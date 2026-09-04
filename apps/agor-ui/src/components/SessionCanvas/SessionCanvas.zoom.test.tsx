@@ -1,14 +1,19 @@
 // biome-ignore-all lint/plugin/noHardcodedColorLiteral: persisted zone palette fixtures verify canvas creation behavior
-
 import { BOARD_SNAP_GRID } from '@agor/core/layout/rectangle-packing';
-import type { AgorClient, Board } from '@agor-live/client';
+import type { AgorClient, Board, BoardComment, User } from '@agor-live/client';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { App as AntApp } from 'antd';
 import type { ButtonHTMLAttributes, MouseEventHandler, ReactNode } from 'react';
 import type { Node, NodeDragHandler } from 'reactflow';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ConnectionProvider } from '../../contexts/ConnectionContext';
+import { agorStore } from '../../store/agorStore';
 import SessionCanvas, { isCanvasSelectionControlTarget } from './SessionCanvas';
+
+const permissionState = vi.hoisted(() => ({ canEdit: true }));
+vi.mock('../../hooks/useCanManageBoard', () => ({
+  useCanManageBoard: () => permissionState.canEdit,
+}));
 
 let reactFlowProps: Record<string, unknown> | null = null;
 // Stable spy for the `useNodesState` setter (onNodesChangeInternal). Lets tests
@@ -69,10 +74,12 @@ vi.mock('./canvas/ArtifactNode', () => ({
 }));
 
 beforeEach(() => {
+  permissionState.canEdit = true;
   reactFlowProps = null;
   nodesStateOverride = undefined;
   onNodesChangeInternalSpy.mockClear();
   setNodesUnsafeSpy.mockClear();
+  agorStore.setState({ userById: new Map(), commentById: new Map() });
 });
 
 describe('SessionCanvas zoom shortcuts', () => {
@@ -839,8 +846,75 @@ describe('SessionCanvas zoom shortcuts', () => {
     });
   });
 
-  it('opens the markdown note modal when the markdown tool clicks a board node', async () => {
+  it('lets a board Viewer add and move their own comments without unlocking structure', async () => {
+    permissionState.canEdit = false;
+    const viewer = { user_id: 'viewer-1', role: 'member', username: 'viewer' } as User;
+    const ownComment = {
+      comment_id: 'comment-own',
+      board_id: 'board-1',
+      created_by: viewer.user_id,
+      content: 'Mine',
+      position: { absolute: { x: 20, y: 30 } },
+      resolved: false,
+    } as BoardComment;
+    const foreignComment = {
+      ...ownComment,
+      comment_id: 'comment-foreign',
+      created_by: 'user-elsewhere',
+      content: 'Not mine',
+      position: { absolute: { x: 40, y: 50 } },
+    } as BoardComment;
+    agorStore.setState({
+      userById: new Map([[viewer.user_id, viewer]]),
+      commentById: new Map([
+        [ownComment.comment_id, ownComment],
+        [foreignComment.comment_id, foreignComment],
+      ]),
+    });
+
     render(
+      <ConnectionProvider
+        value={{
+          connected: true,
+          connecting: false,
+          outOfSync: false,
+          capturedSha: null,
+          currentSha: null,
+        }}
+      >
+        <SessionCanvas
+          board={
+            {
+              board_id: 'board-1',
+              name: 'Board',
+              slug: 'board',
+              objects: {
+                'zone-1': {
+                  type: 'zone',
+                  x: 0,
+                  y: 0,
+                  width: 500,
+                  height: 300,
+                  label: 'Review',
+                },
+              },
+              archived: false,
+            } as Board
+          }
+          client={null}
+          branches={[]}
+          currentUserId={viewer.user_id}
+        />
+      </ConnectionProvider>
+    );
+
+    expect(screen.getByRole('button', { name: 'Add Comment' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Add Zone' })).toBeDisabled();
+    expect(reactFlowProps?.nodesDraggable).toBe(true);
+  });
+
+  it('opens the markdown note modal when the markdown tool clicks a board node', async () => {
+    const canvas = () => (
       <ConnectionProvider
         value={{
           connected: true,
@@ -880,6 +954,7 @@ describe('SessionCanvas zoom shortcuts', () => {
         />
       </ConnectionProvider>
     );
+    const { rerender } = render(canvas());
 
     act(() => {
       (reactFlowProps?.onInit as (instance: unknown) => void)?.({
@@ -898,6 +973,17 @@ describe('SessionCanvas zoom shortcuts', () => {
     });
 
     expect(await screen.findByText('Add Markdown Note')).toBeInTheDocument();
+
+    const draft = screen.getByPlaceholderText(/# Title/);
+    fireEvent.change(draft, { target: { value: 'Keep this draft' } });
+    expect(screen.getByRole('button', { name: 'Create' })).toBeEnabled();
+
+    permissionState.canEdit = false;
+    rerender(canvas());
+
+    expect(screen.getByText('Add Markdown Note')).toBeInTheDocument();
+    expect(draft).toHaveValue('Keep this draft');
+    expect(screen.getByRole('button', { name: 'Create' })).toBeDisabled();
   });
 
   describe('onNodesChange zone resize via O(1) getNode lookup', () => {

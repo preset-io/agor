@@ -8,8 +8,15 @@ import {
   runWithTenantDatabaseScope,
 } from '@agor/core/db';
 import { getConnector } from '@agor/core/gateway';
-import type { GatewayChannel, Message, ThreadSessionMap, User, UserID } from '@agor/core/types';
-import { SessionStatus } from '@agor/core/types';
+import type {
+  GatewayChannel,
+  Message,
+  Task,
+  ThreadSessionMap,
+  User,
+  UserID,
+} from '@agor/core/types';
+import { SessionStatus, TaskStatus } from '@agor/core/types';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { GatewayService } from './gateway.js';
 
@@ -108,7 +115,7 @@ function githubMapping(overrides: Partial<ThreadSessionMap> = {}): ThreadSession
 function makeGitHubHarness(existingMapping: ThreadSessionMap | null = null) {
   let mapping = existingMapping;
   let messages: Message[] = [];
-  let taskMetadata: Record<string, unknown> | undefined;
+  let tasks: Task[] = [];
   const order: string[] = [];
   const db = { run: vi.fn() } as unknown as TenantScopeAwareDatabase;
   const usersGet = vi.fn(async (id: string) => {
@@ -117,7 +124,7 @@ function makeGitHubHarness(existingMapping: ThreadSessionMap | null = null) {
   });
   const sessionsCreate = vi.fn(async (data: Record<string, unknown>) => ({
     ...data,
-    session_id: data.session_id,
+    session_id: data.session_id ?? '019fd900-0000-7000-8000-0000000000e0',
     status: SessionStatus.IDLE,
   }));
   const sessionsGet = vi.fn(async (sessionId: string) => ({
@@ -130,7 +137,7 @@ function makeGitHubHarness(existingMapping: ThreadSessionMap | null = null) {
   const promptCreate = vi.fn(async (data: Record<string, unknown>, params: unknown) => {
     order.push('prompt');
     return {
-      task_id: data.idempotencyTaskId,
+      task_id: data.idempotencyTaskId ?? '019fd900-0000-7000-8000-0000000000f0',
       session_id: (params as { route: { id: string } }).route.id,
       status: 'running',
     };
@@ -197,7 +204,27 @@ function makeGitHubHarness(existingMapping: ThreadSessionMap | null = null) {
     }),
   };
   const findByEmailForAlignment = vi.fn(async () => alignedUser);
-  const messagesRepo = { findBySessionId: vi.fn(async () => messages) };
+  const messagesRepo = {
+    findBySessionId: vi.fn(async () => messages),
+    findByTaskId: vi.fn(async (taskId: string) =>
+      messages.filter((message) => message.task_id === taskId)
+    ),
+    mutateMetadataLocked: vi.fn(
+      async (
+        messageId: string,
+        mutation: (metadata: Message['metadata'], message: Message) => Message['metadata'] | null
+      ) => {
+        const index = messages.findIndex((message) => message.message_id === messageId);
+        const message = messages[index];
+        if (!message) throw new Error('Message not found');
+        const metadata = mutation(message.metadata, message);
+        if (metadata === null) return { changed: false, message };
+        const updated = { ...message, metadata };
+        messages[index] = updated;
+        return { changed: true, message: updated };
+      }
+    ),
+  };
   const inboundEventRepo = {
     claim: vi.fn(async () => {
       order.push('claim');
@@ -218,6 +245,11 @@ function makeGitHubHarness(existingMapping: ThreadSessionMap | null = null) {
       return true;
     }),
   };
+  const taskRepo = {
+    findById: vi.fn(
+      async (taskId: string) => tasks.find((task) => task.task_id === taskId) ?? null
+    ),
+  };
   Object.assign(service as unknown as Record<string, unknown>, {
     channelRepo,
     threadMapRepo,
@@ -225,9 +257,7 @@ function makeGitHubHarness(existingMapping: ThreadSessionMap | null = null) {
     outboundRepo: { findUnconsumedByChannelAndThread: vi.fn(async () => null) },
     inboundEventRepo,
     messagesRepo,
-    taskRepo: {
-      findById: vi.fn(async () => (taskMetadata ? { metadata: taskMetadata } : null)),
-    },
+    taskRepo,
     sessionRepo: {
       findById: vi.fn(async (sessionId: string) => ({
         session_id: sessionId,
@@ -251,12 +281,28 @@ function makeGitHubHarness(existingMapping: ThreadSessionMap | null = null) {
     messagesRepo,
     findByEmailForAlignment,
     inboundEventRepo,
+    taskRepo,
     getMapping: () => mapping,
     setMessages: (next: Message[]) => {
       messages = next;
     },
+    setTasks: (next: Task[]) => {
+      tasks = next;
+    },
     setTaskMetadata: (next: Record<string, unknown>) => {
-      taskMetadata = next;
+      const latestMessage = messages.at(-1);
+      if (latestMessage?.task_id) {
+        tasks = [
+          {
+            task_id: latestMessage.task_id,
+            session_id: latestMessage.session_id,
+            status: TaskStatus.COMPLETED,
+            created_at: '2026-08-14T00:00:01.000Z',
+            completed_at: '2026-08-14T00:00:03.000Z',
+            metadata: next,
+          } as unknown as Task,
+        ];
+      }
     },
   };
 }
@@ -393,6 +439,29 @@ describe('GatewayService GitHub integration', () => {
     );
   });
 
+  it('stores task-scoped acknowledgement metadata in standalone mode', async () => {
+    const harness = makeGitHubHarness();
+    Object.assign(harness.service as unknown as Record<string, unknown>, {
+      durableListenerOwnership: false,
+    });
+
+    await handleGitHubInbound(harness.service, {
+      providerEventId: 'github:preset-io/agor:comment:standalone',
+      text: '@agor standalone request',
+      prepareDelivery: vi.fn(async () => ({ processing_comment_id: 905 })),
+    });
+
+    expect(harness.promptCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        metadata: {
+          gateway_reply_metadata: { processing_comment_id: 905 },
+        },
+      }),
+      expect.anything()
+    );
+    expect(harness.inboundEventRepo.claim).not.toHaveBeenCalled();
+  });
+
   it('keeps follow-ups on the mapped issue and edits the latest ack with only the final reply', async () => {
     const mapping = githubMapping();
     const harness = makeGitHubHarness(mapping);
@@ -457,7 +526,9 @@ describe('GatewayService GitHub integration', () => {
     });
 
     await runWithTenantContext(tenantId, () =>
-      harness.service.flushOutboundBuffer(mapping.session_id)
+      harness.service.flushOutboundBuffer(mapping.session_id, {
+        taskId: promptData.idempotencyTaskId,
+      })
     );
 
     expect(harness.sendMessage).toHaveBeenCalledOnce();
@@ -469,18 +540,327 @@ describe('GatewayService GitHub integration', () => {
     });
     expect(harness.threadMapRepo.mergeMetadata).toHaveBeenCalledWith(mapping.id, {
       gateway_last_flushed_message_id: '019fd900-0000-7000-8000-000000000040',
+      gateway_last_flushed_task_id: promptData.idempotencyTaskId,
     });
+  });
+
+  it('binds a delayed flush to its exact task after a newer task also completes', async () => {
+    const mapping = githubMapping({
+      metadata: { ...githubMetadata, processing_comment_id: 902 },
+    });
+    const harness = makeGitHubHarness(mapping);
+    const completedTaskId = '019fd900-0000-7000-8000-000000000050';
+    const newerTaskId = '019fd900-0000-7000-8000-000000000051';
+
+    harness.setTasks([
+      {
+        task_id: completedTaskId,
+        session_id: mapping.session_id,
+        status: TaskStatus.COMPLETED,
+        created_at: '2026-08-14T00:00:01.000Z',
+        completed_at: '2026-08-14T00:00:03.000Z',
+        metadata: { gateway_reply_metadata: { processing_comment_id: 901 } },
+      } as unknown as Task,
+      {
+        task_id: newerTaskId,
+        session_id: mapping.session_id,
+        status: TaskStatus.COMPLETED,
+        created_at: '2026-08-14T00:00:02.000Z',
+        completed_at: '2026-08-14T00:00:04.000Z',
+        metadata: { gateway_reply_metadata: { processing_comment_id: 902 } },
+      } as unknown as Task,
+    ]);
+    harness.setMessages([
+      {
+        message_id: '019fd900-0000-7000-8000-000000000052',
+        session_id: mapping.session_id,
+        task_id: completedTaskId,
+        role: 'assistant',
+        content: 'Final answer for the completed task.',
+        index: 1,
+      } as unknown as Message,
+      {
+        message_id: '019fd900-0000-7000-8000-000000000053',
+        session_id: mapping.session_id,
+        task_id: newerTaskId,
+        role: 'assistant',
+        content: 'Starting the queued task...',
+        index: 2,
+      } as unknown as Message,
+    ]);
+
+    await runWithTenantContext(tenantId, () =>
+      harness.service.routeMessage({
+        session_id: mapping.session_id,
+        task_id: newerTaskId,
+        message: 'Starting the queued task...',
+      })
+    );
+    await runWithTenantContext(tenantId, () =>
+      harness.service.flushOutboundBuffer(mapping.session_id, {
+        taskId: completedTaskId,
+      })
+    );
+
+    expect(harness.sendMessage).toHaveBeenCalledOnce();
+    expect(harness.sendMessage).toHaveBeenCalledWith({
+      threadId,
+      text: 'Final answer for the completed task.',
+      blocks: undefined,
+      metadata: { edit_comment_id: 901 },
+    });
+    expect(harness.sendMessage).not.toHaveBeenCalledWith(
+      expect.objectContaining({ text: 'Starting the queued task...' })
+    );
+  });
+
+  it('uses a preview-only assistant row as the exact task final response', async () => {
+    const mapping = githubMapping();
+    const harness = makeGitHubHarness(mapping);
+    const taskId = '019fd900-0000-7000-8000-000000000054';
+    harness.setTasks([
+      {
+        task_id: taskId,
+        session_id: mapping.session_id,
+        status: TaskStatus.COMPLETED,
+        created_at: '2026-08-14T00:00:01.000Z',
+        completed_at: '2026-08-14T00:00:03.000Z',
+        metadata: { gateway_reply_metadata: { processing_comment_id: 901 } },
+      } as unknown as Task,
+    ]);
+    harness.setMessages([
+      {
+        message_id: '019fd900-0000-7000-8000-000000000055',
+        session_id: mapping.session_id,
+        task_id: taskId,
+        role: 'assistant',
+        content: '',
+        content_preview: 'Final response retained in the durable preview.',
+        index: 1,
+      } as unknown as Message,
+    ]);
+
+    await runWithTenantContext(tenantId, () =>
+      harness.service.flushOutboundBuffer(mapping.session_id, { taskId })
+    );
+
+    expect(harness.sendMessage).toHaveBeenCalledOnce();
+    expect(harness.sendMessage).toHaveBeenCalledWith({
+      threadId,
+      text: 'Final response retained in the durable preview.',
+      blocks: undefined,
+      metadata: { edit_comment_id: 901 },
+    });
+  });
+
+  it('fences concurrent terminal hooks so only one provider edit is sent', async () => {
+    const mapping = githubMapping();
+    const harness = makeGitHubHarness(mapping);
+    const taskId = '019fd900-0000-7000-8000-000000000057';
+    harness.setTasks([
+      {
+        task_id: taskId,
+        session_id: mapping.session_id,
+        status: TaskStatus.COMPLETED,
+        created_at: '2026-08-14T00:00:01.000Z',
+        completed_at: '2026-08-14T00:00:03.000Z',
+        metadata: {
+          gateway_reply_metadata: { processing_comment_id: 901 },
+        },
+      } as unknown as Task,
+    ]);
+    harness.setMessages([
+      {
+        message_id: '019fd900-0000-7000-8000-000000000058',
+        session_id: mapping.session_id,
+        task_id: taskId,
+        role: 'assistant',
+        content: 'One final answer.',
+        index: 1,
+      } as unknown as Message,
+    ]);
+
+    await runWithTenantContext(tenantId, () =>
+      Promise.all([
+        harness.service.flushOutboundBuffer(mapping.session_id, { taskId }),
+        harness.service.flushOutboundBuffer(mapping.session_id, { taskId }),
+      ])
+    );
+
+    expect(harness.sendMessage).toHaveBeenCalledOnce();
+    expect(harness.messagesRepo.mutateMetadataLocked).toHaveBeenCalledTimes(3);
+  });
+
+  it('reclaims a stale processing claim while an active claim remains fenced', async () => {
+    const mapping = githubMapping();
+    const harness = makeGitHubHarness(mapping);
+    const taskId = '019fd900-0000-7000-8000-000000000059';
+    const message = {
+      message_id: '019fd900-0000-7000-8000-00000000005a',
+      session_id: mapping.session_id,
+      task_id: taskId,
+      role: 'assistant',
+      content: 'Recoverable final answer.',
+      content_preview: 'Recoverable final answer.',
+      index: 1,
+      metadata: {
+        gateway_final_reply: {
+          status: 'processing',
+          claim_token: 'active-daemon-claim',
+          claimed_at: new Date().toISOString(),
+        },
+      },
+    } as unknown as Message;
+    harness.setTasks([
+      {
+        task_id: taskId,
+        session_id: mapping.session_id,
+        status: TaskStatus.COMPLETED,
+        created_at: '2026-08-14T00:00:01.000Z',
+        completed_at: '2026-08-14T00:00:03.000Z',
+        metadata: { gateway_reply_metadata: { processing_comment_id: 901 } },
+      } as unknown as Task,
+    ]);
+    harness.setMessages([message]);
+
+    await runWithTenantContext(tenantId, () =>
+      harness.service.flushOutboundBuffer(mapping.session_id, { taskId })
+    );
+    expect(harness.sendMessage).not.toHaveBeenCalled();
+
+    harness.setMessages([
+      {
+        ...message,
+        metadata: {
+          gateway_final_reply: {
+            status: 'processing',
+            claim_token: 'abandoned-daemon-claim',
+            claimed_at: '2000-01-01T00:00:00.000Z',
+          },
+        },
+      } as unknown as Message,
+    ]);
+    await runWithTenantContext(tenantId, () =>
+      harness.service.flushOutboundBuffer(mapping.session_id, { taskId })
+    );
+
+    expect(harness.sendMessage).toHaveBeenCalledOnce();
+    expect(harness.sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: 'Recoverable final answer.',
+        metadata: { edit_comment_id: 901 },
+      })
+    );
+  });
+
+  it('fails closed instead of using the session acknowledgement when task metadata is missing', async () => {
+    const mapping = githubMapping({
+      metadata: { ...githubMetadata, processing_comment_id: 902 },
+    });
+    const harness = makeGitHubHarness(mapping);
+    const completedTaskId = '019fd900-0000-7000-8000-000000000054';
+    harness.setTasks([
+      {
+        task_id: completedTaskId,
+        session_id: mapping.session_id,
+        status: TaskStatus.COMPLETED,
+        created_at: '2026-08-14T00:00:01.000Z',
+        completed_at: '2026-08-14T00:00:03.000Z',
+      } as unknown as Task,
+    ]);
+    harness.setMessages([
+      {
+        message_id: '019fd900-0000-7000-8000-000000000056',
+        session_id: mapping.session_id,
+        task_id: completedTaskId,
+        role: 'assistant',
+        content: 'Final answer for the completed task.',
+        index: 1,
+      } as unknown as Message,
+    ]);
+
+    await runWithTenantContext(tenantId, () =>
+      harness.service.flushOutboundBuffer(mapping.session_id, {
+        taskId: completedTaskId,
+      })
+    );
+
+    expect(harness.sendMessage).not.toHaveBeenCalled();
+    expect(harness.messagesRepo.findByTaskId).not.toHaveBeenCalled();
+    expect(harness.messagesRepo.mutateMetadataLocked).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      taskStatus: TaskStatus.FAILED,
+      expected: 'session stopped with an error',
+    },
+    {
+      taskStatus: TaskStatus.STOPPED,
+      expected: 'stopped before it finished',
+    },
+  ])('does not publish partial work for a $taskStatus task', async ({ taskStatus, expected }) => {
+    const mapping = githubMapping();
+    const harness = makeGitHubHarness(mapping);
+    const taskId = '019fd900-0000-7000-8000-000000000060';
+    harness.setTasks([
+      {
+        task_id: taskId,
+        session_id: mapping.session_id,
+        status: taskStatus,
+        created_at: '2026-08-14T00:00:01.000Z',
+        completed_at: '2026-08-14T00:00:03.000Z',
+        metadata: { gateway_reply_metadata: { processing_comment_id: 901 } },
+      } as unknown as Task,
+    ]);
+    harness.setMessages([
+      {
+        message_id: '019fd900-0000-7000-8000-000000000061',
+        session_id: mapping.session_id,
+        task_id: taskId,
+        role: 'assistant',
+        content: 'Now invoking the reviewer...',
+        index: 1,
+      } as unknown as Message,
+    ]);
+
+    await runWithTenantContext(tenantId, () =>
+      harness.service.flushOutboundBuffer(mapping.session_id, {
+        taskId,
+      })
+    );
+    await runWithTenantContext(tenantId, () =>
+      harness.service.flushOutboundBuffer(mapping.session_id, {
+        taskId,
+      })
+    );
+
+    expect(harness.sendMessage).toHaveBeenCalledOnce();
+    expect(harness.sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: expect.stringContaining(expected),
+        metadata: { edit_comment_id: 901 },
+      })
+    );
+    expect(harness.sendMessage.mock.calls[0][0].text).toContain(
+      '[View session](https://agor.example.com/ui/s/'
+    );
+    expect(harness.sendMessage).not.toHaveBeenCalledWith(
+      expect.objectContaining({ text: 'Now invoking the reviewer...' })
+    );
   });
 
   it('skips durable message reads when the session has no gateway mapping', async () => {
     const harness = makeGitHubHarness(null);
 
     await runWithTenantContext(tenantId, () =>
-      harness.service.flushOutboundBuffer('019fd900-0000-7000-8000-000000000099')
+      harness.service.flushOutboundBuffer('019fd900-0000-7000-8000-000000000099', {
+        taskId: '019fd900-0000-7000-8000-000000000098' as never,
+      })
     );
 
     expect(harness.threadMapRepo.findBySession).toHaveBeenCalledOnce();
-    expect(harness.messagesRepo.findBySessionId).not.toHaveBeenCalled();
+    expect(harness.messagesRepo.findByTaskId).not.toHaveBeenCalled();
     expect(harness.channelRepo.findById).not.toHaveBeenCalled();
   });
 });

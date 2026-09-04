@@ -1,4 +1,8 @@
 agentic_tools:
+  # This disposable validation stack deliberately opts into native Claude
+  # subscription OAuth. Production remains default-off unless an operator
+  # makes the same explicit release decision.
+  claude_subscription_oauth: true
   # Headless/container deployments must declare their managed integrations.
   # The Compose preparation job reconciles this exact list before either
   # daemon starts, into the shared /home/agor/.agor volume.
@@ -56,6 +60,12 @@ execution:
   # it advertises. Sandbox mode forces branch RBAC, per-user home overlays, and
   # fail-closed bubblewrap isolation; it does not impersonate host accounts.
   unix_user_mode: sandbox
+  sandbox:
+    # These explicit values are also the concrete Claude runtime credential
+    # containment predicate: bubblewrap makes the real .claude parent an
+    # immutable mountpoint and masks the credential plus both authority sidecars.
+    enabled: true
+    home_mode: per_user
   # PTY transport is replica-local and ephemeral. Sticky Socket.IO keeps the
   # create/control connection on its owner; owner loss is a visible disconnect
   # and reconnect creates a new attachment (possibly reattaching local Zellij).

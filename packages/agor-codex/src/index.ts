@@ -1,4 +1,4 @@
 /** Agor-managed, release-aligned codex integration. */
-export const AGOR_INTEGRATION_VERSION = '0.25.2';
+export const AGOR_INTEGRATION_VERSION = '0.26.1';
 export const VENDOR_PACKAGE = '@openai/codex-sdk';
 export * as sdk from '@openai/codex-sdk';

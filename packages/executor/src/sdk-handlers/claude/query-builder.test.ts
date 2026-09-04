@@ -99,6 +99,31 @@ describe('setupQuery - Local Settings Support', () => {
     );
   });
 
+  it.each([
+    [{ kind: 'human' as const }, { kind: 'human' }],
+    [
+      { kind: 'channel' as const, server: 'slack' },
+      { kind: 'channel', server: 'slack' },
+    ],
+    [undefined, undefined],
+  ])('passes only daemon-derived prompt origin to the SDK (%j)', async (promptOrigin, expected) => {
+    const setup = await setupQuery('test-session' as SessionID, 'test prompt', createMockDeps(), {
+      promptOrigin,
+    });
+    const prompt = vi.mocked(Claude.query).mock.calls[0][0].prompt;
+    expect(typeof prompt).not.toBe('string');
+
+    const first = await (prompt as AsyncIterable<Record<string, unknown>>)
+      [Symbol.asyncIterator]()
+      .next();
+    if (expected) {
+      expect(first.value).toMatchObject({ origin: expected });
+    } else {
+      expect(first.value).not.toHaveProperty('origin');
+    }
+    setup.query.releaseInput();
+  });
+
   it('logs only the generic prompt start and passes resume and prompt data to the SDK', async () => {
     const prompt = 'sk-ant-SECRET_QUERY_SENTINEL\r\nsecond line\nDATABASE_URL=do-not-log';
     const deps = createMockDeps();
@@ -122,7 +147,9 @@ describe('setupQuery - Local Settings Support', () => {
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
 
     try {
-      await setupQuery('test-session' as SessionID, prompt, deps);
+      await setupQuery('test-session' as SessionID, prompt, deps, {
+        promptOrigin: { kind: 'human' },
+      });
 
       expect(logSpy.mock.calls).toEqual([['🤖 Prompting Claude for session test-session...']]);
 
@@ -132,9 +159,40 @@ describe('setupQuery - Local Settings Support', () => {
       const promptIterator = callArgs.prompt[Symbol.asyncIterator]();
       const firstMessage = await promptIterator.next();
       expect(firstMessage.value.message.content).toEqual([{ type: 'text', text: prompt }]);
+      expect(firstMessage.value.origin).toEqual({ kind: 'human' });
     } finally {
       logSpy.mockRestore();
     }
+  });
+
+  it('keeps canonical Claude state for fork/resume while credentials use executor env', async () => {
+    const deps = createMockDeps();
+    const now = new Date().toISOString();
+    vi.mocked(deps.sessionsRepo.findById)
+      .mockResolvedValueOnce({
+        session_id: 'fork-session' as SessionID,
+        branch_id: 'test-branch' as BranchID,
+        created_at: now,
+        last_updated: now,
+        genealogy: { forked_from_session_id: 'parent-session' as SessionID },
+      } as any)
+      .mockResolvedValueOnce({
+        session_id: 'parent-session' as SessionID,
+        branch_id: 'test-branch' as BranchID,
+        sdk_session_id: 'parent-sdk-session',
+      } as any);
+
+    await setupQuery('fork-session' as SessionID, 'continue from parent', deps);
+    const callArgs = vi.mocked(Claude.query).mock.calls[0][0];
+    expect(callArgs.options).toMatchObject({
+      resume: 'parent-sdk-session',
+      forkSession: true,
+      settingSources: expect.arrayContaining(['user', 'project', 'local']),
+    });
+    // Runtime containment keeps the canonical .claude state directory writable
+    // while masking only credential authority leaves. It must not redirect
+    // CLAUDE_CONFIG_DIR, which would strand path-keyed transcripts/settings.
+    expect(callArgs.options).not.toHaveProperty('env.CLAUDE_CONFIG_DIR');
   });
 
   it('retains only UTF-8 byte metadata from provider stderr', async () => {

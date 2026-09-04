@@ -42,6 +42,7 @@ export const NON_PORTABLE_TENANT_TABLES: ReadonlySet<string> = new Set([
   'executor_session_token_authorities',
   'mcp_oauth_pending_flows',
   'codex_device_auth_attempts',
+  'claude_oauth_attempts',
   'user_mcp_oauth_tokens',
   'github_install_states',
 ]);

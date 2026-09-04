@@ -96,3 +96,17 @@ allowBuilds:
   'unix-dgram@2.0.7': false
 patchedDependencies:
   streamdown@2.5.0: patches/streamdown@2.5.0.patch
+# These reviewed versions must remain installable when CI or an operator's
+# global pnpm config enforces minimumReleaseAge; this repo sets no age itself.
+minimumReleaseAgeExclude:
+  - '@anthropic-ai/claude-agent-sdk-darwin-arm64@0.3.259'
+  - '@anthropic-ai/claude-agent-sdk-darwin-x64@0.3.259'
+  - '@anthropic-ai/claude-agent-sdk-linux-arm64-musl@0.3.259'
+  - '@anthropic-ai/claude-agent-sdk-linux-arm64@0.3.259'
+  - '@anthropic-ai/claude-agent-sdk-linux-x64-musl@0.3.259'
+  - '@anthropic-ai/claude-agent-sdk-linux-x64@0.3.259'
+  - '@anthropic-ai/claude-agent-sdk-win32-arm64@0.3.259'
+  - '@anthropic-ai/claude-agent-sdk-win32-x64@0.3.259'
+  - '@anthropic-ai/claude-agent-sdk@0.3.259'
+  - '@openai/codex-sdk@0.153.0'
+  - '@openai/codex@0.153.0-darwin-arm64 || 0.153.0-darwin-x64 || 0.153.0-linux-arm64 || 0.153.0-linux-x64 || 0.153.0-win32-arm64 || 0.153.0-win32-x64 || 0.153.0'

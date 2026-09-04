@@ -526,6 +526,24 @@ describe('mcp-catalog/connect', () => {
     probeRemoteAuthType.mockResolvedValue('none');
   });
 
+  it.each(['000000000000700080000000', 'not-a-user-id'])(
+    'rejects non-canonical authenticated identity %s instead of resolving it',
+    async (userId) => {
+      const { app, created, deps, generationClaims } = buildApp(CURATED);
+      const invalidParams = {
+        ...params,
+        user: { ...params.user, user_id: userId },
+      } as AuthenticatedParams;
+
+      await expect(
+        createMCPCatalogConnectService(app, deps).create(request, invalidParams)
+      ).rejects.toThrow(/canonical full UUID/);
+      expect(deps.listCandidates).not.toHaveBeenCalled();
+      expect(generationClaims).toEqual([]);
+      expect(created.mcpServers).toEqual([]);
+    }
+  );
+
   it('derives the whole server config from the catalog entry', async () => {
     const { app, created, deps } = buildApp(CURATED);
 

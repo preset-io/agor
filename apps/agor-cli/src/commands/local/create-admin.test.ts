@@ -1,5 +1,6 @@
+import { BootstrapTenantUnsupportedError } from '@agor/core/config';
 import { describe, expect, it } from 'vitest';
-import { assertDevelopmentDefaultAdminCliRequest } from './create-admin';
+import { assertDevelopmentDefaultAdminCliRequest, presentCreateAdminFailure } from './create-admin';
 
 const exactRequest = {
   email: 'admin@agor.live',
@@ -48,5 +49,26 @@ describe('local create-admin development default', () => {
         }
       )
     ).toThrow(/exact admin@agor.live/);
+  });
+});
+
+describe('create-admin failure presentation', () => {
+  it('surfaces the single-tenant rejection verbatim (not flattened by DB sanitization)', () => {
+    const error = new BootstrapTenantUnsupportedError(
+      'This command operates on the static single tenant and is not supported when ' +
+        'multi_tenancy.mode=required_from_auth.'
+    );
+    // The message must survive create-admin's catch path, which otherwise routes
+    // errors through sanitizeDbError → "Database operation failed".
+    expect(presentCreateAdminFailure(error)).toBe(error.message);
+    expect(presentCreateAdminFailure(error)).not.toMatch(/Database operation failed/);
+  });
+
+  it('flattens ordinary database errors through the sanitizer', () => {
+    const dbError = Object.assign(new Error('duplicate key value violates unique constraint'), {
+      code: '23505',
+    });
+    expect(presentCreateAdminFailure(dbError)).not.toMatch(/duplicate key/);
+    expect(presentCreateAdminFailure(dbError)).toMatch(/Database/);
   });
 });

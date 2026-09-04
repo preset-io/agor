@@ -36,6 +36,15 @@ export const HA_DEV_PERSONAS = Object.freeze([
     role: 'member',
   }),
   Object.freeze({
+    id: 'acme-claude-ha',
+    tenantId: 'acme',
+    tenantName: 'Acme',
+    subject: 'claude-ha-probe',
+    email: 'claude-ha-probe@acme.example.test',
+    name: 'Claude HA Probe',
+    role: 'member',
+  }),
+  Object.freeze({
     id: 'globex-beatrice',
     tenantId: 'globex',
     tenantName: 'Globex',

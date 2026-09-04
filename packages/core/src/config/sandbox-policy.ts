@@ -26,6 +26,7 @@
  */
 
 import { dirname, isAbsolute, join, relative } from 'node:path';
+import { CREDENTIAL_AUTHORITY_SIDECAR_FILENAMES } from '../codex/credential-authority.js';
 import type { AgorSandboxSettings } from './types';
 
 /** Effective defaults for the Agor sugar layer. */
@@ -124,6 +125,16 @@ export interface SandboxPathContext {
    * the daemon guarantees it exists before spawn.
    */
   ownerHomeStore?: string;
+  /**
+   * Child-process fd pinning the validated `<ownerHomeStore>/tmp` directory.
+   * Required when per-user persistent tmp is enabled so bubblewrap never
+   * resolves an actor-replaceable bind-source pathname.
+   */
+  ownerTmpBindFd?: number;
+  /** Canonical target of {@link ownerHomeStore}, when it differs through symlinks. */
+  canonicalOwnerHomeStore?: string;
+  /** Canonical targets used only to analyze final `extra_allow_write` aliases. */
+  canonicalExtraAllowWritePaths?: string[];
   /**
    * Managed agentic-tools dir (`~/.agor/agentic-tools`) re-exposed read-only in
    * `per_user` mode (the overlay would otherwise hide it). Ignored in shared
@@ -239,15 +250,23 @@ export function resolveBwrapArgs(sandbox: AgorSandboxSettings, ctx: SandboxPathC
       const homesParent = dirname(homeDir);
       if (homesParent && homesParent !== '/' && homesParent !== '.') hiddenRoots.add(homesParent);
     }
+    if (!isAbsolute(ctx.ownerHomeStore as string) || ctx.ownerHomeStore === '/') {
+      throw new Error(
+        `Invalid sandbox owner home ${ctx.ownerHomeStore}: expected an absolute path below /`
+      );
+    }
     // The home overlay only hides data stored below the passwd home. A hosted
     // deployment may keep AGOR_DATA_HOME on a persistent volume elsewhere; the
     // read-only root bind would otherwise leave sibling branches and daemon
     // files visible. Mask that root, then re-expose only the authorized paths
     // below. Bubblewrap resolves bind sources before applying these mounts, so
     // owner stores/branches beneath the masked root remain valid sources.
+    // Prefer the canonical deployment root when the configured data home is a
+    // symlink. Mounting a tmpfs on both the symlink and its target is not only
+    // redundant (the target mask closes both routes), but bwrap cannot mount a
+    // filesystem on a symlink destination reliably.
     const dataHomes = [
-      ctx.dataHome,
-      ctx.canonicalDataHome,
+      ctx.canonicalDataHome ?? ctx.dataHome,
       ...(ctx.protectedDataRoots ?? []),
     ].filter((path): path is string => !!path);
     for (const dataHome of dataHomes) {
@@ -284,11 +303,14 @@ export function resolveBwrapArgs(sandbox: AgorSandboxSettings, ctx: SandboxPathC
     if (include.tmp) {
       // /tmp lives in the user's OWN home (on disk, per-user, persists across
       // turns) — NOT a RAM tmpfs (which can OOM on big builds) and NOT a shared
-      // host /tmp (leaky). Bind <store>/tmp over /tmp; the daemon guarantees the
-      // dir exists. It is the SAME underlying dir as ~/tmp (the overlay maps the
-      // store to the home), so `/tmp` and `~/tmp` are one place. /var/tmp stays
-      // a small ephemeral tmpfs. TMPDIR is pinned below so tools agree.
-      args.push('--bind', join(ctx.ownerHomeStore as string, 'tmp'), '/tmp');
+      // host /tmp (leaky). The daemon creates and opens <store>/tmp without
+      // following symlinks, then keeps that exact inode pinned through spawn.
+      // A pathname bind here would let another live sandbox swap tmp to a host
+      // symlink between validation and bwrap setup.
+      if (!Number.isSafeInteger(ctx.ownerTmpBindFd) || (ctx.ownerTmpBindFd as number) < 3) {
+        throw new Error('Per-user persistent tmp requires a validated directory bind fd');
+      }
+      args.push('--bind-fd', String(ctx.ownerTmpBindFd), '/tmp');
       args.push('--tmpfs', '/var/tmp');
     }
     // Re-expose the branch (its worktrees ancestor is hidden by the overlay),
@@ -330,7 +352,6 @@ export function resolveBwrapArgs(sandbox: AgorSandboxSettings, ctx: SandboxPathC
     appendBranchSdkHomeBinds(args, ctx);
     for (const p of sandbox.extra_allow_write ?? []) args.push('--bind', p, p);
     appendBranchSdkCredentialBinds(args, ctx);
-    for (const p of sandbox.extra_deny_read ?? []) args.push('--ro-bind', '/dev/null', p);
 
     // Daemon trust-root masks — UNCONDITIONAL (not gated on protect_secrets).
     // Redundant when AGOR_DATA_HOME lives under the overlaid home (already
@@ -343,6 +364,81 @@ export function resolveBwrapArgs(sandbox: AgorSandboxSettings, ctx: SandboxPathC
         args.push('--ro-bind', '/dev/null', destination);
       }
     }
+
+    // Claude's refreshable subscription grant and its mutation authority are
+    // daemon-owned. First bind the REAL owner-store `.claude` directory onto
+    // every reachable runtime alias. A bind mount is writable inside but its
+    // mountpoint cannot be renamed/replaced, so settings, plugins, projects,
+    // transcripts, and new ordinary CLI files retain their canonical paths
+    // without letting a task swap out the parent and recreate authority leaves.
+    //
+    // The daemon safely materializes this source directory and every authority
+    // leaf before bwrap starts. Use required --bind/--ro-bind here: a missing
+    // source or destination is a containment failure, never a best-effort
+    // downgrade. A custom filesystem_home outside all hidden deployment roots
+    // remains reachable through its physical source path, so bind/mask it too.
+    const ownerClaudeDirectory = join(ctx.ownerHomeStore as string, '.claude');
+    // A canonical target closes both its own route and every symlink route to
+    // it. Do not also mount the symlink destination: after the canonical data
+    // root is hidden, bwrap cannot create parents through that symlink.
+    const ownerClaudeDirectories = new Set([
+      join(ctx.canonicalOwnerHomeStore ?? (ctx.ownerHomeStore as string), '.claude'),
+    ]);
+    const claudeDirectoryAliases = new Set(
+      homeAliasPaths(join(ctx.homeDir, '.claude'), ctx, preserveCanonicalHomeAlias)
+    );
+    const writableAliases = new Set([
+      ...(sandbox.extra_allow_write ?? []),
+      ...(ctx.canonicalExtraAllowWritePaths ?? []),
+    ]);
+    // `extra_allow_write` is applied after the hidden-root overlays above. A
+    // bind that overlaps the authority tree makes the physical `.claude`
+    // reachable again even though the initial namespace analysis classified
+    // its owner store as hidden. This includes both an ancestor (for example
+    // the deployment data root) and a direct descendant (including an exact
+    // `.claude` or authority-leaf bind). Treat that final mount graph as
+    // authoritative and re-apply the immutable parent + leaf masks at the
+    // physical alias. This containment is unconditional: an API-key/Codex task
+    // must not gain an old Claude refresh grant merely because new managed
+    // Claude OAuth admission is disabled for escape-hatch configurations.
+    for (const physicalClaudeDirectory of ownerClaudeDirectories) {
+      const physicalStore = dirname(physicalClaudeDirectory);
+      const physicalStoreIsReachableInitially =
+        ![...hiddenRoots].some((root) => isPathWithin(physicalStore, root)) &&
+        !homeDirs.some((homeDir) => isPathWithin(physicalStore, homeDir));
+      const physicalStoreReexposedByWritableBind = [...writableAliases].some(
+        (path) =>
+          isPathWithin(physicalClaudeDirectory, path) || isPathWithin(path, physicalClaudeDirectory)
+      );
+      if (physicalStoreIsReachableInitially || physicalStoreReexposedByWritableBind) {
+        claudeDirectoryAliases.add(physicalClaudeDirectory);
+      }
+    }
+    for (const destination of claudeDirectoryAliases) {
+      args.push('--bind', ownerClaudeDirectory, destination);
+    }
+
+    // Managed-file tasks receive only a short-lived
+    // CLAUDE_CODE_OAUTH_TOKEN through the sensitive executor credential
+    // channel. Mask both the refreshable credential and every sidecar that
+    // controls generation/serialization; otherwise a task can permanently DoS
+    // refresh or split the cross-replica flock across two inodes. `/dev/null`
+    // may be unreadable when rebound onto a nodev store, which is an acceptable
+    // stronger mask and is covered by the pinned runtime/live tests.
+    // Do NOT mask .codex/auth.json: Codex containment remains separate work.
+    const authorityFilenames = [
+      '.credentials.json',
+      ...CREDENTIAL_AUTHORITY_SIDECAR_FILENAMES,
+    ] as const;
+    for (const directory of claudeDirectoryAliases) {
+      for (const filename of authorityFilenames) {
+        args.push('--ro-bind', '/dev/null', join(directory, filename));
+      }
+    }
+
+    // Operator denials are the final mounts so the Claude parent re-bind above
+    // cannot accidentally shadow a narrower configured deny.
+    for (const p of sandbox.extra_deny_read ?? []) args.push('--ro-bind', '/dev/null', p);
 
     args.push('--setenv', 'HOME', ctx.homeDir);
     if (include.tmp) args.push('--setenv', 'TMPDIR', '/tmp');

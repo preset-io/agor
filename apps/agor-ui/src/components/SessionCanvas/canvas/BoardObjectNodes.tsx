@@ -13,15 +13,14 @@ import {
   AlignLeftOutlined,
   AlignRightOutlined,
   AppstoreOutlined,
+  BgColorsOutlined,
   CaretDownOutlined,
   CaretUpOutlined,
   CommentOutlined,
   DeleteOutlined,
-  EllipsisOutlined,
-  FontSizeOutlined,
+  EditOutlined,
   LockOutlined,
-  MinusSquareOutlined,
-  PlusSquareOutlined,
+  MoreOutlined,
   SettingOutlined,
   SyncOutlined,
   UnlockOutlined,
@@ -29,50 +28,21 @@ import {
   VerticalAlignMiddleOutlined,
   VerticalAlignTopOutlined,
 } from '@ant-design/icons';
-import { ColorPicker, theme } from 'antd';
+import { Button, ColorPicker, Dropdown, Flex, Popover, Space, Typography, theme } from 'antd';
 import type { Color } from 'antd/es/color-picker';
-import { AggregationColor } from 'antd/es/color-picker/color';
-import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { createPortal } from 'react-dom';
-import { NodeResizer, useStore, useViewport } from 'reactflow';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { NodeResizer, useViewport } from 'reactflow';
 import { useMutationGate } from '../../../contexts/ConnectionContext';
 import { getContrastingTextColor } from '../../../utils/theme';
 import { getUserInitials } from '../../UserIdentityAvatar';
 import { DeleteZoneModal } from './DeleteZoneModal';
 import { ZoneConfigModal } from './ZoneConfigModal';
 import type { LayerOp } from './zOrder';
-import {
-  clampZoneFontSize,
-  effectiveLabelFontSize,
-  statusFontSizeFor,
-  ZONE_FONT_SIZE_MAX,
-  ZONE_FONT_SIZE_MIN,
-  ZONE_FONT_SIZE_STEP,
-} from './zoneFontSize';
+import { toTranslucentZoneFill, ZONE_CONTENT_OPACITY } from './zoneAppearance';
+import { effectiveLabelFontSize, statusFontSizeFor } from './zoneFontSize';
 
-// Zone content opacity constant - used for zone background and color indicator
-export const ZONE_CONTENT_OPACITY = 0.1;
-
-const ZONE_TOOLBAR_VIEWPORT_PADDING = 16;
-
-/** Keep a dynamically sized zone toolbar inside its canvas host. */
-export function clampZoneToolbarCenter(
-  requestedLeft: number,
-  toolbarWidth: number,
-  hostWidth: number
-): number {
-  const finiteHostWidth = Number.isFinite(hostWidth) && hostWidth > 0 ? hostWidth : 0;
-  const finiteToolbarWidth = Number.isFinite(toolbarWidth) && toolbarWidth > 0 ? toolbarWidth : 0;
-  const finiteRequestedLeft = Number.isFinite(requestedLeft) ? requestedLeft : finiteHostWidth / 2;
-  if (finiteHostWidth <= 0) return finiteRequestedLeft;
-  const halfWidth = Math.min(
-    finiteToolbarWidth / 2,
-    Math.max(0, finiteHostWidth - ZONE_TOOLBAR_VIEWPORT_PADDING * 2) / 2
-  );
-  const minLeft = ZONE_TOOLBAR_VIEWPORT_PADDING + halfWidth;
-  const maxLeft = Math.max(minLeft, finiteHostWidth - ZONE_TOOLBAR_VIEWPORT_PADDING - halfWidth);
-  return Math.min(Math.max(finiteRequestedLeft, minLeft), maxLeft);
-}
+// Preserve the existing import surface for CommentsPanel and external callers.
+export { ZONE_CONTENT_OPACITY } from './zoneAppearance';
 
 /**
  * Get color palette from Ant Design preset colors
@@ -89,6 +59,7 @@ const getColorPalette = (token: ReturnType<typeof theme.useToken>['token']) => [
 ];
 
 type ZoneBoardObject = Extract<BoardObject, { type: 'zone' }>;
+type BoardObjectUpdateResult = boolean | undefined | Promise<boolean | undefined>;
 
 /**
  * ZoneNode - Resizable rectangle for organizing sessions visually
@@ -99,21 +70,21 @@ interface ZoneNodeData extends Omit<ZoneBoardObject, 'type'> {
   /** The shared multi-selection toolbar replaces this zone's individual controls. */
   suppressToolbar?: boolean;
   pinnedItemCount?: number;
-  /** Every measured board node currently contained by this zone. */
   positionableItemCount?: number;
-  /** Pinned entities whose rendered surface owns a real density state. */
   densityExpandableItemCount?: number;
-  /** Density-capable pinned entities that are currently collapsed. */
   compactDensityExpandableItemCount?: number;
-  onUpdate?: (
-    objectId: string,
-    objectData: BoardObject
-  ) => boolean | undefined | Promise<boolean | undefined>;
+  onUpdate?: (objectId: string, objectData: BoardObject) => BoardObjectUpdateResult;
   onDelete?: (objectId: string, deleteAssociatedSessions: boolean) => void;
   onReorder?: (objectId: string, op: LayerOp) => void;
   onArrangeContents?: (objectId: string) => void;
   onJustifyContents?: (objectId: string, justification: ZoneContentJustification) => void;
   onSetContentsCompact?: (objectId: string, compact: boolean) => void;
+  /** Effective board.edit capability. Omitted only by isolated tests/fixtures. */
+  canEdit?: boolean;
+  /** Number of other zones whose rectangles intersect this zone. */
+  overlappingZoneCount?: number;
+  /** Whether each relative layer operation would change persisted order. */
+  layerAvailability?: Record<LayerOp, boolean>;
 }
 
 // Local storage key for recent colors
@@ -143,117 +114,36 @@ const saveRecentColor = (color: string) => {
   }
 };
 
-const ZoneNodeComponent = ({
-  data,
-  selected,
-  xPos,
-  yPos,
-}: {
-  data: ZoneNodeData;
-  selected?: boolean;
-  xPos?: number;
-  yPos?: number;
-}) => {
+const ZoneNodeComponent = ({ data, selected }: { data: ZoneNodeData; selected?: boolean }) => {
   const { token } = theme.useToken();
-  const { x: viewportX, y: viewportY, zoom } = useViewport();
-  const reactFlowRoot = useStore((state) => state.domNode);
+  const { zoom } = useViewport();
   const [isEditingLabel, setIsEditingLabel] = useState(false);
   const [label, setLabel] = useState(data.label);
   const [configModalOpen, setConfigModalOpen] = useState(false);
   const [deleteModalOpen, setDeleteModalOpen] = useState(false);
-  const [toolbarVisible, setToolbarVisible] = useState(false);
-  const [layoutActionsExpanded, setLayoutActionsExpanded] = useState(false);
-  const [toolbarBounds, setToolbarBounds] = useState({ toolbarWidth: 0, hostWidth: 0 });
   const [recentColors, setRecentColors] = useState<string[]>(getRecentColors());
   const labelInputRef = useRef<HTMLInputElement>(null);
-  const toolbarRef = useRef<HTMLDivElement>(null);
   const colors = getColorPalette(token);
 
-  // Connection gate: when disconnected / reconnecting / out-of-sync, every
-  // mutator inside the zone (resize, label edit, color, lock, config, delete)
-  // short-circuits. The toolbar is still rendered for read-only signal but
-  // its controls visually dim and silently no-op on click.
+  // Both connectivity and effective board.edit permission gate every zone
+  // mutation. Production callers always provide canEdit; omission keeps old
+  // isolated fixtures backwards compatible.
   const mutationGate = useMutationGate();
-  const mutationDisabled = !mutationGate.canMutate;
-
-  // A zone reads as collapsed only when every density-capable item is. A partially
-  // collapsed zone still offers "Collapse contents", so one click makes the
-  // whole zone uniform instead of toggling it into a different mixed state.
-  const zoneContentsAllCompact =
-    (data.densityExpandableItemCount ?? 0) > 0 &&
-    (data.compactDensityExpandableItemCount ?? 0) >= (data.densityExpandableItemCount ?? 0);
+  const mutationDisabled = !mutationGate.canMutate || data.canEdit === false;
   const autoZoneEnabled = normalizeZoneLayoutPolicy(data.layout).mode === 'auto';
   const positionableItemCount = data.positionableItemCount ?? data.pinnedItemCount ?? 0;
-  const hasExtraLayoutActions =
-    positionableItemCount > 0 || (data.densityExpandableItemCount ?? 0) > 0;
-  const layoutActionsId = `zone-layout-actions-${data.objectId}`;
+  const compactDensityCount = data.compactDensityExpandableItemCount ?? 0;
+  const densityExpandableCount = data.densityExpandableItemCount ?? 0;
+  const allDensityCompact =
+    densityExpandableCount > 0 && compactDensityCount === densityExpandableCount;
 
-  // Inverse scale keeps zone labels at a legible size regardless of zoom.
-  const finiteZoom = Number.isFinite(zoom) && zoom > 0 ? zoom : 1;
-  const finiteViewportX = Number.isFinite(viewportX) ? viewportX : 0;
-  const finiteViewportY = Number.isFinite(viewportY) ? viewportY : 0;
-  const finiteNodeX = Number.isFinite(xPos)
-    ? (xPos as number)
-    : Number.isFinite(data.x)
-      ? data.x
-      : 0;
-  const finiteNodeY = Number.isFinite(yPos)
-    ? (yPos as number)
-    : Number.isFinite(data.y)
-      ? data.y
-      : 0;
-  const finiteNodeWidth = Number.isFinite(data.width) && data.width > 0 ? data.width : 0;
-  const scale = 1 / finiteZoom;
-  const toolbarHost = reactFlowRoot ?? (typeof document === 'undefined' ? null : document.body);
-  const toolbarLeft =
-    finiteViewportX + finiteNodeX * finiteZoom + (finiteNodeWidth * finiteZoom) / 2;
-  const toolbarTop = finiteViewportY + finiteNodeY * finiteZoom - 8;
-  const clampedToolbarLeft = clampZoneToolbarCenter(
-    toolbarLeft,
-    toolbarBounds.toolbarWidth,
-    toolbarBounds.hostWidth
-  );
-
-  useLayoutEffect(() => {
-    const toolbar = toolbarRef.current;
-    if (!toolbar || typeof window === 'undefined') return;
-
-    const measure = () => {
-      const next = {
-        toolbarWidth: toolbar.getBoundingClientRect().width,
-        hostWidth: reactFlowRoot?.clientWidth ?? window.innerWidth,
-      };
-      setToolbarBounds((current) =>
-        current.toolbarWidth === next.toolbarWidth && current.hostWidth === next.hostWidth
-          ? current
-          : next
-      );
-    };
-
-    measure();
-    if (typeof ResizeObserver === 'undefined') return;
-    const observer = new ResizeObserver(measure);
-    observer.observe(toolbar);
-    if (reactFlowRoot) observer.observe(reactFlowRoot);
-    return () => observer.disconnect();
-  }, [reactFlowRoot]);
+  // Inverse scale to keep toolbar at constant size regardless of zoom
+  const scale = 1 / zoom;
 
   // Sync label state when data.label changes (from WebSocket or modal updates)
   useEffect(() => {
     setLabel(data.label);
   }, [data.label]);
-
-  // Sync toolbar visibility with selected state
-  useEffect(() => {
-    if (selected) {
-      setToolbarVisible(true);
-    } else {
-      setLayoutActionsExpanded(false);
-      // Delay hiding to prevent flicker during re-renders
-      const timer = setTimeout(() => setToolbarVisible(false), 100);
-      return () => clearTimeout(timer);
-    }
-  }, [selected]);
 
   // Auto-focus input when entering edit mode
   useEffect(() => {
@@ -315,17 +205,6 @@ const ZoneNodeComponent = ({
     }
   };
 
-  const handleToggleAutoZone = () => {
-    if (mutationDisabled || !data.onUpdate) return;
-    void data.onUpdate(
-      data.objectId,
-      createObjectData({
-        layout: setZoneLayoutMode(data.layout, autoZoneEnabled ? 'manual' : 'auto'),
-        layout_binding: 'override',
-      })
-    );
-  };
-
   const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Enter') {
       handleSaveLabel();
@@ -339,7 +218,20 @@ const ZoneNodeComponent = ({
     if (mutationDisabled) return;
     const hexColor = color.toHexString();
     if (data.onUpdate) {
-      data.onUpdate(data.objectId, createObjectData({ borderColor: hexColor }));
+      data.onUpdate(
+        data.objectId,
+        createObjectData({
+          borderColor: hexColor,
+          // A legacy `color` drove a translucent fill. Materialize that fill
+          // before introducing borderColor, whose historical fallback is
+          // opaque, so changing only the border has no surprise side effect.
+          ...(data.color && !data.borderColor && !data.backgroundColor
+            ? {
+                backgroundColor: toTranslucentZoneFill(data.color, `${token.colorBgContainer}40`),
+              }
+            : {}),
+        })
+      );
     }
     // Save to recent colors and update state
     saveRecentColor(hexColor);
@@ -364,154 +256,30 @@ const ZoneNodeComponent = ({
     }
   };
 
+  const handleToggleAutoZone = () => {
+    if (mutationDisabled || !data.onUpdate) return;
+    void data.onUpdate(
+      data.objectId,
+      createObjectData({
+        layout: setZoneLayoutMode(data.layout, autoZoneEnabled ? 'manual' : 'auto'),
+        layout_binding: 'override',
+      })
+    );
+  };
+
   // Effective label font size: sanitized persisted value or the theme default.
   // Sanitizing on read defends the DOM against bad fontSize data (negative,
   // non-finite, absurdly large) written via MCP/import.
   const labelFontSize = effectiveLabelFontSize(data.fontSize, token.fontSize);
   // Status keeps its smaller relative size, scaled from the label size when set.
   const statusFontSize = statusFontSizeFor(data.fontSize, token.fontSize, token.fontSizeSM);
-  const atMinFontSize = labelFontSize <= ZONE_FONT_SIZE_MIN;
-  const atMaxFontSize = labelFontSize >= ZONE_FONT_SIZE_MAX;
-
-  const handleFontSizeStep = (delta: number) => {
-    if (mutationDisabled) return;
-    const next = clampZoneFontSize(labelFontSize, delta);
-    if (next !== labelFontSize && data.onUpdate) {
-      data.onUpdate(data.objectId, createObjectData({ fontSize: next }));
-    }
-  };
-
   const handleReorder = (op: LayerOp) => {
     if (mutationDisabled) return;
     data.onReorder?.(data.objectId, op);
   };
 
-  // Shared style for the compact square icon buttons in the toolbar.
-  const iconButtonStyle: React.CSSProperties = {
-    width: '20px',
-    height: '20px',
-    borderRadius: '3px',
-    backgroundColor: token.colorBgContainer,
-    // Keep every border component longhand because active buttons update only
-    // the color. Mixing `border` with a conditional `borderColor` makes React
-    // warn while removing the active state during rerender.
-    borderWidth: '1px',
-    borderStyle: 'solid',
-    borderColor: token.colorBorder,
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    userSelect: 'none',
-    cursor: 'pointer',
-    padding: 0,
-    color: token.colorText,
-    flexShrink: 0,
-  };
-
-  const verticalDivider = (
-    <div
-      style={{
-        width: '1px',
-        height: '24px',
-        backgroundColor: token.colorBorder,
-        margin: '0 2px',
-        alignSelf: 'center',
-        flexShrink: 0,
-      }}
-    />
-  );
-
-  // A toolbar icon button that runs `action` on pointer-up (matching the
-  // existing lock/settings/delete buttons' event handling). Pointer-up covers
-  // both mouse and touch (a tap synthesizes a click, but we never act on click).
-  // Keyboard activation is driven EXPLICITLY from onKeyDown (Enter/Space) — we
-  // deliberately do NOT infer keyboard from a `detail === 0` click, because some
-  // touch engines also report detail === 0 for tap-synthesized clicks, which
-  // would double-fire (pointerUp + click). onClick only swallows propagation.
-  const renderActionButton = (
-    key: string,
-    title: string,
-    icon: React.ReactNode,
-    action: () => void,
-    disabled = false,
-    options: {
-      pressed?: boolean;
-      active?: boolean;
-      expanded?: boolean;
-      controls?: string;
-    } = {}
-  ) => (
-    <button
-      key={key}
-      type="button"
-      aria-label={title}
-      aria-pressed={options.pressed}
-      aria-expanded={options.expanded}
-      aria-controls={options.controls}
-      disabled={disabled}
-      onPointerDown={(e) => {
-        e.preventDefault();
-        e.stopPropagation();
-      }}
-      onPointerUp={(e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        if (mutationDisabled || disabled) return;
-        action();
-      }}
-      onKeyDown={(e) => {
-        if (e.key !== 'Enter' && e.key !== ' ') return;
-        e.preventDefault();
-        e.stopPropagation();
-        if (mutationDisabled || disabled) return;
-        action();
-      }}
-      onClick={(e) => {
-        e.preventDefault();
-        e.stopPropagation();
-      }}
-      style={{
-        ...iconButtonStyle,
-        ...(options.active
-          ? {
-              backgroundColor: token.colorPrimaryBg,
-              borderColor: token.colorPrimary,
-              color: token.colorPrimary,
-            }
-          : {}),
-        ...(disabled ? { opacity: 0.4, cursor: 'not-allowed' } : {}),
-      }}
-      title={title}
-    >
-      {icon}
-    </button>
-  );
-
-  const layerIconStyle: React.CSSProperties = {
-    fontSize: '12px',
-    color: token.colorText,
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-  };
-
   // Backwards compatibility: fall back to `color` if new fields not set
   const borderColor = data.borderColor || data.color || token.colorBorder;
-
-  // Helper to convert color to rgba with custom alpha (for backwards compatibility with old `color` field)
-  const colorToRgba = (colorStr: string, alpha: number): string => {
-    try {
-      const color = new AggregationColor(colorStr);
-      const rgb = color.toRgb();
-      // If the color already has alpha, multiply it with the requested alpha
-      const finalAlpha = rgb.a * alpha;
-      // biome-ignore lint/plugin/noHardcodedColorLiteral: persisted user color resolver emits CSS syntax from parsed channels
-      return `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, ${finalAlpha})`;
-    } catch {
-      // Fallback to token if parsing fails
-      return `${token.colorBgContainer}40`;
-    }
-  };
 
   // Backwards compatibility: derive background from border if backgroundColor not set
   const backgroundColor =
@@ -519,7 +287,7 @@ const ZoneNodeComponent = ({
     (data.borderColor
       ? data.borderColor // Use borderColor directly if set (supports alpha)
       : data.color
-        ? colorToRgba(data.color, ZONE_CONTENT_OPACITY) // Old behavior for backwards compat
+        ? toTranslucentZoneFill(data.color, `${token.colorBgContainer}40`)
         : `${token.colorBgContainer}40`);
 
   const getTextColor = (background: string): string => getContrastingTextColor(background, token);
@@ -546,7 +314,9 @@ const ZoneNodeComponent = ({
         style={{
           width: '100%',
           height: '100%',
-          border: `2px solid ${borderColor}`,
+          borderWidth: 2,
+          borderStyle: 'solid',
+          borderColor,
           borderRadius: token.borderRadiusLG,
           background: backgroundColor,
           padding: token.padding,
@@ -558,563 +328,349 @@ const ZoneNodeComponent = ({
           position: 'relative',
         }}
       >
-        {/* Toolbar - ALWAYS rendered, visibility controlled by CSS only */}
-        {toolbarHost &&
-          createPortal(
-            /* biome-ignore format: keep the established toolbar body stable inside its portal */
-            <div
-          ref={toolbarRef}
-          className="nodrag nopan"
-          role="toolbar"
-          aria-label="Zone actions"
-          onPointerDown={(e) => {
-            e.preventDefault();
-            e.stopPropagation();
-          }}
-          onPointerUp={(e) => {
-            e.preventDefault();
-            e.stopPropagation();
-          }}
-          onClick={(e) => {
-            e.preventDefault();
-            e.stopPropagation();
-          }}
-          style={{
-            // A portal at the React Flow root escapes every node stacking
-            // context. It therefore stays above zones, cards, artifacts, and
-            // comments without raising the translucent zone container itself.
-            position: reactFlowRoot ? 'absolute' : 'fixed',
-            top: toolbarTop,
-            left: clampedToolbarLeft,
-            // Anchor the toolbar's bottom edge above the zone. The established
-            // zone controls stay in one row; lower-frequency layout controls
-            // expand horizontally from their disclosure instead of wrapping.
-            transform: 'translate(-50%, -100%)',
-            transformOrigin: 'center bottom',
-            display: data.suppressToolbar ? 'none' : 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            flexWrap: 'nowrap',
-            gap: '8px',
-            width: 'max-content',
-            maxWidth: reactFlowRoot ? 'calc(100% - 32px)' : 'calc(100vw - 32px)',
-            overflowX: 'auto',
-            overflowY: 'hidden',
-            padding: '6px',
-            background: token.colorBgElevated,
-            border: `1px solid ${token.colorBorder}`,
-            borderRadius: token.borderRadius,
-            boxShadow: token.boxShadowSecondary,
-            zIndex: 10_000,
-            userSelect: 'none',
-            // CSS-only visibility control (no DOM changes). When the
-            // connection gate is closed we also dim and block clicks so the
-            // toolbar reads as read-only and never accidentally fires.
-            opacity: toolbarVisible ? (mutationDisabled ? 0.5 : 1) : 0,
-            pointerEvents: toolbarVisible && !mutationDisabled ? 'auto' : 'none',
-            transition: 'opacity 0.15s ease',
-          }}
-        >
-          {/* Border Color Picker */}
+        {selected && !data.suppressToolbar && !mutationDisabled && (
           <div
             className="nodrag nopan"
-            onPointerDown={(e) => {
-              e.stopPropagation();
-            }}
-            onPointerUp={(e) => {
-              e.stopPropagation();
-            }}
-            style={{ display: 'flex', alignItems: 'center', gap: '4px', flexShrink: 0 }}
-          >
-            <span
-              style={{
-                fontSize: '11px',
-                color: token.colorTextSecondary,
-                fontWeight: 500,
-                userSelect: 'none',
-                lineHeight: 1,
-              }}
-            >
-              Border
-            </span>
-            <ColorPicker
-              value={borderColor}
-              onChange={handleBorderColorChange}
-              trigger="click"
-              destroyTooltipOnHide
-              showText={false}
-              format="hex"
-              presets={[
-                {
-                  label: 'Presets',
-                  colors: colors,
-                },
-                ...(recentColors.length > 0
-                  ? [
-                      {
-                        label: 'Recent',
-                        colors: recentColors,
-                      },
-                    ]
-                  : []),
-              ]}
-            >
-              <button
-                type="button"
-                style={{
-                  width: '20px',
-                  height: '20px',
-                  borderRadius: '3px',
-                  backgroundColor: borderColor,
-                  border: `1px solid ${token.colorBorder}`,
-                  userSelect: 'none',
-                  cursor: 'pointer',
-                  padding: 0,
-                  boxShadow: token.boxShadowSecondary,
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                }}
-                title="Change border color"
-              />
-            </ColorPicker>
-          </div>
-          <div
+            role="toolbar"
+            aria-label="Zone actions"
+            onPointerDown={(event) => event.stopPropagation()}
+            onPointerUp={(event) => event.stopPropagation()}
+            onClick={(event) => event.stopPropagation()}
             style={{
-              width: '1px',
-              height: '24px',
-              backgroundColor: token.colorBorder,
-              margin: '0 2px',
-              alignSelf: 'center',
-            }}
-          />
-          {/* Background Color Picker */}
-          <div
-            className="nodrag nopan"
-            onPointerDown={(e) => {
-              e.stopPropagation();
-            }}
-            onPointerUp={(e) => {
-              e.stopPropagation();
-            }}
-            style={{ display: 'flex', alignItems: 'center', gap: '4px', flexShrink: 0 }}
-          >
-            <span
-              style={{
-                fontSize: '11px',
-                color: token.colorTextSecondary,
-                fontWeight: 500,
-                userSelect: 'none',
-                lineHeight: 1,
-              }}
-            >
-              Background
-            </span>
-            <ColorPicker
-              value={backgroundColor}
-              onChange={handleBackgroundColorChange}
-              trigger="click"
-              destroyTooltipOnHide
-              showText={false}
-              format="hex"
-              presets={[
-                {
-                  label: 'Presets',
-                  colors: colors.map(
-                    (c) =>
-                      `${c}${Math.round(ZONE_CONTENT_OPACITY * 255)
-                        .toString(16)
-                        .padStart(2, '0')}`
-                  ),
-                },
-                ...(recentColors.length > 0
-                  ? [
-                      {
-                        label: 'Recent',
-                        colors: recentColors,
-                      },
-                    ]
-                  : []),
-              ]}
-            >
-              <button
-                type="button"
-                style={{
-                  width: '20px',
-                  height: '20px',
-                  borderRadius: '3px',
-                  backgroundColor: backgroundColor,
-                  border: `1px solid ${token.colorBorder}`,
-                  userSelect: 'none',
-                  cursor: 'pointer',
-                  padding: 0,
-                  boxShadow: token.boxShadowSecondary,
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                }}
-                title="Change background color"
-              />
-            </ColorPicker>
-          </div>
-          <div
-            style={{
-              width: '1px',
-              height: '24px',
-              backgroundColor: token.colorBorder,
-              margin: '0 2px',
-              alignSelf: 'center',
-            }}
-          />
-          {/* Lock/Unlock Button */}
-          <button
-            type="button"
-            onPointerDown={(e) => {
-              e.preventDefault();
-              e.stopPropagation();
-            }}
-            onPointerUp={(e) => {
-              e.preventDefault();
-              e.stopPropagation();
-              if (mutationDisabled) return;
-              handleToggleLock();
-            }}
-            onClick={(e) => {
-              e.preventDefault();
-              e.stopPropagation();
-            }}
-            style={{
-              width: '20px',
-              height: '20px',
-              borderRadius: '3px',
-              backgroundColor: data.locked ? token.colorWarningBg : token.colorBgContainer,
-              border: `1px solid ${data.locked ? token.colorWarning : token.colorBorder}`,
+              position: 'absolute',
+              top: '-48px',
+              left: '50%',
+              transform: `translateX(-50%) scale(${scale})`,
+              transformOrigin: 'center bottom',
               display: 'flex',
               alignItems: 'center',
-              justifyContent: 'center',
+              gap: token.marginXXS,
+              padding: token.paddingXXS,
+              background: token.colorBgElevated,
+              border: `1px solid ${token.colorBorder}`,
+              borderRadius: token.borderRadiusLG,
+              boxShadow: token.boxShadowSecondary,
+              zIndex: 1000,
               userSelect: 'none',
-              cursor: 'pointer',
-              padding: 0,
-              flexShrink: 0,
-            }}
-            title={data.locked ? 'Unlock zone' : 'Lock zone'}
-          >
-            {data.locked ? (
-              <LockOutlined
-                style={{
-                  fontSize: '12px',
-                  color: token.colorWarning,
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                }}
-              />
-            ) : (
-              <UnlockOutlined
-                style={{
-                  fontSize: '12px',
-                  color: token.colorText,
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                }}
-              />
-            )}
-          </button>
-          {verticalDivider}
-          <fieldset
-            className="nodrag nopan"
-            aria-label="Zone layout actions"
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: '4px',
-              minWidth: 0,
-              margin: 0,
-              padding: 0,
-              border: 0,
-              flexShrink: 0,
+              whiteSpace: 'nowrap',
+              pointerEvents: 'auto',
             }}
           >
-            {renderActionButton(
-              'auto-zone',
-              autoZoneEnabled ? 'Disable Auto Zone' : 'Enable Auto Zone',
-              <SyncOutlined
-                style={{
-                  ...layerIconStyle,
-                  color: autoZoneEnabled ? token.colorPrimary : token.colorText,
-                }}
-              />,
-              handleToggleAutoZone,
-              false,
-              { pressed: autoZoneEnabled, active: autoZoneEnabled }
-            )}
-            {renderActionButton(
-              'arrange-contents',
-              'Tidy up contents',
-              <AppstoreOutlined style={layerIconStyle} />,
-              () => data.onArrangeContents?.(data.objectId),
-              positionableItemCount < 1
-            )}
-            {hasExtraLayoutActions &&
-              renderActionButton(
-                'more-layout-actions',
-                layoutActionsExpanded ? 'Hide extra layout actions' : 'Show more layout actions',
-                <EllipsisOutlined style={layerIconStyle} />,
-                () => setLayoutActionsExpanded((expanded) => !expanded),
-                false,
-                {
-                  active: layoutActionsExpanded,
-                  expanded: layoutActionsExpanded,
-                  controls: layoutActionsId,
+            <Button
+              type="text"
+              size="small"
+              aria-label="Rename zone"
+              title="Rename zone"
+              icon={<EditOutlined />}
+              disabled={mutationDisabled}
+              onClick={() => setIsEditingLabel(true)}
+              style={{ width: 32, height: 32 }}
+            />
+
+            <Popover
+              trigger="click"
+              placement="bottom"
+              title="Appearance"
+              content={
+                <Space orientation="vertical" size="middle" style={{ width: 240 }}>
+                  <Flex justify="space-between" align="center" gap="middle">
+                    <Typography.Text>Border</Typography.Text>
+                    <ColorPicker
+                      value={borderColor}
+                      onChangeComplete={handleBorderColorChange}
+                      trigger="click"
+                      showText
+                      format="hex"
+                      presets={[
+                        { label: 'Presets', colors },
+                        ...(recentColors.length > 0
+                          ? [{ label: 'Recent', colors: recentColors }]
+                          : []),
+                      ]}
+                    >
+                      <Button
+                        aria-label="Zone border color"
+                        icon={
+                          <span
+                            aria-hidden="true"
+                            style={{
+                              width: 14,
+                              height: 14,
+                              borderRadius: token.borderRadiusSM,
+                              background: borderColor,
+                              display: 'inline-block',
+                            }}
+                          />
+                        }
+                      >
+                        {borderColor.toUpperCase()}
+                      </Button>
+                    </ColorPicker>
+                  </Flex>
+                  <Flex justify="space-between" align="center" gap="middle">
+                    <Typography.Text>Fill</Typography.Text>
+                    <ColorPicker
+                      value={backgroundColor}
+                      onChangeComplete={handleBackgroundColorChange}
+                      trigger="click"
+                      showText
+                      format="hex"
+                      presets={[
+                        {
+                          label: 'Presets',
+                          colors: colors.map(
+                            (color) =>
+                              `${color}${Math.round(ZONE_CONTENT_OPACITY * 255)
+                                .toString(16)
+                                .padStart(2, '0')}`
+                          ),
+                        },
+                        ...(recentColors.length > 0
+                          ? [{ label: 'Recent', colors: recentColors }]
+                          : []),
+                      ]}
+                    >
+                      <Button
+                        aria-label="Zone fill color"
+                        icon={
+                          <span
+                            aria-hidden="true"
+                            style={{
+                              width: 14,
+                              height: 14,
+                              borderRadius: token.borderRadiusSM,
+                              border: `1px solid ${token.colorBorder}`,
+                              background: backgroundColor,
+                              display: 'inline-block',
+                            }}
+                          />
+                        }
+                      >
+                        {backgroundColor.toUpperCase()}
+                      </Button>
+                    </ColorPicker>
+                  </Flex>
+                  <Typography.Text type="secondary" style={{ fontSize: token.fontSizeSM }}>
+                    Label size and theme defaults are in Zone settings.
+                  </Typography.Text>
+                </Space>
+              }
+            >
+              <Button
+                type="text"
+                size="small"
+                aria-label="Zone appearance"
+                title="Zone appearance"
+                disabled={mutationDisabled}
+                icon={
+                  <span
+                    aria-hidden="true"
+                    style={{
+                      position: 'relative',
+                      display: 'inline-flex',
+                      fontSize: token.fontSizeLG,
+                    }}
+                  >
+                    <BgColorsOutlined />
+                    <span
+                      style={{
+                        position: 'absolute',
+                        right: -4,
+                        bottom: -2,
+                        width: 9,
+                        height: 9,
+                        borderRadius: '50%',
+                        border: `1px solid ${token.colorBorder}`,
+                        background: backgroundColor,
+                      }}
+                    />
+                  </span>
                 }
-              )}
-            {layoutActionsExpanded && hasExtraLayoutActions && (
-              <div
-                id={layoutActionsId}
-                style={{ display: 'flex', alignItems: 'center', gap: '4px', flexShrink: 0 }}
-              >
-                <fieldset
-                  className="nodrag nopan"
-                  aria-label="Justify contents"
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '4px',
-                    minWidth: 0,
-                    margin: 0,
-                    padding: 0,
-                    border: 0,
-                  }}
-                >
-                  {renderActionButton(
-                    'justify-left',
-                    'Justify contents left',
-                    <AlignLeftOutlined style={layerIconStyle} />,
-                    () => data.onJustifyContents?.(data.objectId, 'left'),
-                    positionableItemCount < 1
-                  )}
-                  {renderActionButton(
-                    'justify-middle',
-                    'Center in zone',
-                    <AlignCenterOutlined style={layerIconStyle} />,
-                    () => data.onJustifyContents?.(data.objectId, 'middle'),
-                    positionableItemCount < 1
-                  )}
-                  {renderActionButton(
-                    'justify-right',
-                    'Justify contents right',
-                    <AlignRightOutlined style={layerIconStyle} />,
-                    () => data.onJustifyContents?.(data.objectId, 'right'),
-                    positionableItemCount < 1
-                  )}
-                  {renderActionButton(
-                    'justify-top',
-                    'Justify contents top',
-                    <VerticalAlignTopOutlined style={layerIconStyle} />,
-                    () => data.onJustifyContents?.(data.objectId, 'top'),
-                    positionableItemCount < 1
-                  )}
-                  {renderActionButton(
-                    'justify-vertical-middle',
-                    'Center contents vertically',
-                    <VerticalAlignMiddleOutlined style={layerIconStyle} />,
-                    () => data.onJustifyContents?.(data.objectId, 'vertical_middle'),
-                    positionableItemCount < 1
-                  )}
-                  {renderActionButton(
-                    'justify-bottom',
-                    'Justify contents bottom',
-                    <VerticalAlignBottomOutlined style={layerIconStyle} />,
-                    () => data.onJustifyContents?.(data.objectId, 'bottom'),
-                    positionableItemCount < 1
-                  )}
-                </fieldset>
-                {/*
-                  One derived-state density button rather than a Collapse/Expand
-                  pair: a zone whose items are all collapsed can only usefully be
-                  expanded, and vice versa, so a second slot would always be a no-op.
-                */}
-                {(data.densityExpandableItemCount ?? 0) > 0 &&
-                  renderActionButton(
-                    'set-contents-compact',
-                    zoneContentsAllCompact ? 'Expand contents' : 'Collapse contents',
-                    zoneContentsAllCompact ? (
-                      <PlusSquareOutlined style={layerIconStyle} />
-                    ) : (
-                      <MinusSquareOutlined style={layerIconStyle} />
-                    ),
-                    () => data.onSetContentsCompact?.(data.objectId, !zoneContentsAllCompact)
-                  )}
-              </div>
-            )}
-          </fieldset>
-          {verticalDivider}
-          {/* Layer (z-order) controls */}
-          <div
-            className="nodrag nopan"
-            style={{ display: 'flex', alignItems: 'center', gap: '4px', flexShrink: 0 }}
-          >
-            {renderActionButton(
-              'to-back',
-              'Send to back',
-              <VerticalAlignBottomOutlined style={layerIconStyle} />,
-              () => handleReorder('back')
-            )}
-            {renderActionButton(
-              'send-backward',
-              'Send backward',
-              <CaretDownOutlined style={layerIconStyle} />,
-              () => handleReorder('backward')
-            )}
-            {renderActionButton(
-              'bring-forward',
-              'Bring forward',
-              <CaretUpOutlined style={layerIconStyle} />,
-              () => handleReorder('forward')
-            )}
-            {renderActionButton(
-              'to-front',
-              'Bring to front',
-              <VerticalAlignTopOutlined style={layerIconStyle} />,
-              () => handleReorder('front')
-            )}
-          </div>
-          {verticalDivider}
-          {/* Label font-size stepper */}
-          <div
-            className="nodrag nopan"
-            style={{ display: 'flex', alignItems: 'center', gap: '4px', flexShrink: 0 }}
-          >
-            <FontSizeOutlined
-              style={{ fontSize: '12px', color: token.colorTextSecondary }}
-              title="Label font size"
-            />
-            {renderActionButton(
-              'font-smaller',
-              'Smaller label',
-              <span style={{ fontSize: '13px', lineHeight: 1, fontWeight: 600 }}>−</span>,
-              () => handleFontSizeStep(-ZONE_FONT_SIZE_STEP),
-              atMinFontSize
-            )}
-            <span
+                style={{ width: 32, height: 32 }}
+              />
+            </Popover>
+
+            <Button
+              type={data.locked ? 'default' : 'text'}
+              size="small"
+              aria-label={data.locked ? 'Unlock position and size' : 'Lock position and size'}
+              title={data.locked ? 'Unlock position and size' : 'Lock position and size'}
+              icon={data.locked ? <LockOutlined /> : <UnlockOutlined />}
+              disabled={mutationDisabled}
+              onClick={handleToggleLock}
               style={{
-                fontSize: '11px',
-                color: token.colorTextSecondary,
-                fontVariantNumeric: 'tabular-nums',
-                minWidth: '20px',
-                textAlign: 'center',
-                userSelect: 'none',
+                width: 32,
+                height: 32,
+                ...(data.locked
+                  ? { color: token.colorWarning, borderColor: token.colorWarning }
+                  : {}),
+              }}
+            />
+
+            <Button
+              type="text"
+              size="small"
+              aria-label="Zone settings"
+              title="Zone settings"
+              icon={<SettingOutlined />}
+              disabled={mutationDisabled}
+              onClick={() => setConfigModalOpen(true)}
+              style={{ width: 32, height: 32 }}
+            />
+
+            <Dropdown
+              trigger={['click']}
+              placement="bottomRight"
+              menu={{
+                items: [
+                  {
+                    key: 'tidy',
+                    label: 'Tidy up contents',
+                    icon: <AppstoreOutlined />,
+                    disabled: positionableItemCount < 1,
+                  },
+                  {
+                    key: 'auto-zone',
+                    label: autoZoneEnabled ? 'Disable Auto Zone' : 'Enable Auto Zone',
+                    icon: <SyncOutlined />,
+                  },
+                  {
+                    key: 'align-contents',
+                    label: 'Align contents',
+                    icon: <AlignCenterOutlined />,
+                    disabled: positionableItemCount < 1,
+                    children: [
+                      { key: 'align-left', label: 'Left', icon: <AlignLeftOutlined /> },
+                      {
+                        key: 'align-middle',
+                        label: 'Horizontal center',
+                        icon: <AlignCenterOutlined />,
+                      },
+                      { key: 'align-right', label: 'Right', icon: <AlignRightOutlined /> },
+                      { key: 'align-top', label: 'Top', icon: <VerticalAlignTopOutlined /> },
+                      {
+                        key: 'align-vertical-middle',
+                        label: 'Vertical center',
+                        icon: <VerticalAlignMiddleOutlined />,
+                      },
+                      {
+                        key: 'align-bottom',
+                        label: 'Bottom',
+                        icon: <VerticalAlignBottomOutlined />,
+                      },
+                    ],
+                  },
+                  {
+                    key: 'content-expansion',
+                    label: 'Content expansion',
+                    disabled: densityExpandableCount < 1,
+                    children: [
+                      {
+                        key: 'expand-contents',
+                        label: 'Expand eligible contents',
+                        disabled: compactDensityCount < 1,
+                      },
+                      {
+                        key: 'collapse-contents',
+                        label: 'Collapse eligible contents',
+                        disabled: allDensityCompact,
+                      },
+                    ],
+                  },
+                  { type: 'divider' },
+                  {
+                    key: 'arrange',
+                    label:
+                      data.overlappingZoneCount && data.overlappingZoneCount > 0
+                        ? `Arrange (${data.overlappingZoneCount} overlapping)`
+                        : 'Arrange',
+                    icon: <VerticalAlignTopOutlined />,
+                    children: [
+                      {
+                        key: 'front',
+                        label: 'Bring to front',
+                        icon: <VerticalAlignTopOutlined />,
+                        disabled: data.layerAvailability?.front === false,
+                      },
+                      {
+                        key: 'forward',
+                        label: 'Bring forward',
+                        icon: <CaretUpOutlined />,
+                        disabled: data.layerAvailability?.forward === false,
+                      },
+                      {
+                        key: 'backward',
+                        label: 'Send backward',
+                        icon: <CaretDownOutlined />,
+                        disabled: data.layerAvailability?.backward === false,
+                      },
+                      {
+                        key: 'back',
+                        label: 'Send to back',
+                        icon: <VerticalAlignBottomOutlined />,
+                        disabled: data.layerAvailability?.back === false,
+                      },
+                    ],
+                  },
+                  { type: 'divider' },
+                  { key: 'delete', label: 'Delete zone', icon: <DeleteOutlined />, danger: true },
+                ],
+                onClick: ({ key, domEvent }) => {
+                  domEvent.stopPropagation();
+                  if (mutationDisabled) return;
+                  if (key === 'delete') {
+                    setDeleteModalOpen(true);
+                    return;
+                  }
+                  if (key === 'tidy') {
+                    data.onArrangeContents?.(data.objectId);
+                    return;
+                  }
+                  if (key === 'auto-zone') {
+                    handleToggleAutoZone();
+                    return;
+                  }
+                  const justificationByKey: Partial<Record<string, ZoneContentJustification>> = {
+                    'align-left': 'left',
+                    'align-middle': 'middle',
+                    'align-right': 'right',
+                    'align-top': 'top',
+                    'align-vertical-middle': 'vertical_middle',
+                    'align-bottom': 'bottom',
+                  };
+                  const justification = justificationByKey[key];
+                  if (justification) {
+                    data.onJustifyContents?.(data.objectId, justification);
+                    return;
+                  }
+                  if (key === 'expand-contents' || key === 'collapse-contents') {
+                    data.onSetContentsCompact?.(data.objectId, key === 'collapse-contents');
+                    return;
+                  }
+                  if (
+                    key === 'front' ||
+                    key === 'forward' ||
+                    key === 'backward' ||
+                    key === 'back'
+                  ) {
+                    handleReorder(key);
+                  }
+                },
               }}
             >
-              {Math.round(labelFontSize)}
-            </span>
-            {renderActionButton(
-              'font-larger',
-              'Larger label',
-              <span style={{ fontSize: '13px', lineHeight: 1, fontWeight: 600 }}>+</span>,
-              () => handleFontSizeStep(ZONE_FONT_SIZE_STEP),
-              atMaxFontSize
-            )}
+              <Button
+                type="text"
+                size="small"
+                aria-label="More zone actions"
+                title="More zone actions"
+                icon={<MoreOutlined />}
+                disabled={mutationDisabled}
+                style={{ width: 32, height: 32 }}
+              />
+            </Dropdown>
           </div>
-          {verticalDivider}
-          <button
-            type="button"
-            onPointerDown={(e) => {
-              e.preventDefault();
-              e.stopPropagation();
-            }}
-            onPointerUp={(e) => {
-              e.preventDefault();
-              e.stopPropagation();
-              if (mutationDisabled) return;
-              setConfigModalOpen(true);
-            }}
-            onClick={(e) => {
-              e.preventDefault();
-              e.stopPropagation();
-            }}
-            style={{
-              width: '20px',
-              height: '20px',
-              borderRadius: '3px',
-              backgroundColor: token.colorBgContainer,
-              border: `1px solid ${token.colorBorder}`,
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              userSelect: 'none',
-              cursor: 'pointer',
-              padding: 0,
-              flexShrink: 0,
-            }}
-            title="Configure zone"
-          >
-            <SettingOutlined
-              style={{
-                fontSize: '12px',
-                color: token.colorText,
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-              }}
-            />
-          </button>
-          <button
-            type="button"
-            onPointerDown={(e) => {
-              e.preventDefault();
-              e.stopPropagation();
-            }}
-            onPointerUp={(e) => {
-              e.preventDefault();
-              e.stopPropagation();
-              if (mutationDisabled) return;
-              setDeleteModalOpen(true);
-            }}
-            onClick={(e) => {
-              e.preventDefault();
-              e.stopPropagation();
-            }}
-            onMouseEnter={(e) => {
-              e.currentTarget.style.color = token.colorError;
-              e.currentTarget.style.borderColor = token.colorError;
-            }}
-            onMouseLeave={(e) => {
-              e.currentTarget.style.color = token.colorTextSecondary;
-              e.currentTarget.style.borderColor = token.colorBorder;
-            }}
-            style={{
-              width: '20px',
-              height: '20px',
-              borderRadius: '3px',
-              backgroundColor: token.colorBgContainer,
-              border: `1px solid ${token.colorBorder}`,
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              userSelect: 'none',
-              cursor: 'pointer',
-              padding: 0,
-              color: token.colorTextSecondary,
-              flexShrink: 0,
-            }}
-            title="Delete zone"
-          >
-            <DeleteOutlined
-              style={{
-                fontSize: '12px',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-              }}
-            />
-          </button>
-        </div>,
-            toolbarHost
-          )}
+        )}
         <div
-          data-zone-marquee-ignore="true"
           style={{
             pointerEvents: 'auto',
             // Position label to allow for inverse scaling
@@ -1202,23 +758,25 @@ const ZoneNodeComponent = ({
           onCancel={() => setConfigModalOpen(false)}
           zoneName={data.label}
           objectId={data.objectId}
-          onUpdate={data.onUpdate || (() => {})}
+          onUpdate={data.onUpdate || (() => undefined)}
           zoneData={zoneData}
           boardZoneLayoutDefaults={data.boardZoneLayoutDefaults}
+          canEdit={data.canEdit !== false}
         />
       )}
       {deleteModalOpen && (
         <DeleteZoneModal
           open={deleteModalOpen}
           onCancel={() => setDeleteModalOpen(false)}
-          onConfirm={(deleteAssociatedSessions) => {
+          onConfirm={() => {
             setDeleteModalOpen(false);
             if (data.onDelete) {
-              data.onDelete(data.objectId, deleteAssociatedSessions);
+              data.onDelete(data.objectId, false);
             }
           }}
           zoneName={data.label}
           pinnedItemCount={data.pinnedItemCount || 0}
+          canEdit={data.canEdit !== false}
         />
       )}
     </>

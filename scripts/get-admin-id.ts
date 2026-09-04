@@ -7,7 +7,7 @@
 
 import os from 'node:os';
 import path from 'node:path';
-import { loadConfig, resolveMultiTenancyConfig } from '@agor/core/config';
+import { loadConfig, resolveBootstrapTenantId } from '@agor/core/config';
 import {
   createDatabase,
   createTenantScopedDatabaseProxy,
@@ -31,8 +31,7 @@ async function main() {
   try {
     const db = createTenantScopedDatabaseProxy(createDatabase({ url: databaseUrl }));
     const config = await loadConfig();
-    const multiTenancy = resolveMultiTenancyConfig(config);
-    const tenantId = multiTenancy.mode === 'static' ? multiTenancy.static_tenant_id : undefined;
+    const tenantId = resolveBootstrapTenantId(config);
 
     // Find admin user in the active static tenant when configured.
     const adminUser = await runWithTenantDatabaseScope(db, tenantId, async () => {

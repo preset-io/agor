@@ -1,6 +1,6 @@
 {
   "name": "@agor-live/codex",
-  "version": "0.25.2",
+  "version": "0.26.1",
   "description": "Version-aligned codex agentic tool integration for Agor",
   "type": "module",
   "main": "./dist/index.js",
@@ -22,7 +22,7 @@
     "check:pack": "npm pack --dry-run"
   },
   "dependencies": {
-    "@openai/codex-sdk": "0.144.0"
+    "@openai/codex-sdk": "0.153.0"
   },
   "devDependencies": {
     "@types/node": "^24.6.0",

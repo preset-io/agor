@@ -18,6 +18,7 @@ import {
 import {
   BranchRepository,
   bindRepositoryToTenantUnitOfWork,
+  EntityNotFoundError,
   getCurrentTenantId,
   runWithTenantDatabaseScope,
   runWithTenantDatabaseTransaction,
@@ -38,6 +39,7 @@ import {
   NotAuthenticated,
   NotFound,
 } from '@agor/core/feathers';
+import { MCPServerNotUsableError } from '@agor/core/mcp';
 import {
   formatModelToolMismatchWarning,
   getCodexModelSelectionError,
@@ -134,6 +136,17 @@ function resolvedSessionModelConfig(
     throw new BadRequest('model_config must be resolved before session creation');
   }
   return modelConfig;
+}
+
+function normalizeCreateMcpServerIds(value: unknown): MCPServerID[] | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value)) {
+    throw new BadRequest('mcpServerIds must be an array');
+  }
+  if (!value.every((serverId) => typeof serverId === 'string' && serverId.trim().length > 0)) {
+    throw new BadRequest('mcpServerIds must contain non-empty strings');
+  }
+  return [...new Set(value)] as MCPServerID[];
 }
 
 /**
@@ -244,6 +257,7 @@ export type ExecuteTaskData = {
   permissionMode?: import('@agor/core/types').PermissionMode;
   stream?: boolean;
   messageSource?: import('@agor/core/types').MessageSource;
+  promptOrigin?: import('@agor/core/types').PromptOrigin;
 };
 
 export type SessionArchiveOptions = {
@@ -399,9 +413,15 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
     if (Array.isArray(data)) {
       return Promise.all(data.map((session) => this.create(session, params) as Promise<Session>));
     }
+    if (!data || typeof data !== 'object') {
+      throw new BadRequest('Session data must be an object');
+    }
     if (Object.hasOwn(data, 'sdk_home_scope')) {
       throw new BadRequest('sdk_home_scope is server-managed and cannot be set by clients');
     }
+    const explicitMcpServerIds = normalizeCreateMcpServerIds(
+      (data as { mcpServerIds?: unknown }).mcpServerIds
+    );
     const agenticTool = requireActiveAgenticTool(data.agentic_tool ?? 'claude-code');
     this.assertDeploymentToolConfigured(agenticTool);
     if (!(await isTenantAgenticToolEnabled(agenticTool, this.db))) {
@@ -410,8 +430,9 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
     const {
       agentic_tool_preset_id: configurationReference,
       model_config: originalModelConfig,
+      mcpServerIds: _requestedMcpServerIds,
       ...sessionData
-    } = data;
+    } = data as CreateSessionInput;
     let createData: Partial<Session> = { ...sessionData };
     if (params?._agenticConfigResolved) {
       createData = {
@@ -521,13 +542,49 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
       }
       if (admission.adoptBranch) await branchRepo.adoptSdkHome(branch.branch_id);
 
-      return new SessionRepository(scoped).create({
+      const createdSession = await new SessionRepository(scoped).create({
         ...createData,
         sdk_home_scope: admission.scope,
       });
+
+      // Attach in-transaction: a bad server rolls the create back, not a silent drop (#2629).
+      if (explicitMcpServerIds && explicitMcpServerIds.length > 0) {
+        const mcpRepo = new SessionMCPServerRepository(scoped);
+        try {
+          for (const serverId of explicitMcpServerIds) {
+            await mcpRepo.addServer(createdSession.session_id, serverId);
+          }
+        } catch (error) {
+          if (error instanceof MCPServerNotUsableError) {
+            throw new Forbidden('That MCP server is private to another user');
+          }
+          if (error instanceof EntityNotFoundError) {
+            throw new NotFound('That MCP server was not found');
+          }
+          throw error;
+        }
+      }
+
+      return createdSession;
     });
     if (Array.isArray(created)) {
       throw new Error('Single-session creation returned multiple sessions');
+    }
+    if (explicitMcpServerIds && explicitMcpServerIds.length > 0) {
+      for (const serverId of explicitMcpServerIds) {
+        emitServiceEvent(this.app, {
+          path: 'session-mcp-servers',
+          event: 'created',
+          data: {
+            session_id: created.session_id,
+            mcp_server_id: serverId,
+            enabled: true,
+            added_at: new Date(),
+          },
+          params,
+          id: created.session_id,
+        });
+      }
     }
     return created;
   }

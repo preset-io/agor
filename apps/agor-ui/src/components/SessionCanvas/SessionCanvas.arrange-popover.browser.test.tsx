@@ -6,16 +6,29 @@
  * captures the pointer as a marquee gesture before Segmented/Checkbox/Select
  * can update, which makes the controls look inert and clears node selection.
  */
-import type { AgorClient, Board } from '@agor-live/client';
+import type { AgorClient, Board, User } from '@agor-live/client';
 import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import { App as AntApp } from 'antd';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { userEvent } from 'vitest/browser';
 import { ConnectionProvider } from '../../contexts/ConnectionContext';
+import { __setAuthConfigForTests } from '../../hooks/useAuthConfig';
+import { agorStore } from '../../store/agorStore';
 import { CANVAS_LAYOUT_CONTROLS_CLASS } from './canvas/SelectionLayoutPopover';
 import SessionCanvas from './SessionCanvas';
 
 afterEach(cleanup);
+
+const CURRENT_USER = {
+  user_id: 'fictional-layout-owner',
+  username: 'fictional-layout-owner',
+  role: 'member',
+} as User;
+
+beforeEach(() => {
+  __setAuthConfigForTests({ requireAuth: false }, { branchRbac: false });
+  agorStore.setState({ userById: new Map([[CURRENT_USER.user_id, CURRENT_USER]]) });
+});
 
 const geometry = (payload: Record<string, unknown>) =>
   Object.fromEntries(
@@ -65,22 +78,30 @@ describe('SessionCanvas Arrange Board popover (real browser)', () => {
             currentSha: null,
           }}
         >
-          <SessionCanvas board={board} client={client} branches={[]} height={700} />
+          <SessionCanvas
+            board={board}
+            client={client}
+            branches={[]}
+            currentUserId={CURRENT_USER.user_id}
+            height={700}
+          />
         </ConnectionProvider>
       </AntApp>
     );
 
     const view = render(renderCanvas(manualBoard));
+    const user = userEvent.setup();
     const zoneNode = await waitFor(() => {
       const node = document.querySelector<HTMLElement>('.react-flow__node[data-id="zone"]');
       if (!node) throw new Error('Fictional zone did not render.');
       return node;
     });
-    await act(async () => userEvent.setup().click(zoneNode));
-    expect(await screen.findByRole('button', { name: 'Enable Auto Zone' })).toBeInTheDocument();
+    await act(async () => user.click(zoneNode));
     const toolbar = screen.getByRole('toolbar', { name: 'Zone actions' });
     expect(Number.isFinite(Number.parseFloat(toolbar.style.left))).toBe(true);
     expect(document.querySelector('.react-flow__node[data-id="legacy-text"]')).toBeNull();
+    await act(async () => user.click(screen.getByRole('button', { name: 'More zone actions' })));
+    expect(await screen.findByText('Enable Auto Zone')).toBeInTheDocument();
 
     view.rerender(
       renderCanvas({
@@ -95,7 +116,7 @@ describe('SessionCanvas Arrange Board popover (real browser)', () => {
         },
       } as Board)
     );
-    expect(await screen.findByRole('button', { name: 'Disable Auto Zone' })).toBeInTheDocument();
+    expect(await screen.findByText('Disable Auto Zone')).toBeInTheDocument();
 
     const productStyleWarnings = consoleError.mock.calls.filter((args) => {
       const message = args.map(String).join(' ');
@@ -155,7 +176,13 @@ describe('SessionCanvas Arrange Board popover (real browser)', () => {
             currentSha: null,
           }}
         >
-          <SessionCanvas board={durableBoard} client={client} branches={[]} height={760} />
+          <SessionCanvas
+            board={durableBoard}
+            client={client}
+            branches={[]}
+            currentUserId={CURRENT_USER.user_id}
+            height={760}
+          />
         </ConnectionProvider>
       </AntApp>
     );
@@ -204,7 +231,7 @@ describe('SessionCanvas Arrange Board popover (real browser)', () => {
       expect(collapse).toBeVisible();
     });
     expect(collapse.closest(`.${CANVAS_LAYOUT_CONTROLS_CLASS}`)).not.toBeNull();
-    await act(async () => user.click(collapse!.closest('[role="option"]')!));
+    await act(async () => user.click(collapse!));
     await waitFor(() => expect(density).toHaveAttribute('aria-expanded', 'false'));
     expect(fitView).toBeChecked();
     await waitFor(() => expect(fitViewLabel).toBeVisible());

@@ -17,7 +17,7 @@ import type {
   SessionRepository,
 } from '@agor/core/db';
 import { shortId } from '@agor/core/db';
-import { Forbidden, NotAuthenticated, NotFound } from '@agor/core/feathers';
+import { BadRequest, Forbidden, NotAuthenticated, NotFound } from '@agor/core/feathers';
 import type {
   AuthenticatedParams,
   Branch,
@@ -1135,6 +1135,34 @@ export function ensureSessionImmutability() {
 
     return context;
   };
+}
+
+/**
+ * Keep gateway provenance under daemon ownership.
+ *
+ * Gateway integrations create sessions through provider-less service calls.
+ * Browser, REST, Socket.IO, and MCP callers may still use the rest of
+ * `custom_context`, but cannot create, replace, or clear `gateway_source`.
+ * Session repository patches deep-merge nested context, so omitting this key
+ * preserves an existing gateway stamp.
+ */
+export function protectGatewaySourceMetadata(context: HookContext): HookContext {
+  if (!context.params.provider) return context;
+
+  const writes = Array.isArray(context.data) ? context.data : [context.data];
+  for (const write of writes) {
+    if (!write || typeof write !== 'object') continue;
+    const customContext = (write as { custom_context?: unknown }).custom_context;
+    if (customContext === undefined) continue;
+    if (!customContext || typeof customContext !== 'object' || Array.isArray(customContext)) {
+      throw new BadRequest('session.custom_context must be an object');
+    }
+    if (Object.hasOwn(customContext, 'gateway_source')) {
+      throw new Forbidden('session.custom_context.gateway_source is server-managed');
+    }
+  }
+
+  return context;
 }
 
 /**

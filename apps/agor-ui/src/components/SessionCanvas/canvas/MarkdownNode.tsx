@@ -8,6 +8,7 @@ interface MarkdownNodeData {
   objectId: string;
   content: string;
   width: number;
+  canEdit: boolean;
   onUpdate: (id: string, data: BoardObject) => void;
   onEdit?: (objectId: string, content: string, width: number) => void;
   onDelete?: (objectId: string) => void;
@@ -17,7 +18,7 @@ export const MarkdownNode = ({ data }: { data: MarkdownNodeData }) => {
   const { token } = theme.useToken();
   const { modal } = App.useApp();
   const mutationGate = useMutationGate();
-  const mutationDisabled = !mutationGate.canMutate;
+  const mutationDisabled = !mutationGate.canMutate || !data.canEdit;
 
   const handleEdit = () => {
     if (mutationDisabled) return;
@@ -69,6 +70,7 @@ export const MarkdownNode = ({ data }: { data: MarkdownNodeData }) => {
               type="text"
               size="small"
               icon={<EditOutlined />}
+              aria-label="Edit note"
               onClick={(e) => {
                 e.stopPropagation();
                 handleEdit();
@@ -82,6 +84,7 @@ export const MarkdownNode = ({ data }: { data: MarkdownNodeData }) => {
               size="small"
               danger
               icon={<DeleteOutlined />}
+              aria-label="Delete note"
               onClick={(e) => {
                 e.stopPropagation();
                 handleDelete();

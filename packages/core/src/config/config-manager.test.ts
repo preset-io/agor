@@ -936,6 +936,28 @@ describe('loadConfig', () => {
     });
   });
 
+  it('accepts only a boolean Claude subscription OAuth release flag', async () => {
+    const agorDir = path.join(tempDir, '.agor');
+    const configPath = path.join(agorDir, 'config.yaml');
+    await fs.mkdir(agorDir, { recursive: true });
+    await fs.writeFile(
+      configPath,
+      yaml.dump({ agentic_tools: { claude_subscription_oauth: true } }),
+      'utf-8'
+    );
+    await expect(loadConfig()).resolves.toMatchObject({
+      agentic_tools: { claude_subscription_oauth: true },
+    });
+
+    __resetConfigCacheForTests();
+    await fs.writeFile(
+      configPath,
+      yaml.dump({ agentic_tools: { claude_subscription_oauth: 'yes' } }),
+      'utf-8'
+    );
+    await expect(loadConfig()).rejects.toThrow(/claude_subscription_oauth must be a boolean/);
+  });
+
   it('rejects unsupported or duplicate configured agentic tools', async () => {
     const agorDir = path.join(tempDir, '.agor');
     const configPath = path.join(agorDir, 'config.yaml');

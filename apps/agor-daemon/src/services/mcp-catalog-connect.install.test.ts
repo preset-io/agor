@@ -143,8 +143,8 @@ async function buildDaemon(
   const installedServers = () => serverRepository.findAll({});
   const seedServer = (server: Parameters<MCPServerRepository['create']>[0]) =>
     serverRepository.create(server);
-  const addUser = (email: string, addedRole: UserRole) =>
-    users.create({ email, name: email, role: addedRole }) as Promise<User>;
+  const addUser = (email: string, addedRole: UserRole, user_id?: UserID) =>
+    users.create({ email, name: email, role: addedRole, user_id }) as Promise<User>;
 
   return { user, connect, connectAs, addUser, installedServers, seedServer };
 }
@@ -167,6 +167,21 @@ describe('marketplace install, as it lands in the database', () => {
       scope: 'session',
       catalog_entry_name: DEEPWIKI,
       owner_user_id: user.user_id,
+    });
+  });
+
+  it('accepts the authentication-hydrated legacy UUID user ID deployed in production', async () => {
+    const { connectAs, addUser, installedServers } = await buildDaemon('allow_crud');
+    const legacyUserId = '707bae66-dda5-4c01-9136-a5cda16e048e' as UserID;
+    const legacy = await addUser('legacy-production-shape@agor.live', 'member', legacyUserId);
+
+    await connectAs(legacy, 'member');
+
+    expect(
+      (await installedServers()).find((row) => row.owner_user_id === legacyUserId)
+    ).toMatchObject({
+      owner_user_id: legacyUserId,
+      catalog_entry_name: DEEPWIKI,
     });
   });
 
@@ -436,12 +451,15 @@ describe('the write hook this seam depends on', () => {
     return { bob, mallory, createAs, patchAs };
   };
 
-  it('is registered on mcp-servers create by registerHooks, not just constructible', async () => {
+  it('trusts the authentication-hydrated owner, not a request-supplied owner', async () => {
     const { bob, mallory, createAs } = await standUpDaemonHooks();
 
     await expect(
       createAs(mallory, { transport: 'http', owner_user_id: bob.user_id })
     ).rejects.toThrow(/only create MCP servers owned by yourself/);
+
+    const context = await createAs(mallory, { transport: 'http' });
+    expect((context.data as { owner_user_id?: string }).owner_user_id).toBe(mallory.user_id);
   });
 
   it('runs as the registered chain, not as a blanket denier', async () => {

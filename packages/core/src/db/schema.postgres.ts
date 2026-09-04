@@ -399,6 +399,12 @@ export const tasks = pgTable(
         sdk_failure?: Task['sdk_failure'];
         termination_request?: Task['termination_request'];
         sdk_watchdog_mode?: Task['sdk_watchdog_mode'];
+        /**
+         * Immutable filesystem authority projected when this executor was
+         * launched. Internal repository fact; deliberately omitted from the
+         * public Task DTO and never accepted from executor writes.
+         */
+        executor_launch_fs_access_floor?: import('@agor/core/types').CapabilityPolicyFsAccess;
       }>()
       .notNull(),
   },
@@ -1139,6 +1145,7 @@ export const users = pgTable(
           opencode?: Record<string, never>;
         };
         agentic_auth_methods?: import('../types/user').AgenticAuthMethods;
+        agentic_credential_sources?: import('../types/user').AgenticCredentialSources;
         // Encrypted environment variables with scope metadata.
         //
         // Two stored value shapes are tolerated on read:
@@ -2220,6 +2227,71 @@ export const mcpOauthPendingFlows = pgTable(
 );
 
 /**
+ * Durable, short-lived authority for Claude subscription OAuth sign-in attempts.
+ *
+ * The provider `state` value is represented only by `state_hash`. The PKCE
+ * verifier lives in `sealed_material`, an authenticated encrypted envelope bound
+ * to the tenant/user/attempt. The authorization code and the resulting
+ * access/refresh tokens are never stored here.
+ *
+ * Unlike the MCP pending-flow table there is no unauthenticated provider
+ * callback: the user pastes the authorization code back into an already
+ * authenticated session, so no state-hash capability policy exists.
+ */
+export const claudeOauthAttempts = pgTable(
+  'claude_oauth_attempts',
+  {
+    tenant_id: text('tenant_id').notNull().default('default'),
+    attempt_id: varchar('attempt_id', { length: 36 }).primaryKey(),
+    state_hash: varchar('state_hash', { length: 64 }).notNull(),
+    user_id: varchar('user_id', { length: 36 }).notNull(),
+    attempt_generation: bigint('attempt_generation', { mode: 'number' }).notNull(),
+    envelope_version: integer('envelope_version').notNull(),
+    is_current: boolean('is_current').notNull().default(true),
+    status: text('status', {
+      enum: ['pending', 'exchanging', 'persisting', 'succeeded', 'failed', 'ambiguous', 'expired'],
+    })
+      .notNull()
+      .default('pending'),
+    // NULL after every terminal transition to minimize retained secret material.
+    sealed_material: text('sealed_material'),
+    exchange_claim_id: varchar('exchange_claim_id', { length: 36 }),
+    failure_code: text('failure_code'),
+    // Non-secret success hint carried by the token response (e.g. the plan
+    // tier). Never holds token material.
+    subscription_type: text('subscription_type'),
+    created_at: t.timestamp('created_at').notNull(),
+    updated_at: t.timestamp('updated_at').notNull(),
+    expires_at: t.timestamp('expires_at').notNull(),
+    exchange_started_at: t.timestamp('exchange_started_at'),
+    finished_at: t.timestamp('finished_at'),
+  },
+  (table) => ({
+    tenantUserFk: foreignKey({
+      name: 'claude_oauth_attempts_tenant_user_fk',
+      columns: [table.tenant_id, table.user_id],
+      foreignColumns: [users.tenant_id, users.user_id],
+    }).onDelete('cascade'),
+    stateHashUnique: uniqueIndex('claude_oauth_attempts_state_hash_unique').on(table.state_hash),
+    currentUserUnique: uniqueIndex('claude_oauth_attempts_current_user_uq')
+      .on(table.tenant_id, table.user_id)
+      .where(sql`${table.is_current} = true`),
+    tenantUserIdx: index('claude_oauth_attempts_tenant_user_idx').on(
+      table.tenant_id,
+      table.user_id,
+      table.created_at
+    ),
+    // Current-attempt uniqueness mirrors the partial index in the migration.
+    maintenanceIdx: index('claude_oauth_attempts_maintenance_idx').on(
+      table.status,
+      table.expires_at,
+      table.exchange_started_at,
+      table.finished_at
+    ),
+  })
+);
+
+/**
  * Durable, short-lived authority for Codex ChatGPT device sign-in attempts.
  *
  * Device identifiers and user codes live only in `sealed_material`, bound to
@@ -3280,6 +3352,8 @@ export type UserMCPOAuthTokenRow = typeof userMcpOauthTokens.$inferSelect;
 export type UserMCPOAuthTokenInsert = typeof userMcpOauthTokens.$inferInsert;
 export type MCPOAuthPendingFlowRow = typeof mcpOauthPendingFlows.$inferSelect;
 export type MCPOAuthPendingFlowInsert = typeof mcpOauthPendingFlows.$inferInsert;
+export type ClaudeOAuthAttemptRow = typeof claudeOauthAttempts.$inferSelect;
+export type ClaudeOAuthAttemptInsert = typeof claudeOauthAttempts.$inferInsert;
 export type CodexDeviceAuthAttemptRow = typeof codexDeviceAuthAttempts.$inferSelect;
 export type CodexDeviceAuthAttemptInsert = typeof codexDeviceAuthAttempts.$inferInsert;
 export type CardTypeRow = typeof cardTypes.$inferSelect;

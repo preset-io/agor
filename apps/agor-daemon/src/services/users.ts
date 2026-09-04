@@ -46,6 +46,7 @@ import {
   insert,
   isExecutionHomeKeyAvailable,
   isNull,
+  isPostgresDatabaseHandle,
   jsonExtract,
   runWithTenantDatabaseTransaction,
   select,
@@ -68,6 +69,8 @@ import {
 import { isLikelyGitToken } from '@agor/core/git/pure';
 import { isInvalidModelConfigError } from '@agor/core/models';
 import type {
+  AgenticAuthMethods,
+  AgenticCredentialSources,
   AgenticToolName,
   AgenticToolsConfig,
   AgenticToolsUpdate,
@@ -102,6 +105,8 @@ import {
   WORKSPACE_DEFAULT_AGENTIC_CONFIGURATION,
 } from '@agor/core/types';
 import { emitServiceEvent } from '../utils/emit-service-event.js';
+import { resolveOwnerHomeStore } from '../utils/sandbox-context.js';
+import type { ClaudeUserCredentialPatchCoordinator } from './claude-credential-mutation.js';
 import { lockTenantAuthorizationFence } from './tenant-authorization-fence.js';
 import { UserAvatarSyncManager } from './user-avatar-sync.js';
 import {
@@ -166,6 +171,7 @@ export const USERS_SERVICE_TRANSPORT_METHODS = [
 export const LOCAL_AUTH_LOOKUP_PARAM = Symbol('agor.users.local-auth-lookup');
 export const AUTH_INTERNAL_USER_LOOKUP_PARAM = Symbol('agor.users.auth-internal-lookup');
 const USER_PATCH_LOCK_HELD_PARAM = Symbol('agor.users.patch-lock-held');
+const USER_CREDENTIAL_LOCK_HELD_PARAM = Symbol('agor.users.credential-lock-held');
 
 // SQLite runs one daemon and has no cross-process writer, but two async
 // requests can still read the same users.data snapshot and then overlap on the
@@ -174,6 +180,33 @@ const USER_PATCH_LOCK_HELD_PARAM = Symbol('agor.users.patch-lock-held');
 // advisory/CAS fences as the cross-replica authority; this local lock merely
 // avoids needless same-process conflicts there.
 const userPatchLocks = new Map<string, Promise<void>>();
+const sqliteTenantAuthorityLocks = new Map<string, Promise<void>>();
+
+async function withSqliteTenantAuthorityLock<T>(
+  db: TenantScopeAwareDatabase | TenantScopedDatabase,
+  params: Params | undefined,
+  work: () => Promise<T>
+): Promise<T> {
+  if (isPostgresDatabaseHandle(db)) return work();
+  const tenantId =
+    (params as AuthenticatedParams | undefined)?.tenant?.tenant_id ??
+    getCurrentTenantId() ??
+    '<standalone>';
+  const key = String(tenantId);
+  const previous = sqliteTenantAuthorityLocks.get(key) ?? Promise.resolve();
+  let release!: () => void;
+  const current = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  sqliteTenantAuthorityLocks.set(key, current);
+  await previous;
+  try {
+    return await work();
+  } finally {
+    release();
+    if (sqliteTenantAuthorityLocks.get(key) === current) sqliteTenantAuthorityLocks.delete(key);
+  }
+}
 
 async function withUserPatchLock<T>(
   id: UserID,
@@ -361,7 +394,8 @@ interface UpdateUserData {
    * Field names are env var names exported into the SDK CLI environment.
    */
   agentic_tools?: AgenticToolsUpdate;
-  agentic_auth_methods?: import('@agor/core/types').AgenticAuthMethods;
+  agentic_auth_methods?: AgenticAuthMethods;
+  agentic_credential_sources?: AgenticCredentialSources;
   // Environment variables for update (accepts plaintext, encrypted before storage)
   env_vars?: Record<string, string | null>; // { "GITHUB_TOKEN": "ghp_...", "NPM_TOKEN": null }
   // Per-var scope updates (v0.5: 'global' | 'session'). Applied after env_vars
@@ -399,6 +433,7 @@ const TRUSTED_USER_MUTATION_FIELDS: Readonly<
     'avatar_synced_at',
   ]),
   'env-vars-widget': new Set(['env_vars', 'env_var_scopes']),
+  'claude-auth': new Set(['agentic_tools', 'agentic_auth_methods', 'agentic_credential_sources']),
 };
 
 function canonicalizeRoleWrite(value: unknown): UserRole {
@@ -463,14 +498,17 @@ function validatedAssignedPassword(password: unknown, email?: string): string {
  */
 export class UsersService {
   private avatarSync?: UserAvatarSyncManager;
+  private readonly config: AgorConfig;
   private readonly identityAuthority: ResolvedIdentityAuthority;
 
   constructor(
     protected db: TenantScopeAwareDatabase | TenantScopedDatabase,
     protected app?: Application,
-    config?: AgorConfig
+    config?: AgorConfig,
+    private readonly claudeCredentialPatches?: ClaudeUserCredentialPatchCoordinator
   ) {
     const effectiveConfig = config ?? (app?.get('config') as AgorConfig | undefined) ?? {};
+    this.config = effectiveConfig;
     this.identityAuthority = resolveIdentityAuthority(effectiveConfig);
     if (app) {
       // Application-bound services are created only from the long-lived,
@@ -880,11 +918,37 @@ export class UsersService {
     if (typeof id !== 'string' || !id) {
       throw new BadRequest('Bulk user mutations are not supported');
     }
+    const coordinateClaudeCredential = this.claudeCredentialPatches?.applies(data, params) === true;
+    const credentialTenantId = coordinateClaudeCredential ? getCurrentTenantId() : undefined;
+    if (coordinateClaudeCredential && !credentialTenantId) {
+      throw new Error('Missing active tenant context for Claude credential mutation');
+    }
+    const credentialLockHeld =
+      (params as (Params & { [USER_CREDENTIAL_LOCK_HELD_PARAM]?: boolean }) | undefined)?.[
+        USER_CREDENTIAL_LOCK_HELD_PARAM
+      ] === true;
     if (
       !(params as (Params & { [USER_PATCH_LOCK_HELD_PARAM]?: boolean }) | undefined)?.[
         USER_PATCH_LOCK_HELD_PARAM
       ]
     ) {
+      if (coordinateClaudeCredential && !credentialLockHeld) {
+        const releaseClaudeCredential = await this.claudeCredentialPatches!.lock(
+          String(credentialTenantId),
+          id
+        );
+        try {
+          const credentialLockedParams = { ...(params ?? {}) } as Params & {
+            [USER_CREDENTIAL_LOCK_HELD_PARAM]: boolean;
+          };
+          credentialLockedParams[USER_CREDENTIAL_LOCK_HELD_PARAM] = true;
+          return await withUserPatchLock(id, credentialLockedParams, (lockedParams) =>
+            this.patch(id, data, lockedParams)
+          );
+        } finally {
+          await releaseClaudeCredential?.();
+        }
+      }
       return withUserPatchLock(id, params, (lockedParams) => this.patch(id, data, lockedParams));
     }
     assertSingleUserMutation(data);
@@ -899,8 +963,62 @@ export class UsersService {
     ) {
       throw new BadRequest(`Execution home key "${data.unix_username}" is already in use`);
     }
+    // Keep lock ordering consistent with OAuth finalization: credential
+    // authority first, then the users-service role/identity authority.
+    const releaseClaudeCredential =
+      coordinateClaudeCredential && !credentialLockHeld
+        ? await this.claudeCredentialPatches!.lock(String(credentialTenantId), id)
+        : undefined;
+    try {
+      return await withSqliteTenantAuthorityLock(this.db, params, () =>
+        this.patchWithClaudeCredentialAuthority(
+          id,
+          data,
+          params,
+          coordinateClaudeCredential,
+          credentialTenantId
+        )
+      );
+    } finally {
+      await releaseClaudeCredential?.();
+    }
+  }
+
+  private async patchWithClaudeCredentialAuthority(
+    id: UserID,
+    data: UpdateUserData,
+    params: Params | undefined,
+    coordinateClaudeCredential: boolean,
+    credentialTenantId: string | undefined
+  ): Promise<User> {
     await lockTenantAuthorizationFence(this.db, params);
     const authority = await this.authorizePatch(id, data, params);
+    const changesClaudeCredentialSource =
+      coordinateClaudeCredential && this.claudeCredentialPatches!.changesSource(data, params);
+    const normalizeRouteField = (value: string | null | undefined) => value?.trim() || null;
+    const unixUsernameChanges =
+      coordinateClaudeCredential &&
+      data.unix_username !== undefined &&
+      this.claudeCredentialPatches!.changesRoute({ unix_username: data.unix_username }) &&
+      normalizeRouteField(data.unix_username) !==
+        normalizeRouteField(authority.target.unix_username);
+    const filesystemHomeChanges =
+      coordinateClaudeCredential &&
+      data.filesystem_home !== undefined &&
+      this.claudeCredentialPatches!.changesRoute({ filesystem_home: data.filesystem_home }) &&
+      resolveOwnerHomeStore({
+        config: this.config,
+        tenantId: credentialTenantId,
+        ownerUserId: id,
+        filesystemHome: authority.target.filesystem_home,
+      }) !==
+        resolveOwnerHomeStore({
+          config: this.config,
+          tenantId: credentialTenantId,
+          ownerUserId: id,
+          filesystemHome: data.filesystem_home,
+        });
+    const changesClaudeCredentialRoute = unixUsernameChanges || filesystemHomeChanges;
     const hasPasswordWrite = Object.hasOwn(data, 'password');
     const assignedPassword = hasPasswordWrite
       ? validatedAssignedPassword(data.password, data.email ?? authority.target.email)
@@ -953,6 +1071,7 @@ export class UsersService {
       data.preferences ||
       data.agentic_tools ||
       data.agentic_auth_methods ||
+      data.agentic_credential_sources ||
       data.env_vars ||
       data.env_var_scopes ||
       data.primary_agentic_tool !== undefined ||
@@ -975,7 +1094,8 @@ export class UsersService {
         avatar_synced_at?: string;
         preferences?: Record<string, unknown>;
         agentic_tools?: StoredAgenticTools;
-        agentic_auth_methods?: import('@agor/core/types').AgenticAuthMethods;
+        agentic_auth_methods?: AgenticAuthMethods;
+        agentic_credential_sources?: AgenticCredentialSources;
         env_vars?: Record<string, string | StoredEnvVar>;
         primary_agentic_tool?: AgenticToolName;
         default_agentic_config?: import('@agor/core/types').DefaultAgenticConfig;
@@ -1044,6 +1164,117 @@ export class UsersService {
       const nextAgenticTools: StoredAgenticTools = data.agentic_tools
         ? applyAgenticToolsPatch(currentData?.agentic_tools ?? {}, data.agentic_tools)
         : (currentData?.agentic_tools ?? {});
+
+      // Keep Claude's coarse auth method and exact credential source in the
+      // same users-row update as the encrypted credential patch. This is the
+      // authority boundary for every UI/API save and clear, including older
+      // clients that do not yet send `agentic_credential_sources`.
+      const nextAgenticAuthMethods: AgenticAuthMethods = {
+        ...currentData.agentic_auth_methods,
+        ...data.agentic_auth_methods,
+      };
+      const nextAgenticCredentialSources: AgenticCredentialSources = {
+        ...currentData.agentic_credential_sources,
+      };
+      const claudePatch = data.agentic_tools?.['claude-code'];
+      if (claudePatch) {
+        const writesSubscriptionToken =
+          typeof claudePatch.CLAUDE_CODE_OAUTH_TOKEN === 'string' &&
+          claudePatch.CLAUDE_CODE_OAUTH_TOKEN.trim().length > 0;
+        const writesApiCredential = ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN'].some((field) => {
+          const value = claudePatch[field as keyof typeof claudePatch];
+          return typeof value === 'string' && value.trim().length > 0;
+        });
+        if (writesSubscriptionToken) {
+          nextAgenticCredentialSources['claude-code'] = 'subscription_token';
+        } else if (writesApiCredential) {
+          nextAgenticCredentialSources['claude-code'] = 'api_key';
+        } else if (
+          claudePatch.CLAUDE_CODE_OAUTH_TOKEN === null &&
+          (nextAgenticCredentialSources['claude-code'] === 'subscription_token' ||
+            (nextAgenticCredentialSources['claude-code'] === undefined &&
+              currentData.agentic_auth_methods?.['claude-code'] === 'subscription' &&
+              Boolean(currentData.agentic_tools?.['claude-code']?.CLAUDE_CODE_OAUTH_TOKEN)))
+        ) {
+          // Source-less rows written before this field existed still need a
+          // durable transition. Require the pre-patch token as well as the
+          // legacy subscription marker so an unrelated clear cannot invent
+          // authority or disable a different credential family.
+          nextAgenticCredentialSources['claude-code'] = 'none';
+        } else if (
+          nextAgenticCredentialSources['claude-code'] === 'api_key' &&
+          (claudePatch.ANTHROPIC_API_KEY === null || claudePatch.ANTHROPIC_AUTH_TOKEN === null) &&
+          !nextAgenticTools['claude-code']?.ANTHROPIC_API_KEY &&
+          !nextAgenticTools['claude-code']?.ANTHROPIC_AUTH_TOKEN
+        ) {
+          nextAgenticCredentialSources['claude-code'] = 'none';
+        }
+      }
+      const requestedClaudeSource = data.agentic_credential_sources?.['claude-code'];
+      if (
+        requestedClaudeSource !== undefined &&
+        !(['api_key', 'subscription_token', 'managed_file', 'none'] as const).includes(
+          requestedClaudeSource
+        )
+      ) {
+        throw new BadRequest('Invalid Claude credential source');
+      }
+      if (requestedClaudeSource !== undefined) {
+        nextAgenticCredentialSources['claude-code'] = requestedClaudeSource;
+      } else if (
+        claudePatch === undefined &&
+        Object.hasOwn(data.agentic_auth_methods ?? {}, 'claude-code')
+      ) {
+        // Preserve the released method-only API as a source transition for old
+        // clients and external callers. Exact source in the same patch wins;
+        // otherwise select only a backed source and never infer a native file
+        // from a coarse subscription marker.
+        const requestedClaudeMethod = data.agentic_auth_methods?.['claude-code'];
+        if (requestedClaudeMethod === 'api_key') {
+          nextAgenticCredentialSources['claude-code'] =
+            nextAgenticTools['claude-code']?.ANTHROPIC_API_KEY ||
+            nextAgenticTools['claude-code']?.ANTHROPIC_AUTH_TOKEN
+              ? 'api_key'
+              : 'none';
+        } else if (requestedClaudeMethod === 'subscription') {
+          if (currentData.agentic_credential_sources?.['claude-code'] === 'managed_file') {
+            nextAgenticCredentialSources['claude-code'] = 'managed_file';
+          } else {
+            nextAgenticCredentialSources['claude-code'] = nextAgenticTools['claude-code']
+              ?.CLAUDE_CODE_OAUTH_TOKEN
+              ? 'subscription_token'
+              : 'none';
+          }
+        } else {
+          nextAgenticCredentialSources['claude-code'] = 'none';
+        }
+      }
+
+      const claudeSource = nextAgenticCredentialSources['claude-code'];
+      if (
+        requestedClaudeSource === 'managed_file' &&
+        getTrustedUserMutationPurpose(params) !== 'claude-auth'
+      ) {
+        throw new Forbidden('Managed Claude credential sources can only be set by Claude sign-in');
+      }
+      if (claudeSource === 'subscription_token') {
+        if (!nextAgenticTools['claude-code']?.CLAUDE_CODE_OAUTH_TOKEN) {
+          throw new BadRequest('A pasted Claude subscription source requires a stored token');
+        }
+        nextAgenticAuthMethods['claude-code'] = 'subscription';
+      } else if (claudeSource === 'managed_file') {
+        nextAgenticAuthMethods['claude-code'] = 'subscription';
+      } else if (claudeSource === 'api_key') {
+        if (
+          !nextAgenticTools['claude-code']?.ANTHROPIC_API_KEY &&
+          !nextAgenticTools['claude-code']?.ANTHROPIC_AUTH_TOKEN
+        ) {
+          throw new BadRequest('A Claude API-key source requires a stored API credential');
+        }
+        nextAgenticAuthMethods['claude-code'] = 'api_key';
+      } else if (claudeSource === 'none') {
+        nextAgenticAuthMethods['claude-code'] = undefined;
+      }
 
       // Handle env vars (encrypt before storage).
       //
@@ -1169,9 +1400,11 @@ export class UsersService {
         preferences: data.preferences ?? current.preferences,
         agentic_tools: Object.keys(nextAgenticTools).length > 0 ? nextAgenticTools : undefined,
         agentic_auth_methods:
-          data.agentic_auth_methods !== undefined
-            ? { ...current.agentic_auth_methods, ...data.agentic_auth_methods }
-            : current.agentic_auth_methods,
+          Object.keys(nextAgenticAuthMethods).length > 0 ? nextAgenticAuthMethods : undefined,
+        agentic_credential_sources:
+          Object.keys(nextAgenticCredentialSources).length > 0
+            ? nextAgenticCredentialSources
+            : undefined,
         env_vars: Object.keys(nextEnvVars).length > 0 ? nextEnvVars : undefined,
         primary_agentic_tool: data.primary_agentic_tool ?? current.primary_agentic_tool,
         default_agentic_config: nextDefaultAgenticConfig,
@@ -1190,6 +1423,13 @@ export class UsersService {
     }
 
     const authorityActorPredicate = this.actorStillCurrentPredicate(authority.actor, params);
+    if (changesClaudeCredentialRoute) {
+      // The old row is still authoritative here. Invalidate attempts and
+      // generation-delete its credential before publishing a different route;
+      // reversing this order would strand secrets in a home no longer
+      // discoverable from the user record.
+      await this.claudeCredentialPatches!.cleanupRouteBeforePatch(String(credentialTenantId), id);
+    }
     const row = await runWithTenantDatabaseTransaction(
       this.db,
       (params as AuthenticatedParams | undefined)?.tenant?.tenant_id ?? getCurrentTenantId(),
@@ -1241,6 +1481,13 @@ export class UsersService {
       }
     );
 
+    if (changesClaudeCredentialSource) {
+      // Authorization and the SQL update have succeeded, but the surrounding
+      // tenant transaction has not committed. Invalidate attempts and advance
+      // the per-home generation now; a failure rolls back the metadata change.
+      await this.claudeCredentialPatches!.complete(String(credentialTenantId), id);
+    }
+
     const requesterId = (params as AuthenticatedParams | undefined)?.user?.user_id as
       | UserID
       | undefined;
@@ -1255,6 +1502,37 @@ export class UsersService {
       throw new BadRequest('Bulk user mutations are not supported');
     }
     this.assertDeleteAllowed();
+    const coordinateClaudeCredential = this.claudeCredentialPatches?.coordinatesRemoval() === true;
+    const credentialTenantId = coordinateClaudeCredential ? getCurrentTenantId() : undefined;
+    if (coordinateClaudeCredential && !credentialTenantId) {
+      throw new Error('Missing active tenant context for Claude credential mutation');
+    }
+    // Credential authority always precedes users/role authority. OAuth
+    // finalization and route deletion therefore cannot deadlock by taking
+    // these locks in opposite orders.
+    const releaseClaudeCredential = coordinateClaudeCredential
+      ? await this.claudeCredentialPatches.lock(String(credentialTenantId), id)
+      : undefined;
+    try {
+      return await withSqliteTenantAuthorityLock(this.db, params, () =>
+        this.removeWithClaudeCredentialAuthority(
+          id,
+          params,
+          coordinateClaudeCredential,
+          credentialTenantId
+        )
+      );
+    } finally {
+      await releaseClaudeCredential?.();
+    }
+  }
+
+  private async removeWithClaudeCredentialAuthority(
+    id: UserID,
+    params: Params | undefined,
+    coordinateClaudeCredential: boolean,
+    credentialTenantId: string | undefined
+  ): Promise<User> {
     await lockTenantAuthorizationFence(this.db, params);
     const authority = await this.authorizeRemove(id, params);
     await this.assertNotLastSuperadmin(authority.target, params);
@@ -1284,6 +1562,13 @@ export class UsersService {
       throw new BadRequest(
         'This user still owns boards or branches. Delete those resources before deleting the user.'
       );
+    }
+
+    if (coordinateClaudeCredential) {
+      // Remove the generation-fenced file while the old route and owner row
+      // still exist. Only after cleanup succeeds may the home key become
+      // reusable through the SQL delete below.
+      await this.claudeCredentialPatches!.cleanupRouteBeforeRemove(String(credentialTenantId), id);
     }
 
     const authorityActorPredicate = this.actorStillCurrentPredicate(authority.actor, params);
@@ -1648,7 +1933,8 @@ export class UsersService {
       avatar_synced_at?: string;
       preferences?: Record<string, unknown>;
       agentic_tools?: StoredAgenticTools; // Encrypted per-tool credential blobs
-      agentic_auth_methods?: import('@agor/core/types').AgenticAuthMethods;
+      agentic_auth_methods?: AgenticAuthMethods;
+      agentic_credential_sources?: AgenticCredentialSources;
       env_vars?: Record<string, string | StoredEnvVar>; // Encrypted env vars (legacy + v0.5 shape)
       primary_agentic_tool?: AgenticToolName;
       primary_teammate_id?: BranchID;
@@ -1688,6 +1974,7 @@ export class UsersService {
       // Per-tool credential presence (boolean only — never expose decrypted values).
       agentic_tools: toAgenticToolsStatus(data.agentic_tools),
       agentic_auth_methods: data.agentic_auth_methods,
+      agentic_credential_sources: data.agentic_credential_sources,
       // Self-only: return plaintext for whitelisted non-secret fields
       // (base URLs) so the UI can render the saved value back. Field-level
       // secrets are NEVER on the whitelist; see `AGENTIC_TOOLS_PUBLIC_FIELDS`.
@@ -1802,9 +2089,10 @@ class UsersServiceWithAuth extends UsersService {
 export function createUsersService(
   db: TenantScopeAwareDatabase,
   app?: Application,
-  config?: AgorConfig
+  config?: AgorConfig,
+  claudeCredentialPatches?: ClaudeUserCredentialPatchCoordinator
 ): UsersServiceWithAuth {
-  return new UsersServiceWithAuth(db, app, config);
+  return new UsersServiceWithAuth(db, app, config, claudeCredentialPatches);
 }
 
 /** Create a provider-less Users service bound to one active tenant transaction. */

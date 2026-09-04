@@ -160,6 +160,7 @@ import {
   loadScheduleAndBranch,
   loadSession,
   loadSessionBranch,
+  protectGatewaySourceMetadata,
   resolveSessionContext,
   scopeFindToAccessibleBoardsSql,
   scopeFindToAccessibleBranchesSql,
@@ -211,6 +212,7 @@ import {
 } from './utils/session-task-state.js';
 import {
   createTenantDatabaseScopeAroundHook,
+  createTenantWriteAdmissionAroundHook,
   deferWithTenantContext,
   enforceTenantWriteGateForHook,
 } from './utils/tenant-db-scope.js';
@@ -542,6 +544,14 @@ export const TENANT_IDENTITY_ONLY_SERVICE_PATHS = [
   'codex-auth/device',
   'codex-auth/import',
   'codex-auth/logout',
+  // Same shape as codex-auth/device: it exchanges a pasted code against
+  // Anthropic and opens short tenant units of work at the call site, then reads
+  // getCurrentTenantId(); without ambient tenant identity its create/find throw
+  // "Missing active tenant context for Claude OAuth".
+  'claude-auth/oauth',
+  // Delete-only logout — reads getCurrentTenantId() to resolve the target home
+  // and clear the stored method; needs the same ambient identity.
+  'claude-auth/logout',
   'opencode-auth',
   'opencode-models',
   'claude-models',
@@ -562,6 +572,12 @@ export const TENANT_IDENTITY_ONLY_SERVICE_PATHS = [
   // short tenant DB units around metadata phases and never holds one across
   // that provider call.
   'gateway-channels',
+] as const;
+
+/** Identity-only Claude endpoints that must clear the tenant freeze before side effects. */
+export const CLAUDE_CREDENTIAL_WRITE_ADMISSION_SERVICE_PATHS = [
+  'claude-auth/oauth',
+  'claude-auth/logout',
 ] as const;
 
 /**
@@ -627,6 +643,10 @@ export const CONSTRAINED_HA_PROCESS_AFFINE_SERVICE_GATES = [
   ['codex-auth/device', 'codexDeviceAuth'],
   ['codex-auth/import', 'codexAuth'],
   ['codex-auth/logout', 'codexAuth'],
+  // Claude is admitted only when the resolved HA capability proves its durable
+  // attempt authority plus exact-user generation-fenced writer route.
+  ['claude-auth/oauth', 'claudeOAuth'],
+  ['claude-auth/logout', 'claudeAuth'],
   ['opencode-auth', 'openCodeAuth'],
   ['opencode-models', 'openCodeAuth'],
 ] as const satisfies ReadonlyArray<readonly [string, Parameters<typeof rejectInConstrainedHa>[1]]>;
@@ -675,6 +695,7 @@ export function protectExternalTaskCreate(context: HookContext): HookContext {
   }
 
   data.status = TaskStatus.CREATED;
+  data.metadata = { source: 'agor' };
   return context;
 }
 
@@ -1156,6 +1177,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
     jwtSecret,
     transaction: false,
   });
+  const tenantWriteAdmissionAround = createTenantWriteAdmissionAroundHook(db);
 
   const ensureTenantContext = async (context: HookContext): Promise<HookContext> => {
     try {
@@ -1215,17 +1237,27 @@ export function registerHooks(ctx: RegisterHooksContext): void {
     for (const path of TENANT_IDENTITY_ONLY_SERVICE_PATHS) {
       safeService(path)?.hooks({ around: { all: [tenantIdentityAround] } });
     }
+    // These caller-bound credential endpoints cross the executor/provider
+    // boundary. Reject a frozen tenant in a short transaction before any file
+    // or network side effect; later users-service writes perform their own gate
+    // check and OAuth compensates if a freeze begins during the external I/O.
+    for (const path of CLAUDE_CREDENTIAL_WRITE_ADMISSION_SERVICE_PATHS) {
+      safeService(path)?.hooks({ around: { create: [tenantWriteAdmissionAround] } });
+    }
   };
 
   // Without tenant columns (SQLite / single-tenant), tenant-owned services skip
-  // the full RLS-transaction hooks — but they must still carry ambient tenant
-  // identity for tenant-aware call sites. MCP session-token issuance can
-  // resolve the configured tenant without ambient identity in static mode,
-  // while required_from_auth remains fail-closed. Identity only: no data
-  // stamping or DB transaction, which are Postgres tenant-column mechanics.
-  const registerTenantIdentityForOwnedServices = (): void => {
+  // the Postgres RLS/tenant-column mechanics (data stamping, transaction-local
+  // RLS GUC) — but they must still enter a tenant DATABASE scope, not merely
+  // tenant identity. The scope guard is armed in every mode now, so a
+  // tenant-owned request that touched `this.db` with identity alone would trip
+  // `MissingTenantDatabaseScopeError`. On SQLite `runWithTenantDatabaseScope`
+  // opens no transaction — the scope is a cheap AsyncLocalStorage store — so
+  // this satisfies the guard at zero runtime cost and stamps/writes nothing.
+  // (`required_from_auth` still runs the full `registerTenantHooks` path.)
+  const registerTenantDatabaseScopeForOwnedServices = (): void => {
     for (const path of tenantOwnedServicePaths) {
-      safeService(path)?.hooks({ around: { all: [tenantIdentityAround] } });
+      safeService(path)?.hooks({ around: { all: [tenantDatabaseScopeAround] } });
     }
   };
 
@@ -2969,6 +3001,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
   // SessionsService.update delegates straight to patch, so both verbs mutate a
   // session the same way and must clear the same authorization chain.
   const sessionWriteGuards = [
+    protectGatewaySourceMetadata,
     // created_by and unix_username remain immutable identity/history stamps.
     // unix_username is load-bearing for delegated execution-home Sessions;
     // branch-home Sessions deliberately use the current prompt actor instead.
@@ -3039,6 +3072,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       ],
       create: [
         requireMinimumRole(ROLES.MEMBER, 'create sessions'),
+        protectGatewaySourceMetadata,
         // Stamp session with creator's unix_username (MUST run first). Also
         // registered without RBAC when delegated mode makes
         // unix_username load-bearing — otherwise sessions would be stamped
@@ -3162,6 +3196,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
           const session = Array.isArray(context.result) ? context.result[0] : context.result;
 
           if (session && shouldRunSessionPostTurnHooks(session)) {
+            const terminalTaskId = session.tasks?.at(-1);
             // Flush the gateway outbound buffer (fire-and-forget).
             // When a GitHub/Shortcut-connected session finishes its turn, post
             // the last buffered message as a PR/issue/story comment. Must happen
@@ -3173,7 +3208,11 @@ export function registerHooks(ctx: RegisterHooksContext): void {
             deferWithTenantContext(context.params, async () => {
               try {
                 const gatewayService = context.app.service('gateway') as unknown as GatewayService;
-                await gatewayService.flushOutboundBuffer(session.session_id);
+                if (terminalTaskId) {
+                  await gatewayService.flushOutboundBuffer(session.session_id, {
+                    taskId: terminalTaskId,
+                  });
+                }
                 await gatewayService.updateProgress({
                   session_id: session.session_id,
                   state: 'done',
@@ -3970,7 +4009,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
   if (tenantColumnsEnabled) {
     registerTenantHooks();
   } else {
-    registerTenantIdentityForOwnedServices();
+    registerTenantDatabaseScopeForOwnedServices();
   }
   registerTenantIdentityHooks();
 }

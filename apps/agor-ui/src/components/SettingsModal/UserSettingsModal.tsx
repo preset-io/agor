@@ -7,6 +7,7 @@ import type {
   AgenticToolConfigField,
   AgenticToolName,
   AgorClient,
+  ClaudeCredentialSource,
   EnvVarMetadata,
   EnvVarScope,
   Group,
@@ -53,7 +54,6 @@ import {
   Menu,
   Modal,
   Popconfirm,
-  Radio,
   Select,
   Space,
   Switch,
@@ -88,6 +88,7 @@ import {
   modelLabelForTool,
 } from '../AgenticToolConfigForm';
 import { ApiKeyFields, type FieldStatus, TOOL_FIELD_CONFIGS } from '../ApiKeyFields';
+import { ClaudeAuthSettings } from '../ClaudeAuth';
 import { CodexAuthSettings } from '../CodexAuth';
 import { EnvVarEditor } from '../EnvVarEditor';
 import { HighlightMatch } from '../HighlightMatch';
@@ -279,7 +280,7 @@ const UserSettingsModalForIdentity: React.FC<UserSettingsModalProps> = ({
   initialTab,
 }) => {
   const { token } = theme.useToken();
-  const { config: authConfig, identityContractState } = useAuthConfig();
+  const { config: authConfig, featuresConfig, identityContractState } = useAuthConfig();
   const screens = Grid.useBreakpoint();
   const compact = !screens.md;
 
@@ -431,6 +432,9 @@ const UserSettingsModalForIdentity: React.FC<UserSettingsModalProps> = ({
   const [savingToolField, setSavingToolField] = useState<Record<string, boolean>>({});
   const [agenticAuthMethods, setAgenticAuthMethods] = useState<
     Partial<Record<'claude-code' | 'codex', AgenticAuthMethod>>
+  >({});
+  const [agenticCredentialSources, setAgenticCredentialSources] = useState<
+    Partial<Record<'claude-code', ClaudeCredentialSource>>
   >({});
 
   // Environment variable management state (scope-aware, v0.5 env-var-access)
@@ -660,6 +664,7 @@ const UserSettingsModalForIdentity: React.FC<UserSettingsModalProps> = ({
     }
     setAgenticToolStatus(next);
     setAgenticAuthMethods(user?.agentic_auth_methods ?? {});
+    setAgenticCredentialSources(user?.agentic_credential_sources ?? {});
 
     if (user?.env_vars) {
       setUserEnvVars(user.env_vars);
@@ -884,6 +889,12 @@ const UserSettingsModalForIdentity: React.FC<UserSettingsModalProps> = ({
       if (patch.agentic_auth_methods) {
         setAgenticAuthMethods((current) => ({ ...current, ...patch.agentic_auth_methods }));
       }
+      if (patch.agentic_credential_sources) {
+        setAgenticCredentialSources((current) => ({
+          ...current,
+          ...patch.agentic_credential_sources,
+        }));
+      }
       setAgenticToolStatus((prev) => ({
         ...prev,
         [tool]: { ...(prev[tool] ?? {}), [field]: true },
@@ -910,12 +921,33 @@ const UserSettingsModalForIdentity: React.FC<UserSettingsModalProps> = ({
 
     try {
       setSavingToolField((prev) => ({ ...prev, [spinnerKey]: true }));
-      await onUpdate?.(
-        user.user_id,
-        buildAgenticToolCredentialPatch(tool, field, null),
-        operation.isCurrent
-      );
+      const patch = buildAgenticToolCredentialPatch(tool, field, null);
+      await onUpdate?.(user.user_id, patch, operation.isCurrent);
       if (!operation.isCurrent()) return;
+      if (patch.agentic_auth_methods) {
+        setAgenticAuthMethods((current) => ({ ...current, ...patch.agentic_auth_methods }));
+      }
+      if (tool === 'claude-code') {
+        const remaining = { ...(agenticToolStatus[tool] ?? {}) };
+        delete remaining[field];
+        setAgenticCredentialSources((current) => {
+          const active = current['claude-code'];
+          const clearedActiveToken =
+            field === 'CLAUDE_CODE_OAUTH_TOKEN' &&
+            (active === 'subscription_token' ||
+              (active === undefined &&
+                agenticAuthMethods['claude-code'] === 'subscription' &&
+                !!agenticToolStatus['claude-code']?.CLAUDE_CODE_OAUTH_TOKEN));
+          const clearedLastApiCredential =
+            active === 'api_key' &&
+            (field === 'ANTHROPIC_API_KEY' || field === 'ANTHROPIC_AUTH_TOKEN') &&
+            !remaining.ANTHROPIC_API_KEY &&
+            !remaining.ANTHROPIC_AUTH_TOKEN;
+          return clearedActiveToken || clearedLastApiCredential
+            ? { ...current, 'claude-code': 'none' }
+            : current;
+        });
+      }
       setAgenticToolStatus((prev) => {
         const nextToolFields = { ...(prev[tool] ?? {}) };
         delete nextToolFields[field];
@@ -1058,10 +1090,16 @@ const UserSettingsModalForIdentity: React.FC<UserSettingsModalProps> = ({
       // expose an explicit method so dormant credentials are never selected by accident.
       const allToolFields = TOOL_FIELD_CONFIGS[tool] ?? [];
       const fieldStatus: FieldStatus = agenticToolStatus[tool] ?? {};
+      const claudeSource =
+        tool === 'claude-code' ? agenticCredentialSources['claude-code'] : undefined;
       const authMethod =
         tool === 'claude-code'
-          ? (agenticAuthMethods['claude-code'] ??
-            (fieldStatus.CLAUDE_CODE_OAUTH_TOKEN ? 'subscription' : 'api_key'))
+          ? claudeSource === 'managed_file' || claudeSource === 'subscription_token'
+            ? 'subscription'
+            : claudeSource === 'api_key' || claudeSource === 'none'
+              ? 'api_key'
+              : (agenticAuthMethods['claude-code'] ??
+                (fieldStatus.CLAUDE_CODE_OAUTH_TOKEN ? 'subscription' : 'api_key'))
           : tool === 'codex'
             ? (agenticAuthMethods.codex ?? 'api_key')
             : undefined;
@@ -1076,8 +1114,19 @@ const UserSettingsModalForIdentity: React.FC<UserSettingsModalProps> = ({
       const tenantSettings = tenantToolSettings.get(tool as TenantAgenticToolName);
       const resolutionPolicy = tenantSettings?.resolution_policy ?? 'user_preferred';
       const personalConfigured =
-        (tool === 'codex' && authMethod === 'subscription') ||
-        toolFields.some(({ field }) => fieldStatus[field] && !String(field).endsWith('_BASE_URL'));
+        tool === 'claude-code'
+          ? claudeSource === 'managed_file' ||
+            (claudeSource === 'subscription_token' && !!fieldStatus.CLAUDE_CODE_OAUTH_TOKEN) ||
+            (claudeSource === 'api_key' &&
+              (!!fieldStatus.ANTHROPIC_API_KEY || !!fieldStatus.ANTHROPIC_AUTH_TOKEN)) ||
+            (claudeSource === undefined &&
+              (authMethod === 'subscription'
+                ? !!fieldStatus.CLAUDE_CODE_OAUTH_TOKEN
+                : !!fieldStatus.ANTHROPIC_API_KEY || !!fieldStatus.ANTHROPIC_AUTH_TOKEN))
+          : (tool === 'codex' && authMethod === 'subscription') ||
+            toolFields.some(
+              ({ field }) => fieldStatus[field] && !String(field).endsWith('_BASE_URL')
+            );
       const workspaceConfigured = Object.entries(tenantSettings?.connection ?? {}).some(
         ([field, status]) => status?.configured && !field.endsWith('_BASE_URL')
       );
@@ -1116,6 +1165,7 @@ const UserSettingsModalForIdentity: React.FC<UserSettingsModalProps> = ({
         allToolFields,
         fieldStatus,
         authMethod,
+        claudeSource,
         toolFields,
         resolutionPolicy,
         personalConfigured,
@@ -1124,7 +1174,7 @@ const UserSettingsModalForIdentity: React.FC<UserSettingsModalProps> = ({
         status,
       };
     },
-    [agenticAuthMethods, agenticToolStatus, tenantToolSettings]
+    [agenticAuthMethods, agenticCredentialSources, agenticToolStatus, tenantToolSettings]
   );
 
   const statusDotColor = useMemo<Record<AgenticToolReadiness['tone'], string>>(
@@ -1971,6 +2021,7 @@ const UserSettingsModalForIdentity: React.FC<UserSettingsModalProps> = ({
       allToolFields,
       fieldStatus,
       authMethod,
+      claudeSource,
       toolFields,
       resolutionPolicy,
       personalConfigured,
@@ -2117,6 +2168,8 @@ const UserSettingsModalForIdentity: React.FC<UserSettingsModalProps> = ({
         </Typography.Paragraph>
       ) : null;
 
+    const nativeClaudeLogin = tool === 'claude-code' && claudeSource === 'managed_file';
+
     const authPane = (
       <>
         {aboveNote}
@@ -2127,22 +2180,33 @@ const UserSettingsModalForIdentity: React.FC<UserSettingsModalProps> = ({
                 Saved personal configuration is inactive and will be retained if the workspace
                 policy changes.
               </Typography.Text>
-              <Popconfirm
-                title="Delete saved personal configuration?"
-                description="This permanently removes your saved credentials for this tool."
-                onConfirm={async () => {
-                  for (const field of allToolFields) {
-                    if (fieldStatus[field.field]) {
-                      await handleToolFieldClear(tool, field.field);
+              {nativeClaudeLogin && !isSelf ? (
+                <Typography.Text type="secondary">
+                  Only this user can disconnect their Claude subscription login.
+                </Typography.Text>
+              ) : (
+                <Popconfirm
+                  title="Delete saved personal configuration?"
+                  description="This permanently removes your saved credentials for this tool."
+                  onConfirm={async () => {
+                    if (nativeClaudeLogin) {
+                      if (!client) throw new Error('Not connected to Agor');
+                      await client.service('claude-auth/logout').create({});
+                      return;
                     }
-                  }
-                  if (tool === 'codex') {
-                    await handleAuthMethodChange('codex', 'api_key');
-                  }
-                }}
-              >
-                <Button danger>Delete saved personal configuration</Button>
-              </Popconfirm>
+                    for (const field of allToolFields) {
+                      if (fieldStatus[field.field]) {
+                        await handleToolFieldClear(tool, field.field);
+                      }
+                    }
+                    if (tool === 'codex' || tool === 'claude-code') {
+                      await handleAuthMethodChange(tool, 'api_key');
+                    }
+                  }}
+                >
+                  <Button danger>Delete saved personal configuration</Button>
+                </Popconfirm>
+              )}
             </Space>
           )
         ) : tool === 'codex' ? (
@@ -2165,26 +2229,33 @@ const UserSettingsModalForIdentity: React.FC<UserSettingsModalProps> = ({
                 | undefined
             }
           />
+        ) : tool === 'claude-code' ? (
+          <ClaudeAuthSettings
+            client={client}
+            identityKey={callerIdentityKey}
+            operationScope={operationScope}
+            authMethod={authMethod ?? 'api_key'}
+            credentialSource={claudeSource}
+            allowSubscriptionLogin={isSelf}
+            allowOAuthSignIn={featuresConfig?.claudeSubscriptionOAuth === true}
+            apiKeyFields={allToolFields}
+            fieldStatus={fieldStatus}
+            onSaveField={(field, value) => handleToolFieldSave(tool, field, value)}
+            onClearField={(field) => handleToolFieldClear(tool, field)}
+            savingFields={Object.fromEntries(
+              allToolFields.map((c) => [c.field, !!savingToolField[`${tool}.${c.field}`]])
+            )}
+            publicValues={
+              user?.agentic_tools_public_values?.[tool] as
+                | Partial<Record<AgenticToolConfigField, string>>
+                | undefined
+            }
+          />
         ) : (
           <Form component={false} layout="vertical">
             <Typography.Paragraph type="secondary" style={{ marginBottom: 16 }}>
               Personal credentials are encrypted at rest and injected only into the agent runtime.
             </Typography.Paragraph>
-            {tool === 'claude-code' && (
-              <FieldRow
-                label="Sign-in method"
-                tooltip="Choose one — Agor uses whichever is selected, the other is ignored."
-              >
-                <Radio.Group
-                  buttonStyle="solid"
-                  value={authMethod}
-                  onChange={(event) => void handleAuthMethodChange(tool, event.target.value)}
-                >
-                  <Radio.Button value="subscription">Claude subscription</Radio.Button>
-                  <Radio.Button value="api_key">API key</Radio.Button>
-                </Radio.Group>
-              </FieldRow>
-            )}
             <ApiKeyFields
               identityKey={callerIdentityKey}
               operationScope={operationScope}

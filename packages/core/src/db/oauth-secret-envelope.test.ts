@@ -41,4 +41,22 @@ describe('bound secret envelope', () => {
       openBoundSecret('agor-mcp-oauth:v2:access-token:a:b:c:d', master, 'access-token', 'binding')
     ).toThrow('Unsupported bound secret envelope');
   });
+
+  it('keeps Claude attempt ciphertext outside the MCP exchange purpose domain', () => {
+    const binding = 'tenant\0user\0attempt\x01';
+    const envelope = sealBoundSecret(
+      '{"codeVerifier":"verifier"}',
+      master,
+      'claude-signin-attempt',
+      binding
+    );
+
+    expect(envelope).toMatch(/^agor-mcp-oauth:v1:claude-signin-attempt:/);
+    expect(() => openBoundSecret(envelope, master, 'pending-exchange', binding)).toThrow(
+      'Unsupported bound secret envelope'
+    );
+    expect(openBoundSecret(envelope, master, 'claude-signin-attempt', binding)).toContain(
+      'verifier'
+    );
+  });
 });

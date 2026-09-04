@@ -42,3 +42,16 @@ export function resolveExecutorWorkingDirectory(
 ): string {
   return outerSandbox ? getCwd() : branchPath;
 }
+
+/**
+ * Path the Claude Code SDK/CLI reads its subscription OAuth login from on Linux:
+ * `${CLAUDE_CONFIG_DIR || ~/.claude}/.credentials.json`. macOS uses the Keychain
+ * instead; Agor's executors run on Linux so the file path is authoritative here.
+ */
+export function resolveClaudeCredentialsPath(
+  claudeConfigDir: string | undefined = process.env.CLAUDE_CONFIG_DIR,
+  lookup?: UserInfoLookup
+): string {
+  const home = claudeConfigDir || join(resolveEffectiveUserInfo(lookup).homedir, '.claude');
+  return join(home, '.credentials.json');
+}

@@ -10,7 +10,12 @@
  * - Archive/Delete/Save actions
  */
 
-import type { AgorClient, Board, CardWithType } from '@agor-live/client';
+import type {
+  AgorClient,
+  Board,
+  CardWithType,
+  EffectiveCapabilityPolicyAccess,
+} from '@agor-live/client';
 import {
   DeleteOutlined,
   EditOutlined,
@@ -18,8 +23,9 @@ import {
   PushpinFilled,
   SaveOutlined,
 } from '@ant-design/icons';
-import { Button, Collapse, Input, Modal, Space, Tag, Typography, theme } from 'antd';
+import { Button, Collapse, Input, Modal, Space, Tag, Tooltip, Typography, theme } from 'antd';
 import React, { useCallback, useEffect, useState } from 'react';
+import { useAuthConfig } from '../../hooks/useAuthConfig';
 import { useAgorStore } from '../../store/agorStore';
 import { selectBranchById } from '../../store/selectors';
 import { useThemedMessage } from '../../utils/message';
@@ -67,6 +73,8 @@ const CardModalComponent = ({
   const { showSuccess, showError } = useThemedMessage();
   const branchById = useAgorStore(selectBranchById);
   const boardEmoji = board ? getBoardEmoji(board, branchById) : undefined;
+  const { featuresConfig } = useAuthConfig();
+  const branchRbacEnabled = featuresConfig?.branchRbac === true;
 
   // Edit state
   const [editingNote, setEditingNote] = useState(false);
@@ -74,6 +82,7 @@ const CardModalComponent = ({
   const [noteValue, setNoteValue] = useState('');
   const [descValue, setDescValue] = useState('');
   const [saving, setSaving] = useState(false);
+  const [boardAccess, setBoardAccess] = useState<EffectiveCapabilityPolicyAccess | null>(null);
 
   // Sync local state when card changes
   useEffect(() => {
@@ -85,10 +94,42 @@ const CardModalComponent = ({
     }
   }, [card]);
 
+  // Mirrors the daemon's card-mutation check (`cardAccess('mutate', ...)`),
+  // which resolves to the same `board.edit` capability as the board itself.
+  // A card list is already scoped to boards the caller can VIEW, which is a
+  // weaker guarantee than being able to edit them.
+  const boardId = board?.board_id;
+  useEffect(() => {
+    if (!open || !client || !boardId || !branchRbacEnabled) {
+      setBoardAccess(null);
+      return;
+    }
+    let cancelled = false;
+    client
+      .service('boards/:id/effective-access')
+      .find({ route: { id: boardId } })
+      .then((access: unknown) => {
+        if (!cancelled) setBoardAccess(access as EffectiveCapabilityPolicyAccess);
+      })
+      .catch(() => {
+        if (!cancelled) setBoardAccess(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [open, client, boardId, branchRbacEnabled]);
+
+  const canEdit = branchRbacEnabled
+    ? Boolean(boardAccess?.capabilities.includes('board.edit'))
+    : true;
+  const editBlockedReason = canEdit
+    ? undefined
+    : "You don't have Board Editor or Manager access to change this card.";
+
   const hasChanges = noteValue !== (card?.note || '') || descValue !== (card?.description || '');
 
   const handleSave = useCallback(async () => {
-    if (!card || !client || !hasChanges) return;
+    if (!card || !client || !hasChanges || !canEdit) return;
     setSaving(true);
     try {
       const updated = await client.service('cards').patch(card.card_id, {
@@ -105,10 +146,20 @@ const CardModalComponent = ({
     } finally {
       setSaving(false);
     }
-  }, [card, client, noteValue, descValue, hasChanges, onCardUpdated, showSuccess, showError]);
+  }, [
+    card,
+    client,
+    noteValue,
+    descValue,
+    hasChanges,
+    canEdit,
+    onCardUpdated,
+    showSuccess,
+    showError,
+  ]);
 
   const handleArchive = useCallback(async () => {
-    if (!card || !client) return;
+    if (!card || !client || !canEdit) return;
     Modal.confirm({
       title: 'Archive card?',
       content: `This will hide "${card.title}" from the board while preserving its data.`,
@@ -128,10 +179,10 @@ const CardModalComponent = ({
         }
       },
     });
-  }, [card, client, onCardUpdated, onClose, showSuccess, showError]);
+  }, [card, client, canEdit, onCardUpdated, onClose, showSuccess, showError]);
 
   const handleDelete = useCallback(async () => {
-    if (!card || !client) return;
+    if (!card || !client || !canEdit) return;
     Modal.confirm({
       title: 'Delete card?',
       content: `This will permanently delete "${card.title}".`,
@@ -149,7 +200,7 @@ const CardModalComponent = ({
         }
       },
     });
-  }, [card, client, onCardDeleted, onClose, showSuccess, showError]);
+  }, [card, client, canEdit, onCardDeleted, onClose, showSuccess, showError]);
 
   if (!card) return null;
 
@@ -165,22 +216,36 @@ const CardModalComponent = ({
       footer={
         <div style={{ display: 'flex', justifyContent: 'space-between' }}>
           <Space>
-            <ArchiveActionButton tooltip="" size="middle" onClick={handleArchive}>
+            <ArchiveActionButton
+              tooltip={editBlockedReason ?? ''}
+              size="middle"
+              disabled={!canEdit}
+              onClick={handleArchive}
+            >
               Archive
             </ArchiveActionButton>
-            <Button danger icon={<DeleteOutlined />} onClick={handleDelete}>
-              Delete
-            </Button>
+            {/* A disabled button can't host a tooltip of its own — hence the span. */}
+            <Tooltip title={editBlockedReason}>
+              <span>
+                <Button danger icon={<DeleteOutlined />} disabled={!canEdit} onClick={handleDelete}>
+                  Delete
+                </Button>
+              </span>
+            </Tooltip>
           </Space>
-          <Button
-            type="primary"
-            icon={<SaveOutlined />}
-            onClick={handleSave}
-            disabled={!hasChanges}
-            loading={saving}
-          >
-            Save
-          </Button>
+          <Tooltip title={editBlockedReason}>
+            <span>
+              <Button
+                type="primary"
+                icon={<SaveOutlined />}
+                onClick={handleSave}
+                disabled={!hasChanges || !canEdit}
+                loading={saving}
+              >
+                Save
+              </Button>
+            </span>
+          </Tooltip>
         </div>
       }
       title={null}
@@ -259,14 +324,19 @@ const CardModalComponent = ({
           <Typography.Text strong style={{ fontSize: 12, color: token.colorTextSecondary }}>
             Note
           </Typography.Text>
-          <Button
-            type="text"
-            size="small"
-            icon={<EditOutlined />}
-            onClick={() => setEditingNote(!editingNote)}
-          >
-            {editingNote ? 'Preview' : 'Edit'}
-          </Button>
+          <Tooltip title={editBlockedReason}>
+            <span>
+              <Button
+                type="text"
+                size="small"
+                icon={<EditOutlined />}
+                disabled={!canEdit}
+                onClick={() => setEditingNote(!editingNote)}
+              >
+                {editingNote ? 'Preview' : 'Edit'}
+              </Button>
+            </span>
+          </Tooltip>
         </div>
         {editingNote ? (
           <TextArea
@@ -308,14 +378,19 @@ const CardModalComponent = ({
           <Typography.Text strong style={{ fontSize: 12, color: token.colorTextSecondary }}>
             Description
           </Typography.Text>
-          <Button
-            type="text"
-            size="small"
-            icon={<EditOutlined />}
-            onClick={() => setEditingDesc(!editingDesc)}
-          >
-            {editingDesc ? 'Preview' : 'Edit'}
-          </Button>
+          <Tooltip title={editBlockedReason}>
+            <span>
+              <Button
+                type="text"
+                size="small"
+                icon={<EditOutlined />}
+                disabled={!canEdit}
+                onClick={() => setEditingDesc(!editingDesc)}
+              >
+                {editingDesc ? 'Preview' : 'Edit'}
+              </Button>
+            </span>
+          </Tooltip>
         </div>
         {editingDesc ? (
           <TextArea

@@ -106,6 +106,23 @@ describe('migration status introspection', () => {
     });
   });
 
+  it('reports Claude OAuth authority as a rollback-incompatible protocol cutover', () => {
+    const migration = introspectMigrationStatus('postgresql', {
+      applied: ['0093_scheduler_poison_recovery'],
+      pending: ['0100_claude_oauth_attempts'],
+      dbAheadOfBinary: false,
+    }).pendingMigrations[0];
+
+    expect(migration).toMatchObject({
+      requiresOfflineCutover: true,
+      impact: {
+        classification: 'protocol',
+        userAction: 'required',
+        rollbackCompatibility: 'incompatible',
+      },
+    });
+  });
+
   it('uses an explicit conservative representation for absent impact metadata', () => {
     expect(getMigrationImpact('9999_unregistered')).toEqual({
       classification: 'unknown',
@@ -123,10 +140,12 @@ describe('migration status introspection', () => {
         '0078_mcp_oauth_pending_flows',
         '0082_github_install_state',
         '0083_transcript_hydration_keysets',
+        '0091_codex_device_auth_attempts',
+        '0100_claude_oauth_attempts',
       ],
     });
 
-    expect(offlineMigrations).toHaveLength(4);
+    expect(offlineMigrations).toHaveLength(6);
     for (const name of offlineMigrations) {
       expect(getMigrationImpact(name).classification).not.toBe('unknown');
     }
@@ -155,6 +174,8 @@ describe('migration status introspection', () => {
       '0078_mcp_oauth_pending_flows',
       '0082_github_install_state',
       '0083_transcript_hydration_keysets',
+      '0091_codex_device_auth_attempts',
+      '0100_claude_oauth_attempts',
       'unregistered',
     ]) {
       expect(getMigrationImpact(name).summary.length).toBeLessThanOrEqual(

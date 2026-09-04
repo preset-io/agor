@@ -46,6 +46,7 @@ import {
   CODEX_AUTH_DEFER_USER_REALTIME,
   type CodexCredentialMutationCoordinator,
   resolveCodexCredentialRoute,
+  sameCodexCredentialRoute,
 } from './codex-auth-shared.js';
 
 /** Minimal users-service surface — mirrors the import service's structural typing. */
@@ -89,6 +90,18 @@ export function createCodexAuthLogoutService(
         );
       }
 
+      const validateRoute = async () => {
+        const currentRoute = await resolveCodexCredentialRoute(
+          userId,
+          withTenantDatabase,
+          app.get('config')
+        );
+        if (!currentRoute.ok || !sameCodexCredentialRoute(currentRoute, identity)) {
+          throw new BadRequest(
+            'The execution home changed while removing credentials. Disconnect again for the current home.'
+          );
+        }
+      };
       const mutate = async (authorityGeneration?: number): Promise<void> => {
         // Delete the local login (idempotent — a missing file is success). A
         // genuine delete failure is a real server problem worth surfacing, and we
@@ -139,9 +152,11 @@ export function createCodexAuthLogoutService(
           String(tenantId),
           userId,
           'credentials_removed',
-          mutate
+          mutate,
+          validateRoute
         );
       } else {
+        await validateRoute();
         await mutate();
       }
       await invalidateCredentialBinds({

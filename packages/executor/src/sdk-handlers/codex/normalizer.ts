@@ -35,6 +35,7 @@ export class CodexNormalizer implements INormalizer<CodexSdkResponse> {
     const inputTokens = usage.input_tokens || 0;
     const outputTokens = usage.output_tokens || 0;
     const cacheReadTokens = usage.cached_input_tokens || 0;
+    const cacheCreationTokens = usage.cache_write_input_tokens || 0;
     const modelForPricing = options?.modelHint || DEFAULT_CODEX_MODEL;
     const estimatedCostUsd = estimateCodexCostUsd({
       modelId: modelForPricing,
@@ -49,7 +50,7 @@ export class CodexNormalizer implements INormalizer<CodexSdkResponse> {
         outputTokens,
         totalTokens: inputTokens + outputTokens,
         cacheReadTokens,
-        cacheCreationTokens: 0,
+        cacheCreationTokens,
       },
       contextWindowLimit,
       costUsd: estimatedCostUsd,

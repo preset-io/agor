@@ -1504,12 +1504,14 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
         const renderedPrompt = renderTemplate(zone.trigger!.template, templateContext);
 
         if (renderedPrompt) {
-          const task = await ctx.app
-            .service('/sessions/:id/prompt')
-            .create(
-              { prompt: renderedPrompt, stream: true },
-              { ...ctx.baseServiceParams, route: { id: targetSessionId } }
-            );
+          const task = await ctx.app.service('/sessions/:id/prompt').create(
+            {
+              prompt: renderedPrompt,
+              stream: true,
+              metadata: { system_authored: true },
+            },
+            { ...ctx.baseServiceParams, provider: undefined, route: { id: targetSessionId } }
+          );
 
           if (task.status === 'queued') {
             promptResult = {

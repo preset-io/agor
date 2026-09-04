@@ -130,6 +130,33 @@ describe('codex-auth-logout', () => {
     });
   });
 
+  it('revalidates the route after mutation authority wins and never deletes a retired home', async () => {
+    const { app } = makeApp();
+    const coordinator = {
+      runCredentialMutation: vi.fn(
+        async (
+          _tenantId: string,
+          _userId: string,
+          _reason: string,
+          work: (generation?: number) => Promise<unknown>,
+          preflight?: () => Promise<void>
+        ) => {
+          loadConfigSyncMock.mockReturnValue({
+            multi_tenancy: { mode: 'required_from_auth' },
+          } as never);
+          await preflight?.();
+          return work(undefined);
+        }
+      ),
+    };
+    const delegate = createCodexAuthLogoutService(app as never, TEST_DB, coordinator);
+
+    await expect(
+      runWithTenantContext('tenant-test', () => delegate.create({}, AUTH_PARAMS))
+    ).rejects.toThrow(/execution home changed/i);
+    expect(deleteCodexAuthCredentialMock).not.toHaveBeenCalled();
+  });
+
   it('surfaces a friendly error and does NOT clear the method if the delete fails', async () => {
     deleteCodexAuthCredentialMock.mockImplementation(async () => {
       throw new Error('sudo: a password is required; stderr: refresh-xyz');

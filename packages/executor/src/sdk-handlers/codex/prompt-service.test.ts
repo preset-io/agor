@@ -20,7 +20,7 @@ import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import type { BranchID, SessionUpdate } from '@agor/core/types';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type {
   BranchRepository,
   MessagesRepository,
@@ -84,6 +84,9 @@ vi.mock('@agor/core/mcp', async () => {
 });
 vi.mock('@agor/core/tools/mcp/jwt-auth', () => mcpAuthMocks);
 vi.mock('../../config.js', () => configMocks);
+vi.mock('@agor/core/agentic-integrations', () => ({
+  loadManagedAgenticToolSdk: vi.fn(() => import('@openai/codex-sdk')),
+}));
 
 vi.mock('@openai/codex-sdk', () => {
   class MockCodexClient {
@@ -334,6 +337,8 @@ describe('CodexPromptService - OPENAI_BASE_URL handling', () => {
 });
 
 describe('CodexPromptService - prompt flow client initialization', () => {
+  const originalOuterSandbox = process.env.AGOR_OUTER_SANDBOX;
+
   beforeEach(() => {
     mockInstanceCount = 0;
     mockInstanceBaseUrls = [];
@@ -344,7 +349,16 @@ describe('CodexPromptService - prompt flow client initialization', () => {
     mockResumeThreadOptions = [];
     delete process.env.OPENAI_BASE_URL;
     delete process.env.AGOR_CODEX_SANDBOX_MODE;
+    // These cases exercise Codex's own sandbox policy. The Agor test runner
+    // itself may be inside an outer sandbox, which must not rewrite the policy
+    // under test into danger-full-access.
+    delete process.env.AGOR_OUTER_SANDBOX;
     vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    if (originalOuterSandbox === undefined) delete process.env.AGOR_OUTER_SANDBOX;
+    else process.env.AGOR_OUTER_SANDBOX = originalOuterSandbox;
   });
 
   it.each([
@@ -1445,7 +1459,7 @@ describe('CodexPromptService - tool payload mapping', () => {
     });
   });
 
-  it('clears resume state on a fatal stream error even when the session started fresh', async () => {
+  it('clears resume state when an observed stream error is followed by EOF on a fresh thread', async () => {
     const service = new CodexPromptService(
       mockMessagesRepo,
       mockSessionsRepo,
@@ -1491,7 +1505,7 @@ describe('CodexPromptService - tool payload mapping', () => {
           // no-op
         }
       })()
-    ).rejects.toThrow('The MCP operation failed');
+    ).rejects.toThrow('Codex ended the turn without a completion event');
 
     expect(mockSessionsRepo.update).toHaveBeenCalledWith('session-1', {
       sdk_session_id: null,
@@ -1601,6 +1615,7 @@ describe('CodexPromptService - event_msg terminal handling (issue #1749)', () =>
         usage: {
           input_tokens: 8,
           cached_input_tokens: 2,
+          cache_write_input_tokens: 1,
           output_tokens: 3,
           reasoning_output_tokens: 1,
         },
@@ -1615,6 +1630,7 @@ describe('CodexPromptService - event_msg terminal handling (issue #1749)', () =>
       usage: {
         input_tokens: 8,
         cached_input_tokens: 2,
+        cache_write_input_tokens: 1,
         output_tokens: 3,
         reasoning_output_tokens: 1,
       },
@@ -1915,27 +1931,90 @@ describe('CodexPromptService - event_msg terminal handling (issue #1749)', () =>
     });
   });
 
-  it('treats the SDK-defined fatal error event as authoritative without parsing reconnect prose', async () => {
-    const { service } = await makeInitializedStreamingService('existing-thread-id');
+  it.each([
+    ['fresh', null],
+    ['established', 'existing-thread-id'],
+  ])(
+    'allows Codex to recover after a stream error for a %s thread without parsing reconnect prose',
+    async (_threadKind, sdkSessionId) => {
+      const { service } = await makeInitializedStreamingService(sdkSessionId);
 
-    const reconnectMessage =
-      'Reconnecting... 2/5 (stream disconnected before completion: websocket closed by server before response.completed)';
-    mockStreamEvents = [
-      { type: 'error', message: reconnectMessage },
-      {
-        type: 'turn.completed',
-        usage: { input_tokens: 5, cached_input_tokens: 0, output_tokens: 2 },
-      },
-    ];
-    await expect(drain(service)).rejects.toThrow('The MCP operation failed');
-    expect(mockSessionsRepo.update).not.toHaveBeenCalled();
-  });
+      const reconnectMessage =
+        'Reconnecting... 2/5 (stream disconnected before completion: websocket closed by server before response.completed)';
+      mockStreamEvents = [
+        { type: 'error', message: reconnectMessage },
+        {
+          type: 'item.completed',
+          item: { id: 'answer-1', type: 'agent_message', text: 'Recovered answer.' },
+        },
+        {
+          type: 'turn.completed',
+          usage: { input_tokens: 5, cached_input_tokens: 0, output_tokens: 2 },
+        },
+      ];
+      const log = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+      try {
+        const emitted = await drain(service);
+        expect(JSON.stringify(emitted)).toContain('Recovered answer.');
+        expect(log).toHaveBeenCalledWith(
+          expect.stringContaining('[codex.runtime] event=stream_error_observed')
+        );
+        expect(log).toHaveBeenCalledWith(
+          expect.stringContaining('outcome=awaiting_terminal_event')
+        );
+        expect(JSON.stringify(log.mock.calls)).not.toContain(reconnectMessage);
+        expect(mockSessionsRepo.update).not.toHaveBeenCalled();
+      } finally {
+        log.mockRestore();
+      }
+    }
+  );
 
   it.each([
     ['fresh', null],
     ['established', 'existing-thread-id'],
   ])(
-    'classifies a real SDK-shaped turn.failed as unknown for a %s thread',
+    'fails only after Codex completes without an assistant response following a stream error for a %s thread',
+    async (_threadKind, sdkSessionId) => {
+      const { service } = await makeInitializedStreamingService(sdkSessionId);
+      const runtimeMessage = 'SENTINEL_RUNTIME_STREAM_BODY';
+      mockStreamEvents = [
+        { type: 'error', message: runtimeMessage },
+        {
+          type: 'item.completed',
+          item: { id: 'empty-answer', type: 'agent_message', text: '' },
+        },
+        {
+          type: 'turn.completed',
+          usage: { input_tokens: 5, cached_input_tokens: 0, output_tokens: 0 },
+        },
+      ];
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+      const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+      try {
+        await expect(drain(service)).rejects.toThrow(
+          'Codex completed after a stream error but returned no assistant response'
+        );
+        expect(warn).toHaveBeenCalledWith(expect.stringContaining('event=stream_error_observed'));
+        expect(error).toHaveBeenCalledWith(
+          expect.stringContaining('event=turn_completed_without_response')
+        );
+        expect(JSON.stringify([...warn.mock.calls, ...error.mock.calls])).not.toContain(
+          runtimeMessage
+        );
+        expect(mockSessionsRepo.update).not.toHaveBeenCalled();
+      } finally {
+        warn.mockRestore();
+        error.mockRestore();
+      }
+    }
+  );
+
+  it.each([
+    ['fresh', null],
+    ['established', 'existing-thread-id'],
+  ])(
+    'reports a real SDK-shaped turn.failed as a Codex runtime failure for a %s thread',
     async (_threadKind, sdkSessionId) => {
       const { service } = await makeInitializedStreamingService(sdkSessionId);
 
@@ -1943,7 +2022,7 @@ describe('CodexPromptService - event_msg terminal handling (issue #1749)', () =>
         { type: 'turn.failed', error: { message: 'provider rejected the turn' } },
       ];
 
-      await expect(drain(service)).rejects.toThrow('The MCP operation failed');
+      await expect(drain(service)).rejects.toThrow('Codex failed the turn');
 
       expect(mockSessionsRepo.update).not.toHaveBeenCalled();
     }
@@ -1968,6 +2047,7 @@ describe('CodexPromptService - event_msg terminal handling (issue #1749)', () =>
       const failure = await drain(service).catch((error: unknown) => error);
       expect(String(failure)).not.toContain(sentinel);
       expect(JSON.stringify(spies.flatMap((spy) => spy.mock.calls))).not.toContain(sentinel);
+      expect(JSON.stringify(spies.flatMap((spy) => spy.mock.calls))).toContain('event=turn_failed');
       expect(JSON.stringify(mockSessionsRepo.update.mock.calls)).not.toContain(sentinel);
     } finally {
       for (const spy of spies) spy.mockRestore();
@@ -1984,7 +2064,7 @@ describe('CodexPromptService - event_msg terminal handling (issue #1749)', () =>
     ];
 
     const failure = await drain(service).catch((error: unknown) => error);
-    expect(String(failure)).toContain('The MCP operation failed');
+    expect(String(failure)).toContain('Codex failed the turn');
     expect(String(failure)).not.toContain('SENTINEL_REJECTED_BODY');
     expect(String(failure)).not.toContain('sign in again');
   });
@@ -1998,7 +2078,7 @@ describe('CodexPromptService - event_msg terminal handling (issue #1749)', () =>
     ];
 
     await expect(drain(service)).rejects.toThrow(
-      'This MCP authentication configuration is incomplete. Review the saved server settings and retry.'
+      'Codex authentication is not configured. Review Codex authentication settings and retry the prompt.'
     );
   });
 
@@ -2007,12 +2087,12 @@ describe('CodexPromptService - event_msg terminal handling (issue #1749)', () =>
     ['Reconnecting...', 'missing N/M'],
     [' Reconnecting... 2/5', 'leading whitespace'],
     ['Error: Reconnecting... 2/5', 'prefixed text'],
-  ])('treats %s as a fatal stream error (%s)', async (message) => {
+  ])('awaits a terminal event after %s without trusting prose shape (%s)', async (message) => {
     const { service } = await makeInitializedStreamingService('existing-thread-id');
 
     mockStreamEvents = [{ type: 'error', message }];
 
-    await expect(drain(service)).rejects.toThrow('The MCP operation failed');
+    await expect(drain(service)).rejects.toThrow('Codex ended the turn without a completion event');
 
     expect(mockSessionsRepo.update).not.toHaveBeenCalled();
   });

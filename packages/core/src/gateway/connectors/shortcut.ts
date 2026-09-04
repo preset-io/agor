@@ -126,6 +126,10 @@ const SHORTCUT_API_BASE = 'https://api.app.shortcut.com/api/v3';
 const DEFAULT_POLL_INTERVAL_MS = 15_000;
 const DEFAULT_SEARCH_PAGE_SIZE = 25;
 const DEFAULT_STARTUP_LOOKBACK_MS = 5 * 60_000;
+// Shortcut story search is eventually consistent. Re-scan a bounded window so
+// a comment that becomes searchable after its own timestamp is still admitted;
+// processed ids and the gateway's durable provider-event claim absorb repeats.
+const DEFAULT_POLL_OVERLAP_MS = 5 * 60_000;
 
 class ShortcutHttpError extends Error {
   constructor(readonly status: number) {
@@ -206,6 +210,11 @@ export function stripAgentMention(
 /** ISO timestamp → `YYYY-MM-DD` for the Shortcut `updated:` range operator. */
 function toSearchDate(iso: string): string {
   return iso.slice(0, 10);
+}
+
+function withLookback(iso: string, lookbackMs: number): string {
+  const timestamp = Date.parse(iso);
+  return Number.isFinite(timestamp) ? new Date(timestamp - lookbackMs).toISOString() : iso;
 }
 
 /**
@@ -474,8 +483,11 @@ export class ShortcutConnector implements GatewayConnector {
 
     const requireMention = this.config.require_mention ?? true;
     const messages: InboundMessage[] = [];
-    // Snapshot the watermark up front so concurrent edits don't move it.
-    const cutoff = this.state.lastPollAt;
+    // Snapshot the watermark up front so concurrent edits don't move it. Scan
+    // with overlap because Shortcut search can index a comment after the poll
+    // that advanced past its created/updated timestamp.
+    const watermark = this.state.lastPollAt;
+    const cutoff = withLookback(watermark, DEFAULT_POLL_OVERLAP_MS);
     const nextWatermark = new Date().toISOString();
 
     // ── Stage 1: discover candidate stories ──────────────────

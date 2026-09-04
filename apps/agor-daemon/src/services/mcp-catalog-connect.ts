@@ -51,7 +51,7 @@ import type {
   Session,
   UserID,
 } from '@agor/core/types';
-import { catalogDisplayName, catalogServerSlug } from '@agor/core/types';
+import { catalogDisplayName, catalogServerSlug, isCanonicalFullUuid } from '@agor/core/types';
 import { hasLiveCallerOAuthGrant, selectCatalogCandidate } from './mcp-catalog-credential-match.js';
 import {
   catalogOAuthConfig,
@@ -900,8 +900,16 @@ export function createMCPCatalogConnectService(
       // comes from the entry the catalog resolved and the answer the endpoint
       // gave, so a caller holding a key can only ever aim it at the URL the
       // checked-in file already points to.
-      const userId = params.user?.user_id as UserID | undefined;
-      if (!userId) throw new NotAuthenticated('Authentication required');
+      const authenticatedUserId = params.user?.user_id;
+      if (!authenticatedUserId) throw new NotAuthenticated('Authentication required');
+      // Every authentication strategy hydrates params.user from the users
+      // table, so this is already the canonical persistence key. A short or
+      // arbitrary value means the authentication invariant was broken; never
+      // reinterpret it through public short-ID lookup semantics here.
+      if (!isCanonicalFullUuid(authenticatedUserId)) {
+        throw new NotAuthenticated('Authenticated user identity must be a canonical full UUID');
+      }
+      const userId = authenticatedUserId as UserID;
       const bearerToken = readBearerToken(data.bearer_token, entry);
       // Every connect claims an operation generation, not only bearer
       // rotation. Compensation must not delete a just-created row after a

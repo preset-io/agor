@@ -117,6 +117,7 @@ function renderTable(client: AgorClient) {
     user_id: 'user-1',
     name: 'Ada Lovelace',
     email: 'ada@example.com',
+    role: 'admin',
   } as unknown as User;
 
   return render(
@@ -304,6 +305,11 @@ describe('GatewayChannelsTable Discord create wizard', () => {
     expect(JSON.stringify(channelCreate.mock.calls[0][0])).not.toContain('••••••••');
 
     fireEvent.change(getTokenInput(), { target: { value: TOKEN } });
+    clickButton(/^Back$/);
+    await waitForStep('Access');
+    clickButton(/^Continue$/);
+    await waitForStep('Token & test');
+    expect(getTokenInput()).toHaveValue(TOKEN);
     clickButton(/Verify and enable/);
     await waitFor(() => expect(channelPatch).toHaveBeenCalledTimes(2), ASYNC);
     expect(channelPatch.mock.calls[0]).toEqual([

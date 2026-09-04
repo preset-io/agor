@@ -4,6 +4,7 @@ import { SandpackPreview, SandpackProvider, type SandpackSetup } from '@codesand
 import { Button, Card, Tooltip, Typography, theme } from 'antd';
 import { useCallback, useRef, useState } from 'react';
 import { NodeResizer } from 'reactflow';
+import { useMutationGate } from '../../../contexts/ConnectionContext';
 import { useStableSandpackProviderInputs } from './utils/sandpackDefaults';
 
 export interface AppNodeData {
@@ -18,6 +19,7 @@ export interface AppNodeData {
   showConsole?: boolean;
   width: number;
   height: number;
+  canEdit: boolean;
   onUpdate: (id: string, data: BoardObject) => void;
   onDelete?: (id: string) => void;
 }
@@ -27,6 +29,8 @@ const MIN_HEIGHT = 200;
 
 export const AppNode = ({ data, selected }: { data: AppNodeData; selected?: boolean }) => {
   const { token } = theme.useToken();
+  const mutationGate = useMutationGate();
+  const layoutMutationDisabled = !mutationGate.canMutate || !data.canEdit;
   const [interactMode, setInteractMode] = useState(false);
   const iframeContainerRef = useRef<HTMLDivElement>(null);
   const sandpackInputs = useStableSandpackProviderInputs({
@@ -38,6 +42,7 @@ export const AppNode = ({ data, selected }: { data: AppNodeData; selected?: bool
 
   const handleResize = useCallback(
     (_event: unknown, params: { x: number; y: number; width: number; height: number }) => {
+      if (layoutMutationDisabled) return;
       const objectData: AppBoardObject = {
         type: 'app',
         x: params.x,
@@ -55,7 +60,7 @@ export const AppNode = ({ data, selected }: { data: AppNodeData; selected?: bool
       };
       data.onUpdate(data.objectId, objectData);
     },
-    [data]
+    [data, layoutMutationDisabled]
   );
 
   const toggleInteract = useCallback(() => {
@@ -68,7 +73,7 @@ export const AppNode = ({ data, selected }: { data: AppNodeData; selected?: bool
   return (
     <>
       <NodeResizer
-        isVisible={selected}
+        isVisible={selected && !layoutMutationDisabled}
         minWidth={MIN_WIDTH}
         minHeight={MIN_HEIGHT}
         onResize={handleResize}
@@ -123,8 +128,11 @@ export const AppNode = ({ data, selected }: { data: AppNodeData; selected?: bool
                   size="small"
                   danger
                   icon={<DeleteOutlined />}
+                  aria-label="Delete app"
+                  disabled={layoutMutationDisabled}
                   onClick={(e) => {
                     e.stopPropagation();
+                    if (layoutMutationDisabled) return;
                     data.onDelete?.(data.objectId);
                   }}
                 />

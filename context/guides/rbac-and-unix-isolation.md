@@ -154,6 +154,21 @@ authority immediately before Prompt admission. The scheduler checks its
 creator at Session admission and again before its initial Prompt so revocation
 races and crash recovery fail closed.
 
+Task launch and heartbeat use the narrower
+`resolveSessionRuntimeBranchAccess` point projection in `branch-access.ts`.
+It resolves the exact Session, Branch, effective inherited/override config,
+principal role/file access, and foreign-session sharing in one bounded SQL
+statement. Launch persists only the original file-access floor inside private
+Task JSON. Each normal heartbeat compares current access to that floor before
+writing liveness: `write -> read/none` and `read -> none` terminate, while an
+increase never remounts or widens a live executor. PostgreSQL also checks the
+exact task-token fingerprint in the same Task transaction. Redis invalidation
+can disconnect sooner, but the database check is sufficient on its own.
+
+Web terminals are not Task executors and do not send this heartbeat. Their
+launch admission and mount projection remain enforced, but live terminal
+authority revalidation is a separate residual boundary.
+
 ## Execution modes
 
 Sandbox mode implies application RBAC and projects effective `write | read |

@@ -552,7 +552,13 @@ function validateConfig(config: AgorConfig): void {
     }
   };
   const legacyConfig = config as LegacyConfig;
-  only(config.agentic_tools, 'agentic_tools', ['installed']);
+  only(config.agentic_tools, 'agentic_tools', ['installed', 'claude_subscription_oauth']);
+  if (
+    config.agentic_tools?.claude_subscription_oauth !== undefined &&
+    typeof config.agentic_tools.claude_subscription_oauth !== 'boolean'
+  ) {
+    throw new Error('Config error: agentic_tools.claude_subscription_oauth must be a boolean');
+  }
   if (config.agentic_tools?.installed !== undefined) {
     if (!Array.isArray(config.agentic_tools.installed)) {
       throw new Error("Config error: 'agentic_tools.installed' must be an array");

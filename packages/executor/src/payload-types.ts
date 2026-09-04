@@ -166,6 +166,12 @@ export const PromptPayloadSchema = BasePayloadSchema.extend({
     permissionMode: PermissionModeSchema.optional(),
     cwd: z.string(),
     messageSource: z.enum(['gateway', 'agor']).optional(),
+    promptOrigin: z
+      .discriminatedUnion('kind', [
+        z.object({ kind: z.literal('human') }),
+        z.object({ kind: z.literal('channel'), server: z.string().min(1) }),
+      ])
+      .optional(),
   }),
 });
 
@@ -816,6 +822,30 @@ export const CodexAuthFilePayloadSchema = BasePayloadSchema.extend({
 
 export type CodexAuthFilePayload = z.infer<typeof CodexAuthFilePayloadSchema>;
 
+/**
+ * Narrow user-runtime credential filesystem operation for Claude's
+ * `~/.claude/.credentials.json`. Like `codex.auth-file`, the daemon resolves the
+ * Unix identity and spawns this command as that identity; no username or path is
+ * accepted in the payload.
+ */
+export const ClaudeAuthFilePayloadSchema = BasePayloadSchema.extend({
+  command: z.literal('claude.auth-file'),
+  params: z.discriminatedUnion('operation', [
+    z.object({ operation: z.literal('inspect') }),
+    z.object({
+      operation: z.literal('write'),
+      content: z.string().max(64 * 1024),
+      generation: z.number().int().positive().optional(),
+    }),
+    z.object({
+      operation: z.literal('delete'),
+      generation: z.number().int().positive().optional(),
+    }),
+  ]),
+});
+
+export type ClaudeAuthFilePayload = z.infer<typeof ClaudeAuthFilePayloadSchema>;
+
 // ═══════════════════════════════════════════════════════════
 // Union Payload Type
 // ═══════════════════════════════════════════════════════════
@@ -852,6 +882,7 @@ const ExecutorPayloadUnionSchema = z.discriminatedUnion('command', [
   ZellijAttachPayloadSchema,
   ZellijTabPayloadSchema,
   CodexAuthFilePayloadSchema,
+  ClaudeAuthFilePayloadSchema,
 ]);
 
 export const ExecutorPayloadSchema = ExecutorPayloadUnionSchema.superRefine((payload, ctx) => {
@@ -929,6 +960,7 @@ export function getSupportedCommands(): string[] {
     'zellij.attach',
     'zellij.tab',
     'codex.auth-file',
+    'claude.auth-file',
   ];
 }
 
