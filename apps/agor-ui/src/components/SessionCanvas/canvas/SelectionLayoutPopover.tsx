@@ -1,7 +1,9 @@
 import type { BoardZoneArrangementOptions } from '@agor/core/layout/board-zone-arrangement';
+import type { LayoutDensityPolicy } from '@agor/core/types';
 import { SettingOutlined } from '@ant-design/icons';
 import { Button, InputNumber, Popover, Segmented, Select, Space, Switch, Typography } from 'antd';
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { LayoutDensityControl } from './LayoutDensityControl';
 
 export type SelectionLayoutMode = 'compact' | 'grid';
 export type SelectionTrackAxis = 'columns' | 'rows';
@@ -17,6 +19,7 @@ export interface SelectionLayoutSettings {
   matchRowHeights: boolean;
   matchColumnWidths: boolean;
   rowDistribution: SelectionRowDistribution;
+  density: LayoutDensityPolicy;
 }
 
 export function selectionGridTracks(
@@ -39,7 +42,7 @@ export function selectionBoardZoneArrangementOptions(
   selectionCount: number,
   settings?: SelectionLayoutSettings
 ): Omit<BoardZoneArrangementOptions, 'looseItems'> {
-  if (settings?.mode === 'compact') return { mode: 'compact' };
+  if (settings?.mode === 'compact') return { mode: 'compact', density: settings.density };
   if (!settings) {
     return {
       mode: 'grid',
@@ -47,6 +50,7 @@ export function selectionBoardZoneArrangementOptions(
       resizeZoneFrames: true,
       matchRowHeights: true,
       matchColumnWidths: true,
+      density: 'preserve',
     };
   }
   const gridSettings = settings;
@@ -64,6 +68,7 @@ export function selectionBoardZoneArrangementOptions(
     matchRowHeights: gridSettings.matchRowHeights,
     matchColumnWidths: gridSettings.matchColumnWidths,
     resizeZoneFrames: gridSettings.matchRowHeights || gridSettings.matchColumnWidths,
+    density: gridSettings.density,
   };
 }
 
@@ -73,12 +78,14 @@ const defaultSelectionTrackCount = (selectionCount: number): number =>
 interface SelectionLayoutPopoverProps {
   selectionCount: number;
   zoneOnlySelection: boolean;
+  densityAvailable?: boolean;
   onApply: (settings: SelectionLayoutSettings) => void | Promise<void>;
 }
 
 export function SelectionLayoutPopover({
   selectionCount,
   zoneOnlySelection,
+  densityAvailable = true,
   onApply,
 }: SelectionLayoutPopoverProps) {
   const [open, setOpen] = useState(false);
@@ -89,6 +96,7 @@ export function SelectionLayoutPopover({
   const [matchRowHeights, setMatchRowHeights] = useState(zoneOnlySelection);
   const [matchColumnWidths, setMatchColumnWidths] = useState(zoneOnlySelection);
   const [rowDistribution, setRowDistribution] = useState<SelectionRowDistribution>('packed');
+  const [density, setDensity] = useState<LayoutDensityPolicy>('preserve');
   const tracks = useMemo(
     () => selectionGridTracks(selectionCount, trackAxis, trackCount),
     [selectionCount, trackAxis, trackCount]
@@ -121,6 +129,12 @@ export function SelectionLayoutPopover({
         ]}
         value={mode}
         onChange={(value) => setMode(value as SelectionLayoutMode)}
+      />
+      <LayoutDensityControl
+        value={density}
+        onChange={setDensity}
+        disabled={!densityAvailable}
+        disabledReason="Unavailable because this selection has no worktrees or cards with body content."
       />
       {mode === 'compact' ? (
         <Typography.Text type="secondary">
@@ -208,6 +222,7 @@ export function SelectionLayoutPopover({
             matchRowHeights,
             matchColumnWidths,
             rowDistribution,
+            density: densityAvailable ? density : 'preserve',
           });
           setOpen(false);
         }}
@@ -223,7 +238,10 @@ export function SelectionLayoutPopover({
       content={content}
       trigger="click"
       open={open}
-      onOpenChange={setOpen}
+      onOpenChange={(nextOpen) => {
+        if (nextOpen) setDensity('preserve');
+        setOpen(nextOpen);
+      }}
       destroyOnHidden
       placement="bottomRight"
       classNames={{ root: CANVAS_LAYOUT_CONTROLS_CLASS }}

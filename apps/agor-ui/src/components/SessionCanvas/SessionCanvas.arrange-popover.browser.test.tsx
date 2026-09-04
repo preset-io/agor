@@ -189,6 +189,23 @@ describe('SessionCanvas Arrange Board popover (real browser)', () => {
       name: 'Fit view after arranging',
     });
     const fitViewLabel = within(dialog).getByText('Fit view after arranging', { exact: true });
+    const density = within(dialog).getByRole('combobox', { name: 'Content expansion' });
+    await act(async () => user.click(density));
+    let collapse: HTMLElement | undefined;
+    await waitFor(() => {
+      collapse = screen
+        .getAllByText('Collapse eligible contents', {
+          selector: '.ant-select-item-option-content',
+        })
+        .find((candidate) => {
+          const bounds = candidate.getBoundingClientRect();
+          return bounds.width > 0 && bounds.height > 0;
+        });
+      expect(collapse).toBeVisible();
+    });
+    expect(collapse.closest(`.${CANVAS_LAYOUT_CONTROLS_CLASS}`)).not.toBeNull();
+    await act(async () => user.click(collapse!.closest('[role="option"]')!));
+    await waitFor(() => expect(density).toHaveAttribute('aria-expanded', 'false'));
     expect(fitView).toBeChecked();
     await waitFor(() => expect(fitViewLabel).toBeVisible());
     await act(async () => user.click(fitViewLabel));
@@ -199,6 +216,7 @@ describe('SessionCanvas Arrange Board popover (real browser)', () => {
       user.click(within(dialog).getByText('Pack zone contents', { exact: true }))
     );
     expect(pack).not.toBeChecked();
+    expect(density).toBeDisabled();
     expect(matchFrames).toBeDisabled();
     expect(within(dialog).getByText(/existing zone frames are preserved/i)).toBeVisible();
     await act(async () =>
@@ -249,6 +267,23 @@ describe('SessionCanvas Arrange Board popover (real browser)', () => {
     });
     await act(async () => user.click(trigger));
     dialog = await screen.findByRole('dialog', { name: 'Arrange board options' });
+    const reopenedDensity = within(dialog).getByRole('combobox', { name: 'Content expansion' });
+    await act(async () => user.click(reopenedDensity));
+    let preserve: HTMLElement | undefined;
+    await waitFor(() => {
+      preserve = screen
+        .getAllByText('Preserve current expansion', {
+          selector: '.ant-select-item-option-content',
+        })
+        .find((candidate) => {
+          const bounds = candidate.getBoundingClientRect();
+          return bounds.width > 0 && bounds.height > 0;
+        });
+      expect(preserve).toBeVisible();
+    });
+    expect(preserve!.closest('.ant-select-item-option')).toHaveClass(
+      'ant-select-item-option-selected'
+    );
     await act(async () =>
       user.click(within(dialog).getByRole('button', { name: 'Arrange board' }))
     );

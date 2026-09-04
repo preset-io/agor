@@ -1269,6 +1269,7 @@ describe('SessionCanvas zoom shortcuts', () => {
     const options = await screen.findByRole('dialog', { name: 'Arrange board options' });
     expect(within(options).getByRole('radio', { name: 'Grid' })).toBeChecked();
     expect(within(options).getByRole('checkbox', { name: 'Pack zone contents' })).toBeChecked();
+    expect(within(options).getByText('Preserve current expansion')).toBeInTheDocument();
     expect(
       within(options).getByRole('checkbox', { name: 'Match / resize zone frames' })
     ).toBeChecked();
@@ -1340,6 +1341,8 @@ describe('SessionCanvas zoom shortcuts', () => {
     expect(pack).toBeChecked();
     fireEvent.click(pack);
     expect(pack).not.toBeChecked();
+    expect(within(options).getByRole('combobox', { name: 'Content expansion' })).toBeDisabled();
+    expect(within(options).getByText(/no child presentation is changed/i)).toBeInTheDocument();
     fireEvent.click(within(options).getByRole('button', { name: 'Arrange board' }));
 
     await waitFor(() => expect(patch).toHaveBeenCalledTimes(1));

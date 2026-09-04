@@ -16,6 +16,7 @@ import type {
   ZoneOverflowStrategy,
 } from '@agor-live/client';
 import { Flex, Form, InputNumber, Segmented, Select, Switch } from 'antd';
+import { LayoutDensityControl } from './LayoutDensityControl';
 
 export interface ZoneLayoutPolicyEditorProps {
   value: ZoneLayoutPolicy;
@@ -58,8 +59,8 @@ export function ZoneLayoutPolicyEditor({
         label="Presentation"
         help={
           policy.preset === 'compact_list'
-            ? 'List uses one column and collapses worktree and capable generic-card details; header-only cards and canvas objects keep their natural size.'
-            : 'Grid keeps natural card detail and can use one or more columns.'
+            ? 'List uses one column. It does not change content expansion.'
+            : 'Grid can use one or more columns. It does not change content expansion.'
         }
       >
         <Segmented
@@ -77,6 +78,15 @@ export function ZoneLayoutPolicyEditor({
               ...(preset === 'compact_list' ? { columns: 1 } : {}),
             })
           }
+        />
+      </Form.Item>
+
+      <Form.Item>
+        <LayoutDensityControl
+          value={policy.density}
+          onChange={(density) => update({ density })}
+          disabled={disabled}
+          label="Content expansion"
         />
       </Form.Item>
 

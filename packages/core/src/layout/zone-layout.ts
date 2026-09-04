@@ -2,6 +2,7 @@ import type {
   BoardEntityType,
   BoardObjectType,
   BoardPosition,
+  LayoutDensityPolicy,
   ZoneLayoutBinding,
   ZoneLayoutPolicy,
   ZoneLayoutPreset,
@@ -15,6 +16,7 @@ import { BOARD_GRID_SIZE, ceilBoardGridValue, snapBoardGridValue } from './recta
 
 export const ZONE_LAYOUT_MODES = ['manual', 'auto'] as const;
 export const ZONE_LAYOUT_PRESETS = ['grid', 'compact_list'] as const;
+export const LAYOUT_DENSITY_POLICIES = ['preserve', 'expand', 'collapse'] as const;
 export const ZONE_LAYOUT_SORT_FIELDS = [
   'position',
   'priority',
@@ -40,6 +42,12 @@ export type ZoneContentJustification = (typeof ZONE_CONTENT_JUSTIFICATIONS)[numb
 export const ZONE_LAYOUT_PRESET_LABELS: Readonly<Record<ZoneLayoutPreset, string>> = {
   grid: 'Grid',
   compact_list: 'List',
+};
+
+export const LAYOUT_DENSITY_POLICY_LABELS: Readonly<Record<LayoutDensityPolicy, string>> = {
+  preserve: 'Preserve current expansion',
+  expand: 'Expand eligible contents',
+  collapse: 'Collapse eligible contents',
 };
 
 export const ZONE_LAYOUT_SORT_LABELS: Readonly<Record<ZoneLayoutSortBy, string>> = {
@@ -166,9 +174,12 @@ export function isBoardEntityDensityExpandable(
   return entityType === 'branch' || (entityType === 'card' && hasCardDensityBody(card));
 }
 
-export const DEFAULT_ZONE_LAYOUT_POLICY: Readonly<ZoneLayoutPolicy> = {
+export type NormalizedZoneLayoutPolicy = ZoneLayoutPolicy & { density: LayoutDensityPolicy };
+
+export const DEFAULT_ZONE_LAYOUT_POLICY: Readonly<NormalizedZoneLayoutPolicy> = {
   mode: 'manual',
   preset: 'grid',
+  density: 'preserve',
   sortBy: 'position',
   sortDirection: 'asc',
   autoResizeHeight: false,
@@ -176,6 +187,16 @@ export const DEFAULT_ZONE_LAYOUT_POLICY: Readonly<ZoneLayoutPolicy> = {
   onOverflow: 'report',
   gap: 24,
 };
+
+/** Resolve a requested density without manufacturing state for incapable surfaces. */
+export function layoutCompactTarget(
+  policy: LayoutDensityPolicy,
+  current: boolean | undefined,
+  densityExpandable: boolean
+): boolean | undefined {
+  if (!densityExpandable || policy === 'preserve') return current;
+  return policy === 'collapse';
+}
 
 /**
  * Legacy zones are explicit overrides. This fail-closed default is what lets
@@ -191,7 +212,7 @@ export function zoneLayoutBinding(
 export function resolveZoneLayoutPolicy(
   zone: { layout?: Partial<ZoneLayoutPolicy>; layout_binding?: ZoneLayoutBinding },
   boardDefaults?: Partial<ZoneLayoutPolicy>
-): ZoneLayoutPolicy {
+): NormalizedZoneLayoutPolicy {
   return normalizeZoneLayoutPolicy(
     zoneLayoutBinding(zone) === 'inherit' ? boardDefaults : zone.layout
   );
@@ -418,7 +439,7 @@ const isOneOf = <T extends string>(value: unknown, values: readonly T[]): value 
 
 export function normalizeZoneLayoutPolicy(
   policy: Partial<ZoneLayoutPolicy> | undefined
-): ZoneLayoutPolicy {
+): NormalizedZoneLayoutPolicy {
   const preset: ZoneLayoutPreset = isOneOf(policy?.preset, ZONE_LAYOUT_PRESETS)
     ? policy.preset
     : DEFAULT_ZONE_LAYOUT_POLICY.preset;
@@ -431,6 +452,9 @@ export function normalizeZoneLayoutPolicy(
   )
     ? policy.sortDirection
     : DEFAULT_ZONE_LAYOUT_POLICY.sortDirection;
+  const density: LayoutDensityPolicy = isOneOf(policy?.density, LAYOUT_DENSITY_POLICIES)
+    ? policy.density
+    : DEFAULT_ZONE_LAYOUT_POLICY.density;
   const columns =
     Number.isFinite(policy?.columns) && (policy?.columns ?? 0) > 0
       ? Math.max(1, Math.floor(policy?.columns ?? 1))
@@ -455,6 +479,7 @@ export function normalizeZoneLayoutPolicy(
   return {
     mode: isOneOf(policy?.mode, ZONE_LAYOUT_MODES) ? policy.mode : DEFAULT_ZONE_LAYOUT_POLICY.mode,
     preset,
+    density,
     sortBy,
     sortDirection,
     ...(columns === undefined ? {} : { columns }),
@@ -475,7 +500,7 @@ export function normalizeZoneLayoutPolicy(
 export function setZoneLayoutMode(
   policy: Partial<ZoneLayoutPolicy> | undefined,
   mode: ZoneLayoutPolicy['mode']
-): ZoneLayoutPolicy {
+): NormalizedZoneLayoutPolicy {
   const current = normalizeZoneLayoutPolicy(policy);
   if (current.mode === mode) return current;
   if (mode === 'auto' && current.sortBy === 'position') {

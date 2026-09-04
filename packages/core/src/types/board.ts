@@ -190,6 +190,9 @@ export type ZoneLayoutBinding = 'inherit' | 'override';
 /** Opinionated v1 presentation presets for the contents of a zone. */
 export type ZoneLayoutPreset = 'grid' | 'compact_list';
 
+/** Whether a layout operation may change collapsible board-card presentation. */
+export type LayoutDensityPolicy = 'preserve' | 'expand' | 'collapse';
+
 /** Stable fields available for deterministic zone ordering. */
 export type ZoneLayoutSortBy = 'position' | 'priority' | 'status' | 'updated' | 'created' | 'title';
 
@@ -224,6 +227,8 @@ export type ZoneOverflowStrategy = 'report' | 'reflow_board';
 export interface ZoneLayoutPolicy {
   mode: ZoneLayoutMode;
   preset: ZoneLayoutPreset;
+  /** Density is orthogonal to geometry; preserve is the safe/default behavior. */
+  density?: LayoutDensityPolicy;
   sortBy: ZoneLayoutSortBy;
   sortDirection: ZoneLayoutSortDirection;
   /** Preferred grid width. Compact lists always use one column. */

@@ -49,6 +49,7 @@ export function autoZoneObserverSignature(input: AutoZoneObserverInput): string 
     [
       policy.mode,
       policy.preset,
+      policy.density,
       policy.sortBy,
       policy.sortDirection,
       policy.columns ?? null,

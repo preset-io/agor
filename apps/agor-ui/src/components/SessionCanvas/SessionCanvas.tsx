@@ -10,11 +10,15 @@ import {
   snapBoardGridPoint,
   snapBoardGridValue,
 } from '@agor/core/layout/rectangle-packing';
-import { normalizeZoneLayoutPolicy } from '@agor/core/layout/zone-layout';
+import {
+  isBoardEntityDensityExpandable,
+  normalizeZoneLayoutPolicy,
+} from '@agor/core/layout/zone-layout';
 import type {
   BoardLayoutApplyResult,
   BoardLayoutBatch,
   BoardLayoutObjectUpdate,
+  LayoutDensityPolicy,
 } from '@agor/core/types';
 import type {
   AgenticToolName,
@@ -131,6 +135,7 @@ import { AppNode } from './canvas/AppNodeLazy';
 import { ArtifactNode } from './canvas/ArtifactNodeLazy';
 import { ARRANGE_DEAL_CLASS } from './canvas/arrangeAnimation';
 import { CommentNode, ZoneNode } from './canvas/BoardObjectNodes';
+import { LayoutDensityControl } from './canvas/LayoutDensityControl';
 import { MarkdownNode } from './canvas/MarkdownNode';
 import {
   arrangeBoardViewportMode,
@@ -517,6 +522,13 @@ const BranchZoneTriggerModal = React.memo(
   }
 );
 
+const nodeSupportsLayoutDensity = (node: Node): boolean => {
+  if (node.type === 'branchNode') return true;
+  if (node.type !== 'cardNode') return false;
+  const card = (node.data as { card?: { description?: string; note?: string } }).card;
+  return isBoardEntityDensityExpandable('card', card);
+};
+
 const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
   (
     {
@@ -898,6 +910,7 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
     const [arrangeBoardPopoverOpen, setArrangeBoardPopoverOpen] = useState(false);
     const [packZoneContents, setPackZoneContents] = useState(true);
     const [arrangeBoardMode, setArrangeBoardMode] = useState<'grid' | 'compact'>('grid');
+    const [arrangeBoardDensity, setArrangeBoardDensity] = useState<LayoutDensityPolicy>('preserve');
     const [justifyBoardRows, setJustifyBoardRows] = useState(true);
     const [resizeZoneFrames, setResizeZoneFrames] = useState(true);
     const [fitViewAfterArranging, setFitViewAfterArranging] = useState(true);
@@ -2885,6 +2898,14 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
     );
 
     const selectedLayoutNodes = useMemo(() => getSelectedLayoutNodes(nodes), [nodes]);
+    const selectedDensityAvailable = useMemo(() => {
+      const selectedIds = new Set(selectedLayoutNodes.map((node) => node.id));
+      return nodes.some(
+        (node) =>
+          (selectedIds.has(node.id) || Boolean(node.parentId && selectedIds.has(node.parentId))) &&
+          nodeSupportsLayoutDensity(node)
+      );
+    }, [nodes, selectedLayoutNodes]);
     const reactFlowNodes = useMemo(
       () => suppressIndividualZoneToolbarsForMultiSelect(nodes),
       [nodes]
@@ -3956,6 +3977,7 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
               <SelectionLayoutPopover
                 selectionCount={selectedLayoutNodes.length}
                 zoneOnlySelection={selectedLayoutNodes.every((node) => node.type === 'zone')}
+                densityAvailable={selectedDensityAvailable}
                 onApply={(settings) => handleLayoutAction('arrange', settings)}
               />
             </div>
@@ -4109,7 +4131,10 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
                   destroyOnHidden
                   classNames={{ root: CANVAS_LAYOUT_CONTROLS_CLASS }}
                   onOpenChange={(open) => {
-                    if (!arrangeBoardDisabled) setArrangeBoardPopoverOpen(open);
+                    if (!arrangeBoardDisabled) {
+                      if (open) setArrangeBoardDensity('preserve');
+                      setArrangeBoardPopoverOpen(open);
+                    }
                   }}
                   content={
                     <div
@@ -4149,6 +4174,16 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
                           ? 'Builds stable, photo-style rows from the usable canvas shape.'
                           : 'Minimizes cluster diameter first for a dense two-dimensional ball.'}
                       </Typography.Text>
+                      <LayoutDensityControl
+                        value={arrangeBoardDensity}
+                        onChange={setArrangeBoardDensity}
+                        disabled={arrangeBoardBusy || !packZoneContents}
+                        disabledReason={
+                          !packZoneContents
+                            ? 'Unavailable while Pack zone contents is off; no child presentation is changed.'
+                            : undefined
+                        }
+                      />
                       <Checkbox
                         checked={fitViewAfterArranging}
                         disabled={arrangeBoardBusy}
@@ -4240,6 +4275,7 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
                           arrangeBoardButtonWrapperRef.current?.querySelector('button')?.focus();
                           void arrangeWholeBoard({
                             mode: arrangeBoardMode,
+                            density: arrangeBoardDensity,
                             packZoneContents,
                             resizeZoneFrames,
                             justifyRows: justifyBoardRows,
@@ -4265,7 +4301,8 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
                       onClick={(event) => {
                         event.stopPropagation();
                         if (!arrangeBoardDisabled) {
-                          setArrangeBoardPopoverOpen((open) => !open);
+                          if (!arrangeBoardPopoverOpen) setArrangeBoardDensity('preserve');
+                          setArrangeBoardPopoverOpen(!arrangeBoardPopoverOpen);
                         }
                       }}
                       style={

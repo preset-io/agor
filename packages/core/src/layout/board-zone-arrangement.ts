@@ -1,4 +1,9 @@
-import type { BoardEntityType, BoardPosition, ZoneLayoutPolicy } from '../types/board.js';
+import type {
+  BoardEntityType,
+  BoardPosition,
+  LayoutDensityPolicy,
+  ZoneLayoutPolicy,
+} from '../types/board.js';
 import {
   type JustifiedZoneResult,
   layoutJustifiedZones,
@@ -17,6 +22,7 @@ import {
   compactZoneItemSize,
   getZoneLayoutFrame,
   isBoardEntityDensityExpandable,
+  layoutCompactTarget,
   normalizeZoneLayoutPolicy,
   sortZoneLayoutItems,
   type ZoneLayoutSortItem,
@@ -42,6 +48,8 @@ export interface BoardZoneArrangementItem extends ZoneLayoutSortItem {
   compact?: boolean;
   /** Definitive rendered density capability; required to compact generic cards. */
   densityExpandable?: boolean;
+  /** Natural expanded geometry used when an explicit Expand starts collapsed. */
+  expandedSize?: { width: number; height: number };
 }
 
 export interface BoardZoneArrangementInput {
@@ -64,11 +72,17 @@ export interface BoardZoneArrangementLooseItem {
   y: number;
   width: number;
   height: number;
+  entityType?: BoardEntityType;
+  compact?: boolean;
+  densityExpandable?: boolean;
+  expandedSize?: { width: number; height: number };
 }
 
 export interface BoardZoneArrangementOptions {
   /** One outer-board presentation shared by UI selection, toolbar, and MCP. */
   mode?: 'grid' | 'compact';
+  /** Orthogonal presentation intent. Omitted uses each zone policy; preserve is recommended. */
+  density?: LayoutDensityPolicy;
   /** Usable viewport aspect; target size is then derived from content area. */
   targetAspectRatio?: number;
   targetWidth?: number;
@@ -110,6 +124,10 @@ export interface BoardZoneArrangementOptions {
   packZoneContents?: boolean;
 }
 
+export interface BoardZoneArrangementPlacement extends RectanglePlacement {
+  compact?: boolean;
+}
+
 export interface ArrangedBoardZone {
   id: string;
   position: BoardPosition;
@@ -119,13 +137,13 @@ export interface ArrangedBoardZone {
   column: number;
   contentColumns: number;
   slackY: number;
-  items: RectanglePlacement[];
+  items: BoardZoneArrangementPlacement[];
 }
 
 export interface BoardZoneArrangementPlan {
   layout: JustifiedZoneResult;
   zones: ArrangedBoardZone[];
-  looseItems: RectanglePlacement[];
+  looseItems: BoardZoneArrangementPlacement[];
   /** Present when the operation also packed free top-level board nodes. */
   boardLayout?: CompactRectangleLayoutResult;
 }
@@ -203,6 +221,7 @@ export function planBoardZoneArrangement(
 
   const prepared = orderedZones.map((zone) => {
     const policy = normalizeZoneLayoutPolicy(zone.layout);
+    const density = packZoneContents ? (options.density ?? policy.density) : 'preserve';
     const frame = getZoneLayoutFrame(zone, { fontScale: zone.fontScale });
     const orderedItems =
       policy.preset === 'grid' && policy.columns === undefined && policy.sortBy === 'position'
@@ -217,16 +236,27 @@ export function planBoardZoneArrangement(
     const compactListWidth = ceilBoardGridValue(
       Math.max(BOARD_GRID_SIZE, ...orderedItems.map((item) => item.width))
     );
-    const items = orderedItems.map((item) => ({
-      id: item.id,
-      ...(policy.preset === 'compact_list' &&
-      item.entityType &&
-      (item.densityExpandable ?? isBoardEntityDensityExpandable(item.entityType))
-        ? compactZoneItemSize(item.entityType, compactListWidth)
-        : { width: item.width, height: item.height }),
-      sourceX: item.position.x,
-      sourceY: item.position.y - frame.headerInset,
-    }));
+    const compactById = new Map<string, boolean | undefined>();
+    const items = orderedItems.map((item) => {
+      const densityExpandable = Boolean(
+        item.entityType &&
+          (item.densityExpandable ?? isBoardEntityDensityExpandable(item.entityType))
+      );
+      const compact = layoutCompactTarget(density, item.compact, densityExpandable);
+      compactById.set(item.id, compact);
+      const size =
+        compact === true && item.entityType
+          ? compactZoneItemSize(item.entityType, compactListWidth)
+          : compact === false && item.compact === true && item.expandedSize
+            ? item.expandedSize
+            : { width: item.width, height: item.height };
+      return {
+        id: item.id,
+        ...size,
+        sourceX: item.position.x,
+        sourceY: item.position.y - frame.headerInset,
+      };
+    });
     const gap = exactGap(policy.gap ?? 24);
     const compact =
       packZoneContents && policy.preset === 'grid' && policy.columns === undefined
@@ -258,9 +288,26 @@ export function planBoardZoneArrangement(
               maxColumns: policy.preset === 'compact_list' ? 1 : policy.columns,
               gridSize: BOARD_GRID_SIZE,
             });
-    return { zone, policy, frame, orderedItems, items, shapes, gap, compact };
+    return { zone, policy, frame, orderedItems, items, shapes, gap, compact, compactById };
   });
   const preparedById = new Map(prepared.map((entry) => [entry.zone.id, entry]));
+  const preparedLooseItems = orderedLooseItems.map((item) => {
+    const densityExpandable = Boolean(
+      item.entityType && (item.densityExpandable ?? isBoardEntityDensityExpandable(item.entityType))
+    );
+    const compact = layoutCompactTarget(
+      packZoneContents ? (options.density ?? 'preserve') : 'preserve',
+      item.compact,
+      densityExpandable
+    );
+    const size =
+      compact === true && item.entityType
+        ? compactZoneItemSize(item.entityType, item.width)
+        : compact === false && item.compact === true && item.expandedSize
+          ? item.expandedSize
+          : { width: item.width, height: item.height };
+    return { ...item, ...size, compact };
+  });
 
   const compactShapeById = new Map(
     prepared.map((entry) => {
@@ -284,7 +331,7 @@ export function planBoardZoneArrangement(
       height: zone.height,
       kind: 'zone' as const,
     })),
-    ...orderedLooseItems.map((item) => ({ ...item, kind: 'loose' as const })),
+    ...preparedLooseItems.map((item) => ({ ...item, kind: 'loose' as const })),
   ];
 
   const targetAspect =
@@ -596,18 +643,22 @@ export function planBoardZoneArrangement(
         return {
           ...placement,
           y: packZoneContents ? placement.y + frame.headerInset : placement.y,
+          ...(entry.compactById.get(placement.id) === undefined
+            ? {}
+            : { compact: entry.compactById.get(placement.id) }),
         };
       }),
     };
   });
 
-  const looseItems = orderedLooseItems.map((item) => {
+  const looseItems = preparedLooseItems.map((item) => {
     const placement = rootPlacementById.get(item.id);
     if (!placement) throw new Error(`Missing placement for board item '${item.id}'.`);
     return {
       ...placement,
       width: item.width,
       height: item.height,
+      ...(item.compact === undefined ? {} : { compact: item.compact }),
       stackIndex: stableRootIndexById.get(item.id) ?? placement.stackIndex,
     };
   });

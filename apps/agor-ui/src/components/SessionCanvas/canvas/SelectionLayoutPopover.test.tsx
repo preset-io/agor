@@ -26,6 +26,7 @@ describe('selectionBoardZoneArrangementOptions', () => {
         matchRowHeights: false,
         matchColumnWidths: true,
         rowDistribution: 'packed',
+        density: 'preserve',
       })
     ).toEqual({
       mode: 'grid',
@@ -36,6 +37,7 @@ describe('selectionBoardZoneArrangementOptions', () => {
       matchRowHeights: false,
       matchColumnWidths: true,
       resizeZoneFrames: true,
+      density: 'preserve',
     });
     expect(
       selectionBoardZoneArrangementOptions(7, {
@@ -45,6 +47,7 @@ describe('selectionBoardZoneArrangementOptions', () => {
         matchRowHeights: true,
         matchColumnWidths: false,
         rowDistribution: 'justify',
+        density: 'collapse',
       })
     ).toEqual({
       mode: 'grid',
@@ -55,6 +58,7 @@ describe('selectionBoardZoneArrangementOptions', () => {
       matchRowHeights: true,
       matchColumnWidths: false,
       resizeZoneFrames: true,
+      density: 'collapse',
     });
   });
 
@@ -65,6 +69,7 @@ describe('selectionBoardZoneArrangementOptions', () => {
       resizeZoneFrames: true,
       matchRowHeights: true,
       matchColumnWidths: true,
+      density: 'preserve',
     });
     expect(
       selectionBoardZoneArrangementOptions(3, {
@@ -74,8 +79,9 @@ describe('selectionBoardZoneArrangementOptions', () => {
         matchRowHeights: false,
         matchColumnWidths: false,
         rowDistribution: 'packed',
+        density: 'expand',
       })
-    ).toEqual({ mode: 'compact' });
+    ).toEqual({ mode: 'compact', density: 'expand' });
   });
 });
 
@@ -93,6 +99,7 @@ describe('SelectionLayoutPopover', () => {
     const gridControl = screen.getByText('Grid');
     expect(gridControl.closest(`.${CANVAS_LAYOUT_CONTROLS_CLASS}`)).not.toBeNull();
     expect(screen.getByText('3 columns × 3 rows')).toBeInTheDocument();
+    expect(screen.getByText('Preserve current expansion')).toBeInTheDocument();
     fireEvent.click(screen.getByLabelText('Match heights within rows'));
     fireEvent.click(screen.getByRole('button', { name: 'Apply layout', hidden: true }));
 
@@ -104,12 +111,51 @@ describe('SelectionLayoutPopover', () => {
         matchRowHeights: true,
         matchColumnWidths: false,
         rowDistribution: 'packed',
+        density: 'preserve',
       })
     );
 
     fireEvent.click(screen.getByRole('button', { name: 'Layout options' }));
     fireEvent.click(screen.getByText('Compact'));
     expect(await screen.findByText(/smallest stable, collision-free cluster/i)).toBeInTheDocument();
+  });
+
+  it('applies an explicit density choice and resets to Preserve when reopened', async () => {
+    const onApply = vi.fn();
+    render(
+      <AntApp>
+        <SelectionLayoutPopover selectionCount={2} zoneOnlySelection={false} onApply={onApply} />
+      </AntApp>
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Layout options' }));
+    fireEvent.mouseDown(screen.getByRole('combobox', { name: 'Content expansion' }));
+    fireEvent.click(await screen.findByText('Collapse eligible contents'));
+    fireEvent.click(screen.getByRole('button', { name: 'Apply layout', hidden: true }));
+    expect(onApply).toHaveBeenCalledWith(expect.objectContaining({ density: 'collapse' }));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Layout options' }));
+    expect(screen.getByText('Preserve current expansion')).toBeInTheDocument();
+  });
+
+  it('explains an ineligible selection and can only submit Preserve', async () => {
+    const onApply = vi.fn();
+    render(
+      <AntApp>
+        <SelectionLayoutPopover
+          selectionCount={2}
+          zoneOnlySelection={false}
+          densityAvailable={false}
+          onApply={onApply}
+        />
+      </AntApp>
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Layout options' }));
+    expect(screen.getByRole('combobox', { name: 'Content expansion' })).toBeDisabled();
+    expect(
+      screen.getByText(/selection has no worktrees or cards with body content/i)
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Apply layout', hidden: true }));
+    expect(onApply).toHaveBeenCalledWith(expect.objectContaining({ density: 'preserve' }));
   });
 
   it('tracks the compact three-column default as a selection grows without overriding edits', async () => {

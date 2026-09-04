@@ -167,9 +167,7 @@ describe('ZoneConfigModal historical tool migration', () => {
       expect(screen.queryByRole('spinbutton', { name: 'Columns' })).not.toBeInTheDocument()
     );
     expect(
-      await screen.findByText(
-        /List uses one column and collapses worktree and capable generic-card details/
-      )
+      await screen.findByText(/List uses one column. It does not change content expansion/)
     ).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
 

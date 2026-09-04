@@ -169,7 +169,13 @@ describe('stale layout recovery production path', () => {
         width: 620,
         height: 560,
         label: 'Current',
-        layout: { mode: 'manual', preset: 'grid', columns: 1, gap: 12 },
+        layout: {
+          mode: 'manual',
+          preset: 'grid',
+          density: 'collapse',
+          columns: 1,
+          gap: 12,
+        },
       },
     },
   } as unknown as Board;
@@ -183,7 +189,13 @@ describe('stale layout recovery production path', () => {
         width: 620,
         height: 560,
         label: 'Current',
-        layout: { mode: 'manual', preset: 'grid', columns: 1, gap: 12 },
+        layout: {
+          mode: 'manual',
+          preset: 'grid',
+          density: 'collapse',
+          columns: 1,
+          gap: 12,
+        },
       },
     },
   } as unknown as Board;
@@ -293,6 +305,9 @@ describe('stale layout recovery production path', () => {
           size: { width: 500, height: 240 },
         },
       },
+    });
+    expect(writes[1]?.placements).toMatchObject({
+      'placement-current': { compact: true },
     });
     expect(view.boardsGet).toHaveBeenCalledTimes(1);
     expect(view.placementsFindAll).toHaveBeenCalledTimes(1);
@@ -1721,7 +1736,7 @@ describe('arrangeZoneContents', () => {
     for (const renderedCard of renderedCards) renderedCard.remove();
   });
 
-  it('uses persisted latest-first ordering and compact dimensions for the list preset', async () => {
+  it('uses List ordering while preserving expanded body-card density', async () => {
     const { client, patch } = makeClient();
     const board = makeBoard({
       zone: {
@@ -1747,7 +1762,13 @@ describe('arrangeZoneContents', () => {
         type: 'cardNode',
         parentId: 'zone',
         position: { x: 200, y: 300 },
-        data: { card: { title: 'Older', updated_at: '2026-01-01T00:00:00.000Z' } },
+        data: {
+          card: {
+            title: 'Older',
+            description: 'Fictional body',
+            updated_at: '2026-01-01T00:00:00.000Z',
+          },
+        },
         width: 380,
         height: 220,
       },
@@ -1756,7 +1777,13 @@ describe('arrangeZoneContents', () => {
         type: 'cardNode',
         parentId: 'zone',
         position: { x: 200, y: 100 },
-        data: { card: { title: 'Newer', updated_at: '2026-02-01T00:00:00.000Z' } },
+        data: {
+          card: {
+            title: 'Newer',
+            description: 'Fictional body',
+            updated_at: '2026-02-01T00:00:00.000Z',
+          },
+        },
         width: 380,
         height: 260,
       },
@@ -1815,14 +1842,16 @@ describe('arrangeZoneContents', () => {
       position: { x: 20, y: 384 },
       size: { width: 380, height: 220 },
     });
+    expect(Object.values(placements).every((placement) => !('compact' in placement))).toBe(true);
     expect(layoutWrites(patch)).toHaveLength(1);
   });
 
-  it('uses rendered compact geometry for both worktrees and generic cards with body content', async () => {
+  it('atomically applies explicit Collapse geometry to worktrees and body cards', async () => {
     const { client, patch } = makeClient();
     const compactLayout = {
       mode: 'auto',
       preset: 'compact_list',
+      density: 'collapse',
       sortBy: 'position',
       sortDirection: 'asc',
       gap: 8,
@@ -1901,7 +1930,7 @@ describe('arrangeZoneContents', () => {
               card_id: 'card-1',
               position: { x: 31, y: 72 },
               zone_id: 'cards-zone',
-              compact: true,
+              compact: false,
               created_at: '2026-01-01T00:00:00.000Z',
             },
             {
@@ -1911,7 +1940,7 @@ describe('arrangeZoneContents', () => {
               branch_id: 'branch-1',
               position: { x: 11, y: 47 },
               zone_id: 'branches-zone',
-              compact: true,
+              compact: false,
               created_at: '2026-01-01T00:00:00.000Z',
             },
           ] as never,
@@ -1934,10 +1963,10 @@ describe('arrangeZoneContents', () => {
     expect(branch).toMatchObject({ position: { x: 20, y: 100 }, width: 580, height: 100 });
     const placements = layoutPlacements(patch);
     expect(placements['placement-card']).toEqual(
-      expect.objectContaining({ size: { width: 320, height: 60 } })
+      expect.objectContaining({ size: { width: 320, height: 60 }, compact: true })
     );
     expect(placements['placement-branch']).toEqual(
-      expect.objectContaining({ size: { width: 580, height: 100 } })
+      expect.objectContaining({ size: { width: 580, height: 100 }, compact: true })
     );
   });
 
@@ -3164,12 +3193,8 @@ describe('setZoneContentsCompact', () => {
   });
 });
 
-/**
- * `compact_list` collapses every capable worktree on the way in and nothing
- * used to undo it, so a zone switched back to Grid stayed collapsed.
- * The expand is keyed to the preset transition, NOT to arranging in grid.
- */
-describe('handleUpdateObject compact_list → grid expansion', () => {
+/** Geometry presentation never owns density; preset edits preserve every item. */
+describe('handleUpdateObject density/preset orthogonality', () => {
   const zoneId = 'zone-1';
   const collapsed = [
     {
@@ -3222,7 +3247,7 @@ describe('handleUpdateObject compact_list → grid expansion', () => {
       .map((call) => [call[0], call[1].compact]);
   }
 
-  it('expands the zone contents when the preset leaves compact_list for grid', async () => {
+  it('preserves collapsed contents when the preset leaves compact_list for grid', async () => {
     const { client, patch } = makeClient();
     const { result } = renderUpdate('compact_list', collapsed, client);
 
@@ -3230,10 +3255,10 @@ describe('handleUpdateObject compact_list → grid expansion', () => {
       await result.current.handleUpdateObject(zoneId, zone('grid') as never);
     });
 
-    expect(compactPatches(patch)).toEqual([['obj-branch', false]]);
+    expect(compactPatches(patch)).toEqual([]);
   });
 
-  it('keeps auto mode armed while its compact-list to grid transition expands contents', async () => {
+  it('keeps auto mode armed without mutating density on a preset transition', async () => {
     const { client, patch } = makeClient();
     const { result } = renderHook(
       () =>
@@ -3252,7 +3277,7 @@ describe('handleUpdateObject compact_list → grid expansion', () => {
       await result.current.handleUpdateObject(zoneId, zone('grid', 'auto') as never);
     });
 
-    expect(compactPatches(patch)).toEqual([['obj-branch', false]]);
+    expect(compactPatches(patch)).toEqual([]);
     expect(
       patch.mock.calls.some(
         (call) => call[1]?._action === 'mergeObjectFields' && call[1].objects?.[zoneId]?.layout
@@ -3334,12 +3359,7 @@ describe('handleUpdateObject compact_list → grid expansion', () => {
   });
 });
 
-/**
- * Expanding on the way out of compact_list is only half the job: worktrees keep
- * the one-row spacing the preset gave them, so restoring their full height
- * makes them overlap until the zone is re-packed.
- */
-describe('compact_list → grid re-packs the expanded zone', () => {
+describe('explicit density changes own any required re-pack', () => {
   const zoneId = 'zone-1';
 
   function zone(preset: string) {
@@ -3394,7 +3414,7 @@ describe('compact_list → grid re-packs the expanded zone', () => {
     },
   ];
 
-  it('schedules an arrange that moves the expanded worktrees apart', async () => {
+  it('does not expand or re-pack merely because List changes to Grid', async () => {
     vi.useFakeTimers();
     const { client, patch } = makeClient();
     const setNodes = vi.fn();
@@ -3415,23 +3435,15 @@ describe('compact_list → grid re-packs the expanded zone', () => {
       await result.current.handleUpdateObject(zoneId, zone('grid') as never);
     });
 
-    // The expand lands immediately; the re-pack is deferred so the worktrees can
-    // paint at full height before the layout measures them.
     const compactPatches = patch.mock.calls.filter((c) => c[1] && 'compact' in c[1]);
-    expect(compactPatches.map((c) => c[1].compact)).toEqual([false, false]);
+    expect(compactPatches.map((c) => c[1].compact)).toEqual([]);
     expect(patch.mock.calls.some((c) => c[1] && 'position' in c[1])).toBe(false);
 
     await act(async () => {
       await vi.advanceTimersByTimeAsync(1000);
     });
 
-    const positioned = Object.values(layoutPlacements(patch)) as Array<{
-      position: { x: number; y: number };
-    }>;
-    expect(positioned.length).toBeGreaterThan(0);
-    // Whatever the packer chooses, the two worktrees must no longer sit 56px apart.
-    const ys = positioned.map((value) => value.position.y).sort((a, b) => a - b);
-    if (ys.length === 2) expect(ys[1] - ys[0]).toBeGreaterThan(56);
+    expect(Object.values(layoutPlacements(patch))).toEqual([]);
   });
 
   it('re-packs when the zone toolbar expands the contents directly', async () => {
@@ -3543,6 +3555,134 @@ describe('compact_list → grid re-packs the expanded zone', () => {
 });
 
 describe('arrangeBoardZones production path', () => {
+  it('preserves mixed density by default and applies only explicit collapse or expand atomically', async () => {
+    const board = makeBoard({
+      zone: {
+        type: 'zone',
+        x: 900,
+        y: 500,
+        width: 900,
+        height: 700,
+        label: 'Fictional review',
+        layout: { mode: 'manual', preset: 'compact_list' },
+      },
+    });
+    const nodes: Node[] = [
+      { id: 'zone', type: 'zone', position: { x: 900, y: 500 }, width: 900, height: 700, data: {} },
+      {
+        id: 'expanded',
+        type: 'branchNode',
+        parentId: 'zone',
+        position: { x: 20, y: 100 },
+        width: 500,
+        height: 200,
+        data: { compact: false },
+      },
+      {
+        id: 'collapsed',
+        type: 'branchNode',
+        parentId: 'zone',
+        position: { x: 20, y: 324 },
+        width: 500,
+        height: 100,
+        data: { compact: true },
+      },
+      {
+        id: 'card-body',
+        type: 'cardNode',
+        parentId: 'zone',
+        position: { x: 20, y: 448 },
+        width: 380,
+        height: 140,
+        data: { card: { title: 'Sample', description: 'Fictional body' } },
+      },
+      {
+        id: 'card-header',
+        type: 'cardNode',
+        parentId: 'zone',
+        position: { x: 420, y: 448 },
+        width: 380,
+        height: 60,
+        data: { card: { title: 'Header only' } },
+      },
+    ];
+    const placements = [
+      {
+        object_id: 'p-expanded',
+        board_id: 'board-1',
+        entity_type: 'branch',
+        branch_id: 'expanded',
+        zone_id: 'zone',
+        position: { x: 20, y: 100 },
+        size: { width: 500, height: 200 },
+        compact: false,
+      },
+      {
+        object_id: 'p-collapsed',
+        board_id: 'board-1',
+        entity_type: 'branch',
+        branch_id: 'collapsed',
+        zone_id: 'zone',
+        position: { x: 20, y: 324 },
+        size: { width: 500, height: 100 },
+        compact: true,
+      },
+      {
+        object_id: 'p-body',
+        board_id: 'board-1',
+        entity_type: 'card',
+        card_id: 'body',
+        zone_id: 'zone',
+        position: { x: 20, y: 448 },
+        size: { width: 380, height: 140 },
+      },
+      {
+        object_id: 'p-header',
+        board_id: 'board-1',
+        entity_type: 'card',
+        card_id: 'header',
+        zone_id: 'zone',
+        position: { x: 420, y: 448 },
+        size: { width: 380, height: 60 },
+      },
+    ] as never;
+
+    const run = async (density: 'preserve' | 'expand' | 'collapse') => {
+      const routed = makeRoutedClient();
+      const view = renderHook(
+        () =>
+          useBoardObjects({
+            board,
+            client: routed.client,
+            boardObjectsForBoard: placements,
+            nodes,
+            setNodes: vi.fn(),
+            deletedObjectsRef: { current: new Set<string>() },
+          }),
+        { wrapper }
+      );
+      await act(async () => view.result.current.arrangeWholeBoard({ density }));
+      return routed.boardsPatch.mock.calls[0]?.[1].placements as Record<
+        string,
+        { compact?: boolean }
+      >;
+    };
+
+    const preserved = await run('preserve');
+    expect(Object.values(preserved).every((placement) => placement.compact === undefined)).toBe(
+      true
+    );
+    const collapsed = await run('collapse');
+    expect(collapsed['p-expanded']?.compact).toBe(true);
+    expect(collapsed['p-body']?.compact).toBe(true);
+    expect(collapsed['p-collapsed']?.compact).toBeUndefined();
+    expect(collapsed['p-header']?.compact).toBeUndefined();
+    const expanded = await run('expand');
+    expect(expanded['p-collapsed']?.compact).toBe(false);
+    expect(expanded['p-expanded']?.compact).toBeUndefined();
+    expect(expanded['p-header']?.compact).toBeUndefined();
+  });
+
   it('packs an anchored protruding canvas child inside-out before placing its final zone frame', async () => {
     const { client, boardsPatch } = makeRoutedClient();
     const board = makeBoard({
