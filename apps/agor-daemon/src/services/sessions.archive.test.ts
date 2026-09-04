@@ -9,7 +9,7 @@ import {
 import type { Application } from '@agor/core/feathers';
 import type { Branch, Session, SessionID, UUID } from '@agor/core/types';
 import { ROLES, SessionStatus } from '@agor/core/types';
-import { describe, expect } from 'vitest';
+import { describe, expect, vi } from 'vitest';
 import { dbTest } from '../../../../packages/core/src/db/test-helpers';
 import { type SessionParams, SessionsService } from './sessions';
 
@@ -241,36 +241,31 @@ describe('SessionsService archive routes', () => {
     });
   });
 
-  dbTest(
-    'honors includeChildren false while generic patch remains single-session',
-    async ({ db }) => {
-      const service = new SessionsService(db, STUB_APP);
-      const branchId = await createBranch(db);
-      const parent = await createSession(db, branchId);
-      const child = await createSession(db, branchId, {
-        genealogy: { parent_session_id: parent.session_id, children: [] },
-      });
+  dbTest('honors includeChildren false and rejects generic archive patches', async ({ db }) => {
+    const service = new SessionsService(db, STUB_APP);
+    const branchId = await createBranch(db);
+    const parent = await createSession(db, branchId);
+    const child = await createSession(db, branchId, {
+      genealogy: { parent_session_id: parent.session_id, children: [] },
+    });
 
-      await service.patch(parent.session_id, { archived: true, archived_reason: 'manual' });
-      await expect(getArchivedState(db, parent.session_id)).resolves.toMatchObject({
-        archived: true,
-      });
-      await expect(getArchivedState(db, child.session_id)).resolves.toMatchObject({
-        archived: false,
-      });
+    await expect(
+      service.patch(parent.session_id, { archived: true, archived_reason: 'manual' })
+    ).rejects.toThrow(/dedicated archive or unarchive/);
+    await expect(getArchivedState(db, child.session_id)).resolves.toMatchObject({
+      archived: false,
+    });
 
-      await service.unarchive(parent.session_id, { includeChildren: false });
-      const archiveResult = await service.archive(parent.session_id, { includeChildren: false });
+    const archiveResult = await service.archive(parent.session_id, { includeChildren: false });
 
-      expect(archiveResult.count).toBe(1);
-      await expect(getArchivedState(db, parent.session_id)).resolves.toMatchObject({
-        archived: true,
-      });
-      await expect(getArchivedState(db, child.session_id)).resolves.toMatchObject({
-        archived: false,
-      });
-    }
-  );
+    expect(archiveResult.count).toBe(1);
+    await expect(getArchivedState(db, parent.session_id)).resolves.toMatchObject({
+      archived: true,
+    });
+    await expect(getArchivedState(db, child.session_id)).resolves.toMatchObject({
+      archived: false,
+    });
+  });
 
   dbTest('does not cascade through remote session relationships', async ({ db }) => {
     const service = new SessionsService(db, STUB_APP);
@@ -295,6 +290,131 @@ describe('SessionsService archive routes', () => {
     await expect(getArchivedState(db, remoteChild.session_id)).resolves.toMatchObject({
       archived: false,
     });
+  });
+
+  dbTest('does not rewrite or re-emit an already satisfied transition', async ({ db }) => {
+    const emit = vi.fn();
+    const app = { service: () => ({ emit }) } as unknown as Application;
+    const service = new SessionsService(db, app);
+    const branchId = await createBranch(db);
+    const root = await createSession(db, branchId);
+
+    expect((await service.archive(root.session_id)).count).toBe(1);
+    expect((await service.archive(root.session_id)).count).toBe(0);
+    expect(emit).toHaveBeenCalledTimes(1);
+  });
+
+  dbTest('uses BTW and branch causes without overwriting independent reasons', async ({ db }) => {
+    const service = new SessionsService(db, STUB_APP);
+    const branchId = await createBranch(db);
+    const btwRoot = await createSession(db, branchId, { fork_origin: 'btw' });
+    const child = await createSession(db, branchId, {
+      genealogy: { parent_session_id: btwRoot.session_id, children: [] },
+    });
+    const manual = await createSession(db, branchId, {
+      archived: true,
+      archived_reason: 'manual',
+    });
+
+    await service.archiveBtwSession(btwRoot.session_id);
+    await expect(getArchivedState(db, btwRoot.session_id)).resolves.toEqual({
+      archived: true,
+      archived_reason: 'btw_completed',
+    });
+    await expect(getArchivedState(db, child.session_id)).resolves.toEqual({
+      archived: true,
+      archived_reason: 'parent_archived',
+    });
+
+    const active = await createSession(db, branchId);
+    const archived = await service.archiveBranchSessions(branchId);
+    expect(archived.count).toBe(1);
+    await expect(getArchivedState(db, active.session_id)).resolves.toEqual({
+      archived: true,
+      archived_reason: 'branch_archived',
+    });
+    await expect(getArchivedState(db, manual.session_id)).resolves.toEqual({
+      archived: true,
+      archived_reason: 'manual',
+    });
+
+    const restored = await service.unarchiveBranchSessions(branchId);
+    expect(restored.count).toBe(1);
+    await expect(getArchivedState(db, active.session_id)).resolves.toEqual({
+      archived: false,
+      archived_reason: undefined,
+    });
+    await expect(getArchivedState(db, btwRoot.session_id)).resolves.toMatchObject({
+      archived: true,
+      archived_reason: 'btw_completed',
+    });
+    await expect(getArchivedState(db, child.session_id)).resolves.toMatchObject({
+      archived: true,
+      archived_reason: 'parent_archived',
+    });
+  });
+
+  dbTest(
+    'plans bulk roots with optional local descendants and executing counts',
+    async ({ db }) => {
+      const service = new SessionsService(db, STUB_APP);
+      const branchId = await createBranch(db);
+      const root = await createSession(db, branchId);
+      const child = await createSession(db, branchId, {
+        status: SessionStatus.RUNNING,
+        genealogy: { parent_session_id: root.session_id, children: [] },
+      });
+
+      const preview = await service.archiveRootsInBranch(branchId, [root.session_id], {
+        includeChildren: true,
+        dryRun: true,
+      });
+      expect(preview).toMatchObject({
+        count: 0,
+        authorizedSessionCount: 2,
+        matchedRootCount: 1,
+        additionalDescendantCount: 1,
+        executingDescendantCount: 1,
+        rootOnlyTotal: 1,
+        withChildrenTotal: 2,
+      });
+      await expect(getArchivedState(db, child.session_id)).resolves.toMatchObject({
+        archived: false,
+      });
+
+      await expect(service.archiveRootsInBranch(branchId, [root.session_id], {})).rejects.toThrow(
+        /Set includeChildren explicitly/
+      );
+      await expect(getArchivedState(db, root.session_id)).resolves.toMatchObject({
+        archived: false,
+      });
+
+      const applied = await service.archiveRootsInBranch(branchId, [root.session_id], {
+        includeChildren: true,
+      });
+      expect(applied.count).toBe(2);
+      await expect(getArchivedState(db, root.session_id)).resolves.toMatchObject({
+        archived: true,
+        archived_reason: 'manual',
+      });
+      await expect(getArchivedState(db, child.session_id)).resolves.toMatchObject({
+        archived: true,
+        archived_reason: 'parent_archived',
+      });
+    }
+  );
+
+  dbTest('rejects archive fields from update and multi-patch', async ({ db }) => {
+    const service = new SessionsService(db, STUB_APP);
+    const branchId = await createBranch(db);
+    const root = await createSession(db, branchId);
+
+    await expect(service.update(root.session_id, { archived: true })).rejects.toThrow(
+      /dedicated archive or unarchive/
+    );
+    await expect(service.patch(null, { archived_reason: 'manual' })).rejects.toThrow(
+      /dedicated archive or unarchive/
+    );
   });
 
   dbTest(
@@ -322,8 +442,10 @@ describe('SessionsService archive routes', () => {
         archived: false,
       });
 
-      await service.patch(parent.session_id, { archived: true, archived_reason: 'manual' });
-      await service.patch(child.session_id, { archived: true, archived_reason: 'parent_archived' });
+      await new SessionRepository(db).updateArchiveStateForTargets([
+        { id: parent.session_id, archived: true, archivedReason: 'manual' },
+        { id: child.session_id, archived: true, archivedReason: 'parent_archived' },
+      ]);
 
       await expect(
         service.unarchive(parent.session_id, undefined, externalParams(TEST_USER_ID))

@@ -67,6 +67,7 @@ import type {
 } from '@agor/core/types';
 import {
   isAgenticToolDefaultConfigurationReference,
+  isSessionExecuting,
   SessionStatus,
   USER_DEFAULT_AGENTIC_CONFIGURATION,
 } from '@agor/core/types';
@@ -90,20 +91,20 @@ import {
 import { emitServiceEvent } from '../utils/emit-service-event.js';
 import { parseLastMessageTruncationLength } from '../utils/query-params.js';
 import { deploymentAgenticToolUnavailableMessage } from './agentic-tool-deployment.js';
+import {
+  BTW_ARCHIVED_REASON,
+  MANUAL_ARCHIVED_REASON,
+  planBranchArchiveTransition,
+  planBranchLocalArchiveRoots,
+  planBranchUnarchiveTransition,
+  planSessionTreeArchiveTransition,
+  type SessionArchiveReason,
+  type SessionArchiveTarget,
+} from './session-archive.js';
 
 type MaterializedAgenticToolConfiguration = Awaited<
   ReturnType<typeof materializeAgenticToolConfiguration>
 >;
-
-type SessionArchiveReason = NonNullable<Session['archived_reason']>;
-type SessionArchiveTarget = {
-  session: Session;
-  archived: boolean;
-  archivedReason: SessionArchiveReason | null;
-};
-
-const MANUAL_ARCHIVED_REASON = 'manual' satisfies SessionArchiveReason;
-const PARENT_ARCHIVED_REASON = 'parent_archived' satisfies SessionArchiveReason;
 
 function sessionConfigurationSource(
   data: Pick<CreateSessionInput, 'model_config' | 'permission_config'>
@@ -136,6 +137,14 @@ function resolvedSessionModelConfig(
     throw new BadRequest('model_config must be resolved before session creation');
   }
   return modelConfig;
+}
+
+export function assertSessionArchiveStateUsesDedicatedOperation(data: SessionUpdate): void {
+  if (Object.hasOwn(data, 'archived') || Object.hasOwn(data, 'archived_reason')) {
+    throw new BadRequest(
+      'Session archive state cannot be changed with patch or update. Use the dedicated archive or unarchive operation.'
+    );
+  }
 }
 
 function normalizeCreateMcpServerIds(value: unknown): MCPServerID[] | undefined {
@@ -268,6 +277,27 @@ export type SessionArchiveResult = {
   session: Session;
   affectedSessions: Session[];
   count: number;
+};
+
+export type SessionArchiveBatchResult = {
+  affectedSessions: Session[];
+  count: number;
+};
+
+export type SessionBulkArchiveOptions = {
+  includeChildren?: boolean;
+  dryRun?: boolean;
+};
+
+export type SessionBulkArchiveResult = SessionArchiveBatchResult & {
+  authorizedSessionCount: number;
+  matchedRootCount: number;
+  additionalDescendantCount: number;
+  executingDescendantCount: number;
+  rootOnlyTotal: number;
+  withChildrenTotal: number;
+  additionalDescendants: Session[];
+  skipped: Array<{ session_id: SessionID; error: string }>;
 };
 
 /**
@@ -1326,45 +1356,42 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
     id: string,
     archived: boolean,
     options: SessionArchiveOptions | undefined,
-    params?: SessionParams
+    params?: SessionParams,
+    rootReason: SessionArchiveReason = MANUAL_ARCHIVED_REASON
   ): Promise<SessionArchiveResult> {
     const root = await this.get(id, params);
     const includeChildren = options?.includeChildren !== false;
     const descendants = includeChildren ? await this.collectBranchLocalDescendants(root) : [];
-    const targets: SessionArchiveTarget[] = [
-      {
-        session: root,
-        archived,
-        archivedReason: archived ? MANUAL_ARCHIVED_REASON : null,
-      },
-    ];
-
-    for (const session of descendants) {
-      if (archived) {
-        if (!session.archived) {
-          targets.push({
-            session,
-            archived: true,
-            archivedReason: PARENT_ARCHIVED_REASON,
-          });
-        }
-        continue;
-      }
-
-      if (session.archived_reason === PARENT_ARCHIVED_REASON) {
-        targets.push({
-          session,
-          archived: false,
-          archivedReason: null,
-        });
-      }
-    }
+    const targets = planSessionTreeArchiveTransition({
+      root,
+      descendants,
+      archived,
+      rootReason,
+    });
 
     await this.assertCanArchiveSessions(
       targets.map((target) => target.session),
       archived,
       params
     );
+
+    const affectedSessions = await this.applyArchiveTargets(targets, params);
+
+    const session =
+      affectedSessions.find((affected) => affected.session_id === root.session_id) ?? root;
+
+    return {
+      session,
+      affectedSessions,
+      count: affectedSessions.length,
+    };
+  }
+
+  private async applyArchiveTargets(
+    targets: SessionArchiveTarget[],
+    params?: SessionParams
+  ): Promise<Session[]> {
+    if (targets.length === 0) return [];
 
     const affectedSessions = await this.sessionRepo.updateArchiveStateForTargets(
       targets.map((target) => ({
@@ -1384,24 +1411,11 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
       });
     }
 
-    const [session] = affectedSessions;
-    if (!session) {
-      throw new Error(`Session ${id} not found`);
-    }
-
-    return {
-      session,
-      affectedSessions,
-      count: affectedSessions.length,
-    };
+    return affectedSessions;
   }
 
   /**
    * Archive a session and, by default, its branch-local descendants.
-   *
-   * Generic `patch({ archived })` intentionally remains single-row so bulk
-   * archive, branch archive, and auto-cleanup paths keep their existing
-   * semantics.
    */
   async archive(
     id: string,
@@ -1420,6 +1434,106 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
     params?: SessionParams
   ): Promise<SessionArchiveResult> {
     return this.setArchiveStateForTree(id, false, options, params);
+  }
+
+  /** Archive a completed BTW root and its active branch-local descendants. */
+  async archiveBtwSession(id: string, params?: SessionParams): Promise<SessionArchiveResult> {
+    return this.setArchiveStateForTree(id, true, undefined, params, BTW_ARCHIVED_REASON);
+  }
+
+  /** Archive every active session in a branch without rewriting prior causes. */
+  async archiveBranchSessions(
+    branchId: BranchID,
+    params?: SessionParams
+  ): Promise<SessionArchiveBatchResult> {
+    const sessions = await this.sessionRepo.findAll({ branchId });
+    const affectedSessions = await this.applyArchiveTargets(
+      planBranchArchiveTransition(sessions),
+      params
+    );
+    return { affectedSessions, count: affectedSessions.length };
+  }
+
+  /** Restore only sessions whose independent cause is branch archival. */
+  async unarchiveBranchSessions(
+    branchId: BranchID,
+    params?: SessionParams
+  ): Promise<SessionArchiveBatchResult> {
+    const sessions = await this.sessionRepo.findAll({ branchId, archived: true });
+    const affectedSessions = await this.applyArchiveTargets(
+      planBranchUnarchiveTransition(sessions),
+      params
+    );
+    return { affectedSessions, count: affectedSessions.length };
+  }
+
+  /** Plan and optionally apply a set of local archive trees in one branch. */
+  async archiveRootsInBranch(
+    branchId: BranchID,
+    rootIds: SessionID[],
+    options: SessionBulkArchiveOptions,
+    params?: SessionParams
+  ): Promise<SessionBulkArchiveResult> {
+    const branchSessions = await this.sessionRepo.findAll({ branchId });
+    const sessionsById = new Map(
+      branchSessions.map((session) => [session.session_id, session] as const)
+    );
+    const roots = rootIds.map((rootId) => {
+      const root = sessionsById.get(rootId);
+      if (!root) throw new NotFound(`Session not found in branch: ${rootId}`);
+      return root;
+    });
+    const descendantsByRoot = await this.sessionRepo.findBranchLocalDescendantsForRoots(
+      rootIds,
+      branchId
+    );
+    const plan = planBranchLocalArchiveRoots({
+      roots,
+      descendantsByRoot,
+      includeChildren: options.includeChildren !== false,
+    });
+    const skipped: SessionBulkArchiveResult['skipped'] = [];
+    const authorizedTargets: SessionArchiveTarget[] = [];
+
+    for (const unit of plan.units) {
+      try {
+        await this.assertCanArchiveSessions(unit.sessions, true, params);
+        authorizedTargets.push(...unit.targets);
+      } catch (error) {
+        if (!(error instanceof Forbidden)) throw error;
+        skipped.push({
+          session_id: unit.root.session_id,
+          error: error.message,
+        });
+      }
+    }
+
+    if (
+      !options.dryRun &&
+      options.includeChildren === undefined &&
+      plan.additionalDescendants.length > 0
+    ) {
+      throw new BadRequest(
+        `Bulk archive matched ${plan.roots.length} root session(s) with ${plan.additionalDescendants.length} additional active same-branch descendant(s). Set includeChildren explicitly before executing.`
+      );
+    }
+
+    const affectedSessions = options.dryRun
+      ? []
+      : await this.applyArchiveTargets(authorizedTargets, params);
+
+    return {
+      affectedSessions,
+      count: affectedSessions.length,
+      authorizedSessionCount: authorizedTargets.length,
+      matchedRootCount: plan.roots.length,
+      additionalDescendantCount: plan.additionalDescendants.length,
+      executingDescendantCount: plan.additionalDescendants.filter(isSessionExecuting).length,
+      rootOnlyTotal: plan.roots.length,
+      withChildrenTotal: plan.withChildrenSessions.length,
+      additionalDescendants: plan.additionalDescendants,
+      skipped,
+    };
   }
 
   /**
@@ -1507,6 +1621,7 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
     data: SessionUpdate,
     params?: SessionParams
   ): Promise<Session | Session[]> {
+    assertSessionArchiveStateUsesDedicatedOperation(data);
     if (Object.hasOwn(data, 'sdk_home_scope')) {
       throw new BadRequest('sdk_home_scope is immutable and server-managed');
     }

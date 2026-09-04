@@ -2081,14 +2081,18 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           throw error;
         }
 
-        // Auto-unarchive on prompt
+        // Prompting is an explicit request to revive this Session only. Its
+        // archived local ancestors and descendants keep their own state, so
+        // the Session can intentionally appear as a root until they are
+        // restored separately.
         if (session.archived) {
           console.log(
             `📦 [Prompt] Auto-unarchiving session ${shortId(id)} (was archived: ${session.archived_reason || 'unknown reason'})`
           );
-          session = (await runWithTenantDatabaseScope(db, promptTenantId, () =>
-            sessionsService.patch(id, { archived: false, archived_reason: undefined }, params)
-          )) as typeof session;
+          const restored = await runWithTenantDatabaseScope(db, promptTenantId, () =>
+            sessionsService.unarchive(id, { includeChildren: false }, params)
+          );
+          session = restored.session as typeof session;
         }
 
         if (session.status === SessionStatus.STOPPING) {

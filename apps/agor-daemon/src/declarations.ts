@@ -45,8 +45,11 @@ import type { DaemonMetrics } from './metrics/index.js';
 import type { EnvironmentHealthCheckOptions } from './services/branches.js';
 import type {
   ExecuteTaskData,
+  SessionArchiveBatchResult,
   SessionArchiveOptions,
   SessionArchiveResult,
+  SessionBulkArchiveOptions,
+  SessionBulkArchiveResult,
 } from './services/sessions.js';
 
 // Re-export core types for convenience
@@ -110,6 +113,21 @@ export interface SessionsServiceImpl
     options?: SessionArchiveOptions,
     params?: FeathersParams
   ): Promise<SessionArchiveResult>;
+  archiveBtwSession(id: string, params?: FeathersParams): Promise<SessionArchiveResult>;
+  archiveBranchSessions(
+    branchId: BranchID,
+    params?: FeathersParams
+  ): Promise<SessionArchiveBatchResult>;
+  unarchiveBranchSessions(
+    branchId: BranchID,
+    params?: FeathersParams
+  ): Promise<SessionArchiveBatchResult>;
+  archiveRootsInBranch(
+    branchId: BranchID,
+    rootIds: import('@agor/core/types').SessionID[],
+    options: SessionBulkArchiveOptions,
+    params?: FeathersParams
+  ): Promise<SessionBulkArchiveResult>;
   enrichRemoteRelationships(
     sessionList: import('@agor/core/types').Session[]
   ): Promise<import('@agor/core/types').Session[]>;

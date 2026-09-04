@@ -1336,11 +1336,6 @@ describe('isPromptFlowPatchOnly', () => {
       expect(isPromptFlowPatchOnly({ tasks: ['task-1', 'task-2'] })).toBe(true);
     });
 
-    it('accepts the prompt-route auto-unarchive shape', () => {
-      // register-routes.ts: /sessions/:id/prompt auto-unarchives before sending
-      expect(isPromptFlowPatchOnly({ archived: false, archived_reason: undefined })).toBe(true);
-    });
-
     it('accepts the stop-route idle shape', () => {
       // register-routes.ts: /sessions/:id/stop sets status + ready_for_prompt
       // (ready_for_prompt: true so the post-patch hook drains any QUEUED tasks)
@@ -1354,6 +1349,10 @@ describe('isPromptFlowPatchOnly', () => {
   });
 
   describe('rejects mixed or metadata patches', () => {
+    it('rejects archive state so callers use the dedicated lifecycle operation', () => {
+      expect(isPromptFlowPatchOnly({ archived: false, archived_reason: undefined })).toBe(false);
+    });
+
     it('rejects a patch that mixes whitelist + metadata field', () => {
       // Prevents partial-trust escalation: if `tasks` is allowed at session-tier,
       // a caller must NOT be able to piggyback `name` (metadata) onto the same patch.
