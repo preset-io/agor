@@ -20,6 +20,8 @@ import {
   bindRepositoryToTenantUnitOfWork,
   EntityNotFoundError,
   getCurrentTenantId,
+  inArray,
+  lockRowForUpdate,
   runWithTenantDatabaseScope,
   runWithTenantDatabaseTransaction,
   SessionEnvSelectionRepository,
@@ -27,6 +29,7 @@ import {
   SessionRelationshipRepository,
   SessionRepository,
   type SessionWithLastMessage,
+  sessions,
   shortId,
   TaskRepository,
   type TenantScopeAwareDatabase,
@@ -1417,11 +1420,12 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
 
   private async loadArchiveBranchGraph(
     graphs: Map<string, ArchiveBranchGraph>,
-    branchId: BranchID
+    branchId: BranchID,
+    sessionRepo = this.sessionRepo
   ): Promise<ArchiveBranchGraph> {
     const cached = graphs.get(branchId);
     if (cached) return cached;
-    const rows = await this.sessionRepo.findAll({ branchId });
+    const rows = await sessionRepo.findAll({ branchId });
     const byId = new Map<string, Session>();
     const childrenOf = new Map<string, Session[]>();
     for (const session of rows) {
@@ -1690,8 +1694,6 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
         (id) => !visited.has(id)
       );
       if (targetIds.length === 0) break;
-      depth += 1;
-      if (depth > MAX_ARCHIVE_REMOTE_DEPTH) throw new ArchiveLimitExceededError('remote_depth');
       const targets = await this.sessionRepo.findByIds(targetIds);
       const targetsByBranch = new Map<BranchID, Session[]>();
       for (const target of targets) {
@@ -1701,6 +1703,7 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
         targetsByBranch.set(target.branch_id, bucket);
       }
       const nextFrontier: string[] = [];
+      const authorizedTargetsByBranch = new Map<BranchID, Session[]>();
       for (const [branchId, branchTargets] of targetsByBranch) {
         // Authorize the visible relationship targets before loading any other
         // sessions from their branch. Session-tier access is checked again for
@@ -1719,6 +1722,12 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
           );
           continue;
         }
+        authorizedTargetsByBranch.set(branchId, branchTargets);
+      }
+      if (authorizedTargetsByBranch.size === 0) break;
+      depth += 1;
+      if (depth > MAX_ARCHIVE_REMOTE_DEPTH) throw new ArchiveLimitExceededError('remote_depth');
+      for (const [branchId, branchTargets] of authorizedTargetsByBranch) {
         const members: Session[] = [...branchTargets];
         if (request.includeChildren) {
           const graph = await this.loadArchiveBranchGraph(graphs, branchId);
@@ -1814,7 +1823,10 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
   private async planRestoreTargets(
     plan: ArchiveTransitionPlan,
     graphs: Map<string, ArchiveBranchGraph>,
-    branchCache: Map<string, Branch | null>
+    branchCache: Map<string, Branch | null>,
+    sessionRepo = this.sessionRepo,
+    relationshipRepo = this.sessionRelationshipRepo,
+    branchRepo = this.branchRepo
   ): Promise<void> {
     const plannedActive = new Set<string>();
     const impliedIds: SessionID[] = [];
@@ -1825,7 +1837,7 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
           impliedIds.push(id as SessionID);
           continue;
         }
-        const branch = await this.loadArchiveBranch(branchCache, session.branch_id);
+        const branch = await this.loadArchiveBranch(branchCache, session.branch_id, branchRepo);
         if (branch?.archived) {
           throw new Conflict(
             `Session ${shortId(session.session_id)} belongs to an archived branch. Restore the branch first.`
@@ -1844,7 +1856,7 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
       }
     }
 
-    const incoming = await this.sessionRelationshipRepo.findRemoteParentsForTargets(impliedIds);
+    const incoming = await relationshipRepo.findRemoteParentsForTargets(impliedIds);
     const remoteSourcesOf = new Map<string, string[]>();
     for (const edge of incoming) {
       const sources = remoteSourcesOf.get(edge.target_session_id) ?? [];
@@ -1862,7 +1874,7 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
       (id) => !lookupSession(id)
     );
     const externalSources = new Map<string, Session>(
-      (await this.sessionRepo.findByIds(unknownSourceIds)).map((session) => [
+      (await sessionRepo.findByIds(unknownSourceIds)).map((session) => [
         session.session_id as string,
         session,
       ])
@@ -1877,7 +1889,7 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
           plan.remainingArchived.push({ sessionId: id as SessionID, reason: 'independent_reason' });
           continue;
         }
-        const branch = await this.loadArchiveBranch(branchCache, session.branch_id);
+        const branch = await this.loadArchiveBranch(branchCache, session.branch_id, branchRepo);
         if (branch?.archived) {
           plan.remainingArchived.push({ sessionId: id as SessionID, reason: 'archived_branch' });
           continue;
@@ -1926,19 +1938,70 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
         async (operationDb) => {
           const currentParams = await this.currentArchiveParams(operationDb, params);
           const sessionRepo = new SessionRepository(operationDb);
+          const branchRepo = new BranchRepository(operationDb);
           const memberIds = [...unit.members.keys()] as SessionID[];
-          const currentMembers = await sessionRepo.findByIds(memberIds);
-          if (currentMembers.length !== memberIds.length) {
-            throw new NotFound('An archive target no longer exists');
+          await lockRowForUpdate(
+            operationDb,
+            this.db,
+            sessions,
+            inArray(sessions.session_id, memberIds)
+          );
+          const currentMembersById = new Map(
+            (await sessionRepo.findByIds(memberIds)).map((member) => [member.session_id, member])
+          );
+          const currentMembers: Session[] = [];
+          for (const memberId of memberIds) {
+            const member = currentMembersById.get(memberId);
+            if (!member) throw new NotFound('An archive target no longer exists');
+            currentMembers.push(member);
           }
           const denial = await this.archiveUnitDenial(
             currentMembers,
             plan.archived,
             currentParams,
             new Map(),
-            new BranchRepository(operationDb)
+            branchRepo
           );
           if (denial) throw denial;
+          if (!plan.archived) {
+            const currentGraphs = new Map<string, ArchiveBranchGraph>();
+            for (const branchId of new Set(currentMembers.map((member) => member.branch_id))) {
+              const graph = await this.loadArchiveBranchGraph(currentGraphs, branchId, sessionRepo);
+              for (const member of currentMembers) {
+                if (member.branch_id === branchId) graph.byId.set(member.session_id, member);
+              }
+            }
+            const currentUnit: ArchiveUnit = {
+              ...unit,
+              members: new Map(currentMembers.map((member) => [member.session_id, member])),
+            };
+            const currentPlan: ArchiveTransitionPlan = {
+              archived: false,
+              localFailure: plan.localFailure,
+              units: [currentUnit],
+              unitResults: [],
+              targets: [],
+              remainingArchived: [],
+              excludedImplied: [],
+            };
+            await this.planRestoreTargets(
+              currentPlan,
+              currentGraphs,
+              new Map(),
+              sessionRepo,
+              new SessionRelationshipRepository(operationDb),
+              branchRepo
+            );
+            const currentlyRestorable = new Set(
+              currentPlan.targets.map((target) => target.session.session_id)
+            );
+            for (const target of unitTargets) {
+              const current = currentUnit.members.get(target.session.session_id);
+              if (current?.archived && !currentlyRestorable.has(current.session_id)) {
+                throw new Conflict('Archive restore eligibility changed. Retry the operation.');
+              }
+            }
+          }
           return sessionRepo.updateArchiveStateForTargets(
             unitTargets.map((target) => ({
               id: target.session.session_id,
@@ -2182,20 +2245,22 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
     options?: SessionArchiveOptions,
     params?: SessionParams
   ): Promise<SessionArchiveResult> {
-    const root = await this.get(id, params);
-    return this.runArchiveTransition(
-      {
-        roots: [root],
-        initiator: 'manual',
-        archived: true,
-        includeChildren: options?.includeChildren !== false,
-        includeRemoteChildren: options?.includeRemoteChildren !== false,
-        grouping: 'branch',
-        localFailure: 'throw',
-        params,
-      },
-      options?.dryRun === true
-    );
+    return this.withArchiveScope(params, async () => {
+      const root = await this.get(id, params);
+      return this.runArchiveTransition(
+        {
+          roots: [root],
+          initiator: 'manual',
+          archived: true,
+          includeChildren: options?.includeChildren !== false,
+          includeRemoteChildren: options?.includeRemoteChildren !== false,
+          grouping: 'branch',
+          localFailure: 'throw',
+          params,
+        },
+        options?.dryRun === true
+      );
+    });
   }
 
   /**
@@ -2209,20 +2274,22 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
     options?: SessionArchiveOptions,
     params?: SessionParams
   ): Promise<SessionArchiveResult> {
-    const root = await this.get(id, params);
-    return this.runArchiveTransition(
-      {
-        roots: [root],
-        initiator: 'manual',
-        archived: false,
-        includeChildren: options?.includeChildren !== false,
-        includeRemoteChildren: options?.includeRemoteChildren !== false,
-        grouping: 'branch',
-        localFailure: 'throw',
-        params,
-      },
-      options?.dryRun === true
-    );
+    return this.withArchiveScope(params, async () => {
+      const root = await this.get(id, params);
+      return this.runArchiveTransition(
+        {
+          roots: [root],
+          initiator: 'manual',
+          archived: false,
+          includeChildren: options?.includeChildren !== false,
+          includeRemoteChildren: options?.includeRemoteChildren !== false,
+          grouping: 'branch',
+          localFailure: 'throw',
+          params,
+        },
+        options?.dryRun === true
+      );
+    });
   }
 
   /**

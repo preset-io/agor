@@ -17,17 +17,12 @@ import { SessionsService } from '../../services/sessions.js';
  * Both `agor_cards_get` and `agor_sessions_archive` used to call a custom
  * (non-transport) service method DIRECTLY from the MCP tool handler. The MCP
  * tool boundary (`tenantScopedToolProxy`) enters tenant *context* only — never a
- * DB scope — so the very first `this.db` touch in the custom method ran outside
- * any tenant/system database scope. Under HA that threw
- * `MissingTenantDatabaseScopeError`; in SQLite/tests the guard was disarmed, so
- * nothing failed and the bug reached production.
+ * DB scope. Cards still needs the transport wrapper; archive now establishes
+ * its own service-side scope before touching the database.
  *
  * These tests reproduce the exact boundary (tenant context, no DB scope) over a
- * real guarded proxy and assert:
- *   1. the pre-fix shape (unwrapped custom-method call) throws the guard error —
- *      i.e. it would now fail in the cheapest environment; and
- *   2. wrapping the same call in a tenant DB scope (the #2612 fix, and the
- *      Stage-B service-side self-scoping) satisfies the guard and reaches the DB.
+ * real guarded proxy and assert that cards fails until externally scoped while
+ * archive self-scopes and reaches the ordinary database result.
  *
  * No rows are seeded: even a lookup for a missing id issues a SELECT against the
  * guarded proxy, which is enough to trip the scope guard.
@@ -58,38 +53,18 @@ dbTest(
   }
 );
 
-dbTest(
-  'guarded harness would catch the pre-fix unscoped agor_sessions_archive (setArchiveStateForTree)',
-  async ({ db }) => {
-    const guardedDb = createTenantScopedDatabaseProxy(db, { label: 'guarded MCP test database' });
-    // setArchiveStateForTree touches the DB (this.get) before any app.service
-    // use, so a stub application suffices for this scope-presence proof.
-    const app = {
-      service: () => {
-        throw new Error('unexpected app.service use in scope-presence proof');
-      },
-    } as unknown as Application;
-    const sessionsService = new SessionsService(guardedDb, app);
+dbTest('agor_sessions_archive self-scopes when only tenant context is present', async ({ db }) => {
+  const guardedDb = createTenantScopedDatabaseProxy(db, { label: 'guarded MCP test database' });
+  // setArchiveStateForTree touches the DB (this.get) before any app.service
+  // use, so a stub application suffices for this scope-presence proof.
+  const app = {
+    service: () => {
+      throw new Error('unexpected app.service use in scope-presence proof');
+    },
+  } as unknown as Application;
+  const sessionsService = new SessionsService(guardedDb, app);
 
-    await runWithTenantContext('tenant-a', async () => {
-      // PRE-FIX agor_sessions_archive: archive → setArchiveStateForTree →
-      // this.get(id) ran unscoped.
-      await expect(sessionsService.archive('session-missing')).rejects.toThrow(
-        /Missing tenant database scope/
-      );
-
-      // POST-FIX / Stage-B: inside a tenant DB scope the read reaches the DB and
-      // fails with an ordinary not-found — NOT the scope guard.
-      let wrappedError: unknown;
-      try {
-        await runWithTenantDatabaseScope(guardedDb, 'tenant-a', () =>
-          sessionsService.archive('session-missing')
-        );
-      } catch (error) {
-        wrappedError = error;
-      }
-      expect(wrappedError).toBeDefined();
-      expect(String((wrappedError as Error)?.message)).not.toMatch(/Missing tenant database scope/);
-    });
-  }
-);
+  await runWithTenantContext('tenant-a', async () => {
+    await expect(sessionsService.archive('session-missing')).rejects.toThrow(/not found/i);
+  });
+});
