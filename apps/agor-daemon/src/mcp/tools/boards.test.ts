@@ -813,10 +813,70 @@ describe('agor_boards_auto_arrange_zone', () => {
     expect(parsed).toMatchObject({ layoutMode: 'grid', columns: 2, rows: 2 });
     expect(patches.map((update) => update.position)).toEqual([
       { x: 20, y: 100 },
-      { x: 420, y: 100 },
-      { x: 20, y: 180 },
-      { x: 420, y: 180 },
+      { x: 424, y: 100 },
+      { x: 20, y: 184 },
+      { x: 424, y: 184 },
     ]);
+  });
+
+  it.each([4, 12, 24])('preserves a requested %ipx boundary gap', async (gap) => {
+    const patches: Array<{ position: { x: number; y: number } }> = [];
+    const entities = ['left', 'right'].map((id) => ({
+      object_id: id,
+      board_id: 'board-1',
+      card_id: id,
+      entity_type: 'card' as const,
+      position: { x: 0, y: 0 },
+      size: { width: 380, height: 100 },
+      zone_id: 'zone-1',
+      created_at: '2026-06-01T00:00:00.000Z',
+    }));
+    const arrange = registerAndCaptureHandler('agor_boards_auto_arrange_zone', {
+      app: {
+        service(name: string) {
+          if (name === 'boards')
+            return {
+              get: vi.fn(async () => ({
+                board_id: 'board-1',
+                objects: {
+                  'zone-1': { type: 'zone', x: 0, y: 0, width: 1000, height: 500 },
+                },
+              })),
+            };
+          if (name === 'board-objects')
+            return {
+              find: vi.fn(async () => ({ data: entities })),
+              patch: vi.fn(async (_id: string, data: { position: { x: number; y: number } }) => {
+                patches.push(data);
+                return data;
+              }),
+            };
+          if (name === 'cards')
+            return {
+              find: vi.fn(async () => ({ data: entities.map(({ card_id }) => ({ card_id })) })),
+            };
+          throw new Error(`Unexpected service call: ${name}`);
+        },
+      },
+      userId: 'user-1',
+      baseServiceParams,
+    });
+
+    const result = JSON.parse(
+      (
+        await arrange({
+          boardId: 'board-1',
+          zoneId: 'zone-1',
+          columns: 2,
+          strictColumns: true,
+          gapX: gap,
+          gapY: gap,
+        })
+      ).content[0].text
+    );
+
+    expect(result).toMatchObject({ applied: true, appliedGapX: gap, appliedGapY: gap });
+    expect(patches[1]!.position.x - (patches[0]!.position.x + 380)).toBe(gap);
   });
 
   it('uses one compact cluster for measured entities and contained canvas objects', async () => {
@@ -1285,7 +1345,10 @@ describe('agor_boards_set_zone_layout', () => {
       expect.objectContaining({
         _action: 'upsertObject',
         objectId: 'zone-1',
-        objectData: expect.objectContaining({ layout: parsed.layout }),
+        objectData: expect.objectContaining({
+          layout: parsed.layout,
+          layout_binding: 'override',
+        }),
       }),
       baseServiceParams
     );
@@ -1335,6 +1398,109 @@ describe('agor_boards_set_zone_layout', () => {
     );
     expect(unchanged.note).toBe('Zone layout policy already matched.');
     expect(patch).not.toHaveBeenCalled();
+  });
+
+  it('resets an override to board defaults and then performs a true no-op', async () => {
+    const patch = vi.fn(async () => undefined);
+    const defaults = { mode: 'manual', preset: 'grid', gap: 4 };
+    let zone = {
+      type: 'zone' as const,
+      x: 0,
+      y: 0,
+      width: 620,
+      height: 900,
+      label: 'Work',
+      layout: { mode: 'auto' as const, preset: 'grid' as const, gap: 40 },
+    };
+    const setLayout = registerAndCaptureHandler('agor_boards_set_zone_layout', {
+      app: {
+        service: () => ({
+          get: vi.fn(async () => ({
+            board_id: 'board-1',
+            zone_layout_defaults: defaults,
+            objects: { 'zone-1': zone },
+          })),
+          patch,
+        }),
+      },
+      userId: 'user-1',
+    });
+
+    const reset = JSON.parse(
+      (await setLayout({ boardId: 'board-1', zoneId: 'zone-1', useBoardDefaults: true })).content[0]
+        .text
+    );
+    expect(reset).toMatchObject({ layoutBinding: 'inherit', layout: { gap: 4 } });
+    expect(patch).toHaveBeenCalledOnce();
+
+    zone = patch.mock.calls[0]![1].objectData;
+    patch.mockClear();
+    const unchanged = JSON.parse(
+      (await setLayout({ boardId: 'board-1', zoneId: 'zone-1', useBoardDefaults: true })).content[0]
+        .text
+    );
+    expect(unchanged.note).toBe('Zone layout policy already matched.');
+    expect(patch).not.toHaveBeenCalled();
+  });
+});
+
+describe('agor_boards_set_zone_defaults', () => {
+  it('uses the shared atomic action and preserves overrides unless apply is explicit', async () => {
+    const baseServiceParams = { authenticated: true, provider: 'mcp' };
+    const patch = vi.fn(async (_id, data) => ({
+      board: { board_id: 'board-1' },
+      changed: true,
+      changed_zone_ids: data.applyToExisting ? ['override', 'follower'] : ['follower'],
+    }));
+    const setDefaults = registerAndCaptureHandler('agor_boards_set_zone_defaults', {
+      app: {
+        service: () => ({
+          get: vi.fn(async () => ({
+            board_id: 'board-1',
+            zone_layout_defaults: { mode: 'manual', preset: 'grid', gap: 24 },
+            objects: {
+              override: {
+                type: 'zone',
+                layout: { mode: 'manual', preset: 'grid', gap: 40 },
+              },
+              follower: {
+                type: 'zone',
+                layout_binding: 'inherit',
+                layout: { mode: 'manual', preset: 'grid', gap: 24 },
+              },
+            },
+          })),
+          patch,
+        }),
+      },
+      userId: 'user-1',
+      baseServiceParams,
+    });
+
+    const preserved = JSON.parse(
+      (await setDefaults({ boardId: 'board-1', gap: 8 })).content[0].text
+    );
+    expect(preserved).toMatchObject({ changed: true, changedZoneIds: ['follower'] });
+    expect(patch).toHaveBeenLastCalledWith(
+      'board-1',
+      expect.objectContaining({
+        _action: 'setZoneLayoutDefaults',
+        defaults: expect.objectContaining({ gap: 8 }),
+        applyToExisting: false,
+        expected: expect.objectContaining({
+          zones: {
+            override: expect.objectContaining({ binding: 'override' }),
+            follower: expect.objectContaining({ binding: 'inherit' }),
+          },
+        }),
+      }),
+      baseServiceParams
+    );
+
+    const applied = JSON.parse(
+      (await setDefaults({ boardId: 'board-1', gap: 8, applyToExisting: true })).content[0].text
+    );
+    expect(applied.changedZoneIds).toEqual(['override', 'follower']);
   });
 });
 

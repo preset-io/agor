@@ -270,7 +270,7 @@ function expectNoOverlap(placements: RectanglePlacement[]): void {
 }
 
 describe('layoutRectangles', () => {
-  it('quantizes every automatic rectangle edge to the manual board grid', () => {
+  it('keeps item sizes on the manual grid while preserving an exact visual gap', () => {
     const result = layoutRectangles(
       [
         { id: 'zone', width: 613, height: 397 },
@@ -280,11 +280,17 @@ describe('layoutRectangles', () => {
     );
 
     for (const placement of result.placements) {
-      for (const value of [placement.x, placement.y, placement.width, placement.height]) {
+      for (const value of [placement.width, placement.height]) {
         expect(value % BOARD_GRID_SIZE).toBe(0);
       }
-      expect(snapBoardGridPoint(placement)).toEqual({ x: placement.x, y: placement.y });
     }
+    expect(snapBoardGridPoint(result.placements[0]!)).toEqual({
+      x: result.placements[0]!.x,
+      y: result.placements[0]!.y,
+    });
+    expect(result.placements[1]!.x - (result.placements[0]!.x + result.placements[0]!.width)).toBe(
+      27
+    );
   });
 
   it('handles empty and single-item layouts without phantom rows or columns', () => {
@@ -556,6 +562,24 @@ describe('layoutRectangles', () => {
       if (left) expect(left.x + left.width).toBeLessThanOrEqual(placement.x);
       if (above) expect(above.y + above.height).toBeLessThanOrEqual(placement.y);
     }
+  });
+
+  it('preserves supported sub-grid gaps as exact rectangle boundaries', () => {
+    const widths = [0, 4, 12, 24].map((gap) => {
+      const result = layoutRectangles(
+        [
+          { id: 'left', width: 101, height: 80 },
+          { id: 'right', width: 101, height: 80 },
+        ],
+        { exactColumns: 2, gapX: gap, gapY: gap, gridSize: BOARD_GRID_SIZE }
+      );
+      const [left, right] = result.placements;
+      expect(right!.x - (left!.x + left!.width)).toBe(gap);
+      expect(result.gapX).toBe(gap);
+      return result.width;
+    });
+
+    expect(widths).toEqual([240, 244, 252, 264]);
   });
 
   it('packs heterogeneous board shapes into a smaller-diameter non-grid cluster', () => {

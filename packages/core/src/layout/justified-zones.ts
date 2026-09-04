@@ -518,8 +518,8 @@ export function zoneShapesForItems(
     gridSize > 0 && value !== 0 ? Math.ceil(value / gridSize) * gridSize : value;
   const titleInset = ceil(nonNegative(options.titleInset, 64));
   const padding = ceil(nonNegative(options.padding, 24));
-  const gapX = ceil(nonNegative(options.gapX, 24));
-  const gapY = ceil(nonNegative(options.gapY, 24));
+  const gapX = nonNegative(options.gapX, 24);
+  const gapY = nonNegative(options.gapY, 24);
 
   if (items.length === 0) {
     return [{ columns: 1, width: padding * 2 + 200, height: titleInset + padding * 2 }];

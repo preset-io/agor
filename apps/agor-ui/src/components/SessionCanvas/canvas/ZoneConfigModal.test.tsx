@@ -47,6 +47,96 @@ function historicalZone(): BoardObject {
 }
 
 describe('ZoneConfigModal historical tool migration', () => {
+  it('makes inherited state understandable, resettable, and focusable', async () => {
+    const onUpdate = vi.fn();
+    render(
+      <AntdApp>
+        <ZoneConfigModal
+          open
+          onCancel={vi.fn()}
+          zoneName="Review"
+          objectId="zone-1"
+          onUpdate={onUpdate}
+          boardZoneLayoutDefaults={{
+            mode: 'auto',
+            preset: 'compact_list',
+            sortBy: 'updated',
+            sortDirection: 'desc',
+            gap: 8,
+          }}
+          zoneData={{
+            type: 'zone',
+            x: 0,
+            y: 0,
+            width: 620,
+            height: 900,
+            label: 'Review',
+            layout_binding: 'inherit',
+            layout: { mode: 'auto', preset: 'compact_list', gap: 8 },
+          }}
+        />
+      </AntdApp>
+    );
+
+    const inherit = await screen.findByRole('switch', { name: 'Use board defaults' });
+    const spacing = screen.getByRole('spinbutton', { name: 'Spacing' });
+    expect(inherit).toBeChecked();
+    expect(spacing).toBeDisabled();
+    expect(spacing).toHaveValue('8');
+    expect(screen.getByText(/follows Zone defaults from Board settings/)).toBeInTheDocument();
+
+    inherit.focus();
+    expect(inherit).toHaveFocus();
+    fireEvent.click(inherit);
+    expect(inherit).not.toBeChecked();
+    expect(spacing).toBeEnabled();
+    fireEvent.change(spacing, { target: { value: '4' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => expect(onUpdate).toHaveBeenCalledOnce());
+    expect(onUpdate.mock.calls[0][1]).toMatchObject({
+      layout_binding: 'override',
+      layout: { mode: 'auto', preset: 'compact_list', gap: 4 },
+    });
+  });
+
+  it('resets an explicit override to current board defaults only by intent', async () => {
+    const onUpdate = vi.fn();
+    render(
+      <AntdApp>
+        <ZoneConfigModal
+          open
+          onCancel={vi.fn()}
+          zoneName="Review"
+          objectId="zone-1"
+          onUpdate={onUpdate}
+          boardZoneLayoutDefaults={{ mode: 'manual', preset: 'grid', gap: 4 }}
+          zoneData={{
+            type: 'zone',
+            x: 0,
+            y: 0,
+            width: 620,
+            height: 900,
+            label: 'Review',
+            layout: { mode: 'auto', preset: 'grid', gap: 40 },
+          }}
+        />
+      </AntdApp>
+    );
+
+    const inherit = await screen.findByRole('switch', { name: 'Use board defaults' });
+    expect(inherit).not.toBeChecked();
+    expect(screen.getByRole('spinbutton', { name: 'Spacing' })).toHaveValue('40');
+    fireEvent.click(inherit);
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => expect(onUpdate).toHaveBeenCalledOnce());
+    expect(onUpdate.mock.calls[0][1]).toMatchObject({
+      layout_binding: 'inherit',
+      layout: { mode: 'manual', preset: 'grid', gap: 4 },
+    });
+  });
+
   it('selects and persists the List presentation', async () => {
     const onUpdate = vi.fn();
     render(

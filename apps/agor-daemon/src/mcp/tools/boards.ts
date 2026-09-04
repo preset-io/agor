@@ -30,6 +30,7 @@ import {
   ZONE_OVERFLOW_STRATEGIES,
   ZONE_RESIZE_MODES,
   type ZoneLayoutSortItem,
+  zoneLayoutBinding,
 } from '@agor/core/layout/zone-layout';
 import type {
   Board,
@@ -91,6 +92,11 @@ const DEFAULT_ARRANGE_START_X = 80;
 const DEFAULT_ARRANGE_START_Y = 80;
 function boardGridSpacing(value: number): number {
   return value === 0 ? 0 : Math.max(BOARD_GRID_SIZE, snapBoardGridValue(value));
+}
+
+/** Density inputs are independent of the coarser canvas drag grid. */
+function exactSpacing(value: number): number {
+  return Number.isFinite(value) ? Math.max(0, value) : 0;
 }
 
 type EntityLayoutMetadata = ZoneLayoutSortItem & {
@@ -1497,8 +1503,8 @@ export function registerBoardTools(server: McpServer, ctx: McpContext): void {
         }
       }
       const requestedPadding = boardGridSpacing(Math.max(0, args.padding ?? BOARD_GRID_SIZE));
-      const gapX = boardGridSpacing(Math.max(0, args.gapX ?? zonePolicy.gap ?? 24));
-      const gapY = boardGridSpacing(Math.max(0, args.gapY ?? zonePolicy.gap ?? 24));
+      const gapX = exactSpacing(Math.max(0, args.gapX ?? zonePolicy.gap ?? 24));
+      const gapY = exactSpacing(Math.max(0, args.gapY ?? zonePolicy.gap ?? 24));
       const resizeMode = zonePolicy.resize ?? 'fixed';
       const autoResizeHeight = resizeMode !== 'fixed';
       // `both` also lets the zone widen. Height alone cannot rescue a zone that
@@ -1911,7 +1917,13 @@ export function registerBoardTools(server: McpServer, ctx: McpContext): void {
       inputSchema: z.object({
         boardId: mcpRequiredId('boardId', 'Board'),
         zoneId: mcpRequiredString('zoneId', 'Zone object ID'),
-        mode: z.enum(ZONE_LAYOUT_MODES),
+        mode: z.enum(ZONE_LAYOUT_MODES).optional(),
+        useBoardDefaults: z
+          .boolean()
+          .optional()
+          .describe(
+            'True resets this zone to the board defaults and follows future changes. False/omitted saves an explicit per-zone override.'
+          ),
         preset: z.enum(ZONE_LAYOUT_PRESETS).optional(),
         sortBy: z.enum(ZONE_LAYOUT_SORT_FIELDS).optional(),
         sortDirection: z.enum(ZONE_LAYOUT_SORT_DIRECTIONS).optional(),
@@ -1957,27 +1969,37 @@ export function registerBoardTools(server: McpServer, ctx: McpContext): void {
       if (zone?.type !== 'zone') {
         throw new Error(`Zone '${zoneId}' was not found on board '${boardId}'.`);
       }
-      const modeTransition = setZoneLayoutMode(zone.layout, args.mode);
-      const layout = normalizeZoneLayoutPolicy({
-        ...modeTransition,
-        // The legacy boolean remains a supported public input. A normalized
-        // transition contains `resize`, whose precedence would otherwise make
-        // the explicit boolean inert; remove it only when no modern resize was
-        // supplied so both spellings retain their documented behavior.
-        ...(args.autoResizeHeight !== undefined && args.resize === undefined
-          ? { resize: undefined }
-          : {}),
-        ...(args.preset === undefined ? {} : { preset: args.preset }),
-        ...(args.sortBy === undefined ? {} : { sortBy: args.sortBy }),
-        ...(args.sortDirection === undefined ? {} : { sortDirection: args.sortDirection }),
-        ...(args.columns === undefined ? {} : { columns: args.columns ?? undefined }),
-        ...(args.gap === undefined ? {} : { gap: args.gap }),
-        ...(args.autoResizeHeight === undefined ? {} : { autoResizeHeight: args.autoResizeHeight }),
-        ...(args.resize === undefined ? {} : { resize: args.resize }),
-        ...(args.onOverflow === undefined ? {} : { onOverflow: args.onOverflow }),
-      } satisfies Partial<ZoneLayoutPolicy>);
-      const updatedZone = { ...zone, layout };
+      if (args.mode === undefined && args.useBoardDefaults !== true) {
+        throw new Error('mode is required when useBoardDefaults is not true');
+      }
+      const modeTransition = setZoneLayoutMode(zone.layout, args.mode ?? 'manual');
+      const layout =
+        args.useBoardDefaults === true
+          ? normalizeZoneLayoutPolicy(board.zone_layout_defaults)
+          : normalizeZoneLayoutPolicy({
+              ...modeTransition,
+              // The legacy boolean remains a supported public input. A normalized
+              // transition contains `resize`, whose precedence would otherwise make
+              // the explicit boolean inert; remove it only when no modern resize was
+              // supplied so both spellings retain their documented behavior.
+              ...(args.autoResizeHeight !== undefined && args.resize === undefined
+                ? { resize: undefined }
+                : {}),
+              ...(args.preset === undefined ? {} : { preset: args.preset }),
+              ...(args.sortBy === undefined ? {} : { sortBy: args.sortBy }),
+              ...(args.sortDirection === undefined ? {} : { sortDirection: args.sortDirection }),
+              ...(args.columns === undefined ? {} : { columns: args.columns ?? undefined }),
+              ...(args.gap === undefined ? {} : { gap: args.gap }),
+              ...(args.autoResizeHeight === undefined
+                ? {}
+                : { autoResizeHeight: args.autoResizeHeight }),
+              ...(args.resize === undefined ? {} : { resize: args.resize }),
+              ...(args.onOverflow === undefined ? {} : { onOverflow: args.onOverflow }),
+            } satisfies Partial<ZoneLayoutPolicy>);
+      const layoutBinding = args.useBoardDefaults === true ? 'inherit' : 'override';
+      const updatedZone = { ...zone, layout, layout_binding: layoutBinding };
       const changed =
+        layoutBinding !== zoneLayoutBinding(zone) ||
         JSON.stringify(layout) !== JSON.stringify(normalizeZoneLayoutPolicy(zone.layout));
       if (changed) {
         await boardsService.patch(
@@ -1994,7 +2016,91 @@ export function registerBoardTools(server: McpServer, ctx: McpContext): void {
         boardId,
         zoneId,
         layout,
+        layoutBinding,
         note: changed ? 'Zone layout policy updated.' : 'Zone layout policy already matched.',
+      });
+    }
+  );
+
+  server.registerTool(
+    'agor_boards_set_zone_defaults',
+    {
+      description:
+        'Set the authoritative layout policy inherited by new/reset zones. Existing overrides are preserved unless applyToExisting is true; current inherited zones always continue following the policy.',
+      annotations: { idempotentHint: true },
+      inputSchema: z.object({
+        boardId: mcpRequiredId('boardId', 'Board'),
+        mode: z.enum(ZONE_LAYOUT_MODES).optional(),
+        preset: z.enum(ZONE_LAYOUT_PRESETS).optional(),
+        sortBy: z.enum(ZONE_LAYOUT_SORT_FIELDS).optional(),
+        sortDirection: z.enum(ZONE_LAYOUT_SORT_DIRECTIONS).optional(),
+        resize: z.enum(ZONE_RESIZE_MODES).optional(),
+        onOverflow: z.enum(ZONE_OVERFLOW_STRATEGIES).optional(),
+        columns: z.number().int().positive().nullable().optional(),
+        gap: z.number().int().min(0).max(96).optional(),
+        applyToExisting: z
+          .boolean()
+          .optional()
+          .describe('Reset every existing zone to this policy and make it inherit.'),
+      }),
+    },
+    async (args) => {
+      const boardId = coerceString(args.boardId);
+      if (!boardId) throw new Error('boardId is required');
+      const boardsService = ctx.app.service('boards');
+      const board = (await boardsService.get(boardId, ctx.baseServiceParams)) as Board;
+      const current = normalizeZoneLayoutPolicy(board.zone_layout_defaults);
+      const defaults = normalizeZoneLayoutPolicy({
+        ...current,
+        ...(args.mode === undefined ? {} : { mode: args.mode }),
+        ...(args.preset === undefined ? {} : { preset: args.preset }),
+        ...(args.sortBy === undefined ? {} : { sortBy: args.sortBy }),
+        ...(args.sortDirection === undefined ? {} : { sortDirection: args.sortDirection }),
+        ...(args.resize === undefined ? {} : { resize: args.resize }),
+        ...(args.onOverflow === undefined ? {} : { onOverflow: args.onOverflow }),
+        ...(args.columns === undefined ? {} : { columns: args.columns ?? undefined }),
+        ...(args.gap === undefined ? {} : { gap: args.gap }),
+      });
+      const expected = {
+        defaults: current,
+        zones: Object.fromEntries(
+          Object.entries(board.objects ?? {}).flatMap(([objectId, object]) =>
+            object.type === 'zone'
+              ? [
+                  [
+                    objectId,
+                    {
+                      binding: zoneLayoutBinding(object),
+                      layout: normalizeZoneLayoutPolicy(object.layout),
+                    },
+                  ] as const,
+                ]
+              : []
+          )
+        ),
+      };
+      const result = (await boardsService.patch(
+        boardId,
+        {
+          _action: 'setZoneLayoutDefaults',
+          defaults,
+          applyToExisting: args.applyToExisting === true,
+          expected,
+        } as unknown as Partial<Board>,
+        ctx.baseServiceParams
+      )) as unknown as {
+        board: Board;
+        changed: boolean;
+        changed_zone_ids: string[];
+      };
+      return textResult({
+        boardId,
+        defaults,
+        changed: result.changed,
+        changedZoneIds: result.changed_zone_ids,
+        note: result.changed
+          ? 'Board zone defaults updated.'
+          : 'Board zone defaults already matched.',
       });
     }
   );

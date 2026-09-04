@@ -76,6 +76,7 @@ import type {
   Board,
   BoardID,
   BoardLayoutBatch,
+  BoardZoneLayoutDefaultsExpected,
   Branch,
   DeepReadonly,
   GatewayChannel,
@@ -3531,6 +3532,8 @@ export function registerHooks(ctx: RegisterHooksContext): void {
             objects,
             placements,
             expected,
+            defaults,
+            applyToExisting,
             deleteAssociatedSessions,
           } = contextData as UnknownJson;
 
@@ -3662,6 +3665,30 @@ export function registerHooks(ctx: RegisterHooksContext): void {
               });
             }
             context.dispatch = result;
+            return context;
+          }
+
+          if (_action === 'setZoneLayoutDefaults' && defaults) {
+            if (!context.id) throw new Error('Board ID required');
+            const result = await boardsService!.setZoneLayoutDefaults(
+              context.id as string,
+              defaults as NonNullable<Board['zone_layout_defaults']>,
+              {
+                applyToExisting: applyToExisting === true,
+                expected: expected as BoardZoneLayoutDefaultsExpected | undefined,
+              }
+            );
+            context.event = null;
+            context.result = result;
+            context.dispatch = result;
+            if (!result.changed) return context;
+            emitServiceEvent(app, {
+              path: 'boards',
+              event: 'patched',
+              data: result.board,
+              params: context.params,
+              id: context.id,
+            });
             return context;
           }
 

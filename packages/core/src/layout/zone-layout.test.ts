@@ -9,9 +9,11 @@ import {
   isBoardEntityDensityExpandable,
   justifyZoneContentCluster,
   normalizeZoneLayoutPolicy,
+  resolveZoneLayoutPolicy,
   setZoneLayoutMode,
   sortZoneLayoutItems,
   type ZoneLayoutSortItem,
+  zoneLayoutBinding,
   zoneLayoutSortDirectionOptions,
 } from './zone-layout';
 
@@ -209,6 +211,14 @@ describe('normalizeZoneLayoutPolicy', () => {
     });
     expect(setZoneLayoutMode(configured, 'auto')).toEqual(configured);
     expect(setZoneLayoutMode(configured, 'manual')).toEqual({ ...configured, mode: 'manual' });
+  });
+
+  it('treats legacy zones as overrides and resolves explicit inheritance through board defaults', () => {
+    expect(zoneLayoutBinding({})).toBe('override');
+    expect(resolveZoneLayoutPolicy({ layout: { gap: 40 } }, { gap: 4 })).toMatchObject({ gap: 40 });
+    expect(
+      resolveZoneLayoutPolicy({ layout_binding: 'inherit', layout: { gap: 40 } }, { gap: 4 })
+    ).toMatchObject({ gap: 4 });
   });
 
   it('owns the direction labels used by every Configure Zone sort key', () => {

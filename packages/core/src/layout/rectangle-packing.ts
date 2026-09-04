@@ -314,8 +314,8 @@ function chooseGrid(
           verticalDivisors === 0
             ? options.gapY
             : Math.floor((bounds.height - compact.height) / verticalDivisors);
-        const effectiveGapX = floorToGrid(Math.min(options.gapX, fittingGapX), options.gridSize);
-        const effectiveGapY = floorToGrid(Math.min(options.gapY, fittingGapY), options.gridSize);
+        const effectiveGapX = Math.min(options.gapX, fittingGapX);
+        const effectiveGapY = Math.min(options.gapY, fittingGapY);
         if (effectiveGapX < options.minGapX || effectiveGapY < options.minGapY) return [];
         return [buildGrid(items, columns, padding, effectiveGapX, effectiveGapY)];
       });
@@ -462,16 +462,16 @@ export function layoutRectangles(
     padding,
     ceilToGrid(finiteNonNegative(options.minPadding, Math.min(8, padding)), gridSize)
   );
-  const gapX = ceilToGrid(finiteNonNegative(options.gapX, 24), gridSize);
-  const gapY = ceilToGrid(finiteNonNegative(options.gapY, 24), gridSize);
-  const minGapX = Math.min(
-    gapX,
-    ceilToGrid(finiteNonNegative(options.minGapX, Math.min(12, gapX)), gridSize)
-  );
-  const minGapY = Math.min(
-    gapY,
-    ceilToGrid(finiteNonNegative(options.minGapY, Math.min(12, gapY)), gridSize)
-  );
+  // Gaps are an explicit visual-density input, not board-grid geometry. Item
+  // sizes and the container frame remain grid-safe, but rounding a requested
+  // 4/8/12px gap up to the 20px drag grid made several distinct UI values
+  // produce the same layout (and rounded the historical 24px default to 40).
+  // Keeping gaps exact also leaves collision checks honest: every solver uses
+  // the same physical boundary distance it reports to the caller.
+  const gapX = finiteNonNegative(options.gapX, 24);
+  const gapY = finiteNonNegative(options.gapY, 24);
+  const minGapX = Math.min(gapX, finiteNonNegative(options.minGapX, Math.min(12, gapX)));
+  const minGapY = Math.min(gapY, finiteNonNegative(options.minGapY, Math.min(12, gapY)));
   const legacyDeckOffset = finiteNonNegative(options.deckOffset, 12);
   const deckOffsetX = ceilToGrid(
     finiteNonNegative(options.deckOffsetX, legacyDeckOffset),
@@ -590,8 +590,8 @@ export function layoutCompactRectangles(
 ): CompactRectangleLayoutResult {
   const gridSize = finiteNonNegative(options.gridSize, 0);
   const padding = ceilToGrid(finiteNonNegative(options.padding, 0), gridSize);
-  const gapX = ceilToGrid(finiteNonNegative(options.gapX, 24), gridSize);
-  const gapY = ceilToGrid(finiteNonNegative(options.gapY, 24), gridSize);
+  const gapX = finiteNonNegative(options.gapX, 24);
+  const gapY = finiteNonNegative(options.gapY, 24);
   const bounds = options.bounds;
   const usableWidth = bounds
     ? Math.max(0, floorToGrid(finiteNonNegative(bounds.width, 0) - padding * 2, gridSize))

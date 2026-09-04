@@ -10,6 +10,7 @@ import {
   snapBoardGridPoint,
   snapBoardGridValue,
 } from '@agor/core/layout/rectangle-packing';
+import { normalizeZoneLayoutPolicy } from '@agor/core/layout/zone-layout';
 import type {
   BoardLayoutApplyResult,
   BoardLayoutBatch,
@@ -3449,6 +3450,7 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
 
           // Create zone with drawn dimensions
           const objectId = `zone-${Date.now()}`;
+          const inheritedLayout = normalizeZoneLayoutPolicy(board?.zone_layout_defaults);
 
           // Default colors for new zones
           // biome-ignore lint/plugin/noHardcodedColorLiteral: persisted neutral default for user-editable zone palettes
@@ -3473,6 +3475,8 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
                 height,
                 borderColor: defaultBorderColor,
                 backgroundColor: defaultBackgroundColor,
+                layout: inheritedLayout,
+                layout_binding: 'inherit',
                 onUpdate: (id: string, data: BoardObject) => {
                   if (board && client) {
                     client
@@ -3505,6 +3509,8 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
                   label: 'New Zone',
                   borderColor: defaultBorderColor,
                   backgroundColor: defaultBackgroundColor,
+                  layout: inheritedLayout,
+                  layout_binding: 'inherit',
                 },
               } as unknown as Partial<Board>)
               .catch((error: unknown) => {

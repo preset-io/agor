@@ -17,6 +17,7 @@ import type {
   Session,
   Task,
   UserExternalIdentity,
+  ZoneLayoutPolicy,
 } from '@agor/core/types';
 import { BRANCH_PERMISSION_LEVELS } from '@agor/core/types';
 import { relations, sql } from 'drizzle-orm';
@@ -621,6 +622,7 @@ export const boards = pgTable(
         background_color?: string; // Background color for the board canvas
         custom_css?: string; // Custom CSS for animations, keyframes, etc. (rendered in scoped <style> tag)
         objects?: Record<string, import('@agor/core/types').BoardObject>; // Board objects (text, zone)
+        zone_layout_defaults?: ZoneLayoutPolicy;
         custom_context?: Record<string, unknown>; // Custom context for Handlebars templates
       }>()
       .notNull(),

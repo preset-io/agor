@@ -117,6 +117,25 @@ export interface BoardLayoutAppliedEvent {
   placements: BoardEntityObject[];
 }
 
+/** Relevant source state used to reject stale board-default writes. */
+export interface BoardZoneLayoutDefaultsExpected {
+  defaults: ZoneLayoutPolicy;
+  zones: Record<
+    string,
+    {
+      binding: ZoneLayoutBinding;
+      layout: ZoneLayoutPolicy;
+    }
+  >;
+}
+
+/** Result of atomically changing board defaults and any intentional followers. */
+export interface BoardZoneLayoutDefaultsApplyResult {
+  board: Board;
+  changed: boolean;
+  changed_zone_ids: string[];
+}
+
 export const BOARD_LAYOUT_APPLIED_EVENT = 'layout-applied' as const;
 
 /**
@@ -164,6 +183,9 @@ export interface ZoneTrigger {
 
 /** Whether a zone preserves spatial placement or continuously maintains its layout. */
 export type ZoneLayoutMode = 'manual' | 'auto';
+
+/** Whether a zone follows its board policy or owns a saved policy. */
+export type ZoneLayoutBinding = 'inherit' | 'override';
 
 /** Opinionated v1 presentation presets for the contents of a zone. */
 export type ZoneLayoutPreset = 'grid' | 'compact_list';
@@ -245,6 +267,11 @@ export interface ZoneBoardObject {
   trigger?: ZoneTrigger;
   /** Optional persisted sorting and automatic layout policy. */
   layout?: ZoneLayoutPolicy;
+  /**
+   * Board-default inheritance state. Missing means `override` so every zone
+   * created before board defaults existed keeps its historical behaviour.
+   */
+  layout_binding?: ZoneLayoutBinding;
   /** Label/status font size in px. Falls back to the theme default when unset. */
   fontSize?: number;
   /** Explicit stacking order. Falls back to the per-type default when unset. */
@@ -446,6 +473,9 @@ export interface Board {
    */
   custom_context?: Record<string, unknown>;
 
+  /** Authoritative layout policy inherited by newly-created/reset zones. */
+  zone_layout_defaults?: ZoneLayoutPolicy;
+
   /**
    * External/user-facing URL for viewing this board in the UI.
    *
@@ -484,6 +514,7 @@ export interface BoardExportBlob {
   access_mode?: BoardAccessMode;
   default_others_can?: BranchPermissionLevel;
   default_others_fs_access?: BoardDefaultFsAccess;
+  zone_layout_defaults?: ZoneLayoutPolicy;
 
   // Annotations (zones, text, markdown)
   objects?: {

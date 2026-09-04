@@ -92,6 +92,7 @@ type ZoneBoardObject = Extract<BoardObject, { type: 'zone' }>;
  */
 interface ZoneNodeData extends Omit<ZoneBoardObject, 'type'> {
   objectId: string;
+  boardZoneLayoutDefaults?: ZoneBoardObject['layout'];
   /** The shared multi-selection toolbar replaces this zone's individual controls. */
   suppressToolbar?: boolean;
   pinnedItemCount?: number;
@@ -261,6 +262,7 @@ const ZoneNodeComponent = ({
       zIndex: data.zIndex,
       trigger: data.trigger,
       layout: data.layout,
+      layout_binding: data.layout_binding,
     }),
     [
       data.x,
@@ -277,6 +279,7 @@ const ZoneNodeComponent = ({
       data.zIndex,
       data.trigger,
       data.layout,
+      data.layout_binding,
     ]
   );
 
@@ -300,6 +303,7 @@ const ZoneNodeComponent = ({
       data.objectId,
       createObjectData({
         layout: setZoneLayoutMode(data.layout, autoZoneEnabled ? 'manual' : 'auto'),
+        layout_binding: 'override',
       })
     );
   };
@@ -1177,6 +1181,7 @@ const ZoneNodeComponent = ({
           objectId={data.objectId}
           onUpdate={data.onUpdate || (() => {})}
           zoneData={zoneData}
+          boardZoneLayoutDefaults={data.boardZoneLayoutDefaults}
         />
       )}
       {deleteModalOpen && (

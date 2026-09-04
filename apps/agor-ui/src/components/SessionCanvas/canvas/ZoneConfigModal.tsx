@@ -3,43 +3,24 @@
  */
 
 import {
-  defaultZoneLayoutSortDirection,
   normalizeZoneLayoutPolicy,
-  setZoneLayoutMode,
-  ZONE_LAYOUT_PRESET_LABELS,
-  ZONE_LAYOUT_SORT_FIELDS,
-  ZONE_LAYOUT_SORT_LABELS,
-  ZONE_OVERFLOW_STRATEGIES,
-  ZONE_OVERFLOW_STRATEGY_LABELS,
-  zoneLayoutSortDirectionOptions,
+  resolveZoneLayoutPolicy,
+  zoneLayoutBinding,
 } from '@agor/core/layout/zone-layout';
 import type {
   AgenticToolName,
   BoardObject,
-  ZoneLayoutMode,
-  ZoneLayoutPreset,
-  ZoneLayoutSortBy,
-  ZoneLayoutSortDirection,
-  ZoneOverflowStrategy,
+  ZoneLayoutBinding,
+  ZoneLayoutPolicy,
   ZoneTriggerBehavior,
 } from '@agor-live/client';
 import { isAgenticToolName } from '@agor-live/client';
-import {
-  Alert,
-  Divider,
-  Flex,
-  Form,
-  Input,
-  InputNumber,
-  Modal,
-  Segmented,
-  Select,
-  Switch,
-} from 'antd';
+import { Alert, Divider, Form, Input, Modal, Select, Switch } from 'antd';
 import { useEffect, useRef, useState } from 'react';
 import { useMutationGate } from '../../../contexts/ConnectionContext';
 import { AgentSelectionGrid, AVAILABLE_AGENTS } from '../../AgentSelectionGrid';
 import { ExpandableAlert } from '../../ExpandableAlert';
+import { ZoneLayoutPolicyEditor } from './ZoneLayoutPolicyEditor';
 
 interface ZoneConfigModalProps {
   open: boolean;
@@ -51,20 +32,13 @@ interface ZoneConfigModalProps {
     objectData: BoardObject
   ) => boolean | undefined | Promise<boolean | undefined>;
   zoneData: BoardObject;
+  boardZoneLayoutDefaults?: ZoneLayoutPolicy;
 }
 
 interface ZoneFormValues {
   name: string;
   triggerBehavior: ZoneTriggerBehavior;
   triggerTemplate: string;
-  layoutMode: ZoneLayoutMode;
-  layoutPreset: ZoneLayoutPreset;
-  layoutSortBy: ZoneLayoutSortBy;
-  layoutSortDirection: ZoneLayoutSortDirection;
-  layoutColumns?: number;
-  layoutGap: number;
-  layoutAutoResizeHeight: boolean;
-  layoutOnOverflow: ZoneOverflowStrategy;
 }
 
 // Sensible default so that a freshly-created zone always has a behavior
@@ -82,17 +56,18 @@ export const ZoneConfigModal = ({
   objectId,
   onUpdate,
   zoneData,
+  boardZoneLayoutDefaults,
 }: ZoneConfigModalProps) => {
   const [form] = Form.useForm<ZoneFormValues>();
   const [triggerAgent, setTriggerAgent] = useState<AgenticToolName | null>('claude-code');
+  const [layoutPolicy, setLayoutPolicy] = useState<ZoneLayoutPolicy>(() =>
+    normalizeZoneLayoutPolicy(undefined)
+  );
+  const [layoutBinding, setLayoutBinding] = useState<ZoneLayoutBinding>('override');
   const isInitializingRef = useRef(false);
   const mutationGate = useMutationGate();
 
   const triggerBehavior = Form.useWatch('triggerBehavior', form);
-  const layoutMode = Form.useWatch('layoutMode', form);
-  const layoutPreset = Form.useWatch('layoutPreset', form);
-  const layoutSortBy = Form.useWatch('layoutSortBy', form);
-  const layoutAutoResizeHeight = Form.useWatch('layoutAutoResizeHeight', form);
 
   const zoneTrigger = zoneData.type === 'zone' ? zoneData.trigger : undefined;
   const hasZoneTrigger = Boolean(zoneTrigger);
@@ -110,22 +85,18 @@ export const ZoneConfigModal = ({
   useEffect(() => {
     if (open && !isInitializingRef.current) {
       isInitializingRef.current = true;
+      const zone = zoneData.type === 'zone' ? zoneData : undefined;
+      setLayoutPolicy(
+        zone
+          ? resolveZoneLayoutPolicy(zone, boardZoneLayoutDefaults)
+          : normalizeZoneLayoutPolicy(boardZoneLayoutDefaults)
+      );
+      setLayoutBinding(zoneLayoutBinding(zone));
       if (hasZoneTrigger) {
-        const layout = normalizeZoneLayoutPolicy(
-          zoneData.type === 'zone' ? zoneData.layout : undefined
-        );
         form.setFieldsValue({
           name: zoneName,
           triggerBehavior: zoneTriggerBehavior,
           triggerTemplate: zoneTriggerTemplate,
-          layoutMode: layout.mode,
-          layoutPreset: layout.preset,
-          layoutSortBy: layout.sortBy,
-          layoutSortDirection: layout.sortDirection,
-          layoutColumns: layout.columns,
-          layoutGap: layout.gap,
-          layoutAutoResizeHeight: layout.autoResizeHeight === true,
-          layoutOnOverflow: layout.onOverflow,
         });
         setTriggerAgent(
           zoneTriggerAgent === undefined
@@ -135,21 +106,10 @@ export const ZoneConfigModal = ({
               : null
         );
       } else {
-        const layout = normalizeZoneLayoutPolicy(
-          zoneData.type === 'zone' ? zoneData.layout : undefined
-        );
         form.setFieldsValue({
           name: zoneName,
           triggerBehavior: DEFAULT_TRIGGER_BEHAVIOR,
           triggerTemplate: '',
-          layoutMode: layout.mode,
-          layoutPreset: layout.preset,
-          layoutSortBy: layout.sortBy,
-          layoutSortDirection: layout.sortDirection,
-          layoutColumns: layout.columns,
-          layoutGap: layout.gap,
-          layoutAutoResizeHeight: layout.autoResizeHeight === true,
-          layoutOnOverflow: layout.onOverflow,
         });
         setTriggerAgent('claude-code');
       }
@@ -164,33 +124,9 @@ export const ZoneConfigModal = ({
     zoneTriggerTemplate,
     zoneTriggerAgent,
     zoneData,
+    boardZoneLayoutDefaults,
     form,
   ]);
-
-  const handleLayoutModeChange = (mode: ZoneLayoutMode) => {
-    const next = setZoneLayoutMode(
-      {
-        // Ant Form normalizes the Switch value before onChange runs. Supply
-        // the pre-toggle mode explicitly so the shared transition can detect
-        // a real manual -> auto enable and choose its stable default sort.
-        mode: mode === 'auto' ? 'manual' : 'auto',
-        sortBy: form.getFieldValue('layoutSortBy'),
-        sortDirection: form.getFieldValue('layoutSortDirection'),
-      },
-      mode
-    );
-    form.setFieldsValue({
-      layoutMode: next.mode,
-      layoutSortBy: next.sortBy,
-      layoutSortDirection: next.sortDirection,
-    });
-  };
-
-  const handleSortByChange = (sortBy: ZoneLayoutSortBy) => {
-    form.setFieldValue('layoutSortDirection', defaultZoneLayoutSortDirection(sortBy));
-  };
-
-  const sortDirectionOptions = zoneLayoutSortDirectionOptions(layoutSortBy ?? 'position');
 
   const handleSave = async () => {
     if (!mutationGate.canMutate) return;
@@ -200,21 +136,10 @@ export const ZoneConfigModal = ({
 
       if (zoneData.type === 'zone') {
         const template = values.triggerTemplate?.trim() || '';
-        const layout = normalizeZoneLayoutPolicy({
-          mode: values.layoutMode,
-          preset: values.layoutPreset,
-          sortBy: values.layoutSortBy,
-          sortDirection: values.layoutSortDirection,
-          columns: values.layoutPreset === 'grid' ? values.layoutColumns : 1,
-          gap: values.layoutGap,
-          autoResizeHeight: values.layoutAutoResizeHeight,
-          resize: values.layoutAutoResizeHeight
-            ? normalizeZoneLayoutPolicy(zoneData.layout).resize === 'both'
-              ? 'both'
-              : 'height'
-            : 'fixed',
-          onOverflow: values.layoutOnOverflow,
-        });
+        const layout =
+          layoutBinding === 'inherit'
+            ? normalizeZoneLayoutPolicy(boardZoneLayoutDefaults)
+            : normalizeZoneLayoutPolicy(layoutPolicy);
         const trigger =
           template && values.triggerBehavior
             ? {
@@ -226,6 +151,7 @@ export const ZoneConfigModal = ({
         const hasChanges =
           values.name !== zoneName ||
           JSON.stringify(trigger) !== JSON.stringify(zoneData.trigger) ||
+          layoutBinding !== zoneLayoutBinding(zoneData) ||
           JSON.stringify(layout) !== JSON.stringify(normalizeZoneLayoutPolicy(zoneData.layout));
 
         if (hasChanges) {
@@ -234,6 +160,7 @@ export const ZoneConfigModal = ({
             label: values.name,
             trigger,
             layout,
+            layout_binding: layoutBinding,
           });
           if (saved === false) return;
         }
@@ -263,122 +190,30 @@ export const ZoneConfigModal = ({
         </Form.Item>
 
         <Divider plain>Layout</Divider>
-
         <Form.Item
-          name="layoutMode"
-          label="Auto Zone"
-          valuePropName="checked"
-          getValueProps={(value: ZoneLayoutMode) => ({ checked: value === 'auto' })}
-          normalize={(checked: boolean) => (checked ? 'auto' : 'manual')}
+          label="Use board defaults"
           help={
-            layoutMode === 'auto'
-              ? 'On: keeps contents arranged with the saved settings below. It pauses for one minute while you use a stacked worktree.'
-              : 'Off: preserves spatial memory. The settings below remain saved and apply when you choose Tidy up contents.'
+            layoutBinding === 'inherit'
+              ? 'This zone follows Zone defaults from Board settings. Turn off to start an independent override from the current values.'
+              : 'This zone keeps its own explicit policy. Turn on to reset it to the board defaults and follow future changes.'
           }
         >
           <Switch
-            aria-label="Auto Zone"
+            aria-label="Use board defaults"
+            checked={layoutBinding === 'inherit'}
+            disabled={!mutationGate.canMutate}
             onChange={(checked) => {
-              const mode: ZoneLayoutMode = checked ? 'auto' : 'manual';
-              handleLayoutModeChange(mode);
+              if (checked) setLayoutPolicy(normalizeZoneLayoutPolicy(boardZoneLayoutDefaults));
+              setLayoutBinding(checked ? 'inherit' : 'override');
             }}
           />
         </Form.Item>
-
-        <Form.Item
-          name="layoutPreset"
-          label="Presentation"
-          help={
-            layoutPreset === 'compact_list'
-              ? 'List uses one column and collapses worktree and capable generic-card details; header-only cards and canvas objects keep their natural size.'
-              : undefined
-          }
-        >
-          <Segmented
-            block
-            aria-label="Presentation"
-            options={[
-              { label: ZONE_LAYOUT_PRESET_LABELS.grid, value: 'grid' },
-              { label: ZONE_LAYOUT_PRESET_LABELS.compact_list, value: 'compact_list' },
-            ]}
-          />
-        </Form.Item>
-
-        <Flex gap="middle" wrap>
-          <Form.Item name="layoutSortBy" label="Sort by" style={{ flex: '1 1 220px' }}>
-            <Select
-              onChange={handleSortByChange}
-              options={ZONE_LAYOUT_SORT_FIELDS.map((value) => ({
-                value,
-                label: ZONE_LAYOUT_SORT_LABELS[value],
-              }))}
-            />
-          </Form.Item>
-          <Form.Item name="layoutSortDirection" label="Order" style={{ flex: '1 1 150px' }}>
-            <Select options={sortDirectionOptions} />
-          </Form.Item>
-        </Flex>
-
-        <Flex gap="large" wrap align="start">
-          {layoutPreset === 'grid' && (
-            <Form.Item
-              name="layoutColumns"
-              label="Columns"
-              help="Leave blank to fit as many columns as the zone allows."
-              style={{ flex: '1 1 200px' }}
-            >
-              <InputNumber min={1} precision={0} style={{ width: '100%' }} placeholder="Auto" />
-            </Form.Item>
-          )}
-          <Form.Item
-            name="layoutGap"
-            label="Spacing"
-            help="Exact space between arranged items."
-            style={{ flex: '1 1 160px' }}
-          >
-            <InputNumber
-              min={0}
-              max={96}
-              precision={0}
-              step={4}
-              suffix="px"
-              style={{ width: '100%' }}
-            />
-          </Form.Item>
-          <Form.Item
-            name="layoutAutoResizeHeight"
-            label="Grow to fit"
-            valuePropName="checked"
-            help="On: content may grow the zone and minimally move newly covered zones; a manual resize becomes its new floor. Off: the zone keeps its frame and an impossible tidy reports overflow without moving anything."
-            style={{ flex: '1 1 200px' }}
-          >
-            <Switch
-              aria-label="Grow to fit"
-              onChange={(checked) => {
-                if (checked) form.setFieldValue('layoutOnOverflow', 'reflow_board');
-              }}
-            />
-          </Form.Item>
-          <Form.Item
-            name="layoutOnOverflow"
-            label="When growth overlaps"
-            help={
-              layoutAutoResizeHeight
-                ? 'Choose whether to report covered zones or minimally move the board zones out of the way.'
-                : 'Enable Grow to fit before choosing an overlap action.'
-            }
-            style={{ flex: '1 1 240px' }}
-          >
-            <Select
-              aria-label="When growth overlaps"
-              disabled={!layoutAutoResizeHeight}
-              options={ZONE_OVERFLOW_STRATEGIES.map((value) => ({
-                value,
-                label: ZONE_OVERFLOW_STRATEGY_LABELS[value],
-              }))}
-            />
-          </Form.Item>
-        </Flex>
+        <ZoneLayoutPolicyEditor
+          value={layoutPolicy}
+          onChange={setLayoutPolicy}
+          disabled={!mutationGate.canMutate || layoutBinding === 'inherit'}
+          idPrefix={`zone-${objectId}`}
+        />
 
         <Divider plain>Automation prompt</Divider>
 

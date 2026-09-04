@@ -26,6 +26,8 @@ import type {
   BoardLayoutApplyResult,
   BoardLayoutBatch,
   BoardObject,
+  BoardZoneLayoutDefaultsApplyResult,
+  BoardZoneLayoutDefaultsExpected,
   QueryParams,
   TeammateWelcomeNoteRequest,
   UUID,
@@ -387,6 +389,16 @@ export class BoardsService extends DrizzleService<Board, Partial<Board>, BoardPa
     _params?: BoardParams
   ): Promise<BoardLayoutApplyResult> {
     return this.boardRepo.applyBoardLayout(boardId, batch);
+  }
+
+  /** Update board-level zone defaults and intentional followers in one row lock/write. */
+  async setZoneLayoutDefaults(
+    boardId: string,
+    defaults: NonNullable<Board['zone_layout_defaults']>,
+    options: { applyToExisting?: boolean; expected?: BoardZoneLayoutDefaultsExpected },
+    _params?: BoardParams
+  ): Promise<BoardZoneLayoutDefaultsApplyResult> {
+    return this.boardRepo.setZoneLayoutDefaults(boardId, defaults, options);
   }
 
   /**

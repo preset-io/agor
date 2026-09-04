@@ -133,6 +133,8 @@ export interface BoardZoneArrangementPlan {
 const gridGap = (value: number): number =>
   value === 0 ? 0 : Math.max(BOARD_GRID_SIZE, ceilBoardGridValue(value));
 
+const exactGap = (value: number): number => (Number.isFinite(value) ? Math.max(0, value) : 0);
+
 export interface BoardZoneMembershipRect {
   id: string;
   x: number;
@@ -225,7 +227,7 @@ export function planBoardZoneArrangement(
       sourceX: item.position.x,
       sourceY: item.position.y - frame.headerInset,
     }));
-    const gap = gridGap(policy.gap ?? 24);
+    const gap = exactGap(policy.gap ?? 24);
     const compact =
       packZoneContents && policy.preset === 'grid' && policy.columns === undefined
         ? layoutCompactRectangles(items, {

@@ -1,4 +1,4 @@
-import { BOARD_GRID_SIZE, snapBoardGridPoint } from '@agor/core/layout/rectangle-packing';
+import { BOARD_GRID_SIZE } from '@agor/core/layout/rectangle-packing';
 import type { Board, BoardObject } from '@agor-live/client';
 import { act, renderHook } from '@testing-library/react';
 import { App as AntApp } from 'antd';
@@ -439,6 +439,76 @@ describe('batchUpdateObjectPositions', () => {
 });
 
 describe('arrangeZoneContents', () => {
+  it.each([4, 12, 24])('persists a real %ipx child boundary gap', async (gap) => {
+    const { client, boardsPatch } = makeRoutedClient();
+    const board = makeBoard({
+      zone: {
+        type: 'zone',
+        x: 0,
+        y: 0,
+        width: 900,
+        height: 500,
+        label: 'Fictional density',
+        layout: { mode: 'manual', preset: 'grid', columns: 2, gap },
+      },
+    });
+    const nodes: Node[] = [
+      { id: 'zone', type: 'zone', position: { x: 0, y: 0 }, width: 900, height: 500, data: {} },
+      ...['left', 'right'].map(
+        (id): Node => ({
+          id,
+          type: 'branchNode',
+          parentId: 'zone',
+          position: { x: 20, y: 100 },
+          width: 380,
+          height: 100,
+          data: {},
+        })
+      ),
+    ];
+    const { result } = renderHook(
+      () =>
+        useBoardObjects({
+          board,
+          client,
+          boardObjectsForBoard: [
+            {
+              object_id: 'placement-left',
+              entity_type: 'branch',
+              branch_id: 'left',
+              zone_id: 'zone',
+              position: { x: 20, y: 100 },
+            },
+            {
+              object_id: 'placement-right',
+              entity_type: 'branch',
+              branch_id: 'right',
+              zone_id: 'zone',
+              position: { x: 20, y: 100 },
+            },
+          ] as never,
+          nodes,
+          setNodes: vi.fn(),
+          deletedObjectsRef: { current: new Set<string>() },
+        }),
+      { wrapper }
+    );
+
+    const zoneNode = result.current.getBoardObjectNodes().find((node) => node.id === 'zone');
+    await act(async () => {
+      await (zoneNode!.data.onArrangeContents as (id: string) => Promise<void>)('zone');
+    });
+
+    const placements = layoutPlacements(boardsPatch);
+    const left = placements['placement-left'];
+    const right = placements['placement-right'];
+    const boundaryGap =
+      right.position.x === left.position.x
+        ? right.position.y - (left.position.y + left.size.height)
+        : right.position.x - (left.position.x + left.size.width);
+    expect(boundaryGap).toBe(gap);
+  });
+
   it('reserves the scaled live title before packing a single child', async () => {
     const { client, boardsPatch, boardObjectsPatch } = makeRoutedClient();
     const board = makeBoard({
@@ -615,12 +685,12 @@ describe('arrangeZoneContents', () => {
     });
     expect(renderedNodes.find((node) => node.id === 'card-card-1')?.position).toEqual({
       x: 20,
-      y: 320,
+      y: 304,
     });
     expect(onArrangeNodes).toHaveBeenCalledTimes(1);
     expect(onArrangeNodes.mock.calls[0]?.[0].map((node: Node) => node.position)).toEqual([
       { x: 20, y: 100 },
-      { x: 20, y: 320 },
+      { x: 20, y: 304 },
       { x: 0, y: 0 },
     ]);
     expect(onArrangeNodes.mock.calls[0]?.[1]).toBeGreaterThan(0);
@@ -635,7 +705,7 @@ describe('arrangeZoneContents', () => {
       size: { width: 400, height: 180 },
     });
     expect(placements['placement-card']).toEqual({
-      position: { x: 20, y: 320 },
+      position: { x: 20, y: 304 },
       size: { width: 300, height: 100 },
     });
     expect(showSuccess).toHaveBeenCalledWith(
@@ -645,11 +715,8 @@ describe('arrangeZoneContents', () => {
       position: { x: number; y: number };
       size: { width: number; height: number };
     }>) {
-      expect(update.position.x % BOARD_GRID_SIZE).toBe(0);
-      expect(update.position.y % BOARD_GRID_SIZE).toBe(0);
       expect(update.size.width % BOARD_GRID_SIZE).toBe(0);
       expect(update.size.height % BOARD_GRID_SIZE).toBe(0);
-      expect(snapBoardGridPoint(update.position)).toEqual(update.position);
     }
   });
 
@@ -1224,7 +1291,7 @@ describe('arrangeZoneContents', () => {
     });
     expect(renderedNodes.find((node) => node.id === 'card-card-1')?.position).toEqual({
       x: 20,
-      y: 380,
+      y: 364,
     });
     const placements = layoutPlacements(patch);
     expect(placements['placement-branch']).toEqual({
@@ -1232,7 +1299,7 @@ describe('arrangeZoneContents', () => {
       size: { width: 500, height: 240 },
     });
     expect(placements['placement-card']).toEqual({
-      position: { x: 20, y: 380 },
+      position: { x: 20, y: 364 },
       size: { width: 380, height: 100 },
     });
 
@@ -1332,7 +1399,7 @@ describe('arrangeZoneContents', () => {
     const stackedBranch = renderedNodes.find((node) => node.id === 'branch-1');
     const stackedCard = renderedNodes.find((node) => node.id === 'branch-2');
     expect(stackedBranch?.position).toEqual({ x: 20, y: 100 });
-    expect(stackedCard?.position).toEqual({ x: 20, y: 320 });
+    expect(stackedCard?.position).toEqual({ x: 20, y: 304 });
     expect(
       (stackedCard?.position.y ?? 0) - (stackedBranch?.position.y ?? 0)
     ).toBeGreaterThanOrEqual(stackedBranch?.height ?? 0);
@@ -1343,7 +1410,7 @@ describe('arrangeZoneContents', () => {
       expect.objectContaining({ position: { x: 20, y: 100 } })
     );
     expect(placements['placement-branch-2']).toEqual(
-      expect.objectContaining({ position: { x: 20, y: 320 } })
+      expect.objectContaining({ position: { x: 20, y: 304 } })
     );
     expect(layoutWrites(patch)[0]).toEqual(
       expect.objectContaining({
@@ -1532,14 +1599,14 @@ describe('arrangeZoneContents', () => {
     });
 
     expect(renderedNodes.find((node) => node.id === 'card-newer')?.position.y).toBe(100);
-    expect(renderedNodes.find((node) => node.id === 'card-older')?.position.y).toBe(400);
+    expect(renderedNodes.find((node) => node.id === 'card-older')?.position.y).toBe(384);
     const placements = layoutPlacements(patch);
     expect(placements['placement-newer']).toEqual({
       position: { x: 20, y: 100 },
       size: { width: 380, height: 260 },
     });
     expect(placements['placement-older']).toEqual({
-      position: { x: 20, y: 400 },
+      position: { x: 20, y: 384 },
       size: { width: 380, height: 220 },
     });
     expect(layoutWrites(patch)).toHaveLength(1);
@@ -1751,7 +1818,7 @@ describe('arrangeZoneContents', () => {
       size: { width: 300, height: 100 },
     });
     expect(placements['placement-older']).toEqual({
-      position: { x: 20, y: 240 },
+      position: { x: 20, y: 224 },
       size: { width: 300, height: 100 },
     });
 

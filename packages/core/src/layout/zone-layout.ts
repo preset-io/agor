@@ -2,6 +2,7 @@ import type {
   BoardEntityType,
   BoardObjectType,
   BoardPosition,
+  ZoneLayoutBinding,
   ZoneLayoutPolicy,
   ZoneLayoutPreset,
   ZoneLayoutSortBy,
@@ -175,6 +176,26 @@ export const DEFAULT_ZONE_LAYOUT_POLICY: Readonly<ZoneLayoutPolicy> = {
   onOverflow: 'report',
   gap: 24,
 };
+
+/**
+ * Legacy zones are explicit overrides. This fail-closed default is what lets
+ * boards adopt a shared policy without silently rewriting old zone behavior.
+ */
+export function zoneLayoutBinding(
+  zone: { layout_binding?: ZoneLayoutBinding } | null | undefined
+): ZoneLayoutBinding {
+  return zone?.layout_binding === 'inherit' ? 'inherit' : 'override';
+}
+
+/** Resolve a zone through the same normalizer used by UI, daemon, and MCP. */
+export function resolveZoneLayoutPolicy(
+  zone: { layout?: Partial<ZoneLayoutPolicy>; layout_binding?: ZoneLayoutBinding },
+  boardDefaults?: Partial<ZoneLayoutPolicy>
+): ZoneLayoutPolicy {
+  return normalizeZoneLayoutPolicy(
+    zoneLayoutBinding(zone) === 'inherit' ? boardDefaults : zone.layout
+  );
+}
 
 export const ZONE_LAYOUT_FRAME_PADDING = BOARD_GRID_SIZE;
 

@@ -89,6 +89,8 @@ export interface BoardFormFieldsProps {
   allGroups?: Group[];
   /** Normalized permission editor mounted by BoardEditModal and persisted separately. */
   capabilityPolicyEditor?: React.ReactNode;
+  /** Board-level defaults for newly-created/reset zones. */
+  zoneDefaultsEditor?: React.ReactNode;
   /**
    * Whether the caller may edit the board's general settings (name,
    * description, appearance). Defaults to `true` for the legacy/non-RBAC
@@ -115,6 +117,7 @@ export const BoardFormFields: React.FC<BoardFormFieldsProps> = ({
   allUsers = [],
   allGroups = [],
   capabilityPolicyEditor,
+  zoneDefaultsEditor,
   canEditGeneral = true,
 }) => {
   const generalFields = (
@@ -238,6 +241,9 @@ export const BoardFormFields: React.FC<BoardFormFieldsProps> = ({
       items={[
         { key: 'general', label: 'General', children: generalFields },
         { key: 'permissions', label: 'Permissions', children: permissionsFields },
+        ...(zoneDefaultsEditor
+          ? [{ key: 'zone-defaults', label: 'Zone defaults', children: zoneDefaultsEditor }]
+          : []),
         { key: 'css', label: 'CSS', children: cssFields },
         ...(extra ? [{ key: 'advanced', label: 'Advanced', children: extra }] : []),
       ]}

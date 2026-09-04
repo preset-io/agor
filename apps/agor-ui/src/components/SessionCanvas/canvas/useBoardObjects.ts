@@ -7,12 +7,7 @@ import {
   containingBoardZoneId,
   planBoardZoneArrangement,
 } from '@agor/core/layout/board-zone-arrangement';
-import {
-  BOARD_GRID_SIZE,
-  ceilBoardGridSize,
-  LayoutObstacleError,
-  snapBoardGridValue,
-} from '@agor/core/layout/rectangle-packing';
+import { ceilBoardGridSize, LayoutObstacleError } from '@agor/core/layout/rectangle-packing';
 import { planZoneGrowthReflow } from '@agor/core/layout/zone-growth-reflow';
 import {
   compactZoneItemSize,
@@ -597,7 +592,11 @@ export const useBoardObjects = ({
           // layout-policy transition durable rather than a successful no-op.
           _action: 'upsertObject',
           objectId: zoneId,
-          objectData: { ...zone, layout: { ...layout, mode: 'manual' } },
+          objectData: {
+            ...zone,
+            layout: { ...layout, mode: 'manual' },
+            layout_binding: 'override',
+          },
         } as unknown as Partial<Board>)
         .then(() => true)
         .catch((error) => {
@@ -1060,9 +1059,7 @@ export const useBoardObjects = ({
         // still plans against the title the initiating user actually sees.
         fontScale,
       });
-      const requestedGap = policy.gap ?? 24;
-      const gridGap =
-        requestedGap === 0 ? 0 : Math.max(BOARD_GRID_SIZE, snapBoardGridValue(requestedGap));
+      const exactGap = policy.gap ?? 24;
       const layoutItems = children.map(({ node, isCanvasObject }) => ({
         id: node.id,
         ...itemSize(node),
@@ -1134,8 +1131,8 @@ export const useBoardObjects = ({
         rows: new Set(packedZone.items.map((item) => item.row)).size,
         width: packedZone.width,
         height: packedZone.height - frame.headerInset,
-        gapX: gridGap,
-        gapY: gridGap,
+        gapX: exactGap,
+        gapY: exactGap,
         padding: frame.padding,
         fitsWithoutOverlap: true,
         stackCount: packedZone.items.length,
@@ -2552,6 +2549,8 @@ export const useBoardObjects = ({
             y: objectData.y,
             trigger: objectData.type === 'zone' ? objectData.trigger : undefined,
             layout: objectData.type === 'zone' ? objectData.layout : undefined,
+            layout_binding: objectData.type === 'zone' ? objectData.layout_binding : undefined,
+            boardZoneLayoutDefaults: board?.zone_layout_defaults,
             pinnedItemCount,
             positionableItemCount,
             densityExpandableItemCount,
@@ -2579,6 +2578,7 @@ export const useBoardObjects = ({
     setZoneContentsCompact,
     eraserMode,
     activeUrlTargetArtifactId,
+    board?.zone_layout_defaults,
     onEditMarkdown,
   ]);
 
@@ -2593,6 +2593,7 @@ export const useBoardObjects = ({
       const objectId = `zone-${Date.now()}`;
       const width = 400;
       const height = 600;
+      const inheritedLayout = normalizeZoneLayoutPolicy(currentBoard.zone_layout_defaults);
 
       // Optimistic update
       setNodes((nodes) => [
@@ -2613,6 +2614,9 @@ export const useBoardObjects = ({
             width,
             height,
             color: undefined, // Will use theme default (colorBorder)
+            layout: inheritedLayout,
+            layout_binding: 'inherit',
+            boardZoneLayoutDefaults: currentBoard.zone_layout_defaults,
             onUpdate: handleUpdateObject,
           },
         },
@@ -2630,6 +2634,8 @@ export const useBoardObjects = ({
             width,
             height,
             label: 'New Zone',
+            layout: inheritedLayout,
+            layout_binding: 'inherit',
             // No color specified - will use theme default
           },
         } as unknown as Partial<Board>);
