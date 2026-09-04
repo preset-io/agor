@@ -77,12 +77,15 @@ Every field in a variant is a Handlebars template. The render context is built i
 
 | Variable | Source | Example | Notes |
 |---|---|---|---|
+| `{{branch.id}}` | Branch | `0198f5d4-...` | Stable branch UUID. Use as a provider-resource binding, not as a display name. |
 | `{{branch.unique_id}}` | Branch | `3` | Auto-incrementing integer. Use for deterministic port offsets. |
 | `{{branch.name}}` | Branch | `feat-new-filter` | Slugified branch name. Good for `docker compose -p`. |
+| `{{branch.ref}}` | Branch | `refs/heads/feat-new-filter` | Exact git ref recorded for the branch. Empty if unavailable. |
 | `{{branch.path}}` | Branch | `/home/you/agor/feat-new-filter` | Absolute path on disk. |
 | `{{branch.base_ref}}` | Branch | `main` | Source branch/tag name the branch was created from (the "Base Branch"/"Base Tag" in the create dialog). The **name**, not a SHA. Empty string if unknown. |
 | `{{branch.ref_type}}` | Branch | `branch` | `branch` or `tag`, indicating whether `base_ref` names a branch or a tag. Defaults to `branch`. |
 | `{{repo.slug}}` | Repo | `preset-io/superset` | Repository slug. |
+| `{{repo.github_slug}}` | Repo | `preset-io/agor` | Credential-free `owner/repository` identity derived from a registered `github.com` remote. Empty for other hosts. |
 | `{{host.ip_address}}` | Auto-detected | `10.0.1.42` | Fallback order: `template_overrides.host.ip_address` → `daemon.host_ip_address` in `~/.agor/config.yaml` → autodetect. |
 | `{{custom.<key>}}` | Branch custom context | `{{custom.compose_profile}}` | Anything you store in `branch.custom_context`. |
 | `{{custom.<key>}}` via overrides | `template_overrides.custom.*` | `{{custom.internal_registry}}` | Repo-wide fallback if the branch doesn't set a key. |
@@ -98,6 +101,8 @@ Every field in a variant is a Handlebars template. The render context is built i
 | `mod` | `{{mod branch.unique_id 4}}` | `3` |
 
 Math helpers are deterministic. The same branch always renders the same ports, which is what keeps parallel branches from colliding.
+
+Use `{{shellQuote value}}` when inserting any template value into a shell command. It renders the value as exactly one inert POSIX shell argument, including values with spaces, quotes, or shell metacharacters.
 
 > Broken template syntax is reported at **render time**, not at save time. Click Render to see the exact error with a line number.
 
@@ -120,15 +125,17 @@ environment:
     <variant-name>:
       description: "Human-readable one-liner"
       extends: <base-variant>      # optional, single-level only
+      startup_timeout_ms: 3600000 # optional; one hour by default
       start:  "<shell command template>"
       stop:   "<shell command template>"
+      sync:   "<shell command template>"   # optional; exact source reconciliation
       nuke:   "<shell command template>"   # optional
       logs:   "<shell command template>"   # optional
       health: "<url template>"             # optional
       app:    "<url template>"             # optional
 ```
 
-`start`, `stop`, `nuke`, and `logs` are rendered lifecycle fields. In the
+`start`, `stop`, `sync`, `nuke`, and `logs` are rendered lifecycle fields. In the
 default `hybrid` mode they can be shell commands or explicit `http://` /
 `https://` webhooks. Webhooks are invoked with HTTP GET. `health` and `app` are
 always URL templates, not shell commands.
@@ -139,7 +146,11 @@ always URL templates, not shell commands.
 - `environment.default` must reference a variant that exists in `environment.variants`.
 - Each variant (after `extends` resolution) needs at least `start` and `stop`.
 
-`nuke`, `logs`, `health`, and `app` are optional. The corresponding UI buttons simply hide or no-op when absent.
+`startup_timeout_ms`, `sync`, `nuke`, `logs`, `health`, and `app` are optional. The
+startup timeout defaults to one hour and may be set from 1 second through 24
+hours. Agor persists an exact deadline for every attempt, so a daemon restart
+or a pause in health monitoring does not restart the clock. The corresponding
+optional UI buttons simply hide or no-op when absent.
 
 ### `extends` (single-level only)
 
@@ -395,7 +406,7 @@ execution:
   managed_envs_execution_mode: webhook-only
 ```
 
-In `webhook-only` mode, rendered `start`, `stop`, `nuke`, and `logs` fields
+In `webhook-only` mode, rendered `start`, `stop`, `sync`, `nuke`, and `logs` fields
 must render to explicit `http://` or `https://` URLs. Agor sends a GET request
 to the URL.
 
@@ -406,10 +417,40 @@ environment:
     remote:
       start: "https://orchestrator.example.com/agor/start?branch={{branch.name}}"
       stop:  "https://orchestrator.example.com/agor/stop?branch={{branch.name}}"
+      sync:  "https://orchestrator.example.com/agor/sync?branch={{branch.name}}&revision={{sync.revision}}"
       logs:  "https://orchestrator.example.com/agor/logs?branch={{branch.name}}"
       health: "https://apps.example.com/{{branch.name}}/health"
       app:    "https://apps.example.com/{{branch.name}}"
 ```
+
+### Lifecycle result contract
+
+A shell `start` command can publish runtime URLs and provider identity by writing
+exactly one control line to **stdout**:
+
+```text
+AGOR_ENVIRONMENT_RESULT={"version":1,"access_urls":[{"name":"App","url":"https://app.example.com/"},{"name":"Metrics","url":"https://metrics.example.com/"}],"health_url":"https://app.example.com/health","resource":{"provider":"github-codespaces","id":"opaque-provider-id","name":"example-space","manage_url":"https://github.com/codespaces/example-space"}}
+```
+
+For a webhook, return the JSON object itself as an `application/json` response;
+do not include the `AGOR_ENVIRONMENT_RESULT=` prefix. Diagnostic stderr is never
+parsed as control data. The control record is removed from user-visible command
+output and persisted logs.
+
+| Field              | Contract                                                                                                                      |
+| ------------------ | ----------------------------------------------------------------------------------------------------------------------------- |
+| `version`          | Required. Must be `1`.                                                                                                        |
+| `access_urls`      | Optional non-empty array of at most 8 uniquely named URLs. Order is preserved; the first URL is the primary application link. |
+| `health_url`       | Optional health endpoint.                                                                                                     |
+| `resource`         | Optional provider identity containing at least one of `provider`, `id`, `name`, or `manage_url`. Never put credentials here.  |
+| `applied_revision` | Required for successful `sync`; the exact full lowercase 40- or 64-character Git object ID that was applied.                  |
+
+The encoded result is limited to 8 KiB. Names are limited to 64 characters and
+URLs to 2,048 characters. URLs must be HTTP(S) and cannot contain credentials,
+query strings, or fragments. Unknown fields, duplicate URL names, multiple
+result lines, malformed JSON, and mixed legacy/typed records fail closed. A
+dynamic health URL must also resolve exclusively to public addresses when Agor
+probes it; DNS is pinned and redirects are not followed.
 
 V1 webhooks are intentionally simple: GET only, no custom headers, no request
 body, no signing, and redirects are not followed. V1 webhook targets must be
@@ -418,11 +459,18 @@ credentials are rejected. Use a trusted orchestration service, and avoid secrets
 in query strings because rendered branch snapshots and infrastructure logs may
 expose them.
 
-In daemon HA mode, lifecycle actions remain webhook-only; Agor does not assign
-distributed ownership for Start, Stop, Restart, or Nuke. Health observation is
+A `sync` command or webhook receives the exact clean desired Git object ID as
+`{{sync.revision}}`. Success must return the versioned lifecycle JSON result
+with `applied_revision` equal to that exact ID. Agor stores desired and applied
+revisions separately, admits only one leased attempt across daemon replicas,
+and retries failures without changing the environment's health status.
+
+In daemon HA mode, Start, Stop, Restart, and Nuke remain webhook-only and do not
+have distributed operation ownership. Source sync and health observation do:
+PostgreSQL admits one leased source-sync attempt and one health observation per
+branch, each fenced against lifecycle changes. Health observation is otherwise
 separate: every replica scans active environments, while PostgreSQL admits only
-one live observation claim per branch and fences the result against lease expiry
-and lifecycle changes. A remote/webhook environment without `health` remains
+one live observation claim per branch. A remote/webhook environment without `health` remains
 explicitly unobservable (`unknown`); Agor never treats another daemon's local
 process map as evidence that it is healthy.
 

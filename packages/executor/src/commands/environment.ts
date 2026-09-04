@@ -7,8 +7,13 @@
  * filesystem and potentially long-running build output.
  */
 
-import { type ChildProcess, spawn } from 'node:child_process';
-import { ENVIRONMENT } from '@agor/core/config';
+import { spawn } from 'node:child_process';
+import { resolveEnvironmentStartupTimeoutMs } from '@agor/core/environment/health-transition';
+import {
+  ENVIRONMENT_LIFECYCLE_SUPERSEDED_CODE,
+  type EnvironmentLifecycleResult,
+  validateEnvironmentSourceRevision,
+} from '@agor/core/environment/lifecycle-result';
 import { assertEnvCommandAllowed } from '@agor/core/unix';
 import type {
   EnvironmentLifecyclePayload,
@@ -16,35 +21,8 @@ import type {
   ExecutorResult,
 } from '../payload-types.js';
 import { createExecutorClient } from '../services/feathers-client.js';
+import { EnvironmentCommandOutputCapture } from './environment-command-output.js';
 import type { CommandOptions } from './index.js';
-
-const MAX_OUTPUT_LINES = ENVIRONMENT.LOGS_MAX_LINES;
-
-function truncateOutput(outputChunks: string[]): string | undefined {
-  const fullOutput = outputChunks.join('');
-  const lines = fullOutput.split('\n');
-  const truncated =
-    lines.length > MAX_OUTPUT_LINES
-      ? `... (truncated ${lines.length - MAX_OUTPUT_LINES} lines)\n${lines
-          .slice(-MAX_OUTPUT_LINES)
-          .join('\n')}`
-      : fullOutput;
-  const output = truncated.trim();
-  return output || undefined;
-}
-
-function collectOutput(child: ChildProcess, outputChunks: string[]): void {
-  const collect = (stream: NodeJS.ReadableStream | null, target: NodeJS.WriteStream) => {
-    if (!stream) return;
-    stream.on('data', (chunk: Buffer) => {
-      const text = chunk.toString();
-      target.write(text);
-      outputChunks.push(text);
-    });
-  };
-  collect(child.stdout, process.stdout);
-  collect(child.stderr, process.stderr);
-}
 
 function successMessage(action: EnvironmentLifecyclePayload['params']['action']): string {
   switch (action) {
@@ -56,6 +34,8 @@ function successMessage(action: EnvironmentLifecyclePayload['params']['action'])
       return 'Restart command completed';
     case 'nuke':
       return 'Nuke command completed';
+    case 'sync':
+      return 'Sync command completed';
   }
 }
 
@@ -67,6 +47,8 @@ function commandForAction(payload: EnvironmentLifecyclePayload): string {
       return payload.params.stopCommand!;
     case 'nuke':
       return payload.params.nukeCommand!;
+    case 'sync':
+      return payload.params.syncCommand!;
     case 'restart':
       return payload.params.startCommand!;
   }
@@ -75,57 +57,162 @@ function commandForAction(payload: EnvironmentLifecyclePayload): string {
 async function updateBranchEnvironment(
   client: Awaited<ReturnType<typeof createExecutorClient>>,
   branchId: string,
-  environmentUpdate: Record<string, unknown>
-): Promise<void> {
-  await client.service('branches').updateEnvironment({
-    branch_id: branchId,
-    environment_update: environmentUpdate,
-  });
+  environmentUpdate: Record<string, unknown>,
+  expectedEnvironmentGeneration?: number,
+  expectedEnvironmentStatus?: 'stopped' | 'starting' | 'running' | 'stopping' | 'error'
+): Promise<{ applied: boolean; generation?: number }> {
+  try {
+    const branch = await client.service('branches').updateEnvironment({
+      branch_id: branchId,
+      environment_update: environmentUpdate,
+      ...(expectedEnvironmentGeneration !== undefined
+        ? { expected_environment_generation: expectedEnvironmentGeneration }
+        : {}),
+      ...(expectedEnvironmentStatus !== undefined
+        ? { expected_environment_status: expectedEnvironmentStatus }
+        : {}),
+    });
+    return { applied: true, generation: branch.environment_generation };
+  } catch (error) {
+    const record = error as {
+      message?: unknown;
+      data?: { code?: unknown };
+    };
+    if (
+      record.data?.code === ENVIRONMENT_LIFECYCLE_SUPERSEDED_CODE ||
+      (typeof record.message === 'string' && record.message.includes('was superseded'))
+    ) {
+      return { applied: false };
+    }
+    throw error;
+  }
+}
+
+function supersededResult(
+  branchId: string,
+  action: EnvironmentLifecyclePayload['params']['action']
+): ExecutorResult {
+  return { success: true, data: { branchId, action, superseded: true } };
+}
+
+function terminateCommandProcess(child: ReturnType<typeof spawn>, signal: NodeJS.Signals): void {
+  if (child.pid && process.platform !== 'win32') {
+    try {
+      // Shell commands may start grandchildren. The child is detached into its
+      // own process group below, so terminate the whole command tree.
+      process.kill(-child.pid, signal);
+      return;
+    } catch {
+      // The shell may have exited between the timeout and this signal. Fall
+      // back to ChildProcess.kill so platforms without process-group support
+      // still receive a best-effort cancellation.
+    }
+  }
+  try {
+    child.kill(signal);
+  } catch {
+    // A concurrently exited command is already cancelled.
+  }
 }
 
 async function runShellCommand(options: {
   command: string;
   cwd: string;
   env?: Record<string, string>;
-  commandType: 'start' | 'stop' | 'nuke' | 'logs';
-}): Promise<{ pid?: number; output?: string }> {
-  const { command, cwd, env, commandType } = options;
+  commandType: 'start' | 'stop' | 'nuke' | 'sync' | 'logs';
+  parseLifecycleResult?: boolean;
+  timeoutMs?: number;
+}): Promise<{
+  pid?: number;
+  output?: string;
+  lifecycleResult?: EnvironmentLifecycleResult;
+  facts: Record<string, string>;
+}> {
+  const { command, cwd, env, commandType, parseLifecycleResult = false, timeoutMs } = options;
   assertEnvCommandAllowed(command, commandType);
+  if (timeoutMs !== undefined && (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0)) {
+    throw new Error(`${commandType} command timeout must be a positive integer`);
+  }
 
   const child = spawn(command, {
     cwd,
     env: { ...process.env, ...(env ?? {}) },
     stdio: 'pipe',
     shell: true,
+    // Only deadline-bound commands need a private process group. Preserve the
+    // existing spawn behavior for logs/sync/stop/nuke.
+    detached: timeoutMs !== undefined && process.platform !== 'win32',
   });
 
-  const outputChunks: string[] = [];
-  collectOutput(child, outputChunks);
+  const capture = new EnvironmentCommandOutputCapture({
+    parseLifecycleResult,
+    stdout: process.stdout,
+    stderr: process.stderr,
+  });
+  child.stdout?.on('data', (chunk: Buffer) => capture.writeStdout(chunk.toString()));
+  child.stderr?.on('data', (chunk: Buffer) => capture.writeStderr(chunk.toString()));
 
-  await new Promise<void>((resolve, reject) => {
-    child.on('exit', (code: number | null) => {
-      if (code === 0) {
-        resolve();
-      } else {
-        const message =
-          code === null
-            ? `${commandType} command exited without a code`
-            : `${commandType} command exited with code ${code}`;
-        const error = new Error(message) as Error & { output?: string; pid?: number };
-        error.output = truncateOutput(outputChunks);
-        error.pid = child.pid;
-        reject(error);
+  try {
+    await new Promise<void>((resolve, reject) => {
+      let timeoutHandle: NodeJS.Timeout | undefined;
+      let forceKillHandle: NodeJS.Timeout | undefined;
+      const clearCommandTimers = () => {
+        if (timeoutHandle) clearTimeout(timeoutHandle);
+        if (forceKillHandle) clearTimeout(forceKillHandle);
+      };
+      child.on('close', (code: number | null) => {
+        clearCommandTimers();
+        if (code === 0) {
+          resolve();
+        } else {
+          const message =
+            code === null
+              ? `${commandType} command exited without a code`
+              : `${commandType} command exited with code ${code}`;
+          const error = new Error(message) as Error & { output?: string; pid?: number };
+          error.output = capture.visibleOutput();
+          error.pid = child.pid;
+          reject(error);
+        }
+      });
+      child.on('error', (error: Error) => {
+        clearCommandTimers();
+        const enriched = error as Error & { output?: string; pid?: number };
+        enriched.output = capture.visibleOutput();
+        enriched.pid = child.pid;
+        reject(enriched);
+      });
+      if (timeoutMs !== undefined) {
+        timeoutHandle = setTimeout(() => {
+          const error = new Error(
+            `${commandType} command exceeded its ${timeoutMs}ms deadline`
+          ) as Error & { output?: string; pid?: number };
+          error.output = capture.visibleOutput();
+          error.pid = child.pid;
+          terminateCommandProcess(child, 'SIGTERM');
+          forceKillHandle = setTimeout(() => terminateCommandProcess(child, 'SIGKILL'), 5_000);
+          forceKillHandle.unref();
+          reject(error);
+        }, timeoutMs);
       }
     });
-    child.on('error', (error: Error) => {
-      const enriched = error as Error & { output?: string; pid?: number };
-      enriched.output = truncateOutput(outputChunks);
-      enriched.pid = child.pid;
-      reject(enriched);
-    });
-  });
+  } catch (error) {
+    try {
+      capture.finish();
+    } catch {
+      // The command failure remains authoritative; control records stay suppressed.
+    }
+    throw error;
+  }
 
-  return { pid: child.pid, output: truncateOutput(outputChunks) };
+  try {
+    return { pid: child.pid, ...capture.finish() };
+  } catch (error) {
+    const enriched = error as Error & { output?: string; pid?: number };
+    enriched.output = capture.visibleOutput();
+    enriched.pid = child.pid;
+    throw enriched;
+  }
 }
 
 export async function handleEnvironmentLogs(
@@ -197,15 +284,61 @@ export async function handleEnvironmentLifecycle(
   const daemonUrl = payload.daemonUrl || 'http://localhost:3030';
   const client = await createExecutorClient(daemonUrl, payload.sessionToken);
   const branchId = payload.params.branchId;
+  let lifecycleGeneration = payload.params.lifecycleGeneration;
 
   try {
     const branch = await client.service('branches').get(branchId);
+    if (
+      lifecycleGeneration !== undefined &&
+      branch.environment_generation !== lifecycleGeneration
+    ) {
+      return supersededResult(branchId, payload.params.action);
+    }
     const cwd = payload.params.branchPath || branch.path;
 
-    if (payload.params.action === 'restart' && payload.params.stopCommand) {
-      await updateBranchEnvironment(client, branchId, {
-        status: 'stopping',
+    // Sync: push the branch's latest code into the already-running environment.
+    // Distinct from start/stop — it does NOT change status (the environment
+    // keeps running) and does NOT touch access_urls/facts (those describe the
+    // environment's identity, not this push). It only records the command
+    // outcome so the UI can show sync progress/errors.
+    if (payload.params.action === 'sync') {
+      const result = await runShellCommand({
+        command: payload.params.syncCommand!,
+        cwd,
+        env: payload.env,
+        commandType: 'sync',
+        parseLifecycleResult: true,
       });
+      const appliedRevision = validateEnvironmentSourceRevision(
+        result.lifecycleResult?.applied_revision,
+        'environment sync command acknowledgement'
+      );
+      if (appliedRevision !== payload.params.desiredRevision) {
+        throw new Error(
+          `Sync command acknowledged ${appliedRevision}, expected ${payload.params.desiredRevision}`
+        );
+      }
+      return {
+        success: true,
+        data: {
+          branchId,
+          action: 'sync',
+          claimToken: payload.params.syncClaimToken,
+          appliedRevision,
+        },
+      };
+    }
+
+    if (payload.params.action === 'restart' && payload.params.stopCommand) {
+      const stopping = await updateBranchEnvironment(
+        client,
+        branchId,
+        { status: 'stopping' },
+        lifecycleGeneration,
+        'stopping'
+      );
+      if (!stopping.applied) return supersededResult(branchId, payload.params.action);
+      lifecycleGeneration = stopping.generation ?? lifecycleGeneration;
       await runShellCommand({
         command: payload.params.stopCommand,
         cwd,
@@ -216,46 +349,95 @@ export async function handleEnvironmentLifecycle(
 
     if (payload.params.action === 'start' || payload.params.action === 'restart') {
       const startedAt = new Date().toISOString();
-      await updateBranchEnvironment(client, branchId, {
-        status: 'starting',
-        process: {
-          ...(branch.environment_instance?.process ?? {}),
-          started_at: startedAt,
+      const existingDeadline = Date.parse(
+        payload.params.action === 'start'
+          ? (branch.environment_instance?.startup_deadline_at ?? '')
+          : ''
+      );
+      const startupDeadlineAt = Number.isFinite(existingDeadline)
+        ? new Date(existingDeadline).toISOString()
+        : new Date(
+            Date.parse(startedAt) +
+              resolveEnvironmentStartupTimeoutMs(payload.params.startupTimeoutMs)
+          ).toISOString();
+      const starting = await updateBranchEnvironment(
+        client,
+        branchId,
+        {
+          status: 'starting',
+          process: {
+            ...(branch.environment_instance?.process ?? {}),
+            started_at: startedAt,
+          },
+          startup_deadline_at: startupDeadlineAt,
+          // This update crosses the Feathers/WebSocket JSON boundary; use null
+          // as an explicit clear sentinel because JSON drops undefined values.
+          last_health_check: null,
+          last_error: null,
+          last_command: null,
+          ...(payload.params.appUrl
+            ? { access_urls: [{ name: 'App', url: payload.params.appUrl }] }
+            : {}),
         },
-        // This update crosses the Feathers/WebSocket JSON boundary; use null
-        // as an explicit clear sentinel because JSON drops undefined values.
-        last_health_check: null,
-        last_error: null,
-        last_command: null,
-        ...(payload.params.appUrl
-          ? { access_urls: [{ name: 'App', url: payload.params.appUrl }] }
-          : {}),
-      });
+        lifecycleGeneration,
+        payload.params.action === 'restart' ? 'stopping' : 'starting'
+      );
+      if (!starting.applied) return supersededResult(branchId, payload.params.action);
+      lifecycleGeneration = starting.generation ?? lifecycleGeneration;
 
       const result = await runShellCommand({
         command: payload.params.startCommand!,
         cwd,
         env: payload.env,
         commandType: 'start',
+        parseLifecycleResult: true,
+        timeoutMs: Math.min(
+          resolveEnvironmentStartupTimeoutMs(payload.params.startupTimeoutMs),
+          Math.max(1, Date.parse(startupDeadlineAt) - Date.now())
+        ),
       });
 
-      await updateBranchEnvironment(client, branchId, {
-        process: {
-          ...(branch.environment_instance?.process ?? {}),
-          pid: result.pid,
-          started_at: startedAt,
+      const accessUrls =
+        result.lifecycleResult?.access_urls ??
+        (payload.params.appUrl ? [{ name: 'App', url: payload.params.appUrl }] : undefined);
+      const effectiveHealthUrl =
+        result.lifecycleResult?.health_url ?? payload.params.healthCheckUrl;
+      const completedAt = new Date().toISOString();
+
+      const completion = await updateBranchEnvironment(
+        client,
+        branchId,
+        {
+          ...(!effectiveHealthUrl
+            ? {
+                status: 'running',
+                last_health_check: {
+                  timestamp: completedAt,
+                  status: 'unknown',
+                  message: 'Start command completed; health is unavailable',
+                },
+              }
+            : {}),
+          process: {
+            ...(branch.environment_instance?.process ?? {}),
+            pid: result.pid,
+            started_at: startedAt,
+          },
+          access_urls: accessUrls ?? null,
+          lifecycle_result: result.lifecycleResult ?? null,
+          facts: Object.keys(result.facts).length > 0 ? result.facts : null,
+          last_command: {
+            action: payload.params.action,
+            status: 'succeeded',
+            timestamp: completedAt,
+            message: successMessage(payload.params.action),
+            ...(result.output ? { output: result.output } : {}),
+          },
         },
-        ...(payload.params.appUrl
-          ? { access_urls: [{ name: 'App', url: payload.params.appUrl }] }
-          : {}),
-        last_command: {
-          action: payload.params.action,
-          status: 'succeeded',
-          timestamp: new Date().toISOString(),
-          message: successMessage(payload.params.action),
-          ...(result.output ? { output: result.output } : {}),
-        },
-      });
+        lifecycleGeneration,
+        'starting'
+      );
+      if (!completion.applied) return supersededResult(branchId, payload.params.action);
 
       return { success: true, data: { branchId, action: payload.params.action } };
     }
@@ -269,34 +451,59 @@ export async function handleEnvironmentLifecycle(
       commandType,
     });
 
-    await updateBranchEnvironment(client, branchId, {
-      status: 'stopped',
-      // This update crosses the Feathers/WebSocket JSON boundary; use null
-      // as an explicit clear sentinel because JSON drops undefined values.
-      process: null,
-      last_health_check: {
-        timestamp: new Date().toISOString(),
-        status: 'unknown',
-        message:
-          payload.params.action === 'nuke'
-            ? 'Environment nuked - all data and volumes destroyed'
-            : 'Environment stopped',
+    const completion = await updateBranchEnvironment(
+      client,
+      branchId,
+      {
+        status: 'stopped',
+        // This update crosses the Feathers/WebSocket JSON boundary; use null
+        // as an explicit clear sentinel because JSON drops undefined values.
+        process: null,
+        startup_deadline_at: null,
+        // Nuke destroys the environment, so any address it reported is now dead —
+        // clear facts. Stop only pauses (a Codespace keeps its name and resumes
+        // to the same URL), so facts are preserved there.
+        ...(payload.params.action === 'nuke'
+          ? { facts: null, lifecycle_result: null, access_urls: null, source_sync: null }
+          : {}),
+        last_health_check: {
+          timestamp: new Date().toISOString(),
+          status: 'unknown',
+          message:
+            payload.params.action === 'nuke'
+              ? 'Environment nuked - all data and volumes destroyed'
+              : 'Environment stopped',
+        },
+        last_error: null,
+        last_command: {
+          action: payload.params.action,
+          status: 'succeeded',
+          timestamp: new Date().toISOString(),
+          message: successMessage(payload.params.action),
+          ...(result.output ? { output: result.output } : {}),
+        },
       },
-      last_error: null,
-      last_command: {
-        action: payload.params.action,
-        status: 'succeeded',
-        timestamp: new Date().toISOString(),
-        message: successMessage(payload.params.action),
-        ...(result.output ? { output: result.output } : {}),
-      },
-    });
+      lifecycleGeneration,
+      'stopping'
+    );
+    if (!completion.applied) return supersededResult(branchId, payload.params.action);
 
     return { success: true, data: { branchId, action: payload.params.action } };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     const output =
       error instanceof Error ? (error as Error & { output?: string }).output : undefined;
+
+    if (payload.params.action === 'sync') {
+      return {
+        success: false,
+        error: {
+          code: 'ENVIRONMENT_COMMAND_FAILED',
+          message,
+          details: { branchId, action: 'sync', output },
+        },
+      };
+    }
 
     try {
       const current = await client.service('branches').get(branchId);
@@ -305,22 +512,29 @@ export async function handleEnvironmentLifecycle(
         payload.params.action === 'start' &&
         (currentStatus === 'stopping' || currentStatus === 'stopped');
       if (!staleStartFailure) {
-        await updateBranchEnvironment(client, branchId, {
-          status: 'error',
-          last_health_check: {
-            timestamp: new Date().toISOString(),
-            status: 'unhealthy',
-            message,
+        const failure = await updateBranchEnvironment(
+          client,
+          branchId,
+          {
+            status: 'error',
+            last_health_check: {
+              timestamp: new Date().toISOString(),
+              status: 'unhealthy',
+              message,
+            },
+            last_error: output || message,
+            last_command: {
+              action: payload.params.action,
+              status: 'failed',
+              timestamp: new Date().toISOString(),
+              message,
+              ...(output ? { output } : {}),
+            },
           },
-          last_error: output || message,
-          last_command: {
-            action: payload.params.action,
-            status: 'failed',
-            timestamp: new Date().toISOString(),
-            message,
-            ...(output ? { output } : {}),
-          },
-        });
+          lifecycleGeneration,
+          currentStatus
+        );
+        if (!failure.applied) return supersededResult(branchId, payload.params.action);
       }
     } catch (patchError) {
       console.error(

@@ -15,8 +15,12 @@ vi.mock('antd', async () => {
     Space: ({ children }: { children: React.ReactNode }) =>
       React.createElement(React.Fragment, null, children),
     Spin: () => React.createElement('span', null, 'loading'),
-    Tooltip: ({ children }: { children: React.ReactNode }) =>
-      React.createElement(React.Fragment, null, children),
+    Tooltip: ({ children, title }: { children: React.ReactNode; title?: React.ReactNode }) =>
+      React.createElement(
+        'span',
+        { 'data-tooltip-title': typeof title === 'string' ? title : undefined },
+        children
+      ),
     Tag: Object.assign(
       ({ children, ...props }: React.HTMLAttributes<HTMLSpanElement>) =>
         React.createElement('span', props, children),
@@ -107,6 +111,68 @@ describe('EnvironmentPill', () => {
 
     expect(screen.queryByRole('link')).not.toBeInTheDocument();
     expect(screen.getByText('env').parentElement).toHaveStyle({ cursor: 'default' });
+  });
+
+  it('uses the first runtime URL as primary and exposes every additional named URL', () => {
+    render(
+      <EnvironmentPill
+        {...defaultProps}
+        branch={
+          {
+            ...branch,
+            app_url: 'https://stale-static.example.test',
+            environment_instance: {
+              status: 'running',
+              access_urls: [
+                { name: 'App', url: 'https://app.example.test' },
+                { name: 'Metrics', url: 'https://metrics.example.test' },
+              ],
+            },
+          } as Branch
+        }
+      />
+    );
+
+    expect(screen.getByRole('link', { name: 'Open App' })).toHaveAttribute(
+      'href',
+      'https://app.example.test'
+    );
+    expect(screen.getByRole('link', { name: 'Open Metrics' })).toHaveAttribute(
+      'href',
+      'https://metrics.example.test'
+    );
+    expect(screen.queryByRole('link', { name: /stale-static/ })).not.toBeInTheDocument();
+  });
+
+  it('distinguishes a pending health observation from no configured health check', () => {
+    const { rerender } = render(
+      <EnvironmentPill
+        {...defaultProps}
+        branch={
+          {
+            ...branch,
+            health_check_url: 'https://example.test/health',
+            environment_instance: { status: 'running' },
+          } as Branch
+        }
+      />
+    );
+
+    expect(screen.getByText('env').closest('[data-tooltip-title]')).toHaveAttribute(
+      'data-tooltip-title',
+      'Running (checking health)'
+    );
+
+    rerender(
+      <EnvironmentPill
+        {...defaultProps}
+        branch={{ ...branch, environment_instance: { status: 'running' } } as Branch}
+      />
+    );
+    expect(screen.getByText('env').closest('[data-tooltip-title]')).toHaveAttribute(
+      'data-tooltip-title',
+      'Running (health check not configured)'
+    );
   });
 
   it('shows a pointer only for an enabled configure control', () => {

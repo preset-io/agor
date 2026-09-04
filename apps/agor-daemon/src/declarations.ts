@@ -322,6 +322,10 @@ export interface BranchesServiceImpl extends Service<Branch, Partial<Branch>, Fe
           branchId?: BranchID;
           environment_update?: BranchEnvironmentUpdate;
           environmentUpdate?: BranchEnvironmentUpdate;
+          expected_environment_generation?: number;
+          expectedEnvironmentGeneration?: number;
+          expected_environment_status?: BranchEnvironmentUpdate['status'];
+          expectedEnvironmentStatus?: BranchEnvironmentUpdate['status'];
         },
     environmentUpdate?: BranchEnvironmentUpdate | FeathersParams,
     params?: FeathersParams
@@ -330,6 +334,13 @@ export interface BranchesServiceImpl extends Service<Branch, Partial<Branch>, Fe
   stopEnvironment(id: BranchID, params?: FeathersParams): Promise<Branch>;
   restartEnvironment(id: BranchID, params?: FeathersParams): Promise<Branch>;
   nukeEnvironment(id: BranchID, params?: FeathersParams): Promise<Branch>;
+  syncEnvironment(
+    id: BranchID,
+    params?: FeathersParams,
+    options?: { desiredRevision?: string }
+  ): Promise<Branch>;
+  /** Internal only; durable source-sync admission is not a client capability. */
+  reconcileEnvironmentSync(id: BranchID, params?: FeathersParams): Promise<void>;
   renderEnvironment(
     id: BranchID,
     data: { variant?: string } | undefined,

@@ -430,6 +430,7 @@ describe('writeAgorYml', () => {
         variants: {
           dev: {
             description: 'Development',
+            startup_timeout_ms: 2_700_000,
             start: 'pnpm dev',
             stop: 'pkill pnpm',
             health: 'http://localhost:3000/health',

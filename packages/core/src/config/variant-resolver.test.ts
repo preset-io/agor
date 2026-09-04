@@ -168,4 +168,31 @@ describe('resolveVariant', () => {
     );
     expect(merged).toEqual({ start: 'override-up', stop: 'down', nuke: 'kill' });
   });
+
+  it('inherits and overrides startup_timeout_ms', () => {
+    const environment = validateRepoEnvironment({
+      version: 2,
+      default: 'child',
+      variants: {
+        parent: { start: 'up', stop: 'down', startup_timeout_ms: 2_700_000 },
+        child: { extends: 'parent' },
+        faster: { extends: 'parent', startup_timeout_ms: 900_000 },
+      },
+    });
+
+    expect(resolveVariant(environment, 'child')?.startup_timeout_ms).toBe(2_700_000);
+    expect(resolveVariant(environment, 'faster')?.startup_timeout_ms).toBe(900_000);
+  });
+
+  it('rejects invalid startup_timeout_ms values at the config boundary', () => {
+    for (const startup_timeout_ms of [0, 999, 1.5, 24 * 60 * 60 * 1_000 + 1]) {
+      expect(() =>
+        validateRepoEnvironment({
+          version: 2,
+          default: 'dev',
+          variants: { dev: { start: 'up', stop: 'down', startup_timeout_ms } },
+        })
+      ).toThrow(/startup_timeout_ms/);
+    }
+  });
 });
