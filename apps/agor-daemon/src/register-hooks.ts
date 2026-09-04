@@ -569,6 +569,10 @@ export const TENANT_IDENTITY_ONLY_SERVICE_PATHS = [
   // short tenant DB units around metadata phases and never holds one across
   // that provider call.
   'gateway-channels',
+  // Gateway probes carry tenant identity while their repository opens a short
+  // read unit before provider I/O; they must not inherit an HTTP-long transaction.
+  'gateway-channels/test',
+  'gateway-channels/app-info',
 ] as const;
 
 /** Identity-only Claude endpoints that must clear the tenant freeze before side effects. */
