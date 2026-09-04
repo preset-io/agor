@@ -219,6 +219,8 @@ function createServiceHarness(appRbacEnabled = true) {
   const sessionsService = {
     find: vi.fn(async () => []),
     patch: vi.fn(async () => ({})),
+    archiveBranchSessions: vi.fn(async () => ({ affectedSessions: [], count: 0 })),
+    unarchiveBranchSessions: vi.fn(async () => ({ affectedSessions: [], count: 0 })),
   };
 
   const reposService = {
@@ -1414,7 +1416,7 @@ describe('BranchesService.unarchive', () => {
       position: { x: 111, y: 222 },
     });
 
-    expect(sessionsService.find).toHaveBeenCalledTimes(1);
+    expect(sessionsService.unarchiveBranchSessions).toHaveBeenCalledWith(branchId, userParams);
     expect(sessionsService.patch).not.toHaveBeenCalled();
   });
 
@@ -1528,10 +1530,8 @@ describe('BranchesService.archiveOrDelete', () => {
       params
     );
 
-    expect(sessionsService.find).toHaveBeenCalledWith({
-      query: { branch_id: branchId, $limit: 1000 },
-      paginate: false,
-    });
+    expect(sessionsService.archiveBranchSessions).toHaveBeenCalledWith(branchId, params);
+    expect(sessionsService.patch).not.toHaveBeenCalled();
     expect(boardObjectsService.findByBranchId).not.toHaveBeenCalled();
     expect(boardObjectsService.patch).not.toHaveBeenCalled();
     expect(branchesService.emit).toHaveBeenCalledTimes(1);

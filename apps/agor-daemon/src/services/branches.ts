@@ -83,6 +83,7 @@ import {
 import { resolveHostIpAddress } from '@agor/core/utils/host-ip';
 import { isAllowedHealthCheckUrl } from '@agor/core/utils/url';
 import { DrizzleService, type Query } from '../adapters/drizzle';
+import type { SessionsServiceImpl } from '../declarations.js';
 import { buildBranchCreatedAnalyticsProperties } from '../utils/analytics-payloads.js';
 import { consumeBranchArchiveDeleteAuthorization } from '../utils/branch-archive-delete-authorization.js';
 import { ensureCanControlBranchEnvironment } from '../utils/branch-authorization.js';
@@ -1795,27 +1796,15 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
         id: archivedBranch.branch_id,
       });
 
-      // Archive all sessions in this branch
-      // Use internal call (no provider) to bypass RBAC hooks that would ignore branch_id filter
-      const sessionsService = this.app.service('sessions');
-      const sessionsResult = await sessionsService.find({
-        query: { branch_id: id, $limit: 1000 },
-        paginate: false,
-      });
-      const sessions = Array.isArray(sessionsResult) ? sessionsResult : sessionsResult.data;
+      // Archive every active session owned by this branch through the session
+      // archive engine: no pagination cap, prior archive reasons preserved, one
+      // atomic write, one event per changed row.
+      const sessionsService = this.app.service('sessions') as unknown as SessionsServiceImpl;
+      const archivedSessions = await this.withTenantDatabase(params, () =>
+        sessionsService.archiveBranchSessions(id, params)
+      );
 
-      for (const session of sessions) {
-        await sessionsService.patch(
-          session.session_id,
-          {
-            archived: true,
-            archived_reason: 'branch_archived',
-          },
-          { provider: undefined } // Bypass RBAC - this is an internal cascade operation
-        );
-      }
-
-      console.log(`✅ Archived branch ${branch.name} and ${sessions.length} session(s)`);
+      console.log(`✅ Archived branch ${branch.name} and ${archivedSessions.count} session(s)`);
 
       retireBranchTerminals();
       dispatchFilesystemAction();
@@ -2055,32 +2044,14 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       }
     }
 
-    // Unarchive all sessions that were archived due to branch archival
-    // Use internal call (no provider) to bypass RBAC hooks that would ignore branch_id filter
-    const sessionsService = this.app.service('sessions');
-    const sessionsResult = await sessionsService.find({
-      query: {
-        branch_id: id,
-        archived: true,
-        archived_reason: 'branch_archived',
-        $limit: 1000,
-      },
-      paginate: false,
-    });
-    const sessions = Array.isArray(sessionsResult) ? sessionsResult : sessionsResult.data;
+    // Restore only the sessions this branch's archive caused. Sessions archived
+    // manually, by a parent, or by BTW completion stay archived.
+    const sessionsService = this.app.service('sessions') as unknown as SessionsServiceImpl;
+    const restoredSessions = await this.withTenantDatabase(params, () =>
+      sessionsService.unarchiveBranchSessions(id, params)
+    );
 
-    for (const session of sessions) {
-      await sessionsService.patch(
-        session.session_id,
-        {
-          archived: false,
-          archived_reason: undefined,
-        },
-        { provider: undefined } // Bypass RBAC - this is an internal cascade operation
-      );
-    }
-
-    console.log(`✅ Unarchived branch ${branch.name} and ${sessions.length} session(s)`);
+    console.log(`✅ Unarchived branch ${branch.name} and ${restoredSessions.count} session(s)`);
     return unarchivedBranch;
   }
 

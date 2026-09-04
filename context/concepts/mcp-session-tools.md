@@ -39,7 +39,7 @@ into SDK-private registration state.
 
 1. **`agor_sessions_prompt`** — continue, fork, or spawn from an existing session. `mode: 'continue' | 'fork' | 'subsession'`.
 2. **`agor_sessions_create`** — new session in a specified branch. Optional `initialPrompt`, agent override, permission mode.
-3. **`agor_sessions_update`** — rename, change status, refresh description.
+3. **`agor_sessions_update`** — rename, change status, refresh description. Archive state is rejected here; `agor_sessions_archive` / `agor_sessions_unarchive` own it and cascade to local and remote-created children (see `context/explorations/session-archive-cascade.md`).
 
 All enforce the branch-centric model (every session references a branch). Permission modes map to each agent's native settings.
 

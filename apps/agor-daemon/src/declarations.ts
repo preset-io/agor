@@ -47,6 +47,8 @@ import type {
   ExecuteTaskData,
   SessionArchiveOptions,
   SessionArchiveResult,
+  SessionBulkArchiveOptions,
+  SessionBulkArchivePreview,
 } from './services/sessions.js';
 
 // Re-export core types for convenience
@@ -110,6 +112,26 @@ export interface SessionsServiceImpl
     options?: SessionArchiveOptions,
     params?: FeathersParams
   ): Promise<SessionArchiveResult>;
+  archiveBtwSession(id: string, params?: FeathersParams): Promise<SessionArchiveResult>;
+  restorePromptedSession(id: string, params?: FeathersParams): Promise<SessionArchiveResult>;
+  archiveBranchSessions(
+    branchId: import('@agor/core/types').BranchID,
+    params?: FeathersParams
+  ): Promise<{ affectedSessions: import('@agor/core/types').Session[]; count: number }>;
+  unarchiveBranchSessions(
+    branchId: import('@agor/core/types').BranchID,
+    params?: FeathersParams
+  ): Promise<{ affectedSessions: import('@agor/core/types').Session[]; count: number }>;
+  previewBulkArchive(
+    roots: import('@agor/core/types').Session[],
+    options: SessionBulkArchiveOptions,
+    params?: FeathersParams
+  ): Promise<SessionBulkArchivePreview>;
+  bulkArchive(
+    roots: import('@agor/core/types').Session[],
+    options: SessionBulkArchiveOptions,
+    params?: FeathersParams
+  ): Promise<SessionArchiveResult & { preview: SessionBulkArchivePreview }>;
   enrichRemoteRelationships(
     sessionList: import('@agor/core/types').Session[]
   ): Promise<import('@agor/core/types').Session[]>;

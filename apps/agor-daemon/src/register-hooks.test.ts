@@ -1336,9 +1336,10 @@ describe('isPromptFlowPatchOnly', () => {
       expect(isPromptFlowPatchOnly({ tasks: ['task-1', 'task-2'] })).toBe(true);
     });
 
-    it('accepts the prompt-route auto-unarchive shape', () => {
-      // register-routes.ts: /sessions/:id/prompt auto-unarchives before sending
-      expect(isPromptFlowPatchOnly({ archived: false, archived_reason: undefined })).toBe(true);
+    it('no longer treats archive fields as prompt-flow bookkeeping', () => {
+      // register-routes.ts: /sessions/:id/prompt restores through the session
+      // archive engine; generic archive patches are rejected by the service.
+      expect(isPromptFlowPatchOnly({ archived: false, archived_reason: undefined })).toBe(false);
     });
 
     it('accepts the stop-route idle shape', () => {
