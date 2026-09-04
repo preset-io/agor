@@ -14,6 +14,14 @@ export interface MarketplaceCredentialPresentation {
   detail: string;
 }
 
+function credentialDetailStatus(credential: MCPMarketplaceCredential) {
+  if (credential.detail_status) return credential.detail_status;
+  if (credential.status === 'expired' || credential.status === 'attention') {
+    return 'reauthentication_required';
+  }
+  return credential.status;
+}
+
 /** One production vocabulary for every caller-scoped Marketplace surface. */
 export function marketplaceCredentialPresentation(
   credential?: MCPMarketplaceCredential,
@@ -38,7 +46,7 @@ export function marketplaceCredentialPresentation(
     };
   }
 
-  switch (credential.status) {
+  switch (credentialDetailStatus(credential)) {
     case 'active':
       return {
         label: 'Connected',
@@ -106,13 +114,13 @@ export function marketplaceCredentialActionLabel(
 ): 'Connect' | 'Reconnect' | 'Settings' {
   if (!serverEnabled) return 'Settings';
   if (credential.method === 'oauth') {
-    if (credential.status === 'reauthentication_required') return 'Reconnect';
-    if (credential.status === 'not_connected') return 'Connect';
+    if (credentialDetailStatus(credential) === 'reauthentication_required') return 'Reconnect';
+    if (credentialDetailStatus(credential) === 'not_connected') return 'Connect';
     return 'Settings';
   }
   // Marketplace settings owns the existing secure editor. Do not promise a
   // one-click rotation when the action opens a form that can edit or clear it.
-  return credential.status === 'configured' ? 'Settings' : 'Connect';
+  return credentialDetailStatus(credential) === 'configured' ? 'Settings' : 'Connect';
 }
 
 export function marketplaceCredentialNeedsRecovery(
@@ -122,16 +130,17 @@ export function marketplaceCredentialNeedsRecovery(
   return (
     serverEnabled &&
     credential.method === 'oauth' &&
-    (credential.status === 'not_connected' || credential.status === 'reauthentication_required')
+    (credentialDetailStatus(credential) === 'not_connected' ||
+      credentialDetailStatus(credential) === 'reauthentication_required')
   );
 }
 
 export function marketplaceCredentialIsUsable(credential: MCPMarketplaceCredential): boolean {
   return (
-    credential.status === 'active' ||
-    credential.status === 'refreshable' ||
-    credential.status === 'refreshing' ||
-    credential.status === 'configured'
+    credentialDetailStatus(credential) === 'active' ||
+    credentialDetailStatus(credential) === 'refreshable' ||
+    credentialDetailStatus(credential) === 'refreshing' ||
+    credentialDetailStatus(credential) === 'configured'
   );
 }
 

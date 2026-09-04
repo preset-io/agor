@@ -34,7 +34,7 @@ import {
 } from '@agor-live/client';
 import { Alert, Button, ConfigProvider, theme } from 'antd';
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { BrowserRouter, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
+import { BrowserRouter, Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import { AVAILABLE_AGENTS } from './components/AgentSelectionGrid';
 import type { BranchUpdate } from './components/BranchModal/tabs/GeneralTab';
 import { ErrorBoundary, setCrashContext } from './components/ErrorBoundary';
@@ -86,7 +86,9 @@ import type { RouteSurfaceId } from './surfaces/surfaceRegistry';
 import {
   ARTIFACT_FULLSCREEN_ROUTE_PATHS,
   CATALOG_ROUTE_PATHS,
+  catalogPathForMarketplaceCompat,
   KNOWLEDGE_ROUTE_PATHS,
+  MARKETPLACE_COMPAT_ROUTE_PATHS,
   RBAC_POLICY_PROTOTYPE_ROUTE_PATH,
   routeUsesDeviceRouter,
 } from './surfaces/surfaceRegistry';
@@ -323,6 +325,12 @@ function DeviceRouter() {
   }, [location.pathname, navigate]);
 
   return null;
+}
+
+function MarketplaceCompatRedirect() {
+  const location = useLocation();
+  const pathname = catalogPathForMarketplaceCompat(location.pathname) ?? '/catalog';
+  return <Navigate replace to={{ pathname, search: location.search, hash: location.hash }} />;
 }
 
 function AppContent() {
@@ -2380,6 +2388,9 @@ function AppContent() {
                 the tenant's board/session store. */}
           {CATALOG_ROUTE_PATHS.map((path) => (
             <Route key={path} path={path} element={marketplacePageElement} />
+          ))}
+          {MARKETPLACE_COMPAT_ROUTE_PATHS.map((path) => (
+            <Route key={path} path={path} element={<MarketplaceCompatRedirect />} />
           ))}
 
           {/* Lightweight artifact fullscreen surface. Uses the shared auth shell,

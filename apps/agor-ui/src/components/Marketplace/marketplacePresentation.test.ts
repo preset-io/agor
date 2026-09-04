@@ -30,11 +30,19 @@ describe('Marketplace presentation vocabulary', () => {
   });
 
   it('offers reconnect only when the OAuth grant must be replaced', () => {
-    const oauth = (status: MCPMarketplaceCredential['status']): MCPMarketplaceCredential => ({
+    const oauth = (
+      detailStatus: NonNullable<MCPMarketplaceCredential['detail_status']>
+    ): MCPMarketplaceCredential => ({
       mcp_server_id: 'server-1',
       server_name: 'server',
       method: 'oauth',
-      status,
+      status:
+        detailStatus === 'refreshing' || detailStatus === 'reauthentication_required'
+          ? 'attention'
+          : detailStatus === 'refreshable'
+            ? 'expired'
+            : detailStatus,
+      detail_status: detailStatus,
     });
 
     expect(marketplaceCredentialActionLabel(oauth('reauthentication_required'))).toBe('Reconnect');

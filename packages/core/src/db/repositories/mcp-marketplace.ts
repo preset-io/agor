@@ -142,9 +142,9 @@ function credentialFrom(
   const grantUpdatedAt = iso(row.credential_updated_at);
   const expiresAt = iso(row.credential_expires_at);
   const expiresAtMs = expiresAt ? Date.parse(expiresAt) : undefined;
-  let status: MCPMarketplaceCredential['status'];
+  let detailStatus: NonNullable<MCPMarketplaceCredential['detail_status']>;
   if (!grantCreatedAt) {
-    status = 'not_connected';
+    detailStatus = 'not_connected';
   } else {
     // This callback is the daemon's canonical binding/mode authority. When it
     // is unavailable or fails, the closed projection fails safe rather than
@@ -168,7 +168,7 @@ function credentialFrom(
         refreshStatus !== 'invalid'
     );
 
-    status = !authorized
+    detailStatus = !authorized
       ? 'reauthentication_required'
       : refreshStatus === 'refreshing' && refreshable
         ? 'refreshing'
@@ -179,6 +179,15 @@ function credentialFrom(
             : 'reauthentication_required';
   }
 
+  const status: MCPMarketplaceCredential['status'] =
+    detailStatus === 'refreshing' || detailStatus === 'reauthentication_required'
+      ? 'attention'
+      : detailStatus === 'refreshable'
+        ? expiresAtMs !== undefined && expiresAtMs <= now
+          ? 'expired'
+          : 'active'
+        : detailStatus;
+
   return {
     mcp_server_id: row.mcp_server_id as MCPServerID,
     server_name: row.name,
@@ -187,6 +196,7 @@ function credentialFrom(
       : {}),
     method,
     status,
+    detail_status: detailStatus,
     ...(expiresAt ? { expires_at: expiresAt } : {}),
     ...(grantCreatedAt ? { created_at: grantCreatedAt } : {}),
     ...(grantUpdatedAt ? { updated_at: grantUpdatedAt } : {}),

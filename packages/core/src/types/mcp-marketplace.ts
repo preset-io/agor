@@ -56,13 +56,24 @@ export type MCPMarketplaceCredentialMethod = (typeof MCP_MARKETPLACE_CREDENTIAL_
 
 export const MCP_MARKETPLACE_CREDENTIAL_STATUSES = [
   'active',
+  'expired',
+  'attention',
+  'not_connected',
+  'configured',
+] as const;
+export type MCPMarketplaceCredentialStatus = (typeof MCP_MARKETPLACE_CREDENTIAL_STATUSES)[number];
+
+/** Additive credential detail; `status` retains the original wire contract. */
+export const MCP_MARKETPLACE_CREDENTIAL_DETAIL_STATUSES = [
+  'active',
   'refreshable',
   'refreshing',
   'reauthentication_required',
   'not_connected',
   'configured',
 ] as const;
-export type MCPMarketplaceCredentialStatus = (typeof MCP_MARKETPLACE_CREDENTIAL_STATUSES)[number];
+export type MCPMarketplaceCredentialDetailStatus =
+  (typeof MCP_MARKETPLACE_CREDENTIAL_DETAIL_STATUSES)[number];
 
 /**
  * Metadata-only credential projection. It can say whether a credential exists
@@ -73,7 +84,10 @@ export interface MCPMarketplaceCredential {
   server_name: string;
   server_display_name?: string;
   method: MCPMarketplaceCredentialMethod;
+  /** Backward-compatible coarse status from the original Marketplace DTO. */
   status: MCPMarketplaceCredentialStatus;
+  /** Optional, additive status used by newer Catalog clients. */
+  detail_status?: MCPMarketplaceCredentialDetailStatus;
   expires_at?: string;
   created_at?: string;
   updated_at?: string;
