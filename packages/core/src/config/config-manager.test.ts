@@ -319,6 +319,44 @@ describe('resolveEffectiveConfig', () => {
 });
 
 describe('assertValidEffectiveExecutionConfig', () => {
+  it('requires branch RBAC in auth-resolved multi-tenant deployments', () => {
+    expect(() =>
+      assertValidEffectiveExecutionConfig(
+        resolveEffectiveConfig(
+          {
+            execution: { unix_user_mode: 'simple', branch_rbac: false },
+            multi_tenancy: { mode: 'required_from_auth' },
+          },
+          {}
+        )
+      )
+    ).toThrow(/required_from_auth requires execution\.branch_rbac: true/);
+
+    expect(() =>
+      assertValidEffectiveExecutionConfig(
+        resolveEffectiveConfig(
+          {
+            execution: { unix_user_mode: 'simple', branch_rbac: true },
+            multi_tenancy: { mode: 'required_from_auth' },
+          },
+          {}
+        )
+      )
+    ).not.toThrow();
+
+    expect(() =>
+      assertValidEffectiveExecutionConfig(
+        resolveEffectiveConfig(
+          {
+            execution: { unix_user_mode: 'sandbox', branch_rbac: false },
+            multi_tenancy: { mode: 'required_from_auth' },
+          },
+          {}
+        )
+      )
+    ).not.toThrow();
+  });
+
   it('requires delegated mode to name an external execution substrate', () => {
     expect(() =>
       assertValidEffectiveExecutionConfig({ execution: { unix_user_mode: 'delegated' } })
@@ -524,6 +562,15 @@ describe('loadConfig', () => {
     );
     __resetConfigCacheForTests();
     await expect(loadConfig()).rejects.toThrow(/preserve_canonical_home_alias must be a boolean/);
+  });
+
+  it('rejects a non-boolean branch RBAC setting instead of silently disabling it', async () => {
+    const agorDir = path.join(tempDir, '.agor');
+    const configPath = path.join(agorDir, 'config.yaml');
+    await fs.mkdir(agorDir, { recursive: true });
+    await fs.writeFile(configPath, 'execution:\n  branch_rbac: "true"\n', 'utf-8');
+
+    await expect(loadConfig()).rejects.toThrow(/execution\.branch_rbac must be a boolean/);
   });
 
   it('accepts branch_storage.borrow_base_objects and rejects a non-boolean value', async () => {

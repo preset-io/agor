@@ -883,6 +883,12 @@ function validateConfig(config: AgorConfig): void {
     'home',
   ]);
   if (
+    config.execution?.branch_rbac !== undefined &&
+    typeof config.execution.branch_rbac !== 'boolean'
+  ) {
+    throw new Error('Config error: execution.branch_rbac must be a boolean');
+  }
+  if (
     config.execution?.sandbox?.preserve_canonical_home_alias !== undefined &&
     typeof config.execution.sandbox.preserve_canonical_home_alias !== 'boolean'
   ) {
@@ -1602,12 +1608,24 @@ export function resolveEffectiveConfig(
 }
 
 /**
- * Reject execution combinations that the local filesystem sandbox cannot
- * enforce. Call this on the resolved effective config so environment-derived
- * settings are covered as well as YAML settings.
+ * Reject execution and authorization combinations that cannot satisfy the
+ * selected deployment contract. Call this on the resolved effective config so
+ * environment-derived settings are covered as well as YAML settings.
  */
 export function assertValidEffectiveExecutionConfig(config: AgorConfig): void {
   const execution = config.execution;
+
+  // Tenant identity prevents cross-tenant reads; it does not authorize one
+  // member to every board, branch, Session, file, or executor in that tenant.
+  // Validate this after environment projection so the named `sandbox` mode's
+  // branch-RBAC implication and AGOR_RBAC_ENABLED are both honored.
+  if (config.multi_tenancy?.mode === 'required_from_auth' && execution?.branch_rbac !== true) {
+    throw new Error(
+      'Config error: multi_tenancy.required_from_auth requires execution.branch_rbac: true; ' +
+        'tenant isolation is not a substitute for board and branch authorization.'
+    );
+  }
+
   if (!execution) return;
 
   const response = resolveExecutorResponseConfig(execution.executor_response);

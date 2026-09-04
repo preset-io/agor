@@ -611,7 +611,11 @@ export interface AgorExecutionSettings {
   /** Execution mode: trusted local, delegated external, or local Linux sandbox. */
   unix_user_mode?: UnixUserMode;
 
-  /** Enable branch RBAC and ownership enforcement (default: false). */
+  /**
+   * Enable branch RBAC and ownership enforcement (default: false for static
+   * deployments). Required in auth-resolved multi-tenant deployments and
+   * implied by the named `sandbox` execution mode.
+   */
   branch_rbac?: boolean;
 
   /**
