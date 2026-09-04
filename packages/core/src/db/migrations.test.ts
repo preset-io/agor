@@ -161,6 +161,21 @@ describe('Postgres migrations', () => {
     ).toEqual([]);
   });
 
+  it('enforces the PostgreSQL DCR authority as an offline cohort cutover after current main', () => {
+    expect(
+      pendingOfflineCutoverMigrations('postgresql', {
+        applied: ['0100_claude_oauth_attempts'],
+        pending: ['0101_mcp_oauth_client_registrations'],
+      })
+    ).toEqual(['0101_mcp_oauth_client_registrations']);
+    expect(
+      pendingOfflineCutoverMigrations('postgresql', {
+        applied: [],
+        pending: ['0000_cuddly_captain_america', '0101_mcp_oauth_client_registrations'],
+      })
+    ).toEqual([]);
+  });
+
   it('assigns GitHub install state unique post-HA migration watermarks', async () => {
     const [postgresJournal, sqliteJournal] = await readJournals();
 
@@ -905,36 +920,29 @@ describe('MCP OAuth pending-flow migrations', () => {
 });
 
 describe('MCP OAuth client-registration migrations', () => {
-  it('creates only sealed DCR material in the SQLite compatibility schema', async () => {
-    const client = createClient({ url: ':memory:' });
-    try {
-      await client.execute('PRAGMA foreign_keys = OFF');
-      const migration = await readFile(
-        new URL('../../drizzle/sqlite/0103_mcp_oauth_client_registrations.sql', import.meta.url),
-        'utf8'
-      );
-      for (const statement of migration.split('--> statement-breakpoint')) {
-        if (statement.trim()) await client.execute(statement);
-      }
-
-      const columns = await client.execute('PRAGMA table_info(mcp_oauth_client_registrations)');
-      const columnNames = columns.rows.map((column) => column.name);
-      expect(columnNames).toContain('sealed_material');
-      expect(columnNames).toContain('binding_fingerprint');
-      expect(columnNames).toContain('claim_generation');
-      expect(columnNames).toContain('lease_expires_at');
-      expect(columnNames).toContain('dispatched_at');
-      expect(columnNames).not.toContain('tenant_id');
-      expect(columnNames).not.toContain('client_id');
-      expect(columnNames).not.toContain('client_secret');
-    } finally {
-      client.close();
-    }
+  it('does not advance SQLite schema history for PostgreSQL-only DCR authority', async () => {
+    const [, sqliteJournal] = await readJournals();
+    expect(sqliteJournal.entries.at(-1)).toMatchObject({
+      idx: 103,
+      tag: '0103_claude_oauth_attempts',
+    });
+    expect(sqliteJournal.entries.some(({ tag }) => tag.includes('client_registrations'))).toBe(
+      false
+    );
+    expect(await import('./schema.sqlite')).not.toHaveProperty('mcpOauthClientRegistrations');
   });
 
-  it('binds the PostgreSQL authority to tenant/server generation with forced RLS', async () => {
+  it('follows current main and binds PostgreSQL authority to tenant/server UUID with forced RLS', async () => {
+    const [postgresJournal] = await readJournals();
+    expect(postgresJournal.entries.slice(-2)).toEqual([
+      expect.objectContaining({ idx: 100, tag: '0100_claude_oauth_attempts' }),
+      expect.objectContaining({ idx: 101, tag: '0101_mcp_oauth_client_registrations' }),
+    ]);
+    expect(postgresJournal.entries.at(-1)!.when).toBeGreaterThan(
+      postgresJournal.entries.at(-2)!.when
+    );
     const migration = await readFile(
-      new URL('../../drizzle/postgres/0100_mcp_oauth_client_registrations.sql', import.meta.url),
+      new URL('../../drizzle/postgres/0101_mcp_oauth_client_registrations.sql', import.meta.url),
       'utf8'
     );
     expect(migration).toContain('FOREIGN KEY ("tenant_id", "mcp_server_id")');
@@ -946,6 +954,11 @@ describe('MCP OAuth client-registration migrations', () => {
     expect(migration).toContain('"sealed_material" text');
     expect(migration).toContain('"claim_generation" bigint');
     expect(migration).toContain('"lease_expires_at" timestamp with time zone');
+    expect(migration).toContain('mcp_oauth_client_registrations_registering_maintenance_idx');
+    expect(migration).toContain('mcp_oauth_client_registrations_registered_maintenance_idx');
+    expect(migration).toContain('mcp_oauth_client_registrations_terminal_maintenance_idx');
+    expect(migration).not.toContain('CREATE SEQUENCE');
+    expect(migration).not.toContain('registration_generation');
     expect(migration).not.toMatch(/"client_id"\s/);
     expect(migration).not.toMatch(/"client_secret"\s/);
   });

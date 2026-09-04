@@ -280,6 +280,10 @@ export const REALTIME_PUBLISH_POLICY = {
     audience: 'none',
     why: 'Signalled by the native oauth:disconnected packet.',
   },
+  'mcp-servers/oauth-client-registration-reset': {
+    audience: 'none',
+    why: 'Admin-only OAuth registration recovery control plane.',
+  },
   'mcp-servers/oauth-status': { audience: 'none', why: 'Per-user token status.' },
   'mcp-servers/oauth-attempt-status': {
     audience: 'none',

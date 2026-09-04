@@ -1,3 +1,4 @@
+import { isPublicHttpUrl } from '../utils/url';
 import {
   hasContainedClaudeRuntimeCredentials,
   hasCrossReplicaExecutorCredentialLock,
@@ -74,7 +75,8 @@ export type ResolvedDeploymentConfig =
         taskRuntimeReconciliation: true;
         knowledgeEmbeddingIndexer: true;
         statelessMcp: true;
-        mcpOAuth: true;
+        /** Browser OAuth requires a trusted, public HTTPS callback origin. */
+        mcpOAuth: boolean;
         completionCallbackDurableAdmission: true;
         completionCallbackPreAdmissionRecovery: false;
         widgetResolutionDurableClaim: true;
@@ -130,6 +132,32 @@ function envBoolean(env: DeploymentEnv, name: string): boolean | undefined {
   if (value === 'true') return true;
   if (value === 'false') return false;
   throw new Error(`Config error: ${name} must be true or false`);
+}
+
+/**
+ * HA browser OAuth is advertised only when its redirect origin is explicitly
+ * public and HTTPS. `daemon.public_url` is intentionally excluded: it is the
+ * executor/backend callback URL and may be an internal service address.
+ */
+export function hasSafeHaMcpOAuthPublicOrigin(
+  config: AgorConfig,
+  env: DeploymentEnv = process.env
+): boolean {
+  const raw = env.AGOR_BASE_URL ?? config.daemon?.base_url ?? config.ui?.base_url;
+  if (!raw) return false;
+  try {
+    const url = new URL(raw);
+    return (
+      url.protocol === 'https:' &&
+      isPublicHttpUrl(url.toString()) &&
+      !url.username &&
+      !url.password &&
+      !url.search &&
+      !url.hash
+    );
+  } catch {
+    return false;
+  }
 }
 
 function positiveInteger(value: number, path: string): number {
@@ -477,7 +505,7 @@ export function resolveDeploymentConfig(
       taskRuntimeReconciliation: true,
       knowledgeEmbeddingIndexer: true,
       statelessMcp: true,
-      mcpOAuth: true,
+      mcpOAuth: hasSafeHaMcpOAuthPublicOrigin(config, env),
       completionCallbackDurableAdmission: true,
       completionCallbackPreAdmissionRecovery: false,
       widgetResolutionDurableClaim: true,

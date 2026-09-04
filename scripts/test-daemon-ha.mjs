@@ -20,6 +20,7 @@ for (const name of [
 
 const ingress = process.env.HA_URL ?? `http://127.0.0.1:${process.env.HA_PORT ?? '3030'}`;
 const publicOrigin = process.env.AGOR_HA_PUBLIC_ORIGIN ?? ingress;
+const mcpOAuthExpected = new URL(publicOrigin).protocol === 'https:';
 const daemonA = `http://127.0.0.1:${process.env.HA_DAEMON_A_PORT ?? '13031'}`;
 const daemonB = `http://127.0.0.1:${process.env.HA_DAEMON_B_PORT ?? '13032'}`;
 const project = process.env.COMPOSE_PROJECT_NAME ?? 'agor-ha-integration';
@@ -627,9 +628,7 @@ try {
   const oauthIngressLogs = dockerOutput('logs', '--no-color', 'ingress');
   assert(!oauthIngressLogs.includes(invalidOAuthState), 'nginx logs retained raw MCP OAuth state');
   assert(!oauthIngressLogs.includes(invalidOAuthCode), 'nginx logs retained raw OAuth code');
-  console.log(
-    'ok - fleet-routed MCP OAuth callback is enabled and ingress logs redact capabilities'
-  );
+  console.log('ok - MCP OAuth callback route is fleet-routed and ingress logs redact secrets');
 
   if (process.env.AGOR_HA_INTEGRATION_FAILURES === '1') {
     // nginx's built-in error format includes the complete request and upstream
@@ -709,7 +708,7 @@ try {
     assert.equal(health.deployment.capabilities.taskRuntimeReconciliation, true);
     assert.equal(health.deployment.capabilities.knowledgeEmbeddingIndexer, true);
     assert.equal(health.deployment.capabilities.statelessMcp, true);
-    assert.equal(health.deployment.capabilities.mcpOAuth, true);
+    assert.equal(health.deployment.capabilities.mcpOAuth, mcpOAuthExpected);
     assert.equal(health.deployment.capabilities.completionCallbackDurableAdmission, true);
     assert.equal(health.deployment.capabilities.completionCallbackPreAdmissionRecovery, false);
     assert.equal(health.deployment.capabilities.widgetResolutionDurableClaim, true);
@@ -1281,7 +1280,7 @@ try {
   assert.equal(health.deployment.supportProfile, 'constrained-active-active');
   assert.equal(health.deployment.capabilities.taskExecution, true);
   assert.equal(health.deployment.capabilities.agorManagedInteractivePermissions, true);
-  assert.equal(health.deployment.capabilities.mcpOAuth, true);
+  assert.equal(health.deployment.capabilities.mcpOAuth, mcpOAuthExpected);
   assert.deepEqual(health.features.branchStorage, {
     defaultMode: 'clone',
     allowedModes: ['clone'],

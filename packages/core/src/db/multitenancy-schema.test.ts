@@ -45,7 +45,7 @@ function migrationTenantTables(): string[] {
     'packages/core/drizzle/postgres/0078_mcp_oauth_pending_flows.sql'
   );
   const mcpOauthClientRegistrationMigration = readRepoFile(
-    'packages/core/drizzle/postgres/0100_mcp_oauth_client_registrations.sql'
+    'packages/core/drizzle/postgres/0101_mcp_oauth_client_registrations.sql'
   );
   const githubInstallStateMigration = readRepoFile(
     'packages/core/drizzle/postgres/0082_github_install_state.sql'
@@ -99,7 +99,7 @@ function rlsPolicyTables(): string[] {
     readRepoFile('packages/core/drizzle/postgres/0075_executor_session_token_authority.sql'),
     readRepoFile('packages/core/drizzle/postgres/0076_gateway_listener_ha.sql'),
     readRepoFile('packages/core/drizzle/postgres/0078_mcp_oauth_pending_flows.sql'),
-    readRepoFile('packages/core/drizzle/postgres/0100_mcp_oauth_client_registrations.sql'),
+    readRepoFile('packages/core/drizzle/postgres/0101_mcp_oauth_client_registrations.sql'),
     readRepoFile('packages/core/drizzle/postgres/0082_github_install_state.sql'),
     readRepoFile('packages/core/drizzle/postgres/0094_discord_gateway_hybrid.sql'),
     readRepoFile('packages/core/drizzle/postgres/0090_external_user_identities.sql'),

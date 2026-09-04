@@ -34,6 +34,15 @@ describe('classifyMCPOAuthCompletionFailure', () => {
       )
     ).toEqual({ status: 'failed', ambiguous: false, failureCode: 'provider_rejected' });
     expect(
+      classifyMCPOAuthCompletionFailure(
+        new OAuthCodeExchangeError('stale client', false, 'client_registration_invalidated', true)
+      )
+    ).toEqual({
+      status: 'failed',
+      ambiguous: false,
+      failureCode: 'client_registration_invalidated',
+    });
+    expect(
       classifyMCPOAuthCompletionFailure(new OAuthFlowAuthorizationChangedError(false))
     ).toEqual({ status: 'failed', ambiguous: false, failureCode: 'authorization_changed' });
     expect(classifyMCPOAuthCompletionFailure(new OAuthFlowAuthorizationChangedError(true))).toEqual(

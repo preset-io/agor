@@ -4,12 +4,15 @@ import {
   createDatabase,
   createTenantScopedDatabaseProxy,
   executeRaw,
+  generateId,
   initializeDatabase,
   isPostgresDatabase,
+  MCPOAuthClientRegistrationRepository,
   MCPServerRepository,
   type RawDatabase,
   rawRows,
   runWithTenantDatabaseScope,
+  runWithTenantDatabaseTransaction,
   sql,
   type TenantScopeAwareDatabase,
   UserMCPOAuthTokenRepository,
@@ -90,11 +93,11 @@ type Replica = {
   emitted: Array<{ room: string; event: string; value: unknown }>;
 };
 
-function params(user: User): AuthenticatedParams {
+function params(user: User, requestTenantId = tenantId): AuthenticatedParams {
   return {
     provider: 'rest',
     user,
-    tenant: { tenant_id: tenantId, source: 'authenticated' },
+    tenant: { tenant_id: requestTenantId, source: 'authenticated' },
     authentication: { strategy: 'jwt', accessToken: 'test-authority-token' },
   } as AuthenticatedParams;
 }
@@ -138,7 +141,10 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
         branchRbacEnabled: false,
         allowSuperadmin: false,
         requireAuth: async (context) => context,
-        deployment: { mode: 'ha' } as RegisterServicesContext['deployment'],
+        deployment: {
+          mode: 'ha',
+          capabilities: { mcpOAuth: true },
+        } as RegisterServicesContext['deployment'],
         mcpOAuthFetch: async (_input, _init, assertCurrent) => {
           assertCurrent?.();
           return new Response('', {
@@ -290,6 +296,73 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
             !JSON.stringify(value).includes('fixture-access-token')
         )
       ).toBe(true);
+    });
+
+    it('lets only a current-tenant admin reset DCR authority before callback completion', async () => {
+      const registrationId = generateId();
+      await runWithTenantDatabaseTransaction(replicaA.db, tenantId, (scoped) =>
+        new MCPOAuthClientRegistrationRepository(scoped).claimOrObserve({
+          tenantId,
+          registrationId,
+          mcpServerId: serverId,
+          bindingFingerprint: 'a'.repeat(64),
+          serverConfigVersion: 1,
+          envelopeVersion: 1,
+          claimId: generateId(),
+          leaseMs: 60_000,
+        })
+      );
+      const member = await runWithTenantDatabaseScope(replicaA.db, tenantId, (scoped) =>
+        new UsersRepository(scoped).create({
+          email: `${crypto.randomUUID()}@example.test`,
+          name: 'OAuth reset member',
+          role: 'member',
+        })
+      );
+      const otherTenantId = `mcp-oauth-reset-other-${crypto.randomUUID()}`;
+      const otherAdmin = await runWithTenantDatabaseScope(replicaA.db, otherTenantId, (scoped) =>
+        new UsersRepository(scoped).create({
+          email: `${crypto.randomUUID()}@example.test`,
+          name: 'Other tenant OAuth reset admin',
+          role: 'admin',
+        })
+      );
+
+      await expect(
+        replicaB.app
+          .service('mcp-servers/oauth-client-registration-reset')
+          .create({ mcp_server_id: serverId }, params(member))
+      ).rejects.toMatchObject({ code: 403 });
+      await expect(
+        replicaB.app
+          .service('mcp-servers/oauth-client-registration-reset')
+          .create({ mcp_server_id: serverId }, params(otherAdmin, otherTenantId))
+      ).rejects.toMatchObject({ code: 404 });
+
+      await expect(
+        replicaB.app
+          .service('mcp-servers/oauth-client-registration-reset')
+          .create({ mcp_server_id: serverId }, params(user))
+      ).resolves.toEqual({ success: true });
+
+      const rows = await runWithTenantDatabaseScope(replicaA.db, tenantId, async (scoped) =>
+        rawRows(
+          await executeRaw(
+            scoped,
+            sql`SELECT status, is_current, failure_code, sealed_material
+                FROM mcp_oauth_client_registrations
+                WHERE registration_id = ${registrationId}`
+          )
+        )
+      );
+      expect(rows).toEqual([
+        expect.objectContaining({
+          status: 'superseded',
+          is_current: false,
+          failure_code: 'server_configuration_changed',
+          sealed_material: null,
+        }),
+      ]);
     });
   }
 );

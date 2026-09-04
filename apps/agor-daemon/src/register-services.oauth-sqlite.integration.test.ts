@@ -1878,6 +1878,28 @@ describe('SQLite saved-row OAuth authority', () => {
     expect(harness.emittedBrowserEvents).toEqual([]);
   });
 
+  it('does not activate constrained-HA OAuth when public-origin capability is false', async () => {
+    const provider = await createTestProvider();
+    providers.push(provider);
+    const harness = await createHarness(provider, undefined, {
+      deployment: {
+        mode: 'ha',
+        capabilities: { mcpOAuth: false },
+      } as RegisterServicesContext['deployment'],
+    });
+    databases.push(harness.rawDb);
+
+    const result = await harness.app
+      .service('mcp-servers/oauth-start')
+      .create({ mcp_server_id: harness.server.mcp_server_id }, paramsFor(harness));
+
+    expect(result).toMatchObject({
+      success: false,
+      recovery: { category: 'redirect_configuration_required' },
+    });
+    expect(provider.requests).toEqual([]);
+  });
+
   it('routes saved-row DCR through the durable fleet authority before creating a flow', async () => {
     const provider = await createTestProvider({ rejectDynamicRegistration: true });
     providers.push(provider);
@@ -1900,9 +1922,12 @@ describe('SQLite saved-row OAuth authority', () => {
       .mockResolvedValueOnce([catalogEntry])
       .mockResolvedValueOnce([catalogEntry]);
     const resolve = vi.fn(async () => ({
-      client_id: 'durably-reused-client',
-      redirect_uris: ['https://agor.example.test/mcp-servers/oauth-callback'],
-      token_endpoint_auth_method: 'none',
+      registration: {
+        client_id: 'durably-reused-client',
+        redirect_uris: ['https://agor.example.test/mcp-servers/oauth-callback'],
+        token_endpoint_auth_method: 'none',
+      },
+      registrationId: crypto.randomUUID(),
     }));
     const durableClientRegistrationAuthority = {
       resolve,
@@ -1939,6 +1964,19 @@ describe('SQLite saved-row OAuth authority', () => {
       })
     );
     expect(provider.requests.filter((entry) => entry.path === '/register')).toEqual([]);
+  });
+
+  it('keeps SQLite DCR process-local and refuses the PostgreSQL registration reset path', async () => {
+    const provider = await createTestProvider();
+    providers.push(provider);
+    const harness = await createHarness(provider);
+    databases.push(harness.rawDb);
+
+    await expect(
+      harness.app
+        .service('mcp-servers/oauth-client-registration-reset')
+        .create({ mcp_server_id: harness.server.mcp_server_id }, paramsFor(harness))
+    ).rejects.toThrow(/only on PostgreSQL/i);
   });
 
   it('derives Marketplace policy and all advertised scopes at the service DCR boundary', async () => {

@@ -187,6 +187,7 @@ describe('register-services OAuth callback URL regression', () => {
       'mcp-servers/oauth-status',
       'mcp-servers/oauth-attempt-status',
       'mcp-servers/oauth-auth-headers',
+      'mcp-servers/oauth-client-registration-reset',
     ] as const;
     const registeredAuthServices = new Set(
       Array.from(

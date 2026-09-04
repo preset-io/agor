@@ -140,9 +140,9 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
         authorityB.resolve(input, register),
       ]);
       expect(registrations).toBe(1);
-      expect(fromA.client_id).toBe('fleet-client-id');
-      expect(fromB.client_id).toBe('fleet-client-id');
-      expect(fromB.client_secret).toBe('fleet-client-secret');
+      expect(fromA.registration.client_id).toBe('fleet-client-id');
+      expect(fromB.registration.client_id).toBe('fleet-client-id');
+      expect(fromB.registration.client_secret).toBe('fleet-client-secret');
 
       const stored = await runWithTenantDatabaseScope(dbB, seedRow.tenantId, async (scoped) => {
         const result = await executeRaw(
@@ -187,7 +187,39 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       expect(current).toMatchObject({ status: 'registered', isCurrent: true });
     });
 
-    it('recovers an undispatched lease after replica loss without rotating generation', async () => {
+    it('CAS-invalidates only the rejected registration ID and cleanly re-registers', async () => {
+      const seedRow = await seed('provider-invalidated-client');
+      const input = inputFor(seedRow);
+      const first = await authorityA.resolve(input, async () => ({ client_id: 'invalidated' }));
+
+      await expect(
+        authorityB.invalidateRegistration(seedRow.tenantId, seedRow.serverId, first.registrationId!)
+      ).resolves.toBe(true);
+      const replacement = await authorityB.resolve(input, async () => ({
+        client_id: 'replacement',
+      }));
+      expect(replacement.registration.client_id).toBe('replacement');
+      expect(replacement.registrationId).not.toBe(first.registrationId);
+
+      // A late callback from the first attempt cannot invalidate the newer row.
+      await expect(
+        authorityA.invalidateRegistration(seedRow.tenantId, seedRow.serverId, first.registrationId!)
+      ).resolves.toBe(false);
+      await expect(
+        runWithTenantDatabaseScope(dbA, seedRow.tenantId, (scoped) =>
+          new MCPOAuthClientRegistrationRepository(scoped).getCurrent(
+            seedRow.tenantId,
+            seedRow.serverId
+          )
+        )
+      ).resolves.toMatchObject({
+        registrationId: replacement.registrationId,
+        status: 'registered',
+        isCurrent: true,
+      });
+    });
+
+    it('recovers an undispatched lease after replica loss without rotating registration ID', async () => {
       const seedRow = await seed('undispatched-recovery');
       const input = inputFor(seedRow);
       const fingerprint = __fingerprintMCPOAuthClientRegistrationForTests(masterSecret, input);
@@ -216,12 +248,12 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       const resolved = await authorityB.resolve(input, async () => ({
         client_id: 'recovered-client',
       }));
-      expect(resolved.client_id).toBe('recovered-client');
+      expect(resolved.registration.client_id).toBe('recovered-client');
       const records = await runWithTenantDatabaseScope(dbB, seedRow.tenantId, async (scoped) =>
         rawRows(
           await executeRaw(
             scoped,
-            sql`SELECT registration_id, registration_generation, status
+            sql`SELECT registration_id, status
                 FROM mcp_oauth_client_registrations
                 WHERE mcp_server_id = ${seedRow.serverId}`
           )
@@ -266,7 +298,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
 
       await expect(
         authorityB.resolve(input, async () => ({ client_id: 'replacement-client' }))
-      ).resolves.toMatchObject({ client_id: 'replacement-client' });
+      ).resolves.toMatchObject({ registration: { client_id: 'replacement-client' } });
       await expect(
         runWithTenantDatabaseScope(dbA, seedRow.tenantId, (scoped) =>
           new MCPOAuthClientRegistrationRepository(scoped).finishRegistered(
@@ -283,7 +315,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
             sql`SELECT status, is_current, failure_code
                 FROM mcp_oauth_client_registrations
                 WHERE mcp_server_id = ${seedRow.serverId}
-                ORDER BY registration_generation`
+                ORDER BY created_at`
           )
         )
       );
@@ -361,11 +393,11 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
           executeRaw(
             scoped,
             sql`INSERT INTO mcp_oauth_client_registrations
-                  (tenant_id, registration_id, mcp_server_id, registration_generation,
-                   binding_version, binding_fingerprint, server_config_version,
+                  (tenant_id, registration_id, mcp_server_id, binding_version,
+                   binding_fingerprint, server_config_version,
                    envelope_version, is_current, status, claim_generation,
                    created_at, updated_at, finished_at)
-                VALUES (${owner.tenantId}, ${generateId()}, ${attacker.serverId}, 99999999,
+                VALUES (${owner.tenantId}, ${generateId()}, ${attacker.serverId},
                         1, ${'f'.repeat(64)}, 1, 1, false, 'failed', 0,
                         clock_timestamp(), clock_timestamp(), clock_timestamp())`
           )
@@ -378,7 +410,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
             scoped,
             sql`SELECT status, is_current FROM mcp_oauth_client_registrations
                 WHERE mcp_server_id = ${owner.serverId}
-                ORDER BY registration_generation`
+                ORDER BY created_at`
           )
         )
       );
@@ -398,7 +430,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
         client_secret_expires_at: Math.floor(Date.now() / 1000) + 3600,
       });
       await expect(authorityA.resolve(input, register)).resolves.toMatchObject({
-        client_id: 'expiring-client-1',
+        registration: { client_id: 'expiring-client-1' },
       });
       await runWithTenantDatabaseScope(dbA, seedRow.tenantId, (scoped) =>
         executeRaw(
@@ -409,7 +441,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
         )
       );
       await expect(authorityB.resolve(input, register)).resolves.toMatchObject({
-        client_id: 'expiring-client-2',
+        registration: { client_id: 'expiring-client-2' },
       });
       expect(registrations).toBe(2);
 
