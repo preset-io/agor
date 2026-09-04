@@ -3,14 +3,17 @@
 import { createHmac, randomUUID } from 'node:crypto';
 import {
   BOUND_SECRET_ENVELOPE_VERSION,
+  executeRaw,
   generateId,
   type MCPOAuthClientRegistrationRecord,
   MCPOAuthClientRegistrationRepository,
   openBoundSecret,
+  rawRows,
   runWithSystemDatabaseScope,
   runWithTenantDatabaseScope,
   runWithTenantDatabaseTransaction,
   sealBoundSecret,
+  sql,
   type TenantScopeAwareDatabase,
 } from '@agor/core/db';
 import type {
@@ -333,6 +336,41 @@ export class MCPOAuthClientRegistrationAuthority {
     return runWithTenantDatabaseScope(this.db, tenantId, (scoped) =>
       new MCPOAuthClientRegistrationRepository(scoped).invalidateForServer(tenantId, serverId)
     );
+  }
+
+  /**
+   * Lock and revalidate the exact DCR generation used by a browser attempt.
+   *
+   * The caller owns the grant-configuration lock and active tenant transaction
+   * before entering here. Keeping this row lock through the pending-attempt
+   * insert makes "current" a fact at publication time rather than an earlier
+   * observation that a concurrent invalidation can retire in between.
+   *
+   * This deliberately does not acquire the DCR advisory lock. DCR lease work
+   * never acquires the grant lock, while attempt/reset work always orders the
+   * grant lock before registration row locks, so there is no advisory-lock
+   * cycle between the two authorities.
+   */
+  async lockExactCurrentForAttempt(input: {
+    tenantId: string;
+    serverId: MCPServerID;
+    registrationId: MCPOAuthClientRegistrationID;
+    serverConfigVersion: number;
+  }): Promise<boolean> {
+    return runWithTenantDatabaseScope(this.db, input.tenantId, async (scoped) => {
+      const result = await executeRaw(
+        scoped,
+        sql`SELECT registration_id FROM mcp_oauth_client_registrations
+            WHERE tenant_id = ${input.tenantId}
+              AND mcp_server_id = ${input.serverId}
+              AND registration_id = ${input.registrationId}
+              AND server_config_version = ${input.serverConfigVersion}
+              AND status = 'registered' AND is_current = true
+            LIMIT 1
+            FOR UPDATE`
+      );
+      return rawRows(result).length === 1;
+    });
   }
 
   async invalidateRegistration(

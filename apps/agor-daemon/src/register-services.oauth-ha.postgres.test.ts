@@ -22,8 +22,15 @@ import { type Application, feathers } from '@agor/core/feathers';
 import type { AuthenticatedParams, MCPServerID, User, UserID } from '@agor/core/types';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { type RegisterServicesContext, registerMCPServices } from './register-services.js';
+import { lockMCPOAuthGrantConfiguration } from './services/mcp-oauth-grant-binding.js';
 
-const oauthFixture = vi.hoisted(() => ({ starts: 0, exchanges: 0 }));
+const oauthFixture = vi.hoisted(() => ({
+  starts: 0,
+  exchanges: 0,
+  registrations: 0,
+  afterDcrResolved: undefined as undefined | ((registrationId: string) => Promise<void>),
+  beforeGrantLock: undefined as undefined | (() => Promise<void>),
+}));
 
 vi.mock('@agor/core/tools/mcp/oauth-mcp-transport', async (importOriginal) => {
   const original =
@@ -42,8 +49,56 @@ vi.mock('@agor/core/tools/mcp/oauth-mcp-transport', async (importOriginal) => {
       },
     })),
     startMCPOAuthFlow: vi.fn(
-      async (_wwwAuthenticate: string, clientId: string, redirectUri: string) => {
+      async (
+        _wwwAuthenticate: string,
+        clientId: string | undefined,
+        redirectUri: string,
+        options?: {
+          resolveDynamicClientRegistration?: (
+            request: {
+              registrationEndpoint: string;
+              registrationEndpointSource: 'metadata';
+              metadataUrl: string;
+              resourceUri: string;
+              issuer: string;
+              authorizationEndpoint: string;
+              tokenEndpoint: string;
+              redirectUri: string;
+              clientName: string;
+              compatibilityMode: 'strict';
+              dcrMode: 'advertised';
+            },
+            register: () => Promise<{ client_id: string }>
+          ) => Promise<{ registration: { client_id: string }; registrationId?: string }>;
+        }
+      ) => {
         const ordinal = ++oauthFixture.starts;
+        let resolvedClientId = clientId;
+        let clientRegistrationId: string | undefined;
+        if (!resolvedClientId && options?.resolveDynamicClientRegistration) {
+          const resolved = await options.resolveDynamicClientRegistration(
+            {
+              registrationEndpoint: 'https://provider.example.test/register',
+              registrationEndpointSource: 'metadata',
+              metadataUrl: 'https://provider.example.test/.well-known/oauth-authorization-server',
+              resourceUri: 'https://mcp.provider.example.test/mcp',
+              issuer: 'https://provider.example.test',
+              authorizationEndpoint: 'https://provider.example.test/authorize',
+              tokenEndpoint: 'https://provider.example.test/token',
+              redirectUri,
+              clientName: 'Agor MCP Client',
+              compatibilityMode: 'strict',
+              dcrMode: 'advertised',
+            },
+            async () => ({ client_id: `fixture-dcr-client-${++oauthFixture.registrations}` })
+          );
+          resolvedClientId = resolved.registration.client_id;
+          clientRegistrationId = resolved.registrationId;
+          if (clientRegistrationId) {
+            await oauthFixture.afterDcrResolved?.(clientRegistrationId);
+          }
+        }
+        if (!resolvedClientId) throw new Error('Fixture OAuth client was not resolved');
         const state = `fixture-state-${ordinal}`;
         const authorizationUrl = new URL('https://provider.example.test/authorize');
         authorizationUrl.searchParams.set('state', state);
@@ -56,7 +111,8 @@ vi.mock('@agor/core/tools/mcp/oauth-mcp-transport', async (importOriginal) => {
           tokenEndpoint: 'https://provider.example.test/token',
           redirectUri,
           pkceVerifier: `fixture-verifier-${ordinal}`,
-          clientId,
+          clientId: resolvedClientId,
+          ...(clientRegistrationId ? { clientRegistrationId } : {}),
           state,
           authorizationUrl: authorizationUrl.toString(),
           compatibilityMode: 'strict' as const,
@@ -145,6 +201,10 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
           mode: 'ha',
           capabilities: { mcpOAuth: true },
         } as RegisterServicesContext['deployment'],
+        lockMcpOAuthGrantConfiguration: async (scopedDb, tenant, server) => {
+          await oauthFixture.beforeGrantLock?.();
+          await lockMCPOAuthGrantConfiguration(scopedDb, tenant, server);
+        },
         mcpOAuthFetch: async (_input, _init, assertCurrent) => {
           assertCurrent?.();
           return new Response('', {
@@ -185,6 +245,9 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       process.env.AGOR_MASTER_SECRET = masterSecret;
       oauthFixture.starts = 0;
       oauthFixture.exchanges = 0;
+      oauthFixture.registrations = 0;
+      oauthFixture.afterDcrResolved = undefined;
+      oauthFixture.beforeGrantLock = undefined;
 
       replicaA = await createReplica('A');
       await initializeDatabase(replicaA.raw);
@@ -363,6 +426,223 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
           sealed_material: null,
         }),
       ]);
+      await expect(
+        runWithTenantDatabaseScope(replicaA.db, tenantId, (scoped) =>
+          new MCPServerRepository(scoped).findById(serverId)
+        )
+      ).resolves.toMatchObject({ config_version: 2 });
+    });
+
+    it('rechecks administrator authority after grant-lock contention', async () => {
+      const seeded = await runWithTenantDatabaseScope(replicaA.db, tenantId, async (scoped) => {
+        const waitingAdmin = await new UsersRepository(scoped).create({
+          email: `${crypto.randomUUID()}@example.test`,
+          name: 'OAuth reset waiting admin',
+          role: 'admin',
+        });
+        const server = await new MCPServerRepository(scoped).create({
+          name: `ha-oauth-reset-demotion-${crypto.randomUUID()}`,
+          transport: 'http',
+          url: 'https://mcp.provider.example.test/mcp',
+          scope: 'global',
+          enabled: true,
+          source: 'user',
+          owner_user_id: waitingAdmin.user_id,
+          auth: {
+            type: 'oauth',
+            oauth_mode: 'per_user',
+            oauth_client_id: 'demotion-fixture-client',
+          },
+        });
+        return { waitingAdmin, serverId: server.mcp_server_id as MCPServerID };
+      });
+      const holderReady = Promise.withResolvers<void>();
+      const releaseHolder = Promise.withResolvers<void>();
+      const holder = runWithTenantDatabaseTransaction(replicaA.db, tenantId, async (scoped) => {
+        await lockMCPOAuthGrantConfiguration(scoped, tenantId, seeded.serverId);
+        holderReady.resolve();
+        await releaseHolder.promise;
+      });
+      await holderReady.promise;
+
+      const resetReachedLock = Promise.withResolvers<void>();
+      oauthFixture.beforeGrantLock = async () => resetReachedLock.resolve();
+      const reset = replicaB.app
+        .service('mcp-servers/oauth-client-registration-reset')
+        .create({ mcp_server_id: seeded.serverId }, params(seeded.waitingAdmin));
+      try {
+        await resetReachedLock.promise;
+        await runWithTenantDatabaseScope(replicaA.db, tenantId, (scoped) =>
+          new UsersRepository(scoped).update(seeded.waitingAdmin.user_id, { role: 'member' })
+        );
+        releaseHolder.resolve();
+        await expect(reset).rejects.toMatchObject({ code: 403 });
+        await expect(
+          runWithTenantDatabaseScope(replicaA.db, tenantId, (scoped) =>
+            new MCPServerRepository(scoped).findById(seeded.serverId)
+          )
+        ).resolves.toMatchObject({ config_version: 1 });
+      } finally {
+        oauthFixture.beforeGrantLock = undefined;
+        releaseHolder.resolve();
+        await holder;
+        await reset.catch(() => undefined);
+      }
+    });
+
+    it('lets a current admin reset a member-owned private server in the same tenant', async () => {
+      const seeded = await runWithTenantDatabaseScope(replicaA.db, tenantId, async (scoped) => {
+        const memberOwner = await new UsersRepository(scoped).create({
+          email: `${crypto.randomUUID()}@example.test`,
+          name: 'Private OAuth server owner',
+          role: 'member',
+        });
+        const server = await new MCPServerRepository(scoped).create({
+          name: `ha-oauth-private-reset-${crypto.randomUUID()}`,
+          transport: 'http',
+          url: 'https://mcp.provider.example.test/mcp',
+          scope: 'session',
+          enabled: true,
+          source: 'user',
+          owner_user_id: memberOwner.user_id,
+          auth: {
+            type: 'oauth',
+            oauth_mode: 'per_user',
+            oauth_client_id: 'private-fixture-client',
+          },
+        });
+        const registrationId = generateId();
+        await new MCPOAuthClientRegistrationRepository(scoped).claimOrObserve({
+          tenantId,
+          registrationId,
+          mcpServerId: server.mcp_server_id as MCPServerID,
+          bindingFingerprint: 'b'.repeat(64),
+          serverConfigVersion: 1,
+          envelopeVersion: 1,
+          claimId: generateId(),
+          leaseMs: 60_000,
+        });
+        return {
+          registrationId,
+          serverId: server.mcp_server_id as MCPServerID,
+        };
+      });
+
+      await expect(
+        replicaB.app
+          .service('mcp-servers/oauth-client-registration-reset')
+          .create({ mcp_server_id: seeded.serverId }, params(user))
+      ).resolves.toEqual({ success: true });
+
+      await runWithTenantDatabaseScope(replicaA.db, tenantId, async (scoped) => {
+        await expect(
+          new MCPServerRepository(scoped).findById(seeded.serverId)
+        ).resolves.toMatchObject({ config_version: 2 });
+        const rows = rawRows(
+          await executeRaw(
+            scoped,
+            sql`SELECT status, is_current
+                FROM mcp_oauth_client_registrations
+                WHERE registration_id = ${seeded.registrationId}`
+          )
+        );
+        expect(rows).toEqual([
+          expect.objectContaining({ status: 'superseded', is_current: false }),
+        ]);
+      });
+    });
+
+    it('fences a start that resolved DCR before reset and re-registers on reconnect', async () => {
+      const dcrServerId = await runWithTenantDatabaseScope(
+        replicaA.db,
+        tenantId,
+        async (scoped) => {
+          const server = await new MCPServerRepository(scoped).create({
+            name: `ha-oauth-reset-race-${crypto.randomUUID()}`,
+            transport: 'http',
+            url: 'https://mcp.provider.example.test/mcp',
+            scope: 'global',
+            enabled: true,
+            source: 'user',
+            owner_user_id: user.user_id,
+            auth: {
+              type: 'oauth',
+              oauth_mode: 'per_user',
+              oauth_dcr_mode: 'advertised',
+              oauth_compatibility_mode: 'strict',
+            },
+          });
+          return server.mcp_server_id as MCPServerID;
+        }
+      );
+      const dcrResolved = Promise.withResolvers<string>();
+      const releaseStart = Promise.withResolvers<void>();
+      oauthFixture.afterDcrResolved = async (registrationId) => {
+        dcrResolved.resolve(registrationId);
+        await releaseStart.promise;
+      };
+      const start = replicaA.app
+        .service('mcp-servers/oauth-start')
+        .create({ mcp_server_id: dcrServerId }, params(user)) as Promise<{ success: boolean }>;
+
+      try {
+        const retiredRegistrationId = await dcrResolved.promise;
+        await expect(
+          replicaB.app
+            .service('mcp-servers/oauth-client-registration-reset')
+            .create({ mcp_server_id: dcrServerId }, params(user))
+        ).resolves.toEqual({ success: true });
+        releaseStart.resolve();
+        await expect(start).resolves.toMatchObject({ success: false });
+
+        const afterRace = await runWithTenantDatabaseScope(
+          replicaB.db,
+          tenantId,
+          async (scoped) => ({
+            server: await new MCPServerRepository(scoped).findById(dcrServerId),
+            pending: rawRows(
+              await executeRaw(
+                scoped,
+                sql`SELECT attempt_id FROM mcp_oauth_pending_flows
+                    WHERE mcp_server_id = ${dcrServerId} AND is_current = true`
+              )
+            ),
+            registration: await new MCPOAuthClientRegistrationRepository(scoped).getCurrent(
+              tenantId,
+              dcrServerId
+            ),
+          })
+        );
+        expect(afterRace.server).toMatchObject({ config_version: 2 });
+        expect(afterRace.pending).toEqual([]);
+        expect(afterRace.registration).toBeNull();
+
+        oauthFixture.afterDcrResolved = undefined;
+        const reconnect = (await replicaB.app
+          .service('mcp-servers/oauth-start')
+          .create({ mcp_server_id: dcrServerId }, params(user))) as {
+          success: boolean;
+          attempt_id?: string;
+        };
+        expect(reconnect).toMatchObject({ success: true, attempt_id: expect.any(String) });
+        expect(oauthFixture.registrations).toBeGreaterThanOrEqual(2);
+        const currentRegistration = await runWithTenantDatabaseScope(
+          replicaA.db,
+          tenantId,
+          (scoped) =>
+            new MCPOAuthClientRegistrationRepository(scoped).getCurrent(tenantId, dcrServerId)
+        );
+        expect(currentRegistration).toMatchObject({
+          status: 'registered',
+          isCurrent: true,
+          serverConfigVersion: 2,
+        });
+        expect(currentRegistration?.registrationId).not.toBe(retiredRegistrationId);
+      } finally {
+        oauthFixture.afterDcrResolved = undefined;
+        releaseStart.resolve();
+        await start.catch(() => undefined);
+      }
     });
   }
 );

@@ -74,7 +74,10 @@ expired undispatched lease is reclaimable without provider duplication. An
 expired dispatched lease is `ambiguous`—the provider may have allocated a
 client—and a new generation is created. Configuration changes supersede the
 current generation and clear its ciphertext. A live exact registered generation
-is reused across replicas until its recorded secret expiry.
+is reused across replicas until its recorded secret expiry. Claim admission
+locks and matches the saved server's config/reset epoch before it can observe or
+replace a registration, so a pre-reset start cannot disturb a post-reset DCR
+generation.
 
 ## State machine
 
@@ -137,8 +140,16 @@ invalidates only that current row, allowing the next start to register anew.
 Network errors and other ambiguous provider failures never invalidate a client.
 An administrator may invoke `mcp-servers/oauth-client-registration-reset` for a
 saved server before callback completion; the tenant-scoped operation rechecks
-admin and server authority under the grant-configuration lock, then retires
-pending attempts, grants, and the current registration.
+and row-locks current admin authority after acquiring the grant-configuration
+lock. It advances the saved server config generation as a shared reset epoch,
+then retires pending attempts, grants, and the current registration. A start
+publishes its pending attempt only after taking that same grant lock, matching
+the reset epoch, and row-locking the exact current registered-client UUID.
+Consequently a pre-reset DCR result cannot publish after reset, including when
+its provider request was already in flight, and the next reconnect resolves a
+fresh client. DCR lease transactions never acquire the grant lock; reset and
+attempt publication order the grant lock before registration row locks, so the
+two authorities have no reverse advisory-lock order.
 
 There is intentionally no “recover provider code” path. OAuth providers may
 consume authorization codes once, and Agor cannot prove whether an interrupted
