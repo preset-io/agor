@@ -750,12 +750,13 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
       if (session.fork_origin === 'btw') {
         if (!suppressBtwCleanup) {
           try {
-            await this.app.service('sessions').patch(session.session_id, {
-              archived: true,
-              archived_reason: 'btw_completed',
-            });
+            const sessionsService = this.app.service('sessions') as unknown as SessionsService;
+            const result = await sessionsService.archiveBtwSession(
+              session.session_id,
+              params as Parameters<SessionsService['archiveBtwSession']>[1]
+            );
             console.log(
-              `📦 [TasksService] Auto-archived btw fork session ${shortId(session.session_id)}`
+              `📦 [TasksService] Auto-archived btw fork session ${shortId(session.session_id)} (${result.count} row(s))`
             );
           } catch (error) {
             console.warn(`⚠️  [TasksService] Failed to auto-archive btw fork:`, error);

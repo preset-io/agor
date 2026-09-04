@@ -2081,14 +2081,16 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           throw error;
         }
 
-        // Auto-unarchive on prompt
+        // Auto-unarchive on prompt: restore only the prompted session.
+        // Ancestors, descendants, and remote work are deliberately untouched.
         if (session.archived) {
           console.log(
             `📦 [Prompt] Auto-unarchiving session ${shortId(id)} (was archived: ${session.archived_reason || 'unknown reason'})`
           );
-          session = (await runWithTenantDatabaseScope(db, promptTenantId, () =>
-            sessionsService.patch(id, { archived: false, archived_reason: undefined }, params)
-          )) as typeof session;
+          const restored = await runWithTenantDatabaseScope(db, promptTenantId, () =>
+            sessionsService.restorePromptedSession(id, params)
+          );
+          session = restored.session as typeof session;
         }
 
         if (session.status === SessionStatus.STOPPING) {

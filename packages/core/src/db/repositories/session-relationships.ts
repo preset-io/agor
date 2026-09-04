@@ -155,6 +155,58 @@ export class SessionRelationshipRepository {
     }
   }
 
+  /**
+   * Batch-load outgoing `remote_create` edges for a frontier of source sessions.
+   */
+  async findRemoteChildrenForSources(
+    sourceSessionIds: SessionID[]
+  ): Promise<SessionRelationship[]> {
+    const uniqueIds = [...new Set(sourceSessionIds)];
+    if (uniqueIds.length === 0) return [];
+    try {
+      const rows = await select(this.db)
+        .from(sessionRelationships)
+        .where(
+          and(
+            inArray(sessionRelationships.source_session_id, uniqueIds),
+            eq(sessionRelationships.relationship_type, 'remote_create')
+          )
+        )
+        .all();
+      return rows.map((row: SessionRelationshipRow) => this.rowToRelationship(row));
+    } catch (error) {
+      throw new RepositoryError(
+        `Failed to list remote child relationships: ${error instanceof Error ? error.message : String(error)}`,
+        error
+      );
+    }
+  }
+
+  /**
+   * Batch-load incoming `remote_create` edges for a set of target sessions.
+   */
+  async findRemoteParentsForTargets(targetSessionIds: SessionID[]): Promise<SessionRelationship[]> {
+    const uniqueIds = [...new Set(targetSessionIds)];
+    if (uniqueIds.length === 0) return [];
+    try {
+      const rows = await select(this.db)
+        .from(sessionRelationships)
+        .where(
+          and(
+            inArray(sessionRelationships.target_session_id, uniqueIds),
+            eq(sessionRelationships.relationship_type, 'remote_create')
+          )
+        )
+        .all();
+      return rows.map((row: SessionRelationshipRow) => this.rowToRelationship(row));
+    } catch (error) {
+      throw new RepositoryError(
+        `Failed to list remote parent relationships: ${error instanceof Error ? error.message : String(error)}`,
+        error
+      );
+    }
+  }
+
   async findRemoteParents(targetSessionId: SessionID): Promise<SessionRelationship[]> {
     try {
       const rows = await select(this.db)

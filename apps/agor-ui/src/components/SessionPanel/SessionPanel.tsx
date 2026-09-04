@@ -55,7 +55,7 @@ import { useAppActions } from '../../contexts/AppActionsContext';
 import { useRecenterMap } from '../../contexts/CanvasNavigationContext';
 import { useConnectionDisabled, useConnectionState } from '../../contexts/ConnectionContext';
 import { useAuthorityOperationGuard } from '../../hooks/useAuthorityOperationGuard';
-import { useSessionActions } from '../../hooks/useSessionActions';
+import { type SessionArchiveOutcome, useSessionActions } from '../../hooks/useSessionActions';
 import { useSessionSearch } from '../../hooks/useSessionSearch';
 import { useSharedReactiveSession } from '../../hooks/useSharedReactiveSession';
 import { useAgorStore } from '../../store/agorStore';
@@ -86,6 +86,11 @@ import { ForkSpawnModal } from '../ForkSpawnModal/ForkSpawnModal';
 import type { ModelConfig } from '../ModelSelector';
 import { CreatedByTag } from '../metadata';
 import { getUrlDisplayLabel } from '../Pill/url-helpers';
+import {
+  formatSessionArchiveOutcome,
+  isArchivePermissionDenial,
+  SessionArchiveConfirmContent,
+} from '../SessionArchiveConfirm';
 import { ToolIcon } from '../ToolIcon';
 import {
   buildPromptWithAttachments,
@@ -323,7 +328,8 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
 }) => {
   const { token } = theme.useToken();
   const { modal } = App.useApp();
-  const { showSuccess, showInfo, showError } = useThemedMessage();
+  const { showSuccess, showInfo, showError, showWarning } = useThemedMessage();
+  const includeRemoteChildrenRef = React.useRef(true);
   const connectionDisabled = useConnectionDisabled();
   const { connected, connecting, authGeneration } = useConnectionState();
   const recenterMap = useRecenterMap();
@@ -1119,24 +1125,80 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     ? (session as Session & { agentic_tool: AgenticToolName })
     : null;
 
-  const handleArchive = () => {
+  const archiveRootOnly = () => {
+    modal.confirm({
+      title: 'Archive only this session?',
+      content:
+        'A child session in this branch belongs to someone you cannot archive for. You can archive just this session and leave its children active.',
+      okText: 'Archive only this session',
+      cancelText: 'Cancel',
+      onOk: async () => {
+        try {
+          const outcome = await archiveSession(session.session_id, {
+            includeChildren: false,
+            includeRemoteChildren: false,
+          });
+          showSuccess(formatSessionArchiveOutcome(outcome).success);
+          onClose();
+        } catch (err) {
+          showError(err instanceof Error ? err.message : 'Failed to archive session');
+        }
+      },
+    });
+  };
+
+  const handleArchive = async () => {
     if (!client || connectionDisabled) {
       showError('Cannot archive while disconnected from the daemon.');
       return;
     }
 
+    // Preview first so the confirmation shows exactly what will change.
+    let preview: SessionArchiveOutcome;
+    try {
+      preview = await archiveSession(session.session_id, {
+        includeChildren: true,
+        includeRemoteChildren: true,
+        dryRun: true,
+      });
+    } catch (err) {
+      if (isArchivePermissionDenial(err)) {
+        archiveRootOnly();
+        return;
+      }
+      showError(err instanceof Error ? err.message : 'Failed to prepare archive');
+      return;
+    }
+
+    includeRemoteChildrenRef.current = true;
     modal.confirm({
       title: 'Archive session and child sessions?',
-      content: 'Are you sure you want to archive this session and its child sessions?',
+      content: (
+        <SessionArchiveConfirmContent
+          preview={preview}
+          onIncludeRemoteChildrenChange={(value) => {
+            includeRemoteChildrenRef.current = value;
+          }}
+        />
+      ),
       okText: 'Archive',
       cancelText: 'Cancel',
       onOk: async () => {
-        const archived = await archiveSession(session.session_id);
-        if (archived) {
-          showSuccess('Session and child sessions archived');
+        try {
+          const outcome = await archiveSession(session.session_id, {
+            includeChildren: true,
+            includeRemoteChildren: includeRemoteChildrenRef.current,
+          });
+          const { success, warning } = formatSessionArchiveOutcome(outcome);
+          showSuccess(success);
+          if (warning) showWarning(warning);
           onClose();
-        } else {
-          showError('Failed to archive session');
+        } catch (err) {
+          if (isArchivePermissionDenial(err)) {
+            archiveRootOnly();
+            return;
+          }
+          showError(err instanceof Error ? err.message : 'Failed to archive session');
         }
       },
     });

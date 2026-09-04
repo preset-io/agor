@@ -366,6 +366,33 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
   }
 
   /**
+   * Load several sessions by full ID in one read. Missing IDs are omitted.
+   */
+  async findByIds(ids: string[]): Promise<Session[]> {
+    const uniqueIds = [...new Set(ids)];
+    if (uniqueIds.length === 0) return [];
+    try {
+      const baseUrl = await getBaseUrl();
+      const results = await select(this.db)
+        .from(sessions)
+        .leftJoin(branches, eq(sessions.branch_id, branches.branch_id))
+        .where(inArray(sessions.session_id, uniqueIds))
+        .all();
+      return results.map(
+        (result: { sessions: SessionRow; branches?: { board_id?: string } | null }) => {
+          const boardId = (result.branches?.board_id ?? null) as UUID | null;
+          return this.rowToSession(result.sessions, boardId, baseUrl);
+        }
+      );
+    } catch (error) {
+      throw new RepositoryError(
+        `Failed to find sessions by id: ${error instanceof Error ? error.message : String(error)}`,
+        error
+      );
+    }
+  }
+
+  /**
    * Find only the branch ID for a session. Used by realtime routing hot paths
    * to avoid loading/enriching the full session row.
    */
@@ -836,6 +863,10 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
         } else if (sdkSessionIdUpdate !== undefined) {
           merged.sdk_session_id = sdkSessionIdUpdate;
         }
+        // Archive invariant: an active row never carries a stale reason.
+        if (genericUpdates.archived === false) {
+          merged.archived_reason = undefined;
+        }
         if (options.replaceAgenticConfig) {
           if (Object.hasOwn(updates, 'model_config')) {
             merged.model_config = updates.model_config;
@@ -917,6 +948,11 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
   /**
    * Atomically update archive state for known sessions that may need distinct
    * archive reasons.
+   *
+   * Rows whose persisted state already matches their target are left untouched
+   * and omitted from the result, so callers can emit exactly one event per
+   * changed session. Restoring a row always clears its reason (archive
+   * invariant: `archived = false` implies `archived_reason IS NULL`).
    */
   async updateArchiveStateForTargets(targets: SessionArchiveStateUpdate[]): Promise<Session[]> {
     if (targets.length === 0) return [];
@@ -927,12 +963,48 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
       const updates = targets.map((target, index) => ({
         ...target,
         id: fullIds[index],
+        archivedReason: target.archived ? target.archivedReason : null,
       }));
       const baseUrl = await getBaseUrl();
       const now = new Date();
       const result = await this.db.transaction(async (tx) => {
+        await lockRowForUpdate(
+          txAsDb(tx),
+          this.db,
+          sessions,
+          inArray(sessions.session_id, fullIds)
+        );
+        const currentRows = await select(txAsDb(tx))
+          .from(sessions)
+          .where(inArray(sessions.session_id, fullIds))
+          .all();
+        const currentById = new Map<
+          string,
+          { archived: boolean; archived_reason: string | null }
+        >();
+        for (const row of currentRows as SessionRow[]) {
+          currentById.set(row.session_id, {
+            archived: Boolean(row.archived),
+            archived_reason: row.archived_reason ?? null,
+          });
+        }
+        if (currentById.size !== fullIds.length) {
+          const missing = fullIds.find((id) => !currentById.has(id));
+          throw new EntityNotFoundError('Session', missing ?? ids[0]);
+        }
+
+        const changed = updates.filter((updateTarget) => {
+          const current = currentById.get(updateTarget.id);
+          return (
+            !current ||
+            current.archived !== updateTarget.archived ||
+            current.archived_reason !== (updateTarget.archivedReason ?? null)
+          );
+        });
+        if (changed.length === 0) return [];
+
         const groups = new Map<string, SessionArchiveStateUpdate[]>();
-        for (const updateTarget of updates) {
+        for (const updateTarget of changed) {
           const key = `${updateTarget.archived}:${updateTarget.archivedReason ?? ''}`;
           const group = groups.get(key) ?? [];
           group.push(updateTarget);
@@ -957,15 +1029,12 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
             .run();
         }
 
+        const changedIds = changed.map((target) => target.id);
         const rows = await select(txAsDb(tx))
           .from(sessions)
           .leftJoin(branches, eq(sessions.branch_id, branches.branch_id))
-          .where(inArray(sessions.session_id, fullIds))
+          .where(inArray(sessions.session_id, changedIds))
           .all();
-
-        if (rows.length !== fullIds.length) {
-          throw new EntityNotFoundError('Session', ids[0]);
-        }
 
         const byId = new Map<string, Session>();
         for (const row of rows as Array<{
@@ -976,7 +1045,7 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
           byId.set(row.sessions.session_id, this.rowToSession(row.sessions, boardId, baseUrl));
         }
 
-        return fullIds.map((id) => {
+        return changedIds.map((id) => {
           const session = byId.get(id);
           if (!session) throw new EntityNotFoundError('Session', id);
           return session;

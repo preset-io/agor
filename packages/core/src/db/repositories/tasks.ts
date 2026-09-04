@@ -725,6 +725,29 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
     }
   }
 
+  /** Which of the given Sessions still have at least one unfinished Task. */
+  async findSessionIdsWithNonterminalTasks(sessionIds: string[]): Promise<Set<string>> {
+    const uniqueIds = [...new Set(sessionIds)];
+    if (uniqueIds.length === 0) return new Set();
+    try {
+      const rows = await select(this.db, { session_id: tasks.session_id })
+        .from(tasks)
+        .where(
+          and(
+            inArray(tasks.session_id, uniqueIds),
+            inArray(tasks.status, [...NONTERMINAL_TASK_STATUSES])
+          )
+        )
+        .all();
+      return new Set(rows.map((row: { session_id: string }) => row.session_id));
+    } catch (error) {
+      throw new RepositoryError(
+        `Failed to inspect unfinished session tasks: ${error instanceof Error ? error.message : String(error)}`,
+        error
+      );
+    }
+  }
+
   /** Whether deleting this Session would cascade any unfinished Task. */
   async hasNonterminalForSession(sessionId: string): Promise<boolean> {
     try {

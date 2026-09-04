@@ -64,6 +64,7 @@ Designs that are referenced from code or in flight. Anything here is either stil
 - [`teammate-kb-namespace-memory-plan.md`](explorations/teammate-kb-namespace-memory-plan.md) — implementation plan for teammate primary KB namespaces, memory append tools, and branch-scoped namespace grants.
 - [`kb-namespace-rbac-v1.md`](explorations/kb-namespace-rbac-v1.md) — directed V1 plan for Knowledge namespace RBAC and teammate home namespaces.
 - [`session-sharing.md`](explorations/session-sharing.md) — tenant/branch gates, immutable Session compatibility, and caller identity for shared prompts.
+- [`session-archive-cascade.md`](explorations/session-archive-cascade.md) — one archive engine for every Session archive entry point: local/remote cascade policy, explicit bulk policy, cause-aware restoration, reason invariant (referenced from `apps/agor-daemon/src/services/sessions.ts`).
 - [`parent-session-callbacks.md`](explorations/parent-session-callbacks.md) — child-session completion notifications (referenced from `docs/never-lose-prompt-design.md`).
 - [`frontend-hardcoded-colors.md`](explorations/frontend-hardcoded-colors.md) — Biome/GritQL color audit, classification, and enforcement rollout.
 - [`web-terminal-ownership-ha.md`](explorations/web-terminal-ownership-ha.md) — process-affine terminal ownership, HA support, and failure semantics.

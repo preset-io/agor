@@ -13,10 +13,12 @@ import {
   type Database,
   generateId,
   RepoRepository,
+  SessionRepository,
   UsersRepository,
 } from '@agor/core/db';
 import { BadRequest } from '@agor/core/feathers';
 import type { Board, BoardID, BranchID, UUID } from '@agor/core/types';
+import { SessionStatus } from '@agor/core/types';
 import { describe, expect, vi } from 'vitest';
 import { ownedDbTest as dbTest } from '../../../../packages/core/src/db/test-helpers';
 import { type BoardParams, BoardsService } from './boards';
@@ -584,6 +586,60 @@ describe('BoardsService - Custom Methods', () => {
       id: board.board_id,
     });
   });
+
+  dbTest(
+    'board archive is container-only: it never archives its branches or sessions',
+    async ({ db }) => {
+      const service = new BoardsService(db, { emitBoardEvent: vi.fn() });
+      const board = (await service.create({
+        name: 'Archive exemption',
+        slug: 'archive-exemption',
+        created_by: TEST_USER,
+      })) as Board;
+      const repo = await new RepoRepository(db).create({
+        repo_id: generateId(),
+        slug: `repo-${generateId()}`,
+        name: 'Exemption Repo',
+        repo_type: 'remote' as const,
+        remote_url: 'https://github.com/test/repo.git',
+        local_path: `/tmp/test-repo-${generateId()}`,
+        default_branch: 'main',
+      });
+      const branch = await new BranchRepository(db).create({
+        branch_id: generateId(),
+        repo_id: repo.repo_id,
+        name: 'exemption',
+        ref: 'exemption',
+        branch_unique_id: 4242,
+        path: `/tmp/test-branch-${generateId()}`,
+        base_ref: 'main',
+        new_branch: false,
+        board_id: board.board_id,
+        created_by: TEST_USER,
+      });
+      const session = await new SessionRepository(db).create({
+        session_id: generateId(),
+        branch_id: branch.branch_id as UUID,
+        agentic_tool: 'claude-code',
+        status: SessionStatus.IDLE,
+        created_by: TEST_USER,
+        tasks: [],
+        contextFiles: [],
+        genealogy: { children: [] },
+      });
+
+      await service.archive(board.board_id, {
+        user: { user_id: TEST_USER },
+        tenant: { tenant_id: 'tenant-a', source: 'auth_claim' },
+      } as never);
+
+      const branchAfter = await new BranchRepository(db).findById(branch.branch_id);
+      const sessionAfter = await new SessionRepository(db).findById(session.session_id);
+      expect(branchAfter?.archived).toBeFalsy();
+      expect(sessionAfter?.archived).toBe(false);
+      expect(sessionAfter?.archived_reason).toBeUndefined();
+    }
+  );
 });
 
 describe('BoardsService.find SQL pushdown', () => {

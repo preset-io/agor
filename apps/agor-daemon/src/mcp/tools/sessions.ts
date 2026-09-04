@@ -1372,7 +1372,7 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
     'agor_sessions_update',
     {
       description:
-        'Update session metadata (title, description, status, archived, callback config). Useful for agents to self-document their work or manage callback settings.',
+        'Update session metadata (title, description, status, callback config). Useful for agents to self-document their work or manage callback settings. Archive state is not accepted here: use agor_sessions_archive / agor_sessions_unarchive, which cascade to child sessions.',
       annotations: { idempotentHint: true },
       inputSchema: z.object({
         sessionId: mcpRequiredId(
@@ -1389,7 +1389,9 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
         archived: z
           .boolean()
           .optional()
-          .describe('Set archive state. true to archive, false to unarchive (optional)'),
+          .describe(
+            'Deprecated and rejected. Use agor_sessions_archive or agor_sessions_unarchive instead.'
+          ),
         enableCallback: z
           .boolean()
           .optional()
@@ -1408,8 +1410,11 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
       if (args.description !== undefined) updates.description = args.description;
       if (args.status !== undefined) updates.status = args.status;
       if (args.archived !== undefined) {
-        updates.archived = args.archived;
-        updates.archived_reason = args.archived ? 'manual' : undefined;
+        throw new Error(
+          `agor_sessions_update no longer changes archive state. Use ${
+            args.archived ? 'agor_sessions_archive' : 'agor_sessions_unarchive'
+          } (cascades to child sessions; pass includeChildren: false to affect only this session).`
+        );
       }
 
       // Handle callback config updates
@@ -1428,7 +1433,7 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
 
       if (Object.keys(updates).length === 0) {
         throw new Error(
-          'At least one field (title, description, status, archived, enableCallback, callbackMode) must be provided'
+          'At least one field (title, description, status, enableCallback, callbackMode) must be provided'
         );
       }
 
@@ -1442,41 +1447,104 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
     }
   );
 
+  type ArchiveOutcome = Awaited<ReturnType<SessionsServiceImpl['archive']>>;
+
+  const describeArchiveOutcome = (
+    verb: 'Archived' | 'Unarchived',
+    result: ArchiveOutcome
+  ): string => {
+    const total = verb === 'Archived' ? result.archivedCount : result.unarchivedCount;
+    const lead = result.dryRun ? `Would ${verb === 'Archived' ? 'archive' : 'unarchive'}` : verb;
+    const parts = [
+      `${lead} ${total} session(s) (${result.localCount} in this branch, ${result.remoteCount} in other branches).`,
+    ];
+    if (result.limitExceeded) {
+      parts.push(
+        `Remote expansion exceeded the ${result.limitExceeded} bound, so execution would fail; pass includeRemoteChildren: false or archive the remote sessions separately.`
+      );
+    }
+    if (result.runningCount > 0) {
+      parts.push(
+        `${result.runningCount} of them are still running; archiving hides work, it does not stop it.`
+      );
+    }
+    if (result.skippedCount > 0) {
+      parts.push(
+        `${result.skippedCount} remote unit(s) skipped: insufficient permission in that branch; those sessions are unchanged.`
+      );
+    }
+    if (result.remainingArchived.length > 0) {
+      parts.push(
+        `${result.remainingArchived.length} child session(s) stay archived (independent reason, another archived parent, or archived branch).`
+      );
+    }
+    return parts.join(' ');
+  };
+
+  const archiveOutcomePayload = (verb: 'Archived' | 'Unarchived', result: ArchiveOutcome) => ({
+    success: true,
+    dryRun: result.dryRun,
+    wouldChangeCount: result.wouldChangeCount,
+    archivedCount: result.archivedCount,
+    unarchivedCount: result.unarchivedCount,
+    localCount: result.localCount,
+    remoteCount: result.remoteCount,
+    skippedCount: result.skippedCount,
+    runningCount: result.runningCount,
+    units: result.units,
+    remainingArchived: result.remainingArchived,
+    ...(result.limitExceeded && { limitExceeded: result.limitExceeded }),
+    message: describeArchiveOutcome(verb, result),
+  });
+
+  const dedicatedArchiveSchema = (verb: 'archive' | 'unarchive') =>
+    z.object({
+      sessionId: mcpRequiredId(
+        'sessionId',
+        'Session',
+        `Session ID to ${verb} (UUIDv7 or short ID)`
+      ),
+      includeChildren: z
+        .boolean()
+        .optional()
+        .describe(`Also ${verb} all child sessions (forks and subsessions). Default: true.`),
+      includeRemoteChildren: z
+        .boolean()
+        .optional()
+        .describe(
+          `Also ${verb} sessions this one created in other branches, with their children. Default: true.`
+        ),
+      dryRun: z
+        .boolean()
+        .optional()
+        .describe(
+          'Plan and authorize without changing anything; returns the counts and units execution would touch. Default: false.'
+        ),
+    });
+
   // Tool 8: agor_sessions_archive
   server.registerTool(
     'agor_sessions_archive',
     {
       description:
-        'Archive a session (soft delete). Archived sessions are hidden from listings by default but can be restored. By default, all child sessions (forks and subsessions) are also archived. Set includeChildren to false to archive only the target session.',
+        'Archive a session (soft delete). Archived sessions are hidden from listings by default but can be restored; archiving never stops running work. By default this also archives all child sessions (forks and subsessions) in the same branch AND the sessions this one created in other branches (with their children), within bounded depth/branch/session limits. Each other branch is authorized separately: branches you cannot modify are skipped and reported, not failed. Set includeChildren to false to leave local children active, includeRemoteChildren to false to leave remote work active, or dryRun to true to preview.',
       annotations: { destructiveHint: true },
-      inputSchema: z.object({
-        sessionId: mcpRequiredId(
-          'sessionId',
-          'Session',
-          'Session ID to archive (UUIDv7 or short ID)'
-        ),
-        includeChildren: z
-          .boolean()
-          .optional()
-          .describe('Also archive all child sessions (forks and subsessions). Default: true.'),
-      }),
+      inputSchema: dedicatedArchiveSchema('archive'),
     },
     async (args) => {
-      const includeChildren = args.includeChildren !== false;
+      const options = {
+        includeChildren: args.includeChildren !== false,
+        includeRemoteChildren: args.includeRemoteChildren !== false,
+        dryRun: args.dryRun === true,
+      };
       const sessionsService = ctx.app.service('sessions') as unknown as SessionsServiceImpl;
-      // archive() -> setArchiveStateForTree touches this.db (this.get,
-      // sessionRepo writes) directly and is not a Feathers transport method, so
-      // enter the tenant DB scope here (the HTTP archive route enters it via its
-      // around hook). The whole tree update is DB-only — no network held.
+      // archive() touches this.db directly and is not a Feathers transport
+      // method, so enter the tenant DB scope here (the HTTP archive route enters
+      // it via its around hook). The whole tree update is DB-only — no network held.
       const result = await runWithMcpTenantDatabaseWrite(ctx, () =>
-        sessionsService.archive(args.sessionId, { includeChildren }, ctx.baseServiceParams)
+        sessionsService.archive(args.sessionId, options, ctx.baseServiceParams)
       );
-
-      return textResult({
-        success: true,
-        archivedCount: result.count,
-        message: `Archived ${result.count} session(s).`,
-      });
+      return textResult(archiveOutcomePayload('Archived', result));
     }
   );
 
@@ -1485,32 +1553,21 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
     'agor_sessions_unarchive',
     {
       description:
-        'Restore a previously archived session. By default, all child sessions are also unarchived. Set includeChildren to false to unarchive only the target session.',
-      inputSchema: z.object({
-        sessionId: mcpRequiredId(
-          'sessionId',
-          'Session',
-          'Session ID to unarchive (UUIDv7 or short ID)'
-        ),
-        includeChildren: z
-          .boolean()
-          .optional()
-          .describe('Also unarchive all child sessions (forks and subsessions). Default: true.'),
-      }),
+        'Restore a previously archived session. By default, child sessions (local and remote-created) that were archived because of this session are restored too; children archived for their own reason, or still covered by another archived parent or an archived branch, stay archived and are reported in remainingArchived. Restoring a session inside an archived branch is rejected: restore the branch first. Set includeChildren or includeRemoteChildren to false to restore only the target session, or dryRun to true to preview.',
+      inputSchema: dedicatedArchiveSchema('unarchive'),
     },
     async (args) => {
-      const includeChildren = args.includeChildren !== false;
+      const options = {
+        includeChildren: args.includeChildren !== false,
+        includeRemoteChildren: args.includeRemoteChildren !== false,
+        dryRun: args.dryRun === true,
+      };
       const sessionsService = ctx.app.service('sessions') as unknown as SessionsServiceImpl;
       // Same as archive: enter the tenant DB scope around the (DB-only) tree walk.
       const result = await runWithMcpTenantDatabaseWrite(ctx, () =>
-        sessionsService.unarchive(args.sessionId, { includeChildren }, ctx.baseServiceParams)
+        sessionsService.unarchive(args.sessionId, options, ctx.baseServiceParams)
       );
-
-      return textResult({
-        success: true,
-        unarchivedCount: result.count,
-        message: `Unarchived ${result.count} session(s).`,
-      });
+      return textResult(archiveOutcomePayload('Unarchived', result));
     }
   );
 
@@ -1519,7 +1576,7 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
     'agor_sessions_bulk_archive',
     {
       description:
-        'Archive multiple sessions matching filter criteria. Supports filtering by session type (gateway/scheduled/agent), age, status, board, and branch. Returns a dry-run preview by default — set dryRun to false to actually archive. Respects RBAC: sessions the current user cannot modify are skipped and reported as errors.',
+        'Archive multiple sessions matching filter criteria. Supports filtering by session type (gateway/scheduled/agent), age, status, board, and branch; the filters select the matched (root) sessions. Returns a dry-run preview by default — set dryRun to false to actually archive. descendantPolicy decides which branch-local child sessions of each match are archived too: "none" leaves children active; "eligible" adds children that have no unfinished task and are not newer than olderThanDays; "all" adds every child, including newer ones and ones still running (archiving never stops work). A dry-run without descendantPolicy previews all three with exact counts and bounded samples. Omitting descendantPolicy on execution applies the legacy "none" behaviour with a deprecation warning; pass it explicitly. Sessions created in other branches are never followed. Respects RBAC: each matched session plus its children is one unit; units the current user cannot modify are skipped and reported.',
       annotations: { destructiveHint: true },
       inputSchema: z.object({
         sessionType: z
@@ -1540,6 +1597,19 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
           .describe('Only archive sessions with this status'),
         boardId: mcpOptionalId('boardId', 'Board', 'Only archive sessions on this board'),
         branchId: mcpOptionalId('branchId', 'Branch', 'Only archive sessions in this branch'),
+        descendantPolicy: z
+          .enum(['none', 'eligible', 'all'])
+          .optional()
+          .describe(
+            '"none" = only matched sessions; "eligible" = plus child sessions with no unfinished task that are not newer than olderThanDays; "all" = plus every child session. Omit on a dry-run to preview all three. Deprecated to omit on execution (applies "none").'
+          ),
+        sampleLimit: z
+          .number()
+          .int()
+          .min(1)
+          .max(100)
+          .optional()
+          .describe('Representative rows returned per preview category (default 20, max 100).'),
         dryRun: z
           .boolean()
           .optional()
@@ -1550,6 +1620,8 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
     },
     async (args) => {
       const dryRun = args.dryRun !== false;
+      const legacyDefaultApplied = !dryRun && args.descendantPolicy === undefined;
+      const sampleLimit = args.sampleLimit ?? 20;
 
       // Build service query for non-archived sessions
       const query: Record<string, unknown> = { archived: false };
@@ -1587,54 +1659,120 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
         return true;
       });
 
+      const sessionsService = ctx.app.service('sessions') as unknown as SessionsServiceImpl;
+      const summarize = (s: Session) => ({
+        session_id: s.session_id,
+        title: s.title,
+        status: s.status,
+        session_type: getSessionType(s),
+        last_updated: s.last_updated,
+        created_at: s.created_at,
+        branch_id: s.branch_id,
+      });
+      // Exact counts always; bounded representative samples never the full set.
+      const sampled = (list: Session[]) => ({
+        count: list.length,
+        sample: list.slice(0, sampleLimit).map(summarize),
+        ...(list.length > sampleLimit && { sampleTruncated: true }),
+      });
+      const skippedRoots = (units: ArchiveOutcome['units']) => {
+        const ids = units
+          .filter((unit) => unit.status === 'skipped')
+          .map((unit) => unit.rootSessionId);
+        return {
+          count: ids.length,
+          sample: ids.slice(0, sampleLimit),
+          ...(ids.length > sampleLimit && { sampleTruncated: true }),
+        };
+      };
+      type BulkPolicy = 'none' | 'eligible' | 'all';
+
       if (dryRun) {
+        // Preview and execution share the planner, so the sets shown here are
+        // exactly what dryRun: false would attempt for the same policy.
+        const policies: BulkPolicy[] = args.descendantPolicy
+          ? [args.descendantPolicy]
+          : ['none', 'eligible', 'all'];
+        const previews: Record<string, { wouldArchive: number } & Record<string, unknown>> = {};
+        for (const policy of policies) {
+          if (toArchive.length === 0) {
+            previews[policy] = { wouldArchive: 0 };
+            continue;
+          }
+          const preview = await runWithMcpTenantDatabaseScope(ctx, () =>
+            sessionsService.previewBulkArchive(
+              toArchive,
+              { policy, cutoffDate },
+              ctx.baseServiceParams
+            )
+          );
+          previews[policy] = {
+            wouldArchive: preview.wouldArchive,
+            matchedRoots: sampled(preview.directRoots),
+            impliedDescendants: sampled(preview.impliedDescendants),
+            excludedDescendants: sampled(preview.excludedDescendants),
+            descendantsNewerThanCutoff: sampled(preview.descendantsNewerThanCutoff),
+            descendantsWithUnfinishedTasks: sampled(preview.descendantsWithUnfinishedTasks),
+            descendantsStillRunning: sampled(preview.activeDescendants),
+            skippedRoots: skippedRoots(preview.units),
+          };
+        }
+        const chosen = args.descendantPolicy ? previews[args.descendantPolicy] : undefined;
         return textResult({
           dryRun: true,
-          wouldArchive: toArchive.length,
           totalMatched: allSessions.length,
+          matchedRootCount: toArchive.length,
           ...(cutoffDate && { cutoffDate: cutoffDate.toISOString() }),
-          sessions: toArchive.map((s) => ({
-            session_id: s.session_id,
-            title: s.title,
-            status: s.status,
-            session_type: getSessionType(s),
-            last_updated: s.last_updated,
-            created_at: s.created_at,
-            branch_id: s.branch_id,
-          })),
-          message: `Would archive ${toArchive.length} session(s). Set dryRun=false to proceed.`,
+          policies: previews,
+          message: chosen
+            ? `Would archive ${chosen.wouldArchive} session(s) with descendantPolicy "${args.descendantPolicy}". Set dryRun=false to proceed.`
+            : `Matched ${toArchive.length} session(s). Choose descendantPolicy "none", "eligible", or "all" (see policies) and set dryRun=false to proceed.`,
         });
       }
 
-      // Archive each session (through service layer for RBAC)
-      let archivedCount = 0;
-      const errors: { session_id: string; error: string }[] = [];
-
-      for (const session of toArchive) {
-        try {
-          await ctx.app
-            .service('sessions')
-            .patch(
-              session.session_id,
-              { archived: true, archived_reason: 'manual' },
-              ctx.baseServiceParams
-            );
-          archivedCount++;
-        } catch (error) {
-          errors.push({
-            session_id: session.session_id,
-            error: error instanceof Error ? error.message : String(error),
-          });
-        }
+      const descendantPolicy: BulkPolicy = args.descendantPolicy ?? 'none';
+      const deprecation = legacyDefaultApplied
+        ? 'descendantPolicy was omitted, so the legacy "none" policy was applied and child sessions were left active. Pass descendantPolicy explicitly; omitting it will be rejected in a future release.'
+        : undefined;
+      if (toArchive.length === 0) {
+        return textResult({
+          success: true,
+          descendantPolicy,
+          ...(legacyDefaultApplied && { deprecatedDefaultApplied: true, warning: deprecation }),
+          archivedCount: 0,
+          failedCount: 0,
+          ...(cutoffDate && { cutoffDate: cutoffDate.toISOString() }),
+          message: 'No sessions matched the filters.',
+        });
       }
+
+      const result = await runWithMcpTenantDatabaseWrite(ctx, () =>
+        sessionsService.bulkArchive(
+          toArchive,
+          { policy: descendantPolicy, cutoffDate },
+          ctx.baseServiceParams
+        )
+      );
+      const errors = result.units
+        .filter((unit) => unit.status === 'skipped')
+        .map((unit) => ({
+          session_id: unit.rootSessionId,
+          error:
+            'Insufficient permission in this branch; the session and its children were not archived.',
+        }));
 
       return textResult({
         success: true,
-        archivedCount,
+        descendantPolicy,
+        ...(legacyDefaultApplied && { deprecatedDefaultApplied: true, warning: deprecation }),
+        archivedCount: result.archivedCount,
+        directCount: result.preview.directRoots.length,
+        descendantCount: result.preview.impliedDescendants.length,
+        excludedDescendantCount: result.preview.excludedDescendants.length,
         failedCount: errors.length,
         ...(cutoffDate && { cutoffDate: cutoffDate.toISOString() }),
         errors: errors.length > 0 ? errors : undefined,
-        message: `Archived ${archivedCount} session(s).${errors.length > 0 ? ` ${errors.length} failed (insufficient permissions or other errors).` : ''}`,
+        message: `Archived ${result.archivedCount} session(s) (${result.preview.directRoots.length} matched, ${result.preview.impliedDescendants.length} child sessions).${errors.length > 0 ? ` ${errors.length} unit(s) skipped (insufficient permissions).` : ''}${deprecation ? ` ${deprecation}` : ''}`,
       });
     }
   );

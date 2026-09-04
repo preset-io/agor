@@ -1973,9 +1973,64 @@ describe('agor_sessions_archive tools', () => {
     vi.clearAllMocks();
   });
 
+  const archiveOutcome = (overrides: Record<string, unknown>) => ({
+    session: { session_id: 'sess-parent' },
+    dryRun: false,
+    wouldChangeCount: 0,
+    affectedSessions: [],
+    count: 0,
+    archivedCount: 0,
+    unarchivedCount: 0,
+    localCount: 0,
+    remoteCount: 0,
+    skippedCount: 0,
+    runningCount: 0,
+    units: [],
+    remainingArchived: [],
+    ...overrides,
+  });
+
   it('delegates archive and unarchive to the shared sessions service operations', async () => {
-    const archive = vi.fn(async () => ({ count: 3 }));
-    const unarchive = vi.fn(async () => ({ count: 2 }));
+    const archive = vi.fn(async () =>
+      archiveOutcome({
+        count: 3,
+        archivedCount: 3,
+        localCount: 2,
+        remoteCount: 1,
+        skippedCount: 1,
+        units: [
+          {
+            rootSessionId: 'sess-parent',
+            branchId: 'wt-1',
+            kind: 'local',
+            status: 'changed',
+            changedCount: 2,
+          },
+          {
+            rootSessionId: 'sess-remote',
+            branchId: 'wt-2',
+            kind: 'remote',
+            status: 'changed',
+            changedCount: 1,
+          },
+          {
+            rootSessionId: 'sess-remote-denied',
+            kind: 'remote',
+            status: 'skipped',
+            changedCount: 0,
+            reason: 'insufficient_permission',
+          },
+        ],
+      })
+    );
+    const unarchive = vi.fn(async () =>
+      archiveOutcome({
+        count: 2,
+        unarchivedCount: 2,
+        localCount: 2,
+        remainingArchived: [{ sessionId: 'sess-child', reason: 'independent_reason' }],
+      })
+    );
     const app = makeFakeApp({
       sessions: { archive, unarchive },
     });
@@ -1992,19 +2047,200 @@ describe('agor_sessions_archive tools', () => {
     const unarchiveResult = await tools.agor_sessions_unarchive({
       sessionId: 'sess-parent',
       includeChildren: false,
+      includeRemoteChildren: false,
     });
 
     expect(archive).toHaveBeenCalledWith(
       'sess-parent',
-      { includeChildren: true },
+      { includeChildren: true, includeRemoteChildren: true, dryRun: false },
       { provider: 'mcp' }
     );
     expect(unarchive).toHaveBeenCalledWith(
       'sess-parent',
-      { includeChildren: false },
+      { includeChildren: false, includeRemoteChildren: false, dryRun: false },
       { provider: 'mcp' }
     );
-    expect(JSON.parse(archiveResult.content[0].text)).toMatchObject({ archivedCount: 3 });
-    expect(JSON.parse(unarchiveResult.content[0].text)).toMatchObject({ unarchivedCount: 2 });
+    const archivePayload = JSON.parse(archiveResult.content[0].text);
+    expect(archivePayload).toMatchObject({
+      archivedCount: 3,
+      localCount: 2,
+      remoteCount: 1,
+      skippedCount: 1,
+    });
+    expect(archivePayload.message).toMatch(/1 remote unit\(s\) skipped/);
+    const unarchivePayload = JSON.parse(unarchiveResult.content[0].text);
+    expect(unarchivePayload).toMatchObject({
+      unarchivedCount: 2,
+      remainingArchived: [{ sessionId: 'sess-child', reason: 'independent_reason' }],
+    });
+    expect(unarchivePayload.message).toMatch(/1 child session\(s\) stay archived/);
+  });
+
+  it('agor_sessions_update rejects archive fields and names the dedicated tools', async () => {
+    const patch = vi.fn();
+    const app = makeFakeApp({ sessions: { patch } });
+    const tools = await registerAndCaptureHandlers(
+      { app, userId: 'user-1', sessionId: 'sess-current', baseServiceParams: { provider: 'mcp' } },
+      ['agor_sessions_update']
+    );
+
+    await expect(
+      tools.agor_sessions_update({ sessionId: 'sess-1', archived: true })
+    ).rejects.toThrow(/agor_sessions_archive/);
+    await expect(
+      tools.agor_sessions_update({ sessionId: 'sess-1', title: 'x', archived: false })
+    ).rejects.toThrow(/agor_sessions_unarchive/);
+    expect(patch).not.toHaveBeenCalled();
+  });
+});
+
+describe('agor_sessions_bulk_archive', () => {
+  afterEach(() => {
+    vi.resetModules();
+    vi.clearAllMocks();
+  });
+
+  const root = {
+    session_id: 'sess-root',
+    title: 'Root',
+    status: 'idle',
+    branch_id: 'wt-1',
+    created_at: '2026-01-01T00:00:00.000Z',
+    last_updated: '2026-01-01T00:00:00.000Z',
+    archived: false,
+  };
+  const child = {
+    ...root,
+    session_id: 'sess-child',
+    title: 'Child',
+    status: 'running',
+    last_updated: new Date().toISOString(),
+  };
+
+  function makeBulkApp() {
+    const find = vi.fn(async () => ({ data: [root], total: 1, limit: 200, skip: 0 }));
+    const previewFor = (policy: 'none' | 'eligible' | 'all') => ({
+      policy,
+      directRoots: [root],
+      impliedDescendants: policy === 'all' ? [child] : [],
+      excludedDescendants: policy === 'eligible' ? [child] : [],
+      descendantsNewerThanCutoff: policy === 'all' ? [child] : [],
+      descendantsWithUnfinishedTasks: [],
+      activeDescendants: policy === 'all' ? [child] : [],
+      units: [
+        {
+          rootSessionId: 'sess-root',
+          kind: 'local',
+          status: 'changed',
+          changedCount: policy === 'all' ? 2 : 1,
+          branchId: 'wt-1',
+        },
+      ],
+      wouldArchive: policy === 'all' ? 2 : 1,
+    });
+    const previewBulkArchive = vi.fn(
+      async (_roots: unknown, options: { policy: 'none' | 'eligible' | 'all' }) =>
+        previewFor(options.policy)
+    );
+    const bulkArchive = vi.fn(
+      async (_roots: unknown, options: { policy: 'none' | 'eligible' | 'all' }) => ({
+        session: root,
+        dryRun: false,
+        wouldChangeCount: options.policy === 'all' ? 2 : 1,
+        affectedSessions: [],
+        count: options.policy === 'all' ? 2 : 1,
+        archivedCount: options.policy === 'all' ? 2 : 1,
+        unarchivedCount: 0,
+        localCount: options.policy === 'all' ? 2 : 1,
+        remoteCount: 0,
+        skippedCount: 0,
+        runningCount: 0,
+        units: [],
+        remainingArchived: [],
+        preview: previewFor(options.policy),
+      })
+    );
+    const app = makeFakeApp({ sessions: { find, previewBulkArchive, bulkArchive } });
+    return { app, find, previewBulkArchive, bulkArchive };
+  }
+
+  it('applies the legacy "none" policy with a deprecation warning when execution omits it', async () => {
+    const { app, bulkArchive } = makeBulkApp();
+    const tools = await registerAndCaptureHandlers(
+      { app, userId: 'user-1', sessionId: 'sess-current', baseServiceParams: { provider: 'mcp' } },
+      ['agor_sessions_bulk_archive']
+    );
+
+    const executed = JSON.parse(
+      (await tools.agor_sessions_bulk_archive({ dryRun: false })).content[0].text
+    );
+
+    expect(bulkArchive).toHaveBeenCalledWith(
+      [expect.objectContaining({ session_id: 'sess-root' })],
+      { policy: 'none', cutoffDate: null },
+      { provider: 'mcp' }
+    );
+    expect(executed).toMatchObject({
+      success: true,
+      descendantPolicy: 'none',
+      deprecatedDefaultApplied: true,
+      archivedCount: 1,
+    });
+    expect(executed.warning).toMatch(/descendantPolicy was omitted/);
+  });
+
+  it('previews all three policies on a dry-run and executes the chosen one through the same planner', async () => {
+    const { app, previewBulkArchive, bulkArchive } = makeBulkApp();
+    const tools = await registerAndCaptureHandlers(
+      { app, userId: 'user-1', sessionId: 'sess-current', baseServiceParams: { provider: 'mcp' } },
+      ['agor_sessions_bulk_archive']
+    );
+
+    const preview = JSON.parse(
+      (await tools.agor_sessions_bulk_archive({ olderThanDays: 30, sampleLimit: 1 })).content[0]
+        .text
+    );
+    expect(preview.dryRun).toBe(true);
+    expect(preview.matchedRootCount).toBe(1);
+    expect(Object.keys(preview.policies)).toEqual(['none', 'eligible', 'all']);
+    expect(preview.policies.none).toMatchObject({ wouldArchive: 1 });
+    expect(preview.policies.eligible).toMatchObject({
+      wouldArchive: 1,
+      excludedDescendants: { count: 1 },
+    });
+    expect(preview.policies.all).toMatchObject({
+      wouldArchive: 2,
+      impliedDescendants: { count: 1 },
+      descendantsNewerThanCutoff: { count: 1 },
+      descendantsStillRunning: { count: 1 },
+    });
+    expect(preview.policies.all.impliedDescendants.sample[0]).toMatchObject({
+      session_id: 'sess-child',
+    });
+    expect(previewBulkArchive).toHaveBeenCalledTimes(3);
+    expect(previewBulkArchive.mock.calls[1]?.[1]).toMatchObject({
+      policy: 'eligible',
+      cutoffDate: expect.any(Date),
+    });
+    expect(bulkArchive).not.toHaveBeenCalled();
+
+    const executed = JSON.parse(
+      (await tools.agor_sessions_bulk_archive({ dryRun: false, descendantPolicy: 'all' }))
+        .content[0].text
+    );
+    expect(bulkArchive).toHaveBeenCalledWith(
+      [expect.objectContaining({ session_id: 'sess-root' })],
+      { policy: 'all', cutoffDate: null },
+      { provider: 'mcp' }
+    );
+    expect(executed).toMatchObject({
+      success: true,
+      descendantPolicy: 'all',
+      archivedCount: 2,
+      directCount: 1,
+      descendantCount: 1,
+      failedCount: 0,
+    });
+    expect(executed.deprecatedDefaultApplied).toBeUndefined();
   });
 });

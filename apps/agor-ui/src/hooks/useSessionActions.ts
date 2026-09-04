@@ -20,12 +20,59 @@ import {
 import { useState } from 'react';
 import type { NewSessionConfig } from '../domain/sessionCreation';
 
+/** Options accepted by `POST /sessions/:id/archive` and `/unarchive`. */
+export interface SessionArchiveOptions {
+  /** Include branch-local spawned/forked descendants. Default: true. */
+  includeChildren?: boolean;
+  /** Follow sessions this one created in other branches. Default: true. */
+  includeRemoteChildren?: boolean;
+  /** Plan and authorize only; nothing changes. Default: false. */
+  dryRun?: boolean;
+}
+
+/** Wire shape returned by the dedicated archive/unarchive routes. */
+export interface SessionArchiveOutcome {
+  session: Session;
+  dryRun: boolean;
+  /** Rows the plan would change (dry-run) or attempted (execution). */
+  wouldChangeCount: number;
+  archivedCount: number;
+  unarchivedCount: number;
+  localCount: number;
+  remoteCount: number;
+  skippedCount: number;
+  /** Planned rows whose session is still executing. */
+  runningCount: number;
+  units: Array<{
+    rootSessionId: SessionID;
+    kind: 'local' | 'remote';
+    status: 'changed' | 'unchanged' | 'skipped';
+    changedCount: number;
+    /** Only for units the caller is authorized for. */
+    branchId?: string;
+    reason?: 'insufficient_permission' | 'not_found' | 'conflict';
+  }>;
+  limitExceeded?: 'remote_depth' | 'remote_branch_units' | 'remote_session_targets';
+  remainingArchived: Array<{
+    sessionId: SessionID;
+    reason: 'independent_reason' | 'archived_ancestor' | 'archived_branch';
+  }>;
+}
+
 interface UseSessionActionsResult {
   createSession: (config: NewSessionConfig) => Promise<Session>;
   updateSession: (sessionId: SessionID, updates: Partial<Session>) => Promise<Session | null>;
   deleteSession: (sessionId: SessionID) => Promise<boolean>;
-  archiveSession: (sessionId: SessionID) => Promise<Session | null>;
-  unarchiveSession: (sessionId: SessionID) => Promise<Session | null>;
+  // Throw on failure so callers can offer a targeted retry (for example
+  // "archive only this session" after a shared-session child was denied).
+  archiveSession: (
+    sessionId: SessionID,
+    options?: SessionArchiveOptions
+  ) => Promise<SessionArchiveOutcome>;
+  unarchiveSession: (
+    sessionId: SessionID,
+    options?: SessionArchiveOptions
+  ) => Promise<SessionArchiveOutcome>;
   // Throw on failure (do NOT return null) so callers can preserve the user's
   // typed prompt in the compose box. See SessionPanel.handleFork / handleBtwSend
   // and ForkSpawnModal.handleOk for the preserved-on-failure invariants.
@@ -255,45 +302,43 @@ export function useSessionActions(client: AgorClient | null): UseSessionActionsR
     }
   };
 
-  const archiveSession = async (sessionId: SessionID): Promise<Session | null> => {
+  // The UI always states both cascade choices explicitly rather than relying on
+  // the transport default, so what the confirmation showed is what is sent.
+  const archiveRequestBody = (
+    options?: SessionArchiveOptions
+  ): Required<SessionArchiveOptions> => ({
+    includeChildren: options?.includeChildren ?? true,
+    includeRemoteChildren: options?.includeRemoteChildren ?? true,
+    dryRun: options?.dryRun ?? false,
+  });
+
+  const runArchiveRoute = async (
+    route: 'archive' | 'unarchive',
+    sessionId: SessionID,
+    options?: SessionArchiveOptions
+  ): Promise<SessionArchiveOutcome> => {
     if (!client) {
       setError('Client not connected');
-      return null;
+      throw new Error('Client not connected');
     }
-
     try {
       setError(null);
-      const result = (await client.service(`sessions/${sessionId}/archive`).create({})) as {
-        session: Session;
-      };
-      return result.session;
+      return (await client
+        .service(`sessions/${sessionId}/${route}`)
+        .create(archiveRequestBody(options))) as SessionArchiveOutcome;
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'Failed to archive session';
+      const message = err instanceof Error ? err.message : `Failed to ${route} session`;
       setError(message);
-      console.error('Failed to archive session:', err);
-      return null;
+      console.error(`Failed to ${route} session:`, err);
+      throw err instanceof Error ? err : new Error(message);
     }
   };
 
-  const unarchiveSession = async (sessionId: SessionID): Promise<Session | null> => {
-    if (!client) {
-      setError('Client not connected');
-      return null;
-    }
+  const archiveSession = (sessionId: SessionID, options?: SessionArchiveOptions) =>
+    runArchiveRoute('archive', sessionId, options);
 
-    try {
-      setError(null);
-      const result = (await client.service(`sessions/${sessionId}/unarchive`).create({})) as {
-        session: Session;
-      };
-      return result.session;
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'Failed to unarchive session';
-      setError(message);
-      console.error('Failed to unarchive session:', err);
-      return null;
-    }
-  };
+  const unarchiveSession = (sessionId: SessionID, options?: SessionArchiveOptions) =>
+    runArchiveRoute('unarchive', sessionId, options);
 
   return {
     createSession,
