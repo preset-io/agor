@@ -27,6 +27,7 @@ import React, { useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
   REACT_FLOW_DRAG_HANDLE_CLASS,
   REACT_FLOW_NO_DRAG_CLASS,
+  REACT_FLOW_NO_WHEEL_CLASS,
 } from '../../utils/reactFlowDragClasses';
 import { ensureColorVisible, isDarkTheme } from '../../utils/theme';
 import { MarkdownRenderer } from '../MarkdownRenderer';
@@ -183,6 +184,7 @@ const CardNodeComponent = ({ data }: { data: CardNodeData }) => {
         >
           <div
             ref={descRef}
+            className={descExpanded ? REACT_FLOW_NO_WHEEL_CLASS : undefined}
             style={{
               maxHeight: descExpanded
                 ? DESCRIPTION_EXPANDED_MAX_HEIGHT
