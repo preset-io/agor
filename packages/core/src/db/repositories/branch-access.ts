@@ -127,7 +127,6 @@ export async function resolveSessionRuntimeBranchAccess(
   input: {
     sessionId: SessionID | string;
     principalUserId: UserID | string;
-    branchRbacEnabled: boolean;
   }
 ): Promise<SessionRuntimeBranchAccess | null> {
   const principal = input.principalUserId;
@@ -220,7 +219,7 @@ export async function resolveSessionRuntimeBranchAccess(
 
   let canPromptOwn = false;
   let fsAccess: CapabilityPolicyFsAccess = 'none';
-  if (principalUserId && (!input.branchRbacEnabled || isPrimaryOwner)) {
+  if (principalUserId && isPrimaryOwner) {
     canPromptOwn = true;
     fsAccess = 'write';
   } else if (principalUserId && row.sharing_mode === 'shared') {
@@ -258,10 +257,7 @@ export async function resolveSessionRuntimeBranchAccess(
     branch_id: String(row.branch_id),
     principal_available: principalUserId !== undefined,
     can_prompt_session: Boolean(
-      principalUserId &&
-        // RBAC-disabled admission intentionally permits any existing member to
-        // prompt the Session; its legacy filesystem projection remains write.
-        (!input.branchRbacEnabled || (canPromptOwn && (ownsSession || sharedSessionAllowed)))
+      principalUserId && canPromptOwn && (ownsSession || sharedSessionAllowed)
     ),
     fs_access: principalUserId ? fsAccess : 'none',
     observed_at: observedAt,

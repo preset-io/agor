@@ -8,15 +8,18 @@
 The capability historically named `full` is not redundant with `postgres`:
 
 - `postgres` selects `docker-compose.override.postgres.yml`. It changes the database to
-  PostgreSQL but leaves branch RBAC off and local execution in trusted `simple` mode.
-- `rich` selects `docker-compose.postgres.yml`. It enables PostgreSQL, branch RBAC,
+  PostgreSQL while retaining local execution in trusted `simple` mode.
+- `rich` selects `docker-compose.postgres.yml`. It enables PostgreSQL,
   `execution.unix_user_mode: sandbox` (therefore fail-closed per-user bubblewrap isolation), and
   Alice/Bob RBAC fixtures.
 
 Both use the source-mode development image, bind-mounted checkout, Vite UI, development seed, and
 standalone daemon topology. Neither is a production deployment profile. The separate `ha` variant
 is the constrained active-active smoke topology; it currently uses a static tenant, shared storage,
-PostgreSQL, ephemeral Redis, two daemon processes, and nginx affinity, with branch RBAC off.
+PostgreSQL, ephemeral Redis, two daemon processes, and nginx affinity.
+
+Board and Branch authorization is now always enabled in every variant; the remaining distinction
+is execution containment, not application authorization.
 
 All source-mode PostgreSQL variants (`postgres`, `postgres-demo`, `rich`, and the `full` alias) skip
 `agor init` so that they do not create an unrelated SQLite database. They therefore need a separate

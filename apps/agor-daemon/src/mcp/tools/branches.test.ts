@@ -1,4 +1,3 @@
-import * as configModule from '@agor/core/config';
 import { BranchRepository, CapabilityPolicyRepository } from '@agor/core/db';
 import { Forbidden, feathers } from '@agor/core/feathers';
 import type { Branch, BranchPermissionLevel } from '@agor/core/types';
@@ -2112,7 +2111,12 @@ describe('agor_teammates_list', () => {
     const result = await listTeammates({ limit: 100 });
     const parsed = JSON.parse(result.content[0].text);
 
-    expect(findTeammateBranches).toHaveBeenCalledWith({ archived: false, limit: 101, offset: 0 });
+    expect(findTeammateBranches).toHaveBeenCalledWith({
+      archived: false,
+      limit: 101,
+      offset: 0,
+      userId: 'user-1',
+    });
     expect(parsed.total).toBe(1);
     expect(parsed.teammates).toEqual([
       expect.objectContaining({
@@ -2172,11 +2176,6 @@ describe('agor_teammates_list', () => {
   });
 
   it('does not scope teammate discovery for superadmins when superadmin bypass is enabled', async () => {
-    vi.spyOn(configModule, 'isBranchRbacEnabled').mockReturnValue(true);
-    vi.spyOn(configModule, 'loadConfig').mockResolvedValue({
-      execution: { allow_superadmin: true },
-    } as Awaited<ReturnType<typeof configModule.loadConfig>>);
-
     const findTeammateBranches = vi
       .spyOn(BranchRepository.prototype, 'findTeammateBranches')
       .mockResolvedValue([]);
@@ -2203,11 +2202,6 @@ describe('agor_teammates_list', () => {
   });
 
   it('scopes teammate discovery for superadmins when superadmin bypass is disabled', async () => {
-    vi.spyOn(configModule, 'isBranchRbacEnabled').mockReturnValue(true);
-    vi.spyOn(configModule, 'loadConfig').mockResolvedValue({
-      execution: { allow_superadmin: false },
-    } as Awaited<ReturnType<typeof configModule.loadConfig>>);
-
     const findTeammateBranches = vi
       .spyOn(BranchRepository.prototype, 'findTeammateBranches')
       .mockResolvedValue([]);

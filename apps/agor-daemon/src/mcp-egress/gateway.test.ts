@@ -91,7 +91,6 @@ interface HarnessOptions {
   oauthRefreshToken?: string;
   oauthExpiresAt?: Date | null;
   separatePrincipal?: boolean;
-  branchRbacEnabled?: boolean;
   authoritySnapshotCheckpoint?: () => Promise<void>;
   oauthAuthHeadersCreate?: (params: {
     mcp_egress_assert_current?: () => Promise<void>;
@@ -247,7 +246,6 @@ async function harness(options: HarnessOptions) {
     db: rawDb as unknown as TenantScopeAwareDatabase,
     app,
     jwtSecret,
-    branchRbacEnabled: options.branchRbacEnabled ?? false,
     allowLocalhostHttp: true,
     resolveDns: options.resolveDns,
     authoritySnapshotCheckpoint: options.authoritySnapshotCheckpoint,
@@ -420,7 +418,6 @@ describe('authoritative MCP gateway real transport', () => {
         auth: { type: 'oauth', oauth_mode: 'per_user' },
       },
       separatePrincipal: true,
-      branchRbacEnabled: true,
       oauthAccessToken: 'prompt-caller-oauth-token',
     });
 
@@ -492,7 +489,6 @@ describe('authoritative MCP gateway real transport', () => {
       db: {} as TenantScopeAwareDatabase,
       app: {} as Application,
       jwtSecret: 'tenant-abort-test',
-      branchRbacEnabled: false,
     });
     const tenantA = new AbortController();
     const tenantB = new AbortController();
@@ -1051,7 +1047,6 @@ describe('authoritative MCP gateway real transport', () => {
     const h = await harness({
       server: { transport: 'http', url: provider, auth: { type: 'none' } },
       separatePrincipal: true,
-      branchRbacEnabled: true,
       resolveDns: async () => {
         dnsStarted();
         await dnsGate;

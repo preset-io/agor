@@ -98,8 +98,8 @@ disabled.
 ## Security boundary
 
 1. Global member-role and branch `session` permission gates run before spawn.
-2. Branch lookup always uses the active tenant database scope, even when branch
-   RBAC is disabled.
+2. Branch lookup always uses the active tenant database scope and normalized
+   Branch authorization.
 3. Terminal create is Socket.IO-only, binding control and PTY traffic to the
    same owner connection. REST creation is rejected.
 4. Raw rooms contain tenant, user, and random terminal ID. Browsers and

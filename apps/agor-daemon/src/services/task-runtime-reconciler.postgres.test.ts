@@ -164,11 +164,8 @@ async function seed(db: Database) {
       principal_user_id: user.user_id,
       session_id: session.session_id,
       branch_id: branch.branch_id,
-      branchRbacEnabled: true,
     };
-    await tasks.bindExecutorLaunchAuthority(active.task_id, {
-      branchRbacEnabled: true,
-    });
+    await tasks.bindExecutorLaunchAuthority(active.task_id, {});
     await tasks.connectExecutor(active.task_id, new Date('2000-01-01T00:00:01.000Z'));
     const tokenNow = new Date();
     await new ExecutorSessionTokenAuthorityRepository(scoped).issue({

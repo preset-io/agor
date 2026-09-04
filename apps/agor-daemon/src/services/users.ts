@@ -1732,11 +1732,8 @@ export class UsersService {
   }
 
   private shouldEnforcePrimaryTeammateAccess(params?: Params): boolean {
-    // Services instantiated without an Application (focused repository/service
-    // tests) retain the safer RBAC-on behavior. Production supplies the app.
     if (!this.app) return true;
     const execution = this.app.get('config').execution;
-    if (execution?.branch_rbac !== true) return false;
     if (
       execution.allow_superadmin === true &&
       hasMinimumRole((params as AuthenticatedParams | undefined)?.user?.role, ROLES.SUPERADMIN)

@@ -612,9 +612,8 @@ export interface AgorExecutionSettings {
   unix_user_mode?: UnixUserMode;
 
   /**
-   * Enable branch RBAC and ownership enforcement (default: false for static
-   * deployments). Required in auth-resolved multi-tenant deployments and
-   * implied by the named `sandbox` execution mode.
+   * @deprecated Board and branch RBAC is always enabled. Omit this key.
+   * `true` remains accepted as a compatibility no-op; `false` is rejected.
    */
   branch_rbac?: boolean;
 

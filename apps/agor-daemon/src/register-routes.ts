@@ -434,7 +434,6 @@ export interface RegisterRoutesContext {
   config: AgorConfig;
   externalLaunchProvider: ResolvedExternalLaunchProvider;
   jwtSecret: string;
-  branchRbacEnabled: boolean;
   requireAuth: (context: HookContext) => Promise<HookContext>;
   enforcePasswordChange: (context: HookContext) => Promise<HookContext>;
   superadminOpts: { allowSuperadmin: boolean };
@@ -785,7 +784,6 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     config,
     externalLaunchProvider,
     jwtSecret,
-    branchRbacEnabled,
     requireAuth,
     enforcePasswordChange,
     superadminOpts,
@@ -821,7 +819,6 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     db,
     app,
     jwtSecret,
-    branchRbacEnabled,
   });
   // Internal composition seam used by MCP mutation hooks. It is never exposed
   // as a Feathers service and carries no serializable credential material.
@@ -1985,7 +1982,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           operationDb: TenantScopedDatabase,
           currentSession: Session
         ): Promise<void> => {
-          if (!branchRbacEnabled || isPromptServiceAccount || !currentSession.branch_id) return;
+          if (isPromptServiceAccount || !currentSession.branch_id) return;
           if (!promptUserId) {
             throw new NotAuthenticated('Authentication required to prompt a session');
           }
@@ -2004,7 +2001,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
             throw new Forbidden(sessionPromptDeniedMessage({ denial_reason: denialReason }));
           }
         };
-        if (branchRbacEnabled && !isPromptServiceAccount && promptBranchId) {
+        if (!isPromptServiceAccount && promptBranchId) {
           await runWithTenantDatabaseScope(db, promptTenantId, (operationDb) =>
             assertCurrentPromptAuthority(operationDb, session)
           );
@@ -2282,7 +2279,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           // different user. `/sessions/:id/prompt` creates a caller-owned Task.
           assertTaskExecutorPrincipal(task, params);
         }
-        if (branchRbacEnabled && task.session_id && !isInternalCall && !isServiceAccount) {
+        if (task.session_id && !isInternalCall && !isServiceAccount) {
           const session = await sessionsService.get(task.session_id, params);
           if (!session.branch_id) {
             // Sessions without branches are out of RBAC scope; fall through.
@@ -2679,35 +2676,31 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       // - 'prompt'/'all' → upload to any session
       // - 'session'      → upload only to own sessions
       // - 'view'/'none'  → denied
-      // Fail-closed: if RBAC is enabled but branch can't be resolved, deny.
-      // When RBAC is disabled, any authenticated member can upload.
-      if (branchRbacEnabled) {
-        const userId = params.user?.user_id as UUID;
-        if (!session.branch_id) {
-          return res.status(403).json({ error: 'Not authorized to upload to this session' });
-        }
-        const access = await runWithTenantDatabaseScope(db, params.tenant?.tenant_id, async () => {
-          const wt = await branchRepo.findById(session.branch_id);
-          if (!wt) return null;
-          return { wt };
-        });
-        if (!access) {
-          return res.status(404).json({ error: 'Branch not found' });
-        }
-        const { wt } = access;
-        const { allowed, effectiveLevel } = await resolveSessionPromptAccess({
-          branchRepository: branchRepo,
-          branch: wt,
-          session,
-          userId,
-        });
+      const userId = params.user?.user_id as UUID;
+      if (!session.branch_id) {
+        return res.status(403).json({ error: 'Not authorized to upload to this session' });
+      }
+      const access = await runWithTenantDatabaseScope(db, params.tenant?.tenant_id, async () => {
+        const wt = await branchRepo.findById(session.branch_id);
+        if (!wt) return null;
+        return { wt };
+      });
+      if (!access) {
+        return res.status(404).json({ error: 'Branch not found' });
+      }
+      const { wt } = access;
+      const { allowed, effectiveLevel } = await resolveSessionPromptAccess({
+        branchRepository: branchRepo,
+        branch: wt,
+        session,
+        userId,
+      });
 
-        if (!allowed) {
-          console.error(
-            `❌ [Upload Authz] User ${shortId(userId)} has '${effectiveLevel}' permission, cannot upload to branch ${shortId(wt.branch_id)}`
-          );
-          return res.status(403).json({ error: 'Not authorized to upload to this session' });
-        }
+      if (!allowed) {
+        console.error(
+          `❌ [Upload Authz] User ${shortId(userId)} has '${effectiveLevel}' permission, cannot upload to branch ${shortId(wt.branch_id)}`
+        );
+        return res.status(403).json({ error: 'Not authorized to upload to this session' });
       }
 
       if (!params.tenant?.tenant_id || !params.user?.user_id || !session.branch_id) {
@@ -2897,7 +2890,6 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       throw new NotFound('Upload unavailable');
     }
     if (upload.createdBy === userId) return upload;
-    if (!branchRbacEnabled) return upload;
     const allowed = await runWithTenantDatabaseScope(db, tenantId, async () => {
       const branch = await branchRepo.findById(upload.branchId);
       if (!branch) return false;
@@ -3099,7 +3091,6 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         // owner-or-admin policy below.
         if (
           body.force_unverified !== true &&
-          branchRbacEnabled &&
           params.provider &&
           !(params.user as { _isServiceAccount?: boolean } | undefined)?._isServiceAccount
         ) {
@@ -3540,7 +3531,6 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           data,
           params,
           authorization: {
-            branchRbacEnabled,
             branchRepository,
             allowSuperadmin: superadminOpts.allowSuperadmin,
           },
@@ -4135,7 +4125,6 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         inTenantDatabaseScope((context: HookContext) =>
           authorizeBranchArchiveDelete(context, {
             branchRepository,
-            branchRbacEnabled,
             superadminOpts,
           })
         ),
@@ -4172,19 +4161,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
 
           return context;
         }),
-        branchRbacEnabled
-          ? ensureBranchPermission('all', 'unarchive branches', superadminOpts)
-          : (context: HookContext) => {
-              const isOwner = context.params.isBranchOwner;
-              const userRole = context.params.user?.role;
-
-              if (!isOwner && !hasMinimumRole(userRole, ROLES.ADMIN)) {
-                throw new Forbidden(
-                  'You must be the branch owner or a global admin to unarchive branches'
-                );
-              }
-              return context;
-            },
+        ensureBranchPermission('all', 'unarchive branches', superadminOpts),
       ],
     },
   });
@@ -4248,18 +4225,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         // schedule-touching path.
         inTenantDatabaseScope(loadScheduleAndBranch(scheduleRepository, branchRepository)),
         ensureScheduleRunsAsCaller(superadminOpts),
-        branchRbacEnabled
-          ? ensureBranchPermission('all', 'run schedule', superadminOpts)
-          : (context: HookContext) => {
-              const isOwner = context.params.isBranchOwner;
-              const userRole = context.params.user?.role;
-              if (!isOwner && !hasMinimumRole(userRole, ROLES.ADMIN)) {
-                throw new Forbidden(
-                  'You must be the branch owner or a global admin to run schedules'
-                );
-              }
-              return context;
-            },
+        ensureBranchPermission('all', 'run schedule', superadminOpts),
       ],
     },
   });
@@ -4353,18 +4319,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           await cacheBranchAccess(context.params, branchRepository, branch);
           return context;
         }),
-        branchRbacEnabled
-          ? ensureBranchPermission('all', 'execute scheduled runs', superadminOpts)
-          : (context: HookContext) => {
-              const isOwner = context.params.isBranchOwner;
-              const userRole = context.params.user?.role;
-              if (!isOwner && !hasMinimumRole(userRole, ROLES.ADMIN)) {
-                throw new Forbidden(
-                  'You must be the branch owner or a global admin to execute scheduled runs'
-                );
-              }
-              return context;
-            },
+        ensureBranchPermission('all', 'execute scheduled runs', superadminOpts),
       ],
     },
   });
@@ -5458,11 +5413,9 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           // unavailable storage modes before submit.
           branchStorage: resolveBranchStorageConfig(config),
           uploadPolicy: getUploadLimits(),
-          // Normalized board/branch policies are independently feature-gated.
-          // This is safe to advertise before login so the UI can avoid
-          // rendering controls that the daemon will reject. Authorization
-          // remains enforced server-side.
-          branchRbac: config.execution?.branch_rbac === true,
+          // Retained temporarily for compatibility with older UIs. Current
+          // daemons enforce normalized board/branch policies unconditionally.
+          branchRbac: true,
         },
       };
 
@@ -5525,7 +5478,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           // AGOR_SET_UNIX_MODE) are written into ~/.agor/config.yaml by the
           // entrypoint before boot, so `config.execution` reflects them.
           execution: {
-            branchRbac: config.execution?.branch_rbac === true,
+            branchRbac: true,
             unixUserMode: config.execution?.unix_user_mode ?? 'simple',
             managedEnvsExecutionMode:
               config.execution?.managed_envs_execution_mode ?? MANAGED_ENV_EXECUTION_MODE_DEFAULT,

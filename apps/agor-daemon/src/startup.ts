@@ -14,7 +14,6 @@ import {
   type ResolvedEnvironmentHealthMonitorSettings,
   resolveDeploymentAgenticToolPolicy,
   resolveDispatchConnectTimeoutMs,
-  resolveExecutionSecurityMode,
   resolveExecutorHeartbeatConfig,
   resolveMultiTenancyConfig,
 } from '@agor/core/config';
@@ -817,7 +816,6 @@ export async function startup(ctx: StartupContext): Promise<void> {
   const schedulerMultiTenancy = resolveMultiTenancyConfig(config);
   const schedulerService = new SchedulerService(db, app, {
     deploymentPolicy: resolveDeploymentAgenticToolPolicy(config),
-    appRbacEnabled: resolveExecutionSecurityMode(config).appRbacEnabled,
     tickInterval: 30000, // 30 seconds
     gracePeriod: 120000, // 2 minutes
     unixUserMode: config.execution?.unix_user_mode ?? 'simple',

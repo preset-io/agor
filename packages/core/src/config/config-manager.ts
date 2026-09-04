@@ -888,6 +888,11 @@ function validateConfig(config: AgorConfig): void {
   ) {
     throw new Error('Config error: execution.branch_rbac must be a boolean');
   }
+  if (config.execution?.branch_rbac === false) {
+    throw new Error(
+      'Config error: execution.branch_rbac: false is no longer supported; board and branch RBAC is always enabled. Remove the key (recommended) or set it to true temporarily.'
+    );
+  }
   if (
     config.execution?.sandbox?.preserve_canonical_home_alias !== undefined &&
     typeof config.execution.sandbox.preserve_canonical_home_alias !== 'boolean'
@@ -1456,6 +1461,16 @@ export function resolveEffectiveConfig(
   config: AgorConfig,
   env: NodeJS.ProcessEnv = process.env
 ): AgorConfig {
+  if (config.execution?.branch_rbac === false) {
+    throw new Error(
+      'Config error: execution.branch_rbac: false is no longer supported; board and branch RBAC is always enabled. Remove the key (recommended) or set it to true temporarily.'
+    );
+  }
+  if (env.AGOR_RBAC_ENABLED && env.AGOR_RBAC_ENABLED !== 'true') {
+    throw new Error(
+      'Config error: AGOR_RBAC_ENABLED can no longer disable board and branch RBAC. Remove the environment variable (recommended) or set it to true temporarily.'
+    );
+  }
   const defaults = getDefaultConfig();
   const port = env.PORT ? Number.parseInt(env.PORT, 10) : undefined;
   const statsdEnabled = parseOptionalBooleanEnvironmentValue(
@@ -1549,7 +1564,9 @@ export function resolveEffectiveConfig(
       ...defaults.execution,
       ...config.execution,
       ...(resolvedExecutorResponse ? { executor_response: resolvedExecutorResponse } : {}),
-      ...(env.AGOR_RBAC_ENABLED === 'true' ? { branch_rbac: true } : {}),
+      // Keep the deprecated read-model field true for old clients and internal
+      // consumers during the compatibility window. It is no longer a switch.
+      branch_rbac: true,
       ...(env.AGOR_UNIX_USER_MODE
         ? {
             unix_user_mode: env.AGOR_UNIX_USER_MODE as NonNullable<
@@ -1561,9 +1578,6 @@ export function resolveEffectiveConfig(
       // isolation-mode implications). Computed above. AGOR_SANDBOX_ENABLED /
       // AGOR_SANDBOX_HOME_MODE are used by the `sandbox` .agor.yml env variants.
       ...(resolvedSandbox ? { sandbox: resolvedSandbox } : {}),
-      // `sandbox` isolation mode requires RBAC to be active (branch authorization
-      // is what the mount policy enforces). Force it on last so it wins.
-      ...(sandboxIsolation ? { branch_rbac: true } : {}),
     },
     paths: {
       ...defaults.paths,
@@ -1614,17 +1628,6 @@ export function resolveEffectiveConfig(
  */
 export function assertValidEffectiveExecutionConfig(config: AgorConfig): void {
   const execution = config.execution;
-
-  // Tenant identity prevents cross-tenant reads; it does not authorize one
-  // member to every board, branch, Session, file, or executor in that tenant.
-  // Validate this after environment projection so the named `sandbox` mode's
-  // branch-RBAC implication and AGOR_RBAC_ENABLED are both honored.
-  if (config.multi_tenancy?.mode === 'required_from_auth' && execution?.branch_rbac !== true) {
-    throw new Error(
-      'Config error: multi_tenancy.required_from_auth requires execution.branch_rbac: true; ' +
-        'tenant isolation is not a substitute for board and branch authorization.'
-    );
-  }
 
   if (!execution) return;
 
@@ -2014,8 +2017,6 @@ export function loadConfigSync(): AgorConfig {
 }
 
 export interface ResolvedExecutionSecurityMode {
-  /** App-layer branch ownership/visibility/action enforcement. */
-  appRbacEnabled: boolean;
   /** Configured Unix execution mode with default applied. */
   unixUserMode: import('./types').UnixUserMode;
   /**
@@ -2028,9 +2029,8 @@ export interface ResolvedExecutionSecurityMode {
 /**
  * Resolve the execution security posture from config.
  *
- * Keep this as the single semantic boundary between app-layer RBAC and
- * OS/filesystem isolation:
- * - `branch_rbac` controls Agor app permissions only.
+ * App-layer RBAC is always enabled and remains distinct from OS/filesystem
+ * isolation:
  * - `delegated` requires per-user `unix_username` but performs no OS-level
  *   work on the daemon host — identity
  *   enforcement is delegated to the execution substrate.
@@ -2040,7 +2040,6 @@ export function resolveExecutionSecurityMode(
 ): ResolvedExecutionSecurityMode {
   const unixUserMode = config.execution?.unix_user_mode ?? 'simple';
   return {
-    appRbacEnabled: config.execution?.branch_rbac === true,
     unixUserMode,
     requiresExecutionHomeKey: unixUserModeRequiresExecutionHomeKey(unixUserMode),
   };
@@ -2054,23 +2053,6 @@ export function unixUserModeRequiresExecutionHomeKey(
   mode: import('./types').UnixUserMode
 ): boolean {
   return mode === 'delegated';
-}
-
-/**
- * Check if logical branch RBAC is enabled.
- *
- * This controls app-level branch ownership/visibility. It does not necessarily
- * imply local filesystem isolation; simple mode may enable branch RBAC while
- * running filesystem work as the daemon user.
- *
- * @returns true if branch_rbac is enabled in config
- */
-export function isBranchRbacEnabled(): boolean {
-  try {
-    return resolveExecutionSecurityMode().appRbacEnabled;
-  } catch {
-    return false;
-  }
 }
 
 /**

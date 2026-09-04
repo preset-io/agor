@@ -109,7 +109,10 @@ describe('resolvePublishScope residual audience', () => {
     const app = makeApp([member, other, service]);
     configureRealtimePublish({
       app,
-      branchRbacEnabled: true,
+      boardRepository: {
+        findById: vi.fn(async () => ({ board_id: 'bd1' })),
+        findRealtimeViewUserIds: vi.fn(async () => ['u1']),
+      } as never,
       ...(repos() as unknown as {
         branchRepository: never;
         sessionsRepository: never;
@@ -129,7 +132,6 @@ describe('resolvePublishScope residual audience', () => {
     const app = makeApp([{ user: user('u1') }]);
     configureRealtimePublish({
       app,
-      branchRbacEnabled: true,
       ...(repos() as unknown as {
         branchRepository: never;
         sessionsRepository: never;
@@ -154,7 +156,10 @@ describe('resolvePublishScope residual audience', () => {
     const app = makeApp([member]);
     configureRealtimePublish({
       app,
-      branchRbacEnabled: false,
+      boardRepository: {
+        findById: vi.fn(async () => ({ board_id: 'bd1' })),
+        findRealtimeViewUserIds: vi.fn(async () => ['u1']),
+      } as never,
       ...(repos() as unknown as {
         branchRepository: never;
         sessionsRepository: never;

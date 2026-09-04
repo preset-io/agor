@@ -19,7 +19,6 @@ multi_tenancy:
   tenants_base_folder: ~/.agor/tenants
 
 execution:
-  branch_rbac: true
   branch_storage:
     default_mode: clone
     allowed_modes: [clone]
@@ -34,13 +33,12 @@ uploads:
 single-tenant layout. It is required when `mode` is `required_from_auth`; the
 daemon rejects that mode without filesystem isolation.
 
-`required_from_auth` also requires branch RBAC and clone-only branch storage.
+Board and branch RBAC is always enabled. `required_from_auth` also requires clone-only branch storage.
 Tenant resolution and PostgreSQL row-level security keep tenants apart, but
 they do not authorize every member of one tenant to every board, branch,
 Session, file, or executor in that tenant. The daemon therefore fails closed at
-startup when the resolved effective configuration does not set
-`execution.branch_rbac: true`. The named `execution.unix_user_mode: sandbox`
-profile satisfies this requirement because it forces branch RBAC on.
+every request boundary. The named `execution.unix_user_mode: sandbox` profile
+adds filesystem isolation but does not change the application authorization model.
 
 `tenants_base_folder` may be absolute, such as `/data/agor-tenants`, or relative
 to the daemon home (`~/.agor`). Its default is `~/.agor/tenants`.

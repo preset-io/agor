@@ -1,8 +1,7 @@
 import type { AgorClient, Board, CardWithType } from '@agor-live/client';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { App as AntApp } from 'antd';
-import { afterEach, describe, expect, it, vi } from 'vitest';
-import { __resetAuthConfigForTests, __setAuthConfigForTests } from '../../hooks/useAuthConfig';
+import { describe, expect, it, vi } from 'vitest';
 import CardModal from './CardModal';
 
 function renderWithApp(ui: React.ReactElement) {
@@ -40,25 +39,7 @@ function makeClient(capabilities: string[]) {
 }
 
 describe('CardModal permission gating', () => {
-  afterEach(() => {
-    __resetAuthConfigForTests();
-  });
-
-  it('leaves edit/archive/delete enabled by default when RBAC is disabled', async () => {
-    __setAuthConfigForTests({ requireAuth: true }, { branchRbac: false });
-    const { client } = makeClient(['board.view']);
-
-    renderWithApp(<CardModal open card={card} board={board} client={client} onClose={vi.fn()} />);
-
-    for (const el of screen.getAllByText('Edit')) {
-      expect(el.closest('button')).not.toBeDisabled();
-    }
-    expect(screen.getByText('Archive').closest('button')).not.toBeDisabled();
-    expect(screen.getByText('Delete').closest('button')).not.toBeDisabled();
-  });
-
   it('disables note/description editing, archive, and delete when the caller lacks board.edit', async () => {
-    __setAuthConfigForTests({ requireAuth: true }, { branchRbac: true });
     const { client, effectiveAccessFind } = makeClient(['board.view']);
 
     renderWithApp(<CardModal open card={card} board={board} client={client} onClose={vi.fn()} />);
@@ -75,7 +56,6 @@ describe('CardModal permission gating', () => {
   });
 
   it('enables editing once the caller has board.edit, and saves through cards.patch', async () => {
-    __setAuthConfigForTests({ requireAuth: true }, { branchRbac: true });
     const { client, patch, effectiveAccessFind } = makeClient(['board.view', 'board.edit']);
 
     renderWithApp(<CardModal open card={card} board={board} client={client} onClose={vi.fn()} />);

@@ -33,7 +33,7 @@ const mocks = vi.hoisted(() => {
     joinRequestingSocket: vi.fn(async () => true),
     config: {
       daemon: { port: 3030 },
-      execution: { branch_rbac: false, unix_user_mode: 'simple' },
+      execution: { branch_rbac: true, unix_user_mode: 'simple' },
     },
     canOpen: true,
     fsAccess: 'write' as 'none' | 'read' | 'write',
@@ -163,6 +163,7 @@ const params = {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mocks.spawnExecutorFireAndForget.mockReset();
   mocks.tenantId = 'tenant-x';
   mocks.databaseScopeDepth = 0;
   mocks.transactionCalls = 0;
@@ -186,7 +187,7 @@ beforeEach(() => {
   mocks.joinRequestingSocket.mockResolvedValue(true);
   mocks.config = {
     daemon: { port: 3030 },
-    execution: { branch_rbac: false, unix_user_mode: 'simple' },
+    execution: { branch_rbac: true, unix_user_mode: 'simple' },
   };
 });
 
@@ -211,7 +212,7 @@ describe('branch-scoped terminal identity', () => {
     ).rejects.toThrow('cannot subscribe to this terminal');
   });
 
-  it('rejects a missing branch even when branch RBAC is disabled', async () => {
+  it('rejects a missing or inaccessible branch without enumeration', async () => {
     const service = new TerminalsService(makeApp() as never, {} as never);
     await expect(
       service.create({ branchId: 'missing' as BranchID }, params as never)
@@ -233,7 +234,7 @@ describe('process-affine attachment creation', () => {
     mocks.config = {
       daemon: { port: 3030 },
       execution: {
-        branch_rbac: false,
+        branch_rbac: true,
         unix_user_mode: 'delegated',
         sandbox: { sdk_home_mode: 'per_branch' },
       },

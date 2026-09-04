@@ -5,9 +5,8 @@
  *
  * 1. `ensureCurrentScheduleLoaded(repo)` — lazy-loads the current
  *    schedule onto `params.schedule` on `patch`. `loadScheduleAndBranch`
- *    already caches it under branch-RBAC, but RBAC is off by default
- *    and the validation/recompute hooks need the current row on every
- *    install.
+ *    normally caches it for external requests, while internal callers may
+ *    still need the current row loaded for validation/recomputation.
  *
  * 2. `validateScheduleConfig()` — cron + IANA + prompt-template
  *    validation against the merged (current + patch) shape so
@@ -35,7 +34,7 @@ import { hasMinimumRole, isTimezoneMode, ROLES } from '@agor/core/types';
 
 /**
  * Lazy-load the current schedule into `context.params.schedule` on
- * patch when the RBAC chain didn't cache it. Idempotent: no-op when
+ * patch when the authorization chain did not cache it. Idempotent: no-op when
  * already present.
  */
 export function ensureCurrentScheduleLoaded(scheduleRepo: ScheduleRepository) {

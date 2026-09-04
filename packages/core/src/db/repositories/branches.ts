@@ -1090,10 +1090,8 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
    * N+1 point checks. Direct user entries shadow groups, active groups are
    * additive, and Others applies only when neither one matches.
    *
-   * NOTE: This method should only be called when RBAC is enabled. The branch
-   * find RBAC hook uses it to resolve accessible branch IDs and compose them
-   * into the service query; when RBAC is disabled, default Feathers query
-   * handling returns all branches without access filtering.
+   * The branch authorization hook uses this to resolve accessible Branch IDs
+   * and compose them into the service query.
    *
    * @param userId - User ID to check access for
    * @param filter - Optional filters
@@ -1133,7 +1131,7 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
     options: {
       /** Minimum app-layer permission required when access enforcement is enabled. */
       minimumPermission?: NonNullable<Branch['others_can']>;
-      /** Disable the point check when branch RBAC is disabled instance-wide. */
+      /** Disable the point check only for a separately authorized administrative bypass. */
       enforceAccess?: boolean;
     } = {}
   ): Promise<Branch | null> {

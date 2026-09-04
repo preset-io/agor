@@ -1,39 +1,41 @@
 # Always-on branch RBAC and pre-1.0 configuration audit
 
 **Date:** 2026-09-04  
-**Decision status:** staged deprecation recommended; do not remove the global
-switch in one step  
-**Implemented with this audit:** auth-resolved multi-tenant deployments now
-fail startup unless the resolved effective configuration enables branch RBAC;
-non-boolean `execution.branch_rbac` values are rejected
+**Decision status:** accepted for one-step pre-1.0 removal of the false mode
+**Implemented with this audit:** board and branch RBAC is a runtime invariant;
+explicit false configuration fails closed; explicit true is a deprecated no-op;
+false-mode backend, realtime, MCP, and UI paths are removed
 
 ## Executive decision
 
-Agor should converge on branch RBAC being always enabled before 1.0. The
-disabled mode is not a simpler equivalent policy. It is an intra-workspace
-authorization bypass spanning board/branch discovery, Sessions, Tasks,
-messages, schedules, files, terminals, MCP, realtime delivery, and mutations.
-It also exposes a stale UI that edits legacy permission fields which the
-repositories now reject on update.
+Agor should ship one authorization contract: authentication is already mandatory
+for external callers, and normalized Board/Branch RBAC is now always enforced.
+The disabled mode was not a useful single-user mode; it was an intra-workspace
+authorization bypass spanning discovery, Sessions, Tasks, messages, schedules,
+files, terminals, MCP, realtime delivery, and mutations. It also exposed a stale
+UI that wrote tombstoned legacy fields.
 
-The global switch should **not** be deleted immediately. Existing databases
-already contain normalized policies, but operators who have run with RBAC off
-have not necessarily reviewed them. Enabling them can hide private resources,
-remove board/branch mutation rights, prevent foreign-Session prompts, and
-reduce filesystem access. Silently widening those policies to reproduce the
-old open mode would defeat the security objective. The safe path is:
+A normal single-user installation is behaviorally unchanged because the creator
+is the immutable primary owner of each Board and Branch, and primary owners
+resolve to Manager/write. The exceptions are precisely the cases that should
+fail closed: imported or corrupt resources without a valid owner/policy, or a
+database containing resources owned by a different historical user. Operators
+should back up and inspect those before upgrading; Agor does not auto-widen a
+normalized policy to imitate the removed open mode.
 
-1. hard-require RBAC now for `multi_tenancy.mode: required_from_auth` (included
-   in this change);
-2. add an operator preflight and usage telemetry, then default static installs
-   to RBAC on while retaining an explicit, loudly deprecated escape hatch;
-3. reject explicit false after a documented migration window; and
-4. remove the false-mode code and UI only after supported configurations can no
-   longer select it.
+The compatibility contract is intentionally narrow:
 
-This is an application-authorization decision, not an executor-containment
-claim. Always-on RBAC does not make `unix_user_mode: simple` safe against an
-agent or web terminal running as the daemon account.
+- omitted `execution.branch_rbac` means RBAC on;
+- `execution.branch_rbac: true` and `AGOR_RBAC_ENABLED=true` are accepted as
+  deprecated no-ops for existing automation;
+- explicit false (or a non-boolean YAML value) stops startup with an actionable
+  error rather than silently changing access;
+- health retains `branchRbac: true` for older clients during the bridge, while
+  the current UI no longer negotiates or renders a false mode.
+
+This is application authorization, not executor containment. Always-on RBAC
+does not make `unix_user_mode: simple` safe against an agent or terminal running
+as the daemon account.
 
 ## Evidence boundary and method
 
@@ -53,7 +55,7 @@ Search at this revision found:
 Counts are an inventory aid, not an API contract. The code and schema remain
 the authority.
 
-## Current implementation inventory
+## Pre-change implementation inventory
 
 | Surface             | Current behavior                                                                                                                                                                                                                              | Consequence of removing the switch                                                                             |
 | ------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
@@ -64,7 +66,7 @@ the authority.
 | Policy persistence  | Board access policies and board branch templates are created transactionally for every Board. Branch overrides are also initialized transactionally; normal Branch service creation uses `inherit`. This happens even when the flag is false. | No new policy schema is needed, but policy completeness must be preflighted.                                   |
 | Schema              | SQLite and PostgreSQL both have normalized board/branch policy and entry tables, fixed role/filesystem enums, one-user-or-group checks, unique principal entries, revisions, and target checks.                                               | Keep dialect parity tests and repository contract tests.                                                       |
 | PostgreSQL tenancy  | Policy rows carry `tenant_id`, composite tenant FKs bind policies/resources/principals, and forced RLS covers all normalized policy tables.                                                                                                   | Always-on RBAC complements rather than replaces RLS.                                                           |
-| List SQL            | Board, Branch, Session, Task/message references, schedules, artifacts, comments, and related list paths compose set-based normalized-policy `EXISTS` predicates.                                                                              | Query work becomes unconditional; benchmark the current normalized schema before the static default flip.      |
+| List SQL            | Board, Branch, Session, Task/message references, schedules, artifacts, comments, and related list paths compose set-based normalized-policy `EXISTS` predicates.                                                                              | Query work becomes unconditional; benchmark the current normalized schema during launch soak.                  |
 | Point authorization | Hooks/repositories resolve effective Board/Branch access and cache bounded request/realtime decisions.                                                                                                                                        | Simplify after the compatibility window, not before.                                                           |
 | REST/service hooks  | Conditional hooks scope reads and authorize creates, patches, deletes, prompt-flow writes, board objects/cards/comments, files, and schedules.                                                                                                | Removing false mode closes many independent bypasses; it is not just a UI feature change.                      |
 | Custom REST routes  | Prompt, upload/download, stop/permission, OpenCode configuration, and terminal routes contain conditional checks or projections.                                                                                                              | Audit by route inventory when deleting branches; service hooks alone are insufficient.                         |
@@ -91,9 +93,9 @@ The conditional enforcement map is wider than the central Branch service:
   authority, primary-teammate candidates, branch removal publication, and
   realtime audience computation each branch independently.
 
-Final removal therefore needs a fresh reference inventory plus route/service
-security tests. Deleting the config type or the central hook spread alone would
-leave inconsistent authorization.
+The implementation in this change removed the conditional branches across this
+whole map rather than deleting only the config type or central hook spread.
+Normalized policy and cross-tenant negative coverage remain the security basis.
 
 ### Migration history
 
@@ -197,13 +199,11 @@ one tenant may access which resource. With branch RBAC false, tenant membership
 effectively becomes authorization for many Boards, Branches, conversations,
 files, and execution surfaces.
 
-That distinction makes false mode unacceptable for Agor Cloud even though it
-is not, by itself, a cross-tenant RLS escape. The bounded code change in this
-audit validates the resolved effective configuration and fails startup when
-`required_from_auth` does not have RBAC true. Validation is deliberately after
-environment projection so `AGOR_RBAC_ENABLED=true` and named sandbox mode both
-satisfy it. The checked-in HA profile already passes because named sandbox
-forces RBAC.
+That distinction makes false mode unacceptable even though it was not, by
+itself, a cross-tenant RLS escape. The implemented cutover removes the runtime
+branch entirely: authorization is enforced in every tenancy mode and resolved
+configuration always reports true. Explicit false or malformed legacy values
+fail startup; exact true spellings are temporary no-op compatibility bridges.
 
 Filesystem/process isolation remains separate:
 
@@ -238,7 +238,7 @@ request duration cannot be attributed to RBAC alone. However, that document's
 fixture/predicate inventory predates the current normalized capability tables;
 its absolute timings are not a launch benchmark for this schema.
 
-Required gates before the static default flip:
+Required launch and soak gates after the cutover:
 
 1. benchmark current normalized Board/Branch/Session/Task/message list and
    point shapes on PostgreSQL with forced RLS, representative direct/group/
@@ -278,31 +278,25 @@ legacy open audience.
 
 ### Rolling deploy and rollback
 
-Changing the default and deleting the key simultaneously is unsafe. An older
-daemon reading a config with the key removed defaults to false, so a mixed or
-rolled-back fleet could disagree on authorization and realtime audiences.
-Conversely, a newer daemon must not silently treat explicit false as true
-without a startup warning/error explaining the changed security model.
+Do not run old and new daemons concurrently. An old daemon with the key omitted
+can still resolve false, so mixed versions can disagree on authorization and
+realtime audiences. Use a cohort stop/upgrade/start, after a database and config
+backup. No policy migration or dual-write is needed because normalized policies
+were already created unconditionally.
 
-Use a cohort restart for the default flip. During the bridge, all replicas must
-receive the same resolved authorization mode, and health/readiness should make
-that mode observable. No database dual-write is needed, but a rollback must
-restore the same explicit setting on every replica.
+For binary rollback, stop every new daemon, set `execution.branch_rbac: true`
+for the old release, and restart the old cohort against a database version it
+supports. Never roll back by changing the new release to false; it rejects that
+value by design.
 
-## Staged branch-RBAC plan
+## Staged rollout plan
 
-| Stage                      | Release action                                                                                                                                                                                                                         | Compatibility behavior                                                                                              | Exit criteria                                                                                                           |
-| -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
-| 0 — now                    | Require true in `required_from_auth`; reject non-boolean YAML. Add this audit.                                                                                                                                                         | Static false mode remains unchanged. Named sandbox and `AGOR_RBAC_ENABLED=true` still imply true.                   | Cloud/HA startup tests pass; docs state the invariant.                                                                  |
-| 1 — observe/preflight      | Add `agor local rbac audit` (read-only by default), low-cardinality mode telemetry, and startup warnings for false. Fix false UI to be read-only/deprecated rather than writing tombstoned fields.                                     | Explicit false still boots only in static standalone.                                                               | Inventory shows policy completeness; current-schema PG/SQLite performance gates pass; no unsupported audience patterns. |
-| 2 — default on             | Set the static default to true; init/examples/demo/Compose use true. Accept explicit false only behind a named legacy escape hatch with a removal version and loud health warning. Forbid false in HA as well as `required_from_auth`. | Existing explicit false configs have one migration window; omission becomes secure.                                 | Release notes and policy migration workflow shipped; fleet-wide config convergence proven.                              |
-| 3 — reject false           | Keep `branch_rbac: true` loadable as a no-op. Reject false and retire `AGOR_RBAC_ENABLED` with actionable startup guidance. Health advertises one authorization contract, not a feature.                                               | Old configs fail closed instead of silently changing behavior.                                                      | No supported deployment exercises false; rollback floor documented.                                                     |
-| 4 — delete code before 1.0 | Remove conditional hooks/routes/queries, false realtime audiences, legacy UI/fields, derived boolean plumbing, and false-only tests. Keep normalized policies and negative coverage.                                                   | Option may remain in the retired-key allowlist for one final read-only compatibility period if upgrades require it. | Source inventory has no runtime false path; both dialects and HA pass security/performance suites.                      |
-
-The preflight should support machine-readable output, tenant-by-tenant summaries,
-and a non-mutating comparison. Any optional repair must require explicit
-operator acknowledgement and update normalized policies through repository
-transactions. It must never auto-grant Manager/write or shared prompting.
+| Stage                   | Action                                                                                                                                                                | Compatibility / gate                                                                                    |
+| ----------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| 0 — release preparation | Publish the breaking/security changelog entry, backup requirement, policy semantics, and single-user exception list.                                                  | Confirm policy migrations have completed; do not auto-grant Manager/write or shared prompting.          |
+| 1 — cohort cutover      | Stop all replicas, remove false config, deploy one version, and start the cohort.                                                                                     | `true` keys remain no-ops; false and malformed values fail startup. Do not mix old/new daemons.         |
+| 2 — verification        | Check owner access, private/shared audiences, foreign-Session denial, terminal/file projection, realtime delivery, and MCP access.                                    | Monitor SQL latency, pool wait, denial counts, and realtime cache behavior on PostgreSQL/HA and SQLite. |
+| 3 — bridge removal      | In the next announced compatibility boundary, reject/remove even the `true` YAML/env spellings and remove the health feature field after old clients are unsupported. | Unknown-key validation remains fail closed; publish the exact rollback floor.                           |
 
 ## Broader pre-1.0 configuration audit
 
@@ -317,20 +311,20 @@ Classification means:
 
 ### Recommended changes
 
-| Option/family                                                                                                                                               | Classification                                         | Evidence and recommendation                                                                                                                                                                                                               | Blast radius / prerequisite                                                                                                                                              |
-| ----------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `execution.branch_rbac`                                                                                                                                     | **Deprecate**, then **hard-set true**                  | False is a broad intra-tenant authorization bypass and incoherent legacy UX. Hard-required immediately for auth-resolved tenancy; stage static installs.                                                                                  | Very high: 95 non-test references, 46 test files, API/MCP/realtime/UI/deploy behavior, existing policy audiences. Needs preflight, benchmark, and rolling-deploy bridge. |
-| `AGOR_RBAC_ENABLED`                                                                                                                                         | **Deprecate** with the switch                          | True-only environment override becomes redundant. Do not remove before mixed-version rollback is unsupported.                                                                                                                             | Compose, entrypoint logging, docs, operators/IaC.                                                                                                                        |
-| `identity.password_policy`                                                                                                                                  | **Hard-set**, then deprecate the key                   | The type accepts only `secure`, raw validation rejects every other value, and default/health always resolve secure. Keep `secure` as a no-op for one compatibility release, then retire it while retaining the versioned policy contract. | Low runtime risk; config/docs/init and clients reading health requirements. Do not remove password requirement metadata.                                                 |
-| Retired `daemon.allowAnonymous/requireAuth`, `defaults.*`, `display.*`, `execution.managed_envs_minimum_role`, `branches.others_*`, onboarding pending keys | **Hard-set already; deprecate parser bridge**          | Runtime strips/ignores these and setup warns. Continue accepting only the known old spellings through the announced upgrade floor; then reject/remove.                                                                                    | Old hand-written YAML and automation. Unknown-key fail-closed policy means removal must be release-noted.                                                                |
-| `mcp_catalog.*` retired section                                                                                                                             | **Hard-set already; deprecate parser bridge**          | Catalog is checked-in `curated.yaml`; all accepted keys are ignored. Retain loadability for upgrades, then remove at the compatibility boundary.                                                                                          | Any older config containing the block; no runtime catalog behavior.                                                                                                      |
-| `daemon.cors_origins`, `daemon.cors_allow_sandpack`                                                                                                         | **Deprecate**                                          | `security.cors.*` is canonical; resolver already warns and defines precedence. Remove aliases after config telemetry/migration tooling.                                                                                                   | Public ingress and artifact origins; a mistaken removal can lock out the UI. Keep `CORS_ORIGIN` until container/IaC users migrate.                                       |
-| `onboarding.frameworkRepoUrl`                                                                                                                               | **Deprecate**                                          | One resolver falls back to the renamed `teammates.framework_repo_url`.                                                                                                                                                                    | Low code cost, but old bootstrap configs. Warn before removal.                                                                                                           |
-| `execution.daemon_writes_user_message`                                                                                                                      | **Investigate**, likely hard-set true                  | False is explicitly a racy emergency kill switch to the legacy executor writer; only one runtime branch remains. Remove after production soak proves daemon insertion/idempotency and the rollback window closes.                         | Prompt transcript integrity and executor compatibility.                                                                                                                  |
-| `daemon.mcpToolSearch`                                                                                                                                      | **Investigate**                                        | Default true and false preserves clients that require a complete `tools/list`. Client capability/version telemetry is needed before hard-setting search.                                                                                  | MCP client compatibility and tool discovery; potentially high support blast radius.                                                                                      |
-| `.agor.yml` `full` variant alias                                                                                                                            | **Deprecate; keep bridge**                             | Already documented as alias to `rich`. Existing Branch records can name it, and repo-authored files are not globally migratable.                                                                                                          | Branch environment re-render/start; remove only after references and repository templates migrate.                                                                       |
-| `sandbox.include.branch`                                                                                                                                    | **Investigate**                                        | Documented “effectively always true,” but false can still alter read-only visibility in standalone/shared-home combinations. RBAC filesystem projection now supplies the real access dimension.                                           | Executor cwd, git behavior, and possible read-only legacy use. Prove no supported combination relies on false before hard-setting.                                       |
-| Inline `external_launch.dev_shared_secret` and `service_credential`                                                                                         | **Deprecate for production profiles; keep dev bridge** | Environment/JWKS/public-key alternatives already exist and avoid secrets in checked-in YAML.                                                                                                                                              | External login availability and existing Compose/dev launcher. Add secret-source diagnostics before rejection in hardened modes.                                         |
+| Option/family                                                                                                                                               | Classification                                         | Evidence and recommendation                                                                                                                                                                                                               | Blast radius / prerequisite                                                                                                                                       |
+| ----------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `execution.branch_rbac`                                                                                                                                     | **Hard-set true; deprecate true-only parser bridge**   | False was a broad intra-tenant authorization bypass and incoherent legacy UX. Runtime enforcement and UI are now unconditional; `true` is accepted temporarily and false fails startup.                                                   | High: API/MCP/realtime/UI/deploy behavior and existing policy audiences. Requires cohort cutover, backup, release notes, and post-cutover performance monitoring. |
+| `AGOR_RBAC_ENABLED`                                                                                                                                         | **Deprecate parser bridge**                            | Removed from supported deployment examples. `true` remains a temporary no-op for old IaC; false/non-empty alternatives fail startup.                                                                                                      | Operators/IaC and old rollback automation; remove at the announced compatibility boundary.                                                                        |
+| `identity.password_policy`                                                                                                                                  | **Hard-set**, then deprecate the key                   | The type accepts only `secure`, raw validation rejects every other value, and default/health always resolve secure. Keep `secure` as a no-op for one compatibility release, then retire it while retaining the versioned policy contract. | Low runtime risk; config/docs/init and clients reading health requirements. Do not remove password requirement metadata.                                          |
+| Retired `daemon.allowAnonymous/requireAuth`, `defaults.*`, `display.*`, `execution.managed_envs_minimum_role`, `branches.others_*`, onboarding pending keys | **Hard-set already; deprecate parser bridge**          | Runtime strips/ignores these and setup warns. Continue accepting only the known old spellings through the announced upgrade floor; then reject/remove.                                                                                    | Old hand-written YAML and automation. Unknown-key fail-closed policy means removal must be release-noted.                                                         |
+| `mcp_catalog.*` retired section                                                                                                                             | **Hard-set already; deprecate parser bridge**          | Catalog is checked-in `curated.yaml`; all accepted keys are ignored. Retain loadability for upgrades, then remove at the compatibility boundary.                                                                                          | Any older config containing the block; no runtime catalog behavior.                                                                                               |
+| `daemon.cors_origins`, `daemon.cors_allow_sandpack`                                                                                                         | **Deprecate**                                          | `security.cors.*` is canonical; resolver already warns and defines precedence. Remove aliases after config telemetry/migration tooling.                                                                                                   | Public ingress and artifact origins; a mistaken removal can lock out the UI. Keep `CORS_ORIGIN` until container/IaC users migrate.                                |
+| `onboarding.frameworkRepoUrl`                                                                                                                               | **Deprecate**                                          | One resolver falls back to the renamed `teammates.framework_repo_url`.                                                                                                                                                                    | Low code cost, but old bootstrap configs. Warn before removal.                                                                                                    |
+| `execution.daemon_writes_user_message`                                                                                                                      | **Investigate**, likely hard-set true                  | False is explicitly a racy emergency kill switch to the legacy executor writer; only one runtime branch remains. Remove after production soak proves daemon insertion/idempotency and the rollback window closes.                         | Prompt transcript integrity and executor compatibility.                                                                                                           |
+| `daemon.mcpToolSearch`                                                                                                                                      | **Investigate**                                        | Default true and false preserves clients that require a complete `tools/list`. Client capability/version telemetry is needed before hard-setting search.                                                                                  | MCP client compatibility and tool discovery; potentially high support blast radius.                                                                               |
+| `.agor.yml` `full` variant alias                                                                                                                            | **Deprecate; keep bridge**                             | Already documented as alias to `rich`. Existing Branch records can name it, and repo-authored files are not globally migratable.                                                                                                          | Branch environment re-render/start; remove only after references and repository templates migrate.                                                                |
+| `sandbox.include.branch`                                                                                                                                    | **Investigate**                                        | Documented “effectively always true,” but false can still alter read-only visibility in standalone/shared-home combinations. RBAC filesystem projection now supplies the real access dimension.                                           | Executor cwd, git behavior, and possible read-only legacy use. Prove no supported combination relies on false before hard-setting.                                |
+| Inline `external_launch.dev_shared_secret` and `service_credential`                                                                                         | **Deprecate for production profiles; keep dev bridge** | Environment/JWKS/public-key alternatives already exist and avoid secrets in checked-in YAML.                                                                                                                                              | External login availability and existing Compose/dev launcher. Add secret-source diagnostics before rejection in hardened modes.                                  |
 
 ### Keep: real choices or safety valves
 
@@ -369,39 +363,39 @@ Classification means:
 5. **Secret sources:** warn/reject inline external-launch secrets in hardened
    profiles after a redacted diagnostic/migration path exists.
 
-## Focused implementation in this change
+## Implemented change
 
-This audit intentionally does **not** flip the static default or remove false
-UI/backend paths. It makes two bounded, fail-closed changes:
+This change completes the one-step invariant without changing policy data:
 
-1. raw config rejects a non-boolean `execution.branch_rbac` instead of allowing
-   a quoted/invalid scalar to act like disabled; and
-2. resolved startup validation rejects `required_from_auth` unless branch RBAC
-   is true, while accepting the named sandbox implication and environment
-   override.
+1. config resolution always materializes RBAC on; omitted is the normal form;
+2. explicit YAML false/malformed values and disabling environment values fail
+   startup, while true-only spellings remain a compatibility no-op;
+3. conditional authorization is removed from REST/service hooks, custom routes,
+   direct MCP SQL, MCP egress, schedules, terminals, Task runtime authority,
+   deletion publication, and realtime audience computation;
+4. the UI always loads normalized policy/effective-access state and fails closed,
+   and no longer exposes the broken legacy false-mode editing path;
+5. Compose, SQLite/PostgreSQL/HA examples and current docs no longer advertise
+   an authorization-off deployment; and
+6. health continues to report `branchRbac: true` temporarily for old-client
+   compatibility.
 
-It also updates the multi-tenant guide with the complete RBAC and clone-only
-requirements. No schema, data, API response, or policy mutation is introduced.
-Static single-tenant behavior is unchanged. The HA checked-in configuration is
-already compliant.
+There is no schema migration: both dialects already create normalized policies
+for every Board/Branch and PostgreSQL already tenant-binds and forces RLS on the
+policy tables. The access change is therefore activation of existing policy,
+not a data rewrite. The release must still be treated as breaking for operators
+who deliberately ran false mode.
 
-## Removal checklist
+## Release checklist
 
-Do not merge the final switch-removal stage until all are true:
-
-- [ ] Supported installs can run a non-mutating policy/audience preflight.
-- [ ] Current normalized PostgreSQL/SQLite query benchmarks meet launch SLOs.
-- [ ] Explicit-false configuration usage and required legacy audience patterns
-      are understood.
-- [ ] Static default-on and explicit-false deprecation shipped for at least one
-      documented migration window.
-- [ ] Mixed-version/rollback floor no longer permits a daemon that defaults to
-      false when the key is absent.
-- [ ] HA and auth-resolved deployment validation reject false.
-- [ ] REST, MCP, direct SQL, realtime relay, deletion tombstones, file access,
-      terminals, and permission decisions have negative security coverage.
-- [ ] False-mode UI is removed together with, not ahead of, backend support.
-- [ ] Legacy permission DTO fields are removed or explicitly retained only as
-      inert read compatibility, with API versioning documented.
-- [ ] Release notes state that the change can reduce access and never
-      auto-widens policy.
+- [x] False config fails closed; true-only config has a documented bridge.
+- [x] Runtime REST/MCP/realtime/UI false paths are removed.
+- [x] Tenant scoping, PostgreSQL RLS, immutable ownership, and normalized policy
+      resolution remain authoritative.
+- [x] Current deployment examples no longer select or advertise false mode.
+- [x] Changelog states that access can narrow and policy is never auto-widened.
+- [ ] Release operator performs backup and cohort cutover (no mixed versions).
+- [ ] Release owner records current-schema PostgreSQL/SQLite latency and HA
+      reauthorization results before Cloud launch.
+- [ ] The true-only YAML/env and health-response compatibility fields are
+      removed at the next announced compatibility boundary.

@@ -2,11 +2,7 @@ import type { BranchRepository } from '@agor/core/db';
 import { BadRequest, Forbidden } from '@agor/core/feathers';
 import type { BranchID, BranchMetadataAction, HookContext } from '@agor/core/types';
 import { isBranchArchiveOrDeleteOptions } from '@agor/core/types';
-import {
-  cacheBranchAccess,
-  ensureBranchOwnerOrAdmin,
-  ensureBranchPermission,
-} from './branch-authorization.js';
+import { cacheBranchAccess, ensureBranchPermission } from './branch-authorization.js';
 
 /**
  * Process-local capability proving the hooked archive/delete service boundary
@@ -51,7 +47,6 @@ export async function authorizeBranchArchiveDelete(
   context: HookContext,
   options: {
     branchRepository: BranchRepository;
-    branchRbacEnabled: boolean;
     superadminOpts?: { allowSuperadmin?: boolean };
   }
 ): Promise<HookContext> {
@@ -65,11 +60,7 @@ export async function authorizeBranchArchiveDelete(
   if (!branch) throw new Forbidden(`Branch not found: ${id}`);
 
   await cacheBranchAccess(context.params, options.branchRepository, branch);
-  if (options.branchRbacEnabled) {
-    ensureBranchPermission('all', 'archive or delete branches', options.superadminOpts)(context);
-  } else {
-    ensureBranchOwnerOrAdmin('archive/delete branches')(context);
-  }
+  ensureBranchPermission('all', 'archive or delete branches', options.superadminOpts)(context);
 
   const { metadataAction } = context.data;
   // Repository lookups accept short/uppercase prefixes but every trusted

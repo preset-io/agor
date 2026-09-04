@@ -47,7 +47,6 @@ import {
   isDeploymentAgenticToolAvailable,
   isTenantAgenticToolEnabled,
   normalizePersistedScheduleAgenticToolConfig,
-  resolveExecutionSecurityMode,
   unixUserModeRequiresExecutionHomeKey,
 } from '@agor/core/config';
 import {
@@ -292,8 +291,6 @@ function isInjectedSchedulerCrash(error: unknown): boolean {
 export interface SchedulerConfig {
   /** Immutable deployment configuration captured when the daemon starts. */
   deploymentPolicy?: DeploymentAgenticToolPolicy;
-  /** App-layer branch RBAC posture captured when the daemon starts. */
-  appRbacEnabled?: boolean;
   /** Tick interval in milliseconds (default: 30000 = 30s) */
   tickInterval?: number;
   /** Grace period for missed runs in milliseconds (default: 120000 = 2min) */
@@ -330,7 +327,6 @@ export interface SchedulerTestHooks {
 
 interface ResolvedSchedulerConfig {
   deploymentPolicy: DeploymentAgenticToolPolicy;
-  appRbacEnabled: boolean;
   tickInterval: number;
   gracePeriod: number;
   unixUserMode: UnixUserMode;
@@ -379,7 +375,6 @@ export class SchedulerService {
     }
     this.config = {
       deploymentPolicy: config.deploymentPolicy ?? { managed: false, installed: new Set() },
-      appRbacEnabled: config.appRbacEnabled ?? resolveExecutionSecurityMode().appRbacEnabled,
       tickInterval: config.tickInterval ?? 30000, // 30 seconds
       gracePeriod: config.gracePeriod ?? 120000, // 2 minutes
       unixUserMode: config.unixUserMode ?? 'simple',
@@ -863,17 +858,15 @@ export class SchedulerService {
         `Schedule ${schedule.schedule_id} references missing branch ${schedule.branch_id}`
       );
     }
-    if (this.config.appRbacEnabled) {
-      const creatorAccess = await this.withTenantDatabase(() =>
-        this.branchRepo.resolveUserAccess(branch, schedule.created_by)
+    const creatorAccess = await this.withTenantDatabase(() =>
+      this.branchRepo.resolveUserAccess(branch, schedule.created_by)
+    );
+    if (!['session', 'prompt', 'all'].includes(creatorAccess.can)) {
+      if (!manual) await this.advanceScheduleCursor(schedule, now);
+      throw new ScheduleNotReadyError(
+        'schedule_permission_revoked',
+        `Schedule creator ${schedule.created_by} no longer has Collaborator access to branch ${schedule.branch_id}`
       );
-      if (!['session', 'prompt', 'all'].includes(creatorAccess.can)) {
-        if (!manual) await this.advanceScheduleCursor(schedule, now);
-        throw new ScheduleNotReadyError(
-          'schedule_permission_revoked',
-          `Schedule creator ${schedule.created_by} no longer has Collaborator access to branch ${schedule.branch_id}`
-        );
-      }
     }
     // Prepare all configuration outside the admission transaction. The only
     // work performed while the schedule row is locked is existing/busy checks
@@ -1431,7 +1424,7 @@ export class SchedulerService {
       // boundary so a revocation that races Session admission, or occurs
       // before crash recovery, cannot launch new work. An already-admitted
       // stable Task has crossed this boundary and is only reconciled here.
-      if (this.config.appRbacEnabled && !existingInitialTask) {
+      if (!existingInitialTask) {
         const authority = await this.withTenantDatabase(() =>
           this.branchRepo.resolveSessionPromptAuthority(
             session.branch_id,

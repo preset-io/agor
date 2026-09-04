@@ -1452,10 +1452,6 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
    *
    * Also populates board_id and url via the branches JOIN.
    *
-   * NOTE: This method should only be called when RBAC is enabled. When RBAC is disabled,
-   * the scopeSessionQuery hook is not registered, so default Feathers query is used
-   * (which returns all sessions without filtering).
-   *
    * @param userId - User ID to check access for
    * @param boardId - Optional board filter, pushed down to SQL via the branch
    *                  join (session → branch → board). Lets callers scope to a

@@ -18,7 +18,6 @@ import {
   getBranchHomePath,
   PAGINATION,
   resolveBranchStorageConfig,
-  resolveExecutionSecurityMode,
   resolveMultiTenancyConfig,
 } from '@agor/core/config';
 import {
@@ -216,7 +215,6 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
   private taskRepo: TaskRepository;
   private db: TenantScopeAwareDatabase;
   private app: Application;
-  private appRbacEnabled: boolean;
   private processes = new Map<BranchID, ManagedProcess>();
   // Cache board-objects service reference (lazy-loaded to avoid circular deps)
   private boardObjectsService?: {
@@ -230,11 +228,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     patch: (id: string, data: { zone_id?: string | null }) => Promise<unknown>;
   };
 
-  constructor(
-    db: TenantScopeAwareDatabase,
-    app: Application,
-    options: { appRbacEnabled?: boolean } = {}
-  ) {
+  constructor(db: TenantScopeAwareDatabase, app: Application) {
     const branchRepo = new BranchRepository(db);
     super(branchRepo, {
       id: 'branch_id',
@@ -250,7 +244,6 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     this.taskRepo = new TaskRepository(db);
     this.db = db;
     this.app = app;
-    this.appRbacEnabled = options.appRbacEnabled ?? resolveExecutionSecurityMode().appRbacEnabled;
   }
 
   /** Refuse a metadata cascade that would orphan a live executor lease. */
@@ -1501,17 +1494,15 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
         const branch = await branchRepo.findById(id);
         if (!branch) throw new NotFound(`Branch not found: ${id}`);
         const branchFsAccess = deleteFromFilesystem
-          ? hasMinimumRole(requestUser?.role, ROLES.ADMIN) && !this.appRbacEnabled
-            ? 'write'
-            : await ensureBranchWorkspaceAccess(
-                branchRepo,
-                branch,
-                requestUser?.user_id,
-                requestUser?.role as UserRole | undefined,
-                'all',
-                'write',
-                this.app.get('config').execution?.allow_superadmin === true
-              )
+          ? await ensureBranchWorkspaceAccess(
+              branchRepo,
+              branch,
+              requestUser?.user_id,
+              requestUser?.role as UserRole | undefined,
+              'all',
+              'write',
+              this.app.get('config').execution?.allow_superadmin === true
+            )
           : undefined;
         await this.assertNoUnfinishedTasks(branch.branch_id, taskRepo);
         // Remove from database FIRST for instant UI feedback. CASCADE cleans
@@ -1589,7 +1580,6 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
           params: removalParams,
           branchRepository: branchRepo,
           branchId: branch.branch_id,
-          branchRbacEnabled: this.appRbacEnabled,
         });
 
         // This custom method deliberately bypasses Feathers' standard method
@@ -1653,19 +1643,17 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     const branchFsAccess =
       filesystemAction === 'preserved'
         ? undefined
-        : hasMinimumRole(requestUser.role, ROLES.ADMIN) && !this.appRbacEnabled
-          ? 'write'
-          : await this.withTenantDatabase(params, () =>
-              ensureBranchWorkspaceAccess(
-                this.branchRepo,
-                branch,
-                requestUser.user_id,
-                requestUser.role as UserRole | undefined,
-                'all',
-                'write',
-                this.app.get('config').execution?.allow_superadmin === true
-              )
-            );
+        : await this.withTenantDatabase(params, () =>
+            ensureBranchWorkspaceAccess(
+              this.branchRepo,
+              branch,
+              requestUser.user_id,
+              requestUser.role as UserRole | undefined,
+              'all',
+              'write',
+              this.app.get('config').execution?.allow_superadmin === true
+            )
+          );
 
     // Stop environment if running
     if (branch.environment_instance?.status === 'running') {
@@ -1857,20 +1845,17 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
 
     const requestUser = params?.user;
     if (!requestUser) throw new NotAuthenticated('Authentication required');
-    const branchFsAccess =
-      hasMinimumRole(requestUser.role, ROLES.ADMIN) && !this.appRbacEnabled
-        ? 'write'
-        : await this.withTenantDatabase(params, () =>
-            ensureBranchWorkspaceAccess(
-              this.branchRepo,
-              branch,
-              requestUser.user_id,
-              requestUser.role as UserRole | undefined,
-              'all',
-              'write',
-              this.app.get('config').execution?.allow_superadmin === true
-            )
-          );
+    const branchFsAccess = await this.withTenantDatabase(params, () =>
+      ensureBranchWorkspaceAccess(
+        this.branchRepo,
+        branch,
+        requestUser.user_id,
+        requestUser.role as UserRole | undefined,
+        'all',
+        'write',
+        this.app.get('config').execution?.allow_superadmin === true
+      )
+    );
 
     console.log(`📦 Unarchiving branch: ${branch.name}`);
 
@@ -2943,8 +2928,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
  */
 export function createBranchesService(
   db: TenantScopeAwareDatabase,
-  app: Application,
-  options?: { appRbacEnabled?: boolean }
+  app: Application
 ): BranchesService {
-  return new BranchesService(db, app, options);
+  return new BranchesService(db, app);
 }

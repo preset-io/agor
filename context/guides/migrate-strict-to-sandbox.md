@@ -172,8 +172,8 @@ inside a session, confirm:
 
 ## Rollback
 
-- **Fast:** set `execution.unix_user_mode: simple`, keep `branch_rbac: true`,
-  disable the web terminal, and restart. Ownership already matches the daemon.
+- **Fast:** set `execution.unix_user_mode: simple`; RBAC remains always enabled.
+  Disable the web terminal and restart. Ownership already matches the daemon.
   Filesystem and tool-home isolation are degraded until sandbox is restored.
 - **Full:** stop every 0.25.1 daemon and restore the complete pre-upgrade
   database, configuration, and storage backup before starting 0.24.7. Retain
@@ -184,7 +184,7 @@ inside a session, confirm:
 
 ## Known behavior changes to expect
 
-- **RBAC turns on.** `sandbox` implies `branch_rbac: true`. Non-owner sessions on
+- **RBAC is already on.** Non-owner sessions on
   a branch whose `others_fs_access` is `read` will mount the branch **read-only**;
   `none` rejects the spawn with a clear error. Owners are unaffected (`write`).
   Decide up front whether shared branches should default to `write`.
