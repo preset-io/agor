@@ -81,6 +81,15 @@ describe('static-mode tenant DB scope for owned services', () => {
 describe('registerHooks static-mode owned-service scope wiring', () => {
   type AroundHook = (ctx: HookContext, next: () => Promise<void>) => Promise<void>;
 
+  const artifactCustomRoutePaths = [
+    'artifacts/:id/payload',
+    'artifacts/:id/console',
+    'artifacts/:id/sandpack-error',
+    'artifacts/:id/runtime-response/:requestId',
+    'artifacts/:id/trust',
+    'me/artifact-trust-grants',
+  ] as const;
+
   /** Run registerHooks against a recorder app and return around hooks per path. */
   function captureAroundHooks(): Map<string, AroundHook[]> {
     const captured = new Map<string, AroundHook[]>();
@@ -152,4 +161,11 @@ describe('registerHooks static-mode owned-service scope wiring', () => {
     await expect(composed()).resolves.toBeUndefined();
     expect(scopeKind).toBe('tenant');
   });
+
+  it.each(artifactCustomRoutePaths)(
+    'installs the shared tenant scope and write gate around /%s',
+    (path) => {
+      expect(captureAroundHooks().get(path)).toHaveLength(2);
+    }
+  );
 });
