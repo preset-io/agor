@@ -2122,12 +2122,15 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
           lastFitBoardIdRef.current = board?.board_id ?? null;
           return;
         }
-        reactFlowInstanceRef.current?.fitView({
-          padding: 0.2, // 20% padding around nodes
-          minZoom: 0.1, // Allow zooming out far enough to see widely-spaced nodes
-          maxZoom: 1.0, // Don't zoom in beyond 100% to keep nodes readable
-          duration: 200, // Smooth animation
-        });
+        const reactFlowInstance = reactFlowInstanceRef.current;
+        if (typeof reactFlowInstance?.fitView === 'function') {
+          reactFlowInstance.fitView({
+            padding: 0.2, // 20% padding around nodes
+            minZoom: 0.1, // Allow zooming out far enough to see widely-spaced nodes
+            maxZoom: 1.0, // Don't zoom in beyond 100% to keep nodes readable
+            duration: 200, // Smooth animation
+          });
+        }
         // Mark this board as fitted
         lastFitBoardIdRef.current = board?.board_id ?? null;
       }, 100);
