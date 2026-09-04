@@ -6,7 +6,13 @@
 
 import { describe, expect, it } from 'vitest';
 import type { DbProbeResult, MigrationsProbeResult } from './db-probe';
-import { authenticatedHealthDb, healthMigrations, healthStatus, publicHealthDb } from './payload';
+import {
+  authenticatedHealthDb,
+  healthMigrations,
+  healthStatus,
+  publicEnvironmentNotice,
+  publicHealthDb,
+} from './payload';
 
 const okProbe: DbProbeResult = { ok: true, latencyMs: 3 };
 const failedProbe: DbProbeResult = { ok: false, latencyMs: 1500, error: 'ECONNREFUSED host:5432' };
@@ -17,6 +23,31 @@ describe('healthStatus', () => {
   });
   it('is degraded when the DB probe fails', () => {
     expect(healthStatus(failedProbe)).toBe('degraded');
+  });
+});
+
+describe('publicEnvironmentNotice', () => {
+  it('keeps absent config absent for backwards-compatible health payloads', () => {
+    expect(publicEnvironmentNotice({})).toBeUndefined();
+  });
+
+  it('defaults severity and projects the constrained public shape', () => {
+    expect(
+      publicEnvironmentNotice({
+        ui: {
+          environment_notice: {
+            title: 'Remote environments',
+            message: 'Bring your own runtime.',
+            link: { label: 'Learn more', url: '/guide/environment-configuration' },
+          },
+        },
+      })
+    ).toEqual({
+      severity: 'info',
+      title: 'Remote environments',
+      message: 'Bring your own runtime.',
+      link: { label: 'Learn more', url: '/guide/environment-configuration' },
+    });
   });
 });
 

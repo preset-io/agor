@@ -778,6 +778,131 @@ describe('loadConfig', () => {
     );
   });
 
+  it('accepts a bounded plain-text environment notice with a safe documentation link', async () => {
+    const agorDir = path.join(tempDir, '.agor');
+    const configPath = path.join(agorDir, 'config.yaml');
+
+    await fs.mkdir(agorDir, { recursive: true });
+    await fs.writeFile(
+      configPath,
+      yaml.dump({
+        ui: {
+          environment_notice: {
+            severity: 'warning',
+            title: 'Remote environments',
+            message: 'Agor can call your environment provider, but does not host the runtime.',
+            link: {
+              label: 'Environment documentation',
+              url: 'https://agor.live/guide/environment-configuration',
+            },
+          },
+        },
+      }),
+      'utf-8'
+    );
+
+    await expect(loadConfig()).resolves.toMatchObject({
+      ui: {
+        environment_notice: {
+          severity: 'warning',
+          title: 'Remote environments',
+          link: { url: 'https://agor.live/guide/environment-configuration' },
+        },
+      },
+    });
+  });
+
+  it.each([
+    [{ title: '', message: 'Body' }, /environment_notice\.title must not be empty/],
+    [{ title: 'Title', message: '' }, /environment_notice\.message must not be empty/],
+    [
+      { severity: 'critical', title: 'Title', message: 'Body' },
+      /severity must be one of: info, success, warning, error/,
+    ],
+    [
+      {
+        title: 'Title',
+        message: 'Body',
+        link: { label: 'Insecure', url: 'http://docs.example.com/environment' },
+      },
+      /link\.url must be an HTTPS URL or a same-origin path/,
+    ],
+    [
+      {
+        title: 'Title',
+        message: 'Body',
+        link: { label: 'Unsafe', url: 'javascript:alert(1)' },
+      },
+      /link\.url must be an HTTPS URL or a same-origin path/,
+    ],
+    [
+      {
+        title: 'Title',
+        message: 'Body',
+        link: { label: 'Credentials', url: 'https://user:secret@example.com/docs' },
+      },
+      /link\.url must not include URL credentials/,
+    ],
+    [
+      {
+        title: 'Title',
+        message: 'Body',
+        link: { label: 'Protocol relative', url: '//evil.example/docs' },
+      },
+      /link\.url must be an HTTPS URL or a same-origin path/,
+    ],
+  ])('rejects invalid environment notice settings %#', async (environmentNotice, expected) => {
+    const agorDir = path.join(tempDir, '.agor');
+    const configPath = path.join(agorDir, 'config.yaml');
+
+    await fs.mkdir(agorDir, { recursive: true });
+    await fs.writeFile(
+      configPath,
+      yaml.dump({ ui: { environment_notice: environmentNotice } }),
+      'utf-8'
+    );
+
+    await expect(loadConfig()).rejects.toThrow(expected);
+  });
+
+  it('rejects oversized environment notice content', async () => {
+    const agorDir = path.join(tempDir, '.agor');
+    const configPath = path.join(agorDir, 'config.yaml');
+
+    await fs.mkdir(agorDir, { recursive: true });
+    await fs.writeFile(
+      configPath,
+      yaml.dump({
+        ui: { environment_notice: { title: 'Title', message: 'x'.repeat(2_001) } },
+      }),
+      'utf-8'
+    );
+
+    await expect(loadConfig()).rejects.toThrow(/environment_notice\.message must be at most 2000/);
+  });
+
+  it('rejects arbitrary environment notice rich-content fields', async () => {
+    const agorDir = path.join(tempDir, '.agor');
+    const configPath = path.join(agorDir, 'config.yaml');
+
+    await fs.mkdir(agorDir, { recursive: true });
+    await fs.writeFile(
+      configPath,
+      yaml.dump({
+        ui: {
+          environment_notice: {
+            title: 'Title',
+            message: 'Body',
+            html: '<script>alert(1)</script>',
+          },
+        },
+      }),
+      'utf-8'
+    );
+
+    await expect(loadConfig()).rejects.toThrow(/unrecognized key: ui\.environment_notice\.html/);
+  });
+
   it.each(['resources', 'services', 'credentials', 'opencode', 'codex', 'knowledge'])(
     'rejects the removed %s config surface',
     async (key) => {

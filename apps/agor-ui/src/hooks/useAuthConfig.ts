@@ -14,6 +14,7 @@ import {
   AgorUserLifecycleAuthority,
   IDENTITY_AUTHORITY_CONTRACT_VERSION,
   type PasswordPolicyRequirements,
+  type ResolvedEnvironmentNotice,
   type ResolvedIdentityAuthority,
 } from '@agor/core/config/browser';
 import type { ManagedEnvExecutionMode } from '@agor/core/environment/webhook';
@@ -39,9 +40,11 @@ export interface AuthConfig {
   };
 }
 
-interface InstanceConfig {
+export interface InstanceConfig {
   label?: string;
   description?: string;
+  /** Deployment-global, public guidance for the Branch Environment tab. */
+  environmentNotice?: ResolvedEnvironmentNotice;
 }
 
 export interface FeaturesConfig {
@@ -142,7 +145,11 @@ export function __resetAuthConfigForTests(): void {
 }
 
 /** Seed the already-loaded app-shell snapshot for isolated component tests. */
-export function __setAuthConfigForTests(config: AuthConfig, featuresConfig?: FeaturesConfig): void {
+export function __setAuthConfigForTests(
+  config: AuthConfig,
+  featuresConfig?: FeaturesConfig,
+  instanceConfig: InstanceConfig | null = null
+): void {
   const identityContractState = config.identity
     ? isResolvedIdentityAuthority(config.identity)
       ? IdentityContractState.SUPPORTED
@@ -150,7 +157,7 @@ export function __setAuthConfigForTests(config: AuthConfig, featuresConfig?: Fea
     : IdentityContractState.LEGACY;
   snapshot = {
     config: identityContractState === IdentityContractState.UNSUPPORTED ? null : config,
-    instanceConfig: null,
+    instanceConfig,
     featuresConfig,
     loading: false,
     error:

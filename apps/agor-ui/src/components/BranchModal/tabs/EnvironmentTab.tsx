@@ -116,11 +116,12 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
   const { confirm } = useThemedModal();
   const confirmNuke = useConfirmNukeEnvironment();
   const { isAdmin } = usePermissions();
-  const { featuresConfig } = useAuthConfig();
+  const { featuresConfig, instanceConfig } = useAuthConfig();
 
   // ----- Permission gating -----
   const managedEnvsExecutionMode: ManagedEnvExecutionMode =
     featuresConfig?.managedEnvsExecutionMode ?? MANAGED_ENV_EXECUTION_MODE_DEFAULT;
+  const environmentNotice = instanceConfig?.environmentNotice;
   const isWebhookMode = managedEnvsExecutionMode === 'webhook-only';
   const canTriggerEnv = canControlEnvironment ?? isAdmin;
   const triggerDisabledTooltip = canTriggerEnv
@@ -617,6 +618,26 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
   return (
     <div style={{ width: '100%', maxHeight: '70vh', overflowY: 'auto' }}>
       <Space orientation="vertical" size="large" style={{ width: '100%' }}>
+        {environmentNotice && (
+          <Alert
+            type={environmentNotice.severity}
+            showIcon
+            title={environmentNotice.title}
+            description={
+              <div style={{ whiteSpace: 'pre-line', overflowWrap: 'anywhere' }}>
+                {environmentNotice.message}
+                {environmentNotice.link && (
+                  <div style={{ marginTop: 4 }}>
+                    <a href={environmentNotice.link.url} target="_blank" rel="noopener noreferrer">
+                      {environmentNotice.link.label}
+                    </a>
+                  </div>
+                )}
+              </div>
+            }
+          />
+        )}
+
         {/* ====== Environment Controls (top — unchanged from prior behavior) ====== */}
         {hasEnvironmentConfig && (
           <Card size="small">
@@ -833,7 +854,7 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
             <Alert
               type="info"
               showIcon
-              message={isWebhookMode ? 'Webhook-managed environments' : 'Managed environments'}
+              title={isWebhookMode ? 'Webhook-managed environments' : 'Managed environments'}
               description={lifecycleFieldHelp}
               style={{ fontSize: 12 }}
             />

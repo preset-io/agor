@@ -122,6 +122,45 @@ Supported environment overrides still win over YAML. Important examples are `POR
 `AGOR_SANDBOX_SDK_HOME_MODE`. They are
 resolved in memory and never written back.
 
+### Environment tab guidance
+
+An operator can add deployment-specific guidance to the top of every Branch
+**Environment** tab. This is useful when the instance can invoke lifecycle
+commands or webhooks but the operator—not Agor itself—owns the runtime:
+
+```yaml filename="~/.agor/config.yaml"
+ui:
+  environment_notice:
+    severity: warning # info (default) | success | warning | error
+    title: Remote environment availability
+    message: >-
+      This Agor instance can call configured environment webhooks, but it does
+      not host development environments. Connect a supported runtime provider.
+    link:
+      label: Read the environment guide
+      url: https://agor.live/guide/environment-configuration
+```
+
+`title` and `message` are required plain text (120 and 2,000 characters
+maximum). Markdown and HTML are not interpreted. `link` is optional, but when
+present both `label` (120 characters maximum) and `url` (2,048 characters
+maximum) are required. URLs must be HTTPS or a same-origin path beginning with
+a single `/`; URL credentials and protocol-relative links are rejected.
+
+The notice supplements rather than replaces Agor's dynamic capability summary.
+For example, `execution.managed_envs_execution_mode: webhook-only` still causes
+the UI to explain and enforce webhook-only lifecycle fields. Keeping capability
+copy authoritative prevents a stale operator message from changing or
+misrepresenting runtime policy.
+
+The notice is deliberately not dismissible: it communicates deployment policy,
+and dismissal would require user-scoped persistence plus notice versioning to
+avoid hiding changed policy. Omit `ui.environment_notice` to preserve the
+existing UI exactly. Like the instance label and description, this
+deployment-global copy is returned by the unauthenticated `/health` endpoint,
+so do not put secrets, tenant-specific information, or private infrastructure
+URLs in it. Restart the daemon after changing the immutable config input.
+
 `AGOR_EXECUTOR_RESPONSE_ORIGIN_URL` overrides
 `execution.executor_response.origin_url`. In Kubernetes/HA it must be the
 exact initiating replica's executor-reachable origin, not the load-balanced

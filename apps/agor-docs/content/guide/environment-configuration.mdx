@@ -426,6 +426,23 @@ and lifecycle changes. A remote/webhook environment without `health` remains
 explicitly unobservable (`unknown`); Agor never treats another daemon's local
 process map as evidence that it is healthy.
 
+### Why does the Environment tab show an instance-specific notice? {/* #operator-notice */}
+
+Deployment operators can configure a plain-text notice at the top of the tab
+to explain where environments run, which integrations are supported, or where
+to find local documentation. The notice is informational UI policy; it does
+not enable, disable, or authorize any environment operation.
+
+It appears in addition to the dynamic **Managed environments** or
+**Webhook-managed environments** summary. That summary comes from the daemon's
+effective execution mode and remains the authoritative description of accepted
+lifecycle fields. If no notice is configured, the tab behaves exactly as it
+did before this option was added.
+
+See [Environment tab guidance](/guide/config-yaml#environment-tab-guidance) for
+the `ui.environment_notice` schema, limits, safe-link rules, public visibility,
+and a complete example.
+
 ---
 
 ## See also
