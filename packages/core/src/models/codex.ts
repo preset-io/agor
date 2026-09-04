@@ -5,7 +5,7 @@
  */
 
 /** Default Codex model */
-export const DEFAULT_CODEX_MODEL = 'gpt-5.6-sol';
+export const DEFAULT_CODEX_MODEL = 'gpt-6-astra';
 
 /** Codex Mini model for cost-effective usage */
 export const CODEX_MINI_MODEL = 'gpt-5.6-terra';
@@ -30,9 +30,16 @@ export type CodexModelLifecycleMetadata = {
  * Uses `as const satisfies` to preserve literal key types for CodexModel.
  */
 const _CODEX_MODEL_REGISTRY = {
+  'gpt-6-astra': {
+    name: 'GPT-6 Astra (Recommended)',
+    description: 'Most capable model for complex reasoning, coding, and end-to-end work',
+    status: 'current',
+    selectable: true,
+    availability: 'provider-dependent',
+  },
   // GPT-5.6 models
   'gpt-5.6-sol': {
-    name: 'GPT-5.6 Sol (Recommended)',
+    name: 'GPT-5.6 Sol',
     description: 'Flagship GPT-5.6 model for complex, open-ended work',
     status: 'current',
     selectable: true,
@@ -58,7 +65,7 @@ const _CODEX_MODEL_REGISTRY = {
     status: 'current',
     selectable: true,
     availability: 'provider-dependent',
-    replacement: DEFAULT_CODEX_MODEL,
+    replacement: 'gpt-5.6-sol',
   },
   // GPT-5.5 models
   'gpt-5.5': {
@@ -360,6 +367,7 @@ const DEFAULT_CODEX_CONTEXT_LIMIT = 200_000;
  * Unknown models fall back to 200k.
  */
 export const CODEX_CONTEXT_LIMITS: Record<string, number> = {
+  'gpt-6-astra': 1_050_000,
   // GPT-5.6 models
   'gpt-5.6-sol': 1_050_000,
   'gpt-5.6-terra': 1_050_000,

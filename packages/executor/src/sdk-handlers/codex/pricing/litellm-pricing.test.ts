@@ -3,13 +3,32 @@ import { estimateCodexCostUsd, getLiteLlmPricingForModel } from './litellm-prici
 
 describe('LiteLLM Codex pricing snapshot', () => {
   it('contains current Codex default model pricing', () => {
-    for (const model of ['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna']) {
+    for (const model of ['gpt-6-astra', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna']) {
       const pricing = getLiteLlmPricingForModel(model);
 
       expect(pricing?.input_cost_per_token).toBeGreaterThan(0);
       expect(pricing?.output_cost_per_token).toBeGreaterThan(0);
       expect(pricing?.cache_read_input_token_cost).toBeGreaterThan(0);
     }
+  });
+
+  it('estimates Astra costs with cached input and provider-prefixed IDs', () => {
+    expect(
+      estimateCodexCostUsd({
+        modelId: 'openai/gpt-6-astra',
+        inputTokens: 10_000,
+        cacheReadTokens: 4_000,
+        outputTokens: 1_000,
+      })
+    ).toBeCloseTo(0.114, 8);
+    expect(
+      estimateCodexCostUsd({
+        modelId: 'gpt-6-astra',
+        inputTokens: 300_000,
+        cacheReadTokens: 100_000,
+        outputTokens: 10_000,
+      })
+    ).toBeCloseTo(2.6, 8);
   });
 
   it('estimates cost with cached input tokens as a subset of input tokens', () => {
