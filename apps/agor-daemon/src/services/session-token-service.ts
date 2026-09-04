@@ -253,14 +253,24 @@ export class SessionTokenService {
    * `session_id` slot carries this opaque command ID. It is never resolved as
    * a Session: only exact command-capability guards interpret it.
    */
-  generateCommandToken(commandId: string, userId: string, branchId?: string): Promise<string> {
+  generateCommandToken(
+    commandId: string,
+    userId: string,
+    branchId?: string,
+    options: { expirationMs?: number } = {}
+  ): Promise<string> {
+    if (options.expirationMs !== undefined && options.expirationMs > this.config.expiration_ms) {
+      throw new Error(
+        `Executor command requires a ${options.expirationMs}ms credential, which exceeds execution.session_token_expiration_ms (${this.config.expiration_ms}ms)`
+      );
+    }
     return this.generateTokenWithPurpose(
       commandId,
       userId,
       {
         branchId,
         maxUses: -1,
-        expirationMs: EXECUTOR_COMMAND_TOKEN_EXPIRATION_MS,
+        expirationMs: options.expirationMs ?? EXECUTOR_COMMAND_TOKEN_EXPIRATION_MS,
       },
       EXECUTOR_COMMAND_TOKEN_PURPOSE
     );
