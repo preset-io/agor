@@ -16,6 +16,7 @@ import {
   resolveExecutionSecurityMode,
 } from '@agor/core/config';
 import {
+  assertTenantWritable,
   BranchRepository,
   bindRepositoryToTenantUnitOfWork,
   EntityNotFoundError,
@@ -29,6 +30,7 @@ import {
   type SessionWithLastMessage,
   TaskRepository,
   type TenantScopeAwareDatabase,
+  TenantWriteGateActiveError,
   UsersRepository,
 } from '@agor/core/db';
 import {
@@ -38,6 +40,7 @@ import {
   Forbidden,
   NotAuthenticated,
   NotFound,
+  Unavailable,
 } from '@agor/core/feathers';
 import { MCPServerNotUsableError } from '@agor/core/mcp';
 import {
@@ -1392,6 +1395,18 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
     params?: SessionParams
   ): Promise<Session[]> {
     if (targets.length === 0) return [];
+
+    const tenantId = params?.tenant?.tenant_id ?? getCurrentTenantId();
+    if (tenantId) {
+      try {
+        await assertTenantWritable(this.db, tenantId);
+      } catch (error) {
+        if (error instanceof TenantWriteGateActiveError) {
+          throw new Unavailable(error.message);
+        }
+        throw error;
+      }
+    }
 
     const affectedSessions = await this.sessionRepo.updateArchiveStateForTargets(
       targets.map((target) => ({

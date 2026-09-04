@@ -4151,7 +4151,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   });
 
   app.service('/branches/:id/archive-or-delete').hooks({
-    around: { all: [tenantIdentityAround] },
+    around: { all: [tenantIdentityAround, tenantWriteAdmissionAround] },
     before: {
       create: [
         requireAuth,
@@ -4178,7 +4178,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   });
 
   app.service('/branches/:id/unarchive').hooks({
-    around: { all: [tenantIdentityAround] },
+    around: { all: [tenantIdentityAround, tenantWriteAdmissionAround] },
     before: {
       create: [
         requireAuth,

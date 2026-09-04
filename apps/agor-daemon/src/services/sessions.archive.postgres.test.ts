@@ -1,4 +1,5 @@
 import {
+  acquireTenantWriteGate,
   BranchRepository,
   createDatabase,
   createTenantScopedDatabaseProxy,
@@ -8,6 +9,7 @@ import {
   initializeDatabase,
   isPostgresDatabase,
   RepoRepository,
+  releaseTenantWriteGate,
   runWithTenantDatabaseScope,
   SessionRepository,
   sql,
@@ -67,7 +69,7 @@ async function createTree(db: Database, label: string) {
     contextFiles: [],
     genealogy: { parent_session_id: root.session_id, children: [] },
   });
-  return { root, child };
+  return { branch, root, child };
 }
 
 describe.skipIf(!postgresUrl || !usesPostgresSchema)(
@@ -135,6 +137,66 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       expect(tenantAState.every((session) => session.archived)).toBe(true);
 
       await expect(service.archive(treeA.root.session_id)).rejects.toThrow(/tenant.*scope/i);
+    }, 30_000);
+
+    it('rejects branch archive transitions while the tenant write gate is active', async () => {
+      const tenantId = `archive-gated-${generateId()}` as TenantID;
+      const db = createTenantScopedDatabaseProxy(rawDb, {
+        requireScope: true,
+        label: 'sessions-archive-write-gate-test',
+      });
+      const tree = await runWithTenantDatabaseScope(db, tenantId, (scoped) =>
+        createTree(scoped, 'tenant-gated')
+      );
+      const app = {
+        get: () => ({ execution: { branch_rbac: false } }),
+        service: () => ({ emit: () => undefined }),
+      } as unknown as Application;
+      const service = new SessionsService(db, app);
+      const params = { tenant: { tenant_id: tenantId, source: 'explicit' as const } };
+
+      await runWithTenantDatabaseScope(db, tenantId, (scoped) =>
+        new SessionRepository(scoped).updateArchiveStateForTargets([
+          { id: tree.root.session_id, archived: true, archivedReason: 'branch_archived' },
+          { id: tree.child.session_id, archived: true, archivedReason: 'branch_archived' },
+        ])
+      );
+
+      let gate = await acquireTenantWriteGate(rawDb, tenantId, { reason: 'test' });
+      try {
+        await expect(
+          runWithTenantDatabaseScope(db, tenantId, () =>
+            service.unarchiveBranchSessions(tree.branch.branch_id, params)
+          )
+        ).rejects.toMatchObject({ code: 503 });
+
+        const archived = await runWithTenantDatabaseScope(db, tenantId, (scoped) =>
+          new SessionRepository(scoped).findAll({ branchId: tree.branch.branch_id })
+        );
+        expect(archived.every((session) => session.archived)).toBe(true);
+      } finally {
+        await releaseTenantWriteGate(rawDb, tenantId, { generation: gate.generation });
+      }
+
+      await runWithTenantDatabaseScope(db, tenantId, () =>
+        service.unarchiveBranchSessions(tree.branch.branch_id, params)
+      );
+
+      gate = await acquireTenantWriteGate(rawDb, tenantId, { reason: 'test' });
+      try {
+        await expect(
+          runWithTenantDatabaseScope(db, tenantId, () =>
+            service.archiveBranchSessions(tree.branch.branch_id, params)
+          )
+        ).rejects.toMatchObject({ code: 503 });
+
+        const active = await runWithTenantDatabaseScope(db, tenantId, (scoped) =>
+          new SessionRepository(scoped).findAll({ branchId: tree.branch.branch_id })
+        );
+        expect(active.every((session) => !session.archived)).toBe(true);
+      } finally {
+        await releaseTenantWriteGate(rawDb, tenantId, { generation: gate.generation });
+      }
     }, 30_000);
   }
 );
