@@ -217,6 +217,12 @@ export const ZoneConfigModal = ({
         return;
       }
 
+      // Ant only returns fields registered by a mounted tab. A user can open
+      // Zone settings and save from Layout without ever mounting Appearance,
+      // so preserve identity/placement values that were not part of this
+      // submission instead of serializing them as undefined/false.
+      const nextName = values.name ?? zoneName;
+      const nextLocked = values.locked ?? Boolean(zone.locked);
       const template = values.triggerTemplate?.trim() || '';
       const nextTrigger =
         template && values.triggerBehavior
@@ -227,8 +233,8 @@ export const ZoneConfigModal = ({
           ? normalizeZoneLayoutPolicy(boardZoneLayoutDefaults)
           : normalizeZoneLayoutPolicy(layoutPolicy);
       const hasChanges =
-        values.name !== zoneName ||
-        Boolean(values.locked) !== Boolean(zone.locked) ||
+        nextName !== zoneName ||
+        Boolean(nextLocked) !== Boolean(zone.locked) ||
         borderColor !== zone.borderColor ||
         backgroundColor !== zone.backgroundColor ||
         fontSize !== sanitizeZoneFontSize(zone.fontSize) ||
@@ -240,8 +246,8 @@ export const ZoneConfigModal = ({
       if (hasChanges) {
         const saved = await onUpdate(objectId, {
           ...zone,
-          label: values.name,
-          locked: Boolean(values.locked),
+          label: nextName,
+          locked: Boolean(nextLocked),
           borderColor,
           backgroundColor,
           fontSize,

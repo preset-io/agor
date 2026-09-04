@@ -153,8 +153,48 @@ describe('ZoneConfigModal historical tool migration', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
     await waitFor(() => expect(onUpdate).toHaveBeenCalledOnce());
     expect(onUpdate.mock.calls[0][1]).toMatchObject({
+      label: 'Review',
+      locked: false,
       layout_binding: 'inherit',
       layout: { mode: 'manual', preset: 'grid', density: 'preserve', gap: 4 },
+    });
+  });
+
+  it('preserves identity and placement when saving from Layout before Appearance mounts', async () => {
+    const onUpdate = vi.fn();
+    render(
+      <AntdApp>
+        <ZoneConfigModal
+          open
+          onCancel={vi.fn()}
+          zoneName="Planning"
+          objectId="zone-1"
+          onUpdate={onUpdate}
+          zoneData={{
+            type: 'zone',
+            x: 0,
+            y: 0,
+            width: 620,
+            height: 900,
+            label: 'Planning',
+            locked: true,
+            layout: { mode: 'manual', preset: 'grid', gap: 24 },
+          }}
+        />
+      </AntdApp>
+    );
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Layout' }));
+    fireEvent.change(screen.getByRole('spinbutton', { name: 'Spacing' }), {
+      target: { value: '8' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => expect(onUpdate).toHaveBeenCalledOnce());
+    expect(onUpdate.mock.calls[0][1]).toMatchObject({
+      label: 'Planning',
+      locked: true,
+      layout: { gap: 8 },
     });
   });
 
