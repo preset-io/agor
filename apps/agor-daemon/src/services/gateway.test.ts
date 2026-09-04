@@ -1301,6 +1301,87 @@ describe('GatewayService Slack thread catch-up', () => {
   });
 });
 
+describe('GatewayService mapped-thread follow-ups', () => {
+  const mappedThreadId = 'C123-100.000000';
+
+  function makeSeedInMappedThread(): GatewayOutboundMessage {
+    return {
+      id: 'seed-in-mapped-thread',
+      gateway_channel_id: slackChannel.id,
+      channel_type: 'slack',
+      platform_channel_id: 'C123',
+      platform_message_id: '102.000000',
+      platform_thread_id: mappedThreadId,
+      platform_permalink: null,
+      target_branch_id: slackChannel.target_branch_id,
+      emitted_by_user_id: 'user-1',
+      emitted_by_session_id: 'sess-1',
+      emitted_by_task_id: 'task-origin',
+      emitted_by_schedule_id: null,
+      message_text: 'Status update from the mapped session.',
+      message_preview: 'Status update from the mapped session.',
+      metadata: null,
+      consumed_by_session_id: null,
+      consumed_at: null,
+      created_at: '2026-06-22T00:00:00.000Z',
+      updated_at: '2026-06-22T00:00:00.000Z',
+    } as unknown as GatewayOutboundMessage;
+  }
+
+  it('prompts the mapped session after a proactive message was emitted into the same thread', async () => {
+    const fetchThreadHistory = vi.fn(async () => ({
+      threadId: mappedThreadId,
+      channel: 'C123',
+      thread_ts: '100.000000',
+      has_more: false,
+      messages: [
+        {
+          ts: '103.000000',
+          iso_time: '2026-06-22T00:00:03.000Z',
+          actor_label: 'Alice',
+          text: '<@U_BOT> any update?',
+          is_bot: false,
+          is_trigger: true,
+        },
+      ],
+    }));
+    const sendMessage = vi.fn(async () => '104.000000');
+    const { service, promptCreate, sessionsCreate, admitReplySession, completeReplyAdmission } =
+      makeGatewayHarness({
+        existingMapping: makeMapping({ thread_id: mappedThreadId }),
+        connector: { fetchThreadHistory, sendMessage },
+        outboundSeed: makeSeedInMappedThread(),
+      });
+
+    const result = await service.create({
+      channel_key: 'slack-key',
+      thread_id: mappedThreadId,
+      text: 'any update?',
+      metadata: {
+        channel: 'C123',
+        channel_type: 'channel',
+        slack_has_mention: true,
+        slack_message_ts: '103.000000',
+        slack_thread_ts: '100.000000',
+      },
+    });
+
+    expect(result).toMatchObject({ success: true, sessionId: 'sess-1', created: false });
+    expect(promptCreate).toHaveBeenCalledTimes(1);
+    expect(promptCreate.mock.calls[0][1]).toMatchObject({ route: { id: 'sess-1' } });
+    expect(sessionsCreate).not.toHaveBeenCalled();
+    // The mapping — not the proactive message — owns the thread, so the seed
+    // is never reserved or consumed and the reply keeps ordinary follow-up
+    // shape instead of a seeded thread's initial prompt.
+    expect(admitReplySession).not.toHaveBeenCalled();
+    expect(completeReplyAdmission).not.toHaveBeenCalled();
+    expect(fetchThreadHistory).toHaveBeenCalledOnce();
+    const prompt = promptCreate.mock.calls[0][0].prompt as string;
+    expect(prompt).toContain('any update?');
+    expect(prompt).not.toContain('This Slack thread began from a proactive Agor gateway message');
+  });
+});
+
 describe('GatewayService startup/bootstrap hint (#1982)', () => {
   const STARTUP_BOOTSTRAP_HINT =
     'Startup/bootstrap note: Follow any startup/bootstrap instructions defined by the working directory before answering the gateway message above.';

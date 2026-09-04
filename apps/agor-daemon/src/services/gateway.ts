@@ -2623,7 +2623,22 @@ export class GatewayService {
     // Seed admission is the one durable mutation that must happen before
     // creating a session. It also replaces the old lookup-then-late-claim
     // sequence, so competing provider aliases receive one stable ID.
-    if (channel.channel_type === 'slack' || channel.channel_type === 'discord') {
+    //
+    // Seed admission only decides which Session a thread that has none yet
+    // belongs to. A thread that already carries a canonical mapping the seed
+    // did not create is not a seed reply: a proactive outbound message can be
+    // sent into a thread that is already routed to a Session, and the mapping
+    // stays that thread's owner. Skip admission entirely for those threads so
+    // no seed is reserved or consumed for a thread it does not own, and the
+    // message continues down the ordinary follow-up path below.
+    const existingMappingSeedId = (existingMapping?.metadata as Record<string, unknown> | null)
+      ?.outbound_seed_id;
+    const threadOwnedByUnseededMapping =
+      !!existingMapping && typeof existingMappingSeedId !== 'string';
+    if (
+      (channel.channel_type === 'slack' || channel.channel_type === 'discord') &&
+      !threadOwnedByUnseededMapping
+    ) {
       outboundAdmission = await this.outboundRepo.admitReplySession(channel.id, data.thread_id);
       if (outboundAdmission) {
         outboundSeed = outboundAdmission.message;
