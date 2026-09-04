@@ -36,6 +36,7 @@ import { useMutationGate } from '../../../contexts/ConnectionContext';
 import { getContrastingTextColor } from '../../../utils/theme';
 import { getUserInitials } from '../../UserIdentityAvatar';
 import { DeleteZoneModal } from './DeleteZoneModal';
+import { CANVAS_LAYOUT_CONTROLS_CLASS } from './SelectionLayoutPopover';
 import { ZoneConfigModal } from './ZoneConfigModal';
 import type { LayerOp } from './zOrder';
 import { toTranslucentZoneFill, ZONE_CONTENT_OPACITY } from './zoneAppearance';
@@ -521,6 +522,7 @@ const ZoneNodeComponent = ({ data, selected }: { data: ZoneNodeData; selected?: 
             <Dropdown
               trigger={['click']}
               placement="bottomRight"
+              classNames={{ root: CANVAS_LAYOUT_CONTROLS_CLASS }}
               menu={{
                 items: [
                   {

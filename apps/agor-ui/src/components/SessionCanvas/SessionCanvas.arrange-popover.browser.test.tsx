@@ -101,7 +101,11 @@ describe('SessionCanvas Arrange Board popover (real browser)', () => {
     expect(Number.isFinite(Number.parseFloat(toolbar.style.left))).toBe(true);
     expect(document.querySelector('.react-flow__node[data-id="legacy-text"]')).toBeNull();
     await act(async () => user.click(screen.getByRole('button', { name: 'More zone actions' })));
-    expect(await screen.findByText('Enable Auto Zone')).toBeInTheDocument();
+    const enableAutoZone = await screen.findByRole('menuitem', { name: /Enable Auto Zone/ });
+    await waitFor(() => expect(enableAutoZone).toBeVisible());
+    expect(enableAutoZone.closest(`.${CANVAS_LAYOUT_CONTROLS_CLASS}`)).not.toBeNull();
+    await act(async () => user.click(enableAutoZone));
+    expect(zoneNode).toHaveClass('selected');
 
     view.rerender(
       renderCanvas({
@@ -116,6 +120,7 @@ describe('SessionCanvas Arrange Board popover (real browser)', () => {
         },
       } as Board)
     );
+    await act(async () => user.click(screen.getByRole('button', { name: 'More zone actions' })));
     expect(await screen.findByText('Disable Auto Zone')).toBeInTheDocument();
 
     const productStyleWarnings = consoleError.mock.calls.filter((args) => {

@@ -5,6 +5,7 @@ import { ReactFlowProvider } from 'reactflow';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ConnectionProvider } from '../../../contexts/ConnectionContext';
 import { ZoneNode } from './BoardObjectNodes';
+import { CANVAS_LAYOUT_CONTROLS_CLASS } from './SelectionLayoutPopover';
 
 const zoneConfigModalRenderSpy = vi.hoisted(() => vi.fn());
 
@@ -109,7 +110,9 @@ describe('ZoneNode compact toolbar', () => {
 
     expect(screen.queryByRole('button', { name: 'Tidy up contents' })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'More zone actions' }));
-    fireEvent.click(await screen.findByText('Tidy up contents'));
+    const tidy = await screen.findByText('Tidy up contents');
+    expect(tidy.closest(`.${CANVAS_LAYOUT_CONTROLS_CLASS}`)).not.toBeNull();
+    fireEvent.click(tidy);
     expect(onArrangeContents).toHaveBeenCalledWith('zone-1');
 
     fireEvent.click(screen.getByRole('button', { name: 'More zone actions' }));
