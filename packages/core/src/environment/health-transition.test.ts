@@ -1,8 +1,12 @@
 import { describe, expect, it } from 'vitest';
+import { EXECUTOR_COMMAND_TOKEN_EXPIRATION_MS } from '../config/constants.js';
 import {
   decideEnvironmentHealthTransition,
   ENVIRONMENT_READY_PROBE_THRESHOLD,
   ENVIRONMENT_UNREACHABLE_PROBE_THRESHOLD,
+  resolveEnvironmentLifecycleBudget,
+  resolveEnvironmentLifecycleTimeoutMs,
+  resolveEnvironmentStartBudget,
   resolveEnvironmentStartupTimeoutMs,
 } from './health-transition.js';
 
@@ -187,5 +191,78 @@ describe('decideEnvironmentHealthTransition', () => {
         decide('error', 'unknown', { status: 'unknown', consecutive: 99 }).nextStatus
       ).toBeUndefined();
     });
+  });
+});
+
+describe('environment lifecycle budgets', () => {
+  it('keeps an unconfigured non-Start command inside the default command credential', () => {
+    // The whole point of a per-variant budget: an operator who lowers
+    // execution.session_token_expiration_ms to the documented 15-minute
+    // taskless maximum must not have every ordinary Stop refused at issuance.
+    const budget = resolveEnvironmentLifecycleBudget();
+    expect(budget.credentialLifetimeMs).toBeLessThanOrEqual(EXECUTOR_COMMAND_TOKEN_EXPIRATION_MS);
+    expect(budget.commandTimeoutMs).toBe(resolveEnvironmentLifecycleTimeoutMs(undefined));
+  });
+
+  it('nests every bound of one attempt strictly inside the next', () => {
+    const budget = resolveEnvironmentLifecycleBudget(1_260_000);
+    expect(budget.commandTimeoutMs).toBe(1_260_000);
+    // Credential outlives the command (it still has to record the outcome),
+    // the daemon's waiter outlives the credential (so it observes that
+    // recording), and the durable Sync claim outlives the waiter (or the
+    // settlement is discarded as stale).
+    expect(budget.credentialLifetimeMs).toBeGreaterThan(budget.commandTimeoutMs);
+    expect(budget.requestTimeoutMs).toBeGreaterThan(budget.credentialLifetimeMs);
+    expect(budget.claimLeaseMs).toBeGreaterThan(budget.requestTimeoutMs);
+  });
+
+  it('rejects an out-of-range configured lifecycle budget', () => {
+    for (const invalid of [0, 999, 1.5, 60 * 60 * 1_000 + 1]) {
+      expect(() => resolveEnvironmentLifecycleTimeoutMs(invalid)).toThrow(/lifecycle_timeout_ms/);
+    }
+    // The documented maximum must remain issuable under the DEFAULT operator
+    // ceiling, or the config range would advertise values nothing can authorize.
+    const widest = resolveEnvironmentLifecycleBudget(60 * 60 * 1_000);
+    expect(widest.credentialLifetimeMs).toBeLessThanOrEqual(24 * 60 * 60 * 1_000);
+  });
+
+  it('shortens the command deadline to fit a tighter operator ceiling', () => {
+    // A deployment that hardened its token lifetime must still be able to run a
+    // two-second `docker compose down`; refusing it outright would break
+    // Stop/Nuke/Sync everywhere rather than bounding one slow provider.
+    const clamped = resolveEnvironmentLifecycleBudget(1_260_000, {
+      credentialCeilingMs: 600_000,
+    });
+    expect(clamped.credentialLifetimeMs).toBe(600_000);
+    expect(clamped.commandTimeoutMs).toBeLessThan(1_260_000);
+
+    // A per-command response override outranks the waiter the daemon passes, so
+    // the command has to end before that override fires.
+    const bounded = resolveEnvironmentLifecycleBudget(1_260_000, { requestCeilingMs: 300_000 });
+    expect(bounded.requestTimeoutMs).toBe(300_000);
+    expect(bounded.commandTimeoutMs).toBeLessThan(300_000);
+
+    // Tightest ceiling wins.
+    const both = resolveEnvironmentLifecycleBudget(1_260_000, {
+      credentialCeilingMs: 600_000,
+      requestCeilingMs: 300_000,
+    });
+    expect(both.commandTimeoutMs).toBe(bounded.commandTimeoutMs);
+  });
+
+  it('refuses only when no room for any command remains', () => {
+    expect(() =>
+      resolveEnvironmentLifecycleBudget(undefined, { credentialCeilingMs: 60_000 })
+    ).toThrow(/session_token_expiration_ms|executor_response/);
+  });
+
+  it('sizes a Start credential from the branch startup policy alone', () => {
+    const start = resolveEnvironmentStartBudget(1_500_000);
+    expect(start.startupTimeoutMs).toBe(1_500_000);
+    expect(start.credentialLifetimeMs).toBeGreaterThan(1_500_000);
+    // A provider's long Stop budget must never widen Start, or vice versa.
+    expect(start.credentialLifetimeMs).not.toBe(
+      resolveEnvironmentLifecycleBudget(1_500_000).credentialLifetimeMs
+    );
   });
 });

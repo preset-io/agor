@@ -5,11 +5,7 @@
  * top-level `status` must flip to `degraded` when connectivity fails.
  */
 
-import {
-  type AgorConfig,
-  type ResolvedEnvironmentNotice,
-  resolveEnvironmentNotice,
-} from '@agor/core/config';
+import { type AgorConfig, resolveEnvironmentDisclaimerMarkdown } from '@agor/core/config';
 import type { DbProbeResult, MigrationsProbeResult } from './db-probe.js';
 
 export type HealthStatus = 'ok' | 'degraded';
@@ -19,8 +15,8 @@ export type HealthStatus = 'ok' | 'degraded';
  * contract. `/health` is unauthenticated, so never return the raw config
  * object or unknown future keys here.
  */
-export function publicEnvironmentNotice(config: AgorConfig): ResolvedEnvironmentNotice | undefined {
-  return resolveEnvironmentNotice(config.ui?.environment_notice);
+export function publicEnvironmentDisclaimerMarkdown(config: AgorConfig): string | undefined {
+  return resolveEnvironmentDisclaimerMarkdown(config.ui?.environment_disclaimer_markdown);
 }
 
 /** Top-level `/health` status: `degraded` iff the DB probe failed. */

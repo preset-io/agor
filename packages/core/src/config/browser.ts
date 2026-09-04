@@ -6,7 +6,7 @@
  */
 
 export * from './constants';
-export * from './environment-notice';
+export * from './environment-disclaimer';
 export * from './password-policy-contract';
 export * from './repo-list';
 export * from './repo-reference';

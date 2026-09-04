@@ -36,15 +36,15 @@ function renderTab() {
   );
 }
 
-describe('EnvironmentTab deployment notice', () => {
+describe('EnvironmentTab deployment disclaimer', () => {
   beforeEach(() => {
     __setAuthConfigForTests({ requireAuth: true }, { managedEnvsExecutionMode: 'hybrid' });
   });
 
-  it('preserves current behavior when the deployment notice is absent', () => {
+  it('preserves current behavior when the deployment disclaimer is absent', () => {
     renderTab();
 
-    expect(screen.queryByText('Remote environment availability')).not.toBeInTheDocument();
+    expect(screen.queryByText('Environment availability')).not.toBeInTheDocument();
     expect(
       screen.getAllByText(
         'This instance supports shell commands and URL webhooks for start, stop, nuke, and logs.'
@@ -52,37 +52,31 @@ describe('EnvironmentTab deployment notice', () => {
     ).not.toHaveLength(0);
   });
 
-  it('renders plain text and a safe new-tab link above the capability summary', () => {
+  it('renders sanitized Markdown above the dynamic capability summary', async () => {
     __setAuthConfigForTests(
       { requireAuth: true },
       { managedEnvsExecutionMode: 'webhook-only' },
       {
-        environmentNotice: {
-          severity: 'warning',
-          title: 'Remote environment availability',
-          message: '<img src=x onerror=alert(1)> **Bring your own runtime.**',
-          link: {
-            label: 'Read the environment guide',
-            url: 'https://agor.live/guide/environment-configuration',
-          },
-        },
+        environmentDisclaimerMarkdown:
+          '<img src=x onerror=alert(1)>\n\n**Bring your own runtime.** [Read the environment guide](https://agor.live/guide/environment-configuration) [unsafe](javascript:alert(1))',
       }
     );
 
     const { container } = renderTab();
 
-    const heading = screen.getByText('Remote environment availability');
+    const heading = screen.getByText('Environment availability');
     const alert = heading.closest('.ant-alert');
     expect(alert).not.toBeNull();
     expect(alert).toHaveClass('ant-alert-warning');
-    expect(alert).toHaveTextContent('<img src=x onerror=alert(1)> **Bring your own runtime.**');
+    expect(await within(alert as HTMLElement).findByText('Bring your own runtime.')).toBeVisible();
+    expect(alert).not.toHaveTextContent('**Bring your own runtime.**');
 
-    const link = within(alert as HTMLElement).getByRole('link', {
+    const link = await within(alert as HTMLElement).findByRole('link', {
       name: 'Read the environment guide',
     });
     expect(link).toHaveAttribute('href', 'https://agor.live/guide/environment-configuration');
     expect(link).toHaveAttribute('target', '_blank');
-    expect(link).toHaveAttribute('rel', 'noopener noreferrer');
+    expect(link).toHaveAttribute('rel', expect.stringContaining('noreferrer'));
 
     const [capabilitySummary] = screen.getAllByText(
       /This instance uses webhook-managed environments/
@@ -91,5 +85,9 @@ describe('EnvironmentTab deployment notice', () => {
       heading.compareDocumentPosition(capabilitySummary) & Node.DOCUMENT_POSITION_FOLLOWING
     ).toBeTruthy();
     expect(container.querySelector('img[src="x"]')).not.toBeInTheDocument();
+    expect(container.querySelector('script, iframe, object, embed')).not.toBeInTheDocument();
+    expect(
+      within(alert as HTMLElement).queryByRole('link', { name: 'unsafe' })
+    ).not.toBeInTheDocument();
   });
 });

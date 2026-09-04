@@ -10,7 +10,7 @@ import {
   authenticatedHealthDb,
   healthMigrations,
   healthStatus,
-  publicEnvironmentNotice,
+  publicEnvironmentDisclaimerMarkdown,
   publicHealthDb,
 } from './payload';
 
@@ -26,28 +26,20 @@ describe('healthStatus', () => {
   });
 });
 
-describe('publicEnvironmentNotice', () => {
+describe('publicEnvironmentDisclaimerMarkdown', () => {
   it('keeps absent config absent for backwards-compatible health payloads', () => {
-    expect(publicEnvironmentNotice({})).toBeUndefined();
+    expect(publicEnvironmentDisclaimerMarkdown({})).toBeUndefined();
   });
 
-  it('defaults severity and projects the constrained public shape', () => {
+  it('projects only the normalized operator-authored Markdown string', () => {
     expect(
-      publicEnvironmentNotice({
+      publicEnvironmentDisclaimerMarkdown({
         ui: {
-          environment_notice: {
-            title: 'Remote environments',
-            message: 'Bring your own runtime.',
-            link: { label: 'Learn more', url: '/guide/environment-configuration' },
-          },
+          environment_disclaimer_markdown:
+            '  **Bring your own runtime.** [Learn more](/guide/environment-configuration)  ',
         },
       })
-    ).toEqual({
-      severity: 'info',
-      title: 'Remote environments',
-      message: 'Bring your own runtime.',
-      link: { label: 'Learn more', url: '/guide/environment-configuration' },
-    });
+    ).toBe('**Bring your own runtime.** [Learn more](/guide/environment-configuration)');
   });
 });
 

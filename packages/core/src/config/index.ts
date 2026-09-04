@@ -15,7 +15,7 @@ export * from './env-locking';
 export * from './env-resolver';
 export * from './env-validation';
 export * from './env-vars';
-export * from './environment-notice';
+export * from './environment-disclaimer';
 export * from './executor-credential-storage';
 export * from './executor-heartbeat';
 export * from './executor-response';

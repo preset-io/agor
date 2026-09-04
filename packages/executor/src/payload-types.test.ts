@@ -327,6 +327,7 @@ describe('EnvironmentLifecyclePayloadSchema', () => {
         syncCommand: 'bridge sync',
         desiredRevision: 'a'.repeat(40),
         syncClaimToken: 'claim-a',
+        commandTimeoutMs: 21 * 60_000,
       },
     };
 
@@ -345,6 +346,12 @@ describe('EnvironmentLifecyclePayloadSchema', () => {
         params: { branchId: valid.params.branchId, action: 'sync' },
       })
     ).toThrow();
+    expect(() =>
+      EnvironmentLifecyclePayloadSchema.parse({
+        ...valid,
+        params: { ...valid.params, commandTimeoutMs: undefined },
+      })
+    ).toThrow('commandTimeoutMs');
   });
 });
 
@@ -357,12 +364,26 @@ describe('EnvironmentLogsPayloadSchema', () => {
         branchId: '550e8400-e29b-41d4-a716-446655440000',
         branchPath: '/data/agor/worktrees/repo/feature',
         logsCommand: 'docker compose logs --tail=100',
+        commandTimeoutMs: 30_000,
       },
     };
 
     const result = EnvironmentLogsPayloadSchema.parse(payload);
     expect(result.command).toBe('environment.logs');
     expect(result.params.logsCommand).toBe('docker compose logs --tail=100');
+  });
+
+  it('requires a bounded logs command deadline', () => {
+    expect(() =>
+      EnvironmentLogsPayloadSchema.parse({
+        command: 'environment.logs',
+        sessionToken: 'jwt-token-here',
+        params: {
+          branchId: '550e8400-e29b-41d4-a716-446655440000',
+          logsCommand: 'tail -n 100 dev.log',
+        },
+      })
+    ).toThrow('commandTimeoutMs');
   });
 });
 

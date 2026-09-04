@@ -832,6 +832,9 @@ export const branches = sqliteTable(
         // Snapshotted environment startup policy.
         startup_timeout_ms?: number;
 
+        // Snapshotted stop/nuke/sync command budget.
+        lifecycle_timeout_ms?: number;
+
         // Environment instance (runtime state only, no variables)
         environment_instance?: {
           status: 'stopped' | 'starting' | 'running' | 'stopping' | 'error';

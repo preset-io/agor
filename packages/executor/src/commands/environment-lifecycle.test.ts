@@ -1,7 +1,11 @@
 import { EventEmitter } from 'node:events';
 import { ENVIRONMENT_LIFECYCLE_SUPERSEDED_CODE } from '@agor/core/environment/lifecycle-result';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { EnvironmentLifecyclePayload } from '../payload-types';
+import {
+  type EnvironmentLifecyclePayload,
+  EnvironmentLifecyclePayloadSchema,
+  type EnvironmentLogsPayload,
+} from '../payload-types';
 
 const mocks = vi.hoisted(() => ({
   createExecutorClient: vi.fn(),
@@ -13,7 +17,7 @@ vi.mock('../services/feathers-client.js', () => ({
   createExecutorClient: mocks.createExecutorClient,
 }));
 
-import { handleEnvironmentLifecycle } from './environment';
+import { handleEnvironmentLifecycle, handleEnvironmentLogs } from './environment';
 
 const branchId = '550e8400-e29b-41d4-a716-446655440000';
 const revision = 'a'.repeat(40);
@@ -36,6 +40,7 @@ function payload(
       desiredRevision: revision,
       syncClaimToken: 'claim-a',
       startupTimeoutMs: 120_000,
+      commandTimeoutMs: 90_000,
       lifecycleGeneration,
     },
   };
@@ -92,6 +97,52 @@ beforeEach(() => {
   mocks.spawn.mockImplementation(() => successfulChild());
 });
 
+describe('environment logs deadline', () => {
+  it('bounds the command and terminates its process group', async () => {
+    vi.useFakeTimers();
+    const kill = vi.spyOn(process, 'kill').mockImplementation(() => true);
+    try {
+      const child = new EventEmitter() as EventEmitter & {
+        stdout: EventEmitter;
+        stderr: EventEmitter;
+        pid: number;
+        kill: ReturnType<typeof vi.fn>;
+      };
+      child.stdout = new EventEmitter();
+      child.stderr = new EventEmitter();
+      child.pid = 4321;
+      child.kill = vi.fn();
+      mocks.spawn.mockReturnValue(child);
+      client({ generation: 1, updateEnvironment: vi.fn() });
+      const logsPayload: EnvironmentLogsPayload = {
+        command: 'environment.logs',
+        sessionToken: 'executor-token',
+        params: {
+          branchId,
+          branchPath: '/tmp/branch',
+          logsCommand: 'tail -n 100 dev.log',
+          commandTimeoutMs: 30_000,
+        },
+      };
+
+      const result = handleEnvironmentLogs(logsPayload, {});
+      await vi.advanceTimersByTimeAsync(30_000);
+
+      await expect(result).resolves.toMatchObject({
+        success: false,
+        error: {
+          code: 'ENVIRONMENT_LOGS_FAILED',
+          message: 'logs command exceeded its 30000ms deadline',
+        },
+      });
+      expect(kill).toHaveBeenCalledWith(-4321, 'SIGTERM');
+    } finally {
+      kill.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+});
+
 describe('environment lifecycle generation fencing', () => {
   it('does not execute a command whose lifecycle was superseded before spawn', async () => {
     const updateEnvironment = vi.fn();
@@ -127,38 +178,23 @@ describe('environment lifecycle generation fencing', () => {
     expect(updateEnvironment).toHaveBeenCalledTimes(2);
     expect(updateEnvironment.mock.calls[1]?.[0]).toMatchObject({
       expected_environment_generation: 1,
-      expected_environment_status: 'starting',
       environment_update: {
         access_urls: [{ name: 'App', url: 'https://app.example.test/' }],
       },
     });
   });
 
-  it('carries the new generation across the internal stop-to-start restart transition', async () => {
-    const updateEnvironment = vi
-      .fn()
-      .mockResolvedValueOnce({ environment_generation: 1 })
-      .mockResolvedValueOnce({ environment_generation: 2 })
-      .mockResolvedValueOnce({ environment_generation: 2 });
-    client({ generation: 1, updateEnvironment });
-
-    await expect(handleEnvironmentLifecycle(payload('restart'), {})).resolves.toMatchObject({
-      success: true,
-      data: { action: 'restart' },
-    });
-    expect(
-      updateEnvironment.mock.calls.map((call) => call[0].expected_environment_generation)
-    ).toEqual([1, 1, 2]);
-    expect(updateEnvironment.mock.calls.map((call) => call[0].expected_environment_status)).toEqual(
-      ['stopping', 'stopping', 'starting']
-    );
-    expect(mocks.spawn).toHaveBeenCalledTimes(2);
-    const restartStart = updateEnvironment.mock.calls[1]?.[0].environment_update as {
-      startup_deadline_at?: string;
-    };
-    const deadlineAt = Date.parse(restartStart.startup_deadline_at ?? '');
-    expect(deadlineAt).toBeGreaterThan(Date.now() + 119_000);
-    expect(deadlineAt).toBeLessThanOrEqual(Date.now() + 120_000);
+  it('has no single-process restart verb that spans a stop and a start', () => {
+    // Restart is a daemon-owned sequence of a bounded Stop and a separately
+    // credentialed Start. One executor process doing both would need one
+    // credential covering both phases and could not be fenced on the Stop's
+    // settled generation.
+    expect(() =>
+      EnvironmentLifecyclePayloadSchema.parse({
+        ...payload('stop'),
+        params: { ...payload('stop').params, action: 'restart' },
+      })
+    ).toThrow();
   });
 
   it('preserves the daemon-owned deadline for a normal start', async () => {
@@ -181,12 +217,18 @@ describe('environment lifecycle generation fencing', () => {
       data: { action: 'start' },
     });
     expect(updateEnvironment.mock.calls[0]?.[0]).toMatchObject({
-      expected_environment_status: 'starting',
+      expected_environment_generation: 1,
       environment_update: { startup_deadline_at: persistedDeadline },
     });
     expect(updateEnvironment.mock.calls[1]?.[0]).toMatchObject({
-      expected_environment_status: 'starting',
+      expected_environment_generation: 1,
     });
+    // Start fences on the generation alone: the health monitor promotes
+    // `starting -> running` WITHOUT advancing it, on purpose, so this command
+    // still owns publishing its typed lifecycle result.
+    for (const call of updateEnvironment.mock.calls) {
+      expect(call[0]).not.toHaveProperty('expected_environment_status');
+    }
   });
 
   it('terminates a Start command when its persisted startup deadline expires', async () => {
@@ -231,13 +273,210 @@ describe('environment lifecycle generation fencing', () => {
       );
       expect(updateEnvironment.mock.calls[1]?.[0]).toMatchObject({
         expected_environment_generation: 1,
-        expected_environment_status: 'starting',
         environment_update: { status: 'error' },
       });
     } finally {
       child.emit('close', null);
       processKill.mockRestore();
     }
+  });
+
+  it.each(['stop', 'nuke', 'sync'] as const)(
+    'terminates a %s command at the daemon-owned lifecycle deadline',
+    async (action) => {
+      const child = new EventEmitter() as EventEmitter & {
+        stdout: EventEmitter;
+        stderr: EventEmitter;
+        pid: number;
+        kill: ReturnType<typeof vi.fn>;
+      };
+      child.stdout = new EventEmitter();
+      child.stderr = new EventEmitter();
+      child.pid = 4321;
+      child.kill = vi.fn();
+      mocks.spawn.mockReturnValue(child);
+      const processKill = vi.spyOn(process, 'kill').mockImplementation(() => true);
+      const updateEnvironment = vi.fn().mockResolvedValue({ environment_generation: 1 });
+      client({
+        generation: 1,
+        updateEnvironment,
+        environmentInstance: { status: action === 'sync' ? 'running' : 'stopping' },
+      });
+      const expiringPayload = payload(action);
+      expiringPayload.params.commandTimeoutMs = 20;
+
+      try {
+        await expect(handleEnvironmentLifecycle(expiringPayload, {})).resolves.toMatchObject({
+          success: false,
+          error: {
+            code: 'ENVIRONMENT_COMMAND_FAILED',
+            message: expect.stringMatching(/exceeded.*deadline/i),
+          },
+        });
+        expect(processKill).toHaveBeenCalledWith(-child.pid, 'SIGTERM');
+        expect(mocks.spawn).toHaveBeenCalledWith(
+          action === 'stop'
+            ? expiringPayload.params.stopCommand
+            : action === 'nuke'
+              ? expiringPayload.params.nukeCommand
+              : expiringPayload.params.syncCommand,
+          expect.objectContaining({ detached: process.platform !== 'win32' })
+        );
+      } finally {
+        child.emit('close', null);
+        processKill.mockRestore();
+      }
+    }
+  );
+
+  // The health monitor moves `starting -> running` and `running -> error`
+  // WITHOUT advancing the lifecycle generation (EnvironmentHealthRepository
+  // does not bump for those), specifically so the in-flight command keeps
+  // ownership of its own outcome. A status fence on these writes would throw
+  // that outcome away whenever the readiness probe won the race.
+  it.each([
+    ['succeeds', 0, { status: 'succeeded' }],
+    ['fails', 1, { status: 'failed' }],
+  ] as const)(
+    'still records a start that %s after readiness already promoted the branch',
+    async (_label, exitCode, expectedCommand) => {
+      mocks.spawn.mockImplementation(() => {
+        const child = new EventEmitter() as EventEmitter & {
+          stdout: EventEmitter;
+          stderr: EventEmitter;
+          pid: number;
+        };
+        child.stdout = new EventEmitter();
+        child.stderr = new EventEmitter();
+        child.pid = 1234;
+        queueMicrotask(() => {
+          if (exitCode === 0) {
+            child.stdout.emit(
+              'data',
+              Buffer.from(
+                `AGOR_ENVIRONMENT_RESULT=${JSON.stringify({
+                  version: 1,
+                  access_urls: [{ name: 'App', url: 'https://app.example.test' }],
+                })}\n`
+              )
+            );
+          }
+          child.emit('close', exitCode);
+        });
+        return child;
+      });
+      const updateEnvironment = vi.fn(async (input: Record<string, unknown>) => {
+        // Faithful CAS: reject a stale generation, and reject a status fence
+        // against the branch the readiness probe already promoted.
+        if (input.expected_environment_generation !== 1) throw supersededConflict();
+        if (
+          input.expected_environment_status !== undefined &&
+          input.expected_environment_status !== 'running'
+        ) {
+          throw supersededConflict();
+        }
+        return { environment_generation: 1 };
+      });
+      client({
+        generation: 1,
+        updateEnvironment,
+        environmentInstance: {
+          status: 'starting',
+          startup_deadline_at: '2030-01-01T00:00:00.000Z',
+        },
+      });
+
+      const outcome = await handleEnvironmentLifecycle(payload('start'), {});
+      // Not merely "did it try": a rejected write also carries the right body.
+      // The point is that the write was ACCEPTED, so the branch keeps this
+      // command's URLs, facts, and outcome instead of silently losing them.
+      expect(outcome).toMatchObject({ success: exitCode === 0 });
+      expect((outcome.data as { superseded?: boolean } | undefined)?.superseded).toBeUndefined();
+      expect(updateEnvironment.mock.calls.at(-1)?.[0]).toMatchObject({
+        environment_update: { last_command: expect.objectContaining(expectedCommand) },
+      });
+    }
+  );
+
+  it('reports the generation its own settlement produced, not the dispatched one', async () => {
+    // Stop changes the branch status, which advances the lifecycle boundary.
+    // Restart sequences its Start phase from THIS number, so returning the
+    // dispatched generation would make the second phase unreachable.
+    const updateEnvironment = vi.fn().mockResolvedValue({ environment_generation: 2 });
+    client({ generation: 1, updateEnvironment, environmentInstance: { status: 'stopping' } });
+
+    await expect(handleEnvironmentLifecycle(payload('stop'), {})).resolves.toMatchObject({
+      success: true,
+      data: { action: 'stop', lifecycleGeneration: 2 },
+    });
+    expect(updateEnvironment.mock.calls[0]?.[0]).toMatchObject({
+      expected_environment_generation: 1,
+      expected_environment_status: 'stopping',
+    });
+  });
+
+  it('settles a failure with one fenced write instead of re-reading the branch', async () => {
+    mocks.spawn.mockImplementation(() => {
+      const child = new EventEmitter() as EventEmitter & {
+        stdout: EventEmitter;
+        stderr: EventEmitter;
+        pid: number;
+      };
+      child.stdout = new EventEmitter();
+      child.stderr = new EventEmitter();
+      child.pid = 4321;
+      queueMicrotask(() => child.emit('close', 1));
+      return child;
+    });
+    const updateEnvironment = vi.fn().mockResolvedValue({ environment_generation: 2 });
+    const service = client({
+      generation: 1,
+      updateEnvironment,
+      environmentInstance: { status: 'stopping' },
+    });
+
+    await expect(handleEnvironmentLifecycle(payload('stop'), {})).resolves.toMatchObject({
+      success: false,
+      error: { code: 'ENVIRONMENT_COMMAND_FAILED' },
+    });
+    // Exactly the one pre-command generation check. A second read here spends
+    // another acknowledgement budget the command may no longer be authorized
+    // for, and the CAS below already rejects a stale failure.
+    expect(service.get).toHaveBeenCalledTimes(1);
+    expect(updateEnvironment).toHaveBeenCalledTimes(1);
+    expect(updateEnvironment.mock.calls[0]?.[0]).toMatchObject({
+      expected_environment_generation: 1,
+      environment_update: { status: 'error' },
+    });
+    expect(updateEnvironment.mock.calls[0]?.[0]).not.toHaveProperty('expected_environment_status');
+  });
+
+  it('does not record a failure a newer lifecycle already superseded', async () => {
+    mocks.spawn.mockImplementation(() => {
+      const child = new EventEmitter() as EventEmitter & {
+        stdout: EventEmitter;
+        stderr: EventEmitter;
+        pid: number;
+      };
+      child.stdout = new EventEmitter();
+      child.stderr = new EventEmitter();
+      child.pid = 4321;
+      queueMicrotask(() => child.emit('close', 1));
+      return child;
+    });
+    const updateEnvironment = vi
+      .fn()
+      // The `starting` claim still owns the boundary...
+      .mockResolvedValueOnce({ environment_generation: 1 })
+      // ...but a competing action wins before this command can record failure.
+      .mockRejectedValueOnce(supersededConflict());
+    client({ generation: 1, updateEnvironment, environmentInstance: { status: 'starting' } });
+
+    await expect(handleEnvironmentLifecycle(payload('start'), {})).resolves.toMatchObject({
+      success: true,
+      data: { superseded: true },
+    });
+    expect(updateEnvironment).toHaveBeenCalledTimes(2);
   });
 });
 

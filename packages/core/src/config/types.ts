@@ -4,7 +4,6 @@
 
 import type { InstallableAgenticTool } from '../agentic-integrations';
 import type { ManagedEnvExecutionMode } from '../environment/webhook';
-import type { AgorEnvironmentNoticeSettings } from './environment-notice';
 import type { AgorPasswordPolicyProfile } from './password-policy';
 
 export type { ManagedEnvExecutionMode };
@@ -165,11 +164,11 @@ export interface AgorUISettings {
   host?: string;
 
   /**
-   * Optional deployment-wide guidance shown at the top of every Branch
-   * Environment tab. Plain text plus one constrained documentation link; this
-   * is intentionally not Markdown. Exposed publicly through `/health`.
+   * Optional operator-authored, constrained Markdown shown at the top of every
+   * Branch Environment tab. Exposed publicly through `/health`; never sourced
+   * from repository configuration.
    */
-  environment_notice?: AgorEnvironmentNoticeSettings;
+  environment_disclaimer_markdown?: string;
 }
 
 /**

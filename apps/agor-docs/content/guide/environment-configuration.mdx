@@ -126,6 +126,7 @@ environment:
       description: "Human-readable one-liner"
       extends: <base-variant>      # optional, single-level only
       startup_timeout_ms: 3600000 # optional; one hour by default
+      lifecycle_timeout_ms: 775000 # optional; budget for one stop/nuke/sync
       start:  "<shell command template>"
       stop:   "<shell command template>"
       sync:   "<shell command template>"   # optional; exact source reconciliation
@@ -146,11 +147,39 @@ always URL templates, not shell commands.
 - `environment.default` must reference a variant that exists in `environment.variants`.
 - Each variant (after `extends` resolution) needs at least `start` and `stop`.
 
-`startup_timeout_ms`, `sync`, `nuke`, `logs`, `health`, and `app` are optional. The
-startup timeout defaults to one hour and may be set from 1 second through 24
-hours. Agor persists an exact deadline for every attempt, so a daemon restart
-or a pause in health monitoring does not restart the clock. The corresponding
-optional UI buttons simply hide or no-op when absent.
+`startup_timeout_ms`, `lifecycle_timeout_ms`, `sync`, `nuke`, `logs`, `health`,
+and `app` are optional. The startup timeout defaults to one hour and may be set
+from 1 second through 24 hours. Agor persists an exact deadline for every
+attempt, so a daemon restart or a pause in health monitoring does not restart
+the clock. The corresponding optional UI buttons simply hide or no-op when
+absent.
+
+`lifecycle_timeout_ms` is the separate budget for one `stop`, `nuke`, or `sync`
+command; Start is governed by `startup_timeout_ms` instead. It ranges from 1
+second to 1 hour and inherits through `extends`.
+
+Leave it unset unless a variant genuinely needs longer. The default is not a
+round number picked by hand: it is the largest command deadline whose executor
+credential still fits inside the 15 minutes Agor gives a taskless executor
+command by default, so an ordinary local `docker compose down` asks for no more
+authority than it already had. Raising it raises three things together — the
+credential that command is issued, how long the daemon waits for its result, and
+the durable Sync claim lease. That last one is why the ceiling is an hour rather
+than the 24 hours `startup_timeout_ms` allows: the lease is how long a peer
+daemon must wait before it may retry a sync whose owner died.
+
+Two operator settings bound this from outside, and Agor applies both when it
+dispatches rather than letting the command discover them later:
+
+- `execution.session_token_expiration_ms` (24 hours by default) caps any
+  executor credential.
+- `execution.executor_response.timeout_ms.by_command['environment.lifecycle']`,
+  if set, caps how long the daemon waits for the command's result.
+
+If either is tighter than the variant asks for, the **command deadline is
+shortened** to fit — the command still runs, and still ends before its authority
+and its waiter do. Agor only refuses outright when a ceiling leaves no room for
+any command at all.
 
 ### `extends` (single-level only)
 
@@ -398,6 +427,35 @@ In `hybrid` mode, lifecycle fields can be shell commands or explicit
 `http://` / `https://` webhooks. URL-shaped fields use webhook execution, so a
 repo can use webhooks for one action and commands for another.
 
+In standalone mode those commands use the configured local executor boundary.
+In HA, `hybrid` is accepted only for the external delegated executor topology;
+it is rejected for `shared-local` so repository commands never fall back into a
+daemon replica. Selecting a repository-defined variant follows normal branch
+`all`/admin permissions. Injecting raw replacement shell text is a distinct,
+admin-only operation; the variant picker must not become a shell-authoring
+escape hatch.
+
+Provider-backed variants should set explicit budgets and make every lifecycle
+command retry-safe:
+
+```yaml
+environment:
+  version: 2
+  default: remote
+  variants:
+    remote:
+      startup_timeout_ms: 1500000
+      lifecycle_timeout_ms: 1260000
+      start: ./scripts/start-github-codespaces.sh
+      stop: ./scripts/stop-github-codespaces.sh
+```
+
+`startup_timeout_ms` may be 1 second through 24 hours; the default is one hour.
+`lifecycle_timeout_ms` may be 1 second through one hour. Its default is derived
+from the bounded taskless executor credential. Do not use Start to keep an
+application server in the foreground: Agor terminates the entire command
+process group at the deadline.
+
 Some instances are configured for webhook-managed environments:
 
 ```yaml
@@ -465,30 +523,46 @@ with `applied_revision` equal to that exact ID. Agor stores desired and applied
 revisions separately, admits only one leased attempt across daemon replicas,
 and retries failures without changing the environment's health status.
 
-In daemon HA mode, Start, Stop, Restart, and Nuke remain webhook-only and do not
-have distributed operation ownership. Source sync and health observation do:
-PostgreSQL admits one leased source-sync attempt and one health observation per
-branch, each fenced against lifecycle changes. Health observation is otherwise
-separate: every replica scans active environments, while PostgreSQL admits only
-one live observation claim per branch. A remote/webhook environment without `health` remains
-explicitly unobservable (`unknown`); Agor never treats another daemon's local
-process map as evidence that it is healthy.
+In daemon HA mode, `webhook-only` works with either supported execution
+topology. `hybrid` is admitted only with `execution_topology: external`,
+`unix_user_mode: delegated`, a command template, persistent branch/user storage
+assertions, and the authenticated external executor-response protocol. Shell
+lifecycle commands therefore go through the same delegated launcher and
+concurrency admission as agent runs; they never execute inside daemon Pods.
 
-### Why does the Environment tab show an instance-specific notice? {/* #operator-notice */}
+Start has a persisted startup deadline. Stop, Nuke, Sync, and Restart's verified
+Stop phase use the variant's bounded `lifecycle_timeout_ms`; the shell deadline,
+credential lifetime, response waiter, and durable Sync lease derive from that
+one budget. Process groups are terminated on deadline, and generation-fenced
+settlement prevents a late executor from overwriting a newer lifecycle action.
+The commands themselves must be idempotent reconcilers: a retry after a Pod or
+daemon loss must converge the provider to the requested state rather than
+blindly creating another resource.
 
-Deployment operators can configure a plain-text notice at the top of the tab
+Agor Cloud's supported pattern is a short-lived command such as
+`start-github-codespaces.sh`: create or reconcile a remote environment, emit
+the bounded `AGOR_ENVIRONMENT_RESULT`, and exit. A foreground application server
+inside the transient executor Pod is killed at the Start deadline and is not
+reachable—Cloud does not currently provide application ingress/proxying for
+environment executor Pods. Remote-provider access controls, secrets, quotas,
+and billing remain the operator's responsibility. Right-sized lifecycle
+containers and application network wiring are planned separately.
+
+### Why does the Environment tab show an instance-specific disclaimer? {/* #operator-notice */}
+
+Deployment operators can configure constrained Markdown at the top of the tab
 to explain where environments run, which integrations are supported, or where
-to find local documentation. The notice is informational UI policy; it does
+to find local documentation. The disclaimer is informational UI policy; it does
 not enable, disable, or authorize any environment operation.
 
 It appears in addition to the dynamic **Managed environments** or
 **Webhook-managed environments** summary. That summary comes from the daemon's
 effective execution mode and remains the authoritative description of accepted
-lifecycle fields. If no notice is configured, the tab behaves exactly as it
+lifecycle fields. If no disclaimer is configured, the tab behaves exactly as it
 did before this option was added.
 
 See [Environment tab guidance](/guide/config-yaml#environment-tab-guidance) for
-the `ui.environment_notice` schema, limits, safe-link rules, public visibility,
+the `ui.environment_disclaimer_markdown` schema, limits, sanitization, public visibility,
 and a complete example.
 
 ---

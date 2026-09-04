@@ -9,6 +9,7 @@
  */
 
 import { createHash, randomUUID } from 'node:crypto';
+import { EXECUTOR_COMMAND_TOKEN_EXPIRATION_MS } from '@agor/core/config';
 import {
   type CurrentTaskExecutorSessionTokenAuthority,
   type ExecutorSessionTokenAuthorityClaim,
@@ -41,16 +42,6 @@ const DEBUG_SESSION_TOKENS =
 const CLEANUP_INTERVAL_MS = 60 * 60 * 1000;
 const CLEANUP_TENANT_LIMIT = 1_000;
 export const EXECUTOR_SESSION_TOKEN_AUTHORITY_RETENTION_MS = 24 * 60 * 60 * 1000;
-
-/**
- * Maximum lifetime for taskless, fire-and-forget executor commands.
- *
- * These credentials delegate the initiating user's normal tenant authority,
- * but have no task lifecycle that can reliably revoke them when a remote
- * launcher exits. Keep that bearer window bounded independently of the longer
- * task-executor session configured by the operator.
- */
-const EXECUTOR_COMMAND_TOKEN_EXPIRATION_MS = 15 * 60 * 1000;
 
 function sessionTokenDebug(result: string): void {
   if (DEBUG_SESSION_TOKENS) {
@@ -241,6 +232,11 @@ export class SessionTokenService {
     }
 
     if (dependencies.startCleanupTimer !== false) this.startCleanupTimer();
+  }
+
+  /** Longest credential this service will issue, whatever a caller requests. */
+  get maxTokenLifetimeMs(): number {
+    return this.config.expiration_ms;
   }
 
   /** Must be called with the same stable secret configured on every daemon. */
@@ -650,13 +646,28 @@ export class SessionTokenService {
  * not expose daemon-private singletons. Keep that one runtime projection here
  * rather than duplicating casts and fallback token issuers across services.
  */
+/**
+ * The longest credential this deployment can issue, from
+ * `execution.session_token_expiration_ms`.
+ *
+ * A caller whose command owns a server-side deadline must size that deadline to
+ * fit inside this, rather than asking for authority the service will refuse.
+ */
+export function resolveExecutorCommandTokenCeilingMs(app: object): number | undefined {
+  const service = (app as { sessionTokenService?: SessionTokenService }).sessionTokenService;
+  return service?.maxTokenLifetimeMs;
+}
+
 export async function issueExecutorCommandToken(
   app: object,
   commandId: string,
   userId: string,
-  branchId?: string
+  branchId?: string,
+  options?: { expirationMs?: number }
 ): Promise<string> {
   const service = (app as { sessionTokenService?: SessionTokenService }).sessionTokenService;
   if (!service) throw new Error('Session token service unavailable');
-  return service.generateCommandToken(commandId, userId, branchId);
+  return options
+    ? service.generateCommandToken(commandId, userId, branchId, options)
+    : service.generateCommandToken(commandId, userId, branchId);
 }

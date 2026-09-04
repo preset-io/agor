@@ -10,8 +10,14 @@ import {
   runWithTenantDatabaseScope,
   UsersRepository,
 } from '@agor/core/db';
+import {
+  ENVIRONMENT_LIFECYCLE_CREDENTIAL_MARGIN_MS,
+  ENVIRONMENT_LIFECYCLE_SETTLEMENT_MARGIN_MS,
+  resolveEnvironmentLifecycleBudget,
+  resolveEnvironmentStartBudget,
+} from '@agor/core/environment/health-transition';
 import { ENVIRONMENT_LIFECYCLE_SUPERSEDED_CODE } from '@agor/core/environment/lifecycle-result';
-import { feathers } from '@agor/core/feathers';
+import { Conflict, feathers } from '@agor/core/feathers';
 import {
   type Application,
   type BoardID,
@@ -292,6 +298,15 @@ function waitForDeferredWork(): Promise<void> {
 const mockedSpawnExecutor = vi.mocked(spawnExecutor);
 const mockedRequestExecutor = vi.mocked(requestExecutor);
 
+// Every non-Start bound comes from one snapshotted budget, so assert against
+// that derivation rather than restating hand-computed minute counts.
+const LIFECYCLE_SETTLEMENT_MARGIN_MS = ENVIRONMENT_LIFECYCLE_SETTLEMENT_MARGIN_MS;
+const LIFECYCLE_CREDENTIAL_MARGIN_MS = ENVIRONMENT_LIFECYCLE_CREDENTIAL_MARGIN_MS;
+const defaultLifecycleBudget = resolveEnvironmentLifecycleBudget();
+const DEFAULT_LIFECYCLE_TIMEOUT_MS = defaultLifecycleBudget.commandTimeoutMs;
+const DEFAULT_LIFECYCLE_CREDENTIAL_MS = defaultLifecycleBudget.credentialLifetimeMs;
+const DEFAULT_LIFECYCLE_REQUEST_TIMEOUT_MS = defaultLifecycleBudget.requestTimeoutMs;
+
 beforeEach(() => {
   mockedSpawnExecutor.mockReset();
   mockedRequestExecutor.mockReset();
@@ -381,7 +396,7 @@ function createFindHarness(opts: {
 
 describe('BranchesService environment start async behavior', () => {
   function createStartHarness() {
-    const { service } = createServiceHarness();
+    const { service, sessionTokenService } = createServiceHarness();
     const branch = {
       branch_id: 'wt-start' as BranchID,
       repo_id: 'repo-1',
@@ -443,11 +458,13 @@ describe('BranchesService environment start async behavior', () => {
       environmentUpdates,
       lifecycleOptions,
       resolveEnvironmentCommand,
+      sessionTokenService,
     };
   }
 
   it('returns after dispatching shell start commands to the executor', async () => {
-    const { service, branch, environmentUpdates, lifecycleOptions } = createStartHarness();
+    const { service, branch, environmentUpdates, lifecycleOptions, sessionTokenService } =
+      createStartHarness();
 
     const result = await Promise.race([
       runInTestTenantScope(() => service.startEnvironment(branch.branch_id)),
@@ -486,6 +503,13 @@ describe('BranchesService environment start async behavior', () => {
           branch_fs_access: 'write',
         },
       })
+    );
+
+    expect(sessionTokenService.generateCommandToken).toHaveBeenCalledWith(
+      'environment-start',
+      'user-1',
+      branch.branch_id,
+      { expirationMs: resolveEnvironmentStartBudget().credentialLifetimeMs }
     );
     expect(environmentUpdates).toEqual(
       expect.arrayContaining([
@@ -722,32 +746,54 @@ describe('BranchesService environment start async behavior', () => {
     );
   });
 
-  it('waits for shell stop before webhook start during mixed-mode restart', async () => {
-    const { service } = createServiceHarness();
+  /**
+   * Restart is the one lifecycle verb with two phases, so its harness has to
+   * model the repository faithfully. Two things the earlier version got wrong
+   * and hid a real bug behind:
+   *
+   *  - `environment_generation` advances on ANY status change, not only when a
+   *    caller opens a lifecycle boundary. Stop's own settlement therefore moves
+   *    the branch off the generation Restart dispatched with.
+   *  - the generation/status CAS is real: a fenced write against a stale
+   *    boundary must fail with the superseded conflict, not silently apply.
+   */
+  function createRestartHarness(options: {
+    branchId: string;
+    startCommand: string;
+    stopCommand: string;
+    lifecycleTimeoutMs?: number;
+  }) {
+    const { service, sessionTokenService } = createServiceHarness();
     const branch = {
-      branch_id: 'wt-restart-mixed' as BranchID,
+      branch_id: options.branchId as BranchID,
       repo_id: 'repo-1',
-      name: 'wt-restart-mixed',
-      path: '/tmp/wt-restart-mixed',
+      name: options.branchId,
+      path: `/tmp/${options.branchId}`,
       created_by: 'user-1' as UUID,
       branch_unique_id: 1,
-      start_command: 'https://env.example/start',
-      stop_command: 'docker compose down',
-      app_url: 'http://localhost:3000',
+      start_command: options.startCommand,
+      stop_command: options.stopCommand,
+      startup_timeout_ms: 1_500_000,
+      ...(options.lifecycleTimeoutMs !== undefined
+        ? { lifecycle_timeout_ms: options.lifecycleTimeoutMs }
+        : {}),
       environment_instance: { status: 'running' },
       environment_generation: 0,
     };
 
-    let currentEnvironment: Record<string, unknown> = { ...branch.environment_instance };
-    let currentGeneration = branch.environment_generation;
-    vi.spyOn(service as never, 'ensureCanTriggerEnv').mockResolvedValue(undefined as never);
-    vi.spyOn(service, 'get').mockImplementation(async () => {
-      return {
+    const state = {
+      environment: { ...branch.environment_instance } as Record<string, unknown>,
+      generation: branch.environment_generation,
+    };
+    const readBranch = () =>
+      ({
         ...branch,
-        environment_generation: currentGeneration,
-        environment_instance: currentEnvironment,
-      } as never;
-    });
+        environment_generation: state.generation,
+        environment_instance: state.environment,
+      }) as never;
+
+    vi.spyOn(service as never, 'ensureCanTriggerEnv').mockResolvedValue(undefined as never);
+    vi.spyOn(service, 'get').mockImplementation(async () => readBranch());
     vi.spyOn(service as never, 'resolveEnvironmentCommand').mockImplementation(
       async (command: string) =>
         command.startsWith('https://')
@@ -760,37 +806,321 @@ describe('BranchesService environment start async behavior', () => {
       executionUserId: 'user-1',
       branchFsAccess: 'write',
     } as never);
-    const executeWebhookSpy = vi
-      .spyOn(service as never, 'executeEnvironmentWebhook')
-      .mockResolvedValue({
-        body: 'ok',
-        truncated: false,
-        status: 200,
-      } as never);
+
+    const environmentUpdates: Array<{ update: Record<string, unknown>; options?: unknown }> = [];
     vi.spyOn(service, 'updateEnvironment').mockImplementation(
-      async (_id, update, _params, options) => {
-        if (options?.beginLifecycle) currentGeneration += 1;
-        currentEnvironment = {
-          ...currentEnvironment,
-          ...(update as Record<string, unknown>),
-        };
-        return {
-          ...branch,
-          environment_generation: currentGeneration,
-          environment_instance: currentEnvironment,
-        } as never;
+      async (_id, update, _params, internalOptions) => {
+        environmentUpdates.push({
+          update: update as Record<string, unknown>,
+          options: internalOptions,
+        });
+        const expectedGeneration = internalOptions?.expectedEnvironmentGeneration;
+        const expectedStatus = internalOptions?.expectedEnvironmentStatus;
+        if (
+          (expectedGeneration !== undefined && expectedGeneration !== state.generation) ||
+          (expectedStatus !== undefined && expectedStatus !== state.environment.status)
+        ) {
+          throw new Conflict('Environment lifecycle was superseded', {
+            code: ENVIRONMENT_LIFECYCLE_SUPERSEDED_CODE,
+          });
+        }
+        const next = { ...state.environment, ...(update as Record<string, unknown>) };
+        if (internalOptions?.beginLifecycle === true || next.status !== state.environment.status) {
+          state.generation += 1;
+        }
+        state.environment = next;
+        return readBranch() as never;
       }
     );
+
+    /** What an honest executor does: settle `stopped` under its own fence. */
+    const settleStop = () => {
+      state.environment = { ...state.environment, status: 'stopped' };
+      state.generation += 1;
+      return state.generation;
+    };
+
+    return { service, branch, sessionTokenService, state, environmentUpdates, settleStop };
+  }
+
+  it('restarts shell environments with a bounded Stop credential, then a separate Start', async () => {
+    const { service, branch, sessionTokenService, settleStop } = createRestartHarness({
+      branchId: 'wt-restart-shell',
+      startCommand: 'docker compose up -d',
+      stopCommand: 'docker compose down',
+    });
+    mockedRequestExecutor.mockImplementation(async () => ({
+      success: true,
+      data: {
+        branchId: branch.branch_id,
+        action: 'stop',
+        // The status change advanced the boundary. Reporting the dispatched
+        // generation instead would make the Start phase unreachable.
+        lifecycleGeneration: settleStop(),
+      },
+    }));
+
+    await runInTestTenantScope(() => service.restartEnvironment(branch.branch_id));
+    expect(mockedRequestExecutor).not.toHaveBeenCalled();
+    await waitForDeferredWork();
+
+    // Stop runs in request mode: a delegated launcher may exit long before the
+    // provider transition finishes, so process exit cannot sequence the Start.
+    expect(mockedSpawnExecutor).not.toHaveBeenCalledWith(
+      expect.objectContaining({ params: expect.objectContaining({ action: 'stop' }) }),
+      expect.anything()
+    );
+    expect(mockedRequestExecutor).toHaveBeenCalledWith(
+      expect.objectContaining({
+        params: expect.objectContaining({
+          action: 'stop',
+          commandTimeoutMs: DEFAULT_LIFECYCLE_TIMEOUT_MS,
+          lifecycleGeneration: 1,
+        }),
+      }),
+      expect.objectContaining({
+        logPrefix: `[Environment.stop ${branch.name}]`,
+        timeoutMs: DEFAULT_LIFECYCLE_REQUEST_TIMEOUT_MS,
+      })
+    );
+    // An ordinary local variant must stay inside the default 15-minute taskless
+    // command credential, or lowering execution.session_token_expiration_ms to
+    // that documented maximum would refuse every Stop.
+    expect(sessionTokenService.generateCommandToken).toHaveBeenNthCalledWith(
+      1,
+      'environment-stop',
+      'user-1',
+      branch.branch_id,
+      { expirationMs: DEFAULT_LIFECYCLE_CREDENTIAL_MS }
+    );
+    expect(DEFAULT_LIFECYCLE_CREDENTIAL_MS).toBeLessThanOrEqual(15 * 60_000);
+
+    await waitForDeferredWork();
+
+    expect(mockedSpawnExecutor).toHaveBeenCalledTimes(1);
+    expect(mockedSpawnExecutor.mock.calls[0]?.[0]).toMatchObject({
+      params: {
+        action: 'start',
+        startupTimeoutMs: 1_500_000,
+        lifecycleGeneration: 3,
+      },
+    });
+    const startPayload = mockedSpawnExecutor.mock.calls[0]?.[0] as
+      | { params: Record<string, unknown> }
+      | undefined;
+    expect(startPayload?.params.commandTimeoutMs).toBeUndefined();
+    expect(sessionTokenService.generateCommandToken).toHaveBeenNthCalledWith(
+      2,
+      'environment-start',
+      'user-1',
+      branch.branch_id,
+      { expirationMs: 1_500_000 + LIFECYCLE_SETTLEMENT_MARGIN_MS }
+    );
+    expect(mockedRequestExecutor).not.toHaveBeenCalledWith(
+      expect.objectContaining({ params: expect.objectContaining({ action: 'restart' }) }),
+      expect.anything()
+    );
+    expect(mockedSpawnExecutor).not.toHaveBeenCalledWith(
+      expect.objectContaining({ params: expect.objectContaining({ action: 'restart' }) }),
+      expect.anything()
+    );
+  });
+
+  it('gives a provider variant its own longer Stop budget without touching Start', async () => {
+    const { service, branch, sessionTokenService, settleStop } = createRestartHarness({
+      branchId: 'wt-restart-codespaces',
+      startCommand: 'launcher start',
+      stopCommand: 'launcher stop',
+      lifecycleTimeoutMs: 1_260_000,
+    });
+    mockedRequestExecutor.mockImplementation(async () => ({
+      success: true,
+      data: { branchId: branch.branch_id, action: 'stop', lifecycleGeneration: settleStop() },
+    }));
+
+    await runInTestTenantScope(() => service.restartEnvironment(branch.branch_id));
+    await waitForDeferredWork();
+    await waitForDeferredWork();
+
+    expect(mockedRequestExecutor).toHaveBeenCalledWith(
+      expect.objectContaining({
+        params: expect.objectContaining({ action: 'stop', commandTimeoutMs: 1_260_000 }),
+      }),
+      expect.objectContaining({
+        timeoutMs: 1_260_000 + LIFECYCLE_CREDENTIAL_MARGIN_MS + LIFECYCLE_SETTLEMENT_MARGIN_MS,
+      })
+    );
+    expect(sessionTokenService.generateCommandToken).toHaveBeenNthCalledWith(
+      1,
+      'environment-stop',
+      'user-1',
+      branch.branch_id,
+      { expirationMs: 1_260_000 + LIFECYCLE_CREDENTIAL_MARGIN_MS }
+    );
+    // Start keeps its own persisted startup policy; the provider's long Stop
+    // budget must not silently widen it.
+    expect(sessionTokenService.generateCommandToken).toHaveBeenNthCalledWith(
+      2,
+      'environment-start',
+      'user-1',
+      branch.branch_id,
+      { expirationMs: 1_500_000 + LIFECYCLE_SETTLEMENT_MARGIN_MS }
+    );
+  });
+
+  it('shortens the Stop budget to fit a tighter configured token ceiling', async () => {
+    const { service, branch, sessionTokenService, settleStop } = createRestartHarness({
+      branchId: 'wt-restart-tight-token',
+      startCommand: 'docker compose up -d',
+      stopCommand: 'docker compose down',
+      lifecycleTimeoutMs: 1_260_000,
+    });
+    // A deployment that hardened execution.session_token_expiration_ms must
+    // still be able to stop an environment; refusing the credential outright
+    // would break every Stop/Nuke/Sync rather than bounding one slow provider.
+    const app = (
+      service as unknown as { app: { sessionTokenService: { maxTokenLifetimeMs: number } } }
+    ).app;
+    app.sessionTokenService.maxTokenLifetimeMs = 600_000;
+    mockedRequestExecutor.mockImplementation(async () => ({
+      success: true,
+      data: { branchId: branch.branch_id, action: 'stop', lifecycleGeneration: settleStop() },
+    }));
+
+    await runInTestTenantScope(() => service.restartEnvironment(branch.branch_id));
+    await waitForDeferredWork();
+    await waitForDeferredWork();
+
+    expect(sessionTokenService.generateCommandToken).toHaveBeenNthCalledWith(
+      1,
+      'environment-stop',
+      'user-1',
+      branch.branch_id,
+      { expirationMs: 600_000 }
+    );
+    const stopPayload = mockedRequestExecutor.mock.calls[0]?.[0] as
+      | { params: { commandTimeoutMs?: number } }
+      | undefined;
+    expect(stopPayload?.params.commandTimeoutMs).toBe(600_000 - LIFECYCLE_CREDENTIAL_MARGIN_MS);
+  });
+
+  it('never starts when the Stop phase reports it was superseded', async () => {
+    const { service, branch, sessionTokenService } = createRestartHarness({
+      branchId: 'wt-restart-superseded',
+      startCommand: 'docker compose up -d',
+      stopCommand: 'docker compose down',
+    });
+    mockedRequestExecutor.mockResolvedValue({
+      success: true,
+      data: { branchId: branch.branch_id, action: 'stop', superseded: true },
+    });
+
+    await runInTestTenantScope(() => service.restartEnvironment(branch.branch_id));
+    await waitForDeferredWork();
+    await waitForDeferredWork();
+
+    expect(mockedSpawnExecutor).not.toHaveBeenCalled();
+    expect(sessionTokenService.generateCommandToken).toHaveBeenCalledTimes(1);
+  });
+
+  it('never starts when a competing action advanced the branch past the settled Stop', async () => {
+    const { service, branch, state, sessionTokenService, settleStop } = createRestartHarness({
+      branchId: 'wt-restart-raced',
+      startCommand: 'docker compose up -d',
+      stopCommand: 'docker compose down',
+    });
     mockedRequestExecutor.mockImplementation(async () => {
-      currentEnvironment = { ...currentEnvironment, status: 'stopped' };
-      currentGeneration += 1;
+      const stoppedGeneration = settleStop();
+      // Someone else claimed the branch between Stop settling and Restart
+      // reloading it. The reported generation is now stale.
+      state.environment = { ...state.environment, status: 'starting' };
+      state.generation += 1;
       return {
         success: true,
-        data: { branchId: branch.branch_id, action: 'stop' },
+        data: {
+          branchId: branch.branch_id,
+          action: 'stop',
+          lifecycleGeneration: stoppedGeneration,
+        },
       };
     });
 
-    await service.restartEnvironment(branch.branch_id);
+    await runInTestTenantScope(() => service.restartEnvironment(branch.branch_id));
+    await waitForDeferredWork();
+    await waitForDeferredWork();
+
+    expect(mockedSpawnExecutor).not.toHaveBeenCalled();
+    expect(sessionTokenService.generateCommandToken).toHaveBeenCalledTimes(1);
+  });
+
+  it('settles the exact claimed generation when the Stop request never reaches an executor', async () => {
+    const { service, branch, state, environmentUpdates, sessionTokenService } =
+      createRestartHarness({
+        branchId: 'wt-restart-unspawned',
+        startCommand: 'docker compose up -d',
+        stopCommand: 'docker compose down',
+      });
+    mockedRequestExecutor.mockResolvedValue({
+      success: false,
+      error: { code: 'EXECUTOR_SPAWN_ERROR', message: 'Executor process did not start' },
+    });
+
+    await runInTestTenantScope(() => service.restartEnvironment(branch.branch_id));
+    await waitForDeferredWork();
+    await waitForDeferredWork();
+
+    // No executor state callback can arrive, so the daemon must not leave the
+    // branch stranded in `stopping`.
+    expect(state.environment.status).toBe('error');
+    expect(environmentUpdates.at(-1)).toMatchObject({
+      update: { status: 'error' },
+      options: { expectedEnvironmentGeneration: 1 },
+    });
+    expect(mockedSpawnExecutor).not.toHaveBeenCalled();
+    expect(sessionTokenService.generateCommandToken).toHaveBeenCalledTimes(1);
+  });
+
+  it('leaves an executor-recorded Stop failure authoritative and does not start', async () => {
+    const { service, branch, state, sessionTokenService } = createRestartHarness({
+      branchId: 'wt-restart-failed',
+      startCommand: 'docker compose up -d',
+      stopCommand: 'docker compose down',
+    });
+    mockedRequestExecutor.mockImplementation(async () => {
+      // The executor got far enough to record its own fenced failure, which
+      // advances the generation the daemon's fallback settlement expects.
+      state.environment = { ...state.environment, status: 'error', last_error: 'stop failed' };
+      state.generation += 1;
+      return {
+        success: false,
+        error: { code: 'ENVIRONMENT_COMMAND_FAILED', message: 'stop failed' },
+      };
+    });
+
+    await runInTestTenantScope(() => service.restartEnvironment(branch.branch_id));
+    await waitForDeferredWork();
+    await waitForDeferredWork();
+
+    expect(state.environment).toMatchObject({ status: 'error', last_error: 'stop failed' });
+    expect(mockedSpawnExecutor).not.toHaveBeenCalled();
+    expect(sessionTokenService.generateCommandToken).toHaveBeenCalledTimes(1);
+  });
+
+  it('waits for a verified shell stop before webhook start during mixed-mode restart', async () => {
+    const { service, branch, sessionTokenService, settleStop } = createRestartHarness({
+      branchId: 'wt-restart-mixed',
+      startCommand: 'https://env.example/start',
+      stopCommand: 'docker compose down',
+    });
+    const executeWebhookSpy = vi
+      .spyOn(service as never, 'executeEnvironmentWebhook')
+      .mockResolvedValue({ body: 'ok', truncated: false, status: 200 } as never);
+    mockedRequestExecutor.mockImplementation(async () => ({
+      success: true,
+      data: { branchId: branch.branch_id, action: 'stop', lifecycleGeneration: settleStop() },
+    }));
+
+    await runInTestTenantScope(() => service.restartEnvironment(branch.branch_id));
 
     expect(mockedRequestExecutor).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -799,18 +1129,44 @@ describe('BranchesService environment start async behavior', () => {
           action: 'stop',
           branchId: branch.branch_id,
           stopCommand: branch.stop_command,
+          commandTimeoutMs: DEFAULT_LIFECYCLE_TIMEOUT_MS,
           lifecycleGeneration: 1,
         }),
       }),
-      expect.objectContaining({ logPrefix: `[Environment.stop ${branch.name}]` })
-    );
-    expect(executeWebhookSpy).toHaveBeenCalledWith(
       expect.objectContaining({
-        url: branch.start_command,
-        commandType: 'start',
+        logPrefix: `[Environment.stop ${branch.name}]`,
+        timeoutMs: DEFAULT_LIFECYCLE_REQUEST_TIMEOUT_MS,
       })
     );
+    expect(sessionTokenService.generateCommandToken).toHaveBeenCalledWith(
+      'environment-stop',
+      'user-1',
+      branch.branch_id,
+      { expirationMs: DEFAULT_LIFECYCLE_CREDENTIAL_MS }
+    );
+    expect(executeWebhookSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ url: branch.start_command, commandType: 'start' })
+    );
     expect(mockedSpawnExecutor).not.toHaveBeenCalled();
+  });
+
+  it('does not invoke the start webhook when the mixed-mode Stop was superseded', async () => {
+    const { service, branch } = createRestartHarness({
+      branchId: 'wt-restart-mixed-superseded',
+      startCommand: 'https://env.example/start',
+      stopCommand: 'docker compose down',
+    });
+    const executeWebhookSpy = vi
+      .spyOn(service as never, 'executeEnvironmentWebhook')
+      .mockResolvedValue({ body: 'ok', truncated: false, status: 200 } as never);
+    mockedRequestExecutor.mockResolvedValue({
+      success: true,
+      data: { branchId: branch.branch_id, action: 'stop', superseded: true },
+    });
+
+    await runInTestTenantScope(() => service.restartEnvironment(branch.branch_id));
+
+    expect(executeWebhookSpy).not.toHaveBeenCalled();
   });
 
   it('uses a reusable branch-scoped token when fetching shell logs via executor', async () => {
@@ -867,6 +1223,7 @@ describe('BranchesService environment start async behavior', () => {
           cwd: branch.path,
           principalBranchAccess: 'write',
           logsCommand: branch.logs_command,
+          commandTimeoutMs: 30_000,
         }),
       }),
       expect.objectContaining({
@@ -3897,6 +4254,9 @@ describe('syncEnvironment exact desired/applied contract', () => {
       requested_by_user_id: userId,
     });
 
+    // No explicit `timeoutMs`: Sync inherits the branch's own snapshotted
+    // lifecycle budget, the same one that sized its credential and its durable
+    // claim lease, so the three cannot drift apart.
     expect(run).toHaveBeenCalledWith(
       expect.objectContaining({
         desiredRevision: revision,
@@ -3904,6 +4264,7 @@ describe('syncEnvironment exact desired/applied contract', () => {
         executionUserIdOverride: userId,
       })
     );
+    expect(run.mock.calls[0]?.[0]).not.toHaveProperty('timeoutMs');
     expect(complete).toHaveBeenCalledWith(
       expect.objectContaining({ appliedRevision: revision, claimToken: 'claim-a' })
     );

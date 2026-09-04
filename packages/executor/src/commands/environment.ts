@@ -30,8 +30,6 @@ function successMessage(action: EnvironmentLifecyclePayload['params']['action'])
       return 'Start command completed';
     case 'stop':
       return 'Stop command completed';
-    case 'restart':
-      return 'Restart command completed';
     case 'nuke':
       return 'Nuke command completed';
     case 'sync':
@@ -49,17 +47,17 @@ function commandForAction(payload: EnvironmentLifecyclePayload): string {
       return payload.params.nukeCommand!;
     case 'sync':
       return payload.params.syncCommand!;
-    case 'restart':
-      return payload.params.startCommand!;
   }
 }
+
+type EnvironmentStatus = 'stopped' | 'starting' | 'running' | 'stopping' | 'error';
 
 async function updateBranchEnvironment(
   client: Awaited<ReturnType<typeof createExecutorClient>>,
   branchId: string,
   environmentUpdate: Record<string, unknown>,
   expectedEnvironmentGeneration?: number,
-  expectedEnvironmentStatus?: 'stopped' | 'starting' | 'running' | 'stopping' | 'error'
+  expectedEnvironmentStatus?: EnvironmentStatus
 ): Promise<{ applied: boolean; generation?: number }> {
   try {
     const branch = await client.service('branches').updateEnvironment({
@@ -139,8 +137,9 @@ async function runShellCommand(options: {
     env: { ...process.env, ...(env ?? {}) },
     stdio: 'pipe',
     shell: true,
-    // Only deadline-bound commands need a private process group. Preserve the
-    // existing spawn behavior for logs/sync/stop/nuke.
+    // Every deadline-bound environment command gets a private process group, so
+    // the deadline can terminate the whole command tree rather than a shell
+    // whose grandchildren survive it.
     detached: timeoutMs !== undefined && process.platform !== 'win32',
   });
 
@@ -241,6 +240,7 @@ export async function handleEnvironmentLogs(
       cwd,
       env: payload.env,
       commandType: 'logs',
+      timeoutMs: payload.params.commandTimeoutMs,
     });
 
     return {
@@ -308,6 +308,7 @@ export async function handleEnvironmentLifecycle(
         env: payload.env,
         commandType: 'sync',
         parseLifecycleResult: true,
+        timeoutMs: payload.params.commandTimeoutMs,
       });
       const appliedRevision = validateEnvironmentSourceRevision(
         result.lifecycleResult?.applied_revision,
@@ -329,31 +330,18 @@ export async function handleEnvironmentLifecycle(
       };
     }
 
-    if (payload.params.action === 'restart' && payload.params.stopCommand) {
-      const stopping = await updateBranchEnvironment(
-        client,
-        branchId,
-        { status: 'stopping' },
-        lifecycleGeneration,
-        'stopping'
-      );
-      if (!stopping.applied) return supersededResult(branchId, payload.params.action);
-      lifecycleGeneration = stopping.generation ?? lifecycleGeneration;
-      await runShellCommand({
-        command: payload.params.stopCommand,
-        cwd,
-        env: payload.env,
-        commandType: 'stop',
-      });
-    }
-
-    if (payload.params.action === 'start' || payload.params.action === 'restart') {
+    // Start's own writes are fenced on the lifecycle generation ALONE. The
+    // health monitor promotes `starting -> running` without advancing the
+    // generation, deliberately, so that this command keeps ownership of
+    // publishing its typed lifecycle result (see the comment on
+    // `invalidatesTimedOutStart` in EnvironmentHealthRepository.commit). Adding
+    // a status fence here would silently discard the access URLs, facts, and
+    // pid of every environment whose readiness probe won that race — and, on
+    // the claim below, would let a stale process still answering the health URL
+    // stop the real start command from ever running.
+    if (payload.params.action === 'start') {
       const startedAt = new Date().toISOString();
-      const existingDeadline = Date.parse(
-        payload.params.action === 'start'
-          ? (branch.environment_instance?.startup_deadline_at ?? '')
-          : ''
-      );
+      const existingDeadline = Date.parse(branch.environment_instance?.startup_deadline_at ?? '');
       const startupDeadlineAt = Number.isFinite(existingDeadline)
         ? new Date(existingDeadline).toISOString()
         : new Date(
@@ -379,8 +367,7 @@ export async function handleEnvironmentLifecycle(
             ? { access_urls: [{ name: 'App', url: payload.params.appUrl }] }
             : {}),
         },
-        lifecycleGeneration,
-        payload.params.action === 'restart' ? 'stopping' : 'starting'
+        lifecycleGeneration
       );
       if (!starting.applied) return supersededResult(branchId, payload.params.action);
       lifecycleGeneration = starting.generation ?? lifecycleGeneration;
@@ -434,12 +421,20 @@ export async function handleEnvironmentLifecycle(
             ...(result.output ? { output: result.output } : {}),
           },
         },
-        lifecycleGeneration,
-        'starting'
+        lifecycleGeneration
       );
       if (!completion.applied) return supersededResult(branchId, payload.params.action);
 
-      return { success: true, data: { branchId, action: payload.params.action } };
+      return {
+        success: true,
+        data: {
+          branchId,
+          action: payload.params.action,
+          ...(completion.generation !== undefined
+            ? { lifecycleGeneration: completion.generation }
+            : {}),
+        },
+      };
     }
 
     const command = commandForAction(payload);
@@ -449,6 +444,7 @@ export async function handleEnvironmentLifecycle(
       cwd,
       env: payload.env,
       commandType,
+      timeoutMs: payload.params.commandTimeoutMs,
     });
 
     const completion = await updateBranchEnvironment(
@@ -488,7 +484,19 @@ export async function handleEnvironmentLifecycle(
     );
     if (!completion.applied) return supersededResult(branchId, payload.params.action);
 
-    return { success: true, data: { branchId, action: payload.params.action } };
+    // Restart sequences its Start phase from this exact settled generation, so
+    // report the boundary this command actually produced rather than the one it
+    // was dispatched with — the status change advanced it.
+    return {
+      success: true,
+      data: {
+        branchId,
+        action: payload.params.action,
+        ...(completion.generation !== undefined
+          ? { lifecycleGeneration: completion.generation }
+          : {}),
+      },
+    };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     const output =
@@ -506,36 +514,40 @@ export async function handleEnvironmentLifecycle(
     }
 
     try {
-      const current = await client.service('branches').get(branchId);
-      const currentStatus = current.environment_instance?.status;
-      const staleStartFailure =
-        payload.params.action === 'start' &&
-        (currentStatus === 'stopping' || currentStatus === 'stopped');
-      if (!staleStartFailure) {
-        const failure = await updateBranchEnvironment(
-          client,
-          branchId,
-          {
-            status: 'error',
-            last_health_check: {
-              timestamp: new Date().toISOString(),
-              status: 'unhealthy',
-              message,
-            },
-            last_error: output || message,
-            last_command: {
-              action: payload.params.action,
-              status: 'failed',
-              timestamp: new Date().toISOString(),
-              message,
-              ...(output ? { output } : {}),
-            },
+      // One generation-fenced write, not a read followed by a write. Every
+      // competing lifecycle claim opens a boundary and therefore advances the
+      // generation, so the CAS alone already rejects a stale failure — while
+      // re-reading the branch first spent a second acknowledgement budget this
+      // command may no longer be authorized for.
+      //
+      // Deliberately NOT status-fenced. The health monitor moves an environment
+      // `starting -> running` and `running -> error` WITHOUT advancing the
+      // generation (see EnvironmentHealthRepository.commit), precisely so this
+      // command keeps ownership of its own outcome. Fencing on the status this
+      // command last saw would throw its result away every time readiness won
+      // the race.
+      const failure = await updateBranchEnvironment(
+        client,
+        branchId,
+        {
+          status: 'error',
+          last_health_check: {
+            timestamp: new Date().toISOString(),
+            status: 'unhealthy',
+            message,
           },
-          lifecycleGeneration,
-          currentStatus
-        );
-        if (!failure.applied) return supersededResult(branchId, payload.params.action);
-      }
+          last_error: output || message,
+          last_command: {
+            action: payload.params.action,
+            status: 'failed',
+            timestamp: new Date().toISOString(),
+            message,
+            ...(output ? { output } : {}),
+          },
+        },
+        lifecycleGeneration
+      );
+      if (!failure.applied) return supersededResult(branchId, payload.params.action);
     } catch (patchError) {
       console.error(
         '[environment.lifecycle] Failed to patch environment error state:',

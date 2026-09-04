@@ -16,6 +16,12 @@
  * the streak survive a daemon restart.
  */
 
+import {
+  EXECUTOR_COMMAND_TOKEN_EXPIRATION_MS,
+  EXECUTOR_FEATHERS_ACK_TIMEOUT_MS,
+  EXECUTOR_REVOCATION_TRANSPORT_CLEANUP_MARGIN_MS,
+} from '../config/constants.js';
+
 /** Consecutive successes required before `starting` becomes `running`. */
 export const ENVIRONMENT_READY_PROBE_THRESHOLD = 2;
 
@@ -54,6 +60,164 @@ export function resolveEnvironmentStartupTimeoutMs(value: unknown): number {
     );
   }
   return value as number;
+}
+
+/**
+ * Time a lifecycle command still needs authority for AFTER its own deadline:
+ * one fenced settlement RPC plus bounded transport cleanup.
+ */
+export const ENVIRONMENT_LIFECYCLE_SETTLEMENT_MARGIN_MS =
+  EXECUTOR_FEATHERS_ACK_TIMEOUT_MS + EXECUTOR_REVOCATION_TRANSPORT_CLEANUP_MARGIN_MS;
+
+/**
+ * Time a non-Start command spends BEFORE its own deadline starts: the executor
+ * reads the branch once to compare lifecycle generations. Start absorbs that
+ * check instead, because its command deadline is derived from the persisted
+ * `startup_deadline_at` rather than from when the shell actually begins.
+ */
+export const ENVIRONMENT_LIFECYCLE_PRECHECK_MARGIN_MS = EXECUTOR_FEATHERS_ACK_TIMEOUT_MS;
+
+/** Total authority a non-Start lifecycle command needs beyond its own deadline. */
+export const ENVIRONMENT_LIFECYCLE_CREDENTIAL_MARGIN_MS =
+  ENVIRONMENT_LIFECYCLE_PRECHECK_MARGIN_MS + ENVIRONMENT_LIFECYCLE_SETTLEMENT_MARGIN_MS;
+
+/**
+ * Default wall-clock budget for one Stop/Nuke/Sync command.
+ *
+ * Derived, not chosen: it is the largest deadline whose credential still fits
+ * inside the default taskless executor-command credential. An operator who
+ * lowers `execution.session_token_expiration_ms` to that same 15 minutes must
+ * not be refused by an ordinary local `docker compose down`; a provider that
+ * legitimately needs longer (GitHub Codespaces) raises its own variant's
+ * `lifecycle_timeout_ms` and accepts the larger credential.
+ */
+export const ENVIRONMENT_LIFECYCLE_TIMEOUT_MS =
+  EXECUTOR_COMMAND_TOKEN_EXPIRATION_MS - ENVIRONMENT_LIFECYCLE_CREDENTIAL_MARGIN_MS;
+
+/** Smallest supported per-variant non-Start command budget. */
+export const ENVIRONMENT_LIFECYCLE_TIMEOUT_MIN_MS = ENVIRONMENT_STARTUP_TIMEOUT_MIN_MS;
+
+/**
+ * Largest supported per-variant non-Start command budget.
+ *
+ * Deliberately NOT the 24-hour startup ceiling. Two costs scale with this
+ * number and only this one bounds them: the credential a command is issued
+ * (which must fit inside the operator's configured session-token maximum,
+ * 24 hours by default — so a 24-hour budget could not be authorized at all),
+ * and the durable Sync claim lease, which is how long a peer daemon must wait
+ * before it may retry a sync whose owner died. An hour leaves the checked-in
+ * 21-minute Codespaces budget ample room while keeping failover bounded.
+ */
+export const ENVIRONMENT_LIFECYCLE_TIMEOUT_MAX_MS = 60 * 60 * 1000;
+
+/**
+ * Validate a configured non-Start command budget, applying the derived default
+ * when it is absent. Kept beside {@link resolveEnvironmentStartupTimeoutMs} for
+ * the same reason: YAML parsing, branch snapshots, daemon dispatch, executor
+ * payloads, and the durable Sync claim must not disagree about it.
+ */
+export function resolveEnvironmentLifecycleTimeoutMs(value: unknown): number {
+  if (value === undefined) return ENVIRONMENT_LIFECYCLE_TIMEOUT_MS;
+  if (
+    !Number.isSafeInteger(value) ||
+    (value as number) < ENVIRONMENT_LIFECYCLE_TIMEOUT_MIN_MS ||
+    (value as number) > ENVIRONMENT_LIFECYCLE_TIMEOUT_MAX_MS
+  ) {
+    throw new Error(
+      `lifecycle_timeout_ms must be an integer between ${ENVIRONMENT_LIFECYCLE_TIMEOUT_MIN_MS} and ${ENVIRONMENT_LIFECYCLE_TIMEOUT_MAX_MS}`
+    );
+  }
+  return value as number;
+}
+
+/** Every bound one Stop/Nuke/Sync attempt is held to, from one snapshot value. */
+export interface EnvironmentLifecycleBudget {
+  /** Wall-clock deadline the executor enforces on the shell command itself. */
+  commandTimeoutMs: number;
+  /** Executor credential lifetime: pre-command check + command + settlement. */
+  credentialLifetimeMs: number;
+  /** How long the daemon waits for the executor's authenticated response. */
+  requestTimeoutMs: number;
+  /** Durable Sync claim lease; must outlive the whole attempt or the settlement is discarded as stale. */
+  claimLeaseMs: number;
+}
+
+/**
+ * Operator-configured ceilings that an environment command cannot exceed.
+ *
+ * These are NOT alternative budgets. They are outer walls the derived budget
+ * has to fit inside, so the command deadline is shortened to preserve the
+ * nesting rather than the deployment being handed a command that outlives its
+ * own authority or its own waiter.
+ */
+export interface EnvironmentLifecycleCeilings {
+  /** `execution.session_token_expiration_ms` — the longest credential issuable. */
+  credentialCeilingMs?: number;
+  /**
+   * `execution.executor_response.timeout_ms.by_command['environment.lifecycle']`.
+   * Only meaningful when the daemon awaits the command's result: that override
+   * wins over the value the daemon passes, so a command budget larger than it
+   * would leave the executor running after its waiter already gave up.
+   */
+  requestCeilingMs?: number;
+}
+
+/**
+ * Resolve every bound of one non-Start lifecycle attempt from the branch's
+ * snapshotted budget. Each layer strictly contains the one inside it, so a slow
+ * provider cannot lose its authority, its waiter, or its Sync claim mid-command.
+ *
+ * When an operator ceiling is tighter than the variant asked for, the COMMAND
+ * DEADLINE is shortened to restore that containment. Refusing instead would
+ * break a two-second `docker compose down` on a deployment that merely hardened
+ * its token lifetime, while silently keeping the long deadline would recreate
+ * the exact failure this budget exists to prevent.
+ */
+export function resolveEnvironmentLifecycleBudget(
+  value?: unknown,
+  ceilings: EnvironmentLifecycleCeilings = {}
+): EnvironmentLifecycleBudget {
+  const requested = resolveEnvironmentLifecycleTimeoutMs(value);
+  const limits: number[] = [requested];
+  if (ceilings.credentialCeilingMs !== undefined) {
+    limits.push(ceilings.credentialCeilingMs - ENVIRONMENT_LIFECYCLE_CREDENTIAL_MARGIN_MS);
+  }
+  if (ceilings.requestCeilingMs !== undefined) {
+    limits.push(
+      ceilings.requestCeilingMs -
+        ENVIRONMENT_LIFECYCLE_CREDENTIAL_MARGIN_MS -
+        ENVIRONMENT_LIFECYCLE_SETTLEMENT_MARGIN_MS
+    );
+  }
+  const commandTimeoutMs = Math.min(...limits);
+  if (commandTimeoutMs < ENVIRONMENT_LIFECYCLE_TIMEOUT_MIN_MS) {
+    throw new Error(
+      'Configured executor ceilings leave no room for an environment lifecycle command: ' +
+        `${requested}ms was requested but only ${commandTimeoutMs}ms remains after reserving ` +
+        `${ENVIRONMENT_LIFECYCLE_CREDENTIAL_MARGIN_MS}ms of credential settlement. Raise ` +
+        'execution.session_token_expiration_ms or execution.executor_response.timeout_ms.'
+    );
+  }
+  const credentialLifetimeMs = commandTimeoutMs + ENVIRONMENT_LIFECYCLE_CREDENTIAL_MARGIN_MS;
+  const requestTimeoutMs = credentialLifetimeMs + ENVIRONMENT_LIFECYCLE_SETTLEMENT_MARGIN_MS;
+  return {
+    commandTimeoutMs,
+    credentialLifetimeMs,
+    requestTimeoutMs,
+    claimLeaseMs: requestTimeoutMs + ENVIRONMENT_LIFECYCLE_SETTLEMENT_MARGIN_MS,
+  };
+}
+
+/** Bounds for one Start attempt, whose deadline is the branch's startup policy. */
+export function resolveEnvironmentStartBudget(value?: unknown): {
+  startupTimeoutMs: number;
+  credentialLifetimeMs: number;
+} {
+  const startupTimeoutMs = resolveEnvironmentStartupTimeoutMs(value);
+  return {
+    startupTimeoutMs,
+    credentialLifetimeMs: startupTimeoutMs + ENVIRONMENT_LIFECYCLE_SETTLEMENT_MARGIN_MS,
+  };
 }
 
 export type EnvironmentObservationStatus = 'healthy' | 'unhealthy' | 'unknown';

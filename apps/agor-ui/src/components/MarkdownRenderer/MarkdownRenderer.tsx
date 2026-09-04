@@ -11,6 +11,7 @@
  * Typography wrapper provides consistent Ant Design styling.
  */
 
+import { isSafeEnvironmentDisclaimerUrl } from '@agor/core/config/browser';
 import { UPLOAD_VIRTUAL_URL_PREFIX } from '@agor/core/types';
 import { DownloadOutlined, PaperClipOutlined } from '@ant-design/icons';
 import { Button, Tooltip, Typography, theme } from 'antd';
@@ -72,6 +73,11 @@ interface MarkdownRendererProps {
   headingAnchors?: boolean;
   /** Demo-only POC: opt in to constrained Vega-Lite fenced blocks. */
   enableVegaLite?: boolean;
+  /**
+   * Operator-content mode: no raw HTML, images, uploads, Mermaid/math/rich
+   * renderers, or non-HTTPS/cross-origin-relative links.
+   */
+  restricted?: boolean;
 }
 
 const MAX_VEGA_LITE_CHARTS_PER_DOCUMENT = 4;
@@ -82,6 +88,28 @@ const MAX_VEGA_LITE_CHARTS_PER_DOCUMENT = 4;
 // their own agents' output. With it off, links render as ordinary anchors that
 // open in a new tab (Streamdown still sets rel="noreferrer" target="_blank").
 const LINK_SAFETY: LinkSafetyConfig = { enabled: false };
+const RESTRICTED_MARKDOWN_ELEMENTS = [
+  'p',
+  'strong',
+  'em',
+  'a',
+  'ul',
+  'ol',
+  'li',
+  'code',
+  'pre',
+  'blockquote',
+  'h1',
+  'h2',
+  'h3',
+  'h4',
+  'hr',
+  'br',
+] as const;
+
+function restrictedMarkdownUrlTransform(url: string): string | null {
+  return isSafeEnvironmentDisclaimerUrl(url) ? url : null;
+}
 
 // Memoized: Streamdown does meaningful per-render work (syntax highlighting,
 // Mermaid, KaTeX) and this component is rendered once per text block in every
@@ -99,6 +127,7 @@ const MarkdownRendererInner: React.FC<MarkdownRendererProps> = ({
   showControls = true,
   headingAnchors = false,
   enableVegaLite = false,
+  restricted = false,
 }) => {
   const { token } = theme.useToken();
 
@@ -107,14 +136,16 @@ const MarkdownRendererInner: React.FC<MarkdownRendererProps> = ({
   let text = rawText;
 
   // Pre-process text to highlight @ mentions
-  text = highlightMentionsInMarkdown(text);
+  if (!restricted) text = highlightMentionsInMarkdown(text);
   // Convert Agor's authenticated virtual upload links into a closed custom
   // element before Streamdown's external-link hardener runs.
-  text = text.replace(
-    INTERNAL_UPLOAD_MARKDOWN_LINK,
-    (_, filename: string, uploadRef: string) =>
-      `<agor-upload upload_ref="${uploadRef}" filename="${filename}"></agor-upload>`
-  );
+  if (!restricted) {
+    text = text.replace(
+      INTERNAL_UPLOAD_MARKDOWN_LINK,
+      (_, filename: string, uploadRef: string) =>
+        `<agor-upload upload_ref="${uploadRef}" filename="${filename}"></agor-upload>`
+    );
+  }
 
   // Detect dark mode from Ant Design token system
   const isDarkMode = isDarkTheme(token);
@@ -175,12 +206,16 @@ const MarkdownRendererInner: React.FC<MarkdownRendererProps> = ({
           isAnimating={isStreaming} // Disable buttons during streaming
           controls={showControls} // Show/hide controls based on context
           mermaid={{ config: mermaidConfig }} // Set Mermaid theme based on current theme mode
-          plugins={plugins}
+          plugins={restricted ? {} : plugins}
           components={components}
-          allowedTags={{ 'agor-upload': ['upload_ref', 'filename'] }}
+          allowedTags={restricted ? undefined : { 'agor-upload': ['upload_ref', 'filename'] }}
           linkSafety={LINK_SAFETY}
           rehypePlugins={rehypePlugins}
-          remarkPlugins={streamdownRemarkPlugins}
+          remarkPlugins={restricted ? undefined : streamdownRemarkPlugins}
+          skipHtml={restricted}
+          allowedElements={restricted ? RESTRICTED_MARKDOWN_ELEMENTS : undefined}
+          unwrapDisallowed={restricted}
+          urlTransform={restricted ? restrictedMarkdownUrlTransform : undefined}
           // Keep anchored documents in one Streamdown block so the heading slugger
           // sees the whole document and duplicate headings are deduped globally.
           parseMarkdownIntoBlocksFn={headingAnchors ? parseMarkdownAsSingleBlock : undefined}

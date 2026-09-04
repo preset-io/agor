@@ -15,7 +15,10 @@
  * `docs/designs/env-command-variants.md`.
  */
 
-import { resolveEnvironmentStartupTimeoutMs } from '../environment/health-transition.js';
+import {
+  resolveEnvironmentLifecycleTimeoutMs,
+  resolveEnvironmentStartupTimeoutMs,
+} from '../environment/health-transition.js';
 import type {
   RepoEnvironment,
   RepoEnvironmentConfigV1,
@@ -31,6 +34,7 @@ export interface YamlVariant {
   description?: string;
   extends?: string;
   startup_timeout_ms?: number;
+  lifecycle_timeout_ms?: number;
   start?: string;
   stop?: string;
   sync?: string;
@@ -87,6 +91,15 @@ export function toVariant(name: string, y: YamlVariant): RepoEnvironmentVariant 
   if (y.startup_timeout_ms !== undefined) {
     try {
       variant.startup_timeout_ms = resolveEnvironmentStartupTimeoutMs(y.startup_timeout_ms);
+    } catch (error) {
+      throw new Error(
+        `.agor.yml: variant "${name}" ${error instanceof Error ? error.message : String(error)}`
+      );
+    }
+  }
+  if (y.lifecycle_timeout_ms !== undefined) {
+    try {
+      variant.lifecycle_timeout_ms = resolveEnvironmentLifecycleTimeoutMs(y.lifecycle_timeout_ms);
     } catch (error) {
       throw new Error(
         `.agor.yml: variant "${name}" ${error instanceof Error ? error.message : String(error)}`
@@ -172,6 +185,8 @@ export function resolveVariant(
     merged.description = variant.description ?? parent.description;
   const startupTimeoutMs = variant.startup_timeout_ms ?? parent.startup_timeout_ms;
   if (startupTimeoutMs !== undefined) merged.startup_timeout_ms = startupTimeoutMs;
+  const lifecycleTimeoutMs = variant.lifecycle_timeout_ms ?? parent.lifecycle_timeout_ms;
+  if (lifecycleTimeoutMs !== undefined) merged.lifecycle_timeout_ms = lifecycleTimeoutMs;
   if (variant.sync ?? parent.sync) merged.sync = variant.sync ?? parent.sync;
   if (variant.nuke ?? parent.nuke) merged.nuke = variant.nuke ?? parent.nuke;
   if (variant.logs ?? parent.logs) merged.logs = variant.logs ?? parent.logs;

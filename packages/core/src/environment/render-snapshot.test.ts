@@ -5,7 +5,11 @@
 import { beforeAll, describe, expect, it } from 'vitest';
 import { registerHandlebarsHelpers } from '../templates/handlebars-helpers';
 import type { RepoEnvironment } from '../types/branch';
+import { resolveEnvironmentLifecycleTimeoutMs } from './health-transition';
 import { renderBranchSnapshot } from './render-snapshot';
+
+/** Snapshots always carry a resolved non-Start budget, defaulted like startup. */
+const DEFAULT_LIFECYCLE_TIMEOUT_MS = resolveEnvironmentLifecycleTimeoutMs(undefined);
 
 const branch = {
   branch_unique_id: 7,
@@ -45,6 +49,7 @@ describe('renderBranchSnapshot', () => {
     expect(snapshot).toEqual({
       variant: 'dev',
       startup_timeout_ms: 60 * 60 * 1_000,
+      lifecycle_timeout_ms: DEFAULT_LIFECYCLE_TIMEOUT_MS,
       start: 'pnpm dev --port=3007',
       stop: 'pkill -f pnpm',
     });
@@ -68,6 +73,7 @@ describe('renderBranchSnapshot', () => {
     expect(snapshot).toEqual({
       variant: 'e2e',
       startup_timeout_ms: 60 * 60 * 1_000,
+      lifecycle_timeout_ms: DEFAULT_LIFECYCLE_TIMEOUT_MS,
       start: 'pnpm e2e',
       stop: 'pnpm e2e:stop',
       health: 'http://localhost:4007/health',
@@ -94,6 +100,7 @@ describe('renderBranchSnapshot', () => {
           start: 'pnpm dev',
           stop: 'pkill pnpm',
           startup_timeout_ms: 45 * 60 * 1_000,
+          lifecycle_timeout_ms: 1_260_000,
           health: 'http://localhost:3000/health',
           logs: 'tail -n 100 base.log',
         },
@@ -109,6 +116,7 @@ describe('renderBranchSnapshot', () => {
     expect(snapshot).toEqual({
       variant: 'dev',
       startup_timeout_ms: 45 * 60 * 1_000,
+      lifecycle_timeout_ms: 1_260_000,
       start: 'pnpm dev',
       stop: 'pkill pnpm',
       health: 'http://localhost:3007/dev-health',

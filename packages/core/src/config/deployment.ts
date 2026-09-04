@@ -1,9 +1,11 @@
+import { EXECUTOR_RESPONSE_PROTOCOL } from '../executor-protocol';
 import {
   hasContainedClaudeRuntimeCredentials,
   hasCrossReplicaExecutorCredentialLock,
   hasExactUserExecutorCredentialHome,
   hasTenantSafeExecutorCredentialHome,
 } from './executor-credential-storage';
+import { resolveExecutorResponseConfig } from './executor-response';
 import type {
   AgorConfig,
   AgorDeploymentMode,
@@ -366,10 +368,25 @@ export function resolveDeploymentConfig(
       'Config error: HA web terminals require execution_topology shared-local; external terminal runtimes do not yet have owner-affine routing'
     );
   }
-  if (config.execution?.managed_envs_execution_mode !== 'webhook-only') {
-    throw new Error(
-      'Config error: HA currently requires execution.managed_envs_execution_mode: webhook-only'
-    );
+  const managedEnvsExecutionMode = config.execution?.managed_envs_execution_mode ?? 'hybrid';
+  if (managedEnvsExecutionMode === 'hybrid') {
+    if (executionTopology !== 'external') {
+      throw new Error(
+        'Config error: HA managed environment shell commands require deployment.ha.execution_topology: external; shared-local daemon execution remains unsupported'
+      );
+    }
+    if (config.execution?.unix_user_mode !== 'delegated') {
+      throw new Error(
+        'Config error: HA managed environment shell commands require execution.unix_user_mode: delegated'
+      );
+    }
+    const response = resolveExecutorResponseConfig(config.execution.executor_response);
+    if (response.externalProtocol !== EXECUTOR_RESPONSE_PROTOCOL || !response.originUrl) {
+      throw new Error(
+        'Config error: HA managed environment shell commands require delegated executor response support: ' +
+          `execution.executor_response.external_protocol=${EXECUTOR_RESPONSE_PROTOCOL} and an exact origin_url`
+      );
+    }
   }
 
   const executorStorage = config.execution?.executor_storage;

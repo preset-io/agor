@@ -18,7 +18,7 @@ import { ensureAgorHome, ensureAgorHomeSync, getAgorHome, getConfigPath } from '
 import { getDefaultAnalyticsConfig } from './analytics-defaults.js';
 import { DAEMON, MCP_TOKEN } from './constants';
 import { validateRedisKeyPrefix, validateRedisUrl } from './deployment';
-import { resolveEnvironmentNotice } from './environment-notice';
+import { resolveEnvironmentDisclaimerMarkdown } from './environment-disclaimer';
 import {
   resolveDispatchConnectTimeoutMs,
   resolveExecutorHeartbeatConfig,
@@ -684,14 +684,7 @@ function validateConfig(config: AgorConfig): void {
     'trust_proxy_hops',
     ...RETIRED_CONFIG_KEYS.daemon,
   ]);
-  only(config.ui, 'ui', ['base_url', 'port', 'host', 'environment_notice']);
-  only(config.ui?.environment_notice, 'ui.environment_notice', [
-    'severity',
-    'title',
-    'message',
-    'link',
-  ]);
-  only(config.ui?.environment_notice?.link, 'ui.environment_notice.link', ['label', 'url']);
+  only(config.ui, 'ui', ['base_url', 'port', 'host', 'environment_disclaimer_markdown']);
   only(config.uploads, 'uploads', ['location', 'max_age_days', 'max_file_size_mb']);
   only(config.external_launch, 'external_launch', [
     'enabled',
@@ -1069,7 +1062,7 @@ function validateConfig(config: AgorConfig): void {
 
   assertSupportedUnixUserMode(config.execution?.unix_user_mode);
 
-  resolveEnvironmentNotice(config.ui?.environment_notice);
+  resolveEnvironmentDisclaimerMarkdown(config.ui?.environment_disclaimer_markdown);
 
   const managedEnvExecutionMode = config.execution?.managed_envs_execution_mode;
   if (

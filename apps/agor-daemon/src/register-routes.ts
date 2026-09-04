@@ -145,7 +145,7 @@ import {
   authenticatedHealthDb,
   healthMigrations,
   healthStatus,
-  publicEnvironmentNotice,
+  publicEnvironmentDisclaimerMarkdown,
   publicHealthDb,
 } from './health/payload.js';
 import { registerHealthProbeRoutes } from './health/routes.js';
@@ -5463,7 +5463,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         instance: {
           label: config.daemon?.instanceLabel,
           description: config.daemon?.instanceDescription,
-          environmentNotice: publicEnvironmentNotice(config),
+          environmentDisclaimerMarkdown: publicEnvironmentDisclaimerMarkdown(config),
         },
         realtime: realtimeRuntime
           ? { required: true, ready: realtimeRuntime.isReady() }

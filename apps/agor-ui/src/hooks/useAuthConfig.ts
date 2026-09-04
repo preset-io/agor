@@ -14,7 +14,6 @@ import {
   AgorUserLifecycleAuthority,
   IDENTITY_AUTHORITY_CONTRACT_VERSION,
   type PasswordPolicyRequirements,
-  type ResolvedEnvironmentNotice,
   type ResolvedIdentityAuthority,
 } from '@agor/core/config/browser';
 import type { ManagedEnvExecutionMode } from '@agor/core/environment/webhook';
@@ -43,8 +42,8 @@ export interface AuthConfig {
 export interface InstanceConfig {
   label?: string;
   description?: string;
-  /** Deployment-global, public guidance for the Branch Environment tab. */
-  environmentNotice?: ResolvedEnvironmentNotice;
+  /** Deployment-global, public, constrained Markdown for the Environment tab. */
+  environmentDisclaimerMarkdown?: string;
 }
 
 export interface FeaturesConfig {

@@ -262,6 +262,96 @@ describe('resolveDeploymentConfig', () => {
     });
   });
 
+  it('supports hybrid managed environments only through the delegated HA executor path', () => {
+    const externalHybrid = {
+      ...haConfig,
+      deployment: {
+        ...haConfig.deployment,
+        ha: {
+          support_profile: 'constrained-active-active',
+          execution_topology: 'external',
+          ingress_affinity: true,
+        },
+      },
+      execution: {
+        ...haConfig.execution,
+        unix_user_mode: 'delegated',
+        managed_envs_execution_mode: 'hybrid',
+        executor_command_template: 'cell launch --tenant {tenant_id} -- {command}',
+        executor_response: {
+          external_protocol: 'executor-response-v1',
+          origin_url: 'https://agor-replica.internal.example',
+        },
+        executor_storage: {
+          user_home: 'persistent-per-user',
+          branch_workspace: 'persistent-per-branch',
+          base_repository: 'unavailable',
+        },
+        branch_storage: {
+          default_mode: 'clone',
+          allowed_modes: ['clone'],
+          allow_shallow_clones: false,
+        },
+      },
+      daemon: { public_url: 'https://agor.internal.example' },
+    } as AgorConfig;
+
+    expect(resolveDeploymentConfig(externalHybrid, secrets)).toMatchObject({
+      topology: { execution: 'external', sharedFilesystem: false },
+      executorStorage: {
+        userHome: 'persistent-per-user',
+        branchWorkspace: 'persistent-per-branch',
+        baseRepository: 'unavailable',
+      },
+    });
+  });
+
+  it('does not weaken HA by allowing managed environment shell commands in daemon replicas', () => {
+    expect(() =>
+      resolveDeploymentConfig(
+        {
+          ...haConfig,
+          execution: {
+            ...haConfig.execution,
+            managed_envs_execution_mode: 'hybrid',
+          },
+        },
+        secrets
+      )
+    ).toThrow('execution_topology: external');
+  });
+
+  it('requires delegated identity and the authenticated response channel for HA hybrid mode', () => {
+    const externalHybrid = {
+      ...haConfig,
+      deployment: {
+        ...haConfig.deployment,
+        ha: {
+          support_profile: 'constrained-active-active',
+          execution_topology: 'external',
+          ingress_affinity: true,
+        },
+      },
+      execution: {
+        ...haConfig.execution,
+        managed_envs_execution_mode: 'hybrid',
+        executor_command_template: 'cell launch --tenant {tenant_id} -- {command}',
+      },
+      daemon: { public_url: 'https://agor.internal.example' },
+    } as AgorConfig;
+
+    expect(() => resolveDeploymentConfig(externalHybrid, secrets)).toThrow('unix_user_mode');
+    expect(() =>
+      resolveDeploymentConfig(
+        {
+          ...externalHybrid,
+          execution: { ...externalHybrid.execution, unix_user_mode: 'delegated' },
+        },
+        secrets
+      )
+    ).toThrow('executor response support');
+  });
+
   it('never advertises Claude containment through an external sandbox-labelled template', () => {
     const external = {
       ...haConfig,

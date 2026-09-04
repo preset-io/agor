@@ -58,6 +58,7 @@ import { useThemedMessage } from '../../../utils/message';
 import { useThemedModal } from '../../../utils/modal';
 import { CodeEditor } from '../../CodeEditor';
 import { EnvironmentLogsModal } from '../../EnvironmentLogsModal';
+import { MarkdownRenderer } from '../../MarkdownRenderer';
 
 const DOCS_URL = 'https://agor.live/guide/environment-configuration';
 
@@ -121,7 +122,7 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
   // ----- Permission gating -----
   const managedEnvsExecutionMode: ManagedEnvExecutionMode =
     featuresConfig?.managedEnvsExecutionMode ?? MANAGED_ENV_EXECUTION_MODE_DEFAULT;
-  const environmentNotice = instanceConfig?.environmentNotice;
+  const environmentDisclaimerMarkdown = instanceConfig?.environmentDisclaimerMarkdown;
   const isWebhookMode = managedEnvsExecutionMode === 'webhook-only';
   const canTriggerEnv = canControlEnvironment ?? isAdmin;
   const triggerDisabledTooltip = canTriggerEnv
@@ -618,22 +619,18 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
   return (
     <div style={{ width: '100%', maxHeight: '70vh', overflowY: 'auto' }}>
       <Space orientation="vertical" size="large" style={{ width: '100%' }}>
-        {environmentNotice && (
+        {environmentDisclaimerMarkdown && (
           <Alert
-            type={environmentNotice.severity}
+            type="warning"
             showIcon
-            title={environmentNotice.title}
+            title="Environment availability"
             description={
-              <div style={{ whiteSpace: 'pre-line', overflowWrap: 'anywhere' }}>
-                {environmentNotice.message}
-                {environmentNotice.link && (
-                  <div style={{ marginTop: 4 }}>
-                    <a href={environmentNotice.link.url} target="_blank" rel="noopener noreferrer">
-                      {environmentNotice.link.label}
-                    </a>
-                  </div>
-                )}
-              </div>
+              <MarkdownRenderer
+                content={environmentDisclaimerMarkdown}
+                showControls={false}
+                restricted
+                style={{ overflowWrap: 'anywhere' }}
+              />
             }
           />
         )}
