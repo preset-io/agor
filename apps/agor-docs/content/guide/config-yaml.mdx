@@ -45,6 +45,59 @@ agentic_tools:
     - codex
 ```
 
+Daemon-driven **Sign in with Claude** is a separate, fail-closed release
+capability. It is disabled when the key is absent or `false`; API-key setup,
+manually pasted `claude setup-token` credentials, ordinary Claude sessions, and
+disconnect/cleanup remain available.
+
+```yaml
+agentic_tools:
+  claude_subscription_oauth: true
+
+execution:
+  unix_user_mode: sandbox
+  executor_storage:
+    user_home: persistent-per-user
+  sandbox:
+    enabled: true
+    home_mode: per_user
+```
+
+Set this to `true` only after the deployment operator has confirmed an
+authorized provider/client contract for this flow, then restart every daemon
+replica with the same immutable config. Agor does not make that policy decision:
+the flag records the operator's clearance. When disabled, `/claude-auth/oauth`
+fails with `CLAUDE_SUBSCRIPTION_OAUTH_DISABLED` and the UI omits the OAuth tab.
+Topology gates still apply after authorization. This release requires the exact
+local per-user sandbox profile shown above and does not expose Claude OAuth in
+delegated, templated, simple, shared-home, disabled-sandbox, or
+`sandbox.extra_allow_write` execution. HA additionally requires the
+`shared-local` topology, durable attempts, and cross-replica home locking; only
+the contained exact-user sandbox topology satisfies all predicates. Any
+`extra_allow_write` entry disables the capability rather than attempting to
+infer whether a final writable re-bind can re-expose a hidden physical owner
+store. Independently, the sandbox resolves configured symlink aliases and
+re-applies the immutable Claude parent and
+authority-leaf masks at a physical owner-store alias exposed by such a bind, so
+other providers, API-key tasks, and terminals cannot reach a pre-existing
+managed grant. The daemon keeps the refreshable grant in the canonical per-user
+`~/.claude/.credentials.json`, refreshes it before task launch, and sends the
+runtime only the current access token. The sandbox required-binds the real
+`~/.claude` directory as a writable, immutable mountpoint at every reachable
+home alias, then masks the canonical credential plus its generation and lock
+sidecars. Daemon mutations keep those pre-created authority inodes stable so a
+live mask cannot be detached by host-side replacement; logout leaves an empty
+tombstone. Settings, plugins, projects, new files, and fork/resume state remain
+writable; Codex native auth is not masked by this change and requires separate
+parity work.
+
+For rollout, deploy/restart this version and confirm the per-user sandbox
+settings on every instance before enabling the default-off flag. For rollback,
+disable the flag and restart first; existing API keys and pasted subscription
+tokens remain available, and disabling the flag does not delete managed files.
+Rolling back to a runtime that reads the canonical file directly reintroduces
+the runtime-writer race, so drain managed-file Claude tasks before doing so.
+
 After editing this list, run `agor install --sync`. It installs the exact matching package version, removes
 unconfigured tools and packages from older Agor versions, and leaves `config.yaml` untouched. The
 packaged daemon fails before listening if any configured integration is missing or misaligned.

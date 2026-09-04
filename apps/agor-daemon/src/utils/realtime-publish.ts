@@ -316,6 +316,8 @@ export const REDIS_FEATHERS_DENIED_PATHS = new Set([
   'codex-auth/device',
   'codex-auth/import',
   'codex-auth/logout',
+  'claude-auth/oauth',
+  'claude-auth/logout',
   'opencode-auth',
   'terminals',
 ]);

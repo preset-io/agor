@@ -224,6 +224,15 @@ describe('resolveProbeState — selected tool only', () => {
     expect(calls).toEqual(['claude-code']);
   });
 
+  it('clears the No-AI banner for a native subscription login with no stored key', async () => {
+    // The in-app Claude OAuth sign-in removes any pasted API key, while the
+    // selected Claude probe still reports the native login as authenticated.
+    const { checkStatus } = collect({ 'claude-code': 'authenticated' });
+    const probeState = await resolveProbeState(checkStatus, 'claude-code');
+    expect(probeState).toBe(ProbeState.Authenticated);
+    expect(decideBanner({ ...baseInput, hasLlm: false, probeState })).not.toBe(BannerDecision.NoAi);
+  });
+
   it('returns Unauthenticated only on a positive rejection for the selected tool', async () => {
     const { calls, checkStatus } = collect({ gemini: 'unauthenticated' });
     expect(await resolveProbeState(checkStatus, 'gemini')).toBe(ProbeState.Unauthenticated);

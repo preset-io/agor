@@ -1424,8 +1424,12 @@ describe('agor_branches_set_zone', () => {
       baseServiceParams
     );
     expect(promptCreate).toHaveBeenCalledWith(
-      { prompt: 'Run Branch 1 in Evidence/QA', stream: true },
-      { ...baseServiceParams, route: { id: 'session-1' } }
+      {
+        prompt: 'Run Branch 1 in Evidence/QA',
+        stream: true,
+        metadata: { system_authored: true },
+      },
+      { ...baseServiceParams, provider: undefined, route: { id: 'session-1' } }
     );
     expect(parsed.trigger.sessionId).toBe('session-1');
   });

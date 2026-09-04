@@ -38,6 +38,7 @@ import {
   MessageRole,
   type MessageSource,
   type PermissionMode,
+  type PromptOrigin,
   type SessionID,
   type TaskID,
 } from '../../types.js';
@@ -256,7 +257,8 @@ export class ClaudeTool implements ITool {
     permissionMode?: PermissionMode,
     streamingCallbacks?: import('../base').StreamingCallbacks,
     abortController?: AbortController,
-    messageSource?: MessageSource
+    messageSource?: MessageSource,
+    promptOrigin?: PromptOrigin
   ): Promise<{
     userMessageId: MessageID;
     assistantMessageIds: MessageID[];
@@ -362,7 +364,8 @@ export class ClaudeTool implements ITool {
       mappedPermissionMode,
       undefined, // chunkCallback (unused)
       abortController,
-      streamingCallbacks?.onPulse
+      streamingCallbacks?.onPulse,
+      promptOrigin
     )) {
       // Detect if execution was stopped early
       if (event.type === 'stopped') {
@@ -945,7 +948,8 @@ export class ClaudeTool implements ITool {
     prompt: string,
     taskId?: TaskID,
     permissionMode?: PermissionMode,
-    messageSource?: MessageSource
+    messageSource?: MessageSource,
+    promptOrigin?: PromptOrigin
   ): Promise<{
     userMessageId: MessageID;
     assistantMessageIds: MessageID[];
@@ -1015,7 +1019,11 @@ export class ClaudeTool implements ITool {
       sessionId,
       prompt,
       taskId,
-      mappedPermissionMode
+      mappedPermissionMode,
+      undefined,
+      undefined,
+      undefined,
+      promptOrigin
     )) {
       // Detect if execution was stopped early
       if (event.type === 'stopped') {

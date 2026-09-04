@@ -20,6 +20,7 @@ import type {
   MessageSource,
   PermissionMode,
   PermissionScope,
+  PromptOrigin,
   SessionID,
   Task,
   TaskID,
@@ -67,6 +68,7 @@ export interface ExecutorConfig {
   permissionMode?: PermissionMode;
   daemonUrl: string;
   messageSource?: MessageSource;
+  promptOrigin?: PromptOrigin;
   /** Opaque, daemon-authorized context interpreted by the selected integration. */
   agenticToolContext?: Record<string, unknown>;
   /** Daemon-resolved config slice. See payload-types.ResolvedConfigSliceSchema. */
@@ -373,6 +375,7 @@ export class AgorExecutor {
         permissionMode: this.config.permissionMode,
         abortController: this.abortController,
         messageSource: this.config.messageSource,
+        promptOrigin: this.config.promptOrigin,
         agenticToolContext: this.config.agenticToolContext,
         resolvedConfig: this.config.resolvedConfig,
         onPulse: (kind, detail) => this.recordPulse(kind, detail),

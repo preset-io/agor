@@ -10,6 +10,9 @@ vi.mock('@google/gemini-cli-core', () => ({
   ApprovalMode: { DEFAULT: 'default', AUTO_EDIT: 'autoEdit', YOLO: 'yolo' },
   GeminiEventType: { Error: 'error' },
 }));
+vi.mock('@agor/core/agentic-integrations', () => ({
+  loadManagedAgenticToolSdk: vi.fn(() => import('@google/gemini-cli-core')),
+}));
 
 import { GeminiPromptService } from './prompt-service.js';
 

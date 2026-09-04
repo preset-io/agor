@@ -16,6 +16,7 @@ export * from './branches';
 export * from './capability-policies';
 export * from './card-types';
 export * from './cards';
+export * from './claude-oauth-attempts';
 export * from './codex-device-auth-attempts';
 export * from './discord-message-deliveries';
 export * from './environment-health';

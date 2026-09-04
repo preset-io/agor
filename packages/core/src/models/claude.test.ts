@@ -16,6 +16,7 @@ describe('AVAILABLE_CLAUDE_MODEL_ALIASES', () => {
     expect(ids).toContain('claude-opus-4-7');
     expect(ids).toContain('claude-sonnet-4-6');
     expect(ids).toContain('claude-haiku-4-5');
+    expect(ids).toContain('claude-fable-5-1');
     expect(ids).toContain('claude-fable-5');
   });
 
@@ -33,9 +34,12 @@ describe('AVAILABLE_CLAUDE_MODEL_ALIASES', () => {
 });
 
 describe('hasNativeMillionContext', () => {
-  it.each(['claude-fable-5', 'claude-sonnet-5'])('recognizes %s as native 1M', (modelId) => {
-    expect(hasNativeMillionContext(modelId)).toBe(true);
-  });
+  it.each(['claude-fable-5-1', 'claude-fable-5', 'claude-sonnet-5'])(
+    'recognizes %s as native 1M',
+    (modelId) => {
+      expect(hasNativeMillionContext(modelId)).toBe(true);
+    }
+  );
 
   it.each(['claude-opus-5', 'claude-opus-4-8', 'claude-opus-4-7', 'claude-opus-4-6'])(
     'keeps %s on the opt-in context path',
@@ -58,6 +62,7 @@ describe('Claude context-window accounting fallback', () => {
     expect(getClaudeContextWindowLimit('claude-opus-5')).toBe(200_000);
     expect(getClaudeContextWindowLimit('claude-opus-5[1m]')).toBe(1_000_000);
     expect(getClaudeContextWindowLimit('claude-sonnet-5')).toBe(1_000_000);
+    expect(getClaudeContextWindowLimit('claude-fable-5-1')).toBe(1_000_000);
   });
 
   it('does not guess for unknown exact models or unsupported suffixes', () => {

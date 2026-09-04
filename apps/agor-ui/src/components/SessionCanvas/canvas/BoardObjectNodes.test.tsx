@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { App as AntApp } from 'antd';
 import type { ReactNode } from 'react';
 import { ReactFlowProvider } from 'reactflow';
@@ -11,7 +11,7 @@ const zoneConfigModalRenderSpy = vi.hoisted(() => vi.fn());
 vi.mock('./ZoneConfigModal', () => ({
   ZoneConfigModal: (props: { zoneName: string }) => {
     zoneConfigModalRenderSpy(props);
-    return <div data-testid="zone-config-modal">Configure Zone: {props.zoneName}</div>;
+    return <div data-testid="zone-config-modal">Zone settings: {props.zoneName}</div>;
   },
 }));
 
@@ -27,7 +27,7 @@ const DISCONNECTED = { ...CONNECTED, connected: false };
 function renderZone(
   onReorder: ReturnType<typeof vi.fn>,
   connection: typeof CONNECTED,
-  extra?: { selected?: boolean }
+  extra?: { selected?: boolean; canEdit?: boolean; onUpdate?: ReturnType<typeof vi.fn> }
 ) {
   const wrapper = ({ children }: { children: ReactNode }) => (
     <ConnectionProvider value={connection}>
@@ -47,6 +47,9 @@ function renderZone(
         x: 0,
         y: 0,
         zIndex: 100,
+        overlappingZoneCount: 2,
+        canEdit: extra?.canEdit,
+        onUpdate: extra?.onUpdate,
         onReorder,
       }}
     />,
@@ -54,82 +57,90 @@ function renderZone(
   );
 }
 
-describe('ZoneNode layer toolbar', () => {
-  it('exposes the layer buttons with accessible labels', () => {
+async function openArrangeMenu() {
+  fireEvent.click(screen.getByRole('button', { name: 'More zone actions' }));
+  const arrange = await screen.findByText('Arrange (2 overlapping)');
+  fireEvent.mouseEnter(arrange);
+  return screen.findByText('Bring to front');
+}
+
+describe('ZoneNode compact toolbar', () => {
+  it('keeps common actions top-level and buries layer controls in More', () => {
     renderZone(vi.fn(), CONNECTED);
-    expect(screen.getByLabelText('Send to back')).toBeTruthy();
-    expect(screen.getByLabelText('Send backward')).toBeTruthy();
-    expect(screen.getByLabelText('Bring forward')).toBeTruthy();
-    expect(screen.getByLabelText('Bring to front')).toBeTruthy();
+
+    expect(screen.getByRole('toolbar', { name: 'Zone actions' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Rename zone' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Zone appearance' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Lock position and size' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Zone settings' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'More zone actions' })).toBeInTheDocument();
+    expect(screen.queryByText('Bring to front')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Smaller label')).not.toBeInTheDocument();
   });
 
-  it('fires onReorder exactly once for a mouse gesture (pointerUp only, never click)', () => {
+  it('runs an arrange action once from the nested More menu', async () => {
     const onReorder = vi.fn();
     renderZone(onReorder, CONNECTED);
-    const btn = screen.getByLabelText('Bring to front');
-    // A full mouse tap: pointerDown → pointerUp → click. The action runs on
-    // pointerUp; the trailing click (detail 1) must NOT also fire it. Some touch
-    // engines emit a detail-0 synthesized click on tap too — assert that path is
-    // inert as well so touch can't double-step.
-    fireEvent.pointerDown(btn);
-    fireEvent.pointerUp(btn);
-    fireEvent.click(btn, { detail: 1 });
-    fireEvent.click(btn, { detail: 0 });
+
+    fireEvent.click(await openArrangeMenu());
+
+    await waitFor(() => expect(onReorder).toHaveBeenCalledWith('zone-1', 'front'));
     expect(onReorder).toHaveBeenCalledTimes(1);
-    expect(onReorder).toHaveBeenCalledWith('zone-1', 'front');
   });
 
-  it('fires onReorder exactly once on keyboard activation (Enter / Space)', () => {
-    const onReorder = vi.fn();
-    renderZone(onReorder, CONNECTED);
-    const btn = screen.getByLabelText('Bring forward');
-    fireEvent.keyDown(btn, { key: 'Enter' });
-    expect(onReorder).toHaveBeenCalledTimes(1);
-    expect(onReorder).toHaveBeenLastCalledWith('zone-1', 'forward');
+  it('uses native keyboard-focusable buttons for common actions', () => {
+    const onUpdate = vi.fn();
+    renderZone(vi.fn(), CONNECTED, { onUpdate });
 
-    fireEvent.keyDown(btn, { key: ' ' });
-    expect(onReorder).toHaveBeenCalledTimes(2);
-    expect(onReorder).toHaveBeenLastCalledWith('zone-1', 'forward');
+    const lock = screen.getByRole('button', { name: 'Lock position and size' });
+    lock.focus();
+    expect(lock).toHaveFocus();
+    fireEvent.click(lock);
+    expect(onUpdate).toHaveBeenCalledTimes(1);
+    expect(onUpdate.mock.calls[0][1]).toMatchObject({ locked: true });
   });
 
-  it('does not compound keyboard + the click the browser synthesizes after it', () => {
-    const onReorder = vi.fn();
-    renderZone(onReorder, CONNECTED);
-    const btn = screen.getByLabelText('Send to back');
-    // Real browsers fire a detail-0 click after Enter on a button. onKeyDown
-    // handles activation; onClick is inert — so the pair must total ONE call.
-    fireEvent.keyDown(btn, { key: 'Enter' });
-    fireEvent.click(btn, { detail: 0 });
-    expect(onReorder).toHaveBeenCalledTimes(1);
-    expect(onReorder).toHaveBeenCalledWith('zone-1', 'back');
+  it('removes mutating controls from the focus order while disconnected', () => {
+    renderZone(vi.fn(), DISCONNECTED);
+    expect(screen.queryByRole('toolbar', { name: 'Zone actions' })).not.toBeInTheDocument();
   });
 
-  it('does NOT fire onReorder when the mutation gate is closed (disconnected)', () => {
-    const onReorder = vi.fn();
-    renderZone(onReorder, DISCONNECTED);
-    const btn = screen.getByLabelText('Bring to front');
-    fireEvent.pointerDown(btn);
-    fireEvent.pointerUp(btn);
-    fireEvent.keyDown(btn, { key: 'Enter' });
-    fireEvent.click(btn, { detail: 0 });
-    expect(onReorder).not.toHaveBeenCalled();
+  it('does not expose editing chrome to viewers or when unselected', () => {
+    const { rerender } = renderZone(vi.fn(), CONNECTED, { canEdit: false });
+    expect(screen.queryByRole('toolbar', { name: 'Zone actions' })).not.toBeInTheDocument();
+
+    rerender(
+      <ZoneNode
+        selected={false}
+        data={{
+          objectId: 'zone-1',
+          label: 'My Zone',
+          width: 400,
+          height: 300,
+          x: 0,
+          y: 0,
+          canEdit: true,
+        }}
+      />
+    );
+    expect(screen.queryByRole('toolbar', { name: 'Zone actions' })).not.toBeInTheDocument();
   });
 });
 
-describe('ZoneNode config modal', () => {
+describe('ZoneNode settings modal', () => {
   beforeEach(() => {
     zoneConfigModalRenderSpy.mockClear();
   });
 
-  it('mounts the configuration modal only when the user opens it', () => {
+  it('mounts the settings modal only when the user opens it', () => {
     renderZone(vi.fn(), CONNECTED);
 
     expect(zoneConfigModalRenderSpy).not.toHaveBeenCalled();
     expect(screen.queryByTestId('zone-config-modal')).not.toBeInTheDocument();
 
-    fireEvent.pointerUp(screen.getByTitle('Configure zone'));
+    fireEvent.click(screen.getByRole('button', { name: 'Zone settings' }));
 
     expect(zoneConfigModalRenderSpy).toHaveBeenCalledTimes(1);
-    expect(screen.getByTestId('zone-config-modal')).toHaveTextContent('Configure Zone: My Zone');
+    expect(screen.getByTestId('zone-config-modal')).toHaveTextContent('Zone settings: My Zone');
   });
 });

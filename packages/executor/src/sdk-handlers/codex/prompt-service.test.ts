@@ -20,7 +20,7 @@ import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import type { BranchID, SessionUpdate } from '@agor/core/types';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type {
   BranchRepository,
   MessagesRepository,
@@ -84,6 +84,9 @@ vi.mock('@agor/core/mcp', async () => {
 });
 vi.mock('@agor/core/tools/mcp/jwt-auth', () => mcpAuthMocks);
 vi.mock('../../config.js', () => configMocks);
+vi.mock('@agor/core/agentic-integrations', () => ({
+  loadManagedAgenticToolSdk: vi.fn(() => import('@openai/codex-sdk')),
+}));
 
 vi.mock('@openai/codex-sdk', () => {
   class MockCodexClient {
@@ -334,6 +337,8 @@ describe('CodexPromptService - OPENAI_BASE_URL handling', () => {
 });
 
 describe('CodexPromptService - prompt flow client initialization', () => {
+  const originalOuterSandbox = process.env.AGOR_OUTER_SANDBOX;
+
   beforeEach(() => {
     mockInstanceCount = 0;
     mockInstanceBaseUrls = [];
@@ -344,7 +349,16 @@ describe('CodexPromptService - prompt flow client initialization', () => {
     mockResumeThreadOptions = [];
     delete process.env.OPENAI_BASE_URL;
     delete process.env.AGOR_CODEX_SANDBOX_MODE;
+    // These cases exercise Codex's own sandbox policy. The Agor test runner
+    // itself may be inside an outer sandbox, which must not rewrite the policy
+    // under test into danger-full-access.
+    delete process.env.AGOR_OUTER_SANDBOX;
     vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    if (originalOuterSandbox === undefined) delete process.env.AGOR_OUTER_SANDBOX;
+    else process.env.AGOR_OUTER_SANDBOX = originalOuterSandbox;
   });
 
   it.each([
@@ -1601,6 +1615,7 @@ describe('CodexPromptService - event_msg terminal handling (issue #1749)', () =>
         usage: {
           input_tokens: 8,
           cached_input_tokens: 2,
+          cache_write_input_tokens: 1,
           output_tokens: 3,
           reasoning_output_tokens: 1,
         },
@@ -1615,6 +1630,7 @@ describe('CodexPromptService - event_msg terminal handling (issue #1749)', () =>
       usage: {
         input_tokens: 8,
         cached_input_tokens: 2,
+        cache_write_input_tokens: 1,
         output_tokens: 3,
         reasoning_output_tokens: 1,
       },

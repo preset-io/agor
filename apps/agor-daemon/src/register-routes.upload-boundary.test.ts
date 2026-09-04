@@ -28,6 +28,14 @@ describe('browser upload route boundary ordering', () => {
     expect(handler).toContain('ref: staged.ref');
   });
 
+  it('classifies an authenticated upload notification as a direct human prompt', () => {
+    const handler = source.slice(
+      source.indexOf('const uploadHandler'),
+      source.indexOf('const uploadLogger')
+    );
+    expect(handler).toContain("{ prompt: promptText, messageSource: 'agor' }");
+  });
+
   it('propagates the tenant verified by authentication on the same params object', async () => {
     const verifiedTenant = { tenant_id: 'verified-tenant', source: 'explicit' } as TenantContext;
     const rawDb = { run: vi.fn(), select: vi.fn(() => ({ user_id: 'user-1' })) };

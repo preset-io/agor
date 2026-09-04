@@ -26,16 +26,11 @@ import type { TurnCompletedEvent } from '@openai/codex-sdk';
 export type ClaudeCodeSdkResponse = SDKResultMessage;
 
 /**
- * Internal structure of modelUsage from Claude Agent SDK
- * Maps model ID to usage statistics
+ * Per-model usage from the Claude Agent SDK. Derive it from the provider type
+ * so newly-added accounting metadata (for example thinkingTokens and
+ * costBasis) is retained without maintaining a second partial interface.
  */
-export interface ClaudeModelUsage {
-  inputTokens?: number;
-  outputTokens?: number;
-  cacheReadInputTokens?: number;
-  cacheCreationInputTokens?: number;
-  contextWindow?: number;
-}
+export type ClaudeModelUsage = SDKResultMessage['modelUsage'][string];
 
 /**
  * Internal structure of top-level usage from Claude Agent SDK (legacy/fallback)

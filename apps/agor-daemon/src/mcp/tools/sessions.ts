@@ -702,9 +702,11 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
           prompt: args.prompt,
           permissionMode: childSession.permission_config?.mode || 'acceptEdits',
           stream: true,
+          metadata: { system_authored: true },
         },
         {
           ...ctx.baseServiceParams,
+          provider: undefined,
           route: { id: childSession.session_id },
         }
       );
@@ -791,8 +793,8 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
         const task = await ctx.app
           .service('/sessions/:id/prompt')
           .create(
-            { prompt: args.prompt, stream: true },
-            { ...callbackParams, route: { id: sessionId } }
+            { prompt: args.prompt, stream: true, metadata: { system_authored: true } },
+            { ...callbackParams, provider: undefined, route: { id: sessionId } }
           );
 
         if (task.status === 'queued') {
@@ -865,8 +867,9 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
             prompt: args.prompt,
             permissionMode: updatedSession.permission_config?.mode,
             stream: true,
+            metadata: { system_authored: true },
           },
-          { ...callbackParams, route: { id: forkedSession.session_id } }
+          { ...callbackParams, provider: undefined, route: { id: forkedSession.session_id } }
         );
 
         const note =
@@ -899,8 +902,9 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
             prompt: args.prompt,
             permissionMode: childSession.permission_config?.mode,
             stream: true,
+            metadata: { system_authored: true },
           },
-          { ...callbackParams, route: { id: childSession.session_id } }
+          { ...callbackParams, provider: undefined, route: { id: childSession.session_id } }
         );
 
         return textResult({
@@ -1330,8 +1334,9 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
             prompt: args.initialPrompt,
             permissionMode: session.permission_config?.mode,
             stream: true,
+            metadata: { system_authored: true },
           },
-          { ...ctx.baseServiceParams, route: { id: session.session_id } }
+          { ...ctx.baseServiceParams, provider: undefined, route: { id: session.session_id } }
         );
       }
 

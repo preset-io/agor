@@ -258,6 +258,11 @@ export const REALTIME_PUBLISH_POLICY = {
     why: 'Imports Codex credentials belonging to the caller.',
   },
   'codex-auth/logout': { audience: 'none', why: 'Credential control plane.' },
+  'claude-auth/oauth': {
+    audience: 'none',
+    why: 'Per-caller OAuth attempt and credential control plane.',
+  },
+  'claude-auth/logout': { audience: 'none', why: 'Credential control plane.' },
   'mcp-servers/oauth-start': { audience: 'none', why: 'OAuth control plane.' },
   'mcp-servers/oauth-browser-reservations': {
     audience: 'none',

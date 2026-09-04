@@ -139,6 +139,7 @@ import type {
   TasksServiceImpl,
 } from './declarations.js';
 import { registerExecutorResponseRoutes } from './executor-response-channel.js';
+import { hasClaudeSubscriptionOAuthCapability } from './ha-support.js';
 import { probeDatabase, probePendingMigrations } from './health/db-probe.js';
 import {
   authenticatedHealthDb,
@@ -223,6 +224,7 @@ import {
 } from './utils/mcp-header-secrets.js';
 import { canConfigureMcpServers } from './utils/mcp-server-authorization.js';
 import { patchUnlessRemoved } from './utils/patch-unless-removed.js';
+import { resolvePromptOrigin } from './utils/prompt-origin.js';
 import {
   buildPromptTaskMetadata,
   type InternalPromptTaskMetadataInput,
@@ -1822,6 +1824,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     const useStreaming = options.stream !== false;
     const sessionId = task.session_id;
     const taskId = task.task_id;
+    const promptOrigin = resolvePromptOrigin(updatedTask, session);
 
     // Background spawn + failure handling. Returning the patched Task to the
     // caller before this resolves matches the previous behavior — the HTTP
@@ -1842,6 +1845,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
             permissionMode: options.permissionMode,
             stream: useStreaming,
             messageSource: runtimeMessageSource,
+            promptOrigin,
           },
           params
         );
@@ -2432,8 +2436,13 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
 
         const promptService = app.service('/sessions/:id/prompt');
         return promptService.create(
-          { prompt: metaPrompt, permissionMode: parentPermissionMode, messageSource: 'agor' },
-          { ...params, route: { id } }
+          {
+            prompt: metaPrompt,
+            permissionMode: parentPermissionMode,
+            messageSource: 'agor',
+            metadata: { system_authored: true },
+          },
+          { ...params, provider: undefined, route: { id } }
         );
       },
     },
@@ -2806,7 +2815,9 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
             authentication: params.authentication,
             tenant: params.tenant,
           };
-          await promptService.create({ prompt: promptText }, promptParams);
+          // This provider-less nested service call represents text submitted
+          // by the authenticated uploader, not daemon-authored automation.
+          await promptService.create({ prompt: promptText, messageSource: 'agor' }, promptParams);
         } catch (_error) {
           console.error('❌ [Upload Handler] Failed to notify agent');
           notificationError = 'Failed to send notification to agent';
@@ -5485,6 +5496,9 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           multiUser: (config.execution?.unix_user_mode ?? 'simple') !== 'simple',
           // Tenant agentic-tool settings provide the authoritative availability gate.
           cursorSdk: true,
+          // Provider-policy release boundary. Absence is false; the daemon
+          // independently rejects the OAuth service when disabled.
+          claudeSubscriptionOAuth: hasClaudeSubscriptionOAuthCapability(config, deployment),
           // Resolved branch storage policy. The daemon still enforces this at
           // create time; the UI uses it to pick the right default and disable
           // unavailable storage modes before submit.
@@ -5508,19 +5522,16 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         // Gated behind auth like the rest of this block (any authenticated
         // user, matching the existing `database`/`execution` fields below —
         // not admin-only).
-        const migrations = await probePendingMigrations(db);
-        const mcpEgressMode = await getMCPEgressGatewayMode(db);
         const healthTenantId =
           (params as AuthenticatedParams | undefined)?.tenant?.tenant_id ?? getCurrentTenantId();
-        const mcpEgressRuntime = healthTenantId
-          ? mcpEgressGateway.status(healthTenantId)
-          : {
-              inFlightRequests: 0,
-              activeRequests: 0,
-              providerInFlightRequests: 0,
-              reservedRequests: 0,
-              oldestRequestMs: 0,
-            };
+        if (!healthTenantId) {
+          throw new NotAuthenticated('Missing tenant context for authenticated health');
+        }
+        const migrations = await probePendingMigrations(db);
+        const mcpEgressMode = await runWithTenantDatabaseScope(db, healthTenantId, (tenantDb) =>
+          getMCPEgressGatewayMode(tenantDb)
+        );
+        const mcpEgressRuntime = mcpEgressGateway.status(healthTenantId);
 
         return {
           ...publicResponse,

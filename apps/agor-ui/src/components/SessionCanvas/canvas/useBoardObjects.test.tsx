@@ -1,8 +1,9 @@
-import type { Board } from '@agor-live/client';
+import type { Board, BoardObject } from '@agor-live/client';
 import { renderHook } from '@testing-library/react';
 import { App as AntApp } from 'antd';
 import type { ReactNode } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { ConnectionProvider } from '../../../contexts/ConnectionContext';
 import { useBoardObjects } from './useBoardObjects';
 
 // Spy the themed error toast so the failure path of reorderObject is observable.
@@ -18,8 +19,20 @@ vi.mock('../../../utils/message', () => ({
   }),
 }));
 
+const connectionState = {
+  connected: true,
+  connecting: false,
+  authGeneration: 1,
+  outOfSync: false,
+  capturedSha: null,
+  currentSha: null,
+};
+
 beforeEach(() => {
   showError.mockClear();
+  connectionState.connected = true;
+  connectionState.connecting = false;
+  connectionState.outOfSync = false;
 });
 
 /**
@@ -28,8 +41,9 @@ beforeEach(() => {
  */
 function makeClient() {
   const patch = vi.fn().mockResolvedValue({});
-  const client = { service: vi.fn().mockReturnValue({ patch }) };
-  return { client: client as never, patch };
+  const service = vi.fn().mockReturnValue({ patch });
+  const client = { service };
+  return { client: client as never, patch, service };
 }
 
 /** Like makeClient but `patch` rejects, to exercise the error path. */
@@ -43,21 +57,174 @@ function makeBoard(objects: Record<string, unknown>): Board {
   return { board_id: 'board-1', objects } as unknown as Board;
 }
 
-const wrapper = ({ children }: { children: ReactNode }) => <AntApp>{children}</AntApp>;
+const wrapper = ({ children }: { children: ReactNode }) => (
+  <ConnectionProvider value={connectionState}>
+    <AntApp>{children}</AntApp>
+  </ConnectionProvider>
+);
 
-function renderReorder(board: Board, client: unknown) {
+function renderReorder(board: Board, client: unknown, canEdit = true) {
   return renderHook(
-    () =>
+    ({ effectiveCanEdit }) =>
       useBoardObjects({
         board,
         client: client as never,
         boardObjectsForBoard: [],
         setNodes: vi.fn(),
         deletedObjectsRef: { current: new Set<string>() },
+        canEdit: effectiveCanEdit,
       }),
-    { wrapper }
+    { wrapper, initialProps: { effectiveCanEdit: canEdit } }
   );
 }
+
+describe('zone toolbar metadata', () => {
+  it('reports geometric overlaps, layer no-ops, and effective edit permission', () => {
+    const { client } = makeClient();
+    const board = makeBoard({
+      a: { type: 'zone', x: 0, y: 0, width: 200, height: 200, label: 'A', zIndex: 100 },
+      b: { type: 'zone', x: 100, y: 100, width: 200, height: 200, label: 'B', zIndex: 110 },
+      c: { type: 'zone', x: 500, y: 500, width: 200, height: 200, label: 'C', zIndex: 120 },
+    });
+    const { result } = renderReorder(board, client, false);
+
+    const nodes = result.current.getBoardObjectNodes();
+    const a = nodes.find((node) => node.id === 'a');
+    const c = nodes.find((node) => node.id === 'c');
+
+    expect(a?.data).toMatchObject({
+      canEdit: false,
+      overlappingZoneCount: 1,
+      layerAvailability: { front: true, forward: true, backward: false, back: false },
+    });
+    expect(a?.draggable).toBe(false);
+    expect(c?.data).toMatchObject({
+      overlappingZoneCount: 0,
+      layerAvailability: { front: false, forward: false, backward: true, back: true },
+    });
+  });
+
+  it('passes effective edit permission to every structural object component', () => {
+    const { client } = makeClient();
+    const board = makeBoard({
+      app: {
+        type: 'app',
+        x: 0,
+        y: 0,
+        width: 300,
+        height: 200,
+        title: 'App',
+        template: 'react',
+        files: {},
+      },
+      artifact: {
+        type: 'artifact',
+        x: 0,
+        y: 0,
+        width: 300,
+        height: 200,
+        artifact_id: 'artifact-1',
+      },
+      note: { type: 'markdown', x: 0, y: 0, width: 300, content: 'Note' },
+    });
+    const { result } = renderReorder(board, client, false);
+
+    for (const node of result.current.getBoardObjectNodes()) {
+      expect(node.data.canEdit).toBe(false);
+      expect(node.draggable).toBe(false);
+    }
+  });
+});
+
+describe('updateObject', () => {
+  it('returns false when the board patch rejects so modal callers stay open', async () => {
+    const { client, patch } = makeRejectingClient();
+    const note = {
+      type: 'markdown',
+      x: 0,
+      y: 0,
+      width: 300,
+      content: 'Review',
+    } as BoardObject;
+    const board = makeBoard({ a: note });
+    const { result } = renderReorder(board, client);
+    const node = result.current.getBoardObjectNodes().find(({ id }) => id === 'a');
+    const onUpdate = node?.data.onUpdate as (
+      objectId: string,
+      objectData: BoardObject
+    ) => Promise<boolean>;
+
+    await expect(onUpdate('a', { ...note, content: 'Updated' })).resolves.toBe(false);
+
+    expect(patch).toHaveBeenCalledTimes(1);
+    expect(showError).toHaveBeenCalledWith('Failed to save board object');
+  });
+
+  it('blocks stale update and delete callbacks after permission revocation', async () => {
+    const { client, patch } = makeClient();
+    const setNodes = vi.fn();
+    const note = {
+      type: 'markdown',
+      x: 0,
+      y: 0,
+      width: 300,
+      content: 'Review',
+    } as BoardObject;
+    const board = makeBoard({ a: note });
+    const { result, rerender } = renderHook(
+      ({ canEdit }) =>
+        useBoardObjects({
+          board,
+          client,
+          boardObjectsForBoard: [],
+          setNodes,
+          deletedObjectsRef: { current: new Set<string>() },
+          canEdit,
+        }),
+      { wrapper, initialProps: { canEdit: true } }
+    );
+    const data = result.current.getBoardObjectNodes()[0]?.data;
+    const onUpdate = data.onUpdate as (
+      objectId: string,
+      objectData: BoardObject
+    ) => Promise<boolean>;
+    const onDelete = data.onDelete as (objectId: string) => Promise<void>;
+
+    rerender({ canEdit: false });
+    await expect(onUpdate('a', { ...note, content: 'Updated' })).resolves.toBe(false);
+    await onDelete('a');
+
+    expect(patch).not.toHaveBeenCalled();
+    expect(setNodes).not.toHaveBeenCalled();
+  });
+});
+
+describe('deleteArtifact', () => {
+  it('blocks a stale lifecycle-delete callback after the connection gate closes', async () => {
+    const { client, service } = makeClient();
+    const board = makeBoard({
+      artifact: {
+        type: 'artifact',
+        x: 0,
+        y: 0,
+        width: 300,
+        height: 200,
+        artifact_id: 'artifact-1',
+      },
+    });
+    const { result, rerender } = renderReorder(board, client);
+    const onDeleteArtifact = result.current.getBoardObjectNodes()[0]?.data.onDeleteArtifact as (
+      objectId: string,
+      artifactId: string
+    ) => Promise<void>;
+
+    connectionState.connecting = true;
+    rerender({ effectiveCanEdit: true });
+    await onDeleteArtifact('artifact', 'artifact-1');
+
+    expect(service).not.toHaveBeenCalled();
+  });
+});
 
 describe('reorderObject', () => {
   it('"front" sends a single mergeObjectFields patch with the clamped zIndex', async () => {

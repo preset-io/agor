@@ -81,6 +81,7 @@ import type {
   GatewayOutboundMessage,
   GatewayOutboundMessageID,
   GatewayOutboundReplyAdmission,
+  GatewaySource,
   MCPServerID,
   Message,
   MessageSource,
@@ -97,8 +98,10 @@ import {
   DEFAULT_DISCORD_CATCH_UP,
   hasMinimumRole,
   isDiscordSnowflake,
+  isTerminalTaskStatus,
   ROLES,
   SessionStatus,
+  TaskStatus,
   USER_DEFAULT_AGENTIC_CONFIGURATION,
   validateDiscordConfig,
 } from '@agor/core/types';
@@ -208,6 +211,39 @@ async function withGatewayTimeout<T>(promise: Promise<T>, timeoutMs: number): Pr
 interface RouteMessageResult {
   routed: boolean;
   channelType?: string;
+}
+
+interface FlushOutboundBufferOptions {
+  taskId: TaskID;
+}
+
+const GATEWAY_FINAL_REPLY_CLAIM_TIMEOUT_MS = 5 * 60 * 1000;
+const GATEWAY_FAILED_TURN_REPLY =
+  "I couldn't complete this request because the Agor session stopped with an error. Mention me again to retry.";
+const GATEWAY_STOPPED_TURN_REPLY =
+  'This request was stopped before it finished. Mention me again to continue.';
+
+type GatewayFinalReplyState =
+  | { status: 'pending' }
+  | { status: 'processing'; claim_token: string; claimed_at: string }
+  | { status: 'delivered'; delivered_at: string };
+
+function gatewayFinalReplyState(metadata: Message['metadata']): GatewayFinalReplyState | undefined {
+  const value = metadata?.gateway_final_reply;
+  if (!value || typeof value !== 'object') return undefined;
+  const state = value as Record<string, unknown>;
+  if (state.status === 'pending') return { status: 'pending' };
+  if (
+    state.status === 'processing' &&
+    typeof state.claim_token === 'string' &&
+    typeof state.claimed_at === 'string'
+  ) {
+    return { status: 'processing', claim_token: state.claim_token, claimed_at: state.claimed_at };
+  }
+  if (state.status === 'delivered' && typeof state.delivered_at === 'string') {
+    return { status: 'delivered', delivered_at: state.delivered_at };
+  }
+  return undefined;
 }
 
 interface EmitGatewayMessageData {
@@ -460,14 +496,18 @@ function previewText(text: string, maxChars = 500): string {
   return `${normalized.slice(0, Math.max(0, maxChars - 1))}…`;
 }
 
-function gatewayMessageText(content: Message['content']): string {
-  if (typeof content === 'string') return content;
-  if (!Array.isArray(content)) return '';
-  return content
-    .filter((block) => block.type === 'text')
-    .map((block) => (typeof block.text === 'string' ? block.text : ''))
-    .filter(Boolean)
-    .join('\n');
+function gatewayMessageText(message: Pick<Message, 'content' | 'content_preview'>): string {
+  const { content } = message;
+  if (typeof content === 'string' && content.trim()) return content;
+  if (Array.isArray(content)) {
+    const text = content
+      .filter((block) => block.type === 'text')
+      .map((block) => (typeof block.text === 'string' ? block.text : ''))
+      .filter(Boolean)
+      .join('\n');
+    if (text.trim()) return text;
+  }
+  return message.content_preview || '';
 }
 
 function quoteForPrompt(text: string, maxChars = 2000): string {
@@ -883,15 +923,6 @@ export class GatewayService {
    * refresh must never suppress another tenant's delivery.
    */
   private activeChannelTenants = new Set<string>();
-
-  /**
-   * GitHub message buffer: keyed by session_id, stores the latest message text.
-   * For GitHub channels, we don't send every assistant message in real-time
-   * (unlike Slack). Instead, we buffer and only send the last message when
-   * the session turn completes (goes idle). Each new message overwrites the
-   * previous one — only the final message matters.
-   */
-  private lastMessageBuffer = new Map<string, string>();
 
   /**
    * Slack status updates are serialized and lightly throttled so concurrent
@@ -2086,7 +2117,7 @@ export class GatewayService {
 
   private async fetchExistingSessionUrlForGatewayUser(
     sessionId: SessionID,
-    user: User
+    user?: User
   ): Promise<string | null> {
     try {
       const baseUrl = await getBaseUrl();
@@ -2096,6 +2127,8 @@ export class GatewayService {
     } catch (_error) {
       console.warn('[gateway] Failed to build public session URL');
     }
+
+    if (!user) return null;
 
     try {
       const sessionsService = this.app.service('sessions') as {
@@ -2111,6 +2144,14 @@ export class GatewayService {
       console.warn('[gateway] Failed to fetch session URL');
       return null;
     }
+  }
+
+  private async formatTerminalGatewayReply(text: string, sessionId: SessionID): Promise<string> {
+    const sessionUrl = await this.fetchExistingSessionUrlForGatewayUser(sessionId);
+    const sessionReference = sessionUrl
+      ? `[View session](${sessionUrl})`
+      : `Session: \`${shortId(sessionId)}\``;
+    return `${text}\n\n${sessionReference}`;
   }
 
   /**
@@ -2750,7 +2791,7 @@ export class GatewayService {
       );
 
       // Build custom_context with gateway metadata + platform-specific fields
-      const gatewaySource: Record<string, unknown> = {
+      const gatewaySource: GatewaySource & Record<string, unknown> = {
         channel_id: channel.id,
         channel_name: channel.name,
         channel_type: channel.channel_type,
@@ -2891,7 +2932,7 @@ export class GatewayService {
           typeof priorGatewaySourceValue === 'object' &&
           priorGatewaySourceValue !== null &&
           !Array.isArray(priorGatewaySourceValue)
-            ? (priorGatewaySourceValue as Record<string, unknown>)
+            ? (priorGatewaySourceValue as unknown as GatewaySource & Record<string, unknown>)
             : null;
         const currentTenantId = getCurrentTenantId();
         const priorSeedId = priorGatewaySource?.outbound_seed_id;
@@ -3331,25 +3372,25 @@ export class GatewayService {
 
       await this.requireInboundPromptAuthority(channel, sessionId, user.user_id);
 
+      const gatewayTaskMetadata = {
+        ...(data.gateway_inbound_event_id
+          ? { gateway_inbound_event_id: data.gateway_inbound_event_id }
+          : {}),
+        ...(typeof data.metadata?.processing_comment_id === 'number'
+          ? {
+              gateway_reply_metadata: {
+                processing_comment_id: data.metadata.processing_comment_id,
+              },
+            }
+          : {}),
+      };
+
       const task = await promptService.create(
         {
           prompt: promptText,
           permissionMode,
           messageSource: 'gateway',
-          ...(data.gateway_inbound_event_id
-            ? {
-                metadata: {
-                  gateway_inbound_event_id: data.gateway_inbound_event_id,
-                  ...(data.metadata?.processing_comment_id
-                    ? {
-                        gateway_reply_metadata: {
-                          processing_comment_id: data.metadata.processing_comment_id,
-                        },
-                      }
-                    : {}),
-                },
-              }
-            : {}),
+          ...(Object.keys(gatewayTaskMetadata).length > 0 ? { metadata: gatewayTaskMetadata } : {}),
           ...(data.idempotency_task_id ? { idempotencyTaskId: data.idempotency_task_id } : {}),
         },
         {
@@ -3545,14 +3586,11 @@ export class GatewayService {
     await this.threadMapRepo.updateLastMessage(mapping.id);
     await this.channelRepo.updateLastMessage(channel.id);
 
-    // GitHub and Shortcut channels buffer the message instead of sending
-    // immediately — only the last message is posted when the session goes idle
-    // (via flushOutboundBuffer). This keeps noisy intermediate agent messages
-    // out of PR/story threads; the agent's final message IS the reply.
+    // GitHub and Shortcut replies are resolved from durable, task-scoped
+    // messages when the session turn ends. Do not stream intermediate output.
     if (channel.channel_type === 'github' || channel.channel_type === 'shortcut') {
-      this.lastMessageBuffer.set(data.session_id, data.message);
       console.log(
-        `[gateway] Buffered ${channel.channel_type} message for session ${shortId(data.session_id)} (${data.message.length} chars)`
+        `[gateway] Deferred ${channel.channel_type} message for session ${shortId(data.session_id)} (${data.message.length} chars)`
       );
       return { routed: true, channelType: channel.channel_type };
     }
@@ -3632,110 +3670,150 @@ export class GatewayService {
     );
   }
 
-  /**
-   * Flush the buffered last message for a session (GitHub / Shortcut).
-   *
-   * Called when a session transitions to idle (turn complete). Posts the last
-   * buffered message as a PR/issue/story comment by editing the connector's
-   * processing acknowledgement. If no buffered message exists, this is a no-op.
-   */
-  async flushOutboundBuffer(sessionId: string): Promise<void> {
-    // This hook runs for every promptable Session, but only mapped GitHub and
-    // Shortcut Sessions have buffered outbound work. Reject the common no-op
-    // cases before reading durable Message history.
+  /** Deliver one task's terminal reply by editing its exact provider acknowledgement. */
+  async flushOutboundBuffer(sessionId: string, options: FlushOutboundBufferOptions): Promise<void> {
     const mapping = await this.threadMapRepo.findBySession(sessionId);
-    if (!mapping) {
-      this.lastMessageBuffer.delete(sessionId);
-      return;
-    }
+    if (!mapping) return;
 
     const channel = await this.channelRepo.findById(mapping.channel_id);
     if (
       !channel?.enabled ||
       (channel.channel_type !== 'github' && channel.channel_type !== 'shortcut')
     ) {
-      this.lastMessageBuffer.delete(sessionId);
       return;
     }
 
-    let bufferedMessage = this.lastMessageBuffer.get(sessionId);
-    let durableMessageId: string | undefined;
-    let durableReplyMetadata: Record<string, unknown> | undefined;
-    // The local buffer is only a latency cache. PostgreSQL/SQLite messages are
-    // the durable recovery source when creation and idle hooks land on
-    // different daemons or the message-producing daemon dies.
-    try {
-      const messages = await this.messagesRepo.findBySessionId(sessionId as SessionID);
-      const latest = [...messages]
-        .reverse()
-        .find((message) => message.role === 'assistant' && gatewayMessageText(message.content));
-      if (latest) {
-        bufferedMessage = gatewayMessageText(latest.content);
-        durableMessageId = latest.message_id;
-        if (latest.task_id) {
-          const task = await this.taskRepo.findById(latest.task_id);
-          durableReplyMetadata = task?.metadata?.gateway_reply_metadata;
-        }
-      }
-    } catch (error) {
-      if (!bufferedMessage) throw error;
-      console.warn('[gateway] Falling back to process-local outbound buffer');
+    const taskId = options.taskId;
+    const terminalTask = await this.taskRepo.findById(taskId);
+    if (
+      !terminalTask ||
+      terminalTask.session_id !== sessionId ||
+      !isTerminalTaskStatus(terminalTask.status)
+    ) {
+      return;
     }
-    if (!bufferedMessage) return;
-
-    this.lastMessageBuffer.delete(sessionId);
+    const processingCommentId =
+      terminalTask.metadata?.gateway_reply_metadata?.processing_comment_id;
+    if (typeof processingCommentId !== 'number') {
+      console.warn(
+        `[gateway] Task ${shortId(taskId)} has no provider acknowledgement; final reply was not sent`
+      );
+      return;
+    }
 
     const mappingMetadata = ((mapping.metadata as Record<string, unknown>) ?? {}) as Record<
       string,
       unknown
     >;
-    if (durableMessageId && mappingMetadata.gateway_last_flushed_message_id === durableMessageId) {
+
+    const messages = await this.messagesRepo.findByTaskId(taskId);
+    const latestAssistant = [...messages]
+      .reverse()
+      .find((message) => message.role === 'assistant' && gatewayMessageText(message));
+    const claimMessage = latestAssistant ?? messages.at(-1);
+    if (!claimMessage) return;
+
+    let finalMessage = latestAssistant ? gatewayMessageText(latestAssistant) : undefined;
+    if (terminalTask.status === TaskStatus.FAILED || terminalTask.status === TaskStatus.TIMED_OUT) {
+      finalMessage = await this.formatTerminalGatewayReply(
+        GATEWAY_FAILED_TURN_REPLY,
+        sessionId as SessionID
+      );
+    } else if (terminalTask.status === TaskStatus.STOPPED) {
+      finalMessage = await this.formatTerminalGatewayReply(
+        GATEWAY_STOPPED_TURN_REPLY,
+        sessionId as SessionID
+      );
+    }
+    if (!finalMessage) return;
+
+    if (
+      mappingMetadata.gateway_last_flushed_task_id === taskId ||
+      mappingMetadata.gateway_last_flushed_message_id === claimMessage.message_id
+    ) {
       return;
     }
 
+    // Reuse the existing Message metadata row-lock primitive. This is the
+    // same short claim/finish pattern used by widget resolution and avoids a
+    // new delivery table or Task-repository state machine.
+    const claimToken = generateId();
+    const claim = await this.messagesRepo.mutateMetadataLocked(
+      claimMessage.message_id,
+      (metadata) => {
+        const claimedAt = new Date();
+        const state = gatewayFinalReplyState(metadata);
+        if (state?.status === 'delivered') return null;
+        if (state?.status === 'processing') {
+          const claimAgeMs = claimedAt.getTime() - Date.parse(state.claimed_at);
+          if (Number.isFinite(claimAgeMs) && claimAgeMs < GATEWAY_FINAL_REPLY_CLAIM_TIMEOUT_MS) {
+            return null;
+          }
+        }
+        return {
+          ...(metadata ?? {}),
+          gateway_final_reply: {
+            status: 'processing',
+            claim_token: claimToken,
+            claimed_at: claimedAt.toISOString(),
+          },
+        };
+      }
+    );
+    if (!claim.changed) return;
+
     try {
       const connector = getConnector(channel.channel_type as ChannelType, channel.config);
-
       const { text, blocks } = normalizeOutbound(
-        connector.formatMessage ? connector.formatMessage(bufferedMessage) : bufferedMessage
+        connector.formatMessage ? connector.formatMessage(finalMessage) : finalMessage
       );
-
-      // Edit the "Processing..." comment with the final response
-      const outboundMetadata: Record<string, unknown> = {};
-      if (typeof durableReplyMetadata?.processing_comment_id === 'number') {
-        outboundMetadata.edit_comment_id = durableReplyMetadata.processing_comment_id;
-      } else if (
-        mapping.metadata &&
-        typeof (mapping.metadata as Record<string, unknown>).processing_comment_id === 'number'
-      ) {
-        outboundMetadata.edit_comment_id = (
-          mapping.metadata as Record<string, unknown>
-        ).processing_comment_id;
-      }
-
       await connector.sendMessage({
         threadId: mapping.thread_id,
         text,
         blocks,
-        metadata: outboundMetadata,
+        metadata: { edit_comment_id: processingCommentId },
       });
 
-      if (durableMessageId) {
+      const completed = await this.messagesRepo.mutateMetadataLocked(
+        claimMessage.message_id,
+        (metadata) => {
+          const state = gatewayFinalReplyState(metadata);
+          if (state?.status !== 'processing' || state.claim_token !== claimToken) return null;
+          return {
+            ...(metadata ?? {}),
+            gateway_final_reply: {
+              status: 'delivered',
+              delivered_at: new Date().toISOString(),
+            },
+          };
+        }
+      );
+      if (!completed.changed) throw new Error('Gateway final reply claim was lost');
+
+      try {
         await this.threadMapRepo.mergeMetadata(mapping.id, {
-          gateway_last_flushed_message_id: durableMessageId,
+          gateway_last_flushed_message_id: claimMessage.message_id,
+          gateway_last_flushed_task_id: taskId,
         });
+      } catch (_error) {
+        console.warn('[gateway] Failed to update legacy final reply markers');
       }
 
       console.log(
-        `[gateway] Flushed ${channel.channel_type} buffer for session ${shortId(sessionId)} → ${mapping.thread_id} (${bufferedMessage.length} chars)`
+        `[gateway] Flushed ${channel.channel_type} final reply for session ${shortId(sessionId)} → ${mapping.thread_id} (${finalMessage.length} chars)`
       );
     } catch (error) {
-      // Re-queue the message so it can be retried on next flush (e.g. session
-      // goes idle again, or daemon restarts). Without this, a transient GitHub
-      // API error would permanently lose the agent's final response.
-      this.lastMessageBuffer.set(sessionId, bufferedMessage);
+      try {
+        await this.messagesRepo.mutateMetadataLocked(claimMessage.message_id, (metadata) => {
+          const state = gatewayFinalReplyState(metadata);
+          if (state?.status !== 'processing' || state.claim_token !== claimToken) return null;
+          return { ...(metadata ?? {}), gateway_final_reply: { status: 'pending' } };
+        });
+      } catch (_releaseError) {
+        console.warn('[gateway] Failed to release final reply claim');
+      }
       console.error(
-        `[gateway] Failed to flush ${channel.channel_type} buffer for session ${shortId(sessionId)} (re-queued):`,
+        `[gateway] Failed to flush ${channel.channel_type} final reply for session ${shortId(sessionId)}:`,
         error
       );
     }

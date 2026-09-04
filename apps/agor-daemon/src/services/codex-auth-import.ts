@@ -33,6 +33,7 @@ import {
   type CodexCredentialMutationCoordinator,
   persistVerifiedCodexAuth,
   resolveCodexCredentialRoute,
+  sameCodexCredentialRoute,
 } from './codex-auth-shared.js';
 
 export function createCodexAuthImportService(
@@ -77,6 +78,18 @@ export function createCodexAuthImportService(
         );
       }
 
+      const validateRoute = async () => {
+        const currentRoute = await resolveCodexCredentialRoute(
+          userId,
+          withTenantDatabase,
+          app.get('config')
+        );
+        if (!currentRoute.ok || !sameCodexCredentialRoute(currentRoute, identity)) {
+          throw new BadRequest(
+            'The execution home changed while importing credentials. Import again for the current home.'
+          );
+        }
+      };
       const persist = (authorityGeneration?: number) =>
         persistVerifiedCodexAuth({
           app,
@@ -92,9 +105,10 @@ export function createCodexAuthImportService(
             String(tenantId),
             userId,
             'credentials_imported',
-            persist
+            persist,
+            validateRoute
           )
-        : await persist();
+        : await validateRoute().then(() => persist());
       await invalidateCredentialBinds({
         tenantId: String(tenantId),
         userId,

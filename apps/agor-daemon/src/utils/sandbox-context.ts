@@ -9,7 +9,7 @@
  */
 
 import { existsSync, realpathSync } from 'node:fs';
-import { isAbsolute, join, resolve } from 'node:path';
+import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import {
   type AgorConfig,
   getAgorHome,
@@ -24,6 +24,19 @@ export interface SandboxStoragePaths {
   protectedDataRoots: string[];
   worktreesRoot: string;
   ownerHomesRoot: string;
+}
+
+/** Canonicalize the deepest existing ancestor while retaining an uncreated suffix. */
+function canonicalizeProspectivePath(path: string): string {
+  let ancestor = resolve(path);
+  const suffix: string[] = [];
+  while (!existsSync(ancestor)) {
+    const parent = dirname(ancestor);
+    if (parent === ancestor) return resolve(path);
+    suffix.unshift(basename(ancestor));
+    ancestor = parent;
+  }
+  return join(realpathSync(ancestor), ...suffix);
 }
 
 /** Resolve tenant-aware sandbox storage paths from the immutable config snapshot. */
@@ -120,5 +133,9 @@ export function resolveOwnerHomeStore(params: {
     }
     return validated;
   }
-  return join(storage.ownerHomesRoot, params.ownerUserId);
+  // Credential authority opens every component without following symlinks.
+  // Resolve a trusted deployment-root symlink before appending any uncreated
+  // tenant/home suffix so supported symlinked data roots retain one stable
+  // physical authority rather than failing every task or exposing an alias.
+  return join(canonicalizeProspectivePath(storage.ownerHomesRoot), params.ownerUserId);
 }

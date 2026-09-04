@@ -22,13 +22,15 @@ import {
   BoardRepository,
   createTenantScopedDatabaseProxy,
   getCurrentTenantDatabaseScope,
+  getCurrentTenantId,
   runWithTenantContext,
 } from '@agor/core/db';
-import { type Branch, type HookContext, TaskStatus } from '@agor/core/types';
+import { type Branch, type HookContext, type Task, TaskStatus } from '@agor/core/types';
 import { describe, expect, it, vi } from 'vitest';
 
 import {
   AUTHENTICATED_RBAC_SERVICE_PATHS,
+  CLAUDE_CREDENTIAL_WRITE_ADMISSION_SERVICE_PATHS,
   CONSTRAINED_HA_PROCESS_AFFINE_SERVICE_GATES,
   classifyPrimaryTeammateAuthorizationInvalidation,
   classifyRealtimeAuthorizationInvalidation,
@@ -51,6 +53,7 @@ import {
   validateBranchEnvPolicyHook,
 } from './register-hooks';
 import { canReceiveMcpTokenForSession } from './utils/mcp-token-authorization';
+import { resolvePromptOrigin } from './utils/prompt-origin';
 
 const makeSession = (sessionId: string): import('@agor/core/types').Session =>
   ({
@@ -325,7 +328,11 @@ describe('protectExternalTaskCreate', () => {
       session_id: 'session-1',
       full_prompt: 'hello',
       status: TaskStatus.CREATED,
+      metadata: { source: 'agor' },
     });
+    expect(
+      resolvePromptOrigin(hook.data as Pick<Task, 'metadata'>, { custom_context: undefined })
+    ).toEqual({ kind: 'human' });
   });
 
   it.each(['running', 'queued', 'completed'])('rejects externally forged status %s', (status) => {
@@ -705,6 +712,19 @@ describe('tenant-owned service registration', () => {
     expect(CONSTRAINED_HA_PROCESS_AFFINE_SERVICE_GATES).toContainEqual([
       'mcp-servers/discover',
       'mcpOAuth',
+    ]);
+  });
+
+  // These remain in the capability-gate inventory, but a safe constrained-HA
+  // deployment resolves both capabilities true and admits the durable paths.
+  it('capability-gates the Claude OAuth attempt flow and credential-file logout in HA', () => {
+    expect(CONSTRAINED_HA_PROCESS_AFFINE_SERVICE_GATES).toContainEqual([
+      'claude-auth/oauth',
+      'claudeOAuth',
+    ]);
+    expect(CONSTRAINED_HA_PROCESS_AFFINE_SERVICE_GATES).toContainEqual([
+      'claude-auth/logout',
+      'claudeAuth',
     ]);
   });
 
@@ -1501,6 +1521,89 @@ describe('TENANT_IDENTITY_ONLY_SERVICE_PATHS', () => {
   ])('keeps provider/waiting endpoint %s out of an HTTP-long transaction', (path) => {
     expect(TENANT_IDENTITY_ONLY_SERVICE_PATHS).toContain(path);
     expect(TENANT_OWNED_SERVICE_PATHS).not.toContain(path);
+  });
+
+  // Regression for the live blocker: /claude-auth/oauth was in NEITHER tenant
+  // list, so no around hook established ambient identity and its create/find
+  // threw "Missing active tenant context for Claude OAuth" — while the identical
+  // codex-auth/device worked. Exercise the REAL registration path (no manual
+  // runWithTenantContext) so the gap is catchable, unlike the service unit tests
+  // that establish tenant context by hand.
+  it.each(['claude-auth/oauth', 'claude-auth/logout'])(
+    'grants ambient tenant identity to %s',
+    (path) => {
+      expect(TENANT_IDENTITY_ONLY_SERVICE_PATHS).toContain(path);
+      expect(TENANT_OWNED_SERVICE_PATHS).not.toContain(path);
+    }
+  );
+
+  it('puts both Claude credential mutation endpoints behind short write admission', () => {
+    expect(CLAUDE_CREDENTIAL_WRITE_ADMISSION_SERVICE_PATHS).toEqual([
+      'claude-auth/oauth',
+      'claude-auth/logout',
+    ]);
+  });
+
+  it('populates getCurrentTenantId() for a claude-auth/oauth call via the registered hook', async () => {
+    type AroundHook = (context: HookContext, next: () => Promise<void>) => Promise<void>;
+    const captured: AroundHook[] = [];
+    const app = {
+      service(path: string) {
+        return {
+          hooks(hooks: { around?: { all?: AroundHook[] } }) {
+            if (path.replace(/^\//, '') === 'claude-auth/oauth') {
+              captured.push(...(hooks.around?.all ?? []));
+            }
+          },
+        };
+      },
+      use() {},
+      publish() {},
+    };
+
+    registerHooks({
+      db: {} as RegisterHooksContext['db'],
+      app: app as RegisterHooksContext['app'],
+      config: {
+        database: { dialect: 'postgresql' },
+        multi_tenancy: { mode: 'static', static_tenant_id: 'registration-test' },
+      } as RegisterHooksContext['config'],
+      jwtSecret: 'registration-test-secret',
+      branchRbacEnabled: false,
+      requireAuth: async (context) => context,
+      superadminOpts: { allowSuperadmin: true },
+      sessionsService: {} as RegisterHooksContext['sessionsService'],
+      messagesService: {} as RegisterHooksContext['messagesService'],
+      boardsService: undefined,
+      branchRepository: {} as RegisterHooksContext['branchRepository'],
+      usersRepository: {} as RegisterHooksContext['usersRepository'],
+      sessionsRepository: {} as RegisterHooksContext['sessionsRepository'],
+      deployment: { mode: 'standalone' },
+    });
+
+    // The service must actually receive an around hook — an empty capture is the
+    // exact production failure (no ambient identity), so assert it is wired.
+    expect(captured.length).toBeGreaterThan(0);
+
+    const context = {
+      path: 'claude-auth/oauth',
+      method: 'create',
+      data: {},
+      params: { provider: 'rest', user: { user_id: 'registration-test-user', role: 'member' } },
+    } as HookContext;
+    // `next` runs where the service body runs; it must see the ambient tenant.
+    let tenantDuringCall: string | undefined;
+    const next = async () => {
+      tenantDuringCall = getCurrentTenantId() ?? undefined;
+    };
+    const invoke = captured.reduceRight<() => Promise<void>>(
+      (downstream, hook) => () => hook(context, downstream),
+      next
+    );
+    await invoke();
+
+    expect(context.params.tenant?.tenant_id).toBe('registration-test');
+    expect(tenantDuringCall).toBe('registration-test');
   });
 
   it('keeps gateway channel provider probes outside the request transaction', () => {

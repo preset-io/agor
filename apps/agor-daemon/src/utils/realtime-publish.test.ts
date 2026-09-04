@@ -668,6 +668,11 @@ describe('HA Feathers publication relay', () => {
         'executor-git-environment',
         'mcp-servers/oauth-auth-headers',
         'codex-auth/device',
+        // Claude subscription control-plane results must never enter shared Redis,
+        // exactly like the codex-auth endpoints: oauth carries the paste-back
+        // exchange and logout emits a patched-user event into the relay path.
+        'claude-auth/oauth',
+        'claude-auth/logout',
         'opencode-auth',
         'terminals',
       ])

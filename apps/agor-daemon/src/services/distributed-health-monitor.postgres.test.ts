@@ -154,15 +154,28 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       const appB = makeApp();
       const emitA = vi.spyOn(appA.branches, 'emit');
       const emitB = vi.spyOn(appB.branches, 'emit');
+      // Keep the cooldown comfortably above loaded-CI PostgreSQL round-trip
+      // time. The assertion below is about durable coordination, not whether
+      // two setup/check transactions happen to finish inside the 50 ms default.
+      const scanIntervalMs = 1_000;
+      const maxIdleIntervalMs = 2_000;
       const monitorA = new DistributedHealthMonitor(
         appA.app as never,
         dbA,
-        monitorOptions(tenantId, branch.branch_id, { fetchHealth })
+        monitorOptions(tenantId, branch.branch_id, {
+          fetchHealth,
+          scanIntervalMs,
+          maxIdleIntervalMs,
+        })
       );
       const monitorB = new DistributedHealthMonitor(
         appB.app as never,
         dbB,
-        monitorOptions(tenantId, branch.branch_id, { fetchHealth })
+        monitorOptions(tenantId, branch.branch_id, {
+          fetchHealth,
+          scanIntervalMs,
+          maxIdleIntervalMs,
+        })
       );
 
       const first = await Promise.all([monitorA.checkOnce(), monitorB.checkOnce()]);
@@ -177,7 +190,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       expect(duringCooldown.reduce((sum, result) => sum + result.failures, 0)).toBe(0);
       expect(fetchHealth).toHaveBeenCalledOnce();
 
-      await new Promise((resolve) => setTimeout(resolve, 75));
+      await new Promise((resolve) => setTimeout(resolve, scanIntervalMs + 100));
       const nextInterval = await Promise.all([monitorA.checkOnce(), monitorB.checkOnce()]);
       expect(nextInterval.reduce((sum, result) => sum + result.committed, 0)).toBe(1);
       expect(nextInterval.reduce((sum, result) => sum + result.failures, 0)).toBe(0);
