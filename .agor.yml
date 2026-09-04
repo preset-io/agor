@@ -116,7 +116,7 @@ environment:
         docker compose -f docker-compose.yml -f docker-compose.override.postgres.yml -p
         agor-{{branch.name}} --profile postgres down
       description: >-
-        PostgreSQL standalone dev for schema and RLS parity; RBAC and executor sandbox off.
+        PostgreSQL standalone dev for schema and RLS parity; always-on RBAC and no executor sandbox.
       extends: sqlite
       nuke: >-
         docker compose -f docker-compose.yml -f docker-compose.override.postgres.yml -p
@@ -141,7 +141,7 @@ environment:
         docker compose -f docker-compose.yml -f docker-compose.override.postgres.yml -p
         agor-{{branch.name}} --profile postgres down
       description: >-
-        PostgreSQL + development seed + four-user demo fixtures; RBAC and sandbox off. Development
+        PostgreSQL + development seed + four-user demo fixtures; always-on RBAC and no executor sandbox. Development
         only.
       extends: sqlite
       nuke: >-

@@ -435,6 +435,20 @@ function requirePlainConfigRecord(value: unknown, path: string): void {
   }
 }
 
+/**
+ * Board and branch RBAC is always enabled. `execution.branch_rbac: false` is a
+ * retired switch that must fail startup rather than silently reopening the
+ * legacy tenant-wide access mode. Enforced at both the raw-config validation
+ * boundary and effective-config resolution so neither path can drift open.
+ */
+function assertBranchRbacNotDisabled(config: AgorConfig): void {
+  if (config.execution?.branch_rbac === false) {
+    throw new Error(
+      'Config error: execution.branch_rbac: false is no longer supported; board and branch RBAC is always enabled. Remove the key (recommended) or set it to true temporarily.'
+    );
+  }
+}
+
 function validateConfig(config: AgorConfig): void {
   requirePlainConfigRecord(config, 'config');
   const configuredAnalyticsPlugins = (config.analytics as { plugins?: unknown[] } | undefined)
@@ -888,11 +902,7 @@ function validateConfig(config: AgorConfig): void {
   ) {
     throw new Error('Config error: execution.branch_rbac must be a boolean');
   }
-  if (config.execution?.branch_rbac === false) {
-    throw new Error(
-      'Config error: execution.branch_rbac: false is no longer supported; board and branch RBAC is always enabled. Remove the key (recommended) or set it to true temporarily.'
-    );
-  }
+  assertBranchRbacNotDisabled(config);
   if (
     config.execution?.sandbox?.preserve_canonical_home_alias !== undefined &&
     typeof config.execution.sandbox.preserve_canonical_home_alias !== 'boolean'
@@ -1461,11 +1471,7 @@ export function resolveEffectiveConfig(
   config: AgorConfig,
   env: NodeJS.ProcessEnv = process.env
 ): AgorConfig {
-  if (config.execution?.branch_rbac === false) {
-    throw new Error(
-      'Config error: execution.branch_rbac: false is no longer supported; board and branch RBAC is always enabled. Remove the key (recommended) or set it to true temporarily.'
-    );
-  }
+  assertBranchRbacNotDisabled(config);
   if (env.AGOR_RBAC_ENABLED && env.AGOR_RBAC_ENABLED !== 'true') {
     throw new Error(
       'Config error: AGOR_RBAC_ENABLED can no longer disable board and branch RBAC. Remove the environment variable (recommended) or set it to true temporarily.'

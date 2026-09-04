@@ -5474,9 +5474,10 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
             },
           },
           // Execution mode surfaced so admins can confirm which security tier
-          // the daemon booted under. Docker env overrides (AGOR_SET_RBAC_FLAG,
-          // AGOR_SET_UNIX_MODE) are written into ~/.agor/config.yaml by the
-          // entrypoint before boot, so `config.execution` reflects them.
+          // the daemon booted under. Deployment env overrides (e.g.
+          // AGOR_UNIX_USER_MODE) are projected into the effective config in
+          // memory at boot — config.yaml is never rewritten — so
+          // `config.execution` reflects them.
           execution: {
             branchRbac: true,
             unixUserMode: config.execution?.unix_user_mode ?? 'simple',

@@ -160,6 +160,12 @@ services:
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - GEMINI_API_KEY=${GEMINI_API_KEY:-}
 
+      # Board and branch RBAC is always enabled; this variable is retired.
+      # Forwarded only during the compatibility window so an existing
+      # deployment still setting it gets the migration error instead of a
+      # silently ignored value: `true` is an accepted no-op, `false`/malformed
+      # fail startup. Remove it from your env once migrated.
+      - AGOR_RBAC_ENABLED=${AGOR_RBAC_ENABLED:-}
       # Execution mode (resolved in memory; config.yaml is never rewritten).
       #   AGOR_UNIX_USER_MODE=sandbox    → execution.unix_user_mode: sandbox
       #                                    (simple | sandbox | delegated)
