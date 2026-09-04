@@ -187,6 +187,33 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       expect(current).toMatchObject({ status: 'registered', isCurrent: true });
     });
 
+    it('refuses a stale server reset epoch before claiming or replacing a registration', async () => {
+      const seedRow = await seed('stale-reset-epoch');
+      const staleInput = inputFor(seedRow);
+      await runWithTenantDatabaseScope(dbA, seedRow.tenantId, (scoped) =>
+        new MCPServerRepository(scoped).update(seedRow.serverId, {
+          expected_config_version: 1,
+        })
+      );
+      let registrations = 0;
+
+      await expect(
+        authorityB.resolve(staleInput, async () => {
+          registrations += 1;
+          return { client_id: 'must-not-register' };
+        })
+      ).rejects.toThrow(/server epoch is stale/);
+      expect(registrations).toBe(0);
+      await expect(
+        runWithTenantDatabaseScope(dbA, seedRow.tenantId, (scoped) =>
+          new MCPOAuthClientRegistrationRepository(scoped).getCurrent(
+            seedRow.tenantId,
+            seedRow.serverId
+          )
+        )
+      ).resolves.toBeNull();
+    });
+
     it('CAS-invalidates only the rejected registration ID and cleanly re-registers', async () => {
       const seedRow = await seed('provider-invalidated-client');
       const input = inputFor(seedRow);

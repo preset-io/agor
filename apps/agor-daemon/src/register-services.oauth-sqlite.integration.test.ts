@@ -1857,6 +1857,7 @@ describe('SQLite saved-row OAuth authority', () => {
       durableAuthority: durableAuthorityWithCreate(async () => crypto.randomUUID() as never),
       durableClientRegistrationAuthority: {
         resolve: resolveDynamicClientRegistration,
+        lockExactCurrentForAttempt: vi.fn(async () => true),
         invalidateForServer: vi.fn(),
         maintain: vi.fn(),
       } as unknown as NonNullable<RegisterServicesContext['mcpOAuthClientRegistrationAuthority']>,
@@ -1921,16 +1922,19 @@ describe('SQLite saved-row OAuth authority', () => {
     vi.mocked(loadCatalog)
       .mockResolvedValueOnce([catalogEntry])
       .mockResolvedValueOnce([catalogEntry]);
+    const registrationId = crypto.randomUUID();
     const resolve = vi.fn(async () => ({
       registration: {
         client_id: 'durably-reused-client',
         redirect_uris: ['https://agor.example.test/mcp-servers/oauth-callback'],
         token_endpoint_auth_method: 'none',
       },
-      registrationId: crypto.randomUUID(),
+      registrationId,
     }));
+    const lockExactCurrentForAttempt = vi.fn(async () => true);
     const durableClientRegistrationAuthority = {
       resolve,
+      lockExactCurrentForAttempt,
       invalidateForServer: vi.fn(),
       maintain: vi.fn(),
     } as unknown as NonNullable<RegisterServicesContext['mcpOAuthClientRegistrationAuthority']>;
@@ -1961,6 +1965,14 @@ describe('SQLite saved-row OAuth authority', () => {
       expect.objectContaining({
         assertCurrent: expect.any(Function),
         assertServerCurrent: expect.any(Function),
+      })
+    );
+    expect(lockExactCurrentForAttempt).toHaveBeenCalledWith(
+      expect.objectContaining({
+        tenantId: 'default',
+        serverId: harness.server.mcp_server_id,
+        serverConfigVersion: harness.server.config_version,
+        registrationId,
       })
     );
     expect(provider.requests.filter((entry) => entry.path === '/register')).toEqual([]);

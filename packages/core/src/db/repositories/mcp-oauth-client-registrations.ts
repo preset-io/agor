@@ -150,6 +150,31 @@ export class MCPOAuthClientRegistrationRepository {
     }
     try {
       await this.lockServer(input.tenantId, input.mcpServerId);
+      // config_version is also the administrative-reset epoch. Lock the saved
+      // server row before observing or replacing a registration so a claim is
+      // ordered wholly before a reset/config write, or sees the newer epoch
+      // and fails without disturbing that epoch's registration. DCR never
+      // takes the grant-configuration lock, so this DCR-lock -> server-row
+      // order cannot cycle with grant-lock -> server-row reset/mutation work.
+      const serverEpochResult = await executeRaw(
+        this.db,
+        sql`SELECT data ->> 'config_version' AS config_version
+            FROM mcp_servers
+            WHERE tenant_id = ${input.tenantId}
+              AND mcp_server_id = ${input.mcpServerId}
+            LIMIT 1
+            FOR UPDATE`
+      );
+      const serverEpochRow = rawRows(serverEpochResult)[0];
+      const serverConfigVersion =
+        serverEpochRow?.config_version == null ? 1 : Number(serverEpochRow.config_version);
+      if (
+        !serverEpochRow ||
+        !Number.isSafeInteger(serverConfigVersion) ||
+        serverConfigVersion !== input.serverConfigVersion
+      ) {
+        throw new RepositoryError('MCP OAuth client registration server epoch is stale');
+      }
       const currentResult = await executeRaw(
         this.db,
         sql`SELECT *,

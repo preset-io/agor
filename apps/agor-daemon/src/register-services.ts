@@ -2487,6 +2487,7 @@ export async function registerMCPServices(
             assertFlowAuthority?.();
             if (
               !currentServer ||
+              (currentServer.config_version ?? 1) !== (savedServerAuthority?.config_version ?? 1) ||
               hasMCPOAuthRelevantServerConfigurationChanged(savedServerAuthority, currentServer)
             ) {
               throw new Error(
@@ -2494,6 +2495,22 @@ export async function registerMCPServices(
               );
             }
             assertFlowAuthority?.();
+            if (context.clientRegistrationId) {
+              const exactRegistration = await runWithinOAuthAuthority(assertFlowAuthority, () =>
+                durableOAuthClientRegistrations!.lockExactCurrentForAttempt({
+                  tenantId: durableBinding.tenantId,
+                  serverId: durableBinding.mcpServerId,
+                  registrationId: context.clientRegistrationId!,
+                  serverConfigVersion: currentServer.config_version ?? 1,
+                })
+              );
+              assertFlowAuthority?.();
+              if (!exactRegistration) {
+                throw new Error(
+                  'The MCP OAuth client registration changed while OAuth was starting. Restart OAuth.'
+                );
+              }
+            }
             const createdAttempt = await runWithinOAuthAuthority(assertFlowAuthority, () =>
               durableOAuthFlows!.create({
                 context,
@@ -4795,10 +4812,30 @@ export async function registerMCPServices(
         }
         const authorized = await loadMcpServerForCaller(db, data.mcp_server_id, params);
         await lockOAuthGrantConfiguration(db, tenantId, authorized.mcp_server_id);
-        const currentServer = await new MCPServerRepository(db).findById(authorized.mcp_server_id);
-        if (!currentServer || !isMCPServerUsableBy(currentServer, userId)) {
+        // The request claim is only an early rejection. Lock the users row and
+        // re-read role after grant-lock contention so a demotion cannot wait
+        // behind reset admission and then leave stale administrator authority
+        // in charge of credential destruction.
+        const lockedUser = await new UsersRepository(db).getWriteAuthorityProjectionForUpdate(
+          userId
+        );
+        if (!hasMinimumRole(lockedUser?.role, ROLES.ADMIN)) {
+          throw new Forbidden('OAuth client-registration reset requires an administrator');
+        }
+        const serverRepository = new MCPServerRepository(db);
+        const currentServer = await serverRepository.findById(authorized.mcp_server_id);
+        if (!currentServer) {
           throw new Forbidden('MCP server authority changed before OAuth reset');
         }
+        // config_version is the reset epoch shared by DCR resolution and
+        // pending-attempt publication. Advancing it under the grant lock means
+        // an older start can neither publish its resolved client nor make it
+        // reusable after this transaction commits. Admin authority is a
+        // same-tenant control-plane override; it intentionally does not apply
+        // the owner's private-server runtime usability rule.
+        await serverRepository.update(authorized.mcp_server_id, {
+          expected_config_version: currentServer.config_version ?? 1,
+        });
         await new UserMCPOAuthTokenRepository(db).deleteAllForServer(authorized.mcp_server_id);
         await durableOAuthFlows.invalidateForServer(tenantId, authorized.mcp_server_id);
         await durableOAuthClientRegistrations.invalidateForServer(
