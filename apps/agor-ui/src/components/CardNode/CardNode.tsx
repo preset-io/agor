@@ -31,8 +31,11 @@ import {
 import { ensureColorVisible, isDarkTheme } from '../../utils/theme';
 import { MarkdownRenderer } from '../MarkdownRenderer';
 
-// ~4 lines of compact markdown (12px / 1.5 line-height) before offering "more".
-const DESCRIPTION_COLLAPSED_MAX_HEIGHT = 72;
+// ~3 lines of compact markdown (12px / 1.5 line-height) before offering "more".
+const DESCRIPTION_COLLAPSED_MAX_HEIGHT = 54;
+// Cap on expanded height so a very long description still scrolls instead of
+// growing the card without bound.
+const DESCRIPTION_EXPANDED_MAX_HEIGHT = 240;
 const CARD_WIDTH = 380;
 
 export interface CardNodeData {
@@ -181,12 +184,19 @@ const CardNodeComponent = ({ data }: { data: CardNodeData }) => {
           <div
             ref={descRef}
             style={{
-              maxHeight: descExpanded ? undefined : DESCRIPTION_COLLAPSED_MAX_HEIGHT,
-              overflow: descExpanded ? 'visible' : 'hidden',
+              maxHeight: descExpanded
+                ? DESCRIPTION_EXPANDED_MAX_HEIGHT
+                : DESCRIPTION_COLLAPSED_MAX_HEIGHT,
+              overflow: descExpanded ? 'auto' : 'hidden',
               color: token.colorTextSecondary,
             }}
           >
-            <MarkdownRenderer content={card.description} compact showControls={false} />
+            <MarkdownRenderer
+              content={card.description}
+              compact
+              boundHeight={false}
+              showControls={false}
+            />
           </div>
           {canExpandDesc && (
             <Button
