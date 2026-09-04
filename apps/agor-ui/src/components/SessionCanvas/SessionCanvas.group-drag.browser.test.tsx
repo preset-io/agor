@@ -6,14 +6,27 @@
  * library integration honest: browser pointer input must make React Flow pass
  * all selected movable zones through SessionCanvas's real drag-stop path.
  */
-import type { AgorClient, Board } from '@agor-live/client';
+import type { AgorClient, Board, User } from '@agor-live/client';
 import { act, cleanup, render, waitFor } from '@testing-library/react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { userEvent } from 'vitest/browser';
 import { ConnectionProvider } from '../../contexts/ConnectionContext';
+import { __setAuthConfigForTests } from '../../hooks/useAuthConfig';
+import { agorStore } from '../../store/agorStore';
 import SessionCanvas from './SessionCanvas';
 
 afterEach(cleanup);
+
+const CURRENT_USER = {
+  user_id: 'fictional-drag-owner',
+  username: 'fictional-drag-owner',
+  role: 'member',
+} as User;
+
+beforeEach(() => {
+  __setAuthConfigForTests({ requireAuth: false }, { branchRbac: false });
+  agorStore.setState({ userById: new Map([[CURRENT_USER.user_id, CURRENT_USER]]) });
+});
 
 describe('SessionCanvas selected-zone drag (real browser)', () => {
   it('commits all three React Flow drag items in one board-layout request', async () => {
@@ -61,7 +74,13 @@ describe('SessionCanvas selected-zone drag (real browser)', () => {
             currentSha: null,
           }}
         >
-          <SessionCanvas board={durableBoard} client={client} branches={[]} height={760} />
+          <SessionCanvas
+            board={durableBoard}
+            client={client}
+            branches={[]}
+            currentUserId={CURRENT_USER.user_id}
+            height={760}
+          />
         </ConnectionProvider>
       );
     let view = renderBoard();
