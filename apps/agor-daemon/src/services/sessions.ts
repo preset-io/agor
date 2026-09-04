@@ -1826,23 +1826,29 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
     branchCache: Map<string, Branch | null>,
     sessionRepo = this.sessionRepo,
     relationshipRepo = this.sessionRelationshipRepo,
-    branchRepo = this.branchRepo
+    branchRepo = this.branchRepo,
+    applicableRestoreIds?: ReadonlySet<string>
   ): Promise<void> {
     const plannedActive = new Set<string>();
+    const blockedRestoreCandidates = new Set<string>();
     const impliedIds: SessionID[] = [];
     for (const unit of plan.units) {
       for (const [id, session] of unit.members) {
         const isExplicitRoot = unit.kind === 'local' && unit.rootIds.has(id);
-        if (!isExplicitRoot) {
-          impliedIds.push(id as SessionID);
+        if (!isExplicitRoot) impliedIds.push(id as SessionID);
+        if (isExplicitRoot) {
+          const branch = await this.loadArchiveBranch(branchCache, session.branch_id, branchRepo);
+          if (branch?.archived) {
+            throw new Conflict(
+              `Session ${shortId(session.session_id)} belongs to an archived branch. Restore the branch first.`
+            );
+          }
+        }
+        if (session.archived && applicableRestoreIds?.has(id) === false) {
+          blockedRestoreCandidates.add(id);
           continue;
         }
-        const branch = await this.loadArchiveBranch(branchCache, session.branch_id, branchRepo);
-        if (branch?.archived) {
-          throw new Conflict(
-            `Session ${shortId(session.session_id)} belongs to an archived branch. Restore the branch first.`
-          );
-        }
+        if (!isExplicitRoot) continue;
         plannedActive.add(id);
         if (session.archived) {
           plan.targets.push({
@@ -1885,6 +1891,16 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
     for (const unit of plan.units) {
       for (const [id, session] of unit.members) {
         if (plannedActive.has(id) || !session.archived) continue;
+        if (blockedRestoreCandidates.has(id)) {
+          plan.remainingArchived.push({
+            sessionId: id as SessionID,
+            reason:
+              session.archived_reason === PARENT_ARCHIVED_REASON
+                ? 'archived_ancestor'
+                : 'independent_reason',
+          });
+          continue;
+        }
         if (session.archived_reason !== PARENT_ARCHIVED_REASON) {
           plan.remainingArchived.push({ sessionId: id as SessionID, reason: 'independent_reason' });
           continue;
@@ -1932,7 +1948,7 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
     for (const unit of plan.units) {
       const unitTargets = plan.targets.filter((target) => target.unitKey === unit.key);
       if (unitTargets.length === 0) continue;
-      const unitChanged = await runWithTenantDatabaseTransaction(
+      const unitOutcome = await runWithTenantDatabaseTransaction(
         this.db,
         tenantId,
         async (operationDb) => {
@@ -1963,6 +1979,21 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
             branchRepo
           );
           if (denial) throw denial;
+          const applicableTargets: ArchivePlannedTarget[] = [];
+          for (const target of unitTargets) {
+            const current = currentMembersById.get(target.session.session_id);
+            if (!current) throw new NotFound('An archive target no longer exists');
+            const currentReason = current.archived ? (current.archived_reason ?? null) : null;
+            const observedReason = target.session.archived
+              ? (target.session.archived_reason ?? null)
+              : null;
+            const matchesObserved =
+              current.archived === target.session.archived && currentReason === observedReason;
+            if (matchesObserved) applicableTargets.push(target);
+          }
+
+          let writeTargets = applicableTargets;
+          let currentRemaining: SessionArchiveResult['remainingArchived'] | null = null;
           if (!plan.archived) {
             const currentGraphs = new Map<string, ArchiveBranchGraph>();
             for (const branchId of new Set(currentMembers.map((member) => member.branch_id))) {
@@ -1990,25 +2021,29 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
               new Map(),
               sessionRepo,
               new SessionRelationshipRepository(operationDb),
-              branchRepo
+              branchRepo,
+              new Set(applicableTargets.map((target) => target.session.session_id))
             );
             const currentlyRestorable = new Set(
               currentPlan.targets.map((target) => target.session.session_id)
             );
-            for (const target of unitTargets) {
-              const current = currentUnit.members.get(target.session.session_id);
-              if (current?.archived && !currentlyRestorable.has(current.session_id)) {
-                throw new Conflict('Archive restore eligibility changed. Retry the operation.');
-              }
-            }
+            writeTargets = applicableTargets.filter((target) =>
+              currentlyRestorable.has(target.session.session_id)
+            );
+            currentRemaining = currentPlan.remainingArchived;
           }
-          return sessionRepo.updateArchiveStateForTargets(
-            unitTargets.map((target) => ({
-              id: target.session.session_id,
-              archived: target.archived,
-              archivedReason: target.archivedReason,
-            }))
-          );
+          return {
+            changed: await sessionRepo.updateArchiveStateForTargets(
+              writeTargets.map((target) => ({
+                id: target.session.session_id,
+                archived: target.archived,
+                archivedReason: target.archivedReason,
+              }))
+            ),
+            currentMembers,
+            writeTargetIds: new Set(writeTargets.map((target) => target.session.session_id)),
+            currentRemaining,
+          };
         }
       ).catch((error) => {
         if (
@@ -2026,11 +2061,37 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
               reason: 'insufficient_permission',
             });
           }
-          return [];
+          return {
+            changed: [],
+            currentMembers: [],
+            writeTargetIds: new Set<string>(),
+            currentRemaining: null,
+          };
         }
         throw error;
       });
-      for (const session of unitChanged) {
+      if (unitOutcome.currentMembers.length > 0) {
+        for (const session of unitOutcome.currentMembers) {
+          unit.members.set(session.session_id, session);
+        }
+        plan.targets = plan.targets.filter(
+          (target) =>
+            target.unitKey !== unit.key || unitOutcome.writeTargetIds.has(target.session.session_id)
+        );
+      }
+      if (unitOutcome.currentRemaining) {
+        const memberIds = new Set(unit.members.keys());
+        const remainingById = new Map(
+          plan.remainingArchived
+            .filter(({ sessionId }) => !memberIds.has(sessionId))
+            .map((remaining) => [remaining.sessionId, remaining])
+        );
+        for (const remaining of unitOutcome.currentRemaining) {
+          remainingById.set(remaining.sessionId, remaining);
+        }
+        plan.remainingArchived = [...remainingById.values()];
+      }
+      for (const session of unitOutcome.changed) {
         emitServiceEvent(this.app, {
           path: 'sessions',
           event: 'patched',
@@ -2039,7 +2100,7 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
           id: session.session_id,
         });
       }
-      changed.push(...unitChanged);
+      changed.push(...unitOutcome.changed);
     }
     if (skippedUnitKeys.size > 0) {
       plan.units = plan.units.filter((unit) => !skippedUnitKeys.has(unit.key));
@@ -2107,8 +2168,11 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
       ? plan.targets.filter((target) => target.archived).length
       : (changed ?? []).filter((session) => session.archived).length;
     const total = dryRun ? plan.targets.length : (changed ?? []).length;
+    const currentRoot = plan.units
+      .map((unit) => unit.members.get(root.session_id))
+      .find((session): session is Session => session !== undefined);
     return {
-      session: changedById.get(root.session_id) ?? root,
+      session: changedById.get(root.session_id) ?? currentRoot ?? root,
       dryRun,
       wouldChangeCount: plan.targets.length,
       affectedSessions: changed ?? [],

@@ -135,6 +135,27 @@ async function linkRemote(db: any, source: Session, target: Session): Promise<vo
   });
 }
 
+function changeArchiveStateBeforeCurrentRead(
+  matchIds: SessionID[],
+  update: {
+    id: SessionID;
+    archived: boolean;
+    archivedReason: NonNullable<Session['archived_reason']> | null;
+  }
+) {
+  const originalFindByIds = SessionRepository.prototype.findByIds;
+  let injected = false;
+  return vi
+    .spyOn(SessionRepository.prototype, 'findByIds')
+    .mockImplementation(async function (ids) {
+      if (!injected && matchIds.every((id) => ids.includes(id))) {
+        injected = true;
+        await this.updateArchiveStateForTargets([update]);
+      }
+      return originalFindByIds.call(this, ids);
+    });
+}
+
 async function getArchivedState(
   db: any,
   sessionId: SessionID
@@ -281,6 +302,92 @@ describe('SessionsService archive engine', () => {
       ARCHIVED('btw_completed')
     );
     await expect(getArchivedState(db, manualChild.session_id)).resolves.toEqual(ARCHIVED('manual'));
+  });
+
+  dbTest(
+    'preserves an implied descendant manually archived after cascade planning',
+    async ({ db }) => {
+      const service = new SessionsService(db, STUB_APP);
+      const branchId = await createBranch(db, 'stale-archive-child');
+      const parent = await createSession(db, branchId);
+      const child = await createSession(db, branchId, childOf(parent));
+      const findByIds = changeArchiveStateBeforeCurrentRead([parent.session_id, child.session_id], {
+        id: child.session_id,
+        archived: true,
+        archivedReason: 'manual',
+      });
+
+      const result = await service.archive(parent.session_id, {
+        includeRemoteChildren: false,
+      });
+
+      findByIds.mockRestore();
+      expect(result).toMatchObject({
+        count: 1,
+        wouldChangeCount: 1,
+        archivedCount: 1,
+        localCount: 1,
+        remoteCount: 0,
+        runningCount: 0,
+      });
+      expect(result.affectedSessions.map((session) => session.session_id)).toEqual([
+        parent.session_id,
+      ]);
+      await expect(getArchivedState(db, parent.session_id)).resolves.toEqual(ARCHIVED('manual'));
+      await expect(getArchivedState(db, child.session_id)).resolves.toEqual(ARCHIVED('manual'));
+    }
+  );
+
+  dbTest('does not recount or re-emit a root archived after planning', async ({ db }) => {
+    const { app, emit } = makeEmittingApp();
+    const service = new SessionsService(db, app);
+    const branchId = await createBranch(db, 'concurrent-root-archive');
+    const root = await createSession(db, branchId);
+    const findByIds = changeArchiveStateBeforeCurrentRead([root.session_id], {
+      id: root.session_id,
+      archived: true,
+      archivedReason: 'manual',
+    });
+
+    const result = await service.archive(root.session_id, { includeRemoteChildren: false });
+
+    findByIds.mockRestore();
+    expect(result).toMatchObject({
+      count: 0,
+      wouldChangeCount: 0,
+      archivedCount: 0,
+      session: ARCHIVED('manual'),
+    });
+    expect(result.affectedSessions).toEqual([]);
+    expect(emit).not.toHaveBeenCalled();
+    await expect(getArchivedState(db, root.session_id)).resolves.toEqual(ARCHIVED('manual'));
+  });
+
+  dbTest('does not recount or re-emit a root restored after planning', async ({ db }) => {
+    const { app, emit } = makeEmittingApp();
+    const service = new SessionsService(db, app);
+    const branchId = await createBranch(db, 'concurrent-root-restore');
+    const root = await createSession(db, branchId);
+    await service.archive(root.session_id, { includeRemoteChildren: false });
+    emit.mockClear();
+    const findByIds = changeArchiveStateBeforeCurrentRead([root.session_id], {
+      id: root.session_id,
+      archived: false,
+      archivedReason: null,
+    });
+
+    const result = await service.unarchive(root.session_id, { includeRemoteChildren: false });
+
+    findByIds.mockRestore();
+    expect(result).toMatchObject({
+      count: 0,
+      wouldChangeCount: 0,
+      unarchivedCount: 0,
+      session: ACTIVE,
+    });
+    expect(result.affectedSessions).toEqual([]);
+    expect(emit).not.toHaveBeenCalled();
+    await expect(getArchivedState(db, root.session_id)).resolves.toEqual(ACTIVE);
   });
 
   dbTest('honors includeChildren false and rejects generic archive patches', async ({ db }) => {
@@ -753,35 +860,189 @@ describe('SessionsService archive engine', () => {
   );
 
   dbTest(
-    'rejects a restore when an implied descendant gains an independent archive reason after planning',
+    'replans a restore after an intermediate descendant gains an independent reason',
     async ({ db }) => {
       const service = new SessionsService(db, STUB_APP);
       const branchId = await createBranch(db, 'stale-restore-reason');
-      const parent = await createSession(db, branchId);
-      const child = await createSession(db, branchId, childOf(parent));
-      await service.archive(parent.session_id, { includeRemoteChildren: false });
+      const root = await createSession(db, branchId);
+      const intermediate = await createSession(db, branchId, childOf(root));
+      const leaf = await createSession(db, branchId, childOf(intermediate));
+      await service.archive(root.session_id, { includeRemoteChildren: false });
 
-      const originalFindByIds = SessionRepository.prototype.findByIds;
-      const findByIds = vi
-        .spyOn(SessionRepository.prototype, 'findByIds')
-        .mockImplementation(async function (ids) {
-          const rows = await originalFindByIds.call(this, ids);
-          if (ids.includes(parent.session_id) && ids.includes(child.session_id)) {
-            return rows.map((row) =>
-              row.session_id === child.session_id
-                ? { ...row, archived_reason: 'manual' as const }
-                : row
-            );
-          }
-          return rows;
-        });
+      const findByIds = changeArchiveStateBeforeCurrentRead(
+        [root.session_id, intermediate.session_id, leaf.session_id],
+        {
+          id: intermediate.session_id,
+          archived: true,
+          archivedReason: 'manual',
+        }
+      );
 
-      await expect(
-        service.unarchive(parent.session_id, { includeRemoteChildren: false })
-      ).rejects.toThrow(/restore eligibility changed/i);
+      const result = await service.unarchive(root.session_id, {
+        includeRemoteChildren: false,
+      });
       findByIds.mockRestore();
 
-      await expect(getArchivedState(db, parent.session_id)).resolves.toEqual(ARCHIVED('manual'));
+      expect(result).toMatchObject({ count: 1, wouldChangeCount: 1, unarchivedCount: 1 });
+      expect(result.remainingArchived).toEqual([
+        { sessionId: intermediate.session_id, reason: 'independent_reason' },
+        { sessionId: leaf.session_id, reason: 'archived_ancestor' },
+      ]);
+      await expect(getArchivedState(db, root.session_id)).resolves.toEqual(ACTIVE);
+      await expect(getArchivedState(db, intermediate.session_id)).resolves.toEqual(
+        ARCHIVED('manual')
+      );
+      await expect(getArchivedState(db, leaf.session_id)).resolves.toEqual(
+        ARCHIVED('parent_archived')
+      );
+    }
+  );
+
+  dbTest(
+    'does not restore beneath an implied descendant archived after restore planning',
+    async ({ db }) => {
+      const { app, emit } = makeEmittingApp();
+      const service = new SessionsService(db, app);
+      const branchId = await createBranch(db, 'stale-restore-implied-cascade');
+      const root = await createSession(db, branchId, ARCHIVED('manual'));
+      const intermediate = await createSession(db, branchId, childOf(root));
+      const leaf = await createSession(db, branchId, {
+        ...ARCHIVED('parent_archived'),
+        ...childOf(intermediate),
+      });
+      const findByIds = changeArchiveStateBeforeCurrentRead(
+        [root.session_id, intermediate.session_id, leaf.session_id],
+        {
+          id: intermediate.session_id,
+          archived: true,
+          archivedReason: 'parent_archived',
+        }
+      );
+
+      const result = await service.unarchive(root.session_id, {
+        includeRemoteChildren: false,
+      });
+      findByIds.mockRestore();
+
+      expect(result).toMatchObject({
+        count: 1,
+        wouldChangeCount: 1,
+        unarchivedCount: 1,
+        localCount: 1,
+        remoteCount: 0,
+      });
+      expect(result.affectedSessions.map((session) => session.session_id)).toEqual([
+        root.session_id,
+      ]);
+      expect(result.remainingArchived).toEqual([
+        { sessionId: intermediate.session_id, reason: 'archived_ancestor' },
+        { sessionId: leaf.session_id, reason: 'archived_ancestor' },
+      ]);
+      expect(emit).toHaveBeenCalledTimes(1);
+      expect(emit.mock.calls.map((call) => (call[1] as Session).session_id)).toEqual([
+        root.session_id,
+      ]);
+      await expect(getArchivedState(db, root.session_id)).resolves.toEqual(ACTIVE);
+      await expect(getArchivedState(db, intermediate.session_id)).resolves.toEqual(
+        ARCHIVED('parent_archived')
+      );
+      await expect(getArchivedState(db, leaf.session_id)).resolves.toEqual(
+        ARCHIVED('parent_archived')
+      );
+    }
+  );
+
+  dbTest(
+    'does not restore a remote unit beneath its target archived after restore planning',
+    async ({ db }) => {
+      const { app, emit } = makeEmittingApp();
+      const service = new SessionsService(db, app);
+      const sourceBranchId = await createBranch(db, 'stale-remote-restore-source');
+      const targetBranchId = await createBranch(db, 'stale-remote-restore-target');
+      const root = await createSession(db, sourceBranchId, ARCHIVED('manual'));
+      const remoteTarget = await createSession(db, targetBranchId);
+      const leaf = await createSession(db, targetBranchId, {
+        ...ARCHIVED('parent_archived'),
+        ...childOf(remoteTarget),
+      });
+      await linkRemote(db, root, remoteTarget);
+      const findByIds = changeArchiveStateBeforeCurrentRead(
+        [remoteTarget.session_id, leaf.session_id],
+        {
+          id: remoteTarget.session_id,
+          archived: true,
+          archivedReason: 'parent_archived',
+        }
+      );
+
+      const result = await service.unarchive(root.session_id);
+      findByIds.mockRestore();
+
+      expect(result).toMatchObject({
+        count: 1,
+        wouldChangeCount: 1,
+        unarchivedCount: 1,
+        localCount: 1,
+        remoteCount: 0,
+      });
+      expect(result.affectedSessions.map((session) => session.session_id)).toEqual([
+        root.session_id,
+      ]);
+      expect(result.remainingArchived).toEqual([
+        { sessionId: remoteTarget.session_id, reason: 'archived_ancestor' },
+        { sessionId: leaf.session_id, reason: 'archived_ancestor' },
+      ]);
+      expect(emit).toHaveBeenCalledTimes(1);
+      expect(emit.mock.calls.map((call) => (call[1] as Session).session_id)).toEqual([
+        root.session_id,
+      ]);
+      await expect(getArchivedState(db, root.session_id)).resolves.toEqual(ACTIVE);
+      await expect(getArchivedState(db, remoteTarget.session_id)).resolves.toEqual(
+        ARCHIVED('parent_archived')
+      );
+      await expect(getArchivedState(db, leaf.session_id)).resolves.toEqual(
+        ARCHIVED('parent_archived')
+      );
+    }
+  );
+
+  dbTest(
+    'keeps descendants archived when an explicit restore root gains an independent reason',
+    async ({ db }) => {
+      const { app, emit } = makeEmittingApp();
+      const service = new SessionsService(db, app);
+      const branchId = await createBranch(db, 'stale-restore-root-reason');
+      const root = await createSession(db, branchId);
+      const child = await createSession(db, branchId, childOf(root));
+      await service.archive(root.session_id, { includeRemoteChildren: false });
+      emit.mockClear();
+
+      const findByIds = changeArchiveStateBeforeCurrentRead([root.session_id, child.session_id], {
+        id: root.session_id,
+        archived: true,
+        archivedReason: 'btw_completed',
+      });
+
+      const result = await service.unarchive(root.session_id, {
+        includeRemoteChildren: false,
+      });
+      findByIds.mockRestore();
+
+      expect(result).toMatchObject({
+        count: 0,
+        wouldChangeCount: 0,
+        unarchivedCount: 0,
+        session: ARCHIVED('btw_completed'),
+      });
+      expect(result.affectedSessions).toEqual([]);
+      expect(result.remainingArchived).toEqual([
+        { sessionId: root.session_id, reason: 'independent_reason' },
+        { sessionId: child.session_id, reason: 'archived_ancestor' },
+      ]);
+      expect(emit).not.toHaveBeenCalled();
+      await expect(getArchivedState(db, root.session_id)).resolves.toEqual(
+        ARCHIVED('btw_completed')
+      );
       await expect(getArchivedState(db, child.session_id)).resolves.toEqual(
         ARCHIVED('parent_archived')
       );
@@ -818,7 +1079,7 @@ describe('SessionsService archive engine', () => {
   });
 
   dbTest(
-    'rejects a restore when an incoming remote source becomes archived after planning',
+    'replans a restore when an incoming remote source becomes archived after planning',
     async ({ db }) => {
       const service = new SessionsService(db, STUB_APP);
       const creatorBranchId = await createBranch(db, 'stale-restore-creator');
@@ -844,12 +1105,16 @@ describe('SessionsService archive engine', () => {
           return rows;
         });
 
-      await expect(
-        service.unarchive(parent.session_id, { includeRemoteChildren: false })
-      ).rejects.toThrow(/restore eligibility changed/i);
+      const result = await service.unarchive(parent.session_id, {
+        includeRemoteChildren: false,
+      });
       findByIds.mockRestore();
 
-      await expect(getArchivedState(db, parent.session_id)).resolves.toEqual(ARCHIVED('manual'));
+      expect(result).toMatchObject({ count: 1, wouldChangeCount: 1, unarchivedCount: 1 });
+      expect(result.remainingArchived).toEqual([
+        { sessionId: child.session_id, reason: 'archived_ancestor' },
+      ]);
+      await expect(getArchivedState(db, parent.session_id)).resolves.toEqual(ACTIVE);
       await expect(getArchivedState(db, child.session_id)).resolves.toEqual(
         ARCHIVED('parent_archived')
       );
@@ -993,6 +1258,25 @@ describe('SessionsService archive engine', () => {
     },
     120_000
   );
+
+  dbTest('preserves a branch session manually archived after restore selection', async ({ db }) => {
+    const service = new SessionsService(db, STUB_APP);
+    const branchId = await createBranch(db, 'stale-branch-restore');
+    const session = await createSession(db, branchId);
+    expect((await service.archiveBranchSessions(branchId as BranchID)).count).toBe(1);
+
+    const findByIds = changeArchiveStateBeforeCurrentRead([session.session_id], {
+      id: session.session_id,
+      archived: true,
+      archivedReason: 'manual',
+    });
+
+    const result = await service.unarchiveBranchSessions(branchId as BranchID);
+
+    findByIds.mockRestore();
+    expect(result).toEqual({ affectedSessions: [], count: 0 });
+    await expect(getArchivedState(db, session.session_id)).resolves.toEqual(ARCHIVED('manual'));
+  });
 
   dbTest(
     'ignores a stale reason on an active row and clears reasons on restore',
