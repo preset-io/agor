@@ -96,7 +96,10 @@ export class OAuthCodeExchangeError extends Error {
       | 'client_registration_invalidated'
       | 'transport_ambiguous'
       | 'response_ambiguous',
-    /** Closed classification only; arbitrary provider payloads are never retained. */
+    /**
+     * Closed classification set only from a structured pinned token-endpoint
+     * response; arbitrary provider payloads and front-channel errors are never retained.
+     */
     readonly invalidClientRegistration = false
   ) {
     super(message);
@@ -2216,32 +2219,40 @@ export async function completeMCPOAuthFlow(
  * @returns Object with code and state, or throws if invalid
  */
 export function parseOAuthCallback(callbackUrl: string): {
-  code: string;
+  code: string | null;
   state: string;
   issuer?: string;
+  /** Closed front-channel outcome; the provider's arbitrary error value is discarded. */
+  authorizationRejected: boolean;
 } {
   try {
     const url = new URL(callbackUrl);
     const code = url.searchParams.get('code');
     const state = url.searchParams.get('state');
 
-    if (!code) {
-      const error = url.searchParams.get('error');
-      if (error) {
-        throw new Error('OAuth provider rejected authorization');
-      }
-      throw new Error('No authorization code in callback URL');
-    }
-
     if (!state) {
       throw new Error('No state parameter in callback URL');
     }
 
-    return { code, state, issuer: url.searchParams.get('iss') ?? undefined };
-  } catch (e) {
-    if (e instanceof Error && e.message === 'OAuth provider rejected authorization') {
-      throw e;
+    if (url.searchParams.has('error')) {
+      return {
+        code: null,
+        state,
+        issuer: url.searchParams.get('iss') ?? undefined,
+        authorizationRejected: true,
+      };
     }
+    if (!code) {
+      throw new Error('No authorization code in callback URL');
+    }
+
+    return {
+      code,
+      state,
+      issuer: url.searchParams.get('iss') ?? undefined,
+      authorizationRejected: false,
+    };
+  } catch {
     // The URL can contain the one-shot authorization code and state. Never
     // copy either capability into an exception that a caller may later log.
     throw new Error('Invalid OAuth callback URL');

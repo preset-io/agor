@@ -415,6 +415,21 @@ describe('completeMCPOAuthFlow token exchange', () => {
       expect(String(error)).not.toContain(callback);
     }
   });
+
+  it('returns only closed front-channel rejection evidence and the state capability', () => {
+    const parsed = parseOAuthCallback(
+      'https://agor.example.test/mcp-servers/oauth-callback?error=invalid_client&error_description=SECRET&state=state'
+    );
+
+    expect(parsed).toEqual({
+      code: null,
+      state: 'state',
+      issuer: undefined,
+      authorizationRejected: true,
+    });
+    expect(JSON.stringify(parsed)).not.toContain('invalid_client');
+    expect(JSON.stringify(parsed)).not.toContain('SECRET');
+  });
 });
 
 // ---------------------------------------------------------------------------

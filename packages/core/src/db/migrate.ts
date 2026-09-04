@@ -144,6 +144,7 @@ const MIGRATION_IMPACT_REGISTRY = createMigrationImpactRegistry([
     '0099_shared_session_prompting',
     '0100_claude_oauth_attempts',
     '0101_mcp_oauth_client_registrations',
+    '0102_oauth_authority_watermark_reconciliation',
     '0102_shared_session_prompting',
   ].map(
     (name) =>
@@ -475,20 +476,7 @@ export async function checkMigrationStatus(db: Database): Promise<{
       maxAppliedMillis = row ? Number(row.max_ts ?? 0) : 0;
     }
 
-    // Mirror Drizzle's logic: pending if folderMillis > last applied created_at
-    const pending = journalEntries.filter((e) => e.when > maxAppliedMillis).map((e) => e.tag);
-    const applied = journalEntries.filter((e) => e.when <= maxAppliedMillis).map((e) => e.tag);
-
-    // The database has been migrated by a newer binary than this one when its
-    // watermark is past every migration this binary knows about.
-    const dbAheadOfBinary = maxAppliedMillis > journalMaxWhen;
-
-    return {
-      hasPending: pending.length > 0,
-      pending,
-      applied,
-      dbAheadOfBinary,
-    };
+    return classifyMigrationWatermark(journalEntries, maxAppliedMillis, journalMaxWhen);
   } catch (error) {
     const rootCause = getRootCause(error);
     const rootMsg =
@@ -500,6 +488,35 @@ export async function checkMigrationStatus(db: Database): Promise<{
       error
     );
   }
+}
+
+/** Pure form of Drizzle's timestamp-only status comparison. */
+export function classifyMigrationWatermark(
+  journalEntries: ReadonlyArray<{ tag: string; when: number }>,
+  maxAppliedMillis: number,
+  journalMaxWhen = journalEntries.reduce((max, entry) => Math.max(max, entry.when), 0)
+): {
+  hasPending: boolean;
+  pending: string[];
+  applied: string[];
+  dbAheadOfBinary: boolean;
+} {
+  // Mirror Drizzle's logic: pending if folderMillis > last applied created_at.
+  const pending = journalEntries
+    .filter((entry) => entry.when > maxAppliedMillis)
+    .map((entry) => entry.tag);
+  const applied = journalEntries
+    .filter((entry) => entry.when <= maxAppliedMillis)
+    .map((entry) => entry.tag);
+
+  return {
+    hasPending: pending.length > 0,
+    pending,
+    applied,
+    // This is the daemon downgrade fence: a database migrated past every
+    // watermark known by the binary is unsafe for that binary to interpret.
+    dbAheadOfBinary: maxAppliedMillis > journalMaxWhen,
+  };
 }
 
 /**

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  classifyMigrationWatermark,
   createMigrationImpactRegistry,
   getMigrationImpact,
   introspectMigrationStatus,
@@ -9,6 +10,20 @@ import {
 } from './migrate';
 
 describe('migration status introspection', () => {
+  it('classifies a later reconciliation watermark as database-ahead for an old binary', () => {
+    expect(
+      classifyMigrationWatermark(
+        [{ tag: '0100_mcp_oauth_client_registrations', when: 1_788_292_800_000 }],
+        1_788_379_200_000
+      )
+    ).toEqual({
+      hasPending: false,
+      pending: [],
+      applied: ['0100_mcp_oauth_client_registrations'],
+      dbAheadOfBinary: true,
+    });
+  });
+
   it('reports an offline pending migration and aggregate cutover requirement', () => {
     const report = introspectMigrationStatus('postgresql', {
       applied: ['0000_init'],
@@ -140,6 +155,23 @@ describe('migration status introspection', () => {
     });
   });
 
+  it('reports the OAuth authority collision reconciliation as an offline incompatible cutover', () => {
+    const migration = introspectMigrationStatus('postgresql', {
+      applied: ['0099_shared_session_prompting'],
+      pending: ['0102_oauth_authority_watermark_reconciliation'],
+      dbAheadOfBinary: false,
+    }).pendingMigrations[0];
+
+    expect(migration).toMatchObject({
+      requiresOfflineCutover: true,
+      impact: {
+        classification: 'protocol',
+        userAction: 'required',
+        rollbackCompatibility: 'incompatible',
+      },
+    });
+  });
+
   it('uses an explicit conservative representation for absent impact metadata', () => {
     expect(getMigrationImpact('9999_unregistered')).toEqual({
       classification: 'unknown',
@@ -160,10 +192,11 @@ describe('migration status introspection', () => {
         '0091_codex_device_auth_attempts',
         '0100_claude_oauth_attempts',
         '0101_mcp_oauth_client_registrations',
+        '0102_oauth_authority_watermark_reconciliation',
       ],
     });
 
-    expect(offlineMigrations).toHaveLength(7);
+    expect(offlineMigrations).toHaveLength(8);
     for (const name of offlineMigrations) {
       expect(getMigrationImpact(name).classification).not.toBe('unknown');
     }
@@ -195,6 +228,7 @@ describe('migration status introspection', () => {
       '0091_codex_device_auth_attempts',
       '0100_claude_oauth_attempts',
       '0101_mcp_oauth_client_registrations',
+      '0102_oauth_authority_watermark_reconciliation',
       'unregistered',
     ]) {
       expect(getMigrationImpact(name).summary.length).toBeLessThanOrEqual(

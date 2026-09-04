@@ -3282,10 +3282,13 @@ export async function registerMCPServices(
     return 'OAuth flow did not complete. Please start a new flow.';
   };
 
-  const invalidateProviderRejectedClient = async (
+  const invalidateTokenEndpointRejectedClient = async (
     pendingFlow: PendingOAuthFlow,
     error: unknown
   ): Promise<void> => {
+    // OAuthCodeExchangeError's invalid-client bit is set only by the pinned
+    // token-endpoint response parser. Never feed browser query parameters into
+    // this boundary.
     if (
       !(error instanceof OAuthCodeExchangeError) ||
       !error.invalidClientRegistration ||
@@ -3331,35 +3334,12 @@ export async function registerMCPServices(
         // Reject any awaitToken() promise from the originating flow so the
         // caller (discover / test-oauth) can surface the failure.
         if (state) {
-          if (
-            durableOAuthFlows &&
-            durableOAuthClientRegistrations &&
-            (error === 'invalid_client' || error === 'unauthorized_client')
-          ) {
-            const claimed = await durableOAuthFlows.claimForCallback(state);
-            if (claimed.outcome === 'claimed') {
-              const rejected = pendingFromDurableClaim(
-                durableOAuthFlows.openClaim(claimed.flow, state)
-              );
-              const invalidatedRegistration = Boolean(rejected.context.clientRegistrationId);
-              if (invalidatedRegistration) {
-                await invalidateProviderRejectedClient(
-                  rejected,
-                  new OAuthCodeExchangeError(
-                    'The provider rejected the OAuth client registration.',
-                    false,
-                    'client_registration_invalidated',
-                    true
-                  )
-                );
-              }
-              await durableOAuthFlows.finish(
-                claimed.flow,
-                'failed',
-                invalidatedRegistration ? 'client_registration_invalidated' : 'provider_rejected'
-              );
-            }
-          } else if (durableOAuthFlows) {
+          if (durableOAuthFlows) {
+            // This browser-controlled response is not authenticated evidence
+            // from the token endpoint. Even invalid_client/unauthorized_client
+            // may therefore consume only this exact state capability; fleet
+            // DCR authority is invalidated exclusively from the pinned
+            // server-to-server exchange path below.
             await durableOAuthFlows.failPendingCallback(state, 'authorization_denied');
           } else {
             const pending = pendingOAuthFlows.get(state);
@@ -3457,7 +3437,7 @@ export async function registerMCPServices(
         sendOAuthResultPage(res, true, 'OAuth authentication was successful.');
       } catch (innerErr) {
         try {
-          await invalidateProviderRejectedClient(pendingFlow, innerErr);
+          await invalidateTokenEndpointRejectedClient(pendingFlow, innerErr);
         } catch {
           console.warn('[OAuth Callback] Client-registration invalidation could not be persisted');
         }
@@ -4670,11 +4650,13 @@ export async function registerMCPServices(
         let code: string;
         let state: string;
         let issuer: string | undefined;
+        let authorizationRejected = false;
         if ('callback_url' in data) {
           const parsed = parseOAuthCallback(data.callback_url);
-          code = parsed.code;
+          code = parsed.code ?? '';
           state = parsed.state;
           issuer = parsed.issuer;
+          authorizationRejected = parsed.authorizationRejected;
         } else {
           code = data.code;
           state = data.state;
@@ -4727,6 +4709,21 @@ export async function registerMCPServices(
           markLocalOAuthAttempt(pendingFlow, 'exchanging');
         }
 
+        if (authorizationRejected) {
+          if (pendingFlow.durableRecord) {
+            await durableOAuthFlows!.finish(
+              pendingFlow.durableRecord,
+              'failed',
+              'authorization_denied'
+            );
+          } else {
+            markLocalOAuthAttempt(pendingFlow, 'failed', 'authorization_denied');
+          }
+          emitOAuthCompletion(pendingFlow, false);
+          pendingFlow.tokenReject?.(new Error('Authorization was not completed'));
+          return oauthCompletionFailure('authorization_denied', pendingFlow.mcpServerId);
+        }
+
         await assertPendingFlowStillAuthorized(pendingFlow);
         const tokenResponse = await completeMCPOAuthFlow(pendingFlow.context, code, state, {
           cacheToken: false,
@@ -4739,7 +4736,7 @@ export async function registerMCPServices(
       } catch (error) {
         if (pendingFlow) {
           try {
-            await invalidateProviderRejectedClient(pendingFlow, error);
+            await invalidateTokenEndpointRejectedClient(pendingFlow, error);
           } catch {
             console.warn(
               '[OAuth Complete] Client-registration invalidation could not be persisted'

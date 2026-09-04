@@ -137,7 +137,12 @@ Each browser attempt records the exact UUIDv7 registration ID whose client it
 used. An exact `invalid_client` or `unauthorized_client` OAuth response on a
 400/401 token exchange (or the equivalent structured provider failure) CAS-
 invalidates only that current row, allowing the next start to register anew.
-Network errors and other ambiguous provider failures never invalidate a client.
+That evidence must come from Agor's pinned server-to-server token request after
+state, issuer, and live authority validation. A browser/front-channel
+`error=invalid_client` or `error=unauthorized_client` is unauthenticated input:
+it fails and consumes only the state-bound attempt, even for a now-demoted
+initiator or a shared server, and never changes fleet DCR authority. Network
+errors and other ambiguous provider failures likewise never invalidate a client.
 An administrator may invoke `mcp-servers/oauth-client-registration-reset` for a
 saved server before callback completion; the tenant-scoped operation rechecks
 and row-locks current admin authority after acquiring the grant-configuration
@@ -264,10 +269,17 @@ or database error detail.
    `agor db migrate --offline-cutover`. It deletes legacy OAuth grant rows
    because plaintext/unfenced rows are structurally incompatible; users must
    reconnect.
-3. Apply additive PostgreSQL migration `0101_mcp_oauth_client_registrations` before OAuth
-   activation. Do not canary or mix old/new cohorts: old constrained-HA daemons
-   keep OAuth gated and do not implement the DCR authority. Start only the new
-   cohort after migrations complete.
+3. Apply PostgreSQL migrations through
+   `0102_oauth_authority_watermark_reconciliation` before OAuth activation. Do
+   not canary or mix old/new cohorts: old constrained-HA daemons keep OAuth
+   gated and do not implement the final DCR authority. `0102` also repairs
+   databases that ran old PR head `b0585d76`, whose DCR migration collided with
+   the final timestamp-only watermark: it creates the skipped Claude authority,
+   discards the incompatible generation/sequence DCR authority so reconnect
+   registers a fresh client, and recreates the final UUID/CAS table. Its later
+   ledger watermark makes pre-final daemons reject the database as ahead. Start
+   only the new cohort after migrations complete; rollback requires the
+   pre-cutover backup.
 4. Resume OAuth and verify cross-daemon callback and rotating refresh.
 5. Monitor stable categories/statuses only. Never log state, code, endpoints,
    provider bodies/descriptions, PKCE, client credentials, or tokens.
