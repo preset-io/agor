@@ -968,6 +968,12 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
       const baseUrl = await getBaseUrl();
       const now = new Date();
       const result = await this.db.transaction(async (tx) => {
+        await lockRowForUpdate(
+          txAsDb(tx),
+          this.db,
+          sessions,
+          inArray(sessions.session_id, fullIds)
+        );
         const currentRows = await select(txAsDb(tx))
           .from(sessions)
           .where(inArray(sessions.session_id, fullIds))

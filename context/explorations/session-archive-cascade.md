@@ -6,7 +6,7 @@ It is the contract the session archive engine implements; the code itself lives
 in the daemon (see "Implementation notes").
 
 **Status:** Implemented (revision 3); see "Implementation notes" for where the
-code lives and the few places the implementation refines this text.  
+code lives and the few places the implementation refines this text.
 **Research baseline:** upstream `main` at
 [`60e7a896`](https://github.com/preset-io/agor/commit/60e7a896d69ac14177c59f906da9e9e176253aa0).
 The archive domain logic is unchanged from the issue audit at

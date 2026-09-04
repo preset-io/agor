@@ -390,6 +390,7 @@ describe('SessionsService archive engine', () => {
         ...childOf(remoteChild),
       });
       await linkRemote(db, parent, remoteChild);
+      const findAll = vi.spyOn(SessionRepository.prototype, 'findAll');
 
       const result = await service.archive(
         parent.session_id,
@@ -416,6 +417,10 @@ describe('SessionsService archive engine', () => {
         },
       ]);
       expect(JSON.stringify(result.units)).not.toContain(targetBranchId);
+      expect(findAll.mock.calls.some(([filter]) => filter?.branchId === targetBranchId)).toBe(
+        false
+      );
+      findAll.mockRestore();
       await expect(getArchivedState(db, parent.session_id)).resolves.toEqual(ARCHIVED('manual'));
       await expect(getArchivedState(db, localChild.session_id)).resolves.toEqual(
         ARCHIVED('parent_archived')
@@ -491,6 +496,97 @@ describe('SessionsService archive engine', () => {
     await expect(getArchivedState(db, child.session_id)).resolves.toMatchObject({
       archived: true,
     });
+  });
+
+  dbTest(
+    'revalidates current branch permission immediately before archive mutation',
+    async ({ db }) => {
+      const service = new SessionsService(db, makeAppWithConfig({ branchRbac: true }));
+      const branchId = await createBranch(db, 'rbac-revalidation', {
+        primary_owner_user_id: OTHER_USER_ID,
+        others_can: 'prompt',
+      });
+      const session = await createSession(db, branchId, { created_by: OTHER_USER_ID });
+      const originalResolveUserAccess = BranchRepository.prototype.resolveUserAccess;
+      let checks = 0;
+      const resolveUserAccess = vi
+        .spyOn(BranchRepository.prototype, 'resolveUserAccess')
+        .mockImplementation(async function (branch, userId) {
+          if (branch.branch_id === branchId) {
+            checks += 1;
+            return {
+              can: checks === 1 ? 'prompt' : 'view',
+              is_owner: false,
+              source: 'others',
+            };
+          }
+          return originalResolveUserAccess.call(this, branch, userId);
+        });
+
+      await expect(
+        service.archive(session.session_id, undefined, externalParams(TEST_USER_ID))
+      ).rejects.toThrow(/prompt/);
+
+      expect(checks).toBe(2);
+      resolveUserAccess.mockRestore();
+      await expect(getArchivedState(db, session.session_id)).resolves.toEqual(ACTIVE);
+    }
+  );
+
+  dbTest('skips a remote unit whose permission is revoked before mutation', async ({ db }) => {
+    const service = new SessionsService(db, makeAppWithConfig({ branchRbac: true }));
+    const sourceBranchId = await createBranch(db, 'revoked-remote-source');
+    const targetBranchId = await createBranch(db, 'revoked-remote-target', {
+      primary_owner_user_id: OTHER_USER_ID,
+      others_can: 'prompt',
+    });
+    const source = await createSession(db, sourceBranchId);
+    const target = await createSession(db, targetBranchId, { created_by: OTHER_USER_ID });
+    await linkRemote(db, source, target);
+
+    const originalResolveUserAccess = BranchRepository.prototype.resolveUserAccess;
+    let targetChecks = 0;
+    const resolveUserAccess = vi
+      .spyOn(BranchRepository.prototype, 'resolveUserAccess')
+      .mockImplementation(async function (branch, userId) {
+        if (branch.branch_id === targetBranchId) {
+          targetChecks += 1;
+          return {
+            can: targetChecks < 3 ? 'prompt' : 'view',
+            is_owner: false,
+            source: 'others',
+          };
+        }
+        return originalResolveUserAccess.call(this, branch, userId);
+      });
+
+    const result = await service.archive(
+      source.session_id,
+      undefined,
+      externalParams(TEST_USER_ID)
+    );
+
+    resolveUserAccess.mockRestore();
+    expect(targetChecks).toBe(3);
+    expect(result.count).toBe(1);
+    expect(result.units).toEqual([
+      {
+        rootSessionId: target.session_id,
+        kind: 'remote',
+        status: 'skipped',
+        changedCount: 0,
+        reason: 'insufficient_permission',
+      },
+      {
+        rootSessionId: source.session_id,
+        kind: 'local',
+        status: 'changed',
+        changedCount: 1,
+        branchId: sourceBranchId,
+      },
+    ]);
+    await expect(getArchivedState(db, source.session_id)).resolves.toEqual(ARCHIVED('manual'));
+    await expect(getArchivedState(db, target.session_id)).resolves.toEqual(ACTIVE);
   });
 
   dbTest(
@@ -585,6 +681,42 @@ describe('SessionsService archive engine', () => {
       const creatorRestored = await service.unarchive(creator.session_id);
       expect(creatorRestored.count).toBe(2);
       await expect(getArchivedState(db, target.session_id)).resolves.toEqual(ACTIVE);
+    }
+  );
+
+  dbTest(
+    'keeps an implied restore archived when an incoming remote source is invisible',
+    async ({ db }) => {
+      const service = new SessionsService(db, STUB_APP);
+      const creatorBranchId = await createBranch(db, 'invisible-creator');
+      const targetBranchId = await createBranch(db, 'invisible-source-target');
+      const creator = await createSession(db, creatorBranchId);
+      const localParent = await createSession(db, targetBranchId);
+      const target = await createSession(db, targetBranchId, childOf(localParent));
+      await linkRemote(db, creator, target);
+      await service.archive(localParent.session_id, { includeRemoteChildren: false });
+
+      const originalFindByIds = SessionRepository.prototype.findByIds;
+      const findByIds = vi
+        .spyOn(SessionRepository.prototype, 'findByIds')
+        .mockImplementation(function (ids) {
+          if (ids.length === 1 && ids[0] === creator.session_id) return Promise.resolve([]);
+          return originalFindByIds.call(this, ids);
+        });
+
+      const restored = await service.unarchive(localParent.session_id, {
+        includeRemoteChildren: false,
+      });
+
+      findByIds.mockRestore();
+      expect(restored.count).toBe(1);
+      expect(restored.remainingArchived).toEqual([
+        { sessionId: target.session_id, reason: 'archived_ancestor' },
+      ]);
+      await expect(getArchivedState(db, localParent.session_id)).resolves.toEqual(ACTIVE);
+      await expect(getArchivedState(db, target.session_id)).resolves.toEqual(
+        ARCHIVED('parent_archived')
+      );
     }
   );
 
@@ -873,6 +1005,12 @@ describe('SessionsService archive engine', () => {
       expect(preview.excludedDescendants.map((session) => session.session_id).sort()).toEqual(
         [recentChild.session_id, oldBusyChild.session_id].sort()
       );
+      expect(preview.descendantsNewerThanCutoff.map((session) => session.session_id)).toEqual([
+        recentChild.session_id,
+      ]);
+      expect(preview.descendantsWithUnfinishedTasks.map((session) => session.session_id)).toEqual([
+        oldBusyChild.session_id,
+      ]);
 
       const all = await service.previewBulkArchive([parent], { policy: 'all', cutoffDate });
       expect(all.wouldArchive).toBe(4);
@@ -930,6 +1068,131 @@ describe('SessionsService archive engine', () => {
     await expect(getArchivedState(db, owned.session_id)).resolves.toEqual(ARCHIVED('manual'));
     await expect(getArchivedState(db, foreign.session_id)).resolves.toEqual(ACTIVE);
     await expect(getArchivedState(db, foreignChild.session_id)).resolves.toEqual(ACTIVE);
+  });
+
+  dbTest('bulk archive removes a newly denied unit from its execution preview', async ({ db }) => {
+    const service = new SessionsService(db, makeAppWithConfig({ branchRbac: true }));
+    const ownedBranchId = await createBranch(db, 'bulk-revalidation-owned');
+    const deniedBranchId = await createBranch(db, 'bulk-revalidation-denied', {
+      primary_owner_user_id: OTHER_USER_ID,
+      others_can: 'prompt',
+    });
+    const cutoffDate = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+    const old = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+    const owned = await createSession(db, ownedBranchId, { last_updated: old });
+    const ownedChild = await createSession(db, ownedBranchId, {
+      ...childOf(owned),
+      last_updated: old,
+    });
+    const ownedRecentChild = await createSession(db, ownedBranchId, childOf(owned));
+    const ownedBusyChild = await createSession(db, ownedBranchId, {
+      ...childOf(owned),
+      last_updated: old,
+    });
+    const denied = await createSession(db, deniedBranchId, {
+      created_by: OTHER_USER_ID,
+      last_updated: old,
+    });
+    const deniedChild = await createSession(db, deniedBranchId, {
+      created_by: OTHER_USER_ID,
+      ...childOf(denied),
+      last_updated: old,
+    });
+    const deniedRecentChild = await createSession(db, deniedBranchId, {
+      created_by: OTHER_USER_ID,
+      ...childOf(denied),
+    });
+    const deniedBusyChild = await createSession(db, deniedBranchId, {
+      created_by: OTHER_USER_ID,
+      ...childOf(denied),
+      last_updated: old,
+    });
+    const taskRepo = new TaskRepository(db);
+    await taskRepo.create({
+      session_id: ownedBusyChild.session_id,
+      full_prompt: 'owned still running',
+      created_by: TEST_USER_ID,
+      status: TaskStatus.RUNNING,
+    });
+    await taskRepo.create({
+      session_id: deniedBusyChild.session_id,
+      full_prompt: 'denied still running',
+      created_by: OTHER_USER_ID,
+      status: TaskStatus.RUNNING,
+    });
+
+    const originalResolveUserAccess = BranchRepository.prototype.resolveUserAccess;
+    let deniedChecks = 0;
+    const resolveUserAccess = vi
+      .spyOn(BranchRepository.prototype, 'resolveUserAccess')
+      .mockImplementation(async function (branch, userId) {
+        if (branch.branch_id === deniedBranchId) {
+          deniedChecks += 1;
+          return {
+            can: deniedChecks <= 2 ? 'prompt' : 'view',
+            is_owner: false,
+            source: 'others',
+          };
+        }
+        return originalResolveUserAccess.call(this, branch, userId);
+      });
+
+    const result = await service.bulkArchive(
+      [owned, denied],
+      { policy: 'eligible', cutoffDate },
+      externalParams(TEST_USER_ID)
+    );
+
+    resolveUserAccess.mockRestore();
+    expect(deniedChecks).toBe(3);
+    expect(result).toMatchObject({
+      count: 2,
+      wouldChangeCount: 2,
+      archivedCount: 2,
+      skippedCount: 1,
+      preview: { wouldArchive: 2 },
+    });
+    expect(result.preview.directRoots.map((session) => session.session_id)).toEqual([
+      owned.session_id,
+    ]);
+    expect(result.preview.impliedDescendants.map((session) => session.session_id)).toEqual([
+      ownedChild.session_id,
+    ]);
+    expect(result.preview.excludedDescendants.map((session) => session.session_id).sort()).toEqual(
+      [ownedRecentChild.session_id, ownedBusyChild.session_id].sort()
+    );
+    expect(result.preview.descendantsNewerThanCutoff.map((session) => session.session_id)).toEqual([
+      ownedRecentChild.session_id,
+    ]);
+    expect(
+      result.preview.descendantsWithUnfinishedTasks.map((session) => session.session_id)
+    ).toEqual([ownedBusyChild.session_id]);
+    expect(result.preview.units).toEqual(
+      expect.arrayContaining([
+        {
+          rootSessionId: denied.session_id,
+          kind: 'local',
+          status: 'skipped',
+          changedCount: 0,
+          reason: 'insufficient_permission',
+        },
+        {
+          rootSessionId: owned.session_id,
+          kind: 'local',
+          status: 'changed',
+          changedCount: 2,
+          branchId: ownedBranchId,
+        },
+      ])
+    );
+    await expect(getArchivedState(db, owned.session_id)).resolves.toEqual(ARCHIVED('manual'));
+    await expect(getArchivedState(db, ownedChild.session_id)).resolves.toEqual(
+      ARCHIVED('parent_archived')
+    );
+    await expect(getArchivedState(db, denied.session_id)).resolves.toEqual(ACTIVE);
+    await expect(getArchivedState(db, deniedChild.session_id)).resolves.toEqual(ACTIVE);
+    await expect(getArchivedState(db, deniedRecentChild.session_id)).resolves.toEqual(ACTIVE);
+    await expect(getArchivedState(db, deniedBusyChild.session_id)).resolves.toEqual(ACTIVE);
   });
 
   dbTest(

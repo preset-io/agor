@@ -30,6 +30,7 @@ import {
   shortId,
   TaskRepository,
   type TenantScopeAwareDatabase,
+  type TenantScopedDatabase,
   UsersRepository,
 } from '@agor/core/db';
 import {
@@ -92,6 +93,10 @@ import {
 import { emitServiceEvent } from '../utils/emit-service-event.js';
 import { parseLastMessageTruncationLength } from '../utils/query-params.js';
 import { deploymentAgenticToolUnavailableMessage } from './agentic-tool-deployment.js';
+import {
+  lockTenantAuthorizationFence,
+  resolveCurrentTenantAuthorityActor,
+} from './tenant-authorization-fence.js';
 
 type MaterializedAgenticToolConfiguration = Awaited<
   ReturnType<typeof materializeAgenticToolConfiguration>
@@ -155,14 +160,21 @@ type ArchivePlannedTarget = {
   unitKey: string;
 };
 
+type ArchiveExcludedImplied = {
+  session: Session;
+  /** Local authorization units whose root closures contain this descendant. */
+  unitKeys: Set<string>;
+};
+
 type ArchiveTransitionPlan = {
   archived: boolean;
+  localFailure: ArchiveTransitionRequest['localFailure'];
   units: ArchiveUnit[];
   unitResults: SessionArchiveUnitResult[];
   targets: ArchivePlannedTarget[];
   remainingArchived: SessionArchiveResult['remainingArchived'];
   /** Implied descendants a bulk eligibility policy left out. */
-  excludedImplied: Session[];
+  excludedImplied: ArchiveExcludedImplied[];
   limitExceeded?: SessionArchiveLimit;
 };
 
@@ -428,9 +440,9 @@ export type SessionBulkArchivePreview = {
   impliedDescendants: Session[];
   /** Descendants `eligible` left out: newer than the cutoff or with unfinished tasks. */
   excludedDescendants: Session[];
-  /** Included descendants newer than the cutoff. */
+  /** Descendants newer than the cutoff, whether included or excluded. */
   descendantsNewerThanCutoff: Session[];
-  /** Included descendants with a nonterminal task. */
+  /** Descendants with a nonterminal task, whether included or excluded. */
   descendantsWithUnfinishedTasks: Session[];
   /** Included descendants whose session status is executing. */
   activeDescendants: Session[];
@@ -1442,10 +1454,11 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
 
   private async loadArchiveBranch(
     cache: Map<string, Branch | null>,
-    branchId: BranchID
+    branchId: BranchID,
+    branchRepo = this.branchRepo
   ): Promise<Branch | null> {
     if (cache.has(branchId)) return cache.get(branchId) ?? null;
-    const branch = await this.branchRepo.findById(branchId);
+    const branch = await branchRepo.findById(branchId);
     cache.set(branchId, branch);
     return branch;
   }
@@ -1454,10 +1467,11 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
     members: Session[],
     archived: boolean,
     params: SessionParams | undefined,
-    branchCache: Map<string, Branch | null>
+    branchCache: Map<string, Branch | null>,
+    branchRepo = this.branchRepo
   ): Promise<Forbidden | null> {
     try {
-      await this.assertCanArchiveSessions(members, archived, params, branchCache);
+      await this.assertCanArchiveSessions(members, archived, params, branchCache, branchRepo);
       return null;
     } catch (error) {
       if (error instanceof Forbidden) return error;
@@ -1472,7 +1486,8 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
     const branchCache = new Map<string, Branch | null>();
     const authorized: ArchiveUnit[] = [];
     const unitResults: SessionArchiveUnitResult[] = [];
-    const excludedImplied: Session[] = [];
+    const excludedImplied: ArchiveExcludedImplied[] = [];
+    const excludedClosureIndexes = new Map<string, Set<number>>();
 
     const skipUnit = (
       unit: Pick<ArchiveUnit, 'kind'>,
@@ -1512,18 +1527,25 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
       }
       const eligible = await request.descendantEligibility([...candidates.values()]);
       for (const [id, session] of candidates) {
-        if (!eligible.has(id)) excludedImplied.push(session);
+        if (!eligible.has(id)) excludedImplied.push({ session, unitKeys: new Set() });
       }
-      for (const closure of closures) {
+      closures.forEach((closure, index) => {
+        for (const member of closure.members) {
+          if (rootIds.has(member.session_id) || eligible.has(member.session_id)) continue;
+          const indexes = excludedClosureIndexes.get(member.session_id) ?? new Set<number>();
+          indexes.add(index);
+          excludedClosureIndexes.set(member.session_id, indexes);
+        }
         closure.members = closure.members.filter(
           (member) => rootIds.has(member.session_id) || eligible.has(member.session_id)
         );
-      }
+      });
     }
 
     // 3. Group closures into local authorization units. Direct roots win over
     //    implied membership when closures overlap.
     const localUnits = new Map<string, ArchiveUnit>();
+    const unitKeyByClosure = new Map<number, string>();
     const closureUnitIndex = new Map<number, number>();
     if (request.grouping === 'root-tree') {
       // Union-find over closures that share a session so overlapping trees
@@ -1561,6 +1583,7 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
         request.grouping === 'branch'
           ? `local:${root.branch_id}`
           : `tree:${representative.session_id}`;
+      unitKeyByClosure.set(index, key);
       let unit = localUnits.get(key);
       if (!unit) {
         unit = {
@@ -1577,6 +1600,12 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
       }
       unit.rootIds.add(root.session_id);
     });
+    for (const excluded of excludedImplied) {
+      for (const index of excludedClosureIndexes.get(excluded.session.session_id) ?? []) {
+        const unitKey = unitKeyByClosure.get(index);
+        if (unitKey) excluded.unitKeys.add(unitKey);
+      }
+    }
 
     // 4. Authorize local units before any traversal leaves them.
     for (const unit of localUnits.values()) {
@@ -1612,13 +1641,20 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
       }
     }
 
+    const authorizedUnitKeys = new Set(authorized.map((unit) => unit.key));
     const plan: ArchiveTransitionPlan = {
       archived: request.archived,
+      localFailure: request.localFailure,
       units: authorized,
       unitResults,
       targets: [],
       remainingArchived: [],
-      excludedImplied,
+      excludedImplied: excludedImplied.flatMap((excluded) => {
+        const unitKeys = new Set(
+          [...excluded.unitKeys].filter((unitKey) => authorizedUnitKeys.has(unitKey))
+        );
+        return unitKeys.size > 0 ? [{ ...excluded, unitKeys }] : [];
+      }),
       ...(limitExceeded && { limitExceeded }),
     };
     if (request.archived) {
@@ -1666,29 +1702,16 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
       }
       const nextFrontier: string[] = [];
       for (const [branchId, branchTargets] of targetsByBranch) {
-        const graph = await this.loadArchiveBranchGraph(graphs, branchId);
-        const members: Session[] = [];
-        for (const target of branchTargets) {
-          members.push(target);
-          if (!request.includeChildren) continue;
-          for (const descendant of this.collectLocalDescendants(graph, target.session_id)) {
-            if (visited.has(descendant.session_id)) continue;
-            visited.add(descendant.session_id);
-            members.push(descendant);
-          }
-        }
-        remoteTargetCount += members.length;
-        if (remoteTargetCount > MAX_ARCHIVE_REMOTE_SESSION_TARGETS) {
-          throw new ArchiveLimitExceededError('remote_session_targets');
-        }
-        const existing = authorized.find((unit) => unit.branchId === branchId);
-        const denial = await this.archiveUnitDenial(
-          members,
+        // Authorize the visible relationship targets before loading any other
+        // sessions from their branch. Session-tier access is checked again for
+        // the complete unit after descendant discovery.
+        const rootDenial = await this.archiveUnitDenial(
+          branchTargets,
           request.archived,
           request.params,
           branchCache
         );
-        if (denial) {
+        if (rootDenial) {
           skipUnit(
             { kind: 'remote' },
             branchTargets.map((target) => target.session_id),
@@ -1696,6 +1719,36 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
           );
           continue;
         }
+        const members: Session[] = [...branchTargets];
+        if (request.includeChildren) {
+          const graph = await this.loadArchiveBranchGraph(graphs, branchId);
+          for (const target of branchTargets) {
+            for (const descendant of this.collectLocalDescendants(graph, target.session_id)) {
+              if (visited.has(descendant.session_id)) continue;
+              visited.add(descendant.session_id);
+              members.push(descendant);
+            }
+          }
+          const denial = await this.archiveUnitDenial(
+            members,
+            request.archived,
+            request.params,
+            branchCache
+          );
+          if (denial) {
+            skipUnit(
+              { kind: 'remote' },
+              branchTargets.map((target) => target.session_id),
+              'insufficient_permission'
+            );
+            continue;
+          }
+        }
+        remoteTargetCount += members.length;
+        if (remoteTargetCount > MAX_ARCHIVE_REMOTE_SESSION_TARGETS) {
+          throw new ArchiveLimitExceededError('remote_session_targets');
+        }
+        const existing = authorized.find((unit) => unit.branchId === branchId);
         let unit = existing;
         if (!unit) {
           remoteUnitCount += 1;
@@ -1833,7 +1886,7 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
         const blocked = parentIds.some((parentId) => {
           if (plannedActive.has(parentId)) return false;
           const parent = lookupSession(parentId) ?? externalSources.get(parentId);
-          return parent?.archived === true;
+          return parent === undefined || parent.archived === true;
         });
         if (blocked) {
           plan.remainingArchived.push({ sessionId: id as SessionID, reason: 'archived_ancestor' });
@@ -1861,16 +1914,59 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
     params?: SessionParams
   ): Promise<Session[]> {
     const changed: Session[] = [];
+    const skippedUnitKeys = new Set<string>();
+    const skippedMemberIds = new Set<string>();
+    const tenantId = params?.tenant?.tenant_id ?? getCurrentTenantId();
     for (const unit of plan.units) {
       const unitTargets = plan.targets.filter((target) => target.unitKey === unit.key);
       if (unitTargets.length === 0) continue;
-      const unitChanged = await this.sessionRepo.updateArchiveStateForTargets(
-        unitTargets.map((target) => ({
-          id: target.session.session_id,
-          archived: target.archived,
-          archivedReason: target.archivedReason,
-        }))
-      );
+      const unitChanged = await runWithTenantDatabaseTransaction(
+        this.db,
+        tenantId,
+        async (operationDb) => {
+          const currentParams = await this.currentArchiveParams(operationDb, params);
+          const sessionRepo = new SessionRepository(operationDb);
+          const memberIds = [...unit.members.keys()] as SessionID[];
+          const currentMembers = await sessionRepo.findByIds(memberIds);
+          if (currentMembers.length !== memberIds.length) {
+            throw new NotFound('An archive target no longer exists');
+          }
+          const denial = await this.archiveUnitDenial(
+            currentMembers,
+            plan.archived,
+            currentParams,
+            new Map(),
+            new BranchRepository(operationDb)
+          );
+          if (denial) throw denial;
+          return sessionRepo.updateArchiveStateForTargets(
+            unitTargets.map((target) => ({
+              id: target.session.session_id,
+              archived: target.archived,
+              archivedReason: target.archivedReason,
+            }))
+          );
+        }
+      ).catch((error) => {
+        if (
+          error instanceof Forbidden &&
+          (unit.kind === 'remote' || plan.localFailure === 'skip')
+        ) {
+          skippedUnitKeys.add(unit.key);
+          for (const memberId of unit.members.keys()) skippedMemberIds.add(memberId);
+          for (const rootSessionId of unit.rootIds) {
+            plan.unitResults.push({
+              rootSessionId: rootSessionId as SessionID,
+              kind: unit.kind,
+              status: 'skipped',
+              changedCount: 0,
+              reason: 'insufficient_permission',
+            });
+          }
+          return [];
+        }
+        throw error;
+      });
       for (const session of unitChanged) {
         emitServiceEvent(this.app, {
           path: 'sessions',
@@ -1882,7 +1978,35 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
       }
       changed.push(...unitChanged);
     }
+    if (skippedUnitKeys.size > 0) {
+      plan.units = plan.units.filter((unit) => !skippedUnitKeys.has(unit.key));
+      plan.targets = plan.targets.filter((target) => !skippedUnitKeys.has(target.unitKey));
+      plan.remainingArchived = plan.remainingArchived.filter(
+        ({ sessionId }) => !skippedMemberIds.has(sessionId)
+      );
+      plan.excludedImplied = plan.excludedImplied.filter((excluded) =>
+        [...excluded.unitKeys].some((unitKey) => !skippedUnitKeys.has(unitKey))
+      );
+    }
     return changed;
+  }
+
+  private async currentArchiveParams(
+    operationDb: TenantScopedDatabase,
+    params?: SessionParams
+  ): Promise<SessionParams | undefined> {
+    if (!params?.provider || !this.shouldEnforceBranchRbac()) return params;
+    await lockTenantAuthorizationFence(operationDb, params);
+    const actor = await resolveCurrentTenantAuthorityActor(operationDb, params);
+    return {
+      ...params,
+      user: {
+        ...params.user,
+        user_id: actor.user_id,
+        role: actor.role ?? params.user?.role,
+        _isServiceAccount: actor.service,
+      },
+    } as SessionParams;
   }
 
   private buildArchiveResult(
@@ -1998,7 +2122,8 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
     sessions: Session[],
     archived: boolean,
     params: SessionParams | undefined,
-    branchCache: Map<string, Branch | null>
+    branchCache: Map<string, Branch | null>,
+    branchRepo = this.branchRepo
   ): Promise<void> {
     if (!params?.provider || !this.shouldEnforceBranchRbac()) return;
 
@@ -2021,12 +2146,12 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
     const action = archived ? 'archive sessions' : 'unarchive sessions';
 
     for (const session of sessions) {
-      const branch = await this.loadArchiveBranch(branchCache, session.branch_id);
+      const branch = await this.loadArchiveBranch(branchCache, session.branch_id, branchRepo);
       if (!branch) {
         throw new Forbidden(`Branch not found for session: ${session.session_id}`);
       }
 
-      const access = await this.branchRepo.resolveUserAccess(branch, userId);
+      const access = await branchRepo.resolveUserAccess(branch, userId);
       const effectiveLevel: BranchPermissionLevel = isSuperAdmin(userRole, allowSuperadmin)
         ? 'all'
         : access.can;
@@ -2224,8 +2349,8 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
     if (!first) throw new BadRequest('At least one session is required');
     return this.withArchiveScope(params, async () => {
       const { plan, unfinishedIds } = await this.planBulkArchive(roots, options, params);
-      const preview = this.summarizeBulkPlan(plan, options, unfinishedIds);
       const changed = await this.applyArchiveTransitionPlan(plan, params);
+      const preview = this.summarizeBulkPlan(plan, options, unfinishedIds);
       return { ...this.buildArchiveResult(first, plan, changed), preview };
     });
   }
@@ -2286,6 +2411,8 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
     const impliedDescendants = plan.targets
       .filter((target) => target.selection === 'implied')
       .map((target) => target.session);
+    const excludedDescendants = plan.excludedImplied.map(({ session }) => session);
+    const classifiedDescendants = [...impliedDescendants, ...excludedDescendants];
     const plannedByUnit = new Map<string, number>();
     for (const target of plan.targets) {
       plannedByUnit.set(target.unitKey, (plannedByUnit.get(target.unitKey) ?? 0) + 1);
@@ -2294,12 +2421,12 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
       policy: options.policy,
       directRoots,
       impliedDescendants,
-      excludedDescendants: plan.excludedImplied,
-      descendantsNewerThanCutoff: impliedDescendants.filter(
+      excludedDescendants,
+      descendantsNewerThanCutoff: classifiedDescendants.filter(
         (session) =>
           cutoff !== null && new Date(session.last_updated || session.created_at) >= cutoff
       ),
-      descendantsWithUnfinishedTasks: impliedDescendants.filter((session) =>
+      descendantsWithUnfinishedTasks: classifiedDescendants.filter((session) =>
         unfinishedIds.has(session.session_id)
       ),
       activeDescendants: impliedDescendants.filter((session) => isSessionExecuting(session)),
