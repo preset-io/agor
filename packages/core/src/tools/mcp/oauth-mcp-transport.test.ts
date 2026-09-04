@@ -9,7 +9,7 @@
 
 import { request as httpRequest } from 'node:http';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { MCPOAuthDCRDiagnostic } from '../../types/mcp.js';
+import type { MCPOAuthClientRegistrationID, MCPOAuthDCRDiagnostic } from '../../types/mcp.js';
 
 vi.mock('../../utils/safe-outbound-fetch', () => ({
   assertSafeOAuthUrl: (input: string, options: { allowLocalhostHttp?: boolean } = {}) => {
@@ -33,6 +33,7 @@ vi.mock('../../utils/safe-outbound-fetch', () => ({
 }));
 
 import { safeOutboundFetch } from '../../utils/safe-outbound-fetch';
+import type { MCPOAuthDynamicClientRegistrationResolver } from './oauth-mcp-transport';
 import {
   __dynamicClientCacheSizeForTests,
   __seedAuthCodeTokenCacheForTests,
@@ -301,6 +302,55 @@ describe('completeMCPOAuthFlow token exchange', () => {
     expect(failure).toMatchObject({ ambiguous: false, failureCode: 'provider_rejected' });
   });
 
+  it.each(['invalid_client', 'unauthorized_client'] as const)(
+    'classifies %s as an unambiguous stale client registration without retaining provider text',
+    async (providerCode) => {
+      globalThis.fetch = vi
+        .fn()
+        .mockResolvedValue(
+          new Response(
+            JSON.stringify({ error: providerCode, error_description: 'SECRET provider detail' }),
+            { status: 401, headers: { 'Content-Type': 'application/json' } }
+          )
+        ) as unknown as typeof fetch;
+
+      const failure = await completeMCPOAuthFlow(
+        {
+          ...context,
+          clientRegistrationId:
+            '01991ea2-58f0-7000-8000-000000000001' as MCPOAuthClientRegistrationID,
+        },
+        'code',
+        'state',
+        { cacheToken: false }
+      ).catch((error: unknown) => error);
+      expect(failure).toBeInstanceOf(OAuthCodeExchangeError);
+      expect(failure).toMatchObject({
+        ambiguous: false,
+        failureCode: 'client_registration_invalidated',
+        invalidClientRegistration: true,
+      });
+      expect(String(failure)).not.toContain('SECRET provider detail');
+      expect(String(failure)).not.toContain(providerCode);
+    }
+  );
+
+  it('does not classify an invalid configured client as an invalidatable DCR row', async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ error: 'invalid_client' }), {
+        status: 401,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    ) as unknown as typeof fetch;
+
+    await expect(
+      completeMCPOAuthFlow(context, 'code', 'state', { cacheToken: false })
+    ).rejects.toMatchObject({
+      failureCode: 'provider_rejected',
+      invalidClientRegistration: false,
+    });
+  });
+
   it.each([
     ['wrong state', 'wrong-state', 'https://provider.example.test', 'callback_state_mismatch'],
     ['missing issuer', 'state', undefined, 'callback_issuer_missing'],
@@ -364,6 +414,21 @@ describe('completeMCPOAuthFlow token exchange', () => {
       expect(String(error)).not.toContain('CODE-SECRET');
       expect(String(error)).not.toContain(callback);
     }
+  });
+
+  it('returns only closed front-channel rejection evidence and the state capability', () => {
+    const parsed = parseOAuthCallback(
+      'https://agor.example.test/mcp-servers/oauth-callback?error=invalid_client&error_description=SECRET&state=state'
+    );
+
+    expect(parsed).toEqual({
+      code: null,
+      state: 'state',
+      issuer: undefined,
+      authorizationRejected: true,
+    });
+    expect(JSON.stringify(parsed)).not.toContain('invalid_client');
+    expect(JSON.stringify(parsed)).not.toContain('SECRET');
   });
 });
 
@@ -1030,6 +1095,45 @@ describe('startMCPOAuthFlow with prefetchedAuthServerMetadata', () => {
     expect(authUrl.searchParams.get('code_challenge')).toBeTruthy();
     expect(authUrl.searchParams.get('state')).toBeTruthy();
     expect(authUrl.searchParams.get('redirect_uri')).toBe('http://127.0.0.1:9999/oauth/callback');
+  });
+
+  it('routes validated DCR through an injected fleet authority with exact discovery binding', async () => {
+    let observedRequest: unknown;
+    const resolver: MCPOAuthDynamicClientRegistrationResolver = vi.fn(async (request, register) => {
+      observedRequest = request;
+      return { registration: await register() };
+    });
+    globalThis.fetch = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          client_id: 'fleet-authority-client',
+          redirect_uris: [redirectUri],
+          token_endpoint_auth_method: 'none',
+        }),
+        { status: 201, headers: { 'content-type': 'application/json' } }
+      )
+    ) as unknown as typeof fetch;
+
+    const context = await startMCPOAuthFlow('', undefined, redirectUri, {
+      ...prefetchedOptions,
+      resolveDynamicClientRegistration: resolver,
+    });
+
+    expect(resolver).toHaveBeenCalledTimes(1);
+    expect(observedRequest).toMatchObject({
+      registrationEndpoint: 'https://auth.reo.dev/oauth/register',
+      registrationEndpointSource: 'metadata',
+      metadataUrl: 'https://mcp.reo.dev/mcp',
+      resourceUri: 'https://mcp.reo.dev/mcp',
+      issuer: 'https://auth.reo.dev',
+      authorizationEndpoint: 'https://auth.reo.dev/oauth/authorize',
+      tokenEndpoint: 'https://auth.reo.dev/oauth/token',
+      redirectUri,
+      compatibilityMode: 'legacy',
+      dcrMode: 'fallback',
+    });
+    expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+    expect(context.clientId).toBe('fleet-authority-client');
   });
 
   it('accepts a confidential client when DCR returns a secret with auth method none/omitted, then uses HTTP Basic on token exchange', async () => {

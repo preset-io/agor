@@ -177,6 +177,15 @@ export function recoveryForOAuthAttemptFailure(
         'Your MCP authorization permission changed. Ask an administrator to review access, then reconnect.',
     };
   }
+  if (failureCode === 'client_registration_invalidated') {
+    return {
+      ...common,
+      category: 'authentication_required',
+      action: 'reauthenticate',
+      message:
+        'The provider no longer recognizes this OAuth client. Reconnect to register a replacement client.',
+    };
+  }
   return {
     ...common,
     category: 'authentication_required',

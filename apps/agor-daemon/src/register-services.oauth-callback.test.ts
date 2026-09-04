@@ -16,9 +16,8 @@ import { MCP_CAPABILITY_ISSUING_SERVICE_PATHS } from './utils/mcp-server-authori
  * localhost" failures for any user not running on the daemon host.
  *
  * The fix funnels every daemon OAuth path through `startTwoPhaseMCPOAuthFlow`,
- * which builds the `redirect_uri` from `requirePublicBaseUrl()` —
- * `<daemon base_url>/mcp-servers/oauth-callback` — never from `localhost` or
- * `127.0.0.1`.
+ * which receives the callback URL resolved once from the daemon's frozen
+ * effective startup configuration — never from a runtime config reload.
  *
  * These structural assertions are intentionally coarse: they prevent the
  * specific regression of any new daemon code re-introducing
@@ -55,12 +54,10 @@ describe('register-services OAuth callback URL regression', () => {
     }
   });
 
-  it('builds the OAuth redirect URI from the public base URL', () => {
-    // startTwoPhaseMCPOAuthFlow is the single entry point and must use
-    // requirePublicBaseUrl() (not getBaseUrl(), which silently falls back
-    // to localhost in dev).
-    expect(codeOnly).toMatch(/requirePublicBaseUrl\s*\(/);
-    expect(codeOnly).toMatch(/['"]\/mcp-servers\/oauth-callback['"]/);
+  it('uses only the startup-injected OAuth callback URL', () => {
+    expect(codeOnly).toMatch(/return\s+ctx\.mcpOAuthCallbackUrl/);
+    expect(codeOnly).not.toMatch(/\brequirePublicBaseUrl\s*\(/);
+    expect(codeOnly).not.toMatch(/\bloadConfig(?:FromFile)?\s*\(/);
   });
 
   it('preserves tenant scope across unauthenticated OAuth callbacks', () => {
@@ -187,6 +184,7 @@ describe('register-services OAuth callback URL regression', () => {
       'mcp-servers/oauth-status',
       'mcp-servers/oauth-attempt-status',
       'mcp-servers/oauth-auth-headers',
+      'mcp-servers/oauth-client-registration-reset',
     ] as const;
     const registeredAuthServices = new Set(
       Array.from(
@@ -265,6 +263,23 @@ describe('register-services OAuth callback URL regression', () => {
     expect(callbackBody).toMatch(
       /if\s*\(\s*!code\s*\|\|\s*!state\s*\)[\s\S]*sendOAuthResultPage\s*\(\s*res\s*,\s*false/
     );
+  });
+
+  it('never treats a browser error parameter as DCR invalidation evidence', () => {
+    const callbackBody = codeOnly.slice(
+      codeOnly.indexOf('const oauthCallbackHandler'),
+      codeOnly.indexOf("app.use('/mcp-servers',")
+    );
+    const frontChannelErrorBranch = callbackBody.slice(
+      callbackBody.indexOf('if (error)'),
+      callbackBody.indexOf('if (!code || !state)')
+    );
+
+    expect(frontChannelErrorBranch).toMatch(
+      /durableOAuthFlows\.failPendingCallback\s*\(\s*state\s*,\s*['"]authorization_denied['"]/
+    );
+    expect(frontChannelErrorBranch).not.toMatch(/invalidateTokenEndpointRejectedClient/);
+    expect(frontChannelErrorBranch).not.toMatch(/client_registration_invalidated/);
   });
 
   it('uses one phase-aware failure classifier for callback and manual completion', () => {

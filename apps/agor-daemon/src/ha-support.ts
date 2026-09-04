@@ -13,7 +13,6 @@ export const HA_CONSTRAINED_PROFILE = 'constrained-active-active' as const;
 export const HA_UNSUPPORTED_FEATURES = {
   providerNativeInteractivePermissions:
     'provider-native interactive permission modes without Agor realtime decision routing',
-  mcpOAuth: 'MCP OAuth flows',
   codexAuth:
     'Codex credential-file import/logout without a consistent executor user home and execution.executor_storage.user_home_locking: cross-replica-flock',
   codexDeviceAuth:

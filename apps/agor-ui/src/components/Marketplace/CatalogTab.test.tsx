@@ -789,6 +789,15 @@ describe('connect', () => {
     const drawer = await connectOAuth();
 
     expect(oauthStartCalls).toEqual([{ mcp_server_id: 'server-1' }]);
+    const popup = vi.mocked(window.open).mock.results[0]?.value as {
+      location?: { replace?: ReturnType<typeof vi.fn> };
+    };
+    expect(popup.location?.replace).toHaveBeenCalledWith('https://accounts.example.test/authorize');
+    expect(
+      screen.queryByText(
+        'Sign-in could not start automatically. Continue from MCP settings in the new session.'
+      )
+    ).not.toBeInTheDocument();
     expect(drawer.queryByText('Connected and ready')).not.toBeInTheDocument();
   });
 

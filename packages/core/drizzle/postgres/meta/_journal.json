@@ -701,6 +701,20 @@
       "when": 1788206400001,
       "tag": "0100_claude_oauth_attempts",
       "breakpoints": true
+    },
+    {
+      "idx": 101,
+      "version": "7",
+      "when": 1788292800000,
+      "tag": "0101_mcp_oauth_client_registrations",
+      "breakpoints": true
+    },
+    {
+      "idx": 102,
+      "version": "7",
+      "when": 1788379200000,
+      "tag": "0102_oauth_authority_watermark_reconciliation",
+      "breakpoints": true
     }
   ]
 }

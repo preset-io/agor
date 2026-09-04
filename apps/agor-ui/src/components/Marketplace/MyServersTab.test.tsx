@@ -385,7 +385,8 @@ describe('Marketplace server inventory and settings', () => {
       credentials: [
         {
           ...overview.credentials[0],
-          status: 'reauthentication_required',
+          status: 'attention',
+          detail_status: 'reauthentication_required',
           oauth_access_token: secret,
           masked_token: '••••1234',
         },
@@ -733,7 +734,13 @@ describe('Marketplace server inventory and settings', () => {
     const unavailable: MCPMarketplaceOverview = {
       ...overview,
       servers: [{ ...overview.servers[0], tools: [], capabilities_discovered_at: undefined }],
-      credentials: [{ ...overview.credentials[0], status: 'reauthentication_required' }],
+      credentials: [
+        {
+          ...overview.credentials[0],
+          status: 'attention',
+          detail_status: 'reauthentication_required',
+        },
+      ],
     };
     const view = render(<MyServersTab {...baseProps} overview={unavailable} />);
     fireEvent.click(screen.getByRole('button', { name: 'Settings for GitHub' }));
@@ -781,7 +788,8 @@ describe('Marketplace server inventory and settings', () => {
       credentials: [
         {
           ...overview.credentials[0],
-          status: 'refreshable',
+          status: 'expired',
+          detail_status: 'refreshable',
           expires_at: new Date(0).toISOString(),
         },
       ],
