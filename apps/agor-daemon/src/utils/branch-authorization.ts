@@ -30,7 +30,10 @@ import type {
 } from '@agor/core/types';
 import { BRANCH_PERMISSION_LEVELS, hasMinimumRole, ROLES } from '@agor/core/types';
 import { assertExecutionHomeKeySatisfiesMode } from '@agor/core/unix';
-import { executorRuntimeScopeSessionId } from '../auth/executor-runtime-scope.js';
+import {
+  assertExecutorBranchReadScope,
+  executorRuntimeScopeSessionId,
+} from '../auth/executor-runtime-scope.js';
 
 /**
  * Check if a user has the superadmin role (or deprecated 'owner' alias).
@@ -422,7 +425,12 @@ export function loadBranch(branchRepo: BranchRepository, branchIdField = 'branch
       return context;
     }
 
-    // Service accounts (executor) bypass RBAC
+    // Keep the helper safe when called outside the registered service chain;
+    // register-hooks installs the same guard before this repository lookup.
+    assertExecutorBranchReadScope(context);
+
+    // Service accounts (executor) bypass RBAC after the scope guard. Only the
+    // cleanup inventory command may intentionally be branchless.
     if (context.params.user?._isServiceAccount) {
       return context;
     }

@@ -101,6 +101,30 @@ describe('prepareSessionForExecutorStart tenant scope', () => {
     expect(sessionsService.materializeAgenticToolPreset).not.toHaveBeenCalled();
   });
 
+  it('rejects a tenant-disabled built-in workload before materialization or spawn', async () => {
+    const db = { run: vi.fn() } as never;
+    const workloadSession = { ...session, agentic_tool: 'workload' } as Session;
+    const sessionsService = {
+      get: vi.fn(async () => workloadSession),
+      materializeAgenticToolPreset: vi.fn(),
+    };
+    mocks.isTenantAgenticToolEnabled.mockResolvedValueOnce(false);
+
+    await expect(
+      runWithTenantContext('tenant-x', () =>
+        prepareSessionForExecutorStart(
+          db,
+          sessionsService as never,
+          workloadSession.session_id,
+          {} as never,
+          { managed: true, installed: new Set() }
+        )
+      )
+    ).rejects.toThrow('workload is disabled for this workspace');
+
+    expect(sessionsService.materializeAgenticToolPreset).not.toHaveBeenCalled();
+  });
+
   it('joins an existing tenant database scope', async () => {
     const db = { run: vi.fn() } as never;
     const sessionsService = createSessionsService();

@@ -105,7 +105,10 @@ import { UserAgenticDefaultEditor } from './UserAgenticDefaultEditor';
 
 const { Sider, Content } = Layout;
 
-const AGENTIC_TOOL_TABS = AGENTIC_TOOL_NAMES;
+type UserConfigurableAgenticTool = Exclude<AgenticToolName, 'workload'>;
+const AGENTIC_TOOL_TABS = AGENTIC_TOOL_NAMES.filter(
+  (tool): tool is UserConfigurableAgenticTool => tool !== 'workload'
+);
 
 // Panels that own the shared `form` instance. Every other panel (tokens,
 // env-vars, providers) keeps the instance alive via a hidden connector.
@@ -170,12 +173,12 @@ type AgenticConfigFormValues = Parameters<typeof buildConfigFromFormValues>[1] &
   mcpServerIds?: string[];
 };
 
-const isAgenticToolTab = (value: string): value is AgenticToolName =>
-  AGENTIC_TOOL_TABS.includes(value as AgenticToolName);
+const isAgenticToolTab = (value: string): value is UserConfigurableAgenticTool =>
+  AGENTIC_TOOL_TABS.includes(value as UserConfigurableAgenticTool);
 
 const providerKeyFor = (tool: AgenticToolName): string => `${PROVIDER_KEY_PREFIX}${tool}`;
-const toolFromProviderKey = (key: string): AgenticToolName =>
-  key.slice(PROVIDER_KEY_PREFIX.length) as AgenticToolName;
+const toolFromProviderKey = (key: string): UserConfigurableAgenticTool =>
+  key.slice(PROVIDER_KEY_PREFIX.length) as UserConfigurableAgenticTool;
 
 // Deep links (banners, saved URLs) may still carry pre-redesign tab ids. Map
 // them onto the current panel keys so a stale link lands on the right panel
@@ -398,6 +401,7 @@ const UserSettingsModalForIdentity: React.FC<UserSettingsModalProps> = ({
   const [opencodeForm] = Form.useForm();
   const [copilotForm] = Form.useForm();
   const [cursorForm] = Form.useForm();
+  const [workloadForm] = Form.useForm();
   const [audioForm] = Form.useForm();
   const [primaryToolForm] = Form.useForm();
 
@@ -409,8 +413,9 @@ const UserSettingsModalForIdentity: React.FC<UserSettingsModalProps> = ({
       opencode: opencodeForm,
       copilot: copilotForm,
       cursor: cursorForm,
+      workload: workloadForm,
     }),
-    [claudeForm, codexForm, copilotForm, cursorForm, geminiForm, opencodeForm]
+    [claudeForm, codexForm, copilotForm, cursorForm, geminiForm, opencodeForm, workloadForm]
   );
 
   // Jump to initialTab each time the modal opens (e.g. from a banner deep-link).
@@ -428,6 +433,7 @@ const UserSettingsModalForIdentity: React.FC<UserSettingsModalProps> = ({
     opencode: {},
     copilot: {},
     cursor: {},
+    workload: {},
   });
   const [savingToolField, setSavingToolField] = useState<Record<string, boolean>>({});
   const [agenticAuthMethods, setAgenticAuthMethods] = useState<
@@ -652,6 +658,7 @@ const UserSettingsModalForIdentity: React.FC<UserSettingsModalProps> = ({
       opencode: {},
       copilot: {},
       cursor: {},
+      workload: {},
     };
     const stored = user?.agentic_tools;
     if (stored) {

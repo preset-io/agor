@@ -66,6 +66,7 @@ interface Harness {
   userToken: string;
   url: string;
   invalidateUserTokens(): void;
+  workloadCompletionCommitted(): boolean;
 }
 
 function executorRoomConnections(harness: Harness): unknown[] {
@@ -127,6 +128,7 @@ async function startHarness(
       })
     : undefined;
   let revoked = false;
+  let workloadCompletionCommitted = false;
   let issuedFingerprint: string | undefined;
   let userTokensValidAfter: Date | undefined;
   const authorityStore: SessionTokenAuthorityStore = {
@@ -145,6 +147,15 @@ async function startHarness(
         session_id: input.sessionId,
         ...(input.taskId ? { task_id: input.taskId } : {}),
         ...(input.branchId ? { branch_id: input.branchId } : {}),
+        user_id: input.userId,
+      };
+    },
+    async findRevoked(input) {
+      if (!revoked) return null;
+      return {
+        session_id: input.sessionId,
+        task_id: input.taskId ?? undefined,
+        branch_id: input.branchId ?? undefined,
         user_id: input.userId,
       };
     },
@@ -225,8 +236,35 @@ async function startHarness(
         await sessionTokens.revokeTaskTokens(data.task_id);
         return { accepted: true, task_id: data.task_id, status: data.status ?? 'completed' };
       },
+      async completeWorkload(data: { task_id: string; result_message_id: string }) {
+        // Model the production ordering: the canonical settlement is durable
+        // before Task-token retirement and the Socket.IO acknowledgement.
+        workloadCompletionCommitted = true;
+        await sessionTokens.revokeTaskTokens(data.task_id);
+        return {
+          outcome: 'transitioned',
+          task_id: data.task_id,
+          result_message_id: data.result_message_id,
+        };
+      },
+      async reconcileWorkloadCompletion(data: { task_id: string; result_message_id: string }) {
+        return {
+          outcome: 'idempotent',
+          task_id: data.task_id,
+          result_message_id: data.result_message_id,
+        };
+      },
     },
-    { events: ['termination_requested'], methods: ['get', 'connectExecutor', 'finish'] }
+    {
+      events: ['termination_requested'],
+      methods: [
+        'get',
+        'connectExecutor',
+        'finish',
+        'completeWorkload',
+        'reconcileWorkloadCompletion',
+      ],
+    }
   );
   app.service('tasks').hooks({
     around: {
@@ -299,6 +337,9 @@ async function startHarness(
     url,
     invalidateUserTokens() {
       userTokensValidAfter = new Date(Date.now() + 1_000);
+    },
+    workloadCompletionCommitted() {
+      return workloadCompletionCommitted;
     },
     userToken: jwt.sign(
       { sub: USER_ID, type: 'access', tenant_id: REPLACEMENT_TENANT_ID },
@@ -518,6 +559,115 @@ describe('executor Socket.IO connection capability', () => {
       expect(transport.listenerCount('ready')).toBeLessThanOrEqual(readyListenersBefore);
     }
   );
+
+  it('reconciles an exact workload receipt after Task token and socket authority retirement', async () => {
+    const harness = await startHarness({ reconnectionAttempts: 0 });
+    harnesses.push(harness);
+    await waitForConnect(harness.client);
+    const resultMessageId = '018f0000-0000-7000-8000-000000000004';
+    const receipt = {
+      task_id: TASK_ID,
+      session_id: SESSION_ID,
+      completion: {
+        task_id: TASK_ID,
+        result_message_id: resultMessageId,
+        profile: 'wait',
+        requested_duration_ms: 100,
+        observed_elapsed_ms: 100,
+      },
+    };
+    const receiptClient = createClient(harness.url, false, {
+      reconnectionAttempts: 0,
+      socketAuthentication: {
+        accessToken: harness.token,
+        authData: () => ({ completionReceipt: receipt }),
+      },
+    });
+    try {
+      const originalSocket = harness.socketConfig
+        .getSocketServer()
+        ?.sockets.sockets.get(harness.client.io.id!);
+      if (!originalSocket) throw new Error('Expected connected executor socket');
+      const originalConnection = (originalSocket as unknown as { feathers?: object }).feathers;
+      const transport = originalSocket.conn.transport;
+      const send = transport.send.bind(transport);
+      transport.send = (() => {
+        // The commit has already happened when the RPC acknowledgement is
+        // encoded. Holding this write models a lost reply, not a failed commit.
+        transport.writable = false;
+      }) as typeof transport.send;
+      const retired = waitForDisconnect(harness.client);
+      const complete = (
+        harness.client.service('tasks') as unknown as {
+          completeWorkload(data: typeof receipt.completion): Promise<unknown>;
+        }
+      ).completeWorkload(receipt.completion);
+      void complete.catch(() => undefined);
+      await waitFor(
+        () =>
+          harness.workloadCompletionCommitted() &&
+          getAuthenticatedConnectionAuthority(originalConnection) === undefined
+      );
+      transport.send = send;
+      // The result acknowledgement was dropped after commit; now close only
+      // this namespace so the client observes reply loss without closing the
+      // HTTP server used for the receipt reconnect.
+      harness.client.io.disconnect();
+      await retired;
+      expect(harness.workloadCompletionCommitted()).toBe(true);
+      expect(getAuthenticatedConnectionAuthority(originalConnection)).toBeUndefined();
+
+      await expect(
+        (
+          harness.app.service('authentication') as unknown as {
+            authenticate(
+              data: { strategy: 'jwt'; accessToken: string },
+              params: Record<string, unknown>,
+              ...strategies: string[]
+            ): Promise<unknown>;
+          }
+        ).authenticate(
+          { strategy: 'jwt', accessToken: harness.token },
+          {
+            provider: 'rest',
+            connection: {},
+            _executorCompletionReceipt: receipt,
+          },
+          'jwt'
+        )
+      ).rejects.toThrow(/Invalid or expired executor token/);
+
+      receiptClient.io.connect();
+      await waitForConnect(receiptClient);
+      const receiptSocket = harness.socketConfig
+        .getSocketServer()
+        ?.sockets.sockets.get(receiptClient.io.id!);
+      const receiptConnection = (receiptSocket as unknown as { feathers?: object }).feathers;
+      expect(getSocketAuthState(receiptSocket!)).toMatchObject({
+        userId: null,
+        isService: false,
+      });
+      expect(executorRoomConnections(harness)).not.toContain(receiptConnection);
+      expect(receiptSocket!.rooms.has('authenticated')).toBe(false);
+      expect(getAuthenticatedConnectionAuthority(receiptConnection)).toMatchObject({
+        principal: {
+          kind: 'executor-completion-receipt',
+          taskId: TASK_ID,
+          sessionId: SESSION_ID,
+          resultMessageId,
+        },
+      });
+      await expect(
+        (
+          receiptClient.service('tasks') as unknown as {
+            reconcileWorkloadCompletion(data: typeof receipt.completion): Promise<unknown>;
+          }
+        ).reconcileWorkloadCompletion(receipt.completion)
+      ).resolves.toMatchObject({ outcome: 'idempotent', task_id: TASK_ID });
+    } finally {
+      receiptClient.io.close();
+    }
+  });
 
   it('rejects login when revocation lands after authority validation starts', async () => {
     const harness = await startHarness({ pauseValidation: true });

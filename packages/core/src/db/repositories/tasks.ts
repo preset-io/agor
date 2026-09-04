@@ -8,6 +8,8 @@ import type {
   CapabilityPolicyFsAccess,
   ExecutorPulse,
   ExecutorTerminationCompleteInput,
+  Message,
+  MessageID,
   SdkFailure,
   SessionID,
   Task,
@@ -17,14 +19,26 @@ import type {
   TerminationCause,
   TerminationCoordinationClaim,
   UUID,
+  WorkloadCompletionInput,
+  WorkloadCompletionResult,
+  WorkloadRequest,
 } from '@agor/core/types';
 import {
+  assertValidWorkloadCompletionInput,
+  assertWorkloadCompletionMatchesRequest,
   EXECUTING_TASK_STATUSES,
+  isCanonicalFullUuid,
   isTerminalTaskStatus,
   NONTERMINAL_TASK_STATUSES,
+  parseWorkloadRequest,
   SessionStatus,
   sessionCanStartTask,
   TaskStatus,
+  WORKLOAD_CONTROLLED_FAILURE_CODE,
+  WORKLOAD_FIXTURE_COMMAND_FAILURE_CODE,
+  WORKLOAD_OFFLINE_INSTALL_FAILURE_CODE,
+  WORKLOAD_RESULT_MAX_BYTES,
+  workloadResultFromCompletion,
 } from '@agor/core/types';
 import {
   and,
@@ -54,7 +68,16 @@ import {
   select,
   update,
 } from '../database-wrapper';
-import { type SessionRow, sessions, type TaskInsert, type TaskRow, tasks, users } from '../schema';
+import {
+  type MessageRow,
+  messages,
+  type SessionRow,
+  sessions,
+  type TaskInsert,
+  type TaskRow,
+  tasks,
+  users,
+} from '../schema';
 import { getCurrentTenantId } from '../tenant-context';
 import {
   AmbiguousIdError,
@@ -70,6 +93,22 @@ import {
 } from './branch-access';
 import { ExecutorSessionTokenAuthorityRepository } from './executor-session-token-authorities';
 import { deepMerge } from './merge-utils';
+import type { MessageCreateTransactionHook } from './messages';
+
+function workloadResultMessage(row: MessageRow): Message {
+  return {
+    message_id: row.message_id as MessageID,
+    session_id: row.session_id as SessionID,
+    task_id: row.task_id ? (row.task_id as TaskID) : undefined,
+    type: row.type,
+    role: row.role as Message['role'],
+    index: row.index,
+    timestamp: new Date(row.timestamp).toISOString(),
+    content_preview: row.content_preview ?? '',
+    content: (row.data as { content: Message['content'] }).content,
+    metadata: (row.data as { metadata?: Message['metadata'] }).metadata,
+  };
+}
 
 function executorOwnsTask(row: Pick<TaskRow, 'status' | 'executor_connected_at'>): boolean {
   return (
@@ -307,11 +346,22 @@ export interface TaskFindPageOptions {
   skip?: number;
 }
 
+/** Server-derived binding retained by the one post-revocation receipt path. */
+export interface WorkloadCompletionReceiptScope {
+  userId: string;
+  sessionId: string;
+  taskId: string;
+  branchId: string;
+}
+
 /**
  * Task repository implementation
  */
 export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
-  constructor(private db: Database) {}
+  constructor(
+    private db: Database,
+    private readonly onWorkloadResultCreateInTransaction?: MessageCreateTransactionHook
+  ) {}
 
   /** Retry an entire SQLite mutation so a contending writer re-reads fresh state. */
   private async runTaskMutation<T>(mutation: () => Promise<T>, attempt = 0): Promise<T> {
@@ -1671,6 +1721,265 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
           termination_unverified_at: null,
         }),
       };
+    });
+  }
+
+  /**
+   * Atomically publish the built-in workload result and settle its Task.
+   *
+   * Session-first locking matches every turn transition. The deterministic
+   * Message identity makes a lost response safely retryable: an exact retry
+   * returns the already-committed pair, while any conflicting reuse fails
+   * closed. No transaction can expose a COMPLETED Task without its required
+   * result Message, or attach that success result after Stop owns the Task.
+   */
+  async completeWorkload(input: WorkloadCompletionInput): Promise<WorkloadCompletionResult> {
+    try {
+      assertValidWorkloadCompletionInput(input);
+    } catch (error) {
+      throw new RepositoryError(
+        error instanceof Error ? error.message : 'WORKLOAD_COMPLETION_INVALID'
+      );
+    }
+    return this.mutateLockedSessionTask(
+      input.task_id,
+      async (txDb, taskRow, sessionRow, fullId) => {
+        if (sessionRow.agentic_tool !== 'workload') {
+          throw new RepositoryError('Workload completion requires a workload Session');
+        }
+
+        const current = this.rowToTask(taskRow);
+        let request: WorkloadRequest;
+        try {
+          request = parseWorkloadRequest(current.full_prompt);
+        } catch {
+          throw new RepositoryError('WORKLOAD_REQUEST_INVALID');
+        }
+        try {
+          assertWorkloadCompletionMatchesRequest(request, input);
+        } catch {
+          throw new RepositoryError('Workload completion does not match its durable request');
+        }
+
+        const fixtureCommandFailed =
+          request.profile === 'fixture-command' &&
+          input.profile === 'fixture-command' &&
+          input.outcome === 'failed';
+        const offlineInstallFailed =
+          request.profile === 'offline-install' &&
+          input.profile === 'offline-install' &&
+          input.outcome === 'failed';
+        const terminalStatus =
+          request.profile === 'controlled-failure' || fixtureCommandFailed || offlineInstallFailed
+            ? TaskStatus.FAILED
+            : TaskStatus.COMPLETED;
+        const failureCode = offlineInstallFailed
+          ? WORKLOAD_OFFLINE_INSTALL_FAILURE_CODE
+          : fixtureCommandFailed
+            ? WORKLOAD_FIXTURE_COMMAND_FAILURE_CODE
+            : WORKLOAD_CONTROLLED_FAILURE_CODE;
+        const content = JSON.stringify(
+          workloadResultFromCompletion(current.task_id, request, input)
+        );
+        if (Buffer.byteLength(content, 'utf8') > WORKLOAD_RESULT_MAX_BYTES) {
+          throw new RepositoryError('Workload result exceeded its bounded contract');
+        }
+
+        const existingMessageRow = await select(txDb)
+          .from(messages)
+          .where(eq(messages.message_id, input.result_message_id))
+          .one();
+        if (existingMessageRow) {
+          const existing = workloadResultMessage(existingMessageRow);
+          const exactResult =
+            existing.session_id === current.session_id &&
+            existing.task_id === current.task_id &&
+            existing.type === 'assistant' &&
+            existing.role === 'assistant' &&
+            existing.content === content &&
+            existing.metadata?.is_meta === true &&
+            existing.metadata?.workload_result === true;
+          if (current.status === terminalStatus && exactResult) {
+            return { outcome: 'idempotent', task: current, message: existing };
+          }
+          throw new RepositoryError('Workload result identity is already in use');
+        }
+
+        if (current.status !== TaskStatus.RUNNING || !current.executor_connected_at) {
+          throw new RepositoryError('Workload completion lost the active Task fence');
+        }
+
+        const now = await this.mutationNow(txDb, fullId);
+        const terminal = withTerminalTiming(current, { status: terminalStatus }, now);
+        const settled = {
+          ...deepMerge(current, terminal),
+          status: terminalStatus,
+          tool_use_count: 0,
+          ...(terminalStatus === TaskStatus.FAILED ? { error_message: failureCode } : {}),
+          task_id: current.task_id,
+          session_id: current.session_id,
+          created_by: current.created_by,
+          created_at: current.created_at,
+        } satisfies Task;
+        const taskInsert = this.taskToInsert(settled);
+
+        const latestIndex = await select(txDb, {
+          value: sql<number | null>`max(${messages.index})`,
+        })
+          .from(messages)
+          .where(eq(messages.session_id, current.session_id))
+          .one();
+        const insertedMessageRow = await insert(txDb, messages)
+          .values({
+            message_id: input.result_message_id,
+            created_at: now,
+            session_id: current.session_id,
+            task_id: current.task_id,
+            type: 'assistant',
+            role: 'assistant',
+            index: (latestIndex?.value ?? -1) + 1,
+            timestamp: now,
+            content_preview: content.slice(0, 200),
+            parent_tool_use_id: null,
+            data: {
+              content,
+              metadata: { is_meta: true, workload_result: true },
+            },
+          })
+          .returning()
+          .one();
+        const message = workloadResultMessage(insertedMessageRow);
+
+        await update(txDb, tasks)
+          .set({
+            status: terminalStatus,
+            completed_at: taskInsert.completed_at,
+            data: {
+              ...taskInsert.data,
+              ...(taskRow.data.executor_launch_fs_access_floor
+                ? {
+                    executor_launch_fs_access_floor: taskRow.data.executor_launch_fs_access_floor,
+                  }
+                : {}),
+            },
+          })
+          .where(eq(tasks.task_id, fullId))
+          .run();
+        await update(txDb, sessions)
+          .set({
+            status:
+              terminalStatus === TaskStatus.FAILED ? SessionStatus.FAILED : SessionStatus.IDLE,
+            ready_for_prompt: true,
+            updated_at: now,
+          })
+          .where(eq(sessions.session_id, sessionRow.session_id))
+          .run();
+        if (this.onWorkloadResultCreateInTransaction) {
+          await this.onWorkloadResultCreateInTransaction(txDb, message);
+        }
+
+        return { outcome: 'transitioned', task: settled, message };
+      }
+    );
+  }
+
+  /**
+   * Replay only an already-committed workload settlement after its executor
+   * bearer was retired. No insert or Task/Session mutation is permitted here;
+   * the exact completion still has to reproduce the daemon-owned Message.
+   */
+  async reconcileWorkloadCompletion(
+    input: WorkloadCompletionInput,
+    scope: WorkloadCompletionReceiptScope
+  ): Promise<WorkloadCompletionResult> {
+    if (
+      !scope.userId ||
+      !scope.sessionId ||
+      !scope.taskId ||
+      !scope.branchId ||
+      input.task_id !== scope.taskId
+    ) {
+      throw new RepositoryError('Workload completion receipt scope does not match its Task');
+    }
+    try {
+      assertValidWorkloadCompletionInput(input);
+    } catch (error) {
+      throw new RepositoryError(
+        error instanceof Error ? error.message : 'WORKLOAD_COMPLETION_INVALID'
+      );
+    }
+    if (!isCanonicalFullUuid(input.task_id) || !isCanonicalFullUuid(input.result_message_id)) {
+      throw new RepositoryError('Workload completion requires canonical Task and Message IDs');
+    }
+
+    const fullId = await this.resolveId(input.task_id);
+    return runDatabaseTransaction(this.db, async (txDb) => {
+      const taskRow = await select(txDb).from(tasks).where(eq(tasks.task_id, fullId)).one();
+      if (!taskRow) throw new EntityNotFoundError('Task', input.task_id);
+      const sessionRow = await select(txDb)
+        .from(sessions)
+        .where(eq(sessions.session_id, taskRow.session_id))
+        .one();
+      if (!sessionRow) throw new EntityNotFoundError('Session', taskRow.session_id);
+      if (sessionRow.agentic_tool !== 'workload') {
+        throw new RepositoryError('Workload completion requires a workload Session');
+      }
+      if (
+        taskRow.task_id !== scope.taskId ||
+        taskRow.session_id !== scope.sessionId ||
+        taskRow.created_by !== scope.userId ||
+        sessionRow.created_by !== scope.userId ||
+        sessionRow.branch_id !== scope.branchId
+      ) {
+        throw new RepositoryError('Workload completion receipt scope does not match its Task');
+      }
+
+      const current = this.rowToTask(taskRow);
+      let request: WorkloadRequest;
+      try {
+        request = parseWorkloadRequest(current.full_prompt);
+        assertWorkloadCompletionMatchesRequest(request, input);
+      } catch {
+        throw new RepositoryError('Workload completion does not match its durable request');
+      }
+
+      const fixtureCommandFailed =
+        request.profile === 'fixture-command' &&
+        input.profile === 'fixture-command' &&
+        input.outcome === 'failed';
+      const offlineInstallFailed =
+        request.profile === 'offline-install' &&
+        input.profile === 'offline-install' &&
+        input.outcome === 'failed';
+      const terminalStatus =
+        request.profile === 'controlled-failure' || fixtureCommandFailed || offlineInstallFailed
+          ? TaskStatus.FAILED
+          : TaskStatus.COMPLETED;
+      const content = JSON.stringify(workloadResultFromCompletion(current.task_id, request, input));
+      if (Buffer.byteLength(content, 'utf8') > WORKLOAD_RESULT_MAX_BYTES) {
+        throw new RepositoryError('Workload result exceeded its bounded contract');
+      }
+
+      const existingMessageRow = await select(txDb)
+        .from(messages)
+        .where(eq(messages.message_id, input.result_message_id))
+        .one();
+      if (!existingMessageRow) {
+        throw new RepositoryError('Workload completion settlement is not committed');
+      }
+      const existing = workloadResultMessage(existingMessageRow);
+      const exactResult =
+        existing.session_id === current.session_id &&
+        existing.task_id === current.task_id &&
+        existing.type === 'assistant' &&
+        existing.role === 'assistant' &&
+        existing.content === content &&
+        existing.metadata?.is_meta === true &&
+        existing.metadata?.workload_result === true;
+      if (current.status !== terminalStatus || !exactResult) {
+        throw new RepositoryError('Workload completion settlement does not match its receipt');
+      }
+      return { outcome: 'idempotent', task: current, message: existing };
     });
   }
 

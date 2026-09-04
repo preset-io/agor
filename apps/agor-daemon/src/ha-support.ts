@@ -92,6 +92,9 @@ export function isHaNonInteractivePermission(options: {
       // The current Cursor SDK surface is autonomous and does not register an
       // Agor permission callback regardless of the persisted display mode.
       return true;
+    case 'workload':
+      // The built-in deterministic runner has no provider permission surface.
+      return true;
     case 'gemini':
       return mapPermissionMode(mode ?? 'default', 'gemini') === 'yolo';
     case 'opencode':

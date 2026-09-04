@@ -1,5 +1,5 @@
-import { getCurrentTenantId } from '@agor/core/db';
-import type { Task } from '@agor/core/types';
+import { getCurrentTenantId, SessionRepository } from '@agor/core/db';
+import type { Message, Session, Task, WorkloadCompletionInput } from '@agor/core/types';
 import { TaskStatus } from '@agor/core/types';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { TasksService } from './tasks';
@@ -66,6 +66,39 @@ describe('TasksService executor connection', () => {
 });
 
 describe('TasksService executor patches', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  function makeTask(fullPrompt: string): Task {
+    return {
+      task_id: '018f0000-0000-7000-8000-000000000001',
+      session_id: '018f0000-0000-7000-8000-000000000002',
+      created_by: '018f0000-0000-7000-8000-000000000003',
+      full_prompt: fullPrompt,
+      status: TaskStatus.RUNNING,
+      created_at: '2026-01-01T00:00:00.000Z',
+      executor_connected_at: '2026-01-01T00:00:01.000Z',
+    } as Task;
+  }
+
+  function makePatchHarness(task: Task, agenticTool: Session['agentic_tool']) {
+    const updateFromExecutor = vi.fn(
+      async (_id: string, updates: Partial<Task>): Promise<Task> => ({ ...task, ...updates })
+    );
+    const service = Object.create(TasksService.prototype) as TasksService;
+    vi.spyOn(service, 'get').mockResolvedValue(task);
+    vi.spyOn(SessionRepository.prototype, 'findById').mockResolvedValue({
+      agentic_tool: agenticTool,
+    } as Session);
+    Reflect.set(service, 'taskRepo', { updateFromExecutor });
+    Reflect.set(service, 'db', {});
+    Reflect.set(service, 'trackTaskCompleted', vi.fn());
+    Reflect.set(service, 'retireTaskExecutorCredentials', vi.fn());
+    Reflect.set(service, 'processCompletionSideEffects', vi.fn().mockResolvedValue(true));
+    return { service, updateFromExecutor };
+  }
+
   it('uses the row-locked executor mutation path for transport patches', async () => {
     const service = Object.create(TasksService.prototype) as TasksService;
     const updateFromExecutor = vi
@@ -78,6 +111,102 @@ describe('TasksService executor patches', () => {
     expect(updateFromExecutor).toHaveBeenCalledWith('task-1', { model: 'test-model' });
   });
 
+  it.each([TaskStatus.STOPPED, TaskStatus.TIMED_OUT])(
+    'rejects an executor-originated %s patch for controlled failure',
+    async (status) => {
+      const task = makeTask('{"schemaVersion":1,"profile":"controlled-failure","delayMs":10}');
+      const { service, updateFromExecutor } = makePatchHarness(task, 'workload');
+
+      await expect(
+        service.patch(
+          task.task_id,
+          {
+            status,
+            completed_at: '2026-01-01T00:00:05.000Z',
+            error_message: 'caller supplied terminality',
+          },
+          { provider: 'rest' }
+        )
+      ).rejects.toThrow('Controlled workload failures must complete through completeWorkload');
+      expect(updateFromExecutor).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each([TaskStatus.FAILED, TaskStatus.STOPPED, TaskStatus.TIMED_OUT])(
+    'rejects an executor-originated %s patch for a fixed command workload',
+    async (status) => {
+      const task = makeTask('{"schemaVersion":1,"profile":"fixture-command"}');
+      const { service, updateFromExecutor } = makePatchHarness(task, 'workload');
+
+      await expect(
+        service.patch(
+          task.task_id,
+          { status, completed_at: '2026-01-01T00:00:05.000Z' },
+          { provider: 'rest' }
+        )
+      ).rejects.toThrow('Fixture command workloads must settle through completeWorkload');
+      expect(updateFromExecutor).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each([TaskStatus.FAILED, TaskStatus.STOPPED, TaskStatus.TIMED_OUT])(
+    'rejects an executor-originated %s patch for an offline install workload',
+    async (status) => {
+      const task = makeTask('{"schemaVersion":1,"profile":"offline-install"}');
+      const { service, updateFromExecutor } = makePatchHarness(task, 'workload');
+
+      await expect(
+        service.patch(
+          task.task_id,
+          { status, completed_at: '2026-01-01T00:00:05.000Z' },
+          { provider: 'rest' }
+        )
+      ).rejects.toThrow('Offline install workloads must settle through completeWorkload');
+      expect(updateFromExecutor).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each([TaskStatus.STOPPED, TaskStatus.TIMED_OUT])(
+    'preserves controlled failure executor %s patches for non-workload sessions',
+    async (status) => {
+      const task = makeTask('{"schemaVersion":1,"profile":"controlled-failure","delayMs":10}');
+      const { service, updateFromExecutor } = makePatchHarness(task, 'codex');
+
+      await expect(
+        service.patch(
+          task.task_id,
+          { status, completed_at: '2026-01-01T00:00:05.000Z' },
+          { provider: 'rest' }
+        )
+      ).resolves.toMatchObject({ status });
+      expect(updateFromExecutor).toHaveBeenCalledWith(
+        task.task_id,
+        expect.objectContaining({ status, completed_at: '2026-01-01T00:00:05.000Z' })
+      );
+    }
+  );
+
+  it.each([TaskStatus.STOPPED, TaskStatus.TIMED_OUT])(
+    'preserves wait workload executor %s patches',
+    async (status) => {
+      const task = makeTask('{"schemaVersion":1,"profile":"wait","durationMs":1000}');
+      const { service, updateFromExecutor } = makePatchHarness(task, 'workload');
+
+      await expect(
+        service.patch(
+          task.task_id,
+          { status, completed_at: '2026-01-01T00:00:05.000Z' },
+          { provider: 'rest' }
+        )
+      ).resolves.toMatchObject({ status });
+      expect(updateFromExecutor).toHaveBeenCalledWith(
+        task.task_id,
+        expect.objectContaining({ status, completed_at: '2026-01-01T00:00:05.000Z' })
+      );
+      expect(SessionRepository.prototype.findById).not.toHaveBeenCalled();
+    }
+  );
+
   it('preserves explicit failure details', async () => {
     const service = Object.create(TasksService.prototype) as TasksService;
     service.patch = vi.fn().mockResolvedValue({ task_id: 'task-1', status: TaskStatus.FAILED });
@@ -89,6 +218,201 @@ describe('TasksService executor patches', () => {
       expect.objectContaining({ status: TaskStatus.FAILED, error_message: 'launch rejected' }),
       undefined
     );
+  });
+
+  it('uses the durable failed workload status for completion side effects', async () => {
+    const task = {
+      task_id: '018f0000-0000-7000-8000-000000000001',
+      session_id: '018f0000-0000-7000-8000-000000000002',
+      created_by: '018f0000-0000-7000-8000-000000000003',
+      full_prompt: '{"schemaVersion":1,"profile":"controlled-failure"}',
+      status: TaskStatus.FAILED,
+    } as Task;
+    const completeWorkload = vi.fn().mockResolvedValue({
+      outcome: 'transitioned',
+      task,
+      message: {} as Message,
+    });
+    const processCompletionSideEffects = vi.fn().mockResolvedValue(true);
+    const trackTaskCompleted = vi.fn();
+    const emit = vi.fn();
+    const service = Object.create(TasksService.prototype) as TasksService;
+    Reflect.set(service, 'taskRepo', { completeWorkload });
+    Reflect.set(service, 'app', { service: () => ({ emit }) });
+    Reflect.set(service, 'retireTaskExecutorCredentials', vi.fn());
+    Reflect.set(service, 'processCompletionSideEffects', processCompletionSideEffects);
+    Reflect.set(service, 'trackTaskCompleted', trackTaskCompleted);
+
+    await service.completeWorkload({
+      task_id: task.task_id,
+      result_message_id: '018f0000-0000-7000-8000-000000000004',
+      profile: 'controlled-failure',
+      requested_delay_ms: 0,
+    });
+
+    expect(trackTaskCompleted).toHaveBeenCalledWith(task);
+    expect(processCompletionSideEffects).toHaveBeenCalledWith(
+      task,
+      TaskStatus.FAILED,
+      expect.objectContaining({ provider: undefined }),
+      true
+    );
+  });
+
+  it('uses the canonical fixed command failure for daemon completion side effects', async () => {
+    const task = {
+      task_id: '018f0000-0000-7000-8000-000000000001',
+      session_id: '018f0000-0000-7000-8000-000000000002',
+      created_by: '018f0000-0000-7000-8000-000000000003',
+      full_prompt: '{"schemaVersion":1,"profile":"fixture-command"}',
+      status: TaskStatus.FAILED,
+      error_message: 'WORKLOAD_FIXTURE_COMMAND_FAILED',
+    } as Task;
+    const completeWorkload = vi.fn().mockResolvedValue({
+      outcome: 'transitioned',
+      task,
+      message: {} as Message,
+    });
+    const processCompletionSideEffects = vi.fn().mockResolvedValue(true);
+    const service = Object.create(TasksService.prototype) as TasksService;
+    Reflect.set(service, 'taskRepo', { completeWorkload });
+    Reflect.set(service, 'app', { service: () => ({ emit: vi.fn() }) });
+    Reflect.set(service, 'retireTaskExecutorCredentials', vi.fn());
+    Reflect.set(service, 'processCompletionSideEffects', processCompletionSideEffects);
+    Reflect.set(service, 'trackTaskCompleted', vi.fn());
+    const completion: WorkloadCompletionInput = {
+      task_id: task.task_id,
+      result_message_id: '018f0000-0000-7000-8000-000000000004',
+      profile: 'fixture-command',
+      requested_repetitions: 1,
+      fixture_id: 'node-compile-test-v1',
+      outcome: 'failed',
+      observed_elapsed_ms: 20,
+      completed_command_count: 0,
+      commands: [
+        {
+          command: 'node-check',
+          attempted: 1,
+          completed: 0,
+          outcome: 'failed',
+          exit_code: 1,
+          stdout_bytes: 0,
+          stderr_bytes: 12,
+          stdout_sha256: 'a'.repeat(64),
+          stderr_sha256: 'b'.repeat(64),
+        },
+        {
+          command: 'node-test',
+          attempted: 0,
+          completed: 0,
+          outcome: 'not-run',
+          exit_code: null,
+          stdout_bytes: 0,
+          stderr_bytes: 0,
+          stdout_sha256: 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855',
+          stderr_sha256: 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855',
+        },
+      ],
+      cleanup_confirmed: true,
+    };
+
+    await service.completeWorkload(completion);
+
+    expect(completeWorkload).toHaveBeenCalledWith(completion);
+    expect(processCompletionSideEffects).toHaveBeenCalledWith(
+      task,
+      TaskStatus.FAILED,
+      expect.objectContaining({ provider: undefined }),
+      true
+    );
+  });
+
+  it('uses the canonical offline install failure for daemon completion side effects', async () => {
+    const task = {
+      task_id: '018f0000-0000-7000-8000-000000000001',
+      session_id: '018f0000-0000-7000-8000-000000000002',
+      created_by: '018f0000-0000-7000-8000-000000000003',
+      full_prompt: '{"schemaVersion":1,"profile":"offline-install"}',
+      status: TaskStatus.FAILED,
+      error_message: 'WORKLOAD_OFFLINE_INSTALL_FAILED',
+    } as Task;
+    const completeWorkload = vi.fn().mockResolvedValue({
+      outcome: 'transitioned',
+      task,
+      message: {} as Message,
+    });
+    const processCompletionSideEffects = vi.fn().mockResolvedValue(true);
+    const service = Object.create(TasksService.prototype) as TasksService;
+    Reflect.set(service, 'taskRepo', { completeWorkload });
+    Reflect.set(service, 'app', { service: () => ({ emit: vi.fn() }) });
+    Reflect.set(service, 'retireTaskExecutorCredentials', vi.fn());
+    Reflect.set(service, 'processCompletionSideEffects', processCompletionSideEffects);
+    Reflect.set(service, 'trackTaskCompleted', vi.fn());
+    const emptyHash = 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855';
+    const completion: WorkloadCompletionInput = {
+      task_id: task.task_id,
+      result_message_id: '018f0000-0000-7000-8000-000000000004',
+      profile: 'offline-install',
+      requested_repetitions: 1,
+      fixture_id: 'node-offline-install-v1',
+      package_manager: 'pnpm',
+      package_manager_version: '11.17.0',
+      package_name: '@agor/offline-fixture-dependency',
+      package_version: '1.0.0',
+      artifact_sha256: '8e4e8ff60b13149ad2b13ce261a16040bd964ed2fe1014458d6c6be2b4745373',
+      lockfile_sha256: '54a155804466627cf95c7326e808e3a4be1a36b0b60628eee00952088f130e40',
+      outcome: 'failed',
+      failure_stage: 'prepare',
+      observed_elapsed_ms: 20,
+      completed_step_count: 0,
+      steps: ['package-manager-version', 'install', 'compile', 'test'].map((step) => ({
+        step,
+        attempted: 0,
+        completed: 0,
+        outcome: 'not-run',
+        exit_code: null,
+        elapsed_ms: 0,
+        stdout_bytes: 0,
+        stderr_bytes: 0,
+        stdout_sha256: emptyHash,
+        stderr_sha256: emptyHash,
+      })) as Extract<WorkloadCompletionInput, { profile: 'offline-install' }>['steps'],
+      cleanup_confirmed: true,
+    };
+
+    await service.completeWorkload(completion);
+
+    expect(completeWorkload).toHaveBeenCalledWith(completion);
+    expect(processCompletionSideEffects).toHaveBeenCalledWith(
+      task,
+      TaskStatus.FAILED,
+      expect.objectContaining({ provider: undefined }),
+      true
+    );
+  });
+
+  it('rejects non-canonical workspace inspection fields before repository mutation', async () => {
+    const completeWorkload = vi.fn();
+    const service = Object.create(TasksService.prototype) as TasksService;
+    Reflect.set(service, 'taskRepo', { completeWorkload });
+    const invalid = {
+      task_id: '018f0000-0000-7000-8000-000000000001',
+      result_message_id: '018f0000-0000-7000-8000-000000000004',
+      profile: 'workspace-inspection',
+      inspection: {
+        node: { state: 'available', version: '22.18.0' },
+        npm: { state: 'unavailable' },
+        pnpm: { state: 'unavailable' },
+        packageJson: { state: 'absent' },
+        packageManager: { state: 'unavailable' },
+        lockfiles: [],
+        repositoryMarkerPresent: false,
+        cwd: '/private/workspace',
+      },
+    } as unknown as WorkloadCompletionInput;
+
+    await expect(service.completeWorkload(invalid)).rejects.toThrow('WORKLOAD_COMPLETION_INVALID');
+    expect(completeWorkload).not.toHaveBeenCalled();
   });
 });
 

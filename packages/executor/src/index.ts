@@ -17,6 +17,7 @@
 import { resolveSdkWatchdogConfig } from '@agor/core/config';
 import { shortId } from '@agor/core/db';
 import type {
+  AgenticToolName,
   MessageSource,
   PermissionMode,
   PermissionScope,
@@ -64,7 +65,9 @@ export interface ExecutorConfig {
   sessionId: string;
   taskId: string;
   prompt: string;
-  tool: 'claude-code' | 'gemini' | 'codex' | 'opencode' | 'copilot' | 'cursor';
+  /** Daemon-authored Task cwd. Absent only in the legacy CLI compatibility path. */
+  workspaceCwd?: string;
+  tool: AgenticToolName;
   permissionMode?: PermissionMode;
   daemonUrl: string;
   messageSource?: MessageSource;
@@ -345,7 +348,7 @@ export class AgorExecutor {
     });
     const watchdogConfig =
       this.config.resolvedConfig?.execution?.sdk_watchdog ?? resolveSdkWatchdogConfig();
-    if (this.config.tool !== 'cursor') {
+    if (this.config.tool !== 'cursor' && this.config.tool !== 'workload') {
       this.watchdog = new SdkWatchdog({
         tool: this.config.tool,
         config: watchdogConfig,
@@ -364,7 +367,7 @@ export class AgorExecutor {
       const { ToolRegistry, initializeToolRegistry } = await import(
         './handlers/sdk/tool-registry.js'
       );
-      await initializeToolRegistry();
+      await initializeToolRegistry(this.config.tool);
 
       // Execute using registry
       await ToolRegistry.execute(this.config.tool, {
@@ -372,6 +375,7 @@ export class AgorExecutor {
         sessionId: this.config.sessionId as SessionID,
         taskId: this.config.taskId as TaskID,
         prompt: this.config.prompt,
+        workspaceCwd: this.config.workspaceCwd,
         permissionMode: this.config.permissionMode,
         abortController: this.abortController,
         messageSource: this.config.messageSource,

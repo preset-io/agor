@@ -12,6 +12,7 @@ import type {
 import {
   DEFAULT_PROVIDER_RESOLUTION_POLICY,
   isProviderConnectionTool,
+  isTenantAgenticToolEnabledByDefault,
   PROVIDER_RESOLUTION_POLICIES,
   TENANT_PROVIDER_CONNECTION_FIELDS,
 } from '../../types';
@@ -85,9 +86,12 @@ function parseSettings(
     if (value) connection[field] = value;
   }
   const resolutionPolicy = input.resolution_policy as ProviderResolutionPolicy | undefined;
+  const enabled = input.enabled as boolean | undefined;
   return {
     ...(input.revision !== undefined ? { revision: input.revision as number } : {}),
-    ...(input.enabled === false ? { enabled: false } : {}),
+    ...(enabled !== undefined && enabled !== isTenantAgenticToolEnabledByDefault(tool)
+      ? { enabled }
+      : {}),
     ...(resolutionPolicy && resolutionPolicy !== DEFAULT_PROVIDER_RESOLUTION_POLICY
       ? { resolution_policy: resolutionPolicy }
       : {}),
@@ -112,7 +116,7 @@ export class TenantAgenticToolSettingsRepository {
   }
 
   async isEnabled(tool: TenantAgenticToolName): Promise<boolean> {
-    return (await this.find(tool)).enabled !== false;
+    return (await this.find(tool)).enabled ?? isTenantAgenticToolEnabledByDefault(tool);
   }
 
   async resolutionPolicy(tool: TenantAgenticToolName) {
@@ -163,13 +167,14 @@ export class TenantAgenticToolSettingsRepository {
       }
       const resolutionPolicy =
         patch.resolution_policy ?? current.resolution_policy ?? DEFAULT_PROVIDER_RESOLUTION_POLICY;
+      const enabled = patch.enabled ?? current.enabled ?? isTenantAgenticToolEnabledByDefault(tool);
       const revision = (current.revision ?? 0) + 1;
       if (!Number.isSafeInteger(revision)) {
         throw new Error(`Tenant agentic-tool settings revision overflow for ${tool}`);
       }
       const next: StoredTenantAgenticToolSettings = {
         revision,
-        ...((patch.enabled ?? current.enabled) === false ? { enabled: false } : {}),
+        ...(enabled !== isTenantAgenticToolEnabledByDefault(tool) ? { enabled } : {}),
         ...(resolutionPolicy !== DEFAULT_PROVIDER_RESOLUTION_POLICY
           ? { resolution_policy: resolutionPolicy }
           : {}),

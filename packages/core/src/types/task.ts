@@ -2,7 +2,7 @@
 import type { PersistedAgenticToolName } from './agentic-tool';
 import type { GatewayInboundEventID } from './gateway';
 import type { MessageID, SessionID, TaskID, UserID } from './id';
-import type { PersistedMessageSource } from './message';
+import type { Message, PersistedMessageSource } from './message';
 import type { ReportPath, ReportTemplate } from './report';
 
 export const TaskStatus = {
@@ -46,6 +46,13 @@ export interface ExecutorPulse {
 export interface RuntimeTelemetryInput {
   task_id: string;
   pulse?: Omit<ExecutorPulse, 'observed_at'>;
+}
+
+/** Atomic result publication returned by the built-in workload completion seam. */
+export interface WorkloadCompletionResult {
+  task: Task;
+  message: Message;
+  outcome: 'transitioned' | 'idempotent';
 }
 
 export const SDK_WATCHDOG_FAILURE_REASONS = [

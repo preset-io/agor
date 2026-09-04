@@ -18,6 +18,7 @@ import type {
   Branch,
   BranchCapabilityPolicy,
   BranchEnvironmentUpdate,
+  BranchFilesystemObservation,
   CapabilityPolicyWorkspacePreferences,
   CardType,
   CardWithType,
@@ -82,6 +83,8 @@ import type {
   UserAvatarSyncResult,
   UserID,
   UUID,
+  WorkloadCompletionInput,
+  WorkloadCompletionResult,
 } from '@agor/core/types';
 import authentication, { type AuthenticationClient } from '@feathersjs/authentication-client';
 import type { Application, Paginated, Params } from '@feathersjs/feathers';
@@ -244,6 +247,11 @@ export interface BranchPermissionsService {
     data: ClientInput<BranchCapabilityPolicy>,
     params?: Params
   ): Promise<BranchCapabilityPolicy>;
+}
+
+/** Read-only, path-free observation of a Branch's server-owned filesystem root. */
+export interface BranchFilesystemStatusService {
+  find(params?: Params): Promise<BranchFilesystemObservation>;
 }
 
 export interface WorkspacePreferencesService {
@@ -521,6 +529,16 @@ export interface TasksService extends AgorService<Task> {
   reportRuntimeTelemetry(data: RuntimeTelemetryInput, params?: Params): Promise<Task>;
   /** Report a daemon-authorized SDK watchdog decision. */
   reportSdkHealthFailure(data: SdkHealthFailureInput, params?: Params): Promise<Task>;
+  /** Atomically publish a built-in workload result and settle its Task. */
+  completeWorkload(
+    data: WorkloadCompletionInput,
+    params?: Params
+  ): Promise<WorkloadCompletionResult>;
+  /** Replay an already-committed workload settlement after token retirement. */
+  reconcileWorkloadCompletion(
+    data: WorkloadCompletionInput,
+    params?: Params
+  ): Promise<WorkloadCompletionResult>;
   /**
    * Mark a task as completed
    */
@@ -836,6 +854,7 @@ export interface AgorClient
   service(path: 'boards'): BoardsService;
   service(path: 'boards/:id/permissions'): BoardPermissionsService;
   service(path: 'branches/:id/permissions'): BranchPermissionsService;
+  service(path: `branches/${string}/filesystem-status`): BranchFilesystemStatusService;
   service(path: 'workspace-preferences'): WorkspacePreferencesService;
   service(path: 'schedules'): SchedulesService;
   service(path: 'gateway-channels'): GatewayChannelsService;
@@ -1349,7 +1368,9 @@ function extendTasksService(client: AgorClient): void {
       'connectExecutor',
       'reportTerminationComplete',
       'reportRuntimeTelemetry',
-      'reportSdkHealthFailure'
+      'reportSdkHealthFailure',
+      'completeWorkload',
+      'reconcileWorkloadCompletion'
     );
   }
   tasksService[TASKS_SERVICE_EXTENDED] = true;
@@ -1540,6 +1561,8 @@ export interface SocketConnectionAuthentication {
    * latest value.
    */
   accessToken: string | (() => string | null | undefined);
+  /** Narrow, transport-only handshake metadata such as a workload receipt. */
+  authData?: () => Record<string, unknown>;
 }
 
 /**
@@ -1595,10 +1618,11 @@ export function createClient(
     closeOnBeforeunload: true, // Close socket when page unloads
     ...(socketAuthentication
       ? {
-          auth: (authorize: (data: Record<string, string>) => void) => {
+          auth: (authorize: (data: Record<string, unknown>) => void) => {
             const configured = socketAuthentication.accessToken;
             const accessToken = typeof configured === 'function' ? configured() : configured;
-            authorize(accessToken ? { token: accessToken } : {});
+            const authData = socketAuthentication.authData?.() ?? {};
+            authorize(accessToken ? { ...authData, token: accessToken } : authData);
           },
         }
       : {}),

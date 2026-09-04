@@ -71,6 +71,7 @@ interface SessionTokenData {
   expires_at: Date;
   max_uses: number;
   use_count: number;
+  revoked_at?: Date;
 }
 
 interface VerifiedExecutorToken {
@@ -97,11 +98,51 @@ export interface SessionTokenValidationScope {
   branchId?: string;
 }
 
+export interface RevokedWorkloadCompletionReceipt {
+  taskId: string;
+  sessionId: string;
+  branchId: string;
+  resultMessageId: string;
+  userId: string;
+  tenantId: string;
+}
+
+function completionReceiptScope(value: unknown): {
+  taskId: string;
+  sessionId: string;
+  resultMessageId: string;
+} | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const receipt = value as Record<string, unknown>;
+  if (Object.keys(receipt).sort().join(',') !== 'completion,session_id,task_id') return null;
+  if (typeof receipt.task_id !== 'string' || !receipt.task_id) return null;
+  if (typeof receipt.session_id !== 'string' || !receipt.session_id) return null;
+  if (
+    !receipt.completion ||
+    typeof receipt.completion !== 'object' ||
+    Array.isArray(receipt.completion)
+  ) {
+    return null;
+  }
+  const completion = receipt.completion as Record<string, unknown>;
+  if (typeof completion.task_id !== 'string' || !completion.task_id) return null;
+  if (typeof completion.result_message_id !== 'string' || !completion.result_message_id)
+    return null;
+  if (completion.task_id !== receipt.task_id) return null;
+  return {
+    taskId: receipt.task_id,
+    sessionId: receipt.session_id,
+    resultMessageId: completion.result_message_id,
+  };
+}
+
 /** Testable port; production PostgreSQL uses the implementation below. */
 export interface SessionTokenAuthorityStore {
   issue(input: ExecutorSessionTokenAuthorityIssue): Promise<void>;
   validateAndConsume(input: ExecutorSessionTokenAuthorityClaim): Promise<SessionInfo | null>;
   isCurrent(input: CurrentTaskExecutorSessionTokenAuthority): Promise<boolean>;
+  /** Retained tombstone lookup for the exact workload receipt capability. */
+  findRevoked?(input: ExecutorSessionTokenAuthorityClaim): Promise<SessionInfo | null>;
   revoke(tokenFingerprint: string, tenantId: string): Promise<boolean>;
   revokeByTask(taskId: string, tenantId: string): Promise<string[]>;
   purgeRetained(cutoff: Date): Promise<number>;
@@ -133,6 +174,19 @@ class PostgreSQLSessionTokenAuthorityStore implements SessionTokenAuthorityStore
     return this.withIndependentTenantTransaction(input.tenantId, (scoped) =>
       new ExecutorSessionTokenAuthorityRepository(scoped).isCurrent(input)
     );
+  }
+
+  async findRevoked(input: ExecutorSessionTokenAuthorityClaim): Promise<SessionInfo | null> {
+    const authority = await this.withIndependentTenantTransaction(input.tenantId, (scoped) =>
+      new ExecutorSessionTokenAuthorityRepository(scoped).findRevoked(input)
+    );
+    if (!authority) return null;
+    return {
+      session_id: authority.sessionId,
+      ...(authority.taskId ? { task_id: authority.taskId } : {}),
+      ...(authority.branchId ? { branch_id: authority.branchId } : {}),
+      user_id: authority.userId,
+    };
   }
 
   async revoke(tokenFingerprint: string, tenantId: string): Promise<boolean> {
@@ -204,6 +258,7 @@ export function fingerprintExecutorSessionToken(token: string): string {
 
 export class SessionTokenService {
   private readonly tokens = new Map<string, SessionTokenData>();
+  private readonly revokedTokens = new Map<string, SessionTokenData>();
   private readonly authorityStore: SessionTokenAuthorityStore | null;
   private readonly now: () => Date;
   private readonly onRevoked?: SessionTokenServiceDependencies['onRevoked'];
@@ -471,6 +526,87 @@ export class SessionTokenService {
   }
 
   /**
+   * Validate the one retained tombstone capability used after a workload
+   * completion reply is lost. The caller must present the original signed
+   * Task bearer plus a receipt whose Task/Session/result identity is exact.
+   */
+  async validateRevokedWorkloadCompletionReceipt(
+    token: string,
+    receiptValue: unknown
+  ): Promise<RevokedWorkloadCompletionReceipt | null> {
+    const receipt = completionReceiptScope(receiptValue);
+    if (!receipt) return null;
+    const claims = this.verifyToken(token, false);
+    const ambientTenantId = getCurrentTenantId();
+    if (
+      !claims?.tenantId ||
+      (ambientTenantId && claims.tenantId !== ambientTenantId) ||
+      claims.purpose !== EXECUTOR_SESSION_TOKEN_PURPOSE ||
+      !claims.taskId ||
+      !claims.branchId ||
+      claims.taskId !== receipt.taskId ||
+      claims.sessionId !== receipt.sessionId
+    ) {
+      return null;
+    }
+
+    const tokenFingerprint = fingerprintExecutorSessionToken(token);
+    const expected = {
+      tenantId: claims.tenantId,
+      tokenFingerprint,
+      tokenType: EXECUTOR_SESSION_TOKEN_TYPE,
+      purpose: claims.purpose,
+      sessionId: claims.sessionId,
+      taskId: claims.taskId,
+      branchId: claims.branchId,
+      userId: claims.userId,
+    } satisfies ExecutorSessionTokenAuthorityClaim;
+
+    let authority: SessionInfo | null = null;
+    if (this.authorityStore) {
+      if (!this.authorityStore.findRevoked) return null;
+      authority = await this.authorityStore.findRevoked(expected);
+    } else {
+      const data = this.revokedTokens.get(tokenFingerprint);
+      if (
+        data &&
+        this.now() < data.expires_at &&
+        data.revoked_at &&
+        data.tenant_id === claims.tenantId &&
+        data.purpose === claims.purpose &&
+        data.session_id === claims.sessionId &&
+        data.task_id === claims.taskId &&
+        data.branch_id === claims.branchId &&
+        data.user_id === claims.userId
+      ) {
+        authority = {
+          session_id: data.session_id,
+          task_id: data.task_id,
+          branch_id: data.branch_id,
+          user_id: data.user_id,
+        };
+      }
+    }
+    if (
+      !authority ||
+      authority.session_id !== receipt.sessionId ||
+      authority.task_id !== receipt.taskId ||
+      authority.branch_id !== claims.branchId ||
+      authority.user_id !== claims.userId
+    ) {
+      return null;
+    }
+    return {
+      tenantId: claims.tenantId,
+      userId: claims.userId,
+      sessionId: receipt.sessionId,
+      taskId: receipt.taskId,
+      branchId: claims.branchId,
+      resultMessageId: receipt.resultMessageId,
+    };
+  }
+
+  /**
    * Check the current authority behind an already-authenticated Task bearer.
    * Callers supply only the server-derived fingerprint and verified claims.
    */
@@ -502,6 +638,8 @@ export class SessionTokenService {
       const existing = this.tokens.get(tokenFingerprint);
       const revoked = this.tokens.delete(tokenFingerprint);
       if (revoked) {
+        if (existing)
+          this.revokedTokens.set(tokenFingerprint, { ...existing, revoked_at: this.now() });
         await this.onRevoked?.({
           ...(existing?.tenant_id ? { tenantId: existing.tenant_id } : {}),
           tokenFingerprint,
@@ -541,6 +679,7 @@ export class SessionTokenService {
       for (const [tokenFingerprint, data] of this.tokens.entries()) {
         if (data.task_id !== taskId) continue;
         this.tokens.delete(tokenFingerprint);
+        this.revokedTokens.set(tokenFingerprint, { ...data, revoked_at: this.now() });
         revoked.push({ tokenFingerprint, data });
       }
       for (const { tokenFingerprint, data } of revoked) {
@@ -578,6 +717,15 @@ export class SessionTokenService {
       if (now >= data.expires_at) {
         this.tokens.delete(tokenFingerprint);
         count += 1;
+      }
+    }
+    const retentionCutoff = now.getTime() - EXECUTOR_SESSION_TOKEN_AUTHORITY_RETENTION_MS;
+    for (const [tokenFingerprint, data] of this.revokedTokens.entries()) {
+      if (
+        now >= data.expires_at ||
+        (data.revoked_at !== undefined && data.revoked_at.getTime() < retentionCutoff)
+      ) {
+        this.revokedTokens.delete(tokenFingerprint);
       }
     }
     return count;

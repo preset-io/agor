@@ -858,6 +858,15 @@ export interface ResolvedBranchStorageConfig {
 }
 
 /**
+ * Public read-only branch storage facts advertised by the daemon health
+ * endpoint. `borrowBaseObjects` is the effective create-time decision, not a
+ * client-selectable branch-create option.
+ */
+export interface BranchStorageHealthConfig extends ResolvedBranchStorageConfig {
+  borrowBaseObjects: boolean;
+}
+
+/**
  * Operator gate for which storage modes can be selected at branch-create
  * time. Defaults (v0.20+) enable both modes so users can pick per branch;
  * `default_mode` stays on `'worktree'` for backwards compatibility. Pin

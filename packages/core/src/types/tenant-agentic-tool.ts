@@ -9,10 +9,16 @@ export const TENANT_AGENTIC_TOOL_NAMES = [
   'copilot',
   'cursor',
   'opencode',
+  'workload',
 ] as const;
 
 export type TenantAgenticToolName = (typeof TENANT_AGENTIC_TOOL_NAMES)[number];
-export type ProviderConnectionTool = Exclude<TenantAgenticToolName, 'opencode'>;
+export type ProviderConnectionTool = Exclude<TenantAgenticToolName, 'opencode' | 'workload'>;
+
+/** Provider tools default on for compatibility; the built-in workload is opt-in per tenant. */
+export function isTenantAgenticToolEnabledByDefault(tool: TenantAgenticToolName): boolean {
+  return tool !== 'workload';
+}
 
 export const PROVIDER_RESOLUTION_POLICIES = [
   'user_required',
@@ -59,7 +65,7 @@ export const TENANT_PROVIDER_CONNECTION_FIELDS = {
 export interface StoredTenantAgenticToolSettings {
   /** Durable generation incremented on every workspace settings patch. */
   revision?: number;
-  /** Omitted values inherit Agor's built-in default (enabled). */
+  /** Omitted values inherit the per-tool built-in default. */
   enabled?: boolean;
   /** Omitted values inherit Agor's built-in user-preferred policy. */
   resolution_policy?: ProviderResolutionPolicy;
@@ -99,7 +105,7 @@ export function canonicalTenantAgenticTool(tool: AgenticToolName): TenantAgentic
 export function isProviderConnectionTool(
   tool: TenantAgenticToolName
 ): tool is ProviderConnectionTool {
-  return tool !== 'opencode';
+  return tool !== 'opencode' && tool !== 'workload';
 }
 
 export function providerToolForField(field: AgenticToolConfigField): ProviderConnectionTool | null {

@@ -786,7 +786,9 @@ describe('createClient', () => {
         'connectExecutor',
         'reportTerminationComplete',
         'reportRuntimeTelemetry',
-        'reportSdkHealthFailure'
+        'reportSdkHealthFailure',
+        'completeWorkload',
+        'reconcileWorkloadCompletion'
       );
     });
 

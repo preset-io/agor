@@ -45,6 +45,13 @@ export type AuthenticatedConnectionPrincipal =
       taskId?: string;
       tokenFingerprint: string;
       revocationGeneration: number;
+    }
+  | {
+      kind: 'executor-completion-receipt';
+      taskId: string;
+      sessionId: string;
+      resultMessageId: string;
+      tokenFingerprint: string;
     };
 
 /**
@@ -159,13 +166,17 @@ export function finalizeAuthenticatedConnectionAuthority(
   const trustedTenant = tenant ? Object.freeze({ ...tenant }) : undefined;
 
   const executorCandidate = getExecutorConnectionCandidate(authResult);
+  const completionReceipt = executorCandidate?.completionReceipt;
   const isExecutorLogin = Boolean(executorCandidate) || isExecutorSessionTokenPayload(payload);
   if (isExecutorLogin) {
     if (!executorCandidate || !trustedTenant || !executorRevocationFence) {
       throw new NotAuthenticated('Executor connection authority is unavailable');
     }
+    if (executorCandidate.tenantId !== trustedTenant.tenant_id) {
+      throw new NotAuthenticated('Executor connection authority was revoked');
+    }
     if (
-      executorCandidate.tenantId !== trustedTenant.tenant_id ||
+      !completionReceipt &&
       !executorRevocationFence.isCurrent(
         executorCandidate.tenantId,
         executorCandidate.revocationGeneration
@@ -177,7 +188,23 @@ export function finalizeAuthenticatedConnectionAuthority(
 
   const user = result.user;
   let principal: AuthenticatedConnectionPrincipal;
-  if (executorCandidate) {
+  if (completionReceipt) {
+    if (
+      !executorCandidate ||
+      completionReceipt.taskId !== executorCandidate.taskId ||
+      completionReceipt.sessionId.length === 0 ||
+      completionReceipt.resultMessageId.length === 0
+    ) {
+      throw new NotAuthenticated('Workload completion receipt authority is invalid');
+    }
+    principal = {
+      kind: 'executor-completion-receipt',
+      taskId: completionReceipt.taskId,
+      sessionId: completionReceipt.sessionId,
+      resultMessageId: completionReceipt.resultMessageId,
+      tokenFingerprint: executorCandidate.tokenFingerprint,
+    };
+  } else if (executorCandidate) {
     if (!user?.user_id) throw new NotAuthenticated('Executor user authority is unavailable');
     principal = {
       kind: 'executor',

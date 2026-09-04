@@ -914,6 +914,9 @@ importers:
       multer:
         specifier: ^2.2.0
         version: 2.2.0
+      pnpm:
+        specifier: 11.17.0
+        version: 11.17.0
       postgres:
         specifier: ^3.4.9
         version: 3.4.9
@@ -1182,6 +1185,9 @@ importers:
       diff:
         specifier: '>=8.0.3 <9'
         version: 8.0.3
+      pnpm:
+        specifier: 11.17.0
+        version: 11.17.0
       zod:
         specifier: ^4.3.6
         version: 4.4.3
@@ -8895,6 +8901,11 @@ packages:
   pngjs@7.0.0:
     resolution: {integrity: sha512-LKWqWJRhstyYo9pGvgor/ivk2w94eSjE3RGVuzLGlr3NmD8bf7RcYGze1mNdEHRP6TRP6rMuDHk5t44hnTRyow==}
     engines: {node: '>=14.19.0'}
+
+  pnpm@11.17.0:
+    resolution: {integrity: sha512-zKPOozKtJUu4QUX5ZtGfSHlhUhA0b8kseaBH8joNezzKPDeS8AdrofGDHSd++88KkRmzGppg7Kf7PWIx8zHvcg==}
+    engines: {node: '>=22.13'}
+    hasBin: true
 
   points-on-curve@0.2.0:
     resolution: {integrity: sha512-0mYKnYYe9ZcqMCWhUjItv/oHjvgEsfKvnUTg8sAtnHr3GVy7rGkXCb6d5cSyqrWqL4k81b9CPg3urd+T7aop3A==}
@@ -19911,6 +19922,8 @@ snapshots:
       fsevents: 2.3.2
 
   pngjs@7.0.0: {}
+
+  pnpm@11.17.0: {}
 
   points-on-curve@0.2.0: {}
 

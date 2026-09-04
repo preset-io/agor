@@ -32,6 +32,7 @@ const TOOL_LABELS: Record<TenantAgenticToolName, string> = {
   copilot: 'GitHub Copilot',
   cursor: 'Cursor SDK',
   opencode: 'OpenCode',
+  workload: 'Deterministic workload',
 };
 
 const TENANT_TOOL_FIELDS: Record<TenantAgenticToolName, AgenticToolFieldConfig[]> = {
@@ -43,6 +44,7 @@ const TENANT_TOOL_FIELDS: Record<TenantAgenticToolName, AgenticToolFieldConfig[]
   copilot: TOOL_FIELD_CONFIGS.copilot,
   cursor: TOOL_FIELD_CONFIGS.cursor,
   opencode: [],
+  workload: [],
 };
 
 const RESOLUTION_POLICIES: Array<{
@@ -232,7 +234,15 @@ export const AgenticToolsSection: React.FC<AgenticToolsSectionProps> = ({
                     }
                   />
                 )}
-                {current.deployment_available && (
+                {current.deployment_available && tool === 'workload' && (
+                  <Alert
+                    type="info"
+                    showIcon
+                    title="Built-in provider-free workload"
+                    description="This tool has no credentials, provider resolution, models, or presets. Its only workspace setting is the availability switch above."
+                  />
+                )}
+                {current.deployment_available && tool !== 'workload' && (
                   <Tabs
                     defaultActiveKey="authentication"
                     items={[

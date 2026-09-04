@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { Forbidden } from '@agor/core/feathers';
 import type { AuthenticatedParams, HookContext, Params } from '@agor/core/types';
 import { getAuthenticatedConnectionAuthority } from './authenticated-connection-authority.js';
+import { BRANCH_FILESYSTEM_STATUS_EXECUTOR_COMMAND_ID } from './executor-command-ids.js';
 import {
   EXECUTOR_COMMAND_TOKEN_PURPOSE,
   EXECUTOR_SESSION_TOKEN_PURPOSE,
@@ -88,6 +89,12 @@ export function authenticatedTaskExecutorRuntimeScope(
   params?: Params
 ): TaskExecutorRuntimeScope | null {
   const scope = authenticatedExecutorDelegationContext(params);
+  if (
+    getAuthenticatedConnectionAuthority(params?.connection)?.principal.kind ===
+    'executor-completion-receipt'
+  ) {
+    return null;
+  }
   return scope?.purpose === EXECUTOR_SESSION_TOKEN_PURPOSE && scope.taskId && scope.sessionId
     ? { sessionId: scope.sessionId, taskId: scope.taskId, branchId: scope.branchId }
     : null;
@@ -120,6 +127,7 @@ export function authenticatedTaskExecutorRuntimeAuthority(
   }
 
   const connectionAuthority = getAuthenticatedConnectionAuthority(params?.connection);
+  if (connectionAuthority?.principal.kind === 'executor-completion-receipt') return null;
   let tokenFingerprint: string;
   if (connectionAuthority) {
     if (
@@ -158,6 +166,50 @@ export function authenticatedExecutorCommandRuntimeScope(
         branchId: scope.branchId,
       }
     : null;
+}
+
+/**
+ * Enforce the executor runtime boundary before a Branch service can resolve a
+ * record. Branch-scoped command and task credentials may read only their
+ * exact Branch. The cleanup inventory is the one intentional branchless
+ * capability and is identified by its exact command ID.
+ */
+export function assertExecutorBranchReadScope(context: HookContext): void {
+  if (!context.params.provider || context.path !== 'branches' || context.method !== 'get') return;
+
+  const commandScope = authenticatedExecutorCommandRuntimeScope(context.params);
+  if (commandScope) {
+    if (commandScope.branchId && String(context.id) === commandScope.branchId) return;
+    if (
+      commandScope.branchId === undefined &&
+      commandScope.commandId === BRANCH_FILESYSTEM_STATUS_EXECUTOR_COMMAND_ID
+    ) {
+      return;
+    }
+    if (commandScope.branchId) {
+      throw new Forbidden('Executor command is scoped to another Branch');
+    }
+    throw new Forbidden('Executor runtime scope is not authorized to read this Branch');
+  }
+
+  const taskScope = authenticatedTaskExecutorRuntimeScope(context.params);
+  if (taskScope) {
+    if (taskScope.branchId && String(context.id) === taskScope.branchId) return;
+    throw new Forbidden('Executor runtime scope is not authorized to read this Branch');
+  }
+
+  const principal = getAuthenticatedConnectionAuthority(context.params.connection)?.principal;
+  if (principal?.kind === 'executor' || context.params.user?._isServiceAccount) {
+    throw new Forbidden('A valid executor runtime scope is required to read a Branch');
+  }
+}
+
+/** Registered before-hook adapter for the unconditional Branch get guard. */
+export function requireExecutorBranchReadScope() {
+  return async (context: HookContext): Promise<HookContext> => {
+    assertExecutorBranchReadScope(context);
+    return context;
+  };
 }
 
 /** Exact action/branch check for a one-purpose executor callback. */
@@ -235,6 +287,41 @@ export function requireTaskScopedExecutorRuntimeToken() {
     const taskId = executorOperationTaskId(context);
     if (!taskId || !isTaskScopedExecutorRequest(context, taskId)) {
       throw new Forbidden('A token scoped to this executor task is required');
+    }
+    return context;
+  };
+}
+
+/** Allow only the immutable receipt authority to replay one committed result. */
+export function requireWorkloadCompletionReceipt() {
+  return async (context: HookContext): Promise<HookContext> => {
+    const authority = getAuthenticatedConnectionAuthority(context.params.connection);
+    const data = asRecord(context.data);
+    if (
+      context.path !== 'tasks' ||
+      context.method !== 'reconcileWorkloadCompletion' ||
+      authority?.principal.kind !== 'executor-completion-receipt' ||
+      !data ||
+      data.task_id !== authority.principal.taskId ||
+      data.result_message_id !== authority.principal.resultMessageId
+    ) {
+      throw new Forbidden('An exact workload completion receipt is required');
+    }
+    const payload = context.params.authentication?.payload as
+      | ExecutorSessionTokenPayload
+      | undefined;
+    if (
+      !payload ||
+      payload.type !== EXECUTOR_SESSION_TOKEN_TYPE ||
+      payload.purpose !== EXECUTOR_SESSION_TOKEN_PURPOSE ||
+      payload.task_id !== authority.principal.taskId ||
+      getExecutorSessionTokenSessionId(payload) !== authority.principal.sessionId ||
+      payload.branch_id === undefined ||
+      payload.sub !== context.params.user?.user_id ||
+      payload.tenant_id === undefined ||
+      context.params.tenant?.tenant_id !== payload.tenant_id
+    ) {
+      throw new Forbidden('Workload completion receipt scope is invalid');
     }
     return context;
   };

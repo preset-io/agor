@@ -4,6 +4,21 @@ import { dbTest } from '../../../../packages/core/src/db/test-helpers';
 import { AgenticToolPresetsService } from './agentic-tool-presets';
 
 describe('AgenticToolPresetsService exact model configuration', () => {
+  dbTest('rejects presets for the built-in workload at the service boundary', async ({ db }) => {
+    const owner = await new UsersRepository(db).create({
+      email: `preset-owner-${generateId()}@example.com`,
+      name: 'Preset owner',
+    });
+
+    await expect(
+      new AgenticToolPresetsService(db).create(
+        { tool: 'workload', name: 'Not configurable', configuration: {} },
+        { user: owner } as never
+      )
+    ).rejects.toThrow('workload does not support presets');
+    expect(await new AgenticToolPresetRepository(db).find('workload')).toHaveLength(0);
+  });
+
   dbTest('rejects incomplete OpenCode presets before persistence', async ({ db }) => {
     const owner = await new UsersRepository(db).create({
       email: `preset-owner-${generateId()}@example.com`,

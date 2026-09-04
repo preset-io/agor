@@ -1,4 +1,9 @@
-import { type AgorConfig, SANDBOX_HOME_MODE_DEFAULT } from '@agor/core/config';
+import {
+  type AgorConfig,
+  type BranchStorageHealthConfig,
+  resolveBranchStorageConfig,
+  SANDBOX_HOME_MODE_DEFAULT,
+} from '@agor/core/config';
 import type { DeepReadonly } from '@agor/core/types';
 
 /**
@@ -64,6 +69,17 @@ export function shouldUseCloneReferencePath(config: DeepReadonly<AgorConfig>): b
     return true;
   }
   return !executorSandboxHidesBaseClone(config);
+}
+
+/**
+ * Public branch-storage health facts. Keep the borrowing fact coupled to the
+ * exact predicate used by branch creation so health cannot drift from runtime.
+ */
+export function resolveBranchStorageHealthConfig(config: AgorConfig): BranchStorageHealthConfig {
+  return {
+    ...resolveBranchStorageConfig(config),
+    borrowBaseObjects: shouldUseCloneReferencePath(config),
+  };
 }
 
 /**

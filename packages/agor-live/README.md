@@ -6,7 +6,7 @@ Agor is a real-time collaborative platform for managing Claude Code, Codex, and 
 
 ## Installation
 
-Requires Node.js ≥ 22.12 and Git on `PATH`. HTTPS remotes also require a working system CA trust store; SSH remotes require an SSH client and configured keys or agent access.
+Requires Node.js ≥ 22.13 and Git on `PATH`. HTTPS remotes also require a working system CA trust store; SSH remotes require an SSH client and configured keys or agent access.
 
 ```bash
 npm install -g agor-live

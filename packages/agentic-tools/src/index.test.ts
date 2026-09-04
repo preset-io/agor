@@ -36,6 +36,7 @@ describe('agentic-tool integrations', () => {
       opencode: true,
       copilot: true,
       cursor: false,
+      workload: false,
     };
 
     const EXPECTED_MAPPING: Partial<

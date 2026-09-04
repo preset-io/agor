@@ -9,6 +9,20 @@ export type BranchMetadataAction = (typeof BRANCH_METADATA_ACTIONS)[number];
 export const BRANCH_FILESYSTEM_ACTIONS = ['preserved', 'cleaned', 'deleted'] as const;
 export type BranchFilesystemAction = (typeof BRANCH_FILESYSTEM_ACTIONS)[number];
 
+/** Health capability for the exact, path-free Branch filesystem observer. */
+export const BRANCH_FILESYSTEM_OBSERVATION_CAPABILITY = 'branch-filesystem-observation-v1' as const;
+
+export const BRANCH_FILESYSTEM_KINDS = ['directory', 'file', 'other', 'missing'] as const;
+export type BranchFilesystemKind = (typeof BRANCH_FILESYSTEM_KINDS)[number];
+
+/** Exact server-side observation returned by the Branch filesystem status route. */
+export interface BranchFilesystemObservation {
+  branch_id: BranchID;
+  exists: boolean;
+  kind: BranchFilesystemKind;
+  observed_at: string;
+}
+
 /** Canonical request contract for the hooked branch archive/delete boundary. */
 export interface BranchArchiveOrDeleteOptions {
   metadataAction: BranchMetadataAction;

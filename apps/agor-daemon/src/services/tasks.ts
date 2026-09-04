@@ -23,6 +23,8 @@ import {
   enqueueTenantDatabasePostCommitCallback,
   getCurrentTenantId,
   isPostgresDatabaseHandle,
+  type MessageCreateTransactionHook,
+  RepositoryError,
   runWithTenantDatabaseScope,
   SessionRepository,
   shortId,
@@ -35,6 +37,7 @@ import {
   type TerminationClaimResult,
   type TerminationSettlementInput,
   type TerminationSettlementResult,
+  type WorkloadCompletionReceiptScope,
 } from '@agor/core/db';
 import { type Application, BadRequest, Conflict, Forbidden } from '@agor/core/feathers';
 import { deriveTitleFromPrompt } from '@agor/core/sessions';
@@ -55,17 +58,23 @@ import type {
   TaskID,
   TaskPendingDispatchStatus,
   UUID,
+  WorkloadCompletionInput,
+  WorkloadCompletionResult,
 } from '@agor/core/types';
 import {
   AUTHORIZATION_REVOKED_TERMINATION_MESSAGE,
+  assertValidWorkloadCompletionInput,
   ExecutorPulseKind,
+  isCanonicalFullUuid,
   isTerminalTaskStatus,
+  parseWorkloadRequest,
   SDK_WATCHDOG_FAILURE_REASONS,
   SessionStatus,
   type TaskMetadata,
   TaskStatus,
 } from '@agor/core/types';
 import { DrizzleService, type Query } from '../adapters/drizzle';
+import { getAuthenticatedConnectionAuthority } from '../auth/authenticated-connection-authority.js';
 import { authenticatedTaskExecutorRuntimeAuthority } from '../auth/executor-runtime-scope.js';
 import { getDaemonMetrics } from '../metrics/index.js';
 import {
@@ -112,6 +121,30 @@ function isCompletionSideEffectTaskStatus(status: Task['status'] | undefined): b
   return status !== undefined && COMPLETION_SIDE_EFFECT_TASK_STATUSES.has(status);
 }
 
+function isControlledFailureWorkload(task: Task): boolean {
+  try {
+    return parseWorkloadRequest(task.full_prompt).profile === 'controlled-failure';
+  } catch {
+    return false;
+  }
+}
+
+function isFixtureCommandWorkload(task: Task): boolean {
+  try {
+    return parseWorkloadRequest(task.full_prompt).profile === 'fixture-command';
+  } catch {
+    return false;
+  }
+}
+
+function isOfflineInstallWorkload(task: Task): boolean {
+  try {
+    return parseWorkloadRequest(task.full_prompt).profile === 'offline-install';
+  } catch {
+    return false;
+  }
+}
+
 const TASK_SORT_FIELDS = new Set(['task_id', 'session_id', 'status', 'created_at', 'created_by']);
 
 /**
@@ -128,6 +161,8 @@ export const TASKS_SERVICE_TRANSPORT_METHODS = [
   'reportTerminationComplete',
   'reportRuntimeTelemetry',
   'reportSdkHealthFailure',
+  'completeWorkload',
+  'reconcileWorkloadCompletion',
 ] as const;
 
 export type TaskParams = QueryParams<{
@@ -179,9 +214,10 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
     private readonly executorCredentialRevoker?: TaskExecutorCredentialRevoker,
     private readonly runtimeAuthorityOptions: TaskRuntimeAuthorityOptions = {
       branchRbacEnabled: app.get?.('config')?.execution?.branch_rbac === true,
-    }
+    },
+    onWorkloadResultCreateInTransaction?: MessageCreateTransactionHook
   ) {
-    const taskRepo = new TaskRepository(db);
+    const taskRepo = new TaskRepository(db, onWorkloadResultCreateInTransaction);
     super(taskRepo, {
       id: 'task_id',
       resourceType: 'Task',
@@ -782,6 +818,108 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
   }
 
   /**
+   * Publish the built-in workload's canonical result and terminal Task fact in
+   * one repository transaction. A deterministic Message ID makes an exact
+   * response-loss retry idempotent without weakening the task-scoped executor
+   * lease or the Stop fence.
+   */
+  async completeWorkload(
+    data: WorkloadCompletionInput,
+    params?: TaskParams
+  ): Promise<WorkloadCompletionResult> {
+    try {
+      assertValidWorkloadCompletionInput(data);
+    } catch (error) {
+      throw new BadRequest(error instanceof Error ? error.message : 'WORKLOAD_COMPLETION_INVALID');
+    }
+    if (!isCanonicalFullUuid(data.task_id) || !isCanonicalFullUuid(data.result_message_id)) {
+      throw new BadRequest('Workload completion requires canonical Task and Message IDs');
+    }
+
+    let result: WorkloadCompletionResult;
+    try {
+      result = await this.taskRepo.completeWorkload(data);
+    } catch (error) {
+      if (error instanceof RepositoryError) throw new Conflict(error.message);
+      throw error;
+    }
+
+    // A response may be lost after the atomic commit. Exact retries repair
+    // credential revocation but do not duplicate transcript or lifecycle
+    // events. The durable queue worker repairs post-commit queue hand-off.
+    await this.retireTaskExecutorCredentials(result.task);
+    if (result.outcome === 'idempotent') return result;
+
+    emitServiceEvent(this.app, {
+      path: 'messages',
+      event: 'created',
+      data: result.message,
+      params,
+    });
+    emitServiceEvent(this.app, {
+      path: 'tasks',
+      event: 'patched',
+      data: result.task,
+      id: result.task.task_id,
+      params,
+    });
+    this.trackTaskCompleted(result.task);
+    await this.processCompletionSideEffects(
+      result.task,
+      result.task.status,
+      { ...(params ?? {}), provider: undefined } as TaskParams,
+      true
+    );
+    return result;
+  }
+
+  /** Replay one canonical workload settlement using the retired-token receipt. */
+  async reconcileWorkloadCompletion(
+    data: WorkloadCompletionInput,
+    params?: TaskParams
+  ): Promise<WorkloadCompletionResult> {
+    const authority = getAuthenticatedConnectionAuthority(params?.connection);
+    const payload = params?.authentication?.payload;
+    const payloadRecord =
+      payload && typeof payload === 'object' && !Array.isArray(payload)
+        ? (payload as Record<string, unknown>)
+        : undefined;
+    const scope = {
+      userId: params?.user?.user_id,
+      sessionId: payloadRecord?.session_id,
+      taskId: payloadRecord?.task_id,
+      branchId: payloadRecord?.branch_id,
+    };
+    if (
+      authority?.principal.kind !== 'executor-completion-receipt' ||
+      authority.principal.taskId !== data.task_id ||
+      authority.principal.resultMessageId !== data.result_message_id ||
+      typeof scope.userId !== 'string' ||
+      typeof scope.sessionId !== 'string' ||
+      typeof scope.taskId !== 'string' ||
+      typeof scope.branchId !== 'string' ||
+      authority.principal.sessionId !== scope.sessionId ||
+      payloadRecord?.type !== 'executor-session' ||
+      payloadRecord?.purpose !== 'executor-task' ||
+      payloadRecord?.sub !== scope.userId ||
+      typeof payloadRecord?.tenant_id !== 'string' ||
+      payloadRecord.tenant_id !== params?.tenant?.tenant_id ||
+      scope.taskId !== data.task_id
+    ) {
+      throw new Forbidden('Workload completion receipt scope is unavailable');
+    }
+    try {
+      return await this.taskRepo.reconcileWorkloadCompletion(
+        data,
+        scope as WorkloadCompletionReceiptScope
+      );
+    } catch (error) {
+      if (error instanceof RepositoryError) throw new Conflict(error.message);
+      throw error;
+    }
+  }
+
+  /**
    * Override patch to detect task completion and:
    * 1. Atomically update session status to IDLE when task reaches terminal state
    * 2. Set ready_for_prompt flag
@@ -792,6 +930,12 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
   async patch(id: string, data: Partial<Task>, params?: TaskParams): Promise<Task | Task[]> {
     const nextStatus = data.status;
     const currentTask = nextStatus !== undefined ? await this.get(id, params) : undefined;
+    if (params?.provider && nextStatus === TaskStatus.COMPLETED && currentTask) {
+      const session = await new SessionRepository(this.db).findById(currentTask.session_id);
+      if (session?.agentic_tool === 'workload') {
+        throw new BadRequest('Workload tasks must complete through completeWorkload');
+      }
+    }
     if (
       currentTask?.status === TaskStatus.STOPPING &&
       currentTask.termination_request &&
@@ -802,6 +946,39 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
         `⏭️ [TasksService] Coordinator owns terminality for stopping task ${shortId(currentTask.task_id)}`
       );
       return currentTask;
+    }
+    if (
+      params?.provider &&
+      currentTask &&
+      isTerminalTaskStatus(nextStatus) &&
+      isControlledFailureWorkload(currentTask)
+    ) {
+      const session = await new SessionRepository(this.db).findById(currentTask.session_id);
+      if (session?.agentic_tool === 'workload') {
+        throw new BadRequest('Controlled workload failures must complete through completeWorkload');
+      }
+    }
+    if (
+      params?.provider &&
+      currentTask &&
+      isTerminalTaskStatus(nextStatus) &&
+      isFixtureCommandWorkload(currentTask)
+    ) {
+      const session = await new SessionRepository(this.db).findById(currentTask.session_id);
+      if (session?.agentic_tool === 'workload') {
+        throw new BadRequest('Fixture command workloads must settle through completeWorkload');
+      }
+    }
+    if (
+      params?.provider &&
+      currentTask &&
+      isTerminalTaskStatus(nextStatus) &&
+      isOfflineInstallWorkload(currentTask)
+    ) {
+      const session = await new SessionRepository(this.db).findById(currentTask.session_id);
+      if (session?.agentic_tool === 'workload') {
+        throw new BadRequest('Offline install workloads must settle through completeWorkload');
+      }
     }
     if (currentTask && isTerminalTaskStatus(currentTask.status) && nextStatus !== undefined) {
       // A prior terminal patch may have committed before durable credential
@@ -1777,7 +1954,14 @@ export function createTasksService(
   db: TenantScopeAwareDatabase,
   app: Application,
   executorCredentialRevoker?: TaskExecutorCredentialRevoker,
-  runtimeAuthorityOptions?: TaskRuntimeAuthorityOptions
+  runtimeAuthorityOptions?: TaskRuntimeAuthorityOptions,
+  onWorkloadResultCreateInTransaction?: MessageCreateTransactionHook
 ): TasksService {
-  return new TasksService(db, app, executorCredentialRevoker, runtimeAuthorityOptions);
+  return new TasksService(
+    db,
+    app,
+    executorCredentialRevoker,
+    runtimeAuthorityOptions,
+    onWorkloadResultCreateInTransaction
+  );
 }

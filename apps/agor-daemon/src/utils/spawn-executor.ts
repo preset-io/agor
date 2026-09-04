@@ -443,6 +443,9 @@ export function spawnExecutor(
     ...withResolvedConfig(payload),
     executorMode: 'autonomous' as const,
   };
+  const promptTool = (payload.params as { tool?: unknown } | undefined)?.tool;
+  const executorType =
+    payload.command === 'prompt' && promptTool === 'workload' ? 'workload' : 'executor';
 
   if (executorCommandTemplate) {
     if (options.localSandboxFileBinds?.length) {
@@ -456,7 +459,7 @@ export function spawnExecutor(
         task_id: generateTaskId(),
         unix_user: options.delegatedHomeKey || undefined,
         log_level: resolveExecutorLogLevel(options.env ?? (process.env as Record<string, string>)),
-        executor_type: 'executor',
+        executor_type: executorType,
         ...templateVariables,
         tenant_id: tenantId,
       },

@@ -18,7 +18,13 @@ import type {
   TenantAgenticToolName,
   UserID,
 } from '@agor/core/types';
-import { TENANT_AGENTIC_TOOL_NAMES } from '@agor/core/types';
+import { isBuiltInAgenticToolName, TENANT_AGENTIC_TOOL_NAMES } from '@agor/core/types';
+
+function rejectBuiltInPreset(tool: TenantAgenticToolName): void {
+  if (isBuiltInAgenticToolName(tool)) {
+    throw new BadRequest(`${tool} does not support presets`);
+  }
+}
 
 function parseTool(value: unknown): TenantAgenticToolName | undefined {
   if (value === undefined) return undefined;
@@ -116,6 +122,7 @@ export class AgenticToolPresetsService {
   async create(data: CreateAgenticToolPreset, params?: Params): Promise<AgenticToolPreset> {
     const tool = parseTool(data.tool);
     if (!tool) throw new BadRequest('tool is required');
+    rejectBuiltInPreset(tool);
     validateConfiguration(data.configuration);
     return this.repository.create(
       { ...data, tool, configuration: normalizeConfiguration(tool, data.configuration) },
@@ -128,9 +135,10 @@ export class AgenticToolPresetsService {
     data: PatchAgenticToolPreset,
     params?: Params
   ): Promise<AgenticToolPreset> {
+    const current = await this.get(id);
+    rejectBuiltInPreset(current.tool);
     if (data.configuration !== undefined) {
       validateConfiguration(data.configuration);
-      const current = await this.get(id);
       data = {
         ...data,
         configuration: normalizeConfiguration(current.tool, data.configuration),
@@ -138,7 +146,6 @@ export class AgenticToolPresetsService {
     }
     if (data.name !== undefined && !data.name.trim()) throw new BadRequest('name is required');
     if (data.is_default === false) {
-      const current = await this.get(id);
       const settings = await new TenantAgenticToolSettingsRepository(this.db).find(current.tool);
       if (current.is_default && settings.inline_configuration_allowed === false) {
         throw new BadRequest(

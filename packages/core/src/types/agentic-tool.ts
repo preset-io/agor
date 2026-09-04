@@ -31,6 +31,7 @@ export type ApiKeyName =
  * - opencode: Open-source terminal-based AI assistant with 75+ LLM providers
  * - copilot: GitHub Copilot's agentic runtime via @github/copilot-sdk
  * - cursor: Cursor's agentic runtime via @cursor/sdk (experimental)
+ * - workload: Agor's built-in deterministic, provider-free workload runner
  *
  * Not to be confused with "execution tools" (Bash, Write, Read, etc.)
  * which are the primitives that agentic tools use to perform work.
@@ -42,9 +43,20 @@ export const AGENTIC_TOOL_NAMES = [
   'opencode',
   'copilot',
   'cursor',
+  'workload',
 ] as const;
 
 export type AgenticToolName = (typeof AGENTIC_TOOL_NAMES)[number];
+
+/** Built-in tools ship with Agor and do not require an optional provider package. */
+export const BUILT_IN_AGENTIC_TOOL_NAMES = [
+  'workload',
+] as const satisfies readonly AgenticToolName[];
+export type BuiltInAgenticToolName = (typeof BUILT_IN_AGENTIC_TOOL_NAMES)[number];
+
+export function isBuiltInAgenticToolName(value: AgenticToolName): value is BuiltInAgenticToolName {
+  return (BUILT_IN_AGENTIC_TOOL_NAMES as readonly AgenticToolName[]).includes(value);
+}
 
 /** Default used only while a user has not chosen a primary agentic tool. */
 export const DEFAULT_AGENTIC_TOOL_NAME: AgenticToolName = 'claude-code';

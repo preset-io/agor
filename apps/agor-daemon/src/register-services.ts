@@ -114,6 +114,7 @@ import type express from 'express';
 import { getAgenticToolDaemonContribution } from './agentic-tool-daemon-contributions.js';
 import { authenticatedTaskExecutorRuntimeScope } from './auth/executor-runtime-scope.js';
 import {
+  agenticToolUsesBranchSdkHome,
   hasSecureLocalCredentialOverlay,
   resolveBranchSdkHomeCompatibility,
   resolveBranchSdkHomeLaunch,
@@ -411,9 +412,20 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   const sessionsService = createSessionsService(db, app, (tool) =>
     isDeploymentAgenticToolAvailable(tool, deploymentAgenticToolPolicy)
   ) as unknown as SessionsServiceImpl;
-  const tasksService = createTasksService(db, app, sessionTokenService, {
-    branchRbacEnabled,
-  });
+  const deliveryRepository = new DiscordMessageDeliveryRepository(db);
+  const onMessageCreateInTransaction = (
+    tx: Parameters<typeof deliveryRepository.enqueueForMessageInTransaction>[0],
+    message: Parameters<typeof deliveryRepository.enqueueForMessageInTransaction>[1]
+  ) => deliveryRepository.enqueueForMessageInTransaction(tx, message).then(() => undefined);
+  const tasksService = createTasksService(
+    db,
+    app,
+    sessionTokenService,
+    {
+      branchRbacEnabled,
+    },
+    onMessageCreateInTransaction
+  );
   app.use('/sessions', sessionsService, {
     events: ['permission:request', 'permission:timeout'],
   });
@@ -452,9 +464,9 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
     events: [...TASKS_SERVICE_CUSTOM_EVENTS],
   });
   app.use('/leaderboard', createLeaderboardService(db));
-  const deliveryRepository = new DiscordMessageDeliveryRepository(db);
-  const messagesService = createMessagesService(db, (tx, message) =>
-    deliveryRepository.enqueueForMessageInTransaction(tx, message).then(() => undefined)
+  const messagesService = createMessagesService(
+    db,
+    onMessageCreateInTransaction
   ) as unknown as MessagesServiceImpl;
   const messageOpenApiProperties = {
     message_id: { type: 'string', format: 'uuid' },
@@ -1297,10 +1309,12 @@ function createExecuteHandler(
     let branchCodexAuthBind:
       | { source: string; destination: string; handle?: FileHandle }
       | undefined;
-    const useBranchSdkHome = sessionUsesBranchSdkHome({
-      sessionScope: session.sdk_home_scope,
-      branchSdkHomeIntent,
-    });
+    const useBranchSdkHome =
+      agenticToolUsesBranchSdkHome(sdkHomeTool) &&
+      sessionUsesBranchSdkHome({
+        sessionScope: session.sdk_home_scope,
+        branchSdkHomeIntent,
+      });
     if (useBranchSdkHome) {
       if (!session.branch_id) {
         throw new Error(`Branch-scoped session ${session.session_id} has no branch`);
@@ -1409,57 +1423,60 @@ function createExecuteHandler(
     // Resolve gateway-level env vars
     const gatewaySource = (session.custom_context as Record<string, unknown> | undefined)
       ?.gateway_source as { channel_id?: string } | undefined;
-    const executorEnv = await runWithTenantDatabaseScope(db, tenantId, async (tenantDb) => {
-      let gatewayEnv: import('@agor/core/types').GatewayEnvVar[] | undefined;
-      if (gatewaySource?.channel_id) {
-        const { decryptApiKey, isEncrypted } = await import('@agor/core/db');
-        const channel = await new GatewayChannelRepository(tenantDb).findById(
-          gatewaySource.channel_id
-        );
-        if (channel?.agentic_config?.envVars) {
-          gatewayEnv = channel.agentic_config.envVars.flatMap((v) => {
-            if (!v.value || !isEncrypted(v.value)) return [v];
-            try {
-              // Compatibility for rows created through the historical
-              // double-encryption hook. New rows are decrypted once by the
-              // repository and never enter this branch.
-              return [{ ...v, value: decryptApiKey(v.value) }];
-            } catch {
-              console.error(`[gateway] Dropping unreadable gateway env var ${v.key}`);
-              return [];
+    const isDeterministicWorkload = session.agentic_tool === 'workload';
+    const executorEnv: Record<string, string> = isDeterministicWorkload
+      ? {}
+      : await runWithTenantDatabaseScope(db, tenantId, async (tenantDb) => {
+          let gatewayEnv: import('@agor/core/types').GatewayEnvVar[] | undefined;
+          if (gatewaySource?.channel_id) {
+            const { decryptApiKey, isEncrypted } = await import('@agor/core/db');
+            const channel = await new GatewayChannelRepository(tenantDb).findById(
+              gatewaySource.channel_id
+            );
+            if (channel?.agentic_config?.envVars) {
+              gatewayEnv = channel.agentic_config.envVars.flatMap((v) => {
+                if (!v.value || !isEncrypted(v.value)) return [v];
+                try {
+                  // Compatibility for rows created through the historical
+                  // double-encryption hook. New rows are decrypted once by the
+                  // repository and never enter this branch.
+                  return [{ ...v, value: decryptApiKey(v.value) }];
+                } catch {
+                  console.error(`[gateway] Dropping unreadable gateway env var ${v.key}`);
+                  return [];
+                }
+              });
             }
-          });
-        }
-        // Merge connector-provided session credentials (e.g. Shortcut's API
-        // token, which the media-intake skill uses to fetch ticket
-        // attachments) as defaults. Operator `agentic_config.envVars` above
-        // take precedence — a key already present is not overwritten.
-        if (channel) {
-          const { getConnector } = await import('@agor/core/gateway');
-          const connectorEnv =
-            getConnector(channel.channel_type, channel.config).sessionEnv?.() ?? [];
-          if (connectorEnv.length > 0) {
-            const present = new Set((gatewayEnv ?? []).map((e) => e.key));
-            const defaults = connectorEnv.filter((e) => !present.has(e.key));
-            if (defaults.length > 0) gatewayEnv = [...(gatewayEnv ?? []), ...defaults];
+            // Merge connector-provided session credentials (e.g. Shortcut's API
+            // token, which the media-intake skill uses to fetch ticket
+            // attachments) as defaults. Operator `agentic_config.envVars` above
+            // take precedence — a key already present is not overwritten.
+            if (channel) {
+              const { getConnector } = await import('@agor/core/gateway');
+              const connectorEnv =
+                getConnector(channel.channel_type, channel.config).sessionEnv?.() ?? [];
+              if (connectorEnv.length > 0) {
+                const present = new Set((gatewayEnv ?? []).map((e) => e.key));
+                const defaults = connectorEnv.filter((e) => !present.has(e.key));
+                if (defaults.length > 0) gatewayEnv = [...(gatewayEnv ?? []), ...defaults];
+              }
+            }
           }
-        }
-      }
 
-      // Provider connections are resolved once by the executor through the
-      // task-scoped daemon API. Generic process environment never carries them.
-      return createUserProcessEnvironment(
-        userId,
-        tenantDb,
-        undefined,
-        gatewayEnv,
-        sessionId as SessionID
-      );
-    });
+          // Provider connections are resolved once by the executor through the
+          // task-scoped daemon API. Generic process environment never carries them.
+          return createUserProcessEnvironment(
+            userId,
+            tenantDb,
+            undefined,
+            gatewayEnv,
+            sessionId as SessionID
+          );
+        });
 
     // Validate required user environment variables
     const requiredUserEnvVars = config.execution?.required_user_env_vars;
-    if (requiredUserEnvVars && requiredUserEnvVars.length > 0) {
+    if (!isDeterministicWorkload && requiredUserEnvVars && requiredUserEnvVars.length > 0) {
       const missingVars = requiredUserEnvVars.filter((v: string) => !executorEnv[v]);
       if (missingVars.length > 0) {
         const missingList = missingVars.map((v: string) => `\`${v}\``).join(', ');
@@ -1490,22 +1507,24 @@ function createExecuteHandler(
     // referenced keys and high-signal literal-value collisions from the
     // executor environment; short/low-entropy values such as DEBUG=1 are not
     // classified as credentials.
-    await runWithTenantDatabaseScope(db, tenantId, async (tenantDb) => {
-      const mode = await getMCPEgressGatewayMode(tenantDb);
-      if (mode !== 'compatibility' && mode !== 'enforced') return;
-      const attached = await new SessionMCPServerRepository(tenantDb).listServers(
-        sessionId as SessionID,
-        true
-      );
-      if (!userId) throw new Error('Missing prompt actor for MCP credential scrubbing');
-      const usableAttached = attached.filter((server) => isMCPServerUsableBy(server, userId));
-      const global = await new MCPServerRepository(tenantDb).findAll({
-        scope: 'global',
-        enabled: true,
-        usableByUserId: userId,
+    if (!isDeterministicWorkload) {
+      await runWithTenantDatabaseScope(db, tenantId, async (tenantDb) => {
+        const mode = await getMCPEgressGatewayMode(tenantDb);
+        if (mode !== 'compatibility' && mode !== 'enforced') return;
+        const attached = await new SessionMCPServerRepository(tenantDb).listServers(
+          sessionId as SessionID,
+          true
+        );
+        if (!userId) throw new Error('Missing prompt actor for MCP credential scrubbing');
+        const usableAttached = attached.filter((server) => isMCPServerUsableBy(server, userId));
+        const global = await new MCPServerRepository(tenantDb).findAll({
+          scope: 'global',
+          enabled: true,
+          usableByUserId: userId,
+        });
+        scrubMCPSecretsFromExecutorEnv(executorEnv, [...usableAttached, ...global]);
       });
-      scrubMCPSecretsFromExecutorEnv(executorEnv, [...usableAttached, ...global]);
-    });
+    }
 
     // Point the tool's SDK/config-home env var(s) at the per-branch SDK home
     // (design §8). These are relocations, NOT credentials — so the MCP scrub
@@ -1513,7 +1532,7 @@ function createExecuteHandler(
     // credential env injected by createUserProcessEnvironment (#2555): different
     // keys, no collision (verified — the branch home never carries a credential,
     // §8A.3). Skipped in delegated mode (the launcher owns the environment).
-    if (branchSdkHomeEnv) {
+    if (!isDeterministicWorkload && branchSdkHomeEnv) {
       Object.assign(executorEnv, branchSdkHomeEnv);
     }
 
@@ -1557,13 +1576,7 @@ function createExecuteHandler(
         sessionId,
         taskId,
         prompt: data.prompt,
-        tool: session.agentic_tool as
-          | 'claude-code'
-          | 'gemini'
-          | 'codex'
-          | 'opencode'
-          | 'copilot'
-          | 'cursor',
+        tool: session.agentic_tool as import('@agor/core/types').AgenticToolName,
         permissionMode: permissionModeForPayload as 'ask' | 'auto' | 'allow-all' | undefined,
         cwd,
         messageSource: data.messageSource,

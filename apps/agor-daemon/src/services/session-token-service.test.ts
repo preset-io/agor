@@ -250,6 +250,71 @@ describe('SessionTokenService runtime scoping', () => {
     await expect(service.isTaskTokenAuthorityCurrent(authority)).resolves.toBe(false);
   });
 
+  it('accepts only the exact retained workload receipt after Task-token revocation', async () => {
+    const service = new SessionTokenService(
+      { expiration_ms: 60_000, max_uses: -1 },
+      { startCleanupTimer: false }
+    );
+    service.setJwtSecret('session-token-test-secret');
+    const token = await runWithTenantDatabaseScope(scopeOnlyDb, 'tenant-a', () =>
+      service.generateToken('session-1', 'user-1', {
+        taskId: 'task-1',
+        branchId: 'branch-1',
+      })
+    );
+    const receipt = {
+      task_id: 'task-1',
+      session_id: 'session-1',
+      completion: {
+        task_id: 'task-1',
+        result_message_id: 'message-1',
+      },
+    };
+
+    await service.revokeToken(token);
+    await expect(service.validateRevokedWorkloadCompletionReceipt(token, receipt)).resolves.toEqual(
+      {
+        tenantId: 'tenant-a',
+        userId: 'user-1',
+        sessionId: 'session-1',
+        taskId: 'task-1',
+        branchId: 'branch-1',
+        resultMessageId: 'message-1',
+      }
+    );
+    for (const invalidReceipt of [
+      { ...receipt, task_id: 'task-2' },
+      { ...receipt, session_id: 'session-2' },
+      { ...receipt, completion: { ...receipt.completion, task_id: 'task-2' } },
+      { ...receipt, extra: 'caller-authored' },
+    ]) {
+      await expect(
+        service.validateRevokedWorkloadCompletionReceipt(token, invalidReceipt)
+      ).resolves.toBeNull();
+    }
+    await expect(
+      runWithTenantDatabaseScope(scopeOnlyDb, 'tenant-b', () =>
+        service.validateRevokedWorkloadCompletionReceipt(token, receipt)
+      )
+    ).resolves.toBeNull();
+
+    const otherToken = await runWithTenantDatabaseScope(scopeOnlyDb, 'tenant-a', () =>
+      service.generateToken('session-2', 'user-2', {
+        taskId: 'task-2',
+        branchId: 'branch-1',
+      })
+    );
+    await service.revokeToken(otherToken);
+    await expect(
+      service.validateRevokedWorkloadCompletionReceipt(otherToken, receipt)
+    ).resolves.toBeNull();
+    await expect(
+      service.validateRevokedWorkloadCompletionReceipt(token, receipt)
+    ).resolves.toMatchObject({
+      taskId: 'task-1',
+    });
+  });
+
   it('fails heartbeat authority closed when the durable store is uncertain', async () => {
     const store = authorityStore({
       isCurrent: vi.fn(async () => {

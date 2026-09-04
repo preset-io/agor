@@ -16,7 +16,6 @@ import {
   type ResolvedDeploymentConfig,
   type ResolvedExternalLaunchProvider,
   requireDeploymentId,
-  resolveBranchStorageConfig,
   resolveIdentityAuthority,
   resolveMultiTenancyConfig,
   resolvePasswordPolicyRequirements,
@@ -93,6 +92,7 @@ import type {
   UUID,
 } from '@agor/core/types';
 import {
+  BRANCH_FILESYSTEM_OBSERVATION_CAPABILITY,
   boardCommentZoneParentObjectKey,
   hasMinimumRole,
   isBranchArchiveOrDeleteOptions,
@@ -171,6 +171,7 @@ import {
   type PermissionDecisionSubmission,
 } from './permissions/deliver-permission-decision.js';
 import { publicBoardCommentRepositionInput } from './services/board-comments.js';
+import { createBranchFilesystemStatusService } from './services/branch-filesystem-status.js';
 import type { GatewayService } from './services/gateway.js';
 import { createMCPCatalogConnectService } from './services/mcp-catalog-connect.js';
 import { isMCPOAuthGrantAuthorizedForServer } from './services/mcp-oauth-grant-authority.js';
@@ -216,6 +217,7 @@ import {
 } from './utils/branch-authorization.js';
 import { buildInitialUserMessage } from './utils/build-initial-user-message.js';
 import { buildPrompterPrefixedPrompt } from './utils/build-prompter-prefix.js';
+import { resolveBranchStorageHealthConfig } from './utils/clone-reference.js';
 import { buildDatabaseHealthInfo } from './utils/database-health-diagnostics.js';
 import { emitServiceEvent } from './utils/emit-service-event.js';
 import {
@@ -4129,6 +4131,17 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     requireAuth
   );
 
+  registerLongAuthenticatedRoute(
+    app,
+    '/branches/:id/filesystem-status',
+    createBranchFilesystemStatusService(branchRepository, db, app),
+    {
+      // Exact Branch and filesystem-read authorization is enforced by the service.
+      find: { role: ROLES.VIEWER, action: 'observe branch filesystem status' },
+    },
+    requireAuth
+  );
+
   // Archive/delete branch
   app.use('/branches/:id/archive-or-delete', {
     async create(data: unknown, params: RouteParams) {
@@ -5451,6 +5464,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           ? { required: true, ready: realtimeRuntime.isReady() }
           : { required: false, ready: true },
         features: {
+          branchFilesystemObservation: BRANCH_FILESYSTEM_OBSERVATION_CAPABILITY,
           teammateFrameworkRepoUrl: resolveTeammateFrameworkRepoUrl(config),
           // Web terminal availability: UI should hide terminal buttons when false.
           // Server-side gate in register-hooks.ts is the source of truth; this
@@ -5476,7 +5490,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           // Resolved branch storage policy. The daemon still enforces this at
           // create time; the UI uses it to pick the right default and disable
           // unavailable storage modes before submit.
-          branchStorage: resolveBranchStorageConfig(config),
+          branchStorage: resolveBranchStorageHealthConfig(config),
           uploadPolicy: getUploadLimits(),
           // Normalized board/branch policies are independently feature-gated.
           // This is safe to advertise before login so the UI can avoid

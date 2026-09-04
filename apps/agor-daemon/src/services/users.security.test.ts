@@ -94,6 +94,34 @@ describe('UsersService — git token env var hardening', () => {
   });
 });
 
+describe('UsersService — built-in workload configuration boundary', () => {
+  for (const [label, patch] of [
+    ['credentials', { agentic_tools: { workload: { API_KEY: 'not-supported' } } }],
+    [
+      'default configuration',
+      {
+        default_agentic_config: {
+          workload: { modelConfig: { mode: 'exact', provider: 'openai', model: 'gpt-test' } },
+        },
+      },
+    ],
+    ['default selection', { default_agentic_selection: { workload: { source: 'inline' } } }],
+  ] as const) {
+    dbTest(`rejects workload ${label}`, async ({ db }) => {
+      const service = new UsersService(db);
+      const id = await makeUser(service);
+
+      await expect(service.patch(id, patch as never)).rejects.toThrow(
+        /does not support user credentials or default configuration/i
+      );
+      const user = await service.get(id);
+      expect(user.agentic_tools?.workload).toBeUndefined();
+      expect(user.default_agentic_config?.workload).toBeUndefined();
+      expect(user.default_agentic_selection?.workload).toBeUndefined();
+    });
+  }
+});
+
 describe('UsersService — delegated execution home key validation', () => {
   for (const invalid of ['1alice', '-alice', 'Alice', '../alice', 'alice name', 'a'.repeat(33)]) {
     dbTest(`rejects invalid key ${JSON.stringify(invalid)} on create`, async ({ db }) => {

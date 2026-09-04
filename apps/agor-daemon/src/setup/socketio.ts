@@ -114,7 +114,10 @@ interface FeathersSocket extends Socket {
     lastTenantPresenceEmitAt?: number;
     lastBoardPresenceEmitAt?: number;
   };
-  handshake: Socket['handshake'] & { headers?: Record<string, string | string[] | undefined> };
+  handshake: Socket['handshake'] & {
+    auth?: Record<string, unknown>;
+    headers?: Record<string, string | string[] | undefined>;
+  };
 }
 
 type PresenceSubscriptionAck = (result: PresenceSubscriptionAcknowledgement) => void;
@@ -241,6 +244,11 @@ export function getSocketAuthState(socket: Socket): SocketAuthState {
   const tenant = authority.tenant;
   if (authority.principal.kind === 'executor') {
     return socketAuthState(null, false, true, tenant);
+  }
+  if (authority.principal.kind === 'executor-completion-receipt') {
+    // Receipt sockets are an internal, one-method replay capability. They do
+    // not receive native socket identity or publication-channel access.
+    return socketAuthState(null, false, false, tenant);
   }
   if (authority.principal.kind === 'terminal-executor') {
     return socketAuthState(
@@ -719,14 +727,24 @@ export function createSocketIOConfig(
         const authentication = app.service('authentication') as unknown as {
           authenticate(
             data: { strategy: 'jwt'; accessToken: string },
-            params: { provider: 'socketio'; connection: object },
+            params: {
+              provider: 'socketio';
+              connection: object;
+              _executorCompletionReceipt?: unknown;
+            },
             ...strategies: string[]
           ): Promise<object>;
           handleConnection(event: 'login', connection: object, result: object): Promise<void>;
         };
         const result = await authentication.authenticate(
           { strategy: 'jwt', accessToken: token },
-          { provider: 'socketio', connection },
+          {
+            provider: 'socketio',
+            connection,
+            ...(socket.handshake.auth?.completionReceipt === undefined
+              ? {}
+              : { _executorCompletionReceipt: socket.handshake.auth.completionReceipt }),
+          },
           'jwt'
         );
         await authentication.handleConnection('login', connection, result);
@@ -1978,7 +1996,12 @@ export function configureChannels(app: Application): void {
 
     // Terminal executors consume only their exactly-scoped raw terminal room.
     // They never enter Feathers publication channels.
-    if (authority.principal.kind === 'terminal-executor') return;
+    if (
+      authority.principal.kind === 'terminal-executor' ||
+      authority.principal.kind === 'executor-completion-receipt'
+    ) {
+      return;
+    }
 
     if (authority.principal.kind === 'executor') {
       const tenantId = authority.tenant?.tenant_id;
