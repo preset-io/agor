@@ -4,10 +4,12 @@ import { describe, expect, it } from 'vitest';
 import { BRAND, surfaceTitle } from '../branding/brand';
 import {
   CATALOG_ROUTE_PATHS,
+  catalogPathForMarketplaceCompat,
   getDemoRoutePaths,
   getRouteSurface,
   isKnowledgeRoutePath,
   isWorkspaceRoutePath,
+  MARKETPLACE_COMPAT_ROUTE_PATHS,
   routeStartsWorkspaceRuntime,
   routeUsesDeviceRouter,
   routeUsesSharedUserSettings,
@@ -71,9 +73,20 @@ describe('surface route registry', () => {
     '/marketplace/servers',
     '/marketplace/sessions',
     '/marketplace/credentials',
-  ])('does not register removed Marketplace route %s as Catalog', (path) => {
-    expect(CATALOG_ROUTE_PATHS).not.toContain(path);
-    expect(getRouteSurface(path).id).toBe('workspace');
+  ])('keeps legacy Marketplace route %s as a lightweight Catalog alias', (path) => {
+    expect(MARKETPLACE_COMPAT_ROUTE_PATHS).toContain(path);
+    expect(getRouteSurface(path).id).toBe('catalog');
+    expect(routeStartsWorkspaceRuntime(path)).toBe(false);
+  });
+
+  it.each([
+    ['/marketplace', '/catalog'],
+    ['/marketplace/catalog', '/catalog'],
+    ['/marketplace/servers', '/catalog/servers'],
+    ['/marketplace/sessions', '/catalog/sessions'],
+    ['/marketplace/credentials', '/catalog/credentials'],
+  ])('redirects legacy %s to %s', (legacy, canonical) => {
+    expect(catalogPathForMarketplaceCompat(legacy)).toBe(canonical);
   });
 
   it.each(['/catalogs', '/catalog/extra', '/marketplaces', '/marketplace/extra'])(

@@ -206,7 +206,7 @@ describe('MCPMarketplaceRepository', () => {
         ).overviewForUser(user.user_id, Date.parse('2026-01-02T00:00:00.000Z'));
 
       await expect(read()).resolves.toMatchObject({
-        credentials: [{ method: 'oauth', status: 'refreshable' }],
+        credentials: [{ method: 'oauth', status: 'expired', detail_status: 'refreshable' }],
       });
 
       const failedAuthorityRead = new MCPMarketplaceRepository(db, async () => {
@@ -221,7 +221,7 @@ describe('MCPMarketplaceRepository', () => {
         .where(eq(userMcpOauthTokens.mcp_server_id, server.mcp_server_id))
         .run();
       await expect(read()).resolves.toMatchObject({
-        credentials: [{ status: 'refreshing' }],
+        credentials: [{ status: 'attention', detail_status: 'refreshing' }],
       });
 
       await update(db, userMcpOauthTokens)
@@ -229,7 +229,9 @@ describe('MCPMarketplaceRepository', () => {
         .where(eq(userMcpOauthTokens.mcp_server_id, server.mcp_server_id))
         .run();
       const ambiguous = await read();
-      expect(ambiguous.credentials).toMatchObject([{ status: 'reauthentication_required' }]);
+      expect(ambiguous.credentials).toMatchObject([
+        { status: 'attention', detail_status: 'reauthentication_required' },
+      ]);
       expect(JSON.stringify(ambiguous)).not.toMatch(/expired-access-secret|usable-refresh-secret/);
 
       await update(db, userMcpOauthTokens)
@@ -237,7 +239,7 @@ describe('MCPMarketplaceRepository', () => {
         .where(eq(userMcpOauthTokens.mcp_server_id, server.mcp_server_id))
         .run();
       await expect(read(false)).resolves.toMatchObject({
-        credentials: [{ status: 'reauthentication_required' }],
+        credentials: [{ status: 'attention', detail_status: 'reauthentication_required' }],
       });
 
       await update(db, userMcpOauthTokens)
@@ -253,7 +255,7 @@ describe('MCPMarketplaceRepository', () => {
         .where(eq(userMcpOauthTokens.mcp_server_id, server.mcp_server_id))
         .run();
       await expect(read()).resolves.toMatchObject({
-        credentials: [{ status: 'reauthentication_required' }],
+        credentials: [{ status: 'attention', detail_status: 'reauthentication_required' }],
       });
     }
   );

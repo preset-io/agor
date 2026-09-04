@@ -72,10 +72,25 @@ export const CATALOG_ROUTE_PATHS = [
   '/catalog/credentials',
 ] as const;
 
+/** Pre-Catalog bookmarks remain lightweight and redirect to the canonical routes. */
+export const MARKETPLACE_COMPAT_ROUTE_PATHS = [
+  '/marketplace',
+  '/marketplace/catalog',
+  '/marketplace/servers',
+  '/marketplace/sessions',
+  '/marketplace/credentials',
+] as const;
+
+export function catalogPathForMarketplaceCompat(pathname: string): string | null {
+  if (!(MARKETPLACE_COMPAT_ROUTE_PATHS as readonly string[]).includes(pathname)) return null;
+  const suffix = pathname.slice('/marketplace'.length);
+  return !suffix || suffix === '/catalog' ? '/catalog' : `/catalog${suffix}`;
+}
+
 export const CATALOG_SURFACE = defineSurface({
   id: 'catalog',
   label: 'Catalog',
-  routePaths: CATALOG_ROUTE_PATHS,
+  routePaths: [...CATALOG_ROUTE_PATHS, ...MARKETPLACE_COMPAT_ROUTE_PATHS],
   // Browsing the catalog reads the checked-in curated file the daemon serves
   // whole, not the tenant's boards and sessions, so the workspace store stays
   // cold until connect navigates into a session.
