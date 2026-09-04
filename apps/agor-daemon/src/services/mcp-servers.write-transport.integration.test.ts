@@ -101,6 +101,7 @@ async function createHarness(
       allowSuperadmin: false,
       requireAuth: async (context) => requireAuth(context),
       deployment: {} as RegisterServicesContext['deployment'],
+      mcpOAuthCallbackUrl: 'http://127.0.0.1:3030/mcp-servers/oauth-callback',
       ...(coordinatorProbe
         ? {
             mcpOAuthPendingFlowAuthority: {

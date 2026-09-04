@@ -28,6 +28,32 @@ const FINAL_RECONCILIATION_WATERMARK = 1_788_379_200_000;
 const OLD_HEAD_MIGRATION_SHA256 =
   'f1e964942fd61182d564cf45dfcf5b13218b1eee242a3927a7fc9fba168fe7c5';
 
+async function executeReconciliation(database: Database): Promise<void> {
+  const source = await readFile(
+    join(migrationsFolder, '0102_oauth_authority_watermark_reconciliation.sql'),
+    'utf8'
+  );
+  for (const statement of source.split('--> statement-breakpoint')) {
+    if (statement.trim()) await executeRaw(database, sql.raw(statement));
+  }
+}
+
+type PostgresTestTransaction = {
+  unsafe: (statement: string) => Promise<unknown>;
+};
+
+async function executeReconciliationTransaction(
+  transaction: PostgresTestTransaction
+): Promise<void> {
+  const source = await readFile(
+    join(migrationsFolder, '0102_oauth_authority_watermark_reconciliation.sql'),
+    'utf8'
+  );
+  for (const statement of source.split('--> statement-breakpoint')) {
+    if (statement.trim()) await transaction.unsafe(statement);
+  }
+}
+
 describe.skipIf(!postgresUrl || !usesPostgresSchema)(
   'MCP OAuth DCR b0585d76 -> final migration (PostgreSQL)',
   () => {
@@ -207,6 +233,155 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
         hasPending: false,
         dbAheadOfBinary: false,
       });
+    });
+
+    it('preserves an exact final DCR schema and its rows', async () => {
+      if (!db) throw new Error('PostgreSQL test database was not initialized');
+      const registrationId = generateId();
+      const relationOid = rawRows(
+        await executeRaw(
+          db,
+          sql`SELECT 'public.mcp_oauth_client_registrations'::regclass::oid AS relation_oid`
+        )
+      )[0]?.relation_oid;
+      await runWithTenantDatabaseScope(db, 'final-preservation', async (scoped) => {
+        const owner = await new UsersRepository(scoped).create({
+          email: `${generateId()}@example.test`,
+          name: 'Final preservation owner',
+          role: 'admin',
+        });
+        const server = await new MCPServerRepository(scoped).create({
+          name: `final-preservation-${generateId()}`,
+          transport: 'http',
+          url: 'https://provider.example.test/mcp',
+          scope: 'global',
+          enabled: true,
+          source: 'user',
+          owner_user_id: owner.user_id,
+          auth: { type: 'oauth', oauth_mode: 'per_user' },
+        });
+        await executeRaw(
+          scoped,
+          sql`INSERT INTO mcp_oauth_client_registrations (
+                tenant_id, registration_id, mcp_server_id, binding_version,
+                binding_fingerprint, server_config_version, envelope_version,
+                is_current, status, claim_generation, failure_code,
+                created_at, updated_at, finished_at
+              ) VALUES (
+                'final-preservation', ${registrationId}, ${server.mcp_server_id}, 1,
+                ${'b'.repeat(64)}, 1, 1, false, 'failed', 0, 'fixture_failure',
+                CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+              )`
+        );
+      });
+
+      await executeReconciliation(db);
+      expect(
+        rawRows(
+          await executeRaw(
+            db,
+            sql`SELECT 'public.mcp_oauth_client_registrations'::regclass::oid AS relation_oid`
+          )
+        )[0]?.relation_oid
+      ).toBe(relationOid);
+      await expect(
+        runWithTenantDatabaseScope(db, 'final-preservation', async (scoped) =>
+          rawRows(
+            await executeRaw(
+              scoped,
+              sql`SELECT registration_id FROM mcp_oauth_client_registrations
+                  WHERE registration_id = ${registrationId}`
+            )
+          )
+        )
+      ).resolves.toEqual([expect.objectContaining({ registration_id: registrationId })]);
+    });
+
+    it.each([
+      [
+        'a DCR schema with a missing column',
+        'ALTER TABLE mcp_oauth_client_registrations DROP COLUMN failure_code',
+        'mcp_oauth_client_registrations',
+      ],
+      [
+        'a DCR schema with a future extra column',
+        'ALTER TABLE mcp_oauth_client_registrations ADD COLUMN future_authority text',
+        'mcp_oauth_client_registrations',
+      ],
+      [
+        'an unknown registration_generation-bearing DCR schema',
+        'ALTER TABLE mcp_oauth_client_registrations ADD COLUMN registration_generation bigint',
+        'mcp_oauth_client_registrations',
+      ],
+      [
+        'a Claude schema with a missing column',
+        'ALTER TABLE claude_oauth_attempts DROP COLUMN subscription_type',
+        'claude_oauth_attempts',
+      ],
+      [
+        'a Claude schema with a future extra column',
+        'ALTER TABLE claude_oauth_attempts ADD COLUMN future_authority text',
+        'claude_oauth_attempts',
+      ],
+    ])('rejects %s without destructive replacement', async (_label, mutation, relationName) => {
+      if (!db || !isPostgresDatabase(db)) {
+        throw new Error('PostgreSQL test database was not initialized');
+      }
+      const before = rawRows(
+        await executeRaw(
+          db,
+          sql`SELECT to_regclass(${`public.${relationName}`})::oid AS relation_oid`
+        )
+      )[0]?.relation_oid;
+      await expect(
+        (
+          db as Database & {
+            $client: {
+              begin: (body: (tx: PostgresTestTransaction) => Promise<void>) => Promise<void>;
+            };
+          }
+        ).$client.begin(async (transaction) => {
+          await transaction.unsafe(mutation);
+          await executeReconciliationTransaction(transaction);
+        })
+      ).rejects.toThrow(/unrecognized .* schema; refusing automatic reconciliation/);
+      const after = rawRows(
+        await executeRaw(
+          db,
+          sql`SELECT to_regclass(${`public.${relationName}`})::oid AS relation_oid`
+        )
+      )[0]?.relation_oid;
+      expect(after).toBe(before);
+    });
+
+    it.each([
+      [
+        'constraint',
+        `ALTER TABLE mcp_oauth_client_registrations
+         DROP CONSTRAINT mcp_oauth_client_registrations_status_check`,
+      ],
+      ['index', 'DROP INDEX mcp_oauth_client_registrations_binding_idx'],
+      [
+        'RLS policy',
+        `DROP POLICY mcp_oauth_client_registration_maintenance_delete
+         ON mcp_oauth_client_registrations`,
+      ],
+    ])('rejects a malformed final DCR %s', async (_label, mutation) => {
+      if (!db || !isPostgresDatabase(db)) {
+        throw new Error('PostgreSQL test database was not initialized');
+      }
+      await expect(
+        (
+          db as Database & {
+            $client: {
+              begin: (body: (tx: PostgresTestTransaction) => Promise<void>) => Promise<void>;
+            };
+          }
+        ).$client.begin(async (transaction) => {
+          await transaction.unsafe(mutation);
+          await executeReconciliationTransaction(transaction);
+        })
+      ).rejects.toThrow(/unrecognized mcp_oauth_client_registrations schema/);
     });
   }
 );

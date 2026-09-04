@@ -20,7 +20,6 @@ import {
   MESSAGE_PAGINATION,
   PublicBaseUrlNotConfiguredError,
   type ResolvedDeploymentConfig,
-  requirePublicBaseUrl,
   resolveDeploymentAgenticToolPolicy,
   resolveExecutionSecurityMode,
   resolveMultiTenancyConfig,
@@ -116,11 +115,7 @@ import {
   TaskStatus,
 } from '@agor/core/types';
 import type { UnixUserMode } from '@agor/core/unix';
-import {
-  assertSafeOAuthUrl,
-  type OutboundDnsLookup,
-  safeOutboundFetch,
-} from '@agor/core/utils/safe-outbound-fetch';
+import { type OutboundDnsLookup, safeOutboundFetch } from '@agor/core/utils/safe-outbound-fetch';
 import type express from 'express';
 import { getAgenticToolDaemonContribution } from './agentic-tool-daemon-contributions.js';
 import { authenticatedTaskExecutorRuntimeScope } from './auth/executor-runtime-scope.js';
@@ -349,6 +344,8 @@ export interface RegisterServicesContext {
   allowSuperadmin: boolean;
   requireAuth: (context: HookContext) => Promise<HookContext>;
   deployment: ResolvedDeploymentConfig;
+  /** Startup-resolved callback URL from the frozen effective configuration. */
+  mcpOAuthCallbackUrl?: string;
   /** Injectable durable authority for boundary tests; production derives it from PostgreSQL. */
   mcpOAuthPendingFlowAuthority?: MCPOAuthPendingFlowAuthority;
   /** Injectable fleet-wide DCR authority paired with PostgreSQL pending flows. */
@@ -2074,20 +2071,12 @@ export async function registerMCPServices(
     '(4) /.well-known/openid-configuration at MCP origin (OIDC).';
 
   async function resolveMCPOAuthRedirectUri(): Promise<string> {
-    const baseUrl = await requirePublicBaseUrl();
-    const redirectUri = new URL('/mcp-servers/oauth-callback', baseUrl).toString();
-    try {
-      // Validate the deployment-owned callback before provider discovery or
-      // DCR. PostgreSQL/HA must never send an internal HTTP ingress address to
-      // a provider; standalone retains only the exact loopback exception used
-      // for local development.
-      assertSafeOAuthUrl(redirectUri, { allowLocalhostHttp: !postgresOAuthDeployment });
-    } catch {
+    if (!ctx.mcpOAuthCallbackUrl) {
       throw new PublicBaseUrlNotConfiguredError(
-        'The configured public base URL is not a safe browser-reachable OAuth callback URL.'
+        'The effective startup configuration does not provide a safe browser-reachable OAuth callback URL.'
       );
     }
-    return redirectUri;
+    return ctx.mcpOAuthCallbackUrl;
   }
 
   type OAuthBrowserReservationClaim = {
@@ -2184,7 +2173,12 @@ export async function registerMCPServices(
   }
 
   const assertMcpOAuthCapability = (): void => {
-    if (isConstrainedHa(ctx.deployment) && !ctx.deployment.capabilities.mcpOAuth) {
+    if (
+      isConstrainedHa(ctx.deployment) &&
+      (!ctx.deployment.capabilities.mcpOAuth ||
+        !ctx.deployment.mcpOAuthCallbackUrl ||
+        ctx.deployment.mcpOAuthCallbackUrl !== ctx.mcpOAuthCallbackUrl)
+    ) {
       throw new PublicBaseUrlNotConfiguredError(
         'HA MCP OAuth requires an explicitly configured public HTTPS base URL.'
       );

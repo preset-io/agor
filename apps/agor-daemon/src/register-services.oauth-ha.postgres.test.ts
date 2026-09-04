@@ -209,7 +209,9 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
         deployment: {
           mode: 'ha',
           capabilities: { mcpOAuth: true },
+          mcpOAuthCallbackUrl: 'https://agor.example.test/mcp-servers/oauth-callback',
         } as RegisterServicesContext['deployment'],
+        mcpOAuthCallbackUrl: 'https://agor.example.test/mcp-servers/oauth-callback',
         lockMcpOAuthGrantConfiguration: async (scopedDb, tenant, server) => {
           await oauthFixture.beforeGrantLock?.();
           await lockMCPOAuthGrantConfiguration(scopedDb, tenant, server);
@@ -262,6 +264,9 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       replicaA = await createReplica('A');
       await initializeDatabase(replicaA.raw);
       replicaB = await createReplica('B');
+      // Runtime must retain the startup injection rather than re-reading an
+      // environment/default-config source that can disagree between phases.
+      process.env.AGOR_BASE_URL = 'https://mismatching-runtime-source.example.test';
       const seeded = await runWithTenantDatabaseScope(replicaA.db, tenantId, async (scoped) => {
         const createdUser = await new UsersRepository(scoped).create({
           email: `${crypto.randomUUID()}@example.test`,
@@ -315,6 +320,12 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       const [fromA, fromB] = await Promise.all([start(replicaA), start(replicaB)]);
       expect(fromA.success).toBe(true);
       expect(fromB.success).toBe(true);
+      expect(new URL(fromA.authorizationUrl).searchParams.get('redirect_uri')).toBe(
+        'https://agor.example.test/mcp-servers/oauth-callback'
+      );
+      expect(new URL(fromB.authorizationUrl).searchParams.get('redirect_uri')).toBe(
+        'https://agor.example.test/mcp-servers/oauth-callback'
+      );
       expect(fromA.state).toBeUndefined();
       expect(fromB.state).toBeUndefined();
 

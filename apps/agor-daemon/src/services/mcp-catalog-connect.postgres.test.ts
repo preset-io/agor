@@ -487,7 +487,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       expect(result.mcp_server.auth?.oauth_compatibility_mode).toBe('strict');
     });
 
-    it('automatically starts durable OAuth for a Catalog install on another HA replica', async () => {
+    it('automatically starts durable OAuth with the replica startup callback frozen', async () => {
       const actor = await buildTenant('automatic-ha-oauth');
       const catalogReplica = connectApp();
       const connected = await connect(actor.user, actor.tenantId, ENTRY, catalogReplica);
@@ -534,7 +534,9 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
           deployment: {
             mode: 'ha',
             capabilities: { mcpOAuth: true },
+            mcpOAuthCallbackUrl: 'https://public-agor.example.test/mcp-servers/oauth-callback',
           } as RegisterServicesContext['deployment'],
+          mcpOAuthCallbackUrl: 'https://public-agor.example.test/mcp-servers/oauth-callback',
           mcpOAuthFetch: async (_input, _init, assertCurrent) => {
             assertCurrent?.();
             return new Response('', {
@@ -593,17 +595,17 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
         oauthProviderFixture.discoveries = 0;
         oauthProviderFixture.registrations = 0;
         process.env.AGOR_BASE_URL = 'http://10.33.92.175:3030';
-        const refused = (await oauthApp
+        const restarted = (await oauthApp
           .service('mcp-servers/oauth-start')
           .create(
             { mcp_server_id: connected.mcp_server.mcp_server_id },
             params(actor.user, actor.tenantId)
-          )) as { success: boolean; recovery?: { category: string } };
-        expect(refused).toMatchObject({
-          success: false,
-          recovery: { category: 'redirect_configuration_required' },
-        });
-        expect(oauthProviderFixture.discoveries).toBe(0);
+          )) as { success: boolean; authorizationUrl?: string };
+        expect(restarted.success).toBe(true);
+        expect(new URL(restarted.authorizationUrl!).searchParams.get('redirect_uri')).toBe(
+          'https://public-agor.example.test/mcp-servers/oauth-callback'
+        );
+        expect(oauthProviderFixture.discoveries).toBe(1);
         expect(oauthProviderFixture.registrations).toBe(0);
       } finally {
         if (originalBaseUrl === undefined) delete process.env.AGOR_BASE_URL;
