@@ -1,4 +1,5 @@
 import http, { type Server as HttpServer } from 'node:http';
+import { resolveMcpOAuthCallbackOrigin } from '@agor/core/config';
 import {
   createDatabaseAsync,
   eq,
@@ -468,6 +469,12 @@ async function createHarness(
   };
   const app = feathers() as Application & { io: typeof io };
   app.io = io;
+  const deployment = options.deployment ?? ({} as RegisterServicesContext['deployment']);
+  const callbackOrigin = resolveMcpOAuthCallbackOrigin({}, process.env);
+  const mcpOAuthCallbackUrl =
+    deployment.mode === 'ha'
+      ? (callbackOrigin.haCallbackUrl ?? undefined)
+      : (callbackOrigin.standaloneCallbackUrl ?? undefined);
   const { oauthCallbackHandler } = await registerMCPServices({
     db,
     app,
@@ -479,7 +486,8 @@ async function createHarness(
     UI_PORT: 5173,
     allowSuperadmin: false,
     requireAuth: options.requireAuth ?? (async (context) => context),
-    deployment: options.deployment ?? ({} as RegisterServicesContext['deployment']),
+    deployment,
+    mcpOAuthCallbackUrl,
     mcpOAuthPendingFlowAuthority: options.durableAuthority,
     mcpOAuthClientRegistrationAuthority: options.durableClientRegistrationAuthority,
     lockMcpOAuthGrantConfiguration: options.lockGrantConfiguration,
@@ -596,6 +604,7 @@ const constrainedHaDeployment = {
     sharedFilesystem: true,
     ingressAffinity: true,
   },
+  mcpOAuthCallbackUrl: 'https://agor.example.test/mcp-servers/oauth-callback',
 } as RegisterHooksContext['deployment'];
 
 /**
@@ -909,6 +918,8 @@ async function createRealSocketHarness(
       return context;
     },
     deployment: {} as RegisterServicesContext['deployment'],
+    mcpOAuthCallbackUrl:
+      resolveMcpOAuthCallbackOrigin({}, process.env).standaloneCallbackUrl ?? undefined,
     mcpOutboundDnsLookup: options.outboundDnsLookup,
   });
 
@@ -2045,6 +2056,7 @@ describe('SQLite saved-row OAuth authority', () => {
     } as MCPCatalogEntry;
     vi.mocked(loadCatalog).mockResolvedValueOnce([catalogEntry]);
     const resolveDynamicClientRegistration = vi.fn();
+    process.env.AGOR_BASE_URL = 'http://10.33.92.175:3030';
     const harness = await createHarness(provider, undefined, {
       catalogEntry,
       durableAuthority: durableAuthorityWithCreate(async () => crypto.randomUUID() as never),
@@ -2057,7 +2069,6 @@ describe('SQLite saved-row OAuth authority', () => {
       lockGrantConfiguration: vi.fn(async () => undefined),
     });
     databases.push(harness.rawDb);
-    process.env.AGOR_BASE_URL = 'http://10.33.92.175:3030';
 
     const result = await harness.app
       .service('mcp-servers/oauth-start')

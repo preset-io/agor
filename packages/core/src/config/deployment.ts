@@ -1,3 +1,4 @@
+import { assertSafeOAuthUrl } from '../utils/safe-outbound-fetch';
 import { isPublicHttpUrl } from '../utils/url';
 import { assertAsyncEnvironmentCommandConfig } from './environment-commands';
 import {
@@ -93,6 +94,8 @@ export type ResolvedDeploymentConfig =
         environmentHealthMonitor: true;
         artifactRuntimeIntrospection: false;
       };
+      /** Exact startup-resolved redirect used whenever mcpOAuth is advertised. */
+      mcpOAuthCallbackUrl: string | null;
       redis: ResolvedRedisSettings;
       environmentHealthMonitor: ResolvedEnvironmentHealthMonitorSettings;
       executorStorage: ResolvedExecutorStorageSettings;
@@ -102,6 +105,13 @@ export type ResolvedDeploymentConfig =
     };
 
 type DeploymentEnv = Record<string, string | undefined>;
+
+export interface ResolvedMcpOAuthCallbackOrigin {
+  /** Safe for a standalone daemon, including the deliberate loopback HTTP exception. */
+  standaloneCallbackUrl: string | null;
+  /** Safe for HA/public ingress: globally routable HTTPS only. */
+  haCallbackUrl: string | null;
+}
 
 function envInteger(env: DeploymentEnv, name: string): number | undefined {
   const value = env[name];
@@ -140,25 +150,57 @@ function envBoolean(env: DeploymentEnv, name: string): boolean | undefined {
  * public and HTTPS. `daemon.public_url` is intentionally excluded: it is the
  * executor/backend callback URL and may be an internal service address.
  */
+export function resolveMcpOAuthCallbackOrigin(
+  config: AgorConfig,
+  env: DeploymentEnv = process.env
+): ResolvedMcpOAuthCallbackOrigin {
+  const raw = env.AGOR_BASE_URL ?? config.daemon?.base_url ?? config.ui?.base_url;
+  if (!raw) return { standaloneCallbackUrl: null, haCallbackUrl: null };
+
+  let configured: URL;
+  try {
+    configured = new URL(raw.trim());
+  } catch {
+    return { standaloneCallbackUrl: null, haCallbackUrl: null };
+  }
+
+  if (configured.protocol !== 'http:' && configured.protocol !== 'https:') {
+    return { standaloneCallbackUrl: null, haCallbackUrl: null };
+  }
+
+  // A leading slash intentionally makes the provider callback an origin-root
+  // route even when an old base_url contains a path. Resolve it once here;
+  // OAuth runtime code must never reload configuration or rebuild this URL.
+  const callbackUrl = new URL('/mcp-servers/oauth-callback', configured).toString();
+  let standaloneCallbackUrl: string | null = null;
+  try {
+    assertSafeOAuthUrl(callbackUrl, { allowLocalhostHttp: true });
+    standaloneCallbackUrl = callbackUrl;
+  } catch {
+    // Unsafe explicit configuration disables the flow rather than turning an
+    // internal/private endpoint into a provider callback capability.
+  }
+
+  const haCallbackUrl =
+    standaloneCallbackUrl &&
+    configured.protocol === 'https:' &&
+    isPublicHttpUrl(configured.toString()) &&
+    !configured.username &&
+    !configured.password &&
+    !configured.search &&
+    !configured.hash
+      ? callbackUrl
+      : null;
+
+  return { standaloneCallbackUrl, haCallbackUrl };
+}
+
+/** Backward-compatible capability predicate backed by the shared resolver. */
 export function hasSafeHaMcpOAuthPublicOrigin(
   config: AgorConfig,
   env: DeploymentEnv = process.env
 ): boolean {
-  const raw = env.AGOR_BASE_URL ?? config.daemon?.base_url ?? config.ui?.base_url;
-  if (!raw) return false;
-  try {
-    const url = new URL(raw);
-    return (
-      url.protocol === 'https:' &&
-      isPublicHttpUrl(url.toString()) &&
-      !url.username &&
-      !url.password &&
-      !url.search &&
-      !url.hash
-    );
-  } catch {
-    return false;
-  }
+  return resolveMcpOAuthCallbackOrigin(config, env).haCallbackUrl !== null;
 }
 
 function positiveInteger(value: number, path: string): number {
@@ -291,7 +333,8 @@ function effectiveDatabaseDialect(config: AgorConfig, env: DeploymentEnv): 'sqli
 export function resolveDeploymentConfig(
   config: AgorConfig,
   env: DeploymentEnv = process.env,
-  runtimeDatabaseUrl?: string
+  runtimeDatabaseUrl?: string,
+  oauthCallbackOrigin: ResolvedMcpOAuthCallbackOrigin = resolveMcpOAuthCallbackOrigin(config, env)
 ): ResolvedDeploymentConfig {
   const mode = (env.AGOR_DEPLOYMENT_MODE ??
     config.deployment?.mode ??
@@ -509,7 +552,7 @@ export function resolveDeploymentConfig(
       taskRuntimeReconciliation: true,
       knowledgeEmbeddingIndexer: true,
       statelessMcp: true,
-      mcpOAuth: hasSafeHaMcpOAuthPublicOrigin(config, env),
+      mcpOAuth: oauthCallbackOrigin.haCallbackUrl !== null,
       completionCallbackDurableAdmission: true,
       completionCallbackPreAdmissionRecovery: false,
       widgetResolutionDurableClaim: true,
@@ -541,6 +584,7 @@ export function resolveDeploymentConfig(
       environmentHealthMonitor: true,
       artifactRuntimeIntrospection: false,
     },
+    mcpOAuthCallbackUrl: oauthCallbackOrigin.haCallbackUrl,
     redis: {
       url,
       keyPrefix,

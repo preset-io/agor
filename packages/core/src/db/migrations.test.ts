@@ -982,8 +982,15 @@ describe('MCP OAuth client-registration migrations', () => {
       ),
       'utf8'
     );
-    expect(reconciliation).toContain("column_name = 'registration_generation'");
+    expect(reconciliation).toContain('agor_0102_relation_fingerprint');
+    expect(reconciliation).toContain('agor_0102_legacy_dcr_expected');
+    expect(reconciliation).toContain('agor_0102_final_dcr_expected');
+    expect(reconciliation).toContain('agor_0102_claude_expected');
+    expect(reconciliation).toContain('pg_temp.agor_0102_relation_matches');
     expect(reconciliation).toContain(
+      'DROP SEQUENCE public.mcp_oauth_client_registration_generation_seq'
+    );
+    expect(reconciliation).not.toContain(
       'DROP SEQUENCE IF EXISTS "mcp_oauth_client_registration_generation_seq"'
     );
     expect(reconciliation).toContain('CREATE TABLE IF NOT EXISTS "claude_oauth_attempts"');
