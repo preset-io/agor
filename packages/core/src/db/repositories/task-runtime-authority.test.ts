@@ -293,7 +293,7 @@ describe('Task runtime heartbeat authority (SQLite)', () => {
 
     // A connected runtime cannot be rebound at all. Its original read floor
     // remains the only projection consumed by the heartbeat comparison.
-    await expect(seed.tasks.bindExecutorLaunchAuthority(seed.task.task_id, {})).rejects.toThrow(
+    await expect(seed.tasks.bindExecutorLaunchAuthority(seed.task.task_id)).rejects.toThrow(
       'not awaiting executor launch authority'
     );
   });

@@ -107,7 +107,7 @@ async function authorizeRuntime(
 ) {
   const tasks = new TaskRepository(scoped);
   const authority = runtimeAuthority(seed, task.task_id);
-  await tasks.bindExecutorLaunchAuthority(task.task_id, {});
+  await tasks.bindExecutorLaunchAuthority(task.task_id);
   await tasks.connectExecutor(task.task_id, connectedAt);
   const now = new Date();
   await new ExecutorSessionTokenAuthorityRepository(scoped).issue({
