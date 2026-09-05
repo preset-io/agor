@@ -532,6 +532,29 @@ export function createRequiredTenantDatabaseRunner(db: TenantScopeAwareDatabase)
   };
 }
 
+/** Resolve upload branch visibility and prompt authority using the authenticated tenant. */
+export async function resolveUploadPromptAccess(input: {
+  db: TenantScopeAwareDatabase;
+  tenantId: string | undefined;
+  branchRepository: Pick<
+    BranchRepository,
+    'findById' | 'resolveUserPermission' | 'resolveSessionPromptAuthority'
+  >;
+  session: Session;
+  userId: UUID;
+}) {
+  return runWithTenantDatabaseScope(input.db, input.tenantId, async () => {
+    const branch = await input.branchRepository.findById(input.session.branch_id);
+    if (!branch) return null;
+    return resolveSessionPromptAccess({
+      branchRepository: input.branchRepository,
+      branch,
+      session: input.session,
+      userId: input.userId,
+    });
+  });
+}
+
 /**
  * Register an authenticated custom route with the same tenant transaction and
  * write-freeze gate as ordinary tenant-owned Feathers services. Custom routes
@@ -2712,23 +2735,17 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         if (!session.branch_id) {
           return res.status(403).json({ error: 'Not authorized to upload to this session' });
         }
-        const access = await runWithTenantDatabaseScope(db, params.tenant?.tenant_id, async () => {
-          const wt = await branchRepo.findById(session.branch_id);
-          if (!wt) return null;
-          return { wt };
+        const access = await resolveUploadPromptAccess({
+          db,
+          tenantId: params.tenant?.tenant_id,
+          branchRepository: branchRepo,
+          session,
+          userId,
         });
         if (!access) {
           return res.status(404).json({ error: 'Branch not found' });
         }
-        const { wt } = access;
-        const { allowed } = await resolveSessionPromptAccess({
-          branchRepository: branchRepo,
-          branch: wt,
-          session,
-          userId,
-        });
-
-        if (!allowed) {
+        if (!access.allowed) {
           return res.status(403).json({ error: 'Not authorized to upload to this session' });
         }
       }
