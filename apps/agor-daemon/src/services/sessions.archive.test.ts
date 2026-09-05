@@ -241,6 +241,51 @@ describe('SessionsService archive routes', () => {
     });
   });
 
+  dbTest('preserves archive coverage through a prompted intermediate session', async ({ db }) => {
+    const service = new SessionsService(db, STUB_APP);
+    const branchId = await createBranch(db);
+    const root = await createSession(db, branchId);
+    const independent = await createSession(db, branchId, {
+      genealogy: { parent_session_id: root.session_id, children: [] },
+    });
+    const prompted = await createSession(db, branchId, {
+      genealogy: { forked_from_session_id: independent.session_id, children: [] },
+    });
+    const leaf = await createSession(db, branchId, {
+      genealogy: { parent_session_id: prompted.session_id, children: [] },
+    });
+
+    await service.archive(root.session_id);
+    await service.archive(independent.session_id);
+    // Prompt auto-unarchive restores only the explicitly prompted session.
+    await service.unarchive(prompted.session_id, { includeChildren: false });
+
+    const restored = await service.unarchive(root.session_id);
+
+    expect(restored.affectedSessions.map((session) => session.session_id)).toEqual([
+      root.session_id,
+    ]);
+    await expect(getArchivedState(db, independent.session_id)).resolves.toEqual({
+      archived: true,
+      archived_reason: 'manual',
+    });
+    await expect(getArchivedState(db, prompted.session_id)).resolves.toEqual({
+      archived: false,
+      archived_reason: undefined,
+    });
+    await expect(getArchivedState(db, leaf.session_id)).resolves.toEqual({
+      archived: true,
+      archived_reason: 'parent_archived',
+    });
+
+    // Restoring the independent ancestor still restores its covered leaf.
+    await service.unarchive(independent.session_id);
+    await expect(getArchivedState(db, leaf.session_id)).resolves.toEqual({
+      archived: false,
+      archived_reason: undefined,
+    });
+  });
+
   dbTest('honors includeChildren false and rejects generic archive patches', async ({ db }) => {
     const service = new SessionsService(db, STUB_APP);
     const branchId = await createBranch(db);

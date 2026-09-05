@@ -64,8 +64,9 @@ export function planSessionTreeArchiveTransition(input: {
   }
 
   // An independently archived intermediate node still covers its subtree.
-  // Do not revive a deeper `parent_archived` row through that boundary.
-  const remainingArchived = new Set(
+  // Track coverage through active rows too: prompting an intermediate Session
+  // restores only that row, not deeper `parent_archived` descendants.
+  const coveredByIndependentArchive = new Set(
     descendants
       .filter((session) => session.archived && session.archived_reason !== PARENT_ARCHIVED_REASON)
       .map((session) => session.session_id)
@@ -74,19 +75,15 @@ export function planSessionTreeArchiveTransition(input: {
   while (discoveredCoveredDescendant) {
     discoveredCoveredDescendant = false;
     for (const session of descendants) {
-      if (
-        !session.archived ||
-        session.archived_reason !== PARENT_ARCHIVED_REASON ||
-        remainingArchived.has(session.session_id)
-      ) {
+      if (coveredByIndependentArchive.has(session.session_id)) {
         continue;
       }
       const parentIds = [
         session.genealogy?.parent_session_id,
         session.genealogy?.forked_from_session_id,
       ];
-      if (parentIds.some((parentId) => parentId && remainingArchived.has(parentId))) {
-        remainingArchived.add(session.session_id);
+      if (parentIds.some((parentId) => parentId && coveredByIndependentArchive.has(parentId))) {
+        coveredByIndependentArchive.add(session.session_id);
         discoveredCoveredDescendant = true;
       }
     }
@@ -94,7 +91,7 @@ export function planSessionTreeArchiveTransition(input: {
   for (const session of descendants) {
     if (
       session.archived_reason === PARENT_ARCHIVED_REASON &&
-      !remainingArchived.has(session.session_id) &&
+      !coveredByIndependentArchive.has(session.session_id) &&
       needsArchiveWrite(session, false, null)
     ) {
       targets.push({ session, archived: false, archivedReason: null });
