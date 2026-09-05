@@ -104,6 +104,7 @@ import {
   ROLES,
   SessionStatus,
   TaskStatus,
+  UPLOAD_REQUEST_ID_HEADER,
 } from '@agor/core/types';
 import { isNotFoundError } from '@agor/core/utils/errors';
 import type { NextFunction, Request, Response } from 'express';
@@ -263,9 +264,26 @@ import {
   getUploadLimits,
   type StagedMulterFile,
 } from './utils/upload.js';
+import { toUploadErrorResponse, type UploadFailureStage } from './utils/upload-http-error.js';
 import { getUploadStagingStore } from './utils/upload-staging.js';
 import { WidgetResolutionStore } from './widgets/resolution-store.js';
 import { resolveWidget } from './widgets/submissions.js';
+
+export function appendResponseHeaderValue(
+  existing: string | string[] | number | undefined,
+  value: string
+): string {
+  const existingValues = (
+    Array.isArray(existing) ? existing : existing === undefined ? [] : [existing]
+  )
+    .flatMap((headerValue) => String(headerValue).split(','))
+    .map((headerValue) => headerValue.trim())
+    .filter(Boolean);
+  if (existingValues.some((headerValue) => headerValue.toLowerCase() === value.toLowerCase())) {
+    return existingValues.join(', ');
+  }
+  return [...existingValues, value].join(', ');
+}
 
 const DEBUG_AUTH_EVENTS =
   process.env.AGOR_DEBUG_AUTH_EVENTS === '1' || process.env.DEBUG?.includes('auth-events');
@@ -744,8 +762,7 @@ export function createUploadAuthMiddleware(input: {
         token,
       });
       next();
-    } catch (error) {
-      console.error('❌ [Upload Auth] Authentication failed:', error);
+    } catch {
       res.status(401).json({ error: 'Authentication required' });
     }
   };
@@ -2669,8 +2686,6 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       res.status(status).json({ error: error instanceof Error ? error.message : 'Upload failed' });
     }
   });
-  const DEBUG_UPLOAD = process.env.AGOR_DEBUG_UPLOAD === 'true';
-
   // biome-ignore lint/suspicious/noExplicitAny: Express 5 type compatibility
   const authorizeUpload: any = async (req: any, res: any, next: any) => {
     try {
@@ -2683,7 +2698,6 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         sessionsService.get(sessionId, params)
       );
       if (!session) {
-        console.error(`❌ [Upload Authz] Session not found: ${shortId(sessionId)}`);
         return res.status(404).json({ error: 'Session not found' });
       }
 
@@ -2707,7 +2721,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           return res.status(404).json({ error: 'Branch not found' });
         }
         const { wt } = access;
-        const { allowed, effectiveLevel } = await resolveSessionPromptAccess({
+        const { allowed } = await resolveSessionPromptAccess({
           branchRepository: branchRepo,
           branch: wt,
           session,
@@ -2715,9 +2729,6 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         });
 
         if (!allowed) {
-          console.error(
-            `❌ [Upload Authz] User ${shortId(userId)} has '${effectiveLevel}' permission, cannot upload to branch ${shortId(wt.branch_id)}`
-          );
           return res.status(403).json({ error: 'Not authorized to upload to this session' });
         }
       }
@@ -2740,38 +2751,13 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   // biome-ignore lint/suspicious/noExplicitAny: Express 5 + multer type compatibility
   const uploadHandler: any = async (req: any, res: any, next: any) => {
     try {
-      if (DEBUG_UPLOAD) {
-        console.log('🚀 [Upload Handler] Request received');
-        console.log('   Headers:', {
-          contentType: req.headers['content-type'],
-          authorization: req.headers.authorization ? 'present' : 'missing',
-          cookie: req.headers.cookie ? 'present' : 'missing',
-        });
-      }
-
       const { sessionId } = req.params;
       const { notifyAgent, message } = req.body;
       const files = req.files as StagedMulterFile[];
 
-      if (DEBUG_UPLOAD) {
-        console.log(
-          `📎 [Upload Handler] Processing for session ${sessionId ? shortId(sessionId) : 'unknown'}`
-        );
-        console.log(`   Notify agent: ${notifyAgent === 'true' || notifyAgent === true}`);
-        console.log(`   Files received: ${files?.length || 0}`);
-      }
-
       const params = req.feathers as AuthenticatedParams;
-      if (DEBUG_UPLOAD) {
-        console.log(`   Auth params:`, {
-          hasUser: !!params?.user,
-          userId: params?.user?.user_id ? shortId(params.user.user_id) : undefined,
-          provider: params?.provider,
-        });
-      }
 
       if (!files || files.length === 0) {
-        console.error('❌ [Upload Handler] No files in request');
         return res.status(400).json({ error: 'No files uploaded' });
       }
 
@@ -2784,20 +2770,11 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         expiresAt: staged.expiresAt,
       }));
 
-      if (DEBUG_UPLOAD) {
-        console.log(`   Uploaded ${uploadedFiles.length} file(s):`);
-        console.log(`   Total bytes: ${uploadedFiles.reduce((sum, f) => sum + f.size, 0)}`);
-      }
-
       let notificationError: string | null = null;
       if ((notifyAgent === 'true' || notifyAgent === true) && message) {
         try {
           const handles = uploadedFiles.map((f) => f.ref).join(', ');
           const promptText = message.replace(/\{filepath\}/g, handles);
-
-          if (DEBUG_UPLOAD) {
-            console.log('   Sending upload notification to agent');
-          }
 
           const promptService = app.service('/sessions/:id/prompt');
           // biome-ignore lint/suspicious/noExplicitAny: Express 5 + FeathersJS type mismatch
@@ -2824,21 +2801,47 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     }
   };
 
+  type UploadRouteRequest = Request & {
+    _uploadRequestId?: string;
+    _uploadFailureStage?: UploadFailureStage;
+  };
+
   // biome-ignore lint/suspicious/noExplicitAny: Express 5 type compatibility
-  const uploadLogger: any = (req: any, res: any, next: any) => {
-    if (DEBUG_UPLOAD) {
-      console.log('📥 [Upload Route] Request received');
-      console.log('   Method:', req.method);
-      console.log('   Route: session upload');
-      console.log('   Content-Type:', req.headers['content-type']);
-      console.log('   Has auth header:', !!req.headers.authorization);
-      console.log(
-        '   Session ID param:',
-        req.params.sessionId ? shortId(req.params.sessionId) : 'unknown'
+  const uploadLogger: any = (req: UploadRouteRequest, res: Response, next: NextFunction) => {
+    const requestId = randomUUID();
+    req._uploadRequestId = requestId;
+    req._uploadFailureStage = 'authentication';
+    res.setHeader(UPLOAD_REQUEST_ID_HEADER, requestId);
+    res.setHeader(
+      'Access-Control-Expose-Headers',
+      appendResponseHeaderValue(
+        res.getHeader('Access-Control-Expose-Headers'),
+        UPLOAD_REQUEST_ID_HEADER
+      )
+    );
+    res.once('finish', () => {
+      if (res.statusCode < 400) return;
+      console.error(
+        formatStructuredLog('[upload]', {
+          event: 'upload.failed',
+          request_id: requestId,
+          stage: req._uploadFailureStage ?? 'authentication',
+          code: res.locals.uploadFailureCode ?? `HTTP_${res.statusCode}`,
+          status: res.statusCode,
+          type: res.locals.uploadFailureType ?? 'request',
+        })
       );
-    }
+    });
+
     next();
   };
+
+  const setUploadFailureStage =
+    (stage: UploadFailureStage) =>
+    (req: UploadRouteRequest, _res: Response, next: NextFunction) => {
+      req._uploadFailureStage = stage;
+      next();
+    };
 
   const uploadAuthMiddleware = createUploadAuthMiddleware({
     authentication: app.service('authentication'),
@@ -2850,41 +2853,31 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     '/sessions/:sessionId/upload',
     uploadLogger,
     uploadAuthMiddleware,
-    // biome-ignore lint/suspicious/noExplicitAny: Express 5 type compatibility
-    ((req: any, res: any, next: any) => {
-      if (DEBUG_UPLOAD) {
-        console.log('✅ [Upload Route] Authentication passed');
-        console.log(
-          '   User:',
-          req.feathers?.user?.user_id ? shortId(req.feathers.user.user_id) : 'unknown'
-        );
-      }
-      next();
-      // biome-ignore lint/suspicious/noExplicitAny: Express 5 type compatibility
-    }) as any,
+    setUploadFailureStage('request_size'),
     // Cheap pre-multer Content-Length check — short-circuits before we spend
     // time writing oversize uploads to disk.
     // biome-ignore lint/suspicious/noExplicitAny: Express 5 type compatibility
     enforceTotalUploadSize() as any,
+    setUploadFailureStage('authorization'),
     authorizeUpload,
+    setUploadFailureStage('multipart'),
     // biome-ignore lint/suspicious/noExplicitAny: Express 5 + multer type compatibility
     uploadMiddleware.array('files', 10) as any,
     // biome-ignore lint/suspicious/noExplicitAny: Express 5 type compatibility
     ((req: any, res: any, next: any) => {
-      if (DEBUG_UPLOAD) {
-        console.log('✅ [Upload Route] Multer processing complete');
-        console.log('   Files parsed:', req.files?.length || 0);
-      }
+      req._uploadFailureStage = 'handler';
       next();
       // biome-ignore lint/suspicious/noExplicitAny: Express 5 type compatibility
     }) as any,
     uploadHandler,
     // biome-ignore lint/suspicious/noExplicitAny: Express 5 type compatibility
     ((err: any, req: any, res: any, next: any) => {
-      console.error('❌ [Upload Route] Upload failed');
-      res.status(err.status || 500).json({
-        error: 'Upload failed',
-      });
+      const requestId = req._uploadRequestId ?? randomUUID();
+      const failure = toUploadErrorResponse(err, requestId);
+      res.setHeader(UPLOAD_REQUEST_ID_HEADER, requestId);
+      res.locals.uploadFailureCode = failure.body.code;
+      res.locals.uploadFailureType = failure.type;
+      res.status(failure.status).json(failure.body);
       // biome-ignore lint/suspicious/noExplicitAny: Express 5 type compatibility
     }) as any
   );
