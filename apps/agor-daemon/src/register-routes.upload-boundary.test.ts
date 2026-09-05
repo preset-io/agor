@@ -1,9 +1,9 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createTenantScopedDatabaseProxy, runWithTenantDatabaseScope } from '@agor/core/db';
-import type { TenantContext } from '@agor/core/types';
+import { type TenantContext, UPLOAD_REQUEST_ID_HEADER } from '@agor/core/types';
 import { describe, expect, it, vi } from 'vitest';
-import { createUploadAuthMiddleware } from './register-routes.js';
+import { appendResponseHeaderValue, createUploadAuthMiddleware } from './register-routes.js';
 
 describe('browser upload route boundary ordering', () => {
   const source = readFileSync(join(__dirname, 'register-routes.ts'), 'utf8');
@@ -16,6 +16,18 @@ describe('browser upload route boundary ordering', () => {
     expect(route.indexOf('authorizeUpload')).toBeLessThan(
       route.indexOf("uploadMiddleware.array('files'")
     );
+  });
+
+  it('preserves existing exposed headers alongside the correlation header', () => {
+    expect(appendResponseHeaderValue('X-Existing-Header', UPLOAD_REQUEST_ID_HEADER)).toBe(
+      `X-Existing-Header, ${UPLOAD_REQUEST_ID_HEADER}`
+    );
+    expect(
+      appendResponseHeaderValue(
+        `X-Existing-Header, ${UPLOAD_REQUEST_ID_HEADER.toUpperCase()}`,
+        UPLOAD_REQUEST_ID_HEADER
+      )
+    ).toBe(`X-Existing-Header, ${UPLOAD_REQUEST_ID_HEADER.toUpperCase()}`);
   });
 
   it('does not expose Multer buffers or physical file paths in the response contract', () => {
@@ -117,7 +129,7 @@ describe('browser upload route boundary ordering', () => {
     const helperStart = source.indexOf('export async function authenticateBearerHttpRequest');
     const middlewareStart = source.indexOf('export function createUploadAuthMiddleware');
     const routeStart = source.indexOf("'/executor/uploads/:uploadRef/content'");
-    const routeEnd = source.indexOf('const DEBUG_UPLOAD', routeStart);
+    const routeEnd = source.indexOf('const authorizeUpload', routeStart);
     const helper = source.slice(helperStart, middlewareStart);
     const executorRoutes = source.slice(routeStart, routeEnd);
 

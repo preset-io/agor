@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildPromptWithAttachments,
+  getComposerAttachmentFailureMessage,
   getLatestComposerPromptText,
   isBlockingComposerAttachment,
   isPreviewableComposerImage,
@@ -10,6 +11,28 @@ import {
 } from './composerAttachments';
 
 describe('composerAttachments', () => {
+  it.each([undefined, '', '   '])('uses a fallback for a missing failure reason (%s)', (error) => {
+    expect(
+      getComposerAttachmentFailureMessage({
+        id: 'failed',
+        file: new File(['x'], 'notes.txt'),
+        status: 'failed',
+        error,
+      })
+    ).toBe('notes.txt: Upload failed');
+  });
+
+  it('preserves the failure reason and support reference for blocked sends', () => {
+    expect(
+      getComposerAttachmentFailureMessage({
+        id: 'failed',
+        file: new File(['x'], 'notes.txt'),
+        status: 'failed',
+        error: 'Upload failed (HTTP 503) (reference: request-123)',
+      })
+    ).toBe('notes.txt: Upload failed (HTTP 503) (reference: request-123)');
+  });
+
   it('honors daemon-provided upload limits', () => {
     const file = new File(['12345'], 'small.txt', { type: 'text/plain' });
     const { acceptedFiles, rejections } = validateComposerFileIntake([file], [], {
