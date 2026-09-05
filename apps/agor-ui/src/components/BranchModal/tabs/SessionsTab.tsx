@@ -215,7 +215,9 @@ const SessionsTabInner: React.FC<SessionsTabProps> = ({
         }
 
         showSuccess(
-          archive ? 'Session and child sessions archived' : 'Session and child sessions unarchived'
+          archive
+            ? 'Session and same-branch children archived'
+            : 'Session and same-branch children unarchived'
         );
       } catch (err) {
         showError(err instanceof Error ? err.message : 'Failed to update session');
@@ -356,11 +358,11 @@ const SessionsTabInner: React.FC<SessionsTabProps> = ({
         const nextArchived = !session.archived;
         const actionLabel = nextArchived ? 'archive' : 'unarchive';
         const title = nextArchived
-          ? 'Archive session and child sessions?'
-          : 'Unarchive session and child sessions?';
+          ? 'Archive session and same-branch children?'
+          : 'Unarchive session and same-branch children?';
         const description = nextArchived
-          ? 'This will archive this session and its branch-local child sessions.'
-          : 'This will unarchive this session and its branch-local child sessions.';
+          ? 'This will archive this session and its same-branch forked or spawned descendants. Remote-created sessions remain active.'
+          : 'This will restore this session and same-branch descendants archived because of their parent. Remote-created sessions are unchanged.';
         const tooltip = nextArchived
           ? 'Archive session and child sessions'
           : 'Archived • Click to unarchive session and child sessions';

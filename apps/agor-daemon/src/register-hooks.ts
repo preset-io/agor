@@ -130,6 +130,7 @@ import type { GatewayService } from './services/gateway.js';
 import { groupMembershipsHooks, groupsHooks } from './services/groups.js';
 import { presentMCPServerOAuthPolicies } from './services/mcp-server-presentation.js';
 import {
+  assertSessionArchiveStateUsesDedicatedOperation,
   isRemoteRelationshipsEnrichedResult,
   markRemoteRelationshipsEnrichedResult,
 } from './services/sessions.js';
@@ -336,7 +337,7 @@ export function validateBranchEnvPolicyHook(config: DeepReadonly<AgorConfig>) {
  * session metadata (name, model_config, permission_config, callback_config).
  *
  * Sources:
- *   - `/sessions/:id/prompt`  → `tasks`, `archived`, `archived_reason`
+ *   - `/sessions/:id/prompt`  → `tasks`
  *   - `/sessions/:id/stop`    → `status`, `ready_for_prompt`
  *   - executor status updates → `status`, `ready_for_prompt`
  *     (claude/copilot permission-hooks, see packages/executor)
@@ -360,8 +361,6 @@ export function validateBranchEnvPolicyHook(config: DeepReadonly<AgorConfig>) {
  */
 export const PROMPT_FLOW_PATCH_FIELDS: readonly string[] = [
   'tasks',
-  'archived',
-  'archived_reason',
   'status',
   'ready_for_prompt',
   'sdk_session_id',
@@ -3002,6 +3001,10 @@ export function registerHooks(ctx: RegisterHooksContext): void {
   // SessionsService.update delegates straight to patch, so both verbs mutate a
   // session the same way and must clear the same authorization chain.
   const sessionWriteGuards = [
+    (context: HookContext) => {
+      assertSessionArchiveStateUsesDedicatedOperation(context.data ?? {});
+      return context;
+    },
     protectGatewaySourceMetadata,
     // created_by and unix_username remain immutable identity/history stamps.
     // unix_username is load-bearing for delegated execution-home Sessions;
@@ -3013,7 +3016,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
           loadSession(sessionsRepository),
           loadBranchFromSession(branchRepository),
           // Branch permission by patch type:
-          //   - Prompt-flow patches (tasks, archived, status, …) are bookkeeping
+          //   - Prompt-flow patches (tasks, status, ready_for_prompt, …) are bookkeeping
           //     emitted by /sessions/:id/prompt and /sessions/:id/stop on behalf
           //     of the authenticated user. They need only the same tier as
           //     prompting the session (session-tier for own, prompt-tier for

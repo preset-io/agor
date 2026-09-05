@@ -51,6 +51,27 @@ describe('prompt and widget transaction scopes', () => {
     expect(prompt).toContain('branchRbacEnabled && !isPromptServiceAccount');
   });
 
+  it('restores only the explicitly prompted archived session', () => {
+    const promptStart = source.indexOf("'/sessions/:id/prompt'");
+    const promptEnd = source.indexOf("'/tasks/:id/run'", promptStart);
+    const prompt = source.slice(promptStart, promptEnd);
+
+    expect(prompt).toContain('sessionsService.unarchive(id, { includeChildren: false }, params)');
+    expect(prompt).not.toContain('{ archived: false, archived_reason: undefined }');
+  });
+
+  it('admits branch archive and unarchive through the tenant write gate', () => {
+    for (const path of ["'/branches/:id/archive-or-delete'", "'/branches/:id/unarchive'"]) {
+      const start = source.indexOf(path);
+      const route = source.slice(start, start + 1_000);
+
+      expect(start).toBeGreaterThan(0);
+      expect(route).toContain(
+        'around: { all: [tenantIdentityAround, tenantWriteAdmissionAround] }'
+      );
+    }
+  });
+
   it('does not keep a route-wide tenant transaction over widget external work', () => {
     for (const path of ["'/widgets/:id/submit'", "'/widgets/:id/dismiss'"]) {
       const start = source.indexOf(path);
