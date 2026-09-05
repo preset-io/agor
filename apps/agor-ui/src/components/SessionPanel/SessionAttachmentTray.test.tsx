@@ -83,6 +83,34 @@ describe('SessionAttachmentTray', () => {
     expect(screen.getByLabelText('notes.md')).toBeInTheDocument();
   });
 
+  it('keeps each failure reason visible and removes stale reasons with their attachment', () => {
+    const failed = attachment({
+      status: 'failed',
+      error:
+        'A file exceeds the upload size limit (reference: 550e8400-e29b-41d4-a716-446655440000)',
+    });
+    const unknownFailure = attachment({
+      id: 'unknown',
+      file: new File(['text'], 'notes.txt', { type: 'text/plain' }),
+      previewUrl: undefined,
+      status: 'failed',
+    });
+    const { rerender } = render(
+      <SessionAttachmentTray attachments={[failed, unknownFailure]} onRemove={vi.fn()} />
+    );
+
+    expect(
+      screen.getByText(
+        'chart.png: A file exceeds the upload size limit (reference: 550e8400-e29b-41d4-a716-446655440000)'
+      )
+    ).toBeVisible();
+    expect(screen.getByText('notes.txt: Upload failed')).toBeVisible();
+
+    rerender(<SessionAttachmentTray attachments={[unknownFailure]} onRemove={vi.fn()} />);
+    expect(screen.queryByText(/chart.png: A file exceeds/)).not.toBeInTheDocument();
+    expect(screen.getByText('notes.txt: Upload failed')).toBeVisible();
+  });
+
   it('locks remove and batch settings while composer files are uploading', () => {
     const onRemove = vi.fn();
 

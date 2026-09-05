@@ -8,7 +8,10 @@ import {
 } from '@ant-design/icons';
 import { Alert, Button, Modal, Space, Tooltip, Typography, theme } from 'antd';
 import React from 'react';
-import type { ComposerAttachment } from './composerAttachments';
+import {
+  type ComposerAttachment,
+  getComposerAttachmentFailureMessage,
+} from './composerAttachments';
 
 function getFileIcon(file: File) {
   const type = file.type.toLowerCase();
@@ -36,7 +39,8 @@ export const SessionAttachmentTray: React.FC<SessionAttachmentTrayProps> = ({
 
   if (attachments.length === 0) return null;
 
-  const failedCount = attachments.filter((attachment) => attachment.status === 'failed').length;
+  const failedAttachments = attachments.filter((attachment) => attachment.status === 'failed');
+  const failedCount = failedAttachments.length;
   const previewAttachment =
     attachments.find((attachment) => attachment.id === previewAttachmentId) ?? null;
 
@@ -175,6 +179,15 @@ export const SessionAttachmentTray: React.FC<SessionAttachmentTrayProps> = ({
             type="error"
             showIcon
             message={`${failedCount} file${failedCount === 1 ? '' : 's'} failed or cannot be uploaded. Remove failed files before sending.`}
+            description={
+              <Space orientation="vertical" size={token.paddingXXS}>
+                {failedAttachments.map((attachment) => (
+                  <Typography.Text key={attachment.id} style={{ overflowWrap: 'anywhere' }}>
+                    {getComposerAttachmentFailureMessage(attachment)}
+                  </Typography.Text>
+                ))}
+              </Space>
+            }
             style={{ paddingBlock: token.paddingXXS }}
           />
         )}
