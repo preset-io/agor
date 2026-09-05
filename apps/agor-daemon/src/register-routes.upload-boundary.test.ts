@@ -1,9 +1,13 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { createTenantScopedDatabaseProxy, runWithTenantDatabaseScope } from '@agor/core/db';
-import type { TenantContext } from '@agor/core/types';
+import {
+  createTenantScopedDatabaseProxy,
+  getCurrentTenantId,
+  runWithTenantDatabaseScope,
+} from '@agor/core/db';
+import type { Session, TenantContext, UUID } from '@agor/core/types';
 import { describe, expect, it, vi } from 'vitest';
-import { createUploadAuthMiddleware } from './register-routes.js';
+import { createUploadAuthMiddleware, resolveUploadPromptAccess } from './register-routes.js';
 
 describe('browser upload route boundary ordering', () => {
   const source = readFileSync(join(__dirname, 'register-routes.ts'), 'utf8');
@@ -126,5 +130,64 @@ describe('browser upload route boundary ordering', () => {
     expect(helper).toMatch(/authentication\.create\([\s\S]*authParams\s*\)/);
     expect(helper).toContain('authParams.tenant ??');
     expect(executorRoutes.match(/authenticateBearerHttpRequest\(/g)).toHaveLength(2);
+  });
+});
+
+describe('upload prompt authorization tenant scope', () => {
+  function fixture() {
+    const rawDb = { run: vi.fn(), select: vi.fn(() => getCurrentTenantId()) };
+    const db = createTenantScopedDatabaseProxy(rawDb as never, {
+      requireScope: true,
+      label: 'upload authorization test database',
+    });
+    const session = {
+      session_id: 'session-a',
+      branch_id: 'branch-a',
+      created_by: 'user-a',
+      sdk_home_scope: 'branch',
+    } as Session;
+    const branchRepository = {
+      findById: vi.fn(async () =>
+        db.select() === 'tenant-a' ? { branch_id: session.branch_id } : null
+      ),
+      resolveUserPermission: vi.fn(async () => {
+        expect(db.select()).toBe('tenant-a');
+        return 'session' as const;
+      }),
+      resolveSessionPromptAuthority: vi.fn(async (_branchId, userId) => {
+        expect(db.select()).toBe('tenant-a');
+        return { allowed: userId === 'user-a', source: 'owner' };
+      }),
+    };
+    const authorize = (tenantId: string, userId = 'user-a') =>
+      resolveUploadPromptAccess({
+        db,
+        tenantId,
+        branchRepository: branchRepository as unknown as Parameters<
+          typeof resolveUploadPromptAccess
+        >[0]['branchRepository'],
+        session,
+        userId: userId as UUID,
+      });
+    return { authorize, branchRepository, rawDb };
+  }
+
+  it('keeps every branch permission query in tenant scope after branch lookup', async () => {
+    const { authorize, rawDb } = fixture();
+    await expect(authorize('tenant-a')).resolves.toMatchObject({ allowed: true });
+    expect(rawDb.select).toHaveBeenCalledTimes(3);
+    expect(getCurrentTenantId()).toBeUndefined();
+  });
+
+  it('does not resolve prompt authority for another tenant’s branch', async () => {
+    const { authorize, branchRepository } = fixture();
+    await expect(authorize('tenant-b')).resolves.toBeNull();
+    expect(branchRepository.resolveUserPermission).not.toHaveBeenCalled();
+    expect(branchRepository.resolveSessionPromptAuthority).not.toHaveBeenCalled();
+  });
+
+  it('preserves a same-tenant caller’s prompt denial', async () => {
+    const { authorize } = fixture();
+    await expect(authorize('tenant-a', 'user-b')).resolves.toMatchObject({ allowed: false });
   });
 });
