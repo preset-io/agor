@@ -48,7 +48,7 @@ vi.mock('../base/permission-hooks.js', () => ({
 import { getMcpServersForSession } from '@agor/core/mcp';
 import { resolveMCPAuthHeaders } from '@agor/core/tools/mcp/jwt-auth';
 import * as Claude from '@anthropic-ai/claude-agent-sdk';
-import { CLAUDE_CODE_DISALLOWED_TOOLS } from './constants.js';
+import { CLAUDE_CODE_DISALLOWED_TOOLS, CLAUDE_CODE_TODO_TOOLS } from './constants.js';
 import { formatListForLog, type QuerySetupDeps, setupQuery } from './query-builder.js';
 
 describe('MCP logging helpers', () => {
@@ -235,6 +235,14 @@ describe('setupQuery - Local Settings Support', () => {
 
     const callArgs = vi.mocked(Claude.query).mock.calls[0][0];
     expect(callArgs.options.disallowedTools).toEqual([...CLAUDE_CODE_DISALLOWED_TOOLS]);
+  });
+
+  it('opts into the Claude task tools that back Agor todo rendering', async () => {
+    await setupQuery('test-session' as SessionID, 'test prompt', createMockDeps());
+
+    const callArgs = vi.mocked(Claude.query).mock.calls[0][0];
+    expect(CLAUDE_CODE_TODO_TOOLS).toEqual(['TaskCreate', 'TaskUpdate', 'TaskGet', 'TaskList']);
+    expect(callArgs.options.allowedTools).toEqual([...CLAUDE_CODE_TODO_TOOLS]);
   });
 
   it('blocks on MCP startup for gateway sessions', async () => {
