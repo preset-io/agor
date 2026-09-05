@@ -4,6 +4,34 @@ import type { TenantID } from './tenant';
 /** Opaque identifier for bytes held at the ingress (boundary B) staging layer. */
 export type UploadRef = string & { readonly __brand: 'UploadRef' };
 
+/** Response header that correlates browser upload failures with daemon logs. */
+export const UPLOAD_REQUEST_ID_HEADER = 'x-agor-upload-request-id';
+
+/** Code/status pairs whose upload-policy messages are safe to display. */
+export const UPLOAD_POLICY_ERROR_CONTRACT = {
+  unsupportedMediaType: { code: 'UNSUPPORTED_MEDIA_TYPE', status: 415 },
+  fileSize: { code: 'LIMIT_FILE_SIZE', status: 413 },
+  totalFileSize: { code: 'LIMIT_TOTAL_FILE_SIZE', status: 413 },
+  fileCount: { code: 'LIMIT_FILE_COUNT', status: 400 },
+  unexpectedFile: { code: 'LIMIT_UNEXPECTED_FILE', status: 400 },
+  payloadTooLarge: { code: 'PAYLOAD_TOO_LARGE', status: 413 },
+} as const;
+
+export type UploadPolicyErrorCode =
+  (typeof UPLOAD_POLICY_ERROR_CONTRACT)[keyof typeof UPLOAD_POLICY_ERROR_CONTRACT]['code'];
+
+export type UploadPolicyErrorDefinition =
+  (typeof UPLOAD_POLICY_ERROR_CONTRACT)[keyof typeof UPLOAD_POLICY_ERROR_CONTRACT];
+
+export function getUploadPolicyErrorDefinition(
+  value: unknown
+): UploadPolicyErrorDefinition | undefined {
+  if (typeof value !== 'string') return undefined;
+  return Object.values(UPLOAD_POLICY_ERROR_CONTRACT).find(
+    (definition) => definition.code === value
+  );
+}
+
 export type UploadProvenance = 'browser' | 'gateway-slack' | 'mcp-slack';
 export type UploadStatus = 'pending' | 'active' | 'deleting';
 

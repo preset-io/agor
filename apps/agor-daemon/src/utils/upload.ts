@@ -15,6 +15,7 @@ import type {
   UploadRef,
   UploadStagingStore,
 } from '@agor/core/types';
+import { UPLOAD_POLICY_ERROR_CONTRACT } from '@agor/core/types';
 import type { NextFunction, Request, Response } from 'express';
 import multer from 'multer';
 
@@ -77,9 +78,6 @@ export function configureUploadLimits(maxFileBytes: number): void {
 export function getUploadLimits(): Readonly<UploadIngressPolicy> {
   return uploadLimits;
 }
-
-// Debug logging only in development
-const DEBUG_UPLOAD = process.env.NODE_ENV !== 'production';
 
 const LEGACY_IGNORED_UPLOAD_DESTINATIONS = new Set(['branch', 'global']);
 
@@ -148,7 +146,10 @@ export function createUploadStorage(
             done(
               Object.assign(
                 new Error(`Combined upload size exceeds ceiling ${limits.maxTotalBytes}`),
-                { status: 413, code: 'LIMIT_TOTAL_FILE_SIZE' }
+                {
+                  status: UPLOAD_POLICY_ERROR_CONTRACT.totalFileSize.status,
+                  code: UPLOAD_POLICY_ERROR_CONTRACT.totalFileSize.code,
+                }
               )
             );
             return;
@@ -216,17 +217,14 @@ export function createUploadMiddleware(store: UploadStagingStore) {
       // Match on the bare MIME (drop any `; charset=...` parameters).
       const mime = (file.mimetype || '').split(';')[0].trim().toLowerCase();
       if (!ALLOWED_UPLOAD_MIME_TYPES.has(mime)) {
-        if (DEBUG_UPLOAD) {
-          console.warn(`🚫 [Upload Storage] Rejecting MIME ${mime} for ${file.originalname}`);
-        }
         // Pass an Error so the route's error handler returns 4xx with a
         // clear message instead of silently dropping the file.
         const err = new Error(`Unsupported file type: ${mime || 'unknown'}`) as Error & {
           status?: number;
           code?: string;
         };
-        err.status = 415;
-        err.code = 'UNSUPPORTED_MEDIA_TYPE';
+        err.status = UPLOAD_POLICY_ERROR_CONTRACT.unsupportedMediaType.status;
+        err.code = UPLOAD_POLICY_ERROR_CONTRACT.unsupportedMediaType.code;
         return cb(err);
       }
       cb(null, true);
@@ -247,10 +245,15 @@ export function enforceTotalUploadSize() {
     const { maxTotalBytes } = getUploadLimits();
     const declared = Number.parseInt(req.headers['content-length'] ?? '', 10);
     if (Number.isFinite(declared) && declared > maxTotalBytes) {
-      res.status(413).json({
+      const requestId = (req as Request & { _uploadRequestId?: string })._uploadRequestId;
+      res.locals ??= {};
+      res.locals.uploadFailureCode = UPLOAD_POLICY_ERROR_CONTRACT.payloadTooLarge.code;
+      res.locals.uploadFailureType = 'upload_policy';
+      res.status(UPLOAD_POLICY_ERROR_CONTRACT.payloadTooLarge.status).json({
         error: 'Upload too large',
         details: `Combined upload size ${declared} exceeds ceiling ${maxTotalBytes}`,
-        code: 'PAYLOAD_TOO_LARGE',
+        code: UPLOAD_POLICY_ERROR_CONTRACT.payloadTooLarge.code,
+        ...(requestId && { requestId }),
       });
       return;
     }
