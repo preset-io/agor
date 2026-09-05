@@ -168,7 +168,7 @@ describe('MCP OAuth status through Feathers response hooks', () => {
       config: {
         database: { dialect: 'sqlite' },
         multi_tenancy: { mode: 'static', static_tenant_id: 'default' },
-        execution: { branch_rbac: true, unix_user_mode: 'simple' },
+        execution: { unix_user_mode: 'simple' },
       } as RegisterHooksContext['config'],
       jwtSecret: 'mcp-hook-integration-secret',
       requireAuth: async (context) => context,

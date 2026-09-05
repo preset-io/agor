@@ -1482,7 +1482,7 @@ describe('loadConfig cache', () => {
   it.each([
     {
       name: 'app RBAC simple',
-      config: { execution: { branch_rbac: true, unix_user_mode: 'simple' } } as AgorConfig,
+      config: { execution: { unix_user_mode: 'simple' } } as AgorConfig,
       expected: {
         unixUserMode: 'simple',
         requiresExecutionHomeKey: false,
@@ -1492,7 +1492,7 @@ describe('loadConfig cache', () => {
       // Delegated requires per-user unix_username but performs no OS-level
       // work on the daemon host: no sudo and no host groups.
       name: 'delegated (identity enforced by execution substrate)',
-      config: { execution: { branch_rbac: true, unix_user_mode: 'delegated' } } as AgorConfig,
+      config: { execution: { unix_user_mode: 'delegated' } } as AgorConfig,
       expected: {
         unixUserMode: 'delegated',
         requiresExecutionHomeKey: true,

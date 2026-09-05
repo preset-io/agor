@@ -205,7 +205,7 @@ describe('registered primary-teammate invalidation lifecycle', () => {
         config: {
           database: { dialect: 'sqlite' },
           multi_tenancy: { mode: 'static', static_tenant_id: 'registration-test' },
-          execution: { branch_rbac: true },
+          execution: {},
         } as RegisterHooksContext['config'],
         jwtSecret: 'registration-test-secret',
         requireAuth: async (context) => context,
@@ -621,7 +621,7 @@ describe('tenant-owned service registration', () => {
       config: {
         database: { dialect: 'postgresql' },
         multi_tenancy: { mode: 'static', static_tenant_id: 'registration-test' },
-        execution: { branch_rbac: true },
+        execution: {},
       } as RegisterHooksContext['config'],
       jwtSecret: 'registration-test-secret',
       requireAuth: async (context) => context,
@@ -782,7 +782,7 @@ describe('registered RBAC authentication boundary', () => {
       config: {
         database: { dialect: 'postgresql' },
         multi_tenancy: { mode: 'static', static_tenant_id: 'rbac-auth-test' },
-        execution: { branch_rbac: true },
+        execution: {},
       } as RegisterHooksContext['config'],
       jwtSecret: 'rbac-auth-test-secret',
       requireAuth,
@@ -878,7 +878,7 @@ describe('registered tenant write-gate classification', () => {
       config: {
         database: { dialect: 'postgresql' },
         multi_tenancy: { mode: 'static', static_tenant_id: 'registration-test' },
-        execution: { branch_rbac: true },
+        execution: {},
       } as RegisterHooksContext['config'],
       jwtSecret: 'registration-test-secret',
       requireAuth: async (context) => context,
@@ -948,7 +948,7 @@ describe('registered external board-comment mutation boundary', () => {
       config: {
         database: { dialect: 'sqlite' },
         multi_tenancy: { mode: 'static', static_tenant_id: 'registration-test' },
-        execution: { branch_rbac: true },
+        execution: {},
       } as RegisterHooksContext['config'],
       jwtSecret: 'registration-test-secret',
       requireAuth: async (context) => context,
@@ -1032,7 +1032,7 @@ describe('registered board admin authority', () => {
       config: {
         database: { dialect: 'sqlite' },
         multi_tenancy: { mode: 'static', static_tenant_id: 'registration-test' },
-        execution: { branch_rbac: true },
+        execution: {},
       } as RegisterHooksContext['config'],
       jwtSecret: 'registration-test-secret',
       requireAuth: async (context) => context,
@@ -1660,7 +1660,7 @@ describe('registered file service RBAC database preload', () => {
         config: {
           database: { dialect: 'postgresql' },
           multi_tenancy: { mode: 'static', static_tenant_id: 'tenant-a' },
-          execution: { branch_rbac: true },
+          execution: {},
         } as RegisterHooksContext['config'],
         jwtSecret: 'registration-test-secret',
         requireAuth: async (context) => context,

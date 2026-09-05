@@ -407,7 +407,7 @@ describe('agor_branches_delete authorization boundary', () => {
     const generateToken = vi.fn();
     const app = {
       sessionTokenService: { generateToken },
-      get: () => ({ execution: { branch_rbac: true, allow_superadmin: false } }),
+      get: () => ({ execution: { allow_superadmin: false } }),
       service(name: string) {
         if (name === 'branches') {
           return {
@@ -457,7 +457,7 @@ describe('agor_branches_update', () => {
     };
     const permissionsPatch = vi.fn(async (_id, data) => data);
     const app = {
-      get: () => ({ execution: { branch_rbac: true, allow_superadmin: false } }),
+      get: () => ({ execution: { allow_superadmin: false } }),
       service(name: string) {
         if (name === 'branches/:id/permissions') return { patch: permissionsPatch };
         throw new Error(`Unexpected service call: ${name}`);
@@ -484,7 +484,7 @@ describe('agor_branches_update', () => {
     const sessionsGet = vi.fn(async () => ({ session_id: 'session-1', branch_id: 'branch-1' }));
     const branchesPatch = vi.fn(async () => ({ branch_id: 'branch-1', notes: 'updated' }));
     const app = {
-      get: () => ({ execution: { branch_rbac: true, allow_superadmin: false } }),
+      get: () => ({ execution: { allow_superadmin: false } }),
       service(name: string) {
         if (name === 'sessions') return { get: sessionsGet };
         if (name === 'branches') return { patch: branchesPatch };
@@ -2180,7 +2180,7 @@ describe('agor_teammates_list', () => {
       .spyOn(BranchRepository.prototype, 'findTeammateBranches')
       .mockResolvedValue([]);
     const app = {
-      get: () => ({ execution: { branch_rbac: true, allow_superadmin: true } }),
+      get: () => ({ execution: { allow_superadmin: true } }),
       service(name: string) {
         throw new Error(`Unexpected service call: ${name}`);
       },
@@ -2206,7 +2206,7 @@ describe('agor_teammates_list', () => {
       .spyOn(BranchRepository.prototype, 'findTeammateBranches')
       .mockResolvedValue([]);
     const app = {
-      get: () => ({ execution: { branch_rbac: true, allow_superadmin: false } }),
+      get: () => ({ execution: { allow_superadmin: false } }),
       service(name: string) {
         throw new Error(`Unexpected service call: ${name}`);
       },

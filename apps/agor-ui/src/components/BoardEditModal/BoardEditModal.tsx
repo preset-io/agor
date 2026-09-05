@@ -122,11 +122,6 @@ export function BoardEditModal({
           description: fresh.description,
           background_color: fresh.background_color,
           custom_css: fresh.custom_css,
-          access_mode: fresh.access_mode || 'shared',
-          default_others_can: fresh.default_others_can || 'session',
-          default_others_fs_access: fresh.default_others_fs_access || 'read',
-          owner_ids: fresh.created_by ? [fresh.created_by] : [],
-          board_group_grants: [],
           custom_context: fresh.custom_context ? JSON.stringify(fresh.custom_context, null, 2) : '',
         });
         // Expose the loaded board last: this is what un-gates the form render.
@@ -206,7 +201,6 @@ export function BoardEditModal({
             key={loadedBoard.board_id}
             form={form}
             backgroundResetSignal={loadedBoard.board_id}
-            rbacEnabled
             allUsers={allUsers}
             allGroups={allGroups}
             canEditGeneral={canEditGeneral}

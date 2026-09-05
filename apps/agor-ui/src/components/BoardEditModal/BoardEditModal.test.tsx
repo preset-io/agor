@@ -16,12 +16,10 @@ vi.mock('../forms/BoardFormFields', () => ({
   BoardFormFields: ({
     capabilityPolicyEditor,
     allGroups,
-    rbacEnabled,
     canEditGeneral,
   }: {
     capabilityPolicyEditor?: React.ReactNode;
     allGroups?: Array<{ name: string }>;
-    rbacEnabled?: boolean;
     canEditGeneral?: boolean;
   }) => (
     <>
@@ -33,7 +31,6 @@ vi.mock('../forms/BoardFormFields', () => ({
         <div
           data-testid="board-modal-policy-editor"
           data-group-names={allGroups?.map((group) => group.name).join(',')}
-          data-rbac-enabled={String(rbacEnabled)}
         />
       )}
     </>

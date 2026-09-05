@@ -56,7 +56,6 @@ interface HealthInfo {
     method: string | null;
   };
   execution?: {
-    branchRbac: boolean;
     unixUserMode: UnixUserMode;
   };
   security?: {

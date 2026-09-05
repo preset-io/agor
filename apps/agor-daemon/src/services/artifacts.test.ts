@@ -188,7 +188,6 @@ describe('ArtifactsService executor sandbox ownership', () => {
     },
     execution: {
       unix_user_mode: 'sandbox',
-      branch_rbac: true,
       sandbox: { enabled: true, home_mode: 'per_user' },
     },
   };
