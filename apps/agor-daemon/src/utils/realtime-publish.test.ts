@@ -1385,7 +1385,7 @@ describe('configureRealtimePublish', () => {
     expect(app.channel).not.toHaveBeenCalledWith(tenantChannelName('tenant-a'));
   });
 
-  it('filters branch events to users with view access when RBAC is enabled', async () => {
+  it('filters branch events to users with view access', async () => {
     const allowed = user('allowed');
     const denied = user('denied');
     const admin = user('admin', ROLES.SUPERADMIN);

@@ -1,4 +1,4 @@
-import type { Board, Group, User } from '@agor-live/client';
+import type { Board } from '@agor-live/client';
 import { LockOutlined } from '@ant-design/icons';
 import type { FormInstance } from 'antd';
 import { Alert, Form, Input, Space, Tabs, Typography } from 'antd';
@@ -84,8 +84,6 @@ export interface BoardFormFieldsProps {
    * mode from the freshly-loaded form values when the board changes.
    */
   backgroundResetSignal?: string;
-  allUsers?: User[];
-  allGroups?: Group[];
   /** Normalized permission editor mounted by BoardEditModal and persisted separately. */
   capabilityPolicyEditor?: React.ReactNode;
   /**
@@ -110,8 +108,6 @@ export const BoardFormFields: React.FC<BoardFormFieldsProps> = ({
   autoFocus,
   extra,
   backgroundResetSignal,
-  allUsers = [],
-  allGroups = [],
   capabilityPolicyEditor,
   canEditGeneral = true,
 }) => {
@@ -192,8 +188,8 @@ export const BoardFormFields: React.FC<BoardFormFieldsProps> = ({
       <RbacPermissionFields
         value={permissionValue}
         onChange={setPermissionField}
-        allUsers={allUsers}
-        allGroups={allGroups}
+        allUsers={[]}
+        allGroups={[]}
         canEdit
         canEditOwners={false}
         canEditGroups={false}

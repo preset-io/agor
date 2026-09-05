@@ -15,26 +15,35 @@ vi.mock('../JSONEditor', () => ({
 vi.mock('../forms/BoardFormFields', () => ({
   BoardFormFields: ({
     capabilityPolicyEditor,
-    allGroups,
     canEditGeneral,
   }: {
     capabilityPolicyEditor?: React.ReactNode;
-    allGroups?: Array<{ name: string }>;
     canEditGeneral?: boolean;
-  }) => (
-    <>
-      <Form.Item name="name" label="Name" rules={[{ required: true }]}>
-        <Input />
-      </Form.Item>
-      <div data-testid="board-modal-can-edit-general" data-value={String(canEditGeneral)} />
-      {capabilityPolicyEditor && (
-        <div
-          data-testid="board-modal-policy-editor"
-          data-group-names={allGroups?.map((group) => group.name).join(',')}
-        />
-      )}
-    </>
-  ),
+  }) => {
+    // The edit modal passes groups straight to the capability-policy editor
+    // element; assert propagation by inspecting that element's props.
+    const editorGroups =
+      capabilityPolicyEditor &&
+      typeof capabilityPolicyEditor === 'object' &&
+      'props' in capabilityPolicyEditor
+        ? ((capabilityPolicyEditor as { props?: { groups?: Array<{ name: string }> } }).props
+            ?.groups ?? [])
+        : [];
+    return (
+      <>
+        <Form.Item name="name" label="Name" rules={[{ required: true }]}>
+          <Input />
+        </Form.Item>
+        <div data-testid="board-modal-can-edit-general" data-value={String(canEditGeneral)} />
+        {capabilityPolicyEditor && (
+          <div
+            data-testid="board-modal-policy-editor"
+            data-group-names={editorGroups.map((group) => group.name).join(',')}
+          />
+        )}
+      </>
+    );
+  },
   extractBoardFormValues: (form: { getFieldValue: (name: string) => unknown }) => ({
     name: form.getFieldValue('name'),
   }),

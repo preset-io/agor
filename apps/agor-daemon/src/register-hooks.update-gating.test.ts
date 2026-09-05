@@ -461,7 +461,7 @@ describe('branch and board visibility authority write symmetry', () => {
     }
   );
 
-  it('requires branch-specific all permission for PUT when RBAC is enabled', async () => {
+  it('requires branch-specific all permission for PUT', async () => {
     await expect(
       runCapturedHooks(captureRegisteredHooks(), 'branches', 'update', 'member', {
         others_can: 'none',

@@ -201,8 +201,6 @@ export function BoardEditModal({
             key={loadedBoard.board_id}
             form={form}
             backgroundResetSignal={loadedBoard.board_id}
-            allUsers={allUsers}
-            allGroups={allGroups}
             canEditGeneral={canEditGeneral}
             capabilityPolicyEditor={
               policy ? (
