@@ -6,6 +6,7 @@ import type { UploadedFile } from '../FileUpload';
 import { uploadFilesToSession } from '../FileUpload/upload';
 import {
   type ComposerAttachment,
+  getComposerAttachmentFailureMessage,
   isBlockingComposerAttachment,
   isPreviewableComposerImage,
   summarizeComposerFileRejections,
@@ -145,7 +146,7 @@ export function useComposerAttachments({
       const blockingAttachment = current.find(isBlockingComposerAttachment);
       if (blockingAttachment) {
         throw new Error(
-          `${blockingAttachment.file.name} failed or cannot be uploaded. Remove failed files before sending.`
+          `${getComposerAttachmentFailureMessage(blockingAttachment)}. Remove failed files before sending.`
         );
       }
 

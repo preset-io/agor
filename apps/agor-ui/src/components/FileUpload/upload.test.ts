@@ -182,7 +182,7 @@ describe('uploadFilesToSession', () => {
     ).rejects.toThrow('Upload failed (HTTP 500)');
   });
 
-  it('renders a short reference when the daemon returns a full request UUID', async () => {
+  it('preserves the logged request UUID in the displayed reference', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(
       new Response(
         JSON.stringify({
@@ -201,6 +201,6 @@ describe('uploadFilesToSession', () => {
         files: [new File(['html'], 'page.html')],
         accessToken: 'token',
       })
-    ).rejects.toThrow('Unsupported file type (reference: 550e8400e29b41d4a7164466)');
+    ).rejects.toThrow('Unsupported file type (reference: 550e8400-e29b-41d4-a716-446655440000)');
   });
 });

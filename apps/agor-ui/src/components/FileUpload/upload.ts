@@ -1,9 +1,4 @@
-import {
-  getUploadPolicyErrorDefinition,
-  isCanonicalFullUuid,
-  shortId,
-  UPLOAD_REQUEST_ID_HEADER,
-} from '@agor/core/types';
+import { getUploadPolicyErrorDefinition, UPLOAD_REQUEST_ID_HEADER } from '@agor/core/types';
 import { ACCESS_TOKEN_KEY } from '../../utils/tokenRefresh';
 
 export interface UploadedFile {
@@ -44,8 +39,9 @@ function boundedErrorMessage(value: unknown): string | undefined {
 
 function safeRequestId(value: unknown): string | undefined {
   if (typeof value !== 'string' || !SAFE_REQUEST_ID.test(value)) return undefined;
-  if (isCanonicalFullUuid(value)) return shortId(value);
-  return value.length <= 24 ? value : value.slice(0, 24);
+  // Keep the bounded reference identical to the daemon log's request_id so
+  // support can search for the value copied from the error message.
+  return value;
 }
 
 function isJsonResponse(response: Response): boolean {

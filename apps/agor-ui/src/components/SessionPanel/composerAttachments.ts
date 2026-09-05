@@ -183,6 +183,10 @@ export function isBlockingComposerAttachment(attachment: ComposerAttachment): bo
   return attachment.status === 'failed';
 }
 
+export function getComposerAttachmentFailureMessage(attachment: ComposerAttachment): string {
+  return `${attachment.file.name}: ${attachment.error?.trim() || 'Upload failed'}`;
+}
+
 export function getComposerUploadAccept(): string {
   return Array.from(COMPOSER_UPLOAD_MIME_TYPES).join(',');
 }
