@@ -1,6 +1,6 @@
 import type { AgorConfig } from '@agor/core/config';
 import type { TenantScopeAwareDatabase } from '@agor/core/db';
-import { registerAuthenticatedRoute as registerAuthenticatedRouteBase } from './authorization.js';
+import { registerAuthenticatedRoute as registerAuthenticatedRouteUnscoped } from './authorization.js';
 import {
   createTenantDatabaseScopeAroundHook,
   createTenantWriteGateAroundHook,
@@ -10,19 +10,20 @@ import {
  * Register an authenticated custom route with the same tenant database scope
  * and write-freeze gate as an ordinary tenant-owned Feathers service.
  *
- * Custom routes are not necessarily present when the static tenant-owned
- * service hook list is installed, so this registrar is their authoritative
- * database boundary.
+ * Custom-route registrations do not pass through the centralized
+ * TENANT_OWNED_SERVICE_PATHS hook inventory. Callers must use this registrar
+ * so tenant database scope and write fencing are installed at the route's
+ * registration boundary.
  */
 export function createTenantScopedAuthenticatedRouteRegistrar(options: {
   db: TenantScopeAwareDatabase;
   config: AgorConfig;
   jwtSecret: string;
-}): typeof registerAuthenticatedRouteBase {
+}): typeof registerAuthenticatedRouteUnscoped {
   const tenantDatabaseScopeAround = createTenantDatabaseScopeAroundHook(options);
   const tenantWriteGateAround = createTenantWriteGateAroundHook(options.db);
   return (routeApp, path, service, authConfig, routeRequireAuth, routeOptions = {}) =>
-    registerAuthenticatedRouteBase(routeApp, path, service, authConfig, routeRequireAuth, {
+    registerAuthenticatedRouteUnscoped(routeApp, path, service, authConfig, routeRequireAuth, {
       ...routeOptions,
       around: [tenantDatabaseScopeAround, tenantWriteGateAround, ...(routeOptions.around ?? [])],
     });

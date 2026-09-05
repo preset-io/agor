@@ -81,13 +81,14 @@ describe('static-mode tenant DB scope for owned services', () => {
 describe('registerHooks static-mode owned-service scope wiring', () => {
   type AroundHook = (ctx: HookContext, next: () => Promise<void>) => Promise<void>;
 
-  const artifactCustomRoutePaths = [
-    'artifacts/:id/payload',
-    'artifacts/:id/console',
-    'artifacts/:id/sandpack-error',
-    'artifacts/:id/runtime-response/:requestId',
-    'artifacts/:id/trust',
-    'me/artifact-trust-grants',
+  const artifactCustomRouteProbes = [
+    ['artifacts/:id/payload', 'find'],
+    ['artifacts/:id/console', 'create'],
+    ['artifacts/:id/sandpack-error', 'create'],
+    ['artifacts/:id/runtime-response/:requestId', 'create'],
+    ['artifacts/:id/trust', 'create'],
+    ['me/artifact-trust-grants', 'find'],
+    ['me/artifact-trust-grants', 'remove'],
   ] as const;
 
   /** Run registerHooks against a recorder app and return around hooks per path. */
@@ -162,10 +163,28 @@ describe('registerHooks static-mode owned-service scope wiring', () => {
     expect(scopeKind).toBe('tenant');
   });
 
-  it.each(artifactCustomRoutePaths)(
-    'installs the shared tenant scope and write gate around /%s',
-    (path) => {
-      expect(captureAroundHooks().get(path)).toHaveLength(2);
+  it.each(artifactCustomRouteProbes)(
+    'runs %s#%s inside the guarded tenant database scope',
+    async (path, method) => {
+      const around = captureAroundHooks().get(path) ?? [];
+      expect(around.length).toBeGreaterThan(0);
+
+      // Exercise the installed chain instead of relying on its structural
+      // arity. Any refactor that leaves identity but drops database scope will
+      // trip this guarded SQLite touch, including the trust write routes.
+      const probe = createTenantScopedDatabaseProxy({ run: () => undefined } as never, {
+        label: `${path} wiring probe db`,
+      });
+      const innermost = async () => {
+        (probe as unknown as { run(): void }).run();
+      };
+      const composed = around.reduceRight<() => Promise<void>>(
+        (next, hook) => () => hook({ path, method, params: {} } as unknown as HookContext, next),
+        innermost
+      );
+
+      await expect(composed()).resolves.toBeUndefined();
+      expect(getCurrentTenantDatabaseScope()).toBeUndefined();
     }
   );
 });

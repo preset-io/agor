@@ -202,7 +202,7 @@ import { appendSystemMessage } from './utils/append-system-message.js';
 import { buildAuthRateLimitKey } from './utils/auth-rate-limit-key.js';
 import {
   ensureMinimumRole,
-  registerAuthenticatedRoute as registerAuthenticatedRouteBase,
+  registerAuthenticatedRoute as registerAuthenticatedRouteUnscoped,
   requireMinimumRole,
 } from './utils/authorization.js';
 import { authorizeBranchArchiveDelete } from './utils/branch-archive-delete-authorization.js';
@@ -879,7 +879,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     jwtSecret,
   });
 
-  const registerLongAuthenticatedRoute: typeof registerAuthenticatedRouteBase = (
+  const registerLongAuthenticatedRoute: typeof registerAuthenticatedRouteUnscoped = (
     routeApp,
     path,
     service,
@@ -887,7 +887,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     routeRequireAuth,
     options = {}
   ) =>
-    registerAuthenticatedRouteBase(routeApp, path, service, authConfig, routeRequireAuth, {
+    registerAuthenticatedRouteUnscoped(routeApp, path, service, authConfig, routeRequireAuth, {
       ...options,
       around: [tenantIdentityAround, tenantWriteAdmissionAround, ...(options.around ?? [])],
     });

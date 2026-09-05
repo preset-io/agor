@@ -107,6 +107,7 @@ dbTest(
       template: 'static',
       files: { '/index.html': '<h1>Scoped artifact payload</h1>' },
       content_hash: 'guarded-custom-route-hash',
+      required_env_vars: ['ARTIFACT_ROUTE_TEST_SECRET'],
       public: true,
       created_by: ownerId,
     });
@@ -210,6 +211,46 @@ dbTest(
       });
       expect(memberWrite.status, await memberWrite.clone().text()).toBe(201);
       await expect(memberWrite.json()).resolves.toEqual({ success: true });
+
+      // Exercise both persisted trust write routes through the real REST
+      // boundary. The service's trust repository uses the guarded database,
+      // so create and revoke would fail if either custom route lost its tenant
+      // database scope.
+      const trust = await fetch(`${baseUrl}/artifacts/${artifact.artifact_id}/trust`, {
+        method: 'POST',
+        headers: { ...authHeaders(memberId), 'content-type': 'application/json' },
+        body: JSON.stringify({ scopeType: 'artifact' }),
+      });
+      expect(trust.status, await trust.clone().text()).toBe(201);
+      await expect(trust.json()).resolves.toEqual({ scope: 'artifact', persisted: true });
+
+      const grants = await fetch(`${baseUrl}/me/artifact-trust-grants`, {
+        headers: authHeaders(memberId),
+      });
+      expect(grants.status, await grants.clone().text()).toBe(200);
+      const grantList = (await grants.json()) as Array<{ grant_id: string; scope_value: string }>;
+      expect(grantList).toEqual([
+        expect.objectContaining({
+          grant_id: expect.any(String),
+          scope_value: artifact.artifact_id,
+        }),
+      ]);
+
+      const revoke = await fetch(`${baseUrl}/me/artifact-trust-grants/${grantList[0]?.grant_id}`, {
+        method: 'DELETE',
+        headers: authHeaders(memberId),
+      });
+      expect(revoke.status, await revoke.clone().text()).toBe(200);
+      await expect(revoke.json()).resolves.toMatchObject({
+        revoked: true,
+        grantId: grantList[0]?.grant_id,
+      });
+
+      const afterRevoke = await fetch(`${baseUrl}/me/artifact-trust-grants`, {
+        headers: authHeaders(memberId),
+      });
+      expect(afterRevoke.status, await afterRevoke.clone().text()).toBe(200);
+      await expect(afterRevoke.json()).resolves.toEqual([]);
     } finally {
       await new Promise<void>((resolve, reject) => {
         server.close((error) => (error ? reject(error) : resolve()));

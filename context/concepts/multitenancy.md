@@ -88,6 +88,17 @@ Long-lived work should carry tenant identity without holding an HTTP-long
 transaction; open short tenant database units at the actual database call.
 Globally unique UUIDs identify resources but do not authorize tenant access.
 
+Authenticated custom Feathers routes must use
+`createTenantScopedAuthenticatedRouteRegistrar`; the unscoped
+`registerAuthenticatedRoute` base installs authentication and role hooks only.
+Direct uses of that base should remain limited to the tenant-scoped registrar
+and the explicitly reviewed long-route adapter in `register-routes.ts`, which
+carries tenant identity and opens short database units instead of holding an
+HTTP-long transaction. Registered services that read tenant repositories
+belong in `TENANT_OWNED_SERVICE_PATHS` unless they intentionally cross a
+long-running external boundary and open short scoped units at each database
+call.
+
 ## Proportional validation
 
 Add only the checks implicated by the changed boundary:
