@@ -6,7 +6,7 @@
  * - Zone border color when pinned to a zone (matching BranchCard pattern)
  * - CardType emoji + title (with optional URL link)
  * - Pin icon when in a zone (click to unpin)
- * - Description (markdown, collapsed after ~4 lines)
+ * - Description (markdown, collapsed after ~3 lines)
  * - Note (always shown in full, distinct background)
  */
 
@@ -23,20 +23,14 @@ function isSafeUrl(url: string): boolean {
   }
 }
 
-import React, { useLayoutEffect, useMemo, useRef, useState } from 'react';
+import React, { useMemo } from 'react';
 import {
   REACT_FLOW_DRAG_HANDLE_CLASS,
   REACT_FLOW_NO_DRAG_CLASS,
-  REACT_FLOW_NO_WHEEL_CLASS,
 } from '../../utils/reactFlowDragClasses';
 import { ensureColorVisible, isDarkTheme } from '../../utils/theme';
-import { MarkdownRenderer } from '../MarkdownRenderer';
+import { MarkdownPreview } from '../MarkdownRenderer';
 
-// ~3 lines of compact markdown (12px / 1.5 line-height) before offering "more".
-const DESCRIPTION_COLLAPSED_MAX_HEIGHT = 54;
-// Cap on expanded height so a very long description still scrolls instead of
-// growing the card without bound.
-const DESCRIPTION_EXPANDED_MAX_HEIGHT = 240;
 const CARD_WIDTH = 380;
 
 export interface CardNodeData {
@@ -51,9 +45,6 @@ export interface CardNodeData {
 const CardNodeComponent = ({ data }: { data: CardNodeData }) => {
   const { token } = theme.useToken();
   const { card, isPinned, zoneName, zoneColor, onClick, onUnpin } = data;
-  const [descExpanded, setDescExpanded] = useState(false);
-  const [canExpandDesc, setCanExpandDesc] = useState(false);
-  const descRef = useRef<HTMLDivElement>(null);
 
   const borderColor = card.effective_color || token.colorBorder;
   const emoji = card.effective_emoji;
@@ -64,20 +55,6 @@ const CardNodeComponent = ({ data }: { data: CardNodeData }) => {
     if (!zoneColor) return undefined;
     return ensureColorVisible(zoneColor, isDarkMode, 50, 50);
   }, [zoneColor, isDarkMode]);
-
-  // Measure against the collapsed height cap to decide whether "more" is
-  // needed. Only measured while collapsed: the rendered markdown (not a raw
-  // char count) is the source of truth, so we never cut off mid-syntax like
-  // `**bo` the old char-slicing truncation could.
-  useLayoutEffect(() => {
-    if (descExpanded || !card.description) {
-      if (!card.description) setCanExpandDesc(false);
-      return;
-    }
-    const el = descRef.current;
-    if (!el) return;
-    setCanExpandDesc(el.scrollHeight - el.clientHeight > 1);
-  }, [card.description, descExpanded]);
 
   return (
     <div
@@ -174,51 +151,8 @@ const CardNodeComponent = ({ data }: { data: CardNodeData }) => {
             padding: '8px 12px',
             borderBottom: card.note ? `1px solid ${token.colorBorderSecondary}` : 'none',
           }}
-          onClick={(e) => {
-            // Let interactive markdown elements (links, copy buttons) act on
-            // their own instead of also opening the card.
-            if ((e.target as HTMLElement).closest('a, button')) {
-              e.stopPropagation();
-            }
-          }}
         >
-          <div
-            ref={descRef}
-            className={descExpanded ? REACT_FLOW_NO_WHEEL_CLASS : undefined}
-            style={{
-              maxHeight: descExpanded
-                ? DESCRIPTION_EXPANDED_MAX_HEIGHT
-                : DESCRIPTION_COLLAPSED_MAX_HEIGHT,
-              overflow: descExpanded ? 'auto' : 'hidden',
-              color: token.colorTextSecondary,
-            }}
-          >
-            <MarkdownRenderer
-              content={card.description}
-              compact
-              boundHeight={false}
-              showControls={false}
-            />
-          </div>
-          {canExpandDesc && (
-            <Button
-              type="link"
-              size="small"
-              onClick={(e) => {
-                e.stopPropagation();
-                setDescExpanded(!descExpanded);
-              }}
-              style={{
-                padding: 0,
-                height: 'auto',
-                fontSize: 11,
-                color: token.colorLink,
-                marginLeft: 4,
-              }}
-            >
-              {descExpanded ? 'less' : 'more'}
-            </Button>
-          )}
+          <MarkdownPreview key={card.card_id} content={card.description} />
         </div>
       )}
 
