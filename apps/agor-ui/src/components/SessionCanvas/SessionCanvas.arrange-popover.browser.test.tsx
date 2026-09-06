@@ -7,7 +7,7 @@
  * can update, which makes the controls look inert and clears node selection.
  */
 import type { AgorClient, Board, User } from '@agor-live/client';
-import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { App as AntApp } from 'antd';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { userEvent } from 'vitest/browser';
@@ -236,7 +236,10 @@ describe('SessionCanvas Arrange Board popover (real browser)', () => {
       expect(collapse).toBeVisible();
     });
     expect(collapse.closest(`.${CANVAS_LAYOUT_CONTROLS_CLASS}`)).not.toBeNull();
-    await act(async () => user.click(collapse!));
+    // Ant owns this portaled option through a delegated click handler. A
+    // direct browser click keeps the assertion focused on that production
+    // boundary instead of vitest/browser's locator retargeting behavior.
+    fireEvent.click(collapse!);
     await waitFor(() => expect(density).toHaveAttribute('aria-expanded', 'false'));
     expect(fitView).toBeChecked();
     await waitFor(() => expect(fitViewLabel).toBeVisible());
