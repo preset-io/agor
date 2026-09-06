@@ -1470,10 +1470,13 @@ describe('canReceiveMcpTokenForSession', () => {
 });
 
 describe('TENANT_IDENTITY_ONLY_SERVICE_PATHS', () => {
-  it.each(['file', 'files'])('%s is identity-only and never request-transaction owned', (path) => {
-    expect(TENANT_IDENTITY_ONLY_SERVICE_PATHS).toContain(path);
-    expect(TENANT_OWNED_SERVICE_PATHS).not.toContain(path);
-  });
+  it.each(['file', 'files', 'gateway-channels/test', 'gateway-channels/app-info'])(
+    '%s is identity-only and never request-transaction owned',
+    (path) => {
+      expect(TENANT_IDENTITY_ONLY_SERVICE_PATHS).toContain(path);
+      expect(TENANT_OWNED_SERVICE_PATHS).not.toContain(path);
+    }
+  );
 
   // Regression: the codex-auth endpoints do network/process work after a short
   // tenant DB read, then call getCurrentTenantId() to open their own units of

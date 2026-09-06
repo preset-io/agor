@@ -2,6 +2,7 @@ const KNOWN_MODEL_PATTERNS: Array<[RegExp, string]> = [
   [/claude.*opus/i, 'claude-opus'],
   [/claude.*sonnet/i, 'claude-sonnet'],
   [/claude.*haiku/i, 'claude-haiku'],
+  [/gpt-6/i, 'gpt-6'],
   [/gpt-5/i, 'gpt-5'],
   [/gpt-4\.1/i, 'gpt-4.1'],
   [/gpt-4o/i, 'gpt-4o'],

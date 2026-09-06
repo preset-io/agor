@@ -202,7 +202,7 @@ import { appendSystemMessage } from './utils/append-system-message.js';
 import { buildAuthRateLimitKey } from './utils/auth-rate-limit-key.js';
 import {
   ensureMinimumRole,
-  registerAuthenticatedRoute as registerAuthenticatedRouteBase,
+  registerAuthenticatedRoute as registerAuthenticatedRouteUnscoped,
   requireMinimumRole,
 } from './utils/authorization.js';
 import { authorizeBranchArchiveDelete } from './utils/branch-archive-delete-authorization.js';
@@ -250,10 +250,10 @@ import {
 import { buildTaskLaunchState } from './utils/task-launch-state.js';
 import { normalizeMessageSource, runExistingTask } from './utils/task-runner.js';
 import { isAgenticToolEnabledForTenant } from './utils/tenant-agentic-tool-validation.js';
+import { createTenantScopedAuthenticatedRouteRegistrar } from './utils/tenant-authenticated-route.js';
 import {
   createTenantDatabaseScopeAroundHook,
   createTenantWriteAdmissionAroundHook,
-  createTenantWriteGateAroundHook,
   deferWithTenantContext,
   withFreshTenantWrite,
 } from './utils/tenant-db-scope.js';
@@ -512,26 +512,6 @@ export function createRequiredTenantDatabaseRunner(db: TenantScopeAwareDatabase)
     if (!tenantId) throw new Error('Missing active tenant context for database operation');
     return runWithTenantDatabaseScope(db, tenantId, work);
   };
-}
-
-/**
- * Register an authenticated custom route with the same tenant transaction and
- * write-freeze gate as ordinary tenant-owned Feathers services. Custom routes
- * are installed after `registerHooks()`, so this registrar—not a static path
- * list—is their authoritative database boundary.
- */
-export function createTenantScopedAuthenticatedRouteRegistrar(options: {
-  db: TenantScopeAwareDatabase;
-  config: AgorConfig;
-  jwtSecret: string;
-}): typeof registerAuthenticatedRouteBase {
-  const tenantDatabaseScopeAround = createTenantDatabaseScopeAroundHook(options);
-  const tenantWriteGateAround = createTenantWriteGateAroundHook(options.db);
-  return (routeApp, path, service, authConfig, routeRequireAuth, routeOptions = {}) =>
-    registerAuthenticatedRouteBase(routeApp, path, service, authConfig, routeRequireAuth, {
-      ...routeOptions,
-      around: [tenantDatabaseScopeAround, tenantWriteGateAround, ...(routeOptions.around ?? [])],
-    });
 }
 
 type BoardCommentRouteParams = Pick<AuthenticatedParams, 'provider' | 'user'>;
@@ -899,7 +879,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     jwtSecret,
   });
 
-  const registerLongAuthenticatedRoute: typeof registerAuthenticatedRouteBase = (
+  const registerLongAuthenticatedRoute: typeof registerAuthenticatedRouteUnscoped = (
     routeApp,
     path,
     service,
@@ -907,7 +887,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     routeRequireAuth,
     options = {}
   ) =>
-    registerAuthenticatedRouteBase(routeApp, path, service, authConfig, routeRequireAuth, {
+    registerAuthenticatedRouteUnscoped(routeApp, path, service, authConfig, routeRequireAuth, {
       ...options,
       around: [tenantIdentityAround, tenantWriteAdmissionAround, ...(options.around ?? [])],
     });

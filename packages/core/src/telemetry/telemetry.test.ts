@@ -65,6 +65,7 @@ describe('open-source telemetry payload hygiene', () => {
     expect(normalizeTelemetryProvider('Gemini')).toBe('google');
     expect(normalizeTelemetryProvider('AcmeInternal')).toBe('other');
     expect(normalizeTelemetryModelFamily('claude-sonnet-4-5')).toBe('claude-sonnet');
+    expect(normalizeTelemetryModelFamily('gpt-6-astra')).toBe('gpt-6');
     expect(normalizeTelemetryModelFamily('acme-prod-secure-westus')).toBe('custom');
   });
 

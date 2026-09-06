@@ -141,7 +141,6 @@ import { resolveWebTerminalCapability } from './terminal-capability.js';
 import { buildSessionCreatedAnalyticsProperties } from './utils/analytics-payloads.js';
 import {
   ensureMinimumRole,
-  registerAuthenticatedRoute,
   requireAdminForEnvConfig,
   requireMinimumRole,
 } from './utils/authorization.js';
@@ -210,6 +209,7 @@ import {
   isTerminalQueueProcessingSuppressed,
   sessionCanStartTask,
 } from './utils/session-task-state.js';
+import { createTenantScopedAuthenticatedRouteRegistrar } from './utils/tenant-authenticated-route.js';
 import {
   createTenantDatabaseScopeAroundHook,
   createTenantWriteAdmissionAroundHook,
@@ -572,6 +572,10 @@ export const TENANT_IDENTITY_ONLY_SERVICE_PATHS = [
   // short tenant DB units around metadata phases and never holds one across
   // that provider call.
   'gateway-channels',
+  // Gateway probes carry tenant identity while their repository opens a short
+  // read unit before provider I/O; they must not inherit an HTTP-long transaction.
+  'gateway-channels/test',
+  'gateway-channels/app-info',
 ] as const;
 
 /** Identity-only Claude endpoints that must clear the tenant freeze before side effects. */
@@ -1136,6 +1140,11 @@ export function registerHooks(ctx: RegisterHooksContext): void {
 
   const multiTenancy = resolveMultiTenancyConfig(config);
   const tenantColumnsEnabled = resolveMultiTenancyDatabaseDialect(config) === 'postgresql';
+  const registerTenantScopedAuthenticatedRoute = createTenantScopedAuthenticatedRouteRegistrar({
+    db,
+    config,
+    jwtSecret,
+  });
   const executionMode = resolveExecutionSecurityMode(config);
   const sessionMcpTokenAfterHooks = createSessionMcpTokenAfterHooks({
     app,
@@ -1872,7 +1881,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
 
   // Custom REST routes for artifact payload and console
   {
-    registerAuthenticatedRoute(
+    registerTenantScopedAuthenticatedRoute(
       app,
       '/artifacts/:id/payload',
       {
@@ -1887,7 +1896,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       requireAuth
     );
 
-    registerAuthenticatedRoute(
+    registerTenantScopedAuthenticatedRoute(
       app,
       '/artifacts/:id/console',
       {
@@ -1925,7 +1934,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       requireAuth
     );
 
-    registerAuthenticatedRoute(
+    registerTenantScopedAuthenticatedRoute(
       app,
       '/artifacts/:id/sandpack-error',
       {
@@ -1974,7 +1983,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
     // here too so a wrongly-sized payload doesn't bloat the daemon's
     // pending-query map or the agent's MCP context.
     const RUNTIME_RESPONSE_BYTE_CAP = 512 * 1024;
-    registerAuthenticatedRoute(
+    registerTenantScopedAuthenticatedRoute(
       app,
       '/artifacts/:id/runtime-response/:requestId',
       {
@@ -2028,7 +2037,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
     // Per-artifact: POST creates a grant covering the artifact's currently-
     // requested env vars and grants. Caller MUST be authenticated; the grant
     // is attributed to the calling user.
-    registerAuthenticatedRoute(
+    registerTenantScopedAuthenticatedRoute(
       app,
       '/artifacts/:id/trust',
       {
@@ -2060,7 +2069,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
     );
 
     // List the calling user's active trust grants. Used by the settings page.
-    registerAuthenticatedRoute(
+    registerTenantScopedAuthenticatedRoute(
       app,
       '/me/artifact-trust-grants',
       {

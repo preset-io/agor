@@ -1754,7 +1754,7 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
         codex: {
           default: DEFAULT_CODEX_MODEL,
           models: codexModels,
-          note: 'Latest models are listed first; omit modelConfig to use the default. Current models are supported defaults; older entries marked provider-dependent may vary by Codex account and are checked by Codex at startup. This is Agor’s known-model registry, not a dynamic Codex CLI/provider listing. Provider-specific IDs absent from this list must be passed with mode "exact". Known unsupported legacy aliases are omitted.',
+          note: 'Latest models are listed first; omit modelConfig to use the default. Entries marked provider-dependent, including newly rolling-out models, may vary by Codex account and are checked by Codex at startup. This is Agor’s known-model registry, not a dynamic Codex CLI/provider listing. Provider-specific IDs absent from this list must be passed with mode "exact". Known unsupported legacy aliases are omitted.',
         },
         gemini: {
           default: DEFAULT_GEMINI_MODEL,

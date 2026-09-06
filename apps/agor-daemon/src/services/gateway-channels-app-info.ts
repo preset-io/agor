@@ -14,7 +14,11 @@
  * rather than an error, so the UI degrades to a generic Slack link.
  */
 
-import { GatewayChannelRepository, type TenantScopeAwareDatabase } from '@agor/core/db';
+import {
+  bindRepositoryToTenantUnitOfWork,
+  GatewayChannelRepository,
+  type TenantScopeAwareDatabase,
+} from '@agor/core/db';
 import { BadRequest, NotFound } from '@agor/core/feathers';
 import { getConnector } from '@agor/core/gateway';
 import type { AuthenticatedParams, SlackAppInfo } from '@agor/core/types';
@@ -29,7 +33,7 @@ const UNRESOLVED: SlackAppInfo = { appId: null, teamId: null };
  * Factory for the `gateway-channels/app-info` service.
  */
 export function createGatewayChannelsAppInfoService(db: TenantScopeAwareDatabase) {
-  const channelRepo = new GatewayChannelRepository(db);
+  const channelRepo = bindRepositoryToTenantUnitOfWork(db, new GatewayChannelRepository(db));
 
   return {
     async create(

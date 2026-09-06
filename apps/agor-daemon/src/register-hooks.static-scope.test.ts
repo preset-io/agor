@@ -81,6 +81,16 @@ describe('static-mode tenant DB scope for owned services', () => {
 describe('registerHooks static-mode owned-service scope wiring', () => {
   type AroundHook = (ctx: HookContext, next: () => Promise<void>) => Promise<void>;
 
+  const artifactCustomRouteProbes = [
+    ['artifacts/:id/payload', 'find'],
+    ['artifacts/:id/console', 'create'],
+    ['artifacts/:id/sandpack-error', 'create'],
+    ['artifacts/:id/runtime-response/:requestId', 'create'],
+    ['artifacts/:id/trust', 'create'],
+    ['me/artifact-trust-grants', 'find'],
+    ['me/artifact-trust-grants', 'remove'],
+  ] as const;
+
   /** Run registerHooks against a recorder app and return around hooks per path. */
   function captureAroundHooks(): Map<string, AroundHook[]> {
     const captured = new Map<string, AroundHook[]>();
@@ -152,4 +162,29 @@ describe('registerHooks static-mode owned-service scope wiring', () => {
     await expect(composed()).resolves.toBeUndefined();
     expect(scopeKind).toBe('tenant');
   });
+
+  it.each(artifactCustomRouteProbes)(
+    'runs %s#%s inside the guarded tenant database scope',
+    async (path, method) => {
+      const around = captureAroundHooks().get(path) ?? [];
+      expect(around.length).toBeGreaterThan(0);
+
+      // Exercise the installed chain instead of relying on its structural
+      // arity. Any refactor that leaves identity but drops database scope will
+      // trip this guarded SQLite touch, including the trust write routes.
+      const probe = createTenantScopedDatabaseProxy({ run: () => undefined } as never, {
+        label: `${path} wiring probe db`,
+      });
+      const innermost = async () => {
+        (probe as unknown as { run(): void }).run();
+      };
+      const composed = around.reduceRight<() => Promise<void>>(
+        (next, hook) => () => hook({ path, method, params: {} } as unknown as HookContext, next),
+        innermost
+      );
+
+      await expect(composed()).resolves.toBeUndefined();
+      expect(getCurrentTenantDatabaseScope()).toBeUndefined();
+    }
+  );
 });

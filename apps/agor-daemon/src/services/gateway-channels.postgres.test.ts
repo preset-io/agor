@@ -11,7 +11,7 @@ import {
   runWithTenantDatabaseScope,
   UsersRepository,
 } from '@agor/core/db';
-import { getConnector } from '@agor/core/gateway';
+import { type GatewayConnector, getConnector } from '@agor/core/gateway';
 import {
   DEFAULT_DISCORD_CATCH_UP,
   type GatewayChannel,
@@ -20,6 +20,8 @@ import {
 } from '@agor/core/types';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { GatewayChannelsService } from './gateway-channels.js';
+import { createGatewayChannelsAppInfoService } from './gateway-channels-app-info.js';
+import { createGatewayChannelsTestService } from './gateway-channels-test.js';
 
 vi.mock('@agor/core/gateway', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@agor/core/gateway')>();
@@ -352,6 +354,50 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
         provider_installation_id: applicationId,
         enabled: true,
       });
+    }, 30_000);
+
+    it('scopes both gateway probes to tenant A and does not call a provider for tenant B', async () => {
+      const ownerTenant = `gateway-probe-owner-${generateId()}` as TenantID;
+      const otherTenant = `gateway-probe-other-${generateId()}` as TenantID;
+      const { channel } = await seedChannel(dbA, ownerTenant);
+      const guardedDb = createTenantScopedDatabaseProxy(dbB, {
+        requireScope: true,
+        label: 'gateway probe PostgreSQL database',
+      });
+      const testService = createGatewayChannelsTestService(guardedDb);
+      const appInfoService = createGatewayChannelsAppInfoService(guardedDb);
+      const connector = {
+        testConnection: vi.fn(async () => ({ ok: true, failures: [], notVerifiable: [] })),
+        getAppInfo: vi.fn(async () => ({ appId: 'app-a', teamId: 'team-a' })),
+      } as unknown as GatewayConnector;
+      vi.mocked(getConnector).mockReturnValue(connector);
+
+      await expect(
+        runWithTenantContext(ownerTenant, () =>
+          testService.create({ gatewayChannelId: channel.id })
+        )
+      ).resolves.toMatchObject({ ok: true });
+      await expect(
+        runWithTenantContext(ownerTenant, () =>
+          appInfoService.create({ gatewayChannelId: channel.id })
+        )
+      ).resolves.toEqual({ appId: 'app-a', teamId: 'team-a' });
+      expect(connector.testConnection).toHaveBeenCalledOnce();
+      expect(connector.getAppInfo).toHaveBeenCalledOnce();
+
+      vi.mocked(getConnector).mockClear();
+      const foreignTestError = await runWithTenantContext(otherTenant, () =>
+        testService.create({ gatewayChannelId: channel.id })
+      ).catch((error) => error);
+      const foreignAppInfoError = await runWithTenantContext(otherTenant, () =>
+        appInfoService.create({ gatewayChannelId: channel.id })
+      ).catch((error) => error);
+
+      expect(String(foreignTestError)).toMatch(/not found/i);
+      expect(String(foreignAppInfoError)).toMatch(/not found/i);
+      expect(String(foreignTestError)).not.toContain('app-a');
+      expect(String(foreignAppInfoError)).not.toContain('app-a');
+      expect(vi.mocked(getConnector)).not.toHaveBeenCalled();
     }, 30_000);
   }
 );
