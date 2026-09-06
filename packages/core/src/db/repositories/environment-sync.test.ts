@@ -3,11 +3,12 @@ import { describe, expect } from 'vitest';
 import { resolveEnvironmentLifecycleBudget } from '../../environment/health-transition';
 import { generateId } from '../../lib/ids';
 import type { Database } from '../client';
+import { runDatabaseTransaction } from '../database-wrapper';
 import { dbTest } from '../test-helpers';
 import { BranchRepository } from './branches';
 import { EnvironmentHealthRepository } from './environment-health';
 import { EnvironmentSyncRepository } from './environment-sync';
-import { RepoRepository } from './repos';
+import { RepoDeletionInProgressError, RepoRepository } from './repos';
 import { UsersRepository } from './users';
 
 const REVISION_A = 'a'.repeat(40);
@@ -45,6 +46,27 @@ async function seedRunningBranch(
 }
 
 describe('EnvironmentSyncRepository desired/applied reconciliation', () => {
+  dbTest('rejects new sync work after repository cleanup is claimed', async ({ db }) => {
+    const { branch, user } = await seedRunningBranch(db);
+    await runDatabaseTransaction(
+      db,
+      async (txDb) => {
+        const repoRepo = new RepoRepository(txDb);
+        await repoRepo.lockForBranchInventory(branch.repo_id);
+        await repoRepo.claimDeletionAttemptLocked(branch.repo_id, generateId(), 60_000);
+      },
+      { sqliteImmediate: true }
+    );
+
+    await expect(
+      new EnvironmentSyncRepository(db).request({
+        branchId: branch.branch_id,
+        desiredRevision: REVISION_A,
+        requestedByUserId: user.user_id as UserID,
+      })
+    ).rejects.toBeInstanceOf(RepoDeletionInProgressError);
+  });
+
   dbTest(
     'admits exactly one cross-caller claim for the current desired revision',
     async ({ db }) => {

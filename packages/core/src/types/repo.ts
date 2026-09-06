@@ -139,10 +139,31 @@ export interface Repo {
    */
   clone_error?: RepoCloneError;
 
+  /**
+   * Durable server-owned fence for destructive managed-directory cleanup.
+   * New branches, tasks, and environment mutations are refused while this is
+   * present; an expired attempt may only be replaced by another delete retry.
+   */
+  deletion_attempt?: RepoDeletionAttempt;
+
   /** Repository metadata */
   created_at: string;
   last_updated: string;
 }
+
+export const REPO_DELETION_ATTEMPT_TIMEOUT_MS = 6 * 60_000;
+
+export interface RepoDeletionAttempt {
+  attempt_id: UUID;
+  started_at: string;
+  deadline_at: string;
+  cleanup: true;
+}
+
+/** Fields owned by daemon orchestration rather than generic Repo CRUD. */
+export const REPO_SERVER_MANAGED_FIELDS = ['deletion_attempt'] as const satisfies ReadonlyArray<
+  keyof Repo
+>;
 
 export type RepoCloneStatus = 'cloning' | 'ready' | 'failed';
 

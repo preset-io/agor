@@ -28,7 +28,6 @@ import {
   BoardObjectRepository,
   BoardRepository,
   type BranchRepository,
-  CapabilityPolicyRepository,
   CardRepository,
   getMCPEgressGatewayMode,
   requireCurrentTenantId,
@@ -99,6 +98,7 @@ import {
   GATEWAY_CHANNEL_WRITE_FIELDS,
   GATEWAY_REDACTED_SENTINEL,
   hasMinimumRole,
+  REPO_SERVER_MANAGED_FIELDS,
   ROLES,
   SCHEDULE_CREATE_WRITE_FIELDS,
   SCHEDULE_PATCH_WRITE_FIELDS,
@@ -143,6 +143,7 @@ import { isAuthenticationUserLookup, isLocalAuthenticationLookup } from './servi
 import { resolveWebTerminalCapability } from './terminal-capability.js';
 import { buildSessionCreatedAnalyticsProperties } from './utils/analytics-payloads.js';
 import {
+  ensureCanAttachBranchToBoard,
   ensureMinimumRole,
   registerAuthenticatedRoute,
   requireAdminForEnvConfig,
@@ -693,6 +694,21 @@ export function protectExternalBranchCrud(context: HookContext): HookContext {
     );
     if (forbidden.length === 0) continue;
     throw new BadRequest(`Branch field is server-managed: ${forbidden[0]}`);
+  }
+  return context;
+}
+
+/** Destructive cleanup ownership is never writable through generic Repo CRUD. */
+export function protectExternalRepoCrud(context: HookContext): HookContext {
+  if (!context.params.provider) return context;
+
+  const items = Array.isArray(context.data) ? context.data : [context.data];
+  for (const item of items) {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) continue;
+    const forbidden = Object.keys(item as Record<string, unknown>).find((field) =>
+      (REPO_SERVER_MANAGED_FIELDS as readonly string[]).includes(field)
+    );
+    if (forbidden) throw new BadRequest(`Repository field is server-managed: ${forbidden}`);
   }
   return context;
 }
@@ -2153,16 +2169,19 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       all: [typedValidateQuery(repoQueryValidator), requireAuth],
       create: [
         requireMinimumRole(ROLES.MEMBER, 'create repositories'),
+        protectExternalRepoCrud,
         requireAdminForEnvConfig(),
         validateRepoEnvPolicyHook(config),
       ],
       update: [
         requireMinimumRole(ROLES.MEMBER, 'update repositories'),
+        protectExternalRepoCrud,
         requireAdminForEnvConfig(),
         validateRepoEnvPolicyHook(config),
       ],
       patch: [
         requireMinimumRole(ROLES.MEMBER, 'update repositories'),
+        protectExternalRepoCrud,
         requireAdminForEnvConfig(),
         validateRepoEnvPolicyHook(config),
       ],
@@ -2197,15 +2216,15 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       }
       if (value.board_id) {
         const targetBoard = await boardRepository.findBySlugOrId(value.board_id);
-        const canAttach = targetBoard
-          ? await new CapabilityPolicyRepository(db)
-              .resolveBoardAccess(targetBoard.board_id, userId as UserID)
-              .then((access) => access.capabilities.includes('board.attach_branch'))
-              .catch(() => false)
-          : false;
-        if (!canAttach) {
+        if (!targetBoard) {
           throw new Forbidden('Board Editor or Manager access is required to attach a branch');
         }
+        await ensureCanAttachBranchToBoard(
+          db,
+          targetBoard.board_id,
+          context.params,
+          executionMode.appRbacEnabled
+        );
       }
     }
     return context;

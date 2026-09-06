@@ -20,6 +20,21 @@ export function gatewaySlackUploadExecutorCommandId(
   return `gateway.slack-file-upload:${component(gatewayChannelId)}:${component(slackChannelId)}`;
 }
 
+export function gitBranchAddExecutorCommandId(attemptId: string): string {
+  return `git.branch.add:${component(attemptId)}`;
+}
+
+export function parseGitBranchAddExecutorCommandId(commandId: string): string | null {
+  const match = /^git\.branch\.add:([^:]+)$/.exec(commandId);
+  if (!match) return null;
+  try {
+    const attemptId = decodeURIComponent(match[1]);
+    return attemptId.length > 0 ? attemptId : null;
+  } catch {
+    return null;
+  }
+}
+
 export type EnvironmentLifecycleExecutorAction = 'start' | 'stop' | 'nuke';
 
 export function environmentLifecycleExecutorCommandId(

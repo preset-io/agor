@@ -22,7 +22,7 @@ async function makeUser(service: UsersService): Promise<UserID> {
 
 function commandParams(
   userId: UserID,
-  commandId: 'git.clone' | 'git.branch.add' | 'environment-start'
+  commandId: 'git.clone' | 'git.branch.add' | `git.branch.add:${string}` | 'environment-start'
 ): AuthenticatedParams {
   return {
     provider: 'socketio',
@@ -58,7 +58,12 @@ describe('ExecutorGitEnvironmentService', () => {
       },
     } as AuthenticatedParams;
 
-    for (const params of [ordinary, serviceAccount, commandParams(userId, 'environment-start')]) {
+    for (const params of [
+      ordinary,
+      serviceAccount,
+      commandParams(userId, 'environment-start'),
+      commandParams(userId, 'git.branch.add'),
+    ]) {
       await expect(service.create({}, params)).rejects.toThrow(Forbidden);
     }
     await expect(service.create({}, { provider: 'socketio' })).rejects.toThrow(
@@ -100,7 +105,10 @@ describe('ExecutorGitEnvironmentService', () => {
 
     await expect(
       runWithTenantContext('tenant-test', () =>
-        service.create({}, commandParams(userId, 'git.branch.add'))
+        service.create(
+          {},
+          commandParams(userId, 'git.branch.add:550e8400-e29b-41d4-a716-446655440004')
+        )
       )
     ).resolves.toEqual({ GH_TOKEN: `ghp_${'s'.repeat(36)}` });
   });

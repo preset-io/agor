@@ -395,6 +395,7 @@ describe('GitBranchAddPayloadSchema', () => {
       params: {
         branchId: '550e8400-e29b-41d4-a716-446655440002',
         repoId: '550e8400-e29b-41d4-a716-446655440003',
+        materializationAttemptId: '550e8400-e29b-41d4-a716-446655440004',
       },
     };
 
@@ -411,6 +412,7 @@ describe('GitBranchAddPayloadSchema', () => {
       params: {
         branchId: '550e8400-e29b-41d4-a716-446655440002',
         repoId: '550e8400-e29b-41d4-a716-446655440003',
+        materializationAttemptId: '550e8400-e29b-41d4-a716-446655440004',
         branch: 'untrusted',
         storageMode: 'worktree',
         cloneDepth: 100,
@@ -676,6 +678,7 @@ describe('Type guards', () => {
       params: {
         branchId: '550e8400-e29b-41d4-a716-446655440002',
         repoId: '550e8400-e29b-41d4-a716-446655440003',
+        materializationAttemptId: '550e8400-e29b-41d4-a716-446655440004',
       },
     };
     expect(isGitBranchAddPayload(payload)).toBe(true);

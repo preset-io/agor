@@ -54,7 +54,15 @@ import {
   select,
   update,
 } from '../database-wrapper';
-import { type SessionRow, sessions, type TaskInsert, type TaskRow, tasks, users } from '../schema';
+import {
+  branches,
+  type SessionRow,
+  sessions,
+  type TaskInsert,
+  type TaskRow,
+  tasks,
+  users,
+} from '../schema';
 import { getCurrentTenantId } from '../tenant-context';
 import {
   AmbiguousIdError,
@@ -70,6 +78,7 @@ import {
 } from './branch-access';
 import { ExecutorSessionTokenAuthorityRepository } from './executor-session-token-authorities';
 import { deepMerge } from './merge-utils';
+import { RepoRepository } from './repos';
 
 function executorOwnsTask(row: Pick<TaskRow, 'status' | 'executor_connected_at'>): boolean {
   return (
@@ -559,24 +568,51 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
     });
   }
 
+  /** Hold the owning repo row through task admission so cleanup cannot overtake it. */
+  private async lockRepoForSessionWorkAdmission(
+    txDb: Database,
+    sessionId: SessionID
+  ): Promise<void> {
+    const session = await select(txDb, { branch_id: sessions.branch_id })
+      .from(sessions)
+      .where(eq(sessions.session_id, sessionId))
+      .one();
+    if (!session) throw new EntityNotFoundError('Session', sessionId);
+    const branch = await select(txDb, { repo_id: branches.repo_id })
+      .from(branches)
+      .where(eq(branches.branch_id, session.branch_id))
+      .one();
+    if (!branch) throw new EntityNotFoundError('Branch', session.branch_id);
+    await new RepoRepository(this.db).lockForWorkAdmissionInTransaction(
+      txDb,
+      branch.repo_id as UUID
+    );
+  }
+
   /**
    * Create a new task
    */
   async create(data: Partial<Task>): Promise<Task> {
     try {
       const insertData = this.taskToInsert(data);
-      await insert(this.db, tasks).values(insertData).run();
+      return await this.runTaskMutation(() =>
+        runDatabaseTransaction(
+          this.db,
+          async (txDb) => {
+            await this.lockRepoForSessionWorkAdmission(txDb, insertData.session_id as SessionID);
+            await insert(txDb, tasks).values(insertData).run();
 
-      const row = await select(this.db)
-        .from(tasks)
-        .where(eq(tasks.task_id, insertData.task_id))
-        .one();
+            const row = await select(txDb)
+              .from(tasks)
+              .where(eq(tasks.task_id, insertData.task_id))
+              .one();
 
-      if (!row) {
-        throw new RepositoryError('Failed to retrieve created task');
-      }
-
-      return this.rowToTask(row);
+            if (!row) throw new RepositoryError('Failed to retrieve created task');
+            return this.rowToTask(row);
+          },
+          { sqliteImmediate: true }
+        )
+      );
     } catch (error) {
       if (error instanceof RepositoryError) throw error;
       throw new RepositoryError(
@@ -1878,18 +1914,30 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
 
     if (input.status === TaskStatus.CREATED) {
       const insertData = this.taskToInsert(taskBase);
-      await insert(this.db, tasks).values(insertData).onConflictDoNothing().run();
-      const row = await select(this.db).from(tasks).where(eq(tasks.task_id, input.task_id!)).one();
-      if (!row) throw new RepositoryError('Failed to retrieve idempotent pending task');
-      const existing = this.rowToTask(row);
-      if (
-        existing.session_id !== input.session_id ||
-        existing.created_by !== input.created_by ||
-        existing.full_prompt !== input.full_prompt
-      ) {
-        throw new RepositoryError(`Task identity ${input.task_id} is already in use`);
-      }
-      return existing;
+      return this.runTaskMutation(() =>
+        runDatabaseTransaction(
+          this.db,
+          async (txDb) => {
+            await this.lockRepoForSessionWorkAdmission(txDb, input.session_id);
+            await insert(txDb, tasks).values(insertData).onConflictDoNothing().run();
+            const row = await select(txDb)
+              .from(tasks)
+              .where(eq(tasks.task_id, input.task_id!))
+              .one();
+            if (!row) throw new RepositoryError('Failed to retrieve idempotent pending task');
+            const existing = this.rowToTask(row);
+            if (
+              existing.session_id !== input.session_id ||
+              existing.created_by !== input.created_by ||
+              existing.full_prompt !== input.full_prompt
+            ) {
+              throw new RepositoryError(`Task identity ${input.task_id} is already in use`);
+            }
+            return existing;
+          },
+          { sqliteImmediate: true }
+        )
+      );
     }
 
     // QUEUED: lock the durable Session row before max+1. This is required on
@@ -1900,6 +1948,7 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
       runDatabaseTransaction(
         this.db,
         async (txDb) => {
+          await this.lockRepoForSessionWorkAdmission(txDb, input.session_id);
           await lockRowForUpdate(
             txDb,
             this.db,

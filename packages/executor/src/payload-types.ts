@@ -295,6 +295,9 @@ export const GitBranchAddPayloadSchema = BasePayloadSchema.extend({
     /** Branch ID (UUID) - DB record already exists with filesystem_status: 'creating' */
     branchId: z.string().uuid(),
 
+    /** Exact server-owned materialization attempt bound into the callback token. */
+    materializationAttemptId: z.string().uuid(),
+
     /** Repo ID (UUID) */
     repoId: z.string().uuid(),
 

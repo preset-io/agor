@@ -14,6 +14,7 @@ import {
 } from '../database-wrapper';
 import { branches } from '../schema';
 import { EntityNotFoundError, RepositoryError } from './base';
+import { RepoRepository } from './repos';
 
 const SYNC_ERROR_MAX_CHARS = 2_048;
 const SYNC_RETRY_MIN_MS = 5_000;
@@ -112,6 +113,16 @@ export class EnvironmentSyncRepository {
     return row.value instanceof Date ? row.value : new Date(row.value);
   }
 
+  private async lockRepoForWorkAdmission(txDb: Database, branchId: BranchID): Promise<boolean> {
+    const row = await select(txDb, { repo_id: branches.repo_id })
+      .from(branches)
+      .where(eq(branches.branch_id, branchId))
+      .one();
+    if (!row) return false;
+    await new RepoRepository(this.db).lockForWorkAdmissionInTransaction(txDb, row.repo_id);
+    return true;
+  }
+
   async request(input: {
     branchId: BranchID;
     desiredRevision: string;
@@ -122,6 +133,9 @@ export class EnvironmentSyncRepository {
       runDatabaseTransaction(
         this.db,
         async (txDb) => {
+          if (!(await this.lockRepoForWorkAdmission(txDb, input.branchId))) {
+            throw new EntityNotFoundError('Branch', input.branchId);
+          }
           await lockRowForUpdate(txDb, this.db, branches, eq(branches.branch_id, input.branchId));
           const row = await select(txDb)
             .from(branches)
@@ -197,6 +211,9 @@ export class EnvironmentSyncRepository {
       runDatabaseTransaction(
         this.db,
         async (txDb) => {
+          if (!(await this.lockRepoForWorkAdmission(txDb, input.branchId))) {
+            return { outcome: 'unavailable' };
+          }
           await lockRowForUpdate(txDb, this.db, branches, eq(branches.branch_id, input.branchId));
           const row = await select(txDb)
             .from(branches)

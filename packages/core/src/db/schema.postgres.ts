@@ -8,12 +8,14 @@
 import type {
   AgorGrants,
   AgorRuntimeConfig,
+  Branch,
   BranchEnvironmentInstance,
   CodexApprovalPolicy,
   CodexSandboxMode,
   EffortLevel,
   Message,
   PermissionMode,
+  Repo,
   SandpackConfig,
   Session,
   Task,
@@ -691,6 +693,7 @@ export const repos = pgTable(
           category: 'auth_failed' | 'not_found' | 'network' | 'git_unavailable' | 'unknown';
           message: string;
         };
+        deletion_attempt?: Repo['deletion_attempt'];
         // v2 environment config — source of truth. Named variants + optional
         // deployment-local template_overrides. See RepoEnvironment in
         // packages/core/src/types/branch.ts.
@@ -859,6 +862,7 @@ export const branches = pgTable(
       .$type<{
         // File system
         path: string; // Absolute path to branch directory
+        filesystem_attempt?: Branch['filesystem_attempt'];
 
         // Git state (current)
         base_ref?: string; // Branch this diverged from (e.g., "main")

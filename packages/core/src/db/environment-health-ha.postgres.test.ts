@@ -595,13 +595,16 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
           stateChanged: true,
           environmentStatus: 'error',
         });
-        await expect(branchesRepo.findById(stopping.branch_id)).resolves.toMatchObject({
+        const recoveredStopping = await branchesRepo.findById(stopping.branch_id);
+        expect(recoveredStopping).toMatchObject({
           environment_generation: (stopping.environment_generation ?? 0) + 1,
           environment_instance: {
             status: 'error',
-            active_lifecycle_attempt: undefined,
           },
         });
+        expect(
+          Object.hasOwn(recoveredStopping?.environment_instance ?? {}, 'active_lifecycle_attempt')
+        ).toBe(false);
 
         await new BranchRepository(scoped).delete(active.branch_id);
         expect(

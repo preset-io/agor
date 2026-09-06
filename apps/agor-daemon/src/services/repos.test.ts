@@ -1,3 +1,4 @@
+import { EnvironmentRetirementConflictError } from '@agor/core/db';
 import type { Application } from '@agor/core/types';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ReposService } from './repos';
@@ -24,7 +25,12 @@ const repositoryMocks = vi.hoisted(() => ({
   deleteRepo: vi.fn(),
   findAllBranchesByRepoId: vi.fn(),
   lockRepoForBranchInventory: vi.fn(),
+  claimRepoDeletionAttempt: vi.fn(),
+  requireRepoDeletionAttempt: vi.fn(),
+  assertBranchRetirementReady: vi.fn(),
+  hasNonterminalForBranch: vi.fn(),
   resolveBranchUserAccess: vi.fn(),
+  resolveBoardAccess: vi.fn(),
 }));
 
 vi.mock('@agor/core/db', async (importOriginal) => {
@@ -38,6 +44,7 @@ vi.mock('@agor/core/db', async (importOriginal) => {
         findAllByRepoId: repositoryMocks.findAllBranchesByRepoId,
         getAllUsedUniqueIds: vi.fn(async () => []),
         addOwner: vi.fn(async () => undefined),
+        assertRetirementReadyInTransaction: repositoryMocks.assertBranchRetirementReady,
         resolveUserAccess: repositoryMocks.resolveBranchUserAccess,
       };
     }),
@@ -50,7 +57,15 @@ vi.mock('@agor/core/db', async (importOriginal) => {
         delete: repositoryMocks.deleteRepo,
         findBySlug: vi.fn(),
         lockForBranchInventory: repositoryMocks.lockRepoForBranchInventory,
+        claimDeletionAttemptLocked: repositoryMocks.claimRepoDeletionAttempt,
+        requireDeletionAttemptLocked: repositoryMocks.requireRepoDeletionAttempt,
       };
+    }),
+    TaskRepository: vi.fn().mockImplementation(function TaskRepository() {
+      return { hasNonterminalForBranch: repositoryMocks.hasNonterminalForBranch };
+    }),
+    CapabilityPolicyRepository: vi.fn().mockImplementation(function CapabilityPolicyRepository() {
+      return { resolveBoardAccess: repositoryMocks.resolveBoardAccess };
     }),
   };
 });
@@ -91,6 +106,13 @@ beforeEach(() => {
     fs_access: 'write',
     is_owner: false,
     source: 'direct',
+  });
+  repositoryMocks.assertBranchRetirementReady.mockReset().mockResolvedValue(undefined);
+  repositoryMocks.hasNonterminalForBranch.mockReset().mockResolvedValue(false);
+  repositoryMocks.claimRepoDeletionAttempt.mockReset().mockResolvedValue(undefined);
+  repositoryMocks.requireRepoDeletionAttempt.mockReset().mockResolvedValue(undefined);
+  repositoryMocks.resolveBoardAccess.mockReset().mockResolvedValue({
+    capabilities: ['board.view', 'board.attach_branch'],
   });
 });
 
@@ -272,9 +294,9 @@ describe('ReposService.createBranch Git lifecycle execution', () => {
     delegatedHomeMocks.resolve.mockRejectedValueOnce(
       new Error('Delegated execution requires a unix_username home key')
     );
-    const branches = { create: vi.fn(), find: vi.fn(async () => []) };
+    const branches = { createMaterializationIntent: vi.fn(), find: vi.fn(async () => []) };
     const app = {
-      get: () => ({}),
+      get: () => ({ execution: { branch_rbac: true } }),
       sessionTokenService: {
         generateCommandToken: vi.fn(async () => 'delegated-user-token'),
       },
@@ -306,7 +328,7 @@ describe('ReposService.createBranch Git lifecycle execution', () => {
         { user: { user_id: '550e8400-e29b-41d4-a716-446655440004' } } as never
       )
     ).rejects.toThrow(/unix_username/);
-    expect(branches.create).not.toHaveBeenCalled();
+    expect(branches.createMaterializationIntent).not.toHaveBeenCalled();
     expect(executorMocks.spawnExecutorFireAndForget).not.toHaveBeenCalled();
   });
 
@@ -333,8 +355,8 @@ describe('ReposService.createBranch Git lifecycle execution', () => {
       error_message: 'Failed to spawn executor: launcher unavailable',
     };
     const branches = {
-      create: vi.fn(async () => creatingBranch),
-      patch: vi.fn(async () => failedBranch),
+      createMaterializationIntent: vi.fn(async () => creatingBranch),
+      settleFilesystemIntent: vi.fn(async () => failedBranch),
       find: vi.fn(async () => []),
     };
     const app = {
@@ -344,7 +366,13 @@ describe('ReposService.createBranch Git lifecycle execution', () => {
       },
       settings: { authentication: { secret: 'test-secret' } },
       service: vi.fn((name: string) => {
-        if (name === 'boards') return { get: vi.fn(async () => ({ objects: {} })) };
+        if (name === 'boards')
+          return {
+            get: vi.fn(async () => ({
+              board_id: '550e8400-e29b-41d4-a716-446655440003',
+              objects: {},
+            })),
+          };
         if (name === 'branches') return branches;
         if (name === 'board-objects') {
           return { create: vi.fn(async () => undefined), find: vi.fn(async () => ({ data: [] })) };
@@ -369,9 +397,10 @@ describe('ReposService.createBranch Git lifecycle execution', () => {
       { user: { user_id: '550e8400-e29b-41d4-a716-446655440004' } } as never
     );
 
-    expect(branches.patch).toHaveBeenCalledWith(
-      creatingBranch.branch_id,
+    expect(branches.settleFilesystemIntent).toHaveBeenCalledWith(
       {
+        branch_id: creatingBranch.branch_id,
+        filesystem_attempt_id: expect.any(String),
         filesystem_status: 'failed',
         error_message: 'Failed to spawn executor: launcher unavailable',
       },
@@ -397,7 +426,7 @@ describe('ReposService.createBranch Git lifecycle execution', () => {
       others_fs_access: 'read',
     };
     const branches = {
-      create: vi.fn(async () => branch),
+      createMaterializationIntent: vi.fn(async () => branch),
       find: vi.fn(async () => []),
     };
     const boardObjects = {
@@ -405,13 +434,19 @@ describe('ReposService.createBranch Git lifecycle execution', () => {
       find: vi.fn(async () => ({ data: [] })),
     };
     const app = {
-      get: () => ({}),
+      get: () => ({ execution: { branch_rbac: true } }),
       sessionTokenService: {
         generateCommandToken: vi.fn(async () => 'delegated-user-token'),
       },
       settings: { authentication: { secret: 'test-secret' } },
       service: vi.fn((name: string) => {
-        if (name === 'boards') return { get: vi.fn(async () => ({ objects: {} })) };
+        if (name === 'boards')
+          return {
+            get: vi.fn(async () => ({
+              board_id: '550e8400-e29b-41d4-a716-446655440003',
+              objects: {},
+            })),
+          };
         if (name === 'branches') return branches;
         if (name === 'board-objects') return boardObjects;
         throw new Error(`Unexpected service: ${name}`);
@@ -428,20 +463,32 @@ describe('ReposService.createBranch Git lifecycle execution', () => {
         createBranch: true,
         sourceBranch: 'template/deal-desk-revops-analyst',
         sourceRemoteUrl: 'https://token:secret@github.com/preset-io/agor-teammate.git',
-        boardId: '550e8400-e29b-41d4-a716-446655440003',
+        boardId: '550e8400',
         position: { x: 10, y: 20 },
         storage_mode: 'worktree',
       },
       {
-        user: { user_id: '550e8400-e29b-41d4-a716-446655440004' },
+        provider: 'rest',
+        user: {
+          user_id: '550e8400-e29b-41d4-a716-446655440004',
+          role: 'member',
+        },
       } as never
     );
 
-    expect(branches.create).toHaveBeenCalledWith(
+    expect(branches.createMaterializationIntent).toHaveBeenCalledWith(
       expect.objectContaining({
         base_ref: 'template/deal-desk-revops-analyst',
         base_remote_url: 'https://github.com/preset-io/agor-teammate.git',
+        board_id: '550e8400-e29b-41d4-a716-446655440003',
       }),
+      expect.anything()
+    );
+    expect(branches.createMaterializationIntent.mock.calls[0]?.[1]).toMatchObject({
+      provider: undefined,
+    });
+    expect(boardObjects.create).toHaveBeenCalledWith(
+      expect.objectContaining({ board_id: '550e8400-e29b-41d4-a716-446655440003' }),
       expect.anything()
     );
     expect(executorMocks.spawnExecutorFireAndForget).toHaveBeenCalledWith(
@@ -450,9 +497,61 @@ describe('ReposService.createBranch Git lifecycle execution', () => {
     );
   });
 
+  it('rejects an external branch create when the caller cannot attach to the board', async () => {
+    repositoryMocks.resolveBoardAccess.mockResolvedValueOnce({ capabilities: ['board.view'] });
+    const repo = {
+      repo_id: '550e8400-e29b-41d4-a716-446655440001',
+      slug: 'preset-io/agor',
+      local_path: '/managed/repos/agor',
+      default_branch: 'main',
+    };
+    const branches = {
+      createMaterializationIntent: vi.fn(),
+      find: vi.fn(async () => []),
+    };
+    const app = {
+      get: () => ({ execution: { branch_rbac: true } }),
+      service: vi.fn((name: string) => {
+        if (name === 'boards')
+          return {
+            get: vi.fn(async () => ({
+              board_id: '550e8400-e29b-41d4-a716-446655440003',
+              objects: {},
+            })),
+          };
+        if (name === 'branches') return branches;
+        throw new Error(`Unexpected service: ${name}`);
+      }),
+    } as unknown as Application;
+    const service = new ReposService({} as never, app);
+    vi.spyOn(service, 'get').mockResolvedValue(repo as never);
+
+    await expect(
+      service.createBranch(
+        repo.repo_id,
+        {
+          name: 'denied',
+          ref: 'denied',
+          createBranch: true,
+          sourceBranch: 'main',
+          boardId: '550e8400-e29b-41d4-a716-446655440003',
+        },
+        {
+          provider: 'rest',
+          user: {
+            user_id: '550e8400-e29b-41d4-a716-446655440004',
+            role: 'member',
+          },
+        } as never
+      )
+    ).rejects.toThrow('Board Editor or Manager access');
+    expect(branches.createMaterializationIntent).not.toHaveBeenCalled();
+    expect(executorMocks.spawnExecutorFireAndForget).not.toHaveBeenCalled();
+  });
+
   it('rejects a client-selected template remote before persisting a branch', async () => {
     executorMocks.spawnExecutorFireAndForget.mockClear();
-    const branches = { create: vi.fn(), find: vi.fn(async () => []) };
+    const branches = { createMaterializationIntent: vi.fn(), find: vi.fn(async () => []) };
     const app = {
       get: () => ({}),
       service: vi.fn((name: string) => {
@@ -482,7 +581,7 @@ describe('ReposService.createBranch Git lifecycle execution', () => {
         { user: { user_id: '550e8400-e29b-41d4-a716-446655440004' } } as never
       )
     ).rejects.toThrow(/canonical Agor teammate template repository/);
-    expect(branches.create).not.toHaveBeenCalled();
+    expect(branches.createMaterializationIntent).not.toHaveBeenCalled();
     expect(executorMocks.spawnExecutorFireAndForget).not.toHaveBeenCalled();
   });
 });
@@ -612,6 +711,90 @@ describe('ReposService.cloneRepository Git lifecycle execution', () => {
 });
 
 describe('ReposService.remove branch inventory', () => {
+  it('does not dispatch destructive cleanup until every branch is retired', async () => {
+    const repo = {
+      repo_id: '550e8400-e29b-41d4-a716-446655440001',
+      slug: 'preset-io/repo',
+      repo_type: 'remote',
+      local_path: '/managed/repos/preset-io/repo',
+    };
+    const branch = {
+      branch_id: '550e8400-e29b-41d4-a716-446655440002',
+      repo_id: repo.repo_id,
+      name: 'starting',
+      path: '/managed/worktrees/preset-io/repo/starting',
+    };
+    repositoryMocks.findAllBranchesByRepoId.mockReset().mockResolvedValue([branch]);
+    repositoryMocks.lockRepoForBranchInventory.mockReset().mockResolvedValue(repo);
+    repositoryMocks.assertBranchRetirementReady.mockRejectedValueOnce(
+      new EnvironmentRetirementConflictError(branch.branch_id as never)
+    );
+    const app = {
+      get: () => ({}),
+      service: vi.fn((name: string) => {
+        if (name === 'branches') return { removeMetadataWithRealtime: vi.fn() };
+        throw new Error(`Unexpected service: ${name}`);
+      }),
+    } as unknown as Application;
+    const tx = { run: vi.fn() };
+    const db = {
+      run: vi.fn(),
+      transaction: vi.fn(async (work: (transaction: unknown) => Promise<unknown>) => work(tx)),
+    };
+    const service = new ReposService(db as never, app);
+    vi.spyOn(service, 'get').mockResolvedValue(repo as never);
+
+    await expect(
+      service.remove(repo.repo_id, {
+        query: { cleanup: true },
+        tenant: { tenant_id: 'tenant-a', source: 'explicit' },
+      } as never)
+    ).rejects.toThrow('must settle before repository cleanup');
+    expect(repositoryMocks.claimRepoDeletionAttempt).not.toHaveBeenCalled();
+    expect(executorMocks.requestExecutor).not.toHaveBeenCalled();
+  });
+
+  it('does not dispatch destructive cleanup while a branch has unfinished tasks', async () => {
+    const repo = {
+      repo_id: '550e8400-e29b-41d4-a716-446655440001',
+      slug: 'preset-io/repo',
+      repo_type: 'remote',
+      local_path: '/managed/repos/preset-io/repo',
+    };
+    const branch = {
+      branch_id: '550e8400-e29b-41d4-a716-446655440002',
+      repo_id: repo.repo_id,
+      name: 'busy',
+      path: '/managed/worktrees/preset-io/repo/busy',
+    };
+    repositoryMocks.findAllBranchesByRepoId.mockReset().mockResolvedValue([branch]);
+    repositoryMocks.lockRepoForBranchInventory.mockReset().mockResolvedValue(repo);
+    repositoryMocks.hasNonterminalForBranch.mockResolvedValueOnce(true);
+    const app = {
+      get: () => ({}),
+      service: vi.fn((name: string) => {
+        if (name === 'branches') return { removeMetadataWithRealtime: vi.fn() };
+        throw new Error(`Unexpected service: ${name}`);
+      }),
+    } as unknown as Application;
+    const tx = { run: vi.fn() };
+    const db = {
+      run: vi.fn(),
+      transaction: vi.fn(async (work: (transaction: unknown) => Promise<unknown>) => work(tx)),
+    };
+    const service = new ReposService(db as never, app);
+    vi.spyOn(service, 'get').mockResolvedValue(repo as never);
+
+    await expect(
+      service.remove(repo.repo_id, {
+        query: { cleanup: true },
+        tenant: { tenant_id: 'tenant-a', source: 'explicit' },
+      } as never)
+    ).rejects.toThrow('unfinished tasks');
+    expect(repositoryMocks.claimRepoDeletionAttempt).not.toHaveBeenCalled();
+    expect(executorMocks.requestExecutor).not.toHaveBeenCalled();
+  });
+
   it('passes the authorized unbounded filesystem inventory without a service bearer', async () => {
     const repo = {
       repo_id: '550e8400-e29b-41d4-a716-446655440001',

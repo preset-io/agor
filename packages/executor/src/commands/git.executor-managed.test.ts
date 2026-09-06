@@ -85,6 +85,7 @@ import {
 
 const repoId = '550e8400-e29b-41d4-a716-446655440001';
 const branchId = '550e8400-e29b-41d4-a716-446655440002';
+const materializationAttemptId = '550e8400-e29b-41d4-a716-446655440004';
 const deleteRoots = { reposRoot: '/safe/repos', branchesRoot: '/safe/worktrees' };
 
 function createClient(records: {
@@ -285,6 +286,7 @@ describe('managed executor git/fs commands', () => {
         params: {
           branchId,
           repoId,
+          materializationAttemptId,
           useReference: true,
         },
       },
@@ -304,6 +306,7 @@ describe('managed executor git/fs commands', () => {
     );
     expect(patchedBranches).toContainEqual({
       branch_id: branchId,
+      filesystem_attempt_id: materializationAttemptId,
       filesystem_status: 'ready',
     });
     expect(renderedBranches).toEqual([branchId]);
@@ -336,7 +339,7 @@ describe('managed executor git/fs commands', () => {
       {
         command: 'git.branch.add',
         sessionToken: 'tenant-token',
-        params: { branchId, repoId, restoreMode: true },
+        params: { branchId, repoId, materializationAttemptId, restoreMode: true },
       },
       {}
     );
@@ -384,7 +387,7 @@ describe('managed executor git/fs commands', () => {
       {
         command: 'git.branch.add',
         sessionToken: 'tenant-token',
-        params: { branchId, repoId, restoreMode: true },
+        params: { branchId, repoId, materializationAttemptId, restoreMode: true },
       },
       {}
     );
@@ -426,7 +429,7 @@ describe('managed executor git/fs commands', () => {
       {
         command: 'git.branch.add',
         sessionToken: 'tenant-token',
-        params: { branchId, repoId, restoreMode: true },
+        params: { branchId, repoId, materializationAttemptId, restoreMode: true },
       },
       {}
     );
@@ -463,7 +466,7 @@ describe('managed executor git/fs commands', () => {
       {
         command: 'git.branch.add',
         sessionToken: 'tenant-token',
-        params: { branchId, repoId },
+        params: { branchId, repoId, materializationAttemptId },
       },
       {}
     );
@@ -491,6 +494,7 @@ describe('managed executor git/fs commands', () => {
         params: {
           branchId,
           repoId,
+          materializationAttemptId,
         },
       },
       {}

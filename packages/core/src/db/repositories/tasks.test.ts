@@ -9,11 +9,12 @@ import { MessageRole, SessionStatus, TaskStatus } from '@agor/core/types';
 import { describe, expect, vi } from 'vitest';
 import { generateId, toShortId } from '../../lib/ids';
 import type { Database } from '../client';
+import { runDatabaseTransaction } from '../database-wrapper';
 import { ownedDbTest as dbTest, setTestBranchUserRole } from '../test-helpers';
 import { AmbiguousIdError, EntityNotFoundError, RepositoryError } from './base';
 import { BranchRepository } from './branches';
 import { MessagesRepository } from './messages';
-import { RepoRepository } from './repos';
+import { RepoDeletionInProgressError, RepoRepository } from './repos';
 import { SessionRepository } from './sessions';
 import { MISSING_TASK_ACTOR_ERROR, TaskRepository } from './tasks';
 import { UsersRepository } from './users';
@@ -138,6 +139,32 @@ describe('TaskRepository.create', () => {
     expect(created.task_id).toMatch(
       /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
     );
+  });
+
+  dbTest('rejects task admission after repository cleanup is durably claimed', async ({ db }) => {
+    const taskRepo = new TaskRepository(db);
+    const sessionId = await createSessionWithDeps(db);
+    const session = await new SessionRepository(db).findById(sessionId);
+    const branch = await new BranchRepository(db).findById(session!.branch_id);
+    const attemptId = generateId();
+    await runDatabaseTransaction(
+      db,
+      async (txDb) => {
+        const repoRepo = new RepoRepository(txDb);
+        await repoRepo.lockForBranchInventory(branch!.repo_id);
+        await repoRepo.claimDeletionAttemptLocked(branch!.repo_id, attemptId, 60_000);
+      },
+      { sqliteImmediate: true }
+    );
+
+    await expect(
+      taskRepo.createPending({
+        session_id: sessionId,
+        full_prompt: 'must not overtake cleanup',
+        created_by: 'test-user',
+        status: TaskStatus.CREATED,
+      })
+    ).rejects.toBeInstanceOf(RepoDeletionInProgressError);
   });
 
   dbTest('should default status to CREATED', async ({ db }) => {

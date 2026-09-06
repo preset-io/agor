@@ -4,13 +4,27 @@
  * Type-safe CRUD operations for git repositories with short ID support.
  */
 
-import type { Repo, RepoEnvironment, RepoEnvironmentConfigV1, UUID } from '@agor/core/types';
+import type {
+  Repo,
+  RepoDeletionAttempt,
+  RepoEnvironment,
+  RepoEnvironmentConfigV1,
+  UUID,
+} from '@agor/core/types';
 import { eq, like, sql } from 'drizzle-orm';
 import { resolveVariant, wrapV1AsV2 } from '../../config/variant-resolver.js';
 import { generateId } from '../../lib/ids';
 import { httpUrlHasUserinfo, stripHttpUrlUserinfo } from '../../utils/url';
 import type { Database } from '../client';
-import { deleteFrom, insert, lockRowForUpdate, select, txAsDb, update } from '../database-wrapper';
+import {
+  deleteFrom,
+  insert,
+  isPostgresDatabase,
+  lockRowForUpdate,
+  select,
+  txAsDb,
+  update,
+} from '../database-wrapper';
 import { type RepoInsert, type RepoRow, repos } from '../schema';
 import {
   AmbiguousIdError,
@@ -53,6 +67,16 @@ function deriveV1FromV2(env: RepoEnvironment | undefined): RepoEnvironmentConfig
 export interface RepoRemoteUrlCredentialFinding {
   repo_id: UUID;
   slug: string;
+}
+
+export class RepoDeletionInProgressError extends RepositoryError {
+  constructor(
+    readonly repoId: UUID,
+    readonly deadlineAt: string
+  ) {
+    super(`Repository ${repoId} has a destructive cleanup attempt in progress`);
+    this.name = 'RepoDeletionInProgressError';
+  }
 }
 
 /**
@@ -150,6 +174,7 @@ export class RepoRepository implements BaseRepository<Repo, Partial<Repo>> {
         // coerce that to `undefined` here so the stored value matches the
         // `clone_error?: RepoCloneError` invariant (set only when failed).
         clone_error: repo.clone_error || undefined,
+        deletion_attempt: repo.deletion_attempt,
       },
     };
   }
@@ -269,6 +294,78 @@ export class RepoRepository implements BaseRepository<Repo, Partial<Repo>> {
         error
       );
     }
+  }
+
+  private async databaseNow(db: Database, repoId: string): Promise<Date> {
+    if (!isPostgresDatabase(this.db)) return new Date();
+    const row = await select(db, { value: sql<Date>`clock_timestamp()` })
+      .from(repos)
+      .where(eq(repos.repo_id, repoId))
+      .one();
+    if (!row) throw new EntityNotFoundError('Repo', repoId);
+    return row.value instanceof Date ? row.value : new Date(row.value);
+  }
+
+  /**
+   * Serialize new repo-owned work against destructive cleanup. Callers pass
+   * their current transaction so the repo lock is held through admission.
+   */
+  async lockForWorkAdmissionInTransaction(db: Database, id: UUID): Promise<Repo> {
+    await lockRowForUpdate(db, this.db, repos, eq(repos.repo_id, id));
+    const row = await select(db).from(repos).where(eq(repos.repo_id, id)).one();
+    if (!row) throw new EntityNotFoundError('Repo', id);
+    const repo = this.rowToRepo(row);
+    if (repo.deletion_attempt) {
+      throw new RepoDeletionInProgressError(id, repo.deletion_attempt.deadline_at);
+    }
+    return repo;
+  }
+
+  /** Caller must already hold the repository row lock in its native transaction. */
+  async claimDeletionAttemptLocked(
+    id: UUID,
+    attemptId: UUID,
+    durationMs: number
+  ): Promise<RepoDeletionAttempt> {
+    const row = await select(this.db).from(repos).where(eq(repos.repo_id, id)).one();
+    if (!row) throw new EntityNotFoundError('Repo', id);
+    const repo = this.rowToRepo(row);
+    const now = await this.databaseNow(this.db, id);
+    const existingDeadline = Date.parse(repo.deletion_attempt?.deadline_at ?? '');
+    if (
+      repo.deletion_attempt &&
+      (!Number.isFinite(existingDeadline) || existingDeadline > now.getTime())
+    ) {
+      throw new RepoDeletionInProgressError(id, repo.deletion_attempt.deadline_at);
+    }
+    const attempt: RepoDeletionAttempt = {
+      attempt_id: attemptId,
+      started_at: now.toISOString(),
+      deadline_at: new Date(now.getTime() + durationMs).toISOString(),
+      cleanup: true,
+    };
+    await update(this.db, repos)
+      .set({
+        updated_at: now,
+        data: { ...row.data, deletion_attempt: attempt },
+      })
+      .where(eq(repos.repo_id, id))
+      .run();
+    return attempt;
+  }
+
+  /** Caller must already hold the repository row lock in its native transaction. */
+  async requireDeletionAttemptLocked(id: UUID, attemptId: UUID): Promise<Repo> {
+    const row = await select(this.db).from(repos).where(eq(repos.repo_id, id)).one();
+    if (!row) throw new EntityNotFoundError('Repo', id);
+    const repo = this.rowToRepo(row);
+    if (repo.deletion_attempt?.attempt_id !== attemptId) {
+      throw new RepoDeletionInProgressError(
+        id,
+        repo.deletion_attempt?.deadline_at ?? new Date(0).toISOString()
+      );
+    }
+    return repo;
   }
 
   /**

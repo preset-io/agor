@@ -41,6 +41,7 @@ import {
   PROMPT_FLOW_PATCH_FIELDS,
   projectExecutorTaskSdkResponse,
   protectExternalBranchCrud,
+  protectExternalRepoCrud,
   protectExternalTaskCreate,
   protectFilesystemHomeWrite,
   protectServerManagedTaskWrites,
@@ -404,6 +405,14 @@ describe('protectExternalBranchCrud', () => {
     ).toThrow('server-managed: archived');
   });
 
+  it('rejects persisted source-remote authority through generic CRUD', () => {
+    expect(() =>
+      protectExternalBranchCrud(
+        context({ base_remote_url: 'https://attacker.example/repo.git' }, { provider: 'rest' })
+      )
+    ).toThrow('server-managed: base_remote_url');
+  });
+
   it('allows ordinary client-authored metadata and trusted internal writes', () => {
     const external = context({ notes: 'updated', board_id: 'board-2' });
     expect(protectExternalBranchCrud(external)).toBe(external);
@@ -423,6 +432,20 @@ describe('protectExternalBranchCrud', () => {
         )
       )
     ).toThrow('server-managed');
+  });
+});
+
+describe('protectExternalRepoCrud', () => {
+  it('rejects external deletion-fence mutation and permits internal settlement', () => {
+    const external = {
+      method: 'patch',
+      data: { deletion_attempt: null },
+      params: { provider: 'rest' },
+    } as unknown as HookContext;
+    expect(() => protectExternalRepoCrud(external)).toThrow('server-managed: deletion_attempt');
+
+    const internal = { ...external, params: { provider: undefined } } as unknown as HookContext;
+    expect(protectExternalRepoCrud(internal)).toBe(internal);
   });
 });
 

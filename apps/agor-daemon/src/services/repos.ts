@@ -26,14 +26,24 @@ import {
 } from '@agor/core/config';
 import {
   BranchRepository,
+  EnvironmentRetirementConflictError,
+  generateId,
   getCurrentTenantId,
+  RepoDeletionInProgressError,
   RepoRepository,
   runWithTenantDatabaseTransaction,
   shortId,
+  TaskRepository,
   type TenantScopeAwareDatabase,
 } from '@agor/core/db';
 import { autoAssignBranchUniqueId } from '@agor/core/environment/variable-resolver';
-import { type Application, BadRequest, Forbidden, NotAuthenticated } from '@agor/core/feathers';
+import {
+  type Application,
+  BadRequest,
+  Conflict,
+  Forbidden,
+  NotAuthenticated,
+} from '@agor/core/feathers';
 import { redactGitUrlCredentials, stripGitUrlCredentials } from '@agor/core/git/pure';
 import type {
   AuthenticatedParams,
@@ -47,10 +57,18 @@ import type {
   UserRole,
   UUID,
 } from '@agor/core/types';
-import { hasMinimumRole, ROLES, TEAMMATE_FRAMEWORK_REPO_URL } from '@agor/core/types';
+import {
+  BRANCH_FILESYSTEM_MATERIALIZATION_TIMEOUT_MS,
+  hasMinimumRole,
+  REPO_DELETION_ATTEMPT_TIMEOUT_MS,
+  ROLES,
+  TEAMMATE_FRAMEWORK_REPO_URL,
+} from '@agor/core/types';
 import { DrizzleService } from '../adapters/drizzle';
+import { gitBranchAddExecutorCommandId } from '../auth/executor-command-ids.js';
 import type { BranchesServiceImpl } from '../declarations.js';
 import { emitHaNativeSocketEvent, tenantChannelName } from '../realtime/routing.js';
+import { ensureCanAttachBranchToBoard } from '../utils/authorization.js';
 import { ensureBranchWorkspaceAccess } from '../utils/branch-workspace-path.js';
 import { shouldUseCloneReferencePath } from '../utils/clone-reference.js';
 import { emitServiceEvent } from '../utils/emit-service-event.js';
@@ -749,7 +767,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
 
     // Validate boardId exists before creating DB record (FK constraint would reject it)
     // Board is stored for later use in smart positioning
-    let board: { objects?: Record<string, { type?: string }> } | undefined;
+    let board: { board_id: UUID; objects?: Record<string, { type?: string }> } | undefined;
     if (data.boardId) {
       try {
         board = await this.app.service('boards').get(data.boardId, params);
@@ -759,6 +777,14 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
             `(use agor_boards_list to see available boards).`
         );
       }
+      if (!board) throw new Error(`Board '${data.boardId}' not found`);
+
+      await ensureCanAttachBranchToBoard(
+        this.db,
+        board.board_id,
+        params as AuthenticatedParams | undefined,
+        config.execution?.branch_rbac === true
+      );
 
       // Validate zoneId exists on the board
       if (data.zoneId && board) {
@@ -771,6 +797,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
         }
       }
     }
+    const resolvedBoardId = board?.board_id;
 
     const tenantId = (params as AuthenticatedParams | undefined)?.tenant?.tenant_id;
     const branchPath = getBranchPath(repo.slug, data.name, tenantId);
@@ -793,6 +820,8 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     const branchUniqueId = autoAssignBranchUniqueId(allUsedIds);
 
     const branchesService = this.app.service('branches');
+    const filesystemAttemptId = generateId();
+    const filesystemAttemptStartedAt = new Date();
 
     // Environment command templates (start_command, stop_command, etc.) are
     // rendered by the executor after filesystem materialization.
@@ -805,7 +834,9 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     // 1. Create git branch on filesystem
     // 2. Render environment templates with the materialized branch context
     // 3. Patch branch to 'ready' with rendered templates
-    let branch = (await branchesService.create(
+    let branch = (await (
+      branchesService as unknown as BranchesServiceImpl
+    ).createMaterializationIntent(
       {
         repo_id: repo.repo_id,
         name: data.name,
@@ -817,6 +848,14 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
         new_branch: data.createBranch ?? false,
         branch_unique_id: branchUniqueId,
         filesystem_status: 'creating', // Will be set to 'ready' by executor
+        filesystem_attempt: {
+          attempt_id: filesystemAttemptId,
+          action: 'create',
+          started_at: filesystemAttemptStartedAt.toISOString(),
+          deadline_at: new Date(
+            filesystemAttemptStartedAt.getTime() + BRANCH_FILESYSTEM_MATERIALIZATION_TIMEOUT_MS
+          ).toISOString(),
+        },
         // Environment templates are rendered after filesystem materialization.
         // RBAC fields are intentionally omitted at creation: new branches
         // always align with their board defaults. Overrides are a deliberate
@@ -824,19 +863,19 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
         ...(data.environment_variant ? { environment_variant: data.environment_variant } : {}),
         storage_mode: storageMode,
         ...(cloneDepth !== undefined ? { clone_depth: cloneDepth } : {}),
-        sessions: [],
         last_used: new Date().toISOString(),
         issue_url: data.issue_url,
         pull_request_url: data.pull_request_url,
-        notes: data.notes,
+        notes: data.notes ?? undefined,
         custom_context: data.custom_context,
-        board_id: data.boardId,
+        board_id: resolvedBoardId,
         created_by: userId,
+        primary_owner_user_id: userId,
       },
-      params
+      { ...params, provider: undefined }
     )) as Branch;
 
-    if (data.boardId) {
+    if (resolvedBoardId) {
       const boardObjectsService = this.app.service('board-objects');
 
       // Honor an explicit position from the caller (the UI passes the
@@ -868,7 +907,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
 
           // Fetch all entities for THIS board
           const existingResult = await boardObjectsService.find({
-            query: { board_id: data.boardId },
+            query: { board_id: resolvedBoardId },
             ...params,
           });
           const existing = (
@@ -924,7 +963,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
 
       await boardObjectsService.create(
         {
-          board_id: data.boardId,
+          board_id: resolvedBoardId,
           branch_id: branch.branch_id,
           position,
           ...(resolvedZoneId ? { zone_id: resolvedZoneId } : {}),
@@ -942,7 +981,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     try {
       const sessionToken = await issueExecutorCommandToken(
         this.app,
-        'git.branch.add',
+        gitBranchAddExecutorCommandId(filesystemAttemptId),
         userId,
         branch.branch_id
       );
@@ -954,6 +993,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
           daemonUrl: getDaemonUrl(),
           params: {
             branchId: branch.branch_id,
+            materializationAttemptId: filesystemAttemptId,
             repoId: repo.repo_id,
             userId: userId as string | undefined,
             principalBranchAccess: 'write',
@@ -976,14 +1016,15 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       console.error('[ReposService.createBranch] Failed to spawn executor:', message);
-      branch = (await branchesService.patch(
-        branch.branch_id,
+      branch = await (branchesService as unknown as BranchesServiceImpl).settleFilesystemIntent(
         {
+          branch_id: branch.branch_id,
+          filesystem_attempt_id: filesystemAttemptId,
           filesystem_status: 'failed',
           error_message: `Failed to spawn executor: ${message}`,
         },
         { ...params, provider: undefined }
-      )) as Branch;
+      );
     }
 
     // Return immediately; asynchronous filesystem updates arrive via WebSocket.
@@ -1203,13 +1244,15 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
    *
    * Supports query parameter: ?cleanup=true to delete filesystem directories
    *
-   * Behavior: Fail-fast transactional approach
-   * - If cleanup=true: Delete filesystem FIRST, then database (abort on filesystem failure)
+   * Behavior: fenced two-phase approach
+   * - If cleanup=true: atomically admit + fence, delete filesystem, then finalize metadata
    * - If cleanup=false: Delete database only (filesystem preserved)
    */
   async remove(id: string, params?: RepoParams): Promise<Repo> {
-    const repo = await this.get(id, params);
+    let repo = await this.get(id, params);
     const cleanup = params?.query?.cleanup === true;
+    const tenantId =
+      (params as AuthenticatedParams | undefined)?.tenant?.tenant_id ?? getCurrentTenantId();
 
     // Get ALL branches for this repo (needed for both filesystem and database cleanup).
     // CRITICAL: Use the unbounded repository query so transport pagination and
@@ -1227,16 +1270,102 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
       }
       return found;
     };
-    const branches = await findRepoBranches(repo.repo_id as UUID);
+    let branches = await findRepoBranches(repo.repo_id as UUID);
 
     console.log(
       `🗑️  Repo deletion: Found ${branches.length} branch(s) for repo ${repo.slug} (${repo.repo_id})`
     );
 
-    // If cleanup is requested and this is a remote repo, delete filesystem directories FIRST.
-    // Delegate to the executor so the daemon never rm -rfs managed repo/branch dirs itself.
+    const removeMetadata = async (expectedDeletionAttemptId?: UUID): Promise<Repo> =>
+      runWithTenantDatabaseTransaction(this.db, tenantId, async (scoped) => {
+        const scopedRepoRepo = new RepoRepository(scoped);
+        // Lock the parent first. PostgreSQL branch inserts and all new
+        // task/lifecycle admissions take this same repo fence.
+        const lockedRepo = await scopedRepoRepo.lockForBranchInventory(repo.repo_id);
+        if (expectedDeletionAttemptId) {
+          await scopedRepoRepo.requireDeletionAttemptLocked(
+            lockedRepo.repo_id,
+            expectedDeletionAttemptId
+          );
+        } else if (lockedRepo.deletion_attempt) {
+          throw new RepoDeletionInProgressError(
+            lockedRepo.repo_id,
+            lockedRepo.deletion_attempt.deadline_at
+          );
+        }
+        const metadataBranches = await new BranchRepository(scoped).findAllByRepoId(
+          lockedRepo.repo_id
+        );
+        for (const branch of metadataBranches) {
+          // The repo deletion itself is already authorized; individual branch
+          // permission hooks would incorrectly block full repository cleanup.
+          await branchesService.removeMetadataWithRealtime(branch.branch_id, params);
+          console.log(`🗑️  Deleted branch from database: ${branch.name}`);
+        }
+
+        // The native transaction covers every branch row plus the repository.
+        // Tombstones queued above drain once, only after this final delete commits.
+        return super.remove(lockedRepo.repo_id, params) as Promise<Repo>;
+      });
+
+    // Destructive cleanup first acquires a durable deletion intent. Admission
+    // locks and verifies every current branch/task before publishing the
+    // marker; new branches, tasks, lifecycle actions, and Sync claims all take
+    // the same repo-row fence and reject while the marker exists.
     if (cleanup && repo.repo_type === 'remote') {
       if (!repo.local_path) throw new Error(`Repo ${repo.repo_id} has no local_path`);
+
+      const deletionAttemptId = generateId();
+      try {
+        const admitted = await runWithTenantDatabaseTransaction(
+          this.db,
+          tenantId,
+          async (scoped) => {
+            const scopedRepoRepo = new RepoRepository(scoped);
+            const lockedRepo = await scopedRepoRepo.lockForBranchInventory(repo.repo_id);
+            const scopedBranchRepo = new BranchRepository(scoped);
+            const scopedTaskRepo = new TaskRepository(scoped);
+            const admittedBranches = await scopedBranchRepo.findAllByRepoId(lockedRepo.repo_id);
+            for (const branch of admittedBranches) {
+              await scopedBranchRepo.assertRetirementReadyInTransaction(scoped, branch.branch_id);
+              if (await scopedTaskRepo.hasNonterminalForBranch(branch.branch_id)) {
+                throw new Conflict(
+                  `Cannot delete repository while branch ${branch.name} has unfinished tasks`
+                );
+              }
+            }
+            await scopedRepoRepo.claimDeletionAttemptLocked(
+              lockedRepo.repo_id,
+              deletionAttemptId,
+              REPO_DELETION_ATTEMPT_TIMEOUT_MS
+            );
+            return { repo: lockedRepo, branches: admittedBranches };
+          }
+        );
+        repo = admitted.repo;
+        branches = admitted.branches;
+      } catch (error) {
+        if (error instanceof EnvironmentRetirementConflictError) {
+          throw new Conflict(
+            'Every branch environment and filesystem operation must settle before repository cleanup',
+            {
+              code: 'REPOSITORY_BRANCH_NOT_RETIRED',
+              branch_id: error.branchId,
+            }
+          );
+        }
+        if (error instanceof RepoDeletionInProgressError) {
+          throw new Conflict(
+            'Repository cleanup is already in progress; retry after its deadline',
+            {
+              code: 'REPOSITORY_DELETION_IN_PROGRESS',
+              repo_id: error.repoId,
+              deadline_at: error.deadlineAt,
+            }
+          );
+        }
+        throw error;
+      }
 
       const cleanupResult = await requestExecutor(
         {
@@ -1271,43 +1400,34 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
           throw new Error(
             `Partial deletion occurred: Successfully deleted ${deletedPathList.length} path(s): ${deletedPathList.join(', ')}. ` +
               `Failed while deleting repository ${repo.slug}: ${errorMsg}. ` +
-              `Database NOT modified. Manual cleanup required for deleted paths.`
+              `Database metadata and its durable deletion fence were retained. Retry after the cleanup deadline; manual cleanup may be required for deleted paths.`
           );
         }
 
         throw new Error(
           `Cannot delete repository: executor failed to delete managed directories for ${repo.slug}: ${errorMsg}. ` +
-            `No files were deleted. Please fix this issue and retry.`
+            `The durable deletion fence was retained because the executor outcome may be ambiguous. Retry after its deadline.`
         );
       }
 
       console.log(
         `✅ Successfully deleted ${branches.length} branch director${branches.length === 1 ? 'y' : 'ies'} and repository directory`
       );
+      return removeMetadata(deletionAttemptId);
     }
 
-    // Only reach here if filesystem cleanup succeeded (or wasn't requested)
-    // Now safe to delete from database
-
-    const tenantId =
-      (params as AuthenticatedParams | undefined)?.tenant?.tenant_id ?? getCurrentTenantId();
-    return runWithTenantDatabaseTransaction(this.db, tenantId, async () => {
-      // Lock the parent first. PostgreSQL branch inserts take a conflicting FK
-      // key-share lock, so none can appear after the unbounded inventory read;
-      // SQLite's IMMEDIATE transaction provides the corresponding exclusion.
-      const lockedRepo = await this.repoRepo.lockForBranchInventory(repo.repo_id);
-      const metadataBranches = await findRepoBranches(lockedRepo.repo_id);
-      for (const branch of metadataBranches) {
-        // The repo deletion itself is already authorized; individual branch
-        // permission hooks would incorrectly block full repository cleanup.
-        await branchesService.removeMetadataWithRealtime(branch.branch_id, params);
-        console.log(`🗑️  Deleted branch from database: ${branch.name}`);
+    try {
+      return await removeMetadata();
+    } catch (error) {
+      if (error instanceof RepoDeletionInProgressError) {
+        throw new Conflict('Repository cleanup is already in progress; retry after its deadline', {
+          code: 'REPOSITORY_DELETION_IN_PROGRESS',
+          repo_id: error.repoId,
+          deadline_at: error.deadlineAt,
+        });
       }
-
-      // The native transaction covers every branch row plus the repository.
-      // Tombstones queued above drain once, only after this final delete commits.
-      return super.remove(lockedRepo.repo_id, params) as Promise<Repo>;
-    });
+      throw error;
+    }
   }
 }
 

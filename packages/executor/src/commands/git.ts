@@ -18,7 +18,7 @@ import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { getReposDir } from '@agor/core/config';
 import { parseAgorYml, writeAgorYml } from '@agor/core/config/node';
 import { shortId } from '@agor/core/db';
-import { type BranchID, TEAMMATE_FRAMEWORK_REPO_URL } from '@agor/core/types';
+import { type BranchID, TEAMMATE_FRAMEWORK_REPO_URL, type UUID } from '@agor/core/types';
 import { diagnoseGit } from '@agor/git';
 import type { UserGitEnvironment } from '@agor/git/pure';
 import { appendGitConfigParameterPairs } from '../git/config-parameters.js';
@@ -980,6 +980,7 @@ export async function handleGitBranchAdd(
       console.log(`[git.branch.add] Marking branch ${shortId(branchId)} as ready`);
       await client.service('branches').settleFilesystem({
         branch_id: branchId as BranchID,
+        filesystem_attempt_id: payload.params.materializationAttemptId as UUID,
         filesystem_status: 'ready',
       });
       console.log(`[git.branch.add] Branch marked as ready`);
@@ -1052,6 +1053,7 @@ export async function handleGitBranchAdd(
       try {
         await client.service('branches').settleFilesystem({
           branch_id: branchId as BranchID,
+          filesystem_attempt_id: payload.params.materializationAttemptId as UUID,
           filesystem_status: 'failed',
           error_message: userMessage,
         });

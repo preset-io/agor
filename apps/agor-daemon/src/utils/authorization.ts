@@ -2,11 +2,32 @@
  * Authorization utilities for Feathers services and custom routes.
  */
 
+import { CapabilityPolicyRepository, type TenantScopeAwareDatabase } from '@agor/core/db';
 import { Forbidden, NotAuthenticated } from '@agor/core/feathers';
-import type { AuthenticatedParams, HookContext, UserRole } from '@agor/core/types';
+import type { AuthenticatedParams, HookContext, UserID, UserRole, UUID } from '@agor/core/types';
 import { hasMinimumRole, ROLES } from '@agor/core/types';
 
 export type Role = UserRole;
+
+/** Shared custom-route/hook admission for attaching a branch to one board. */
+export async function ensureCanAttachBranchToBoard(
+  db: TenantScopeAwareDatabase,
+  boardId: UUID,
+  params: AuthenticatedParams | undefined,
+  appRbacEnabled: boolean
+): Promise<void> {
+  if (!appRbacEnabled || !params?.provider) return;
+  const user = params.user;
+  if (!user) throw new NotAuthenticated('Authentication required');
+  if (user._isServiceAccount || hasMinimumRole(user.role, ROLES.ADMIN)) return;
+  const access = await new CapabilityPolicyRepository(db).resolveBoardAccess(
+    boardId,
+    user.user_id as UserID
+  );
+  if (!access.capabilities.includes('board.attach_branch')) {
+    throw new Forbidden('Board Editor or Manager access is required to attach a branch');
+  }
+}
 
 /**
  * Ensure the request is authenticated and has the minimum required role.

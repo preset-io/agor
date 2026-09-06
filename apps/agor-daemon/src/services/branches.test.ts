@@ -1752,6 +1752,7 @@ describe('BranchesService environment start async behavior', () => {
 
   it('settles filesystem readiness only through the exact git.branch.add executor scope', async () => {
     const { service, branchRepo, branchesService } = createServiceHarness();
+    const filesystemAttemptId = '550e8400-e29b-41d4-a716-446655440004' as UUID;
     const branch = {
       branch_id: 'wt-filesystem-settlement' as BranchID,
       repo_id: 'repo-1',
@@ -1760,12 +1761,14 @@ describe('BranchesService environment start async behavior', () => {
       created_by: 'user-1' as UUID,
       branch_unique_id: 1,
       filesystem_status: 'ready' as const,
+      filesystem_attempt: null,
     };
     const update = vi.spyOn(branchRepo, 'update').mockResolvedValue(branch as never);
 
     await service.settleFilesystem(
       {
         branch_id: branch.branch_id,
+        filesystem_attempt_id: filesystemAttemptId,
         filesystem_status: 'ready',
       },
       {
@@ -1775,7 +1778,7 @@ describe('BranchesService environment start async behavior', () => {
           payload: {
             type: 'executor-session',
             purpose: 'executor-command',
-            session_id: 'git.branch.add',
+            session_id: `git.branch.add:${filesystemAttemptId}`,
             branch_id: branch.branch_id,
           },
         },
@@ -1783,9 +1786,11 @@ describe('BranchesService environment start async behavior', () => {
       } as never
     );
 
-    expect(update).toHaveBeenCalledWith(branch.branch_id, {
-      filesystem_status: 'ready',
-    });
+    expect(update).toHaveBeenCalledWith(
+      branch.branch_id,
+      { filesystem_status: 'ready', filesystem_attempt: null },
+      { expectedFilesystemAttemptId: filesystemAttemptId }
+    );
     expect(branchesService.emit).toHaveBeenCalledWith(
       'patched',
       branch,
@@ -1802,15 +1807,17 @@ describe('BranchesService environment start async behavior', () => {
       label: 'ordinary admin',
       data: {
         branch_id: 'wt-filesystem-negative',
+        filesystem_attempt_id: '550e8400-e29b-41d4-a716-446655440004',
         filesystem_status: 'ready',
       },
       params: { provider: 'rest', user: { user_id: 'admin-1', role: 'admin' } },
-      expected: 'branch-scoped git.branch.add executor token',
+      expected: 'exact branch materialization executor token',
     },
     {
       label: 'wrong branch executor',
       data: {
         branch_id: 'wt-filesystem-negative',
+        filesystem_attempt_id: '550e8400-e29b-41d4-a716-446655440004',
         filesystem_status: 'ready',
       },
       params: {
@@ -1820,17 +1827,39 @@ describe('BranchesService environment start async behavior', () => {
           payload: {
             type: 'executor-session',
             purpose: 'executor-command',
-            session_id: 'git.branch.add',
+            session_id: 'git.branch.add:550e8400-e29b-41d4-a716-446655440004',
             branch_id: 'another-branch',
           },
         },
       },
-      expected: 'branch-scoped git.branch.add executor token',
+      expected: 'exact branch materialization executor token',
+    },
+    {
+      label: 'old same-branch materialization attempt',
+      data: {
+        branch_id: 'wt-filesystem-negative',
+        filesystem_attempt_id: '550e8400-e29b-41d4-a716-446655440004',
+        filesystem_status: 'ready',
+      },
+      params: {
+        provider: 'rest',
+        authentication: {
+          strategy: 'jwt',
+          payload: {
+            type: 'executor-session',
+            purpose: 'executor-command',
+            session_id: 'git.branch.add:550e8400-e29b-41d4-a716-446655440005',
+            branch_id: 'wt-filesystem-negative',
+          },
+        },
+      },
+      expected: 'exact branch materialization executor token',
     },
     {
       label: 'invalid failed settlement',
       data: {
         branch_id: 'wt-filesystem-negative',
+        filesystem_attempt_id: '550e8400-e29b-41d4-a716-446655440004',
         filesystem_status: 'failed',
       },
       params: {
@@ -1840,7 +1869,7 @@ describe('BranchesService environment start async behavior', () => {
           payload: {
             type: 'executor-session',
             purpose: 'executor-command',
-            session_id: 'git.branch.add',
+            session_id: 'git.branch.add:550e8400-e29b-41d4-a716-446655440004',
             branch_id: 'wt-filesystem-negative',
           },
         },
@@ -1851,6 +1880,7 @@ describe('BranchesService environment start async behavior', () => {
       label: 'extra field',
       data: {
         branch_id: 'wt-filesystem-negative',
+        filesystem_attempt_id: '550e8400-e29b-41d4-a716-446655440004',
         filesystem_status: 'ready',
         environment_instance: { status: 'running' },
       },
@@ -1861,7 +1891,7 @@ describe('BranchesService environment start async behavior', () => {
           payload: {
             type: 'executor-session',
             purpose: 'executor-command',
-            session_id: 'git.branch.add',
+            session_id: 'git.branch.add:550e8400-e29b-41d4-a716-446655440004',
             branch_id: 'wt-filesystem-negative',
           },
         },

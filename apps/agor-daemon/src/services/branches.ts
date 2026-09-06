@@ -23,6 +23,7 @@ import {
 } from '@agor/core/config';
 import {
   BoardRepository,
+  BranchFilesystemAttemptConflictError,
   BranchRepository,
   type BranchWithZoneAndSessions,
   type EnvironmentHealthObservation,
@@ -35,6 +36,7 @@ import {
   generateId,
   getCurrentTenantId,
   KnowledgeNamespaceRepository,
+  RepoDeletionInProgressError,
   RepoRepository,
   runWithTenantDatabaseScope,
   runWithTenantDatabaseTransaction,
@@ -94,6 +96,7 @@ import type {
 } from '@agor/core/types';
 import {
   BRANCH_ENVIRONMENT_CLEARABLE_FIELDS,
+  BRANCH_FILESYSTEM_MATERIALIZATION_TIMEOUT_MS,
   getTeammateConfig,
   hasMinimumRole,
   isTeammate,
@@ -104,7 +107,10 @@ import { resolveHostIpAddress } from '@agor/core/utils/host-ip';
 import { createPinnedFetch } from '@agor/core/utils/pinned-fetch';
 import { isAllowedHealthCheckUrl } from '@agor/core/utils/url';
 import { DrizzleService, type Query } from '../adapters/drizzle';
-import { environmentLifecycleExecutorCommandId } from '../auth/executor-command-ids.js';
+import {
+  environmentLifecycleExecutorCommandId,
+  gitBranchAddExecutorCommandId,
+} from '../auth/executor-command-ids.js';
 import {
   authenticatedEnvironmentExecutorCallbackRuntimeScope,
   matchesExecutorCommandRuntimeScope,
@@ -1323,9 +1329,18 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     return withDefaults;
   }
 
-  /**
-   * Override create to inject board permission defaults.
-   */
+  /** Dedicated internal boundary for an already-authorized materialization intent. */
+  async createMaterializationIntent(data: Partial<Branch>, params?: BranchParams): Promise<Branch> {
+    if (params?.provider) {
+      throw new Forbidden('Branch materialization intent creation is internal-only');
+    }
+    if (!data.created_by || data.primary_owner_user_id !== data.created_by) {
+      throw new BadRequest('Branch materialization intent requires its immutable primary owner');
+    }
+    return (await this.create(data, params)) as Branch;
+  }
+
+  /** Override create to inject board permission defaults. */
   async create(
     data: Partial<Branch> | Partial<Branch>[],
     params?: BranchParams
@@ -2424,11 +2439,34 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
 
     if (!branchPathExists) {
       console.log(`📂 Branch directory missing, spawning executor to recreate: ${branch.path}`);
+      const filesystemAttemptId = generateId();
+      const filesystemAttemptStartedAt = new Date();
 
       // Set filesystem_status to 'creating' while we rebuild
-      await this.withTenantDatabase(params, () =>
-        this.patch(id, { filesystem_status: 'creating' }, { ...params, provider: undefined })
+      const creatingBranch = await this.withTenantDatabase(params, () =>
+        this.branchRepo.update(
+          id,
+          {
+            filesystem_status: 'creating',
+            filesystem_attempt: {
+              attempt_id: filesystemAttemptId,
+              action: 'restore',
+              started_at: filesystemAttemptStartedAt.toISOString(),
+              deadline_at: new Date(
+                filesystemAttemptStartedAt.getTime() + BRANCH_FILESYSTEM_MATERIALIZATION_TIMEOUT_MS
+              ).toISOString(),
+            },
+          },
+          { rejectRepoDeletion: true }
+        )
       );
+      emitServiceEvent(this.app, {
+        path: 'branches',
+        event: 'patched',
+        data: creatingBranch,
+        params,
+        id: creatingBranch.branch_id,
+      });
 
       // Look up repo to get local_path
       const reposService = this.app.service('repos');
@@ -2444,12 +2482,14 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
           `Cannot unarchive clone-mode branch '${branch.name}' for repo '${repo.slug}': ` +
           `repo has no remote_url. The clone source URL is unknown.`;
         console.error(`⚠️  ${errMsg}`);
-        await this.withTenantDatabase(params, () =>
-          this.patch(
-            id,
-            { filesystem_status: 'failed', error_message: errMsg },
-            { ...params, provider: undefined }
-          )
+        await this.settleFilesystemIntent(
+          {
+            branch_id: branch.branch_id,
+            filesystem_attempt_id: filesystemAttemptId,
+            filesystem_status: 'failed',
+            error_message: errMsg,
+          },
+          { ...params, provider: undefined }
         );
         return unarchivedBranch;
       }
@@ -2457,7 +2497,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       try {
         const sessionToken = await issueExecutorCommandToken(
           this.app,
-          'git.branch.add',
+          gitBranchAddExecutorCommandId(filesystemAttemptId),
           userId,
           branch.branch_id
         );
@@ -2468,6 +2508,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
             daemonUrl: getDaemonUrl(),
             params: {
               branchId: branch.branch_id,
+              materializationAttemptId: filesystemAttemptId,
               repoId: repo.repo_id,
               // Use restore mode: checks if branch exists on remote via ls-remote,
               // checks out existing branch if found, otherwise creates new branch from base_ref.
@@ -2501,12 +2542,14 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
         );
         // Mark as failed so the UI can show the error state
         const errMsg = error instanceof Error ? error.message : String(error);
-        await this.withTenantDatabase(params, () =>
-          this.patch(
-            id,
-            { filesystem_status: 'failed', error_message: `Failed to spawn executor: ${errMsg}` },
-            { ...params, provider: undefined }
-          )
+        await this.settleFilesystemIntent(
+          {
+            branch_id: branch.branch_id,
+            filesystem_attempt_id: filesystemAttemptId,
+            filesystem_status: 'failed',
+            error_message: `Failed to spawn executor: ${errMsg}`,
+          },
+          { ...params, provider: undefined }
         );
       }
     }
@@ -2888,6 +2931,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
                 invalidateEnvironmentObservation: internalOptions?.beginLifecycle === true,
                 rejectActiveEnvironmentLifecycle: internalOptions?.beginLifecycle === true,
                 rejectActiveEnvironmentSync: internalOptions?.beginLifecycle === true,
+                rejectRepoDeletion: internalOptions?.beginLifecycle === true,
                 expectedEnvironmentGeneration,
                 ...(expectedEnvironmentStatus !== undefined ? { expectedEnvironmentStatus } : {}),
                 ...(callbackAction && expectedEnvironmentGeneration !== undefined
@@ -2917,6 +2961,13 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
         throw new Conflict(error.message, {
           code: ENVIRONMENT_LIFECYCLE_SUPERSEDED_CODE,
           branch_id: error.branchId,
+        });
+      }
+      if (error instanceof RepoDeletionInProgressError) {
+        throw new Conflict('Repository deletion is in progress; new environment work is disabled', {
+          code: 'REPOSITORY_DELETION_IN_PROGRESS',
+          repo_id: error.repoId,
+          deadline_at: error.deadlineAt,
         });
       }
       if (error instanceof EnvironmentProviderMutationBusyError) {
@@ -2976,16 +3027,25 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
    * CRUD deliberately excludes filesystem state, including for admins.
    */
   async settleFilesystem(data: BranchFilesystemSettlement, params?: BranchParams): Promise<Branch> {
+    const attemptId = data?.filesystem_attempt_id;
     if (
+      !attemptId ||
       !params?.provider ||
-      !matchesExecutorCommandRuntimeScope(params, 'git.branch.add', data?.branch_id)
+      !matchesExecutorCommandRuntimeScope(
+        params,
+        gitBranchAddExecutorCommandId(attemptId),
+        data?.branch_id
+      )
     ) {
-      throw new Forbidden('A branch-scoped git.branch.add executor token is required');
+      throw new Forbidden('An exact branch materialization executor token is required');
     }
     const fields = Object.keys((data ?? {}) as unknown as Record<string, unknown>);
     if (
       fields.some(
-        (field) => !['branch_id', 'filesystem_status', 'error_message'].includes(field)
+        (field) =>
+          !['branch_id', 'filesystem_attempt_id', 'filesystem_status', 'error_message'].includes(
+            field
+          )
       ) ||
       (data.filesystem_status !== 'ready' && data.filesystem_status !== 'failed')
     ) {
@@ -2999,12 +3059,45 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       throw new BadRequest('Invalid branch filesystem settlement');
     }
 
-    const branch = await this.withTenantDatabase(params, () =>
-      this.branchRepo.update(data.branch_id, {
-        filesystem_status: data.filesystem_status,
-        ...(errorMessage ? { error_message: errorMessage } : {}),
-      })
-    );
+    return this.commitFilesystemSettlement(data, errorMessage, params);
+  }
+
+  /** Internal settlement for a synchronous daemon-side launch failure. */
+  async settleFilesystemIntent(
+    data: BranchFilesystemSettlement,
+    params?: BranchParams
+  ): Promise<Branch> {
+    if (params?.provider) throw new Forbidden('Filesystem intent settlement is internal-only');
+    return this.commitFilesystemSettlement(data, data.error_message?.trim(), params);
+  }
+
+  private async commitFilesystemSettlement(
+    data: BranchFilesystemSettlement,
+    errorMessage: string | undefined,
+    params?: BranchParams
+  ): Promise<Branch> {
+    let branch: Branch;
+    try {
+      branch = await this.withTenantDatabase(params, () =>
+        this.branchRepo.update(
+          data.branch_id,
+          {
+            filesystem_status: data.filesystem_status,
+            filesystem_attempt: null,
+            ...(errorMessage ? { error_message: errorMessage } : {}),
+          },
+          { expectedFilesystemAttemptId: data.filesystem_attempt_id }
+        )
+      );
+    } catch (error) {
+      if (error instanceof BranchFilesystemAttemptConflictError) {
+        throw new Conflict(error.message, {
+          code: 'BRANCH_FILESYSTEM_ATTEMPT_SUPERSEDED',
+          branch_id: error.branchId,
+        });
+      }
+      throw error;
+    }
     emitServiceEvent(this.app, {
       path: 'branches',
       event: 'patched',

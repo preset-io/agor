@@ -452,6 +452,22 @@ export interface Branch {
    * transitioning; it never strands accumulated Claude/Codex/… history.
    */
   sdk_home?: 'per_branch' | null;
+
+  /**
+   * Server-owned authority for one asynchronous git.branch.add operation.
+   * The opaque attempt ID is bound into the executor credential and every
+   * settlement CAS so an old callback cannot overwrite a newer restore.
+   */
+  filesystem_attempt?: BranchFilesystemAttempt | null;
+}
+
+export const BRANCH_FILESYSTEM_MATERIALIZATION_TIMEOUT_MS = 10 * 60_000;
+
+export interface BranchFilesystemAttempt {
+  attempt_id: UUID;
+  action: 'create' | 'restore';
+  started_at: string;
+  deadline_at: string;
 }
 
 /**
@@ -465,6 +481,7 @@ export const BRANCH_SERVER_MANAGED_FIELDS = [
   'branch_unique_id',
   'repo_id',
   'path',
+  'base_remote_url',
   'base_sha',
   'last_commit_sha',
   'tracking_branch',
@@ -478,6 +495,7 @@ export const BRANCH_SERVER_MANAGED_FIELDS = [
   'archived_at',
   'archived_by',
   'filesystem_status',
+  'filesystem_attempt',
   'error_message',
   'primary_owner_user_id',
   'sdk_home',
@@ -494,6 +512,7 @@ export type BranchPatchData = Omit<Partial<Branch>, BranchServerManagedField>;
 /** Exact executor settlement for asynchronous branch materialization. */
 export interface BranchFilesystemSettlement {
   branch_id: BranchID;
+  filesystem_attempt_id: UUID;
   filesystem_status: 'ready' | 'failed';
   error_message?: string;
 }

@@ -8,13 +8,13 @@ import type { BoardID, BranchID, UUID } from '@agor/core/types';
 import { eq } from 'drizzle-orm';
 import { describe, expect, vi } from 'vitest';
 import { generateId, shortId } from '../../lib/ids';
-import { update } from '../database-wrapper';
+import { runDatabaseTransaction, update } from '../database-wrapper';
 import { boards, branches } from '../schema';
 import { ownedDbTest as dbTest } from '../test-helpers';
 import { AmbiguousIdError, EntityNotFoundError } from './base';
 import { BoardObjectRepository } from './board-objects';
 import { BranchRepository } from './branches';
-import { RepoRepository } from './repos';
+import { RepoDeletionInProgressError, RepoRepository } from './repos';
 import { ScheduleRepository } from './schedules';
 import { UsersRepository } from './users';
 
@@ -66,6 +66,13 @@ function createBranchData(overrides?: {
   storage_mode?: 'worktree' | 'clone';
   clone_depth?: number;
   archived?: boolean;
+  filesystem_status?: 'creating' | 'ready' | 'failed' | 'preserved' | 'cleaned' | 'deleted';
+  filesystem_attempt?: {
+    attempt_id: UUID;
+    action: 'create' | 'restore';
+    started_at: string;
+    deadline_at: string;
+  } | null;
   permission_source?: 'board' | 'override';
   others_can?: 'none' | 'view' | 'session' | 'prompt' | 'all';
   others_fs_access?: 'none' | 'read' | 'write';
@@ -101,6 +108,8 @@ function createBranchData(overrides?: {
     storage_mode: overrides?.storage_mode,
     clone_depth: overrides?.clone_depth,
     archived: overrides?.archived,
+    filesystem_status: overrides?.filesystem_status,
+    filesystem_attempt: overrides?.filesystem_attempt,
     permission_source: overrides?.permission_source,
     others_can: overrides?.others_can,
     others_fs_access: overrides?.others_fs_access,
@@ -172,6 +181,25 @@ describe('BranchRepository.findBranchIdsByZone', () => {
 // ============================================================================
 
 describe('BranchRepository.create', () => {
+  dbTest('rejects a new branch after repository cleanup is claimed', async ({ db }) => {
+    const repoRepo = new RepoRepository(db);
+    const branchRepo = new BranchRepository(db);
+    const repo = await repoRepo.create(createRepoData());
+    await runDatabaseTransaction(
+      db,
+      async (txDb) => {
+        const scoped = new RepoRepository(txDb);
+        await scoped.lockForBranchInventory(repo.repo_id);
+        await scoped.claimDeletionAttemptLocked(repo.repo_id, generateId(), 60_000);
+      },
+      { sqliteImmediate: true }
+    );
+
+    await expect(
+      branchRepo.create(createBranchData({ repo_id: repo.repo_id }))
+    ).rejects.toBeInstanceOf(RepoDeletionInProgressError);
+  });
+
   dbTest('rejects a missing immutable primary owner', async ({ db }) => {
     const repoRepo = new RepoRepository(db);
     const branchRepo = new BranchRepository(db);
@@ -1135,6 +1163,36 @@ describe('BranchRepository.update', () => {
     });
   });
 
+  dbTest('rejects lifecycle admission after repository cleanup is claimed', async ({ db }) => {
+    const repoRepo = new RepoRepository(db);
+    const branchRepo = new BranchRepository(db);
+    const repo = await repoRepo.create(createRepoData());
+    const created = await branchRepo.create(
+      createBranchData({ repo_id: repo.repo_id, environment_instance: { status: 'running' } })
+    );
+    await runDatabaseTransaction(
+      db,
+      async (txDb) => {
+        const scoped = new RepoRepository(txDb);
+        await scoped.lockForBranchInventory(repo.repo_id);
+        await scoped.claimDeletionAttemptLocked(repo.repo_id, generateId(), 60_000);
+      },
+      { sqliteImmediate: true }
+    );
+
+    await expect(
+      branchRepo.update(
+        created.branch_id,
+        { environment_instance: { status: 'stopping' } },
+        {
+          rejectRepoDeletion: true,
+          expectedEnvironmentGeneration: 0,
+          expectedEnvironmentStatus: 'running',
+        }
+      )
+    ).rejects.toBeInstanceOf(RepoDeletionInProgressError);
+  });
+
   dbTest('refuses archival while lifecycle or Sync ownership is active', async ({ db }) => {
     const repoRepo = new RepoRepository(db);
     const branchRepo = new BranchRepository(db);
@@ -1353,6 +1411,111 @@ describe('BranchRepository.update', () => {
     const refetched = await branchRepo.findById(created.branch_id);
     expect(refetched?.filesystem_status).toBe('ready');
     expect(refetched?.error_message).toBeUndefined();
+  });
+
+  dbTest('settles only the live filesystem materialization attempt once', async ({ db }) => {
+    const repoRepo = new RepoRepository(db);
+    const branchRepo = new BranchRepository(db);
+    const repo = await repoRepo.create(createRepoData());
+    const attemptId = generateId();
+    const staleAttemptId = generateId();
+    const created = await branchRepo.create(
+      createBranchData({
+        repo_id: repo.repo_id,
+        filesystem_status: 'creating',
+        filesystem_attempt: {
+          attempt_id: attemptId,
+          action: 'create',
+          started_at: new Date().toISOString(),
+          deadline_at: new Date(Date.now() + 60_000).toISOString(),
+        },
+      })
+    );
+
+    await expect(
+      branchRepo.update(
+        created.branch_id,
+        { filesystem_status: 'ready', filesystem_attempt: null },
+        { expectedFilesystemAttemptId: staleAttemptId }
+      )
+    ).rejects.toMatchObject({ name: 'BranchFilesystemAttemptConflictError' });
+
+    const ready = await branchRepo.update(
+      created.branch_id,
+      { filesystem_status: 'ready', filesystem_attempt: null },
+      { expectedFilesystemAttemptId: attemptId }
+    );
+    expect(ready).toMatchObject({ filesystem_status: 'ready', filesystem_attempt: null });
+
+    // A lost successful response cannot be replayed as a later failure.
+    await expect(
+      branchRepo.update(
+        created.branch_id,
+        {
+          filesystem_status: 'failed',
+          filesystem_attempt: null,
+          error_message: 'response was lost',
+        },
+        { expectedFilesystemAttemptId: attemptId }
+      )
+    ).rejects.toMatchObject({ name: 'BranchFilesystemAttemptConflictError' });
+    await expect(branchRepo.findById(created.branch_id)).resolves.toMatchObject({
+      filesystem_status: 'ready',
+    });
+
+    const newerAttemptId = generateId();
+    await branchRepo.update(created.branch_id, {
+      filesystem_status: 'creating',
+      filesystem_attempt: {
+        attempt_id: newerAttemptId,
+        action: 'restore',
+        started_at: new Date().toISOString(),
+        deadline_at: new Date(Date.now() + 60_000).toISOString(),
+      },
+    });
+    await expect(
+      branchRepo.update(
+        created.branch_id,
+        {
+          filesystem_status: 'failed',
+          filesystem_attempt: null,
+          error_message: 'old token replay',
+        },
+        { expectedFilesystemAttemptId: attemptId }
+      )
+    ).rejects.toMatchObject({ name: 'BranchFilesystemAttemptConflictError' });
+    await expect(branchRepo.findById(created.branch_id)).resolves.toMatchObject({
+      filesystem_status: 'creating',
+      filesystem_attempt: { attempt_id: newerAttemptId },
+    });
+  });
+
+  dbTest('refuses retirement while filesystem materialization is active', async ({ db }) => {
+    const repoRepo = new RepoRepository(db);
+    const branchRepo = new BranchRepository(db);
+    const repo = await repoRepo.create(createRepoData());
+    const branch = await branchRepo.create(
+      createBranchData({
+        repo_id: repo.repo_id,
+        filesystem_status: 'creating',
+        filesystem_attempt: {
+          attempt_id: generateId(),
+          action: 'create',
+          started_at: new Date().toISOString(),
+          deadline_at: new Date(Date.now() + 60_000).toISOString(),
+        },
+      })
+    );
+
+    await expect(branchRepo.assertRetirementReady(branch.branch_id)).rejects.toMatchObject({
+      name: 'EnvironmentRetirementConflictError',
+    });
+    await expect(
+      branchRepo.update(branch.branch_id, { archived: true }, { requireEnvironmentRetired: true })
+    ).rejects.toMatchObject({ name: 'EnvironmentRetirementConflictError' });
+    await expect(
+      branchRepo.delete(branch.branch_id, { requireEnvironmentRetired: true })
+    ).rejects.toMatchObject({ name: 'EnvironmentRetirementConflictError' });
   });
 
   dbTest('should throw EntityNotFoundError for non-existent ID', async ({ db }) => {
