@@ -444,6 +444,15 @@ describe('protectExternalRepoCrud', () => {
     } as unknown as HookContext;
     expect(() => protectExternalRepoCrud(external)).toThrow('server-managed: deletion_attempt');
 
+    for (const field of ['clone_status', 'clone_error']) {
+      expect(() =>
+        protectExternalRepoCrud({
+          ...external,
+          data: { [field]: field === 'clone_status' ? 'ready' : { message: 'forged' } },
+        } as never)
+      ).toThrow(`server-managed: ${field}`);
+    }
+
     const internal = { ...external, params: { provider: undefined } } as unknown as HookContext;
     expect(protectExternalRepoCrud(internal)).toBe(internal);
   });

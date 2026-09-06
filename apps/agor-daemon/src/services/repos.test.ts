@@ -1,6 +1,6 @@
 import { EXECUTOR_REVOCATION_TRANSPORT_CLEANUP_TIMEOUT_MS } from '@agor/core/config';
 import { EnvironmentRetirementConflictError } from '@agor/core/db';
-import type { Application } from '@agor/core/types';
+import type { Application, UUID } from '@agor/core/types';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ReposService } from './repos';
 
@@ -28,6 +28,8 @@ const repositoryMocks = vi.hoisted(() => ({
   lockRepoForBranchInventory: vi.fn(),
   claimRepoDeletionAttempt: vi.fn(),
   requireRepoDeletionAttempt: vi.fn(),
+  findRepoById: vi.fn(),
+  settleRepoClone: vi.fn(),
   assertBranchRetirementReady: vi.fn(),
   hasNonterminalForBranch: vi.fn(),
   resolveBranchUserAccess: vi.fn(),
@@ -52,7 +54,7 @@ vi.mock('@agor/core/db', async (importOriginal) => {
     RepoRepository: vi.fn().mockImplementation(function RepoRepository() {
       return {
         create: vi.fn(),
-        findById: vi.fn(),
+        findById: repositoryMocks.findRepoById,
         findAll: vi.fn(async () => []),
         update: vi.fn(),
         delete: repositoryMocks.deleteRepo,
@@ -60,6 +62,7 @@ vi.mock('@agor/core/db', async (importOriginal) => {
         lockForBranchInventory: repositoryMocks.lockRepoForBranchInventory,
         claimDeletionAttemptLocked: repositoryMocks.claimRepoDeletionAttempt,
         requireDeletionAttemptLocked: repositoryMocks.requireRepoDeletionAttempt,
+        settleClone: repositoryMocks.settleRepoClone,
       };
     }),
     TaskRepository: vi.fn().mockImplementation(function TaskRepository() {
@@ -115,6 +118,8 @@ beforeEach(() => {
   repositoryMocks.hasNonterminalForBranch.mockReset().mockResolvedValue(false);
   repositoryMocks.claimRepoDeletionAttempt.mockReset().mockResolvedValue(undefined);
   repositoryMocks.requireRepoDeletionAttempt.mockReset().mockResolvedValue(undefined);
+  repositoryMocks.findRepoById.mockReset();
+  repositoryMocks.settleRepoClone.mockReset();
   repositoryMocks.resolveBoardAccess.mockReset().mockResolvedValue({
     capabilities: ['board.view', 'board.attach_branch'],
   });
@@ -602,6 +607,50 @@ describe('ReposService.createBranch Git lifecycle execution', () => {
 });
 
 describe('ReposService.cloneRepository Git lifecycle execution', () => {
+  it('settles clone state only with the exact repo-scoped executor credential', async () => {
+    const repoId = '550e8400-e29b-41d4-a716-446655440001';
+    const settled = {
+      repo_id: repoId as UUID,
+      slug: 'preset-io/agor',
+      clone_status: 'ready',
+      default_branch: 'main',
+    };
+    repositoryMocks.settleRepoClone.mockResolvedValue(settled);
+    const app = {
+      get: () => ({}),
+      service: vi.fn(() => ({ emit: vi.fn() })),
+    } as unknown as Application;
+    const service = new ReposService({} as never, app);
+    const settlement = {
+      repo_id: repoId as UUID,
+      clone_status: 'ready' as const,
+      default_branch: 'main',
+    };
+
+    await expect(
+      service.settleClone(settlement, {
+        provider: 'rest',
+        user: { user_id: 'user-1', role: 'member' },
+        authentication: {
+          strategy: 'jwt',
+          payload: {
+            type: 'executor-session',
+            purpose: 'executor-command',
+            session_id: `git.clone:${repoId}`,
+          },
+        },
+      } as never)
+    ).resolves.toEqual(settled);
+    await expect(
+      service.settleClone(settlement, {
+        provider: 'rest',
+        user: { user_id: 'user-1', role: 'member' },
+        authentication: { strategy: 'jwt', payload: { type: 'access' } },
+      } as never)
+    ).rejects.toThrow('exact repository clone executor token');
+    expect(repositoryMocks.settleRepoClone).toHaveBeenCalledTimes(1);
+  });
+
   it('creates managed storage without delegated user routing', async () => {
     executorMocks.spawnExecutorFireAndForget.mockClear();
 
@@ -618,7 +667,7 @@ describe('ReposService.cloneRepository Git lifecycle execution', () => {
       }),
     } as unknown as Application;
     const service = new ReposService({} as never, app);
-    vi.spyOn(service, 'create').mockResolvedValue({
+    vi.spyOn(service as never, 'createClonePlaceholder').mockResolvedValue({
       repo_id: '550e8400-e29b-41d4-a716-446655440001',
       slug: 'preset-io/agor-teammate',
     } as never);
@@ -650,7 +699,7 @@ describe('ReposService.cloneRepository Git lifecycle execution', () => {
       }),
     } as unknown as Application;
     const service = new ReposService({} as never, app);
-    vi.spyOn(service, 'create').mockResolvedValue({
+    vi.spyOn(service as never, 'createClonePlaceholder').mockResolvedValue({
       repo_id: '550e8400-e29b-41d4-a716-446655440001',
       slug: 'preset-io/agor-admin-clone',
     } as never);
@@ -680,10 +729,12 @@ describe('ReposService.cloneRepository Git lifecycle execution', () => {
       slug: 'preset-io/agor-failed-clone',
       clone_status: 'cloning',
     };
-    const repos = {
-      get: vi.fn(async () => current),
-      patch: vi.fn(async (_id: string, data: object) => ({ ...current, ...data })),
-    };
+    repositoryMocks.findRepoById.mockResolvedValue(current);
+    repositoryMocks.settleRepoClone.mockImplementation(async (data: object) => ({
+      ...current,
+      ...data,
+    }));
+    const repos = { emit: vi.fn() };
     const app = {
       get: () => ({}),
       sessionTokenService: {
@@ -696,25 +747,31 @@ describe('ReposService.cloneRepository Git lifecycle execution', () => {
       }),
     } as unknown as Application;
     const service = new ReposService(db as never, app);
-    vi.spyOn(service, 'create').mockResolvedValue(current as never);
+    vi.spyOn(service as never, 'createClonePlaceholder').mockResolvedValue(current as never);
 
     await service.cloneRepository({ url: 'https://github.com/preset-io/agor-failed-clone.git' }, {
       tenant: { tenant_id: 'tenant-a', source: 'explicit' },
       user: { user_id: '550e8400-e29b-41d4-a716-446655440004' },
     } as never);
     const spawnOptions = executorMocks.spawnExecutorFireAndForget.mock.calls.at(-1)?.[1] as
-      | { onExit?: (code: number | null) => Promise<void> | void }
+      | {
+          onExit?: (
+            code: number | null,
+            context: { mode: 'local' | 'delegated' }
+          ) => Promise<void> | void;
+        }
       | undefined;
 
-    await spawnOptions?.onExit?.(17);
+    await spawnOptions?.onExit?.(17, { mode: 'local' });
 
     expect(tenantScopeMocks.withFreshTenantWrite).toHaveBeenCalledWith(
       db,
       'tenant-a',
       expect.any(Function)
     );
-    expect(repos.get).toHaveBeenCalledWith(current.repo_id);
-    expect(repos.patch).toHaveBeenCalledWith(current.repo_id, {
+    expect(repositoryMocks.findRepoById).toHaveBeenCalledWith(current.repo_id);
+    expect(repositoryMocks.settleRepoClone).toHaveBeenCalledWith({
+      repo_id: current.repo_id,
       clone_status: 'failed',
       clone_error: {
         exit_code: 17,
@@ -722,6 +779,32 @@ describe('ReposService.cloneRepository Git lifecycle execution', () => {
         message: 'Clone exited with code 17 before reporting an error.',
       },
     });
+  });
+
+  it('retains clone ownership after an ambiguous delegated launcher exit', async () => {
+    const repoId = '550e8400-e29b-41d4-a716-446655440001';
+    const app = {
+      get: () => ({
+        execution: { executor_command_nonzero_may_have_dispatched: true },
+      }),
+      sessionTokenService: { generateCommandToken: vi.fn(async () => 'clone-token') },
+      service: vi.fn(() => ({ emit: vi.fn() })),
+    } as unknown as Application;
+    const service = new ReposService({} as never, app);
+    vi.spyOn(service as never, 'createClonePlaceholder').mockResolvedValue({
+      repo_id: repoId,
+      slug: 'preset-io/ambiguous-clone',
+      clone_status: 'cloning',
+    } as never);
+
+    await service.cloneRepository({ url: 'https://github.com/preset-io/ambiguous-clone.git' }, {
+      user: { user_id: '550e8400-e29b-41d4-a716-446655440004' },
+    } as never);
+    const onExit = executorMocks.spawnExecutorFireAndForget.mock.calls.at(-1)?.[1]?.onExit;
+    await onExit?.(17, { mode: 'delegated' } as never);
+
+    expect(repositoryMocks.findRepoById).not.toHaveBeenCalled();
+    expect(repositoryMocks.settleRepoClone).not.toHaveBeenCalled();
   });
 });
 

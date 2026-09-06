@@ -6,6 +6,7 @@
 
 import type {
   Repo,
+  RepoCloneSettlement,
   RepoDeletionAttempt,
   RepoEnvironment,
   RepoEnvironmentConfigV1,
@@ -21,6 +22,7 @@ import {
   insert,
   isPostgresDatabase,
   lockRowForUpdate,
+  runDatabaseTransaction,
   select,
   txAsDb,
   update,
@@ -76,6 +78,13 @@ export class RepoDeletionInProgressError extends RepositoryError {
   ) {
     super(`Repository ${repoId} has a destructive cleanup attempt in progress`);
     this.name = 'RepoDeletionInProgressError';
+  }
+}
+
+export class RepoCloneAttemptConflictError extends RepositoryError {
+  constructor(readonly repoId: UUID) {
+    super(`Repository clone ${repoId} was already settled or superseded`);
+    this.name = 'RepoCloneAttemptConflictError';
   }
 }
 
@@ -319,6 +328,44 @@ export class RepoRepository implements BaseRepository<Repo, Partial<Repo>> {
       throw new RepoDeletionInProgressError(id, repo.deletion_attempt.deadline_at);
     }
     return repo;
+  }
+
+  /** Settle only the exact live clone row; stale/lost-response callbacks cannot overwrite it. */
+  async settleClone(settlement: RepoCloneSettlement): Promise<Repo> {
+    const fullId = await this.resolveId(settlement.repo_id);
+    return runDatabaseTransaction(this.db, async (db) => {
+      await lockRowForUpdate(db, this.db, repos, eq(repos.repo_id, fullId));
+      const row = await select(db).from(repos).where(eq(repos.repo_id, fullId)).one();
+      if (!row) throw new EntityNotFoundError('Repo', settlement.repo_id);
+
+      const current = this.rowToRepo(row);
+      if (current.clone_status !== 'cloning') {
+        throw new RepoCloneAttemptConflictError(current.repo_id);
+      }
+
+      const data = { ...row.data } as typeof row.data & {
+        clone_status?: Repo['clone_status'];
+        clone_error?: Repo['clone_error'];
+        default_branch?: string;
+        environment?: RepoEnvironment;
+      };
+      data.clone_status = settlement.clone_status;
+      if (settlement.clone_status === 'ready') {
+        data.default_branch = settlement.default_branch;
+        if (settlement.environment) data.environment = settlement.environment;
+        delete data.clone_error;
+      } else {
+        data.clone_error = settlement.clone_error;
+      }
+
+      await update(db, repos)
+        .set({ data, updated_at: new Date() })
+        .where(eq(repos.repo_id, fullId))
+        .run();
+      const updated = await select(db).from(repos).where(eq(repos.repo_id, fullId)).one();
+      if (!updated) throw new EntityNotFoundError('Repo', settlement.repo_id);
+      return this.rowToRepo(updated);
+    });
   }
 
   /** Caller must already hold the repository row lock in its native transaction. */

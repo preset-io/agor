@@ -639,7 +639,6 @@ export async function handleGitClone(
 
     // Compute slug for the repo
     const slug = payload.params.slug || computeRepoSlug(safeCloneUrl);
-    const repoName = extractRepoName(slug);
 
     // Create DB record if requested (default: true)
     let repoId: string | undefined;
@@ -672,56 +671,21 @@ export async function handleGitClone(
       // of being silently overwritten by whatever GitHub's HEAD points at.
       const defaultBranch = payload.params.default_branch?.trim() || cloneResult.defaultBranch;
 
-      if (payload.params.repoId) {
-        // Daemon pre-created the row in `cloneRepository` so failures stay
-        // queryable. Fill post-clone fields but keep it `cloning` until the
-        // synchronous operator permission handoff below completes.
-        repoId = payload.params.repoId;
-        console.log(
-          `[git.clone] Patching pre-created repo ${shortId(repoId)} with cloned metadata: ` +
-            `slug=${slug} default_branch=${defaultBranch}` +
-            (payload.params.default_branch ? ' (user-supplied)' : ' (auto-detected)')
-        );
-        await client.service('repos').patch(repoId, {
-          name: repoName,
-          local_path: cloneResult.path,
-          default_branch: defaultBranch,
-          clone_status: 'cloning',
-          // Explicit null clears any prior `clone_error` (e.g. from a retry
-          // through the daemon's failed-row replace path). `deepMerge` in
-          // `RepoRepository.update` propagates the null; `repoToInsert`
-          // coerces it back to `undefined` so the stored shape stays
-          // aligned with the `clone_error?: RepoCloneError` invariant.
-          // Cast: Feathers' patch typing is `Partial<Repo>`, which forbids
-          // null on optional fields even when the merger explicitly handles it.
-          clone_error: null as unknown as undefined,
-          ...(environment ? { environment } : {}),
-        });
-      } else {
-        // Legacy fallback (no pre-created row): create the record now. Used
-        // when a caller invokes the executor directly without going through
-        // `reposService.cloneRepository` (e.g. ad-hoc tooling).
-        console.log(
-          `[git.clone] Creating repo record: slug=${slug} default_branch=${defaultBranch}` +
-            (payload.params.default_branch ? ' (user-supplied)' : ' (auto-detected)')
-        );
-        const repoRecord = await client.service('repos').create({
-          repo_type: 'remote',
-          slug,
-          name: repoName,
-          remote_url: safeCloneUrl,
-          local_path: cloneResult.path,
-          default_branch: defaultBranch,
-          clone_status: 'cloning',
-          ...(environment ? { environment } : {}),
-        });
-        repoId = repoRecord.repo_id;
-        console.log(`[git.clone] Repo record created: ${repoId}`);
+      if (!payload.params.repoId) {
+        throw new Error('Managed git.clone requires a daemon-created repository placeholder');
       }
-
-      if (repoId) {
-        await client.service('repos').patch(repoId, { clone_status: 'ready' });
-      }
+      repoId = payload.params.repoId;
+      console.log(
+        `[git.clone] Settling pre-created repo ${shortId(repoId)}: ` +
+          `slug=${slug} default_branch=${defaultBranch}` +
+          (payload.params.default_branch ? ' (user-supplied)' : ' (auto-detected)')
+      );
+      await client.service('repos').settleClone({
+        repo_id: repoId as UUID,
+        clone_status: 'ready',
+        default_branch: defaultBranch,
+        ...(environment ? { environment } : {}),
+      });
     }
 
     return {
@@ -748,7 +712,8 @@ export async function handleGitClone(
       try {
         const category = categorizeGitError(errorMessage);
         const firstLine = errorMessage.split('\n')[0]?.slice(0, 500) || errorMessage.slice(0, 500);
-        await client.service('repos').patch(payload.params.repoId, {
+        await client.service('repos').settleClone({
+          repo_id: payload.params.repoId as UUID,
           clone_status: 'failed',
           clone_error: {
             // simple-git wraps git's exit code in the message rather than
@@ -1065,7 +1030,7 @@ export async function handleGitBranchAdd(
     // when git worktree add fails. No host permission repair is attempted.
     const fallbackPath = resolvedBranchPath;
     let fallbackCreated = false;
-    if (fallbackPath) {
+    if (fallbackPath && !payload.params.recoveryMode) {
       // Step 1: Ensure directory exists
       if (!existsSync(fallbackPath)) {
         try {

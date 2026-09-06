@@ -2380,32 +2380,16 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     const boardIdExplicitlyProvided = options !== undefined && 'boardId' in options;
     const targetBoardId = boardIdExplicitlyProvided ? options?.boardId : branch.board_id;
 
-    // Update branch - clear archive metadata
-    const patchData: Partial<Branch> = {
-      archived: false,
-      archived_at: undefined,
-      archived_by: undefined,
-      filesystem_status: undefined,
-      updated_at: new Date().toISOString(),
-    };
-    if (boardIdExplicitlyProvided) {
-      patchData.board_id = options?.boardId;
-    }
-
-    const unarchivedBranch = await this.withTenantDatabase(params, () =>
-      this.patch(id, patchData, params)
-    );
-    emitServiceEvent(this.app, {
-      path: 'branches',
-      event: 'patched',
-      data: unarchivedBranch,
-      params,
-      id: unarchivedBranch.branch_id,
-    });
-
-    // Recreate the git branch on filesystem if the directory is missing
-    // (e.g., it was archived with filesystemAction: 'deleted')
     const userId = requestUser.user_id;
+    const delegatedHomeKey = await resolveDelegatedExecutionHomeKey(
+      this.db,
+      userId,
+      this.app.get('config')
+    );
+
+    // Inspect while the branch is still archived. A probe, budget, or token
+    // failure must not publish an unarchived row that clients classify as
+    // filesystem-ready.
     const statusToken = await issueExecutorCommandToken(
       this.app,
       'branch-filesystem-status',
@@ -2421,11 +2405,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       },
       {
         logPrefix: `[BranchesService.unarchive.status ${branch.name}]`,
-        delegatedHomeKey: await resolveDelegatedExecutionHomeKey(
-          this.db,
-          params?.user?.user_id,
-          this.app.get('config')
-        ),
+        delegatedHomeKey,
         templateVariables: {
           branch_id: branch.branch_id,
           user_id: userId,
@@ -2443,72 +2423,84 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       typeof statusResult.data === 'object' &&
       (statusResult.data as { exists?: unknown }).exists === true;
 
+    let filesystemAttemptId: UUID | undefined;
+    let materializationToken: string | undefined;
+    let repo: Repo | undefined;
+    let filesystemAttempt: NonNullable<Branch['filesystem_attempt']> | undefined;
     if (!branchPathExists) {
       console.log(`📂 Branch directory missing, spawning executor to recreate: ${branch.path}`);
-      const filesystemAttemptId = generateId();
+      filesystemAttemptId = generateId();
       const filesystemAttemptStartedAt = new Date();
       const materializationBudget = resolveBranchFilesystemMaterializationBudget(
         resolveExecutorCommandTokenCeilingMs(this.app)
       );
-      const materializationToken = await issueExecutorCommandToken(
+      materializationToken = await issueExecutorCommandToken(
         this.app,
         gitBranchAddExecutorCommandId(filesystemAttemptId),
         userId,
         branch.branch_id,
         { expirationMs: materializationBudget.credentialLifetimeMs }
       );
+      filesystemAttempt = {
+        attempt_id: filesystemAttemptId,
+        action: 'restore',
+        started_at: filesystemAttemptStartedAt.toISOString(),
+        deadline_at: new Date(
+          filesystemAttemptStartedAt.getTime() + materializationBudget.attemptTimeoutMs
+        ).toISOString(),
+      };
 
-      // Set filesystem_status to 'creating' while we rebuild
-      const creatingBranch = await this.withTenantDatabase(params, () =>
-        this.branchRepo.update(
-          id,
-          {
-            filesystem_status: 'creating',
-            filesystem_attempt: {
-              attempt_id: filesystemAttemptId,
-              action: 'restore',
-              started_at: filesystemAttemptStartedAt.toISOString(),
-              deadline_at: new Date(
-                filesystemAttemptStartedAt.getTime() + materializationBudget.attemptTimeoutMs
-              ).toISOString(),
-            },
-          },
-          { rejectRepoDeletion: true }
-        )
-      );
-      emitServiceEvent(this.app, {
-        path: 'branches',
-        event: 'patched',
-        data: creatingBranch,
+      repo = await this.withTenantDatabase(
         params,
-        id: creatingBranch.branch_id,
-      });
-
-      // Look up repo to get local_path
-      const reposService = this.app.service('repos');
-      const repo = await this.withTenantDatabase(
-        params,
-        () => reposService.get(branch.repo_id, params) as Promise<Repo>
+        () => this.app.service('repos').get(branch.repo_id, params) as Promise<Repo>
       );
-
-      // The executor derives the materialization mode from this persisted row.
       const storageMode = branch.storage_mode ?? 'worktree';
       if (storageMode === 'clone' && !repo.remote_url) {
-        const errMsg =
+        throw new BadRequest(
           `Cannot unarchive clone-mode branch '${branch.name}' for repo '${repo.slug}': ` +
-          `repo has no remote_url. The clone source URL is unknown.`;
-        console.error(`⚠️  ${errMsg}`);
-        await this.settleFilesystemIntent(
-          {
-            branch_id: branch.branch_id,
-            filesystem_attempt_id: filesystemAttemptId,
-            filesystem_status: 'failed',
-            error_message: errMsg,
-          },
-          { ...params, provider: undefined }
+            `repo has no remote_url. The clone source URL is unknown.`
         );
-        return unarchivedBranch;
       }
+    }
+
+    const patchData: Partial<Branch> = {
+      archived: false,
+      archived_at: null as unknown as undefined,
+      archived_by: null as unknown as undefined,
+      filesystem_status: branchPathExists ? 'ready' : 'creating',
+      filesystem_attempt: filesystemAttempt ?? (null as unknown as undefined),
+    };
+    if (boardIdExplicitlyProvided) patchData.board_id = options?.boardId;
+
+    let unarchivedBranch: Branch;
+    try {
+      unarchivedBranch = await this.withTenantDatabase(params, () =>
+        this.branchRepo.update(id, patchData, {
+          rejectRepoDeletion: true,
+          expectedArchived: true,
+        })
+      );
+    } catch (error) {
+      if (error instanceof RepoDeletionInProgressError) {
+        throw new Conflict(error.message, {
+          code: 'REPOSITORY_DELETION_IN_PROGRESS',
+          repo_id: error.repoId,
+          deadline_at: error.deadlineAt,
+        });
+      }
+      throw error;
+    }
+    await this.maintainPrimaryTeammateAfterPatch(branch, unarchivedBranch, params);
+    emitServiceEvent(this.app, {
+      path: 'branches',
+      event: 'patched',
+      data: unarchivedBranch,
+      params,
+      id: unarchivedBranch.branch_id,
+    });
+
+    if (!branchPathExists && filesystemAttemptId && materializationToken && repo) {
+      const storageMode = branch.storage_mode ?? 'worktree';
 
       try {
         spawnExecutor(
@@ -2533,11 +2525,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
           },
           {
             logPrefix: `[BranchesService.unarchive ${branch.name}]`,
-            delegatedHomeKey: await resolveDelegatedExecutionHomeKey(
-              this.db,
-              userId,
-              this.app.get('config')
-            ),
+            delegatedHomeKey,
             templateVariables: {
               branch_id: branch.branch_id,
               user_id: userId,
@@ -2572,8 +2560,12 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
         await this.withTenantDatabase(params, async () => {
           const existingObject = (await boardObjectsService.findByBranchId(id)) as {
             object_id: string;
+            board_id?: BoardID;
           } | null;
-          if (!existingObject) {
+          const moveExisting =
+            !!existingObject && boardIdExplicitlyProvided && branch.board_id !== targetBoardId;
+          if (moveExisting) await boardObjectsService.remove(existingObject.object_id);
+          if (!existingObject || moveExisting) {
             const position = await this.computeDefaultBoardPositionForBranch(
               targetBoardId,
               id,

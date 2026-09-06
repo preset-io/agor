@@ -6,6 +6,7 @@ import {
   GroupRepository,
   generateId,
   KnowledgeNamespaceRepository,
+  RepoDeletionInProgressError,
   RepoRepository,
   runWithTenantDatabaseScope,
   UsersRepository,
@@ -2703,7 +2704,7 @@ describe('BranchesService.unarchive', () => {
   const userParams = { user: { user_id: 'user-1' as UUID, role: 'member' } } as never;
 
   it('preserves existing board_id when options.boardId is not provided', async () => {
-    const { service, boardObjectsService, sessionsService } = createServiceHarness();
+    const { service, branchRepo, boardObjectsService, sessionsService } = createServiceHarness();
     const branchId = 'wt-1' as BranchID;
     const existingBoardId = 'board-a' as BoardID;
 
@@ -2714,7 +2715,7 @@ describe('BranchesService.unarchive', () => {
       archived: true,
       board_id: existingBoardId,
     } as never);
-    const patchSpy = vi.spyOn(service, 'patch').mockResolvedValue({
+    const updateSpy = vi.spyOn(branchRepo, 'update').mockResolvedValue({
       branch_id: branchId,
       name: 'WT 1',
       path: '/tmp',
@@ -2728,17 +2729,18 @@ describe('BranchesService.unarchive', () => {
 
     await service.unarchive(branchId, undefined, userParams);
 
-    expect(patchSpy).toHaveBeenCalledWith(
+    expect(updateSpy).toHaveBeenCalledWith(
       branchId,
       expect.objectContaining({
         archived: false,
-        archived_at: undefined,
-        archived_by: undefined,
-        filesystem_status: undefined,
+        archived_at: null,
+        archived_by: null,
+        filesystem_status: 'ready',
+        filesystem_attempt: null,
       }),
-      userParams
+      { rejectRepoDeletion: true, expectedArchived: true }
     );
-    expect(patchSpy.mock.calls[0][1]).not.toHaveProperty('board_id');
+    expect(updateSpy.mock.calls[0][1]).not.toHaveProperty('board_id');
 
     expect(boardObjectsService.findByBranchId).toHaveBeenCalledWith(branchId);
     expect(boardObjectsService.create).toHaveBeenCalledWith({
@@ -2752,7 +2754,7 @@ describe('BranchesService.unarchive', () => {
   });
 
   it('does not create a new board object when one already exists', async () => {
-    const { service, boardObjectsService } = createServiceHarness();
+    const { service, branchRepo, boardObjectsService } = createServiceHarness();
     const branchId = 'wt-2' as BranchID;
     const boardId = 'board-b' as BoardID;
 
@@ -2763,7 +2765,7 @@ describe('BranchesService.unarchive', () => {
       archived: true,
       board_id: boardId,
     } as never);
-    vi.spyOn(service, 'patch').mockResolvedValue({
+    vi.spyOn(branchRepo, 'update').mockResolvedValue({
       branch_id: branchId,
       name: 'WT 2',
       path: '/tmp',
@@ -2779,7 +2781,7 @@ describe('BranchesService.unarchive', () => {
   });
 
   it('uses explicit options.boardId override for patch and placement', async () => {
-    const { service, boardObjectsService } = createServiceHarness();
+    const { service, branchRepo, boardObjectsService } = createServiceHarness();
     const branchId = 'wt-3' as BranchID;
     const oldBoardId = 'board-old' as BoardID;
     const newBoardId = 'board-new' as BoardID;
@@ -2791,7 +2793,7 @@ describe('BranchesService.unarchive', () => {
       archived: true,
       board_id: oldBoardId,
     } as never);
-    const patchSpy = vi.spyOn(service, 'patch').mockResolvedValue({
+    const updateSpy = vi.spyOn(branchRepo, 'update').mockResolvedValue({
       branch_id: branchId,
       name: 'WT 3',
       path: '/tmp',
@@ -2805,19 +2807,83 @@ describe('BranchesService.unarchive', () => {
 
     await service.unarchive(branchId, { boardId: newBoardId }, userParams);
 
-    expect(patchSpy).toHaveBeenCalledWith(
+    expect(updateSpy).toHaveBeenCalledWith(
       branchId,
       expect.objectContaining({
         archived: false,
         board_id: newBoardId,
       }),
-      userParams
+      { rejectRepoDeletion: true, expectedArchived: true }
     );
     expect(boardObjectsService.create).toHaveBeenCalledWith({
       board_id: newBoardId,
       branch_id: branchId,
       position: { x: 7, y: 8 },
     });
+  });
+
+  it('keeps the branch archived when the filesystem probe fails', async () => {
+    const { service, branchRepo } = createServiceHarness();
+    const branchId = 'wt-probe-failure' as BranchID;
+    vi.spyOn(service, 'get').mockResolvedValue({
+      branch_id: branchId,
+      repo_id: 'repo-1',
+      name: 'Probe failure',
+      path: '/tmp/missing',
+      archived: true,
+    } as never);
+    const updateSpy = vi.spyOn(branchRepo, 'update');
+    mockedRequestExecutor.mockResolvedValueOnce({
+      success: false,
+      error: { code: 'PROBE_FAILED', message: 'probe unavailable' },
+    });
+
+    await expect(service.unarchive(branchId, undefined, userParams)).rejects.toThrow(
+      'probe unavailable'
+    );
+    expect(updateSpy).not.toHaveBeenCalled();
+  });
+
+  it('keeps the branch archived when restore credential issuance fails', async () => {
+    const { service, branchRepo, sessionTokenService } = createServiceHarness();
+    const branchId = 'wt-token-failure' as BranchID;
+    vi.spyOn(service, 'get').mockResolvedValue({
+      branch_id: branchId,
+      repo_id: 'repo-1',
+      name: 'Token failure',
+      path: '/tmp/missing',
+      archived: true,
+    } as never);
+    const updateSpy = vi.spyOn(branchRepo, 'update');
+    mockedRequestExecutor.mockResolvedValueOnce({ success: true, data: { exists: false } });
+    sessionTokenService.generateCommandToken
+      .mockResolvedValueOnce('status-token')
+      .mockRejectedValueOnce(new Error('credential ceiling unavailable'));
+
+    await expect(service.unarchive(branchId, undefined, userParams)).rejects.toThrow(
+      'credential ceiling unavailable'
+    );
+    expect(updateSpy).not.toHaveBeenCalled();
+  });
+
+  it('does not publish unarchive while repository cleanup owns admission', async () => {
+    const { service, branchRepo } = createServiceHarness();
+    const branchId = 'wt-delete-race' as BranchID;
+    vi.spyOn(service, 'get').mockResolvedValue({
+      branch_id: branchId,
+      repo_id: 'repo-1',
+      name: 'Delete race',
+      path: '/tmp/existing',
+      archived: true,
+    } as never);
+    vi.spyOn(branchRepo, 'update').mockRejectedValue(
+      new RepoDeletionInProgressError('repo-1' as UUID, '2026-09-06T12:00:00.000Z')
+    );
+
+    await expect(service.unarchive(branchId, undefined, userParams)).rejects.toMatchObject({
+      data: { code: 'REPOSITORY_DELETION_IN_PROGRESS' },
+    });
+    expect(mockedSpawnExecutor).not.toHaveBeenCalled();
   });
 });
 

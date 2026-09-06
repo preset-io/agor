@@ -12,7 +12,11 @@ import { runDatabaseTransaction, select, update } from '../database-wrapper';
 import { repos } from '../schema';
 import { dbTest } from '../test-helpers';
 import { AmbiguousIdError, EntityNotFoundError, RepositoryError } from './base';
-import { RepoDeletionInProgressError, RepoRepository } from './repos';
+import {
+  RepoCloneAttemptConflictError,
+  RepoDeletionInProgressError,
+  RepoRepository,
+} from './repos';
 
 /**
  * Create test repo data
@@ -252,6 +256,31 @@ describe('RepoRepository.create', () => {
     const fetched = await repo.findById(placeholder.repo_id);
     expect(fetched?.clone_status).toBe('failed');
     expect(fetched?.clone_error?.category).toBe('auth_failed');
+  });
+
+  dbTest('settles a clone only once from the live cloning state', async ({ db }) => {
+    const repo = new RepoRepository(db);
+    const placeholder = await repo.create({
+      ...createRepoData({ slug: 'test/settlement-cas' }),
+      clone_status: 'cloning',
+    });
+
+    const ready = await repo.settleClone({
+      repo_id: placeholder.repo_id,
+      clone_status: 'ready',
+      default_branch: 'main',
+    });
+    expect(ready).toMatchObject({ clone_status: 'ready', default_branch: 'main' });
+    expect(ready.clone_error).toBeUndefined();
+
+    await expect(
+      repo.settleClone({
+        repo_id: placeholder.repo_id,
+        clone_status: 'failed',
+        clone_error: { exit_code: 1, category: 'unknown', message: 'late failure' },
+      })
+    ).rejects.toBeInstanceOf(RepoCloneAttemptConflictError);
+    expect((await repo.findById(placeholder.repo_id))?.clone_status).toBe('ready');
   });
 
   // The executor's success patch sends `clone_error: null` to drop the prior

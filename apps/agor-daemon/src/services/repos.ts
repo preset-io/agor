@@ -25,12 +25,14 @@ import {
   resolveBranchFilesystemMaterializationBudget,
   resolveBranchStorageConfig,
   resolveMultiTenancyConfig,
+  validateRepoEnvironment,
 } from '@agor/core/config';
 import {
   BranchRepository,
   EnvironmentRetirementConflictError,
   generateId,
   getCurrentTenantId,
+  RepoCloneAttemptConflictError,
   RepoDeletionInProgressError,
   RepoRepository,
   runWithTenantDatabaseTransaction,
@@ -39,6 +41,10 @@ import {
   type TenantScopeAwareDatabase,
 } from '@agor/core/db';
 import { autoAssignBranchUniqueId } from '@agor/core/environment/variable-resolver';
+import {
+  MANAGED_ENV_EXECUTION_MODE_DEFAULT,
+  validateRepoEnvironmentLifecyclePolicy,
+} from '@agor/core/environment/webhook';
 import {
   type Application,
   BadRequest,
@@ -55,6 +61,7 @@ import type {
   CloneRepositoryResult,
   QueryParams,
   Repo,
+  RepoCloneSettlement,
   RepoEnvironment,
   RepoSlug,
   UserID,
@@ -63,7 +70,11 @@ import type {
 } from '@agor/core/types';
 import { hasMinimumRole, ROLES, TEAMMATE_FRAMEWORK_REPO_URL } from '@agor/core/types';
 import { DrizzleService } from '../adapters/drizzle';
-import { gitBranchAddExecutorCommandId } from '../auth/executor-command-ids.js';
+import {
+  gitBranchAddExecutorCommandId,
+  gitCloneExecutorCommandId,
+} from '../auth/executor-command-ids.js';
+import { matchesExecutorCommandRuntimeScope } from '../auth/executor-runtime-scope.js';
 import type { BranchesServiceImpl } from '../declarations.js';
 import { emitHaNativeSocketEvent, tenantChannelName } from '../realtime/routing.js';
 import { ensureCanAttachBranchToBoard } from '../utils/authorization.js';
@@ -77,6 +88,7 @@ import {
   resolveExecutorResponseCommandCeilingMs,
   spawnExecutorFireAndForget,
 } from '../utils/spawn-executor.js';
+import { classifyExecutorExit } from '../utils/task-launch-state.js';
 import { withFreshTenantWrite } from '../utils/tenant-db-scope.js';
 import {
   issueExecutorCommandToken,
@@ -201,6 +213,112 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     return this.repoRepo.findBySlug(slug);
   }
 
+  /** Exact executor-only settlement for the live clone placeholder. */
+  async settleClone(data: RepoCloneSettlement, params?: RepoParams): Promise<Repo> {
+    if (
+      !data?.repo_id ||
+      !params?.provider ||
+      !matchesExecutorCommandRuntimeScope(params, gitCloneExecutorCommandId(data.repo_id))
+    ) {
+      throw new Forbidden('An exact repository clone executor token is required');
+    }
+
+    const fields = Object.keys(data as unknown as Record<string, unknown>);
+    const allowed =
+      data.clone_status === 'ready'
+        ? ['repo_id', 'clone_status', 'default_branch', 'environment']
+        : ['repo_id', 'clone_status', 'clone_error'];
+    if (
+      (data.clone_status !== 'ready' && data.clone_status !== 'failed') ||
+      fields.some((field) => !allowed.includes(field))
+    ) {
+      throw new BadRequest('Invalid repository clone settlement');
+    }
+
+    let settlement = data;
+    if (data.clone_status === 'ready') {
+      const defaultBranch = data.default_branch?.trim();
+      if (!defaultBranch || defaultBranch.length > 255) {
+        throw new BadRequest('Clone settlement requires a valid default_branch');
+      }
+      if (data.environment !== undefined) {
+        if (!hasMinimumRole((params as AuthenticatedParams | undefined)?.user?.role, ROLES.ADMIN)) {
+          throw new Forbidden('Admin access is required to import repository environment settings');
+        }
+        try {
+          const environment = validateRepoEnvironment(data.environment);
+          validateRepoEnvironmentLifecyclePolicy(
+            environment,
+            this.app.get('config').execution?.managed_envs_execution_mode ??
+              MANAGED_ENV_EXECUTION_MODE_DEFAULT
+          );
+          settlement = { ...data, default_branch: defaultBranch, environment };
+        } catch (error) {
+          throw new BadRequest(error instanceof Error ? error.message : 'Invalid repo environment');
+        }
+      } else {
+        settlement = { ...data, default_branch: defaultBranch };
+      }
+    } else {
+      const error = data.clone_error;
+      const categories = ['auth_failed', 'not_found', 'network', 'git_unavailable', 'unknown'];
+      if (
+        !error ||
+        !Number.isSafeInteger(error.exit_code) ||
+        !categories.includes(error.category) ||
+        typeof error.message !== 'string' ||
+        !error.message.trim() ||
+        error.message.length > 500
+      ) {
+        throw new BadRequest('Clone failure settlement requires a valid clone_error');
+      }
+    }
+
+    return this.commitCloneSettlement(settlement, params);
+  }
+
+  /** Internal safety-net path; shares the same cloning-state CAS as executor settlement. */
+  private async commitCloneSettlement(
+    settlement: RepoCloneSettlement,
+    params?: RepoParams
+  ): Promise<Repo> {
+    try {
+      const repo = await this.repoRepo.settleClone(settlement);
+      emitServiceEvent(this.app, {
+        path: 'repos',
+        event: 'patched',
+        data: repo,
+        params,
+        id: repo.repo_id,
+      });
+      return repo;
+    } catch (error) {
+      if (error instanceof RepoCloneAttemptConflictError) {
+        throw new Conflict(error.message, {
+          code: 'REPOSITORY_CLONE_ALREADY_SETTLED',
+          repo_id: error.repoId,
+        });
+      }
+      throw error;
+    }
+  }
+
+  /** Create the daemon-owned clone placeholder without reopening generic Repo CRUD. */
+  private async createClonePlaceholder(data: Partial<Repo>, params?: RepoParams): Promise<Repo> {
+    const repo = (await super.create(data, {
+      ...params,
+      provider: undefined,
+    } as RepoParams)) as Repo;
+    emitServiceEvent(this.app, {
+      path: 'repos',
+      event: 'created',
+      data: repo,
+      params,
+      id: repo.repo_id,
+    });
+    return repo;
+  }
+
   /**
    * Custom method: Clone repository (fire-and-forget)
    *
@@ -210,8 +328,9 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
    * symptom. The executor then handles:
    * - Git clone
    * - Parse .agor.yml
-   * - Patch the existing row to `'ready'` (with parsed env, default branch)
-   *   or `'failed'` (with categorized clone_error)
+   * - Settle the existing row through an exact repo-scoped callback to
+   *   `'ready'` (with parsed env/default branch) or `'failed'` (with a
+   *   categorized clone_error)
    *
    * Returns immediately with `{ status: 'pending', slug, repo_id }`.
    * Clients see a `repos.created` event for the placeholder row, then a
@@ -309,7 +428,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     // name but distinct Agor slugs do not collide on disk.
     const tenantId = (params as AuthenticatedParams | undefined)?.tenant?.tenant_id;
     const expectedLocalPath = path.join(getReposDir(tenantId), slug);
-    const placeholder = (await this.create(
+    const placeholder = await this.createClonePlaceholder(
       {
         slug: slug as RepoSlug,
         name: data.name || slug,
@@ -320,9 +439,13 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
         clone_status: 'cloning',
       },
       params
-    )) as Repo;
+    );
     const repoId = placeholder.repo_id;
-    const sessionToken = await issueExecutorCommandToken(this.app, 'git.clone', userId);
+    const sessionToken = await issueExecutorCommandToken(
+      this.app,
+      gitCloneExecutorCommandId(repoId),
+      userId
+    );
 
     // Fire and forget - spawn executor and return immediately.
     // Executor handles: git clone, .agor.yml parsing, repo row patching.
@@ -330,10 +453,6 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     // the executor-only credential service.
     // Unix permissions are applied synchronously inside that lifecycle executor.
     const app = this.app;
-    // Capture the Feathers service so the `onExit` safety net (below) writes
-    // through the same service layer the executor uses — that way clients
-    // receive `repos.patched` regardless of which path declares failure.
-    const reposService = this.app.service('repos');
     spawnExecutorFireAndForget(
       {
         command: 'git.clone',
@@ -362,8 +481,21 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
         templateVariables: {
           user_id: userId,
         },
-        onExit: async (code) => {
+        onExit: async (code, context) => {
           if (code !== 0 && code !== null) {
+            const disposition = classifyExecutorExit({
+              mode: context.mode,
+              code,
+              nonzeroMayHaveDispatched:
+                this.app.get('config').execution?.executor_command_nonzero_may_have_dispatched ===
+                true,
+            });
+            if (disposition === 'ambiguous') {
+              console.warn(
+                `[clone ${slug}] Launcher exited with ${code}; retaining clone ownership because delegated work may still be running`
+              );
+              return;
+            }
             console.error(
               `[clone ${slug}] Clone failed with exit code ${code}; resolving durable error`
             );
@@ -382,16 +514,20 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
             const resolveDurableFailure = async () => {
               let current: Repo | undefined;
               try {
-                current = (await reposService.get(repoId)) as Repo;
-                if (current.clone_status === 'cloning') {
-                  current = (await reposService.patch(repoId, {
-                    clone_status: 'failed',
-                    clone_error: {
-                      exit_code: code,
-                      category: 'unknown',
-                      message: `Clone exited with code ${code} before reporting an error.`,
+                current = (await this.repoRepo.findById(repoId)) ?? undefined;
+                if (current?.clone_status === 'cloning') {
+                  current = await this.commitCloneSettlement(
+                    {
+                      repo_id: repoId,
+                      clone_status: 'failed',
+                      clone_error: {
+                        exit_code: code,
+                        category: 'unknown',
+                        message: `Clone exited with code ${code} before reporting an error.`,
+                      },
                     },
-                  })) as Repo;
+                    params
+                  );
                 }
               } catch (err) {
                 console.error(

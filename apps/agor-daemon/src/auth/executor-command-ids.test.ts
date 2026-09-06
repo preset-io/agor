@@ -3,8 +3,10 @@ import {
   environmentLifecycleExecutorCommandId,
   gatewaySlackUploadExecutorCommandId,
   gitBranchAddExecutorCommandId,
+  gitCloneExecutorCommandId,
   parseEnvironmentLifecycleExecutorCommandId,
   parseGitBranchAddExecutorCommandId,
+  parseGitCloneExecutorCommandId,
   uploadMaterializeExecutorCommandId,
 } from './executor-command-ids.js';
 
@@ -34,5 +36,12 @@ describe('executor data-plane command identities', () => {
     expect(gitBranchAddExecutorCommandId(attemptId)).toBe(`git.branch.add:${attemptId}`);
     expect(parseGitBranchAddExecutorCommandId(`git.branch.add:${attemptId}`)).toBe(attemptId);
     expect(parseGitBranchAddExecutorCommandId('git.branch.add')).toBeNull();
+  });
+
+  it('round-trips an exact repository clone identity', () => {
+    const repoId = '550e8400-e29b-41d4-a716-446655440001';
+    expect(gitCloneExecutorCommandId(repoId)).toBe(`git.clone:${repoId}`);
+    expect(parseGitCloneExecutorCommandId(`git.clone:${repoId}`)).toBe(repoId);
+    expect(parseGitCloneExecutorCommandId('git.clone')).toBeNull();
   });
 });

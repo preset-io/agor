@@ -7,7 +7,10 @@ import {
 import { Forbidden, NotAuthenticated } from '@agor/core/feathers';
 import { filterUserGitEnvironment, type UserGitEnvironment } from '@agor/core/git/pure';
 import type { AuthenticatedParams, Params, UserID } from '@agor/core/types';
-import { parseGitBranchAddExecutorCommandId } from '../auth/executor-command-ids.js';
+import {
+  parseGitBranchAddExecutorCommandId,
+  parseGitCloneExecutorCommandId,
+} from '../auth/executor-command-ids.js';
 import { authenticatedExecutorCommandRuntimeScope } from '../auth/executor-runtime-scope.js';
 
 /**
@@ -31,7 +34,8 @@ export class ExecutorGitEnvironmentService {
     const scope = authenticatedExecutorCommandRuntimeScope(params);
     if (
       !scope ||
-      (scope.commandId !== 'git.clone' && !parseGitBranchAddExecutorCommandId(scope.commandId))
+      (!parseGitCloneExecutorCommandId(scope.commandId) &&
+        !parseGitBranchAddExecutorCommandId(scope.commandId))
     ) {
       throw new Forbidden('A Git executor command token is required');
     }

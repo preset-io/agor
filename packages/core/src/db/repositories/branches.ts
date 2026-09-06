@@ -194,6 +194,8 @@ type BranchUpdateOptions = {
   requireEnvironmentRetired?: boolean;
   /** Refuse a new provider mutation while its repository is being destroyed. */
   rejectRepoDeletion?: boolean;
+  /** Apply an archive transition only while the row still has this state. */
+  expectedArchived?: boolean;
   /** Exact asynchronous filesystem materialization settlement boundary. */
   expectedFilesystemAttemptId?: UUID;
   /** Fence one expired attempt and replace it using database-derived time. */
@@ -828,6 +830,15 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
       }
 
       const current = this.rowToBranch(currentRow, baseUrl);
+
+      if (
+        options?.expectedArchived !== undefined &&
+        current.archived !== options.expectedArchived
+      ) {
+        throw new RepositoryError(
+          `Branch ${current.branch_id} archive state changed before the operation was admitted`
+        );
+      }
 
       if (options?.requireEnvironmentRetired) {
         this.assertEnvironmentRetired(current, currentRow.environment_generation);

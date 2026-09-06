@@ -65,6 +65,7 @@ import type {
   PatchAgenticToolPreset,
   PermissionMode,
   Repo,
+  RepoCloneSettlement,
   RuntimeTelemetryInput,
   Schedule,
   ScheduleCreateData,
@@ -559,6 +560,8 @@ export interface BoardCommentRepositionService {
  * Repos service with branch management
  */
 export interface ReposService extends AgorService<Repo> {
+  /** Exact git.clone executor callback; ordinary clients cannot call it. */
+  settleClone(data: RepoCloneSettlement, params?: Params): Promise<Repo>;
   /**
    * Create a git branch for a repository.
    *
@@ -1336,6 +1339,9 @@ function extendReposService(client: AgorClient): void {
     methods?: (...names: string[]) => unknown;
   };
   if (reposService[REPOS_SERVICE_EXTENDED]) return;
+  if (typeof reposService.methods === 'function') {
+    reposService.methods('settleClone');
+  }
   reposService[REPOS_SERVICE_EXTENDED] = true;
 }
 

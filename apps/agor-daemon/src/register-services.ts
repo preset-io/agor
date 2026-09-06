@@ -631,7 +631,7 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   // which is not the Feathers custom-method contract, and it is already exposed as
   // the RBAC-guarded `/repos/:id/branches` route that the UI and CLI both use.
   app.use('/repos', createReposService(db, app), {
-    methods: ['find', 'get', 'create', 'update', 'patch', 'remove'],
+    methods: ['find', 'get', 'create', 'update', 'patch', 'remove', 'settleClone'],
   });
 
   // First-class schedules. RBAC hooks wired in register-hooks.ts.

@@ -206,6 +206,10 @@ export interface TasksServiceImpl extends Service<Task, Partial<Task>, FeathersP
  * Repos service with custom methods (server-side implementation)
  */
 export interface ReposServiceImpl extends Service<Repo, Partial<Repo>, FeathersParams> {
+  settleClone(
+    data: import('@agor/core/types').RepoCloneSettlement,
+    params?: FeathersParams
+  ): Promise<Repo>;
   addLocalRepository(data: { path: string; slug?: string }, params?: FeathersParams): Promise<Repo>;
   cloneRepository(
     data: { url: string; name?: string; slug?: string; default_branch?: string },

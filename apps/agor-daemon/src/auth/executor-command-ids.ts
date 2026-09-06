@@ -24,6 +24,21 @@ export function gitBranchAddExecutorCommandId(attemptId: string): string {
   return `git.branch.add:${component(attemptId)}`;
 }
 
+export function gitCloneExecutorCommandId(repoId: string): string {
+  return `git.clone:${component(repoId)}`;
+}
+
+export function parseGitCloneExecutorCommandId(commandId: string): string | null {
+  const match = /^git\.clone:([^:]+)$/.exec(commandId);
+  if (!match) return null;
+  try {
+    const repoId = decodeURIComponent(match[1]);
+    return repoId.length > 0 ? repoId : null;
+  } catch {
+    return null;
+  }
+}
+
 export function parseGitBranchAddExecutorCommandId(commandId: string): string | null {
   const match = /^git\.branch\.add:([^:]+)$/.exec(commandId);
   if (!match) return null;
