@@ -1573,6 +1573,220 @@ describe('SessionCanvas zoom shortcuts', () => {
     expect(patch).not.toHaveBeenCalled();
   });
 
+  it('matches the largest selected width and reflows it in one atomic write', async () => {
+    nodesStateOverride = [
+      {
+        id: 'small-note',
+        type: 'markdown',
+        position: { x: 0, y: 0 },
+        width: 240,
+        height: 140,
+        selected: true,
+        data: {},
+      },
+      {
+        id: 'large-app',
+        type: 'appNode',
+        position: { x: 800, y: 0 },
+        width: 640,
+        height: 320,
+        selected: true,
+        data: {},
+      },
+      {
+        id: 'medium-artifact',
+        type: 'artifactNode',
+        position: { x: 0, y: 600 },
+        width: 360,
+        height: 220,
+        selected: true,
+        data: {},
+      },
+    ];
+    const patch = vi.fn().mockResolvedValue({});
+    const client = { service: vi.fn(() => ({ patch })) } as unknown as AgorClient;
+    let board = {
+      board_id: 'board-1',
+      objects: {
+        'small-note': { type: 'markdown', x: 0, y: 0, width: 240, content: 'Small' },
+        'large-app': {
+          type: 'app',
+          x: 800,
+          y: 0,
+          width: 640,
+          height: 320,
+          title: 'Large',
+          files: {},
+        },
+        'medium-artifact': {
+          type: 'artifact',
+          x: 0,
+          y: 600,
+          width: 360,
+          height: 220,
+          artifact_id: 'artifact-1',
+        },
+      },
+    } as unknown as Board;
+    const view = render(
+      <AntApp>
+        <ConnectionProvider
+          value={{
+            connected: true,
+            connecting: false,
+            outOfSync: false,
+            capturedSha: null,
+            currentSha: null,
+          }}
+        >
+          <SessionCanvas board={board} client={client} branches={[]} />
+        </ConnectionProvider>
+      </AntApp>
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Match width' }));
+
+    await waitFor(() => expect(patch).toHaveBeenCalledTimes(1));
+    const write = patch.mock.calls[0]?.[1];
+    expect(write).toMatchObject({ _action: 'applyLayout', placements: {} });
+    const writtenObjects = Object.values(write.objects) as Array<{
+      width: number;
+      height?: number;
+      x: number;
+      y: number;
+    }>;
+    expect(writtenObjects.map((object) => object.width)).toEqual([640, 640, 640]);
+    const origins = writtenObjects.map((object) => `${object.x}:${object.y}`);
+    expect(new Set(origins).size).toBe(3);
+
+    board = { ...board, objects: { ...board.objects, ...write.objects } } as Board;
+    nodesStateOverride = nodesStateOverride.map((node) => {
+      const object = write.objects[node.id];
+      return object
+        ? {
+            ...node,
+            position: { x: object.x, y: object.y },
+            width: object.width,
+            ...('height' in object ? { height: object.height } : {}),
+          }
+        : node;
+    });
+    view.rerender(
+      <AntApp>
+        <ConnectionProvider
+          value={{
+            connected: true,
+            connecting: false,
+            outOfSync: false,
+            capturedSha: null,
+            currentSha: null,
+          }}
+        >
+          <SessionCanvas board={board} client={client} branches={[]} />
+        </ConnectionProvider>
+      </AntApp>
+    );
+    patch.mockClear();
+    fireEvent.click(screen.getByRole('button', { name: 'Match width' }));
+    await act(async () => Promise.resolve());
+    expect(patch).not.toHaveBeenCalled();
+  });
+
+  it('routes Grid alignment through cell tracks without collapsing columns', async () => {
+    const fixtures = [
+      { id: 'wide', x: 0, y: 0, width: 600, height: 160 },
+      { id: 'short', x: 700, y: 0, width: 200, height: 120 },
+      { id: 'narrow', x: 0, y: 500, width: 200, height: 280 },
+      { id: 'long', x: 700, y: 500, width: 500, height: 180 },
+    ];
+    nodesStateOverride = fixtures.map((item) => ({
+      id: item.id,
+      type: 'appNode',
+      position: { x: item.x, y: item.y },
+      width: item.width,
+      height: item.height,
+      selected: true,
+      data: {},
+    }));
+    const patch = vi.fn().mockResolvedValue({});
+    const client = { service: vi.fn(() => ({ patch })) } as unknown as AgorClient;
+    let board = {
+      board_id: 'board-1',
+      objects: Object.fromEntries(
+        fixtures.map((item) => [
+          item.id,
+          {
+            type: 'app',
+            x: item.x,
+            y: item.y,
+            width: item.width,
+            height: item.height,
+            title: item.id,
+            files: {},
+          },
+        ])
+      ),
+    } as unknown as Board;
+    const view = render(
+      <AntApp>
+        <ConnectionProvider
+          value={{
+            connected: true,
+            connecting: false,
+            outOfSync: false,
+            capturedSha: null,
+            currentSha: null,
+          }}
+        >
+          <SessionCanvas board={board} client={client} branches={[]} />
+        </ConnectionProvider>
+      </AntApp>
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Layout options' }));
+    fireEvent.change(screen.getByLabelText('Number of columns'), { target: { value: '2' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Apply layout' }));
+    await waitFor(() => expect(patch).toHaveBeenCalledTimes(1));
+    const gridWrite = patch.mock.calls[0]?.[1];
+    board = { ...board, objects: { ...board.objects, ...gridWrite.objects } } as Board;
+    nodesStateOverride = nodesStateOverride.map((node) => {
+      const object = gridWrite.objects[node.id];
+      return object
+        ? {
+            ...node,
+            position: { x: object.x, y: object.y },
+            width: object.width,
+            height: object.height,
+          }
+        : node;
+    });
+    view.rerender(
+      <AntApp>
+        <ConnectionProvider
+          value={{
+            connected: true,
+            connecting: false,
+            outOfSync: false,
+            capturedSha: null,
+            currentSha: null,
+          }}
+        >
+          <SessionCanvas board={board} client={client} branches={[]} />
+        </ConnectionProvider>
+      </AntApp>
+    );
+    patch.mockClear();
+
+    fireEvent.click(screen.getByRole('button', { name: 'More alignment actions' }));
+    fireEvent.click(await screen.findByText('Right / end'));
+
+    await waitFor(() => expect(patch).toHaveBeenCalledTimes(1));
+    const aligned = patch.mock.calls[0]?.[1].objects;
+    expect(aligned.narrow.x).toBeGreaterThan(gridWrite.objects.wide.x);
+    expect(aligned.short.x).toBeGreaterThan(gridWrite.objects.short.x);
+    expect(aligned.narrow.y).toBe(gridWrite.objects.narrow.y);
+    expect(aligned.short.y).toBe(gridWrite.objects.short.y);
+  });
+
   it('atomically matches an unequal three-zone grid to uniform tracks and repeats as a no-op', async () => {
     nodesStateOverride = [
       {

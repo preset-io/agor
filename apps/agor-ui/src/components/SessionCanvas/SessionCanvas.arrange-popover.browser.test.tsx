@@ -86,7 +86,12 @@ describe('SessionCanvas Arrange Board popover (real browser)', () => {
       },
     } as unknown as Board;
     const patch = vi.fn();
-    const client = { service: vi.fn(() => ({ patch })) } as unknown as AgorClient;
+    const client = {
+      service: vi.fn(() => ({
+        patch,
+        find: vi.fn().mockResolvedValue({ capabilities: ['board.edit'] }),
+      })),
+    } as unknown as AgorClient;
     const renderCanvas = (board: Board) => (
       <AntApp>
         <ConnectionProvider
@@ -189,7 +194,12 @@ describe('SessionCanvas Arrange Board popover (real browser)', () => {
         changed_placement_ids: [],
       };
     });
-    const client = { service: vi.fn(() => ({ patch })) } as unknown as AgorClient;
+    const client = {
+      service: vi.fn(() => ({
+        patch,
+        find: vi.fn().mockResolvedValue({ capabilities: ['board.edit'] }),
+      })),
+    } as unknown as AgorClient;
     render(
       <AntApp>
         <ConnectionProvider

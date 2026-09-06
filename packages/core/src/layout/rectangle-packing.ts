@@ -818,8 +818,6 @@ export function layoutCompactRectangles(
   };
 }
 
-export type SelectionRowDistribution = 'packed' | 'justify';
-
 export type SelectionAlignment = 'left' | 'center' | 'right' | 'top' | 'middle' | 'bottom';
 
 export interface SelectionAlignmentOptions {
@@ -900,95 +898,6 @@ export function layoutAlignedRectangles(
     const placement = byId.get(item.id);
     return placement ? [placement] : [];
   });
-}
-
-export interface SelectionGridLayoutOptions {
-  /** Fix one grid axis. When both are omitted, a balanced grid is chosen. */
-  columns?: number;
-  rows?: number;
-  gapX?: number;
-  gapY?: number;
-  gridSize?: number;
-  /** Stretch each item to the tallest measured rectangle in its own row. */
-  matchRowHeights?: boolean;
-  /** Spread complete rows across targetWidth while keeping the outer edges fixed. */
-  rowDistribution?: SelectionRowDistribution;
-  /** Existing selection width used by justified rows. */
-  targetWidth?: number;
-}
-
-/**
- * Deterministic row-major grid for heterogeneous free-canvas selections.
- * Spatial order is preserved, either axis can drive the track count, and the
- * optional row treatments operate on the same measured rectangles rather than
- * replacing them with generic card sizes.
- */
-export function layoutSelectionGrid(
-  sourceItems: readonly CompactRectangleLayoutItem[],
-  options: SelectionGridLayoutOptions = {}
-): RectangleLayoutResult {
-  const gridSize = finiteNonNegative(options.gridSize, 0);
-  if (sourceItems.length === 0) return layoutRectangles([], { gridSize });
-  const items = [...sourceItems].sort(
-    (a, b) =>
-      finiteNonNegative(a.sourceY, 0) - finiteNonNegative(b.sourceY, 0) ||
-      finiteNonNegative(a.sourceX, 0) - finiteNonNegative(b.sourceX, 0) ||
-      a.id.localeCompare(b.id)
-  );
-  const requestedRows = options.rows
-    ? Math.max(1, Math.min(items.length, Math.floor(options.rows)))
-    : undefined;
-  const requestedColumns = options.columns
-    ? Math.max(1, Math.min(items.length, Math.floor(options.columns)))
-    : undefined;
-  const columns =
-    requestedColumns ??
-    (requestedRows
-      ? Math.ceil(items.length / requestedRows)
-      : Math.max(1, Math.ceil(Math.sqrt(items.length))));
-  const base = layoutRectangles(
-    items.map(({ id, width, height }) => ({ id, width, height })),
-    {
-      exactColumns: columns,
-      gapX: options.gapX,
-      gapY: options.gapY,
-      gridSize,
-      allowDeck: false,
-    }
-  );
-  const targetWidth = Math.max(
-    base.width,
-    ceilToGrid(finiteNonNegative(options.targetWidth, base.width), gridSize)
-  );
-  const placements = base.placements.map((placement) => ({ ...placement }));
-  const rows = new Map<number, RectanglePlacement[]>();
-  for (const placement of placements) {
-    const row = rows.get(placement.row) ?? [];
-    row.push(placement);
-    rows.set(placement.row, row);
-  }
-  for (const row of rows.values()) {
-    row.sort((a, b) => a.column - b.column || a.id.localeCompare(b.id));
-    if (options.matchRowHeights) {
-      const height = Math.max(...row.map((item) => item.height));
-      for (const item of row) item.height = height;
-    }
-    if (options.rowDistribution !== 'justify' || row.length < 2) continue;
-    const occupiedWidth = row.reduce((total, item) => total + item.width, 0);
-    const freeUnits = Math.max(0, Math.round((targetWidth - occupiedWidth) / (gridSize || 1)));
-    const slots = row.length - 1;
-    const baseGapUnits = Math.floor(freeUnits / slots);
-    let remainder = freeUnits % slots;
-    let x = 0;
-    for (const [index, item] of row.entries()) {
-      item.x = x;
-      if (index === row.length - 1) continue;
-      const gapUnits = baseGapUnits + (remainder > 0 ? 1 : 0);
-      if (remainder > 0) remainder -= 1;
-      x += item.width + gapUnits * (gridSize || 1);
-    }
-  }
-  return { ...base, placements, width: targetWidth };
 }
 
 /**

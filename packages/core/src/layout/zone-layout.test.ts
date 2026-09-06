@@ -127,6 +127,35 @@ describe('zone content justification', () => {
     expect(first.placements.map(({ y }) => y)).toEqual(mixed.map(({ y }) => y));
   });
 
+  it('uses Grid alignment as justify-self/align-self without collapsing columns', () => {
+    const grid = [
+      { id: 'wide', x: 20, y: 100, width: 360, height: 120 },
+      { id: 'tall', x: 420, y: 100, width: 180, height: 300 },
+      { id: 'narrow', x: 20, y: 440, width: 160, height: 180 },
+      { id: 'partial', x: 420, y: 440, width: 320, height: 100 },
+    ];
+    const gridFrame = getZoneLayoutFrame({ width: 780 });
+    const right = justifyZoneContentCluster(grid, gridFrame, 760, 'right', {
+      columns: 2,
+      gap: 40,
+    });
+    const bottom = justifyZoneContentCluster(grid, gridFrame, 760, 'bottom', {
+      columns: 2,
+      gap: 40,
+    });
+    const rightById = new Map(right.placements.map((item) => [item.id, item]));
+    const bottomById = new Map(bottom.placements.map((item) => [item.id, item]));
+
+    expect(right.fits).toBe(true);
+    expect(rightById.get('wide')?.x).toBe(20);
+    expect(rightById.get('narrow')?.x).toBe(220);
+    expect(rightById.get('tall')?.x).toBe(560);
+    expect(rightById.get('partial')?.x).toBe(420);
+    expect(bottomById.get('wide')?.y).toBe(280);
+    expect(bottomById.get('tall')?.y).toBe(100);
+    expect(bottomById.get('partial')?.y).toBe(520);
+  });
+
   it('refuses an axis that cannot fit instead of clipping or distorting the cluster', () => {
     const oversized = [{ id: 'too-wide', x: 40, y: 120, width: 700, height: 100 }];
     expect(justifyZoneContentCluster(oversized, frame, 900, 'right')).toEqual({

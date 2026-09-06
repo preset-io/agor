@@ -2524,7 +2524,7 @@ describe('board layout tools with branch entities present', () => {
     });
   });
 
-  it('places and sizes zones on the manual board grid', async () => {
+  it('grid-aligns frames and the cluster origin while preserving the exact MCP gap', async () => {
     const { app } = makeApp({
       entities: [],
       objects: {
@@ -2552,7 +2552,16 @@ describe('board layout tools with branch entities present', () => {
     );
 
     expect(parsed.updates).toHaveLength(2);
-    for (const update of parsed.updates) expectBoardGridRect(update);
+    expect(parsed.gap).toBe(31);
+    for (const update of parsed.updates) {
+      expect(update.size.width % BOARD_GRID_SIZE).toBe(0);
+      expect(update.size.height % BOARD_GRID_SIZE).toBe(0);
+    }
+    expect(parsed.updates[0].position.x % BOARD_GRID_SIZE).toBe(0);
+    expect(parsed.updates[0].position.y % BOARD_GRID_SIZE).toBe(0);
+    expect(
+      parsed.updates[1].position.y - (parsed.updates[0].position.y + parsed.updates[0].size.height)
+    ).toBe(31);
   });
 
   it('persists one container batch and re-packs each visible child in the same call', async () => {
@@ -2613,6 +2622,75 @@ describe('board layout tools with branch entities present', () => {
     expect(parsed.updates.map((update: { arrangedItems: number }) => update.arrangedItems)).toEqual(
       [1, 1]
     );
+  });
+
+  it('shares exact Grid, match, and cell-alignment options in one idempotent MCP batch', async () => {
+    const boardPatches: Array<Record<string, unknown>> = [];
+    const { app } = makeApp({
+      entities: [],
+      objects: {
+        note: { type: 'markdown', x: 120, y: 140, width: 300, height: 180, content: '# Brief' },
+        app: {
+          type: 'app',
+          x: 900,
+          y: 160,
+          width: 640,
+          height: 260,
+          title: 'Fictional metrics',
+          template: 'react',
+          files: {},
+        },
+        locked: {
+          type: 'artifact',
+          artifact_id: 'artifact-locked',
+          x: 1900,
+          y: 800,
+          width: 920,
+          height: 420,
+          locked: true,
+        },
+      },
+      boardPatches,
+    });
+    const arrange = registerAndCaptureHandler('agor_boards_arrange_zones', {
+      app,
+      userId: 'user-1',
+      baseServiceParams,
+    });
+
+    const args = {
+      boardId: 'board-1',
+      mode: 'grid' as const,
+      columns: 2,
+      gap: 27,
+      justifyRows: false,
+      matchWidth: true,
+      cellHorizontalAlignment: 'end' as const,
+      cellVerticalAlignment: 'center' as const,
+      packZoneContents: false,
+    };
+    const first = JSON.parse((await arrange(args)).content[0].text);
+
+    expect(first.gap).toBe(27);
+    expect(first.looseUpdates).toHaveLength(2);
+    expect(
+      first.looseUpdates.map((update: { size: { width: number } }) => update.size.width)
+    ).toEqual([640, 640]);
+    expect(boardPatches).toHaveLength(1);
+    expect(boardPatches[0]).toMatchObject({
+      _action: 'applyLayout',
+      objects: {
+        note: expect.objectContaining({ width: 640 }),
+        app: expect.objectContaining({ width: 640 }),
+      },
+      placements: {},
+      expected: expect.any(Object),
+    });
+    expect((boardPatches[0]!.objects as Record<string, unknown>).locked).toBeUndefined();
+
+    const second = JSON.parse((await arrange(args)).content[0].text);
+    expect(second.looseUpdates).toEqual(first.looseUpdates);
+    expect(boardPatches).toHaveLength(1);
   });
 
   it('defaults Pack zone contents on, repairs anchored protrusion, compacts waste, and is idempotent', async () => {

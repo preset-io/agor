@@ -1,11 +1,10 @@
+import { planBoardZoneArrangement } from '@agor/core/layout/board-zone-arrangement';
 import {
   BOARD_GRID_SIZE,
   BOARD_SNAP_GRID,
   ceilBoardGridSize,
   LayoutObstacleError,
   layoutAlignedRectangles,
-  layoutCompactRectangles,
-  layoutSelectionGrid,
   placeLayoutAroundFixedObstacles,
   snapBoardGridPoint,
   snapBoardGridValue,
@@ -41,6 +40,7 @@ import type {
 import {
   AlignCenterOutlined,
   AlignLeftOutlined,
+  AlignRightOutlined,
   AppstoreOutlined,
   BorderOutlined,
   ColumnHeightOutlined,
@@ -49,8 +49,10 @@ import {
   DeleteOutlined,
   FileMarkdownOutlined,
   MinusOutlined,
+  MoreOutlined,
   PlusOutlined,
   SelectOutlined,
+  VerticalAlignBottomOutlined,
   VerticalAlignMiddleOutlined,
   VerticalAlignTopOutlined,
   ZoomInOutlined,
@@ -58,6 +60,7 @@ import {
 import {
   Button,
   Checkbox,
+  Dropdown,
   Input,
   Modal,
   Popover,
@@ -832,10 +835,18 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
     const localPositionsRef = useRef<Record<string, { x: number; y: number }>>({});
     const localZoneGeometryRef = useRef<Record<string, ZoneGeometry>>({});
     const selectionLayoutOrderRef = useRef<SelectionLayoutContinuity | undefined>(undefined);
+    const selectionPlannerRef = useRef<
+      | {
+          signature: string;
+          options: ReturnType<typeof selectionBoardZoneArrangementOptions>;
+        }
+      | undefined
+    >(undefined);
     const selectionLayoutBoardIdRef = useRef(board?.board_id);
     if (selectionLayoutBoardIdRef.current !== board?.board_id) {
       selectionLayoutBoardIdRef.current = board?.board_id;
       selectionLayoutOrderRef.current = undefined;
+      selectionPlannerRef.current = undefined;
     }
     // Track objects we've deleted locally (to prevent them from reappearing during WebSocket updates)
     const deletedObjectsRef = useRef<Set<string>>(new Set());
@@ -2910,7 +2921,16 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
     );
     const handleLayoutAction = useCallback(
       async (
-        action: 'arrange' | 'left' | 'center' | 'top' | 'middle' | 'width' | 'height',
+        action:
+          | 'arrange'
+          | 'left'
+          | 'center'
+          | 'right'
+          | 'top'
+          | 'middle'
+          | 'bottom'
+          | 'width'
+          | 'height',
         layoutSettings?: SelectionLayoutSettings
       ) => {
         if (!board || !client || selectedLayoutNodes.length < 2) return;
@@ -2922,13 +2942,48 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
               node.type ?? ''
             )
         );
-        if (action === 'arrange' && selectedTopLevelRoots) {
+        const selectionSignature = selectedLayoutNodes
+          .map((node) => node.id)
+          .sort()
+          .join('\u0000');
+        const rememberedPlanner =
+          selectionPlannerRef.current?.signature === selectionSignature
+            ? selectionPlannerRef.current.options
+            : undefined;
+        const explicitPlanner = selectionBoardZoneArrangementOptions(
+          selectedLayoutNodes.length,
+          layoutSettings
+        );
+        const shouldUsePlanner =
+          action === 'arrange' ||
+          action === 'width' ||
+          action === 'height' ||
+          (rememberedPlanner?.mode === 'grid' &&
+            ['left', 'center', 'right', 'top', 'middle', 'bottom'].includes(action));
+        const plannerOptions =
+          action === 'arrange' ? explicitPlanner : (rememberedPlanner ?? explicitPlanner);
+        if (shouldUsePlanner) {
+          selectionPlannerRef.current = { signature: selectionSignature, options: plannerOptions };
+        }
+        if (shouldUsePlanner && selectedTopLevelRoots) {
           const selectedZoneIds = selectedLayoutNodes
             .filter((node) => node.type === 'zone')
             .map((node) => node.id);
           await arrangeBoardZones(selectedZoneIds, {
-            ...selectionBoardZoneArrangementOptions(selectedLayoutNodes.length, layoutSettings),
+            ...plannerOptions,
             ...(!layoutSettings ? { targetAspectRatio: getUsableBoardAspect() } : {}),
+            ...(action === 'width'
+              ? { matchWidth: true, packZoneContents: false, resizeZoneFrames: false }
+              : {}),
+            ...(action === 'height'
+              ? { matchHeight: true, packZoneContents: false, resizeZoneFrames: false }
+              : {}),
+            ...(action === 'left' ? { cellHorizontalAlignment: 'start' as const } : {}),
+            ...(action === 'center' ? { cellHorizontalAlignment: 'center' as const } : {}),
+            ...(action === 'right' ? { cellHorizontalAlignment: 'end' as const } : {}),
+            ...(action === 'top' ? { cellVerticalAlignment: 'start' as const } : {}),
+            ...(action === 'middle' ? { cellVerticalAlignment: 'center' as const } : {}),
+            ...(action === 'bottom' ? { cellVerticalAlignment: 'end' as const } : {}),
             userInitiated: true,
             layoutScope: 'selection',
             viewportIntentToken,
@@ -2959,43 +3014,59 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
         const left = snapBoardGridValue(Math.min(...rects.map((item) => item.position.x)));
         const right = Math.max(...rects.map((item) => item.position.x + item.width));
         const top = snapBoardGridValue(Math.min(...rects.map((item) => item.position.y)));
-        const targetWidth = rects[0]?.persistedSize.width ?? 240;
-        const targetHeight = rects[0]?.persistedSize.height ?? 120;
         const order = stableSelectionLayoutOrder(
           rects.map(({ node, position }) => ({ id: node.id, position })),
           selectionLayoutOrderRef.current
         );
         const stableOrder = order.ids;
-        const orderById = new Map(stableOrder.map((id, index) => [id, index]));
-        const layoutItems = rects.map(({ node, position, width, height }) => ({
-          id: node.id,
-          width,
-          height,
-          sourceX: orderById.get(node.id) ?? 0,
-          sourceY: 0,
-        }));
-        const autoLayout =
-          action !== 'arrange'
-            ? null
-            : layoutSettings?.mode === 'grid'
-              ? layoutSelectionGrid(layoutItems, {
-                  ...(layoutSettings.trackAxis === 'columns'
-                    ? { columns: layoutSettings.trackCount }
-                    : { rows: layoutSettings.trackCount }),
-                  gapX: BOARD_GRID_SIZE * 2,
-                  gapY: BOARD_GRID_SIZE * 2,
-                  gridSize: BOARD_GRID_SIZE,
-                  matchRowHeights: layoutSettings.matchRowHeights,
-                  rowDistribution: layoutSettings.rowDistribution,
-                  targetWidth: right - left,
-                })
-              : layoutCompactRectangles(layoutItems, {
-                  gapX: BOARD_GRID_SIZE * 2,
-                  gapY: BOARD_GRID_SIZE * 2,
-                  gridSize: BOARD_GRID_SIZE,
-                });
+        const rectById = new Map(rects.map((rect) => [rect.node.id, rect]));
+        const layoutItems = stableOrder.flatMap((id) => {
+          const rect = rectById.get(id);
+          return rect
+            ? [
+                {
+                  id,
+                  width: rect.width,
+                  height: rect.height,
+                  x: rect.position.x,
+                  y: rect.position.y,
+                  sourceX: rect.position.x,
+                  sourceY: rect.position.y,
+                  minWidth: rect.persistedSize.width,
+                  minHeight: rect.persistedSize.height,
+                  resizable: rect.node.data?.locked !== true,
+                },
+              ]
+            : [];
+        });
+        const autoLayout = !shouldUsePlanner
+          ? null
+          : (() => {
+              const plan = planBoardZoneArrangement([], {
+                ...plannerOptions,
+                ...(action === 'width' ? { matchWidth: true } : {}),
+                ...(action === 'height' ? { matchHeight: true } : {}),
+                ...(action === 'left' ? { cellHorizontalAlignment: 'start' as const } : {}),
+                ...(action === 'center' ? { cellHorizontalAlignment: 'center' as const } : {}),
+                ...(action === 'right' ? { cellHorizontalAlignment: 'end' as const } : {}),
+                ...(action === 'top' ? { cellVerticalAlignment: 'start' as const } : {}),
+                ...(action === 'middle' ? { cellVerticalAlignment: 'center' as const } : {}),
+                ...(action === 'bottom' ? { cellVerticalAlignment: 'end' as const } : {}),
+                looseItems: layoutItems,
+                anchorToSelectionBounds: true,
+                packZoneContents: false,
+                resizeZoneFrames: false,
+              });
+              return { ...plan.layout, placements: plan.looseItems };
+            })();
         const alignedPlacements =
-          action === 'left' || action === 'center' || action === 'top' || action === 'middle'
+          !shouldUsePlanner &&
+          (action === 'left' ||
+            action === 'center' ||
+            action === 'right' ||
+            action === 'top' ||
+            action === 'middle' ||
+            action === 'bottom')
             ? layoutAlignedRectangles(layoutItems, action, {
                 gap: BOARD_GRID_SIZE * 2,
                 gridSize: BOARD_GRID_SIZE,
@@ -3074,13 +3145,14 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
         let updates = rects.map(({ node, position, width, height, persistedSize }) => {
           const autoPlacement = autoPlacementById.get(node.id);
           const alignedPlacement = alignedPlacementById.get(node.id);
-          const nextWidth = action === 'width' ? targetWidth : persistedSize.width;
+          const nextWidth =
+            (action === 'width' || action === 'arrange') && autoPlacement
+              ? autoPlacement.width
+              : persistedSize.width;
           const nextHeight =
-            action === 'height'
-              ? targetHeight
-              : action === 'arrange' && autoPlacement && layoutSettings?.matchRowHeights
-                ? persistedSize.height + (autoPlacement.height - height)
-                : persistedSize.height;
+            (action === 'height' || action === 'arrange') && autoPlacement
+              ? autoPlacement.height
+              : persistedSize.height;
           let x = position.x;
           let y = position.y;
           if (autoPlacement) {
@@ -3100,6 +3172,7 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
             height: nextHeight,
             layoutWidth: autoPlacement?.width ?? nextWidth,
             layoutHeight: autoPlacement?.height ?? nextHeight,
+            sizeChanged: nextWidth !== persistedSize.width || nextHeight !== persistedSize.height,
           };
         });
         selectionLayoutOrderRef.current = {
@@ -3162,7 +3235,7 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
             {
               ...node,
               position,
-              ...(action === 'width' || action === 'height' || layoutSettings?.matchRowHeights
+              ...(update.sizeChanged
                 ? {
                     width: update.width,
                     height: update.height,
@@ -3217,9 +3290,7 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
               ...objectData,
               x: update.x,
               y: update.y,
-              ...(action === 'width' || action === 'height' || layoutSettings?.matchRowHeights
-                ? { width: update.width, height: update.height }
-                : {}),
+              ...(update.sizeChanged ? { width: update.width, height: update.height } : {}),
             };
             if (JSON.stringify(nextObject) !== JSON.stringify(objectData)) {
               canvasObjectUpdates[update.node.id] = nextObject as BoardObject;
@@ -3962,10 +4033,6 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
               {(
                 [
                   ['arrange', 'Tidy up', <AppstoreOutlined key="arrange" />],
-                  ['left', 'Align left', <AlignLeftOutlined key="left" />],
-                  ['center', 'Align center', <AlignCenterOutlined key="center" />],
-                  ['top', 'Align top', <VerticalAlignTopOutlined key="top" />],
-                  ['middle', 'Align middle', <VerticalAlignMiddleOutlined key="middle" />],
                   ['width', 'Match width', <ColumnWidthOutlined key="width" />],
                   ['height', 'Match height', <ColumnHeightOutlined key="height" />],
                 ] as const
@@ -3986,6 +4053,45 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
                   </Tooltip>
                 );
               })}
+              <Dropdown
+                trigger={['click']}
+                classNames={{ root: CANVAS_LAYOUT_CONTROLS_CLASS }}
+                menu={{
+                  selectable: false,
+                  items: [
+                    { key: 'left', label: 'Left / start', icon: <AlignLeftOutlined /> },
+                    { key: 'center', label: 'Horizontal center', icon: <AlignCenterOutlined /> },
+                    { key: 'right', label: 'Right / end', icon: <AlignRightOutlined /> },
+                    { type: 'divider' },
+                    { key: 'top', label: 'Top / start', icon: <VerticalAlignTopOutlined /> },
+                    {
+                      key: 'middle',
+                      label: 'Vertical center',
+                      icon: <VerticalAlignMiddleOutlined />,
+                    },
+                    {
+                      key: 'bottom',
+                      label: 'Bottom / end',
+                      icon: <VerticalAlignBottomOutlined />,
+                    },
+                  ],
+                  onClick: ({ key, domEvent }) => {
+                    domEvent.stopPropagation();
+                    void handleLayoutAction(
+                      key as 'left' | 'center' | 'right' | 'top' | 'middle' | 'bottom'
+                    );
+                  },
+                }}
+              >
+                <Tooltip title="Align within Grid cells; Compact aligns the cluster">
+                  <Button
+                    size="small"
+                    icon={<MoreOutlined />}
+                    aria-label="More alignment actions"
+                    onMouseDown={(event) => event.stopPropagation()}
+                  />
+                </Tooltip>
+              </Dropdown>
               <SelectionLayoutPopover
                 selectionCount={selectedLayoutNodes.length}
                 zoneOnlySelection={selectedLayoutNodes.every((node) => node.type === 'zone')}

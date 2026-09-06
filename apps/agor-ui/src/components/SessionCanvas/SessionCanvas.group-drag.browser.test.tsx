@@ -62,7 +62,12 @@ describe('SessionCanvas selected-zone drag (real browser)', () => {
         changed_placement_ids: [],
       };
     });
-    const client = { service: vi.fn(() => ({ patch })) } as unknown as AgorClient;
+    const client = {
+      service: vi.fn(() => ({
+        patch,
+        find: vi.fn().mockResolvedValue({ capabilities: ['board.edit'] }),
+      })),
+    } as unknown as AgorClient;
     const renderBoard = () =>
       render(
         <ConnectionProvider

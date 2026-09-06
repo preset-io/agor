@@ -65,6 +65,10 @@ export interface JustifiedZoneOptions {
   matchRowHeights?: boolean;
   /** Placement of a short final row when it is not justified. */
   lastRowAlignment?: 'start' | 'center' | 'end';
+  /** Align a non-stretched item inside its assigned fixed column track. */
+  cellHorizontalAlignment?: 'start' | 'center' | 'end';
+  /** Align a non-stretched item inside its row track. */
+  cellVerticalAlignment?: 'start' | 'center' | 'end';
   /**
    * Preferred row height, the photo-grid knob.
    *
@@ -307,7 +311,10 @@ export function layoutJustifiedZones(
     gridSize > 0 && value !== 0 ? Math.ceil(value / gridSize) * gridSize : value;
   const floor = (value: number): number =>
     gridSize > 0 ? Math.floor(value / gridSize) * gridSize : value;
-  const gap = ceil(nonNegative(options.gap, 40));
+  // Gaps are an explicit visual contract, not a dimension to quantize. Item
+  // frames and the cluster origin may remain board-grid aligned while the
+  // distance between neighboring frames stays exactly what the user chose.
+  const gap = nonNegative(options.gap, 40);
   const startX = snap(Number.isFinite(options.startX) ? (options.startX as number) : 80);
   const startY = snap(Number.isFinite(options.startY) ? (options.startY as number) : 80);
   const targetWidth = Math.max(gridSize, floor(positive(options.targetWidth, 1600)));
@@ -443,7 +450,14 @@ export function layoutJustifiedZones(
       );
     }
 
-    const actualWidth = widths.reduce((sum, width) => sum + width, 0) + gap * (row.length - 1);
+    // Fixed columns are real cells, not merely a source for the widest item.
+    // Advance through the complete track width even when the item cannot (or
+    // must not) resize; otherwise right/center alignment collapses a
+    // multi-column grid toward a line.
+    const trackWidths = useFixedTracks
+      ? solved.shapes.map((_shape, column) => fixedTrackWidths[column] ?? widths[column])
+      : widths;
+    const actualWidth = trackWidths.reduce((sum, width) => sum + width, 0) + gap * (row.length - 1);
     const alignment = isLastRow ? (options.lastRowAlignment ?? 'start') : 'start';
     let x =
       startX +
@@ -452,15 +466,21 @@ export function layoutJustifiedZones(
         : alignment === 'end'
           ? Math.max(0, targetWidth - actualWidth)
           : 0);
+    const rowTrackHeight = Math.max(0, ...solved.shapes.map((shape) => shape.height));
     let actualRowHeight = 0;
     row.forEach((zone, columnIndex) => {
       const shape = solved.shapes[columnIndex];
       const height =
         zone.resizable && options.matchRowHeights !== false ? solved.rowHeight : shape.height;
+      const trackWidth = trackWidths[columnIndex] ?? widths[columnIndex];
+      const horizontalSlack = Math.max(0, trackWidth - widths[columnIndex]);
+      const verticalSlack = Math.max(0, rowTrackHeight - height);
+      const alignOffset = (alignment: 'start' | 'center' | 'end', slack: number) =>
+        alignment === 'end' ? slack : alignment === 'center' ? snap(slack / 2) : 0;
       placements.push({
         id: zone.id,
-        x,
-        y,
+        x: x + alignOffset(options.cellHorizontalAlignment ?? 'start', horizontalSlack),
+        y: y + alignOffset(options.cellVerticalAlignment ?? 'start', verticalSlack),
         width: widths[columnIndex],
         height,
         row: rowIndex,
@@ -468,8 +488,8 @@ export function layoutJustifiedZones(
         columns: shape.columns,
         slackY: height - shape.height,
       });
-      x += widths[columnIndex] + gap;
-      actualRowHeight = Math.max(actualRowHeight, height);
+      x += trackWidth + gap;
+      actualRowHeight = Math.max(actualRowHeight, rowTrackHeight, height);
     });
 
     widest = Math.max(widest, actualWidth);

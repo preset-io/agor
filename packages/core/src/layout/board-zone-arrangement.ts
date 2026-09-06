@@ -63,6 +63,11 @@ export interface BoardZoneArrangementInput {
   fontScale?: number;
   status?: string;
   layout?: Partial<ZoneLayoutPolicy>;
+  /** Capability-aware frame resizing. False keeps this root at its safe size. */
+  resizable?: boolean;
+  /** Persisted/manual frame floors which matching may never cross. */
+  minWidth?: number;
+  minHeight?: number;
   items: readonly BoardZoneArrangementItem[];
 }
 
@@ -76,6 +81,11 @@ export interface BoardZoneArrangementLooseItem {
   compact?: boolean;
   densityExpandable?: boolean;
   expandedSize?: { width: number; height: number };
+  /** Whether explicit Match width/height may resize this root. */
+  resizable?: boolean;
+  /** Render/content/manual floors which matching may never cross. */
+  minWidth?: number;
+  minHeight?: number;
 }
 
 export interface BoardZoneArrangementOptions {
@@ -105,6 +115,14 @@ export interface BoardZoneArrangementOptions {
   matchRowHeights?: boolean;
   /** Give every zone in an outer column that column's widest final frame. */
   matchColumnWidths?: boolean;
+  /** Match every eligible root to the largest content-safe width in scope. */
+  matchWidth?: boolean;
+  /** Match every eligible root to the largest content-safe height in scope. */
+  matchHeight?: boolean;
+  /** CSS-grid-like alignment inside each fixed column track. */
+  cellHorizontalAlignment?: 'start' | 'center' | 'end';
+  /** CSS-grid-like alignment inside each row track. */
+  cellVerticalAlignment?: 'start' | 'center' | 'end';
   /** Master switch for changing zone frames. Pack still grows unsafe frames. */
   resizeZoneFrames?: boolean;
   /** Alignment for a short, non-justified final row. */
@@ -147,9 +165,6 @@ export interface BoardZoneArrangementPlan {
   /** Present when the operation also packed free top-level board nodes. */
   boardLayout?: CompactRectangleLayoutResult;
 }
-
-const gridGap = (value: number): number =>
-  value === 0 ? 0 : Math.max(BOARD_GRID_SIZE, ceilBoardGridValue(value));
 
 const exactGap = (value: number): number => (Number.isFinite(value) ? Math.max(0, value) : 0);
 
@@ -208,7 +223,7 @@ export function planBoardZoneArrangement(
   const packZoneContents = options.packZoneContents !== false;
   const mode = options.mode ?? (options.compactOuterLayout ? 'compact' : 'grid');
   const resizeZoneFrames = packZoneContents && options.resizeZoneFrames !== false;
-  const outerGap = gridGap(options.gap ?? DEFAULT_BOARD_ZONE_ARRANGEMENT.gap);
+  const outerGap = exactGap(options.gap ?? DEFAULT_BOARD_ZONE_ARRANGEMENT.gap);
   // Callers provide the persisted logical order. Sorting it by the geometry
   // this function is about to replace makes row order feed back into the next
   // invocation (and lets Arrange oscillate between two valid grids).
@@ -291,7 +306,7 @@ export function planBoardZoneArrangement(
     return { zone, policy, frame, orderedItems, items, shapes, gap, compact, compactById };
   });
   const preparedById = new Map(prepared.map((entry) => [entry.zone.id, entry]));
-  const preparedLooseItems = orderedLooseItems.map((item) => {
+  const naturalLooseItems = orderedLooseItems.map((item) => {
     const densityExpandable = Boolean(
       item.entityType && (item.densityExpandable ?? isBoardEntityDensityExpandable(item.entityType))
     );
@@ -306,12 +321,73 @@ export function planBoardZoneArrangement(
         : compact === false && item.compact === true && item.expandedSize
           ? item.expandedSize
           : { width: item.width, height: item.height };
-    return { ...item, ...size, compact };
+    return {
+      ...item,
+      width: Math.max(size.width, item.minWidth ?? 0),
+      height: Math.max(size.height, item.minHeight ?? 0),
+      compact,
+    };
   });
+
+  const eligibleZone = (entry: (typeof prepared)[number]) => entry.zone.resizable !== false;
+  const eligibleLoose = (item: (typeof naturalLooseItems)[number]) => item.resizable !== false;
+  const matchedWidth = options.matchWidth
+    ? Math.max(
+        0,
+        ...prepared
+          .filter(eligibleZone)
+          .map((entry) =>
+            Math.max(
+              entry.zone.width,
+              entry.zone.minWidth ?? 0,
+              Math.min(...entry.shapes.map((shape) => shape.width))
+            )
+          ),
+        ...naturalLooseItems.filter(eligibleLoose).map((item) => item.width)
+      )
+    : undefined;
+  const matchedHeight = options.matchHeight
+    ? Math.max(
+        0,
+        ...prepared
+          .filter(eligibleZone)
+          .map((entry) =>
+            Math.max(
+              entry.zone.height,
+              entry.zone.minHeight ?? 0,
+              Math.min(...entry.shapes.map((shape) => shape.height))
+            )
+          ),
+        ...naturalLooseItems.filter(eligibleLoose).map((item) => item.height)
+      )
+    : undefined;
+  const planningShapes = (entry: (typeof prepared)[number]) => {
+    let shapes = entry.shapes;
+    if (matchedWidth !== undefined && eligibleZone(entry)) {
+      const fitting = shapes.filter((shape) => shape.width <= matchedWidth);
+      shapes = (fitting.length > 0 ? fitting : shapes).map((shape) => ({
+        ...shape,
+        width: Math.max(matchedWidth, shape.width),
+      }));
+    }
+    if (matchedHeight !== undefined && eligibleZone(entry)) {
+      const fitting = shapes.filter((shape) => shape.height <= matchedHeight);
+      shapes = (fitting.length > 0 ? fitting : shapes).map((shape) => ({
+        ...shape,
+        height: Math.max(matchedHeight, shape.height),
+      }));
+    }
+    return shapes;
+  };
+  const preparedLooseItems = naturalLooseItems.map((item) => ({
+    ...item,
+    ...(matchedWidth !== undefined && eligibleLoose(item) ? { width: matchedWidth } : {}),
+    ...(matchedHeight !== undefined && eligibleLoose(item) ? { height: matchedHeight } : {}),
+  }));
 
   const compactShapeById = new Map(
     prepared.map((entry) => {
-      const shape = [...entry.shapes].sort(
+      const shape = [...planningShapes(entry)].sort(
         (left, right) =>
           Math.max(left.width, left.height) - Math.max(right.width, right.height) ||
           left.width * left.height - right.width * right.height ||
@@ -367,8 +443,16 @@ export function planBoardZoneArrangement(
             const entry = preparedById.get(root.id);
             return {
               id: root.id,
-              shapes: entry?.shapes ?? [{ columns: 1, width: root.width, height: root.height }],
-              resizable: Boolean(entry && resizeZoneFrames),
+              shapes: entry
+                ? planningShapes(entry)
+                : [{ columns: 1, width: root.width, height: root.height }],
+              resizable: Boolean(
+                entry &&
+                  resizeZoneFrames &&
+                  entry.zone.resizable !== false &&
+                  matchedWidth === undefined &&
+                  matchedHeight === undefined
+              ),
             };
           }),
           {
@@ -395,6 +479,8 @@ export function planBoardZoneArrangement(
             justifyLastRow: options.justifyLastRow ?? DEFAULT_BOARD_ZONE_ARRANGEMENT.justifyLastRow,
             lastRowAlignment: options.lastRowAlignment ?? 'start',
             matchRowHeights: resizeZoneFrames && options.matchRowHeights !== false,
+            cellHorizontalAlignment: options.cellHorizontalAlignment,
+            cellVerticalAlignment: options.cellVerticalAlignment,
             gridSize: BOARD_GRID_SIZE,
           }
         )
@@ -409,7 +495,7 @@ export function planBoardZoneArrangement(
       const preferred =
         gridPlacement === undefined
           ? compactShapeById.get(entry.zone.id)
-          : entry.shapes
+          : planningShapes(entry)
               .filter((shape) => shape.columns === gridPlacement.columns)
               .sort(
                 (left, right) =>
@@ -427,30 +513,27 @@ export function planBoardZoneArrangement(
       const shape = selectedShapeById.get(entry.zone.id);
       if (!shape) throw new Error(`Missing final shape for zone '${entry.zone.id}'.`);
       const placement = gridPlacementById.get(entry.zone.id);
+      let frame: { width: number; height: number };
       if (!packZoneContents) {
-        return [entry.zone.id, { width: entry.zone.width, height: entry.zone.height }] as const;
-      }
-      if (resizeZoneFrames && placement) {
-        return [
-          entry.zone.id,
-          {
-            width: options.matchColumnWidths === false ? shape.width : placement.width,
-            height: options.matchRowHeights === false ? shape.height : placement.height,
-          },
-        ] as const;
-      }
-      if (resizeZoneFrames) {
-        return [entry.zone.id, { width: shape.width, height: shape.height }] as const;
-      }
-      // The OFF control preserves a safe manual frame. A frame that is already
-      // too small still grows just enough; Pack may never leave protruding children.
-      return [
-        entry.zone.id,
-        {
+        frame = { width: entry.zone.width, height: entry.zone.height };
+      } else if (resizeZoneFrames && placement) {
+        frame = {
+          width: options.matchColumnWidths === false ? shape.width : placement.width,
+          height: options.matchRowHeights === false ? shape.height : placement.height,
+        };
+      } else if (resizeZoneFrames) {
+        frame = { width: shape.width, height: shape.height };
+      } else {
+        // The OFF control preserves a safe manual frame. A frame that is already
+        // too small still grows just enough; Pack may never leave protruding children.
+        frame = {
           width: Math.max(entry.zone.width, shape.width),
           height: Math.max(entry.zone.height, shape.height),
-        },
-      ] as const;
+        };
+      }
+      if (eligibleZone(entry) && matchedWidth !== undefined) frame.width = matchedWidth;
+      if (eligibleZone(entry) && matchedHeight !== undefined) frame.height = matchedHeight;
+      return [entry.zone.id, frame] as const;
     })
   );
 

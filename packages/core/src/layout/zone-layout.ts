@@ -265,6 +265,13 @@ export interface JustifiedZoneContents {
   placements: ZoneContentRect[];
 }
 
+export interface ZoneGridCellAlignmentOptions {
+  /** Stable row-major item count; partial final rows retain their membership. */
+  columns: number;
+  /** Exact configured gap between tracks. */
+  gap: number;
+}
+
 const JUSTIFY_OVERLAP_TOLERANCE = 0.5;
 
 function connectedSpanComponents(
@@ -317,7 +324,8 @@ export function justifyZoneContentCluster(
   items: readonly ZoneContentRect[],
   frame: ZoneLayoutFrame,
   zoneHeight: number,
-  justification: ZoneContentJustification
+  justification: ZoneContentJustification,
+  grid?: ZoneGridCellAlignmentOptions
 ): JustifiedZoneContents {
   if (items.length === 0) return { fits: true, placements: [] };
 
@@ -327,6 +335,68 @@ export function justifyZoneContentCluster(
   const contentBottom = zoneHeight - frame.padding;
   const horizontal =
     justification === 'left' || justification === 'middle' || justification === 'right';
+
+  // Grid alignment is justify-self/align-self, not cluster alignment. Keep
+  // every item in its row-major cell and move it only through the slack owned
+  // by that column/row track. This is deliberately separate from the compact
+  // component behavior below, where aligning a cluster edge is intentional.
+  if (grid && grid.columns > 1) {
+    const columns = Math.max(1, Math.min(items.length, Math.floor(grid.columns)));
+    const rows = Math.ceil(items.length / columns);
+    const gap = Math.max(0, grid.gap);
+    const columnWidths = Array.from({ length: columns }, () => 0);
+    const rowHeights = Array.from({ length: rows }, () => 0);
+    items.forEach((item, index) => {
+      const column = index % columns;
+      const row = Math.floor(index / columns);
+      columnWidths[column] = Math.max(columnWidths[column] ?? 0, item.width);
+      rowHeights[row] = Math.max(rowHeights[row] ?? 0, item.height);
+    });
+    const requiredWidth = columnWidths.reduce((sum, width) => sum + width, 0) + gap * (columns - 1);
+    const requiredHeight = rowHeights.reduce((sum, height) => sum + height, 0) + gap * (rows - 1);
+    if (
+      requiredWidth > contentRight - contentLeft + JUSTIFY_OVERLAP_TOLERANCE ||
+      requiredHeight > contentBottom - contentTop + JUSTIFY_OVERLAP_TOLERANCE
+    ) {
+      return { fits: false, placements: [...items] };
+    }
+    const columnOffsets: number[] = [];
+    const rowOffsets: number[] = [];
+    let x = contentLeft;
+    for (const width of columnWidths) {
+      columnOffsets.push(x);
+      x += width + gap;
+    }
+    let y = contentTop;
+    for (const height of rowHeights) {
+      rowOffsets.push(y);
+      y += height + gap;
+    }
+    const offset = (slack: number) =>
+      justification === 'right' || justification === 'bottom'
+        ? slack
+        : justification === 'middle' || justification === 'vertical_middle'
+          ? snapBoardGridValue(slack / 2)
+          : 0;
+    return {
+      fits: true,
+      placements: items.map((item, index) => {
+        const column = index % columns;
+        const row = Math.floor(index / columns);
+        return {
+          ...item,
+          x: horizontal
+            ? (columnOffsets[column] ?? contentLeft) +
+              offset(Math.max(0, (columnWidths[column] ?? item.width) - item.width))
+            : (columnOffsets[column] ?? contentLeft),
+          y: horizontal
+            ? (rowOffsets[row] ?? contentTop)
+            : (rowOffsets[row] ?? contentTop) +
+              offset(Math.max(0, (rowHeights[row] ?? item.height) - item.height)),
+        };
+      }),
+    };
+  }
   const components = connectedSpanComponents(items, horizontal ? 'vertical' : 'horizontal');
   const placements = items.map((item) => ({ ...item }));
 

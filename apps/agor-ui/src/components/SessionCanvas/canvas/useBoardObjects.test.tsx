@@ -97,11 +97,11 @@ describe('justifyZoneContents production path', () => {
 
     await act(async () => view.result.current.justifyZoneContents(zoneId, 'middle'));
 
-    expect(view.boardsPatch).not.toHaveBeenCalled();
-    expect(view.boardObjectsPatch).toHaveBeenCalledTimes(1);
-    expect(view.boardObjectsPatch).toHaveBeenCalledWith('placement-branch', {
-      position: { x: 80, y: 100 },
+    expect(view.boardsPatch).toHaveBeenCalledTimes(1);
+    expect(layoutPlacements(view.boardsPatch)).toMatchObject({
+      'placement-branch': { position: { x: 80, y: 100 }, size: { width: 380, height: 240 } },
     });
+    expect(view.boardObjectsPatch).not.toHaveBeenCalled();
     expect(view.setNodes).toHaveBeenCalledTimes(1);
     expect(showSuccess).toHaveBeenCalledWith('Justified 1 items to the center.');
   });
@@ -121,11 +121,11 @@ describe('justifyZoneContents production path', () => {
 
     await act(async () => view.result.current.justifyZoneContents(zoneId, 'vertical_middle'));
 
-    expect(view.boardsPatch).not.toHaveBeenCalled();
-    expect(view.boardObjectsPatch).toHaveBeenCalledTimes(1);
-    expect(view.boardObjectsPatch).toHaveBeenCalledWith('placement-branch', {
-      position: { x: 20, y: 140 },
+    expect(view.boardsPatch).toHaveBeenCalledTimes(1);
+    expect(layoutPlacements(view.boardsPatch)).toMatchObject({
+      'placement-branch': { position: { x: 20, y: 140 }, size: { width: 500, height: 240 } },
     });
+    expect(view.boardObjectsPatch).not.toHaveBeenCalled();
     expect(view.setNodes).toHaveBeenCalledTimes(1);
     expect(showSuccess).toHaveBeenCalledWith('Centered 1 items vertically in the zone.');
   });
@@ -160,13 +160,61 @@ describe('justifyZoneContents production path', () => {
 
     await act(async () => view.result.current.justifyZoneContents(zoneId, 'middle'));
 
-    expect(view.boardsPatch).not.toHaveBeenCalled();
-    expect(view.boardObjectsPatch).toHaveBeenCalledTimes(1);
-    expect(view.boardObjectsPatch).toHaveBeenCalledWith('placement-card', {
-      position: { x: 80, y: 380 },
+    expect(view.boardsPatch).toHaveBeenCalledTimes(1);
+    expect(layoutPlacements(view.boardsPatch)).toMatchObject({
+      'placement-card': { position: { x: 80, y: 380 }, size: { width: 380, height: 100 } },
     });
+    expect(view.boardObjectsPatch).not.toHaveBeenCalled();
     expect(view.setNodes).toHaveBeenCalledTimes(1);
     expect(showSuccess).toHaveBeenCalledWith('Justified 1 items to the center.');
+  });
+
+  it('aligns inside configured Grid cells and commits one authoritative batch', async () => {
+    const gridZone = {
+      ...zone,
+      width: 820,
+      height: 760,
+      layout: { mode: 'manual', preset: 'grid', columns: 2, gap: 40 },
+    } as const;
+    const gridNodes: Node[] = [
+      { ...branch, id: 'wide', width: 360, height: 120, position: { x: 20, y: 100 } },
+      { ...branch, id: 'tall', width: 180, height: 300, position: { x: 420, y: 100 } },
+      { ...branch, id: 'narrow', width: 160, height: 180, position: { x: 20, y: 440 } },
+      { ...branch, id: 'partial', width: 320, height: 100, position: { x: 420, y: 440 } },
+    ];
+    const placements = gridNodes.map((node) => ({
+      object_id: `placement-${node.id}`,
+      branch_id: node.id,
+      zone_id: zoneId,
+      position: node.position,
+      size: { width: node.width, height: node.height },
+    }));
+    const routed = makeRoutedClient();
+    const view = renderHook(
+      () =>
+        useBoardObjects({
+          board: makeBoard({ [zoneId]: gridZone }),
+          client: routed.client,
+          boardObjectsForBoard: placements as never,
+          nodes: gridNodes,
+          setNodes: vi.fn(),
+          deletedObjectsRef: { current: new Set<string>() },
+        }),
+      { wrapper }
+    );
+
+    await act(async () => view.result.current.justifyZoneContents(zoneId, 'right'));
+
+    expect(routed.boardsPatch).toHaveBeenCalledTimes(1);
+    expect(routed.boardObjectsPatch).not.toHaveBeenCalled();
+    const written = layoutPlacements(routed.boardsPatch) as Record<
+      string,
+      { position: { x: number; y: number } }
+    >;
+    expect(written['placement-narrow']?.position.x).toBe(220);
+    expect(written['placement-tall']?.position.x).toBe(560);
+    expect(written['placement-narrow']?.position.y).toBe(440);
+    expect(written['placement-tall']?.position.y).toBe(100);
   });
 });
 

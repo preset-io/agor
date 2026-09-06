@@ -1764,6 +1764,7 @@ export const useBoardObjects = ({
         fontSize: liveZoneData?.fontSize ?? persistedZone.fontSize,
         status: liveZoneData?.status ?? persistedZone.status,
       };
+      const policy = normalizeZoneLayoutPolicy(zone.layout);
       const placementByNodeId = new Map<string, BoardEntityObject>();
       for (const placement of boardObjectsForBoard) {
         if (placement.zone_id !== zoneId) continue;
@@ -1794,13 +1795,25 @@ export const useBoardObjects = ({
         return;
       }
 
+      const alignmentChildren =
+        policy.preset === 'grid' && (policy.columns ?? 0) > 1
+          ? [...children].sort(
+              (left, right) =>
+                left.rect.y - right.rect.y ||
+                left.rect.x - right.rect.x ||
+                left.rect.id.localeCompare(right.rect.id)
+            )
+          : children;
       const justified = justifyZoneContentCluster(
-        children.map(({ rect }) => rect),
+        alignmentChildren.map(({ rect }) => rect),
         getZoneLayoutFrame(zone, {
           fontScale: renderedZoneFontScale(zoneId, zone.width),
         }),
         zone.height,
-        justification
+        justification,
+        policy.preset === 'grid' && (policy.columns ?? 0) > 1
+          ? { columns: policy.columns ?? 1, gap: policy.gap ?? 24 }
+          : undefined
       );
       if (!justified.fits) {
         showWarning('The contents do not fit on that axis. Resize or tidy the zone first.');
@@ -1837,7 +1850,13 @@ export const useBoardObjects = ({
         return;
       }
       const viewportIntentToken = onUserLayoutStart?.();
-      if (!(await demoteAutoZone(zoneId))) return;
+      const demotingAutoZone = policy.mode === 'auto';
+      if (demotingAutoZone) {
+        manuallyControlledZoneIdsRef.current.add(zoneId);
+        autoZoneDeferralRef.current?.cancel(zoneId);
+        expectedAutoLayoutSignaturesRef.current.delete(zoneId);
+        skipNextAutoArrangeRef.current.delete(zoneId);
+      }
 
       const changedById = new Map(changedNodes.map((node) => [node.id, node]));
       onArrangeNodes?.(changedNodes, 180);
@@ -1855,21 +1874,48 @@ export const useBoardObjects = ({
             ];
           })
         );
-        if (Object.keys(canvasObjects).length > 0) {
-          await client.service('boards').patch(currentBoard.board_id, {
-            _action: 'batchUpsertObjects',
-            objects: canvasObjects,
-          } as unknown as Partial<Board>);
-        }
-        await Promise.all(
-          changedNodes.map(async (node) => {
+        const objects = {
+          ...(demotingAutoZone
+            ? {
+                [zoneId]: {
+                  ...persistedZone,
+                  layout: { ...policy, mode: 'manual' as const },
+                  layout_binding: 'override' as const,
+                },
+              }
+            : {}),
+          ...canvasObjects,
+        };
+        const placements = Object.fromEntries(
+          changedNodes.flatMap((node) => {
             const placement = placementByNodeId.get(node.id);
-            if (!placement) return;
-            await client
-              .service('board-objects')
-              .patch(placement.object_id, { position: node.position });
+            if (!placement) return [];
+            return [
+              [
+                placement.object_id,
+                {
+                  position: node.position,
+                  size: ceilBoardGridSize(renderedNodeSize(node)),
+                },
+              ] as const,
+            ];
           })
         );
+        const batch: BoardLayoutBatch = {
+          objects,
+          placements,
+          expected: expectedLayoutSnapshot(
+            currentBoard,
+            new Map(boardObjectsForBoard.map((placement) => [placement.object_id, placement]))
+          ),
+        };
+        const result = (await client.service('boards').patch(currentBoard.board_id, {
+          _action: 'applyLayout',
+          ...batch,
+        } as unknown as Partial<Board>)) as unknown as BoardLayoutApplyResult;
+        if (!layoutResultCoversBatch(result, batch)) {
+          throw new Error('Board layout acknowledgement omitted committed geometry');
+        }
         completeUserLayout({
           userInitiated: true,
           viewportIntentToken,
@@ -1884,6 +1930,7 @@ export const useBoardObjects = ({
             : `Justified ${changedNodes.length} items to the ${label}.`
         );
       } catch (error) {
+        if (demotingAutoZone) manuallyControlledZoneIdsRef.current.delete(zoneId);
         console.error('Failed to justify zone contents:', error);
         showError('Failed to justify zone contents');
       }
@@ -1892,7 +1939,6 @@ export const useBoardObjects = ({
       boardObjectsForBoard,
       client,
       completeUserLayout,
-      demoteAutoZone,
       onArrangeNodes,
       onUserLayoutStart,
       setNodes,
@@ -1984,6 +2030,7 @@ export const useBoardObjects = ({
               };
         const plan = planBoardZoneArrangement(
           selectedZones.map(([zoneId, object]) => {
+            const persistedZone = currentBoard.objects?.[zoneId];
             const children = currentNodes.filter((node) => {
               if (
                 node.parentId === zoneId &&
@@ -2006,6 +2053,9 @@ export const useBoardObjects = ({
               fontScale: object.fontScale,
               status: object.status,
               layout: object.layout,
+              resizable: true,
+              minWidth: persistedZone?.type === 'zone' ? persistedZone.width : object.width,
+              minHeight: persistedZone?.type === 'zone' ? persistedZone.height : object.height,
               items: children.map((node) => {
                 const isCanvasObject = isPositionableZoneCanvasNode(node);
                 const data = node.data as {
@@ -2055,10 +2105,23 @@ export const useBoardObjects = ({
               (node) => {
                 const placement = placementByNodeId.get(node.id);
                 const isEntity = node.type === 'branchNode' || node.type === 'cardNode';
+                const rendered = ceilBoardGridSize(renderedNodeSize(node));
+                const canvasObject = currentBoard.objects?.[node.id];
+                const persistedWidth =
+                  (canvasObject && 'width' in canvasObject ? canvasObject.width : undefined) ??
+                  placement?.size?.width ??
+                  rendered.width;
+                const persistedHeight =
+                  (canvasObject && 'height' in canvasObject ? canvasObject.height : undefined) ??
+                  placement?.size?.height ??
+                  rendered.height;
                 return {
                   id: node.id,
                   ...node.position,
-                  ...ceilBoardGridSize(renderedNodeSize(node)),
+                  ...rendered,
+                  minWidth: persistedWidth,
+                  minHeight: persistedHeight,
+                  resizable: node.data?.locked !== true,
                   ...(isEntity
                     ? {
                         entityType:

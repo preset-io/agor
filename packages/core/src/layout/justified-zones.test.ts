@@ -4,7 +4,7 @@ import {
   layoutJustifiedZones,
   zoneShapesForItems,
 } from './justified-zones';
-import { BOARD_GRID_SIZE, snapBoardGridPoint } from './rectangle-packing';
+import { BOARD_GRID_SIZE } from './rectangle-packing';
 
 const shape = (columns: number, width: number, height: number) => ({ columns, width, height });
 
@@ -24,7 +24,7 @@ function expectNoOverlaps(placements: JustifiedZonePlacement[]) {
   }
 }
 
-it('quantizes arranged zone origins and dimensions to the board grid', () => {
+it('quantizes frames and the cluster origin while preserving the exact requested gap', () => {
   const result = layoutJustifiedZones(
     [
       { id: 'zone-a', shapes: [shape(1, 413, 307)] },
@@ -34,11 +34,13 @@ it('quantizes arranged zone origins and dimensions to the board grid', () => {
   );
 
   for (const placement of result.placements) {
-    for (const value of [placement.x, placement.y, placement.width, placement.height]) {
+    for (const value of [placement.y, placement.width, placement.height]) {
       expect(value % BOARD_GRID_SIZE).toBe(0);
     }
-    expect(snapBoardGridPoint(placement)).toEqual({ x: placement.x, y: placement.y });
   }
+  expect(result.placements[0].x % BOARD_GRID_SIZE).toBe(0);
+  expect(result.placements[1].x - (result.placements[0].x + result.placements[0].width)).toBe(33);
+  expect(result.gap).toBe(33);
   expectNoOverlaps(result.placements);
 });
 

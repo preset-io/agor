@@ -340,8 +340,16 @@ interface ArrangeBoardZonesOptions {
   startX?: number;
   startY?: number;
   maxPerRow?: number;
+  fixedItemsPerRow?: number;
+  targetAspectRatio?: number;
   justifyLastRow?: boolean;
   justifyRows?: boolean;
+  matchRowHeights?: boolean;
+  matchColumnWidths?: boolean;
+  matchWidth?: boolean;
+  matchHeight?: boolean;
+  cellHorizontalAlignment?: 'start' | 'center' | 'end';
+  cellVerticalAlignment?: 'start' | 'center' | 'end';
   resizeZoneFrames?: boolean;
   lastRowAlignment?: 'start' | 'center' | 'end';
   dryRun?: boolean;
@@ -535,6 +543,9 @@ async function arrangeBoardZones(
         fontSize: zone.fontSize,
         status: zone.status,
         layout: zonePolicy,
+        resizable: true,
+        minWidth: zone.width,
+        minHeight: zone.height,
         items: [...items, ...canvasItems],
       };
     })
@@ -613,7 +624,12 @@ async function arrangeBoardZones(
       y: object.y,
       ...getCanvasObjectDimensions(object),
     })),
-  ];
+  ].map((item) => ({
+    ...item,
+    resizable: true,
+    minWidth: item.width,
+    minHeight: item.height,
+  }));
   if (zones.length === 0 && looseItems.length === 0) return null;
   const eligibleZoneIds = new Set(zones.map((zone) => zone.id));
   const fixedObstacles = [
@@ -638,8 +654,16 @@ async function arrangeBoardZones(
     startX: options.startX,
     startY: options.startY,
     maxPerRow: options.maxPerRow,
+    fixedItemsPerRow: options.fixedItemsPerRow,
+    targetAspectRatio: options.targetAspectRatio,
     justifyLastRow: options.justifyLastRow,
     justifyRows: options.justifyRows,
+    matchRowHeights: options.matchRowHeights,
+    matchColumnWidths: options.matchColumnWidths,
+    matchWidth: options.matchWidth,
+    matchHeight: options.matchHeight,
+    cellHorizontalAlignment: options.cellHorizontalAlignment,
+    cellVerticalAlignment: options.cellVerticalAlignment,
     resizeZoneFrames: options.resizeZoneFrames,
     lastRowAlignment: options.lastRowAlignment,
     packZoneContents: options.packZoneContents,
@@ -2424,6 +2448,14 @@ export function registerBoardTools(server: McpServer, ctx: McpContext): void {
         startX: mcpOptionalNumber('startX', 'Canvas X origin (default: 80).'),
         startY: mcpOptionalNumber('startY', 'Canvas Y origin (default: 80).'),
         maxPerRow: mcpOptionalPositiveInt('maxPerRow', 'Upper bound on zones per row.'),
+        columns: mcpOptionalPositiveInt(
+          'columns',
+          'Exact Grid column count. Row membership and partial final rows remain stable.'
+        ),
+        targetAspectRatio: mcpOptionalNumber(
+          'targetAspectRatio',
+          'Usable viewport aspect ratio used by smart Grid/Compact fitting.'
+        ),
         justifyLastRow: z
           .boolean()
           .optional()
@@ -2440,6 +2472,30 @@ export function registerBoardTools(server: McpServer, ctx: McpContext): void {
           .describe(
             'Allow packed zone frames to match row tracks (default: true). False preserves safe frames; undersized frames still grow.'
           ),
+        matchRowHeights: z
+          .boolean()
+          .optional()
+          .describe('Match eligible zone frames to their Grid row height.'),
+        matchColumnWidths: z
+          .boolean()
+          .optional()
+          .describe('Match eligible zone frames to their Grid column width.'),
+        matchWidth: z
+          .boolean()
+          .optional()
+          .describe('Match every resize-capable root to the largest safe width before reflow.'),
+        matchHeight: z
+          .boolean()
+          .optional()
+          .describe('Match every resize-capable root to the largest safe height before reflow.'),
+        cellHorizontalAlignment: z
+          .enum(['start', 'center', 'end'])
+          .optional()
+          .describe('Align each Grid item within its assigned column track.'),
+        cellVerticalAlignment: z
+          .enum(['start', 'center', 'end'])
+          .optional()
+          .describe('Align each Grid item within its assigned row track.'),
         lastRowAlignment: z
           .enum(['start', 'center', 'end'])
           .optional()
@@ -2470,8 +2526,16 @@ export function registerBoardTools(server: McpServer, ctx: McpContext): void {
         startX: args.startX,
         startY: args.startY,
         maxPerRow: args.maxPerRow,
+        fixedItemsPerRow: args.columns,
+        targetAspectRatio: args.targetAspectRatio,
         justifyLastRow: args.justifyLastRow === true,
         justifyRows: args.justifyRows !== false,
+        matchRowHeights: args.matchRowHeights,
+        matchColumnWidths: args.matchColumnWidths,
+        matchWidth: args.matchWidth === true,
+        matchHeight: args.matchHeight === true,
+        cellHorizontalAlignment: args.cellHorizontalAlignment,
+        cellVerticalAlignment: args.cellVerticalAlignment,
         resizeZoneFrames: args.resizeZoneFrames !== false,
         lastRowAlignment: args.lastRowAlignment,
         packZoneContents: args.packZoneContents !== false,

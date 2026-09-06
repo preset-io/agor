@@ -131,7 +131,10 @@ const ZoneNodeComponent = ({ data, selected }: { data: ZoneNodeData; selected?: 
   // isolated fixtures backwards compatible.
   const mutationGate = useMutationGate();
   const mutationDisabled = !mutationGate.canMutate || data.canEdit === false;
-  const autoZoneEnabled = normalizeZoneLayoutPolicy(data.layout).mode === 'auto';
+  const normalizedLayout = normalizeZoneLayoutPolicy(data.layout);
+  const autoZoneEnabled = normalizedLayout.mode === 'auto';
+  const alignsInsideGridCells =
+    normalizedLayout.preset === 'grid' && (normalizedLayout.columns ?? 0) > 1;
   const positionableItemCount = data.positionableItemCount ?? data.pinnedItemCount ?? 0;
   const compactDensityCount = data.compactDensityExpandableItemCount ?? 0;
   const densityExpandableCount = data.densityExpandableItemCount ?? 0;
@@ -538,7 +541,9 @@ const ZoneNodeComponent = ({ data, selected }: { data: ZoneNodeData; selected?: 
                   },
                   {
                     key: 'align-contents',
-                    label: 'Align contents',
+                    label: alignsInsideGridCells
+                      ? 'Align inside Grid cells'
+                      : 'Align content cluster',
                     icon: <AlignCenterOutlined />,
                     disabled: positionableItemCount < 1,
                     children: [
