@@ -17,6 +17,26 @@ import { agorStore } from '../../store/agorStore';
 import { CANVAS_LAYOUT_CONTROLS_CLASS } from './canvas/SelectionLayoutPopover';
 import SessionCanvas from './SessionCanvas';
 
+async function visibleSelectOption(label: string): Promise<HTMLElement> {
+  let option: HTMLElement | undefined;
+  await waitFor(() => {
+    option = screen
+      .getAllByText(label, { selector: '.ant-select-item-option-content' })
+      .find((candidate) => {
+        const dropdown = candidate.closest('.ant-select-dropdown');
+        const bounds = candidate.getBoundingClientRect();
+        return (
+          dropdown &&
+          !dropdown.classList.contains('ant-select-dropdown-hidden') &&
+          bounds.width > 0 &&
+          bounds.height > 0
+        );
+      });
+    expect(option).toBeVisible();
+  });
+  return option!;
+}
+
 afterEach(cleanup);
 
 const CURRENT_USER = {
@@ -223,18 +243,7 @@ describe('SessionCanvas Arrange Board popover (real browser)', () => {
     const fitViewLabel = within(dialog).getByText('Fit view after arranging', { exact: true });
     const density = within(dialog).getByRole('combobox', { name: 'Content expansion' });
     await act(async () => user.click(density));
-    let collapse: HTMLElement | undefined;
-    await waitFor(() => {
-      collapse = screen
-        .getAllByText('Collapse eligible contents', {
-          selector: '.ant-select-item-option-content',
-        })
-        .find((candidate) => {
-          const bounds = candidate.getBoundingClientRect();
-          return bounds.width > 0 && bounds.height > 0;
-        });
-      expect(collapse).toBeVisible();
-    });
+    const collapse = await visibleSelectOption('Collapse eligible contents');
     expect(collapse.closest(`.${CANVAS_LAYOUT_CONTROLS_CLASS}`)).not.toBeNull();
     // Ant owns this portaled option through a delegated click handler. A
     // direct browser click keeps the assertion focused on that production
@@ -304,19 +313,8 @@ describe('SessionCanvas Arrange Board popover (real browser)', () => {
     dialog = await screen.findByRole('dialog', { name: 'Arrange board options' });
     const reopenedDensity = within(dialog).getByRole('combobox', { name: 'Content expansion' });
     await act(async () => user.click(reopenedDensity));
-    let preserve: HTMLElement | undefined;
-    await waitFor(() => {
-      preserve = screen
-        .getAllByText('Preserve current expansion', {
-          selector: '.ant-select-item-option-content',
-        })
-        .find((candidate) => {
-          const bounds = candidate.getBoundingClientRect();
-          return bounds.width > 0 && bounds.height > 0;
-        });
-      expect(preserve).toBeVisible();
-    });
-    expect(preserve!.closest('.ant-select-item-option')).toHaveClass(
+    const preserve = await visibleSelectOption('Preserve current expansion');
+    expect(preserve.closest('.ant-select-item-option')).toHaveClass(
       'ant-select-item-option-selected'
     );
     await act(async () =>
