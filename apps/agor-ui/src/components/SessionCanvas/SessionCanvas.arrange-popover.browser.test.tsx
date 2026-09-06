@@ -25,9 +25,19 @@ async function visibleSelectOption(label: string): Promise<HTMLElement> {
       .find((candidate) => {
         const dropdown = candidate.closest('.ant-select-dropdown');
         const bounds = candidate.getBoundingClientRect();
+        // Ant retains old dropdown portals between openings. Chromium can
+        // preserve their last non-zero geometry even after an ancestor makes
+        // them non-rendered, so bounds plus the dropdown's hidden class are
+        // insufficient on slower CI runners. Use the browser's recursive
+        // visibility check to select only the currently interactive copy.
+        const rendered = candidate.checkVisibility({
+          checkOpacity: true,
+          checkVisibilityCSS: true,
+        });
         return (
           dropdown &&
           !dropdown.classList.contains('ant-select-dropdown-hidden') &&
+          rendered &&
           bounds.width > 0 &&
           bounds.height > 0
         );
