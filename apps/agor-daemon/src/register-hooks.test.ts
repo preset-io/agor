@@ -1206,6 +1206,24 @@ describe('branch environment materialization validation', () => {
       })(context)
     ).rejects.toThrow('managed environment app URL');
   });
+
+  it('rejects an invalid snapshotted startup timeout before persistence', async () => {
+    const context = {
+      path: 'branches',
+      method: 'create',
+      data: {
+        start_command: 'pnpm dev',
+        startup_timeout_ms: 999,
+      },
+      params: {},
+    } as HookContext;
+
+    await expect(
+      validateBranchEnvPolicyHook({
+        execution: { managed_envs_execution_mode: 'hybrid' },
+      })(context)
+    ).rejects.toThrow('startup_timeout_ms');
+  });
 });
 
 describe('shouldRunSessionPostTurnHooks', () => {

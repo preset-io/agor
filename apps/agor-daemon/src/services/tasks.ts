@@ -35,6 +35,7 @@ import {
   type TerminationSettlementInput,
   type TerminationSettlementResult,
 } from '@agor/core/db';
+import { validateEnvironmentSourceRevision } from '@agor/core/environment/lifecycle-result';
 import { type Application, BadRequest, Conflict, Forbidden } from '@agor/core/feathers';
 import { deriveTitleFromPrompt } from '@agor/core/sessions';
 import type {
@@ -84,7 +85,11 @@ import {
   ExecutorHeartbeatCallbackRunner,
 } from '../utils/executor-heartbeat-callback.js';
 import { ensureRepoOriginAlignedById } from '../utils/realign-repo-origin';
-import { deferWithTenantContext, withFreshTenantWrite } from '../utils/tenant-db-scope.js';
+import {
+  deferWithTenantContext,
+  resolveTenantIdForDeferredScope,
+  withFreshTenantWrite,
+} from '../utils/tenant-db-scope.js';
 import type { SessionsService } from './sessions';
 
 export interface TaskExecutorCredentialRevoker {
@@ -107,6 +112,11 @@ function isAnalyticsTerminalTaskStatus(status: Task['status'] | undefined): bool
 
 function isCompletionSideEffectTaskStatus(status: Task['status'] | undefined): boolean {
   return status !== undefined && COMPLETION_SIDE_EFFECT_TASK_STATUSES.has(status);
+}
+
+/** Only a successfully completed task may advance an automatic preview. */
+export function shouldAutoSyncEnvironmentAfterTask(status: Task['status']): boolean {
+  return status === TaskStatus.COMPLETED;
 }
 
 const TASK_SORT_FIELDS = new Set(['task_id', 'session_id', 'status', 'created_at', 'created_by']);
@@ -670,6 +680,71 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
     ) as Promise<Session>;
   }
 
+  /**
+   * Headless code-sync trigger. Persist the task's exact clean ending commit as
+   * desired state; the branch service validates the variant and reconciles it
+   * immediately when running or after the environment becomes ready.
+   *
+   * Fire-and-forget and best-effort:
+   * - Never blocks or fails task completion (all errors are swallowed).
+   * - Idempotent: repeated requests for one SHA converge to one applied state.
+   * - Dirty, abbreviated, and unknown revisions are rejected before dispatch.
+   */
+  private async maybeAutoSyncEnvironmentAfterTask(
+    branchId: string,
+    desiredRevision: string,
+    requestedByUserId: string,
+    params?: TaskParams
+  ): Promise<void> {
+    try {
+      const revision = validateEnvironmentSourceRevision(desiredRevision);
+      // Run EVERY call here as a trusted INTERNAL daemon operation, NOT with the
+      // completing caller's identity. A task that finished via the executor
+      // carries an executor-scoped token that is (correctly) not valid for the
+      // branch/repo/sync endpoints — passing it through fails with "Executor
+      // token is not valid for this endpoint". Fresh params with only the tenant
+      // (resolved from the deferred tenant scope) and no `provider` mark it a
+      // trusted server call, the shape the daemon's other background ops use.
+      const tenantId = resolveTenantIdForDeferredScope(params);
+      const internalParams = {
+        tenant: tenantId ? { tenant_id: tenantId } : undefined,
+      } as TaskParams;
+
+      const branchesService = this.app.service('branches') as unknown as {
+        patch: (id: string, data: { last_commit_sha: string }, p?: unknown) => Promise<unknown>;
+        syncEnvironment: (
+          id: string,
+          p?: unknown,
+          options?: {
+            desiredRevision: string;
+            requestedByUserId: string;
+            skipIfUnavailable: boolean;
+          }
+        ) => Promise<unknown>;
+      };
+
+      console.log(
+        `🔄 [TasksService] Requesting remote environment revision ${revision.slice(0, 12)} for branch ${shortId(branchId)}`
+      );
+      // A completed task's clean sha_at_end is an observed branch fact. Record
+      // it separately from the remote desired revision: the public sync route
+      // accepts a caller-selected target and must never be able to rewrite
+      // last_commit_sha merely by requesting it.
+      await branchesService.patch(branchId, { last_commit_sha: revision }, internalParams);
+      await branchesService.syncEnvironment(branchId, internalParams, {
+        desiredRevision: revision,
+        requestedByUserId,
+        skipIfUnavailable: true,
+      });
+    } catch (err) {
+      console.warn(
+        `⚠️  [TasksService] Auto-sync after task failed for branch ${shortId(branchId)}: ${
+          err instanceof Error ? err.message : String(err)
+        }`
+      );
+    }
+  }
+
   private async processCompletionSideEffects(
     task: Task,
     status: Task['status'],
@@ -695,6 +770,42 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
               `⚠️  [TasksService] ensureRepoOriginAlignedById failed for session ${shortId(task.session_id)}: ${message}`
             );
           });
+
+        // Headless "event-driven sync": the commit a SUCCESSFUL task just
+        // produced is the trigger. Failed/stopped tasks may leave intentional
+        // partial work and require an explicit sync instead of silently
+        // replacing the developer's preview.
+        //
+        // Defer to AFTER this task-patch transaction commits (the same idiom the
+        // executor dispatch uses): the sync itself dispatches an executor via
+        // deferWithTenantContext, which enqueues the spawn behind the active DB
+        // transaction — running it inline here would trap that spawn behind a
+        // transaction that never re-fires its commit hook, so the sync would
+        // never actually run. Best-effort: never blocks or fails completion.
+        if (shouldAutoSyncEnvironmentAfterTask(status)) {
+          const syncBranchId = session.branch_id;
+          try {
+            const desiredRevision = validateEnvironmentSourceRevision(task.git_state.sha_at_end);
+            deferWithTenantContext(
+              params,
+              () =>
+                this.maybeAutoSyncEnvironmentAfterTask(
+                  syncBranchId,
+                  desiredRevision,
+                  task.created_by,
+                  params
+                ),
+              (err) =>
+                console.warn(
+                  `⚠️  [TasksService] Auto-sync trigger failed for session ${shortId(task.session_id)}: ${
+                    err instanceof Error ? err.message : String(err)
+                  }`
+                )
+            );
+          } catch {
+            // Dirty, abbreviated, and unknown task-end states are not deployable facts.
+          }
+        }
       }
 
       const latestTaskId = session.tasks?.[session.tasks.length - 1];

@@ -69,6 +69,8 @@ const ENV_COMMAND_FIELDS = [
   'logs_command',
   'health_check_url',
   'app_url',
+  'startup_timeout_ms',
+  'lifecycle_timeout_ms',
 ];
 
 /**

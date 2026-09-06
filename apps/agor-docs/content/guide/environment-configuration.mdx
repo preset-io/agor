@@ -5,7 +5,7 @@ description: Define named environment variants per repo, layer deployment-local 
 
 # Environment Configuration
 
-Agor's managed environments let a repo ship a **library of named variants** (`lean`, `postgres`, `full`, …) that every branch can pick from. Variants are Handlebars-templated and get **rendered into a per-branch snapshot** that the Start/Stop/Nuke/Logs buttons execute against.
+Agor's managed environments let a repo ship a **library of named variants** (`lean`, `postgres`, `full`, …) that every branch can pick from. Variants are Handlebars-templated and get **rendered into a per-branch snapshot** that the Start/Stop/Sync/Nuke/Logs controls execute against.
 
 This page documents the data model, the template vars, deployment-local overrides, and the permission rules.
 
@@ -38,8 +38,9 @@ Managed environments are built out of three layers, precedence **low → high**:
                               ▼
   ┌────────────────────────────────────────────────────────┐
   │ 3. branch rendered snapshot — plain strings          │
-  │    start_command, stop_command, nuke_command,          │
-  │    logs_command, health_check_url, app_url             │
+  │    start_command, stop_command, sync_command,          │
+  │    nuke_command, logs_command, health_check_url,       │
+  │    app_url                                             │
   └────────────────────────────────────────────────────────┘
 ```
 
@@ -77,12 +78,15 @@ Every field in a variant is a Handlebars template. The render context is built i
 
 | Variable | Source | Example | Notes |
 |---|---|---|---|
+| `{{branch.id}}` | Branch | `0198f5d4-...` | Stable branch UUID. Use as a provider-resource binding, not as a display name. |
 | `{{branch.unique_id}}` | Branch | `3` | Auto-incrementing integer. Use for deterministic port offsets. |
 | `{{branch.name}}` | Branch | `feat-new-filter` | Slugified branch name. Good for `docker compose -p`. |
+| `{{branch.ref}}` | Branch | `refs/heads/feat-new-filter` | Exact git ref recorded for the branch. Empty if unavailable. |
 | `{{branch.path}}` | Branch | `/home/you/agor/feat-new-filter` | Absolute path on disk. |
 | `{{branch.base_ref}}` | Branch | `main` | Source branch/tag name the branch was created from (the "Base Branch"/"Base Tag" in the create dialog). The **name**, not a SHA. Empty string if unknown. |
 | `{{branch.ref_type}}` | Branch | `branch` | `branch` or `tag`, indicating whether `base_ref` names a branch or a tag. Defaults to `branch`. |
 | `{{repo.slug}}` | Repo | `preset-io/superset` | Repository slug. |
+| `{{repo.github_slug}}` | Repo | `preset-io/agor` | Credential-free `owner/repository` identity derived from a registered `github.com` remote. Empty for other hosts. |
 | `{{host.ip_address}}` | Auto-detected | `10.0.1.42` | Fallback order: `template_overrides.host.ip_address` → `daemon.host_ip_address` in `~/.agor/config.yaml` → autodetect. |
 | `{{custom.<key>}}` | Branch custom context | `{{custom.compose_profile}}` | Anything you store in `branch.custom_context`. |
 | `{{custom.<key>}}` via overrides | `template_overrides.custom.*` | `{{custom.internal_registry}}` | Repo-wide fallback if the branch doesn't set a key. |
@@ -98,6 +102,8 @@ Every field in a variant is a Handlebars template. The render context is built i
 | `mod` | `{{mod branch.unique_id 4}}` | `3` |
 
 Math helpers are deterministic. The same branch always renders the same ports, which is what keeps parallel branches from colliding.
+
+Use `{{shellQuote value}}` when inserting any template value into a shell command. It renders the value as exactly one inert POSIX shell argument, including values with spaces, quotes, or shell metacharacters.
 
 > Broken template syntax is reported at **render time**, not at save time. Click Render to see the exact error with a line number.
 
@@ -120,15 +126,18 @@ environment:
     <variant-name>:
       description: "Human-readable one-liner"
       extends: <base-variant>      # optional, single-level only
+      startup_timeout_ms: 3600000 # optional; one hour by default
+      lifecycle_timeout_ms: 775000 # optional; budget for one stop/nuke/sync
       start:  "<shell command template>"
       stop:   "<shell command template>"
+      sync:   "<shell command template>"   # optional; exact source reconciliation
       nuke:   "<shell command template>"   # optional
       logs:   "<shell command template>"   # optional
       health: "<url template>"             # optional
       app:    "<url template>"             # optional
 ```
 
-`start`, `stop`, `nuke`, and `logs` are rendered lifecycle fields. In the
+`start`, `stop`, `sync`, `nuke`, and `logs` are rendered lifecycle fields. In the
 default `hybrid` mode they can be shell commands or explicit `http://` /
 `https://` webhooks. Webhooks are invoked with HTTP GET. `health` and `app` are
 always URL templates, not shell commands.
@@ -139,7 +148,111 @@ always URL templates, not shell commands.
 - `environment.default` must reference a variant that exists in `environment.variants`.
 - Each variant (after `extends` resolution) needs at least `start` and `stop`.
 
-`nuke`, `logs`, `health`, and `app` are optional. The corresponding UI buttons simply hide or no-op when absent.
+`startup_timeout_ms`, `lifecycle_timeout_ms`, `sync`, `nuke`, `logs`, `health`,
+and `app` are optional. The startup timeout defaults to one hour and may be set
+from 1 second through 24 hours. Agor persists an exact deadline for every
+attempt, so a daemon restart or a pause in health monitoring does not restart
+the clock. The corresponding optional UI buttons simply hide or no-op when
+absent.
+
+`lifecycle_timeout_ms` is the separate budget for one `stop`, `nuke`, or `sync`
+command; Start is governed by `startup_timeout_ms` instead. It ranges from 1
+second to 1 hour and inherits through `extends`.
+
+Leave it unset unless a variant genuinely needs longer. The default is not a
+round number picked by hand: it is the largest command deadline whose executor
+credential still fits inside the 15 minutes Agor gives a taskless executor
+command by default, so an ordinary local `docker compose down` asks for no more
+authority than it already had. Raising it raises three things together — the
+credential that command is issued, how long the daemon waits for its result, and
+the durable Sync claim lease. That last one is why the ceiling is an hour rather
+than the 24 hours `startup_timeout_ms` allows: the lease is how long a peer
+daemon must wait before it may retry a sync whose owner died.
+
+Two operator settings bound this from outside, and Agor applies both when it
+dispatches rather than letting the command discover them later:
+
+- `execution.session_token_expiration_ms` (24 hours by default) caps any
+  executor credential.
+- `execution.executor_response.timeout_ms.by_command['environment.lifecycle']`,
+  if set, caps how long the daemon waits for the command's result.
+
+If either is tighter than the variant asks for, the **command deadline is
+shortened** to fit — the command still runs, and still ends before its authority
+and its waiter do. Agor only refuses outright when a ceiling leaves no room for
+any command at all.
+
+### GitHub Codespaces example in this repository
+
+Agor's own `.agor.yml` includes an experimental, opt-in `codespaces-sqlite`
+variant. It creates or rediscovers one GitHub Codespace for the branch binding,
+starts the SQLite Compose stack there, and publishes the real app and health
+URLs only after the remote health check succeeds. `sync` accepts only a full
+Git object ID already pushed to the configured GitHub branch, applies exactly
+that revision to a clean checkout, reconciles the Compose stack, waits for
+health, and re-verifies the remote HEAD before acknowledging success. The
+development image is rebuilt only when its verified build inputs changed.
+
+The variant uses the current user's authenticated `gh` CLI session. Its ports
+3000 and 5000 are deliberately made public, subject to repository and
+organization policy. Stop preserves the Codespace; Nuke deletes it. This is a
+single-actor development preview, not an Agor Cloud or production topology.
+
+#### Operating the Codespaces example
+
+Before pressing Start, push the branch ref to GitHub, register the repository
+from a `github.com` remote, and authenticate the Agor host's current user with
+`gh` and Codespaces access. The checked-in managed devcontainer installs the SSH
+server required by the launcher's health, Logs, and Sync operations. A Codespace
+created from an older devcontainer may need a devcontainer rebuild or a Nuke and
+fresh Start before those operations can connect.
+
+This example deliberately makes ports 3000 and 5000 public after the remote
+health check succeeds. GitHub's forwarding tunnel adds no authentication to a
+public port, and port 3000 exposes the complete Agor daemon rather than only its
+health endpoint. The bootstrap therefore creates a unique admin password in the
+Codespace. Retrieve it from a Codespace terminal, use it for the first login,
+and change it when prompted:
+
+```bash
+cat ~/.agor-managed/bootstrap-admin-password
+```
+
+Start reconciles the branch's existing bound Codespace: it creates or resumes
+one when necessary, revalidates its owner, repository, ref, and binding, repairs
+an unhealthy nested Agor stack, and republishes current URLs after health is
+ready. Pressing Start again after an interrupted attempt reuses that resource
+rather than creating another one. GitHub state transitions can take several
+minutes. Start keeps a bounded 24-minute provider wait inside Agor's 25-minute
+lifecycle deadline, leaving a minute for the result to settle. Stop and Nuke
+keep bounded 20-minute waits instead of reporting completion before GitHub
+reaches the requested state. The variant therefore sets `lifecycle_timeout_ms`
+to 21 minutes, which gives Stop, Nuke, and Sync a process deadline just past
+that provider wait; the credential, the daemon's wait for the result, and the
+Sync claim lease are all derived from it. Restart runs that bounded Stop first
+and starts again only after the Stop has actually settled, so a slow provider
+transition never needs one long-lived credential covering both phases.
+
+Sync is the explicit source-update operation. It accepts a full commit ID that
+has already been pushed to the configured ref, refuses to overwrite a dirty
+Codespace checkout, applies exactly that commit, restarts the stack when needed,
+waits for health, and verifies the applied commit before reporting success.
+Stop shuts down the Codespace but preserves its disk and nested SQLite data.
+Logs returns bounded creation diagnostics and, once available, nested Compose
+logs. While GitHub reports the Codespace shutting down or fully stopped, Logs
+skips SSH-backed calls so reading logs cannot delay shutdown or wake billable
+compute. Nuke revalidates and deletes only the bound Codespace; use it when the
+disposable disk and credentials must be recreated.
+
+If GitHub cannot find the ref, push it before retrying. If the launcher reports
+a missing SSH server, rebuild the managed devcontainer or Nuke and recreate the
+Codespace. A public-port policy error means the repository or organization does
+not allow the visibility requested by this example. If Sync reports a dirty
+checkout, preserve or remove those in-Codespace changes yourself before retrying;
+Agor will not overwrite them.
+If the bootstrap password file is lost while persistent Codespace data remains,
+restore that file or Nuke the disposable Codespace; Start refuses to invent a
+replacement that would not match the existing admin account.
 
 ### `extends` (single-level only)
 
@@ -395,7 +508,7 @@ execution:
   managed_envs_execution_mode: webhook-only
 ```
 
-In `webhook-only` mode, rendered `start`, `stop`, `nuke`, and `logs` fields
+In `webhook-only` mode, rendered `start`, `stop`, `sync`, `nuke`, and `logs` fields
 must render to explicit `http://` or `https://` URLs. Agor sends a GET request
 to the URL.
 
@@ -406,10 +519,40 @@ environment:
     remote:
       start: "https://orchestrator.example.com/agor/start?branch={{branch.name}}"
       stop:  "https://orchestrator.example.com/agor/stop?branch={{branch.name}}"
+      sync:  "https://orchestrator.example.com/agor/sync?branch={{branch.name}}&revision={{sync.revision}}"
       logs:  "https://orchestrator.example.com/agor/logs?branch={{branch.name}}"
       health: "https://apps.example.com/{{branch.name}}/health"
       app:    "https://apps.example.com/{{branch.name}}"
 ```
+
+### Lifecycle result contract
+
+A shell `start` command can publish runtime URLs and provider identity by writing
+exactly one control line to **stdout**:
+
+```text
+AGOR_ENVIRONMENT_RESULT={"version":1,"access_urls":[{"name":"App","url":"https://app.example.com/"},{"name":"Metrics","url":"https://metrics.example.com/"}],"health_url":"https://app.example.com/health","resource":{"provider":"github-codespaces","id":"opaque-provider-id","name":"example-space","manage_url":"https://github.com/codespaces/example-space"}}
+```
+
+For a webhook, return the JSON object itself as an `application/json` response;
+do not include the `AGOR_ENVIRONMENT_RESULT=` prefix. Diagnostic stderr is never
+parsed as control data. The control record is removed from user-visible command
+output and persisted logs.
+
+| Field              | Contract                                                                                                                      |
+| ------------------ | ----------------------------------------------------------------------------------------------------------------------------- |
+| `version`          | Required. Must be `1`.                                                                                                        |
+| `access_urls`      | Optional non-empty array of at most 8 uniquely named URLs. Order is preserved; the first URL is the primary application link. |
+| `health_url`       | Optional health endpoint.                                                                                                     |
+| `resource`         | Optional provider identity containing at least one of `provider`, `id`, `name`, or `manage_url`. Never put credentials here.  |
+| `applied_revision` | Required for successful `sync`; the exact full lowercase 40- or 64-character Git object ID that was applied.                  |
+
+The encoded result is limited to 8 KiB. Names are limited to 64 characters and
+URLs to 2,048 characters. URLs must be HTTP(S) and cannot contain credentials,
+query strings, or fragments. Unknown fields, duplicate URL names, multiple
+result lines, malformed JSON, and mixed legacy/typed records fail closed. A
+dynamic health URL must also resolve exclusively to public addresses when Agor
+probes it; DNS is pinned and redirects are not followed.
 
 V1 webhooks are intentionally simple: GET only, no custom headers, no request
 body, no signing, and redirects are not followed. V1 webhook targets must be
@@ -418,11 +561,18 @@ credentials are rejected. Use a trusted orchestration service, and avoid secrets
 in query strings because rendered branch snapshots and infrastructure logs may
 expose them.
 
-In daemon HA mode, lifecycle actions remain webhook-only; Agor does not assign
-distributed ownership for Start, Stop, Restart, or Nuke. Health observation is
+A `sync` command or webhook receives the exact clean desired Git object ID as
+`{{sync.revision}}`. Success must return the versioned lifecycle JSON result
+with `applied_revision` equal to that exact ID. Agor stores desired and applied
+revisions separately, admits only one leased attempt across daemon replicas,
+and retries failures without changing the environment's health status.
+
+In daemon HA mode, Start, Stop, Restart, and Nuke remain webhook-only and do not
+have distributed operation ownership. Source sync and health observation do:
+PostgreSQL admits one leased source-sync attempt and one health observation per
+branch, each fenced against lifecycle changes. Health observation is otherwise
 separate: every replica scans active environments, while PostgreSQL admits only
-one live observation claim per branch and fences the result against lease expiry
-and lifecycle changes. A remote/webhook environment without `health` remains
+one live observation claim per branch. A remote/webhook environment without `health` remains
 explicitly unobservable (`unknown`); Agor never treats another daemon's local
 process map as evidence that it is healthy.
 

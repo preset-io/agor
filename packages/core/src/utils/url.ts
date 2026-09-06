@@ -642,3 +642,42 @@ export function isAllowedHealthCheckUrl(urlString: string): boolean {
 
   return true;
 }
+
+/**
+ * Validates a health URL from the transitional lifecycle-facts cache.
+ *
+ * Unlike an operator-authored `health_check_url`, provider output is untrusted,
+ * so loopback, private, link-local, metadata, and internal-looking destinations
+ * are refused. New lifecycle commands publish `health_url` in the typed result;
+ * this guard remains only while already-started legacy instances can still
+ * carry the derived value in `facts`.
+ */
+export function isAllowedFactProbeUrl(urlString: string): boolean {
+  if (!isAllowedHealthCheckUrl(urlString)) return false;
+
+  let url: URL;
+  try {
+    url = new URL(normalizeOptionalHttpUrl(urlString, 'health_fact_url') as string);
+  } catch {
+    return false;
+  }
+
+  const hostname = url.hostname.toLowerCase();
+  const host =
+    hostname.startsWith('[') && hostname.endsWith(']') ? hostname.slice(1, -1) : hostname;
+
+  if (host === 'localhost' || host === '::1' || host === '0.0.0.0' || host === '::') return false;
+  if (/^127\./.test(host)) return false;
+  if (/^10\./.test(host)) return false;
+  if (/^192\.168\./.test(host)) return false;
+  if (/^172\.(1[6-9]|2[0-9]|3[01])\./.test(host)) return false;
+  if (/^100\.(6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])\./.test(host)) return false;
+  if (/^f[cd][0-9a-f]{2}:/.test(host)) return false;
+  if (/^fe80:/.test(host)) return false;
+  if (host.endsWith('.internal') || host.endsWith('.local') || host.endsWith('.localhost')) {
+    return false;
+  }
+  if (!host.includes('.')) return false;
+
+  return true;
+}

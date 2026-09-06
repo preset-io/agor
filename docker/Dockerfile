@@ -175,6 +175,11 @@ RUN sudo chmod +x /usr/local/bin/docker-entrypoint.sh && \
 # Expose UI port only (daemon is internal)
 EXPOSE ${VITE_PORT:-5173}
 
+# The managed Codespaces bootstrap computes this from the exact development
+# image inputs. It reuses agor-dev:latest only when this label still matches.
+ARG AGOR_DEV_IMAGE_INPUT_FINGERPRINT=untracked
+LABEL io.agor.dev-image-input-fingerprint="${AGOR_DEV_IMAGE_INPUT_FINGERPRINT}"
+
 # Use entrypoint script to start both processes
 ENTRYPOINT ["docker-entrypoint.sh"]
 

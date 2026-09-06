@@ -25,6 +25,7 @@ import {
   deleteFrom,
   insert,
   isPostgresDatabase,
+  isSQLiteDatabase,
   jsonExtract,
   lockRowForUpdate,
   runDatabaseTransaction,
@@ -104,6 +105,38 @@ export interface ActiveEnvironmentBranchRef {
   tenant_id?: string;
 }
 
+export class EnvironmentLifecycleConflictError extends RepositoryError {
+  constructor(
+    readonly branchId: BranchID,
+    readonly expectedGeneration: number,
+    readonly currentGeneration: number,
+    readonly expectedStatus?: NonNullable<Branch['environment_instance']>['status'],
+    readonly currentStatus?: NonNullable<Branch['environment_instance']>['status']
+  ) {
+    super(
+      `Environment lifecycle for branch ${branchId} was superseded ` +
+        `(expected generation ${expectedGeneration}, current generation ${currentGeneration})`
+    );
+    this.name = 'EnvironmentLifecycleConflictError';
+  }
+}
+
+type BranchUpdateOptions = {
+  preserveUpdatedAt?: boolean;
+  /** Explicit lifecycle boundary, including starting -> starting retries. */
+  invalidateEnvironmentObservation?: boolean;
+  /** Apply only while this exact lifecycle boundary remains current. */
+  expectedEnvironmentGeneration?: number;
+  /** Optional state precondition checked under the same row lock as the write. */
+  expectedEnvironmentStatus?: NonNullable<Branch['environment_instance']>['status'];
+};
+
+function isSQLiteBusyError(error: unknown): boolean {
+  const text = error instanceof Error ? error.message : String(error);
+  if (/SQLITE_BUSY|database is locked|database is busy/i.test(text)) return true;
+  return error instanceof Error && 'cause' in error && isSQLiteBusyError(error.cause);
+}
+
 /**
  * Branch repository implementation
  */
@@ -160,6 +193,7 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
         // Per-branch SDK home intent (design §9.2)
         sdk_home: row.sdk_home ?? undefined,
         ...row.data,
+        environment_generation: row.environment_generation,
         url,
       },
       row
@@ -235,6 +269,8 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
         notes: branch.notes,
         error_message: branch.error_message,
         environment_instance: branch.environment_instance,
+        startup_timeout_ms: branch.startup_timeout_ms,
+        lifecycle_timeout_ms: branch.lifecycle_timeout_ms,
         last_used: branch.last_used ?? new Date(now).toISOString(),
         custom_context: branch.custom_context,
         mcp_server_ids: branch.mcp_server_ids,
@@ -593,11 +629,31 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
   async update(
     id: string,
     updates: Partial<Branch>,
-    options?: {
-      preserveUpdatedAt?: boolean;
-      /** Explicit lifecycle boundary, including starting -> starting retries. */
-      invalidateEnvironmentObservation?: boolean;
+    options?: BranchUpdateOptions
+  ): Promise<Branch> {
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        return await this.updateOnce(id, updates, options);
+      } catch (error) {
+        if (
+          options?.expectedEnvironmentGeneration === undefined ||
+          !isSQLiteDatabase(this.db) ||
+          !isSQLiteBusyError(error) ||
+          attempt >= 9
+        ) {
+          throw error;
+        }
+        // libSQL may report write contention immediately despite busy_timeout.
+        // Retry the whole transaction so the loser re-reads the winning generation.
+        await new Promise((resolve) => setTimeout(resolve, 10 * (attempt + 1)));
+      }
     }
+  }
+
+  private async updateOnce(
+    id: string,
+    updates: Partial<Branch>,
+    options?: BranchUpdateOptions
   ): Promise<Branch> {
     if (Object.hasOwn(updates, 'primary_owner_user_id')) {
       throw new RepositoryError('Primary ownership is immutable');
@@ -656,6 +712,21 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
 
       const current = this.rowToBranch(currentRow, baseUrl);
 
+      if (
+        options?.expectedEnvironmentGeneration !== undefined &&
+        (currentRow.environment_generation !== options.expectedEnvironmentGeneration ||
+          (Object.hasOwn(options, 'expectedEnvironmentStatus') &&
+            current.environment_instance?.status !== options.expectedEnvironmentStatus))
+      ) {
+        throw new EnvironmentLifecycleConflictError(
+          current.branch_id,
+          options.expectedEnvironmentGeneration,
+          currentRow.environment_generation,
+          options.expectedEnvironmentStatus,
+          current.environment_instance?.status
+        );
+      }
+
       // STEP 3: Deep merge updates into current branch (in memory)
       // Preserves nested objects like schedule, environment_instance, custom_context
       const merged = deepMerge(current, {
@@ -704,11 +775,28 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
         : {};
 
       // STEP 4: Write merged branch (within same transaction)
+      const writeCondition =
+        options?.expectedEnvironmentGeneration === undefined
+          ? eq(branches.branch_id, current.branch_id)
+          : and(
+              eq(branches.branch_id, current.branch_id),
+              eq(branches.environment_generation, options.expectedEnvironmentGeneration)
+            );
       const row = await update(txAsDb(tx), branches)
         .set({ ...insertData, ...environmentCoordinationUpdate })
-        .where(eq(branches.branch_id, current.branch_id))
+        .where(writeCondition)
         .returning()
         .one();
+
+      if (!row && options?.expectedEnvironmentGeneration !== undefined) {
+        throw new EnvironmentLifecycleConflictError(
+          current.branch_id,
+          options.expectedEnvironmentGeneration,
+          currentRow.environment_generation,
+          options.expectedEnvironmentStatus,
+          current.environment_instance?.status
+        );
+      }
 
       return this.rowToBranch(row, baseUrl);
     });

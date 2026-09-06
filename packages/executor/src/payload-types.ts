@@ -10,6 +10,12 @@
 
 import { type ResolvedConfigSlice, ResolvedConfigSliceSchema } from '@agor/core/config';
 import {
+  ENVIRONMENT_LIFECYCLE_TIMEOUT_MAX_MS,
+  ENVIRONMENT_LIFECYCLE_TIMEOUT_MIN_MS,
+  ENVIRONMENT_STARTUP_TIMEOUT_MAX_MS,
+  ENVIRONMENT_STARTUP_TIMEOUT_MIN_MS,
+} from '@agor/core/environment/health-transition';
+import {
   type ExecutorCommandResult,
   ExecutorCommandResultSchema,
   ExecutorResponseDescriptorSchema,
@@ -581,7 +587,7 @@ export type BranchAgorYmlExportPayload = z.infer<typeof BranchAgorYmlExportPaylo
 // ═══════════════════════════════════════════════════════════
 
 /**
- * Environment lifecycle payload - run shell-based start/stop/restart/nuke
+ * Environment lifecycle payload - run shell-based start/stop/nuke/sync
  * commands from the executor. Webhook lifecycle commands stay daemon-owned.
  */
 export const EnvironmentLifecyclePayloadSchema = BasePayloadSchema.extend({
@@ -599,26 +605,67 @@ export const EnvironmentLifecyclePayloadSchema = BasePayloadSchema.extend({
       branchPath: z.string().optional(),
 
       /** Lifecycle action */
-      action: z.enum(['start', 'stop', 'restart', 'nuke']),
+      /**
+       * Restart is deliberately absent. It is a daemon-owned sequence of a
+       * bounded Stop and, once that Stop has verifiably settled, an ordinary
+       * Start with its own credential — not a single executor process holding
+       * one credential across both phases.
+       */
+      action: z.enum(['start', 'stop', 'nuke', 'sync']),
 
-      /** Shell start command. Required for start/restart. */
+      /** Shell start command. Required for start. */
       startCommand: z.string().optional(),
 
-      /** Shell stop command. Required for stop and used before restart when present. */
+      /** Shell stop command. Required for stop. */
       stopCommand: z.string().optional(),
 
       /** Shell nuke command. Required for nuke. */
       nukeCommand: z.string().optional(),
 
+      /** Shell sync command. Required for sync. Pushes the branch's latest code
+       *  into the running remote environment (see RepoEnvironmentVariant.sync). */
+      syncCommand: z.string().optional(),
+
+      /** Exact clean commit this sync attempt must apply and acknowledge. */
+      desiredRevision: z
+        .string()
+        .regex(/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/)
+        .optional(),
+
+      /** Opaque durable claim correlating this executor with one sync attempt. */
+      syncClaimToken: z.string().min(1).optional(),
+
       /** Static app URL rendered by the daemon/branch snapshot. */
       appUrl: z.string().optional(),
+
+      /** Static health URL rendered by the daemon/branch snapshot. */
+      healthCheckUrl: z.string().optional(),
+
+      /** Wall-clock budget for a start attempt, snapshotted by the daemon. */
+      startupTimeoutMs: z
+        .number()
+        .int()
+        .min(ENVIRONMENT_STARTUP_TIMEOUT_MIN_MS)
+        .max(ENVIRONMENT_STARTUP_TIMEOUT_MAX_MS)
+        .optional(),
+
+      /** Daemon-owned wall-clock budget for a non-Start shell phase. */
+      commandTimeoutMs: z
+        .number()
+        .int()
+        .min(ENVIRONMENT_LIFECYCLE_TIMEOUT_MIN_MS)
+        .max(ENVIRONMENT_LIFECYCLE_TIMEOUT_MAX_MS)
+        .optional(),
+
+      /** Monotonic lifecycle boundary that must still own every state update. */
+      lifecycleGeneration: z.number().int().nonnegative().optional(),
     })
     .superRefine((params, ctx) => {
-      if ((params.action === 'start' || params.action === 'restart') && !params.startCommand) {
+      if (params.action === 'start' && !params.startCommand) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
           path: ['startCommand'],
-          message: 'startCommand is required for start/restart',
+          message: 'startCommand is required for start',
         });
       }
       if (params.action === 'stop' && !params.stopCommand) {
@@ -633,6 +680,24 @@ export const EnvironmentLifecyclePayloadSchema = BasePayloadSchema.extend({
           code: z.ZodIssueCode.custom,
           path: ['nukeCommand'],
           message: 'nukeCommand is required for nuke',
+        });
+      }
+      if (params.action === 'sync') {
+        for (const field of ['syncCommand', 'desiredRevision', 'syncClaimToken'] as const) {
+          if (!params[field]) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              path: [field],
+              message: `${field} is required for sync`,
+            });
+          }
+        }
+      }
+      if (params.action !== 'start' && params.commandTimeoutMs === undefined) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['commandTimeoutMs'],
+          message: 'commandTimeoutMs is required for non-start lifecycle commands',
         });
       }
     }),

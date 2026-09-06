@@ -23,9 +23,11 @@ vi.mock('antd', async () => {
     }) => React.createElement('span', props, indicator ?? 'loading'),
     Tooltip: ({
       children,
+      title,
       trigger,
     }: {
       children: React.ReactNode;
+      title?: React.ReactNode;
       trigger?: string | string[];
     }) => {
       if (!React.isValidElement(children)) {
@@ -33,6 +35,7 @@ vi.mock('antd', async () => {
       }
 
       return React.cloneElement(children as React.ReactElement<Record<string, unknown>>, {
+        'data-tooltip-title': typeof title === 'string' ? title : undefined,
         'data-tooltip-trigger': Array.isArray(trigger) ? trigger.join(',') : trigger,
       });
     },
@@ -133,6 +136,72 @@ describe('BranchHeaderPill', () => {
       width: '22px',
       minWidth: '22px',
     });
+  });
+
+  it('uses the first runtime URL as primary and exposes every additional named URL', () => {
+    render(
+      <BranchHeaderPill
+        {...defaultProps}
+        branch={
+          {
+            ...branch,
+            app_url: 'https://stale-static.example.test',
+            environment_instance: {
+              status: 'running',
+              access_urls: [
+                { name: 'App', url: 'https://app.example.test' },
+                { name: 'Metrics', url: 'https://metrics.example.test' },
+              ],
+            },
+          } as Branch
+        }
+      />
+    );
+
+    expect(screen.getByRole('link', { name: 'Open App' })).toHaveAttribute(
+      'href',
+      'https://app.example.test'
+    );
+    expect(screen.getByRole('link', { name: 'Open Metrics' })).toHaveAttribute(
+      'href',
+      'https://metrics.example.test'
+    );
+  });
+
+  it('distinguishes a pending health observation from no configured health check', () => {
+    const { rerender } = render(
+      <BranchHeaderPill
+        {...defaultProps}
+        branch={
+          {
+            ...branch,
+            environment_instance: {
+              status: 'running',
+              lifecycle_result: {
+                version: 1,
+                health_url: 'https://runtime.example.test/health',
+              },
+            },
+          } as Branch
+        }
+      />
+    );
+
+    expect(screen.getByText('env').closest('[data-tooltip-title]')).toHaveAttribute(
+      'data-tooltip-title',
+      'Running (checking health)'
+    );
+
+    rerender(
+      <BranchHeaderPill
+        {...defaultProps}
+        branch={{ ...branch, environment_instance: { status: 'running' } } as Branch}
+      />
+    );
+    expect(screen.getByText('env').closest('[data-tooltip-title]')).toHaveAttribute(
+      'data-tooltip-title',
+      'Running (health check not configured)'
+    );
   });
 
   it('can explicitly hide only the destructive nuke action', () => {

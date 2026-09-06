@@ -756,6 +756,10 @@ export interface BranchesService extends AgorService<Branch> {
           branchId?: string;
           environment_update?: BranchEnvironmentUpdate;
           environmentUpdate?: BranchEnvironmentUpdate;
+          expected_environment_generation?: number;
+          expectedEnvironmentGeneration?: number;
+          expected_environment_status?: BranchEnvironmentUpdate['status'];
+          expectedEnvironmentStatus?: BranchEnvironmentUpdate['status'];
         }
       | string,
     environmentUpdate?: BranchEnvironmentUpdate,

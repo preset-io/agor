@@ -1,5 +1,9 @@
 import { and, asc, eq, gt, or, sql } from 'drizzle-orm';
 import type { DistributedWorkIdentity } from '../../coordination';
+import {
+  decideEnvironmentHealthTransition,
+  ENVIRONMENT_STARTUP_TIMEOUT_MS,
+} from '../../environment/health-transition';
 import type { BranchEnvironmentInstance, BranchID, TenantID } from '../../types';
 import type { Database, SystemDatabase } from '../client';
 import {
@@ -53,8 +57,25 @@ export type EnvironmentHealthCommitResult =
       outcome: 'committed';
       mutated: boolean;
       stateChanged: boolean;
-      environmentStatus: 'starting' | 'running';
+      /**
+       * Status AFTER the observation. Includes `error`: an environment is only
+       * admitted for observation while `starting`/`running`, but the transition
+       * rules can demote it here (unreachable, or a startup that never became
+       * reachable).
+       */
+      environmentStatus: 'starting' | 'running' | 'error';
     };
+
+function startupDeadlineAtMs(environment: BranchEnvironmentInstance): number | undefined {
+  const persisted = Date.parse(environment.startup_deadline_at ?? '');
+  if (Number.isFinite(persisted)) return persisted;
+
+  // Compatibility for attempts started before startup_deadline_at existed.
+  // This still uses persisted wall-clock state, never the number/cadence of
+  // probes, so a daemon outage cannot grant an old attempt more time.
+  const startedAt = Date.parse(environment.process?.started_at ?? '');
+  return Number.isFinite(startedAt) ? startedAt + ENVIRONMENT_STARTUP_TIMEOUT_MS : undefined;
+}
 
 /**
  * System-scope discovery exposes routing metadata only. The RLS capability
@@ -355,12 +376,38 @@ export class EnvironmentHealthRepository {
         }
         const activeEnvironment = environment as BranchEnvironmentInstance;
 
+        // Same rules the standalone monitor applies, so an environment reaches
+        // the same status under either monitor. Previously this promoted
+        // `starting -> running` on a SINGLE healthy observation and never
+        // demoted or timed out at all, so a resuming tunnel's one stale 200
+        // could report an environment live while it was still booting, and one
+        // that went away stayed green forever.
+        const decision = decideEnvironmentHealthTransition({
+          currentStatus: status,
+          observation: input.observation.status,
+          previous: activeEnvironment.last_health_check,
+          observedAtMs: now.getTime(),
+          startupDeadlineAtMs: startupDeadlineAtMs(activeEnvironment),
+        });
+        const activeSyncAttempt = activeEnvironment.source_sync?.active_attempt;
+        const activeSyncLeaseExpiresAt = Date.parse(activeSyncAttempt?.lease_expires_at ?? '');
+        const syncOwnsExpectedDowntime =
+          status === 'running' &&
+          input.observation.status === 'unhealthy' &&
+          !!activeSyncAttempt &&
+          activeSyncAttempt.environment_generation === row.environment_generation &&
+          Number.isFinite(activeSyncLeaseExpiresAt) &&
+          activeSyncLeaseExpiresAt > now.getTime();
+        // Network failures during legitimate startup remain unrecorded, but an
+        // expired attempt MUST persist its terminal transition. Previously the
+        // decision returned `error` while shouldRecord stayed false, so the row
+        // remained `starting` forever despite the apparent timeout result.
         const shouldRecord =
           status === 'running' ||
           input.observation.status === 'healthy' ||
-          input.observation.recordWhileStarting;
-        const nextStatus =
-          status === 'starting' && input.observation.status === 'healthy' ? 'running' : status;
+          input.observation.recordWhileStarting ||
+          decision.nextStatus !== undefined;
+        const nextStatus = syncOwnsExpectedDowntime ? status : (decision.nextStatus ?? status);
         const previousHealth = activeEnvironment.last_health_check;
         const stateChanged =
           shouldRecord &&
@@ -375,9 +422,18 @@ export class EnvironmentHealthRepository {
                 timestamp: now.toISOString(),
                 status: input.observation.status,
                 message: input.observation.message,
+                consecutive: decision.consecutive,
               },
             }
           : activeEnvironment;
+        // A startup timeout is a terminal lifecycle boundary, not merely a
+        // health observation. Invalidate the Start generation while holding
+        // the same row lock as the starting -> error transition so its shell
+        // callback can never publish URLs or revive the branch afterward.
+        // Do not bump for starting -> running: readiness may become healthy
+        // before Start exits and its current-generation callback still owns
+        // publication of the typed lifecycle result.
+        const invalidatesTimedOutStart = status === 'starting' && nextStatus === 'error';
         // A network failure while an environment is still starting is a
         // legitimate, deliberately unrecorded observation: startup grace
         // keeps the prior durable state until a recordable result arrives.
@@ -390,6 +446,17 @@ export class EnvironmentHealthRepository {
             .set({
               data: { ...data, environment_instance: nextEnvironment },
               ...(stateChanged ? { updated_at: now } : {}),
+              ...(invalidatesTimedOutStart
+                ? {
+                    environment_generation: sql`${branches.environment_generation} + 1`,
+                    environment_health_claim_token: null,
+                    environment_health_claimed_at: null,
+                    environment_health_claim_expires_at: null,
+                    environment_health_next_observation_at: null,
+                    environment_health_claim_instance_id: null,
+                    environment_health_claim_boot_id: null,
+                  }
+                : {}),
             })
             .where(
               and(

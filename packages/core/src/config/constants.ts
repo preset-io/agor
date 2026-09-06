@@ -95,6 +95,22 @@ export const EXECUTOR_FEATHERS_ACK_TIMEOUT_MS = 60_000;
 /** Extra time for bounded transport cleanup after the executor RPC deadline. */
 export const EXECUTOR_REVOCATION_TRANSPORT_CLEANUP_MARGIN_MS = 5_000;
 
+/**
+ * Default lifetime of a taskless executor command credential.
+ *
+ * These credentials delegate the initiating user's normal tenant authority but
+ * have no task lifecycle that can reliably revoke them when a remote launcher
+ * exits, so the expiry is the only bound. A caller that owns a stricter
+ * server-side command deadline may request that exact narrower window; the
+ * configured `execution.session_token_expiration_ms` maximum stays
+ * authoritative.
+ *
+ * Lives here rather than beside the issuer because the default environment
+ * lifecycle command budget is derived from it. A second local copy could drift
+ * and silently size a command deadline past the authority issued for it.
+ */
+export const EXECUTOR_COMMAND_TOKEN_EXPIRATION_MS = 15 * 60 * 1000;
+
 export const EXECUTOR_REVOCATION_TRANSPORT_CLEANUP_TIMEOUT_MS =
   EXECUTOR_FEATHERS_ACK_TIMEOUT_MS + EXECUTOR_REVOCATION_TRANSPORT_CLEANUP_MARGIN_MS;
 

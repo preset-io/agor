@@ -308,6 +308,9 @@ describe('EnvironmentLifecyclePayloadSchema', () => {
         action: 'start',
         startCommand: 'docker compose up -d --build',
         appUrl: 'http://localhost:3000',
+        healthCheckUrl: 'http://localhost:3000/health',
+        startupTimeoutMs: 2_700_000,
+        lifecycleGeneration: 7,
       },
     };
 
@@ -315,6 +318,9 @@ describe('EnvironmentLifecyclePayloadSchema', () => {
     expect(result.command).toBe('environment.lifecycle');
     expect(result.params.action).toBe('start');
     expect(result.params.startCommand).toBe('docker compose up -d --build');
+    expect(result.params.healthCheckUrl).toBe('http://localhost:3000/health');
+    expect(result.params.startupTimeoutMs).toBe(2_700_000);
+    expect(result.params.lifecycleGeneration).toBe(7);
   });
 
   it('should reject start payloads without startCommand', () => {
@@ -328,6 +334,43 @@ describe('EnvironmentLifecyclePayloadSchema', () => {
         },
       })
     ).toThrow();
+  });
+
+  it('requires an exact desired revision and claim for sync', () => {
+    const valid = {
+      command: 'environment.lifecycle',
+      sessionToken: 'jwt-token-here',
+      params: {
+        branchId: '550e8400-e29b-41d4-a716-446655440000',
+        action: 'sync',
+        syncCommand: 'bridge sync',
+        desiredRevision: 'a'.repeat(40),
+        syncClaimToken: 'claim-a',
+        commandTimeoutMs: 21 * 60_000,
+      },
+    };
+
+    expect(EnvironmentLifecyclePayloadSchema.parse(valid).params.desiredRevision).toBe(
+      'a'.repeat(40)
+    );
+    expect(() =>
+      EnvironmentLifecyclePayloadSchema.parse({
+        ...valid,
+        params: { ...valid.params, desiredRevision: 'abc123' },
+      })
+    ).toThrow();
+    expect(() =>
+      EnvironmentLifecyclePayloadSchema.parse({
+        ...valid,
+        params: { branchId: valid.params.branchId, action: 'sync' },
+      })
+    ).toThrow();
+    expect(() =>
+      EnvironmentLifecyclePayloadSchema.parse({
+        ...valid,
+        params: { ...valid.params, commandTimeoutMs: undefined },
+      })
+    ).toThrow('commandTimeoutMs');
   });
 });
 

@@ -102,6 +102,44 @@ export function extractSlugFromUrl(url: string): RepoSlug {
 }
 
 /**
+ * Derive a credential-free GitHub `owner/repository` identity from a
+ * `github.com` git remote.
+ *
+ * Provider integrations must not treat a same-shaped GitLab/Bitbucket path as
+ * a GitHub repository. Only the validated path components are returned, so
+ * legacy HTTP userinfo can never enter a rendered lifecycle command.
+ */
+export function extractGitHubSlugFromUrl(url: string): RepoSlug | undefined {
+  const value = url.trim();
+  if (!value) return undefined;
+
+  let remotePath: string | undefined;
+  const scpMatch = value.match(/^(?:[^@\s/:]+@)?github\.com:([^?#]+)$/i);
+  if (scpMatch) {
+    remotePath = scpMatch[1];
+  } else {
+    let parsed: URL;
+    try {
+      parsed = new URL(value);
+    } catch {
+      return undefined;
+    }
+    if (
+      parsed.hostname.toLowerCase() !== 'github.com' ||
+      !['http:', 'https:', 'ssh:', 'git:'].includes(parsed.protocol) ||
+      parsed.search ||
+      parsed.hash
+    ) {
+      return undefined;
+    }
+    remotePath = parsed.pathname;
+  }
+
+  const slug = remotePath.replace(/^\/+|\/+$/g, '').replace(/\.git$/i, '');
+  return isValidSlug(slug) ? (slug as RepoSlug) : undefined;
+}
+
+/**
  * Validate slug format (org/name)
  *
  * @param slug - Repository slug to validate
