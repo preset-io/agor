@@ -205,7 +205,7 @@ describe('registered primary-teammate invalidation lifecycle', () => {
         config: {
           database: { dialect: 'sqlite' },
           multi_tenancy: { mode: 'static', static_tenant_id: 'registration-test' },
-          execution: { branch_rbac: false },
+          execution: {},
         } as RegisterHooksContext['config'],
         jwtSecret: 'registration-test-secret',
         requireAuth: async (context) => context,
@@ -229,7 +229,7 @@ describe('registered primary-teammate invalidation lifecycle', () => {
         params: {
           tenant: { tenant_id: 'registration-test', source: 'static' },
           provider: 'socketio',
-          user: { user_id: 'member-1', role: 'member' },
+          user: { user_id: 'member-1', role: 'admin' },
         },
         result: board,
         arguments: [firstArgument],
@@ -621,7 +621,7 @@ describe('tenant-owned service registration', () => {
       config: {
         database: { dialect: 'postgresql' },
         multi_tenancy: { mode: 'static', static_tenant_id: 'registration-test' },
-        execution: { branch_rbac: false },
+        execution: {},
       } as RegisterHooksContext['config'],
       jwtSecret: 'registration-test-secret',
       requireAuth: async (context) => context,
@@ -629,7 +629,15 @@ describe('tenant-owned service registration', () => {
       sessionsService: {} as RegisterHooksContext['sessionsService'],
       messagesService: {} as RegisterHooksContext['messagesService'],
       boardsService: undefined,
-      branchRepository: {} as RegisterHooksContext['branchRepository'],
+      branchRepository: {
+        findById: vi.fn(async (branchId: string) => ({
+          branch_id: branchId,
+          created_by: 'registration-test-user',
+          primary_owner_user_id: 'registration-test-user',
+        })),
+        isOwner: vi.fn(async () => true),
+        resolveUserPermission: vi.fn(async () => 'all'),
+      } as unknown as RegisterHooksContext['branchRepository'],
       usersRepository: {} as RegisterHooksContext['usersRepository'],
       sessionsRepository: {} as RegisterHooksContext['sessionsRepository'],
       deployment: { mode: 'standalone' },
@@ -774,7 +782,7 @@ describe('registered RBAC authentication boundary', () => {
       config: {
         database: { dialect: 'postgresql' },
         multi_tenancy: { mode: 'static', static_tenant_id: 'rbac-auth-test' },
-        execution: { branch_rbac: true },
+        execution: {},
       } as RegisterHooksContext['config'],
       jwtSecret: 'rbac-auth-test-secret',
       requireAuth,
@@ -870,7 +878,7 @@ describe('registered tenant write-gate classification', () => {
       config: {
         database: { dialect: 'postgresql' },
         multi_tenancy: { mode: 'static', static_tenant_id: 'registration-test' },
-        execution: { branch_rbac: false },
+        execution: {},
       } as RegisterHooksContext['config'],
       jwtSecret: 'registration-test-secret',
       requireAuth: async (context) => context,
@@ -940,7 +948,7 @@ describe('registered external board-comment mutation boundary', () => {
       config: {
         database: { dialect: 'sqlite' },
         multi_tenancy: { mode: 'static', static_tenant_id: 'registration-test' },
-        execution: { branch_rbac: false },
+        execution: {},
       } as RegisterHooksContext['config'],
       jwtSecret: 'registration-test-secret',
       requireAuth: async (context) => context,
@@ -964,7 +972,7 @@ describe('registered external board-comment mutation boundary', () => {
       data,
       params: {
         provider: 'socketio',
-        user: { user_id: 'member-1', role: 'member' },
+        user: { user_id: 'member-1', role: 'admin' },
       },
     } as HookContext;
     for (const registration of captureBoardCommentHooks()) {
@@ -1024,7 +1032,7 @@ describe('registered board admin authority', () => {
       config: {
         database: { dialect: 'sqlite' },
         multi_tenancy: { mode: 'static', static_tenant_id: 'registration-test' },
-        execution: { branch_rbac: true },
+        execution: {},
       } as RegisterHooksContext['config'],
       jwtSecret: 'registration-test-secret',
       requireAuth: async (context) => context,
@@ -1554,7 +1562,6 @@ describe('TENANT_IDENTITY_ONLY_SERVICE_PATHS', () => {
         multi_tenancy: { mode: 'static', static_tenant_id: 'registration-test' },
       } as RegisterHooksContext['config'],
       jwtSecret: 'registration-test-secret',
-      branchRbacEnabled: false,
       requireAuth: async (context) => context,
       superadminOpts: { allowSuperadmin: true },
       sessionsService: {} as RegisterHooksContext['sessionsService'],
@@ -1653,7 +1660,7 @@ describe('registered file service RBAC database preload', () => {
         config: {
           database: { dialect: 'postgresql' },
           multi_tenancy: { mode: 'static', static_tenant_id: 'tenant-a' },
-          execution: { branch_rbac: true },
+          execution: {},
         } as RegisterHooksContext['config'],
         jwtSecret: 'registration-test-secret',
         requireAuth: async (context) => context,

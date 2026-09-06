@@ -65,10 +65,6 @@ const fsAccessDescriptions: Record<FsAccessLevel, string> = {
   write: 'Read/write',
 };
 
-export const rbacVisibilityFromOthersCan = (
-  othersCan: BranchPermissionLevel | undefined
-): RbacVisibility => (othersCan === 'none' ? 'private' : 'shared');
-
 export const othersCanFromRbacVisibility = (
   visibility: RbacVisibility,
   previous: BranchPermissionLevel | undefined

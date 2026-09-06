@@ -1,19 +1,10 @@
 import type { Branch } from '@agor-live/client';
 import { act, renderHook, waitFor } from '@testing-library/react';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { __resetAuthConfigForTests, __setAuthConfigForTests } from '../../hooks/useAuthConfig';
+import { describe, expect, it } from 'vitest';
 import { makeBranch, makeBranchPolicy, makeStubClient, makeUser, wrapper } from './testUtils';
 import { useBranchModalForm } from './useBranchModalForm';
 
 describe('useBranchModalForm normalized permission package', () => {
-  beforeEach(() => {
-    __setAuthConfigForTests({ requireAuth: true }, { branchRbac: true });
-  });
-
-  afterEach(() => {
-    __resetAuthConfigForTests();
-  });
-
   it('loads the immutable primary owner and grants that owner management', async () => {
     const owner = makeUser({ user_id: 'user-1', role: 'member' });
     const branch = makeBranch();
@@ -162,14 +153,6 @@ describe('useBranchModalForm normalized permission package', () => {
 });
 
 describe('useBranchModalForm board-move validation', () => {
-  beforeEach(() => {
-    __setAuthConfigForTests({ requireAuth: true }, { branchRbac: true });
-  });
-
-  afterEach(() => {
-    __resetAuthConfigForTests();
-  });
-
   it('blocks the move and reports why when the caller lacks board.attach_branch on the target board', async () => {
     const owner = makeUser({ user_id: 'user-1', role: 'member' });
     const branch = makeBranch();

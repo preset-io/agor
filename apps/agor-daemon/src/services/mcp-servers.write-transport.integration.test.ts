@@ -97,7 +97,6 @@ async function createHarness(
       bundledUiAvailable: false,
       DAEMON_PORT: 3030,
       UI_PORT: 5173,
-      branchRbacEnabled: false,
       allowSuperadmin: false,
       requireAuth: async (context) => requireAuth(context),
       deployment: {} as RegisterServicesContext['deployment'],

@@ -164,7 +164,7 @@ describe('gateway channel probe tenant boundary', () => {
         config: {
           database: { dialect: 'sqlite' },
           multi_tenancy: { mode: 'required_from_auth', auth_claim: 'tenant_id' },
-          execution: { branch_rbac: false, unix_user_mode: 'simple' },
+          execution: { unix_user_mode: 'simple' },
         } as AgorConfig,
         jwtSecret: 'gateway-probe-test-secret',
         requireAuth: async (context) => context,

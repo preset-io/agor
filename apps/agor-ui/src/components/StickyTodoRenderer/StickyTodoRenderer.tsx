@@ -1,11 +1,11 @@
 /**
  * StickyTodoRenderer - Displays latest TODO above typing indicator
  *
- * Scans backward through messages to find the latest TodoWrite tool use,
- * rendering it above the typing indicator when a task is running.
+ * Reconstructs the latest list from either Codex/legacy TodoWrite snapshots or
+ * Claude's TaskCreate/TaskUpdate lifecycle, then renders it above the typing
+ * indicator.
  *
  * Features:
- * - Scans messages in reverse for performance (early exit)
  * - Caches result with useMemo (dependency: messages)
  * - Reuses existing TodoListRenderer for consistent styling
  * - Subtle visual distinction (dashed border, light background)
@@ -24,7 +24,7 @@ import {
 
 interface StickyTodoRendererProps {
   /**
-   * Messages from the task - will be scanned in reverse to find latest TodoWrite
+   * Messages from the task, including provider tool-use and tool-result blocks.
    */
   messages: Message[];
 
@@ -60,34 +60,187 @@ function inProgressOverrideFor(taskStatus: TaskStatus): RenderableTodoStatus | n
   }
 }
 
+type TaskToolName = 'taskcreate' | 'taskupdate' | 'taskget' | 'tasklist';
+
+interface TaskTodo extends RenderableTodoItem {
+  id: string;
+}
+
+interface TaskToolCall {
+  name: TaskToolName;
+  input: Record<string, unknown>;
+}
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+function stringField(record: Record<string, unknown> | undefined, ...keys: string[]) {
+  for (const key of keys) {
+    const value = record?.[key];
+    if (typeof value === 'string' && value.length > 0) return value;
+  }
+  return undefined;
+}
+
+function todoStatus(value: unknown): RenderableTodoStatus | undefined {
+  return value === 'pending' || value === 'in_progress' || value === 'completed'
+    ? value
+    : undefined;
+}
+
+function taskFromRecord(
+  record: Record<string, unknown>,
+  fallback?: TaskTodo
+): TaskTodo | undefined {
+  const id = stringField(record, 'id', 'taskId', 'task_id') ?? fallback?.id;
+  const content = stringField(record, 'subject') ?? fallback?.content;
+  if (!id || !content) return undefined;
+  return {
+    id,
+    content,
+    activeForm: stringField(record, 'activeForm', 'active_form') ?? fallback?.activeForm ?? content,
+    status: todoStatus(record.status) ?? fallback?.status ?? 'pending',
+  };
+}
+
+function structuredToolResult(block: Record<string, unknown>) {
+  const structured = asRecord(block.tool_use_result);
+  if (structured) return structured;
+
+  // Some importers may serialize structured output into content. Prefer the
+  // SDK field above, but accept a JSON object for durable historical records.
+  if (typeof block.content === 'string') {
+    try {
+      return asRecord(JSON.parse(block.content));
+    } catch {
+      return undefined;
+    }
+  }
+  return asRecord(block.content);
+}
+
 /**
- * Virtual component that scans backward through messages to find and display
- * the latest TodoWrite tool use. Renders nothing if no TODOs found.
+ * Fold persisted tool calls/results into the latest renderable task list.
  *
- * Performance: Uses useMemo + early exit strategy (O(1) to O(5) in practice)
+ * TodoWrite is a complete snapshot (including Codex's normalized todo_list
+ * event). Claude Task* calls are incremental and TaskCreate receives its ID in
+ * the following SDKUserMessage.tool_use_result, so calls are correlated by
+ * tool_use_id. This function is intentionally pure so hydrated and realtime
+ * message arrays follow the same path.
+ */
+export function deriveLatestTodos(messages: Message[]): RenderableTodoItem[] | null {
+  let mode: 'todo-write' | 'task-tools' | null = null;
+  let todoWriteSnapshot: RenderableTodoItem[] = [];
+  const tasks = new Map<string, TaskTodo>();
+  const calls = new Map<string, TaskToolCall>();
+
+  for (const message of messages) {
+    if (!Array.isArray(message.content)) continue;
+
+    for (const rawBlock of message.content) {
+      const block = rawBlock as Record<string, unknown>;
+      if (block.type === 'tool_use' && typeof block.name === 'string') {
+        const name = block.name.toLowerCase();
+        const input = asRecord(block.input) ?? {};
+
+        if (name === 'todowrite') {
+          if (mode !== 'todo-write') {
+            tasks.clear();
+            calls.clear();
+          }
+          mode = 'todo-write';
+          todoWriteSnapshot = parseTodosInput(input.todos);
+          continue;
+        }
+
+        if (!['taskcreate', 'taskupdate', 'taskget', 'tasklist'].includes(name)) continue;
+        if (mode !== 'task-tools') {
+          tasks.clear();
+          calls.clear();
+        }
+        mode = 'task-tools';
+        const toolUseId = typeof block.id === 'string' ? block.id : undefined;
+        const toolName = name as TaskToolName;
+
+        if (toolName === 'taskcreate' && toolUseId) {
+          const subject = stringField(input, 'subject');
+          if (subject) {
+            tasks.set(`pending:${toolUseId}`, {
+              id: `pending:${toolUseId}`,
+              content: subject,
+              activeForm: stringField(input, 'activeForm', 'active_form') ?? subject,
+              status: 'pending',
+            });
+          }
+        }
+
+        if (toolName === 'taskupdate') {
+          if (toolUseId) calls.set(toolUseId, { name: toolName, input });
+          continue;
+        }
+
+        if (toolUseId) calls.set(toolUseId, { name: toolName, input });
+        continue;
+      }
+
+      if (block.type !== 'tool_result' || typeof block.tool_use_id !== 'string') continue;
+      const call = calls.get(block.tool_use_id);
+      if (!call) continue;
+
+      if (block.is_error === true) {
+        if (call.name === 'taskcreate') tasks.delete(`pending:${block.tool_use_id}`);
+        calls.delete(block.tool_use_id);
+        continue;
+      }
+
+      const result = structuredToolResult(block);
+      if (call.name === 'taskcreate') {
+        const created = asRecord(result?.task) ?? result;
+        const pending = tasks.get(`pending:${block.tool_use_id}`);
+        const task = created ? taskFromRecord(created, pending) : undefined;
+        if (task) {
+          tasks.delete(`pending:${block.tool_use_id}`);
+          tasks.set(task.id, task);
+        }
+      } else if (call.name === 'taskupdate' && result?.success !== false) {
+        const taskId = stringField(call.input, 'taskId', 'task_id', 'id');
+        if (taskId && call.input.status === 'deleted') {
+          tasks.delete(taskId);
+        } else if (taskId) {
+          const updated = taskFromRecord(call.input, tasks.get(taskId));
+          if (updated) tasks.set(taskId, updated);
+        }
+      } else if (call.name === 'taskget') {
+        const returned = asRecord(result?.task) ?? result;
+        const task = returned ? taskFromRecord(returned) : undefined;
+        if (task) tasks.set(task.id, task);
+      } else if (call.name === 'tasklist' && Array.isArray(result?.tasks)) {
+        tasks.clear();
+        for (const rawTask of result.tasks) {
+          const taskRecord = asRecord(rawTask);
+          const task = taskRecord ? taskFromRecord(taskRecord) : undefined;
+          if (task) tasks.set(task.id, task);
+        }
+      }
+      calls.delete(block.tool_use_id);
+    }
+  }
+
+  const latest = mode === 'task-tools' ? Array.from(tasks.values()) : todoWriteSnapshot;
+  return latest.length > 0 ? latest : null;
+}
+
+/**
+ * Virtual component that derives and displays the latest task list. Renders
+ * nothing if neither provider has produced task state.
  */
 export function StickyTodoRenderer({ messages, taskStatus }: StickyTodoRendererProps) {
   const { token } = theme.useToken();
 
-  // Scan messages in reverse to find latest TodoWrite
-  // Early exit on first match for performance
-  const latestTodo = useMemo(() => {
-    for (let i = messages.length - 1; i >= 0; i--) {
-      const message = messages[i];
-
-      if (Array.isArray(message.content)) {
-        for (const block of message.content) {
-          if (block.type === 'tool_use' && block.name === 'TodoWrite') {
-            // Found the latest TodoWrite - return its todos and exit immediately
-            const input = block.input as Record<string, unknown> | undefined;
-            const todos = parseTodosInput(input?.todos);
-            return todos.length > 0 ? todos : null;
-          }
-        }
-      }
-    }
-    return null;
-  }, [messages]);
+  const latestTodo = useMemo(() => deriveLatestTodos(messages), [messages]);
 
   // Apply display-only transform: items still `in_progress` are rewritten when
   // the parent task can no longer be making progress. Underlying message data

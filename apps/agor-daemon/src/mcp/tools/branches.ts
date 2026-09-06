@@ -249,7 +249,6 @@ async function collectZoneOccupantRectangles(
 }
 
 async function shouldScopeTeammateDiscoveryToUser(ctx: McpContext): Promise<boolean> {
-  if (ctx.app.get('config').execution?.branch_rbac !== true) return false;
   if (ctx.authenticatedUser?._isServiceAccount) return false;
 
   const config = ctx.app.get('config');

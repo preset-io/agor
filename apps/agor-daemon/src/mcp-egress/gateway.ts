@@ -149,7 +149,6 @@ interface GatewayOptions {
   db: TenantScopeAwareDatabase;
   app: Application;
   jwtSecret: string;
-  branchRbacEnabled: boolean;
   allowLocalhostHttp?: boolean;
   resolveDns?: OutboundDnsLookup;
   /** Test seam proving all constituent reads share one native snapshot. */
@@ -650,19 +649,17 @@ export class MCPEgressGateway {
             throw new MCPEgressGatewayError(403, 'server_detached', 'MCP server was detached');
           }
         }
-        if (this.options.branchRbacEnabled) {
-          const branchRepository = new BranchRepository(tenantDb);
-          const branch = await branchRepository.findById(session.branch_id);
-          if (!branch) throw new MCPEgressGatewayError(403, 'branch_revoked', 'Branch unavailable');
-          const promptAccess = await resolveSessionPromptAccess({
-            branchRepository,
-            branch,
-            session,
-            userId: claims.principal_user_id as UserID,
-          });
-          if (!promptAccess.allowed) {
-            throw new MCPEgressGatewayError(403, 'branch_revoked', 'Branch permission changed');
-          }
+        const branchRepository = new BranchRepository(tenantDb);
+        const branch = await branchRepository.findById(session.branch_id);
+        if (!branch) throw new MCPEgressGatewayError(403, 'branch_revoked', 'Branch unavailable');
+        const promptAccess = await resolveSessionPromptAccess({
+          branchRepository,
+          branch,
+          session,
+          userId: claims.principal_user_id as UserID,
+        });
+        if (!promptAccess.allowed) {
+          throw new MCPEgressGatewayError(403, 'branch_revoked', 'Branch permission changed');
         }
         if (server.auth?.type === 'oauth') {
           const tokenUserId =

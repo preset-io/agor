@@ -6,6 +6,8 @@ broad; the required handling depends on the resource classification.
 Do not use the current SQLite/static-tenant development topology as proof that a
 change is tenant-neutral. `required_from_auth` resolves tenant identity from
 trusted authentication context and uses PostgreSQL row-level security (RLS).
+Board and branch RBAC is always enabled: tenant isolation keeps workspaces
+apart, while Board and Branch policies authorize members within one workspace.
 
 ## Trigger the check
 

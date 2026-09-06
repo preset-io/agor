@@ -1235,7 +1235,6 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
   private getRuntimeExecutionConfig():
     | {
         execution?: {
-          branch_rbac?: boolean;
           allow_superadmin?: boolean;
         };
       }
@@ -1248,7 +1247,6 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
       ).get?.('config') as
         | {
             execution?: {
-              branch_rbac?: boolean;
               allow_superadmin?: boolean;
             };
           }
@@ -1256,10 +1254,6 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
     } catch {
       return undefined;
     }
-  }
-
-  private shouldEnforceBranchRbac(): boolean {
-    return this.getRuntimeExecutionConfig()?.execution?.branch_rbac === true;
   }
 
   private shouldAllowSuperadminBypass(): boolean {
@@ -1271,7 +1265,7 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
     archived: boolean,
     params?: SessionParams
   ): Promise<void> {
-    if (!params?.provider || !this.shouldEnforceBranchRbac()) return;
+    if (!params?.provider) return;
 
     const user = params.user;
     if (!user) {
@@ -1671,9 +1665,8 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
    */
   async find(params?: SessionParams): Promise<Paginated<Session> | Session[]> {
     // SQL-pushdown path for the recency-sorted / board-scoped list queries the
-    // first-paint loader issues. In RBAC mode the before-hook stamps a marker
-    // here so the same SQL path can compose branch visibility into the query;
-    // in open-access mode this path still handles board_id + `$sort:{updated_at}`.
+    // first-paint loader issues. The before-hook stamps a marker here so the
+    // same SQL path can compose branch visibility into the query.
     //
     // We can't lean on DrizzleService's generic path: (1) its filter matches
     // `item.board_id`, but sessions expose the board as `branch_board_id`, so a

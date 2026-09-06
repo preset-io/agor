@@ -468,7 +468,6 @@ async function createHarness(
     bundledUiAvailable: false,
     DAEMON_PORT: 3030,
     UI_PORT: 5173,
-    branchRbacEnabled: false,
     allowSuperadmin: false,
     requireAuth: options.requireAuth ?? (async (context) => context),
     deployment: {} as RegisterServicesContext['deployment'],
@@ -812,7 +811,6 @@ async function createRealSocketHarness(
     bundledUiAvailable: false,
     DAEMON_PORT: 3030,
     UI_PORT: 5173,
-    branchRbacEnabled: false,
     allowSuperadmin: false,
     requireAuth: async (context) => {
       if (context.params.provider === 'socketio' && !context.params.user) {

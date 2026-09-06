@@ -332,7 +332,6 @@ export interface RegisterServicesContext {
   bundledUiAvailable: boolean;
   DAEMON_PORT: number;
   UI_PORT: number;
-  branchRbacEnabled: boolean;
   allowSuperadmin: boolean;
   requireAuth: (context: HookContext) => Promise<HookContext>;
   deployment: ResolvedDeploymentConfig;
@@ -365,7 +364,7 @@ export interface RegisteredServices {
  * Register all FeathersJS services on the app.
  */
 export async function registerServices(ctx: RegisterServicesContext): Promise<RegisteredServices> {
-  const { db, app, config, daemonUrl, branchRbacEnabled, allowSuperadmin } = ctx;
+  const { db, app, config, daemonUrl, allowSuperadmin } = ctx;
   const deploymentAgenticToolPolicy = resolveDeploymentAgenticToolPolicy(config);
 
   const _superadminOpts = { allowSuperadmin };
@@ -412,9 +411,7 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   const sessionsService = createSessionsService(db, app, (tool) =>
     isDeploymentAgenticToolAvailable(tool, deploymentAgenticToolPolicy)
   ) as unknown as SessionsServiceImpl;
-  const tasksService = createTasksService(db, app, sessionTokenService, {
-    branchRbacEnabled,
-  });
+  const tasksService = createTasksService(db, app, sessionTokenService);
   app.use('/sessions', sessionsService, {
     events: ['permission:request', 'permission:timeout'],
   });
@@ -607,7 +604,7 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   // Branches, repos
   // ============================================================================
 
-  app.use('/branches', createBranchesService(db, app, { appRbacEnabled: branchRbacEnabled }), {
+  app.use('/branches', createBranchesService(db, app), {
     methods: [
       'find',
       'get',
@@ -620,7 +617,7 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
     ],
   });
 
-  console.log(`[RBAC] Branch RBAC ${branchRbacEnabled ? 'Enabled' : 'Disabled'}`);
+  console.log('[RBAC] Board and branch RBAC enabled (always on)');
   console.log(`[RBAC] Superadmin bypass ${allowSuperadmin ? 'Enabled' : 'Disabled'}`);
 
   app.use('/groups', createGroupsService(db), {
@@ -754,7 +751,7 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
     app.service('gateway-channels/app-info').publish(() => []);
 
     app.use('/thread-session-map', createThreadSessionMapService(db));
-    app.use('/gateway', createGatewayService(db, app, { appRbacEnabled: branchRbacEnabled }), {
+    app.use('/gateway', createGatewayService(db, app), {
       // Only expose the inbound gateway entrypoint and existing route hook
       // externally. Proactive outbound emits are intentionally invoked through
       // the authenticated Agor MCP tool surface; exposing emitMessage here would
@@ -1214,8 +1211,7 @@ function createExecuteHandler(
         ? resolveSandboxStoragePaths(config, tenantId).worktreesRoot
         : undefined;
     // Effective fs access of the prompt actor on the branch: write/read/none.
-    // Drives whether the sandbox binds the branch rw / ro / not at all. Defaults
-    // to 'write' when RBAC is off (open-access behavior).
+    // Drives whether the sandbox binds the branch rw / ro / not at all.
     const principalBranchAccess = launchAuthority.fs_access;
     if (session.branch_id) {
       const branchMounts = await runWithTenantDatabaseScope(db, tenantId, async (tenantDb) => {

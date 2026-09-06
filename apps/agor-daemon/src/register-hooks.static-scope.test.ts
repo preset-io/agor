@@ -120,7 +120,7 @@ describe('registerHooks static-mode owned-service scope wiring', () => {
       config: {
         database: { dialect: 'sqlite' },
         multi_tenancy: { mode: 'static', static_tenant_id: 'static-scope-test' },
-        execution: { branch_rbac: false },
+        execution: {},
       } as RegisterHooksContext['config'],
       jwtSecret: 'static-scope-test-secret',
       deployment: { mode: 'standalone' },

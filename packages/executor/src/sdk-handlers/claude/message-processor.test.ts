@@ -420,4 +420,88 @@ describe('SDKMessageProcessor tool lifecycle', () => {
     ]);
     expect(replayed).toEqual([]);
   });
+
+  it('preserves the structured TaskCreate result used to correlate its assigned ID', async () => {
+    const processor = createProcessor();
+    await processor.process({
+      type: 'assistant',
+      message: {
+        content: [
+          {
+            type: 'tool_use',
+            id: 'create-1',
+            name: 'TaskCreate',
+            input: { subject: 'Verify the fix' },
+          },
+        ],
+      },
+    } as never);
+    const events = await processor.process({
+      type: 'user',
+      message: {
+        content: [{ type: 'tool_result', tool_use_id: 'create-1', content: 'Task created' }],
+      },
+      tool_use_result: {
+        task: { id: 'task-7', subject: 'Verify the fix' },
+      },
+    } as never);
+
+    const complete = events.find(
+      (event): event is Extract<ProcessedEvent, { type: 'complete' }> => event.type === 'complete'
+    );
+    expect(complete?.content).toEqual([
+      {
+        type: 'tool_result',
+        tool_use_id: 'create-1',
+        content: 'Task created',
+        tool_use_result: { task: { id: 'task-7', subject: 'Verify the fix' } },
+      },
+    ]);
+  });
+
+  it('does not misattribute an uncorrelated top-level result to parallel tool results', async () => {
+    const processor = createProcessor();
+    const events = await processor.process({
+      type: 'user',
+      message: {
+        content: [
+          { type: 'tool_result', tool_use_id: 'tool-1', content: 'one' },
+          { type: 'tool_result', tool_use_id: 'tool-2', content: 'two' },
+        ],
+      },
+      tool_use_result: { task: { id: 'ambiguous' } },
+    } as never);
+
+    const complete = events.find(
+      (event): event is Extract<ProcessedEvent, { type: 'complete' }> => event.type === 'complete'
+    );
+    expect(complete?.content).toEqual([
+      { type: 'tool_result', tool_use_id: 'tool-1', content: 'one' },
+      { type: 'tool_result', tool_use_id: 'tool-2', content: 'two' },
+    ]);
+  });
+
+  it('does not persist unrelated structured tool output', async () => {
+    const processor = createProcessor();
+    await processor.process({
+      type: 'assistant',
+      message: {
+        content: [{ type: 'tool_use', id: 'read-1', name: 'Read', input: { file_path: '/tmp/x' } }],
+      },
+    } as never);
+    const events = await processor.process({
+      type: 'user',
+      message: {
+        content: [{ type: 'tool_result', tool_use_id: 'read-1', content: 'bounded text' }],
+      },
+      tool_use_result: { unboundedProviderObject: 'must not be persisted' },
+    } as never);
+
+    const complete = events.find(
+      (event): event is Extract<ProcessedEvent, { type: 'complete' }> => event.type === 'complete'
+    );
+    expect(complete?.content).toEqual([
+      { type: 'tool_result', tool_use_id: 'read-1', content: 'bounded text' },
+    ]);
+  });
 });

@@ -33,7 +33,7 @@ const mocks = vi.hoisted(() => {
     joinRequestingSocket: vi.fn(async () => true),
     config: {
       daemon: { port: 3030 },
-      execution: { branch_rbac: false, unix_user_mode: 'simple' },
+      execution: { unix_user_mode: 'simple' },
     },
     canOpen: true,
     fsAccess: 'write' as 'none' | 'read' | 'write',
@@ -163,6 +163,7 @@ const params = {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mocks.spawnExecutorFireAndForget.mockReset();
   mocks.tenantId = 'tenant-x';
   mocks.databaseScopeDepth = 0;
   mocks.transactionCalls = 0;
@@ -186,7 +187,7 @@ beforeEach(() => {
   mocks.joinRequestingSocket.mockResolvedValue(true);
   mocks.config = {
     daemon: { port: 3030 },
-    execution: { branch_rbac: false, unix_user_mode: 'simple' },
+    execution: { unix_user_mode: 'simple' },
   };
 });
 
@@ -211,7 +212,7 @@ describe('branch-scoped terminal identity', () => {
     ).rejects.toThrow('cannot subscribe to this terminal');
   });
 
-  it('rejects a missing branch even when branch RBAC is disabled', async () => {
+  it('rejects a missing or inaccessible branch without enumeration', async () => {
     const service = new TerminalsService(makeApp() as never, {} as never);
     await expect(
       service.create({ branchId: 'missing' as BranchID }, params as never)
@@ -233,7 +234,6 @@ describe('process-affine attachment creation', () => {
     mocks.config = {
       daemon: { port: 3030 },
       execution: {
-        branch_rbac: false,
         unix_user_mode: 'delegated',
         sandbox: { sdk_home_mode: 'per_branch' },
       },
@@ -444,7 +444,7 @@ describe('process-affine attachment creation', () => {
     let release!: () => void;
     mocks.config = {
       daemon: { port: 3030 },
-      execution: { branch_rbac: true, unix_user_mode: 'simple' },
+      execution: { unix_user_mode: 'simple' },
     };
     mocks.createUserProcessEnvironment.mockImplementation(
       () => new Promise<Record<string, string>>((resolve) => (release = () => resolve({})))
@@ -512,7 +512,7 @@ describe('process-affine attachment creation', () => {
     mocks.canOpen = false;
     mocks.config = {
       daemon: { port: 3030 },
-      execution: { branch_rbac: true, unix_user_mode: 'simple' },
+      execution: { unix_user_mode: 'simple' },
     };
     const service = new TerminalsService(makeApp() as never, {} as never);
     const inaccessible = service.create({ branchId: 'branch-1' as BranchID }, params as never);
@@ -533,7 +533,7 @@ describe('process-affine attachment creation', () => {
   it('requires filesystem access in every execution mode and forwards its level', async () => {
     mocks.config = {
       daemon: { port: 3030 },
-      execution: { branch_rbac: true, unix_user_mode: 'simple' },
+      execution: { unix_user_mode: 'simple' },
     };
     mocks.fsAccess = 'none';
     const denied = new TerminalsService(makeApp() as never, {} as never);

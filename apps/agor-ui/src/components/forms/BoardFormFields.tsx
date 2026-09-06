@@ -1,4 +1,4 @@
-import type { Board, Group, User } from '@agor-live/client';
+import type { Board } from '@agor-live/client';
 import { LockOutlined } from '@ant-design/icons';
 import type { FormInstance } from 'antd';
 import { Alert, Form, Input, Space, Tabs, Typography } from 'antd';
@@ -84,19 +84,16 @@ export interface BoardFormFieldsProps {
    * mode from the freshly-loaded form values when the board changes.
    */
   backgroundResetSignal?: string;
-  rbacEnabled?: boolean;
-  allUsers?: User[];
-  allGroups?: Group[];
   /** Normalized permission editor mounted by BoardEditModal and persisted separately. */
   capabilityPolicyEditor?: React.ReactNode;
   /** Board-level defaults for newly-created/reset zones. */
   zoneDefaultsEditor?: React.ReactNode;
   /**
    * Whether the caller may edit the board's general settings (name,
-   * description, appearance). Defaults to `true` for the legacy/non-RBAC
-   * path, where every board mutator has always been allowed to save.
-   * `board.edit` is a single capability covering all of these fields
-   * together, so they're gated uniformly rather than field-by-field.
+   * description, appearance). Defaults to `true` for the create flows, where
+   * the board doesn't exist yet so there's nothing to gate. `board.edit` is a
+   * single capability covering all of these fields together, so they're gated
+   * uniformly rather than field-by-field.
    */
   canEditGeneral?: boolean;
 }
@@ -113,9 +110,6 @@ export const BoardFormFields: React.FC<BoardFormFieldsProps> = ({
   autoFocus,
   extra,
   backgroundResetSignal,
-  rbacEnabled = false,
-  allUsers = [],
-  allGroups = [],
   capabilityPolicyEditor,
   zoneDefaultsEditor,
   canEditGeneral = true,
@@ -197,24 +191,17 @@ export const BoardFormFields: React.FC<BoardFormFieldsProps> = ({
       <RbacPermissionFields
         value={permissionValue}
         onChange={setPermissionField}
-        allUsers={allUsers}
-        allGroups={allGroups}
+        allUsers={[]}
+        allGroups={[]}
         canEdit
-        canEditOwners={rbacEnabled}
-        canEditGroups={rbacEnabled}
+        canEditOwners={false}
+        canEditGroups={false}
         ownerHelp="Manage board owners"
         groupsHelp="Inherited by aligned branches"
         visibilityLabel="Default branch permissions"
         othersCanLabel="Default others can"
         othersFsAccessLabel="Default filesystem access"
       />
-      {!rbacEnabled && (
-        <Form.Item wrapperCol={{ offset: 8, span: 16 }}>
-          <Typography.Text type="secondary">
-            Enable execution.branch_rbac to manage board owners and group grants.
-          </Typography.Text>
-        </Form.Item>
-      )}
     </Form>
   );
 

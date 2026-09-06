@@ -55,7 +55,6 @@ describe('branch hard-delete realtime integration', () => {
     } as unknown as BranchRepository;
     configureRealtimePublish({
       app: app as never,
-      branchRbacEnabled: true,
       branchRepository,
       sessionsRepository: {
         findBranchIdBySessionId: vi.fn(async () => null),

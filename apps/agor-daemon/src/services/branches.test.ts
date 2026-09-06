@@ -207,7 +207,7 @@ const teammateContext = {
   },
 };
 
-function createServiceHarness(appRbacEnabled = true) {
+function createServiceHarness() {
   const boardObjectsService = {
     find: vi.fn(async () => ({ data: [] })),
     findByBranchId: vi.fn(async () => null),
@@ -249,9 +249,7 @@ function createServiceHarness(appRbacEnabled = true) {
     },
   } as unknown as Application;
 
-  const service = new BranchesService(createTenantScopeTestDb() as never, app, {
-    appRbacEnabled,
-  });
+  const service = new BranchesService(createTenantScopeTestDb() as never, app);
   const branchRepo = (
     service as unknown as {
       branchRepo: BranchRepository;
@@ -1770,42 +1768,6 @@ describe('BranchesService.archiveOrDelete', () => {
     });
   });
 
-  it('captures a tenant-wide hard-delete tombstone when branch RBAC is disabled', async () => {
-    const { service, branchRepo, branchesService } = createServiceHarness(false);
-    const branchId = 'wt-delete-open-mode' as BranchID;
-    const removedBranch = {
-      branch_id: branchId,
-      name: 'WT Delete Open Mode',
-      path: '/tmp/wt-delete-open-mode',
-      archived: false,
-      environment_instance: { status: 'stopped' },
-    } as never;
-    const params = {
-      user: { user_id: 'user-1' as UUID },
-      tenant: { tenant_id: 'tenant-a', source: 'auth_claim' },
-    } as never;
-    vi.spyOn(service, 'get').mockResolvedValue(removedBranch);
-    vi.spyOn(branchRepo, 'findById').mockResolvedValue(removedBranch);
-    const findRealtimeVisibility = vi.spyOn(branchRepo, 'findRealtimeVisibilityBranch');
-    vi.spyOn(branchRepo, 'delete').mockResolvedValue();
-
-    markBranchArchiveDeleteAuthorized(params, branchId, 'delete');
-    await service.archiveOrDelete(
-      branchId,
-      { metadataAction: 'delete', filesystemAction: 'preserved' },
-      params
-    );
-
-    const eventHook = branchesService.emit.mock.calls[0][2] as {
-      params: Record<string, unknown>;
-    };
-    expect(eventHook.params[BRANCH_REMOVAL_VISIBILITY_PARAM]).toEqual({
-      branchId,
-      mode: 'allAuthenticated',
-    });
-    expect(findRealtimeVisibility).not.toHaveBeenCalled();
-  });
-
   it('rejects direct callers before any environment, token, executor, or metadata work', async () => {
     const { service, sessionTokenService } = createServiceHarness();
     const get = vi.spyOn(service, 'get');
@@ -1886,7 +1848,7 @@ describe('BranchesService.find SQL pushdown', () => {
     { branch_id: 'b4', name: 'delta', board_id: 'board-2', archived: false },
   ];
 
-  it('pushes board_id + archived into the repository read and never reads the whole table (rbac off)', async () => {
+  it('pushes board_id + archived into the repository read and never reads the whole table', async () => {
     const { service, repository, branchRepo } = createFindHarness({
       branches: fixture(),
       branchIdsInZone: [],

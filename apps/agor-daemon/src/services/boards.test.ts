@@ -697,7 +697,7 @@ describe('BoardsService.find SQL pushdown', () => {
   }
 
   dbTest(
-    'pages the whole tenant scope in SQL when no filter is present (rbac off)',
+    'pages the whole authorized tenant scope in SQL when no filter is present',
     async ({ db }) => {
       const { service } = await seed(db);
       const repoFindPage = vi.spyOn(

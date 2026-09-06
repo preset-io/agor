@@ -21,16 +21,12 @@ const STUB_APP = {
 const TEST_USER_ID = 'test-user' as UUID;
 const OTHER_USER_ID = 'other-user' as UUID;
 
-function makeAppWithConfig(config: {
-  branchRbac: boolean;
-  allowSuperadmin?: boolean;
-}): Application {
+function makeAppWithConfig(config: { allowSuperadmin?: boolean } = {}): Application {
   return {
     get(key: string) {
       if (key !== 'config') return undefined;
       return {
         execution: {
-          branch_rbac: config.branchRbac,
           allow_superadmin: config.allowSuperadmin ?? false,
         },
       };
@@ -300,7 +296,7 @@ describe('SessionsService archive routes', () => {
   dbTest(
     'rejects external archive and unarchive before mutating when RBAC prompt permission is missing',
     async ({ db }) => {
-      const service = new SessionsService(db, makeAppWithConfig({ branchRbac: true }));
+      const service = new SessionsService(db, makeAppWithConfig());
       const branchId = await createBranch(db, 'rbac-session-only', {
         primary_owner_user_id: OTHER_USER_ID,
         others_can: 'session',
@@ -339,7 +335,7 @@ describe('SessionsService archive routes', () => {
   );
 
   dbTest('allows external archive when RBAC prompt permission is present', async ({ db }) => {
-    const service = new SessionsService(db, makeAppWithConfig({ branchRbac: true }));
+    const service = new SessionsService(db, makeAppWithConfig());
     const branchId = await createBranch(db, 'rbac-prompt', { others_can: 'prompt' });
     const parent = await createSession(db, branchId, { created_by: OTHER_USER_ID });
     const child = await createSession(db, branchId, {

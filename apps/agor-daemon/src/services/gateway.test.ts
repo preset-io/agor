@@ -56,7 +56,6 @@ vi.mock('@agor/core/config', async (importOriginal) => {
     assertInlineAgenticConfigurationAllowed: vi.fn(async () => undefined),
     getBaseUrl: vi.fn(async () => 'https://agor.example.com'),
     resolveExecutionSecurityMode: vi.fn(() => ({
-      appRbacEnabled: true,
       unixUserMode: 'simple',
       requiresExecutionHomeKey: false,
     })),

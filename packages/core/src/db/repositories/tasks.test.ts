@@ -91,15 +91,12 @@ async function createSessionWithDeps(db: Database): Promise<UUID> {
 async function bindTestRuntimeAuthority(db: Database, taskRepo: TaskRepository, task: Task) {
   const session = await new SessionRepository(db).findById(task.session_id);
   if (!session?.branch_id) throw new Error('Test runtime Session Branch is unavailable');
-  await taskRepo.bindExecutorLaunchAuthority(task.task_id, {
-    branchRbacEnabled: true,
-  });
+  await taskRepo.bindExecutorLaunchAuthority(task.task_id);
   return {
     token_fingerprint: 'a'.repeat(64),
     principal_user_id: task.created_by,
     session_id: task.session_id,
     branch_id: session.branch_id,
-    branchRbacEnabled: true,
     standalone_token_current: true,
   };
 }

@@ -121,7 +121,7 @@ dbTest(
     const config = {
       database: { dialect: 'sqlite' },
       multi_tenancy: { mode: 'static', static_tenant_id: STATIC_TENANT },
-      execution: { branch_rbac: false },
+      execution: {},
     } as RegisterHooksContext['config'];
     const app = feathersExpress(feathers());
     app.use(feathersExpress.json());

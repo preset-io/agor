@@ -30,7 +30,6 @@ import {
   getReposDir,
   getTenantDataRoot,
   initConfig,
-  isBranchRbacEnabled,
   loadConfig,
   loadConfigSync,
   PublicBaseUrlNotConfiguredError,
@@ -296,13 +295,13 @@ describe('resolveEffectiveConfig', () => {
       { AGOR_SANDBOX_HOME_MODE: 'per_user' }
     );
     expect(resolved.execution?.sandbox).toMatchObject({ enabled: true, home_mode: 'per_user' });
-    expect(resolved.execution?.branch_rbac).not.toBe(true); // not sandbox mode → no forced RBAC
+    expect(resolved.execution?.branch_rbac).toBe(true);
   });
 
   it('projects the SDK-home rollout override without implicitly enabling the sandbox', () => {
     const enabled = resolveEffectiveConfig({}, { AGOR_SANDBOX_SDK_HOME_MODE: 'per_branch' });
     expect(enabled.execution?.sandbox).toEqual({ sdk_home_mode: 'per_branch' });
-    expect(enabled.execution?.branch_rbac).not.toBe(true);
+    expect(enabled.execution?.branch_rbac).toBe(true);
 
     const disabled = resolveEffectiveConfig(
       { execution: { sandbox: { sdk_home_mode: 'per_branch' } } },
@@ -319,6 +318,41 @@ describe('resolveEffectiveConfig', () => {
 });
 
 describe('assertValidEffectiveExecutionConfig', () => {
+  it('keeps RBAC enabled in auth-resolved multi-tenant deployments', () => {
+    const resolved = resolveEffectiveConfig(
+      {
+        execution: { unix_user_mode: 'simple' },
+        multi_tenancy: { mode: 'required_from_auth' },
+      },
+      {}
+    );
+    expect(resolved.execution?.branch_rbac).toBe(true);
+    expect(() => assertValidEffectiveExecutionConfig(resolved)).not.toThrow();
+    expect(() =>
+      assertValidEffectiveExecutionConfig(
+        resolveEffectiveConfig(
+          {
+            execution: { unix_user_mode: 'simple', branch_rbac: true },
+            multi_tenancy: { mode: 'required_from_auth' },
+          },
+          {}
+        )
+      )
+    ).not.toThrow();
+
+    expect(() =>
+      assertValidEffectiveExecutionConfig(
+        resolveEffectiveConfig(
+          {
+            execution: { unix_user_mode: 'sandbox' },
+            multi_tenancy: { mode: 'required_from_auth' },
+          },
+          {}
+        )
+      )
+    ).not.toThrow();
+  });
+
   it('requires delegated mode to name an external execution substrate', () => {
     expect(() =>
       assertValidEffectiveExecutionConfig({ execution: { unix_user_mode: 'delegated' } })
@@ -524,6 +558,15 @@ describe('loadConfig', () => {
     );
     __resetConfigCacheForTests();
     await expect(loadConfig()).rejects.toThrow(/preserve_canonical_home_alias must be a boolean/);
+  });
+
+  it('rejects a non-boolean branch RBAC setting instead of silently disabling it', async () => {
+    const agorDir = path.join(tempDir, '.agor');
+    const configPath = path.join(agorDir, 'config.yaml');
+    await fs.mkdir(agorDir, { recursive: true });
+    await fs.writeFile(configPath, 'execution:\n  branch_rbac: "true"\n', 'utf-8');
+
+    await expect(loadConfig()).rejects.toThrow(/execution\.branch_rbac must be a boolean/);
   });
 
   it('accepts branch_storage.borrow_base_objects and rejects a non-boolean value', async () => {
@@ -1416,29 +1459,31 @@ describe('loadConfig cache', () => {
     );
   });
 
-  it('treats branch_rbac as app-level only in simple Unix mode', async () => {
-    await writeConfigFile({
-      execution: { branch_rbac: true, unix_user_mode: 'simple' },
-    });
+  it('rejects the removed RBAC false mode and accepts true as a compatibility no-op', async () => {
+    await writeConfigFile({ execution: { branch_rbac: false } });
+    expect(() => loadConfigSync()).toThrow(/branch_rbac: false is no longer supported/);
 
-    expect(isBranchRbacEnabled()).toBe(true);
+    await writeConfigFile({ execution: { branch_rbac: true } });
+    expect(loadConfigSync().execution?.branch_rbac).toBe(true);
+  });
+
+  it('rejects environment attempts to disable always-on RBAC', () => {
+    expect(() => resolveEffectiveConfig({ execution: { branch_rbac: false } })).toThrow(
+      /branch_rbac: false is no longer supported/
+    );
+    expect(() => resolveEffectiveConfig({}, { AGOR_RBAC_ENABLED: 'false' })).toThrow(
+      /can no longer disable board and branch RBAC/
+    );
+    expect(resolveEffectiveConfig({}, { AGOR_RBAC_ENABLED: 'true' }).execution?.branch_rbac).toBe(
+      true
+    );
   });
 
   it.each([
     {
-      name: 'open access simple',
-      config: { execution: { branch_rbac: false, unix_user_mode: 'simple' } } as AgorConfig,
-      expected: {
-        appRbacEnabled: false,
-        unixUserMode: 'simple',
-        requiresExecutionHomeKey: false,
-      },
-    },
-    {
       name: 'app RBAC simple',
-      config: { execution: { branch_rbac: true, unix_user_mode: 'simple' } } as AgorConfig,
+      config: { execution: { unix_user_mode: 'simple' } } as AgorConfig,
       expected: {
-        appRbacEnabled: true,
         unixUserMode: 'simple',
         requiresExecutionHomeKey: false,
       },
@@ -1447,9 +1492,8 @@ describe('loadConfig cache', () => {
       // Delegated requires per-user unix_username but performs no OS-level
       // work on the daemon host: no sudo and no host groups.
       name: 'delegated (identity enforced by execution substrate)',
-      config: { execution: { branch_rbac: true, unix_user_mode: 'delegated' } } as AgorConfig,
+      config: { execution: { unix_user_mode: 'delegated' } } as AgorConfig,
       expected: {
-        appRbacEnabled: true,
         unixUserMode: 'delegated',
         requiresExecutionHomeKey: true,
       },

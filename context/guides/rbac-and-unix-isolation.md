@@ -8,7 +8,6 @@ is the source of truth; the user-facing guide is
 
 ```yaml
 execution:
-  branch_rbac: true
   unix_user_mode: sandbox # simple | sandbox | delegated
 ```
 
@@ -24,7 +23,7 @@ sudo to launch executors.
 
 ## Capability policy model
 
-When `execution.branch_rbac` is enabled, normalized capability-policy tables
+Board and branch RBAC is always enabled. Normalized capability-policy tables
 are the only authorization source. The historical owner/grant rows and
 `others_can` fields remain empty, fail-closed compatibility shells; runtime
 code does not read or write them.

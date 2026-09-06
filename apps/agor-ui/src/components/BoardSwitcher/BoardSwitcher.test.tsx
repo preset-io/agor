@@ -1,7 +1,6 @@
 import type { AgorClient, Board, User } from '@agor-live/client';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { __resetAuthConfigForTests, __setAuthConfigForTests } from '../../hooks/useAuthConfig';
+import { describe, expect, it, vi } from 'vitest';
 import { BoardSwitcher } from './BoardSwitcher';
 
 const modalProps = vi.hoisted(() => ({ current: null as Record<string, unknown> | null }));
@@ -35,14 +34,6 @@ function clientFor({ reject, findResult }: { reject?: unknown; findResult?: unkn
     }),
   } as unknown as AgorClient;
 }
-
-beforeEach(() => {
-  __setAuthConfigForTests({ requireAuth: true }, { branchRbac: false });
-});
-
-afterEach(() => {
-  __resetAuthConfigForTests();
-});
 
 function renderSwitcher(client = clientFor(), user: User = owner) {
   const onBoardChange = vi.fn();
@@ -169,7 +160,6 @@ describe('BoardSwitcher current-board edit shortcut', () => {
   });
 
   it('hides the action when normalized policy resolution denies management', async () => {
-    __setAuthConfigForTests({ requireAuth: true }, { branchRbac: true });
     renderSwitcher(clientFor({ findResult: { capabilities: ['board.view'] } }), {
       user_id: 'member-2',
       role: 'member',

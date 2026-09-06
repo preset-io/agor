@@ -25,7 +25,6 @@ vi.mock('@agor/core/config', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@agor/core/config')>();
   return {
     ...actual,
-    isBranchRbacEnabled: () => false,
   };
 });
 

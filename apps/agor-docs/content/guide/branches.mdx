@@ -272,7 +272,7 @@ The branch is also where several other features attach:
 
 ## Permissions (RBAC)
 
-When `execution.branch_rbac: true` is set, every branch has one primary owner and a complete permission package. Primary ownership cannot be reassigned.
+Every branch has one primary owner and a complete permission package. Board and branch RBAC is always enabled, and primary ownership cannot be reassigned.
 
 A branch can inherit its board's defaults or override the whole package. Choosing an override starts with a copy of the current defaults, so you only need to change the exceptions. Moving an inherited branch to another board is blocked until you choose an override; this prevents a move from silently changing access.
 

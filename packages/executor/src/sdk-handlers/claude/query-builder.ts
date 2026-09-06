@@ -50,7 +50,7 @@ import {
   mcpToolNameAliasesForTool,
 } from '../base/mcp-tool-permissions.js';
 import { createCanUseToolCallback } from '../base/permission-hooks.js';
-import { CLAUDE_CODE_DISALLOWED_TOOLS } from './constants.js';
+import { CLAUDE_CODE_DISALLOWED_TOOLS, CLAUDE_CODE_TODO_TOOLS } from './constants.js';
 import { DEFAULT_CLAUDE_MODEL } from './models.js';
 
 export function formatListForLog(items: string[], maxItems = 5): string {
@@ -231,6 +231,10 @@ export async function setupQuery(
       append: agorSystemPrompt,
     },
     settingSources: ['user', 'project', 'local'], // Load user + project + local permissions, auto-loads CLAUDE.md
+    // SDK 0.3.233+ omits task-list tools on newer model families unless the
+    // embedding application opts in. Agor reads their calls for the sticky
+    // task-list UI, so use the SDK's targeted opt-in rather than rolling back.
+    allowedTools: [...CLAUDE_CODE_TODO_TOOLS],
     // Defensive copy — the const is readonly but the SDK option is typed `string[]`.
     disallowedTools: [...CLAUDE_CODE_DISALLOWED_TOOLS],
     model, // Use configured model or default
