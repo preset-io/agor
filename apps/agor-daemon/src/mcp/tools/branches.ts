@@ -321,6 +321,36 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
     }
   );
 
+  server.registerTool(
+    'agor_branches_recover_filesystem',
+    {
+      description:
+        'Explicitly recover a branch whose filesystem materialization attempt has expired. ' +
+        'The daemon atomically fences the expired attempt and dispatches a read-only reconciliation on the configured executor substrate. ' +
+        'A demonstrably completed checkout becomes ready; a missing or mismatched checkout becomes failed so cleanup/recreation is possible. ' +
+        'Active attempts are never preempted. After dispatch, use agor_branches_wait_for_ready.',
+      annotations: { idempotentHint: false },
+      inputSchema: z.object({
+        branchId: mcpRequiredId('branchId', 'Branch'),
+      }),
+    },
+    async (args) => {
+      const branchId = await resolveBranchId(ctx, args.branchId);
+      const branchesService = ctx.app.service('branches') as unknown as BranchesServiceImpl;
+      const branch = await runWithMcpTenantDatabaseWrite(ctx, () =>
+        branchesService.recoverFilesystem(
+          { branch_id: branchId },
+          ctx.baseServiceParams as Parameters<BranchesServiceImpl['recoverFilesystem']>[1]
+        )
+      );
+      return textResult({
+        branch,
+        note: 'Expired filesystem attempt fenced; reconciliation dispatched.',
+        next: readinessPoll(branch.branch_id),
+      });
+    }
+  );
+
   // Tool 2: agor_branches_list
   server.registerTool(
     'agor_branches_list',

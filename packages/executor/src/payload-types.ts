@@ -304,6 +304,9 @@ export const GitBranchAddPayloadSchema = BasePayloadSchema.extend({
     /** Use restore mode: smart branch detection via ls-remote, falls back to creating from sourceBranch */
     restoreMode: z.boolean().optional(),
 
+    /** Inspect and settle an expired attempt without starting a second filesystem mutation. */
+    recoveryMode: z.boolean().optional(),
+
     /** User ID of the requesting user (for per-user credential resolution) */
     userId: z.string().uuid().optional(),
 

@@ -159,6 +159,20 @@ export class BranchFilesystemAttemptConflictError extends RepositoryError {
   }
 }
 
+export class BranchFilesystemRecoveryConflictError extends RepositoryError {
+  constructor(
+    readonly branchId: BranchID,
+    readonly deadlineAt?: string
+  ) {
+    super(
+      deadlineAt
+        ? `Filesystem materialization attempt for branch ${branchId} is active through ${deadlineAt}`
+        : `Branch ${branchId} has no expired filesystem materialization attempt to recover`
+    );
+    this.name = 'BranchFilesystemRecoveryConflictError';
+  }
+}
+
 type BranchUpdateOptions = {
   preserveUpdatedAt?: boolean;
   /** Explicit lifecycle boundary, including starting -> starting retries. */
@@ -182,6 +196,13 @@ type BranchUpdateOptions = {
   rejectRepoDeletion?: boolean;
   /** Exact asynchronous filesystem materialization settlement boundary. */
   expectedFilesystemAttemptId?: UUID;
+  /** Fence one expired attempt and replace it using database-derived time. */
+  recoverExpiredFilesystemAttempt?: {
+    expectedAttemptId: UUID;
+    replacementAttemptId: UUID;
+    action: NonNullable<Branch['filesystem_attempt']>['action'];
+    durationMs: number;
+  };
 };
 
 function isSQLiteBusyError(error: unknown): boolean {
@@ -195,6 +216,19 @@ function isSQLiteBusyError(error: unknown): boolean {
  */
 export class BranchRepository implements BaseRepository<Branch, Partial<Branch>> {
   constructor(private db: Database) {}
+
+  private async databaseNow(db: Database, branchId: BranchID): Promise<Date> {
+    const row = await select(db, {
+      value: isPostgresDatabase(this.db)
+        ? sql<number>`EXTRACT(EPOCH FROM clock_timestamp()) * 1000`
+        : sql<number>`CAST(strftime('%s', 'now') AS integer) * 1000`,
+    })
+      .from(branches)
+      .where(eq(branches.branch_id, branchId))
+      .one();
+    if (!row) throw new EntityNotFoundError('Branch', branchId);
+    return new Date(Number(row.value));
+  }
 
   private assertEnvironmentRetired(branch: Branch, generation: number): void {
     const environment = branch.environment_instance;
@@ -809,6 +843,33 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
         }
       }
 
+      if (options?.recoverExpiredFilesystemAttempt) {
+        const recovery = options.recoverExpiredFilesystemAttempt;
+        const currentAttempt = current.filesystem_attempt;
+        const currentDeadlineMs = Date.parse(currentAttempt?.deadline_at ?? '');
+        const now = await this.databaseNow(txAsDb(tx), current.branch_id);
+        if (
+          current.archived ||
+          current.filesystem_status !== 'creating' ||
+          currentAttempt?.attempt_id !== recovery.expectedAttemptId ||
+          !Number.isFinite(currentDeadlineMs) ||
+          currentDeadlineMs > now.getTime()
+        ) {
+          throw new BranchFilesystemRecoveryConflictError(
+            current.branch_id,
+            currentAttempt?.attempt_id === recovery.expectedAttemptId
+              ? currentAttempt.deadline_at
+              : undefined
+          );
+        }
+        updates.filesystem_attempt = {
+          attempt_id: recovery.replacementAttemptId,
+          action: recovery.action,
+          started_at: now.toISOString(),
+          deadline_at: new Date(now.getTime() + recovery.durationMs).toISOString(),
+        };
+      }
+
       if (options?.expectedEnvironmentLifecycleAttempt) {
         const expected = options.expectedEnvironmentLifecycleAttempt;
         const attempt = current.environment_instance?.active_lifecycle_attempt;
@@ -836,17 +897,7 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
       if (options?.rejectActiveEnvironmentSync) {
         const attempt = current.environment_instance?.source_sync?.active_attempt;
         const leaseExpiresAt = Date.parse(attempt?.lease_expires_at ?? '');
-        let now = new Date();
-        if (isPostgresDatabase(this.db)) {
-          const databaseNow = await select(txAsDb(tx), {
-            value: sql<Date>`clock_timestamp()`,
-          })
-            .from(branches)
-            .where(eq(branches.branch_id, current.branch_id))
-            .one();
-          if (!databaseNow) throw new EntityNotFoundError('Branch', current.branch_id);
-          now = databaseNow.value instanceof Date ? databaseNow.value : new Date(databaseNow.value);
-        }
+        const now = await this.databaseNow(txAsDb(tx), current.branch_id);
         if (
           attempt &&
           attempt.environment_generation === currentRow.environment_generation &&

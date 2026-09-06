@@ -114,6 +114,45 @@ export const EXECUTOR_COMMAND_TOKEN_EXPIRATION_MS = 15 * 60 * 1000;
 export const EXECUTOR_REVOCATION_TRANSPORT_CLEANUP_TIMEOUT_MS =
   EXECUTOR_FEATHERS_ACK_TIMEOUT_MS + EXECUTOR_REVOCATION_TRANSPORT_CLEANUP_MARGIN_MS;
 
+/** Desired lease for one asynchronous branch filesystem materialization. */
+export const BRANCH_FILESYSTEM_MATERIALIZATION_TIMEOUT_MS = 10 * 60_000;
+
+/** Smallest useful materialization lease after reserving callback settlement time. */
+export const BRANCH_FILESYSTEM_MATERIALIZATION_MIN_TIMEOUT_MS = 1_000;
+
+export interface BranchFilesystemMaterializationBudget {
+  attemptTimeoutMs: number;
+  credentialLifetimeMs: number;
+}
+
+/**
+ * Fit the durable filesystem attempt and its callback credential to one
+ * shared budget. A hardened session-token ceiling shortens the attempt rather
+ * than leaving a lease whose only settlement credential expires first.
+ */
+export function resolveBranchFilesystemMaterializationBudget(
+  credentialCeilingMs?: number
+): BranchFilesystemMaterializationBudget {
+  const ceilingMs = Math.min(
+    credentialCeilingMs ?? EXECUTOR_COMMAND_TOKEN_EXPIRATION_MS,
+    EXECUTOR_COMMAND_TOKEN_EXPIRATION_MS
+  );
+  const attemptTimeoutMs = Math.min(
+    BRANCH_FILESYSTEM_MATERIALIZATION_TIMEOUT_MS,
+    ceilingMs - EXECUTOR_REVOCATION_TRANSPORT_CLEANUP_TIMEOUT_MS
+  );
+  if (attemptTimeoutMs < BRANCH_FILESYSTEM_MATERIALIZATION_MIN_TIMEOUT_MS) {
+    throw new Error(
+      'execution.session_token_expiration_ms is too short for branch filesystem materialization: ' +
+        `at least ${BRANCH_FILESYSTEM_MATERIALIZATION_MIN_TIMEOUT_MS + EXECUTOR_REVOCATION_TRANSPORT_CLEANUP_TIMEOUT_MS}ms is required`
+    );
+  }
+  return {
+    attemptTimeoutMs,
+    credentialLifetimeMs: attemptTimeoutMs + EXECUTOR_REVOCATION_TRANSPORT_CLEANUP_TIMEOUT_MS,
+  };
+}
+
 /**
  * Pagination Constants
  *

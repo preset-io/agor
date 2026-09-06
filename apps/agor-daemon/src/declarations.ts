@@ -24,8 +24,10 @@ import type {
   Branch,
   BranchCreateData,
   BranchEnvironmentUpdate,
+  BranchFilesystemRecoveryRequest,
   BranchFilesystemSettlement,
   BranchID,
+  BranchMaterializationIntentData,
   BranchPatchData,
   CloneRepositoryResult,
   AuthenticatedParams as CoreAuthenticatedParams,
@@ -319,13 +321,20 @@ export interface MessagesServiceImpl
 export interface BranchesServiceImpl
   extends Service<Branch, BranchCreateData, FeathersParams, BranchPatchData> {
   /** Internal-only creation boundary used after repo/board authorization. */
-  createMaterializationIntent(data: Partial<Branch>, params?: FeathersParams): Promise<Branch>;
+  createMaterializationIntent(
+    data: BranchMaterializationIntentData,
+    params?: FeathersParams
+  ): Promise<Branch>;
   /** Internal-only exact settlement for synchronous executor launch failure. */
   settleFilesystemIntent(
     data: BranchFilesystemSettlement,
     params?: FeathersParams
   ): Promise<Branch>;
   settleFilesystem(data: BranchFilesystemSettlement, params?: FeathersParams): Promise<Branch>;
+  recoverFilesystem(
+    data: BranchFilesystemRecoveryRequest,
+    params?: FeathersParams
+  ): Promise<Branch>;
   updateEnvironment(
     id:
       | BranchID

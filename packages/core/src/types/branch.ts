@@ -461,8 +461,6 @@ export interface Branch {
   filesystem_attempt?: BranchFilesystemAttempt | null;
 }
 
-export const BRANCH_FILESYSTEM_MATERIALIZATION_TIMEOUT_MS = 10 * 60_000;
-
 export interface BranchFilesystemAttempt {
   attempt_id: UUID;
   action: 'create' | 'restore';
@@ -508,6 +506,46 @@ export type BranchCreateData = Omit<Partial<Branch>, BranchServerManagedField>;
 
 /** Client-authored fields accepted by the generic Branch patch/update transport. */
 export type BranchPatchData = Omit<Partial<Branch>, BranchServerManagedField>;
+
+/** Narrow internal DTO for an already-authorized new materialization intent. */
+export type BranchMaterializationIntentData = Pick<
+  Branch,
+  | 'branch_id'
+  | 'repo_id'
+  | 'name'
+  | 'path'
+  | 'ref'
+  | 'new_branch'
+  | 'branch_unique_id'
+  | 'created_by'
+  | 'primary_owner_user_id'
+  | 'filesystem_attempt'
+> &
+  Partial<
+    Pick<
+      Branch,
+      | 'ref_type'
+      | 'base_ref'
+      | 'base_remote_url'
+      | 'environment_variant'
+      | 'storage_mode'
+      | 'clone_depth'
+      | 'last_used'
+      | 'issue_url'
+      | 'pull_request_url'
+      | 'notes'
+      | 'custom_context'
+    >
+  > & {
+    board_id: BoardID;
+    filesystem_status: 'creating';
+    filesystem_attempt: BranchFilesystemAttempt;
+  };
+
+/** Authorized request to fence and inspect an expired materialization attempt. */
+export interface BranchFilesystemRecoveryRequest {
+  branch_id: BranchID;
+}
 
 /** Exact executor settlement for asynchronous branch materialization. */
 export interface BranchFilesystemSettlement {

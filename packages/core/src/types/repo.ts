@@ -151,8 +151,6 @@ export interface Repo {
   last_updated: string;
 }
 
-export const REPO_DELETION_ATTEMPT_TIMEOUT_MS = 6 * 60_000;
-
 export interface RepoDeletionAttempt {
   attempt_id: UUID;
   started_at: string;

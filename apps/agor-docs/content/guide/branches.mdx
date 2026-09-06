@@ -104,6 +104,23 @@ error. Client cancellation only stops further polling. No database transaction o
 retained between reads; each individual read remains subject to the daemon's normal database query
 timeout.
 
+If a daemon or delegated launcher disappears before settlement, the persisted materialization
+attempt remains fenced until its deadline. A branch manager with write filesystem access can then
+call `agor_branches_recover_filesystem`. Recovery atomically replaces only that exact expired
+attempt and sends the configured executor a reconciliation request; it never starts a second clone
+or worktree operation on top of an attempt whose process cannot be observed. A complete checkout
+whose branch/tag, repository registration, and sanitized remote match the tenant-scoped database
+record becomes `ready`. A missing or mismatched checkout becomes `failed`, allowing deliberate
+cleanup or recreation. An old executor callback cannot settle the replacement attempt.
+
+The materialization lease and its attempt-bound callback credential share one budget. The normal
+lease is 10 minutes; a hardened `execution.session_token_expiration_ms` ceiling shortens it while
+reserving time for settlement, rather than leaving an uncallable lease behind.
+
+> **HA rollout:** repository cleanup uses a durable repository deletion marker that older daemons
+> do not understand. During a mixed-version rolling deployment that introduces this contract,
+> wait until every daemon replica is upgraded before running repository cleanup.
+
 ---
 
 ## Storage modes

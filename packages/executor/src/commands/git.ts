@@ -33,10 +33,12 @@ import {
   deleteBranchDirectory,
   deleteRepoDirectory,
   ensureGitRemoteUrl,
+  getCurrentBranch,
   getDefaultBranch,
   getRemoteUrl,
   isRemoteRefVisibleForClone,
   isValidGitRepo,
+  listGitWorktrees,
   redactGitUrlCredentials,
   removeGitWorktree,
   restoreBranchFilesystem,
@@ -879,8 +881,49 @@ export async function handleGitBranchAdd(
       `[git.branch.add] Repo: ${repoPath}, Branch: ${branch}, CreateBranch: ${shouldCreateBranch}, RestoreMode: ${restoreMode}, RefType: ${refType || 'branch'}, StorageMode: ${storageMode}`
     );
 
-    // Create the git branch on filesystem
-    if (storageMode === 'clone') {
+    // Explicit expiry recovery never starts a second materialization on top of
+    // an owner whose process cannot be observed. It only adopts a checkout
+    // that the expired attempt demonstrably completed, or terminally fails the
+    // replacement attempt so an operator can clean up and retry deliberately.
+    if (payload.params.recoveryMode) {
+      if (!(await isValidGitRepo(branchPath))) {
+        throw new Error(
+          `Expired materialization left no valid Git checkout at '${branchPath}'. ` +
+            'The attempt was fenced; remove or recreate the failed branch explicitly.'
+        );
+      }
+      const { git: branchGit } = createGit(branchPath);
+      if (refType === 'tag') {
+        const [head, expected] = await Promise.all([
+          branchGit.revparse(['HEAD']),
+          branchGit.revparse([`refs/tags/${branch}`]),
+        ]);
+        if (head.trim() !== expected.trim()) {
+          throw new Error(`Existing checkout does not match expected tag '${branch}'`);
+        }
+      } else {
+        const currentBranch = await getCurrentBranch(branchPath);
+        if (currentBranch !== branch) {
+          throw new Error(
+            `Existing checkout is on branch '${currentBranch || '(detached)'}', expected '${branch}'`
+          );
+        }
+      }
+      if (storageMode === 'worktree') {
+        const registered = (await listGitWorktrees(repoPath)).some(
+          (worktree) => resolve(worktree.path) === resolve(branchPath)
+        );
+        if (!registered) {
+          throw new Error('Existing checkout is not registered to the authoritative repository');
+        }
+      } else {
+        const observedRemote = await getRemoteUrl(branchPath);
+        if (!remoteUrl || observedRemote !== remoteUrl) {
+          throw new Error('Existing checkout origin does not match the authoritative repository');
+        }
+      }
+      console.log(`[git.branch.add] Recovered completed checkout at ${branchPath}`);
+    } else if (storageMode === 'clone') {
       // Self-standing clone path. The remote URL is daemon-resolved from the
       // repo record; refuse to silently fall through to worktree mode if it
       // didn't come along — that would defeat the leak-defense reason for

@@ -2295,7 +2295,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
   type BranchCustomHookRegistrar = {
     hooks(options: {
       before: Record<
-        'updateEnvironment' | 'ensureTeammateKnowledgeNamespace',
+        'updateEnvironment' | 'recoverFilesystem' | 'ensureTeammateKnowledgeNamespace',
         Array<(context: HookContext) => HookContext | Promise<HookContext>>
       >;
     }): void;
@@ -2303,6 +2303,9 @@ export function registerHooks(ctx: RegisterHooksContext): void {
   (app.service('branches') as unknown as BranchCustomHookRegistrar).hooks({
     before: {
       updateEnvironment: [requireEnvironmentExecutorCallbackToken()],
+      recoverFilesystem: [
+        requireMinimumRole(ROLES.MEMBER, 'recover branch filesystem materialization'),
+      ],
       ensureTeammateKnowledgeNamespace: [
         requireMinimumRole(ROLES.MEMBER, 'create teammate knowledge namespaces'),
       ],

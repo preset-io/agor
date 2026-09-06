@@ -18,6 +18,8 @@ const mocks = vi.hoisted(() => ({
   gitRaw: vi.fn(),
   isValidGitRepo: vi.fn(),
   getDefaultBranch: vi.fn(),
+  getCurrentBranch: vi.fn(),
+  listGitWorktrees: vi.fn(),
   getRemoteUrl: vi.fn(),
   ensureGitRemoteUrl: vi.fn(),
   scanGitConfigRemoteCredentials: vi.fn(),
@@ -55,6 +57,8 @@ vi.mock('../git/index.js', async () => {
     deleteRepoDirectory: mocks.deleteRepoDirectory,
     isValidGitRepo: mocks.isValidGitRepo,
     getDefaultBranch: mocks.getDefaultBranch,
+    getCurrentBranch: mocks.getCurrentBranch,
+    listGitWorktrees: mocks.listGitWorktrees,
     getRemoteUrl: mocks.getRemoteUrl,
     ensureGitRemoteUrl: mocks.ensureGitRemoteUrl,
     scanGitConfigRemoteCredentials: mocks.scanGitConfigRemoteCredentials,
@@ -204,6 +208,8 @@ beforeEach(() => {
   mocks.isRemoteRefVisibleForClone.mockResolvedValue(false);
   mocks.isValidGitRepo.mockResolvedValue(true);
   mocks.getDefaultBranch.mockResolvedValue('main');
+  mocks.getCurrentBranch.mockResolvedValue('feature');
+  mocks.listGitWorktrees.mockResolvedValue([{ path: '/trusted/branch', branch: 'feature' }]);
   mocks.getRemoteUrl.mockResolvedValue('https://user:secret@example.com/org/repo.git');
   mocks.scanGitConfigRemoteCredentials.mockResolvedValue({
     findings: [{ configPath: '/repo/.git/config' }],
@@ -311,6 +317,88 @@ describe('managed executor git/fs commands', () => {
     });
     expect(renderedBranches).toEqual([branchId]);
     expect(patchedBranches.some((patch) => 'start_command' in patch)).toBe(false);
+  });
+
+  it('recovers a demonstrably completed clone without starting another materialization', async () => {
+    const patchedBranches: Array<Record<string, unknown>> = [];
+    createClient({
+      repo: {
+        repo_id: repoId,
+        local_path: '/trusted/repo',
+        remote_url: 'https://user:secret@example.com/trusted/repo.git',
+      },
+      branch: {
+        branch_id: branchId,
+        repo_id: repoId,
+        path: '/trusted/branch',
+        name: 'feature',
+        ref: 'feature',
+        ref_type: 'branch',
+        storage_mode: 'clone',
+      },
+      patchedBranches,
+    });
+    mocks.getRemoteUrl.mockResolvedValueOnce('https://example.com/trusted/repo.git');
+
+    const result = await handleGitBranchAdd(
+      {
+        command: 'git.branch.add',
+        sessionToken: 'tenant-token',
+        params: { branchId, repoId, materializationAttemptId, recoveryMode: true },
+      },
+      {}
+    );
+
+    expect(result.success).toBe(true);
+    expect(mocks.createBranchAsClone).not.toHaveBeenCalled();
+    expect(patchedBranches).toContainEqual({
+      branch_id: branchId,
+      filesystem_attempt_id: materializationAttemptId,
+      filesystem_status: 'ready',
+    });
+  });
+
+  it('terminally fails recovery when the expired attempt left no valid checkout', async () => {
+    const patchedBranches: Array<Record<string, unknown>> = [];
+    createClient({
+      repo: {
+        repo_id: repoId,
+        local_path: '/trusted/repo',
+        remote_url: 'https://example.com/trusted/repo.git',
+      },
+      branch: {
+        branch_id: branchId,
+        repo_id: repoId,
+        path: '/trusted/branch',
+        name: 'feature',
+        ref: 'feature',
+        ref_type: 'branch',
+        storage_mode: 'clone',
+      },
+      patchedBranches,
+    });
+    mocks.isValidGitRepo.mockResolvedValueOnce(false);
+
+    const result = await handleGitBranchAdd(
+      {
+        command: 'git.branch.add',
+        sessionToken: 'tenant-token',
+        params: { branchId, repoId, materializationAttemptId, recoveryMode: true },
+      },
+      {}
+    );
+
+    expect(result).toMatchObject({
+      success: false,
+      error: { message: expect.stringContaining('left no valid Git checkout') },
+    });
+    expect(mocks.createBranchAsClone).not.toHaveBeenCalled();
+    expect(patchedBranches).toContainEqual({
+      branch_id: branchId,
+      filesystem_attempt_id: materializationAttemptId,
+      filesystem_status: 'failed',
+      error_message: expect.stringContaining('left no valid Git checkout'),
+    });
   });
 
   it('restores a clone from the destination branch when it has already been pushed', async () => {

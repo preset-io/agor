@@ -11,6 +11,7 @@
 
 import path from 'node:path';
 import {
+  EXECUTOR_REVOCATION_TRANSPORT_CLEANUP_TIMEOUT_MS,
   ensureBranchCloneDepthAllowed,
   ensureBranchStorageModeAllowed,
   extractSlugFromUrl,
@@ -21,6 +22,7 @@ import {
   isValidSlug,
   normalizeRepoUrl,
   PAGINATION,
+  resolveBranchFilesystemMaterializationBudget,
   resolveBranchStorageConfig,
   resolveMultiTenancyConfig,
 } from '@agor/core/config';
@@ -48,6 +50,8 @@ import { redactGitUrlCredentials, stripGitUrlCredentials } from '@agor/core/git/
 import type {
   AuthenticatedParams,
   Branch,
+  BranchID,
+  BranchMaterializationIntentData,
   CloneRepositoryResult,
   QueryParams,
   Repo,
@@ -57,13 +61,7 @@ import type {
   UserRole,
   UUID,
 } from '@agor/core/types';
-import {
-  BRANCH_FILESYSTEM_MATERIALIZATION_TIMEOUT_MS,
-  hasMinimumRole,
-  REPO_DELETION_ATTEMPT_TIMEOUT_MS,
-  ROLES,
-  TEAMMATE_FRAMEWORK_REPO_URL,
-} from '@agor/core/types';
+import { hasMinimumRole, ROLES, TEAMMATE_FRAMEWORK_REPO_URL } from '@agor/core/types';
 import { DrizzleService } from '../adapters/drizzle';
 import { gitBranchAddExecutorCommandId } from '../auth/executor-command-ids.js';
 import type { BranchesServiceImpl } from '../declarations.js';
@@ -76,10 +74,14 @@ import { resolveDelegatedExecutionHomeKey } from '../utils/executor-delegated-ho
 import {
   getDaemonUrl,
   requestExecutor,
+  resolveExecutorResponseCommandCeilingMs,
   spawnExecutorFireAndForget,
 } from '../utils/spawn-executor.js';
 import { withFreshTenantWrite } from '../utils/tenant-db-scope.js';
-import { issueExecutorCommandToken } from './session-token-service.js';
+import {
+  issueExecutorCommandToken,
+  resolveExecutorCommandTokenCeilingMs,
+} from './session-token-service.js';
 
 /**
  * Repo service params
@@ -798,6 +800,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
       }
     }
     const resolvedBoardId = board?.board_id;
+    if (!resolvedBoardId) throw new BadRequest('boardId is required when creating a branch');
 
     const tenantId = (params as AuthenticatedParams | undefined)?.tenant?.tenant_id;
     const branchPath = getBranchPath(repo.slug, data.name, tenantId);
@@ -820,8 +823,21 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     const branchUniqueId = autoAssignBranchUniqueId(allUsedIds);
 
     const branchesService = this.app.service('branches');
+    const branchId = generateId() as BranchID;
     const filesystemAttemptId = generateId();
     const filesystemAttemptStartedAt = new Date();
+    const materializationBudget = resolveBranchFilesystemMaterializationBudget(
+      resolveExecutorCommandTokenCeilingMs(this.app)
+    );
+    // Issue before publishing the intent so a hardened credential ceiling or
+    // unavailable authority cannot leave a branch with no possible callback.
+    const materializationToken = await issueExecutorCommandToken(
+      this.app,
+      gitBranchAddExecutorCommandId(filesystemAttemptId),
+      userId,
+      branchId,
+      { expirationMs: materializationBudget.credentialLifetimeMs }
+    );
 
     // Environment command templates (start_command, stop_command, etc.) are
     // rendered by the executor after filesystem materialization.
@@ -838,6 +854,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
       branchesService as unknown as BranchesServiceImpl
     ).createMaterializationIntent(
       {
+        branch_id: branchId,
         repo_id: repo.repo_id,
         name: data.name,
         path: branchPath,
@@ -853,7 +870,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
           action: 'create',
           started_at: filesystemAttemptStartedAt.toISOString(),
           deadline_at: new Date(
-            filesystemAttemptStartedAt.getTime() + BRANCH_FILESYSTEM_MATERIALIZATION_TIMEOUT_MS
+            filesystemAttemptStartedAt.getTime() + materializationBudget.attemptTimeoutMs
           ).toISOString(),
         },
         // Environment templates are rendered after filesystem materialization.
@@ -871,7 +888,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
         board_id: resolvedBoardId,
         created_by: userId,
         primary_owner_user_id: userId,
-      },
+      } satisfies BranchMaterializationIntentData,
       { ...params, provider: undefined }
     )) as Branch;
 
@@ -979,17 +996,10 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     // configuration. Per-user credentials come from the same Feathers identity.
     // Filesystem authorization stays fail-closed inside the selected substrate.
     try {
-      const sessionToken = await issueExecutorCommandToken(
-        this.app,
-        gitBranchAddExecutorCommandId(filesystemAttemptId),
-        userId,
-        branch.branch_id
-      );
-
       spawnExecutorFireAndForget(
         {
           command: 'git.branch.add',
-          sessionToken,
+          sessionToken: materializationToken,
           daemonUrl: getDaemonUrl(),
           params: {
             branchId: branch.branch_id,
@@ -1316,6 +1326,10 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
       if (!repo.local_path) throw new Error(`Repo ${repo.repo_id} has no local_path`);
 
       const deletionAttemptId = generateId();
+      const deletionResponseTimeoutMs =
+        resolveExecutorResponseCommandCeilingMs('git.repo.delete') ?? 5 * 60_000;
+      const deletionAttemptTimeoutMs =
+        deletionResponseTimeoutMs + EXECUTOR_REVOCATION_TRANSPORT_CLEANUP_TIMEOUT_MS;
       try {
         const admitted = await runWithTenantDatabaseTransaction(
           this.db,
@@ -1326,6 +1340,12 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
             const scopedBranchRepo = new BranchRepository(scoped);
             const scopedTaskRepo = new TaskRepository(scoped);
             const admittedBranches = await scopedBranchRepo.findAllByRepoId(lockedRepo.repo_id);
+            if (lockedRepo.clone_status === 'cloning') {
+              throw new Conflict('Repository clone must settle before repository cleanup', {
+                code: 'REPOSITORY_CLONE_IN_PROGRESS',
+                repo_id: lockedRepo.repo_id,
+              });
+            }
             for (const branch of admittedBranches) {
               await scopedBranchRepo.assertRetirementReadyInTransaction(scoped, branch.branch_id);
               if (await scopedTaskRepo.hasNonterminalForBranch(branch.branch_id)) {
@@ -1337,7 +1357,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
             await scopedRepoRepo.claimDeletionAttemptLocked(
               lockedRepo.repo_id,
               deletionAttemptId,
-              REPO_DELETION_ATTEMPT_TIMEOUT_MS
+              deletionAttemptTimeoutMs
             );
             return { repo: lockedRepo, branches: admittedBranches };
           }
@@ -1382,7 +1402,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
         },
         {
           logPrefix: `[repo.delete ${repo.slug}]`,
-          timeoutMs: 5 * 60_000,
+          timeoutMs: deletionResponseTimeoutMs,
         }
       );
 

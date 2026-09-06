@@ -1518,6 +1518,73 @@ describe('BranchRepository.update', () => {
     ).rejects.toMatchObject({ name: 'EnvironmentRetirementConflictError' });
   });
 
+  dbTest('fences only an expired filesystem attempt before explicit recovery', async ({ db }) => {
+    const repoRepo = new RepoRepository(db);
+    const branchRepo = new BranchRepository(db);
+    const repo = await repoRepo.create(createRepoData());
+    const expiredAttemptId = generateId();
+    const replacementAttemptId = generateId();
+    const branch = await branchRepo.create(
+      createBranchData({
+        repo_id: repo.repo_id,
+        filesystem_status: 'creating',
+        filesystem_attempt: {
+          attempt_id: expiredAttemptId,
+          action: 'create',
+          started_at: '2000-01-01T00:00:00.000Z',
+          deadline_at: '2000-01-01T00:01:00.000Z',
+        },
+      })
+    );
+
+    const recovering = await branchRepo.update(
+      branch.branch_id,
+      { filesystem_status: 'creating' },
+      {
+        recoverExpiredFilesystemAttempt: {
+          expectedAttemptId: expiredAttemptId,
+          replacementAttemptId,
+          action: 'create',
+          durationMs: 30_000,
+        },
+      }
+    );
+    expect(recovering.filesystem_attempt).toMatchObject({
+      attempt_id: replacementAttemptId,
+      action: 'create',
+    });
+    expect(
+      Date.parse(recovering.filesystem_attempt!.deadline_at) -
+        Date.parse(recovering.filesystem_attempt!.started_at)
+    ).toBe(30_000);
+    await expect(
+      branchRepo.update(
+        branch.branch_id,
+        { filesystem_status: 'ready', filesystem_attempt: null },
+        { expectedFilesystemAttemptId: expiredAttemptId }
+      )
+    ).rejects.toMatchObject({ name: 'BranchFilesystemAttemptConflictError' });
+
+    const activeAttemptId = replacementAttemptId;
+    await expect(
+      branchRepo.update(
+        branch.branch_id,
+        { filesystem_status: 'creating' },
+        {
+          recoverExpiredFilesystemAttempt: {
+            expectedAttemptId: activeAttemptId,
+            replacementAttemptId: generateId(),
+            action: 'create',
+            durationMs: 30_000,
+          },
+        }
+      )
+    ).rejects.toMatchObject({
+      name: 'BranchFilesystemRecoveryConflictError',
+      deadlineAt: recovering.filesystem_attempt!.deadline_at,
+    });
+  });
+
   dbTest('should throw EntityNotFoundError for non-existent ID', async ({ db }) => {
     const wtRepo = new BranchRepository(db);
 

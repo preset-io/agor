@@ -1,3 +1,4 @@
+import { EXECUTOR_REVOCATION_TRANSPORT_CLEANUP_TIMEOUT_MS } from '@agor/core/config';
 import { EnvironmentRetirementConflictError } from '@agor/core/db';
 import type { Application } from '@agor/core/types';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -72,6 +73,7 @@ vi.mock('@agor/core/db', async (importOriginal) => {
 
 const executorMocks = vi.hoisted(() => ({
   requestExecutor: vi.fn(),
+  resolveExecutorResponseCommandCeilingMs: vi.fn(),
   spawnExecutorFireAndForget: vi.fn(),
 }));
 const delegatedHomeMocks = vi.hoisted(() => ({ resolve: vi.fn(async () => undefined) }));
@@ -92,6 +94,7 @@ vi.mock('../utils/spawn-executor.js', () => {
   return {
     requestExecutor: executorMocks.requestExecutor,
     getDaemonUrl: vi.fn(() => 'http://daemon'),
+    resolveExecutorResponseCommandCeilingMs: executorMocks.resolveExecutorResponseCommandCeilingMs,
     spawnExecutorFireAndForget: executorMocks.spawnExecutorFireAndForget,
   };
 });
@@ -99,6 +102,7 @@ vi.mock('../utils/spawn-executor.js', () => {
 beforeEach(() => {
   tenantScopeMocks.withFreshTenantWrite.mockClear();
   executorMocks.requestExecutor.mockReset();
+  executorMocks.resolveExecutorResponseCommandCeilingMs.mockReset().mockReturnValue(undefined);
   executorMocks.spawnExecutorFireAndForget.mockReset();
   delegatedHomeMocks.resolve.mockReset().mockResolvedValue(undefined);
   repositoryMocks.resolveBranchUserAccess.mockReset().mockResolvedValue({
@@ -359,11 +363,13 @@ describe('ReposService.createBranch Git lifecycle execution', () => {
       settleFilesystemIntent: vi.fn(async () => failedBranch),
       find: vi.fn(async () => []),
     };
+    const sessionTokenService = {
+      maxTokenLifetimeMs: 5 * 60_000,
+      generateCommandToken: vi.fn(async () => 'delegated-user-token'),
+    };
     const app = {
       get: () => ({}),
-      sessionTokenService: {
-        generateCommandToken: vi.fn(async () => 'delegated-user-token'),
-      },
+      sessionTokenService,
       settings: { authentication: { secret: 'test-secret' } },
       service: vi.fn((name: string) => {
         if (name === 'boards')
@@ -405,6 +411,15 @@ describe('ReposService.createBranch Git lifecycle execution', () => {
         error_message: 'Failed to spawn executor: launcher unavailable',
       },
       expect.objectContaining({ provider: undefined })
+    );
+    const materializationIntent = branches.createMaterializationIntent.mock.calls[0]?.[0];
+    const attempt = materializationIntent?.filesystem_attempt;
+    expect(Date.parse(attempt.deadline_at) - Date.parse(attempt.started_at)).toBe(235_000);
+    expect(sessionTokenService.generateCommandToken).toHaveBeenCalledWith(
+      `git.branch.add:${attempt.attempt_id}`,
+      '550e8400-e29b-41d4-a716-446655440004',
+      expect.any(String),
+      { expirationMs: 300_000 }
     );
     expect(result).toEqual(failedBranch);
   });
@@ -795,7 +810,44 @@ describe('ReposService.remove branch inventory', () => {
     expect(executorMocks.requestExecutor).not.toHaveBeenCalled();
   });
 
+  it('does not dispatch destructive cleanup while the repository clone is active', async () => {
+    const repo = {
+      repo_id: '550e8400-e29b-41d4-a716-446655440001',
+      slug: 'preset-io/repo',
+      repo_type: 'remote',
+      local_path: '/managed/repos/preset-io/repo',
+      clone_status: 'cloning',
+    };
+    repositoryMocks.findAllBranchesByRepoId.mockReset().mockResolvedValue([]);
+    repositoryMocks.lockRepoForBranchInventory.mockReset().mockResolvedValue(repo);
+    const app = {
+      get: () => ({}),
+      service: vi.fn((name: string) => {
+        if (name === 'branches') return { removeMetadataWithRealtime: vi.fn() };
+        throw new Error(`Unexpected service: ${name}`);
+      }),
+    } as unknown as Application;
+    const tx = { run: vi.fn() };
+    const db = {
+      run: vi.fn(),
+      transaction: vi.fn(async (work: (transaction: unknown) => Promise<unknown>) => work(tx)),
+    };
+    const service = new ReposService(db as never, app);
+    vi.spyOn(service, 'get').mockResolvedValue(repo as never);
+
+    await expect(
+      service.remove(repo.repo_id, {
+        query: { cleanup: true },
+        tenant: { tenant_id: 'tenant-a', source: 'explicit' },
+      } as never)
+    ).rejects.toThrow('clone must settle');
+    expect(repositoryMocks.claimRepoDeletionAttempt).not.toHaveBeenCalled();
+    expect(executorMocks.requestExecutor).not.toHaveBeenCalled();
+  });
+
   it('passes the authorized unbounded filesystem inventory without a service bearer', async () => {
+    const configuredTimeoutMs = 20 * 60_000;
+    executorMocks.resolveExecutorResponseCommandCeilingMs.mockReturnValueOnce(configuredTimeoutMs);
     const repo = {
       repo_id: '550e8400-e29b-41d4-a716-446655440001',
       slug: 'preset-io/repo',
@@ -844,7 +896,12 @@ describe('ReposService.remove branch inventory', () => {
           branchPaths: [branches[0].path],
         }),
       }),
-      expect.anything()
+      expect.objectContaining({ timeoutMs: configuredTimeoutMs })
+    );
+    expect(repositoryMocks.claimRepoDeletionAttempt).toHaveBeenCalledWith(
+      repo.repo_id,
+      expect.any(String),
+      configuredTimeoutMs + EXECUTOR_REVOCATION_TRANSPORT_CLEANUP_TIMEOUT_MS
     );
     expect(executorMocks.requestExecutor.mock.calls[0]?.[0]).not.toHaveProperty('sessionToken');
   });

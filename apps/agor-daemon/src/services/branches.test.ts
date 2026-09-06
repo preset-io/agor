@@ -277,6 +277,7 @@ function createServiceHarness(appRbacEnabled = true) {
   ).taskRepo;
   taskRepo.hasNonterminalForBranch = vi.fn(async () => false);
   return {
+    app,
     service,
     branchRepo,
     taskRepo,
@@ -1800,6 +1801,123 @@ describe('BranchesService environment start async behavior', () => {
         id: branch.branch_id,
       })
     );
+  });
+
+  it('atomically fences an expired filesystem attempt before dispatching reconciliation', async () => {
+    const { app, service, branchRepo, branchesService, sessionTokenService } =
+      createServiceHarness();
+    (
+      app as unknown as {
+        sessionTokenService: { maxTokenLifetimeMs: number };
+      }
+    ).sessionTokenService.maxTokenLifetimeMs = 5 * 60_000;
+    const expiredAttemptId = '550e8400-e29b-41d4-a716-446655440004' as UUID;
+    const branch = {
+      branch_id: 'wt-filesystem-recovery' as BranchID,
+      repo_id: 'repo-1',
+      name: 'feature',
+      path: '/tmp/feature',
+      created_by: 'user-1' as UUID,
+      branch_unique_id: 1,
+      filesystem_status: 'creating' as const,
+      filesystem_attempt: {
+        attempt_id: expiredAttemptId,
+        action: 'create' as const,
+        started_at: '2026-01-01T00:00:00.000Z',
+        deadline_at: '2026-01-01T00:10:00.000Z',
+      },
+      storage_mode: 'worktree' as const,
+    };
+    vi.spyOn(branchRepo, 'findById').mockResolvedValue(branch as never);
+    const update = vi
+      .spyOn(branchRepo, 'update')
+      .mockImplementation(async (_id, _data, options) => {
+        const replacement = options?.recoverExpiredFilesystemAttempt;
+        return {
+          ...branch,
+          filesystem_attempt: replacement
+            ? {
+                attempt_id: replacement.replacementAttemptId,
+                action: replacement.action,
+                started_at: '2026-01-01T01:00:00.000Z',
+                deadline_at: '2026-01-01T01:03:55.000Z',
+              }
+            : null,
+        } as never;
+      });
+
+    const result = await service.recoverFilesystem({ branch_id: branch.branch_id }, {
+      provider: 'rest',
+      user: { user_id: 'user-1', role: 'member' },
+      tenant: { tenant_id: 'tenant-test', source: 'auth_claim' },
+    } as never);
+
+    const recovery = update.mock.calls[0]?.[2]?.recoverExpiredFilesystemAttempt;
+    expect(recovery).toMatchObject({
+      expectedAttemptId: expiredAttemptId,
+      action: 'create',
+      durationMs: 235_000,
+    });
+    expect(sessionTokenService.generateCommandToken).toHaveBeenCalledWith(
+      `git.branch.add:${recovery?.replacementAttemptId}`,
+      'user-1',
+      branch.branch_id,
+      { expirationMs: 300_000 }
+    );
+    expect(mockedSpawnExecutor).toHaveBeenCalledWith(
+      expect.objectContaining({
+        command: 'git.branch.add',
+        sessionToken: 'executor-token',
+        params: expect.objectContaining({
+          branchId: branch.branch_id,
+          repoId: branch.repo_id,
+          materializationAttemptId: recovery?.replacementAttemptId,
+          recoveryMode: true,
+        }),
+      }),
+      expect.any(Object)
+    );
+    expect(result.filesystem_attempt?.attempt_id).toBe(recovery?.replacementAttemptId);
+    expect(branchesService.emit).toHaveBeenCalledWith(
+      'patched',
+      result,
+      expect.objectContaining({ id: branch.branch_id })
+    );
+  });
+
+  it('does not let a read-only branch member recover filesystem ownership', async () => {
+    const { service, branchRepo, sessionTokenService } = createServiceHarness();
+    vi.spyOn(branchRepo, 'findById').mockResolvedValue({
+      branch_id: 'wt-filesystem-recovery-denied',
+      repo_id: 'repo-1',
+      name: 'feature',
+      path: '/tmp/feature',
+      created_by: 'owner-1',
+      branch_unique_id: 1,
+      filesystem_status: 'creating',
+      filesystem_attempt: {
+        attempt_id: '550e8400-e29b-41d4-a716-446655440004',
+        action: 'create',
+        started_at: '2026-01-01T00:00:00.000Z',
+        deadline_at: '2026-01-01T00:10:00.000Z',
+      },
+    } as never);
+    vi.mocked(branchRepo.resolveUserAccess).mockResolvedValueOnce({
+      can: 'view',
+      fs_access: 'read',
+      is_owner: false,
+      source: 'direct',
+    });
+
+    await expect(
+      service.recoverFilesystem({ branch_id: 'wt-filesystem-recovery-denied' as BranchID }, {
+        provider: 'rest',
+        user: { user_id: 'user-1', role: 'member' },
+        tenant: { tenant_id: 'tenant-test', source: 'auth_claim' },
+      } as never)
+    ).rejects.toThrow();
+    expect(sessionTokenService.generateCommandToken).not.toHaveBeenCalled();
+    expect(mockedSpawnExecutor).not.toHaveBeenCalled();
   });
 
   it.each([

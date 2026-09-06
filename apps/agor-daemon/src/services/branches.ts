@@ -17,6 +17,7 @@ import {
   getBranchesDir,
   getBranchHomePath,
   PAGINATION,
+  resolveBranchFilesystemMaterializationBudget,
   resolveBranchStorageConfig,
   resolveExecutionSecurityMode,
   resolveMultiTenancyConfig,
@@ -24,6 +25,7 @@ import {
 import {
   BoardRepository,
   BranchFilesystemAttemptConflictError,
+  BranchFilesystemRecoveryConflictError,
   BranchRepository,
   type BranchWithZoneAndSessions,
   type EnvironmentHealthObservation,
@@ -84,9 +86,11 @@ import type {
   BranchArchiveOrDeleteOptions,
   BranchArchiveOrDeleteResult,
   BranchEnvironmentUpdate,
+  BranchFilesystemRecoveryRequest,
   BranchFilesystemSettlement,
   BranchFsAccessLevel,
   BranchID,
+  BranchMaterializationIntentData,
   KnowledgeNamespace,
   QueryParams,
   Repo,
@@ -96,7 +100,6 @@ import type {
 } from '@agor/core/types';
 import {
   BRANCH_ENVIRONMENT_CLEARABLE_FIELDS,
-  BRANCH_FILESYSTEM_MATERIALIZATION_TIMEOUT_MS,
   getTeammateConfig,
   hasMinimumRole,
   isTeammate,
@@ -1330,7 +1333,10 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
   }
 
   /** Dedicated internal boundary for an already-authorized materialization intent. */
-  async createMaterializationIntent(data: Partial<Branch>, params?: BranchParams): Promise<Branch> {
+  async createMaterializationIntent(
+    data: BranchMaterializationIntentData,
+    params?: BranchParams
+  ): Promise<Branch> {
     if (params?.provider) {
       throw new Forbidden('Branch materialization intent creation is internal-only');
     }
@@ -2441,6 +2447,16 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       console.log(`📂 Branch directory missing, spawning executor to recreate: ${branch.path}`);
       const filesystemAttemptId = generateId();
       const filesystemAttemptStartedAt = new Date();
+      const materializationBudget = resolveBranchFilesystemMaterializationBudget(
+        resolveExecutorCommandTokenCeilingMs(this.app)
+      );
+      const materializationToken = await issueExecutorCommandToken(
+        this.app,
+        gitBranchAddExecutorCommandId(filesystemAttemptId),
+        userId,
+        branch.branch_id,
+        { expirationMs: materializationBudget.credentialLifetimeMs }
+      );
 
       // Set filesystem_status to 'creating' while we rebuild
       const creatingBranch = await this.withTenantDatabase(params, () =>
@@ -2453,7 +2469,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
               action: 'restore',
               started_at: filesystemAttemptStartedAt.toISOString(),
               deadline_at: new Date(
-                filesystemAttemptStartedAt.getTime() + BRANCH_FILESYSTEM_MATERIALIZATION_TIMEOUT_MS
+                filesystemAttemptStartedAt.getTime() + materializationBudget.attemptTimeoutMs
               ).toISOString(),
             },
           },
@@ -2495,16 +2511,10 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       }
 
       try {
-        const sessionToken = await issueExecutorCommandToken(
-          this.app,
-          gitBranchAddExecutorCommandId(filesystemAttemptId),
-          userId,
-          branch.branch_id
-        );
         spawnExecutor(
           {
             command: 'git.branch.add',
-            sessionToken,
+            sessionToken: materializationToken,
             daemonUrl: getDaemonUrl(),
             params: {
               branchId: branch.branch_id,
@@ -3069,6 +3079,188 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
   ): Promise<Branch> {
     if (params?.provider) throw new Forbidden('Filesystem intent settlement is internal-only');
     return this.commitFilesystemSettlement(data, data.error_message?.trim(), params);
+  }
+
+  /**
+   * Explicit recovery for a materialization owner that disappeared before
+   * settlement. This fences only an expired exact attempt, then delegates a
+   * read-only filesystem reconciliation to the same execution substrate.
+   */
+  async recoverFilesystem(
+    data: BranchFilesystemRecoveryRequest,
+    params?: BranchParams
+  ): Promise<Branch> {
+    if (
+      !data?.branch_id ||
+      Object.keys((data ?? {}) as unknown as Record<string, unknown>).some(
+        (field) => field !== 'branch_id'
+      )
+    ) {
+      throw new BadRequest('recoverFilesystem requires only branch_id');
+    }
+    const requestUser = params?.user;
+    if (!requestUser) throw new NotAuthenticated('Authentication required');
+
+    const branch = await this.withTenantDatabase(params, () =>
+      this.branchRepo.findById(data.branch_id)
+    );
+    if (!branch) throw new NotFound(`Branch not found: ${data.branch_id}`);
+    const expiredAttempt = branch.filesystem_attempt;
+    if (branch.filesystem_status !== 'creating' || !expiredAttempt) {
+      throw new Conflict('Branch has no pending filesystem materialization to recover', {
+        code: 'BRANCH_FILESYSTEM_RECOVERY_UNAVAILABLE',
+        branch_id: branch.branch_id,
+      });
+    }
+
+    const branchFsAccess =
+      hasMinimumRole(requestUser.role, ROLES.ADMIN) && !this.appRbacEnabled
+        ? 'write'
+        : await this.withTenantDatabase(params, () =>
+            ensureBranchWorkspaceAccess(
+              this.branchRepo,
+              branch,
+              requestUser.user_id,
+              requestUser.role as UserRole | undefined,
+              'all',
+              'write',
+              this.app.get('config').execution?.allow_superadmin === true
+            )
+          );
+    const config = this.app.get('config');
+    const delegatedHomeKey = await resolveDelegatedExecutionHomeKey(
+      this.db,
+      requestUser.user_id,
+      config
+    );
+    const reposService = this.app.service('repos');
+    const repo = await this.withTenantDatabase(
+      params,
+      () => reposService.get(branch.repo_id, params) as Promise<Repo>
+    );
+    if ((branch.storage_mode ?? 'worktree') === 'clone' && !repo.remote_url) {
+      throw new Conflict('Clone-mode branch recovery requires its repository remote URL');
+    }
+
+    const materializationBudget = resolveBranchFilesystemMaterializationBudget(
+      resolveExecutorCommandTokenCeilingMs(this.app)
+    );
+    const replacementAttemptId = generateId();
+    // Mint before claiming. If issuance fails, the expired attempt remains
+    // untouched; if another recovery wins first, this unused token cannot pass
+    // the repository CAS because its attempt ID was never published.
+    const sessionToken = await issueExecutorCommandToken(
+      this.app,
+      gitBranchAddExecutorCommandId(replacementAttemptId),
+      requestUser.user_id,
+      branch.branch_id,
+      { expirationMs: materializationBudget.credentialLifetimeMs }
+    );
+
+    let recovering: Branch;
+    try {
+      recovering = await this.withTenantDatabase(params, () =>
+        this.branchRepo.update(
+          branch.branch_id,
+          { filesystem_status: 'creating' },
+          {
+            rejectRepoDeletion: true,
+            recoverExpiredFilesystemAttempt: {
+              expectedAttemptId: expiredAttempt.attempt_id,
+              replacementAttemptId,
+              action: expiredAttempt.action,
+              durationMs: materializationBudget.attemptTimeoutMs,
+            },
+          }
+        )
+      );
+    } catch (error) {
+      if (error instanceof BranchFilesystemRecoveryConflictError) {
+        throw new Conflict(error.message, {
+          code: 'BRANCH_FILESYSTEM_ATTEMPT_NOT_EXPIRED',
+          branch_id: error.branchId,
+          deadline_at: error.deadlineAt,
+        });
+      }
+      if (error instanceof RepoDeletionInProgressError) {
+        throw new Conflict(error.message, {
+          code: 'REPOSITORY_DELETION_IN_PROGRESS',
+          repo_id: error.repoId,
+          deadline_at: error.deadlineAt,
+        });
+      }
+      throw error;
+    }
+    emitServiceEvent(this.app, {
+      path: 'branches',
+      event: 'patched',
+      data: recovering,
+      params,
+      id: recovering.branch_id,
+    });
+
+    const settleLaunchFailure = async (message: string): Promise<Branch | undefined> => {
+      try {
+        return await this.settleFilesystemIntent(
+          {
+            branch_id: branch.branch_id,
+            filesystem_attempt_id: replacementAttemptId,
+            filesystem_status: 'failed',
+            error_message: message,
+          },
+          { ...params, provider: undefined }
+        );
+      } catch (error) {
+        if (error instanceof Conflict) return undefined;
+        throw error;
+      }
+    };
+
+    try {
+      spawnExecutor(
+        {
+          command: 'git.branch.add',
+          sessionToken,
+          daemonUrl: getDaemonUrl(),
+          params: {
+            branchId: branch.branch_id,
+            materializationAttemptId: replacementAttemptId,
+            repoId: repo.repo_id,
+            recoveryMode: true,
+          },
+        },
+        {
+          logPrefix: `[BranchesService.recoverFilesystem ${branch.name}]`,
+          delegatedHomeKey,
+          templateVariables: {
+            branch_id: branch.branch_id,
+            user_id: requestUser.user_id,
+            branch_fs_access: branchFsAccess,
+          },
+          onExit: async (code, context) => {
+            if (code === 0) return;
+            const disposition = classifyExecutorExit({
+              mode: context.mode,
+              code,
+              nonzeroMayHaveDispatched:
+                config.execution?.executor_command_nonzero_may_have_dispatched === true,
+            });
+            if (disposition === 'authoritative') {
+              await settleLaunchFailure(
+                `Filesystem recovery executor exited before settlement (code ${code ?? 'unknown'})`
+              );
+            }
+          },
+        }
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return (
+        (await settleLaunchFailure(`Failed to spawn filesystem recovery executor: ${message}`)) ??
+        recovering
+      );
+    }
+    return recovering;
   }
 
   private async commitFilesystemSettlement(

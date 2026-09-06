@@ -19,6 +19,7 @@ import type {
   BranchCapabilityPolicy,
   BranchCreateData,
   BranchEnvironmentUpdate,
+  BranchFilesystemRecoveryRequest,
   BranchFilesystemSettlement,
   BranchPatchData,
   CapabilityPolicyWorkspacePreferences,
@@ -719,6 +720,8 @@ export interface BranchesService
   extends AgorService<Branch, BranchCreateData, BranchPatchData, BranchPatchData> {
   /** Exact git.branch.add executor callback; ordinary clients cannot call it. */
   settleFilesystem(data: BranchFilesystemSettlement, params?: Params): Promise<Branch>;
+  /** Explicitly fence and inspect one expired filesystem materialization attempt. */
+  recoverFilesystem(data: BranchFilesystemRecoveryRequest, params?: Params): Promise<Branch>;
   /**
    * Create or repair the primary Knowledge namespace for a teammate branch.
    * API/UI-only; not exposed through teammate MCP config mutation tools.
@@ -1346,6 +1349,7 @@ function extendBranchesService(client: AgorClient): void {
     branchesService.methods(
       'updateEnvironment',
       'settleFilesystem',
+      'recoverFilesystem',
       'ensureTeammateKnowledgeNamespace'
     );
   }

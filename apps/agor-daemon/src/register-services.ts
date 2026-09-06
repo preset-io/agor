@@ -607,6 +607,7 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
       'remove',
       'updateEnvironment',
       'settleFilesystem',
+      'recoverFilesystem',
       'ensureTeammateKnowledgeNamespace',
     ],
   });
