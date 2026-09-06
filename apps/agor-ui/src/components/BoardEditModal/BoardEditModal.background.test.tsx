@@ -59,6 +59,13 @@ function makeClient(board: Board) {
       if (name === 'workspace-preferences') {
         return { find: vi.fn().mockResolvedValue({ session_sharing_enabled: false }) };
       }
+      if (name === 'boards/:id/effective-access') {
+        return {
+          find: vi.fn().mockResolvedValue({
+            capabilities: ['board.view', 'board.edit', 'board.attach_branch'],
+          }),
+        };
+      }
       return { findAll: vi.fn().mockResolvedValue([]) };
     },
   } as unknown as AgorClient;
