@@ -388,15 +388,9 @@ export async function handleEnvironmentLifecycle(
       };
     }
 
-    // Start's own writes are fenced on the lifecycle generation ALONE. The
-    // health monitor promotes `starting -> running` without advancing the
-    // generation, deliberately, so that this command keeps ownership of
-    // publishing its typed lifecycle result (see the comment on
-    // `invalidatesTimedOutStart` in EnvironmentHealthRepository.commit). Adding
-    // a status fence here would silently discard the access URLs, facts, and
-    // pid of every environment whose readiness probe won that race — and, on
-    // the claim below, would let a stale process still answering the health URL
-    // stop the real start command from ever running.
+    // Readiness observations cannot settle the server-owned Start attempt.
+    // Both callbacks are therefore fenced on its generation and `starting`
+    // status; only the completion callback clears provider-mutation ownership.
     if (payload.params.action === 'start') {
       const startedAt = new Date().toISOString();
       const existingDeadline = Date.parse(branch.environment_instance?.startup_deadline_at ?? '');
@@ -422,7 +416,8 @@ export async function handleEnvironmentLifecycle(
           last_error: null,
           last_command: null,
         },
-        lifecycleGeneration
+        lifecycleGeneration,
+        'starting'
       );
       if (!starting.applied) return supersededResult(branchId, payload.params.action);
       lifecycleGeneration = starting.generation ?? lifecycleGeneration;
@@ -471,7 +466,8 @@ export async function handleEnvironmentLifecycle(
             ...(result.output ? { output: result.output } : {}),
           },
         },
-        lifecycleGeneration
+        lifecycleGeneration,
+        'starting'
       );
       if (!completion.applied) return supersededResult(branchId, payload.params.action);
 
@@ -590,12 +586,8 @@ export async function handleEnvironmentLifecycle(
       // re-reading the branch first spent a second acknowledgement budget this
       // command may no longer be authorized for.
       //
-      // Deliberately NOT status-fenced. The health monitor moves an environment
-      // `starting -> running` and `running -> error` WITHOUT advancing the
-      // generation (see EnvironmentHealthRepository.commit), precisely so this
-      // command keeps ownership of its own outcome. Fencing on the status this
-      // command last saw would throw its result away every time readiness won
-      // the race.
+      // Generation fencing is sufficient here: deadline recovery advances the
+      // generation, while readiness cannot release an active Start attempt.
       const failure = await updateBranchEnvironment(
         client,
         branchId,

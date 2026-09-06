@@ -27,8 +27,9 @@ import {
   type BranchWithZoneAndSessions,
   type EnvironmentHealthObservation,
   EnvironmentHealthRepository,
-  EnvironmentLifecycleBusyError,
+  EnvironmentLifecycleAttemptConflictError,
   EnvironmentLifecycleConflictError,
+  EnvironmentProviderMutationBusyError,
   EnvironmentSyncRepository,
   generateId,
   getCurrentTenantId,
@@ -101,7 +102,8 @@ import { resolveHostIpAddress } from '@agor/core/utils/host-ip';
 import { createPinnedFetch } from '@agor/core/utils/pinned-fetch';
 import { isAllowedHealthCheckUrl } from '@agor/core/utils/url';
 import { DrizzleService, type Query } from '../adapters/drizzle';
-import { matchesExecutorCommandRuntimeScope } from '../auth/executor-runtime-scope.js';
+import { environmentLifecycleExecutorCommandId } from '../auth/executor-command-ids.js';
+import { authenticatedEnvironmentExecutorCallbackRuntimeScope } from '../auth/executor-runtime-scope.js';
 import { buildBranchCreatedAnalyticsProperties } from '../utils/analytics-payloads.js';
 import { consumeBranchArchiveDeleteAuthorization } from '../utils/branch-archive-delete-authorization.js';
 import { ensureCanControlBranchEnvironment } from '../utils/branch-authorization.js';
@@ -570,9 +572,14 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     params?: BranchParams
   ): Promise<BranchWithZoneAndSessions | undefined> {
     try {
-      return await this.updateEnvironment(id, environmentUpdate, params, {
-        expectedEnvironmentGeneration: generation,
-      });
+      return await this.updateEnvironment(
+        id,
+        { ...environmentUpdate, active_lifecycle_attempt: undefined },
+        params,
+        {
+          expectedEnvironmentGeneration: generation,
+        }
+      );
     } catch (error) {
       if (this.isEnvironmentLifecycleSuperseded(error)) return undefined;
       throw error;
@@ -773,7 +780,12 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     const commandId =
       action === 'sync' && options.syncClaimToken
         ? `environment-sync:${options.syncClaimToken}`
-        : `environment-${action}`;
+        : action !== 'sync' && options.lifecycleGeneration !== undefined
+          ? environmentLifecycleExecutorCommandId(action, options.lifecycleGeneration)
+          : undefined;
+    if (!commandId) {
+      throw new Error(`Environment ${action} executor is missing attempt authority`);
+    }
     // One snapshotted budget decides the shell deadline, the credential, the
     // daemon's waiter, and (for Sync) the durable claim lease. Start keeps its
     // own persisted startup policy; every other verb is bounded per variant so
@@ -858,6 +870,38 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     });
   }
 
+  private environmentLifecycleAttempt(
+    branch: Branch,
+    action: EnvironmentCallbackAction,
+    startedAt: Date,
+    deadlineAt: Date
+  ): NonNullable<NonNullable<Branch['environment_instance']>['active_lifecycle_attempt']> {
+    const environmentGeneration = this.requireEnvironmentGeneration(branch) + 1;
+    if (!Number.isSafeInteger(environmentGeneration)) {
+      throw new Error(`Branch ${branch.branch_id} exhausted lifecycle coordination metadata`);
+    }
+    return {
+      action,
+      environment_generation: environmentGeneration,
+      started_at: startedAt.toISOString(),
+      deadline_at: deadlineAt.toISOString(),
+    };
+  }
+
+  private resolveStoppingLifecycleDeadlineAt(
+    branch: Branch,
+    executionKind: 'command' | 'webhook' | undefined,
+    startedAt: Date,
+    awaitsResponse = false
+  ): Date {
+    const durationMs =
+      executionKind === 'command'
+        ? this.resolveEnvironmentLifecycleAttemptBudget(branch, undefined, awaitsResponse)
+            .claimLeaseMs
+        : ENVIRONMENT.LOGS_TIMEOUT_MS + ENVIRONMENT_LIFECYCLE_SETTLEMENT_MARGIN_MS;
+    return new Date(startedAt.getTime() + durationMs);
+  }
+
   private async dispatchEnvironmentExecutor(options: {
     branch: Branch;
     action: EnvironmentLifecycleAction;
@@ -879,6 +923,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
           {
             status: 'error',
             lifecycle_deadline_at: undefined,
+            active_lifecycle_attempt: undefined,
             last_health_check: {
               timestamp: new Date().toISOString(),
               status: 'unhealthy',
@@ -2495,15 +2540,6 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     return branch;
   }
 
-  private resolveEnvironmentCallbackAction(
-    branchId: BranchID,
-    params?: BranchParams
-  ): EnvironmentCallbackAction | undefined {
-    return (['start', 'stop', 'nuke'] as const).find((action) =>
-      matchesExecutorCommandRuntimeScope(params, `environment-${action}`, branchId)
-    );
-  }
-
   /**
    * Validate the deliberately narrow executor callback protocol. Repository
    * commands can choose a vetted variant, but they never gain a generic branch
@@ -2561,6 +2597,13 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
         }
       }
     }
+    const settlesAttempt =
+      update.status === 'error' ||
+      update.status === 'stopped' ||
+      update.status === 'running' ||
+      update.last_command?.status === 'succeeded' ||
+      update.last_command?.status === 'failed';
+    if (settlesAttempt) normalized.active_lifecycle_attempt = null;
     return normalized;
   }
 
@@ -2597,6 +2640,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     let environmentUpdate = isRpcEnvelope
       ? (idOrData.environment_update ?? idOrData.environmentUpdate)
       : (environmentUpdateOrParams as BranchEnvironmentUpdate | undefined);
+    let callbackAction: EnvironmentCallbackAction | undefined;
     const resolvedParams = isRpcEnvelope
       ? (environmentUpdateOrParams as BranchParams | undefined)
       : params;
@@ -2616,13 +2660,17 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       throw new Error('Environment update is required');
     }
     if (isRpcEnvelope && resolvedParams?.provider) {
-      const callbackAction = this.resolveEnvironmentCallbackAction(id, resolvedParams);
-      if (!callbackAction) {
-        throw new Forbidden('Environment state callbacks require an exact executor command scope');
+      const callbackScope = authenticatedEnvironmentExecutorCallbackRuntimeScope(resolvedParams);
+      if (callbackScope?.branchId !== id) {
+        throw new Forbidden('Environment state callbacks require exact attempt authority');
       }
       if (expectedEnvironmentGeneration === undefined) {
         throw new BadRequest('Environment callbacks require an expected generation');
       }
+      if (callbackScope.generation !== expectedEnvironmentGeneration) {
+        throw new Forbidden('Environment state callbacks require exact attempt authority');
+      }
+      callbackAction = callbackScope.action;
       environmentUpdate = this.normalizeEnvironmentCallbackUpdate(
         callbackAction,
         environmentUpdate
@@ -2741,9 +2789,18 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
               },
               {
                 invalidateEnvironmentObservation: internalOptions?.beginLifecycle === true,
+                rejectActiveEnvironmentLifecycle: internalOptions?.beginLifecycle === true,
                 rejectActiveEnvironmentSync: internalOptions?.beginLifecycle === true,
                 expectedEnvironmentGeneration,
                 ...(expectedEnvironmentStatus !== undefined ? { expectedEnvironmentStatus } : {}),
+                ...(callbackAction && expectedEnvironmentGeneration !== undefined
+                  ? {
+                      expectedEnvironmentLifecycleAttempt: {
+                        action: callbackAction,
+                        generation: expectedEnvironmentGeneration,
+                      },
+                    }
+                  : {}),
               }
             );
             return this.get(id, resolvedParams);
@@ -2759,11 +2816,18 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
             )
           );
     } catch (error) {
-      if (error instanceof EnvironmentLifecycleBusyError) {
+      if (error instanceof EnvironmentLifecycleAttemptConflictError) {
+        throw new Conflict(error.message, {
+          code: ENVIRONMENT_LIFECYCLE_SUPERSEDED_CODE,
+          branch_id: error.branchId,
+        });
+      }
+      if (error instanceof EnvironmentProviderMutationBusyError) {
         throw new Conflict(error.message, {
           code: 'ENVIRONMENT_LIFECYCLE_BUSY',
           branch_id: error.branchId,
-          lease_expires_at: error.leaseExpiresAt,
+          action: error.ownerAction,
+          deadline_at: error.deadlineAt,
         });
       }
       if (error instanceof EnvironmentLifecycleConflictError) {
@@ -2850,10 +2914,12 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     // A hardened command-token ceiling may shorten the configured provider
     // budget, but can never strand the branch in `starting` with a credential
     // that expires before its persisted deadline.
-    const startupTimeoutMs = resolveEnvironmentStartBudget(branch.startup_timeout_ms, {
+    const startBudget = resolveEnvironmentStartBudget(branch.startup_timeout_ms, {
       credentialCeilingMs: resolveExecutorCommandTokenCeilingMs(this.app),
-    }).startupTimeoutMs;
+    });
+    const startupTimeoutMs = startBudget.startupTimeoutMs;
     const startedAt = new Date();
+    const lifecycleDeadlineAt = new Date(startedAt.getTime() + startBudget.credentialLifetimeMs);
 
     const startingBranch = await this.updateEnvironment(
       id,
@@ -2865,6 +2931,12 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
         },
         startup_deadline_at: new Date(startedAt.getTime() + startupTimeoutMs).toISOString(),
         lifecycle_deadline_at: undefined,
+        active_lifecycle_attempt: this.environmentLifecycleAttempt(
+          branch,
+          'start',
+          startedAt,
+          lifecycleDeadlineAt
+        ),
         access_urls,
         facts: undefined,
         lifecycle_result: undefined,
@@ -2996,20 +3068,25 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     const execution = branch.stop_command
       ? await this.resolveEnvironmentCommand(branch.stop_command, 'stop')
       : undefined;
-    const lifecycleBudget =
-      execution?.kind === 'command'
-        ? this.resolveEnvironmentLifecycleAttemptBudget(branch)
-        : undefined;
     const lifecycleStartedAt = new Date();
+    const lifecycleDeadlineAt = this.resolveStoppingLifecycleDeadlineAt(
+      branch,
+      execution?.kind,
+      lifecycleStartedAt
+    );
 
     const stoppingBranch = await this.updateEnvironment(
       id,
       {
         status: 'stopping',
         startup_deadline_at: undefined,
-        lifecycle_deadline_at: lifecycleBudget
-          ? new Date(lifecycleStartedAt.getTime() + lifecycleBudget.claimLeaseMs).toISOString()
-          : undefined,
+        lifecycle_deadline_at: lifecycleDeadlineAt.toISOString(),
+        active_lifecycle_attempt: this.environmentLifecycleAttempt(
+          branch,
+          'stop',
+          lifecycleStartedAt,
+          lifecycleDeadlineAt
+        ),
       },
       params,
       {
@@ -3130,24 +3207,31 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       ? await this.resolveEnvironmentCommand(branch.stop_command, 'stop')
       : undefined;
 
-    if (!branch.stop_command || stopExecution?.kind === 'webhook') {
+    if (!stopExecution || stopExecution.kind === 'webhook') {
       await this.stopEnvironment(id, params);
       return await this.startEnvironment(id, params);
     }
+
+    const lifecycleStartedAt = new Date();
+    const lifecycleDeadlineAt = this.resolveStoppingLifecycleDeadlineAt(
+      branch,
+      stopExecution.kind,
+      lifecycleStartedAt,
+      true
+    );
 
     const stoppingBranch = await this.updateEnvironment(
       id,
       {
         status: 'stopping',
         startup_deadline_at: undefined,
-        lifecycle_deadline_at:
-          stopExecution?.kind === 'command'
-            ? new Date(
-                Date.now() +
-                  this.resolveEnvironmentLifecycleAttemptBudget(branch, undefined, true)
-                    .claimLeaseMs
-              ).toISOString()
-            : undefined,
+        lifecycle_deadline_at: lifecycleDeadlineAt.toISOString(),
+        active_lifecycle_attempt: this.environmentLifecycleAttempt(
+          branch,
+          'stop',
+          lifecycleStartedAt,
+          lifecycleDeadlineAt
+        ),
       },
       params,
       {
@@ -3288,20 +3372,25 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       throw new Conflict('Environment is already stopping');
     }
     const execution = await this.resolveEnvironmentCommand(branch.nuke_command, 'nuke');
-    const lifecycleBudget =
-      execution.kind === 'command'
-        ? this.resolveEnvironmentLifecycleAttemptBudget(branch)
-        : undefined;
     const lifecycleStartedAt = new Date();
+    const lifecycleDeadlineAt = this.resolveStoppingLifecycleDeadlineAt(
+      branch,
+      execution.kind,
+      lifecycleStartedAt
+    );
 
     const stoppingBranch = await this.updateEnvironment(
       id,
       {
         status: 'stopping',
         startup_deadline_at: undefined,
-        lifecycle_deadline_at: lifecycleBudget
-          ? new Date(lifecycleStartedAt.getTime() + lifecycleBudget.claimLeaseMs).toISOString()
-          : undefined,
+        lifecycle_deadline_at: lifecycleDeadlineAt.toISOString(),
+        active_lifecycle_attempt: this.environmentLifecycleAttempt(
+          branch,
+          'nuke',
+          lifecycleStartedAt,
+          lifecycleDeadlineAt
+        ),
       },
       params,
       {

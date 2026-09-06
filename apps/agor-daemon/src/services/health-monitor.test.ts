@@ -124,6 +124,31 @@ describe('HealthMonitor tenant context', () => {
     await monitor.cleanup();
   });
 
+  it('recovers a stopping lifecycle deadline discovered after standalone restart', async () => {
+    const branches = new BranchServiceMock();
+    branches.get.mockResolvedValue(
+      makeBranch({ branch_id: 'branch-stopping', environment_instance: { status: 'stopping' } })
+    );
+    branches.checkHealth.mockResolvedValue(
+      makeBranch({ branch_id: 'branch-stopping', environment_instance: { status: 'stopping' } })
+    );
+    const monitor = new HealthMonitor(makeApp(branches) as never, {
+      tenantId: 'default',
+      discoverActiveEnvironmentRefs: async () => [{ branchId: 'branch-stopping' as never }],
+    });
+
+    await monitor.initialize();
+    await vi.advanceTimersByTimeAsync(ENVIRONMENT.STARTUP_GRACE_PERIOD_MS);
+
+    await vi.waitFor(() => expect(branches.checkHealth).toHaveBeenCalledOnce());
+    expect(branches.checkHealth).toHaveBeenCalledWith(
+      'branch-stopping',
+      { tenant: { tenant_id: 'default', source: 'static' } },
+      { signal: expect.any(AbortSignal), intent: 'automatic' }
+    );
+    await monitor.cleanup();
+  });
+
   it('revalidates startup discovery refs and excludes an archived active row', async () => {
     const branches = new BranchServiceMock();
     branches.get.mockResolvedValue(
@@ -378,7 +403,7 @@ describe('HealthMonitor tenant context', () => {
     await monitor.cleanup();
   });
 
-  it.each(['stopped', 'stopping', 'error'] as const)(
+  it.each(['stopped', 'error'] as const)(
     'does not monitor an environment in %s state',
     async (status) => {
       const branches = new BranchServiceMock();
@@ -395,7 +420,7 @@ describe('HealthMonitor tenant context', () => {
     }
   );
 
-  it.each(['starting', 'running'] as const)(
+  it.each(['starting', 'running', 'stopping'] as const)(
     'monitors an environment in %s state',
     async (status) => {
       const branches = new BranchServiceMock();

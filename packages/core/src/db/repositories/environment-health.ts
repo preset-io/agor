@@ -399,6 +399,7 @@ export class EnvironmentHealthRepository {
                 ...activeEnvironment,
                 status: 'error',
                 lifecycle_deadline_at: undefined,
+                active_lifecycle_attempt: undefined,
                 last_health_check: {
                   timestamp: now.toISOString(),
                   status: 'unhealthy',
@@ -449,6 +450,15 @@ export class EnvironmentHealthRepository {
           observedAtMs: now.getTime(),
           startupDeadlineAtMs: startupDeadlineAtMs(activeEnvironment),
         });
+        const activeLifecycleAttempt = activeEnvironment.active_lifecycle_attempt;
+        const activeStartOwnsGeneration =
+          status === 'starting' &&
+          activeLifecycleAttempt?.action === 'start' &&
+          activeLifecycleAttempt.environment_generation === row.environment_generation;
+        const activeStartDeadlineAt = Date.parse(activeLifecycleAttempt?.deadline_at ?? '');
+        const activeStartExpired =
+          activeStartOwnsGeneration &&
+          (!Number.isFinite(activeStartDeadlineAt) || activeStartDeadlineAt <= now.getTime());
         const activeSyncAttempt = activeEnvironment.source_sync?.active_attempt;
         const activeSyncLeaseExpiresAt = Date.parse(activeSyncAttempt?.lease_expires_at ?? '');
         const syncOwnsExpectedDowntime =
@@ -466,8 +476,15 @@ export class EnvironmentHealthRepository {
           status === 'running' ||
           input.observation.status === 'healthy' ||
           input.observation.recordWhileStarting ||
-          decision.nextStatus !== undefined;
-        const nextStatus = syncOwnsExpectedDowntime ? status : (decision.nextStatus ?? status);
+          decision.nextStatus !== undefined ||
+          activeStartExpired;
+        const nextStatus = activeStartOwnsGeneration
+          ? activeStartExpired
+            ? 'error'
+            : status
+          : syncOwnsExpectedDowntime
+            ? status
+            : (decision.nextStatus ?? status);
         const previousHealth = activeEnvironment.last_health_check;
         const stateChanged =
           shouldRecord &&
@@ -478,6 +495,7 @@ export class EnvironmentHealthRepository {
           ? {
               ...activeEnvironment,
               status: nextStatus,
+              ...(activeStartExpired ? { active_lifecycle_attempt: undefined } : {}),
               last_health_check: {
                 timestamp: now.toISOString(),
                 status: input.observation.status,
@@ -490,9 +508,10 @@ export class EnvironmentHealthRepository {
         // health observation. Invalidate the Start generation while holding
         // the same row lock as the starting -> error transition so its shell
         // callback can never publish URLs or revive the branch afterward.
-        // Do not bump for starting -> running: readiness may become healthy
-        // before Start exits and its current-generation callback still owns
-        // publication of the typed lifecycle result.
+        // Readiness cannot produce starting -> running while a server-owned
+        // Start attempt is active. Once its callback clears ownership, the
+        // next healthy observation may promote without opening a new lifecycle
+        // generation.
         const invalidatesTimedOutStart = status === 'starting' && nextStatus === 'error';
         // A network failure while an environment is still starting is a
         // legitimate, deliberately unrecorded observation: startup grace

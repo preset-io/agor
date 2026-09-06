@@ -246,11 +246,8 @@ describe('environment lifecycle generation fencing', () => {
     expect(updateEnvironment.mock.calls[1]?.[0]).toMatchObject({
       expected_environment_generation: 1,
     });
-    // Start fences on the generation alone: the health monitor promotes
-    // `starting -> running` WITHOUT advancing it, on purpose, so this command
-    // still owns publishing its typed lifecycle result.
     for (const call of updateEnvironment.mock.calls) {
-      expect(call[0]).not.toHaveProperty('expected_environment_status');
+      expect(call[0]).toMatchObject({ expected_environment_status: 'starting' });
     }
   });
 
@@ -409,74 +406,29 @@ describe('environment lifecycle generation fencing', () => {
     }
   });
 
-  // The health monitor moves `starting -> running` and `running -> error`
-  // WITHOUT advancing the lifecycle generation (EnvironmentHealthRepository
-  // does not bump for those), specifically so the in-flight command keeps
-  // ownership of its own outcome. A status fence on these writes would throw
-  // that outcome away whenever the readiness probe won the race.
-  it.each([
-    ['succeeds', 0, { status: 'succeeded' }],
-    ['fails', 1, { status: 'failed' }],
-  ] as const)(
-    'still records a start that %s after readiness already promoted the branch',
-    async (_label, exitCode, expectedCommand) => {
-      mocks.spawn.mockImplementation(() => {
-        const child = new EventEmitter() as EventEmitter & {
-          stdout: EventEmitter;
-          stderr: EventEmitter;
-          pid: number;
-        };
-        child.stdout = new EventEmitter();
-        child.stderr = new EventEmitter();
-        child.pid = 1234;
-        queueMicrotask(() => {
-          if (exitCode === 0) {
-            child.stdout.emit(
-              'data',
-              Buffer.from(
-                `AGOR_ENVIRONMENT_RESULT=${JSON.stringify({
-                  version: 1,
-                  access_urls: [{ name: 'App', url: 'https://app.example.test' }],
-                })}\n`
-              )
-            );
-          }
-          child.emit('close', exitCode);
-        });
-        return child;
-      });
-      const updateEnvironment = vi.fn(async (input: Record<string, unknown>) => {
-        // Faithful CAS: reject a stale generation, and reject a status fence
-        // against the branch the readiness probe already promoted.
-        if (input.expected_environment_generation !== 1) throw supersededConflict();
-        if (
-          input.expected_environment_status !== undefined &&
-          input.expected_environment_status !== 'running'
-        ) {
-          throw supersededConflict();
-        }
-        return { environment_generation: 1 };
-      });
-      client({
-        generation: 1,
-        updateEnvironment,
-        environmentInstance: {
-          status: 'starting',
-          startup_deadline_at: '2030-01-01T00:00:00.000Z',
-        },
-      });
+  it('does not spawn Start after its mutation-owning status was superseded', async () => {
+    const updateEnvironment = vi.fn(async () => {
+      throw supersededConflict();
+    });
+    client({
+      generation: 1,
+      updateEnvironment,
+      environmentInstance: {
+        status: 'starting',
+        startup_deadline_at: '2030-01-01T00:00:00.000Z',
+      },
+    });
 
-      const outcome = await handleEnvironmentLifecycle(payload('start'), {});
-      // Not merely "did it try": a rejected write also carries the right body.
-      // The point is that the write was ACCEPTED, so the branch keeps this
-      // command's URLs, facts, and outcome instead of silently losing them.
-      expect(outcome).toMatchObject({ success: exitCode === 0 });
-      expect((outcome.data as { superseded?: boolean } | undefined)?.superseded).toBeUndefined();
-      expect(updateEnvironment.mock.calls.at(-1)?.[0]).toMatchObject({
-        environment_update: { last_command: expect.objectContaining(expectedCommand) },
-      });
-    }
-  );
+    await expect(handleEnvironmentLifecycle(payload('start'), {})).resolves.toMatchObject({
+      success: true,
+      data: { action: 'start', superseded: true },
+    });
+    expect(mocks.spawn).not.toHaveBeenCalled();
+    expect(updateEnvironment.mock.calls[0]?.[0]).toMatchObject({
+      expected_environment_generation: 1,
+      expected_environment_status: 'starting',
+    });
+  });
 
   it('reports the generation its own settlement produced, not the dispatched one', async () => {
     // Stop changes the branch status, which advances the lifecycle boundary.

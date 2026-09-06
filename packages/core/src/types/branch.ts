@@ -548,6 +548,18 @@ export interface BranchEnvironmentInstance {
   lifecycle_deadline_at?: string;
 
   /**
+   * Server-owned provider-mutation lease for the current lifecycle generation.
+   * Readiness is observational and must not release this lock: only the
+   * generation-fenced lifecycle settlement or deadline recovery clears it.
+   */
+  active_lifecycle_attempt?: {
+    action: 'start' | 'stop' | 'nuke';
+    environment_generation: number;
+    started_at: string;
+    deadline_at: string;
+  };
+
+  /**
    * Last health check result
    */
   last_health_check?: {
@@ -680,6 +692,7 @@ export const BRANCH_ENVIRONMENT_CLEARABLE_FIELDS = [
   'lifecycle_result',
   'startup_deadline_at',
   'lifecycle_deadline_at',
+  'active_lifecycle_attempt',
   'source_sync',
   // Derived from the typed lifecycle result, so it is cleared alongside the
   // template-value cache whenever that result becomes stale.

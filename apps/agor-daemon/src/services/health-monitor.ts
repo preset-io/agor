@@ -1,12 +1,12 @@
 /**
  * Health Monitor Service
  *
- * Periodically checks health of non-archived starting/running branch environments.
+ * Periodically checks non-archived active branch environments.
  * Runs every 5 seconds and updates environment_instance.last_health_check.
  *
  * Features:
  * - Interval-based polling (5 seconds)
- * - Only monitors non-archived branches with status='starting' or 'running'
+ * - Monitors `starting`/`running` health and `stopping` lifecycle deadlines
  * - Automatic start/stop on environment state changes
  * - Graceful cleanup on daemon shutdown
  */
@@ -82,17 +82,12 @@ interface HealthMonitorTimer {
 /**
  * Statuses the monitor keeps polling.
  *
- * `error` is included deliberately. An environment is demoted to `error` when
- * it becomes unreachable, but "unreachable" is frequently temporary — a Codespace
- * whose app is still booting, or a lifecycle command that raced. If the monitor
- * stopped polling on `error`, such an environment could never return to
- * `running` on its own: it would sit red while serving HTTP 200, and a human
- * would have to press Start on a perfectly healthy app. `BranchesService.checkHealth`
- * already implements the `error → running` recovery path; this keeps the monitor
- * consistent with it.
+ * `error` is deliberately excluded as documented above. `stopping` is included
+ * even though it has no health endpoint: its persisted lifecycle deadline must
+ * be recoverable after a standalone daemon restart.
  */
 function isMonitorableStatus(status: string | undefined): boolean {
-  return status === 'running' || status === 'starting';
+  return status === 'running' || status === 'starting' || status === 'stopping';
 }
 
 function tenantParamsFromBranch(branch: Branch): HealthMonitorParams | undefined {

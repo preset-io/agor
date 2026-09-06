@@ -1091,12 +1091,95 @@ describe('BranchRepository.update', () => {
           rejectActiveEnvironmentSync: true,
         }
       )
-    ).rejects.toMatchObject({ name: 'EnvironmentLifecycleBusyError' });
+    ).rejects.toMatchObject({ name: 'EnvironmentProviderMutationBusyError' });
     await expect(branchRepo.findById(created.branch_id)).resolves.toMatchObject({
       environment_generation: 0,
       environment_instance: { status: 'running' },
     });
   });
+
+  dbTest('does not treat health-promoted running state as lifecycle settlement', async ({ db }) => {
+    const repoRepo = new RepoRepository(db);
+    const branchRepo = new BranchRepository(db);
+    const repo = await repoRepo.create(createRepoData());
+    const created = await branchRepo.create(
+      createBranchData({
+        repo_id: repo.repo_id,
+        environment_instance: {
+          status: 'running',
+          active_lifecycle_attempt: {
+            action: 'start',
+            environment_generation: 0,
+            started_at: new Date().toISOString(),
+            deadline_at: new Date(Date.now() + 60_000).toISOString(),
+          },
+        },
+      })
+    );
+
+    await expect(
+      branchRepo.update(
+        created.branch_id,
+        { environment_instance: { status: 'stopping' } },
+        {
+          invalidateEnvironmentObservation: true,
+          expectedEnvironmentGeneration: 0,
+          expectedEnvironmentStatus: 'running',
+          rejectActiveEnvironmentLifecycle: true,
+        }
+      )
+    ).rejects.toMatchObject({ name: 'EnvironmentProviderMutationBusyError' });
+    await expect(branchRepo.findById(created.branch_id)).resolves.toMatchObject({
+      environment_generation: 0,
+      environment_instance: { status: 'running', active_lifecycle_attempt: { action: 'start' } },
+    });
+  });
+
+  dbTest(
+    'accepts an attempt callback only once while server ownership is active',
+    async ({ db }) => {
+      const repoRepo = new RepoRepository(db);
+      const branchRepo = new BranchRepository(db);
+      const repo = await repoRepo.create(createRepoData());
+      const created = await branchRepo.create(
+        createBranchData({
+          repo_id: repo.repo_id,
+          environment_instance: {
+            status: 'starting',
+            active_lifecycle_attempt: {
+              action: 'start',
+              environment_generation: 0,
+              started_at: new Date().toISOString(),
+              deadline_at: new Date(Date.now() + 60_000).toISOString(),
+            },
+          },
+        })
+      );
+      const callbackOptions = {
+        expectedEnvironmentGeneration: 0,
+        expectedEnvironmentStatus: 'starting' as const,
+        expectedEnvironmentLifecycleAttempt: { action: 'start' as const, generation: 0 },
+      };
+
+      await branchRepo.update(
+        created.branch_id,
+        {
+          environment_instance: {
+            status: 'starting',
+            active_lifecycle_attempt: null,
+          } as never,
+        },
+        callbackOptions
+      );
+      await expect(
+        branchRepo.update(
+          created.branch_id,
+          { environment_instance: { status: 'starting' } },
+          callbackOptions
+        )
+      ).rejects.toMatchObject({ name: 'EnvironmentLifecycleAttemptConflictError' });
+    }
+  );
 
   dbTest('should update by full UUID and short ID', async ({ db }) => {
     const repoRepo = new RepoRepository(db);

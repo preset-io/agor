@@ -357,11 +357,13 @@ Start, Stop, Restart, Nuke, Logs, and Render controls require branch `all` permi
 
 ### Health-check lifecycle
 
-Automatic health monitoring is active only while a non-archived environment is
-`starting` or `running`. A healthy `starting` observation promotes the durable
-state to `running`. Stop, failure, archive, and deletion remove the environment
-from monitoring; daemon startup reconciliation likewise rediscovers only
-non-archived `starting` and `running` rows.
+Automatic coordination is active only while a non-archived environment is
+`starting`, `running`, or `stopping`. Readiness observations are recorded during
+Start but cannot promote the durable state until the generation-fenced Start
+callback has cleared its active provider-mutation attempt. `stopping` has no
+health probe; it remains scheduled so a daemon restart can recover an expired
+Stop/Nuke deadline. Terminal status, archive, and deletion remove the
+environment from monitoring.
 
 The rendered `health` value is stored as branch configuration even when it is
 not currently a usable URL. This keeps an inactive or optional managed
@@ -371,7 +373,7 @@ probe. An unsafe target is never contacted and is reported as unhealthy while
 the environment is active.
 
 An explicit health/status request does not turn monitoring back on for a
-stopped, stopping, archived, or deleted environment. It may return a transient
+stopped, archived, or deleted environment. It may return a transient
 diagnostic probe for an environment already in `error`, but that result does not
 change durable lifecycle state. Active observations are fenced against
 concurrent stop, archive, delete, restart, and health-URL changes, so a late
@@ -537,11 +539,13 @@ Start has a persisted startup deadline. Stop, Nuke, Sync, and Restart's verified
 Stop phase use the variant's bounded `lifecycle_timeout_ms`; the shell deadline,
 credential lifetime, response waiter, and durable Sync lease derive from that
 one budget. Stop/Nuke also persist a fleet-visible lifecycle deadline: another
-daemon can expire a claim whose owner vanished, advance its generation, and
-make retry safe. Process groups are terminated with TERM then KILL, and Agor
+daemon can expire any shell, webhook, or fallback claim whose owner vanished,
+advance its generation, and make retry safe. Process groups are terminated with TERM then KILL, and Agor
 does not settle until the process group is absent (or explicitly reports
-containment as unverified). Generation-fenced settlement prevents a late executor from
-overwriting a newer lifecycle action.
+containment as unverified). Generation-fenced settlement prevents a late
+executor from overwriting a newer lifecycle action. Executor callback tokens
+are bound to the exact action, branch, and lifecycle generation, so a still-live
+token from an older attempt cannot replay into a newer one.
 
 Provider mutations are serialized per branch. Stop/Nuke cannot preempt an
 in-flight Start, and no lifecycle action can overtake a live Sync lease; wait

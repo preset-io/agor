@@ -121,16 +121,24 @@ export class EnvironmentLifecycleConflictError extends RepositoryError {
   }
 }
 
-export class EnvironmentLifecycleBusyError extends RepositoryError {
+export class EnvironmentProviderMutationBusyError extends RepositoryError {
   constructor(
     readonly branchId: BranchID,
-    readonly leaseExpiresAt: string
+    readonly ownerAction: 'start' | 'stop' | 'nuke' | 'sync',
+    readonly deadlineAt: string
   ) {
     super(
-      `Environment lifecycle for branch ${branchId} is waiting for source synchronization ` +
-        `through ${leaseExpiresAt}`
+      `Environment lifecycle for branch ${branchId} has an active ${ownerAction} attempt ` +
+        `through ${deadlineAt}`
     );
-    this.name = 'EnvironmentLifecycleBusyError';
+    this.name = 'EnvironmentProviderMutationBusyError';
+  }
+}
+
+export class EnvironmentLifecycleAttemptConflictError extends RepositoryError {
+  constructor(readonly branchId: BranchID) {
+    super(`Environment lifecycle attempt for branch ${branchId} was already settled or superseded`);
+    this.name = 'EnvironmentLifecycleAttemptConflictError';
   }
 }
 
@@ -144,6 +152,13 @@ type BranchUpdateOptions = {
   expectedEnvironmentStatus?: NonNullable<Branch['environment_instance']>['status'];
   /** Refuse to open a provider-mutation boundary while a live Sync lease owns it. */
   rejectActiveEnvironmentSync?: boolean;
+  /** Refuse to open a provider-mutation boundary until the prior one settles. */
+  rejectActiveEnvironmentLifecycle?: boolean;
+  /** Require the exact server-owned attempt before accepting its callback. */
+  expectedEnvironmentLifecycleAttempt?: {
+    action: 'start' | 'stop' | 'nuke';
+    generation: number;
+  };
 };
 
 function isSQLiteBusyError(error: unknown): boolean {
@@ -730,6 +745,30 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
 
       const current = this.rowToBranch(currentRow, baseUrl);
 
+      if (options?.expectedEnvironmentLifecycleAttempt) {
+        const expected = options.expectedEnvironmentLifecycleAttempt;
+        const attempt = current.environment_instance?.active_lifecycle_attempt;
+        if (
+          !attempt ||
+          attempt.action !== expected.action ||
+          attempt.environment_generation !== expected.generation ||
+          currentRow.environment_generation !== expected.generation
+        ) {
+          throw new EnvironmentLifecycleAttemptConflictError(current.branch_id);
+        }
+      }
+
+      if (options?.rejectActiveEnvironmentLifecycle) {
+        const attempt = current.environment_instance?.active_lifecycle_attempt;
+        if (attempt && attempt.environment_generation === currentRow.environment_generation) {
+          throw new EnvironmentProviderMutationBusyError(
+            current.branch_id,
+            attempt.action,
+            attempt.deadline_at
+          );
+        }
+      }
+
       if (options?.rejectActiveEnvironmentSync) {
         const attempt = current.environment_instance?.source_sync?.active_attempt;
         const leaseExpiresAt = Date.parse(attempt?.lease_expires_at ?? '');
@@ -750,8 +789,9 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
           Number.isFinite(leaseExpiresAt) &&
           leaseExpiresAt > now.getTime()
         ) {
-          throw new EnvironmentLifecycleBusyError(
+          throw new EnvironmentProviderMutationBusyError(
             current.branch_id,
+            'sync',
             new Date(leaseExpiresAt).toISOString()
           );
         }

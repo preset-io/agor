@@ -223,11 +223,15 @@ describe('requireTaskScopedExecutorRuntimeToken', () => {
 
 describe('requireEnvironmentExecutorCallbackToken', () => {
   const guard = requireEnvironmentExecutorCallbackToken();
-  const callbackContext = (commandId = 'environment-start', branchId = 'branch-1') =>
+  const callbackContext = (
+    commandId = 'environment-start:4',
+    branchId = 'branch-1',
+    generation = 4
+  ) =>
     context({
       path: 'branches',
       method: 'updateEnvironment',
-      data: { branch_id: branchId },
+      data: { branch_id: branchId, expected_environment_generation: generation },
       params: params({
         type: 'executor-session',
         purpose: 'executor-command',
@@ -243,7 +247,8 @@ describe('requireEnvironmentExecutorCallbackToken', () => {
 
   it.each([
     ['ordinary member', context({ path: 'branches', data: { branch_id: 'branch-1' } })],
-    ['wrong branch', callbackContext('environment-start', 'branch-other')],
+    ['wrong branch', callbackContext('environment-start:4', 'branch-other')],
+    ['old attempt', callbackContext('environment-start:3')],
     ['unrelated command', callbackContext('environment-logs')],
   ])('rejects %s authority', async (_label, ctx) => {
     await expect(guard(ctx)).rejects.toThrow(/scoped to this environment callback/);

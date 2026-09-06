@@ -453,7 +453,7 @@ export const tasks = pgTable(
  * authentication still requires a valid JWT signature and matching claims.
  * `session_id` is intentionally not a foreign key because this token family is
  * also used for executor-backed branch/environment operations with synthetic
- * session labels (for example `environment-start`).
+ * session labels (for example `environment-start:42`).
  */
 export const executorSessionTokenAuthorities = pgTable(
   'executor_session_token_authorities',

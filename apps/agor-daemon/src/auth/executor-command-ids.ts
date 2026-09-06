@@ -19,3 +19,28 @@ export function gatewaySlackUploadExecutorCommandId(
 ): string {
   return `gateway.slack-file-upload:${component(gatewayChannelId)}:${component(slackChannelId)}`;
 }
+
+export type EnvironmentLifecycleExecutorAction = 'start' | 'stop' | 'nuke';
+
+export function environmentLifecycleExecutorCommandId(
+  action: EnvironmentLifecycleExecutorAction,
+  generation: number
+): string {
+  if (!Number.isSafeInteger(generation) || generation < 0) {
+    throw new Error('Environment lifecycle generation must be a non-negative integer');
+  }
+  return `environment-${action}:${generation}`;
+}
+
+export function parseEnvironmentLifecycleExecutorCommandId(
+  commandId: string
+): { action: EnvironmentLifecycleExecutorAction; generation: number } | null {
+  const match = /^environment-(start|stop|nuke):(\d+)$/.exec(commandId);
+  if (!match) return null;
+  const generation = Number(match[2]);
+  if (!Number.isSafeInteger(generation)) return null;
+  return {
+    action: match[1] as EnvironmentLifecycleExecutorAction,
+    generation,
+  };
+}

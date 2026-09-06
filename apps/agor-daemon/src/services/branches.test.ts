@@ -504,7 +504,7 @@ describe('BranchesService environment start async behavior', () => {
     );
 
     expect(sessionTokenService.generateCommandToken).toHaveBeenCalledWith(
-      'environment-start',
+      'environment-start:1',
       'user-1',
       branch.branch_id,
       { expirationMs: resolveEnvironmentStartBudget().credentialLifetimeMs }
@@ -523,8 +523,15 @@ describe('BranchesService environment start async behavior', () => {
       (startUpdate?.process as { started_at?: string } | undefined)?.started_at ?? ''
     );
     const deadlineAt = Date.parse((startUpdate?.startup_deadline_at as string | undefined) ?? '');
+    const attempt = startUpdate?.active_lifecycle_attempt as
+      | { action?: string; environment_generation?: number; deadline_at?: string }
+      | undefined;
     expect(Number.isFinite(startedAt)).toBe(true);
     expect(deadlineAt - startedAt).toBe(60 * 60 * 1_000);
+    expect(attempt).toMatchObject({ action: 'start', environment_generation: 1 });
+    expect(Date.parse(attempt?.deadline_at ?? '') - startedAt).toBe(
+      resolveEnvironmentStartBudget().credentialLifetimeMs
+    );
     expect(lifecycleOptions[0]).toMatchObject({
       beginLifecycle: true,
       expectedEnvironmentGeneration: 0,
@@ -898,7 +905,7 @@ describe('BranchesService environment start async behavior', () => {
     // that documented maximum would refuse every Stop.
     expect(sessionTokenService.generateCommandToken).toHaveBeenNthCalledWith(
       1,
-      'environment-stop',
+      'environment-stop:1',
       'user-1',
       branch.branch_id,
       { expirationMs: DEFAULT_LIFECYCLE_CREDENTIAL_MS }
@@ -921,7 +928,7 @@ describe('BranchesService environment start async behavior', () => {
     expect(startPayload?.params.commandTimeoutMs).toBeUndefined();
     expect(sessionTokenService.generateCommandToken).toHaveBeenNthCalledWith(
       2,
-      'environment-start',
+      'environment-start:3',
       'user-1',
       branch.branch_id,
       { expirationMs: 1_500_000 + LIFECYCLE_SETTLEMENT_MARGIN_MS }
@@ -962,7 +969,7 @@ describe('BranchesService environment start async behavior', () => {
     );
     expect(sessionTokenService.generateCommandToken).toHaveBeenNthCalledWith(
       1,
-      'environment-stop',
+      'environment-stop:1',
       'user-1',
       branch.branch_id,
       { expirationMs: 1_260_000 + LIFECYCLE_CREDENTIAL_MARGIN_MS }
@@ -971,7 +978,7 @@ describe('BranchesService environment start async behavior', () => {
     // budget must not silently widen it.
     expect(sessionTokenService.generateCommandToken).toHaveBeenNthCalledWith(
       2,
-      'environment-start',
+      'environment-start:3',
       'user-1',
       branch.branch_id,
       { expirationMs: 1_500_000 + LIFECYCLE_SETTLEMENT_MARGIN_MS }
@@ -1003,7 +1010,7 @@ describe('BranchesService environment start async behavior', () => {
 
     expect(sessionTokenService.generateCommandToken).toHaveBeenNthCalledWith(
       1,
-      'environment-stop',
+      'environment-stop:1',
       'user-1',
       branch.branch_id,
       { expirationMs: 600_000 }
@@ -1149,7 +1156,7 @@ describe('BranchesService environment start async behavior', () => {
       })
     );
     expect(sessionTokenService.generateCommandToken).toHaveBeenCalledWith(
-      'environment-stop',
+      'environment-stop:1',
       'user-1',
       branch.branch_id,
       { expirationMs: DEFAULT_LIFECYCLE_CREDENTIAL_MS }
@@ -1561,7 +1568,7 @@ describe('BranchesService environment start async behavior', () => {
           payload: {
             type: 'executor-session',
             purpose: 'executor-command',
-            session_id: 'environment-stop',
+            session_id: 'environment-stop:3',
             branch_id: branch.branch_id,
           },
         },
@@ -1622,7 +1629,7 @@ describe('BranchesService environment start async behavior', () => {
             payload: {
               type: 'executor-session',
               purpose: 'executor-command',
-              session_id: 'environment-start',
+              session_id: 'environment-start:7',
               branch_id: branch.branch_id,
             },
           },
@@ -1638,6 +1645,7 @@ describe('BranchesService environment start async behavior', () => {
       expect.objectContaining({
         expectedEnvironmentGeneration: 7,
         expectedEnvironmentStatus: 'starting',
+        expectedEnvironmentLifecycleAttempt: { action: 'start', generation: 7 },
       })
     );
   });
@@ -1667,28 +1675,35 @@ describe('BranchesService environment start async behavior', () => {
           user: { user_id: 'user-1', role: 'member' },
         } as never
       )
-    ).rejects.toThrow('exact executor command scope');
+    ).rejects.toThrow('exact attempt authority');
     expect(patchSpy).not.toHaveBeenCalled();
   });
 
   it.each([
     {
       label: 'wrong branch',
-      sessionId: 'environment-start',
+      sessionId: 'environment-start:4',
       tokenBranchId: 'another-branch',
       includeGeneration: true,
-      expected: 'exact executor command scope',
+      expected: 'exact attempt authority',
+    },
+    {
+      label: 'old same-action attempt',
+      sessionId: 'environment-start:3',
+      tokenBranchId: 'wt-env-callback-negative',
+      includeGeneration: true,
+      expected: 'exact attempt authority',
     },
     {
       label: 'missing generation',
-      sessionId: 'environment-start',
+      sessionId: 'environment-start:4',
       tokenBranchId: 'wt-env-callback-negative',
       includeGeneration: false,
       expected: 'expected generation',
     },
     {
       label: 'wrong action',
-      sessionId: 'environment-stop',
+      sessionId: 'environment-stop:4',
       tokenBranchId: 'wt-env-callback-negative',
       includeGeneration: true,
       expected: 'callback status is invalid',
@@ -1766,7 +1781,7 @@ describe('BranchesService environment start async behavior', () => {
           payload: {
             type: 'executor-session',
             purpose: 'executor-command',
-            session_id: 'environment-start',
+            session_id: 'environment-start:4',
             branch_id: branch.branch_id,
           },
         },
@@ -1826,7 +1841,7 @@ describe('BranchesService environment start async behavior', () => {
           payload: {
             type: 'executor-session',
             purpose: 'executor-command',
-            session_id: 'environment-nuke',
+            session_id: 'environment-nuke:8',
             branch_id: branch.branch_id,
           },
         },
@@ -1931,6 +1946,106 @@ describe('BranchesService environment start async behavior', () => {
     expect(patchedEnvironment?.process).toBeNull();
     expect(patchedEnvironment?.last_error).toBeNull();
     expect(patchedEnvironment?.last_command).toBeNull();
+  });
+
+  it.each(['stop', 'nuke'] as const)(
+    'persists a recoverable stopping deadline before a %s webhook',
+    async (action) => {
+      const { service } = createServiceHarness();
+      const branch = {
+        branch_id: `wt-${action}-webhook` as BranchID,
+        repo_id: 'repo-1',
+        name: `wt-${action}-webhook`,
+        path: `/tmp/wt-${action}-webhook`,
+        created_by: 'user-1' as UUID,
+        branch_unique_id: 1,
+        environment_generation: 0,
+        environment_instance: { status: 'running' },
+        start_command: 'https://launcher.example.test/start',
+        stop_command: 'https://launcher.example.test/stop',
+        nuke_command: 'https://launcher.example.test/nuke',
+      };
+      vi.spyOn(service as never, 'loadEnvironmentForAction').mockResolvedValue(branch as never);
+      vi.spyOn(service as never, 'resolveEnvironmentCommand').mockResolvedValue({
+        kind: 'webhook',
+        url: `https://launcher.example.test/${action}`,
+      } as never);
+      vi.spyOn(service as never, 'executeEnvironmentWebhook').mockResolvedValue({
+        body: '',
+        truncated: false,
+        status: 200,
+      } as never);
+      const updates: Array<Record<string, unknown>> = [];
+      let generation = 0;
+      vi.spyOn(service, 'updateEnvironment').mockImplementation(
+        async (_id, update, _params, options) => {
+          updates.push(update as Record<string, unknown>);
+          if (options?.beginLifecycle) generation += 1;
+          return {
+            ...branch,
+            environment_generation: generation,
+            environment_instance: { ...branch.environment_instance, ...update },
+          } as never;
+        }
+      );
+
+      const requestedAt = Date.now();
+      await runInTestTenantScope(() =>
+        action === 'stop'
+          ? service.stopEnvironment(branch.branch_id)
+          : service.nukeEnvironment(branch.branch_id)
+      );
+
+      const claim = updates[0];
+      const deadlineAt = Date.parse(String(claim?.lifecycle_deadline_at));
+      expect(claim).toMatchObject({
+        status: 'stopping',
+        active_lifecycle_attempt: {
+          action,
+          environment_generation: 1,
+          deadline_at: expect.any(String),
+        },
+      });
+      expect(deadlineAt).toBeGreaterThan(requestedAt + 30_000);
+      expect(deadlineAt).toBeLessThan(requestedAt + 2 * 60_000);
+    }
+  );
+
+  it('persists a bounded deadline for the no-command Stop fallback', async () => {
+    const { service } = createServiceHarness();
+    const branch = {
+      branch_id: 'wt-stop-fallback' as BranchID,
+      repo_id: 'repo-1',
+      name: 'wt-stop-fallback',
+      path: '/tmp/wt-stop-fallback',
+      created_by: 'user-1' as UUID,
+      branch_unique_id: 1,
+      environment_generation: 0,
+      environment_instance: { status: 'running' },
+      start_command: 'echo start',
+    };
+    vi.spyOn(service as never, 'loadEnvironmentForAction').mockResolvedValue(branch as never);
+    const updates: Array<Record<string, unknown>> = [];
+    let generation = 0;
+    vi.spyOn(service, 'updateEnvironment').mockImplementation(
+      async (_id, update, _params, options) => {
+        updates.push(update as Record<string, unknown>);
+        if (options?.beginLifecycle) generation += 1;
+        return {
+          ...branch,
+          environment_generation: generation,
+          environment_instance: { ...branch.environment_instance, ...update },
+        } as never;
+      }
+    );
+
+    await runInTestTenantScope(() => service.stopEnvironment(branch.branch_id));
+
+    expect(updates[0]).toMatchObject({
+      status: 'stopping',
+      lifecycle_deadline_at: expect.any(String),
+      active_lifecycle_attempt: { action: 'stop', environment_generation: 1 },
+    });
   });
 });
 
@@ -4077,7 +4192,7 @@ describe('BranchesService.startEnvironment concurrency guard', () => {
     expect(rejected).toMatchObject({
       status: 'rejected',
       reason: expect.objectContaining({
-        data: expect.objectContaining({ code: ENVIRONMENT_LIFECYCLE_SUPERSEDED_CODE }),
+        data: expect.objectContaining({ code: 'ENVIRONMENT_LIFECYCLE_BUSY' }),
       }),
     });
     expect(dispatch).toHaveBeenCalledTimes(1);
