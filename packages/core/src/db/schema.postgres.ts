@@ -8,11 +8,14 @@
 import type {
   AgorGrants,
   AgorRuntimeConfig,
+  Branch,
+  BranchEnvironmentInstance,
   CodexApprovalPolicy,
   CodexSandboxMode,
   EffortLevel,
   Message,
   PermissionMode,
+  Repo,
   SandpackConfig,
   Session,
   Task,
@@ -452,7 +455,7 @@ export const tasks = pgTable(
  * authentication still requires a valid JWT signature and matching claims.
  * `session_id` is intentionally not a foreign key because this token family is
  * also used for executor-backed branch/environment operations with synthetic
- * session labels (for example `environment-start`).
+ * session labels (for example `environment-start:42`).
  */
 export const executorSessionTokenAuthorities = pgTable(
   'executor_session_token_authorities',
@@ -690,6 +693,7 @@ export const repos = pgTable(
           category: 'auth_failed' | 'not_found' | 'network' | 'git_unavailable' | 'unknown';
           message: string;
         };
+        deletion_attempt?: Repo['deletion_attempt'];
         // v2 environment config — source of truth. Named variants + optional
         // deployment-local template_overrides. See RepoEnvironment in
         // packages/core/src/types/branch.ts.
@@ -858,6 +862,7 @@ export const branches = pgTable(
       .$type<{
         // File system
         path: string; // Absolute path to branch directory
+        filesystem_attempt?: Branch['filesystem_attempt'];
 
         // Git state (current)
         base_ref?: string; // Branch this diverged from (e.g., "main")
@@ -873,25 +878,14 @@ export const branches = pgTable(
         notes?: string; // Freeform user notes
         error_message?: string; // Error details when filesystem_status is 'failed'
 
+        // Snapshotted environment startup policy.
+        startup_timeout_ms?: number;
+
+        // Snapshotted stop/nuke/sync command budget.
+        lifecycle_timeout_ms?: number;
+
         // Environment instance (runtime state only, no variables)
-        environment_instance?: {
-          status: 'stopped' | 'starting' | 'running' | 'stopping' | 'error';
-          process?: {
-            pid?: number;
-            started_at?: string;
-            uptime?: string;
-          };
-          last_health_check?: {
-            timestamp: string;
-            status: 'healthy' | 'unhealthy' | 'unknown';
-            message?: string;
-          };
-          access_urls?: Array<{
-            name: string;
-            url: string;
-          }>;
-          logs?: string[];
-        };
+        environment_instance?: BranchEnvironmentInstance;
 
         last_used: string; // ISO timestamp
 
@@ -920,7 +914,7 @@ export const branches = pgTable(
     environmentHealthDiscoveryIdx: index('branches_environment_health_discovery_idx')
       .on(table.tenant_id, table.branch_id)
       .where(
-        sql`${table.archived} = false AND (${table.data}->'environment_instance'->>'status') IN ('starting', 'running')`
+        sql`${table.archived} = false AND (${table.data}->'environment_instance'->>'status') IN ('starting', 'running', 'stopping')`
       ),
     // Composite unique constraint (repo + name)
     uniqueRepoName: index('branches_repo_name_unique').on(table.repo_id, table.name),

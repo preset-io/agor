@@ -28,7 +28,6 @@ import {
   BoardObjectRepository,
   BoardRepository,
   type BranchRepository,
-  CapabilityPolicyRepository,
   CardRepository,
   getMCPEgressGatewayMode,
   requireCurrentTenantId,
@@ -41,6 +40,10 @@ import {
   TenantWriteGateActiveError,
   type UsersRepository,
 } from '@agor/core/db';
+import {
+  resolveEnvironmentLifecycleTimeoutMs,
+  resolveEnvironmentStartupTimeoutMs,
+} from '@agor/core/environment/health-transition';
 import {
   MANAGED_ENV_EXECUTION_MODE_DEFAULT,
   validateManagedEnvLifecyclePolicy,
@@ -91,9 +94,11 @@ import type {
 } from '@agor/core/types';
 import {
   assertPublicMCPOAuthCompatibilityMode,
+  BRANCH_SERVER_MANAGED_FIELDS,
   GATEWAY_CHANNEL_WRITE_FIELDS,
   GATEWAY_REDACTED_SENTINEL,
   hasMinimumRole,
+  REPO_SERVER_MANAGED_FIELDS,
   ROLES,
   SCHEDULE_CREATE_WRITE_FIELDS,
   SCHEDULE_PATCH_WRITE_FIELDS,
@@ -101,6 +106,7 @@ import {
 } from '@agor/core/types';
 import {
   isTaskScopedExecutorRequest,
+  requireEnvironmentExecutorCallbackToken,
   requireTaskScopedExecutorRuntimeToken,
 } from './auth/executor-runtime-scope.js';
 import type {
@@ -137,6 +143,7 @@ import { isAuthenticationUserLookup, isLocalAuthenticationLookup } from './servi
 import { resolveWebTerminalCapability } from './terminal-capability.js';
 import { buildSessionCreatedAnalyticsProperties } from './utils/analytics-payloads.js';
 import {
+  authorizeBranchBoardMove,
   ensureMinimumRole,
   requireAdminForEnvConfig,
   requireMinimumRole,
@@ -232,6 +239,8 @@ const BRANCH_ENV_FIELDS = [
   'logs_command',
   'health_check_url',
   'app_url',
+  'startup_timeout_ms',
+  'lifecycle_timeout_ms',
 ] as const;
 
 function itemHasAnyField(item: Record<string, unknown>, fields: readonly string[]): boolean {
@@ -321,6 +330,8 @@ export function validateBranchEnvPolicyHook(config: DeepReadonly<AgorConfig>) {
         validateRenderedManagedEnvUrlFields({
           app: item.app_url,
         });
+        resolveEnvironmentStartupTimeoutMs(item.startup_timeout_ms);
+        resolveEnvironmentLifecycleTimeoutMs(item.lifecycle_timeout_ms);
       } catch (error) {
         throw new BadRequest(error instanceof Error ? error.message : 'Invalid branch environment');
       }
@@ -672,6 +683,40 @@ const EXECUTOR_TASK_PATCH_FIELDS = taskFieldSet(
 );
 
 const EXTERNAL_TASK_CREATE_FIELDS = taskFieldSet('session_id', 'full_prompt', 'status');
+
+/**
+ * Generic Branch CRUD is metadata-only. Lifecycle, archival, filesystem, and
+ * identity state is written through narrower daemon/executor boundaries.
+ */
+export function protectExternalBranchCrud(context: HookContext): HookContext {
+  if (!context.params.provider) return context;
+
+  const items = Array.isArray(context.data) ? context.data : [context.data];
+  for (const item of items) {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) continue;
+    const forbidden = Object.keys(item as Record<string, unknown>).filter((field) =>
+      (BRANCH_SERVER_MANAGED_FIELDS as readonly string[]).includes(field)
+    );
+    if (forbidden.length === 0) continue;
+    throw new BadRequest(`Branch field is server-managed: ${forbidden[0]}`);
+  }
+  return context;
+}
+
+/** Destructive cleanup ownership is never writable through generic Repo CRUD. */
+export function protectExternalRepoCrud(context: HookContext): HookContext {
+  if (!context.params.provider) return context;
+
+  const items = Array.isArray(context.data) ? context.data : [context.data];
+  for (const item of items) {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) continue;
+    const forbidden = Object.keys(item as Record<string, unknown>).find((field) =>
+      (REPO_SERVER_MANAGED_FIELDS as readonly string[]).includes(field)
+    );
+    if (forbidden) throw new BadRequest(`Repository field is server-managed: ${forbidden}`);
+  }
+  return context;
+}
 
 /** Keep the documented two-step create/run API dormant until the explicit run call. */
 export function protectExternalTaskCreate(context: HookContext): HookContext {
@@ -2135,16 +2180,19 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       all: [typedValidateQuery(repoQueryValidator), requireAuth],
       create: [
         requireMinimumRole(ROLES.MEMBER, 'create repositories'),
+        protectExternalRepoCrud,
         requireAdminForEnvConfig(),
         validateRepoEnvPolicyHook(config),
       ],
       update: [
         requireMinimumRole(ROLES.MEMBER, 'update repositories'),
+        protectExternalRepoCrud,
         requireAdminForEnvConfig(),
         validateRepoEnvPolicyHook(config),
       ],
       patch: [
         requireMinimumRole(ROLES.MEMBER, 'update repositories'),
+        protectExternalRepoCrud,
         requireAdminForEnvConfig(),
         validateRepoEnvPolicyHook(config),
       ],
@@ -2168,26 +2216,16 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       const boardWasSupplied = context.method === 'create' || Object.hasOwn(value, 'board_id');
       if (!boardWasSupplied || previousBoardId === value.board_id) continue;
 
-      const userId = user.user_id as UUID;
-      if (previousBoardId) {
-        const canDetach = await boardRepository
-          .canMutate(previousBoardId, userId)
-          .catch(() => false);
-        if (!canDetach) {
-          throw new Forbidden('Board Editor or Manager access is required to detach this branch');
-        }
-      }
+      const canonicalTargetBoardId = await authorizeBranchBoardMove(
+        db,
+        previousBoardId,
+        value.board_id,
+        context.params as AuthenticatedParams,
+        executionMode.appRbacEnabled,
+        boardRepository
+      );
       if (value.board_id) {
-        const targetBoard = await boardRepository.findBySlugOrId(value.board_id);
-        const canAttach = targetBoard
-          ? await new CapabilityPolicyRepository(db)
-              .resolveBoardAccess(targetBoard.board_id, userId as UserID)
-              .then((access) => access.capabilities.includes('board.attach_branch'))
-              .catch(() => false)
-          : false;
-        if (!canAttach) {
-          throw new Forbidden('Board Editor or Manager access is required to attach a branch');
-        }
+        value.board_id = canonicalTargetBoardId;
       }
     }
     return context;
@@ -2204,6 +2242,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
           ensureCanChangeBranchBoard,
         ]
       : []),
+    protectExternalBranchCrud,
     captureMarketplaceInvalidationTargets,
   ];
 
@@ -2228,6 +2267,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
         requireAdminForEnvConfig(),
         validateBranchEnvPolicyHook(config),
         ensureCanChangeBranchBoard,
+        protectExternalBranchCrud,
         injectCreatedBy(),
         bindPrimaryOwnerToCreatedBy(),
       ],
@@ -2256,14 +2296,17 @@ export function registerHooks(ctx: RegisterHooksContext): void {
   type BranchCustomHookRegistrar = {
     hooks(options: {
       before: Record<
-        'updateEnvironment' | 'ensureTeammateKnowledgeNamespace',
-        Array<(context: HookContext) => HookContext>
+        'updateEnvironment' | 'recoverFilesystem' | 'ensureTeammateKnowledgeNamespace',
+        Array<(context: HookContext) => HookContext | Promise<HookContext>>
       >;
     }): void;
   };
   (app.service('branches') as unknown as BranchCustomHookRegistrar).hooks({
     before: {
-      updateEnvironment: [requireMinimumRole(ROLES.MEMBER, 'update branch environments')],
+      updateEnvironment: [requireEnvironmentExecutorCallbackToken()],
+      recoverFilesystem: [
+        requireMinimumRole(ROLES.MEMBER, 'recover branch filesystem materialization'),
+      ],
       ensureTeammateKnowledgeNamespace: [
         requireMinimumRole(ROLES.MEMBER, 'create teammate knowledge namespaces'),
       ],

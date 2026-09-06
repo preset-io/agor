@@ -6,7 +6,13 @@
 
 import { describe, expect, it } from 'vitest';
 import type { DbProbeResult, MigrationsProbeResult } from './db-probe';
-import { authenticatedHealthDb, healthMigrations, healthStatus, publicHealthDb } from './payload';
+import {
+  authenticatedHealthDb,
+  healthMigrations,
+  healthStatus,
+  publicEnvironmentDisclaimerMarkdown,
+  publicHealthDb,
+} from './payload';
 
 const okProbe: DbProbeResult = { ok: true, latencyMs: 3 };
 const failedProbe: DbProbeResult = { ok: false, latencyMs: 1500, error: 'ECONNREFUSED host:5432' };
@@ -17,6 +23,23 @@ describe('healthStatus', () => {
   });
   it('is degraded when the DB probe fails', () => {
     expect(healthStatus(failedProbe)).toBe('degraded');
+  });
+});
+
+describe('publicEnvironmentDisclaimerMarkdown', () => {
+  it('keeps absent config absent for backwards-compatible health payloads', () => {
+    expect(publicEnvironmentDisclaimerMarkdown({})).toBeUndefined();
+  });
+
+  it('projects only the normalized operator-authored Markdown string', () => {
+    expect(
+      publicEnvironmentDisclaimerMarkdown({
+        ui: {
+          environment_disclaimer_markdown:
+            '  **Bring your own runtime.** [Learn more](/guide/environment-configuration)  ',
+        },
+      })
+    ).toBe('**Bring your own runtime.** [Learn more](/guide/environment-configuration)');
   });
 });
 

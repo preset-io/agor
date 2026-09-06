@@ -58,6 +58,7 @@ import { useThemedMessage } from '../../../utils/message';
 import { useThemedModal } from '../../../utils/modal';
 import { CodeEditor } from '../../CodeEditor';
 import { EnvironmentLogsModal } from '../../EnvironmentLogsModal';
+import { MarkdownRenderer } from '../../MarkdownRenderer';
 
 const DOCS_URL = 'https://agor.live/guide/environment-configuration';
 
@@ -116,11 +117,12 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
   const { confirm } = useThemedModal();
   const confirmNuke = useConfirmNukeEnvironment();
   const { isAdmin } = usePermissions();
-  const { featuresConfig } = useAuthConfig();
+  const { featuresConfig, instanceConfig } = useAuthConfig();
 
   // ----- Permission gating -----
   const managedEnvsExecutionMode: ManagedEnvExecutionMode =
     featuresConfig?.managedEnvsExecutionMode ?? MANAGED_ENV_EXECUTION_MODE_DEFAULT;
+  const environmentDisclaimerMarkdown = instanceConfig?.environmentDisclaimerMarkdown;
   const isWebhookMode = managedEnvsExecutionMode === 'webhook-only';
   const canTriggerEnv = canControlEnvironment ?? isAdmin;
   const triggerDisabledTooltip = canTriggerEnv
@@ -617,6 +619,22 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
   return (
     <div style={{ width: '100%', maxHeight: '70vh', overflowY: 'auto' }}>
       <Space orientation="vertical" size="large" style={{ width: '100%' }}>
+        {environmentDisclaimerMarkdown && (
+          <Alert
+            type="warning"
+            showIcon
+            title="Environment availability"
+            description={
+              <MarkdownRenderer
+                content={environmentDisclaimerMarkdown}
+                showControls={false}
+                restricted
+                style={{ overflowWrap: 'anywhere' }}
+              />
+            }
+          />
+        )}
+
         {/* ====== Environment Controls (top — unchanged from prior behavior) ====== */}
         {hasEnvironmentConfig && (
           <Card size="small">
@@ -649,7 +667,14 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
                 icon={isStopping ? <LoadingOutlined /> : <PoweroffOutlined />}
                 onClick={handleStop}
                 loading={isStopping}
-                disabled={!canTriggerEnv}
+                disabled={
+                  !canTriggerEnv ||
+                  envStatus === 'starting' ||
+                  envStatus === 'stopping' ||
+                  isStarting ||
+                  isStopping ||
+                  isRestarting
+                }
                 title={triggerDisabledTooltip}
                 danger
               >
@@ -659,7 +684,14 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
                 size="small"
                 icon={isRestarting ? <LoadingOutlined /> : <ReloadOutlined />}
                 onClick={handleRestart}
-                disabled={!canTriggerEnv || isStarting || isStopping || isRestarting}
+                disabled={
+                  !canTriggerEnv ||
+                  envStatus === 'starting' ||
+                  envStatus === 'stopping' ||
+                  isStarting ||
+                  isStopping ||
+                  isRestarting
+                }
                 loading={isRestarting}
                 title={triggerDisabledTooltip}
               >
@@ -670,7 +702,15 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
                   size="small"
                   icon={isNuking ? <LoadingOutlined /> : <FireOutlined />}
                   onClick={handleNuke}
-                  disabled={!canTriggerEnv || isStarting || isStopping || isRestarting || isNuking}
+                  disabled={
+                    !canTriggerEnv ||
+                    envStatus === 'starting' ||
+                    envStatus === 'stopping' ||
+                    isStarting ||
+                    isStopping ||
+                    isRestarting ||
+                    isNuking
+                  }
                   loading={isNuking}
                   danger
                   title={
@@ -833,7 +873,7 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
             <Alert
               type="info"
               showIcon
-              message={isWebhookMode ? 'Webhook-managed environments' : 'Managed environments'}
+              title={isWebhookMode ? 'Webhook-managed environments' : 'Managed environments'}
               description={lifecycleFieldHelp}
               style={{ fontSize: 12 }}
             />

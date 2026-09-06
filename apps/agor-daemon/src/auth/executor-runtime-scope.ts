@@ -3,6 +3,10 @@ import { Forbidden } from '@agor/core/feathers';
 import type { AuthenticatedParams, HookContext, Params } from '@agor/core/types';
 import { getAuthenticatedConnectionAuthority } from './authenticated-connection-authority.js';
 import {
+  type EnvironmentLifecycleExecutorAction,
+  parseEnvironmentLifecycleExecutorCommandId,
+} from './executor-command-ids.js';
+import {
   EXECUTOR_COMMAND_TOKEN_PURPOSE,
   EXECUTOR_SESSION_TOKEN_PURPOSE,
   EXECUTOR_SESSION_TOKEN_TYPE,
@@ -38,6 +42,12 @@ export interface TaskExecutorRuntimeScope extends ExecutorDelegationContext {
 export interface ExecutorCommandRuntimeScope {
   commandId: string;
   branchId?: string;
+}
+
+export interface EnvironmentExecutorCallbackRuntimeScope {
+  action: EnvironmentLifecycleExecutorAction;
+  generation: number;
+  branchId: string;
 }
 
 /** Immutable Task credential authority needed by runtime-heartbeat revalidation. */
@@ -170,6 +180,16 @@ export function matchesExecutorCommandRuntimeScope(
   return !!scope && scope.commandId === commandId && scope.branchId === branchId;
 }
 
+/** Attempt-bound authority for one managed-environment lifecycle callback. */
+export function authenticatedEnvironmentExecutorCallbackRuntimeScope(
+  params?: Params
+): EnvironmentExecutorCallbackRuntimeScope | null {
+  const scope = authenticatedExecutorCommandRuntimeScope(params);
+  if (!scope?.branchId) return null;
+  const attempt = parseEnvironmentLifecycleExecutorCommandId(scope.commandId);
+  return attempt ? { ...attempt, branchId: scope.branchId } : null;
+}
+
 /** Whether this authenticated transport request carries executor scope for one task. */
 export function isTaskScopedExecutorRequest(context: HookContext, taskId: string): boolean {
   return authenticatedTaskExecutorRuntimeScope(context.params)?.taskId === taskId;
@@ -235,6 +255,30 @@ export function requireTaskScopedExecutorRuntimeToken() {
     const taskId = executorOperationTaskId(context);
     if (!taskId || !isTaskScopedExecutorRequest(context, taskId)) {
       throw new Forbidden('A token scoped to this executor task is required');
+    }
+    return context;
+  };
+}
+
+/** Guard the transport-only managed-environment settlement callback family. */
+export function requireEnvironmentExecutorCallbackToken() {
+  return async (context: HookContext): Promise<HookContext> => {
+    const input =
+      asRecord(context.data) ??
+      asRecord((context as HookContext & { arguments?: unknown[] }).arguments?.[0]);
+    const branchId = input?.branch_id ?? input?.branchId;
+    const generation =
+      input?.expected_environment_generation ?? input?.expectedEnvironmentGeneration;
+    const scope = authenticatedEnvironmentExecutorCallbackRuntimeScope(context.params);
+    if (
+      typeof branchId !== 'string' ||
+      typeof generation !== 'number' ||
+      !Number.isSafeInteger(generation) ||
+      !scope ||
+      scope.branchId !== branchId ||
+      scope.generation !== generation
+    ) {
+      throw new Forbidden('An executor token scoped to this environment callback is required');
     }
     return context;
   };

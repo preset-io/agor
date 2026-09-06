@@ -89,6 +89,29 @@ describe('managed environment policy validation', () => {
     ).toThrow(/variant "base" start must render to an http\(s\) URL webhook/);
   });
 
+  it('applies webhook-only policy to source sync too', () => {
+    expect(() =>
+      validateRepoEnvironmentLifecyclePolicy(
+        {
+          version: 2,
+          default: 'remote',
+          variants: {
+            remote: {
+              start: 'https://hooks.example.com/start',
+              stop: 'https://hooks.example.com/stop',
+              sync: 'bridge sync --revision {{sync.revision}}',
+            },
+          },
+        },
+        'webhook-only'
+      )
+    ).not.toThrow();
+
+    expect(() => resolveManagedEnvCommandExecution('bridge sync', 'webhook-only', 'sync')).toThrow(
+      /rendered sync field must be an http\(s\) URL webhook/
+    );
+  });
+
   it('allows unresolved repo lifecycle templates for rendered branch-state validation', () => {
     expect(() =>
       validateRepoEnvironmentLifecyclePolicy(

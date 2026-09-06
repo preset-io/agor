@@ -77,12 +77,15 @@ Every field in a variant is a Handlebars template. The render context is built i
 
 | Variable | Source | Example | Notes |
 |---|---|---|---|
+| `{{branch.id}}` | Branch | `0198f5d4-...` | Stable branch UUID. Use as a provider-resource binding, not as a display name. |
 | `{{branch.unique_id}}` | Branch | `3` | Auto-incrementing integer. Use for deterministic port offsets. |
 | `{{branch.name}}` | Branch | `feat-new-filter` | Slugified branch name. Good for `docker compose -p`. |
+| `{{branch.ref}}` | Branch | `refs/heads/feat-new-filter` | Exact git ref recorded for the branch. Empty if unavailable. |
 | `{{branch.path}}` | Branch | `/home/you/agor/feat-new-filter` | Absolute path on disk. |
 | `{{branch.base_ref}}` | Branch | `main` | Source branch/tag name the branch was created from (the "Base Branch"/"Base Tag" in the create dialog). The **name**, not a SHA. Empty string if unknown. |
 | `{{branch.ref_type}}` | Branch | `branch` | `branch` or `tag`, indicating whether `base_ref` names a branch or a tag. Defaults to `branch`. |
 | `{{repo.slug}}` | Repo | `preset-io/superset` | Repository slug. |
+| `{{repo.github_slug}}` | Repo | `preset-io/agor` | Credential-free `owner/repository` identity derived from a registered `github.com` remote. Empty for other hosts. |
 | `{{host.ip_address}}` | Auto-detected | `10.0.1.42` | Fallback order: `template_overrides.host.ip_address` → `daemon.host_ip_address` in `~/.agor/config.yaml` → autodetect. |
 | `{{custom.<key>}}` | Branch custom context | `{{custom.compose_profile}}` | Anything you store in `branch.custom_context`. |
 | `{{custom.<key>}}` via overrides | `template_overrides.custom.*` | `{{custom.internal_registry}}` | Repo-wide fallback if the branch doesn't set a key. |
@@ -98,6 +101,8 @@ Every field in a variant is a Handlebars template. The render context is built i
 | `mod` | `{{mod branch.unique_id 4}}` | `3` |
 
 Math helpers are deterministic. The same branch always renders the same ports, which is what keeps parallel branches from colliding.
+
+Use `{{shellQuote value}}` when inserting any template value into a shell command. It renders the value as exactly one inert POSIX shell argument, including values with spaces, quotes, or shell metacharacters.
 
 > Broken template syntax is reported at **render time**, not at save time. Click Render to see the exact error with a line number.
 
@@ -120,15 +125,18 @@ environment:
     <variant-name>:
       description: "Human-readable one-liner"
       extends: <base-variant>      # optional, single-level only
+      startup_timeout_ms: 3600000 # optional; one hour by default
+      lifecycle_timeout_ms: 775000 # optional; budget for one stop/nuke/sync
       start:  "<shell command template>"
       stop:   "<shell command template>"
+      sync:   "<shell command template>"   # optional; exact source reconciliation
       nuke:   "<shell command template>"   # optional
       logs:   "<shell command template>"   # optional
       health: "<url template>"             # optional
       app:    "<url template>"             # optional
 ```
 
-`start`, `stop`, `nuke`, and `logs` are rendered lifecycle fields. In the
+`start`, `stop`, `sync`, `nuke`, and `logs` are rendered lifecycle fields. In the
 default `hybrid` mode they can be shell commands or explicit `http://` /
 `https://` webhooks. Webhooks are invoked with HTTP GET. `health` and `app` are
 always URL templates, not shell commands.
@@ -139,7 +147,42 @@ always URL templates, not shell commands.
 - `environment.default` must reference a variant that exists in `environment.variants`.
 - Each variant (after `extends` resolution) needs at least `start` and `stop`.
 
-`nuke`, `logs`, `health`, and `app` are optional. The corresponding UI buttons simply hide or no-op when absent.
+`startup_timeout_ms`, `lifecycle_timeout_ms`, `sync`, `nuke`, `logs`, `health`,
+and `app` are optional. The startup timeout defaults to one hour and may be set
+from 1 second through 24 hours. Agor persists an exact deadline for every
+attempt, so a daemon restart or a pause in health monitoring does not restart
+the clock. The corresponding optional UI buttons simply hide or no-op when
+absent.
+
+`lifecycle_timeout_ms` is the separate budget for one `stop`, `nuke`, or `sync`
+command; Start is governed by `startup_timeout_ms` instead. It ranges from 1
+second to 1 hour and inherits through `extends`.
+
+Leave it unset unless a variant genuinely needs longer. The default is not a
+round number picked by hand: it is the largest command deadline whose executor
+credential still fits inside the 15 minutes Agor gives a taskless executor
+command by default, so an ordinary local `docker compose down` asks for no more
+authority than it already had. Raising it raises three things together — the
+credential that command is issued, how long the daemon waits for its result, and
+the durable Sync claim lease. That last one is why the ceiling is an hour rather
+than the 24 hours `startup_timeout_ms` allows: the lease is how long a peer
+daemon must wait before it may retry a sync whose owner died.
+
+Two operator settings bound this from outside, and Agor applies both when it
+dispatches rather than letting the command discover them later:
+
+- `execution.session_token_expiration_ms` (24 hours by default) caps any
+  executor credential.
+- `execution.executor_response.timeout_ms.by_command['environment.lifecycle']`,
+  if set, caps how long the daemon waits for the command's result.
+
+If either is tighter than the variant asks for, the **command deadline is
+shortened** to fit — the command still runs, and still ends before its authority
+and its waiter do. Agor only refuses outright when a ceiling leaves no room for
+any command at all. The same credential rule applies to Start: its effective
+persisted startup deadline is shortened before the lifecycle generation is
+opened, so a configured 24-hour startup can never outlive a 24-hour command
+credential plus settlement time.
 
 ### `extends` (single-level only)
 
@@ -314,11 +357,13 @@ Start, Stop, Restart, Nuke, Logs, and Render controls require branch `all` permi
 
 ### Health-check lifecycle
 
-Automatic health monitoring is active only while a non-archived environment is
-`starting` or `running`. A healthy `starting` observation promotes the durable
-state to `running`. Stop, failure, archive, and deletion remove the environment
-from monitoring; daemon startup reconciliation likewise rediscovers only
-non-archived `starting` and `running` rows.
+Automatic coordination is active only while a non-archived environment is
+`starting`, `running`, or `stopping`. Readiness observations are recorded during
+Start but cannot promote the durable state until the generation-fenced Start
+callback has cleared its active provider-mutation attempt. `stopping` has no
+health probe; it remains scheduled so a daemon restart can recover an expired
+Stop/Nuke deadline. Terminal status, archive, and deletion remove the
+environment from monitoring.
 
 The rendered `health` value is stored as branch configuration even when it is
 not currently a usable URL. This keeps an inactive or optional managed
@@ -328,7 +373,7 @@ probe. An unsafe target is never contacted and is reported as unhealthy while
 the environment is active.
 
 An explicit health/status request does not turn monitoring back on for a
-stopped, stopping, archived, or deleted environment. It may return a transient
+stopped, archived, or deleted environment. It may return a transient
 diagnostic probe for an environment already in `error`, but that result does not
 change durable lifecycle state. Active observations are fenced against
 concurrent stop, archive, delete, restart, and health-URL changes, so a late
@@ -387,6 +432,35 @@ In `hybrid` mode, lifecycle fields can be shell commands or explicit
 `http://` / `https://` webhooks. URL-shaped fields use webhook execution, so a
 repo can use webhooks for one action and commands for another.
 
+In standalone mode those commands use the configured local executor boundary.
+In HA, `hybrid` is accepted only for the external delegated executor topology;
+it is rejected for `shared-local` so repository commands never fall back into a
+daemon replica. Selecting a repository-defined variant follows normal branch
+`all`/admin permissions. Injecting raw replacement shell text is a distinct,
+admin-only operation; the variant picker must not become a shell-authoring
+escape hatch.
+
+Provider-backed variants should set explicit budgets and make every lifecycle
+command retry-safe:
+
+```yaml
+environment:
+  version: 2
+  default: remote
+  variants:
+    remote:
+      startup_timeout_ms: 1500000
+      lifecycle_timeout_ms: 1260000
+      start: ./scripts/start-github-codespaces.sh
+      stop: ./scripts/stop-github-codespaces.sh
+```
+
+`startup_timeout_ms` may be 1 second through 24 hours; the default is one hour.
+`lifecycle_timeout_ms` may be 1 second through one hour. Its default is derived
+from the bounded taskless executor credential. Do not use Start to keep an
+application server in the foreground: Agor terminates the entire command
+process group at the deadline.
+
 Some instances are configured for webhook-managed environments:
 
 ```yaml
@@ -395,7 +469,7 @@ execution:
   managed_envs_execution_mode: webhook-only
 ```
 
-In `webhook-only` mode, rendered `start`, `stop`, `nuke`, and `logs` fields
+In `webhook-only` mode, rendered `start`, `stop`, `sync`, `nuke`, and `logs` fields
 must render to explicit `http://` or `https://` URLs. Agor sends a GET request
 to the URL.
 
@@ -406,10 +480,40 @@ environment:
     remote:
       start: "https://orchestrator.example.com/agor/start?branch={{branch.name}}"
       stop:  "https://orchestrator.example.com/agor/stop?branch={{branch.name}}"
+      sync:  "https://orchestrator.example.com/agor/sync?branch={{branch.name}}&revision={{sync.revision}}"
       logs:  "https://orchestrator.example.com/agor/logs?branch={{branch.name}}"
       health: "https://apps.example.com/{{branch.name}}/health"
       app:    "https://apps.example.com/{{branch.name}}"
 ```
+
+### Lifecycle result contract
+
+A shell `start` command can publish runtime URLs and provider identity by writing
+exactly one control line to **stdout**:
+
+```text
+AGOR_ENVIRONMENT_RESULT={"version":1,"access_urls":[{"name":"App","url":"https://app.example.com/"},{"name":"Metrics","url":"https://metrics.example.com/"}],"health_url":"https://app.example.com/health","resource":{"provider":"github-codespaces","id":"opaque-provider-id","name":"example-space","manage_url":"https://github.com/codespaces/example-space"}}
+```
+
+For a webhook, return the JSON object itself as an `application/json` response;
+do not include the `AGOR_ENVIRONMENT_RESULT=` prefix. Diagnostic stderr is never
+parsed as control data. The control record is removed from user-visible command
+output and persisted logs.
+
+| Field              | Contract                                                                                                                      |
+| ------------------ | ----------------------------------------------------------------------------------------------------------------------------- |
+| `version`          | Required. Must be `1`.                                                                                                        |
+| `access_urls`      | Optional non-empty array of at most 8 uniquely named URLs. Order is preserved; the first URL is the primary application link. |
+| `health_url`       | Optional health endpoint.                                                                                                     |
+| `resource`         | Optional provider identity containing at least one of `provider`, `id`, `name`, or `manage_url`. Never put credentials here.  |
+| `applied_revision` | Required for successful `sync`; the exact full lowercase 40- or 64-character Git object ID that was applied.                  |
+
+The encoded result is limited to 8 KiB. Names are limited to 64 characters and
+URLs to 2,048 characters. URLs must be HTTP(S) and cannot contain credentials,
+query strings, or fragments. Unknown fields, duplicate URL names, multiple
+result lines, malformed JSON, and mixed legacy/typed records fail closed. A
+dynamic health URL must also resolve exclusively to public addresses when Agor
+probes it; DNS is pinned and redirects are not followed.
 
 V1 webhooks are intentionally simple: GET only, no custom headers, no request
 body, no signing, and redirects are not followed. V1 webhook targets must be
@@ -418,13 +522,76 @@ credentials are rejected. Use a trusted orchestration service, and avoid secrets
 in query strings because rendered branch snapshots and infrastructure logs may
 expose them.
 
-In daemon HA mode, lifecycle actions remain webhook-only; Agor does not assign
-distributed ownership for Start, Stop, Restart, or Nuke. Health observation is
-separate: every replica scans active environments, while PostgreSQL admits only
-one live observation claim per branch and fences the result against lease expiry
-and lifecycle changes. A remote/webhook environment without `health` remains
-explicitly unobservable (`unknown`); Agor never treats another daemon's local
-process map as evidence that it is healthy.
+A `sync` command or webhook receives the exact clean desired Git object ID as
+`{{sync.revision}}`. Success must return the versioned lifecycle JSON result
+with `applied_revision` equal to that exact ID. Agor stores desired and applied
+revisions separately, admits only one leased attempt across daemon replicas,
+and retries failures without changing the environment's health status.
+
+In daemon HA mode, `webhook-only` works with either supported execution
+topology. `hybrid` is admitted only with `execution_topology: external`,
+`unix_user_mode: delegated`, a command template, persistent branch/user storage
+assertions, and the authenticated external executor-response protocol. Shell
+lifecycle commands therefore go through the same delegated launcher and
+concurrency admission as agent runs; they never execute inside daemon Pods.
+
+Start has a persisted startup deadline. Stop, Nuke, Sync, and Restart's verified
+Stop phase use the variant's bounded `lifecycle_timeout_ms`; the shell deadline,
+credential lifetime, response waiter, and durable Sync lease derive from that
+one budget. Stop/Nuke also persist a fleet-visible lifecycle deadline: another
+daemon can expire any shell, webhook, or fallback claim whose owner vanished,
+advance its generation, and make retry safe. Process groups are terminated with TERM then KILL, and Agor
+does not settle until the process group is absent (or explicitly reports
+containment as unverified). Generation-fenced settlement prevents a late
+executor from overwriting a newer lifecycle action. Executor callback tokens
+are bound to the exact action, branch, and lifecycle generation, so a still-live
+token from an older attempt cannot replay into a newer one.
+
+A completed non-success webhook response is authoritative. A timeout,
+disconnect, or response-stream failure is not: the orchestration service may
+still be applying the request. Agor records the diagnostic but retains the
+lifecycle attempt or Sync lease until its durable deadline instead of admitting
+an overlapping retry.
+
+Provider mutations are serialized per branch. Stop/Nuke cannot preempt an
+in-flight Start, and no lifecycle action can overtake a live Sync lease; wait
+for the bounded attempt to settle or expire. This avoids a late Start recreating
+a resource after Stop/Nuke. The commands themselves must still be idempotent
+reconcilers: a retry after a Pod or daemon loss must converge the provider to
+the requested state rather than blindly creating another resource.
+
+Archiving or deleting a branch is also fenced against provider work. If its
+environment is running, the first request initiates Stop and asks the user to
+retry after Stop settles. A branch that is starting, stopping, or owned by an
+active lifecycle/Sync attempt cannot be retired. This deliberately avoids
+discarding the only recovery record for an external, potentially billable
+resource.
+
+Agor Cloud's supported pattern is a short-lived command such as
+`start-github-codespaces.sh`: create or reconcile a remote environment, emit
+the bounded `AGOR_ENVIRONMENT_RESULT`, and exit. A foreground application server
+inside the transient executor Pod is killed at the Start deadline and is not
+reachable—Cloud does not currently provide application ingress/proxying for
+environment executor Pods. Remote-provider access controls, secrets, quotas,
+and billing remain the operator's responsibility. Right-sized lifecycle
+containers and application network wiring are planned separately.
+
+### Why does the Environment tab show an instance-specific disclaimer? {/* #operator-notice */}
+
+Deployment operators can configure constrained Markdown at the top of the tab
+to explain where environments run, which integrations are supported, or where
+to find local documentation. The disclaimer is informational UI policy; it does
+not enable, disable, or authorize any environment operation.
+
+It appears in addition to the dynamic **Managed environments** or
+**Webhook-managed environments** summary. That summary comes from the daemon's
+effective execution mode and remains the authoritative description of accepted
+lifecycle fields. If no disclaimer is configured, the tab behaves exactly as it
+did before this option was added.
+
+See [Environment tab guidance](/guide/config-yaml#environment-tab-guidance) for
+the `ui.environment_disclaimer_markdown` schema, limits, sanitization, public visibility,
+and a complete example.
 
 ---
 

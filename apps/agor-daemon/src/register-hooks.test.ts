@@ -40,6 +40,8 @@ import {
   isPromptFlowPatchOnly,
   PROMPT_FLOW_PATCH_FIELDS,
   projectExecutorTaskSdkResponse,
+  protectExternalBranchCrud,
+  protectExternalRepoCrud,
   protectExternalTaskCreate,
   protectFilesystemHomeWrite,
   protectServerManagedTaskWrites,
@@ -353,6 +355,111 @@ describe('protectExternalTaskCreate', () => {
     const hook = context({ status: TaskStatus.RUNNING }, null);
     expect(protectExternalTaskCreate(hook)).toBe(hook);
     expect(hook.data).toEqual({ status: TaskStatus.RUNNING });
+  });
+});
+
+describe('protectExternalBranchCrud', () => {
+  const context = (
+    data: unknown,
+    options: {
+      provider?: string | null;
+      method?: 'create' | 'patch' | 'update';
+      commandId?: string;
+      branchId?: string;
+    } = {}
+  ) =>
+    ({
+      id: options.branchId ?? 'branch-1',
+      method: options.method ?? 'patch',
+      data,
+      params: {
+        provider: options.provider === undefined ? 'rest' : options.provider,
+        user: { user_id: 'manager-1', role: 'admin' },
+        ...(options.commandId
+          ? {
+              authentication: {
+                strategy: 'jwt',
+                payload: {
+                  type: 'executor-session',
+                  purpose: 'executor-command',
+                  session_id: options.commandId,
+                  branch_id: options.branchId ?? 'branch-1',
+                },
+              },
+            }
+          : {}),
+      },
+    }) as unknown as HookContext;
+
+  it.each(['rest', 'socketio'])('rejects %s attempts to forge environment state', (provider) => {
+    expect(() =>
+      protectExternalBranchCrud(
+        context(
+          { environment_instance: { active_lifecycle_attempt: null, status: 'running' } },
+          { provider }
+        )
+      )
+    ).toThrow('server-managed: environment_instance');
+  });
+
+  it('rejects archive and filesystem state even for an administrator', () => {
+    expect(() =>
+      protectExternalBranchCrud(
+        context({ archived: true, filesystem_status: 'deleted' }, { provider: 'rest' })
+      )
+    ).toThrow('server-managed: archived');
+  });
+
+  it('rejects persisted source-remote authority through generic CRUD', () => {
+    expect(() =>
+      protectExternalBranchCrud(
+        context({ base_remote_url: 'https://attacker.example/repo.git' }, { provider: 'rest' })
+      )
+    ).toThrow('server-managed: base_remote_url');
+  });
+
+  it('allows ordinary client-authored metadata and trusted internal writes', () => {
+    const external = context({ notes: 'updated', board_id: 'board-2' });
+    expect(protectExternalBranchCrud(external)).toBe(external);
+    const internal = context(
+      { environment_instance: { status: 'stopped' }, archived: true },
+      { provider: null }
+    );
+    expect(protectExternalBranchCrud(internal)).toBe(internal);
+  });
+
+  it('keeps filesystem settlement out of generic CRUD even for an executor token', () => {
+    expect(() =>
+      protectExternalBranchCrud(
+        context(
+          { filesystem_status: 'ready' },
+          { commandId: 'git.branch.add', branchId: 'branch-1' }
+        )
+      )
+    ).toThrow('server-managed');
+  });
+});
+
+describe('protectExternalRepoCrud', () => {
+  it('rejects external deletion-fence mutation and permits internal settlement', () => {
+    const external = {
+      method: 'patch',
+      data: { deletion_attempt: null },
+      params: { provider: 'rest' },
+    } as unknown as HookContext;
+    expect(() => protectExternalRepoCrud(external)).toThrow('server-managed: deletion_attempt');
+
+    for (const field of ['clone_status', 'clone_error']) {
+      expect(() =>
+        protectExternalRepoCrud({
+          ...external,
+          data: { [field]: field === 'clone_status' ? 'ready' : { message: 'forged' } },
+        } as never)
+      ).toThrow(`server-managed: ${field}`);
+    }
+
+    const internal = { ...external, params: { provider: undefined } } as unknown as HookContext;
+    expect(protectExternalRepoCrud(internal)).toBe(internal);
   });
 });
 
@@ -1197,6 +1304,24 @@ describe('branch environment materialization validation', () => {
         execution: { managed_envs_execution_mode: 'hybrid' },
       })(context)
     ).rejects.toThrow('managed environment app URL');
+  });
+
+  it('rejects an invalid snapshotted startup timeout before persistence', async () => {
+    const context = {
+      path: 'branches',
+      method: 'create',
+      data: {
+        start_command: 'pnpm dev',
+        startup_timeout_ms: 999,
+      },
+      params: {},
+    } as HookContext;
+
+    await expect(
+      validateBranchEnvPolicyHook({
+        execution: { managed_envs_execution_mode: 'hybrid' },
+      })(context)
+    ).rejects.toThrow('startup_timeout_ms');
   });
 });
 

@@ -701,6 +701,13 @@
       "when": 1788206400001,
       "tag": "0100_claude_oauth_attempts",
       "breakpoints": true
+    },
+    {
+      "idx": 101,
+      "version": "7",
+      "when": 1788206400002,
+      "tag": "0101_environment_health_stopping",
+      "breakpoints": true
     }
   ]
 }

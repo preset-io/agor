@@ -25,6 +25,7 @@ import {
   deleteFrom,
   insert,
   isPostgresDatabase,
+  isSQLiteDatabase,
   jsonExtract,
   lockRowForUpdate,
   runDatabaseTransaction,
@@ -65,6 +66,7 @@ import {
   findLatestAssistantMessages,
   truncateMessageText,
 } from './message-activity';
+import { RepoRepository } from './repos';
 
 const BRANCH_PERMISSION_SOURCES = ['board', 'override'] as const;
 const FS_ACCESS_BRANCH_PERMISSIONS = ['read', 'write'] as const;
@@ -104,11 +106,146 @@ export interface ActiveEnvironmentBranchRef {
   tenant_id?: string;
 }
 
+export class EnvironmentLifecycleConflictError extends RepositoryError {
+  constructor(
+    readonly branchId: BranchID,
+    readonly expectedGeneration: number,
+    readonly currentGeneration: number,
+    readonly expectedStatus?: NonNullable<Branch['environment_instance']>['status'],
+    readonly currentStatus?: NonNullable<Branch['environment_instance']>['status']
+  ) {
+    super(
+      `Environment lifecycle for branch ${branchId} was superseded ` +
+        `(expected generation ${expectedGeneration}, current generation ${currentGeneration})`
+    );
+    this.name = 'EnvironmentLifecycleConflictError';
+  }
+}
+
+export class EnvironmentProviderMutationBusyError extends RepositoryError {
+  constructor(
+    readonly branchId: BranchID,
+    readonly ownerAction: 'start' | 'stop' | 'nuke' | 'sync',
+    readonly deadlineAt: string
+  ) {
+    super(
+      `Environment lifecycle for branch ${branchId} has an active ${ownerAction} attempt ` +
+        `through ${deadlineAt}`
+    );
+    this.name = 'EnvironmentProviderMutationBusyError';
+  }
+}
+
+export class EnvironmentLifecycleAttemptConflictError extends RepositoryError {
+  constructor(readonly branchId: BranchID) {
+    super(`Environment lifecycle attempt for branch ${branchId} was already settled or superseded`);
+    this.name = 'EnvironmentLifecycleAttemptConflictError';
+  }
+}
+
+export class EnvironmentRetirementConflictError extends RepositoryError {
+  constructor(readonly branchId: BranchID) {
+    super(
+      `Environment for branch ${branchId} must be fully stopped before branch archival or deletion`
+    );
+    this.name = 'EnvironmentRetirementConflictError';
+  }
+}
+
+export class BranchFilesystemAttemptConflictError extends RepositoryError {
+  constructor(readonly branchId: BranchID) {
+    super(`Filesystem materialization attempt for branch ${branchId} is no longer current`);
+    this.name = 'BranchFilesystemAttemptConflictError';
+  }
+}
+
+export class BranchFilesystemRecoveryConflictError extends RepositoryError {
+  constructor(
+    readonly branchId: BranchID,
+    readonly deadlineAt?: string
+  ) {
+    super(
+      deadlineAt
+        ? `Filesystem materialization attempt for branch ${branchId} is active through ${deadlineAt}`
+        : `Branch ${branchId} has no expired filesystem materialization attempt to recover`
+    );
+    this.name = 'BranchFilesystemRecoveryConflictError';
+  }
+}
+
+type BranchUpdateOptions = {
+  preserveUpdatedAt?: boolean;
+  /** Explicit lifecycle boundary, including starting -> starting retries. */
+  invalidateEnvironmentObservation?: boolean;
+  /** Apply only while this exact lifecycle boundary remains current. */
+  expectedEnvironmentGeneration?: number;
+  /** Optional state precondition checked under the same row lock as the write. */
+  expectedEnvironmentStatus?: NonNullable<Branch['environment_instance']>['status'];
+  /** Refuse to open a provider-mutation boundary while a live Sync lease owns it. */
+  rejectActiveEnvironmentSync?: boolean;
+  /** Refuse to open a provider-mutation boundary until the prior one settles. */
+  rejectActiveEnvironmentLifecycle?: boolean;
+  /** Require the exact server-owned attempt before accepting its callback. */
+  expectedEnvironmentLifecycleAttempt?: {
+    action: 'start' | 'stop' | 'nuke';
+    generation: number;
+  };
+  /** Archive only after provider mutation ownership has terminally settled. */
+  requireEnvironmentRetired?: boolean;
+  /** Refuse a new provider mutation while its repository is being destroyed. */
+  rejectRepoDeletion?: boolean;
+  /** Apply an archive transition only while the row still has this state. */
+  expectedArchived?: boolean;
+  /** Exact asynchronous filesystem materialization settlement boundary. */
+  expectedFilesystemAttemptId?: UUID;
+  /** Fence one expired attempt and replace it using database-derived time. */
+  recoverExpiredFilesystemAttempt?: {
+    expectedAttemptId: UUID;
+    replacementAttemptId: UUID;
+    action: NonNullable<Branch['filesystem_attempt']>['action'];
+    durationMs: number;
+  };
+};
+
+function isSQLiteBusyError(error: unknown): boolean {
+  const text = error instanceof Error ? error.message : String(error);
+  if (/SQLITE_BUSY|database is locked|database is busy/i.test(text)) return true;
+  return error instanceof Error && 'cause' in error && isSQLiteBusyError(error.cause);
+}
+
 /**
  * Branch repository implementation
  */
 export class BranchRepository implements BaseRepository<Branch, Partial<Branch>> {
   constructor(private db: Database) {}
+
+  private async databaseNow(db: Database, branchId: BranchID): Promise<Date> {
+    const row = await select(db, {
+      value: isPostgresDatabase(this.db)
+        ? sql<number>`EXTRACT(EPOCH FROM clock_timestamp()) * 1000`
+        : sql<number>`CAST(strftime('%s', 'now') AS integer) * 1000`,
+    })
+      .from(branches)
+      .where(eq(branches.branch_id, branchId))
+      .one();
+    if (!row) throw new EntityNotFoundError('Branch', branchId);
+    return new Date(Number(row.value));
+  }
+
+  private assertEnvironmentRetired(branch: Branch, generation: number): void {
+    const environment = branch.environment_instance;
+    const lifecycleAttempt = environment?.active_lifecycle_attempt;
+    const syncAttempt = environment?.source_sync?.active_attempt;
+    if (
+      (environment && environment.status !== 'stopped') ||
+      (lifecycleAttempt && lifecycleAttempt.environment_generation === generation) ||
+      (syncAttempt && syncAttempt.environment_generation === generation) ||
+      branch.filesystem_status === 'creating' ||
+      branch.filesystem_attempt
+    ) {
+      throw new EnvironmentRetirementConflictError(branch.branch_id);
+    }
+  }
 
   /**
    * Convert database row to Branch type.
@@ -160,6 +297,7 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
         // Per-branch SDK home intent (design §9.2)
         sdk_home: row.sdk_home ?? undefined,
         ...row.data,
+        environment_generation: row.environment_generation,
         url,
       },
       row
@@ -224,6 +362,7 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
       clone_depth: branch.clone_depth ?? null,
       data: {
         path: branch.path!,
+        filesystem_attempt: branch.filesystem_attempt,
         base_ref: branch.base_ref,
         base_remote_url: branch.base_remote_url,
         base_sha: branch.base_sha,
@@ -235,6 +374,8 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
         notes: branch.notes,
         error_message: branch.error_message,
         environment_instance: branch.environment_instance,
+        startup_timeout_ms: branch.startup_timeout_ms,
+        lifecycle_timeout_ms: branch.lifecycle_timeout_ms,
         last_used: branch.last_used ?? new Date(now).toISOString(),
         custom_context: branch.custom_context,
         mcp_server_ids: branch.mcp_server_ids,
@@ -251,6 +392,11 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
       const row = await runDatabaseTransaction(
         this.db,
         async (tx) => {
+          await new RepoRepository(this.db).lockForWorkAdmissionInTransaction(
+            tx,
+            insertData.repo_id as UUID,
+            { requireCloneReady: true }
+          );
           const owner = await select(tx, { user_id: users.user_id })
             .from(users)
             .where(eq(users.user_id, insertData.primary_owner_user_id))
@@ -279,6 +425,7 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
       const baseUrl = await getBaseUrl();
       return this.rowToBranch(row, baseUrl);
     } catch (error) {
+      if (error instanceof RepositoryError) throw error;
       const msg = error instanceof Error ? error.message : String(error);
       // Surface helpful messages for common constraint violations
       if (msg.includes('FOREIGN KEY constraint failed')) {
@@ -510,7 +657,10 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
     const rows = await select(this.db, columns)
       .from(branches)
       .where(
-        and(eq(branches.archived, false), or(eq(statusExpr, 'running'), eq(statusExpr, 'starting')))
+        and(
+          eq(branches.archived, false),
+          or(eq(statusExpr, 'running'), eq(statusExpr, 'starting'), eq(statusExpr, 'stopping'))
+        )
       )
       .all();
 
@@ -593,11 +743,31 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
   async update(
     id: string,
     updates: Partial<Branch>,
-    options?: {
-      preserveUpdatedAt?: boolean;
-      /** Explicit lifecycle boundary, including starting -> starting retries. */
-      invalidateEnvironmentObservation?: boolean;
+    options?: BranchUpdateOptions
+  ): Promise<Branch> {
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        return await this.updateOnce(id, updates, options);
+      } catch (error) {
+        if (
+          options?.expectedEnvironmentGeneration === undefined ||
+          !isSQLiteDatabase(this.db) ||
+          !isSQLiteBusyError(error) ||
+          attempt >= 9
+        ) {
+          throw error;
+        }
+        // libSQL may report write contention immediately despite busy_timeout.
+        // Retry the whole transaction so the loser re-reads the winning generation.
+        await new Promise((resolve) => setTimeout(resolve, 10 * (attempt + 1)));
+      }
     }
+  }
+
+  private async updateOnce(
+    id: string,
+    updates: Partial<Branch>,
+    options?: BranchUpdateOptions
   ): Promise<Branch> {
     if (Object.hasOwn(updates, 'primary_owner_user_id')) {
       throw new RepositoryError('Primary ownership is immutable');
@@ -626,6 +796,12 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
 
     // Use transaction to make read-merge-write atomic
     return await this.db.transaction(async (tx) => {
+      if (options?.rejectRepoDeletion) {
+        await new RepoRepository(this.db).lockForWorkAdmissionInTransaction(
+          txAsDb(tx),
+          existing.repo_id
+        );
+      }
       // Acquire row-level lock on PostgreSQL to prevent lost updates
       await lockRowForUpdate(
         txAsDb(tx),
@@ -655,6 +831,113 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
       }
 
       const current = this.rowToBranch(currentRow, baseUrl);
+
+      if (
+        options?.expectedArchived !== undefined &&
+        current.archived !== options.expectedArchived
+      ) {
+        throw new RepositoryError(
+          `Branch ${current.branch_id} archive state changed before the operation was admitted`
+        );
+      }
+
+      if (options?.requireEnvironmentRetired) {
+        this.assertEnvironmentRetired(current, currentRow.environment_generation);
+      }
+
+      if (options?.expectedFilesystemAttemptId) {
+        if (
+          current.archived ||
+          current.filesystem_status !== 'creating' ||
+          current.filesystem_attempt?.attempt_id !== options.expectedFilesystemAttemptId
+        ) {
+          throw new BranchFilesystemAttemptConflictError(current.branch_id);
+        }
+      }
+
+      if (options?.recoverExpiredFilesystemAttempt) {
+        const recovery = options.recoverExpiredFilesystemAttempt;
+        const currentAttempt = current.filesystem_attempt;
+        const currentDeadlineMs = Date.parse(currentAttempt?.deadline_at ?? '');
+        const now = await this.databaseNow(txAsDb(tx), current.branch_id);
+        if (
+          current.archived ||
+          current.filesystem_status !== 'creating' ||
+          currentAttempt?.attempt_id !== recovery.expectedAttemptId ||
+          !Number.isFinite(currentDeadlineMs) ||
+          currentDeadlineMs > now.getTime()
+        ) {
+          throw new BranchFilesystemRecoveryConflictError(
+            current.branch_id,
+            currentAttempt?.attempt_id === recovery.expectedAttemptId
+              ? currentAttempt.deadline_at
+              : undefined
+          );
+        }
+        updates.filesystem_attempt = {
+          attempt_id: recovery.replacementAttemptId,
+          action: recovery.action,
+          started_at: now.toISOString(),
+          deadline_at: new Date(now.getTime() + recovery.durationMs).toISOString(),
+        };
+      }
+
+      if (options?.expectedEnvironmentLifecycleAttempt) {
+        const expected = options.expectedEnvironmentLifecycleAttempt;
+        const attempt = current.environment_instance?.active_lifecycle_attempt;
+        if (
+          !attempt ||
+          attempt.action !== expected.action ||
+          attempt.environment_generation !== expected.generation ||
+          currentRow.environment_generation !== expected.generation
+        ) {
+          throw new EnvironmentLifecycleAttemptConflictError(current.branch_id);
+        }
+      }
+
+      if (options?.rejectActiveEnvironmentLifecycle) {
+        const attempt = current.environment_instance?.active_lifecycle_attempt;
+        if (attempt && attempt.environment_generation === currentRow.environment_generation) {
+          throw new EnvironmentProviderMutationBusyError(
+            current.branch_id,
+            attempt.action,
+            attempt.deadline_at
+          );
+        }
+      }
+
+      if (options?.rejectActiveEnvironmentSync) {
+        const attempt = current.environment_instance?.source_sync?.active_attempt;
+        const leaseExpiresAt = Date.parse(attempt?.lease_expires_at ?? '');
+        const now = await this.databaseNow(txAsDb(tx), current.branch_id);
+        if (
+          attempt &&
+          attempt.environment_generation === currentRow.environment_generation &&
+          Number.isFinite(leaseExpiresAt) &&
+          leaseExpiresAt > now.getTime()
+        ) {
+          throw new EnvironmentProviderMutationBusyError(
+            current.branch_id,
+            'sync',
+            new Date(leaseExpiresAt).toISOString()
+          );
+        }
+      }
+
+      if (
+        options?.expectedEnvironmentGeneration !== undefined &&
+        (currentRow.environment_generation !== options.expectedEnvironmentGeneration ||
+          (Object.hasOwn(options, 'expectedEnvironmentStatus') &&
+            current.environment_instance?.status !== options.expectedEnvironmentStatus))
+      ) {
+        throw new EnvironmentLifecycleConflictError(
+          current.branch_id,
+          options.expectedEnvironmentGeneration,
+          currentRow.environment_generation,
+          options.expectedEnvironmentStatus,
+          current.environment_instance?.status
+        );
+      }
 
       // STEP 3: Deep merge updates into current branch (in memory)
       // Preserves nested objects like schedule, environment_instance, custom_context
@@ -704,11 +987,28 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
         : {};
 
       // STEP 4: Write merged branch (within same transaction)
+      const writeCondition =
+        options?.expectedEnvironmentGeneration === undefined
+          ? eq(branches.branch_id, current.branch_id)
+          : and(
+              eq(branches.branch_id, current.branch_id),
+              eq(branches.environment_generation, options.expectedEnvironmentGeneration)
+            );
       const row = await update(txAsDb(tx), branches)
         .set({ ...insertData, ...environmentCoordinationUpdate })
-        .where(eq(branches.branch_id, current.branch_id))
+        .where(writeCondition)
         .returning()
         .one();
+
+      if (!row && options?.expectedEnvironmentGeneration !== undefined) {
+        throw new EnvironmentLifecycleConflictError(
+          current.branch_id,
+          options.expectedEnvironmentGeneration,
+          currentRow.environment_generation,
+          options.expectedEnvironmentStatus,
+          current.environment_instance?.status
+        );
+      }
 
       return this.rowToBranch(row, baseUrl);
     });
@@ -743,16 +1043,51 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
     return this.rowToBranch(row, await getBaseUrl());
   }
 
-  /**
-   * Delete branch by ID
-   */
-  async delete(id: string): Promise<void> {
+  /** Lock a branch and prove that no provider or filesystem work is active. */
+  async assertRetirementReady(id: string): Promise<Branch> {
+    const existing = await this.findById(id);
+    if (!existing) throw new EntityNotFoundError('Branch', id);
+    return runDatabaseTransaction(
+      this.db,
+      (txDb) => this.assertRetirementReadyInTransaction(txDb, existing.branch_id),
+      { sqliteImmediate: true }
+    );
+  }
+
+  /** Same assertion for callers that already own the parent-repository transaction. */
+  async assertRetirementReadyInTransaction(db: Database, id: BranchID): Promise<Branch> {
+    await lockRowForUpdate(db, this.db, branches, eq(branches.branch_id, id));
+    const row = await select(db).from(branches).where(eq(branches.branch_id, id)).one();
+    if (!row) throw new EntityNotFoundError('Branch', id);
+    const current = this.rowToBranch(row, await getBaseUrl());
+    this.assertEnvironmentRetired(current, row.environment_generation);
+    return current;
+  }
+
+  /** Delete branch by ID. */
+  async delete(id: string, options?: { requireEnvironmentRetired?: boolean }): Promise<void> {
     const existing = await this.findById(id);
     if (!existing) {
       throw new EntityNotFoundError('Branch', id);
     }
 
-    await deleteFrom(this.db, branches).where(eq(branches.branch_id, existing.branch_id)).run();
+    await runDatabaseTransaction(
+      this.db,
+      async (txDb) => {
+        await lockRowForUpdate(txDb, this.db, branches, eq(branches.branch_id, existing.branch_id));
+        const row = await select(txDb)
+          .from(branches)
+          .where(eq(branches.branch_id, existing.branch_id))
+          .one();
+        if (!row) throw new EntityNotFoundError('Branch', id);
+        if (options?.requireEnvironmentRetired) {
+          const current = this.rowToBranch(row, await getBaseUrl());
+          this.assertEnvironmentRetired(current, row.environment_generation);
+        }
+        await deleteFrom(txDb, branches).where(eq(branches.branch_id, existing.branch_id)).run();
+      },
+      { sqliteImmediate: true }
+    );
   }
 
   /**

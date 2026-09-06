@@ -10,6 +10,12 @@
 
 import { type ResolvedConfigSlice, ResolvedConfigSliceSchema } from '@agor/core/config';
 import {
+  ENVIRONMENT_LIFECYCLE_TIMEOUT_MAX_MS,
+  ENVIRONMENT_LIFECYCLE_TIMEOUT_MIN_MS,
+  ENVIRONMENT_STARTUP_TIMEOUT_MAX_MS,
+  ENVIRONMENT_STARTUP_TIMEOUT_MIN_MS,
+} from '@agor/core/environment/health-transition';
+import {
   type ExecutorCommandResult,
   ExecutorCommandResultSchema,
   ExecutorResponseDescriptorSchema,
@@ -201,7 +207,7 @@ export type AgenticToolInvokePayload = z.infer<typeof AgenticToolInvokePayloadSc
  *
  * When createDbRecord is true (default), the executor will:
  * 1. Clone the repository to outputPath
- * 2. Create a repo record in the database via Feathers
+ * 2. Settle the exact daemon-created repository placeholder via Feathers
  */
 export const GitClonePayloadSchema = BasePayloadSchema.extend({
   command: z.literal('git.clone'),
@@ -209,53 +215,60 @@ export const GitClonePayloadSchema = BasePayloadSchema.extend({
   /** JWT for Feathers authentication */
   sessionToken: z.string(),
 
-  params: z.object({
-    /** Repository URL (https, ssh, git://, file://, or local path) */
-    url: GitUrlSchema,
+  params: z
+    .object({
+      /** Repository URL (https, ssh, git://, file://, or local path) */
+      url: GitUrlSchema,
 
-    /** Output path for the repository (optional, defaults to AGOR_DATA_HOME/repos/) */
-    outputPath: z.string().optional(),
+      /** Output path for the repository (optional, defaults to AGOR_DATA_HOME/repos/) */
+      outputPath: z.string().optional(),
 
-    /** Branch to checkout (optional) */
-    branch: z.string().optional(),
+      /** Branch to checkout (optional) */
+      branch: z.string().optional(),
 
-    /** Clone as bare repository */
-    bare: z.boolean().optional(),
+      /** Clone as bare repository */
+      bare: z.boolean().optional(),
 
-    /** Slug for the repo (computed from URL if not provided) */
-    slug: z.string().optional(),
+      /** Slug for the repo (computed from URL if not provided) */
+      slug: z.string().optional(),
 
-    /**
-     * User-supplied default branch for the repo record. When provided, this
-     * overrides the auto-detected `origin/HEAD`. Used by the UI's "Add
-     * Repository" form so the operator can pin a non-default base branch
-     * for new branches (e.g. a long-lived feature branch).
-     */
-    default_branch: z.string().optional(),
+      /**
+       * User-supplied default branch for the repo record. When provided, this
+       * overrides the auto-detected `origin/HEAD`. Used by the UI's "Add
+       * Repository" form so the operator can pin a non-default base branch
+       * for new branches (e.g. a long-lived feature branch).
+       */
+      default_branch: z.string().optional(),
 
-    /** Create DB record after clone (default: true) */
-    createDbRecord: z.boolean().optional().default(true),
+      /** Create DB record after clone (default: true) */
+      createDbRecord: z.boolean().optional().default(true),
 
-    /**
-     * Import executable environment configuration from the cloned
-     * `.agor.yml`. This capability is derived by the daemon from the
-     * initiating user's admin role and defaults closed for direct callers.
-     */
-    importEnvironmentConfig: z.boolean().optional().default(false),
+      /**
+       * Import executable environment configuration from the cloned
+       * `.agor.yml`. This capability is derived by the daemon from the
+       * initiating user's admin role and defaults closed for direct callers.
+       */
+      importEnvironmentConfig: z.boolean().optional().default(false),
 
-    /**
-     * Pre-existing repo row to patch with clone outcome. When set, the
-     * executor patches this row with `clone_status: 'ready'` (success) or
-     * `'failed'` (with `clone_error`) instead of creating a new row. The
-     * daemon pre-creates the row in `cloneRepository` so failures are
-     * persisted (and queryable) instead of vanishing into a dropped
-     * `{ status: 'pending' }` response.
-     */
-    repoId: z.string().optional(),
+      /**
+       * Exact pre-existing repo placeholder to settle with the clone outcome.
+       * Required whenever createDbRecord is true (the default). The daemon
+       * creates this row and binds the executor callback credential to its ID.
+       */
+      repoId: z.string().uuid().optional(),
 
-    /** User ID of the requesting user (for per-user credential resolution) */
-    userId: z.string().uuid().optional(),
-  }),
+      /** User ID of the requesting user (for per-user credential resolution) */
+      userId: z.string().uuid().optional(),
+    })
+    .superRefine((params, ctx) => {
+      if (params.createDbRecord && !params.repoId) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['repoId'],
+          message: 'Managed git.clone requires a daemon-created repository placeholder',
+        });
+      }
+    }),
 });
 
 export type GitClonePayload = z.infer<typeof GitClonePayloadSchema>;
@@ -295,11 +308,17 @@ export const GitBranchAddPayloadSchema = BasePayloadSchema.extend({
     /** Branch ID (UUID) - DB record already exists with filesystem_status: 'creating' */
     branchId: z.string().uuid(),
 
+    /** Exact server-owned materialization attempt bound into the callback token. */
+    materializationAttemptId: z.string().uuid(),
+
     /** Repo ID (UUID) */
     repoId: z.string().uuid(),
 
     /** Use restore mode: smart branch detection via ls-remote, falls back to creating from sourceBranch */
     restoreMode: z.boolean().optional(),
+
+    /** Inspect and settle an expired attempt without starting a second filesystem mutation. */
+    recoveryMode: z.boolean().optional(),
 
     /** User ID of the requesting user (for per-user credential resolution) */
     userId: z.string().uuid().optional(),
@@ -581,7 +600,7 @@ export type BranchAgorYmlExportPayload = z.infer<typeof BranchAgorYmlExportPaylo
 // ═══════════════════════════════════════════════════════════
 
 /**
- * Environment lifecycle payload - run shell-based start/stop/restart/nuke
+ * Environment lifecycle payload - run shell-based start/stop/nuke/sync
  * commands from the executor. Webhook lifecycle commands stay daemon-owned.
  */
 export const EnvironmentLifecyclePayloadSchema = BasePayloadSchema.extend({
@@ -599,26 +618,67 @@ export const EnvironmentLifecyclePayloadSchema = BasePayloadSchema.extend({
       branchPath: z.string().optional(),
 
       /** Lifecycle action */
-      action: z.enum(['start', 'stop', 'restart', 'nuke']),
+      /**
+       * Restart is deliberately absent. It is a daemon-owned sequence of a
+       * bounded Stop and, once that Stop has verifiably settled, an ordinary
+       * Start with its own credential — not a single executor process holding
+       * one credential across both phases.
+       */
+      action: z.enum(['start', 'stop', 'nuke', 'sync']),
 
-      /** Shell start command. Required for start/restart. */
+      /** Shell start command. Required for start. */
       startCommand: z.string().optional(),
 
-      /** Shell stop command. Required for stop and used before restart when present. */
+      /** Shell stop command. Required for stop. */
       stopCommand: z.string().optional(),
 
       /** Shell nuke command. Required for nuke. */
       nukeCommand: z.string().optional(),
 
+      /** Shell sync command. Required for sync. Pushes the branch's latest code
+       *  into the running remote environment (see RepoEnvironmentVariant.sync). */
+      syncCommand: z.string().optional(),
+
+      /** Exact clean commit this sync attempt must apply and acknowledge. */
+      desiredRevision: z
+        .string()
+        .regex(/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/)
+        .optional(),
+
+      /** Opaque durable claim correlating this executor with one sync attempt. */
+      syncClaimToken: z.string().min(1).optional(),
+
       /** Static app URL rendered by the daemon/branch snapshot. */
       appUrl: z.string().optional(),
+
+      /** Static health URL rendered by the daemon/branch snapshot. */
+      healthCheckUrl: z.string().optional(),
+
+      /** Wall-clock budget for a start attempt, snapshotted by the daemon. */
+      startupTimeoutMs: z
+        .number()
+        .int()
+        .min(ENVIRONMENT_STARTUP_TIMEOUT_MIN_MS)
+        .max(ENVIRONMENT_STARTUP_TIMEOUT_MAX_MS)
+        .optional(),
+
+      /** Daemon-owned wall-clock budget for a non-Start shell phase. */
+      commandTimeoutMs: z
+        .number()
+        .int()
+        .min(ENVIRONMENT_LIFECYCLE_TIMEOUT_MIN_MS)
+        .max(ENVIRONMENT_LIFECYCLE_TIMEOUT_MAX_MS)
+        .optional(),
+
+      /** Monotonic lifecycle boundary that must still own every state update. */
+      lifecycleGeneration: z.number().int().nonnegative().optional(),
     })
     .superRefine((params, ctx) => {
-      if ((params.action === 'start' || params.action === 'restart') && !params.startCommand) {
+      if (params.action === 'start' && !params.startCommand) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
           path: ['startCommand'],
-          message: 'startCommand is required for start/restart',
+          message: 'startCommand is required for start',
         });
       }
       if (params.action === 'stop' && !params.stopCommand) {
@@ -633,6 +693,24 @@ export const EnvironmentLifecyclePayloadSchema = BasePayloadSchema.extend({
           code: z.ZodIssueCode.custom,
           path: ['nukeCommand'],
           message: 'nukeCommand is required for nuke',
+        });
+      }
+      if (params.action === 'sync') {
+        for (const field of ['syncCommand', 'desiredRevision', 'syncClaimToken'] as const) {
+          if (!params[field]) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              path: [field],
+              message: `${field} is required for sync`,
+            });
+          }
+        }
+      }
+      if (params.action !== 'start' && params.commandTimeoutMs === undefined) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['commandTimeoutMs'],
+          message: 'commandTimeoutMs is required for non-start lifecycle commands',
         });
       }
     }),
@@ -659,6 +737,13 @@ export const EnvironmentLogsPayloadSchema = BasePayloadSchema.extend({
 
     /** Shell logs command */
     logsCommand: z.string(),
+
+    /** Daemon-owned wall-clock budget for the logs shell command. */
+    commandTimeoutMs: z
+      .number()
+      .int()
+      .min(ENVIRONMENT_LIFECYCLE_TIMEOUT_MIN_MS)
+      .max(ENVIRONMENT_LIFECYCLE_TIMEOUT_MAX_MS),
   }),
 });
 

@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -18,6 +18,8 @@ const mocks = vi.hoisted(() => ({
   gitRaw: vi.fn(),
   isValidGitRepo: vi.fn(),
   getDefaultBranch: vi.fn(),
+  getCurrentBranch: vi.fn(),
+  listGitWorktrees: vi.fn(),
   getRemoteUrl: vi.fn(),
   ensureGitRemoteUrl: vi.fn(),
   scanGitConfigRemoteCredentials: vi.fn(),
@@ -55,6 +57,8 @@ vi.mock('../git/index.js', async () => {
     deleteRepoDirectory: mocks.deleteRepoDirectory,
     isValidGitRepo: mocks.isValidGitRepo,
     getDefaultBranch: mocks.getDefaultBranch,
+    getCurrentBranch: mocks.getCurrentBranch,
+    listGitWorktrees: mocks.listGitWorktrees,
     getRemoteUrl: mocks.getRemoteUrl,
     ensureGitRemoteUrl: mocks.ensureGitRemoteUrl,
     scanGitConfigRemoteCredentials: mocks.scanGitConfigRemoteCredentials,
@@ -85,6 +89,7 @@ import {
 
 const repoId = '550e8400-e29b-41d4-a716-446655440001';
 const branchId = '550e8400-e29b-41d4-a716-446655440002';
+const materializationAttemptId = '550e8400-e29b-41d4-a716-446655440004';
 const deleteRoots = { reposRoot: '/safe/repos', branchesRoot: '/safe/worktrees' };
 
 function createClient(records: {
@@ -117,6 +122,10 @@ function createClient(records: {
         );
         return {
           get: vi.fn(async () => records.repo),
+          settleClone: vi.fn(async (data: Record<string, unknown>) => {
+            records.patchedRepos?.push(data);
+            return { ...(records.repo ?? {}), ...data };
+          }),
           patch: vi.fn(async (_id: string, data: Record<string, unknown>) => {
             records.patchedRepos?.push(data);
             return { ...(records.repo ?? {}), ...data };
@@ -156,6 +165,10 @@ function createClient(records: {
           get: vi.fn(async () => records.branch),
           find,
           patch: vi.fn(async (_id: string, data: Record<string, unknown>) => {
+            records.patchedBranches?.push(data);
+            return { ...(records.branch ?? {}), ...data };
+          }),
+          settleFilesystem: vi.fn(async (data: Record<string, unknown>) => {
             records.patchedBranches?.push(data);
             return { ...(records.branch ?? {}), ...data };
           }),
@@ -199,6 +212,8 @@ beforeEach(() => {
   mocks.isRemoteRefVisibleForClone.mockResolvedValue(false);
   mocks.isValidGitRepo.mockResolvedValue(true);
   mocks.getDefaultBranch.mockResolvedValue('main');
+  mocks.getCurrentBranch.mockResolvedValue('feature');
+  mocks.listGitWorktrees.mockResolvedValue([{ path: '/trusted/branch', branch: 'feature' }]);
   mocks.getRemoteUrl.mockResolvedValue('https://user:secret@example.com/org/repo.git');
   mocks.scanGitConfigRemoteCredentials.mockResolvedValue({
     findings: [{ configPath: '/repo/.git/config' }],
@@ -281,6 +296,7 @@ describe('managed executor git/fs commands', () => {
         params: {
           branchId,
           repoId,
+          materializationAttemptId,
           useReference: true,
         },
       },
@@ -298,9 +314,102 @@ describe('managed executor git/fs commands', () => {
         referencePath: '/trusted/repo',
       })
     );
-    expect(patchedBranches).toContainEqual({ filesystem_status: 'ready' });
+    expect(patchedBranches).toContainEqual({
+      branch_id: branchId,
+      filesystem_attempt_id: materializationAttemptId,
+      filesystem_status: 'ready',
+    });
     expect(renderedBranches).toEqual([branchId]);
     expect(patchedBranches.some((patch) => 'start_command' in patch)).toBe(false);
+  });
+
+  it('recovers a demonstrably completed clone without starting another materialization', async () => {
+    const patchedBranches: Array<Record<string, unknown>> = [];
+    createClient({
+      repo: {
+        repo_id: repoId,
+        local_path: '/trusted/repo',
+        remote_url: 'https://user:secret@example.com/trusted/repo.git',
+      },
+      branch: {
+        branch_id: branchId,
+        repo_id: repoId,
+        path: '/trusted/branch',
+        name: 'feature',
+        ref: 'feature',
+        ref_type: 'branch',
+        storage_mode: 'clone',
+      },
+      patchedBranches,
+    });
+    mocks.getRemoteUrl.mockResolvedValueOnce('https://example.com/trusted/repo.git');
+
+    const result = await handleGitBranchAdd(
+      {
+        command: 'git.branch.add',
+        sessionToken: 'tenant-token',
+        params: { branchId, repoId, materializationAttemptId, recoveryMode: true },
+      },
+      {}
+    );
+
+    expect(result.success).toBe(true);
+    expect(mocks.createBranchAsClone).not.toHaveBeenCalled();
+    expect(patchedBranches).toContainEqual({
+      branch_id: branchId,
+      filesystem_attempt_id: materializationAttemptId,
+      filesystem_status: 'ready',
+    });
+  });
+
+  it('terminally fails recovery when the expired attempt left no valid checkout', async () => {
+    const tempRoot = await mkdtemp(join(tmpdir(), 'agor-recovery-missing-'));
+    const missingBranchPath = join(tempRoot, 'branch');
+    const patchedBranches: Array<Record<string, unknown>> = [];
+    createClient({
+      repo: {
+        repo_id: repoId,
+        local_path: '/trusted/repo',
+        remote_url: 'https://example.com/trusted/repo.git',
+      },
+      branch: {
+        branch_id: branchId,
+        repo_id: repoId,
+        path: missingBranchPath,
+        name: 'feature',
+        ref: 'feature',
+        ref_type: 'branch',
+        storage_mode: 'clone',
+      },
+      patchedBranches,
+    });
+    mocks.isValidGitRepo.mockResolvedValueOnce(false);
+
+    try {
+      const result = await handleGitBranchAdd(
+        {
+          command: 'git.branch.add',
+          sessionToken: 'tenant-token',
+          params: { branchId, repoId, materializationAttemptId, recoveryMode: true },
+        },
+        {}
+      );
+
+      expect(result).toMatchObject({
+        success: false,
+        error: { message: expect.stringContaining('left no valid Git checkout') },
+      });
+      expect(mocks.createBranchAsClone).not.toHaveBeenCalled();
+      await expect(access(missingBranchPath)).rejects.toThrow();
+      expect(patchedBranches).toContainEqual({
+        branch_id: branchId,
+        filesystem_attempt_id: materializationAttemptId,
+        filesystem_status: 'failed',
+        error_message: expect.stringContaining('left no valid Git checkout'),
+      });
+    } finally {
+      await rm(tempRoot, { recursive: true, force: true });
+    }
   });
 
   it('restores a clone from the destination branch when it has already been pushed', async () => {
@@ -329,7 +438,7 @@ describe('managed executor git/fs commands', () => {
       {
         command: 'git.branch.add',
         sessionToken: 'tenant-token',
-        params: { branchId, repoId, restoreMode: true },
+        params: { branchId, repoId, materializationAttemptId, restoreMode: true },
       },
       {}
     );
@@ -377,7 +486,7 @@ describe('managed executor git/fs commands', () => {
       {
         command: 'git.branch.add',
         sessionToken: 'tenant-token',
-        params: { branchId, repoId, restoreMode: true },
+        params: { branchId, repoId, materializationAttemptId, restoreMode: true },
       },
       {}
     );
@@ -419,7 +528,7 @@ describe('managed executor git/fs commands', () => {
       {
         command: 'git.branch.add',
         sessionToken: 'tenant-token',
-        params: { branchId, repoId, restoreMode: true },
+        params: { branchId, repoId, materializationAttemptId, restoreMode: true },
       },
       {}
     );
@@ -456,7 +565,7 @@ describe('managed executor git/fs commands', () => {
       {
         command: 'git.branch.add',
         sessionToken: 'tenant-token',
-        params: { branchId, repoId },
+        params: { branchId, repoId, materializationAttemptId },
       },
       {}
     );
@@ -484,6 +593,7 @@ describe('managed executor git/fs commands', () => {
         params: {
           branchId,
           repoId,
+          materializationAttemptId,
         },
       },
       {}
@@ -704,12 +814,11 @@ describe('managed executor git/fs commands', () => {
       expect(process.env.GIT_CONFIG_PARAMETERS).toContain(
         "'safe.directory=/safe/repos/smoke/agor-assistant-pr1258'"
       );
-      expect(patchedRepos).toContainEqual(
-        expect.objectContaining({
-          local_path: '/safe/repos/smoke/agor-assistant-pr1258',
-        })
-      );
-      expect(patchedRepos.at(-1)).toMatchObject({ clone_status: 'ready' });
+      expect(patchedRepos.at(-1)).toMatchObject({
+        repo_id: repoId,
+        clone_status: 'ready',
+        default_branch: 'main',
+      });
     } finally {
       if (previousGitConfigParameters === undefined) {
         delete process.env.GIT_CONFIG_PARAMETERS;

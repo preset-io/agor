@@ -22,8 +22,13 @@ import type { ExpressApplication, Service } from '@agor/core/feathers';
 import type {
   Board,
   Branch,
+  BranchCreateData,
   BranchEnvironmentUpdate,
+  BranchFilesystemRecoveryRequest,
+  BranchFilesystemSettlement,
   BranchID,
+  BranchMaterializationIntentData,
+  BranchPatchData,
   CloneRepositoryResult,
   AuthenticatedParams as CoreAuthenticatedParams,
   AuthenticatedUser as CoreAuthenticatedUser,
@@ -201,6 +206,10 @@ export interface TasksServiceImpl extends Service<Task, Partial<Task>, FeathersP
  * Repos service with custom methods (server-side implementation)
  */
 export interface ReposServiceImpl extends Service<Repo, Partial<Repo>, FeathersParams> {
+  settleClone(
+    data: import('@agor/core/types').RepoCloneSettlement,
+    params?: FeathersParams
+  ): Promise<Repo>;
   addLocalRepository(data: { path: string; slug?: string }, params?: FeathersParams): Promise<Repo>;
   cloneRepository(
     data: { url: string; name?: string; slug?: string; default_branch?: string },
@@ -313,7 +322,23 @@ export interface MessagesServiceImpl
 /**
  * Branches service with custom methods (server-side implementation)
  */
-export interface BranchesServiceImpl extends Service<Branch, Partial<Branch>, FeathersParams> {
+export interface BranchesServiceImpl
+  extends Service<Branch, BranchCreateData, FeathersParams, BranchPatchData> {
+  /** Internal-only creation boundary used after repo/board authorization. */
+  createMaterializationIntent(
+    data: BranchMaterializationIntentData,
+    params?: FeathersParams
+  ): Promise<Branch>;
+  /** Internal-only exact settlement for synchronous executor launch failure. */
+  settleFilesystemIntent(
+    data: BranchFilesystemSettlement,
+    params?: FeathersParams
+  ): Promise<Branch>;
+  settleFilesystem(data: BranchFilesystemSettlement, params?: FeathersParams): Promise<Branch>;
+  recoverFilesystem(
+    data: BranchFilesystemRecoveryRequest,
+    params?: FeathersParams
+  ): Promise<Branch>;
   updateEnvironment(
     id:
       | BranchID
@@ -322,6 +347,10 @@ export interface BranchesServiceImpl extends Service<Branch, Partial<Branch>, Fe
           branchId?: BranchID;
           environment_update?: BranchEnvironmentUpdate;
           environmentUpdate?: BranchEnvironmentUpdate;
+          expected_environment_generation?: number;
+          expectedEnvironmentGeneration?: number;
+          expected_environment_status?: BranchEnvironmentUpdate['status'];
+          expectedEnvironmentStatus?: BranchEnvironmentUpdate['status'];
         },
     environmentUpdate?: BranchEnvironmentUpdate | FeathersParams,
     params?: FeathersParams
@@ -330,6 +359,13 @@ export interface BranchesServiceImpl extends Service<Branch, Partial<Branch>, Fe
   stopEnvironment(id: BranchID, params?: FeathersParams): Promise<Branch>;
   restartEnvironment(id: BranchID, params?: FeathersParams): Promise<Branch>;
   nukeEnvironment(id: BranchID, params?: FeathersParams): Promise<Branch>;
+  syncEnvironment(
+    id: BranchID,
+    params?: FeathersParams,
+    options?: { desiredRevision?: string }
+  ): Promise<Branch>;
+  /** Internal only; durable source-sync admission is not a client capability. */
+  reconcileEnvironmentSync(id: BranchID, params?: FeathersParams): Promise<void>;
   renderEnvironment(
     id: BranchID,
     data: { variant?: string } | undefined,

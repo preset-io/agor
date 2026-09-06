@@ -18,7 +18,7 @@ import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { getReposDir } from '@agor/core/config';
 import { parseAgorYml, writeAgorYml } from '@agor/core/config/node';
 import { shortId } from '@agor/core/db';
-import { TEAMMATE_FRAMEWORK_REPO_URL } from '@agor/core/types';
+import { type BranchID, TEAMMATE_FRAMEWORK_REPO_URL, type UUID } from '@agor/core/types';
 import { diagnoseGit } from '@agor/git';
 import type { UserGitEnvironment } from '@agor/git/pure';
 import { appendGitConfigParameterPairs } from '../git/config-parameters.js';
@@ -33,10 +33,12 @@ import {
   deleteBranchDirectory,
   deleteRepoDirectory,
   ensureGitRemoteUrl,
+  getCurrentBranch,
   getDefaultBranch,
   getRemoteUrl,
   isRemoteRefVisibleForClone,
   isValidGitRepo,
+  listGitWorktrees,
   redactGitUrlCredentials,
   removeGitWorktree,
   restoreBranchFilesystem,
@@ -637,7 +639,6 @@ export async function handleGitClone(
 
     // Compute slug for the repo
     const slug = payload.params.slug || computeRepoSlug(safeCloneUrl);
-    const repoName = extractRepoName(slug);
 
     // Create DB record if requested (default: true)
     let repoId: string | undefined;
@@ -670,56 +671,21 @@ export async function handleGitClone(
       // of being silently overwritten by whatever GitHub's HEAD points at.
       const defaultBranch = payload.params.default_branch?.trim() || cloneResult.defaultBranch;
 
-      if (payload.params.repoId) {
-        // Daemon pre-created the row in `cloneRepository` so failures stay
-        // queryable. Fill post-clone fields but keep it `cloning` until the
-        // synchronous operator permission handoff below completes.
-        repoId = payload.params.repoId;
-        console.log(
-          `[git.clone] Patching pre-created repo ${shortId(repoId)} with cloned metadata: ` +
-            `slug=${slug} default_branch=${defaultBranch}` +
-            (payload.params.default_branch ? ' (user-supplied)' : ' (auto-detected)')
-        );
-        await client.service('repos').patch(repoId, {
-          name: repoName,
-          local_path: cloneResult.path,
-          default_branch: defaultBranch,
-          clone_status: 'cloning',
-          // Explicit null clears any prior `clone_error` (e.g. from a retry
-          // through the daemon's failed-row replace path). `deepMerge` in
-          // `RepoRepository.update` propagates the null; `repoToInsert`
-          // coerces it back to `undefined` so the stored shape stays
-          // aligned with the `clone_error?: RepoCloneError` invariant.
-          // Cast: Feathers' patch typing is `Partial<Repo>`, which forbids
-          // null on optional fields even when the merger explicitly handles it.
-          clone_error: null as unknown as undefined,
-          ...(environment ? { environment } : {}),
-        });
-      } else {
-        // Legacy fallback (no pre-created row): create the record now. Used
-        // when a caller invokes the executor directly without going through
-        // `reposService.cloneRepository` (e.g. ad-hoc tooling).
-        console.log(
-          `[git.clone] Creating repo record: slug=${slug} default_branch=${defaultBranch}` +
-            (payload.params.default_branch ? ' (user-supplied)' : ' (auto-detected)')
-        );
-        const repoRecord = await client.service('repos').create({
-          repo_type: 'remote',
-          slug,
-          name: repoName,
-          remote_url: safeCloneUrl,
-          local_path: cloneResult.path,
-          default_branch: defaultBranch,
-          clone_status: 'cloning',
-          ...(environment ? { environment } : {}),
-        });
-        repoId = repoRecord.repo_id;
-        console.log(`[git.clone] Repo record created: ${repoId}`);
+      if (!payload.params.repoId) {
+        throw new Error('Managed git.clone requires a daemon-created repository placeholder');
       }
-
-      if (repoId) {
-        await client.service('repos').patch(repoId, { clone_status: 'ready' });
-      }
+      repoId = payload.params.repoId;
+      console.log(
+        `[git.clone] Settling pre-created repo ${shortId(repoId)}: ` +
+          `slug=${slug} default_branch=${defaultBranch}` +
+          (payload.params.default_branch ? ' (user-supplied)' : ' (auto-detected)')
+      );
+      await client.service('repos').settleClone({
+        repo_id: repoId as UUID,
+        clone_status: 'ready',
+        default_branch: defaultBranch,
+        ...(environment ? { environment } : {}),
+      });
     }
 
     return {
@@ -746,7 +712,8 @@ export async function handleGitClone(
       try {
         const category = categorizeGitError(errorMessage);
         const firstLine = errorMessage.split('\n')[0]?.slice(0, 500) || errorMessage.slice(0, 500);
-        await client.service('repos').patch(payload.params.repoId, {
+        await client.service('repos').settleClone({
+          repo_id: payload.params.repoId as UUID,
           clone_status: 'failed',
           clone_error: {
             // simple-git wraps git's exit code in the message rather than
@@ -879,8 +846,49 @@ export async function handleGitBranchAdd(
       `[git.branch.add] Repo: ${repoPath}, Branch: ${branch}, CreateBranch: ${shouldCreateBranch}, RestoreMode: ${restoreMode}, RefType: ${refType || 'branch'}, StorageMode: ${storageMode}`
     );
 
-    // Create the git branch on filesystem
-    if (storageMode === 'clone') {
+    // Explicit expiry recovery never starts a second materialization on top of
+    // an owner whose process cannot be observed. It only adopts a checkout
+    // that the expired attempt demonstrably completed, or terminally fails the
+    // replacement attempt so an operator can clean up and retry deliberately.
+    if (payload.params.recoveryMode) {
+      if (!(await isValidGitRepo(branchPath))) {
+        throw new Error(
+          `Expired materialization left no valid Git checkout at '${branchPath}'. ` +
+            'The attempt was fenced; remove or recreate the failed branch explicitly.'
+        );
+      }
+      const { git: branchGit } = createGit(branchPath);
+      if (refType === 'tag') {
+        const [head, expected] = await Promise.all([
+          branchGit.revparse(['HEAD']),
+          branchGit.revparse([`refs/tags/${branch}`]),
+        ]);
+        if (head.trim() !== expected.trim()) {
+          throw new Error(`Existing checkout does not match expected tag '${branch}'`);
+        }
+      } else {
+        const currentBranch = await getCurrentBranch(branchPath);
+        if (currentBranch !== branch) {
+          throw new Error(
+            `Existing checkout is on branch '${currentBranch || '(detached)'}', expected '${branch}'`
+          );
+        }
+      }
+      if (storageMode === 'worktree') {
+        const registered = (await listGitWorktrees(repoPath)).some(
+          (worktree) => resolve(worktree.path) === resolve(branchPath)
+        );
+        if (!registered) {
+          throw new Error('Existing checkout is not registered to the authoritative repository');
+        }
+      } else {
+        const observedRemote = await getRemoteUrl(branchPath);
+        if (!remoteUrl || observedRemote !== remoteUrl) {
+          throw new Error('Existing checkout origin does not match the authoritative repository');
+        }
+      }
+      console.log(`[git.branch.add] Recovered completed checkout at ${branchPath}`);
+    } else if (storageMode === 'clone') {
       // Self-standing clone path. The remote URL is daemon-resolved from the
       // repo record; refuse to silently fall through to worktree mode if it
       // didn't come along — that would defeat the leak-defense reason for
@@ -978,7 +986,11 @@ export async function handleGitBranchAdd(
     // boundary and is derived there from trusted repo configuration.
     if (branchId) {
       console.log(`[git.branch.add] Marking branch ${shortId(branchId)} as ready`);
-      await client.service('branches').patch(branchId, { filesystem_status: 'ready' });
+      await client.service('branches').settleFilesystem({
+        branch_id: branchId as BranchID,
+        filesystem_attempt_id: payload.params.materializationAttemptId as UUID,
+        filesystem_status: 'ready',
+      });
       console.log(`[git.branch.add] Branch marked as ready`);
 
       if (repo.environment) {
@@ -1018,7 +1030,7 @@ export async function handleGitBranchAdd(
     // when git worktree add fails. No host permission repair is attempted.
     const fallbackPath = resolvedBranchPath;
     let fallbackCreated = false;
-    if (fallbackPath) {
+    if (fallbackPath && !payload.params.recoveryMode) {
       // Step 1: Ensure directory exists
       if (!existsSync(fallbackPath)) {
         try {
@@ -1047,7 +1059,9 @@ export async function handleGitBranchAdd(
     // Try to mark branch as failed with error details (if we have a branchId and client)
     if (branchId && client) {
       try {
-        await client.service('branches').patch(branchId, {
+        await client.service('branches').settleFilesystem({
+          branch_id: branchId as BranchID,
+          filesystem_attempt_id: payload.params.materializationAttemptId as UUID,
           filesystem_status: 'failed',
           error_message: userMessage,
         });

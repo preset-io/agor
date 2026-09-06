@@ -782,6 +782,13 @@ export async function startup(ctx: StartupContext): Promise<void> {
     }
   }
 
+  if (ctx.environmentHealthMonitorPolicy !== 'standalone') {
+    // Both monitors apply the same rules (@agor/core/environment/health-transition),
+    // with the readiness/demotion streak persisted on the observation so it
+    // survives an observation lease moving between daemons.
+    console.log('🏥 Environment health monitoring: distributed (HA)');
+  }
+
   // 5. Start the Task-owned runtime reconciler. In shared mode every daemon
   // may discover the same routing refs; repository fences choose the winner.
   const heartbeatConfig = resolveExecutorHeartbeatConfig(config.execution);

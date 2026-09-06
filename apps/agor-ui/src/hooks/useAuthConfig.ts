@@ -39,9 +39,11 @@ export interface AuthConfig {
   };
 }
 
-interface InstanceConfig {
+export interface InstanceConfig {
   label?: string;
   description?: string;
+  /** Deployment-global, public, constrained Markdown for the Environment tab. */
+  environmentDisclaimerMarkdown?: string;
 }
 
 export interface FeaturesConfig {
@@ -142,7 +144,11 @@ export function __resetAuthConfigForTests(): void {
 }
 
 /** Seed the already-loaded app-shell snapshot for isolated component tests. */
-export function __setAuthConfigForTests(config: AuthConfig, featuresConfig?: FeaturesConfig): void {
+export function __setAuthConfigForTests(
+  config: AuthConfig,
+  featuresConfig?: FeaturesConfig,
+  instanceConfig: InstanceConfig | null = null
+): void {
   const identityContractState = config.identity
     ? isResolvedIdentityAuthority(config.identity)
       ? IdentityContractState.SUPPORTED
@@ -150,7 +156,7 @@ export function __setAuthConfigForTests(config: AuthConfig, featuresConfig?: Fea
     : IdentityContractState.LEGACY;
   snapshot = {
     config: identityContractState === IdentityContractState.UNSUPPORTED ? null : config,
-    instanceConfig: null,
+    instanceConfig,
     featuresConfig,
     loading: false,
     error:

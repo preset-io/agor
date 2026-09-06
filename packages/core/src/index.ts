@@ -10,6 +10,7 @@ export { getBranchesDir, getBranchPath, getReposDir } from './config/index.js';
 export * from './coordination/index.js';
 export * from './db/index.js';
 export * from './design/board-backgrounds.js';
+export * from './environment/lifecycle-result.js';
 export * from './environment/render-snapshot.js';
 export * from './knowledge/index.js';
 export * from './mcp/index.js';

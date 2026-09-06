@@ -21,8 +21,10 @@ import {
   runWithTenantDatabaseScope,
   type TenantScopeAwareDatabase,
 } from '@agor/core/db';
+import { resolveEnvironmentHealthTarget } from '@agor/core/environment/lifecycle-result';
 import type { Application } from '@agor/core/feathers';
 import type { Branch, BranchID, TenantID } from '@agor/core/types';
+import { createPinnedFetch } from '@agor/core/utils/pinned-fetch';
 import { isAllowedHealthCheckUrl } from '@agor/core/utils/url';
 import { emitServiceEvent } from '../utils/emit-service-event.js';
 
@@ -39,6 +41,7 @@ export interface DistributedHealthMonitorOptions {
   random?: () => number;
   generateClaimToken?: () => string;
   fetchHealth?: typeof fetch;
+  fetchDynamicHealth?: ReturnType<typeof createPinnedFetch>;
   /** Test seam; production always uses capability-scoped PostgreSQL discovery. */
   discover?: (
     after?: EnvironmentHealthRoutingCursor
@@ -88,6 +91,7 @@ export class DistributedHealthMonitor {
   private readonly random: () => number;
   private readonly generateClaimToken: () => string;
   private readonly fetchHealth: typeof fetch;
+  private readonly fetchDynamicHealth: ReturnType<typeof createPinnedFetch>;
   private readonly activeClaims = new Map<
     string,
     { tenantId: TenantID; claim: EnvironmentHealthClaim }
@@ -107,6 +111,13 @@ export class DistributedHealthMonitor {
     this.random = options.random ?? Math.random;
     this.generateClaimToken = options.generateClaimToken ?? generateId;
     this.fetchHealth = options.fetchHealth ?? fetch;
+    this.fetchDynamicHealth =
+      options.fetchDynamicHealth ??
+      createPinnedFetch({
+        timeoutMs: options.httpTimeoutMs,
+        maxBytes: 64 * 1024,
+        isBodyComplete: () => true,
+      });
     for (const [value, label] of [
       [options.scanIntervalMs, 'scan interval'],
       [options.maxIdleIntervalMs, 'maximum idle interval'],
@@ -358,6 +369,9 @@ export class DistributedHealthMonitor {
       if (rowTenantId && rowTenantId !== tenantId) {
         throw new Error(`Environment health tenant mismatch for branch ${branchId}`);
       }
+      if (branch.environment_instance?.status === 'running') {
+        await this.triggerSourceReconciliation(tenantId, branchId);
+      }
       const claimToken = this.generateClaimToken();
       const claimResult = await runWithTenantDatabaseScope(this.db, tenantId, (scopedDb) =>
         new EnvironmentHealthRepository(scopedDb).claim({
@@ -436,6 +450,9 @@ export class DistributedHealthMonitor {
       this.activeClaims.delete(this.claimKey(tenantId, branch.branch_id));
       return false;
     }
+    if (result.environmentStatus === 'running') {
+      await this.triggerSourceReconciliation(tenantId, branch.branch_id);
+    }
     if (result.stateChanged) {
       const current = await runWithTenantDatabaseScope(this.db, tenantId, (scopedDb) =>
         new BranchRepository(scopedDb).findById(branch.branch_id)
@@ -453,15 +470,39 @@ export class DistributedHealthMonitor {
     return true;
   }
 
+  private async triggerSourceReconciliation(tenantId: TenantID, branchId: BranchID): Promise<void> {
+    try {
+      const branches = this.app.service('branches') as unknown as {
+        reconcileEnvironmentSync(id: BranchID, params?: unknown): Promise<void>;
+      };
+      await branches.reconcileEnvironmentSync(branchId, tenantParams(tenantId));
+    } catch (error) {
+      console.warn(
+        `[distributed-work.environment-sync] tenant_id=${JSON.stringify(tenantId)} branch_id=${JSON.stringify(branchId)} error=${JSON.stringify(error instanceof Error ? error.message : String(error))}`
+      );
+    }
+  }
+
   private async fetchObservation(
     branch: Branch,
     controller: AbortController
   ): Promise<EnvironmentHealthObservation | null> {
-    const healthUrl = branch.health_check_url;
+    // A remote environment may not have a reachable address until Start
+    // completes. Its typed lifecycle result can publish a dynamic health URL;
+    // provider output must pass the public-destination guard before use. The
+    // facts fallback is transitional for instances started by the older output
+    // protocol and can be removed after adapters migrate.
+    const { rawDynamicHealthUrl, healthUrl, isDynamicHealth } = resolveEnvironmentHealthTarget({
+      configuredHealthUrl: branch.health_check_url,
+      lifecycleResultHealthUrl: branch.environment_instance?.lifecycle_result?.health_url,
+      legacyFactHealthUrl: branch.environment_instance?.facts?.health,
+    });
     if (!healthUrl) {
       return {
         status: 'unknown',
-        message: 'No health check configured; remote environment health is not observable',
+        message: rawDynamicHealthUrl
+          ? 'Lifecycle health URL points at a disallowed destination; environment health is not observable'
+          : 'No health check configured; remote environment health is not observable',
         recordWhileStarting: true,
       };
     }
@@ -480,13 +521,16 @@ export class DistributedHealthMonitor {
         this.options.httpTimeoutMs
       );
       timeout.unref?.();
-      const response = await this.fetchHealth(healthUrl, {
-        method: 'GET',
-        signal: controller.signal,
-        // Do not follow redirects (see branches.ts): the distributed/managed
-        // path is where a 302 to a link-local metadata endpoint matters most.
-        redirect: 'manual',
-      });
+      const response = await (isDynamicHealth ? this.fetchDynamicHealth : this.fetchHealth)(
+        healthUrl,
+        {
+          method: 'GET',
+          signal: controller.signal,
+          // Do not follow redirects (see branches.ts): the distributed/managed
+          // path is where a 302 to a link-local metadata endpoint matters most.
+          redirect: 'manual',
+        }
+      );
       return {
         status: response.ok ? 'healthy' : 'unhealthy',
         message: response.ok

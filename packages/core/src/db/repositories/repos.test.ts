@@ -8,11 +8,15 @@ import type { UUID } from '@agor/core/types';
 import { eq } from 'drizzle-orm';
 import { describe, expect } from 'vitest';
 import { generateId, shortId } from '../../lib/ids';
-import { select, update } from '../database-wrapper';
+import { runDatabaseTransaction, select, update } from '../database-wrapper';
 import { repos } from '../schema';
 import { dbTest } from '../test-helpers';
 import { AmbiguousIdError, EntityNotFoundError, RepositoryError } from './base';
-import { RepoRepository } from './repos';
+import {
+  RepoCloneAttemptConflictError,
+  RepoDeletionInProgressError,
+  RepoRepository,
+} from './repos';
 
 /**
  * Create test repo data
@@ -254,6 +258,31 @@ describe('RepoRepository.create', () => {
     expect(fetched?.clone_error?.category).toBe('auth_failed');
   });
 
+  dbTest('settles a clone only once from the live cloning state', async ({ db }) => {
+    const repo = new RepoRepository(db);
+    const placeholder = await repo.create({
+      ...createRepoData({ slug: 'test/settlement-cas' }),
+      clone_status: 'cloning',
+    });
+
+    const ready = await repo.settleClone({
+      repo_id: placeholder.repo_id,
+      clone_status: 'ready',
+      default_branch: 'main',
+    });
+    expect(ready).toMatchObject({ clone_status: 'ready', default_branch: 'main' });
+    expect(ready.clone_error).toBeUndefined();
+
+    await expect(
+      repo.settleClone({
+        repo_id: placeholder.repo_id,
+        clone_status: 'failed',
+        clone_error: { exit_code: 1, category: 'unknown', message: 'late failure' },
+      })
+    ).rejects.toBeInstanceOf(RepoCloneAttemptConflictError);
+    expect((await repo.findById(placeholder.repo_id))?.clone_status).toBe('ready');
+  });
+
   // The executor's success patch sends `clone_error: null` to drop the prior
   // failure shape from the row. `repoToInsert` coerces null → undefined so
   // the stored value matches the `clone_error?: RepoCloneError` invariant
@@ -288,6 +317,35 @@ describe('RepoRepository.create', () => {
       expect(refetched?.clone_error).toBeUndefined();
     }
   );
+});
+
+describe('RepoRepository deletion admission', () => {
+  dbTest('durably fences new repo-owned work once cleanup is claimed', async ({ db }) => {
+    const repoRepository = new RepoRepository(db);
+    const repo = await repoRepository.create(createRepoData());
+    const attemptId = generateId();
+
+    await runDatabaseTransaction(
+      db,
+      async (txDb) => {
+        const scoped = new RepoRepository(txDb);
+        await scoped.lockForBranchInventory(repo.repo_id);
+        await scoped.claimDeletionAttemptLocked(repo.repo_id, attemptId, 60_000);
+      },
+      { sqliteImmediate: true }
+    );
+
+    await expect(repoRepository.findById(repo.repo_id)).resolves.toMatchObject({
+      deletion_attempt: { attempt_id: attemptId, cleanup: true },
+    });
+    await expect(
+      runDatabaseTransaction(
+        db,
+        (txDb) => new RepoRepository(db).lockForWorkAdmissionInTransaction(txDb, repo.repo_id),
+        { sqliteImmediate: true }
+      )
+    ).rejects.toBeInstanceOf(RepoDeletionInProgressError);
+  });
 });
 
 // ============================================================================

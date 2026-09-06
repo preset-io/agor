@@ -103,6 +103,12 @@ matching client or host timeout. After a timeout, keep the returned branch ID an
 read-only wait tool again. Losing a waited create response does not cancel the already-created branch,
 so do not blindly replay branch creation.
 
+If the returned branch remains `creating` after its persisted filesystem-attempt deadline, a branch
+manager with write filesystem access can call `agor_branches_recover_filesystem`. The tool fences the
+exact expired attempt and reconciles the existing checkout; it does not launch a duplicate clone or
+worktree mutation. Follow it with `agor_branches_wait_for_ready`. Active attempts and stale recovery
+requests are rejected.
+
 - **Repository bootstrap:** "Clone this GitHub repo, create a branch off `main`, and start the dev environment automatically."
 - **Zone-based workflows:** "Create a 'Human PR Review' zone on the board, positioned based on existing zones, with a trigger that prompts for review feedback."
 - **Mass subsession fan-out:** "Read `context/js-to-ts-refactor`, split the file list, create a subsession per chunk, and report back when done."

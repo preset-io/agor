@@ -17,7 +17,11 @@ import type {
   BoardExportBlob,
   Branch,
   BranchCapabilityPolicy,
+  BranchCreateData,
   BranchEnvironmentUpdate,
+  BranchFilesystemRecoveryRequest,
+  BranchFilesystemSettlement,
+  BranchPatchData,
   CapabilityPolicyWorkspacePreferences,
   CardType,
   CardWithType,
@@ -61,6 +65,7 @@ import type {
   PatchAgenticToolPreset,
   PermissionMode,
   Repo,
+  RepoCloneSettlement,
   RuntimeTelemetryInput,
   Schedule,
   ScheduleCreateData,
@@ -555,6 +560,8 @@ export interface BoardCommentRepositionService {
  * Repos service with branch management
  */
 export interface ReposService extends AgorService<Repo> {
+  /** Exact git.clone executor callback; ordinary clients cannot call it. */
+  settleClone(data: RepoCloneSettlement, params?: Params): Promise<Repo>;
   /**
    * Create a git branch for a repository.
    *
@@ -712,7 +719,12 @@ export interface UsersService extends AgorService<User> {
 /**
  * Branches service with environment management
  */
-export interface BranchesService extends AgorService<Branch> {
+export interface BranchesService
+  extends AgorService<Branch, BranchCreateData, BranchPatchData, BranchPatchData> {
+  /** Exact git.branch.add executor callback; ordinary clients cannot call it. */
+  settleFilesystem(data: BranchFilesystemSettlement, params?: Params): Promise<Branch>;
+  /** Explicitly fence and inspect one expired filesystem materialization attempt. */
+  recoverFilesystem(data: BranchFilesystemRecoveryRequest, params?: Params): Promise<Branch>;
   /**
    * Create or repair the primary Knowledge namespace for a teammate branch.
    * API/UI-only; not exposed through teammate MCP config mutation tools.
@@ -756,6 +768,10 @@ export interface BranchesService extends AgorService<Branch> {
           branchId?: string;
           environment_update?: BranchEnvironmentUpdate;
           environmentUpdate?: BranchEnvironmentUpdate;
+          expected_environment_generation?: number;
+          expectedEnvironmentGeneration?: number;
+          expected_environment_status?: BranchEnvironmentUpdate['status'];
+          expectedEnvironmentStatus?: BranchEnvironmentUpdate['status'];
         }
       | string,
     environmentUpdate?: BranchEnvironmentUpdate,
@@ -1323,6 +1339,9 @@ function extendReposService(client: AgorClient): void {
     methods?: (...names: string[]) => unknown;
   };
   if (reposService[REPOS_SERVICE_EXTENDED]) return;
+  if (typeof reposService.methods === 'function') {
+    reposService.methods('settleClone');
+  }
   reposService[REPOS_SERVICE_EXTENDED] = true;
 }
 
@@ -1333,7 +1352,12 @@ function extendBranchesService(client: AgorClient): void {
   };
   if (branchesService[BRANCHES_SERVICE_EXTENDED]) return;
   if (typeof branchesService.methods === 'function') {
-    branchesService.methods('updateEnvironment', 'ensureTeammateKnowledgeNamespace');
+    branchesService.methods(
+      'updateEnvironment',
+      'settleFilesystem',
+      'recoverFilesystem',
+      'ensureTeammateKnowledgeNamespace'
+    );
   }
   branchesService[BRANCHES_SERVICE_EXTENDED] = true;
 }

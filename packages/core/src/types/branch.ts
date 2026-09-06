@@ -1,4 +1,5 @@
 // src/types/branch.ts
+import type { EnvironmentLifecycleResult } from '../environment/lifecycle-result';
 import type { BoardID, BranchID, UUID } from './id';
 import type { KnowledgeNamespaceID, KnowledgeVisibility } from './knowledge';
 import type { BranchName } from './repo';
@@ -79,6 +80,12 @@ export interface Branch {
 
   /** Logs command - initialized from repo template, then user-editable (e.g., "docker logs agor-daemon") */
   logs_command?: string;
+
+  /** Maximum wall-clock time allowed for one start attempt. */
+  startup_timeout_ms?: number;
+
+  /** Maximum wall-clock time allowed for one stop/nuke/sync command. */
+  lifecycle_timeout_ms?: number;
 
   /**
    * Name of the environment variant this branch is currently rendered from.
@@ -254,6 +261,12 @@ export interface Branch {
    * Each branch gets its own environment instance with unique ports.
    */
   environment_instance?: BranchEnvironmentInstance;
+
+  /**
+   * Server-managed monotonic lifecycle boundary used to fence asynchronous
+   * environment commands and health observations. Clients may read but never set it.
+   */
+  readonly environment_generation?: number;
 
   // ===== Sessions =====
 
@@ -439,6 +452,107 @@ export interface Branch {
    * transitioning; it never strands accumulated Claude/Codex/… history.
    */
   sdk_home?: 'per_branch' | null;
+
+  /**
+   * Server-owned authority for one asynchronous git.branch.add operation.
+   * The opaque attempt ID is bound into the executor credential and every
+   * settlement CAS so an old callback cannot overwrite a newer restore.
+   */
+  filesystem_attempt?: BranchFilesystemAttempt | null;
+}
+
+export interface BranchFilesystemAttempt {
+  attempt_id: UUID;
+  action: 'create' | 'restore';
+  started_at: string;
+  deadline_at: string;
+}
+
+/**
+ * Sensitive identity/lifecycle fields owned by daemon orchestration rather
+ * than generic Branch CRUD. Keep the runtime guard and transport DTOs derived
+ * from this inventory so adding orchestrated state does not silently reopen
+ * the broad `Partial<Branch>` write boundary.
+ */
+export const BRANCH_SERVER_MANAGED_FIELDS = [
+  'branch_id',
+  'branch_unique_id',
+  'repo_id',
+  'path',
+  'base_remote_url',
+  'base_sha',
+  'last_commit_sha',
+  'tracking_branch',
+  'new_branch',
+  'created_at',
+  'updated_at',
+  'created_by',
+  'environment_instance',
+  'environment_generation',
+  'archived',
+  'archived_at',
+  'archived_by',
+  'filesystem_status',
+  'filesystem_attempt',
+  'error_message',
+  'primary_owner_user_id',
+  'sdk_home',
+] as const satisfies ReadonlyArray<keyof Branch>;
+
+export type BranchServerManagedField = (typeof BRANCH_SERVER_MANAGED_FIELDS)[number];
+
+/** Client-authored fields accepted by the generic Branch create transport. */
+export type BranchCreateData = Omit<Partial<Branch>, BranchServerManagedField>;
+
+/** Client-authored fields accepted by the generic Branch patch/update transport. */
+export type BranchPatchData = Omit<Partial<Branch>, BranchServerManagedField>;
+
+/** Narrow internal DTO for an already-authorized new materialization intent. */
+export type BranchMaterializationIntentData = Pick<
+  Branch,
+  | 'branch_id'
+  | 'repo_id'
+  | 'name'
+  | 'path'
+  | 'ref'
+  | 'new_branch'
+  | 'branch_unique_id'
+  | 'created_by'
+  | 'primary_owner_user_id'
+  | 'filesystem_attempt'
+> &
+  Partial<
+    Pick<
+      Branch,
+      | 'ref_type'
+      | 'base_ref'
+      | 'base_remote_url'
+      | 'environment_variant'
+      | 'storage_mode'
+      | 'clone_depth'
+      | 'last_used'
+      | 'issue_url'
+      | 'pull_request_url'
+      | 'notes'
+      | 'custom_context'
+    >
+  > & {
+    board_id: BoardID;
+    filesystem_status: 'creating';
+    filesystem_attempt: BranchFilesystemAttempt;
+  };
+
+/** Authorized request to fence and inspect an expired materialization attempt. */
+export interface BranchFilesystemRecoveryRequest {
+  branch_id: BranchID;
+}
+
+/** Exact executor settlement for asynchronous branch materialization. */
+export interface BranchFilesystemSettlement {
+  branch_id: BranchID;
+  filesystem_attempt_id: UUID;
+  filesystem_status: 'ready' | 'failed';
+  error_message?: string;
 }
 
 export type BranchFilesystemReadinessState = 'pending' | 'ready' | 'failed' | 'unavailable';
@@ -520,12 +634,54 @@ export interface BranchEnvironmentInstance {
   };
 
   /**
+   * Persisted wall-clock deadline for the current start attempt.
+   *
+   * This must not be reconstructed from probe counts: health monitoring may
+   * pause while a daemon restarts or leadership moves between replicas.
+   */
+  startup_deadline_at?: string;
+
+  /**
+   * Persisted fleet-wide deadline for the current Stop/Nuke/Restart Stop
+   * attempt. Health coordination expires a lost delegated launch from any
+   * daemon replica and advances the lifecycle generation before retry.
+   */
+  lifecycle_deadline_at?: string;
+
+  /**
+   * Server-owned provider-mutation lease for the current lifecycle generation.
+   * Readiness is observational and must not release this lock: only the
+   * generation-fenced lifecycle settlement or deadline recovery clears it.
+   */
+  active_lifecycle_attempt?: {
+    action: 'start' | 'stop' | 'nuke';
+    environment_generation: number;
+    started_at: string;
+    deadline_at: string;
+  };
+
+  /**
    * Last health check result
    */
   last_health_check?: {
     timestamp: string;
     status: 'healthy' | 'unhealthy' | 'unknown';
     message?: string;
+    /**
+     * How many consecutive observations have now reported {@link status}.
+     *
+     * Readiness and demotion are deliberately streak-based — one stale 200 from
+     * a resuming tunnel must not promote, and one dropped packet must not
+     * demote. The count lives HERE, next to the observation that produced it,
+     * rather than in daemon memory, because the distributed monitor moves an
+     * environment's observation lease between daemons: in-process counters
+     * would reset on every handoff (and on every restart), so the streak rules
+     * could never be applied there at all.
+     *
+     * Absent on rows written before this existed, and on a probe that changed
+     * status; both are read as a streak of 1 for the reported status.
+     */
+    consecutive?: number;
   };
 
   /**
@@ -540,6 +696,45 @@ export interface BranchEnvironmentInstance {
     name: string;
     url: string;
   }>;
+
+  /**
+   * Latest bounded, versioned result reported by Start/discovery.
+   * `access_urls` remains the denormalized UI/API shortcut; this object retains
+   * the health target and opaque provider identity needed by later lifecycle commands.
+   */
+  lifecycle_result?: EnvironmentLifecycleResult;
+
+  /** Durable desired/applied source reconciliation state for remote environments. */
+  source_sync?: {
+    /** Latest clean Git commit requested for this environment. */
+    desired_revision: string;
+    desired_at: string;
+    /** Latest commit the adapter truthfully acknowledged applying. */
+    applied_revision?: string;
+    applied_at?: string;
+    /** User identity whose credential route owns retries for this request. */
+    requested_by_user_id?: string;
+    /** Cross-replica, lease-bounded ownership of one exact revision attempt. */
+    active_attempt?: {
+      token: string;
+      revision: string;
+      environment_generation: number;
+      started_at: string;
+      lease_expires_at: string;
+      instance_id: string;
+      boot_id: string;
+      /** User whose credential/home context was frozen for this attempt. */
+      requested_by_user_id?: string;
+    };
+    last_error?: {
+      revision: string;
+      timestamp: string;
+      message: string;
+    };
+    /** Durable exponential retry state; reset when desired_revision changes. */
+    failure_count?: number;
+    retry_not_before_at?: string;
+  };
 
   /**
    * Process logs (last N lines)
@@ -564,12 +759,28 @@ export interface BranchEnvironmentInstance {
    * the health monitor still waits for the app to become reachable.
    */
   last_command?: {
-    action: 'start' | 'stop' | 'restart' | 'nuke';
+    action: 'start' | 'stop' | 'restart' | 'nuke' | 'sync';
     status: 'succeeded' | 'failed';
     timestamp: string;
     message?: string;
     output?: string;
   };
+
+  /**
+   * Bounded template values derived from the typed lifecycle result.
+   *
+   * A remote environment's address and provider identity may not exist until
+   * Start completes. `AGOR_ENVIRONMENT_RESULT` persists that runtime metadata
+   * in `lifecycle_result`; this field exposes a small derived view to
+   * Handlebars as `{{env.<key>}}` (see `buildBranchContext`). `env.url` is the
+   * primary access URL and additional named URLs use `env.url_<normalized_name>`.
+   * During adapter migration, bounded historical output is first converted to
+   * the same typed result and therefore reaches templates through this path.
+   *
+   * This is a cache, not a second source of truth. It is refreshed from the
+   * typed result and cleared on nuke or variant switch.
+   */
+  facts?: Record<string, string>;
 }
 
 export const BRANCH_ENVIRONMENT_CLEARABLE_FIELDS = [
@@ -578,6 +789,15 @@ export const BRANCH_ENVIRONMENT_CLEARABLE_FIELDS = [
   'last_error',
   'last_command',
   'logs',
+  'facts',
+  'lifecycle_result',
+  'startup_deadline_at',
+  'lifecycle_deadline_at',
+  'active_lifecycle_attempt',
+  'source_sync',
+  // Derived from the typed lifecycle result, so it is cleared alongside the
+  // template-value cache whenever that result becomes stale.
+  'access_urls',
 ] as const satisfies ReadonlyArray<keyof BranchEnvironmentInstance>;
 
 export type BranchEnvironmentClearableField = (typeof BRANCH_ENVIRONMENT_CLEARABLE_FIELDS)[number];
@@ -707,6 +927,21 @@ export interface RepoEnvironmentVariant {
   extends?: string;
 
   /**
+   * Maximum wall-clock time for a start attempt, in milliseconds.
+   * Defaults to one hour and is inherited through `extends`.
+   */
+  startup_timeout_ms?: number;
+
+  /**
+   * Maximum wall-clock time for one `stop` / `nuke` / `sync` command, in
+   * milliseconds. Inherited through `extends`. The default is sized to fit
+   * inside the default executor command credential; raise it only for a
+   * provider whose state transitions legitimately take longer (the credential,
+   * the daemon's waiter, and the durable Sync claim all grow with it).
+   */
+  lifecycle_timeout_ms?: number;
+
+  /**
    * Command to start the environment (Handlebars template).
    *
    * Required on a resolved variant, but may be omitted on the raw variant
@@ -722,6 +957,19 @@ export interface RepoEnvironmentVariant {
    * declaration when `extends` supplies it. See {@link start}.
    */
   stop?: string;
+
+  /**
+   * Optional command or webhook to apply an exact clean commit in a remote
+   * remote environment (Handlebars template). For a local environment this is
+   * usually unset (the environment already runs on the branch's own files); for
+   * a remote backend (e.g. a Codespace, which shares no filesystem with Agor)
+   * it publishes the branch and updates the remote working tree, so
+   * in-environment watchers hot-reload. `{{sync.revision}}` is the exact desired
+   * SHA. Success must emit/return a versioned lifecycle result whose
+   * `applied_revision` matches it; Agor otherwise records a retryable sync
+   * failure without demoting environment health.
+   */
+  sync?: string;
 
   /**
    * Destructive reset command (Handlebars template).

@@ -778,6 +778,71 @@ describe('loadConfig', () => {
     );
   });
 
+  it('accepts bounded environment disclaimer Markdown with safe documentation links', async () => {
+    const agorDir = path.join(tempDir, '.agor');
+    const configPath = path.join(agorDir, 'config.yaml');
+
+    await fs.mkdir(agorDir, { recursive: true });
+    await fs.writeFile(
+      configPath,
+      yaml.dump({
+        ui: {
+          environment_disclaimer_markdown:
+            '**Remote environments:** Agor can trigger your provider. [Learn more](https://agor.live/guide/environment-configuration).',
+        },
+      }),
+      'utf-8'
+    );
+
+    await expect(loadConfig()).resolves.toMatchObject({
+      ui: {
+        environment_disclaimer_markdown:
+          '**Remote environments:** Agor can trigger your provider. [Learn more](https://agor.live/guide/environment-configuration).',
+      },
+    });
+  });
+
+  it.each([
+    ['', /environment_disclaimer_markdown must not be empty/],
+    [42, /environment_disclaimer_markdown must be a string/],
+    ['[Insecure](http://docs.example.com/environment)', /links must use HTTPS/],
+    ['[Unsafe](javascript:alert(1))', /links must use HTTPS/],
+    ['<javascript:alert(1)>', /links must use HTTPS/],
+    ['[Credentials](https://user:secret@example.com/docs)', /links must use HTTPS/],
+    ['[Protocol relative](//evil.example/docs)', /links must use HTTPS/],
+    ['![Tracking image](https://evil.example/pixel)', /does not support images/],
+  ])('rejects invalid environment disclaimer content %#', async (markdown, expected) => {
+    const agorDir = path.join(tempDir, '.agor');
+    const configPath = path.join(agorDir, 'config.yaml');
+
+    await fs.mkdir(agorDir, { recursive: true });
+    await fs.writeFile(
+      configPath,
+      yaml.dump({ ui: { environment_disclaimer_markdown: markdown } }),
+      'utf-8'
+    );
+
+    await expect(loadConfig()).rejects.toThrow(expected);
+  });
+
+  it('rejects oversized environment disclaimer content', async () => {
+    const agorDir = path.join(tempDir, '.agor');
+    const configPath = path.join(agorDir, 'config.yaml');
+
+    await fs.mkdir(agorDir, { recursive: true });
+    await fs.writeFile(
+      configPath,
+      yaml.dump({
+        ui: { environment_disclaimer_markdown: 'x'.repeat(8_001) },
+      }),
+      'utf-8'
+    );
+
+    await expect(loadConfig()).rejects.toThrow(
+      /environment_disclaimer_markdown must be at most 8000/
+    );
+  });
+
   it.each(['resources', 'services', 'credentials', 'opencode', 'codex', 'knowledge'])(
     'rejects the removed %s config surface',
     async (key) => {

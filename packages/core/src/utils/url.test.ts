@@ -8,6 +8,7 @@ import {
   getBranchUrl,
   getKnowledgeUrl,
   getSessionUrl,
+  isAllowedFactProbeUrl,
   isAllowedHealthCheckUrl,
   normalizeHttpBaseUrl,
   normalizeOptionalHttpUrl,
@@ -197,6 +198,47 @@ describe('isAllowedHealthCheckUrl', () => {
   it('returns false for invalid URLs', () => {
     expect(isAllowedHealthCheckUrl('not-a-url')).toBe(false);
     expect(isAllowedHealthCheckUrl('')).toBe(false);
+  });
+});
+
+describe('isAllowedFactProbeUrl', () => {
+  // Provider-reported health URLs are untrusted, so the transitional cache gets
+  // a stricter rule than an operator-authored health_check_url.
+  it('blocks the daemon itself and other loopback addresses', () => {
+    expect(isAllowedFactProbeUrl('http://localhost:3030/health')).toBe(false);
+    expect(isAllowedFactProbeUrl('http://127.0.0.1:5432/')).toBe(false);
+    expect(isAllowedFactProbeUrl('http://[::1]:3030/')).toBe(false);
+    expect(isAllowedFactProbeUrl('http://0.0.0.0:8080/')).toBe(false);
+  });
+
+  it('blocks private ranges, including a Docker socket on 2375', () => {
+    expect(isAllowedFactProbeUrl('http://10.0.0.5:8080/admin')).toBe(false);
+    expect(isAllowedFactProbeUrl('http://192.168.1.1/')).toBe(false);
+    expect(isAllowedFactProbeUrl('http://172.17.0.1:2375/containers/json')).toBe(false);
+    expect(isAllowedFactProbeUrl('http://172.31.255.255/')).toBe(false);
+    expect(isAllowedFactProbeUrl('http://172.15.0.1/')).toBe(true);
+    expect(isAllowedFactProbeUrl('http://172.32.0.1/')).toBe(true);
+  });
+
+  it('blocks cloud metadata and link-local destinations', () => {
+    expect(isAllowedFactProbeUrl('http://169.254.169.254/latest/meta-data/')).toBe(false);
+    expect(isAllowedFactProbeUrl('http://metadata.google.internal/')).toBe(false);
+  });
+
+  it('blocks internal-looking and bare hostnames', () => {
+    expect(isAllowedFactProbeUrl('http://vault:8200/')).toBe(false);
+    expect(isAllowedFactProbeUrl('http://db.internal/')).toBe(false);
+    expect(isAllowedFactProbeUrl('http://printer.local/')).toBe(false);
+  });
+
+  it('allows public destinations', () => {
+    expect(isAllowedFactProbeUrl('https://space-8088.app.github.dev/health')).toBe(true);
+    expect(isAllowedFactProbeUrl('https://example.com/health')).toBe(true);
+  });
+
+  it('is stricter than the configured health URL rule', () => {
+    expect(isAllowedHealthCheckUrl('http://localhost:3030/health')).toBe(true);
+    expect(isAllowedFactProbeUrl('http://localhost:3030/health')).toBe(false);
   });
 });
 

@@ -139,10 +139,31 @@ export interface Repo {
    */
   clone_error?: RepoCloneError;
 
+  /**
+   * Durable server-owned fence for destructive managed-directory cleanup.
+   * New branches, tasks, and environment mutations are refused while this is
+   * present; an expired attempt may only be replaced by another delete retry.
+   */
+  deletion_attempt?: RepoDeletionAttempt;
+
   /** Repository metadata */
   created_at: string;
   last_updated: string;
 }
+
+export interface RepoDeletionAttempt {
+  attempt_id: UUID;
+  started_at: string;
+  deadline_at: string;
+  cleanup: true;
+}
+
+/** Fields owned by daemon orchestration rather than generic Repo CRUD. */
+export const REPO_SERVER_MANAGED_FIELDS = [
+  'clone_status',
+  'clone_error',
+  'deletion_attempt',
+] as const satisfies ReadonlyArray<keyof Repo>;
 
 export type RepoCloneStatus = 'cloning' | 'ready' | 'failed';
 
@@ -159,6 +180,20 @@ export interface RepoCloneError {
   /** Short, user-facing first-line message (stderr excerpt or wrapper message). */
   message: string;
 }
+
+/** Exact result accepted from the executor that owns one repository clone. */
+export type RepoCloneSettlement =
+  | {
+      repo_id: UUID;
+      clone_status: 'ready';
+      default_branch: string;
+      environment?: RepoEnvironment;
+    }
+  | {
+      repo_id: UUID;
+      clone_status: 'failed';
+      clone_error: RepoCloneError;
+    };
 
 /**
  * Return a safe, actionable remediation hint for a remote-clone failure.

@@ -145,6 +145,7 @@ import {
   authenticatedHealthDb,
   healthMigrations,
   healthStatus,
+  publicEnvironmentDisclaimerMarkdown,
   publicHealthDb,
 } from './health/payload.js';
 import { registerHealthProbeRoutes } from './health/routes.js';
@@ -4073,6 +4074,32 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
 
   registerLongAuthenticatedRoute(
     app,
+    '/branches/:id/sync',
+    {
+      async create(data: unknown, params: RouteParams) {
+        const id = params.route?.id;
+        if (!id) throw new Error('Branch ID required');
+        const desiredRevision =
+          data && typeof data === 'object' && !Array.isArray(data)
+            ? (data as { desired_revision?: unknown }).desired_revision
+            : undefined;
+        if (typeof desiredRevision !== 'string') {
+          throw new BadRequest('Environment sync requires desired_revision');
+        }
+        return branchesService.syncEnvironment(id as import('@agor/core/types').BranchID, params, {
+          desiredRevision,
+        });
+      },
+    },
+    {
+      // Branch `all`/admin control is enforced at the service layer.
+      create: { role: ROLES.VIEWER, action: 'sync branch environments' },
+    },
+    requireAuth
+  );
+
+  registerLongAuthenticatedRoute(
+    app,
     '/branches/:id/render-environment',
     {
       async create(data: unknown, params: RouteParams) {
@@ -5426,6 +5453,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         instance: {
           label: config.daemon?.instanceLabel,
           description: config.daemon?.instanceDescription,
+          environmentDisclaimerMarkdown: publicEnvironmentDisclaimerMarkdown(config),
         },
         realtime: realtimeRuntime
           ? { required: true, ready: realtimeRuntime.isReady() }

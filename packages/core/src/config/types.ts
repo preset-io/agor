@@ -162,6 +162,13 @@ export interface AgorUISettings {
 
   /** UI host (default: localhost) */
   host?: string;
+
+  /**
+   * Optional operator-authored, constrained Markdown shown at the top of every
+   * Branch Environment tab. Exposed publicly through `/health`; never sourced
+   * from repository configuration.
+   */
+  environment_disclaimer_markdown?: string;
 }
 
 /**

@@ -162,6 +162,7 @@ describe('GitClonePayloadSchema', () => {
       params: {
         url: 'https://github.com/user/repo.git',
         outputPath: '/data/agor/repos/github.com/user/repo.git',
+        createDbRecord: false,
       },
     };
 
@@ -176,6 +177,7 @@ describe('GitClonePayloadSchema', () => {
       sessionToken: 'jwt-token-here',
       params: {
         url: 'git@github.com:user/repo.git',
+        createDbRecord: false,
       },
     };
 
@@ -189,6 +191,7 @@ describe('GitClonePayloadSchema', () => {
       sessionToken: 'jwt-token-here',
       params: {
         url: '/home/user/repos/my-repo',
+        createDbRecord: false,
       },
     };
 
@@ -202,6 +205,7 @@ describe('GitClonePayloadSchema', () => {
       sessionToken: 'jwt-token-here',
       params: {
         url: 'git://github.com/user/repo.git',
+        createDbRecord: false,
       },
     };
 
@@ -215,6 +219,7 @@ describe('GitClonePayloadSchema', () => {
       sessionToken: 'jwt-token-here',
       params: {
         url: 'ssh://git@github.com/user/repo.git',
+        createDbRecord: false,
       },
     };
 
@@ -231,6 +236,7 @@ describe('GitClonePayloadSchema', () => {
         outputPath: '/data/agor/repos/github.com/user/repo.git',
         branch: 'main',
         bare: true,
+        createDbRecord: false,
       },
     };
 
@@ -247,6 +253,7 @@ describe('GitClonePayloadSchema', () => {
       params: {
         url: 'https://github.com/user/repo.git',
         importEnvironmentConfig: true,
+        repoId: '550e8400-e29b-41d4-a716-446655440000',
       },
     });
 
@@ -275,6 +282,7 @@ describe('GitClonePayloadSchema', () => {
       params: {
         url: 'https://github.com/user/repo.git',
         default_branch: 'release/2024-q1',
+        createDbRecord: false,
       },
     };
 
@@ -288,11 +296,22 @@ describe('GitClonePayloadSchema', () => {
       sessionToken: 'jwt-token-here',
       params: {
         url: 'https://github.com/user/repo.git',
+        createDbRecord: false,
       },
     };
 
     const result = GitClonePayloadSchema.parse(payload);
     expect(result.params.default_branch).toBeUndefined();
+  });
+
+  it('requires an exact repo placeholder for managed clones', () => {
+    expect(() =>
+      GitClonePayloadSchema.parse({
+        command: 'git.clone',
+        sessionToken: 'jwt-token-here',
+        params: { url: 'https://github.com/user/repo.git' },
+      })
+    ).toThrow('daemon-created repository placeholder');
   });
 });
 
@@ -308,6 +327,9 @@ describe('EnvironmentLifecyclePayloadSchema', () => {
         action: 'start',
         startCommand: 'docker compose up -d --build',
         appUrl: 'http://localhost:3000',
+        healthCheckUrl: 'http://localhost:3000/health',
+        startupTimeoutMs: 2_700_000,
+        lifecycleGeneration: 7,
       },
     };
 
@@ -315,6 +337,9 @@ describe('EnvironmentLifecyclePayloadSchema', () => {
     expect(result.command).toBe('environment.lifecycle');
     expect(result.params.action).toBe('start');
     expect(result.params.startCommand).toBe('docker compose up -d --build');
+    expect(result.params.healthCheckUrl).toBe('http://localhost:3000/health');
+    expect(result.params.startupTimeoutMs).toBe(2_700_000);
+    expect(result.params.lifecycleGeneration).toBe(7);
   });
 
   it('should reject start payloads without startCommand', () => {
@@ -329,6 +354,43 @@ describe('EnvironmentLifecyclePayloadSchema', () => {
       })
     ).toThrow();
   });
+
+  it('requires an exact desired revision and claim for sync', () => {
+    const valid = {
+      command: 'environment.lifecycle',
+      sessionToken: 'jwt-token-here',
+      params: {
+        branchId: '550e8400-e29b-41d4-a716-446655440000',
+        action: 'sync',
+        syncCommand: 'bridge sync',
+        desiredRevision: 'a'.repeat(40),
+        syncClaimToken: 'claim-a',
+        commandTimeoutMs: 21 * 60_000,
+      },
+    };
+
+    expect(EnvironmentLifecyclePayloadSchema.parse(valid).params.desiredRevision).toBe(
+      'a'.repeat(40)
+    );
+    expect(() =>
+      EnvironmentLifecyclePayloadSchema.parse({
+        ...valid,
+        params: { ...valid.params, desiredRevision: 'abc123' },
+      })
+    ).toThrow();
+    expect(() =>
+      EnvironmentLifecyclePayloadSchema.parse({
+        ...valid,
+        params: { branchId: valid.params.branchId, action: 'sync' },
+      })
+    ).toThrow();
+    expect(() =>
+      EnvironmentLifecyclePayloadSchema.parse({
+        ...valid,
+        params: { ...valid.params, commandTimeoutMs: undefined },
+      })
+    ).toThrow('commandTimeoutMs');
+  });
 });
 
 describe('EnvironmentLogsPayloadSchema', () => {
@@ -340,12 +402,26 @@ describe('EnvironmentLogsPayloadSchema', () => {
         branchId: '550e8400-e29b-41d4-a716-446655440000',
         branchPath: '/data/agor/worktrees/repo/feature',
         logsCommand: 'docker compose logs --tail=100',
+        commandTimeoutMs: 30_000,
       },
     };
 
     const result = EnvironmentLogsPayloadSchema.parse(payload);
     expect(result.command).toBe('environment.logs');
     expect(result.params.logsCommand).toBe('docker compose logs --tail=100');
+  });
+
+  it('requires a bounded logs command deadline', () => {
+    expect(() =>
+      EnvironmentLogsPayloadSchema.parse({
+        command: 'environment.logs',
+        sessionToken: 'jwt-token-here',
+        params: {
+          branchId: '550e8400-e29b-41d4-a716-446655440000',
+          logsCommand: 'tail -n 100 dev.log',
+        },
+      })
+    ).toThrow('commandTimeoutMs');
   });
 });
 
@@ -357,6 +433,7 @@ describe('GitBranchAddPayloadSchema', () => {
       params: {
         branchId: '550e8400-e29b-41d4-a716-446655440002',
         repoId: '550e8400-e29b-41d4-a716-446655440003',
+        materializationAttemptId: '550e8400-e29b-41d4-a716-446655440004',
       },
     };
 
@@ -373,6 +450,7 @@ describe('GitBranchAddPayloadSchema', () => {
       params: {
         branchId: '550e8400-e29b-41d4-a716-446655440002',
         repoId: '550e8400-e29b-41d4-a716-446655440003',
+        materializationAttemptId: '550e8400-e29b-41d4-a716-446655440004',
         branch: 'untrusted',
         storageMode: 'worktree',
         cloneDepth: 100,
@@ -504,6 +582,7 @@ describe('ExecutorPayloadSchema (discriminated union)', () => {
       params: {
         url: 'https://github.com/user/repo.git',
         outputPath: '/data/repos/repo.git',
+        createDbRecord: false,
       },
     };
 
@@ -638,6 +717,7 @@ describe('Type guards', () => {
       params: {
         branchId: '550e8400-e29b-41d4-a716-446655440002',
         repoId: '550e8400-e29b-41d4-a716-446655440003',
+        materializationAttemptId: '550e8400-e29b-41d4-a716-446655440004',
       },
     };
     expect(isGitBranchAddPayload(payload)).toBe(true);
