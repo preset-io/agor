@@ -105,6 +105,7 @@ import {
 } from '@agor/core/types';
 import {
   isTaskScopedExecutorRequest,
+  requireEnvironmentExecutorCallbackToken,
   requireTaskScopedExecutorRuntimeToken,
 } from './auth/executor-runtime-scope.js';
 import type {
@@ -2254,13 +2255,13 @@ export function registerHooks(ctx: RegisterHooksContext): void {
     hooks(options: {
       before: Record<
         'updateEnvironment' | 'ensureTeammateKnowledgeNamespace',
-        Array<(context: HookContext) => HookContext>
+        Array<(context: HookContext) => HookContext | Promise<HookContext>>
       >;
     }): void;
   };
   (app.service('branches') as unknown as BranchCustomHookRegistrar).hooks({
     before: {
-      updateEnvironment: [requireMinimumRole(ROLES.MEMBER, 'update branch environments')],
+      updateEnvironment: [requireEnvironmentExecutorCallbackToken()],
       ensureTeammateKnowledgeNamespace: [
         requireMinimumRole(ROLES.MEMBER, 'create teammate knowledge namespaces'),
       ],

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { EXECUTOR_COMMAND_TOKEN_EXPIRATION_MS } from '../config/constants.js';
 import {
   decideEnvironmentHealthTransition,
+  ENVIRONMENT_LIFECYCLE_SETTLEMENT_MARGIN_MS,
   ENVIRONMENT_READY_PROBE_THRESHOLD,
   ENVIRONMENT_UNREACHABLE_PROBE_THRESHOLD,
   resolveEnvironmentLifecycleBudget,
@@ -264,5 +265,24 @@ describe('environment lifecycle budgets', () => {
     expect(start.credentialLifetimeMs).not.toBe(
       resolveEnvironmentLifecycleBudget(1_500_000).credentialLifetimeMs
     );
+  });
+
+  it('shortens Start to the credential ceiling while preserving settlement authority', () => {
+    const ceiling = 24 * 60 * 60 * 1_000;
+    const start = resolveEnvironmentStartBudget(ceiling, { credentialCeilingMs: ceiling });
+    expect(start.credentialLifetimeMs).toBe(ceiling);
+    expect(start.startupTimeoutMs).toBe(ceiling - ENVIRONMENT_LIFECYCLE_SETTLEMENT_MARGIN_MS);
+
+    const hardened = resolveEnvironmentStartBudget(undefined, { credentialCeilingMs: 300_000 });
+    expect(hardened.credentialLifetimeMs).toBe(300_000);
+    expect(hardened.startupTimeoutMs).toBe(300_000 - ENVIRONMENT_LIFECYCLE_SETTLEMENT_MARGIN_MS);
+  });
+
+  it('rejects a Start ceiling that cannot preserve its settlement margin', () => {
+    expect(() =>
+      resolveEnvironmentStartBudget(undefined, {
+        credentialCeilingMs: ENVIRONMENT_LIFECYCLE_SETTLEMENT_MARGIN_MS,
+      })
+    ).toThrow(/session_token_expiration_ms/);
   });
 });

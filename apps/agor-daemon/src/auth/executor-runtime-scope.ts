@@ -239,3 +239,23 @@ export function requireTaskScopedExecutorRuntimeToken() {
     return context;
   };
 }
+
+/** Guard the transport-only managed-environment settlement callback family. */
+export function requireEnvironmentExecutorCallbackToken() {
+  return async (context: HookContext): Promise<HookContext> => {
+    const input =
+      asRecord(context.data) ??
+      asRecord((context as HookContext & { arguments?: unknown[] }).arguments?.[0]);
+    const branchId = input?.branch_id ?? input?.branchId;
+    const scope = authenticatedExecutorCommandRuntimeScope(context.params);
+    if (
+      typeof branchId !== 'string' ||
+      !scope ||
+      scope.branchId !== branchId ||
+      !['environment-start', 'environment-stop', 'environment-nuke'].includes(scope.commandId)
+    ) {
+      throw new Forbidden('An executor token scoped to this environment callback is required');
+    }
+    return context;
+  };
+}

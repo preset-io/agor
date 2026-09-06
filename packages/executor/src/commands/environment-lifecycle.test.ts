@@ -92,6 +92,22 @@ function supersededConflict() {
   };
 }
 
+function mockProcessGroup() {
+  let alive = true;
+  const kill = vi.spyOn(process, 'kill').mockImplementation((_pid, signal) => {
+    if (signal === 0 && !alive) {
+      throw Object.assign(new Error('No such process'), { code: 'ESRCH' });
+    }
+    return true;
+  });
+  return {
+    kill,
+    markExited: () => {
+      alive = false;
+    },
+  };
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.spawn.mockImplementation(() => successfulChild());
@@ -100,7 +116,8 @@ beforeEach(() => {
 describe('environment logs deadline', () => {
   it('bounds the command and terminates its process group', async () => {
     vi.useFakeTimers();
-    const kill = vi.spyOn(process, 'kill').mockImplementation(() => true);
+    const processGroup = mockProcessGroup();
+    const { kill } = processGroup;
     try {
       const child = new EventEmitter() as EventEmitter & {
         stdout: EventEmitter;
@@ -127,6 +144,11 @@ describe('environment logs deadline', () => {
 
       const result = handleEnvironmentLogs(logsPayload, {});
       await vi.advanceTimersByTimeAsync(30_000);
+      expect(kill).toHaveBeenCalledWith(-4321, 'SIGTERM');
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(kill).toHaveBeenCalledWith(-4321, 'SIGKILL');
+      processGroup.markExited();
+      child.emit('close', null);
 
       await expect(result).resolves.toMatchObject({
         success: false,
@@ -135,7 +157,6 @@ describe('environment logs deadline', () => {
           message: 'logs command exceeded its 30000ms deadline',
         },
       });
-      expect(kill).toHaveBeenCalledWith(-4321, 'SIGTERM');
     } finally {
       kill.mockRestore();
       vi.useRealTimers();
@@ -179,7 +200,9 @@ describe('environment lifecycle generation fencing', () => {
     expect(updateEnvironment.mock.calls[1]?.[0]).toMatchObject({
       expected_environment_generation: 1,
       environment_update: {
-        access_urls: [{ name: 'App', url: 'https://app.example.test/' }],
+        lifecycle_result: {
+          access_urls: [{ name: 'App', url: 'https://app.example.test/' }],
+        },
       },
     });
   });
@@ -243,7 +266,8 @@ describe('environment lifecycle generation fencing', () => {
     child.pid = 1234;
     child.kill = vi.fn();
     mocks.spawn.mockReturnValue(child);
-    const processKill = vi.spyOn(process, 'kill').mockImplementation(() => true);
+    const processGroup = mockProcessGroup();
+    const { kill: processKill } = processGroup;
     const updateEnvironment = vi
       .fn()
       .mockResolvedValueOnce({ environment_generation: 1 })
@@ -259,14 +283,18 @@ describe('environment lifecycle generation fencing', () => {
     const expiringPayload = payload('start');
 
     try {
-      await expect(handleEnvironmentLifecycle(expiringPayload, {})).resolves.toMatchObject({
+      const result = handleEnvironmentLifecycle(expiringPayload, {});
+      await new Promise((resolve) => setTimeout(resolve, 40));
+      expect(processKill).toHaveBeenCalledWith(-child.pid, 'SIGTERM');
+      processGroup.markExited();
+      child.emit('close', null);
+      await expect(result).resolves.toMatchObject({
         success: false,
         error: {
           code: 'ENVIRONMENT_COMMAND_FAILED',
           message: expect.stringMatching(/exceeded.*deadline/i),
         },
       });
-      expect(processKill).toHaveBeenCalledWith(-child.pid, 'SIGTERM');
       expect(mocks.spawn).toHaveBeenCalledWith(
         expiringPayload.params.startCommand,
         expect.objectContaining({ detached: process.platform !== 'win32' })
@@ -295,7 +323,8 @@ describe('environment lifecycle generation fencing', () => {
       child.pid = 4321;
       child.kill = vi.fn();
       mocks.spawn.mockReturnValue(child);
-      const processKill = vi.spyOn(process, 'kill').mockImplementation(() => true);
+      const processGroup = mockProcessGroup();
+      const { kill: processKill } = processGroup;
       const updateEnvironment = vi.fn().mockResolvedValue({ environment_generation: 1 });
       client({
         generation: 1,
@@ -306,14 +335,18 @@ describe('environment lifecycle generation fencing', () => {
       expiringPayload.params.commandTimeoutMs = 20;
 
       try {
-        await expect(handleEnvironmentLifecycle(expiringPayload, {})).resolves.toMatchObject({
+        const result = handleEnvironmentLifecycle(expiringPayload, {});
+        await new Promise((resolve) => setTimeout(resolve, 40));
+        expect(processKill).toHaveBeenCalledWith(-child.pid, 'SIGTERM');
+        processGroup.markExited();
+        child.emit('close', null);
+        await expect(result).resolves.toMatchObject({
           success: false,
           error: {
             code: 'ENVIRONMENT_COMMAND_FAILED',
             message: expect.stringMatching(/exceeded.*deadline/i),
           },
         });
-        expect(processKill).toHaveBeenCalledWith(-child.pid, 'SIGTERM');
         expect(mocks.spawn).toHaveBeenCalledWith(
           action === 'stop'
             ? expiringPayload.params.stopCommand
@@ -328,6 +361,53 @@ describe('environment lifecycle generation fencing', () => {
       }
     }
   );
+
+  it('does not settle a timed-out command until TERM escalates to KILL and the group exits', async () => {
+    vi.useFakeTimers();
+    const child = new EventEmitter() as EventEmitter & {
+      stdout: EventEmitter;
+      stderr: EventEmitter;
+      pid: number;
+      kill: ReturnType<typeof vi.fn>;
+    };
+    child.stdout = new EventEmitter();
+    child.stderr = new EventEmitter();
+    child.pid = 5678;
+    child.kill = vi.fn();
+    mocks.spawn.mockReturnValue(child);
+    const processGroup = mockProcessGroup();
+    const { kill: processKill } = processGroup;
+    const updateEnvironment = vi.fn().mockResolvedValue({ environment_generation: 1 });
+    client({
+      generation: 1,
+      updateEnvironment,
+      environmentInstance: { status: 'stopping' },
+    });
+    const expiringPayload = payload('stop');
+    expiringPayload.params.commandTimeoutMs = 20;
+
+    try {
+      const result = handleEnvironmentLifecycle(expiringPayload, {});
+      await vi.advanceTimersByTimeAsync(20);
+      expect(processKill).toHaveBeenCalledWith(-child.pid, 'SIGTERM');
+      expect(updateEnvironment).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(processKill).toHaveBeenCalledWith(-child.pid, 'SIGKILL');
+      expect(updateEnvironment).not.toHaveBeenCalled();
+
+      processGroup.markExited();
+      child.emit('close', null);
+      await expect(result).resolves.toMatchObject({
+        success: false,
+        error: { code: 'ENVIRONMENT_COMMAND_FAILED' },
+      });
+      expect(updateEnvironment).toHaveBeenCalledTimes(1);
+    } finally {
+      processKill.mockRestore();
+      vi.useRealTimers();
+    }
+  });
 
   // The health monitor moves `starting -> running` and `running -> error`
   // WITHOUT advancing the lifecycle generation (EnvironmentHealthRepository

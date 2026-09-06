@@ -52,6 +52,10 @@ function commandForAction(payload: EnvironmentLifecyclePayload): string {
 
 type EnvironmentStatus = 'stopped' | 'starting' | 'running' | 'stopping' | 'error';
 
+const ENVIRONMENT_COMMAND_TERM_GRACE_MS = 5_000;
+const ENVIRONMENT_COMMAND_KILL_CONFIRMATION_MS = 5_000;
+const ENVIRONMENT_COMMAND_CONTAINMENT_POLL_MS = 50;
+
 async function updateBranchEnvironment(
   client: Awaited<ReturnType<typeof createExecutorClient>>,
   branchId: string,
@@ -113,7 +117,17 @@ function terminateCommandProcess(child: ReturnType<typeof spawn>, signal: NodeJS
   }
 }
 
-async function runShellCommand(options: {
+function isCommandProcessGroupAlive(child: ReturnType<typeof spawn>): boolean {
+  if (!child.pid) return false;
+  try {
+    process.kill(process.platform === 'win32' ? child.pid : -child.pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code !== 'ESRCH';
+  }
+}
+
+export async function runShellCommand(options: {
   command: string;
   cwd: string;
   env?: Record<string, string>;
@@ -155,14 +169,29 @@ async function runShellCommand(options: {
     await new Promise<void>((resolve, reject) => {
       let timeoutHandle: NodeJS.Timeout | undefined;
       let forceKillHandle: NodeJS.Timeout | undefined;
+      let killConfirmationHandle: NodeJS.Timeout | undefined;
+      let containmentPollHandle: NodeJS.Timeout | undefined;
+      let timeoutError: (Error & { output?: string; pid?: number }) | undefined;
+      let settled = false;
       const clearCommandTimers = () => {
         if (timeoutHandle) clearTimeout(timeoutHandle);
         if (forceKillHandle) clearTimeout(forceKillHandle);
+        if (killConfirmationHandle) clearTimeout(killConfirmationHandle);
+        if (containmentPollHandle) clearTimeout(containmentPollHandle);
+      };
+      const settle = (callback: () => void) => {
+        if (settled) return;
+        settled = true;
+        clearCommandTimers();
+        callback();
       };
       child.on('close', (code: number | null) => {
-        clearCommandTimers();
+        if (timeoutError) {
+          if (!isCommandProcessGroupAlive(child)) settle(() => reject(timeoutError!));
+          return;
+        }
         if (code === 0) {
-          resolve();
+          settle(resolve);
         } else {
           const message =
             code === null
@@ -171,27 +200,56 @@ async function runShellCommand(options: {
           const error = new Error(message) as Error & { output?: string; pid?: number };
           error.output = capture.visibleOutput();
           error.pid = child.pid;
-          reject(error);
+          settle(() => reject(error));
         }
       });
       child.on('error', (error: Error) => {
-        clearCommandTimers();
+        if (timeoutError) {
+          if (!isCommandProcessGroupAlive(child)) settle(() => reject(timeoutError!));
+          return;
+        }
         const enriched = error as Error & { output?: string; pid?: number };
         enriched.output = capture.visibleOutput();
         enriched.pid = child.pid;
-        reject(enriched);
+        settle(() => reject(enriched));
       });
       if (timeoutMs !== undefined) {
         timeoutHandle = setTimeout(() => {
-          const error = new Error(
+          timeoutError = new Error(
             `${commandType} command exceeded its ${timeoutMs}ms deadline`
           ) as Error & { output?: string; pid?: number };
-          error.output = capture.visibleOutput();
-          error.pid = child.pid;
+          timeoutError.output = capture.visibleOutput();
+          timeoutError.pid = child.pid;
           terminateCommandProcess(child, 'SIGTERM');
-          forceKillHandle = setTimeout(() => terminateCommandProcess(child, 'SIGKILL'), 5_000);
-          forceKillHandle.unref();
-          reject(error);
+          // Do not settle while the command tree can still mutate its provider.
+          // The ref'd escalation timer keeps the CLI alive through containment.
+          forceKillHandle = setTimeout(() => {
+            terminateCommandProcess(child, 'SIGKILL');
+            const confirmContainment = () => {
+              if (!isCommandProcessGroupAlive(child)) {
+                settle(() => reject(timeoutError!));
+                return;
+              }
+              containmentPollHandle = setTimeout(
+                confirmContainment,
+                ENVIRONMENT_COMMAND_CONTAINMENT_POLL_MS
+              );
+            };
+            killConfirmationHandle = setTimeout(() => {
+              const error = new Error(
+                `${commandType} command containment could not be verified after SIGKILL`
+              ) as Error & {
+                output?: string;
+                pid?: number;
+                containmentUnverified?: boolean;
+              };
+              error.output = capture.visibleOutput();
+              error.pid = child.pid;
+              error.containmentUnverified = true;
+              settle(() => reject(error));
+            }, ENVIRONMENT_COMMAND_KILL_CONFIRMATION_MS);
+            confirmContainment();
+          }, ENVIRONMENT_COMMAND_TERM_GRACE_MS);
         }, timeoutMs);
       }
     });
@@ -363,9 +421,6 @@ export async function handleEnvironmentLifecycle(
           last_health_check: null,
           last_error: null,
           last_command: null,
-          ...(payload.params.appUrl
-            ? { access_urls: [{ name: 'App', url: payload.params.appUrl }] }
-            : {}),
         },
         lifecycleGeneration
       );
@@ -384,9 +439,6 @@ export async function handleEnvironmentLifecycle(
         ),
       });
 
-      const accessUrls =
-        result.lifecycleResult?.access_urls ??
-        (payload.params.appUrl ? [{ name: 'App', url: payload.params.appUrl }] : undefined);
       const effectiveHealthUrl =
         result.lifecycleResult?.health_url ?? payload.params.healthCheckUrl;
       const completedAt = new Date().toISOString();
@@ -410,9 +462,7 @@ export async function handleEnvironmentLifecycle(
             pid: result.pid,
             started_at: startedAt,
           },
-          access_urls: accessUrls ?? null,
           lifecycle_result: result.lifecycleResult ?? null,
-          facts: Object.keys(result.facts).length > 0 ? result.facts : null,
           last_command: {
             action: payload.params.action,
             status: 'succeeded',
@@ -456,6 +506,7 @@ export async function handleEnvironmentLifecycle(
         // as an explicit clear sentinel because JSON drops undefined values.
         process: null,
         startup_deadline_at: null,
+        lifecycle_deadline_at: null,
         // Nuke destroys the environment, so any address it reported is now dead —
         // clear facts. Stop only pauses (a Codespace keeps its name and resumes
         // to the same URL), so facts are preserved there.
@@ -501,14 +552,33 @@ export async function handleEnvironmentLifecycle(
     const message = error instanceof Error ? error.message : String(error);
     const output =
       error instanceof Error ? (error as Error & { output?: string }).output : undefined;
+    const containmentUnverified =
+      error instanceof Error &&
+      (error as Error & { containmentUnverified?: boolean }).containmentUnverified === true;
 
     if (payload.params.action === 'sync') {
       return {
         success: false,
         error: {
-          code: 'ENVIRONMENT_COMMAND_FAILED',
+          code: containmentUnverified
+            ? 'ENVIRONMENT_CONTAINMENT_UNVERIFIED'
+            : 'ENVIRONMENT_COMMAND_FAILED',
           message,
           details: { branchId, action: 'sync', output },
+        },
+      };
+    }
+
+    // Do not publish a retryable terminal state while a command tree may still
+    // be mutating the external provider. Its persisted lifecycle boundary and
+    // deadline remain authoritative for operator/reconciler recovery.
+    if (containmentUnverified) {
+      return {
+        success: false,
+        error: {
+          code: 'ENVIRONMENT_CONTAINMENT_UNVERIFIED',
+          message,
+          details: { branchId, action: payload.params.action, output },
         },
       };
     }
@@ -531,6 +601,7 @@ export async function handleEnvironmentLifecycle(
         branchId,
         {
           status: 'error',
+          lifecycle_deadline_at: null,
           last_health_check: {
             timestamp: new Date().toISOString(),
             status: 'unhealthy',

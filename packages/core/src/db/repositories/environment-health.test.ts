@@ -43,9 +43,9 @@ async function seedStartingBranch(
 }
 
 describe('EnvironmentHealthRepository lifecycle fencing', () => {
-  dbTest('admits only non-archived starting and running environments', async ({ db }) => {
+  dbTest('admits only non-archived active or settling environments', async ({ db }) => {
     const health = new EnvironmentHealthRepository(db);
-    for (const status of ['starting', 'running'] as const) {
+    for (const status of ['starting', 'running', 'stopping'] as const) {
       const branch = await seedStartingBranch(db, status);
       const result = await health.claim({
         branchId: branch.branch_id,
@@ -59,7 +59,7 @@ describe('EnvironmentHealthRepository lifecycle fencing', () => {
       }
     }
 
-    for (const status of ['stopped', 'stopping', 'error'] as const) {
+    for (const status of ['stopped', 'error'] as const) {
       const branch = await seedStartingBranch(db, status);
       await expect(
         health.claim({
@@ -91,6 +91,51 @@ describe('EnvironmentHealthRepository lifecycle fencing', () => {
         identity: { instanceId: 'daemon-a', bootId: 'boot-a' },
       })
     ).resolves.toEqual({ outcome: 'unavailable' });
+  });
+
+  dbTest('expires a lost stopping attempt and fences its late callback', async ({ db }) => {
+    const branches = new BranchRepository(db);
+    const health = new EnvironmentHealthRepository(db);
+    const seeded = await seedStartingBranch(db, 'stopping');
+    const branch = await branches.update(seeded.branch_id, {
+      environment_instance: {
+        ...seeded.environment_instance,
+        status: 'stopping',
+        lifecycle_deadline_at: new Date(Date.now() - 1_000).toISOString(),
+      },
+    });
+    const claim = await health.claim({
+      branchId: branch.branch_id,
+      claimToken: 'lost-stop',
+      leaseDurationMs: 30_000,
+      identity: { instanceId: 'daemon-b', bootId: 'boot-b' },
+    });
+    expect(claim).toMatchObject({ outcome: 'claimed' });
+    if (claim.outcome !== 'claimed') throw new Error('expected health claim');
+
+    await expect(
+      health.commit({
+        branchId: branch.branch_id,
+        claimToken: claim.claim.claim_token,
+        environmentGeneration: claim.claim.environment_generation,
+        observation: {
+          status: 'unknown',
+          message: 'settling',
+          recordWhileStarting: true,
+        },
+      })
+    ).resolves.toMatchObject({
+      outcome: 'committed',
+      stateChanged: true,
+      environmentStatus: 'error',
+    });
+    await expect(branches.findById(branch.branch_id)).resolves.toMatchObject({
+      environment_generation: (branch.environment_generation ?? 0) + 1,
+      environment_instance: {
+        status: 'error',
+        last_error: expect.stringMatching(/durable deadline/),
+      },
+    });
   });
 
   dbTest('promotes healthy startup and records unhealthy running observations', async ({ db }) => {

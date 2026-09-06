@@ -63,7 +63,7 @@ export type EnvironmentHealthCommitResult =
        * rules can demote it here (unreachable, or a startup that never became
        * reachable).
        */
-      environmentStatus: 'starting' | 'running' | 'error';
+      environmentStatus: 'starting' | 'running' | 'stopping' | 'error';
     };
 
 function startupDeadlineAtMs(environment: BranchEnvironmentInstance): number | undefined {
@@ -115,7 +115,11 @@ export class EnvironmentHealthDiscoveryRepository {
     })
       .from(branches)
       .where(
-        and(eq(branches.archived, false), or(eq(status, 'starting'), eq(status, 'running')), after)
+        and(
+          eq(branches.archived, false),
+          or(eq(status, 'starting'), eq(status, 'running'), eq(status, 'stopping')),
+          after
+        )
       )
       .orderBy(asc(tenantColumn), asc(branches.branch_id))
       .limit(options.limit)
@@ -187,7 +191,11 @@ export class EnvironmentHealthRepository {
         const status = (
           row?.data as { environment_instance?: BranchEnvironmentInstance } | undefined
         )?.environment_instance?.status;
-        if (!row || row.archived || (status !== 'starting' && status !== 'running')) {
+        if (
+          !row ||
+          row.archived ||
+          (status !== 'starting' && status !== 'running' && status !== 'stopping')
+        ) {
           return { outcome: 'unavailable' };
         }
         const now = await this.mutationNow(txDb, input.branchId);
@@ -275,7 +283,7 @@ export class EnvironmentHealthRepository {
         if (
           !row ||
           row.archived ||
-          (status !== 'starting' && status !== 'running') ||
+          (status !== 'starting' && status !== 'running' && status !== 'stopping') ||
           row.environment_generation !== input.environmentGeneration ||
           row.environment_health_claim_token !== input.claimToken
         ) {
@@ -328,7 +336,7 @@ export class EnvironmentHealthRepository {
         and(
           eq(branches.branch_id, input.branchId),
           eq(branches.archived, false),
-          or(eq(status, 'starting'), eq(status, 'running')),
+          or(eq(status, 'starting'), eq(status, 'running'), eq(status, 'stopping')),
           eq(branches.environment_generation, input.environmentGeneration),
           eq(branches.environment_health_claim_token, input.claimToken),
           expiry
@@ -366,7 +374,7 @@ export class EnvironmentHealthRepository {
         if (
           !row ||
           row.archived ||
-          (status !== 'starting' && status !== 'running') ||
+          (status !== 'starting' && status !== 'running' && status !== 'stopping') ||
           row.environment_generation !== input.environmentGeneration ||
           row.environment_health_claim_token !== input.claimToken ||
           !row.environment_health_claim_expires_at ||
@@ -375,6 +383,58 @@ export class EnvironmentHealthRepository {
           return { outcome: 'stale' };
         }
         const activeEnvironment = environment as BranchEnvironmentInstance;
+
+        const lifecycleDeadlineAt = Date.parse(activeEnvironment.lifecycle_deadline_at ?? '');
+        const timedOutLifecycle =
+          status === 'stopping' &&
+          Number.isFinite(lifecycleDeadlineAt) &&
+          lifecycleDeadlineAt <= now.getTime();
+
+        // `stopping` is coordination-only: there is no health endpoint to
+        // probe. Its persisted lifecycle deadline lets any replica expire a
+        // command whose claiming daemon or delegated launcher disappeared.
+        if (status === 'stopping') {
+          const nextEnvironment: BranchEnvironmentInstance = timedOutLifecycle
+            ? {
+                ...activeEnvironment,
+                status: 'error',
+                lifecycle_deadline_at: undefined,
+                last_health_check: {
+                  timestamp: now.toISOString(),
+                  status: 'unhealthy',
+                  message: 'Environment lifecycle command exceeded its durable deadline',
+                },
+                last_error: 'Environment lifecycle command exceeded its durable deadline',
+              }
+            : activeEnvironment;
+          if (timedOutLifecycle) {
+            await update(txDb, branches)
+              .set({
+                data: { ...data, environment_instance: nextEnvironment },
+                updated_at: now,
+                environment_generation: sql`${branches.environment_generation} + 1`,
+                environment_health_claim_token: null,
+                environment_health_claimed_at: null,
+                environment_health_claim_expires_at: null,
+                environment_health_next_observation_at: null,
+                environment_health_claim_instance_id: null,
+                environment_health_claim_boot_id: null,
+              })
+              .where(
+                and(
+                  eq(branches.branch_id, input.branchId),
+                  eq(branches.environment_health_claim_token, input.claimToken)
+                )
+              )
+              .run();
+          }
+          return {
+            outcome: 'committed',
+            mutated: timedOutLifecycle,
+            stateChanged: timedOutLifecycle,
+            environmentStatus: timedOutLifecycle ? 'error' : 'stopping',
+          };
+        }
 
         // Same rules the standalone monitor applies, so an environment reaches
         // the same status under either monitor. Previously this promoted

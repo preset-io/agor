@@ -541,6 +541,13 @@ export interface BranchEnvironmentInstance {
   startup_deadline_at?: string;
 
   /**
+   * Persisted fleet-wide deadline for the current Stop/Nuke/Restart Stop
+   * attempt. Health coordination expires a lost delegated launch from any
+   * daemon replica and advances the lifecycle generation before retry.
+   */
+  lifecycle_deadline_at?: string;
+
+  /**
    * Last health check result
    */
   last_health_check?: {
@@ -672,6 +679,7 @@ export const BRANCH_ENVIRONMENT_CLEARABLE_FIELDS = [
   'facts',
   'lifecycle_result',
   'startup_deadline_at',
+  'lifecycle_deadline_at',
   'source_sync',
   // Derived from the typed lifecycle result, so it is cleared alongside the
   // template-value cache whenever that result becomes stale.

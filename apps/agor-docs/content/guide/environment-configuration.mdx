@@ -179,7 +179,10 @@ dispatches rather than letting the command discover them later:
 If either is tighter than the variant asks for, the **command deadline is
 shortened** to fit — the command still runs, and still ends before its authority
 and its waiter do. Agor only refuses outright when a ceiling leaves no room for
-any command at all.
+any command at all. The same credential rule applies to Start: its effective
+persisted startup deadline is shortened before the lifecycle generation is
+opened, so a configured 24-hour startup can never outlive a 24-hour command
+credential plus settlement time.
 
 ### `extends` (single-level only)
 
@@ -533,11 +536,19 @@ concurrency admission as agent runs; they never execute inside daemon Pods.
 Start has a persisted startup deadline. Stop, Nuke, Sync, and Restart's verified
 Stop phase use the variant's bounded `lifecycle_timeout_ms`; the shell deadline,
 credential lifetime, response waiter, and durable Sync lease derive from that
-one budget. Process groups are terminated on deadline, and generation-fenced
-settlement prevents a late executor from overwriting a newer lifecycle action.
-The commands themselves must be idempotent reconcilers: a retry after a Pod or
-daemon loss must converge the provider to the requested state rather than
-blindly creating another resource.
+one budget. Stop/Nuke also persist a fleet-visible lifecycle deadline: another
+daemon can expire a claim whose owner vanished, advance its generation, and
+make retry safe. Process groups are terminated with TERM then KILL, and Agor
+does not settle until the process group is absent (or explicitly reports
+containment as unverified). Generation-fenced settlement prevents a late executor from
+overwriting a newer lifecycle action.
+
+Provider mutations are serialized per branch. Stop/Nuke cannot preempt an
+in-flight Start, and no lifecycle action can overtake a live Sync lease; wait
+for the bounded attempt to settle or expire. This avoids a late Start recreating
+a resource after Stop/Nuke. The commands themselves must still be idempotent
+reconcilers: a retry after a Pod or daemon loss must converge the provider to
+the requested state rather than blindly creating another resource.
 
 Agor Cloud's supported pattern is a short-lived command such as
 `start-github-codespaces.sh`: create or reconcile a remote environment, emit

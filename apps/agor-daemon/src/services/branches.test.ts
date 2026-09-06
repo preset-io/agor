@@ -472,9 +472,7 @@ describe('BranchesService environment start async behavior', () => {
     ]);
 
     expect(result).not.toBe('timed-out');
-    expect(mockedSpawnExecutor).not.toHaveBeenCalled();
-
-    await waitForDeferredWork();
+    expect(mockedSpawnExecutor).toHaveBeenCalledTimes(1);
 
     expect(mockedSpawnExecutor).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -531,6 +529,20 @@ describe('BranchesService environment start async behavior', () => {
       beginLifecycle: true,
       expectedEnvironmentGeneration: 0,
       expectedEnvironmentStatus: 'stopped',
+    });
+  });
+
+  it('generation-fences an authoritative asynchronous launcher failure', async () => {
+    const { service, branch, environmentUpdates } = createStartHarness();
+    await runInTestTenantScope(() => service.startEnvironment(branch.branch_id));
+    const spawnOptions = mockedSpawnExecutor.mock.calls[0]?.[1];
+    expect(spawnOptions?.onExit).toEqual(expect.any(Function));
+
+    await spawnOptions?.onExit?.(127, { mode: 'local' });
+
+    expect(environmentUpdates.at(-1)).toMatchObject({
+      status: 'error',
+      last_error: expect.stringMatching(/failed to launch/),
     });
   });
 
@@ -723,9 +735,7 @@ describe('BranchesService environment start async behavior', () => {
     await runInTestTenantScope(() => service.restartEnvironment(branch.branch_id));
 
     expect(kill).toHaveBeenCalledWith('SIGTERM');
-    expect(mockedSpawnExecutor).not.toHaveBeenCalled();
-
-    await waitForDeferredWork();
+    expect(mockedSpawnExecutor).toHaveBeenCalledTimes(1);
 
     expect(mockedSpawnExecutor).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -1508,7 +1518,7 @@ describe('BranchesService environment start async behavior', () => {
   });
 
   it('accepts branch-scoped RPC envelope for updateEnvironment', async () => {
-    const { service } = createServiceHarness();
+    const { service, branchRepo } = createServiceHarness();
     const branch = {
       branch_id: 'wt-env-rpc' as BranchID,
       repo_id: 'repo-1',
@@ -1516,6 +1526,7 @@ describe('BranchesService environment start async behavior', () => {
       path: '/tmp/wt-env-rpc',
       created_by: 'user-1' as UUID,
       branch_unique_id: 1,
+      environment_generation: 3,
       environment_instance: {
         status: 'stopping',
         process: { pid: 123 },
@@ -1527,22 +1538,37 @@ describe('BranchesService environment start async behavior', () => {
       },
     };
     vi.spyOn(service, 'get').mockResolvedValue(branch as never);
-    const patchSpy = vi.spyOn(service, 'patch').mockImplementation(async (_id, data) => {
+    const update = vi.spyOn(branchRepo, 'update').mockImplementation(async (_id, data) => {
       return { ...branch, ...(data as object) } as never;
     });
 
-    await service.updateEnvironment({
-      branch_id: branch.branch_id,
-      environment_update: {
-        status: 'stopped',
-        // Remote executor calls cross JSON, where undefined is dropped; null is
-        // the explicit clear sentinel.
-        process: null,
-        last_health_check: null,
+    await service.updateEnvironment(
+      {
+        branch_id: branch.branch_id,
+        expected_environment_generation: 3,
+        environment_update: {
+          status: 'stopped',
+          // Remote executor calls cross JSON, where undefined is dropped; null is
+          // the explicit clear sentinel.
+          process: null,
+          last_health_check: null,
+        },
       },
-    });
+      {
+        provider: 'rest',
+        authentication: {
+          strategy: 'jwt',
+          payload: {
+            type: 'executor-session',
+            purpose: 'executor-command',
+            session_id: 'environment-stop',
+            branch_id: branch.branch_id,
+          },
+        },
+      } as never
+    );
 
-    const patchedEnvironment = patchSpy.mock.calls[0]?.[1]?.environment_instance as
+    const patchedEnvironment = update.mock.calls[0]?.[1]?.environment_instance as
       | Record<string, unknown>
       | undefined;
     expect(patchedEnvironment).toMatchObject({ status: 'stopped' });
@@ -1552,14 +1578,14 @@ describe('BranchesService environment start async behavior', () => {
     // to pass while the field silently survived in the database.
     expect(patchedEnvironment?.process).toBeNull();
     expect(patchedEnvironment?.last_health_check).toBeNull();
-    expect(patchSpy).toHaveBeenCalledWith(
+    expect(update).toHaveBeenCalledWith(
       branch.branch_id,
       expect.objectContaining({
         environment_instance: expect.objectContaining({
           status: 'stopped',
         }),
       }),
-      undefined
+      expect.objectContaining({ expectedEnvironmentGeneration: 3 })
     );
   });
 
@@ -1582,12 +1608,26 @@ describe('BranchesService environment start async behavior', () => {
     } as never);
 
     await runInTestTenantScope(() =>
-      service.updateEnvironment({
-        branch_id: branch.branch_id,
-        environment_update: { status: 'running' },
-        expected_environment_generation: 7,
-        expected_environment_status: 'starting',
-      })
+      service.updateEnvironment(
+        {
+          branch_id: branch.branch_id,
+          environment_update: { status: 'running' },
+          expected_environment_generation: 7,
+          expected_environment_status: 'starting',
+        },
+        {
+          provider: 'rest',
+          authentication: {
+            strategy: 'jwt',
+            payload: {
+              type: 'executor-session',
+              purpose: 'executor-command',
+              session_id: 'environment-start',
+              branch_id: branch.branch_id,
+            },
+          },
+        } as never
+      )
     );
 
     expect(update).toHaveBeenCalledWith(
@@ -1602,7 +1642,7 @@ describe('BranchesService environment start async behavior', () => {
     );
   });
 
-  it('rejects direct transport forgery of daemon-owned source reconciliation state', async () => {
+  it('rejects ordinary member transport forgery of environment state', async () => {
     const { service } = createServiceHarness();
     const branch = {
       branch_id: 'wt-env-source-sync' as BranchID,
@@ -1620,25 +1660,137 @@ describe('BranchesService environment start async behavior', () => {
       service.updateEnvironment(
         {
           branch_id: branch.branch_id,
-          environment_update: {
-            source_sync: {
-              desired_revision: 'a'.repeat(40),
-              desired_at: '2026-09-01T00:00:00.000Z',
-              applied_revision: 'a'.repeat(40),
-            },
-          },
+          environment_update: { status: 'running' },
         },
         {
           provider: 'rest',
           user: { user_id: 'user-1', role: 'member' },
         } as never
       )
-    ).rejects.toThrow('source reconciliation state is daemon-owned');
+    ).rejects.toThrow('exact executor command scope');
     expect(patchSpy).not.toHaveBeenCalled();
   });
 
+  it.each([
+    {
+      label: 'wrong branch',
+      sessionId: 'environment-start',
+      tokenBranchId: 'another-branch',
+      includeGeneration: true,
+      expected: 'exact executor command scope',
+    },
+    {
+      label: 'missing generation',
+      sessionId: 'environment-start',
+      tokenBranchId: 'wt-env-callback-negative',
+      includeGeneration: false,
+      expected: 'expected generation',
+    },
+    {
+      label: 'wrong action',
+      sessionId: 'environment-stop',
+      tokenBranchId: 'wt-env-callback-negative',
+      includeGeneration: true,
+      expected: 'callback status is invalid',
+    },
+  ])('rejects an executor callback with $label authority', async (testCase) => {
+    const { service, branchRepo } = createServiceHarness();
+    const branch = {
+      branch_id: 'wt-env-callback-negative' as BranchID,
+      repo_id: 'repo-1',
+      name: 'wt-env-callback-negative',
+      path: '/tmp/wt-env-callback-negative',
+      created_by: 'user-1' as UUID,
+      branch_unique_id: 1,
+      environment_generation: 4,
+      environment_instance: { status: 'starting' },
+    };
+    vi.spyOn(service, 'get').mockResolvedValue(branch as never);
+    const update = vi.spyOn(branchRepo, 'update').mockResolvedValue(branch as never);
+
+    await expect(
+      service.updateEnvironment(
+        {
+          branch_id: branch.branch_id,
+          ...(testCase.includeGeneration ? { expected_environment_generation: 4 } : {}),
+          environment_update: { status: 'running' },
+        },
+        {
+          provider: 'rest',
+          authentication: {
+            strategy: 'jwt',
+            payload: {
+              type: 'executor-session',
+              purpose: 'executor-command',
+              session_id: testCase.sessionId,
+              branch_id: testCase.tokenBranchId,
+            },
+          },
+        } as never
+      )
+    ).rejects.toThrow(testCase.expected);
+    expect(update).not.toHaveBeenCalled();
+  });
+
+  it('validates a Start result and derives callback URLs and template facts server-side', async () => {
+    const { service, branchRepo } = createServiceHarness();
+    const branch = {
+      branch_id: 'wt-env-result-callback' as BranchID,
+      repo_id: 'repo-1',
+      name: 'wt-env-result-callback',
+      path: '/tmp/wt-env-result-callback',
+      created_by: 'user-1' as UUID,
+      branch_unique_id: 1,
+      environment_generation: 4,
+      environment_instance: { status: 'starting' },
+    };
+    vi.spyOn(service, 'get').mockResolvedValue(branch as never);
+    const update = vi.spyOn(branchRepo, 'update').mockResolvedValue(branch as never);
+
+    await service.updateEnvironment(
+      {
+        branch_id: branch.branch_id,
+        expected_environment_generation: 4,
+        environment_update: {
+          lifecycle_result: {
+            version: 1,
+            access_urls: [{ name: 'App', url: 'https://managed.example.test' }],
+            resource: { provider: 'codespaces', id: 'remote-123' },
+          },
+        },
+      },
+      {
+        provider: 'rest',
+        authentication: {
+          strategy: 'jwt',
+          payload: {
+            type: 'executor-session',
+            purpose: 'executor-command',
+            session_id: 'environment-start',
+            branch_id: branch.branch_id,
+          },
+        },
+      } as never
+    );
+
+    expect(update).toHaveBeenCalledWith(
+      branch.branch_id,
+      expect.objectContaining({
+        environment_instance: expect.objectContaining({
+          access_urls: [{ name: 'App', url: 'https://managed.example.test/' }],
+          facts: expect.objectContaining({
+            url: 'https://managed.example.test/',
+            resource_id: 'remote-123',
+            resource_provider: 'codespaces',
+          }),
+        }),
+      }),
+      expect.objectContaining({ expectedEnvironmentGeneration: 4 })
+    );
+  });
+
   it('allows only the exact nuke executor scope to clear source reconciliation state', async () => {
-    const { service } = createServiceHarness();
+    const { service, branchRepo } = createServiceHarness();
     const branch = {
       branch_id: 'wt-env-source-nuke' as BranchID,
       repo_id: 'repo-1',
@@ -1646,6 +1798,7 @@ describe('BranchesService environment start async behavior', () => {
       path: '/tmp/wt-env-source-nuke',
       created_by: 'user-1' as UUID,
       branch_unique_id: 1,
+      environment_generation: 8,
       environment_instance: {
         status: 'stopping',
         source_sync: {
@@ -1655,13 +1808,14 @@ describe('BranchesService environment start async behavior', () => {
       },
     };
     vi.spyOn(service, 'get').mockResolvedValue(branch as never);
-    const patchSpy = vi.spyOn(service, 'patch').mockImplementation(async (_id, data) => {
+    const update = vi.spyOn(branchRepo, 'update').mockImplementation(async (_id, data) => {
       return { ...branch, ...(data as object) } as never;
     });
 
     await service.updateEnvironment(
       {
         branch_id: branch.branch_id,
+        expected_environment_generation: 8,
         environment_update: { source_sync: null },
       },
       {
@@ -1679,7 +1833,7 @@ describe('BranchesService environment start async behavior', () => {
       } as never
     );
 
-    expect(patchSpy).toHaveBeenCalledWith(
+    expect(update).toHaveBeenCalledWith(
       branch.branch_id,
       expect.objectContaining({
         environment_instance: expect.objectContaining({ source_sync: null }),
@@ -3596,7 +3750,6 @@ describe('BranchesService environment health requests', () => {
 
   it.each([
     { status: 'stopped' as const, archived: false },
-    { status: 'stopping' as const, archived: false },
     { status: 'running' as const, archived: true },
   ])('does not probe an inactive environment (%o)', async ({ status, archived }) => {
     const branch = {
@@ -4298,6 +4451,48 @@ describe('syncEnvironment exact desired/applied contract', () => {
     expect(fail).toHaveBeenCalledWith(
       expect.objectContaining({ revision, message: expect.stringContaining('expected') })
     );
+  });
+
+  it('demotes the environment without retrying when sync process containment is unverified', async () => {
+    const { service, branch, complete, fail } = harness();
+    vi.spyOn(service as never, 'getCanonicalBranch').mockResolvedValue(branch as never);
+    vi.spyOn(service as never, 'renderEnvironmentSyncCommand').mockResolvedValue('sync exact');
+    const containmentError = Object.assign(new Error('sync containment could not be verified'), {
+      code: 'ENVIRONMENT_CONTAINMENT_UNVERIFIED',
+    });
+    vi.spyOn(service as never, 'runEnvironmentExecutor').mockRejectedValue(containmentError);
+    const update = vi.spyOn(service, 'updateEnvironment').mockResolvedValue(branch as never);
+
+    await (
+      service as unknown as {
+        runClaimedEnvironmentSync: (id: BranchID, attempt: unknown) => Promise<void>;
+      }
+    ).runClaimedEnvironmentSync('wt-sync-race' as BranchID, {
+      token: 'claim-a',
+      revision,
+      environment_generation: 1,
+      started_at: new Date().toISOString(),
+      lease_expires_at: new Date(Date.now() + 60_000).toISOString(),
+      instance_id: 'daemon-a',
+      boot_id: 'boot-a',
+      requested_by_user_id: userId,
+    });
+
+    expect(update).toHaveBeenCalledWith(
+      'wt-sync-race',
+      expect.objectContaining({
+        status: 'error',
+        last_error: expect.stringContaining('containment could not be verified'),
+      }),
+      undefined,
+      {
+        beginLifecycle: true,
+        expectedEnvironmentGeneration: 1,
+        expectedEnvironmentStatus: 'running',
+      }
+    );
+    expect(complete).not.toHaveBeenCalled();
+    expect(fail).not.toHaveBeenCalled();
   });
 
   it('requires the same typed acknowledgement from a sync webhook', async () => {

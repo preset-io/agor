@@ -28,10 +28,10 @@ const repo = {
   },
 } as Repo;
 
-function renderTab() {
+function renderTab(branchOverride: Branch = branch) {
   return render(
     <AntApp>
-      <EnvironmentTab branch={branch} repo={repo} client={null} />
+      <EnvironmentTab branch={branchOverride} repo={repo} client={null} />
     </AntApp>
   );
 }
@@ -89,5 +89,15 @@ describe('EnvironmentTab deployment disclaimer', () => {
     expect(
       within(alert as HTMLElement).queryByRole('link', { name: 'unsafe' })
     ).not.toBeInTheDocument();
+  });
+
+  it('does not offer an overlapping provider mutation while Start is settling', () => {
+    renderTab({
+      ...branch,
+      environment_instance: { status: 'starting' },
+    });
+
+    expect(screen.getByText('Stop').closest('button')).toBeDisabled();
+    expect(screen.getByText('Restart').closest('button')).toBeDisabled();
   });
 });

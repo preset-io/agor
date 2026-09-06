@@ -667,7 +667,14 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
                 icon={isStopping ? <LoadingOutlined /> : <PoweroffOutlined />}
                 onClick={handleStop}
                 loading={isStopping}
-                disabled={!canTriggerEnv}
+                disabled={
+                  !canTriggerEnv ||
+                  envStatus === 'starting' ||
+                  envStatus === 'stopping' ||
+                  isStarting ||
+                  isStopping ||
+                  isRestarting
+                }
                 title={triggerDisabledTooltip}
                 danger
               >
@@ -677,7 +684,14 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
                 size="small"
                 icon={isRestarting ? <LoadingOutlined /> : <ReloadOutlined />}
                 onClick={handleRestart}
-                disabled={!canTriggerEnv || isStarting || isStopping || isRestarting}
+                disabled={
+                  !canTriggerEnv ||
+                  envStatus === 'starting' ||
+                  envStatus === 'stopping' ||
+                  isStarting ||
+                  isStopping ||
+                  isRestarting
+                }
                 loading={isRestarting}
                 title={triggerDisabledTooltip}
               >
@@ -688,7 +702,15 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
                   size="small"
                   icon={isNuking ? <LoadingOutlined /> : <FireOutlined />}
                   onClick={handleNuke}
-                  disabled={!canTriggerEnv || isStarting || isStopping || isRestarting || isNuking}
+                  disabled={
+                    !canTriggerEnv ||
+                    envStatus === 'starting' ||
+                    envStatus === 'stopping' ||
+                    isStarting ||
+                    isStopping ||
+                    isRestarting ||
+                    isNuking
+                  }
                   loading={isNuking}
                   danger
                   title={

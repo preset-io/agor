@@ -209,11 +209,29 @@ export function resolveEnvironmentLifecycleBudget(
 }
 
 /** Bounds for one Start attempt, whose deadline is the branch's startup policy. */
-export function resolveEnvironmentStartBudget(value?: unknown): {
+export function resolveEnvironmentStartBudget(
+  value?: unknown,
+  ceilings: { credentialCeilingMs?: number } = {}
+): {
   startupTimeoutMs: number;
   credentialLifetimeMs: number;
 } {
-  const startupTimeoutMs = resolveEnvironmentStartupTimeoutMs(value);
+  const requested = resolveEnvironmentStartupTimeoutMs(value);
+  const startupTimeoutMs =
+    ceilings.credentialCeilingMs === undefined
+      ? requested
+      : Math.min(
+          requested,
+          ceilings.credentialCeilingMs - ENVIRONMENT_LIFECYCLE_SETTLEMENT_MARGIN_MS
+        );
+  if (startupTimeoutMs < ENVIRONMENT_STARTUP_TIMEOUT_MIN_MS) {
+    throw new Error(
+      'Configured executor credential ceiling leaves no room for an environment Start command: ' +
+        `${requested}ms was requested but only ${startupTimeoutMs}ms remains after reserving ` +
+        `${ENVIRONMENT_LIFECYCLE_SETTLEMENT_MARGIN_MS}ms for settlement. Raise ` +
+        'execution.session_token_expiration_ms.'
+    );
+  }
   return {
     startupTimeoutMs,
     credentialLifetimeMs: startupTimeoutMs + ENVIRONMENT_LIFECYCLE_SETTLEMENT_MARGIN_MS,

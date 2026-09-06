@@ -121,6 +121,19 @@ export class EnvironmentLifecycleConflictError extends RepositoryError {
   }
 }
 
+export class EnvironmentLifecycleBusyError extends RepositoryError {
+  constructor(
+    readonly branchId: BranchID,
+    readonly leaseExpiresAt: string
+  ) {
+    super(
+      `Environment lifecycle for branch ${branchId} is waiting for source synchronization ` +
+        `through ${leaseExpiresAt}`
+    );
+    this.name = 'EnvironmentLifecycleBusyError';
+  }
+}
+
 type BranchUpdateOptions = {
   preserveUpdatedAt?: boolean;
   /** Explicit lifecycle boundary, including starting -> starting retries. */
@@ -129,6 +142,8 @@ type BranchUpdateOptions = {
   expectedEnvironmentGeneration?: number;
   /** Optional state precondition checked under the same row lock as the write. */
   expectedEnvironmentStatus?: NonNullable<Branch['environment_instance']>['status'];
+  /** Refuse to open a provider-mutation boundary while a live Sync lease owns it. */
+  rejectActiveEnvironmentSync?: boolean;
 };
 
 function isSQLiteBusyError(error: unknown): boolean {
@@ -546,7 +561,10 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
     const rows = await select(this.db, columns)
       .from(branches)
       .where(
-        and(eq(branches.archived, false), or(eq(statusExpr, 'running'), eq(statusExpr, 'starting')))
+        and(
+          eq(branches.archived, false),
+          or(eq(statusExpr, 'running'), eq(statusExpr, 'starting'), eq(statusExpr, 'stopping'))
+        )
       )
       .all();
 
@@ -711,6 +729,33 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
       }
 
       const current = this.rowToBranch(currentRow, baseUrl);
+
+      if (options?.rejectActiveEnvironmentSync) {
+        const attempt = current.environment_instance?.source_sync?.active_attempt;
+        const leaseExpiresAt = Date.parse(attempt?.lease_expires_at ?? '');
+        let now = new Date();
+        if (isPostgresDatabase(this.db)) {
+          const databaseNow = await select(txAsDb(tx), {
+            value: sql<Date>`clock_timestamp()`,
+          })
+            .from(branches)
+            .where(eq(branches.branch_id, current.branch_id))
+            .one();
+          if (!databaseNow) throw new EntityNotFoundError('Branch', current.branch_id);
+          now = databaseNow.value instanceof Date ? databaseNow.value : new Date(databaseNow.value);
+        }
+        if (
+          attempt &&
+          attempt.environment_generation === currentRow.environment_generation &&
+          Number.isFinite(leaseExpiresAt) &&
+          leaseExpiresAt > now.getTime()
+        ) {
+          throw new EnvironmentLifecycleBusyError(
+            current.branch_id,
+            new Date(leaseExpiresAt).toISOString()
+          );
+        }
+      }
 
       if (
         options?.expectedEnvironmentGeneration !== undefined &&

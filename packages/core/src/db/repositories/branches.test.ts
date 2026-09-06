@@ -1054,6 +1054,50 @@ describe('BranchRepository.update', () => {
     );
   });
 
+  dbTest('serializes lifecycle claims behind a live source-sync lease', async ({ db }) => {
+    const repoRepo = new RepoRepository(db);
+    const branchRepo = new BranchRepository(db);
+    const repo = await repoRepo.create(createRepoData());
+    const created = await branchRepo.create(
+      createBranchData({
+        repo_id: repo.repo_id,
+        environment_instance: {
+          status: 'running',
+          source_sync: {
+            desired_revision: 'b'.repeat(40),
+            desired_at: new Date().toISOString(),
+            active_attempt: {
+              token: 'sync-lease',
+              revision: 'b'.repeat(40),
+              environment_generation: 0,
+              started_at: new Date().toISOString(),
+              lease_expires_at: new Date(Date.now() + 60_000).toISOString(),
+              instance_id: 'daemon-a',
+              boot_id: 'boot-a',
+            },
+          },
+        },
+      })
+    );
+
+    await expect(
+      branchRepo.update(
+        created.branch_id,
+        { environment_instance: { status: 'stopping' } },
+        {
+          invalidateEnvironmentObservation: true,
+          expectedEnvironmentGeneration: 0,
+          expectedEnvironmentStatus: 'running',
+          rejectActiveEnvironmentSync: true,
+        }
+      )
+    ).rejects.toMatchObject({ name: 'EnvironmentLifecycleBusyError' });
+    await expect(branchRepo.findById(created.branch_id)).resolves.toMatchObject({
+      environment_generation: 0,
+      environment_instance: { status: 'running' },
+    });
+  });
+
   dbTest('should update by full UUID and short ID', async ({ db }) => {
     const repoRepo = new RepoRepository(db);
     const wtRepo = new BranchRepository(db);
