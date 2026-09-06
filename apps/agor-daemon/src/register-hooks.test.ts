@@ -40,6 +40,7 @@ import {
   isPromptFlowPatchOnly,
   PROMPT_FLOW_PATCH_FIELDS,
   projectExecutorTaskSdkResponse,
+  protectExternalBranchCrud,
   protectExternalTaskCreate,
   protectFilesystemHomeWrite,
   protectServerManagedTaskWrites,
@@ -348,6 +349,80 @@ describe('protectExternalTaskCreate', () => {
     const hook = context({ status: TaskStatus.RUNNING }, null);
     expect(protectExternalTaskCreate(hook)).toBe(hook);
     expect(hook.data).toEqual({ status: TaskStatus.RUNNING });
+  });
+});
+
+describe('protectExternalBranchCrud', () => {
+  const context = (
+    data: unknown,
+    options: {
+      provider?: string | null;
+      method?: 'create' | 'patch' | 'update';
+      commandId?: string;
+      branchId?: string;
+    } = {}
+  ) =>
+    ({
+      id: options.branchId ?? 'branch-1',
+      method: options.method ?? 'patch',
+      data,
+      params: {
+        provider: options.provider === undefined ? 'rest' : options.provider,
+        user: { user_id: 'manager-1', role: 'admin' },
+        ...(options.commandId
+          ? {
+              authentication: {
+                strategy: 'jwt',
+                payload: {
+                  type: 'executor-session',
+                  purpose: 'executor-command',
+                  session_id: options.commandId,
+                  branch_id: options.branchId ?? 'branch-1',
+                },
+              },
+            }
+          : {}),
+      },
+    }) as unknown as HookContext;
+
+  it.each(['rest', 'socketio'])('rejects %s attempts to forge environment state', (provider) => {
+    expect(() =>
+      protectExternalBranchCrud(
+        context(
+          { environment_instance: { active_lifecycle_attempt: null, status: 'running' } },
+          { provider }
+        )
+      )
+    ).toThrow('server-managed: environment_instance');
+  });
+
+  it('rejects archive and filesystem state even for an administrator', () => {
+    expect(() =>
+      protectExternalBranchCrud(
+        context({ archived: true, filesystem_status: 'deleted' }, { provider: 'rest' })
+      )
+    ).toThrow('server-managed: archived');
+  });
+
+  it('allows ordinary client-authored metadata and trusted internal writes', () => {
+    const external = context({ notes: 'updated', board_id: 'board-2' });
+    expect(protectExternalBranchCrud(external)).toBe(external);
+    const internal = context(
+      { environment_instance: { status: 'stopped' }, archived: true },
+      { provider: null }
+    );
+    expect(protectExternalBranchCrud(internal)).toBe(internal);
+  });
+
+  it('keeps filesystem settlement out of generic CRUD even for an executor token', () => {
+    expect(() =>
+      protectExternalBranchCrud(
+        context(
+          { filesystem_status: 'ready' },
+          { commandId: 'git.branch.add', branchId: 'branch-1' }
+        )
+      )
+    ).toThrow('server-managed');
   });
 });
 

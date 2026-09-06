@@ -142,6 +142,15 @@ export class EnvironmentLifecycleAttemptConflictError extends RepositoryError {
   }
 }
 
+export class EnvironmentRetirementConflictError extends RepositoryError {
+  constructor(readonly branchId: BranchID) {
+    super(
+      `Environment for branch ${branchId} must be fully stopped before branch archival or deletion`
+    );
+    this.name = 'EnvironmentRetirementConflictError';
+  }
+}
+
 type BranchUpdateOptions = {
   preserveUpdatedAt?: boolean;
   /** Explicit lifecycle boundary, including starting -> starting retries. */
@@ -159,6 +168,8 @@ type BranchUpdateOptions = {
     action: 'start' | 'stop' | 'nuke';
     generation: number;
   };
+  /** Archive only after provider mutation ownership has terminally settled. */
+  requireEnvironmentRetired?: boolean;
 };
 
 function isSQLiteBusyError(error: unknown): boolean {
@@ -172,6 +183,19 @@ function isSQLiteBusyError(error: unknown): boolean {
  */
 export class BranchRepository implements BaseRepository<Branch, Partial<Branch>> {
   constructor(private db: Database) {}
+
+  private assertEnvironmentRetired(branch: Branch, generation: number): void {
+    const environment = branch.environment_instance;
+    const lifecycleAttempt = environment?.active_lifecycle_attempt;
+    const syncAttempt = environment?.source_sync?.active_attempt;
+    if (
+      (environment && environment.status !== 'stopped') ||
+      (lifecycleAttempt && lifecycleAttempt.environment_generation === generation) ||
+      (syncAttempt && syncAttempt.environment_generation === generation)
+    ) {
+      throw new EnvironmentRetirementConflictError(branch.branch_id);
+    }
+  }
 
   /**
    * Convert database row to Branch type.
@@ -745,6 +769,10 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
 
       const current = this.rowToBranch(currentRow, baseUrl);
 
+      if (options?.requireEnvironmentRetired) {
+        this.assertEnvironmentRetired(current, currentRow.environment_generation);
+      }
+
       if (options?.expectedEnvironmentLifecycleAttempt) {
         const expected = options.expectedEnvironmentLifecycleAttempt;
         const attempt = current.environment_instance?.active_lifecycle_attempt;
@@ -919,13 +947,29 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
   /**
    * Delete branch by ID
    */
-  async delete(id: string): Promise<void> {
+  async delete(id: string, options?: { requireEnvironmentRetired?: boolean }): Promise<void> {
     const existing = await this.findById(id);
     if (!existing) {
       throw new EntityNotFoundError('Branch', id);
     }
 
-    await deleteFrom(this.db, branches).where(eq(branches.branch_id, existing.branch_id)).run();
+    await runDatabaseTransaction(
+      this.db,
+      async (txDb) => {
+        await lockRowForUpdate(txDb, this.db, branches, eq(branches.branch_id, existing.branch_id));
+        const row = await select(txDb)
+          .from(branches)
+          .where(eq(branches.branch_id, existing.branch_id))
+          .one();
+        if (!row) throw new EntityNotFoundError('Branch', id);
+        if (options?.requireEnvironmentRetired) {
+          const current = this.rowToBranch(row, await getBaseUrl());
+          this.assertEnvironmentRetired(current, row.environment_generation);
+        }
+        await deleteFrom(txDb, branches).where(eq(branches.branch_id, existing.branch_id)).run();
+      },
+      { sqliteImmediate: true }
+    );
   }
 
   /**

@@ -159,6 +159,10 @@ function createClient(records: {
             records.patchedBranches?.push(data);
             return { ...(records.branch ?? {}), ...data };
           }),
+          settleFilesystem: vi.fn(async (data: Record<string, unknown>) => {
+            records.patchedBranches?.push(data);
+            return { ...(records.branch ?? {}), ...data };
+          }),
         };
       }
       if (name === `branches/${branchId}/render-environment`) {
@@ -298,7 +302,10 @@ describe('managed executor git/fs commands', () => {
         referencePath: '/trusted/repo',
       })
     );
-    expect(patchedBranches).toContainEqual({ filesystem_status: 'ready' });
+    expect(patchedBranches).toContainEqual({
+      branch_id: branchId,
+      filesystem_status: 'ready',
+    });
     expect(renderedBranches).toEqual([branchId]);
     expect(patchedBranches.some((patch) => 'start_command' in patch)).toBe(false);
   });

@@ -684,6 +684,77 @@ describe('BranchesService environment start async behavior', () => {
     });
   });
 
+  it('keeps Start ownership when a webhook dispatch has an ambiguous transport failure', async () => {
+    const { service, branch, environmentUpdates, resolveEnvironmentCommand } = createStartHarness();
+    resolveEnvironmentCommand.mockResolvedValue({
+      kind: 'webhook',
+      url: 'https://launcher.example.test/start',
+    } as never);
+    vi.spyOn(service as never, 'executeEnvironmentWebhook').mockRejectedValue(
+      Object.assign(new Error('request timed out after dispatch'), {
+        code: 'ENVIRONMENT_WEBHOOK_DISPATCH_AMBIGUOUS',
+      })
+    );
+
+    await expect(
+      runInTestTenantScope(() => service.startEnvironment(branch.branch_id))
+    ).rejects.toThrow('timed out after dispatch');
+
+    expect(environmentUpdates[0]).toMatchObject({
+      status: 'starting',
+      active_lifecycle_attempt: { action: 'start', environment_generation: 1 },
+    });
+    expect(environmentUpdates.at(-1)).toMatchObject({
+      last_error: 'request timed out after dispatch',
+      last_health_check: { status: 'unknown' },
+    });
+    expect(environmentUpdates.some((update) => update.status === 'error')).toBe(false);
+    expect(
+      environmentUpdates.some(
+        (update) =>
+          Object.hasOwn(update, 'active_lifecycle_attempt') &&
+          update.active_lifecycle_attempt === undefined
+      )
+    ).toBe(false);
+  });
+
+  it('classifies a webhook that receives the request but never responds as ambiguous', async () => {
+    const { service } = createServiceHarness();
+    const originalFetch = globalThis.fetch;
+    vi.useFakeTimers();
+    globalThis.fetch = vi.fn((_url, init) => {
+      return new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener('abort', () => {
+          reject(new DOMException('The operation was aborted', 'AbortError'));
+        });
+      });
+    }) as never;
+    try {
+      const request = (
+        service as unknown as {
+          executeEnvironmentWebhook(options: {
+            url: string;
+            branch: Record<string, unknown>;
+            commandType: 'start';
+          }): Promise<unknown>;
+        }
+      ).executeEnvironmentWebhook({
+        url: 'https://launcher.example.test/start',
+        branch: { branch_id: 'branch-1', name: 'branch-1' },
+        commandType: 'start',
+      });
+      const rejection = expect(request).rejects.toMatchObject({
+        code: 'ENVIRONMENT_WEBHOOK_DISPATCH_AMBIGUOUS',
+      });
+      await vi.advanceTimersByTimeAsync(30_000);
+      await rejection;
+      expect(globalThis.fetch).toHaveBeenCalledOnce();
+    } finally {
+      globalThis.fetch = originalFetch;
+      vi.useRealTimers();
+    }
+  });
+
   it('preserves daemon stop fallback when restarting a running shell env without stop command', async () => {
     const { service } = createServiceHarness();
     const kill = vi.fn();
@@ -1679,6 +1750,134 @@ describe('BranchesService environment start async behavior', () => {
     expect(patchSpy).not.toHaveBeenCalled();
   });
 
+  it('settles filesystem readiness only through the exact git.branch.add executor scope', async () => {
+    const { service, branchRepo, branchesService } = createServiceHarness();
+    const branch = {
+      branch_id: 'wt-filesystem-settlement' as BranchID,
+      repo_id: 'repo-1',
+      name: 'wt-filesystem-settlement',
+      path: '/tmp/wt-filesystem-settlement',
+      created_by: 'user-1' as UUID,
+      branch_unique_id: 1,
+      filesystem_status: 'ready' as const,
+    };
+    const update = vi.spyOn(branchRepo, 'update').mockResolvedValue(branch as never);
+
+    await service.settleFilesystem(
+      {
+        branch_id: branch.branch_id,
+        filesystem_status: 'ready',
+      },
+      {
+        provider: 'rest',
+        authentication: {
+          strategy: 'jwt',
+          payload: {
+            type: 'executor-session',
+            purpose: 'executor-command',
+            session_id: 'git.branch.add',
+            branch_id: branch.branch_id,
+          },
+        },
+        tenant: { tenant_id: 'tenant-test', source: 'auth_claim' },
+      } as never
+    );
+
+    expect(update).toHaveBeenCalledWith(branch.branch_id, {
+      filesystem_status: 'ready',
+    });
+    expect(branchesService.emit).toHaveBeenCalledWith(
+      'patched',
+      branch,
+      expect.objectContaining({
+        path: 'branches',
+        event: 'patched',
+        id: branch.branch_id,
+      })
+    );
+  });
+
+  it.each([
+    {
+      label: 'ordinary admin',
+      data: {
+        branch_id: 'wt-filesystem-negative',
+        filesystem_status: 'ready',
+      },
+      params: { provider: 'rest', user: { user_id: 'admin-1', role: 'admin' } },
+      expected: 'branch-scoped git.branch.add executor token',
+    },
+    {
+      label: 'wrong branch executor',
+      data: {
+        branch_id: 'wt-filesystem-negative',
+        filesystem_status: 'ready',
+      },
+      params: {
+        provider: 'rest',
+        authentication: {
+          strategy: 'jwt',
+          payload: {
+            type: 'executor-session',
+            purpose: 'executor-command',
+            session_id: 'git.branch.add',
+            branch_id: 'another-branch',
+          },
+        },
+      },
+      expected: 'branch-scoped git.branch.add executor token',
+    },
+    {
+      label: 'invalid failed settlement',
+      data: {
+        branch_id: 'wt-filesystem-negative',
+        filesystem_status: 'failed',
+      },
+      params: {
+        provider: 'rest',
+        authentication: {
+          strategy: 'jwt',
+          payload: {
+            type: 'executor-session',
+            purpose: 'executor-command',
+            session_id: 'git.branch.add',
+            branch_id: 'wt-filesystem-negative',
+          },
+        },
+      },
+      expected: 'Invalid branch filesystem settlement',
+    },
+    {
+      label: 'extra field',
+      data: {
+        branch_id: 'wt-filesystem-negative',
+        filesystem_status: 'ready',
+        environment_instance: { status: 'running' },
+      },
+      params: {
+        provider: 'rest',
+        authentication: {
+          strategy: 'jwt',
+          payload: {
+            type: 'executor-session',
+            purpose: 'executor-command',
+            session_id: 'git.branch.add',
+            branch_id: 'wt-filesystem-negative',
+          },
+        },
+      },
+      expected: 'Invalid branch filesystem settlement',
+    },
+  ])('rejects $label filesystem settlement', async ({ data, params, expected }) => {
+    const { service, branchRepo } = createServiceHarness();
+    const update = vi.spyOn(branchRepo, 'update');
+
+    await expect(service.settleFilesystem(data as never, params as never)).rejects.toThrow(
+      expected
+    );
+    expect(update).not.toHaveBeenCalled();
+  });
+
   it.each([
     {
       label: 'wrong branch',
@@ -2046,6 +2245,55 @@ describe('BranchesService environment start async behavior', () => {
       lifecycle_deadline_at: expect.any(String),
       active_lifecycle_attempt: { action: 'stop', environment_generation: 1 },
     });
+  });
+
+  it('keeps Stop ownership after an ambiguous webhook disconnect', async () => {
+    const { service } = createServiceHarness();
+    const branch = {
+      branch_id: 'wt-stop-ambiguous' as BranchID,
+      repo_id: 'repo-1',
+      name: 'wt-stop-ambiguous',
+      path: '/tmp/wt-stop-ambiguous',
+      created_by: 'user-1' as UUID,
+      branch_unique_id: 1,
+      environment_generation: 0,
+      environment_instance: { status: 'running' },
+      stop_command: 'https://launcher.example.test/stop',
+    };
+    vi.spyOn(service as never, 'loadEnvironmentForAction').mockResolvedValue(branch as never);
+    vi.spyOn(service as never, 'resolveEnvironmentCommand').mockResolvedValue({
+      kind: 'webhook',
+      url: branch.stop_command,
+    } as never);
+    vi.spyOn(service as never, 'executeEnvironmentWebhook').mockRejectedValue(
+      Object.assign(new Error('connection closed'), {
+        code: 'ENVIRONMENT_WEBHOOK_DISPATCH_AMBIGUOUS',
+      })
+    );
+    const updates: Array<Record<string, unknown>> = [];
+    let generation = 0;
+    vi.spyOn(service, 'updateEnvironment').mockImplementation(
+      async (_id, update, _params, options) => {
+        updates.push(update as Record<string, unknown>);
+        if (options?.beginLifecycle) generation += 1;
+        return {
+          ...branch,
+          environment_generation: generation,
+          environment_instance: { ...branch.environment_instance, ...update },
+        } as never;
+      }
+    );
+
+    await expect(service.stopEnvironment(branch.branch_id)).rejects.toThrow('connection closed');
+    expect(updates[0]).toMatchObject({
+      status: 'stopping',
+      active_lifecycle_attempt: { action: 'stop', environment_generation: 1 },
+    });
+    expect(updates.at(-1)).toMatchObject({
+      last_error: 'connection closed',
+      last_health_check: { status: 'unknown' },
+    });
+    expect(updates.some((update) => update.status === 'error')).toBe(false);
   });
 });
 
@@ -2427,7 +2675,7 @@ describe('BranchesService.unarchive', () => {
 
 describe('BranchesService.archiveOrDelete', () => {
   it('preserves placement and manually emits the tenant-aware archive transition', async () => {
-    const { service, boardObjectsService, sessionsService, branchesService } =
+    const { service, branchRepo, boardObjectsService, sessionsService, branchesService } =
       createServiceHarness();
     const branchId = 'wt-archive-op' as BranchID;
     const userId = 'user-1' as UUID;
@@ -2441,7 +2689,7 @@ describe('BranchesService.archiveOrDelete', () => {
       filesystem_status: 'ready',
       environment_instance: { status: 'stopped' },
     } as never);
-    vi.spyOn(service, 'patch').mockResolvedValue({
+    vi.spyOn(branchRepo, 'update').mockResolvedValue({
       branch_id: branchId,
       name: 'WT Archive Op',
       path: '/tmp/wt-archive-op',
@@ -2488,7 +2736,7 @@ describe('BranchesService.archiveOrDelete', () => {
   });
 
   it('delegates filesystem deletion with authoritative paths and no daemon bearer', async () => {
-    const { service, sessionTokenService } = createServiceHarness();
+    const { service, branchRepo, sessionTokenService } = createServiceHarness();
     const removeSdkHome = vi
       .spyOn(service as never, 'removeBranchSdkHomeAfterDelete')
       .mockImplementation(() => undefined);
@@ -2503,7 +2751,7 @@ describe('BranchesService.archiveOrDelete', () => {
       environment_instance: { status: 'stopped' },
     } as never;
     vi.spyOn(service, 'get').mockResolvedValue(branch);
-    vi.spyOn(service, 'patch').mockResolvedValue({ ...branch, archived: true });
+    vi.spyOn(branchRepo, 'update').mockResolvedValue({ ...branch, archived: true });
     const params = {
       user: { user_id: 'user-1' as UUID },
       tenant: { tenant_id: 'tenant-a', source: 'auth_claim' },
@@ -2612,7 +2860,9 @@ describe('BranchesService.archiveOrDelete', () => {
     expect(branchesService.remove).not.toHaveBeenCalled();
     expect(wrappedRemove).not.toHaveBeenCalled();
     expect(repositoryDelete).toHaveBeenCalledOnce();
-    expect(repositoryDelete).toHaveBeenCalledWith(branchId);
+    expect(repositoryDelete).toHaveBeenCalledWith(branchId, {
+      requireEnvironmentRetired: true,
+    });
     expect(branchesService.emit).toHaveBeenCalledOnce();
     expect(branchesService.emit).toHaveBeenCalledWith(
       'removed',
@@ -2766,6 +3016,78 @@ describe('BranchesService.archiveOrDelete', () => {
     expect(remove).not.toHaveBeenCalled();
     expect(sessionTokenService.generateCommandToken).not.toHaveBeenCalled();
     expect(mockedSpawnExecutor).not.toHaveBeenCalled();
+  });
+
+  it.each(['starting', 'stopping'] as const)(
+    'refuses archival while an environment is %s',
+    async (status) => {
+      const { service, branchRepo } = createServiceHarness();
+      const branchId = `wt-archive-${status}` as BranchID;
+      vi.spyOn(service, 'get').mockResolvedValue({
+        branch_id: branchId,
+        name: `Archive ${status}`,
+        path: `/tmp/${branchId}`,
+        archived: false,
+        environment_generation: 2,
+        environment_instance: {
+          status,
+          active_lifecycle_attempt: {
+            action: status === 'starting' ? 'start' : 'stop',
+            environment_generation: 2,
+            started_at: new Date().toISOString(),
+            deadline_at: new Date(Date.now() + 60_000).toISOString(),
+          },
+        },
+      } as never);
+      const metadataUpdate = vi.spyOn(branchRepo, 'update');
+      const params = {
+        user: { user_id: 'user-1' as UUID },
+        tenant: { tenant_id: 'tenant-a', source: 'auth_claim' },
+      } as never;
+      markBranchArchiveDeleteAuthorized(params, branchId, 'archive');
+
+      await expect(
+        service.archiveOrDelete(
+          branchId,
+          { metadataAction: 'archive', filesystemAction: 'preserved' },
+          params
+        )
+      ).rejects.toThrow(/lifecycle work is active/i);
+      expect(metadataUpdate).not.toHaveBeenCalled();
+    }
+  );
+
+  it('dispatches Stop for a running environment and requires archival retry after settlement', async () => {
+    const { service, branchRepo } = createServiceHarness();
+    const branchId = 'wt-archive-running' as BranchID;
+    const branch = {
+      branch_id: branchId,
+      name: 'Archive running',
+      path: '/tmp/wt-archive-running',
+      archived: false,
+      environment_instance: { status: 'running' },
+    } as never;
+    vi.spyOn(service, 'get').mockResolvedValue(branch);
+    const stop = vi.spyOn(service, 'stopEnvironment').mockResolvedValue({
+      ...branch,
+      environment_instance: { status: 'stopping' },
+    });
+    const metadataUpdate = vi.spyOn(branchRepo, 'update');
+    const params = {
+      user: { user_id: 'user-1' as UUID },
+      tenant: { tenant_id: 'tenant-a', source: 'auth_claim' },
+    } as never;
+    markBranchArchiveDeleteAuthorized(params, branchId, 'archive');
+
+    await expect(
+      service.archiveOrDelete(
+        branchId,
+        { metadataAction: 'archive', filesystemAction: 'preserved' },
+        params
+      )
+    ).rejects.toThrow(/retry archive after it is fully stopped/i);
+    expect(stop).toHaveBeenCalledWith(branchId, params);
+    expect(metadataUpdate).not.toHaveBeenCalled();
   });
 });
 
@@ -4647,6 +4969,41 @@ describe('syncEnvironment exact desired/applied contract', () => {
     expect(complete).toHaveBeenCalledWith(
       expect.objectContaining({ claimToken: 'claim-webhook', appliedRevision: revision })
     );
+    expect(fail).not.toHaveBeenCalled();
+  });
+
+  it('preserves the Sync lease after an ambiguous webhook disconnect', async () => {
+    const { service, branch, complete, fail } = harness();
+    vi.spyOn(service as never, 'getCanonicalBranch').mockResolvedValue(branch as never);
+    vi.spyOn(service as never, 'renderEnvironmentSyncCommand').mockResolvedValue(
+      'https://hooks.example.com/sync'
+    );
+    vi.spyOn(service as never, 'resolveEnvironmentExecutionAuthority').mockResolvedValue({
+      executionUserId: userId,
+      branchFsAccess: 'write',
+    });
+    vi.spyOn(service as never, 'executeEnvironmentWebhook').mockRejectedValue(
+      Object.assign(new Error('sync response disconnected'), {
+        code: 'ENVIRONMENT_WEBHOOK_DISPATCH_AMBIGUOUS',
+      })
+    );
+
+    await (
+      service as unknown as {
+        runClaimedEnvironmentSync: (id: BranchID, attempt: unknown) => Promise<void>;
+      }
+    ).runClaimedEnvironmentSync('wt-sync-race' as BranchID, {
+      token: 'claim-ambiguous',
+      revision,
+      environment_generation: 1,
+      started_at: new Date().toISOString(),
+      lease_expires_at: new Date(Date.now() + 60_000).toISOString(),
+      instance_id: 'daemon-a',
+      boot_id: 'boot-a',
+      requested_by_user_id: userId,
+    });
+
+    expect(complete).not.toHaveBeenCalled();
     expect(fail).not.toHaveBeenCalled();
   });
 });

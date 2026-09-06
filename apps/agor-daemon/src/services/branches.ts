@@ -30,6 +30,7 @@ import {
   EnvironmentLifecycleAttemptConflictError,
   EnvironmentLifecycleConflictError,
   EnvironmentProviderMutationBusyError,
+  EnvironmentRetirementConflictError,
   EnvironmentSyncRepository,
   generateId,
   getCurrentTenantId,
@@ -81,6 +82,7 @@ import type {
   BranchArchiveOrDeleteOptions,
   BranchArchiveOrDeleteResult,
   BranchEnvironmentUpdate,
+  BranchFilesystemSettlement,
   BranchFsAccessLevel,
   BranchID,
   KnowledgeNamespace,
@@ -103,7 +105,10 @@ import { createPinnedFetch } from '@agor/core/utils/pinned-fetch';
 import { isAllowedHealthCheckUrl } from '@agor/core/utils/url';
 import { DrizzleService, type Query } from '../adapters/drizzle';
 import { environmentLifecycleExecutorCommandId } from '../auth/executor-command-ids.js';
-import { authenticatedEnvironmentExecutorCallbackRuntimeScope } from '../auth/executor-runtime-scope.js';
+import {
+  authenticatedEnvironmentExecutorCallbackRuntimeScope,
+  matchesExecutorCommandRuntimeScope,
+} from '../auth/executor-runtime-scope.js';
 import { buildBranchCreatedAnalyticsProperties } from '../utils/analytics-payloads.js';
 import { consumeBranchArchiveDeleteAuthorization } from '../utils/branch-archive-delete-authorization.js';
 import { ensureCanControlBranchEnvironment } from '../utils/branch-authorization.js';
@@ -277,6 +282,26 @@ interface EnvironmentSyncRequestOptions {
 
 class EnvironmentSyncUnavailableError extends Error {}
 
+const ENVIRONMENT_WEBHOOK_DISPATCH_AMBIGUOUS_CODE =
+  'ENVIRONMENT_WEBHOOK_DISPATCH_AMBIGUOUS' as const;
+
+class EnvironmentWebhookDispatchAmbiguousError extends Error {
+  readonly code = ENVIRONMENT_WEBHOOK_DISPATCH_AMBIGUOUS_CODE;
+
+  constructor(message: string, options?: ErrorOptions) {
+    super(message, options);
+    this.name = 'EnvironmentWebhookDispatchAmbiguousError';
+  }
+}
+
+function isEnvironmentWebhookDispatchAmbiguous(error: unknown): boolean {
+  return (
+    error instanceof EnvironmentWebhookDispatchAmbiguousError ||
+    (error instanceof Error &&
+      (error as Error & { code?: string }).code === ENVIRONMENT_WEBHOOK_DISPATCH_AMBIGUOUS_CODE)
+  );
+}
+
 type EnvironmentInstance = NonNullable<Branch['environment_instance']>;
 type EnvironmentSyncAttempt = NonNullable<
   NonNullable<EnvironmentInstance['source_sync']>['active_attempt']
@@ -376,6 +401,16 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
         `Cannot delete branch ${branchId} while it has unfinished tasks. Stop them first.`
       );
     }
+  }
+
+  private rethrowEnvironmentRetirementConflict(error: unknown): never {
+    if (error instanceof EnvironmentRetirementConflictError) {
+      throw new Conflict(
+        'The environment must be fully stopped before this branch can be archived or deleted. ' +
+          'Stop it and retry after lifecycle settlement.'
+      );
+    }
+    throw error;
   }
 
   private removalRepositories(scoped: TenantScopedDatabase): {
@@ -497,34 +532,49 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     const timeout = setTimeout(() => controller.abort(), ENVIRONMENT.LOGS_TIMEOUT_MS);
 
     try {
-      const response = await fetch(url, {
-        method: 'GET',
-        redirect: 'manual',
-        signal: controller.signal,
-        headers: {
-          'User-Agent': 'Agor managed-environment webhook',
-        },
-      });
+      let response: Response;
+      try {
+        response = await fetch(url, {
+          method: 'GET',
+          redirect: 'manual',
+          signal: controller.signal,
+          headers: {
+            'User-Agent': 'Agor managed-environment webhook',
+          },
+        });
+      } catch (error) {
+        const message =
+          error instanceof Error && error.name === 'AbortError'
+            ? `Environment ${commandType} webhook timed out after ${ENVIRONMENT.LOGS_TIMEOUT_MS / 1000}s`
+            : `Environment ${commandType} webhook transport failed: ${error instanceof Error ? error.message : String(error)}`;
+        // A missing response cannot prove the remote orchestrator did not
+        // receive and continue processing the mutation. Preserve durable
+        // ownership until its deadline rather than admitting an overlapping
+        // opposite action or retry.
+        throw new EnvironmentWebhookDispatchAmbiguousError(message, { cause: error });
+      }
 
-      const { body, truncated } = await this.readLimitedWebhookBody(response, maxBytes);
+      let bodyResult: { body: string; truncated: boolean };
+      try {
+        bodyResult = await this.readLimitedWebhookBody(response, maxBytes);
+      } catch (error) {
+        throw new EnvironmentWebhookDispatchAmbiguousError(
+          `Environment ${commandType} webhook response ended ambiguously: ${error instanceof Error ? error.message : String(error)}`,
+          { cause: error }
+        );
+      }
 
       if (!response.ok) {
+        // A completed HTTP response is authoritative even when it reports
+        // failure: the remote server has finished this request.
         throw new Error(`Environment ${commandType} webhook returned HTTP ${response.status}`);
       }
 
       return {
-        body,
-        truncated,
+        ...bodyResult,
         status: response.status,
         contentType: response.headers.get('content-type') ?? undefined,
       };
-    } catch (error) {
-      if (error instanceof Error && error.name === 'AbortError') {
-        throw new Error(
-          `Environment ${commandType} webhook timed out after ${ENVIRONMENT.LOGS_TIMEOUT_MS / 1000}s`
-        );
-      }
-      throw error;
     } finally {
       clearTimeout(timeout);
     }
@@ -584,6 +634,35 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       if (this.isEnvironmentLifecycleSuperseded(error)) return undefined;
       throw error;
     }
+  }
+
+  /** Record diagnostics without releasing a mutation whose webhook may still be running. */
+  private async preserveAmbiguousEnvironmentLifecycle(
+    id: BranchID,
+    generation: number,
+    status: 'starting' | 'stopping',
+    error: unknown,
+    params?: BranchParams
+  ): Promise<void> {
+    const message = error instanceof Error ? error.message : String(error);
+    await this.updateEnvironment(
+      id,
+      {
+        last_health_check: {
+          timestamp: new Date().toISOString(),
+          status: 'unknown',
+          message,
+        },
+        last_error: message,
+      },
+      params,
+      {
+        expectedEnvironmentGeneration: generation,
+        expectedEnvironmentStatus: status,
+      }
+    ).catch((settlementError) => {
+      if (!this.isEnvironmentLifecycleSuperseded(settlementError)) throw settlementError;
+    });
   }
 
   private async readLimitedWebhookBody(
@@ -1878,10 +1957,9 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     // The active-task guard and metadata cascade are one native transaction on
     // both databases. Otherwise a task could start between the check and the
     // delete and leave a valid executor lease with no owning task row.
-    const { branch, result, branchFsAccess } = await runWithTenantDatabaseTransaction(
-      this.db,
-      tenantId,
-      async (scoped) => {
+    let removal: { branch: Branch; result: Branch; branchFsAccess?: BranchFsAccessLevel };
+    try {
+      removal = await runWithTenantDatabaseTransaction(this.db, tenantId, async (scoped) => {
         const { branchRepo, taskRepo } = this.removalRepositories(scoped);
         const branch = await branchRepo.findById(id);
         if (!branch) throw new NotFound(`Branch not found: ${id}`);
@@ -1901,10 +1979,13 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
         await this.assertNoUnfinishedTasks(branch.branch_id, taskRepo);
         // Remove from database FIRST for instant UI feedback. CASCADE cleans
         // up related comments and terminal tasks.
-        await branchRepo.delete(id);
+        await branchRepo.delete(id, { requireEnvironmentRetired: true });
         return { branch, result: branch, branchFsAccess };
-      }
-    );
+      });
+    } catch (error) {
+      this.rethrowEnvironmentRetirementConflict(error);
+    }
+    const { branch, result, branchFsAccess } = removal;
 
     this.removeBranchSdkHomeAfterDelete(branch, tenantId);
 
@@ -1962,10 +2043,9 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
   async removeMetadataWithRealtime(id: BranchID, params?: BranchParams): Promise<Branch> {
     const removalParams = params ?? ({} as BranchParams);
     const tenantId = removalParams.tenant?.tenant_id ?? getCurrentTenantId();
-    const removedBranch = await runWithTenantDatabaseTransaction(
-      this.db,
-      tenantId,
-      async (scoped) => {
+    let removedBranch: Branch;
+    try {
+      removedBranch = await runWithTenantDatabaseTransaction(this.db, tenantId, async (scoped) => {
         const { branchRepo, taskRepo } = this.removalRepositories(scoped);
         const branch = await branchRepo.findById(id);
         if (!branch) throw new NotFound(`Branch not found: ${id}`);
@@ -1980,7 +2060,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
         // This custom method deliberately bypasses Feathers' standard method
         // wrapper. The explicit event below is the single authoritative
         // tombstone and drains only after the transaction commits.
-        await branchRepo.delete(branch.branch_id);
+        await branchRepo.delete(branch.branch_id, { requireEnvironmentRetired: true });
         const removedBranch = branch;
         emitServiceEvent(this.app, {
           path: 'branches',
@@ -1990,8 +2070,10 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
           id: removedBranch.branch_id,
         });
         return removedBranch;
-      }
-    );
+      });
+    } catch (error) {
+      this.rethrowEnvironmentRetirementConflict(error);
+    }
     this.removeBranchSdkHomeAfterDelete(removedBranch, tenantId);
     return removedBranch;
   }
@@ -2052,17 +2134,27 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
               )
             );
 
-    // Stop environment if running
+    // Archival/deletion is intentionally two-step for a live environment.
+    // Dispatch Stop, then require the operator to retry only after its durable
+    // attempt settles. Deleting the ownership row while a provider mutation is
+    // in flight would fence its callback and orphan the remote resource.
     if (branch.environment_instance?.status === 'running') {
       console.log(`⚠️  Stopping environment for branch ${branch.name} before ${metadataAction}`);
-      try {
-        await this.stopEnvironment(id, params);
-      } catch (error) {
-        console.warn(
-          `Failed to stop environment, continuing with ${metadataAction}:`,
-          error instanceof Error ? error.message : String(error)
-        );
-      }
+      await this.stopEnvironment(id, params);
+      throw new Conflict(
+        `Environment Stop was requested. Retry ${metadataAction} after it is fully stopped.`
+      );
+    }
+    if (
+      branch.environment_instance &&
+      (branch.environment_instance.status !== 'stopped' ||
+        branch.environment_instance.active_lifecycle_attempt ||
+        branch.environment_instance.source_sync?.active_attempt)
+    ) {
+      throw new Conflict(
+        `Cannot ${metadataAction} while environment lifecycle work is active. ` +
+          'Wait for settlement or recover the environment, then retry.'
+      );
     }
 
     // Prepare the one-purpose filesystem action now, but dispatch it only
@@ -2154,20 +2246,25 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       console.log(`📦 Archiving branch: ${branch.name} (filesystem: ${filesystemAction})`);
 
       // Update branch
-      const archivedBranch = await this.withTenantDatabase(params, () =>
-        this.patch(
-          id,
-          {
-            archived: true,
-            archived_at: new Date().toISOString(),
-            archived_by: currentUserId,
-            filesystem_status: filesystemAction,
-            // Preserve board_id + board_object placement so unarchive can restore in-place
-            updated_at: new Date().toISOString(),
-          },
-          params
-        )
-      );
+      let archivedBranch: Branch;
+      try {
+        archivedBranch = await this.withTenantDatabase(params, () =>
+          this.branchRepo.update(
+            id,
+            {
+              archived: true,
+              archived_at: new Date().toISOString(),
+              archived_by: currentUserId,
+              filesystem_status: filesystemAction,
+              // Preserve board_id + board_object placement so unarchive can restore in-place
+              updated_at: new Date().toISOString(),
+            },
+            { requireEnvironmentRetired: true }
+          )
+        );
+      } catch (error) {
+        this.rethrowEnvironmentRetirementConflict(error);
+      }
 
       // archiveOrDelete is a custom service method. Its internal this.patch()
       // call bypasses Feathers' standard-method event hook, so publish the
@@ -2875,6 +2972,50 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
   }
 
   /**
+   * Exact callback for the one-purpose git.branch.add executor. Generic Branch
+   * CRUD deliberately excludes filesystem state, including for admins.
+   */
+  async settleFilesystem(data: BranchFilesystemSettlement, params?: BranchParams): Promise<Branch> {
+    if (
+      !params?.provider ||
+      !matchesExecutorCommandRuntimeScope(params, 'git.branch.add', data?.branch_id)
+    ) {
+      throw new Forbidden('A branch-scoped git.branch.add executor token is required');
+    }
+    const fields = Object.keys((data ?? {}) as unknown as Record<string, unknown>);
+    if (
+      fields.some(
+        (field) => !['branch_id', 'filesystem_status', 'error_message'].includes(field)
+      ) ||
+      (data.filesystem_status !== 'ready' && data.filesystem_status !== 'failed')
+    ) {
+      throw new BadRequest('Invalid branch filesystem settlement');
+    }
+    const errorMessage = data.error_message?.trim();
+    if (
+      (data.filesystem_status === 'ready' && data.error_message !== undefined) ||
+      (data.filesystem_status === 'failed' && (!errorMessage || errorMessage.length > 2_048))
+    ) {
+      throw new BadRequest('Invalid branch filesystem settlement');
+    }
+
+    const branch = await this.withTenantDatabase(params, () =>
+      this.branchRepo.update(data.branch_id, {
+        filesystem_status: data.filesystem_status,
+        ...(errorMessage ? { error_message: errorMessage } : {}),
+      })
+    );
+    emitServiceEvent(this.app, {
+      path: 'branches',
+      event: 'patched',
+      data: branch,
+      params,
+      id: branch.branch_id,
+    });
+    return branch;
+  }
+
+  /**
    * Custom method: Start environment
    */
   async startEnvironment(id: BranchID, params?: BranchParams): Promise<BranchWithZoneAndSessions> {
@@ -3018,6 +3159,16 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       // Keep status as 'starting' - let health checks transition to 'running'.
       return await this.withTenantDatabase(params, () => this.get(id, params));
     } catch (error) {
+      if (isEnvironmentWebhookDispatchAmbiguous(error)) {
+        await this.preserveAmbiguousEnvironmentLifecycle(
+          id,
+          lifecycleGeneration,
+          'starting',
+          error,
+          params
+        );
+        throw error;
+      }
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
       const commandOutput =
         error instanceof Error
@@ -3161,6 +3312,16 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
         )) ?? (await this.withTenantDatabase(params, () => this.get(id, params)))
       );
     } catch (error) {
+      if (isEnvironmentWebhookDispatchAmbiguous(error)) {
+        await this.preserveAmbiguousEnvironmentLifecycle(
+          id,
+          lifecycleGeneration,
+          'stopping',
+          error,
+          params
+        );
+        throw error;
+      }
       const committed = await this.commitEnvironmentLifecycle(
         id,
         {
@@ -3457,6 +3618,16 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
         )) ?? (await this.withTenantDatabase(params, () => this.get(id, params)))
       );
     } catch (error) {
+      if (isEnvironmentWebhookDispatchAmbiguous(error)) {
+        await this.preserveAmbiguousEnvironmentLifecycle(
+          id,
+          lifecycleGeneration,
+          'stopping',
+          error,
+          params
+        );
+        throw error;
+      }
       const committed = await this.commitEnvironmentLifecycle(
         id,
         {
@@ -3693,6 +3864,14 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       needsReconcile = settlement.outcome === 'settled' && settlement.needs_reconcile;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
+      if (isEnvironmentWebhookDispatchAmbiguous(error)) {
+        // The remote reconciler may still be applying this exact revision.
+        // Keep the durable claim until its lease deadline; a peer may take
+        // over only after that containment boundary expires.
+        console.warn(`[Environment.sync ${id}] ${message}; preserving active claim`);
+        await this.publishEnvironmentSyncState(id, params);
+        return;
+      }
       if (
         error instanceof Error &&
         (error as Error & { code?: string }).code === 'ENVIRONMENT_CONTAINMENT_UNVERIFIED'

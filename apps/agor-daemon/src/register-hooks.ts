@@ -95,6 +95,7 @@ import type {
 } from '@agor/core/types';
 import {
   assertPublicMCPOAuthCompatibilityMode,
+  BRANCH_SERVER_MANAGED_FIELDS,
   GATEWAY_CHANNEL_WRITE_FIELDS,
   GATEWAY_REDACTED_SENTINEL,
   hasMinimumRole,
@@ -676,6 +677,25 @@ const EXECUTOR_TASK_PATCH_FIELDS = taskFieldSet(
 );
 
 const EXTERNAL_TASK_CREATE_FIELDS = taskFieldSet('session_id', 'full_prompt', 'status');
+
+/**
+ * Generic Branch CRUD is metadata-only. Lifecycle, archival, filesystem, and
+ * identity state is written through narrower daemon/executor boundaries.
+ */
+export function protectExternalBranchCrud(context: HookContext): HookContext {
+  if (!context.params.provider) return context;
+
+  const items = Array.isArray(context.data) ? context.data : [context.data];
+  for (const item of items) {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) continue;
+    const forbidden = Object.keys(item as Record<string, unknown>).filter((field) =>
+      (BRANCH_SERVER_MANAGED_FIELDS as readonly string[]).includes(field)
+    );
+    if (forbidden.length === 0) continue;
+    throw new BadRequest(`Branch field is server-managed: ${forbidden[0]}`);
+  }
+  return context;
+}
 
 /** Keep the documented two-step create/run API dormant until the explicit run call. */
 export function protectExternalTaskCreate(context: HookContext): HookContext {
@@ -2202,6 +2222,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
           ensureCanChangeBranchBoard,
         ]
       : []),
+    protectExternalBranchCrud,
     captureMarketplaceInvalidationTargets,
   ];
 
@@ -2226,6 +2247,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
         requireAdminForEnvConfig(),
         validateBranchEnvPolicyHook(config),
         ensureCanChangeBranchBoard,
+        protectExternalBranchCrud,
         injectCreatedBy(),
         bindPrimaryOwnerToCreatedBy(),
       ],

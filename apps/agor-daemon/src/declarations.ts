@@ -22,8 +22,11 @@ import type { ExpressApplication, Service } from '@agor/core/feathers';
 import type {
   Board,
   Branch,
+  BranchCreateData,
   BranchEnvironmentUpdate,
+  BranchFilesystemSettlement,
   BranchID,
+  BranchPatchData,
   CloneRepositoryResult,
   AuthenticatedParams as CoreAuthenticatedParams,
   AuthenticatedUser as CoreAuthenticatedUser,
@@ -313,7 +316,9 @@ export interface MessagesServiceImpl
 /**
  * Branches service with custom methods (server-side implementation)
  */
-export interface BranchesServiceImpl extends Service<Branch, Partial<Branch>, FeathersParams> {
+export interface BranchesServiceImpl
+  extends Service<Branch, BranchCreateData, FeathersParams, BranchPatchData> {
+  settleFilesystem(data: BranchFilesystemSettlement, params?: FeathersParams): Promise<Branch>;
   updateEnvironment(
     id:
       | BranchID

@@ -27,7 +27,7 @@ let branchUnique = (Date.now() % 1_000_000) + 8_000_000;
 async function seedBranch(
   db: Database,
   tenantId: TenantID,
-  status: 'starting' | 'running' | 'stopped' = 'running'
+  status: 'starting' | 'running' | 'stopping' | 'stopped' = 'running'
 ) {
   return runWithTenantDatabaseScope(db, tenantId, async (scoped) => {
     const user = await new UsersRepository(scoped).create({
@@ -514,6 +514,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       const tenantA = `env-a-${generateId()}` as TenantID;
       const tenantB = `env-b-${generateId()}` as TenantID;
       const active = await seedBranch(dbA, tenantA, 'running');
+      const stopping = await seedBranch(dbA, tenantA, 'stopping');
       const stopped = await seedBranch(dbA, tenantA, 'stopped');
       const archived = await seedBranch(dbA, tenantB, 'running');
       await runWithTenantDatabaseScope(dbA, tenantB, (scoped) =>
@@ -528,6 +529,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
         { capability: 'environment_health_discovery' }
       );
       expect(refs).toContainEqual({ branch_id: active.branch_id, tenant_id: tenantA });
+      expect(refs).toContainEqual({ branch_id: stopping.branch_id, tenant_id: tenantA });
       expect(refs.some((ref) => ref.branch_id === stopped.branch_id)).toBe(false);
       expect(refs.some((ref) => ref.branch_id === archived.branch_id)).toBe(false);
 
@@ -556,6 +558,51 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       });
 
       await runWithTenantDatabaseScope(dbA, tenantA, async (scoped) => {
+        const branchesRepo = new BranchRepository(scoped);
+        await branchesRepo.update(stopping.branch_id, {
+          environment_instance: {
+            status: 'stopping',
+            lifecycle_deadline_at: '2000-01-01T00:00:00.000Z',
+            active_lifecycle_attempt: {
+              action: 'stop',
+              environment_generation: stopping.environment_generation ?? 0,
+              started_at: '1999-12-31T23:59:00.000Z',
+              deadline_at: '2000-01-01T00:00:00.000Z',
+            },
+          },
+        });
+        const health = new EnvironmentHealthRepository(scoped);
+        const stoppingClaim = await health.claim({
+          branchId: stopping.branch_id,
+          claimToken: 'recover-stopping',
+          leaseDurationMs: 30_000,
+          identity: { instanceId: 'daemon-b', bootId: 'boot-b' },
+        });
+        if (stoppingClaim.outcome !== 'claimed') throw new Error('Expected stopping claim');
+        await expect(
+          health.commit({
+            branchId: stopping.branch_id,
+            claimToken: stoppingClaim.claim.claim_token,
+            environmentGeneration: stoppingClaim.claim.environment_generation,
+            observation: {
+              status: 'unknown',
+              message: 'coordination-only recovery',
+              recordWhileStarting: false,
+            },
+          })
+        ).resolves.toMatchObject({
+          outcome: 'committed',
+          stateChanged: true,
+          environmentStatus: 'error',
+        });
+        await expect(branchesRepo.findById(stopping.branch_id)).resolves.toMatchObject({
+          environment_generation: (stopping.environment_generation ?? 0) + 1,
+          environment_instance: {
+            status: 'error',
+            active_lifecycle_attempt: undefined,
+          },
+        });
+
         await new BranchRepository(scoped).delete(active.branch_id);
         expect(
           await new EnvironmentHealthRepository(scoped).claim({

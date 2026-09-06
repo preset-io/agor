@@ -17,7 +17,10 @@ import type {
   BoardExportBlob,
   Branch,
   BranchCapabilityPolicy,
+  BranchCreateData,
   BranchEnvironmentUpdate,
+  BranchFilesystemSettlement,
+  BranchPatchData,
   CapabilityPolicyWorkspacePreferences,
   CardType,
   CardWithType,
@@ -712,7 +715,10 @@ export interface UsersService extends AgorService<User> {
 /**
  * Branches service with environment management
  */
-export interface BranchesService extends AgorService<Branch> {
+export interface BranchesService
+  extends AgorService<Branch, BranchCreateData, BranchPatchData, BranchPatchData> {
+  /** Exact git.branch.add executor callback; ordinary clients cannot call it. */
+  settleFilesystem(data: BranchFilesystemSettlement, params?: Params): Promise<Branch>;
   /**
    * Create or repair the primary Knowledge namespace for a teammate branch.
    * API/UI-only; not exposed through teammate MCP config mutation tools.
@@ -1337,7 +1343,11 @@ function extendBranchesService(client: AgorClient): void {
   };
   if (branchesService[BRANCHES_SERVICE_EXTENDED]) return;
   if (typeof branchesService.methods === 'function') {
-    branchesService.methods('updateEnvironment', 'ensureTeammateKnowledgeNamespace');
+    branchesService.methods(
+      'updateEnvironment',
+      'settleFilesystem',
+      'ensureTeammateKnowledgeNamespace'
+    );
   }
   branchesService[BRANCHES_SERVICE_EXTENDED] = true;
 }

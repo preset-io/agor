@@ -547,12 +547,25 @@ executor from overwriting a newer lifecycle action. Executor callback tokens
 are bound to the exact action, branch, and lifecycle generation, so a still-live
 token from an older attempt cannot replay into a newer one.
 
+A completed non-success webhook response is authoritative. A timeout,
+disconnect, or response-stream failure is not: the orchestration service may
+still be applying the request. Agor records the diagnostic but retains the
+lifecycle attempt or Sync lease until its durable deadline instead of admitting
+an overlapping retry.
+
 Provider mutations are serialized per branch. Stop/Nuke cannot preempt an
 in-flight Start, and no lifecycle action can overtake a live Sync lease; wait
 for the bounded attempt to settle or expire. This avoids a late Start recreating
 a resource after Stop/Nuke. The commands themselves must still be idempotent
 reconcilers: a retry after a Pod or daemon loss must converge the provider to
 the requested state rather than blindly creating another resource.
+
+Archiving or deleting a branch is also fenced against provider work. If its
+environment is running, the first request initiates Stop and asks the user to
+retry after Stop settles. A branch that is starting, stopping, or owned by an
+active lifecycle/Sync attempt cannot be retired. This deliberately avoids
+discarding the only recovery record for an external, potentially billable
+resource.
 
 Agor Cloud's supported pattern is a short-lived command such as
 `start-github-codespaces.sh`: create or reconcile a remote environment, emit

@@ -454,6 +454,50 @@ export interface Branch {
   sdk_home?: 'per_branch' | null;
 }
 
+/**
+ * Sensitive identity/lifecycle fields owned by daemon orchestration rather
+ * than generic Branch CRUD. Keep the runtime guard and transport DTOs derived
+ * from this inventory so adding orchestrated state does not silently reopen
+ * the broad `Partial<Branch>` write boundary.
+ */
+export const BRANCH_SERVER_MANAGED_FIELDS = [
+  'branch_id',
+  'branch_unique_id',
+  'repo_id',
+  'path',
+  'base_sha',
+  'last_commit_sha',
+  'tracking_branch',
+  'new_branch',
+  'created_at',
+  'updated_at',
+  'created_by',
+  'environment_instance',
+  'environment_generation',
+  'archived',
+  'archived_at',
+  'archived_by',
+  'filesystem_status',
+  'error_message',
+  'primary_owner_user_id',
+  'sdk_home',
+] as const satisfies ReadonlyArray<keyof Branch>;
+
+export type BranchServerManagedField = (typeof BRANCH_SERVER_MANAGED_FIELDS)[number];
+
+/** Client-authored fields accepted by the generic Branch create transport. */
+export type BranchCreateData = Omit<Partial<Branch>, BranchServerManagedField>;
+
+/** Client-authored fields accepted by the generic Branch patch/update transport. */
+export type BranchPatchData = Omit<Partial<Branch>, BranchServerManagedField>;
+
+/** Exact executor settlement for asynchronous branch materialization. */
+export interface BranchFilesystemSettlement {
+  branch_id: BranchID;
+  filesystem_status: 'ready' | 'failed';
+  error_message?: string;
+}
+
 export type BranchFilesystemReadinessState = 'pending' | 'ready' | 'failed' | 'unavailable';
 
 /**

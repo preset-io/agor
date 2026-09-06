@@ -1135,6 +1135,34 @@ describe('BranchRepository.update', () => {
     });
   });
 
+  dbTest('refuses archival while lifecycle or Sync ownership is active', async ({ db }) => {
+    const repoRepo = new RepoRepository(db);
+    const branchRepo = new BranchRepository(db);
+    const repo = await repoRepo.create(createRepoData());
+    const created = await branchRepo.create(
+      createBranchData({
+        repo_id: repo.repo_id,
+        environment_instance: {
+          status: 'starting',
+          active_lifecycle_attempt: {
+            action: 'start',
+            environment_generation: 0,
+            started_at: new Date().toISOString(),
+            deadline_at: new Date(Date.now() + 60_000).toISOString(),
+          },
+        },
+      })
+    );
+
+    await expect(
+      branchRepo.update(created.branch_id, { archived: true }, { requireEnvironmentRetired: true })
+    ).rejects.toMatchObject({ name: 'EnvironmentRetirementConflictError' });
+    await expect(branchRepo.findById(created.branch_id)).resolves.toMatchObject({
+      archived: false,
+      environment_instance: { status: 'starting' },
+    });
+  });
+
   dbTest(
     'accepts an attempt callback only once while server ownership is active',
     async ({ db }) => {
@@ -1341,6 +1369,37 @@ describe('BranchRepository.update', () => {
 // ============================================================================
 
 describe('BranchRepository.delete', () => {
+  dbTest('refuses deletion until the environment is fully stopped', async ({ db }) => {
+    const repoRepo = new RepoRepository(db);
+    const wtRepo = new BranchRepository(db);
+    const repo = await repoRepo.create(createRepoData());
+    const branch = await wtRepo.create(
+      createBranchData({
+        repo_id: repo.repo_id,
+        environment_instance: {
+          status: 'stopping',
+          active_lifecycle_attempt: {
+            action: 'stop',
+            environment_generation: 0,
+            started_at: new Date().toISOString(),
+            deadline_at: new Date(Date.now() + 60_000).toISOString(),
+          },
+        },
+      })
+    );
+
+    await expect(
+      wtRepo.delete(branch.branch_id, { requireEnvironmentRetired: true })
+    ).rejects.toMatchObject({ name: 'EnvironmentRetirementConflictError' });
+    await expect(wtRepo.findById(branch.branch_id)).resolves.not.toBeNull();
+
+    await wtRepo.update(branch.branch_id, {
+      environment_instance: { status: 'stopped', active_lifecycle_attempt: null as never },
+    });
+    await wtRepo.delete(branch.branch_id, { requireEnvironmentRetired: true });
+    await expect(wtRepo.findById(branch.branch_id)).resolves.toBeNull();
+  });
+
   dbTest('should delete by full UUID and short ID', async ({ db }) => {
     const repoRepo = new RepoRepository(db);
     const wtRepo = new BranchRepository(db);
