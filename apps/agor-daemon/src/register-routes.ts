@@ -88,6 +88,7 @@ import type {
   Task,
   TaskID,
   TaskMetadata,
+  TenantID,
   User,
   UserID,
   UUID,
@@ -516,7 +517,7 @@ export function createRequiredTenantDatabaseRunner(db: TenantScopeAwareDatabase)
 /** Resolve upload branch visibility and prompt authority using the authenticated tenant. */
 export async function resolveUploadPromptAccess(input: {
   db: TenantScopeAwareDatabase;
-  tenantId: string | undefined;
+  tenantId: TenantID | undefined;
   branchRepository: Pick<
     BranchRepository,
     'findById' | 'resolveUserPermission' | 'resolveSessionPromptAuthority'
