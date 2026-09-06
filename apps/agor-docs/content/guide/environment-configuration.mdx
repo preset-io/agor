@@ -21,6 +21,34 @@ _What it looks like on the card: a green env pill, one-click open, and start/sto
 
 ## Overview
 
+### Instance guidance
+
+Operators can display a fixed informational notice at the top of every branch's
+Environment tab. Set this **top-level** key in `~/.agor/config.yaml` and restart
+the daemon (coordinate the same configuration across HA replicas):
+
+```yaml
+environment_disclaimer_markdown: |
+  Commands can launch remote environments such as GitHub Codespaces or your own provider.
+  Agor runs your commands and reports their results; it does not host your application
+  in the executor. Servers started inside Cloud executor Pods are not exposed and
+  commands are time-limited. Your remote provider's security and billing apply.
+  See the [environment guide](https://agor.live/guide/environment-configuration)
+  for configuration and cleanup responsibilities.
+```
+
+This is public, instance-wide policy content, not a secret store. Repositories,
+variants, and branch snapshots cannot override it. It supplements the dynamic
+capability summary; text cannot enable execution or change permissions.
+
+Omit the key or use an empty string to show no notice. The limit is **4000 UTF-16
+code units** (most characters count as one; emoji may count as two). Supported
+Markdown is paragraphs, emphasis, lists, and absolute HTTP(S) documentation
+links without embedded credentials. Raw HTML, images, embeds, code blocks, and
+interactive plugins are not rendered. Unsafe and relative URLs are not clickable.
+
+### Configuration layers
+
 Managed environments are built out of three layers, precedence **low → high**:
 
 ```text
@@ -418,15 +446,145 @@ credentials are rejected. Use a trusted orchestration service, and avoid secrets
 in query strings because rendered branch snapshots and infrastructure logs may
 expose them.
 
-In daemon HA mode, lifecycle actions remain webhook-only; Agor does not assign
-distributed ownership for Start, Stop, Restart, or Nuke. Health observation is
-separate: every replica scans active environments, while PostgreSQL admits only
-one live observation claim per branch and fences the result against lease expiry
-and lifecycle changes. A remote/webhook environment without `health` remains
-explicitly unobservable (`unknown`); Agor never treats another daemon's local
-process map as evidence that it is healthy.
+### Bounded external commands in HA
 
----
+HA `hybrid` mode supports **remote-environment trigger scripts**, not application
+hosting. Agor dispatches a bounded executor, which claims its admitted attempt
+and reports progress and completion to any daemon replica. The initiating HTTP
+request waits at most 10 seconds for launcher admission, **not** for the command
+or its result. An accepted Start is not a readiness guarantee.
+
+| Deployment / action | Start, Stop, Nuke | Restart | Diagnostic shell Logs |
+| --- | --- | --- | --- |
+| Standalone hybrid | Existing local/delegated behavior | Existing behavior | Bounded query |
+| Standalone or HA webhook-only | Existing HTTP(S) webhooks | Existing webhook sequence | Shell commands rejected; Logs webhook supported |
+| HA shared-local hybrid | Rejected at startup | Rejected | Not an enabled lifecycle profile |
+| HA external delegated hybrid | Attempt-scoped external commands; HTTP(S) webhooks also supported | Unavailable: Stop, inspect, then Start | Independently requires `executor-response-v1` and an exact replica `origin_url` |
+
+Missing shell Logs prerequisites **does not block lifecycle dispatch** or the
+output reported by lifecycle executors. Configure only capabilities you actually
+provide. The Environment tab shows the current capability and outcome separately
+from instance guidance.
+
+Operator configuration (in addition to the normal [HA prerequisites](/guide/daemon-ha)):
+
+```yaml
+daemon:
+  public_url: https://agor.example.com # reachable from executors; may load-balance replicas
+deployment:
+  mode: ha
+  ha:
+    execution_topology: external
+execution:
+  unix_user_mode: delegated
+  managed_envs_execution_mode: hybrid
+  executor_command_template: /path/to/reviewed-external-launcher
+  # Assertion about the external Job's TOTAL lifetime, including termination grace.
+  # Set only after the launcher/control plane enforce this bound.
+  environment_command_job_deadline_ms: 365000
+  session_token_expiration_ms: 900000 # at least 405000
+```
+
+Do **not** simply flip the mode on an existing Cloud installation. The trusted
+launcher must recognize `environment.lifecycle` payloads carrying `params.attempt`,
+perform normal tenant/user/branch and Team admission, create the external executor
+Job, and exit promptly after that admission. It must not wait for completion,
+reserve a synchronous response, retry the command, or expose application ingress.
+Other command families, especially diagnostic queries, retain their own handoff.
+The executor image must support the same attempt/report protocol as every daemon.
+Keep daemon, database, and executor clocks synchronized for the absolute deadlines.
+
+#### Deadlines and rollout coordination
+
+| Bound | Budget |
+| --- | --- |
+| Local launcher admission | 10 seconds |
+| Executor claim, measured from durable admission | 60 seconds |
+| Command, measured from claim | At most 300 seconds, also capped by the admitted absolute deadline |
+| Owned process-group cleanup | TERM, then KILL after at most 5 seconds |
+| Result delivery grace | 30 seconds beyond the admitted command and cleanup deadline |
+| Final result deadline, measured from admission | 395 seconds |
+| External Job total bound | Operator-enforced 305–365 seconds, including termination grace |
+
+For Kubernetes, configure command-specific `activeDeadlineSeconds` **plus**
+`terminationGracePeriodSeconds` within the asserted total, with `backoffLimit: 0`
+and `restartPolicy: Never`. The external bound is necessary when an executor
+crashes or commands escape its process group. Agor does not implement provider
+containment, discover zombie remote resources, or certify their deletion.
+
+Before enabling hybrid, apply PostgreSQL migration
+`0101_environment_command_discovery` and replace the daemon/executor cohort with
+compatible versions. The migration changes only the existing recovery SELECT
+policy and partial index to include `stopping`; lifecycle rules remain application
+code, using PostgreSQL row locks or SQLite immediate transactions. No SQLite
+schema migration is required. Ordinary tenant scope and branch permissions still
+apply. The privileged PostgreSQL monitor discovers routing IDs, then switches to
+the corresponding tenant for all state transitions.
+
+Coordinate the external launcher and Job deadline **before** setting the deadline
+assertion. Drain active attempts before rolling back; retain remote cleanup diagnostics.
+For branches with attempt metadata, a configuration-only switch to legacy
+lifecycle handling is not supported: the generic state-write guard deliberately
+remains closed. Roll back the compatible daemon/executor cohort together instead. Deploy neither a mixed attempt-capability cohort nor
+a launcher that waits for command results. No particular Git SHA or provider is
+hard-coded as an eligibility gate.
+
+#### Script contract and outcomes
+
+For example, a repository variant can call three scripts:
+
+```yaml
+environment:
+  version: 2
+  default: remote
+  variants:
+    remote:
+      start: ./scripts/start-remote.sh {{branch.name}}
+      stop: ./scripts/stop-remote.sh {{branch.name}}
+      nuke: ./scripts/delete-remote.sh {{branch.name}}
+      logs: ./scripts/remote-logs.sh {{branch.name}}
+```
+
+Each script must finish; do not start a local development server in the executor.
+Remote resource identity and credentials belong to your scripts/provider. Make
+Stop safe to repeat. Agor never automatically retries Start, Stop, or Nuke.
+Commands can optionally return Start access links by writing this small JSON file
+to the supplied `AGOR_ENVIRONMENT_RESULT_FILE` path before exiting:
+
+```json
+{"access_urls":[{"name":"Preview","url":"https://preview.example.com"}]}
+```
+
+The file must be a regular file, at most 16 KiB, with at most eight named absolute
+HTTP(S) URLs and no embedded credentials. Invalid results produce an **unknown**
+outcome, not a claim that nothing happened. Without a result file, the rendered
+`app` URL is used. A successful Start waits for configured health checks; without
+one, the command success and **unknown health** are displayed separately.
+An early healthy response never releases a still-running command's admission.
+A successful Stop/Nuke records script success, not independent proof of cleanup.
+
+Only one lifecycle attempt may be active per branch. Duplicate claims cannot run
+again; stale reports cannot overwrite a newer attempt. Lost claim/result reports
+expire to **unknown**, even after the initiating daemon disappears. The UI retains
+an output tail of at most 32 KiB per attempt, plus three prior attempts, and marks
+truncation or missing/incomplete output. Do not print secrets: this diagnostic
+output is readable by authorized branch viewers.
+
+After failed or uncertain cleanup, **Retry Stop** is allowed once the current
+attempt has settled or expired. Start requires an explicit warning acceptance
+bound to the currently displayed failed/uncertain attempt. Starting again can
+leave additional billable resources running, and your scripts might no longer
+be able to stop the previous environment. Confirmation is never sticky:
+
+- REST: `POST /branches/<id>/start` with `{"confirmation_of":"<current attempt UUID>"}`.
+- MCP: `agor_environment_start` with `confirmationOf`, only after operator consent.
+- CLI: `agor branch env start <branch> --confirm-previous-attempt <UUID>`.
+
+Stale confirmation is rejected; refresh and inspect rather than automatically
+retrying. Configuration, variant rendering, archiving, and deletion cannot bypass
+an active attempt. HA external repository removal with filesystem `cleanup: true`
+is deliberately unavailable: explicitly stop/inspect and use the existing
+branch-by-branch cleanup workflow instead of a filesystem-first bulk operation.
 
 ## See also
 

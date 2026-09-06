@@ -85,6 +85,15 @@ export function requireAdminForEnvConfig() {
 
     // Check both single objects and array payloads (bulk create)
     const items = Array.isArray(data) ? data : [data];
+    if (
+      context.params?.provider &&
+      items.some(
+        (item) =>
+          item?.environment_instance?.command_attempt || item?.environment_instance?.command_history
+      )
+    ) {
+      throw new Forbidden('Environment command tracking is daemon-owned');
+    }
     const hasEnvConfig = items.some((item: Record<string, unknown>) =>
       ENV_COMMAND_FIELDS.some((field) => item?.[field] != null)
     );

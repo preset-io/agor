@@ -23,6 +23,9 @@ export const DAEMON = {
  * Environment Management Constants
  */
 export const ENVIRONMENT = {
+  /** Maximum operator guidance length, also enforced before Markdown rendering. */
+  DISCLAIMER_MAX_LENGTH: 4000,
+
   /**
    * Health check interval in milliseconds
    * How often to poll environment health when status is 'running'

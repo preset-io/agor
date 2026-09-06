@@ -600,6 +600,16 @@ export const EnvironmentLifecyclePayloadSchema = BasePayloadSchema.extend({
 
       /** Lifecycle action */
       action: z.enum(['start', 'stop', 'restart', 'nuke']),
+      /** Only the asynchronous delegated path carries durable attempt authority. */
+      attempt: z
+        .object({
+          id: z.string().uuid(),
+          claimDeadline: z.string().datetime(),
+          commandDeadline: z.string().datetime(),
+          resultDeadline: z.string().datetime(),
+          externalJobDeadlineMs: z.number().int().min(305000).max(365000),
+        })
+        .optional(),
 
       /** Shell start command. Required for start/restart. */
       startCommand: z.string().optional(),
@@ -614,6 +624,13 @@ export const EnvironmentLifecyclePayloadSchema = BasePayloadSchema.extend({
       appUrl: z.string().optional(),
     })
     .superRefine((params, ctx) => {
+      if (params.attempt && (!params.branchPath || params.action === 'restart')) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['attempt'],
+          message: 'Asynchronous commands require branchPath and support only Start, Stop, or Nuke',
+        });
+      }
       if ((params.action === 'start' || params.action === 'restart') && !params.startCommand) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
