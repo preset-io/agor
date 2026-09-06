@@ -1078,6 +1078,7 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
             <button
               type="button"
               style={sessionRowStyle(session)}
+              data-session-id={session.session_id}
               aria-label={getSessionRowAccessibleLabel(session)}
               onClick={() => onSessionClick?.(session.session_id)}
             >
