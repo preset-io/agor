@@ -502,6 +502,12 @@ export type BranchPermissionSource = 'board' | 'override';
  * - Custom: branch.custom_context (JSON object)
  */
 export interface BranchEnvironmentInstance {
+  /** Daemon-owned bounded command tracking; lifecycle status below remains authoritative. */
+  command_attempt?: import('./environment-command').EnvironmentCommandAttempt;
+  command_history?: Array<{
+    attempt: import('./environment-command').EnvironmentCommandAttempt;
+    result?: BranchEnvironmentInstance['last_command'];
+  }>;
   /**
    * Current environment status
    */
@@ -565,7 +571,9 @@ export interface BranchEnvironmentInstance {
    */
   last_command?: {
     action: 'start' | 'stop' | 'restart' | 'nuke';
-    status: 'succeeded' | 'failed';
+    status: 'succeeded' | 'failed' | 'unknown';
+    attempt_id?: string;
+    output_truncated?: boolean;
     timestamp: string;
     message?: string;
     output?: string;

@@ -101,6 +101,7 @@ import type {
 } from '@agor/core/types';
 import {
   assertPublicMCPOAuthCompatibilityMode,
+  ENVIRONMENT_COMMAND_REPORT_SERVICE,
   hasMinimumRole,
   isMCPOAuthGrantBindingVersion,
   MCP_MEMBER_POLICY_CHANGED_EVENT,
@@ -187,6 +188,7 @@ import { createDurableCodexDeviceAuthService } from './services/codex-device-aut
 import { createConfigService } from './services/config.js';
 import { createCopilotModelsService } from './services/copilot-models.js';
 import { createCursorModelsService } from './services/cursor-models.js';
+import { EnvironmentCommandReportsService } from './services/environment-command-reports.js';
 import { createExecutorGitEnvironmentService } from './services/executor-git-environment.js';
 import { prepareSessionForExecutorStart } from './services/executor-startup.js';
 import { createFileService } from './services/file.js';
@@ -1071,6 +1073,10 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   // the exact daemon-issued Git executor command acting as its token owner.
   app.use('/executor-git-environment', createExecutorGitEnvironmentService(db), {
     methods: ['create'],
+  });
+  app.use(ENVIRONMENT_COMMAND_REPORT_SERVICE, new EnvironmentCommandReportsService(db, app), {
+    methods: ['create'],
+    events: [],
   });
 
   // Bootstrap superadmin users

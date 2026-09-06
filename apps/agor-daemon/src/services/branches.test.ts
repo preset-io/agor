@@ -2175,7 +2175,10 @@ describe('BranchesService managed environment control authorization', () => {
     await groups.addMember(group.group_id, member.user_id, owner.user_id);
     await setBranchGroupRole(db, branch.branch_id, owner.user_id, group.group_id, 'manager');
 
-    const service = new BranchesService(db, { service: vi.fn() } as unknown as Application);
+    const service = new BranchesService(db, {
+      get: () => ({}),
+      service: vi.fn(),
+    } as unknown as Application);
     const getSpy = vi.spyOn(service, 'get').mockResolvedValue(branch as never);
     const updateEnvironmentSpy = vi
       .spyOn(service, 'updateEnvironment')
@@ -2307,7 +2310,10 @@ describe('BranchesService managed environment control authorization', () => {
       new_branch: true,
       others_can: 'none',
     });
-    const service = new BranchesService(db, { service: vi.fn() } as unknown as Application);
+    const service = new BranchesService(db, {
+      get: () => ({}),
+      service: vi.fn(),
+    } as unknown as Application);
     vi.spyOn(service, 'get').mockResolvedValue(branch as never);
 
     await expect(
@@ -2353,7 +2359,10 @@ describe('BranchesService managed environment control authorization', () => {
     await groups.addMember(group.group_id, member.user_id, owner.user_id);
     await setBranchGroupRole(db, branch.branch_id, owner.user_id, group.group_id, 'collaborator');
 
-    const service = new BranchesService(db, { service: vi.fn() } as unknown as Application);
+    const service = new BranchesService(db, {
+      get: () => ({}),
+      service: vi.fn(),
+    } as unknown as Application);
     const getSpy = vi.spyOn(service, 'get').mockResolvedValue(branch as never);
 
     await expect(

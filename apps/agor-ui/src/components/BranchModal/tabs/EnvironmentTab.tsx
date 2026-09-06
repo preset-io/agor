@@ -20,6 +20,7 @@ import {
   validateManagedEnvLifecyclePolicy,
   validateRepoEnvironmentLifecyclePolicy,
 } from '@agor/core/environment/webhook';
+import { hasActiveEnvironmentCommand } from '@agor/core/types';
 import {
   type AgorClient,
   type Branch,
@@ -49,6 +50,7 @@ import { Alert, Button, Card, Select, Space, Spin, Tag, Tooltip, Typography, the
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useAuthConfig } from '../../../hooks/useAuthConfig';
 import { useConfirmNukeEnvironment } from '../../../hooks/useConfirmNukeEnvironment';
+import { useEnvironmentStart } from '../../../hooks/useEnvironmentStart';
 import { usePermissions } from '../../../hooks/usePermissions';
 import {
   getEnvironmentState,
@@ -58,6 +60,7 @@ import { useThemedMessage } from '../../../utils/message';
 import { useThemedModal } from '../../../utils/modal';
 import { CodeEditor } from '../../CodeEditor';
 import { EnvironmentLogsModal } from '../../EnvironmentLogsModal';
+import { EnvironmentDisclaimer } from './EnvironmentDisclaimer';
 
 const DOCS_URL = 'https://agor.live/guide/environment-configuration';
 
@@ -117,6 +120,14 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
   const confirmNuke = useConfirmNukeEnvironment();
   const { isAdmin } = usePermissions();
   const { featuresConfig } = useAuthConfig();
+  const startEnvironment = useEnvironmentStart(client);
+  const [environment, setEnvironment] = useState(branch.environment_instance);
+  const commandActive = hasActiveEnvironmentCommand(environment);
+  const asynchronous = featuresConfig?.environmentCommands?.asynchronous === true;
+  const shellLogsUnavailable =
+    featuresConfig?.environmentCommands?.shellLogs === false &&
+    !!branch.logs_command &&
+    !/^https?:\/\//i.test(branch.logs_command.trim());
 
   // ----- Permission gating -----
   const managedEnvsExecutionMode: ManagedEnvExecutionMode =
@@ -175,6 +186,7 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
 
   useEffect(() => {
     setEnvStatus(branch.environment_instance?.status || 'stopped');
+    setEnvironment(branch.environment_instance);
     setLastHealthCheck(branch.environment_instance?.last_health_check);
     setLastError(branch.environment_instance?.last_error);
 
@@ -210,6 +222,7 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
     const handleBranchUpdate = (data: unknown) => {
       const updated = data as Branch;
       if (updated.branch_id === branch.branch_id) {
+        setEnvironment(updated.environment_instance);
         setEnvStatus(updated.environment_instance?.status || 'stopped');
         setLastHealthCheck(updated.environment_instance?.last_health_check);
         setLastError(updated.environment_instance?.last_error);
@@ -224,7 +237,7 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
     if (!client) return;
     setIsStarting(true);
     try {
-      await client.service(`branches/${branch.branch_id}/start`).create({});
+      if (!(await startEnvironment(branch.branch_id))) return;
       showSuccess('Environment start requested');
     } catch (error) {
       showError(error instanceof Error ? error.message : 'Failed to start environment');
@@ -617,6 +630,86 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
   return (
     <div style={{ width: '100%', maxHeight: '70vh', overflowY: 'auto' }}>
       <Space orientation="vertical" size="large" style={{ width: '100%' }}>
+        <EnvironmentDisclaimer markdown={featuresConfig?.environmentDisclaimerMarkdown} />
+        {asynchronous && (
+          <Alert
+            type="info"
+            showIcon
+            title="Bounded remote-environment commands"
+            description="Start, Stop, and Nuke report command outcomes, not proof of provider resource ownership or readiness. Restart is unavailable: Stop, inspect the result, then Start. Applications are not hosted in the executor."
+          />
+        )}
+        {shellLogsUnavailable && (
+          <Alert
+            type="info"
+            showIcon
+            title="Shell Logs unavailable"
+            description={featuresConfig?.environmentCommands?.shellLogsReason}
+          />
+        )}
+        {environment?.command_attempt && (
+          <Alert
+            type={environment.last_command?.status === 'unknown' ? 'warning' : 'info'}
+            showIcon
+            title={
+              commandActive
+                ? environment.command_attempt.claimed_at
+                  ? 'Command executing'
+                  : 'Command dispatched; awaiting executor claim'
+                : environment.last_command?.status === 'unknown'
+                  ? 'Outcome unknown'
+                  : environment.last_command?.message
+            }
+            description={
+              <Space orientation="vertical" style={{ width: '100%', minWidth: 0 }}>
+                {commandActive && (
+                  <span>Result deadline: {environment.command_attempt.result_deadline}</span>
+                )}
+                {environment.last_command?.status !== 'succeeded' && !commandActive && (
+                  <span>
+                    Retry Stop to request cleanup, or explicitly confirm Start anyway. An earlier
+                    command or provider operation may overlap; Agor does not automatically retry
+                    mutations.
+                  </span>
+                )}
+                <span>
+                  {environment.command_attempt.output_truncated
+                    ? 'Output truncated.'
+                    : 'Available command output (may be incomplete after executor loss).'}
+                </span>
+                <pre
+                  style={{
+                    maxHeight: 200,
+                    overflow: 'auto',
+                    whiteSpace: 'pre-wrap',
+                    overflowWrap: 'anywhere',
+                    margin: 0,
+                  }}
+                >
+                  {environment.command_attempt.output || 'No command output received.'}
+                </pre>
+                {environment.command_history?.map((entry) => (
+                  <details key={entry.attempt.id}>
+                    <summary>
+                      Previous {entry.attempt.action}: {entry.result?.status ?? 'unknown'}
+                    </summary>
+                    <p>{entry.result?.message}</p>
+                    <pre
+                      style={{
+                        maxHeight: 160,
+                        overflow: 'auto',
+                        whiteSpace: 'pre-wrap',
+                        overflowWrap: 'anywhere',
+                      }}
+                    >
+                      {entry.attempt.output || 'No output received.'}
+                    </pre>
+                  </details>
+                ))}
+              </Space>
+            }
+          />
+        )}
         {/* ====== Environment Controls (top — unchanged from prior behavior) ====== */}
         {hasEnvironmentConfig && (
           <Card size="small">
@@ -634,6 +727,7 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
                 loading={isStarting}
                 disabled={
                   !canTriggerEnv ||
+                  commandActive ||
                   envStatus === 'running' ||
                   envStatus === 'starting' ||
                   isStarting ||
@@ -649,7 +743,7 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
                 icon={isStopping ? <LoadingOutlined /> : <PoweroffOutlined />}
                 onClick={handleStop}
                 loading={isStopping}
-                disabled={!canTriggerEnv}
+                disabled={!canTriggerEnv || commandActive}
                 title={triggerDisabledTooltip}
                 danger
               >
@@ -659,7 +753,9 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
                 size="small"
                 icon={isRestarting ? <LoadingOutlined /> : <ReloadOutlined />}
                 onClick={handleRestart}
-                disabled={!canTriggerEnv || isStarting || isStopping || isRestarting}
+                disabled={
+                  !canTriggerEnv || asynchronous || isStarting || isStopping || isRestarting
+                }
                 loading={isRestarting}
                 title={triggerDisabledTooltip}
               >
@@ -670,7 +766,14 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
                   size="small"
                   icon={isNuking ? <LoadingOutlined /> : <FireOutlined />}
                   onClick={handleNuke}
-                  disabled={!canTriggerEnv || isStarting || isStopping || isRestarting || isNuking}
+                  disabled={
+                    !canTriggerEnv ||
+                    commandActive ||
+                    isStarting ||
+                    isStopping ||
+                    isRestarting ||
+                    isNuking
+                  }
                   loading={isNuking}
                   danger
                   title={
@@ -685,7 +788,7 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
                 size="small"
                 icon={<FileTextOutlined />}
                 onClick={() => setLogsModalOpen(true)}
-                disabled={!canTriggerEnv || !branch.logs_command}
+                disabled={!canTriggerEnv || !branch.logs_command || shellLogsUnavailable}
                 title={
                   !canTriggerEnv
                     ? triggerDisabledTooltip

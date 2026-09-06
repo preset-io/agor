@@ -10,20 +10,24 @@ import { rm } from 'node:fs/promises';
 import { isDeepStrictEqual } from 'node:util';
 import { analyticsLogger } from '@agor/core/analytics';
 import {
+  assertAsyncEnvironmentCommandConfig,
   createUserProcessEnvironment,
   ENVIRONMENT,
   ensureBranchCloneDepthAllowed,
   ensureBranchStorageModeAllowed,
+  environmentCommandCapabilities,
   getBranchesDir,
   getBranchHomePath,
   PAGINATION,
   resolveBranchStorageConfig,
   resolveMultiTenancyConfig,
+  usesAsyncEnvironmentCommands,
 } from '@agor/core/config';
 import {
   BoardRepository,
   BranchRepository,
   type BranchWithZoneAndSessions,
+  EnvironmentCommandRepository,
   type EnvironmentHealthObservation,
   EnvironmentHealthRepository,
   generateId,
@@ -73,6 +77,9 @@ import type {
 } from '@agor/core/types';
 import {
   BRANCH_ENVIRONMENT_CLEARABLE_FIELDS,
+  ENVIRONMENT_COMMAND_BUDGET,
+  type EnvironmentCommandAction,
+  environmentCommandTokenId,
   getTeammateConfig,
   hasMinimumRole,
   isTeammate,
@@ -89,6 +96,7 @@ import { captureBranchRemovalRealtimeVisibility } from '../utils/branch-removal-
 import { ensureBranchWorkspaceAccess } from '../utils/branch-workspace-path.js';
 import { shouldUseCloneReferencePath } from '../utils/clone-reference.js';
 import { emitServiceEvent } from '../utils/emit-service-event.js';
+import { dispatchEnvironmentCommand } from '../utils/environment-command-dispatch.js';
 import { resolveDelegatedExecutionHomeKey } from '../utils/executor-delegated-home.js';
 import { parseLastMessageTruncationLength } from '../utils/query-params.js';
 import { resolveOwnerHomeStore, resolveSandboxStoragePaths } from '../utils/sandbox-context.js';
@@ -318,6 +326,144 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       await this.getManagedEnvExecutionMode(),
       commandType
     );
+  }
+
+  private async runAsyncEnvironmentAction(
+    branch: Branch,
+    action: EnvironmentCommandAction,
+    params?: BranchParams,
+    confirmationOf?: string
+  ): Promise<BranchWithZoneAndSessions> {
+    const config = this.app.get('config');
+    assertAsyncEnvironmentCommandConfig(config);
+    const command =
+      action === 'start'
+        ? branch.start_command
+        : action === 'stop'
+          ? branch.stop_command
+          : branch.nuke_command;
+    if (!command) throw new BadRequest(`No ${action} command configured`);
+    const execution = await this.resolveEnvironmentCommand(command, action);
+    const context =
+      execution.kind === 'command'
+        ? await this.resolveEnvironmentExecutorContext(branch, params)
+        : undefined;
+    const userId = ((params as AuthenticatedParams | undefined)?.user?.user_id ??
+      branch.created_by) as UserID;
+    const attemptId = generateId();
+    // Preparation precedes admission; the row lock rechecks the current snapshot.
+    const sessionToken = context
+      ? await this.withTenantDatabase(params, () =>
+          issueExecutorCommandToken(
+            this.app,
+            environmentCommandTokenId(action, attemptId),
+            userId,
+            branch.branch_id
+          )
+        )
+      : undefined;
+    const environment = await this.withTenantDatabase(params, () =>
+      new EnvironmentCommandRepository(this.db).admit({
+        branch,
+        action,
+        attemptId,
+        userId,
+        confirmationOf,
+      })
+    );
+    const publish = async () => {
+      const current = await this.withTenantDatabase(params, () =>
+        this.get(branch.branch_id, params)
+      );
+      emitServiceEvent(this.app, {
+        path: 'branches',
+        event: 'patched',
+        data: current,
+        params,
+        id: branch.branch_id,
+      });
+      return current;
+    };
+    await publish();
+    try {
+      if (execution.kind === 'webhook') {
+        const scope = { branch_id: branch.branch_id, attempt_id: attemptId, action };
+        await this.withTenantDatabase(params, () =>
+          new EnvironmentCommandRepository(this.db).report({ ...scope, kind: 'claim' })
+        );
+        try {
+          const result = await this.executeEnvironmentWebhook({
+            url: execution.url,
+            branch,
+            commandType: action,
+            triggeredBy: this.extractTriggeredBy(params),
+            maxBytes: ENVIRONMENT_COMMAND_BUDGET.outputBytes,
+          });
+          await this.withTenantDatabase(params, () =>
+            new EnvironmentCommandRepository(this.db).report({
+              ...scope,
+              kind: 'result',
+              outcome: 'succeeded',
+              message: `${action} webhook succeeded; remote resource cleanup/readiness is not certified`,
+              output: result.body,
+              truncated: result.truncated,
+            })
+          );
+        } catch {
+          await this.withTenantDatabase(params, () =>
+            new EnvironmentCommandRepository(this.db).report({
+              ...scope,
+              kind: 'result',
+              outcome: 'unknown',
+              message: `${action} webhook failed or timed out; remote outcome is unknown`,
+            })
+          );
+        }
+      } else {
+        await dispatchEnvironmentCommand(
+          {
+            command: 'environment.lifecycle',
+            sessionToken,
+            daemonUrl: getDaemonUrl(),
+            env: context!.env,
+            params: {
+              branchId: branch.branch_id,
+              branchPath: branch.path,
+              cwd: branch.path,
+              principalBranchAccess: context!.branchFsAccess,
+              ...context!.sandboxMounts,
+              action,
+              startCommand: action === 'start' ? command : undefined,
+              stopCommand: action === 'stop' ? command : undefined,
+              nukeCommand: action === 'nuke' ? command : undefined,
+              appUrl: branch.app_url,
+              attempt: {
+                id: attemptId,
+                claimDeadline: environment.command_attempt!.claim_deadline,
+                commandDeadline: environment.command_attempt!.command_deadline,
+                resultDeadline: environment.command_attempt!.result_deadline,
+                externalJobDeadlineMs: config.execution!.environment_command_job_deadline_ms,
+              },
+            },
+          },
+          {
+            delegatedHomeKey: context!.delegatedHomeKey,
+            preparedEnv: context!.env,
+            logPrefix: `[Environment.${action} ${branch.branch_id}]`,
+            templateVariables: {
+              branch_id: branch.branch_id,
+              user_id: userId,
+              branch_fs_access: context!.branchFsAccess,
+            },
+          }
+        );
+      }
+    } catch {
+      await this.withTenantDatabase(params, () =>
+        new EnvironmentCommandRepository(this.db).dispatchFailed(branch.branch_id, attemptId)
+      );
+    }
+    return publish();
   }
 
   private async validateRenderedEnvironmentActions(snapshot: {
@@ -668,6 +814,8 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     logsCommand: string,
     params?: BranchParams
   ): Promise<{ stdout: string; stderr: string; truncated: boolean }> {
+    const capability = environmentCommandCapabilities(this.app.get('config'));
+    if (!capability.shellLogs) throw new BadRequest(capability.shellLogsReason);
     const { delegatedHomeKey, env, executionUserId, branchFsAccess, sandboxMounts } =
       await this.resolveEnvironmentExecutorContext(branch, params, 'read');
     const sessionToken = await this.withTenantDatabase(params, () =>
@@ -1638,6 +1786,15 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
 
     const { metadataAction, filesystemAction } = options;
     const branch = await this.withTenantDatabase(params, () => this.get(id, params));
+    if (
+      branch.environment_instance?.command_attempt &&
+      branch.environment_instance.status !== 'stopped' &&
+      branch.environment_instance.status !== 'error'
+    ) {
+      throw new Conflict(
+        'Stop the asynchronous environment and inspect its result before archiving or deleting this branch'
+      );
+    }
     const requestUser = (params as AuthenticatedParams).user!;
     const currentUserId = requestUser.user_id as UUID;
     const branchFsAccess =
@@ -2171,6 +2328,11 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     if (!environmentUpdate) {
       throw new Error('Environment update is required');
     }
+    if (resolvedParams?.provider && usesAsyncEnvironmentCommands(this.app.get('config'))) {
+      throw new Forbidden(
+        'Use attempt-scoped environment command reports, not arbitrary environment patches'
+      );
+    }
 
     const existing = await this.withTenantDatabase(resolvedParams, () =>
       this.get(id, resolvedParams)
@@ -2283,8 +2445,14 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
   /**
    * Custom method: Start environment
    */
-  async startEnvironment(id: BranchID, params?: BranchParams): Promise<BranchWithZoneAndSessions> {
+  async startEnvironment(
+    id: BranchID,
+    params?: BranchParams,
+    confirmationOf?: string
+  ): Promise<BranchWithZoneAndSessions> {
     const branch = await this.loadEnvironmentForAction(id, params, 'start branch environments');
+    if (usesAsyncEnvironmentCommands(this.app.get('config')))
+      return this.runAsyncEnvironmentAction(branch, 'start', params, confirmationOf);
 
     if (!branch.start_command) {
       throw new Error('No start command configured for this branch');
@@ -2368,6 +2536,8 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
    */
   async stopEnvironment(id: BranchID, params?: BranchParams): Promise<BranchWithZoneAndSessions> {
     const branch = await this.loadEnvironmentForAction(id, params, 'stop branch environments');
+    if (usesAsyncEnvironmentCommands(this.app.get('config')))
+      return this.runAsyncEnvironmentAction(branch, 'stop', params);
 
     await this.updateEnvironment(id, { status: 'stopping' }, params);
 
@@ -2452,6 +2622,10 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     params?: BranchParams
   ): Promise<BranchWithZoneAndSessions> {
     const branch = await this.loadEnvironmentForAction(id, params, 'restart branch environments');
+    if (usesAsyncEnvironmentCommands(this.app.get('config')))
+      throw new BadRequest(
+        'Restart is unavailable for asynchronous environments. Request Stop, inspect its outcome, then explicitly Start.'
+      );
 
     if (!branch.start_command) {
       throw new Error('No start command configured for this branch');
@@ -2505,6 +2679,8 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
    */
   async nukeEnvironment(id: BranchID, params?: BranchParams): Promise<BranchWithZoneAndSessions> {
     const branch = await this.loadEnvironmentForAction(id, params, 'nuke branch environments');
+    if (usesAsyncEnvironmentCommands(this.app.get('config')))
+      return this.runAsyncEnvironmentAction(branch, 'nuke', params);
 
     if (!branch.nuke_command) {
       throw new Error('No nuke_command configured for this branch');
@@ -2593,7 +2769,16 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       internalOptions?.intent === 'automatic'
         ? this.getCanonicalBranch(id, params)
         : this.get(id, params);
-    const branch = await this.withTenantDatabase(params, loadCurrent);
+    let branch = await this.withTenantDatabase(params, loadCurrent);
+    if (
+      branch.environment_instance?.command_attempt &&
+      (await this.withTenantDatabase(params, () =>
+        new EnvironmentCommandRepository(this.db).expire(id)
+      ))
+    ) {
+      branch = await this.withTenantDatabase(params, loadCurrent);
+      emitServiceEvent(this.app, { path: 'branches', event: 'patched', data: branch, params, id });
+    }
 
     const currentStatus = branch.environment_instance?.status;
     if (

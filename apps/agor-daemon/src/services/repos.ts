@@ -1210,6 +1210,19 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
   async remove(id: string, params?: RepoParams): Promise<Repo> {
     const repo = await this.get(id, params);
     const cleanup = params?.query?.cleanup === true;
+    // This legacy path deletes remote files before taking branch lifecycle
+    // locks. Do not erase a newly admitted command's checkout. A distributed
+    // repository-cleanup workflow is deliberately outside environment scope.
+    const config = this.app.get('config');
+    if (
+      cleanup &&
+      config.deployment?.mode === 'ha' &&
+      config.deployment.ha?.execution_topology === 'external'
+    ) {
+      throw new Error(
+        'Repository filesystem cleanup is unavailable with external HA execution. Stop environments, inspect outcomes, and use operator-managed cleanup; metadata-only removal remains available.'
+      );
+    }
 
     // Get ALL branches for this repo (needed for both filesystem and database cleanup).
     // CRITICAL: Use the unbounded repository query so transport pagination and
