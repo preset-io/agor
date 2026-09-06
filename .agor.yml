@@ -37,7 +37,7 @@ environment:
         docker compose -f docker-compose.ha.yml -p agor-ha-{{branch.name}} logs --tail=150
       description: >-
         Hosted control-plane smoke: PostgreSQL/RLS, ephemeral Redis, two daemons, nginx affinity,
-        auth-resolved tenants, RBAC, per-user sandbox homes, and a development identity picker.
+        auth-resolved multi-tenancy, per-user sandbox homes, and a development identity picker.
       health: http://localhost:{{add 3000 branch.unique_id}}/readyz
       app: http://{{host.ip_address}}:{{add 3000 branch.unique_id}}/dev-auth/
     docs:
