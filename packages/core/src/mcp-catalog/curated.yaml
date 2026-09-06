@@ -541,6 +541,10 @@ unpublished:
     remote_url: https://mcp.app.preset.io/mcp
     transport: streamable-http
     auth_type: oauth
+    # Fail closed rather than opt into marketplace interoperability before
+    # production callback/registration compatibility has been verified.
+    oauth:
+      compatibility_mode: strict
     website_url: https://preset.io/
 
   - name: com.dropbox/mcp

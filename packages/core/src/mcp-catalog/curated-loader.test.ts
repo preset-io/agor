@@ -531,19 +531,40 @@ describe('the shipped catalog', () => {
     );
   });
 
-  it('opts the providers that pass the strict production boundary into strict mode', async () => {
+  it('keeps the explicit strict-mode policy inventory', async () => {
     // Marketplace installs with no statement use the daemon's bounded
-    // interoperability profile. These three publish the exact PRM/issuer,
+    // interoperability profile. Monday, Cloudflare and ClickUp publish the exact PRM/issuer,
     // S256 and RFC 9207 contracts, so keep the stronger policy explicit and
-    // make any later expansion a reviewed curation change.
+    // make any later expansion a reviewed curation change. Preset is pinned
+    // defensively pending production validation, not claimed to have passed it.
     const entries = await loadCuratedCatalog();
     expect(
       entries.filter((entry) => entry.oauth !== undefined).map((entry) => [entry.name, entry.oauth])
     ).toEqual([
       ['com.monday/monday.com', { compatibility_mode: 'strict' }],
       ['com.cloudflare/mcp', { compatibility_mode: 'strict' }],
+      ['io.preset/mcp-gateway', { compatibility_mode: 'strict' }],
       ['com.clickup/mcp', { compatibility_mode: 'strict' }],
     ]);
+  });
+
+  it('preserves Preset install identity and requires strict OAuth without hiding write authority', async () => {
+    const entries = await loadCuratedCatalog();
+    // catalog_entry_name is persisted on installs: this is a release identity,
+    // not display copy. A rename requires an explicit migration decision.
+    const preset = entries.find((entry) => entry.name === 'io.preset/mcp-gateway');
+    expect(preset).toMatchObject({
+      remote_url: 'https://mcp.app.preset.io/mcp',
+      transport: 'streamable-http',
+      auth_type: 'oauth',
+      oauth: { compatibility_mode: 'strict' },
+    });
+    // The initial task is intentionally read-only, not an authorization limit.
+    expect(preset!.starter_prompt).toContain('Do not change any data.');
+    expect(preset!.permission_disclosure).toContain('run SQL');
+    expect(preset!.permission_disclosure).toContain(
+      'create, edit, soft-delete, or restore Knowledge documents'
+    );
   });
 
   it('does not advertise OAuth endpoints that cannot reach a safely bound client-registration boundary', async () => {
