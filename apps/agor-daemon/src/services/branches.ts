@@ -119,6 +119,7 @@ import {
   matchesExecutorCommandRuntimeScope,
 } from '../auth/executor-runtime-scope.js';
 import { buildBranchCreatedAnalyticsProperties } from '../utils/analytics-payloads.js';
+import { authorizeBranchBoardMove } from '../utils/authorization.js';
 import { consumeBranchArchiveDeleteAuthorization } from '../utils/branch-archive-delete-authorization.js';
 import { ensureCanControlBranchEnvironment } from '../utils/branch-authorization.js';
 import { captureBranchRemovalRealtimeVisibility } from '../utils/branch-removal-realtime.js';
@@ -2378,7 +2379,18 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     console.log(`📦 Unarchiving branch: ${branch.name}`);
 
     const boardIdExplicitlyProvided = options !== undefined && 'boardId' in options;
-    const targetBoardId = boardIdExplicitlyProvided ? options?.boardId : branch.board_id;
+    const targetBoardId = boardIdExplicitlyProvided
+      ? await this.withTenantDatabase(params, () =>
+          authorizeBranchBoardMove(
+            this.db,
+            branch.board_id,
+            options?.boardId,
+            params as AuthenticatedParams,
+            this.appRbacEnabled,
+            this.boardRepo
+          )
+        )
+      : branch.board_id;
 
     const userId = requestUser.user_id;
     const delegatedHomeKey = await resolveDelegatedExecutionHomeKey(
@@ -2470,7 +2482,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       filesystem_status: branchPathExists ? 'ready' : 'creating',
       filesystem_attempt: filesystemAttempt ?? (null as unknown as undefined),
     };
-    if (boardIdExplicitlyProvided) patchData.board_id = options?.boardId;
+    if (boardIdExplicitlyProvided) patchData.board_id = targetBoardId;
 
     let unarchivedBranch: Branch;
     try {

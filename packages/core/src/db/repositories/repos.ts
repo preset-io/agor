@@ -88,6 +88,16 @@ export class RepoCloneAttemptConflictError extends RepositoryError {
   }
 }
 
+export class RepoCloneNotReadyError extends RepositoryError {
+  constructor(
+    readonly repoId: UUID,
+    readonly cloneStatus: 'cloning' | 'failed'
+  ) {
+    super(`Repository ${repoId} clone is ${cloneStatus}; branch materialization is unavailable`);
+    this.name = 'RepoCloneNotReadyError';
+  }
+}
+
 /**
  * Repo repository implementation
  */
@@ -319,13 +329,23 @@ export class RepoRepository implements BaseRepository<Repo, Partial<Repo>> {
    * Serialize new repo-owned work against destructive cleanup. Callers pass
    * their current transaction so the repo lock is held through admission.
    */
-  async lockForWorkAdmissionInTransaction(db: Database, id: UUID): Promise<Repo> {
+  async lockForWorkAdmissionInTransaction(
+    db: Database,
+    id: UUID,
+    options?: { requireCloneReady?: boolean }
+  ): Promise<Repo> {
     await lockRowForUpdate(db, this.db, repos, eq(repos.repo_id, id));
     const row = await select(db).from(repos).where(eq(repos.repo_id, id)).one();
     if (!row) throw new EntityNotFoundError('Repo', id);
     const repo = this.rowToRepo(row);
     if (repo.deletion_attempt) {
       throw new RepoDeletionInProgressError(id, repo.deletion_attempt.deadline_at);
+    }
+    if (
+      options?.requireCloneReady &&
+      (repo.clone_status === 'cloning' || repo.clone_status === 'failed')
+    ) {
+      throw new RepoCloneNotReadyError(id, repo.clone_status);
     }
     return repo;
   }

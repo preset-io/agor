@@ -121,6 +121,17 @@ reserving time for settlement, rather than leaving an uncallable lease behind.
 > do not understand. During a mixed-version rolling deployment that introduces this contract,
 > wait until every daemon replica is upgraded before running repository cleanup.
 
+Repository registration also uses an exact `git.clone:<repo-id>` callback capability and a
+daemon-created `cloning` placeholder. Upgrade daemon and executor images together; an older
+executor cannot settle a placeholder created by the new daemon. Branch creation remains disabled
+until the clone settles to `ready` (legacy rows without `clone_status` remain compatible).
+
+An ambiguous delegated-launcher exit deliberately retains `cloning` ownership because Agor cannot
+prove that the external clone stopped writing. To recover, first cancel the external Job/run and
+verify that no clone process can still reach the managed path. Then remove the repository metadata
+without filesystem cleanup, remove the contained path through the external substrate, and register
+the repository again. Never use destructive Agor cleanup while clone ownership is ambiguous.
+
 ---
 
 ## Storage modes

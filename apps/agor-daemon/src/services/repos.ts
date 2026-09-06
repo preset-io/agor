@@ -33,6 +33,7 @@ import {
   generateId,
   getCurrentTenantId,
   RepoCloneAttemptConflictError,
+  RepoCloneNotReadyError,
   RepoDeletionInProgressError,
   RepoRepository,
   runWithTenantDatabaseTransaction,
@@ -304,7 +305,10 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
   }
 
   /** Create the daemon-owned clone placeholder without reopening generic Repo CRUD. */
-  private async createClonePlaceholder(data: Partial<Repo>, params?: RepoParams): Promise<Repo> {
+  private async createClonePlaceholder(
+    data: Partial<Repo> & Pick<Repo, 'repo_id'>,
+    params?: RepoParams
+  ): Promise<Repo> {
     const repo = (await super.create(data, {
       ...params,
       provider: undefined,
@@ -428,8 +432,17 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     // name but distinct Agor slugs do not collide on disk.
     const tenantId = (params as AuthenticatedParams | undefined)?.tenant?.tenant_id;
     const expectedLocalPath = path.join(getReposDir(tenantId), slug);
-    const placeholder = await this.createClonePlaceholder(
+    const repoId = generateId() as UUID;
+    // Mint the exact callback capability before publishing clone ownership.
+    // A credential-service failure must leave no durable `cloning` row.
+    const sessionToken = await issueExecutorCommandToken(
+      this.app,
+      gitCloneExecutorCommandId(repoId),
+      userId
+    );
+    await this.createClonePlaceholder(
       {
+        repo_id: repoId,
         slug: slug as RepoSlug,
         name: data.name || slug,
         repo_type: 'remote',
@@ -440,12 +453,6 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
       },
       params
     );
-    const repoId = placeholder.repo_id;
-    const sessionToken = await issueExecutorCommandToken(
-      this.app,
-      gitCloneExecutorCommandId(repoId),
-      userId
-    );
 
     // Fire and forget - spawn executor and return immediately.
     // Executor handles: git clone, .agor.yml parsing, repo row patching.
@@ -453,125 +460,152 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     // the executor-only credential service.
     // Unix permissions are applied synchronously inside that lifecycle executor.
     const app = this.app;
-    spawnExecutorFireAndForget(
-      {
-        command: 'git.clone',
-        sessionToken,
-        daemonUrl: getDaemonUrl(),
-        params: {
-          url: remoteUrl,
-          slug,
-          repoId,
-          outputPath: expectedLocalPath,
-          // Forward the user-supplied default_branch so the executor
-          // persists what the operator typed in "Add Repository" instead
-          // of silently overwriting it with origin/HEAD.
-          ...(data.default_branch ? { default_branch: data.default_branch } : {}),
-          createDbRecord: true,
-          // `.agor.yml` can define executable environment commands. Preserve
-          // the same admin boundary as direct repo create/patch even though
-          // clone finalization currently authenticates as a daemon worker.
-          importEnvironmentConfig: mayImportEnvironment,
-          userId: userId as string | undefined,
+    try {
+      spawnExecutorFireAndForget(
+        {
+          command: 'git.clone',
+          sessionToken,
+          daemonUrl: getDaemonUrl(),
+          params: {
+            url: remoteUrl,
+            slug,
+            repoId,
+            outputPath: expectedLocalPath,
+            // Forward the user-supplied default_branch so the executor
+            // persists what the operator typed in "Add Repository" instead
+            // of silently overwriting it with origin/HEAD.
+            ...(data.default_branch ? { default_branch: data.default_branch } : {}),
+            createDbRecord: true,
+            // `.agor.yml` can define executable environment commands. Preserve
+            // the same admin boundary as direct repo create/patch even though
+            // clone finalization currently authenticates as a daemon worker.
+            importEnvironmentConfig: mayImportEnvironment,
+            userId: userId as string | undefined,
+          },
         },
-      },
-      {
-        logPrefix: `[clone ${slug}]`,
-        delegatedHomeKey: delegatedHomeKey,
-        templateVariables: {
-          user_id: userId,
-        },
-        onExit: async (code, context) => {
-          if (code !== 0 && code !== null) {
-            const disposition = classifyExecutorExit({
-              mode: context.mode,
-              code,
-              nonzeroMayHaveDispatched:
-                this.app.get('config').execution?.executor_command_nonzero_may_have_dispatched ===
-                true,
-            });
-            if (disposition === 'ambiguous') {
-              console.warn(
-                `[clone ${slug}] Launcher exited with ${code}; retaining clone ownership because delegated work may still be running`
-              );
-              return;
-            }
-            console.error(
-              `[clone ${slug}] Clone failed with exit code ${code}; resolving durable error`
-            );
-            const io = (
-              app as unknown as {
-                io?: {
-                  to: (room: string) => { emit: (event: string, data: unknown) => void };
-                };
+        {
+          logPrefix: `[clone ${slug}]`,
+          delegatedHomeKey: delegatedHomeKey,
+          templateVariables: {
+            user_id: userId,
+          },
+          onExit: async (code, context) => {
+            if (code !== 0 && code !== null) {
+              const disposition = classifyExecutorExit({
+                mode: context.mode,
+                code,
+                nonzeroMayHaveDispatched:
+                  this.app.get('config').execution?.executor_command_nonzero_may_have_dispatched ===
+                  true,
+              });
+              if (disposition === 'ambiguous') {
+                console.warn(
+                  `[clone ${slug}] Launcher exited with ${code}; retaining clone ownership because delegated work may still be running`
+                );
+                return;
               }
-            ).io;
-            // Resolve the durable row before emitting the fallback event. If
-            // the executor already persisted a categorized error, include the
-            // same structured payload so the fallback toast cannot lose the
-            // auth/CA/Git remediation hints. If the executor crashed before
-            // patching, preserve the safety-net failure row and emit that one.
-            const resolveDurableFailure = async () => {
-              let current: Repo | undefined;
-              try {
-                current = (await this.repoRepo.findById(repoId)) ?? undefined;
-                if (current?.clone_status === 'cloning') {
-                  current = await this.commitCloneSettlement(
-                    {
-                      repo_id: repoId,
-                      clone_status: 'failed',
-                      clone_error: {
-                        exit_code: code,
-                        category: 'unknown',
-                        message: `Clone exited with code ${code} before reporting an error.`,
+              console.error(
+                `[clone ${slug}] Clone failed with exit code ${code}; resolving durable error`
+              );
+              const io = (
+                app as unknown as {
+                  io?: {
+                    to: (room: string) => { emit: (event: string, data: unknown) => void };
+                  };
+                }
+              ).io;
+              // Resolve the durable row before emitting the fallback event. If
+              // the executor already persisted a categorized error, include the
+              // same structured payload so the fallback toast cannot lose the
+              // auth/CA/Git remediation hints. If the executor crashed before
+              // patching, preserve the safety-net failure row and emit that one.
+              const resolveDurableFailure = async () => {
+                let current: Repo | undefined;
+                try {
+                  current = (await this.repoRepo.findById(repoId)) ?? undefined;
+                  if (current?.clone_status === 'cloning') {
+                    current = await this.commitCloneSettlement(
+                      {
+                        repo_id: repoId,
+                        clone_status: 'failed',
+                        clone_error: {
+                          exit_code: code,
+                          category: 'unknown',
+                          message: `Clone exited with code ${code} before reporting an error.`,
+                        },
                       },
-                    },
-                    params
+                      params
+                    );
+                  }
+                } catch (err) {
+                  console.error(
+                    `[clone ${slug}] Failed to mark repo as failed in onExit safety net:`,
+                    err instanceof Error ? err.message : String(err)
                   );
                 }
-              } catch (err) {
-                console.error(
-                  `[clone ${slug}] Failed to mark repo as failed in onExit safety net:`,
-                  err instanceof Error ? err.message : String(err)
-                );
-              }
 
-              if (io && tenantId) {
-                // Include the pinned branch in the message so an operator who
-                // typo'd the Default Branch can self-diagnose.
-                const branchHint = data.default_branch
-                  ? ` Default Branch was set to '${data.default_branch}' — verify it exists on the remote.`
-                  : '';
-                emitHaNativeSocketEvent(io.to(tenantChannelName(tenantId)), 'repo:cloneError', {
-                  slug,
-                  url: remoteUrl,
-                  error:
-                    current?.clone_error?.message ??
-                    `Clone failed (exit code ${code}). Check that the repository URL is correct and accessible.${branchHint}`,
-                  repo_id: repoId,
-                  ...(current?.clone_error ? { clone_error: current.clone_error } : {}),
-                });
-              } else if (io) {
-                // Never fall back to a global raw Socket.IO broadcast. The
-                // durable repos.patched event remains the source of truth.
-                console.warn(`[clone ${slug}] Missing tenant scope; skipping clone-error toast`);
-              }
-            };
+                if (io && tenantId) {
+                  // Include the pinned branch in the message so an operator who
+                  // typo'd the Default Branch can self-diagnose.
+                  const branchHint = data.default_branch
+                    ? ` Default Branch was set to '${data.default_branch}' — verify it exists on the remote.`
+                    : '';
+                  emitHaNativeSocketEvent(io.to(tenantChannelName(tenantId)), 'repo:cloneError', {
+                    slug,
+                    url: remoteUrl,
+                    error:
+                      current?.clone_error?.message ??
+                      `Clone failed (exit code ${code}). Check that the repository URL is correct and accessible.${branchHint}`,
+                    repo_id: repoId,
+                    ...(current?.clone_error ? { clone_error: current.clone_error } : {}),
+                  });
+                } else if (io) {
+                  // Never fall back to a global raw Socket.IO broadcast. The
+                  // durable repos.patched event remains the source of truth.
+                  console.warn(`[clone ${slug}] Missing tenant scope; skipping clone-error toast`);
+                }
+              };
 
-            // Executor callbacks outlive the request transaction that spawned
-            // them. In tenant-aware modes, explicitly leave any inherited ALS
-            // transaction and persist the safety-net result in one fresh,
-            // write-gated tenant unit. Standalone SQLite retains its historical
-            // unscoped internal-service behavior.
-            if (tenantId) {
-              await withFreshTenantWrite(this.db, tenantId, resolveDurableFailure);
-            } else {
-              await resolveDurableFailure();
+              // Executor callbacks outlive the request transaction that spawned
+              // them. In tenant-aware modes, explicitly leave any inherited ALS
+              // transaction and persist the safety-net result in one fresh,
+              // write-gated tenant unit. Standalone SQLite retains its historical
+              // unscoped internal-service behavior.
+              if (tenantId) {
+                await withFreshTenantWrite(this.db, tenantId, resolveDurableFailure);
+              } else {
+                await resolveDurableFailure();
+              }
             }
-          }
-        },
+          },
+        }
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      // A synchronous throw means the launcher did not accept ownership. Settle
+      // the exact placeholder before returning the error so retry/removal stays
+      // available instead of leaving an unowned `cloning` fence.
+      try {
+        await this.commitCloneSettlement(
+          {
+            repo_id: repoId,
+            clone_status: 'failed',
+            clone_error: {
+              exit_code: -1,
+              category: 'unknown',
+              message: `Failed to dispatch repository clone: ${message}`.slice(0, 500),
+            },
+          },
+          params
+        );
+      } catch (settlementError) {
+        console.error(
+          `[clone ${slug}] Failed to settle synchronous dispatch failure:`,
+          settlementError instanceof Error ? settlementError.message : String(settlementError)
+        );
       }
-    );
+      throw error;
+    }
 
     // Return immediately - callers can poll `agor_repos_get(repoId)` for
     // `clone_status: 'ready' | 'failed'` to discover the final outcome.
@@ -986,47 +1020,59 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     // 1. Create git branch on filesystem
     // 2. Render environment templates with the materialized branch context
     // 3. Patch branch to 'ready' with rendered templates
-    let branch = (await (
-      branchesService as unknown as BranchesServiceImpl
-    ).createMaterializationIntent(
-      {
-        branch_id: branchId,
-        repo_id: repo.repo_id,
-        name: data.name,
-        path: branchPath,
-        ref: data.ref,
-        ref_type: data.refType,
-        base_ref: data.sourceBranch,
-        base_remote_url: baseRemoteUrl,
-        new_branch: data.createBranch ?? false,
-        branch_unique_id: branchUniqueId,
-        filesystem_status: 'creating', // Will be set to 'ready' by executor
-        filesystem_attempt: {
-          attempt_id: filesystemAttemptId,
-          action: 'create',
-          started_at: filesystemAttemptStartedAt.toISOString(),
-          deadline_at: new Date(
-            filesystemAttemptStartedAt.getTime() + materializationBudget.attemptTimeoutMs
-          ).toISOString(),
-        },
-        // Environment templates are rendered after filesystem materialization.
-        // RBAC fields are intentionally omitted at creation: new branches
-        // always align with their board defaults. Overrides are a deliberate
-        // post-create action from the Branch permissions tab.
-        ...(data.environment_variant ? { environment_variant: data.environment_variant } : {}),
-        storage_mode: storageMode,
-        ...(cloneDepth !== undefined ? { clone_depth: cloneDepth } : {}),
-        last_used: new Date().toISOString(),
-        issue_url: data.issue_url,
-        pull_request_url: data.pull_request_url,
-        notes: data.notes ?? undefined,
-        custom_context: data.custom_context,
-        board_id: resolvedBoardId,
-        created_by: userId,
-        primary_owner_user_id: userId,
-      } satisfies BranchMaterializationIntentData,
-      { ...params, provider: undefined }
-    )) as Branch;
+    let branch: Branch;
+    try {
+      branch = (await (
+        branchesService as unknown as BranchesServiceImpl
+      ).createMaterializationIntent(
+        {
+          branch_id: branchId,
+          repo_id: repo.repo_id,
+          name: data.name,
+          path: branchPath,
+          ref: data.ref,
+          ref_type: data.refType,
+          base_ref: data.sourceBranch,
+          base_remote_url: baseRemoteUrl,
+          new_branch: data.createBranch ?? false,
+          branch_unique_id: branchUniqueId,
+          filesystem_status: 'creating', // Will be set to 'ready' by executor
+          filesystem_attempt: {
+            attempt_id: filesystemAttemptId,
+            action: 'create',
+            started_at: filesystemAttemptStartedAt.toISOString(),
+            deadline_at: new Date(
+              filesystemAttemptStartedAt.getTime() + materializationBudget.attemptTimeoutMs
+            ).toISOString(),
+          },
+          // Environment templates are rendered after filesystem materialization.
+          // RBAC fields are intentionally omitted at creation: new branches
+          // always align with their board defaults. Overrides are a deliberate
+          // post-create action from the Branch permissions tab.
+          ...(data.environment_variant ? { environment_variant: data.environment_variant } : {}),
+          storage_mode: storageMode,
+          ...(cloneDepth !== undefined ? { clone_depth: cloneDepth } : {}),
+          last_used: new Date().toISOString(),
+          issue_url: data.issue_url,
+          pull_request_url: data.pull_request_url,
+          notes: data.notes ?? undefined,
+          custom_context: data.custom_context,
+          board_id: resolvedBoardId,
+          created_by: userId,
+          primary_owner_user_id: userId,
+        } satisfies BranchMaterializationIntentData,
+        { ...params, provider: undefined }
+      )) as Branch;
+    } catch (error) {
+      if (error instanceof RepoCloneNotReadyError) {
+        throw new Conflict('Repository clone must settle successfully before creating branches', {
+          code: 'REPOSITORY_CLONE_NOT_READY',
+          repo_id: error.repoId,
+          clone_status: error.cloneStatus,
+        });
+      }
+      throw error;
+    }
 
     if (resolvedBoardId) {
       const boardObjectsService = this.app.service('board-objects');

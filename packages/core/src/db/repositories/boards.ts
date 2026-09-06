@@ -564,6 +564,11 @@ export class BoardRepository implements BaseRepository<Board, Partial<Board>> {
   async canAttachBranch(boardId: string, userId: UUID): Promise<boolean> {
     const board = await this.findById(boardId);
     if (!board) throw new EntityNotFoundError('Board', boardId);
+    return this.canAttachBranchResolved(board, userId);
+  }
+
+  /** Resolve current branch-attach authority for a canonical board. */
+  async canAttachBranchResolved(board: Pick<Board, 'board_id'>, userId: UUID): Promise<boolean> {
     const access = await new CapabilityPolicyRepository(this.db).resolveBoardAccess(
       board.board_id,
       userId as UserID

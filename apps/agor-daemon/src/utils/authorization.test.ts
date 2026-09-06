@@ -6,10 +6,15 @@
  */
 
 import { Forbidden, NotAuthenticated } from '@agor/core/feathers';
-import type { AuthenticatedParams, HookContext } from '@agor/core/types';
+import type { AuthenticatedParams, BoardID, HookContext, UUID } from '@agor/core/types';
 import { ROLES } from '@agor/core/types';
 import { describe, expect, it } from 'vitest';
-import { ensureMinimumRole, registerAuthenticatedRoute, requireMinimumRole } from './authorization';
+import {
+  authorizeBranchBoardMove,
+  ensureMinimumRole,
+  registerAuthenticatedRoute,
+  requireMinimumRole,
+} from './authorization';
 
 /** Helper to create authenticated params for a given role and provider */
 function makeParams(role: string, provider: string | undefined = 'rest'): AuthenticatedParams {
@@ -134,6 +139,60 @@ describe('ensureMinimumRole', () => {
       } as AuthenticatedParams;
       expect(() => ensureMinimumRole(params, ROLES.ADMIN)).not.toThrow();
     });
+  });
+});
+
+describe('authorizeBranchBoardMove', () => {
+  const oldBoardId = '550e8400-e29b-41d4-a716-446655440001' as BoardID;
+  const targetBoardId = '550e8400-e29b-41d4-a716-446655440002' as BoardID;
+
+  it('rejects a branch manager who cannot attach to the target board', async () => {
+    const boardRepository = {
+      findBySlugOrId: async (ref: string) =>
+        ref === oldBoardId
+          ? { board_id: oldBoardId }
+          : ref === 'target-board'
+            ? { board_id: targetBoardId }
+            : null,
+      canMutateResolved: async () => true,
+      canAttachBranchResolved: async () => false,
+    };
+
+    await expect(
+      authorizeBranchBoardMove(
+        {} as never,
+        oldBoardId,
+        'target-board',
+        makeParams(ROLES.MEMBER),
+        true,
+        boardRepository as never
+      )
+    ).rejects.toThrow('Board Editor or Manager access is required to attach a branch');
+  });
+
+  it('returns the canonical target ID after detach and attach authorization', async () => {
+    const userId = 'user-test-0001' as UUID;
+    const boardRepository = {
+      findBySlugOrId: async (ref: string) =>
+        ref === oldBoardId
+          ? { board_id: oldBoardId }
+          : ref === 'target-board'
+            ? { board_id: targetBoardId }
+            : null,
+      canMutateResolved: async (_board: unknown, actorId: UUID) => actorId === userId,
+      canAttachBranchResolved: async (_board: unknown, actorId: UUID) => actorId === userId,
+    };
+
+    await expect(
+      authorizeBranchBoardMove(
+        {} as never,
+        oldBoardId,
+        'target-board',
+        makeParams(ROLES.MEMBER),
+        true,
+        boardRepository as never
+      )
+    ).resolves.toBe(targetBoardId);
   });
 });
 

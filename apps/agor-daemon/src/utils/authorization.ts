@@ -2,12 +2,28 @@
  * Authorization utilities for Feathers services and custom routes.
  */
 
-import { CapabilityPolicyRepository, type TenantScopeAwareDatabase } from '@agor/core/db';
+import {
+  BoardRepository,
+  CapabilityPolicyRepository,
+  type TenantScopeAwareDatabase,
+} from '@agor/core/db';
 import { Forbidden, NotAuthenticated } from '@agor/core/feathers';
-import type { AuthenticatedParams, HookContext, UserID, UserRole, UUID } from '@agor/core/types';
+import type {
+  AuthenticatedParams,
+  Board,
+  BoardID,
+  HookContext,
+  UserID,
+  UserRole,
+  UUID,
+} from '@agor/core/types';
 import { hasMinimumRole, ROLES } from '@agor/core/types';
 
 export type Role = UserRole;
+
+type BranchBoardMoveRepository = Pick<BoardRepository, 'findBySlugOrId' | 'canMutateResolved'> & {
+  canAttachBranchResolved(board: Pick<Board, 'board_id'>, userId: UUID): Promise<boolean>;
+};
 
 /** Shared custom-route/hook admission for attaching a branch to one board. */
 export async function ensureCanAttachBranchToBoard(
@@ -27,6 +43,54 @@ export async function ensureCanAttachBranchToBoard(
   if (!access.capabilities.includes('board.attach_branch')) {
     throw new Forbidden('Board Editor or Manager access is required to attach a branch');
   }
+}
+
+/**
+ * Shared hook/custom-route boundary for moving a branch between boards.
+ *
+ * Resolves the target to its canonical ID before authorization so callers do
+ * not persist a short ID or slug. The caller is expected to have separately
+ * established authority over the branch itself.
+ */
+export async function authorizeBranchBoardMove(
+  db: TenantScopeAwareDatabase,
+  previousBoardId: BoardID | undefined,
+  targetBoardRef: string | undefined,
+  params: AuthenticatedParams | undefined,
+  appRbacEnabled: boolean,
+  boardRepository: BranchBoardMoveRepository = new BoardRepository(db)
+): Promise<BoardID | undefined> {
+  const targetBoard = targetBoardRef
+    ? await boardRepository.findBySlugOrId(targetBoardRef)
+    : undefined;
+  if (targetBoardRef && !targetBoard) {
+    throw new Forbidden('Board Editor or Manager access is required to attach a branch');
+  }
+  const targetBoardId = targetBoard?.board_id as BoardID | undefined;
+  if (previousBoardId === targetBoardId) return targetBoardId;
+
+  if (!appRbacEnabled || !params?.provider) return targetBoardId;
+  const user = params.user;
+  if (!user) throw new NotAuthenticated('Authentication required');
+  if (user._isServiceAccount || hasMinimumRole(user.role, ROLES.ADMIN)) return targetBoardId;
+
+  const userId = user.user_id as UUID;
+  if (previousBoardId) {
+    const previousBoard = await boardRepository.findBySlugOrId(previousBoardId);
+    const canDetach = previousBoard
+      ? await boardRepository.canMutateResolved(previousBoard, userId).catch(() => false)
+      : false;
+    if (!canDetach) {
+      throw new Forbidden('Board Editor or Manager access is required to detach this branch');
+    }
+  }
+  if (
+    targetBoard &&
+    !(await boardRepository.canAttachBranchResolved(targetBoard, userId).catch(() => false))
+  ) {
+    throw new Forbidden('Board Editor or Manager access is required to attach a branch');
+  }
+  return targetBoardId;
 }
 
 /**

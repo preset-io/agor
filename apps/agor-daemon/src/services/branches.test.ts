@@ -2804,6 +2804,12 @@ describe('BranchesService.unarchive', () => {
       x: 7,
       y: 8,
     });
+    const boardRepo = (
+      service as unknown as {
+        boardRepo: BoardRepository;
+      }
+    ).boardRepo;
+    vi.spyOn(boardRepo, 'findBySlugOrId').mockResolvedValue({ board_id: newBoardId } as never);
 
     await service.unarchive(branchId, { boardId: newBoardId }, userParams);
 
@@ -2820,6 +2826,44 @@ describe('BranchesService.unarchive', () => {
       branch_id: branchId,
       position: { x: 7, y: 8 },
     });
+  });
+
+  it('checks target-board attach authority before probing or publishing unarchive', async () => {
+    const { service, branchRepo } = createServiceHarness();
+    const branchId = 'wt-board-denied' as BranchID;
+    const oldBoardId = '550e8400-e29b-41d4-a716-446655440001' as BoardID;
+    const newBoardId = '550e8400-e29b-41d4-a716-446655440002' as BoardID;
+    vi.spyOn(service, 'get').mockResolvedValue({
+      branch_id: branchId,
+      repo_id: 'repo-1',
+      name: 'Board denied',
+      path: '/tmp',
+      archived: true,
+      board_id: oldBoardId,
+    } as never);
+    const updateSpy = vi.spyOn(branchRepo, 'update');
+    const boardRepo = (
+      service as unknown as {
+        boardRepo: BoardRepository;
+      }
+    ).boardRepo;
+    vi.spyOn(boardRepo, 'findBySlugOrId').mockImplementation(async (ref) => {
+      if (ref === oldBoardId) return { board_id: oldBoardId } as never;
+      if (ref === 'target-board') return { board_id: newBoardId } as never;
+      return null;
+    });
+    vi.spyOn(boardRepo, 'canMutateResolved').mockResolvedValue(true);
+    vi.spyOn(boardRepo, 'canAttachBranchResolved').mockResolvedValue(false);
+
+    await expect(
+      service.unarchive(branchId, { boardId: 'target-board' as BoardID }, {
+        provider: 'rest',
+        user: { user_id: 'user-1' as UUID, role: 'member' },
+      } as never)
+    ).rejects.toThrow('Board Editor or Manager access is required to attach a branch');
+
+    expect(mockedRequestExecutor).not.toHaveBeenCalled();
+    expect(updateSpy).not.toHaveBeenCalled();
   });
 
   it('keeps the branch archived when the filesystem probe fails', async () => {

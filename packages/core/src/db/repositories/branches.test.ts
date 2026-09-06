@@ -14,14 +14,18 @@ import { ownedDbTest as dbTest } from '../test-helpers';
 import { AmbiguousIdError, EntityNotFoundError } from './base';
 import { BoardObjectRepository } from './board-objects';
 import { BranchRepository } from './branches';
-import { RepoDeletionInProgressError, RepoRepository } from './repos';
+import { RepoCloneNotReadyError, RepoDeletionInProgressError, RepoRepository } from './repos';
 import { ScheduleRepository } from './schedules';
 import { UsersRepository } from './users';
 
 /**
  * Create test repo data (needed as FK for branches)
  */
-function createRepoData(overrides?: { repo_id?: UUID; slug?: string }) {
+function createRepoData(overrides?: {
+  repo_id?: UUID;
+  slug?: string;
+  clone_status?: 'cloning' | 'ready' | 'failed';
+}) {
   const slug = overrides?.slug ?? 'test-repo';
   return {
     repo_id: overrides?.repo_id ?? generateId(),
@@ -31,6 +35,7 @@ function createRepoData(overrides?: { repo_id?: UUID; slug?: string }) {
     remote_url: 'https://github.com/test/repo.git',
     local_path: `/home/user/.agor/repos/${slug}`,
     default_branch: 'main',
+    clone_status: overrides?.clone_status,
   };
 }
 
@@ -199,6 +204,19 @@ describe('BranchRepository.create', () => {
       branchRepo.create(createBranchData({ repo_id: repo.repo_id }))
     ).rejects.toBeInstanceOf(RepoDeletionInProgressError);
   });
+
+  for (const cloneStatus of ['cloning', 'failed'] as const) {
+    dbTest(`rejects a new branch while its repository clone is ${cloneStatus}`, async ({ db }) => {
+      const repoRepo = new RepoRepository(db);
+      const branchRepo = new BranchRepository(db);
+      const repo = await repoRepo.create(createRepoData({ clone_status: cloneStatus }));
+
+      await expect(
+        branchRepo.create(createBranchData({ repo_id: repo.repo_id }))
+      ).rejects.toBeInstanceOf(RepoCloneNotReadyError);
+      await expect(branchRepo.findAllByRepoId(repo.repo_id)).resolves.toEqual([]);
+    });
+  }
 
   dbTest('rejects a missing immutable primary owner', async ({ db }) => {
     const repoRepo = new RepoRepository(db);

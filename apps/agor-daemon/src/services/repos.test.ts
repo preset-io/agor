@@ -1,5 +1,5 @@
 import { EXECUTOR_REVOCATION_TRANSPORT_CLEANUP_TIMEOUT_MS } from '@agor/core/config';
-import { EnvironmentRetirementConflictError } from '@agor/core/db';
+import { EnvironmentRetirementConflictError, RepoCloneNotReadyError } from '@agor/core/db';
 import type { Application, UUID } from '@agor/core/types';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ReposService } from './repos';
@@ -341,6 +341,63 @@ describe('ReposService.createBranch Git lifecycle execution', () => {
     expect(executorMocks.spawnExecutorFireAndForget).not.toHaveBeenCalled();
   });
 
+  it('does not dispatch branch materialization while the repository clone is unsettled', async () => {
+    const repoId = '550e8400-e29b-41d4-a716-446655440001' as UUID;
+    const branches = {
+      createMaterializationIntent: vi.fn(async () => {
+        throw new RepoCloneNotReadyError(repoId, 'cloning');
+      }),
+      find: vi.fn(async () => []),
+    };
+    const app = {
+      get: () => ({ execution: { branch_rbac: true } }),
+      sessionTokenService: {
+        generateCommandToken: vi.fn(async () => 'delegated-user-token'),
+      },
+      settings: { authentication: { secret: 'test-secret' } },
+      service: vi.fn((name: string) => {
+        if (name === 'boards') {
+          return {
+            get: vi.fn(async () => ({
+              board_id: '550e8400-e29b-41d4-a716-446655440003',
+              objects: {},
+            })),
+          };
+        }
+        if (name === 'branches') return branches;
+        throw new Error(`Unexpected service: ${name}`);
+      }),
+    } as unknown as Application;
+    const service = new ReposService({} as never, app);
+    vi.spyOn(service, 'get').mockResolvedValue({
+      repo_id: repoId,
+      slug: 'preset-io/agor',
+      local_path: '/managed/repos/agor',
+      default_branch: 'main',
+      clone_status: 'cloning',
+    } as never);
+
+    await expect(
+      service.createBranch(
+        repoId,
+        {
+          name: 'premature',
+          ref: 'premature',
+          createBranch: true,
+          sourceBranch: 'main',
+          boardId: '550e8400-e29b-41d4-a716-446655440003',
+        },
+        {
+          provider: 'rest',
+          user: { user_id: '550e8400-e29b-41d4-a716-446655440004', role: 'member' },
+        } as never
+      )
+    ).rejects.toMatchObject({
+      data: { code: 'REPOSITORY_CLONE_NOT_READY', clone_status: 'cloning' },
+    });
+    expect(executorMocks.spawnExecutorFireAndForget).not.toHaveBeenCalled();
+  });
+
   it('returns the failed representation when executor dispatch throws synchronously', async () => {
     executorMocks.spawnExecutorFireAndForget.mockImplementationOnce(() => {
       throw new Error('launcher unavailable');
@@ -651,6 +708,63 @@ describe('ReposService.cloneRepository Git lifecycle execution', () => {
     expect(repositoryMocks.settleRepoClone).toHaveBeenCalledTimes(1);
   });
 
+  it('does not publish clone ownership when callback credential issuance fails', async () => {
+    const app = {
+      get: () => ({}),
+      sessionTokenService: {
+        generateCommandToken: vi.fn(async () => {
+          throw new Error('credential authority unavailable');
+        }),
+      },
+    } as unknown as Application;
+    const service = new ReposService({} as never, app);
+    const placeholder = vi.spyOn(service as never, 'createClonePlaceholder');
+
+    await expect(
+      service.cloneRepository({ url: 'https://github.com/preset-io/token-failure.git' }, {
+        user: { user_id: '550e8400-e29b-41d4-a716-446655440004' },
+      } as never)
+    ).rejects.toThrow('credential authority unavailable');
+
+    expect(placeholder).not.toHaveBeenCalled();
+    expect(executorMocks.spawnExecutorFireAndForget).not.toHaveBeenCalled();
+  });
+
+  it('settles the exact clone placeholder when dispatch throws synchronously', async () => {
+    executorMocks.spawnExecutorFireAndForget.mockImplementationOnce(() => {
+      throw new Error('launcher unavailable');
+    });
+    repositoryMocks.settleRepoClone.mockImplementation(async (settlement: object) => settlement);
+    const app = {
+      get: () => ({}),
+      sessionTokenService: { generateCommandToken: vi.fn(async () => 'clone-token') },
+      service: vi.fn(() => ({ emit: vi.fn() })),
+    } as unknown as Application;
+    const service = new ReposService({} as never, app);
+    const placeholder = vi
+      .spyOn(service as never, 'createClonePlaceholder')
+      .mockImplementation(async (data: object) => data);
+
+    await expect(
+      service.cloneRepository({ url: 'https://github.com/preset-io/dispatch-failure.git' }, {
+        user: { user_id: '550e8400-e29b-41d4-a716-446655440004' },
+      } as never)
+    ).rejects.toThrow('launcher unavailable');
+
+    const placeholderCall = placeholder.mock.calls[0];
+    expect(placeholderCall).toBeDefined();
+    const repoId = (placeholderCall![0] as { repo_id: UUID }).repo_id;
+    expect(repositoryMocks.settleRepoClone).toHaveBeenCalledWith({
+      repo_id: repoId,
+      clone_status: 'failed',
+      clone_error: {
+        exit_code: -1,
+        category: 'unknown',
+        message: 'Failed to dispatch repository clone: launcher unavailable',
+      },
+    });
+  });
+
   it('creates managed storage without delegated user routing', async () => {
     executorMocks.spawnExecutorFireAndForget.mockClear();
 
@@ -667,10 +781,9 @@ describe('ReposService.cloneRepository Git lifecycle execution', () => {
       }),
     } as unknown as Application;
     const service = new ReposService({} as never, app);
-    vi.spyOn(service as never, 'createClonePlaceholder').mockResolvedValue({
-      repo_id: '550e8400-e29b-41d4-a716-446655440001',
-      slug: 'preset-io/agor-teammate',
-    } as never);
+    vi.spyOn(service as never, 'createClonePlaceholder').mockImplementation(
+      async (data: object) => data
+    );
 
     await service.cloneRepository({ url: 'https://github.com/preset-io/agor-teammate.git' }, {
       user: { user_id: '550e8400-e29b-41d4-a716-446655440004' },
@@ -699,10 +812,9 @@ describe('ReposService.cloneRepository Git lifecycle execution', () => {
       }),
     } as unknown as Application;
     const service = new ReposService({} as never, app);
-    vi.spyOn(service as never, 'createClonePlaceholder').mockResolvedValue({
-      repo_id: '550e8400-e29b-41d4-a716-446655440001',
-      slug: 'preset-io/agor-admin-clone',
-    } as never);
+    vi.spyOn(service as never, 'createClonePlaceholder').mockImplementation(
+      async (data: object) => data
+    );
 
     await service.cloneRepository({ url: 'https://github.com/preset-io/agor-admin-clone.git' }, {
       provider: 'rest',
@@ -725,11 +837,9 @@ describe('ReposService.cloneRepository Git lifecycle execution', () => {
     executorMocks.spawnExecutorFireAndForget.mockClear();
     const db = { marker: 'base-db' };
     const current = {
-      repo_id: '550e8400-e29b-41d4-a716-446655440001',
       slug: 'preset-io/agor-failed-clone',
       clone_status: 'cloning',
     };
-    repositoryMocks.findRepoById.mockResolvedValue(current);
     repositoryMocks.settleRepoClone.mockImplementation(async (data: object) => ({
       ...current,
       ...data,
@@ -747,7 +857,9 @@ describe('ReposService.cloneRepository Git lifecycle execution', () => {
       }),
     } as unknown as Application;
     const service = new ReposService(db as never, app);
-    vi.spyOn(service as never, 'createClonePlaceholder').mockResolvedValue(current as never);
+    vi.spyOn(service as never, 'createClonePlaceholder').mockImplementation(
+      async (data: object) => ({ ...current, ...data })
+    );
 
     await service.cloneRepository({ url: 'https://github.com/preset-io/agor-failed-clone.git' }, {
       tenant: { tenant_id: 'tenant-a', source: 'explicit' },
@@ -761,6 +873,10 @@ describe('ReposService.cloneRepository Git lifecycle execution', () => {
           ) => Promise<void> | void;
         }
       | undefined;
+    const spawnCall = executorMocks.spawnExecutorFireAndForget.mock.calls.at(-1);
+    expect(spawnCall).toBeDefined();
+    const repoId = (spawnCall![0].params as { repoId: UUID }).repoId;
+    repositoryMocks.findRepoById.mockResolvedValue({ ...current, repo_id: repoId });
 
     await spawnOptions?.onExit?.(17, { mode: 'local' });
 
@@ -769,9 +885,9 @@ describe('ReposService.cloneRepository Git lifecycle execution', () => {
       'tenant-a',
       expect.any(Function)
     );
-    expect(repositoryMocks.findRepoById).toHaveBeenCalledWith(current.repo_id);
+    expect(repositoryMocks.findRepoById).toHaveBeenCalledWith(repoId);
     expect(repositoryMocks.settleRepoClone).toHaveBeenCalledWith({
-      repo_id: current.repo_id,
+      repo_id: repoId,
       clone_status: 'failed',
       clone_error: {
         exit_code: 17,
@@ -782,7 +898,6 @@ describe('ReposService.cloneRepository Git lifecycle execution', () => {
   });
 
   it('retains clone ownership after an ambiguous delegated launcher exit', async () => {
-    const repoId = '550e8400-e29b-41d4-a716-446655440001';
     const app = {
       get: () => ({
         execution: { executor_command_nonzero_may_have_dispatched: true },
@@ -791,11 +906,9 @@ describe('ReposService.cloneRepository Git lifecycle execution', () => {
       service: vi.fn(() => ({ emit: vi.fn() })),
     } as unknown as Application;
     const service = new ReposService({} as never, app);
-    vi.spyOn(service as never, 'createClonePlaceholder').mockResolvedValue({
-      repo_id: repoId,
-      slug: 'preset-io/ambiguous-clone',
-      clone_status: 'cloning',
-    } as never);
+    vi.spyOn(service as never, 'createClonePlaceholder').mockImplementation(
+      async (data: object) => data
+    );
 
     await service.cloneRepository({ url: 'https://github.com/preset-io/ambiguous-clone.git' }, {
       user: { user_id: '550e8400-e29b-41d4-a716-446655440004' },

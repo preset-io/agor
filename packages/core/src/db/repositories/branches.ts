@@ -394,7 +394,8 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
         async (tx) => {
           await new RepoRepository(this.db).lockForWorkAdmissionInTransaction(
             tx,
-            insertData.repo_id as UUID
+            insertData.repo_id as UUID,
+            { requireCloneReady: true }
           );
           const owner = await select(tx, { user_id: users.user_id })
             .from(users)

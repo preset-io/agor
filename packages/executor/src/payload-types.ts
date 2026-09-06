@@ -201,7 +201,7 @@ export type AgenticToolInvokePayload = z.infer<typeof AgenticToolInvokePayloadSc
  *
  * When createDbRecord is true (default), the executor will:
  * 1. Clone the repository to outputPath
- * 2. Create a repo record in the database via Feathers
+ * 2. Settle the exact daemon-created repository placeholder via Feathers
  */
 export const GitClonePayloadSchema = BasePayloadSchema.extend({
   command: z.literal('git.clone'),
@@ -209,53 +209,60 @@ export const GitClonePayloadSchema = BasePayloadSchema.extend({
   /** JWT for Feathers authentication */
   sessionToken: z.string(),
 
-  params: z.object({
-    /** Repository URL (https, ssh, git://, file://, or local path) */
-    url: GitUrlSchema,
+  params: z
+    .object({
+      /** Repository URL (https, ssh, git://, file://, or local path) */
+      url: GitUrlSchema,
 
-    /** Output path for the repository (optional, defaults to AGOR_DATA_HOME/repos/) */
-    outputPath: z.string().optional(),
+      /** Output path for the repository (optional, defaults to AGOR_DATA_HOME/repos/) */
+      outputPath: z.string().optional(),
 
-    /** Branch to checkout (optional) */
-    branch: z.string().optional(),
+      /** Branch to checkout (optional) */
+      branch: z.string().optional(),
 
-    /** Clone as bare repository */
-    bare: z.boolean().optional(),
+      /** Clone as bare repository */
+      bare: z.boolean().optional(),
 
-    /** Slug for the repo (computed from URL if not provided) */
-    slug: z.string().optional(),
+      /** Slug for the repo (computed from URL if not provided) */
+      slug: z.string().optional(),
 
-    /**
-     * User-supplied default branch for the repo record. When provided, this
-     * overrides the auto-detected `origin/HEAD`. Used by the UI's "Add
-     * Repository" form so the operator can pin a non-default base branch
-     * for new branches (e.g. a long-lived feature branch).
-     */
-    default_branch: z.string().optional(),
+      /**
+       * User-supplied default branch for the repo record. When provided, this
+       * overrides the auto-detected `origin/HEAD`. Used by the UI's "Add
+       * Repository" form so the operator can pin a non-default base branch
+       * for new branches (e.g. a long-lived feature branch).
+       */
+      default_branch: z.string().optional(),
 
-    /** Create DB record after clone (default: true) */
-    createDbRecord: z.boolean().optional().default(true),
+      /** Create DB record after clone (default: true) */
+      createDbRecord: z.boolean().optional().default(true),
 
-    /**
-     * Import executable environment configuration from the cloned
-     * `.agor.yml`. This capability is derived by the daemon from the
-     * initiating user's admin role and defaults closed for direct callers.
-     */
-    importEnvironmentConfig: z.boolean().optional().default(false),
+      /**
+       * Import executable environment configuration from the cloned
+       * `.agor.yml`. This capability is derived by the daemon from the
+       * initiating user's admin role and defaults closed for direct callers.
+       */
+      importEnvironmentConfig: z.boolean().optional().default(false),
 
-    /**
-     * Pre-existing repo row to patch with clone outcome. When set, the
-     * executor patches this row with `clone_status: 'ready'` (success) or
-     * `'failed'` (with `clone_error`) instead of creating a new row. The
-     * daemon pre-creates the row in `cloneRepository` so failures are
-     * persisted (and queryable) instead of vanishing into a dropped
-     * `{ status: 'pending' }` response.
-     */
-    repoId: z.string().optional(),
+      /**
+       * Exact pre-existing repo placeholder to settle with the clone outcome.
+       * Required whenever createDbRecord is true (the default). The daemon
+       * creates this row and binds the executor callback credential to its ID.
+       */
+      repoId: z.string().uuid().optional(),
 
-    /** User ID of the requesting user (for per-user credential resolution) */
-    userId: z.string().uuid().optional(),
-  }),
+      /** User ID of the requesting user (for per-user credential resolution) */
+      userId: z.string().uuid().optional(),
+    })
+    .superRefine((params, ctx) => {
+      if (params.createDbRecord && !params.repoId) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['repoId'],
+          message: 'Managed git.clone requires a daemon-created repository placeholder',
+        });
+      }
+    }),
 });
 
 export type GitClonePayload = z.infer<typeof GitClonePayloadSchema>;

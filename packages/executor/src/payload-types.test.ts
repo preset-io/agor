@@ -143,6 +143,7 @@ describe('GitClonePayloadSchema', () => {
       params: {
         url: 'https://github.com/user/repo.git',
         outputPath: '/data/agor/repos/github.com/user/repo.git',
+        createDbRecord: false,
       },
     };
 
@@ -157,6 +158,7 @@ describe('GitClonePayloadSchema', () => {
       sessionToken: 'jwt-token-here',
       params: {
         url: 'git@github.com:user/repo.git',
+        createDbRecord: false,
       },
     };
 
@@ -170,6 +172,7 @@ describe('GitClonePayloadSchema', () => {
       sessionToken: 'jwt-token-here',
       params: {
         url: '/home/user/repos/my-repo',
+        createDbRecord: false,
       },
     };
 
@@ -183,6 +186,7 @@ describe('GitClonePayloadSchema', () => {
       sessionToken: 'jwt-token-here',
       params: {
         url: 'git://github.com/user/repo.git',
+        createDbRecord: false,
       },
     };
 
@@ -196,6 +200,7 @@ describe('GitClonePayloadSchema', () => {
       sessionToken: 'jwt-token-here',
       params: {
         url: 'ssh://git@github.com/user/repo.git',
+        createDbRecord: false,
       },
     };
 
@@ -212,6 +217,7 @@ describe('GitClonePayloadSchema', () => {
         outputPath: '/data/agor/repos/github.com/user/repo.git',
         branch: 'main',
         bare: true,
+        createDbRecord: false,
       },
     };
 
@@ -228,6 +234,7 @@ describe('GitClonePayloadSchema', () => {
       params: {
         url: 'https://github.com/user/repo.git',
         importEnvironmentConfig: true,
+        repoId: '550e8400-e29b-41d4-a716-446655440000',
       },
     });
 
@@ -256,6 +263,7 @@ describe('GitClonePayloadSchema', () => {
       params: {
         url: 'https://github.com/user/repo.git',
         default_branch: 'release/2024-q1',
+        createDbRecord: false,
       },
     };
 
@@ -269,11 +277,22 @@ describe('GitClonePayloadSchema', () => {
       sessionToken: 'jwt-token-here',
       params: {
         url: 'https://github.com/user/repo.git',
+        createDbRecord: false,
       },
     };
 
     const result = GitClonePayloadSchema.parse(payload);
     expect(result.params.default_branch).toBeUndefined();
+  });
+
+  it('requires an exact repo placeholder for managed clones', () => {
+    expect(() =>
+      GitClonePayloadSchema.parse({
+        command: 'git.clone',
+        sessionToken: 'jwt-token-here',
+        params: { url: 'https://github.com/user/repo.git' },
+      })
+    ).toThrow('daemon-created repository placeholder');
   });
 });
 
@@ -544,6 +563,7 @@ describe('ExecutorPayloadSchema (discriminated union)', () => {
       params: {
         url: 'https://github.com/user/repo.git',
         outputPath: '/data/repos/repo.git',
+        createDbRecord: false,
       },
     };
 

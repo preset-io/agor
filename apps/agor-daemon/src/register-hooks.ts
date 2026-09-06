@@ -143,7 +143,7 @@ import { isAuthenticationUserLookup, isLocalAuthenticationLookup } from './servi
 import { resolveWebTerminalCapability } from './terminal-capability.js';
 import { buildSessionCreatedAnalyticsProperties } from './utils/analytics-payloads.js';
 import {
-  ensureCanAttachBranchToBoard,
+  authorizeBranchBoardMove,
   ensureMinimumRole,
   registerAuthenticatedRoute,
   requireAdminForEnvConfig,
@@ -2205,26 +2205,16 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       const boardWasSupplied = context.method === 'create' || Object.hasOwn(value, 'board_id');
       if (!boardWasSupplied || previousBoardId === value.board_id) continue;
 
-      const userId = user.user_id as UUID;
-      if (previousBoardId) {
-        const canDetach = await boardRepository
-          .canMutate(previousBoardId, userId)
-          .catch(() => false);
-        if (!canDetach) {
-          throw new Forbidden('Board Editor or Manager access is required to detach this branch');
-        }
-      }
+      const canonicalTargetBoardId = await authorizeBranchBoardMove(
+        db,
+        previousBoardId,
+        value.board_id,
+        context.params as AuthenticatedParams,
+        executionMode.appRbacEnabled,
+        boardRepository
+      );
       if (value.board_id) {
-        const targetBoard = await boardRepository.findBySlugOrId(value.board_id);
-        if (!targetBoard) {
-          throw new Forbidden('Board Editor or Manager access is required to attach a branch');
-        }
-        await ensureCanAttachBranchToBoard(
-          db,
-          targetBoard.board_id,
-          context.params,
-          executionMode.appRbacEnabled
-        );
+        value.board_id = canonicalTargetBoardId;
       }
     }
     return context;
