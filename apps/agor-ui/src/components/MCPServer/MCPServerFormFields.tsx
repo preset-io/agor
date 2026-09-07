@@ -19,8 +19,9 @@ import {
   Tooltip,
   Typography,
 } from 'antd';
-import { useState } from 'react';
+import { useCallback, useState } from 'react';
 import { useAuthorityOperationGuard } from '@/hooks/useAuthorityOperationGuard';
+import { useTroubleshootError } from '@/hooks/useTroubleshootError';
 import { useThemedMessage } from '@/utils/message';
 import { sanitizeSecretValue } from '@/utils/sanitizeSecret';
 import { MCPOAuthRecoveryAlert } from './MCPOAuthRecoveryAlert';
@@ -130,6 +131,13 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
   managedOAuthCompatibilityMode,
 }) => {
   const { showSuccess, showError, showWarning, showInfo } = useThemedMessage();
+  // MCP OAuth connect is the motivating error for the troubleshoot button
+  // (issue #2271 / #2388): failures here get a one-click handoff to an agent.
+  const { showErrorWithTroubleshoot } = useTroubleshootError(client);
+  const showOAuthError = useCallback(
+    (msg: string) => showErrorWithTroubleshoot(msg, { source: 'Connecting an MCP server (OAuth)' }),
+    [showErrorWithTroubleshoot]
+  );
   const [testingAuth, setTestingAuth] = useState(false);
   const [oauthBrowserFlowAvailable, setOauthBrowserFlowAvailable] = useState(false);
   const [oauthAdvancedOpen, setOauthAdvancedOpen] = useState(false);
@@ -161,7 +169,7 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
     authorityKey,
     onPrepareOAuthStart,
     onOAuthSucceeded: () => setOauthBrowserFlowAvailable(false),
-    showError,
+    showError: showOAuthError,
     showInfo,
     showSuccess,
     startAllowed: oauthStartAllowed,

@@ -79,6 +79,7 @@ import {
   useOnboardingLifecycle,
 } from './hooks/useOnboardingLifecycle';
 import { useSurfaceBranding } from './hooks/useSurfaceBranding';
+import { useTroubleshootError } from './hooks/useTroubleshootError';
 import { sessionCreated } from './store/agorRealtimeActions';
 import { agorStore, useAgorStore } from './store/agorStore';
 import { SharedUserSettingsModal } from './surfaces/SharedUserSettingsModal';
@@ -523,6 +524,9 @@ function AppContent() {
   // Session actions
   const { createSession, forkSession, btwForkSession, spawnSession, updateSession, deleteSession } =
     useSessionActions(client);
+
+  // Error toasts that can hand the error off to an agent (issue #2388).
+  const { showErrorWithTroubleshoot } = useTroubleshootError(client);
 
   // Board actions
   const { createBoard, updateBoard, deleteBoard, archiveBoard, unarchiveBoard } =
@@ -1366,7 +1370,10 @@ function AppContent() {
       showSuccess('Session forked successfully!');
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to fork session';
-      showError(`Failed to fork session: ${message}`);
+      showErrorWithTroubleshoot(`Failed to fork session: ${message}`, {
+        sessionId,
+        source: 'Forking a session',
+      });
       throw err;
     }
   };
@@ -1411,8 +1418,9 @@ function AppContent() {
       return isAuthenticationOwnerCurrent(operationUserId, operationAuthenticationGeneration);
     } catch (error) {
       if (isAuthenticationOwnerCurrent(operationUserId, operationAuthenticationGeneration)) {
-        showError(
-          `Failed to send prompt: ${error instanceof Error ? error.message : String(error)}`
+        showErrorWithTroubleshoot(
+          `Failed to send prompt: ${error instanceof Error ? error.message : String(error)}`,
+          { sessionId, source: 'Sending a prompt to a session' }
         );
         console.error('Prompt error:', error);
       }

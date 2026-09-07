@@ -17,6 +17,12 @@ vi.mock('@/utils/message', () => ({
   }),
 }));
 
+// The troubleshoot hook pulls in router + canvas-nav contexts that this bare
+// harness doesn't provide; stub it so the form renders in isolation.
+vi.mock('@/hooks/useTroubleshootError', () => ({
+  useTroubleshootError: () => ({ showErrorWithTroubleshoot: vi.fn() }),
+}));
+
 // `getByRole('button', { name })` prices in an accessible-name and visibility
 // pass over the whole form, and jsdom's getComputedStyle runs ~18ms per node
 // against antd's injected stylesheets — ~2.5s per query here, which is what
