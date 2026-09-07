@@ -209,11 +209,24 @@ function shouldSqlPageSessionQuery(query?: Record<string, unknown>, forcePage = 
   const wantsBranch = query.branch_id !== undefined;
   if (!wantsRecency && !wantsCreatedAt && !wantsBoard && !wantsBranch && !forcePage) return false;
 
-  const allowedKeys = new Set(['archived', 'board_id', 'branch_id', '$sort', '$limit', '$skip']);
+  const allowedKeys = new Set([
+    'archived',
+    'status',
+    'board_id',
+    'branch_id',
+    '$sort',
+    '$limit',
+    '$skip',
+  ]);
   for (const key of Object.keys(query)) {
     if (!allowedKeys.has(key)) return false;
   }
   if (query.archived !== undefined && typeof query.archived !== 'boolean') return false;
+  if (
+    query.status !== undefined &&
+    !Object.values(SessionStatus).includes(query.status as SessionStatus)
+  )
+    return false;
   if (wantsBoard && typeof query.board_id !== 'string') return false;
   if (wantsBranch) {
     const branchFilter = query.branch_id;
@@ -1687,6 +1700,7 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
       const limit = (query?.$limit as number | undefined) ?? PAGINATION.DEFAULT_LIMIT;
       const skip = (query?.$skip as number | undefined) ?? 0;
       const { data, total } = await this.sessionRepo.findPage({
+        status: query?.status as SessionStatus | undefined,
         boardId: query?.board_id as string | undefined,
         branchId: typeof branchFilter === 'string' ? (branchFilter as BranchID) : undefined,
         branchIds,

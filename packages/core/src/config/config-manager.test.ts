@@ -107,6 +107,17 @@ describe('getDefaultConfig', () => {
 });
 
 describe('resolveEffectiveConfig', () => {
+  it('projects deployment environment overrides into the runtime capability configuration', () => {
+    const resolved = resolveEffectiveConfig(
+      {},
+      { AGOR_DEPLOYMENT_MODE: 'ha', AGOR_HA_EXECUTION_TOPOLOGY: 'external' }
+    );
+    expect(resolved.deployment).toMatchObject({
+      mode: 'ha',
+      ha: { execution_topology: 'external' },
+    });
+  });
+
   it('keeps the fail-safe password profile out of environment-variable override space', () => {
     const resolved = resolveEffectiveConfig(
       { identity: { password_policy: 'secure' } },
@@ -804,6 +815,29 @@ describe('loadConfig', () => {
       execution: { managed_envs_execution_mode: 'webhook-only' },
     });
   });
+
+  it.each([undefined, '', 'Read **this** before starting.', 'x'.repeat(4000)])(
+    'loads optional instance-owned environment guidance',
+    async (guidance) => {
+      const agorDir = path.join(tempDir, '.agor');
+      await fs.mkdir(agorDir, { recursive: true });
+      await fs.writeFile(
+        path.join(agorDir, 'config.yaml'),
+        yaml.dump({ environment_disclaimer_markdown: guidance }),
+        'utf-8'
+      );
+      expect((await loadConfig()).environment_disclaimer_markdown).toBe(guidance);
+    }
+  );
+
+  it.each([null, false, 42, {}, 'x'.repeat(4001)])(
+    'rejects invalid instance environment guidance',
+    (guidance) => {
+      expect(() =>
+        assertValidRawConfig({ environment_disclaimer_markdown: guidance } as AgorConfig)
+      ).toThrow(/environment_disclaimer_markdown must be a string of at most 4000/);
+    }
+  );
 
   it('rejects invalid managed environment execution modes', async () => {
     const agorDir = path.join(tempDir, '.agor');

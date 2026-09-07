@@ -8,6 +8,7 @@ import type { BoardID, BranchID, UUID } from '@agor/core/types';
 import { eq } from 'drizzle-orm';
 import { describe, expect, vi } from 'vitest';
 import { generateId, shortId } from '../../lib/ids';
+import { BRANCH_ENVIRONMENT_SNAPSHOT_FIELDS } from '../../types/branch';
 import { update } from '../database-wrapper';
 import { boards, branches } from '../schema';
 import { ownedDbTest as dbTest } from '../test-helpers';
@@ -934,6 +935,70 @@ describe('BranchRepository.update', () => {
         board_id: sourceBoardId,
         permission_binding: 'inherit',
       });
+    }
+  );
+
+  dbTest(
+    'environment clears are explicit while omitted and nested patch fields still merge',
+    async ({ db }) => {
+      const repo = await new RepoRepository(db).create(createRepoData());
+      const branches = new BranchRepository(db);
+      const branch = await branches.create(
+        createBranchData({
+          repo_id: repo.repo_id,
+          environment_instance: {
+            status: 'error',
+            last_error: 'failed',
+            process: { pid: 123, started_at: 'old' },
+          },
+        })
+      );
+      await branches.update(branch.branch_id, {
+        environment_instance: { status: 'starting', process: { started_at: 'new' } },
+      });
+      expect((await branches.findById(branch.branch_id))?.environment_instance).toEqual({
+        status: 'starting',
+        last_error: 'failed',
+        process: { pid: 123, started_at: 'new' },
+      });
+      await branches.update(branch.branch_id, {
+        environment_instance: { status: 'stopped', process: undefined, last_error: undefined },
+      });
+      expect((await branches.findById(branch.branch_id))?.environment_instance).toEqual({
+        status: 'stopped',
+      });
+    }
+  );
+
+  dbTest(
+    'clears only explicitly supplied snapshot fields, preserving omitted fields',
+    async ({ db }) => {
+      const repo = await new RepoRepository(db).create(createRepoData());
+      const repository = new BranchRepository(db);
+      const snapshot = Object.fromEntries(
+        BRANCH_ENVIRONMENT_SNAPSHOT_FIELDS.map((key) => [key, 'old'])
+      );
+      const branch = await repository.create({
+        ...createBranchData({ repo_id: repo.repo_id }),
+        ...snapshot,
+      });
+      await repository.update(branch.branch_id, {
+        notes: 'unrelated patch',
+        health_check_url: undefined,
+      });
+      const partial = await repository.findById(branch.branch_id);
+      expect(partial?.health_check_url).toBeUndefined();
+      expect(partial?.start_command).toBe('old');
+      expect(partial?.app_url).toBe('old');
+
+      await repository.update(
+        branch.branch_id,
+        Object.fromEntries(BRANCH_ENVIRONMENT_SNAPSHOT_FIELDS.map((key) => [key, undefined]))
+      );
+      const cleared = await repository.findById(branch.branch_id);
+      for (const field of BRANCH_ENVIRONMENT_SNAPSHOT_FIELDS)
+        expect(cleared?.[field]).toBeUndefined();
+      expect(cleared?.notes).toBe('unrelated patch');
     }
   );
 

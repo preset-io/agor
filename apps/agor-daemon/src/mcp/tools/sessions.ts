@@ -24,7 +24,6 @@ import {
   type Board,
   getSessionType,
   type Session,
-  type SessionType,
   type ZoneBoardObject,
 } from '@agor/core/types';
 import type { McpServer } from '@modelcontextprotocol/server';
@@ -135,29 +134,9 @@ function coerceModelConfig(
   return input;
 }
 
-function filterSessionsByBranch<T extends { branch_id?: string }>(
-  result: T[] | { data: T[]; total?: number; [key: string]: unknown },
-  branchId: string
-): T[] | { data: T[]; total?: number; [key: string]: unknown } {
-  if (Array.isArray(result)) {
-    return result.filter((session) => session.branch_id === branchId);
-  }
-
-  const data = result.data.filter((session) => session.branch_id === branchId);
-  return { ...result, data, total: data.length };
-}
-
-function filterSessionsByBoard<T extends { branch_board_id?: string | null }>(
-  result: T[] | { data: T[]; total?: number; [key: string]: unknown },
-  boardId: string
-): T[] | { data: T[]; total?: number; [key: string]: unknown } {
-  if (Array.isArray(result)) {
-    return result.filter((session) => session.branch_board_id === boardId);
-  }
-
-  const data = result.data.filter((session) => session.branch_board_id === boardId);
-  return { ...result, data, total: data.length };
-}
+// Keep derived-type scans within the existing API page ceiling. Never present
+// a truncated candidate scan as a complete filtered inventory.
+const SESSION_TYPE_SCAN_LIMIT = 10_000;
 
 function redactSessionForMcp<T extends { mcp_token?: unknown }>(session: T): Omit<T, 'mcp_token'> {
   const { mcp_token: _mcpToken, ...safeSession } = session;
@@ -183,23 +162,13 @@ function compactSessionForMcp(session: Session) {
   };
 }
 
-function redactSessionFindResult<T extends { mcp_token?: unknown }>(
-  result: T[] | { data: T[]; [key: string]: unknown }
-): Array<Omit<T, 'mcp_token'>> | { data: Array<Omit<T, 'mcp_token'>>; [key: string]: unknown } {
-  if (Array.isArray(result)) {
-    return result.map(redactSessionForMcp);
-  }
-
-  return { ...result, data: result.data.map(redactSessionForMcp) };
-}
-
 export function registerSessionTools(server: McpServer, ctx: McpContext): void {
   // Tool 1: agor_sessions_list
   server.registerTool(
     'agor_sessions_list',
     {
       description:
-        'List a lean page of sessions accessible to the current user. Runtime configuration, context files, task ID arrays, and SDK state are omitted by default; use agor_sessions_get for details or lean:false when required. Advance with offset=nextOffset while hasMore is true.',
+        'List a lean page of sessions accessible to the current user. Branch and board filters are optional. sessionType scans at most 10000 candidates and errors if the scan is incomplete. Runtime configuration, context files, task ID arrays, and SDK state are omitted by default; use agor_sessions_get for details or lean:false when required. Advance with offset=nextOffset while hasMore is true.',
       annotations: { readOnlyHint: true },
       inputSchema: z.object({
         limit: mcpListLimit(),
@@ -236,70 +205,69 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
       }),
     },
     async (args) => {
-      const query: Record<string, unknown> = {};
-      // When sessionType or boardId is set, skip service-level pagination
-      // (it runs before our post-query filters) and apply the requested limit
-      // ourselves after filtering.
-      // Keep handler defaults explicit because unit/in-process callers may
-      // invoke captured handlers without going through Zod defaulting.
+      // Handler defaults also serve captured/in-process callers. The registered
+      // schema validates positive limits (max 100) and nonnegative offsets.
       const requestedLimit = args.limit ?? 25;
       const requestedOffset = args.offset ?? 0;
       const boardId = args.boardId ? await resolveBoardId(ctx, args.boardId) : undefined;
-      const needsPostQueryLimit = Boolean(args.sessionType || boardId);
-      if (!needsPostQueryLimit) {
-        query.$limit = requestedLimit;
-        query.$skip = requestedOffset;
-      }
-      query.$sort = { created_at: -1, session_id: 1 };
-      if (args.status) query.status = args.status;
       const branchId = args.branchId ? await resolveBranchId(ctx, args.branchId) : undefined;
+      const needsTypeScan = Boolean(args.sessionType);
+      const query: Record<string, unknown> = {
+        $limit: needsTypeScan ? SESSION_TYPE_SCAN_LIMIT : requestedLimit,
+        $skip: needsTypeScan ? 0 : requestedOffset,
+        // findPage supplies the session_id tie-breaker. Adding it here would
+        // select the generic in-memory fallback instead of the SQL page path.
+        $sort: { created_at: -1 },
+      };
+      if (boardId) query.board_id = boardId;
       if (branchId) query.branch_id = branchId;
+      if (args.status) query.status = args.status;
       if (args.archived === true) {
         query.archived = true;
       } else if (!args.includeArchived) {
         query.archived = false;
       }
       const result = await ctx.app.service('sessions').find({
-        query: needsPostQueryLimit ? { ...query, $limit: 10000, $skip: 0 } : query,
+        query,
         ...ctx.baseServiceParams,
       });
+      const data: Session[] = Array.isArray(result) ? result : result.data;
+      // A dropped narrowing filter is an adapter/authorization contract error,
+      // not a reason to leak rows or fabricate a new total from this one page.
+      if (
+        data.some(
+          (session) =>
+            (branchId && session.branch_id !== branchId) ||
+            (boardId && session.branch_board_id !== boardId)
+        )
+      ) {
+        throw new Error(
+          'Session list returned records outside the requested branch or board scope.'
+        );
+      }
+      if (data.length > (needsTypeScan ? SESSION_TYPE_SCAN_LIMIT : requestedLimit)) {
+        throw new Error('Session list exceeded the requested page limit.');
+      }
+      const project = (session: Session) =>
+        args.lean === false ? redactSessionForMcp(session) : compactSessionForMcp(session);
 
-      // Defense-in-depth: the sessions service normally handles branch_id in
-      // its query filter, but MCP callers rely on this tool contract. Keep the
-      // response scoped even if an adapter/hook layer drops or rewrites the
-      // query before it reaches the repository.
-      const branchScopedResult = branchId ? filterSessionsByBranch(result, branchId) : result;
-      const boardScopedResult = boardId
-        ? filterSessionsByBoard(branchScopedResult, boardId)
-        : branchScopedResult;
-
-      // Apply post-query filters. sessionType is derived from fields that are
-      // not in the query schema. boardId is exposed on Session as
-      // branch_board_id via the branch join, not sessions.board_id (legacy
-      // column is null for branch-backed sessions).
-      if (needsPostQueryLimit) {
-        const allData: Session[] = Array.isArray(boardScopedResult)
-          ? boardScopedResult
-          : boardScopedResult.data;
-        const filtered = args.sessionType
-          ? allData.filter((s) => getSessionType(s) === (args.sessionType as SessionType))
-          : allData;
-        const limited = filtered.slice(requestedOffset, requestedOffset + requestedLimit);
-
-        if (Array.isArray(boardScopedResult)) {
-          const data = limited.map((session) =>
-            args.lean === false ? redactSessionForMcp(session) : compactSessionForMcp(session)
+      if (needsTypeScan) {
+        // A bare array cannot prove whether an adapter truncated the scan.
+        const complete =
+          !Array.isArray(result) && result.skip === 0 && result.total === data.length;
+        if (!complete) {
+          throw new Error(
+            `sessionType requires a complete scan of at most ${SESSION_TYPE_SCAN_LIMIT} candidate sessions. Narrow with branchId, boardId, status or archive filters, or omit sessionType and page normally.`
           );
-          return textResult(mcpPageResult(data, requestedLimit, requestedOffset));
         }
+        const filtered = data.filter((session) => getSessionType(session) === args.sessionType);
         return textResult(
           mcpPageResult(
             {
-              ...boardScopedResult,
-              data: limited.map((session) =>
-                args.lean === false ? redactSessionForMcp(session) : compactSessionForMcp(session)
-              ),
+              data: filtered.slice(requestedOffset, requestedOffset + requestedLimit).map(project),
               total: filtered.length,
+              limit: requestedLimit,
+              skip: requestedOffset,
             },
             requestedLimit,
             requestedOffset
@@ -307,20 +275,12 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
         );
       }
 
-      const page = mcpPageResult(
-        redactSessionFindResult(boardScopedResult) as {
-          data: Array<Omit<Session, 'mcp_token'>>;
-          total?: number;
-          limit?: number;
-          skip?: number;
-        },
-        requestedLimit,
-        requestedOffset
-      );
       return textResult(
-        args.lean === false
-          ? page
-          : { ...page, data: page.data.map((session) => compactSessionForMcp(session as Session)) }
+        mcpPageResult(
+          Array.isArray(result) ? data.map(project) : { ...result, data: data.map(project) },
+          requestedLimit,
+          requestedOffset
+        )
       );
     }
   );

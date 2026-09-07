@@ -111,6 +111,9 @@ describe('Marketplace server actions', () => {
   });
 
   it('uses contextual tool labels and the narrow atomic permission action', async () => {
+    // Static messages own a React root outside RTL cleanup. Assert the toast
+    // call without leaving its timers/scheduler work alive after jsdom teardown.
+    const success = vi.spyOn(message, 'success').mockImplementation(() => undefined as never);
     const create = vi.fn(async () => ({ permission: 'deny' }));
     const service = vi.fn((path: string) =>
       path === 'mcp-member-policy'
@@ -144,6 +147,8 @@ describe('Marketplace server actions', () => {
       enabled: false,
     });
     await waitFor(() => expect(refresh).toHaveBeenCalledOnce());
+    expect(success).toHaveBeenCalledWith('issues.create is off');
+    await waitFor(() => expect(control).toBeEnabled());
   });
 
   it('allows owner refresh under use_existing_only but refuses configuration actions', async () => {

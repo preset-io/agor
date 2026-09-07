@@ -21,6 +21,24 @@ Agor supports Node releases that are Current, Active LTS, or Maintenance LTS ups
 the Node ≥ 22.12 minimum. The packaged release gate currently runs Node 22, 24, and 26 end to end.
 Upstream EOL releases such as Node 25 are not supported production runtimes.
 
+### Diagnosing repository clone failures
+
+Remote repository creation is asynchronous. Poll `agor_repos_get` with the returned
+`repo_id` until `clone_status` is `ready` or `failed`. On failure, `clone_error.message`
+includes credential-redacted multiline Git diagnostics (up to 4,000 characters;
+oversized output retains the tail and marks the truncation), not just the
+`Cloning into ...` progress line. Existing failed rows keep their recorded diagnostics;
+retry to capture a new error after upgrading.
+
+`not_found` is Git's reported result, not proof that a repository is absent or
+public. Check the URL and the calling user's Git credentials and repository access.
+Agor does not automatically retry anonymously after an authenticated failure.
+After correcting access or Git/CA prerequisites, repeat `agor_repos_create_remote`
+with the same slug: the failed database row is replaced and a new `repo_id` is
+returned. A ready or in-progress repository is not replaced. Retrying does not
+delete repository files; if Git reports a nonempty invalid destination, have an
+operator inspect it before removing anything.
+
 ## Install paths
 
 Use whichever install method fits your setup:

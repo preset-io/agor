@@ -90,6 +90,31 @@ _A btw question runs in an ephemeral fork; the answer is delivered back inline i
 
 The tree is rendered on the branch card on the board, and in full detail in the session view.
 
+### Large session lists
+
+Branch cards and the branch teammate panel keep manual and gateway genealogy
+trees in a virtual, scrollable viewport (up to 400 pixels high). Scroll inside
+the tree to reach older sessions; collapsing a parent still hides its descendants.
+Scheduled runs and panel search results show 20 sessions per page. Search matches
+the loaded collection, not just the current page. The branch settings Sessions
+tab also paginates its table.
+
+These are rendering bounds, not a retention policy or a data-fetch limit: the
+UI still hydrates accessible sessions, and no sessions are deleted or archived
+because a list is large.
+
+For integrations, `agor_sessions_list` supports optional `branchId` and `boardId`
+filters; omitting both lists across the caller's accessible branches in the
+authenticated workspace, not across tenants. A session must belong to a branch,
+but a list query need not name one. MCP list pages default to 25 records, with
+a maximum requested limit of 100. The derived `sessionType` filter scans at most
+10,000 candidate sessions; if the complete candidate set does not fit, the tool
+returns an error rather than an incomplete result. Narrow with branch, board,
+status, or archive filters, or omit `sessionType` and page normally. The Feathers API uses `branch_id` / `board_id`
+and `$limit` / `$skip` instead. Use `find()` for one page: the TypeScript client's
+`findAll()` follows continuation pages and accumulates the entire result, even
+when its query includes `$limit`.
+
 ---
 
 ## Spawned subsessions with callbacks
