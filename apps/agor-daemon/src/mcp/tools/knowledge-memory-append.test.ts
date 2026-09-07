@@ -26,6 +26,8 @@ vi.mock('@agor/core/db', () => ({
 }));
 
 vi.mock('@agor/core/feathers', () => ({
+  BadRequest: class BadRequest extends Error {},
+  Forbidden: class Forbidden extends Error {},
   NotFound: class NotFound extends Error {},
 }));
 
@@ -305,12 +307,12 @@ describe('agor_teammate_memory_append governance preservation', () => {
     expect(stored?.visibility).toBe('private');
     expect(stored?.kind).toBe('memory');
     expect(stored?.status).toBe('published');
-    expect(stored?.edit_policy).toBe('public');
+    expect(stored?.edit_policy).toBe('owner');
     expect(stored?.title).toBe(MEMORY_DATE);
     // Guards against the fields being dropped and silently falling back to the
     // repository column defaults rather than the memory-document defaults.
     expect(stored?.kind).not.toBe(CREATE_DEFAULTS.kind);
-    expect(stored?.edit_policy).not.toBe(CREATE_DEFAULTS.edit_policy);
+    expect(documents.putDocument.mock.calls[0][0]).toMatchObject({ edit_policy: 'owner' });
     expect(stored?.content).toContain('First bullet of a brand new day');
   });
 
