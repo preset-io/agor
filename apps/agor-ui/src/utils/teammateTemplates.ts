@@ -12,7 +12,7 @@ import {
 } from '@ant-design/icons';
 import type { AntdIconProps } from '@ant-design/icons/lib/components/AntdIcon';
 import { AVATAR_PALETTE } from './avatarPalette';
-import type { OnboardingGoalId } from './onboardingGoals';
+import { ONBOARDING_GOALS, type OnboardingGoalId } from './onboardingGoals';
 
 /**
  * Canonical teammate starter templates.
@@ -309,6 +309,29 @@ export function recommendedTemplateIds(goals: readonly string[]): TeammateTempla
     result.push(id);
   }
   return result;
+}
+
+/**
+ * MCP integration "kit" for a template: the ids to surface as suggested
+ * connections when the template is picked. Derived by reversing
+ * GOAL_TEMPLATE_RECS — every goal that recommends this template contributes its
+ * `integrationRecs` (order-preserving, deduped). Templates no goal points at
+ * return []. Ids resolve via ONBOARDING_INTEGRATION_RECOMMENDATIONS.
+ */
+export function integrationRecIdsForTemplate(templateId?: string | null): string[] {
+  if (!templateId || templateId === BLANK_TEMPLATE_ID) return [];
+  const ids: string[] = [];
+  const seen = new Set<string>();
+  for (const goal of ONBOARDING_GOALS) {
+    const recs = GOAL_TEMPLATE_RECS[goal.id as OnboardingGoalId] as readonly string[] | undefined;
+    if (!recs?.includes(templateId)) continue;
+    for (const recId of goal.integrationRecs) {
+      if (seen.has(recId)) continue;
+      seen.add(recId);
+      ids.push(recId);
+    }
+  }
+  return ids;
 }
 
 /** The gallery's active filter: everything, or a single category. */
