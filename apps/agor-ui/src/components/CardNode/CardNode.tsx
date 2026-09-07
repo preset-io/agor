@@ -6,7 +6,7 @@
  * - Zone border color when pinned to a zone (matching BranchCard pattern)
  * - CardType emoji + title (with optional URL link)
  * - Pin icon when in a zone (click to unpin)
- * - Description (previewed after ~100 chars, expandable inside the bounded body)
+ * - Description (markdown, collapsed after ~3 lines)
  * - Note (complete inside the bounded keyboard-scrollable body)
  */
 
@@ -38,8 +38,7 @@ import {
   REACT_FLOW_NO_DRAG_CLASS,
 } from '../../utils/reactFlowDragClasses';
 import { ensureColorVisible, isDarkTheme } from '../../utils/theme';
-
-const DESCRIPTION_MAX_CHARS = GENERIC_BOARD_CARD_LAYOUT.descriptionPreviewChars;
+import { MarkdownPreview } from '../MarkdownRenderer';
 
 export interface CardNodeData {
   card: CardWithType;
@@ -69,7 +68,6 @@ const CardNodeComponent = ({ data }: { data: CardNodeData }) => {
     onToggleCompact,
     onAutoZoneInteraction,
   } = data;
-  const [descExpanded, setDescExpanded] = useState(false);
   const [bodyFocused, setBodyFocused] = useState(false);
   const hasCollapsibleBody = hasCardDensityBody(card);
   // Old payloads may carry compact for a card whose body was later removed.
@@ -86,16 +84,6 @@ const CardNodeComponent = ({ data }: { data: CardNodeData }) => {
     if (!zoneColor) return undefined;
     return ensureColorVisible(zoneColor, isDarkMode, 50, 50);
   }, [zoneColor, isDarkMode]);
-
-  const truncatedDesc = useMemo(() => {
-    if (!card.description) return '';
-    if (card.description.length <= DESCRIPTION_MAX_CHARS || descExpanded) return card.description;
-    const truncated = card.description.slice(0, DESCRIPTION_MAX_CHARS);
-    const lastSpace = truncated.lastIndexOf(' ');
-    return `${lastSpace > DESCRIPTION_MAX_CHARS * 0.7 ? truncated.slice(0, lastSpace) : truncated}...`;
-  }, [card.description, descExpanded]);
-
-  const needsTruncation = (card.description?.length ?? 0) > DESCRIPTION_MAX_CHARS;
 
   return (
     <div
@@ -219,7 +207,7 @@ const CardNodeComponent = ({ data }: { data: CardNodeData }) => {
             boxShadow: bodyFocused ? `inset 0 0 0 2px ${token.colorPrimary}` : 'none',
           }}
         >
-          {/* Description preview/expansion stays inside the bounded body. */}
+          {/* Markdown preview/expansion stays inside the bounded body. */}
           {card.description && (
             <div
               style={{
@@ -227,36 +215,14 @@ const CardNodeComponent = ({ data }: { data: CardNodeData }) => {
                 borderBottom: card.note ? `1px solid ${token.colorBorderSecondary}` : 'none',
               }}
             >
-              <Typography.Text
-                style={{
-                  fontSize: 12,
-                  color: token.colorTextSecondary,
-                  lineHeight: '1.5',
-                  whiteSpace: 'pre-wrap',
-                  wordBreak: 'break-word',
-                }}
-              >
-                {truncatedDesc}
-              </Typography.Text>
-              {needsTruncation && (
-                <Button
-                  type="link"
-                  size="small"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setDescExpanded(!descExpanded);
-                  }}
-                  style={{
-                    padding: 0,
-                    height: 'auto',
-                    fontSize: 11,
-                    color: token.colorLink,
-                    marginLeft: 4,
-                  }}
-                >
-                  {descExpanded ? 'less' : 'more'}
-                </Button>
-              )}
+              <MarkdownPreview
+                key={card.card_id}
+                content={card.description}
+                // When a note follows, the density body remains the only
+                // bounded scroll container. Description-only cards retain the
+                // shared preview's bounded expanded viewport from main.
+                boundExpandedHeight={!card.note}
+              />
             </div>
           )}
 
