@@ -48,6 +48,18 @@ async function fixture(command: string) {
   return { payload, reports, fetchMock, directory };
 }
 describe('executor-owned attempt protocol', () => {
+  it('reports invalid extra URL properties immediately instead of retrying an unacceptable result', async () => {
+    const h = await fixture(
+      `printf '%s' '{"access_urls":[{"name":"Preview","url":"https://preview.example.test","extra":true}]}' > "$AGOR_ENVIRONMENT_RESULT_FILE"`
+    );
+    expect(await handleEnvironmentAttempt(h.payload)).toMatchObject({ success: false });
+    expect(h.reports.filter((report) => report.kind === 'result')).toHaveLength(1);
+    expect(h.reports.at(-1)).toMatchObject({
+      outcome: 'unknown',
+      message: expect.stringContaining('invalid'),
+    });
+  });
+
   it('does not execute after a denied or lost claim acknowledgement', async () => {
     for (const lost of [false, true]) {
       const h = await fixture('touch must-not-exist');

@@ -203,6 +203,13 @@ describe('executor-owned command reports', () => {
             message: 'x',
             access_urls: [{ name: 'bad', url: 'javascript:alert(1)' }],
           },
+          {
+            ...scope,
+            kind: 'result',
+            outcome: 'succeeded',
+            message: 'x',
+            access_urls: [{ name: 'Preview', url: 'https://preview.example.test', extra: true }],
+          },
           { ...scope, status: 'running' },
         ])
           await expect(reporter.create(data, params)).rejects.toThrow('Invalid or oversized');

@@ -5,6 +5,7 @@ import {
   runWithTenantDatabaseScope,
   type TenantScopeAwareDatabase,
 } from '@agor/core/db';
+import { environmentAccessUrlsSchema } from '@agor/core/environment/access-urls';
 import { type Application, BadRequest, Forbidden } from '@agor/core/feathers';
 import {
   type AuthenticatedParams,
@@ -46,29 +47,7 @@ const reportSchema = z.discriminatedUnion('kind', [
       output: output.optional(),
       truncated: z.boolean().optional(),
       message: z.string().max(1024),
-      access_urls: z
-        .array(
-          z
-            .object({
-              name: z.string().min(1).max(128),
-              url: z
-                .string()
-                .max(2048)
-                .refine((value) => {
-                  try {
-                    const url = new URL(value);
-                    return (
-                      ['http:', 'https:'].includes(url.protocol) && !url.username && !url.password
-                    );
-                  } catch {
-                    return false;
-                  }
-                }, 'Access URLs must be absolute credential-free HTTP(S) URLs'),
-            })
-            .strict()
-        )
-        .max(8)
-        .optional(),
+      access_urls: environmentAccessUrlsSchema.optional(),
     })
     .strict(),
 ]);
