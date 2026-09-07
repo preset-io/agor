@@ -88,6 +88,7 @@ export const MCP_CATALOG_CSP_IMG_SRCS = [
   'https://*.gstatic.com',
   'https://logos.composio.dev',
   'https://cdn.jsdelivr.net',
+  'https://preset.io',
 ] as const;
 
 /**

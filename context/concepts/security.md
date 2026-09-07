@@ -130,7 +130,7 @@ work. Operators rarely need to override them:
 default-src        'self'
 script-src         'self'
 style-src          'self' 'unsafe-inline' https://fonts.bunny.net # Ant Design inline + Inter font CSS
-img-src            'self' data: blob: https://*.slack-edge.com https://api.smithery.ai https://www.google.com https://*.gstatic.com https://logos.composio.dev https://cdn.jsdelivr.net https://*.codesandbox.io
+img-src            'self' data: blob: https://*.slack-edge.com https://api.smithery.ai https://www.google.com https://*.gstatic.com https://logos.composio.dev https://cdn.jsdelivr.net https://preset.io https://*.codesandbox.io
 font-src           'self' data: https://fonts.bunny.net           # Inter font files
 connect-src        'self' ws: wss: <daemon-url>
 frame-src          'self' https://*.codesandbox.io               # Sandpack iframes
