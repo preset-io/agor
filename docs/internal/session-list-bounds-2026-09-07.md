@@ -172,7 +172,7 @@ bounded performance:
   Derived-type scans still inspect up to 10,000 full candidate records per
   request; they are bounded, not cheap, and now fail explicitly on truncation.
 - `findAll` is intentionally aggregate-unbounded. It checks stable totals,
-  advancing offsets, nonempty continuation and complete membership, raising
+  advancing offsets, nonempty continuation and the advertised row count, raising
   useful errors rather than claiming a partial walk is complete. Its current
   session offset walk also encounters the API's 10,000-offset ceiling for
   larger inventories. Silently lowering its page/aggregate limit is unsafe.
