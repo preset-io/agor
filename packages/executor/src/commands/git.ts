@@ -39,6 +39,7 @@ import {
   isValidGitRepo,
   redactGitUrlCredentials,
   removeGitWorktree,
+  resolveGitRef,
   restoreBranchFilesystem,
   scanGitConfigRemoteCredentials,
   scrubGitConfigRemoteCredentials,
@@ -879,6 +880,32 @@ export async function handleGitBranchAdd(
       `[git.branch.add] Repo: ${repoPath}, Branch: ${branch}, CreateBranch: ${shouldCreateBranch}, RestoreMode: ${restoreMode}, RefType: ${refType || 'branch'}, StorageMode: ${storageMode}`
     );
 
+    // Resolve the user-controlled starting point once, before storage-mode
+    // dispatch. Worktree and clone materializers consume this concrete result
+    // and must not independently guess or qualify the ref.
+    const requestedStartingRef = shouldCreateBranch ? sourceBranch : branch;
+    const resolveStartingRef = () =>
+      resolveGitRef(repoPath, requestedStartingRef, {
+        refType: refType || 'branch',
+        ...(baseRemoteUrl
+          ? { remote: { url: baseRemoteUrl }, remoteOnly: true }
+          : remoteUrl
+            ? { remote: { url: remoteUrl, name: 'origin' } }
+            : {}),
+        env,
+      });
+    const resolvedStartingRef = restoreMode ? undefined : await resolveStartingRef();
+
+    if (resolvedStartingRef) {
+      await client.service('branches').patch(branchId, {
+        base_ref: resolvedStartingRef.ref,
+        base_sha: resolvedStartingRef.sha,
+      });
+      console.log(
+        `[git.branch.add] Resolved '${requestedStartingRef}' to ${resolvedStartingRef.ref} @ ${resolvedStartingRef.sha}`
+      );
+    }
+
     // Create the git branch on filesystem
     if (storageMode === 'clone') {
       // Self-standing clone path. The remote URL is daemon-resolved from the
@@ -896,9 +923,10 @@ export async function handleGitBranchAdd(
       // helper fork off the cloned tip. When checking out an existing
       // branch, just clone the ref directly. The helper owns both flows so
       // the executor handler doesn't have to orchestrate post-clone git ops.
-      let cloneRef = branch;
+      let cloneRef = resolvedStartingRef?.name ?? branch;
       let cloneRemoteUrl = remoteUrl;
       let newBranchName: string | undefined;
+      const detached = resolvedStartingRef?.kind === 'commit';
 
       if (shouldCreateBranch) {
         const restoreFromDestination = restoreMode
@@ -911,10 +939,27 @@ export async function handleGitBranchAdd(
           : false;
 
         if (!restoreFromDestination) {
-          cloneRef = sourceBranch || branch;
-          cloneRemoteUrl = baseRemoteUrl || remoteUrl;
+          cloneRef = resolvedStartingRef?.name ?? sourceBranch ?? branch;
+          cloneRemoteUrl =
+            resolvedStartingRef?.remoteUrl ??
+            (resolvedStartingRef?.kind === 'local_branch' ||
+            resolvedStartingRef?.kind === 'commit' ||
+            (resolvedStartingRef?.kind === 'tag' && !resolvedStartingRef.remoteUrl)
+              ? repoPath
+              : baseRemoteUrl || remoteUrl);
           newBranchName = branch !== cloneRef ? branch : undefined;
         }
+      } else if (resolvedStartingRef) {
+        cloneRemoteUrl =
+          resolvedStartingRef.remoteUrl ??
+          (resolvedStartingRef.kind === 'local_branch' ||
+          resolvedStartingRef.kind === 'commit' ||
+          resolvedStartingRef.kind === 'tag'
+            ? repoPath
+            : remoteUrl);
+      }
+      if (!cloneRemoteUrl) {
+        throw new Error(`Cannot materialize resolved ref '${requestedStartingRef}': no source URL`);
       }
       console.log(
         `[git.branch.add] Using createBranchAsClone (sourceRemote=${redactGitUrlCredentials(cloneRemoteUrl)}, ` +
@@ -924,10 +969,12 @@ export async function handleGitBranchAdd(
       );
       await createBranchAsClone({
         remoteUrl: cloneRemoteUrl,
-        ...(cloneRemoteUrl !== remoteUrl ? { originRemoteUrl: remoteUrl } : {}),
+        ...(remoteUrl && cloneRemoteUrl !== remoteUrl ? { originRemoteUrl: remoteUrl } : {}),
         targetPath: branchPath,
         ref: cloneRef,
         ...(newBranchName ? { newBranchName } : {}),
+        ...(detached ? { detached: true } : {}),
+        ...(resolvedStartingRef ? { expectedSha: resolvedStartingRef.sha } : {}),
         depth: cloneDepth,
         // Pass the daemon's hint through unconditionally. The helper does
         // the existsSync check on the executor's filesystem and falls back
@@ -960,14 +1007,15 @@ export async function handleGitBranchAdd(
       await createBranch(
         repoPath,
         branchPath,
-        branch,
+        shouldCreateBranch ? branch : (resolvedStartingRef?.ref ?? branch),
         shouldCreateBranch,
         true, // pullLatest
-        sourceBranch,
+        shouldCreateBranch ? resolvedStartingRef?.ref : undefined,
         env,
         refType,
         baseRemoteUrl,
-        remoteUrl
+        remoteUrl,
+        resolvedStartingRef?.sha
       );
     }
 

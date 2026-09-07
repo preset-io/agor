@@ -11,7 +11,9 @@ const mocks = vi.hoisted(() => ({
   deleteBranchDirectory: vi.fn(),
   deleteRepoDirectory: vi.fn(),
   cloneRepo: vi.fn(),
+  createBranch: vi.fn(),
   createBranchAsClone: vi.fn(),
+  resolveGitRef: vi.fn(),
   isRemoteRefVisibleForClone: vi.fn(),
   getReposDir: vi.fn(() => '/safe/repos'),
   addConfig: vi.fn(),
@@ -49,7 +51,9 @@ vi.mock('../git/index.js', async () => {
     ...actual,
     createGit: vi.fn(() => ({ git: { addConfig: mocks.addConfig, raw: mocks.gitRaw } })),
     cloneRepo: mocks.cloneRepo,
+    createBranch: mocks.createBranch,
     createBranchAsClone: mocks.createBranchAsClone,
+    resolveGitRef: mocks.resolveGitRef,
     isRemoteRefVisibleForClone: mocks.isRemoteRefVisibleForClone,
     deleteBranchDirectory: mocks.deleteBranchDirectory,
     deleteRepoDirectory: mocks.deleteRepoDirectory,
@@ -196,6 +200,16 @@ beforeEach(() => {
     defaultBranch: 'main',
   });
   mocks.createBranchAsClone.mockResolvedValue({ path: '/trusted/branch', ref: 'main' });
+  mocks.resolveGitRef.mockImplementation(
+    async (_repoPath: string, input: string, options: { remote?: { url: string } }) => ({
+      input,
+      ref: input,
+      sha: '0123456789abcdef0123456789abcdef01234567',
+      kind: options.remote ? 'remote_branch' : 'local_branch',
+      name: input,
+      ...(options.remote ? { remoteUrl: options.remote.url } : {}),
+    })
+  );
   mocks.isRemoteRefVisibleForClone.mockResolvedValue(false);
   mocks.isValidGitRepo.mockResolvedValue(true);
   mocks.getDefaultBranch.mockResolvedValue('main');
@@ -299,8 +313,73 @@ describe('managed executor git/fs commands', () => {
       })
     );
     expect(patchedBranches).toContainEqual({ filesystem_status: 'ready' });
+    expect(patchedBranches).toContainEqual({
+      base_ref: 'trusted-base',
+      base_sha: '0123456789abcdef0123456789abcdef01234567',
+    });
     expect(renderedBranches).toEqual([branchId]);
     expect(patchedBranches.some((patch) => 'start_command' in patch)).toBe(false);
+  });
+
+  it('resolves once before worktree dispatch and reports the concrete ref and SHA', async () => {
+    const patchedBranches: Array<Record<string, unknown>> = [];
+    createClient({
+      repo: {
+        repo_id: repoId,
+        local_path: '/trusted/repo',
+        remote_url: 'https://example.com/trusted/repo.git',
+      },
+      branch: {
+        branch_id: branchId,
+        repo_id: repoId,
+        path: '/trusted/branch',
+        name: 'feature',
+        ref: 'feature',
+        base_ref: 'origin/main',
+        new_branch: true,
+        ref_type: 'branch',
+        storage_mode: 'worktree',
+      },
+      patchedBranches,
+    });
+    mocks.resolveGitRef.mockResolvedValueOnce({
+      input: 'origin/main',
+      ref: 'origin/main',
+      sha: 'abcdef0123456789abcdef0123456789abcdef01',
+      kind: 'remote_branch',
+      name: 'main',
+      remoteName: 'origin',
+      remoteUrl: 'https://example.com/trusted/repo.git',
+    });
+
+    const result = await handleGitBranchAdd(
+      {
+        command: 'git.branch.add',
+        sessionToken: 'tenant-token',
+        params: { branchId, repoId },
+      },
+      {}
+    );
+
+    expect(result.success).toBe(true);
+    expect(mocks.resolveGitRef).toHaveBeenCalledOnce();
+    expect(mocks.createBranch).toHaveBeenCalledWith(
+      '/trusted/repo',
+      '/trusted/branch',
+      'feature',
+      true,
+      true,
+      'origin/main',
+      {},
+      'branch',
+      undefined,
+      'https://example.com/trusted/repo.git',
+      'abcdef0123456789abcdef0123456789abcdef01'
+    );
+    expect(patchedBranches).toContainEqual({
+      base_ref: 'origin/main',
+      base_sha: 'abcdef0123456789abcdef0123456789abcdef01',
+    });
   });
 
   it('restores a clone from the destination branch when it has already been pushed', async () => {

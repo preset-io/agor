@@ -128,7 +128,6 @@ describe('buildWorktreeAddArgs — argv shape', () => {
       branchPath: '/tmp/wt',
       ref: 'main',
       createBranch: false,
-      fetchSucceeded: false,
     });
     const dashIdx = basic.indexOf('--');
     expect(dashIdx).toBeGreaterThanOrEqual(0);
@@ -143,8 +142,7 @@ describe('buildWorktreeAddArgs — argv shape', () => {
       branchPath: '/tmp/wt',
       ref: 'feat/new',
       createBranch: true,
-      sourceBranch: 'main',
-      fetchSucceeded: true,
+      sourceBranch: 'origin/main',
     });
     const dashIdx = withBranch.indexOf('--');
     expect(dashIdx).toBeGreaterThanOrEqual(0);
@@ -157,13 +155,12 @@ describe('buildWorktreeAddArgs — argv shape', () => {
     expect(withBranch.indexOf('origin/main')).toBeGreaterThan(dashIdx);
   });
 
-  it('uses local ref (no origin/ prefix) when fetch failed', () => {
+  it('uses a resolved local ref without adding an origin prefix', () => {
     const args = buildWorktreeAddArgs({
       branchPath: '/tmp/wt',
       ref: 'feat/new',
       createBranch: true,
       sourceBranch: 'main',
-      fetchSucceeded: false,
     });
     expect(args).toContain('main');
     expect(args).not.toContain('origin/main');
@@ -176,7 +173,6 @@ describe('buildWorktreeAddArgs — argv shape', () => {
       createBranch: true,
       sourceBranch: 'v1.2.3',
       refType: 'tag',
-      fetchSucceeded: true,
     });
     expect(args).toContain('v1.2.3');
     expect(args).not.toContain('origin/v1.2.3');

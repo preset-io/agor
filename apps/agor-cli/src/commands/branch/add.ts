@@ -129,7 +129,7 @@ export default class BranchAdd extends BaseCommand {
           chalk.dim(`  Creating new branch ${chalk.cyan(ref)} from ${chalk.cyan(sourceBranch)}`)
         );
         if (pullLatest) {
-          this.log(chalk.dim(`  Pulling latest ${chalk.cyan(`origin/${sourceBranch}`)}`));
+          this.log(chalk.dim(`  Resolving source ref ${chalk.cyan(sourceBranch)}`));
         }
       }
 

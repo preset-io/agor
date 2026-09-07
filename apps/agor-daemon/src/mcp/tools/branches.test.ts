@@ -584,7 +584,12 @@ describe('agor_branches_create', () => {
       filesystem_status: 'creating',
       ...options.initial,
     };
-    const observed = { ...creating, ...options.observed };
+    const observed = {
+      ...creating,
+      base_ref: 'main',
+      base_sha: 'a'.repeat(40),
+      ...options.observed,
+    };
     const createBranch = vi.fn(async () => creating);
     const branchesGet = vi.fn(async () => observed);
     const app = {
@@ -632,6 +637,8 @@ describe('agor_branches_create', () => {
         branch_id: 'branch-new',
         created_by: 'user-b',
         ...(data as Record<string, unknown>),
+        base_ref: (data as { sourceBranch?: string }).sourceBranch ?? 'main',
+        base_sha: 'a'.repeat(40),
       };
     });
     const reposGet = vi.fn(async (_repoId: string) => ({
@@ -654,18 +661,29 @@ describe('agor_branches_create', () => {
       baseServiceParams,
     });
 
-    await create({
+    const result = await create({
       repoId: 'repo-1',
       branchName: 'user-b-feature',
       boardId: 'board-1',
       autoSuffix: false,
     });
+    const payload = JSON.parse(result.content[0].text);
 
     expect(createBranch).toHaveBeenCalledWith(
       'repo-1',
       expect.objectContaining({ name: 'user-b-feature', boardId: 'board-1' }),
       baseServiceParams
     );
+    expect(payload).toMatchObject({
+      base_ref: 'main',
+      base_sha: 'a'.repeat(40),
+      _resolution: {
+        outcome: 'resolved',
+        requested_ref: 'main',
+        resolved_ref: 'main',
+        resolved_sha: 'a'.repeat(40),
+      },
+    });
   });
 
   it('optionally waits and returns the authoritative ready branch in the existing flat response', async () => {
@@ -742,6 +760,7 @@ describe('agor_branches_create', () => {
       requestContext()
     );
     await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(100);
     await vi.advanceTimersByTimeAsync(1_000);
     const result = await waiting;
     const payload = JSON.parse(result.content[0].text);
@@ -759,8 +778,9 @@ describe('agor_branches_create', () => {
       },
     });
     expect(createBranch).toHaveBeenCalledOnce();
-    expect(branchesGet).toHaveBeenCalledTimes(2);
+    expect(branchesGet).toHaveBeenCalledTimes(3);
     expect(branchesGet.mock.calls[1][1]).not.toBe(branchesGet.mock.calls[0][1]);
+    expect(branchesGet.mock.calls[2][1]).not.toBe(branchesGet.mock.calls[1][1]);
   });
 
   it('returns a persisted materialization failure without losing creation metadata', async () => {
@@ -805,6 +825,8 @@ describe('agor_branches_create', () => {
       branch_id: 'teammate-branch',
       created_by: 'user-a',
       ...(data as Record<string, unknown>),
+      base_ref: (data as { sourceBranch?: string }).sourceBranch ?? 'main',
+      base_sha: 'a'.repeat(40),
     }));
     const reposGet = vi.fn(async () => ({
       repo_id: 'repo-1',
@@ -866,6 +888,8 @@ describe('agor_branches_create', () => {
       branch_id: 'plain-branch',
       created_by: 'user-a',
       ...(data as Record<string, unknown>),
+      base_ref: (data as { sourceBranch?: string }).sourceBranch ?? 'main',
+      base_sha: 'a'.repeat(40),
     }));
     const reposGet = vi.fn(async () => ({
       repo_id: 'repo-1',
@@ -903,6 +927,8 @@ describe('agor_branches_create', () => {
       branch_id: 'teammate-branch',
       created_by: 'user-a',
       ...(data as Record<string, unknown>),
+      base_ref: (data as { sourceBranch?: string }).sourceBranch ?? 'main',
+      base_sha: 'a'.repeat(40),
     }));
     const reposGet = vi.fn(async () => ({
       repo_id: 'repo-1',
@@ -968,6 +994,8 @@ describe('agor_branches_create', () => {
     const createBranch = vi.fn(async (_repoId: string, data: unknown) => ({
       branch_id: 'teammate-branch',
       ...(data as Record<string, unknown>),
+      base_ref: (data as { sourceBranch?: string }).sourceBranch ?? 'main',
+      base_sha: 'a'.repeat(40),
     }));
     const reposGet = vi.fn(async () => ({ repo_id: 'repo-1', slug: 's', default_branch: 'main' }));
     const boardsCreate = vi.fn(async () => ({ board_id: 'board-auto', name: 'Helper' }));
@@ -1006,6 +1034,8 @@ describe('agor_branches_create', () => {
     const createBranch = vi.fn(async (_repoId: string, data: unknown) => ({
       branch_id: 'teammate-branch',
       ...(data as Record<string, unknown>),
+      base_ref: (data as { sourceBranch?: string }).sourceBranch ?? 'main',
+      base_sha: 'a'.repeat(40),
     }));
     const reposGet = vi.fn(async () => ({ repo_id: 'repo-1', slug: 's', default_branch: 'main' }));
     const boardsCreate = vi.fn();

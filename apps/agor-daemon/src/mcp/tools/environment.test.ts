@@ -50,13 +50,31 @@ function makeFakeApp(services: Record<string, ServiceStub>) {
   };
 }
 
+const resolvedSourceSha = 'a'.repeat(40);
+
 type ToolHandler = (args: Record<string, unknown>) => Promise<{
   content: Array<{ type: string; text: string }>;
 }>;
 
 function makeCtx(services: Record<string, ServiceStub>) {
+  const servicesWithBranchResolution = {
+    branches: {
+      // Branch creation returns before the executor resolves its source ref.
+      // The production MCP path then reads the branches service until the
+      // concrete ref and SHA appear, so every branch-create fixture must
+      // provide that shared service seam.
+      get: async (branchId: unknown) => ({
+        branch_id: branchId,
+        name: 'my-feature',
+        base_ref: 'main',
+        base_sha: resolvedSourceSha,
+        filesystem_status: 'creating',
+      }),
+    },
+    ...services,
+  };
   return {
-    app: makeFakeApp(services) as any,
+    app: makeFakeApp(servicesWithBranchResolution) as any,
     db: {} as any,
     userId: 'user-1' as any,
     sessionId: 'sess-1' as any,
@@ -529,7 +547,7 @@ describe('agor_branches_create', () => {
     });
 
     const handler = await captureBranchTool(ctx, 'agor_branches_create');
-    await handler({
+    const result = await handler({
       repoId: 'repo-1',
       branchName: 'my-feature',
       boardId: 'board-1',
@@ -539,6 +557,11 @@ describe('agor_branches_create', () => {
     expect(createCalls).toHaveLength(1);
     const data = createCalls[0][1] as Record<string, unknown>;
     expect(data.environment_variant).toBe('e2e');
+    expect(JSON.parse(result.content[0].text)._resolution).toMatchObject({
+      outcome: 'resolved',
+      resolved_ref: 'main',
+      resolved_sha: resolvedSourceSha,
+    });
   });
 
   it('rejects an invalid variant with the available variants in the message', async () => {
@@ -602,7 +625,7 @@ describe('agor_branches_create', () => {
     });
 
     const handler = await captureBranchTool(ctx, 'agor_branches_create');
-    await handler({
+    const result = await handler({
       repoId: 'repo-1',
       branchName: 'my-feature',
       boardId: 'board-1',
@@ -611,5 +634,10 @@ describe('agor_branches_create', () => {
     expect(createCalls).toHaveLength(1);
     const data = createCalls[0][1] as Record<string, unknown>;
     expect(Object.hasOwn(data, 'environment_variant')).toBe(false);
+    expect(JSON.parse(result.content[0].text)._resolution).toMatchObject({
+      outcome: 'resolved',
+      resolved_ref: 'main',
+      resolved_sha: resolvedSourceSha,
+    });
   });
 });

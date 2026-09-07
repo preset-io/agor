@@ -156,9 +156,9 @@ export interface Branch {
   // ===== Git State (Current) =====
 
   /**
-   * Branch this branch diverged from
+   * Concrete ref this branch diverged from after source-ref resolution.
    *
-   * Example: "main" (if this is a feature branch)
+   * Examples: "main", "origin/main", "refs/tags/v1.0.0"
    */
   base_ref?: string;
 

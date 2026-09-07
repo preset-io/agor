@@ -81,7 +81,13 @@ function makeFixture(options: {
       scopeKind: scope?.kind,
       scopeTenantId: scope?.kind === 'tenant' ? scope.tenantId : undefined,
     });
-    return { branch_id: 'branch-new', name: 'feature', board_id: 'board-1' };
+    return {
+      branch_id: 'branch-new',
+      name: 'feature',
+      board_id: 'board-1',
+      base_ref: 'main',
+      base_sha: 'a'.repeat(40),
+    };
   });
 
   const app = {
@@ -177,6 +183,8 @@ describe('agor_branches_create tenant database scope (HA regression)', () => {
         name: 'feature',
         board_id: 'board-1',
         filesystem_status: 'ready',
+        base_ref: 'main',
+        base_sha: 'a'.repeat(40),
       };
     });
     const { handler, observations } = makeFixture({ tenantId: 'tenant-a', branchesGet });

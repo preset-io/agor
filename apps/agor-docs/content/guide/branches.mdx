@@ -104,6 +104,23 @@ error. Client cancellation only stops further polling. No database transaction o
 retained between reads; each individual read remains subject to the daemon's normal database query
 timeout.
 
+### Source ref resolution
+
+Agor resolves a branch creation's source ref before either worktree or clone materialization:
+
+- Remote-qualified branches such as `origin/main` or `upstream/feature`, full `refs/...` names,
+  tags, and commit SHAs are never prefixed or otherwise reinterpreted.
+- A bare branch name may match a local branch and any number of remote-tracking branches. Agor uses
+  local-first, then lexically sorted remote precedence only when every match points to the same commit.
+- If matching refs point to different commits, creation fails with an actionable error listing each
+  candidate and SHA. Qualify the intended ref rather than relying on a remote-name default.
+- A missing ref fails instead of being rewritten as `origin/<name>`.
+
+Successful `agor_branches_create` responses include the concrete `base_ref`, `base_sha`, and an
+explicit `_resolution` object with the requested ref, resolved ref, and full commit SHA. The MCP call
+waits only for this short resolution phase even when `waitForReady` is false; filesystem
+materialization remains asynchronous unless readiness waiting is requested.
+
 ---
 
 ## Storage modes
