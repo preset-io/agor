@@ -1,118 +1,145 @@
+import { readFileSync } from 'node:fs';
+import type { AgorConfig } from '@agor/core/config';
 import {
   createTenantScopedDatabaseProxy,
+  type Database,
   getCurrentTenantDatabaseScope,
+  getCurrentTenantId,
   RepoRepository,
   runWithTenantContext,
   runWithTenantDatabaseScope,
 } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
-import type { RepoSlug, TenantID, UserID } from '@agor/core/types';
-import type { McpServer } from '@modelcontextprotocol/server';
-import { expect, vi } from 'vitest';
+import type { McpServer, ServerContext } from '@modelcontextprotocol/server';
+import { beforeEach, expect, it, vi } from 'vitest';
 import { dbTest } from '../../../../../packages/core/src/db/test-helpers';
-import { type RepoParams, ReposService } from '../../services/repos.js';
-import type { McpContext } from '../server.js';
-import { registerRepoTools } from './repos.js';
+import { ReposService } from '../../services/repos';
+import type { McpContext } from '../server';
+import { registerRepoTools } from './repos';
 
-const executor = vi.hoisted(() => ({ spawn: vi.fn(), request: vi.fn() }));
-vi.mock('../../utils/spawn-executor.js', () => ({
-  spawnExecutorFireAndForget: executor.spawn,
-  requestExecutor: executor.request,
+const executor = vi.hoisted(() => vi.fn());
+vi.mock('../../utils/spawn-executor', () => ({
+  requestExecutor: executor,
   getDaemonUrl: () => 'http://daemon.test',
 }));
-vi.mock('../../services/session-token-service.js', () => ({
-  issueExecutorCommandToken: vi.fn(async () => 'test-command-token'),
-}));
 
-dbTest('MCP replaces failed clones under a real guarded DB scope (#2643)', async ({ db }) => {
-  executor.spawn.mockClear();
-  executor.request.mockClear();
-  const guardedDb = createTenantScopedDatabaseProxy(db, { label: 'daemon database' });
-  const app = {
-    get: () => ({ execution: { unix_user_mode: 'simple' } }),
-    service: (name: string) => {
-      if (name === 'repos') return service;
-      if (name === 'branches') return {};
-      throw new Error(`Unexpected service: ${name}`);
-    },
-  } as unknown as Application;
-  const service = new ReposService(guardedDb, app);
-  const params: McpContext['baseServiceParams'] & RepoParams = {
-    provider: 'mcp',
-    authenticated: true,
-    tenant: { tenant_id: 'tenant-a' as TenantID, source: 'auth_claim' },
-    user: { user_id: 'test-user' as UserID, role: 'member', email: 'test@example.test' },
-    query: { cleanup: true },
-  };
-  const args = { url: 'https://github.com/apache/superset.git', slug: 'apache/superset' };
-  const repository = new RepoRepository(guardedDb);
-  const inScope = <T>(work: () => Promise<T>) =>
-    runWithTenantDatabaseScope(guardedDb, 'tenant-a', work);
-  const failed = await inScope(() =>
-    repository.create({
-      slug: args.slug as RepoSlug,
-      repo_type: 'remote',
-      remote_url: args.url,
-      local_path: '/test/repos/apache/superset',
-      clone_status: 'failed',
-      clone_error: { category: 'not_found', exit_code: 1, message: 'Repository not found' },
-    })
-  );
+beforeEach(() => {
+  executor.mockReset().mockImplementation(async () => {
+    // Real MCP entry has tenant identity, but must not retain a DB unit while
+    // waiting on filesystem inspection in another process.
+    expect(getCurrentTenantId()).toBe('default');
+    expect(getCurrentTenantDatabaseScope()).toBeUndefined();
+    return {
+      success: true,
+      data: { path: '/inspected/fixture', defaultBranch: 'main', credentialFindingCount: 0 },
+    };
+  });
+});
 
-  // Same real custom service call as pre-#2612: identity alone is insufficient.
-  await expect(
-    runWithTenantContext('tenant-a', () => service.cloneRepository(args, params))
-  ).rejects.toThrow(
-    'Failed to find repo by slug: Missing tenant database scope for daemon database access'
-  );
-  expect(await inScope(() => repository.findById(failed.repo_id))).toEqual(failed);
+type Handler = (args: Record<string, unknown>, context: ServerContext) => Promise<unknown>;
+const args = { path: '/submitted/fixture', slug: 'local/scope-fixture' };
+// This handler does not read the SDK request context.
+const context = {} as ServerContext;
 
-  type Handler = (
-    input: typeof args
-  ) => Promise<{ content: Array<{ type: string; text: string }> }>;
+function fixture(db: Database, tenantId: string | null = 'default', hosted = false) {
+  const guarded = createTenantScopedDatabaseProxy(db, { label: 'daemon database' });
+  const config = {
+    execution: { unix_user_mode: 'simple' },
+    multi_tenancy: { mode: hosted ? 'required_from_auth' : 'static', static_tenant_id: 'default' },
+  } as AgorConfig;
+  const app = { get: () => config, service: () => service } as unknown as Application;
+  const service = new ReposService(guarded, app);
   let handler: Handler | undefined;
   const server = {
-    registerTool: (name: string, _config: unknown, fn: Handler) => {
-      if (name === 'agor_repos_create_remote') handler = fn;
+    registerTool(name: string, _config: unknown, callback: Handler) {
+      if (name === 'agor_repos_create_local') handler = callback;
     },
   } as unknown as McpServer;
-  registerRepoTools(server, { app, db: guardedDb, baseServiceParams: params } as McpContext);
-  if (!handler) throw new Error('Missing create-remote tool');
-  const invoke = handler;
+  registerRepoTools(server, {
+    app,
+    db: guarded,
+    baseServiceParams: tenantId ? { tenant: { tenant_id: tenantId } } : {},
+  } as McpContext);
+  if (!handler) throw new Error('Local registration tool missing');
+  return { handler, guarded, service };
+}
 
-  // Conflicting trusted identity cannot switch to tenant A and remove its tombstone.
-  await expect(runWithTenantContext('tenant-b', () => invoke(args))).rejects.toThrow();
-  expect(await inScope(() => repository.findById(failed.repo_id))).toEqual(failed);
-  expect(executor.spawn).not.toHaveBeenCalled();
-
-  let previousId = failed.repo_id;
-  for (let attempt = 0; attempt < 2; attempt++) {
-    const result = await runWithTenantContext('tenant-a', () => invoke(args));
-    const pending = JSON.parse(result.content[0].text) as { status: string; repo_id: string };
-    expect(pending.status).toBe('pending');
-    expect(getCurrentTenantDatabaseScope()).toBeUndefined();
-    expect(pending.repo_id).not.toBe(previousId);
-    expect(await inScope(() => repository.findById(previousId))).toBeNull();
-    const replacement = await inScope(() => repository.findBySlug(args.slug));
-    expect(replacement).toMatchObject({ repo_id: pending.repo_id, clone_status: 'cloning' });
-    expect(replacement?.clone_error).toBeUndefined();
-    // An in-flight clone must not be removed or launched a second time.
-    const existing = await invoke(args);
-    expect(JSON.parse(existing.content[0].text)).toMatchObject({
-      status: 'exists',
-      repo_id: pending.repo_id,
-    });
-    if (!replacement) throw new Error('Missing replacement clone');
-    previousId = replacement.repo_id;
-    await inScope(() => repository.update(previousId, { clone_status: 'failed' }));
-  }
-  await inScope(() => repository.update(previousId, { clone_status: 'ready' }));
-  const ready = await invoke(args);
-  expect(JSON.parse(ready.content[0].text)).toMatchObject({
-    status: 'exists',
-    repo_id: previousId,
+dbTest('MCP registers a local repo through the real service on guarded SQLite', async ({ db }) => {
+  const { handler, guarded, service } = fixture(db);
+  const originalCreate = service.create.bind(service);
+  const create = vi.spyOn(service, 'create').mockImplementation(async (...parameters) => {
+    expect(getCurrentTenantDatabaseScope()).toMatchObject({ kind: 'tenant', tenantId: 'default' });
+    return originalCreate(...parameters);
   });
-  expect(executor.spawn).toHaveBeenCalledTimes(2);
-  // Even a caller's cleanup=true must not turn retry into filesystem deletion.
-  expect(executor.request).not.toHaveBeenCalled();
+  await runWithTenantContext('default', () => handler(args, context));
+  expect(executor).toHaveBeenCalledOnce();
+  expect(create).toHaveBeenCalledOnce();
+  const saved = await runWithTenantDatabaseScope(guarded, 'default', () =>
+    new RepoRepository(guarded).findBySlug(args.slug)
+  );
+  expect(saved).toMatchObject({
+    local_path: '/inspected/fixture',
+    default_branch: 'main',
+    repo_type: 'local',
+  });
+  expect(getCurrentTenantDatabaseScope()).toBeUndefined();
+});
+
+dbTest('MCP duplicate registration remains a domain error, not a scope error', async ({ db }) => {
+  const { handler } = fixture(db);
+  await runWithTenantContext('default', async () => {
+    await handler(args, context);
+    await expect(handler(args, context)).rejects.toThrow(
+      "Repository 'local/scope-fixture' already exists"
+    );
+  });
+  expect(await new RepoRepository(db).findAll()).toHaveLength(1);
+});
+
+dbTest('inspection failure does not create a repo', async ({ db }) => {
+  executor.mockResolvedValueOnce({ success: false, error: { message: 'Not a git repo' } });
+  const { handler } = fixture(db);
+  await expect(runWithTenantContext('default', () => handler(args, context))).rejects.toThrow(
+    'Not a git repo'
+  );
+  expect(await new RepoRepository(db).findAll()).toHaveLength(0);
+});
+
+dbTest(
+  'missing tenant identity fails before executor inspection or persistence',
+  async ({ db }) => {
+    const { service } = fixture(db);
+    await expect(service.addLocalRepository(args)).rejects.toThrow('Missing tenant context');
+    expect(executor).not.toHaveBeenCalled();
+    expect(await new RepoRepository(db).findAll()).toHaveLength(0);
+  }
+);
+
+dbTest(
+  'conflicting tenant identity fails before executor inspection or persistence',
+  async ({ db }) => {
+    const { handler } = fixture(db, 'tenant-b');
+    await expect(runWithTenantContext('default', () => handler(args, context))).rejects.toThrow(
+      /tenant/
+    );
+    expect(executor).not.toHaveBeenCalled();
+    expect(await new RepoRepository(db).findAll()).toHaveLength(0);
+  }
+);
+
+dbTest(
+  'hosted mode still rejects local registration before executor inspection',
+  async ({ db }) => {
+    const { handler } = fixture(db, 'default', true);
+    await expect(runWithTenantContext('default', () => handler(args, context))).rejects.toThrow(
+      'unavailable in hosted multi-tenant mode'
+    );
+    expect(executor).not.toHaveBeenCalled();
+    expect(await new RepoRepository(db).findAll()).toHaveLength(0);
+  }
+);
+
+it('HTTP local registration uses the identity-only long-route boundary', () => {
+  const source = readFileSync(new URL('../../register-routes.ts', import.meta.url), 'utf8');
+  expect(source).toMatch(/registerLongAuthenticatedRoute\(\s*app,\s*'\/repos\/local'/);
 });

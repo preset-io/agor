@@ -42,4 +42,17 @@ describe('cloneDiagnostic', () => {
     expect(message).toMatch(/<redacted>\nfatal: connection refused$/);
     expect(message).not.toContain(token);
   });
+
+  it('redacts a token that crosses the truncation boundary without leaking its suffix', () => {
+    const token = `sensitive-${'0123456789abcdef'.repeat(8)}`;
+    const output = `${'progress\n'.repeat(1000)}${token}${'x'.repeat(3900)}`;
+    // Truncating first would split the token, preventing exact-value redaction.
+    expect(output.slice(-4000)).toContain(token.slice(-32));
+    expect(output.slice(-4000)).not.toContain(token);
+
+    const message = cloneDiagnostic(output, { GH_TOKEN: token });
+    expect(message.length).toBeLessThanOrEqual(4000);
+    expect(message).toContain('<redacted>');
+    expect(message).not.toContain(token.slice(-32));
+  });
 });
