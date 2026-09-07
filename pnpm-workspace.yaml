@@ -94,6 +94,11 @@ allowBuilds:
   # hot-shots uses this optional native addon only for Unix-domain sockets;
   # Agor's exporter deliberately uses UDP to the local Agent.
   'unix-dgram@2.0.7': false
+  # Voice input runs Whisper in the browser via WebGPU; neither the
+  # tsparticles engine nor transformers' optional Node ONNX runtime needs
+  # a native build step in this workspace.
+  '@tsparticles/engine': false
+  onnxruntime-node: false
 patchedDependencies:
   streamdown@2.5.0: patches/streamdown@2.5.0.patch
 # These reviewed versions must remain installable when CI or an operator's

@@ -1648,6 +1648,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
       onEffortChange={stableFooterHandlers.onEffortChange}
       onPermissionModeChange={stableFooterHandlers.onPermissionModeChange}
       onCodexPermissionChange={stableFooterHandlers.onCodexPermissionChange}
+      onInsertText={(text) => promptRef.current?.insertText(text)}
       promptInputSlot={promptInputSlot}
     />
   ) : null;
