@@ -21,13 +21,14 @@ import {
 import type { Application } from '@agor/core/feathers';
 import type { Session, UUID } from '@agor/core/types';
 import { SessionStatus } from '@agor/core/types';
-import { describe, expect, vi } from 'vitest';
+import { afterEach, describe, expect, vi } from 'vitest';
 import { ownedDbTest as dbTest } from '../../../../packages/core/src/db/test-helpers';
 import { SessionsService } from './sessions';
 
 // The find() board_id path only touches the session repos built from `db`; the
 // stored `app` is never read. A bare cast keeps the harness minimal.
 const STUB_APP = {} as unknown as Application;
+afterEach(() => vi.restoreAllMocks());
 
 function createService(db: Database) {
   // Standalone SQLite query tests deliberately install no tenant around-hook.
@@ -217,6 +218,50 @@ describe('SessionsService.find — recency sort + pagination (SQL pushdown)', ()
       }
     }
   );
+
+  dbTest('caps the SQL page limit and preserves count-only requests', async ({ db }) => {
+    const service = createService(db);
+    const branch = await createBranchOnBoard(db, await createBoard(db));
+    await createSession(db, branch);
+    await createSession(db, branch);
+    const pageSpy = vi.spyOn(SessionRepository.prototype, 'findPage');
+    expect(await service.find({ query: { branch_id: branch, $limit: 10000 } })).toMatchObject({
+      limit: 10000,
+    });
+    service.paginate = { default: 100, max: 1000 };
+    expect(await service.find({ query: { branch_id: branch } })).toMatchObject({ limit: 100 });
+    const capped = await service.find({ query: { branch_id: branch, $limit: 10000 } });
+    expect(capped).toMatchObject({ total: 2, limit: 1000 });
+    expect(pageSpy).toHaveBeenLastCalledWith(expect.objectContaining({ limit: 1000 }));
+    expect(await service.find({ query: { branch_id: branch, $limit: 0 } })).toMatchObject({
+      total: 2,
+      limit: 0,
+      data: [],
+    });
+  });
+
+  dbTest('keeps residual operators and field selection before pagination', async ({ db }) => {
+    const service = createService(db);
+    const board = await createBoard(db);
+    const branch = await createBranchOnBoard(db, board);
+    await createSession(db, branch, { title: 'excluded', created_at: T_OLD });
+    const first = await createSession(db, branch, { title: 'first', created_at: T_MID });
+    const second = await createSession(db, branch, { title: 'second', created_at: T_NEW });
+    for (const scope of [{ board_id: board }, { branch_id: branch }]) {
+      const result = await service.find({
+        query: {
+          ...scope,
+          status: SessionStatus.IDLE,
+          session_id: { $in: [first, second] },
+          $select: ['title'],
+          $sort: { created_at: 1 },
+          $limit: 1,
+          $skip: 1,
+        },
+      });
+      expect(result).toEqual({ total: 2, limit: 1, skip: 1, data: [{ title: 'second' }] });
+    }
+  });
 
   dbTest('orders board-scoped sessions by updated_at desc', async ({ db }) => {
     const service = createService(db);

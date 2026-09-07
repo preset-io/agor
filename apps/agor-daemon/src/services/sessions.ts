@@ -195,7 +195,7 @@ export type SessionParams = QueryParams<{
  * (SQL board filter + recency sort + limit/offset) rather than the generic
  * in-memory path. We only divert the loader's bounded list queries — those that
  * sort by `updated_at` and/or scope to a `board_id`/`branch_id` — and only when the rest of
- * the query is a shape findPage fully models (archived + pagination). Anything
+ * the query is a shape findPage fully models (archived/status + pagination). Anything
  * with extra filters, operators, or `$select` falls through to the existing path
  * so we never silently drop semantics findPage doesn't implement.
  */
@@ -660,7 +660,9 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
   }
 
   async enrichRemoteRelationships(sessionList: Session[]): Promise<Session[]> {
-    const sessionIds = sessionList.map((session) => session.session_id);
+    // A generic $select can intentionally omit the ID. Do not send undefined
+    // SQL parameters or reintroduce fields the caller did not select.
+    const sessionIds = sessionList.map((session) => session.session_id).filter(Boolean);
     if (sessionIds.length === 0) return sessionList;
 
     const relationships = await this.sessionRelationshipRepo.findForSessions(sessionIds);
@@ -1697,7 +1699,10 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
         Array.isArray((branchFilter as { $in?: unknown }).$in)
           ? ((branchFilter as { $in: BranchID[] }).$in ?? [])
           : undefined;
-      const limit = (query?.$limit as number | undefined) ?? PAGINATION.DEFAULT_LIMIT;
+      const limit = Math.min(
+        (query?.$limit as number | undefined) ?? this.paginate?.default ?? PAGINATION.DEFAULT_LIMIT,
+        this.paginate?.max ?? 1000 // Same fallback as DrizzleService.paginateData.
+      );
       const skip = (query?.$skip as number | undefined) ?? 0;
       const { data, total } = await this.sessionRepo.findPage({
         status: query?.status as SessionStatus | undefined,

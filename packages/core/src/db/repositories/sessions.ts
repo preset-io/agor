@@ -582,7 +582,22 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
         conditions.push(inArray(sessions.branch_id, opts.branchIds));
       if (opts.archived !== undefined) conditions.push(eq(sessions.archived, opts.archived));
       if (opts.visibleToUserId) {
-        conditions.push(visibleBranchAccessCondition(this.db, opts.visibleToUserId));
+        // Keep policy evaluation at branch cardinality, not session cardinality.
+        // OFFSET 0 prevents PostgreSQL from flattening this into the outer join
+        // and repeating the correlated policy subplans for every Session. SQLite
+        // requires LIMIT with OFFSET; -1 means unbounded. This set exists only
+        // within each statement and keeps the same tenant/RLS scope and predicate.
+        const branchConditions = [visibleBranchAccessCondition(this.db, opts.visibleToUserId)];
+        if (opts.boardId !== undefined) branchConditions.push(eq(branches.board_id, opts.boardId));
+        if (opts.branchId !== undefined)
+          branchConditions.push(eq(branches.branch_id, opts.branchId));
+        if (opts.branchIds !== undefined)
+          branchConditions.push(inArray(branches.branch_id, opts.branchIds));
+        conditions.push(sql`${sessions.branch_id} IN (
+          SELECT ${branches.branch_id} FROM ${branches}
+          WHERE ${and(...branchConditions)}
+          ${isPostgresDatabase(this.db) ? sql`OFFSET 0` : sql`LIMIT -1 OFFSET 0`}
+        )`);
       }
       const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
 
@@ -593,10 +608,11 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
         .leftJoin(branches, eq(sessions.branch_id, branches.branch_id));
       const countRow = await (whereClause ? countQuery.where(whereClause) : countQuery).one();
       const total = Number(countRow?.count ?? 0);
+      if (opts.limit === 0) return { data: [], total };
 
       // Page of rows, recency-sorted in SQL on the real `updated_at` column.
       // biome-ignore lint/suspicious/noExplicitAny: Conditional query builder shape differs with the RBAC join
-      let dataQuery: any = select(this.db)
+      let dataQuery: any = select(this.db, { sessions, branches: { board_id: branches.board_id } })
         .from(sessions)
         .leftJoin(branches, eq(sessions.branch_id, branches.branch_id));
       if (whereClause) dataQuery = dataQuery.where(whereClause);
