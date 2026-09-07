@@ -1,3 +1,4 @@
+import { assertAsyncEnvironmentCommandConfig } from './environment-commands';
 import {
   hasContainedClaudeRuntimeCredentials,
   hasCrossReplicaExecutorCredentialLock,
@@ -366,11 +367,14 @@ export function resolveDeploymentConfig(
       'Config error: HA web terminals require execution_topology shared-local; external terminal runtimes do not yet have owner-affine routing'
     );
   }
-  if (config.execution?.managed_envs_execution_mode !== 'webhook-only') {
-    throw new Error(
-      'Config error: HA currently requires execution.managed_envs_execution_mode: webhook-only'
-    );
-  }
+  assertAsyncEnvironmentCommandConfig({
+    ...config,
+    deployment: {
+      ...config.deployment,
+      mode: 'ha',
+      ha: { ...config.deployment?.ha, execution_topology: executionTopology },
+    },
+  });
 
   const executorStorage = config.execution?.executor_storage;
   if (

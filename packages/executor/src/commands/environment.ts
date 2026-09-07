@@ -16,6 +16,8 @@ import type {
   ExecutorResult,
 } from '../payload-types.js';
 import { createExecutorClient } from '../services/feathers-client.js';
+import { handleEnvironmentAttempt } from './environment-attempt.js';
+import { EnvironmentOutput, runBoundedEnvironmentShell } from './environment-shell.js';
 import type { CommandOptions } from './index.js';
 
 const MAX_OUTPUT_LINES = ENVIRONMENT.LOGS_MAX_LINES;
@@ -149,17 +151,22 @@ export async function handleEnvironmentLogs(
   const cwd = payload.params.branchPath || branch.path;
 
   try {
-    const result = await runShellCommand({
+    const output = new EnvironmentOutput();
+    const result = await runBoundedEnvironmentShell({
       command: payload.params.logsCommand,
       cwd,
       env: payload.env,
-      commandType: 'logs',
+      action: 'logs',
+      output,
+      deadline: Date.now() + ENVIRONMENT.LOGS_TIMEOUT_MS - 5000,
     });
+    if (result.outcome !== 'succeeded') throw new Error(result.message);
 
     return {
       success: true,
       data: {
-        logs: result.output ?? '',
+        logs: output.text(),
+        truncated: output.truncated,
         timestamp: new Date().toISOString(),
       },
     };
@@ -193,6 +200,8 @@ export async function handleEnvironmentLifecycle(
       },
     };
   }
+
+  if (payload.params.attempt) return handleEnvironmentAttempt(payload);
 
   const daemonUrl = payload.daemonUrl || 'http://localhost:3030';
   const client = await createExecutorClient(daemonUrl, payload.sessionToken);

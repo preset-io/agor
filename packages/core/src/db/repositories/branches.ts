@@ -19,6 +19,7 @@ import type {
 import { and, asc, desc, eq, exists, inArray, isNull, like, or, type SQL, sql } from 'drizzle-orm';
 import { getBaseUrl } from '../../config/config-manager';
 import { generateId } from '../../lib/ids';
+import { hasActiveEnvironmentCommand } from '../../types/environment-command';
 import { getBranchUrl } from '../../utils/url';
 import type { Database } from '../client';
 import {
@@ -655,6 +656,36 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
       }
 
       const current = this.rowToBranch(currentRow, baseUrl);
+      if (
+        Object.hasOwn(updates, 'environment_instance') &&
+        (current.environment_instance?.command_attempt ||
+          updates.environment_instance?.command_attempt ||
+          updates.environment_instance?.command_history)
+      ) {
+        throw new RepositoryError(
+          'Executor-backed environment state must be changed through attempt-scoped reports'
+        );
+      }
+      if (
+        hasActiveEnvironmentCommand(current.environment_instance) &&
+        [
+          'archived',
+          'filesystem_status',
+          'path',
+          'ref',
+          'start_command',
+          'stop_command',
+          'nuke_command',
+          'logs_command',
+          'health_check_url',
+          'app_url',
+          'environment_variant',
+        ].some((field) => Object.hasOwn(updates, field))
+      ) {
+        throw new RepositoryError(
+          'Wait for the active environment command before changing its branch or configuration'
+        );
+      }
 
       // STEP 3: Deep merge updates into current branch (in memory)
       // Preserves nested objects like schedule, environment_instance, custom_context
@@ -752,7 +783,23 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
       throw new EntityNotFoundError('Branch', id);
     }
 
-    await deleteFrom(this.db, branches).where(eq(branches.branch_id, existing.branch_id)).run();
+    await runDatabaseTransaction(
+      this.db,
+      async (tx) => {
+        await lockRowForUpdate(tx, this.db, branches, eq(branches.branch_id, existing.branch_id));
+        const row = await select(tx)
+          .from(branches)
+          .where(eq(branches.branch_id, existing.branch_id))
+          .one();
+        if (hasActiveEnvironmentCommand(row?.data.environment_instance)) {
+          throw new RepositoryError(
+            'Wait for the active environment command before deleting its branch'
+          );
+        }
+        await deleteFrom(tx, branches).where(eq(branches.branch_id, existing.branch_id)).run();
+      },
+      { sqliteImmediate: true }
+    );
   }
 
   /**

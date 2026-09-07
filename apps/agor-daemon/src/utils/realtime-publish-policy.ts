@@ -1,4 +1,4 @@
-import type { UserRole } from '@agor/core/types';
+import { ENVIRONMENT_COMMAND_REPORT_SERVICE, type UserRole } from '@agor/core/types';
 
 /**
  * The allowlist that decides which services may fan out over the socket at all.
@@ -243,6 +243,10 @@ export const REALTIME_PUBLISH_POLICY = {
   'auth/launch': { audience: 'none', why: 'Exchanges a launch token for a session.' },
   'check-auth': { audience: 'none', why: 'Echoes back the API key it was asked to validate.' },
   'config/resolve-api-key': { audience: 'none', why: 'Returns a provider API key.' },
+  [ENVIRONMENT_COMMAND_REPORT_SERVICE]: {
+    audience: 'none',
+    why: 'Attempt-scoped executor RPC; persisted environment updates publish through branches.',
+  },
   'executor-git-environment': {
     audience: 'none',
     why: 'Returns a command-scoped Git credential DTO to one executor.',

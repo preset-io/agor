@@ -45,6 +45,11 @@ interface InstanceConfig {
 }
 
 export interface FeaturesConfig {
+  /** Instance-owned informational copy; never a capability or repository override. */
+  environmentDisclaimerMarkdown?: string;
+  environmentCommands?: ReturnType<
+    typeof import('@agor/core/config/browser').environmentCommandCapabilities
+  >;
   /** Operator-selected repository used to bootstrap the first teammate. */
   teammateFrameworkRepoUrl?: string;
   /**

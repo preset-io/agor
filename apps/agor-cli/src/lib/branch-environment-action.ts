@@ -3,7 +3,7 @@ import type { Branch } from '@agor-live/client';
 export type BranchEnvironmentAction = 'start' | 'stop' | 'restart';
 
 interface BranchEnvironmentRouteService {
-  create(data: Record<string, never>): Promise<unknown>;
+  create(data: { confirmation_of?: string }): Promise<unknown>;
 }
 
 export interface BranchEnvironmentRouteClient {
@@ -23,8 +23,11 @@ export interface BranchEnvironmentRouteClient {
 export async function requestBranchEnvironmentAction(
   client: BranchEnvironmentRouteClient,
   branchId: string,
-  action: BranchEnvironmentAction
+  action: BranchEnvironmentAction,
+  confirmationOf?: string
 ): Promise<Branch> {
   const route = `branches/${encodeURIComponent(branchId)}/${action}`;
-  return (await client.service(route).create({})) as Branch;
+  return (await client
+    .service(route)
+    .create(confirmationOf ? { confirmation_of: confirmationOf } : {})) as Branch;
 }

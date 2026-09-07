@@ -21,6 +21,34 @@ _What it looks like on the card: a green env pill, one-click open, and start/sto
 
 ## Overview
 
+### Instance guidance
+
+Operators can display a fixed informational notice at the top of every branch's
+Environment tab. Set this **top-level** key in `~/.agor/config.yaml` and restart
+the daemon (coordinate the same configuration across HA replicas):
+
+```yaml
+environment_disclaimer_markdown: |
+  Commands can launch remote environments such as GitHub Codespaces or your own provider.
+  Agor runs your commands and reports their results; it does not host your application
+  in the executor. Servers started inside Cloud executor Pods are not exposed and
+  commands are time-limited. Your remote provider's security and billing apply.
+  See the [environment guide](https://agor.live/guide/environment-configuration)
+  for configuration and cleanup responsibilities.
+```
+
+This is public, instance-wide policy content, not a secret store. Repositories,
+variants, and branch snapshots cannot override it. It supplements the dynamic
+capability summary; text cannot enable execution or change permissions.
+
+Omit the key or use an empty string to show no notice. The limit is **4000 UTF-16
+code units** (most characters count as one; emoji may count as two). Supported
+Markdown is paragraphs, emphasis, lists, and absolute HTTP(S) documentation
+links without embedded credentials. Raw HTML, images, embeds, code blocks, and
+interactive plugins are not rendered. Unsafe and relative URLs are not clickable.
+
+### Configuration layers
+
 Managed environments are built out of three layers, precedence **low → high**:
 
 ```text
@@ -75,27 +103,27 @@ Every field in a variant is a Handlebars template. The render context is built i
 
 ### Variables
 
-| Variable | Source | Example | Notes |
-|---|---|---|---|
-| `{{branch.unique_id}}` | Branch | `3` | Auto-incrementing integer. Use for deterministic port offsets. |
-| `{{branch.name}}` | Branch | `feat-new-filter` | Slugified branch name. Good for `docker compose -p`. |
-| `{{branch.path}}` | Branch | `/home/you/agor/feat-new-filter` | Absolute path on disk. |
-| `{{branch.base_ref}}` | Branch | `main` | Source branch/tag name the branch was created from (the "Base Branch"/"Base Tag" in the create dialog). The **name**, not a SHA. Empty string if unknown. |
-| `{{branch.ref_type}}` | Branch | `branch` | `branch` or `tag`, indicating whether `base_ref` names a branch or a tag. Defaults to `branch`. |
-| `{{repo.slug}}` | Repo | `preset-io/superset` | Repository slug. |
-| `{{host.ip_address}}` | Auto-detected | `10.0.1.42` | Fallback order: `template_overrides.host.ip_address` → `daemon.host_ip_address` in `~/.agor/config.yaml` → autodetect. |
-| `{{custom.<key>}}` | Branch custom context | `{{custom.compose_profile}}` | Anything you store in `branch.custom_context`. |
-| `{{custom.<key>}}` via overrides | `template_overrides.custom.*` | `{{custom.internal_registry}}` | Repo-wide fallback if the branch doesn't set a key. |
+| Variable                         | Source                        | Example                          | Notes                                                                                                                                                     |
+| -------------------------------- | ----------------------------- | -------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `{{branch.unique_id}}`           | Branch                        | `3`                              | Auto-incrementing integer. Use for deterministic port offsets.                                                                                            |
+| `{{branch.name}}`                | Branch                        | `feat-new-filter`                | Slugified branch name. Good for `docker compose -p`.                                                                                                      |
+| `{{branch.path}}`                | Branch                        | `/home/you/agor/feat-new-filter` | Absolute path on disk.                                                                                                                                    |
+| `{{branch.base_ref}}`            | Branch                        | `main`                           | Source branch/tag name the branch was created from (the "Base Branch"/"Base Tag" in the create dialog). The **name**, not a SHA. Empty string if unknown. |
+| `{{branch.ref_type}}`            | Branch                        | `branch`                         | `branch` or `tag`, indicating whether `base_ref` names a branch or a tag. Defaults to `branch`.                                                           |
+| `{{repo.slug}}`                  | Repo                          | `preset-io/superset`             | Repository slug.                                                                                                                                          |
+| `{{host.ip_address}}`            | Auto-detected                 | `10.0.1.42`                      | Fallback order: `template_overrides.host.ip_address` → `daemon.host_ip_address` in `~/.agor/config.yaml` → autodetect.                                    |
+| `{{custom.<key>}}`               | Branch custom context         | `{{custom.compose_profile}}`     | Anything you store in `branch.custom_context`.                                                                                                            |
+| `{{custom.<key>}}` via overrides | `template_overrides.custom.*` | `{{custom.internal_registry}}`   | Repo-wide fallback if the branch doesn't set a key.                                                                                                       |
 
 ### Math helpers
 
-| Helper | Example | Result (with `unique_id = 3`) |
-|---|---|---|
-| `add` | `{{add 9000 branch.unique_id}}` | `9003` |
-| `sub` | `{{sub 9000 branch.unique_id}}` | `8997` |
-| `mul` | `{{mul branch.unique_id 10}}` | `30` |
-| `div` | `{{div 60 branch.unique_id}}` | `20` |
-| `mod` | `{{mod branch.unique_id 4}}` | `3` |
+| Helper | Example                         | Result (with `unique_id = 3`) |
+| ------ | ------------------------------- | ----------------------------- |
+| `add`  | `{{add 9000 branch.unique_id}}` | `9003`                        |
+| `sub`  | `{{sub 9000 branch.unique_id}}` | `8997`                        |
+| `mul`  | `{{mul branch.unique_id 10}}`   | `30`                          |
+| `div`  | `{{div 60 branch.unique_id}}`   | `20`                          |
+| `mod`  | `{{mod branch.unique_id 4}}`    | `3`                           |
 
 Math helpers are deterministic. The same branch always renders the same ports, which is what keeps parallel branches from colliding.
 
@@ -115,17 +143,17 @@ Math helpers are deterministic. The same branch always renders the same ports, w
 version: 2
 
 environment:
-  default: lean                    # which variant new branches get
+  default: lean # which variant new branches get
   variants:
     <variant-name>:
-      description: "Human-readable one-liner"
-      extends: <base-variant>      # optional, single-level only
-      start:  "<shell command template>"
-      stop:   "<shell command template>"
-      nuke:   "<shell command template>"   # optional
-      logs:   "<shell command template>"   # optional
-      health: "<url template>"             # optional
-      app:    "<url template>"             # optional
+      description: 'Human-readable one-liner'
+      extends: <base-variant> # optional, single-level only
+      start: '<shell command template>'
+      stop: '<shell command template>'
+      nuke: '<shell command template>' # optional
+      logs: '<shell command template>' # optional
+      health: '<url template>' # optional
+      app: '<url template>' # optional
 ```
 
 `start`, `stop`, `nuke`, and `logs` are rendered lifecycle fields. In the
@@ -161,29 +189,29 @@ environment:
   default: lean
   variants:
     lean:
-      description: "SQLite-backed, single-container, fast iteration"
-      start:  "docker compose -f docker-compose-light.yml -p agor-{{branch.name}} up -d"
-      stop:   "docker compose -f docker-compose-light.yml -p agor-{{branch.name}} down"
-      nuke:   "docker compose -f docker-compose-light.yml -p agor-{{branch.name}} down -v"
-      logs:   "docker compose -f docker-compose-light.yml -p agor-{{branch.name}} logs --tail=100"
-      health: "http://{{host.ip_address}}:{{add 9000 branch.unique_id}}/health"
-      app:    "http://{{host.ip_address}}:{{add 5000 branch.unique_id}}"
+      description: 'SQLite-backed, single-container, fast iteration'
+      start: 'docker compose -f docker-compose-light.yml -p agor-{{branch.name}} up -d'
+      stop: 'docker compose -f docker-compose-light.yml -p agor-{{branch.name}} down'
+      nuke: 'docker compose -f docker-compose-light.yml -p agor-{{branch.name}} down -v'
+      logs: 'docker compose -f docker-compose-light.yml -p agor-{{branch.name}} logs --tail=100'
+      health: 'http://{{host.ip_address}}:{{add 9000 branch.unique_id}}/health'
+      app: 'http://{{host.ip_address}}:{{add 5000 branch.unique_id}}'
 
     postgres:
-      description: "Postgres + Redis + Celery — closer to prod"
-      extends: lean                # inherits health + app from lean
-      start:  "docker compose -p agor-{{branch.name}} up -d --build"
-      stop:   "docker compose -p agor-{{branch.name}} down"
-      nuke:   "docker compose -p agor-{{branch.name}} down -v"
-      logs:   "docker compose -p agor-{{branch.name}} logs --tail=100"
+      description: 'Postgres + Redis + Celery — closer to prod'
+      extends: lean # inherits health + app from lean
+      start: 'docker compose -p agor-{{branch.name}} up -d --build'
+      stop: 'docker compose -p agor-{{branch.name}} down'
+      nuke: 'docker compose -p agor-{{branch.name}} down -v'
+      logs: 'docker compose -p agor-{{branch.name}} logs --tail=100'
 
     full:
-      description: "Postgres + Redis + Celery + worker + beat"
-      extends: lean                # NOT extends: postgres — chains are not allowed
-      start:  "COMPOSE_PROFILES=full docker compose -p agor-{{branch.name}} up -d --build"
-      stop:   "docker compose -p agor-{{branch.name}} down"
-      nuke:   "docker compose -p agor-{{branch.name}} down -v"
-      logs:   "docker compose -p agor-{{branch.name}} logs --tail=100"
+      description: 'Postgres + Redis + Celery + worker + beat'
+      extends: lean # NOT extends: postgres — chains are not allowed
+      start: 'COMPOSE_PROFILES=full docker compose -p agor-{{branch.name}} up -d --build'
+      stop: 'docker compose -p agor-{{branch.name}} down'
+      nuke: 'docker compose -p agor-{{branch.name}} down -v'
+      logs: 'docker compose -p agor-{{branch.name}} logs --tail=100'
 ```
 
 Notice that `postgres` and `full` both extend `lean` (not each other). That's the single-level rule. Both inherit `health` and `app` from `lean` and override the rest.
@@ -192,10 +220,10 @@ Notice that `postgres` and `full` both extend `lean` (not each other). That's th
 
 Two admin-only actions in the repo editor header:
 
-| Action | Effect |
-|---|---|
+| Action                 | Effect                                                                                                                                                              |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Import `.agor.yml`** | Parses `$BRANCH_PATH/.agor.yml` and **replaces** `environment.variants` + `environment.default` in the DB. `template_overrides` and branch snapshots are untouched. |
-| **Export `.agor.yml`** | Writes the current `environment.variants` + `environment.default` to `$BRANCH_PATH/.agor.yml`. `template_overrides` is **stripped** before writing. |
+| **Export `.agor.yml`** | Writes the current `environment.variants` + `environment.default` to `$BRANCH_PATH/.agor.yml`. `template_overrides` is **stripped** before writing.                 |
 
 Both paths go through a confirm dialog. Import is **replace, not merge**. A variant that exists in the DB but not in the file gets dropped.
 
@@ -223,11 +251,11 @@ Superset's upstream `.agor.yml` shouldn't hard-code `10.0.1.42` as the host IP. 
 ```yaml
 template_overrides:
   host:
-    ip_address: "10.0.1.42"        # overrides daemon config / autodetect
+    ip_address: '10.0.1.42' # overrides daemon config / autodetect
   custom:
-    internal_registry: "registry.preset.io"
-    aws_profile: "preset-dev"
-    compose_profile: "preset"
+    internal_registry: 'registry.preset.io'
+    aws_profile: 'preset-dev'
+    compose_profile: 'preset'
 ```
 
 The structure is a plain `{ host, custom }` map. `template_overrides` is root-level and applies to **all variants**. There are no per-variant overrides.
@@ -260,10 +288,10 @@ Each branch has:
 
 The Environment tab has two stacked editors:
 
-| Editor | Who edits | What it shows |
-|---|---|---|
-| **Repo editor** (top) | Admins only | `version`, `environment.variants`, `environment.default`, `template_overrides` as YAML |
-| **Branch editor** (bottom) | Admins only | The 6 rendered commands for this branch |
+| Editor                     | Who edits   | What it shows                                                                          |
+| -------------------------- | ----------- | -------------------------------------------------------------------------------------- |
+| **Repo editor** (top)      | Admins only | `version`, `environment.variants`, `environment.default`, `template_overrides` as YAML |
+| **Branch editor** (bottom) | Admins only | The 6 rendered commands for this branch                                                |
 
 Members see both editors **read-only**. Users with branch `all` permission and admins can use the **Variant picker** and the **Render** button in between them.
 
@@ -277,7 +305,7 @@ Members see both editors **read-only**. Users with branch `all` permission and a
 2. Click **Render**.
 3. Agor re-evaluates `variant + template_overrides` and overwrites the branch snapshot.
 
-If the snapshot has unsaved manual edits (admins only, since members can't make them), Render prompts a confirm: *"Rendering will discard your local edits. Continue?"*
+If the snapshot has unsaved manual edits (admins only, since members can't make them), Render prompts a confirm: _"Rendering will discard your local edits. Continue?"_
 
 ### No auto-tracking
 
@@ -287,7 +315,7 @@ If an admin edits a variant after a branch has rendered, **the branch snapshot d
 
 A repo with no variants configured shows a disabled picker and:
 
-> *No environment variants configured. Ask an admin to set up commands in the repo editor above.*
+> _No environment variants configured. Ask an admin to set up commands in the repo editor above._
 
 ---
 
@@ -297,14 +325,14 @@ Two orthogonal axes govern access: **who can edit what**, and **who can run Star
 
 ### Edit permissions
 
-| Action | Member | Admin |
-|---|:---:|:---:|
-| View repo config (top editor) | ✅ read-only | ✅ |
-| Edit `environment.variants` / `environment.default` | ❌ | ✅ |
-| Edit `template_overrides` | ❌ | ✅ |
-| Import / export `.agor.yml` | ❌ | ✅ |
-| Pick variant + Render to branch | Requires branch `all` | ✅ |
-| Hand-edit branch rendered commands | ❌ | ✅ |
+| Action                                              |        Member         | Admin |
+| --------------------------------------------------- | :-------------------: | :---: |
+| View repo config (top editor)                       |     ✅ read-only      |  ✅   |
+| Edit `environment.variants` / `environment.default` |          ❌           |  ✅   |
+| Edit `template_overrides`                           |          ❌           |  ✅   |
+| Import / export `.agor.yml`                         |          ❌           |  ✅   |
+| Pick variant + Render to branch                     | Requires branch `all` |  ✅   |
+| Hand-edit branch rendered commands                  |          ❌           |  ✅   |
 
 The reason members **cannot** hand-edit rendered commands: admins curate the set of commands that can run (the variants), and users with branch `all` permission pick from that list. This makes the variant library the effective allowlist and complements the execution-time deny-list guard.
 
@@ -340,12 +368,12 @@ success cannot restore an older lifecycle state.
 
 No forced user action. The upgrade is silent:
 
-| Before | After |
-|---|---|
-| `repos.environment_config: { up_command, down_command, … }` | `repos.environment: { version: 2, default: "default", variants: { default: <old value> }, template_overrides: {} }` |
-| Branch `start_command` / `stop_command` / … | Unchanged. They're already the rendered snapshot this design formalizes. |
-| `.agor.yml` v1 (flat `environment: { start, stop, … }`) | Still parses. Loaded as `variants.default`. Export writes v2 going forward. |
-| `daemon.host_ip_address` in `~/.agor/config.yaml` | Still works as the fallback for `{{host.ip_address}}`. For new setups, prefer per-repo `template_overrides.host.ip_address`. |
+| Before                                                      | After                                                                                                                        |
+| ----------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| `repos.environment_config: { up_command, down_command, … }` | `repos.environment: { version: 2, default: "default", variants: { default: <old value> }, template_overrides: {} }`          |
+| Branch `start_command` / `stop_command` / …                 | Unchanged. They're already the rendered snapshot this design formalizes.                                                     |
+| `.agor.yml` v1 (flat `environment: { start, stop, … }`)     | Still parses. Loaded as `variants.default`. Export writes v2 going forward.                                                  |
+| `daemon.host_ip_address` in `~/.agor/config.yaml`           | Still works as the fallback for `{{host.ip_address}}`. For new setups, prefer per-repo `template_overrides.host.ip_address`. |
 
 Existing branches keep running against their existing rendered commands. Nothing re-renders until someone hits Render or creates a new branch.
 
@@ -404,11 +432,11 @@ environment:
   default: remote
   variants:
     remote:
-      start: "https://orchestrator.example.com/agor/start?branch={{branch.name}}"
-      stop:  "https://orchestrator.example.com/agor/stop?branch={{branch.name}}"
-      logs:  "https://orchestrator.example.com/agor/logs?branch={{branch.name}}"
-      health: "https://apps.example.com/{{branch.name}}/health"
-      app:    "https://apps.example.com/{{branch.name}}"
+      start: 'https://orchestrator.example.com/agor/start?branch={{branch.name}}'
+      stop: 'https://orchestrator.example.com/agor/stop?branch={{branch.name}}'
+      logs: 'https://orchestrator.example.com/agor/logs?branch={{branch.name}}'
+      health: 'https://apps.example.com/{{branch.name}}/health'
+      app: 'https://apps.example.com/{{branch.name}}'
 ```
 
 V1 webhooks are intentionally simple: GET only, no custom headers, no request
@@ -418,15 +446,147 @@ credentials are rejected. Use a trusted orchestration service, and avoid secrets
 in query strings because rendered branch snapshots and infrastructure logs may
 expose them.
 
-In daemon HA mode, lifecycle actions remain webhook-only; Agor does not assign
-distributed ownership for Start, Stop, Restart, or Nuke. Health observation is
-separate: every replica scans active environments, while PostgreSQL admits only
-one live observation claim per branch and fences the result against lease expiry
-and lifecycle changes. A remote/webhook environment without `health` remains
-explicitly unobservable (`unknown`); Agor never treats another daemon's local
-process map as evidence that it is healthy.
+### Bounded external commands in HA
 
----
+HA `hybrid` mode supports **remote-environment trigger scripts**, not application
+hosting. Agor dispatches a bounded executor, which claims its admitted attempt
+and reports progress and completion to any daemon replica. The initiating HTTP
+request waits at most 10 seconds for launcher admission, **not** for the command
+or its result. An accepted Start is not a readiness guarantee.
+
+| Deployment / action           | Start, Stop, Nuke                                                 | Restart                                | Diagnostic shell Logs                                                           |
+| ----------------------------- | ----------------------------------------------------------------- | -------------------------------------- | ------------------------------------------------------------------------------- |
+| Standalone hybrid             | Existing local/delegated behavior                                 | Existing behavior                      | Bounded query                                                                   |
+| Standalone or HA webhook-only | Existing HTTP(S) webhooks                                         | Existing webhook sequence              | Shell commands rejected; Logs webhook supported                                 |
+| HA shared-local hybrid        | Rejected at startup                                               | Rejected                               | Not an enabled lifecycle profile                                                |
+| HA external delegated hybrid  | Attempt-scoped external commands; HTTP(S) webhooks also supported | Unavailable: Stop, inspect, then Start | Independently requires `executor-response-v1` and an exact replica `origin_url` |
+
+Missing shell Logs prerequisites **does not block lifecycle dispatch** or the
+output reported by lifecycle executors. Configure only capabilities you actually
+provide. The Environment tab shows the current capability and outcome separately
+from instance guidance.
+
+Operator configuration (in addition to the normal [HA prerequisites](/guide/daemon-ha)):
+
+```yaml
+daemon:
+  public_url: https://agor.example.com # reachable from executors; may load-balance replicas
+deployment:
+  mode: ha
+  ha:
+    execution_topology: external
+execution:
+  unix_user_mode: delegated
+  managed_envs_execution_mode: hybrid
+  executor_command_template: /path/to/reviewed-external-launcher
+  # Assertion about the external Job's TOTAL lifetime, including termination grace.
+  # Set only after the launcher/control plane enforce this bound.
+  environment_command_job_deadline_ms: 365000
+  session_token_expiration_ms: 900000 # at least 405000
+```
+
+Do **not** simply flip the mode on an existing Cloud installation. The trusted
+launcher must recognize `environment.lifecycle` payloads carrying `params.attempt`,
+perform normal tenant/user/branch and Team admission, create the external executor
+Job, and exit promptly after that admission. It must not wait for completion,
+reserve a synchronous response, retry the command, or expose application ingress.
+Other command families, especially diagnostic queries, retain their own handoff.
+The executor image must support the same attempt/report protocol as every daemon.
+Keep daemon, database, and executor clocks synchronized for the absolute deadlines.
+
+#### Deadlines and rollout coordination
+
+| Bound                                           | Budget                                                             |
+| ----------------------------------------------- | ------------------------------------------------------------------ |
+| Local launcher admission                        | 10 seconds                                                         |
+| Executor claim, measured from durable admission | 60 seconds                                                         |
+| Command, measured from claim                    | At most 300 seconds, also capped by the admitted absolute deadline |
+| Owned process-group cleanup                     | TERM, then KILL after at most 5 seconds                            |
+| Result delivery grace                           | 30 seconds beyond the admitted command and cleanup deadline        |
+| Final result deadline, measured from admission  | 395 seconds                                                        |
+| External Job total bound                        | Operator-enforced 305–365 seconds, including termination grace     |
+
+For Kubernetes, configure command-specific `activeDeadlineSeconds` **plus**
+`terminationGracePeriodSeconds` within the asserted total, with `backoffLimit: 0`
+and `restartPolicy: Never`. The external bound is necessary when an executor
+crashes or commands escape its process group. Agor does not implement provider
+containment, discover zombie remote resources, or certify their deletion.
+
+Before enabling hybrid, apply PostgreSQL migration
+`0101_environment_command_discovery` and replace the daemon/executor cohort with
+compatible versions. The migration changes only the existing recovery SELECT
+policy and partial index to include `stopping`; lifecycle rules remain application
+code, using PostgreSQL row locks or SQLite immediate transactions. No SQLite
+schema migration is required. Ordinary tenant scope and branch permissions still
+apply. The privileged PostgreSQL monitor discovers routing IDs, then switches to
+the corresponding tenant for all state transitions.
+
+Coordinate the external launcher and Job deadline **before** setting the deadline
+assertion. Drain active attempts before rolling back; retain remote cleanup diagnostics.
+For branches with attempt metadata, a configuration-only switch to legacy
+lifecycle handling is not supported: the generic state-write guard deliberately
+remains closed. Roll back the compatible daemon/executor cohort together instead. Deploy neither a mixed attempt-capability cohort nor
+a launcher that waits for command results. No particular Git SHA or provider is
+hard-coded as an eligibility gate.
+
+#### Script contract and outcomes
+
+For example, a repository variant can call three scripts:
+
+```yaml
+environment:
+  version: 2
+  default: remote
+  variants:
+    remote:
+      start: ./scripts/start-remote.sh {{branch.name}}
+      stop: ./scripts/stop-remote.sh {{branch.name}}
+      nuke: ./scripts/delete-remote.sh {{branch.name}}
+      logs: ./scripts/remote-logs.sh {{branch.name}}
+```
+
+Each script must finish; do not start a local development server in the executor.
+Remote resource identity and credentials belong to your scripts/provider. Make
+Stop safe to repeat. Agor never automatically retries Start, Stop, or Nuke.
+Commands can optionally return Start access links by writing this small JSON file
+to the supplied `AGOR_ENVIRONMENT_RESULT_FILE` path before exiting:
+
+```json
+{ "access_urls": [{ "name": "Preview", "url": "https://preview.example.com" }] }
+```
+
+The file must be a regular file, at most 16 KiB, with at most eight named absolute
+HTTP(S) URLs and no embedded credentials. Invalid results produce an **unknown**
+outcome, not a claim that nothing happened. Without a result file, the rendered
+`app` URL is used. Reported links appear in the Environment tab; the environment
+pills open the first reported link, falling back to the static `app` URL.
+A successful Start waits for configured health checks; without
+one, the command success and **unknown health** are displayed separately.
+An early healthy response never releases a still-running command's admission.
+A successful Stop/Nuke records script success, not independent proof of cleanup.
+
+Only one lifecycle attempt may be active per branch. Duplicate claims cannot run
+again; stale reports cannot overwrite a newer attempt. Lost claim/result reports
+expire to **unknown**, even after the initiating daemon disappears. The UI retains
+an output tail of at most 32 KiB per attempt, plus three prior attempts, and marks
+truncation or missing/incomplete output. Do not print secrets: this diagnostic
+output is readable by authorized branch viewers.
+
+After failed or uncertain cleanup, **Retry Stop** is allowed once the current
+attempt has settled or expired. Start requires an explicit warning acceptance
+bound to the currently displayed failed/uncertain attempt. Starting again can
+leave additional billable resources running, and your scripts might no longer
+be able to stop the previous environment. Confirmation is never sticky:
+
+- REST: `POST /branches/<id>/start` with `{"confirmation_of":"<current attempt UUID>"}`.
+- MCP: `agor_environment_start` with `confirmationOf`, only after operator consent.
+- CLI: `agor branch env start <branch> --confirm-previous-attempt <UUID>`.
+
+Stale confirmation is rejected; refresh and inspect rather than automatically
+retrying. Configuration, variant rendering, archiving, and deletion cannot bypass
+an active attempt. HA external repository removal with filesystem `cleanup: true`
+is deliberately unavailable: explicitly stop/inspect and use the existing
+branch-by-branch cleanup workflow instead of a filesystem-first bulk operation.
 
 ## See also
 

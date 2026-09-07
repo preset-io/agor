@@ -16,7 +16,7 @@ import type { AgenticToolName } from '../types';
 import { normalizeHttpBaseUrl } from '../utils/url';
 import { ensureAgorHome, ensureAgorHomeSync, getAgorHome, getConfigPath } from './agor-home';
 import { getDefaultAnalyticsConfig } from './analytics-defaults.js';
-import { DAEMON, MCP_TOKEN } from './constants';
+import { DAEMON, ENVIRONMENT, MCP_TOKEN } from './constants';
 import { validateRedisKeyPrefix, validateRedisUrl } from './deployment';
 import {
   resolveDispatchConnectTimeoutMs,
@@ -527,6 +527,7 @@ function validateConfig(config: AgorConfig): void {
   }
 
   const knownTopLevelKeys = new Set([
+    'environment_disclaimer_markdown',
     'agentic_tools',
     'defaults',
     'display',
@@ -553,6 +554,16 @@ function validateConfig(config: AgorConfig): void {
   if (unknownTopLevelKeys.length > 0) {
     throw new Error(
       `Config error: unrecognized top-level key${unknownTopLevelKeys.length === 1 ? '' : 's'}: ${unknownTopLevelKeys.join(', ')}`
+    );
+  }
+
+  const disclaimer = config.environment_disclaimer_markdown;
+  if (
+    disclaimer !== undefined &&
+    (typeof disclaimer !== 'string' || disclaimer.length > ENVIRONMENT.DISCLAIMER_MAX_LENGTH)
+  ) {
+    throw new Error(
+      `Config error: environment_disclaimer_markdown must be a string of at most ${ENVIRONMENT.DISCLAIMER_MAX_LENGTH} UTF-16 code units`
     );
   }
 
@@ -837,6 +848,7 @@ function validateConfig(config: AgorConfig): void {
     'required_user_env_vars',
     ...RETIRED_CONFIG_KEYS.execution,
     'managed_envs_execution_mode',
+    'environment_command_job_deadline_ms',
     'branch_storage',
     'sandbox',
   ]);
@@ -1564,6 +1576,18 @@ export function resolveEffectiveConfig(
       ...(env.INSTANCE_LABEL ? { instanceLabel: env.INSTANCE_LABEL } : {}),
     },
     ui: { ...defaults.ui, ...config.ui },
+    deployment: {
+      ...config.deployment,
+      ...(env.AGOR_DEPLOYMENT_MODE
+        ? { mode: env.AGOR_DEPLOYMENT_MODE as 'standalone' | 'ha' }
+        : {}),
+      ha: {
+        ...config.deployment?.ha,
+        ...(env.AGOR_HA_EXECUTION_TOPOLOGY
+          ? { execution_topology: env.AGOR_HA_EXECUTION_TOPOLOGY as 'shared-local' | 'external' }
+          : {}),
+      },
+    },
     identity: { ...defaults.identity, ...config.identity },
     ...(externalLaunch ? { external_launch: externalLaunch } : {}),
     execution: {
