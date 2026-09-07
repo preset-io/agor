@@ -136,7 +136,15 @@ same normalized policies through `CapabilityPolicyRepository`:
 `BranchRepository.resolveUserAccess` is the compatibility projection used by
 existing hooks; it is backed exclusively by the normalized resolver. SQL list
 queries mirror direct-user shadowing, additive active groups, and unmatched
-`Others`. PostgreSQL RLS and tenant-qualified foreign keys remain an additional
+`Others`. For many child rows referring to branches, `inVisibleBranchSet` composes
+that predicate into a statement-local branch-ID set, with optional intersecting
+branch/branch-set/board scopes. Session inventory uses it to avoid evaluating
+policy per Session. Use `visibleBranchReferenceAccessExists` for selective
+exact-branch references or outer-user audience enumeration; use the rich point
+resolver when effective capabilities or principal existence must be resolved.
+The inventory primitives require an already authenticated, existing same-tenant
+principal; none implements tenant-admin bypass or replaces trusted tenant scope.
+PostgreSQL RLS and tenant-qualified foreign keys remain an additional
 boundary, not a substitute for application authorization.
 
 Realtime delivery materializes the exact current set of viewers with that same

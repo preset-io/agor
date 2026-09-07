@@ -1,13 +1,13 @@
 /** Shared SQL predicates for normalized board/branch capability policies. */
 
-import type { CapabilityPolicyFsAccess, SessionID, UserID, UUID } from '@agor/core/types';
+import type { BranchID, CapabilityPolicyFsAccess, SessionID, UserID, UUID } from '@agor/core/types';
 import { and, eq, exists, inArray, or, type SQL, type SQLWrapper, sql } from 'drizzle-orm';
 import {
   CAPABILITY_POLICY_SESSION_SHARING_KEY,
   CAPABILITY_POLICY_WORKSPACE_PREFERENCES_NAMESPACE,
 } from '../../types/capability-policy';
 import type { Database } from '../client';
-import { select } from '../database-wrapper';
+import { isPostgresDatabase, select } from '../database-wrapper';
 import {
   appVariables,
   boardAccessEntries,
@@ -391,6 +391,37 @@ function branchCapabilityCondition(
 
 export function visibleBranchAccessCondition(db: Database, userId: UserIdExpression): SQL {
   return branchCapabilityCondition(db, userId, 'branch.view');
+}
+
+/**
+ * Inventory membership for many rows referring to branches, for one already
+ * authenticated same-tenant principal. Scope filters only intersect visibility.
+ *
+ * Keep policy evaluation at branch cardinality: OFFSET 0 prevents PostgreSQL
+ * flattening this set into the outer query and repeating policy per child row.
+ * SQLite requires an unbounded LIMIT with OFFSET. This is statement-local, not
+ * an authorization cache, and must use the caller's existing tenant DB scope.
+ *
+ * For a selective exact-ID probe or outer-user enumeration use
+ * visibleBranchReferenceAccessExists instead; for effective capabilities and
+ * principal existence checks use CapabilityPolicyRepository.resolveBranchAccess.
+ */
+export function inVisibleBranchSet(
+  db: Database,
+  userId: UUID,
+  branchId: SQLWrapper,
+  scope: { branchId?: BranchID; branchIds?: BranchID[]; boardId?: string } = {}
+): SQL {
+  if (scope.branchIds?.length === 0) return sql`false`;
+  const conditions = [visibleBranchAccessCondition(db, userId)];
+  if (scope.branchId !== undefined) conditions.push(eq(branches.branch_id, scope.branchId));
+  if (scope.branchIds !== undefined) conditions.push(inArray(branches.branch_id, scope.branchIds));
+  if (scope.boardId !== undefined) conditions.push(eq(branches.board_id, scope.boardId));
+  return sql`${branchId} IN (
+    SELECT ${branches.branch_id} FROM ${branches}
+    WHERE ${and(...conditions)}
+    ${isPostgresDatabase(db) ? sql`OFFSET 0` : sql`LIMIT -1 OFFSET 0`}
+  )`;
 }
 
 export function sessionBranchAccessCondition(db: Database, userId: UserIdExpression): SQL {

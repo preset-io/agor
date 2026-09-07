@@ -60,7 +60,7 @@ import {
   RepositoryError,
   resolveByShortIdPrefix,
 } from './base';
-import { visibleBranchAccessCondition } from './branch-access';
+import { inVisibleBranchSet } from './branch-access';
 import { deepMerge } from './merge-utils';
 import {
   extractMessageText,
@@ -434,7 +434,9 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
         conditions.push(eq(sessions.archived, filter.archived));
       }
       if (filter?.visibleToUserId) {
-        conditions.push(visibleBranchAccessCondition(this.db, filter.visibleToUserId));
+        conditions.push(
+          inVisibleBranchSet(this.db, filter.visibleToUserId, sessions.branch_id, filter)
+        );
       }
 
       // biome-ignore lint/suspicious/noExplicitAny: Conditional query builder shape differs with the RBAC join
@@ -518,7 +520,9 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
 
       const conditions = [eq(branches.board_id, boardId)];
       if (filter?.visibleToUserId) {
-        conditions.push(visibleBranchAccessCondition(this.db, filter.visibleToUserId));
+        conditions.push(
+          inVisibleBranchSet(this.db, filter.visibleToUserId, sessions.branch_id, { boardId })
+        );
       }
 
       // Filter on the branch's board_id via the JOIN (sessions.board_id is dead).
@@ -582,22 +586,9 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
         conditions.push(inArray(sessions.branch_id, opts.branchIds));
       if (opts.archived !== undefined) conditions.push(eq(sessions.archived, opts.archived));
       if (opts.visibleToUserId) {
-        // Keep policy evaluation at branch cardinality, not session cardinality.
-        // OFFSET 0 prevents PostgreSQL from flattening this into the outer join
-        // and repeating the correlated policy subplans for every Session. SQLite
-        // requires LIMIT with OFFSET; -1 means unbounded. This set exists only
-        // within each statement and keeps the same tenant/RLS scope and predicate.
-        const branchConditions = [visibleBranchAccessCondition(this.db, opts.visibleToUserId)];
-        if (opts.boardId !== undefined) branchConditions.push(eq(branches.board_id, opts.boardId));
-        if (opts.branchId !== undefined)
-          branchConditions.push(eq(branches.branch_id, opts.branchId));
-        if (opts.branchIds !== undefined)
-          branchConditions.push(inArray(branches.branch_id, opts.branchIds));
-        conditions.push(sql`${sessions.branch_id} IN (
-          SELECT ${branches.branch_id} FROM ${branches}
-          WHERE ${and(...branchConditions)}
-          ${isPostgresDatabase(this.db) ? sql`OFFSET 0` : sql`LIMIT -1 OFFSET 0`}
-        )`);
+        conditions.push(
+          inVisibleBranchSet(this.db, opts.visibleToUserId, sessions.branch_id, opts)
+        );
       }
       const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
 
@@ -1481,7 +1472,7 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
 
     // Join branches for board_id (exposed as Session.branch_board_id).
     // No boards join needed — flat `/s/<short>/` URLs don't carry a slug.
-    const accessCondition = visibleBranchAccessCondition(this.db, userId);
+    const accessCondition = inVisibleBranchSet(this.db, userId, sessions.branch_id, { boardId });
     const whereCondition = boardId
       ? and(accessCondition, eq(branches.board_id, boardId))
       : accessCondition;

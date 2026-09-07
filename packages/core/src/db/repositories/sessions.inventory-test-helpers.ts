@@ -1,8 +1,16 @@
+import { eq, sql } from 'drizzle-orm';
 import { expect } from 'vitest';
 import { generateId } from '../../lib/ids';
 import type { BranchID, CapabilityPolicyEntry, UserID } from '../../types';
 import type { Database } from '../client';
+import { select } from '../database-wrapper';
+import { branches as branchTable, users as userTable } from '../schema';
 import { BoardRepository } from './boards';
+import {
+  inVisibleBranchSet,
+  visibleBranchAccessCondition,
+  visibleBranchReferenceAccessExists,
+} from './branch-access';
 import { BranchRepository } from './branches';
 import { CapabilityPolicyRepository } from './capability-policies';
 import { GroupRepository } from './groups';
@@ -60,6 +68,7 @@ export async function exerciseSessionInventory(db: Database) {
   const sessions = new SessionRepository(db);
   const visible = new Set<string>();
   const all = new Set<string>();
+  const branchIds: BranchID[] = [];
   let groupedBranch!: BranchID;
   let hiddenBranch!: BranchID;
   let shadowBranch!: BranchID;
@@ -82,6 +91,7 @@ export async function exerciseSessionInventory(db: Database) {
       branch_unique_id: i,
       permission_binding: kind === 'inherit' ? 'inherit' : 'override',
     });
+    branchIds.push(branch.branch_id);
     if (kind === 'group') groupedBranch = branch.branch_id;
     if (kind === 'private') hiddenBranch = branch.branch_id;
     if (kind === 'shadow') shadowBranch = branch.branch_id;
@@ -132,6 +142,81 @@ export async function exerciseSessionInventory(db: Database) {
       if (!['private', 'shadow', 'group-deny'].includes(kind)) visible.add(session.session_id);
     }
   }
+  // Differential proof: SQL inventory, exact reference, and rich point checks
+  // answer the same visibility question for an existing authenticated principal.
+  async function verifyPrimitiveParity(userId: UserID) {
+    const rowIds: { id: BranchID }[] = await select(db, { id: branchTable.branch_id })
+      .from(branchTable)
+      .where(visibleBranchAccessCondition(db, userId))
+      .all();
+    const setIds: { id: BranchID }[] = await select(db, { id: branchTable.branch_id })
+      .from(branchTable)
+      .where(inVisibleBranchSet(db, userId, branchTable.branch_id))
+      .all();
+    expect(new Set(setIds.map((row) => row.id))).toEqual(new Set(rowIds.map((row) => row.id)));
+    for (const branchId of branchIds) {
+      const visible = setIds.some((row) => row.id === branchId);
+      const exact = await select(db, {
+        allowed: visibleBranchReferenceAccessExists(db, userId, sql`${branchId}`),
+      })
+        .from(userTable)
+        .where(eq(userTable.user_id, userId))
+        .one();
+      expect(Boolean(exact?.allowed)).toBe(visible);
+      expect(
+        (await policies.resolveBranchAccess(branchId, userId)).capabilities.includes('branch.view')
+      ).toBe(visible);
+    }
+    const paged = await sessions.findPage({ visibleToUserId: userId, limit: 100 });
+    const expectedIds = new Set(paged.data.map((row) => row.session_id));
+    expect(
+      new Set((await sessions.findAll({ visibleToUserId: userId })).map((row) => row.session_id))
+    ).toEqual(expectedIds);
+    expect(
+      new Set((await sessions.findAccessibleSessions(userId)).map((row) => row.session_id))
+    ).toEqual(expectedIds);
+    for (const boardId of [board.board_id, sharedBoard.board_id]) {
+      const expected = new Set(
+        paged.data.filter((row) => row.branch_board_id === boardId).map((row) => row.session_id)
+      );
+      expect(
+        new Set(
+          (await sessions.findByBoard(boardId, { visibleToUserId: userId })).map(
+            (row) => row.session_id
+          )
+        )
+      ).toEqual(expected);
+    }
+    // Exact IDs and intersecting scopes remain filters, not grants.
+    const contradiction = await select(db, { id: branchTable.branch_id })
+      .from(branchTable)
+      .where(
+        inVisibleBranchSet(db, userId, branchTable.branch_id, {
+          branchId: groupedBranch,
+          boardId: sharedBoard.board_id,
+        })
+      )
+      .all();
+    expect(contradiction).toEqual([]);
+    expect(
+      await select(db, { id: branchTable.branch_id })
+        .from(branchTable)
+        .where(inVisibleBranchSet(db, userId, branchTable.branch_id, { branchIds: [] }))
+        .all()
+    ).toEqual([]);
+    const exactSet = await select(db, { id: branchTable.branch_id })
+      .from(branchTable)
+      .where(
+        inVisibleBranchSet(db, userId, branchTable.branch_id, {
+          branchId: groupedBranch,
+          boardId: board.board_id,
+          branchIds: [groupedBranch, hiddenBranch],
+        })
+      )
+      .all();
+    expect(exactSet).toEqual(rowIds.filter((row) => row.id === groupedBranch));
+  }
+  for (const userId of [owner, viewer, admin]) await verifyPrimitiveParity(userId);
   // Board visibility neither grants nor vetoes independent branch visibility.
   expect(await boards.findVisibleBoardIds(viewer)).not.toContain(board.board_id);
   expect(await boards.findVisibleBoardIds(viewer)).toContain(sharedBoard.board_id);
@@ -181,6 +266,7 @@ export async function exerciseSessionInventory(db: Database) {
   });
   // Revocation/fallback is read anew; no process-local allowed-branch cache.
   await groups.update(group.group_id, { archived: true });
+  await verifyPrimitiveParity(viewer);
   expect((await sessions.findPage({ visibleToUserId: viewer, limit: 100 })).total).toBe(16);
   expect(
     (await sessions.findPage({ visibleToUserId: viewer, branchId: groupedBranch, limit: 100 }))
@@ -191,6 +277,7 @@ export async function exerciseSessionInventory(db: Database) {
   ).toBe(0);
   await groups.update(group.group_id, { archived: false });
   await groups.removeMember(group.group_id, viewer);
+  await verifyPrimitiveParity(viewer);
   expect((await sessions.findPage({ visibleToUserId: viewer, limit: 100 })).total).toBe(16);
   return {
     owner,

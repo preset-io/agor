@@ -3,7 +3,7 @@ import { drizzle } from 'drizzle-orm/postgres-js';
 import type postgres from 'postgres';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { generateId } from '../../lib/ids';
-import type { UUID } from '../../types';
+import type { BranchID, UUID } from '../../types';
 import { createDatabase, type Database } from '../client';
 import { executeRaw, insert } from '../database-wrapper';
 import { initializeDatabase } from '../migrate';
@@ -74,6 +74,15 @@ describe.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
           expect(
             await repository.findPage({ visibleToUserId, boardId: foreign.boardId, limit: 0 })
           ).toEqual({ total: 0, data: [] });
+          expect(await repository.findAll({ visibleToUserId, branchId: foreign.branchId })).toEqual(
+            []
+          );
+          expect(await repository.findByBoard(foreign.boardId, { visibleToUserId })).toEqual([]);
+          if (visibleToUserId) {
+            expect(
+              await repository.findAccessibleSessions(visibleToUserId, foreign.boardId)
+            ).toEqual([]);
+          }
         }
         expect((await repository.findPage({ limit: 100 })).total).toBe(local.total);
         expect(
@@ -111,6 +120,7 @@ describe.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
         const branchRepo = new BranchRepository(scoped);
         const branchCount = 200;
         const sessionsPerBranch = 100;
+        let visibleBranchId!: BranchID;
         for (let b = 0; b < branchCount; b++) {
           const branch = await branchRepo.create({
             repo_id: repo.repo_id,
@@ -123,6 +133,7 @@ describe.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
             permission_binding: 'override',
             others_can: b % 2 ? 'view' : 'none',
           });
+          if (b === 1) visibleBranchId = branch.branch_id;
           await insert(scoped, sessions)
             .values(
               Array.from({ length: sessionsPerBranch }, (_, s) => ({
@@ -186,6 +197,50 @@ describe.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
           process.stdout.write(
             `INVENTORY_PLAN ${name} branches=${branchCount} sessions=${branchCount * sessionsPerBranch} ${JSON.stringify(plan)}\n`
           );
+        }
+        // The residual and compatibility inventories must use the same bounded
+        // branch-set composition as paging, not re-evaluate policy per Session.
+        for (const [name, read, expectedRows, policyBound] of [
+          [
+            'findAll',
+            () => repository.findAll({ visibleToUserId: viewer.user_id }),
+            page.total,
+            branchCount,
+          ],
+          [
+            'findByBoard',
+            () => repository.findByBoard(board.board_id, { visibleToUserId: viewer.user_id }),
+            page.total,
+            branchCount,
+          ],
+          [
+            'findAccessibleSessions',
+            () => repository.findAccessibleSessions(viewer.user_id, board.board_id),
+            page.total,
+            branchCount,
+          ],
+          [
+            'findAllExactBranch',
+            () =>
+              repository.findAll({ visibleToUserId: viewer.user_id, branchId: visibleBranchId }),
+            sessionsPerBranch,
+            1,
+          ],
+        ] as const) {
+          captured.length = 0;
+          capture = true;
+          const inventory = await read();
+          capture = false;
+          expect(inventory).toHaveLength(expectedRows);
+          expect(captured).toHaveLength(1);
+          const plan = await executeRaw(
+            scoped,
+            sql`EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) ${bindQuery(captured[0].query, captured[0].params)}`
+          );
+          process.stdout.write(
+            `INVENTORY_PLAN ${name} branches=${branchCount} sessions=${branchCount * sessionsPerBranch} ${JSON.stringify(plan)}\n`
+          );
+          expect(Math.max(...policyLoops(plan))).toBeLessThanOrEqual(policyBound);
         }
         captured.length = 0;
         capture = true;

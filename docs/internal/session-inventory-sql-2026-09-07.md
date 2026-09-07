@@ -134,3 +134,87 @@ In particular, the supplied 09:03:43 trace
 `branches.get` failure with PostgreSQL `CONNECT_TIMEOUT`. Connection capacity
 and timeout investigation remains distinct. Health-monitor outer transactions,
 OAuth/gateway changes and board-query validation are outside this change.
+
+## Shared-primitives review (follow-up)
+
+The normalized policy predicate was already centralized before this PR. There
+are deliberately different query shapes, not one universal authorization API:
+
+| Use                                        | Existing owner                                                                                                   | Contract                                                                                                                                      |
+| ------------------------------------------ | ---------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| Branch/board inventory                     | `visibleBranchAccessCondition` / `visibleBoardAccessCondition`                                                   | Predicate on the current branch/board row; already at resource cardinality.                                                                   |
+| Many rows referring to branches            | `inVisibleBranchSet`                                                                                             | Statement-local branch-ID membership, with optional exact branch, branch-set and board scopes. Holds policy evaluation at branch cardinality. |
+| Exact branch reference / realtime audience | `visibleBranchReferenceAccessExists`                                                                             | Correlated exact-ID existence check; also accepts an outer user expression for viewer enumeration.                                            |
+| Session/task/message references            | `visibleSessionReferenceAccessExists` and its task/message wrappers                                              | Follow the tenant-owned parent to its branch; do not confuse board visibility with branch visibility.                                         |
+| Rich point authorization                   | `CapabilityPolicyRepository.resolveBranchAccess` (`BranchRepository.resolveUserAccess` compatibility projection) | Effective capabilities, filesystem access, owner/source/group explanation; checks principal existence.                                        |
+| Task launch/heartbeat                      | `resolveSessionRuntimeBranchAccess`                                                                              | Bounded exact-session projection including prompting, filesystem access and session-sharing rules. Not an inventory visibility check.         |
+
+The reusable branch-set primitive centralizes the optimization fence and scope
+composition formerly embedded in `SessionRepository.findPage`. All four
+session inventory readers now use it: `findPage`, `findAll`, `findByBoard` and
+`findAccessibleSessions`. Residual service filters still run after authorized
+candidate selection; this does not broaden SQL pushdown or discard predicates.
+
+### Important usage boundaries
+
+- These inventory SQL predicates take an **already authenticated, existing
+  same-tenant principal** and run in the caller's existing trusted tenant DB
+  scope. They are not authentication or a complete `canUserDoAnything` API.
+  In particular the low-level list predicate does not independently check that
+  an arbitrary supplied user ID exists; the rich point resolver does. Do not
+  expose a caller-selected user ID as authority or use the list predicate as a
+  replacement for that resolver.
+- Tenant administrator bypass belongs to trusted service hooks, not to these
+  user-ID predicates. Owner rights, view rights, prompting another user's
+  session and filesystem access are different questions.
+- Scope IDs only intersect the allowed branch set. Empty branch sets deny;
+  branch and board filters combine, never override one another. The board
+  scope is a location filter, **not** a grant from `board_access`.
+- `inVisibleBranchSet` requires a fixed principal ID. Do not use it to enumerate
+  principals; the existing correlated point/reference predicate owns that case.
+- No allowed-ID array is cached or fetched into application memory. Each SQL
+  statement reads current policy and membership under its existing DB scope.
+
+### Other consumers reviewed, not mechanically rewritten
+
+Branches and boards already apply their respective shared policy at their own
+row cardinality. Replacing their predicates with another membership join adds
+no demonstrated benefit. Messages/tasks use shared session-reference checks;
+board comments, marketplace attachments and nested references reuse those
+same helpers. Artifacts/board objects use branch-reference checks; cards and
+board objects separately enforce board visibility. Schedules join branches
+and could benefit from the new primitive if a many-schedules-per-branch
+fixture establishes the same problem.
+
+For messages/tasks, a branch-set rewrite must be measured separately for both
+broad inventory and selective exact-session history. Forcing a full allowed
+branch set for one exact session can do unnecessary work. This follow-up does
+not claim their current plans are optimal, nor change all reference helpers
+without reproductions. The remaining nested policy EXISTS clauses and the
+separate rich/SQL role projections are unchanged; consolidation of those
+semantics needs broader capability/terminal/owner parity evidence, not merely
+similar-looking SQL. The new differential coverage compares visibility from
+row predicates, exact-ID predicates, branch-set predicates, rich point checks,
+and all session inventory readers on the same SQLite/PostgreSQL policies.
+
+Follow-up started from `ff32e0dae72450723f97a5240cc05cb4293fb5d7`;
+fetched main was still `74e96187b663cd533a1925a46d3ba5db72047890`.
+A new regression failed before the extraction: actual `findAll` policy
+SubPlans each ran 20,000 times, with 850,569 shared buffer hits and an observed
+14,730.310 ms execution. The page path was already at 200 loops.
+
+After extraction, the same isolated 200-branch/20,000-session fixture captured:
+
+| Actual repository query       | Returned rows | Max policy loops | Shared hits | Execution ms |
+| ----------------------------- | ------------: | ---------------: | ----------: | -----------: |
+| `findAll`                     |        10,000 |              200 |       9,479 |      190.928 |
+| `findByBoard`                 |        10,000 |              200 |       9,480 |      172.433 |
+| `findAccessibleSessions`      |        10,000 |              200 |       9,480 |      287.931 |
+| `findAll`, one visible branch |           100 |                1 |          58 |        1.490 |
+
+Each reader executes one query. The new plan assertions enforce the 200/1
+policy-loop bounds, one-query contract and exact returned cardinality. Timing
+remains observational, not a test threshold or a production estimate. The
+expanded isolated fixture's two tests passed; cross-tenant negative checks now
+exercise the additional readers as well. Full follow-up validation and managed
+smoke outcomes are recorded in the PR body.
