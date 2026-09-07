@@ -52,6 +52,18 @@ coalesced by a database uniqueness constraint. Delivery remains best-effort if
 the daemon exits after terminalizing the source task but before callback task
 creation.
 
+For work that may be delegated again, use `callbackPropagation: "root"`
+instead. This creates a durable completion subscription and returns its ID. A
+downstream agent transfers that exact requested unit of work by setting
+`continueCompletion: true` on `agor_sessions_prompt`, `agor_sessions_create`,
+or `agor_sessions_spawn`. Only one child can be designated at each hop; other
+parallel children are helpers and do not delay or complete the aggregate. The
+intermediary's completion is suppressed for the root recipient after a handoff,
+and the designated terminal Task delivers exactly one queued callback. Query
+the aggregate with `agor_completion_subscriptions_get`. See
+[`transitive-completion-propagation.md`](../explorations/transitive-completion-propagation.md)
+for lifecycle, failure, retry, privacy, and rollback semantics.
+
 Callbacks enabled by `agor_sessions_create` default to `persistent`; use
 `callbackMode: "once"` for a single report. Durable remote relationships can
 be muted or resumed with `agor_session_relationships_set_callback` without

@@ -65,6 +65,7 @@ Designs that are referenced from code or in flight. Anything here is either stil
 - [`kb-namespace-rbac-v1.md`](explorations/kb-namespace-rbac-v1.md) — directed V1 plan for Knowledge namespace RBAC and teammate home namespaces.
 - [`session-sharing.md`](explorations/session-sharing.md) — tenant/branch gates, immutable Session compatibility, and caller identity for shared prompts.
 - [`parent-session-callbacks.md`](explorations/parent-session-callbacks.md) — child-session completion notifications (referenced from `docs/never-lose-prompt-design.md`).
+- [`transitive-completion-propagation.md`](explorations/transitive-completion-propagation.md) — durable, designated-child completion routing across delegated session chains.
 - [`frontend-hardcoded-colors.md`](explorations/frontend-hardcoded-colors.md) — Biome/GritQL color audit, classification, and enforcement rollout.
 - [`web-terminal-ownership-ha.md`](explorations/web-terminal-ownership-ha.md) — process-affine terminal ownership, HA support, and failure semantics.
 - [`mcp-authoritative-egress-gateway.md`](explorations/mcp-authoritative-egress-gateway.md) — issue-ready design for strong MCP credential/request revocation at a daemon-owned egress boundary.

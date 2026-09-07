@@ -1,5 +1,11 @@
 import { createHash } from 'node:crypto';
-import type { GatewayInboundEventID, MessageID, SessionID, TaskID } from '@agor/core/types';
+import type {
+  CompletionSubscriptionID,
+  GatewayInboundEventID,
+  MessageID,
+  SessionID,
+  TaskID,
+} from '@agor/core/types';
 
 function stableTaskId(sourceId: string, domain: string, discriminator = ''): TaskID {
   const digest = createHash('sha256')
@@ -16,6 +22,14 @@ function stableTaskId(sourceId: string, domain: string, discriminator = ''): Tas
 /** One durable Task per source completion event and callback target. */
 export function completionCallbackTaskId(sourceTaskId: TaskID, targetSessionId: SessionID): TaskID {
   return stableTaskId(sourceTaskId, 'session_completion', targetSessionId);
+}
+
+/** One recipient-visible terminal callback per durable requested-work subscription. */
+export function propagatedCompletionCallbackTaskId(
+  subscriptionId: CompletionSubscriptionID,
+  targetSessionId: SessionID
+): TaskID {
+  return stableTaskId(subscriptionId, 'root_completion', targetSessionId);
 }
 
 /** One durable auto-resume Task per widget message. */
