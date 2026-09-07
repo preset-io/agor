@@ -1,8 +1,37 @@
 import { Tabs } from 'nextra/components';
 
+<<<<<<< HEAD
 <Tabs items={['npm (Recommended)', 'Docker Compose']} defaultIndex={0}>
+=======
+<Tabs items={['curl (Recommended)', 'npm', 'Homebrew', 'Docker Compose']} defaultIndex={0}>
+>>>>>>> 28e833db2 (docs: lead install instructions with the curl one-liner)
   <Tabs.Tab>
-    Most users should start here. It's the most universal path, and it's the one the rest of the docs assume.
+    The fastest path: one command installs Agor, initializes it, starts the daemon, and opens the UI.
+
+    Requires **Node.js ≥ 22.12** ([install](https://nodejs.org)) and **Git** on `PATH` — the script checks both and fails with a clear message if either is missing, rather than trying to install them for you. HTTPS remotes also require a working system CA trust store; SSH remotes require an SSH client and configured keys or agent access.
+
+    ```bash
+    curl -fsSL https://agor.live/install.sh | bash
+    ```
+
+    Safe to re-run — it's idempotent on an existing install. [View the script source](https://github.com/preset-io/agor/blob/main/apps/agor-docs/public/install.sh) before piping it into `bash`, same as you should for any `curl | bash` installer.
+
+    Configure the first run with environment variables:
+
+    ```bash
+    # Which agentic tools to configure (default: all)
+    AGOR_AGENTIC_TOOLS=claude-code,codex curl -fsSL https://agor.live/install.sh | bash
+
+    # Pin a specific version instead of latest
+    AGOR_VERSION=0.24.5 curl -fsSL https://agor.live/install.sh | bash
+    ```
+
+    No install telemetry is sent by the script itself. `agor init` has its own separate, consent-based [anonymous telemetry](/faq) — disabled by default for a non-interactive install like this one unless you opt in with `AGOR_TELEMETRY=1`.
+
+  </Tabs.Tab>
+
+  <Tabs.Tab>
+    Prefer to see each step, or already have an npm-based workflow? Same install, run manually.
 
     Requires **Node.js ≥ 22.12** ([install](https://nodejs.org)) and **Git** on `PATH`. HTTPS remotes also require a working system CA trust store; SSH remotes require an SSH client and configured keys or agent access. Run `git --version` before `agor init`.
 
