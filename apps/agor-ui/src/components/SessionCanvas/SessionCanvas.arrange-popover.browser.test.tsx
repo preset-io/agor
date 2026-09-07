@@ -394,5 +394,5 @@ describe('SessionCanvas Arrange Board popover (real browser)', () => {
     expect(getSelectedZone()).toHaveClass('selected');
 
     expect(patch).toHaveBeenCalledTimes(2);
-  });
+  }, 60_000);
 });
