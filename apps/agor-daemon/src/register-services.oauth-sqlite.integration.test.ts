@@ -632,7 +632,6 @@ function registerProductionHooksForHarness(harness: SQLiteHarness): void {
     config: {
       database: { dialect: 'sqlite' },
       multi_tenancy: { mode: 'static', static_tenant_id: 'default' },
-      execution: { branch_rbac: false },
     } as RegisterHooksContext['config'],
     jwtSecret: 'ha-discovery-registration-test',
     requireAuth: async (context) => context,
