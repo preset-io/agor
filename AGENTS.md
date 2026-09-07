@@ -87,7 +87,7 @@ Terms you'll see across the codebase, UI, and docs:
 | **Daemon**         | The FeathersJS server (`apps/agor-daemon`) that owns the database, services, WebSocket events, and MCP HTTP endpoint. Default port 3030.                                                        |
 | **Executor**       | Process-isolated agent runtime in `packages/executor/`. Spawns Claude / Codex / Gemini / OpenCode via their SDKs locally, sandboxed, or through a delegated external substrate.                 |
 | **MCP**            | Model Context Protocol. Agor exposes itself as an MCP server (`POST /mcp`) so agents can introspect sessions, branches, boards, etc.                                                            |
-| **RBAC**           | Normalized board/branch capability policies with immutable primary owners, named users/groups, unmatched-member fallback, and branch file access. Feature-flagged via `execution.branch_rbac`.  |
+| **RBAC**           | Always-on normalized board/branch capability policies with immutable primary owners, named users/groups, unmatched-member fallback, and branch file access.                                     |
 | **Execution mode** | `simple` / `sandbox` / `delegated` — trusted local, fail-closed local filesystem sandbox, or explicitly delegated external execution. The config key remains `unix_user_mode` temporarily.      |
 | **Genealogy**      | Parent/child + fork ancestry of a session. Surfaced as a tree inside a branch card.                                                                                                             |
 | **Short ID**       | First 8 chars of a UUIDv7, used in UI and CLI. Resolved at API boundary via a `resolveShortId` hook. See [`context/concepts/id-management.md`](context/concepts/id-management.md).              |
@@ -215,7 +215,6 @@ Application RBAC and process isolation are separate controls:
 
 ```yaml
 execution:
-  branch_rbac: true # enforce branch permissions in the application
   unix_user_mode: sandbox # simple | sandbox | delegated
 ```
 
@@ -240,7 +239,6 @@ Relevant options include:
 
 ```yaml
 execution:
-  branch_rbac: boolean
   unix_user_mode: simple | sandbox | delegated
   allow_web_terminal: boolean
   session_token_expiration_ms: number
@@ -294,7 +292,7 @@ Sessions are never shareable. See
 - `delegated` passes trusted tenant/user identifiers, `{branch_fs_access}`, and
   the transitional home key to an external launcher; the launcher owns enforcement.
 - Historical `unix_group` columns remain nullable and ignored at runtime.
-- The Permissions UI is controlled by `branch_rbac`.
+- The Permissions UI is always available and fails closed when policy data cannot load.
 
 Related files:
 
@@ -426,8 +424,10 @@ differences implemented in `oauth-mcp-transport.ts`, while retaining
 same-origin bounds on those fallbacks, resource/issuer binding, the exact MCP
 URL as the RFC 8707 resource, PKCE S256, and callback issuer validation. An
 explicit saved-row `strict` or `legacy` mode always wins. The catalog explicitly
-keeps Monday, Cloudflare, and ClickUp on `strict`; an edited/imported install, a
-removed entry, or any catalog configuration drift falls back to `strict`.
+keeps Monday, Cloudflare, ClickUp, and Preset on `strict`. Preset is pinned
+defensively pending production OAuth validation, not asserted to have passed it;
+an edited/imported install, a removed entry, or any catalog configuration drift
+falls back to `strict`.
 GitHub, Prisma, MongoDB, Box, HubSpot, Slack, PagerDuty, and Kagi were removed
 from the shelf because the review could not establish a safely bound
 client-registration or issuer path; do not re-add one merely because its

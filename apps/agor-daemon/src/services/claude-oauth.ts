@@ -73,14 +73,13 @@ import {
 } from './codex-auth-shared.js';
 import { markTrustedUserMutation } from './user-mutation-trust.js';
 
-// Constants are the PROD OAuth config (`yol`) read out of the native `claude`
-// binary bundled by the pinned SDK: package.json pins
-// @anthropic-ai/claude-agent-sdk@0.3.197, whose manifest.json bundles claude
-// CLI v2.1.197 (commit c8fd8048). The prod config is identical in the installed
-// CLI v2.1.211, which was byte-inspected: config object at file offset
-// ~237512852 (`yol={...}`), login authorize builder at ~101457400, token
-// exchange at ~101464300. The `-local-oauth` config (client id
-// 22422756-…, localhost:8205) is dev-only and deliberately not used here.
+// Constants are the PROD OAuth config read out of the native `claude` binary
+// bundled by the pinned SDK: package.json pins
+// @anthropic-ai/claude-agent-sdk@0.3.259, whose manifest.json bundles claude
+// CLI v2.1.259 (commit 9b549c8d). The URLs, client id, redirect, scope set, and
+// JSON authorization-code exchange were re-checked in that native binary for
+// this upgrade. The `-local-oauth` config (client id 22422756-…,
+// localhost:8205) is dev-only and deliberately not used here.
 /** PROD OAuth client id (`yol.CLIENT_ID`). Fixed and public across installs. */
 const CLAUDE_CLIENT_ID = '9d1c250a-e61b-44d9-88ed-5944d1962f5e';
 // Subscription (Claude Pro/Max) authorize endpoint = `yol.CLAUDE_AI_AUTHORIZE_URL`.
@@ -95,13 +94,15 @@ const CLAUDE_TOKEN_URL = 'https://platform.claude.com/v1/oauth/token';
 // runs no loopback server, so it uses the manual redirect, and the token is
 // issued for exactly this redirect + client id, so both must match byte-for-byte.
 const CLAUDE_REDIRECT_URI = 'https://platform.claude.com/oauth/code/callback';
-// Scope string the CLI's claude.ai login sends (login builder at offset
-// ~101458000: "user:profile user:inference user:sessions:claude_code user:mcp_servers").
+// Scope string the CLI's claude.ai login sends. `user:file_upload` was added by
+// the CLI bundled with Agent SDK 0.3.259; omitting it would leave a successful
+// Agor sign-in less capable than `/login` in the same CLI.
 const CLAUDE_SCOPES = [
   'user:profile',
   'user:inference',
   'user:sessions:claude_code',
   'user:mcp_servers',
+  'user:file_upload',
 ];
 
 const FETCH_TIMEOUT_MS = 15_000;
@@ -152,7 +153,8 @@ export function buildAuthorizeUrl(challenge: string, state: string): string {
   url.searchParams.set('state', state);
   // `code=true` selects the code-display (paste-back) page instead of a silent
   // loopback redirect — the CLI sets it for its manual flow (authorize builder
-  // offset ~101457400). Required here since the daemon has no loopback server.
+  // originally audited in v2.1.211). Required here since the daemon has no
+  // loopback server.
   url.searchParams.set('code', 'true');
   return url.toString();
 }
@@ -232,8 +234,7 @@ export async function exchangeCodeForTokens(
   verifier: string,
   state: string
 ): Promise<ExchangedTokens> {
-  // The CLI posts the exchange as JSON (no oauth beta header on this call);
-  // token exchange at binary offset ~101464300 uses application/json.
+  // The CLI posts the exchange as JSON (no oauth beta header on this call).
   let res: Response;
   try {
     res = await fetchWithTimeout(CLAUDE_TOKEN_URL, {

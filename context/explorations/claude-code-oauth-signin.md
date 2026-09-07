@@ -23,19 +23,19 @@ what remains unconfirmed.
 
 ### VERIFIED
 
-Sources: the pinned SDK is **`@anthropic-ai/claude-agent-sdk@0.3.197`** (in
+Sources: the pinned SDK is **`@anthropic-ai/claude-agent-sdk@0.3.259`** (in
 every workspace `package.json`; loaded via `loadManagedAgenticToolSdk`). That
 SDK no longer ships a `cli.js` — its `manifest.json` bundles the **native
-`claude` CLI v2.1.197** (commit `c8fd8048`) which it extracts and spawns. The
-OAuth constants below were read by **byte-inspecting the native binary** (the
-installed v2.1.211, whose prod OAuth config is identical to 2.1.197's) at the
-file offsets cited, and cross-checked against Anthropic's official docs
+`claude` CLI v2.1.259** (commit `9b549c8d`) which it extracts and spawns. The
+OAuth constants and flow below were **re-checked in the installed v2.1.259
+native binary** for this upgrade (the original audit used v2.1.211), and
+cross-checked against Anthropic's official docs
 (<https://code.claude.com/docs/en/authentication>).
 
 1. **There is NO device-authorization (RFC 8628) endpoint for Claude Code.**
    The claim "no device endpoint" was treated as something to disprove, not
    assume. The native binary's login flow uses only a loopback-or-manual
-   authorization-code redirect (login builder ~101457400); its Anthropic OAuth
+   authorization-code redirect (original v2.1.211 login-builder audit); its Anthropic OAuth
    config exposes no device-grant endpoint, and the official auth doc describes
    only the browser + paste-back flow. The one `device_code` string in the binary
    lives in the bundled `@azure/msal-common` generic OAuth param enum (the
@@ -43,9 +43,8 @@ file offsets cited, and cross-checked against Anthropic's official docs
    device endpoint. This is the **one structural difference from Codex** — see
    below.
 2. **Claude Code uses OAuth 2.0 authorization-code + PKCE (S256) with a
-   paste-back code.** These are the PROD OAuth config object (`yol`) at binary
-   offset ~237512852, plus the login authorize builder (~101457400) and token
-   exchange (~101464300). The values the service uses:
+   paste-back code.** These are the production OAuth config plus the login
+   authorize builder and token exchange. The values the service uses:
    - authorize URL (subscription / Claude Pro-Max):
      **`https://claude.com/cai/oauth/authorize`** (`yol.CLAUDE_AI_AUTHORIZE_URL`).
      The Console/API-billing login instead uses `yol.CONSOLE_AUTHORIZE_URL` =
@@ -61,12 +60,14 @@ file offsets cited, and cross-checked against Anthropic's official docs
      single fixed public id. (The other id in the binary,
      `22422756-60c9-4084-8eb7-27705fd5cf9a`, is the **local-dev** config
      `-local-oauth`/`localhost:8205`, not prod.)
-   - authorize query params (login builder ~101457400): `code=true`, `client_id`,
+   - authorize query params (re-checked in v2.1.259): `code=true`, `client_id`,
      `response_type=code`, `redirect_uri`, `scope`, `code_challenge`,
      `code_challenge_method=S256`, `state`. `code=true` selects the code-display
      (paste-back) page — required since we have no loopback server.
-   - scope string: **`user:profile user:inference user:sessions:claude_code user:mcp_servers`**.
-   - token exchange (~101464300): **`POST` with `Content-Type: application/json`**,
+   - scope string: **`user:profile user:inference user:sessions:claude_code user:mcp_servers user:file_upload`**.
+     `user:file_upload` is present in the v2.1.259 subscription-login scope set
+     and was added to Agor's URL as part of this SDK upgrade.
+   - token exchange: **`POST` with `Content-Type: application/json`**,
      `grant_type=authorization_code`; **no** `oauth-2025-04-20` beta header on the
      exchange call. `refresh_token` grant also present (renewal).
    - the authorize page returns the code as **`CODE#STATE`** which the user

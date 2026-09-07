@@ -209,11 +209,24 @@ function shouldSqlPageSessionQuery(query?: Record<string, unknown>, forcePage = 
   const wantsBranch = query.branch_id !== undefined;
   if (!wantsRecency && !wantsCreatedAt && !wantsBoard && !wantsBranch && !forcePage) return false;
 
-  const allowedKeys = new Set(['archived', 'board_id', 'branch_id', '$sort', '$limit', '$skip']);
+  const allowedKeys = new Set([
+    'archived',
+    'status',
+    'board_id',
+    'branch_id',
+    '$sort',
+    '$limit',
+    '$skip',
+  ]);
   for (const key of Object.keys(query)) {
     if (!allowedKeys.has(key)) return false;
   }
   if (query.archived !== undefined && typeof query.archived !== 'boolean') return false;
+  if (
+    query.status !== undefined &&
+    !Object.values(SessionStatus).includes(query.status as SessionStatus)
+  )
+    return false;
   if (wantsBoard && typeof query.board_id !== 'string') return false;
   if (wantsBranch) {
     const branchFilter = query.branch_id;
@@ -257,6 +270,7 @@ export type ExecuteTaskData = {
   permissionMode?: import('@agor/core/types').PermissionMode;
   stream?: boolean;
   messageSource?: import('@agor/core/types').MessageSource;
+  promptOrigin?: import('@agor/core/types').PromptOrigin;
 };
 
 export type SessionArchiveOptions = {
@@ -1234,7 +1248,6 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
   private getRuntimeExecutionConfig():
     | {
         execution?: {
-          branch_rbac?: boolean;
           allow_superadmin?: boolean;
         };
       }
@@ -1247,7 +1260,6 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
       ).get?.('config') as
         | {
             execution?: {
-              branch_rbac?: boolean;
               allow_superadmin?: boolean;
             };
           }
@@ -1255,10 +1267,6 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
     } catch {
       return undefined;
     }
-  }
-
-  private shouldEnforceBranchRbac(): boolean {
-    return this.getRuntimeExecutionConfig()?.execution?.branch_rbac === true;
   }
 
   private shouldAllowSuperadminBypass(): boolean {
@@ -1270,7 +1278,7 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
     archived: boolean,
     params?: SessionParams
   ): Promise<void> {
-    if (!params?.provider || !this.shouldEnforceBranchRbac()) return;
+    if (!params?.provider) return;
 
     const user = params.user;
     if (!user) {
@@ -1670,9 +1678,8 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
    */
   async find(params?: SessionParams): Promise<Paginated<Session> | Session[]> {
     // SQL-pushdown path for the recency-sorted / board-scoped list queries the
-    // first-paint loader issues. In RBAC mode the before-hook stamps a marker
-    // here so the same SQL path can compose branch visibility into the query;
-    // in open-access mode this path still handles board_id + `$sort:{updated_at}`.
+    // first-paint loader issues. The before-hook stamps a marker here so the
+    // same SQL path can compose branch visibility into the query.
     //
     // We can't lean on DrizzleService's generic path: (1) its filter matches
     // `item.board_id`, but sessions expose the board as `branch_board_id`, so a
@@ -1693,6 +1700,7 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
       const limit = (query?.$limit as number | undefined) ?? PAGINATION.DEFAULT_LIMIT;
       const skip = (query?.$skip as number | undefined) ?? 0;
       const { data, total } = await this.sessionRepo.findPage({
+        status: query?.status as SessionStatus | undefined,
         boardId: query?.board_id as string | undefined,
         branchId: typeof branchFilter === 'string' ? (branchFilter as BranchID) : undefined,
         branchIds,

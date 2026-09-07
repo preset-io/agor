@@ -14,9 +14,16 @@ export function registerEnvironmentTools(server: McpServer, ctx: McpContext): vo
     {
       description:
         'Start the environment for a branch using its configured start action (shell command by default, or HTTP(S) GET webhook when URL-shaped / webhook-only mode)',
-      annotations: { idempotentHint: true },
+      annotations: { idempotentHint: false },
       inputSchema: z.object({
         branchId: mcpRequiredId('branchId', 'Branch'),
+        confirmationOf: z
+          .string()
+          .uuid()
+          .optional()
+          .describe(
+            'Only after explicit operator acceptance of unconfirmed cleanup, pass the current command_attempt.id. Starting again may create additional billable resources that prior scripts cannot stop. Never infer consent.'
+          ),
       }),
     },
     async (args) => {
@@ -25,7 +32,8 @@ export function registerEnvironmentTools(server: McpServer, ctx: McpContext): vo
       try {
         const branch = await branchesService.startEnvironment(
           branchId as BranchID,
-          ctx.baseServiceParams
+          ctx.baseServiceParams,
+          args.confirmationOf
         );
         return textResult({
           success: true,

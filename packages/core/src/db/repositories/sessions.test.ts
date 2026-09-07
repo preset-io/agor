@@ -594,6 +594,22 @@ describe('SessionRepository.findAll', () => {
       const page = await repo.findPage({ visibleToUserId: userId, limit: 10, skip: 0 });
       expect(page.total).toBe(1);
       expect(page.data.map((session) => session.session_id)).toEqual([visibleSession.session_id]);
+      const statusPage = await repo.findPage({
+        visibleToUserId: userId,
+        status: visibleSession.status,
+        limit: 1,
+      });
+      expect(statusPage.total).toBe(1);
+      expect(statusPage.data.map((session) => session.session_id)).toEqual([
+        visibleSession.session_id,
+      ]);
+      const hiddenStatusPage = await repo.findPage({
+        visibleToUserId: userId,
+        status: visibleSession.status,
+        branchId: hiddenBranch.branch_id,
+        limit: 1,
+      });
+      expect(hiddenStatusPage).toEqual({ data: [], total: 0 });
     }
   );
 });

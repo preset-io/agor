@@ -31,7 +31,7 @@ import { ensureColorVisible, isDarkTheme } from '../../utils/theme';
 import { ArchiveActionButton } from '../ArchiveButton';
 import { ArchiveDeleteBranchModal } from '../ArchiveDeleteBranchModal';
 import { EnvironmentPill } from '../EnvironmentPill';
-import { MarkdownRenderer } from '../MarkdownRenderer';
+import { MarkdownPreview } from '../MarkdownRenderer';
 import { CreatedByTag } from '../metadata';
 import { IssuePill, PullRequestPill } from '../Pill';
 import { BranchSessionPeekSection } from './BranchSessionPeekSection';
@@ -39,7 +39,6 @@ import { BranchSessionSections } from './BranchSessionSections';
 import { estimateBranchSessionSectionsHeight } from './branchCardLayout';
 
 const _BRANCH_CARD_MAX_WIDTH = 600;
-const NOTES_MAX_LENGTH = 200; // Character limit for truncated notes
 const PEEK_SESSIONS_STORAGE_KEY_PREFIX = 'agor:branch-card:peeked-session-ids:';
 
 interface BranchCardProps {
@@ -134,8 +133,6 @@ const BranchCardComponent = ({
   const [archiveDeleteModalOpen, setArchiveDeleteModalOpen] = useState(false);
   const [archiveDeleteModalMounted, setArchiveDeleteModalMounted] = useState(false);
 
-  // Notes expansion state
-  const [notesExpanded, setNotesExpanded] = useState(false);
   const [storedPeekedSessionIds, setStoredPeekedSessionIds] = useLocalStorage<string[]>(
     `${PEEK_SESSIONS_STORAGE_KEY_PREFIX}${branch.branch_id}`,
     []
@@ -278,19 +275,6 @@ const BranchCardComponent = ({
     if (!zoneColor) return undefined;
     return ensureColorVisible(zoneColor, isDarkMode, 50, 50);
   }, [zoneColor, isDarkMode]);
-
-  // Determine if notes should show "See more" button
-  const notesNeedTruncation = branch.notes && branch.notes.length > NOTES_MAX_LENGTH;
-  const displayedNotes = useMemo(() => {
-    if (!branch.notes) return '';
-    if (!notesNeedTruncation || notesExpanded) return branch.notes;
-    // Truncate at word boundary for cleaner display
-    const truncated = branch.notes.slice(0, NOTES_MAX_LENGTH);
-    const lastSpace = truncated.lastIndexOf(' ');
-    return lastSpace > NOTES_MAX_LENGTH * 0.8
-      ? `${truncated.slice(0, lastSpace)}...`
-      : `${truncated}...`;
-  }, [branch.notes, notesNeedTruncation, notesExpanded]);
 
   // Compose card chrome from independent visual channels so multiple
   // states can stack cleanly:
@@ -544,39 +528,13 @@ const BranchCardComponent = ({
       {/* Notes */}
       {branch.notes && (
         <div className={REACT_FLOW_NO_DRAG_CLASS} style={{ marginBottom: 8 }}>
-          <div
-            className="markdown-compact"
-            style={{
-              maxHeight: notesExpanded ? 'none' : '120px',
-              overflow: 'hidden',
-              transition: 'max-height 0.3s ease',
-            }}
-          >
-            <MarkdownRenderer
-              content={displayedNotes}
-              style={{ fontSize: 12, color: token.colorTextSecondary, lineHeight: '1.5' }}
-              compact={false}
-              showControls={false}
-            />
-          </div>
-          {notesNeedTruncation && (
-            <Button
-              type="link"
-              size="small"
-              onClick={(e) => {
-                e.stopPropagation();
-                setNotesExpanded(!notesExpanded);
-              }}
-              style={{
-                padding: 0,
-                height: 'auto',
-                fontSize: 12,
-                color: token.colorLink,
-              }}
-            >
-              {notesExpanded ? 'See less' : 'See more'}
-            </Button>
-          )}
+          <MarkdownPreview
+            key={branch.branch_id}
+            content={branch.notes}
+            collapsedHeight={120}
+            moreLabel="See more"
+            lessLabel="See less"
+          />
         </div>
       )}
 

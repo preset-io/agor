@@ -1,17 +1,17 @@
 /**
- * Modal for confirming zone deletion with options for handling associated pinned items
+ * Modal for confirming zone deletion and explaining its non-destructive scope.
  */
 
-import { Modal, Radio, theme } from 'antd';
-import { useState } from 'react';
+import { Alert, Modal, Typography } from 'antd';
 import { useMutationGate } from '../../../contexts/ConnectionContext';
 
 interface DeleteZoneModalProps {
   open: boolean;
   onCancel: () => void;
-  onConfirm: (deleteAssociatedSessions: boolean) => void;
+  onConfirm: () => void;
   zoneName: string;
   pinnedItemCount: number;
+  canEdit: boolean;
 }
 
 export const DeleteZoneModal = ({
@@ -20,76 +20,46 @@ export const DeleteZoneModal = ({
   onConfirm,
   zoneName,
   pinnedItemCount,
+  canEdit,
 }: DeleteZoneModalProps) => {
-  const { token } = theme.useToken();
-  const [deleteAssociatedSessions, setDeleteAssociatedSessions] = useState(false);
   const mutationGate = useMutationGate();
 
   const handleOk = () => {
-    if (!mutationGate.canMutate) return;
-    onConfirm(deleteAssociatedSessions);
+    if (!mutationGate.canMutate || !canEdit) return;
+    onConfirm();
   };
 
   return (
     <Modal
-      title="Delete Zone"
+      title="Delete zone?"
       open={open}
       onCancel={onCancel}
       onOk={handleOk}
-      okText="Delete Zone"
+      okText="Delete zone"
       okButtonProps={{
         danger: true,
-        disabled: !mutationGate.canMutate,
+        disabled: !mutationGate.canMutate || !canEdit,
       }}
       cancelText="Cancel"
       width={480}
     >
-      <div style={{ marginBottom: 16 }}>
-        <p style={{ margin: 0, marginBottom: 16 }}>Are you sure you want to delete this zone?</p>
+      <Typography.Paragraph>
+        Delete <Typography.Text strong>{zoneName}</Typography.Text>? This removes only the zone.
+        Branches, cards, comments, notes, and sessions are kept.
+      </Typography.Paragraph>
 
-        {pinnedItemCount > 0 && (
-          <>
-            <p style={{ margin: 0, marginBottom: 16, color: token.colorTextSecondary }}>
-              This zone has {pinnedItemCount} pinned item{pinnedItemCount !== 1 ? 's' : ''}.
-            </p>
-
-            <Radio.Group
-              value={deleteAssociatedSessions}
-              onChange={(e) => setDeleteAssociatedSessions(e.target.value)}
-            >
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-                <Radio value={false}>
-                  <div>
-                    <div style={{ fontWeight: 500 }}>Unpin items (keep on board)</div>
-                    <div style={{ fontSize: 12, color: token.colorTextSecondary }}>
-                      Pinned items will remain on the board at their current positions
-                    </div>
-                  </div>
-                </Radio>
-                <Radio value={true} disabled>
-                  <div>
-                    <div style={{ fontWeight: 500 }}>
-                      Delete pinned items too{' '}
-                      <span style={{ fontSize: 11, color: token.colorTextTertiary }}>
-                        [coming soon]
-                      </span>
-                    </div>
-                    <div style={{ fontSize: 12, color: token.colorTextSecondary }}>
-                      Remove pinned items from board entirely
-                    </div>
-                  </div>
-                </Radio>
-              </div>
-            </Radio.Group>
-          </>
-        )}
-
-        {pinnedItemCount === 0 && (
-          <p style={{ margin: 0, color: token.colorTextSecondary }}>
-            This zone has no pinned items.
-          </p>
-        )}
-      </div>
+      {pinnedItemCount > 0 ? (
+        <Alert
+          type="info"
+          showIcon
+          title={`${pinnedItemCount} pinned ${pinnedItemCount === 1 ? 'branch/card' : 'branches/cards'} will be unpinned`}
+          description="They will remain on the board at the same visible positions. Their content and session history are not changed."
+        />
+      ) : (
+        <Typography.Paragraph type="secondary">
+          Nothing else on the board will be removed.
+        </Typography.Paragraph>
+      )}
     </Modal>
   );
 };

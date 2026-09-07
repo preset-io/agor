@@ -167,6 +167,7 @@ function projectCodexCompletedEvent(
     usage: {
       input_tokens: count('input_tokens'),
       cached_input_tokens: count('cached_input_tokens'),
+      cache_write_input_tokens: count('cache_write_input_tokens'),
       output_tokens: count('output_tokens'),
       reasoning_output_tokens: count('reasoning_output_tokens'),
     },

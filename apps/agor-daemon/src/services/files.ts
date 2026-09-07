@@ -22,6 +22,7 @@ import type {
   UserID,
   UserRole,
 } from '@agor/core/types';
+import { resolveBranchExecutorSandboxMounts } from '../utils/branch-executor-sandbox.js';
 import { ensureBranchWorkspaceAccess } from '../utils/branch-workspace-path.js';
 import { resolveDelegatedExecutionHomeKey } from '../utils/executor-delegated-home.js';
 import { getDaemonUrl, requestExecutor } from '../utils/spawn-executor.js';
@@ -131,12 +132,22 @@ export class FilesService {
         currentUserId,
         this.app.get('config')
       );
+      // Autocomplete is a caller-initiated, stateless read. Use the caller's
+      // sandbox home rather than the Session/branch owner's credential home.
+      const sandboxMounts = await resolveBranchExecutorSandboxMounts({
+        config: this.app.get('config'),
+        tenantId,
+        executionUserId: currentUserId,
+        branch,
+        db: this.db,
+      });
       return {
         branchId: branch.branch_id,
         branchPath: branch.path,
         delegatedHomeKey,
         fsAccess,
         userId: currentUserId,
+        sandboxMounts,
       };
     });
     if (!resolved) return [];
@@ -160,6 +171,7 @@ export class FilesService {
             limit: MAX_FILE_RESULTS,
             cwd: resolved.branchPath,
             principalBranchAccess: resolved.fsAccess,
+            ...resolved.sandboxMounts,
           },
         },
         {

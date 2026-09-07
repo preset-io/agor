@@ -59,6 +59,7 @@ describe('PromptPayloadSchema', () => {
         prompt: 'Hello!',
         tool: 'gemini',
         permissionMode: 'auto',
+        promptOrigin: { kind: 'channel', server: 'slack' },
         cwd: '/home/user/project',
       },
     };
@@ -68,6 +69,24 @@ describe('PromptPayloadSchema', () => {
     expect(result.env?.ANTHROPIC_API_KEY).toBe('key');
     expect(result.agenticToolContext).toEqual({ nativeHome: '/data/agor' });
     expect(result.params.permissionMode).toBe('auto');
+    expect(result.params.promptOrigin).toEqual({ kind: 'channel', server: 'slack' });
+  });
+
+  it('rejects malformed prompt provenance at the private executor boundary', () => {
+    expect(() =>
+      PromptPayloadSchema.parse({
+        command: 'prompt',
+        sessionToken: 'jwt-token-here',
+        params: {
+          sessionId: '550e8400-e29b-41d4-a716-446655440000',
+          taskId: '550e8400-e29b-41d4-a716-446655440001',
+          prompt: 'Hello!',
+          tool: 'claude-code',
+          cwd: '/home/user/project',
+          promptOrigin: { kind: 'channel', server: '' },
+        },
+      })
+    ).toThrow();
   });
 
   it('should reject invalid tool type', () => {

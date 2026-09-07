@@ -7,6 +7,7 @@
 
 import type { BoardObject } from '@agor-live/client';
 import type { Node } from 'reactflow';
+import { DEFAULT_BOARD_OBJECT_Z_INDEX, sanitizeZIndex } from '../zOrder';
 import { getNodeAbsolutePosition, getNodeCenter, type Position } from './coordinateTransforms';
 import { getAbsoluteNodePosition } from './nodePositionUtils';
 import type { ReactFlowNode } from './reactFlowTypes';
@@ -14,6 +15,16 @@ import type { ReactFlowNode } from './reactFlowTypes';
 export interface CollisionResult {
   branchNode?: Node;
   zoneNode?: Node;
+}
+
+/** Pick the visually topmost node. Later nodes win equal-z ties, matching DOM paint order. */
+function topmostNode(nodes: Node[]): Node | undefined {
+  return nodes.reduce<Node | undefined>((top, node) => {
+    if (!top) return node;
+    const topZ = typeof top.zIndex === 'number' ? top.zIndex : 0;
+    const nodeZ = typeof node.zIndex === 'number' ? node.zIndex : 0;
+    return nodeZ >= topZ ? node : top;
+  }, undefined);
 }
 
 /**
@@ -70,8 +81,8 @@ export function findIntersectingObjects(
 
   // Priority: branch > zone (branches are rendered on top)
   return {
-    branchNode: intersectingNodes.find((n) => n.type === 'branchNode'),
-    zoneNode: intersectingNodes.find((n) => n.type === 'zone'),
+    branchNode: topmostNode(intersectingNodes.filter((node) => node.type === 'branchNode')),
+    zoneNode: topmostNode(intersectingNodes.filter((node) => node.type === 'zone')),
   };
 }
 
@@ -81,6 +92,34 @@ export function findIntersectingObjects(
 export interface ZoneCollision {
   zoneId: string;
   zoneData: BoardObject & { type: 'zone' };
+}
+
+function topmostZoneAtPoint(
+  point: Position,
+  boardObjects: Record<string, BoardObject>
+): ZoneCollision | null {
+  let result: ZoneCollision | null = null;
+  let resultZ = Number.NEGATIVE_INFINITY;
+
+  // Later entries win equal-z ties, matching the order used to build React
+  // Flow nodes. This keeps the visible top zone and the drop target aligned.
+  for (const [zoneId, zoneData] of Object.entries(boardObjects)) {
+    if (zoneData.type !== 'zone') continue;
+    const isInZone =
+      point.x >= zoneData.x &&
+      point.x <= zoneData.x + zoneData.width &&
+      point.y >= zoneData.y &&
+      point.y <= zoneData.y + zoneData.height;
+    if (!isInZone) continue;
+
+    const zIndex = sanitizeZIndex(zoneData.zIndex, DEFAULT_BOARD_OBJECT_Z_INDEX.zone);
+    if (zIndex >= resultZ) {
+      result = { zoneId, zoneData };
+      resultZ = zIndex;
+    }
+  }
+
+  return result;
 }
 
 /**
@@ -118,26 +157,7 @@ export function findZoneForNode(
   // Calculate center point for collision detection
   const center = getNodeCenter(absolutePos, nodeWidth, nodeHeight);
 
-  // Check each zone
-  for (const [zoneId, zoneData] of Object.entries(boardObjects)) {
-    if (zoneData.type !== 'zone') continue;
-
-    // Check if center is within zone bounds
-    const isInZone =
-      center.x >= zoneData.x &&
-      center.x <= zoneData.x + zoneData.width &&
-      center.y >= zoneData.y &&
-      center.y <= zoneData.y + zoneData.height;
-
-    if (isInZone) {
-      return {
-        zoneId,
-        zoneData: zoneData as BoardObject & { type: 'zone' },
-      };
-    }
-  }
-
-  return null;
+  return topmostZoneAtPoint(center, boardObjects);
 }
 
 /**
@@ -153,22 +173,5 @@ export function findZoneAtPosition(
 ): ZoneCollision | null {
   if (!boardObjects) return null;
 
-  for (const [zoneId, zoneData] of Object.entries(boardObjects)) {
-    if (zoneData.type !== 'zone') continue;
-
-    const isInZone =
-      absolutePosition.x >= zoneData.x &&
-      absolutePosition.x <= zoneData.x + zoneData.width &&
-      absolutePosition.y >= zoneData.y &&
-      absolutePosition.y <= zoneData.y + zoneData.height;
-
-    if (isInZone) {
-      return {
-        zoneId,
-        zoneData: zoneData as BoardObject & { type: 'zone' },
-      };
-    }
-  }
-
-  return null;
+  return topmostZoneAtPoint(absolutePosition, boardObjects);
 }

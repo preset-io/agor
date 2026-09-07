@@ -48,7 +48,7 @@ vi.mock('../base/permission-hooks.js', () => ({
 import { getMcpServersForSession } from '@agor/core/mcp';
 import { resolveMCPAuthHeaders } from '@agor/core/tools/mcp/jwt-auth';
 import * as Claude from '@anthropic-ai/claude-agent-sdk';
-import { CLAUDE_CODE_DISALLOWED_TOOLS } from './constants.js';
+import { CLAUDE_CODE_DISALLOWED_TOOLS, CLAUDE_CODE_TODO_TOOLS } from './constants.js';
 import { formatListForLog, type QuerySetupDeps, setupQuery } from './query-builder.js';
 
 describe('MCP logging helpers', () => {
@@ -99,6 +99,31 @@ describe('setupQuery - Local Settings Support', () => {
     );
   });
 
+  it.each([
+    [{ kind: 'human' as const }, { kind: 'human' }],
+    [
+      { kind: 'channel' as const, server: 'slack' },
+      { kind: 'channel', server: 'slack' },
+    ],
+    [undefined, undefined],
+  ])('passes only daemon-derived prompt origin to the SDK (%j)', async (promptOrigin, expected) => {
+    const setup = await setupQuery('test-session' as SessionID, 'test prompt', createMockDeps(), {
+      promptOrigin,
+    });
+    const prompt = vi.mocked(Claude.query).mock.calls[0][0].prompt;
+    expect(typeof prompt).not.toBe('string');
+
+    const first = await (prompt as AsyncIterable<Record<string, unknown>>)
+      [Symbol.asyncIterator]()
+      .next();
+    if (expected) {
+      expect(first.value).toMatchObject({ origin: expected });
+    } else {
+      expect(first.value).not.toHaveProperty('origin');
+    }
+    setup.query.releaseInput();
+  });
+
   it('logs only the generic prompt start and passes resume and prompt data to the SDK', async () => {
     const prompt = 'sk-ant-SECRET_QUERY_SENTINEL\r\nsecond line\nDATABASE_URL=do-not-log';
     const deps = createMockDeps();
@@ -122,7 +147,9 @@ describe('setupQuery - Local Settings Support', () => {
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
 
     try {
-      await setupQuery('test-session' as SessionID, prompt, deps);
+      await setupQuery('test-session' as SessionID, prompt, deps, {
+        promptOrigin: { kind: 'human' },
+      });
 
       expect(logSpy.mock.calls).toEqual([['🤖 Prompting Claude for session test-session...']]);
 
@@ -132,6 +159,7 @@ describe('setupQuery - Local Settings Support', () => {
       const promptIterator = callArgs.prompt[Symbol.asyncIterator]();
       const firstMessage = await promptIterator.next();
       expect(firstMessage.value.message.content).toEqual([{ type: 'text', text: prompt }]);
+      expect(firstMessage.value.origin).toEqual({ kind: 'human' });
     } finally {
       logSpy.mockRestore();
     }
@@ -207,6 +235,14 @@ describe('setupQuery - Local Settings Support', () => {
 
     const callArgs = vi.mocked(Claude.query).mock.calls[0][0];
     expect(callArgs.options.disallowedTools).toEqual([...CLAUDE_CODE_DISALLOWED_TOOLS]);
+  });
+
+  it('opts into the Claude task tools that back Agor todo rendering', async () => {
+    await setupQuery('test-session' as SessionID, 'test prompt', createMockDeps());
+
+    const callArgs = vi.mocked(Claude.query).mock.calls[0][0];
+    expect(CLAUDE_CODE_TODO_TOOLS).toEqual(['TaskCreate', 'TaskUpdate', 'TaskGet', 'TaskList']);
+    expect(callArgs.options.allowedTools).toEqual([...CLAUDE_CODE_TODO_TOOLS]);
   });
 
   it('blocks on MCP startup for gateway sessions', async () => {

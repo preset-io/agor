@@ -19,7 +19,6 @@ import {
   assertTenantWritable,
   type CurrentTaskExecutorSessionTokenAuthority,
   type ExecutorLaunchAuthority,
-  type ExecutorLaunchAuthorityOptions,
   enqueueTenantDatabasePostCommitCallback,
   getCurrentTenantId,
   isPostgresDatabaseHandle,
@@ -92,8 +91,6 @@ export interface TaskExecutorCredentialRevoker {
   revokeTaskTokens(taskId: string): Promise<number>;
   isTaskTokenAuthorityCurrent?(input: CurrentTaskExecutorSessionTokenAuthority): Promise<boolean>;
 }
-
-export type TaskRuntimeAuthorityOptions = ExecutorLaunchAuthorityOptions;
 
 /**
  * Task service params
@@ -176,10 +173,7 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
   constructor(
     db: TenantScopeAwareDatabase,
     app: Application,
-    private readonly executorCredentialRevoker?: TaskExecutorCredentialRevoker,
-    private readonly runtimeAuthorityOptions: TaskRuntimeAuthorityOptions = {
-      branchRbacEnabled: app.get?.('config')?.execution?.branch_rbac === true,
-    }
+    private readonly executorCredentialRevoker?: TaskExecutorCredentialRevoker
   ) {
     const taskRepo = new TaskRepository(db);
     super(taskRepo, {
@@ -1499,7 +1493,7 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
 
   /** Internal launch boundary; not exposed through the Feathers transport. */
   bindExecutorLaunchAuthority(taskId: string): Promise<ExecutorLaunchAuthority> {
-    return this.taskRepo.bindExecutorLaunchAuthority(taskId, this.runtimeAuthorityOptions);
+    return this.taskRepo.bindExecutorLaunchAuthority(taskId);
   }
 
   async reportRuntimeTelemetry(data: RuntimeTelemetryInput, params?: TaskParams): Promise<Task> {
@@ -1550,7 +1544,6 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
           principal_user_id: authority.userId,
           session_id: authority.sessionId,
           branch_id: authority.branchId,
-          ...this.runtimeAuthorityOptions,
           ...(standaloneTokenCurrent === undefined
             ? {}
             : { standalone_token_current: standaloneTokenCurrent }),
@@ -1776,8 +1769,7 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
 export function createTasksService(
   db: TenantScopeAwareDatabase,
   app: Application,
-  executorCredentialRevoker?: TaskExecutorCredentialRevoker,
-  runtimeAuthorityOptions?: TaskRuntimeAuthorityOptions
+  executorCredentialRevoker?: TaskExecutorCredentialRevoker
 ): TasksService {
-  return new TasksService(db, app, executorCredentialRevoker, runtimeAuthorityOptions);
+  return new TasksService(db, app, executorCredentialRevoker);
 }

@@ -46,14 +46,24 @@ Drag into "Ship It" → auto-prompts for changelog + PR description.
 
 Zones turn your board into a workflow engine. Spatial position _means something_. It triggers behavior.
 
+### Editing a zone
+
+Select a zone to show its compact board toolbar:
+
+- **Rename**, **appearance**, and **lock position and size** cover the common edits.
+- **Zone settings** opens on **Automation**, where you configure the prompt and how it starts. **Appearance & placement** contains the name, border and fill colors, label size, and placement lock.
+- **More → Arrange** contains the less common layer controls (bring forward/front and send backward/back). When zones overlap, the visually topmost zone is also the drop target.
+- **More → Delete zone** removes only the zone. Pinned branches, cards, and comments are unpinned at the same visible board positions; their content and sessions are kept.
+
+Locking a zone prevents moving and resizing it; it does not prevent renaming it or changing its settings. Viewers do not see editing controls. Editors, managers, and the board owner can edit zones.
+
 ### How zone triggers work
 
 When you drop a branch into a zone:
 
 1. **Session selection**: which session gets the prompt?
-   - **Always create new session** (default): clean slate for the zone's task
-   - **Let me pick**: choose which session in the tree has the right context
-   - **Most recently active**: usually the session you were just working in
+   - **Show picker** (default): choose a session and action when the branch is dropped
+   - **Always new**: create a new root session automatically
 
 2. **Templated prompt executes**: the zone's Handlebars template renders with dynamic data from the branch, board, repo, and environment.
 
@@ -128,7 +138,7 @@ Branches aren't the only thing that can live on a board. **[Cards](/guide/cards)
 
 ## Permissions and branch defaults
 
-When branch RBAC is enabled, a board has one primary owner and two intentionally separate permission sections:
+Every board has one primary owner and two intentionally separate permission sections. Board and branch RBAC is always enabled:
 
 1. **Board access** controls who can see and manage this canvas.
 2. **Branch defaults** define the complete permission package inherited by branches on this board.
@@ -143,6 +153,11 @@ Primary ownership cannot be reassigned. Managers can maintain access and may
 enable shared prompting for branch-home Sessions, but do not become owners.
 The workspace preference must also be enabled, and execution-home Sessions are
 never shareable.
+
+The primary owner can edit the board's name, emoji, and description independently
+of named entries and the **Others** fallback. Other members need Board Editor or
+Manager access to edit this metadata. Ownership never grants access across
+workspace tenant boundaries.
 
 ---
 

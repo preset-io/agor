@@ -73,7 +73,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   enabled.mockResolvedValue(true);
   loadConfig.mockReturnValue({
-    execution: { unix_user_mode: 'simple', branch_rbac: true },
+    execution: { unix_user_mode: 'simple' },
   } as never);
   usersRepository.mockImplementation(function repository() {
     return { findById: vi.fn(async () => ({ unix_username: 'alice' })) };

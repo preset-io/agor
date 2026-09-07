@@ -175,8 +175,10 @@ export interface TaskMetadata {
   }>;
   /**
    * Marks a task whose prompt was authored by the daemon (not typed by a
-   * human). Used by widget auto-resume so the UI can label the queued
-   * prompt appropriately.
+   * human). This is a security-relevant provenance marker: MCP, widget,
+   * zone, spawn, and other synthesized prompt paths set it so provider SDKs
+   * do not grant the prompt human authority. The UI may also use it to label
+   * the queued prompt appropriately.
    */
   system_authored?: boolean;
   /**
@@ -367,8 +369,8 @@ export interface Task {
       inputTokens: number;
       outputTokens: number;
       totalTokens: number;
-      cacheReadTokens?: number; // Claude-specific: prompt caching reads
-      cacheCreationTokens?: number; // Claude-specific: prompt caching writes
+      cacheReadTokens?: number; // Provider-reported prompt cache reads
+      cacheCreationTokens?: number; // Provider-reported prompt cache writes
     };
     contextWindowLimit?: number; // Model's max context window (e.g., 200k for Claude)
     costUsd?: number; // Estimated cost in USD (if pricing available)

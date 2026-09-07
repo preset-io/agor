@@ -94,12 +94,14 @@ import type {
   MCPServerID,
   MessageSource,
   Params,
+  PromptOrigin,
   SessionID,
   UserID,
   UUID,
 } from '@agor/core/types';
 import {
   assertPublicMCPOAuthCompatibilityMode,
+  ENVIRONMENT_COMMAND_REPORT_SERVICE,
   hasMinimumRole,
   isMCPOAuthGrantBindingVersion,
   MCP_MEMBER_POLICY_CHANGED_EVENT,
@@ -186,6 +188,7 @@ import { createDurableCodexDeviceAuthService } from './services/codex-device-aut
 import { createConfigService } from './services/config.js';
 import { createCopilotModelsService } from './services/copilot-models.js';
 import { createCursorModelsService } from './services/cursor-models.js';
+import { EnvironmentCommandReportsService } from './services/environment-command-reports.js';
 import { createExecutorGitEnvironmentService } from './services/executor-git-environment.js';
 import { prepareSessionForExecutorStart } from './services/executor-startup.js';
 import { createFileService } from './services/file.js';
@@ -330,7 +333,6 @@ export interface RegisterServicesContext {
   bundledUiAvailable: boolean;
   DAEMON_PORT: number;
   UI_PORT: number;
-  branchRbacEnabled: boolean;
   allowSuperadmin: boolean;
   requireAuth: (context: HookContext) => Promise<HookContext>;
   deployment: ResolvedDeploymentConfig;
@@ -363,7 +365,7 @@ export interface RegisteredServices {
  * Register all FeathersJS services on the app.
  */
 export async function registerServices(ctx: RegisterServicesContext): Promise<RegisteredServices> {
-  const { db, app, config, daemonUrl, branchRbacEnabled, allowSuperadmin } = ctx;
+  const { db, app, config, daemonUrl, allowSuperadmin } = ctx;
   const deploymentAgenticToolPolicy = resolveDeploymentAgenticToolPolicy(config);
 
   const _superadminOpts = { allowSuperadmin };
@@ -410,9 +412,7 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   const sessionsService = createSessionsService(db, app, (tool) =>
     isDeploymentAgenticToolAvailable(tool, deploymentAgenticToolPolicy)
   ) as unknown as SessionsServiceImpl;
-  const tasksService = createTasksService(db, app, sessionTokenService, {
-    branchRbacEnabled,
-  });
+  const tasksService = createTasksService(db, app, sessionTokenService);
   app.use('/sessions', sessionsService, {
     events: ['permission:request', 'permission:timeout'],
   });
@@ -539,9 +539,8 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   } as any);
   app.use(
     '/boards',
-    createBoardsService(
-      db,
-      (boardObject, params) => {
+    createBoardsService(db, {
+      emitBoardObjectPatched: (boardObject, params) => {
         emitServiceEvent(app, {
           path: 'board-objects',
           event: 'patched',
@@ -550,8 +549,16 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
           id: boardObject.object_id,
         });
       },
-      (event) => emitServiceEvent(app, { path: 'boards', ...event })
-    ),
+      emitBoardEvent: (event) => emitServiceEvent(app, { path: 'boards', ...event }),
+      emitBoardCommentPatched: (comment, params) =>
+        emitServiceEvent(app, {
+          path: 'board-comments',
+          event: 'patched',
+          data: comment,
+          params,
+          id: comment.comment_id,
+        }),
+    }),
     {
       methods: [
         'find',
@@ -597,7 +604,7 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   // Branches, repos
   // ============================================================================
 
-  app.use('/branches', createBranchesService(db, app, { appRbacEnabled: branchRbacEnabled }), {
+  app.use('/branches', createBranchesService(db, app), {
     methods: [
       'find',
       'get',
@@ -610,7 +617,7 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
     ],
   });
 
-  console.log(`[RBAC] Branch RBAC ${branchRbacEnabled ? 'Enabled' : 'Disabled'}`);
+  console.log('[RBAC] Board and branch RBAC enabled (always on)');
   console.log(`[RBAC] Superadmin bypass ${allowSuperadmin ? 'Enabled' : 'Disabled'}`);
 
   app.use('/groups', createGroupsService(db), {
@@ -744,7 +751,7 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
     app.service('gateway-channels/app-info').publish(() => []);
 
     app.use('/thread-session-map', createThreadSessionMapService(db));
-    app.use('/gateway', createGatewayService(db, app, { appRbacEnabled: branchRbacEnabled }), {
+    app.use('/gateway', createGatewayService(db, app), {
       // Only expose the inbound gateway entrypoint and existing route hook
       // externally. Proactive outbound emits are intentionally invoked through
       // the authenticated Agor MCP tool surface; exposing emitMessage here would
@@ -1067,6 +1074,10 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   app.use('/executor-git-environment', createExecutorGitEnvironmentService(db), {
     methods: ['create'],
   });
+  app.use(ENVIRONMENT_COMMAND_REPORT_SERVICE, new EnvironmentCommandReportsService(db, app), {
+    methods: ['create'],
+    events: [],
+  });
 
   // Bootstrap superadmin users
   await bootstrapSuperadminUsers(config, db, allowSuperadmin);
@@ -1131,6 +1142,7 @@ function createExecuteHandler(
       permissionMode?: import('@agor/core/types').PermissionMode;
       stream?: boolean;
       messageSource?: MessageSource;
+      promptOrigin?: PromptOrigin;
     },
     // biome-ignore lint/suspicious/noExplicitAny: FeathersJS params type varies by context
     params: any
@@ -1203,8 +1215,7 @@ function createExecuteHandler(
         ? resolveSandboxStoragePaths(config, tenantId).worktreesRoot
         : undefined;
     // Effective fs access of the prompt actor on the branch: write/read/none.
-    // Drives whether the sandbox binds the branch rw / ro / not at all. Defaults
-    // to 'write' when RBAC is off (open-access behavior).
+    // Drives whether the sandbox binds the branch rw / ro / not at all.
     const principalBranchAccess = launchAuthority.fs_access;
     if (session.branch_id) {
       const branchMounts = await runWithTenantDatabaseScope(db, tenantId, async (tenantDb) => {
@@ -1558,6 +1569,7 @@ function createExecuteHandler(
         permissionMode: permissionModeForPayload as 'ask' | 'auto' | 'allow-all' | undefined,
         cwd,
         messageSource: data.messageSource,
+        promptOrigin: data.promptOrigin,
         // Authoritative sandbox mount inputs (consumed in spawn-executor →
         // buildSandboxWrap). Undefined when the sandbox / per_user home is off.
         sandboxBaseRepoPath,
