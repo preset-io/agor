@@ -33,7 +33,7 @@ import { ArchiveDeleteBranchModal } from '../ArchiveDeleteBranchModal';
 import { EnvironmentPill } from '../EnvironmentPill';
 import { MarkdownPreview } from '../MarkdownRenderer';
 import { CreatedByTag } from '../metadata';
-import { IssuePill, PullRequestPill } from '../Pill';
+import { IssuePill, PullRequestPill, StorageModePill } from '../Pill';
 import { BranchSessionPeekSection } from './BranchSessionPeekSection';
 import { BranchSessionSections } from './BranchSessionSections';
 import { estimateBranchSessionSectionsHeight } from './branchCardLayout';
@@ -507,6 +507,7 @@ const BranchCardComponent = ({
               prefix="Created by"
             />
           )}
+          <StorageModePill storageMode={branch.storage_mode} />
           {branch.issue_url && <IssuePill issueUrl={branch.issue_url} currentRepo={repo} />}
           {branch.pull_request_url && (
             <PullRequestPill prUrl={branch.pull_request_url} currentRepo={repo} />
