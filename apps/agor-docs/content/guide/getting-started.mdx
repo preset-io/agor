@@ -13,7 +13,9 @@ Install Agor, open the UI, and follow the onboarding wizard. Your **first AI tea
 
 <InstallTabs />
 
-Run `agor init` after installation. It shows a multi-select for every supported agentic tool and
+If you ran the curl installer, `agor init` already ran non-interactively with every agentic tool
+configured (`--agentic-tools all`) — skip ahead to the onboarding wizard below. Otherwise, run
+`agor init` yourself after installation. It shows a multi-select for every supported agentic tool and
 requires an intentional selection of at least one. The prompt explains that each selection adds
 download time and disk use; credentials are configured later in the UI. Init writes the selection
 once to `agentic_tools.installed` and installs the exact version-aligned packages before reporting

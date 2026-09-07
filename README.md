@@ -84,6 +84,7 @@ _The board: branches as cards, zones as regions, agent sessions, and — optiona
 Requires **Node.js ≥ 22.12** ([install](https://nodejs.org)) and **Git** on `PATH`. HTTPS remotes also require a working system CA trust store; SSH remotes require an SSH client and configured keys or agent access.
 
 ```bash
+<<<<<<< HEAD
 npm install -g agor-live
 
 agor init           # creates config/database and installs the tools you select
@@ -94,9 +95,14 @@ agor open           # opens the web UI
 Use `agor install` later to change or repair the selected agentic tools; it does not initialize or recreate Agor.
 
 That's it — add a repo and create your first session from the onboarding wizard.
+=======
+curl -fsSL https://agor.live/install.sh | bash
+```
 
-Prefer Homebrew? See the [Getting Started guide](https://agor.live/guide/getting-started) for the
-brew path. For Docker, source builds, Postgres, and team setups, see
+That installs Agor, initializes it, starts the daemon, and opens the UI — [view the script](https://github.com/preset-io/agor/blob/main/apps/agor-docs/public/install.sh) before piping it into `bash`, same as you should for any `curl | bash` installer. That's it — add a repo and create your first session from the onboarding wizard.
+>>>>>>> 28e833db2 (docs: lead install instructions with the curl one-liner)
+
+Prefer to run each step yourself, or use Homebrew? See the [Getting Started guide](https://agor.live/guide/getting-started) for the npm and brew paths. For Docker, source builds, Postgres, and team setups, see
 [Extended Installation](https://agor.live/guide/extended-install).
 
 ---

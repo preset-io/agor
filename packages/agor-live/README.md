@@ -12,7 +12,7 @@ Requires Node.js ≥ 22.12 and Git on `PATH`. HTTPS remotes also require a worki
 npm install -g agor-live
 ```
 
-Prefer Homebrew on macOS or Linux? See the main docs for the brew install path.
+Prefer one command that also runs the steps below? `curl -fsSL https://agor.live/install.sh | bash` — [view the script](https://github.com/preset-io/agor/blob/main/apps/agor-docs/public/install.sh) first, same as you should for any `curl | bash` installer. Prefer Homebrew on macOS or Linux? See the main docs for the brew install path.
 
 ## Quick Start
 
