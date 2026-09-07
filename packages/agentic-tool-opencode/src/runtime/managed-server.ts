@@ -14,6 +14,7 @@ export { OPENCODE_VERSION };
 
 const DEFAULT_READINESS_TIMEOUT_MS = 10_000;
 const DEFAULT_SHUTDOWN_TIMEOUT_MS = 2_000;
+const DEFAULT_MODEL_REFRESH_TIMEOUT_MS = 15_000;
 const READINESS_POLL_INTERVAL_MS = 25;
 const HEALTH_REQUEST_TIMEOUT_MS = 500;
 const MAX_STARTUP_OUTPUT = 4_096;
@@ -395,6 +396,160 @@ export type ManagedOpenCodeServerDependencies = {
   shutdownTimeoutMs?: number;
 };
 
+export type RefreshOpenCodeModelsDependencies = Pick<
+  ManagedOpenCodeServerDependencies,
+  'resolveBinary' | 'spawn' | 'shutdownTimeoutMs'
+> & {
+  refreshTimeoutMs?: number;
+};
+
+function openCodeNativeEnvironment(dataHome?: string): NodeJS.ProcessEnv {
+  return dataHome
+    ? {
+        XDG_DATA_HOME: dataHome,
+        XDG_CONFIG_HOME: join(dataHome, 'xdg-config'),
+        XDG_CACHE_HOME: join(dataHome, 'xdg-cache'),
+        XDG_STATE_HOME: join(dataHome, 'xdg-state'),
+      }
+    : {};
+}
+
+async function prepareOpenCodeNativeEnvironment(
+  dataHome: string | undefined,
+  nativeEnvironment: NodeJS.ProcessEnv
+): Promise<void> {
+  if (!dataHome) return;
+  const boundary = resolveOpenCodeNativeBoundary(dataHome);
+  await prepareOpenCodeNativeState(boundary.dataHome);
+  await Promise.all(
+    Object.values(nativeEnvironment)
+      .filter((directory): directory is string =>
+        Boolean(directory && directory !== boundary.dataHome)
+      )
+      .map((directory) => ensureOwnedPrivateDirectory(boundary.homeDir, directory))
+  );
+}
+
+/**
+ * Refresh the models.dev cache in the exact native-state namespace used by a
+ * task's managed server. This process never substitutes for server-side model
+ * validation: callers must restart OpenCode and re-check the exact pair.
+ */
+export async function refreshOpenCodeModels(
+  input: {
+    directory: string;
+    providerId: string;
+    dataHome: string;
+    environment?: NodeJS.ProcessEnv;
+    secrets?: readonly unknown[];
+    signal?: AbortSignal;
+  },
+  dependencies: RefreshOpenCodeModelsDependencies = {}
+): Promise<void> {
+  if (!input.dataHome.trim()) {
+    throw new Error('OpenCode model catalog refresh requires a private native data home');
+  }
+  const nativeEnvironment = openCodeNativeEnvironment(input.dataHome);
+  await prepareOpenCodeNativeEnvironment(input.dataHome, nativeEnvironment);
+  if (input.signal?.aborted) throw new Error('OpenCode model catalog refresh was aborted');
+
+  const environment = {
+    ...process.env,
+    ...input.environment,
+    ...nativeEnvironment,
+  };
+  const sanitizer = createOpenCodeSanitizer(
+    [input.dataHome ?? '', input.secrets ?? [], input.environment],
+    environment
+  );
+  const resolveBinary = dependencies.resolveBinary ?? resolvePackagedOpenCodeBinary;
+  const spawn =
+    dependencies.spawn ??
+    ((executable: string, args: readonly string[], options: SpawnOptions) =>
+      nodeSpawn(executable, [...args], options));
+
+  let child: ManagedChild;
+  try {
+    const resolvedCommand = await resolveBinary();
+    const command =
+      typeof resolvedCommand === 'string'
+        ? { executable: resolvedCommand, argsPrefix: [] }
+        : resolvedCommand;
+    child = spawn(
+      command.executable,
+      [...command.argsPrefix, 'models', input.providerId, '--refresh'],
+      {
+        cwd: input.directory,
+        detached: false,
+        env: environment,
+        stdio: ['ignore', 'pipe', 'pipe'],
+      }
+    );
+  } catch (error) {
+    throw sanitizer.error(error);
+  }
+
+  const close = createBoundedClose(
+    child,
+    dependencies.shutdownTimeoutMs ?? DEFAULT_SHUTDOWN_TIMEOUT_MS
+  );
+  let output = '';
+  const onData = (chunk: Buffer | string) => {
+    output = `${output}${chunk.toString()}`.slice(-MAX_STARTUP_OUTPUT);
+  };
+  child.stdout?.on('data', onData);
+  child.stderr?.on('data', onData);
+
+  let timer: NodeJS.Timeout | undefined;
+  let abortHandler: (() => void) | undefined;
+  const completion = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
+    (resolveCompletion, rejectCompletion) => {
+      child.once('close', (code, signal) => resolveCompletion({ code, signal }));
+      child.once('error', rejectCompletion);
+    }
+  );
+  const timeout = new Promise<never>((_, rejectTimeout) => {
+    timer = setTimeout(
+      () => rejectTimeout(new Error('OpenCode model catalog refresh timed out')),
+      dependencies.refreshTimeoutMs ?? DEFAULT_MODEL_REFRESH_TIMEOUT_MS
+    );
+  });
+  const aborted = new Promise<never>((_, rejectAbort) => {
+    if (!input.signal) return;
+    abortHandler = () => rejectAbort(new Error('OpenCode model catalog refresh was aborted'));
+    input.signal.addEventListener('abort', abortHandler, { once: true });
+  });
+
+  try {
+    const result = await Promise.race([completion, timeout, aborted]);
+    if (result.code !== 0) {
+      const diagnostic = sanitizer.text(output).trim();
+      throw new Error(
+        `OpenCode model catalog refresh exited with code ${result.code ?? 'null'} (signal ${result.signal ?? 'none'})${diagnostic ? `: ${diagnostic}` : ''}`
+      );
+    }
+  } catch (error) {
+    try {
+      await close();
+    } catch (closeError) {
+      throw sanitizer.error(
+        new OpenCodeCleanupUnverifiedError('OpenCode model catalog refresh cleanup failed', {
+          cause: new AggregateError(
+            [error, closeError],
+            'OpenCode model catalog refresh and cleanup both failed'
+          ),
+        })
+      );
+    }
+    throw sanitizer.error(error);
+  } finally {
+    if (timer) clearTimeout(timer);
+    if (abortHandler) input.signal?.removeEventListener('abort', abortHandler);
+    child.stdout?.off('data', onData);
+    child.stderr?.off('data', onData);
+  }
+}
+
 export async function startManagedOpenCodeServer(
   input: {
     directory: string;
@@ -404,23 +559,8 @@ export async function startManagedOpenCodeServer(
   },
   dependencies: ManagedOpenCodeServerDependencies = {}
 ): Promise<ManagedOpenCodeServer> {
-  const nativeEnvironment = input.dataHome
-    ? {
-        XDG_DATA_HOME: input.dataHome,
-        XDG_CONFIG_HOME: join(input.dataHome, 'xdg-config'),
-        XDG_CACHE_HOME: join(input.dataHome, 'xdg-cache'),
-        XDG_STATE_HOME: join(input.dataHome, 'xdg-state'),
-      }
-    : {};
-  if (input.dataHome) {
-    const boundary = resolveOpenCodeNativeBoundary(input.dataHome);
-    await prepareOpenCodeNativeState(boundary.dataHome);
-    await Promise.all(
-      Object.values(nativeEnvironment)
-        .filter((directory) => directory !== boundary.dataHome)
-        .map((directory) => ensureOwnedPrivateDirectory(boundary.homeDir, directory))
-    );
-  }
+  const nativeEnvironment = openCodeNativeEnvironment(input.dataHome);
+  await prepareOpenCodeNativeEnvironment(input.dataHome, nativeEnvironment);
 
   const randomBytes = dependencies.randomBytes ?? nodeRandomBytes;
   const password = randomBytes(32).toString('base64url');

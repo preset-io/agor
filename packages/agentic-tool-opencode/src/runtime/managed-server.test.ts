@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   ensureOpenCodeDataHome,
   type ManagedChild,
+  refreshOpenCodeModels,
   startManagedOpenCodeServer,
   verifyOpenCodeAuthFileBoundary,
 } from './managed-server';
@@ -189,5 +190,136 @@ describe('managed OpenCode readiness', () => {
         headers: { Authorization: server.authorization },
       })
     );
+  });
+});
+
+describe('managed OpenCode model refresh', () => {
+  it('refuses to refresh without a private native-state namespace', async () => {
+    const spawn = vi.fn();
+
+    await expect(
+      refreshOpenCodeModels(
+        { directory: '/workspace', providerId: 'opencode-go', dataHome: ' ' },
+        { resolveBinary: async () => '/packaged/opencode', spawn }
+      )
+    ).rejects.toThrow(/requires a private native data home/i);
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
+  it('runs the pinned refresh command in the same private XDG namespace', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'agor-opencode-refresh-xdg-'));
+    roots.push(root);
+    const dataHome = nativeDataHome(root, 'alice-tenant');
+    const child = Object.assign(new EventEmitter(), {
+      stdout: new PassThrough(),
+      stderr: new PassThrough(),
+      exitCode: null,
+      kill: vi.fn(() => true),
+    }) as ManagedChild;
+    const spawn = vi.fn(() => child);
+
+    const refreshed = refreshOpenCodeModels(
+      {
+        directory: '/workspace',
+        providerId: 'opencode-go',
+        dataHome,
+        environment: { OPENCODE_CONFIG_CONTENT: '{"synthetic":true}' },
+      },
+      {
+        resolveBinary: async () => ({
+          executable: process.execPath,
+          argsPrefix: ['/managed/opencode-ai/bin/opencode'],
+        }),
+        spawn,
+      }
+    );
+    await vi.waitFor(() => expect(spawn).toHaveBeenCalledOnce());
+
+    expect(spawn).toHaveBeenCalledWith(
+      process.execPath,
+      ['/managed/opencode-ai/bin/opencode', 'models', 'opencode-go', '--refresh'],
+      expect.objectContaining({
+        cwd: '/workspace',
+        env: expect.objectContaining({
+          XDG_DATA_HOME: dataHome,
+          XDG_CONFIG_HOME: join(dataHome, 'xdg-config'),
+          XDG_CACHE_HOME: join(dataHome, 'xdg-cache'),
+          XDG_STATE_HOME: join(dataHome, 'xdg-state'),
+          OPENCODE_CONFIG_CONTENT: '{"synthetic":true}',
+        }),
+      })
+    );
+    child.exitCode = 0;
+    child.emit('close', 0, null);
+
+    await expect(refreshed).resolves.toBeUndefined();
+    expect(child.kill).not.toHaveBeenCalled();
+  });
+
+  it('terminates the refresh child when the task is cancelled', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'agor-opencode-refresh-abort-'));
+    roots.push(root);
+    const child = Object.assign(new EventEmitter(), {
+      stdout: new PassThrough(),
+      stderr: new PassThrough(),
+      exitCode: null,
+      kill: vi.fn(function (this: ManagedChild, signal: NodeJS.Signals) {
+        this.exitCode = 0;
+        queueMicrotask(() => {
+          (this as unknown as EventEmitter).emit('exit', 0, signal);
+          (this as unknown as EventEmitter).emit('close', 0, signal);
+        });
+        return true;
+      }),
+    }) as ManagedChild;
+    const spawn = vi.fn(() => child);
+    const controller = new AbortController();
+
+    const refreshed = refreshOpenCodeModels(
+      {
+        directory: '/workspace',
+        providerId: 'opencode-go',
+        dataHome: nativeDataHome(root),
+        signal: controller.signal,
+      },
+      { resolveBinary: async () => '/packaged/opencode', spawn }
+    );
+    await vi.waitFor(() => expect(spawn).toHaveBeenCalledOnce());
+    controller.abort();
+
+    await expect(refreshed).rejects.toThrow(/refresh was aborted/i);
+    expect(child.kill).toHaveBeenCalledWith('SIGTERM');
+  });
+
+  it('sanitizes bounded native diagnostics when refresh exits unsuccessfully', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'agor-opencode-refresh-failure-'));
+    roots.push(root);
+    const child = Object.assign(new EventEmitter(), {
+      stdout: new PassThrough(),
+      stderr: new PassThrough(),
+      exitCode: null,
+      kill: vi.fn(() => true),
+    }) as ManagedChild;
+    const spawn = vi.fn(() => child);
+    const secret = 'refresh-native-secret';
+
+    const refreshed = refreshOpenCodeModels(
+      {
+        directory: '/workspace',
+        providerId: 'opencode-go',
+        dataHome: nativeDataHome(root),
+        secrets: [secret],
+      },
+      { resolveBinary: async () => '/packaged/opencode', spawn }
+    );
+    await vi.waitFor(() => expect(spawn).toHaveBeenCalledOnce());
+    child.stderr?.emit('data', `failed with ${secret}`);
+    child.exitCode = 1;
+    child.emit('close', 1, null);
+
+    const failure = await refreshed.catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(Error);
+    expect((failure as Error).message).toContain('[REDACTED]');
+    expect((failure as Error).message).not.toContain(secret);
   });
 });

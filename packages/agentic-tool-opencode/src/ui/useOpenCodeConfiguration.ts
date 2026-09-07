@@ -6,6 +6,8 @@ interface ResourceState {
   configuration: OpenCodeProviderSettings | null;
   loading: boolean;
   loadFailed: boolean;
+  /** Server-provided failure message, when the load error carried one. */
+  loadError: string | undefined;
   stale: boolean;
   loadedAt: number;
 }
@@ -24,6 +26,7 @@ const EMPTY_STATE: ResourceState = {
   configuration: null,
   loading: false,
   loadFailed: false,
+  loadError: undefined,
   stale: false,
   loadedAt: 0,
 };
@@ -73,7 +76,13 @@ async function load(entry: ResourceEntry, force = false): Promise<void> {
     entry.state.configuration !== null && Date.now() - entry.state.loadedAt < MAX_AGE_MS;
   if (!force && !entry.state.stale && fresh) return;
 
-  publish(entry, { ...entry.state, loading: true, loadFailed: false, stale: false });
+  publish(entry, {
+    ...entry.state,
+    loading: true,
+    loadFailed: false,
+    loadError: undefined,
+    stale: false,
+  });
   const revision = entry.revision;
   const request = (async () => {
     try {
@@ -86,16 +95,24 @@ async function load(entry: ResourceEntry, force = false): Promise<void> {
           configuration,
           loading: false,
           loadFailed: false,
+          loadError: undefined,
           stale: false,
           loadedAt: Date.now(),
         });
       }
-    } catch {
+    } catch (error) {
       if (
         entry.revision === revision &&
         entry.client.get?.('authentication') === entry.authentication
       ) {
-        publish(entry, { ...entry.state, loading: false, loadFailed: true, stale: false });
+        publish(entry, {
+          ...entry.state,
+          loading: false,
+          loadFailed: true,
+          loadError:
+            error instanceof Error && error.message.trim() ? error.message.trim() : undefined,
+          stale: false,
+        });
       }
     } finally {
       entry.request = undefined;
@@ -117,6 +134,7 @@ export function publishOpenCodeConfiguration(
     configuration,
     loading: false,
     loadFailed: false,
+    loadError: undefined,
     stale: false,
     loadedAt: Date.now(),
   });

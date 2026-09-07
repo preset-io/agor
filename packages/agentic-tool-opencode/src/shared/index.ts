@@ -3,7 +3,19 @@ export {
   type OpenCodeExecutorContext,
   parseOpenCodeExecutorContext,
 } from './executor-context.js';
-export { createOpenCodeKnownModelCatalog, OPENCODE_VERSION } from './known-models.js';
+export {
+  createOpenCodeKnownModelCatalog,
+  isKnownActiveOpenCodeModel,
+  knownActiveOpenCodeModels,
+  OPENCODE_VERSION,
+} from './known-models.js';
+
+/**
+ * Executor error code for "the pinned OpenCode binary could not be resolved".
+ * Raised before any credential or server activity, so its message is safe to
+ * surface verbatim to the caller.
+ */
+export const OPENCODE_RUNTIME_UNAVAILABLE_ERROR_CODE = 'OPENCODE_RUNTIME_UNAVAILABLE';
 
 export {
   hasCompleteOpenCodeModelConfig,
