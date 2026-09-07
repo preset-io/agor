@@ -359,7 +359,7 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
     'agor_sessions_get_current',
     {
       description:
-        'Get information about the current session (the one making this MCP call). Returns session details, denormalized branch/repo/board context, and the MCP servers attached to this session (each with `oauth_authenticated` so callers can spot servers needing auth). To browse the broader catalog of servers eligible to attach, use `agor_mcp_servers_list`. The returned session_id is the value a remote orchestrator passes as callbackSessionId (agor_sessions_create) to self-target cross-branch completion callbacks; agor_sessions_get_current_context is the leaner way to fetch it.',
+        'Get information about the current session (the one making this MCP call). Returns session details, denormalized branch/repo/board context, and the MCP servers attached to this session (each with `oauth_authenticated` so callers can spot servers needing auth). To browse the broader catalog of servers eligible to attach, use `agor_mcp_servers_list`. For self callbacks with agor_sessions_create, set enableCallback: true and omit callbackSessionId to target the actual calling session, including cross-branch creation. Only set callbackSessionId for an intentional authorized alternate destination. When explicit current identity is needed, make a fresh call to this tool or the leaner agor_sessions_get_current_context and use its session_id rather than inherited IDs or earlier results.',
       annotations: { readOnlyHint: true },
       inputSchema: z.object({}),
     },
@@ -443,7 +443,7 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
     'agor_sessions_get_current_context',
     {
       description:
-        'Get a lean orientation snapshot for the current session in ONE call. Returns deduplicated context: session identity, user, latest task Git boundaries, branch (zone, issue/PR, notes, environment), board (with zones), repo (slug, default branch), genealogy, and sibling sessions. Every field appears exactly once. Use get_current or entity-specific tools for full details. The returned session_id is what a remote orchestrator passes as callbackSessionId (agor_sessions_create) to self-target cross-branch completion callbacks.',
+        'Get a lean orientation snapshot for the current session in ONE call. Returns deduplicated context: session identity, user, latest task Git boundaries, branch (zone, issue/PR, notes, environment), board (with zones), repo (slug, default branch), genealogy, and sibling sessions. Every field appears exactly once. Use get_current or entity-specific tools for full details. For self callbacks with agor_sessions_create, set enableCallback: true and omit callbackSessionId to target the actual calling session, including cross-branch creation. Only set callbackSessionId for an intentional authorized alternate destination. When explicit current identity is needed, make a fresh call to this tool and use its session_id rather than inherited IDs or earlier results.',
       annotations: { readOnlyHint: true },
       inputSchema: z.object({
         includeSiblings: z
@@ -1049,7 +1049,8 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
           'callbackSessionId',
           'Session',
           'Session ID to notify on completion (defaults to the current/creating session when enableCallback is true). ' +
-            'Not restricted to the target branch: this may be a session in a DIFFERENT branch — e.g. a remote orchestrator registering its own session (fetch that ID via agor_sessions_get_current_context) to be notified when cross-branch work finishes.'
+            'For callbacks to yourself, omit this field, including across branches or from a fork/nested coordinator. ' +
+            'Set it only for an intentional authorized alternate destination, which may be in a different branch.'
         ),
         includeLastMessage: z
           .boolean()

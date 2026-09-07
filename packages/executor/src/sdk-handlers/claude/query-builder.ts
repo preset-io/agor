@@ -9,7 +9,10 @@ import * as fs from 'node:fs/promises';
 import { loadManagedAgenticToolSdk } from '@agor/core/agentic-integrations';
 import { shortId } from '@agor/core/db';
 import { validateDirectory } from '@agor/core/lib/validation';
-import { renderAgorSystemPrompt } from '@agor/core/templates/session-context';
+import {
+  renderAgorSessionIdentity,
+  renderAgorSystemPrompt,
+} from '@agor/core/templates/session-context';
 import { mergeMCPRemoteHeaders } from '@agor/core/tools/mcp/http-headers';
 import { isGatewaySession, type PromptOrigin } from '@agor/core/types';
 import type * as ClaudeSdk from '@anthropic-ai/claude-agent-sdk';
@@ -220,7 +223,8 @@ export async function setupQuery(
   // callback or become available to later logging code.
   let stderrByteLength = 0;
 
-  // Append static Agor orientation. Dynamic context is available through Agor MCP.
+  // Keep orientation stable; refresh identity on every query, including fork/resume.
+  // Use SDK system instructions so native user slash commands remain unchanged.
   const agorSystemPrompt = await renderAgorSystemPrompt();
 
   const queryOptions: Record<string, unknown> = {
@@ -228,7 +232,7 @@ export async function setupQuery(
     systemPrompt: {
       type: 'preset',
       preset: 'claude_code',
-      append: agorSystemPrompt,
+      append: `${agorSystemPrompt}\n\n${renderAgorSessionIdentity(sessionId)}`,
     },
     settingSources: ['user', 'project', 'local'], // Load user + project + local permissions, auto-loads CLAUDE.md
     // SDK 0.3.233+ omits task-list tools on newer model families unless the

@@ -14,7 +14,10 @@ import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { loadManagedAgenticToolSdk } from '@agor/core/agentic-integrations';
-import { renderAgorSystemPrompt } from '@agor/core/templates/session-context';
+import {
+  renderAgorSessionIdentity,
+  renderAgorSystemPrompt,
+} from '@agor/core/templates/session-context';
 import { mergeMCPRemoteHeaders } from '@agor/core/tools/mcp/http-headers';
 import type * as GeminiTypes from '@google/gemini-cli-core';
 import type { Part } from '@google/genai';
@@ -186,7 +189,7 @@ export class GeminiPromptService {
       const configuredModel = session.model_config?.model;
 
       // Prepare initial prompt (just text for now - can enhance with file paths later)
-      let parts: Part[] = [{ text: prompt }];
+      let parts: Part[] = [{ text: prompt }, { text: renderAgorSessionIdentity(sessionId) }];
 
       // Generate unique prompt ID for this turn
       const promptId = `${sessionId}-${Date.now()}`;

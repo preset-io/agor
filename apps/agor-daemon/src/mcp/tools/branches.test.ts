@@ -36,6 +36,7 @@ type ToolHandler = (
 }>;
 
 type ToolConfig = {
+  description?: string;
   inputSchema?: {
     safeParse: (
       value: unknown
@@ -1236,6 +1237,19 @@ describe('branch MCP input schemas', () => {
 });
 
 describe('agor_branches_set_zone', () => {
+  it('recommends omitted-target self callbacks while preserving alternate destinations', () => {
+    const config = registerAndCaptureConfig('agor_branches_set_zone', {
+      app: {},
+      userId: 'user-1',
+    });
+
+    expect(config.description).toContain(
+      'agor_sessions_create with enableCallback:true and omit callbackSessionId for the current caller'
+    );
+    expect(config.description).toContain('agor_sessions_prompt callback');
+    expect(config.description).toContain('intentional authorized alternate destination');
+  });
+
   it('accepts zoneId null and clears the existing board object zone pin', async () => {
     const baseServiceParams = {
       authenticated: true,

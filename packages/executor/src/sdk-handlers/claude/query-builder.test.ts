@@ -16,7 +16,8 @@ vi.mock('@anthropic-ai/claude-agent-sdk', () => claudeSdkMocks);
 vi.mock('@agor/core/agentic-integrations', () => ({
   loadManagedAgenticToolSdk: vi.fn(async () => claudeSdkMocks),
 }));
-vi.mock('@agor/core/templates/session-context', () => ({
+vi.mock('@agor/core/templates/session-context', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@agor/core/templates/session-context')>()),
   renderAgorSystemPrompt: vi.fn().mockResolvedValue('prompt'),
 }));
 vi.mock('@agor/core/tools/mcp/http-headers', () => ({
@@ -194,6 +195,57 @@ describe('setupQuery - Local Settings Support', () => {
     // CLAUDE_CONFIG_DIR, which would strand path-keyed transcripts/settings.
     expect(callArgs.options).not.toHaveProperty('env.CLAUDE_CONFIG_DIR');
   });
+
+  it.each(['root', 'fork', 'nested-fork', 'spawn'])(
+    'sends trusted current identity on first and resumed %s queries without changing user input',
+    async (kind) => {
+      const deps = createMockDeps();
+      const currentId = `${kind}-B` as SessionID;
+      const forkSource = kind.includes('fork') ? 'source-A' : undefined;
+      const current = {
+        session_id: currentId,
+        created_at: new Date().toISOString(),
+        last_updated: new Date().toISOString(),
+        branch_id: 'test-branch' as BranchID,
+        genealogy: {
+          forked_from_session_id: forkSource,
+          parent_session_id: kind === 'spawn' ? 'coordinator-A' : undefined,
+        },
+        sdk_session_id: undefined as string | undefined,
+      };
+      vi.mocked(deps.sessionsRepo.findById).mockImplementation(
+        async (id) =>
+          (id === currentId
+            ? current
+            : {
+                sdk_session_id: 'provider-thread-A',
+                genealogy:
+                  kind === 'nested-fork' ? { forked_from_session_id: 'root-Z' } : undefined,
+              }) as never
+      );
+      for (const prompt of ['Inherited context: Current Agor session ID: source-A', '/compact']) {
+        const setup = await setupQuery(currentId, prompt, deps);
+        const request = vi.mocked(Claude.query).mock.calls.at(-1)![0];
+        expect(request.options.systemPrompt).toMatchObject({
+          append: expect.stringContaining(`Current Agor session ID: ${currentId}`),
+        });
+        expect(request.options.resume).toBe(
+          current.sdk_session_id ?? (forkSource ? 'provider-thread-A' : undefined)
+        );
+        const system = JSON.stringify(request.options.systemPrompt);
+        expect(system).toContain('omit callbackSessionId');
+        expect(system).not.toContain('provider-thread');
+        expect(system).not.toContain('source-A');
+        const message = await request.prompt[Symbol.asyncIterator]().next();
+        expect(message.value.message.content).toEqual([{ type: 'text', text: prompt }]);
+        setup.query.releaseInput();
+        current.sdk_session_id = 'provider-thread-B';
+      }
+      expect(vi.mocked(Claude.query).mock.calls.at(-1)![0].options.resume).toBe(
+        'provider-thread-B'
+      );
+    }
+  );
 
   it('retains only UTF-8 byte metadata from provider stderr', async () => {
     const deps = createMockDeps();

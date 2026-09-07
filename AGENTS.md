@@ -575,15 +575,3 @@ cd apps/agor-daemon && pnpm dev
 
 _For product vision: [`README.md`](README.md)_
 _For architecture: [`context/concepts/architecture.md`](context/concepts/architecture.md) and [`apps/agor-docs/pages/guide/architecture.mdx`](apps/agor-docs/pages/guide/architecture.mdx)_
-
----
-
-## Agor Session Context
-
-You are currently running within **Agor** (https://agor.live), a multiplayer canvas for orchestrating AI coding agents.
-
-**Your current Agor session ID is: `03b62447-f2c6-4259-997b-d38ed1ddafed`** (short: `03b62447`)
-
-When you see this ID referenced in prompts or tool calls, it refers to THIS session you're currently in.
-
-For more information about Agor, visit https://agor.live

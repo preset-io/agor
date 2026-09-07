@@ -42,7 +42,7 @@ Session: "Built user authentication feature"
 └─ Fork: "Generate API documentation"
 ```
 
-Use forks when downstream work needs the _same starting knowledge_ but different focus. (Currently Claude Code only. Other SDKs don't yet expose conversation copy.)
+Use forks when downstream work needs the _same starting knowledge_ but different focus. Agor supports session forks for Claude Code and Codex. Gemini, OpenCode, GitHub Copilot, and Cursor do not currently support session forks in Agor.
 
 ### Spawn — delegate with fresh context
 
@@ -65,7 +65,7 @@ The "btw" button (❓) sits next to the prompt input. Click it, type your questi
 
 For orchestrating agents, the same thing is exposed via `agor_sessions_prompt` with `mode: "btw"`. Agents can ask peer sessions quick questions without breaking their flow.
 
-> BTW uses session forking under the hood, so it's currently Claude-only. For tools without fork support (Codex, Gemini), use `mode: "subsession"` instead.
+> BTW uses session forking under the hood and is supported for Claude Code and Codex. For tools without fork support (Gemini, OpenCode, GitHub Copilot, and Cursor), use `mode: "subsession"` instead.
 
 <img
   src="/screenshots/btw-inline.png"
@@ -196,6 +196,8 @@ Each level delegates to specialized agents. Each session has a focused context w
 **Mind the filesystem.** Forks and spawns share the branch's filesystem. Independent edits = no conflict. Parallel edits to the same file = git conflict. Plan accordingly.
 
 **Use callbacks wisely.** Include the last message for quick status updates. Include the original prompt only when context might be lost. Add extra instructions when you need a specific report format ("include line numbers for all changes").
+
+**Use the current caller for self callbacks.** With `agor_sessions_create`, set `enableCallback: true` and omit `callbackSessionId` to receive completion in the calling session—even from a fork, nested coordinator, or across branches. Only supply `callbackSessionId` for an intentional authorized alternate destination. Inherited conversation examples and shared workspace IDs may refer to an earlier session; the runtime-supplied Agor session identity is distinct from fork ancestry and the provider SDK thread ID.
 
 **Remote callbacks stay linked by default.** Sessions created with callbacks report after each completion until you unlink callbacks from the session relationship control. Unlinking stops delivery without deleting the relationship; select `once` when you only want the next completion. Spawned subsessions and `btw` side questions remain one-shot.
 

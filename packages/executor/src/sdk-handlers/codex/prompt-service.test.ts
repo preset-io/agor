@@ -62,6 +62,7 @@ let mockStartThreadId: string | undefined = 'mock-thread-id';
 let mockStreamFailure: Error | undefined;
 let mockStartThreadOptions: unknown[] = [];
 let mockResumeThreadOptions: unknown[] = [];
+let mockRunStreamedInputs: string[] = [];
 
 async function* streamMockEvents() {
   for (const event of mockStreamEvents) {
@@ -111,7 +112,10 @@ vi.mock('@openai/codex-sdk', () => {
       return {
         id: mockStartThreadId,
         run: vi.fn(),
-        runStreamed: vi.fn().mockResolvedValue({ events: streamMockEvents() }),
+        runStreamed: vi.fn(async (input: string) => {
+          mockRunStreamedInputs.push(input);
+          return { events: streamMockEvents() };
+        }),
       };
     }
 
@@ -120,7 +124,10 @@ vi.mock('@openai/codex-sdk', () => {
       return {
         id: threadId,
         run: vi.fn(),
-        runStreamed: vi.fn().mockResolvedValue({ events: streamMockEvents() }),
+        runStreamed: vi.fn(async (input: string) => {
+          mockRunStreamedInputs.push(input);
+          return { events: streamMockEvents() };
+        }),
       };
     }
   }
@@ -153,6 +160,7 @@ describe('CodexPromptService - SDK Instance Caching (issue #133)', () => {
     mockStartThreadId = 'mock-thread-id';
     mockStartThreadOptions = [];
     mockResumeThreadOptions = [];
+    mockRunStreamedInputs = [];
     delete process.env.OPENAI_BASE_URL;
     vi.clearAllMocks();
     appServerMocks.forkCodexThreadViaAppServer.mockReset();
@@ -347,6 +355,7 @@ describe('CodexPromptService - prompt flow client initialization', () => {
     mockStreamEvents = [];
     mockStartThreadOptions = [];
     mockResumeThreadOptions = [];
+    mockRunStreamedInputs = [];
     delete process.env.OPENAI_BASE_URL;
     delete process.env.AGOR_CODEX_SANDBOX_MODE;
     // These cases exercise Codex's own sandbox policy. The Agor test runner
@@ -569,6 +578,7 @@ describe('CodexPromptService - prompt flow client initialization', () => {
       expect(emitted.find((event) => event.type === 'complete')).toMatchObject({
         threadId: 'mock-thread-id',
       });
+      expect(mockRunStreamedInputs.at(-1)).toContain('Current Agor session ID: session-flow');
       expect(mockStartThreadOptions.at(-1)).toMatchObject({
         model: 'gpt-5.4',
         modelReasoningEffort: 'medium',
@@ -768,93 +778,130 @@ describe('CodexPromptService - forked sessions', () => {
     mockStreamEvents = [];
     mockStartThreadOptions = [];
     mockResumeThreadOptions = [];
+    mockRunStreamedInputs = [];
     delete process.env.OPENAI_BASE_URL;
     vi.clearAllMocks();
     appServerMocks.forkCodexThreadViaAppServer.mockReset();
   });
 
-  it('forks the parent Codex thread via app-server before resuming the child thread', async () => {
-    const service = new CodexPromptService(
-      mockMessagesRepo,
-      mockSessionsRepo,
-      mockSessionMCPServerRepo,
-      mockBranchesRepo,
-      undefined,
-      'test-api-key',
-      mockDb
-    );
+  it.each(['direct', 'nested'])(
+    'forks %s parent history with fresh model-visible and MCP identity on both turns',
+    async (kind) => {
+      const service = new CodexPromptService(
+        mockMessagesRepo,
+        mockSessionsRepo,
+        mockSessionMCPServerRepo,
+        mockBranchesRepo,
+        undefined,
+        'test-api-key',
+        mockDb
+      );
 
-    const serviceWithPrivates = service as any;
-    serviceWithPrivates.ensureCodexInstructionsFile = vi
-      .fn()
-      .mockResolvedValue('/tmp/agor-codex-instructions-child.md');
-    serviceWithPrivates.buildMcpServersConfig = vi
-      .fn()
-      .mockResolvedValue({ servers: {}, total: 0 });
-    await serviceWithPrivates.ensureCodexClient({
-      model_instructions_file: '/tmp/agor-codex-instructions-mock.md',
-    });
-    serviceWithPrivates.ensureCodexClient = vi.fn();
-    serviceWithPrivates.refreshClient = vi.fn();
+      // Exercise actual instruction-file and MCP config construction, not a
+      // preconfigured client that hides whether a fork retained its parent's
+      // bearer. The SDK/app-server remain mocked: this cannot prove which
+      // callbackSessionId a model chooses from inherited conversation history.
+      configMocks.getDaemonUrl.mockResolvedValue('http://localhost:3030');
+      mcpScopingMocks.getMcpServersForSession.mockResolvedValue([]);
 
-    const childSession = {
-      session_id: 'child-session',
-      branch_id: 'branch-1',
-      created_at: new Date().toISOString(),
-      sdk_session_id: null,
-      genealogy: { forked_from_session_id: 'parent-session' },
-      permission_config: { codex: {} },
-      model_config: { effort: 'max' },
-      mcp_token: 'test-token',
-    };
-    const parentSession = {
-      session_id: 'parent-session',
-      branch_id: 'branch-1',
-      created_at: new Date().toISOString(),
-      sdk_session_id: 'parent-thread-id',
-      permission_config: { codex: {} },
-      model_config: {},
-      mcp_token: 'test-token',
-    };
+      const childSession = {
+        session_id: 'child-session',
+        branch_id: 'branch-1',
+        created_at: new Date().toISOString(),
+        sdk_session_id: null,
+        genealogy: { forked_from_session_id: 'parent-session' },
+        permission_config: { codex: {} },
+        model_config: { effort: 'max' },
+        mcp_token: 'child-test-token',
+      };
+      const parentSession = {
+        session_id: 'parent-session',
+        branch_id: 'branch-1',
+        created_at: new Date().toISOString(),
+        sdk_session_id: 'parent-thread-id',
+        genealogy: kind === 'nested' ? { forked_from_session_id: 'root-session' } : undefined,
+        permission_config: { codex: {} },
+        model_config: {},
+        mcp_token: 'parent-test-token',
+      };
 
-    mockSessionsRepo.findById.mockImplementation(async (id: string) => {
-      if (id === 'child-session') return childSession;
-      if (id === 'parent-session') return parentSession;
-      return null;
-    });
-    mockSessionsRepo.update.mockResolvedValue(undefined);
-    mockBranchesRepo.findById.mockResolvedValue({
-      branch_id: 'branch-1',
-      path: process.cwd(),
-    });
-    appServerMocks.forkCodexThreadViaAppServer.mockResolvedValue('forked-thread-id');
+      mockSessionsRepo.findById.mockImplementation(async (id: string) => {
+        if (id === 'child-session') return childSession;
+        if (id === 'parent-session') return parentSession;
+        return null;
+      });
+      mockSessionsRepo.update.mockResolvedValue(undefined);
+      mockBranchesRepo.findById.mockResolvedValue({
+        branch_id: 'branch-1',
+        path: process.cwd(),
+      });
+      appServerMocks.forkCodexThreadViaAppServer.mockResolvedValue('forked-thread-id');
 
-    mockStreamEvents = [
-      {
-        type: 'turn.completed',
-        usage: { input_tokens: 1, cached_input_tokens: 0, output_tokens: 1 },
-      },
-    ];
+      mockStreamEvents = [
+        {
+          type: 'turn.completed',
+          usage: { input_tokens: 1, cached_input_tokens: 0, output_tokens: 1 },
+        },
+      ];
 
-    const emitted: Array<Record<string, unknown>> = [];
-    for await (const event of service.promptSessionStreaming('child-session' as any, 'continue')) {
-      emitted.push(event as Record<string, unknown>);
+      try {
+        for (const prompt of [
+          'Inherited example: callbackSessionId=parent-session. First fork turn.',
+          'Resume fork; inherited context still identifies parent-session.',
+        ]) {
+          const emitted: Array<Record<string, unknown>> = [];
+          for await (const event of service.promptSessionStreaming(
+            'child-session' as SessionID,
+            prompt
+          )) {
+            emitted.push(event as Record<string, unknown>);
+          }
+
+          const config = mockInstanceConfigs.at(-1) as {
+            model_instructions_file: string;
+            mcp_servers: { agor: { url: string; bearer_token_env_var: string } };
+          };
+          expect(path.basename(config.model_instructions_file)).toBe(
+            'agor-codex-instructions-child-session.md'
+          );
+          expect(await fs.readFile(config.model_instructions_file, 'utf8')).toContain(
+            'agor_sessions_get_current_context'
+          );
+          expect(config.mcp_servers.agor.url).toBe('http://localhost:3030/mcp');
+          expect(process.env[config.mcp_servers.agor.bearer_token_env_var]).toBe(
+            'child-test-token'
+          );
+          expect(emitted.find((event) => event.type === 'complete')).toMatchObject({
+            threadId: 'forked-thread-id',
+          });
+        }
+
+        expect(appServerMocks.forkCodexThreadViaAppServer).toHaveBeenCalledTimes(1);
+        expect(appServerMocks.forkCodexThreadViaAppServer).toHaveBeenCalledWith(
+          'parent-thread-id',
+          expect.objectContaining({ env: expect.any(Object) })
+        );
+        expect(mockSessionsRepo.update).toHaveBeenCalledWith('child-session', {
+          sdk_session_id: 'forked-thread-id',
+        });
+        expect(mockRunStreamedInputs).toHaveLength(2);
+        for (const input of mockRunStreamedInputs) {
+          expect(input).toContain('parent-session');
+          expect(input).toContain('Current Agor session ID: child-session');
+          expect(input).toContain('omit callbackSessionId');
+          expect(input).not.toContain('Current Agor session ID: parent-session');
+          expect(input).not.toContain('forked-thread-id');
+          expect(input).not.toContain('child-test-token');
+        }
+        expect(mockInstanceCount).toBe(1);
+        expect(mockSessionsRepo.findById).not.toHaveBeenCalledWith('root-session');
+        expect(mockResumeThreadOptions).toHaveLength(2);
+        expect(mockResumeThreadOptions.at(-1)).toMatchObject({ modelReasoningEffort: 'max' });
+      } finally {
+        await service.closeSession('child-session' as SessionID);
+      }
     }
-
-    expect(appServerMocks.forkCodexThreadViaAppServer).toHaveBeenCalledWith(
-      'parent-thread-id',
-      expect.objectContaining({ env: expect.any(Object) })
-    );
-    expect(mockSessionsRepo.update).toHaveBeenCalledWith('child-session', {
-      sdk_session_id: 'forked-thread-id',
-    });
-    expect(emitted.find((event) => event.type === 'complete')).toMatchObject({
-      threadId: 'forked-thread-id',
-    });
-    expect(mockResumeThreadOptions.at(-1)).toMatchObject({
-      modelReasoningEffort: 'max',
-    });
-  });
+  );
 });
 
 describe('CodexPromptService - Todo normalization', () => {

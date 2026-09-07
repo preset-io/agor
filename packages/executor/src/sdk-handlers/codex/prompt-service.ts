@@ -38,7 +38,10 @@ import {
   sanitizeMCPExternalError,
 } from '@agor/core/mcp';
 import type { CodexOptions, Thread, ThreadItem, TurnCompletedEvent } from '@agor/core/sdk';
-import { renderAgorSystemPrompt } from '@agor/core/templates/session-context';
+import {
+  renderAgorSessionIdentity,
+  renderAgorSystemPrompt,
+} from '@agor/core/templates/session-context';
 import { mergeMCPRemoteHeaders } from '@agor/core/tools/mcp/http-headers';
 import type { CodexSandboxMode, ContextUsageSnapshot, MCPServer } from '@agor/core/types';
 import { getDefaultPermissionMode, isGatewaySession } from '@agor/core/types';
@@ -1395,7 +1398,10 @@ export class CodexPromptService {
       // The signal is passed to Codex SDK which will throw AbortError when aborted
       codexDebug(`🎬 [Codex] Starting runStreamed() for session ${shortId(sessionId)}`);
       const turnOptions = abortController ? { signal: abortController.signal } : undefined;
-      const { events } = await thread.runStreamed(prompt, turnOptions);
+      // Refresh model-visible identity even when a fork/resume retains old SDK instructions.
+      // Keep the persisted user prompt and cached client configuration unchanged.
+      const providerPrompt = `${prompt}\n\n${renderAgorSessionIdentity(sessionId)}`;
+      const { events } = await thread.runStreamed(providerPrompt, turnOptions);
       runtimePhase = 'streaming';
       codexDebug(`✅ [Codex] runStreamed() returned, starting event iteration`);
 
