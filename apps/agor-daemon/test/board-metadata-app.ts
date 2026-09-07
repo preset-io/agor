@@ -13,6 +13,7 @@ import {
   feathers,
   feathersExpress,
   rest,
+  socketio,
 } from '@agor/core/feathers';
 import type { HookContext, UserID } from '@agor/core/types';
 import express from 'express';
@@ -23,18 +24,20 @@ import { createBoardsService } from '../src/services/boards.js';
 import { setupCapabilityPolicyServices } from '../src/services/capability-policies.js';
 import { setupBoardEffectiveAccessService } from '../src/services/groups.js';
 import { createUsersService } from '../src/services/users.js';
+import { configureChannels, createSocketIOConfig } from '../src/setup/socketio.js';
 
 const JWT_SECRET = 'board-metadata-disposable-test-secret';
 
 /** Real REST/auth/hooks/repositories; only unrelated daemon services are inert. */
 export async function boardMetadataTestApp(
   db: TenantScopeAwareDatabase,
-  config: RegisterHooksContext['config']
+  config: RegisterHooksContext['config'],
+  withSocketIO = false
 ) {
   const app = feathersExpress(feathers());
   app.use(express.json());
   app.configure(rest());
-  (app as unknown as { publish: () => void }).publish = () => undefined;
+  if (!withSocketIO) (app as unknown as { publish: () => void }).publish = () => undefined;
   app.set('config', config);
   app.set('authentication', {
     secret: JWT_SECRET,
@@ -72,6 +75,15 @@ export async function boardMetadataTestApp(
     new RuntimeJWTStrategy({ multiTenancy: resolveMultiTenancyConfig(config) })
   );
   app.use('authentication', authentication);
+  if (withSocketIO) {
+    const sockets = createSocketIOConfig(app, {
+      corsOrigin: '*',
+      credentialsAllowed: false,
+      multiTenancy: resolveMultiTenancyConfig(config),
+    });
+    app.configure(socketio(sockets.serverOptions, sockets.callback));
+    configureChannels(app);
+  }
   const boardsService = createBoardsService(db);
   app.use('boards', boardsService);
   setupBoardEffectiveAccessService(app, new BoardRepository(db), { allowSuperadmin: false });

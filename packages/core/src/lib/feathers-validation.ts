@@ -9,6 +9,7 @@ import { Ajv } from '@feathersjs/schema';
 import type { TObject, TProperties } from '@feathersjs/typebox';
 import { getValidator, Type } from '@feathersjs/typebox';
 import { AGENTIC_TOOL_NAMES, PERSISTED_AGENTIC_TOOL_NAMES } from '../types/agentic-tool';
+import { MAX_PRESENCE_BOARD_SUBSCRIPTIONS } from '../types/presence';
 
 /**
  * Query validator with type coercion enabled
@@ -300,7 +301,19 @@ export const branchQuerySchema = createQuerySchema(
  */
 export const boardQuerySchema = createQuerySchema(
   Type.Object({
-    board_id: Type.Optional(CommonSchemas.uuid),
+    // Presence authorizes a bounded set through the same registered find hooks
+    // as REST/Socket.IO lists. Keep every ID validated and retain scalar queries.
+    board_id: Type.Optional(
+      Type.Union([
+        CommonSchemas.uuid,
+        Type.Object(
+          {
+            $in: Type.Array(CommonSchemas.uuid, { maxItems: MAX_PRESENCE_BOARD_SUBSCRIPTIONS }),
+          },
+          { additionalProperties: false }
+        ),
+      ])
+    ),
     name: Type.Optional(Type.String({ maxLength: 255 })),
     slug: Type.Optional(Type.String({ maxLength: 255 })),
     created_by: Type.Optional(CommonSchemas.uuid),
