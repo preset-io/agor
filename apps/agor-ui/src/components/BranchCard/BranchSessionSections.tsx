@@ -74,6 +74,7 @@ import {
   collectSessionSubtreeIds,
   type SessionTreeNode,
 } from './buildSessionTree';
+import { PagedSessions } from './PagedSessions';
 
 // Stable theme object so the ConfigProvider context value doesn't churn.
 const NO_MOTION_THEME = { token: { motion: false } };
@@ -979,7 +980,9 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
     expandableKeys: React.Key[]
   ) => (
     <Tree
-      className="agor-flat-tree"
+      className="agor-flat-tree nodrag nowheel"
+      height={400}
+      virtual
       treeData={treeData}
       expandedKeys={expandedKeys}
       onExpand={(keys) => handleSessionTreeExpand(keys as React.Key[], expandableKeys)}
@@ -1045,8 +1048,8 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
   );
 
   const scheduledRunsContent = isScheduledRunsOpen ? (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-      {scheduledSessions.map((session) => {
+    <PagedSessions key={branch.branch_id} sessions={scheduledSessions}>
+      {(session) => {
         const isActive = isSessionExecuting(session);
         const callbackToggle = getCallbackToggle(session);
         const remoteParentId = getRemoteParentId(session);
@@ -1092,8 +1095,8 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
             </button>
           </SessionItemWithActions>
         );
-      })}
-    </div>
+      }}
+    </PagedSessions>
   ) : null;
 
   const gatewaySessionsHeader = (
@@ -1161,9 +1164,9 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
             </Typography.Text>
           </div>
         ) : (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-            {searchResults.map((session) => renderFlatSessionRow(session, trimmedSearchQuery))}
-          </div>
+          <PagedSessions key={`${branch.branch_id}:${trimmedSearchQuery}`} sessions={searchResults}>
+            {(session) => renderFlatSessionRow(session, trimmedSearchQuery)}
+          </PagedSessions>
         )}
 
         {forkSpawnModal.session && (

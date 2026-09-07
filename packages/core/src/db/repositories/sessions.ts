@@ -118,6 +118,7 @@ function isSessionTimestampNeutralPatch(updates: SessionUpdate): boolean {
 
 /** Options for the SQL-backed session list page used by board/branch views. */
 export interface SessionPageOptions {
+  status?: SessionStatus;
   boardId?: string;
   branchId?: BranchID;
   branchIds?: BranchID[];
@@ -574,6 +575,7 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
       const baseUrl = await getBaseUrl();
 
       const conditions = [];
+      if (opts.status !== undefined) conditions.push(eq(sessions.status, opts.status));
       if (opts.boardId !== undefined) conditions.push(eq(branches.board_id, opts.boardId));
       if (opts.branchId !== undefined) conditions.push(eq(sessions.branch_id, opts.branchId));
       if (opts.branchIds !== undefined)
