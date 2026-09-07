@@ -190,6 +190,13 @@ describe('shared environment command admission and transitions', () => {
       await commands.admit({ branch, action: 'start', attemptId: id, userId: user.user_id });
       for (const patch of [
         { environment_instance: { status: 'stopped' as const } },
+        {
+          environment_instance: {
+            status: 'stopped' as const,
+            process: undefined,
+            last_error: undefined,
+          },
+        },
         { start_command: 'evil' },
         { archived: true },
         { path: '/elsewhere' },

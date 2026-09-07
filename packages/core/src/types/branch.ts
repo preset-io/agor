@@ -595,8 +595,9 @@ export type BranchEnvironmentClearableField = (typeof BRANCH_ENVIRONMENT_CLEARAB
  *
  * `null` is accepted for clearable optional runtime fields because executor
  * callbacks cross a JSON boundary, where `undefined` values are dropped.
- * The daemon normalizes both explicit `null` and in-process `undefined` by
- * deleting these fields before persisting the merged environment instance.
+ * The daemon normalizes explicit `null` to an own `undefined` clear marker.
+ * The repository deletes marked fields after its atomic merge, before storage.
+ * Omitted fields preserve existing values.
  */
 export type BranchEnvironmentUpdate = Omit<
   Partial<BranchEnvironmentInstance>,

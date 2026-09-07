@@ -2343,12 +2343,17 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       ...environmentUpdate,
     } as EnvironmentInstance;
 
+    // Keep explicit clears in the repository patch. Omitting a field means
+    // preserve during its atomic deep merge, not delete. The normalized copy
+    // remains tombstone-free for state-change comparison.
+    const environmentPatch = { ...updatedEnvironment };
     for (const key of BRANCH_ENVIRONMENT_CLEARABLE_FIELDS) {
       if (
         Object.hasOwn(environmentUpdate, key) &&
         (environmentUpdate[key] === undefined || environmentUpdate[key] === null)
       ) {
         delete updatedEnvironment[key];
+        environmentPatch[key] = undefined;
       }
     }
 
@@ -2393,7 +2398,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       return this.withTenantDatabase(resolvedParams, () =>
         this.branchRepo.update(
           id,
-          { environment_instance: updatedEnvironment },
+          { environment_instance: environmentPatch },
           { preserveUpdatedAt: true }
         )
       );
@@ -2404,7 +2409,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
           await this.branchRepo.update(
             id,
             {
-              environment_instance: updatedEnvironment,
+              environment_instance: environmentPatch,
               updated_at: new Date().toISOString(),
             },
             { invalidateEnvironmentObservation: true }
@@ -2415,7 +2420,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
           this.patch(
             id,
             {
-              environment_instance: updatedEnvironment,
+              environment_instance: environmentPatch,
               updated_at: new Date().toISOString(),
             },
             resolvedParams

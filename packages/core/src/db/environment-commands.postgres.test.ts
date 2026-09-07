@@ -29,6 +29,39 @@ describe.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
       for (const db of [a, b])
         await (db as Database & { $client: { end(): Promise<void> } }).$client.end();
     });
+    it('legacy environment clears persist across replicas without crossing tenants', async () => {
+      const tenant = `clear-${generateId()}` as TenantID;
+      const { branch } = await runWithTenantDatabaseScope(a, tenant, seedEnvironmentCommandBranch);
+      await runWithTenantDatabaseScope(a, tenant, (db) =>
+        new BranchRepository(db).update(branch.branch_id, {
+          environment_instance: { status: 'error', last_error: 'failed', process: { pid: 123 } },
+        })
+      );
+      const clear = {
+        environment_instance: {
+          status: 'stopped' as const,
+          process: undefined,
+          last_error: undefined,
+        },
+      };
+      await runWithTenantDatabaseScope(b, `foreign-${generateId()}` as TenantID, async (db) => {
+        await expect(new BranchRepository(db).update(branch.branch_id, clear)).rejects.toThrow();
+      });
+      await runWithTenantDatabaseScope(a, tenant, async (db) => {
+        expect(
+          (await new BranchRepository(db).findById(branch.branch_id))?.environment_instance
+        ).toMatchObject({ last_error: 'failed', process: { pid: 123 } });
+      });
+      await runWithTenantDatabaseScope(b, tenant, (db) =>
+        new BranchRepository(db).update(branch.branch_id, clear)
+      );
+      await runWithTenantDatabaseScope(a, tenant, async (db) => {
+        expect(
+          (await new BranchRepository(db).findById(branch.branch_id))?.environment_instance
+        ).toEqual({ status: 'stopped' });
+      });
+    });
+
     it('admits and claims once, settles on another replica, rejects foreign tenants and stale confirmation', async () => {
       const tenant = `command-${generateId()}` as TenantID;
       const { branch, user } = await runWithTenantDatabaseScope(

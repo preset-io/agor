@@ -1007,8 +1007,8 @@ describe('BranchesService environment start async behavior', () => {
       | Record<string, unknown>
       | undefined;
     expect(patchedEnvironment).toMatchObject({ status: 'stopped' });
-    expect(patchedEnvironment).not.toHaveProperty('process');
-    expect(patchedEnvironment).not.toHaveProperty('last_health_check');
+    expect(patchedEnvironment).toHaveProperty('process', undefined);
+    expect(patchedEnvironment).toHaveProperty('last_health_check', undefined);
     expect(patchSpy).toHaveBeenCalledWith(
       branch.branch_id,
       expect.objectContaining({
@@ -1104,9 +1104,9 @@ describe('BranchesService environment start async behavior', () => {
       | Record<string, unknown>
       | undefined;
     expect(patchedEnvironment).toMatchObject({ status: 'starting' });
-    expect(patchedEnvironment).not.toHaveProperty('process');
-    expect(patchedEnvironment).not.toHaveProperty('last_error');
-    expect(patchedEnvironment).not.toHaveProperty('last_command');
+    expect(patchedEnvironment).toHaveProperty('process', undefined);
+    expect(patchedEnvironment).toHaveProperty('last_error', undefined);
+    expect(patchedEnvironment).toHaveProperty('last_command', undefined);
   });
 });
 

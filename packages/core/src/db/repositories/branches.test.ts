@@ -937,6 +937,38 @@ describe('BranchRepository.update', () => {
     }
   );
 
+  dbTest(
+    'environment clears are explicit while omitted and nested patch fields still merge',
+    async ({ db }) => {
+      const repo = await new RepoRepository(db).create(createRepoData());
+      const branches = new BranchRepository(db);
+      const branch = await branches.create(
+        createBranchData({
+          repo_id: repo.repo_id,
+          environment_instance: {
+            status: 'error',
+            last_error: 'failed',
+            process: { pid: 123, started_at: 'old' },
+          },
+        })
+      );
+      await branches.update(branch.branch_id, {
+        environment_instance: { status: 'starting', process: { started_at: 'new' } },
+      });
+      expect((await branches.findById(branch.branch_id))?.environment_instance).toEqual({
+        status: 'starting',
+        last_error: 'failed',
+        process: { pid: 123, started_at: 'new' },
+      });
+      await branches.update(branch.branch_id, {
+        environment_instance: { status: 'stopped', process: undefined, last_error: undefined },
+      });
+      expect((await branches.findById(branch.branch_id))?.environment_instance).toEqual({
+        status: 'stopped',
+      });
+    }
+  );
+
   dbTest('can preserve updated_at for observation-only bookkeeping', async ({ db }) => {
     const repoRepo = new RepoRepository(db);
     const branchRepo = new BranchRepository(db);

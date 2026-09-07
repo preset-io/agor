@@ -19,6 +19,7 @@ import type {
 import { and, asc, desc, eq, exists, inArray, isNull, like, or, type SQL, sql } from 'drizzle-orm';
 import { getBaseUrl } from '../../config/config-manager';
 import { generateId } from '../../lib/ids';
+import { BRANCH_ENVIRONMENT_CLEARABLE_FIELDS } from '../../types/branch';
 import { hasActiveEnvironmentCommand } from '../../types/environment-command';
 import { getBranchUrl } from '../../utils/url';
 import type { Database } from '../client';
@@ -696,6 +697,19 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
         created_at: current.created_at, // Never change created timestamp
         updated_at: options?.preserveUpdatedAt ? current.updated_at : new Date().toISOString(),
       });
+      // Environment callbacks have an explicit-clear contract. Apply its
+      // tombstones AFTER merging under the row lock so stale runtime fields
+      // cannot reappear. Omitted fields and other nested patches still merge.
+      if (merged.environment_instance && updates.environment_instance) {
+        for (const key of BRANCH_ENVIRONMENT_CLEARABLE_FIELDS) {
+          if (
+            Object.hasOwn(updates.environment_instance, key) &&
+            updates.environment_instance[key] == null
+          ) {
+            delete merged.environment_instance[key];
+          }
+        }
+      }
       // A materialization error describes only the failed filesystem state.
       // Clear it atomically with every explicit transition away from failed
       // so a successful retry/unarchive cannot remain visually poisoned by
