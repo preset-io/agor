@@ -8,14 +8,18 @@
  * list — WITHOUT disturbing non-widget order, message indices, or identity.
  */
 
+import { AUTHORIZATION_REVOKED_TERMINATION_MESSAGE } from '@agor/core/types';
 import type { Message, Task } from '@agor-live/client';
-import { describe, expect, it } from 'vitest';
+import { render, screen } from '@testing-library/react';
+import { describe, expect, it, vi } from 'vitest';
 
 import {
   type Block,
   groupMessagesIntoBlocks,
+  isAuthorizationRevokedFailure,
   isVerifiedRuntimeInterruption,
   shouldRenderLiveTaskProgress,
+  TaskBlock,
 } from './TaskBlock';
 
 function userMessage(index: number, id: string): Message {
@@ -170,7 +174,7 @@ describe('verified runtime interruption projection', () => {
     expect(isVerifiedRuntimeInterruption(task, false)).toBe(false);
   });
 
-  it('keeps unverified containment and user Stop out of Resume UX', () => {
+  it('keeps non-resumable outcomes out of Resume UX', () => {
     expect(
       isVerifiedRuntimeInterruption(
         { ...task, sdk_failure: { ...task.sdk_failure!, termination: 'unverified' } } as Task,
@@ -183,6 +187,79 @@ describe('verified runtime interruption projection', () => {
         true
       )
     ).toBe(false);
+    expect(
+      isVerifiedRuntimeInterruption(
+        {
+          ...task,
+          termination_request: {
+            ...task.termination_request!,
+            cause: 'authorization_revoked',
+          },
+        },
+        true
+      )
+    ).toBe(false);
+  });
+});
+
+describe('authorization-revoked failure projection', () => {
+  it('shows durable revoked authority without synthesizing a transcript message', () => {
+    expect(
+      isAuthorizationRevokedFailure({
+        status: 'failed',
+        termination_request: { cause: 'authorization_revoked' },
+      } as Task)
+    ).toBe(true);
+  });
+
+  it('does not relabel an in-flight or unrelated failure', () => {
+    expect(
+      isAuthorizationRevokedFailure({
+        status: 'stopping',
+        termination_request: { cause: 'authorization_revoked' },
+      } as Task)
+    ).toBe(false);
+    expect(
+      isAuthorizationRevokedFailure({
+        status: 'failed',
+        termination_request: { cause: 'heartbeat_lost' },
+      } as Task)
+    ).toBe(false);
+  });
+
+  it('renders the durable sanitized reason inside the expanded Task', () => {
+    render(
+      <TaskBlock
+        task={
+          {
+            task_id: 'task-revoked',
+            session_id: 'session-1',
+            status: 'failed',
+            created_at: '2026-08-30T19:26:18.933Z',
+            created_by: 'user-1',
+            full_prompt: 'sleep 300',
+            error_message: AUTHORIZATION_REVOKED_TERMINATION_MESSAGE,
+            termination_request: { cause: 'authorization_revoked' },
+            git_state: { ref_at_start: 'main', sha_at_start: 'unknown' },
+            message_range: {
+              start_index: 0,
+              end_index: 0,
+              start_timestamp: '2026-08-30T19:26:18.933Z',
+            },
+            tool_use_count: 0,
+          } as Task
+        }
+        isExpanded
+        onExpandChange={vi.fn()}
+        taskMessages={[]}
+        taskMessagesLoaded
+        onLoadTaskMessages={vi.fn()}
+        onUnloadTaskMessages={vi.fn()}
+      />
+    );
+
+    expect(screen.getByText('Task access revoked')).toBeInTheDocument();
+    expect(screen.getByText(AUTHORIZATION_REVOKED_TERMINATION_MESSAGE)).toBeInTheDocument();
   });
 });
 

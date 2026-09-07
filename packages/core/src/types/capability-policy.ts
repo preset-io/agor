@@ -3,6 +3,10 @@ import type { BoardID, GroupID, UserID, UUID } from './id';
 /** Canonical board/branch capability-policy contract. */
 export const CAPABILITY_POLICY_SCHEMA_VERSION = 1 as const;
 
+/** Durable workspace-preference identifiers used by shared-session policy. */
+export const CAPABILITY_POLICY_WORKSPACE_PREFERENCES_NAMESPACE = 'workspace_preferences' as const;
+export const CAPABILITY_POLICY_SESSION_SHARING_KEY = 'session_sharing_enabled' as const;
+
 export type CapabilityPolicySchemaVersion = typeof CAPABILITY_POLICY_SCHEMA_VERSION;
 export type CapabilityPolicySharingMode = 'private' | 'shared';
 export type CapabilityPolicyBindingMode = 'inherit' | 'override';

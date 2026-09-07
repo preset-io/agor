@@ -207,7 +207,6 @@ function notesPreview(notes: string | undefined, maxLength = 200): string | null
 }
 
 async function shouldScopeTeammateDiscoveryToUser(ctx: McpContext): Promise<boolean> {
-  if (ctx.app.get('config').execution?.branch_rbac !== true) return false;
   if (ctx.authenticatedUser?._isServiceAccount) return false;
 
   const config = ctx.app.get('config');
@@ -1448,12 +1447,14 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
         const renderedPrompt = renderTemplate(zone.trigger!.template, templateContext);
 
         if (renderedPrompt) {
-          const task = await ctx.app
-            .service('/sessions/:id/prompt')
-            .create(
-              { prompt: renderedPrompt, stream: true },
-              { ...ctx.baseServiceParams, route: { id: targetSessionId } }
-            );
+          const task = await ctx.app.service('/sessions/:id/prompt').create(
+            {
+              prompt: renderedPrompt,
+              stream: true,
+              metadata: { system_authored: true },
+            },
+            { ...ctx.baseServiceParams, provider: undefined, route: { id: targetSessionId } }
+          );
 
           if (task.status === 'queued') {
             promptResult = {

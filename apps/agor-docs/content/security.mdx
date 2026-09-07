@@ -25,7 +25,6 @@ Agor 0.25 supports three execution modes:
 ```yaml
 execution:
   unix_user_mode: simple
-  branch_rbac: false
 ```
 
 Every local executor and terminal runs as the daemon user. Application RBAC can still restrict API operations, but it does not protect daemon-readable files from shell or agent code.
@@ -37,7 +36,7 @@ execution:
   unix_user_mode: sandbox
 ```
 
-Sandbox mode enables branch RBAC and a fail-closed Linux bubblewrap filesystem policy. Executors still run as the daemon uid; isolation comes from mount visibility, not host accounts, groups, ACLs, or sudo impersonation. There is no fallback to `simple` when bubblewrap is unavailable.
+Sandbox mode adds a fail-closed Linux bubblewrap filesystem policy to Agor's always-on RBAC. Executors still run as the daemon uid; isolation comes from mount visibility, not host accounts, groups, ACLs, or sudo impersonation. There is no fallback to `simple` when bubblewrap is unavailable.
 
 ### Delegated
 
@@ -56,7 +55,7 @@ The launcher command receives a curated minimal process environment. The authent
 
 ## Board and branch permissions (RBAC)
 
-When `branch_rbac: true` is set, every board and branch has one primary owner plus normalized user, group, and **Others** rules. The primary owner cannot be reassigned. A direct user rule takes precedence over groups; otherwise matching group rules combine. Others is only the fallback for an active same-workspace member with no direct or group match.
+Board and branch RBAC is always enabled. Every board and branch has one primary owner plus normalized user, group, and **Others** rules. The primary owner cannot be reassigned. A direct user rule takes precedence over groups; otherwise matching group rules combine. Others is only the fallback for an active same-workspace member with no direct or group match.
 
 Board access and branch access are separate. A board has one policy for who can see or manage its canvas and one complete default package for its branches. A branch either inherits that package or overrides all of it.
 

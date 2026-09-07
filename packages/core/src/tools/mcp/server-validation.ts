@@ -4,6 +4,7 @@ import {
   hasTemplateMarker,
   isValidMCPHttpUrlTemplate,
 } from '../../mcp/template-patterns';
+import { isCanonicalFullUuid } from '../../types/id';
 import { MCP_SCOPES, MCP_TRANSPORTS, type MCPServer } from '../../types/mcp';
 import { assertValidMCPAuthPatch } from './auth-patch';
 import {
@@ -490,8 +491,8 @@ function validateMCPServerWrite(value: unknown, options: MCPServerWriteValidatio
     throw new Error('replace_auth requires auth to be provided');
   }
   if (record.owner_user_id !== undefined && record.owner_user_id !== null) {
-    if (typeof record.owner_user_id !== 'string' || !isValidUUID(record.owner_user_id)) {
-      throw new Error('owner_user_id must be a UUIDv7 or null');
+    if (!isCanonicalFullUuid(record.owner_user_id)) {
+      throw new Error('owner_user_id must be a canonical full UUID or null');
     }
   }
   if (record.expected_config_version !== undefined) {

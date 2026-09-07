@@ -18,6 +18,7 @@ import {
 import {
   BranchRepository,
   bindRepositoryToTenantUnitOfWork,
+  EntityNotFoundError,
   getCurrentTenantId,
   runWithTenantDatabaseScope,
   runWithTenantDatabaseTransaction,
@@ -38,6 +39,7 @@ import {
   NotAuthenticated,
   NotFound,
 } from '@agor/core/feathers';
+import { MCPServerNotUsableError } from '@agor/core/mcp';
 import {
   formatModelToolMismatchWarning,
   getCodexModelSelectionError,
@@ -137,6 +139,17 @@ function resolvedSessionModelConfig(
   return modelConfig;
 }
 
+function normalizeCreateMcpServerIds(value: unknown): MCPServerID[] | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value)) {
+    throw new BadRequest('mcpServerIds must be an array');
+  }
+  if (!value.every((serverId) => typeof serverId === 'string' && serverId.trim().length > 0)) {
+    throw new BadRequest('mcpServerIds must contain non-empty strings');
+  }
+  return [...new Set(value)] as MCPServerID[];
+}
+
 /**
  * Internal service params shared between services that support last-message enrichment.
  * Bypasses Feathers query filtering for internal service-to-service calls.
@@ -197,11 +210,24 @@ function shouldSqlPageSessionQuery(query?: Record<string, unknown>, forcePage = 
   const wantsBranch = query.branch_id !== undefined;
   if (!wantsRecency && !wantsCreatedAt && !wantsBoard && !wantsBranch && !forcePage) return false;
 
-  const allowedKeys = new Set(['archived', 'board_id', 'branch_id', '$sort', '$limit', '$skip']);
+  const allowedKeys = new Set([
+    'archived',
+    'status',
+    'board_id',
+    'branch_id',
+    '$sort',
+    '$limit',
+    '$skip',
+  ]);
   for (const key of Object.keys(query)) {
     if (!allowedKeys.has(key)) return false;
   }
   if (query.archived !== undefined && typeof query.archived !== 'boolean') return false;
+  if (
+    query.status !== undefined &&
+    !Object.values(SessionStatus).includes(query.status as SessionStatus)
+  )
+    return false;
   if (wantsBoard && typeof query.board_id !== 'string') return false;
   if (wantsBranch) {
     const branchFilter = query.branch_id;
@@ -245,6 +271,7 @@ export type ExecuteTaskData = {
   permissionMode?: import('@agor/core/types').PermissionMode;
   stream?: boolean;
   messageSource?: import('@agor/core/types').MessageSource;
+  promptOrigin?: import('@agor/core/types').PromptOrigin;
 };
 
 export type SessionArchiveOptions = {
@@ -400,9 +427,15 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
     if (Array.isArray(data)) {
       return Promise.all(data.map((session) => this.create(session, params) as Promise<Session>));
     }
+    if (!data || typeof data !== 'object') {
+      throw new BadRequest('Session data must be an object');
+    }
     if (Object.hasOwn(data, 'sdk_home_scope')) {
       throw new BadRequest('sdk_home_scope is server-managed and cannot be set by clients');
     }
+    const explicitMcpServerIds = normalizeCreateMcpServerIds(
+      (data as { mcpServerIds?: unknown }).mcpServerIds
+    );
     const agenticTool = requireActiveAgenticTool(data.agentic_tool ?? 'claude-code');
     this.assertDeploymentToolConfigured(agenticTool);
     if (!(await isTenantAgenticToolEnabled(agenticTool, this.db))) {
@@ -420,8 +453,9 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
     const {
       agentic_tool_preset_id: configurationReference,
       model_config: originalModelConfig,
+      mcpServerIds: _requestedMcpServerIds,
       ...sessionData
-    } = data;
+    } = data as CreateSessionInput;
     let createData: Partial<Session> = { ...sessionData };
     if (params?._agenticConfigResolved) {
       createData = {
@@ -532,13 +566,49 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
       }
       if (admission.adoptBranch) await branchRepo.adoptSdkHome(branch.branch_id);
 
-      return new SessionRepository(scoped).create({
+      const createdSession = await new SessionRepository(scoped).create({
         ...createData,
         sdk_home_scope: admission.scope,
       });
+
+      // Attach in-transaction: a bad server rolls the create back, not a silent drop (#2629).
+      if (explicitMcpServerIds && explicitMcpServerIds.length > 0) {
+        const mcpRepo = new SessionMCPServerRepository(scoped);
+        try {
+          for (const serverId of explicitMcpServerIds) {
+            await mcpRepo.addServer(createdSession.session_id, serverId);
+          }
+        } catch (error) {
+          if (error instanceof MCPServerNotUsableError) {
+            throw new Forbidden('That MCP server is private to another user');
+          }
+          if (error instanceof EntityNotFoundError) {
+            throw new NotFound('That MCP server was not found');
+          }
+          throw error;
+        }
+      }
+
+      return createdSession;
     });
     if (Array.isArray(created)) {
       throw new Error('Single-session creation returned multiple sessions');
+    }
+    if (explicitMcpServerIds && explicitMcpServerIds.length > 0) {
+      for (const serverId of explicitMcpServerIds) {
+        emitServiceEvent(this.app, {
+          path: 'session-mcp-servers',
+          event: 'created',
+          data: {
+            session_id: created.session_id,
+            mcp_server_id: serverId,
+            enabled: true,
+            added_at: new Date(),
+          },
+          params,
+          id: created.session_id,
+        });
+      }
     }
     return created;
   }
@@ -1258,7 +1328,6 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
   private getRuntimeExecutionConfig():
     | {
         execution?: {
-          branch_rbac?: boolean;
           allow_superadmin?: boolean;
         };
       }
@@ -1271,7 +1340,6 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
       ).get?.('config') as
         | {
             execution?: {
-              branch_rbac?: boolean;
               allow_superadmin?: boolean;
             };
           }
@@ -1279,10 +1347,6 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
     } catch {
       return undefined;
     }
-  }
-
-  private shouldEnforceBranchRbac(): boolean {
-    return this.getRuntimeExecutionConfig()?.execution?.branch_rbac === true;
   }
 
   private shouldAllowSuperadminBypass(): boolean {
@@ -1294,7 +1358,7 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
     archived: boolean,
     params?: SessionParams
   ): Promise<void> {
-    if (!params?.provider || !this.shouldEnforceBranchRbac()) return;
+    if (!params?.provider) return;
 
     const user = params.user;
     if (!user) {
@@ -1694,9 +1758,8 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
    */
   async find(params?: SessionParams): Promise<Paginated<Session> | Session[]> {
     // SQL-pushdown path for the recency-sorted / board-scoped list queries the
-    // first-paint loader issues. In RBAC mode the before-hook stamps a marker
-    // here so the same SQL path can compose branch visibility into the query;
-    // in open-access mode this path still handles board_id + `$sort:{updated_at}`.
+    // first-paint loader issues. The before-hook stamps a marker here so the
+    // same SQL path can compose branch visibility into the query.
     //
     // We can't lean on DrizzleService's generic path: (1) its filter matches
     // `item.board_id`, but sessions expose the board as `branch_board_id`, so a
@@ -1717,6 +1780,7 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
       const limit = (query?.$limit as number | undefined) ?? PAGINATION.DEFAULT_LIMIT;
       const skip = (query?.$skip as number | undefined) ?? 0;
       const { data, total } = await this.sessionRepo.findPage({
+        status: query?.status as SessionStatus | undefined,
         boardId: query?.board_id as string | undefined,
         branchId: typeof branchFilter === 'string' ? (branchFilter as BranchID) : undefined,
         branchIds,

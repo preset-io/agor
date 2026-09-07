@@ -83,7 +83,12 @@ export type TerminationCause =
   | 'user_stop'
   | 'startup_timeout'
   | 'heartbeat_lost'
-  | 'sdk_health_failure';
+  | 'sdk_health_failure'
+  | 'authorization_revoked';
+
+/** Fixed server/executor copy for runtime authorization withdrawal. */
+export const AUTHORIZATION_REVOKED_TERMINATION_MESSAGE =
+  'Authorization to continue this task was revoked.';
 
 /** Why a durable termination request is waiting for another HA coordinator. */
 export const TERMINATION_COORDINATION_PENDING_CODES = [
@@ -170,8 +175,10 @@ export interface TaskMetadata {
   }>;
   /**
    * Marks a task whose prompt was authored by the daemon (not typed by a
-   * human). Used by widget auto-resume so the UI can label the queued
-   * prompt appropriately.
+   * human). This is a security-relevant provenance marker: MCP, widget,
+   * zone, spawn, and other synthesized prompt paths set it so provider SDKs
+   * do not grant the prompt human authority. The UI may also use it to label
+   * the queued prompt appropriately.
    */
   system_authored?: boolean;
   /**
@@ -362,8 +369,8 @@ export interface Task {
       inputTokens: number;
       outputTokens: number;
       totalTokens: number;
-      cacheReadTokens?: number; // Claude-specific: prompt caching reads
-      cacheCreationTokens?: number; // Claude-specific: prompt caching writes
+      cacheReadTokens?: number; // Provider-reported prompt cache reads
+      cacheCreationTokens?: number; // Provider-reported prompt cache writes
     };
     contextWindowLimit?: number; // Model's max context window (e.g., 200k for Claude)
     costUsd?: number; // Estimated cost in USD (if pricing available)

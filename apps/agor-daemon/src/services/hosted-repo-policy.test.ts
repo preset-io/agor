@@ -94,7 +94,7 @@ describe('hosted repository storage policy canonical boundaries', () => {
         service: vi.fn(),
       } as unknown as Application
     );
-    vi.spyOn(BranchRepository.prototype, 'findActiveByRepoAndName').mockResolvedValue(null);
+    vi.spyOn(BranchRepository.prototype, 'findByRepoAndName').mockResolvedValue(null);
     vi.spyOn(service, 'get').mockResolvedValue({
       repo_id: '550e8400-e29b-41d4-a716-446655440001',
       slug: 'preset-io/onboarding-teammate',

@@ -481,7 +481,7 @@ describe('ModelSelector (Claude)', () => {
     );
     fireEvent.mouseDown(screen.getByRole('combobox'));
     // A long model description renders in full and is allowed to wrap.
-    expect(screen.getByText(/Frontier model for complex reasoning/)).toHaveStyle({
+    expect(screen.getByText(/Most capable model for demanding reasoning/)).toHaveStyle({
       whiteSpace: 'normal',
     });
   });

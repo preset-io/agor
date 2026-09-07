@@ -5,7 +5,7 @@
  * Sandbox auth is routed to the same per-user store mounted for sessions.
  */
 import { loadConfigSync, resolveEffectiveConfig } from '@agor/core/config';
-import { type TenantScopedDatabase, UsersRepository } from '@agor/core/db';
+import { runWithTenantContext, type TenantScopedDatabase, UsersRepository } from '@agor/core/db';
 import type { UserID } from '@agor/core/types';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -259,8 +259,41 @@ describe('resolveCodexCredentialRoute — sandbox mode', () => {
       delegatedHomeKey: null,
       userId: USER_ID,
       codexHome: '/srv/agor-homes/alice/.codex',
+      claudeConfigDir: '/srv/agor-homes/alice/.claude',
     });
     expect(findById).toHaveBeenCalledOnce();
+  });
+
+  it('derives distinct Claude config directories for every sandbox tenant and user', async () => {
+    const config = {
+      agor: { data_dir: '/srv/agor' },
+      execution: {
+        unix_user_mode: 'sandbox',
+        sandbox: { enabled: true, home_mode: 'per_user' },
+        executor_storage: { user_home: 'persistent-per-user' },
+      },
+    } as never;
+    findById.mockImplementation(async (userId: string) => ({
+      user_id: userId,
+      unix_username: null,
+      filesystem_home: null,
+    }));
+    const route = (tenantId: string, userId: string) =>
+      runWithTenantContext(tenantId, () =>
+        resolveCodexCredentialRoute(userId as UserID, withTenantDatabase, config)
+      );
+
+    const tenantAUserA = await route('tenant-a', 'user-a');
+    const tenantAUserB = await route('tenant-a', 'user-b');
+    const tenantBUserA = await route('tenant-b', 'user-a');
+    expect(tenantAUserA.ok && tenantAUserA.claudeConfigDir).toBeTruthy();
+    expect(
+      new Set([
+        tenantAUserA.ok && tenantAUserA.claudeConfigDir,
+        tenantAUserB.ok && tenantAUserB.claudeConfigDir,
+        tenantBUserA.ok && tenantBUserA.claudeConfigDir,
+      ]).size
+    ).toBe(3);
   });
 
   it('rejects filesystem_home overrides in HA rather than trusting shared ownership', async () => {

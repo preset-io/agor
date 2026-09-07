@@ -22,6 +22,8 @@ import { and, eq, inArray, or, sql } from 'drizzle-orm';
 import { generateId } from '../../lib/ids';
 import {
   CAPABILITY_POLICY_SCHEMA_VERSION,
+  CAPABILITY_POLICY_SESSION_SHARING_KEY,
+  CAPABILITY_POLICY_WORKSPACE_PREFERENCES_NAMESPACE,
   capabilityPolicyPresetCapabilities,
   resolveCapabilityPolicyAccess,
   validateCapabilityPolicyDraft,
@@ -67,9 +69,6 @@ const EMPTY_BRANCH_CONFIG: BranchPermissionConfig = {
   },
   allow_shared_session_prompts: false,
 };
-
-const WORKSPACE_PREFERENCES_NAMESPACE = 'workspace_preferences';
-const SESSION_SHARING_KEY = 'session_sharing_enabled';
 
 function assertPolicy(policy: CapabilityPolicy, kind: CapabilityPolicy['policy_kind']): void {
   if (policy.schema_version !== CAPABILITY_POLICY_SCHEMA_VERSION || policy.policy_kind !== kind) {
@@ -942,8 +941,8 @@ export class CapabilityPolicyRepository {
       .from(appVariables)
       .where(
         and(
-          eq(appVariables.namespace, WORKSPACE_PREFERENCES_NAMESPACE),
-          eq(appVariables.key, SESSION_SHARING_KEY)
+          eq(appVariables.namespace, CAPABILITY_POLICY_WORKSPACE_PREFERENCES_NAMESPACE),
+          eq(appVariables.key, CAPABILITY_POLICY_SESSION_SHARING_KEY)
         )
       )
       .one();
@@ -964,8 +963,8 @@ export class CapabilityPolicyRepository {
           .values({
             ...currentTenantInsert(),
             variable_id: generateId(),
-            namespace: WORKSPACE_PREFERENCES_NAMESPACE,
-            key: SESSION_SHARING_KEY,
+            namespace: CAPABILITY_POLICY_WORKSPACE_PREFERENCES_NAMESPACE,
+            key: CAPABILITY_POLICY_SESSION_SHARING_KEY,
             value_text: 'false',
             value_encrypted: null,
             is_encrypted: false,
@@ -985,8 +984,8 @@ export class CapabilityPolicyRepository {
           })
           .where(
             and(
-              eq(appVariables.namespace, WORKSPACE_PREFERENCES_NAMESPACE),
-              eq(appVariables.key, SESSION_SHARING_KEY)
+              eq(appVariables.namespace, CAPABILITY_POLICY_WORKSPACE_PREFERENCES_NAMESPACE),
+              eq(appVariables.key, CAPABILITY_POLICY_SESSION_SHARING_KEY)
             )
           )
           .run();

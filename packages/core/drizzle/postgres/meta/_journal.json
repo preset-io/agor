@@ -694,6 +694,20 @@
       "when": 1788206400000,
       "tag": "0099_shared_session_prompting",
       "breakpoints": true
+    },
+    {
+      "idx": 100,
+      "version": "7",
+      "when": 1788206400001,
+      "tag": "0100_claude_oauth_attempts",
+      "breakpoints": true
+    },
+    {
+      "idx": 101,
+      "version": "7",
+      "when": 1788728664645,
+      "tag": "0101_environment_command_discovery",
+      "breakpoints": true
     }
   ]
 }

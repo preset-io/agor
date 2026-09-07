@@ -378,6 +378,76 @@ describe('UserSettingsModal', { timeout: 60_000 }, () => {
     expect(screen.getByText(/Sign in with your ChatGPT account/i)).toBeInTheDocument();
   });
 
+  it.each([
+    [
+      'an explicit none source with a dormant API key',
+      {
+        agentic_auth_methods: { 'claude-code': 'api_key' as const },
+        agentic_credential_sources: { 'claude-code': 'none' as const },
+        agentic_tools: { 'claude-code': { ANTHROPIC_API_KEY: true } },
+      },
+    ],
+    [
+      'a legacy empty subscription marker',
+      { agentic_auth_methods: { 'claude-code': 'subscription' as const } },
+    ],
+  ])('shows Claude as disconnected for %s', async (_case, overrides) => {
+    const user = makeUser(overrides);
+    renderWithApp(
+      <UserSettingsModal
+        open
+        onClose={vi.fn()}
+        user={user}
+        currentUser={user}
+        client={null}
+        onUpdate={vi.fn()}
+      />
+    );
+
+    const claudeItem = screen.getByRole('menuitem', { name: /^claude code/i });
+    expect(claudeItem).toHaveTextContent('Not connected');
+  });
+
+  it('shows an explicit managed-file Claude source as connected without a stored env token', () => {
+    const user = makeUser({
+      agentic_auth_methods: { 'claude-code': 'subscription' },
+      agentic_credential_sources: { 'claude-code': 'managed_file' },
+    });
+    renderWithApp(
+      <UserSettingsModal
+        open
+        onClose={vi.fn()}
+        user={user}
+        currentUser={user}
+        client={null}
+        onUpdate={vi.fn()}
+      />
+    );
+
+    expect(screen.getByRole('menuitem', { name: /^claude code/i })).toHaveTextContent('Connected');
+  });
+
+  it('shows a legacy API-method row as connected when both credential families are stored', () => {
+    const user = makeUser({
+      agentic_auth_methods: { 'claude-code': 'api_key' },
+      agentic_tools: {
+        'claude-code': { ANTHROPIC_API_KEY: true, CLAUDE_CODE_OAUTH_TOKEN: true },
+      },
+    });
+    renderWithApp(
+      <UserSettingsModal
+        open
+        onClose={vi.fn()}
+        user={user}
+        currentUser={user}
+        client={null}
+        onUpdate={vi.fn()}
+      />
+    );
+
+    expect(screen.getByRole('menuitem', { name: /^claude code/i })).toHaveTextContent('Connected');
+  });
+
   it('saves a Claude model alias before closing', async () => {
     // Stale `user` prop that never reflects the save — mirrors the realtime lag
     // between the resolved patch and the Feathers `patched` event that refreshes

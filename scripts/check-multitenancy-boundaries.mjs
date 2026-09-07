@@ -208,17 +208,16 @@ const checks = [
       // coordinator cannot be bypassed. No application database access lives
       // in this file.
       'packages/core/src/db/in-memory-sqlite-coordinator.test.ts': 10,
-      // 1 pre-existing, three provisioning compare-and-swaps, and the
-      // provisioning-aware delete transaction.
-      // (claimFailedForProvisioningRetry / markProvisioningFailedIfCreating /
-      // acknowledgeProvisioningAttempt).
-      // Those need a real transaction: the row lock and the state check must be
-      // in the same unit of work, or two callers could both claim a retry and
-      // dispatch two materializers. Callers enter runWithTenantDatabaseScope
-      // first, so the transaction runs on the tenant-scoped handle.
-      'packages/core/src/db/repositories/branches.ts': 5,
+      // One pre-existing raw `patch` transaction. The provisioning
+      // compare-and-swaps (claimFailedForProvisioningRetry /
+      // markProvisioningFailedIfCreating / acknowledgeProvisioningAttempt) and
+      // the provisioning-aware delete all go through `runDatabaseTransaction`,
+      // which keeps the row lock and the state check in one unit of work and
+      // takes SQLite's write lock up front. Callers enter
+      // runWithTenantDatabaseScope first, so they run on the tenant handle.
+      'packages/core/src/db/repositories/branches.ts': 1,
       'packages/core/src/db/repositories/knowledge.ts': 7,
-      'packages/core/src/db/repositories/repos.ts': 3,
+      'packages/core/src/db/repositories/repos.ts': 2,
       // Session updates and archive cascades use raw repository transactions until
       // the Agor store/tenant transaction wrapper covers both patterns.
       'packages/core/src/db/repositories/sessions.ts': 2,

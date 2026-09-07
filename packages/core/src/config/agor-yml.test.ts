@@ -275,7 +275,7 @@ describe('parseAgorYml — repo .agor.yml demo variants', () => {
     expect(ha.start).toContain('AGOR_EXTERNAL_LAUNCH_SHARED_SECRET=');
     expect(ha.start).not.toContain('AGOR_ADMIN_PASSWORD=');
     expect(ha.app).toMatch(/\/dev-auth\/$/);
-    expect(ha.description).toMatch(/auth-resolved tenants/);
+    expect(ha.description).toMatch(/auth-resolved multi-tenancy/);
   });
 
   it('forwards the RBAC fixture flag used by .env.postgres', () => {

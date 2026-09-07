@@ -102,6 +102,9 @@ export interface Repo {
    * Null when the repo has no environment config. Legacy v1 configs are
    * wrapped as `variants.default` on read.
    *
+   * When supplied in an update, replaces the complete configuration (including
+   * template_overrides). Omit the key to leave it unchanged.
+   *
    * This is the source of truth for backend logic. `environment_config`
    * (below) is a legacy view kept in sync for UI back-compat.
    */

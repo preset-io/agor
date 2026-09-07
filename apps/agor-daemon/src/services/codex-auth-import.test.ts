@@ -155,7 +155,7 @@ describe('codex-auth-import', () => {
 
     expect(usersService.patch).toHaveBeenCalledWith(
       'user-1',
-      { agentic_auth_methods: { 'claude-code': 'api_key', codex: 'subscription' } },
+      { agentic_auth_methods: { codex: 'subscription' } },
       expect.objectContaining({ authenticated: true })
     );
 
@@ -196,6 +196,35 @@ describe('codex-auth-import', () => {
       authenticated: true,
       [CODEX_AUTH_DEFER_USER_REALTIME]: true,
     });
+  });
+
+  it('revalidates the route after mutation authority wins and never writes a retired home', async () => {
+    const { app } = makeApp();
+    const coordinator = {
+      runCredentialMutation: vi.fn(
+        async (
+          _tenantId: string,
+          _userId: string,
+          _reason: string,
+          work: (generation?: number) => Promise<unknown>,
+          preflight?: () => Promise<void>
+        ) => {
+          loadConfigSyncMock.mockReturnValue({
+            multi_tenancy: { mode: 'required_from_auth' },
+          } as never);
+          await preflight?.();
+          return work(undefined);
+        }
+      ),
+    };
+    const delegate = createCodexAuthImportService(app as never, TEST_DB, coordinator);
+
+    await expect(
+      runWithTenantContext('tenant-test', () =>
+        delegate.create({ authJson: VALID_AUTH_JSON }, AUTH_PARAMS)
+      )
+    ).rejects.toThrow(/execution home changed/i);
+    expect(writeCodexAuthCredentialMock).not.toHaveBeenCalled();
   });
 
   it('maps write failures to a friendly error and logs only the error class', async () => {

@@ -1,6 +1,6 @@
 import type { BranchRepository } from '@agor/core/db';
 import { NotFound } from '@agor/core/feathers';
-import { type BranchID, BranchRealtimeVisibilityMode, type HookContext } from '@agor/core/types';
+import type { BranchID, HookContext } from '@agor/core/types';
 import {
   type RealtimeAccessBranchRepository,
   type RealtimeAccessCache,
@@ -20,16 +20,9 @@ export async function captureBranchRemovalRealtimeVisibility(options: {
   params: HookContext['params'];
   branchRepository: BranchRepository;
   branchId: BranchID;
-  branchRbacEnabled: boolean;
   realtimeAccessCache?: Pick<RealtimeAccessCache, 'getBranchVisibility' | 'invalidateBranch'>;
 }): Promise<void> {
-  const { params, branchRepository, branchId, branchRbacEnabled, realtimeAccessCache } = options;
-  if (!branchRbacEnabled) {
-    setBranchRemovalRealtimeVisibility(params, branchId, {
-      mode: BranchRealtimeVisibilityMode.ALL_AUTHENTICATED,
-    });
-    return;
-  }
+  const { params, branchRepository, branchId, realtimeAccessCache } = options;
   realtimeAccessCache?.invalidateBranch(branchId);
   const visibility = realtimeAccessCache
     ? await realtimeAccessCache.getBranchVisibility(branchId)

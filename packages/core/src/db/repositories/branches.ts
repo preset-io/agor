@@ -19,6 +19,11 @@ import type {
 import { and, asc, desc, eq, exists, inArray, isNull, like, or, type SQL, sql } from 'drizzle-orm';
 import { getBaseUrl } from '../../config/config-manager';
 import { generateId } from '../../lib/ids';
+import {
+  BRANCH_ENVIRONMENT_CLEARABLE_FIELDS,
+  BRANCH_ENVIRONMENT_SNAPSHOT_FIELDS,
+} from '../../types/branch';
+import { hasActiveEnvironmentCommand } from '../../types/environment-command';
 import { getBranchUrl } from '../../utils/url';
 import type { Database } from '../client';
 import {
@@ -657,6 +662,31 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
       }
 
       const current = this.rowToBranch(currentRow, baseUrl);
+      if (
+        Object.hasOwn(updates, 'environment_instance') &&
+        (current.environment_instance?.command_attempt ||
+          updates.environment_instance?.command_attempt ||
+          updates.environment_instance?.command_history)
+      ) {
+        throw new RepositoryError(
+          'Executor-backed environment state must be changed through attempt-scoped reports'
+        );
+      }
+      if (
+        hasActiveEnvironmentCommand(current.environment_instance) &&
+        [
+          'archived',
+          'filesystem_status',
+          'path',
+          'ref',
+          ...BRANCH_ENVIRONMENT_SNAPSHOT_FIELDS,
+          'environment_variant',
+        ].some((field) => Object.hasOwn(updates, field))
+      ) {
+        throw new RepositoryError(
+          'Wait for the active environment command before changing its branch or configuration'
+        );
+      }
 
       if (updates.archived === true && current.filesystem_status === 'creating') {
         throw new RepositoryError(
@@ -673,6 +703,26 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
         created_at: current.created_at, // Never change created timestamp
         updated_at: options?.preserveUpdatedAt ? current.updated_at : new Date().toISOString(),
       });
+      // A rendered snapshot must also remove fields absent from its variant.
+      // Keep this narrow: omitted keys and other branch fields still deep-merge.
+      for (const key of BRANCH_ENVIRONMENT_SNAPSHOT_FIELDS) {
+        if (Object.hasOwn(updates, key) && updates[key] == null) {
+          delete merged[key];
+        }
+      }
+      // Environment callbacks have an explicit-clear contract. Apply its
+      // tombstones AFTER merging under the row lock so stale runtime fields
+      // cannot reappear. Omitted fields and other nested patches still merge.
+      if (merged.environment_instance && updates.environment_instance) {
+        for (const key of BRANCH_ENVIRONMENT_CLEARABLE_FIELDS) {
+          if (
+            Object.hasOwn(updates.environment_instance, key) &&
+            updates.environment_instance[key] == null
+          ) {
+            delete merged.environment_instance[key];
+          }
+        }
+      }
       // A materialization error describes only the failed filesystem state.
       // Clear it atomically with every explicit transition away from failed
       // so a successful retry/unarchive cannot remain visually poisoned by
@@ -746,39 +796,41 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
       throw new EntityNotFoundError('Branch', id);
     }
     const baseUrl = await getBaseUrl();
-    return await this.db.transaction(async (tx) => {
-      await lockRowForUpdate(
-        txAsDb(tx),
-        this.db,
-        branches,
-        eq(branches.branch_id, existing.branch_id)
-      );
-      const currentRow = await select(txAsDb(tx))
-        .from(branches)
-        .where(eq(branches.branch_id, existing.branch_id))
-        .one();
-      if (!currentRow) {
-        throw new EntityNotFoundError('Branch', id);
-      }
-      const current = this.rowToBranch(currentRow, baseUrl);
-      if (current.archived || current.filesystem_status !== 'failed') {
-        // Lost the race (or never eligible) — do not write, do not re-dispatch.
-        return { claimed: false, branch: current };
-      }
-      const insertData = this.branchToInsert({
-        ...current,
-        filesystem_status: 'creating',
-        error_message: undefined,
-        provisioning_attempt_id: attemptId,
-        provisioning_operation: current.provisioning_operation === 'restore' ? 'restore' : 'retry',
-      });
-      const row = await update(txAsDb(tx), branches)
-        .set(insertData)
-        .where(eq(branches.branch_id, current.branch_id))
-        .returning()
-        .one();
-      return { claimed: true, branch: this.rowToBranch(row, baseUrl) };
-    });
+    return await runDatabaseTransaction(
+      this.db,
+      async (tx) => {
+        await lockRowForUpdate(tx, this.db, branches, eq(branches.branch_id, existing.branch_id));
+        const currentRow = await select(tx)
+          .from(branches)
+          .where(eq(branches.branch_id, existing.branch_id))
+          .one();
+        if (!currentRow) {
+          throw new EntityNotFoundError('Branch', id);
+        }
+        const current = this.rowToBranch(currentRow, baseUrl);
+        if (current.archived || current.filesystem_status !== 'failed') {
+          // Lost the race (or never eligible) — do not write, do not re-dispatch.
+          return { claimed: false, branch: current };
+        }
+        const insertData = this.branchToInsert({
+          ...current,
+          filesystem_status: 'creating',
+          error_message: undefined,
+          provisioning_attempt_id: attemptId,
+          provisioning_operation:
+            current.provisioning_operation === 'restore' ? 'restore' : 'retry',
+        });
+        const row = await update(tx, branches)
+          .set(insertData)
+          .where(eq(branches.branch_id, current.branch_id))
+          .returning()
+          .one();
+        return { claimed: true, branch: this.rowToBranch(row, baseUrl) };
+      },
+      // Read-then-write provisioning fence: SQLite must take the write lock
+      // up front so two concurrent attempts cannot both observe the old row.
+      { sqliteImmediate: true }
+    );
   }
 
   /**
@@ -809,43 +861,44 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
       throw new EntityNotFoundError('Branch', id);
     }
     const baseUrl = await getBaseUrl();
-    return await this.db.transaction(async (tx) => {
-      await lockRowForUpdate(
-        txAsDb(tx),
-        this.db,
-        branches,
-        eq(branches.branch_id, existing.branch_id)
-      );
-      const currentRow = await select(txAsDb(tx))
-        .from(branches)
-        .where(eq(branches.branch_id, existing.branch_id))
-        .one();
-      if (!currentRow) {
-        throw new EntityNotFoundError('Branch', id);
-      }
-      const current = this.rowToBranch(currentRow, baseUrl);
-      if (current.filesystem_status !== 'creating') {
-        return { changed: false, branch: current };
-      }
-      if (
-        expectedAttemptId !== undefined &&
-        current.provisioning_attempt_id !== expectedAttemptId
-      ) {
-        // A newer attempt owns `creating` now — this acknowledgement is stale.
-        return { changed: false, branch: current };
-      }
-      const insertData = this.branchToInsert({
-        ...current,
-        filesystem_status: 'failed',
-        error_message: message,
-      });
-      const row = await update(txAsDb(tx), branches)
-        .set(insertData)
-        .where(eq(branches.branch_id, current.branch_id))
-        .returning()
-        .one();
-      return { changed: true, branch: this.rowToBranch(row, baseUrl) };
-    });
+    return await runDatabaseTransaction(
+      this.db,
+      async (tx) => {
+        await lockRowForUpdate(tx, this.db, branches, eq(branches.branch_id, existing.branch_id));
+        const currentRow = await select(tx)
+          .from(branches)
+          .where(eq(branches.branch_id, existing.branch_id))
+          .one();
+        if (!currentRow) {
+          throw new EntityNotFoundError('Branch', id);
+        }
+        const current = this.rowToBranch(currentRow, baseUrl);
+        if (current.filesystem_status !== 'creating') {
+          return { changed: false, branch: current };
+        }
+        if (
+          expectedAttemptId !== undefined &&
+          current.provisioning_attempt_id !== expectedAttemptId
+        ) {
+          // A newer attempt owns `creating` now — this acknowledgement is stale.
+          return { changed: false, branch: current };
+        }
+        const insertData = this.branchToInsert({
+          ...current,
+          filesystem_status: 'failed',
+          error_message: message,
+        });
+        const row = await update(tx, branches)
+          .set(insertData)
+          .where(eq(branches.branch_id, current.branch_id))
+          .returning()
+          .one();
+        return { changed: true, branch: this.rowToBranch(row, baseUrl) };
+      },
+      // Read-then-write provisioning fence: SQLite must take the write lock
+      // up front so two concurrent attempts cannot both observe the old row.
+      { sqliteImmediate: true }
+    );
   }
 
   async acknowledgeProvisioningAttempt(
@@ -856,40 +909,41 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
     const existing = await this.findById(id);
     if (!existing) throw new EntityNotFoundError('Branch', id);
     const baseUrl = await getBaseUrl();
-    return this.db.transaction(async (tx) => {
-      await lockRowForUpdate(
-        txAsDb(tx),
-        this.db,
-        branches,
-        eq(branches.branch_id, existing.branch_id)
-      );
-      const currentRow = await select(txAsDb(tx))
-        .from(branches)
-        .where(eq(branches.branch_id, existing.branch_id))
-        .one();
-      if (!currentRow) throw new EntityNotFoundError('Branch', id);
-      const current = this.rowToBranch(currentRow, baseUrl);
-      const generationMatches = expectedAttemptId
-        ? current.provisioning_attempt_id === expectedAttemptId
-        : current.provisioning_attempt_id === undefined;
-      if (current.archived || current.filesystem_status !== 'creating' || !generationMatches) {
-        return { applied: false, branch: current };
-      }
-      const merged = deepMerge(current, {
-        ...acknowledgement,
-        branch_id: current.branch_id,
-        repo_id: current.repo_id,
-        created_at: current.created_at,
-        updated_at: new Date().toISOString(),
-      });
-      if (acknowledgement.filesystem_status !== 'failed') delete merged.error_message;
-      const row = await update(txAsDb(tx), branches)
-        .set(this.branchToInsert(merged))
-        .where(eq(branches.branch_id, current.branch_id))
-        .returning()
-        .one();
-      return { applied: true, branch: this.rowToBranch(row, baseUrl) };
-    });
+    return await runDatabaseTransaction(
+      this.db,
+      async (tx) => {
+        await lockRowForUpdate(tx, this.db, branches, eq(branches.branch_id, existing.branch_id));
+        const currentRow = await select(tx)
+          .from(branches)
+          .where(eq(branches.branch_id, existing.branch_id))
+          .one();
+        if (!currentRow) throw new EntityNotFoundError('Branch', id);
+        const current = this.rowToBranch(currentRow, baseUrl);
+        const generationMatches = expectedAttemptId
+          ? current.provisioning_attempt_id === expectedAttemptId
+          : current.provisioning_attempt_id === undefined;
+        if (current.archived || current.filesystem_status !== 'creating' || !generationMatches) {
+          return { applied: false, branch: current };
+        }
+        const merged = deepMerge(current, {
+          ...acknowledgement,
+          branch_id: current.branch_id,
+          repo_id: current.repo_id,
+          created_at: current.created_at,
+          updated_at: new Date().toISOString(),
+        });
+        if (acknowledgement.filesystem_status !== 'failed') delete merged.error_message;
+        const row = await update(tx, branches)
+          .set(this.branchToInsert(merged))
+          .where(eq(branches.branch_id, current.branch_id))
+          .returning()
+          .one();
+        return { applied: true, branch: this.rowToBranch(row, baseUrl) };
+      },
+      // Read-then-write provisioning fence: SQLite must take the write lock
+      // up front so two concurrent attempts cannot both observe the old row.
+      { sqliteImmediate: true }
+    );
   }
 
   async findCreatingPage(limit: number): Promise<Branch[]> {
@@ -940,27 +994,31 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
     if (!existing) {
       throw new EntityNotFoundError('Branch', id);
     }
-    await this.db.transaction(async (tx) => {
-      await lockRowForUpdate(
-        txAsDb(tx),
-        this.db,
-        branches,
-        eq(branches.branch_id, existing.branch_id)
-      );
-      const current = await select(txAsDb(tx))
-        .from(branches)
-        .where(eq(branches.branch_id, existing.branch_id))
-        .one();
-      if (!current) throw new EntityNotFoundError('Branch', id);
-      if (current.filesystem_status === 'creating') {
-        throw new RepositoryError(
-          'Cannot delete a branch while filesystem provisioning is in progress'
-        );
-      }
-      await deleteFrom(txAsDb(tx), branches)
-        .where(eq(branches.branch_id, existing.branch_id))
-        .run();
-    });
+    await runDatabaseTransaction(
+      this.db,
+      async (tx) => {
+        await lockRowForUpdate(tx, this.db, branches, eq(branches.branch_id, existing.branch_id));
+        const row = await select(tx)
+          .from(branches)
+          .where(eq(branches.branch_id, existing.branch_id))
+          .one();
+        if (!row) throw new EntityNotFoundError('Branch', id);
+        // Deleting the row out from under a live provisioning attempt would
+        // leave the executor materializing a workspace nothing owns.
+        if (row.filesystem_status === 'creating') {
+          throw new RepositoryError(
+            'Cannot delete a branch while filesystem provisioning is in progress'
+          );
+        }
+        if (hasActiveEnvironmentCommand(row.data.environment_instance)) {
+          throw new RepositoryError(
+            'Wait for the active environment command before deleting its branch'
+          );
+        }
+        await deleteFrom(tx, branches).where(eq(branches.branch_id, existing.branch_id)).run();
+      },
+      { sqliteImmediate: true }
+    );
   }
 
   /**
@@ -1298,10 +1356,8 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
    * N+1 point checks. Direct user entries shadow groups, active groups are
    * additive, and Others applies only when neither one matches.
    *
-   * NOTE: This method should only be called when RBAC is enabled. The branch
-   * find RBAC hook uses it to resolve accessible branch IDs and compose them
-   * into the service query; when RBAC is disabled, default Feathers query
-   * handling returns all branches without access filtering.
+   * The branch authorization hook uses this to resolve accessible Branch IDs
+   * and compose them into the service query.
    *
    * @param userId - User ID to check access for
    * @param filter - Optional filters
@@ -1341,7 +1397,7 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
     options: {
       /** Minimum app-layer permission required when access enforcement is enabled. */
       minimumPermission?: NonNullable<Branch['others_can']>;
-      /** Disable the point check when branch RBAC is disabled instance-wide. */
+      /** Disable the point check only for a separately authorized administrative bypass. */
       enforceAccess?: boolean;
     } = {}
   ): Promise<Branch | null> {

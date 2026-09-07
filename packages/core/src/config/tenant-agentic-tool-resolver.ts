@@ -88,15 +88,40 @@ async function resolveUserConnection(
   const data = row.data as {
     agentic_tools?: StoredAgenticTools;
     agentic_auth_methods?: Partial<Record<'claude-code' | 'codex', AgenticAuthMethod>>;
+    agentic_credential_sources?: import('../types').AgenticCredentialSources;
   };
   const stored = data.agentic_tools?.[tool];
   const configuredMethod =
     tool === 'claude-code' || tool === 'codex' ? data.agentic_auth_methods?.[tool] : undefined;
+  const claudeSource =
+    tool === 'claude-code' ? data.agentic_credential_sources?.['claude-code'] : undefined;
   const method =
     configuredMethod ??
     (tool === 'claude-code' && stored?.CLAUDE_CODE_OAUTH_TOKEN ? 'subscription' : 'api_key');
   if (tool === 'codex' && method === 'subscription') {
     return { connection: {}, useNativeAuth: true };
+  }
+  if (tool === 'claude-code') {
+    // The explicit source is authoritative over dormant secrets and files.
+    // `none` is deliberately durable: clearing a pasted token must not make an
+    // older ~/.claude/.credentials.json active again. A managed-file source is
+    // written only by the OAuth service after the file write succeeds.
+    if (claudeSource === 'none') return null;
+    if (claudeSource === 'managed_file') {
+      return { connection: {}, useNativeAuth: true };
+    }
+
+    // Pre-source rows remain compatible with pasted tokens and API keys, but
+    // an empty legacy `subscription` marker is no longer authority to borrow a
+    // native file. PR #2317 had not shipped managed-file persistence before the
+    // source field was introduced, so there is no released native row to infer.
+    if (
+      claudeSource === undefined &&
+      method === 'subscription' &&
+      !stored?.CLAUDE_CODE_OAUTH_TOKEN
+    ) {
+      return null;
+    }
   }
   if (!stored || Object.keys(stored).length === 0) return null;
 
@@ -104,8 +129,12 @@ async function resolveUserConnection(
   try {
     for (const field of PROVIDER_CONNECTION_FIELDS[tool]) {
       if (tool === 'claude-code') {
-        if (method === 'subscription' && field !== 'CLAUDE_CODE_OAUTH_TOKEN') continue;
-        if (method === 'api_key' && field === 'CLAUDE_CODE_OAUTH_TOKEN') continue;
+        const effectiveSource =
+          claudeSource ?? (method === 'subscription' ? 'subscription_token' : 'api_key');
+        if (effectiveSource === 'subscription_token' && field !== 'CLAUDE_CODE_OAUTH_TOKEN') {
+          continue;
+        }
+        if (effectiveSource === 'api_key' && field === 'CLAUDE_CODE_OAUTH_TOKEN') continue;
       }
       const encrypted = stored[field];
       if (!encrypted) continue;

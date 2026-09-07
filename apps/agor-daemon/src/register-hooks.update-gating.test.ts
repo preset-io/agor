@@ -34,14 +34,9 @@ type CapturedHooks = {
 
 /**
  * Run `registerHooks` against a recording stand-in for the Feathers app and
- * return the before-hook map per service path, for one RBAC mode.
- *
- * Several hook blocks spread their branch permission hooks in only when
- * `branchRbacEnabled` is true, so each mode is captured and asserted on its
- * own — see {@link RBAC_MODES}.
+ * return the before-hook map per service path. Authorization is invariant.
  */
 const captureRegisteredHooks = (
-  branchRbacEnabled: boolean,
   branchRepositoryOverride?: RegisterHooksContext['branchRepository'],
   boardRepositoryOverride?: RegisterHooksContext['boardRepository']
 ): Map<string, CapturedHooks> => {
@@ -80,7 +75,7 @@ const captureRegisteredHooks = (
     config: {
       database: { dialect: 'postgresql' },
       multi_tenancy: { mode: 'static', static_tenant_id: 'update-gating-test' },
-      execution: { branch_rbac: branchRbacEnabled },
+      execution: {},
     } as RegisterHooksContext['config'],
     jwtSecret: 'update-gating-test-secret',
     // The HA gates are `before.all` entries, so they cannot satisfy or defeat a
@@ -124,7 +119,7 @@ describe('board get authorization prefetch', () => {
       canViewResolved,
       canView,
     } as unknown as NonNullable<RegisterHooksContext['boardRepository']>;
-    const hooks = captureRegisteredHooks(true, undefined, boardRepository).get('boards')?.before;
+    const hooks = captureRegisteredHooks(undefined, boardRepository).get('boards')?.before;
     if (!hooks) throw new Error('boards registers no before hooks');
     const context = {
       path: 'boards',
@@ -168,7 +163,7 @@ describe('branch hard-delete realtime hook', () => {
       findRealtimeVisibilityBranch: async () => branch,
       findRealtimeViewUserIds: async () => [ownerId, '00000000-0000-7000-8000-0000000000aa'],
     } as unknown as RegisterHooksContext['branchRepository'];
-    const hooks = captureRegisteredHooks(true, branchRepository).get('branches')?.before;
+    const hooks = captureRegisteredHooks(branchRepository).get('branches')?.before;
     if (!hooks) throw new Error('branches registers no before hooks');
     const context = {
       path: 'branches',
@@ -192,7 +187,7 @@ describe('branch hard-delete realtime hook', () => {
     });
   });
 
-  it('captures an open-mode snapshot so every relay revision has a complete tombstone', async () => {
+  it('captures a policy-scoped snapshot so every relay revision has a complete tombstone', async () => {
     const branchId = '00000000-0000-7000-8000-000000000001';
     const branch = { branch_id: branchId, others_can: 'session' };
     const branchRepository = {
@@ -202,7 +197,7 @@ describe('branch hard-delete realtime hook', () => {
       findRealtimeVisibilityBranch: async () => branch,
       findRealtimeViewUserIds: async () => [],
     } as unknown as RegisterHooksContext['branchRepository'];
-    const hooks = captureRegisteredHooks(false, branchRepository).get('branches')?.before;
+    const hooks = captureRegisteredHooks(branchRepository).get('branches')?.before;
     if (!hooks) throw new Error('branches registers no before hooks');
     const context = {
       path: 'branches',
@@ -219,11 +214,12 @@ describe('branch hard-delete realtime hook', () => {
 
     expect((context.params as Record<string, unknown>)[BRANCH_REMOVAL_VISIBILITY_PARAM]).toEqual({
       branchId,
-      mode: 'allAuthenticated',
+      mode: 'explicitUsers',
+      userIds: [],
     });
   });
 
-  it('keeps direct REST/socket removal aligned with the open-mode owner/admin boundary', async () => {
+  it('keeps direct REST/socket removal aligned with normalized branch policy', async () => {
     const branchId = '00000000-0000-7000-8000-000000000001';
     const branch = { branch_id: branchId, others_can: 'session' };
     const findRealtimeVisibilityBranch = vi.fn(async () => branch);
@@ -234,7 +230,7 @@ describe('branch hard-delete realtime hook', () => {
       findRealtimeVisibilityBranch,
       findRealtimeViewUserIds: async () => [],
     } as unknown as RegisterHooksContext['branchRepository'];
-    const hooks = captureRegisteredHooks(false, branchRepository).get('branches')?.before;
+    const hooks = captureRegisteredHooks(branchRepository).get('branches')?.before;
     if (!hooks) throw new Error('branches registers no before hooks');
     const context = {
       path: 'branches',
@@ -256,17 +252,7 @@ describe('branch hard-delete realtime hook', () => {
   });
 });
 
-/**
- * Both RBAC modes, kept separate on purpose.
- *
- * Merging them would let a verb gated only under `branchRbacEnabled: true`
- * satisfy the invariant while sitting wide open in the default mode, which is
- * exactly the shape these tests exist to catch.
- */
-const RBAC_MODES = [
-  { name: 'rbac disabled', branchRbacEnabled: false },
-  { name: 'rbac enabled', branchRbacEnabled: true },
-] as const;
+const RBAC_MODES = [{ name: 'RBAC always on' }] as const;
 
 const WRITE_METHODS = ['create', 'patch', 'remove'] as const;
 
@@ -299,8 +285,8 @@ const runCapturedHooks = async (
   return context;
 };
 
-describe.each(RBAC_MODES)('viewer read access ($name)', ({ branchRbacEnabled }) => {
-  const captured = captureRegisteredHooks(branchRbacEnabled);
+describe.each(RBAC_MODES)('viewer read access ($name)', () => {
+  const captured = captureRegisteredHooks();
 
   it.each([
     ['users', 'find'],
@@ -317,30 +303,28 @@ describe.each(RBAC_MODES)('viewer read access ($name)', ({ branchRbacEnabled }) 
     await expect(runCapturedHooks(captured, path, method, 'viewer')).resolves.toBeDefined();
   });
 
-  if (branchRbacEnabled) {
-    it('retains SQL branch visibility scoping for viewer branch finds', async () => {
-      const context = await runCapturedHooks(captured, 'branches', 'find', 'viewer');
-      expect(context.params).toMatchObject({
-        _agorSqlBranchAccessUserId: '00000000-0000-7000-8000-0000000000ff',
-      });
+  it('retains SQL branch visibility scoping for viewer branch finds', async () => {
+    const context = await runCapturedHooks(captured, 'branches', 'find', 'viewer');
+    expect(context.params).toMatchObject({
+      _agorSqlBranchAccessUserId: '00000000-0000-7000-8000-0000000000ff',
     });
+  });
 
-    it('retains SQL board visibility scoping for viewer board-object reads', async () => {
-      for (const method of ['find', 'get']) {
-        const context = await runCapturedHooks(captured, 'board-objects', method, 'viewer');
-        expect(context.params).toMatchObject({
-          _agorSqlBoardAccessUserId: '00000000-0000-7000-8000-0000000000ff',
-        });
-      }
-    });
-
-    it('retains SQL session visibility scoping for viewer MCP assignment finds', async () => {
-      const context = await runCapturedHooks(captured, 'session-mcp-servers', 'find', 'viewer');
+  it('retains SQL board visibility scoping for viewer board-object reads', async () => {
+    for (const method of ['find', 'get']) {
+      const context = await runCapturedHooks(captured, 'board-objects', method, 'viewer');
       expect(context.params).toMatchObject({
-        _agorSqlSessionAccessUserId: '00000000-0000-7000-8000-0000000000ff',
+        _agorSqlBoardAccessUserId: '00000000-0000-7000-8000-0000000000ff',
       });
+    }
+  });
+
+  it('retains SQL session visibility scoping for viewer MCP assignment finds', async () => {
+    const context = await runCapturedHooks(captured, 'session-mcp-servers', 'find', 'viewer');
+    expect(context.params).toMatchObject({
+      _agorSqlSessionAccessUserId: '00000000-0000-7000-8000-0000000000ff',
     });
-  }
+  });
 
   it.each([
     ['board-objects', 'create'],
@@ -420,8 +404,8 @@ const findUngated = (captured: Map<string, CapturedHooks>): string[] => {
   return ungated;
 };
 
-describe.each(RBAC_MODES)('update-verb hook gating ($name)', ({ branchRbacEnabled }) => {
-  const captured = captureRegisteredHooks(branchRbacEnabled);
+describe.each(RBAC_MODES)('update-verb hook gating ($name)', () => {
+  const captured = captureRegisteredHooks();
 
   it('gates update wherever a sibling write verb is gated', () => {
     expect(
@@ -451,7 +435,7 @@ describe.each(RBAC_MODES)('update-verb hook gating ($name)', ({ branchRbacEnable
     // boards' update chain deleted. boards is the least ambiguous canary: its
     // registration names 'update' in an explicit methods array, so the verb is
     // certainly routed.
-    const tampered = captureRegisteredHooks(branchRbacEnabled);
+    const tampered = captureRegisteredHooks();
     const boards = tampered.get('boards');
     if (!boards) throw new Error('boards registers no hooks');
     delete boards.before.update;
@@ -461,25 +445,25 @@ describe.each(RBAC_MODES)('update-verb hook gating ($name)', ({ branchRbacEnable
 });
 
 describe('branch and board visibility authority write symmetry', () => {
-  it.each(RBAC_MODES)('keeps branch update structurally aligned with patch ($name)', (mode) => {
-    const hooks = captureRegisteredHooks(mode.branchRbacEnabled).get('branches');
+  it.each(RBAC_MODES)('keeps branch update structurally aligned with patch ($name)', () => {
+    const hooks = captureRegisteredHooks().get('branches');
     expect(hooks?.before.update).toEqual(hooks?.before.patch);
     expect(hooks?.after.update).toEqual(hooks?.after.patch);
   });
 
   it.each(RBAC_MODES)(
     'keeps board update on the same authority prefix and invalidation chain as patch ($name)',
-    (mode) => {
-      const hooks = captureRegisteredHooks(mode.branchRbacEnabled).get('boards');
+    () => {
+      const hooks = captureRegisteredHooks().get('boards');
       if (!hooks?.before.update) throw new Error('boards registers no before-update hooks');
       expect(hooks.before.update).toEqual(hooks.before.patch?.slice(0, hooks.before.update.length));
       expect(hooks.after.update).toEqual(hooks.after.patch);
     }
   );
 
-  it('requires branch-specific all permission for PUT when RBAC is enabled', async () => {
+  it('requires branch-specific all permission for PUT', async () => {
     await expect(
-      runCapturedHooks(captureRegisteredHooks(true), 'branches', 'update', 'member', {
+      runCapturedHooks(captureRegisteredHooks(), 'branches', 'update', 'member', {
         others_can: 'none',
       })
     ).rejects.toBeInstanceOf(Forbidden);
@@ -492,28 +476,19 @@ describe('branch and board visibility authority write symmetry', () => {
       resolveUserPermission: async () => 'all',
     } as unknown as RegisterHooksContext['branchRepository'];
     await expect(
-      runCapturedHooks(
-        captureRegisteredHooks(true, ownerRepository),
-        'branches',
-        'update',
-        'member',
-        {
-          others_can: 'none',
-        }
-      )
+      runCapturedHooks(captureRegisteredHooks(ownerRepository), 'branches', 'update', 'member', {
+        others_can: 'none',
+      })
     ).resolves.toBeDefined();
   });
 
   it.each(['patch', 'update'])(
     'captures a tenant-user invalidation for board authority %s',
     async (method) => {
-      const context = await runCapturedHooks(
-        captureRegisteredHooks(false),
-        'boards',
-        method,
-        'admin',
-        { access_mode: 'private', default_others_can: 'none' }
-      );
+      const context = await runCapturedHooks(captureRegisteredHooks(), 'boards', method, 'admin', {
+        access_mode: 'private',
+        default_others_can: 'none',
+      });
       expect(
         (context.params as Record<string, unknown>)._agorMarketplaceInvalidationTargets
       ).toEqual(['00000000-0000-7000-8000-0000000000ff']);
@@ -521,90 +496,74 @@ describe('branch and board visibility authority write symmetry', () => {
   );
 });
 
-describe.each(RBAC_MODES)(
-  'update is refused for under-privileged callers ($name)',
-  ({ branchRbacEnabled }) => {
-    const captured = captureRegisteredHooks(branchRbacEnabled);
+describe.each(RBAC_MODES)('update is refused for under-privileged callers ($name)', () => {
+  const captured = captureRegisteredHooks();
 
-    const runUpdateHooks = async (
-      path: string,
-      role: string,
-      data: Record<string, unknown> = {}
-    ) => {
-      const chain = captured.get(path)?.before.update;
-      if (!chain?.length) throw new Error(`${path} registers no before-update hooks`);
-      const context = {
-        path,
-        method: 'update',
-        id: '00000000-0000-7000-8000-000000000001',
-        data,
-        params: {
-          provider: 'rest',
-          query: {},
-          user: { user_id: '00000000-0000-7000-8000-0000000000ff', role },
-        },
-      } as unknown as HookContext;
-      for (const hook of chain) await hook(context);
-      return context;
-    };
+  const runUpdateHooks = async (path: string, role: string, data: Record<string, unknown> = {}) => {
+    const chain = captured.get(path)?.before.update;
+    if (!chain?.length) throw new Error(`${path} registers no before-update hooks`);
+    const context = {
+      path,
+      method: 'update',
+      id: '00000000-0000-7000-8000-000000000001',
+      data,
+      params: {
+        provider: 'rest',
+        query: {},
+        user: { user_id: '00000000-0000-7000-8000-0000000000ff', role },
+      },
+    } as unknown as HookContext;
+    for (const hook of chain) await hook(context);
+    return context;
+  };
 
-    it.each([
-      ['boards', 'update boards'],
-      ['cards', 'update cards'],
-      ['card-types', 'update card types'],
-      ['board-comments', 'update board comments'],
-    ])('refuses a viewer rewriting %s', async (path) => {
-      await expect(runUpdateHooks(path, 'viewer')).rejects.toMatchObject({ name: 'Forbidden' });
-    });
+  it.each([
+    ['boards', 'update boards'],
+    ['cards', 'update cards'],
+    ['card-types', 'update card types'],
+    ['board-comments', 'update board comments'],
+  ])('refuses a viewer rewriting %s', async (path) => {
+    await expect(runUpdateHooks(path, 'viewer')).rejects.toMatchObject({ name: 'Forbidden' });
+  });
 
-    it.each(['viewer', 'member', 'admin'])(
-      'refuses a %s replacing a message whatever their role',
-      async (role) => {
-        // Messages are the one write surface here that is not role-gated:
-        // whole-row replacement is outside the public Message contract, so it is
-        // refused for every external caller and left off the transport method
-        // list entirely (see register-services.messages-boundary.test.ts).
-        await expect(runUpdateHooks('messages', role)).rejects.toMatchObject({ name: 'Forbidden' });
-      }
-    );
+  it.each(['viewer', 'member', 'admin'])(
+    'refuses a %s replacing a message whatever their role',
+    async (role) => {
+      // Messages are the one write surface here that is not role-gated:
+      // whole-row replacement is outside the public Message contract, so it is
+      // refused for every external caller and left off the transport method
+      // list entirely (see register-services.messages-boundary.test.ts).
+      await expect(runUpdateHooks('messages', role)).rejects.toMatchObject({ name: 'Forbidden' });
+    }
+  );
 
-    it.each(['created_by', 'unix_username'])(
-      'refuses a PUT that reassigns session.%s',
-      async (field) => {
-        // The reattribution primitive the whole fix exists to protect. These two
-        // fields select the OS identity a session executes as, so a PUT carrying
-        // them must be refused in either RBAC mode — branch_rbac and
-        // unix_user_mode are configured independently.
-        await expect(
-          runUpdateHooks('sessions', 'viewer', {
-            [field]: '00000000-0000-7000-8000-00000000beef',
-          })
-        ).rejects.toMatchObject({ name: 'Forbidden' });
-      }
-    );
+  it.each(['created_by', 'unix_username'])(
+    'refuses a PUT that reassigns session.%s',
+    async (field) => {
+      // The reattribution primitive the whole fix exists to protect. These two
+      // fields select the OS identity a session executes as, so a PUT carrying
+      // them must be refused. Board/branch authorization is invariant;
+      // unix_user_mode independently selects the execution substrate.
+      await expect(
+        runUpdateHooks('sessions', 'viewer', {
+          [field]: '00000000-0000-7000-8000-00000000beef',
+        })
+      ).rejects.toMatchObject({ name: 'Forbidden' });
+    }
+  );
 
-    it('holds sessions.update to the same chain as sessions.patch', () => {
-      // SessionsService.update calls this.patch directly rather than going back
-      // through the service proxy, so patch's before-hooks never re-run for it.
-      // Anything short of the same chain is a route to patch's writes without
-      // patch's branch-permission checks.
-      const sessions = captured.get('sessions');
+  it('holds sessions.update to the same chain as sessions.patch', () => {
+    // SessionsService.update calls this.patch directly rather than going back
+    // through the service proxy, so patch's before-hooks never re-run for it.
+    // Anything short of the same chain is a route to patch's writes without
+    // patch's branch-permission checks.
+    const sessions = captured.get('sessions');
 
-      // The recorder copies each chain into its own array, so this compares hook
-      // function references pairwise rather than an array against itself.
-      expect(sessions?.before.update).not.toBe(sessions?.before.patch);
-      expect(sessions?.before.update).toEqual(sessions?.before.patch);
-      expect(sessions?.before.update?.length).toBeGreaterThan(0);
-    });
-  }
-);
-
-describe('enabling branch RBAC only adds session guards', () => {
-  it('never shortens the sessions write chain', () => {
-    const open = captureRegisteredHooks(false).get('sessions');
-    const rbac = captureRegisteredHooks(true).get('sessions');
-
-    expect(rbac?.before.update?.length).toBeGreaterThan(open?.before.update?.length ?? 0);
+    // The recorder copies each chain into its own array, so this compares hook
+    // function references pairwise rather than an array against itself.
+    expect(sessions?.before.update).not.toBe(sessions?.before.patch);
+    expect(sessions?.before.update).toEqual(sessions?.before.patch);
+    expect(sessions?.before.update?.length).toBeGreaterThan(0);
   });
 });
 

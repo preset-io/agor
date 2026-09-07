@@ -4,7 +4,7 @@
 
 import { Forbidden, NotAuthenticated } from '@agor/core/feathers';
 import type { AuthenticatedParams, HookContext, UserRole } from '@agor/core/types';
-import { hasMinimumRole, ROLES } from '@agor/core/types';
+import { BRANCH_ENVIRONMENT_SNAPSHOT_FIELDS, hasMinimumRole, ROLES } from '@agor/core/types';
 
 export type Role = UserRole;
 
@@ -63,12 +63,7 @@ const ENV_COMMAND_FIELDS = [
   'environment', // Repo-level: v2 named variants (source of truth)
   'environment_config', // Repo-level: legacy v1 view (still guarded)
   'environment_variant', // Branch-level: selected variant name
-  'start_command', // Branch-level: resolved commands
-  'stop_command',
-  'nuke_command',
-  'logs_command',
-  'health_check_url',
-  'app_url',
+  ...BRANCH_ENVIRONMENT_SNAPSHOT_FIELDS,
 ];
 
 /**
@@ -85,8 +80,17 @@ export function requireAdminForEnvConfig() {
 
     // Check both single objects and array payloads (bulk create)
     const items = Array.isArray(data) ? data : [data];
+    if (
+      context.params?.provider &&
+      items.some(
+        (item) =>
+          item?.environment_instance?.command_attempt || item?.environment_instance?.command_history
+      )
+    ) {
+      throw new Forbidden('Environment command tracking is daemon-owned');
+    }
     const hasEnvConfig = items.some((item: Record<string, unknown>) =>
-      ENV_COMMAND_FIELDS.some((field) => item?.[field] != null)
+      ENV_COMMAND_FIELDS.some((field) => item != null && Object.hasOwn(item, field))
     );
     if (!hasEnvConfig) {
       return context;

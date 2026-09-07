@@ -1,8 +1,16 @@
-import { BoardRepository, UsersRepository } from '@agor/core/db';
+import { mkdir, mkdtemp, rm, symlink } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { BoardRepository, runWithTenantContext, UsersRepository } from '@agor/core/db';
 import { feathers } from '@agor/core/feathers';
 import type { AuthenticatedParams, Params, User, UserID, UserRole } from '@agor/core/types';
-import { describe, expect } from 'vitest';
+import { describe, expect, vi } from 'vitest';
 import { dbTest } from '../../../../packages/core/src/db/test-helpers';
+import {
+  CLAUDE_AUTH_TRUSTED_USER_MUTATION,
+  createClaudeUserCredentialPatchCoordinator,
+} from './claude-credential-mutation';
+import { InMemoryClaudeOAuthAttemptStore } from './claude-oauth-attempt-store';
 import { markTrustedUserMutation } from './user-mutation-trust';
 import { createUsersService, UsersService } from './users';
 
@@ -344,4 +352,485 @@ describe('UsersService role authority', () => {
       service.patch(superadmin.user_id, { name: 'hook bypass' }, externalParams(admin))
     ).rejects.toMatchObject({ code: 403 });
   });
+});
+
+describe('UsersService Claude credential-source authority', () => {
+  dbTest(
+    'lets nested standalone OAuth metadata patch pass a waiting external source change',
+    async ({ db }) => {
+      const config = { deployment: { mode: 'standalone' } } as const;
+      const app = { get: () => config, service: () => undefined };
+      const store = new InMemoryClaudeOAuthAttemptStore();
+      let externalLockRequested!: () => void;
+      const externalRequested = new Promise<void>((resolve) => {
+        externalLockRequested = resolve;
+      });
+      const service = new UsersService(
+        db,
+        app as never,
+        config as never,
+        createClaudeUserCredentialPatchCoordinator(app as never, db, {
+          lockExternalUserMutation: (...args) => {
+            externalLockRequested();
+            return store.lockExternalUserMutation(...args);
+          },
+          completeExternalUserMutation: (...args) => store.completeExternalUserMutation(...args),
+        })
+      );
+      const user = await createUser(service, 'member', 'standalone-lock-order');
+
+      await runWithTenantContext('default', async () => {
+        let ownerEntered!: () => void;
+        const entered = new Promise<void>((resolve) => {
+          ownerEntered = resolve;
+        });
+        let allowNested!: () => void;
+        const allowed = new Promise<void>((resolve) => {
+          allowNested = resolve;
+        });
+        const owner = store.runCredentialRefresh(
+          { tenantId: 'default', userId: user.user_id },
+          async () => {
+            ownerEntered();
+            await allowed;
+            const trustedParams = { ...externalParams(user), provider: undefined } as Params & {
+              [CLAUDE_AUTH_TRUSTED_USER_MUTATION]: boolean;
+            };
+            trustedParams[CLAUDE_AUTH_TRUSTED_USER_MUTATION] = true;
+            markTrustedUserMutation(trustedParams, 'claude-auth');
+            return service.patch(
+              user.user_id,
+              {
+                agentic_auth_methods: { 'claude-code': 'subscription' },
+                agentic_credential_sources: { 'claude-code': 'managed_file' },
+              },
+              trustedParams
+            );
+          }
+        );
+        await entered;
+        const external = service.patch(
+          user.user_id,
+          { agentic_auth_methods: { 'claude-code': 'api_key' } },
+          externalParams(user)
+        );
+        await externalRequested;
+        allowNested();
+
+        await expect(
+          Promise.race([
+            owner,
+            new Promise((_, reject) =>
+              setTimeout(() => reject(new Error('nested users patch deadlocked')), 250)
+            ),
+          ])
+        ).resolves.toMatchObject({
+          agentic_auth_methods: { 'claude-code': 'subscription' },
+        });
+        await expect(external).resolves.toMatchObject({
+          user_id: user.user_id,
+        });
+      });
+    }
+  );
+
+  dbTest('serializes SQLite actor demotion with destructive route cleanup', async ({ db }) => {
+    let enterCleanup!: () => void;
+    const cleanupEntered = new Promise<void>((resolve) => {
+      enterCleanup = resolve;
+    });
+    let releaseCleanup!: () => void;
+    const cleanupReleased = new Promise<void>((resolve) => {
+      releaseCleanup = resolve;
+    });
+    const cleanupRouteBeforePatch = vi.fn(async () => {
+      enterCleanup();
+      await cleanupReleased;
+    });
+    const service = new UsersService(db, undefined, undefined, {
+      applies: (data) => Object.hasOwn(data, 'filesystem_home'),
+      changesSource: () => false,
+      changesRoute: (data) => Object.hasOwn(data, 'filesystem_home'),
+      coordinatesRemoval: () => true,
+      lock: vi.fn(async () => undefined),
+      complete: vi.fn(async () => undefined),
+      cleanupRouteBeforePatch,
+      cleanupRouteBeforeRemove: vi.fn(async () => undefined),
+    });
+    const actor = await createUser(service, 'superadmin', 'cleanup-actor');
+    const demoter = await createUser(service, 'superadmin', 'cleanup-demoter');
+    const target = await createUser(service, 'admin', 'cleanup-target');
+
+    await runWithTenantContext('default', async () => {
+      const targetPatch = service.patch(
+        target.user_id as UserID,
+        { filesystem_home: '/tmp/serialized-cleanup-home' },
+        externalParams(actor)
+      );
+      await cleanupEntered;
+
+      let demotionCompleted = false;
+      const demotion = service
+        .patch(actor.user_id as UserID, { role: 'member' }, externalParams(demoter))
+        .then((value) => {
+          demotionCompleted = true;
+          return value;
+        });
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(demotionCompleted).toBe(false);
+
+      releaseCleanup();
+      await expect(targetPatch).resolves.toMatchObject({
+        user_id: target.user_id,
+      });
+      await expect(demotion).resolves.toMatchObject({ role: 'member' });
+    });
+    expect(cleanupRouteBeforePatch).toHaveBeenCalledTimes(1);
+  });
+
+  dbTest('serializes source and route changes with managed runtime refresh', async ({ db }) => {
+    const lock = vi.fn(async () => undefined);
+    const complete = vi.fn(async () => undefined);
+    const cleanupRouteBeforePatch = vi.fn(async () => undefined);
+    const service = new UsersService(db, undefined, undefined, {
+      applies: (data) =>
+        Object.hasOwn(data, 'filesystem_home') ||
+        Object.hasOwn(data.agentic_tools ?? {}, 'claude-code'),
+      changesSource: (data) => Object.hasOwn(data.agentic_tools ?? {}, 'claude-code'),
+      changesRoute: (data) => Object.hasOwn(data, 'filesystem_home'),
+      coordinatesRemoval: () => true,
+      lock,
+      complete,
+      cleanupRouteBeforePatch,
+      cleanupRouteBeforeRemove: vi.fn(async () => undefined),
+    });
+    const user = await createUser(service, 'admin', 'claude-coordinated-source');
+    const params = externalParams(user);
+
+    await runWithTenantContext('default', async () => {
+      await service.patch(
+        user.user_id as UserID,
+        {
+          agentic_tools: {
+            'claude-code': { CLAUDE_CODE_OAUTH_TOKEN: 'sk-ant-oat01-coordinated' },
+          },
+        },
+        params
+      );
+      await service.patch(
+        user.user_id as UserID,
+        { filesystem_home: '/tmp/claude-coordinated-home' },
+        params
+      );
+      await service.patch(
+        user.user_id as UserID,
+        { filesystem_home: '/tmp/claude-coordinated-home' },
+        params
+      );
+      await service.patch(user.user_id as UserID, { name: 'not-credential-related' }, params);
+    });
+
+    expect(lock).toHaveBeenCalledTimes(3);
+    expect(complete).toHaveBeenCalledTimes(1);
+    expect(cleanupRouteBeforePatch).toHaveBeenCalledTimes(1);
+  });
+
+  dbTest(
+    'preserves managed credentials across canonical-equivalent sandbox home updates',
+    async ({ db }) => {
+      const root = await mkdtemp(join(tmpdir(), 'agor-claude-home-route-'));
+      try {
+        const realHome = join(root, 'real-home');
+        const aliasHome = join(root, 'alias-home');
+        await mkdir(realHome);
+        await symlink(realHome, aliasHome, 'dir');
+        const cleanupRouteBeforePatch = vi.fn(async () => undefined);
+        const config = {
+          execution: {
+            unix_user_mode: 'sandbox' as const,
+            sandbox: { enabled: true, home_mode: 'per_user' as const },
+          },
+        };
+        const service = new UsersService(db, undefined, config, {
+          applies: (data) => Object.hasOwn(data, 'filesystem_home'),
+          changesSource: () => false,
+          changesRoute: (data) => Object.hasOwn(data, 'filesystem_home'),
+          coordinatesRemoval: () => true,
+          lock: vi.fn(async () => undefined),
+          complete: vi.fn(async () => undefined),
+          cleanupRouteBeforePatch,
+          cleanupRouteBeforeRemove: vi.fn(async () => undefined),
+        });
+        const user = await createUser(service, 'admin', 'claude-canonical-route');
+        const params = externalParams(user);
+
+        await runWithTenantContext('default', async () => {
+          await service.patch(user.user_id as UserID, { filesystem_home: realHome }, params);
+          const trusted = { ...params, provider: undefined } as Params & {
+            [CLAUDE_AUTH_TRUSTED_USER_MUTATION]: boolean;
+          };
+          trusted[CLAUDE_AUTH_TRUSTED_USER_MUTATION] = true;
+          markTrustedUserMutation(trusted, 'claude-auth');
+          await service.patch(
+            user.user_id as UserID,
+            {
+              agentic_auth_methods: { 'claude-code': 'subscription' },
+              agentic_credential_sources: { 'claude-code': 'managed_file' },
+            },
+            trusted
+          );
+          cleanupRouteBeforePatch.mockClear();
+
+          for (const equivalent of [`${realHome}/`, `${root}/./real-home`, aliasHome]) {
+            await service.patch(user.user_id as UserID, { filesystem_home: equivalent }, params);
+          }
+        });
+
+        expect(cleanupRouteBeforePatch).not.toHaveBeenCalled();
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
+    }
+  );
+
+  dbTest(
+    'linearizes managed-file → pasted-token → clear without reactivating the file',
+    async ({ db }) => {
+      const service = new UsersService(db);
+      const user = await createUser(service, 'member', 'claude-source');
+      const params = externalParams(user);
+      const trustedParams = { ...params, provider: undefined } as Params;
+      markTrustedUserMutation(trustedParams, 'claude-auth');
+
+      await expect(
+        service.patch(
+          user.user_id as UserID,
+          {
+            agentic_auth_methods: { 'claude-code': 'subscription' },
+            agentic_credential_sources: { 'claude-code': 'managed_file' },
+          },
+          trustedParams
+        )
+      ).resolves.toMatchObject({
+        agentic_credential_sources: { 'claude-code': 'managed_file' },
+      });
+
+      await expect(
+        service.patch(
+          user.user_id as UserID,
+          {
+            agentic_tools: {
+              'claude-code': { CLAUDE_CODE_OAUTH_TOKEN: 'sk-ant-oat01-pasted' },
+            },
+          },
+          params
+        )
+      ).resolves.toMatchObject({
+        agentic_auth_methods: { 'claude-code': 'subscription' },
+        agentic_credential_sources: { 'claude-code': 'subscription_token' },
+        agentic_tools: { 'claude-code': { CLAUDE_CODE_OAUTH_TOKEN: true } },
+      });
+
+      // Even an older client that sends only the field clear gets the source
+      // transition in the same users-row write.
+      await expect(
+        service.patch(
+          user.user_id as UserID,
+          { agentic_tools: { 'claude-code': { CLAUDE_CODE_OAUTH_TOKEN: null } } },
+          params
+        )
+      ).resolves.toMatchObject({
+        agentic_credential_sources: { 'claude-code': 'none' },
+        agentic_tools: {},
+      });
+    }
+  );
+
+  dbTest('persists none when an older client clears a legacy source-less token', async ({ db }) => {
+    const service = new UsersService(db);
+    const user = await createUser(service, 'member', 'claude-legacy-source');
+    const params = externalParams(user);
+
+    await service.patch(
+      user.user_id as UserID,
+      {
+        agentic_tools: {
+          'claude-code': { CLAUDE_CODE_OAUTH_TOKEN: 'sk-ant-oat01-legacy' },
+        },
+      },
+      params
+    );
+    // Model a row written before exact-source persistence was introduced.
+    await new UsersRepository(db).update(user.user_id, { agentic_credential_sources: {} });
+
+    await expect(
+      service.patch(
+        user.user_id as UserID,
+        { agentic_tools: { 'claude-code': { CLAUDE_CODE_OAUTH_TOKEN: null } } },
+        params
+      )
+    ).resolves.toMatchObject({
+      agentic_credential_sources: { 'claude-code': 'none' },
+      agentic_tools: {},
+    });
+  });
+
+  dbTest('keeps inactive credentials dormant across every Claude source switch', async ({ db }) => {
+    const service = new UsersService(db);
+    const user = await createUser(service, 'member', 'claude-permutations');
+    const params = externalParams(user);
+    const trustedParams = { ...params, provider: undefined } as Params;
+    markTrustedUserMutation(trustedParams, 'claude-auth');
+
+    const api = await service.patch(
+      user.user_id as UserID,
+      {
+        agentic_tools: {
+          'claude-code': {
+            ANTHROPIC_API_KEY: 'sk-ant-api-test',
+            ANTHROPIC_AUTH_TOKEN: 'sk-ant-auth-test',
+          },
+        },
+      },
+      params
+    );
+    expect(api).toMatchObject({
+      agentic_auth_methods: { 'claude-code': 'api_key' },
+      agentic_credential_sources: { 'claude-code': 'api_key' },
+    });
+
+    // Either API credential is sufficient. Clearing one must not deactivate
+    // the other credential in the same active source family.
+    await expect(
+      service.patch(
+        user.user_id as UserID,
+        { agentic_tools: { 'claude-code': { ANTHROPIC_API_KEY: null } } },
+        params
+      )
+    ).resolves.toMatchObject({
+      agentic_auth_methods: { 'claude-code': 'api_key' },
+      agentic_credential_sources: { 'claude-code': 'api_key' },
+      agentic_tools: { 'claude-code': { ANTHROPIC_AUTH_TOKEN: true } },
+    });
+
+    const token = await service.patch(
+      user.user_id as UserID,
+      {
+        agentic_tools: {
+          'claude-code': { CLAUDE_CODE_OAUTH_TOKEN: 'sk-ant-oat01-pasted' },
+        },
+      },
+      params
+    );
+    expect(token).toMatchObject({
+      agentic_credential_sources: { 'claude-code': 'subscription_token' },
+      agentic_tools: {
+        'claude-code': { ANTHROPIC_AUTH_TOKEN: true, CLAUDE_CODE_OAUTH_TOKEN: true },
+      },
+    });
+
+    const managed = await service.patch(
+      user.user_id as UserID,
+      {
+        agentic_credential_sources: { 'claude-code': 'managed_file' },
+      },
+      trustedParams
+    );
+    expect(managed).toMatchObject({
+      agentic_auth_methods: { 'claude-code': 'subscription' },
+      agentic_credential_sources: { 'claude-code': 'managed_file' },
+      agentic_tools: {
+        'claude-code': { ANTHROPIC_AUTH_TOKEN: true, CLAUDE_CODE_OAUTH_TOKEN: true },
+      },
+    });
+
+    // Clearing a dormant pasted token must not log out the active managed file.
+    await expect(
+      service.patch(
+        user.user_id as UserID,
+        { agentic_tools: { 'claude-code': { CLAUDE_CODE_OAUTH_TOKEN: null } } },
+        params
+      )
+    ).resolves.toMatchObject({
+      agentic_auth_methods: { 'claude-code': 'subscription' },
+      agentic_credential_sources: { 'claude-code': 'managed_file' },
+      agentic_tools: { 'claude-code': { ANTHROPIC_AUTH_TOKEN: true } },
+    });
+
+    // Clearing an inactive API credential must not log out the managed file.
+    await expect(
+      service.patch(
+        user.user_id as UserID,
+        { agentic_tools: { 'claude-code': { ANTHROPIC_AUTH_TOKEN: null } } },
+        params
+      )
+    ).resolves.toMatchObject({
+      agentic_auth_methods: { 'claude-code': 'subscription' },
+      agentic_credential_sources: { 'claude-code': 'managed_file' },
+    });
+
+    await expect(
+      service.patch(
+        user.user_id as UserID,
+        { agentic_credential_sources: { 'claude-code': 'managed_file' } },
+        params
+      )
+    ).rejects.toMatchObject({ code: 403 });
+  });
+
+  dbTest(
+    'maps legacy method-only switches and clears onto exact backed sources',
+    async ({ db }) => {
+      const service = new UsersService(db);
+      const user = await createUser(service, 'member', 'claude-method-switch');
+      const params = externalParams(user);
+
+      await service.patch(
+        user.user_id as UserID,
+        { agentic_tools: { 'claude-code': { ANTHROPIC_API_KEY: 'sk-ant-api-dormant' } } },
+        params
+      );
+      await service.patch(
+        user.user_id as UserID,
+        {
+          agentic_tools: {
+            'claude-code': { CLAUDE_CODE_OAUTH_TOKEN: 'sk-ant-oat01-active' },
+          },
+        },
+        params
+      );
+
+      await expect(
+        service.patch(
+          user.user_id as UserID,
+          { agentic_auth_methods: { 'claude-code': 'api_key' } },
+          params
+        )
+      ).resolves.toMatchObject({
+        agentic_auth_methods: { 'claude-code': 'api_key' },
+        agentic_credential_sources: { 'claude-code': 'api_key' },
+      });
+
+      await expect(
+        service.patch(
+          user.user_id as UserID,
+          { agentic_auth_methods: { 'claude-code': 'subscription' } },
+          params
+        )
+      ).resolves.toMatchObject({
+        agentic_auth_methods: { 'claude-code': 'subscription' },
+        agentic_credential_sources: { 'claude-code': 'subscription_token' },
+      });
+
+      await expect(
+        service.patch(
+          user.user_id as UserID,
+          { agentic_auth_methods: { 'claude-code': undefined } },
+          params
+        )
+      ).resolves.toMatchObject({
+        agentic_credential_sources: { 'claude-code': 'none' },
+      });
+    }
+  );
 });

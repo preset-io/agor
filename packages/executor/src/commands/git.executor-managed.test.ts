@@ -16,6 +16,8 @@ const mocks = vi.hoisted(() => ({
   getReposDir: vi.fn(() => '/safe/repos'),
   addConfig: vi.fn(),
   gitRaw: vi.fn(),
+  gitRevparse: vi.fn(),
+  writeFile: vi.fn(),
   isValidGitRepo: vi.fn(),
   getDefaultBranch: vi.fn(),
   getRemoteUrl: vi.fn(),
@@ -24,6 +26,15 @@ const mocks = vi.hoisted(() => ({
   scrubGitConfigRemoteCredentials: vi.fn(),
   userHome: '/passwd/home',
 }));
+
+// Only `writeFile` is stubbed: `git.branch.add` uses it to drop the durable
+// workspace-ownership marker, and these cases run against unwritable synthetic
+// branch paths. Everything else (including this file's own tmpdir helpers)
+// stays real.
+vi.mock('node:fs/promises', async () => {
+  const actual = await vi.importActual<Record<string, unknown>>('node:fs/promises');
+  return { ...actual, writeFile: mocks.writeFile };
+});
 
 vi.mock('node:os', async () => {
   const actual = await vi.importActual<typeof import('node:os')>('node:os');
@@ -47,7 +58,9 @@ vi.mock('../git/index.js', async () => {
   const actual = await vi.importActual<Record<string, unknown>>('../git/index.js');
   return {
     ...actual,
-    createGit: vi.fn(() => ({ git: { addConfig: mocks.addConfig, raw: mocks.gitRaw } })),
+    createGit: vi.fn(() => ({
+      git: { addConfig: mocks.addConfig, raw: mocks.gitRaw, revparse: mocks.gitRevparse },
+    })),
     cloneRepo: mocks.cloneRepo,
     createBranchAsClone: mocks.createBranchAsClone,
     isRemoteRefVisibleForClone: mocks.isRemoteRefVisibleForClone,
@@ -184,6 +197,10 @@ beforeEach(() => {
     binary: '/usr/bin/git',
     version: '2.47.1',
   });
+  mocks.writeFile.mockResolvedValue(undefined);
+  mocks.gitRevparse.mockImplementation(async (args: string[]) =>
+    args.includes('--git-path') ? 'agor-branch-id\n' : 'sha-abc\n'
+  );
   mocks.gitRaw.mockImplementation(async (args: string[]) => {
     if (args.includes('status')) return '';
     if (args.includes('--abbrev-ref')) return 'main\n';
@@ -297,6 +314,14 @@ describe('managed executor git/fs commands', () => {
         depth: 42,
         referencePath: '/trusted/repo',
       })
+    );
+    // The durable workspace-ownership marker must land before the branch is
+    // acknowledged ready — it is what stops a later retry/restore from adopting
+    // an archived or unrelated checkout at the same deterministic path.
+    expect(mocks.writeFile).toHaveBeenCalledWith(
+      '/trusted/branch/agor-branch-id',
+      `${branchId}\n`,
+      { mode: 0o600 }
     );
     expect(patchedBranches).toContainEqual({ filesystem_status: 'ready' });
     expect(renderedBranches).toEqual([branchId]);

@@ -333,7 +333,7 @@ export interface BranchesServiceImpl extends Service<Branch, Partial<Branch>, Fe
     environmentUpdate?: BranchEnvironmentUpdate | FeathersParams,
     params?: FeathersParams
   ): Promise<Branch>;
-  startEnvironment(id: BranchID, params?: FeathersParams): Promise<Branch>;
+  startEnvironment(id: BranchID, params?: FeathersParams, confirmationOf?: string): Promise<Branch>;
   stopEnvironment(id: BranchID, params?: FeathersParams): Promise<Branch>;
   restartEnvironment(id: BranchID, params?: FeathersParams): Promise<Branch>;
   nukeEnvironment(id: BranchID, params?: FeathersParams): Promise<Branch>;

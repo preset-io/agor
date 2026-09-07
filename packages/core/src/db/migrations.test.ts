@@ -140,6 +140,27 @@ describe('Postgres migrations', () => {
     ).toEqual([]);
   });
 
+  it('enforces the Claude OAuth mutation-authority migration as an offline cutover', () => {
+    expect(
+      pendingOfflineCutoverMigrations('postgresql', {
+        applied: ['0093_scheduler_poison_recovery'],
+        pending: ['0100_claude_oauth_attempts'],
+      })
+    ).toEqual(['0100_claude_oauth_attempts']);
+    expect(
+      pendingOfflineCutoverMigrations('sqlite', {
+        applied: ['0096_scheduler_poison_recovery'],
+        pending: ['0103_claude_oauth_attempts'],
+      })
+    ).toEqual([]);
+    expect(
+      pendingOfflineCutoverMigrations('postgresql', {
+        applied: [],
+        pending: ['0000_cuddly_captain_america', '0100_claude_oauth_attempts'],
+      })
+    ).toEqual([]);
+  });
+
   it('assigns GitHub install state unique post-HA migration watermarks', async () => {
     const [postgresJournal, sqliteJournal] = await readJournals();
 

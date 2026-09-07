@@ -20,11 +20,12 @@ import type {
   MessageSource,
   PermissionMode,
   PermissionScope,
+  PromptOrigin,
   SessionID,
   Task,
   TaskID,
 } from '@agor/core/types';
-import { TaskStatus } from '@agor/core/types';
+import { AUTHORIZATION_REVOKED_TERMINATION_MESSAGE, TaskStatus } from '@agor/core/types';
 import { patchConsole } from '@agor/core/utils/logger';
 import { type ExecutorHeartbeatHandle, startExecutorHeartbeat } from './executor-heartbeat.js';
 import type { ResolvedConfigSlice } from './payload-types.js';
@@ -67,6 +68,7 @@ export interface ExecutorConfig {
   permissionMode?: PermissionMode;
   daemonUrl: string;
   messageSource?: MessageSource;
+  promptOrigin?: PromptOrigin;
   /** Opaque, daemon-authorized context interpreted by the selected integration. */
   agenticToolContext?: Record<string, unknown>;
   /** Daemon-resolved config slice. See payload-types.ResolvedConfigSliceSchema. */
@@ -236,6 +238,9 @@ export class AgorExecutor {
       `[executor.stop] event=request_observed task_id=${shortId(this.config.taskId)} ` +
         `cause=${task.termination_request.cause} source=${source}`
     );
+    if (task.termination_request.cause === 'authorization_revoked') {
+      console.warn(AUTHORIZATION_REVOKED_TERMINATION_MESSAGE);
+    }
     markCoordinatorTerminationAbort(this.abortController);
     // Keep task-scoped heartbeat/pulse reporting alive until ToolRegistry.execute
     // and provider cleanup actually return. STOPPING is still live work; hiding
@@ -370,6 +375,7 @@ export class AgorExecutor {
         permissionMode: this.config.permissionMode,
         abortController: this.abortController,
         messageSource: this.config.messageSource,
+        promptOrigin: this.config.promptOrigin,
         agenticToolContext: this.config.agenticToolContext,
         resolvedConfig: this.config.resolvedConfig,
         onPulse: (kind, detail) => this.recordPulse(kind, detail),

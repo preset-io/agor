@@ -266,6 +266,7 @@ Some migrations change authorization, distributed ownership, or callback protoco
 - `0091_codex_device_auth_attempts` moves Codex device authorization polling and exchange ownership into a fenced PostgreSQL protocol.
 - `0092_add_user_credential_generation` makes password-change revocation use generation-bearing tokens. Old daemons do not understand the claim and must not share a cohort once a password changes.
 - `0095_board_branch_capability_policies` (PostgreSQL) / `0098_board_branch_capability_policies` (SQLite) replaces board and branch RBAC with normalized capability policies. Its best-effort conversion is intentionally equal-or-less privilege: legacy prompt sharing is reduced to independent collaboration, and rules that cannot be represented safely may lose access rather than gain it.
+- `0100_claude_oauth_attempts` (PostgreSQL) / `0103_claude_oauth_attempts` (SQLite) moves Claude paste-back attempts and credential-file mutations into generation-fenced authority. Old daemons do not participate in that protocol and must not overlap the new cohort.
 
 Rolling old and new daemons against the same database across any cutover is not supported.
 
@@ -283,6 +284,8 @@ Normal daemon startup and `agor db migrate --yes` deliberately refuse registered
 Before the board/branch RBAC cutover, take a complete database backup and review the migration preflight. The migration stops if a board or branch cannot be attributed to an existing primary owner. After migration, review access rules, especially board-aligned branches that were materialized as overrides and any legacy cross-user prompt access. A release rollback requires stopping all new daemons and restoring the complete pre-migration backup; do not run an old daemon against the new policy schema.
 
 Migration `0078` deletes existing MCP OAuth grant rows because the old plaintext, unfenced rows are not compatible with active-active callback and rotating-refresh ownership. Users must reconnect MCP OAuth after the upgrade. Take a backup before the cutover. A rollback to an older daemon requires restoring the pre-cutover backup; do not run an older cohort against the new OAuth schema.
+
+Migration `0100` is additive, so an offline binary rollback may retain its table, but its distributed protocol is not rollback compatible: stop every new daemon first, do not run mixed cohorts, and return to a release whose HA guard keeps Claude OAuth/logout disabled. Pending `0100` attempts then remain inert until the new cohort returns or an operator removes them in a coordinated schema-and-ledger rollback. Never advertise Claude HA credential mutation from a binary that does not own the `0100` generation/tombstone protocol and concrete runtime credential mask. Drain managed-file Claude tasks before rolling back to a runtime that can read or refresh the canonical file directly. Current-version standalone writers share one process-global queue and do not advance durable file tombstones; after an offline HA → standalone → HA deployment-mode transition, retained PostgreSQL sequences resume above the prior HA tombstones. This does not permit concurrent standalone/HA writers.
 
 Tenant archives deliberately omit MCP OAuth grants. The encrypted grant envelope is bound to the source tenant ID, server, generation, and deployment master secret, so importing or re-homing a tenant restores the MCP server configuration but requires users to reconnect OAuth. Pending OAuth attempts, executor token authorities, and GitHub install state are likewise non-portable.
 
@@ -322,6 +325,21 @@ Each tool may have one workspace default preset. Users can choose that moving wo
 Agor uses these credentials only to authenticate the agent runtime with the provider SDK/CLI. Stored secrets are encrypted at rest and are not written into the prompt transcript or intentionally sent to the model as text.
 
 Mixing is fine: one user can run on a Claude subscription token while teammates use a workspace API key.
+
+The in-app **Sign in with Claude** OAuth flow is intentionally not a default
+authentication option. Operators must explicitly enable
+`agentic_tools.claude_subscription_oauth: true` after obtaining the appropriate
+provider authorization/client contract; see [Operator configuration](./config-yaml).
+Absent that clearance flag, Agor continues to support Anthropic API keys and
+manually pasted `claude setup-token` credentials without exposing the OAuth
+endpoint or tab. Managed sign-in additionally requires local sandbox execution
+with persistent per-user homes and `sandbox.home_mode: per_user`; other
+topologies fail closed. In that profile the daemon, not Claude Code, owns token
+refresh. Before each sandbox spawn Agor safely prepares the real `.claude`
+store; bubblewrap binds that writable directory as an immutable mountpoint and
+masks the credential, generation, and mutation-lock leaves. Claude settings,
+plugins, projects, and fork/resume state remain writable at their canonical
+paths.
 
 <a id="claude-max-pro" />
 

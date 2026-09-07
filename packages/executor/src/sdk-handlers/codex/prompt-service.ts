@@ -29,7 +29,6 @@ import * as path from 'node:path';
 import { loadManagedAgenticToolSdk } from '@agor/core/agentic-integrations';
 import { shortId } from '@agor/core/db';
 import {
-  asMCPExternalError,
   getMcpServersForSession,
   isMCPAbortError,
   listMcpToolsWithPermission,
@@ -121,11 +120,20 @@ function applyMcpToolPermissions(config: CodexConfigObject, server: MCPServer): 
 const GATEWAY_MCP_STARTUP_TIMEOUT_MS = 30_000;
 
 type CodexLifecycleFailureCode =
+  | 'authentication_required'
+  | 'completed_without_response'
+  | 'turn_failed'
   | 'stream_start_failed'
   | 'stream_interrupted'
   | 'stream_ended_without_completion';
 
 const CODEX_LIFECYCLE_MESSAGES: Record<CodexLifecycleFailureCode, string> = {
+  authentication_required:
+    'Codex authentication is not configured. Review Codex authentication settings and retry the prompt.',
+  completed_without_response:
+    'Codex completed after a stream error but returned no assistant response. Retry the prompt.',
+  turn_failed:
+    'Codex failed the turn. Retry the prompt; review Codex authentication or runtime status if it continues.',
   stream_start_failed: 'Codex could not start the turn. Retry the prompt.',
   stream_interrupted: 'The Codex turn was interrupted before completion. Retry the prompt.',
   stream_ended_without_completion:
@@ -159,6 +167,7 @@ function projectCodexCompletedEvent(
     usage: {
       input_tokens: count('input_tokens'),
       cached_input_tokens: count('cached_input_tokens'),
+      cache_write_input_tokens: count('cache_write_input_tokens'),
       output_tokens: count('output_tokens'),
       reasoning_output_tokens: count('reasoning_output_tokens'),
     },
@@ -182,6 +191,25 @@ function isKnownCodexBoundaryError(
     return error instanceof CodexLifecycleError || error instanceof MCPExternalError;
   } catch {
     return false;
+  }
+}
+
+function logCodexRuntimeFailure(
+  event: 'stream_error_observed' | 'turn_completed_without_response' | 'turn_failed',
+  error: unknown,
+  sessionId: SessionID,
+  category?: 'configuration_required'
+): void {
+  const safe = sanitizeMCPExternalError(error, {
+    stage: 'runtime',
+    ...(category ? { category } : {}),
+  });
+  const code = safe.diagnostic.code;
+  const message = `[codex.runtime] event=${event} session_id=${sessionId} category=${safe.category} type=${safe.diagnostic.type}${code ? ` code=${code}` : ''}`;
+  if (event === 'stream_error_observed') {
+    console.warn(`${message} outcome=awaiting_terminal_event`);
+  } else {
+    console.error(message);
   }
 }
 
@@ -1386,6 +1414,8 @@ export class CodexPromptService {
       let allToolUses: Array<{ id: string; name: string; input: Record<string, unknown> }> = [];
       let todoIdsEmittedViaUpdate = new Set<string>();
       let latestContextUsage: ContextUsageSnapshot | undefined;
+      let observedStreamError: unknown;
+      let receivedAssistantMessage = false;
 
       let eventCount = 0;
       let didStop = false;
@@ -1442,6 +1472,7 @@ export class CodexPromptService {
                     ? eventPayload.message
                     : '';
             if (text) {
+              receivedAssistantMessage = true;
               currentMessage.push({ type: 'text', text });
             }
             continue;
@@ -1469,7 +1500,17 @@ export class CodexPromptService {
               (block) => block.type === 'text' && block.text === lastAgentMessage
             );
             if (lastAgentMessage && !hasSameTextContent) {
+              receivedAssistantMessage = true;
               currentMessage.push({ type: 'text', text: lastAgentMessage });
+            }
+
+            if (observedStreamError && !receivedAssistantMessage) {
+              logCodexRuntimeFailure(
+                'turn_completed_without_response',
+                observedStreamError,
+                sessionId
+              );
+              throw new CodexLifecycleError('completed_without_response');
             }
 
             codexDebug(
@@ -1589,7 +1630,9 @@ export class CodexPromptService {
               // Codex can emit multiple agent_message items per turn, interleaved with tool calls.
               // Yielding them immediately gives a "chatty" UX where users see text as it arrives.
               if ('text' in event.item && event.item.type === 'agent_message') {
-                const textContent = [{ type: 'text', text: event.item.text as string }];
+                const agentMessageText = event.item.text as string;
+                if (agentMessageText) receivedAssistantMessage = true;
+                const textContent = [{ type: 'text', text: agentMessageText }];
 
                 yield {
                   type: 'complete',
@@ -1630,6 +1673,14 @@ export class CodexPromptService {
           case 'turn.completed': {
             // Turn complete, emit final message
             receivedTerminalEvent = true;
+            if (observedStreamError && !receivedAssistantMessage) {
+              logCodexRuntimeFailure(
+                'turn_completed_without_response',
+                observedStreamError,
+                sessionId
+              );
+              throw new CodexLifecycleError('completed_without_response');
+            }
             threadId = thread.id || '';
             const mappedUsage = extractCodexTokenUsage((event as { usage?: unknown }).usage);
             const contextUsage =
@@ -1654,25 +1705,28 @@ export class CodexPromptService {
 
           case 'turn.failed': {
             receivedTerminalEvent = true;
-            const classification = {
-              stage: 'runtime' as const,
-              ...(!this.apiKey && !this.useNativeAuth
-                ? { category: 'configuration_required' as const }
-                : {}),
-            };
-            const safe = sanitizeMCPExternalError(event.error, classification);
-            console.error(
-              `❌ [Codex] Turn failed for session ${shortId(sessionId)} category=${safe.category} type=${safe.diagnostic.type}`
+            const missingAuthentication = !this.apiKey && !this.useNativeAuth;
+            logCodexRuntimeFailure(
+              'turn_failed',
+              event.error,
+              sessionId,
+              missingAuthentication ? 'configuration_required' : undefined
             );
-            throw asMCPExternalError(event.error, classification);
+            throw new CodexLifecycleError(
+              missingAuthentication ? 'authentication_required' : 'turn_failed'
+            );
           }
 
           case 'error': {
-            // The public SDK defines every `error` event as unrecoverable and
-            // exposes only an arbitrary provider/CLI message. It has no typed
-            // reconnect/auth discriminator, so do not parse prose to invent
-            // control flow or recovery state.
-            throw asMCPExternalError(event, { stage: 'runtime' });
+            // Despite the public type's "unrecoverable" wording, Codex exec
+            // keeps its event processor running after this notification. In
+            // particular, retry progress is projected through this same lossy
+            // event shape without the source `will_retry` discriminator. Do
+            // not parse provider prose or terminate early: remember the error
+            // and wait for the authoritative turn.completed / turn.failed / EOF.
+            observedStreamError = event;
+            logCodexRuntimeFailure('stream_error_observed', event, sessionId);
+            break;
           }
 
           default:
@@ -1707,8 +1761,8 @@ export class CodexPromptService {
       if (isKnownCodexBoundaryError(error)) throw error;
 
       // Convert opaque SDK lifecycle failures to local, fixed control-flow
-      // errors. Provider failures emitted as typed events above retain their
-      // closed MCP category/action contract instead of being flattened here.
+      // errors. Codex runtime failures emitted as typed events above have already
+      // been converted to Codex-specific fixed lifecycle errors.
       throw new CodexLifecycleError(
         runtimePhase === 'starting' ? 'stream_start_failed' : 'stream_interrupted'
       );

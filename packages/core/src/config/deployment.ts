@@ -1,4 +1,6 @@
+import { assertAsyncEnvironmentCommandConfig } from './environment-commands';
 import {
+  hasContainedClaudeRuntimeCredentials,
   hasCrossReplicaExecutorCredentialLock,
   hasExactUserExecutorCredentialHome,
   hasTenantSafeExecutorCredentialHome,
@@ -79,6 +81,9 @@ export type ResolvedDeploymentConfig =
         githubInstall: true;
         codexCredentialFiles: boolean;
         codexDeviceAuth: boolean;
+        /** Claude OAuth + logout generation-fenced exact-user mutation authority. */
+        claudeOAuth: boolean;
+        claudeAuth: boolean;
         processAffineAuth: false;
         gatewayListeners: true;
         gatewayOutboundExactlyOnce: false;
@@ -362,11 +367,14 @@ export function resolveDeploymentConfig(
       'Config error: HA web terminals require execution_topology shared-local; external terminal runtimes do not yet have owner-affine routing'
     );
   }
-  if (config.execution?.managed_envs_execution_mode !== 'webhook-only') {
-    throw new Error(
-      'Config error: HA currently requires execution.managed_envs_execution_mode: webhook-only'
-    );
-  }
+  assertAsyncEnvironmentCommandConfig({
+    ...config,
+    deployment: {
+      ...config.deployment,
+      mode: 'ha',
+      ha: { ...config.deployment?.ha, execution_topology: executionTopology },
+    },
+  });
 
   const executorStorage = config.execution?.executor_storage;
   if (
@@ -381,6 +389,8 @@ export function resolveDeploymentConfig(
   const tenantSafeCredentialHome = hasTenantSafeExecutorCredentialHome(config);
   const exactUserCredentialHome = hasExactUserExecutorCredentialHome(config);
   const crossReplicaCredentialLock = hasCrossReplicaExecutorCredentialLock(config);
+  const containedClaudeRuntimeCredentials =
+    executionTopology === 'shared-local' && hasContainedClaudeRuntimeCredentials(config);
   if (!tenantSafeCredentialHome) {
     throw new Error(
       'Config error: HA auth-resolved execution requires execution.executor_storage.user_home: persistent-per-user'
@@ -483,6 +493,18 @@ export function resolveDeploymentConfig(
       // deployment's intentional shared Unix identity would let users replace
       // each other's login. Admit only a concrete tenant/user-keyed route.
       codexDeviceAuth: exactUserCredentialHome && crossReplicaCredentialLock,
+      // Claude additionally requires concrete runtime containment: exact
+      // routing and a shared lock protect daemon writers, while the bubblewrap
+      // mask proves the provider runtime cannot mutate the canonical grant.
+      claudeOAuth:
+        exactUserCredentialHome && crossReplicaCredentialLock && containedClaudeRuntimeCredentials,
+      // Cleanup must remain available after a containment-policy downgrade so
+      // an operator can remove credentials written by the formerly-admitted
+      // configuration. It still requires local exact routing + writer lock.
+      claudeAuth:
+        executionTopology === 'shared-local' &&
+        exactUserCredentialHome &&
+        crossReplicaCredentialLock,
       processAffineAuth: false,
       gatewayListeners: true,
       gatewayOutboundExactlyOnce: false,

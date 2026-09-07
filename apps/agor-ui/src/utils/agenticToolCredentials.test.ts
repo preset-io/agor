@@ -20,6 +20,7 @@ describe('buildAgenticToolCredentialPatch', () => {
         'claude-code': { CLAUDE_CODE_OAUTH_TOKEN: 'sk-ant-oat01-test' },
       },
       agentic_auth_methods: { 'claude-code': 'subscription' },
+      agentic_credential_sources: { 'claude-code': 'subscription_token' },
     });
   });
 
@@ -43,7 +44,7 @@ describe('buildAgenticToolCredentialPatch', () => {
     });
   });
 
-  it('clears a token by sending null at the same canonical field path', () => {
+  it('leaves the daemon to atomically derive a token-clear source transition', () => {
     expect(buildAgenticToolCredentialPatch('claude-code', 'CLAUDE_CODE_OAUTH_TOKEN', null)).toEqual(
       {
         agentic_tools: {
@@ -51,5 +52,14 @@ describe('buildAgenticToolCredentialPatch', () => {
         },
       }
     );
+  });
+
+  it('does not assert a source when clearing either API credential field', () => {
+    expect(buildAgenticToolCredentialPatch('claude-code', 'ANTHROPIC_API_KEY', null)).toEqual({
+      agentic_tools: { 'claude-code': { ANTHROPIC_API_KEY: null } },
+    });
+    expect(buildAgenticToolCredentialPatch('claude-code', 'ANTHROPIC_AUTH_TOKEN', null)).toEqual({
+      agentic_tools: { 'claude-code': { ANTHROPIC_AUTH_TOKEN: null } },
+    });
   });
 });

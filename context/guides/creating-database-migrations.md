@@ -151,7 +151,7 @@ live daemon connections hold shared locks that will trip the timeout.
 
 If old and new workers cannot safely share the additive schema, register the
 migration in the impact registry in `src/db/migrate.ts` with
-`requiresOfflineCutover: true`. Existing
+`requiresOfflineCutover: true` and state its rollback compatibility. Existing
 databases then refuse automatic migration until an operator stops every daemon
 and runs `agor db migrate --offline-cutover`. The registry may cover either or
 both dialects; a protocol-breaking SQLite migration still needs acknowledgement

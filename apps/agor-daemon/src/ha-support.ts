@@ -1,4 +1,9 @@
-import type { ResolvedDeploymentConfig } from '@agor/core/config';
+import {
+  type AgorConfig,
+  hasContainedClaudeRuntimeCredentials,
+  isClaudeSubscriptionOAuthEnabled,
+  type ResolvedDeploymentConfig,
+} from '@agor/core/config';
 import { Unavailable } from '@agor/core/feathers';
 import type { HookContext, PermissionMode, Session } from '@agor/core/types';
 import { mapPermissionMode } from '@agor/core/utils/permission-mode-mapper';
@@ -13,6 +18,10 @@ export const HA_UNSUPPORTED_FEATURES = {
     'Codex credential-file import/logout without a consistent executor user home and execution.executor_storage.user_home_locking: cross-replica-flock',
   codexDeviceAuth:
     'Codex device authentication without durable attempt ownership, exact per-user credential routing, and execution.executor_storage.user_home_locking: cross-replica-flock',
+  claudeAuth:
+    'Claude credential mutation without exact local per-user routing, cross-replica writer serialization, and generation fencing',
+  claudeOAuth:
+    'Claude subscription OAuth without durable attempt ownership, exact per-user routing, cross-replica credential mutation authority, and concrete runtime credential containment',
   openCodeAuth: 'OpenCode OAuth/native authentication flows',
   artifactRuntime: 'synchronous artifact runtime introspection',
 } as const;
@@ -39,7 +48,21 @@ export function isHaFeatureUnavailable(
   if (!isConstrainedHa(deployment)) return false;
   if (feature === 'codexAuth') return !deployment.capabilities.codexCredentialFiles;
   if (feature === 'codexDeviceAuth') return !deployment.capabilities.codexDeviceAuth;
+  if (feature === 'claudeAuth') return !deployment.capabilities.claudeAuth;
+  if (feature === 'claudeOAuth') return !deployment.capabilities.claudeOAuth;
   return true;
+}
+
+/** Effective UI/runtime capability: provider authorization AND topology support. */
+export function hasClaudeSubscriptionOAuthCapability(
+  config: AgorConfig,
+  deployment: ResolvedDeploymentConfig
+): boolean {
+  return (
+    isClaudeSubscriptionOAuthEnabled(config) &&
+    hasContainedClaudeRuntimeCredentials(config) &&
+    !isHaFeatureUnavailable(deployment, 'claudeOAuth')
+  );
 }
 
 export function rejectInConstrainedHa(

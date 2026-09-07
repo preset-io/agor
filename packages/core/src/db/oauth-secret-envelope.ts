@@ -11,6 +11,7 @@ const IV_LENGTH = 12;
 export type BoundSecretPurpose =
   | 'pending-exchange'
   | 'codex-device-attempt'
+  | 'claude-signin-attempt'
   | 'access-token'
   | 'refresh-token'
   | 'client-id'
