@@ -1129,11 +1129,8 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
       ? { ...environment, template_overrides: repo.environment.template_overrides }
       : environment;
 
-    // Replace wholesale (NOT deep-merge) — otherwise deepMerge in
-    // RepoRepository.update would preserve stale variant keys that the user
-    // renamed or removed in .agor.yml, and fields dropped from a still-present
-    // variant would also linger. See packages/core/src/db/repositories/repos.ts
-    // setEnvironment() for the single-field replace semantics.
+    // Imports and YAML Save share the repository's complete-configuration
+    // replacement contract, removing deleted variants and fields atomically.
     const updated = await this.repoRepo.setEnvironment(id, replacement);
 
     emitServiceEvent(this.app, {

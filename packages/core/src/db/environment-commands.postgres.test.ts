@@ -1,7 +1,7 @@
 import { eq } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { generateId } from '../lib/ids';
-import type { TenantID } from '../types';
+import type { RepoEnvironment, TenantID } from '../types';
 import { createDatabase, type Database } from './client';
 import { update } from './database-wrapper';
 import { initializeDatabase } from './migrate';
@@ -9,6 +9,7 @@ import {
   BranchRepository,
   EnvironmentCommandRepository,
   EnvironmentHealthDiscoveryRepository,
+  RepoRepository,
 } from './repositories';
 import { seedEnvironmentCommandBranch } from './repositories/environment-commands.test-support';
 import { branches } from './schema';
@@ -29,6 +30,52 @@ describe.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
       for (const db of [a, b])
         await (db as Database & { $client: { end(): Promise<void> } }).$client.end();
     });
+    it('replaces repository YAML across replicas without allowing foreign tenant writes', async () => {
+      const tenant = `yaml-${generateId()}` as TenantID;
+      const { branch } = await runWithTenantDatabaseScope(a, tenant, seedEnvironmentCommandBranch);
+      const original: RepoEnvironment = {
+        version: 2,
+        default: 'keep',
+        variants: {
+          keep: { start: 'echo start', stop: 'echo stop', logs: 'echo old logs' },
+          remove: { start: 'echo temporary', stop: 'echo stop' },
+        },
+      };
+      await runWithTenantDatabaseScope(a, tenant, (db) =>
+        new RepoRepository(db).setEnvironment(branch.repo_id, original)
+      );
+      const replacement: RepoEnvironment = {
+        version: 2,
+        default: 'keep',
+        variants: { keep: { start: 'echo new', stop: 'echo stop' } },
+      };
+      await runWithTenantDatabaseScope(b, `foreign-${generateId()}` as TenantID, async (db) => {
+        await expect(
+          new RepoRepository(db).update(branch.repo_id, { environment: replacement })
+        ).rejects.toThrow();
+      });
+      await runWithTenantDatabaseScope(a, tenant, async (db) => {
+        expect((await new RepoRepository(db).findById(branch.repo_id))?.environment).toEqual(
+          original
+        );
+      });
+      await runWithTenantDatabaseScope(b, tenant, (db) =>
+        new RepoRepository(db).update(branch.repo_id, {
+          environment: replacement,
+          name: 'YAML saved',
+        })
+      );
+      await runWithTenantDatabaseScope(a, tenant, async (db) => {
+        const saved = await new RepoRepository(db).findById(branch.repo_id);
+        expect(saved?.environment).toEqual(replacement);
+        expect(saved?.environment_config).toEqual({
+          up_command: 'echo new',
+          down_command: 'echo stop',
+        });
+        expect(saved?.name).toBe('YAML saved');
+      });
+    });
+
     it('legacy environment clears persist across replicas without crossing tenants', async () => {
       const tenant = `clear-${generateId()}` as TenantID;
       const { branch } = await runWithTenantDatabaseScope(a, tenant, seedEnvironmentCommandBranch);

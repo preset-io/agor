@@ -295,6 +295,8 @@ The Environment tab has two stacked editors:
 
 Members see both editors **read-only**. Users with branch `all` permission and admins can use the **Variant picker** and the **Render** button in between them.
 
+Saving the repo YAML replaces its complete environment configuration: deleted variants, fields, and overrides are removed. Existing branch snapshots remain unchanged until Render. API updates that include `environment` use the same replacement semantics; omit that key to leave it unchanged.
+
 ### The Render flow
 
 ```text
