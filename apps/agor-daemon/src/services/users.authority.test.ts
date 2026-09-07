@@ -35,6 +35,23 @@ function externalParams(actor: User, provider = 'rest'): AuthenticatedParams {
 }
 
 describe('UsersService role authority', () => {
+  dbTest('allows self-service emoji updates without allowing peer edits', async ({ db }) => {
+    const service = new UsersService(db);
+    const member = await createUser(service, 'member', 'member');
+    const peer = await createUser(service, 'member', 'peer');
+
+    await expect(
+      service.patch(member.user_id as UserID, { emoji: '🧭' }, externalParams(member))
+    ).resolves.toMatchObject({ emoji: '🧭' });
+    await expect(
+      service.patch(member.user_id as UserID, { emoji: '🛠️' }, externalParams(peer))
+    ).rejects.toMatchObject({ code: 403 });
+
+    await expect(
+      service.get(member.user_id as UserID, externalParams(member))
+    ).resolves.toMatchObject({ emoji: '🧭' });
+  });
+
   for (const provider of ['rest', 'socketio', 'mcp']) {
     dbTest(`denies ${provider} admins every mutation against a superadmin`, async ({ db }) => {
       const service = new UsersService(db);
