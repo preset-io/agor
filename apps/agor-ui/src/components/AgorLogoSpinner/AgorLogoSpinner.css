@@ -1,0 +1,90 @@
+/* biome-ignore-all lint/plugin/noFirstPartyCss: SVG stroke-dash keyframes and prefers-reduced-motion cannot be expressed inline */
+
+/* All dash animations use pathLength-normalized units: every animated path
+   declares pathLength="100", and dash/gap values sum to 101 (not 100) because
+   at dashoffset === dasharray exactly, some browsers paint a stray rounded-cap
+   stub at the path's start point. */
+
+.agor-logo-spinner-ring,
+.agor-logo-spinner-orbit {
+  transform-box: view-box;
+  transform-origin: 50% 50%;
+}
+
+/* Inner ring: a classic indeterminate spinner — the arc sweeps around while
+   growing and shrinking. Rotation and arc-length run on different periods so
+   the arc's start point drifts rather than repeating in place. */
+@keyframes agor-logo-spinner-turn {
+  to {
+    rotate: 360deg;
+  }
+}
+@keyframes agor-logo-spinner-arc {
+  0% {
+    stroke-dasharray: 8 93;
+    stroke-dashoffset: 0;
+  }
+  50% {
+    stroke-dasharray: 58 43;
+    stroke-dashoffset: -26;
+  }
+  100% {
+    stroke-dasharray: 8 93;
+    stroke-dashoffset: -101;
+  }
+}
+.agor-logo-spinner-ring {
+  animation:
+    agor-logo-spinner-turn 1.8s linear infinite,
+    agor-logo-spinner-arc 2.7s ease-in-out infinite;
+}
+
+/* Outer structure: dots and their connecting arcs rotate together as one rigid
+   group — the logo's silhouette stays intact, just in motion — in the same
+   direction as the inner spinner, at a much statelier pace. */
+.agor-logo-spinner-orbit {
+  animation: agor-logo-spinner-turn 6.4s linear infinite;
+}
+
+/* Connecting arcs: each tail retracts toward its leading dot, holds, then
+   re-extends until it reaches the trailing dot again. The two tails run a
+   half-cycle apart so one is always partially drawn. */
+@keyframes agor-logo-spinner-tail {
+  0%,
+  12% {
+    stroke-dashoffset: 0;
+    animation-timing-function: ease-in-out;
+  }
+  46%,
+  58% {
+    stroke-dashoffset: 101;
+    animation-timing-function: ease-in-out;
+  }
+  92%,
+  100% {
+    stroke-dashoffset: 0;
+  }
+}
+.agor-logo-spinner-tail {
+  stroke-dasharray: 101;
+  animation: agor-logo-spinner-tail 3.2s infinite;
+}
+.agor-logo-spinner-tail-alt {
+  animation-delay: -1.6s;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .agor-logo-spinner-ring,
+  .agor-logo-spinner-orbit,
+  .agor-logo-spinner-tail {
+    animation: none;
+  }
+  /* Rest state is the complete, static logo. */
+  .agor-logo-spinner-ring {
+    stroke-dasharray: none;
+    stroke-dashoffset: 0;
+  }
+  .agor-logo-spinner-tail {
+    stroke-dashoffset: 0;
+  }
+}
