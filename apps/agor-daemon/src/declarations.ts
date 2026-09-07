@@ -234,6 +234,13 @@ export interface ReposServiceImpl extends Service<Repo, Partial<Repo>, FeathersP
     },
     params?: FeathersParams
   ): Promise<Branch>;
+  retryBranchProvisioning(branchId: string, params?: FeathersParams): Promise<Branch>;
+  // Takes AuthenticatedParams, not bare FeathersParams: the startup watchdog
+  // calls it with an explicit static-tenant context and no user, and that
+  // tenant has to survive into the repository scope.
+  reconcileStuckCreatingBranches(
+    params?: CoreAuthenticatedParams
+  ): Promise<{ scanned: number; failed: number }>;
   removeBranch(id: string, name: string, params?: FeathersParams): Promise<Repo>;
   importFromAgorYml(
     id: string,

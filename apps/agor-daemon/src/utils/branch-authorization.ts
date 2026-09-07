@@ -166,6 +166,29 @@ function rememberPrefetchedRecord(
   };
 }
 
+/**
+ * Drop the authorization hook's prefetched row from `params`, forcing the next
+ * read through this params object to hit the database.
+ *
+ * The prefetch is a read-amplification optimization: an authorization hook
+ * stashes the row it already loaded so the service's own existence read does
+ * not repeat it. That is safe for the checks it was built for, but it makes the
+ * row as old as the *start* of the request. A caller that must compare against
+ * committed state — rather than merely confirm the record exists — has to
+ * decline it, or it can observe a value that a concurrent transaction has
+ * already replaced.
+ *
+ * Kept beside `rememberPrefetchedRecord` so the field name has exactly one
+ * owner. Returns `params` untouched when there is nothing to strip.
+ */
+export function withoutPrefetchedRecord<P extends object | undefined>(params: P): P {
+  if (!params || !(params as PrefetchParams)._agorPrefetchedRecord) {
+    return params;
+  }
+  const { _agorPrefetchedRecord: _dropped, ...rest } = params as PrefetchParams;
+  return rest as P;
+}
+
 async function loadCachedSession(
   params: AuthenticatedParams,
   sessionRepo: Pick<SessionRepository, 'findById'>,

@@ -29,7 +29,12 @@ import {
 import type { Id, Paginated, Session, SessionID, Task, TenantContext } from '@agor/core/types';
 import { isTerminalTaskStatus, SessionStatus } from '@agor/core/types';
 import { hasSecureLocalCredentialOverlay, resolveSdkHomeConfig } from './branch-sdk-home.js';
-import type { Application, SessionsServiceImpl, TasksServiceImpl } from './declarations.js';
+import type {
+  Application,
+  ReposServiceImpl,
+  SessionsServiceImpl,
+  TasksServiceImpl,
+} from './declarations.js';
 import { beginExecutorResponseDrain } from './executor-response-channel.js';
 import { clearTrackedExecutorGauge, containAllTrackedExecutors } from './executor-tracking.js';
 import { type DaemonMetrics, getDaemonMetrics, NOOP_METRICS } from './metrics/index.js';
@@ -685,6 +690,22 @@ export async function startup(ctx: StartupContext): Promise<void> {
       'daemon-restart-notices',
       () => injectRestartNotices(ctx, orphanCleanupResult),
       metrics
+    );
+  }
+
+  // Recover branches whose filesystem provisioning was interrupted by the
+  // previous process exit (the git.branch.add executor is fire-and-forget, so a
+  // daemon kill mid-provision would otherwise leave the row stuck in
+  // 'creating' forever). Conservatively transition any interrupted 'creating'
+  // branch to 'failed' with an actionable message — recovery is an explicit,
+  // human-triggered retry, not an automatic re-dispatch. Never deletes refs or
+  // worktrees.
+  if (ctx.taskRuntimePolicy === 'standalone') {
+    runPostStartJob('branch-provisioning-watchdog', () =>
+      runStartupTenantDatabaseScope(ctx, async () => {
+        const reposService = app.service('repos') as unknown as ReposServiceImpl;
+        await reposService.reconcileStuckCreatingBranches(startupTenantParams(config));
+      })
     );
   }
 

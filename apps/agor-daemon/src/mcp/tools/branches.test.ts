@@ -2232,3 +2232,61 @@ describe('agor_teammates_list', () => {
     });
   });
 });
+
+describe('agor_branches_retry_provisioning', () => {
+  it('is discoverable (registered with an input schema)', () => {
+    const config = registerAndCaptureConfig('agor_branches_retry_provisioning', {
+      app: {
+        service() {
+          throw new Error('should not touch services during registration');
+        },
+      },
+      userId: 'user-1',
+    });
+    expect(config.inputSchema).toBeDefined();
+    // branchId is required — an empty payload must fail schema validation.
+    const parsed = config.inputSchema?.safeParse({});
+    expect(parsed?.success).toBe(false);
+  });
+
+  it('resolves the branch id and calls the shared retryBranchProvisioning service', async () => {
+    const baseServiceParams = {
+      authenticated: true,
+      provider: 'mcp',
+      user: { user_id: 'user-1', role: 'member' },
+    };
+    // resolveBranchId → branches.get; the service resolves the short id to a
+    // full id, which is what must be forwarded to retryBranchProvisioning.
+    const branchesGet = vi.fn(async () => ({ branch_id: 'branch-full-1' }));
+    const retryBranchProvisioning = vi.fn(async (branchId: string) => ({
+      branch_id: branchId,
+      filesystem_status: 'ready',
+      error_message: null,
+      path: '/worktrees/sample-app/feature-x',
+    }));
+    const app = {
+      service(name: string) {
+        if (name === 'branches') return { get: branchesGet };
+        if (name === 'repos') return { retryBranchProvisioning };
+        throw new Error(`Unexpected service call: ${name}`);
+      },
+    };
+
+    const retry = registerAndCaptureHandler('agor_branches_retry_provisioning', {
+      app,
+      userId: 'user-1',
+      baseServiceParams,
+    });
+
+    const result = await retry({ branchId: 'branch-short' });
+
+    expect(branchesGet).toHaveBeenCalledWith('branch-short', baseServiceParams);
+    expect(retryBranchProvisioning).toHaveBeenCalledWith('branch-full-1', baseServiceParams);
+    const payload = JSON.parse(result.content[0].text) as {
+      branch_id: string;
+      filesystem_status: string;
+    };
+    expect(payload.branch_id).toBe('branch-full-1');
+    expect(payload.filesystem_status).toBe('ready');
+  });
+});

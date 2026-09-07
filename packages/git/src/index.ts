@@ -6,7 +6,7 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import { constants, existsSync } from 'node:fs';
+import { constants, existsSync, readdirSync } from 'node:fs';
 import { lstat, mkdir, mkdtemp, open, readdir, readFile, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
@@ -171,6 +171,27 @@ function getGitBinary(): string {
  *
  * Exported so tests can assert the argv shape without spawning a real git.
  */
+/**
+ * True when `path` exists and contains at least one entry. Used to distinguish
+ * a genuinely occupied target directory (must not be clobbered) from a harmless
+ * empty directory. An empty directory is a valid target for both
+ * `git worktree add <path>` and `git clone <url> <path>`, and — critically — it
+ * is exactly what a prior *failed* provisioning attempt leaves behind (the
+ * executor's fallback `mkdirSync`). Treating an empty directory as "already
+ * occupied" makes retry provisioning permanently un-repairable, so provisioning
+ * guards must key off non-emptiness, not mere existence.
+ */
+export function directoryHasEntries(path: string): boolean {
+  if (!existsSync(path)) return false;
+  try {
+    return readdirSync(path).length > 0;
+  } catch {
+    // Not a directory (a file at the path) or unreadable — treat as occupied so
+    // we fail safe rather than clobber something unexpected.
+    return true;
+  }
+}
+
 export function buildWorktreeAddArgs(params: {
   branchPath: string;
   ref: string;
@@ -1272,15 +1293,20 @@ export async function createBranch(
     );
   }
 
-  // Refuse to clobber an existing directory. Matches createBranchAsClone's
-  // guard, so worktree-mode and clone-mode surface the same user-facing
-  // error when the path is already taken (typically by an archived or
-  // partially-cleaned branch). Used to live in the daemon as a
-  // synchronous preflight; moved here so the executor / core layer is the
-  // single source of truth for filesystem facts.
-  if (existsSync(branchPath)) {
+  // Refuse to clobber a NON-EMPTY existing directory. Matches
+  // createBranchAsClone's guard, so worktree-mode and clone-mode surface the
+  // same user-facing error when the path is genuinely occupied (typically by an
+  // archived or partially-cleaned branch). An *empty* directory is deliberately
+  // allowed through: `git worktree add` accepts an empty target, and a prior
+  // failed attempt leaves exactly such an empty directory behind (the
+  // executor's fallback mkdir). Refusing it would make retry provisioning
+  // permanently un-repairable. Used to live in the daemon as a synchronous
+  // preflight; moved here so the executor / core layer is the single source of
+  // truth for filesystem facts.
+  if (directoryHasEntries(branchPath)) {
     throw new Error(
-      `Target directory '${branchPath}' already exists on disk. ` +
+      `Target directory '${branchPath}' already exists on disk and is not empty. ` +
+        'This usually means an archived or partially-cleaned branch still occupies this path. ' +
         'Please choose a different name or clean up the existing directory.'
     );
   }
@@ -1711,9 +1737,13 @@ export async function createBranchAsClone(
     throw new Error(`Invalid clone depth: expected positive integer, got ${depth}`);
   }
 
-  if (existsSync(targetPath)) {
+  // Refuse a NON-EMPTY target only. `git clone <url> <dir>` accepts an empty
+  // existing directory, and a prior failed provisioning attempt leaves exactly
+  // such an empty directory behind — allowing it through is what makes retry
+  // idempotent and repairable rather than permanently wedged.
+  if (directoryHasEntries(targetPath)) {
     throw new Error(
-      `Target directory '${targetPath}' already exists. ` +
+      `Target directory '${targetPath}' already exists and is not empty. ` +
         'Refusing to clone over existing contents — pick a different path or remove the directory first.'
     );
   }
