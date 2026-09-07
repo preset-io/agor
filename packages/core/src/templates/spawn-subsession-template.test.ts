@@ -18,6 +18,15 @@ describe('renderSpawnSubsessionPrompt', () => {
     expect(out).toContain('plan');
   });
 
+  it('preserves selected configuration preset for the child spawn call', () => {
+    const out = renderSpawnSubsessionPrompt({
+      userPrompt: 'do thing',
+      presetId: '__user_default__',
+    });
+    expect(out).toContain('presetId: "__user_default__"');
+    expect(out).toContain('"presetId": "__user_default__"');
+  });
+
   it('autocomputes hasConfig when any config field is present', () => {
     const withConfig = renderSpawnSubsessionPrompt({
       userPrompt: 'x',
