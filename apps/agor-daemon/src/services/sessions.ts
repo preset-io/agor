@@ -66,6 +66,7 @@ import type {
   UUID,
 } from '@agor/core/types';
 import {
+  classifyBranchFilesystemReadiness,
   isAgenticToolDefaultConfigurationReference,
   SessionStatus,
   USER_DEFAULT_AGENTIC_CONFIGURATION,
@@ -427,6 +428,15 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
     if (!(await isTenantAgenticToolEnabled(agenticTool, this.db))) {
       throw new BadRequest(`${agenticTool} is disabled for this workspace`);
     }
+
+    // A session runs inside its branch's working directory. If that directory
+    // has not been materialized yet (provisioning still running, or it failed),
+    // fail with a clear domain error here instead of letting a downstream
+    // simple-git call throw a raw ENOENT ("Cannot use simple-git on a directory
+    // that does not exist"), which is opaque and unactionable.
+    if (data.branch_id) {
+      await this.assertBranchFilesystemUsable(data.branch_id as string);
+    }
     const {
       agentic_tool_preset_id: configurationReference,
       model_config: originalModelConfig,
@@ -504,6 +514,7 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
       const branchRepo = new BranchRepository(scoped);
       const branch = await branchRepo.findById(createData.branch_id as BranchID);
       if (!branch) throw new NotFound(`Branch ${createData.branch_id} not found`);
+      this.assertBranchFilesystemRecordUsable(branch);
 
       // Minimal service harnesses predate application configuration. Treat an
       // absent getter as the product default (`inherit`); production always
@@ -587,6 +598,75 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
       }
     }
     return created;
+  }
+
+  /**
+   * Assert a branch's filesystem is usable before a session is created in it.
+   * Translates recorded provisioning lifecycle state into a clear domain error
+   * instead of letting a downstream simple-git call throw a raw ENOENT:
+   * - `creating`  → 409 "provisioning in progress" (retryable, transient)
+   * - `failed`    → 409 with the stored, sanitized provisioning error
+   * - other terminal states (cleaned/deleted) → 409
+   *
+   * Purely a read of recorded state — it never touches the filesystem. See the
+   * `usableStatus` branch below for why.
+   *
+   * Backward compatibility: rows predating `filesystem_status` (undefined) are
+   * treated as ready. Never throws for a genuinely usable checkout.
+   */
+  private async assertBranchFilesystemUsable(branchId: string): Promise<void> {
+    const branch = await this.branchRepo.findById(branchId);
+    // If the branch can't be loaded, defer to existing downstream handling
+    // (creation will fail later with the normal not-found path).
+    if (!branch) return;
+
+    this.assertBranchFilesystemRecordUsable(branch);
+  }
+
+  private assertBranchFilesystemRecordUsable(branch: Branch): void {
+    const branchId = branch.branch_id;
+
+    const status = branch.filesystem_status;
+    const readiness = classifyBranchFilesystemReadiness(branch);
+
+    if (readiness === 'pending') {
+      throw new Conflict(
+        'Branch provisioning is still in progress. The working directory is not ready yet — wait for provisioning to finish, then start the session again.',
+        { code: 'BRANCH_PROVISIONING_INCOMPLETE', branchId, filesystemStatus: status }
+      );
+    }
+
+    if (readiness === 'failed') {
+      throw new Conflict(
+        `Branch provisioning failed and the working directory was not created${
+          branch.error_message ? `: ${branch.error_message}` : '.'
+        } Repair/retry provisioning for this branch, then start the session again.`,
+        { code: 'BRANCH_PROVISIONING_FAILED', branchId, filesystemStatus: status }
+      );
+    }
+
+    // 'ready', 'preserved', or legacy undefined: treated as usable.
+    //
+    // Deliberately NOT stat'd from here. The daemon does not own the branch
+    // filesystem — in a multi-host deployment it may not share one with the
+    // executor at all — so a daemon-local `existsSync` would be answering a
+    // question about somebody else's disk. It is also the same daemon-side
+    // filesystem guessing this PR removed from the provisioning lifecycle, and
+    // the repo's daemon-filesystem-boundary check enforces it.
+    //
+    // The trade: a directory deleted out-of-band while the row still says
+    // `ready` is not caught here and will surface downstream instead. Recording
+    // that state accurately is the executor's job (it owns the disk), not
+    // something the daemon can infer.
+    if (readiness === 'ready') {
+      return;
+    }
+
+    // cleaned / deleted / any other non-usable terminal state.
+    throw new Conflict(
+      `Branch working directory is not available (filesystem_status="${status}"). Restore or re-provision the branch before starting a session.`,
+      { code: 'BRANCH_FILESYSTEM_UNAVAILABLE', branchId, filesystemStatus: status }
+    );
   }
 
   /** Re-resolve a live preset immediately before a task starts. */

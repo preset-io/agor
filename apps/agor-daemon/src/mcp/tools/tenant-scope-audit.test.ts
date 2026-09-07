@@ -83,6 +83,7 @@ const CALL_SITE_SCOPED_SERVICES = ['repos', 'boards', 'cards', 'sessions', 'boar
 const MUTATION_TOKENS = new Set([
   'reposService.createBranch',
   'reposService.cloneRepository',
+  'reposService.retryBranchProvisioning',
   'reposService.updateMetadata',
   'boardsService.archive',
   'boardsService.unarchive',

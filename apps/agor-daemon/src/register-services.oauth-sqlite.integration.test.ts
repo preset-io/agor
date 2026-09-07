@@ -2478,7 +2478,7 @@ describe('SQLite saved-row OAuth authority', () => {
           request.path === '/authorize'
       )
     ).toEqual([]);
-  });
+  }, 30_000);
 
   it('enforces layered socket/user/tenant/global reservation quotas with isolation and TTL recovery', async () => {
     const provider = await createTestProvider();

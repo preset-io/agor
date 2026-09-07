@@ -14,9 +14,10 @@ import {
   DragOutlined,
   EditOutlined,
   PushpinFilled,
+  ReloadOutlined,
   RobotOutlined,
 } from '@ant-design/icons';
-import { Button, Card, Space, Spin, Tooltip, Typography, theme } from 'antd';
+import { App, Button, Card, Space, Spin, Tooltip, Typography, theme } from 'antd';
 import { AggregationColor } from 'antd/es/color-picker/color';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useConnectionDisabled } from '../../contexts/ConnectionContext';
@@ -210,6 +211,30 @@ const BranchCardComponent = ({
   // Check if branch is still being created on filesystem
   const isCreating = branch.filesystem_status === 'creating';
   const isFailed = branch.filesystem_status === 'failed';
+
+  // Retry provisioning for a branch whose working directory failed to
+  // materialize. Hits POST /branches/:id/retry-provisioning, which runs the
+  // exact same non-destructive `retryBranchProvisioning` service the MCP tool
+  // uses. Only offered while `isFailed` — the server accepts `failed` alone and
+  // conflicts on an in-flight `creating`. Feedback is surfaced explicitly so a
+  // failed request never looks like a no-op.
+  const { message } = App.useApp();
+  const [isRetryingProvisioning, setIsRetryingProvisioning] = useState(false);
+  const handleRetryProvisioning = useCallback(async () => {
+    if (!client) {
+      message.error('Not connected — cannot retry provisioning right now.');
+      return;
+    }
+    setIsRetryingProvisioning(true);
+    try {
+      await client.service(`branches/${branch.branch_id}/retry-provisioning`).create({});
+      message.success('Provisioning retry requested');
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : 'Failed to retry branch provisioning');
+    } finally {
+      setIsRetryingProvisioning(false);
+    }
+  }, [client, branch.branch_id, message]);
 
   // Check if this branch is a persisted agent
   const teammateConfig = useMemo(() => getTeammateConfig(branch), [branch]);
@@ -524,6 +549,55 @@ const BranchCardComponent = ({
           />
         </Space>
       </div>
+
+      {/* Provisioning failure banner + retry. The working directory did not
+          materialize; surface the sanitized error and a one-click, idempotent
+          retry that hits the shared retry-provisioning service. */}
+      {isFailed && (
+        <div
+          className={REACT_FLOW_NO_DRAG_CLASS}
+          style={{
+            marginBottom: 8,
+            padding: '8px 10px',
+            borderRadius: 6,
+            border: `1px solid ${token.colorErrorBorder}`,
+            background: token.colorErrorBg,
+            display: 'flex',
+            alignItems: 'flex-start',
+            gap: 8,
+          }}
+        >
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <Typography.Text type="danger" strong style={{ fontSize: 12 }}>
+              Provisioning failed
+            </Typography.Text>
+            {branch.error_message && (
+              <Tooltip title={branch.error_message}>
+                <Typography.Paragraph
+                  type="secondary"
+                  ellipsis={{ rows: 2 }}
+                  style={{ fontSize: 11, margin: '2px 0 0' }}
+                >
+                  {branch.error_message}
+                </Typography.Paragraph>
+              </Tooltip>
+            )}
+          </div>
+          <Button
+            size="small"
+            danger
+            icon={<ReloadOutlined />}
+            loading={isRetryingProvisioning}
+            disabled={connectionDisabled}
+            onClick={(e) => {
+              e.stopPropagation();
+              void handleRetryProvisioning();
+            }}
+          >
+            Retry
+          </Button>
+        </div>
+      )}
 
       {/* Notes */}
       {branch.notes && (

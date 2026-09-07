@@ -234,6 +234,8 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
         pull_request_url: branch.pull_request_url,
         notes: branch.notes,
         error_message: branch.error_message,
+        provisioning_attempt_id: branch.provisioning_attempt_id,
+        provisioning_operation: branch.provisioning_operation,
         environment_instance: branch.environment_instance,
         last_used: branch.last_used ?? new Date(now).toISOString(),
         custom_context: branch.custom_context,
@@ -656,6 +658,12 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
 
       const current = this.rowToBranch(currentRow, baseUrl);
 
+      if (updates.archived === true && current.filesystem_status === 'creating') {
+        throw new RepositoryError(
+          'Cannot archive a branch while filesystem provisioning is in progress'
+        );
+      }
+
       // STEP 3: Deep merge updates into current branch (in memory)
       // Preserves nested objects like schedule, environment_instance, custom_context
       const merged = deepMerge(current, {
@@ -715,6 +723,187 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
   }
 
   /**
+   * Atomically claim a `failed` branch for a provisioning retry: flip it to
+   * `creating` and clear the stored error, but ONLY if it is still `failed`
+   * while we hold the row lock. Returns `{ claimed: false }` when another caller
+   * (a double-click on Retry, or a concurrent retry) already moved it out of
+   * `failed`, so retry can never spawn two materializers for the same branch.
+   *
+   * This is the fencing that lets the daemon avoid a general provisioning-job
+   * framework: the state transition itself is the lock.
+   *
+   * `attemptId` stamps the row with the generation that now owns `creating`, so
+   * a superseded attempt's late acknowledgement can be told apart from the
+   * current one's. The winner's branch (with the id applied) is returned; the
+   * caller passes that same id to the executor it dispatches.
+   */
+  async claimFailedForProvisioningRetry(
+    id: string,
+    attemptId: string
+  ): Promise<{ claimed: boolean; branch: Branch }> {
+    const existing = await this.findById(id);
+    if (!existing) {
+      throw new EntityNotFoundError('Branch', id);
+    }
+    const baseUrl = await getBaseUrl();
+    return await this.db.transaction(async (tx) => {
+      await lockRowForUpdate(
+        txAsDb(tx),
+        this.db,
+        branches,
+        eq(branches.branch_id, existing.branch_id)
+      );
+      const currentRow = await select(txAsDb(tx))
+        .from(branches)
+        .where(eq(branches.branch_id, existing.branch_id))
+        .one();
+      if (!currentRow) {
+        throw new EntityNotFoundError('Branch', id);
+      }
+      const current = this.rowToBranch(currentRow, baseUrl);
+      if (current.archived || current.filesystem_status !== 'failed') {
+        // Lost the race (or never eligible) — do not write, do not re-dispatch.
+        return { claimed: false, branch: current };
+      }
+      const insertData = this.branchToInsert({
+        ...current,
+        filesystem_status: 'creating',
+        error_message: undefined,
+        provisioning_attempt_id: attemptId,
+        provisioning_operation: current.provisioning_operation === 'restore' ? 'restore' : 'retry',
+      });
+      const row = await update(txAsDb(tx), branches)
+        .set(insertData)
+        .where(eq(branches.branch_id, current.branch_id))
+        .returning()
+        .one();
+      return { claimed: true, branch: this.rowToBranch(row, baseUrl) };
+    });
+  }
+
+  /**
+   * Atomically move an interrupted provisioning attempt to a terminal `failed`
+   * state with an actionable message, but ONLY if it is still `creating`.
+   *
+   * Used by the crash/on-exit safety net and the startup watchdog. It never
+   * clobbers a status the executor already wrote (success/failure), and — by
+   * design — it does NOT inspect the daemon-local filesystem or infer success
+   * from a `.git` path. An interrupted attempt is surfaced as `failed` so a
+   * human can retry, rather than the daemon guessing and auto-promoting.
+   *
+   * `expectedAttemptId` fences the write to one generation. The status check
+   * alone is not enough: a superseded attempt's `onExit` can fire *after* a
+   * retry has already claimed `creating`, and would otherwise mark the new,
+   * healthy attempt `failed`. Pass the id the caller dispatched with and the
+   * write applies only while that attempt still owns the row. Omit it for
+   * callers that legitimately target whatever attempt is current (the startup
+   * watchdog, which by definition runs when no attempt can still be live).
+   */
+  async markProvisioningFailedIfCreating(
+    id: string,
+    message: string,
+    expectedAttemptId?: string
+  ): Promise<{ changed: boolean; branch: Branch }> {
+    const existing = await this.findById(id);
+    if (!existing) {
+      throw new EntityNotFoundError('Branch', id);
+    }
+    const baseUrl = await getBaseUrl();
+    return await this.db.transaction(async (tx) => {
+      await lockRowForUpdate(
+        txAsDb(tx),
+        this.db,
+        branches,
+        eq(branches.branch_id, existing.branch_id)
+      );
+      const currentRow = await select(txAsDb(tx))
+        .from(branches)
+        .where(eq(branches.branch_id, existing.branch_id))
+        .one();
+      if (!currentRow) {
+        throw new EntityNotFoundError('Branch', id);
+      }
+      const current = this.rowToBranch(currentRow, baseUrl);
+      if (current.filesystem_status !== 'creating') {
+        return { changed: false, branch: current };
+      }
+      if (
+        expectedAttemptId !== undefined &&
+        current.provisioning_attempt_id !== expectedAttemptId
+      ) {
+        // A newer attempt owns `creating` now — this acknowledgement is stale.
+        return { changed: false, branch: current };
+      }
+      const insertData = this.branchToInsert({
+        ...current,
+        filesystem_status: 'failed',
+        error_message: message,
+      });
+      const row = await update(txAsDb(tx), branches)
+        .set(insertData)
+        .where(eq(branches.branch_id, current.branch_id))
+        .returning()
+        .one();
+      return { changed: true, branch: this.rowToBranch(row, baseUrl) };
+    });
+  }
+
+  async acknowledgeProvisioningAttempt(
+    id: string,
+    acknowledgement: Partial<Branch>,
+    expectedAttemptId?: string
+  ): Promise<{ applied: boolean; branch: Branch }> {
+    const existing = await this.findById(id);
+    if (!existing) throw new EntityNotFoundError('Branch', id);
+    const baseUrl = await getBaseUrl();
+    return this.db.transaction(async (tx) => {
+      await lockRowForUpdate(
+        txAsDb(tx),
+        this.db,
+        branches,
+        eq(branches.branch_id, existing.branch_id)
+      );
+      const currentRow = await select(txAsDb(tx))
+        .from(branches)
+        .where(eq(branches.branch_id, existing.branch_id))
+        .one();
+      if (!currentRow) throw new EntityNotFoundError('Branch', id);
+      const current = this.rowToBranch(currentRow, baseUrl);
+      const generationMatches = expectedAttemptId
+        ? current.provisioning_attempt_id === expectedAttemptId
+        : current.provisioning_attempt_id === undefined;
+      if (current.archived || current.filesystem_status !== 'creating' || !generationMatches) {
+        return { applied: false, branch: current };
+      }
+      const merged = deepMerge(current, {
+        ...acknowledgement,
+        branch_id: current.branch_id,
+        repo_id: current.repo_id,
+        created_at: current.created_at,
+        updated_at: new Date().toISOString(),
+      });
+      if (acknowledgement.filesystem_status !== 'failed') delete merged.error_message;
+      const row = await update(txAsDb(tx), branches)
+        .set(this.branchToInsert(merged))
+        .where(eq(branches.branch_id, current.branch_id))
+        .returning()
+        .one();
+      return { applied: true, branch: this.rowToBranch(row, baseUrl) };
+    });
+  }
+
+  async findCreatingPage(limit: number): Promise<Branch[]> {
+    const rows = await select(this.db)
+      .from(branches)
+      .where(and(eq(branches.filesystem_status, 'creating'), eq(branches.archived, false)))
+      .orderBy(asc(branches.branch_id))
+      .limit(limit)
+      .all();
+    const baseUrl = await getBaseUrl();
+    return rows.map((row: BranchRow) => this.rowToBranch(row, baseUrl));
+  }
+
+  /**
    * Stickily adopt the server-managed per-branch SDK-home intent.
    *
    * This is deliberately separate from generic branch CRUD: clients may not
@@ -751,8 +940,27 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
     if (!existing) {
       throw new EntityNotFoundError('Branch', id);
     }
-
-    await deleteFrom(this.db, branches).where(eq(branches.branch_id, existing.branch_id)).run();
+    await this.db.transaction(async (tx) => {
+      await lockRowForUpdate(
+        txAsDb(tx),
+        this.db,
+        branches,
+        eq(branches.branch_id, existing.branch_id)
+      );
+      const current = await select(txAsDb(tx))
+        .from(branches)
+        .where(eq(branches.branch_id, existing.branch_id))
+        .one();
+      if (!current) throw new EntityNotFoundError('Branch', id);
+      if (current.filesystem_status === 'creating') {
+        throw new RepositoryError(
+          'Cannot delete a branch while filesystem provisioning is in progress'
+        );
+      }
+      await deleteFrom(txAsDb(tx), branches)
+        .where(eq(branches.branch_id, existing.branch_id))
+        .run();
+    });
   }
 
   /**

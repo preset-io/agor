@@ -4062,6 +4062,40 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     requireAuth
   );
 
+  // Explicit, non-destructive repair for a branch whose filesystem provisioning
+  // landed in 'failed' (or was stranded 'creating' by a daemon restart). Shares
+  // the exact same service implementation the MCP tool and UI use, so REST, MCP
+  // and UI can never drift. A live 'creating' attempt conflicts, 'ready' no-ops;
+  // the transition is an atomic claim. Returns the (possibly-updated) branch row.
+  registerLongAuthenticatedRoute(
+    app,
+    '/branches/:id/retry-provisioning',
+    {
+      async create(_data: unknown, params: RouteParams) {
+        const id = params.route?.id;
+        if (!id) throw new Error('Branch ID required');
+        return reposService.retryBranchProvisioning(id, params);
+      },
+    },
+    {
+      // Global-role floor only. The branch-scoped gate that actually matters —
+      // effective `all` permission, branch owner, or global admin — is asserted
+      // inside `reposService.retryBranchProvisioning`, because the retry writes
+      // through the repository CAS and so never passes through the
+      // branches-service `patch` hook that normally demands `all`. Enforcing it
+      // in the service (not here) is what keeps REST, MCP and the UI on one
+      // check.
+      //
+      // Identity split (intentional): the caller must hold branch control, but
+      // the executor runs as `branch.created_by`, not as the caller. That
+      // mirrors the create path (the directory must be materialized as its
+      // owner to be usable) and re-runs provisioning the owner already
+      // initiated, so it grants no capability the owner had not exercised.
+      create: { role: ROLES.MEMBER, action: 'retry branch provisioning' },
+    },
+    requireAuth
+  );
+
   registerLongAuthenticatedRoute(
     app,
     '/branches/:id/nuke',

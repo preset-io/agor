@@ -390,6 +390,10 @@ export const REALTIME_PUBLISH_POLICY = {
   'branches/:id/start': { audience: 'none', why: `${NO_CONSUMER} Lands as branches.patched.` },
   'branches/:id/stop': { audience: 'none', why: `${NO_CONSUMER} Lands as branches.patched.` },
   'branches/:id/restart': { audience: 'none', why: `${NO_CONSUMER} Lands as branches.patched.` },
+  'branches/:id/retry-provisioning': {
+    audience: 'none',
+    why: `${NO_CONSUMER} Lands as branches.patched.`,
+  },
   'branches/:id/nuke': { audience: 'none', why: `${NO_CONSUMER} Lands as branches.patched.` },
   'branches/:id/health': { audience: 'none', why: NO_CONSUMER },
   'branches/:id/render-environment': {

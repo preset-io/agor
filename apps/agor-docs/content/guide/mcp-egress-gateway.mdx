@@ -153,9 +153,13 @@ changes. PostgreSQL/HA numbers require `AGOR_TEST_POSTGRES_URL` and the managed
 HA environment.
 
 On a quiet, otherwise idle host, the implementation review run on 2026-08-25 measured 200 warmed SQLite
-admissions at p50 3.450 ms, p95 4.236 ms, and p99 5.088 ms. Reproduce it with
-`AGOR_RUN_MCP_EGRESS_BENCHMARK=1 pnpm --filter @agor/daemon exec vitest run
-src/mcp-egress/gateway.test.ts`. These local figures are not a PostgreSQL/HA
+admissions at p50 3.450 ms, p95 4.236 ms, and p99 5.088 ms. Reproduce it with:
+
+```bash
+AGOR_RUN_MCP_EGRESS_BENCHMARK=1 pnpm --filter @agor/daemon exec vitest run src/mcp-egress/gateway.test.ts
+```
+
+These local figures are not a PostgreSQL/HA
 availability measurement. The opt-in harness reports host-sensitive figures and
 does not enforce them as a CI release threshold; run it only on a quiet idle host
 and compare with a recorded baseline.

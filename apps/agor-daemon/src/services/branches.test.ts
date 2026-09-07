@@ -171,6 +171,19 @@ function createPatchHarness(opts: {
     create: vi.fn(),
     findAll: vi.fn(async () => []),
     delete: vi.fn(),
+    acknowledgeProvisioningAttempt: vi.fn(async (_id, acknowledgement, expectedAttemptId) => {
+      const currentAttemptId = opts.current.provisioning_attempt_id;
+      const applied =
+        opts.current.archived !== true &&
+        opts.current.filesystem_status === 'creating' &&
+        (expectedAttemptId
+          ? expectedAttemptId === currentAttemptId
+          : currentAttemptId === undefined);
+      return {
+        applied,
+        branch: applied ? { ...opts.current, ...acknowledgement } : opts.current,
+      };
+    }),
   };
   const boardRepo = {
     clearPrimaryTeammateIfMatches: vi.fn(async () => ({
@@ -189,8 +202,9 @@ function createPatchHarness(opts: {
   const service = new BranchesService(createTenantScopeTestDb() as never, app);
   (service as unknown as { repository: typeof repository }).repository = repository;
   (service as unknown as { boardRepo: typeof boardRepo }).boardRepo = boardRepo;
-  (service as unknown as { branchRepo: { enrichWithZoneInfo: typeof vi.fn } }).branchRepo = {
+  (service as unknown as { branchRepo: Record<string, unknown> }).branchRepo = {
     enrichWithZoneInfo: vi.fn(async (branch) => branch),
+    acknowledgeProvisioningAttempt: repository.acknowledgeProvisioningAttempt,
   } as never;
   vi.spyOn(service as never, 'computeDefaultBoardPositionForBranch').mockResolvedValue({
     x: 10,
@@ -3027,5 +3041,142 @@ describe('BranchesService environment health requests', () => {
       expect(result.environment_instance?.last_health_check).toBeUndefined();
     }
     expect(branchesService.emit).not.toHaveBeenCalled();
+  });
+});
+
+describe('BranchesService.patch provisioning attempt fence', () => {
+  // `git.branch.add` is fire-and-forget and can be slow. If a user retries
+  // while an older attempt is still running, that older executor eventually
+  // patches its own outcome — and without a fence it lands on the *newer*
+  // attempt: a stale success reported as ready, or a healthy in-flight
+  // materialization marked failed. Each dispatch carries a generation id,
+  // echoed back on the ack; a mismatch drops just the provisioning fields.
+  const branchId = 'branch-fence' as BranchID;
+
+  function harness(currentAttemptId?: string) {
+    return createPatchHarness({
+      current: {
+        branch_id: branchId,
+        board_id: undefined,
+        filesystem_status: 'creating',
+        ...(currentAttemptId ? { provisioning_attempt_id: currentAttemptId } : {}),
+      },
+      updated: { branch_id: branchId, filesystem_status: 'creating' },
+    });
+  }
+
+  it('drops a superseded success ack but keeps its attempt-independent work', async () => {
+    const { service, repository } = harness('attempt-B');
+
+    await service.patch(branchId, {
+      filesystem_status: 'ready',
+      provisioning_attempt_id: 'attempt-A',
+      start_command: 'pnpm dev',
+    } as never);
+
+    expect(repository.acknowledgeProvisioningAttempt).toHaveBeenCalledWith(
+      branchId,
+      expect.objectContaining({ filesystem_status: 'ready', start_command: 'pnpm dev' }),
+      'attempt-A'
+    );
+  });
+
+  it('drops a superseded failure ack so it cannot fail the newer attempt', async () => {
+    const { service, repository } = harness('attempt-B');
+
+    await service.patch(branchId, {
+      filesystem_status: 'failed',
+      error_message: 'attempt A blew up',
+      provisioning_attempt_id: 'attempt-A',
+    } as never);
+
+    expect(repository.acknowledgeProvisioningAttempt.mock.results.at(-1)?.value).toBeDefined();
+  });
+
+  it('applies the ack from the attempt that currently owns the row', async () => {
+    const { service, repository } = harness('attempt-B');
+
+    await service.patch(branchId, {
+      filesystem_status: 'ready',
+      provisioning_attempt_id: 'attempt-B',
+    } as never);
+
+    expect(repository.acknowledgeProvisioningAttempt).toHaveBeenCalledWith(
+      branchId,
+      expect.objectContaining({ filesystem_status: 'ready' }),
+      'attempt-B'
+    );
+  });
+
+  it('rejects an unfenced legacy ack when the row has a generation', async () => {
+    const { service, repository } = harness('attempt-B');
+
+    await service.patch(branchId, { filesystem_status: 'ready' } as never);
+
+    expect(repository.acknowledgeProvisioningAttempt).toHaveBeenCalledWith(
+      branchId,
+      expect.objectContaining({ filesystem_status: 'ready' }),
+      undefined
+    );
+  });
+
+  it('rejects a fenced ack when the legacy row carries no generation', async () => {
+    const { service, repository } = harness(undefined);
+
+    await service.patch(branchId, {
+      filesystem_status: 'ready',
+      provisioning_attempt_id: 'attempt-A',
+    } as never);
+
+    expect(repository.acknowledgeProvisioningAttempt).toHaveBeenCalledWith(
+      branchId,
+      expect.objectContaining({ filesystem_status: 'ready' }),
+      'attempt-A'
+    );
+  });
+
+  it('reads the generation authoritatively rather than trusting the RBAC prefetch', async () => {
+    // The tests above call `patch` bare, so the adapter always reads the row.
+    // Through the real hook chain it does not: with `branch_rbac` enabled,
+    // `loadBranch` stashes the row it authorized against as
+    // `_agorPrefetchedRecord`, and the adapter serves `patch`'s existence read
+    // from that instead of the database. The stashed row is as old as the
+    // *start* of the request, so a retry whose CAS commits during this
+    // request's authorization work is invisible to a fence that trusts it —
+    // the generations compare equal and the superseded ack lands on the newer
+    // attempt, which is precisely what the fence exists to stop.
+    //
+    // Here the committed row already owns attempt-B while the prefetch still
+    // reports attempt-A, matching the incoming ack. The fence must ignore the
+    // prefetch and drop the ack anyway.
+    const { service, repository } = harness('attempt-B');
+
+    await service.patch(
+      branchId,
+      {
+        filesystem_status: 'ready',
+        provisioning_attempt_id: 'attempt-A',
+        start_command: 'pnpm dev',
+      } as never,
+      {
+        _agorPrefetchedRecord: {
+          id: branchId,
+          idField: 'branch_id',
+          record: {
+            branch_id: branchId,
+            board_id: undefined,
+            filesystem_status: 'creating',
+            provisioning_attempt_id: 'attempt-A',
+          },
+        },
+      } as never
+    );
+
+    expect(repository.acknowledgeProvisioningAttempt).toHaveBeenCalledWith(
+      branchId,
+      expect.objectContaining({ filesystem_status: 'ready', start_command: 'pnpm dev' }),
+      'attempt-A'
+    );
+    expect(repository.update).not.toHaveBeenCalled();
   });
 });

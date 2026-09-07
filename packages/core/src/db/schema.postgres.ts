@@ -872,6 +872,10 @@ export const branches = pgTable(
         pull_request_url?: string; // PR link
         notes?: string; // Freeform user notes
         error_message?: string; // Error details when filesystem_status is 'failed'
+        // Generation owning the in-flight provisioning attempt. Fences stale
+        // acknowledgements from a superseded attempt (see Branch type).
+        provisioning_attempt_id?: string;
+        provisioning_operation?: 'create' | 'retry' | 'restore';
 
         // Environment instance (runtime state only, no variables)
         environment_instance?: {

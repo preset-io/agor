@@ -637,7 +637,11 @@ describe('createBranch', () => {
   it('does not leave a temporary source ref when the target path already exists', async () => {
     const { destinationRemote, sourceRemote } = await createSeparatedTemplateRemotes(tempDir);
     await simpleGit().clone(destinationRemote, repoDir);
-    await fs.mkdir(branchDir);
+    // Must be NON-empty to trip the guard: an empty directory is deliberately
+    // allowed through so a failed provisioning attempt — which leaves exactly
+    // such an empty directory behind — stays repairable by retry provisioning.
+    await fs.mkdir(branchDir, { recursive: true });
+    await fs.writeFile(path.join(branchDir, 'preexisting.txt'), 'x', 'utf-8');
 
     await expect(
       createBranch(
