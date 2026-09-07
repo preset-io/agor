@@ -321,8 +321,12 @@ describe('agor_sessions_list', () => {
   });
 
   it('fails closed on a truncated derived-type scan rather than claiming an empty or complete result', async () => {
+    const find = vi
+      .fn()
+      .mockResolvedValueOnce({ total: 10001, limit: 10000, skip: 0, data: [] })
+      .mockResolvedValueOnce([]);
     const app = makeFakeApp({
-      sessions: { find: async () => ({ total: 10001, limit: 10000, skip: 0, data: [] }) },
+      sessions: { find },
     });
     const { agor_sessions_list } = await registerAndCaptureHandlers({ app, userId: 'user-1' }, [
       'agor_sessions_list',
@@ -330,6 +334,8 @@ describe('agor_sessions_list', () => {
     await expect(agor_sessions_list({ sessionType: 'scheduled' })).rejects.toThrow(
       /Narrow with branchId, boardId/
     );
+    // Legacy bare-array adapters supply no evidence that their scan is complete.
+    await expect(agor_sessions_list({ sessionType: 'scheduled' })).rejects.toThrow(/complete scan/);
   });
 
   it('rejects an adapter response larger than the requested page', async () => {

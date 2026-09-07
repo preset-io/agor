@@ -252,9 +252,9 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
         args.lean === false ? redactSessionForMcp(session) : compactSessionForMcp(session);
 
       if (needsTypeScan) {
-        const complete = Array.isArray(result)
-          ? data.length < SESSION_TYPE_SCAN_LIMIT
-          : result.skip === 0 && result.total === data.length;
+        // A bare array cannot prove whether an adapter truncated the scan.
+        const complete =
+          !Array.isArray(result) && result.skip === 0 && result.total === data.length;
         if (!complete) {
           throw new Error(
             `sessionType requires a complete scan of at most ${SESSION_TYPE_SCAN_LIMIT} candidate sessions. Narrow with branchId, boardId, status or archive filters, or omit sessionType and page normally.`

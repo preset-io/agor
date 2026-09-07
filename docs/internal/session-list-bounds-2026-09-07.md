@@ -67,7 +67,7 @@ The shipped correction bounds **rendering and MCP list candidate materialization
   limit (default 25, maximum 100).
 - Derived `sessionType` filtering retains the existing 10,000-candidate scan
   ceiling, but errors if the scan is incomplete (including a server-clamped
-  scan), rather than reporting partial data as complete. Narrowing with branch,
+  scan or a legacy bare-array response without completeness metadata), rather than reporting partial data as complete. Narrowing with branch,
   board, status, or archive filters is optional; callers may instead omit
   `sessionType` and page normally. Exact counts still cost a matching-row scan.
 - Branch-scoped results retain their service total instead of replacing it with
