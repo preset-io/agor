@@ -530,6 +530,23 @@ unpublished:
     transport: streamable-http
     auth_type: oauth
 
+  - name: io.preset/mcp-gateway
+    title: Preset
+    category: data-storage
+    capabilities: [databases, sql, schema, datasets, analytics, notes]
+    benefit: Explore governed Preset workspaces from an agent using the same roles and data access you have in Preset.
+    starter_prompt: List my Preset workspaces and the MCP service families available in each. Do not change any data.
+    permission_disclosure: Acts as your Preset user across every Preset workspace you can access. It can read workspace metadata, datasets, charts, dashboards, database schemas, SQL query results, and Knowledge documents; run SQL and other workspace tools; and create, edit, soft-delete, or restore Knowledge documents where your Preset permissions allow. Data returned by Preset is sent to the agent and AI provider running this Agor session.
+    icon_url: https://preset.io/icons/icon-192x192.png
+    remote_url: https://mcp.app.preset.io/mcp
+    transport: streamable-http
+    auth_type: oauth
+    # Fail closed rather than opt into marketplace interoperability before
+    # production callback/registration compatibility has been verified.
+    oauth:
+      compatibility_mode: strict
+    website_url: https://preset.io/
+
   - name: com.dropbox/mcp
     category: data-storage
     capabilities: [files, web-search]

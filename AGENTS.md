@@ -424,8 +424,10 @@ differences implemented in `oauth-mcp-transport.ts`, while retaining
 same-origin bounds on those fallbacks, resource/issuer binding, the exact MCP
 URL as the RFC 8707 resource, PKCE S256, and callback issuer validation. An
 explicit saved-row `strict` or `legacy` mode always wins. The catalog explicitly
-keeps Monday, Cloudflare, and ClickUp on `strict`; an edited/imported install, a
-removed entry, or any catalog configuration drift falls back to `strict`.
+keeps Monday, Cloudflare, ClickUp, and Preset on `strict`. Preset is pinned
+defensively pending production OAuth validation, not asserted to have passed it;
+an edited/imported install, a removed entry, or any catalog configuration drift
+falls back to `strict`.
 GitHub, Prisma, MongoDB, Box, HubSpot, Slack, PagerDuty, and Kagi were removed
 from the shelf because the review could not establish a safely bound
 client-registration or issuer path; do not re-add one merely because its
