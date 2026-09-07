@@ -8,6 +8,7 @@ import {
   MCP_HEADER_REDACTED_SENTINEL,
   redactMCPCustomHeaders,
 } from '@agor/core/tools/mcp/http-headers';
+import { oauthGrantCanAuthenticate } from '@agor/core/tools/mcp/oauth-refresh';
 import type {
   CreateMCPServerInput,
   MCPAuth,
@@ -94,16 +95,11 @@ async function getOAuthStatus(
       ? grant
       : null;
   });
-  if (tokenData) {
-    if (
-      tokenData.refresh_status === 'idle' &&
-      (!tokenData.oauth_token_expires_at || tokenData.oauth_token_expires_at > new Date())
-    ) {
-      return {
-        authenticated: true,
-        tokenExpiresAt: tokenData.oauth_token_expires_at?.getTime(),
-      };
-    }
+  if (tokenData && oauthGrantCanAuthenticate(tokenData)) {
+    return {
+      authenticated: true,
+      tokenExpiresAt: tokenData.oauth_token_expires_at?.getTime(),
+    };
   }
   return { authenticated: false };
 }

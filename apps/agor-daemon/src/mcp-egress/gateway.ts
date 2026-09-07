@@ -705,15 +705,19 @@ export class MCPEgressGateway {
   private async credentialHeaders(
     claims: MCPEgressCapabilityClaims,
     server: MCPServer,
-    assertCurrent: () => Promise<void>
+    assertCurrent: () => Promise<void>,
+    { forceRefresh = false }: { forceRefresh?: boolean } = {}
   ): Promise<Headers> {
     let authHeaders: Record<string, string> | undefined;
     if (server.auth?.type === 'oauth') {
       let result: { headers: Record<string, { authorization?: string; error?: string }> };
       try {
-        result = (await this.options.app
-          .service('mcp-servers/oauth-auth-headers')
-          .create({ mcp_server_ids: [server.mcp_server_id] }, {
+        result = (await this.options.app.service('mcp-servers/oauth-auth-headers').create(
+          {
+            mcp_server_ids: [server.mcp_server_id],
+            ...(forceRefresh ? { force_refresh: true } : {}),
+          },
+          {
             provider: undefined,
             tenant: { tenant_id: claims.tid },
             session_id: claims.session_id,
@@ -723,7 +727,8 @@ export class MCPEgressGateway {
               _isServiceAccount: true,
             },
             mcp_egress_assert_current: assertCurrent,
-          } as unknown as AuthenticatedParams)) as typeof result;
+          } as unknown as AuthenticatedParams
+        )) as typeof result;
       } catch (error) {
         // Preserve the typed known-no-send outcome, while allowing durable
         // authority to supersede the local accelerator reason when reachable.
@@ -874,14 +879,19 @@ export class MCPEgressGateway {
       this.reservations.delete(reservationId);
       throw error;
     }
-    const headers = protocolRequestHeaders(input.headers);
-    const finalHeaders = new Headers(
-      mergeMCPRemoteHeaders({
-        custom: admitted.server.headers,
-        auth: Object.fromEntries(credentials.entries()),
-      })
-    );
-    for (const [name, value] of finalHeaders) headers.set(name, value);
+    const buildOutboundHeaders = (resolvedCredentials: Headers) => {
+      const requestHeaders = protocolRequestHeaders(input.headers);
+      const secretHeaders = new Headers(
+        mergeMCPRemoteHeaders({
+          custom: admitted.server.headers,
+          auth: Object.fromEntries(resolvedCredentials.entries()),
+        })
+      );
+      for (const [name, value] of secretHeaders) requestHeaders.set(name, value);
+      return { requestHeaders, secretHeaders };
+    };
+    let { requestHeaders: headers, secretHeaders: finalHeaders } =
+      buildOutboundHeaders(credentials);
     const requestId = randomUUID();
     const tracked: InFlight = {
       tenantId: claims.tid,
@@ -902,18 +912,29 @@ export class MCPEgressGateway {
       const assertCurrent = async () => {
         await this.assertCurrentOrAbort(claims, controller.signal);
       };
-      const response = await safeOutboundFetch(admitted.server.url!, {
-        method: input.method,
-        headers,
-        body: input.method === 'DELETE' ? undefined : input.body,
-        redirect: 'error',
-        timeoutMs: RESPONSE_TIMEOUT_MS,
-        maxResponseBytes: MAX_RESPONSE_BYTES,
-        allowLocalhostHttp: this.options.allowLocalhostHttp === true,
-        signal: controller.signal,
-        resolveDns: this.options.resolveDns,
-        assertCurrent,
-      });
+      const dispatch = (requestHeaders: Headers) =>
+        safeOutboundFetch(admitted.server.url!, {
+          method: input.method,
+          headers: requestHeaders,
+          body: input.method === 'DELETE' ? undefined : input.body,
+          redirect: 'error',
+          timeoutMs: RESPONSE_TIMEOUT_MS,
+          maxResponseBytes: MAX_RESPONSE_BYTES,
+          allowLocalhostHttp: this.options.allowLocalhostHttp === true,
+          signal: controller.signal,
+          resolveDns: this.options.resolveDns,
+          assertCurrent,
+        });
+      let response = await dispatch(headers);
+      if (response.status === 401 && admitted.server.auth?.type === 'oauth') {
+        await response.body?.cancel();
+        credentials = await this.credentialHeaders(claims, admitted.server, assertCurrent, {
+          forceRefresh: true,
+        });
+        ({ requestHeaders: headers, secretHeaders: finalHeaders } =
+          buildOutboundHeaders(credentials));
+        response = await dispatch(headers);
+      }
       const body = new Uint8Array(await response.arrayBuffer());
       const secrets = this.responseSecrets(
         admitted.unresolvedServer,

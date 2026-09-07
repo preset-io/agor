@@ -4730,7 +4730,7 @@ export async function registerMCPServices(
   // --------------------------------------------------------------------------
   app.use('/mcp-servers/oauth-auth-headers', {
     async create(
-      data: { mcp_server_ids: string[] },
+      data: { mcp_server_ids: string[]; force_refresh?: boolean },
       params?: AuthenticatedParams
     ): Promise<{
       headers: Record<string, { authorization?: string; error?: string }>;
@@ -4755,6 +4755,13 @@ export async function registerMCPServices(
       if (!trustedInternalOrService && !trustedSessionExecutor) {
         throw new Forbidden('oauth-auth-headers is only available to trusted executor paths');
       }
+      // `force_refresh` is an internal accelerator for the egress gateway's
+      // post-401 retry, not a capability request data controls: only the
+      // trusted internal/service caller may set it. A session executor's own
+      // request data is otherwise agent-directed, and forcing a refresh has
+      // real side effects (provider rate limits, refresh-token rotation,
+      // fencing pressure on concurrent callers of the same grant).
+      const forceRefresh = trustedInternalOrService && data?.force_refresh === true;
       const tenantId = tenantIdFromParams(params);
       if (!tenantId) throw new NotAuthenticated('oauth-auth-headers requires tenant identity');
       const mcpEgressAssertCurrent = (
@@ -4892,7 +4899,7 @@ export async function registerMCPServices(
               return;
             }
             if (row.refresh_status === 'ambiguous') {
-              headers[serverId] = { error: 'needs_reauth' };
+              headers[serverId] = { error: 'token_refresh_failed' };
               return;
             }
 
@@ -4917,7 +4924,8 @@ export async function registerMCPServices(
              */
             const refreshWouldRun =
               row.refresh_status === 'refreshing' ||
-              (needsRefresh(row.oauth_token_expires_at) && !!row.oauth_refresh_token);
+              ((forceRefresh || needsRefresh(row.oauth_token_expires_at)) &&
+                !!row.oauth_refresh_token);
             if (refreshWouldRun && mode === 'per_user' && !(await isPerUserGrantOwnerEntitled())) {
               console.warn('[OAuth AuthHeaders] refresh_refused category=grant_owner_role');
               headers[serverId] = { error: 'needs_reauth' };
@@ -4942,13 +4950,21 @@ export async function registerMCPServices(
                 headers[serverId] = { authorization: `Bearer ${observed}` };
               } catch (refreshErr) {
                 if (refreshErr instanceof OAuthRefreshAuthorityCancelledError) throw refreshErr;
-                headers[serverId] = { error: 'needs_reauth' };
+                headers[serverId] = {
+                  error:
+                    refreshErr instanceof InvalidGrantError
+                      ? 'needs_reauth'
+                      : 'token_refresh_failed',
+                };
               }
               return;
             }
 
             let accessToken = row.oauth_access_token;
-            if (needsRefresh(row.oauth_token_expires_at) && row.oauth_refresh_token) {
+            if (
+              (forceRefresh || needsRefresh(row.oauth_token_expires_at)) &&
+              row.oauth_refresh_token
+            ) {
               try {
                 accessToken = await refreshAndPersistToken({
                   db,
@@ -4971,10 +4987,13 @@ export async function registerMCPServices(
                 }
                 // A failed/ambiguous rotating-token exchange must not fall back
                 // to a stale token that may already be invalid.
-                console.warn('[OAuth AuthHeaders] refresh_failed category=reauth_or_retry');
-                headers[serverId] = { error: 'needs_reauth' };
+                console.warn('[OAuth AuthHeaders] refresh_failed category=retryable');
+                headers[serverId] = { error: 'token_refresh_failed' };
                 return;
               }
+            } else if (forceRefresh) {
+              headers[serverId] = { error: 'needs_reauth' };
+              return;
             } else if (
               !accessToken ||
               (row.oauth_token_expires_at && row.oauth_token_expires_at <= new Date())
@@ -5106,15 +5125,16 @@ export async function registerMCPServices(
           if (
             err instanceof InvalidGrantError ||
             err instanceof MissingRefreshTokenError ||
-            err instanceof AmbiguousRefreshError ||
             err instanceof GrantConfigurationChangedError
           ) {
             return { success: false, error: 'needs_reauth' };
           }
-          // A peer observed a known, non-ambiguous owner failure. Match the
-          // owner's retryable response rather than forcing one daemon's caller
-          // to reconnect for the same refresh generation.
-          if (err instanceof FailedRefreshError) {
+          // A peer observed a known, non-ambiguous owner failure, or the
+          // outcome of a concurrent refresh could not be observed in time.
+          // Neither means the grant itself is invalid, so match the
+          // auth-headers path's retryable response rather than forcing the
+          // caller to reconnect for the same refresh generation.
+          if (err instanceof FailedRefreshError || err instanceof AmbiguousRefreshError) {
             return { success: false, error: 'token_refresh_failed' };
           }
           if (err instanceof MissingTokenEndpointError) {

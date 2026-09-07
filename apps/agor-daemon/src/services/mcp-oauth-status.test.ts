@@ -95,6 +95,38 @@ describe('resolveAuthenticatedServerIds', () => {
     await expect(resolveAuthenticatedServerIds(deps)).resolves.toEqual([]);
   });
 
+  it('keeps an expired access token authenticated while its refresh grant is durable', async () => {
+    const deps = buildDeps({
+      now: new Date('2026-01-02T00:00:00.000Z'),
+      listShared: async () => [
+        grantFor('server-shared', {
+          oauth_token_expires_at: new Date('2026-01-01T00:00:00.000Z'),
+          oauth_refresh_token: 'stored-refresh-token',
+          refresh_status: 'idle',
+        }),
+      ],
+      findServer: async () => serverOwnedBy('server-shared'),
+    });
+
+    await expect(resolveAuthenticatedServerIds(deps)).resolves.toEqual(['server-shared']);
+  });
+
+  it('keeps a concurrently refreshing grant authenticated', async () => {
+    const deps = buildDeps({
+      now: new Date('2026-01-02T00:00:00.000Z'),
+      listShared: async () => [
+        grantFor('server-shared', {
+          oauth_token_expires_at: new Date('2026-01-01T00:00:00.000Z'),
+          oauth_refresh_token: 'stored-refresh-token',
+          refresh_status: 'refreshing',
+        }),
+      ],
+      findServer: async () => serverOwnedBy('server-shared'),
+    });
+
+    await expect(resolveAuthenticatedServerIds(deps)).resolves.toEqual(['server-shared']);
+  });
+
   it('revalidates a grant against its server before advertising it', async () => {
     const isGrantBoundToServer = vi.fn(() => false);
     const deps = buildDeps({

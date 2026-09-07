@@ -3,8 +3,9 @@
  *
  * The answer drives an auth badge in the UI, so it is a read of durable state
  * rather than of whatever a realtime hint last said: a grant is advertised only
- * if it has not expired, is not mid-refresh in an ambiguous state, and still
- * binds to the server it was issued against. Historical standalone grants
+ * if it has a usable access token or a durable refresh token capable of
+ * renewing it, is not in an ambiguous refresh state, and still binds to the
+ * server it was issued against. Historical standalone grants
  * predate binding and are intentionally grandfathered; newly issued SQLite
  * grants carry the same versioned configuration envelope.
  *
@@ -16,6 +17,7 @@
 
 import type { UserMCPOAuthToken } from '@agor/core/db';
 import { isMCPServerUsableBy } from '@agor/core/mcp';
+import { oauthGrantCanAuthenticate } from '@agor/core/tools/mcp/oauth-refresh';
 import type { MCPServer, MCPServerID, UserID } from '@agor/core/types';
 import { hasMinimumRole, ROLES } from '@agor/core/types';
 
@@ -61,8 +63,7 @@ export async function resolveAuthenticatedServerIds(deps: OAuthStatusDeps): Prom
 
   const authenticatedServerIds = new Set<MCPServerID>();
   for (const token of [...perUserTokens, ...sharedTokens]) {
-    if (token.oauth_token_expires_at && token.oauth_token_expires_at <= now) continue;
-    if (token.refresh_status === 'ambiguous') continue;
+    if (!oauthGrantCanAuthenticate(token, now)) continue;
 
     const server = await deps.findServer(token.mcp_server_id);
     if (!server || !isVisibleTo(server, deps.viewer)) continue;

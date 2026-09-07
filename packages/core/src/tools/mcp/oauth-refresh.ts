@@ -22,6 +22,48 @@ export const REFRESH_BUFFER_MS = 60_000;
 const REFRESH_OBSERVE_TIMEOUT_MS = 20_000;
 const REFRESH_OBSERVE_INTERVAL_MS = 100;
 
+/**
+ * An expired access token is not the same thing as an expired OAuth grant.
+ * The daemon refreshes an idle/refreshing grant just-in-time before vending
+ * the next Authorization header, so status surfaces must keep it authenticated
+ * while a durable refresh token remains available.
+ */
+export function oauthGrantCanAuthenticate(
+  token: Pick<
+    UserMCPOAuthToken,
+    'oauth_token_expires_at' | 'oauth_refresh_token' | 'refresh_status'
+  >,
+  now = new Date()
+): boolean {
+  if (token.refresh_status === 'ambiguous') return false;
+  if (!token.oauth_token_expires_at || token.oauth_token_expires_at > now) return true;
+  return Boolean(token.oauth_refresh_token);
+}
+
+/**
+ * Google's OAuth refresh tokens are reusable and are not rotated by a normal
+ * access-token refresh. An ambiguous network failure can therefore be retried
+ * later without risking replay of a single-use rotating refresh token.
+ */
+export function isReplaySafeRefreshTokenEndpoint(tokenEndpoint: string): boolean {
+  try {
+    const url = new URL(tokenEndpoint);
+    return (
+      url.protocol === 'https:' &&
+      ['oauth2.googleapis.com', 'www.googleapis.com'].includes(url.hostname.toLowerCase())
+    );
+  } catch {
+    return false;
+  }
+}
+
+export function classifyFailedRefreshClaimStatus(
+  ambiguous: boolean,
+  tokenEndpoint: string
+): 'idle' | 'ambiguous' {
+  return ambiguous && !isReplaySafeRefreshTokenEndpoint(tokenEndpoint) ? 'ambiguous' : 'idle';
+}
+
 export class InvalidGrantError extends Error {
   readonly code = 'invalid_grant';
   constructor(message = 'OAuth refresh grant is no longer valid') {
@@ -385,7 +427,8 @@ async function refreshPostgres(deps: RefreshAndPersistDeps): Promise<string> {
     return releaseUnstartedClaim(new MissingRefreshTokenError());
   }
   if (!row.oauth_client_id) return releaseUnstartedClaim(new MissingClientIdError());
-  if (!row.oauth_token_endpoint) {
+  const tokenEndpoint = row.oauth_token_endpoint;
+  if (!tokenEndpoint) {
     return releaseUnstartedClaim(new MissingTokenEndpointError());
   }
   try {
@@ -397,7 +440,7 @@ async function refreshPostgres(deps: RefreshAndPersistDeps): Promise<string> {
   }
   try {
     const result = await refreshMCPToken({
-      tokenEndpoint: row.oauth_token_endpoint,
+      tokenEndpoint,
       refreshToken: row.oauth_refresh_token,
       clientId: row.oauth_client_id,
       clientSecret: row.oauth_client_secret,
@@ -460,7 +503,7 @@ async function refreshPostgres(deps: RefreshAndPersistDeps): Promise<string> {
         deps.userId,
         deps.mcpServerId,
         fence,
-        ambiguous ? 'ambiguous' : 'idle'
+        classifyFailedRefreshClaimStatus(ambiguous, tokenEndpoint)
       )
     );
     console.warn(

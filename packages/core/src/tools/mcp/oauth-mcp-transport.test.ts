@@ -42,6 +42,7 @@ import {
   discoverAuthorizationServerFromMcpOrigin,
   discoverResourceMetadataUrl,
   getAuthCodeTokenCacheStats,
+  isGoogleAuthorizationEndpoint,
   isOAuthRequired,
   OAuthCallbackValidationError,
   OAuthCodeExchangeError,
@@ -51,6 +52,25 @@ import {
   resolveResourceMetadataUrl,
   startMCPOAuthFlow,
 } from './oauth-mcp-transport';
+
+describe('Google authorization endpoint classification', () => {
+  it('accepts only the exact HTTPS Google Accounts host', () => {
+    expect(isGoogleAuthorizationEndpoint(new URL('https://accounts.google.com/authorize'))).toBe(
+      true
+    );
+    expect(isGoogleAuthorizationEndpoint(new URL('http://accounts.google.com/authorize'))).toBe(
+      false
+    );
+    expect(
+      isGoogleAuthorizationEndpoint(
+        new URL('https://accounts.google.com.attacker.example/authorize')
+      )
+    ).toBe(false);
+    expect(
+      isGoogleAuthorizationEndpoint(new URL('https://accounts.google.example/authorize'))
+    ).toBe(false);
+  });
+});
 
 async function rejectedError<T extends Error>(promise: Promise<unknown>): Promise<T> {
   try {
@@ -1030,6 +1050,108 @@ describe('startMCPOAuthFlow with prefetchedAuthServerMetadata', () => {
     expect(authUrl.searchParams.get('code_challenge')).toBeTruthy();
     expect(authUrl.searchParams.get('state')).toBeTruthy();
     expect(authUrl.searchParams.get('redirect_uri')).toBe('http://127.0.0.1:9999/oauth/callback');
+  });
+
+  it.each(['https://gmailmcp.googleapis.com/mcp/v1', 'https://calendarmcp.googleapis.com/mcp/v1'])(
+    'requests a durable offline Google grant for %s',
+    async (resourceUri) => {
+      const ctx = await startMCPOAuthFlow('', 'configured-google-client', redirectUri, {
+        prefetchedAuthServerMetadata: {
+          issuer: 'https://accounts.google.com',
+          authorization_endpoint:
+            'https://accounts.google.com/o/oauth2/v2/auth?prompt=select_account',
+          token_endpoint: 'https://oauth2.googleapis.com/token',
+        },
+        cacheKey: resourceUri,
+        resourceUri,
+        compatibilityMode: 'legacy',
+        allowLocalhostHttp: true,
+      });
+
+      const authorizationUrl = new URL(ctx.authorizationUrl);
+      expect(authorizationUrl.searchParams.get('access_type')).toBe('offline');
+      expect(authorizationUrl.searchParams.get('prompt')?.split(/\s+/)).toEqual([
+        'select_account',
+        'consent',
+      ]);
+      expect(authorizationUrl.searchParams.get('client_id')).toBe('configured-google-client');
+    }
+  );
+
+  it('does not add Google-only offline parameters to another provider', async () => {
+    const ctx = await startMCPOAuthFlow('', 'configured-client', redirectUri, {
+      prefetchedAuthServerMetadata: {
+        issuer: 'https://auth.example.test',
+        authorization_endpoint: 'https://auth.example.test/authorize',
+        token_endpoint: 'https://auth.example.test/token',
+      },
+      cacheKey: 'https://mcp.example.test/mcp',
+      resourceUri: 'https://mcp.example.test/mcp',
+      compatibilityMode: 'legacy',
+      allowLocalhostHttp: true,
+    });
+
+    const authorizationUrl = new URL(ctx.authorizationUrl);
+    expect(authorizationUrl.searchParams.get('access_type')).toBeNull();
+    expect(authorizationUrl.searchParams.get('prompt')).toBeNull();
+  });
+
+  it.each([
+    'https://accounts.google.com.attacker.example/authorize',
+    'https://accounts.google.example/authorize',
+  ])('does not trust a lookalike Google authorization host %s', async (authorizationEndpoint) => {
+    const ctx = await startMCPOAuthFlow('', 'configured-client', redirectUri, {
+      prefetchedAuthServerMetadata: {
+        issuer: new URL(authorizationEndpoint).origin,
+        authorization_endpoint: authorizationEndpoint,
+        token_endpoint: 'https://auth.example.test/token',
+      },
+      cacheKey: 'https://mcp.example.test/mcp',
+      resourceUri: 'https://mcp.example.test/mcp',
+      compatibilityMode: 'legacy',
+      allowLocalhostHttp: true,
+    });
+
+    const authorizationUrl = new URL(ctx.authorizationUrl);
+    expect(authorizationUrl.searchParams.get('access_type')).toBeNull();
+    expect(authorizationUrl.searchParams.get('prompt')).toBeNull();
+  });
+
+  it('rejects an insecure Google authorization endpoint before provider parameters apply', async () => {
+    await expect(
+      startMCPOAuthFlow('', 'configured-client', redirectUri, {
+        prefetchedAuthServerMetadata: {
+          issuer: 'http://accounts.google.com',
+          authorization_endpoint: 'http://accounts.google.com/authorize',
+          token_endpoint: 'https://oauth2.googleapis.com/token',
+        },
+        cacheKey: 'https://gmailmcp.googleapis.com/mcp/v1',
+        resourceUri: 'https://gmailmcp.googleapis.com/mcp/v1',
+        compatibilityMode: 'legacy',
+        allowLocalhostHttp: true,
+      })
+    ).rejects.toThrow('OAuth endpoints require HTTPS');
+  });
+
+  it('deduplicates consent while preserving existing Google prompts', async () => {
+    const ctx = await startMCPOAuthFlow('', 'configured-google-client', redirectUri, {
+      prefetchedAuthServerMetadata: {
+        issuer: 'https://accounts.google.com',
+        authorization_endpoint:
+          'https://accounts.google.com/o/oauth2/v2/auth?prompt=consent%20select_account%20consent',
+        token_endpoint: 'https://oauth2.googleapis.com/token',
+      },
+      cacheKey: 'https://gmailmcp.googleapis.com/mcp/v1',
+      resourceUri: 'https://gmailmcp.googleapis.com/mcp/v1',
+      compatibilityMode: 'legacy',
+      allowLocalhostHttp: true,
+    });
+
+    const authorizationUrl = new URL(ctx.authorizationUrl);
+    expect(authorizationUrl.searchParams.get('prompt')?.split(/\s+/)).toEqual([
+      'consent',
+      'select_account',
+    ]);
   });
 
   it('accepts a confidential client when DCR returns a secret with auth method none/omitted, then uses HTTP Basic on token exchange', async () => {

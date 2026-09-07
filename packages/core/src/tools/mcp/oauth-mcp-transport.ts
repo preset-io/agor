@@ -80,6 +80,34 @@ interface OAuthRawTokenResponse {
 }
 
 /**
+ * Google only issues a durable refresh token when the authorization request
+ * explicitly asks for offline access. `prompt=consent` is required when an
+ * existing grant must be replaced because Google commonly omits a refresh
+ * token from subsequent authorization responses.
+ *
+ * These are Google extensions rather than generic OAuth parameters, so keep
+ * them scoped to Google's exact authorization host. Other providers can give
+ * `prompt` different semantics or reject unknown parameters entirely.
+ */
+export function isGoogleAuthorizationEndpoint(authUrl: URL): boolean {
+  return authUrl.protocol === 'https:' && authUrl.hostname.toLowerCase() === 'accounts.google.com';
+}
+
+function applyProviderAuthorizationParameters(authUrl: URL): void {
+  if (!isGoogleAuthorizationEndpoint(authUrl)) return;
+
+  authUrl.searchParams.set('access_type', 'offline');
+  const prompts = new Set(
+    (authUrl.searchParams.get('prompt') ?? '')
+      .split(/\s+/)
+      .map((value) => value.trim())
+      .filter(Boolean)
+  );
+  prompts.add('consent');
+  authUrl.searchParams.set('prompt', [...prompts].join(' '));
+}
+
+/**
  * Classified authorization-code exchange failure.
  *
  * `ambiguous=true` means the request may have reached the provider and the
@@ -1283,6 +1311,7 @@ export async function performMCPOAuthFlow(
     authUrl.searchParams.set('code_challenge', pkce.challenge);
     authUrl.searchParams.set('code_challenge_method', 'S256');
     authUrl.searchParams.set('state', state);
+    applyProviderAuthorizationParameters(authUrl);
 
     // Add scopes if available (same scopes used during DCR registration)
     if (scopeString) {
@@ -1733,6 +1762,7 @@ async function startMCPOAuthFlowWithAS(opts: {
   authUrl.searchParams.set('code_challenge_method', 'S256');
   authUrl.searchParams.set('state', state);
   authUrl.searchParams.set('resource', resourceUri);
+  applyProviderAuthorizationParameters(authUrl);
   if (scopeString) {
     authUrl.searchParams.set('scope', scopeString);
   }
