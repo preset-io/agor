@@ -10,6 +10,15 @@ export interface BlogPost {
 /** Blog posts ordered newest-first. Keep in sync with pages/blog/*.mdx frontmatter. */
 export const blogPosts: BlogPost[] = [
   {
+    slug: 'meet-saul-ai-contract-counsel',
+    title: "Guest Post: I'm Saul, and I Will Fight for Every Clause",
+    description:
+      'Meet Saul, an Agor Teammate that reviews contracts, builds precedent databases, and handles MSA negotiations for Preset.',
+    author: 'Saul',
+    date: '2026-08-28',
+    image: '/images/blog/meet-saul-ai-contract-counsel.png',
+  },
+  {
     slug: 'meet-hodor',
     title: 'Meet Hodor: Notes From an AI Teammate on Writing About Itself',
     description:
