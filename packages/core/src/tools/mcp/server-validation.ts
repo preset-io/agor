@@ -78,6 +78,14 @@ function hasControlCharacter(value: string): boolean {
   });
 }
 
+/** MCP capability text may use JSON's conventional horizontal/line whitespace. */
+function hasUnsafeMCPCapabilityTextControlCharacter(value: string): boolean {
+  return [...value].some((character) => {
+    const code = character.charCodeAt(0);
+    return (code <= 31 && code !== 9 && code !== 10 && code !== 13) || code === 127;
+  });
+}
+
 export interface MCPServerWriteValidationOptions {
   operation: 'create' | 'mutation';
   /** Trusted daemon/catalog/import paths may set provenance and capabilities. */
@@ -95,6 +103,17 @@ export class MCPServerWriteValidationError extends Error {
   constructor(message: string) {
     super(message);
     this.name = 'MCPServerWriteValidationError';
+  }
+}
+
+/** Classify validator failures without letting a hostile Proxy trap escape. */
+export function isMCPServerWriteValidationError(
+  error: unknown
+): error is MCPServerWriteValidationError {
+  try {
+    return error instanceof MCPServerWriteValidationError;
+  } catch {
+    return false;
   }
 }
 
@@ -248,7 +267,11 @@ function boundedOptionalString(
 ): void {
   const value = record[field];
   if (value === undefined) return;
-  if (typeof value !== 'string' || value.length > MAX_VALUE_LENGTH || hasControlCharacter(value)) {
+  if (
+    typeof value !== 'string' ||
+    value.length > MAX_VALUE_LENGTH ||
+    hasUnsafeMCPCapabilityTextControlCharacter(value)
+  ) {
     throw new Error(`${label}.${field} must be a bounded string`);
   }
 }
@@ -267,7 +290,7 @@ function boundedJsonValue(value: unknown, label: string): void {
       return;
     }
     if (typeof nested === 'string') {
-      if (nested.length > MAX_VALUE_LENGTH || hasControlCharacter(nested)) {
+      if (nested.length > MAX_VALUE_LENGTH || hasUnsafeMCPCapabilityTextControlCharacter(nested)) {
         throw new Error(`${path} contains an invalid string`);
       }
       return;
@@ -283,7 +306,7 @@ function boundedJsonValue(value: unknown, label: string): void {
     const entries = Object.entries(object);
     if (entries.length > MAX_COLLECTION_ENTRIES) throw new Error(`${path} is too large`);
     for (const [key, item] of entries) {
-      if (!key || key.length > MAX_NAME_LENGTH || hasControlCharacter(key)) {
+      if (!key || key.length > MAX_NAME_LENGTH || hasUnsafeMCPCapabilityTextControlCharacter(key)) {
         throw new Error(`${path} contains an invalid key`);
       }
       visit(item, `${path}.${key}`, depth + 1);
@@ -529,7 +552,7 @@ export function assertValidMCPServerWrite(
   try {
     validateMCPServerWrite(value, options);
   } catch (error) {
-    if (error instanceof MCPServerWriteValidationError) throw error;
+    if (isMCPServerWriteValidationError(error)) throw error;
     throw new MCPServerWriteValidationError(
       error instanceof Error ? error.message : 'Invalid MCP server input'
     );
@@ -582,7 +605,7 @@ export function assertValidDiscoveredMCPCapabilities(value: unknown): void {
     }
     capabilities(record);
   } catch (error) {
-    if (error instanceof MCPServerWriteValidationError) throw error;
+    if (isMCPServerWriteValidationError(error)) throw error;
     throw new MCPServerWriteValidationError(
       error instanceof Error ? error.message : 'Invalid discovered MCP capabilities'
     );
@@ -704,7 +727,7 @@ export function assertValidArchivedMCPServerRow(value: unknown): void {
       ...data,
     });
   } catch (error) {
-    if (error instanceof MCPServerWriteValidationError) throw error;
+    if (isMCPServerWriteValidationError(error)) throw error;
     throw new MCPServerWriteValidationError(
       error instanceof Error ? error.message : 'Invalid archived MCP server row'
     );

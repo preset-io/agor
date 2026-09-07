@@ -98,7 +98,7 @@ const DEFAULT_TIMEOUT_MS = 15_000;
 const MAX_TIMER_MS = 2_147_483_647;
 
 function outboundTimeoutError(): Error {
-  return new Error('Outbound OAuth timeout');
+  return Object.assign(new Error('Outbound OAuth timeout'), { code: 'ETIMEDOUT' as const });
 }
 
 function abortReason(signal: AbortSignal): Error {

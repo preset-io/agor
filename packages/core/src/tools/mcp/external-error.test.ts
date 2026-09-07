@@ -1,3 +1,4 @@
+import { BadRequest, Conflict, Forbidden } from '@feathersjs/errors';
 import { describe, expect, it, vi } from 'vitest';
 import {
   asMCPExternalError,
@@ -20,7 +21,7 @@ describe('MCP external error boundary', () => {
     expect(serialized).not.toContain('SENTINEL');
     expect(safe.diagnostic.event).toBe('mcp_external_failure');
     expect(safe.diagnostic.stage).toBe('discovery');
-    expect(['Error', 'TypeError', 'UnknownError']).toContain(safe.diagnostic.type);
+    expect(['Error', 'TypeError', 'NetworkError', 'UnknownError']).toContain(safe.diagnostic.type);
     expect(thrown.message).toBe(safe.message);
   });
 
@@ -37,6 +38,73 @@ describe('MCP external error boundary', () => {
     expect(allowed.diagnostic.code).toBe('ECONNREFUSED');
     expect(rejected.diagnostic.code).toBeUndefined();
     expect(JSON.stringify({ allowed, rejected })).not.toContain('SENTINEL');
+  });
+
+  it.each([
+    ['PUBLIC_BASE_URL_NOT_CONFIGURED', 'ConfigurationError'],
+    ['unsafe_outbound_url', 'ConfigurationError'],
+    ['EAGOROUTBOUND', 'ConfigurationError'],
+    ['ETIMEDOUT', 'NetworkError'],
+  ] as const)('classifies the closed transport/configuration code %s', (code, type) => {
+    const safe = sanitizeMCPExternalError(
+      Object.assign(new Error('SENTINEL_SYSTEMIC_EGRESS_FAILURE'), { code }),
+      { stage: 'discovery' }
+    );
+
+    expect(safe).toMatchObject({
+      category: type === 'ConfigurationError' ? 'configuration_required' : 'provider_unavailable',
+      diagnostic: { code, type },
+    });
+    expect(JSON.stringify(safe)).not.toContain('SENTINEL');
+  });
+
+  it.each([
+    [401, 'provider_rejected', 'reauthenticate'],
+    [403, 'provider_rejected', 'reauthenticate'],
+    [429, 'provider_unavailable', 'retry'],
+    [503, 'provider_unavailable', 'retry'],
+    [404, 'configuration_required', 'review_configuration'],
+  ] as const)(
+    'classifies an MCP SDK HTTP status %i without retaining its response body',
+    (status, category, action) => {
+      // StreamableHTTPError uses an own numeric `code`; its message contains
+      // the untrusted response body and must remain outside the safe result.
+      const failure = Object.assign(new Error('SENTINEL_PROVIDER_RESPONSE_BODY'), {
+        code: status,
+      });
+      const safe = sanitizeMCPExternalError(failure, { stage: 'discovery' });
+
+      expect(safe).toMatchObject({
+        category,
+        action,
+        diagnostic: { type: 'HTTPError', status },
+      });
+      expect(safe.diagnostic.code).toBeUndefined();
+      expect(JSON.stringify(safe)).not.toContain('SENTINEL');
+    }
+  );
+
+  it('does not reinterpret JSON-RPC codes as HTTP statuses', () => {
+    const safe = sanitizeMCPExternalError(
+      Object.assign(new Error('SENTINEL_JSON_RPC'), { code: -32603 }),
+      { stage: 'discovery' }
+    );
+
+    expect(safe).toMatchObject({ category: 'unknown', diagnostic: { type: 'Error' } });
+    expect(safe.diagnostic.status).toBeUndefined();
+    expect(JSON.stringify(safe)).not.toContain('SENTINEL');
+  });
+
+  it.each([
+    new BadRequest('SENTINEL_BAD_REQUEST'),
+    new Forbidden('SENTINEL_FORBIDDEN'),
+    new Conflict('SENTINEL_CONFLICT'),
+  ])('does not reinterpret the trusted Feathers control error %# as provider HTTP', (failure) => {
+    const safe = sanitizeMCPExternalError(failure, { stage: 'discovery' });
+
+    expect(safe).toMatchObject({ category: 'unknown', diagnostic: { type: 'Error' } });
+    expect(safe.diagnostic.status).toBeUndefined();
+    expect(JSON.stringify(safe)).not.toContain('SENTINEL');
   });
 
   it('fails closed when hostile code and name getters throw', () => {
@@ -82,6 +150,9 @@ describe('MCP external error boundary', () => {
     expect(isMCPAbortError(domAbort)).toBe(true);
     expect(isMCPAbortError(sdkAbort)).toBe(true);
     expect(isMCPAbortError(codeAbort)).toBe(true);
+    expect(sanitizeMCPExternalError(codeAbort, { stage: 'discovery' }).diagnostic.type).toBe(
+      'AbortError'
+    );
     expect(isMCPAbortError(hostile)).toBe(false);
     expect(hostileGetter).not.toHaveBeenCalled();
   });
@@ -89,6 +160,7 @@ describe('MCP external error boundary', () => {
   it.each([
     ['provider_rejected', 'reauthenticate'],
     ['invalid_response', 'retry'],
+    ['storage_policy_rejected', 'contact_admin'],
     ['configuration_required', 'review_configuration'],
   ] as const)('preserves the closed %s category/action pair', (category, action) => {
     const typed = asMCPExternalError(undefined, { stage: 'jwt', category });
@@ -97,6 +169,72 @@ describe('MCP external error boundary', () => {
       action,
       diagnostic: { stage: 'oauth' },
     });
+  });
+
+  it('keeps the persistence-validation diagnostic and user contract closed', () => {
+    const safe = sanitizeMCPExternalError(new Error('SENTINEL_PROVIDER_FIELD'), {
+      stage: 'discovery',
+      category: 'storage_policy_rejected',
+      reason: 'capability_persistence_validation_rejected',
+    });
+
+    expect(safe).toEqual({
+      category: 'storage_policy_rejected',
+      action: 'contact_admin',
+      message:
+        "The MCP server's capabilities did not meet Agor's storage safety limits, so Agor did not save them. Ask an administrator to review the secure operational event.",
+      diagnostic: {
+        event: 'mcp_external_failure',
+        stage: 'discovery',
+        type: 'Error',
+        reason: 'capability_persistence_validation_rejected',
+      },
+    });
+    expect(JSON.stringify(safe)).not.toContain('SENTINEL');
+
+    const rejectedReason = sanitizeMCPExternalError(undefined, {
+      stage: 'discovery',
+      reason: 'SENTINEL_PROVIDER_REASON' as never,
+    });
+    expect(rejectedReason.diagnostic.reason).toBeUndefined();
+    expect(JSON.stringify(rejectedReason)).not.toContain('SENTINEL');
+  });
+
+  it('accepts only a closed OAuth configuration diagnostic override', () => {
+    const safe = sanitizeMCPExternalError(new Error('SENTINEL_OAUTH_METADATA'), {
+      stage: 'oauth',
+      category: 'configuration_required',
+      type: 'ConfigurationError',
+      reason: 'oauth_metadata_incompatible',
+    });
+
+    expect(safe).toMatchObject({
+      category: 'configuration_required',
+      diagnostic: {
+        stage: 'oauth',
+        type: 'ConfigurationError',
+        reason: 'oauth_metadata_incompatible',
+      },
+    });
+    expect(JSON.stringify(safe)).not.toContain('SENTINEL');
+  });
+
+  it('keeps only closed redirect and Catalog probe reasons', () => {
+    const redirect = sanitizeMCPExternalError(new Error('SENTINEL_REDIRECT'), {
+      stage: 'oauth',
+      category: 'configuration_required',
+      type: 'ConfigurationError',
+      reason: 'oauth_redirect_configuration_required',
+    });
+    const probe = sanitizeMCPExternalError(new Error('SENTINEL_PROBE'), {
+      stage: 'discovery',
+      category: 'provider_unavailable',
+      reason: 'catalog_probe_unreachable',
+    });
+
+    expect(redirect.diagnostic.reason).toBe('oauth_redirect_configuration_required');
+    expect(probe.diagnostic.reason).toBe('catalog_probe_unreachable');
+    expect(JSON.stringify({ redirect, probe })).not.toContain('SENTINEL');
   });
 
   it('re-closes forged typed errors instead of trusting their public prose or metadata', () => {

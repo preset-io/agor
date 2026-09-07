@@ -51,7 +51,10 @@ import {
 // The boundary under test is daemon discovery/OAuth authority, not the MCP
 // SDK's stream parser. Mock only the post-grant capability client so Vitest
 // does not try to type-strip eventsource-parser's published TypeScript file.
-const mcpClientTestState = vi.hoisted(() => ({ connectError: undefined as unknown }));
+const mcpClientTestState = vi.hoisted(() => ({
+  connectError: undefined as unknown,
+  tools: [] as Array<{ name: string; description?: string }>,
+}));
 vi.mock('@modelcontextprotocol/sdk/client/index.js', () => ({
   Client: class {
     async connect() {
@@ -59,7 +62,7 @@ vi.mock('@modelcontextprotocol/sdk/client/index.js', () => ({
     }
     async close() {}
     async listTools() {
-      return { tools: [] };
+      return { tools: mcpClientTestState.tools };
     }
     async listResources() {
       return { resources: [] };
@@ -138,6 +141,7 @@ async function createTestProvider(
     rejectDynamicRegistration?: boolean;
     holdDynamicRegistration?: boolean;
     resourceScopes?: string[];
+    resourcePath?: string;
     holdMcpChallenge?: boolean;
   } = {}
 ): Promise<TestProvider> {
@@ -184,7 +188,7 @@ async function createTestProvider(
       response.writeHead(200, { 'content-type': 'application/json' });
       response.end(
         JSON.stringify({
-          resource: `${baseUrl}/saved/mcp`,
+          resource: `${baseUrl}${options.resourcePath ?? '/saved/mcp'}`,
           authorization_servers: [baseUrl],
           ...(options.resourceScopes ? { scopes_supported: options.resourceScopes } : {}),
         })
@@ -908,6 +912,7 @@ beforeEach(() => {
 
 afterEach(async () => {
   mcpClientTestState.connectError = undefined;
+  mcpClientTestState.tools = [];
   await Promise.all(realSocketHarnesses.splice(0).map((harness) => harness.close()));
   await Promise.all(providers.splice(0).map((provider) => provider.close()));
   for (const db of databases.splice(0)) {
@@ -917,6 +922,141 @@ afterEach(async () => {
   else process.env.AGOR_BASE_URL = previousBaseUrl;
   if (previousMasterSecret === undefined) delete process.env.AGOR_MASTER_SECRET;
   else process.env.AGOR_MASTER_SECRET = previousMasterSecret;
+});
+
+describe('saved-server capability discovery', () => {
+  it('reports an MCP SDK 401 with a redacted HTTP authentication diagnostic', async () => {
+    const provider = await createTestProvider();
+    providers.push(provider);
+    const harness = await createHarness(provider);
+    const sentinel = 'SENTINEL_CONTEXT7_AUTH_RESPONSE';
+    mcpClientTestState.connectError = Object.assign(new Error(sentinel), { code: 401 });
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    try {
+      const result = await harness.app
+        .service('mcp-servers/discover')
+        .create({ mcp_server_id: harness.server.mcp_server_id }, paramsFor(harness));
+
+      expect(result).toMatchObject({
+        success: false,
+        category: 'provider_rejected',
+        error:
+          'The provider rejected the MCP authentication request. Review the saved credentials or sign in again.',
+      });
+      expect(errorSpy).toHaveBeenCalledWith(
+        expect.stringContaining(
+          'event=mcp_external_failure stage=discovery category=provider_rejected type=HTTPError status=401'
+        )
+      );
+      expect(JSON.stringify({ result, logs: errorSpy.mock.calls })).not.toContain(sentinel);
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+
+  it('reports a shared MCP egress timeout as provider availability', async () => {
+    const provider = await createTestProvider();
+    providers.push(provider);
+    const harness = await createHarness(provider);
+    const sentinel = 'SENTINEL_MCP_EGRESS_TIMEOUT';
+    mcpClientTestState.connectError = Object.assign(new Error(sentinel), { code: 'ETIMEDOUT' });
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    try {
+      const result = await harness.app
+        .service('mcp-servers/discover')
+        .create({ mcp_server_id: harness.server.mcp_server_id }, paramsFor(harness));
+
+      expect(result).toMatchObject({
+        success: false,
+        category: 'provider_unavailable',
+        error:
+          'The MCP or OAuth provider is temporarily unreachable. Check the saved configuration and retry.',
+      });
+      expect(errorSpy).toHaveBeenCalledWith(
+        expect.stringContaining(
+          'event=mcp_external_failure stage=discovery category=provider_unavailable type=NetworkError code=ETIMEDOUT'
+        )
+      );
+      expect(JSON.stringify({ result, logs: errorSpy.mock.calls })).not.toContain(sentinel);
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+
+  it('persists protocol-valid multiline tool descriptions', async () => {
+    const provider = await createTestProvider();
+    providers.push(provider);
+    const harness = await createHarness(provider);
+    const server = await new MCPServerRepository(harness.rawDb).create({
+      name: 'multiline-description-server',
+      transport: 'http',
+      url: provider.savedMcpUrl,
+      scope: 'global',
+      owner_user_id: harness.user.user_id as UserID,
+      auth: { type: 'none' },
+    });
+    mcpClientTestState.tools = [
+      {
+        name: 'resolve-library-id',
+        description: 'Resolve a library.\n\nRules:\n- prefer an exact match\n- explain ambiguity',
+      },
+    ];
+
+    await expect(
+      harness.app
+        .service('mcp-servers/discover')
+        .create({ mcp_server_id: server.mcp_server_id }, paramsFor(harness))
+    ).resolves.toMatchObject({
+      success: true,
+      tools: mcpClientTestState.tools,
+    });
+    await expect(
+      new MCPServerRepository(harness.rawDb).findById(server.mcp_server_id)
+    ).resolves.toMatchObject({ tools: mcpClientTestState.tools });
+  });
+
+  it('reports Agor persistence-policy rejection without blaming the provider or echoing it', async () => {
+    const provider = await createTestProvider();
+    providers.push(provider);
+    const harness = await createHarness(provider);
+    const server = await new MCPServerRepository(harness.rawDb).create({
+      name: 'invalid-description-server',
+      transport: 'http',
+      url: provider.savedMcpUrl,
+      scope: 'global',
+      owner_user_id: harness.user.user_id as UserID,
+      auth: { type: 'none' },
+    });
+    mcpClientTestState.tools = [{ name: 'unsafe', description: 'provider-secret\0suffix' }];
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    try {
+      const result = await harness.app
+        .service('mcp-servers/discover')
+        .create({ mcp_server_id: server.mcp_server_id }, paramsFor(harness));
+
+      expect(result).toMatchObject({
+        success: false,
+        category: 'storage_policy_rejected',
+        action: 'contact_admin',
+        error:
+          "The MCP server's capabilities did not meet Agor's storage safety limits, so Agor did not save them. Ask an administrator to review the secure operational event.",
+      });
+      expect(errorSpy).toHaveBeenCalledWith(
+        '[MCP Discovery] event=mcp_external_failure stage=discovery category=storage_policy_rejected type=Error reason=capability_persistence_validation_rejected'
+      );
+      expect(JSON.stringify({ result, logs: errorSpy.mock.calls })).not.toContain(
+        'provider-secret'
+      );
+      await expect(
+        new MCPServerRepository(harness.rawDb).findById(server.mcp_server_id)
+      ).resolves.toMatchObject({ tools: undefined });
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
 });
 
 describe('real Feathers Socket.IO request authority', () => {
@@ -1195,6 +1335,61 @@ describe('real Feathers Socket.IO request authority', () => {
 });
 
 describe('SQLite saved-row OAuth authority', () => {
+  it('logs a closed deployment-configuration diagnostic when the public callback is missing', async () => {
+    const provider = await createTestProvider();
+    providers.push(provider);
+    const harness = await createHarness(provider);
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    delete process.env.AGOR_BASE_URL;
+
+    try {
+      const result = await harness.app
+        .service('mcp-servers/oauth-start')
+        .create({ mcp_server_id: harness.server.mcp_server_id }, paramsFor(harness));
+
+      expect(result).toMatchObject({
+        success: false,
+        recovery: {
+          category: 'redirect_configuration_required',
+          action: 'configure_redirect',
+        },
+      });
+      expect(errorSpy).toHaveBeenCalledWith(
+        expect.stringContaining(
+          'event=mcp_external_failure stage=oauth category=configuration_required type=ConfigurationError code=PUBLIC_BASE_URL_NOT_CONFIGURED reason=oauth_redirect_configuration_required'
+        )
+      );
+    } finally {
+      process.env.AGOR_BASE_URL = 'https://agor.example.test';
+      errorSpy.mockRestore();
+    }
+  });
+
+  it('logs closed Context7-style OAuth metadata incompatibility diagnostics', async () => {
+    const provider = await createTestProvider({ resourcePath: '/different/mcp' });
+    providers.push(provider);
+    const harness = await createHarness(provider);
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    try {
+      const result = await harness.app
+        .service('mcp-servers/oauth-start')
+        .create({ mcp_server_id: harness.server.mcp_server_id }, paramsFor(harness));
+
+      expect(result).toMatchObject({
+        success: false,
+        recovery: { category: 'metadata_incompatible', action: 'review_compatibility' },
+      });
+      expect(errorSpy).toHaveBeenCalledWith(
+        expect.stringContaining(
+          'event=mcp_external_failure stage=oauth category=configuration_required type=ConfigurationError reason=oauth_metadata_incompatible'
+        )
+      );
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+
   it('authenticates REST mutations before the MCP OAuth around hook can read or write', async () => {
     const provider = await createTestProvider();
     providers.push(provider);
