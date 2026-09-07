@@ -240,8 +240,8 @@ pnpm check:realtime-boundaries
 pnpm check:shortid
 ```
 
-No package builds or daemon/UI background servers were started. Source-condition
-no-emit typechecks avoid Turbo's `typecheck -> ^build` dependency. UI source-mode
+The initial investigation used no package builds or daemon/UI background servers.
+Source-condition no-emit typechecks avoid Turbo's `typecheck -> ^build` dependency. UI source-mode
 checking needs `erasableSyntaxOnly:false` because imported core source contains
 existing enums and constructor parameter properties; this does not disable
 strict type checking. A temporary config extending the UI config with those
@@ -250,6 +250,26 @@ plus all five changed/new test files checks tests too. Existing test helper type
 erasures were corrected to accept typed callbacks and actual Zod schemas; the
 standalone SQLite service fixture now explicitly creates the scope-aware proxy
 without a tenant hook, instead of passing an incorrectly branded raw database.
+
+### Requested full-workspace validation follow-up
+
+On 2026-09-07, the user explicitly requested dependency installation and the full
+workspace check (including its builds). Both completed successfully:
+
+```sh
+pnpm i
+# All 18 workspace projects; already up to date, no lockfile changes
+pnpm check
+# Standard workspace typecheck, lint, short-ID/multitenancy/filesystem/realtime
+# boundary checks, then Turbo builds excluding @agor/docs; exit 0
+```
+
+All four focused Vitest commands above were rerun after the full check: browser
+12, UI 51, daemon 97, and core 168 tests passed (**328 total**), each with exit 0.
+
+No persistent daemon/UI dev servers, deployment, merge, or issue closure were
+performed. The existing PR #2687 was attached to this worktree using
+`agor_branches_update` with its `pullRequestUrl`.
 
 No fresh PostgreSQL/RLS integration or production load benchmark was run. The
 SQL status change is an additional shared Drizzle predicate under existing
