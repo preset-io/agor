@@ -88,6 +88,7 @@ import SessionCard from '../SessionCard';
 import { AppNode } from './canvas/AppNodeLazy';
 import { ArtifactNode } from './canvas/ArtifactNodeLazy';
 import { CommentNode, ZoneNode } from './canvas/BoardObjectNodes';
+import EjectedSessionNode, { type EjectedSessionNodeData } from './canvas/EjectedSessionNode';
 import { MarkdownNode } from './canvas/MarkdownNode';
 import { RemoteCursorLayer, type StaticRemoteCursor } from './canvas/RemoteCursorLayer';
 import { useBoardObjects } from './canvas/useBoardObjects';
@@ -154,6 +155,18 @@ interface SessionCanvasProps {
   staticCursorScale?: number;
   /** Optional host-controlled height for embedded/demo canvases. Defaults to full viewport. */
   height?: React.CSSProperties['height'];
+  /**
+   * Map of ejected session IDs → canvas positions. Sessions in this map are
+   * rendered as interactive `ejectedSessionNode` nodes instead of in the sidebar.
+   * Persisted in localStorage by `useEjectedSessions` in App.tsx.
+   */
+  ejectedSessions?: Record<string, { x: number; y: number }>;
+  /** Called when the user re-docks an ejected session back to the sidebar. */
+  onEjectSessionRedock?: (sessionId: string) => void;
+  /** Called when the user closes an ejected session without re-docking. */
+  onEjectSessionClose?: (sessionId: string) => void;
+  /** Called when an ejected session node is dragged to persist its new position. */
+  onUpdateEjectedPosition?: (sessionId: string, position: { x: number; y: number }) => void;
 }
 
 export interface SessionCanvasRef {
@@ -356,6 +369,7 @@ const nodeTypes = {
   markdown: MarkdownNode,
   appNode: AppNode,
   artifactNode: ArtifactNode,
+  ejectedSessionNode: EjectedSessionNode,
 };
 
 const EMPTY_BOARD_ENTITY_OBJECTS: BoardEntityObject[] = Object.freeze(
@@ -454,6 +468,10 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
       staticCursors,
       staticCursorScale,
       height = '100vh',
+      ejectedSessions = {},
+      onEjectSessionRedock,
+      onEjectSessionClose,
+      onUpdateEjectedPosition,
     }: SessionCanvasProps,
     ref
   ) => {
@@ -1060,6 +1078,27 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
       canMutateBoard,
     ]);
 
+    // Build ejected session nodes from the ejectedSessions map passed in from App.tsx.
+    // These render as full interactive panels on the canvas (no backend persistence needed).
+    const ejectedSessionNodes: Node[] = useMemo(() => {
+      return Object.entries(ejectedSessions).map(([sessionId, position]) => ({
+        id: `ejected-${sessionId}`,
+        type: 'ejectedSessionNode',
+        dragHandle: REACT_FLOW_DRAG_HANDLE_SELECTOR,
+        position,
+        zIndex: 600, // Above branches (500), below comments (1000)
+        width: 600,
+        height: 700,
+        data: {
+          sessionId,
+          client,
+          currentUserId,
+          onRedock: onEjectSessionRedock ?? (() => {}),
+          onClose: onEjectSessionClose ?? (() => {}),
+        } satisfies EjectedSessionNodeData,
+      }));
+    }, [ejectedSessions, client, currentUserId, onEjectSessionRedock, onEjectSessionClose]);
+
     // No edges needed for branch-centric boards
     // (Session genealogy is visualized within BranchCard, not as canvas edges)
     const initialEdges: Edge[] = useMemo(() => [], []);
@@ -1439,6 +1478,7 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
         if (node.type === 'comment') return token.colorText;
         if (node.type === 'markdown') return `${token.colorText}B3`;
         if (node.type === 'zone') return `${token.colorText}66`;
+        if (node.type === 'ejectedSessionNode') return token.colorPrimary;
         if (node.type === 'cardNode') {
           const cardData = node.data as CardNodeData;
           return cardData.card?.effective_color || token.colorPrimaryBorder;
@@ -1474,6 +1514,7 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
       const cards: Node[] = [];
       const apps: Node[] = [];
       const comments: Node[] = [];
+      const ejected: Node[] = [];
       for (const node of nodes) {
         switch (node.type) {
           case 'zone':
@@ -1495,13 +1536,16 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
           case 'comment':
             comments.push(node);
             break;
+          case 'ejectedSessionNode':
+            ejected.push(node);
+            break;
         }
       }
-      return { zones, markdown, branches, cards, apps, comments };
+      return { zones, markdown, branches, cards, apps, comments, ejected };
     }, []);
 
     // Helper: Apply consistent z-ordering to nodes
-    // Z-order: zones < branches/cards < apps/artifacts < markdown < comments
+    // Z-order: zones < branches/cards < apps/artifacts < markdown < ejected < comments
     const applyZOrder = useCallback(
       (
         zones: Node[],
@@ -1509,10 +1553,11 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
         branches: Node[],
         cards: Node[],
         comments: Node[],
-        apps: Node[] = []
+        apps: Node[] = [],
+        ejected: Node[] = []
       ) => {
         return sanitizeOrphanedNodeParents(
-          [...zones, ...branches, ...cards, ...apps, ...markdown, ...comments],
+          [...zones, ...branches, ...cards, ...apps, ...markdown, ...ejected, ...comments],
           { onOrphan: onOrphanedParent }
         );
       },
@@ -1532,7 +1577,7 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
       const boardObjectNodes = getBoardObjectNodes();
 
       setNodes((currentNodes) => {
-        const { comments } = partitionNodesByType(currentNodes);
+        const { comments, ejected } = partitionNodesByType(currentNodes);
         const currentNodesById = new Map(currentNodes.map((n) => [n.id, n]));
 
         const zones = boardObjectNodes
@@ -1573,7 +1618,7 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
         const updatedBranches = applyLocalPositions(initialNodes, currentNodesById, zones);
         const updatedCards = applyLocalPositions(cardNodes, currentNodesById, zones);
 
-        return applyZOrder(zones, markdown, updatedBranches, updatedCards, comments, apps);
+        return applyZOrder(zones, markdown, updatedBranches, updatedCards, comments, apps, ejected);
       });
     }, [
       initialNodes,
@@ -1590,7 +1635,8 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
       if (isDraggingRef.current) return;
 
       setNodes((currentNodes) => {
-        const { zones, markdown, branches, cards, apps } = partitionNodesByType(currentNodes);
+        const { zones, markdown, branches, cards, apps, ejected } =
+          partitionNodesByType(currentNodes);
 
         // Comment parents are branches or zones; branches take precedence on id
         // collision (insertion order below makes them overwrite).
@@ -1643,9 +1689,46 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
           return newNode;
         });
 
-        return applyZOrder(zones, markdown, branches, cards, commentsWithLocalPositions, apps);
+        return applyZOrder(
+          zones,
+          markdown,
+          branches,
+          cards,
+          commentsWithLocalPositions,
+          apps,
+          ejected
+        );
       });
     }, [commentNodes, setNodes, applyZOrder, partitionNodesByType]);
+
+    // Sync EJECTED SESSION nodes separately. Position is owned by localStorage
+    // (via ejectedSessionNodes prop); apply localPositionsRef overrides to prevent
+    // flicker while a drag is in-flight waiting for the localStorage write to round-trip.
+    useEffect(() => {
+      if (isDraggingRef.current) return;
+
+      setNodes((currentNodes) => {
+        const { zones, markdown, branches, cards, apps, comments } =
+          partitionNodesByType(currentNodes);
+
+        const updatedEjected = ejectedSessionNodes.map((newNode) => {
+          const localPosition = localPositionsRef.current[newNode.id];
+          if (localPosition) {
+            const positionConfirmed =
+              Math.abs(localPosition.x - newNode.position.x) <= 1 &&
+              Math.abs(localPosition.y - newNode.position.y) <= 1;
+            if (positionConfirmed) {
+              delete localPositionsRef.current[newNode.id];
+              return newNode;
+            }
+            return { ...newNode, position: localPosition };
+          }
+          return newNode;
+        });
+
+        return applyZOrder(zones, markdown, branches, cards, comments, apps, updatedEjected);
+      });
+    }, [ejectedSessionNodes, setNodes, applyZOrder, partitionNodesByType]);
 
     // Sync edges
     useEffect(() => {
@@ -1821,10 +1904,21 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
     // Handle node drag end - persist layout to board (debounced)
     const handleNodeDragStop: NodeDragHandler = useCallback(
       (_event, node) => {
-        if (!board || !client || !reactFlowInstanceRef.current) return;
-
         // Reset dragging flag immediately to allow node sync effects to run
         isDraggingRef.current = false;
+
+        // Ejected session nodes are client-side only — persist to localStorage and return.
+        // No board_object update needed.
+        if (node.type === 'ejectedSessionNode') {
+          const absolutePos = node.positionAbsolute || node.position;
+          localPositionsRef.current[node.id] = { x: absolutePos.x, y: absolutePos.y };
+          // Extract sessionId from node id (format: `ejected-<sessionId>`)
+          const sessionId = node.id.replace(/^ejected-/, '');
+          onUpdateEjectedPosition?.(sessionId, { x: absolutePos.x, y: absolutePos.y });
+          return;
+        }
+
+        if (!board || !client || !reactFlowInstanceRef.current) return;
 
         // Track final position locally
         // IMPORTANT: Store ABSOLUTE position, not relative!
@@ -2179,6 +2273,7 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
         boardObjectByCard,
         commentById,
         setNodes,
+        onUpdateEjectedPosition,
       ]
     );
 
