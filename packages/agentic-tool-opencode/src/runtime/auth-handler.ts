@@ -9,8 +9,13 @@ import type {
   OpenCodeProviderDiscovery,
 } from '@agor/core/types';
 import type { createOpencodeClient } from '@opencode-ai/sdk/v2';
-import { createOpenCodeKnownModelCatalog } from '../shared/known-models.js';
+import { OPENCODE_RUNTIME_UNAVAILABLE_ERROR_CODE } from '../shared/index.js';
+import {
+  createOpenCodeKnownModelCatalog,
+  knownActiveOpenCodeModels,
+} from '../shared/known-models.js';
 import type { OpenCodeAuthPayload } from './auth-payload.js';
+import { resolvePackagedOpenCodeBinary } from './binary.js';
 import {
   ensureOpenCodeDataHome as defaultEnsureOpenCodeDataHome,
   startManagedOpenCodeServer as defaultStartManagedOpenCodeServer,
@@ -29,13 +34,38 @@ export interface OpenCodeAuthRuntimeDependencies {
   ensureOpenCodeDataHome: typeof defaultEnsureOpenCodeDataHome;
   startManagedOpenCodeServer: typeof defaultStartManagedOpenCodeServer;
   verifyOpenCodeAuthFileBoundary: typeof defaultVerifyOpenCodeAuthFileBoundary;
+  resolveOpenCodeBinary: typeof resolvePackagedOpenCodeBinary;
 }
 
 const DEFAULT_AUTH_RUNTIME: OpenCodeAuthRuntimeDependencies = {
   ensureOpenCodeDataHome: defaultEnsureOpenCodeDataHome,
   startManagedOpenCodeServer: defaultStartManagedOpenCodeServer,
   verifyOpenCodeAuthFileBoundary: defaultVerifyOpenCodeAuthFileBoundary,
+  resolveOpenCodeBinary: resolvePackagedOpenCodeBinary,
 };
+
+/**
+ * Resolves the pinned OpenCode binary before any credential or server work.
+ * Failing here is a host-configuration problem, not an auth outcome, so the
+ * resolver's message is returned verbatim under a dedicated error code
+ * instead of the deliberately opaque OPENCODE_AUTH_FAILED envelope.
+ */
+async function runtimeUnavailableFailure(
+  runtime: OpenCodeAuthRuntimeDependencies
+): Promise<{ success: false; error: { code: string; message: string } } | undefined> {
+  try {
+    await runtime.resolveOpenCodeBinary();
+    return undefined;
+  } catch (error) {
+    return {
+      success: false,
+      error: {
+        code: OPENCODE_RUNTIME_UNAVAILABLE_ERROR_CODE,
+        message: error instanceof Error ? error.message : String(error),
+      },
+    };
+  }
+}
 
 type V2Client = ReturnType<typeof createOpencodeClient>;
 type ProviderAuthMethods = NonNullable<Awaited<ReturnType<V2Client['provider']['auth']>>['data']>;
@@ -164,6 +194,25 @@ async function discoverModels(
   };
 }
 
+/**
+ * A fresh server can serve a stale bundled catalog for its whole lifetime
+ * (the models.dev refresh only reaches the next server), so a connected
+ * curated provider's snapshot is completed with the curated active models the
+ * pinned runtime is known to support for display. Execution treats that merge
+ * only as a refresh signal, then restarts and revalidates the exact pair on the
+ * new native server.
+ */
+function withKnownActiveModels(
+  providerId: string,
+  liveModels: OpenCodeProviderConnection['models']
+): OpenCodeProviderConnection['models'] {
+  const present = new Set(liveModels.map((model) => model.id));
+  return [
+    ...liveModels,
+    ...knownActiveOpenCodeModels(providerId).filter((model) => !present.has(model.id)),
+  ];
+}
+
 function configuredPair(model: string | undefined): OpenCodeModelPair | undefined {
   if (!model) return undefined;
   const separator = model.indexOf('/');
@@ -216,6 +265,16 @@ async function readConfigurationSnapshot(
     .map((providerId): OpenCodeProviderConnection => {
       const modelProvider = modelProviders.get(providerId);
       const runtimeProvider = runtimeProviders.get(providerId);
+      const liveModels = modelProvider
+        ? Object.values(modelProvider.models).map((model) => ({
+            id: model.id,
+            name: model.name,
+            status: model.status,
+          }))
+        : [];
+      const models = runtimeAvailable.has(providerId)
+        ? withKnownActiveModels(providerId, liveModels)
+        : liveModels;
       return {
         id: providerId,
         name: modelProvider?.name ?? runtimeProvider?.name ?? providerId,
@@ -225,15 +284,7 @@ async function readConfigurationSnapshot(
         ...(modelsResponse.data.default[providerId]
           ? { suggestedModel: modelsResponse.data.default[providerId] }
           : {}),
-        models: modelProvider
-          ? Object.values(modelProvider.models)
-              .map((model) => ({
-                id: model.id,
-                name: model.name,
-                status: model.status,
-              }))
-              .sort((left, right) => left.id.localeCompare(right.id))
-          : [],
+        models: models.sort((left, right) => left.id.localeCompare(right.id)),
       };
     })
     .sort((left, right) => left.id.localeCompare(right.id));
@@ -297,6 +348,13 @@ export async function handleOpenCodeAuth(
   }
 
   try {
+    if (payload.params.operation === 'read-model-catalog') {
+      return { success: true, data: await discoverModels(payload.dataHome, runtime) };
+    }
+
+    const unavailable = await runtimeUnavailableFailure(runtime);
+    if (unavailable) return unavailable;
+
     if (payload.params.operation === 'discover') {
       return {
         success: true,
@@ -306,10 +364,6 @@ export async function handleOpenCodeAuth(
           runtime
         ),
       };
-    }
-
-    if (payload.params.operation === 'read-model-catalog') {
-      return { success: true, data: await discoverModels(payload.dataHome, runtime) };
     }
 
     if (payload.params.operation === 'connect-oauth') {
@@ -414,6 +468,9 @@ export async function handleOpenCodeOAuth(
       data: { dryRun: true, operation: payload.params.operation },
     };
   }
+
+  const unavailable = await runtimeUnavailableFailure(runtime);
+  if (unavailable) return unavailable;
 
   const { providerId, method, inputs } = payload.params;
   try {

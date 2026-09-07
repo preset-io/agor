@@ -5,6 +5,7 @@ import {
   type OpenCodeNativeUnixUserMode,
   resolveOpenCodeCredentialNamespace,
 } from '@agor/agentic-tool-opencode/daemon';
+import { MANAGED_AGENTIC_TOOL_RUNTIME_ENV_KEYS } from '@agor/core/agentic-integrations';
 import { type AgorConfig, isTenantAgenticToolEnabled } from '@agor/core/config';
 import {
   getCurrentTenantId,
@@ -16,6 +17,8 @@ import { BadRequest, NotAuthenticated } from '@agor/core/feathers';
 import type { AuthenticatedParams, DeepReadonly, UserID } from '@agor/core/types';
 
 const OPENCODE_EXECUTOR_ENV_KEYS = [
+  ...MANAGED_AGENTIC_TOOL_RUNTIME_ENV_KEYS,
+  'AGOR_OPENCODE_PATH',
   'PATH',
   'HOME',
   'USER',

@@ -1,3 +1,4 @@
+import { OPENCODE_RUNTIME_UNAVAILABLE_ERROR_CODE } from '@agor/agentic-tool-opencode';
 import type { AgorConfig } from '@agor/core/config';
 import type { TenantScopeAwareDatabase } from '@agor/core/db';
 import { BadRequest, NotFound } from '@agor/core/feathers';
@@ -134,6 +135,9 @@ export class OpenCodeAuthService {
       await blockOpenCodeNativeStateNamespace(context.namespaceKey, handle);
     }
     if (!result.success || !result.data) {
+      if (result.error?.code === OPENCODE_RUNTIME_UNAVAILABLE_ERROR_CODE && result.error.message) {
+        throw new BadRequest(result.error.message);
+      }
       throw new BadRequest('OpenCode provider operation failed. Try again.');
     }
     return result.data as OpenCodeProviderDiscovery;

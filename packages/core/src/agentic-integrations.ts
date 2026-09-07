@@ -50,6 +50,17 @@ export function getAgenticToolsRoot(): string {
   return process.env.AGOR_AGENTIC_TOOLS_DIR ?? join(homedir(), '.agor', 'agentic-tools');
 }
 
+/**
+ * Env vars a spawned executor needs to resolve the managed agentic-tool
+ * runtime. Env-allowlisted executor spawns must propagate these, or the child
+ * silently falls back to a PATH scan and the packaged runtime pin fails.
+ */
+export const MANAGED_AGENTIC_TOOL_RUNTIME_ENV_KEYS = [
+  'AGOR_MANAGED_AGENTIC_TOOLS',
+  'AGOR_VERSION',
+  'AGOR_AGENTIC_TOOLS_DIR',
+] as const;
+
 export const AGENTIC_TOOL_SELECTION_MANIFEST = 'selection.json';
 export const AGENTIC_TOOL_REPAIR_COMMAND = 'agor install --sync';
 

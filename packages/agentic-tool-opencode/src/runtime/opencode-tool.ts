@@ -25,7 +25,7 @@ import {
   type ToolUse,
 } from '@agor/core/types';
 import type { createOpencodeClient } from '@opencode-ai/sdk';
-import { OPENCODE_MODEL_CONFIG_PAIR_ERROR } from '../shared/index.js';
+import { isKnownActiveOpenCodeModel, OPENCODE_MODEL_CONFIG_PAIR_ERROR } from '../shared/index.js';
 import type { OpenCodeCommand } from './binary.js';
 import {
   createOpenCodeEventTranslator,
@@ -34,10 +34,12 @@ import {
 } from './event-translator.js';
 import {
   createOpenCodeSanitizer,
+  isOpenCodeCleanupUnverifiedError,
   type ManagedChild,
   type ManagedOpenCodeServer,
   OpenCodeCleanupUnverifiedError,
   type OpenCodeSanitizer,
+  refreshOpenCodeModels,
   resolvePackagedOpenCodeBinary,
   startManagedOpenCodeServer,
 } from './managed-server.js';
@@ -174,6 +176,9 @@ export type OpenCodeToolDependencies = {
   readinessTimeoutMs?: number;
   shutdownTimeoutMs?: number;
   eventDrainMs?: number;
+  modelRefreshTimeoutMs?: number;
+  startManagedServer?: typeof startManagedOpenCodeServer;
+  refreshModels?: typeof refreshOpenCodeModels;
 };
 
 function automaticallyAllowsOpenCodePermission(
@@ -227,6 +232,8 @@ interface TurnContext {
    */
   mcpToolPermissions?: ReadonlyMap<string, ToolPermission>;
 }
+
+type ExplicitModelAvailability = 'available' | 'curated-refresh-required';
 
 /**
  * The alphabet OpenCode rewrites a name into before using it as a tool key.
@@ -556,6 +563,9 @@ export class OpenCodeTool {
     readinessTimeoutMs: number;
     shutdownTimeoutMs: number;
     eventDrainMs: number;
+    modelRefreshTimeoutMs: number;
+    startManagedServer: typeof startManagedOpenCodeServer;
+    refreshModels: typeof refreshOpenCodeModels;
   };
 
   constructor(dependencies: OpenCodeToolDependencies) {
@@ -585,6 +595,9 @@ export class OpenCodeTool {
       readinessTimeoutMs: dependencies.readinessTimeoutMs ?? DEFAULT_READINESS_TIMEOUT_MS,
       shutdownTimeoutMs: dependencies.shutdownTimeoutMs ?? DEFAULT_SHUTDOWN_TIMEOUT_MS,
       eventDrainMs: dependencies.eventDrainMs ?? DEFAULT_EVENT_DRAIN_MS,
+      modelRefreshTimeoutMs: dependencies.modelRefreshTimeoutMs ?? 15_000,
+      startManagedServer: dependencies.startManagedServer ?? startManagedOpenCodeServer,
+      refreshModels: dependencies.refreshModels ?? refreshOpenCodeModels,
     };
   }
 
@@ -679,36 +692,155 @@ export class OpenCodeTool {
     // the repository's opencode.json contains permissive rules.
     const invocationConfig = this.protectedInvocationConfig(resolvedInvocationConfig);
     const configContent = JSON.stringify(invocationConfig);
-    let managedServer: ManagedOpenCodeServer;
+    const managedServerInput = {
+      directory: input.directory,
+      dataHome: input.dataHome,
+      environment: {
+        OPENCODE_CONFIG_CONTENT: configContent,
+        // OpenCode resolves this dedicated runtime override when creating
+        // session permission rules. Keep it alongside the config content so
+        // permissive project/agent rules cannot bypass Agor interception.
+        OPENCODE_PERMISSION: JSON.stringify(AGOR_PERMISSION_INTERCEPTION),
+      },
+      secrets: [input.mcpToken ?? '', configContent, invocationConfig],
+    };
+    const managedServerDependencies = {
+      resolveBinary: this.dependencies.resolveBinary,
+      spawn: this.dependencies.spawn,
+      randomBytes: this.dependencies.randomBytes,
+      fetch: this.dependencies.fetch,
+      readinessTimeoutMs: this.dependencies.readinessTimeoutMs,
+      shutdownTimeoutMs: this.dependencies.shutdownTimeoutMs,
+    };
+    const lifecycleSanitizer = createOpenCodeSanitizer(
+      [input.mcpToken ?? '', input.dataHome ?? '', configContent, invocationConfig],
+      managedServerInput.environment
+    );
+    let managedServer: ManagedOpenCodeServer | undefined;
+    let client: OpenCodeClient | undefined;
     try {
-      managedServer = await startManagedOpenCodeServer(
-        {
-          directory: input.directory,
-          dataHome: input.dataHome,
-          environment: {
-            OPENCODE_CONFIG_CONTENT: configContent,
-            // OpenCode resolves this dedicated runtime override when creating
-            // session permission rules. Keep it alongside the config content so
-            // permissive project/agent rules cannot bypass Agor interception.
-            OPENCODE_PERMISSION: JSON.stringify(AGOR_PERMISSION_INTERCEPTION),
-          },
-          secrets: [input.mcpToken ?? '', configContent, invocationConfig],
-        },
-        {
-          resolveBinary: this.dependencies.resolveBinary,
-          spawn: this.dependencies.spawn,
-          randomBytes: this.dependencies.randomBytes,
-          fetch: this.dependencies.fetch,
-          readinessTimeoutMs: this.dependencies.readinessTimeoutMs,
-          shutdownTimeoutMs: this.dependencies.shutdownTimeoutMs,
-        }
+      const createClient =
+        this.dependencies.createClient ?? (await loadOpenCodeSdk()).createOpencodeClient;
+      managedServer = await this.dependencies.startManagedServer(
+        managedServerInput,
+        managedServerDependencies
       );
+      client = createClient({
+        baseUrl: managedServer.baseUrl,
+        directory: input.directory,
+        headers: { Authorization: managedServer.authorization },
+      });
+
+      const availability = await this.inspectExplicitModelAvailability(
+        client,
+        input.directory,
+        provider,
+        model,
+        input.effort
+      );
+      if (availability === 'curated-refresh-required') {
+        // The current process captured its provider database before the
+        // models.dev refresh completed. It cannot safely execute the curated
+        // pair, so close it before touching its private cache namespace.
+        await managedServer.close();
+        managedServer = undefined;
+        client = undefined;
+        if (input.signal.aborted) {
+          throw new Error('OpenCode turn was aborted before model catalog refresh');
+        }
+        if (!input.dataHome) {
+          throw this.explicitModelUnavailableError();
+        }
+        try {
+          await this.dependencies.refreshModels(
+            {
+              directory: input.directory,
+              providerId: provider,
+              dataHome: input.dataHome,
+              environment: managedServerInput.environment,
+              secrets: managedServerInput.secrets,
+              signal: input.signal,
+            },
+            {
+              resolveBinary: this.dependencies.resolveBinary,
+              spawn: this.dependencies.spawn,
+              shutdownTimeoutMs: this.dependencies.shutdownTimeoutMs,
+              refreshTimeoutMs: this.dependencies.modelRefreshTimeoutMs,
+            }
+          );
+        } catch (error) {
+          const refreshFailure = lifecycleSanitizer.error(error);
+          if (isOpenCodeCleanupUnverifiedError(refreshFailure)) {
+            throw new OpenCodeCleanupUnverifiedError(
+              'OpenCode model catalog refresh cleanup could not be verified',
+              { cause: refreshFailure }
+            );
+          }
+          if (input.signal.aborted) {
+            throw new Error('OpenCode turn was aborted during model catalog refresh', {
+              cause: refreshFailure,
+            });
+          }
+          throw new Error(
+            'OpenCode could not refresh the selected provider/model catalog; retry discovery or choose another available exact pair',
+            { cause: refreshFailure }
+          );
+        }
+        if (input.signal.aborted) {
+          throw new Error('OpenCode turn was aborted before model catalog reload');
+        }
+        try {
+          managedServer = await this.dependencies.startManagedServer(
+            managedServerInput,
+            managedServerDependencies
+          );
+        } catch (error) {
+          const restartFailure = lifecycleSanitizer.error(error);
+          if (isOpenCodeCleanupUnverifiedError(restartFailure)) {
+            throw new OpenCodeCleanupUnverifiedError(
+              'OpenCode refreshed server startup cleanup could not be verified',
+              { cause: restartFailure }
+            );
+          }
+          throw new Error(
+            'OpenCode could not reload the refreshed provider/model catalog; retry discovery or choose another available exact pair',
+            { cause: restartFailure }
+          );
+        }
+        client = createClient({
+          baseUrl: managedServer.baseUrl,
+          directory: input.directory,
+          headers: { Authorization: managedServer.authorization },
+        });
+        await this.assertExplicitModelAvailable(
+          client,
+          input.directory,
+          provider,
+          model,
+          input.effort
+        );
+      }
+      if (input.signal.aborted) throw new Error('OpenCode turn was aborted before session setup');
     } catch (error) {
       this.dependencies.cancelPendingPermissions?.(input.agorSessionId);
-      throw preliminarySanitizer.error(error);
+      const startupFailure = lifecycleSanitizer.error(error);
+      if (!managedServer) throw startupFailure;
+      try {
+        await managedServer.close();
+      } catch (closeError) {
+        throw lifecycleSanitizer.error(
+          new OpenCodeCleanupUnverifiedError('OpenCode model setup cleanup could not be verified', {
+            cause: new AggregateError(
+              [startupFailure, closeError],
+              'OpenCode model setup and cleanup both failed'
+            ),
+          })
+        );
+      }
+      throw startupFailure;
     }
-    const { authorization, baseUrl, close, sanitizer } = managedServer;
-    let client: OpenCodeClient | undefined;
+    if (!managedServer || !client) throw new Error('OpenCode model setup ended without a server');
+    const { close, sanitizer } = managedServer;
     let activeOpenCodeSessionId: string | undefined;
     let stopEventCollector = async () => {};
     let turnCompleted = false;
@@ -740,21 +872,6 @@ export class OpenCodeTool {
     let outcome: OpenCodeTurnResult | undefined;
     let turnFailure: Error | undefined;
     try {
-      const createClient =
-        this.dependencies.createClient ?? (await loadOpenCodeSdk()).createOpencodeClient;
-      client = createClient({
-        baseUrl,
-        directory: input.directory,
-        headers: { Authorization: authorization },
-      });
-      await this.assertExplicitModelAvailable(
-        client,
-        input.directory,
-        provider,
-        model,
-        input.effort
-      );
-
       const { openCodeSessionId, sessionWasCreated } = await this.resolveSession(client, input);
 
       activeOpenCodeSessionId = openCodeSessionId;
@@ -865,8 +982,8 @@ export class OpenCodeTool {
   }
 
   /**
-   * Admit the required exact pair against the configured catalog on this
-   * task's already-running server.
+   * Require the exact pair against the executing server's configured catalog.
+   * Curated membership is intentionally not sufficient here.
    */
   private async assertExplicitModelAvailable(
     client: OpenCodeClient,
@@ -875,7 +992,31 @@ export class OpenCodeTool {
     modelId: string,
     effort?: EffortLevel
   ): Promise<void> {
-    let modelAvailable = false;
+    const availability = await this.inspectExplicitModelAvailability(
+      client,
+      directory,
+      providerId,
+      modelId,
+      effort
+    );
+    if (availability !== 'available') throw this.explicitModelUnavailableError();
+  }
+
+  private explicitModelUnavailableError(): Error {
+    return new Error(
+      'The selected OpenCode provider/model is not available for this session owner and branch configuration; retry discovery or enter an available exact pair'
+    );
+  }
+
+  private async inspectExplicitModelAvailability(
+    client: OpenCodeClient,
+    directory: string,
+    providerId: string,
+    modelId: string,
+    effort?: EffortLevel
+  ): Promise<ExplicitModelAvailability> {
+    let providerConnected = false;
+    let selectedModel: { variants?: Record<string, unknown> } | undefined;
     let effortAvailable = !effort;
     try {
       const query = { directory };
@@ -884,34 +1025,35 @@ export class OpenCodeTool {
         client.provider.list({ query }),
       ]);
       const provider = catalogResponse.data?.providers.find((entry) => entry.id === providerId);
-      const selectedModel = provider
-        ? Object.entries(provider.models).find(
+      selectedModel = provider
+        ? (Object.entries(provider.models).find(
             ([candidateId, model]) => candidateId === modelId || model.id === modelId
-          )?.[1]
+          )?.[1] as { variants?: Record<string, unknown> } | undefined)
         : undefined;
-      modelAvailable =
+      providerConnected =
         !catalogResponse.error &&
         !runtimeResponse.error &&
-        Boolean(runtimeResponse.data?.connected.includes(providerId)) &&
-        Boolean(selectedModel);
-      if (modelAvailable && effort) {
+        Boolean(runtimeResponse.data?.connected.includes(providerId));
+      if (providerConnected && selectedModel && effort) {
         // OpenCode returns native variants here; the generated SDK model type currently omits them.
-        const variants = (selectedModel as { variants?: Record<string, unknown> }).variants;
+        const variants = selectedModel.variants;
         effortAvailable = Boolean(variants && Object.hasOwn(variants, effort));
       }
     } catch {
       // Public failure stays independent of raw provider objects and SDK details.
     }
-    if (!modelAvailable) {
-      throw new Error(
-        'The selected OpenCode provider/model is not available for this session owner and branch configuration; retry discovery or enter an available exact pair'
-      );
+    if (!providerConnected || !selectedModel) {
+      if (providerConnected && isKnownActiveOpenCodeModel(providerId, modelId)) {
+        return 'curated-refresh-required';
+      }
+      throw this.explicitModelUnavailableError();
     }
     if (!effortAvailable) {
       throw new Error(
         "The selected OpenCode reasoning effort is not available for this session owner's provider/model and branch configuration; choose a supported effort or leave it unset"
       );
     }
+    return 'available';
   }
 
   private async buildInvocationConfig(

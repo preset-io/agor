@@ -82,6 +82,7 @@ export function OpenCodeProviderSettings({
     configuration: settings,
     loading,
     loadFailed,
+    loadError,
     retry,
   } = useOpenCodeConfiguration({ client, enabled: true });
   const [selectedProviderId, setSelectedProviderId] = useState<string>();
@@ -396,7 +397,7 @@ export function OpenCodeProviderSettings({
         <Alert
           type="error"
           showIcon
-          title={error ?? 'OpenCode provider settings could not be loaded.'}
+          title={error ?? loadError ?? 'OpenCode provider settings could not be loaded.'}
           {...(!error && loadFailed
             ? {
                 action: (
