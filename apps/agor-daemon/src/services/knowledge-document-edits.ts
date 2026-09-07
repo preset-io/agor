@@ -15,6 +15,10 @@ import type {
 import { createTwoFilesPatch, structuredPatch } from 'diff';
 import { canWriteKnowledgeDocument } from './knowledge-access.js';
 import type { KnowledgeDocumentParams, KnowledgeDocumentsService } from './knowledge-documents.js';
+import {
+  KnowledgeDocumentOwnerOnlyEditError,
+  KnowledgeDocumentVersionMismatchError,
+} from './knowledge-errors.js';
 
 interface KnowledgeDocumentEditInput {
   documentId?: string;
@@ -78,6 +82,7 @@ export class KnowledgeDocumentEditsService {
 
   private async ensureCanEdit(document: KnowledgeDocument, user: User | undefined) {
     if (await canWriteKnowledgeDocument(this.namespaceRepo, document, user)) return;
+    if (document.edit_policy === 'owner') throw new KnowledgeDocumentOwnerOnlyEditError();
     throw new Forbidden('You do not have permission to edit this knowledge document');
   }
 
@@ -128,8 +133,9 @@ export class KnowledgeDocumentEditsService {
         String(expectedVersion) === currentVersion.version_id ||
         String(expectedVersion) === String(currentVersion.version_number);
       if (!matches) {
-        throw new BadRequest(
-          `Knowledge document version mismatch: expected ${expectedVersion}, current is ${currentVersion.version_number}`
+        throw new KnowledgeDocumentVersionMismatchError(
+          expectedVersion,
+          currentVersion.version_number
         );
       }
     } else if (!dryRun) {

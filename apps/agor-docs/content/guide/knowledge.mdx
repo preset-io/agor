@@ -132,6 +132,8 @@ This makes Knowledge a natural companion to [Teammates](/guide/teammates): teamm
 
 Knowledge is tied into Agor's existing role-based control plane. Members can create and work with documents and namespaces, workspace admins manage semantic-search settings, and namespace owners/admins manage namespace governance. Each document also carries visibility and edit-policy controls.
 
+Namespace write access is necessary but does not override a document's narrower edit policy. In particular, teammate daily-memory documents are created with owner-only editing, even in a public namespace. The user who creates that day's document owns subsequent appends; another namespace writer receives an owner-only error, while workspace admins can still update it. This prevents a shared namespace default from silently widening memory-document governance.
+
 In practice, that means Knowledge follows the same posture as the rest of Agor: humans and agents collaborate in one system, with view/edit boundaries enforced by the daemon rather than scattered across ad hoc files and local MCP servers.
 
 ---

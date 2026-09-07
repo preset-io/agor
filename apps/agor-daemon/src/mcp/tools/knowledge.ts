@@ -47,6 +47,7 @@ import {
   hasKnowledgeNamespacePermission,
   resolveKnowledgeNamespacePermission,
 } from '../../services/knowledge-access.js';
+import { isKnowledgeDocumentVersionMismatchError } from '../../services/knowledge-errors.js';
 import { issueExecutorCommandToken } from '../../services/session-token-service.js';
 import {
   TEAMMATE_MEMORY_PATH_TEMPLATE,
@@ -784,6 +785,62 @@ function escapeHtmlAttr(value: string): string {
   return value.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
 }
 
+const TEAMMATE_MEMORY_APPEND_MAX_ATTEMPTS = 3;
+
+type ExistingMemoryDocument = {
+  content: string;
+  expectedVersion: string | number;
+};
+
+function existingMemoryDocument(
+  result: HydratedKnowledgeDocumentResult | undefined
+): ExistingMemoryDocument | null {
+  if (!result) return null;
+  const document = result.document ?? result;
+  if (
+    !KNOWLEDGE_VISIBILITIES.includes(document.visibility as KnowledgeVisibility) ||
+    !KNOWLEDGE_EDIT_POLICIES.includes(document.edit_policy as KnowledgeEditPolicy)
+  ) {
+    throw new Error(
+      'Cannot append teammate memory because the existing document access policy is invalid'
+    );
+  }
+  if (typeof result.content !== 'string') {
+    throw new Error('Cannot append teammate memory without the existing document content');
+  }
+  const version = result.current_version;
+  const expectedVersion =
+    typeof version?.version_id === 'string' && version.version_id.length > 0
+      ? version.version_id
+      : typeof version?.version_number === 'number' &&
+          Number.isInteger(version.version_number) &&
+          version.version_number > 0
+        ? version.version_number
+        : undefined;
+  if (expectedVersion === undefined) {
+    throw new Error('Cannot append teammate memory without an existing document version');
+  }
+  return { content: result.content, expectedVersion };
+}
+
+function teammateMemoryCreateVisibility(
+  namespace: KnowledgeNamespace,
+  teammateDefault: unknown
+): KnowledgeVisibility {
+  if (!KNOWLEDGE_VISIBILITIES.includes(namespace.visibility_default as KnowledgeVisibility)) {
+    throw new Error('Cannot create teammate memory because the namespace visibility is invalid');
+  }
+  if (
+    teammateDefault !== undefined &&
+    !KNOWLEDGE_VISIBILITIES.includes(teammateDefault as KnowledgeVisibility)
+  ) {
+    throw new Error('Cannot create teammate memory because the teammate visibility is invalid');
+  }
+  return namespace.visibility_default === 'private' || teammateDefault === 'private'
+    ? 'private'
+    : 'public';
+}
+
 const TEAMMATE_POLICY_RANK: Record<TeammateKnowledgeGrantAccess, number> = {
   none: 0,
   read: 1,
@@ -1034,82 +1091,103 @@ export function registerKnowledgeTools(server: McpServer, ctx: McpContext): void
     const docsService = getOptionalService(ctx, 'kb/documents');
     if (!docsService) throw new Error('Knowledge documents service is not registered');
 
-    let existingContent = `# ${date}\n`;
-    let expectedVersion: string | number | undefined;
-    try {
-      const existing = (await callCustomMethod(
-        docsService,
-        'getDocument',
-        {
-          namespace_slug: namespace.slug,
-          path: docPath,
-          include_content: true,
-        },
-        mcpParams(ctx)
-      )) as HydratedKnowledgeDocumentResult | undefined;
-      if (existing) {
-        existingContent = typeof existing.content === 'string' ? existing.content : existingContent;
-        expectedVersion = existing.current_version?.version_id;
-      }
-    } catch (error) {
-      if (!isNotFoundError(error)) throw error;
-    }
-
     const now = new Date().toISOString();
     const category = args.category ?? 'note';
     const tags = (args.tags ?? []).map((tag) => tag.trim()).filter(Boolean);
-    const appended: Array<{ text: string; hash: string; deduped: boolean }> = [];
-    const blocks: string[] = [];
-    bullets.forEach((bullet, index) => {
+    const entries = bullets.map((bullet, index) => {
       const key = args.idempotencyKey ? `${args.idempotencyKey}:${index}` : `${category}:${bullet}`;
       const hash = memoryEntryHash(key);
-      if (existingContent.includes(`hash="${hash}"`)) {
-        appended.push({ text: bullet, hash, deduped: true });
-        return;
-      }
       const id = args.idempotencyKey
         ? createHash('sha256').update(key).digest('hex').slice(0, 24)
         : randomUUID();
       const tagText = tags.map((tag) => ` #${tag.replace(/\s+/g, '-')}`).join('');
       const importance =
         args.importance && args.importance !== 'normal' ? ` (${args.importance})` : '';
-      blocks.push(
-        `<!-- agor-memory-entry id="${escapeHtmlAttr(id)}" hash="${hash}" -->\n` +
+      return {
+        text: bullet,
+        hash,
+        block:
+          `<!-- agor-memory-entry id="${escapeHtmlAttr(id)}" hash="${hash}" -->\n` +
           `- [${now}] ${category}${importance}: ${bullet}${tagText}\n` +
           `  - source: agor://session/${ctx.sessionId}\n` +
-          '<!-- /agor-memory-entry -->'
-      );
-      appended.push({ text: bullet, hash, deduped: false });
+          '<!-- /agor-memory-entry -->',
+      };
     });
 
-    const nextContent = blocks.length
-      ? `${existingContent.replace(/\s*$/, '\n\n')}${blocks.join('\n\n')}\n`
-      : existingContent;
-    if (blocks.length > 0) {
-      const result = await callCustomMethod(
-        docsService,
-        'putDocument',
-        {
-          namespace_slug: namespace.slug,
-          path: docPath,
-          title: date,
-          kind: 'memory',
-          visibility: teammate?.kb?.default_visibility ?? namespace.visibility_default,
-          edit_policy: 'public',
-          status: 'published',
-          content_text: nextContent,
-          expected_version: expectedVersion,
-          metadata: {
-            teammate_memory: true,
-            teammate_branch_id: branch.branch_id,
-            memory_date: date,
+    for (let attempt = 1; attempt <= TEAMMATE_MEMORY_APPEND_MAX_ATTEMPTS; attempt += 1) {
+      let existingResult: HydratedKnowledgeDocumentResult | undefined;
+      try {
+        existingResult = (await callCustomMethod(
+          docsService,
+          'getDocument',
+          {
+            namespace_slug: namespace.slug,
+            path: docPath,
+            include_content: true,
           },
-        },
-        mcpParams(ctx)
-      );
-      return textResult({ namespace: namespace.slug, path: docPath, appended, document: result });
+          mcpParams(ctx)
+        )) as HydratedKnowledgeDocumentResult | undefined;
+      } catch (error) {
+        if (!isNotFoundError(error)) throw error;
+      }
+
+      const existing = existingMemoryDocument(existingResult);
+      const existingContent = existing?.content ?? `# ${date}\n`;
+      const appended = entries.map(({ text, hash }) => ({
+        text,
+        hash,
+        deduped: existingContent.includes(`hash="${hash}"`),
+      }));
+      const blocks = entries
+        .filter(({ hash }) => !existingContent.includes(`hash="${hash}"`))
+        .map(({ block }) => block);
+      if (blocks.length === 0) {
+        return textResult({ namespace: namespace.slug, path: docPath, appended });
+      }
+
+      const nextContent = `${existingContent.replace(/\s*$/, '\n\n')}${blocks.join('\n\n')}\n`;
+      const createVisibility = existing
+        ? undefined
+        : teammateMemoryCreateVisibility(namespace, teammate?.kb?.default_visibility);
+      try {
+        const result = await callCustomMethod(
+          docsService,
+          'putDocument',
+          {
+            namespace_slug: namespace.slug,
+            path: docPath,
+            ...(existing
+              ? { expected_version: existing.expectedVersion }
+              : {
+                  title: date,
+                  kind: 'memory',
+                  visibility: createVisibility,
+                  edit_policy: 'owner',
+                  status: 'published',
+                  // Version zero is a create-only precondition. If another append creates the
+                  // daily document first, putDocument rejects instead of applying create policy
+                  // or stale content to that document.
+                  expected_version: 0,
+                }),
+            content_text: nextContent,
+            metadata: {
+              teammate_memory: true,
+              teammate_branch_id: branch.branch_id,
+              memory_date: date,
+            },
+          },
+          mcpParams(ctx)
+        );
+        return textResult({ namespace: namespace.slug, path: docPath, appended, document: result });
+      } catch (error) {
+        if (isKnowledgeDocumentVersionMismatchError(error)) {
+          if (attempt < TEAMMATE_MEMORY_APPEND_MAX_ATTEMPTS) continue;
+          break;
+        }
+        throw error;
+      }
     }
-    return textResult({ namespace: namespace.slug, path: docPath, appended });
+    throw new Error('Cannot append teammate memory because the document changed concurrently');
   };
 
   server.registerTool(
