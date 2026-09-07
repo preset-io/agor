@@ -387,7 +387,6 @@ export const mcpServerQuerySchema = createQuerySchema(
     mcp_server_id: Type.Optional(CommonSchemas.uuid),
     server_id: Type.Optional(CommonSchemas.uuid), // Legacy alias
     scope: Type.Optional(Type.Union([Type.Literal('global'), Type.Literal('session')])),
-    scopeId: Type.Optional(Type.String()), // scope_id for session-scoped servers
     transport: Type.Optional(
       Type.Union([Type.Literal('stdio'), Type.Literal('http'), Type.Literal('sse')])
     ),

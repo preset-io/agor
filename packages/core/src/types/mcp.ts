@@ -544,7 +544,6 @@ export interface SessionMCPServer {
  */
 export interface MCPServerFilters {
   scope?: MCPScope;
-  scopeId?: string; // user_id, team_id, repo_id, or session_id
   transport?: MCPTransport;
   enabled?: boolean;
   source?: MCPSource;

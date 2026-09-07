@@ -213,25 +213,6 @@ describe('MCPServerRepository.findAll', () => {
     expect(globalServers[0].name).toBe('global-1');
   });
 
-  dbTest('should filter by scope and owner (global with scopeId)', async ({ db }) => {
-    const repo = new MCPServerRepository(db);
-    const user1 = generateId() as UserID;
-    const user2 = generateId() as UserID;
-
-    await repo.create(
-      createMCPServerData({ name: 'user1-server', scope: 'global', owner_user_id: user1 })
-    );
-    await repo.create(
-      createMCPServerData({ name: 'user2-server', scope: 'global', owner_user_id: user2 })
-    );
-
-    const user1Servers = await repo.findAll({ scope: 'global', scopeId: user1 });
-
-    expect(user1Servers).toHaveLength(1);
-    expect(user1Servers[0].name).toBe('user1-server');
-    expect(user1Servers[0].owner_user_id).toBe(user1);
-  });
-
   dbTest('should keep shared and caller-owned servers for usableByUserId', async ({ db }) => {
     const repo = new MCPServerRepository(db);
     const user1 = generateId() as UserID;
@@ -615,33 +596,6 @@ describe('MCPServerRepository scope model', () => {
       createMCPServerData({ name: 'session-server', scope: 'session' })
     );
     expect(sessionServer.scope).toBe('session');
-  });
-
-  dbTest('should filter global servers by owner', async ({ db }) => {
-    const repo = new MCPServerRepository(db);
-    const user1 = generateId() as UserID;
-    const user2 = generateId() as UserID;
-
-    // Create servers for different users
-    await repo.create(
-      createMCPServerData({ name: 'user1-fs', scope: 'global', owner_user_id: user1 })
-    );
-    await repo.create(
-      createMCPServerData({ name: 'user1-git', scope: 'global', owner_user_id: user1 })
-    );
-    await repo.create(
-      createMCPServerData({ name: 'user2-fs', scope: 'global', owner_user_id: user2 })
-    );
-
-    // Each user should only see their own servers
-    const user1Servers = await repo.findAll({ scope: 'global', scopeId: user1 });
-    const user2Servers = await repo.findAll({ scope: 'global', scopeId: user2 });
-
-    expect(user1Servers).toHaveLength(2);
-    expect(user2Servers).toHaveLength(1);
-    expect(user1Servers.map((s) => s.name)).toContain('user1-fs');
-    expect(user1Servers.map((s) => s.name)).toContain('user1-git');
-    expect(user2Servers[0].name).toBe('user2-fs');
   });
 });
 
