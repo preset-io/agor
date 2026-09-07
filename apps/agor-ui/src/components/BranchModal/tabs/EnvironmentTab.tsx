@@ -60,6 +60,7 @@ import { useThemedMessage } from '../../../utils/message';
 import { useThemedModal } from '../../../utils/modal';
 import { CodeEditor } from '../../CodeEditor';
 import { EnvironmentLogsModal } from '../../EnvironmentLogsModal';
+import { EnvironmentAccessLinks } from './EnvironmentAccessLinks';
 import { EnvironmentDisclaimer } from './EnvironmentDisclaimer';
 
 const DOCS_URL = 'https://agor.live/guide/environment-configuration';
@@ -288,18 +289,21 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
   const variantChanged = selectedVariant !== branch.environment_variant;
   const envIsActive = envStatus === 'running' || envStatus === 'starting';
   const renderDisabled =
+    commandActive ||
     !canTriggerEnv ||
     !repo.environment ||
     !selectedVariant ||
     (variantChanged && envIsActive) ||
     isRendering;
-  const renderDisabledTooltip = !canTriggerEnv
-    ? triggerDisabledTooltip
-    : !repo.environment
-      ? 'Configure repo environment variants first'
-      : variantChanged && envIsActive
-        ? `Stop the environment before switching variants (currently ${envStatus})`
-        : undefined;
+  const renderDisabledTooltip = commandActive
+    ? 'Wait for the active environment command to finish'
+    : !canTriggerEnv
+      ? triggerDisabledTooltip
+      : !repo.environment
+        ? 'Configure repo environment variants first'
+        : variantChanged && envIsActive
+          ? `Stop the environment before switching variants (currently ${envStatus})`
+          : undefined;
 
   const performRender = async () => {
     if (!client) return;
@@ -710,6 +714,7 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
             }
           />
         )}
+        <EnvironmentAccessLinks environment={environment} appUrl={branch.app_url} />
         {/* ====== Environment Controls (top — unchanged from prior behavior) ====== */}
         {hasEnvironmentConfig && (
           <Card size="small">

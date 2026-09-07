@@ -2,6 +2,7 @@ import { constants } from 'node:fs';
 import { mkdtemp, open, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { environmentAccessUrlsSchema } from '@agor/core/environment/access-urls';
 import {
   type BranchID,
   ENVIRONMENT_COMMAND_BUDGET as BUDGET,
@@ -114,31 +115,8 @@ export async function handleEnvironmentAttempt(
           const { bytesRead } = await file.read(buffer, 0, buffer.length, 0);
           if (bytesRead > 16384) throw new Error('Environment result file too large');
           const value = JSON.parse(buffer.subarray(0, bytesRead).toString('utf8'));
-          accessUrls = value.access_urls;
-          // The daemon independently validates the same result on reporting.
-          if (
-            !Array.isArray(accessUrls) ||
-            accessUrls.length > 8 ||
-            accessUrls.some((entry) => {
-              if (
-                typeof entry?.name !== 'string' ||
-                entry.name.length > 128 ||
-                !entry.name ||
-                typeof entry.url !== 'string' ||
-                entry.url.length > 2048
-              )
-                return true;
-              try {
-                const url = new URL(entry.url);
-                return (
-                  !['http:', 'https:'].includes(url.protocol) || !!url.username || !!url.password
-                );
-              } catch {
-                return true;
-              }
-            })
-          )
-            throw new Error('Invalid environment access URLs');
+          // The exact same strict contract is checked again at daemon admission.
+          accessUrls = environmentAccessUrlsSchema.parse(value.access_urls);
         } finally {
           await file.close();
         }

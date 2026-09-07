@@ -76,6 +76,35 @@ const defaultProps = {
 };
 
 describe('EnvironmentPill', () => {
+  it('opens the reported URL and permits Stop retry only after an attempt settles', () => {
+    const running = {
+      ...branch,
+      app_url: 'https://static.example.test',
+      environment_instance: {
+        status: 'running',
+        access_urls: [{ name: 'Preview', url: 'https://preview.example.test' }],
+      },
+    } as Branch;
+    const { rerender } = render(<EnvironmentPill {...defaultProps} branch={running} />);
+    expect(screen.getByRole('link')).toHaveAttribute('href', 'https://preview.example.test');
+    const failed = {
+      ...branch,
+      environment_instance: {
+        status: 'error',
+        command_attempt: { id: 'attempt', finished_at: 'done' },
+      },
+    } as Branch;
+    rerender(<EnvironmentPill {...defaultProps} branch={failed} />);
+    expect(screen.getByRole('button', { name: 'Stop environment' })).not.toBeDisabled();
+    const active = {
+      ...branch,
+      environment_instance: { status: 'starting', command_attempt: { id: 'attempt' } },
+    } as Branch;
+    rerender(<EnvironmentPill {...defaultProps} branch={active} />);
+    expect(screen.getByRole('button', { name: 'Stop environment' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Nuke environment' })).toBeDisabled();
+  });
+
   it('uses an Ant Design button for the unconfigured environment action', () => {
     render(
       <EnvironmentPill
