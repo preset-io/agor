@@ -5,8 +5,8 @@
 - Initial clean branch and fetched `origin/main`:
   `33a428b95dc4a0f42a1ac8d551d533ce81ebd16d` (2026-09-07).
 - The audit named `9326e8706a971fae6f45bc9ae38f998f10fe2d17`; that object
-  was not present in this independent clone. No commit from clone-diagnostics
-  PR #2686 was fetched, cherry-picked, or modified.
+  was not present in this independent clone. No clone-diagnostics PR #2686 ref was fetched, cherry-picked, or modified.
+  Its later arrival through merged main is recorded below.
 - Both prior fixes are ancestors of the initial baseline:
   `5ff672d98646f97226bf14284dace87c672fff9b` (#2555) and
   `ac0861269cc40811b521e6c6765e59d363309665` (#2669).
@@ -218,3 +218,52 @@ remains observational, not a test threshold or a production estimate. The
 expanded isolated fixture's two tests passed; cross-tenant negative checks now
 exercise the additional readers as well. Full follow-up validation and managed
 smoke outcomes are recorded in the PR body.
+
+## Message/task inventory review and guardrails
+
+The next follow-up rebased normally onto current main
+`8f8b3ec764a9c28ee658b4f2d5cedf95265c5e47`, which now contains the
+merged #2686. No clone-diagnostics source was modified and no PR commit was
+cherry-picked. The earlier PR commits became `a10a2fcf310fa53b5f9407f0dfd4133109d66e9d`
+(implementation), `a71716eaaac5e6b03e36396e6d8c561efb44a8bd` (evidence), and
+`1470af728e53400bf776307408ef6fe59926472d` (shared branch-set composition).
+
+The message/task reproduction found **no analogous per-child policy scan**.
+Their shared `visibleSessionReferenceAccessExists` uses an INNER JOIN, unlike
+the expensive LEFT JOIN in the session reproduction. The inspected PostgreSQL
+plans can filter branches first, join their sessions, and semi-join the child
+inventory. For exact session/task/message IDs, the planner instead uses the
+selective parent lookup. This difference is evidence against mechanically
+replacing this helper with a fenced full-inventory set.
+
+An initial isolated fixture with 200 branches, 2,000 sessions, and 20,000 rows
+**in each** of tasks/messages returned 10,000 visible children per table.
+Observed policy-loop bounds were already 200 for broad count/page queries,
+1 for exact session/task/message queries, and 2 for a two-session scope
+containing one denied and one visible session. Representative broad count
+observations were 144.951 ms (tasks) and 146.700 ms (messages); exact-session
+counts were 0.673/0.691 ms. These are existing-query fixture measurements, not
+a before/after speedup or a production estimate.
+
+`session-children.inventory.postgres.test.ts` now guards broad and selective
+query shapes at three ratios: 1, 10, and 100 sessions per branch, respectively
+100, 10, and 1 children per session. Every case has 200 branches and 20,000
+rows in each child table. It captures actual `findAll` and `findPage` SQL,
+checks query counts and returned cardinality/projection, and explains the
+count/data statements. Assertions bound policy work at branches for broad
+inventories and at 1/2 for selective scopes, without timing thresholds.
+Session and child plan tests share small test-only capture/inspection helpers.
+
+The existing cross-dialect policy fixture now also seeds a task and message
+per session. It compares all/page/count/select/skip/status/role and mixed,
+empty or contradictory session scopes against the same visible-session set,
+including direct-user shadowing, groups/Others, owner/admin-ID distinctions,
+archive/removal revocation and independent board/branch visibility. PostgreSQL
+negative checks cover foreign session, task and message IDs and unmarked
+count-only requests; a foreign tenant cannot contribute to totals.
+
+**No message/task runtime SQL or authorization behavior was changed.** Keeping
+an already efficient shared primitive, documenting why, and adding repeatable
+regressions is the evidence-backed extension here. This does not establish
+optimal plans for every possible filter, data distribution or database version.
+Full validation and managed message/task smoke results are in the PR body.

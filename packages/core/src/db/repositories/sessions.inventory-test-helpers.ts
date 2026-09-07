@@ -1,7 +1,15 @@
 import { eq, sql } from 'drizzle-orm';
 import { expect } from 'vitest';
 import { generateId } from '../../lib/ids';
-import type { BranchID, CapabilityPolicyEntry, UserID } from '../../types';
+import {
+  type BranchID,
+  type CapabilityPolicyEntry,
+  type Message,
+  MessageRole,
+  type Task,
+  TaskStatus,
+  type UserID,
+} from '../../types';
 import type { Database } from '../client';
 import { select } from '../database-wrapper';
 import { branches as branchTable, users as userTable } from '../schema';
@@ -14,8 +22,10 @@ import {
 import { BranchRepository } from './branches';
 import { CapabilityPolicyRepository } from './capability-policies';
 import { GroupRepository } from './groups';
+import { MessagesRepository } from './messages';
 import { RepoRepository } from './repos';
 import { SessionRepository } from './sessions';
+import { TaskRepository } from './tasks';
 import { UsersRepository } from './users';
 
 /** Same inventory authorization contract exercised on SQLite and PostgreSQL/RLS. */
@@ -66,6 +76,10 @@ export async function exerciseSessionInventory(db: Database) {
   const policies = new CapabilityPolicyRepository(db);
   const branches = new BranchRepository(db);
   const sessions = new SessionRepository(db);
+  const taskRepo = new TaskRepository(db);
+  const messageRepo = new MessagesRepository(db);
+  const childTasks: Task[] = [];
+  const childMessages: Message[] = [];
   const visible = new Set<string>();
   const all = new Set<string>();
   const branchIds: BranchID[] = [];
@@ -138,6 +152,25 @@ export async function exerciseSessionInventory(db: Database) {
         custom_context: { inventory: true },
         sdk_home_scope: 'branch',
       });
+      const task = await taskRepo.create({
+        session_id: session.session_id,
+        created_by: owner,
+        status: n % 2 ? TaskStatus.COMPLETED : TaskStatus.CREATED,
+        full_prompt: 'Inventory child',
+      });
+      childTasks.push(task);
+      childMessages.push(
+        await messageRepo.create({
+          session_id: session.session_id,
+          task_id: task.task_id,
+          type: n % 2 ? 'assistant' : 'user',
+          role: n % 2 ? MessageRole.ASSISTANT : MessageRole.USER,
+          index: 0,
+          timestamp: session.created_at,
+          content: 'Inventory child',
+          content_preview: 'Inventory child',
+        })
+      );
       all.add(session.session_id);
       if (!['private', 'shadow', 'group-deny'].includes(kind)) visible.add(session.session_id);
     }
@@ -175,6 +208,93 @@ export async function exerciseSessionInventory(db: Database) {
     expect(
       new Set((await sessions.findAccessibleSessions(userId)).map((row) => row.session_id))
     ).toEqual(expectedIds);
+    // Child inventories reuse the session-reference predicate. Keep all/page/
+    // count/projection semantics aligned with the same currently visible set.
+    const expectedTasks = childTasks
+      .filter((row) => expectedIds.has(row.session_id))
+      .sort((a, b) => a.task_id.localeCompare(b.task_id));
+    const expectedMessages = childMessages
+      .filter((row) => expectedIds.has(row.session_id))
+      .sort((a, b) => a.message_id.localeCompare(b.message_id));
+    expect(
+      new Set((await taskRepo.findAll({ visibleToUserId: userId })).map((row) => row.task_id))
+    ).toEqual(new Set(expectedTasks.map((row) => row.task_id)));
+    expect(
+      new Set((await messageRepo.findAll({ visibleToUserId: userId })).map((row) => row.message_id))
+    ).toEqual(new Set(expectedMessages.map((row) => row.message_id)));
+    expect(
+      await taskRepo.findPage({
+        visibleToUserId: userId,
+        limit: 2,
+        skip: 1,
+        sort: { task_id: 1 },
+        selectTaskIdOnly: true,
+      })
+    ).toEqual({
+      total: expectedTasks.length,
+      data: expectedTasks.slice(1, 3).map((row) => ({ task_id: row.task_id })),
+    });
+    expect(
+      await messageRepo.findPage({
+        visibleToUserId: userId,
+        limit: 2,
+        skip: 1,
+        sort: { message_id: 1 },
+        select: ['message_id'],
+      })
+    ).toEqual({
+      total: expectedMessages.length,
+      data: expectedMessages.slice(1, 3).map((row) => ({ message_id: row.message_id })),
+    });
+    expect(
+      await taskRepo.findPage({ visibleToUserId: userId, limit: 0, status: TaskStatus.COMPLETED })
+    ).toEqual({
+      total: expectedTasks.filter((row) => row.status === TaskStatus.COMPLETED).length,
+      data: [],
+    });
+    expect(
+      await messageRepo.findPage({ visibleToUserId: userId, limit: 0, role: MessageRole.ASSISTANT })
+    ).toEqual({
+      total: expectedMessages.filter((row) => row.role === MessageRole.ASSISTANT).length,
+      data: [],
+    });
+    const visibleChild = expectedTasks[0];
+    const hiddenChild = childTasks.find((row) => !expectedIds.has(row.session_id));
+    if (hiddenChild) {
+      for (const repository of [taskRepo, messageRepo]) {
+        expect(
+          await repository.findPage({
+            visibleToUserId: userId,
+            sessionId: hiddenChild.session_id,
+            limit: 1,
+          })
+        ).toEqual({ total: 0, data: [] });
+        const mixed = await repository.findPage({
+          visibleToUserId: userId,
+          sessionIds: [hiddenChild.session_id, visibleChild.session_id],
+          limit: 1,
+        });
+        expect(mixed.total).toBe(1);
+        expect(mixed.data[0].session_id).toBe(visibleChild.session_id);
+        expect(
+          await repository.findPage({
+            visibleToUserId: userId,
+            sessionId: hiddenChild.session_id,
+            taskId: visibleChild.task_id,
+            limit: 1,
+          })
+        ).toEqual({ total: 0, data: [] });
+      }
+    }
+    for (const repository of [taskRepo, messageRepo]) {
+      expect(await repository.findAll({ visibleToUserId: userId, sessionIds: [] })).toEqual([]);
+      expect(
+        await repository.findPage({ visibleToUserId: userId, sessionIds: [], limit: 1 })
+      ).toEqual({ total: 0, data: [] });
+      expect(
+        (await repository.findPage({ visibleToUserId: userId, skip: 100, limit: 1 })).data
+      ).toEqual([]);
+    }
     for (const boardId of [board.board_id, sharedBoard.board_id]) {
       const expected = new Set(
         paged.data.filter((row) => row.branch_board_id === boardId).map((row) => row.session_id)
@@ -286,5 +406,7 @@ export async function exerciseSessionInventory(db: Database) {
     branchId: groupedBranch,
     sessionId: expected[0].session_id,
     total: all.size,
+    childTaskId: childTasks[0].task_id,
+    childMessageId: childMessages[0].message_id,
   };
 }

@@ -146,6 +146,11 @@ The inventory primitives require an already authenticated, existing same-tenant
 principal; none implements tenant-admin bypass or replaces trusted tenant scope.
 PostgreSQL RLS and tenant-qualified foreign keys remain an additional
 boundary, not a substitute for application authorization.
+Message/task inventories already reuse `visibleSessionReferenceAccessExists`:
+its INNER JOIN permits branch-first filtering for broad queries and a selective
+parent lookup for exact IDs. Their isolated PostgreSQL plan tests cover both
+shapes at multiple session/child ratios. Do not mechanically replace this with
+a fenced global inventory merely because both helpers answer visibility.
 
 Realtime delivery materializes the exact current set of viewers with that same
 SQL predicate. A permissive `Others` role is never represented as a tenant-wide

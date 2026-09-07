@@ -544,6 +544,13 @@ export function visibleBranchReferenceAccessExists(
   );
 }
 
+/**
+ * Shared visibility for session references, including message/task inventories.
+ * The INNER JOIN lets PostgreSQL filter branches before joining their Sessions;
+ * exact session IDs can instead become a bounded parent probe. Do not replace
+ * this with a fenced full inventory indiscriminately: the child-inventory plan
+ * regressions cover both broad and selective shapes across session/child ratios.
+ */
 export function visibleSessionReferenceAccessExists(
   db: Database,
   userId: UserIdExpression,

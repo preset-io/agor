@@ -1,4 +1,4 @@
-import { type SQL, sql } from 'drizzle-orm';
+import { sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import type postgres from 'postgres';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -13,32 +13,15 @@ import { runWithTenantDatabaseScope } from '../tenant-scope';
 import { BoardRepository } from './boards';
 import { visibleBranchAccessCondition } from './branch-access';
 import { BranchRepository } from './branches';
+import { bindQuery, policyLoops } from './inventory-plan-test-helpers';
+import { MessagesRepository } from './messages';
 import { RepoRepository } from './repos';
 import { SessionRepository } from './sessions';
 import { exerciseSessionInventory } from './sessions.inventory-test-helpers';
+import { TaskRepository } from './tasks';
 import { UsersRepository } from './users';
 
 const url = process.env.AGOR_TEST_POSTGRES_URL;
-
-function bindQuery(query: string, params: unknown[]): SQL {
-  return sql.join(
-    query
-      .split(/(\$\d+)/)
-      .map((part) =>
-        /^\$\d+$/.test(part) ? sql`${params[Number(part.slice(1)) - 1]}` : sql.raw(part)
-      ),
-    sql``
-  );
-}
-
-function policyLoops(value: unknown): number[] {
-  if (!value || typeof value !== 'object') return [];
-  const node = value as Record<string, unknown>;
-  return [
-    ...(node['Parent Relationship'] === 'SubPlan' ? [Number(node['Actual Loops'])] : []),
-    ...Object.values(node).flatMap(policyLoops),
-  ];
-}
 
 describe.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
   'session inventory query cardinality (isolated PostgreSQL)',
@@ -78,11 +61,34 @@ describe.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
             []
           );
           expect(await repository.findByBoard(foreign.boardId, { visibleToUserId })).toEqual([]);
+          const taskRepo = new TaskRepository(scoped);
+          const messageRepo = new MessagesRepository(scoped);
+          for (const childRepo of [taskRepo, messageRepo]) {
+            expect(
+              await childRepo.findAll({ visibleToUserId, sessionId: foreign.sessionId })
+            ).toEqual([]);
+            expect(
+              await childRepo.findPage({ visibleToUserId, sessionId: foreign.sessionId, limit: 1 })
+            ).toEqual({ total: 0, data: [] });
+            expect(
+              await childRepo.findPage({ visibleToUserId, taskId: foreign.childTaskId, limit: 0 })
+            ).toEqual({ total: 0, data: [] });
+          }
+          expect(
+            await messageRepo.findPage({
+              visibleToUserId,
+              messageId: foreign.childMessageId,
+              limit: 1,
+            })
+          ).toEqual({ total: 0, data: [] });
           if (visibleToUserId) {
             expect(
               await repository.findAccessibleSessions(visibleToUserId, foreign.boardId)
             ).toEqual([]);
           }
+        }
+        for (const childRepo of [new TaskRepository(scoped), new MessagesRepository(scoped)]) {
+          expect(await childRepo.findPage({ limit: 0 })).toEqual({ total: local.total, data: [] });
         }
         expect((await repository.findPage({ limit: 100 })).total).toBe(local.total);
         expect(
