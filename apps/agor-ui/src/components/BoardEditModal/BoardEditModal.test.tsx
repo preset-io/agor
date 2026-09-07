@@ -45,10 +45,15 @@ vi.mock('../forms/BoardFormFields', () => ({
         {editor && (
           <button
             type="button"
+            data-sharing-mode={editor.value.board_access.sharing_mode}
             onClick={() =>
               editor.onChange({
                 ...editor.value,
-                board_access: { ...editor.value.board_access, sharing_mode: 'private' },
+                board_access: {
+                  ...editor.value.board_access,
+                  sharing_mode:
+                    editor.value.board_access.sharing_mode === 'shared' ? 'private' : 'shared',
+                },
               })
             }
           >
@@ -248,6 +253,31 @@ describe('BoardEditModal', () => {
       { ...policy, board_access: { ...policy.board_access, sharing_mode: 'private' } },
       { route: { id: listedBoard.board_id } }
     );
+  });
+
+  it('does not rewrite permissions when an edit is reverted before saving metadata', async () => {
+    const { client, permissionsPatch } = makeClient();
+    const onUpdate = vi.fn();
+    const onClose = vi.fn();
+    render(
+      <BoardEditModal
+        board={listedBoard}
+        client={client}
+        open
+        onClose={onClose}
+        onUpdate={onUpdate}
+      />
+    );
+    const changeAccess = await screen.findByRole('button', { name: 'Change board access' });
+    fireEvent.click(changeAccess);
+    expect(changeAccess).toHaveAttribute('data-sharing-mode', 'private');
+    fireEvent.click(changeAccess);
+    expect(changeAccess).toHaveAttribute('data-sharing-mode', 'shared');
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Renamed' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(onClose).toHaveBeenCalledOnce());
+    expect(onUpdate).toHaveBeenCalledWith(listedBoard.board_id, { name: 'Renamed' });
+    expect(permissionsPatch).not.toHaveBeenCalled();
   });
 
   it('keeps normalized group principals selectable', async () => {

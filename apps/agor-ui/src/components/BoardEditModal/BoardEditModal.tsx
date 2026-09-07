@@ -146,7 +146,11 @@ export function BoardEditModal({
   const syncPermissions = async () => {
     // Metadata-only saves must not require board.policy.manage or rewrite a
     // policy the user did not edit (including its optimistic revisions).
-    if (!client || !board || !policy || policy === loadedPolicy) return;
+    // Compare JSON drafts like the branch editor: change-then-revert creates
+    // new objects but must not trigger a permission write.
+    if (!client || !board || !policy || JSON.stringify(policy) === JSON.stringify(loadedPolicy)) {
+      return;
+    }
     const saved = await client
       .service('boards/:id/permissions')
       .patch(null, policy, { route: { id: board.board_id } });
