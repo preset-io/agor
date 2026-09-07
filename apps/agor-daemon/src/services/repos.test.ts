@@ -300,6 +300,58 @@ describe('ReposService.addLocalRepository executor boundary', () => {
 });
 
 describe('ReposService.createBranch Git lifecycle execution', () => {
+  // The workspace path is derived from the branch name and stays owned by the
+  // row even once archived, whose checkout lifecycle cleanup still preserves.
+  // Creating a second row against that same path would give two branches one
+  // workspace, so archiving/deleting either could damage the other.
+  it('refuses to create a branch whose deterministic path an archived branch still owns', async () => {
+    const branches = { create: vi.fn(), find: vi.fn(async () => []) };
+    const app = {
+      get: () => ({}),
+      sessionTokenService: {
+        generateCommandToken: vi.fn(async () => 'token'),
+      },
+      settings: { authentication: { secret: 'test-secret' } },
+      service: vi.fn((name: string) => {
+        if (name === 'branches') return branches;
+        throw new Error(`Unexpected service: ${name}`);
+      }),
+    } as unknown as Application;
+    const service = new ReposService({} as never, app);
+    vi.spyOn(service, 'get').mockResolvedValue({
+      repo_id: '550e8400-e29b-41d4-a716-446655440001',
+      slug: 'preset-io/agor',
+      local_path: '/managed/repos/agor',
+      default_branch: 'main',
+    } as never);
+    // The lookup deliberately includes archived rows — an active-only check is
+    // what would let the new row silently adopt the preserved checkout.
+    branchRepoMock.findByRepoAndName.mockResolvedValueOnce({
+      branch_id: '550e8400-e29b-41d4-a716-446655440009',
+      name: 'reused-name',
+      archived: true,
+      filesystem_status: 'preserved',
+    } as never);
+
+    await expect(
+      service.createBranch(
+        '550e8400-e29b-41d4-a716-446655440001',
+        {
+          name: 'reused-name',
+          ref: 'reused-name',
+          createBranch: true,
+          sourceBranch: 'main',
+          boardId: '550e8400-e29b-41d4-a716-446655440003',
+          storage_mode: 'worktree',
+        },
+        { user: { user_id: '550e8400-e29b-41d4-a716-446655440004' } } as never
+      )
+    ).rejects.toThrow(/archived branch named 'reused-name' still owns this workspace path/);
+    // No row, and no executor pointed at a workspace another row still owns.
+    expect(branches.create).not.toHaveBeenCalled();
+    expect(executorMocks.spawnExecutorFireAndForget).not.toHaveBeenCalled();
+  });
+
   it('rejects invalid delegated routing before persisting the branch', async () => {
     delegatedHomeMocks.resolve.mockRejectedValueOnce(
       new Error('Delegated execution requires a unix_username home key')
@@ -1145,6 +1197,54 @@ describe('ReposService branch provisioning lifecycle', () => {
       expect.objectContaining({
         command: 'git.branch.add',
         params: expect.objectContaining({ provisioningAttemptId: expect.any(String) }),
+      }),
+      expect.any(Object)
+    );
+  });
+
+  it('retry of a failed unarchive replays the restore, not a fresh create from base_ref', async () => {
+    // A failed unarchive and a failed create both sit in `failed`, so retry
+    // cannot infer the operation from lifecycle state alone. The claim carries
+    // `provisioning_operation` forward, and the dispatch reads it back — drop
+    // either half and retrying a failed restore silently rebuilds the branch
+    // from base_ref, discarding the pushed work the restore existed to recover.
+    const get = vi.fn(async () =>
+      branch({ filesystem_status: 'failed', provisioning_operation: 'restore' })
+    );
+    branchRepoMock.claimFailedForProvisioningRetry.mockResolvedValue({
+      claimed: true,
+      branch: branch({ filesystem_status: 'creating', provisioning_operation: 'restore' }),
+    });
+    const { service } = makeService({ get, patch: vi.fn() });
+    (service as unknown as { repoRepo: { findById: ReturnType<typeof vi.fn> } }).repoRepo.findById =
+      vi.fn(async () => repo);
+
+    await service.retryBranchProvisioning('b1');
+
+    expect(executorMocks.spawnExecutorFireAndForget).toHaveBeenCalledWith(
+      expect.objectContaining({
+        command: 'git.branch.add',
+        params: expect.objectContaining({ restoreMode: true }),
+      }),
+      expect.any(Object)
+    );
+  });
+
+  it('retry of a failed create does not dispatch in restore mode', async () => {
+    const get = vi.fn(async () => branch({ filesystem_status: 'failed' }));
+    branchRepoMock.claimFailedForProvisioningRetry.mockResolvedValue({
+      claimed: true,
+      branch: branch({ filesystem_status: 'creating', provisioning_operation: 'retry' }),
+    });
+    const { service } = makeService({ get, patch: vi.fn() });
+    (service as unknown as { repoRepo: { findById: ReturnType<typeof vi.fn> } }).repoRepo.findById =
+      vi.fn(async () => repo);
+
+    await service.retryBranchProvisioning('b1');
+
+    expect(executorMocks.spawnExecutorFireAndForget).toHaveBeenCalledWith(
+      expect.objectContaining({
+        params: expect.objectContaining({ restoreMode: false }),
       }),
       expect.any(Object)
     );
