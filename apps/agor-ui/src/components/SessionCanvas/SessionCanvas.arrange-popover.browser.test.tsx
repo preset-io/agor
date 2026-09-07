@@ -19,32 +19,56 @@ import SessionCanvas from './SessionCanvas';
 
 async function visibleSelectOption(label: string): Promise<HTMLElement> {
   let option: HTMLElement | undefined;
-  await waitFor(() => {
-    option = screen
-      .getAllByText(label, { selector: '.ant-select-item-option-content' })
-      .find((candidate) => {
-        const dropdown = candidate.closest('.ant-select-dropdown');
-        const bounds = candidate.getBoundingClientRect();
-        // Ant retains old dropdown portals between openings. Chromium can
-        // preserve their last non-zero geometry even after an ancestor makes
-        // them non-rendered, so bounds plus the dropdown's hidden class are
-        // insufficient on slower CI runners. Use the browser's recursive
-        // visibility check to select only the currently interactive copy.
-        const rendered = candidate.checkVisibility({
-          checkOpacity: true,
-          checkVisibilityCSS: true,
+  await waitFor(
+    () => {
+      option = screen
+        .getAllByText(label, { selector: '.ant-select-item-option-content' })
+        .find((candidate) => {
+          const dropdown = candidate.closest('.ant-select-dropdown');
+          const bounds = candidate.getBoundingClientRect();
+          // Ant retains old dropdown portals between openings. Chromium can
+          // preserve their last non-zero geometry even after an ancestor makes
+          // them non-rendered, so bounds plus the dropdown's hidden class are
+          // insufficient on slower CI runners. Use the browser's recursive
+          // visibility check to select only the currently interactive copy.
+          const rendered = candidate.checkVisibility({
+            checkOpacity: true,
+            checkVisibilityCSS: true,
+          });
+          return (
+            dropdown &&
+            !dropdown.classList.contains('ant-select-dropdown-hidden') &&
+            rendered &&
+            bounds.width > 0 &&
+            bounds.height > 0
+          );
         });
-        return (
-          dropdown &&
-          !dropdown.classList.contains('ant-select-dropdown-hidden') &&
-          rendered &&
-          bounds.width > 0 &&
-          bounds.height > 0
-        );
-      });
-    expect(option).toBeVisible();
-  });
+      expect(option).toBeDefined();
+    },
+    { timeout: 10_000 }
+  );
+  expect(option).toBeVisible();
   return option!;
+}
+
+async function visibleMenuItem(name: RegExp): Promise<HTMLElement> {
+  let menuItem: HTMLElement | undefined;
+  await waitFor(
+    () => {
+      menuItem = screen.getAllByRole('menuitem', { hidden: true }).find(
+        (candidate) =>
+          name.test(candidate.textContent ?? '') &&
+          candidate.checkVisibility({
+            checkOpacity: true,
+            checkVisibilityCSS: true,
+          })
+      );
+      expect(menuItem).toBeDefined();
+    },
+    { timeout: 10_000 }
+  );
+  expect(menuItem).toBeVisible();
+  return menuItem!;
 }
 
 afterEach(cleanup);
@@ -136,8 +160,7 @@ describe('SessionCanvas Arrange Board popover (real browser)', () => {
     expect(Number.isFinite(Number.parseFloat(toolbar.style.left))).toBe(true);
     expect(document.querySelector('.react-flow__node[data-id="legacy-text"]')).toBeNull();
     await act(async () => user.click(screen.getByRole('button', { name: 'More zone actions' })));
-    const enableAutoZone = await screen.findByRole('menuitem', { name: /Enable Auto Zone/ });
-    await waitFor(() => expect(enableAutoZone).toBeVisible());
+    const enableAutoZone = await visibleMenuItem(/Enable Auto Zone/);
     expect(enableAutoZone.closest(`.${CANVAS_LAYOUT_CONTROLS_CLASS}`)).not.toBeNull();
     await act(async () => user.click(enableAutoZone));
     expect(zoneNode).toHaveClass('selected');
