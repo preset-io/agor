@@ -17,6 +17,9 @@ it('bounds each page and recovers when realtime removals empty a later page', ()
   rerender(<PagedSessions sessions={sessions.slice(0, 1)}>{row}</PagedSessions>);
   expect(screen.getByText('session-0')).toBeInTheDocument();
   expect(screen.queryByTitle('Next Page')).not.toBeInTheDocument();
+  rerender(<PagedSessions sessions={sessions}>{row}</PagedSessions>);
+  expect(screen.getByText('session-0')).toBeInTheDocument();
+  expect(screen.queryByText('session-20')).not.toBeInTheDocument();
   rerender(<PagedSessions sessions={[]}>{row}</PagedSessions>);
   expect(screen.queryByText(/^session-/)).not.toBeInTheDocument();
 });

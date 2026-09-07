@@ -69,6 +69,7 @@ import {
   SessionSortButton,
 } from '../SessionSearchControls';
 import { ToolIcon } from '../ToolIcon';
+import { BRANCH_SESSION_VIEWPORT_HEIGHT } from './branchCardLayout';
 import {
   buildSessionTree,
   collectSessionSubtreeIds,
@@ -981,7 +982,7 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
   ) => (
     <Tree
       className="agor-flat-tree nodrag nowheel"
-      height={400}
+      height={BRANCH_SESSION_VIEWPORT_HEIGHT}
       virtual
       treeData={treeData}
       expandedKeys={expandedKeys}

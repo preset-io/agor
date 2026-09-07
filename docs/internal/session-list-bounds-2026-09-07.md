@@ -56,10 +56,13 @@ The shipped correction bounds **rendering and MCP list candidate materialization
 
 - Manual and gateway genealogy retain their structure, expansion state, actions,
   and ordering, with a 400px virtual Tree viewport. `nodrag nowheel` keeps local
-  tree interaction from dragging/zooming the board.
+  tree interaction from dragging/zooming the board. The deferred branch-card
+  shell caps its manual-row estimate at that same shared viewport height, so
+  initial board fitting cannot measure thousands of rows before hydration.
 - Scheduled runs and search matches use 20-row pages in a max-400px scroll area.
   Filtering/search happens before paging, so later records remain searchable.
   Branch/query switches reset the page; realtime removals clamp an invalid page.
+  The clamped page is retained if new sessions arrive afterward.
 - MCP board filtering now goes through the service's branch/board SQL join;
   exact status filters join the SQL page path. MCP uses its single created-time
   sort plus the repository's ID tie-breaker instead of selecting the generic
@@ -276,3 +279,39 @@ SQL status change is an additional shared Drizzle predicate under existing
 visibility/tenant scope, with real SQLite hidden-branch/count negatives and
 MCP tenant propagation/denied-resolution coverage. Further end-to-end data-fetch
 and byte-budget performance work remains as described above.
+
+### Codex review follow-up
+
+The independent reviewer identified a real integration gap: the progressive-mount
+shell still estimated 42px per manual session before the bounded tree mounted.
+For 1,001 sessions this reserved 42,096px and could distort the initial board fit.
+The estimate now caps the manual rows at the same domain-owned viewport constant
+used by Tree and flat-list rendering. Small and collapsed shells keep their
+existing estimates. No mount-scheduler or canvas-fitting redesign was needed.
+
+The review also found that a removed page's number remained in React state, so
+later collection growth jumped back to it. The component now stores the clamped
+page immediately. Both findings were reproduced by new/extended regression tests
+against the pre-fix implementation (two failures). The deferred-shell regression
+mounts the actual BranchCard with only the progressive-mount readiness held false;
+it checks small, 1,001-session, and persisted-collapsed shells. Pagination coverage
+now includes growth after removal.
+
+These changes only adjust derived UI layout and local navigation state over the
+already supplied sessions. They introduce no fetching, tenant identity source,
+shared persisted state, or authorization changes.
+
+```sh
+pnpm --filter agor-ui exec vitest run src/components/BranchCard/BranchCard.bounds.test.tsx src/components/BranchCard/BranchCard.drag.test.tsx src/components/BranchCard/PagedSessions.test.tsx src/components/BranchCard/BranchSessionSections.test.tsx src/components/BranchCard/buildSessionTree.test.ts src/hooks/useAgorData.test.tsx src/hooks/useProgressiveMount.test.tsx
+# 61 passed
+pnpm --filter agor-ui exec vitest run --config vitest.browser.config.ts src/components/BranchCard/BranchSessionSections.bounds.browser.test.tsx
+# 12 passed across all four Chromium projects
+pnpm check
+# Full workspace typecheck, lint, all four boundary checks, builds: exit 0
+```
+
+A separate strict no-emit TypeScript check passed for the new deferred-card test
+and extended pagination test, using a temporary config extending
+`apps/agor-ui/tsconfig.app.json`, `exclude:[]`, and only those two tests plus
+`src/test/setup.ts` as includes. This follow-up used built package declarations
+without source-mode overrides. Both review findings were addressed; none skipped.
