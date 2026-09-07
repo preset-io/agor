@@ -96,6 +96,7 @@ export function resolveProbeServerTemplates(
   ];
   if (serverConfig.auth?.type === 'oauth') {
     const oauthTemplatedFields = [
+      'oauth_authorization_url',
       'oauth_token_url',
       'oauth_client_id',
       'oauth_client_secret',

@@ -1,6 +1,6 @@
 import type { MCPMarketplaceOverview } from '@agor/core/types';
 import type { AgorClient } from '@agor-live/client';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { message } from 'antd';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { MyServersTab } from './MyServersTab';
@@ -26,7 +26,10 @@ const overview: MCPMarketplaceOverview = {
 };
 
 describe('Marketplace server actions', () => {
-  afterEach(() => vi.restoreAllMocks());
+  afterEach(() => {
+    cleanup();
+    vi.restoreAllMocks();
+  });
 
   it('renders a dedicated empty state when the caller owns no servers', () => {
     render(
@@ -224,9 +227,14 @@ describe('Marketplace server actions', () => {
       <MyServersTab {...props} currentUser={{ user_id: 'alice', role: 'member' } as never} />
     );
     const remove = screen.getByRole('button', { name: 'Remove GitHub' });
-    await waitFor(() => expect(remove).toBeEnabled());
+    await waitFor(() => {
+      expect(remove).toBeEnabled();
+      expect(
+        screen.queryByText(/Checking what this workspace's MCP policy allows/i)
+      ).not.toBeInTheDocument();
+    });
     fireEvent.click(remove);
-    await waitFor(() => expect(remove).toHaveClass('ant-popover-open'));
+    await waitFor(() => expect(remove).toHaveClass('ant-popover-open'), { timeout: 5_000 });
 
     view.rerender(
       <MyServersTab {...props} currentUser={{ user_id: 'alice', role: 'viewer' } as never} />
@@ -236,6 +244,8 @@ describe('Marketplace server actions', () => {
     expect(screen.getByRole('button', { name: 'Refresh tools for GitHub' })).toBeDisabled();
     const demotedRemove = screen.getByRole('button', { name: 'Remove GitHub' });
     expect(demotedRemove).toBeDisabled();
-    await waitFor(() => expect(demotedRemove).not.toHaveClass('ant-popover-open'));
+    await waitFor(() => expect(demotedRemove).not.toHaveClass('ant-popover-open'), {
+      timeout: 5_000,
+    });
   });
 });

@@ -32,6 +32,21 @@ config after warning that YAML comments and formatting may be lost; noninteracti
 with a paste-ready UUID instead. The ID is public, opaque identity—not a credential—and is exposed
 by `/health` so the CLI can bind logins and local administration to the correct deployment.
 
+MCP OAuth uses a native-tool loopback callback by default, including when a standalone daemon uses
+PostgreSQL. This needs no public DNS and expects the sign-in browser to run on the daemon host. A
+single daemon used through a browser on another machine can opt into its configured public HTTPS
+origin:
+
+```yaml
+daemon:
+  base_url: https://agor.example.com
+  mcp_oauth_callback_mode: public
+```
+
+Register `https://agor.example.com/mcp-servers/oauth-callback` with the provider and route that path
+through the reverse proxy to the daemon. `AGOR_BASE_URL` can supply the base URL instead; callback
+mode remains an explicit YAML choice.
+
 Change operator settings in the file (or its Helm/Terraform/Ansible/secret-manager source), then
 restart the daemon. Settings needed before the database is reachable—database/bootstrap, tenant
 routing, filesystem, listener, executor, and security settings—belong here or in deployment env.

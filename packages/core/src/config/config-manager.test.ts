@@ -92,6 +92,7 @@ describe('getDefaultConfig', () => {
     // Verify structure and key defaults
     expect(defaults.daemon?.port).toBe(3030);
     expect(defaults.daemon?.host).toBe('localhost');
+    expect(defaults.daemon?.mcp_oauth_callback_mode).toBe('loopback');
     expect(defaults.ui?.port).toBe(5173);
     expect(defaults.ui?.host).toBe('localhost');
     expect(defaults.identity?.password_policy).toBe('secure');
@@ -103,6 +104,22 @@ describe('getDefaultConfig', () => {
       prefix: 'agor.daemon.',
       global_tags: {},
     });
+  });
+});
+
+describe('MCP OAuth callback configuration', () => {
+  it.each(['loopback', 'public'] as const)('accepts daemon callback mode %s', (mode) => {
+    expect(() => assertValidRawConfig({ daemon: { mcp_oauth_callback_mode: mode } })).not.toThrow();
+  });
+
+  it('rejects an unknown daemon callback mode', () => {
+    expect(() =>
+      assertValidRawConfig({
+        daemon: {
+          mcp_oauth_callback_mode: 'automatic',
+        } as unknown as AgorConfig['daemon'],
+      })
+    ).toThrow(/mcp_oauth_callback_mode must be loopback or public/);
   });
 });
 

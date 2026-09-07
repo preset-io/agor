@@ -229,6 +229,28 @@ describe('resolveProbeServerTemplates', () => {
     }
   });
 
+  it('surfaces a missing oauth_authorization_url template alongside a resolved oauth_token_url', () => {
+    const result = resolveProbeServerTemplates(
+      {
+        url: 'https://api.example.com/mcp',
+        transport: 'http',
+        auth: {
+          type: 'oauth',
+          oauth_authorization_url: '{{ user.env.OAUTH_AUTH_URL_MISSING }}',
+          oauth_token_url: '{{ user.env.OAUTH_TOKEN_URL }}',
+        },
+        name: 'oauth-server',
+      },
+      { OAUTH_TOKEN_URL: 'https://auth.example.com/token' }
+    );
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toContain('auth.oauth_authorization_url');
+      expect(result.error).not.toContain('auth.oauth_token_url');
+    }
+  });
+
   it.each([
     ['opening', 'SENTINEL_INLINE_OPEN_{{'],
     ['closing', 'SENTINEL_INLINE_CLOSE_}}'],

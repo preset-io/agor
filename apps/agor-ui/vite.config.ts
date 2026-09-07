@@ -102,6 +102,12 @@ export default defineConfig({
       '/authentication': { target: `http://localhost:${daemonPort}`, changeOrigin: true },
       '/socket.io': { target: `http://localhost:${daemonPort}`, changeOrigin: true, ws: true },
       '/api': { target: `http://localhost:${daemonPort}`, changeOrigin: true },
+      // OAuth providers navigate the browser to this non-API path. Keep it
+      // reachable when a development reverse proxy terminates at Vite.
+      '/mcp-servers/oauth-callback': {
+        target: `http://localhost:${daemonPort}`,
+        changeOrigin: true,
+      },
     },
     // Watch for changes in workspace packages
     watch: {

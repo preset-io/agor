@@ -13,6 +13,14 @@ Marketplace checks the live endpoint before installing it. An entry may be:
 
 For unsupported schemes, configure the server in **Settings → MCP Servers**. Custom headers support services such as Datadog API/application-key pairs; Marketplace's Datadog entry instead asks for the bearer PAT/SAT described in Datadog's MCP setup guide.
 
+### OAuth callbacks
+
+Standalone Agor uses `http://127.0.0.1:<daemon-port>/mcp-servers/oauth-callback`, the same loopback pattern used by native developer tools. It does not need public DNS, TLS, Caddy, or router port forwarding. The browser completing sign-in must be running on the daemon machine.
+
+A single daemon used from a browser on another machine can explicitly select a public callback with `daemon.mcp_oauth_callback_mode: public`. Then set `AGOR_BASE_URL` or `daemon.base_url`, register `<public-origin>/mcp-servers/oauth-callback` with the provider, and configure the reverse proxy to forward that path to the daemon. The public origin must use HTTPS. The Vite development server forwards the callback path automatically.
+
+Google Gmail and Calendar require a pre-registered OAuth client; Google does not advertise Dynamic Client Registration for these endpoints. For standalone Agor, create a Desktop OAuth client that permits the loopback redirect, then enter its Client ID and provider-required Client Secret in the MCP server's advanced OAuth settings. An API key is not a substitute unless the MCP provider explicitly supports API-key authentication.
+
 ### Local stdio servers
 
 An stdio configuration uses only its command, arguments, and environment. HTTP/SSE authentication, URL, and custom-header fields do not apply. Agor does not download the command: it must already be available in the actual executor environment, which may differ from the daemon host. Store a per-user token in **Settings → Environment Variables**, then reference it from the server environment, for example `{"SHORTCUT_API_TOKEN":"{{ user.env.SHORTCUT_API_TOKEN }}"}`. The managed value is encrypted and resolved only for the authenticated user whose task is running; do not paste the token directly into the MCP server definition.

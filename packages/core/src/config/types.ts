@@ -72,8 +72,9 @@ export interface AgorDaemonSettings {
   /**
    * Browser-reachable base URL for daemon endpoints.
    *
-   * Used for OAuth callbacks and artifact API grants. It is also the fallback
-   * origin for browser UI links when ui.base_url is not set.
+   * Used for MCP OAuth callbacks when `mcp_oauth_callback_mode` is `public`,
+   * and for artifact API grants. It is also the fallback origin for browser
+   * UI links when ui.base_url is not set.
    *
    * Defaults to `http://localhost:{port}` in development.
    * Should be set to your public domain in production (e.g., https://agor.example.com).
@@ -87,6 +88,15 @@ export interface AgorDaemonSettings {
    * ```
    */
   base_url?: string;
+
+  /**
+   * Browser location used for MCP OAuth redirects.
+   *
+   * `loopback` (default) behaves like a native developer tool and requires the
+   * browser to run on the daemon host. `public` uses `AGOR_BASE_URL` or
+   * `daemon.base_url` and requires HTTPS.
+   */
+  mcp_oauth_callback_mode?: 'loopback' | 'public';
 
   /** JWT secret (auto-generated if not provided) */
   jwtSecret?: string;

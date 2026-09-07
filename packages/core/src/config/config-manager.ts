@@ -685,6 +685,7 @@ function validateConfig(config: AgorConfig): void {
     'host_ip_address',
     'public_url',
     'base_url',
+    'mcp_oauth_callback_mode',
     'jwtSecret',
     'masterSecret',
     'mcpEnabled',
@@ -698,6 +699,13 @@ function validateConfig(config: AgorConfig): void {
     ...RETIRED_CONFIG_KEYS.daemon,
   ]);
   only(config.ui, 'ui', ['base_url', 'port', 'host']);
+  if (
+    config.daemon?.mcp_oauth_callback_mode !== undefined &&
+    config.daemon.mcp_oauth_callback_mode !== 'loopback' &&
+    config.daemon.mcp_oauth_callback_mode !== 'public'
+  ) {
+    throw new Error('Config error: daemon.mcp_oauth_callback_mode must be loopback or public');
+  }
   only(config.uploads, 'uploads', ['location', 'max_age_days', 'max_file_size_mb']);
   only(config.external_launch, 'external_launch', [
     'enabled',
@@ -1420,6 +1428,7 @@ export function getDefaultConfig(): AgorConfig {
       port: DAEMON.DEFAULT_PORT,
       host: DAEMON.DEFAULT_HOST,
       mcpEnabled: true, // Default: Enable built-in MCP server
+      mcp_oauth_callback_mode: 'loopback',
     },
     ui: {
       port: 5173,
