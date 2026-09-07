@@ -120,7 +120,8 @@ describe('ForkSpawnModal configuration defaults', { timeout: 10_000 }, () => {
       />
     );
 
-    fireEvent.change(screen.getByTestId('prompt-textarea'), { target: { value: 'go' } });
+    const promptTextareas = screen.getAllByTestId('prompt-textarea');
+    fireEvent.change(promptTextareas[promptTextareas.length - 1], { target: { value: 'go' } });
     fireEvent.click(screen.getByText('Custom config'));
     fireEvent.click(screen.getByTestId('pick-codex'));
     fireEvent.click(screen.getByRole('button', { name: /Spawn Session/i }));
