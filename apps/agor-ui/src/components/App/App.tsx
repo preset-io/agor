@@ -189,6 +189,11 @@ export interface AppProps {
     prompt: string,
     permissionMode?: PermissionMode
   ) => boolean | undefined | Promise<boolean | undefined>;
+  onSendPing?: (
+    sessionId: string,
+    text: string,
+    mentionedUserIds?: string[]
+  ) => boolean | undefined | Promise<boolean | undefined>;
   onUpdateSession?: (sessionId: string, updates: Partial<Session>) => void;
   onDeleteSession?: (sessionId: string) => void;
   onCreateBoard?: (board: Partial<Board>) => Promise<Board | null>;
@@ -336,6 +341,7 @@ export const App: React.FC<AppProps> = ({
   onBtwForkSession,
   onSpawnSession,
   onSendPrompt,
+  onSendPing,
   onUpdateSession,
   onDeleteSession,
   onCreateBoard,
@@ -1321,6 +1327,7 @@ export const App: React.FC<AppProps> = ({
   // AppActions consumer — would re-render whenever the parent re-renders,
   // even when nothing they draw changed.
   const stableOnSendPrompt = useStableCallback(onSendPrompt);
+  const stableOnSendPing = useStableCallback(onSendPing);
   const stableOnBtwForkSession = useStableCallback(onBtwForkSession);
   const stableOnSessionUpdate = useStableCallback(onUpdateSession);
   const stableOnSessionDelete = useStableCallback(onDeleteSession);
@@ -1350,6 +1357,7 @@ export const App: React.FC<AppProps> = ({
   const appActionsValue = useMemo(
     () => ({
       onSendPrompt: stableOnSendPrompt,
+      onSendPing: stableOnSendPing,
       onFork: stableOnForkSession,
       onBtwFork: stableOnBtwForkSession,
       onSubsession: stableOnSpawnSession,
@@ -1373,6 +1381,7 @@ export const App: React.FC<AppProps> = ({
     }),
     [
       stableOnSendPrompt,
+      stableOnSendPing,
       stableOnForkSession,
       stableOnBtwForkSession,
       stableOnSpawnSession,

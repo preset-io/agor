@@ -229,6 +229,25 @@ describe('agor_messages_list MCP tool', () => {
     expect(mockAllSpy).toHaveBeenCalled();
   });
 
+  it('always excludes mention (ping) messages from agent-facing results', async () => {
+    const handler = await registerAndGetHandler({ userId: 'user-1' });
+
+    await handler({ sessionId: 'sess-0001', includeToolCalls: true });
+
+    expect(mockWhereSpy).toHaveBeenCalledTimes(1);
+    // Drizzle SQL fragments are circular; flatten to text to assert on content
+    // without depending on their internal shape.
+    const seen = new WeakSet();
+    const flattened = JSON.stringify(mockWhereSpy.mock.calls[0]?.[0], (_key, v) => {
+      if (typeof v === 'object' && v !== null) {
+        if (seen.has(v)) return undefined;
+        seen.add(v);
+      }
+      return v;
+    });
+    expect(flattened).toContain("!= 'mention'");
+  });
+
   it('sets next_offset to the raw rows consumed for the returned page', async () => {
     mockAllSpy.mockResolvedValue([row(0), row(1), row(2)]);
     const handler = await registerAndGetHandler({ userId: 'user-1' });
