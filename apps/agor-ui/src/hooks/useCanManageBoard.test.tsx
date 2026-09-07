@@ -25,6 +25,24 @@ afterEach(() => {
 });
 
 describe('useCanManageBoard', () => {
+  it('offers the primary owner the board editor even if ordinary access cannot be fetched', async () => {
+    const find = vi.fn().mockRejectedValue(new Error('Authentication required'));
+    const client = { service: () => ({ find }) } as unknown as AgorClient;
+    const { result } = renderHook(() =>
+      useCanManageBoard(client, board, { ...member, user_id: 'user-1' as User['user_id'] })
+    );
+    await waitFor(() => expect(result.current).toBe(true));
+    expect(find).not.toHaveBeenCalled();
+  });
+
+  it('does not offer a non-owner an edit shortcut when board.edit is absent', async () => {
+    const find = vi.fn().mockResolvedValue({ capabilities: ['board.view'] });
+    const client = { service: () => ({ find }) } as unknown as AgorClient;
+    const { result } = renderHook(() => useCanManageBoard(client, board, member));
+    await waitFor(() => expect(find).toHaveBeenCalledOnce());
+    expect(result.current).toBe(false);
+  });
+
   it('ignores object patches but refetches effective access after authenticated reconnect', async () => {
     let resolveReconnect: ((access: { capabilities: string[] }) => void) | undefined;
     const reconnectAccess = new Promise<{ capabilities: string[] }>((resolve) => {

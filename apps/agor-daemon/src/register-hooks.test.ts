@@ -800,6 +800,9 @@ describe('registered RBAC authentication boundary', () => {
   };
 
   it('keeps every authenticated RBAC service inside tenant database scope', () => {
+    // Pin the board projection explicitly: iterating the registry alone cannot
+    // detect a service accidentally omitted from that registry.
+    expect(AUTHENTICATED_RBAC_SERVICE_PATHS).toContain('boards/:id/effective-access');
     expect(TENANT_OWNED_SERVICE_PATHS).toEqual(
       expect.arrayContaining([...AUTHENTICATED_RBAC_SERVICE_PATHS])
     );

@@ -1,6 +1,7 @@
-import type { AgorClient, Board, BoardCapabilityPolicies } from '@agor-live/client';
+import type { AgorClient, Board, BoardCapabilityPolicies, UserID } from '@agor-live/client';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { Form, Input } from 'antd';
+import { isValidElement } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { BoardEditModal } from './BoardEditModal';
 
@@ -20,6 +21,12 @@ vi.mock('../forms/BoardFormFields', () => ({
     capabilityPolicyEditor?: React.ReactNode;
     canEditGeneral?: boolean;
   }) => {
+    const editor = isValidElement<{
+      value: BoardCapabilityPolicies;
+      onChange: (value: BoardCapabilityPolicies) => void;
+    }>(capabilityPolicyEditor)
+      ? capabilityPolicyEditor.props
+      : null;
     // The edit modal passes groups straight to the capability-policy editor
     // element; assert propagation by inspecting that element's props.
     const editorGroups =
@@ -35,6 +42,19 @@ vi.mock('../forms/BoardFormFields', () => ({
           <Input />
         </Form.Item>
         <div data-testid="board-modal-can-edit-general" data-value={String(canEditGeneral)} />
+        {editor && (
+          <button
+            type="button"
+            onClick={() =>
+              editor.onChange({
+                ...editor.value,
+                board_access: { ...editor.value.board_access, sharing_mode: 'private' },
+              })
+            }
+          >
+            Change board access
+          </button>
+        )}
         {capabilityPolicyEditor && (
           <div
             data-testid="board-modal-policy-editor"
@@ -58,8 +78,8 @@ const listedBoard = {
   last_updated: '',
 } as Board;
 const freshBoard = { ...listedBoard, name: 'Fresh name', icon: '✨' } as Board;
-const policy = {
-  primary_owner_user_id: 'owner-1',
+const policy: BoardCapabilityPolicies = {
+  primary_owner_user_id: 'owner-1' as UserID,
   board_access_revision: 1,
   branch_template_revision: 1,
   board_access: {
@@ -79,9 +99,12 @@ const policy = {
     },
     allow_shared_session_prompts: false,
   },
-} as BoardCapabilityPolicies;
+};
 
-function makeClient(metadataError: { code?: number; message?: string } = { code: 404 }) {
+function makeClient(
+  metadataError: { code?: number; message?: string } = { code: 404 },
+  accessError?: Error
+) {
   const get = vi.fn().mockResolvedValue(freshBoard);
   const permissionsFind = vi
     .fn()
@@ -90,16 +113,20 @@ function makeClient(metadataError: { code?: number; message?: string } = { code:
         ? Promise.reject(metadataError)
         : Promise.resolve(policy)
     );
+  const permissionsPatch = vi
+    .fn()
+    .mockImplementation(async (_id: unknown, value: unknown) => value);
   return {
     get,
     permissionsFind,
+    permissionsPatch,
     client: {
       service: (name: string) => {
         if (name === 'boards') return { get };
         if (name === 'boards/:id/permissions') {
           return {
             find: permissionsFind,
-            patch: vi.fn().mockImplementation(async (_id: unknown, value: unknown) => value),
+            patch: permissionsPatch,
           };
         }
         if (name === 'workspace-preferences') {
@@ -107,13 +134,15 @@ function makeClient(metadataError: { code?: number; message?: string } = { code:
         }
         if (name === 'boards/:id/effective-access') {
           return {
-            find: vi.fn().mockResolvedValue({
-              capabilities: ['board.view', 'board.edit', 'board.attach_branch'],
-              fs_access: 'none',
-              source: 'primary_owner',
-              group_ids: [],
-              is_primary_owner: true,
-            }),
+            find: accessError
+              ? vi.fn().mockRejectedValue(accessError)
+              : vi.fn().mockResolvedValue({
+                  capabilities: ['board.view', 'board.edit', 'board.attach_branch'],
+                  fs_access: 'none',
+                  source: 'primary_owner',
+                  group_ids: [],
+                  is_primary_owner: true,
+                }),
           };
         }
         return { findAll: vi.fn().mockResolvedValue([]) };
@@ -199,6 +228,28 @@ describe('BoardEditModal', () => {
     expect(onClose).toHaveBeenCalledOnce();
   });
 
+  it('still persists deliberately edited permissions through the policy service', async () => {
+    const { client, permissionsPatch } = makeClient();
+    const onClose = vi.fn();
+    render(
+      <BoardEditModal
+        board={listedBoard}
+        client={client}
+        open
+        onClose={onClose}
+        onUpdate={vi.fn()}
+      />
+    );
+    fireEvent.click(await screen.findByRole('button', { name: 'Change board access' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(onClose).toHaveBeenCalledOnce());
+    expect(permissionsPatch).toHaveBeenCalledWith(
+      null,
+      { ...policy, board_access: { ...policy.board_access, sharing_mode: 'private' } },
+      { route: { id: listedBoard.board_id } }
+    );
+  });
+
   it('keeps normalized group principals selectable', async () => {
     const get = vi.fn().mockResolvedValue(freshBoard);
     const client = {
@@ -267,6 +318,27 @@ describe('BoardEditModal', () => {
     expect(await screen.findByText('Board settings unavailable')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled();
     expect(screen.queryByDisplayValue('Stale name')).not.toBeInTheDocument();
+  });
+
+  it('surfaces a failed effective-access request instead of misreporting an owner policy denial', async () => {
+    const { client } = makeClient(undefined, new Error('Authentication required'));
+    const onUpdate = vi.fn();
+    render(
+      <BoardEditModal
+        board={listedBoard}
+        client={client}
+        open
+        onClose={vi.fn()}
+        onUpdate={onUpdate}
+      />
+    );
+    expect(await screen.findByText('Board settings unavailable')).toBeInTheDocument();
+    expect(
+      screen.getByText(/Could not load current board settings: Authentication required/)
+    ).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled();
+    expect(screen.queryByTestId('board-modal-can-edit-general')).not.toBeInTheDocument();
+    expect(onUpdate).not.toHaveBeenCalled();
   });
 
   it('awaits the board mutation before closing', async () => {

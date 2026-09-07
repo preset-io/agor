@@ -41,6 +41,7 @@ export function BoardEditModal({
   const [allUsers, setAllUsers] = useState<User[]>([]);
   const [allGroups, setAllGroups] = useState<Group[]>([]);
   const [policy, setPolicy] = useState<BoardCapabilityPolicies | null>(null);
+  const [loadedPolicy, setLoadedPolicy] = useState<BoardCapabilityPolicies | null>(null);
   const [workspacePreferences, setWorkspacePreferences] =
     useState<CapabilityPolicyWorkspacePreferences>({ session_sharing_enabled: false });
   const [effectiveAccess, setEffectiveAccess] = useState<EffectiveCapabilityPolicyAccess | null>(
@@ -62,6 +63,7 @@ export function BoardEditModal({
     setLoadError(null);
     setLoadedBoard(null);
     setPolicy(null);
+    setLoadedPolicy(null);
     setEffectiveAccess(null);
 
     // Re-read the board as the modal opens. The selector uses a lean board list,
@@ -97,20 +99,18 @@ export function BoardEditModal({
         if (cancelled) return;
         if (policyResult.status === 'fulfilled') {
           setPolicy(policyResult.value);
+          setLoadedPolicy(policyResult.value);
         } else {
           throw policyResult.reason;
         }
         if (preferencesResult.status === 'fulfilled') {
           setWorkspacePreferences(preferencesResult.value);
         }
-        // A failed fetch here fails closed: canEditGeneral (below) treats a
-        // null effectiveAccess as "no board.edit capability", same as an
-        // explicit denial.
-        setEffectiveAccess(
-          accessResult.status === 'fulfilled'
-            ? (accessResult.value as unknown as EffectiveCapabilityPolicyAccess)
-            : null
-        );
+        // A failed projection is not a policy denial. Surface the load error
+        // and prevent saving rather than silently locking the owner's fields.
+        // Do not replace server authority with a client-side ownership bypass.
+        if (accessResult.status === 'rejected') throw accessResult.reason;
+        setEffectiveAccess(accessResult.value as unknown as EffectiveCapabilityPolicyAccess);
         if (cancelled) return;
         // Populate the form BEFORE exposing loadedBoard so the background
         // editor mounts against fully-initialized field values (rather than
@@ -144,11 +144,14 @@ export function BoardEditModal({
   const canEditGeneral = Boolean(effectiveAccess?.capabilities.includes('board.edit'));
 
   const syncPermissions = async () => {
-    if (!client || !board || !policy) return;
+    // Metadata-only saves must not require board.policy.manage or rewrite a
+    // policy the user did not edit (including its optimistic revisions).
+    if (!client || !board || !policy || policy === loadedPolicy) return;
     const saved = await client
       .service('boards/:id/permissions')
       .patch(null, policy, { route: { id: board.board_id } });
     setPolicy(saved);
+    setLoadedPolicy(saved);
   };
 
   const close = () => {
@@ -157,7 +160,7 @@ export function BoardEditModal({
   };
 
   const save = async () => {
-    if (!board) return;
+    if (!board || loading || loadError || !canEditGeneral) return;
     try {
       setSaving(true);
       await form.validateFields();
@@ -181,7 +184,7 @@ export function BoardEditModal({
       open={open}
       width={760}
       confirmLoading={loading || saving}
-      okButtonProps={{ disabled: loading || saving || Boolean(loadError) }}
+      okButtonProps={{ disabled: loading || saving || Boolean(loadError) || !canEditGeneral }}
       onOk={() => void save()}
       onCancel={close}
       okText="Save"
