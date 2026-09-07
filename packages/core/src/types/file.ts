@@ -11,6 +11,33 @@
 export type FilePath = string;
 
 /**
+ * Working-tree git status for a single file, relative to HEAD.
+ *
+ * Mirrors the VSCode / IDE source-control vocabulary so the UI can color-code
+ * and badge entries consistently:
+ * - `added`      — staged new file (index `A`)
+ * - `modified`   — content changed (index/worktree `M`/`T`)
+ * - `deleted`    — removed from the working tree (index/worktree `D`)
+ * - `renamed`    — moved/renamed (index/worktree `R`)
+ * - `copied`     — copied from another tracked file (index/worktree `C`)
+ * - `untracked`  — new, not yet tracked by git (`??`)
+ * - `conflicted` — unmerged / merge conflict (`U`, `AA`, `DD`, …)
+ * - `ignored`    — matched by a gitignore rule (`!!`)
+ *
+ * `undefined` means the file is unchanged relative to HEAD (or status could
+ * not be computed, e.g. the branch is not a git repository).
+ */
+export type GitFileStatus =
+  | 'added'
+  | 'modified'
+  | 'deleted'
+  | 'renamed'
+  | 'copied'
+  | 'untracked'
+  | 'conflicted'
+  | 'ignored';
+
+/**
  * File list response (lightweight, for browsing)
  * Returned by GET /file
  */
@@ -49,6 +76,12 @@ export interface FileListItem {
 
   /** Detected MIME type (optional) */
   mimeType?: string;
+
+  /**
+   * Working-tree git status relative to HEAD. Omitted when the file is
+   * unchanged or status could not be computed (non-git branch, git error).
+   */
+  gitStatus?: GitFileStatus;
 }
 
 /**
@@ -61,4 +94,20 @@ export interface FileDetail extends FileListItem {
 
   /** Content encoding: 'utf-8' for text files, 'base64' for binary files */
   encoding: 'utf-8' | 'base64';
+
+  /**
+   * Text content from HEAD used to compare the checked-out file with its
+   * committed version. Present only for previewable working-tree changes.
+   * Added/untracked files use an empty base; deleted files use empty current
+   * `content` and retain their committed text here.
+   */
+  gitDiff?: FileGitDiff;
+}
+
+export interface FileGitDiff {
+  /** UTF-8 content of the file at HEAD (or an empty string for a new file). */
+  baseContent: string;
+
+  /** Original HEAD path when git reports a rename or copy. */
+  basePath?: FilePath;
 }

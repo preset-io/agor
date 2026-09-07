@@ -116,32 +116,85 @@ function fromStructuredPatch(hunks: StructuredPatchHunk[]): DiffData {
 
 function fromOldNew(oldContent: string, newContent: string): DiffData {
   const changes = diffLines(oldContent, newContent);
-  const lines: DiffLine[] = [];
+  let lines: DiffLine[] = [];
   let additions = 0;
   let deletions = 0;
+  let oldLine = 1;
+  let newLine = 1;
 
   for (const change of changes) {
     const changeLines = change.value.replace(/\n$/, '').split('\n');
     for (const line of changeLines) {
       if (change.added) {
-        lines.push({ type: 'add', content: line });
+        lines.push({ type: 'add', content: line, newLineNumber: newLine });
+        newLine++;
         additions++;
       } else if (change.removed) {
-        lines.push({ type: 'remove', content: line });
+        lines.push({ type: 'remove', content: line, oldLineNumber: oldLine });
+        oldLine++;
         deletions++;
       } else {
-        lines.push({ type: 'context', content: line });
+        lines.push({
+          type: 'context',
+          content: line,
+          oldLineNumber: oldLine,
+          newLineNumber: newLine,
+        });
+        oldLine++;
+        newLine++;
       }
     }
   }
 
+  if (additions === 0 && deletions === 0) {
+    lines = [];
+  } else {
+    lines = compactUnchangedContext(lines);
+  }
   addWordSegments(lines);
   return {
     lines,
     stats: { additions, deletions },
-    hasLineNumbers: false,
+    hasLineNumbers: true,
     totalLines: lines.length,
   };
+}
+
+/** Keep GitHub/VSCode-style context around edits instead of rendering the whole file. */
+function compactUnchangedContext(lines: DiffLine[], contextLines = 3): DiffLine[] {
+  const compacted: DiffLine[] = [];
+  let index = 0;
+
+  while (index < lines.length) {
+    if (lines[index].type !== 'context') {
+      compacted.push(lines[index]);
+      index++;
+      continue;
+    }
+
+    const start = index;
+    while (index < lines.length && lines[index].type === 'context') index++;
+    const run = lines.slice(start, index);
+    const isLeading = start === 0;
+    const isTrailing = index === lines.length;
+    const visibleLimit = isLeading || isTrailing ? contextLines : contextLines * 2;
+
+    if (run.length <= visibleLimit) {
+      compacted.push(...run);
+    } else if (isLeading) {
+      compacted.push({ type: 'context', content: '...' }, ...run.slice(-contextLines));
+    } else if (isTrailing) {
+      compacted.push(...run.slice(0, contextLines), { type: 'context', content: '...' });
+    } else {
+      compacted.push(
+        ...run.slice(0, contextLines),
+        { type: 'context', content: '...' },
+        ...run.slice(-contextLines)
+      );
+    }
+  }
+
+  return compacted;
 }
 
 function fromNewOnly(content: string): DiffData {
