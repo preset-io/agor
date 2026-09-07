@@ -60,7 +60,6 @@ import {
   ExecutorPulseKind,
   isTerminalTaskStatus,
   SDK_WATCHDOG_FAILURE_REASONS,
-  SessionStatus,
   type TaskMetadata,
   TaskStatus,
 } from '@agor/core/types';
@@ -562,12 +561,7 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
       // patch that projection again: a new Task may already have claimed the
       // Session, and an unconditional retry here would clobber
       // RUNNING/ready=false.
-      await this.processCompletionSideEffects(
-        result.task,
-        result.task.status,
-        completionParams,
-        true
-      );
+      await this.processTerminalTaskTransition(result.task, result.task.status, completionParams);
     });
     return result;
   }
@@ -655,28 +649,13 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
     );
   }
 
-  private projectTerminalSession(
+  private async processTerminalTaskTransition(
     task: Task,
     status: Task['status'],
     params?: TaskParams
-  ): Promise<Session> {
-    return this.app.service('sessions').patch(
-      task.session_id,
-      {
-        status: status === TaskStatus.FAILED ? SessionStatus.FAILED : SessionStatus.IDLE,
-        ready_for_prompt: true,
-      },
-      params
-    ) as Promise<Session>;
-  }
-
-  private async processCompletionSideEffects(
-    task: Task,
-    status: Task['status'],
-    params?: TaskParams,
-    sessionProjectionAlreadyCommitted = false
   ): Promise<boolean> {
     if (!task.session_id || !this.app) return false;
+    const runCompletionSideEffects = isCompletionSideEffectTaskStatus(status);
     try {
       const session = await this.app.service('sessions').get(task.session_id, params);
 
@@ -706,27 +685,32 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
         console.log(
           `⏭️ [TasksService] Skipping session terminal-state update - task ${shortId(task.task_id)} is not the latest (latest: ${shortId(latestTaskId)})`
         );
-        if (!isStop) {
+        if (runCompletionSideEffects && !isStop) {
           await this.dispatchCompletionCallbacksAfterCommit(task, session, params);
         }
         return false;
       }
 
-      if (sessionProjectionAlreadyCommitted) {
-        // Publish the latest Session fact rather than rewriting it. It may
-        // already reflect a newer Task admitted after the settlement commit.
-        emitServiceEvent(this.app, {
-          path: 'sessions',
-          event: 'patched',
-          data: session,
-          id: session.session_id,
-          params,
-        });
-      } else {
-        await this.projectTerminalSession(task, status, params);
-        console.log(
-          `✅ [TasksService] Session ${shortId(task.session_id)} status updated after terminal task (task ${shortId(task.task_id)} ${status})`
-        );
+      // The repository committed the Task terminal state and its minimal
+      // Session projection in one transaction. Publish the latest Session fact
+      // rather than rewriting it: another Task may already have claimed it.
+      emitServiceEvent(this.app, {
+        path: 'sessions',
+        event: 'patched',
+        data: session,
+        id: session.session_id,
+        params,
+      });
+
+      // Timeouts are terminal lifecycle results, but they are not successful,
+      // failed, or stopped provider completions. Publish the projection and
+      // drain queued work without dispatching completion callbacks or cleaning
+      // up ephemeral forks as though the provider had completed its turn.
+      if (!runCompletionSideEffects) {
+        if (!params?.suppressTerminalQueueProcessing) {
+          await this.triggerQueueProcessingAfterCommit(task.session_id, params);
+        }
+        return true;
       }
 
       // Defensive fallback for tasks created before create-time auto-title
@@ -777,7 +761,7 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
 
   /**
    * Override patch to detect task completion and:
-   * 1. Atomically update session status to IDLE when task reaches terminal state
+   * 1. Publish the Session status projected atomically by the repository
    * 2. Set ready_for_prompt flag
    * 3. Queue callback to parent session (if exists)
    *
@@ -808,12 +792,9 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
       );
       return currentTask;
     }
-    const isAnalyticsTerminalTransition =
+    const isTerminalTransition =
       isAnalyticsTerminalTaskStatus(nextStatus) &&
       !isAnalyticsTerminalTaskStatus(currentTask?.status);
-    const isCompletionSideEffectTransition =
-      isCompletionSideEffectTaskStatus(nextStatus) &&
-      !isCompletionSideEffectTaskStatus(currentTask?.status);
     const isRunningTransition =
       nextStatus === TaskStatus.RUNNING && currentTask?.status !== TaskStatus.RUNNING;
 
@@ -824,7 +805,7 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
     // Task terminality is the one lifecycle boundary shared by local and
     // off-host executors. Retire every bearer for this exact task before any
     // completion orchestration can advertise it as finished.
-    if (isAnalyticsTerminalTransition && !Array.isArray(result)) {
+    if (isTerminalTransition && !Array.isArray(result)) {
       await this.retireTaskExecutorCredentials(result);
     }
 
@@ -834,16 +815,17 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
 
     // Emit analytics for terminal task transitions, including timeouts that do not
     // run the broader task-completion side effects below.
-    if (isAnalyticsTerminalTransition) {
+    if (isTerminalTransition) {
       const task = result as Task;
       this.trackTaskCompleted(task);
     }
 
-    // Run completion side effects only for statuses that historically completed
-    // executor turns. Timeout paths patch session state separately and should not
-    // enqueue callbacks, mark sessions promptable, archive forks, or drain queues here.
-    if (isCompletionSideEffectTransition) {
-      await this.processCompletionSideEffects(result as Task, data.status!, params);
+    // Task terminality is the authoritative lifecycle boundary. Project every
+    // terminal result onto the Session inside this daemon request; an executor
+    // cannot safely make a second request after this transition because the
+    // terminal Task patch revokes its task-scoped credential.
+    if (isTerminalTransition) {
+      await this.processTerminalTaskTransition(result as Task, data.status!, params);
     }
 
     return result;

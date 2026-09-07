@@ -152,6 +152,30 @@ describe('realtimeBatch — keyed session-patch queue', () => {
     }
   });
 
+  it('re-arms a hidden-tab flush on animation frames when visibility resumes', () => {
+    vi.useFakeTimers();
+    let visibility: DocumentVisibilityState = 'hidden';
+    Object.defineProperty(document, 'visibilityState', {
+      configurable: true,
+      get: () => visibility,
+    });
+    try {
+      seedSession(makeSession({ status: 'idle' }));
+      bumpRevision('sessions');
+      enqueueSessionPatch(AUTHORITY, makeSession({ status: 'running' }));
+
+      visibility = 'visible';
+      document.dispatchEvent(new Event('visibilitychange'));
+      // Foreground rAF lands well before the 250 ms hidden fallback. Removing
+      // the visibility handler or its cancel/re-arm leaves this assertion idle.
+      vi.advanceTimersByTime(20);
+
+      expect(agorStore.getState().sessionById.get('s-1')).toMatchObject({ status: 'running' });
+    } finally {
+      delete (document as { visibilityState?: unknown }).visibilityState;
+    }
+  });
+
   it('drops a queued patch subsumed by a later hydration apply', () => {
     seedSession(makeSession({ status: 'idle' }));
 

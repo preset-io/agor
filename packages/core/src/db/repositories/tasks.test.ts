@@ -1592,6 +1592,72 @@ describe('TaskRepository.update', () => {
     });
   });
 
+  for (const [taskStatus, sessionStatus] of [
+    [TaskStatus.COMPLETED, SessionStatus.IDLE],
+    [TaskStatus.FAILED, SessionStatus.FAILED],
+    [TaskStatus.STOPPED, SessionStatus.IDLE],
+    [TaskStatus.TIMED_OUT, SessionStatus.TIMED_OUT],
+  ] as const) {
+    dbTest(
+      `atomically projects terminal task status ${taskStatus} onto the owning Session`,
+      async ({ db }) => {
+        const taskRepo = new TaskRepository(db);
+        const sessionRepo = new SessionRepository(db);
+        const sessionId = await createSessionWithDeps(db);
+        const task = await taskRepo.create(
+          createTaskData({
+            session_id: sessionId,
+            status: TaskStatus.RUNNING,
+            executor_connected_at: '2026-08-30T12:00:00.000Z',
+          })
+        );
+        await sessionRepo.update(sessionId, {
+          status: SessionStatus.RUNNING,
+          ready_for_prompt: false,
+          tasks: [task.task_id],
+          scheduled_from_branch: taskStatus === TaskStatus.TIMED_OUT,
+        });
+
+        await taskRepo.updateFromExecutor(task.task_id, { status: taskStatus });
+        await expect(taskRepo.findById(task.task_id)).resolves.toMatchObject({
+          status: taskStatus,
+          completed_at: expect.any(String),
+        });
+        await expect(sessionRepo.findById(sessionId)).resolves.toMatchObject({
+          status: sessionStatus,
+          ready_for_prompt: true,
+        });
+      }
+    );
+  }
+
+  dbTest(
+    'does not let an older terminal Task clobber a newer active Session claim',
+    async ({ db }) => {
+      const taskRepo = new TaskRepository(db);
+      const sessionRepo = new SessionRepository(db);
+      const sessionId = await createSessionWithDeps(db);
+      const older = await taskRepo.create(
+        createTaskData({ session_id: sessionId, status: TaskStatus.RUNNING })
+      );
+      const newer = await taskRepo.create(
+        createTaskData({ session_id: sessionId, status: TaskStatus.RUNNING })
+      );
+      await sessionRepo.update(sessionId, {
+        status: SessionStatus.RUNNING,
+        ready_for_prompt: false,
+        tasks: [older.task_id, newer.task_id],
+      });
+
+      await taskRepo.update(older.task_id, { status: TaskStatus.FAILED });
+
+      await expect(sessionRepo.findById(sessionId)).resolves.toMatchObject({
+        status: SessionStatus.RUNNING,
+        ready_for_prompt: false,
+      });
+    }
+  );
+
   dbTest('computes terminal timing at the row-locked mutation boundary', async ({ db }) => {
     const taskRepo = new TaskRepository(db);
     const sessionId = await createSessionWithDeps(db);
