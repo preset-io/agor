@@ -3708,7 +3708,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   // Repos custom routes
   // ============================================================================
 
-  registerAuthenticatedRoute(
+  registerLongAuthenticatedRoute(
     app,
     '/repos/local',
     {

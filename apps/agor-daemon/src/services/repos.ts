@@ -540,10 +540,12 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     }
 
     const userId = (params as AuthenticatedParams | undefined)?.user?.user_id as UserID | undefined;
-    const delegatedHomeKey = await resolveDelegatedExecutionHomeKey(
-      this.db,
-      userId,
-      this.app.get('config')
+    // Both MCP and HTTP enter with tenant identity only. Admit in a short
+    // write-gated unit, then release it before the executor inspects the repo.
+    const tenantId =
+      (params as AuthenticatedParams | undefined)?.tenant?.tenant_id ?? getCurrentTenantId();
+    const delegatedHomeKey = await withFreshTenantWrite(this.db, tenantId, () =>
+      resolveDelegatedExecutionHomeKey(this.db, userId, this.app.get('config'))
     );
     const inspection = await requestExecutor(
       {
@@ -566,37 +568,40 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     const repoPath = metadata.path;
     const slug = deriveLocalRepoSlug(metadata.remoteUrl, data.slug);
 
-    const existing = await this.repoRepo.findBySlug(slug);
-    if (existing) {
-      throw new Error(
-        `Repository '${slug}' already exists.\nUse a different slug with: --slug custom/name`
-      );
-    }
+    // Inspection may outlive admission; recheck the write gate when persisting.
+    return withFreshTenantWrite(this.db, tenantId, async () => {
+      const existing = await this.repoRepo.findBySlug(slug);
+      if (existing) {
+        throw new Error(
+          `Repository '${slug}' already exists.\nUse a different slug with: --slug custom/name`
+        );
+      }
 
-    if (metadata.credentialFindingCount > 0) {
-      console.warn(
-        `[repos.local] Registered local repo has ${metadata.credentialFindingCount} credential-bearing remote URL(s) in git config; persisted remote_url was sanitized. Run the repair utility if this repo is managed/shared.`
-      );
-    }
-    if (metadata.environmentWarning) {
-      console.warn(`[repos.local] ${metadata.environmentWarning}`);
-    }
-    const name = slug.split('/').pop() ?? slug;
+      if (metadata.credentialFindingCount > 0) {
+        console.warn(
+          `[repos.local] Registered local repo has ${metadata.credentialFindingCount} credential-bearing remote URL(s) in git config; persisted remote_url was sanitized. Run the repair utility if this repo is managed/shared.`
+        );
+      }
+      if (metadata.environmentWarning) {
+        console.warn(`[repos.local] ${metadata.environmentWarning}`);
+      }
+      const name = slug.split('/').pop() ?? slug;
 
-    const repo = (await this.create(
-      {
-        repo_type: 'local',
-        slug,
-        name,
-        remote_url: metadata.remoteUrl,
-        local_path: repoPath,
-        default_branch: metadata.defaultBranch,
-        environment: metadata.environment,
-      },
-      params
-    )) as Repo;
+      const repo = (await this.create(
+        {
+          repo_type: 'local',
+          slug,
+          name,
+          remote_url: metadata.remoteUrl,
+          local_path: repoPath,
+          default_branch: metadata.defaultBranch,
+          environment: metadata.environment,
+        },
+        params
+      )) as Repo;
 
-    return repo;
+      return repo;
+    });
   }
 
   /**
