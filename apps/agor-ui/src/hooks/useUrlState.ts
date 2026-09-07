@@ -70,6 +70,17 @@ export interface UseUrlStateOptions {
    *  artifact). Null when the URL has no such target. Fires only on
    *  transitions to keep downstream React state updates idempotent. */
   onActiveUrlTargetChange?: (target: ActiveUrlTarget | null) => void;
+  /** Suspend the state→URL self-heal while the consumer has a deliberate
+   *  navigation in flight.
+   *
+   *  React Router commits `navigate()` inside a transition, so a plain
+   *  `setState` made alongside it renders once at the OLD pathname. If that
+   *  render also changes `currentBoardId` / `currentSessionId` — which is
+   *  exactly what App's "render Home immediately" flag does — the self-heal
+   *  reads the transitional pair as authoritative and `replace()`s the URL,
+   *  cancelling the navigation that was already on its way. The consumer
+   *  owns that knowledge, so it hands it down rather than us guessing. */
+  suspendStateToUrlSync?: boolean;
 }
 
 /** Slug lookup helper — the core `boardPath` builder takes a slug
@@ -106,6 +117,7 @@ export function useUrlState(options: UseUrlStateOptions) {
     onBoardChange,
     onSessionChange,
     onActiveUrlTargetChange,
+    suspendStateToUrlSync = false,
   } = options;
 
   const navigate = useNavigate();
@@ -476,6 +488,9 @@ export function useUrlState(options: UseUrlStateOptions) {
   useEffect(() => {
     if (syncingRef.current) return;
     if (isSettingsRoute) return;
+    // A deliberate navigation is mid-flight and our (board, session) pair
+    // is transitional — see `suspendStateToUrlSync`.
+    if (suspendStateToUrlSync) return;
 
     // Unknown non-root paths have no entity params but are not the Home
     // route. The URL→state effect canonicalizes them to `/`; do not let
@@ -507,6 +522,7 @@ export function useUrlState(options: UseUrlStateOptions) {
     urlBranchShortId,
     urlArtifactShortId,
     isSettingsRoute,
+    suspendStateToUrlSync,
     updateUrlFromState,
     location.pathname,
   ]);
