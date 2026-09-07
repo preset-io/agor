@@ -466,6 +466,7 @@ export const AUTHENTICATED_RBAC_SERVICE_PATHS = [
   'branches/:id/effective-access',
   'branches/:id/fs-access-users',
   'boards/:id/permissions',
+  'boards/:id/effective-access',
   'boards/:id/aligned-branches',
   'workspace-preferences',
 ] as const;
