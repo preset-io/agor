@@ -86,6 +86,7 @@ import type { RouteSurfaceId } from './surfaces/surfaceRegistry';
 import {
   ARTIFACT_FULLSCREEN_ROUTE_PATHS,
   KNOWLEDGE_ROUTE_PATHS,
+  MARKETPLACE_CATALOG_PATH,
   MARKETPLACE_ROUTE_PATHS,
   RBAC_POLICY_PROTOTYPE_ROUTE_PATH,
   routeUsesDeviceRouter,
@@ -2178,6 +2179,7 @@ function AppContent() {
             setOpenUserSettings(true);
           }}
           onOpenWorkspaceSettings={(tab) => setSettingsTabToOpen(tab)}
+          onOpenCatalog={() => navigate(MARKETPLACE_CATALOG_PATH)}
           onCheckAuth={handleCheckAuth}
           credentialVersion={credentialVersion}
           connectionReady={connected && !connecting}

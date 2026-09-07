@@ -25,6 +25,7 @@ const baseProps = (over: Partial<OnboardingBannersProps>): OnboardingBannersProp
   canManageMcp: false,
   onOpenUserSettings: vi.fn(),
   onOpenWorkspaceSettings: vi.fn(),
+  onOpenCatalog: vi.fn(),
   onCheckAuth: vi.fn(async () => result('unauthenticated')),
   credentialVersion: 0,
   connectionReady: true,
@@ -229,6 +230,26 @@ describe('OnboardingBanners probe effect', () => {
 
     fireEvent.click(await screen.findByRole('button', { name: 'Maybe later' }));
     expect(screen.queryByText(/Connect Slack/)).not.toBeInTheDocument();
+  });
+
+  it('routes the integrations CTA to the catalog, not workspace MCP settings', async () => {
+    const onOpenCatalog = vi.fn();
+    const onOpenWorkspaceSettings = vi.fn();
+    render(
+      <OnboardingBanners
+        {...baseProps({
+          mcpServerCount: 0,
+          canManageMcp: true,
+          onOpenCatalog,
+          onOpenWorkspaceSettings,
+          onCheckAuth: async () => result('authenticated'),
+        })}
+      />
+    );
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Browse the catalog' }));
+    expect(onOpenCatalog).toHaveBeenCalledTimes(1);
+    expect(onOpenWorkspaceSettings).not.toHaveBeenCalled();
   });
 
   it('routes tenant-preferred credential failures to workspace agentic-tool settings', async () => {

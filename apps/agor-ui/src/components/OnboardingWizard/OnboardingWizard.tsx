@@ -1,12 +1,16 @@
 // biome-ignore-all lint/plugin/noHardcodedColorLiteral: intentional dark-glass first-run surface — bespoke gradient/particle/glass values with no semantic-token equivalent; semantic text/primary/border already use theme tokens
 /**
- * OnboardingWizard — redesigned 4-step first-run flow.
+ * OnboardingWizard — 5-step first-run flow.
  *
- * Steps: goals → workspace (name + template gallery) → llm → done
+ * Steps: goals → workspace (name + template gallery) → llm → tools → done
  *
- * The in-wizard recommendations step was removed; goal-tailored tools still
- * feed the first-session prompt with their real Agor setup routes, so the
- * teammate can propose them accurately in-session.
+ * The tools step is an actionable-but-deferred curation of the goal-tailored
+ * Connect kit (see the tools-step feasibility note): the real catalog connect
+ * flow creates + navigates to a session and needs an existing branch, neither
+ * of which exists mid-wizard, so this step selects rather than connects. The
+ * selection (plus the always-on Ask items) feeds the first-session prompt so
+ * the teammate connects them through the one-click catalog, and a
+ * browse-catalog link reaches the real connect UX now.
  */
 
 import { TOOL_API_KEY_NAMES } from '@agor/agentic-tools';
@@ -22,7 +26,9 @@ import type {
   User,
   UserPreferences,
 } from '@agor-live/client';
+import { hasMinimumRole, ROLES } from '@agor-live/client';
 import {
+  ArrowRightOutlined,
   CheckCircleOutlined,
   CheckOutlined,
   CloseOutlined,
@@ -33,8 +39,10 @@ import { Alert, Button, Input, Modal, Spin, Tag, Tooltip, Typography, theme } fr
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { VISUALLY_HIDDEN_STYLE } from '@/utils/accessibility';
 import { sanitizeSecretValue } from '@/utils/sanitizeSecret';
+import { uiRouteHref } from '@/utils/uiRoutes';
 import { useAuthenticatedAuthorityScope } from '../../hooks/useAuthorityOperationGuard';
 import { useAgorStore } from '../../store/agorStore';
+import { MARKETPLACE_CATALOG_PATH } from '../../surfaces/surfaceRegistry';
 import {
   MAX_ONBOARDING_GOALS,
   mergeGoalIntegrationRecs,
@@ -50,6 +58,7 @@ import {
 } from '../../utils/teammateTemplates';
 import { type CodexAuthFallback, CodexDeviceSignIn, CodexImportAuthJson } from '../CodexAuth';
 import { GlassPanelHighlights } from '../GlassSurface/GlassPanel';
+import { McpLogo } from '../McpLogo';
 import { ToolIcon } from '../ToolIcon';
 import { OnboardingTeammateGalleryStep } from './OnboardingTeammateGalleryStep';
 
@@ -59,7 +68,7 @@ const openCodeOnboarding = getAgenticToolUIIntegration('opencode').onboardingOpt
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
-export type WizardStep = 'goals' | 'workspace' | 'llm' | 'done';
+export type WizardStep = 'goals' | 'workspace' | 'llm' | 'tools' | 'done';
 type AuthMethod =
   | 'api-key'
   | 'claude-subscription-token'
@@ -87,13 +96,14 @@ const AUTH_METHOD_OPTIONS: Partial<
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const STEPS: WizardStep[] = ['goals', 'workspace', 'llm', 'done'];
+const STEPS: WizardStep[] = ['goals', 'workspace', 'llm', 'tools', 'done'];
 
 const STEP_META: Record<WizardStep, { number: number; label: string; skippable: boolean }> = {
   goals: { number: 1, label: 'Goals', skippable: true },
   workspace: { number: 2, label: 'Teammate', skippable: true },
   llm: { number: 3, label: 'AI', skippable: true },
-  done: { number: 4, label: "You're ready", skippable: false },
+  tools: { number: 4, label: 'Tools', skippable: true },
+  done: { number: 5, label: "You're ready", skippable: false },
 };
 
 const GOALS = ONBOARDING_GOALS;
@@ -472,6 +482,26 @@ export function OnboardingWizard({
     });
   }, []);
 
+  // ── Step 4: tools — curate the goal-tailored Connect kit ──────────────────
+  // Connect items are shown selected by default; this holds the ones the user
+  // removed, so an untouched/skipped step still threads the full kit through
+  // (matching the pre-revival suggestedIntegrations behavior). Ask items
+  // (Slack/GitHub) are never counted here — they always flow to the first
+  // session regardless of the toggle below.
+  const [deselectedToolIds, setDeselectedToolIds] = useState<Set<string>>(new Set());
+  const [askToolsWanted, setAskToolsWanted] = useState(true);
+  const toggleTool = useCallback((id: string) => {
+    setDeselectedToolIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }, []);
+  // Only admins (MCP manage) get Connect toggles; others see a read-only teaser
+  // plus the browse-catalog link. Reuses the same role signal as the app shell.
+  const canManageMcp = hasMinimumRole(user?.role, ROLES.ADMIN);
+
   // ── Step 3: LLM ─────────────────────────────────────────────────────────
   const [selectedAgent, setSelectedAgent] = useState<AgenticToolName | null>(null);
   const [apiKey, setApiKey] = useState('');
@@ -514,6 +544,8 @@ export function OnboardingWizard({
     if (!open) return;
     setCurrentStep(initialStep || 'goals');
     setSelectedGoals([]);
+    setDeselectedToolIds(new Set());
+    setAskToolsWanted(true);
     setSelectedAgent(null);
     setApiKey('');
     setAuthMethod('api-key');
@@ -704,6 +736,9 @@ export function OnboardingWizard({
       case 'workspace':
         // A teammate name is required — it names the new board we always create.
         return teammateName.trim().length > 0;
+      case 'tools':
+        // Curating tools is optional; Continue is always available.
+        return true;
       case 'done':
         return true;
     }
@@ -777,6 +812,8 @@ export function OnboardingWizard({
       }
       case 'workspace':
         return 'Continue →';
+      case 'tools':
+        return 'Continue →';
       case 'done': {
         const name = teammateName.trim();
         if (completing) return completionSlow ? 'Still finishing…' : 'Setting up…';
@@ -844,7 +881,7 @@ export function OnboardingWizard({
   // marking codex verified so the primary button advances to the next step.
   const handleCodexImported = useCallback(() => {
     setLlmAuthVerified((prev) => (prev.codex === true ? prev : { ...prev, codex: true }));
-    goToStep('done');
+    goToStep('tools');
   }, [goToStep]);
 
   const handleBack = useCallback(() => {
@@ -905,7 +942,7 @@ export function OnboardingWizard({
       case 'llm': {
         if (!selectedAgent) return;
         if (agentIsVerifiedConnected(selectedAgent)) {
-          goToStep('done');
+          goToStep('tools');
           return;
         }
         // Device sign-in and login-file import both complete inside their own
@@ -915,12 +952,12 @@ export function OnboardingWizard({
           selectedAgent === 'codex' &&
           (authMethod === 'codex-device-auth' || authMethod === 'codex-auth-json')
         ) {
-          if (llmAuthVerified.codex === true) goToStep('done');
+          if (llmAuthVerified.codex === true) goToStep('tools');
           return;
         }
         // Key stored, auth check still running — proceed optimistically
         if (agentHasKey(selectedAgent) && llmAuthVerified[selectedAgent] === undefined) {
-          goToStep('done');
+          goToStep('tools');
           return;
         }
         if (!user || !sanitizeSecretValue(apiKey)) return;
@@ -962,7 +999,7 @@ export function OnboardingWizard({
             } as UpdateUserInput['agentic_tools'],
           });
           if (!isCurrent()) return;
-          goToStep('done');
+          goToStep('tools');
         } catch (err) {
           if (isCurrent()) {
             setLlmError(
@@ -982,6 +1019,12 @@ export function OnboardingWizard({
         goToStep('llm');
         break;
       }
+      case 'tools': {
+        // No inline connect (see the tools-step feasibility note): selections
+        // are threaded into the first-session prompt at completion.
+        goToStep('done');
+        break;
+      }
       case 'done': {
         if (invalidSavedTemplateId) return;
         // React state does not update quickly enough to guard two native click
@@ -997,9 +1040,12 @@ export function OnboardingWizard({
         };
         const name = teammateName.trim();
         // Merged MCP integrations for the chosen goals, threaded into the
-        // teammate's bootstrap prompt. The in-wizard MCP step was removed, but
-        // this still powers the teammate proposing connections in its first session.
-        const suggestedIntegrations = mergeGoalIntegrationRecs(selectedGoals);
+        // teammate's bootstrap prompt. The tools step lets the user drop Connect
+        // items from this set; Ask items (Slack/GitHub) always flow through so
+        // the teammate still offers to set them up.
+        const suggestedIntegrations = mergeGoalIntegrationRecs(selectedGoals).filter(
+          (rec) => rec.connectMode === 'ask' || !deselectedToolIds.has(rec.id)
+        );
         // Keep the modal up in a loading state until creation + navigation
         // finish (onComplete may run async), then it closes from the parent.
         setCompleting(true);
@@ -1107,6 +1153,7 @@ export function OnboardingWizard({
     currentStep,
     isCurrent,
     selectedGoals,
+    deselectedToolIds,
     selectedAgent,
     agentIsVerifiedConnected,
     agentHasKey,
@@ -1748,6 +1795,179 @@ export function OnboardingWizard({
     />
   );
 
+  const renderTools = () => {
+    const kit = mergeGoalIntegrationRecs(selectedGoals);
+    const connectItems = kit.filter((rec) => rec.connectMode !== 'ask');
+    const askItems = kit.filter((rec) => rec.connectMode === 'ask');
+    const teammateLabel = teammateName.trim() || 'your teammate';
+    const catalogHref = uiRouteHref(MARKETPLACE_CATALOG_PATH);
+    const LOGO_TINT = 'rgba(255,255,255,0.82)';
+
+    const cardBody = (rec: OnboardingIntegrationRecommendation) => (
+      <>
+        <span
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            width: 32,
+            height: 32,
+            flexShrink: 0,
+            borderRadius: 8,
+            background: 'rgba(255,255,255,0.06)',
+            border: '1px solid rgba(255,255,255,0.1)',
+          }}
+        >
+          <McpLogo id={rec.id} name={rec.name} size={18} color={LOGO_TINT} />
+        </span>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ color: TEXT_PRIMARY, fontWeight: 600, fontSize: 13.5 }}>{rec.name}</div>
+          <div style={{ color: TEXT_MUTED, fontSize: 11.5, lineHeight: 1.4 }}>
+            {rec.description}
+          </div>
+        </div>
+      </>
+    );
+
+    return (
+      <div>
+        {renderStepBadge('Connect your tools')}
+        <Paragraph style={{ color: TEXT_SECONDARY, marginBottom: 18 }}>
+          {canManageMcp
+            ? `Pick what ${teammateLabel} should set up first — most connect in one click from the catalog. You can skip this.`
+            : `Here's what ${teammateLabel} can set up for you. Browse the catalog to connect them.`}
+        </Paragraph>
+
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+          {connectItems.map((rec) => {
+            const isSelected = !deselectedToolIds.has(rec.id);
+            const cardStyle = {
+              display: 'flex',
+              gap: 10,
+              alignItems: 'flex-start',
+              width: '100%',
+              textAlign: 'left' as const,
+              padding: 12,
+              borderRadius: 12,
+              backdropFilter: 'blur(20px)',
+              WebkitBackdropFilter: 'blur(20px)',
+              background: isSelected && canManageMcp ? CARD_SELECTED_BG : GLASS_CARD_BG,
+              border: isSelected && canManageMcp ? CARD_SELECTED_BORDER : SELECTABLE_CARD_BORDER,
+              boxShadow: isSelected && canManageMcp ? CARD_SELECTED_SHADOW : GLASS_CARD_SHADOW,
+            };
+            // Non-admins get a read-only teaser (no toggle); the catalog link below
+            // is their action, so it never reads as the old dead recommendation list.
+            if (!canManageMcp) {
+              return (
+                <div key={rec.id} style={cardStyle}>
+                  {cardBody(rec)}
+                </div>
+              );
+            }
+            return (
+              <button
+                key={rec.id}
+                type="button"
+                aria-pressed={isSelected}
+                className="onb-card"
+                onClick={() => toggleTool(rec.id)}
+                style={{ ...cardStyle, cursor: 'pointer', transition: 'all 0.15s ease' }}
+              >
+                {cardBody(rec)}
+                <span
+                  aria-hidden="true"
+                  style={{
+                    flexShrink: 0,
+                    width: 18,
+                    height: 18,
+                    marginTop: 2,
+                    borderRadius: '50%',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    background: isSelected ? 'rgba(46,154,146,0.9)' : 'transparent',
+                    border: isSelected
+                      ? '1.5px solid rgba(46,154,146,0.95)'
+                      : '1.5px solid rgba(255,255,255,0.25)',
+                  }}
+                >
+                  {isSelected && (
+                    <CheckOutlined style={{ color: token.colorTextLightSolid, fontSize: 9 }} />
+                  )}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+
+        {askItems.length > 0 && (
+          <div style={{ marginTop: 12 }}>
+            {canManageMcp ? (
+              <button
+                type="button"
+                aria-pressed={askToolsWanted}
+                className="onb-card"
+                onClick={() => setAskToolsWanted((wanted) => !wanted)}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 10,
+                  width: '100%',
+                  textAlign: 'left',
+                  padding: '10px 12px',
+                  borderRadius: 10,
+                  cursor: 'pointer',
+                  backdropFilter: 'blur(20px)',
+                  WebkitBackdropFilter: 'blur(20px)',
+                  background: askToolsWanted ? CARD_SELECTED_BG : GLASS_CARD_BG,
+                  border: askToolsWanted ? CARD_SELECTED_BORDER : SELECTABLE_CARD_BORDER,
+                  boxShadow: askToolsWanted ? CARD_SELECTED_SHADOW : GLASS_CARD_SHADOW,
+                }}
+              >
+                <span style={{ display: 'inline-flex', gap: 6, flexShrink: 0 }}>
+                  {askItems.map((rec) => (
+                    <McpLogo key={rec.id} id={rec.id} name={rec.name} size={16} color={LOGO_TINT} />
+                  ))}
+                </span>
+                <span style={{ flex: 1, minWidth: 0, color: TEXT_SECONDARY, fontSize: 12.5 }}>
+                  Ask {teammateLabel} to set up:{' '}
+                  <span style={{ color: TEXT_PRIMARY, fontWeight: 600 }}>
+                    {askItems.map((rec) => rec.name).join(', ')}
+                  </span>
+                </span>
+              </button>
+            ) : (
+              <Text style={{ color: TEXT_MUTED, fontSize: 12.5 }}>
+                {teammateLabel} can also set up {askItems.map((rec) => rec.name).join(' and ')} for
+                you.
+              </Text>
+            )}
+          </div>
+        )}
+
+        <div
+          style={{
+            marginTop: 16,
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+            flexWrap: 'wrap',
+          }}
+        >
+          <Typography.Link
+            href={catalogHref}
+            target="_blank"
+            rel="noopener noreferrer"
+            style={{ color: PRIMARY, fontSize: 13, fontWeight: 500 }}
+          >
+            Browse the full catalog <ArrowRightOutlined style={{ fontSize: 11 }} />
+          </Typography.Link>
+          <Text style={{ color: TEXT_MUTED, fontSize: 12 }}>— dozens more tools to connect.</Text>
+        </div>
+      </div>
+    );
+  };
+
   const renderDone = () => {
     const name = teammateName.trim();
     // Role = the picked template's title; the blank starter is a starting point,
@@ -2083,6 +2303,7 @@ export function OnboardingWizard({
             {currentStep === 'goals' && renderGoals()}
             {currentStep === 'llm' && renderLlm()}
             {currentStep === 'workspace' && renderWorkspace()}
+            {currentStep === 'tools' && renderTools()}
             {currentStep === 'done' && renderDone()}
           </div>
 

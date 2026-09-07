@@ -186,6 +186,8 @@ describe('OnboardingWizard layout (real browser)', () => {
     fireEvent.click(screen.getByText(/skip for now/i).closest('button')!);
     await screen.findByText('Connect your AI');
     fireEvent.click(screen.getByText(/skip for now/i).closest('button')!);
+    await screen.findByText('Connect your tools');
+    fireEvent.click(screen.getByText(/skip for now/i).closest('button')!);
     await screen.findByText("You're ready to build.");
     const closeRect = screen.getByRole('button', { name: 'Close' }).getBoundingClientRect();
     expect(closeRect.top).toBeGreaterThanOrEqual(0);
