@@ -658,7 +658,10 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
       );
     }
 
-    // 'ready', 'preserved', or legacy undefined: treated as usable.
+    // Only 'ready' (which the canonical classifier also grants to rows
+    // predating `filesystem_status`) is usable. Archived, 'preserved',
+    // 'cleaned' and 'deleted' all classify as 'unavailable' and fall through
+    // to the throw below.
     //
     // Deliberately NOT stat'd from here. The daemon does not own the branch
     // filesystem — in a multi-host deployment it may not share one with the
