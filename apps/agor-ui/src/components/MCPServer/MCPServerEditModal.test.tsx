@@ -22,7 +22,7 @@ vi.mock('@/utils/message', () => ({
 }));
 
 vi.mock('./MCPServerFormFields', async () => {
-  const { Button, Form, Input } = await import('antd');
+  const { Button, Form, Input, Switch } = await import('antd');
   return {
     MCPServerFormFields: ({ onPrepareOAuthStart, onTestConnection }: FormFieldsMockProps) => (
       <>
@@ -44,6 +44,9 @@ vi.mock('./MCPServerFormFields', async () => {
         <Form.Item label="Dynamic Client Registration" name="oauth_dcr_mode">
           <Input />
         </Form.Item>
+        <Form.Item label="Enabled" name="enabled" valuePropName="checked">
+          <Switch />
+        </Form.Item>
         <Button onClick={() => void onPrepareOAuthStart().then(preparedServerId)}>
           Start OAuth Flow
         </Button>
@@ -57,6 +60,45 @@ import { MCPServerEditModal } from './MCPServerEditModal';
 
 describe('MCPServerEditModal legacy DCR compatibility', () => {
   beforeEach(() => vi.clearAllMocks());
+
+  it('requires destructive confirmation before disabling an OAuth server', async () => {
+    const patch = vi.fn().mockResolvedValue({});
+    const client = {
+      service: vi.fn().mockReturnValue({ patch }),
+      io: { on: vi.fn(), off: vi.fn() },
+    } as unknown as AgorClient;
+    const server = {
+      mcp_server_id: '01900000-0000-7000-8000-000000000099',
+      name: 'oauth-disable',
+      transport: 'http',
+      url: 'https://mcp.example.com/mcp',
+      scope: 'global',
+      enabled: true,
+      auth: { type: 'oauth' },
+    } as MCPServer;
+
+    render(
+      <MCPServerEditModal
+        server={server}
+        open
+        client={client}
+        identityKey="user-a"
+        authorityKey="user-a:admin:1"
+        authGeneration={1}
+        mutationAllowed
+        onClose={vi.fn()}
+      />
+    );
+
+    fireEvent.click(await screen.findByRole('switch', { name: 'Enabled' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    expect((await screen.findAllByText('Disable this OAuth server?')).length).toBeGreaterThan(0);
+    expect(patch).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Disable server' }));
+    await waitFor(() => expect(patch).toHaveBeenCalledTimes(1));
+    expect(patch.mock.calls[0]?.[1]).toMatchObject({ enabled: false });
+  });
 
   it('keeps oauth_dcr_mode absent when an unrelated field is saved', async () => {
     const patch = vi.fn().mockResolvedValue({});

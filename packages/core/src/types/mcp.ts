@@ -519,6 +519,8 @@ export interface MCPServer {
   tools?: MCPTool[];
   resources?: MCPResource[];
   prompts?: MCPPrompt[];
+  /** Daemon-owned timestamp of the last successful capability discovery. */
+  capabilities_discovered_at?: Date;
 
   // Tool permissions (per-tool permission settings)
   tool_permissions?: Record<string, ToolPermission>; // e.g., { "list_files": "allow", "write_file": "ask" }

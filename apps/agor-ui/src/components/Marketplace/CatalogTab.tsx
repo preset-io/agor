@@ -9,8 +9,11 @@
 import type {
   AgenticToolName,
   MCPCatalogCategory,
+  MCPCatalogConnectResult,
   MCPCatalogCredentialRequirement,
   MCPCatalogEntry,
+  MCPMarketplaceOverview,
+  SessionID,
 } from '@agor/core/types';
 import { readCredentialRequirement } from '@agor/core/types';
 import type { AgorClient, User } from '@agor-live/client';
@@ -29,8 +32,13 @@ import { CatalogCard } from './CatalogCard';
 import { CatalogDetailDrawer } from './CatalogDetailDrawer';
 import { CatalogToolbar } from './CatalogToolbar';
 import { DEFAULT_SORT } from './catalogPresentation';
+import {
+  MARKETPLACE_DRAWER_FOCUS_FALLBACK_MS,
+  MARKETPLACE_OAUTH_POLL_DELAYS_MS,
+} from './marketplaceLayout';
 import { launchMarketplaceOAuth } from './marketplaceOAuthLaunch';
 import type { MarketplaceOAuthPopup } from './marketplaceOAuthPopup';
+import { marketplaceCredentialIsUsable } from './marketplacePresentation';
 import { useCatalogReadiness } from './useCatalogReadiness';
 import {
   CATALOG_PAGE_SIZE,
@@ -92,6 +100,8 @@ const CatalogGrid = memo<{
 ));
 
 export interface CatalogTabProps {
+  /** Whether this tab is the active route; inactive drawers must not portal over another tab. */
+  active?: boolean;
   client: AgorClient | null;
   /** The socket has connected and authenticated, so reads will be answered. */
   connected: boolean;
@@ -101,14 +111,18 @@ export interface CatalogTabProps {
   authGeneration: number;
   /** Whose server-provided capability decides whether Connect is offered. */
   currentUser?: User | null;
+  /** Refresh the shared four-tab projection after durable OAuth confirmation. */
+  refreshMarketplaceOverview?: () => Promise<unknown>;
 }
 
 const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
+  active = true,
   client,
   connected,
   connecting: connectionPending,
   authGeneration,
   currentUser,
+  refreshMarketplaceOverview,
 }) => {
   const { token } = theme.useToken();
   const navigate = useNavigate();
@@ -126,6 +140,22 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
   const drawerTrigger = useRef<HTMLElement | null>(null);
   const [connecting, setConnecting] = useState(false);
   const [connectError, setConnectError] = useState<string | null>(null);
+  const [connectSuccess, setConnectSuccess] = useState<{
+    sessionId: SessionID;
+    sessionTitle?: string;
+    branchName?: string;
+    authentication: 'ready' | 'action_required' | 'pending' | 'failed' | 'unknown';
+    reusedExistingServer: boolean;
+    serverId?: string;
+    oauthAttemptId?: string;
+  } | null>(null);
+  const connectSuccessRef = useRef(connectSuccess);
+  connectSuccessRef.current = connectSuccess;
+  // A live probe can discover OAuth after advisory readiness said an endpoint
+  // was open. Preserve the redacted connect result only long enough for a
+  // direct user gesture to open the provider window and create the durable
+  // attempt. Never manufacture a pending state when neither exists.
+  const surpriseOAuthResultRef = useRef<MCPCatalogConnectResult | null>(null);
   // What the live endpoint said it wanted, when a refusal contradicted the
   // catalog entry the drawer built its form from. Held here rather than in the
   // drawer because it arrives with the connect response, which is this
@@ -134,6 +164,18 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
     null
   );
   const showDisconnected = useSettledFlag(!connected, DISCONNECT_NOTICE_DELAY_MS);
+
+  useEffect(() => {
+    if (active) return;
+    drawerOpen.current = false;
+    drawerTrigger.current = null;
+    setSelected(null);
+    setConnecting(false);
+    setConnectError(null);
+    setConnectSuccess(null);
+    setKeyRequirement(null);
+    surpriseOAuthResultRef.current = null;
+  }, [active]);
 
   const { entries, status, matchCount, catalogSize, error, retry } = useCatalogSearch(
     client,
@@ -194,6 +236,122 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
     userId: currentUser?.user_id,
   });
 
+  const confirmOAuthGrant = useCallback(
+    async (attemptId: string, serverId: string) => {
+      const operation = operationGuard.begin();
+      if (!client || !operation.isCurrent()) return false;
+      try {
+        const refreshed = await refreshMarketplaceOverview?.();
+        const fresh: MCPMarketplaceOverview =
+          refreshed && typeof refreshed === 'object' && 'credentials' in refreshed
+            ? (refreshed as MCPMarketplaceOverview)
+            : ((await client.service('mcp-marketplace').find()) as MCPMarketplaceOverview);
+        if (!operation.isCurrent()) return false;
+        const credential = fresh.credentials.find(
+          (item) => item.mcp_server_id === serverId && marketplaceCredentialIsUsable(item)
+        );
+        const serverEnabled = fresh.servers.some(
+          (item) => item.mcp_server_id === serverId && item.enabled
+        );
+        const current = connectSuccessRef.current;
+        if (
+          !credential ||
+          !serverEnabled ||
+          current?.oauthAttemptId !== attemptId ||
+          current.serverId !== serverId
+        ) {
+          return false;
+        }
+        setConnectSuccess({ ...current, authentication: 'ready' });
+        return true;
+      } catch {
+        // Realtime completion is only a latency hint. If the caller-scoped
+        // credential projection cannot confirm the saved grant, stay pending.
+        return false;
+      }
+    },
+    [client, operationGuard, refreshMarketplaceOverview]
+  );
+
+  useEffect(() => {
+    if (!client) return;
+    const onCompleted = (event: {
+      attempt_id?: string;
+      mcp_server_id?: string;
+      success?: boolean;
+    }) => {
+      const current = connectSuccessRef.current;
+      if (
+        !current?.oauthAttemptId ||
+        event.attempt_id !== current.oauthAttemptId ||
+        event.mcp_server_id !== current.serverId
+      ) {
+        return;
+      }
+      if (event.success === true) void confirmOAuthGrant(current.oauthAttemptId, current.serverId!);
+      // A false realtime packet is only a latency hint: the durable attempt
+      // distinguishes a definite provider failure from an ambiguous exchange.
+    };
+    client.io.on('oauth:completed', onCompleted);
+    return () => {
+      client.io.off('oauth:completed', onCompleted);
+    };
+  }, [client, confirmOAuthGrant]);
+
+  // Close the small race where callback completion can beat the pending-panel
+  // commit. This durable attempt read may confirm failure or trigger a fresh
+  // credential read; it never treats popup navigation as authentication.
+  useEffect(() => {
+    const current = connectSuccess;
+    if (!client || current?.authentication !== 'pending' || !current.oauthAttemptId) return;
+    const attemptId = current.oauthAttemptId;
+    let cancelled = false;
+    let pollTimer: number | undefined;
+    const wait = (delay: number) =>
+      new Promise<void>((resolve) => {
+        pollTimer = window.setTimeout(resolve, delay);
+      });
+    void (async () => {
+      for (const delay of [0, ...MARKETPLACE_OAUTH_POLL_DELAYS_MS]) {
+        if (delay) await wait(delay);
+        if (cancelled || connectSuccessRef.current?.oauthAttemptId !== attemptId) return;
+        try {
+          const raw = await client.service('mcp-servers/oauth-attempt-status').get(attemptId);
+          const attempt = raw as { status?: string; mcp_server_id?: string };
+          if (cancelled || connectSuccessRef.current?.oauthAttemptId !== attemptId) return;
+          if (attempt.status === 'succeeded' && attempt.mcp_server_id === current.serverId) {
+            if (await confirmOAuthGrant(attemptId, current.serverId!)) return;
+            continue;
+          }
+          if (attempt.status === 'failed') {
+            setConnectSuccess((value) =>
+              value?.oauthAttemptId === attemptId ? { ...value, authentication: 'failed' } : value
+            );
+            return;
+          }
+          if (attempt.status === 'ambiguous') {
+            setConnectSuccess((value) =>
+              value?.oauthAttemptId === attemptId ? { ...value, authentication: 'unknown' } : value
+            );
+            return;
+          }
+        } catch {
+          // Keep polling within the bounded schedule. A missed/unavailable
+          // status read is never failure evidence.
+        }
+      }
+      if (!cancelled) {
+        setConnectSuccess((value) =>
+          value?.oauthAttemptId === attemptId ? { ...value, authentication: 'unknown' } : value
+        );
+      }
+    })();
+    return () => {
+      cancelled = true;
+      window.clearTimeout(pollTimer);
+    };
+  }, [client, confirmOAuthGrant, connectSuccess]);
+
   // Any narrowing invalidates the current offset — page 4 of an unfiltered
   // catalog is usually past the end of a filtered one.
   const applyFilter = useCallback((patch: Partial<CatalogFilterState>) => {
@@ -220,6 +378,8 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
     drawerTrigger.current =
       document.activeElement instanceof HTMLElement ? document.activeElement : null;
     setConnectError(null);
+    setConnectSuccess(null);
+    surpriseOAuthResultRef.current = null;
     // A requirement learned about one entry says nothing about the next.
     setKeyRequirement(null);
     setSelected(entry);
@@ -227,8 +387,8 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
 
   const restoreDrawerFocus = useCallback((trigger: HTMLElement | null) => {
     if (drawerOpen.current || !trigger?.isConnected || drawerTrigger.current !== trigger) return;
-    trigger.focus();
     drawerTrigger.current = null;
+    trigger.focus();
   }, []);
 
   const closeDrawer = useCallback(() => {
@@ -237,10 +397,12 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
     setKeyRequirement(null);
     setSelected(null);
     setConnectError(null);
+    setConnectSuccess(null);
+    surpriseOAuthResultRef.current = null;
     // `afterOpenChange(false)` is the normal restoration boundary. Keep a
     // guarded fallback for browsers that cancel the exit motion after Escape
     // (for example when reduced-motion state changes during the animation).
-    window.setTimeout(() => restoreDrawerFocus(trigger), 350);
+    window.setTimeout(() => restoreDrawerFocus(trigger), MARKETPLACE_DRAWER_FOCUS_FALLBACK_MS);
   }, [restoreDrawerFocus]);
 
   const handleDrawerOpenChange = useCallback(
@@ -306,10 +468,11 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
         // a tab-local suggestion, not an automatic write into the cross-tab
         // composer draft. A new OAuth install without a reusable grant instead
         // lands on the recoverable authentication notice and warning MCP badge.
-        if (
-          result.starter_prompt &&
-          !mcpServerNeedsAuth(result.mcp_server, userAuthenticatedMcpServerIds)
-        ) {
+        const needsAuthentication = mcpServerNeedsAuth(
+          result.mcp_server,
+          userAuthenticatedMcpServerIds
+        );
+        if (result.starter_prompt && !needsAuthentication) {
           saveMarketplacePromptSuggestion({
             sessionId: result.session.session_id,
             prompt: result.starter_prompt,
@@ -321,7 +484,10 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
           });
         }
 
-        if (mcpServerNeedsAuth(result.mcp_server, userAuthenticatedMcpServerIds)) {
+        let authentication: 'ready' | 'action_required' | 'pending' | 'failed' | 'unknown' =
+          'ready';
+        let oauthAttemptId: string | undefined;
+        if (needsAuthentication) {
           if (oauthPopup && result.mcp_server.auth?.type === 'oauth') {
             try {
               const launched = await launchMarketplaceOAuth(client, result, oauthPopup, {
@@ -333,10 +499,13 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
                 isCurrent: operation.isCurrent,
               });
               if (!launched && operation.isCurrent()) {
+                authentication = 'failed';
                 message.warning(
                   'Sign-in could not start automatically. Continue from MCP settings in the new session.'
                 );
               }
+              oauthAttemptId = launched?.attemptId;
+              if (oauthAttemptId) authentication = 'pending';
               if (!operation.isCurrent()) {
                 oauthPopup.close();
                 return;
@@ -346,23 +515,42 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
               // session rather than pretending the whole Connect failed.
               oauthPopup.close();
               if (!operation.isCurrent()) return;
+              authentication = 'failed';
               message.error(
                 cause instanceof Error
                   ? cause.message
                   : 'Sign-in could not open. Continue from MCP settings in the new session.'
               );
             }
+          } else if (result.mcp_server.auth?.type === 'oauth') {
+            // Readiness is advisory. A formerly-open endpoint can race to
+            // OAuth after the click that did not pre-open a popup. Do not call
+            // that pending: there is no window or durable attempt yet. Retain
+            // the redacted result so a new, explicit user gesture can create
+            // both safely.
+            authentication = 'action_required';
+            surpriseOAuthResultRef.current = result;
           } else {
-            // Readiness is advisory. If a formerly-open endpoint raced to
-            // OAuth after a no-popup click, the session notice is the safe
-            // recovery surface; never open a popup after user activation.
+            authentication = 'unknown';
             oauthPopup?.close();
           }
         } else {
           oauthPopup?.close();
         }
-        setSelected(null);
-        navigate(sessionPath(result.session.session_id));
+        const connectedBranch = branches.find((branch) => branch.branch_id === branchId);
+        setConnectSuccess({
+          sessionId: result.session.session_id,
+          ...(result.session.title ? { sessionTitle: result.session.title } : {}),
+          ...(connectedBranch ? { branchName: connectedBranch.name as string } : {}),
+          authentication,
+          reusedExistingServer: result.reused_existing_server,
+          ...(needsAuthentication
+            ? {
+                serverId: result.mcp_server.mcp_server_id,
+                ...(oauthAttemptId ? { oauthAttemptId } : {}),
+              }
+            : {}),
+        });
       } catch (err: unknown) {
         oauthPopup?.close();
         if (!operation.isCurrent()) return;
@@ -382,13 +570,79 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
     [
       client,
       authGeneration,
+      branches,
       currentUser,
       currentUser?.user_id,
-      navigate,
       operationGuard,
       selected,
       userAuthenticatedMcpServerIds,
     ]
+  );
+
+  const continueSurpriseOAuth = useCallback(
+    async (oauthPopup: MarketplaceOAuthPopup) => {
+      const operation = operationGuard.begin();
+      const result = surpriseOAuthResultRef.current;
+      const current = connectSuccessRef.current;
+      if (
+        !client ||
+        !result ||
+        current?.authentication !== 'action_required' ||
+        current.serverId !== result.mcp_server.mcp_server_id ||
+        current.sessionId !== result.session.session_id ||
+        !operation.isCurrent()
+      ) {
+        oauthPopup.close();
+        return;
+      }
+
+      setConnecting(true);
+      try {
+        const launched = await launchMarketplaceOAuth(client, result, oauthPopup, {
+          authority: {
+            userId: currentUser!.user_id,
+            role: currentUser!.role,
+            authGeneration,
+          },
+          isCurrent: operation.isCurrent,
+        });
+        if (!operation.isCurrent()) {
+          oauthPopup.close();
+          return;
+        }
+        if (!launched?.attemptId) {
+          setConnectSuccess((value) =>
+            value?.authentication === 'action_required'
+              ? { ...value, authentication: 'failed' }
+              : value
+          );
+          return;
+        }
+        surpriseOAuthResultRef.current = null;
+        setConnectSuccess((value) =>
+          value?.authentication === 'action_required' &&
+          value.serverId === result.mcp_server.mcp_server_id
+            ? { ...value, authentication: 'pending', oauthAttemptId: launched.attemptId }
+            : value
+        );
+      } catch (cause) {
+        oauthPopup.close();
+        if (!operation.isCurrent()) return;
+        setConnectSuccess((value) =>
+          value?.authentication === 'action_required'
+            ? { ...value, authentication: 'failed' }
+            : value
+        );
+        message.error(
+          cause instanceof Error
+            ? cause.message
+            : 'Sign-in could not open. Continue from MCP settings in the new session.'
+        );
+      } finally {
+        if (operation.isCurrent()) setConnecting(false);
+      }
+    },
+    [authGeneration, client, currentUser, operationGuard]
   );
 
   return (
@@ -409,7 +663,7 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
         <Alert
           type="warning"
           showIcon
-          message="Not connected to the Agor daemon"
+          title="Not connected to the Agor daemon"
           description="The catalog will load as soon as the connection is back."
         />
       )}
@@ -420,7 +674,7 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
         <Alert
           type="error"
           showIcon
-          message="Could not load the catalog"
+          title="Could not load the catalog"
           description={error}
           action={
             <Button size="small" onClick={retry}>
@@ -485,6 +739,9 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
         readiness={readiness.readiness}
         readinessLoading={readiness.loading}
         readinessError={readiness.error}
+        success={connectSuccess}
+        onOpenSession={(sessionId) => navigate(sessionPath(sessionId))}
+        onContinueOAuth={continueSurpriseOAuth}
         onConnect={handleConnect}
       />
     </Flex>

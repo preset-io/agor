@@ -95,35 +95,32 @@ describe('AppHeader navigation entries', () => {
     renderHeader();
 
     // The whole set, so adding or removing an entry has to be a deliberate
-    // edit here rather than something that slips in. Order matters: Marketplace
+    // edit here rather than something that slips in. Order matters: Catalog
     // is last of the two because it sits immediately left of the gear.
     const linkNames = screen
       .getAllByRole('link')
       .map((link) => link.getAttribute('aria-label') ?? link.textContent?.trim());
 
-    expect(linkNames).toEqual(['Knowledge Base', 'Marketplace']);
+    expect(linkNames).toEqual(['Knowledge Base', 'Catalog']);
   });
 
-  it('renders the Marketplace entry as a real link to /marketplace', () => {
+  it('renders the Catalog entry as a real link to /catalog', () => {
     renderHeader();
 
     // The href is what makes middle-click and cmd-click open a tab, so assert
     // the resolved basename-aware path rather than merely that a button exists.
-    expect(screen.getByRole('link', { name: 'Marketplace' })).toHaveAttribute(
-      'href',
-      '/ui/marketplace'
-    );
+    expect(screen.getByRole('link', { name: 'Catalog' })).toHaveAttribute('href', '/ui/catalog');
   });
 
-  it('navigates to /marketplace via SPA navigation on plain click', () => {
+  it('navigates to /catalog via SPA navigation on plain click', () => {
     renderHeader();
 
-    fireEvent.click(screen.getByRole('link', { name: 'Marketplace' }));
+    fireEvent.click(screen.getByRole('link', { name: 'Catalog' }));
 
-    expect(mockNavigate).toHaveBeenCalledExactlyOnceWith('/marketplace');
+    expect(mockNavigate).toHaveBeenCalledExactlyOnceWith('/catalog');
   });
 
-  it('promotes Marketplace to the header rather than the gear dropdown', async () => {
+  it('promotes Catalog to the header rather than the gear dropdown', async () => {
     renderHeader();
 
     // Option A from the spec: a marketplace is a surface people revisit, so
@@ -132,17 +129,17 @@ describe('AppHeader navigation entries', () => {
     await screen.findByText('Settings');
 
     // The header entry is an icon button carrying its name on aria-label, so a
-    // rendered "Marketplace" text node could only be a dropdown menu item.
-    expect(screen.queryByText('Marketplace')).not.toBeInTheDocument();
-    expect(screen.getByRole('link', { name: 'Marketplace' })).toBeInTheDocument();
+    // rendered "Catalog" text node could only be a dropdown menu item.
+    expect(screen.queryByText('Catalog')).not.toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Catalog' })).toBeInTheDocument();
   });
 
-  it('shows the Marketplace entry to a viewer', () => {
+  it('shows the Catalog entry to a viewer', () => {
     // Browsing the catalog is authenticated-only on the daemon, so no role is
     // filtered out of the entry. Connect is gated separately, in the surface.
     renderHeader({ user: { user_id: 'u1', email: 'v@agor.live', role: 'viewer' } as never });
 
-    expect(screen.getByRole('link', { name: 'Marketplace' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Catalog' })).toBeInTheDocument();
   });
 
   it('bounds the always-visible board switcher slot', () => {

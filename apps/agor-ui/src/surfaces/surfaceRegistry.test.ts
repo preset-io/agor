@@ -3,10 +3,13 @@ import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { BRAND, surfaceTitle } from '../branding/brand';
 import {
+  CATALOG_ROUTE_PATHS,
+  catalogPathForMarketplaceCompat,
   getDemoRoutePaths,
   getRouteSurface,
   isKnowledgeRoutePath,
   isWorkspaceRoutePath,
+  MARKETPLACE_COMPAT_ROUTE_PATHS,
   routeStartsWorkspaceRuntime,
   routeUsesDeviceRouter,
   routeUsesSharedUserSettings,
@@ -14,6 +17,15 @@ import {
 } from './surfaceRegistry';
 
 describe('surface route registry', () => {
+  it('registers only the four canonical Catalog routes', () => {
+    expect(CATALOG_ROUTE_PATHS).toEqual([
+      '/catalog',
+      '/catalog/servers',
+      '/catalog/sessions',
+      '/catalog/credentials',
+    ]);
+  });
+
   it.each([
     '/kb',
     '/kb/',
@@ -44,23 +56,41 @@ describe('surface route registry', () => {
     }
   );
 
+  it.each(['/catalog', '/catalog/servers', '/catalog/sessions', '/catalog/credentials'])(
+    'classifies canonical %s as Catalog',
+    (path) => {
+      expect(getRouteSurface(path).id).toBe('catalog');
+      expect(isWorkspaceRoutePath(path)).toBe(false);
+      expect(routeStartsWorkspaceRuntime(path)).toBe(false);
+      expect(routeUsesDeviceRouter(path)).toBe(false);
+      expect(routeUsesSharedUserSettings(path)).toBe(true);
+    }
+  );
+
   it.each([
     '/marketplace',
     '/marketplace/catalog',
     '/marketplace/servers',
     '/marketplace/sessions',
     '/marketplace/credentials',
-  ])('classifies %s as Marketplace', (path) => {
-    expect(getRouteSurface(path).id).toBe('marketplace');
-    expect(isWorkspaceRoutePath(path)).toBe(false);
-    // Browsing the catalog must not spin up the board/session store.
+  ])('keeps legacy Marketplace route %s as a lightweight Catalog alias', (path) => {
+    expect(MARKETPLACE_COMPAT_ROUTE_PATHS).toContain(path);
+    expect(getRouteSurface(path).id).toBe('catalog');
     expect(routeStartsWorkspaceRuntime(path)).toBe(false);
-    expect(routeUsesDeviceRouter(path)).toBe(false);
-    expect(routeUsesSharedUserSettings(path)).toBe(true);
   });
 
-  it.each(['/marketplaces', '/marketplace/extra'])(
-    'does not treat similarly prefixed path %s as Marketplace',
+  it.each([
+    ['/marketplace', '/catalog'],
+    ['/marketplace/catalog', '/catalog'],
+    ['/marketplace/servers', '/catalog/servers'],
+    ['/marketplace/sessions', '/catalog/sessions'],
+    ['/marketplace/credentials', '/catalog/credentials'],
+  ])('redirects legacy %s to %s', (legacy, canonical) => {
+    expect(catalogPathForMarketplaceCompat(legacy)).toBe(canonical);
+  });
+
+  it.each(['/catalogs', '/catalog/extra', '/marketplaces', '/marketplace/extra'])(
+    'does not treat unsupported Catalog-like path %s as Catalog',
     (path) => {
       expect(getRouteSurface(path).id).toBe('workspace');
     }
@@ -102,6 +132,12 @@ describe('surface route registry', () => {
 });
 
 describe('surface branding declarations', () => {
+  it('names and brands the product surface as Catalog', () => {
+    const catalog = SURFACE_REGISTRY.find((surface) => surface.id === 'catalog');
+    expect(catalog?.label).toBe('Catalog');
+    expect(catalog?.branding).toBe(surfaceTitle('Catalog'));
+  });
+
   it('every surface declares branding (favicon + title) behavior', () => {
     // Forces a new surface to opt into the shared branding contract instead of
     // silently inheriting the static index.html favicon/title.

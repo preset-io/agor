@@ -9,6 +9,7 @@
 import type {
   MCPCatalogAuthType,
   MCPCatalogCategory,
+  MCPCatalogCredentialRequirement,
   MCPCatalogEntry,
   MCPCatalogSort,
 } from '@agor/core/types';
@@ -115,6 +116,38 @@ export const DEFAULT_SORT: MCPCatalogSort = 'popularity';
 export const entryTitle = catalogDisplayName;
 
 /**
+ * Technical authentication copy follows the live endpoint verdict whenever
+ * Connect has one. Catalog metadata is explicitly labelled as an unchecked
+ * fallback so stale curation cannot contradict the primary status panel.
+ */
+export function catalogAuthenticationDetail(
+  catalogAuthType: MCPCatalogAuthType,
+  liveRequirement?: MCPCatalogCredentialRequirement | null
+): string {
+  switch (liveRequirement) {
+    case 'required':
+      return 'Bearer credential · Live endpoint check';
+    case 'oauth':
+      return 'OAuth · Live endpoint check';
+    case 'not_accepted':
+      return 'No credential accepted · Live endpoint check';
+    case 'unsupported':
+      return 'Unsupported credential scheme · Live endpoint check';
+    default:
+      switch (catalogAuthType) {
+        case 'none':
+          return 'Catalog metadata: no account stated · Live endpoint not checked yet';
+        case 'oauth':
+          return 'Catalog metadata: OAuth · Live endpoint not checked yet';
+        case 'credentials':
+          return 'Catalog metadata: bearer credential · Live endpoint not checked yet';
+        default:
+          return 'Unknown · Checked live when you connect';
+      }
+  }
+}
+
+/**
  * What a user would find out by pressing Connect, said before they press it.
  *
  * `unknown` is its own case rather than being folded into either side:
@@ -191,10 +224,11 @@ const CONNECT_STATUSES = {
     detail:
       'Agor has not checked this endpoint, so it may ask for an account. Connecting checks it — and stops there if it does.',
   },
-  ready: {
-    readiness: 'ready',
-    label: 'No account needed',
-    detail: 'This server needs no account, so connecting it takes one step.',
+  declaredOpen: {
+    readiness: 'unchecked',
+    label: 'Catalog says no account',
+    detail:
+      'Catalog metadata says this server needs no account. Agor checks the live endpoint before connecting.',
   },
 } as const satisfies Record<string, ConnectStatus>;
 
@@ -231,7 +265,7 @@ export function connectStatus(entry: MCPCatalogEntry): ConnectStatus {
   if (entry.auth_type === 'credentials') return CONNECT_STATUSES.needsKey;
   if (entry.auth_type === 'oauth') return CONNECT_STATUSES.signIn;
   if (entry.auth_type !== 'none') return CONNECT_STATUSES.unchecked;
-  return CONNECT_STATUSES.ready;
+  return CONNECT_STATUSES.declaredOpen;
 }
 
 /** Whether the "connectable now" filter would keep this entry. */

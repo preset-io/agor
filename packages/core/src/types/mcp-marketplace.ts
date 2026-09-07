@@ -30,6 +30,8 @@ export interface MCPMarketplaceServer {
   catalog_entry_name?: string;
   enabled: boolean;
   tools: MCPMarketplaceTool[];
+  /** Last successful daemon capability discovery; absent means never discovered. */
+  capabilities_discovered_at?: string;
   /** Counted from the same visible attachment rows returned in `attachments`. */
   session_count: number;
   created_at: string;
@@ -61,6 +63,18 @@ export const MCP_MARKETPLACE_CREDENTIAL_STATUSES = [
 ] as const;
 export type MCPMarketplaceCredentialStatus = (typeof MCP_MARKETPLACE_CREDENTIAL_STATUSES)[number];
 
+/** Additive credential detail; `status` retains the original wire contract. */
+export const MCP_MARKETPLACE_CREDENTIAL_DETAIL_STATUSES = [
+  'active',
+  'refreshable',
+  'refreshing',
+  'reauthentication_required',
+  'not_connected',
+  'configured',
+] as const;
+export type MCPMarketplaceCredentialDetailStatus =
+  (typeof MCP_MARKETPLACE_CREDENTIAL_DETAIL_STATUSES)[number];
+
 /**
  * Metadata-only credential projection. It can say whether a credential exists
  * and when its durable row changed; it can never identify or reproduce it.
@@ -70,7 +84,10 @@ export interface MCPMarketplaceCredential {
   server_name: string;
   server_display_name?: string;
   method: MCPMarketplaceCredentialMethod;
+  /** Backward-compatible coarse status from the original Marketplace DTO. */
   status: MCPMarketplaceCredentialStatus;
+  /** Optional, additive status used by newer Catalog clients. */
+  detail_status?: MCPMarketplaceCredentialDetailStatus;
   expires_at?: string;
   created_at?: string;
   updated_at?: string;

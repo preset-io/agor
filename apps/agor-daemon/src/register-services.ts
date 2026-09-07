@@ -244,6 +244,7 @@ import {
 import {
   isCurrentMCPOAuthGrantAuthorized,
   isMCPOAuthGrantAuthorizedForServer,
+  resolveMCPMarketplaceOAuthGrantAuthority,
 } from './services/mcp-oauth-grant-authority.js';
 import {
   fingerprintMCPOAuthGrantConfiguration,
@@ -290,12 +291,13 @@ import { appendSystemMessage } from './utils/append-system-message.js';
 import { requireMinimumRole } from './utils/authorization.js';
 import { emitServiceEvent } from './utils/emit-service-event.js';
 import { renderOAuthResultPage } from './utils/html.js';
-import { emitMarketplaceInvalidation } from './utils/marketplace-invalidation.js';
+import { emitMarketplaceChanged } from './utils/marketplace-invalidation.js';
 import { createAuthorityGuardedMCPFetch } from './utils/mcp-authority-fetch.js';
 import {
   bindMCPDiscoveryOAuthGrant,
   bindMCPDiscoveryResolvedConfiguration,
   captureMCPDiscoveryAuthority,
+  type DiscoveredMCPCapabilities,
   type MCPDiscoveryAuthoritySnapshot,
   persistDiscoveredMCPCapabilities,
 } from './utils/mcp-discovered-capabilities.js';
@@ -3522,26 +3524,43 @@ export async function registerMCPServices(
     }),
     { methods: ['get'] }
   );
-  app.use('/mcp-marketplace', new MCPMarketplaceService(new MCPMarketplaceRepository(db)), {
-    methods: ['find'],
-  });
+  const marketplaceServerRepository = new MCPServerRepository(db);
+  const marketplaceTokenRepository = new UserMCPOAuthTokenRepository(db);
+  app.use(
+    '/mcp-marketplace',
+    new MCPMarketplaceService(
+      new MCPMarketplaceRepository(db, async (userId, serverIds) => {
+        // Marketplace receives only this closed boolean map. The daemon reuses the same
+        // mode/binding authority as execution and refresh; no token, client,
+        // issuer, resource, or binding material crosses the service boundary.
+        return resolveMCPMarketplaceOAuthGrantAuthority({
+          db,
+          userId,
+          serverIds,
+          serverRepository: marketplaceServerRepository,
+          tokenRepository: marketplaceTokenRepository,
+        });
+      })
+    ),
+    { methods: ['find'] }
+  );
   app.use(
     '/mcp-marketplace/remove-unattached',
     new MCPMarketplaceRemoveServerService(db, (userIds, params) =>
-      emitMarketplaceInvalidation(app, params.tenant?.tenant_id, userIds)
+      emitMarketplaceChanged(app, params.tenant?.tenant_id, userIds)
     ),
     { methods: ['create'] }
   );
   app.use(
     '/mcp-marketplace/tool-permission',
     new MCPMarketplaceToolPermissionService(db, (userIds, params) =>
-      emitMarketplaceInvalidation(app, params.tenant?.tenant_id, userIds)
+      emitMarketplaceChanged(app, params.tenant?.tenant_id, userIds)
     ),
     { methods: ['create'] }
   );
   // Action replies are private acknowledgements. These services mutate through
   // repository transactions, so they explicitly emit the user-targeted empty
-  // Marketplace invalidation rather than pretending the ordinary MCP CRUD
+  // Marketplace freshness hint rather than pretending the ordinary MCP CRUD
   // service emitted a lifecycle event.
   for (const path of [
     'mcp-marketplace/remove-unattached',
@@ -5427,14 +5446,25 @@ export async function registerMCPServices(
         console.log('[MCP Discovery] Starting test for:', serverConfig.name || 'inline-config');
 
         assertBrowserReservation?.();
-        let authHeaders = await runWithinOAuthBrowserReservation(browserReservation, () =>
-          resolveMCPAuthHeaders(serverConfig.auth, serverConfig.url, {
-            allowLocalhostHttp: !postgresOAuthDeployment,
-            cacheNamespace: [tenantId ?? '<standalone>', serverId ?? '<unsaved>', userId].join(':'),
-            disableProcessTokenCache: !!durableOAuthFlows,
-            assertCurrent: assertRequestAuthority,
-          })
-        );
+        // In constrained HA, only a caller-scoped durable grant may make an
+        // OAuth server usable for this capability probe. Do not let persisted
+        // client configuration begin a fresh token exchange here; the durable
+        // grant lookup below remains authoritative.
+        let authHeaders =
+          serverConfig.auth?.type === 'oauth' && isConstrainedHa(ctx.deployment)
+            ? undefined
+            : await runWithinOAuthBrowserReservation(browserReservation, () =>
+                resolveMCPAuthHeaders(serverConfig.auth, serverConfig.url, {
+                  allowLocalhostHttp: !postgresOAuthDeployment,
+                  cacheNamespace: [
+                    tenantId ?? '<standalone>',
+                    serverId ?? '<unsaved>',
+                    userId,
+                  ].join(':'),
+                  disableProcessTokenCache: !!durableOAuthFlows,
+                  assertCurrent: assertRequestAuthority,
+                })
+              );
 
         const probeAndAcquireOAuthToken = async (mcpUrl: string): Promise<string | undefined> => {
           try {
@@ -5453,6 +5483,13 @@ export async function registerMCPServices(
             );
             const wwwAuthenticate = probeResponse.headers.get('www-authenticate');
             if (probeResponse.status !== 401) return undefined;
+            // Capability discovery itself is stateless and safe in HA when a
+            // usable credential already exists. A 401 is the exact boundary
+            // where this optional probe would become a process-affine OAuth
+            // flow (metadata discovery, possible DCR, PKCE, and callback
+            // completion), so stop here without weakening the explicit OAuth
+            // endpoint gates below.
+            if (isConstrainedHa(ctx.deployment)) return undefined;
             // Provider discovery and dynamic client registration can create
             // durable state outside Agor. Never begin either unless this
             // exact socket/caller/operation already consumed a server-issued
@@ -5760,44 +5797,49 @@ export async function registerMCPServices(
             listTimeout,
           ])) as PromptsResult;
 
+          const discoveredCapabilities: DiscoveredMCPCapabilities = {
+            tools: toolsResult.tools.map((tool) => ({
+              name: tool.name,
+              description: tool.description,
+              input_schema: tool.inputSchema,
+            })),
+            resources: resourcesResult.resources.map((resource) => ({
+              uri: resource.uri,
+              name: resource.name,
+              description: resource.description,
+              mimeType: resource.mimeType,
+            })),
+            prompts: promptsResult.prompts.map((prompt) => ({
+              name: prompt.name,
+              description: prompt.description,
+              arguments: prompt.arguments?.map((argument) => ({
+                name: argument.name,
+                description: argument.description,
+                required: argument.required,
+              })),
+            })),
+          };
+          let responseCapabilities = discoveredCapabilities;
+
           if (serverId && discoveryAuthority) {
-            await runWithinOAuthAuthority(assertCurrentRequestAuthority, () =>
-              runWithTenantDatabaseTransaction(db, tenantId, (scopedDb) =>
-                persistDiscoveredMCPCapabilities(
-                  scopedDb,
-                  tenantId,
-                  discoveryAuthority as MCPDiscoveryAuthoritySnapshot,
-                  {
-                    tools: toolsResult.tools.map((t) => ({
-                      name: t.name,
-                      description: t.description,
-                      input_schema: t.inputSchema,
-                    })),
-                    resources: resourcesResult.resources.map((r) => ({
-                      uri: r.uri,
-                      name: r.name,
-                      description: r.description,
-                      mimeType: r.mimeType,
-                    })),
-                    prompts: promptsResult.prompts.map((p) => ({
-                      name: p.name,
-                      description: p.description,
-                      arguments: p.arguments?.map((a) => ({
-                        name: a.name,
-                        description: a.description,
-                        required: a.required,
-                      })),
-                    })),
-                  },
-                  process.env.AGOR_MASTER_SECRET ?? ''
+            responseCapabilities = await runWithinOAuthAuthority(
+              assertCurrentRequestAuthority,
+              () =>
+                runWithTenantDatabaseTransaction(db, tenantId, (scopedDb) =>
+                  persistDiscoveredMCPCapabilities(
+                    scopedDb,
+                    tenantId,
+                    discoveryAuthority as MCPDiscoveryAuthoritySnapshot,
+                    discoveredCapabilities,
+                    process.env.AGOR_MASTER_SECRET ?? ''
+                  )
                 )
-              )
             );
             // Discovery writes through a short repository transaction rather
             // than the generic MCP service. Refresh every device belonging to
             // the actor and durable owner with the same empty, tenant-targeted
             // control event used by Marketplace actions.
-            emitMarketplaceInvalidation(
+            emitMarketplaceChanged(
               app,
               tenantId,
               [userId, authoritativeServer?.owner_user_id].filter(Boolean) as UserID[]
@@ -5807,22 +5849,22 @@ export async function registerMCPServices(
           return {
             success: true,
             capabilities: {
-              tools: toolsResult.tools.length,
-              resources: resourcesResult.resources.length,
-              prompts: promptsResult.prompts.length,
+              tools: responseCapabilities.tools.length,
+              resources: responseCapabilities.resources.length,
+              prompts: responseCapabilities.prompts.length,
             },
-            tools: toolsResult.tools.map((t) => ({
-              name: t.name,
-              description: t.description || '',
+            tools: responseCapabilities.tools.map((tool) => ({
+              name: tool.name,
+              description: tool.description || '',
             })),
-            resources: resourcesResult.resources.map((r) => ({
-              name: r.name,
-              uri: r.uri,
-              mimeType: r.mimeType,
+            resources: responseCapabilities.resources.map((resource) => ({
+              name: resource.name,
+              uri: resource.uri,
+              mimeType: resource.mimeType,
             })),
-            prompts: promptsResult.prompts.map((p) => ({
-              name: p.name,
-              description: p.description || '',
+            prompts: responseCapabilities.prompts.map((prompt) => ({
+              name: prompt.name,
+              description: prompt.description || '',
             })),
           };
         } finally {

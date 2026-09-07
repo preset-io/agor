@@ -16,8 +16,9 @@ import {
   LoginOutlined,
   QuestionCircleOutlined,
 } from '@ant-design/icons';
-import { Avatar, Card, Flex, Space, Tag, Tooltip, Typography, theme } from 'antd';
+import { Card, Flex, Space, Tag, Tooltip, Typography, theme } from 'antd';
 import { memo } from 'react';
+import { CatalogEntryAvatar } from './CatalogEntryAvatar';
 import { capabilityLabel, connectStatus, entryTitle } from './catalogPresentation';
 
 const { Text, Paragraph } = Typography;
@@ -58,9 +59,7 @@ const CatalogCardInner: React.FC<CatalogCardProps> = ({ entry, onOpen }) => {
     >
       <Flex vertical gap={token.marginXS} style={{ height: '100%' }}>
         <Flex gap={token.marginSM} align="flex-start">
-          <Avatar shape="square" size={40} src={entry.icon_url} style={{ flexShrink: 0 }}>
-            {title.charAt(0).toUpperCase()}
-          </Avatar>
+          <CatalogEntryAvatar iconUrl={entry.icon_url} title={title} style={{ flexShrink: 0 }} />
           <Flex vertical style={{ minWidth: 0, flex: 1 }}>
             <Text strong ellipsis>
               {title}

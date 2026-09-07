@@ -1,5 +1,5 @@
 /**
- * Marketplace surface: browse the MCP catalog and connect a server.
+ * Catalog surface: browse reviewed MCP servers and connect one.
  *
  * A standalone surface rather than a workspace route — it reads the checked-in
  * curated catalog and does not need the tenant's boards, sessions or canvas,
@@ -13,8 +13,8 @@ import type { User } from '@agor/core/types';
 import type { AgorClient } from '@agor-live/client';
 import { hasMinimumRole, ROLES } from '@agor-live/client';
 import { ArrowLeftOutlined, ShopOutlined } from '@ant-design/icons';
-import { Button, Layout, Space, Tabs, Typography, theme } from 'antd';
-import { useEffect } from 'react';
+import { Button, Grid, Layout, Space, Tabs, Typography, theme } from 'antd';
+import { useEffect, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { BrandLogo } from '../components/BrandLogo';
 import { GlobalUserMenu } from '../components/GlobalUserMenu';
@@ -61,6 +61,7 @@ export const MarketplacePage: React.FC<MarketplacePageProps> = ({
   onLogout,
 }) => {
   const { token } = theme.useToken();
+  const screens = Grid.useBreakpoint();
   const navigate = useNavigate();
   const location = useLocation();
   const requestedTab = location.pathname.split('/')[2];
@@ -68,7 +69,8 @@ export const MarketplacePage: React.FC<MarketplacePageProps> = ({
     ? requestedTab
     : 'catalog';
   useEffect(() => {
-    if (requestedTab !== activeTab) navigate(`/marketplace/${activeTab}`, { replace: true });
+    if (requestedTab === undefined || requestedTab === activeTab) return;
+    navigate(activeTab === 'catalog' ? '/catalog' : `/catalog/${activeTab}`, { replace: true });
   }, [activeTab, navigate, requestedTab]);
 
   const overview = useMarketplaceOverview({
@@ -79,6 +81,7 @@ export const MarketplacePage: React.FC<MarketplacePageProps> = ({
     userId: currentUser?.user_id,
     role: currentUser?.role,
   });
+  const [requestedServerId, setRequestedServerId] = useState<string | null>(null);
   const authorityKey =
     client &&
     connected &&
@@ -109,13 +112,10 @@ export const MarketplacePage: React.FC<MarketplacePageProps> = ({
             onClick={() => navigate('/')}
           />
           <BrandLogo level={3} style={{ marginTop: -4 }} />
-          <Text
-            strong
-            style={{ display: 'inline-flex', alignItems: 'center', gap: token.sizeUnit }}
-          >
+          <Space data-testid="catalog-header-brand" align="center" size={token.marginXS}>
             <ShopOutlined style={{ color: token.colorTextSecondary }} />
-            Marketplace
-          </Text>
+            <Text strong>Catalog</Text>
+          </Space>
         </Space>
         <GlobalUserMenu
           user={currentUser}
@@ -128,30 +128,32 @@ export const MarketplacePage: React.FC<MarketplacePageProps> = ({
         style={{
           height: `calc(100vh - ${HEADER_HEIGHT}px)`,
           overflow: 'auto',
-          padding: token.paddingLG,
+          padding: screens.md ? token.paddingLG : token.paddingSM,
         }}
       >
         <div style={{ maxWidth: 1400, margin: '0 auto' }}>
           <Title level={3} style={{ marginTop: 0, marginBottom: token.marginXXS }}>
-            Marketplace
+            Catalog
           </Title>
           <Paragraph type="secondary" style={{ marginBottom: token.margin }}>
             Attach tools to your agents — browse, review permissions, connect.
           </Paragraph>
           <Tabs
             activeKey={activeTab}
-            onChange={(key) => navigate(`/marketplace/${key}`)}
+            onChange={(key) => navigate(key === 'catalog' ? '/catalog' : `/catalog/${key}`)}
             items={[
               {
                 key: 'catalog',
                 label: 'Catalog',
                 children: (
                   <CatalogTab
+                    active={activeTab === 'catalog'}
                     client={client}
                     connected={connected}
                     connecting={connecting}
                     authGeneration={authGeneration}
                     currentUser={currentUser}
+                    refreshMarketplaceOverview={overview.refresh}
                   />
                 ),
               },
@@ -160,24 +162,45 @@ export const MarketplacePage: React.FC<MarketplacePageProps> = ({
                 label: `My Servers${overview.overview.servers.length ? ` (${overview.overview.servers.length})` : ''}`,
                 children: (
                   <MyServersTab
+                    active={activeTab === 'servers'}
                     client={client}
                     connected={connected}
                     connecting={connecting}
                     authGeneration={authGeneration}
                     currentUser={currentUser}
                     {...overview}
+                    onBrowseCatalog={() => navigate('/catalog')}
+                    requestedServerId={requestedServerId}
+                    onRequestedServerOpened={() => setRequestedServerId(null)}
                   />
                 ),
               },
               {
                 key: 'sessions',
-                label: `Sessions${overview.overview.attachments.length ? ` (${overview.overview.attachments.length})` : ''}`,
-                children: <SessionsTab client={client} authorityKey={authorityKey} {...overview} />,
+                label: `Sessions${overview.overview.attachments.length ? ` (${new Set(overview.overview.attachments.map((item) => item.session_id)).size})` : ''}`,
+                children: (
+                  <SessionsTab
+                    client={client}
+                    authorityKey={authorityKey}
+                    {...overview}
+                    onBrowseCatalog={() => navigate('/catalog')}
+                  />
+                ),
               },
               {
                 key: 'credentials',
-                label: 'Credentials',
-                children: <CredentialsTab {...overview} />,
+                label: `Credentials${overview.overview.credentials.length ? ` (${overview.overview.credentials.length})` : ''}`,
+                children: (
+                  <CredentialsTab
+                    {...overview}
+                    canManageCredentials={authorityKey !== null}
+                    onOpenServerSettings={(serverId) => {
+                      setRequestedServerId(serverId);
+                      navigate('/catalog/servers');
+                    }}
+                    onBrowseCatalog={() => navigate('/catalog')}
+                  />
+                ),
               },
             ]}
           />

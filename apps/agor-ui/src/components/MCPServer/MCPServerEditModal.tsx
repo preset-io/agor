@@ -83,6 +83,7 @@ const MCPServerEditModalForIdentity: React.FC<MCPServerEditModalProps> = ({
   focusTriggerAfterClose,
 }) => {
   const { showSuccess, showError } = useThemedMessage();
+  const [modal, modalContextHolder] = Modal.useModal();
   const [form] = Form.useForm();
   const [transport, setTransport] = useState<MCPTransport>('stdio');
   const [authType, setAuthType] = useState<'none' | 'bearer' | 'jwt' | 'oauth'>('none');
@@ -389,6 +390,32 @@ const MCPServerEditModalForIdentity: React.FC<MCPServerEditModalProps> = ({
   };
 
   const handleSave = async () => {
+    if (
+      server?.enabled &&
+      form.getFieldValue('enabled') === false &&
+      (server.auth?.type === 'oauth' || authType === 'oauth')
+    ) {
+      const confirmed = await new Promise<boolean>((resolve) => {
+        let settled = false;
+        const settle = (value: boolean) => {
+          if (settled) return;
+          settled = true;
+          resolve(value);
+        };
+        modal.confirm({
+          title: 'Disable this OAuth server?',
+          content:
+            'Disabling removes the saved OAuth connection from Agor. Re-enabling requires a new sign-in. Provider-side access may remain until you revoke it with the provider.',
+          okText: 'Disable server',
+          okButtonProps: { danger: true },
+          cancelText: 'Keep enabled',
+          onOk: () => settle(true),
+          onCancel: () => settle(false),
+          afterClose: () => settle(false),
+        });
+      });
+      if (!confirmed) return;
+    }
     const operation = operationGuard.begin();
     if (await saveFormValues(operation)) {
       if (!operation.isCurrent()) return;
@@ -464,95 +491,98 @@ const MCPServerEditModalForIdentity: React.FC<MCPServerEditModalProps> = ({
   };
 
   return (
-    <Modal
-      title="Edit MCP Server"
-      open={open}
-      onCancel={closeAndReset}
-      afterClose={afterClose}
-      focusable={focusTriggerAfterClose === undefined ? undefined : { focusTriggerAfterClose }}
-      width={600}
-      destroyOnHidden
-      footer={
-        <Space>
-          <Button onClick={closeAndReset}>Cancel</Button>
-          {/* A disabled button can't host a tooltip of its own — hence the span. */}
-          <Tooltip
-            title={
-              !mutationAllowed
-                ? mutationBlockedReason
-                : saveBlocked
-                  ? describeMissingForSave(missingRequiredFields)
-                  : undefined
-            }
-          >
-            <span>
-              <Button type="primary" disabled={saveBlocked} onClick={handleSave}>
-                Save
-              </Button>
-            </span>
-          </Tooltip>
-        </Space>
-      }
-    >
-      {!mutationAllowed && (
-        <Alert
-          type="warning"
-          showIcon
-          title="MCP server changes are unavailable"
-          description={mutationBlockedReason}
-          style={{ marginTop: 16 }}
-        />
-      )}
-      {configConflict && (
-        <Alert
-          type="warning"
-          showIcon
-          title="Newer MCP settings are available"
-          description="Reloading fetches the current server and discards your unsaved edits."
-          action={
-            <Button loading={reloadingLatest} onClick={() => void reloadLatest()}>
-              Reload latest
-            </Button>
-          }
-          style={{ marginTop: 16 }}
-        />
-      )}
-      <Form
-        form={form}
-        layout="vertical"
-        style={{ marginTop: 16 }}
-        onValuesChange={(changedValues) => {
-          if ('oauth_dcr_mode' in changedValues) setPreserveAbsentDcrMode(false);
-          if ('oauth_compatibility_mode' in changedValues) {
-            setPreserveAbsentCompatibilityMode(false);
-          }
-          if ('oauth_grant_type' in changedValues) setPreserveAbsentGrantType(false);
-          bumpFormRevision();
-        }}
+    <>
+      {modalContextHolder}
+      <Modal
+        title="Edit MCP Server"
+        open={open}
+        onCancel={closeAndReset}
+        afterClose={afterClose}
+        focusable={focusTriggerAfterClose === undefined ? undefined : { focusTriggerAfterClose }}
+        width={600}
+        destroyOnHidden
+        footer={
+          <Space>
+            <Button onClick={closeAndReset}>Cancel</Button>
+            {/* A disabled button can't host a tooltip of its own — hence the span. */}
+            <Tooltip
+              title={
+                !mutationAllowed
+                  ? mutationBlockedReason
+                  : saveBlocked
+                    ? describeMissingForSave(missingRequiredFields)
+                    : undefined
+              }
+            >
+              <span>
+                <Button type="primary" disabled={saveBlocked} onClick={handleSave}>
+                  Save
+                </Button>
+              </span>
+            </Tooltip>
+          </Space>
+        }
       >
-        <MCPServerFormFields
-          offeredTransports={offeredTransports}
-          offeredScopes={offeredScopes}
-          mode="edit"
-          transport={transport}
-          onTransportChange={setTransport}
-          authType={authType}
-          onAuthTypeChange={setAuthType}
+        {!mutationAllowed && (
+          <Alert
+            type="warning"
+            showIcon
+            title="MCP server changes are unavailable"
+            description={mutationBlockedReason}
+            style={{ marginTop: 16 }}
+          />
+        )}
+        {configConflict && (
+          <Alert
+            type="warning"
+            showIcon
+            title="Newer MCP settings are available"
+            description="Reloading fetches the current server and discards your unsaved edits."
+            action={
+              <Button loading={reloadingLatest} onClick={() => void reloadLatest()}>
+                Reload latest
+              </Button>
+            }
+            style={{ marginTop: 16 }}
+          />
+        )}
+        <Form
           form={form}
-          client={client}
-          authorityKey={authorityKey}
-          serverId={server?.mcp_server_id}
-          onTestConnection={handleTestConnection}
-          testing={testing}
-          testResult={testResult}
-          onPrepareOAuthStart={prepareOAuthStart}
-          mutationAllowed={mutationAllowed}
-          mutationBlockedReason={mutationBlockedReason}
-          formRevision={formRevision}
-          managedOAuthCompatibilityMode={managedOAuthCompatibilityMode}
-        />
-      </Form>
-    </Modal>
+          layout="vertical"
+          style={{ marginTop: 16 }}
+          onValuesChange={(changedValues) => {
+            if ('oauth_dcr_mode' in changedValues) setPreserveAbsentDcrMode(false);
+            if ('oauth_compatibility_mode' in changedValues) {
+              setPreserveAbsentCompatibilityMode(false);
+            }
+            if ('oauth_grant_type' in changedValues) setPreserveAbsentGrantType(false);
+            bumpFormRevision();
+          }}
+        >
+          <MCPServerFormFields
+            offeredTransports={offeredTransports}
+            offeredScopes={offeredScopes}
+            mode="edit"
+            transport={transport}
+            onTransportChange={setTransport}
+            authType={authType}
+            onAuthTypeChange={setAuthType}
+            form={form}
+            client={client}
+            authorityKey={authorityKey}
+            serverId={server?.mcp_server_id}
+            onTestConnection={handleTestConnection}
+            testing={testing}
+            testResult={testResult}
+            onPrepareOAuthStart={prepareOAuthStart}
+            mutationAllowed={mutationAllowed}
+            mutationBlockedReason={mutationBlockedReason}
+            formRevision={formRevision}
+            managedOAuthCompatibilityMode={managedOAuthCompatibilityMode}
+          />
+        </Form>
+      </Modal>
+    </>
   );
 };
 

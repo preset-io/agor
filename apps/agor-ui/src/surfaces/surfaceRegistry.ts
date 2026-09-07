@@ -1,12 +1,7 @@
 import { matchPath } from 'react-router-dom';
 import { surfaceTitle } from '../branding/brand';
 
-export type RouteSurfaceId =
-  | 'workspace'
-  | 'knowledge'
-  | 'marketplace'
-  | 'artifact-fullscreen'
-  | 'demo';
+export type RouteSurfaceId = 'workspace' | 'knowledge' | 'catalog' | 'artifact-fullscreen' | 'demo';
 
 export interface RouteSurfaceDefinition {
   id: RouteSurfaceId;
@@ -70,7 +65,15 @@ export const KNOWLEDGE_SURFACE = defineSurface({
   branding: surfaceTitle('Knowledge'),
 });
 
-export const MARKETPLACE_ROUTE_PATHS = [
+export const CATALOG_ROUTE_PATHS = [
+  '/catalog',
+  '/catalog/servers',
+  '/catalog/sessions',
+  '/catalog/credentials',
+] as const;
+
+/** Pre-Catalog bookmarks remain lightweight and redirect to the canonical routes. */
+export const MARKETPLACE_COMPAT_ROUTE_PATHS = [
   '/marketplace',
   '/marketplace/catalog',
   '/marketplace/servers',
@@ -78,17 +81,23 @@ export const MARKETPLACE_ROUTE_PATHS = [
   '/marketplace/credentials',
 ] as const;
 
-export const MARKETPLACE_SURFACE = defineSurface({
-  id: 'marketplace',
-  label: 'Marketplace',
-  routePaths: MARKETPLACE_ROUTE_PATHS,
+export function catalogPathForMarketplaceCompat(pathname: string): string | null {
+  if (!(MARKETPLACE_COMPAT_ROUTE_PATHS as readonly string[]).includes(pathname)) return null;
+  const suffix = pathname.slice('/marketplace'.length);
+  return !suffix || suffix === '/catalog' ? '/catalog' : `/catalog${suffix}`;
+}
+
+export const CATALOG_SURFACE = defineSurface({
+  id: 'catalog',
+  label: 'Catalog',
+  routePaths: [...CATALOG_ROUTE_PATHS, ...MARKETPLACE_COMPAT_ROUTE_PATHS],
   // Browsing the catalog reads the checked-in curated file the daemon serves
   // whole, not the tenant's boards and sessions, so the workspace store stays
   // cold until connect navigates into a session.
   startsWorkspaceRuntime: false,
   usesDeviceRouter: false,
   usesSharedUserSettings: true,
-  branding: surfaceTitle('Marketplace'),
+  branding: surfaceTitle('Catalog'),
 });
 
 export const ARTIFACT_FULLSCREEN_ROUTE_PATHS = ['/a/:artifactShortId/fullscreen'] as const;
@@ -143,7 +152,7 @@ export const WORKSPACE_SURFACE = defineSurface({
 
 export const SURFACE_REGISTRY = [
   KNOWLEDGE_SURFACE,
-  MARKETPLACE_SURFACE,
+  CATALOG_SURFACE,
   ARTIFACT_FULLSCREEN_SURFACE,
   DEMO_SURFACE,
   WORKSPACE_SURFACE,

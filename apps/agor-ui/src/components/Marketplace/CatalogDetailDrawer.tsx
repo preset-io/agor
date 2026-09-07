@@ -1,11 +1,9 @@
 /**
  * Detail view for one catalog entry, and the only place a connect starts.
  *
- * `REQ-SEC-1`: the "What this can access" disclosure is rendered expanded, is
- * not collapsible, and sits between the user and the connect control — which
- * stays disabled until it is acknowledged. Reading it is the last thing that
- * happens before a server the agent will obey gets attached to a session, so it
- * is a gate rather than a panel.
+ * The access disclosure is the first expanded details section and the connect
+ * control stays disabled until it is acknowledged. The disclosure controls
+ * remain keyboard-operable without weakening the server-side text match.
  */
 
 import type {
@@ -14,13 +12,19 @@ import type {
   MCPCatalogCredentialRequirement,
   MCPCatalogEntry,
   MCPCatalogReadiness,
+  SessionID,
 } from '@agor/core/types';
-import { ThunderboltOutlined } from '@ant-design/icons';
+import {
+  ArrowRightOutlined,
+  RightOutlined,
+  SafetyCertificateOutlined,
+  ThunderboltOutlined,
+} from '@ant-design/icons';
 import {
   Alert,
-  Avatar,
   Button,
   Checkbox,
+  Descriptions,
   Drawer,
   Flex,
   Form,
@@ -31,14 +35,22 @@ import {
   Typography,
   theme,
 } from 'antd';
-import { useEffect, useMemo, useState } from 'react';
+import { type ReactNode, useEffect, useId, useMemo, useRef, useState } from 'react';
+import { VISUALLY_HIDDEN_STYLE } from '../../utils/accessibility';
 import { AVAILABLE_AGENTS } from '../AgentSelectionGrid/availableAgents';
 import {
   canAddMcpServer,
   explainAddRestriction,
   type MCPServerCapabilityContext,
 } from '../MCPServer/memberPolicy';
-import { capabilityLabel, connectStatus, entryTitle } from './catalogPresentation';
+import { CatalogEntryAvatar } from './CatalogEntryAvatar';
+import {
+  capabilityLabel,
+  catalogAuthenticationDetail,
+  connectStatus,
+  entryTitle,
+} from './catalogPresentation';
+import { MARKETPLACE_CATALOG_DRAWER_WIDTH } from './marketplaceLayout';
 import { type MarketplaceOAuthPopup, openMarketplaceOAuthPopup } from './marketplaceOAuthPopup';
 
 const { Title, Paragraph, Text, Link } = Typography;
@@ -52,6 +64,53 @@ const AGENT_OPTIONS = AVAILABLE_AGENTS.map((agent) => ({
 
 const FALLBACK_DISCLOSURE =
   'This server has published no access statement. Anything it exposes becomes available to the agent in the session you connect it to.';
+
+const CatalogDetailSection: React.FC<{
+  label: ReactNode;
+  defaultOpen?: boolean;
+  children: ReactNode;
+}> = ({ label, defaultOpen = false, children }) => {
+  const { token } = theme.useToken();
+  const contentId = useId();
+  const [open, setOpen] = useState(defaultOpen);
+
+  return (
+    <div
+      style={{
+        borderWidth: token.lineWidth,
+        borderStyle: 'solid',
+        borderColor: token.colorBorder,
+        borderRadius: token.borderRadiusLG,
+        overflow: 'hidden',
+      }}
+    >
+      <Button
+        type="text"
+        block
+        aria-expanded={open}
+        aria-controls={contentId}
+        onClick={() => setOpen((current) => !current)}
+        style={{ height: 'auto', justifyContent: 'flex-start', padding: token.paddingSM }}
+      >
+        <RightOutlined rotate={open ? 90 : 0} />
+        {label}
+      </Button>
+      {open && (
+        <div
+          id={contentId}
+          style={{
+            borderTopWidth: token.lineWidth,
+            borderTopStyle: 'solid',
+            borderTopColor: token.colorBorderSecondary,
+            padding: token.padding,
+          }}
+        >
+          {children}
+        </div>
+      )}
+    </div>
+  );
+};
 
 export interface CatalogDetailDrawerProps {
   /** Authenticated identity that owns consent, selections, and pasted credentials. */
@@ -91,6 +150,16 @@ export interface CatalogDetailDrawerProps {
   readiness?: MCPCatalogReadiness | null;
   readinessLoading?: boolean;
   readinessError?: string | null;
+  success?: {
+    sessionId: SessionID;
+    sessionTitle?: string;
+    branchName?: string;
+    authentication: 'ready' | 'action_required' | 'pending' | 'failed' | 'unknown';
+    reusedExistingServer: boolean;
+  } | null;
+  onOpenSession?: (sessionId: SessionID) => void;
+  /** Continue surprise OAuth from a fresh direct user gesture. */
+  onContinueOAuth?: (popup: MarketplaceOAuthPopup) => void;
   /**
    * `acknowledgedDisclosure` is the exact text this drawer put on screen, so
    * what the connect request claims was shown cannot drift from what was.
@@ -128,9 +197,13 @@ const CatalogDetailDrawerForIdentity: React.FC<CatalogDetailDrawerProps> = ({
   readiness,
   readinessLoading = false,
   readinessError = null,
+  success = null,
+  onOpenSession,
+  onContinueOAuth,
   onConnect,
 }) => {
   const { token } = theme.useToken();
+  const successActionRef = useRef<HTMLButtonElement | null>(null);
   const [branchId, setBranchId] = useState<string | undefined>();
   const [agenticTool, setAgenticTool] = useState<AgenticToolName>(DEFAULT_AGENT);
 
@@ -154,15 +227,25 @@ const CatalogDetailDrawerForIdentity: React.FC<CatalogDetailDrawerProps> = ({
     setBranchId(preferred);
   }, [branchOptions, defaultBranchId, branchId]);
 
+  useEffect(() => {
+    if (!open || !success) return;
+    // The Connect button is removed when the success panel replaces the form.
+    // Defer until that commit and rc-drawer's own focus bookkeeping settle, so
+    // focus lands on the truthful next step instead of falling back to body.
+    const timer = window.setTimeout(() => successActionRef.current?.focus(), 0);
+    return () => window.clearTimeout(timer);
+  }, [open, success]);
+
   const title = entry ? entryTitle(entry) : '';
   const connect = entry ? connectStatus(entry) : undefined;
   const readinessPresentation = (() => {
     switch (readiness?.state) {
       case 'no_auth':
         return {
-          readiness: 'ready' as const,
-          label: 'No account needed',
-          detail: 'Connect in one step and try the starter prompt.',
+          readiness: 'unchecked' as const,
+          label: 'No account expected',
+          detail:
+            'Catalog and saved connection data indicate no account is needed. Agor checks the endpoint when you connect.',
         };
       case 'bearer_required':
         return {
@@ -219,7 +302,7 @@ const CatalogDetailDrawerForIdentity: React.FC<CatalogDetailDrawerProps> = ({
           readiness: 'blocked',
           label: 'Credential scheme not supported',
           detail:
-            'This endpoint requires credentials, but Marketplace has no reviewed prescription for how to send them.',
+            'This endpoint requires credentials, but Catalog has no reviewed prescription for how to send them.',
         } as const;
       default:
         return advisoryStatus;
@@ -267,18 +350,18 @@ const CatalogDetailDrawerForIdentity: React.FC<CatalogDetailDrawerProps> = ({
   // is open, so a key pasted and then abandoned came back, visible, on
   // reopening the same entry.
   //
-  // A successful connect closes the drawer, so it clears here too rather than
-  // needing its own path. A failed one deliberately does not: the drawer stays
-  // open, and a user who mistyped one character should not have to find the key
-  // again to correct it — unless the endpoint has just said it wants no key at
-  // all, which ends the need for that particular secret as surely as closing
-  // the drawer does. Hiding the field while still holding what was typed in it
-  // would be the retention bug again, one state further along.
+  // A successful connect now keeps the drawer open to show the next step, so it
+  // must clear the key explicitly. A failed one deliberately does not: a user
+  // who mistyped one character should not have to find the key again to correct
+  // it — unless the endpoint has just said it wants no key at all, which ends
+  // the need for that particular secret as surely as closing the drawer does.
+  // Hiding the field while still holding what was typed in it would be the
+  // retention bug again, one state further along.
   useEffect(() => {
     setPastedKey((held) =>
-      open && needsApiKey && held !== null && held.entryId === entryId ? held : null
+      open && !success && needsApiKey && held !== null && held.entryId === entryId ? held : null
     );
-  }, [open, entryId, needsApiKey]);
+  }, [open, entryId, needsApiKey, success]);
   // biome-ignore lint/correctness/useExhaustiveDependencies: both interaction boundaries clear a prior popup refusal
   useEffect(() => setPopupBlocked(false), [open, entryId]);
 
@@ -295,27 +378,56 @@ const CatalogDetailDrawerForIdentity: React.FC<CatalogDetailDrawerProps> = ({
       !connecting &&
       (!needsApiKey || bearerToken)
   );
+  const connectDisabledReason = connecting
+    ? 'Connection in progress.'
+    : !acknowledged
+      ? 'Review the access disclosure and acknowledge it to continue.'
+      : branchesLoading
+        ? 'Loading branches…'
+        : !branchId
+          ? 'Choose an available branch to continue.'
+          : needsApiKey && !bearerToken
+            ? `Enter your ${title} bearer access token to continue.`
+            : undefined;
 
   return (
     <Drawer
       open={open}
       onClose={onClose}
       afterOpenChange={onAfterOpenChange}
-      size={480}
+      size={MARKETPLACE_CATALOG_DRAWER_WIDTH}
       destroyOnHidden
       title={
         entry && (
-          <Space align="center">
-            <Avatar shape="square" src={entry.icon_url}>
-              {title.charAt(0).toUpperCase()}
-            </Avatar>
-            <Text strong>{title}</Text>
+          <Space align="center" size={token.marginSM}>
+            <CatalogEntryAvatar iconUrl={entry.icon_url} title={title} />
+            <Flex vertical style={{ minWidth: 0 }}>
+              <Text strong ellipsis>
+                {title}
+              </Text>
+              <Text type="secondary" style={{ fontSize: token.fontSizeSM }} ellipsis>
+                {entry.name}
+              </Text>
+            </Flex>
           </Space>
         )
       }
     >
       {entry && (
         <Flex vertical gap={token.margin}>
+          <span role="status" aria-live="polite" aria-atomic="true" style={VISUALLY_HIDDEN_STYLE}>
+            {success?.authentication === 'ready'
+              ? 'Connection status: Connected and ready.'
+              : success?.authentication === 'action_required'
+                ? 'Connection status: Continue to the provider to sign in.'
+                : success?.authentication === 'failed'
+                  ? 'Connection status: Sign-in not completed.'
+                  : success?.authentication === 'unknown'
+                    ? 'Connection status: Sign-in needs verification.'
+                    : success?.authentication === 'pending'
+                      ? 'Connection status: Sign-in pending.'
+                      : ''}
+          </span>
           <div>
             <Title level={4} style={{ marginTop: 0, marginBottom: token.marginXXS }}>
               {entry.benefit}
@@ -325,9 +437,6 @@ const CatalogDetailDrawerForIdentity: React.FC<CatalogDetailDrawerProps> = ({
                 {entry.description}
               </Paragraph>
             )}
-            <Text type="secondary" copyable style={{ fontSize: token.fontSizeSM }}>
-              {entry.name}
-            </Text>
           </div>
 
           {entry.website_url && (
@@ -353,31 +462,138 @@ const CatalogDetailDrawerForIdentity: React.FC<CatalogDetailDrawerProps> = ({
             </div>
           )}
 
-          {runtimeStatus && runtimeStatus.readiness !== 'blocked' && (
+          {success ? (
+            <Flex vertical gap={token.marginSM}>
+              <Alert
+                type={
+                  success.authentication === 'ready'
+                    ? 'success'
+                    : success.authentication === 'action_required'
+                      ? 'info'
+                      : success.authentication === 'failed'
+                        ? 'error'
+                        : success.authentication === 'unknown'
+                          ? 'warning'
+                          : 'info'
+                }
+                showIcon
+                title={
+                  success.authentication === 'ready'
+                    ? 'Connected and ready'
+                    : success.authentication === 'action_required'
+                      ? 'Sign in to continue'
+                      : success.authentication === 'failed'
+                        ? 'Sign-in not completed'
+                        : success.authentication === 'unknown'
+                          ? 'Sign-in needs verification'
+                          : 'Sign-in pending'
+                }
+                description={
+                  success.authentication === 'ready'
+                    ? `${title} is attached to ${success.sessionTitle || 'your new session'}${success.branchName ? ` on ${success.branchName}` : ''}.`
+                    : success.authentication === 'action_required'
+                      ? `${title} requires OAuth. Continue to open the provider sign-in; no sign-in is pending yet.`
+                      : success.authentication === 'failed'
+                        ? `The session is available, but ${title} is not connected. Open it to retry through the MCP badge.`
+                        : success.authentication === 'unknown'
+                          ? `Agor could not verify the final ${title} sign-in result. Open the session to check or retry through the MCP badge.`
+                          : `Complete ${title} sign-in in the provider window. Agor will show success only after the saved grant is confirmed.`
+                }
+                action={
+                  success.authentication === 'action_required' ? (
+                    <Flex gap={token.marginXS} wrap>
+                      <Button
+                        ref={successActionRef}
+                        type="primary"
+                        loading={connecting}
+                        disabled={!onContinueOAuth}
+                        onClick={() => {
+                          if (!onContinueOAuth) return;
+                          const opened = openMarketplaceOAuthPopup();
+                          if (!opened) {
+                            setPopupBlocked(true);
+                            return;
+                          }
+                          setPopupBlocked(false);
+                          onContinueOAuth(opened);
+                        }}
+                      >
+                        Continue to provider
+                      </Button>
+                      <Button
+                        type="link"
+                        aria-label="Open session"
+                        icon={<ArrowRightOutlined />}
+                        onClick={() => onOpenSession?.(success.sessionId)}
+                      >
+                        Open session
+                      </Button>
+                    </Flex>
+                  ) : (
+                    <Button
+                      ref={successActionRef}
+                      type="primary"
+                      aria-label="Open session"
+                      icon={<ArrowRightOutlined />}
+                      onClick={() => onOpenSession?.(success.sessionId)}
+                    >
+                      Open session
+                    </Button>
+                  )
+                }
+              />
+              {success.reusedExistingServer && (
+                <Alert
+                  type="info"
+                  showIcon
+                  title="Your existing connection was reused"
+                  description="No duplicate server was installed; the new session uses the connection you already had."
+                />
+              )}
+            </Flex>
+          ) : runtimeStatus && runtimeStatus.readiness !== 'blocked' ? (
             <Alert
               type={runtimeStatus.readiness === 'ready' ? 'success' : 'info'}
               showIcon
-              message={runtimeStatus.label}
+              title={runtimeStatus.label}
               description={runtimeStatus.detail}
             />
+          ) : null}
+          {popupBlocked && (
+            <Alert
+              type="error"
+              showIcon
+              title="Allow popups to connect this account"
+              description={
+                success?.authentication === 'action_required'
+                  ? 'Sign-in has not started. Allow popups, then continue to the provider again.'
+                  : 'Nothing was connected because the sign-in window could not be opened.'
+              }
+            />
           )}
-          {readinessError && (
+          {!success && readinessError && (
             <Alert
               type="warning"
               showIcon
-              message="Saved connection status is unavailable"
+              title="Saved connection status is unavailable"
               description="Connect will recheck safely before it uses or creates anything."
             />
           )}
 
-          <Alert
-            type="warning"
-            showIcon
-            message="What this can access"
-            description={
-              <Flex vertical gap={token.marginXS}>
+          <Flex vertical gap={token.marginXS}>
+            <CatalogDetailSection
+              key={`${entryId}:access`}
+              defaultOpen
+              label={
+                <Space size={token.marginXS}>
+                  <SafetyCertificateOutlined />
+                  <Text strong>What this can access</Text>
+                </Space>
+              }
+            >
+              <Flex vertical gap={token.marginSM}>
                 <Text>{disclosure}</Text>
-                {!blockedReason && (
+                {!blockedReason && !success && (
                   <Checkbox
                     checked={acknowledged}
                     onChange={(event) =>
@@ -392,11 +608,42 @@ const CatalogDetailDrawerForIdentity: React.FC<CatalogDetailDrawerProps> = ({
                   </Checkbox>
                 )}
               </Flex>
-            }
-          />
+            </CatalogDetailSection>
+            <CatalogDetailSection
+              key={`${entryId}:technical`}
+              label={<Text strong>Technical details</Text>}
+            >
+              <Descriptions
+                size="small"
+                column={1}
+                items={[
+                  {
+                    key: 'identity',
+                    label: 'Catalog ID',
+                    children: <Text copyable>{entry.name}</Text>,
+                  },
+                  {
+                    key: 'transport',
+                    label: 'Transport',
+                    children: entry.transport ?? 'Not stated',
+                  },
+                  {
+                    key: 'authentication',
+                    label: 'Authentication',
+                    children: catalogAuthenticationDetail(entry.auth_type, credentialRequirement),
+                  },
+                  {
+                    key: 'tools',
+                    label: 'Tools',
+                    children: 'Discovered from the server after connection',
+                  },
+                ]}
+              />
+            </CatalogDetailSection>
+          </Flex>
 
-          {blockedReason ? (
-            <Alert type="info" showIcon message={blockedReason} />
+          {success ? null : blockedReason ? (
+            <Alert type="info" showIcon title={blockedReason} />
           ) : (
             <Flex vertical gap={token.marginXS}>
               <Form layout="vertical" size="middle" component="div">
@@ -469,17 +716,9 @@ const CatalogDetailDrawerForIdentity: React.FC<CatalogDetailDrawerProps> = ({
                 )}
               </Form>
 
-              {branchesError && <Alert type="error" showIcon message={branchesError} />}
-              {connectError && <Alert type="error" showIcon message={connectError} />}
-              {popupBlocked && (
-                <Alert
-                  type="error"
-                  showIcon
-                  message="Allow popups to connect this account"
-                  description="Nothing was connected because the sign-in window could not be opened."
-                />
-              )}
-              {policyRefusal && <Alert type="info" showIcon message={policyRefusal} />}
+              {branchesError && <Alert type="error" showIcon title={branchesError} />}
+              {connectError && <Alert type="error" showIcon title={connectError} />}
+              {policyRefusal && <Alert type="info" showIcon title={policyRefusal} />}
 
               <Button
                 type="primary"
@@ -490,14 +729,16 @@ const CatalogDetailDrawerForIdentity: React.FC<CatalogDetailDrawerProps> = ({
                 onClick={() => {
                   if (!branchId) return;
                   let oauthPopup: MarketplaceOAuthPopup | undefined;
+                  const hasLiveCredentialRequirement = credentialRequirement != null;
                   const needsOAuthWindow =
-                    readinessLoading ||
-                    !readiness ||
-                    Boolean(readinessError) ||
-                    entry.auth_type === 'oauth' ||
                     credentialRequirement === 'oauth' ||
-                    readiness?.state === 'oauth_required' ||
-                    readiness?.state === 'reusable_oauth';
+                    (!hasLiveCredentialRequirement &&
+                      (readinessLoading ||
+                        !readiness ||
+                        Boolean(readinessError) ||
+                        entry.auth_type === 'oauth' ||
+                        readiness?.state === 'oauth_required' ||
+                        readiness?.state === 'reusable_oauth'));
                   if (needsOAuthWindow) {
                     const opened = openMarketplaceOAuthPopup();
                     if (!opened) {
@@ -519,22 +760,30 @@ const CatalogDetailDrawerForIdentity: React.FC<CatalogDetailDrawerProps> = ({
                   });
                 }}
               >
-                {readiness?.state === 'installed_ready' || readiness?.state === 'reusable_oauth'
-                  ? 'Use in a new session'
-                  : runtimeStatus?.readiness === 'sign-in'
-                    ? `Connect with ${title}`
-                    : runtimeStatus?.readiness === 'api-key'
-                      ? 'Verify key & connect'
+                {runtimeStatus?.readiness === 'sign-in'
+                  ? `Connect with ${title}`
+                  : runtimeStatus?.readiness === 'api-key'
+                    ? 'Verify key & connect'
+                    : credentialRequirement == null &&
+                        (readiness?.state === 'installed_ready' ||
+                          readiness?.state === 'reusable_oauth')
+                      ? 'Use in a new session'
                       : runtimeStatus?.readiness === 'unchecked'
                         ? 'Check & connect'
                         : 'Connect & try it'}
               </Button>
-              <Text type="secondary" style={{ fontSize: token.fontSizeSM }}>
-                {runtimeStatus?.readiness === 'sign-in'
-                  ? `Opens ${title}'s sign-in popup and a recoverable new session; its starter prompt appears after sign-in succeeds.`
-                  : runtimeStatus?.readiness === 'unchecked'
-                    ? `Checks ${title}'s live authentication requirement before opening a session.`
-                    : `Opens a new session on that branch with ${title} attached and a starter prompt ready to send.`}
+              <Text
+                type="secondary"
+                role="status"
+                aria-live="polite"
+                style={{ fontSize: token.fontSizeSM }}
+              >
+                {connectDisabledReason ??
+                  (runtimeStatus?.readiness === 'sign-in'
+                    ? `Opens ${title}'s sign-in popup and a recoverable new session; its starter prompt appears after sign-in succeeds.`
+                    : runtimeStatus?.readiness === 'unchecked'
+                      ? `Checks ${title}'s live authentication requirement before opening a session.`
+                      : `Opens a new session on that branch with ${title} attached and a starter prompt ready to send.`)}
               </Text>
             </Flex>
           )}

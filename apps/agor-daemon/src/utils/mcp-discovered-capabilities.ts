@@ -34,6 +34,25 @@ export interface DiscoveredMCPCapabilities {
   prompts: MCPPrompt[];
 }
 
+/**
+ * Tool names are protocol identities. Keep the provider's first occurrence
+ * (including its metadata) and its first-seen order so persistence and the
+ * response expose one deterministic switch per identity.
+ */
+function canonicalizeDiscoveredMCPCapabilities(
+  capabilities: DiscoveredMCPCapabilities
+): DiscoveredMCPCapabilities {
+  const names = new Set<string>();
+  return {
+    ...capabilities,
+    tools: capabilities.tools.filter((tool) => {
+      if (names.has(tool.name)) return false;
+      names.add(tool.name);
+      return true;
+    }),
+  };
+}
+
 interface ResolvedDiscoveryConfiguration {
   url: string;
   transport: MCPServer['transport'];
@@ -233,11 +252,12 @@ export async function persistDiscoveredMCPCapabilities(
   snapshot: MCPDiscoveryAuthoritySnapshot,
   capabilities: DiscoveredMCPCapabilities,
   masterSecret: string
-): Promise<void> {
+): Promise<DiscoveredMCPCapabilities> {
   // Provider discovery output is untrusted input. Bound and close it before
   // any durable work so an oversized or extension-bearing response cannot be
   // persisted and later bypass API redaction/export assumptions.
   assertValidDiscoveredMCPCapabilities(capabilities);
+  const canonicalCapabilities = canonicalizeDiscoveredMCPCapabilities(capabilities);
   assertTenantDiscoveryScope(db, true);
   if (tenantId) await assertTenantWritable(db, tenantId);
 
@@ -322,9 +342,10 @@ export async function persistDiscoveredMCPCapabilities(
   if (
     !(await repository.setDiscoveredCapabilitiesInCurrentTransaction(
       snapshot.serverId,
-      capabilities
+      canonicalCapabilities
     ))
   ) {
     throw new NotFound('MCP server not found');
   }
+  return canonicalCapabilities;
 }

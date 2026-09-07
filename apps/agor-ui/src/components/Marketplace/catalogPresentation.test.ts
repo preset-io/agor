@@ -3,12 +3,14 @@ import { describe, expect, it } from 'vitest';
 import {
   CONNECTABLE_AUTH_TYPES,
   capabilityLabel,
+  catalogAuthenticationDetail,
   connectBlockedReason,
   connectStatus,
   DEFAULT_SORT,
   entryTitle,
   isConnectable,
 } from './catalogPresentation';
+import { MARKETPLACE_OAUTH_POLL_DELAYS_MS } from './marketplaceLayout';
 
 function entry(overrides: Partial<MCPCatalogEntry> = {}): MCPCatalogEntry {
   return {
@@ -25,6 +27,15 @@ function entry(overrides: Partial<MCPCatalogEntry> = {}): MCPCatalogEntry {
     ...overrides,
   };
 }
+
+describe('OAuth pending convergence budget', () => {
+  it('keeps durable polling bounded while allowing a realistic provider callback window', () => {
+    const total = MARKETPLACE_OAUTH_POLL_DELAYS_MS.reduce((sum, delay) => sum + delay, 0);
+    expect(total).toBeGreaterThanOrEqual(60_000);
+    expect(total).toBeLessThanOrEqual(90_000);
+    expect(Math.max(...MARKETPLACE_OAUTH_POLL_DELAYS_MS)).toBeLessThanOrEqual(30_000);
+  });
+});
 
 describe('entryTitle', () => {
   it('prefers a real title when one exists', () => {
@@ -100,8 +111,11 @@ describe('connectStatus', () => {
     expect(connectBlockedReason(entry({ auth_type: 'unknown' }))).toBeUndefined();
   });
 
-  it('says outright when no account is needed', () => {
-    expect(connectStatus(entry()).readiness).toBe('ready');
+  it('qualifies catalog-declared no-auth until the live endpoint is checked', () => {
+    expect(connectStatus(entry())).toMatchObject({
+      readiness: 'unchecked',
+      label: 'Catalog says no account',
+    });
   });
 
   it('carries a card-sized label for every blocked reason', () => {
@@ -138,6 +152,29 @@ describe('connectStatus', () => {
     expect(oauth.readiness).not.toBe(connectStatus(entry()).readiness);
     expect(oauth.detail).toMatch(/your own account/i);
     expect(oauth.detail).toMatch(/popup/i);
+  });
+});
+
+describe('catalogAuthenticationDetail', () => {
+  it.each([
+    ['none', 'required', 'Bearer credential · Live endpoint check'],
+    ['credentials', 'not_accepted', 'No credential accepted · Live endpoint check'],
+    ['none', 'oauth', 'OAuth · Live endpoint check'],
+    ['oauth', 'unsupported', 'Unsupported credential scheme · Live endpoint check'],
+  ] as const)(
+    'lets live %s/%s evidence override stale catalog metadata',
+    (catalogAuthType, liveRequirement, expected) => {
+      expect(catalogAuthenticationDetail(catalogAuthType, liveRequirement)).toBe(expected);
+    }
+  );
+
+  it.each([
+    ['none', 'Catalog metadata: no account stated · Live endpoint not checked yet'],
+    ['oauth', 'Catalog metadata: OAuth · Live endpoint not checked yet'],
+    ['credentials', 'Catalog metadata: bearer credential · Live endpoint not checked yet'],
+    ['unknown', 'Unknown · Checked live when you connect'],
+  ] as const)('labels unchecked %s catalog metadata as fallback', (catalogAuthType, expected) => {
+    expect(catalogAuthenticationDetail(catalogAuthType)).toBe(expected);
   });
 });
 

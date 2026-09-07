@@ -395,7 +395,7 @@ AGOR_CONFIG_PATH=/etc/agor/config.yaml agor daemon start
 
 Agor ships a browsable catalog of MCP servers. It is a reviewed file in the repository, parsed lazily
 on the daemon's first catalog read and then cached for the life of the process, so browsing the
-marketplace requires no external catalog service and there is nothing to configure.
+Catalog requires no external catalog service and there is nothing to configure.
 
 What the catalog offers is therefore a function of the deployed binary: rolling
 back to an older release withdraws entries added since, until you roll forward
@@ -409,7 +409,7 @@ user's connect generation so a slower, older reconnect cannot overwrite a newer 
 token against the catalog URL and writes the server/session only after the probe accepts it. A stale
 catalog auth label therefore does not silently install a connection that the live endpoint will reject.
 
-Marketplace OAuth uses a bounded compatibility profile for current, unmodified catalog installs. It
+Catalog OAuth uses a bounded compatibility profile for current, unmodified catalog installs. It
 accepts only reviewed discovery differences while retaining same-origin bounds on those fallbacks,
 resource and issuer binding, the exact MCP URL in authorization and token requests, PKCE S256, and
 callback issuer checks. This profile is derived by the daemon; it cannot be selected or persisted as a
@@ -430,12 +430,17 @@ configuration. An expired matching grant may be refreshed before reuse. Reconnec
 entry reuses only that user's catalog connection and rotates the token after the new session and
 attachment have succeeded.
 
-Every successful Connect creates a new idle session, attaches the server, and opens that session. For an
-open server, a bearer-token server, or OAuth with a reusable live grant, the starter prompt is loaded in
-the composer. A new OAuth connection that still needs sign-in lands in the same session without the
-starter prompt. The dismissible notice above the composer and the warning MCP badge identify the
-unfinished connection; open the badge and activate the server pill to sign in. Agor does not auto-open
-OAuth after navigation because browsers require a short-lived user activation for a reliable popup.
+Every successful Connect creates a new idle session and attaches the server, but keeps the catalog
+drawer open so you can review the result and choose **Open session**. For an open server, a bearer-token
+server, or OAuth with a reusable live grant, the starter prompt is staged for that session. A new OAuth
+connection pre-opens the provider window while browser user activation is available. The drawer stays
+at **Sign-in pending** until Agor confirms the durable grant; navigating the popup is not treated as
+success. If sign-in does not finish, the session's dismissible notice and warning MCP badge remain the
+recovery path.
+
+**What this can access** is expanded by default and must be acknowledged before Connect is enabled.
+Agor records the exact disclosure text shown; collapsing it is not consent. Technical details are
+collapsed separately because they are not part of that consent record.
 
 If you previously set an `mcp_catalog:` block in `~/.agor/config.yaml`, leave it
 or delete it — either works. The daemon still accepts the section so an upgrade
