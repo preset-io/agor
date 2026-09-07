@@ -3969,13 +3969,22 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
     runConnectionProbe,
   ]);
 
-  // Probe an existing Slack channel via the `gateway-channels/test` service. The
-  // backend resolves the stored decrypted tokens from `gatewayChannelId`, so the
-  // edit form never sends credentials.
+  // Probe an existing Slack channel via the `gateway-channels/test` service.
+  // Tokens typed into the edit form are forwarded as overrides so the probe
+  // tests what the user just entered; fields left blank fall back to the stored
+  // decrypted credentials the backend resolves from `gatewayChannelId`.
   const handleSlackEditTest = useCallback(async () => {
     if (!editingChannel) return;
-    await runConnectionProbe('slack', {}, editingChannel.id);
-  }, [editingChannel, runConnectionProbe]);
+    const values = editForm.getFieldsValue(true);
+    const config: Record<string, unknown> = {};
+    if (values.bot_token && values.bot_token !== GATEWAY_REDACTED_SENTINEL) {
+      config.bot_token = values.bot_token;
+    }
+    if (values.app_token && values.app_token !== GATEWAY_REDACTED_SENTINEL) {
+      config.app_token = values.app_token;
+    }
+    await runConnectionProbe('slack', config, editingChannel.id);
+  }, [editingChannel, editForm, runConnectionProbe]);
 
   const extractFormData = (
     values: Record<string, unknown>,

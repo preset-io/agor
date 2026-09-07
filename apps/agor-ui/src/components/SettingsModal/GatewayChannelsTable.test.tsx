@@ -642,7 +642,7 @@ describe('GatewayChannelsTable Slack edit mode', () => {
     expect(writeText.mock.calls[0][0]).toContain('"channels:history"');
   });
 
-  it('tests an existing channel via gatewayChannelId (never form tokens)', async () => {
+  it('tests an existing channel via gatewayChannelId when no tokens are typed', async () => {
     const result = {
       ok: true,
       team: { id: 'T123', name: 'Acme' },
@@ -660,6 +660,26 @@ describe('GatewayChannelsTable Slack edit mode', () => {
     expect(testCreate.mock.calls[0][0]).toEqual({ gatewayChannelId: 'channel-1' });
     expect(await screen.findByText('Connection succeeded')).toBeInTheDocument();
     expect(screen.getByText('Acme')).toBeInTheDocument();
+  });
+
+  it('probes the tokens typed into the edit form instead of the stored ones', async () => {
+    const { client, testCreate } = makeClient();
+    renderEditTable(client, makeSlackChannel());
+    expandPanel('Credentials');
+
+    fireEvent.change(screen.getByPlaceholderText('••••••••'), {
+      target: { value: 'xoxb-fresh' },
+    });
+    fireEvent.change(screen.getByPlaceholderText('xapp-...'), {
+      target: { value: 'xapp-fresh' },
+    });
+    clickButton(/Test connection/);
+
+    await waitFor(() => expect(testCreate).toHaveBeenCalledTimes(1));
+    expect(testCreate.mock.calls[0][0]).toEqual({
+      gatewayChannelId: 'channel-1',
+      config: { bot_token: 'xoxb-fresh', app_token: 'xapp-fresh' },
+    });
   });
 
   it('derives the Message Sources scope/event list (no stale message.* events)', async () => {
