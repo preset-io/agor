@@ -27,7 +27,11 @@ import {
   type BoardComment,
   type BoardExportBlob,
   type BoardID,
+  type BoardLayoutApplyResult,
+  type BoardLayoutBatch,
   type BoardObject,
+  type BoardZoneLayoutDefaultsApplyResult,
+  type BoardZoneLayoutDefaultsExpected,
   boardCommentZoneParentObjectKey,
   type QueryParams,
   type TeammateWelcomeNoteRequest,
@@ -419,6 +423,25 @@ export class BoardsService extends DrizzleService<Board, Partial<Board>, BoardPa
     _params?: BoardParams
   ): Promise<Board> {
     return this.boardRepo.batchUpsertBoardObjects(boardId, objects);
+  }
+
+  /** Commit a planned whole-board layout across both persistence surfaces. */
+  async applyBoardLayout(
+    boardId: string,
+    batch: BoardLayoutBatch,
+    _params?: BoardParams
+  ): Promise<BoardLayoutApplyResult> {
+    return this.boardRepo.applyBoardLayout(boardId, batch);
+  }
+
+  /** Update board-level zone defaults and intentional followers in one row lock/write. */
+  async setZoneLayoutDefaults(
+    boardId: string,
+    defaults: NonNullable<Board['zone_layout_defaults']>,
+    options: { applyToExisting?: boolean; expected?: BoardZoneLayoutDefaultsExpected },
+    _params?: BoardParams
+  ): Promise<BoardZoneLayoutDefaultsApplyResult> {
+    return this.boardRepo.setZoneLayoutDefaults(boardId, defaults, options);
   }
 
   /**

@@ -1235,6 +1235,173 @@ describe('branch MCP input schemas', () => {
   });
 });
 
+describe('agor_branches_set_zone placement', () => {
+  const baseServiceParams = {
+    authenticated: true,
+    provider: 'mcp',
+    user: { user_id: 'user-1', role: 'member' },
+  };
+  const BRANCH = { width: 500, height: 200 };
+
+  function makeApp(options: {
+    zone: { width: number; height: number };
+    occupants: Array<Record<string, unknown>>;
+    existingObject?: Record<string, unknown> | null;
+  }) {
+    const created: Array<Record<string, unknown>> = [];
+    const patched: Array<{ objectId: string; data: Record<string, unknown> }> = [];
+    const app = {
+      get: () => ({}),
+      service(name: string) {
+        if (name === 'branches')
+          return {
+            get: vi.fn(async () => ({
+              branch_id: 'branch-1',
+              board_id: 'board-1',
+              name: 'Branch 1',
+            })),
+          };
+        if (name === 'boards')
+          return {
+            get: vi.fn(async () => ({
+              board_id: 'board-1',
+              objects: { 'zone-1': { type: 'zone', x: 40, y: 40, ...options.zone } },
+            })),
+          };
+        if (name === 'board-objects')
+          return {
+            find: vi.fn(async () => ({ data: options.occupants })),
+            findByBranchId: vi.fn(async () => options.existingObject ?? null),
+            create: vi.fn(async (data: Record<string, unknown>) => {
+              created.push(data);
+              return { object_id: 'obj-new', ...data };
+            }),
+            patch: vi.fn(async (objectId: string, data: Record<string, unknown>) => {
+              patched.push({ objectId, data });
+              return { object_id: objectId, ...data };
+            }),
+          };
+        throw new Error(`Unexpected service call: ${name}`);
+      },
+    };
+    return { app, created, patched };
+  }
+
+  function occupant(overrides: Record<string, unknown>) {
+    return {
+      object_id: 'obj-card-1',
+      board_id: 'board-1',
+      card_id: 'card-1',
+      entity_type: 'card' as const,
+      zone_id: 'zone-1',
+      position: { x: 0, y: 0 },
+      ...overrides,
+    };
+  }
+
+  function overlaps(
+    a: { x: number; y: number; width: number; height: number },
+    b: { x: number; y: number; width: number; height: number }
+  ) {
+    return (
+      a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height
+    );
+  }
+
+  it('does not land the branch on a rectangle another entity already occupies', async () => {
+    // Cards sized 400x150 at the top-left; the branch is 500x200 and must not
+    // be dropped on them the way random-jitter placement did.
+    const occupants = [
+      occupant({ object_id: 'obj-card-1', position: { x: 0, y: 0 } }),
+      occupant({ object_id: 'obj-card-2', card_id: 'card-2', position: { x: 420, y: 0 } }),
+    ];
+    const { app, created } = makeApp({
+      zone: { width: 1400, height: 1200 },
+      occupants,
+      existingObject: null,
+    });
+    const setZone = registerAndCaptureHandler('agor_branches_set_zone', {
+      app,
+      userId: 'user-1',
+      baseServiceParams,
+    });
+
+    await setZone({ branchId: 'branch-1', zoneId: 'zone-1' });
+
+    expect(created).toHaveLength(1);
+    const placed = { ...(created[0].position as { x: number; y: number }), ...BRANCH };
+    for (const existing of occupants) {
+      const rect = { ...(existing.position as { x: number; y: number }), width: 400, height: 150 };
+      expect(overlaps(placed, rect)).toBe(false);
+    }
+  });
+
+  it('places deterministically, not by random jitter', async () => {
+    const positions = new Set<string>();
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      const { app, created } = makeApp({
+        zone: { width: 1400, height: 1200 },
+        occupants: [occupant({ position: { x: 0, y: 0 } })],
+        existingObject: null,
+      });
+      const setZone = registerAndCaptureHandler('agor_branches_set_zone', {
+        app,
+        userId: 'user-1',
+        baseServiceParams,
+      });
+      await setZone({ branchId: 'branch-1', zoneId: 'zone-1' });
+      positions.add(JSON.stringify(created[0].position));
+    }
+    expect(positions.size).toBe(1);
+  });
+
+  it('re-pinning to the same zone does not treat the branch as its own obstacle', async () => {
+    const existingObject = {
+      object_id: 'obj-branch-1',
+      branch_id: 'branch-1',
+      entity_type: 'branch' as const,
+      zone_id: 'zone-1',
+      position: { x: 24, y: 24 },
+    };
+    const { app, patched } = makeApp({
+      zone: { width: 1400, height: 1200 },
+      occupants: [existingObject],
+      existingObject,
+    });
+    const setZone = registerAndCaptureHandler('agor_branches_set_zone', {
+      app,
+      userId: 'user-1',
+      baseServiceParams,
+    });
+
+    await setZone({ branchId: 'branch-1', zoneId: 'zone-1' });
+
+    // The only occupant is the branch itself, so the first slot must stay free.
+    expect(patched[0].data.position).toEqual({ x: 24, y: 24 });
+  });
+
+  it('parks below the occupants rather than overlapping when the zone is full', async () => {
+    const occupants = [occupant({ position: { x: 0, y: 0 } })];
+    const { app, created } = makeApp({
+      // Too small to fit a 500x200 branch anywhere free.
+      zone: { width: 520, height: 200 },
+      occupants,
+      existingObject: null,
+    });
+    const setZone = registerAndCaptureHandler('agor_branches_set_zone', {
+      app,
+      userId: 'user-1',
+      baseServiceParams,
+    });
+
+    await setZone({ branchId: 'branch-1', zoneId: 'zone-1' });
+
+    const placed = { ...(created[0].position as { x: number; y: number }), ...BRANCH };
+    expect(overlaps(placed, { x: 0, y: 0, width: 400, height: 150 })).toBe(false);
+    expect(placed.y).toBeGreaterThanOrEqual(150);
+  });
+});
+
 describe('agor_branches_set_zone', () => {
   it('accepts zoneId null and clears the existing board object zone pin', async () => {
     const baseServiceParams = {
@@ -1392,6 +1559,8 @@ describe('agor_branches_set_zone', () => {
         if (name === 'boards') return { get: boardsGet };
         if (name === 'board-objects') {
           return {
+            // Placement reads the zone's current occupants so it can avoid them.
+            find: vi.fn(async () => ({ data: [] })),
             findByBranchId,
             patch: boardObjectsPatch,
           };
@@ -1464,6 +1633,8 @@ describe('agor_branches_set_zone', () => {
         if (name === 'boards') return { get: boardsGet };
         if (name === 'board-objects') {
           return {
+            // Placement reads the zone's current occupants so it can avoid them.
+            find: vi.fn(async () => ({ data: [] })),
             findByBranchId,
             patch: boardObjectsPatch,
           };

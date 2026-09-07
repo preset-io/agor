@@ -151,3 +151,73 @@ export function computeZoneRelativePosition(
     y: paddingY + Math.random() * jitterRangeY,
   };
 }
+
+export interface ZoneOccupantRectangle {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+function overlapsAnyOccupant(
+  candidate: ZoneOccupantRectangle,
+  occupants: readonly ZoneOccupantRectangle[]
+): boolean {
+  return occupants.some(
+    (occupant) =>
+      candidate.x < occupant.x + occupant.width &&
+      occupant.x < candidate.x + candidate.width &&
+      candidate.y < occupant.y + occupant.height &&
+      occupant.y < candidate.y + candidate.height
+  );
+}
+
+/**
+ * Find a zone-relative position for a new entity that does not land on the
+ * zone's current occupants.
+ *
+ * {@link computeZoneRelativePosition} places by random jitter, which is fine
+ * for an empty zone and wrong for a populated one: dropping a 500x200 worktree
+ * into a zone of cards puts it on top of them, and the caller has no way to ask
+ * for anything better. This scans the zone row-major on an item-sized grid and
+ * returns the first free cell.
+ *
+ * When nothing inside the zone is free the entity is parked directly below the
+ * lowest occupant. That can exceed the zone's current height, which is both
+ * visible and fixable (resize the zone, or arrange it with autoResizeHeight) —
+ * unlike a silent overlap, which reads as data loss.
+ */
+export function findFreeZoneSlot(
+  zone: Pick<ZoneBoardObject, 'width' | 'height'>,
+  occupants: readonly ZoneOccupantRectangle[],
+  options?: {
+    entityWidth?: number;
+    entityHeight?: number;
+    padding?: number;
+    gap?: number;
+    titleInset?: number;
+  }
+): BoardPosition {
+  const entityWidth = options?.entityWidth ?? BRANCH_CARD_WIDTH;
+  const entityHeight = options?.entityHeight ?? BRANCH_CARD_HEIGHT;
+  const padding = Math.max(0, options?.padding ?? 24);
+  const gap = Math.max(0, options?.gap ?? 24);
+  const top = padding + Math.max(0, options?.titleInset ?? 0);
+
+  if (occupants.length === 0) return { x: padding, y: top };
+
+  const stepX = entityWidth + gap;
+  const stepY = entityHeight + gap;
+  const maxX = Math.max(padding, zone.width - padding - entityWidth);
+  const maxY = Math.max(top, zone.height - padding - entityHeight);
+
+  for (let y = top; y <= maxY; y += stepY) {
+    for (let x = padding; x <= maxX; x += stepX) {
+      const candidate = { x, y, width: entityWidth, height: entityHeight };
+      if (!overlapsAnyOccupant(candidate, occupants)) return { x, y };
+    }
+  }
+
+  const lowestOccupiedEdge = Math.max(...occupants.map((occupant) => occupant.y + occupant.height));
+  return { x: padding, y: lowestOccupiedEdge + gap };
+}

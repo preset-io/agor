@@ -98,6 +98,11 @@ describeIntegration('MCP Tools - Session Tools', () => {
     expect(toolNames).toContain('agor_boards_get');
     expect(toolNames).toContain('agor_boards_list');
     expect(toolNames).toContain('agor_boards_update');
+    expect(toolNames).toContain('agor_boards_auto_arrange');
+    expect(toolNames).toContain('agor_boards_auto_arrange_zone');
+    expect(toolNames).toContain('agor_boards_set_zone_layout');
+    expect(toolNames).toContain('agor_boards_set_zone_defaults');
+    expect(toolNames).toContain('agor_boards_set_compact');
     expect(toolNames).toContain('agor_tasks_list');
     expect(toolNames).toContain('agor_tasks_get');
     expect(toolNames).toContain('agor_users_list');

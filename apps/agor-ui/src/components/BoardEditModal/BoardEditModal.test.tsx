@@ -2,6 +2,7 @@ import type { AgorClient, Board, BoardCapabilityPolicies } from '@agor-live/clie
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { Form, Input } from 'antd';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { __setAuthConfigForTests } from '../../hooks/useAuthConfig';
 import { BoardEditModal } from './BoardEditModal';
 
 const showError = vi.hoisted(() => vi.fn());
@@ -15,9 +16,11 @@ vi.mock('../JSONEditor', () => ({
 vi.mock('../forms/BoardFormFields', () => ({
   BoardFormFields: ({
     capabilityPolicyEditor,
+    zoneDefaultsEditor,
     canEditGeneral,
   }: {
     capabilityPolicyEditor?: React.ReactNode;
+    zoneDefaultsEditor?: React.ReactNode;
     canEditGeneral?: boolean;
   }) => {
     // The edit modal passes groups straight to the capability-policy editor
@@ -41,11 +44,24 @@ vi.mock('../forms/BoardFormFields', () => ({
             data-group-names={editorGroups.map((group) => group.name).join(',')}
           />
         )}
+        {zoneDefaultsEditor && (
+          <div data-testid="board-zone-defaults-editor">{zoneDefaultsEditor}</div>
+        )}
       </>
     );
   },
-  extractBoardFormValues: (form: { getFieldValue: (name: string) => unknown }) => ({
+  extractBoardFormValues: (
+    form: { getFieldValue: (name: string) => unknown },
+    options?: { includeLegacyPermissions?: boolean }
+  ) => ({
     name: form.getFieldValue('name'),
+    ...(options?.includeLegacyPermissions === false
+      ? {}
+      : {
+          access_mode: 'shared',
+          default_others_can: 'session',
+          default_others_fs_access: 'read',
+        }),
   }),
   isCustomCSS: () => false,
 }));
@@ -83,6 +99,7 @@ const policy = {
 
 function makeClient(metadataError: { code?: number; message?: string } = { code: 404 }) {
   const get = vi.fn().mockResolvedValue(freshBoard);
+  const boardPatch = vi.fn().mockResolvedValue({ changed: true, changed_zone_ids: [] });
   const permissionsFind = vi
     .fn()
     .mockImplementation(() =>
@@ -92,10 +109,11 @@ function makeClient(metadataError: { code?: number; message?: string } = { code:
     );
   return {
     get,
+    boardPatch,
     permissionsFind,
     client: {
       service: (name: string) => {
-        if (name === 'boards') return { get };
+        if (name === 'boards') return { get, patch: boardPatch };
         if (name === 'boards/:id/permissions') {
           return {
             find: permissionsFind,
@@ -125,6 +143,33 @@ function makeClient(metadataError: { code?: number; message?: string } = { code:
 describe('BoardEditModal', () => {
   beforeEach(() => {
     showError.mockReset();
+  });
+
+  it('does not attach retired permission fields to a settings write when RBAC is disabled', async () => {
+    __setAuthConfigForTests({ requireAuth: true }, { branchRbac: false });
+    const { client } = makeClient();
+    const onUpdate = vi.fn().mockResolvedValue(undefined);
+
+    render(
+      <BoardEditModal
+        board={listedBoard}
+        client={client}
+        open
+        onClose={vi.fn()}
+        onUpdate={onUpdate}
+      />
+    );
+
+    fireEvent.change(await screen.findByLabelText('Name'), {
+      target: { value: 'Fictional planning board' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() =>
+      expect(onUpdate).toHaveBeenCalledWith(listedBoard.board_id, {
+        name: 'Fictional planning board',
+      })
+    );
   });
 
   it('passes canEditGeneral=false through to BoardFormFields when the caller lacks board.edit', async () => {
@@ -171,6 +216,8 @@ describe('BoardEditModal', () => {
       'data-value',
       'false'
     );
+    expect(screen.getByRole('spinbutton', { name: 'Spacing' })).toBeDisabled();
+    expect(screen.getByRole('checkbox', { name: 'Apply to existing zones' })).toBeDisabled();
   });
 
   it('loads the latest board and normalized permission package before saving', async () => {
@@ -197,6 +244,76 @@ describe('BoardEditModal', () => {
       expect(onUpdate).toHaveBeenCalledWith(listedBoard.board_id, { name: 'Renamed' })
     );
     expect(onClose).toHaveBeenCalledOnce();
+  });
+
+  it('saves zone defaults atomically and applies them only by explicit intent', async () => {
+    const current = {
+      ...freshBoard,
+      zone_layout_defaults: { mode: 'manual', preset: 'grid', gap: 24 },
+      objects: {
+        review: {
+          type: 'zone',
+          x: 0,
+          y: 0,
+          width: 620,
+          height: 400,
+          label: 'Fictional review',
+          layout: { mode: 'manual', preset: 'grid', gap: 40 },
+        },
+      },
+    } as Board;
+    const { client, get, boardPatch } = makeClient();
+    get.mockResolvedValue(current);
+    render(
+      <BoardEditModal
+        board={listedBoard}
+        client={client}
+        open
+        onClose={vi.fn()}
+        onUpdate={vi.fn().mockResolvedValue(undefined)}
+      />
+    );
+
+    const spacing = await screen.findByRole('spinbutton', { name: 'Spacing' });
+    fireEvent.change(spacing, { target: { value: '8' } });
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Apply to existing zones' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => expect(boardPatch).toHaveBeenCalledOnce());
+    expect(boardPatch).toHaveBeenCalledWith(
+      listedBoard.board_id,
+      expect.objectContaining({
+        _action: 'setZoneLayoutDefaults',
+        defaults: expect.objectContaining({ gap: 8 }),
+        applyToExisting: true,
+        expected: expect.objectContaining({
+          zones: {
+            review: expect.objectContaining({ binding: 'override' }),
+          },
+        }),
+      })
+    );
+  });
+
+  it('does not send a defaults action for an unchanged save', async () => {
+    const { client, boardPatch } = makeClient();
+    const onClose = vi.fn();
+    const onUpdate = vi.fn().mockResolvedValue(undefined);
+    render(
+      <BoardEditModal
+        board={listedBoard}
+        client={client}
+        open
+        onClose={onClose}
+        onUpdate={onUpdate}
+      />
+    );
+
+    await screen.findByDisplayValue('Fresh name');
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(onClose).toHaveBeenCalledOnce());
+    expect(onUpdate).not.toHaveBeenCalled();
+    expect(boardPatch).not.toHaveBeenCalled();
   });
 
   it('keeps normalized group principals selectable', async () => {
@@ -289,6 +406,7 @@ describe('BoardEditModal', () => {
       />
     );
     await screen.findByDisplayValue('Fresh name');
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Awaited name' } });
     fireEvent.click(await screen.findByRole('button', { name: 'Save' }));
     await waitFor(() => expect(onUpdate).toHaveBeenCalledOnce());
     expect(onClose).not.toHaveBeenCalled();
@@ -300,18 +418,20 @@ describe('BoardEditModal', () => {
   it('stays open when the board mutation reports failure', async () => {
     const { client } = makeClient({ code: 404 });
     const onClose = vi.fn();
+    const onUpdate = vi.fn().mockResolvedValue(false);
     render(
       <BoardEditModal
         board={listedBoard}
         client={client}
         open
         onClose={onClose}
-        onUpdate={vi.fn().mockResolvedValue(false)}
+        onUpdate={onUpdate}
       />
     );
     await screen.findByDisplayValue('Fresh name');
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Rejected name' } });
     fireEvent.click(await screen.findByRole('button', { name: 'Save' }));
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Save' })).toBeEnabled());
+    await waitFor(() => expect(onUpdate).toHaveBeenCalledOnce());
     expect(onClose).not.toHaveBeenCalled();
   });
 });

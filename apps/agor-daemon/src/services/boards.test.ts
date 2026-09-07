@@ -64,6 +64,89 @@ function createBranchData(overrides?: { branch_id?: BranchID; repo_id?: UUID; na
 }
 
 describe('BoardsService - Custom Methods', () => {
+  dbTest(
+    'applies board zone defaults through the shared repository transaction',
+    async ({ db }) => {
+      await ensureTestUser(db);
+      const service = new BoardsService(db);
+      const board = (await service.create({
+        name: 'Fictional defaults board',
+        created_by: TEST_USER,
+        zone_layout_defaults: { mode: 'manual', preset: 'grid', gap: 24 },
+        objects: {
+          override: {
+            type: 'zone',
+            x: 0,
+            y: 0,
+            width: 620,
+            height: 400,
+            label: 'Override',
+            layout: { mode: 'manual', preset: 'grid', gap: 40 },
+          },
+          follower: {
+            type: 'zone',
+            x: 700,
+            y: 0,
+            width: 620,
+            height: 400,
+            label: 'Follower',
+            layout_binding: 'inherit',
+            layout: { mode: 'manual', preset: 'grid', gap: 24 },
+          },
+        },
+      })) as Board;
+
+      const result = await service.setZoneLayoutDefaults(board.board_id, { gap: 8 });
+      expect(result).toMatchObject({ changed: true, changed_zone_ids: ['follower'] });
+      expect(result.board.objects?.override).toMatchObject({ layout: { gap: 40 } });
+      expect(result.board.objects?.follower).toMatchObject({
+        layout_binding: 'inherit',
+        layout: { gap: 8 },
+      });
+    }
+  );
+
+  dbTest('returns a structured no-op for byte-identical layout geometry', async ({ db }) => {
+    await ensureTestUser(db);
+    const service = new BoardsService(db);
+    const board = (await service.create({
+      name: 'Layout service boundary',
+      created_by: TEST_USER,
+      objects: {
+        note: { type: 'markdown', x: 1240, y: 760, width: 320, content: 'Durable note' },
+      },
+    })) as Board;
+
+    const noOp = await service.applyBoardLayout(board.board_id, {
+      objects: { note: { x: 1240, y: 760, width: 320 } },
+      placements: {},
+    });
+    expect(noOp).toMatchObject({
+      changed: false,
+      changed_object_ids: [],
+      changed_placement_ids: [],
+      placements: [],
+    });
+    expect(noOp.board).toEqual(board);
+
+    const correction = await service.applyBoardLayout(board.board_id, {
+      objects: { note: { x: 1240, y: 840, width: 320 } },
+      placements: {},
+    });
+    expect(correction).toMatchObject({
+      changed: true,
+      changed_object_ids: ['note'],
+      changed_placement_ids: [],
+    });
+    expect(correction.board.objects?.note).toMatchObject({ y: 840, content: 'Durable note' });
+
+    const repeated = await service.applyBoardLayout(board.board_id, {
+      objects: { note: { x: 1240, y: 840, width: 320 } },
+      placements: {},
+    });
+    expect(repeated.changed).toBe(false);
+  });
+
   dbTest('rejects a client-supplied board id that is not UUIDv7', async ({ db }) => {
     const service = new BoardsService(db);
 
@@ -124,6 +207,7 @@ describe('BoardsService - Custom Methods', () => {
       default_others_can: 'all',
       default_others_fs_access: 'write',
       custom_css: '.board { color: rebeccapurple; }',
+      zone_layout_defaults: { mode: 'auto', preset: 'grid', gap: 8 },
       created_by: TEST_USER,
     })) as Board;
 
@@ -140,6 +224,7 @@ describe('BoardsService - Custom Methods', () => {
     expect(imported.board_id).not.toBe(original.board_id);
     expect(imported.icon).toBe('🔷'); // Icon should be preserved
     expect(imported.custom_css).toBe('.board { color: rebeccapurple; }');
+    expect(imported.zone_layout_defaults).toMatchObject({ mode: 'auto', gap: 8 });
     const importedPolicy = await new CapabilityPolicyRepository(db).getBoardPolicies(
       imported.board_id
     );
@@ -208,6 +293,7 @@ describe('BoardsService - Custom Methods', () => {
       icon: '🔵',
       access_mode: 'private',
       custom_css: '.clone { opacity: 0.9; }',
+      zone_layout_defaults: { mode: 'manual', preset: 'compact_list', gap: 4 },
       created_by: TEST_USER,
     })) as Board;
 
@@ -219,6 +305,7 @@ describe('BoardsService - Custom Methods', () => {
     expect(cloned.icon).toBe(original.icon);
     expect(cloned.description).toBe(original.description);
     expect(cloned.custom_css).toBe('.clone { opacity: 0.9; }');
+    expect(cloned.zone_layout_defaults).toMatchObject({ preset: 'compact_list', gap: 4 });
     const clonedPolicy = await new CapabilityPolicyRepository(db).getBoardPolicies(cloned.board_id);
     expect(clonedPolicy.board_access.sharing_mode).toBe('private');
     expect(clonedPolicy.branch_template.access.sharing_mode).toBe('private');

@@ -49,6 +49,30 @@ export function getNodeAbsolutePosition(node: Node, allNodes: Node[]): Position 
 }
 
 /**
+ * Resolve absolute geometry from the current controlled node state.
+ *
+ * React Flow's derived `positionAbsolute` can trail an optimistic or realtime
+ * position update by a render. Explicit repeated layouts must instead use the
+ * authoritative `position` values or they can plan a second, different grid
+ * from stale pre-layout coordinates.
+ */
+export function getCurrentNodeAbsolutePosition(node: Node, allNodes: Node[]): Position {
+  const byId = new Map(allNodes.map((candidate) => [candidate.id, candidate]));
+  const resolve = (candidate: Node, visited: Set<string>): Position => {
+    if (!candidate.parentId || visited.has(candidate.parentId)) return candidate.position;
+    const parent = byId.get(candidate.parentId);
+    if (!parent) return candidate.position;
+    visited.add(candidate.parentId);
+    const parentPosition = resolve(parent, visited);
+    return {
+      x: parentPosition.x + candidate.position.x,
+      y: parentPosition.y + candidate.position.y,
+    };
+  };
+  return resolve(node, new Set([node.id]));
+}
+
+/**
  * Convert absolute position to relative position within a parent
  *
  * @param absolutePos - Position in board coordinates
@@ -86,6 +110,34 @@ export function relativeToAbsolute(relativePos: Position, parentPos: Position): 
     x: relativePos.x + parentPos.x,
     y: relativePos.y + parentPos.y,
   };
+}
+
+/**
+ * Rebase optimistic absolute child positions when their parent container
+ * moves. React Flow keeps each child's relative position unchanged, so its
+ * realtime guard must travel by the same delta or it will briefly pull the
+ * child back toward the parent's old location during the persistence echo.
+ */
+export function translateTrackedChildPositions(
+  nodes: readonly Pick<Node, 'id' | 'parentId'>[],
+  parentId: string,
+  previousParentPosition: Position,
+  nextParentPosition: Position,
+  trackedPositions: Record<string, Position>
+): number {
+  const deltaX = nextParentPosition.x - previousParentPosition.x;
+  const deltaY = nextParentPosition.y - previousParentPosition.y;
+  if (deltaX === 0 && deltaY === 0) return 0;
+
+  let translated = 0;
+  for (const node of nodes) {
+    if (node.parentId !== parentId) continue;
+    const tracked = trackedPositions[node.id];
+    if (!tracked) continue;
+    trackedPositions[node.id] = { x: tracked.x + deltaX, y: tracked.y + deltaY };
+    translated += 1;
+  }
+  return translated;
 }
 
 /**

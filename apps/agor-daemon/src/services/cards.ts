@@ -249,15 +249,41 @@ export class CardsService extends DrizzleService<Card, Partial<Card>, CardParams
       throw new Error(`Card ${cardId} has no board placement`);
     }
 
-    // If moving to a zone with zone data, calculate position
+    // If moving to a zone with zone data, calculate position. Placement is
+    // collision-aware for the same reason agor_branches_set_zone is: the
+    // random-jitter placement cannot see the zone's existing occupants, so
+    // moving a card into a populated zone dropped it on top of whatever was
+    // already there. The card's own placement is excluded so re-moving it to
+    // the zone it already occupies does not treat it as an obstacle to itself.
     if (zoneId && zoneData) {
-      const { computeZoneRelativePosition, CARD_WIDTH, CARD_HEIGHT } = await import(
-        '@agor/core/utils/board-placement'
+      const { findFreeZoneSlot, CARD_WIDTH, CARD_HEIGHT, BRANCH_CARD_WIDTH, BRANCH_CARD_HEIGHT } =
+        await import('@agor/core/utils/board-placement');
+
+      const siblings = (await this.boardObjectRepo.findByBoardId(boardObj.board_id)).filter(
+        (entity) => entity.zone_id === zoneId && entity.object_id !== boardObj.object_id
       );
-      const position = computeZoneRelativePosition(zoneData, {
+      const occupants = siblings.map((entity) => {
+        const size = entity.size;
+        const usable =
+          size !== undefined &&
+          Number.isFinite(size.width) &&
+          Number.isFinite(size.height) &&
+          size.width > 0 &&
+          size.height > 0;
+        // Size each occupant by its own kind: a worktree renders far taller
+        // than a card, and measuring one as the other is what lets a "free"
+        // slot land on something.
+        const nominal =
+          entity.entity_type === 'branch'
+            ? { width: BRANCH_CARD_WIDTH, height: BRANCH_CARD_HEIGHT }
+            : { width: CARD_WIDTH, height: CARD_HEIGHT };
+        const { width, height } = usable ? size : nominal;
+        return { x: entity.position.x, y: entity.position.y, width, height };
+      });
+
+      const position = findFreeZoneSlot(zoneData, occupants, {
         entityWidth: CARD_WIDTH,
         entityHeight: CARD_HEIGHT,
-        desiredPadding: 60,
       });
 
       await this.boardObjectRepo.updatePosition(boardObj.object_id, position);

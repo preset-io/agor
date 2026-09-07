@@ -284,7 +284,24 @@ export const messageQuerySchema = Type.Object(
  */
 export const branchQuerySchema = createQuerySchema(
   Type.Object({
-    branch_id: Type.Optional(CommonSchemas.uuid),
+    // `{ $in: [...] }` is a first-class branch-id filter in BranchesService
+    // (see `fetchData` / `find` in services/branches.ts, and the `branch_id`
+    // member of BranchParams). Callers that hydrate a batch of branches — the
+    // board MCP tools resolving which pinned worktrees are still active, the
+    // schedule tools — send exactly that shape. Omitting it here did not make
+    // the service reject the filter, it made the query die one layer earlier
+    // in Ajv with its bare default "validation failed" message.
+    branch_id: Type.Optional(
+      Type.Union([
+        CommonSchemas.uuid,
+        Type.Object(
+          // Bounded like `$limit`: a batch hydrate is a page of ids, not an
+          // unbounded SQL `IN` list assembled by the caller.
+          { $in: Type.Array(CommonSchemas.uuid, { maxItems: 10_000 }) },
+          { additionalProperties: false }
+        ),
+      ])
+    ),
     repo_id: Type.Optional(CommonSchemas.uuid),
     board_id: Type.Optional(CommonSchemas.uuid),
     zone_id: Type.Optional(Type.String({ maxLength: 255 })),
@@ -443,6 +460,32 @@ export const mcpServerQueryValidator = getValidator(mcpServerQuerySchema, queryV
 export const mcpCatalogQueryValidator = getValidator(mcpCatalogQuerySchema, queryValidator);
 
 /**
+ * Ajv's ValidationError carries every detail in `errors` and none in `message`,
+ * which is the bare string "validation failed". Feathers' validateQuery hook
+ * rethrows it as `BadRequest(error.message, error.errors)`, so a caller that
+ * only renders the message — an MCP tool result, a CLI error line — is told
+ * that something was rejected and nothing about what. Fold the field paths and
+ * reasons into the message so the rejection names itself wherever it surfaces.
+ * `data` still carries the full structured errors for anyone reading them.
+ */
+function describeQueryValidationErrors(errors: unknown): string | null {
+  if (!Array.isArray(errors) || errors.length === 0) return null;
+  const described = errors
+    .slice(0, 5)
+    .map((error) => {
+      const { instancePath, message } = (error ?? {}) as {
+        instancePath?: string;
+        message?: string;
+      };
+      const field = instancePath ? instancePath.replace(/^\//, '').replace(/\//g, '.') : 'query';
+      return `${field} ${message ?? 'is invalid'}`;
+    })
+    .join('; ');
+  const overflow = errors.length > 5 ? ` (+${errors.length - 5} more)` : '';
+  return `${described}${overflow}`;
+}
+
+/**
  * Wrap validateQuery to produce a FeathersJS-compatible hook function.
  *
  * validateQuery (from @feathersjs/schema) returns `Promise<any>` but FeathersJS
@@ -452,7 +495,17 @@ export const mcpCatalogQueryValidator = getValidator(mcpCatalogQuerySchema, quer
 export function typedValidateQuery(
   validator: Parameters<typeof validateQueryFn>[0]
 ): (context: unknown) => Promise<void> {
-  return validateQueryFn(validator) as unknown as (context: unknown) => Promise<void>;
+  const validate = validateQueryFn(validator) as unknown as (context: unknown) => Promise<void>;
+  return async (context: unknown) => {
+    try {
+      return await validate(context);
+    } catch (error) {
+      const badRequest = error as { name?: string; message?: string; data?: unknown };
+      const described = describeQueryValidationErrors(badRequest?.data);
+      if (described) badRequest.message = `Invalid query: ${described}`;
+      throw error;
+    }
+  };
 }
 
 // Re-export validateQuery for direct usage

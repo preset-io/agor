@@ -748,6 +748,61 @@ describe('useAgorData — socket-event bailouts', () => {
     expect(agorStore.getState().boardObjectByBranchId.has('b-2')).toBe(false);
   });
 
+  it('applies a board layout realtime batch in one store notification', async () => {
+    const board = {
+      board_id: 'board-1',
+      name: 'Board',
+      objects: {
+        zone: { type: 'zone', x: 900, y: 700, width: 300, height: 220, label: 'Zone' },
+      },
+    };
+    const placement = makeBoardObject({
+      object_id: 'bo-layout',
+      board_id: 'board-1',
+      zone_id: 'zone',
+      position: { x: 20, y: 120 },
+    });
+    const { client, emit } = makeMockClient({ boards: [board], 'board-objects': [placement] });
+    const { result } = renderHook(() => useAgorData(client));
+    await waitForInitialLoad(result);
+    let notifications = 0;
+    const unsubscribe = agorStore.subscribe(() => {
+      notifications += 1;
+    });
+
+    act(() =>
+      emit('boards', 'layout-applied', {
+        board_id: 'board-1',
+        board: {
+          ...board,
+          objects: {
+            zone: { type: 'zone', x: 80, y: 80, width: 540, height: 380, label: 'Zone' },
+          },
+        },
+        placements: [
+          {
+            ...placement,
+            position: { x: 20, y: 100 },
+            size: { width: 500, height: 240 },
+          },
+        ],
+      })
+    );
+
+    expect(notifications).toBe(1);
+    expect(agorStore.getState().boardById.get('board-1')?.objects?.zone).toMatchObject({
+      x: 80,
+      y: 80,
+      width: 540,
+      height: 380,
+    });
+    expect(agorStore.getState().boardObjectById.get('bo-layout')).toMatchObject({
+      position: { x: 20, y: 100 },
+      size: { width: 500, height: 240 },
+    });
+    unsubscribe();
+  });
+
   it('keeps unrelated board-object buckets reference-stable on other-board patches', async () => {
     const currentBoardObject = makeBoardObject({ object_id: 'bo-current', board_id: 'board-1' });
     const otherBoardObject = makeBoardObject({

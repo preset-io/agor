@@ -29,6 +29,7 @@ import type {
 } from '@agor-live/client';
 import {
   ARTIFACT_METADATA_LIST_FIELDS,
+  BOARD_LAYOUT_APPLIED_EVENT,
   ENTITY_PATH_SEGMENTS,
   findByShortIdPrefix,
   hasMinimumRole,
@@ -1415,6 +1416,7 @@ export function useAgorData(
     boardsService.on('created', scopedRealtime.boardCreated);
     boardsService.on('patched', scopedRealtime.boardPatched);
     boardsService.on('updated', scopedRealtime.boardPatched);
+    boardsService.on(BOARD_LAYOUT_APPLIED_EVENT, scopedRealtime.boardLayoutApplied);
     boardsService.on('removed', scopedRealtime.boardRemoved);
 
     // Subscribe to board object events
@@ -1654,6 +1656,7 @@ export function useAgorData(
       boardsService.removeListener('created', scopedRealtime.boardCreated);
       boardsService.removeListener('patched', scopedRealtime.boardPatched);
       boardsService.removeListener('updated', scopedRealtime.boardPatched);
+      boardsService.removeListener(BOARD_LAYOUT_APPLIED_EVENT, scopedRealtime.boardLayoutApplied);
       boardsService.removeListener('removed', scopedRealtime.boardRemoved);
 
       boardObjectsService?.removeListener('created', scopedRealtime.boardObjectCreated);

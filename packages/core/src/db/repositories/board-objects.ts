@@ -9,16 +9,24 @@ import type {
   BoardEntityObject,
   BoardEntityType,
   BoardID,
+  BoardLayoutPlacementUpdate,
   BranchID,
   CardID,
   UUID,
 } from '@agor/core/types';
 import { and, asc, eq, getTableColumns, isNotNull, isNull, or, type SQL, sql } from 'drizzle-orm';
+import { isBoardEntityDensityExpandable } from '../../layout/zone-layout.js';
 import { generateId } from '../../lib/ids';
 import { toAbsolutePosition } from '../../utils/board-placement.js';
 import type { Database } from '../client';
 import { deleteFrom, insert, jsonExtract, select, update } from '../database-wrapper';
-import { type BoardObjectInsert, type BoardObjectRow, boardObjects, branches } from '../schema';
+import {
+  type BoardObjectInsert,
+  type BoardObjectRow,
+  boardObjects,
+  branches,
+  cards,
+} from '../schema';
 import { EntityNotFoundError, RepositoryError } from './base';
 import {
   visibleBoardReferenceAccessExists,
@@ -36,6 +44,23 @@ export interface BoardObjectFindFilters {
 export interface BoardObjectFindOptions {
   limit?: number;
   offset?: number;
+}
+
+function validateFinitePosition(position: { x: number; y: number }, objectId: string): void {
+  if (!Number.isFinite(position.x) || !Number.isFinite(position.y)) {
+    throw new RepositoryError(`Board object ${objectId} requires finite x/y geometry`);
+  }
+}
+
+function validateFiniteSize(size: { width: number; height: number }, objectId: string): void {
+  if (
+    !Number.isFinite(size.width) ||
+    size.width <= 0 ||
+    !Number.isFinite(size.height) ||
+    size.height <= 0
+  ) {
+    throw new RepositoryError(`Board object ${objectId} requires a positive finite size`);
+  }
 }
 
 /**
@@ -332,9 +357,13 @@ export class BoardObjectRepository {
     branch_id?: BranchID;
     card_id?: CardID;
     position: { x: number; y: number };
+    size?: { width: number; height: number };
     zone_id?: string;
+    compact?: boolean;
   }): Promise<BoardEntityObject> {
     try {
+      validateFinitePosition(data.position, 'create');
+      if (data.size) validateFiniteSize(data.size, 'create');
       // Validate: exactly one of branch_id or card_id must be provided
       if (!data.branch_id && !data.card_id) {
         throw new RepositoryError('Either branch_id or card_id is required');
@@ -362,7 +391,9 @@ export class BoardObjectRepository {
         created_at: new Date(),
         data: {
           position: data.position,
+          size: data.size,
           zone_id: data.zone_id,
+          compact: data.compact,
         },
       };
 
@@ -396,6 +427,7 @@ export class BoardObjectRepository {
     position: { x: number; y: number }
   ): Promise<BoardEntityObject> {
     try {
+      validateFinitePosition(position, objectId);
       const existing = await select(this.db)
         .from(boardObjects)
         .where(eq(boardObjects.object_id, objectId))
@@ -412,8 +444,8 @@ export class BoardObjectRepository {
       await update(this.db, boardObjects)
         .set({
           data: {
+            ...existingData,
             position,
-            zone_id: existingData.zone_id,
           },
         })
         .where(eq(boardObjects.object_id, objectId))
@@ -433,6 +465,169 @@ export class BoardObjectRepository {
       if (error instanceof EntityNotFoundError) throw error;
       throw new RepositoryError(
         `Failed to update board object position: ${error instanceof Error ? error.message : String(error)}`,
+        error
+      );
+    }
+  }
+
+  /** Update the last measured rendered size while preserving placement. */
+  async updateSize(
+    objectId: string,
+    size: { width: number; height: number }
+  ): Promise<BoardEntityObject> {
+    try {
+      validateFiniteSize(size, objectId);
+      const existing = await select(this.db)
+        .from(boardObjects)
+        .where(eq(boardObjects.object_id, objectId))
+        .one();
+      if (!existing) throw new EntityNotFoundError('BoardObject', objectId);
+      const existingData =
+        typeof existing.data === 'string' ? JSON.parse(existing.data) : existing.data;
+      await update(this.db, boardObjects)
+        .set({
+          data: {
+            ...existingData,
+            size,
+          },
+        })
+        .where(eq(boardObjects.object_id, objectId))
+        .run();
+      const row = await select(this.db)
+        .from(boardObjects)
+        .where(eq(boardObjects.object_id, objectId))
+        .one();
+      if (!row) throw new RepositoryError('Failed to retrieve resized board object');
+      return this.rowToEntity(row);
+    } catch (error) {
+      if (error instanceof EntityNotFoundError) throw error;
+      throw new RepositoryError(
+        `Failed to update board object size: ${error instanceof Error ? error.message : String(error)}`,
+        error
+      );
+    }
+  }
+
+  /** Update layout fields in one row write so realtime never sees half a placement. */
+  async updateLayout(
+    objectId: string,
+    layout: {
+      position?: { x: number; y: number };
+      size?: { width: number; height: number };
+      compact?: boolean;
+    }
+  ): Promise<BoardEntityObject> {
+    try {
+      if (layout.position) validateFinitePosition(layout.position, objectId);
+      if (layout.size) validateFiniteSize(layout.size, objectId);
+      const existing = await select(this.db)
+        .from(boardObjects)
+        .where(eq(boardObjects.object_id, objectId))
+        .one();
+      if (!existing) throw new EntityNotFoundError('BoardObject', objectId);
+      const existingData =
+        typeof existing.data === 'string' ? JSON.parse(existing.data) : existing.data;
+      await update(this.db, boardObjects)
+        .set({
+          data: {
+            ...existingData,
+            ...(layout.position ? { position: layout.position } : {}),
+            ...(layout.size ? { size: layout.size } : {}),
+            ...(layout.compact !== undefined ? { compact: layout.compact } : {}),
+          },
+        })
+        .where(eq(boardObjects.object_id, objectId))
+        .run();
+      const row = await select(this.db)
+        .from(boardObjects)
+        .where(eq(boardObjects.object_id, objectId))
+        .one();
+      if (!row) throw new RepositoryError('Failed to retrieve updated board object layout');
+      return this.rowToEntity(row);
+    } catch (error) {
+      if (error instanceof EntityNotFoundError) throw error;
+      throw new RepositoryError(
+        `Failed to update board object layout: ${error instanceof Error ? error.message : String(error)}`,
+        error
+      );
+    }
+  }
+
+  /**
+   * Update layout only when the entity belongs to the authoritative board.
+   * Whole-board commits use this inside the board repository transaction so a
+   * caller cannot smuggle another board's placement into an otherwise valid
+   * layout request.
+   */
+  async updateLayoutForBoard(
+    boardId: BoardID,
+    objectId: string,
+    layout: BoardLayoutPlacementUpdate
+  ): Promise<{ entity: BoardEntityObject; changed: boolean }> {
+    try {
+      if (
+        !Number.isFinite(layout.position.x) ||
+        !Number.isFinite(layout.position.y) ||
+        !Number.isFinite(layout.size.width) ||
+        layout.size.width <= 0 ||
+        !Number.isFinite(layout.size.height) ||
+        layout.size.height <= 0
+      ) {
+        throw new RepositoryError(
+          `Board object ${objectId} requires complete finite position and positive size geometry`
+        );
+      }
+      const condition = and(
+        eq(boardObjects.object_id, objectId),
+        eq(boardObjects.board_id, boardId)
+      );
+      const existing = await select(this.db).from(boardObjects).where(condition).one();
+      if (!existing) throw new EntityNotFoundError('BoardObject', objectId);
+      const existingData =
+        typeof existing.data === 'string' ? JSON.parse(existing.data) : existing.data;
+      const current = this.rowToEntity(existing);
+      if (layout.compact !== undefined) {
+        const card = existing.card_id
+          ? await select(this.db, {
+              board_id: cards.board_id,
+              description: cards.description,
+              note: cards.note,
+            })
+              .from(cards)
+              .where(and(eq(cards.card_id, existing.card_id), eq(cards.board_id, boardId)))
+              .one()
+          : undefined;
+        if (!isBoardEntityDensityExpandable(current.entity_type, card ?? undefined)) {
+          throw new RepositoryError(
+            `Board object ${objectId} does not own collapsible body content`
+          );
+        }
+      }
+      const changed =
+        current.position.x !== layout.position.x ||
+        current.position.y !== layout.position.y ||
+        current.size?.width !== layout.size.width ||
+        current.size?.height !== layout.size.height ||
+        (layout.compact !== undefined && current.compact !== layout.compact);
+      if (!changed) return { entity: current, changed: false };
+      await update(this.db, boardObjects)
+        .set({
+          data: {
+            ...existingData,
+            position: layout.position,
+            size: layout.size,
+            ...(layout.compact !== undefined ? { compact: layout.compact } : {}),
+          },
+        })
+        .where(condition)
+        .run();
+      const row = await select(this.db).from(boardObjects).where(condition).one();
+      if (!row) throw new RepositoryError('Failed to retrieve updated board object layout');
+      return { entity: this.rowToEntity(row), changed: true };
+    } catch (error) {
+      if (error instanceof EntityNotFoundError) throw error;
+      throw new RepositoryError(
+        `Failed to update board object layout: ${error instanceof Error ? error.message : String(error)}`,
         error
       );
     }
@@ -462,7 +657,7 @@ export class BoardObjectRepository {
       await update(this.db, boardObjects)
         .set({
           data: {
-            position: existingData.position,
+            ...existingData,
             // Convert null to undefined for consistency
             zone_id: zoneId === null ? undefined : zoneId,
           },
@@ -487,6 +682,40 @@ export class BoardObjectRepository {
         error
       );
     }
+  }
+
+  /**
+   * Update shared compact presentation state while preserving placement data.
+   *
+   * A measured size describes one presentation mode, so it becomes stale as
+   * soon as compactness changes. Drop it here and let the active renderer
+   * publish a measurement for the new mode before a later layout trusts it.
+   */
+  async updateCompact(objectId: string, compact: boolean): Promise<BoardEntityObject> {
+    const existing = await select(this.db)
+      .from(boardObjects)
+      .where(eq(boardObjects.object_id, objectId))
+      .one();
+    if (!existing) throw new EntityNotFoundError('BoardObject', objectId);
+    const existingData =
+      typeof existing.data === 'string' ? JSON.parse(existing.data) : existing.data;
+    // Missing compact is the historical expanded state. Treat an explicit
+    // false request as equal so repeated density actions neither rewrite the
+    // row nor discard the authoritative measurement for the current mode.
+    if ((existingData.compact === true) === compact) {
+      return this.rowToEntity(existing);
+    }
+    const { size: _staleSize, ...placementData } = existingData;
+    await update(this.db, boardObjects)
+      .set({ data: { ...placementData, compact } })
+      .where(eq(boardObjects.object_id, objectId))
+      .run();
+    const row = await select(this.db)
+      .from(boardObjects)
+      .where(eq(boardObjects.object_id, objectId))
+      .one();
+    if (!row) throw new RepositoryError('Failed to retrieve updated board object');
+    return this.rowToEntity(row);
   }
 
   /**
@@ -536,6 +765,7 @@ export class BoardObjectRepository {
             .set({
               data: {
                 position: absolutePosition,
+                size: data.size,
                 zone_id: undefined,
               },
             })
@@ -590,6 +820,8 @@ export class BoardObjectRepository {
       card_id: (row.card_id as CardID) ?? undefined,
       entity_type: entityType,
       position: data.position,
+      size: data.size,
+      compact: data.compact === true,
       zone_id: data.zone_id,
       created_at: new Date(row.created_at).toISOString(),
     };

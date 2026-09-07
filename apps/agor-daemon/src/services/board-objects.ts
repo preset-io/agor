@@ -9,9 +9,11 @@ import {
   type BoardObjectFindFilters,
   type BoardObjectFindOptions,
   BoardObjectRepository,
+  CardRepository,
   type TenantScopeAwareDatabase,
 } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
+import { isBoardEntityDensityExpandable } from '@agor/core/layout/zone-layout';
 import type {
   BoardEntityObject,
   BoardEntityType,
@@ -85,6 +87,7 @@ export function normalizeBoardObjectFindQuery(
  */
 export class BoardObjectsService {
   private boardObjectRepo: BoardObjectRepository;
+  private cardRepo: CardRepository;
   public emit?: (event: string, data: BoardEntityObject, params?: BoardObjectParams) => void;
 
   constructor(
@@ -92,6 +95,7 @@ export class BoardObjectsService {
     private app?: Application
   ) {
     this.boardObjectRepo = new BoardObjectRepository(db);
+    this.cardRepo = new CardRepository(db);
   }
 
   /**
@@ -121,7 +125,9 @@ export class BoardObjectsService {
       board_id: data.board_id,
       branch_id: data.branch_id,
       position: data.position,
+      size: data.size,
       zone_id: data.zone_id,
+      compact: data.compact,
     });
 
     return boardObject;
@@ -177,8 +183,61 @@ export class BoardObjectsService {
   async patch(
     id: string,
     data: Partial<BoardEntityObject>,
-    _params?: BoardObjectParams
+    params?: BoardObjectParams
   ): Promise<BoardEntityObject> {
+    if (typeof data.compact === 'boolean') {
+      // Reuse the tenant/access-scoped read path rather than bypassing the
+      // trusted SQL visibility context for this capability check.
+      const existing = await this.get(id, params);
+      const card = existing.card_id ? await this.cardRepo.findById(existing.card_id) : undefined;
+      if (
+        !isBoardEntityDensityExpandable(existing.entity_type, card) ||
+        (card !== undefined && card?.board_id !== existing.board_id)
+      ) {
+        throw new Error(
+          'Compact presentation is supported only for worktrees and generic cards with body content'
+        );
+      }
+      if (
+        (existing.compact === true) === data.compact &&
+        !data.position &&
+        !data.size &&
+        !('zone_id' in data)
+      )
+        return existing;
+    }
+
+    if (data.position && (!Number.isFinite(data.position.x) || !Number.isFinite(data.position.y))) {
+      throw new Error('position x and y must be finite numbers');
+    }
+
+    if (data.size) {
+      if (
+        !Number.isFinite(data.size.width) ||
+        !Number.isFinite(data.size.height) ||
+        data.size.width <= 0 ||
+        data.size.height <= 0
+      ) {
+        throw new Error('size width and height must be positive finite numbers');
+      }
+      if ('zone_id' in data) {
+        throw new Error('size must be patched separately from zone_id');
+      }
+      if (!data.position && typeof data.compact !== 'boolean') {
+        return this.boardObjectRepo.updateSize(id, data.size);
+      }
+    }
+
+    // Auto-layout changes these fields as one visual operation. Persist them
+    // together so realtime subscribers never observe a half-applied layout.
+    if (data.size || (data.position && typeof data.compact === 'boolean')) {
+      return this.boardObjectRepo.updateLayout(id, {
+        ...(data.position ? { position: data.position } : {}),
+        ...(data.size ? { size: data.size } : {}),
+        ...(typeof data.compact === 'boolean' ? { compact: data.compact } : {}),
+      });
+    }
+
     // Handle simultaneous position + zone_id update
     if (data.position && 'zone_id' in data) {
       // Update both atomically without emitting intermediate events
@@ -197,7 +256,11 @@ export class BoardObjectsService {
       return toBoardObjectPatchedEventPayload(boardObject) as BoardEntityObject;
     }
 
-    throw new Error('Only position and zone_id updates are supported via patch');
+    if (typeof data.compact === 'boolean') {
+      return this.boardObjectRepo.updateCompact(id, data.compact);
+    }
+
+    throw new Error('Only position, size, zone_id, and compact updates are supported via patch');
   }
 
   /**

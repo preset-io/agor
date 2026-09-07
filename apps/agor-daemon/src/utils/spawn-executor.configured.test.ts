@@ -758,6 +758,7 @@ describe('configured executor spawning', () => {
   });
 
   it('carries the per-user home store through local request handoff into bubblewrap', async () => {
+    if (process.platform !== 'linux') return;
     const root = mkdtempSync(path.join(tmpdir(), 'agor-owner-home-handoff-'));
     const homeDir = path.join(root, 'home');
     const dataHome = path.join(homeDir, '.agor');

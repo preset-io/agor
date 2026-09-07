@@ -40,6 +40,36 @@
       "import": "./dist/design/board-backgrounds.js",
       "require": "./dist/design/board-backgrounds.cjs"
     },
+    "./layout/justified-zones": {
+      "source": "./src/layout/justified-zones.ts",
+      "types": "./dist/layout/justified-zones.d.ts",
+      "import": "./dist/layout/justified-zones.js",
+      "require": "./dist/layout/justified-zones.cjs"
+    },
+    "./layout/board-zone-arrangement": {
+      "source": "./src/layout/board-zone-arrangement.ts",
+      "types": "./dist/layout/board-zone-arrangement.d.ts",
+      "import": "./dist/layout/board-zone-arrangement.js",
+      "require": "./dist/layout/board-zone-arrangement.cjs"
+    },
+    "./layout/rectangle-packing": {
+      "source": "./src/layout/rectangle-packing.ts",
+      "types": "./dist/layout/rectangle-packing.d.ts",
+      "import": "./dist/layout/rectangle-packing.js",
+      "require": "./dist/layout/rectangle-packing.cjs"
+    },
+    "./layout/zone-layout": {
+      "source": "./src/layout/zone-layout.ts",
+      "types": "./dist/layout/zone-layout.d.ts",
+      "import": "./dist/layout/zone-layout.js",
+      "require": "./dist/layout/zone-layout.cjs"
+    },
+    "./layout/zone-growth-reflow": {
+      "source": "./src/layout/zone-growth-reflow.ts",
+      "types": "./dist/layout/zone-growth-reflow.d.ts",
+      "import": "./dist/layout/zone-growth-reflow.js",
+      "require": "./dist/layout/zone-growth-reflow.cjs"
+    },
     "./db": {
       "source": "./src/db/index.ts",
       "types": "./dist/db/index.d.ts",

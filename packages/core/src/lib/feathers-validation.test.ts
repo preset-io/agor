@@ -63,6 +63,85 @@ describe('branchQueryValidator', () => {
       archived: false,
     });
   });
+
+  it('passes a branch_id batch through to the service that reads it', async () => {
+    const context = {
+      params: {
+        query: {
+          branch_id: { $in: ['019e8e1c', '019e8e1c-0000-7000-8000-000000000001'] },
+          archived: 'false',
+        },
+      },
+    };
+
+    await typedValidateQuery(branchQueryValidator)(context);
+
+    expect(context.params.query).toEqual({
+      branch_id: { $in: ['019e8e1c', '019e8e1c-0000-7000-8000-000000000001'] },
+      archived: false,
+    });
+  });
+
+  it('still refuses branch_id operators and elements the service cannot read', async () => {
+    for (const branch_id of [
+      { $ne: null },
+      { $in: ['not-a-branch-id'] },
+      { $in: '019e8e1c' },
+    ] as const) {
+      await expect(
+        typedValidateQuery(branchQueryValidator)({ params: { query: { branch_id } } })
+      ).rejects.toThrow();
+    }
+  });
+
+  it('names the offending field instead of Ajv bare "validation failed"', async () => {
+    // Ajv's ValidationError message is the literal string "validation failed"
+    // with every detail in `errors`. A caller that renders only the message —
+    // an MCP tool result, a CLI line — could otherwise only find the bad field
+    // by bisecting its own query.
+    await expect(
+      typedValidateQuery(branchQueryValidator)({
+        params: { query: { branch_id: { $ne: null } } },
+      })
+    ).rejects.toThrow(/branch_id/);
+
+    await expect(
+      typedValidateQuery(branchQueryValidator)({ params: { query: { $limit: 99999 } } })
+    ).rejects.toThrow(/\$limit must be <= 10000/);
+
+    await expect(
+      typedValidateQuery(branchQueryValidator)({ params: { query: { $limit: 99999 } } })
+    ).rejects.not.toThrow(/^validation failed$/);
+  });
+
+  it('keeps the structured Ajv errors on the rejection for programmatic callers', async () => {
+    // Resolving is a failure, not a pass: `.catch` alone widens the result to
+    // `void | error`, which both breaks the typecheck and would report a
+    // reading-`code`-of-undefined TypeError instead of the real problem.
+    const error = await typedValidateQuery(branchQueryValidator)({
+      params: { query: { $limit: 99999 } },
+    }).then(
+      () => {
+        throw new Error('Expected an over-limit $limit query to be rejected.');
+      },
+      (thrown: { data?: unknown; code?: number }) => thrown
+    );
+
+    expect(error.code).toBe(400);
+    expect(error.data).toEqual([
+      expect.objectContaining({ instancePath: '/$limit', keyword: 'maximum' }),
+    ]);
+  });
+
+  it('strips unsupported operators sitting beside a branch_id batch', async () => {
+    const context = {
+      params: { query: { branch_id: { $in: ['019e8e1c'], $nin: ['019e8e1d'] } } },
+    };
+
+    await typedValidateQuery(branchQueryValidator)(context);
+
+    expect(context.params.query).toEqual({ branch_id: { $in: ['019e8e1c'] } });
+  });
 });
 
 describe('userQueryValidator', () => {

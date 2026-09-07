@@ -265,6 +265,20 @@ export interface BoardsServiceImpl extends Service<Board, Partial<Board>, Feathe
     objects: unknown[],
     params?: FeathersParams
   ): Promise<Board>;
+  applyBoardLayout(
+    boardId: string,
+    batch: import('@agor/core/types').BoardLayoutBatch,
+    params?: FeathersParams
+  ): Promise<import('@agor/core/types').BoardLayoutApplyResult>;
+  setZoneLayoutDefaults(
+    boardId: string,
+    defaults: NonNullable<Board['zone_layout_defaults']>,
+    options: {
+      applyToExisting?: boolean;
+      expected?: import('@agor/core/types').BoardZoneLayoutDefaultsExpected;
+    },
+    params?: FeathersParams
+  ): Promise<import('@agor/core/types').BoardZoneLayoutDefaultsApplyResult>;
   mergeBoardObjectFields(
     boardId: string,
     patches: Record<string, unknown>,

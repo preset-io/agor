@@ -75,6 +75,8 @@ import type {
   AuthenticatedParams,
   Board,
   BoardID,
+  BoardLayoutBatch,
+  BoardZoneLayoutDefaultsExpected,
   Branch,
   DeepReadonly,
   GatewayChannel,
@@ -91,6 +93,7 @@ import type {
 } from '@agor/core/types';
 import {
   assertPublicMCPOAuthCompatibilityMode,
+  BOARD_LAYOUT_APPLIED_EVENT,
   GATEWAY_CHANNEL_WRITE_FIELDS,
   GATEWAY_REDACTED_SENTINEL,
   hasMinimumRole,
@@ -3394,8 +3397,17 @@ export function registerHooks(ctx: RegisterHooksContext): void {
         async (context: HookContext<Board>) => {
           // Handle atomic board object operations via _action parameter
           const contextData = context.data || {};
-          const { _action, objectId, objectData, objects, deleteAssociatedSessions } =
-            contextData as UnknownJson;
+          const {
+            _action,
+            objectId,
+            objectData,
+            objects,
+            placements,
+            expected,
+            defaults,
+            applyToExisting,
+            deleteAssociatedSessions,
+          } = contextData as UnknownJson;
 
           if (_action === 'upsertObject') {
             if (!objectId || !objectData) {
@@ -3468,6 +3480,87 @@ export function registerHooks(ctx: RegisterHooksContext): void {
             });
             // Skip normal patch flow to prevent double emit
             context.dispatch = result;
+            return context;
+          }
+
+          if (_action === 'applyLayout' && objects && placements) {
+            if (!context.id) throw new Error('Board ID required');
+            const result = await boardsService!.applyBoardLayout(
+              context.id as string,
+              { objects, placements, expected } as unknown as BoardLayoutBatch
+            );
+            // This action returns a structured acknowledgement, not a Board.
+            // Suppress Feathers' automatic `patched` event so that result can
+            // never enter Board stores; the authorized atomic/manual events
+            // below are the only realtime publication for a material write.
+            context.event = null;
+            context.result = result;
+            if (result.changed === false) {
+              // A stale owner can submit an already-durable target while its
+              // local selectors catch up. Return the authoritative board but
+              // do not write or publish another observer-triggering echo.
+              context.dispatch = result;
+              return context;
+            }
+            // The complete payload is published first so current clients can
+            // apply both persistence surfaces in one store notification. The
+            // ordinary events that follow preserve compatibility and are
+            // reference-equal no-ops for those clients.
+            emitServiceEvent(app, {
+              path: 'boards',
+              event: BOARD_LAYOUT_APPLIED_EVENT,
+              data: {
+                board_id: result.board.board_id,
+                board: result.board,
+                placements: result.placements,
+              },
+              params: context.params,
+              id: context.id,
+              method: 'patch',
+            });
+            emitServiceEvent(app, {
+              path: 'boards',
+              event: 'patched',
+              data: result.board,
+              params: context.params,
+              id: context.id,
+            });
+            const changedPlacementIds = new Set(result.changed_placement_ids);
+            for (const placement of result.placements) {
+              if (!changedPlacementIds.has(placement.object_id)) continue;
+              emitServiceEvent(app, {
+                path: 'board-objects',
+                event: 'patched',
+                data: placement,
+                params: context.params,
+                id: placement.object_id,
+              });
+            }
+            context.dispatch = result;
+            return context;
+          }
+
+          if (_action === 'setZoneLayoutDefaults' && defaults) {
+            if (!context.id) throw new Error('Board ID required');
+            const result = await boardsService!.setZoneLayoutDefaults(
+              context.id as string,
+              defaults as NonNullable<Board['zone_layout_defaults']>,
+              {
+                applyToExisting: applyToExisting === true,
+                expected: expected as BoardZoneLayoutDefaultsExpected | undefined,
+              }
+            );
+            context.event = null;
+            context.result = result;
+            context.dispatch = result;
+            if (!result.changed) return context;
+            emitServiceEvent(app, {
+              path: 'boards',
+              event: 'patched',
+              data: result.board,
+              params: context.params,
+              id: context.id,
+            });
             return context;
           }
 
