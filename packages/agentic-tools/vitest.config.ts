@@ -18,5 +18,8 @@ export default defineConfig({
       { find: '@agor/core', replacement: source('../core/src/index.ts') },
     ],
   },
-  test: { include: ['src/**/*.test.ts'] },
+  test: {
+    include: ['src/**/*.test.ts'],
+    setupFiles: ['../../test/isolate-host-env.ts'],
+  },
 });

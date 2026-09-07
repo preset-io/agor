@@ -10,5 +10,6 @@ export default defineConfig({
   },
   test: {
     include: ['src/**/*.test.ts'],
+    setupFiles: ['../../test/isolate-host-env.ts'],
   },
 });

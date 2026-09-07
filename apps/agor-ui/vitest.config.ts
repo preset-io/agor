@@ -13,7 +13,7 @@ export default defineConfig({
   test: {
     globals: true,
     environment: 'jsdom',
-    setupFiles: './src/test/setup.ts',
+    setupFiles: ['../../test/isolate-host-env.ts', './src/test/setup.ts'],
     server: {
       deps: {
         // Streamdown dynamically imports KaTeX CSS; inline both packages so
