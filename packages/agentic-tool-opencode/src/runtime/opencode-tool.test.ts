@@ -218,7 +218,18 @@ describe('OpenCodeTool prompt variants', () => {
 
     expect(error).toBeInstanceOf(Error);
     expect((error as Error).message).toMatch(/reasoning effort.*not available/i);
+    expect((error as Error).message).toContain('high');
+    expect((error as Error).message).toContain('max');
     expect((error as Error).message).not.toContain('must-not-cross');
+  });
+
+  it('directs models without compatible native variants to leave effort unset', async () => {
+    const error = await assertExplicitModelAvailable({ id: 'qwen3.8-flash' }, 'high').catch(
+      (failure: unknown) => failure
+    );
+
+    expect((error as Error).message).toContain('"high"');
+    expect((error as Error).message).toMatch(/no supported explicit efforts.*leave it unset/i);
   });
 
   it('omits the native prompt variant but still submits the Agor system prompt when effort is unset', async () => {

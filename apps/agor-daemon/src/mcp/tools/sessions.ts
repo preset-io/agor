@@ -1,3 +1,4 @@
+import { createOpenCodeKnownModelCatalog, OPENCODE_VERSION } from '@agor/agentic-tool-opencode';
 import { AGENTIC_TOOL_CAPABILITIES } from '@agor/agentic-tools';
 import {
   BranchRepository,
@@ -23,6 +24,8 @@ import {
   type AgenticToolName,
   type Board,
   getSessionType,
+  type OpenCodeModelCatalog,
+  type OpenCodeProviderSettings,
   type Session,
   type SessionType,
   type ZoneBoardObject,
@@ -96,7 +99,9 @@ const modelConfigObjectSchema = z.object({
   effort: z
     .enum(['low', 'medium', 'high', 'xhigh', 'max'])
     .optional()
-    .describe('Reasoning effort level (default: high)'),
+    .describe(
+      'Reasoning effort override. For OpenCode, omit it to inherit the selected model/runtime default and use agor_models_list to inspect exact-pair support.'
+    ),
   advisorModel: mcpOptionalString(
     'modelConfig.advisorModel',
     "Claude Code advisor model override (e.g. 'opus', 'sonnet', 'fable', or a full model ID)."
@@ -1687,9 +1692,9 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
   // Tool 13: agor_models_list
   //
   // Discovery tool so MCP-driven agents can find valid `model` strings without
-  // having to scrape tool descriptions. Sourced from the same in-process model
-  // registries the UI uses (packages/core/src/models/*). This reads the
-  // registry loaded by the running daemon; it is not provider discovery.
+  // having to scrape tool descriptions. Most tools use the same in-process
+  // registries as the UI. OpenCode also returns its safe provider/model catalog
+  // and can perform owner-scoped live discovery when a branch is supplied.
   //
   // Caveats:
   //   - Gemini's authoritative list is fetched live from the Google API per
@@ -1697,8 +1702,8 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
   //     best-effort starter list.
   //   - Copilot and Cursor have dynamic discovery exposed via /copilot-models
   //     and /cursor-models in the daemon. Static fallbacks are exposed here.
-  //   - OpenCode is a provider+model matrix and doesn't have a single static
-  //     list. Its entry explains that discovery happens after provider choice.
+  //   - OpenCode is a provider+model matrix. Its entry includes flattened exact
+  //     pairs plus the provider groups and model-specific effort metadata.
   server.registerTool(
     'agor_models_list',
     {
@@ -1710,9 +1715,30 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
           .enum(AGENTIC_TOOL_NAMES)
           .optional()
           .describe('Filter to a single agentic tool. Omit to return all tools.'),
+        branchId: mcpOptionalId(
+          'branchId',
+          'Branch',
+          'Optional branch scope for authoritative live OpenCode provider/model effort discovery.'
+        ),
       }),
     },
     async (args) => {
+      let openCodeCatalog: OpenCodeModelCatalog | OpenCodeProviderSettings | null = null;
+      if (args.agenticTool === undefined || args.agenticTool === 'opencode') {
+        try {
+          openCodeCatalog = args.branchId
+            ? await ctx.app.service('/opencode-auth').find({
+                ...ctx.baseServiceParams,
+                query: { branch_id: await resolveBranchId(ctx, args.branchId) },
+              })
+            : await ctx.app.service('/opencode-models').find(ctx.baseServiceParams);
+        } catch {
+          openCodeCatalog = {
+            runtimeVersion: OPENCODE_VERSION,
+            ...createOpenCodeKnownModelCatalog(null),
+          };
+        }
+      }
       const claudeModels = AVAILABLE_CLAUDE_MODEL_ALIASES.map((m) => ({
         id: m.id,
         displayName: m.displayName,
@@ -1762,9 +1788,20 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
           note: 'Gemini models are normally fetched live from the Google API per-user. This is the static fallback list — newer models may exist.',
         },
         opencode: {
-          default: null,
-          models: [],
-          note: 'OpenCode models are provider-specific and are discovered after selecting a provider. Pass both modelConfig.provider and modelConfig.model from the OpenCode provider catalog.',
+          default: openCodeCatalog?.suggestedSelection ?? null,
+          runtimeVersion: openCodeCatalog?.runtimeVersion ?? OPENCODE_VERSION,
+          providers: openCodeCatalog?.providers ?? [],
+          models:
+            openCodeCatalog?.providers.flatMap((provider) =>
+              provider.models.map((model) => ({
+                provider: provider.id,
+                id: model.id,
+                displayName: model.name,
+                status: model.status,
+                reasoningEffortLevels: model.reasoningEffortLevels,
+              }))
+            ) ?? [],
+          note: 'OpenCode requires an exact provider/model pair. reasoningEffortLevels is model-specific: [] means omit modelConfig.effort, while a missing field means the value is unknown and will be validated at runtime. Live session-owner and branch configuration remains authoritative.',
         },
         copilot: {
           default: DEFAULT_COPILOT_MODEL,
@@ -1784,7 +1821,7 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
         },
       } satisfies Record<
         AgenticToolName,
-        { default: string | null; models: unknown[]; note: string }
+        { default: unknown; models: unknown[]; note: string; [key: string]: unknown }
       >;
 
       if (args.agenticTool) {

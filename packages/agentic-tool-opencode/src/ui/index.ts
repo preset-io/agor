@@ -9,6 +9,7 @@ export {
 } from './OpenCodeModelSelector.js';
 export { OpenCodeProviderSettings } from './OpenCodeProviderSettings.js';
 export { OpenCodeReadiness } from './OpenCodeReadiness.js';
+export { useOpenCodeReasoningEffortLevels } from './useOpenCodeReasoningEffortLevels.js';
 
 export const OPENCODE_UI_CONTRIBUTION = {
   name: 'opencode',

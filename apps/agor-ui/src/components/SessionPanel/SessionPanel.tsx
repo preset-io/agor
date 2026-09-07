@@ -935,7 +935,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   // lifetime-stable wrappers that delegate to the latest implementations via
   // a ref (re-pointed each render, right where the impls are defined).
   const footerHandlersRef = React.useRef<{
-    onModelConfigCommit: (config: ModelConfig) => void;
+    onModelConfigCommit: (config: ModelConfig, options?: { clearEffort?: boolean }) => void;
     onSendPrompt: () => void;
     onStop: () => void;
     onFork: () => void;
@@ -949,8 +949,8 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   } | null>(null);
   const stableFooterHandlers = React.useMemo(
     () => ({
-      onModelConfigCommit: (config: ModelConfig) =>
-        footerHandlersRef.current?.onModelConfigCommit(config),
+      onModelConfigCommit: (config: ModelConfig, options?: { clearEffort?: boolean }) =>
+        footerHandlersRef.current?.onModelConfigCommit(config, options),
       onSendPrompt: () => footerHandlersRef.current?.onSendPrompt(),
       onStop: () => footerHandlersRef.current?.onStop(),
       onFork: () => footerHandlersRef.current?.onFork(),
@@ -1554,7 +1554,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     }
   };
 
-  const handleModelConfigCommit = (newConfig: ModelConfig) => {
+  const handleModelConfigCommit = (newConfig: ModelConfig, options?: { clearEffort?: boolean }) => {
     if (session && onUpdateSession) {
       const nextConfig: NonNullable<Session['model_config']> = {
         ...session.model_config,
@@ -1571,6 +1571,10 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
         nextConfig.advisorModel = newConfig.advisorModel;
       } else {
         delete nextConfig.advisorModel;
+      }
+      if (options?.clearEffort) {
+        delete nextConfig.effort;
+        setEffortLevel(undefined);
       }
       onUpdateSession(session.session_id, { model_config: nextConfig });
     }

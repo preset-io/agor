@@ -19,8 +19,11 @@ vi.mock('../ModelSelector', () => ({
   ModelSelector: () => <div data-testid="model-selector-stub" />,
 }));
 vi.mock('../EffortSelector', () => ({
-  EffortSelector: ({ value }: { value?: EffortLevel }) => (
-    <div data-testid="effort-selector-stub">{value ?? 'Inherited'}</div>
+  EffortSelector: ({ value, levels }: { value?: EffortLevel; levels?: readonly EffortLevel[] }) => (
+    <div data-testid="effort-selector-stub">
+      <span>{value ?? 'Inherited'}</span>
+      <span data-testid="effort-levels-stub">{levels?.join(',') ?? 'unknown'}</span>
+    </div>
   ),
 }));
 
@@ -506,6 +509,40 @@ describe('SessionFooter', () => {
     const overflowOptions = await screen.findByRole('group', { name: 'More options' });
     expect(within(overflowOptions).getByText('Effort')).toBeInTheDocument();
     expect(within(overflowOptions).getByText('Inherited')).toBeInTheDocument();
+  });
+
+  it('uses the exact OpenCode model effort set in the footer', async () => {
+    render(
+      <SessionFooter
+        {...baseProps}
+        currentUserId="opencode-owner"
+        session={
+          {
+            ...baseSession,
+            branch_id: 'branch-1',
+            created_by: 'opencode-owner',
+            agentic_tool: 'opencode',
+            model_config: {
+              mode: 'exact',
+              provider: 'opencode-go',
+              model: 'qwen3.8-flash',
+            },
+          } as Session
+        }
+        modelConfig={{
+          mode: 'exact',
+          provider: 'opencode-go',
+          model: 'qwen3.8-flash',
+        }}
+        toolCaps={AGENTIC_TOOL_CAPABILITIES.opencode}
+      />,
+      { wrapper: Wrapper }
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'More options' }));
+    const overflowOptions = await screen.findByRole('group', { name: 'More options' });
+    expect(within(overflowOptions).getByText('Effort')).toBeInTheDocument();
+    expect(within(overflowOptions).getByTestId('effort-levels-stub')).toBeEmptyDOMElement();
   });
 });
 

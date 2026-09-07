@@ -1760,10 +1760,18 @@ describe('agor_models_list', () => {
     expect(claudeIds).toContain('claude-opus-4-6');
     expect(claudeIds).toContain('claude-sonnet-5');
     expect(parsed.opencode).toMatchObject({
-      default: null,
-      models: [],
-      note: expect.stringContaining('provider-specific'),
+      default: { providerId: 'opencode', modelId: 'big-pickle' },
+      runtimeVersion: '1.14.33',
+      providers: expect.any(Array),
+      models: expect.any(Array),
+      note: expect.stringContaining('model-specific'),
     });
+    expect(
+      parsed.opencode.models.find(
+        (model: { provider: string; id: string }) =>
+          model.provider === 'opencode-go' && model.id === 'qwen3.8-flash'
+      )
+    ).toMatchObject({ reasoningEffortLevels: [] });
   });
 
   it('filters to a single agenticTool when requested', async () => {
@@ -1802,6 +1810,50 @@ describe('agor_models_list', () => {
       status: 'known',
       availability: 'provider-dependent',
     });
+  });
+
+  it('returns authoritative branch-scoped OpenCode effort metadata when requested', async () => {
+    const find = vi.fn(async () => ({
+      runtime: 'available',
+      runtimeVersion: '1.14.33',
+      suggestedSelection: { providerId: 'opencode-go', modelId: 'qwen3.8-flash' },
+      providers: [
+        {
+          id: 'opencode-go',
+          name: 'OpenCode Go',
+          runtimeAvailable: true,
+          credentialPresence: 'present',
+          authMethods: [],
+          models: [
+            {
+              id: 'qwen3.8-flash',
+              name: 'Qwen3.8 Flash',
+              status: 'active',
+              reasoningEffortLevels: [],
+            },
+          ],
+        },
+      ],
+    }));
+    const app = makeFakeApp({ '/opencode-auth': { find } });
+    const { agor_models_list } = await registerAndCaptureHandlers(
+      { app, userId: 'user-1', sessionId: 'sess-1' },
+      ['agor_models_list']
+    );
+
+    const result = await agor_models_list({ agenticTool: 'opencode', branchId: 'branch-1' });
+    const parsed = JSON.parse(result.content[0].text);
+
+    expect(find).toHaveBeenCalledWith(
+      expect.objectContaining({ query: { branch_id: 'branch-1' } })
+    );
+    expect(parsed.opencode.models).toEqual([
+      expect.objectContaining({
+        provider: 'opencode-go',
+        id: 'qwen3.8-flash',
+        reasoningEffortLevels: [],
+      }),
+    ]);
   });
 });
 

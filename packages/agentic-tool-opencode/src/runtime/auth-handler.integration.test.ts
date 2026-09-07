@@ -186,11 +186,26 @@ describe('opencode.auth executor command', () => {
             name: 'OpenAI',
             key: 'must-not-cross',
             models: {
+              'custom-unknown': {
+                id: 'custom-unknown',
+                name: 'Custom Unknown',
+                status: 'active',
+              },
               'gpt-next': {
                 id: 'gpt-next',
                 name: 'GPT Next',
                 status: 'active',
                 options: { apiKey: 'must-not-cross' },
+                variants: {
+                  high: { apiKey: 'must-not-cross' },
+                  minimal: { apiKey: 'must-not-cross' },
+                },
+              },
+              'qwen-empty': {
+                id: 'qwen-empty',
+                name: 'Qwen Empty',
+                status: 'active',
+                variants: {},
               },
             },
           },
@@ -237,7 +252,25 @@ describe('opencode.auth executor command', () => {
             credentialPresence: 'present',
             authMethods: [],
             suggestedModel: 'gpt-next',
-            models: [{ id: 'gpt-next', name: 'GPT Next', status: 'active' }],
+            models: [
+              {
+                id: 'custom-unknown',
+                name: 'Custom Unknown',
+                status: 'active',
+              },
+              {
+                id: 'gpt-next',
+                name: 'GPT Next',
+                status: 'active',
+                reasoningEffortLevels: ['high'],
+              },
+              {
+                id: 'qwen-empty',
+                name: 'Qwen Empty',
+                status: 'active',
+                reasoningEffortLevels: [],
+              },
+            ],
           },
         ],
       },
