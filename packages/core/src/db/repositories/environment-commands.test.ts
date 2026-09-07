@@ -198,6 +198,7 @@ describe('shared environment command admission and transitions', () => {
           },
         },
         { start_command: 'evil' },
+        { health_check_url: undefined, start_command: undefined },
         { archived: true },
         { path: '/elsewhere' },
       ]) {

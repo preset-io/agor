@@ -29,6 +29,20 @@ export function isBranchArchiveOrDeleteOptions(
 export type BranchArchiveOrDeleteResult = Branch | { deleted: true; branch_id: BranchID };
 
 /**
+ * Rendered environment snapshot fields. In branch updates, an own null/undefined
+ * value clears these fields; omitting a key preserves it. Rendering supplies all
+ * six keys so an absent template value cannot retain another variant's command.
+ */
+export const BRANCH_ENVIRONMENT_SNAPSHOT_FIELDS = [
+  'start_command',
+  'stop_command',
+  'nuke_command',
+  'logs_command',
+  'health_check_url',
+  'app_url',
+] as const satisfies readonly (keyof Branch)[];
+
+/**
  * Git branch - First-class entity for isolated development contexts
  *
  * Branches are persistent work contexts that outlive individual sessions.

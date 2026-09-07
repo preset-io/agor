@@ -19,7 +19,10 @@ import type {
 import { and, asc, desc, eq, exists, inArray, isNull, like, or, type SQL, sql } from 'drizzle-orm';
 import { getBaseUrl } from '../../config/config-manager';
 import { generateId } from '../../lib/ids';
-import { BRANCH_ENVIRONMENT_CLEARABLE_FIELDS } from '../../types/branch';
+import {
+  BRANCH_ENVIRONMENT_CLEARABLE_FIELDS,
+  BRANCH_ENVIRONMENT_SNAPSHOT_FIELDS,
+} from '../../types/branch';
 import { hasActiveEnvironmentCommand } from '../../types/environment-command';
 import { getBranchUrl } from '../../utils/url';
 import type { Database } from '../client';
@@ -674,12 +677,7 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
           'filesystem_status',
           'path',
           'ref',
-          'start_command',
-          'stop_command',
-          'nuke_command',
-          'logs_command',
-          'health_check_url',
-          'app_url',
+          ...BRANCH_ENVIRONMENT_SNAPSHOT_FIELDS,
           'environment_variant',
         ].some((field) => Object.hasOwn(updates, field))
       ) {
@@ -697,6 +695,13 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
         created_at: current.created_at, // Never change created timestamp
         updated_at: options?.preserveUpdatedAt ? current.updated_at : new Date().toISOString(),
       });
+      // A rendered snapshot must also remove fields absent from its variant.
+      // Keep this narrow: omitted keys and other branch fields still deep-merge.
+      for (const key of BRANCH_ENVIRONMENT_SNAPSHOT_FIELDS) {
+        if (Object.hasOwn(updates, key) && updates[key] == null) {
+          delete merged[key];
+        }
+      }
       // Environment callbacks have an explicit-clear contract. Apply its
       // tombstones AFTER merging under the row lock so stale runtime fields
       // cannot reappear. Omitted fields and other nested patches still merge.

@@ -35,9 +35,13 @@ describe.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
       await runWithTenantDatabaseScope(a, tenant, (db) =>
         new BranchRepository(db).update(branch.branch_id, {
           environment_instance: { status: 'error', last_error: 'failed', process: { pid: 123 } },
+          health_check_url: 'https://example.invalid/old-health',
+          app_url: 'https://example.invalid/old-app',
         })
       );
       const clear = {
+        health_check_url: undefined,
+        app_url: undefined,
         environment_instance: {
           status: 'stopped' as const,
           process: undefined,
@@ -48,6 +52,9 @@ describe.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
         await expect(new BranchRepository(db).update(branch.branch_id, clear)).rejects.toThrow();
       });
       await runWithTenantDatabaseScope(a, tenant, async (db) => {
+        const before = await new BranchRepository(db).findById(branch.branch_id);
+        expect(before?.health_check_url).toBe('https://example.invalid/old-health');
+        expect(before?.app_url).toBe('https://example.invalid/old-app');
         expect(
           (await new BranchRepository(db).findById(branch.branch_id))?.environment_instance
         ).toMatchObject({ last_error: 'failed', process: { pid: 123 } });
@@ -56,6 +63,10 @@ describe.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
         new BranchRepository(db).update(branch.branch_id, clear)
       );
       await runWithTenantDatabaseScope(a, tenant, async (db) => {
+        const after = await new BranchRepository(db).findById(branch.branch_id);
+        expect(after?.health_check_url).toBeUndefined();
+        expect(after?.app_url).toBeUndefined();
+        expect(after?.start_command).toBe(branch.start_command);
         expect(
           (await new BranchRepository(db).findById(branch.branch_id))?.environment_instance
         ).toEqual({ status: 'stopped' });
