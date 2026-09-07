@@ -8,6 +8,7 @@
 import { Ajv } from '@feathersjs/schema';
 import type { TObject, TProperties } from '@feathersjs/typebox';
 import { getValidator, Type } from '@feathersjs/typebox';
+import { PAGINATION } from '../config/constants';
 import { AGENTIC_TOOL_NAMES, PERSISTED_AGENTIC_TOOL_NAMES } from '../types/agentic-tool';
 import { MAX_PRESENCE_BOARD_SUBSCRIPTIONS } from '../types/presence';
 
@@ -91,8 +92,8 @@ export function createQuerySchema<T extends TProperties>(properties: TObject<T>)
     [
       properties,
       Type.Object({
-        $limit: Type.Optional(Type.Integer({ minimum: 0, maximum: 10000 })),
-        $skip: Type.Optional(Type.Integer({ minimum: 0, maximum: 10000 })),
+        $limit: Type.Optional(Type.Integer({ minimum: 0, maximum: PAGINATION.MAX_LIMIT })),
+        $skip: Type.Optional(Type.Integer({ minimum: 0, maximum: PAGINATION.MAX_SKIP })),
         $sort: Type.Optional(
           Type.Record(Type.String(), Type.Union([Type.Literal(1), Type.Literal(-1)]))
         ),
@@ -365,6 +366,7 @@ export const boardObjectQuerySchema = createQuerySchema(
     card_id: Type.Optional(CommonSchemas.uuid),
     zone_id: Type.Optional(Type.String()),
     entity_type: Type.Optional(Type.Union([Type.Literal('branch'), Type.Literal('card')])),
+    exclude_archived_branches: Type.Optional(CommonSchemas.boolean),
     created_at: Type.Optional(CommonSchemas.timestamp),
   })
 );

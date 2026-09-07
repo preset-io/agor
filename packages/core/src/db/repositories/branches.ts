@@ -35,6 +35,7 @@ import {
 import {
   type BranchInsert,
   type BranchRow,
+  boardObjects,
   branches,
   branchPermissionConfigs,
   branchPermissionEntries,
@@ -430,6 +431,7 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
   async findPage(opts: {
     repo_id?: UUID;
     board_id?: BoardID;
+    zone_id?: string;
     archived?: boolean;
     branchIds?: BranchID[];
     visibleToUserId?: UUID;
@@ -442,6 +444,13 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
     const conditions: SQL[] = [];
     if (opts.repo_id) conditions.push(eq(branches.repo_id, opts.repo_id));
     if (opts.board_id) conditions.push(eq(branches.board_id, opts.board_id));
+    if (opts.zone_id) {
+      conditions.push(
+        sql`exists (select 1 from ${boardObjects}
+          where ${boardObjects.branch_id} = ${branches.branch_id}
+            and ${jsonExtract(this.db, boardObjects.data, 'zone_id')} = ${opts.zone_id})`
+      );
+    }
     if (opts.archived !== undefined) conditions.push(eq(branches.archived, opts.archived));
     if (opts.branchIds) conditions.push(inArray(branches.branch_id, opts.branchIds));
     if (opts.visibleToUserId) {

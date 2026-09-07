@@ -1,3 +1,4 @@
+import { PAGINATION } from '@agor/core/config';
 import { BranchRepository, CapabilityPolicyRepository, shortId } from '@agor/core/db';
 import type {
   Board,
@@ -335,7 +336,7 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
       inputSchema: z.object({
         repoId: mcpOptionalId('repoId', 'Repository', 'Repository ID to filter by'),
         limit: mcpLimit(BRANCH_LIST_DEFAULT_LIMIT, BRANCH_LIST_MAX_LIMIT),
-        offset: mcpOffset(0),
+        offset: mcpOffset(0, PAGINATION.MAX_SKIP),
         includeArchived: z
           .boolean()
           .optional()

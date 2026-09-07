@@ -68,6 +68,7 @@ describe('boardObjectQueryValidator', () => {
           card_id: '019e8e1e',
           zone_id: 'zone-review',
           entity_type: 'branch',
+          exclude_archived_branches: 'true',
           $limit: 25,
           $skip: 5,
           unknown: 'removed',
@@ -83,6 +84,7 @@ describe('boardObjectQueryValidator', () => {
       card_id: '019e8e1e',
       zone_id: 'zone-review',
       entity_type: 'branch',
+      exclude_archived_branches: true,
       $limit: 25,
       $skip: 5,
     });

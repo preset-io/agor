@@ -127,12 +127,16 @@ function shouldSqlPageBranchQuery(query?: Record<string, unknown>): boolean {
     'board_id',
     'repo_id',
     'branch_id',
+    'zone_id',
     '$limit',
     '$skip',
     '$sort',
   ]);
   if (Object.keys(query).some((key) => !allowed.has(key))) return false;
-  for (const key of ['archived', 'board_id', 'repo_id']) {
+  // An empty virtual filter historically goes through the generic adapter;
+  // do not turn it into an unrestricted SQL page.
+  if (query.zone_id === '') return false;
+  for (const key of ['archived', 'board_id', 'repo_id', 'zone_id']) {
     if (query[key] !== undefined && typeof query[key] !== 'boolean' && key === 'archived') {
       return false;
     }
@@ -1396,7 +1400,9 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     const zoneId = params?.query?.zone_id;
     let findParams = params;
 
-    if (zoneId) {
+    // Simple inventory pages can correlate zone membership in SQL rather than
+    // materializing every matching ID. Preserve the generic adapter fallback.
+    if (zoneId && !shouldSqlPageBranchQuery(params?.query)) {
       const branchIdsInZone = await this.branchRepo.findBranchIdsByZone(zoneId);
       const existingBranchFilter = params?.query?.branch_id;
       let filteredBranchIds = branchIdsInZone;
@@ -1442,6 +1448,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       const page = await this.branchRepo.findPage({
         repo_id: typeof query?.repo_id === 'string' ? (query.repo_id as UUID) : undefined,
         board_id: typeof query?.board_id === 'string' ? (query.board_id as BoardID) : undefined,
+        zone_id: typeof query?.zone_id === 'string' ? query.zone_id : undefined,
         archived: typeof query?.archived === 'boolean' ? query.archived : undefined,
         branchIds,
         visibleToUserId: findParams?._agorSqlBranchAccessUserId,

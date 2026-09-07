@@ -115,6 +115,9 @@ export const PAGINATION = {
    */
   MAX_LIMIT: 10_000,
 
+  /** Offset ceiling for services using the common Feathers query schema. */
+  MAX_SKIP: 10_000,
+
   /**
    * Default limit for CLI list commands - reasonable for terminal display
    */
