@@ -10,7 +10,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useIdentityGuardedAsync } from '../../hooks/useIdentityGuardedAsync';
 import { type AgenticToolFieldConfig, ApiKeyFields, type FieldStatus } from '../ApiKeyFields';
 import { FieldRow } from '../SettingsModal/panelPrimitives';
-import { ClaudeOAuthSignIn } from './ClaudeOAuthSignIn';
+import { CLAUDE_OAUTH_STORAGE_DESCRIPTION, ClaudeOAuthSignIn } from './ClaudeOAuthSignIn';
 
 const { Text } = Typography;
 const { useToken } = theme;
@@ -358,9 +358,7 @@ export function ClaudeAuthSettings({
         {allowSubscriptionLogin && allowOAuthSignIn && view === 'oauth' && (
           <div>
             <Text type="secondary" style={{ display: 'block', marginBottom: token.marginSM }}>
-              Sign in with your Claude subscription — Agor stores the login on the server, no token
-              to copy. The login is shared per server user, so signing in replaces any Claude login
-              already on this server.
+              {CLAUDE_OAUTH_STORAGE_DESCRIPTION}
             </Text>
             <ClaudeOAuthSignIn
               client={client}

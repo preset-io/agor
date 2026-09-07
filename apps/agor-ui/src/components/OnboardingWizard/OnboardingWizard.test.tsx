@@ -26,7 +26,7 @@
  */
 
 import type { Board, User } from '@agor-live/client';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { ComponentProps } from 'react';
 import { EMPTY_MAPS } from '../../store/agorMaps';
 import { agorStore } from '../../store/agorStore';
@@ -518,6 +518,112 @@ describe('OnboardingWizard', () => {
     });
   });
 
+  it('hides Claude OAuth unless the daemon capability is explicitly enabled', () => {
+    const { client } = renderWizard({ initialStep: 'llm' });
+
+    clickButton('Claude');
+
+    expect(screen.queryByText('Sign in with Claude')).not.toBeInTheDocument();
+    expect(screen.getByText('API key')).toBeInTheDocument();
+    expect(screen.getByText('Subscription token')).toBeInTheDocument();
+    expect(client.service).not.toHaveBeenCalledWith('claude-auth/oauth');
+  });
+
+  it('offers the capability-gated Claude OAuth flow alongside both existing alternatives', async () => {
+    const create = vi.fn(async () => ({
+      phase: 'awaiting_code',
+      attemptId: 'attempt-1',
+      verificationUrl: 'https://claude.example/authorize',
+    }));
+    const find = vi.fn(async () => ({ phase: 'idle' }));
+    const client = {
+      io: { on: vi.fn(), off: vi.fn() },
+      service: vi.fn((name: string) =>
+        name === 'claude-auth/oauth' ? { create, find } : { create: vi.fn(), find: vi.fn() }
+      ),
+    };
+    renderWizard({
+      initialStep: 'llm',
+      client: client as never,
+      allowClaudeOAuthSignIn: true,
+    });
+
+    clickButton('Claude');
+    expect(screen.getByText('API key')).toBeInTheDocument();
+    expect(screen.getByText('Subscription token')).toBeInTheDocument();
+    const methodGroup = screen.getByRole('group', {
+      name: 'Claude authentication method',
+    });
+    expect(methodGroup.querySelector('button[aria-pressed="true"]')).toHaveTextContent('API key');
+    expect(methodGroup.querySelectorAll('button[aria-pressed]')).toHaveLength(3);
+    expect(
+      screen.getByText('Encrypted at rest and not added to prompt transcripts or logs.')
+    ).toBeInTheDocument();
+    clickButton('Sign in with Claude');
+
+    await waitFor(() => expect(create).toHaveBeenCalledWith({}));
+    expect(methodGroup.querySelector('button[aria-pressed="true"]')).toHaveTextContent(
+      'Sign in with Claude'
+    );
+    expect(
+      screen.getByText(
+        /stores the resulting refreshable login in your private per-user execution home/i
+      )
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText('Encrypted at rest and not added to prompt transcripts or logs.')
+    ).not.toBeInTheDocument();
+    expect((await screen.findByText('Open the Claude sign-in page')).closest('a')).toHaveAttribute(
+      'href',
+      'https://claude.example/authorize'
+    );
+    expect(screen.getByLabelText('Claude authorization code')).toBeInTheDocument();
+    expect(screen.getByText(/^connect →/i).closest('button')).toBeDisabled();
+  });
+
+  it('enables continuation only after Claude OAuth succeeds', async () => {
+    const create = vi
+      .fn()
+      .mockResolvedValueOnce({
+        phase: 'awaiting_code',
+        attemptId: 'attempt-1',
+        verificationUrl: 'https://claude.example/authorize',
+      })
+      .mockResolvedValueOnce({
+        phase: 'success',
+        attemptId: 'attempt-1',
+        hint: 'Signed in with Claude.',
+      });
+    const find = vi.fn(async () => ({ phase: 'idle' }));
+    const client = {
+      io: { on: vi.fn(), off: vi.fn() },
+      service: vi.fn((name: string) =>
+        name === 'claude-auth/oauth' ? { create, find } : { create: vi.fn(), find: vi.fn() }
+      ),
+    };
+    renderWizard({
+      initialStep: 'llm',
+      client: client as never,
+      allowClaudeOAuthSignIn: true,
+    });
+
+    clickButton('Claude');
+    clickButton('Sign in with Claude');
+    const codeInput = await screen.findByLabelText('Claude authorization code');
+    fireEvent.change(codeInput, { target: { value: 'CODE#STATE' } });
+    fireEvent.keyDown(codeInput, { key: 'Enter', code: 'Enter' });
+
+    await waitFor(() =>
+      expect(create).toHaveBeenLastCalledWith({
+        code: 'CODE#STATE',
+        attemptId: 'attempt-1',
+      })
+    );
+    await waitFor(() => expect(screen.getByText(/^continue →/i).closest('button')).toBeEnabled());
+    clickButton(/^continue →/i);
+    expect(await screen.findByText("You're ready to build.")).toBeInTheDocument();
+  });
+
   it('strips whitespace picked up from a wrapped terminal paste before saving a subscription token', async () => {
     // `claude setup-token` prints a long token that a narrow terminal soft-wraps
     // across lines; copying the wrapped output can carry an embedded newline.
@@ -565,6 +671,66 @@ describe('OnboardingWizard', () => {
     expect(await screen.findByText("You're ready to build.")).toBeInTheDocument();
     // Continuing with an already-verified key does not re-save it.
     expect(onUpdateUser).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['missing', undefined],
+    ['false', false],
+  ] as const)(
+    'fails closed for a managed Claude login when the runtime capability is %s',
+    async (_label, allowClaudeOAuthSignIn) => {
+      const onCheckAuth = vi.fn(async () => ({
+        status: 'unknown' as const,
+        authenticated: false,
+        method: 'none' as const,
+      }));
+      renderWizard({
+        initialStep: 'llm',
+        user: makeUser({
+          agentic_auth_methods: { 'claude-code': 'subscription' },
+          agentic_credential_sources: { 'claude-code': 'managed_file' },
+        } as Partial<User>),
+        onCheckAuth,
+        ...(allowClaudeOAuthSignIn === undefined ? {} : { allowClaudeOAuthSignIn }),
+      });
+
+      // Let the mount effects and one deferred task settle before checking the
+      // negative path; an immediate waitFor assertion can pass before the
+      // capability-gated auth check would have had a chance to run.
+      await act(async () => {
+        await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      });
+      expect(onCheckAuth).not.toHaveBeenCalled();
+      expect(screen.queryByText('Connected')).not.toBeInTheDocument();
+      expect(screen.queryByText('Sign in with Claude')).not.toBeInTheDocument();
+      expect(screen.getByText('Connect →').closest('button')).toBeDisabled();
+
+      clickButton('Claude');
+      expect(screen.getByLabelText('Anthropic API key')).toBeInTheDocument();
+      expect(screen.getByText('Subscription token')).toBeInTheDocument();
+      expect(screen.getByText('Connect →').closest('button')).toBeDisabled();
+    }
+  );
+
+  it('keeps a managed Claude login usable after a wizard remount when its cheap probe is inconclusive and the runtime capability is available', async () => {
+    const onCheckAuth = vi.fn(async () => ({
+      status: 'unknown' as const,
+      authenticated: false,
+      method: 'none' as const,
+    }));
+    renderWizard({
+      initialStep: 'llm',
+      user: makeUser({
+        agentic_auth_methods: { 'claude-code': 'subscription' },
+        agentic_credential_sources: { 'claude-code': 'managed_file' },
+      } as Partial<User>),
+      onCheckAuth,
+      allowClaudeOAuthSignIn: true,
+    });
+
+    await waitFor(() => expect(onCheckAuth).toHaveBeenCalledWith('claude-code'));
+    expect(await screen.findByText('Connected')).toBeInTheDocument();
+    expect(screen.getByText(/^continue/i).closest('button')).toBeEnabled();
   });
 
   it('workspace step advances to the LLM step WITHOUT creating a board (creation deferred to completion)', async () => {

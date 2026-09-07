@@ -48,6 +48,7 @@ import {
   resolveTemplateSourceRemoteUrl,
   type TeammateGalleryCardId,
 } from '../../utils/teammateTemplates';
+import { CLAUDE_OAUTH_STORAGE_DESCRIPTION, ClaudeOAuthSignIn } from '../ClaudeAuth';
 import { type CodexAuthFallback, CodexDeviceSignIn, CodexImportAuthJson } from '../CodexAuth';
 import { GlassPanelHighlights } from '../GlassSurface/GlassPanel';
 import { ToolIcon } from '../ToolIcon';
@@ -62,10 +63,23 @@ const openCodeOnboarding = getAgenticToolUIIntegration('opencode').onboardingOpt
 export type WizardStep = 'goals' | 'workspace' | 'llm' | 'done';
 type AuthMethod =
   | 'api-key'
+  | 'claude-oauth'
   | 'claude-subscription-token'
-  | 'codex-cli-auth'
   | 'codex-auth-json'
   | 'codex-device-auth';
+type AuthPane = 'secret' | 'claude-oauth' | 'codex-auth-json' | 'codex-device-auth';
+
+function paneForAuthMethod(method: AuthMethod): AuthPane {
+  switch (method) {
+    case 'api-key':
+    case 'claude-subscription-token':
+      return 'secret';
+    case 'claude-oauth':
+    case 'codex-auth-json':
+    case 'codex-device-auth':
+      return method;
+  }
+}
 
 /**
  * Per-agent auth-method toggle entries. Agents absent here have exactly one
@@ -76,6 +90,7 @@ const AUTH_METHOD_OPTIONS: Partial<
 > = {
   'claude-code': [
     { label: 'API key', value: 'api-key' },
+    { label: 'Sign in with Claude', value: 'claude-oauth' },
     { label: 'Subscription token', value: 'claude-subscription-token' },
   ],
   codex: [
@@ -191,18 +206,36 @@ function validateLlmKeyPattern(agent: AgenticToolName, key: string): string | nu
   }
 }
 
-function hasAnyLlmKey(user: User | null | undefined): boolean {
+function hasManagedClaudeLogin(user: User | null | undefined): boolean {
+  return user?.agentic_credential_sources?.['claude-code'] === 'managed_file';
+}
+
+function hasUsableClaudeCredential(
+  user: User | null | undefined,
+  managedClaudeLoginAvailable: boolean
+): boolean {
   if (!user) return false;
+  if (hasManagedClaudeLogin(user)) return managedClaudeLoginAvailable;
   const claude = user.agentic_tools?.['claude-code'];
-  const codex = user.agentic_tools?.codex;
-  const gemini = user.agentic_tools?.gemini;
   return !!(
     claude?.ANTHROPIC_API_KEY ||
     claude?.CLAUDE_CODE_OAUTH_TOKEN ||
+    user.env_vars?.ANTHROPIC_API_KEY
+  );
+}
+
+function hasAnyLlmKey(
+  user: User | null | undefined,
+  managedClaudeLoginAvailable: boolean
+): boolean {
+  if (!user) return false;
+  const codex = user.agentic_tools?.codex;
+  const gemini = user.agentic_tools?.gemini;
+  return !!(
+    hasUsableClaudeCredential(user, managedClaudeLoginAvailable) ||
     codex?.OPENAI_API_KEY ||
     user.agentic_auth_methods?.codex === 'subscription' ||
     gemini?.GEMINI_API_KEY ||
-    user.env_vars?.ANTHROPIC_API_KEY ||
     user.env_vars?.OPENAI_API_KEY ||
     user.env_vars?.GEMINI_API_KEY
   );
@@ -287,6 +320,12 @@ const ONB_ANIM_CSS = `
      target only wizard-owned classes; no AntD internals are overridden. */
   @media (max-width: 480px) {
     .onb-goal-grid { grid-template-columns: minmax(0, 1fr) !important; }
+    .onb-auth-methods { grid-template-columns: minmax(0, 1fr) !important; }
+    .onb-auth-methods > button {
+      border-left: none !important;
+      border-top: 1px solid rgba(255,255,255,0.08) !important;
+    }
+    .onb-auth-methods > button:first-child { border-top: none !important; }
   }
 
   @media (max-height: 600px) {
@@ -376,6 +415,9 @@ export interface OnboardingWizardProps {
 
   onCheckAuth?: (tool: AgenticToolName, apiKey?: string) => Promise<AuthCheckResult>;
 
+  /** Deployment capability for daemon-driven Claude OAuth. Fail-closed by default. */
+  allowClaudeOAuthSignIn?: boolean;
+
   /** Re-open wizard starting at a specific step (used by tests / future callers). */
   initialStep?: WizardStep;
   /** Override only for deterministic slow-operation tests. */
@@ -433,6 +475,7 @@ export function OnboardingWizard({
   client,
   onUpdateUser,
   onCheckAuth,
+  allowClaudeOAuthSignIn = false,
   initialStep,
   completionSlowThresholdMs = ONBOARDING_COMPLETION_SLOW_THRESHOLD_MS,
 }: OnboardingWizardProps) {
@@ -482,6 +525,13 @@ export function OnboardingWizard({
   const [llmAuthVerified, setLlmAuthVerified] = useState<Partial<Record<AgenticToolName, boolean>>>(
     {}
   );
+  const managedClaudeLoginAvailable = allowClaudeOAuthSignIn && hasManagedClaudeLogin(user);
+  // A successful health response is cached for the app lifetime, so this
+  // capability does not normally change while the wizard is mounted. Resolve
+  // a stale local OAuth view synchronously anyway, keeping pane/header/action
+  // selection total for isolated rerenders without a state-reset effect.
+  const effectiveAuthMethod =
+    authMethod === 'claude-oauth' && !allowClaudeOAuthSignIn ? 'api-key' : authMethod;
 
   // ── Step 2: workspace — name the user's first AI teammate ─────────────────
   // The teammate's name/emoji also names the board the wizard creates for them,
@@ -552,15 +602,10 @@ export function OnboardingWizard({
     if (userSeedRef.current === seedKey) return;
     userSeedRef.current = seedKey;
     // Pre-select LLM if user already has one configured
-    if (hasAnyLlmKey(user)) {
-      const claude = user?.agentic_tools?.['claude-code'];
+    if (hasAnyLlmKey(user, managedClaudeLoginAvailable)) {
       const codex = user?.agentic_tools?.codex;
       const gemini = user?.agentic_tools?.gemini;
-      if (
-        claude?.ANTHROPIC_API_KEY ||
-        claude?.CLAUDE_CODE_OAUTH_TOKEN ||
-        user?.env_vars?.ANTHROPIC_API_KEY
-      ) {
+      if (hasUsableClaudeCredential(user, managedClaudeLoginAvailable)) {
         setSelectedAgent('claude-code');
       } else if (
         codex?.OPENAI_API_KEY ||
@@ -588,7 +633,15 @@ export function OnboardingWizard({
     } else {
       setTeammateName('');
     }
-  }, [open, user, savedBoard, savedBoardId, savedOnboarding, initialStep]);
+  }, [
+    open,
+    user,
+    savedBoard,
+    savedBoardId,
+    savedOnboarding,
+    initialStep,
+    managedClaudeLoginAvailable,
+  ]);
 
   // ─── Derived values ──────────────────────────────────────────────────────
 
@@ -602,15 +655,10 @@ export function OnboardingWizard({
   const agentHasKey = useCallback(
     (agent: AgenticToolName): boolean => {
       if (!user) return false;
-      const claude = user.agentic_tools?.['claude-code'];
       const codex = user.agentic_tools?.codex;
       const gemini = user.agentic_tools?.gemini;
       if (agent === 'claude-code') {
-        return !!(
-          claude?.ANTHROPIC_API_KEY ||
-          claude?.CLAUDE_CODE_OAUTH_TOKEN ||
-          user.env_vars?.ANTHROPIC_API_KEY
-        );
+        return hasUsableClaudeCredential(user, managedClaudeLoginAvailable);
       }
       if (agent === 'codex') {
         return !!(
@@ -626,7 +674,7 @@ export function OnboardingWizard({
       }
       return false;
     },
-    [user]
+    [managedClaudeLoginAvailable, user]
   );
 
   const agentIsVerifiedConnected = useCallback(
@@ -654,13 +702,19 @@ export function OnboardingWizard({
       onCheckAuth(agent)
         .then((result) => {
           // 'unknown' = couldn't verify (transient/transport). Never downgrade a
-          // stored key to "broken". A persisted Codex subscription is the
-          // durable result of a device/import flow that already verified its
-          // executor write, so keep that successful registration usable
-          // without turning the onboarding button into "Checking…" forever.
+          // stored key to "broken". Persisted Codex and managed Claude
+          // subscriptions are durable results of flows that already verified
+          // their executor writes, so keep those successful registrations
+          // usable without turning the onboarding button into "Checking…"
+          // forever.
           if (result.status === 'unknown') {
-            if (agent === 'codex' && user?.agentic_auth_methods?.codex === 'subscription') {
-              setLlmAuthVerified((prev) => (prev.codex === true ? prev : { ...prev, codex: true }));
+            const hasVerifiedSubscription =
+              (agent === 'codex' && user?.agentic_auth_methods?.codex === 'subscription') ||
+              (agent === 'claude-code' && managedClaudeLoginAvailable);
+            if (hasVerifiedSubscription) {
+              setLlmAuthVerified((prev) =>
+                prev[agent] === true ? prev : { ...prev, [agent]: true }
+              );
             }
             return;
           }
@@ -674,7 +728,13 @@ export function OnboardingWizard({
           if (authCheckInFlightRef.current.size === 0) setLlmAuthChecking(null);
         });
     }
-  }, [currentStep, onCheckAuth, agentHasKey, user?.agentic_auth_methods?.codex]);
+  }, [
+    currentStep,
+    onCheckAuth,
+    agentHasKey,
+    user?.agentic_auth_methods?.codex,
+    managedClaudeLoginAvailable,
+  ]);
 
   const primaryEnabled = useMemo(() => {
     switch (currentStep) {
@@ -689,16 +749,19 @@ export function OnboardingWizard({
         // refresh that agentIsVerifiedConnected depends on).
         if (
           selectedAgent === 'codex' &&
-          (authMethod === 'codex-device-auth' || authMethod === 'codex-auth-json')
+          (effectiveAuthMethod === 'codex-device-auth' || effectiveAuthMethod === 'codex-auth-json')
         )
           return llmAuthVerified.codex === true;
+        if (selectedAgent === 'claude-code' && effectiveAuthMethod === 'claude-oauth') {
+          return allowClaudeOAuthSignIn && llmAuthVerified['claude-code'] === true;
+        }
         // Key stored, check still in progress — keep enabled so user isn't stuck
         if (agentHasKey(selectedAgent) && llmAuthVerified[selectedAgent] === undefined) return true;
         // Require a new key with valid format (stored key absent or broken)
         if (!sanitizeSecretValue(apiKey)) return false;
         // Subscription tokens have no fixed format — any non-empty string is
         // accepted (the daemon validates the token).
-        if (authMethod === 'claude-subscription-token') return true;
+        if (effectiveAuthMethod === 'claude-subscription-token') return true;
         return validateLlmKeyPattern(selectedAgent, sanitizeSecretValue(apiKey)) === null;
       }
       case 'workspace':
@@ -715,7 +778,8 @@ export function OnboardingWizard({
     agentHasKey,
     llmAuthVerified,
     apiKey,
-    authMethod,
+    effectiveAuthMethod,
+    allowClaudeOAuthSignIn,
     teammateName,
   ]);
 
@@ -727,13 +791,18 @@ export function OnboardingWizard({
       case 'llm': {
         if (!selectedAgent) return 'Choose an AI model first';
         if (agentIsVerifiedConnected(selectedAgent)) return null;
-        if (selectedAgent === 'codex' && authMethod === 'codex-device-auth') {
+        if (selectedAgent === 'codex' && effectiveAuthMethod === 'codex-device-auth') {
           return llmAuthVerified.codex === true
             ? null
             : 'Approve the sign-in code in ChatGPT first';
         }
-        if (selectedAgent === 'codex' && authMethod === 'codex-auth-json') {
+        if (selectedAgent === 'codex' && effectiveAuthMethod === 'codex-auth-json') {
           return llmAuthVerified.codex === true ? null : 'Import your Codex login to continue';
+        }
+        if (selectedAgent === 'claude-code' && effectiveAuthMethod === 'claude-oauth') {
+          return allowClaudeOAuthSignIn && llmAuthVerified['claude-code'] === true
+            ? null
+            : 'Complete Claude sign-in to continue';
         }
         if (agentHasKey(selectedAgent) && llmAuthVerified[selectedAgent] === undefined) return null;
         if (!sanitizeSecretValue(apiKey)) {
@@ -755,7 +824,8 @@ export function OnboardingWizard({
     agentHasKey,
     llmAuthVerified,
     apiKey,
-    authMethod,
+    effectiveAuthMethod,
+    allowClaudeOAuthSignIn,
     teammateName,
     llmSaving,
     completing,
@@ -773,6 +843,12 @@ export function OnboardingWizard({
         )
           return 'Checking…';
         if (selectedAgent && agentIsVerifiedConnected(selectedAgent)) return 'Continue →';
+        if (
+          selectedAgent === 'claude-code' &&
+          effectiveAuthMethod === 'claude-oauth' &&
+          llmAuthVerified['claude-code'] === true
+        )
+          return 'Continue →';
         return 'Connect →';
       }
       case 'workspace':
@@ -794,6 +870,7 @@ export function OnboardingWizard({
     agentHasKey,
     llmAuthVerified,
     agentIsVerifiedConnected,
+    effectiveAuthMethod,
     teammateName,
     completionError,
   ]);
@@ -832,6 +909,12 @@ export function OnboardingWizard({
   // so its internal timers never force wizard-wide re-renders.
   const handleCodexDeviceVerified = useCallback(() => {
     setLlmAuthVerified((prev) => (prev.codex === true ? prev : { ...prev, codex: true }));
+  }, []);
+
+  const handleClaudeOAuthVerified = useCallback(() => {
+    setLlmAuthVerified((prev) =>
+      prev['claude-code'] === true ? prev : { ...prev, 'claude-code': true }
+    );
   }, []);
 
   const handleCodexAuthMethodFallback = useCallback((target: CodexAuthFallback) => {
@@ -913,9 +996,13 @@ export function OnboardingWizard({
         // succeeded (button is disabled until then).
         if (
           selectedAgent === 'codex' &&
-          (authMethod === 'codex-device-auth' || authMethod === 'codex-auth-json')
+          (effectiveAuthMethod === 'codex-device-auth' || effectiveAuthMethod === 'codex-auth-json')
         ) {
           if (llmAuthVerified.codex === true) goToStep('done');
+          return;
+        }
+        if (selectedAgent === 'claude-code' && effectiveAuthMethod === 'claude-oauth') {
+          if (allowClaudeOAuthSignIn && llmAuthVerified['claude-code'] === true) goToStep('done');
           return;
         }
         // Key stored, auth check still running — proceed optimistically
@@ -926,7 +1013,7 @@ export function OnboardingWizard({
         if (!user || !sanitizeSecretValue(apiKey)) return;
         // Subscription tokens have no fixed format (see primaryEnabled/disabledReason
         // above, which already treat them as exempt) — only pattern-validate API keys.
-        if (authMethod !== 'claude-subscription-token') {
+        if (effectiveAuthMethod !== 'claude-subscription-token') {
           const patternErr = validateLlmKeyPattern(selectedAgent, sanitizeSecretValue(apiKey));
           if (patternErr) {
             setLlmError(patternErr);
@@ -954,7 +1041,7 @@ export function OnboardingWizard({
           }
         }
         if (!isCurrent()) return;
-        const keyName = keyNameForAgent(selectedAgent, authMethod);
+        const keyName = keyNameForAgent(selectedAgent, effectiveAuthMethod);
         try {
           await onUpdateUser(user.user_id, {
             agentic_tools: {
@@ -1113,7 +1200,8 @@ export function OnboardingWizard({
     llmAuthVerified,
     user,
     apiKey,
-    authMethod,
+    effectiveAuthMethod,
+    allowClaudeOAuthSignIn,
     onCheckAuth,
     onUpdateUser,
     client,
@@ -1386,7 +1474,10 @@ export function OnboardingWizard({
               keyBroken &&
               option.agent === 'codex' &&
               user?.agentic_auth_methods?.codex === 'subscription';
-            const methodOptions = AUTH_METHOD_OPTIONS[option.agent];
+            const methodOptions = AUTH_METHOD_OPTIONS[option.agent]?.filter(
+              (method) => method.value !== 'claude-oauth' || allowClaudeOAuthSignIn
+            );
+            const authPane = paneForAuthMethod(effectiveAuthMethod);
             return (
               <div
                 key={option.id}
@@ -1560,9 +1651,15 @@ export function OnboardingWizard({
 
                     {/* Auth method toggle — agents with more than one way in */}
                     {methodOptions && (
-                      <div
+                      <fieldset
+                        className="onb-auth-methods"
+                        aria-label={`${option.title} authentication method`}
                         style={{
-                          display: 'flex',
+                          display: 'grid',
+                          gridTemplateColumns: `repeat(${methodOptions.length}, minmax(0, 1fr))`,
+                          padding: 0,
+                          minWidth: 0,
+                          width: '100%',
                           marginTop: 12,
                           marginBottom: 12,
                           borderRadius: 8,
@@ -1576,11 +1673,12 @@ export function OnboardingWizard({
                         }}
                       >
                         {methodOptions.map((opt, idx) => {
-                          const active = authMethod === opt.value;
+                          const active = effectiveAuthMethod === opt.value;
                           return (
                             <button
                               key={opt.value}
                               type="button"
+                              aria-pressed={active}
                               onClick={() => {
                                 setAuthMethod(opt.value);
                                 setApiKey('');
@@ -1603,10 +1701,10 @@ export function OnboardingWizard({
                             </button>
                           );
                         })}
-                      </div>
+                      </fieldset>
                     )}
 
-                    {authMethod !== 'codex-device-auth' && authMethod !== 'codex-auth-json' && (
+                    {authPane === 'secret' && (
                       <div
                         style={{
                           display: 'flex',
@@ -1617,9 +1715,9 @@ export function OnboardingWizard({
                         }}
                       >
                         <Text style={{ color: TEXT_PRIMARY, fontSize: 13, fontWeight: 500 }}>
-                          {getKeyLabel(option.agent, authMethod)}
+                          {getKeyLabel(option.agent, effectiveAuthMethod)}
                         </Text>
-                        {option.keyLink && authMethod === 'api-key' && (
+                        {option.keyLink && effectiveAuthMethod === 'api-key' && (
                           <Typography.Link
                             href={option.keyLink}
                             target="_blank"
@@ -1632,49 +1730,83 @@ export function OnboardingWizard({
                       </div>
                     )}
 
-                    {authMethod === 'codex-device-auth' ? (
+                    {authPane === 'claude-oauth' && (
+                      <div>
+                        <Text style={{ color: TEXT_SECONDARY, display: 'block', marginBottom: 10 }}>
+                          {CLAUDE_OAUTH_STORAGE_DESCRIPTION}
+                        </Text>
+                        <ClaudeOAuthSignIn
+                          client={client}
+                          operationScope={onboardingAuthority.operationScope}
+                          connected={managedClaudeLoginAvailable}
+                          onVerified={handleClaudeOAuthVerified}
+                        />
+                      </div>
+                    )}
+                    {authPane === 'codex-device-auth' && (
                       <CodexDeviceSignIn
                         client={client}
                         operationScope={onboardingAuthority.operationScope}
                         onVerified={handleCodexDeviceVerified}
                         onUseFallback={handleCodexAuthMethodFallback}
                       />
-                    ) : authMethod === 'codex-auth-json' ? (
+                    )}
+                    {authPane === 'codex-auth-json' && (
                       <CodexImportAuthJson
                         client={client}
                         identityKey={onboardingAuthority.identityKey}
                         operationScope={onboardingAuthority.operationScope}
                         onImported={handleCodexImported}
                       />
-                    ) : authMethod === 'claude-subscription-token' ? (
-                      <>
-                        <Alert
-                          type="info"
-                          showIcon
-                          style={{ marginBottom: 10, fontSize: 12 }}
-                          title={
-                            <span>
-                              For claude.ai Pro or Max subscribers. In any terminal with Claude Code
-                              installed, run <code>claude setup-token</code>, then paste the printed
-                              token below. Need Claude Code?{' '}
-                              <Typography.Link
-                                href="https://docs.claude.com/en/docs/claude-code/setup"
-                                target="_blank"
-                                rel="noopener noreferrer"
-                              >
-                                Install docs
-                              </Typography.Link>
-                              .
-                            </span>
-                          }
-                        />
+                    )}
+                    {authPane === 'secret' &&
+                      (effectiveAuthMethod === 'claude-subscription-token' ? (
+                        <>
+                          <Alert
+                            type="info"
+                            showIcon
+                            style={{ marginBottom: 10, fontSize: 12 }}
+                            title={
+                              <span>
+                                For claude.ai Pro or Max subscribers. In any terminal with Claude
+                                Code installed, run <code>claude setup-token</code>, then paste the
+                                printed token below. Need Claude Code?{' '}
+                                <Typography.Link
+                                  href="https://docs.claude.com/en/docs/claude-code/setup"
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                >
+                                  Install docs
+                                </Typography.Link>
+                                .
+                              </span>
+                            }
+                          />
+                          <Input.Password
+                            aria-label="Claude subscription token"
+                            placeholder="Paste token from claude setup-token…"
+                            value={apiKey}
+                            onChange={(e) => {
+                              setApiKey(e.target.value);
+                              setLlmError(null);
+                            }}
+                            style={{
+                              background: 'rgba(0,0,0,0.3)',
+                              borderColor: 'rgba(255,255,255,0.12)',
+                              fontFamily: 'monospace',
+                              fontSize: 13,
+                            }}
+                          />
+                        </>
+                      ) : (
                         <Input.Password
-                          aria-label="Claude subscription token"
-                          placeholder="Paste token from claude setup-token…"
+                          aria-label={getKeyLabel(option.agent, effectiveAuthMethod)}
+                          placeholder={option.placeholder}
                           value={apiKey}
                           onChange={(e) => {
                             setApiKey(e.target.value);
-                            setLlmError(null);
+                            if (selectedAgent)
+                              setLlmError(validateLlmKeyPattern(selectedAgent, e.target.value));
                           }}
                           style={{
                             background: 'rgba(0,0,0,0.3)',
@@ -1683,31 +1815,15 @@ export function OnboardingWizard({
                             fontSize: 13,
                           }}
                         />
-                      </>
-                    ) : (
-                      <Input.Password
-                        aria-label={getKeyLabel(option.agent, authMethod)}
-                        placeholder={option.placeholder}
-                        value={apiKey}
-                        onChange={(e) => {
-                          setApiKey(e.target.value);
-                          if (selectedAgent)
-                            setLlmError(validateLlmKeyPattern(selectedAgent, e.target.value));
-                        }}
-                        style={{
-                          background: 'rgba(0,0,0,0.3)',
-                          borderColor: 'rgba(255,255,255,0.12)',
-                          fontFamily: 'monospace',
-                          fontSize: 13,
-                        }}
-                      />
-                    )}
+                      ))}
 
-                    <Text
-                      style={{ fontSize: 11, color: TEXT_MUTED, marginTop: 8, display: 'block' }}
-                    >
-                      Stored securely - never shared or logged.
-                    </Text>
+                    {authPane === 'secret' && (
+                      <Text
+                        style={{ fontSize: 11, color: TEXT_MUTED, marginTop: 8, display: 'block' }}
+                      >
+                        Encrypted at rest and not added to prompt transcripts or logs.
+                      </Text>
+                    )}
                     {llmError && (
                       <Alert
                         type="error"
