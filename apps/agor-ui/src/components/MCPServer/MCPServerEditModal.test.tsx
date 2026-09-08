@@ -115,7 +115,9 @@ describe('MCPServerEditModal legacy DCR compatibility', () => {
 
     fireEvent.click(await screen.findByRole('button', { name: 'Test Connection' }));
 
-    expect(await screen.findByText(error)).toBeVisible();
+    // The result can arrive while the modal is still opening. Wait for the
+    // visible message, not just its presence in the animated dialog's DOM.
+    await waitFor(() => expect(screen.getByText(error)).toBeVisible());
     expect(patch).toHaveBeenCalledOnce();
     expect(discover).toHaveBeenCalledOnce();
     expect(patch.mock.invocationCallOrder[0]).toBeLessThan(discover.mock.invocationCallOrder[0]!);
