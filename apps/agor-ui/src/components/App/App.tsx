@@ -64,6 +64,7 @@ import {
   selectFirstBoardId,
   selectSessionById,
 } from '../../store/selectors';
+import { SharedUserSettingsModal } from '../../surfaces/SharedUserSettingsModal';
 import type { AgenticToolOption, CreateRepoOptions } from '../../types';
 import { initializeAudioOnInteraction } from '../../utils/audio';
 import { useThemedMessage } from '../../utils/message';
@@ -95,7 +96,7 @@ import { SessionCanvas, type SessionCanvasRef } from '../SessionCanvas';
 import { SessionPanel } from '../SessionPanel';
 import { PendingToolChoicePanel } from '../SessionPanel/PendingToolChoicePanel';
 import { SessionSettingsModal } from '../SessionSettingsModal';
-import { SettingsModal, UserSettingsModal } from '../SettingsModal';
+import { SettingsModal } from '../SettingsModal';
 import { TerminalModal, WEB_TERMINAL_MIN_ROLE } from '../TerminalModal';
 import { ThemeEditorModal } from '../ThemeEditorModal';
 import {
@@ -1918,7 +1919,7 @@ export const App: React.FC<AppProps> = ({
           />
         )}
         <ThemeEditorModal open={themeEditorOpen} onClose={() => setThemeEditorOpen(false)} />
-        <UserSettingsModal
+        <SharedUserSettingsModal
           open={effectiveUserSettingsOpen}
           initialTab={userSettingsInitialTool ?? initialUserSettingsTab}
           onClose={() => {
@@ -1927,13 +1928,9 @@ export const App: React.FC<AppProps> = ({
             onUserSettingsClose?.();
           }}
           user={user || null}
-          currentUser={user || null}
           client={client}
-          onUpdate={async (userId, updates, childShouldApply) => {
-            await onUpdateUser?.(userId, updates, childShouldApply);
-            if (childShouldApply && !childShouldApply()) return;
-            await onRefreshCurrentUser?.(childShouldApply ?? (() => true));
-          }}
+          onUpdateUser={onUpdateUser}
+          onRefreshCurrentUser={onRefreshCurrentUser}
           onReopenOnboarding={async (mode, shouldApply) => {
             if (shouldApply && !shouldApply()) return;
             await onReopenOnboarding?.(mode, shouldApply);

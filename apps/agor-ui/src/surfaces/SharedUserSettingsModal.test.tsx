@@ -64,9 +64,11 @@ describe('SharedUserSettingsModal authority fencing', () => {
   it('drops refresh and restart continuations from the previous auth generation', async () => {
     const updatePending = deferred();
     const restartPending = deferred();
-    const onUpdateUser = vi.fn(() => updatePending.promise);
+    const onUpdateUser = vi.fn<CapturedProps['onUpdate']>(() => updatePending.promise);
     const onRefreshCurrentUser = vi.fn(async (_shouldApply: () => boolean) => {});
-    const onReopenOnboarding = vi.fn(() => restartPending.promise);
+    const onReopenOnboarding = vi.fn<NonNullable<CapturedProps['onReopenOnboarding']>>(
+      () => restartPending.promise
+    );
     const modal = (
       <SharedUserSettingsModal
         open
@@ -99,7 +101,7 @@ describe('SharedUserSettingsModal authority fencing', () => {
     expect(restartGuard?.()).toBe(false);
   });
 
-  it('passes the exact operation guard through an in-flight current-user refresh', async () => {
+  it('keeps an in-flight current-user refresh fenced to its authority', async () => {
     const refreshPending = deferred();
     let refreshGuard: (() => boolean) | undefined;
     const onRefreshCurrentUser = vi.fn((shouldApply: () => boolean) => {
@@ -131,5 +133,92 @@ describe('SharedUserSettingsModal authority fencing', () => {
       refreshPending.resolve();
       await pendingUpdate;
     });
+  });
+  it('serializes each patch and refresh pair and continues after a failed write', async () => {
+    const firstRefresh = deferred();
+    const calls: string[] = [];
+    const onUpdateUser = vi.fn<CapturedProps['onUpdate']>(
+      async (_id: string, updates: UpdateUserInput) => {
+        calls.push(`patch:${updates.name}`);
+        if (updates.name === 'rejected') throw new Error('denied');
+      }
+    );
+    const onRefreshCurrentUser = vi.fn(async () => {
+      calls.push('refresh');
+      if (onRefreshCurrentUser.mock.calls.length === 1) await firstRefresh.promise;
+    });
+    render(
+      view(
+        1,
+        <SharedUserSettingsModal
+          open
+          user={user}
+          client={client}
+          onClose={vi.fn()}
+          onUpdateUser={onUpdateUser}
+          onRefreshCurrentUser={onRefreshCurrentUser}
+        />
+      )
+    );
+    const first = captured!.onUpdate(user.user_id, { name: 'first' }, () => true);
+    const second = captured!.onUpdate(user.user_id, { name: 'rejected' }, () => true);
+    const rejected = expect(second).rejects.toThrow('denied');
+    const third = captured!.onUpdate(user.user_id, { name: 'third' }, () => true);
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(calls).toEqual(['patch:first', 'refresh']);
+    await act(async () => {
+      firstRefresh.resolve();
+      await first;
+      await rejected;
+      await third;
+    });
+    expect(calls).toEqual(['patch:first', 'refresh', 'patch:rejected', 'patch:third', 'refresh']);
+  });
+
+  it('refreshes a persisted self-edit after the dialog closes, but not under a new authority', async () => {
+    const pendingPatch = deferred();
+    let dialogCurrent = true;
+    const refresh = vi.fn(async (shouldApply: () => boolean) => {
+      expect(shouldApply()).toBe(true);
+    });
+    const onUpdateUser = vi
+      .fn<CapturedProps['onUpdate']>()
+      .mockImplementationOnce(() => pendingPatch.promise)
+      .mockResolvedValue(undefined);
+    const modal = (
+      <SharedUserSettingsModal
+        open
+        user={user}
+        client={client}
+        onClose={vi.fn()}
+        onUpdateUser={onUpdateUser}
+        onRefreshCurrentUser={refresh}
+      />
+    );
+    const rendered = render(view(1, modal));
+    const oldUpdate = captured!.onUpdate(user.user_id, { name: 'old' }, () => dialogCurrent);
+    dialogCurrent = false;
+    await act(async () => {
+      pendingPatch.resolve();
+      await oldUpdate;
+    });
+    expect(refresh).toHaveBeenCalledOnce();
+
+    const held = deferred();
+    onUpdateUser.mockImplementationOnce(() => held.promise);
+    const obsolete = captured!.onUpdate(user.user_id, { name: 'obsolete' }, () => true);
+    rendered.rerender(view(2, modal));
+    await act(async () => {
+      await captured!.onUpdate(user.user_id, { name: 'current' }, () => true);
+    });
+    // The replacement authority did not wait for the obsolete mutation.
+    expect(refresh).toHaveBeenCalledTimes(2);
+    await act(async () => {
+      held.resolve();
+      await obsolete;
+    });
+    expect(refresh).toHaveBeenCalledTimes(2);
   });
 });
