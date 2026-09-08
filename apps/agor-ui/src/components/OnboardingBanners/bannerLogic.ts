@@ -16,7 +16,10 @@ import type {
   User,
 } from '@agor-live/client';
 import { DEFAULT_PROVIDER_RESOLUTION_POLICY, PROVIDER_CREDENTIAL_FIELDS } from '@agor-live/client';
-import { resolveAvailableUserAgenticTool } from '../AgentSelectionGrid/availableAgents';
+import {
+  AVAILABLE_AGENTS,
+  resolveAvailableUserAgenticTool,
+} from '../AgentSelectionGrid/availableAgents';
 
 function credentialFieldsFor(tool: AgenticToolName): readonly string[] {
   return Object.hasOwn(PROVIDER_CREDENTIAL_FIELDS, tool)
@@ -47,6 +50,60 @@ export function resolveGovernedProbeAgent(
   settings: Map<TenantAgenticToolName, TenantAgenticToolSettings>
 ): AgenticToolName {
   return resolveAvailableUserAgenticTool(user, settings);
+}
+
+/**
+ * Every tool the banner should probe: the governed default (what New Session
+ * selects) plus each OTHER enabled tool the user/tenant already has a credential
+ * for. A working credential on one of these is what lets the amber warning
+ * soften instead of claiming all AI is down.
+ */
+export function probeableTools(
+  user: User | null | undefined,
+  settings: Map<TenantAgenticToolName, TenantAgenticToolSettings>,
+  agents: readonly { id: string }[] = AVAILABLE_AGENTS
+): AgenticToolName[] {
+  const governed = resolveGovernedProbeAgent(user, settings);
+  const isEnabled = (tool: string) =>
+    settings.get(tool as TenantAgenticToolName)?.enabled !== false;
+  const others = agents
+    .map((agent) => agent.id as AgenticToolName)
+    .filter(
+      (tool) =>
+        tool !== governed &&
+        isEnabled(tool) &&
+        hasConfiguredCredentialFor(user, tool, settings.get(tool as TenantAgenticToolName))
+    );
+  return [governed, ...others];
+}
+
+/**
+ * Stable signature of one tool's credential state. A persistent dismissal keeps
+ * a warning hidden until this fingerprint changes, so an unrelated tool's
+ * credential save cannot resurface it — only a change to THIS tool's fields,
+ * auth method, resolution policy, or tenant revision does.
+ */
+export function credentialFingerprint(
+  user: User | null | undefined,
+  tool: AgenticToolName,
+  settings?: TenantAgenticToolSettings
+): string {
+  const fields = credentialFieldsFor(tool);
+  const toolStatus = user?.agentic_tools?.[tool] as Record<string, boolean | undefined> | undefined;
+  const userFields = fields.map((field) => !!toolStatus?.[field]);
+  const authMethod =
+    tool === 'claude-code' || tool === 'codex' ? user?.agentic_auth_methods?.[tool] : undefined;
+  const tenantFields = fields.map(
+    (field) => !!settings?.connection[field as keyof typeof settings.connection]?.configured
+  );
+  return JSON.stringify([
+    tool,
+    userFields,
+    authMethod ?? null,
+    settings?.revision ?? 0,
+    tenantFields,
+    settings?.resolution_policy ?? null,
+  ]);
 }
 
 export function hasConfiguredCredentialFor(
@@ -154,6 +211,8 @@ export const BannerDecision = {
   None: 'none',
   NoAi: 'no-ai',
   KeyInvalid: 'key-invalid',
+  /** Governed tool is broken but another credentialed tool passes its probe. */
+  PartialAi: 'partial-ai',
   Integrations: 'integrations',
 } as const;
 export type BannerDecision = (typeof BannerDecision)[keyof typeof BannerDecision];
@@ -162,15 +221,20 @@ export interface BannerDecisionInput {
   onboardingCompleted: boolean;
   /** DB-key presence — used only to word the amber banner, never to hide it. */
   hasLlm: boolean;
+  /** Probe verdict for the governed/default tool (what New Session selects). */
   probeState: ProbeState;
+  /** Positive proof that a DIFFERENT credentialed tool passes its probe. */
+  hasWorkingAlternative: boolean;
   canManageMcp: boolean;
   mcpServerCount: number;
   gatewayChannelCount: number;
   /** Whether both integration collections (mcp-servers + gateway-channels) have finished their first hydration. */
   integrationsHydrated: boolean;
   integrationsBannerDismissed: boolean;
-  /** A user-scoped 24-hour snooze of the selected tool's warning. */
+  /** User+tool-scoped persistent dismissal of the amber warning. */
   credentialWarningDismissed: boolean;
+  /** User+tool-scoped persistent dismissal of the softened partial-AI notice. */
+  softWarningDismissed: boolean;
 }
 
 /**
@@ -181,6 +245,10 @@ export interface BannerDecisionInput {
  * wording ("No AI" vs "credentials broken"). While the probe is `unknown`,
  * neither amber banner shows — a brief false-negative beats a false-positive.
  *
+ * When the governed tool is broken but another credentialed tool positively
+ * passes, the amber warning softens to a dismissible informational notice: AI
+ * is not down, only the one tool is. Both facts rest on positive probe proof.
+ *
  * The teal integrations banner requires AI to be confirmed OK, both integration
  * collections hydrated (else the counts are not yet known — no premature flash),
  * and BOTH sources empty: MCP servers AND gateway channels (Slack/GitHub
@@ -190,6 +258,9 @@ export function decideBanner(input: BannerDecisionInput): BannerDecision {
   if (!input.onboardingCompleted) return BannerDecision.None;
 
   if (input.probeState === ProbeState.Unauthenticated) {
+    if (input.hasWorkingAlternative) {
+      return input.softWarningDismissed ? BannerDecision.None : BannerDecision.PartialAi;
+    }
     if (input.credentialWarningDismissed) return BannerDecision.None;
     return input.hasLlm ? BannerDecision.KeyInvalid : BannerDecision.NoAi;
   }
