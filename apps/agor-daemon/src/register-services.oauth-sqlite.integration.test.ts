@@ -1433,9 +1433,12 @@ describe('SQLite saved-row OAuth authority', () => {
   it('logs a closed deployment-configuration diagnostic when the public callback is missing', async () => {
     const provider = await createTestProvider();
     providers.push(provider);
-    const harness = await createHarness(provider);
-    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    // Callback configuration is frozen when services are registered, not read
+    // again from the process environment when the browser flow starts.
     delete process.env.AGOR_BASE_URL;
+    const harness = await createHarness(provider);
+    databases.push(harness.rawDb);
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
 
     try {
       const result = await harness.app
@@ -1449,6 +1452,8 @@ describe('SQLite saved-row OAuth authority', () => {
           action: 'configure_redirect',
         },
       });
+      expect(provider.requests).toEqual([]);
+      expect(harness.emittedBrowserEvents).toEqual([]);
       expect(errorSpy).toHaveBeenCalledWith(
         expect.stringContaining(
           'event=mcp_external_failure stage=oauth category=configuration_required type=ConfigurationError code=PUBLIC_BASE_URL_NOT_CONFIGURED reason=oauth_redirect_configuration_required'
@@ -1460,10 +1465,43 @@ describe('SQLite saved-row OAuth authority', () => {
     }
   });
 
+  it.each([undefined, 'https://changed.example.test'])(
+    'keeps the startup callback when AGOR_BASE_URL later becomes %s',
+    async (changedBaseUrl) => {
+      const provider = await createTestProvider();
+      providers.push(provider);
+      const harness = await createHarness(provider, 'per_user');
+      databases.push(harness.rawDb);
+
+      if (changedBaseUrl === undefined) delete process.env.AGOR_BASE_URL;
+      else process.env.AGOR_BASE_URL = changedBaseUrl;
+
+      const started = await harness.app
+        .service('mcp-servers/oauth-start')
+        .create({ mcp_server_id: harness.server.mcp_server_id }, paramsFor(harness));
+
+      expect(started.success).toBe(true);
+      const authorizationUrl = new URL(started.authorizationUrl);
+      expect(authorizationUrl.searchParams.get('redirect_uri')).toBe(
+        'https://agor.example.test/mcp-servers/oauth-callback'
+      );
+      const state = authorizationUrl.searchParams.get('state');
+      expect(state).toBeTruthy();
+      expect((await harness.callback(state!)).status).toBe(200);
+      await expect(
+        new UserMCPOAuthTokenRepository(harness.rawDb).getToken(
+          harness.user.user_id as UserID,
+          harness.server.mcp_server_id as MCPServerID
+        )
+      ).resolves.toMatchObject({ oauth_access_token: 'sqlite-access-token' });
+    }
+  );
+
   it('logs closed Context7-style OAuth metadata incompatibility diagnostics', async () => {
     const provider = await createTestProvider({ resourcePath: '/different/mcp' });
     providers.push(provider);
     const harness = await createHarness(provider);
+    databases.push(harness.rawDb);
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
 
     try {
