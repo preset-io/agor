@@ -15,6 +15,7 @@ import type { Database } from '../client';
 import { update } from '../database-wrapper';
 import { branchPermissionConfigs } from '../schema';
 import { dbTest } from '../test-helpers';
+import { BoardObjectRepository } from './board-objects';
 import { BoardRepository } from './boards';
 import { BranchRepository } from './branches';
 import { CapabilityPolicyRepository } from './capability-policies';
@@ -209,6 +210,67 @@ describe('CapabilityPolicyRepository', () => {
     }
   );
 
+  dbTest(
+    'keeps direct-deny precedence, groups, Others and owner access in archive/zone SQL pages',
+    async ({ db }) => {
+      const value = await fixture(db);
+      const policies = new CapabilityPolicyRepository(db);
+      const boardPolicy = await policies.getBoardPolicies(value.boardId);
+      boardPolicy.board_access.sharing_mode = 'shared';
+      boardPolicy.board_access.others = {
+        preset: 'viewer',
+        capabilities: capabilityPolicyPresetCapabilities('board_access', 'viewer') ?? [],
+        fs_access: 'none',
+      };
+      await policies.replaceBoardPolicies(value.boardId, boardPolicy, value.owner);
+      const branchPolicy = await policies.getBranchPolicy(value.branchId);
+      const config = structuredClone(branchPolicy.override_config!);
+      config.access.sharing_mode = 'shared';
+      config.access.entries = [
+        userEntry(value.direct, 'none'),
+        groupEntry(value.readers, 'collaborator', 'read'),
+      ];
+      config.access.others = {
+        preset: 'viewer',
+        capabilities: capabilityPolicyPresetCapabilities('branch_access', 'viewer') ?? [],
+        fs_access: 'none',
+      };
+      await policies.replaceBranchPolicy(
+        value.branchId,
+        { ...branchPolicy, override_config: config },
+        value.owner
+      );
+      const objects = new BoardObjectRepository(db);
+      await objects.create({
+        board_id: value.boardId,
+        branch_id: value.branchId,
+        position: { x: 0, y: 0 },
+        zone_id: 'zone-review',
+      });
+      for (const userId of [value.owner, value.grouped, value.unmatched, value.direct]) {
+        const expected = userId === value.direct ? 0 : 1;
+        const filters = {
+          board_id: value.boardId,
+          zone_id: 'zone-review',
+          exclude_archived_branches: true,
+        };
+        expect(await objects.countVisibleToUser(userId, filters)).toBe(expected);
+        expect(await objects.findVisibleToUser(userId, filters, { limit: 1 })).toHaveLength(
+          expected
+        );
+        const page = await new BranchRepository(db).findPage({
+          board_id: value.boardId,
+          zone_id: 'zone-review',
+          archived: false,
+          visibleToUserId: userId,
+          limit: 1,
+        });
+        expect(page.total).toBe(expected);
+        expect(page.data).toHaveLength(expected);
+      }
+    }
+  );
+
   dbTest('denies permissive Others access to a nonexistent principal', async ({ db }) => {
     const value = await fixture(db);
     const policies = new CapabilityPolicyRepository(db);
@@ -346,18 +408,7 @@ describe('CapabilityPolicyRepository', () => {
     const board = await policies.getBoardPolicies(value.boardId);
     board.branch_template.access.sharing_mode = 'shared';
     board.branch_template.access.entries = [groupEntry(value.readers, 'collaborator', 'read')];
-    board.branch_template.session_sharing.owner_rules = [
-      {
-        session_owner_user_id: value.owner,
-        enabled: true,
-        grantees: [
-          {
-            grant_id: generateId(),
-            principal: { principal_type: 'user', user_id: value.grouped },
-          },
-        ],
-      },
-    ];
+    board.branch_template.allow_shared_session_prompts = true;
     await policies.replaceBoardPolicies(value.boardId, board, value.owner);
     const branch = await policies.getBranchPolicy(value.branchId);
     await policies.replaceBranchPolicy(
@@ -377,9 +428,7 @@ describe('CapabilityPolicyRepository', () => {
       inherited_from_board_id: value.boardId,
       inherited_config: {
         access: { entries: [expect.objectContaining({ preset: 'collaborator' })] },
-        session_sharing: {
-          owner_rules: [expect.objectContaining({ session_owner_user_id: value.owner })],
-        },
+        allow_shared_session_prompts: true,
       },
     });
     expect(await policies.resolveBranchAccess(value.branchId, value.direct)).toMatchObject({
@@ -409,18 +458,7 @@ describe('CapabilityPolicyRepository', () => {
     boardPolicy.branch_template.access.entries = [
       groupEntry(value.readers, 'collaborator', 'read'),
     ];
-    boardPolicy.branch_template.session_sharing.owner_rules = [
-      {
-        session_owner_user_id: value.owner,
-        enabled: true,
-        grantees: [
-          {
-            grant_id: generateId(),
-            principal: { principal_type: 'user', user_id: value.direct },
-          },
-        ],
-      },
-    ];
+    boardPolicy.branch_template.allow_shared_session_prompts = true;
     await policies.replaceBoardPolicies(value.boardId, boardPolicy, value.owner);
 
     await boards.delete(value.boardId);
@@ -436,15 +474,13 @@ describe('CapabilityPolicyRepository', () => {
         access: {
           entries: [expect.objectContaining({ preset: 'collaborator', fs_access: 'read' })],
         },
-        session_sharing: {
-          owner_rules: [expect.objectContaining({ session_owner_user_id: value.owner })],
-        },
+        allow_shared_session_prompts: true,
       },
     });
   });
 
   dbTest(
-    'requires an explicit owner grant and workspace gate for foreign-session prompting',
+    'requires workspace and branch opt-ins for foreign branch-home prompting',
     async ({ db }) => {
       const value = await fixture(db);
       const policies = new CapabilityPolicyRepository(db);
@@ -455,22 +491,7 @@ describe('CapabilityPolicyRepository', () => {
         userEntry(value.direct, 'collaborator', 'read'),
         userEntry(value.viewer, 'viewer'),
       ];
-      config.session_sharing.owner_rules = [
-        {
-          session_owner_user_id: value.owner,
-          enabled: true,
-          grantees: [
-            {
-              grant_id: generateId(),
-              principal: { principal_type: 'user', user_id: value.direct },
-            },
-            {
-              grant_id: generateId(),
-              principal: { principal_type: 'user', user_id: value.viewer },
-            },
-          ],
-        },
-      ];
+      config.allow_shared_session_prompts = true;
       await policies.replaceBranchPolicy(
         value.branchId,
         { ...current, override_config: config },
@@ -482,31 +503,57 @@ describe('CapabilityPolicyRepository', () => {
           branch_id: value.branchId,
           caller_user_id: value.direct,
           session_owner_user_id: value.owner,
+          session_sdk_home_scope: 'execution_home',
         })
-      ).resolves.toEqual({ allowed: false, source: 'denied' });
+      ).resolves.toEqual({
+        allowed: false,
+        source: 'denied',
+        denial_reason: 'execution_home_sharing_disabled',
+      });
 
-      await policies.setWorkspacePreferences(
-        { personal_session_sharing_enabled: true },
-        value.owner
-      );
       await expect(
         policies.resolveSessionPromptAuthority({
           branch_id: value.branchId,
           caller_user_id: value.direct,
           session_owner_user_id: value.owner,
+          session_sdk_home_scope: 'branch',
+        })
+      ).resolves.toEqual({
+        allowed: false,
+        source: 'denied',
+        denial_reason: 'workspace_session_sharing_disabled',
+      });
+
+      await policies.setWorkspacePreferences({ session_sharing_enabled: true }, value.owner);
+      await expect(
+        policies.resolveSessionPromptAuthority({
+          branch_id: value.branchId,
+          caller_user_id: value.direct,
+          session_owner_user_id: value.owner,
+          session_sdk_home_scope: 'branch',
         })
       ).resolves.toEqual({
         allowed: true,
-        execution_user_id: value.owner,
-        source: 'personal_session_sharing',
+        execution_user_id: value.direct,
+        source: 'branch_session',
       });
       await expect(
         policies.resolveSessionPromptAuthority({
           branch_id: value.branchId,
           caller_user_id: value.viewer,
           session_owner_user_id: value.owner,
+          session_sdk_home_scope: 'branch',
         })
-      ).resolves.toEqual({ allowed: false, source: 'denied' });
+      ).resolves.toEqual({
+        allowed: false,
+        source: 'denied',
+        denial_reason: 'branch_access_required',
+      });
+
+      await policies.setWorkspacePreferences({ session_sharing_enabled: false }, value.owner);
+      await expect(policies.getBranchPolicy(value.branchId)).resolves.toMatchObject({
+        override_config: { allow_shared_session_prompts: false },
+      });
     }
   );
 

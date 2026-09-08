@@ -1,12 +1,12 @@
 import { Forbidden } from '@agor/core/feathers';
 import { ROLES } from '@agor/core/types';
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { determineSpawnIdentity } from './branch-authorization';
 
 const ALICE = 'user-alice';
 const BOB = 'user-bob';
-const SHARED = { branch_id: 'branch-shared', share_owner_home: true };
-const NOT_SHARED = { branch_id: 'branch-private', share_owner_home: false };
+const NOT_SHARED = { allow_caller_identity: false };
+const BRANCH_SCOPED = { allow_caller_identity: true };
 
 describe('determineSpawnIdentity', () => {
   it('keeps a same-owner child in the owner genealogy without shared-home audit', () => {
@@ -16,35 +16,25 @@ describe('determineSpawnIdentity', () => {
         { user_id: ALICE, role: ROLES.MEMBER },
         NOT_SHARED
       )
-    ).toEqual({ created_by: ALICE, usesSharedHome: false });
+    ).toEqual({ created_by: ALICE });
   });
 
-  it('keeps an explicitly shared cross-user child in the Session owner genealogy', () => {
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    try {
-      expect(
-        determineSpawnIdentity({ created_by: BOB }, { user_id: ALICE, role: ROLES.MEMBER }, SHARED)
-      ).toEqual({ created_by: BOB, usesSharedHome: true });
-      expect(warn).toHaveBeenCalledWith(
-        '[SECURITY] personal_session_sharing',
-        expect.objectContaining({
-          event: 'personal_session_sharing',
-          caller_id: ALICE,
-          session_owner_id: BOB,
-          branch_id: SHARED.branch_id,
-        })
-      );
-    } finally {
-      warn.mockRestore();
-    }
+  it('attributes a branch-scoped cross-user child to the caller', () => {
+    expect(
+      determineSpawnIdentity(
+        { created_by: BOB },
+        { user_id: ALICE, role: ROLES.MEMBER },
+        BRANCH_SCOPED
+      )
+    ).toEqual({ created_by: ALICE });
   });
 
   it.each([ROLES.MEMBER, ROLES.ADMIN, ROLES.SUPERADMIN])(
-    'rejects a cross-user child without owner-authored sharing for %s',
+    'rejects a cross-user child without branch session sharing for %s',
     (role) => {
       expect(() =>
         determineSpawnIdentity({ created_by: BOB }, { user_id: ALICE, role }, NOT_SHARED)
-      ).toThrow('The session owner has not shared their sessions with you.');
+      ).toThrow('This branch does not allow shared session prompting.');
     }
   );
 
@@ -55,7 +45,7 @@ describe('determineSpawnIdentity', () => {
         { user_id: 'executor-sa', _isServiceAccount: true },
         undefined
       )
-    ).toEqual({ created_by: BOB, usesSharedHome: false });
+    ).toEqual({ created_by: BOB });
   });
 
   it('fails closed when a human caller has no identity', () => {

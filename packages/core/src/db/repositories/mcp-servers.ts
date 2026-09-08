@@ -7,7 +7,6 @@
 import type {
   CreateMCPServerInput,
   MCPAuth,
-  MCPScope,
   MCPServer,
   MCPServerFilters,
   MCPServerID,
@@ -97,9 +96,6 @@ const MCP_SERVER_SORT_COLUMNS: Record<MCPServerSortField, AnyColumn> = {
 function buildMCPServerConditions(filters?: MCPServerFilters): SQL[] {
   const conditions: SQL[] = [];
   if (filters?.scope) conditions.push(eq(mcpServers.scope, filters.scope));
-  if (filters?.scopeId && filters.scope === 'global') {
-    conditions.push(eq(mcpServers.owner_user_id, filters.scopeId));
-  }
   if (filters?.transport) conditions.push(eq(mcpServers.transport, filters.transport));
   if (filters?.enabled !== undefined) conditions.push(eq(mcpServers.enabled, filters.enabled));
   if (filters?.source) conditions.push(eq(mcpServers.source, filters.source));
@@ -601,13 +597,6 @@ export class MCPServerRepository
         error
       );
     }
-  }
-
-  /**
-   * Find MCP servers by scope
-   */
-  async findByScope(scope: string, scopeId?: string): Promise<MCPServer[]> {
-    return this.findAll({ scope: scope as MCPScope, scopeId });
   }
 
   /**

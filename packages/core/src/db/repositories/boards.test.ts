@@ -40,7 +40,6 @@ function createBoardData(overrides?: Partial<Board>): Partial<Board> {
     access_mode: overrides?.access_mode,
     default_others_can: overrides?.default_others_can,
     default_others_fs_access: overrides?.default_others_fs_access,
-    default_dangerously_allow_session_sharing: overrides?.default_dangerously_allow_session_sharing,
   };
   if (overrides && Object.hasOwn(overrides, 'primary_teammate_id')) {
     data.primary_teammate_id = overrides.primary_teammate_id;
@@ -1890,4 +1889,40 @@ describe('BoardRepository normalized permission boundary', () => {
       repo.update(board.board_id, { primary_owner_user_id: generateId() })
     ).rejects.toThrow('Primary ownership is immutable');
   });
+
+  dbTest(
+    'resolveUserAccess grants full capabilities to the primary owner and none to an unrelated member on a private board',
+    async ({ db }) => {
+      const repo = new BoardRepository(db);
+      const creatorId = generateId() as UUID;
+      const otherId = generateId() as UUID;
+      await new UsersRepository(db).create({
+        user_id: creatorId,
+        email: `owner-${creatorId}@agor.test`,
+        role: 'member',
+      });
+      await new UsersRepository(db).create({
+        user_id: otherId,
+        email: `other-${otherId}@agor.test`,
+        role: 'member',
+      });
+      const board = await repo.create(
+        createBoardData({
+          name: 'Effective Access Board',
+          created_by: creatorId,
+          access_mode: 'private',
+        })
+      );
+
+      const ownerAccess = await repo.resolveUserAccess(board, creatorId);
+      expect(ownerAccess.is_primary_owner).toBe(true);
+      expect(ownerAccess.capabilities).toEqual(
+        expect.arrayContaining(['board.view', 'board.edit'])
+      );
+
+      const otherAccess = await repo.resolveUserAccess(board, otherId);
+      expect(otherAccess.is_primary_owner).toBe(false);
+      expect(otherAccess.capabilities).toEqual([]);
+    }
+  );
 });

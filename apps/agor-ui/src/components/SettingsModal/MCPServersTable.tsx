@@ -63,7 +63,7 @@ import {
   type MCPServerCapabilityContext,
   policyPendingState,
 } from '../MCPServer/memberPolicy';
-import { useOAuthBrowserEventAttempt } from '../MCPServer/useOAuthBrowserEventAttempt';
+import { useMCPServerDiscovery } from '../MCPServer/useMCPServerDiscovery';
 import { AdaptiveSettingsModal } from './AdaptiveSettingsModal';
 import { MCPEgressGatewayStatus } from './MCPEgressGatewayStatus';
 import { MCPMemberPolicySetting } from './MCPMemberPolicySetting';
@@ -123,17 +123,6 @@ const getServerHealth = (
   };
 };
 
-interface TestResult {
-  success: boolean;
-  toolCount: number;
-  resourceCount: number;
-  promptCount: number;
-  error?: string;
-  tools?: Array<{ name: string; description: string }>;
-  resources?: Array<{ name: string; uri: string; mimeType?: string }>;
-  prompts?: Array<{ name: string; description: string }>;
-}
-
 const MCPServersTableForIdentity: React.FC<MCPServersTableProps> = ({
   mcpServerById,
   client,
@@ -184,12 +173,6 @@ const MCPServersTableForIdentity: React.FC<MCPServersTableProps> = ({
       ? [durableAuthorityKey, client, memberPolicy.policy, memberPolicy.canConfigure]
       : null
   );
-  const oauthBrowserEvents = useOAuthBrowserEventAttempt({
-    client,
-    currentUserId: currentUser?.user_id ?? null,
-    authGeneration,
-    authorityGuard: operationGuard,
-  });
   const capabilityRef = useRef({ capability, policyPending, addRestriction });
   capabilityRef.current = { capability, policyPending, addRestriction };
   const addIsCurrentlyAllowed = () => {
@@ -220,23 +203,33 @@ const MCPServersTableForIdentity: React.FC<MCPServersTableProps> = ({
   const [chosenTransport, setChosenTransport] = useState<MCPTransport | null>(null);
   const transport = chosenTransport ?? offeredTransports[0];
   const [authType, setAuthType] = useState<'none' | 'bearer' | 'jwt' | 'oauth'>('none');
-  const [testing, setTesting] = useState(false);
   const [createdServerId, setCreatedServerId] = useState<string | null>(null);
-  const [testResult, setTestResult] = useState<TestResult | null>(null);
+  const createdConfigVersion = useRef(1);
   const [searchTerm, setSearchTerm] = useState('');
 
   const [formRevision, bumpFormRevision] = useFormRevision();
+  const createOperationGuard = useAuthorityOperationGuard(
+    createModalOpen && canAdd && durableAuthorityKey
+      ? [durableAuthorityKey, client, createModalOpen]
+      : null
+  );
+  const { testing, testResult, testConnection } = useMCPServerDiscovery({
+    client,
+    authorityKey: canAdd ? durableAuthorityKey : null,
+    currentUserId: currentUser?.user_id ?? null,
+    authGeneration,
+    formRevision,
+    contextKey: createModalOpen ? 'create' : null,
+  });
   // Only ask the form once it is rendered — an unmounted instance warns.
   const missingRequiredFields = createModalOpen
     ? missingMCPFieldLabels(createForm.getFieldsValue(true), {
-        mode: 'create',
+        mode: createdServerId ? 'edit' : 'create',
         transport,
         authType,
       })
     : [];
-  // Once the row exists the button only dismisses the modal, so nothing about
-  // the form should be able to trap the user behind it.
-  const createBlocked = !createdServerId && (!canAdd || missingRequiredFields.length > 0);
+  const createBlocked = !canAdd || testing || missingRequiredFields.length > 0;
 
   // Sync modal records when mcpServerById updates (real-time WebSocket
   // updates). An absent row is authoritative too: retaining the previous
@@ -294,8 +287,9 @@ const MCPServersTableForIdentity: React.FC<MCPServersTableProps> = ({
 
   // Persist the current form before every OAuth start. The saved row is the
   // daemon's tenant-scoped authority for provider URL and client credentials.
-  const prepareOAuthStartForCreate = async (): Promise<string | null> => {
-    const operation = operationGuard.begin();
+  const prepareOAuthStartForCreate = async (
+    operation = createOperationGuard.begin()
+  ): Promise<string | null> => {
     if (!client || !operation.isCurrent()) return null;
     if (!addIsCurrentlyAllowed()) {
       showError(capabilityRef.current.addRestriction);
@@ -315,14 +309,24 @@ const MCPServersTableForIdentity: React.FC<MCPServersTableProps> = ({
         const result = await client.service('mcp-servers').create(data);
         if (!operation.isCurrent()) return null;
         const newServerId = (result as MCPServer).mcp_server_id || null;
+        createdConfigVersion.current = (result as MCPServer).config_version ?? 1;
         setCreatedServerId(newServerId);
         return newServerId;
       }
 
       const { name: _name, ...updates } = data;
       if (!operation.isCurrent() || !addIsCurrentlyAllowed()) return null;
-      await client.service('mcp-servers').patch(createdServerId, updates as UpdateMCPServerInput);
+      const updated = await client.service('mcp-servers').patch(createdServerId, {
+        ...updates,
+        auth: buildAuthFromValues(createForm.getFieldsValue(true), { forPatch: true }),
+        expected_config_version: createdConfigVersion.current,
+        env: parseEnvJSON(createForm.getFieldValue('env')) ?? {},
+        ...(data.transport === 'stdio'
+          ? {}
+          : { headers: parseHeadersJSON(createForm.getFieldValue('headers')) ?? {} }),
+      } as UpdateMCPServerInput);
       if (!operation.isCurrent()) return null;
+      createdConfigVersion.current = updated.config_version ?? createdConfigVersion.current + 1;
       return createdServerId;
     } catch (error) {
       if (!operation.isCurrent()) return null;
@@ -341,13 +345,13 @@ const MCPServersTableForIdentity: React.FC<MCPServersTableProps> = ({
     setCreateModalOpen(false);
     setChosenTransport(null);
     setAuthType('none');
-    setTestResult(null);
     setCreatedServerId(null);
+    bumpFormRevision();
   };
 
   const handleCreate = async () => {
     if (createdServerId) {
-      resetCreateModal();
+      if (await prepareOAuthStartForCreate()) resetCreateModal();
       return;
     }
 
@@ -356,7 +360,7 @@ const MCPServersTableForIdentity: React.FC<MCPServersTableProps> = ({
       return;
     }
 
-    const operation = operationGuard.begin();
+    const operation = createOperationGuard.begin();
     try {
       await createForm.validateFields();
       if (!operation.isCurrent()) return;
@@ -371,96 +375,34 @@ const MCPServersTableForIdentity: React.FC<MCPServersTableProps> = ({
       resetCreateModal();
     } catch (error) {
       if (!operation.isCurrent()) return;
-      console.error('Form validation failed:', error);
       showError(firstFormErrorMessage(error) || 'Please fill in required fields');
     }
   };
 
-  // Test connection from create modal (always inline config, no persistence).
-  const handleCreateTestConnection = async () => {
-    const operation = operationGuard.begin();
-    if (!operation.isCurrent()) return;
-    if (!client) {
-      showError('Client not available');
-      return;
-    }
-
-    const values = createForm.getFieldsValue(true);
-
-    if (!values.url) {
-      showError('URL is required to test connection');
-      return;
-    }
-    if (values.transport === 'stdio') {
-      showError('Connection test is not available for stdio transport');
-      return;
-    }
-    try {
-      await createForm.validateFields(['headers']);
-    } catch {
-      if (!operation.isCurrent()) return;
-      showError('Please fix custom HTTP headers before testing');
-      return;
-    }
-    if (!operation.isCurrent()) return;
-
-    let browserAttempt: Awaited<ReturnType<typeof oauthBrowserEvents.begin>> = null;
-    try {
-      setTesting(true);
-      setTestResult(null);
-      browserAttempt = await oauthBrowserEvents.begin({ operation: 'discover' });
-      if (!operation.isCurrent()) return;
-      const data = (await client.service('mcp-servers/discover').create({
+  const handleCreateTestConnection = () =>
+    testConnection(async (operation) => {
+      const values = createForm.getFieldsValue(true);
+      if (createdServerId || values.auth_type === 'oauth') {
+        const id = await prepareOAuthStartForCreate(operation);
+        return id ? { mcp_server_id: id } : null;
+      }
+      try {
+        await createForm.validateFields(['url', 'headers']);
+      } catch (error) {
+        if (operation.isCurrent())
+          showError(
+            firstFormErrorMessage(error) ?? 'Please fix connection settings before testing'
+          );
+        return null;
+      }
+      if (!values.url || values.transport === 'stdio') return null;
+      return {
         url: values.url,
         transport: values.transport || 'http',
         auth: buildAuthFromValues(values),
         headers: parseHeadersJSON(values.headers),
-        ...(browserAttempt ? { oauth_browser_event: browserAttempt.request } : {}),
-      })) as {
-        success: boolean;
-        error?: string;
-        capabilities?: { tools: number; resources: number; prompts: number };
-        tools?: Array<{ name: string; description: string }>;
-        resources?: Array<{ name: string; uri: string; mimeType?: string }>;
-        prompts?: Array<{ name: string; description: string }>;
       };
-
-      if (!operation.isCurrent()) return;
-
-      if (data.success && data.capabilities) {
-        setTestResult({
-          success: true,
-          toolCount: data.capabilities.tools,
-          resourceCount: data.capabilities.resources,
-          promptCount: data.capabilities.prompts,
-          tools: data.tools,
-          resources: data.resources,
-          prompts: data.prompts,
-        });
-      } else {
-        setTestResult({
-          success: false,
-          toolCount: 0,
-          resourceCount: 0,
-          promptCount: 0,
-          error: data.error || 'Connection test failed',
-        });
-      }
-    } catch (error) {
-      if (!operation.isCurrent()) return;
-      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-      setTestResult({
-        success: false,
-        toolCount: 0,
-        resourceCount: 0,
-        promptCount: 0,
-        error: errorMessage,
-      });
-    } finally {
-      browserAttempt?.cleanup();
-      if (operation.isCurrent()) setTesting(false);
-    }
-  };
+    });
 
   const handleEdit = useCallback((server: MCPServer) => {
     setEditingServer(server);
@@ -778,16 +720,18 @@ const MCPServersTableForIdentity: React.FC<MCPServersTableProps> = ({
             {/* A disabled button can't host a tooltip of its own — hence the span. */}
             <Tooltip
               title={
-                !createdServerId && !canAdd
+                !canAdd
                   ? addRestriction
-                  : createBlocked
-                    ? describeMissingForSave(missingRequiredFields)
-                    : undefined
+                  : testing
+                    ? 'Wait for the connection test to finish.'
+                    : missingRequiredFields.length > 0
+                      ? describeMissingForSave(missingRequiredFields)
+                      : undefined
               }
             >
               <span>
                 <Button type="primary" disabled={createBlocked} onClick={handleCreate}>
-                  {createdServerId ? 'Done' : 'Create'}
+                  {createdServerId ? 'Save' : 'Create'}
                 </Button>
               </span>
             </Tooltip>
@@ -810,7 +754,7 @@ const MCPServersTableForIdentity: React.FC<MCPServersTableProps> = ({
           onValuesChange={bumpFormRevision}
         >
           <MCPServerFormFields
-            mode="create"
+            mode={createdServerId ? 'edit' : 'create'}
             transport={transport}
             onTransportChange={setChosenTransport}
             offeredTransports={offeredTransports}

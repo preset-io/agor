@@ -15,10 +15,12 @@ import type {
   TenantID,
   UserID,
 } from '@agor/core/types';
+import type { CodexCredentialBindInvalidator } from '../codex-auth-bind-invalidation.js';
 import {
   type AppLike,
   persistVerifiedCodexAuth,
   resolveCodexCredentialRoute,
+  sameCodexCredentialRoute,
 } from './codex-auth-shared.js';
 import type { CodexDeviceAuthAttemptAuthority } from './codex-device-auth-attempt-authority.js';
 import {
@@ -97,7 +99,8 @@ export function createDurableCodexDeviceAuthService(
   app: AppLike,
   db: TenantScopeAwareDatabase,
   authority: CodexDeviceAuthAttemptAuthority,
-  provider: CodexDeviceAuthProvider = codexDeviceAuthProvider
+  provider: CodexDeviceAuthProvider = codexDeviceAuthProvider,
+  invalidateCredentialBinds: CodexCredentialBindInvalidator = async () => undefined
 ) {
   const workers = new Map<string, Worker>();
 
@@ -225,7 +228,18 @@ export function createDurableCodexDeviceAuthService(
       const { tokens } = exchanged;
 
       try {
-        await authority.finalize(exchange, async (route) => {
+        const finalized = await authority.finalize(exchange, async (route) => {
+          const currentRoute = await resolveCodexCredentialRoute(
+            worker.context.userId,
+            <T>(work: (tenantDb: TenantScopedDatabase) => Promise<T>) =>
+              runWithTenantDatabaseScope(db, worker.context.tenantId, work),
+            app.get('config')
+          );
+          if (!currentRoute.ok || !sameCodexCredentialRoute(currentRoute, route)) {
+            throw new BadRequest(
+              'The execution home changed while you were signing in. Start over to save the login in the right home.'
+            );
+          }
           const summary = await persistVerifiedCodexAuth({
             app,
             normalized: buildDeviceAuthJson(tokens),
@@ -237,6 +251,13 @@ export function createDurableCodexDeviceAuthService(
           });
           return { value: summary, planType: summary.planType };
         });
+        if (finalized.outcome === 'committed') {
+          await invalidateCredentialBinds({
+            tenantId: String(worker.context.tenantId),
+            userId: worker.context.userId,
+            reason: 'credentials_imported',
+          });
+        }
       } catch (error) {
         console.error(
           `[CodexDeviceAuth] Credential finalization failed: ${error instanceof Error ? error.constructor.name : 'unknown error'}`
@@ -306,6 +327,19 @@ export function createDurableCodexDeviceAuthService(
         userId: context.userId,
         delegatedHomeKey: route.delegatedHomeKey,
         codexHome: route.codexHome,
+        validateRoute: async () => {
+          const currentRoute = await resolveCodexCredentialRoute(
+            context.userId,
+            withTenantDatabase,
+            app.get('config')
+          );
+          if (!currentRoute.ok || !sameCodexCredentialRoute(currentRoute, route)) {
+            throw new BadRequest(
+              'The execution home changed before sign-in started. Start again to use the current home.'
+            );
+          }
+          return true;
+        },
       });
       let grant: Awaited<ReturnType<CodexDeviceAuthProvider['requestUserCode']>>;
       try {

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { probeRemoteAuthType, probeRemoteBearerToken } from './auth-probe';
+import { probeRemoteAuth, probeRemoteAuthType, probeRemoteBearerToken } from './auth-probe';
 
 // These cover the status-to-verdict rules, so the transport is injected. The
 // outbound destination filter is not exercised here: it lives in
@@ -40,6 +40,17 @@ describe('probeRemoteAuthType', () => {
     mockFetch(async () => jsonResponse(401, { 'www-authenticate': challenge }));
 
     expect(await probeRemoteAuthType('https://example.com/mcp', { fetchImpl })).toBe('oauth');
+  });
+
+  it('returns the challenge to the read-only metadata auditor', async () => {
+    const challenge =
+      'Bearer resource_metadata="https://example.com/.well-known/oauth-protected-resource"';
+    mockFetch(async () => jsonResponse(401, { 'www-authenticate': challenge }));
+
+    await expect(probeRemoteAuth('https://example.com/mcp', { fetchImpl })).resolves.toEqual({
+      authType: 'oauth',
+      wwwAuthenticate: challenge,
+    });
   });
 
   it('issues exactly one request, to the URL it was given', async () => {
@@ -161,6 +172,34 @@ describe('probeRemoteAuthType', () => {
   it('reports credentials for a 401 carrying no challenge at all', async () => {
     mockFetch(async () => jsonResponse(401));
     expect(await probeRemoteAuthType('https://example.com/mcp', { fetchImpl })).toBe('credentials');
+  });
+
+  it('recognizes a bare 401 as OAuth only after the exact metadata contract validates', async () => {
+    mockFetch(async () => jsonResponse(401));
+    const oauthMetadataValid = vi.fn().mockResolvedValue(true);
+
+    await expect(
+      probeRemoteAuth('https://mcp.datadoghq.com/api/unstable/mcp-server/mcp', {
+        fetchImpl,
+        oauthMetadataValid,
+      })
+    ).resolves.toEqual({ authType: 'oauth' });
+    expect(oauthMetadataValid).toHaveBeenCalledWith(
+      'https://mcp.datadoghq.com/api/unstable/mcp-server/mcp'
+    );
+  });
+
+  it('does not reinterpret an explicit non-OAuth challenge through metadata fallback', async () => {
+    mockFetch(async () => jsonResponse(401, { 'www-authenticate': 'ApiKey realm="internal"' }));
+    const oauthMetadataValid = vi.fn().mockResolvedValue(true);
+
+    await expect(
+      probeRemoteAuthType('https://apikey.example.com/mcp', {
+        fetchImpl,
+        oauthMetadataValid,
+      })
+    ).resolves.toBe('credentials');
+    expect(oauthMetadataValid).not.toHaveBeenCalled();
   });
 
   it('reports unreachable for a server error', async () => {

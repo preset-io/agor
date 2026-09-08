@@ -1,112 +1,71 @@
-# Personal session sharing
+# Shared session prompting
 
-**Status:** normalized owner-authored policy implemented; workspace opt-in is
-off by default.
+Agor can let branch Collaborators and Managers continue Sessions created by
+another person, but only when the Session uses branch-scoped SDK state.
 
-## Why sharing is dangerous
+## Authority model
 
-Native Claude Code, Codex, Gemini, and similar conversations are not portable
-database records. Their conversation state lives in files below the session
-owner's home, such as `~/.claude/` and `~/.codex/`. Continuing a native
-conversation therefore requires the executor to keep using that owner's home.
+Three independent conditions must hold for a foreign prompt:
 
-That home can contain much more than the selected conversation:
+1. The tenant preference `session_sharing_enabled` is on. Workspace admins
+   manage it in **Settings → Workspace → Preferences**. It defaults off.
+2. The effective board branch default or branch override has
+   `allow_shared_session_prompts` on. Board/Branch Managers manage this switch.
+3. The caller has `sessions.prompt_own` through the effective branch policy
+   (the Collaborator or Manager role).
 
-- native session history and metadata for other sessions;
-- dotfiles, caches, scripts, repositories, and arbitrary files left by users
-  or agents;
-- tool-managed credentials. For example, Codex subscription mode stores
-  credential material in `~/.codex/auth.json`.
+Session owners still need ordinary branch access. Superadmin status and policy
+management never substitute for prompt authority.
 
-An agent operating in the shared home can potentially inspect, change, or
-break those files even when no browser terminal is available. Terminal denial
-is not a security boundary against agent tools.
+## Session compatibility boundary
 
-## Why the feature exists
+`Session.sdk_home_scope` is immutable:
 
-Some workspaces have high trust between members and value continuing the exact
-native conversation. Other deployments use deliberately shared identities,
-such as a team service account or a Slack-facing assistant whose home is
-treated as shared infrastructure. Agor lets workspace administrators make that
-trade-off explicitly rather than pretending the home can be transferred
-safely.
+- `branch`: eligible for shared prompting when both switches and branch access
+  allow it.
+- `execution_home`: never shareable. These Sessions may contain native tool
+  state tied to their creator's private execution home. Users should start a
+  new branch-home Session instead.
 
-The safer alternative is to grant read access to the original session and have
-the colleague create a new session under their own home, referencing the prior
-conversation in a prompt such as “read the sibling session and continue from
-where it stopped.” Per-session homes are the long-term direction.
+This immutable stamp keeps compatibility logic at Session admission and avoids
+changing the mount identity of a resumable conversation later.
 
-## Authorization model
+## Identity and state
 
-Sharing has two independent gates:
+An admitted foreign prompt:
 
-1. The tenant-managed Workspace Preference
-   `personal_session_sharing_enabled`, which defaults to false.
-2. An enabled rule authored by the user whose sessions/home will be shared.
+- records the actual caller on `Task.created_by`;
+- uses the caller's execution home, managed environment variables, provider
+  credentials, MCP visibility, and connector credentials;
+- uses the branch's filesystem projection and branch SDK home;
+- continues the shared Session conversation.
 
-Rules are part of `BranchPermissionConfig`, so a board's branch template can
-express “Bob may prompt all sessions I own on branches using these defaults.” A
-branch inherits or overrides the entire package; session sharing never has its
-own independent inherit switch. Switching to override clones the current board
-template before edits.
+It never mounts or borrows the Session creator's execution home. A fork or
+spawn made by a foreign caller is attributed to that caller and inherits the
+parent Session's branch SDK-home scope.
 
-Each rule contains one `session_owner_user_id` and named user/group grantees.
-Only that owner may change the rule. Managers and other owners see foreign
-rules read-only and cannot erase them by changing a branch binding. Group
-membership is resolved at authorization time.
+People who can prompt a Session can read its conversation and influence its
+future context. That is the product warning; it is no longer a credential-home
+sharing exception.
 
-To prompt a foreign session, the caller must both:
+## Configuration and revocation
 
-- have `sessions.prompt_own` through the effective branch policy; and
-- match an enabled rule belonging to that session's owner while the workspace
-  gate is on.
+The tenant preference is stored in tenant-scoped `app_variables`, not
+`config.yaml`. Board defaults and branch overrides store one boolean on the
+complete normalized `branch_permission_configs` package, so it follows the
+same inherit/override boundary as branch access.
 
-Branch Manager never implies foreign-session authority.
+Disabling the tenant preference also clears every board and branch opt-in in
+that tenant. Re-enabling therefore cannot silently restore stale sharing.
 
-## Runtime identity split
+Gateway, browser, API, MCP, scheduler, widget, fork, and spawn paths use the
+same `resolveSessionPromptAuthority` result and canonical denial copy. Gateway
+denials are terminal rather than retryable.
 
-For an allowed shared prompt:
+## Migration
 
-| Concern                              | Identity used |
-| ------------------------------------ | ------------- |
-| `session.created_by` and genealogy   | session owner |
-| native agent-tool home (`~/`)        | session owner |
-| `task.created_by` and prompt label   | actual caller |
-| Agor-managed environment variables   | actual caller |
-| private/global MCP definitions       | actual caller |
-| per-user OAuth/connector credentials | actual caller |
-| branch filesystem read/write mount   | actual caller |
-
-The distinction matters: Agor does not inject the owner's managed secrets, but
-credentials stored as ordinary files inside the owner's shared home are still
-exposed by the home itself.
-
-`CapabilityPolicyRepository.resolveSessionPromptAuthority` is the canonical
-point check. REST prompt admission, Feathers hooks, widgets, MCP tools, task
-tokens, executors, and OAuth-header hydration use the resulting identity split.
-
-## Lifecycle rules
-
-- Board templates and branch overrides store owner rules in normalized rows.
-- Board deletion materializes inherited branch packages before detaching them.
-- Archive/unarchive retains policy and sharing state.
-- Export/clone operations intentionally omit named principals and sharing
-  grants; importing cannot recreate cross-tenant or foreign-home authority.
-- Primary ownership is immutable. No custody transfer or session-home migration
-  exists in this remodel.
-- Hard user deletion must fail elsewhere while protected objects remain. User
-  deactivation is the near-term offboarding mechanism.
-
-## User-facing explanation
-
-The UI copy and FAQ should make these points without implying more isolation
-than exists:
-
-- listed people prompt from the owner's `~/`;
-- prompts remain labeled with the actual caller and use that caller's
-  Agor-managed credentials;
-- the home may expose all native session metadata and home-resident credentials;
-- use only with high trust and an understanding of the home's contents;
-- a separate session under the colleague's own home is the safer alternative.
-
-See [`apps/agor-docs/content/faq.mdx`](../../apps/agor-docs/content/faq.mdx#session-sharing-home-access).
+The personal per-owner grant tables and legacy identity-borrowing JSON fields
+are removed. Existing grants are intentionally not broadened into branch-wide
+permission: the new tenant preference and every branch switch start off. The
+table removal is an offline protocol cutover because older daemons cannot
+operate against the new schema.

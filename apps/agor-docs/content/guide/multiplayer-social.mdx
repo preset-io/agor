@@ -165,12 +165,12 @@ The settings panel is split into two surfaces:
 
 When teammates share a board, sessions still execute under a specific user's identity:
 
-- A task normally uses its durable prompter's generic env vars and task credentials. Prompting another user's existing session is a deliberately high-trust mixed-identity case: the session creator's filesystem/home context remains attached while the task actor supplies generic env vars.
+- A task uses its durable prompter's execution home, generic env vars, and task credentials. A foreign prompt is allowed only for an explicitly shareable branch-home Session; the conversation and branch SDK state remain attached while caller identity stays consistent.
 - Resolution precedence is: allowlisted host runtime → gateway fallback values → the task user's globals and eligible session selections → gateway force-overrides → narrow trusted executor fields. Provider credentials are resolved separately for the selected agentic tool.
 - Session selection rows contain names only. A selected name resolves only for a session owned by the same execution user, so a foreign session cannot select a same-named secret from the prompter's profile.
 - In `unix_user_mode: sandbox`, the executor runs as the daemon user inside an RBAC-derived filesystem boundary.
 
-Fork/spawn creation copies selected variable **names**, not values. The child resolves those names against its own attributed owner at its next task; with safe session-sharing defaults that is the caller. A scope/selection change affects future launches, not an already-running process. Gateway and scheduled sessions use their configured execution owner; gateway-specific values are channel configuration, not implicit access to another user's profile.
+Fork/spawn creation copies selected variable **names**, not values. The child resolves those names against its own attributed owner at its next task; for a shared branch-home Session that is the caller. A scope/selection change affects future launches, not an already-running process. Gateway and scheduled sessions use their configured execution owner; gateway-specific values are channel configuration, not implicit access to another user's profile.
 
 This is what makes co-locating teams on one Agor instance work without secret-sharing: everyone keeps their own credentials, but the boards, branches, and conversations are shared.
 

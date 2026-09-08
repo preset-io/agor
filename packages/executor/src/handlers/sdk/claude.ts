@@ -9,6 +9,7 @@ import type {
   ExecutorPulseKind,
   MessageSource,
   PermissionMode,
+  PromptOrigin,
   SessionID,
   TaskID,
 } from '@agor/core/types';
@@ -31,6 +32,7 @@ export async function executeClaudeCodeTask(params: {
   permissionMode?: PermissionMode;
   abortController: AbortController;
   messageSource?: MessageSource;
+  promptOrigin?: PromptOrigin;
   resolvedConfig?: ResolvedConfigSlice;
   onPulse?: (kind: ExecutorPulseKind, detail?: string) => void;
 }): Promise<void> {

@@ -11,7 +11,7 @@
  */
 
 import { spawnSync } from 'node:child_process';
-import { accessSync, constants } from 'node:fs';
+import { accessSync, closeSync, constants, openSync } from 'node:fs';
 import { delimiter, join } from 'node:path';
 
 /** Is an executable named `bwrap` resolvable + executable on PATH? (no subprocess) */
@@ -60,6 +60,81 @@ function probeBwrap(extraArgs: string[]): boolean {
  */
 export function probeBwrapUserns(): boolean {
   return probeBwrap([]);
+}
+
+/**
+ * Can this bubblewrap build mount an already-open file descriptor?
+ *
+ * `--bind-fd` is required for actor-writable credential paths: validating a
+ * pathname and later passing it to `--bind` leaves a symlink-swap race. The
+ * descriptor form pins the validated inode and bubblewrap verifies that the
+ * mounted inode still matches before it starts the sandboxed command.
+ *
+ * Debian backported this upstream 0.10 feature to its supported 0.8 package,
+ * so a functional probe is more accurate than parsing the version string.
+ */
+export function probeBwrapBindFd(): boolean {
+  if (process.platform !== 'linux' || !bwrapOnPath()) return false;
+  let sourceFd: number | undefined;
+  try {
+    sourceFd = openSync('/dev/null', constants.O_RDONLY | constants.O_NOFOLLOW);
+    const result = spawnSync(
+      'bwrap',
+      ['--unshare-user', '--ro-bind', '/', '/', '--ro-bind-fd', '3', '/dev/null', '--', 'true'],
+      {
+        stdio: ['ignore', 'ignore', 'ignore', sourceFd],
+        timeout: 10_000,
+      }
+    );
+    return result.status === 0;
+  } catch {
+    return false;
+  } finally {
+    if (sourceFd !== undefined) closeSync(sourceFd);
+  }
+}
+
+/**
+ * Does this bwrap include the sandbox-setup path resolution fix published in
+ * 0.12.0 (GHSA-pxhw-h44j-8pfx)?
+ *
+ * Unlike `--bind-fd`, this cannot be established with a harmless feature
+ * probe: the vulnerable and fixed binaries accept the same arguments. Parse
+ * the upstream version instead. The fix was intentionally not backported to
+ * older releases because it depends on a substantial setup-path rewrite.
+ */
+export function bwrapHasSafeSetupPathResolution(versionOutput: string): boolean {
+  const match = versionOutput.match(/\b(\d+)\.(\d+)\.(\d+)\b/);
+  if (!match) return false;
+  const [, majorText, minorText] = match;
+  const major = Number.parseInt(majorText, 10);
+  const minor = Number.parseInt(minorText, 10);
+  return major > 0 || (major === 0 && minor >= 12);
+}
+
+export function probeBwrapSafeSetupPathResolution(): boolean {
+  if (process.platform !== 'linux' || !bwrapOnPath()) return false;
+  try {
+    const result = spawnSync('bwrap', ['--version'], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+      timeout: 10_000,
+    });
+    return result.status === 0 && bwrapHasSafeSetupPathResolution(result.stdout);
+  } catch {
+    return false;
+  }
+}
+
+/** Complete security/feature baseline required by Agor's local sandbox. */
+export function probeBwrapSecurityBaseline(): boolean {
+  return (
+    process.platform === 'linux' &&
+    bwrapOnPath() &&
+    probeBwrapSafeSetupPathResolution() &&
+    probeBwrapUserns() &&
+    probeBwrapBindFd()
+  );
 }
 
 /**

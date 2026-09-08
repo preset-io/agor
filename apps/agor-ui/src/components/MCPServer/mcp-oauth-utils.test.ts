@@ -5,6 +5,7 @@ import {
   extractOAuthConfigForTesting,
   isTemplateValue,
   parseEnvJSON,
+  validateEnvJSON,
   validateHeadersJSON,
 } from './mcp-oauth-utils';
 
@@ -192,6 +193,17 @@ describe('extractOAuthConfigForTesting', () => {
 });
 
 describe('buildAuthFromValues', () => {
+  it('does not submit hidden remote auth for a stdio server', () => {
+    const values = {
+      transport: 'stdio',
+      auth_type: 'bearer',
+      auth_token: 'stale-token',
+    };
+
+    expect(buildAuthFromValues(values)).toBeUndefined();
+    expect(buildAuthFromValues(values, { forPatch: true })).toBeNull();
+  });
+
   it('preserves a legacy absent DCR field across an unrelated edit', () => {
     expect(
       buildAuthFromValues(
@@ -423,4 +435,19 @@ describe('buildAuthFromValues PATCH semantics', () => {
       )
     ).toMatchObject({ type: 'jwt', api_token: null, api_secret: null });
   });
+});
+
+describe('environment form validation', () => {
+  it.each(['', '{}', '{"API_KEY":"••••••••"}', '{"API_KEY":"{{ user.env.API_KEY }}"}'])(
+    'accepts %s',
+    (value) => {
+      expect(validateEnvJSON(value)).toBeUndefined();
+    }
+  );
+  it.each(['{invalid', 'null', '[]', '{"API_KEY":123}', '{"bad name":"value"}'])(
+    'rejects %s rather than dropping the edit',
+    (value) => {
+      expect(validateEnvJSON(value)).toMatch(/Environment/);
+    }
+  );
 });

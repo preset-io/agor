@@ -6,8 +6,8 @@ import type {
 import { Divider, Flex, theme } from 'antd';
 import { CapabilityPolicyEditor } from './CapabilityPolicyEditor';
 import type { EffectiveAccessSubject } from './effectiveAccessPreviewModel';
-import { PersonalSessionSharingSection } from './PersonalSessionSharingSection';
 import { BRANCH_ACCESS_EDITOR_CONTEXT } from './policyEditorModel';
+import { SharedSessionPromptingSection } from './SharedSessionPromptingSection';
 
 interface BranchPermissionConfigEditorProps {
   value: BranchPermissionConfigDraft;
@@ -15,7 +15,6 @@ interface BranchPermissionConfigEditorProps {
   accessTitle: string;
   accessDescription?: React.ReactNode;
   primaryOwnerUserId: UserID;
-  currentUserId: UserID;
   principals: CapabilityPolicyPrincipalDescriptor[];
   subjects: EffectiveAccessSubject[];
   readOnly?: boolean;
@@ -23,13 +22,13 @@ interface BranchPermissionConfigEditorProps {
   sharingReadOnly?: boolean;
   showModeSelector?: boolean;
   sharingScope: 'board_defaults' | 'branch';
-  personalSessionSharingWorkspaceEnabled?: boolean;
+  sessionSharingWorkspaceEnabled?: boolean;
 }
 
 /**
  * The one editor for the complete config stored by board templates and branch
- * overrides. Server-side commands must still authorize access-policy edits and
- * each owner's personal sharing rule independently.
+ * overrides. The workspace preference remains an independent, admin-owned
+ * fail-closed gate over the branch-level switch.
  */
 export const BranchPermissionConfigEditor: React.FC<BranchPermissionConfigEditorProps> = ({
   value,
@@ -37,7 +36,6 @@ export const BranchPermissionConfigEditor: React.FC<BranchPermissionConfigEditor
   accessTitle,
   accessDescription,
   primaryOwnerUserId,
-  currentUserId,
   principals,
   subjects,
   readOnly,
@@ -45,7 +43,7 @@ export const BranchPermissionConfigEditor: React.FC<BranchPermissionConfigEditor
   sharingReadOnly,
   showModeSelector = true,
   sharingScope,
-  personalSessionSharingWorkspaceEnabled = true,
+  sessionSharingWorkspaceEnabled = true,
 }) => {
   const { token } = theme.useToken();
 
@@ -64,12 +62,12 @@ export const BranchPermissionConfigEditor: React.FC<BranchPermissionConfigEditor
         subjects={subjects}
       />
       <Divider style={{ marginBlock: 0 }} />
-      <PersonalSessionSharingSection
-        value={value.session_sharing}
-        onChange={(sessionSharing) => onChange({ ...value, session_sharing: sessionSharing })}
-        currentUserId={currentUserId}
-        principals={principals}
-        workspaceEnabled={personalSessionSharingWorkspaceEnabled}
+      <SharedSessionPromptingSection
+        value={value.allow_shared_session_prompts}
+        onChange={(allowSharedSessionPrompts) =>
+          onChange({ ...value, allow_shared_session_prompts: allowSharedSessionPrompts })
+        }
+        workspaceEnabled={sessionSharingWorkspaceEnabled}
         readOnly={sharingReadOnly ?? readOnly}
         scope={sharingScope}
       />

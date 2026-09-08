@@ -24,6 +24,7 @@ describe('TenantAgenticToolSettingsRepository', () => {
     });
 
     await expect(repository.find('codex')).resolves.toEqual({
+      revision: 1,
       enabled: false,
       connection: {
         OPENAI_API_KEY: 'workspace-key',
@@ -45,6 +46,7 @@ describe('TenantAgenticToolSettingsRepository', () => {
     });
 
     await expect(repository.find('claude-code')).resolves.toEqual({
+      revision: 2,
       connection: { ANTHROPIC_BASE_URL: 'https://example.invalid' },
     });
   });
@@ -58,15 +60,35 @@ describe('TenantAgenticToolSettingsRepository', () => {
         resolution_policy: 'user_required',
       });
       await expect(repository.find('codex')).resolves.toEqual({
+        revision: 1,
         resolution_policy: 'user_required',
         connection: { OPENAI_API_KEY: 'workspace-key' },
       });
 
       await repository.patch('codex', { resolution_policy: 'tenant_required' });
       await expect(repository.find('codex')).resolves.toEqual({
+        revision: 2,
         resolution_policy: 'tenant_required',
         connection: { OPENAI_API_KEY: 'workspace-key' },
       });
     }
   );
+
+  dbTest('increments a durable revision for same-presence credential rotations', async ({ db }) => {
+    const repository = new TenantAgenticToolSettingsRepository(db);
+    await repository.patch('claude-code', {
+      connection: { ANTHROPIC_AUTH_TOKEN: 'synthetic-token-one' },
+    });
+    const first = await repository.find('claude-code');
+
+    await repository.patch('claude-code', {
+      connection: { ANTHROPIC_AUTH_TOKEN: 'synthetic-token-two' },
+    });
+    const second = await repository.find('claude-code');
+
+    expect(first).toMatchObject({ revision: 1 });
+    expect(second).toMatchObject({ revision: 2 });
+    expect(Object.keys(first.connection ?? {})).toEqual(['ANTHROPIC_AUTH_TOKEN']);
+    expect(Object.keys(second.connection ?? {})).toEqual(['ANTHROPIC_AUTH_TOKEN']);
+  });
 });

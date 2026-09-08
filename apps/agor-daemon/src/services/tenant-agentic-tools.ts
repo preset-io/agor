@@ -51,6 +51,7 @@ export class TenantAgenticToolSettingsService {
     }
     return {
       tool,
+      revision: stored.revision ?? 0,
       deployment_available: deploymentEnabled,
       enabled: deploymentEnabled && stored.enabled !== false,
       resolution_policy: stored.resolution_policy ?? DEFAULT_PROVIDER_RESOLUTION_POLICY,

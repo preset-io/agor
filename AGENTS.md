@@ -16,6 +16,11 @@ This file is intentionally high-level. There are three places to look:
 
 **Rule of thumb:** If a topic has a guide page, read the guide. `context/` is for orientation, not exposition.
 
+**Do not accumulate task reports in the repo.** Routine bug investigations, audit snapshots,
+before/after evidence, and validation receipts belong in the issue or PR, not new dated
+`docs/internal/` files. Update an existing guide or code comment for durable behavior changes;
+retain separate docs only for lasting design/security contracts or operational runbooks.
+
 ---
 
 ## Quick Start
@@ -87,7 +92,7 @@ Terms you'll see across the codebase, UI, and docs:
 | **Daemon**         | The FeathersJS server (`apps/agor-daemon`) that owns the database, services, WebSocket events, and MCP HTTP endpoint. Default port 3030.                                                        |
 | **Executor**       | Process-isolated agent runtime in `packages/executor/`. Spawns Claude / Codex / Gemini / OpenCode via their SDKs locally, sandboxed, or through a delegated external substrate.                 |
 | **MCP**            | Model Context Protocol. Agor exposes itself as an MCP server (`POST /mcp`) so agents can introspect sessions, branches, boards, etc.                                                            |
-| **RBAC**           | Normalized board/branch capability policies with immutable primary owners, named users/groups, unmatched-member fallback, and branch file access. Feature-flagged via `execution.branch_rbac`.  |
+| **RBAC**           | Always-on normalized board/branch capability policies with immutable primary owners, named users/groups, unmatched-member fallback, and branch file access.                                     |
 | **Execution mode** | `simple` / `sandbox` / `delegated` — trusted local, fail-closed local filesystem sandbox, or explicitly delegated external execution. The config key remains `unix_user_mode` temporarily.      |
 | **Genealogy**      | Parent/child + fork ancestry of a session. Surfaced as a tree inside a branch card.                                                                                                             |
 | **Short ID**       | First 8 chars of a UUIDv7, used in UI and CLI. Resolved at API boundary via a `resolveShortId` hook. See [`context/concepts/id-management.md`](context/concepts/id-management.md).              |
@@ -215,7 +220,6 @@ Application RBAC and process isolation are separate controls:
 
 ```yaml
 execution:
-  branch_rbac: true # enforce branch permissions in the application
   unix_user_mode: sandbox # simple | sandbox | delegated
 ```
 
@@ -240,7 +244,6 @@ Relevant options include:
 
 ```yaml
 execution:
-  branch_rbac: boolean
   unix_user_mode: simple | sandbox | delegated
   allow_web_terminal: boolean
   session_token_expiration_ms: number
@@ -271,10 +274,12 @@ a copy of the current board template.
   maximum.
 - `Others` matches only active same-tenant members with no direct/group match.
 
-Personal session sharing is a tenant-gated, owner-authored part of the complete
-branch configuration. Shared prompts retain the owner's native conversation
-and home, but task attribution, managed env/connector credentials, private MCP
-visibility, and branch mounts use the actual caller. See
+Shared session prompting is tenant-gated and explicitly enabled in the complete
+board-default or branch-override configuration. It applies only to branch-home
+Sessions: the conversation and branch SDK state are shared, while task
+attribution, execution home, managed env/connector credentials, private MCP
+visibility, and branch mounts use the actual caller. Historical execution-home
+Sessions are never shareable. See
 [`context/explorations/session-sharing.md`](context/explorations/session-sharing.md).
 
 ---
@@ -292,7 +297,7 @@ visibility, and branch mounts use the actual caller. See
 - `delegated` passes trusted tenant/user identifiers, `{branch_fs_access}`, and
   the transitional home key to an external launcher; the launcher owns enforcement.
 - Historical `unix_group` columns remain nullable and ignored at runtime.
-- The Permissions UI is controlled by `branch_rbac`.
+- The Permissions UI is always available and fails closed when policy data cannot load.
 
 Related files:
 
@@ -411,9 +416,9 @@ probes the endpoint on every connect, whatever the entry says. A valid JSON-RPC
 `per_user` OAuth row; a non-OAuth challenge installs only when the entry carries
 a reviewed bearer-credential recipe and the caller supplies a key that passes a
 second `initialize`. When the probe contradicts the entry, the daemon logs it at
-`warn` with the stated and probed values; that log is the only thing that can
-catch a stale `auth_type`, because nothing else compares the file against the
-servers it describes.
+`warn` with the stated and probed values. The catalog health workflow repeats
+that comparison on curation pull requests and on a schedule, annotates
+transient reachability separately, and fails on actionable auth/OAuth drift.
 
 OAuth entries that omit `oauth.compatibility_mode` use an internal,
 non-persistable `marketplace` profile. This is not a general relaxed default: it
@@ -424,12 +429,17 @@ differences implemented in `oauth-mcp-transport.ts`, while retaining
 same-origin bounds on those fallbacks, resource/issuer binding, the exact MCP
 URL as the RFC 8707 resource, PKCE S256, and callback issuer validation. An
 explicit saved-row `strict` or `legacy` mode always wins. The catalog explicitly
-keeps Monday, Cloudflare, and ClickUp on `strict`; an edited/imported install, a
-removed entry, or any catalog configuration drift falls back to `strict`.
-GitHub, Prisma, MongoDB, Box, HubSpot, Slack, PagerDuty, and Kagi were removed
-from the shelf because the review could not establish a safely bound
-client-registration or issuer path; do not re-add one merely because its
-endpoint still challenges for OAuth.
+keeps Monday, Cloudflare, ClickUp, and Preset on `strict`. Preset is pinned
+defensively pending production OAuth validation, not asserted to have passed it;
+an edited/imported install, a removed entry, or any catalog configuration drift
+falls back to `strict`.
+Prisma, MongoDB, Box, HubSpot, Slack, PagerDuty, and Kagi remain off the shelf
+because the review could not establish a safely bound client-registration or
+issuer path; do not re-add one merely because its endpoint challenges for
+OAuth. GitHub instead uses its documented PAT bearer route: the catalog marks
+the OAuth challenge as a reviewed exception, Connect verifies each supplied PAT
+against the pinned endpoint, and the health audit reports separately if the
+OAuth metadata later becomes usable so the exception can be retired.
 
 An endpoint the probe finds behind a non-OAuth challenge is installed with a key
 the user pastes into the marketplace drawer. The key never goes in
@@ -573,15 +583,3 @@ cd apps/agor-daemon && pnpm dev
 
 _For product vision: [`README.md`](README.md)_
 _For architecture: [`context/concepts/architecture.md`](context/concepts/architecture.md) and [`apps/agor-docs/pages/guide/architecture.mdx`](apps/agor-docs/pages/guide/architecture.mdx)_
-
----
-
-## Agor Session Context
-
-You are currently running within **Agor** (https://agor.live), a multiplayer canvas for orchestrating AI coding agents.
-
-**Your current Agor session ID is: `03b62447-f2c6-4259-997b-d38ed1ddafed`** (short: `03b62447`)
-
-When you see this ID referenced in prompts or tool calls, it refers to THIS session you're currently in.
-
-For more information about Agor, visit https://agor.live

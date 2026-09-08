@@ -16,7 +16,7 @@ import type { AgenticToolName } from '../types';
 import { normalizeHttpBaseUrl } from '../utils/url';
 import { ensureAgorHome, ensureAgorHomeSync, getAgorHome, getConfigPath } from './agor-home';
 import { getDefaultAnalyticsConfig } from './analytics-defaults.js';
-import { DAEMON, MCP_TOKEN } from './constants';
+import { DAEMON, ENVIRONMENT, MCP_TOKEN } from './constants';
 import { validateRedisKeyPrefix, validateRedisUrl } from './deployment';
 import {
   resolveDispatchConnectTimeoutMs,
@@ -394,6 +394,14 @@ function parseOptionalPortEnvironmentValue(
   return port;
 }
 
+function parseOptionalSdkHomeModeEnvironmentValue(
+  value: string | undefined
+): 'inherit' | 'per_branch' | undefined {
+  if (value === undefined || value === '') return undefined;
+  if (value === 'inherit' || value === 'per_branch') return value;
+  throw new Error('Config error: AGOR_SANDBOX_SDK_HOME_MODE must be one of: inherit, per_branch');
+}
+
 /**
  * Policy for config keys the daemon does not recognize.
  *
@@ -424,6 +432,20 @@ function resolveUnknownConfigKeyPolicy(): UnknownConfigKeyPolicy {
 function requirePlainConfigRecord(value: unknown, path: string): void {
   if (!isPlainConfigRecord(value)) {
     throw new Error(`Config error: ${path} must be an object`);
+  }
+}
+
+/**
+ * Board and branch RBAC is always enabled. `execution.branch_rbac: false` is a
+ * retired switch that must fail startup rather than silently reopening the
+ * legacy tenant-wide access mode. Enforced at both the raw-config validation
+ * boundary and effective-config resolution so neither path can drift open.
+ */
+function assertBranchRbacNotDisabled(config: AgorConfig): void {
+  if (config.execution?.branch_rbac === false) {
+    throw new Error(
+      'Config error: execution.branch_rbac: false is no longer supported; board and branch RBAC is always enabled. Remove the key (recommended) or set it to true temporarily.'
+    );
   }
 }
 
@@ -505,6 +527,7 @@ function validateConfig(config: AgorConfig): void {
   }
 
   const knownTopLevelKeys = new Set([
+    'environment_disclaimer_markdown',
     'agentic_tools',
     'defaults',
     'display',
@@ -534,6 +557,16 @@ function validateConfig(config: AgorConfig): void {
     );
   }
 
+  const disclaimer = config.environment_disclaimer_markdown;
+  if (
+    disclaimer !== undefined &&
+    (typeof disclaimer !== 'string' || disclaimer.length > ENVIRONMENT.DISCLAIMER_MAX_LENGTH)
+  ) {
+    throw new Error(
+      `Config error: environment_disclaimer_markdown must be a string of at most ${ENVIRONMENT.DISCLAIMER_MAX_LENGTH} UTF-16 code units`
+    );
+  }
+
   const unknownPaths: string[] = [];
   const only = (value: unknown, path: string, allowed: readonly string[]) => {
     if (value === undefined) return;
@@ -544,7 +577,13 @@ function validateConfig(config: AgorConfig): void {
     }
   };
   const legacyConfig = config as LegacyConfig;
-  only(config.agentic_tools, 'agentic_tools', ['installed']);
+  only(config.agentic_tools, 'agentic_tools', ['installed', 'claude_subscription_oauth']);
+  if (
+    config.agentic_tools?.claude_subscription_oauth !== undefined &&
+    typeof config.agentic_tools.claude_subscription_oauth !== 'boolean'
+  ) {
+    throw new Error('Config error: agentic_tools.claude_subscription_oauth must be a boolean');
+  }
   if (config.agentic_tools?.installed !== undefined) {
     if (!Array.isArray(config.agentic_tools.installed)) {
       throw new Error("Config error: 'agentic_tools.installed' must be an array");
@@ -809,6 +848,7 @@ function validateConfig(config: AgorConfig): void {
     'required_user_env_vars',
     ...RETIRED_CONFIG_KEYS.execution,
     'managed_envs_execution_mode',
+    'environment_command_job_deadline_ms',
     'branch_storage',
     'sandbox',
   ]);
@@ -856,6 +896,7 @@ function validateConfig(config: AgorConfig): void {
     'protect_secrets',
     'isolate_branches',
     'home_mode',
+    'sdk_home_mode',
     'preserve_canonical_home_alias',
     'extra_allow_write',
     'extra_deny_read',
@@ -867,6 +908,13 @@ function validateConfig(config: AgorConfig): void {
     'tmp',
     'home',
   ]);
+  if (
+    config.execution?.branch_rbac !== undefined &&
+    typeof config.execution.branch_rbac !== 'boolean'
+  ) {
+    throw new Error('Config error: execution.branch_rbac must be a boolean');
+  }
+  assertBranchRbacNotDisabled(config);
   if (
     config.execution?.sandbox?.preserve_canonical_home_alias !== undefined &&
     typeof config.execution.sandbox.preserve_canonical_home_alias !== 'boolean'
@@ -1435,6 +1483,12 @@ export function resolveEffectiveConfig(
   config: AgorConfig,
   env: NodeJS.ProcessEnv = process.env
 ): AgorConfig {
+  assertBranchRbacNotDisabled(config);
+  if (env.AGOR_RBAC_ENABLED && env.AGOR_RBAC_ENABLED !== 'true') {
+    throw new Error(
+      'Config error: AGOR_RBAC_ENABLED can no longer disable board and branch RBAC. Remove the environment variable (recommended) or set it to true temporarily.'
+    );
+  }
   const defaults = getDefaultConfig();
   const port = env.PORT ? Number.parseInt(env.PORT, 10) : undefined;
   const statsdEnabled = parseOptionalBooleanEnvironmentValue(
@@ -1472,6 +1526,7 @@ export function resolveEffectiveConfig(
     env.AGOR_SANDBOX_HOME_MODE === 'per_user' || env.AGOR_SANDBOX_HOME_MODE === 'shared'
       ? env.AGOR_SANDBOX_HOME_MODE
       : undefined;
+  const envSdkHomeMode = parseOptionalSdkHomeModeEnvironmentValue(env.AGOR_SANDBOX_SDK_HOME_MODE);
   let resolvedSandbox = config.execution?.sandbox;
   if (sandboxIsolation) {
     resolvedSandbox = {
@@ -1487,6 +1542,13 @@ export function resolveEffectiveConfig(
       ...(envSandboxEnabled ? { enabled: true } : {}),
       ...(envHomeMode ? { home_mode: envHomeMode } : {}),
     };
+  }
+  // SDK-home relocation is an independent rollout control: setting it must
+  // not implicitly enable or weaken the filesystem sandbox. The rich/full
+  // development profile opts in explicitly, while ordinary deployments keep
+  // the legacy-safe `inherit` default when neither YAML nor env names a mode.
+  if (envSdkHomeMode) {
+    resolvedSandbox = { ...resolvedSandbox, sdk_home_mode: envSdkHomeMode };
   }
   const resolvedExecutorResponse =
     defaults.execution?.executor_response ||
@@ -1514,13 +1576,27 @@ export function resolveEffectiveConfig(
       ...(env.INSTANCE_LABEL ? { instanceLabel: env.INSTANCE_LABEL } : {}),
     },
     ui: { ...defaults.ui, ...config.ui },
+    deployment: {
+      ...config.deployment,
+      ...(env.AGOR_DEPLOYMENT_MODE
+        ? { mode: env.AGOR_DEPLOYMENT_MODE as 'standalone' | 'ha' }
+        : {}),
+      ha: {
+        ...config.deployment?.ha,
+        ...(env.AGOR_HA_EXECUTION_TOPOLOGY
+          ? { execution_topology: env.AGOR_HA_EXECUTION_TOPOLOGY as 'shared-local' | 'external' }
+          : {}),
+      },
+    },
     identity: { ...defaults.identity, ...config.identity },
     ...(externalLaunch ? { external_launch: externalLaunch } : {}),
     execution: {
       ...defaults.execution,
       ...config.execution,
       ...(resolvedExecutorResponse ? { executor_response: resolvedExecutorResponse } : {}),
-      ...(env.AGOR_RBAC_ENABLED === 'true' ? { branch_rbac: true } : {}),
+      // Keep the deprecated read-model field true for old clients and internal
+      // consumers during the compatibility window. It is no longer a switch.
+      branch_rbac: true,
       ...(env.AGOR_UNIX_USER_MODE
         ? {
             unix_user_mode: env.AGOR_UNIX_USER_MODE as NonNullable<
@@ -1532,9 +1608,6 @@ export function resolveEffectiveConfig(
       // isolation-mode implications). Computed above. AGOR_SANDBOX_ENABLED /
       // AGOR_SANDBOX_HOME_MODE are used by the `sandbox` .agor.yml env variants.
       ...(resolvedSandbox ? { sandbox: resolvedSandbox } : {}),
-      // `sandbox` isolation mode requires RBAC to be active (branch authorization
-      // is what the mount policy enforces). Force it on last so it wins.
-      ...(sandboxIsolation ? { branch_rbac: true } : {}),
     },
     paths: {
       ...defaults.paths,
@@ -1579,12 +1652,13 @@ export function resolveEffectiveConfig(
 }
 
 /**
- * Reject execution combinations that the local filesystem sandbox cannot
- * enforce. Call this on the resolved effective config so environment-derived
- * settings are covered as well as YAML settings.
+ * Reject execution and authorization combinations that cannot satisfy the
+ * selected deployment contract. Call this on the resolved effective config so
+ * environment-derived settings are covered as well as YAML settings.
  */
 export function assertValidEffectiveExecutionConfig(config: AgorConfig): void {
   const execution = config.execution;
+
   if (!execution) return;
 
   const response = resolveExecutorResponseConfig(execution.executor_response);
@@ -1973,8 +2047,6 @@ export function loadConfigSync(): AgorConfig {
 }
 
 export interface ResolvedExecutionSecurityMode {
-  /** App-layer branch ownership/visibility/action enforcement. */
-  appRbacEnabled: boolean;
   /** Configured Unix execution mode with default applied. */
   unixUserMode: import('./types').UnixUserMode;
   /**
@@ -1987,9 +2059,8 @@ export interface ResolvedExecutionSecurityMode {
 /**
  * Resolve the execution security posture from config.
  *
- * Keep this as the single semantic boundary between app-layer RBAC and
- * OS/filesystem isolation:
- * - `branch_rbac` controls Agor app permissions only.
+ * App-layer RBAC is always enabled and remains distinct from OS/filesystem
+ * isolation:
  * - `delegated` requires per-user `unix_username` but performs no OS-level
  *   work on the daemon host — identity
  *   enforcement is delegated to the execution substrate.
@@ -1999,7 +2070,6 @@ export function resolveExecutionSecurityMode(
 ): ResolvedExecutionSecurityMode {
   const unixUserMode = config.execution?.unix_user_mode ?? 'simple';
   return {
-    appRbacEnabled: config.execution?.branch_rbac === true,
     unixUserMode,
     requiresExecutionHomeKey: unixUserModeRequiresExecutionHomeKey(unixUserMode),
   };
@@ -2013,23 +2083,6 @@ export function unixUserModeRequiresExecutionHomeKey(
   mode: import('./types').UnixUserMode
 ): boolean {
   return mode === 'delegated';
-}
-
-/**
- * Check if logical branch RBAC is enabled.
- *
- * This controls app-level branch ownership/visibility. It does not necessarily
- * imply local filesystem isolation; simple mode may enable branch RBAC while
- * running filesystem work as the daemon user.
- *
- * @returns true if branch_rbac is enabled in config
- */
-export function isBranchRbacEnabled(): boolean {
-  try {
-    return resolveExecutionSecurityMode().appRbacEnabled;
-  } catch {
-    return false;
-  }
 }
 
 /**
@@ -2275,6 +2328,43 @@ export function getBranchesDir(tenantId?: string): string {
  */
 export function getBranchPath(repoSlug: string, branchName: string, tenantId?: string): string {
   return path.join(getBranchesDir(tenantId), repoSlug, branchName);
+}
+
+/**
+ * Get the on-disk root for per-branch SDK homes.
+ *
+ * Returns: $AGOR_DATA_HOME/branch-homes
+ *
+ * A sibling of `worktrees/` and `homes/` (see {@link getBranchesDir},
+ * `resolveOwnerHomeStore`). Purely additive — nothing existing moves. Inherits
+ * filesystem-multitenancy isolation via {@link getTenantDataRoot}. See design
+ * §6.2.
+ *
+ * @returns Absolute path to the branch-homes root
+ */
+export function getBranchHomesDir(tenantId?: string): string {
+  return path.join(getTenantDataRoot(tenantId), 'branch-homes');
+}
+
+/**
+ * Get the per-branch SDK home path for a specific branch.
+ *
+ * Returns: $AGOR_DATA_HOME/branch-homes/<branchId>
+ *
+ * Keyed by the immutable `branchId` — NOT the branch name — because names are
+ * mutable and non-unique across repos. This is the single resolver that derives
+ * the path from the branch id, so the on-disk location cannot drift or be
+ * injected (the branch record only stores a boolean/enum intent, never a path;
+ * see design §9.2).
+ *
+ * @param branchId - The branch's immutable id
+ * @returns Absolute path to the branch's SDK home
+ */
+export function getBranchHomePath(branchId: string, tenantId?: string): string {
+  if (!branchId || branchId.includes('/') || branchId.includes('..')) {
+    throw new Error(`Invalid branchId for SDK home path: ${JSON.stringify(branchId)}`);
+  }
+  return path.join(getBranchHomesDir(tenantId), branchId);
 }
 
 /**

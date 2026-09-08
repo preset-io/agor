@@ -26,18 +26,21 @@ import {
 } from '@agor/core/db';
 import { BadRequest, NotAuthenticated } from '@agor/core/feathers';
 import type { AuthenticatedParams, CodexAuthImportResult, UserID } from '@agor/core/types';
+import type { CodexCredentialBindInvalidator } from '../codex-auth-bind-invalidation.js';
 import { parseCodexAuthJson } from '../utils/codex-auth-file.js';
 import {
   type AppLike,
   type CodexCredentialMutationCoordinator,
   persistVerifiedCodexAuth,
   resolveCodexCredentialRoute,
+  sameCodexCredentialRoute,
 } from './codex-auth-shared.js';
 
 export function createCodexAuthImportService(
   app: AppLike,
   db: TenantScopeAwareDatabase,
-  credentialMutations?: CodexCredentialMutationCoordinator
+  credentialMutations?: CodexCredentialMutationCoordinator,
+  invalidateCredentialBinds: CodexCredentialBindInvalidator = async () => undefined
 ) {
   return {
     async create(
@@ -75,6 +78,18 @@ export function createCodexAuthImportService(
         );
       }
 
+      const validateRoute = async () => {
+        const currentRoute = await resolveCodexCredentialRoute(
+          userId,
+          withTenantDatabase,
+          app.get('config')
+        );
+        if (!currentRoute.ok || !sameCodexCredentialRoute(currentRoute, identity)) {
+          throw new BadRequest(
+            'The execution home changed while importing credentials. Import again for the current home.'
+          );
+        }
+      };
       const persist = (authorityGeneration?: number) =>
         persistVerifiedCodexAuth({
           app,
@@ -90,9 +105,15 @@ export function createCodexAuthImportService(
             String(tenantId),
             userId,
             'credentials_imported',
-            persist
+            persist,
+            validateRoute
           )
-        : await persist();
+        : await validateRoute().then(() => persist());
+      await invalidateCredentialBinds({
+        tenantId: String(tenantId),
+        userId,
+        reason: 'credentials_imported',
+      });
 
       return {
         status: 'authenticated',

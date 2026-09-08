@@ -2,6 +2,7 @@ import type { BranchID, SessionID, TaskID } from '@agor/core/types';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mcpAuthMocks = vi.hoisted(() => ({ resolveMCPAuthHeaders: vi.fn() }));
+const claudeSdkMocks = vi.hoisted(() => ({ query: vi.fn() }));
 
 // Mock minimal dependencies
 vi.mock('@agor/core/lib/validation', () => ({
@@ -11,8 +12,12 @@ vi.mock('@agor/core/db', () => ({
   // shortId is used in log lines inside query-builder; passthrough mock.
   shortId: vi.fn((id: string) => id),
 }));
-vi.mock('@anthropic-ai/claude-agent-sdk', () => ({ query: vi.fn() }));
-vi.mock('@agor/core/templates/session-context', () => ({
+vi.mock('@anthropic-ai/claude-agent-sdk', () => claudeSdkMocks);
+vi.mock('@agor/core/agentic-integrations', () => ({
+  loadManagedAgenticToolSdk: vi.fn(async () => claudeSdkMocks),
+}));
+vi.mock('@agor/core/templates/session-context', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@agor/core/templates/session-context')>()),
   renderAgorSystemPrompt: vi.fn().mockResolvedValue('prompt'),
 }));
 vi.mock('@agor/core/tools/mcp/http-headers', () => ({
@@ -44,7 +49,7 @@ vi.mock('../base/permission-hooks.js', () => ({
 import { getMcpServersForSession } from '@agor/core/mcp';
 import { resolveMCPAuthHeaders } from '@agor/core/tools/mcp/jwt-auth';
 import * as Claude from '@anthropic-ai/claude-agent-sdk';
-import { CLAUDE_CODE_DISALLOWED_TOOLS } from './constants.js';
+import { CLAUDE_CODE_DISALLOWED_TOOLS, CLAUDE_CODE_TODO_TOOLS } from './constants.js';
 import { formatListForLog, type QuerySetupDeps, setupQuery } from './query-builder.js';
 
 describe('MCP logging helpers', () => {
@@ -95,6 +100,31 @@ describe('setupQuery - Local Settings Support', () => {
     );
   });
 
+  it.each([
+    [{ kind: 'human' as const }, { kind: 'human' }],
+    [
+      { kind: 'channel' as const, server: 'slack' },
+      { kind: 'channel', server: 'slack' },
+    ],
+    [undefined, undefined],
+  ])('passes only daemon-derived prompt origin to the SDK (%j)', async (promptOrigin, expected) => {
+    const setup = await setupQuery('test-session' as SessionID, 'test prompt', createMockDeps(), {
+      promptOrigin,
+    });
+    const prompt = vi.mocked(Claude.query).mock.calls[0][0].prompt;
+    expect(typeof prompt).not.toBe('string');
+
+    const first = await (prompt as AsyncIterable<Record<string, unknown>>)
+      [Symbol.asyncIterator]()
+      .next();
+    if (expected) {
+      expect(first.value).toMatchObject({ origin: expected });
+    } else {
+      expect(first.value).not.toHaveProperty('origin');
+    }
+    setup.query.releaseInput();
+  });
+
   it('logs only the generic prompt start and passes resume and prompt data to the SDK', async () => {
     const prompt = 'sk-ant-SECRET_QUERY_SENTINEL\r\nsecond line\nDATABASE_URL=do-not-log';
     const deps = createMockDeps();
@@ -118,7 +148,9 @@ describe('setupQuery - Local Settings Support', () => {
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
 
     try {
-      await setupQuery('test-session' as SessionID, prompt, deps);
+      await setupQuery('test-session' as SessionID, prompt, deps, {
+        promptOrigin: { kind: 'human' },
+      });
 
       expect(logSpy.mock.calls).toEqual([['🤖 Prompting Claude for session test-session...']]);
 
@@ -128,9 +160,108 @@ describe('setupQuery - Local Settings Support', () => {
       const promptIterator = callArgs.prompt[Symbol.asyncIterator]();
       const firstMessage = await promptIterator.next();
       expect(firstMessage.value.message.content).toEqual([{ type: 'text', text: prompt }]);
+      expect(firstMessage.value.origin).toEqual({ kind: 'human' });
     } finally {
       logSpy.mockRestore();
     }
+  });
+
+  it('keeps canonical Claude state for fork/resume while credentials use executor env', async () => {
+    const deps = createMockDeps();
+    const now = new Date().toISOString();
+    vi.mocked(deps.sessionsRepo.findById)
+      .mockResolvedValueOnce({
+        session_id: 'fork-session' as SessionID,
+        branch_id: 'test-branch' as BranchID,
+        created_at: now,
+        last_updated: now,
+        genealogy: { forked_from_session_id: 'parent-session' as SessionID },
+      } as any)
+      .mockResolvedValueOnce({
+        session_id: 'parent-session' as SessionID,
+        branch_id: 'test-branch' as BranchID,
+        sdk_session_id: 'parent-sdk-session',
+      } as any);
+
+    await setupQuery('fork-session' as SessionID, 'continue from parent', deps);
+    const callArgs = vi.mocked(Claude.query).mock.calls[0][0];
+    expect(callArgs.options).toMatchObject({
+      resume: 'parent-sdk-session',
+      forkSession: true,
+      settingSources: expect.arrayContaining(['user', 'project', 'local']),
+    });
+    // Runtime containment keeps the canonical .claude state directory writable
+    // while masking only credential authority leaves. It must not redirect
+    // CLAUDE_CONFIG_DIR, which would strand path-keyed transcripts/settings.
+    expect(callArgs.options).not.toHaveProperty('env.CLAUDE_CONFIG_DIR');
+  });
+
+  it.each(['root', 'fork', 'nested-fork', 'spawn'])(
+    'sends trusted current identity on first and resumed %s queries without changing user input',
+    async (kind) => {
+      const deps = createMockDeps();
+      const currentId = `${kind}-B` as SessionID;
+      const forkSource = kind.includes('fork') ? 'source-A' : undefined;
+      const current = {
+        session_id: currentId,
+        created_at: new Date().toISOString(),
+        last_updated: new Date().toISOString(),
+        branch_id: 'test-branch' as BranchID,
+        genealogy: {
+          forked_from_session_id: forkSource,
+          parent_session_id: kind === 'spawn' ? 'coordinator-A' : undefined,
+        },
+        sdk_session_id: undefined as string | undefined,
+      };
+      vi.mocked(deps.sessionsRepo.findById).mockImplementation(
+        async (id) =>
+          (id === currentId
+            ? current
+            : {
+                sdk_session_id: 'provider-thread-A',
+                genealogy:
+                  kind === 'nested-fork' ? { forked_from_session_id: 'root-Z' } : undefined,
+              }) as never
+      );
+      for (const prompt of ['Inherited context: Current Agor session ID: source-A', '/compact']) {
+        const setup = await setupQuery(currentId, prompt, deps);
+        const request = vi.mocked(Claude.query).mock.calls.at(-1)![0];
+        expect(request.options.systemPrompt).toMatchObject({
+          append: expect.stringContaining(`Current Agor session ID: ${currentId}`),
+        });
+        expect(request.options.resume).toBe(
+          current.sdk_session_id ?? (forkSource ? 'provider-thread-A' : undefined)
+        );
+        const system = JSON.stringify(request.options.systemPrompt);
+        expect(system).toContain('omit callbackSessionId');
+        expect(system).not.toContain('provider-thread');
+        expect(system).not.toContain('source-A');
+        const message = await request.prompt[Symbol.asyncIterator]().next();
+        expect(message.value.message.content).toEqual([{ type: 'text', text: prompt }]);
+        setup.query.releaseInput();
+        current.sdk_session_id = 'provider-thread-B';
+      }
+      expect(vi.mocked(Claude.query).mock.calls.at(-1)![0].options.resume).toBe(
+        'provider-thread-B'
+      );
+    }
+  );
+
+  it('retains only UTF-8 byte metadata from provider stderr', async () => {
+    const deps = createMockDeps();
+    const setup = await setupQuery('test-session' as SessionID, 'test prompt', deps);
+    const callArgs = vi.mocked(Claude.query).mock.calls[0][0];
+    const captureStderr = callArgs.options.stderr as (data: unknown) => void;
+    const sentinel = 'SENTINEL_CLAUDE_STDERR_SECRET_🔐';
+
+    captureStderr(sentinel);
+    captureStderr({ reflected: sentinel });
+
+    expect(setup.getStderrMetadata()).toEqual({
+      hasStderr: true,
+      byteLength: Buffer.byteLength(sentinel),
+    });
+    expect(JSON.stringify(setup.getStderrMetadata())).not.toContain(sentinel);
   });
 
   // Pin the literal disallow list so a stray edit to the constant
@@ -156,6 +287,14 @@ describe('setupQuery - Local Settings Support', () => {
 
     const callArgs = vi.mocked(Claude.query).mock.calls[0][0];
     expect(callArgs.options.disallowedTools).toEqual([...CLAUDE_CODE_DISALLOWED_TOOLS]);
+  });
+
+  it('opts into the Claude task tools that back Agor todo rendering', async () => {
+    await setupQuery('test-session' as SessionID, 'test prompt', createMockDeps());
+
+    const callArgs = vi.mocked(Claude.query).mock.calls[0][0];
+    expect(CLAUDE_CODE_TODO_TOOLS).toEqual(['TaskCreate', 'TaskUpdate', 'TaskGet', 'TaskList']);
+    expect(callArgs.options.allowedTools).toEqual([...CLAUDE_CODE_TODO_TOOLS]);
   });
 
   it('blocks on MCP startup for gateway sessions', async () => {

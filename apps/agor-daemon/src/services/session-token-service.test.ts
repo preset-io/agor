@@ -25,6 +25,7 @@ function authorityStore(
       ...(input.branchId ? { branch_id: input.branchId } : {}),
       user_id: input.userId,
     })),
+    isCurrent: vi.fn(async () => true),
     revoke: vi.fn(async () => true),
     revokeByTask: vi.fn(async () => []),
     purgeRetained: vi.fn(async () => 0),
@@ -218,6 +219,58 @@ describe('SessionTokenService runtime scoping', () => {
         })
       )
     ).resolves.toMatchObject({ session_id: 'session-1', user_id: 'user-1' });
+  });
+
+  it('revalidates one standalone Task fingerprint in O(1) and observes revocation', async () => {
+    const service = new SessionTokenService(
+      { expiration_ms: 60_000, max_uses: -1 },
+      { startCleanupTimer: false }
+    );
+    service.setJwtSecret('session-token-test-secret');
+    const token = await runWithTenantDatabaseScope(scopeOnlyDb, 'tenant-a', () =>
+      service.generateToken('session-1', 'user-1', {
+        taskId: 'task-1',
+        branchId: 'branch-1',
+      })
+    );
+    const authority = {
+      tenantId: 'tenant-a',
+      tokenFingerprint: fingerprintExecutorSessionToken(token),
+      sessionId: 'session-1',
+      taskId: 'task-1',
+      branchId: 'branch-1',
+      userId: 'user-1',
+    };
+
+    await expect(service.isTaskTokenAuthorityCurrent(authority)).resolves.toBe(true);
+    await expect(
+      service.isTaskTokenAuthorityCurrent({ ...authority, branchId: 'branch-other' })
+    ).resolves.toBe(false);
+    await service.revokeToken(token);
+    await expect(service.isTaskTokenAuthorityCurrent(authority)).resolves.toBe(false);
+  });
+
+  it('fails heartbeat authority closed when the durable store is uncertain', async () => {
+    const store = authorityStore({
+      isCurrent: vi.fn(async () => {
+        throw new Error('authority store unavailable');
+      }),
+    });
+    const service = new SessionTokenService(
+      { expiration_ms: 60_000, max_uses: -1 },
+      { authorityStore: store, startCleanupTimer: false }
+    );
+
+    await expect(
+      service.isTaskTokenAuthorityCurrent({
+        tenantId: 'tenant-a',
+        tokenFingerprint: 'c'.repeat(64),
+        sessionId: 'session-1',
+        taskId: 'task-1',
+        branchId: 'branch-1',
+        userId: 'user-1',
+      })
+    ).rejects.toThrow('authority store unavailable');
   });
 
   it('preserves standalone expiry, revocation, and cleanup behavior', async () => {

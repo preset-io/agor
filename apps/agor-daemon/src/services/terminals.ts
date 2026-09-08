@@ -209,9 +209,10 @@ export class TerminalsService {
         if (current.service || !hasMinimumRole(current.role, ROLES.MEMBER)) {
           throw new Forbidden('Member access is required to open terminals');
         }
-        const enforceBranchAccess =
-          config.execution?.branch_rbac === true &&
-          !isSuperAdmin(current.role, config.execution?.allow_superadmin === true);
+        const enforceBranchAccess = !isSuperAdmin(
+          current.role,
+          config.execution?.allow_superadmin === true
+        );
         const branchRepo = new BranchRepository(tenantDb);
         const branch = await branchRepo.findAccessibleById(data.branchId!, userId, {
           minimumPermission: 'session',
@@ -397,6 +398,11 @@ export class TerminalsService {
             user_id: userId,
             branch_id: branch.branch_id,
             branch_fs_access: principalBranchAccess,
+            // Interactive shells are deliberately excluded from shared SDK
+            // homes: native login commands could persist caller credentials
+            // into branch-owned state. Delegated launchers receive the same
+            // fail-closed empty value.
+            branch_sdk_home: '',
           },
           onExit: () => this.handleExecutorExit(terminalId, userId),
         }
@@ -428,9 +434,10 @@ export class TerminalsService {
       if (current.service || !hasMinimumRole(current.role, ROLES.MEMBER)) {
         throw new Forbidden('Terminal access changed while the terminal was starting.');
       }
-      const enforceCurrentAccess =
-        config.execution?.branch_rbac === true &&
-        !isSuperAdmin(current.role, config.execution?.allow_superadmin === true);
+      const enforceCurrentAccess = !isSuperAdmin(
+        current.role,
+        config.execution?.allow_superadmin === true
+      );
       const branchRepo = new BranchRepository(tenantDb);
       const branch = await branchRepo.findAccessibleById(branchId, userId, {
         minimumPermission: 'session',

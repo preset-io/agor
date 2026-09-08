@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { io } from 'socket.io-client';
 
 if (process.env.AGOR_HA_INTEGRATION !== '1') {
@@ -25,6 +25,7 @@ const daemonB = `http://127.0.0.1:${process.env.HA_DAEMON_B_PORT ?? '13032'}`;
 const project = process.env.COMPOSE_PROJECT_NAME ?? 'agor-ha-integration';
 const compose = ['compose', '-f', 'docker-compose.ha.yml', '-p', project];
 const cleanupFailures = [];
+const cleanupDockerProcesses = new Set();
 
 function cleanupWarning(message, error) {
   const detail = error instanceof Error ? error.message : error == null ? '' : String(error);
@@ -45,6 +46,224 @@ function dockerOutput(...args) {
   });
   assert.equal(result.status, 0, result.stderr || `docker ${args.join(' ')} failed`);
   return result.stdout;
+}
+
+function dockerFileExists(service, path) {
+  return (
+    spawnSync('docker', [...compose, 'exec', '-T', service, 'test', '-e', path], {
+      env: process.env,
+      stdio: 'ignore',
+    }).status === 0
+  );
+}
+
+const CLAUDE_CONTAINMENT_ATTACK_SCRIPT = String.raw`
+set -eu
+must_fail() {
+  if "$@" >/dev/null 2>&1; then
+    echo "unexpected success: $*" >&2
+    exit 70
+  fi
+}
+attack_authority() {
+  for claude_dir in "$@"; do
+    replacement="$HOME/ha-claude-replacement-$(basename "$(dirname "$claude_dir")")"
+    rm -rf "$replacement"
+    mkdir -p "$replacement"
+    must_fail mv "$claude_dir" "$claude_dir.renamed"
+    must_fail rmdir "$claude_dir"
+    must_fail mv -T "$replacement" "$claude_dir"
+    for leaf in .credentials.json .agor-auth-generation .agor-auth-mutation.lock; do
+      must_fail cat "$claude_dir/$leaf"
+      must_fail sh -c 'printf attacker > "$1"' sh "$claude_dir/$leaf"
+      must_fail unlink "$claude_dir/$leaf"
+      must_fail ln -sfn "$replacement/attacker" "$claude_dir/$leaf"
+    done
+    eval "exec 9<\"$claude_dir\""
+    must_fail sh -c 'printf attacker > /proc/self/fd/9/.credentials.json'
+    must_fail sh -c 'printf 0 > /proc/self/fd/9/.agor-auth-generation'
+    must_fail sh -c 'printf attacker > /proc/self/fd/9/.agor-auth-mutation.lock'
+    eval 'exec 9<&-'
+  done
+}
+attack_authority "$@"
+printf ready > "$AGOR_HA_CONTAINMENT_READY"
+while test ! -e "$AGOR_HA_CONTAINMENT_CONTINUE"; do sleep 0.02; done
+attack_authority "$@"
+`;
+
+function startClaudeContainmentProbe(service, ownerHomeStore, probeName) {
+  const ready = `${ownerHomeStore}/.claude/${probeName}.ready`;
+  const proceed = `${ownerHomeStore}/.claude/${probeName}.continue`;
+  const program = `
+import { spawnSync } from 'node:child_process';
+import { mkdir, rm } from 'node:fs/promises';
+import { join } from 'node:path';
+import { buildSandboxWrap } from '/opt/agor-runtime/lib/node_modules/agor-live/dist/daemon/utils/sandbox-wrap.js';
+import { ensureCredentialAuthorityLayout } from '/opt/agor-runtime/lib/node_modules/agor-live/node_modules/@agor/core/codex/credential-file.js';
+import { hasContainedClaudeRuntimeCredentials } from '/opt/agor-runtime/lib/node_modules/agor-live/node_modules/@agor/core/config/index.js';
+
+const [ownerHomeStore, ready, proceed] = process.argv.slice(2);
+const containedConfig = {
+  execution: {
+    unix_user_mode: 'sandbox',
+    executor_storage: { user_home: 'persistent-per-user' },
+    sandbox: { enabled: true, home_mode: 'per_user' },
+  },
+};
+if (!hasContainedClaudeRuntimeCredentials(containedConfig)) {
+  throw new Error('HA containment probe rejected the exact contained topology');
+}
+if (
+  hasContainedClaudeRuntimeCredentials({
+    execution: {
+      ...containedConfig.execution,
+      sandbox: {
+        ...containedConfig.execution.sandbox,
+        extra_allow_write: [ownerHomeStore],
+      },
+    },
+  })
+) {
+  throw new Error('HA containment probe admitted an extra writable physical-store escape');
+}
+const claudeDir = join(ownerHomeStore, '.claude');
+const branch = join('/home/agor/.agor/worktrees', 'ha-containment', ${JSON.stringify(probeName)});
+await mkdir(branch, { recursive: true });
+await ensureCredentialAuthorityLayout(join(claudeDir, '.credentials.json'));
+await rm(ready, { force: true });
+await rm(proceed, { force: true });
+const runtimePaths = {
+  homeDir: '/home/agor',
+  dataHome: '/home/agor/.agor',
+  protectedDataRoots: ['/home/agor/.agor'],
+  worktreesRoot: '/home/agor/.agor/worktrees',
+  agenticToolsPath: '/home/agor/.agor/agentic-tools',
+  agorConfigPath: '/home/agor/.agor/config.yaml',
+};
+const options = {
+  sandbox: {
+    enabled: true,
+    home_mode: 'per_user',
+    preserve_canonical_home_alias: true,
+    fail_if_unavailable: true,
+    include: { tmp: false },
+    // Synthetic hostile topology: re-expose the initially hidden shared data
+    // root. Managed Claude admission must reject it, while the sandbox's
+    // unconditional masks must still protect an existing/dormant grant from
+    // other provider tasks and terminals.
+    extra_allow_write: ['/home/agor/.agor'],
+  },
+  branchPath: branch,
+  ownerHomeStore,
+  runtimePaths,
+};
+const discovery = buildSandboxWrap({ ...options, cmd: '/bin/true', args: [] });
+if (!discovery) throw new Error('HA containment probe did not resolve a sandbox');
+const aliases = [];
+for (let index = 0; index < discovery.args.length - 2; index += 1) {
+  if (
+    discovery.args[index] === '--bind' &&
+    discovery.args[index + 1] === claudeDir &&
+    !aliases.includes(discovery.args[index + 2])
+  ) aliases.push(discovery.args[index + 2]);
+}
+if (aliases.length === 0) throw new Error('HA containment probe found no live home alias');
+const sandboxReady = join(aliases[0], ready.split('/').at(-1));
+const sandboxProceed = join(aliases[0], proceed.split('/').at(-1));
+for (const alias of aliases) {
+  for (const leaf of ['.credentials.json', '.agor-auth-generation', '.agor-auth-mutation.lock']) {
+    const target = join(alias, leaf);
+    const masked = discovery.args.some(
+      (arg, index) =>
+        arg === '--ro-bind' &&
+        discovery.args[index + 1] === '/dev/null' &&
+        discovery.args[index + 2] === target
+    );
+    if (!masked) throw new Error('HA containment probe found an unmasked authority leaf: ' + target);
+  }
+}
+const wrapped = buildSandboxWrap({
+  ...options,
+  cmd: '/bin/bash',
+  args: ['-c', ${JSON.stringify(CLAUDE_CONTAINMENT_ATTACK_SCRIPT)}, 'bash', ...aliases],
+});
+if (!wrapped) throw new Error('HA containment probe failed to build its live sandbox');
+const result = spawnSync(wrapped.cmd, wrapped.args, {
+  encoding: 'utf8',
+  env: {
+    PATH: process.env.PATH,
+    AGOR_HA_CONTAINMENT_READY: sandboxReady,
+    AGOR_HA_CONTAINMENT_CONTINUE: sandboxProceed,
+  },
+});
+if (result.status !== 0) {
+  throw new Error('HA containment attack escaped or failed: ' + result.status + '\\n' + result.stdout + '\\n' + result.stderr);
+}
+`;
+  const child = spawn(
+    'docker',
+    [
+      ...compose,
+      'exec',
+      '-T',
+      service,
+      'node',
+      '--input-type=module',
+      '-',
+      ownerHomeStore,
+      ready,
+      proceed,
+    ],
+    { env: process.env, stdio: ['pipe', 'pipe', 'pipe'] }
+  );
+  const cleanupRecord = { child, service, proceed, completion: undefined };
+  cleanupDockerProcesses.add(cleanupRecord);
+  child.stdin.end(program);
+  let stdout = '';
+  let stderr = '';
+  child.stdout.setEncoding('utf8');
+  child.stderr.setEncoding('utf8');
+  child.stdout.on('data', (chunk) => {
+    stdout += chunk;
+  });
+  child.stderr.on('data', (chunk) => {
+    stderr += chunk;
+  });
+  const completion = new Promise((resolve, reject) => {
+    child.once('error', reject);
+    child.once('close', (code, signal) => {
+      cleanupDockerProcesses.delete(cleanupRecord);
+      code === 0
+        ? resolve()
+        : reject(
+            new Error(
+              `${service} Claude containment probe failed (${code ?? signal}): ${stdout}${stderr}`
+            )
+          );
+    });
+  });
+  cleanupRecord.completion = completion;
+  return { ready, proceed, completion };
+}
+
+function claudeAuthoritySnapshot(service, claudeConfigDir) {
+  const output = dockerOutput(
+    'exec',
+    '-T',
+    service,
+    'sh',
+    '-c',
+    `set -eu; for leaf in .credentials.json .agor-auth-generation .agor-auth-mutation.lock; do path='${claudeConfigDir}'/"$leaf"; printf '%s ' "$leaf"; stat -c '%i' "$path"; sha256sum "$path" | cut -d' ' -f1; done`
+  )
+    .trim()
+    .split('\n');
+  const snapshot = {};
+  for (let index = 0; index < output.length; index += 2) {
+    const [leaf, inode] = output[index].split(' ');
+    snapshot[leaf] = { inode, sha256: output[index + 1] };
+  }
+  return snapshot;
 }
 
 function composeServiceContainerId(service) {
@@ -191,6 +410,7 @@ let cleanupAccessToken;
 let cleanupApiKeyId;
 const cleanupBoards = new Map();
 let cleanupCodexAccessToken;
+let cleanupClaudeAccessToken;
 const cleanupSockets = new Set();
 const cleanupStoppedServices = new Set();
 let completed = false;
@@ -198,6 +418,10 @@ let primaryError;
 
 try {
   if (process.env.AGOR_HA_INTEGRATION_START === '1') docker('up', '-d', '--build');
+  // The Compose-only launcher source is bind-mounted rather than baked into an
+  // image. Reusable stacks otherwise keep the old in-memory persona table after
+  // the source changes, producing a false harness failure for new fixtures.
+  docker('restart', 'dev-launcher');
 
   await Promise.all(
     [ingress, daemonA, daemonB].map((base) => waitFor(`${base}/readyz`, (r) => r.status === 200))
@@ -313,15 +537,39 @@ try {
     daemonB
   );
   const memberLoginResult = await loginPersona({ tenant: 'acme', persona: 'acme-aaron' }, daemonB);
+  const claudeLoginResult = await loginPersona(
+    { tenant: 'acme', persona: 'acme-claude-ha' },
+    daemonA
+  );
   const { accessToken, refreshToken } = loginResult;
   const foreignAccessToken = foreignLoginResult.accessToken;
   const memberAccessToken = memberLoginResult.accessToken;
+  const claudeAccessToken = claudeLoginResult.accessToken;
+  const claudeUserId = claudeLoginResult.user?.user_id;
   const memberUserId = memberLoginResult.user?.user_id;
+  const memberTokenPayload = JSON.parse(
+    Buffer.from(memberAccessToken.split('.')[1], 'base64url').toString('utf8')
+  );
+  const memberTenantId =
+    memberLoginResult.tenant?.tenant_id ??
+    memberLoginResult.user?.tenant_id ??
+    memberTokenPayload.tenant_id;
+  const claudeTokenPayload = JSON.parse(
+    Buffer.from(claudeAccessToken.split('.')[1], 'base64url').toString('utf8')
+  );
+  const claudeTenantId =
+    claudeLoginResult.tenant?.tenant_id ??
+    claudeLoginResult.user?.tenant_id ??
+    claudeTokenPayload.tenant_id;
   assert.equal(typeof accessToken, 'string');
   assert.equal(typeof refreshToken, 'string');
   assert.equal(typeof foreignAccessToken, 'string');
   assert.equal(typeof memberAccessToken, 'string');
   assert.equal(typeof memberUserId, 'string');
+  assert.equal(typeof memberTenantId, 'string');
+  assert.equal(typeof claudeAccessToken, 'string');
+  assert.equal(typeof claudeUserId, 'string');
+  assert.equal(typeof claudeTenantId, 'string');
   cleanupAccessToken = accessToken;
   console.log('ok - dev picker JIT-provisioned independent admin identities in two tenants');
 
@@ -422,6 +670,11 @@ try {
   assert.equal(healthA.deployment.instanceId, 'daemon-a');
   assert.equal(healthB.deployment.instanceId, 'daemon-b');
   assert.notEqual(healthA.deployment.bootId, healthB.deployment.bootId);
+  assert.deepEqual(
+    healthA.deployment.capabilities,
+    healthB.deployment.capabilities,
+    'HA replicas reported different resolved capability matrices'
+  );
   for (const health of [healthA, healthB]) {
     assert.equal(health.deployment.supportProfile, 'constrained-active-active');
     assert.equal(health.deployment.capabilities.taskExecution, true);
@@ -441,11 +694,20 @@ try {
     assert.equal(health.deployment.capabilities.environmentHealthMonitor, true);
     assert.equal(health.deployment.capabilities.codexCredentialFiles, true);
     assert.equal(health.deployment.capabilities.codexDeviceAuth, true);
+    assert.equal(health.deployment.capabilities.claudeOAuth, true);
+    assert.equal(health.deployment.capabilities.claudeAuth, true);
     assert.equal(health.deployment.realtime.ready, true);
   }
   console.log(
     'ok - distinct daemon/boot identities expose the constrained merged-foundation profile'
   );
+
+  const authorizedClaudeConfig = await fetch(`${daemonB}/health`, {
+    headers: { authorization: `Bearer ${memberAccessToken}` },
+  });
+  assert.equal(authorizedClaudeConfig.status, 200);
+  assert.equal((await authorizedClaudeConfig.json()).features.claudeSubscriptionOAuth, true);
+  console.log('ok - the HA validation profile explicitly authorizes Claude subscription OAuth');
 
   // Status is safe to probe without creating an uncontrolled provider device
   // attempt. Both replicas must admit it and observe the same durable state.
@@ -556,6 +818,353 @@ try {
       'ok - Codex exact-user auth file is written on A, consumed on B, removed on B, and absent on A'
     );
   }
+
+  // This fixed Compose-only identity is reserved for the destructive Claude
+  // HA smoke. Reset any residue from an interrupted prior run so reusable
+  // volumes cannot turn the required adversarial assertions into a skip.
+  const resetClaudeRoute = await fetch(`${daemonA}/users/${claudeUserId}`, {
+    method: 'PATCH',
+    headers: {
+      authorization: `Bearer ${accessToken}`,
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify({ filesystem_home: null }),
+  });
+  assert.equal(resetClaudeRoute.status, 200, await resetClaudeRoute.text());
+  const resetClaudeProbe = await fetch(`${daemonB}/claude-auth/logout`, {
+    method: 'POST',
+    headers: {
+      authorization: `Bearer ${claudeAccessToken}`,
+      'content-type': 'application/json',
+    },
+    body: '{}',
+  });
+  assert.equal(resetClaudeProbe.status, 201);
+  await resetClaudeProbe.text();
+
+  const initialClaudeAuth = await fetch(`${daemonA}/check-auth`, {
+    method: 'POST',
+    headers: {
+      authorization: `Bearer ${claudeAccessToken}`,
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify({ tool: 'claude-code', validateNative: true }),
+  });
+  assert.equal(initialClaudeAuth.status, 201);
+  assert.equal((await initialClaudeAuth.json()).status, 'unauthenticated');
+
+  const startA = await fetch(`${daemonA}/claude-auth/oauth`, {
+    method: 'POST',
+    headers: {
+      authorization: `Bearer ${claudeAccessToken}`,
+      'content-type': 'application/json',
+    },
+    body: '{}',
+  });
+  assert.equal(startA.status, 201);
+  const attemptA = await startA.json();
+  assert.equal(attemptA.phase, 'awaiting_code');
+  assert.equal(typeof attemptA.attemptId, 'string');
+  const statusThroughB = await fetch(
+    `${daemonB}/claude-auth/oauth?attemptId=${encodeURIComponent(attemptA.attemptId)}`,
+    { headers: { authorization: `Bearer ${claudeAccessToken}` } }
+  );
+  assert.equal(statusThroughB.status, 200);
+  assert.deepEqual(await statusThroughB.json(), {
+    phase: 'awaiting_code',
+    attemptId: attemptA.attemptId,
+    expiresAt: attemptA.expiresAt,
+  });
+
+  const wrongStateThroughB = await fetch(`${daemonB}/claude-auth/oauth`, {
+    method: 'POST',
+    headers: {
+      authorization: `Bearer ${claudeAccessToken}`,
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify({ attemptId: attemptA.attemptId, code: 'HA-CODE#wrong-state' }),
+  });
+  assert.equal(wrongStateThroughB.status, 400);
+  await wrongStateThroughB.text();
+
+  const [raceAResponse, raceBResponse] = await Promise.all(
+    [daemonA, daemonB].map((base) =>
+      fetch(`${base}/claude-auth/oauth`, {
+        method: 'POST',
+        headers: {
+          authorization: `Bearer ${claudeAccessToken}`,
+          'content-type': 'application/json',
+        },
+        body: '{}',
+      })
+    )
+  );
+  assert.equal(raceAResponse.status, 201);
+  assert.equal(raceBResponse.status, 201);
+  const [raceA, raceB] = await Promise.all([raceAResponse.json(), raceBResponse.json()]);
+  const currentThroughA = await fetch(`${daemonA}/claude-auth/oauth`, {
+    headers: { authorization: `Bearer ${claudeAccessToken}` },
+  });
+  assert.equal(currentThroughA.status, 200);
+  const currentAttempt = await currentThroughA.json();
+  assert([raceA.attemptId, raceB.attemptId].includes(currentAttempt.attemptId));
+
+  assert.match(claudeTenantId, /^[A-Za-z0-9_-]+$/);
+  assert.match(claudeUserId, /^[A-Za-z0-9_-]+$/);
+  const claudeConfigDir = `/home/agor/.agor/tenants/${claudeTenantId}/homes/${claudeUserId}/.claude`;
+  const claudeOwnerHome = claudeConfigDir.slice(0, -'/.claude'.length);
+  const dummyClaudeAccess = `sk-ant-oat-ha-${crypto.randomUUID()}`;
+  const dummyClaudeRefresh = `sk-ant-ort-ha-${crypto.randomUUID()}`;
+  const credentialPayload = Buffer.from(
+    JSON.stringify({
+      claudeAiOauth: {
+        accessToken: dummyClaudeAccess,
+        refreshToken: dummyClaudeRefresh,
+        expiresAt: Date.now() + 60_000,
+        scopes: ['user:inference'],
+        subscriptionType: null,
+        rateLimitTier: null,
+      },
+    })
+  ).toString('base64');
+  dockerOutput(
+    'exec',
+    '-T',
+    'daemon-a',
+    'sh',
+    '-c',
+    `mkdir -p '${claudeConfigDir}' && printf '%s' '${credentialPayload}' | base64 -d > '${claudeConfigDir}/.credentials.json' && chmod 600 '${claudeConfigDir}/.credentials.json'`
+  );
+  const setManagedClaudeSource = () => {
+    const update = dockerOutput(
+      'exec',
+      '-T',
+      'postgres',
+      'psql',
+      '--set',
+      'ON_ERROR_STOP=1',
+      '--username',
+      'agor_bootstrap',
+      '--dbname',
+      'agor',
+      '--command',
+      `UPDATE users SET data = COALESCE(data, '{}'::jsonb) || jsonb_build_object('agentic_credential_sources', COALESCE(data->'agentic_credential_sources', '{}'::jsonb) || '{"claude-code":"managed_file"}'::jsonb) WHERE tenant_id = '${claudeTenantId}' AND user_id = '${claudeUserId}'`
+    );
+    assert.match(update, /UPDATE 1/);
+  };
+  // Provider exchange is deliberately not invoked by this deterministic
+  // smoke. Complete its trusted metadata half as a fixture so the runtime
+  // exercises the explicit source model rather than legacy inference.
+  setManagedClaudeSource();
+
+  const fenceProbe = startClaudeContainmentProbe(
+    'daemon-a',
+    claudeOwnerHome,
+    `ha-fence-${crypto.randomUUID()}`
+  );
+  await waitUntil(
+    () => dockerFileExists('daemon-b', fenceProbe.ready),
+    'live HA Claude containment fence probe',
+    30_000
+  );
+  const beforeFence = claudeAuthoritySnapshot('daemon-a', claudeConfigDir);
+
+  // An external Claude method choice uses the same user authority, invalidates
+  // the winning attempt, and advances the exact home's tombstone through B
+  // while A holds a live sandbox attacking every alias and authority leaf.
+  const selectNative = await fetch(`${daemonB}/users/${claudeUserId}`, {
+    method: 'PATCH',
+    headers: {
+      authorization: `Bearer ${claudeAccessToken}`,
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify({
+      agentic_auth_methods: { 'claude-code': 'subscription' },
+      agentic_credential_sources: { 'claude-code': 'none' },
+    }),
+  });
+  assert.equal(selectNative.status, 200);
+  assert.equal((await selectNative.json()).agentic_credential_sources?.['claude-code'], 'none');
+  const afterFence = claudeAuthoritySnapshot('daemon-b', claudeConfigDir);
+  for (const leaf of Object.keys(beforeFence)) {
+    assert.equal(afterFence[leaf].inode, beforeFence[leaf].inode, `${leaf} inode changed on fence`);
+  }
+  assert.equal(
+    afterFence['.credentials.json'].sha256,
+    beforeFence['.credentials.json'].sha256,
+    'source fencing changed credential bytes'
+  );
+  assert.notEqual(
+    afterFence['.agor-auth-generation'].sha256,
+    beforeFence['.agor-auth-generation'].sha256,
+    'source fencing did not advance the authority generation'
+  );
+  assert.equal(
+    afterFence['.agor-auth-mutation.lock'].sha256,
+    beforeFence['.agor-auth-mutation.lock'].sha256,
+    'source fencing changed lock bytes'
+  );
+  dockerOutput('exec', '-T', 'daemon-b', 'touch', fenceProbe.proceed);
+  await fenceProbe.completion;
+  assert.deepEqual(
+    claudeAuthoritySnapshot('daemon-a', claudeConfigDir),
+    afterFence,
+    'live alias/sidecar attacks changed authority after replica-B fencing'
+  );
+  cleanupClaudeAccessToken = claudeAccessToken;
+  const afterExternalChoice = await fetch(`${daemonA}/claude-auth/oauth`, {
+    headers: { authorization: `Bearer ${claudeAccessToken}` },
+  });
+  assert.equal(afterExternalChoice.status, 200);
+  assert.equal((await afterExternalChoice.json()).phase, 'idle');
+
+  setManagedClaudeSource();
+
+  const visibleThroughB = await fetch(`${daemonB}/check-auth`, {
+    method: 'POST',
+    headers: {
+      authorization: `Bearer ${claudeAccessToken}`,
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify({ tool: 'claude-code', validateNative: true }),
+  });
+  assert.equal(visibleThroughB.status, 201);
+  assert.deepEqual(await visibleThroughB.json(), {
+    status: 'authenticated',
+    authenticated: true,
+    method: 'oauth',
+    hint: 'Claude subscription login found.',
+  });
+
+  // A route-affecting users.patch on B must join the same tenant/user
+  // authority as an attempt started on A, invalidate that attempt, and
+  // generation-delete the old canonical credential before the users row
+  // publishes the override. The checked-in HA profile intentionally refuses
+  // to use the override as a native credential route.
+  const routeRaceStart = await fetch(`${daemonA}/claude-auth/oauth`, {
+    method: 'POST',
+    headers: {
+      authorization: `Bearer ${claudeAccessToken}`,
+      'content-type': 'application/json',
+    },
+    body: '{}',
+  });
+  assert.equal(routeRaceStart.status, 201);
+  const routeRaceAttempt = await routeRaceStart.json();
+  const temporaryOverride = `/home/agor/ha-route-retired-${crypto.randomUUID()}`;
+  const routeChangeThroughB = await fetch(`${daemonB}/users/${claudeUserId}`, {
+    method: 'PATCH',
+    headers: {
+      authorization: `Bearer ${accessToken}`,
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify({ filesystem_home: temporaryOverride }),
+  });
+  const routeChangeBody = await routeChangeThroughB.text();
+  assert.equal(routeChangeThroughB.status, 200, routeChangeBody);
+  const routeAttemptAfterPatch = await fetch(
+    `${daemonA}/claude-auth/oauth?attemptId=${encodeURIComponent(routeRaceAttempt.attemptId)}`,
+    { headers: { authorization: `Bearer ${claudeAccessToken}` } }
+  );
+  assert.equal(routeAttemptAfterPatch.status, 200);
+  assert.equal((await routeAttemptAfterPatch.json()).phase, 'error');
+  dockerOutput(
+    'exec',
+    '-T',
+    'daemon-a',
+    'sh',
+    '-c',
+    `test -f '${claudeConfigDir}/.credentials.json' && test ! -s '${claudeConfigDir}/.credentials.json'`
+  );
+
+  const restoreCanonicalThroughA = await fetch(`${daemonA}/users/${claudeUserId}`, {
+    method: 'PATCH',
+    headers: {
+      authorization: `Bearer ${accessToken}`,
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify({ filesystem_home: null }),
+  });
+  const restoreCanonicalBody = await restoreCanonicalThroughA.text();
+  assert.equal(restoreCanonicalThroughA.status, 200, restoreCanonicalBody);
+  dockerOutput(
+    'exec',
+    '-T',
+    'daemon-b',
+    'sh',
+    '-c',
+    `mkdir -p '${claudeConfigDir}' && printf '%s' '${credentialPayload}' | base64 -d > '${claudeConfigDir}/.credentials.json' && chmod 600 '${claudeConfigDir}/.credentials.json'`
+  );
+
+  const logoutProbe = startClaudeContainmentProbe(
+    'daemon-a',
+    claudeOwnerHome,
+    `ha-logout-${crypto.randomUUID()}`
+  );
+  await waitUntil(
+    () => dockerFileExists('daemon-b', logoutProbe.ready),
+    'live HA Claude containment logout probe',
+    30_000
+  );
+  const beforeLogout = claudeAuthoritySnapshot('daemon-a', claudeConfigDir);
+
+  const logoutThroughB = await fetch(`${daemonB}/claude-auth/logout`, {
+    method: 'POST',
+    headers: {
+      authorization: `Bearer ${claudeAccessToken}`,
+      'content-type': 'application/json',
+    },
+    body: '{}',
+  });
+  assert.equal(logoutThroughB.status, 201);
+  await logoutThroughB.text();
+  const afterLogout = claudeAuthoritySnapshot('daemon-b', claudeConfigDir);
+  for (const leaf of Object.keys(beforeLogout)) {
+    assert.equal(
+      afterLogout[leaf].inode,
+      beforeLogout[leaf].inode,
+      `${leaf} inode changed on logout`
+    );
+  }
+  assert.equal(
+    afterLogout['.credentials.json'].sha256,
+    'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855',
+    'replica-B logout did not publish the empty credential tombstone'
+  );
+  assert.notEqual(
+    afterLogout['.agor-auth-generation'].sha256,
+    beforeLogout['.agor-auth-generation'].sha256,
+    'replica-B logout did not advance the authority generation'
+  );
+  assert.equal(
+    afterLogout['.agor-auth-mutation.lock'].sha256,
+    beforeLogout['.agor-auth-mutation.lock'].sha256,
+    'replica-B logout changed lock bytes'
+  );
+  dockerOutput('exec', '-T', 'daemon-b', 'touch', logoutProbe.proceed);
+  await logoutProbe.completion;
+  assert.deepEqual(
+    claudeAuthoritySnapshot('daemon-a', claudeConfigDir),
+    afterLogout,
+    'live alias/sidecar attacks changed authority after replica-B logout'
+  );
+  cleanupClaudeAccessToken = undefined;
+  const absentThroughA = await fetch(`${daemonA}/check-auth`, {
+    method: 'POST',
+    headers: {
+      authorization: `Bearer ${claudeAccessToken}`,
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify({ tool: 'claude-code', validateNative: true }),
+  });
+  assert.equal(absentThroughA.status, 201);
+  assert.equal((await absentThroughA.json()).status, 'unauthenticated');
+  const claudeAuthLogs = dockerOutput('logs', '--no-color', 'daemon-a', 'daemon-b', 'ingress');
+  assert(!claudeAuthLogs.includes(dummyClaudeAccess), 'Claude access token appeared in HA logs');
+  assert(!claudeAuthLogs.includes(dummyClaudeRefresh), 'Claude refresh token appeared in HA logs');
+  console.log(
+    'ok - Claude attempts start/replace across replicas; live every-alias parent/sidecar attacks cannot escape; extra writable-store topology fails closed; replica-B source fencing, route cleanup, and logout retain authority inodes and cross-replica ordering'
+  );
 
   const ingressInstances = new Set();
   for (let attempt = 0; attempt < 12; attempt++) {
@@ -971,6 +1580,21 @@ try {
   // operations also fail. Cleanup failures fail an otherwise-successful run.
   primaryError = error;
 } finally {
+  for (const probe of cleanupDockerProcesses) {
+    try {
+      spawnSync('docker', [...compose, 'exec', '-T', probe.service, 'touch', probe.proceed], {
+        env: process.env,
+        stdio: 'ignore',
+      });
+      await Promise.race([probe.completion, delay(2_000)]);
+      if (probe.child.exitCode === null) probe.child.kill('SIGTERM');
+    } catch (error) {
+      probe.child.kill('SIGTERM');
+      cleanupWarning(`Claude containment probe cleanup failed for ${probe.service}`, error);
+    }
+  }
+  cleanupDockerProcesses.clear();
+
   for (const socket of cleanupSockets) {
     try {
       socket.close();
@@ -1022,6 +1646,23 @@ try {
       await removed.text();
     } catch (error) {
       cleanupWarning('Codex auth cleanup failed', error);
+    }
+  }
+
+  if (cleanupClaudeAccessToken) {
+    try {
+      const removed = await fetch(`${ingress}/claude-auth/logout`, {
+        method: 'POST',
+        headers: {
+          authorization: `Bearer ${cleanupClaudeAccessToken}`,
+          'content-type': 'application/json',
+        },
+        body: '{}',
+      });
+      if (removed.status !== 201) cleanupWarning(`Claude auth cleanup returned ${removed.status}`);
+      await removed.text();
+    } catch (error) {
+      cleanupWarning('Claude auth cleanup failed', error);
     }
   }
 

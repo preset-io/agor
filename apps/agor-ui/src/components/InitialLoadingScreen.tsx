@@ -7,6 +7,7 @@ import type {
   InitialLoadingStage,
   LoaderPhase,
 } from '../hooks';
+import { AgorLogoSpinner } from './AgorLogoSpinner/AgorLogoSpinner';
 import { Tag } from './Tag';
 
 const PRIMARY_INITIAL_LOAD_ITEMS = new Set<InitialLoadItemKey>([
@@ -87,7 +88,7 @@ export function InitialLoadingScreen({
         transition: 'opacity 280ms ease-out',
       }}
     >
-      <Spin size="large" />
+      <AgorLogoSpinner size={96} />
       <Typography.Text type="secondary" style={{ marginTop: token.marginMD }}>
         {statusMessage}
       </Typography.Text>

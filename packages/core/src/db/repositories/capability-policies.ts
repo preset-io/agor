@@ -4,7 +4,6 @@ import type {
   BranchCapabilityPolicy,
   BranchID,
   BranchPermissionConfig,
-  BranchSessionSharingOwnerRule,
   CapabilityPolicy,
   CapabilityPolicyCapability,
   CapabilityPolicyEntry,
@@ -15,6 +14,7 @@ import type {
   EffectiveCapabilityPolicyAccess,
   GroupID,
   SessionPromptAuthority,
+  SessionSdkHomeScope,
   UserID,
   UUID,
 } from '@agor/core/types';
@@ -22,9 +22,10 @@ import { and, eq, inArray, or, sql } from 'drizzle-orm';
 import { generateId } from '../../lib/ids';
 import {
   CAPABILITY_POLICY_SCHEMA_VERSION,
+  CAPABILITY_POLICY_SESSION_SHARING_KEY,
+  CAPABILITY_POLICY_WORKSPACE_PREFERENCES_NAMESPACE,
   capabilityPolicyPresetCapabilities,
   resolveCapabilityPolicyAccess,
-  validateBranchSessionSharingDraft,
   validateCapabilityPolicyDraft,
 } from '../../types/capability-policy';
 import type { Database } from '../client';
@@ -44,8 +45,6 @@ import {
   branches,
   branchPermissionConfigs,
   branchPermissionEntries,
-  branchSessionSharingGrants,
-  branchSessionSharingRules,
   groupMemberships,
   groups,
   users,
@@ -68,11 +67,8 @@ const EMPTY_BRANCH_CONFIG: BranchPermissionConfig = {
     entries: [],
     others: { preset: 'none', capabilities: [], fs_access: 'none' },
   },
-  session_sharing: { owner_rules: [] },
+  allow_shared_session_prompts: false,
 };
-
-const WORKSPACE_PREFERENCES_NAMESPACE = 'workspace_preferences';
-const PERSONAL_SESSION_SHARING_KEY = 'personal_session_sharing_enabled';
 
 function assertPolicy(policy: CapabilityPolicy, kind: CapabilityPolicy['policy_kind']): void {
   if (policy.schema_version !== CAPABILITY_POLICY_SCHEMA_VERSION || policy.policy_kind !== kind) {
@@ -84,8 +80,9 @@ function assertPolicy(policy: CapabilityPolicy, kind: CapabilityPolicy['policy_k
 
 function assertConfig(config: BranchPermissionConfig): void {
   assertPolicy(config.access, 'branch_access');
-  const issues = validateBranchSessionSharingDraft(config.session_sharing);
-  if (issues.length > 0) throw new RepositoryError(issues.map((issue) => issue.message).join(' '));
+  if (typeof config.allow_shared_session_prompts !== 'boolean') {
+    throw new RepositoryError('Shared session prompting must be enabled or disabled explicitly');
+  }
 }
 
 function rowPrincipal(row: {
@@ -153,11 +150,7 @@ function policyPrincipalIds(policy: CapabilityPolicy): { userIds: string[]; grou
   return { userIds, groupIds };
 }
 
-async function assertPrincipalsExist(
-  db: Database,
-  policies: CapabilityPolicy[],
-  ownerRules: BranchSessionSharingOwnerRule[]
-): Promise<void> {
+async function assertPrincipalsExist(db: Database, policies: CapabilityPolicy[]): Promise<void> {
   const userIds = new Set<string>();
   const groupIds = new Set<string>();
   for (const policy of policies) {
@@ -165,14 +158,6 @@ async function assertPrincipalsExist(
     for (const id of ids.userIds) userIds.add(id);
     for (const id of ids.groupIds) groupIds.add(id);
   }
-  for (const rule of ownerRules) {
-    userIds.add(rule.session_owner_user_id);
-    for (const grant of rule.grantees) {
-      if (grant.principal.principal_type === 'user') userIds.add(grant.principal.user_id);
-      else groupIds.add(grant.principal.group_id);
-    }
-  }
-
   if (userIds.size > 0) {
     const rows = await select(db, { user_id: users.user_id })
       .from(users)
@@ -348,9 +333,7 @@ export class CapabilityPolicyRepository {
                 fs_access: fsAccess,
               },
             },
-            // Legacy cross-user prompt permission is deliberately not
-            // reproduced: no owner-authored grantees can be inferred here.
-            session_sharing: { owner_rules: [] },
+            allow_shared_session_prompts: false,
           };
     await this.writeBranchConfig(tx, { branch_id: branchId }, config, null);
   }
@@ -426,29 +409,6 @@ export class CapabilityPolicyRepository {
       .one();
     if (!row) throw new RepositoryError(`Missing branch permission config ${configId}`);
     const entries = await this.loadPolicyEntries('branch', configId);
-    const ruleRows = await select(this.db)
-      .from(branchSessionSharingRules)
-      .where(eq(branchSessionSharingRules.config_id, configId))
-      .all();
-    const grantRows = await select(this.db)
-      .from(branchSessionSharingGrants)
-      .where(eq(branchSessionSharingGrants.config_id, configId))
-      .all();
-    const owner_rules: BranchSessionSharingOwnerRule[] = ruleRows.map(
-      (rule: { session_owner_user_id: string; enabled: boolean }) => ({
-        session_owner_user_id: rule.session_owner_user_id as UserID,
-        enabled: Boolean(rule.enabled),
-        grantees: grantRows
-          .filter(
-            (grant: { session_owner_user_id: string }) =>
-              grant.session_owner_user_id === rule.session_owner_user_id
-          )
-          .map((grant: { grant_id: string; user_id: string | null; group_id: string | null }) => ({
-            grant_id: grant.grant_id as UUID,
-            principal: rowPrincipal(grant),
-          })),
-      })
-    );
     return {
       access: {
         schema_version: CAPABILITY_POLICY_SCHEMA_VERSION,
@@ -465,7 +425,7 @@ export class CapabilityPolicyRepository {
           fs_access: row.others_fs_access as CapabilityPolicyFsAccess,
         },
       },
-      session_sharing: { owner_rules },
+      allow_shared_session_prompts: Boolean(row.allow_shared_session_prompts),
     };
   }
 
@@ -577,6 +537,7 @@ export class CapabilityPolicyRepository {
           sharing_mode: config.access.sharing_mode,
           others_role: config.access.others.preset,
           others_fs_access: config.access.others.fs_access,
+          allow_shared_session_prompts: config.allow_shared_session_prompts,
           revision: sql`${branchPermissionConfigs.revision} + 1`,
           updated_by: actorId,
           updated_at: now,
@@ -596,9 +557,6 @@ export class CapabilityPolicyRepository {
       await deleteFrom(tx, branchPermissionEntries)
         .where(eq(branchPermissionEntries.config_id, configId))
         .run();
-      await deleteFrom(tx, branchSessionSharingRules)
-        .where(eq(branchSessionSharingRules.config_id, configId))
-        .run();
     } else {
       await insert(tx, branchPermissionConfigs)
         .values({
@@ -610,6 +568,7 @@ export class CapabilityPolicyRepository {
           sharing_mode: config.access.sharing_mode,
           others_role: config.access.others.preset,
           others_fs_access: config.access.others.fs_access,
+          allow_shared_session_prompts: config.allow_shared_session_prompts,
           revision: 1,
           updated_by: actorId,
           created_at: now,
@@ -629,34 +588,6 @@ export class CapabilityPolicyRepository {
         )
         .run();
     }
-    for (const rule of config.session_sharing.owner_rules) {
-      await insert(tx, branchSessionSharingRules)
-        .values({
-          ...currentTenantInsert(),
-          config_id: configId,
-          session_owner_user_id: rule.session_owner_user_id,
-          enabled: rule.enabled,
-          updated_at: now,
-        })
-        .run();
-      if (rule.grantees.length > 0) {
-        await insert(tx, branchSessionSharingGrants)
-          .values(
-            rule.grantees.map((grant) => ({
-              ...currentTenantInsert(),
-              // Copied templates likewise need distinct sharing-grant row IDs.
-              grant_id: generateId(),
-              config_id: configId,
-              session_owner_user_id: rule.session_owner_user_id,
-              user_id: grant.principal.principal_type === 'user' ? grant.principal.user_id : null,
-              group_id:
-                grant.principal.principal_type === 'group' ? grant.principal.group_id : null,
-              created_at: now,
-            }))
-          )
-          .run();
-      }
-    }
     return configId;
   }
 
@@ -672,11 +603,7 @@ export class CapabilityPolicyRepository {
       this.db,
       async (tx) => {
         await lockRowForUpdate(tx, this.db, boards, eq(boards.board_id, boardId));
-        await assertPrincipalsExist(
-          tx,
-          [value.board_access, value.branch_template.access],
-          value.branch_template.session_sharing.owner_rules
-        );
+        await assertPrincipalsExist(tx, [value.board_access, value.branch_template.access]);
         const board = await select(tx, { owner: boards.primary_owner_user_id })
           .from(boards)
           .where(eq(boards.board_id, boardId))
@@ -788,11 +715,7 @@ export class CapabilityPolicyRepository {
         const submittedConfig =
           value.binding_mode === 'override' ? value.override_config : value.inherited_config;
         if (submittedConfig) {
-          await assertPrincipalsExist(
-            tx,
-            [submittedConfig.access],
-            submittedConfig.session_sharing.owner_rules
-          );
+          await assertPrincipalsExist(tx, [submittedConfig.access]);
         }
         const branch = await select(tx, {
           owner: branches.primary_owner_user_id,
@@ -890,7 +813,7 @@ export class CapabilityPolicyRepository {
    *
    * An inherited branch cannot outlive its template. Before the board row is
    * removed (which clears branches.board_id), materialize the complete current
-   * template — access plus every owner-authored sharing rule — as an override
+   * template — access plus the shared-session switch — as an override
    * for each inherited branch. The caller must run this in the same transaction
    * as the board delete.
    */
@@ -982,7 +905,6 @@ export class CapabilityPolicyRepository {
     return {
       can: legacyCan(access),
       fs_access: access.fs_access,
-      dangerously_allow_session_sharing: false,
       is_owner: access.is_primary_owner,
       source:
         access.source === 'primary_owner'
@@ -1019,12 +941,12 @@ export class CapabilityPolicyRepository {
       .from(appVariables)
       .where(
         and(
-          eq(appVariables.namespace, WORKSPACE_PREFERENCES_NAMESPACE),
-          eq(appVariables.key, PERSONAL_SESSION_SHARING_KEY)
+          eq(appVariables.namespace, CAPABILITY_POLICY_WORKSPACE_PREFERENCES_NAMESPACE),
+          eq(appVariables.key, CAPABILITY_POLICY_SESSION_SHARING_KEY)
         )
       )
       .one();
-    return { personal_session_sharing_enabled: row?.value_text === 'true' };
+    return { session_sharing_enabled: row?.value_text === 'true' };
   }
 
   async setWorkspacePreferences(
@@ -1032,39 +954,59 @@ export class CapabilityPolicyRepository {
     actorId: UserID
   ): Promise<CapabilityPolicyWorkspacePreferences> {
     const now = new Date();
-    // Insert-if-absent followed by an atomic update avoids the absent-row race
-    // on both SQLite and PostgreSQL. Concurrent writers have ordinary
-    // last-statement-wins semantics rather than a unique-key failure.
-    await insert(this.db, appVariables)
-      .values({
-        ...currentTenantInsert(),
-        variable_id: generateId(),
-        namespace: WORKSPACE_PREFERENCES_NAMESPACE,
-        key: PERSONAL_SESSION_SHARING_KEY,
-        value_text: 'false',
-        value_encrypted: null,
-        is_encrypted: false,
-        content_type: 'text/plain',
-        metadata: null,
-        updated_by: actorId,
-        created_at: now,
-        updated_at: now,
-      })
-      .onConflictDoNothing()
-      .run();
-    await update(this.db, appVariables)
-      .set({
-        value_text: String(value.personal_session_sharing_enabled),
-        updated_by: actorId,
-        updated_at: now,
-      })
-      .where(
-        and(
-          eq(appVariables.namespace, WORKSPACE_PREFERENCES_NAMESPACE),
-          eq(appVariables.key, PERSONAL_SESSION_SHARING_KEY)
-        )
-      )
-      .run();
+    await runDatabaseTransaction(
+      this.db,
+      async (tx) => {
+        // Insert-if-absent followed by an atomic update avoids the absent-row
+        // race on both SQLite and PostgreSQL.
+        await insert(tx, appVariables)
+          .values({
+            ...currentTenantInsert(),
+            variable_id: generateId(),
+            namespace: CAPABILITY_POLICY_WORKSPACE_PREFERENCES_NAMESPACE,
+            key: CAPABILITY_POLICY_SESSION_SHARING_KEY,
+            value_text: 'false',
+            value_encrypted: null,
+            is_encrypted: false,
+            content_type: 'text/plain',
+            metadata: null,
+            updated_by: actorId,
+            created_at: now,
+            updated_at: now,
+          })
+          .onConflictDoNothing()
+          .run();
+        await update(tx, appVariables)
+          .set({
+            value_text: String(value.session_sharing_enabled),
+            updated_by: actorId,
+            updated_at: now,
+          })
+          .where(
+            and(
+              eq(appVariables.namespace, CAPABILITY_POLICY_WORKSPACE_PREFERENCES_NAMESPACE),
+              eq(appVariables.key, CAPABILITY_POLICY_SESSION_SHARING_KEY)
+            )
+          )
+          .run();
+
+        if (!value.session_sharing_enabled) {
+          // Revocation is deliberately sticky: disabling the tenant gate also
+          // clears every narrower opt-in, so re-enabling the feature cannot
+          // silently reopen branches based on stale configuration.
+          await update(tx, branchPermissionConfigs)
+            .set({
+              allow_shared_session_prompts: false,
+              revision: sql`${branchPermissionConfigs.revision} + 1`,
+              updated_by: actorId,
+              updated_at: now,
+            })
+            .where(eq(branchPermissionConfigs.allow_shared_session_prompts, true))
+            .run();
+        }
+      },
+      { sqliteImmediate: true }
+    );
     return value;
   }
 
@@ -1072,40 +1014,48 @@ export class CapabilityPolicyRepository {
     branch_id: BranchID;
     caller_user_id: UserID;
     session_owner_user_id: UserID;
+    session_sdk_home_scope: SessionSdkHomeScope;
   }): Promise<SessionPromptAuthority> {
     const access = await this.resolveBranchAccess(input.branch_id, input.caller_user_id);
     const canPromptOwn = access.capabilities.includes('sessions.prompt_own');
     if (input.caller_user_id === input.session_owner_user_id) {
       return canPromptOwn
         ? { allowed: true, execution_user_id: input.caller_user_id, source: 'own_session' }
-        : { allowed: false, source: 'denied' };
+        : { allowed: false, source: 'denied', denial_reason: 'branch_access_required' };
     }
     if (!access.capabilities.includes('sessions.prompt_own')) {
-      return { allowed: false, source: 'denied' };
+      return { allowed: false, source: 'denied', denial_reason: 'branch_access_required' };
+    }
+    if (input.session_sdk_home_scope === 'execution_home') {
+      return {
+        allowed: false,
+        source: 'denied',
+        denial_reason: 'execution_home_sharing_disabled',
+      };
     }
     const preferences = await this.getWorkspacePreferences();
-    if (!preferences.personal_session_sharing_enabled) return { allowed: false, source: 'denied' };
+    if (!preferences.session_sharing_enabled) {
+      return {
+        allowed: false,
+        source: 'denied',
+        denial_reason: 'workspace_session_sharing_disabled',
+      };
+    }
     const policy = await this.getBranchPolicy(input.branch_id);
     const config =
       policy.binding_mode === 'inherit' ? policy.inherited_config : policy.override_config;
-    const rule = config?.session_sharing.owner_rules.find(
-      (candidate) =>
-        candidate.session_owner_user_id === input.session_owner_user_id && candidate.enabled
-    );
-    if (!rule) return { allowed: false, source: 'denied' };
-    const callerGroups = new Set(await this.activeGroupIds(input.caller_user_id));
-    const granted = rule.grantees.some((grant) =>
-      grant.principal.principal_type === 'user'
-        ? grant.principal.user_id === input.caller_user_id
-        : callerGroups.has(grant.principal.group_id)
-    );
-    return granted
-      ? {
-          allowed: true,
-          execution_user_id: input.session_owner_user_id,
-          source: 'personal_session_sharing',
-        }
-      : { allowed: false, source: 'denied' };
+    if (!config?.allow_shared_session_prompts) {
+      return {
+        allowed: false,
+        source: 'denied',
+        denial_reason: 'branch_session_sharing_disabled',
+      };
+    }
+    return {
+      allowed: true,
+      execution_user_id: input.caller_user_id,
+      source: 'branch_session',
+    };
   }
 
   /** Batch read used by inventory/export surfaces that need only private/shared state. */

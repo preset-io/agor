@@ -68,7 +68,6 @@ describe('Knowledge command realtime suppression', () => {
       const relay = { relay: vi.fn(), setRelayHandler: vi.fn() };
       configureRealtimePublish({
         app,
-        branchRbacEnabled: false,
         branchRepository: {} as BranchRepository,
         sessionsRepository: {} as SessionRepository,
         multiTenancy: { mode: 'static', static_tenant_id: 'tenant-a' as never },

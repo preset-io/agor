@@ -1,5 +1,7 @@
+import { readFile } from 'node:fs/promises';
 import { describe, expect, it } from 'vitest';
-import { renderAgorSystemPrompt } from './session-context';
+import type { SessionID } from '../types/id';
+import { renderAgorSessionIdentity, renderAgorSystemPrompt } from './session-context';
 
 describe('renderAgorSystemPrompt', () => {
   it('tells agents which portable and rich Markdown constructs to use', async () => {
@@ -30,4 +32,45 @@ describe('renderAgorSystemPrompt', () => {
     expect(prompt).toContain('Slack gateway channels and MCP tool access are separate systems');
     expect(prompt).toContain('do not invent an unvetted third-party server');
   });
+});
+
+describe('renderAgorSessionIdentity', () => {
+  it('uses only the current execution ID and keeps the payload stable across turns', () => {
+    const original = renderAgorSessionIdentity('original-A' as SessionID);
+    const fork = renderAgorSessionIdentity('fork-B' as SessionID);
+    expect(fork).toBe(renderAgorSessionIdentity('fork-B' as SessionID));
+    expect(fork).toContain('Current Agor session ID: fork-B');
+    expect(fork).not.toContain('original-A');
+    expect(renderAgorSessionIdentity('original-A' as SessionID)).toBe(original);
+    expect(fork).toContain('not a fork source, spawn parent, or provider SDK thread ID');
+    expect(fork).toContain('Inherited conversation and workspace IDs may be stale');
+    expect(fork).toContain('enableCallback:true and omit callbackSessionId');
+    expect(fork).toContain(
+      'Intentional authorized alternate callbackSessionId targets remain supported'
+    );
+    expect(fork).toContain('(runtime-supplied)');
+  });
+
+  it('does not contaminate the shared static orientation with any execution identity', async () => {
+    const before = await renderAgorSystemPrompt();
+    renderAgorSessionIdentity('other-tenant-session' as SessionID);
+    expect(await renderAgorSystemPrompt()).toBe(before);
+    expect(before).not.toContain('other-tenant-session');
+    expect(before).not.toContain('<agor_session_identity>');
+  });
+});
+
+describe('shared repository instructions', () => {
+  it.each(['AGENTS.md', 'CLAUDE.md'])(
+    'keeps generated session identity out of %s',
+    async (file) => {
+      const instructions = await readFile(new URL(`../../../../${file}`, import.meta.url), 'utf8');
+
+      expect(instructions).not.toMatch(/^## Agor Session Context\s*$/m);
+      expect(instructions).not.toContain('<agor_session_identity>');
+      expect(instructions).not.toMatch(
+        /(?:current Agor session ID|Agor Session ID:)\s*(?:is:)?\s*[*`]*[\da-f]{8}-[\da-f-]{27}/i
+      );
+    }
+  );
 });

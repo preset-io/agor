@@ -6,12 +6,16 @@
  */
 
 import { createHash, randomBytes } from 'node:crypto';
+import { type FileHandle, mkdir } from 'node:fs/promises';
 import { homedir } from 'node:os';
+import { join } from 'node:path';
 import { performance } from 'node:perf_hooks';
 import { OPENCODE_DAEMON_CONTRIBUTION } from '@agor/agentic-tool-opencode/daemon';
-
+import { AGENTIC_TOOL_DISPLAY_NAMES } from '@agor/agentic-tools';
+import { mutateCredentialFile, openCredentialFileForBind } from '@agor/core/codex/credential-file';
 import {
   type AgorConfig,
+  getBranchHomePath,
   isDeploymentAgenticToolAvailable,
   MESSAGE_PAGINATION,
   type ResolvedDeploymentConfig,
@@ -23,6 +27,7 @@ import {
 import {
   AmbiguousIdError,
   and,
+  BoardRepository,
   BranchRepository,
   DiscordMessageDeliveryRepository,
   EntityNotFoundError,
@@ -62,7 +67,12 @@ import { BadRequest, Conflict, Forbidden, NotAuthenticated } from '@agor/core/fe
 import {
   hasTemplateMarker,
   isMCPServerUsableBy,
+  isMCPServerWriteValidationError,
+  type MCPExternalErrorCategory,
+  type MCPExternalErrorReason,
   type MCPExternalErrorStage,
+  type MCPExternalErrorType,
+  normalizeDiscoveredMCPCapabilities,
   sanitizeMCPExternalError,
 } from '@agor/core/mcp';
 import type {
@@ -72,9 +82,13 @@ import type {
 import { OAuthConfigurationError } from '@agor/core/tools/mcp/oauth-mcp-transport';
 import type { RefreshAndPersistDeps } from '@agor/core/tools/mcp/oauth-refresh';
 import type {
+  AgenticToolName,
   AuthenticatedParams,
   HookContext,
   MCPAuth,
+  MCPAuthRecovery,
+  MCPDiscoveryRequest,
+  MCPDiscoveryResult,
   MCPOAuthAttemptID,
   MCPOAuthBrowserEventRequest,
   MCPOAuthBrowserOperation,
@@ -88,12 +102,14 @@ import type {
   MCPServerID,
   MessageSource,
   Params,
+  PromptOrigin,
   SessionID,
   UserID,
   UUID,
 } from '@agor/core/types';
 import {
   assertPublicMCPOAuthCompatibilityMode,
+  ENVIRONMENT_COMMAND_REPORT_SERVICE,
   hasMinimumRole,
   isMCPOAuthGrantBindingVersion,
   MCP_MEMBER_POLICY_CHANGED_EVENT,
@@ -104,7 +120,15 @@ import {
 import type { UnixUserMode } from '@agor/core/unix';
 import { type OutboundDnsLookup, safeOutboundFetch } from '@agor/core/utils/safe-outbound-fetch';
 import type express from 'express';
+import { getAgenticToolDaemonContribution } from './agentic-tool-daemon-contributions.js';
 import { authenticatedTaskExecutorRuntimeScope } from './auth/executor-runtime-scope.js';
+import {
+  hasSecureLocalCredentialOverlay,
+  resolveBranchSdkHomeCompatibility,
+  resolveBranchSdkHomeLaunch,
+  sessionUsesBranchSdkHome,
+} from './branch-sdk-home.js';
+import { invalidateLiveBranchCodexCredentialBinds } from './codex-auth-bind-invalidation.js';
 import type {
   BoardsServiceImpl,
   MessagesServiceImpl,
@@ -149,15 +173,30 @@ import { setupCapabilityPolicyServices } from './services/capability-policies.js
 import { createCardTypesService } from './services/card-types.js';
 import { createCardsService } from './services/cards.js';
 import { createCheckAuthService } from './services/check-auth.js';
+import { createClaudeAuthLogoutService } from './services/claude-auth-logout.js';
+import {
+  canManageClaudeCredentialRoute,
+  createClaudeUserCredentialPatchCoordinator,
+  needsUserCredentialRouteCoordinator,
+} from './services/claude-credential-mutation.js';
 import { createClaudeModelsService } from './services/claude-models.js';
+import { createClaudeOAuthService } from './services/claude-oauth.js';
+import { ClaudeOAuthAttemptAuthority } from './services/claude-oauth-attempt-authority.js';
+import {
+  DurableClaudeOAuthAttemptStore,
+  InMemoryClaudeOAuthAttemptStore,
+} from './services/claude-oauth-attempt-store.js';
+import { ClaudeRuntimeCredentialResolver } from './services/claude-runtime-credential.js';
 import { createCodexAuthImportService } from './services/codex-auth-import.js';
 import { createCodexAuthLogoutService } from './services/codex-auth-logout.js';
+import { resolveCodexCredentialRoute } from './services/codex-auth-shared.js';
 import { createCodexDeviceAuthService } from './services/codex-device-auth.js';
 import { CodexDeviceAuthAttemptAuthority } from './services/codex-device-auth-attempt-authority.js';
 import { createDurableCodexDeviceAuthService } from './services/codex-device-auth-durable.js';
 import { createConfigService } from './services/config.js';
 import { createCopilotModelsService } from './services/copilot-models.js';
 import { createCursorModelsService } from './services/cursor-models.js';
+import { EnvironmentCommandReportsService } from './services/environment-command-reports.js';
 import { createExecutorGitEnvironmentService } from './services/executor-git-environment.js';
 import { prepareSessionForExecutorStart } from './services/executor-startup.js';
 import { createFileService } from './services/file.js';
@@ -176,6 +215,7 @@ import {
   GROUP_MEMBERSHIPS_SERVICE_TRANSPORT_METHODS,
   GROUPS_SERVICE_TRANSPORT_METHODS,
   setupBoardAlignedBranchesService,
+  setupBoardEffectiveAccessService,
   setupBranchEffectiveAccessService,
   setupBranchFsAccessUsersService,
 } from './services/groups.js';
@@ -240,7 +280,11 @@ import { createSessionEnvSelectionsService } from './services/session-env-select
 import { createSessionMCPServersService } from './services/session-mcp-servers.js';
 import { createSessionStreamsService } from './services/session-streams.js';
 import { createSessionsService } from './services/sessions.js';
-import { createTasksService, TASKS_SERVICE_TRANSPORT_METHODS } from './services/tasks.js';
+import {
+  createTasksService,
+  TASKS_SERVICE_TRANSPORT_METHODS,
+  type TasksService,
+} from './services/tasks.js';
 import { TASKS_SERVICE_CUSTOM_EVENTS } from './services/tasks-events.js';
 import { createTemplatesService } from './services/templates.js';
 import { createTenantAgenticToolSettingsService } from './services/tenant-agentic-tools.js';
@@ -274,6 +318,7 @@ import {
   isSessionMcpServerLinkVisibleToCaller,
   loadMcpServerForCaller,
   registerMcpCapabilityRoleFloor,
+  resolveMcpCaller,
 } from './utils/mcp-server-authorization.js';
 import { resolveOwnerHomeStore, resolveSandboxStoragePaths } from './utils/sandbox-context.js';
 import {
@@ -297,7 +342,6 @@ export interface RegisterServicesContext {
   bundledUiAvailable: boolean;
   DAEMON_PORT: number;
   UI_PORT: number;
-  branchRbacEnabled: boolean;
   allowSuperadmin: boolean;
   requireAuth: (context: HookContext) => Promise<HookContext>;
   deployment: ResolvedDeploymentConfig;
@@ -330,7 +374,7 @@ export interface RegisteredServices {
  * Register all FeathersJS services on the app.
  */
 export async function registerServices(ctx: RegisterServicesContext): Promise<RegisteredServices> {
-  const { db, app, config, daemonUrl, branchRbacEnabled, allowSuperadmin } = ctx;
+  const { db, app, config, daemonUrl, allowSuperadmin } = ctx;
   const deploymentAgenticToolPolicy = resolveDeploymentAgenticToolPolicy(config);
 
   const _superadminOpts = { allowSuperadmin };
@@ -377,13 +421,14 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   const sessionsService = createSessionsService(db, app, (tool) =>
     isDeploymentAgenticToolAvailable(tool, deploymentAgenticToolPolicy)
   ) as unknown as SessionsServiceImpl;
+  const tasksService = createTasksService(db, app, sessionTokenService);
   app.use('/sessions', sessionsService, {
     events: ['permission:request', 'permission:timeout'],
   });
 
   // Wire up the execute handler for spawning executor processes
   sessionsService.setExecuteHandler(
-    createExecuteHandler(ctx, sessionsService, sessionTokenService)
+    createExecuteHandler(ctx, sessionsService, sessionTokenService, tasksService)
   );
 
   // Realtime control-plane: browsers subscribe (create) / unsubscribe (remove)
@@ -399,7 +444,7 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   });
   app.service('/session-streams').publish(() => []);
 
-  app.use('/tasks', createTasksService(db, app, sessionTokenService), {
+  app.use('/tasks', tasksService, {
     methods: [...TASKS_SERVICE_TRANSPORT_METHODS],
     // Custom events not in this list are dropped at the FeathersJS transport
     // boundary — they fire on the local EventEmitter but never reach socket
@@ -503,9 +548,8 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   } as any);
   app.use(
     '/boards',
-    createBoardsService(
-      db,
-      (boardObject, params) => {
+    createBoardsService(db, {
+      emitBoardObjectPatched: (boardObject, params) => {
         emitServiceEvent(app, {
           path: 'board-objects',
           event: 'patched',
@@ -514,8 +558,16 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
           id: boardObject.object_id,
         });
       },
-      (event) => emitServiceEvent(app, { path: 'boards', ...event })
-    ),
+      emitBoardEvent: (event) => emitServiceEvent(app, { path: 'boards', ...event }),
+      emitBoardCommentPatched: (comment, params) =>
+        emitServiceEvent(app, {
+          path: 'board-comments',
+          event: 'patched',
+          data: comment,
+          params,
+          id: comment.comment_id,
+        }),
+    }),
     {
       methods: [
         'find',
@@ -561,7 +613,7 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   // Branches, repos
   // ============================================================================
 
-  app.use('/branches', createBranchesService(db, app, { appRbacEnabled: branchRbacEnabled }), {
+  app.use('/branches', createBranchesService(db, app), {
     methods: [
       'find',
       'get',
@@ -574,7 +626,7 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
     ],
   });
 
-  console.log(`[RBAC] Branch RBAC ${branchRbacEnabled ? 'Enabled' : 'Disabled'}`);
+  console.log('[RBAC] Board and branch RBAC enabled (always on)');
   console.log(`[RBAC] Superadmin bypass ${allowSuperadmin ? 'Enabled' : 'Disabled'}`);
 
   app.use('/groups', createGroupsService(db), {
@@ -584,6 +636,7 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
     methods: [...GROUP_MEMBERSHIPS_SERVICE_TRANSPORT_METHODS],
   });
   setupBranchEffectiveAccessService(app, new BranchRepository(db), { allowSuperadmin });
+  setupBoardEffectiveAccessService(app, new BoardRepository(db), { allowSuperadmin });
   setupBoardAlignedBranchesService(app, new BranchRepository(db));
   setupBranchFsAccessUsersService(app, new BranchRepository(db));
   setupCapabilityPolicyServices(app, db, { allowSuperadmin });
@@ -707,7 +760,7 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
     app.service('gateway-channels/app-info').publish(() => []);
 
     app.use('/thread-session-map', createThreadSessionMapService(db));
-    app.use('/gateway', createGatewayService(db, app, { appRbacEnabled: branchRbacEnabled }), {
+    app.use('/gateway', createGatewayService(db, app), {
       // Only expose the inbound gateway entrypoint and existing route hook
       // externally. Proactive outbound emits are intentionally invoked through
       // the authenticated Agor MCP tool surface; exposing emitMessage here would
@@ -728,7 +781,21 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   // Config, context, file, files, terminals
   // ============================================================================
 
-  const configService = createConfigService(db, config);
+  // One authority owns OAuth completion, logout, user source/route changes,
+  // and task-time refresh. Provider refresh I/O happens outside this boundary;
+  // only the final source/route re-read and generation CAS run inside it. HA
+  // uses the same durable tenant/user authority as paste-back finalization.
+  const claudeOAuthAuthority =
+    ctx.deployment.mode === 'ha' ? new ClaudeOAuthAttemptAuthority(db) : undefined;
+  const claudeOAuthStore = claudeOAuthAuthority
+    ? new DurableClaudeOAuthAttemptStore(claudeOAuthAuthority)
+    : new InMemoryClaudeOAuthAttemptStore();
+  const claudeRuntimeCredentials = new ClaudeRuntimeCredentialResolver(
+    db,
+    config,
+    claudeOAuthStore
+  );
+  const configService = createConfigService(db, config, claudeRuntimeCredentials);
   configService.app = app;
   app.use(
     '/agentic-tool-settings',
@@ -755,24 +822,48 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
 
   registerOpenCodeServices(ctx);
 
+  // Claude's standalone store also supplies the process-global credential
+  // route queue used by standalone Codex finalization and users route changes.
+  // In HA, each provider uses its durable authority over the same advisory
+  // tenant/user lock instead.
   // Imports a pasted Codex CLI auth.json for the authenticated user — writes
   // it 0600 into the resolved Codex credential home and flips the caller's auth
   // method to subscription. Token material never leaves the daemon.
   const codexDeviceAttempts =
     ctx.deployment.mode === 'ha' ? new CodexDeviceAuthAttemptAuthority(db) : undefined;
-
-  app.use('/codex-auth/import', createCodexAuthImportService(app, db, codexDeviceAttempts));
-  app.service('/codex-auth/import').hooks({ before: { create: [ctx.requireAuth] } });
+  const invalidateCodexCredentialBinds = (input: {
+    tenantId: string;
+    userId: UserID;
+    reason: 'credentials_imported' | 'credentials_removed';
+  }) =>
+    hasSecureLocalCredentialOverlay(config)
+      ? invalidateLiveBranchCodexCredentialBinds({ app, db, ...input })
+      : Promise.resolve();
 
   // ChatGPT device-code sign-in: create starts an attempt (code + verification
   // URL back to the UI, daemon polls OpenAI for approval); find reports the
   // caller's attempt status. Tokens stay daemon-side end to end.
+  const standaloneCodexDeviceService = codexDeviceAttempts
+    ? undefined
+    : createCodexDeviceAuthService(app, db, claudeOAuthStore, invalidateCodexCredentialBinds);
+  const codexDeviceService = codexDeviceAttempts
+    ? createDurableCodexDeviceAuthService(
+        app,
+        db,
+        codexDeviceAttempts,
+        undefined,
+        invalidateCodexCredentialBinds
+      )
+    : standaloneCodexDeviceService!;
+  const codexCredentialMutations = codexDeviceAttempts ?? standaloneCodexDeviceService!;
+
   app.use(
-    '/codex-auth/device',
-    codexDeviceAttempts
-      ? createDurableCodexDeviceAuthService(app, db, codexDeviceAttempts)
-      : createCodexDeviceAuthService(app, db)
+    '/codex-auth/import',
+    createCodexAuthImportService(app, db, codexCredentialMutations, invalidateCodexCredentialBinds)
   );
+  app.service('/codex-auth/import').hooks({ before: { create: [ctx.requireAuth] } });
+
+  app.use('/codex-auth/device', codexDeviceService);
   app.service('/codex-auth/device').hooks({
     before: { create: [ctx.requireAuth], find: [ctx.requireAuth], remove: [ctx.requireAuth] },
   });
@@ -781,8 +872,41 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   // credential route and clears the stored auth method (emitting `patched` so the
   // UI re-probes to disconnected). Server-local only; does not revoke the OAuth
   // grant, so other machines stay signed in.
-  app.use('/codex-auth/logout', createCodexAuthLogoutService(app, db, codexDeviceAttempts));
+  app.use(
+    '/codex-auth/logout',
+    createCodexAuthLogoutService(app, db, codexCredentialMutations, invalidateCodexCredentialBinds)
+  );
   app.service('/codex-auth/logout').hooks({ before: { create: [ctx.requireAuth] } });
+
+  // Claude subscription OAuth sign-in. Anthropic has no device endpoint,
+  // so this is authorization-code + PKCE with a paste-back code: create({})
+  // returns the authorize URL; create({code}) exchanges the pasted CODE#STATE and
+  // writes ~/.claude/.credentials.json 0600 as the right Unix identity; find
+  // reports status. Tokens stay daemon-side end to end.
+  // See context/explorations/claude-code-oauth-signin.md.
+  if (claudeOAuthAuthority) {
+    const maintenance = setInterval(() => {
+      void claudeOAuthAuthority.maintain().catch((error) => {
+        console.error(
+          `[ClaudeOAuth] Attempt maintenance failed: ${
+            error instanceof Error ? error.constructor.name : 'unknown error'
+          }`
+        );
+      });
+    }, 60_000);
+    maintenance.unref?.();
+  }
+  app.use('/claude-auth/oauth', createClaudeOAuthService(app, db, claudeOAuthStore));
+  app
+    .service('/claude-auth/oauth')
+    .hooks({ before: { create: [ctx.requireAuth], find: [ctx.requireAuth] } });
+
+  // Removes the caller's Claude subscription login — deletes their
+  // ~/.claude/.credentials.json as the right Unix identity and clears the stored
+  // token + claude auth method (emitting `patched` so the UI re-probes to
+  // disconnected). Deployment credential-home only; does not revoke the OAuth grant.
+  app.use('/claude-auth/logout', createClaudeAuthLogoutService(app, db, claudeOAuthStore));
+  app.service('/claude-auth/logout').hooks({ before: { create: [ctx.requireAuth] } });
 
   // Claude dynamic model discovery via @anthropic-ai/sdk's models.list().
   // Resolves ANTHROPIC_API_KEY per-user (with config.yaml + env fallback)
@@ -930,7 +1054,23 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   // Users service
   // ============================================================================
 
-  const usersService = createUsersService(db, app);
+  // Standalone users mutations share the in-process store's credential queue;
+  // HA mutations share the durable tenant/user authority whenever either
+  // provider admits a credential-file writer. A delegated Codex-only profile
+  // still needs unix_username lifecycle coordination, but must not gain Claude
+  // path deletion when exact-home Claude auth is capability-gated.
+  const userCredentialRouteCoordinator = needsUserCredentialRouteCoordinator(ctx.deployment)
+    ? createClaudeUserCredentialPatchCoordinator(
+        app,
+        db,
+        claudeOAuthStore,
+        codexDeviceAttempts ?? standaloneCodexDeviceService,
+        {
+          manageClaudeRoute: canManageClaudeCredentialRoute(ctx.deployment, config),
+        }
+      )
+    : undefined;
+  const usersService = createUsersService(db, app, config, userCredentialRouteCoordinator);
   // UsersService implements find/get/create/patch/remove (no `update`), plus
   // avatar sync helpers. Listing `update` here makes Feathers' hook
   // wiring throw "Can not apply hooks. 'update' is not a function" at startup.
@@ -942,6 +1082,10 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   // the exact daemon-issued Git executor command acting as its token owner.
   app.use('/executor-git-environment', createExecutorGitEnvironmentService(db), {
     methods: ['create'],
+  });
+  app.use(ENVIRONMENT_COMMAND_REPORT_SERVICE, new EnvironmentCommandReportsService(db, app), {
+    methods: ['create'],
+    events: [],
   });
 
   // Bootstrap superadmin users
@@ -985,7 +1129,8 @@ function createDeferredSignal() {
 function createExecuteHandler(
   ctx: RegisterServicesContext,
   sessionsService: SessionsServiceImpl,
-  sessionTokenService: import('./services/session-token-service.js').SessionTokenService
+  sessionTokenService: import('./services/session-token-service.js').SessionTokenService,
+  tasksService: TasksService
 ) {
   const { db, app, config, daemonUrl } = ctx;
   const deploymentAgenticToolPolicy = resolveDeploymentAgenticToolPolicy(config);
@@ -1006,6 +1151,7 @@ function createExecuteHandler(
       permissionMode?: import('@agor/core/types').PermissionMode;
       stream?: boolean;
       messageSource?: MessageSource;
+      promptOrigin?: PromptOrigin;
     },
     // biome-ignore lint/suspicious/noExplicitAny: FeathersJS params type varies by context
     params: any
@@ -1025,7 +1171,19 @@ function createExecuteHandler(
       session,
       requestedMode: data.permissionMode,
     });
-    const userId = (params as AuthenticatedParams).user?.user_id as UserID | undefined;
+    if (!tenantId) throw new Error('Missing active tenant context for executor launch');
+    const launchAuthority = await runWithTenantDatabaseScope(db, tenantId, () =>
+      tasksService.bindExecutorLaunchAuthority(data.taskId)
+    );
+    if (
+      launchAuthority.session_id !== sessionId ||
+      launchAuthority.branch_id !== session.branch_id
+    ) {
+      throw new Error('Task launch authority does not match its prepared Session');
+    }
+    // Principal, Session, Branch, and projected filesystem floor all come from
+    // the locked Task and normalized capability policy, never request params.
+    const userId = launchAuthority.principal_user_id as UserID;
     if (
       session.agentic_tool_preset_id &&
       data.permissionMode !== undefined &&
@@ -1044,53 +1202,30 @@ function createExecuteHandler(
       });
     }
 
-    // Generate session token for executor authentication
-    const appWithExecutor = app as unknown as {
-      sessionTokenService?: import('./services/session-token-service.js').SessionTokenService;
-    };
-    if (!appWithExecutor.sessionTokenService) {
-      throw new Error('Session token service not initialized');
-    }
-    // Hook chain enforces auth before we get here.
-    const sessionToken = await appWithExecutor.sessionTokenService.generateToken(
-      sessionId,
-      (params as AuthenticatedParams).user!.user_id,
-      {
-        taskId: data.taskId,
-        branchId: session.branch_id,
-        // Executor JWTs authenticate at Socket.IO handshake/reconnect (and on
-        // every REST request), so low use limits make normal execution fail
-        // during transport recovery. Keep expiry + lifecycle revocation for
-        // these runtime credentials. Bounded tokens retain per-validation use
-        // counting for compatibility.
-        maxUses: -1,
-      }
-    );
-
     const taskId = data.taskId;
     const runInFreshTerminationTenantWriteDatabase = <T>(work: () => Promise<T>) =>
       withFreshTenantWrite(db, tenantId, work);
 
     // Get branch path (+ authoritative base repo path for the sandbox) and, for
     // RBAC-aware mounting, the current PROMPT ACTOR's effective filesystem
-    // access to the branch. Personal session sharing keeps the owner's home,
-    // but it must not upgrade the caller's branch mounts to the owner's access.
+    // access to the branch. A shared branch Session still must not upgrade the
+    // caller's branch mounts to the Session owner's access.
     // The filesystem sandbox binds `<baseRepoPath>/.git` writable so
     // worktree commits work; we resolve `repo.local_path` from Agor's own DB
     // state rather than parsing the on-disk `.git` pointer (deterministic, and
     // unaffected if a worktree's origin/gitdir is later rewritten).
     const sandboxCfg = config.execution?.sandbox;
-    const rbacOn = config.execution?.branch_rbac === true;
     let cwd = process.cwd();
     let sandboxBaseRepoPath: string | undefined;
+    // Per-branch SDK home intent read from the branch record (design §9.2/§8B.3).
+    let branchSdkHomeIntent: 'per_branch' | null = null;
     const sandboxWorktreesRoot =
       sandboxCfg?.enabled === true
         ? resolveSandboxStoragePaths(config, tenantId).worktreesRoot
         : undefined;
     // Effective fs access of the prompt actor on the branch: write/read/none.
-    // Drives whether the sandbox binds the branch rw / ro / not at all. Defaults
-    // to 'write' when RBAC is off (open-access behavior).
-    let principalBranchAccess: 'write' | 'read' | 'none' = 'write';
+    // Drives whether the sandbox binds the branch rw / ro / not at all.
+    const principalBranchAccess = launchAuthority.fs_access;
     if (session.branch_id) {
       const branchMounts = await runWithTenantDatabaseScope(db, tenantId, async (tenantDb) => {
         const branchRepo = new BranchRepository(tenantDb);
@@ -1108,20 +1243,13 @@ function createExecuteHandler(
           const repo = await new RepoRepository(tenantDb).findById(branch.repo_id);
           baseRepoPath = repo?.local_path ?? undefined;
         }
-        let fsAccess: 'write' | 'read' | 'none' = 'write';
-        if (rbacOn) {
-          if (!userId) throw new Error('Missing prompt actor for branch filesystem authorization');
-          const access = await branchRepo.resolveUserAccess(branch, userId as UUID);
-          fsAccess =
-            access.fs_access === 'write' ? 'write' : access.fs_access === 'read' ? 'read' : 'none';
-        }
-        return { path: branch.path, baseRepoPath, fsAccess };
+        return { path: branch.path, baseRepoPath, sdkHome: branch.sdk_home ?? null };
       });
       if (!branchMounts)
         throw new Error(`Branch ${session.branch_id} not found for executor startup`);
       cwd = branchMounts.path;
       sandboxBaseRepoPath = branchMounts.baseRepoPath;
-      principalBranchAccess = branchMounts.fsAccess;
+      branchSdkHomeIntent = branchMounts.sdkHome;
       // Under the sandbox, 'none' means the branch would not be mounted at all,
       // so the task cannot operate on it. Fail fast with a clear message rather
       // than letting bwrap abort on a missing chdir target.
@@ -1134,33 +1262,131 @@ function createExecuteHandler(
       }
     }
 
-    // Per-owner home store for `sandbox.home_mode: per_user` — a private,
-    // persistent home overlaid at the passwd home inside the sandbox. Keyed by
-    // the SESSION OWNER (not the prompter): the home carries the owner's tool
-    // auth/state, so prompting another user's session runs against the owner's
-    // home. The SOURCE is the owner's `filesystem_home`
+    // Per-execution home store for `sandbox.home_mode: per_user` — a private,
+    // persistent home overlaid at the passwd home inside the sandbox. Legacy
+    // `execution_home` sessions keep using their immutable owner identity.
+    // Branch-scoped sessions instead use the prompt actor's home: resumable SDK
+    // state comes from the branch overlay, so exposing the session owner's
+    // arbitrary files would be both unnecessary and unsafe. The SOURCE is the
+    // selected user's `filesystem_home`
     // if set (the migration points it at their existing /home/<user> so no files
     // move), else the canonical store (see resolveOwnerHomeStore). Only computed
     // when the mode is active — and FAIL CLOSED if the owner can't be resolved.
     let sandboxHomeStore: string | undefined;
     if (sandboxCfg?.enabled === true && sandboxCfg?.home_mode === 'per_user') {
-      if (!session.created_by) {
+      const executionHomeUserId =
+        session.sdk_home_scope === 'branch' ? userId : (session.created_by as UserID | undefined);
+      if (!executionHomeUserId) {
         throw new Error(
-          'sandbox home_mode=per_user requires a resolvable session owner; refusing to spawn ' +
-            'with a shared home (fail closed).'
+          'sandbox home_mode=per_user requires a resolvable execution user; refusing to spawn ' +
+            'without a caller-scoped home (fail closed).'
         );
       }
-      const ownerFilesystemHome = await runWithTenantDatabaseScope(db, tenantId, (tenantDb) =>
+      const executionFilesystemHome = await runWithTenantDatabaseScope(db, tenantId, (tenantDb) =>
         new UsersRepository(tenantDb)
-          .findById(session.created_by as string)
+          .findById(executionHomeUserId as string)
           .then((u) => u?.filesystem_home?.trim() || undefined)
       );
       sandboxHomeStore = resolveOwnerHomeStore({
         config,
         tenantId,
-        ownerUserId: session.created_by,
-        filesystemHome: ownerFilesystemHome,
+        ownerUserId: executionHomeUserId,
+        filesystemHome: executionFilesystemHome,
       });
+    }
+
+    // ── Per-branch SDK home (design §7/§8/§11) ─────────────────────────────
+    // Executor startup follows the SESSION stamp, never today's deployment
+    // flag or branch intent alone. This is the compatibility seam that lets an
+    // old, resumable session keep its historical execution home while a fresh
+    // session on the same adopted branch uses branch-owned SDK state.
+    const sdkHomeTool = session.agentic_tool as AgenticToolName;
+    const isDelegatedExecution = (config.execution?.unix_user_mode ?? 'simple') === 'delegated';
+    let sandboxBranchSdkHome: string | undefined;
+    let branchSdkHomeEnv: Record<string, string> | undefined;
+    let branchSdkHomeTemplatePath = '';
+    let branchCodexAuthBind:
+      | { source: string; destination: string; handle?: FileHandle }
+      | undefined;
+    const useBranchSdkHome = sessionUsesBranchSdkHome({
+      sessionScope: session.sdk_home_scope,
+      branchSdkHomeIntent,
+    });
+    if (useBranchSdkHome) {
+      if (!session.branch_id) {
+        throw new Error(`Branch-scoped session ${session.session_id} has no branch`);
+      }
+      const branchId = session.branch_id as string;
+      // A relocatable directory is necessary but not sufficient: OpenCode's
+      // current XDG data home also contains its native credential file. Until
+      // its actor credential namespace is split from branch-owned state, a
+      // branch home would either lose configured credentials or share them.
+      const compatibility = await runWithTenantDatabaseScope(db, tenantId, (tenantDb) =>
+        resolveBranchSdkHomeCompatibility({
+          tool: sdkHomeTool,
+          delegated: isDelegatedExecution,
+          secureLocalCredentialOverlay: hasSecureLocalCredentialOverlay(config),
+          userId,
+          db: tenantDb,
+        })
+      );
+      if (compatibility.unsupportedReason) {
+        throw new BadRequest(
+          `${AGENTIC_TOOL_DISPLAY_NAMES[sdkHomeTool]} cannot run in a branch-scoped session ` +
+            `because ${compatibility.unsupportedReason}. Use a supported tool or authentication mode.`
+        );
+      }
+      const branchHomeDir = getBranchHomePath(branchId, tenantId ?? undefined);
+      // Delegated mode: Agor mounts nothing; the external launcher owns
+      // enforcement and is told the path via `{branch_sdk_home}` (§7.4). We do
+      // not inject env, create dirs, or mount here.
+      branchSdkHomeTemplatePath = branchHomeDir;
+      if (!isDelegatedExecution) {
+        // Lazy-create the branch home + per-tool subdirs on first prompt
+        // (§6.2); idempotent, and the bwrap --bind source must exist pre-spawn
+        // (§7.2 — dropMasksForMissingTargets never drops a --bind).
+        await mkdir(branchHomeDir, { recursive: true });
+        const launch = resolveBranchSdkHomeLaunch({
+          tool: sdkHomeTool,
+          branchId,
+          tenantId: tenantId ?? undefined,
+        });
+        branchSdkHomeEnv = launch.envVars;
+        for (const dir of launch.ensureDirs) await mkdir(dir, { recursive: true });
+        if (compatibility.requiresLocalCodexAuthOverlay) {
+          if (!userId) throw new BadRequest('Codex subscription auth requires a prompt actor');
+          const credentialRoute = await resolveCodexCredentialRoute(
+            userId,
+            (work) => runWithTenantDatabaseScope(db, tenantId, work),
+            config
+          );
+          if (!credentialRoute.ok || !credentialRoute.codexHome) {
+            throw new BadRequest(
+              credentialRoute.ok
+                ? 'Codex subscription auth requires a persistent per-user credential home'
+                : credentialRoute.message
+            );
+          }
+          const branchCodexHome = launch.envVars.CODEX_HOME;
+          if (!branchCodexHome) {
+            throw new Error('Codex branch SDK-home launch is missing CODEX_HOME');
+          }
+          const destination = join(branchCodexHome, 'auth.json');
+          // Bubblewrap requires an existing file mountpoint. Keep the
+          // branch-owned inode deliberately empty: the caller credential is
+          // visible only as a per-executor mount and is never copied into
+          // shared branch state. The capability-based writer refuses symlinked
+          // parent directories and replaces an adversarial final symlink.
+          await mutateCredentialFile({ target: destination, content: '' });
+          branchCodexAuthBind = {
+            source: join(credentialRoute.codexHome, 'auth.json'),
+            destination,
+          };
+        }
+        // Bind the branch home into the sandbox (consumed by buildSandboxWrap).
+        // Harmless when the sandbox is disabled (buildSandboxWrap returns null).
+        sandboxBranchSdkHome = branchHomeDir;
+      }
     }
 
     // Resolve the optional delegated home key reported to an external launcher.
@@ -1168,11 +1394,19 @@ function createExecuteHandler(
     const { resolveDelegatedHomeKey } = await import('@agor/core/unix');
 
     const unixUserMode = (config.execution?.unix_user_mode ?? 'simple') as UnixUserMode;
-    const sessionUnixUser = session.unix_username;
+    let executionHomeKey = session.unix_username;
+    if (unixUserMode === 'delegated' && session.sdk_home_scope === 'branch') {
+      if (!userId) throw new Error('Missing prompt actor for delegated branch-scoped execution');
+      executionHomeKey = await runWithTenantDatabaseScope(db, tenantId, (tenantDb) =>
+        new UsersRepository(tenantDb)
+          .findById(userId)
+          .then((user) => user?.unix_username?.trim() || null)
+      );
+    }
 
     const delegatedHomeKeyResolution = resolveDelegatedHomeKey({
       mode: unixUserMode,
-      executionHomeKey: sessionUnixUser,
+      executionHomeKey,
     });
 
     const executorHomeDir = homedir();
@@ -1284,25 +1518,51 @@ function createExecuteHandler(
       scrubMCPSecretsFromExecutorEnv(executorEnv, [...usableAttached, ...global]);
     });
 
+    // Point the tool's SDK/config-home env var(s) at the per-branch SDK home
+    // (design §8). These are relocations, NOT credentials — so the MCP scrub
+    // above leaves them alone, and they compose with the caller-scoped
+    // credential env injected by createUserProcessEnvironment (#2555): different
+    // keys, no collision (verified — the branch home never carries a credential,
+    // §8A.3). Skipped in delegated mode (the launcher owns the environment).
+    if (branchSdkHomeEnv) {
+      Object.assign(executorEnv, branchSdkHomeEnv);
+    }
+
     executorEnv.DAEMON_URL = daemonUrl;
 
-    const openCodeLaunch = (() => {
-      if (session.agentic_tool !== 'opencode') return undefined;
-      if (!tenantId) throw new Error('Missing active tenant context for OpenCode execution');
-      if (!executorHomeDir) throw new Error('Missing executor home for OpenCode execution');
-      return OPENCODE_DAEMON_CONTRIBUTION.getExecutorLaunch({
+    // Generalized executor-launch hook (design §4/§13 Phase 2). Every tool has a
+    // daemon contribution; only OpenCode implements getExecutorLaunch today, so
+    // this stays a no-op for all other tools and preserves prior behavior.
+    const executorLaunch = (() => {
+      const contribution = getAgenticToolDaemonContribution(session.agentic_tool);
+      if (!contribution?.getExecutorLaunch) return undefined;
+      // These guards fire for any tool with a launch hook (currently OpenCode).
+      if (!tenantId) throw new Error('Missing active tenant context for executor-launch hook');
+      if (!executorHomeDir) throw new Error('Missing executor home for executor-launch hook');
+      return contribution.getExecutorLaunch({
         tenantId,
         session,
         homeDir: executorHomeDir,
       });
     })();
 
+    // Issue only after every launch prerequisite succeeds. The credential
+    // scope repeats the locked, server-derived launch authority; token retries
+    // cannot lower the already-bound filesystem floor.
+    const sessionToken = await sessionTokenService.generateToken(sessionId, userId, {
+      taskId: data.taskId,
+      branchId: launchAuthority.branch_id,
+      // Runtime JWTs reconnect and authenticate frequently. Expiry + lifecycle
+      // revocation, not bounded validation uses, retire this credential.
+      maxUses: -1,
+    });
+
     // Build executor payload
     const executorPayload = {
       command: 'prompt' as const,
       sessionToken,
       daemonUrl,
-      ...(openCodeLaunch?.executorPayload ?? {}),
+      ...(executorLaunch?.executorPayload ?? {}),
       env: executorEnv,
       params: {
         sessionId,
@@ -1318,16 +1578,35 @@ function createExecuteHandler(
         permissionMode: permissionModeForPayload as 'ask' | 'auto' | 'allow-all' | undefined,
         cwd,
         messageSource: data.messageSource,
+        promptOrigin: data.promptOrigin,
         // Authoritative sandbox mount inputs (consumed in spawn-executor →
         // buildSandboxWrap). Undefined when the sandbox / per_user home is off.
         sandboxBaseRepoPath,
         sandboxHomeStore,
         sandboxWorktreesRoot,
         principalBranchAccess,
+        // Per-branch SDK home to bind into the sandbox (design §7). Undefined
+        // for execution-home sessions and in delegated mode (where the launcher
+        // mounts it via the {branch_sdk_home} template).
+        sandboxBranchSdkHome,
       },
     };
 
     const logPrefix = `[Executor ${shortId(sessionId)}]`;
+
+    // Open as late as possible and keep the capability alive only through
+    // child_process.spawn(). The directory-capability helper rejects every
+    // symlink component and the final file; `--bind-fd` then mounts this exact
+    // inode even if another sandbox renames the pathname concurrently.
+    if (branchCodexAuthBind) {
+      try {
+        branchCodexAuthBind.handle = await openCredentialFileForBind(branchCodexAuthBind.source);
+      } catch {
+        throw new BadRequest(
+          'Codex subscription credentials are missing or unsafe to mount. Reconnect Codex in Agent Setup or use an API key.'
+        );
+      }
+    }
 
     type NativeStateSpawn = {
       fence: OpenCodeNativeStateMutationFence;
@@ -1341,12 +1620,25 @@ function createExecuteHandler(
       delegatedHomeKey: delegatedHomeKeyResolution.delegatedHomeKey || undefined,
       preparedEnv: executorEnv,
       logPrefix,
+      ...(branchCodexAuthBind?.handle
+        ? {
+            localSandboxFileBinds: [
+              {
+                sourceFd: branchCodexAuthBind.handle.fd,
+                destination: branchCodexAuthBind.destination,
+              },
+            ],
+          }
+        : {}),
       templateVariables: {
         session_id: sessionId,
         task_id: taskId,
         branch_id: session.branch_id,
         user_id: userId,
         branch_fs_access: principalBranchAccess,
+        // Delegated launchers own SDK-home enforcement (§7.4): absolute path for
+        // a branch-scoped session, empty string for an execution-home session.
+        branch_sdk_home: branchSdkHomeTemplatePath,
       },
       onSpawn: (child, spawnContext) => {
         metrics.increment('executor.launches', 1, { mode: spawnContext.mode });
@@ -1472,20 +1764,18 @@ function createExecuteHandler(
           // Launcher callbacks can outlive the tenant transaction that spawned
           // them. Leave any inherited DB scope before opening the fresh
           // tenant scope derived from the verified token claim.
-          await runWithoutTenantDatabaseScope(() =>
-            appWithExecutor.sessionTokenService?.revokeToken(sessionToken)
-          );
+          await runWithoutTenantDatabaseScope(() => sessionTokenService.revokeToken(sessionToken));
         } finally {
           nativeState?.finished.resolve();
         }
       },
     });
 
-    if (openCodeLaunch) {
+    if (executorLaunch) {
       const ready = createDeferredSignal();
       const finished = createDeferredSignal();
       let spawned = false;
-      const slot = inOpenCodeNativeStateMutationSlot(openCodeLaunch.namespaceKey, async (fence) => {
+      const slot = inOpenCodeNativeStateMutationSlot(executorLaunch.namespaceKey, async (fence) => {
         try {
           spawnExecutor(
             executorPayload,
@@ -1504,7 +1794,13 @@ function createExecuteHandler(
       });
       await ready.promise;
     } else {
-      spawnExecutor(executorPayload, executorOptions());
+      try {
+        spawnExecutor(executorPayload, executorOptions());
+      } finally {
+        // The child inherits its own descriptor during synchronous spawn.
+        // Close only the daemon's copy once spawn returns or throws.
+        await branchCodexAuthBind?.handle?.close().catch(() => undefined);
+      }
     }
 
     return {
@@ -1531,13 +1827,50 @@ export async function registerMCPServices(
     (postgresOAuthDeployment ? new MCPOAuthPendingFlowAuthority(db) : null);
   const lockOAuthGrantConfiguration =
     ctx.lockMcpOAuthGrantConfiguration ?? lockMCPOAuthGrantConfiguration;
-  const externalFailure = (event: string, stage: MCPExternalErrorStage, error: unknown) => {
-    const safe = sanitizeMCPExternalError(error, { stage });
-    const { type, code } = safe.diagnostic;
+  const externalFailure = (
+    event: string,
+    stage: MCPExternalErrorStage,
+    error: unknown,
+    options: {
+      category?: MCPExternalErrorCategory;
+      type?: MCPExternalErrorType;
+      reason?: MCPExternalErrorReason;
+    } = {}
+  ) => {
+    const safe = sanitizeMCPExternalError(error, { stage, ...options });
+    const { type, code, status, reason } = safe.diagnostic;
     console.error(
-      `[${event}] event=mcp_external_failure stage=${stage} category=${safe.category} type=${type}${code ? ` code=${code}` : ''}`
+      `[${event}] event=mcp_external_failure stage=${stage} category=${safe.category} type=${type}${status !== undefined ? ` status=${status}` : ''}${code ? ` code=${code}` : ''}${reason ? ` reason=${reason}` : ''}`
     );
     return safe;
+  };
+  const externalFailureOptionsForRecovery = (
+    recovery: MCPAuthRecovery
+  ): Parameters<typeof externalFailure>[3] => {
+    if (recovery.category === 'redirect_configuration_required') {
+      return {
+        category: 'configuration_required',
+        type: 'ConfigurationError',
+        reason: 'oauth_redirect_configuration_required',
+      };
+    }
+    if (recovery.category === 'metadata_incompatible') {
+      return {
+        category: 'configuration_required',
+        type: 'ConfigurationError',
+        reason: 'oauth_metadata_incompatible',
+      };
+    }
+    if (
+      recovery.category === 'provider_unavailable' ||
+      recovery.category === 'provider_rejected' ||
+      recovery.category === 'invalid_response' ||
+      recovery.category === 'storage_policy_rejected' ||
+      recovery.category === 'configuration_required'
+    ) {
+      return { category: recovery.category };
+    }
+    return {};
   };
   const oauthFetch = async (
     input: string | URL | Request,
@@ -4104,7 +4437,12 @@ export async function registerMCPServices(
             mcpServerId: data.mcp_server_id,
           });
           if (recovery.category === 'redirect_configuration_required') {
-            console.error('[OAuth Start] Failed category=PublicBaseUrlNotConfiguredError');
+            externalFailure(
+              'OAuth Start',
+              'oauth',
+              err,
+              externalFailureOptionsForRecovery(recovery)
+            );
             return {
               success: false,
               error: recovery.message,
@@ -4154,7 +4492,7 @@ export async function registerMCPServices(
           : preliminaryRecovery;
         // This is deliberately the final consumer of the original unknown.
         // Response construction below uses only the closed recovery contract.
-        externalFailure('OAuth Start', 'oauth', error);
+        externalFailure('OAuth Start', 'oauth', error, externalFailureOptionsForRecovery(recovery));
         return {
           success: false,
           error: recovery.message,
@@ -4511,10 +4849,9 @@ export async function registerMCPServices(
               globalServers: await new MCPServerRepository(db).findAll({
                 scope: 'global',
                 enabled: true,
-                // The task token is issued to the actual prompter. Even when
-                // personal sharing keeps the session owner's home, connector
-                // credentials and private server visibility stay with the
-                // prompter rather than silently borrowing the owner identity.
+                // The task token is issued to the actual prompter. Connector
+                // credentials and private server visibility stay with that
+                // caller rather than silently borrowing the Session owner.
                 usableByUserId: userId,
               }),
             };
@@ -4891,42 +5228,27 @@ export async function registerMCPServices(
     server: MCPServer,
     params?: AuthenticatedParams
   ): { success: false; error: string } | null => {
-    if (!params?.provider || !params.user) return null;
-    if (hasMinimumRole(params.user.role?.toLowerCase(), ROLES.ADMIN)) return null;
-    if (server.owner_user_id && server.owner_user_id === params.user.user_id) return null;
-    return {
-      success: false,
+    const caller = resolveMcpCaller(params);
+    if (caller.kind === 'internal') return null;
+    const denial = {
+      success: false as const,
       error: 'Access denied: only an admin or the server owner can discover this MCP server',
     };
+    // Read visibility is not discovery authority: service accounts carry no
+    // membership or ownership and must not exercise a saved credential here.
+    if (caller.kind === 'anonymous' || caller.kind === 'service-account') return denial;
+    const user = caller.user;
+    if (hasMinimumRole(user.role?.toLowerCase(), ROLES.ADMIN)) return null;
+    if (server.owner_user_id && server.owner_user_id === user.user_id) return null;
+    return denial;
   };
 
   // Discover endpoint
   app.use('/mcp-servers/discover', {
     async create(
-      data: {
-        mcp_server_id?: string;
-        url?: string;
-        transport?: 'http' | 'sse';
-        auth?: {
-          type: 'none' | 'bearer' | 'jwt' | 'oauth';
-          token?: string;
-          api_url?: string;
-          api_token?: string;
-          api_secret?: string;
-          oauth_token_url?: string;
-          oauth_client_id?: string;
-          oauth_client_secret?: string;
-          oauth_scope?: string;
-          oauth_grant_type?: string;
-          oauth_mode?: 'per_user' | 'shared';
-          oauth_compatibility_mode?: 'strict' | 'legacy';
-          oauth_dcr_mode?: MCPOAuthDCRMode;
-        };
-        headers?: Record<string, string>;
-        oauth_browser_event?: MCPOAuthBrowserEventRequest;
-      },
+      data: MCPDiscoveryRequest,
       params?: AuthenticatedParams
-    ) {
+    ): Promise<MCPDiscoveryResult> {
       try {
         const browserReservation = consumeOAuthBrowserReservation(
           data.oauth_browser_event,
@@ -4952,7 +5274,7 @@ export async function registerMCPServices(
         const { mergeMCPRemoteHeaders } = await import('@agor/core/tools/mcp/http-headers');
         const tenantId = tenantIdFromParams(params);
 
-        const validateUrl = (url: string): { valid: boolean; error?: string } => {
+        const validateUrl = (url: string): { valid: true } | { valid: false; error: string } => {
           try {
             const parsed = new URL(url);
             if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
@@ -5286,7 +5608,12 @@ export async function registerMCPServices(
             ) {
               throw error;
             }
-            externalFailure('MCP Discovery OAuth token acquisition', 'discovery', error);
+            externalFailure(
+              'MCP Discovery OAuth token acquisition',
+              'discovery',
+              error,
+              externalFailureOptionsForRecovery(recovery)
+            );
             return undefined;
           }
         };
@@ -5397,7 +5724,15 @@ export async function registerMCPServices(
             mcpTransport: InstanceType<typeof StreamableHTTPClientTransport>
           ) => {
             const timeout = new Promise<never>((_, reject) => {
-              setTimeout(() => reject(new Error('Connection timeout after 10 seconds')), 10000);
+              setTimeout(
+                () =>
+                  reject(
+                    Object.assign(new Error('Connection timeout after 10 seconds'), {
+                      code: 'ETIMEDOUT' as const,
+                    })
+                  ),
+                10000
+              );
             });
             await runWithinOAuthAuthority(assertCurrentRequestAuthority, () =>
               Promise.race([mcpClient.connect(mcpTransport), timeout])
@@ -5435,7 +5770,12 @@ export async function registerMCPServices(
 
           const listTimeout = new Promise<never>((_, reject) => {
             setTimeout(
-              () => reject(new Error('List capabilities timeout after 10 seconds')),
+              () =>
+                reject(
+                  Object.assign(new Error('List capabilities timeout after 10 seconds'), {
+                    code: 'ETIMEDOUT' as const,
+                  })
+                ),
               10000
             );
           });
@@ -5480,35 +5820,38 @@ export async function registerMCPServices(
             listTimeout,
           ])) as PromptsResult;
 
+          const discovered = {
+            tools: toolsResult.tools.map((t) => ({
+              name: t.name,
+              description: t.description,
+              input_schema: t.inputSchema,
+            })),
+            resources: resourcesResult.resources.map((r) => ({
+              uri: r.uri,
+              name: r.name,
+              description: r.description,
+              mimeType: r.mimeType,
+            })),
+            prompts: promptsResult.prompts.map((p) => ({
+              name: p.name,
+              description: p.description,
+              arguments: p.arguments?.map((a) => ({
+                name: a.name,
+                description: a.description,
+                required: a.required,
+              })),
+            })),
+          };
+          let normalizedDiscovery: ReturnType<typeof normalizeDiscoveredMCPCapabilities>;
+
           if (serverId && discoveryAuthority) {
-            await runWithinOAuthAuthority(assertCurrentRequestAuthority, () =>
+            normalizedDiscovery = await runWithinOAuthAuthority(assertCurrentRequestAuthority, () =>
               runWithTenantDatabaseTransaction(db, tenantId, (scopedDb) =>
                 persistDiscoveredMCPCapabilities(
                   scopedDb,
                   tenantId,
                   discoveryAuthority as MCPDiscoveryAuthoritySnapshot,
-                  {
-                    tools: toolsResult.tools.map((t) => ({
-                      name: t.name,
-                      description: t.description,
-                      input_schema: t.inputSchema,
-                    })),
-                    resources: resourcesResult.resources.map((r) => ({
-                      uri: r.uri,
-                      name: r.name,
-                      description: r.description,
-                      mimeType: r.mimeType,
-                    })),
-                    prompts: promptsResult.prompts.map((p) => ({
-                      name: p.name,
-                      description: p.description,
-                      arguments: p.arguments?.map((a) => ({
-                        name: a.name,
-                        description: a.description,
-                        required: a.required,
-                      })),
-                    })),
-                  },
+                  discovered,
                   process.env.AGOR_MASTER_SECRET ?? ''
                 )
               )
@@ -5522,25 +5865,30 @@ export async function registerMCPServices(
               tenantId,
               [userId, authoritativeServer?.owner_user_id].filter(Boolean) as UserID[]
             );
+          } else {
+            normalizedDiscovery = normalizeDiscoveredMCPCapabilities(discovered);
           }
 
           return {
             success: true,
             capabilities: {
-              tools: toolsResult.tools.length,
-              resources: resourcesResult.resources.length,
-              prompts: promptsResult.prompts.length,
+              tools: normalizedDiscovery.capabilities.tools.length,
+              resources: normalizedDiscovery.capabilities.resources.length,
+              prompts: normalizedDiscovery.capabilities.prompts.length,
             },
-            tools: toolsResult.tools.map((t) => ({
+            metadata: {
+              descriptions_truncated: normalizedDiscovery.truncatedDescriptions,
+            },
+            tools: normalizedDiscovery.capabilities.tools.map((t) => ({
               name: t.name,
               description: t.description || '',
             })),
-            resources: resourcesResult.resources.map((r) => ({
+            resources: normalizedDiscovery.capabilities.resources.map((r) => ({
               name: r.name,
               uri: r.uri,
               mimeType: r.mimeType,
             })),
-            prompts: promptsResult.prompts.map((p) => ({
+            prompts: normalizedDiscovery.capabilities.prompts.map((p) => ({
               name: p.name,
               description: p.description || '',
             })),
@@ -5567,8 +5915,20 @@ export async function registerMCPServices(
         ) {
           return { success: false, error: recovery.message, recovery };
         }
-        const safe = externalFailure('MCP Discovery', 'discovery', error);
-        return { success: false, error: safe.message, category: safe.category };
+        const persistenceRejected = isMCPServerWriteValidationError(error);
+        const safe = externalFailure('MCP Discovery', 'discovery', error, {
+          ...externalFailureOptionsForRecovery(recovery),
+          ...(persistenceRejected ? { category: 'storage_policy_rejected' as const } : {}),
+          ...(persistenceRejected
+            ? { reason: 'capability_persistence_validation_rejected' as const }
+            : {}),
+        });
+        return {
+          success: false,
+          error: safe.message,
+          category: safe.category,
+          ...(persistenceRejected ? { action: safe.action } : {}),
+        };
       }
     },
   });

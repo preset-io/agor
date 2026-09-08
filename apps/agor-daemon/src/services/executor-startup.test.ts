@@ -24,6 +24,7 @@ const session = {
   branch_id: 'branch-1',
   agentic_tool: 'codex',
   status: SessionStatus.IDLE,
+  sdk_home_scope: 'execution_home',
 } as Session;
 
 function createSessionsService() {
@@ -174,6 +175,31 @@ describe('prepareSessionForExecutorStart tenant scope', () => {
       await expect(run).resolves.toBe(stampedSession);
       expect(guard.loadCreator).toHaveBeenCalledOnce();
       expect(loadCreator).toHaveBeenCalledWith(stampedSession.created_by);
+    });
+
+    it("does not validate the creator's old home for a branch-scoped session", async () => {
+      const branchSession = { ...stampedSession, sdk_home_scope: 'branch' as const };
+      const loadCreator = vi.fn(async () => ({ unix_username: 'alice-renamed' }));
+      const guard = { loadCreator: vi.fn(() => loadCreator) };
+      const sessionsService = {
+        get: vi.fn(async () => branchSession),
+        materializeAgenticToolPreset: vi.fn(async (loaded: Session) => loaded),
+      };
+
+      await expect(
+        runWithTenantContext('tenant-x', () =>
+          prepareSessionForExecutorStart(
+            { run: vi.fn() } as never,
+            sessionsService as never,
+            branchSession.session_id,
+            {} as never,
+            undefined,
+            guard
+          )
+        )
+      ).resolves.toBe(branchSession);
+      expect(guard.loadCreator).not.toHaveBeenCalled();
+      expect(loadCreator).not.toHaveBeenCalled();
     });
 
     // `register-services.ts` builds the guard only when the resolved execution

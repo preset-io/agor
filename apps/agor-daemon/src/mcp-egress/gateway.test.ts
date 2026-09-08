@@ -19,6 +19,10 @@ import {
   UsersRepository,
 } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
+import {
+  MAX_MCP_CAPABILITY_DESCRIPTION_LENGTH,
+  MCP_DESCRIPTION_TRUNCATION_SUFFIX,
+} from '@agor/core/mcp';
 import { refreshAndPersistToken } from '@agor/core/tools/mcp/oauth-refresh';
 import {
   capabilityPolicyPresetCapabilities,
@@ -91,7 +95,6 @@ interface HarnessOptions {
   oauthRefreshToken?: string;
   oauthExpiresAt?: Date | null;
   separatePrincipal?: boolean;
-  branchRbacEnabled?: boolean;
   authoritySnapshotCheckpoint?: () => Promise<void>;
   oauthAuthHeadersCreate?: (params: {
     mcp_egress_assert_current?: () => Promise<void>;
@@ -151,33 +154,20 @@ async function harness(options: HarnessOptions) {
         fs_access: 'read',
       },
     ];
-    config.session_sharing.owner_rules = [
-      {
-        session_owner_user_id: user.user_id,
-        enabled: true,
-        grantees: [
-          {
-            grant_id: generateId(),
-            principal: { principal_type: 'user', user_id: principal.user_id },
-          },
-        ],
-      },
-    ];
+    config.allow_shared_session_prompts = true;
     await policies.replaceBranchPolicy(
       branch.branch_id,
       { ...current, override_config: config },
       user.user_id
     );
-    await policies.setWorkspacePreferences(
-      { personal_session_sharing_enabled: true },
-      user.user_id
-    );
+    await policies.setWorkspacePreferences({ session_sharing_enabled: true }, user.user_id);
   }
   const session = await new SessionRepository(rawDb).create({
     session_id: randomUUID(),
     branch_id: branch.branch_id,
     agentic_tool: 'codex',
     created_by: user.user_id as UserID,
+    sdk_home_scope: options.separatePrincipal ? 'branch' : 'execution_home',
   });
   const task = await new TaskRepository(rawDb).create({
     task_id: randomUUID(),
@@ -260,7 +250,6 @@ async function harness(options: HarnessOptions) {
     db: rawDb as unknown as TenantScopeAwareDatabase,
     app,
     jwtSecret,
-    branchRbacEnabled: options.branchRbacEnabled ?? false,
     allowLocalhostHttp: true,
     resolveDns: options.resolveDns,
     authoritySnapshotCheckpoint: options.authoritySnapshotCheckpoint,
@@ -433,7 +422,6 @@ describe('authoritative MCP gateway real transport', () => {
         auth: { type: 'oauth', oauth_mode: 'per_user' },
       },
       separatePrincipal: true,
-      branchRbacEnabled: true,
       oauthAccessToken: 'prompt-caller-oauth-token',
     });
 
@@ -505,7 +493,6 @@ describe('authoritative MCP gateway real transport', () => {
       db: {} as TenantScopeAwareDatabase,
       app: {} as Application,
       jwtSecret: 'tenant-abort-test',
-      branchRbacEnabled: false,
     });
     const tenantA = new AbortController();
     const tenantB = new AbortController();
@@ -861,6 +848,132 @@ describe('authoritative MCP gateway real transport', () => {
     });
   });
 
+  it('normalizes overlong tools/list metadata on the mediated agent path', async () => {
+    const longDescription = `fictional provider ${'📬'.repeat(40_000)}`;
+    const url = await listen((_request, response) => {
+      response.writeHead(200, { 'content-type': 'application/json' });
+      response.end(
+        JSON.stringify({
+          jsonrpc: '2.0',
+          id: 7,
+          result: {
+            tools: [
+              {
+                name: 'fictional_mail_search',
+                description: longDescription,
+                inputSchema: { type: 'object', properties: { query: { type: 'string' } } },
+                annotations: { readOnlyHint: true },
+              },
+            ],
+          },
+        })
+      );
+    });
+    const h = await harness({ server: { transport: 'http', url, auth: { type: 'none' } } });
+    const result = await h.request(
+      'POST',
+      JSON.stringify({ jsonrpc: '2.0', id: 7, method: 'tools/list' })
+    );
+    const payload = (await result.response.json()) as {
+      result: { tools: Array<Record<string, unknown>> };
+    };
+    expect(String(payload.result.tools[0]?.description).length).toBeLessThanOrEqual(
+      MAX_MCP_CAPABILITY_DESCRIPTION_LENGTH
+    );
+    expect(
+      String(payload.result.tools[0]?.description).endsWith(MCP_DESCRIPTION_TRUNCATION_SUFFIX)
+    ).toBe(true);
+    expect(payload.result.tools[0]).toMatchObject({
+      name: 'fictional_mail_search',
+      inputSchema: { type: 'object' },
+      annotations: { readOnlyHint: true },
+    });
+  });
+
+  it('does not reserialize non-metadata JSON responses', async () => {
+    const payload =
+      '{"jsonrpc":"2.0","id":79,"result":{"structuredContent":{"id":9007199254740993}}}';
+    const url = await listen((_request, response) => {
+      response.writeHead(200, { 'content-type': 'application/json' });
+      response.end(payload);
+    });
+    const h = await harness({ server: { transport: 'http', url, auth: { type: 'none' } } });
+    const result = await h.request(
+      'POST',
+      JSON.stringify({ jsonrpc: '2.0', id: 79, method: 'tools/call', params: { name: 'search' } })
+    );
+    expect(await result.response.text()).toBe(payload);
+  });
+
+  it.each(['application/json', 'text/event-stream'])(
+    'scans reflected credentials before truncation in %s tools/list',
+    async (contentType) => {
+      const token = 'fictional-provider-credential-0123456789-ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+      const description =
+        'x'.repeat(
+          MAX_MCP_CAPABILITY_DESCRIPTION_LENGTH - MCP_DESCRIPTION_TRUNCATION_SUFFIX.length - 24
+        ) + token;
+      const url = await listen((_request, response) => {
+        const payload = JSON.stringify({
+          jsonrpc: '2.0',
+          id: 78,
+          result: {
+            tools: [{ name: 'search', description, inputSchema: { type: 'object' } }],
+          },
+        });
+        response.writeHead(200, { 'content-type': contentType });
+        response.end(contentType === 'application/json' ? payload : `data: ${payload}\n\n`);
+      });
+      const h = await harness({
+        server: { transport: 'http', url, auth: { type: 'bearer', token } },
+      });
+      await expect(
+        h.request('POST', JSON.stringify({ jsonrpc: '2.0', id: 78, method: 'tools/list' }))
+      ).rejects.toMatchObject({ code: 'credential_reflection_blocked' });
+    }
+  );
+
+  it('preserves multiline schema annotations and literal whitespace values on tools/list', async () => {
+    const tool = {
+      name: 'search',
+      description: 'Search mail',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          query: { type: 'string', description: 'First line\nSecond line\tformatted' },
+          separator: { type: 'string', enum: ['\n', '\t'], default: '\n' },
+        },
+      },
+    };
+    const url = await listen((_request, response) => {
+      response.writeHead(200, { 'content-type': 'application/json' });
+      response.end(JSON.stringify({ jsonrpc: '2.0', id: 77, result: { tools: [tool] } }));
+    });
+    const h = await harness({ server: { transport: 'http', url, auth: { type: 'none' } } });
+    const result = await h.request(
+      'POST',
+      JSON.stringify({ jsonrpc: '2.0', id: 77, method: 'tools/list' })
+    );
+    expect(await result.response.json()).toMatchObject({ result: { tools: [tool] } });
+  });
+
+  it('rejects malformed tools/list metadata with a targeted provider diagnostic', async () => {
+    const url = await listen((_request, response) => {
+      response.writeHead(200, { 'content-type': 'application/json' });
+      response.end(
+        JSON.stringify({
+          jsonrpc: '2.0',
+          id: 8,
+          result: { tools: [{ name: 'fictional_mail_search', description: { private: true } }] },
+        })
+      );
+    });
+    const h = await harness({ server: { transport: 'http', url, auth: { type: 'none' } } });
+    await expect(
+      h.request('POST', JSON.stringify({ jsonrpc: '2.0', id: 8, method: 'tools/list' }))
+    ).rejects.toMatchObject({ code: 'invalid_mcp_tool_metadata' });
+  });
+
   it('uses a second SQLite connection to prove a commit before final admission prevents provider observation', async () => {
     const file = `/tmp/mcp-egress-race-${randomUUID()}.db`;
     files.push(file);
@@ -1064,7 +1177,6 @@ describe('authoritative MCP gateway real transport', () => {
     const h = await harness({
       server: { transport: 'http', url: provider, auth: { type: 'none' } },
       separatePrincipal: true,
-      branchRbacEnabled: true,
       resolveDns: async () => {
         dnsStarted();
         await dnsGate;
@@ -1076,7 +1188,7 @@ describe('authoritative MCP gateway real transport', () => {
     const policies = new CapabilityPolicyRepository(h.rawDb);
     const current = await policies.getBranchPolicy(h.branch.branch_id);
     const config = structuredClone(current.override_config!);
-    config.session_sharing.owner_rules = [];
+    config.allow_shared_session_prompts = false;
     await policies.replaceBranchPolicy(
       h.branch.branch_id,
       { ...current, override_config: config },

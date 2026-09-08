@@ -1,9 +1,57 @@
 import { describe, expect, it } from 'vitest';
 import {
+  hasContainedClaudeRuntimeCredentials,
   hasCrossReplicaExecutorCredentialLock,
   hasExactUserExecutorCredentialHome,
   hasTenantSafeExecutorCredentialHome,
 } from './executor-credential-storage';
+
+describe('hasContainedClaudeRuntimeCredentials', () => {
+  it('requires the concrete per-user bubblewrap mask topology', () => {
+    const contained = {
+      execution: {
+        unix_user_mode: 'sandbox' as const,
+        executor_storage: { user_home: 'persistent-per-user' as const },
+        sandbox: { enabled: true, home_mode: 'per_user' as const },
+      },
+    };
+    expect(hasContainedClaudeRuntimeCredentials(contained)).toBe(true);
+    expect(
+      hasContainedClaudeRuntimeCredentials({
+        execution: { ...contained.execution, sandbox: { enabled: true, home_mode: 'shared' } },
+      })
+    ).toBe(false);
+    expect(
+      hasContainedClaudeRuntimeCredentials({
+        execution: { ...contained.execution, unix_user_mode: 'delegated' },
+      })
+    ).toBe(false);
+    expect(
+      hasContainedClaudeRuntimeCredentials({
+        execution: { ...contained.execution, sandbox: { enabled: false, home_mode: 'per_user' } },
+      })
+    ).toBe(false);
+    expect(
+      hasContainedClaudeRuntimeCredentials({
+        execution: {
+          ...contained.execution,
+          executor_command_template: 'remote-launcher -- {command}',
+        },
+      })
+    ).toBe(false);
+    expect(
+      hasContainedClaudeRuntimeCredentials({
+        execution: {
+          ...contained.execution,
+          sandbox: {
+            ...contained.execution.sandbox,
+            extra_allow_write: ['/home/agor/.agor'],
+          },
+        },
+      })
+    ).toBe(false);
+  });
+});
 
 describe('hasTenantSafeExecutorCredentialHome', () => {
   it('allows an intentional shared identity only for static tenancy', () => {

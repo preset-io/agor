@@ -44,7 +44,7 @@ function makeClient(board: Board) {
         entries: [],
         others: { preset: 'none', capabilities: [], fs_access: 'none' },
       },
-      session_sharing: { owner_rules: [] },
+      allow_shared_session_prompts: false,
     },
   };
   return {
@@ -57,7 +57,14 @@ function makeClient(board: Board) {
         };
       }
       if (name === 'workspace-preferences') {
-        return { find: vi.fn().mockResolvedValue({ personal_session_sharing_enabled: false }) };
+        return { find: vi.fn().mockResolvedValue({ session_sharing_enabled: false }) };
+      }
+      if (name === 'boards/:id/effective-access') {
+        return {
+          find: vi.fn().mockResolvedValue({
+            capabilities: ['board.view', 'board.edit', 'board.attach_branch'],
+          }),
+        };
       }
       return { findAll: vi.fn().mockResolvedValue([]) };
     },

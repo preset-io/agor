@@ -33,6 +33,14 @@ import { agorStore } from '../../store/agorStore';
 import { mergeGoalIntegrationRecs } from '../../utils/onboardingGoals';
 import { OnboardingWizard } from './OnboardingWizard';
 
+const { TEST_BOARD_ID } = vi.hoisted(() => ({
+  TEST_BOARD_ID: '01933e4a-7b89-7c35-a8f3-9d2e1c4b5a6f',
+}));
+
+vi.mock('@agor/core/ids/browser', () => ({
+  generateId: () => TEST_BOARD_ID,
+}));
+
 vi.mock('../EmojiPickerInput/EmojiPickerInput', () => ({
   EmojiPickerInput: ({ value, onChange }: { value: string; onChange: (value: string) => void }) => (
     <button type="button" onClick={() => onChange(value)} aria-label="emoji picker">
@@ -79,7 +87,11 @@ function renderWizard(
   const effectiveUser = componentOverrides.user ?? makeUser();
 
   const boardsService = {
-    create: vi.fn(async () => ({ board_id: 'board-1', created_by: 'user-1' })),
+    create: vi.fn(async (data: Partial<Board>) => ({
+      ...data,
+      board_id: data.board_id,
+      created_by: 'user-1',
+    })),
     patch: vi.fn(async () => ({ board_id: 'board-1', created_by: 'user-1' })),
   };
   const usersService = {
@@ -293,7 +305,8 @@ describe('OnboardingWizard', () => {
             'dig-into-anything',
             'ship-without-busywork',
           ]),
-        })
+        }),
+        expect.objectContaining({ isCurrent: expect.any(Function) })
       )
     );
   });
@@ -313,7 +326,8 @@ describe('OnboardingWizard', () => {
       expect.objectContaining({
         goals: [],
         suggestedIntegrations: mergeGoalIntegrationRecs([]),
-      })
+      }),
+      expect.objectContaining({ isCurrent: expect.any(Function) })
     );
   });
 
@@ -349,7 +363,8 @@ describe('OnboardingWizard', () => {
         expect.objectContaining({
           goals: [],
           suggestedIntegrations: mergeGoalIntegrationRecs([]),
-        })
+        }),
+        expect.objectContaining({ isCurrent: expect.any(Function) })
       )
     );
   });
@@ -570,6 +585,7 @@ describe('OnboardingWizard', () => {
   });
 
   it('surfaces a board-creation failure at COMPLETION as an inline error on the final step', async () => {
+    const user = makeUser();
     const boardsService = {
       create: vi.fn(async () => {
         throw new Error('slug already exists');
@@ -577,7 +593,11 @@ describe('OnboardingWizard', () => {
     };
     const client = {
       io: { on: vi.fn(), off: vi.fn() },
-      service: vi.fn((name: string) => (name === 'boards' ? boardsService : {})),
+      service: vi.fn((name: string) => {
+        if (name === 'boards') return boardsService;
+        if (name === 'users') return { get: vi.fn(async () => user) };
+        return {};
+      }),
     };
 
     renderWizard({ initialStep: 'workspace', client: client as never });
@@ -593,6 +613,37 @@ describe('OnboardingWizard', () => {
     expect(screen.getByText('Rusty needs one more try.')).toBeInTheDocument();
   });
 
+  it('discovers a board committed before an ambiguous create response failed', async () => {
+    const user = makeUser();
+    const boardsService = {
+      create: vi.fn(async () => {
+        throw new Error('response disconnected');
+      }),
+      get: vi.fn(async (boardId: string) => ({ board_id: boardId, created_by: user.user_id })),
+    };
+    const usersService = { get: vi.fn(async () => user) };
+    const client = {
+      io: { on: vi.fn(), off: vi.fn() },
+      service: vi.fn((name: string) => {
+        if (name === 'boards') return boardsService;
+        if (name === 'users') return usersService;
+        return {};
+      }),
+    };
+    const onComplete = vi.fn();
+
+    renderWizard({ client: client as never, initialStep: 'done', onComplete });
+    clickButton(/open my board/i);
+
+    await waitFor(() => expect(onComplete).toHaveBeenCalledTimes(1));
+    expect(boardsService.create).toHaveBeenCalledTimes(1);
+    expect(boardsService.get).toHaveBeenCalledWith(TEST_BOARD_ID);
+    expect(onComplete).toHaveBeenCalledWith(
+      expect.objectContaining({ boardId: TEST_BOARD_ID }),
+      expect.objectContaining({ isCurrent: expect.any(Function) })
+    );
+  });
+
   it('does not persist progress or complete after an identity switch during the latest-user read', async () => {
     let current = true;
     let resolveUser!: (user: User) => void;
@@ -605,7 +656,7 @@ describe('OnboardingWizard', () => {
       ),
     };
     const boardsService = {
-      create: vi.fn(async () => ({ board_id: 'board-1', created_by: 'user-1' })),
+      create: vi.fn(async () => ({ board_id: TEST_BOARD_ID, created_by: 'user-1' })),
     };
     const client = {
       io: { on: vi.fn(), off: vi.fn() },
@@ -674,7 +725,7 @@ describe('OnboardingWizard', () => {
       ),
     };
     const boardsService = {
-      create: vi.fn(async () => ({ board_id: 'board-1', created_by: 'user-1' })),
+      create: vi.fn(async () => ({ board_id: TEST_BOARD_ID, created_by: 'user-1' })),
     };
     const client = {
       io: { on: vi.fn(), off: vi.fn() },
@@ -779,7 +830,8 @@ describe('OnboardingWizard', () => {
           sourceBranch: 'template/legal-analyst',
           sourceRemoteUrl: 'https://github.com/preset-io/agor-teammate.git',
           templateId: 'legal-analyst',
-        })
+        }),
+        expect.objectContaining({ isCurrent: expect.any(Function) })
       )
     );
   });
@@ -801,7 +853,8 @@ describe('OnboardingWizard', () => {
           teammateEmoji: '🤖',
           sourceBranch: undefined,
           templateId: null,
-        })
+        }),
+        expect.objectContaining({ isCurrent: expect.any(Function) })
       )
     );
   });
@@ -830,7 +883,11 @@ describe('OnboardingWizard', () => {
     clickButton(/meet rusty/i); // completion → create the brand-new board now
 
     await waitFor(() => {
-      expect(boardsService.create).toHaveBeenCalledWith({ name: 'Rusty', icon: '🤖' });
+      expect(boardsService.create).toHaveBeenCalledWith({
+        board_id: TEST_BOARD_ID,
+        name: 'Rusty',
+        icon: '🤖',
+      });
     });
   });
 
@@ -863,22 +920,25 @@ describe('OnboardingWizard', () => {
     // teammate on it. No template was picked → sourceBranch undefined. Board
     // creation precedes onComplete, so await it.
     await waitFor(() =>
-      expect(onComplete).toHaveBeenCalledWith({
-        branchId: '',
-        sessionId: '',
-        boardId: 'board-1',
-        path: 'teammate',
-        teammateName: 'Rusty',
-        teammateEmoji: '🤖',
-        sourceBranch: undefined,
-        sourceRemoteUrl: undefined,
-        templateId: null,
-        agent: 'claude-code',
-        // Goals were skipped → the default MCP suggestion set flows through, and
-        // the goals threaded to the completion handler are empty.
-        suggestedIntegrations: mergeGoalIntegrationRecs([]),
-        goals: [],
-      })
+      expect(onComplete).toHaveBeenCalledWith(
+        {
+          branchId: '',
+          sessionId: '',
+          boardId: TEST_BOARD_ID,
+          path: 'teammate',
+          teammateName: 'Rusty',
+          teammateEmoji: '🤖',
+          sourceBranch: undefined,
+          sourceRemoteUrl: undefined,
+          templateId: null,
+          agent: 'claude-code',
+          // Goals were skipped → the default MCP suggestion set flows through, and
+          // the goals threaded to the completion handler are empty.
+          suggestedIntegrations: mergeGoalIntegrationRecs([]),
+          goals: [],
+        },
+        expect.objectContaining({ isCurrent: expect.any(Function) })
+      )
     );
     // The teammate branch/session is created by the app shell on completion, not
     // by the wizard — the wizard itself never invokes these provisioning props.
@@ -971,20 +1031,23 @@ describe('OnboardingWizard', () => {
     // is emitted, so the app shell skips teammate creation. A board is still
     // always created (with a generic default name) so the user lands on one.
     await waitFor(() =>
-      expect(onComplete).toHaveBeenCalledWith({
-        branchId: '',
-        sessionId: '',
-        boardId: 'board-1',
-        path: 'teammate',
-        teammateName: undefined,
-        teammateEmoji: '🤖',
-        sourceBranch: undefined,
-        sourceRemoteUrl: undefined,
-        templateId: null,
-        agent: null,
-        suggestedIntegrations: mergeGoalIntegrationRecs([]),
-        goals: [],
-      })
+      expect(onComplete).toHaveBeenCalledWith(
+        {
+          branchId: '',
+          sessionId: '',
+          boardId: TEST_BOARD_ID,
+          path: 'teammate',
+          teammateName: undefined,
+          teammateEmoji: '🤖',
+          sourceBranch: undefined,
+          sourceRemoteUrl: undefined,
+          templateId: null,
+          agent: null,
+          suggestedIntegrations: mergeGoalIntegrationRecs([]),
+          goals: [],
+        },
+        expect.objectContaining({ isCurrent: expect.any(Function) })
+      )
     );
   });
 
@@ -1012,6 +1075,75 @@ describe('OnboardingWizard', () => {
     await waitFor(() => expect(onComplete).toHaveBeenCalledTimes(1));
   });
 
+  it('single-flights a double final click and creates/writes each resource once', async () => {
+    const onComplete = vi.fn(async () => undefined);
+    const { boardsService, usersService, props } = renderWizard({
+      onComplete,
+      initialStep: 'done',
+    });
+    const finalButton = screen.getByText(/open my board/i).closest('button')!;
+
+    // Same-turn duplicate delivery bypasses a React disabled-state-only guard.
+    fireEvent.click(finalButton);
+    fireEvent.click(finalButton);
+
+    await waitFor(() => expect(onComplete).toHaveBeenCalledTimes(1));
+    expect(boardsService.create).toHaveBeenCalledTimes(1);
+    expect(usersService.get).toHaveBeenCalledTimes(1);
+    expect(props.onUpdateUser).toHaveBeenCalledTimes(1);
+    expect(props.onUpdateUser.mock.invocationCallOrder[0]).toBeLessThan(
+      boardsService.create.mock.invocationCallOrder[0]
+    );
+  });
+
+  it('does not offer retry after the slow warning until provisioning settles', async () => {
+    let rejectFirst!: (error: Error) => void;
+    const firstCompletion = new Promise<void>((_resolve, reject) => {
+      rejectFirst = reject;
+    });
+    const onComplete = vi
+      .fn<NonNullable<ComponentProps<typeof OnboardingWizard>['onComplete']>>()
+      .mockReturnValueOnce(firstCompletion)
+      .mockResolvedValueOnce(undefined);
+    const { boardsService } = renderWizard({
+      onComplete,
+      initialStep: 'done',
+      completionSlowThresholdMs: 20,
+    });
+
+    clickButton(/open my board/i);
+    expect(await screen.findByText(/setup is taking longer than expected/i)).toBeVisible();
+    expect(onComplete).toHaveBeenCalledTimes(1);
+    expect(onComplete.mock.calls[0][1].isCurrent()).toBe(true);
+    expect(screen.queryByText(/^try again →$/i)).not.toBeInTheDocument();
+    expect(screen.getByText(/^still finishing…$/i).closest('button')).toBeDisabled();
+
+    rejectFirst(new Error('Provisioning eventually failed'));
+    expect(await screen.findByText('Provisioning eventually failed')).toBeVisible();
+
+    clickButton(/^try again →$/i);
+    await waitFor(() => expect(onComplete).toHaveBeenCalledTimes(2));
+    expect(boardsService.create).toHaveBeenCalledTimes(1);
+    expect(onComplete.mock.calls[1][1].isCurrent()).toBe(true);
+  });
+
+  it('persists the candidate id before create and retries a failed progress write without an orphan', async () => {
+    const onComplete = vi.fn(async () => undefined);
+    const { boardsService, props } = renderWizard({ onComplete, initialStep: 'done' });
+    props.onUpdateUser.mockRejectedValueOnce(new Error('Progress write failed'));
+
+    clickButton(/open my board/i);
+    expect(await screen.findByText('Progress write failed')).toBeInTheDocument();
+    expect(boardsService.create).not.toHaveBeenCalled();
+
+    clickButton(/^try again →$/i);
+    await waitFor(() => expect(onComplete).toHaveBeenCalledOnce());
+    expect(boardsService.create).toHaveBeenCalledOnce();
+    expect(boardsService.create).toHaveBeenCalledWith(
+      expect.objectContaining({ board_id: TEST_BOARD_ID })
+    );
+  });
+
   it('reuses the board when completion fails and the user retries', async () => {
     const onComplete = vi
       .fn<NonNullable<ComponentProps<typeof OnboardingWizard>['onComplete']>>()
@@ -1026,7 +1158,32 @@ describe('OnboardingWizard', () => {
     clickButton(/^try again →$/i);
     await waitFor(() => expect(onComplete).toHaveBeenCalledTimes(2));
     expect(boardsService.create).toHaveBeenCalledTimes(1);
-    expect(onComplete.mock.calls[1][0].boardId).toBe('board-1');
+    expect(onComplete.mock.calls[1][0].boardId).toBe(TEST_BOARD_ID);
+  });
+
+  it('reuses a persisted candidate after dismiss and remount before board creation', async () => {
+    const onComplete = vi.fn(async () => undefined);
+    const user = makeUser({
+      preferences: {
+        onboarding: {
+          boardId: TEST_BOARD_ID,
+          deferredAt: '2026-08-29T12:00:00.000Z',
+          teammateDisplayName: 'Rusty',
+          teammateEmoji: '⚖️',
+          teammateTemplateId: 'legal-analyst',
+        },
+      },
+    });
+    const { boardsService } = renderWizard({ onComplete, user });
+
+    expect(await screen.findByText('Rusty is ready.')).toBeInTheDocument();
+    clickButton(/meet rusty/i);
+
+    await waitFor(() => expect(onComplete).toHaveBeenCalledOnce());
+    expect(boardsService.create).toHaveBeenCalledOnce();
+    expect(boardsService.create).toHaveBeenCalledWith(
+      expect.objectContaining({ board_id: TEST_BOARD_ID })
+    );
   });
 
   it('resumes an incomplete setup from its saved, still-visible board', async () => {
@@ -1061,7 +1218,8 @@ describe('OnboardingWizard', () => {
         templateId: 'legal-analyst',
         sourceBranch: 'template/legal-analyst',
         sourceRemoteUrl: 'https://github.com/preset-io/agor-teammate.git',
-      })
+      }),
+      expect.objectContaining({ isCurrent: expect.any(Function) })
     );
   });
 
@@ -1115,7 +1273,8 @@ describe('OnboardingWizard', () => {
         templateId: 'blank',
         sourceBranch: undefined,
         sourceRemoteUrl: undefined,
-      })
+      }),
+      expect.objectContaining({ isCurrent: expect.any(Function) })
     );
   });
 
@@ -1154,17 +1313,40 @@ describe('OnboardingWizard', () => {
     );
   });
 
-  it('dismiss button calls onDismiss and is hidden on the final step', async () => {
+  it('lets the user dismiss with X or Escape, including from the final step', async () => {
     const onDismiss = vi.fn();
-    renderWizard({ onDismiss, initialStep: 'done' });
+    const final = renderWizard({ onDismiss, initialStep: 'done' });
 
-    expect(document.querySelector('button[aria-label="Close"]')).not.toBeInTheDocument();
-
-    renderWizard({ onDismiss, initialStep: 'goals' });
-    const closeButtons = document.querySelectorAll('button[aria-label="Close"]');
-    expect(closeButtons.length).toBeGreaterThan(0);
-    fireEvent.click(closeButtons[closeButtons.length - 1]);
+    const finalClose = document.querySelector('button[aria-label="Close"]');
+    expect(finalClose).toBeEnabled();
+    fireEvent.click(finalClose as HTMLButtonElement);
     expect(onDismiss).toHaveBeenCalledTimes(1);
+
+    final.unmount();
+    renderWizard({ onDismiss, initialStep: 'goals' });
+    fireEvent.keyDown(document, { key: 'Escape', code: 'Escape' });
+    await waitFor(() => expect(onDismiss).toHaveBeenCalledTimes(2));
+  });
+
+  it('lets the user dismiss a hung final provisioning attempt and retires it', async () => {
+    const onDismiss = vi.fn();
+    const onComplete = vi.fn(() => new Promise<void>(() => {})) as NonNullable<
+      ComponentProps<typeof OnboardingWizard>['onComplete']
+    >;
+    renderWizard({ onDismiss, onComplete, initialStep: 'done' });
+
+    clickButton(/open my board/i);
+    await waitFor(() => expect(onComplete).toHaveBeenCalledTimes(1));
+    const attempt = vi.mocked(onComplete).mock.calls[0][1];
+    const close = document.querySelector('button[aria-label="Close"]');
+    await waitFor(() => expect(close).toBeEnabled());
+
+    fireEvent.click(close as HTMLButtonElement);
+
+    expect(onDismiss).toHaveBeenCalledWith(
+      expect.objectContaining({ boardId: TEST_BOARD_ID, goals: [] })
+    );
+    expect(attempt.isCurrent()).toBe(false);
   });
 });
 
@@ -1172,7 +1354,7 @@ describe('Codex ChatGPT login import', () => {
   // Client harness whose codex-auth/import service is controllable per test.
   function renderWithCodexImport(create: ReturnType<typeof vi.fn>) {
     const boardsService = {
-      create: vi.fn(async () => ({ board_id: 'board-1', created_by: 'user-1' })),
+      create: vi.fn(async () => ({ board_id: TEST_BOARD_ID, created_by: 'user-1' })),
     };
     const client = {
       io: { on: vi.fn(), off: vi.fn() },

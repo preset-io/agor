@@ -12,7 +12,7 @@ import {
   UsersRepository,
 } from '@agor/core/db';
 import { Conflict, Forbidden, NotAuthenticated, NotFound } from '@agor/core/feathers';
-import { assertValidDiscoveredMCPCapabilities } from '@agor/core/mcp';
+import { normalizeDiscoveredMCPCapabilities } from '@agor/core/mcp';
 import { isAtLeastMemberRole, mayMemberUseMCPTransport } from '@agor/core/mcp/member-policy';
 import type {
   MCPAuth,
@@ -233,11 +233,11 @@ export async function persistDiscoveredMCPCapabilities(
   snapshot: MCPDiscoveryAuthoritySnapshot,
   capabilities: DiscoveredMCPCapabilities,
   masterSecret: string
-): Promise<void> {
+): Promise<{ capabilities: DiscoveredMCPCapabilities; truncatedDescriptions: number }> {
   // Provider discovery output is untrusted input. Bound and close it before
   // any durable work so an oversized or extension-bearing response cannot be
   // persisted and later bypass API redaction/export assumptions.
-  assertValidDiscoveredMCPCapabilities(capabilities);
+  const normalized = normalizeDiscoveredMCPCapabilities(capabilities);
   assertTenantDiscoveryScope(db, true);
   if (tenantId) await assertTenantWritable(db, tenantId);
 
@@ -322,9 +322,10 @@ export async function persistDiscoveredMCPCapabilities(
   if (
     !(await repository.setDiscoveredCapabilitiesInCurrentTransaction(
       snapshot.serverId,
-      capabilities
+      normalized.capabilities
     ))
   ) {
     throw new NotFound('MCP server not found');
   }
+  return normalized;
 }

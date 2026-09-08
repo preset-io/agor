@@ -1,4 +1,8 @@
 agentic_tools:
+  # This disposable validation stack deliberately opts into native Claude
+  # subscription OAuth. Production remains default-off unless an operator
+  # makes the same explicit release decision.
+  claude_subscription_oauth: true
   # Headless/container deployments must declare their managed integrations.
   # The Compose preparation job reconciles this exact list before either
   # daemon starts, into the shared /home/agor/.agor volume.
@@ -32,6 +36,16 @@ execution:
     user_home: persistent-per-user
     # Docker's same-host named volume propagates kernel flock between these
     # replicas. Multi-host operators must verify this for their storage.
+    #
+    # If execution.sandbox.sdk_home_mode is set to per_branch, the tenant data
+    # root's branch-homes/<branch-id>/ tree needs this SAME shared-storage +
+    # cross-replica-flock guarantee: a branch-scoped Session dispatched to
+    # either replica must see what the other wrote. Local Codex subscription
+    # auth remains caller-scoped: the dispatching replica pins that caller's
+    # persistent auth.json and overlays it only in that executor's sandbox.
+    # There is no separate executor_storage key for branch homes — keep them on
+    # the same backing store as the nested Agor volume, at the same absolute
+    # path on both replicas. (Left at the inherit default here.)
     user_home_locking: cross-replica-flock
     branch_workspace: shared
     base_repository: shared
@@ -43,9 +57,15 @@ execution:
     allowed_modes:
       - clone
   # The checked-in HA smoke must exercise the same exact-user credential route
-  # it advertises. Sandbox mode forces branch RBAC, per-user home overlays, and
+  # it advertises. Sandbox mode adds per-user home overlays and
   # fail-closed bubblewrap isolation; it does not impersonate host accounts.
   unix_user_mode: sandbox
+  sandbox:
+    # These explicit values are also the concrete Claude runtime credential
+    # containment predicate: bubblewrap makes the real .claude parent an
+    # immutable mountpoint and masks the credential plus both authority sidecars.
+    enabled: true
+    home_mode: per_user
   # PTY transport is replica-local and ephemeral. Sticky Socket.IO keeps the
   # create/control connection on its owner; owner loss is a visible disconnect
   # and reconnect creates a new attachment (possibly reattaching local Zellij).

@@ -106,6 +106,25 @@ describe('UsersRepository execution home key validation', () => {
   });
 });
 
+describe('UsersRepository.getFilesystemHomeProjection', () => {
+  dbTest('returns only the nonsecret filesystem-home authority fields', async ({ db }) => {
+    const repo = new UsersRepository(db);
+    const user = await repo.create({
+      email: `filesystem-home-${Date.now()}-${Math.random()}@example.com`,
+      filesystem_home: '/home/filesystem-owner',
+    });
+    await repo.setToolConfigField(user.user_id, 'codex', 'OPENAI_API_KEY', 'encrypted-secret');
+
+    await expect(repo.getFilesystemHomeProjection(user.user_id)).resolves.toEqual({
+      user_id: user.user_id,
+      filesystem_home: '/home/filesystem-owner',
+    });
+    await expect(
+      repo.getFilesystemHomeProjection('00000000-0000-0000-0000-000000000000')
+    ).resolves.toBeNull();
+  });
+});
+
 describe('UsersRepository.findByEmailForAlignment', () => {
   dbTest('matches external-provider emails case-insensitively', async ({ db }) => {
     const repo = new UsersRepository(db);

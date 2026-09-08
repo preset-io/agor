@@ -6,6 +6,7 @@ import {
   type CodexDeviceAuthAttemptRecord,
   CodexDeviceAuthAttemptRepository,
   generateId,
+  getCurrentTenantDatabaseScope,
   openBoundSecret,
   runWithSystemDatabaseScope,
   runWithTenantDatabaseScope,
@@ -115,11 +116,15 @@ export class CodexDeviceAuthAttemptAuthority {
     userId: UserID;
     delegatedHomeKey: string | null;
     codexHome?: string;
+    validateRoute?: () => Promise<boolean>;
   }): Promise<ReservedCodexDeviceAttempt> {
     const attemptId = generateId() as CodexDeviceAuthAttemptID;
     return runWithTenantDatabaseScope(this.db, input.tenantId, async (scoped) => {
       const repository = new CodexDeviceAuthAttemptRepository(scoped);
       const attemptGeneration = await repository.allocateGeneration(input.tenantId, input.userId);
+      if (input.validateRoute && !(await input.validateRoute())) {
+        throw new Error('Credential route changed before sign-in reservation');
+      }
       const material: CodexDeviceAuthSealedMaterial = {
         version: 1,
         tenantId: input.tenantId,
@@ -307,10 +312,13 @@ export class CodexDeviceAuthAttemptAuthority {
     tenantId: string,
     userId: UserID,
     reason: 'credentials_imported' | 'credentials_removed',
-    work: (authorityGeneration: number) => Promise<T>
+    work: (authorityGeneration?: number) => Promise<T>,
+    preflight?: () => Promise<void>
   ): Promise<T> {
     const outcome = await runWithTenantDatabaseScope(this.db, tenantId, async (scoped) => {
       const repository = new CodexDeviceAuthAttemptRepository(scoped);
+      await repository.lockUser(tenantId, userId);
+      await preflight?.();
       const authorityGeneration = await repository.allocateGeneration(tenantId, userId);
       await repository.invalidateForUser(tenantId, userId, 'superseded', reason);
       try {
@@ -323,6 +331,23 @@ export class CodexDeviceAuthAttemptAuthority {
     });
     if (!outcome.ok) throw outcome.error;
     return outcome.value;
+  }
+
+  /** Complete an already shared-locked users-service route/removal mutation. */
+  async completeExternalUserRouteMutation(
+    tenantId: string,
+    userId: UserID,
+    work: (authorityGeneration?: number) => Promise<void>,
+    reason: 'execution_home_changed' | 'user_removed'
+  ): Promise<void> {
+    const scope = getCurrentTenantDatabaseScope();
+    if (scope?.kind !== 'tenant' || !scope.transactionActive || scope.tenantId !== tenantId) {
+      throw new Error('Codex credential user mutation requires its tenant transaction');
+    }
+    const repository = new CodexDeviceAuthAttemptRepository(scope.db);
+    const authorityGeneration = await repository.allocateGeneration(tenantId, userId);
+    await repository.invalidateForUser(tenantId, userId, 'superseded', reason);
+    await work(authorityGeneration);
   }
 
   async maintain() {

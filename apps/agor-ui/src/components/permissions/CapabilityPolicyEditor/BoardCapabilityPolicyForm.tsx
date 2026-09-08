@@ -17,8 +17,7 @@ interface BoardCapabilityPolicyFormProps {
   principals: CapabilityPolicyPrincipalDescriptor[];
   subjects: EffectiveAccessSubject[];
   sampleBranchOwnerUserId: UserID;
-  currentUserId: UserID;
-  personalSessionSharingWorkspaceEnabled?: boolean;
+  sessionSharingWorkspaceEnabled?: boolean;
   canManageAccess?: boolean;
 }
 
@@ -38,8 +37,7 @@ export const BoardCapabilityPolicyForm: React.FC<BoardCapabilityPolicyFormProps>
   principals,
   subjects,
   sampleBranchOwnerUserId,
-  currentUserId,
-  personalSessionSharingWorkspaceEnabled = true,
+  sessionSharingWorkspaceEnabled = true,
   canManageAccess = true,
 }) => {
   const { token } = theme.useToken();
@@ -94,12 +92,11 @@ export const BoardCapabilityPolicyForm: React.FC<BoardCapabilityPolicyFormProps>
                   onChange({ ...value, branch_template: branchTemplate })
                 }
                 primaryOwnerUserId={sampleBranchOwnerUserId}
-                currentUserId={currentUserId}
                 principals={principals}
                 subjects={subjects}
                 sharingScope="board_defaults"
-                personalSessionSharingWorkspaceEnabled={personalSessionSharingWorkspaceEnabled}
-                accessReadOnly={!canManageAccess}
+                sessionSharingWorkspaceEnabled={sessionSharingWorkspaceEnabled}
+                readOnly={!canManageAccess}
               />
             ),
           },

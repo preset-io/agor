@@ -1,0 +1,61 @@
+# Hosted MCP catalog drift audit.
+#
+# Pull requests run only when curation/audit policy changes. Endpoint outages
+# remain advisory, while deterministic auth contradictions and unusable OAuth
+# contracts fail where a curator can fix them. The daily run applies the same
+# gate so actionable vendor drift produces normal workflow failure alerts.
+name: MCP catalog health
+
+on:
+  schedule:
+    - cron: '17 6 * * *'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'packages/core/src/mcp-catalog/**'
+      - 'packages/core/src/tools/mcp/oauth-mcp-transport.ts'
+      - 'packages/core/src/tools/mcp/oauth-mcp-transport.test.ts'
+      - 'scripts/audit-mcp-catalog.mts'
+      - 'scripts/tsconfig.mcp-catalog-audit.json'
+      - 'package.json'
+      - '.github/workflows/mcp-catalog-health.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mcp-catalog-health-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  PNPM_VERSION: '11.17.0'
+  NODE_VERSION: '22'
+
+jobs:
+  audit:
+    name: Curation, reachability, and OAuth metadata
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: pnpm/action-setup@v6
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Typecheck audit entry point
+        run: pnpm typecheck:mcp-catalog-audit
+
+      - name: Deterministic catalog and auth-policy regressions
+        run: pnpm --filter @agor/core exec vitest run src/mcp-catalog src/tools/mcp/oauth-mcp-transport.test.ts
+
+      - name: Live hosted-endpoint audit
+        run: pnpm audit:mcp-catalog -- --github-annotations --summary-file "$GITHUB_STEP_SUMMARY"

@@ -20,6 +20,8 @@
     "docs:dev": "pnpm --filter @agor/docs dev",
     "docs:build": "pnpm --filter @agor/docs build",
     "docs:generate": "pnpm --filter @agor/docs generate",
+    "audit:mcp-catalog": "NODE_OPTIONS=--conditions=source tsx scripts/audit-mcp-catalog.mts",
+    "typecheck:mcp-catalog-audit": "tsc -p scripts/tsconfig.mcp-catalog-audit.json",
     "lint": "biome check --diagnostic-level=warn --error-on-warnings . && node scripts/test-frontend-color-plugins.mjs",
     "lint:fix": "biome check --write .",
     "format": "prettier --write .",
@@ -49,7 +51,7 @@
     "test:daemon-filesystem-boundaries": "node --test scripts/check-daemon-filesystem-boundaries.test.mjs",
     "test:sandbox-migration": "node --test scripts/strict-to-sandbox-migration.test.mjs",
     "check:agentic-tool-packages": "node scripts/check-agentic-tool-packages.mjs",
-    "test:ha:docker": "node --test docker/ha/dev-launcher.test.mjs && node scripts/test-daemon-ha.mjs"
+    "test:ha:docker": "node --test docker/ha/dev-launcher.test.mjs && node scripts/test-daemon-ha.mjs && node scripts/test-ha-mcp-branch-create.mjs"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.7",
@@ -64,7 +66,8 @@
     "socket.io-client": "^4.8.3",
     "tsx": "4.23.11",
     "turbo": "^2.10.9",
-    "typescript": "^6.0.3"
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.10"
   },
   "packageManager": "pnpm@11.17.0",
   "engines": {

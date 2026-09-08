@@ -11,10 +11,13 @@
 
 import { TOOL_API_KEY_NAMES } from '@agor/agentic-tools';
 import { getAgenticToolUIIntegration } from '@agor/agentic-tools/ui';
+import { generateId } from '@agor/core/ids/browser';
 import type {
   AgenticToolName,
   AgorClient,
   AuthCheckResult,
+  Board,
+  OnboardingState,
   UpdateUserInput,
   User,
   UserPreferences,
@@ -350,13 +353,21 @@ export interface OnboardingCompletionResult {
   // loading state until it resolves, so the modal covers the whole operation.
 }
 
+export interface OnboardingCompletionAttempt {
+  /** False after dismissal, remount, rejection retirement, or authenticated-owner replacement. */
+  isCurrent: () => boolean;
+}
+
 export interface OnboardingWizardProps {
   open: boolean;
   /** Synchronous owner fence for every async continuation in this wizard instance. */
   isCurrent?: () => boolean;
-  onComplete: (result: OnboardingCompletionResult) => void | Promise<void>;
+  onComplete: (
+    result: OnboardingCompletionResult,
+    attempt: OnboardingCompletionAttempt
+  ) => void | Promise<void>;
   /** Called when the user dismisses the wizard without completing it. */
-  onDismiss?: () => void;
+  onDismiss?: (progress: Partial<OnboardingState>) => void;
 
   user?: User | null;
   client: AgorClient | null;
@@ -367,9 +378,25 @@ export interface OnboardingWizardProps {
 
   /** Re-open wizard starting at a specific step (used by tests / future callers). */
   initialStep?: WizardStep;
+  /** Override only for deterministic slow-operation tests. */
+  completionSlowThresholdMs?: number;
 }
 
 const ALWAYS_CURRENT = () => true;
+export const ONBOARDING_COMPLETION_SLOW_THRESHOLD_MS = 45_000;
+
+async function observeSlowCompletion<T>(
+  promise: Promise<T>,
+  thresholdMs: number,
+  onSlow: () => void
+): Promise<T> {
+  const timer = window.setTimeout(onSlow, thresholdMs);
+  try {
+    return await promise;
+  } finally {
+    window.clearTimeout(timer);
+  }
+}
 
 // ─── Static glass layer (non-token values intentionally kept) ─────────────────
 
@@ -407,6 +434,7 @@ export function OnboardingWizard({
   onUpdateUser,
   onCheckAuth,
   initialStep,
+  completionSlowThresholdMs = ONBOARDING_COMPLETION_SLOW_THRESHOLD_MS,
 }: OnboardingWizardProps) {
   const { token } = useToken();
   const savedOnboarding = user?.preferences?.onboarding;
@@ -469,11 +497,15 @@ export function OnboardingWizard({
   // leaves no orphan board. Errors from that final creation surface on step 4.
   const [boardError, setBoardError] = useState<string | null>(null);
   const [createdBoardId, setCreatedBoardId] = useState<string | null>(null);
+  const boardCreationConfirmedRef = useRef(false);
 
   // ── Step 4: completion ────────────────────────────────────────────────────
   // True while the async onComplete (teammate creation + navigation) runs, so
   // the final step shows a spinner + copy instead of vanishing the modal.
   const [completing, setCompleting] = useState(false);
+  const [completionSlow, setCompletionSlow] = useState(false);
+  const completionInFlightRef = useRef(false);
+  const completionAttemptGenerationRef = useRef(0);
 
   // ── Reset on open ────────────────────────────────────────────────────────
   // Reset wizard state when modal opens. Clears all local state so re-opens are
@@ -495,7 +527,11 @@ export function OnboardingWizard({
     setInvalidSavedTemplateId(null);
     setBoardError(null);
     setCreatedBoardId(null);
+    boardCreationConfirmedRef.current = false;
     setCompleting(false);
+    setCompletionSlow(false);
+    completionInFlightRef.current = false;
+    completionAttemptGenerationRef.current += 1;
     // Force seed effect to re-run on every open for the same user
     userSeedRef.current = null;
     authCheckInFlightRef.current.clear();
@@ -512,7 +548,7 @@ export function OnboardingWizard({
       userSeedRef.current = null;
       return;
     }
-    const seedKey = `${user?.user_id ?? '__no_user__'}:${savedBoard?.board_id ?? ''}`;
+    const seedKey = `${user?.user_id ?? '__no_user__'}:${savedBoardId ?? ''}`;
     if (userSeedRef.current === seedKey) return;
     userSeedRef.current = seedKey;
     // Pre-select LLM if user already has one configured
@@ -538,20 +574,21 @@ export function OnboardingWizard({
     } else {
       setSelectedAgent(null);
     }
-    if (savedBoard) {
+    if (savedBoardId) {
       setSelectedGoals(savedOnboarding?.goals ?? []);
       setTeammateName(savedOnboarding?.teammateDisplayName ?? '');
-      setTeammateEmoji(savedOnboarding?.teammateEmoji ?? savedBoard.icon ?? '🤖');
+      setTeammateEmoji(savedOnboarding?.teammateEmoji ?? savedBoard?.icon ?? '🤖');
       const savedTemplateId = savedOnboarding?.teammateTemplateId;
       const savedTemplate = getTeammateTemplate(savedTemplateId);
       setSelectedTemplateId(savedTemplate?.id ?? null);
       setInvalidSavedTemplateId(savedTemplateId && !savedTemplate ? savedTemplateId : null);
-      setCreatedBoardId(savedBoard.board_id);
+      setCreatedBoardId(savedBoardId);
+      boardCreationConfirmedRef.current = !!savedBoard;
       if (!initialStep) setCurrentStep('done');
     } else {
       setTeammateName('');
     }
-  }, [open, user, savedBoard, savedOnboarding, initialStep]);
+  }, [open, user, savedBoard, savedBoardId, savedOnboarding, initialStep]);
 
   // ─── Derived values ──────────────────────────────────────────────────────
 
@@ -742,7 +779,7 @@ export function OnboardingWizard({
         return 'Continue →';
       case 'done': {
         const name = teammateName.trim();
-        if (completing) return 'Setting up…';
+        if (completing) return completionSlow ? 'Still finishing…' : 'Setting up…';
         if (completionError) return 'Try again →';
         // Verb-first primary action into the activation moment — the teammate's
         // first session — named when we have a name, generic board-open otherwise.
@@ -752,6 +789,7 @@ export function OnboardingWizard({
   }, [
     currentStep,
     completing,
+    completionSlow,
     selectedAgent,
     agentHasKey,
     llmAuthVerified,
@@ -838,6 +876,21 @@ export function OnboardingWizard({
     }
     goToStep(STEPS[stepIndex + 1]);
   }, [currentStep, stepIndex, goToStep, selectedAgent, agentHasKey]);
+
+  const handleDismiss = useCallback(() => {
+    if (!onDismiss) return;
+    // Invalidate a provisioning continuation synchronously before the parent
+    // closes the surface. App combines this fence with its authenticated owner.
+    completionAttemptGenerationRef.current += 1;
+    const name = teammateName.trim();
+    onDismiss({
+      ...(createdBoardId ? { boardId: createdBoardId } : {}),
+      goals: selectedGoals,
+      teammateDisplayName: name || undefined,
+      teammateEmoji: name ? teammateEmoji : undefined,
+      teammateTemplateId: name ? (selectedTemplateId ?? undefined) : undefined,
+    });
+  }, [createdBoardId, onDismiss, selectedGoals, selectedTemplateId, teammateEmoji, teammateName]);
 
   const handlePrimary = useCallback(async () => {
     if (!isCurrent()) return;
@@ -931,6 +984,17 @@ export function OnboardingWizard({
       }
       case 'done': {
         if (invalidSavedTemplateId) return;
+        // React state does not update quickly enough to guard two native click
+        // events delivered in the same turn. The ref is the authoritative
+        // single-flight gate for board creation and completion.
+        if (completionInFlightRef.current) return;
+        completionInFlightRef.current = true;
+        completionAttemptGenerationRef.current += 1;
+        const attemptGeneration = completionAttemptGenerationRef.current;
+        const completionAttempt: OnboardingCompletionAttempt = {
+          isCurrent: () =>
+            isCurrent() && completionAttemptGenerationRef.current === attemptGeneration,
+        };
         const name = teammateName.trim();
         // Merged MCP integrations for the chosen goals, threaded into the
         // teammate's bootstrap prompt. The in-wizard MCP step was removed, but
@@ -939,30 +1003,20 @@ export function OnboardingWizard({
         // Keep the modal up in a loading state until creation + navigation
         // finish (onComplete may run async), then it closes from the parent.
         setCompleting(true);
+        setCompletionSlow(false);
         setBoardError(null);
         try {
           if (!isCurrent()) return;
           if (!client) throw new Error('Not connected - try again when Agor reconnects.');
 
-          // This is a small resumable saga: retain the board id before any later
-          // preference/teammate work. A retry in this mounted wizard or a reload
-          // (via the progress preferences below) reuses the durable board rather
-          // than issuing another create.
+          // This is a small resumable saga. Persist the client-generated id
+          // BEFORE issuing create: a reload after a committed response was lost
+          // must discover the same board instead of allocating another id.
           let boardId = createdBoardId ?? '';
           if (!boardId) {
-            const board = await client.service('boards').create({
-              name: name || (user?.name ? `${user.name}'s board` : 'My board'),
-              icon: teammateEmoji,
-            });
-            if (!isCurrent()) return;
-            boardId = board?.board_id ?? '';
-            if (!boardId) {
-              setBoardError('Board was created but returned no ID - try again.');
-              return;
-            }
+            boardId = generateId();
             setCreatedBoardId(boardId);
           }
-          if (!isCurrent()) return;
           const progressSaved = await saveOnboardingProgress({
             path: 'teammate',
             boardId,
@@ -971,30 +1025,80 @@ export function OnboardingWizard({
             teammateEmoji: name ? teammateEmoji : undefined,
             teammateTemplateId: name ? (selectedTemplateId ?? undefined) : undefined,
           });
-          if (!progressSaved || !isCurrent()) return;
-          await onComplete({
-            branchId: '',
-            sessionId: '',
-            boardId,
-            path: 'teammate',
-            // Naming details for the first AI teammate, seeded on completion.
-            teammateName: name || undefined,
-            teammateEmoji,
-            // Framework source branch from the chosen gallery template; undefined
-            // (blank / no pick) falls back to the repo default branch.
-            sourceBranch: resolveTemplateSourceBranch(selectedTemplateId),
-            sourceRemoteUrl: resolveTemplateSourceRemoteUrl(selectedTemplateId),
-            templateId: selectedTemplateId,
-            agent: selectedAgent,
-            suggestedIntegrations,
-            goals: selectedGoals,
-          });
+          if (!progressSaved || !completionAttempt.isCurrent()) return;
+          if (!boardCreationConfirmedRef.current) {
+            let board: Board | undefined;
+            try {
+              board = await client.service('boards').create({
+                board_id: boardId,
+                name: name || (user?.name ? `${user.name}'s board` : 'My board'),
+                icon: teammateEmoji,
+              });
+            } catch (createError) {
+              // The response can fail after the server committed. Resolve the
+              // client-generated ID before offering retry, so an ambiguous
+              // transport failure cannot create a second board.
+              try {
+                board = await client.service('boards').get(boardId);
+              } catch {
+                throw createError;
+              }
+            }
+            if (!isCurrent()) return;
+            if (board?.board_id !== boardId) {
+              setBoardError('Board creation returned an unexpected ID - try again.');
+              return;
+            }
+            boardCreationConfirmedRef.current = true;
+          }
+          if (!isCurrent()) return;
+          await observeSlowCompletion(
+            Promise.resolve(
+              onComplete(
+                {
+                  branchId: '',
+                  sessionId: '',
+                  boardId,
+                  path: 'teammate',
+                  // Naming details for the first AI teammate, seeded on completion.
+                  teammateName: name || undefined,
+                  teammateEmoji,
+                  // Framework source branch from the chosen gallery template; undefined
+                  // (blank / no pick) falls back to the repo default branch.
+                  sourceBranch: resolveTemplateSourceBranch(selectedTemplateId),
+                  sourceRemoteUrl: resolveTemplateSourceRemoteUrl(selectedTemplateId),
+                  templateId: selectedTemplateId,
+                  agent: selectedAgent,
+                  suggestedIntegrations,
+                  goals: selectedGoals,
+                },
+                completionAttempt
+              )
+            ),
+            completionSlowThresholdMs,
+            () => {
+              // A slow-operation warning cannot cancel already-issued daemon
+              // writes. Keep this attempt single-flight until it really settles;
+              // X and Escape remain available if the user wants to finish later.
+              if (completionAttempt.isCurrent()) setCompletionSlow(true);
+            }
+          );
         } catch (err) {
+          if (completionAttemptGenerationRef.current === attemptGeneration) {
+            // A rejection retires this attempt before retry becomes available,
+            // so a stale continuation cannot commit or navigate.
+            completionAttemptGenerationRef.current += 1;
+          }
           if (isCurrent()) {
+            setCompletionSlow(false);
             setBoardError(err instanceof Error ? err.message : 'Failed to finish setup');
           }
         } finally {
-          if (isCurrent()) setCompleting(false);
+          completionInFlightRef.current = false;
+          if (isCurrent()) {
+            setCompleting(false);
+            setCompletionSlow(false);
+          }
         }
         break;
       }
@@ -1020,6 +1124,7 @@ export function OnboardingWizard({
     createdBoardId,
     saveOnboardingProgress,
     onComplete,
+    completionSlowThresholdMs,
     goToStep,
   ]);
 
@@ -1777,7 +1882,16 @@ export function OnboardingWizard({
           {subline}
         </Paragraph>
 
-        {completionError && (
+        {completionSlow && (
+          <Alert
+            type="warning"
+            title="Setup is taking longer than expected. It is still finishing; you can close and finish later."
+            showIcon
+            style={{ marginTop: 18, textAlign: 'left' }}
+          />
+        )}
+
+        {completionError && !completionSlow && (
           <Alert
             type="error"
             title={completionError}
@@ -1864,7 +1978,7 @@ export function OnboardingWizard({
         mask={{ closable: false }}
         keyboard={Boolean(onDismiss)}
         onCancel={() => {
-          if (onDismiss && !completing && currentStep !== 'done') onDismiss();
+          handleDismiss();
         }}
         footer={null}
         // Widened from 600 → 730 so step-2's gallery fits 3 cards per row while
@@ -1895,14 +2009,13 @@ export function OnboardingWizard({
         <div style={{ position: 'relative' }}>
           <GlassPanelHighlights intensity="strong" animated={open} />
 
-          {/* Dismiss button — only shown when onDismiss is provided and not on the final step */}
-          {onDismiss && currentStep !== 'done' && (
+          {/* Dismiss/defer is available on every step, including completion errors. */}
+          {onDismiss && (
             <Button
               type="text"
               size="small"
               aria-label="Close"
-              onClick={onDismiss}
-              disabled={completing}
+              onClick={handleDismiss}
               icon={<CloseOutlined style={{ fontSize: 12 }} />}
               style={{
                 position: 'absolute',

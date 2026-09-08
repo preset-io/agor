@@ -241,6 +241,51 @@ describe('polling', () => {
     );
     expect(decodeURIComponent(searchUrl)).not.toContain('comment:agorithm');
   });
+
+  it('processes a mention that appears in search after its timestamp watermark passed', async () => {
+    const delayedCommentTime = new Date(Date.now() - 1_000).toISOString();
+    let searchCalls = 0;
+    const fetchMock = vi.fn(async (url: string | URL, init?: RequestInit) => {
+      const value = String(url);
+      if (value.endsWith('/member')) return json({ id: 'agent-1' });
+      if (value.endsWith('/members/agent-1')) {
+        return json({ id: 'agent-1', profile: { mention_name: 'agorithm' } });
+      }
+      if (value.includes('/search/stories')) {
+        searchCalls += 1;
+        return json({ data: searchCalls === 1 ? [] : [{ id: 1 }], next: null });
+      }
+      if (init?.method === 'POST') return json({ id: 900 }, 201);
+      return json({
+        id: 1,
+        comments: [
+          {
+            id: 10,
+            author_id: 'author-1',
+            text: '@agorithm help',
+            member_mention_ids: ['agent-1'],
+            created_at: delayedCommentTime,
+          },
+        ],
+      });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const connector = new ShortcutConnector({ api_token: 'tok' });
+    const callback = vi.fn();
+    try {
+      // Shortcut search is eventually consistent: the first poll misses the
+      // story, then the next poll returns its already-older comment.
+      await connector.startListening(callback);
+      await connector.stopListening();
+      await connector.startListening(callback);
+    } finally {
+      await connector.stopListening();
+    }
+
+    expect(callback).toHaveBeenCalledOnce();
+    expect(callback.mock.calls[0]?.[0].metadata.shortcut_story_id).toBe(1);
+  });
 });
 
 describe('sendMessage', () => {

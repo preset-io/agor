@@ -1,5 +1,13 @@
 import type { User } from '@agor-live/client';
 
+function timestamp(value: unknown): number {
+  return value instanceof Date
+    ? value.getTime()
+    : typeof value === 'string'
+      ? Date.parse(value)
+      : NaN;
+}
+
 /**
  * Enrich the freshly authenticated user with directory display data without
  * allowing an older directory snapshot to become authorization authority.
@@ -16,6 +24,12 @@ export function enrichAuthenticatedUser(
   if (!authenticated) return null;
   if (!directory || directory.user_id !== authenticated.user_id) return authenticated;
 
+  // A post-save authentication read must not be overwritten by an older
+  // directory echo (e.g. bringing back a just-cleared API-key presence flag).
+  // Missing/invalid timestamps retain the existing enrichment behavior.
+  // This selects display data only; directory rows never confer authority.
+  if (timestamp(directory.updated_at) < timestamp(authenticated.updated_at)) return authenticated;
+
   return {
     ...authenticated,
     ...directory,
@@ -30,4 +44,18 @@ export function enrichAuthenticatedUser(
     unix_username: authenticated.unix_username,
     filesystem_home: authenticated.filesystem_home,
   };
+}
+
+/**
+ * Close-only onboarding signal. Authentication remains authoritative for
+ * opening/login gates, while a same-user directory `true` may only make the
+ * state more terminal (for example when another tab completes onboarding).
+ */
+export function hasObservedOnboardingCompletion(
+  authenticated: User | null | undefined,
+  directory: User | null | undefined
+): boolean {
+  if (!authenticated) return false;
+  if (authenticated.onboarding_completed === true) return true;
+  return directory?.user_id === authenticated.user_id && directory.onboarding_completed === true;
 }

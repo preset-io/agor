@@ -15,8 +15,8 @@
  * environment variables (populated by createUserProcessEnvironment when spawning).
  *
  * The repository layer filters both global rows and session assignments by the
- * current prompt actor. A shared prompt keeps the session owner's home, but it
- * must never silently borrow the owner's Agor-managed connectors or credentials.
+ * current prompt actor. A shared prompt must never silently borrow the Session
+ * owner's Agor-managed connectors or credentials.
  */
 
 import { resolveMCPAuthHeaders } from '../tools/mcp/jwt-auth';

@@ -189,12 +189,6 @@ function buildApp(
         const query = findParams?.query ?? {};
         let rows = serverStore.filter((server) => {
           if (query.scope && server.scope !== query.scope) return false;
-          // MCPServerRepository only has a materialized scope foreign key for
-          // global rows. Session scope is represented by the attachment table,
-          // so scopeId deliberately adds no condition for every other scope.
-          if (query.scopeId && query.scope === 'global' && server.owner_user_id !== query.scopeId) {
-            return false;
-          }
           if (query.transport && server.transport !== query.transport) return false;
           if (query.enabled !== undefined && server.enabled !== query.enabled) return false;
           if (query.source && server.source !== query.source) return false;
@@ -484,28 +478,6 @@ const attachOf = (app: { service: (p: string) => unknown }) =>
 const services = serversOf;
 
 describe('stateful mcp-servers.find harness', () => {
-  it('maps global scopeId to owner_user_id and ignores scopeId for other scopes', async () => {
-    const aliceGlobal = installOf({ mcp_server_id: 'alice-global', scope: 'global' });
-    const ownerlessGlobal = installOf({
-      mcp_server_id: 'ownerless-global',
-      scope: 'global',
-      owner_user_id: undefined,
-    });
-    const session = installOf({
-      mcp_server_id: 'session-row',
-      scope: 'session',
-      owner_user_id: undefined,
-    });
-    const { app } = buildApp(CURATED, [aliceGlobal, ownerlessGlobal, session]);
-
-    await expect(
-      serversOf(app).find({ query: { scope: 'global', scopeId: ALICE } })
-    ).resolves.toMatchObject({ data: [{ mcp_server_id: 'alice-global' }] });
-    await expect(
-      serversOf(app).find({ query: { scope: 'session', scopeId: 'session-attachment-id' } })
-    ).resolves.toMatchObject({ data: [{ mcp_server_id: 'session-row' }] });
-  });
-
   it('does not apply an owner filter for ownerless:false', async () => {
     const owned = installOf({ mcp_server_id: 'owned' });
     const ownerless = installOf({ mcp_server_id: 'ownerless', owner_user_id: undefined });
@@ -525,6 +497,24 @@ describe('mcp-catalog/connect', () => {
     // the baseline and each refusal test overrides it.
     probeRemoteAuthType.mockResolvedValue('none');
   });
+
+  it.each(['000000000000700080000000', 'not-a-user-id'])(
+    'rejects non-canonical authenticated identity %s instead of resolving it',
+    async (userId) => {
+      const { app, created, deps, generationClaims } = buildApp(CURATED);
+      const invalidParams = {
+        ...params,
+        user: { ...params.user, user_id: userId },
+      } as AuthenticatedParams;
+
+      await expect(
+        createMCPCatalogConnectService(app, deps).create(request, invalidParams)
+      ).rejects.toThrow(/canonical full UUID/);
+      expect(deps.listCandidates).not.toHaveBeenCalled();
+      expect(generationClaims).toEqual([]);
+      expect(created.mcpServers).toEqual([]);
+    }
+  );
 
   it('derives the whole server config from the catalog entry', async () => {
     const { app, created, deps } = buildApp(CURATED);
@@ -895,14 +885,25 @@ describe('mcp-catalog/connect', () => {
     expect(created.mcpServers[0]).toMatchObject({ auth: { type: 'oauth' } });
   });
 
-  it('refuses an endpoint nothing answers on', async () => {
-    probeRemoteAuthType.mockResolvedValue('unreachable');
+  it.each([
+    ['unreachable', 'provider_unavailable', 'catalog_probe_unreachable'],
+    ['unknown', 'invalid_response', 'catalog_probe_unrecognized'],
+  ] as const)('refuses and logs a closed %s endpoint outcome', async (probed, category, reason) => {
+    probeRemoteAuthType.mockResolvedValue(probed);
     const { app, created, deps } = buildApp(CURATED);
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
 
-    await expect(createMCPCatalogConnectService(app, deps).create(request, params)).rejects.toThrow(
-      /could not be reached/
-    );
-    expect(created.mcpServers).toHaveLength(0);
+    try {
+      await expect(
+        createMCPCatalogConnectService(app, deps).create(request, params)
+      ).rejects.toThrow(/could not be reached/);
+      expect(created.mcpServers).toHaveLength(0);
+      expect(errorSpy).toHaveBeenCalledWith(
+        `[mcp-catalog/connect] event=mcp_external_failure stage=discovery category=${category} type=UnknownError reason=${reason} catalog_entry=${LINEAR}`
+      );
+    } finally {
+      errorSpy.mockRestore();
+    }
   });
 
   describe('stale auth_type', () => {

@@ -33,10 +33,19 @@ import type {
 import { isPostgresDatabase, runDatabaseTransaction } from './database-wrapper';
 
 const tenantScopedProxyTargets = new WeakMap<object, RawDatabase | Database>();
-const tenantScopedProxyOptions = new WeakMap<object, TenantScopedDatabaseProxyOptions>();
 
 export interface TenantScopedDatabaseProxyOptions {
-  /** Throw on DB access unless a tenant or explicit system DB scope is active. */
+  /**
+   * Throw on DB access unless a tenant or explicit system DB scope is active.
+   *
+   * Defaults to `true`: the guard is armed in EVERY mode — SQLite, tests, dev,
+   * and production — so that "touch tenant data without declaring tenancy
+   * intent" fails in the cheapest environment rather than only under HA
+   * `required_from_auth`. On non-Postgres a scope is a cheap AsyncLocalStorage
+   * store (`runWithTenantDatabaseScope` opens no transaction), so arming it
+   * everywhere costs nothing at runtime. Pass `false` only for a deliberate,
+   * documented raw-access path.
+   */
   requireScope?: boolean;
   /** Human-readable label included in guard errors. */
   label?: string;
@@ -49,23 +58,17 @@ export class MissingTenantDatabaseScopeError extends Error {
   }
 }
 
-function assertDatabaseScopeAllowed(base: Database): void {
-  const options = tenantScopedProxyOptions.get(base as unknown as object);
-  if (!options?.requireScope) return;
+function assertDatabaseScopeAllowed(options: TenantScopedDatabaseProxyOptions): void {
+  if (!options.requireScope) return;
   const store = tenantDatabaseScope.getStore();
   if (store?.kind === 'system') return;
   if (store?.kind === 'tenant' && store.tenantId) return;
   throw new MissingTenantDatabaseScopeError(options.label);
 }
 
-function scopedTarget(base: Database): Database {
-  const scoped = tenantDatabaseScope.getStore()?.db;
-  if (scoped) {
-    assertDatabaseScopeAllowed(base);
-    return scoped;
-  }
-  assertDatabaseScopeAllowed(base);
-  return base;
+function scopedTarget(base: Database, options: TenantScopedDatabaseProxyOptions): Database {
+  assertDatabaseScopeAllowed(options);
+  return tenantDatabaseScope.getStore()?.db ?? base;
 }
 
 function unwrapTenantScopedDatabaseProxy(db: Database): RawDatabase | Database {
@@ -88,24 +91,35 @@ export function createTenantScopedDatabaseProxy(
   base: RawDatabase | Database,
   options: TenantScopedDatabaseProxyOptions = {}
 ): TenantScopeAwareDatabase {
+  // Normalize once and close over it PER PROXY. Options must not be keyed by the
+  // shared base handle: two proxies can wrap the same handle with different
+  // guard settings, and a later opt-out wrapper must never disarm an earlier
+  // guarded proxy. Arm the guard by default (opt-out only) — see
+  // TenantScopedDatabaseProxyOptions.
+  const proxyOptions: TenantScopedDatabaseProxyOptions = {
+    ...options,
+    requireScope: options.requireScope !== false,
+  };
   const proxy = new Proxy(base as object, {
     get(_target, property, receiver) {
-      const target = scopedTarget(base) as unknown as Record<PropertyKey, unknown>;
+      const target = scopedTarget(base, proxyOptions) as unknown as Record<PropertyKey, unknown>;
       const value = Reflect.get(target, property, receiver);
       return typeof value === 'function' ? value.bind(target) : value;
     },
     has(_target, property) {
-      return property in (scopedTarget(base) as unknown as object);
+      return property in (scopedTarget(base, proxyOptions) as unknown as object);
     },
     ownKeys() {
-      return Reflect.ownKeys(scopedTarget(base) as unknown as object);
+      return Reflect.ownKeys(scopedTarget(base, proxyOptions) as unknown as object);
     },
     getOwnPropertyDescriptor(_target, property) {
-      return Reflect.getOwnPropertyDescriptor(scopedTarget(base) as unknown as object, property);
+      return Reflect.getOwnPropertyDescriptor(
+        scopedTarget(base, proxyOptions) as unknown as object,
+        property
+      );
     },
   }) as TenantScopeAwareDatabase;
   tenantScopedProxyTargets.set(proxy as unknown as object, base);
-  tenantScopedProxyOptions.set(base as unknown as object, options);
   return proxy;
 }
 
@@ -243,10 +257,11 @@ export async function runWithTenantDatabaseScope<T>(
  * Run one short tenant-owned metadata unit in a native database transaction on
  * both supported dialects.
  *
- * Normal SQLite request scopes intentionally carry identity only, because a
- * whole Feathers request can include slow network/process work. Callers use
- * this narrower primitive for metadata phases that must commit atomically. If
- * a PostgreSQL request already owns a transaction, the work joins it. Queued
+ * Normal SQLite request scopes are intentionally NON-TRANSACTIONAL (they carry
+ * tenant identity and a scope, but no native transaction) because a whole
+ * Feathers request can include slow network/process work. Callers use this
+ * narrower primitive for metadata phases that must commit atomically. If a
+ * PostgreSQL request already owns a transaction, the work joins it. Queued
  * realtime/deferred callbacks drain only after the native transaction commits.
  */
 export async function runWithTenantDatabaseTransaction<T>(
@@ -280,8 +295,8 @@ export async function runWithTenantDatabaseTransaction<T>(
       { sqliteImmediate: true, postgresIsolationLevel: options.postgresIsolationLevel }
     );
 
-  // SQLite requests normally have an identity-only DB scope. Temporarily leave
-  // it so the repository proxy targets the new native transaction handle.
+  // SQLite requests normally have a non-transactional DB scope. Temporarily
+  // leave it so the repository proxy targets the new native transaction handle.
   const result = existingScope ? await runWithoutTenantDatabaseScope(execute) : await execute();
   await drainTenantCommitCallbacks(baseDb, effectiveTenantId, callbacks);
   return result;

@@ -9,9 +9,12 @@ import * as fs from 'node:fs/promises';
 import { loadManagedAgenticToolSdk } from '@agor/core/agentic-integrations';
 import { shortId } from '@agor/core/db';
 import { validateDirectory } from '@agor/core/lib/validation';
-import { renderAgorSystemPrompt } from '@agor/core/templates/session-context';
+import {
+  renderAgorSessionIdentity,
+  renderAgorSystemPrompt,
+} from '@agor/core/templates/session-context';
 import { mergeMCPRemoteHeaders } from '@agor/core/tools/mcp/http-headers';
-import { isGatewaySession } from '@agor/core/types';
+import { isGatewaySession, type PromptOrigin } from '@agor/core/types';
 import type * as ClaudeSdk from '@anthropic-ai/claude-agent-sdk';
 import { McpAuthDiagnosticAccumulator } from '../../diagnostics/mcp-auth-diagnostic-accumulator.js';
 
@@ -50,7 +53,7 @@ import {
   mcpToolNameAliasesForTool,
 } from '../base/mcp-tool-permissions.js';
 import { createCanUseToolCallback } from '../base/permission-hooks.js';
-import { CLAUDE_CODE_DISALLOWED_TOOLS } from './constants.js';
+import { CLAUDE_CODE_DISALLOWED_TOOLS, CLAUDE_CODE_TODO_TOOLS } from './constants.js';
 import { DEFAULT_CLAUDE_MODEL } from './models.js';
 
 export function formatListForLog(items: string[], maxItems = 5): string {
@@ -104,6 +107,16 @@ export interface InterruptibleQuery {
    * Must be called after the result event is fully processed.
    */
   releaseInput(): void;
+  /**
+   * Finalize the Query. The SDK Query's own `return()` runs `cleanup()` FIRST —
+   * closing the transport/stdin — and only then delegates to the inner message
+   * generator's `return()`. Closing the transport is what resolves an
+   * outstanding `next()` read, so this (unlike `[Symbol.asyncIterator]().return()`,
+   * which is serialized behind that pending read) is the correct teardown when a
+   * held read never settles on its own. Bounded by callers because
+   * `cleanup()` awaits the subprocess exit.
+   */
+  return(value?: unknown): Promise<IteratorResult<unknown>>;
   // biome-ignore lint/suspicious/noExplicitAny: SDK returns complex union of message types
   [Symbol.asyncIterator](): AsyncIterator<any>;
 }
@@ -117,13 +130,14 @@ export async function setupQuery(
     permissionMode?: PermissionMode;
     resume?: boolean;
     abortController?: AbortController;
+    promptOrigin?: PromptOrigin;
   } = {}
 ): Promise<{
   query: InterruptibleQuery;
   resolvedModel: string;
-  getStderr: () => string;
+  getStderrMetadata: () => { hasStderr: boolean; byteLength: number };
 }> {
-  const { taskId, permissionMode, resume = true, abortController } = options;
+  const { taskId, permissionMode, resume = true, abortController, promptOrigin } = options;
 
   const session = await deps.sessionsRepo.findById(sessionId);
   if (!session) {
@@ -204,10 +218,13 @@ export async function setupQuery(
 
   // Get Claude Code path
 
-  // Buffer to capture stderr for better error messages
-  let stderrBuffer = '';
+  // Provider stderr may contain MCP URLs/headers, credentials, or reflected
+  // payloads. Retain only bounded scalar metadata; raw bytes never cross this
+  // callback or become available to later logging code.
+  let stderrByteLength = 0;
 
-  // Append static Agor orientation. Dynamic context is available through Agor MCP.
+  // Keep orientation stable; refresh identity on every query, including fork/resume.
+  // Use SDK system instructions so native user slash commands remain unchanged.
   const agorSystemPrompt = await renderAgorSystemPrompt();
 
   const queryOptions: Record<string, unknown> = {
@@ -215,9 +232,13 @@ export async function setupQuery(
     systemPrompt: {
       type: 'preset',
       preset: 'claude_code',
-      append: agorSystemPrompt,
+      append: `${agorSystemPrompt}\n\n${renderAgorSessionIdentity(sessionId)}`,
     },
     settingSources: ['user', 'project', 'local'], // Load user + project + local permissions, auto-loads CLAUDE.md
+    // SDK 0.3.233+ omits task-list tools on newer model families unless the
+    // embedding application opts in. Agor reads their calls for the sticky
+    // task-list UI, so use the SDK's targeted opt-in rather than rolling back.
+    allowedTools: [...CLAUDE_CODE_TODO_TOOLS],
     // Defensive copy — the const is readonly but the SDK option is typed `string[]`.
     disallowedTools: [...CLAUDE_CODE_DISALLOWED_TOOLS],
     model, // Use configured model or default
@@ -225,9 +246,14 @@ export async function setupQuery(
     additionalDirectories: ['/tmp', '/var/tmp'],
     // Enable token-level streaming (yields partial messages as tokens arrive)
     includePartialMessages: true,
-    // Capture stderr to get actual error messages (not just "exit code 1")
-    stderr: (data: string) => {
-      stderrBuffer += data;
+    stderr: (data: unknown) => {
+      const chunkByteLength =
+        typeof data === 'string'
+          ? Buffer.byteLength(data)
+          : Buffer.isBuffer(data)
+            ? data.length
+            : 0;
+      stderrByteLength = Math.min(Number.MAX_SAFE_INTEGER, stderrByteLength + chunkByteLength);
     },
   };
 
@@ -619,6 +645,10 @@ export async function setupQuery(
       type: 'user' as const,
       message: { role: 'user' as const, content: [{ type: 'text' as const, text }] },
       parent_tool_use_id: null,
+      // Agent SDK 0.3.259 treats an omitted origin as unattributed at strict
+      // human-trust gates. The daemon derives this value from durable Task and
+      // Session state; synthesized prompts deliberately leave it undefined.
+      ...(promptOrigin ? { origin: promptOrigin } : {}),
     };
     // Hold the iterable open until releaseInput() is called, keeping stdin alive
     await inputHeldPromise;
@@ -642,8 +672,10 @@ export async function setupQuery(
     throw new Error(safe.message);
   }
 
-  // Store stderr buffer getter for error reporting
-  const getStderr = () => stderrBuffer;
+  const getStderrMetadata = () => ({
+    hasStderr: stderrByteLength > 0,
+    byteLength: stderrByteLength,
+  });
 
   // Attach releaseInput() so callers can signal when post-result control requests are done.
   // The SDK's query() returns an AsyncGenerator with interrupt()/getContextUsage() methods.
@@ -655,6 +687,6 @@ export async function setupQuery(
   return {
     query: queryObj,
     resolvedModel: model,
-    getStderr,
+    getStderrMetadata,
   };
 }

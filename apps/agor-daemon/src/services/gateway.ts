@@ -81,6 +81,7 @@ import type {
   GatewayOutboundMessage,
   GatewayOutboundMessageID,
   GatewayOutboundReplyAdmission,
+  GatewaySource,
   MCPServerID,
   Message,
   MessageSource,
@@ -97,8 +98,10 @@ import {
   DEFAULT_DISCORD_CATCH_UP,
   hasMinimumRole,
   isDiscordSnowflake,
+  isTerminalTaskStatus,
   ROLES,
   SessionStatus,
+  TaskStatus,
   USER_DEFAULT_AGENTIC_CONFIGURATION,
   validateDiscordConfig,
 } from '@agor/core/types';
@@ -106,7 +109,7 @@ import { assertExecutionHomeKeySatisfiesMode } from '@agor/core/unix';
 import { getSessionUrl } from '@agor/core/utils/url';
 import { gatewayAgenticConfigToInlineConfiguration } from '../utils/agentic-configuration-sources.js';
 import { requireActiveAgenticTool } from '../utils/agentic-tool-runtime.js';
-import { hasBranchPermission } from '../utils/branch-authorization.js';
+import { hasBranchPermission, sessionPromptDeniedMessage } from '../utils/branch-authorization.js';
 import { gatewayInboundSessionId, gatewayInboundTaskId } from '../utils/durable-task-id.js';
 import {
   buildPromptWithAttachments,
@@ -143,6 +146,13 @@ interface PostMessageResult {
   sessionId: string;
   created: boolean;
   taskId?: TaskID;
+}
+
+/** Safe, terminal authorization denial that may be shown on the gateway. */
+class GatewayPromptAuthorizationError extends Forbidden {
+  constructor(readonly userMessage: string) {
+    super(`Gateway inbound denied: ${userMessage}`);
+  }
 }
 
 /**
@@ -201,6 +211,39 @@ async function withGatewayTimeout<T>(promise: Promise<T>, timeoutMs: number): Pr
 interface RouteMessageResult {
   routed: boolean;
   channelType?: string;
+}
+
+interface FlushOutboundBufferOptions {
+  taskId: TaskID;
+}
+
+const GATEWAY_FINAL_REPLY_CLAIM_TIMEOUT_MS = 5 * 60 * 1000;
+const GATEWAY_FAILED_TURN_REPLY =
+  "I couldn't complete this request because the Agor session stopped with an error. Mention me again to retry.";
+const GATEWAY_STOPPED_TURN_REPLY =
+  'This request was stopped before it finished. Mention me again to continue.';
+
+type GatewayFinalReplyState =
+  | { status: 'pending' }
+  | { status: 'processing'; claim_token: string; claimed_at: string }
+  | { status: 'delivered'; delivered_at: string };
+
+function gatewayFinalReplyState(metadata: Message['metadata']): GatewayFinalReplyState | undefined {
+  const value = metadata?.gateway_final_reply;
+  if (!value || typeof value !== 'object') return undefined;
+  const state = value as Record<string, unknown>;
+  if (state.status === 'pending') return { status: 'pending' };
+  if (
+    state.status === 'processing' &&
+    typeof state.claim_token === 'string' &&
+    typeof state.claimed_at === 'string'
+  ) {
+    return { status: 'processing', claim_token: state.claim_token, claimed_at: state.claimed_at };
+  }
+  if (state.status === 'delivered' && typeof state.delivered_at === 'string') {
+    return { status: 'delivered', delivered_at: state.delivered_at };
+  }
+  return undefined;
 }
 
 interface EmitGatewayMessageData {
@@ -453,14 +496,18 @@ function previewText(text: string, maxChars = 500): string {
   return `${normalized.slice(0, Math.max(0, maxChars - 1))}…`;
 }
 
-function gatewayMessageText(content: Message['content']): string {
-  if (typeof content === 'string') return content;
-  if (!Array.isArray(content)) return '';
-  return content
-    .filter((block) => block.type === 'text')
-    .map((block) => (typeof block.text === 'string' ? block.text : ''))
-    .filter(Boolean)
-    .join('\n');
+function gatewayMessageText(message: Pick<Message, 'content' | 'content_preview'>): string {
+  const { content } = message;
+  if (typeof content === 'string' && content.trim()) return content;
+  if (Array.isArray(content)) {
+    const text = content
+      .filter((block) => block.type === 'text')
+      .map((block) => (typeof block.text === 'string' ? block.text : ''))
+      .filter(Boolean)
+      .join('\n');
+    if (text.trim()) return text;
+  }
+  return message.content_preview || '';
 }
 
 function quoteForPrompt(text: string, maxChars = 2000): string {
@@ -847,7 +894,6 @@ export class GatewayService {
   private userTokenRepo: UserMCPOAuthTokenRepository;
   private db: TenantScopeAwareDatabase;
   private app: Application;
-  private appRbacEnabled: boolean;
 
   /** Active listeners keyed by immutable tenant + channel identity. */
   private activeListeners = new Map<string, GatewayConnector>();
@@ -878,15 +924,6 @@ export class GatewayService {
   private activeChannelTenants = new Set<string>();
 
   /**
-   * GitHub message buffer: keyed by session_id, stores the latest message text.
-   * For GitHub channels, we don't send every assistant message in real-time
-   * (unlike Slack). Instead, we buffer and only send the last message when
-   * the session turn completes (goes idle). Each new message overwrites the
-   * previous one — only the final message matters.
-   */
-  private lastMessageBuffer = new Map<string, string>();
-
-  /**
    * Slack status updates are serialized and lightly throttled so concurrent
    * tool/message hooks do not race while deleting/reposting the transient row.
    * Terminal states always bypass this throttle.
@@ -902,11 +939,7 @@ export class GatewayService {
   private static SLACK_STREAM_STATUS_REFRESH_MS = 300;
   private static SLACK_STREAMED_MESSAGE_CACHE_MAX = 500;
 
-  constructor(
-    db: TenantScopeAwareDatabase,
-    app: Application,
-    options: { appRbacEnabled?: boolean } = {}
-  ) {
+  constructor(db: TenantScopeAwareDatabase, app: Application) {
     // Long-lived listener orchestration carries tenant identity without
     // holding a transaction. Every repository field is therefore bound to a
     // short per-method tenant unit of work here; provider/process/network work
@@ -935,7 +968,6 @@ export class GatewayService {
     this.userTokenRepo = bindRepositoryToTenantUnitOfWork(db, new UserMCPOAuthTokenRepository(db));
     this.db = db;
     this.app = app;
-    this.appRbacEnabled = options.appRbacEnabled ?? resolveExecutionSecurityMode().appRbacEnabled;
     this.workIdentity = (
       app as unknown as { get?: (name: string) => DistributedWorkIdentity | undefined }
     ).get?.('distributedWorkIdentity') ?? {
@@ -1014,15 +1046,17 @@ export class GatewayService {
   }
 
   /**
-   * Send a system message to the platform thread (fire-and-forget).
-   * Useful for giving the user visibility into what's happening.
+   * Send a best-effort system message to the platform thread. Most progress
+   * callers intentionally fire and forget; authorization denials await it so
+   * the durable provider event is not acknowledged before the user-facing
+   * explanation has been handed to the connector.
    */
-  private sendSystemMessage(
+  private async sendSystemMessage(
     channel: GatewayChannel,
     threadId: string,
     text: string,
     opts?: { suppressSlack?: boolean; suppressDiscord?: boolean }
-  ): void {
+  ): Promise<void> {
     // GitHub and Shortcut have their own editable ack comment (the connector's
     // "Processing" / "👀 on it" comment that becomes the final reply), so they
     // suppress all gateway system messages here. Slack keeps durable routing
@@ -1040,14 +1074,44 @@ export class GatewayService {
       const connector =
         this.getActiveListener(channel.id) ??
         getConnector(channel.channel_type as ChannelType, channel.config);
-      connector
-        .sendMessage({
-          threadId,
-          ...formatGatewaySystemPayload(channel.channel_type as ChannelType, text),
-        })
-        .catch((err) => console.warn('[gateway] Debug message failed:', err));
-    } catch {
+      await connector.sendMessage({
+        threadId,
+        ...formatGatewaySystemPayload(channel.channel_type as ChannelType, text),
+      });
+    } catch (error) {
       // Ignore — debug messages are best-effort
+      console.warn('[gateway] Debug message failed:', error);
+    }
+  }
+
+  /**
+   * Surface a prompt denial where the external user actually asked. GitHub and
+   * Shortcut normally suppress gateway system messages because their
+   * processing acknowledgement is editable, so use that same comment rather
+   * than leaving a permanent "working" acknowledgement behind.
+   */
+  private async sendPromptAuthorizationDenied(
+    channel: GatewayChannel,
+    data: Pick<PostMessageData, 'thread_id' | 'metadata'>,
+    message: string
+  ): Promise<void> {
+    if (channel.channel_type !== 'github' && channel.channel_type !== 'shortcut') {
+      await this.sendSystemMessage(channel, data.thread_id, message);
+      return;
+    }
+    try {
+      const connector =
+        this.getActiveListener(channel.id) ??
+        getConnector(channel.channel_type as ChannelType, channel.config);
+      await connector.sendMessage({
+        threadId: data.thread_id,
+        text: `⚠️ ${message}`,
+        metadata: data.metadata?.processing_comment_id
+          ? { edit_comment_id: data.metadata.processing_comment_id }
+          : undefined,
+      });
+    } catch (error) {
+      console.warn('[gateway] Failed to post prompt authorization denial:', error);
     }
   }
 
@@ -1512,7 +1576,7 @@ export class GatewayService {
       async () => {
         await this.updateProgress(data);
       },
-      (error) => {
+      () => {
         console.warn('[gateway] Failed to update Slack progress after commit');
       }
     );
@@ -1891,8 +1955,6 @@ export class GatewayService {
     channel: GatewayChannel,
     userId: UserID
   ): Promise<void> {
-    if (!this.appRbacEnabled) return;
-
     const branch = await this.branchRepo.findById(channel.target_branch_id);
     if (!branch) {
       throw new Forbidden('Gateway inbound denied: target branch is unavailable');
@@ -1908,8 +1970,9 @@ export class GatewayService {
   /**
    * Resolve the target Session again immediately before prompt admission.
    * This both binds a durable thread mapping to its configured branch and
-   * applies owner-authored personal session sharing for aligned users. A
-   * Manager role alone never grants authority over another user's home.
+   * applies the Session's immutable sharing boundary: branch Sessions require
+   * Collaborator access and both sharing switches, while execution-home
+   * Sessions are never shareable.
    */
   private async requireInboundPromptAuthority(
     channel: GatewayChannel,
@@ -1918,21 +1981,18 @@ export class GatewayService {
   ): Promise<Session> {
     const session = await this.sessionRepo.findById(sessionId);
     if (!session || session.branch_id !== channel.target_branch_id) {
-      throw new Forbidden('Gateway inbound denied: target session is unavailable');
+      throw new GatewayPromptAuthorizationError(
+        "This gateway thread's Agor session is no longer available."
+      );
     }
-    if (!this.appRbacEnabled) return session;
-
     const authority = await this.branchRepo.resolveSessionPromptAuthority(
       channel.target_branch_id,
       userId,
-      session.created_by as UserID
+      session.created_by as UserID,
+      session.sdk_home_scope
     );
     if (!authority.allowed) {
-      throw new Forbidden(
-        session.created_by === userId
-          ? 'Gateway inbound denied: Collaborator access is required to prompt this session'
-          : 'Gateway inbound denied: the session owner has not shared their sessions with this user'
-      );
+      throw new GatewayPromptAuthorizationError(sessionPromptDeniedMessage(authority));
     }
     return session;
   }
@@ -2047,7 +2107,7 @@ export class GatewayService {
 
   private async fetchExistingSessionUrlForGatewayUser(
     sessionId: SessionID,
-    user: User
+    user?: User
   ): Promise<string | null> {
     try {
       const baseUrl = await getBaseUrl();
@@ -2057,6 +2117,8 @@ export class GatewayService {
     } catch (_error) {
       console.warn('[gateway] Failed to build public session URL');
     }
+
+    if (!user) return null;
 
     try {
       const sessionsService = this.app.service('sessions') as {
@@ -2072,6 +2134,14 @@ export class GatewayService {
       console.warn('[gateway] Failed to fetch session URL');
       return null;
     }
+  }
+
+  private async formatTerminalGatewayReply(text: string, sessionId: SessionID): Promise<string> {
+    const sessionUrl = await this.fetchExistingSessionUrlForGatewayUser(sessionId);
+    const sessionReference = sessionUrl
+      ? `[View session](${sessionUrl})`
+      : `Session: \`${shortId(sessionId)}\``;
+    return `${text}\n\n${sessionReference}`;
   }
 
   /**
@@ -2489,7 +2559,13 @@ export class GatewayService {
     // Session. Re-check at the actual Session/Task admission boundaries below
     // so a revoked aligned user cannot keep using a durable platform thread.
     if (existingMapping) {
-      await this.requireInboundPromptAuthority(channel, existingMapping.session_id, user.user_id);
+      try {
+        await this.requireInboundPromptAuthority(channel, existingMapping.session_id, user.user_id);
+      } catch (error) {
+        if (!(error instanceof GatewayPromptAuthorizationError)) throw error;
+        await this.sendPromptAuthorizationDenied(channel, data, error.userMessage);
+        return { success: false, sessionId: '', created: false };
+      }
     } else {
       await this.requireInboundSessionCreateAccess(channel, user.user_id);
     }
@@ -2537,7 +2613,22 @@ export class GatewayService {
     // Seed admission is the one durable mutation that must happen before
     // creating a session. It also replaces the old lookup-then-late-claim
     // sequence, so competing provider aliases receive one stable ID.
-    if (channel.channel_type === 'slack' || channel.channel_type === 'discord') {
+    //
+    // Seed admission only decides which Session a thread that has none yet
+    // belongs to. A thread that already carries a canonical mapping the seed
+    // did not create is not a seed reply: a proactive outbound message can be
+    // sent into a thread that is already routed to a Session, and the mapping
+    // stays that thread's owner. Skip admission entirely for those threads so
+    // no seed is reserved or consumed for a thread it does not own, and the
+    // message continues down the ordinary follow-up path below.
+    const existingMappingSeedId = (existingMapping?.metadata as Record<string, unknown> | null)
+      ?.outbound_seed_id;
+    const threadOwnedByUnseededMapping =
+      !!existingMapping && typeof existingMappingSeedId !== 'string';
+    if (
+      (channel.channel_type === 'slack' || channel.channel_type === 'discord') &&
+      !threadOwnedByUnseededMapping
+    ) {
       outboundAdmission = await this.outboundRepo.admitReplySession(channel.id, data.thread_id);
       if (outboundAdmission) {
         outboundSeed = outboundAdmission.message;
@@ -2705,7 +2796,7 @@ export class GatewayService {
       );
 
       // Build custom_context with gateway metadata + platform-specific fields
-      const gatewaySource: Record<string, unknown> = {
+      const gatewaySource: GatewaySource & Record<string, unknown> = {
         channel_id: channel.id,
         channel_name: channel.name,
         channel_type: channel.channel_type,
@@ -2846,7 +2937,7 @@ export class GatewayService {
           typeof priorGatewaySourceValue === 'object' &&
           priorGatewaySourceValue !== null &&
           !Array.isArray(priorGatewaySourceValue)
-            ? (priorGatewaySourceValue as Record<string, unknown>)
+            ? (priorGatewaySourceValue as unknown as GatewaySource & Record<string, unknown>)
             : null;
         const currentTenantId = getCurrentTenantId();
         const priorSeedId = priorGatewaySource?.outbound_seed_id;
@@ -3286,25 +3377,25 @@ export class GatewayService {
 
       await this.requireInboundPromptAuthority(channel, sessionId, user.user_id);
 
+      const gatewayTaskMetadata = {
+        ...(data.gateway_inbound_event_id
+          ? { gateway_inbound_event_id: data.gateway_inbound_event_id }
+          : {}),
+        ...(typeof data.metadata?.processing_comment_id === 'number'
+          ? {
+              gateway_reply_metadata: {
+                processing_comment_id: data.metadata.processing_comment_id,
+              },
+            }
+          : {}),
+      };
+
       const task = await promptService.create(
         {
           prompt: promptText,
           permissionMode,
           messageSource: 'gateway',
-          ...(data.gateway_inbound_event_id
-            ? {
-                metadata: {
-                  gateway_inbound_event_id: data.gateway_inbound_event_id,
-                  ...(data.metadata?.processing_comment_id
-                    ? {
-                        gateway_reply_metadata: {
-                          processing_comment_id: data.metadata.processing_comment_id,
-                        },
-                      }
-                    : {}),
-                },
-              }
-            : {}),
+          ...(Object.keys(gatewayTaskMetadata).length > 0 ? { metadata: gatewayTaskMetadata } : {}),
           ...(data.idempotency_task_id ? { idempotencyTaskId: data.idempotency_task_id } : {}),
         },
         {
@@ -3379,6 +3470,18 @@ export class GatewayService {
         });
       }
     } catch (error) {
+      if (error instanceof GatewayPromptAuthorizationError) {
+        await this.sendPromptAuthorizationDenied(channel, data, error.userMessage);
+        this.updateProgressAfterCommit({
+          session_id: sessionId,
+          state: 'failed',
+          error_message: 'prompt_not_authorized',
+        });
+        // Authorization is a terminal outcome for this provider occurrence,
+        // not a transient delivery failure. Retrying cannot make the already
+        // denied event safe to admit and would spam the same visible message.
+        return { success: false, sessionId: '', created: false };
+      }
       const safeError = gatewayFailureCode(error);
       console.error(
         `[gateway] Failed to send prompt to session: channel_id=${channel.id} code=${safeError}`
@@ -3488,14 +3591,11 @@ export class GatewayService {
     await this.threadMapRepo.updateLastMessage(mapping.id);
     await this.channelRepo.updateLastMessage(channel.id);
 
-    // GitHub and Shortcut channels buffer the message instead of sending
-    // immediately — only the last message is posted when the session goes idle
-    // (via flushOutboundBuffer). This keeps noisy intermediate agent messages
-    // out of PR/story threads; the agent's final message IS the reply.
+    // GitHub and Shortcut replies are resolved from durable, task-scoped
+    // messages when the session turn ends. Do not stream intermediate output.
     if (channel.channel_type === 'github' || channel.channel_type === 'shortcut') {
-      this.lastMessageBuffer.set(data.session_id, data.message);
       console.log(
-        `[gateway] Buffered ${channel.channel_type} message for session ${shortId(data.session_id)} (${data.message.length} chars)`
+        `[gateway] Deferred ${channel.channel_type} message for session ${shortId(data.session_id)} (${data.message.length} chars)`
       );
       return { routed: true, channelType: channel.channel_type };
     }
@@ -3569,116 +3669,156 @@ export class GatewayService {
       async () => {
         await this.routeMessage(data);
       },
-      (error) => {
+      () => {
         console.warn('[gateway] Failed to route message after commit');
       }
     );
   }
 
-  /**
-   * Flush the buffered last message for a session (GitHub / Shortcut).
-   *
-   * Called when a session transitions to idle (turn complete). Posts the last
-   * buffered message as a PR/issue/story comment by editing the connector's
-   * processing acknowledgement. If no buffered message exists, this is a no-op.
-   */
-  async flushOutboundBuffer(sessionId: string): Promise<void> {
-    // This hook runs for every promptable Session, but only mapped GitHub and
-    // Shortcut Sessions have buffered outbound work. Reject the common no-op
-    // cases before reading durable Message history.
+  /** Deliver one task's terminal reply by editing its exact provider acknowledgement. */
+  async flushOutboundBuffer(sessionId: string, options: FlushOutboundBufferOptions): Promise<void> {
     const mapping = await this.threadMapRepo.findBySession(sessionId);
-    if (!mapping) {
-      this.lastMessageBuffer.delete(sessionId);
-      return;
-    }
+    if (!mapping) return;
 
     const channel = await this.channelRepo.findById(mapping.channel_id);
     if (
       !channel?.enabled ||
       (channel.channel_type !== 'github' && channel.channel_type !== 'shortcut')
     ) {
-      this.lastMessageBuffer.delete(sessionId);
       return;
     }
 
-    let bufferedMessage = this.lastMessageBuffer.get(sessionId);
-    let durableMessageId: string | undefined;
-    let durableReplyMetadata: Record<string, unknown> | undefined;
-    // The local buffer is only a latency cache. PostgreSQL/SQLite messages are
-    // the durable recovery source when creation and idle hooks land on
-    // different daemons or the message-producing daemon dies.
-    try {
-      const messages = await this.messagesRepo.findBySessionId(sessionId as SessionID);
-      const latest = [...messages]
-        .reverse()
-        .find((message) => message.role === 'assistant' && gatewayMessageText(message.content));
-      if (latest) {
-        bufferedMessage = gatewayMessageText(latest.content);
-        durableMessageId = latest.message_id;
-        if (latest.task_id) {
-          const task = await this.taskRepo.findById(latest.task_id);
-          durableReplyMetadata = task?.metadata?.gateway_reply_metadata;
-        }
-      }
-    } catch (error) {
-      if (!bufferedMessage) throw error;
-      console.warn('[gateway] Falling back to process-local outbound buffer');
+    const taskId = options.taskId;
+    const terminalTask = await this.taskRepo.findById(taskId);
+    if (
+      !terminalTask ||
+      terminalTask.session_id !== sessionId ||
+      !isTerminalTaskStatus(terminalTask.status)
+    ) {
+      return;
     }
-    if (!bufferedMessage) return;
-
-    this.lastMessageBuffer.delete(sessionId);
+    const processingCommentId =
+      terminalTask.metadata?.gateway_reply_metadata?.processing_comment_id;
+    if (typeof processingCommentId !== 'number') {
+      console.warn(
+        `[gateway] Task ${shortId(taskId)} has no provider acknowledgement; final reply was not sent`
+      );
+      return;
+    }
 
     const mappingMetadata = ((mapping.metadata as Record<string, unknown>) ?? {}) as Record<
       string,
       unknown
     >;
-    if (durableMessageId && mappingMetadata.gateway_last_flushed_message_id === durableMessageId) {
+
+    const messages = await this.messagesRepo.findByTaskId(taskId);
+    const latestAssistant = [...messages]
+      .reverse()
+      .find((message) => message.role === 'assistant' && gatewayMessageText(message));
+    const claimMessage = latestAssistant ?? messages.at(-1);
+    if (!claimMessage) return;
+
+    let finalMessage = latestAssistant ? gatewayMessageText(latestAssistant) : undefined;
+    if (terminalTask.status === TaskStatus.FAILED || terminalTask.status === TaskStatus.TIMED_OUT) {
+      finalMessage = await this.formatTerminalGatewayReply(
+        GATEWAY_FAILED_TURN_REPLY,
+        sessionId as SessionID
+      );
+    } else if (terminalTask.status === TaskStatus.STOPPED) {
+      finalMessage = await this.formatTerminalGatewayReply(
+        GATEWAY_STOPPED_TURN_REPLY,
+        sessionId as SessionID
+      );
+    }
+    if (!finalMessage) return;
+
+    if (
+      mappingMetadata.gateway_last_flushed_task_id === taskId ||
+      mappingMetadata.gateway_last_flushed_message_id === claimMessage.message_id
+    ) {
       return;
     }
 
+    // Reuse the existing Message metadata row-lock primitive. This is the
+    // same short claim/finish pattern used by widget resolution and avoids a
+    // new delivery table or Task-repository state machine.
+    const claimToken = generateId();
+    const claim = await this.messagesRepo.mutateMetadataLocked(
+      claimMessage.message_id,
+      (metadata) => {
+        const claimedAt = new Date();
+        const state = gatewayFinalReplyState(metadata);
+        if (state?.status === 'delivered') return null;
+        if (state?.status === 'processing') {
+          const claimAgeMs = claimedAt.getTime() - Date.parse(state.claimed_at);
+          if (Number.isFinite(claimAgeMs) && claimAgeMs < GATEWAY_FINAL_REPLY_CLAIM_TIMEOUT_MS) {
+            return null;
+          }
+        }
+        return {
+          ...(metadata ?? {}),
+          gateway_final_reply: {
+            status: 'processing',
+            claim_token: claimToken,
+            claimed_at: claimedAt.toISOString(),
+          },
+        };
+      }
+    );
+    if (!claim.changed) return;
+
     try {
       const connector = getConnector(channel.channel_type as ChannelType, channel.config);
-
       const { text, blocks } = normalizeOutbound(
-        connector.formatMessage ? connector.formatMessage(bufferedMessage) : bufferedMessage
+        connector.formatMessage ? connector.formatMessage(finalMessage) : finalMessage
       );
-
-      // Edit the "Processing..." comment with the final response
-      const outboundMetadata: Record<string, unknown> = {};
-      if (typeof durableReplyMetadata?.processing_comment_id === 'number') {
-        outboundMetadata.edit_comment_id = durableReplyMetadata.processing_comment_id;
-      } else if (
-        mapping.metadata &&
-        typeof (mapping.metadata as Record<string, unknown>).processing_comment_id === 'number'
-      ) {
-        outboundMetadata.edit_comment_id = (
-          mapping.metadata as Record<string, unknown>
-        ).processing_comment_id;
-      }
-
       await connector.sendMessage({
         threadId: mapping.thread_id,
         text,
         blocks,
-        metadata: outboundMetadata,
+        metadata: { edit_comment_id: processingCommentId },
       });
 
-      if (durableMessageId) {
+      const completed = await this.messagesRepo.mutateMetadataLocked(
+        claimMessage.message_id,
+        (metadata) => {
+          const state = gatewayFinalReplyState(metadata);
+          if (state?.status !== 'processing' || state.claim_token !== claimToken) return null;
+          return {
+            ...(metadata ?? {}),
+            gateway_final_reply: {
+              status: 'delivered',
+              delivered_at: new Date().toISOString(),
+            },
+          };
+        }
+      );
+      if (!completed.changed) throw new Error('Gateway final reply claim was lost');
+
+      try {
         await this.threadMapRepo.mergeMetadata(mapping.id, {
-          gateway_last_flushed_message_id: durableMessageId,
+          gateway_last_flushed_message_id: claimMessage.message_id,
+          gateway_last_flushed_task_id: taskId,
         });
+      } catch (_error) {
+        console.warn('[gateway] Failed to update legacy final reply markers');
       }
 
       console.log(
-        `[gateway] Flushed ${channel.channel_type} buffer for session ${shortId(sessionId)} → ${mapping.thread_id} (${bufferedMessage.length} chars)`
+        `[gateway] Flushed ${channel.channel_type} final reply for session ${shortId(sessionId)} → ${mapping.thread_id} (${finalMessage.length} chars)`
       );
     } catch (error) {
-      // Re-queue the message so it can be retried on next flush (e.g. session
-      // goes idle again, or daemon restarts). Without this, a transient GitHub
-      // API error would permanently lose the agent's final response.
-      this.lastMessageBuffer.set(sessionId, bufferedMessage);
+      try {
+        await this.messagesRepo.mutateMetadataLocked(claimMessage.message_id, (metadata) => {
+          const state = gatewayFinalReplyState(metadata);
+          if (state?.status !== 'processing' || state.claim_token !== claimToken) return null;
+          return { ...(metadata ?? {}), gateway_final_reply: { status: 'pending' } };
+        });
+      } catch (_releaseError) {
+        console.warn('[gateway] Failed to release final reply claim');
+      }
       console.error(
-        `[gateway] Failed to flush ${channel.channel_type} buffer for session ${shortId(sessionId)} (re-queued):`,
+        `[gateway] Failed to flush ${channel.channel_type} final reply for session ${shortId(sessionId)}:`,
         error
       );
     }
@@ -4565,8 +4705,7 @@ export class GatewayService {
  */
 export function createGatewayService(
   db: TenantScopeAwareDatabase,
-  app: Application,
-  options?: { appRbacEnabled?: boolean }
+  app: Application
 ): GatewayService {
-  return new GatewayService(db, app, options);
+  return new GatewayService(db, app);
 }

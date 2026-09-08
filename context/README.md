@@ -10,7 +10,10 @@ This folder is a small set of **agent-oriented cheat sheets** — tight pointers
 - **Guides are user truth.** If a topic has a guide page, this folder links to it instead of duplicating it.
 - **Keep it small.** A bloated `context/` is a tax on every agent that loads it.
 
-If you're tempted to add a long prose doc here — write it as a guide in `apps/agor-docs/pages/guide/` instead, and link to it from here.
+Routine investigation reports, audit snapshots, before/after evidence, and validation receipts
+belong in the issue or PR, not this folder or dated `docs/internal/` files. For lasting user-facing
+behavior, update the relevant guide; for durable implementation contracts, update an existing
+cheat sheet or code comment before adding another document.
 
 ---
 
@@ -63,7 +66,7 @@ Designs that are referenced from code or in flight. Anything here is either stil
 - [`kb-teammate-framework-integration.md`](explorations/kb-teammate-framework-integration.md) — options for backing Agor teammate framework memory/docs/skills with Knowledge Base namespaces and tools.
 - [`teammate-kb-namespace-memory-plan.md`](explorations/teammate-kb-namespace-memory-plan.md) — implementation plan for teammate primary KB namespaces, memory append tools, and branch-scoped namespace grants.
 - [`kb-namespace-rbac-v1.md`](explorations/kb-namespace-rbac-v1.md) — directed V1 plan for Knowledge namespace RBAC and teammate home namespaces.
-- [`session-sharing.md`](explorations/session-sharing.md) — `dangerously_allow_session_sharing` security contract (referenced from `AGENTS.md` and `apps/agor-docs/pages/security.mdx`).
+- [`session-sharing.md`](explorations/session-sharing.md) — tenant/branch gates, immutable Session compatibility, and caller identity for shared prompts.
 - [`parent-session-callbacks.md`](explorations/parent-session-callbacks.md) — child-session completion notifications (referenced from `docs/never-lose-prompt-design.md`).
 - [`frontend-hardcoded-colors.md`](explorations/frontend-hardcoded-colors.md) — Biome/GritQL color audit, classification, and enforcement rollout.
 - [`web-terminal-ownership-ha.md`](explorations/web-terminal-ownership-ha.md) — process-affine terminal ownership, HA support, and failure semantics.

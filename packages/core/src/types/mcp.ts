@@ -138,6 +138,7 @@ export const MCP_AUTH_RECOVERY_CATEGORIES = [
   'provider_unavailable',
   'provider_rejected',
   'invalid_response',
+  'storage_policy_rejected',
   'configuration_required',
   'unknown',
 ] as const;
@@ -427,6 +428,34 @@ export interface PromptArgument {
   required?: boolean;
 }
 
+/** Request for an authenticated, tenant-scoped capability probe. Saved IDs use the durable row. */
+export interface MCPDiscoveryRequest {
+  mcp_server_id?: string;
+  url?: string;
+  transport?: 'http' | 'sse';
+  auth?: MCPAuth;
+  headers?: Record<string, string>;
+  oauth_browser_event?: MCPOAuthBrowserEventRequest;
+}
+
+/** Bounded discovery response shared by the daemon and both MCP server forms. */
+export type MCPDiscoveryResult =
+  | {
+      success: true;
+      capabilities: { tools: number; resources: number; prompts: number };
+      metadata?: { descriptions_truncated: number };
+      tools: Pick<MCPTool, 'name' | 'description'>[];
+      resources: Pick<MCPResource, 'name' | 'uri' | 'mimeType'>[];
+      prompts: Pick<MCPPrompt, 'name' | 'description'>[];
+    }
+  | {
+      success: false;
+      error: string;
+      recovery?: MCPAuthRecovery;
+      category?: string;
+      action?: MCPAuthRecoveryAction;
+    };
+
 /**
  * MCP Server Capabilities
  * Discovered from server via MCP protocol
@@ -544,7 +573,6 @@ export interface SessionMCPServer {
  */
 export interface MCPServerFilters {
   scope?: MCPScope;
-  scopeId?: string; // user_id, team_id, repo_id, or session_id
   transport?: MCPTransport;
   enabled?: boolean;
   source?: MCPSource;

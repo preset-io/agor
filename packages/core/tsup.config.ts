@@ -26,6 +26,8 @@ export default defineConfig({
     'feathers/index': 'src/feathers/index.ts', // FeathersJS runtime re-exports
     'lib/feathers-validation': 'src/lib/feathers-validation.ts', // FeathersJS query validation schemas
     'lib/validation': 'src/lib/validation.ts', // Node-only filesystem validation for executors
+    'ids/index': 'src/lib/ids.ts', // Canonical Node UUIDv7 generation and ID utilities
+    'ids/browser': 'src/lib/ids.browser.ts', // Browser-safe UUIDv7 generation via Web Crypto
     'templates/handlebars-helpers': 'src/templates/handlebars-helpers.ts', // Handlebars helpers
     'templates/session-context': 'src/templates/session-context.ts', // Agor system prompt rendering
     'templates/spawn-subsession-template': 'src/templates/spawn-subsession-template.ts', // Spawn-subsession meta-prompt
@@ -33,6 +35,7 @@ export default defineConfig({
     'templates/zone-trigger-context': 'src/templates/zone-trigger-context.ts', // Canonical zone-trigger context builder
     'environment/variable-resolver': 'src/environment/variable-resolver.ts', // Environment variable resolution
     'environment/render-snapshot': 'src/environment/render-snapshot.ts', // v2 branch env snapshot rendering
+    'environment/access-urls': 'src/environment/access-urls.ts', // Browser-safe command result contract
     'environment/webhook': 'src/environment/webhook.ts', // Managed environment webhook execution policy
     'utils/errors': 'src/utils/errors.ts', // Error handling and formatting utilities
     'utils/url': 'src/utils/url.ts', // Shared URL validation helpers
