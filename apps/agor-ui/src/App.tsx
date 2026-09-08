@@ -2174,6 +2174,7 @@ function AppContent() {
       suppressLeftPanel={onboardingWizardOpen}
       topBanner={
         <OnboardingBanners
+          authenticationGeneration={authenticationGeneration}
           user={currentUser}
           mcpServerCount={mcpServerCount}
           gatewayChannelCount={gatewayChannelCount}

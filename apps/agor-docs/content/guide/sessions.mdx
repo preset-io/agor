@@ -264,6 +264,21 @@ shared branch-scoped session, the child is attributed to that collaborator, so a
 borrow the parent's secret. Execution-home sessions cannot be continued across users. Callbacks
 carry message content, not an environment grant.
 
+### Credential reminders
+
+After onboarding, Agor may show a credential reminder for the enabled agent that
+New Session initially selects. It checks only that agent, not the health of all
+your AIs. Loading, network errors and unverified native logins are inconclusive,
+so they do not produce a disconnected reminder.
+
+**Don't remind me about this agent** is a persistent opt-out in this browser,
+scoped to your workspace, user and agent. It stays dismissed after credential
+changes and reconnects, and stops the reminder's background checks. No other
+setup reminder replaces it while that agent is selected. It does not
+change authentication, permissions, or errors reported by sessions. Clearing
+this site's browser storage resets the opt-out. The integrations reminder's
+**Maybe later** also persists for your workspace and user in this browser.
+
 ### Historical Claude CLI sessions
 
 Agor previously included an experimental `claude-code-cli` runtime. That integration has been
