@@ -160,6 +160,7 @@ describe('Own settings persistence (real browser)', () => {
 describe('Cross-panel validation (real browser)', () => {
   it('validates inactive provider drafts before making the combined user patch', async () => {
     const user = makeUser();
+    const onClose = vi.fn();
     const onUpdate = vi.fn(async (_userId: string, _updates: UpdateUserInput) => {});
     const client = {
       service: () => ({
@@ -174,21 +175,22 @@ describe('Cross-panel validation (real browser)', () => {
         ],
       }),
     } as unknown as AgorClient;
-    render(
+    const view = (currentUser: User) => (
       <ConfigProvider theme={{ token: { motion: false } }}>
         <AntApp>
           <UserSettingsModal
             open
-            user={user}
-            currentUser={user}
+            user={currentUser}
+            currentUser={currentUser}
             client={client}
             onUpdate={onUpdate}
-            onClose={vi.fn()}
+            onClose={onClose}
             initialTab="claude-code"
           />
         </AntApp>
       </ConfigProvider>
     );
+    const rendered = render(view(user));
     fireEvent.click(await screen.findByRole('tab', { name: 'Session defaults' }));
     fireEvent.mouseDown(await screen.findByLabelText('Default for new configurations'));
     fireEvent.click(await screen.findByText('Use a specific preset'));
@@ -200,9 +202,39 @@ describe('Cross-panel validation (real browser)', () => {
       fireEvent.click(await screen.findByText('Account · Profile'));
     }
     fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Changed name' } });
-    fireEvent.click(screen.getByRole('button', { name: /^save$/i }));
-    expect(await screen.findByText('Choose a preset')).toBeVisible();
-    expect(screen.getByRole('heading', { name: 'Claude Code' })).toBeVisible();
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /^save$/i }));
+    });
+    // Save validates multiple retained forms, navigates back, and renders Ant's
+    // debounced field errors. Wait for that complete state, not just text insertion
+    // within RTL's one-second default while all CI viewports are running.
+    await waitFor(
+      () => {
+        expect(screen.getByText('Choose a preset')).toBeVisible();
+        expect(screen.getByRole('heading', { name: 'Claude Code' })).toBeVisible();
+        expect(screen.getByRole('button', { name: /^save$/i })).toBeEnabled();
+      },
+      { timeout: 5_000 }
+    );
+    // A same-user realtime refresh must not erase the dirty form's errors.
+    await act(async () => {
+      rendered.rerender(view({ ...user, name: 'Realtime name' }));
+    });
+    expect(screen.getByText('Choose a preset')).toBeVisible();
     expect(onUpdate).not.toHaveBeenCalled();
+    expect(onClose).not.toHaveBeenCalled();
+
+    // Correct the invalid draft and prove Save still flushes both panels once.
+    fireEvent.mouseDown(screen.getByLabelText('Preset'));
+    fireEvent.click(await screen.findByText('Team preset'));
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /^save$/i }));
+    });
+    await waitFor(() => expect(onClose).toHaveBeenCalledOnce(), { timeout: 5_000 });
+    expect(onUpdate).toHaveBeenCalledOnce();
+    expect(onUpdate.mock.calls[0][1]).toMatchObject({
+      name: 'Changed name',
+      default_agentic_selection: { 'claude-code': { source: 'preset', preset_id: 'preset-a' } },
+    });
   });
 });
