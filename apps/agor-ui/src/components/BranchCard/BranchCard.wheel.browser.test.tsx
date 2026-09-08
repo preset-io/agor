@@ -370,7 +370,7 @@ it('opts panel/popover cards out, cleans up mode changes, and leaves standalone 
 });
 
 it('retains pointer anchoring and line-mode deltas when forwarding pinch', async () => {
-  const { flow } = await mount(2);
+  const { flow, container } = await mount(2);
   const row = screen.getByRole('button', { name: 'Open session Conversation 0' });
   const rect = row.getBoundingClientRect();
   // Chromium's constructed WheelEvent uses integer client coordinates.
@@ -379,11 +379,23 @@ it('retains pointer anchoring and line-mode deltas when forwarding pinch', async
     y: Math.trunc(rect.y + rect.height / 2),
   };
   const before = flow.screenToFlowPosition(pointer);
-  const zoom = flow.getZoom();
-  expect(
-    wheel(row, { ctrlKey: true, deltaMode: WheelEvent.DOM_DELTA_LINE, deltaY: -1 }).defaultPrevented
-  ).toBe(true);
-  expect(flow.getZoom()).toBeCloseTo(zoom * 2 ** 0.05);
+  const initialViewport = flow.getViewport();
+  const gesture = {
+    ctrlKey: true,
+    deltaMode: WheelEvent.DOM_DELTA_LINE,
+    deltaY: -1,
+    clientX: pointer.x,
+    clientY: pointer.y,
+  };
+  // Compare with React Flow itself rather than duplicate its platform-specific scaling.
+  expect(wheel(container.querySelector('.react-flow__pane')!, gesture).defaultPrevented).toBe(true);
+  const canvasViewport = flow.getViewport();
+  expect(canvasViewport.zoom).toBeGreaterThan(initialViewport.zoom);
+  await settle();
+  await act(async () => flow.setViewport(initialViewport));
+  await settle();
+  expect(wheel(row, gesture).defaultPrevented).toBe(true);
+  expect(flow.getViewport()).toEqual(canvasViewport);
   const after = flow.screenToFlowPosition(pointer);
   expect(after.x).toBeCloseTo(before.x);
   expect(after.y).toBeCloseTo(before.y);
