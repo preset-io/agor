@@ -8,6 +8,7 @@ import {
   readFile,
   rename,
   rm,
+  rmdir,
   stat,
   writeFile,
 } from 'node:fs/promises';
@@ -168,35 +169,40 @@ export async function writeAgenticToolSelectionManifest(
 export async function acquireAgenticToolInstallLock(): Promise<() => Promise<void>> {
   const root = getAgenticToolsRoot();
   const lock = join(root, '.install.lock');
+  const acquisitionGuard = join(root, '.install.acquire.lock');
   await ensureSharedManagedDirectory(root);
+  // Serialize stale inspection/removal across processes. Retrying the library's
+  // stat -> rmdir race cannot prevent one reclaimer deleting another's new lock.
+  // This short-lived guard must NOT expire: that would recreate the same race.
   try {
-    const release = await acquireFileLock(root, {
+    await mkdir(acquisitionGuard, { mode: PRIVATE_MANAGED_DIRECTORY_MODE });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'EEXIST') {
+      throw new Error(
+        'Another `agor install` is acquiring the agentic-tools lock. ' +
+          `If a previous installer was interrupted, verify that no installer is running before removing the empty directory ${JSON.stringify(acquisitionGuard)}.`
+      );
+    }
+    throw error;
+  }
+  let release: (() => Promise<void>) | undefined;
+  try {
+    release = await acquireFileLock(root, {
       lockfilePath: lock,
       realpath: false,
       stale: 10_000,
       update: 5_000,
-      // Two contenders can observe the same stale directory and race while
-      // proper-lockfile removes it. One may briefly see ENOENT if the other
-      // contender replaces the directory during the stale-lock probe. A few
-      // short, randomized retries let that transient race settle; a genuinely
-      // live lock still fails quickly with ELOCKED and the user-facing message
-      // below.
-      retries: {
-        retries: 3,
-        factor: 1,
-        minTimeout: 10,
-        maxTimeout: 25,
-        randomize: true,
-      },
+      retries: 0,
     });
     try {
       await chmod(lock, PRIVATE_MANAGED_DIRECTORY_MODE);
-      return release;
     } catch (error) {
       await release();
+      release = undefined;
       throw error;
     }
   } catch (error) {
+    await rmdir(acquisitionGuard);
     if ((error as NodeJS.ErrnoException).code === 'ELOCKED') {
       throw new Error(
         'Another `agor install` is already updating agentic tools. Try again when it finishes.'
@@ -204,6 +210,14 @@ export async function acquireAgenticToolInstallLock(): Promise<() => Promise<voi
     }
     throw error;
   }
+  try {
+    await rmdir(acquisitionGuard);
+  } catch (error) {
+    // Do not strand the long-lived lease if guard cleanup prevents returning it.
+    await release();
+    throw error;
+  }
+  return release;
 }
 
 export function getAgenticToolInstallSlug(tool: InstallableAgenticTool): string {

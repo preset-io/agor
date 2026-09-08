@@ -97,6 +97,17 @@ but installs into Agor's private runtime directory rather than changing global n
 is staged and swapped into place only after the exact Agor package version is verified. It does not
 replace Claude, Codex, or other tools you may already use from your terminal.
 
+Run only one installer at a time, including across Agor versions. Installation uses a
+heartbeat lease and a short-lived `.install.acquire.lock` directory under the managed
+agentic-tools root to serialize acquisition and stale-lease recovery across processes.
+The acquisition guard never expires automatically: deleting it based on age could let
+two installers proceed together. If an installer is killed during acquisition, the next
+attempt reports the exact guard path. First verify that **no installer is running**,
+then remove only that empty directory with `rmdir` and retry. Do not remove an active
+guard or recursively delete the managed tools directory. Normal completion removes the
+guard before package installation starts; an expired installation lease is still
+recovered automatically.
+
 Inspect the managed integrations at any time:
 
 ```bash
