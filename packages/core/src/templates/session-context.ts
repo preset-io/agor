@@ -42,12 +42,15 @@ export function renderAgorSystemPrompt(): Promise<string> {
 }
 
 /**
- * Trusted execution identity for the current provider request. Keep this separate
- * from the cached static orientation: forked/resumed SDK histories can retain old
- * instructions, and workspace files are shared by multiple Agor sessions.
+ * Runtime-supplied execution identity for the current provider request. Keep this
+ * separate from the cached static orientation: forked/resumed SDK histories can
+ * retain old instructions, and workspace files are shared by multiple Agor sessions.
  *
  * Pass the admitted execution's Agor ID, never an SDK thread ID or an ID recovered
  * from conversation text. No ancestry lookup, credentials, or per-turn metadata.
+ * This is model guidance, not authenticated text: other content can imitate the
+ * block, especially in a user turn. Destination permission checks, not this label
+ * or an unvalidated nonce, remain the authorization boundary.
  */
 export function renderAgorSessionIdentity(sessionId: SessionID): string {
   return `<agor_session_identity>

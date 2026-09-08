@@ -48,7 +48,7 @@ describe('renderAgorSessionIdentity', () => {
     expect(fork).toContain(
       'Intentional authorized alternate callbackSessionId targets remain supported'
     );
-    expect(fork.split('\n')).toHaveLength(5);
+    expect(fork).toContain('(runtime-supplied)');
   });
 
   it('does not contaminate the shared static orientation with any execution identity', async () => {

@@ -195,13 +195,23 @@ dbTest(
       const coordinator = await app.service('sessions').get(coordinatorResult.session.session_id);
       const coordinatorHeaders = await runtimeHeaders(coordinator);
       for (const scenario of [
-        { tool: 'agor_sessions_create', args: { enableCallback: true } },
-        { tool: 'agor_sessions_spawn', args: {} },
         {
+          name: 'fork: same-branch create defaults callback to caller',
+          tool: 'agor_sessions_create',
+          args: { enableCallback: true },
+        },
+        {
+          name: 'fork: spawn defaults callback to caller',
+          tool: 'agor_sessions_spawn',
+          args: {},
+        },
+        {
+          name: 'fork: cross-branch create defaults callback to caller',
           tool: 'agor_sessions_create',
           args: { enableCallback: true, branchId: remote.branch_id },
         },
         {
+          name: 'fork: cross-branch create preserves explicit original target',
           tool: 'agor_sessions_create',
           // Matches the verified incident call shape. The server cannot
           // distinguish a stale explicit A from an intentional override.
@@ -212,19 +222,34 @@ dbTest(
             branchId: remote.branch_id,
           },
         },
-        { tool: 'agor_sessions_create', args: { enableCallback: false } },
-        { tool: 'agor_sessions_spawn', args: { enableCallback: false } },
         {
+          name: 'fork: same-branch create disables callback',
+          tool: 'agor_sessions_create',
+          args: { enableCallback: false },
+        },
+        {
+          name: 'fork: spawn disables callback',
+          tool: 'agor_sessions_spawn',
+          args: { enableCallback: false },
+        },
+        {
+          name: 'fork: cross-branch create disables callback',
           tool: 'agor_sessions_create',
           args: { enableCallback: false, branchId: remote.branch_id },
         },
-        { tool: 'agor_sessions_create', args: { enableCallback: true, parentSessionId: null } },
         {
+          name: 'fork: same-branch create opts out of genealogy',
+          tool: 'agor_sessions_create',
+          args: { enableCallback: true, parentSessionId: null },
+        },
+        {
+          name: 'coordinator: cross-branch create defaults callback to caller',
           tool: 'agor_sessions_create',
           nested: true,
           args: { enableCallback: true, branchId: remote.branch_id },
         },
         {
+          name: 'coordinator: cross-branch create preserves explicit original target',
           tool: 'agor_sessions_create',
           nested: true,
           args: {
@@ -233,56 +258,69 @@ dbTest(
             callbackSessionId: original.session_id,
           },
         },
-        { tool: 'agor_sessions_spawn', nested: true, args: {} },
+        {
+          name: 'coordinator: spawn defaults callback to caller',
+          tool: 'agor_sessions_spawn',
+          nested: true,
+          args: {},
+        },
       ]) {
-        const caller = scenario.nested ? coordinator : fork;
-        const result = await call(
-          scenario.nested ? coordinatorHeaders : forkHeaders,
-          scenario.tool,
-          {
-            ...(scenario.tool === 'agor_sessions_create'
-              ? { branchId: branch.branch_id }
-              : { prompt: 'Child C' }),
-            agenticTool: 'claude-code',
-            ...scenario.args,
+        try {
+          const caller = scenario.nested ? coordinator : fork;
+          const expectedBranchId = scenario.args.branchId ?? branch.branch_id;
+          const result = await call(
+            scenario.nested ? coordinatorHeaders : forkHeaders,
+            scenario.tool,
+            {
+              ...(scenario.tool === 'agor_sessions_create'
+                ? { branchId: branch.branch_id }
+                : { prompt: 'Child C' }),
+              agenticTool: 'claude-code',
+              ...scenario.args,
+            }
+          );
+          const child = await app
+            .service('sessions')
+            .get(result.session?.session_id ?? result.session_id);
+          const enabled = scenario.args.enableCallback !== false;
+          const target = scenario.args.callbackSessionId ?? caller.session_id;
+          expect(child.branch_id, 'child must use the requested scenario branch').toBe(
+            expectedBranchId
+          );
+          if (enabled) expect(child.callback_config.callback_session_id).toBe(target);
+          if (expectedBranchId !== caller.branch_id) {
+            expect(child.genealogy.parent_session_id).toBeNull();
+            expect(result.remoteRelationship).toMatchObject({
+              source_session_id: caller.session_id,
+              callback_session_id: target,
+              callback_enabled: enabled,
+            });
+          } else if (scenario.args.parentSessionId !== null) {
+            expect(child.genealogy.parent_session_id).toBe(caller.session_id);
+          } else {
+            expect(child.genealogy.parent_session_id).toBeNull();
           }
-        );
-        const child = await app
-          .service('sessions')
-          .get(result.session?.session_id ?? result.session_id);
-        const enabled = scenario.args.enableCallback !== false;
-        const target = scenario.args.callbackSessionId ?? caller.session_id;
-        if (enabled) expect(child.callback_config.callback_session_id).toBe(target);
-        if (child.branch_id !== caller.branch_id) {
-          expect(child.genealogy.parent_session_id).toBeNull();
-          expect(result.remoteRelationship).toMatchObject({
-            source_session_id: caller.session_id,
-            callback_session_id: target,
-            callback_enabled: enabled,
+          queue.mockClear();
+          const task = await tasks.createPending({
+            session_id: child.session_id,
+            full_prompt: 'Child C',
+            created_by: user.user_id,
+            status: 'created',
           });
-        } else if (scenario.args.parentSessionId !== null) {
-          expect(child.genealogy.parent_session_id).toBe(caller.session_id);
-        } else {
-          expect(child.genealogy.parent_session_id).toBeNull();
-        }
-        queue.mockClear();
-        const task = await tasks.createPending({
-          session_id: child.session_id,
-          full_prompt: 'Child C',
-          created_by: user.user_id,
-          status: 'created',
-        });
-        await taskService.patch(task.task_id, { status: 'completed' });
-        const callbacks = (await tasks.findAll()).filter(
-          (t) => t.metadata?.child_task_id === task.task_id
-        );
-        expect(callbacks).toHaveLength(enabled ? 1 : 0);
-        if (enabled) {
-          expect(callbacks[0]).toMatchObject({ session_id: target, status: 'queued' });
-          expect(queue).toHaveBeenCalledWith(target, {});
-          if (target !== original.session_id) {
-            expect(queue.mock.calls.map(([id]) => id)).not.toContain(original.session_id);
+          await taskService.patch(task.task_id, { status: 'completed' });
+          const callbacks = (await tasks.findAll()).filter(
+            (t) => t.metadata?.child_task_id === task.task_id
+          );
+          expect(callbacks).toHaveLength(enabled ? 1 : 0);
+          if (enabled) {
+            expect(callbacks[0]).toMatchObject({ session_id: target, status: 'queued' });
+            expect(queue).toHaveBeenCalledWith(target, {});
+            if (target !== original.session_id) {
+              expect(queue.mock.calls.map(([id]) => id)).not.toContain(original.session_id);
+            }
           }
+        } catch (cause) {
+          throw new Error(`Callback routing scenario failed: ${scenario.name}`, { cause });
         }
       }
     } finally {

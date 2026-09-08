@@ -36,8 +36,23 @@ The identity is refreshed at six provider request boundaries:
 - **Gemini, GitHub Copilot, Cursor:** added at the normal initial turn send sites,
   not every tool-result continuation. Coverage does not imply native fork support.
 
+User-turn placement is not forced by a lack of session-instruction paths:
+Copilot's `prompt-service.ts` passes `systemMessage` to both `createSession` and
+`resumeSession`; Gemini's `prompt-service.ts` writes per-session orientation to a
+temporary file loaded through `geminiMdFilePaths`. The current per-turn request
+approach keeps those orientation paths unchanged and supplies identity at each
+normal turn send, at the cost of repeated user-turn content. Moving identity into
+those paths could avoid that extra user-turn content, but their identity refresh,
+retention, and model-compliance behavior would need provider validation. These
+request tests do not establish that either placement is superior; no channel
+change is made here.
+
 The shared static orientation remains identity-free. The small identity block is
-stable within one session, changes across sessions, and adds a bounded token cost.
+stable within one session, changes across sessions, and adds bounded token
+overhead **per submission**, not bounded cumulative retained-history overhead.
+User-turn insertion repeats across turns; retained and forked histories can
+accumulate copies, including ancestor session IDs. No exact token estimate is
+established here.
 No callback routing, authorization, schema, historical session, or persisted Agor
 user-message behavior changes. The stale generated identity tail was removed from
 shared `AGENTS.md` (`CLAUDE.md` remains its symlink), with regression coverage against
@@ -60,6 +75,10 @@ and the `agor_sessions_prompt` callback alternative remain available.
   scenarios include omitted targets, explicit authorized overrides, disabled
   callbacks, cross-branch provenance, genealogy opt-out, and nested coordinators.
   Stale transport/header hints do not override current runtime credentials.
+  The expected branch comes from scenario inputs, not the returned child. A
+  temporary probe forced create requests onto the local branch: the old oracle
+  passed, while the strengthened oracle failed at the named cross-branch case.
+  The probe was reverted before the successful focused rerun.
 - Tenant-derived execution identity stays separate from system/global static
   orientation. A negative request assertion checks that a later tenant's system
   payload does not contain the prior tenant's identity. Existing focused MCP
@@ -105,6 +124,13 @@ No live provider/model call or replay of historical sessions was performed.
 These tests prove request payloads, runtime MCP caller identity, persisted callback
 destinations, and queued completion admission—not model obedience or running-queue
 delivery. A model can still explicitly choose a stale authorized destination.
+Compliance is probabilistic: “runtime-supplied” describes the real block's
+provenance, not an authentication marker. Other conversation or workspace content
+can imitate the block and confuse the model into choosing an authorized but wrong
+destination, especially when identity is placed in a user turn. Destination
+permission checks in `apps/agor-daemon/src/mcp/tools/sessions.ts` remain the real
+authorization boundary; this limitation does not bypass them. Adding a nonce
+without a validating mechanism would not establish authenticity either.
 
 SDK execution, executor launch/queue draining, model listing, and message reads
 are stubbed. Repository-backed read adapters do not install the full Feathers
