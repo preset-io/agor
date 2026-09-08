@@ -1,5 +1,5 @@
 import type { Board, Branch, Repo, Session } from '@agor-live/client';
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { App } from 'antd';
 import { beforeEach, expect, it, vi } from 'vitest';
 import '../../index.css';
@@ -58,6 +58,17 @@ function makeSessions(count = 1001, gateway = false): Session[] {
     })
   );
   return sessions;
+}
+
+function makeGatewaySessions(count: number): Session[] {
+  return makeSessions(count, true).map((session, index) => ({
+    ...session,
+    session_id: `gateway-${index}` as Session['session_id'],
+    genealogy: {
+      children: [],
+      ...(index > 0 ? { parent_session_id: 'gateway-0' as Session['session_id'] } : {}),
+    },
+  }));
 }
 
 function mount(sessions: Session[], panelBranch = branch) {
@@ -135,14 +146,7 @@ it.each([false, true])(
 
 it('shares remaining space between trees and keeps scheduled runs and search reachable', async () => {
   const manual = makeSessions(301);
-  const gateway = makeSessions(301, true).map((session, index) => ({
-    ...session,
-    session_id: `gateway-${index}` as Session['session_id'],
-    genealogy: {
-      children: [],
-      ...(index > 0 ? { parent_session_id: 'gateway-0' as Session['session_id'] } : {}),
-    },
-  }));
+  const gateway = makeGatewaySessions(301);
   const scheduled = makeSessions(21).map((session, index) => ({
     ...session,
     session_id: `scheduled-${index}` as Session['session_id'],
@@ -158,6 +162,17 @@ it('shares remaining space between trees and keeps scheduled runs and search rea
     expect(scrollers()[1].clientHeight).toBeGreaterThan(80);
   });
   fireEvent.click(screen.getByRole('button', { name: /Scheduled Runs/ }));
+  await waitFor(() => expect(scrollers()[0].clientHeight).toBeGreaterThan(300));
+  const beforeParentCollapseHeight = scrollers()[1].clientHeight;
+  const manualSection = scrollers()[0].closest('.ant-collapse') as HTMLElement;
+  fireEvent.click(within(manualSection).getByRole('button', { name: 'Collapse Conversation 0' }));
+  await waitFor(() => {
+    expect(scrollers()[1].clientHeight).toBeGreaterThan(beforeParentCollapseHeight + 150);
+    expect(
+      manualSection.getBoundingClientRect().bottom - scrollers()[0].getBoundingClientRect().bottom
+    ).toBeLessThan(20);
+  });
+  fireEvent.click(within(manualSection).getByRole('button', { name: 'Expand Conversation 0' }));
   await waitFor(() => expect(scrollers()[0].clientHeight).toBeGreaterThan(300));
   const sharedHeight = scrollers()[1].clientHeight;
   fireEvent.click(screen.getByText('Sessions', { selector: 'strong' }));
@@ -220,3 +235,61 @@ it('keeps the tree reachable below a long description in a short container', asy
     40
   );
 });
+
+it.each([
+  { manualCount: 1, gatewayCount: 301 },
+  { manualCount: 1, gatewayCount: 1 },
+  { manualCount: 2, gatewayCount: 301 },
+  { manualCount: 301, gatewayCount: 2 },
+  { manualCount: 2, gatewayCount: 2 },
+])(
+  'releases unused space with $manualCount manual and $gatewayCount gateway sessions',
+  async ({ manualCount, gatewayCount }) => {
+    const { container } = mount([
+      ...makeSessions(manualCount),
+      ...makeGatewaySessions(gatewayCount),
+    ]);
+    const scrollers = () => [...container.querySelectorAll<HTMLElement>('.ant-tree-list-holder')];
+    await waitFor(() => {
+      expect(scrollers()).toHaveLength(2);
+      for (const [index, count] of [manualCount, gatewayCount].entries()) {
+        const tree = scrollers()[index];
+        if (count <= 2) {
+          const section = tree.closest('.ant-collapse')!;
+          // Only the Collapse body padding may follow the rendered short tree.
+          expect(
+            section.getBoundingClientRect().bottom - tree.getBoundingClientRect().bottom
+          ).toBeLessThan(20);
+        } else {
+          expect(tree.clientHeight).toBeGreaterThan(500);
+        }
+      }
+    });
+    // Realtime growth must remove the short-tree cap; later shrink must restore it.
+    await act(async () => {
+      agorStore.setState({
+        sessionsByBranch: new Map([
+          [branch.branch_id, [...makeSessions(301), ...makeGatewaySessions(301)]],
+        ]),
+      });
+    });
+    await waitFor(() => {
+      for (const tree of scrollers()) expect(tree.clientHeight).toBeGreaterThan(300);
+    });
+    await act(async () => {
+      agorStore.setState({
+        sessionsByBranch: new Map([
+          [branch.branch_id, [...makeSessions(2), ...makeGatewaySessions(2)]],
+        ]),
+      });
+    });
+    await waitFor(() => {
+      for (const tree of scrollers()) {
+        expect(
+          tree.closest('.ant-collapse')!.getBoundingClientRect().bottom -
+            tree.getBoundingClientRect().bottom
+        ).toBeLessThan(20);
+      }
+    });
+  }
+);
