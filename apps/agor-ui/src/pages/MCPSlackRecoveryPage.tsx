@@ -1,7 +1,10 @@
 import type { AgorClient, MCPOAuthStartFailure } from '@agor-live/client';
 import { Alert, Button, Card, Flex, Spin, Typography, theme } from 'antd';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { openMarketplaceOAuthPopup } from '@/components/Marketplace/marketplaceOAuthPopup';
+import {
+  type MarketplaceOAuthPopup,
+  openMarketplaceOAuthPopup,
+} from '@/components/Marketplace/marketplaceOAuthPopup';
 import { waitForMCPOAuthAttempt } from '@/utils/mcpOAuthAttempt';
 
 type PageState =
@@ -33,7 +36,8 @@ export function MCPSlackRecoveryPage({ client }: Props) {
   const token = useMemo(fragmentToken, []);
   const [state, setState] = useState<PageState>('checking');
   const [preflight, setPreflight] = useState<RecoveryPreflight | null>(null);
-  const mounted = useRef(true);
+  const operationOwner = useRef(0);
+  const activePopup = useRef<MarketplaceOAuthPopup | null>(null);
   const pollAbort = useRef<AbortController | null>(null);
   const titleRef = useRef<HTMLHeadingElement | null>(null);
   const { token: designToken } = theme.useToken();
@@ -51,14 +55,10 @@ export function MCPSlackRecoveryPage({ client }: Props) {
       );
     }
   }, [token]);
-  useEffect(
-    () => () => {
-      mounted.current = false;
-      pollAbort.current?.abort();
-    },
-    []
-  );
   useEffect(() => {
+    const owner = ++operationOwner.current;
+    setPreflight(null);
+    setState('checking');
     if (!client || !token) {
       setState('unavailable');
       return;
@@ -81,6 +81,10 @@ export function MCPSlackRecoveryPage({ client }: Props) {
       .catch(() => !cancelled && setState('unavailable'));
     return () => {
       cancelled = true;
+      if (operationOwner.current === owner) operationOwner.current++;
+      pollAbort.current?.abort();
+      activePopup.current?.close();
+      activePopup.current = null;
     };
   }, [client, token]);
 
@@ -92,18 +96,21 @@ export function MCPSlackRecoveryPage({ client }: Props) {
       setState('failed');
       return;
     }
+    const owner = operationOwner.current;
+    const isCurrent = () => operationOwner.current === owner;
+    activePopup.current = popup;
     setState('starting');
     try {
       const result = (await client.service('mcp-servers/oauth-start').create({
         slack_recovery_token: token,
       })) as { success: true; authorizationUrl: string; attempt_id: string } | MCPOAuthStartFailure;
-      if (!mounted.current) return;
+      if (!isCurrent()) return;
       if (!result.success || !result.authorizationUrl || !result.attempt_id) {
         popup.close();
         setState('failed');
         return;
       }
-      if (!popup.navigate(result.authorizationUrl, () => mounted.current)) {
+      if (!popup.navigate(result.authorizationUrl, isCurrent)) {
         setState('failed');
         return;
       }
@@ -113,11 +120,11 @@ export function MCPSlackRecoveryPage({ client }: Props) {
       const attempt = await waitForMCPOAuthAttempt(client, result.attempt_id, {
         signal: pollAbort.current.signal,
       });
-      if (!mounted.current) return;
+      if (!isCurrent()) return;
       setState(attempt.status === 'succeeded' ? 'recovered' : 'failed');
     } catch {
       popup.close();
-      if (mounted.current) setState('failed');
+      if (isCurrent()) setState('failed');
     }
   };
 

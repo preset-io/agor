@@ -976,11 +976,12 @@ describe('configureRealtimePublish', () => {
     const app = makeApp([owner, viewer, admin, service]);
     configureRealtimePublish({
       app,
-      branchRbacEnabled: false,
-      branchRepository: {} as never,
-      sessionsRepository: {
-        findCreatedByBySessionId: vi.fn().mockResolvedValue('owner'),
-      } as never,
+      ...repos({
+        branch: branch('branch-1'),
+        session: session('session-1', 'branch-1'),
+        permissions: { owner: 'view', viewer: 'view', admin: 'view' },
+        owner: 'owner',
+      }),
     });
     const task = {
       task_id: 'task-1',

@@ -53,9 +53,12 @@ describe('MCP recovery multi-principal realtime transport', () => {
     );
     configureRealtimePublish({
       app: app as never,
-      branchRbacEnabled: false,
-      branchRepository: {} as BranchRepository,
+      branchRepository: {
+        findRealtimeVisibilityBranch: async () => ({ branch_id: 'branch-1' }),
+        findRealtimeViewUserIds: async () => [owner.user_id, collaborator.user_id],
+      } as unknown as BranchRepository,
       sessionsRepository: {
+        findBranchIdBySessionId: async () => 'branch-1',
         findCreatedByBySessionId: async () => owner.user_id,
       } as SessionRepository,
     });
