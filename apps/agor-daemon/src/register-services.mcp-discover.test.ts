@@ -84,9 +84,12 @@ describe('register-services /mcp-servers/discover wiring', () => {
   });
 
   it('returns the same canonical capability list that persistence accepted', () => {
-    expect(discoverBlock).toContain('responseCapabilities = await runWithinOAuthAuthority(');
-    expect(discoverBlock).toContain('tools: responseCapabilities.tools.map(');
-    expect(discoverBlock).toContain('tools: responseCapabilities.tools.length');
+    expect(discoverBlock).toContain('normalizedDiscovery = await runWithinOAuthAuthority(');
+    expect(discoverBlock).toContain('tools: normalizedDiscovery.capabilities.tools.map(');
+    expect(discoverBlock).toContain('tools: normalizedDiscovery.capabilities.tools.length');
+    expect(discoverBlock).toContain(
+      'descriptions_truncated: normalizedDiscovery.truncatedDescriptions'
+    );
   });
 
   it('calls resolveProbeServerTemplates before resolveMCPAuthHeaders', () => {

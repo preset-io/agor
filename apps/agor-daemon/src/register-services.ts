@@ -5897,7 +5897,7 @@ export async function registerMCPServices(
             // than the generic MCP service. Refresh every device belonging to
             // the actor and durable owner with the same empty, tenant-targeted
             // control event used by Marketplace actions.
-            emitMarketplaceInvalidation(
+            emitMarketplaceChanged(
               app,
               tenantId,
               [userId, authoritativeServer?.owner_user_id].filter(Boolean) as UserID[]

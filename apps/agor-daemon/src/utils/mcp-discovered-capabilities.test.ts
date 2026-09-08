@@ -162,12 +162,12 @@ describe('discovery authority/configuration CAS (SQLite)', () => {
       persistDiscoveredMCPCapabilities(scopedDb, undefined, snapshot, duplicateTools, masterSecret)
     );
 
-    expect(canonical.tools).toEqual([
+    expect(canonical.capabilities.tools).toEqual([
       { name: 'search', description: 'First provider description' },
       { name: 'lookup', description: 'Lookup' },
     ]);
     await expect(new MCPServerRepository(db).findById(server.mcp_server_id)).resolves.toMatchObject(
-      { tools: canonical.tools }
+      { tools: canonical.capabilities.tools }
     );
   });
 
@@ -186,6 +186,7 @@ describe('discovery authority/configuration CAS (SQLite)', () => {
               description: providerDescription,
               input_schema: { type: 'object' },
             },
+            { name: 'fictional_mail_search', description: 'Conflicting duplicate' },
           ],
           resources: [],
           prompts: [],
@@ -195,6 +196,7 @@ describe('discovery authority/configuration CAS (SQLite)', () => {
     );
 
     expect(result.truncatedDescriptions).toBe(1);
+    expect(result.capabilities.tools).toHaveLength(1);
     const description = result.capabilities.tools[0]?.description ?? '';
     expect(description.length).toBeLessThanOrEqual(MAX_MCP_CAPABILITY_DESCRIPTION_LENGTH);
     expect(description.endsWith(MCP_DESCRIPTION_TRUNCATION_SUFFIX)).toBe(true);

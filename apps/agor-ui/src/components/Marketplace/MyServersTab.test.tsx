@@ -443,7 +443,7 @@ describe('Marketplace server inventory and settings', () => {
     const optimistic = await screen.findByRole('switch', { name: 'GitHub: issues.create off' });
     expect(optimistic).toBe(control);
     expect(optimistic).not.toBeDisabled();
-    expect(success).not.toHaveBeenCalled();
+    await waitFor(() => expect(success).toHaveBeenCalledWith('issues.create is off'));
     expect(screen.getByRole('dialog')).toBe(drawer);
 
     await waitFor(() => expect(service).toHaveBeenCalledWith('mcp-marketplace/tool-permission'));
