@@ -7,6 +7,14 @@ import { ConnectionProvider } from '../../contexts/ConnectionContext';
 import { agorStore } from '../../store/agorStore';
 import { MCPServersTable } from './MCPServersTable';
 
+// The edit modal mounts MCPServerFormFields, which pulls in the troubleshoot
+// hook (router + canvas-nav contexts) this bare harness doesn't provide; stub
+// it so opening a server row renders in isolation. Mirrors the stub in
+// MCPServerFormFields.test.tsx.
+vi.mock('@/hooks/useTroubleshootError', () => ({
+  useTroubleshootError: () => ({ showErrorWithTroubleshoot: vi.fn() }),
+}));
+
 const ADMIN: User = {
   user_id: 'user-admin',
   email: 'admin@agor.live',
