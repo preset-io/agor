@@ -141,17 +141,17 @@ function formatTeammateBootstrapPrompt(context: TeammateBootstrapPromptContext):
       switch (integration.setup.surface) {
         case 'marketplace':
           lines.push(
-            `- ${integration.name}: use the reviewed Marketplace entry ${integration.setup.catalogEntryName}. Ask the user to connect it there; do not bypass the catalog by registering a guessed endpoint through MCP tools.`
+            `- ${integration.name}: use the reviewed Catalog entry ${integration.setup.catalogEntryName}. Ask the user to connect it there; do not bypass the catalog by registering a guessed endpoint through MCP tools.`
           );
           break;
         case 'mcp-settings':
           lines.push(
-            `- ${integration.name}: first check whether a configured server is already available. If not, offer to register the official endpoint ${integration.setup.endpoint} through the MCP tools only after the user agrees; use session scope and attach it to this session unless they explicitly ask for workspace-wide setup. Let the service enforce the current user's workspace member policy, and explain any policy refusal instead of assuming only admins can configure MCP. Never ask for a secret in chat; if OAuth requires browser action, send the user to Settings -> MCP Servers for that action. Do not call this a Marketplace entry, and keep gateway channels separate.`
+            `- ${integration.name}: first check whether a configured server is already available. If not, offer to register the official endpoint ${integration.setup.endpoint} through the MCP tools only after the user agrees; use session scope and attach it to this session unless they explicitly ask for workspace-wide setup. Let the service enforce the current user's workspace member policy, and explain any policy refusal instead of assuming only admins can configure MCP. Never ask for a secret in chat; if OAuth requires browser action, send the user to Settings -> MCP Servers for that action. Do not call this a Catalog entry, and keep gateway channels separate.`
           );
           break;
         case 'connected-repository':
           lines.push(
-            `- ${integration.name}: use the repository already connected to Agor, or ask which repository to add. Do not describe this as an MCP or Marketplace install.`
+            `- ${integration.name}: use the repository already connected to Agor, or ask which repository to add. Do not describe this as an MCP or Catalog install.`
           );
           break;
       }

@@ -1,4 +1,9 @@
-import type { EffortLevel } from '@agor/core/types';
+import {
+  renderAgorSessionIdentity,
+  renderAgorSystemPrompt,
+} from '@agor/core/templates/session-context';
+import type { EffortLevel, SessionID } from '@agor/core/types';
+import type { createOpencodeClient } from '@opencode-ai/sdk';
 import { describe, expect, it, vi } from 'vitest';
 import { OpenCodeCleanupUnverifiedError } from './managed-server.js';
 import { OpenCodeTool } from './opencode-tool.js';
@@ -52,43 +57,62 @@ function settleRuntimeCleanup(
   ).settleRuntimeCleanup(activeSessionAbort, collectorStop, close);
 }
 
-async function submittedPrompt(effort?: EffortLevel) {
-  const prompt = vi.fn(async () => ({ error: { name: 'PromptError' } }));
+async function submittedPrompt(
+  effort?: EffortLevel,
+  identity: { agorSessionId?: SessionID; existingOpenCodeSessionId?: string } = {
+    agorSessionId: 'session-1' as SessionID,
+  },
+  userPrompt = 'Continue'
+) {
+  type PromptRequest = Parameters<ReturnType<typeof createOpencodeClient>['session']['prompt']>[0];
+  const prompt = vi.fn(async (_request: PromptRequest) => ({ error: { name: 'PromptError' } }));
   const stream = (async function* () {})();
   const client = {
     event: { subscribe: vi.fn(async () => ({ stream })) },
     session: {
+      create: vi.fn(async () => ({ data: { id: 'opencode-session-1' } })),
+      get: vi.fn(async () => ({ data: { id: 'opencode-session-1' } })),
       messages: vi.fn(async () => ({ data: [], error: undefined })),
       prompt,
     },
   };
   const tool = new OpenCodeTool({});
-  const executeTask = (
-    tool as unknown as {
-      executeTask(
-        client: unknown,
-        input: unknown,
-        context: unknown,
-        callbacks: undefined,
-        registerStop: (stop: () => Promise<void>) => void,
-        sanitizer: { error(value: unknown): Error }
-      ): Promise<unknown>;
-    }
-  ).executeTask.bind(tool);
+  const runtime = tool as unknown as {
+    resolveSession(
+      client: unknown,
+      input: unknown
+    ): Promise<{ openCodeSessionId: string; sessionWasCreated: boolean }>;
+    executeTask(
+      client: unknown,
+      input: unknown,
+      context: unknown,
+      callbacks: undefined,
+      registerStop: (stop: () => Promise<void>) => void,
+      sanitizer: { error(value: unknown): Error }
+    ): Promise<unknown>;
+  };
+  const input = {
+    ...identity,
+    taskId: 'task-1',
+    prompt: userPrompt,
+    agorAssistantMessageId: 'message-1',
+    effort,
+    signal: new AbortController().signal,
+    title: 'Test session',
+    directory: '/workspace',
+    persistOpenCodeSessionId: vi.fn(),
+  };
+  const resolved = await runtime.resolveSession(client, input);
+  expect(resolved.sessionWasCreated).toBe(!identity.existingOpenCodeSessionId);
+  expect(client.session.create).toHaveBeenCalledTimes(identity.existingOpenCodeSessionId ? 0 : 1);
+  expect(client.session.get).toHaveBeenCalledTimes(identity.existingOpenCodeSessionId ? 1 : 0);
 
   await expect(
-    executeTask(
+    runtime.executeTask(
       client,
+      input,
       {
-        agorSessionId: 'session-1',
-        taskId: 'task-1',
-        prompt: 'Continue',
-        agorAssistantMessageId: 'message-1',
-        effort,
-        signal: new AbortController().signal,
-      },
-      {
-        opencodeSessionId: 'opencode-session-1',
+        opencodeSessionId: resolved.openCodeSessionId,
         provider: 'openai',
         model: 'gpt-test',
         branchPath: '/workspace',
@@ -193,6 +217,38 @@ describe('OpenCodeTool abort cleanup', () => {
 });
 
 describe('OpenCodeTool prompt variants', () => {
+  it('sends fresh system identity on first/resumed requests without changing user text', async () => {
+    const staticPrompt = await renderAgorSystemPrompt();
+    const userPrompt = '  Continue\nwith the exact user prompt.\n';
+    for (const identity of [
+      { agorSessionId: 'tenant-A-session' as SessionID },
+      {
+        agorSessionId: 'tenant-A-session' as SessionID,
+        existingOpenCodeSessionId: 'opencode-session-1',
+      },
+      { agorSessionId: 'tenant-B-session' as SessionID },
+    ]) {
+      const request = await submittedPrompt(undefined, identity, userPrompt);
+      expect(request?.body?.parts).toEqual([{ type: 'text', text: userPrompt }]);
+      expect(request?.body?.system).toBe(
+        `${staticPrompt}\n\n${renderAgorSessionIdentity(identity.agorSessionId)}`
+      );
+      expect(request?.body?.system).not.toContain('opencode-session-1');
+      if (identity.agorSessionId === 'tenant-B-session') {
+        expect(request?.body?.system).not.toContain('tenant-A-session');
+      }
+    }
+  });
+
+  it('retains only static orientation when runtime identity is absent', async () => {
+    // Production requires an Agor ID; defend the request boundary against an
+    // absent runtime value without substituting the provider session ID.
+    const request = await submittedPrompt(undefined, {});
+
+    expect(request?.body?.system).toBe(await renderAgorSystemPrompt());
+    expect(request?.body?.parts).toEqual([{ type: 'text', text: 'Continue' }]);
+  });
+
   it('submits the configured Agor effort as the native prompt variant alongside the Agor system prompt', async () => {
     const request = await submittedPrompt('max');
 

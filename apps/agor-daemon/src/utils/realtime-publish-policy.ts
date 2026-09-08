@@ -1,4 +1,4 @@
-import type { UserRole } from '@agor/core/types';
+import { ENVIRONMENT_COMMAND_REPORT_SERVICE, type UserRole } from '@agor/core/types';
 
 /**
  * The allowlist that decides which services may fan out over the socket at all.
@@ -243,6 +243,10 @@ export const REALTIME_PUBLISH_POLICY = {
   'auth/launch': { audience: 'none', why: 'Exchanges a launch token for a session.' },
   'check-auth': { audience: 'none', why: 'Echoes back the API key it was asked to validate.' },
   'config/resolve-api-key': { audience: 'none', why: 'Returns a provider API key.' },
+  [ENVIRONMENT_COMMAND_REPORT_SERVICE]: {
+    audience: 'none',
+    why: 'Attempt-scoped executor RPC; persisted environment updates publish through branches.',
+  },
   'executor-git-environment': {
     audience: 'none',
     why: 'Returns a command-scoped Git credential DTO to one executor.',
@@ -258,6 +262,11 @@ export const REALTIME_PUBLISH_POLICY = {
     why: 'Imports Codex credentials belonging to the caller.',
   },
   'codex-auth/logout': { audience: 'none', why: 'Credential control plane.' },
+  'claude-auth/oauth': {
+    audience: 'none',
+    why: 'Per-caller OAuth attempt and credential control plane.',
+  },
+  'claude-auth/logout': { audience: 'none', why: 'Credential control plane.' },
   'mcp-servers/oauth-start': { audience: 'none', why: 'OAuth control plane.' },
   'mcp-servers/oauth-browser-reservations': {
     audience: 'none',
@@ -274,6 +283,10 @@ export const REALTIME_PUBLISH_POLICY = {
   'mcp-servers/oauth-disconnect': {
     audience: 'none',
     why: 'Signalled by the native oauth:disconnected packet.',
+  },
+  'mcp-servers/oauth-client-registration-reset': {
+    audience: 'none',
+    why: 'Admin-only OAuth registration recovery control plane.',
   },
   'mcp-servers/oauth-status': { audience: 'none', why: 'Per-user token status.' },
   'mcp-servers/oauth-attempt-status': {
@@ -319,11 +332,11 @@ export const REALTIME_PUBLISH_POLICY = {
   },
   'mcp-marketplace/remove-unattached': {
     audience: 'none',
-    why: 'Caller-private acknowledgement; an explicit empty user-room invalidation refreshes every owner device.',
+    why: 'Caller-private acknowledgement; an explicit empty user-room freshness hint refreshes every owner device.',
   },
   'mcp-marketplace/tool-permission': {
     audience: 'none',
-    why: 'Caller-private acknowledgement; an explicit empty user-room invalidation refreshes every affected owner/admin device.',
+    why: 'Caller-private acknowledgement; an explicit empty user-room freshness hint refreshes every affected owner/admin device.',
   },
   'mcp-member-policy': { audience: 'none', why: 'Policy read for the caller.' },
   'mcp-egress/status': {

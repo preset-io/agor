@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { App as AntApp } from 'antd';
 import { describe, expect, it, vi } from 'vitest';
 import { ApiKeyFields } from './ApiKeyFields';
@@ -49,5 +49,52 @@ describe('ApiKeyFields authority fencing', () => {
 
     rendered.rerender(view('admin-b:admin', 6));
     expect(screen.getByPlaceholderText('sk-ant-...')).toHaveValue('');
+  });
+  it('preserves a failed credential draft for retry without leaking the server error', async () => {
+    const onSave = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('upstream rejected secret-example'))
+      .mockResolvedValueOnce(undefined);
+    render(
+      <AntApp>
+        <ApiKeyFields
+          tool="gemini"
+          fieldStatus={{}}
+          onSave={onSave}
+          onClear={vi.fn()}
+          identityKey="user-a"
+          operationScope={['user-a', 1]}
+        />
+      </AntApp>
+    );
+    const input = screen.getByPlaceholderText('AIza...');
+    fireEvent.change(input, { target: { value: 'secret-example' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not save');
+    expect(screen.queryByText(/upstream rejected/)).toBeNull();
+    expect(input).toHaveValue('secret-example');
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(input).toHaveValue(''));
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(onSave).toHaveBeenCalledTimes(2);
+  });
+
+  it('reports a rejected clear without claiming the key is unset', async () => {
+    const onClear = vi.fn().mockRejectedValue(new Error('denied'));
+    render(
+      <AntApp>
+        <ApiKeyFields
+          tool="gemini"
+          fieldStatus={{ GEMINI_API_KEY: true }}
+          onSave={vi.fn()}
+          onClear={onClear}
+          identityKey="user-a"
+          operationScope={['user-a', 1]}
+        />
+      </AntApp>
+    );
+    fireEvent.click(screen.getByRole('button', { name: /Clear$/ }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not clear');
+    expect(screen.getByText('Set')).toBeVisible();
   });
 });

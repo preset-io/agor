@@ -7,7 +7,6 @@
 import type {
   CreateMCPServerInput,
   MCPAuth,
-  MCPScope,
   MCPServer,
   MCPServerFilters,
   MCPServerID,
@@ -16,7 +15,7 @@ import type {
   UserID,
 } from '@agor/core/types';
 import type { AnyColumn, SQL } from 'drizzle-orm';
-import { and, asc, desc, eq, isNull, like, or, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, isNull, like, or, sql } from 'drizzle-orm';
 import { PAGINATION } from '../../config/constants';
 import { generateId } from '../../lib/ids';
 import {
@@ -97,9 +96,6 @@ const MCP_SERVER_SORT_COLUMNS: Record<MCPServerSortField, AnyColumn> = {
 function buildMCPServerConditions(filters?: MCPServerFilters): SQL[] {
   const conditions: SQL[] = [];
   if (filters?.scope) conditions.push(eq(mcpServers.scope, filters.scope));
-  if (filters?.scopeId && filters.scope === 'global') {
-    conditions.push(eq(mcpServers.owner_user_id, filters.scopeId));
-  }
   if (filters?.transport) conditions.push(eq(mcpServers.transport, filters.transport));
   if (filters?.enabled !== undefined) conditions.push(eq(mcpServers.enabled, filters.enabled));
   if (filters?.source) conditions.push(eq(mcpServers.source, filters.source));
@@ -287,6 +283,7 @@ export class MCPServerRepository
   constructor(private db: Database) {}
 
   private static readonly CATALOG_CONNECT_GENERATION_NAMESPACE = 'mcp-catalog-connect-generation';
+  private static readonly AUTHORITY_READ_BATCH_SIZE = 500;
 
   static catalogConnectGenerationKey(ownerUserId: string, catalogEntryName: string): string {
     return JSON.stringify([ownerUserId, catalogEntryName]);
@@ -338,6 +335,9 @@ export class MCPServerRepository
       tools: row.data.tools,
       resources: row.data.resources,
       prompts: row.data.prompts,
+      capabilities_discovered_at: row.data.capabilities_discovered_at
+        ? new Date(row.data.capabilities_discovered_at)
+        : undefined,
 
       // Tool permissions
       tool_permissions: row.data.tool_permissions,
@@ -416,6 +416,12 @@ export class MCPServerRepository
         tools: 'tools' in data ? data.tools : undefined,
         resources: 'resources' in data ? data.resources : undefined,
         prompts: 'prompts' in data ? data.prompts : undefined,
+        capabilities_discovered_at:
+          options.preserveDaemonRevisions &&
+          'capabilities_discovered_at' in data &&
+          data.capabilities_discovered_at
+            ? new Date(data.capabilities_discovered_at).toISOString()
+            : undefined,
         tool_permissions: 'tool_permissions' in data ? data.tool_permissions : undefined,
       },
     };
@@ -569,6 +575,42 @@ export class MCPServerRepository
   }
 
   /**
+   * Read an explicitly bounded set of caller-owned rows for a batch authority
+   * decision. Ownerless and other-user rows are excluded in SQL.
+   */
+  async findOwnedByIds(userId: UserID, ids: readonly MCPServerID[]): Promise<MCPServer[]> {
+    try {
+      const uniqueIds = [...new Set(ids)];
+      const rows: MCPServerRow[] = [];
+      for (
+        let offset = 0;
+        offset < uniqueIds.length;
+        offset += MCPServerRepository.AUTHORITY_READ_BATCH_SIZE
+      ) {
+        const batch = uniqueIds.slice(
+          offset,
+          offset + MCPServerRepository.AUTHORITY_READ_BATCH_SIZE
+        );
+        if (batch.length === 0) continue;
+        rows.push(
+          ...(await select(this.db)
+            .from(mcpServers)
+            .where(
+              and(eq(mcpServers.owner_user_id, userId), inArray(mcpServers.mcp_server_id, batch))
+            )
+            .all())
+        );
+      }
+      return rows.map((row) => this.rowToMCPServer(row));
+    } catch (error) {
+      throw new RepositoryError(
+        `Failed to find owned MCP servers: ${error instanceof Error ? error.message : String(error)}`,
+        error
+      );
+    }
+  }
+
+  /**
    * Find all MCP servers
    */
   async findAll(filters?: MCPServerFilters): Promise<MCPServer[]> {
@@ -601,13 +643,6 @@ export class MCPServerRepository
         error
       );
     }
-  }
-
-  /**
-   * Find MCP servers by scope
-   */
-  async findByScope(scope: string, scopeId?: string): Promise<MCPServer[]> {
-    return this.findAll({ scope: scope as MCPScope, scopeId });
   }
 
   /**
@@ -1032,9 +1067,10 @@ export class MCPServerRepository
     const toolsJson = JSON.stringify(capabilities.tools ?? []);
     const resourcesJson = JSON.stringify(capabilities.resources ?? []);
     const promptsJson = JSON.stringify(capabilities.prompts ?? []);
+    const discoveredAt = new Date().toISOString();
     const nextData = isPostgresDatabase(this.db)
-      ? sql`jsonb_set(jsonb_set(jsonb_set(${mcpServers.data}, '{tools}'::text[], ${toolsJson}::jsonb, true), '{resources}'::text[], ${resourcesJson}::jsonb, true), '{prompts}'::text[], ${promptsJson}::jsonb, true)`
-      : sql`json_set(${mcpServers.data}, '$.tools', json(${toolsJson}), '$.resources', json(${resourcesJson}), '$.prompts', json(${promptsJson}))`;
+      ? sql`jsonb_set(jsonb_set(jsonb_set(jsonb_set(${mcpServers.data}, '{tools}'::text[], ${toolsJson}::jsonb, true), '{resources}'::text[], ${resourcesJson}::jsonb, true), '{prompts}'::text[], ${promptsJson}::jsonb, true), '{capabilities_discovered_at}'::text[], to_jsonb(${discoveredAt}::text), true)`
+      : sql`json_set(${mcpServers.data}, '$.tools', json(${toolsJson}), '$.resources', json(${resourcesJson}), '$.prompts', json(${promptsJson}), '$.capabilities_discovered_at', ${discoveredAt})`;
     const result = await update(this.db, mcpServers)
       .set({ data: nextData, updated_at: new Date() })
       .where(where)

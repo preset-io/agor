@@ -32,13 +32,16 @@ export function useMarketplaceOverview(input: {
   const [loaded, setLoaded] = useState<{
     authority: typeof authority;
     value: MCPMarketplaceOverview;
-  }>({ authority: null, value: EMPTY });
+    successful: boolean;
+  }>({ authority: null, value: EMPTY, successful: false });
   const [loading, setLoading] = useState(ready);
   const [loadedError, setLoadedError] = useState<{
     authority: typeof authority;
     value: string | null;
   }>({ authority: null, value: null });
   const requestSequence = useRef(0);
+  const loadedRef = useRef(loaded);
+  loadedRef.current = loaded;
 
   // Never render data captured under another identity/role/auth generation,
   // even for the render before effects run. This is the caller-private data
@@ -48,22 +51,36 @@ export function useMarketplaceOverview(input: {
 
   const refresh = useCallback(async () => {
     const operation = guard.begin();
-    if (!client || !ready || !operation.isCurrent()) return;
+    if (!client || !ready || !operation.isCurrent()) return null;
     const request = ++requestSequence.current;
     const isCurrent = () => operation.isCurrent() && requestSequence.current === request;
-    setLoading(true);
+    const hasSnapshot = loadedRef.current.authority === authority && loadedRef.current.successful;
+    // Revalidation is deliberately stale-while-refresh. A table, drawer, or
+    // confirmation that was already rendered must not disappear just because
+    // focus/visibility or a realtime hint asked for a fresher projection.
+    if (!hasSnapshot) setLoading(true);
     setLoadedError({ authority, value: null });
     try {
-      const result = await client.service('mcp-marketplace').find();
-      if (!isCurrent()) return;
-      setLoaded({ authority, value: result });
+      const result = (await client
+        .service('mcp-marketplace')
+        .find()) as unknown as MCPMarketplaceOverview;
+      if (!isCurrent()) return null;
+      const next = { authority, value: result, successful: true };
+      loadedRef.current = next;
+      setLoaded(next);
+      return result;
     } catch (cause) {
       if (!isCurrent()) return;
-      setLoaded({ authority, value: EMPTY });
+      if (!hasSnapshot) {
+        const next = { authority, value: EMPTY, successful: false };
+        loadedRef.current = next;
+        setLoaded(next);
+      }
       setLoadedError({
         authority,
-        value: cause instanceof Error ? cause.message : 'Could not load Marketplace data',
+        value: cause instanceof Error ? cause.message : 'Could not load Catalog data',
       });
+      return null;
     } finally {
       if (isCurrent()) setLoading(false);
     }
@@ -71,7 +88,7 @@ export function useMarketplaceOverview(input: {
 
   useEffect(() => {
     if (!ready) {
-      setLoaded({ authority: null, value: EMPTY });
+      setLoaded({ authority: null, value: EMPTY, successful: false });
       setLoading(false);
       setLoadedError({ authority: null, value: null });
       return;
@@ -85,9 +102,17 @@ export function useMarketplaceOverview(input: {
     const schedule = () => {
       clearTimeout(timer);
       requestSequence.current++;
-      // Visibility can only narrow while this read is in flight. Fail closed
-      // immediately, then coalesce event bursts into one authoritative read.
-      setLoaded({ authority, value: EMPTY });
+      setLoadedError({ authority, value: null });
+      timer = setTimeout(() => void refresh(), 100);
+    };
+    const invalidate = () => {
+      clearTimeout(timer);
+      requestSequence.current++;
+      // This targeted event is emitted for caller revocation. Unlike ordinary
+      // freshness hints it is an explicit authority narrowing, so fail closed.
+      const next = { authority, value: EMPTY, successful: false };
+      loadedRef.current = next;
+      setLoaded(next);
       setLoadedError({ authority, value: null });
       timer = setTimeout(() => void refresh(), 100);
     };
@@ -112,7 +137,8 @@ export function useMarketplaceOverview(input: {
     }
     client.io.on('oauth:completed', schedule);
     client.io.on('oauth:disconnected', schedule);
-    client.io.on('marketplace:invalidated', schedule);
+    client.io.on('marketplace:changed', schedule);
+    client.io.on('marketplace:invalidated', invalidate);
     const onFocus = schedule;
     const onVisibility = () => document.visibilityState === 'visible' && schedule();
     window.addEventListener('focus', onFocus);
@@ -124,11 +150,21 @@ export function useMarketplaceOverview(input: {
       }
       client.io.off('oauth:completed', schedule);
       client.io.off('oauth:disconnected', schedule);
-      client.io.off('marketplace:invalidated', schedule);
+      client.io.off('marketplace:changed', schedule);
+      client.io.off('marketplace:invalidated', invalidate);
       window.removeEventListener('focus', onFocus);
       document.removeEventListener('visibilitychange', onVisibility);
     };
   }, [authority, client, ready, refresh]);
 
-  return { overview, loading, error, refresh };
+  return {
+    overview,
+    // A cold standalone route can render while socket authentication is still
+    // in progress. Do not turn that transient state into a confident empty
+    // inventory before the first caller-scoped read is even possible.
+    loading:
+      error === null && (!ready || loaded.authority !== authority || !loaded.successful || loading),
+    error,
+    refresh,
+  };
 }

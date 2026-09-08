@@ -8,6 +8,7 @@ import {
 import {
   launchMarketplaceOAuth,
   MarketplaceOAuthPopupNavigationError,
+  MarketplaceOAuthStartError,
 } from './marketplaceOAuthLaunch';
 
 const result = {
@@ -51,7 +52,7 @@ describe('Marketplace OAuth launch', () => {
         authority: { userId: 'alice', role: 'member', authGeneration: 3 },
         isCurrent: () => true,
       })
-    ).resolves.toBe(true);
+    ).resolves.toEqual({ attemptId: 'attempt-1' });
     expect(create).toHaveBeenCalledWith({ mcp_server_id: 'server-oauth' });
     expect(replace).toHaveBeenCalledWith('https://accounts.example.test/authorize');
     expect(close).not.toHaveBeenCalled();
@@ -92,7 +93,7 @@ describe('Marketplace OAuth launch', () => {
         authority,
         isCurrent: () => true,
       })
-    ).resolves.toBe(true);
+    ).resolves.toEqual({ attemptId: 'attempt-newer' });
     expect(earlier).not.toBeNull();
     expect(
       consumeMarketplacePromptSuggestionState(result.session.session_id, authority)
@@ -104,8 +105,11 @@ describe('Marketplace OAuth launch', () => {
     ).toMatchObject({ attemptId: 'attempt-newer', prompt: '' });
   });
 
-  it('closes the pre-opened window when OAuth start is refused', async () => {
-    const { client } = clientWith({ success: false, error: 'not available' });
+  it('closes the pre-opened window and preserves the safe recovery when OAuth start is refused', async () => {
+    const { client } = clientWith({
+      success: false,
+      error: 'The provider does not support automatic client registration.',
+    });
     const close = vi.fn();
     const popup = { operationId: 'popup-2', navigate: vi.fn(), close };
     await expect(
@@ -113,7 +117,9 @@ describe('Marketplace OAuth launch', () => {
         authority: { userId: 'alice', role: 'member', authGeneration: 3 },
         isCurrent: () => true,
       })
-    ).resolves.toBe(false);
+    ).rejects.toEqual(
+      new MarketplaceOAuthStartError('The provider does not support automatic client registration.')
+    );
     expect(close).toHaveBeenCalledOnce();
     expect(sessionStorage.getItem('agor-marketplace-oauth-prompt:session-oauth')).toBeNull();
   });
@@ -134,7 +140,7 @@ describe('Marketplace OAuth launch', () => {
       authorizationUrl: 'https://accounts.example.test/authorize',
       attempt_id: 'attempt-stale',
     });
-    await expect(launched).resolves.toBe(false);
+    await expect(launched).resolves.toBeNull();
     expect(popup.close).toHaveBeenCalledOnce();
     expect(popup.navigate).not.toHaveBeenCalled();
     expect(localStorage.length).toBe(0);

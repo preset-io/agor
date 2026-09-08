@@ -9,6 +9,19 @@ const settled = (taskId: string, status: 'completed' | 'failed' | 'stopped' = 'c
   message({ type: 'system', subtype: 'task_notification', task_id: taskId, status });
 const updated = (taskId: string, status: string) =>
   message({ type: 'system', subtype: 'task_updated', task_id: taskId, patch: { status } });
+const backgrounded = (taskId: string) =>
+  message({
+    type: 'system',
+    subtype: 'task_updated',
+    task_id: taskId,
+    patch: { is_backgrounded: true },
+  });
+const snapshot = (...tasks: Array<string | { task_id: string; ambient?: boolean }>) =>
+  message({
+    type: 'system',
+    subtype: 'background_tasks_changed',
+    tasks: tasks.map((task) => (typeof task === 'string' ? { task_id: task } : task)),
+  });
 const result = (subtype = 'success') => message({ type: 'result', subtype });
 
 describe('ClaudeBackgroundTaskLifecycle', () => {
@@ -40,12 +53,15 @@ describe('ClaudeBackgroundTaskLifecycle', () => {
     }
   );
 
-  it.each(['completed', 'failed', 'stopped'] as const)(
+  // `killed` is task_updated-only (not a task_notification status) and must
+  // still drain the task — otherwise a killed background task reported only via
+  // task_updated would wait out the whole active-task timeout.
+  it.each(['completed', 'failed', 'killed'] as const)(
     'settles a task from a terminal task_updated patch when no notification follows (%s)',
     (status) => {
       const lifecycle = new ClaudeBackgroundTaskLifecycle();
       lifecycle.observe(started('bash-1'));
-      expect(lifecycle.observe(updated('bash-1', status)).taskTransition).toBe('settled');
+      expect(lifecycle.observe(updated('bash-1', status)).tasksSettled).toBe(1);
       expect(lifecycle.activeTaskCount).toBe(0);
       expect(lifecycle.observe(result()).resultDisposition).toBe('terminal');
     }
@@ -54,10 +70,10 @@ describe('ClaudeBackgroundTaskLifecycle', () => {
   it('deduplicates task_updated followed by task_notification and ignores non-terminal patches', () => {
     const lifecycle = new ClaudeBackgroundTaskLifecycle();
     lifecycle.observe(started('bash-1'));
-    expect(lifecycle.observe(updated('bash-1', 'running')).taskTransition).toBeUndefined();
+    expect(lifecycle.observe(updated('bash-1', 'running')).tasksSettled).toBeUndefined();
     expect(lifecycle.activeTaskCount).toBe(1);
-    expect(lifecycle.observe(updated('bash-1', 'completed')).taskTransition).toBe('settled');
-    expect(lifecycle.observe(settled('bash-1')).taskTransition).toBeUndefined();
+    expect(lifecycle.observe(updated('bash-1', 'completed')).tasksSettled).toBe(1);
+    expect(lifecycle.observe(settled('bash-1')).tasksSettled).toBeUndefined();
     expect(lifecycle.activeTaskCount).toBe(0);
   });
 
@@ -76,6 +92,60 @@ describe('ClaudeBackgroundTaskLifecycle', () => {
     expect(new ClaudeBackgroundTaskLifecycle().observe(result()).resultDisposition).toBe(
       'terminal'
     );
+  });
+
+  it('replaces edge state from the authoritative background task snapshot', () => {
+    const lifecycle = new ClaudeBackgroundTaskLifecycle();
+    lifecycle.observe(started('stale'));
+
+    expect(lifecycle.observe(snapshot('live-1', 'live-2'))).toMatchObject({
+      tasksStarted: 2,
+      tasksSettled: 1,
+    });
+    expect(lifecycle.activeTaskCount).toBe(2);
+    expect(lifecycle.observe(snapshot()).tasksSettled).toBe(2);
+    expect(lifecycle.observe(result()).resultDisposition).toBe('terminal');
+  });
+
+  it('ignores foreground task starts and tracks a later background transition', () => {
+    const lifecycle = new ClaudeBackgroundTaskLifecycle();
+    expect(
+      lifecycle.observe(
+        message({
+          type: 'system',
+          subtype: 'task_started',
+          task_id: 'foreground',
+          is_backgrounded: false,
+        })
+      ).tasksStarted
+    ).toBeUndefined();
+    expect(lifecycle.observe(result()).resultDisposition).toBe('terminal');
+    expect(lifecycle.observe(backgrounded('foreground')).tasksStarted).toBe(1);
+    expect(lifecycle.activeTaskCount).toBe(1);
+  });
+
+  it('does not let ambient housekeeping hold the Agor task open', () => {
+    const lifecycle = new ClaudeBackgroundTaskLifecycle();
+    expect(
+      lifecycle.observe(
+        message({
+          type: 'system',
+          subtype: 'task_started',
+          task_id: 'watcher',
+          is_backgrounded: true,
+          ambient: true,
+        })
+      ).tasksStarted
+    ).toBeUndefined();
+    expect(lifecycle.observe(backgrounded('watcher')).tasksStarted).toBeUndefined();
+    expect(lifecycle.observe(result()).resultDisposition).toBe('terminal');
+
+    expect(
+      lifecycle.observe(
+        snapshot({ task_id: 'watcher', ambient: true }, { task_id: 'user-agent', ambient: false })
+      ).tasksStarted
+    ).toBe(1);
+    expect(lifecycle.activeTaskCount).toBe(1);
   });
 
   it('ends error results even if a task never reports settlement', () => {
@@ -115,9 +185,9 @@ describe('ClaudeBackgroundTaskLifecycle', () => {
 
   it('reports only real task transitions and can clear orphaned activity', () => {
     const lifecycle = new ClaudeBackgroundTaskLifecycle();
-    expect(lifecycle.observe(started('agent-1')).taskTransition).toBe('started');
-    expect(lifecycle.observe(started('agent-1')).taskTransition).toBeUndefined();
-    expect(lifecycle.observe(settled('unknown')).taskTransition).toBeUndefined();
+    expect(lifecycle.observe(started('agent-1')).tasksStarted).toBe(1);
+    expect(lifecycle.observe(started('agent-1')).tasksStarted).toBeUndefined();
+    expect(lifecycle.observe(settled('unknown')).tasksSettled).toBeUndefined();
     expect(lifecycle.clearActiveTasks()).toBe(1);
     expect(lifecycle.clearActiveTasks()).toBe(0);
   });

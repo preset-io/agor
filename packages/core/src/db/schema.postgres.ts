@@ -8,6 +8,7 @@
 import type {
   AgorGrants,
   AgorRuntimeConfig,
+  BranchEnvironmentInstance,
   CodexApprovalPolicy,
   CodexSandboxMode,
   EffortLevel,
@@ -880,24 +881,7 @@ export const branches = pgTable(
         error_message?: string; // Error details when filesystem_status is 'failed'
 
         // Environment instance (runtime state only, no variables)
-        environment_instance?: {
-          status: 'stopped' | 'starting' | 'running' | 'stopping' | 'error';
-          process?: {
-            pid?: number;
-            started_at?: string;
-            uptime?: string;
-          };
-          last_health_check?: {
-            timestamp: string;
-            status: 'healthy' | 'unhealthy' | 'unknown';
-            message?: string;
-          };
-          access_urls?: Array<{
-            name: string;
-            url: string;
-          }>;
-          logs?: string[];
-        };
+        environment_instance?: BranchEnvironmentInstance;
 
         last_used: string; // ISO timestamp
 
@@ -926,7 +910,7 @@ export const branches = pgTable(
     environmentHealthDiscoveryIdx: index('branches_environment_health_discovery_idx')
       .on(table.tenant_id, table.branch_id)
       .where(
-        sql`${table.archived} = false AND (${table.data}->'environment_instance'->>'status') IN ('starting', 'running')`
+        sql`${table.archived} = false AND (${table.data}->'environment_instance'->>'status') IN ('starting', 'running', 'stopping')`
       ),
     // Composite unique constraint (repo + name)
     uniqueRepoName: index('branches_repo_name_unique').on(table.repo_id, table.name),
@@ -1149,6 +1133,7 @@ export const users = pgTable(
           opencode?: Record<string, never>;
         };
         agentic_auth_methods?: import('../types/user').AgenticAuthMethods;
+        agentic_credential_sources?: import('../types/user').AgenticCredentialSources;
         // Encrypted environment variables with scope metadata.
         //
         // Two stored value shapes are tolerated on read:
@@ -1834,6 +1819,7 @@ export const mcpServers = pgTable(
             required?: boolean;
           }>;
         }>;
+        capabilities_discovered_at?: string;
 
         // Tool permissions configuration
         tool_permissions?: Record<string, 'ask' | 'allow' | 'deny'>;
@@ -2219,6 +2205,163 @@ export const mcpOauthPendingFlows = pgTable(
       table.grant_generation
     ),
     maintenanceIdx: index('mcp_oauth_pending_flows_maintenance_idx').on(
+      table.status,
+      table.expires_at,
+      table.exchange_started_at,
+      table.finished_at
+    ),
+  })
+);
+
+/**
+ * Fleet-wide Dynamic Client Registration authority for saved MCP servers.
+ *
+ * Client identifiers and secrets are stored only in `sealed_material`. A
+ * database-clock lease owns the provider POST, while registration ID + claim CAS
+ * prevents a late replica from publishing credentials after supersession.
+ */
+export const mcpOauthClientRegistrations = pgTable(
+  'mcp_oauth_client_registrations',
+  {
+    tenant_id: text('tenant_id').notNull().default('default'),
+    registration_id: varchar('registration_id', { length: 36 }).primaryKey(),
+    mcp_server_id: varchar('mcp_server_id', { length: 36 }).notNull(),
+    binding_version: integer('binding_version').notNull(),
+    binding_fingerprint: varchar('binding_fingerprint', { length: 64 }).notNull(),
+    server_config_version: integer('server_config_version').notNull(),
+    envelope_version: integer('envelope_version').notNull(),
+    is_current: boolean('is_current').notNull().default(true),
+    status: text('status', {
+      enum: ['registering', 'registered', 'failed', 'ambiguous', 'superseded', 'expired'],
+    })
+      .notNull()
+      .default('registering'),
+    sealed_material: text('sealed_material'),
+    claim_id: varchar('claim_id', { length: 36 }),
+    claim_generation: bigint('claim_generation', { mode: 'number' }).notNull().default(0),
+    lease_expires_at: t.timestamp('lease_expires_at'),
+    dispatched_at: t.timestamp('dispatched_at'),
+    client_secret_expires_at: t.timestamp('client_secret_expires_at'),
+    failure_code: text('failure_code'),
+    created_at: t.timestamp('created_at').notNull(),
+    updated_at: t.timestamp('updated_at').notNull(),
+    finished_at: t.timestamp('finished_at'),
+  },
+  (table) => ({
+    currentServerUnique: uniqueIndex('mcp_oauth_client_registrations_current_server_uq')
+      .on(table.tenant_id, table.mcp_server_id)
+      .where(sql`${table.is_current} = true`),
+    versionsCheck: check(
+      'mcp_oauth_client_registrations_versions_check',
+      sql`${table.binding_version} = 1 AND ${table.server_config_version} > 0
+          AND ${table.envelope_version} > 0
+          AND ${table.claim_generation} >= 0`
+    ),
+    lifecycleCheck: check(
+      'mcp_oauth_client_registrations_lifecycle_check',
+      sql`(
+        (${table.status} = 'registering' AND ${table.is_current} = true
+          AND ${table.sealed_material} IS NULL AND ${table.claim_id} IS NOT NULL
+          AND ${table.lease_expires_at} IS NOT NULL AND ${table.finished_at} IS NULL)
+        OR
+        (${table.status} = 'registered' AND ${table.is_current} = true
+          AND ${table.sealed_material} IS NOT NULL AND ${table.claim_id} IS NULL
+          AND ${table.lease_expires_at} IS NULL AND ${table.dispatched_at} IS NOT NULL
+          AND ${table.finished_at} IS NULL)
+        OR
+        (${table.status} IN ('failed','ambiguous','superseded','expired')
+          AND ${table.is_current} = false AND ${table.sealed_material} IS NULL
+          AND ${table.claim_id} IS NULL AND ${table.lease_expires_at} IS NULL
+          AND ${table.finished_at} IS NOT NULL)
+      )`
+    ),
+    tenantServerFk: foreignKey({
+      name: 'mcp_oauth_client_registrations_tenant_server_fk',
+      columns: [table.tenant_id, table.mcp_server_id],
+      foreignColumns: [mcpServers.tenant_id, mcpServers.mcp_server_id],
+    }).onDelete('cascade'),
+    tenantServerIdx: index('mcp_oauth_client_registrations_tenant_server_idx').on(
+      table.tenant_id,
+      table.mcp_server_id,
+      table.created_at
+    ),
+    bindingIdx: index('mcp_oauth_client_registrations_binding_idx').on(
+      table.tenant_id,
+      table.mcp_server_id,
+      table.binding_fingerprint
+    ),
+    registeringMaintenanceIdx: index('mcp_oauth_client_registrations_registering_maintenance_idx')
+      .on(table.lease_expires_at)
+      .where(sql`${table.status} = 'registering' AND ${table.is_current} = true`),
+    registeredMaintenanceIdx: index('mcp_oauth_client_registrations_registered_maintenance_idx')
+      .on(table.client_secret_expires_at)
+      .where(
+        sql`${table.status} = 'registered' AND ${table.is_current} = true
+            AND ${table.client_secret_expires_at} IS NOT NULL`
+      ),
+    terminalMaintenanceIdx: index('mcp_oauth_client_registrations_terminal_maintenance_idx')
+      .on(table.finished_at)
+      .where(sql`${table.status} IN ('failed','ambiguous','superseded','expired')`),
+  })
+);
+
+/**
+ * Durable, short-lived authority for Claude subscription OAuth sign-in attempts.
+ *
+ * The provider `state` value is represented only by `state_hash`. The PKCE
+ * verifier lives in `sealed_material`, an authenticated encrypted envelope bound
+ * to the tenant/user/attempt. The authorization code and the resulting
+ * access/refresh tokens are never stored here.
+ *
+ * Unlike the MCP pending-flow table there is no unauthenticated provider
+ * callback: the user pastes the authorization code back into an already
+ * authenticated session, so no state-hash capability policy exists.
+ */
+export const claudeOauthAttempts = pgTable(
+  'claude_oauth_attempts',
+  {
+    tenant_id: text('tenant_id').notNull().default('default'),
+    attempt_id: varchar('attempt_id', { length: 36 }).primaryKey(),
+    state_hash: varchar('state_hash', { length: 64 }).notNull(),
+    user_id: varchar('user_id', { length: 36 }).notNull(),
+    attempt_generation: bigint('attempt_generation', { mode: 'number' }).notNull(),
+    envelope_version: integer('envelope_version').notNull(),
+    is_current: boolean('is_current').notNull().default(true),
+    status: text('status', {
+      enum: ['pending', 'exchanging', 'persisting', 'succeeded', 'failed', 'ambiguous', 'expired'],
+    })
+      .notNull()
+      .default('pending'),
+    // NULL after every terminal transition to minimize retained secret material.
+    sealed_material: text('sealed_material'),
+    exchange_claim_id: varchar('exchange_claim_id', { length: 36 }),
+    failure_code: text('failure_code'),
+    // Non-secret success hint carried by the token response (e.g. the plan
+    // tier). Never holds token material.
+    subscription_type: text('subscription_type'),
+    created_at: t.timestamp('created_at').notNull(),
+    updated_at: t.timestamp('updated_at').notNull(),
+    expires_at: t.timestamp('expires_at').notNull(),
+    exchange_started_at: t.timestamp('exchange_started_at'),
+    finished_at: t.timestamp('finished_at'),
+  },
+  (table) => ({
+    tenantUserFk: foreignKey({
+      name: 'claude_oauth_attempts_tenant_user_fk',
+      columns: [table.tenant_id, table.user_id],
+      foreignColumns: [users.tenant_id, users.user_id],
+    }).onDelete('cascade'),
+    stateHashUnique: uniqueIndex('claude_oauth_attempts_state_hash_unique').on(table.state_hash),
+    currentUserUnique: uniqueIndex('claude_oauth_attempts_current_user_uq')
+      .on(table.tenant_id, table.user_id)
+      .where(sql`${table.is_current} = true`),
+    tenantUserIdx: index('claude_oauth_attempts_tenant_user_idx').on(
+      table.tenant_id,
+      table.user_id,
+      table.created_at
+    ),
+    // Current-attempt uniqueness mirrors the partial index in the migration.
+    maintenanceIdx: index('claude_oauth_attempts_maintenance_idx').on(
       table.status,
       table.expires_at,
       table.exchange_started_at,
@@ -3288,6 +3431,10 @@ export type UserMCPOAuthTokenRow = typeof userMcpOauthTokens.$inferSelect;
 export type UserMCPOAuthTokenInsert = typeof userMcpOauthTokens.$inferInsert;
 export type MCPOAuthPendingFlowRow = typeof mcpOauthPendingFlows.$inferSelect;
 export type MCPOAuthPendingFlowInsert = typeof mcpOauthPendingFlows.$inferInsert;
+export type MCPOAuthClientRegistrationRow = typeof mcpOauthClientRegistrations.$inferSelect;
+export type MCPOAuthClientRegistrationInsert = typeof mcpOauthClientRegistrations.$inferInsert;
+export type ClaudeOAuthAttemptRow = typeof claudeOauthAttempts.$inferSelect;
+export type ClaudeOAuthAttemptInsert = typeof claudeOauthAttempts.$inferInsert;
 export type CodexDeviceAuthAttemptRow = typeof codexDeviceAuthAttempts.$inferSelect;
 export type CodexDeviceAuthAttemptInsert = typeof codexDeviceAuthAttempts.$inferInsert;
 export type CardTypeRow = typeof cardTypes.$inferSelect;

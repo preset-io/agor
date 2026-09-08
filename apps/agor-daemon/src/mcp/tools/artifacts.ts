@@ -253,10 +253,10 @@ IMPORTANT:
       const validationInstructions = publishValidation
         ? publishValidation.ok
           ? ' Browser runtime validation observed a successful Sandpack boot.'
-          : publishValidation.observed
-            ? ' Browser runtime validation observed a failure; inspect publish_validation.build_errors, sandpack_error, and console_logs, then fix and republish.'
-            : publishValidation.timed_out
-              ? ' Browser runtime validation was inconclusive because no current browser render reported status before the timeout. Open the artifact as this user and call agor_artifacts_status, or republish with waitForStatus once the board/fullscreen view is open.'
+          : publishValidation.timed_out
+            ? ' Browser runtime validation was inconclusive: compilation completion and settling were not confirmed before the timeout. Inspect publish_validation.note and the preview as this user, then call agor_artifacts_status. This is not evidence that the app is broken.'
+            : publishValidation.observed
+              ? ' Browser runtime validation observed a failure; inspect publish_validation.build_errors, sandpack_error, and console_logs, then fix and republish.'
               : ' Publish validation failed before browser boot; inspect publish_validation.build_errors, then fix and republish.'
         : '';
       return textResult({
@@ -374,7 +374,8 @@ Fields:
 - build_errors: array of error messages (includes Sandpack errors prefixed with [Sandpack])
 - diagnostic: compact deterministic diagnosis + suggested_fix when an error/no-observation pattern is recognized
 - sandpack_error: the raw Sandpack bundler/runtime error object (null if no error)
-- sandpack_status: Sandpack bundler status ('idle', 'running', 'timeout', etc.)
+- sandpack_status: Sandpack provider lifecycle ('idle', 'running', 'timeout', etc.), NOT compilation readiness
+- compilation_status: 'pending' | 'compiling' | 'success' | 'error'; explicit browser compilation progress (absent for older tabs). Compilation success is a boot smoke check, not proof of DOM correctness.
 - runtime_observed_at: when your browser last reported current-content status/logs
 - console_logs: console.log/warn/error output from the running app
 

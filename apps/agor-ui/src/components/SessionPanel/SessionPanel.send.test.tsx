@@ -415,6 +415,33 @@ describe('SessionPanel composer send', () => {
     await waitFor(() => expect(onSendPrompt).toHaveBeenCalledTimes(1));
   });
 
+  it('keeps an upload failure visible and preserves its reason on repeated send', async () => {
+    const reason = 'A file exceeds the upload size limit (reference: request-123)';
+    uploadMockState.uploadFilesToSession.mockRejectedValue(new Error(reason));
+    const onSendPrompt = vi.fn();
+    const { container } = renderSessionPanel({ onSendPrompt });
+    fireEvent.drop(screen.getByLabelText('Composer attachments and input drop zone'), {
+      dataTransfer: {
+        types: ['Files'],
+        files: [new File(['image'], 'chart.png', { type: 'image/png' })],
+      },
+    });
+    const textarea = screen.getByPlaceholderText(/Prompt here/i);
+    fireEvent.change(textarea, { target: { value: 'Describe this chart' } });
+    const sendButton = container.querySelector('button.ant-btn-primary');
+    expect(sendButton).toBeInstanceOf(HTMLButtonElement);
+    fireEvent.click(sendButton as HTMLButtonElement);
+
+    expect(await screen.findByText(`chart.png: ${reason}`)).toBeVisible();
+    fireEvent.click(sendButton as HTMLButtonElement);
+    expect(
+      await screen.findByText(`chart.png: ${reason}. Remove failed files before sending.`)
+    ).toBeVisible();
+    expect(uploadMockState.uploadFilesToSession).toHaveBeenCalledTimes(1);
+    expect(onSendPrompt).not.toHaveBeenCalled();
+    expect(textarea).toHaveValue('Describe this chart');
+  });
+
   it('preserves prompt and uploaded attachments when prompt submission fails after upload', async () => {
     uploadMockState.uploadFilesToSession.mockResolvedValue({
       success: true,

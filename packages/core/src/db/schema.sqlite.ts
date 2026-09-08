@@ -8,6 +8,7 @@
 import type {
   AgorGrants,
   AgorRuntimeConfig,
+  BranchEnvironmentInstance,
   CodexApprovalPolicy,
   CodexSandboxMode,
   EffortLevel,
@@ -835,24 +836,7 @@ export const branches = sqliteTable(
         error_message?: string; // Error details when filesystem_status is 'failed'
 
         // Environment instance (runtime state only, no variables)
-        environment_instance?: {
-          status: 'stopped' | 'starting' | 'running' | 'stopping' | 'error';
-          process?: {
-            pid?: number;
-            started_at?: string;
-            uptime?: string;
-          };
-          last_health_check?: {
-            timestamp: string;
-            status: 'healthy' | 'unhealthy' | 'unknown';
-            message?: string;
-          };
-          access_urls?: Array<{
-            name: string;
-            url: string;
-          }>;
-          logs?: string[];
-        };
+        environment_instance?: BranchEnvironmentInstance;
 
         last_used: string; // ISO timestamp
 
@@ -1091,6 +1075,7 @@ export const users = sqliteTable(
           opencode?: Record<string, never>;
         };
         agentic_auth_methods?: import('../types/user').AgenticAuthMethods;
+        agentic_credential_sources?: import('../types/user').AgenticCredentialSources;
         // Encrypted environment variables with scope metadata.
         //
         // Two stored value shapes are tolerated on read:
@@ -1666,6 +1651,7 @@ export const mcpServers = sqliteTable(
             required?: boolean;
           }>;
         }>;
+        capabilities_discovered_at?: string;
 
         // Tool permissions configuration
         tool_permissions?: Record<string, 'ask' | 'allow' | 'deny'>;
@@ -2003,6 +1989,53 @@ export const mcpOauthPendingFlows = sqliteTable(
       table.grant_generation
     ),
     maintenanceIdx: index('mcp_oauth_pending_flows_maintenance_idx').on(
+      table.status,
+      table.expires_at,
+      table.exchange_started_at,
+      table.finished_at
+    ),
+  })
+);
+
+/**
+ * Schema mirror for PostgreSQL Claude subscription OAuth attempt authority.
+ *
+ * Standalone SQLite deliberately keeps its existing process-local sign-in state;
+ * this table is unused at runtime and exists for cross-dialect compatibility.
+ */
+export const claudeOauthAttempts = sqliteTable(
+  'claude_oauth_attempts',
+  {
+    attempt_id: text('attempt_id', { length: 36 }).primaryKey(),
+    state_hash: text('state_hash', { length: 64 }).notNull(),
+    user_id: text('user_id', { length: 36 })
+      .notNull()
+      .references(() => users.user_id, { onDelete: 'cascade' }),
+    attempt_generation: integer('attempt_generation').notNull(),
+    envelope_version: integer('envelope_version').notNull(),
+    is_current: integer('is_current', { mode: 'boolean' }).notNull().default(true),
+    status: text('status', {
+      enum: ['pending', 'exchanging', 'persisting', 'succeeded', 'failed', 'ambiguous', 'expired'],
+    })
+      .notNull()
+      .default('pending'),
+    sealed_material: text('sealed_material'),
+    exchange_claim_id: text('exchange_claim_id', { length: 36 }),
+    failure_code: text('failure_code'),
+    subscription_type: text('subscription_type'),
+    created_at: t.timestamp('created_at').notNull(),
+    updated_at: t.timestamp('updated_at').notNull(),
+    expires_at: t.timestamp('expires_at').notNull(),
+    exchange_started_at: t.timestamp('exchange_started_at'),
+    finished_at: t.timestamp('finished_at'),
+  },
+  (table) => ({
+    stateHashUnique: uniqueIndex('claude_oauth_attempts_state_hash_unique').on(table.state_hash),
+    userIdx: index('claude_oauth_attempts_user_idx').on(table.user_id, table.created_at),
+    currentUserUnique: uniqueIndex('claude_oauth_attempts_current_user_uq')
+      .on(table.user_id)
+      .where(sql`${table.is_current} = 1`),
+    maintenanceIdx: index('claude_oauth_attempts_maintenance_idx').on(
       table.status,
       table.expires_at,
       table.exchange_started_at,
@@ -2997,6 +3030,8 @@ export type UserMCPOAuthTokenRow = typeof userMcpOauthTokens.$inferSelect;
 export type UserMCPOAuthTokenInsert = typeof userMcpOauthTokens.$inferInsert;
 export type MCPOAuthPendingFlowRow = typeof mcpOauthPendingFlows.$inferSelect;
 export type MCPOAuthPendingFlowInsert = typeof mcpOauthPendingFlows.$inferInsert;
+export type ClaudeOAuthAttemptRow = typeof claudeOauthAttempts.$inferSelect;
+export type ClaudeOAuthAttemptInsert = typeof claudeOauthAttempts.$inferInsert;
 export type CodexDeviceAuthAttemptRow = typeof codexDeviceAuthAttempts.$inferSelect;
 export type CodexDeviceAuthAttemptInsert = typeof codexDeviceAuthAttempts.$inferInsert;
 export type CardTypeRow = typeof cardTypes.$inferSelect;

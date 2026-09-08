@@ -254,6 +254,17 @@ export function capabilityPolicyPresetCapabilities(
   return normalizeCapabilityPolicyCapabilities(kind, capabilities);
 }
 
+/** Inverse of canonical role expansion, including the supplied filesystem dimension. */
+export function capabilityPolicyPresetsGrantingCapability(
+  kind: CapabilityPolicyKind,
+  capability: CapabilityPolicyCapability,
+  fsAccess: CapabilityPolicyFsAccess = 'none'
+): CapabilityPolicyPresetId[] {
+  return (Object.keys(PRESET_CAPABILITIES[kind]) as CapabilityPolicyPresetId[]).filter((preset) =>
+    capabilityPolicyPresetCapabilities(kind, preset, fsAccess)?.includes(capability)
+  );
+}
+
 export function capabilityPolicyPrincipalKey(principal: CapabilityPolicyPrincipalRef): string {
   return principal.principal_type === 'user'
     ? `user:${principal.user_id}`

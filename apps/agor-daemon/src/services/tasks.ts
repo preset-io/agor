@@ -19,7 +19,6 @@ import {
   assertTenantWritable,
   type CurrentTaskExecutorSessionTokenAuthority,
   type ExecutorLaunchAuthority,
-  type ExecutorLaunchAuthorityOptions,
   enqueueTenantDatabasePostCommitCallback,
   getCurrentTenantId,
   isPostgresDatabaseHandle,
@@ -86,14 +85,12 @@ import {
 } from '../utils/executor-heartbeat-callback.js';
 import { ensureRepoOriginAlignedById } from '../utils/realign-repo-origin';
 import { deferWithTenantContext, withFreshTenantWrite } from '../utils/tenant-db-scope.js';
-import type { SessionsService } from './sessions';
+import type { SessionParams, SessionsService } from './sessions';
 
 export interface TaskExecutorCredentialRevoker {
   revokeTaskTokens(taskId: string): Promise<number>;
   isTaskTokenAuthorityCurrent?(input: CurrentTaskExecutorSessionTokenAuthority): Promise<boolean>;
 }
-
-export type TaskRuntimeAuthorityOptions = ExecutorLaunchAuthorityOptions;
 
 /**
  * Task service params
@@ -176,10 +173,7 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
   constructor(
     db: TenantScopeAwareDatabase,
     app: Application,
-    private readonly executorCredentialRevoker?: TaskExecutorCredentialRevoker,
-    private readonly runtimeAuthorityOptions: TaskRuntimeAuthorityOptions = {
-      branchRbacEnabled: app.get?.('config')?.execution?.branch_rbac === true,
-    }
+    private readonly executorCredentialRevoker?: TaskExecutorCredentialRevoker
   ) {
     const taskRepo = new TaskRepository(db);
     super(taskRepo, {
@@ -750,9 +744,17 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
       if (session.fork_origin === 'btw') {
         if (!suppressBtwCleanup) {
           try {
-            await this.app.service('sessions').patch(session.session_id, {
-              archived: true,
-              archived_reason: 'btw_completed',
+            const tenantId = getCurrentTenantId() ?? params?.tenant?.tenant_id;
+            if (!tenantId) throw new Error('Missing tenant context for BTW archive cleanup');
+            await runWithTenantDatabaseScope(this.db, tenantId, async (tenantDb) => {
+              await assertTenantWritable(tenantDb, tenantId);
+              const sessionsService = this.app.service('sessions') as unknown as SessionsService;
+              const archiveParams: SessionParams = {
+                ...params,
+                query: undefined,
+                provider: undefined,
+              };
+              await sessionsService.archiveBtwSession(session.session_id, archiveParams);
             });
             console.log(
               `📦 [TasksService] Auto-archived btw fork session ${shortId(session.session_id)}`
@@ -1499,7 +1501,7 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
 
   /** Internal launch boundary; not exposed through the Feathers transport. */
   bindExecutorLaunchAuthority(taskId: string): Promise<ExecutorLaunchAuthority> {
-    return this.taskRepo.bindExecutorLaunchAuthority(taskId, this.runtimeAuthorityOptions);
+    return this.taskRepo.bindExecutorLaunchAuthority(taskId);
   }
 
   async reportRuntimeTelemetry(data: RuntimeTelemetryInput, params?: TaskParams): Promise<Task> {
@@ -1550,7 +1552,6 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
           principal_user_id: authority.userId,
           session_id: authority.sessionId,
           branch_id: authority.branchId,
-          ...this.runtimeAuthorityOptions,
           ...(standaloneTokenCurrent === undefined
             ? {}
             : { standalone_token_current: standaloneTokenCurrent }),
@@ -1776,8 +1777,7 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
 export function createTasksService(
   db: TenantScopeAwareDatabase,
   app: Application,
-  executorCredentialRevoker?: TaskExecutorCredentialRevoker,
-  runtimeAuthorityOptions?: TaskRuntimeAuthorityOptions
+  executorCredentialRevoker?: TaskExecutorCredentialRevoker
 ): TasksService {
-  return new TasksService(db, app, executorCredentialRevoker, runtimeAuthorityOptions);
+  return new TasksService(db, app, executorCredentialRevoker);
 }

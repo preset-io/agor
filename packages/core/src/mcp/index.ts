@@ -14,7 +14,9 @@ export {
   MCPExternalError,
   type MCPExternalErrorAction,
   type MCPExternalErrorCategory,
+  type MCPExternalErrorReason,
   type MCPExternalErrorStage,
+  type MCPExternalErrorType,
   type SanitizedMCPExternalError,
   sanitizeMCPExternalError,
 } from '../tools/mcp/external-error';
@@ -22,7 +24,13 @@ export {
   assertValidDiscoveredMCPCapabilities,
   assertValidEffectiveMCPServer,
   assertValidMCPServerWrite,
+  isMCPServerWriteValidationError,
+  MAX_MCP_CAPABILITY_DESCRIPTION_BUDGET,
+  MAX_MCP_CAPABILITY_DESCRIPTION_LENGTH,
+  MCP_DESCRIPTION_TRUNCATION_SUFFIX,
   MCPServerWriteValidationError,
+  type NormalizedDiscoveredMCPCapabilities,
+  normalizeDiscoveredMCPCapabilities,
 } from '../tools/mcp/server-validation';
 export {
   canConfigureMCPServers,

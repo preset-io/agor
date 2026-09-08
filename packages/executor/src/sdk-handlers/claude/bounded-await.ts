@@ -1,14 +1,20 @@
 /**
- * Bounded await for Claude Agent SDK control requests.
+ * Bounded await for Claude Agent SDK operations that depend on the CLI
+ * subprocess responding — control requests, iterator reads, and query teardown.
  *
- * Control requests (e.g. `getContextUsage()`) are answered by the CLI
- * subprocess over stdin/stdout and the SDK resolves them ONLY when a matching
- * `control_response` arrives — there is no built-in timeout. On the terminal
- * result path we deliberately hold the input stream open so the control request
- * can use stdin, which means a subprocess that never answers leaves the await
- * pending forever, the query generator never closes, and the Task never settles.
+ * These all resolve ONLY when the subprocess answers over stdin/stdout, and the
+ * SDK gives them no built-in timeout:
+ *  - control requests (e.g. `getContextUsage()`) resolve on a matching
+ *    `control_response`. On the terminal result path we deliberately hold the
+ *    input stream open so the request can use stdin, so a subprocess that never
+ *    answers would leave the await pending forever;
+ *  - an iterator `next()` held open past the model turn's `result` (awaiting a
+ *    background-task continuation) never resolves if no further message arrives;
+ *  - `iterator.return()` during teardown can queue behind a stuck `next()`.
+ * In every case an unbounded await means the query generator never closes and
+ * the Task never settles.
  *
- * `awaitWithTimeout` races the control request against a bounded timer so the
+ * `awaitWithTimeout` races the operation against a bounded timer so the
  * lifecycle can always converge: the caller gets the real value when the
  * subprocess answers in time, or the `AWAIT_TIMEOUT` sentinel so it can degrade
  * gracefully and finish settling the turn.

@@ -12,6 +12,7 @@ import type { SessionInitializationRequest } from '@agor/core/api';
 import {
   type AgorConfig,
   ENV_VAR_CONSTRAINTS,
+  environmentCommandCapabilities,
   isEnvVarAllowed,
   type ResolvedDeploymentConfig,
   type ResolvedExternalLaunchProvider,
@@ -97,6 +98,7 @@ import type {
   Task,
   TaskID,
   TaskMetadata,
+  TenantID,
   User,
   UserID,
   UUID,
@@ -113,10 +115,12 @@ import {
   ROLES,
   SessionStatus,
   TaskStatus,
+  UPLOAD_REQUEST_ID_HEADER,
 } from '@agor/core/types';
 import { isNotFoundError } from '@agor/core/utils/errors';
 import type { NextFunction, Request, Response } from 'express';
 import { rateLimit } from 'express-rate-limit';
+import { z } from 'zod';
 import {
   gatewaySlackUploadExecutorCommandId,
   uploadMaterializeExecutorCommandId,
@@ -148,6 +152,7 @@ import type {
   TasksServiceImpl,
 } from './declarations.js';
 import { registerExecutorResponseRoutes } from './executor-response-channel.js';
+import { hasClaudeSubscriptionOAuthCapability } from './ha-support.js';
 import { probeDatabase, probePendingMigrations } from './health/db-probe.js';
 import {
   authenticatedHealthDb,
@@ -213,7 +218,7 @@ import { appendSystemMessage } from './utils/append-system-message.js';
 import { buildAuthRateLimitKey } from './utils/auth-rate-limit-key.js';
 import {
   ensureMinimumRole,
-  registerAuthenticatedRoute as registerAuthenticatedRouteBase,
+  registerAuthenticatedRoute as registerAuthenticatedRouteUnscoped,
   requireMinimumRole,
 } from './utils/authorization.js';
 import { authorizeBranchArchiveDelete } from './utils/branch-archive-delete-authorization.js';
@@ -247,6 +252,7 @@ import {
 import { canConfigureMcpServers } from './utils/mcp-server-authorization.js';
 import { authorizeMcpSessionConfigAccess } from './utils/mcp-session-config-authorization.js';
 import { patchUnlessRemoved } from './utils/patch-unless-removed.js';
+import { resolvePromptOrigin } from './utils/prompt-origin.js';
 import {
   buildPromptTaskMetadata,
   type InternalPromptTaskMetadataInput,
@@ -272,10 +278,10 @@ import {
 import { buildTaskLaunchState } from './utils/task-launch-state.js';
 import { normalizeMessageSource, runExistingTask } from './utils/task-runner.js';
 import { isAgenticToolEnabledForTenant } from './utils/tenant-agentic-tool-validation.js';
+import { createTenantScopedAuthenticatedRouteRegistrar } from './utils/tenant-authenticated-route.js';
 import {
   createTenantDatabaseScopeAroundHook,
   createTenantWriteAdmissionAroundHook,
-  createTenantWriteGateAroundHook,
   deferWithTenantContext,
   withFreshTenantWrite,
 } from './utils/tenant-db-scope.js';
@@ -285,9 +291,26 @@ import {
   getUploadLimits,
   type StagedMulterFile,
 } from './utils/upload.js';
+import { toUploadErrorResponse, type UploadFailureStage } from './utils/upload-http-error.js';
 import { getUploadStagingStore } from './utils/upload-staging.js';
 import { WidgetResolutionStore } from './widgets/resolution-store.js';
 import { resolveWidget } from './widgets/submissions.js';
+
+export function appendResponseHeaderValue(
+  existing: string | string[] | number | undefined,
+  value: string
+): string {
+  const existingValues = (
+    Array.isArray(existing) ? existing : existing === undefined ? [] : [existing]
+  )
+    .flatMap((headerValue) => String(headerValue).split(','))
+    .map((headerValue) => headerValue.trim())
+    .filter(Boolean);
+  if (existingValues.some((headerValue) => headerValue.toLowerCase() === value.toLowerCase())) {
+    return existingValues.join(', ');
+  }
+  return [...existingValues, value].join(', ');
+}
 
 const DEBUG_AUTH_EVENTS =
   process.env.AGOR_DEBUG_AUTH_EVENTS === '1' || process.env.DEBUG?.includes('auth-events');
@@ -456,7 +479,6 @@ export interface RegisterRoutesContext {
   config: AgorConfig;
   externalLaunchProvider: ResolvedExternalLaunchProvider;
   jwtSecret: string;
-  branchRbacEnabled: boolean;
   requireAuth: (context: HookContext) => Promise<HookContext>;
   enforcePasswordChange: (context: HookContext) => Promise<HookContext>;
   superadminOpts: { allowSuperadmin: boolean };
@@ -569,24 +591,27 @@ export function createRequiredTenantDatabaseRunner(db: TenantScopeAwareDatabase)
   };
 }
 
-/**
- * Register an authenticated custom route with the same tenant transaction and
- * write-freeze gate as ordinary tenant-owned Feathers services. Custom routes
- * are installed after `registerHooks()`, so this registrar—not a static path
- * list—is their authoritative database boundary.
- */
-export function createTenantScopedAuthenticatedRouteRegistrar(options: {
+/** Resolve upload branch visibility and prompt authority using the authenticated tenant. */
+export async function resolveUploadPromptAccess(input: {
   db: TenantScopeAwareDatabase;
-  config: AgorConfig;
-  jwtSecret: string;
-}): typeof registerAuthenticatedRouteBase {
-  const tenantDatabaseScopeAround = createTenantDatabaseScopeAroundHook(options);
-  const tenantWriteGateAround = createTenantWriteGateAroundHook(options.db);
-  return (routeApp, path, service, authConfig, routeRequireAuth, routeOptions = {}) =>
-    registerAuthenticatedRouteBase(routeApp, path, service, authConfig, routeRequireAuth, {
-      ...routeOptions,
-      around: [tenantDatabaseScopeAround, tenantWriteGateAround, ...(routeOptions.around ?? [])],
+  tenantId: TenantID | undefined;
+  branchRepository: Pick<
+    BranchRepository,
+    'findById' | 'resolveUserPermission' | 'resolveSessionPromptAuthority'
+  >;
+  session: Session;
+  userId: UUID;
+}) {
+  return runWithTenantDatabaseScope(input.db, input.tenantId, async () => {
+    const branch = await input.branchRepository.findById(input.session.branch_id);
+    if (!branch) return null;
+    return resolveSessionPromptAccess({
+      branchRepository: input.branchRepository,
+      branch,
+      session: input.session,
+      userId: input.userId,
     });
+  });
 }
 
 type BoardCommentRouteParams = Pick<AuthenticatedParams, 'provider' | 'user'>;
@@ -700,24 +725,23 @@ export function createRegisteredMCPCatalogConnectService(
   app: Application,
   db: TenantScopeAwareDatabase
 ) {
+  const runInTenantDatabaseScope = <T>(params: AuthenticatedParams, work: () => Promise<T>) => {
+    const tenantId = params.tenant?.tenant_id ?? getCurrentTenantId();
+    return tenantId ? runWithTenantDatabaseScope(db, tenantId, work) : work();
+  };
   return createMCPCatalogConnectService(app, {
+    runInTenantDatabaseScope,
     async listCandidates(userId, params) {
-      const tenantId =
-        (params as { tenant?: { tenant_id?: string } }).tenant?.tenant_id ?? getCurrentTenantId();
       const read = async () => new MCPCatalogCandidateRepository(db).listForUser(userId);
-      return tenantId ? runWithTenantDatabaseScope(db, tenantId, read) : read();
+      return runInTenantDatabaseScope(params, read);
     },
     async getCandidate(userId, serverId, params) {
-      const tenantId =
-        (params as { tenant?: { tenant_id?: string } }).tenant?.tenant_id ?? getCurrentTenantId();
       const read = async () => new MCPCatalogCandidateRepository(db).getForUser(userId, serverId);
-      return tenantId ? runWithTenantDatabaseScope(db, tenantId, read) : read();
+      return runInTenantDatabaseScope(params, read);
     },
     async isGrantAuthorized(candidate, params) {
       const userId = params.user?.user_id as UserID | undefined;
       if (!userId) return false;
-      const tenantId =
-        (params as { tenant?: { tenant_id?: string } }).tenant?.tenant_id ?? getCurrentTenantId();
       const read = async () => {
         const grant = await new UserMCPOAuthTokenRepository(db).getCatalogGrantAuthority(
           userId,
@@ -728,7 +752,7 @@ export function createRegisteredMCPCatalogConnectService(
             (await isMCPOAuthGrantAuthorizedForServer(db, candidate.server, grant))
         );
       };
-      return tenantId ? runWithTenantDatabaseScope(db, tenantId, read) : read();
+      return runInTenantDatabaseScope(params, read);
     },
   });
 }
@@ -800,8 +824,7 @@ export function createUploadAuthMiddleware(input: {
         token,
       });
       next();
-    } catch (error) {
-      console.error('❌ [Upload Auth] Authentication failed:', error);
+    } catch {
       res.status(401).json({ error: 'Authentication required' });
     }
   };
@@ -860,7 +883,6 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     config,
     externalLaunchProvider,
     jwtSecret,
-    branchRbacEnabled,
     requireAuth,
     enforcePasswordChange,
     superadminOpts,
@@ -896,7 +918,6 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     db,
     app,
     jwtSecret,
-    branchRbacEnabled,
   });
   // Internal composition seam used by MCP mutation hooks. It is never exposed
   // as a Feathers service and carries no serializable credential material.
@@ -954,7 +975,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     jwtSecret,
   });
 
-  const registerLongAuthenticatedRoute: typeof registerAuthenticatedRouteBase = (
+  const registerLongAuthenticatedRoute: typeof registerAuthenticatedRouteUnscoped = (
     routeApp,
     path,
     service,
@@ -962,7 +983,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     routeRequireAuth,
     options = {}
   ) =>
-    registerAuthenticatedRouteBase(routeApp, path, service, authConfig, routeRequireAuth, {
+    registerAuthenticatedRouteUnscoped(routeApp, path, service, authConfig, routeRequireAuth, {
       ...options,
       around: [tenantIdentityAround, tenantWriteAdmissionAround, ...(options.around ?? [])],
     });
@@ -1879,6 +1900,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     const useStreaming = options.stream !== false;
     const sessionId = task.session_id;
     const taskId = task.task_id;
+    const promptOrigin = resolvePromptOrigin(updatedTask, session);
 
     // Background spawn + failure handling. Returning the patched Task to the
     // caller before this resolves matches the previous behavior — the HTTP
@@ -1899,6 +1921,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
             permissionMode: options.permissionMode,
             stream: useStreaming,
             messageSource: runtimeMessageSource,
+            promptOrigin,
           },
           params
         );
@@ -2058,7 +2081,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           operationDb: TenantScopedDatabase,
           currentSession: Session
         ): Promise<void> => {
-          if (!branchRbacEnabled || isPromptServiceAccount || !currentSession.branch_id) return;
+          if (isPromptServiceAccount || !currentSession.branch_id) return;
           if (!promptUserId) {
             throw new NotAuthenticated('Authentication required to prompt a session');
           }
@@ -2077,7 +2100,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
             throw new Forbidden(sessionPromptDeniedMessage({ denial_reason: denialReason }));
           }
         };
-        if (branchRbacEnabled && !isPromptServiceAccount && promptBranchId) {
+        if (!isPromptServiceAccount && promptBranchId) {
           await runWithTenantDatabaseScope(db, promptTenantId, (operationDb) =>
             assertCurrentPromptAuthority(operationDb, session)
           );
@@ -2134,14 +2157,18 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           throw error;
         }
 
-        // Auto-unarchive on prompt
+        // Prompting is an explicit request to revive this Session only. Its
+        // archived local ancestors and descendants keep their own state, so
+        // the Session can intentionally appear as a root until they are
+        // restored separately.
         if (session.archived) {
           console.log(
             `📦 [Prompt] Auto-unarchiving session ${shortId(id)} (was archived: ${session.archived_reason || 'unknown reason'})`
           );
-          session = (await runWithTenantDatabaseScope(db, promptTenantId, () =>
-            sessionsService.patch(id, { archived: false, archived_reason: undefined }, params)
-          )) as typeof session;
+          const restored = await runWithTenantDatabaseScope(db, promptTenantId, () =>
+            sessionsService.unarchive(id, { includeChildren: false }, params)
+          );
+          session = restored.session as typeof session;
         }
 
         if (session.status === SessionStatus.STOPPING) {
@@ -2355,7 +2382,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           // different user. `/sessions/:id/prompt` creates a caller-owned Task.
           assertTaskExecutorPrincipal(task, params);
         }
-        if (branchRbacEnabled && task.session_id && !isInternalCall && !isServiceAccount) {
+        if (task.session_id && !isInternalCall && !isServiceAccount) {
           const session = await sessionsService.get(task.session_id, params);
           if (!session.branch_id) {
             // Sessions without branches are out of RBAC scope; fall through.
@@ -2489,8 +2516,13 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
 
         const promptService = app.service('/sessions/:id/prompt');
         return promptService.create(
-          { prompt: metaPrompt, permissionMode: parentPermissionMode, messageSource: 'agor' },
-          { ...params, route: { id } }
+          {
+            prompt: metaPrompt,
+            permissionMode: parentPermissionMode,
+            messageSource: 'agor',
+            metadata: { system_authored: true },
+          },
+          { ...params, provider: undefined, route: { id } }
         );
       },
     },
@@ -2725,8 +2757,6 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       res.status(status).json({ error: error instanceof Error ? error.message : 'Upload failed' });
     }
   });
-  const DEBUG_UPLOAD = process.env.AGOR_DEBUG_UPLOAD === 'true';
-
   // biome-ignore lint/suspicious/noExplicitAny: Express 5 type compatibility
   const authorizeUpload: any = async (req: any, res: any, next: any) => {
     try {
@@ -2739,7 +2769,6 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         sessionsService.get(sessionId, params)
       );
       if (!session) {
-        console.error(`❌ [Upload Authz] Session not found: ${shortId(sessionId)}`);
         return res.status(404).json({ error: 'Session not found' });
       }
 
@@ -2747,35 +2776,22 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       // - 'prompt'/'all' → upload to any session
       // - 'session'      → upload only to own sessions
       // - 'view'/'none'  → denied
-      // Fail-closed: if RBAC is enabled but branch can't be resolved, deny.
-      // When RBAC is disabled, any authenticated member can upload.
-      if (branchRbacEnabled) {
-        const userId = params.user?.user_id as UUID;
-        if (!session.branch_id) {
-          return res.status(403).json({ error: 'Not authorized to upload to this session' });
-        }
-        const access = await runWithTenantDatabaseScope(db, params.tenant?.tenant_id, async () => {
-          const wt = await branchRepo.findById(session.branch_id);
-          if (!wt) return null;
-          return { wt };
-        });
-        if (!access) {
-          return res.status(404).json({ error: 'Branch not found' });
-        }
-        const { wt } = access;
-        const { allowed, effectiveLevel } = await resolveSessionPromptAccess({
-          branchRepository: branchRepo,
-          branch: wt,
-          session,
-          userId,
-        });
-
-        if (!allowed) {
-          console.error(
-            `❌ [Upload Authz] User ${shortId(userId)} has '${effectiveLevel}' permission, cannot upload to branch ${shortId(wt.branch_id)}`
-          );
-          return res.status(403).json({ error: 'Not authorized to upload to this session' });
-        }
+      const userId = params.user?.user_id as UUID;
+      if (!session.branch_id) {
+        return res.status(403).json({ error: 'Not authorized to upload to this session' });
+      }
+      const access = await resolveUploadPromptAccess({
+        db,
+        tenantId: params.tenant?.tenant_id,
+        branchRepository: branchRepo,
+        session,
+        userId,
+      });
+      if (!access) {
+        return res.status(404).json({ error: 'Branch not found' });
+      }
+      if (!access.allowed) {
+        return res.status(403).json({ error: 'Not authorized to upload to this session' });
       }
 
       if (!params.tenant?.tenant_id || !params.user?.user_id || !session.branch_id) {
@@ -2796,38 +2812,13 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   // biome-ignore lint/suspicious/noExplicitAny: Express 5 + multer type compatibility
   const uploadHandler: any = async (req: any, res: any, next: any) => {
     try {
-      if (DEBUG_UPLOAD) {
-        console.log('🚀 [Upload Handler] Request received');
-        console.log('   Headers:', {
-          contentType: req.headers['content-type'],
-          authorization: req.headers.authorization ? 'present' : 'missing',
-          cookie: req.headers.cookie ? 'present' : 'missing',
-        });
-      }
-
       const { sessionId } = req.params;
       const { notifyAgent, message } = req.body;
       const files = req.files as StagedMulterFile[];
 
-      if (DEBUG_UPLOAD) {
-        console.log(
-          `📎 [Upload Handler] Processing for session ${sessionId ? shortId(sessionId) : 'unknown'}`
-        );
-        console.log(`   Notify agent: ${notifyAgent === 'true' || notifyAgent === true}`);
-        console.log(`   Files received: ${files?.length || 0}`);
-      }
-
       const params = req.feathers as AuthenticatedParams;
-      if (DEBUG_UPLOAD) {
-        console.log(`   Auth params:`, {
-          hasUser: !!params?.user,
-          userId: params?.user?.user_id ? shortId(params.user.user_id) : undefined,
-          provider: params?.provider,
-        });
-      }
 
       if (!files || files.length === 0) {
-        console.error('❌ [Upload Handler] No files in request');
         return res.status(400).json({ error: 'No files uploaded' });
       }
 
@@ -2840,20 +2831,11 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         expiresAt: staged.expiresAt,
       }));
 
-      if (DEBUG_UPLOAD) {
-        console.log(`   Uploaded ${uploadedFiles.length} file(s):`);
-        console.log(`   Total bytes: ${uploadedFiles.reduce((sum, f) => sum + f.size, 0)}`);
-      }
-
       let notificationError: string | null = null;
       if ((notifyAgent === 'true' || notifyAgent === true) && message) {
         try {
           const handles = uploadedFiles.map((f) => f.ref).join(', ');
           const promptText = message.replace(/\{filepath\}/g, handles);
-
-          if (DEBUG_UPLOAD) {
-            console.log('   Sending upload notification to agent');
-          }
 
           const promptService = app.service('/sessions/:id/prompt');
           // biome-ignore lint/suspicious/noExplicitAny: Express 5 + FeathersJS type mismatch
@@ -2863,7 +2845,9 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
             authentication: params.authentication,
             tenant: params.tenant,
           };
-          await promptService.create({ prompt: promptText }, promptParams);
+          // This provider-less nested service call represents text submitted
+          // by the authenticated uploader, not daemon-authored automation.
+          await promptService.create({ prompt: promptText, messageSource: 'agor' }, promptParams);
         } catch (_error) {
           console.error('❌ [Upload Handler] Failed to notify agent');
           notificationError = 'Failed to send notification to agent';
@@ -2880,21 +2864,47 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     }
   };
 
+  type UploadRouteRequest = Request & {
+    _uploadRequestId?: string;
+    _uploadFailureStage?: UploadFailureStage;
+  };
+
   // biome-ignore lint/suspicious/noExplicitAny: Express 5 type compatibility
-  const uploadLogger: any = (req: any, res: any, next: any) => {
-    if (DEBUG_UPLOAD) {
-      console.log('📥 [Upload Route] Request received');
-      console.log('   Method:', req.method);
-      console.log('   Route: session upload');
-      console.log('   Content-Type:', req.headers['content-type']);
-      console.log('   Has auth header:', !!req.headers.authorization);
-      console.log(
-        '   Session ID param:',
-        req.params.sessionId ? shortId(req.params.sessionId) : 'unknown'
+  const uploadLogger: any = (req: UploadRouteRequest, res: Response, next: NextFunction) => {
+    const requestId = randomUUID();
+    req._uploadRequestId = requestId;
+    req._uploadFailureStage = 'authentication';
+    res.setHeader(UPLOAD_REQUEST_ID_HEADER, requestId);
+    res.setHeader(
+      'Access-Control-Expose-Headers',
+      appendResponseHeaderValue(
+        res.getHeader('Access-Control-Expose-Headers'),
+        UPLOAD_REQUEST_ID_HEADER
+      )
+    );
+    res.once('finish', () => {
+      if (res.statusCode < 400) return;
+      console.error(
+        formatStructuredLog('[upload]', {
+          event: 'upload.failed',
+          request_id: requestId,
+          stage: req._uploadFailureStage ?? 'authentication',
+          code: res.locals.uploadFailureCode ?? `HTTP_${res.statusCode}`,
+          status: res.statusCode,
+          type: res.locals.uploadFailureType ?? 'request',
+        })
       );
-    }
+    });
+
     next();
   };
+
+  const setUploadFailureStage =
+    (stage: UploadFailureStage) =>
+    (req: UploadRouteRequest, _res: Response, next: NextFunction) => {
+      req._uploadFailureStage = stage;
+      next();
+    };
 
   const uploadAuthMiddleware = createUploadAuthMiddleware({
     authentication: app.service('authentication'),
@@ -2906,41 +2916,31 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     '/sessions/:sessionId/upload',
     uploadLogger,
     uploadAuthMiddleware,
-    // biome-ignore lint/suspicious/noExplicitAny: Express 5 type compatibility
-    ((req: any, res: any, next: any) => {
-      if (DEBUG_UPLOAD) {
-        console.log('✅ [Upload Route] Authentication passed');
-        console.log(
-          '   User:',
-          req.feathers?.user?.user_id ? shortId(req.feathers.user.user_id) : 'unknown'
-        );
-      }
-      next();
-      // biome-ignore lint/suspicious/noExplicitAny: Express 5 type compatibility
-    }) as any,
+    setUploadFailureStage('request_size'),
     // Cheap pre-multer Content-Length check — short-circuits before we spend
     // time writing oversize uploads to disk.
     // biome-ignore lint/suspicious/noExplicitAny: Express 5 type compatibility
     enforceTotalUploadSize() as any,
+    setUploadFailureStage('authorization'),
     authorizeUpload,
+    setUploadFailureStage('multipart'),
     // biome-ignore lint/suspicious/noExplicitAny: Express 5 + multer type compatibility
     uploadMiddleware.array('files', 10) as any,
     // biome-ignore lint/suspicious/noExplicitAny: Express 5 type compatibility
     ((req: any, res: any, next: any) => {
-      if (DEBUG_UPLOAD) {
-        console.log('✅ [Upload Route] Multer processing complete');
-        console.log('   Files parsed:', req.files?.length || 0);
-      }
+      req._uploadFailureStage = 'handler';
       next();
       // biome-ignore lint/suspicious/noExplicitAny: Express 5 type compatibility
     }) as any,
     uploadHandler,
     // biome-ignore lint/suspicious/noExplicitAny: Express 5 type compatibility
     ((err: any, req: any, res: any, next: any) => {
-      console.error('❌ [Upload Route] Upload failed');
-      res.status(err.status || 500).json({
-        error: 'Upload failed',
-      });
+      const requestId = req._uploadRequestId ?? randomUUID();
+      const failure = toUploadErrorResponse(err, requestId);
+      res.setHeader(UPLOAD_REQUEST_ID_HEADER, requestId);
+      res.locals.uploadFailureCode = failure.body.code;
+      res.locals.uploadFailureType = failure.type;
+      res.status(failure.status).json(failure.body);
       // biome-ignore lint/suspicious/noExplicitAny: Express 5 type compatibility
     }) as any
   );
@@ -2963,7 +2963,6 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       throw new NotFound('Upload unavailable');
     }
     if (upload.createdBy === userId) return upload;
-    if (!branchRbacEnabled) return upload;
     const allowed = await runWithTenantDatabaseScope(db, tenantId, async () => {
       const branch = await branchRepo.findById(upload.branchId);
       if (!branch) return false;
@@ -3165,7 +3164,6 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         // owner-or-admin policy below.
         if (
           body.force_unverified !== true &&
-          branchRbacEnabled &&
           params.provider &&
           !(params.user as { _isServiceAccount?: boolean } | undefined)?._isServiceAccount
         ) {
@@ -3606,7 +3604,6 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           data,
           params,
           authorization: {
-            branchRbacEnabled,
             branchRepository,
             allowSuperadmin: superadminOpts.allowSuperadmin,
           },
@@ -3764,7 +3761,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   // Repos custom routes
   // ============================================================================
 
-  registerAuthenticatedRoute(
+  registerLongAuthenticatedRoute(
     app,
     '/repos/local',
     {
@@ -4068,10 +4065,18 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     app,
     '/branches/:id/start',
     {
-      async create(_data: unknown, params: RouteParams) {
+      async create(data: unknown, params: RouteParams) {
         const id = params.route?.id;
         if (!id) throw new Error('Branch ID required');
-        return branchesService.startEnvironment(id as import('@agor/core/types').BranchID, params);
+        const input = z
+          .object({ confirmation_of: z.string().uuid().optional() })
+          .strict()
+          .parse(data ?? {});
+        return branchesService.startEnvironment(
+          id as import('@agor/core/types').BranchID,
+          params,
+          input.confirmation_of
+        );
       },
     },
     {
@@ -4193,7 +4198,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   });
 
   app.service('/branches/:id/archive-or-delete').hooks({
-    around: { all: [tenantIdentityAround] },
+    around: { all: [tenantIdentityAround, tenantWriteAdmissionAround] },
     before: {
       create: [
         requireAuth,
@@ -4201,7 +4206,6 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         inTenantDatabaseScope((context: HookContext) =>
           authorizeBranchArchiveDelete(context, {
             branchRepository,
-            branchRbacEnabled,
             superadminOpts,
           })
         ),
@@ -4220,7 +4224,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   });
 
   app.service('/branches/:id/unarchive').hooks({
-    around: { all: [tenantIdentityAround] },
+    around: { all: [tenantIdentityAround, tenantWriteAdmissionAround] },
     before: {
       create: [
         requireAuth,
@@ -4238,19 +4242,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
 
           return context;
         }),
-        branchRbacEnabled
-          ? ensureBranchPermission('all', 'unarchive branches', superadminOpts)
-          : (context: HookContext) => {
-              const isOwner = context.params.isBranchOwner;
-              const userRole = context.params.user?.role;
-
-              if (!isOwner && !hasMinimumRole(userRole, ROLES.ADMIN)) {
-                throw new Forbidden(
-                  'You must be the branch owner or a global admin to unarchive branches'
-                );
-              }
-              return context;
-            },
+        ensureBranchPermission('all', 'unarchive branches', superadminOpts),
       ],
     },
   });
@@ -4314,18 +4306,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         // schedule-touching path.
         inTenantDatabaseScope(loadScheduleAndBranch(scheduleRepository, branchRepository)),
         ensureScheduleRunsAsCaller(superadminOpts),
-        branchRbacEnabled
-          ? ensureBranchPermission('all', 'run schedule', superadminOpts)
-          : (context: HookContext) => {
-              const isOwner = context.params.isBranchOwner;
-              const userRole = context.params.user?.role;
-              if (!isOwner && !hasMinimumRole(userRole, ROLES.ADMIN)) {
-                throw new Forbidden(
-                  'You must be the branch owner or a global admin to run schedules'
-                );
-              }
-              return context;
-            },
+        ensureBranchPermission('all', 'run schedule', superadminOpts),
       ],
     },
   });
@@ -4419,18 +4400,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           await cacheBranchAccess(context.params, branchRepository, branch);
           return context;
         }),
-        branchRbacEnabled
-          ? ensureBranchPermission('all', 'execute scheduled runs', superadminOpts)
-          : (context: HookContext) => {
-              const isOwner = context.params.isBranchOwner;
-              const userRole = context.params.user?.role;
-              if (!isOwner && !hasMinimumRole(userRole, ROLES.ADMIN)) {
-                throw new Forbidden(
-                  'You must be the branch owner or a global admin to execute scheduled runs'
-                );
-              }
-              return context;
-            },
+        ensureBranchPermission('all', 'execute scheduled runs', superadminOpts),
       ],
     },
   });
@@ -4728,7 +4698,6 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     if (!principal || !hasMinimumRole(principal.role, ROLES.MEMBER)) {
       return 'principal_revoked';
     }
-    if (!branchRbacEnabled) return null;
     const branch = await branchRepository.findById(session.branch_id);
     if (!branch) return 'branch_revoked';
     return (
@@ -6436,6 +6405,8 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           ? { required: true, ready: realtimeRuntime.isReady() }
           : { required: false, ready: true },
         features: {
+          environmentDisclaimerMarkdown: config.environment_disclaimer_markdown,
+          environmentCommands: environmentCommandCapabilities(config),
           teammateFrameworkRepoUrl: resolveTeammateFrameworkRepoUrl(config),
           // Web terminal availability: UI should hide terminal buttons when false.
           // Server-side gate in register-hooks.ts is the source of truth; this
@@ -6455,16 +6426,17 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           multiUser: (config.execution?.unix_user_mode ?? 'simple') !== 'simple',
           // Tenant agentic-tool settings provide the authoritative availability gate.
           cursorSdk: true,
+          // Provider-policy release boundary. Absence is false; the daemon
+          // independently rejects the OAuth service when disabled.
+          claudeSubscriptionOAuth: hasClaudeSubscriptionOAuthCapability(config, deployment),
           // Resolved branch storage policy. The daemon still enforces this at
           // create time; the UI uses it to pick the right default and disable
           // unavailable storage modes before submit.
           branchStorage: resolveBranchStorageConfig(config),
           uploadPolicy: getUploadLimits(),
-          // Normalized board/branch policies are independently feature-gated.
-          // This is safe to advertise before login so the UI can avoid
-          // rendering controls that the daemon will reject. Authorization
-          // remains enforced server-side.
-          branchRbac: config.execution?.branch_rbac === true,
+          // Retained temporarily for compatibility with older UIs. Current
+          // daemons enforce normalized board/branch policies unconditionally.
+          branchRbac: true,
         },
       };
 
@@ -6478,19 +6450,16 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         // Gated behind auth like the rest of this block (any authenticated
         // user, matching the existing `database`/`execution` fields below —
         // not admin-only).
-        const migrations = await probePendingMigrations(db);
-        const mcpEgressMode = await getMCPEgressGatewayMode(db);
         const healthTenantId =
           (params as AuthenticatedParams | undefined)?.tenant?.tenant_id ?? getCurrentTenantId();
-        const mcpEgressRuntime = healthTenantId
-          ? mcpEgressGateway.status(healthTenantId)
-          : {
-              inFlightRequests: 0,
-              activeRequests: 0,
-              providerInFlightRequests: 0,
-              reservedRequests: 0,
-              oldestRequestMs: 0,
-            };
+        if (!healthTenantId) {
+          throw new NotAuthenticated('Missing tenant context for authenticated health');
+        }
+        const migrations = await probePendingMigrations(db);
+        const mcpEgressMode = await runWithTenantDatabaseScope(db, healthTenantId, (tenantDb) =>
+          getMCPEgressGatewayMode(tenantDb)
+        );
+        const mcpEgressRuntime = mcpEgressGateway.status(healthTenantId);
 
         return {
           ...publicResponse,
@@ -6526,11 +6495,12 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
             },
           },
           // Execution mode surfaced so admins can confirm which security tier
-          // the daemon booted under. Docker env overrides (AGOR_SET_RBAC_FLAG,
-          // AGOR_SET_UNIX_MODE) are written into ~/.agor/config.yaml by the
-          // entrypoint before boot, so `config.execution` reflects them.
+          // the daemon booted under. Deployment env overrides (e.g.
+          // AGOR_UNIX_USER_MODE) are projected into the effective config in
+          // memory at boot — config.yaml is never rewritten — so
+          // `config.execution` reflects them.
           execution: {
-            branchRbac: config.execution?.branch_rbac === true,
+            branchRbac: true,
             unixUserMode: config.execution?.unix_user_mode ?? 'simple',
             managedEnvsExecutionMode:
               config.execution?.managed_envs_execution_mode ?? MANAGED_ENV_EXECUTION_MODE_DEFAULT,

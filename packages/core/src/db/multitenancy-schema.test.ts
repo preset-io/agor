@@ -44,6 +44,9 @@ function migrationTenantTables(): string[] {
   const mcpOauthMigration = readRepoFile(
     'packages/core/drizzle/postgres/0078_mcp_oauth_pending_flows.sql'
   );
+  const mcpOauthClientRegistrationMigration = readRepoFile(
+    'packages/core/drizzle/postgres/0102_mcp_oauth_client_registrations.sql'
+  );
   const githubInstallStateMigration = readRepoFile(
     'packages/core/drizzle/postgres/0082_github_install_state.sql'
   );
@@ -55,6 +58,9 @@ function migrationTenantTables(): string[] {
   );
   const codexDeviceAuthMigration = readRepoFile(
     'packages/core/drizzle/postgres/0091_codex_device_auth_attempts.sql'
+  );
+  const claudeOauthMigration = readRepoFile(
+    'packages/core/drizzle/postgres/0100_claude_oauth_attempts.sql'
   );
   const capabilityPoliciesMigration = readRepoFile(
     'packages/core/drizzle/postgres/0095_board_branch_capability_policies.sql'
@@ -69,10 +75,14 @@ function migrationTenantTables(): string[] {
         ...executorTokenMigration.matchAll(/CREATE TABLE "([^"]+)" \([\s\S]*?"tenant_id"/g),
         ...gatewayHaMigration.matchAll(/CREATE TABLE "([^"]+)" \([\s\S]*?"tenant_id"/g),
         ...mcpOauthMigration.matchAll(/CREATE TABLE "([^"]+)" \([\s\S]*?"tenant_id"/g),
+        ...mcpOauthClientRegistrationMigration.matchAll(
+          /CREATE TABLE "([^"]+)" \([\s\S]*?"tenant_id"/g
+        ),
         ...githubInstallStateMigration.matchAll(/CREATE TABLE "([^"]+)" \([\s\S]*?"tenant_id"/g),
         ...discordGatewayHybridMigration.matchAll(/CREATE TABLE "([^"]+)" \([\s\S]*?"tenant_id"/g),
         ...externalIdentitiesMigration.matchAll(/CREATE TABLE "([^"]+)" \([\s\S]*?"tenant_id"/g),
         ...codexDeviceAuthMigration.matchAll(/CREATE TABLE "([^"]+)" \([\s\S]*?"tenant_id"/g),
+        ...claudeOauthMigration.matchAll(/CREATE TABLE "([^"]+)" \([\s\S]*?"tenant_id"/g),
         ...capabilityPoliciesMigration.matchAll(/CREATE TABLE "([^"]+)" \([\s\S]*?"tenant_id"/g),
       ]
         .map((m) => m[1])
@@ -89,10 +99,12 @@ function rlsPolicyTables(): string[] {
     readRepoFile('packages/core/drizzle/postgres/0075_executor_session_token_authority.sql'),
     readRepoFile('packages/core/drizzle/postgres/0076_gateway_listener_ha.sql'),
     readRepoFile('packages/core/drizzle/postgres/0078_mcp_oauth_pending_flows.sql'),
+    readRepoFile('packages/core/drizzle/postgres/0102_mcp_oauth_client_registrations.sql'),
     readRepoFile('packages/core/drizzle/postgres/0082_github_install_state.sql'),
     readRepoFile('packages/core/drizzle/postgres/0094_discord_gateway_hybrid.sql'),
     readRepoFile('packages/core/drizzle/postgres/0090_external_user_identities.sql'),
     readRepoFile('packages/core/drizzle/postgres/0091_codex_device_auth_attempts.sql'),
+    readRepoFile('packages/core/drizzle/postgres/0100_claude_oauth_attempts.sql'),
     readRepoFile('packages/core/drizzle/postgres/0095_board_branch_capability_policies.sql'),
   ].join('\n');
   const retiredTables = retiredTenantTables();

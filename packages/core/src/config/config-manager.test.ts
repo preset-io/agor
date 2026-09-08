@@ -30,7 +30,6 @@ import {
   getReposDir,
   getTenantDataRoot,
   initConfig,
-  isBranchRbacEnabled,
   loadConfig,
   loadConfigSync,
   PublicBaseUrlNotConfiguredError,
@@ -108,6 +107,17 @@ describe('getDefaultConfig', () => {
 });
 
 describe('resolveEffectiveConfig', () => {
+  it('projects deployment environment overrides into the runtime capability configuration', () => {
+    const resolved = resolveEffectiveConfig(
+      {},
+      { AGOR_DEPLOYMENT_MODE: 'ha', AGOR_HA_EXECUTION_TOPOLOGY: 'external' }
+    );
+    expect(resolved.deployment).toMatchObject({
+      mode: 'ha',
+      ha: { execution_topology: 'external' },
+    });
+  });
+
   it('keeps the fail-safe password profile out of environment-variable override space', () => {
     const resolved = resolveEffectiveConfig(
       { identity: { password_policy: 'secure' } },
@@ -296,13 +306,13 @@ describe('resolveEffectiveConfig', () => {
       { AGOR_SANDBOX_HOME_MODE: 'per_user' }
     );
     expect(resolved.execution?.sandbox).toMatchObject({ enabled: true, home_mode: 'per_user' });
-    expect(resolved.execution?.branch_rbac).not.toBe(true); // not sandbox mode → no forced RBAC
+    expect(resolved.execution?.branch_rbac).toBe(true);
   });
 
   it('projects the SDK-home rollout override without implicitly enabling the sandbox', () => {
     const enabled = resolveEffectiveConfig({}, { AGOR_SANDBOX_SDK_HOME_MODE: 'per_branch' });
     expect(enabled.execution?.sandbox).toEqual({ sdk_home_mode: 'per_branch' });
-    expect(enabled.execution?.branch_rbac).not.toBe(true);
+    expect(enabled.execution?.branch_rbac).toBe(true);
 
     const disabled = resolveEffectiveConfig(
       { execution: { sandbox: { sdk_home_mode: 'per_branch' } } },
@@ -319,6 +329,41 @@ describe('resolveEffectiveConfig', () => {
 });
 
 describe('assertValidEffectiveExecutionConfig', () => {
+  it('keeps RBAC enabled in auth-resolved multi-tenant deployments', () => {
+    const resolved = resolveEffectiveConfig(
+      {
+        execution: { unix_user_mode: 'simple' },
+        multi_tenancy: { mode: 'required_from_auth' },
+      },
+      {}
+    );
+    expect(resolved.execution?.branch_rbac).toBe(true);
+    expect(() => assertValidEffectiveExecutionConfig(resolved)).not.toThrow();
+    expect(() =>
+      assertValidEffectiveExecutionConfig(
+        resolveEffectiveConfig(
+          {
+            execution: { unix_user_mode: 'simple', branch_rbac: true },
+            multi_tenancy: { mode: 'required_from_auth' },
+          },
+          {}
+        )
+      )
+    ).not.toThrow();
+
+    expect(() =>
+      assertValidEffectiveExecutionConfig(
+        resolveEffectiveConfig(
+          {
+            execution: { unix_user_mode: 'sandbox' },
+            multi_tenancy: { mode: 'required_from_auth' },
+          },
+          {}
+        )
+      )
+    ).not.toThrow();
+  });
+
   it('requires delegated mode to name an external execution substrate', () => {
     expect(() =>
       assertValidEffectiveExecutionConfig({ execution: { unix_user_mode: 'delegated' } })
@@ -524,6 +569,15 @@ describe('loadConfig', () => {
     );
     __resetConfigCacheForTests();
     await expect(loadConfig()).rejects.toThrow(/preserve_canonical_home_alias must be a boolean/);
+  });
+
+  it('rejects a non-boolean branch RBAC setting instead of silently disabling it', async () => {
+    const agorDir = path.join(tempDir, '.agor');
+    const configPath = path.join(agorDir, 'config.yaml');
+    await fs.mkdir(agorDir, { recursive: true });
+    await fs.writeFile(configPath, 'execution:\n  branch_rbac: "true"\n', 'utf-8');
+
+    await expect(loadConfig()).rejects.toThrow(/execution\.branch_rbac must be a boolean/);
   });
 
   it('accepts branch_storage.borrow_base_objects and rejects a non-boolean value', async () => {
@@ -762,6 +816,29 @@ describe('loadConfig', () => {
     });
   });
 
+  it.each([undefined, '', 'Read **this** before starting.', 'x'.repeat(4000)])(
+    'loads optional instance-owned environment guidance',
+    async (guidance) => {
+      const agorDir = path.join(tempDir, '.agor');
+      await fs.mkdir(agorDir, { recursive: true });
+      await fs.writeFile(
+        path.join(agorDir, 'config.yaml'),
+        yaml.dump({ environment_disclaimer_markdown: guidance }),
+        'utf-8'
+      );
+      expect((await loadConfig()).environment_disclaimer_markdown).toBe(guidance);
+    }
+  );
+
+  it.each([null, false, 42, {}, 'x'.repeat(4001)])(
+    'rejects invalid instance environment guidance',
+    (guidance) => {
+      expect(() =>
+        assertValidRawConfig({ environment_disclaimer_markdown: guidance } as AgorConfig)
+      ).toThrow(/environment_disclaimer_markdown must be a string of at most 4000/);
+    }
+  );
+
   it('rejects invalid managed environment execution modes', async () => {
     const agorDir = path.join(tempDir, '.agor');
     const configPath = path.join(agorDir, 'config.yaml');
@@ -934,6 +1011,28 @@ describe('loadConfig', () => {
     await expect(loadConfig()).resolves.toMatchObject({
       agentic_tools: { installed: ['claude-code', 'codex'] },
     });
+  });
+
+  it('accepts only a boolean Claude subscription OAuth release flag', async () => {
+    const agorDir = path.join(tempDir, '.agor');
+    const configPath = path.join(agorDir, 'config.yaml');
+    await fs.mkdir(agorDir, { recursive: true });
+    await fs.writeFile(
+      configPath,
+      yaml.dump({ agentic_tools: { claude_subscription_oauth: true } }),
+      'utf-8'
+    );
+    await expect(loadConfig()).resolves.toMatchObject({
+      agentic_tools: { claude_subscription_oauth: true },
+    });
+
+    __resetConfigCacheForTests();
+    await fs.writeFile(
+      configPath,
+      yaml.dump({ agentic_tools: { claude_subscription_oauth: 'yes' } }),
+      'utf-8'
+    );
+    await expect(loadConfig()).rejects.toThrow(/claude_subscription_oauth must be a boolean/);
   });
 
   it('rejects unsupported or duplicate configured agentic tools', async () => {
@@ -1394,29 +1493,31 @@ describe('loadConfig cache', () => {
     );
   });
 
-  it('treats branch_rbac as app-level only in simple Unix mode', async () => {
-    await writeConfigFile({
-      execution: { branch_rbac: true, unix_user_mode: 'simple' },
-    });
+  it('rejects the removed RBAC false mode and accepts true as a compatibility no-op', async () => {
+    await writeConfigFile({ execution: { branch_rbac: false } });
+    expect(() => loadConfigSync()).toThrow(/branch_rbac: false is no longer supported/);
 
-    expect(isBranchRbacEnabled()).toBe(true);
+    await writeConfigFile({ execution: { branch_rbac: true } });
+    expect(loadConfigSync().execution?.branch_rbac).toBe(true);
+  });
+
+  it('rejects environment attempts to disable always-on RBAC', () => {
+    expect(() => resolveEffectiveConfig({ execution: { branch_rbac: false } })).toThrow(
+      /branch_rbac: false is no longer supported/
+    );
+    expect(() => resolveEffectiveConfig({}, { AGOR_RBAC_ENABLED: 'false' })).toThrow(
+      /can no longer disable board and branch RBAC/
+    );
+    expect(resolveEffectiveConfig({}, { AGOR_RBAC_ENABLED: 'true' }).execution?.branch_rbac).toBe(
+      true
+    );
   });
 
   it.each([
     {
-      name: 'open access simple',
-      config: { execution: { branch_rbac: false, unix_user_mode: 'simple' } } as AgorConfig,
-      expected: {
-        appRbacEnabled: false,
-        unixUserMode: 'simple',
-        requiresExecutionHomeKey: false,
-      },
-    },
-    {
       name: 'app RBAC simple',
-      config: { execution: { branch_rbac: true, unix_user_mode: 'simple' } } as AgorConfig,
+      config: { execution: { unix_user_mode: 'simple' } } as AgorConfig,
       expected: {
-        appRbacEnabled: true,
         unixUserMode: 'simple',
         requiresExecutionHomeKey: false,
       },
@@ -1425,9 +1526,8 @@ describe('loadConfig cache', () => {
       // Delegated requires per-user unix_username but performs no OS-level
       // work on the daemon host: no sudo and no host groups.
       name: 'delegated (identity enforced by execution substrate)',
-      config: { execution: { branch_rbac: true, unix_user_mode: 'delegated' } } as AgorConfig,
+      config: { execution: { unix_user_mode: 'delegated' } } as AgorConfig,
       expected: {
-        appRbacEnabled: true,
         unixUserMode: 'delegated',
         requiresExecutionHomeKey: true,
       },
@@ -1485,6 +1585,27 @@ describe('base URL resolution', () => {
     await expect(getBaseUrl()).resolves.toBe('https://agor.sandbox.example.com');
     await expect(getDaemonBaseUrl()).resolves.toBe('https://agor.sandbox.example.com');
     await expect(requirePublicBaseUrl()).resolves.toBe('https://agor.sandbox.example.com');
+  });
+
+  it('keeps the public browser origin separate from an HA internal daemon URL', async () => {
+    const agorDir = path.join(tempDir, '.agor');
+    await fs.mkdir(agorDir, { recursive: true });
+    await fs.writeFile(
+      path.join(agorDir, 'config.yaml'),
+      yaml.dump({
+        daemon: {
+          // Production HA charts use this fleet-internal URL for executor callbacks.
+          public_url: 'http://agor-runtime-daemon.runtime.svc.cluster.local:3030',
+          // OAuth callbacks must use this deployment-owned public ingress origin.
+          base_url: 'https://sdx-us1a-v2.dp-sdx-us1a.cloud-sdx.agor.live',
+        },
+      }),
+      'utf-8'
+    );
+
+    await expect(requirePublicBaseUrl()).resolves.toBe(
+      'https://sdx-us1a-v2.dp-sdx-us1a.cloud-sdx.agor.live'
+    );
   });
 
   it('returns ui.base_url from legacy config when daemon.base_url is unset', async () => {

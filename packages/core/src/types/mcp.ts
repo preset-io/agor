@@ -22,6 +22,11 @@ export type MCPServerID = UUID & { readonly __brand: 'MCPServerID' };
  */
 export type MCPOAuthAttemptID = UUID & { readonly __brand: 'MCPOAuthAttemptID' };
 
+/** Durable identity for one provider-side Dynamic Client Registration generation. */
+export type MCPOAuthClientRegistrationID = UUID & {
+  readonly __brand: 'MCPOAuthClientRegistrationID';
+};
+
 /** Durable lifecycle of a browser-based MCP OAuth authorization attempt. */
 export type MCPOAuthPendingFlowStatus =
   | 'pending'
@@ -29,6 +34,15 @@ export type MCPOAuthPendingFlowStatus =
   | 'succeeded'
   | 'failed'
   | 'ambiguous'
+  | 'expired';
+
+/** Durable lifecycle of one exact-bound Dynamic Client Registration generation. */
+export type MCPOAuthClientRegistrationStatus =
+  | 'registering'
+  | 'registered'
+  | 'failed'
+  | 'ambiguous'
+  | 'superseded'
   | 'expired';
 
 /** Authenticated durable-attempt read DTO; `not_found` avoids leaking rows. */
@@ -138,6 +152,7 @@ export const MCP_AUTH_RECOVERY_CATEGORIES = [
   'provider_unavailable',
   'provider_rejected',
   'invalid_response',
+  'storage_policy_rejected',
   'configuration_required',
   'unknown',
 ] as const;
@@ -202,12 +217,57 @@ export interface MCPOAuthPendingFlowSealedMaterial {
   pkceVerifier: string;
   clientId: string;
   clientSecret?: string;
+  /** Exact durable DCR UUID epoch used by this attempt. */
+  clientRegistrationId?: MCPOAuthClientRegistrationID;
   compatibilityMode: MCPOAuthRuntimeCompatibilityMode;
   /** Whether RFC 9207 says this AS will return `iss` on the callback. */
   authorizationResponseIssuerParameterSupported?: boolean;
   allowLocalhostHttp: boolean;
   /** Non-secret durable routing back to an exact Slack recovery notice. */
   slackRecovery?: MCPSlackOAuthRecoveryContext;
+}
+
+/**
+ * Exact policy/binding duplicated inside an encrypted durable DCR envelope.
+ *
+ * DCR credentials intentionally outlive one browser attempt, so the authority
+ * is scoped to the tenant and saved MCP-server configuration rather than to a
+ * grant subject. The server config version plus every provider/redirect/policy
+ * input prevents reuse after a relevant edit or against another issuer.
+ */
+export interface MCPOAuthClientRegistrationSealedMaterial {
+  version: 1;
+  tenantId: string;
+  registrationId: MCPOAuthClientRegistrationID;
+  mcpServerId: MCPServerID;
+  bindingVersion: 1;
+  bindingFingerprint: string;
+  serverConfigVersion: number;
+  registrationEndpoint: string;
+  registrationEndpointSource: 'metadata' | 'legacy_fallback';
+  metadataUrl: string;
+  resourceUri: string;
+  issuer: string;
+  authorizationEndpoint: string;
+  tokenEndpoint: string;
+  redirectUri: string;
+  applicationType: 'native' | 'web';
+  scope?: string;
+  compatibilityMode: MCPOAuthRuntimeCompatibilityMode;
+  dcrMode: MCPOAuthDCRMode;
+  clientId: string;
+  clientSecret?: string;
+  /** Provider epoch seconds. Zero/absent means no advertised expiry. */
+  clientSecretExpiresAt?: number;
+}
+
+/** Admin-only reset of the current durable DCR authority for one saved server. */
+export interface MCPOAuthClientRegistrationResetRequest {
+  mcp_server_id: MCPServerID;
+}
+
+export interface MCPOAuthClientRegistrationResetResult {
+  success: true;
 }
 
 /**
@@ -429,6 +489,34 @@ export interface PromptArgument {
   required?: boolean;
 }
 
+/** Request for an authenticated, tenant-scoped capability probe. Saved IDs use the durable row. */
+export interface MCPDiscoveryRequest {
+  mcp_server_id?: string;
+  url?: string;
+  transport?: 'http' | 'sse';
+  auth?: MCPAuth;
+  headers?: Record<string, string>;
+  oauth_browser_event?: MCPOAuthBrowserEventRequest;
+}
+
+/** Bounded discovery response shared by the daemon and both MCP server forms. */
+export type MCPDiscoveryResult =
+  | {
+      success: true;
+      capabilities: { tools: number; resources: number; prompts: number };
+      metadata?: { descriptions_truncated: number };
+      tools: Pick<MCPTool, 'name' | 'description'>[];
+      resources: Pick<MCPResource, 'name' | 'uri' | 'mimeType'>[];
+      prompts: Pick<MCPPrompt, 'name' | 'description'>[];
+    }
+  | {
+      success: false;
+      error: string;
+      recovery?: MCPAuthRecovery;
+      category?: string;
+      action?: MCPAuthRecoveryAction;
+    };
+
 /**
  * MCP Server Capabilities
  * Discovered from server via MCP protocol
@@ -521,6 +609,8 @@ export interface MCPServer {
   tools?: MCPTool[];
   resources?: MCPResource[];
   prompts?: MCPPrompt[];
+  /** Daemon-owned timestamp of the last successful capability discovery. */
+  capabilities_discovered_at?: Date;
 
   // Tool permissions (per-tool permission settings)
   tool_permissions?: Record<string, ToolPermission>; // e.g., { "list_files": "allow", "write_file": "ask" }
@@ -546,7 +636,6 @@ export interface SessionMCPServer {
  */
 export interface MCPServerFilters {
   scope?: MCPScope;
-  scopeId?: string; // user_id, team_id, repo_id, or session_id
   transport?: MCPTransport;
   enabled?: boolean;
   source?: MCPSource;

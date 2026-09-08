@@ -516,8 +516,6 @@ export class BoardRepository implements BaseRepository<Board, Partial<Board>> {
    * Find board ids visible through the board's own normalized policy. Branch
    * visibility never makes a board visible implicitly.
    *
-   * Should only be called when branch RBAC is enabled.
-   *
    * @param userId - User ID to check board visibility for
    * @returns Array of board ids the user can see
    */

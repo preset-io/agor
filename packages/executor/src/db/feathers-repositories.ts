@@ -156,9 +156,6 @@ export class FeathersMCPServersRepository {
     if (filters?.scope) {
       query.scope = filters.scope;
     }
-    if (filters?.scopeId) {
-      query.scopeId = filters.scopeId;
-    }
     if (filters?.transport) {
       query.transport = filters.transport;
     }

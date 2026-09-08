@@ -264,6 +264,12 @@ function assertDisclosureAcknowledged(entry: MCPCatalogEntry, acknowledged: unkn
  * from.
  */
 function logProbeDisagreement(entry: MCPCatalogEntry, probed: MCPCatalogProbedAuthType): void {
+  if (
+    probed === 'oauth' &&
+    entry.auth_type === 'credentials' &&
+    entry.credentials?.oauth_challenge_compatible
+  )
+    return;
   if (entry.auth_type === 'unknown' || probed === entry.auth_type) return;
   if (probed !== 'none' && probed !== 'oauth' && probed !== 'credentials') return;
   console.warn(
@@ -343,6 +349,19 @@ async function resolveAuthRequirement(
   const probed = await probeRemoteAuthType(entry.remote_url);
   logProbeDisagreement(entry, probed);
 
+  // Some vendors publish a first-class bearer route while their unauthenticated
+  // endpoint advertises an OAuth flow that Agor cannot safely enter (for
+  // example, no DCR and no public client). This exception is reviewed per
+  // catalog entry and never inferred from the challenge. The supplied token is
+  // still checked by a second pinned initialize before it is persisted.
+  if (
+    probed === 'oauth' &&
+    entry.credentials?.scheme === 'bearer' &&
+    entry.credentials.oauth_challenge_compatible
+  ) {
+    return resolveBearerTokenAuth(entry, bearerToken);
+  }
+
   if (probed === 'none' || probed === 'oauth') {
     if (bearerToken !== undefined) {
       throw new CatalogCredentialRequirementError(
@@ -368,6 +387,18 @@ async function resolveAuthRequirement(
     }
     return resolveBearerTokenAuth(entry, bearerToken);
   }
+
+  // `probeRemoteAuthType` deliberately retains no provider exception or body,
+  // but an unreachable/invalid probe is still an operational external failure.
+  // Log the closed outcome here before converting it to the safe Marketplace
+  // control error; otherwise Catalog clicks (for example Sentry or Figma) leave
+  // no named discovery/OAuth event at all.
+  const category = probed === 'unreachable' ? 'provider_unavailable' : 'invalid_response';
+  const reason =
+    probed === 'unreachable' ? 'catalog_probe_unreachable' : 'catalog_probe_unrecognized';
+  console.error(
+    `[mcp-catalog/connect] event=mcp_external_failure stage=discovery category=${category} type=UnknownError reason=${reason} catalog_entry=${entry.name}`
+  );
 
   throw new CatalogConnectControlError(
     `${catalogDisplayName(entry)} could not be reached, so it cannot be connected`
@@ -498,9 +529,10 @@ export interface MCPCatalogConnectService {
  * Credential reuse has to know which protected resource a grant was actually
  * minted for, and that is a column on `user_mcp_oauth_tokens`
  * (`oauth_resource_uri`) which no read path puts on an `mcp_servers` payload —
- * the hydrate hook copies the token and its expiry and nothing else. Rather
- * than give this service a database handle and a tenant scope of its own, the
- * daemon injects the one read, so everything else here stays service calls.
+ * the hydrate hook copies the token and its expiry and nothing else. The
+ * daemon injects those bounded reads and the short-scope runner used by the
+ * two internal MCP-server methods that bypass ordinary Feathers hooks, so this
+ * service never holds a database scope across the remote endpoint probe.
  *
  * Required rather than optional, though only credential reuse reads it. An
  * optional version was written first and had exactly the failure mode this
@@ -509,6 +541,12 @@ export interface MCPCatalogConnectService {
  * to catch that than a bug report about consenting twice.
  */
 export interface MCPCatalogConnectDeps {
+  /**
+   * Opens one short tenant database unit for direct, internal service methods.
+   * Connect is a long route and must not retain this scope across its remote
+   * authentication probe.
+   */
+  runInTenantDatabaseScope<T>(params: AuthenticatedParams, work: () => Promise<T>): Promise<T>;
   listCandidates(userId: UserID, params: AuthenticatedParams): Promise<MCPCatalogServerCandidate[]>;
   getCandidate(
     userId: UserID,
@@ -919,9 +957,12 @@ export function createMCPCatalogConnectService(
       const operationGeneration = {
         ownerUserId: userId,
         catalogEntryName: entry.name,
-        value: await (
-          service('mcp-servers') as unknown as MCPServersService
-        ).claimCatalogConnectGeneration(userId, entry.name),
+        value: await deps.runInTenantDatabaseScope(params, () =>
+          (service('mcp-servers') as unknown as MCPServersService).claimCatalogConnectGeneration(
+            userId,
+            entry.name
+          )
+        ),
       };
       const connectGeneration = bearerToken === undefined ? undefined : operationGeneration;
       let auth: MCPAuth;
@@ -930,8 +971,9 @@ export function createMCPCatalogConnectService(
       } catch (error) {
         if (isCatalogConnectControlError(error)) throw error;
         const safe = sanitizeMCPExternalError(error, { stage: 'discovery' });
+        const { type, code, status, reason } = safe.diagnostic;
         console.error(
-          `[mcp-catalog/connect] event=mcp_external_failure stage=discovery category=${safe.category} type=${safe.diagnostic.type}`
+          `[mcp-catalog/connect] event=mcp_external_failure stage=discovery category=${safe.category} type=${type}${status !== undefined ? ` status=${status}` : ''}${code ? ` code=${code}` : ''}${reason ? ` reason=${reason}` : ''}`
         );
         throw new BadRequest(safe.message, { category: safe.category });
       }
@@ -1137,9 +1179,11 @@ export function createMCPCatalogConnectService(
             // Atomic liveness/adoption check. A concurrent unique-conflict
             // loser may now be using this row; in that case it owns the row's
             // continued life and compensation must leave it in place.
-            await service('mcp-servers').removeIfUnattached(
-              mcpServer.mcp_server_id,
-              operationGeneration
+            await deps.runInTenantDatabaseScope(params, () =>
+              service('mcp-servers').removeIfUnattached(
+                mcpServer.mcp_server_id,
+                operationGeneration
+              )
             );
           } catch (cleanupError) {
             const safe = sanitizeMCPExternalError(cleanupError, { stage: 'runtime' });

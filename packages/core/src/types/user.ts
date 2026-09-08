@@ -212,6 +212,17 @@ export interface CodexConfig {
 export type AgenticAuthMethod = 'api_key' | 'subscription';
 export type AgenticAuthMethods = Partial<Record<'claude-code' | 'codex', AgenticAuthMethod>>;
 
+/**
+ * Authoritative source for a user's Claude credential.
+ *
+ * `agentic_auth_methods` intentionally remains the coarse UI/provider choice,
+ * while this value distinguishes the two subscription implementations. In
+ * particular, `none` is a durable opt-out: an old `.credentials.json` must not
+ * become active merely because a pasted token was cleared.
+ */
+export type ClaudeCredentialSource = 'api_key' | 'subscription_token' | 'managed_file' | 'none';
+export type AgenticCredentialSources = Partial<Record<'claude-code', ClaudeCredentialSource>>;
+
 export interface GeminiConfig {
   GEMINI_API_KEY?: string;
 }
@@ -540,6 +551,8 @@ export interface User extends BaseUserFields {
   agentic_tools?: AgenticToolsStatus;
   /** Explicit authentication method; inactive credentials remain stored but are never resolved. */
   agentic_auth_methods?: AgenticAuthMethods;
+  /** Explicit credential source; `none` prevents fallback to dormant native files or secrets. */
+  agentic_credential_sources?: AgenticCredentialSources;
   /**
    * Plaintext values for fields listed in `AGENTIC_TOOLS_PUBLIC_FIELDS` —
    * only populated when the requester is the field's owner. Lets the UI
@@ -718,6 +731,7 @@ export interface UpdateUserInput extends Partial<BaseUserFields> {
    */
   agentic_tools?: AgenticToolsUpdate;
   agentic_auth_methods?: AgenticAuthMethods;
+  agentic_credential_sources?: AgenticCredentialSources;
   // Environment variables for update (accepts plaintext, encrypted before storage).
   // `null` clears the variable. A plain `string` creates/updates the value and leaves
   // the existing scope in place (defaults to 'global' for new vars).

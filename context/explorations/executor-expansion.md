@@ -1148,8 +1148,7 @@ execution:
   # string = template with variables
   executor_command_template: null
 
-  # Enable branch RBAC (Unix group isolation)
-  branch_rbac: false
+  # Board/Branch authorization is always enabled; there is no RBAC switch.
 
 # Daemon configuration
 daemon:

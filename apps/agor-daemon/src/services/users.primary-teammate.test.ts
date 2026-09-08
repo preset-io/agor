@@ -189,31 +189,6 @@ describe('UsersService primary teammate', () => {
     ).rejects.toThrow(/active teammate/);
   });
 
-  dbTest(
-    'open-access mode permits any active teammate regardless of branch ACL',
-    async ({ db }) => {
-      await ensureCaller(db);
-      const branchId = await createBranch(db, {
-        created_by: generateId() as UUID,
-        others_can: 'none',
-      });
-      const app = {
-        get: () => ({ execution: { branch_rbac: false } }),
-        service: () => ({ emit: vi.fn() }),
-      } as never;
-      const service = createUsersService(db, app);
-
-      await expect(
-        service.setPrimaryTeammate(teammateMutation(branchId), CALLER_PARAMS)
-      ).resolves.toMatchObject({
-        branch_id: branchId,
-      });
-      await expect(service.getPrimaryTeammate(undefined, CALLER_PARAMS)).resolves.toMatchObject({
-        branch_id: branchId,
-      });
-    }
-  );
-
   dbTest('primary teammate methods require an authenticated caller', async ({ db }) => {
     const service = createUsersService(db);
     await expect(service.getPrimaryTeammate(undefined, {} as never)).rejects.toThrow();

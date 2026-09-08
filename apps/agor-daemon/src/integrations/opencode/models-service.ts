@@ -1,4 +1,3 @@
-import { resolvePackagedOpenCodeBinary } from '@agor/agentic-tool-opencode/runtime/binary';
 import type { AgorConfig } from '@agor/core/config';
 import type { TenantScopeAwareDatabase } from '@agor/core/db';
 import { BadRequest } from '@agor/core/feathers';
@@ -9,6 +8,43 @@ import { startOpenCodeExecutorInvocation } from './executor-command.js';
 import { blockOpenCodeNativeStateNamespace } from './native-state-coordinator.js';
 
 const MODEL_CATALOG_FAILURE = 'OpenCode model catalog could not be loaded. Try again.';
+const OPEN_CODE_MODEL_STATUSES = new Set(['active', 'alpha', 'beta', 'deprecated']);
+
+function isString(value: unknown): value is string {
+  return typeof value === 'string' && value.length > 0;
+}
+
+function isOpenCodeModelCatalog(value: unknown): value is OpenCodeModelCatalog {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const catalog = value as Partial<OpenCodeModelCatalog>;
+  if (!isString(catalog.runtimeVersion) || !Array.isArray(catalog.providers)) return false;
+  if (
+    catalog.suggestedSelection !== undefined &&
+    (!catalog.suggestedSelection ||
+      typeof catalog.suggestedSelection !== 'object' ||
+      Array.isArray(catalog.suggestedSelection) ||
+      !isString(catalog.suggestedSelection.providerId) ||
+      !isString(catalog.suggestedSelection.modelId))
+  ) {
+    return false;
+  }
+  return catalog.providers.every(
+    (provider) =>
+      provider &&
+      isString(provider.id) &&
+      isString(provider.name) &&
+      typeof provider.availableForSelection === 'boolean' &&
+      (provider.suggestedModel === undefined || isString(provider.suggestedModel)) &&
+      Array.isArray(provider.models) &&
+      provider.models.every(
+        (model) =>
+          model &&
+          isString(model.id) &&
+          isString(model.name) &&
+          OPEN_CODE_MODEL_STATUSES.has(model.status)
+      )
+  );
+}
 
 async function readModelCatalog(
   db: TenantScopeAwareDatabase,
@@ -18,7 +54,6 @@ async function readModelCatalog(
   const context = await resolveAuthenticatedOpenCodeSubjectContext(db, config, params);
   let result: ExecutorCommandResult;
   try {
-    await resolvePackagedOpenCodeBinary();
     const handle = startOpenCodeExecutorInvocation(
       context.dataHome,
       { operation: 'read-model-catalog' },
@@ -34,10 +69,10 @@ async function readModelCatalog(
   } catch {
     throw new BadRequest(MODEL_CATALOG_FAILURE);
   }
-  if (!result.success || !result.data) {
+  if (!result.success || !isOpenCodeModelCatalog(result.data)) {
     throw new BadRequest(MODEL_CATALOG_FAILURE);
   }
-  return result.data as OpenCodeModelCatalog;
+  return result.data;
 }
 
 export class OpenCodeModelsService {
