@@ -15,11 +15,13 @@ vi.mock('../MCPServer', () => ({
   MCPServerFormFields: ({
     form,
     onAuthTypeChange,
+    onTransportChange,
     onPrepareOAuthStart,
     serverId,
   }: {
     form: { setFieldsValue: (values: Record<string, unknown>) => void };
     onAuthTypeChange?: (authType: 'oauth') => void;
+    onTransportChange?: (transport: 'http') => void;
     onPrepareOAuthStart: () => Promise<string | null>;
     serverId?: string;
   }) => (
@@ -39,6 +41,7 @@ vi.mock('../MCPServer', () => ({
             oauth_dcr_mode: 'advertised',
           });
           onAuthTypeChange?.('oauth');
+          onTransportChange?.('http');
         }}
       >
         Configure OAuth
@@ -115,7 +118,15 @@ describe('MCPServersTable OAuth creation', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Prepare OAuth' }));
     await waitFor(() => expect(patch).toHaveBeenCalledWith('server-1', expect.any(Object)));
 
-    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    // Once OAuth has created the row, the footer must save later edits, not
+    // merely dismiss them as the former Done button did.
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(patch).toHaveBeenCalledTimes(2));
+    expect(patch.mock.calls[0]?.[1]).toMatchObject({ expected_config_version: 1 });
+    expect(patch.mock.calls[1]?.[1]).toMatchObject({ expected_config_version: 2 });
+    await waitFor(() =>
+      expect(screen.queryByRole('button', { name: 'Save' })).not.toBeInTheDocument()
+    );
     fireEvent.click(screen.getByRole('button', { name: /New MCP Server/ }));
     expect(await screen.findByTestId('prepared-server-id')).toHaveTextContent('none');
 
@@ -123,7 +134,7 @@ describe('MCPServersTable OAuth creation', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Prepare OAuth' }));
     await waitFor(() => expect(create).toHaveBeenCalledTimes(2));
     expect(screen.getByTestId('prepared-server-id')).toHaveTextContent('server-2');
-    expect(patch).toHaveBeenCalledTimes(1);
+    expect(patch).toHaveBeenCalledTimes(2);
     expect(showError).not.toHaveBeenCalled();
   }, 30_000);
 });

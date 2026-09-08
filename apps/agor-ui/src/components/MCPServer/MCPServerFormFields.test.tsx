@@ -7,10 +7,11 @@ import { MCPServerFormFields } from './MCPServerFormFields';
 import { useFormRevision } from './mcp-form-requirements';
 
 const showError = vi.fn();
+const showSuccess = vi.fn();
 
 vi.mock('@/utils/message', () => ({
   useThemedMessage: () => ({
-    showSuccess: vi.fn(),
+    showSuccess,
     showError,
     showInfo: vi.fn(),
     showWarning: vi.fn(),
@@ -32,6 +33,37 @@ const oauthButton = (name = 'Start OAuth Flow') => buttonLabeled(name);
 
 describe('MCPServerFormFields OAuth start', () => {
   beforeEach(() => vi.clearAllMocks());
+
+  it('shows truncation metadata in the discovery result, not the OAuth setup response', () => {
+    const Harness = () => {
+      const [form] = Form.useForm();
+      return (
+        <Form form={form}>
+          <MCPServerFormFields
+            mode="create"
+            transport="http"
+            form={form}
+            client={null}
+            authorityKey="user-a:admin:1"
+            onPrepareOAuthStart={vi.fn()}
+            testResult={{
+              success: true,
+              capabilities: { tools: 1, resources: 0, prompts: 0 },
+              metadata: { descriptions_truncated: 2 },
+              tools: [{ name: 'search' }],
+              resources: [],
+              prompts: [],
+            }}
+          />
+        </Form>
+      );
+    };
+    render(<Harness />);
+    expect(
+      screen.getByText("2 provider description(s) shortened to Agor's safe metadata budget")
+    ).toBeInTheDocument();
+    expect(showSuccess).not.toHaveBeenCalled();
+  });
 
   it('uses an explicit visible control to clear a saved bearer secret', async () => {
     let capturedForm: FormInstance | undefined;

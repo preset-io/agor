@@ -24,7 +24,7 @@ execution:
   unix_user_mode: sandbox
 ```
 
-Sandbox mode automatically enables branch RBAC and the per-user filesystem sandbox. It requires Linux and bubblewrap and refuses to launch rather than silently falling back.
+Board and branch RBAC is always enabled. Sandbox mode adds the per-user filesystem sandbox. It requires Linux and bubblewrap and refuses to launch rather than silently falling back.
 
 For each launch the daemon derives mount access from trusted tenant and branch authorization state:
 

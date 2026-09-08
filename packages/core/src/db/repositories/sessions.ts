@@ -60,7 +60,7 @@ import {
   RepositoryError,
   resolveByShortIdPrefix,
 } from './base';
-import { visibleBranchAccessCondition } from './branch-access';
+import { inVisibleBranchSet } from './branch-access';
 import { deepMerge } from './merge-utils';
 import {
   extractMessageText,
@@ -118,6 +118,7 @@ function isSessionTimestampNeutralPatch(updates: SessionUpdate): boolean {
 
 /** Options for the SQL-backed session list page used by board/branch views. */
 export interface SessionPageOptions {
+  status?: SessionStatus;
   boardId?: string;
   branchId?: BranchID;
   branchIds?: BranchID[];
@@ -433,7 +434,9 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
         conditions.push(eq(sessions.archived, filter.archived));
       }
       if (filter?.visibleToUserId) {
-        conditions.push(visibleBranchAccessCondition(this.db, filter.visibleToUserId));
+        conditions.push(
+          inVisibleBranchSet(this.db, filter.visibleToUserId, sessions.branch_id, filter)
+        );
       }
 
       // biome-ignore lint/suspicious/noExplicitAny: Conditional query builder shape differs with the RBAC join
@@ -517,7 +520,9 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
 
       const conditions = [eq(branches.board_id, boardId)];
       if (filter?.visibleToUserId) {
-        conditions.push(visibleBranchAccessCondition(this.db, filter.visibleToUserId));
+        conditions.push(
+          inVisibleBranchSet(this.db, filter.visibleToUserId, sessions.branch_id, { boardId })
+        );
       }
 
       // Filter on the branch's board_id via the JOIN (sessions.board_id is dead).
@@ -574,13 +579,16 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
       const baseUrl = await getBaseUrl();
 
       const conditions = [];
+      if (opts.status !== undefined) conditions.push(eq(sessions.status, opts.status));
       if (opts.boardId !== undefined) conditions.push(eq(branches.board_id, opts.boardId));
       if (opts.branchId !== undefined) conditions.push(eq(sessions.branch_id, opts.branchId));
       if (opts.branchIds !== undefined)
         conditions.push(inArray(sessions.branch_id, opts.branchIds));
       if (opts.archived !== undefined) conditions.push(eq(sessions.archived, opts.archived));
       if (opts.visibleToUserId) {
-        conditions.push(visibleBranchAccessCondition(this.db, opts.visibleToUserId));
+        conditions.push(
+          inVisibleBranchSet(this.db, opts.visibleToUserId, sessions.branch_id, opts)
+        );
       }
       const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
 
@@ -591,10 +599,11 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
         .leftJoin(branches, eq(sessions.branch_id, branches.branch_id));
       const countRow = await (whereClause ? countQuery.where(whereClause) : countQuery).one();
       const total = Number(countRow?.count ?? 0);
+      if (opts.limit === 0) return { data: [], total };
 
       // Page of rows, recency-sorted in SQL on the real `updated_at` column.
       // biome-ignore lint/suspicious/noExplicitAny: Conditional query builder shape differs with the RBAC join
-      let dataQuery: any = select(this.db)
+      let dataQuery: any = select(this.db, { sessions, branches: { board_id: branches.board_id } })
         .from(sessions)
         .leftJoin(branches, eq(sessions.branch_id, branches.branch_id));
       if (whereClause) dataQuery = dataQuery.where(whereClause);
@@ -1452,10 +1461,6 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
    *
    * Also populates board_id and url via the branches JOIN.
    *
-   * NOTE: This method should only be called when RBAC is enabled. When RBAC is disabled,
-   * the scopeSessionQuery hook is not registered, so default Feathers query is used
-   * (which returns all sessions without filtering).
-   *
    * @param userId - User ID to check access for
    * @param boardId - Optional board filter, pushed down to SQL via the branch
    *                  join (session → branch → board). Lets callers scope to a
@@ -1467,7 +1472,7 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
 
     // Join branches for board_id (exposed as Session.branch_board_id).
     // No boards join needed — flat `/s/<short>/` URLs don't carry a slug.
-    const accessCondition = visibleBranchAccessCondition(this.db, userId);
+    const accessCondition = inVisibleBranchSet(this.db, userId, sessions.branch_id, { boardId });
     const whereCondition = boardId
       ? and(accessCondition, eq(branches.board_id, boardId))
       : accessCondition;

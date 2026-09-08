@@ -68,6 +68,7 @@ import {
   hasTemplateMarker,
   isMCPServerUsableBy,
   type MCPExternalErrorStage,
+  normalizeDiscoveredMCPCapabilities,
   sanitizeMCPExternalError,
 } from '@agor/core/mcp';
 import type {
@@ -81,6 +82,8 @@ import type {
   AuthenticatedParams,
   HookContext,
   MCPAuth,
+  MCPDiscoveryRequest,
+  MCPDiscoveryResult,
   MCPOAuthAttemptID,
   MCPOAuthBrowserEventRequest,
   MCPOAuthBrowserOperation,
@@ -101,6 +104,7 @@ import type {
 } from '@agor/core/types';
 import {
   assertPublicMCPOAuthCompatibilityMode,
+  ENVIRONMENT_COMMAND_REPORT_SERVICE,
   hasMinimumRole,
   isMCPOAuthGrantBindingVersion,
   MCP_MEMBER_POLICY_CHANGED_EVENT,
@@ -187,6 +191,7 @@ import { createDurableCodexDeviceAuthService } from './services/codex-device-aut
 import { createConfigService } from './services/config.js';
 import { createCopilotModelsService } from './services/copilot-models.js';
 import { createCursorModelsService } from './services/cursor-models.js';
+import { EnvironmentCommandReportsService } from './services/environment-command-reports.js';
 import { createExecutorGitEnvironmentService } from './services/executor-git-environment.js';
 import { prepareSessionForExecutorStart } from './services/executor-startup.js';
 import { createFileService } from './services/file.js';
@@ -331,7 +336,6 @@ export interface RegisterServicesContext {
   bundledUiAvailable: boolean;
   DAEMON_PORT: number;
   UI_PORT: number;
-  branchRbacEnabled: boolean;
   allowSuperadmin: boolean;
   requireAuth: (context: HookContext) => Promise<HookContext>;
   deployment: ResolvedDeploymentConfig;
@@ -364,7 +368,7 @@ export interface RegisteredServices {
  * Register all FeathersJS services on the app.
  */
 export async function registerServices(ctx: RegisterServicesContext): Promise<RegisteredServices> {
-  const { db, app, config, daemonUrl, branchRbacEnabled, allowSuperadmin } = ctx;
+  const { db, app, config, daemonUrl, allowSuperadmin } = ctx;
   const deploymentAgenticToolPolicy = resolveDeploymentAgenticToolPolicy(config);
 
   const _superadminOpts = { allowSuperadmin };
@@ -411,9 +415,7 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   const sessionsService = createSessionsService(db, app, (tool) =>
     isDeploymentAgenticToolAvailable(tool, deploymentAgenticToolPolicy)
   ) as unknown as SessionsServiceImpl;
-  const tasksService = createTasksService(db, app, sessionTokenService, {
-    branchRbacEnabled,
-  });
+  const tasksService = createTasksService(db, app, sessionTokenService);
   app.use('/sessions', sessionsService, {
     events: ['permission:request', 'permission:timeout'],
   });
@@ -605,7 +607,7 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   // Branches, repos
   // ============================================================================
 
-  app.use('/branches', createBranchesService(db, app, { appRbacEnabled: branchRbacEnabled }), {
+  app.use('/branches', createBranchesService(db, app), {
     methods: [
       'find',
       'get',
@@ -618,7 +620,7 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
     ],
   });
 
-  console.log(`[RBAC] Branch RBAC ${branchRbacEnabled ? 'Enabled' : 'Disabled'}`);
+  console.log('[RBAC] Board and branch RBAC enabled (always on)');
   console.log(`[RBAC] Superadmin bypass ${allowSuperadmin ? 'Enabled' : 'Disabled'}`);
 
   app.use('/groups', createGroupsService(db), {
@@ -752,7 +754,7 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
     app.service('gateway-channels/app-info').publish(() => []);
 
     app.use('/thread-session-map', createThreadSessionMapService(db));
-    app.use('/gateway', createGatewayService(db, app, { appRbacEnabled: branchRbacEnabled }), {
+    app.use('/gateway', createGatewayService(db, app), {
       // Only expose the inbound gateway entrypoint and existing route hook
       // externally. Proactive outbound emits are intentionally invoked through
       // the authenticated Agor MCP tool surface; exposing emitMessage here would
@@ -1075,6 +1077,10 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   app.use('/executor-git-environment', createExecutorGitEnvironmentService(db), {
     methods: ['create'],
   });
+  app.use(ENVIRONMENT_COMMAND_REPORT_SERVICE, new EnvironmentCommandReportsService(db, app), {
+    methods: ['create'],
+    events: [],
+  });
 
   // Bootstrap superadmin users
   await bootstrapSuperadminUsers(config, db, allowSuperadmin);
@@ -1212,8 +1218,7 @@ function createExecuteHandler(
         ? resolveSandboxStoragePaths(config, tenantId).worktreesRoot
         : undefined;
     // Effective fs access of the prompt actor on the branch: write/read/none.
-    // Drives whether the sandbox binds the branch rw / ro / not at all. Defaults
-    // to 'write' when RBAC is off (open-access behavior).
+    // Drives whether the sandbox binds the branch rw / ro / not at all.
     const principalBranchAccess = launchAuthority.fs_access;
     if (session.branch_id) {
       const branchMounts = await runWithTenantDatabaseScope(db, tenantId, async (tenantDb) => {
@@ -5187,30 +5192,9 @@ export async function registerMCPServices(
   // Discover endpoint
   app.use('/mcp-servers/discover', {
     async create(
-      data: {
-        mcp_server_id?: string;
-        url?: string;
-        transport?: 'http' | 'sse';
-        auth?: {
-          type: 'none' | 'bearer' | 'jwt' | 'oauth';
-          token?: string;
-          api_url?: string;
-          api_token?: string;
-          api_secret?: string;
-          oauth_token_url?: string;
-          oauth_client_id?: string;
-          oauth_client_secret?: string;
-          oauth_scope?: string;
-          oauth_grant_type?: string;
-          oauth_mode?: 'per_user' | 'shared';
-          oauth_compatibility_mode?: 'strict' | 'legacy';
-          oauth_dcr_mode?: MCPOAuthDCRMode;
-        };
-        headers?: Record<string, string>;
-        oauth_browser_event?: MCPOAuthBrowserEventRequest;
-      },
+      data: MCPDiscoveryRequest,
       params?: AuthenticatedParams
-    ) {
+    ): Promise<MCPDiscoveryResult> {
       try {
         const browserReservation = consumeOAuthBrowserReservation(
           data.oauth_browser_event,
@@ -5236,7 +5220,7 @@ export async function registerMCPServices(
         const { mergeMCPRemoteHeaders } = await import('@agor/core/tools/mcp/http-headers');
         const tenantId = tenantIdFromParams(params);
 
-        const validateUrl = (url: string): { valid: boolean; error?: string } => {
+        const validateUrl = (url: string): { valid: true } | { valid: false; error: string } => {
           try {
             const parsed = new URL(url);
             if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
@@ -5764,35 +5748,38 @@ export async function registerMCPServices(
             listTimeout,
           ])) as PromptsResult;
 
+          const discovered = {
+            tools: toolsResult.tools.map((t) => ({
+              name: t.name,
+              description: t.description,
+              input_schema: t.inputSchema,
+            })),
+            resources: resourcesResult.resources.map((r) => ({
+              uri: r.uri,
+              name: r.name,
+              description: r.description,
+              mimeType: r.mimeType,
+            })),
+            prompts: promptsResult.prompts.map((p) => ({
+              name: p.name,
+              description: p.description,
+              arguments: p.arguments?.map((a) => ({
+                name: a.name,
+                description: a.description,
+                required: a.required,
+              })),
+            })),
+          };
+          let normalizedDiscovery: ReturnType<typeof normalizeDiscoveredMCPCapabilities>;
+
           if (serverId && discoveryAuthority) {
-            await runWithinOAuthAuthority(assertCurrentRequestAuthority, () =>
+            normalizedDiscovery = await runWithinOAuthAuthority(assertCurrentRequestAuthority, () =>
               runWithTenantDatabaseTransaction(db, tenantId, (scopedDb) =>
                 persistDiscoveredMCPCapabilities(
                   scopedDb,
                   tenantId,
                   discoveryAuthority as MCPDiscoveryAuthoritySnapshot,
-                  {
-                    tools: toolsResult.tools.map((t) => ({
-                      name: t.name,
-                      description: t.description,
-                      input_schema: t.inputSchema,
-                    })),
-                    resources: resourcesResult.resources.map((r) => ({
-                      uri: r.uri,
-                      name: r.name,
-                      description: r.description,
-                      mimeType: r.mimeType,
-                    })),
-                    prompts: promptsResult.prompts.map((p) => ({
-                      name: p.name,
-                      description: p.description,
-                      arguments: p.arguments?.map((a) => ({
-                        name: a.name,
-                        description: a.description,
-                        required: a.required,
-                      })),
-                    })),
-                  },
+                  discovered,
                   process.env.AGOR_MASTER_SECRET ?? ''
                 )
               )
@@ -5806,25 +5793,30 @@ export async function registerMCPServices(
               tenantId,
               [userId, authoritativeServer?.owner_user_id].filter(Boolean) as UserID[]
             );
+          } else {
+            normalizedDiscovery = normalizeDiscoveredMCPCapabilities(discovered);
           }
 
           return {
             success: true,
             capabilities: {
-              tools: toolsResult.tools.length,
-              resources: resourcesResult.resources.length,
-              prompts: promptsResult.prompts.length,
+              tools: normalizedDiscovery.capabilities.tools.length,
+              resources: normalizedDiscovery.capabilities.resources.length,
+              prompts: normalizedDiscovery.capabilities.prompts.length,
             },
-            tools: toolsResult.tools.map((t) => ({
+            metadata: {
+              descriptions_truncated: normalizedDiscovery.truncatedDescriptions,
+            },
+            tools: normalizedDiscovery.capabilities.tools.map((t) => ({
               name: t.name,
               description: t.description || '',
             })),
-            resources: resourcesResult.resources.map((r) => ({
+            resources: normalizedDiscovery.capabilities.resources.map((r) => ({
               name: r.name,
               uri: r.uri,
               mimeType: r.mimeType,
             })),
-            prompts: promptsResult.prompts.map((p) => ({
+            prompts: normalizedDiscovery.capabilities.prompts.map((p) => ({
               name: p.name,
               description: p.description || '',
             })),

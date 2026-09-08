@@ -7,7 +7,10 @@ import type {
 } from '@agor-live/client';
 import { Alert, Button, Form, Modal, Space, Tooltip } from 'antd';
 import { useEffect, useRef, useState } from 'react';
-import { useAuthorityOperationGuard } from '@/hooks/useAuthorityOperationGuard';
+import {
+  type AuthorityOperationGuard,
+  useAuthorityOperationGuard,
+} from '@/hooks/useAuthorityOperationGuard';
 import { useThemedMessage } from '@/utils/message';
 import { MCPServerFormFields } from './MCPServerFormFields';
 import {
@@ -17,7 +20,7 @@ import {
   useFormRevision,
 } from './mcp-form-requirements';
 import { buildAuthFromValues, parseEnvJSON, parseHeadersJSON } from './mcp-oauth-utils';
-import { useOAuthBrowserEventAttempt } from './useOAuthBrowserEventAttempt';
+import { useMCPServerDiscovery } from './useMCPServerDiscovery';
 
 export interface MCPServerEditModalProps {
   /** The server being edited. Modal opens when this is non-null and `open` is true. */
@@ -48,17 +51,6 @@ export interface MCPServerEditModalProps {
   focusTriggerAfterClose?: boolean;
 }
 
-interface TestResult {
-  success: boolean;
-  toolCount: number;
-  resourceCount: number;
-  promptCount: number;
-  error?: string;
-  tools?: Array<{ name: string; description?: string }>;
-  resources?: Array<{ name: string; uri: string; mimeType?: string }>;
-  prompts?: Array<{ name: string; description?: string }>;
-}
-
 /**
  * Self-contained "Edit MCP Server" modal.
  *
@@ -86,8 +78,6 @@ const MCPServerEditModalForIdentity: React.FC<MCPServerEditModalProps> = ({
   const [form] = Form.useForm();
   const [transport, setTransport] = useState<MCPTransport>('stdio');
   const [authType, setAuthType] = useState<'none' | 'bearer' | 'jwt' | 'oauth'>('none');
-  const [testing, setTesting] = useState(false);
-  const [testResult, setTestResult] = useState<TestResult | null>(null);
   const [preserveAbsentDcrMode, setPreserveAbsentDcrMode] = useState(false);
   const [preserveAbsentCompatibilityMode, setPreserveAbsentCompatibilityMode] = useState(false);
   const [preserveAbsentGrantType, setPreserveAbsentGrantType] = useState(false);
@@ -96,19 +86,24 @@ const MCPServerEditModalForIdentity: React.FC<MCPServerEditModalProps> = ({
   // animates in.
   const [formHydrated, setFormHydrated] = useState(false);
   const [configConflict, setConfigConflict] = useState(false);
-  const [reloadingLatest, setReloadingLatest] = useState(false);
+  const [reloadScope, setReloadScope] = useState<AuthorityOperationGuard | null>(null);
   const [managedOAuthCompatibilityMode, setManagedOAuthCompatibilityMode] = useState<
     'strict' | 'marketplace' | undefined
   >();
   const [formRevision, bumpFormRevision] = useFormRevision();
   const operationGuard = useAuthorityOperationGuard(
-    authorityKey && mutationAllowed ? [authorityKey, client, mutationAllowed] : null
+    authorityKey && mutationAllowed
+      ? [authorityKey, client, mutationAllowed, open, server?.mcp_server_id]
+      : null
   );
-  const oauthBrowserEvents = useOAuthBrowserEventAttempt({
+  const reloadingLatest = reloadScope === operationGuard;
+  const { testing, testResult, testConnection } = useMCPServerDiscovery({
     client,
+    authorityKey: mutationAllowed ? authorityKey : null,
     currentUserId: identityKey,
     authGeneration,
-    authorityGuard: operationGuard,
+    formRevision,
+    contextKey: open ? (server?.mcp_server_id ?? null) : null,
   });
 
   // Only ask the form once it is rendered and filled — an unmounted instance
@@ -117,7 +112,13 @@ const MCPServerEditModalForIdentity: React.FC<MCPServerEditModalProps> = ({
     open && formHydrated
       ? missingMCPFieldLabels(form.getFieldsValue(true), { mode: 'edit', transport, authType })
       : [];
-  const saveBlocked = !mutationAllowed || missingRequiredFields.length > 0;
+  const saveBlocked =
+    !mutationAllowed ||
+    !authorityKey ||
+    configConflict ||
+    testing ||
+    reloadingLatest ||
+    missingRequiredFields.length > 0;
   const mutationStateRef = useRef({ allowed: mutationAllowed, reason: mutationBlockedReason });
   const configVersionRef = useRef(1);
   mutationStateRef.current = { allowed: mutationAllowed, reason: mutationBlockedReason };
@@ -130,7 +131,6 @@ const MCPServerEditModalForIdentity: React.FC<MCPServerEditModalProps> = ({
   useEffect(() => {
     if (!open || !server) return;
 
-    setTestResult(null);
     setConfigConflict(false);
     configVersionRef.current = server.config_version ?? 1;
     setPreserveAbsentDcrMode(false);
@@ -205,119 +205,28 @@ const MCPServerEditModalForIdentity: React.FC<MCPServerEditModalProps> = ({
     form.resetFields();
     setTransport('stdio');
     setAuthType('none');
-    setTestResult(null);
     setPreserveAbsentDcrMode(false);
     setPreserveAbsentCompatibilityMode(false);
     setPreserveAbsentGrantType(false);
     setFormHydrated(false);
     setConfigConflict(false);
-    setReloadingLatest(false);
+    setReloadScope(null);
     setManagedOAuthCompatibilityMode(undefined);
     onClose();
   };
 
-  const handleTestConnection = async () => {
-    const operation = operationGuard.begin();
-    if (!operation.isCurrent()) return;
-    if (!client || !server) {
-      // Pre-flight failure — no inline result UI yet, so a toast is the
-      // only signal we have. Result-bearing failures below set testResult
-      // and rely on the inline alert (no duplicate toast).
-      showError('Client not available');
-      return;
-    }
-
-    const values = form.getFieldsValue(true);
-
-    if (!values.url) {
-      showError('URL is required to test connection');
-      return;
-    }
-    if (values.transport === 'stdio') {
-      showError('Connection test is not available for stdio transport');
-      return;
-    }
-    let browserAttempt: Awaited<ReturnType<typeof oauthBrowserEvents.begin>> = null;
-    try {
-      await form.validateFields(['headers']);
-    } catch {
-      if (!operation.isCurrent()) return;
-      showError('Please fix custom HTTP headers before testing');
-      return;
-    }
-    if (!operation.isCurrent()) return;
-
-    try {
-      setTesting(true);
-      setTestResult(null);
-      browserAttempt = await oauthBrowserEvents.begin({
-        operation: 'discover',
-        mcpServerId: server.mcp_server_id,
-      });
-      if (!operation.isCurrent()) return;
-      const data = (await client.service('mcp-servers/discover').create({
-        mcp_server_id: server.mcp_server_id,
-        url: values.url,
-        transport: values.transport || 'http',
-        auth: buildAuthFromValues(values, {
-          preserveAbsentDcrMode,
-          preserveAbsentCompatibilityMode,
-          preserveAbsentGrantType,
-        }),
-        headers: parseHeadersJSON(values.headers),
-        ...(browserAttempt ? { oauth_browser_event: browserAttempt.request } : {}),
-      })) as {
-        success: boolean;
-        error?: string;
-        capabilities?: { tools: number; resources: number; prompts: number };
-        tools?: Array<{ name: string; description?: string }>;
-        resources?: Array<{ name: string; uri: string; mimeType?: string }>;
-        prompts?: Array<{ name: string; description?: string }>;
-      };
-
-      if (!operation.isCurrent()) return;
-
-      if (data.success && data.capabilities) {
-        const refreshed = await client.service('mcp-servers').get(server.mcp_server_id);
-        if (!operation.isCurrent()) return;
-        configVersionRef.current = refreshed.config_version ?? configVersionRef.current;
-        setTestResult({
-          success: true,
-          toolCount: data.capabilities.tools,
-          resourceCount: data.capabilities.resources,
-          promptCount: data.capabilities.prompts,
-          tools: data.tools,
-          resources: data.resources,
-          prompts: data.prompts,
-        });
-      } else {
-        setTestResult({
-          success: false,
-          toolCount: 0,
-          resourceCount: 0,
-          promptCount: 0,
-          error: data.error || 'Connection test failed',
-        });
-      }
-    } catch {
-      if (!operation.isCurrent()) return;
-      setTestResult({
-        success: false,
-        toolCount: 0,
-        resourceCount: 0,
-        promptCount: 0,
-        error: 'Connection test failed. Check the saved configuration and try again.',
-      });
-    } finally {
-      browserAttempt?.cleanup();
-      if (operation.isCurrent()) setTesting(false);
-    }
-  };
+  // A saved ID is authoritative at the daemon. Save the draft first rather
+  // than sending ignored inline credentials and claiming that they were tested.
+  const handleTestConnection = () =>
+    testConnection(async (operation) => {
+      if (!server || !(await saveFormValues(operation))) return null;
+      return { mcp_server_id: server.mcp_server_id };
+    });
 
   const saveFormValues = async (
     operation: ReturnType<typeof operationGuard.begin>
   ): Promise<boolean> => {
-    if (!server || !client || !operation.isCurrent()) return false;
+    if (!server || !client || configConflict || !operation.isCurrent()) return false;
     if (!mutationStateRef.current.allowed) {
       showError(mutationStateRef.current.reason);
       return false;
@@ -346,11 +255,10 @@ const MCPServerEditModalForIdentity: React.FC<MCPServerEditModalProps> = ({
         updates.args = values.args?.split(',').map((arg: string) => arg.trim()) || [];
       } else {
         updates.url = values.url;
-        updates.headers = parseHeadersJSON(values.headers);
+        updates.headers = parseHeadersJSON(values.headers) ?? {};
       }
 
-      const env = parseEnvJSON(values.env);
-      if (env) updates.env = env;
+      updates.env = parseEnvJSON(values.env) ?? {};
 
       updates.auth = buildAuthFromValues(values, {
         preserveAbsentDcrMode,
@@ -365,6 +273,7 @@ const MCPServerEditModalForIdentity: React.FC<MCPServerEditModalProps> = ({
         return false;
       }
       const updated = await client.service('mcp-servers').patch(server.mcp_server_id, updates);
+      if (!operation.isCurrent()) return false;
       configVersionRef.current = updated.config_version ?? configVersionRef.current + 1;
       return operation.isCurrent();
     } catch (error) {
@@ -398,10 +307,12 @@ const MCPServerEditModalForIdentity: React.FC<MCPServerEditModalProps> = ({
   };
 
   const reloadLatest = async () => {
-    if (!client || !server) return;
-    setReloadingLatest(true);
+    const operation = operationGuard.begin();
+    if (!client || !server || !operation.isCurrent()) return;
+    setReloadScope(operationGuard);
     try {
       const latest = await client.service('mcp-servers').get(server.mcp_server_id);
+      if (!operation.isCurrent()) return;
       configVersionRef.current = latest.config_version ?? 1;
       const latestAuthType = latest.auth?.type || 'none';
       const latestManagedMode = latest.oauth_compatibility_policy?.managed_by_catalog
@@ -451,9 +362,10 @@ const MCPServerEditModalForIdentity: React.FC<MCPServerEditModalProps> = ({
       setConfigConflict(false);
       bumpFormRevision();
     } catch (error) {
+      if (!operation.isCurrent()) return;
       showError(error instanceof Error ? error.message : 'Failed to reload the latest MCP server');
     } finally {
-      setReloadingLatest(false);
+      if (operation.isCurrent()) setReloadScope(null);
     }
   };
 
@@ -480,9 +392,15 @@ const MCPServerEditModalForIdentity: React.FC<MCPServerEditModalProps> = ({
             title={
               !mutationAllowed
                 ? mutationBlockedReason
-                : saveBlocked
-                  ? describeMissingForSave(missingRequiredFields)
-                  : undefined
+                : configConflict
+                  ? 'Reload the latest settings before saving again.'
+                  : testing || reloadingLatest
+                    ? 'Wait for the current connection operation to finish.'
+                    : !authorityKey
+                      ? 'Reconnect before saving.'
+                      : missingRequiredFields.length > 0
+                        ? describeMissingForSave(missingRequiredFields)
+                        : undefined
             }
           >
             <span>
@@ -546,8 +464,14 @@ const MCPServerEditModalForIdentity: React.FC<MCPServerEditModalProps> = ({
           testing={testing}
           testResult={testResult}
           onPrepareOAuthStart={prepareOAuthStart}
-          mutationAllowed={mutationAllowed}
-          mutationBlockedReason={mutationBlockedReason}
+          mutationAllowed={mutationAllowed && !configConflict && !reloadingLatest}
+          mutationBlockedReason={
+            configConflict
+              ? 'Reload the latest settings before trying again.'
+              : reloadingLatest
+                ? 'Wait for the latest settings to load.'
+                : mutationBlockedReason
+          }
           formRevision={formRevision}
           managedOAuthCompatibilityMode={managedOAuthCompatibilityMode}
         />
@@ -558,14 +482,14 @@ const MCPServerEditModalForIdentity: React.FC<MCPServerEditModalProps> = ({
 
 /**
  * The form can contain raw OAuth/JWT/bearer credentials. Remount its entire
- * state owner when the authenticated identity changes so another same-role
+ * state owner when the authenticated identity or selected server changes so another same-role
  * caller cannot inherit a selected row or any registered Ant Form value.
  * `authorityKey` remains a finer mutation gate; it intentionally does not key
  * this owner, preserving same-user reconnect and token-refresh edits.
  */
 export const MCPServerEditModal: React.FC<MCPServerEditModalProps> = (props) => (
   <MCPServerEditModalForIdentity
-    key={props.identityKey ?? '__no-authenticated-user__'}
+    key={`${props.identityKey ?? '__no-authenticated-user__'}:${props.server?.mcp_server_id ?? ''}`}
     {...props}
   />
 );

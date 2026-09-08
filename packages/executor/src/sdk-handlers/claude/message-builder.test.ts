@@ -564,6 +564,31 @@ describe('createUserMessageFromContent', () => {
     expect(result.content_preview).toBe('Tool result: Tool execution result');
   });
 
+  it('persists structured task-tool output without folding it into the preview', async () => {
+    const messagesService = createMockMessagesService();
+    const content = [
+      {
+        type: 'tool_result',
+        tool_use_id: 'create-1',
+        content: 'Task created',
+        tool_use_result: { task: { id: 'task-7', subject: 'Verify the fix' } },
+      },
+    ];
+
+    const result = await createUserMessageFromContent(
+      generateId() as SessionID,
+      generateId() as MessageID,
+      content,
+      undefined,
+      1,
+      messagesService
+    );
+
+    expect(result.content).toEqual(content);
+    expect(result.content_preview).toBe('Tool result: Task created');
+    expect(messagesService.create).toHaveBeenCalledWith(result);
+  });
+
   it('should create preview from tool_result with object content', async () => {
     const messagesService = createMockMessagesService();
     const sessionId = generateId() as SessionID;

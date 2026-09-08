@@ -188,6 +188,8 @@ export interface ExecutorSpawnContext {
 }
 
 export interface SpawnExecutorOptions {
+  /** Bounded environment handoff owns/kills its entire local launcher process group. */
+  launcherProcessGroup?: boolean;
   cwd?: string;
   env?: Record<string, string>;
   logPrefix?: string;
@@ -744,6 +746,7 @@ function spawnExecutorWithTemplate(
   };
 
   const executorProcess = spawn('sh', ['-c', command], {
+    detached: options.launcherProcessGroup === true,
     env: resolveTemplateLauncherEnvironment(logLevel),
     // Trusted launchers receive the reserved AGOR_CLOUD_* credential namespace.
     // Their output is therefore not a daemon logging channel: discard it at the

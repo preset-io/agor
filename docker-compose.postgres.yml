@@ -25,7 +25,6 @@ services:
       - DATABASE_URL=postgresql://agor_app:agor_dev_secret@postgres:5432/agor
 
       # Enable RBAC + local filesystem sandbox
-      - AGOR_RBAC_ENABLED=${AGOR_RBAC_ENABLED:-true}
       - AGOR_UNIX_USER_MODE=${AGOR_UNIX_USER_MODE:-sandbox}
       - AGOR_SANDBOX_ENABLED=${AGOR_SANDBOX_ENABLED:-true}
       - AGOR_SANDBOX_HOME_MODE=${AGOR_SANDBOX_HOME_MODE:-per_user}

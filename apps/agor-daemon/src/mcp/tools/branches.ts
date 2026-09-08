@@ -1,3 +1,4 @@
+import { PAGINATION } from '@agor/core/config';
 import { BranchRepository, CapabilityPolicyRepository, shortId } from '@agor/core/db';
 import type {
   Board,
@@ -207,7 +208,6 @@ function notesPreview(notes: string | undefined, maxLength = 200): string | null
 }
 
 async function shouldScopeTeammateDiscoveryToUser(ctx: McpContext): Promise<boolean> {
-  if (ctx.app.get('config').execution?.branch_rbac !== true) return false;
   if (ctx.authenticatedUser?._isServiceAccount) return false;
 
   const config = ctx.app.get('config');
@@ -336,7 +336,7 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
       inputSchema: z.object({
         repoId: mcpOptionalId('repoId', 'Repository', 'Repository ID to filter by'),
         limit: mcpLimit(BRANCH_LIST_DEFAULT_LIMIT, BRANCH_LIST_MAX_LIMIT),
-        offset: mcpOffset(0),
+        offset: mcpOffset(0, PAGINATION.MAX_SKIP),
         includeArchived: z
           .boolean()
           .optional()

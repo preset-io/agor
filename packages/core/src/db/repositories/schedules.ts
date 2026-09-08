@@ -293,8 +293,7 @@ export class ScheduleRepository implements BaseRepository<Schedule, Partial<Sche
    * Mirrors `SessionRepository.findAccessibleSessions`: returns schedules
    * whose parent branch the normalized effective policy grants `branch.view`.
    *
-   * Only call when RBAC is enabled. When disabled, the `scopeScheduleQuery`
-   * hook is not registered and `findAll` is used instead.
+   * Backs the always-registered `scopeScheduleQuery` find hook.
    */
   async findAccessibleSchedules(
     userId: UUID,

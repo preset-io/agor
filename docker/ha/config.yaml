@@ -57,7 +57,7 @@ execution:
     allowed_modes:
       - clone
   # The checked-in HA smoke must exercise the same exact-user credential route
-  # it advertises. Sandbox mode forces branch RBAC, per-user home overlays, and
+  # it advertises. Sandbox mode adds per-user home overlays and
   # fail-closed bubblewrap isolation; it does not impersonate host accounts.
   unix_user_mode: sandbox
   sandbox:

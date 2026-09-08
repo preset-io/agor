@@ -894,7 +894,6 @@ export class GatewayService {
   private userTokenRepo: UserMCPOAuthTokenRepository;
   private db: TenantScopeAwareDatabase;
   private app: Application;
-  private appRbacEnabled: boolean;
 
   /** Active listeners keyed by immutable tenant + channel identity. */
   private activeListeners = new Map<string, GatewayConnector>();
@@ -940,11 +939,7 @@ export class GatewayService {
   private static SLACK_STREAM_STATUS_REFRESH_MS = 300;
   private static SLACK_STREAMED_MESSAGE_CACHE_MAX = 500;
 
-  constructor(
-    db: TenantScopeAwareDatabase,
-    app: Application,
-    options: { appRbacEnabled?: boolean } = {}
-  ) {
+  constructor(db: TenantScopeAwareDatabase, app: Application) {
     // Long-lived listener orchestration carries tenant identity without
     // holding a transaction. Every repository field is therefore bound to a
     // short per-method tenant unit of work here; provider/process/network work
@@ -973,7 +968,6 @@ export class GatewayService {
     this.userTokenRepo = bindRepositoryToTenantUnitOfWork(db, new UserMCPOAuthTokenRepository(db));
     this.db = db;
     this.app = app;
-    this.appRbacEnabled = options.appRbacEnabled ?? resolveExecutionSecurityMode().appRbacEnabled;
     this.workIdentity = (
       app as unknown as { get?: (name: string) => DistributedWorkIdentity | undefined }
     ).get?.('distributedWorkIdentity') ?? {
@@ -1582,7 +1576,7 @@ export class GatewayService {
       async () => {
         await this.updateProgress(data);
       },
-      (error) => {
+      () => {
         console.warn('[gateway] Failed to update Slack progress after commit');
       }
     );
@@ -1961,8 +1955,6 @@ export class GatewayService {
     channel: GatewayChannel,
     userId: UserID
   ): Promise<void> {
-    if (!this.appRbacEnabled) return;
-
     const branch = await this.branchRepo.findById(channel.target_branch_id);
     if (!branch) {
       throw new Forbidden('Gateway inbound denied: target branch is unavailable');
@@ -1993,8 +1985,6 @@ export class GatewayService {
         "This gateway thread's Agor session is no longer available."
       );
     }
-    if (!this.appRbacEnabled) return session;
-
     const authority = await this.branchRepo.resolveSessionPromptAuthority(
       channel.target_branch_id,
       userId,
@@ -2623,7 +2613,22 @@ export class GatewayService {
     // Seed admission is the one durable mutation that must happen before
     // creating a session. It also replaces the old lookup-then-late-claim
     // sequence, so competing provider aliases receive one stable ID.
-    if (channel.channel_type === 'slack' || channel.channel_type === 'discord') {
+    //
+    // Seed admission only decides which Session a thread that has none yet
+    // belongs to. A thread that already carries a canonical mapping the seed
+    // did not create is not a seed reply: a proactive outbound message can be
+    // sent into a thread that is already routed to a Session, and the mapping
+    // stays that thread's owner. Skip admission entirely for those threads so
+    // no seed is reserved or consumed for a thread it does not own, and the
+    // message continues down the ordinary follow-up path below.
+    const existingMappingSeedId = (existingMapping?.metadata as Record<string, unknown> | null)
+      ?.outbound_seed_id;
+    const threadOwnedByUnseededMapping =
+      !!existingMapping && typeof existingMappingSeedId !== 'string';
+    if (
+      (channel.channel_type === 'slack' || channel.channel_type === 'discord') &&
+      !threadOwnedByUnseededMapping
+    ) {
       outboundAdmission = await this.outboundRepo.admitReplySession(channel.id, data.thread_id);
       if (outboundAdmission) {
         outboundSeed = outboundAdmission.message;
@@ -3664,7 +3669,7 @@ export class GatewayService {
       async () => {
         await this.routeMessage(data);
       },
-      (error) => {
+      () => {
         console.warn('[gateway] Failed to route message after commit');
       }
     );
@@ -4700,8 +4705,7 @@ export class GatewayService {
  */
 export function createGatewayService(
   db: TenantScopeAwareDatabase,
-  app: Application,
-  options?: { appRbacEnabled?: boolean }
+  app: Application
 ): GatewayService {
-  return new GatewayService(db, app, options);
+  return new GatewayService(db, app);
 }

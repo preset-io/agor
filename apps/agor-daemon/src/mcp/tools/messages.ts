@@ -168,8 +168,7 @@ export function registerMessageTools(server: McpServer, ctx: McpContext): void {
         if (searchCondition) conditions.push(searchCondition);
       }
 
-      // RBAC enforcement: when branch_rbac is enabled, restrict this search
-      // to sessions the caller can access. Use the same SQL EXISTS predicate
+      // Restrict this search to sessions the caller can access. Use the same SQL EXISTS predicate
       // as high-cardinality repository paths instead of materializing every
       // accessible session id into an IN (...) list.
       const orderCol = sessionId ? messagesTable.index : messagesTable.timestamp;
@@ -179,13 +178,11 @@ export function registerMessageTools(server: McpServer, ctx: McpContext): void {
       // every matching row into daemon memory.
       const fetchLimit = Math.min(limit + 100, 200);
       const allRows = await runWithMcpTenantDatabaseScope(ctx, async (db) => {
-        if (ctx.app.get('config').execution?.branch_rbac === true) {
-          const userRole = ctx.authenticatedUser?.role as string | undefined;
-          if (!isSuperAdmin(userRole, ctx.app.get('config').execution?.allow_superadmin === true)) {
-            conditions.push(
-              visibleSessionReferenceAccessExists(db, ctx.userId, messagesTable.session_id)
-            );
-          }
+        const userRole = ctx.authenticatedUser?.role as string | undefined;
+        if (!isSuperAdmin(userRole, ctx.app.get('config').execution?.allow_superadmin === true)) {
+          conditions.push(
+            visibleSessionReferenceAccessExists(db, ctx.userId, messagesTable.session_id)
+          );
         }
         return select(db)
           .from(messagesTable)

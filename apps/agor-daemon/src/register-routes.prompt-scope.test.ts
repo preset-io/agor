@@ -48,7 +48,7 @@ describe('prompt and widget transaction scopes', () => {
     // exempt from the user-facing check.
     expect(prompt).not.toContain('const isInternalPrompt = !params.provider;');
     expect(prompt).toContain('_isServiceAccount');
-    expect(prompt).toContain('branchRbacEnabled && !isPromptServiceAccount');
+    expect(prompt).toContain('if (!isPromptServiceAccount && promptBranchId)');
   });
 
   it('does not keep a route-wide tenant transaction over widget external work', () => {

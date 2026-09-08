@@ -258,6 +258,15 @@ function makeGitHubHarness(existingMapping: ThreadSessionMap | null = null) {
     inboundEventRepo,
     messagesRepo,
     taskRepo,
+    // Board/branch RBAC is always on, so gateway inbound now unconditionally
+    // resolves session-creation and prompt authority. These GitHub tests cover
+    // attribution/routing/acknowledgement, not RBAC (which has its own
+    // coverage), so grant authority here.
+    branchRepo: {
+      findById: vi.fn(async () => ({ branch_id: githubChannel.target_branch_id })),
+      resolveUserAccess: vi.fn(async () => ({ can: 'all' })),
+      resolveSessionPromptAuthority: vi.fn(async () => ({ allowed: true })),
+    },
     sessionRepo: {
       findById: vi.fn(async (sessionId: string) => ({
         session_id: sessionId,

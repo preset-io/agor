@@ -10,7 +10,10 @@ This folder is a small set of **agent-oriented cheat sheets** — tight pointers
 - **Guides are user truth.** If a topic has a guide page, this folder links to it instead of duplicating it.
 - **Keep it small.** A bloated `context/` is a tax on every agent that loads it.
 
-If you're tempted to add a long prose doc here — write it as a guide in `apps/agor-docs/pages/guide/` instead, and link to it from here.
+Routine investigation reports, audit snapshots, before/after evidence, and validation receipts
+belong in the issue or PR, not this folder or dated `docs/internal/` files. For lasting user-facing
+behavior, update the relevant guide; for durable implementation contracts, update an existing
+cheat sheet or code comment before adding another document.
 
 ---
 

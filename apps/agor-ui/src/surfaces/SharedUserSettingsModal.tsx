@@ -1,4 +1,5 @@
 import type { AgorClient, UpdateUserInput, User } from '@agor-live/client';
+import { useMemo } from 'react';
 import { UserSettingsModal } from '../components/SettingsModal';
 import {
   useAuthenticatedAuthorityScope,
@@ -11,12 +12,12 @@ export interface SharedUserSettingsModalProps {
   user: User | null;
   client: AgorClient | null;
   onClose: () => void;
-  onUpdateUser: (
+  onUpdateUser?: (
     userId: string,
     updates: UpdateUserInput,
     shouldApply?: () => boolean
-  ) => Promise<void>;
-  onRefreshCurrentUser: (shouldApply: () => boolean) => Promise<unknown>;
+  ) => void | Promise<void>;
+  onRefreshCurrentUser?: (shouldApply: () => boolean) => Promise<unknown>;
   onReopenOnboarding?: (
     mode: OnboardingReopenMode,
     shouldApply?: () => boolean
@@ -27,9 +28,9 @@ export interface SharedUserSettingsModalProps {
 /**
  * Shared-surface owner for current-user settings.
  *
- * Workspace still renders its full settings stack inside `AgorApp`; lightweight
- * surfaces use this wrapper so a user menu/settings flow does not require the
- * Workspace route tree to mount first. The MCP server map is read by
+ * Workspace and lightweight surfaces share the same persistence/refresh owner.
+ * A user menu/settings flow does not require the Workspace route tree to mount.
+ * The MCP server map is read by
  * `UserSettingsModal` straight from the store, so a fresh Knowledge deep link
  * that has not loaded Workspace data yet simply sees an empty map.
  */
@@ -48,6 +49,11 @@ export const SharedUserSettingsModal: React.FC<SharedUserSettingsModalProps> = (
     user ? `${user.user_id}:${user.role}` : null
   );
   const operationGuard = useAuthorityOperationGuard(authority.operationScope);
+  // Serialize patch + refresh pairs, not just patches: two concurrent fields
+  // must not install authentication snapshots in reverse order. A replacement
+  // authority owns a fresh queue and never waits for an obsolete request.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: a new authority epoch owns a new queue
+  const updatesQueue = useMemo(() => ({ pending: null as Promise<void> | null }), [operationGuard]);
   return (
     <UserSettingsModal
       open={open}
@@ -59,11 +65,23 @@ export const SharedUserSettingsModal: React.FC<SharedUserSettingsModalProps> = (
         const operation = operationGuard.begin();
         const shouldApply = () =>
           operation.isCurrent() && (childShouldApply ? childShouldApply() : true);
-        if (!shouldApply()) return;
-        await onUpdateUser(userId, updates, shouldApply);
-        if (!shouldApply()) return;
-        await onRefreshCurrentUser(shouldApply);
-        if (!shouldApply()) return;
+        const previous = updatesQueue.pending;
+        const update = async () => {
+          if (previous) await previous.catch(() => {});
+          if (!shouldApply()) return;
+          await onUpdateUser?.(userId, updates, shouldApply);
+          if (!operation.isCurrent()) return;
+          // The auth snapshot belongs to the caller, not to the dialog. A
+          // route-driven close after persistence must not leave it stale.
+          await onRefreshCurrentUser?.(operation.isCurrent);
+        };
+        const pending = update();
+        updatesQueue.pending = pending;
+        try {
+          await pending;
+        } finally {
+          if (updatesQueue.pending === pending) updatesQueue.pending = null;
+        }
       }}
       onReopenOnboarding={
         onReopenOnboarding

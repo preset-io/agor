@@ -442,6 +442,12 @@
       "import": "./dist/git/exec.js",
       "require": "./dist/git/exec.cjs"
     },
+    "./environment/access-urls": {
+      "source": "./src/environment/access-urls.ts",
+      "types": "./dist/environment/access-urls.d.ts",
+      "import": "./dist/environment/access-urls.js",
+      "require": "./dist/environment/access-urls.cjs"
+    },
     "./environment/webhook": {
       "source": "./src/environment/webhook.ts",
       "types": "./dist/environment/webhook.d.ts",

@@ -33,6 +33,16 @@ Every release-version bump PR must include its finalized changelog section; a ve
 
 ## Unreleased
 
+### Breaking
+
+- **Board and branch RBAC is always enabled** — authentication was already mandatory; Agor now has one normalized authorization contract across REST, MCP, realtime, files, terminals, and the UI. Omit `execution.branch_rbac` and `AGOR_RBAC_ENABLED`; `true` is accepted temporarily as a deprecated no-op, while false or malformed values fail startup. ([#2669](https://github.com/preset-io/agor/pull/2669))
+  - Single-user owners keep Manager/write access. Before upgrading an installation that intentionally ran with RBAC off, back up the database, stop the whole daemon cohort, and review normalized private/shared policies; the upgrade never auto-widens them to reproduce open access.
+  - Do not mix old and new daemons. To roll back, stop the new cohort and explicitly set RBAC true for the old release before restarting it against a supported database version.
+
+### Security
+
+- **The authenticated-member open-access fallback is removed** — Board/Branch visibility, Session and Task authority, direct MCP queries and egress, filesystem projection, and realtime audiences now always enforce current normalized policy. ([#2669](https://github.com/preset-io/agor/pull/2669))
+
 ## 0.26.1 (2026-09-03)
 
 ### Fixes

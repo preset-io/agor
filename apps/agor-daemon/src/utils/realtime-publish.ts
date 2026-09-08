@@ -239,7 +239,6 @@ export type RealtimeAccessBoardRepository = Pick<BoardRepository, 'findById'> & 
 type RealtimePublishOptions = {
   app: Application;
   db?: TenantScopeAwareDatabase;
-  branchRbacEnabled: boolean;
   branchRepository: BranchRepository;
   boardRepository?: RealtimeAccessBoardRepository;
   sessionsRepository: SessionRepository;
@@ -736,12 +735,11 @@ function filterToUserIdsOrServices(
  *      stale-cached client has re-subscribed after refresh.
  *
  * Authorization is enforced at PUBLISH time, not just at subscribe time: when
- * branch RBAC is on, room members AND the owner fallback are filtered through
+ * room members AND the owner fallback are filtered through
  * the current cached branch visibility, so a viewer whose access is revoked
  * mid-stream stops receiving chunks on the very next event (rather than waiting
  * for unsubscribe / disconnect). The cache keeps this per-chunk cost cheap, and
- * room membership is small. With RBAC off there is no visibility model, so
- * subscription + owner + service delivery stands.
+ * room membership is small.
  *
  * Everything else (created/patched/removed, status transitions) keeps its
  * existing tenant/branch scoping. Malformed events without a resolvable
@@ -753,7 +751,6 @@ async function resolveStreamingDelivery(
   tenantId: string,
   tenantScoped: PublishChannel,
   accessCache: RealtimeAccessCache,
-  branchRbacEnabled: boolean,
   allowSuperadmin: boolean
 ): Promise<PublishChannel | PublishChannel[]> {
   const serviceConnections = filterToServiceConnections(tenantScoped);
@@ -798,14 +795,6 @@ async function resolveStreamingDelivery(
         !isSessionStreamsAware(connection) &&
         !roomConnections.has(connection)
     );
-
-  // RBAC off: no visibility model — deliver to subscribers + owner + service.
-  if (!branchRbacEnabled) {
-    const channels: PublishChannel[] = [serviceConnections];
-    if (room) channels.push(room);
-    if (ownerId) channels.push(ownerChannel());
-    return channels;
-  }
 
   // RBAC on: enforce CURRENT branch visibility at publish time. Resolving the
   // branch/visibility fails closed to service connections if unknown.
@@ -901,14 +890,12 @@ function resolveRealtimeTenantId(
  * Register the single global Feathers publish handler.
  *
  * Nothing publishes unless `realtime-publish-policy.ts` says who may hear it.
- * That gate runs first and is independent of branch RBAC: an undeclared path
+ * That gate runs first: an undeclared path
  * reaches nobody at all, service connections included, and never enters the
  * Redis relay.
  *
- * For a path that IS declared, the audience is then narrowed as before. In
- * open-access mode a declared service reaches every authenticated socket in the
- * tenant. When branch RBAC is enabled, events for branch/session-scoped
- * resources are reduced to authenticated connections whose user currently has
+ * For a path that IS declared, events for branch/session-scoped resources are
+ * reduced to authenticated connections whose user currently has
  * at least `view` permission for the event's branch. Service executor sockets
  * remain trusted so prompt/permission plumbing keeps working.
  */
@@ -916,7 +903,6 @@ export function configureRealtimePublish(options: RealtimePublishOptions): void 
   const {
     app,
     db,
-    branchRbacEnabled,
     branchRepository,
     boardRepository,
     sessionsRepository,
@@ -989,7 +975,6 @@ export function configureRealtimePublish(options: RealtimePublishOptions): void 
           tenantId ?? 'standalone',
           tenantScoped,
           accessCache,
-          branchRbacEnabled,
           allowSuperadmin
         );
       }
@@ -1012,8 +997,6 @@ export function configureRealtimePublish(options: RealtimePublishOptions): void 
           (connection: unknown) => userFromConnection(connection)?.user_id === requestedBy
         );
       }
-
-      if (!branchRbacEnabled) return tenantScoped;
 
       const scope = await resolvePublishScope(data, context, accessCache);
       if (scope.kind === 'global') return tenantScoped;

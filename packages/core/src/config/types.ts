@@ -611,7 +611,10 @@ export interface AgorExecutionSettings {
   /** Execution mode: trusted local, delegated external, or local Linux sandbox. */
   unix_user_mode?: UnixUserMode;
 
-  /** Enable branch RBAC and ownership enforcement (default: false). */
+  /**
+   * @deprecated Board and branch RBAC is always enabled. Omit this key.
+   * `true` remains accepted as a compatibility no-op; `false` is rejected.
+   */
   branch_rbac?: boolean;
 
   /**
@@ -776,6 +779,8 @@ export interface AgorExecutionSettings {
    * Default: `'hybrid'`.
    */
   managed_envs_execution_mode?: ManagedEnvsExecutionMode;
+  /** External Job lifetime INCLUDING forced cleanup, in ms. Required for HA hybrid commands. */
+  environment_command_job_deadline_ms?: number;
 
   /**
    * Branch storage configuration — operator gate for which storage modes a
@@ -1480,6 +1485,13 @@ export interface AgorDeploymentSettings {
  * Complete Agor configuration
  */
 export interface AgorConfig {
+  /**
+   * Instance-owned Environment-tab guidance (never read from repository config).
+   * At most 4000 UTF-16 code units. The UI permits only basic prose/list Markdown
+   * and absolute HTTP(S) documentation links; HTML, images, and plugins are disabled.
+   */
+  environment_disclaimer_markdown?: string;
+
   /** Deployment-owned agentic-tool package selection. */
   agentic_tools?: AgorAgenticToolsSettings;
 

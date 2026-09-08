@@ -96,7 +96,6 @@ function runtimeAuthority(seed: TenantSeed, taskId: string) {
     principal_user_id: seed.userId,
     session_id: seed.sessionId,
     branch_id: seed.branchId,
-    branchRbacEnabled: true,
   };
 }
 
@@ -108,9 +107,7 @@ async function authorizeRuntime(
 ) {
   const tasks = new TaskRepository(scoped);
   const authority = runtimeAuthority(seed, task.task_id);
-  await tasks.bindExecutorLaunchAuthority(task.task_id, {
-    branchRbacEnabled: true,
-  });
+  await tasks.bindExecutorLaunchAuthority(task.task_id);
   await tasks.connectExecutor(task.task_id, connectedAt);
   const now = new Date();
   await new ExecutorSessionTokenAuthorityRepository(scoped).issue({
