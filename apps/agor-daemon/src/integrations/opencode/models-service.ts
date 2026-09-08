@@ -20,7 +20,10 @@ function isOpenCodeModelCatalog(value: unknown): value is OpenCodeModelCatalog {
   if (!isString(catalog.runtimeVersion) || !Array.isArray(catalog.providers)) return false;
   if (
     catalog.suggestedSelection !== undefined &&
-    (!isString(catalog.suggestedSelection.providerId) ||
+    (!catalog.suggestedSelection ||
+      typeof catalog.suggestedSelection !== 'object' ||
+      Array.isArray(catalog.suggestedSelection) ||
+      !isString(catalog.suggestedSelection.providerId) ||
       !isString(catalog.suggestedSelection.modelId))
   ) {
     return false;

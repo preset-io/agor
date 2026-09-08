@@ -122,6 +122,10 @@ describe('OpenCode model catalog service', () => {
     {},
     { runtimeVersion: '1.14.33' },
     { runtimeVersion: '1.14.33', providers: [{}] },
+    ...[null, false, 1, 'invalid', []].map((suggestedSelection) => ({
+      ...catalog,
+      suggestedSelection,
+    })),
     { runtimeVersion: '1.14.33', providers: [], suggestedSelection: { providerId: 'openai' } },
     {
       runtimeVersion: '1.14.33',
@@ -138,7 +142,11 @@ describe('OpenCode model catalog service', () => {
     runCommand.mockResolvedValueOnce({ success: true, data });
 
     await runWithTenantContext('tenant-a', async () => {
-      await expect(service().find(params)).rejects.toThrow(MODEL_CATALOG_ERROR);
+      await expect(service().find(params)).rejects.toMatchObject({
+        name: 'BadRequest',
+        code: 400,
+        message: MODEL_CATALOG_ERROR,
+      });
     });
   });
 
@@ -148,6 +156,18 @@ describe('OpenCode model catalog service', () => {
 
     await runWithTenantContext('tenant-a', async () => {
       await expect(service().find(params)).resolves.toEqual(empty);
+    });
+  });
+
+  it('preserves a valid suggested provider/model selection', async () => {
+    const data = {
+      ...catalog,
+      suggestedSelection: { providerId: 'openai', modelId: 'gpt-5' },
+    };
+    runCommand.mockResolvedValueOnce({ success: true, data });
+
+    await runWithTenantContext('tenant-a', async () => {
+      await expect(service().find(params)).resolves.toEqual(data);
     });
   });
 
