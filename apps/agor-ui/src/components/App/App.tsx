@@ -130,14 +130,12 @@ const BoardSwitcherBridge: React.FC<{ setCurrentBoardId: (id: string) => void }>
 const UrlStateBridge: React.FC<{
   currentBoardId: string;
   currentSessionId: string | null;
-  suspendStateToUrlSync?: boolean;
   onBoardChange: (boardId: string) => void;
   onSessionChange: (sessionId: string | null) => void;
   onActiveUrlTargetChange: (target: ActiveUrlTarget | null) => void;
 }> = ({
   currentBoardId,
   currentSessionId,
-  suspendStateToUrlSync,
   onBoardChange,
   onSessionChange,
   onActiveUrlTargetChange,
@@ -152,7 +150,6 @@ const UrlStateBridge: React.FC<{
     onBoardChange,
     onSessionChange,
     onActiveUrlTargetChange,
-    suspendStateToUrlSync,
   });
   return null;
 };
@@ -397,16 +394,10 @@ export const App: React.FC<AppProps> = ({
     branchShortId?: string;
     artifactShortId?: string;
   }>();
-  // Settings is a routed *overlay*: `/settings/...` takes over the address
-  // bar but is supposed to leave whatever it was opened over rendered
-  // behind it. `useSettingsRoute` stashes that origin in history state, so
-  // read the surface from there — deriving it from `location.pathname`
-  // instead makes opening settings unmount Home and swap in the board
-  // canvas first, which is visible as a flash of the "normal" view before
-  // the modal appears.
+  // Settings owns the address bar, not the surface behind its modal.
+  // Preserve the Home/board background recorded by useSettingsRoute.
   const isRootHomePath = getShellSurfacePath(location) === '/';
   const hasExplicitEntityTarget = hasExplicitEntityRouteTarget(routeParams);
-  const [pendingHomeNavigation, setPendingHomeNavigation] = useState(false);
   const sessionCanvasRef = useRef<SessionCanvasRef>(null);
   const [newSessionBranchId, setNewSessionBranchId] = useState<string | null>(null);
   // Set instead of creating a session immediately when quick-start can't
@@ -447,9 +438,7 @@ export const App: React.FC<AppProps> = ({
     useMemo(() => makeSessionExistsSelector(selectedSessionId), [selectedSessionId])
   );
   const effectiveSelectedSessionId =
-    !isRootHomePath && !pendingHomeNavigation && selectedSessionId && selectedSessionExists
-      ? selectedSessionId
-      : null;
+    !isRootHomePath && selectedSessionId && selectedSessionExists ? selectedSessionId : null;
 
   // A real selected session always wins; the pending tool-choice empty state
   // only matters when there's no real session to show yet (see
@@ -541,7 +530,7 @@ export const App: React.FC<AppProps> = ({
   const currentBoard = useAgorStore(
     useMemo(() => makeBoardSelector(currentBoardId), [currentBoardId])
   );
-  const isHomeSurface = (isRootHomePath || pendingHomeNavigation) && !hasExplicitEntityTarget;
+  const isHomeSurface = isRootHomePath && !hasExplicitEntityTarget;
   const headerBoardId = isHomeSurface ? '' : currentBoardId;
   const wasHomeSurfaceRef = useRef(isHomeSurface);
   const isLeavingHomeSurface = wasHomeSurfaceRef.current && !isHomeSurface;
@@ -576,26 +565,17 @@ export const App: React.FC<AppProps> = ({
     setHomeExitPanelDetailsDeferred(false);
   }, []);
 
-  // Home is route-authoritative. Do not clear board/session state while the
-  // old `/b/...` URL is still active — that creates a transient no-board
-  // canvas render. Instead, render Home immediately via `pendingHomeNavigation`
-  // during the route transition, then clean stale board/session state only once
-  // the `/` route has committed. Layout timing keeps the header/board picker
-  // from painting stale board identity on Home.
+  // Let the committed route choose Home before clearing stale selection.
+  // Optimistically hiding the session at the OLD path lets URL self-healing
+  // cancel the Home navigation. A separate pending flag can also outlive a
+  // superseded navigation. Route-derived rendering avoids both races and a
+  // boardless canvas flash; layout cleanup keeps stale identity off Home.
   useLayoutEffect(() => {
     if (!isRootHomePath || hasExplicitEntityTarget) return;
     if (currentBoardId) setCurrentBoardIdInternal('');
     if (selectedSessionId) setSelectedSessionId(null);
     if (activeUrlTarget) setActiveUrlTarget(null);
-    if (pendingHomeNavigation) setPendingHomeNavigation(false);
-  }, [
-    activeUrlTarget,
-    currentBoardId,
-    hasExplicitEntityTarget,
-    isRootHomePath,
-    pendingHomeNavigation,
-    selectedSessionId,
-  ]);
+  }, [activeUrlTarget, currentBoardId, hasExplicitEntityTarget, isRootHomePath, selectedSessionId]);
 
   const leftPanelCollapsed =
     commentsPanelCollapsed ||
@@ -1433,10 +1413,7 @@ export const App: React.FC<AppProps> = ({
   // isn't defeated by a fresh inline-arrow identity on every App re-render. Each
   // delegates to the latest impl via useStableCallback, so they read current
   // state (selection, panel, board) at call time without re-rendering the header.
-  const handleHomeClick = useStableCallback(() => {
-    setPendingHomeNavigation(true);
-    navigation.goHome();
-  });
+  const handleHomeClick = useStableCallback(() => navigation.goHome());
   const handleEventStreamClick = useStableCallback(() => {
     // If a session is open, close it and reveal the event stream; otherwise
     // toggle the event stream panel.
@@ -1469,10 +1446,6 @@ export const App: React.FC<AppProps> = ({
       <UrlStateBridge
         currentBoardId={currentBoardId}
         currentSessionId={effectiveSelectedSessionId}
-        // While a Home navigation is in flight the pair above is
-        // transitional (the session is already suppressed, the `/` route
-        // has not committed) — see `suspendStateToUrlSync`.
-        suspendStateToUrlSync={pendingHomeNavigation}
         onBoardChange={handleUrlBoardChange}
         onSessionChange={setSelectedSessionId}
         onActiveUrlTargetChange={setActiveUrlTarget}

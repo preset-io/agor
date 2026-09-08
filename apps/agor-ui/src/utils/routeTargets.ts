@@ -36,9 +36,8 @@ function isSettingsPath(pathname: string): boolean {
  * a navigation away from Home, swapping in the board canvas underneath
  * before the modal paints.
  *
- * Falls back to the pathname when no usable origin was recorded — a
- * settings URL opened cold (shared link, hard refresh) has no prior
- * surface to preserve.
+ * Falls back to the pathname when no usable origin was recorded, such as
+ * when opening a shared settings link. A reload can retain history state.
  */
 export function getShellSurfacePath(location: { pathname: string; state?: unknown }): string {
   if (!isSettingsPath(location.pathname)) return location.pathname;

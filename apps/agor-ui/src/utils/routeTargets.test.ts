@@ -41,7 +41,7 @@ describe('getShellSurfacePath', () => {
   });
 
   it('falls back to the pathname when no usable origin was recorded', () => {
-    // Cold-loaded settings URL (shared link / refresh) — nothing to preserve.
+    // Shared settings link without history state — nothing to preserve.
     expect(getShellSurfacePath({ pathname: '/settings/users/' })).toBe('/settings/users/');
     expect(getShellSurfacePath({ pathname: '/settings/users/', state: null })).toBe(
       '/settings/users/'

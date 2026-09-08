@@ -1,51 +1,35 @@
 /**
- * Home-surface integration tests.
- *
- * Two defects, both of the form "the URL and the rendered surface disagree":
- *
- *   1. Clicking Home with a session open never reached `/`. React Router
- *      commits `navigate()` inside a transition, so `setPendingHomeNavigation`
- *      rendered once at the OLD path with the session already suppressed;
- *      `useUrlState`'s state→URL self-heal read that transitional
- *      (board, session=null) pair as authoritative and `replace()`d the URL
- *      with `/b/<board>/`, cancelling the `/` push. `pendingHomeNavigation`
- *      then stayed armed forever, because its only reset requires already
- *      being at `/`. While armed, the shell renders Home for every non-entity
- *      URL and forces `effectiveSelectedSessionId` to null — so the board
- *      switcher moves the address bar while Home keeps rendering, and Home's
- *      session rows resolve but never select.
- *
- *   2. Settings is a routed *overlay*: `/settings/...` owns the address bar
- *      while the surface it was opened over stays mounted behind the modal.
- *      Deriving the surface from `location.pathname` made opening Settings
- *      over Home read as a navigation away from Home, swapping in the board
- *      canvas underneath before the modal painted.
- *
- * They are written at the App level on purpose: each is an interaction
- * between the route table, `useUrlState`'s two effects, and the shell's
- * surface derivation. No single unit sees it.
+ * Shell integration contracts: committed routes select Home/board/session;
+ * Settings preserves its background; state-only recentering still heals URLs.
+ * Exercise the real router and sync effects, with layout-heavy surfaces mocked.
  */
 import type { Board, Branch, Session, SessionID, User } from '@agor-live/client';
 import { sessionPath } from '@agor-live/client';
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import { App as AntApp } from 'antd';
-import { forwardRef } from 'react';
-import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
+import { forwardRef, useLayoutEffect } from 'react';
+import { MemoryRouter, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { CanvasNavigationProvider, useRecenterMap } from '../../contexts/CanvasNavigationContext';
 import { ThemeProvider } from '../../contexts/ThemeContext';
+import { useAppNavigation } from '../../hooks/useAppNavigation';
 import { useSettingsRoute } from '../../hooks/useSettingsRoute';
 import { EMPTY_MAPS } from '../../store/agorMaps';
 import { agorStore } from '../../store/agorStore';
 import { App } from './App';
 
+const canvasCommit = vi.hoisted(() => vi.fn<(boardName: string | null) => void>());
+
 // Surface stand-ins. Each renders the one attribute the assertions read, so
 // a test can say "the board canvas is showing Beta" without depending on
 // canvas internals.
 vi.mock('../SessionCanvas', () => ({
-  SessionCanvas: forwardRef((props: { board?: { name?: string } | null }) => (
-    <div data-testid="session-canvas" data-board={props.board?.name ?? ''} />
-  )),
+  SessionCanvas: forwardRef((props: { board?: { name?: string } | null }, _ref) => {
+    useLayoutEffect(() => {
+      canvasCommit(props.board?.name ?? null);
+    });
+    return <div data-testid="session-canvas" data-board={props.board?.name ?? ''} />;
+  }),
 }));
 vi.mock('../SessionPanel', () => ({
   SessionPanel: (props: { session?: { session_id?: string } | null; open?: boolean }) =>
@@ -179,12 +163,28 @@ function PathSpy() {
 /** Drives the real settings-route open path — the same call the gear menu
  *  makes — so the test exercises `openSettings`'s history-state contract
  *  rather than a hand-rolled navigate. */
-function SettingsOpener() {
-  const { openSettings } = useSettingsRoute();
+function RouteControls() {
+  const { openSettings, closeSettings } = useSettingsRoute();
+  const { goToSession } = useAppNavigation();
+  const navigate = useNavigate();
   return (
-    <button type="button" data-testid="open-settings" onClick={() => openSettings()}>
-      settings
-    </button>
+    <>
+      <button type="button" data-testid="open-settings" onClick={() => openSettings()}>
+        settings
+      </button>
+      <button type="button" data-testid="close-settings" onClick={closeSettings}>
+        close settings
+      </button>
+      <button type="button" data-testid="open-session" onClick={() => goToSession(SESSION_2)}>
+        open session
+      </button>
+      <button type="button" data-testid="back" onClick={() => navigate(-1)}>
+        back
+      </button>
+      <button type="button" data-testid="forward" onClick={() => navigate(1)}>
+        forward
+      </button>
+    </>
   );
 }
 
@@ -217,7 +217,7 @@ function renderApp(initialPath: string) {
         <MemoryRouter initialEntries={[initialPath]}>
           <CanvasNavigationProvider>
             <PathSpy />
-            <SettingsOpener />
+            <RouteControls />
             <CrossBoardRecenter />
             <Routes>
               <Route path="/b/:boardParam/" element={el} />
@@ -269,6 +269,7 @@ async function pickBoardFromSwitcher(name: string) {
 beforeEach(() => {
   localStorage.clear();
   seedStore();
+  canvasCommit.mockClear();
 });
 
 describe('Settings opens as an overlay, not a navigation', () => {
@@ -285,6 +286,12 @@ describe('Settings opens as an overlay, not a navigation', () => {
     // behind the modal before it could open.
     expect(homeIsShowing()).toBe(true);
     expect(screen.queryByTestId('session-canvas')).toBeNull();
+
+    fireEvent.click(screen.getByTestId('close-settings'));
+    await settle();
+    expect(currentPath).toBe('/');
+    expect(homeIsShowing()).toBe(true);
+    expect(screen.queryByTestId('settings-modal')).toBeNull();
   });
 
   it('keeps the board canvas rendered behind the settings modal', async () => {
@@ -302,8 +309,21 @@ describe('Settings opens as an overlay, not a navigation', () => {
     expect(homeIsShowing()).toBe(false);
   });
 
+  it('keeps the selected session behind Settings and restores it on close', async () => {
+    renderApp(sessionPath(SESSION_1 as SessionID));
+    await settle();
+    fireEvent.click(screen.getByTestId('open-settings'));
+    await settle();
+    expect(openSessionId()).toBe(SESSION_1);
+    expect(canvasBoardName()).toBe('Alpha');
+    fireEvent.click(screen.getByTestId('close-settings'));
+    await settle();
+    expect(currentPath).toBe(sessionPath(SESSION_1 as SessionID));
+    expect(openSessionId()).toBe(SESSION_1);
+  });
+
   it('falls back to the pathname for a cold-loaded settings URL', async () => {
-    // Shared link / hard refresh: no recorded origin in history state, so
+    // Shared link: no recorded origin in history state, so
     // there is no prior surface to preserve.
     renderApp('/settings/boards/');
     await settle();
@@ -319,6 +339,7 @@ describe('Home navigation with a session open', () => {
     renderApp(sessionPath(SESSION_1 as SessionID));
     await settle();
     expect(openSessionId()).toBe(SESSION_1);
+    canvasCommit.mockClear();
 
     clickHomeButton();
     await settle();
@@ -327,6 +348,8 @@ describe('Home navigation with a session open', () => {
     // transitional (board, session=null) pair and cancelled the `/` push.
     expect(currentPath).toBe('/');
     expect(homeIsShowing()).toBe(true);
+    // No committed boardless canvas in between the old session and Home.
+    expect(canvasCommit).not.toHaveBeenCalledWith(null);
   });
 
   it('leaves the board switcher working afterwards', async () => {
@@ -375,13 +398,43 @@ describe('Home navigation with a session open', () => {
       el.textContent?.includes('Beta')
     ) as HTMLElement;
 
-    clickHomeButton();
-    fireEvent.click(betaItem);
+    // One act boundary keeps `/` from committing between the two intents.
+    act(() => {
+      clickHomeButton();
+      fireEvent.click(betaItem);
+    });
     await settle();
 
     expect(currentPath).toBe('/b/beta/');
     expect(canvasBoardName()).toBe('Beta');
     expect(homeIsShowing()).toBe(false);
+  });
+
+  it('opens a session when its navigation supersedes Home', async () => {
+    renderApp(sessionPath(SESSION_1 as SessionID));
+    await settle();
+    act(() => {
+      clickHomeButton();
+      fireEvent.click(screen.getByTestId('open-session'));
+    });
+    await settle();
+    expect(currentPath).toBe(sessionPath(SESSION_2 as SessionID));
+    expect(openSessionId()).toBe(SESSION_2);
+  });
+
+  it('restores the session on Back and Home on Forward', async () => {
+    renderApp(sessionPath(SESSION_1 as SessionID));
+    await settle();
+    clickHomeButton();
+    await settle();
+    fireEvent.click(screen.getByTestId('back'));
+    await settle();
+    expect(currentPath).toBe(sessionPath(SESSION_1 as SessionID));
+    expect(openSessionId()).toBe(SESSION_1);
+    fireEvent.click(screen.getByTestId('forward'));
+    await settle();
+    expect(currentPath).toBe('/');
+    expect(homeIsShowing()).toBe(true);
   });
 
   it('still lets state heal the URL when no navigation is in flight', async () => {
