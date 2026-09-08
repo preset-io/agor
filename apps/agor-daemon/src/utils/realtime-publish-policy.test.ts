@@ -40,10 +40,13 @@ describe('realtimePublishPolicyFor', () => {
     expect(realtimePublishPolicyFor('boards')?.minimumRole).toBeUndefined();
   });
 
-  it('treats an explicit none declaration as not allowed', () => {
-    expect(realtimePublishPolicyFor('mcp-catalog/connect')?.audience).toBe('none');
-    expect(isRealtimePublishAllowed('mcp-catalog/connect')).toBe(false);
-  });
+  it.each(['mcp-catalog/connect', 'mcp-slack-recovery'])(
+    'keeps %s replies private to the caller',
+    (path) => {
+      expect(realtimePublishPolicyFor(path)?.audience).toBe('none');
+      expect(isRealtimePublishAllowed(path)).toBe(false);
+    }
+  );
 
   it('requires every entry to explain itself', () => {
     for (const [path, policy] of Object.entries(REALTIME_PUBLISH_POLICY)) {

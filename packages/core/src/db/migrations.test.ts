@@ -931,7 +931,7 @@ describe('MCP OAuth pending-flow migrations', () => {
 describe('MCP OAuth client-registration migrations', () => {
   it('does not advance SQLite schema history for PostgreSQL-only DCR authority', async () => {
     const [, sqliteJournal] = await readJournals();
-    expect(sqliteJournal.entries.at(-1)).toMatchObject({
+    expect(sqliteJournal.entries.find(({ idx }) => idx === 103)).toMatchObject({
       idx: 103,
       tag: '0103_claude_oauth_attempts',
     });
@@ -943,7 +943,7 @@ describe('MCP OAuth client-registration migrations', () => {
 
   it('follows current main and binds PostgreSQL authority to tenant/server UUID with forced RLS', async () => {
     const [postgresJournal] = await readJournals();
-    expect(postgresJournal.entries.slice(-4)).toEqual([
+    expect(postgresJournal.entries.filter(({ idx }) => idx >= 100 && idx <= 103)).toEqual([
       expect.objectContaining({ idx: 100, tag: '0100_claude_oauth_attempts' }),
       expect.objectContaining({ idx: 101, tag: '0101_environment_command_discovery' }),
       expect.objectContaining({ idx: 102, tag: '0102_mcp_oauth_client_registrations' }),
@@ -952,8 +952,8 @@ describe('MCP OAuth client-registration migrations', () => {
         tag: '0103_oauth_authority_watermark_reconciliation',
       }),
     ]);
-    expect(postgresJournal.entries.at(-1)!.when).toBeGreaterThan(
-      postgresJournal.entries.at(-2)!.when
+    expect(postgresJournal.entries.find(({ idx }) => idx === 103)!.when).toBeGreaterThan(
+      postgresJournal.entries.find(({ idx }) => idx === 102)!.when
     );
     const migration = await readFile(
       new URL('../../drizzle/postgres/0102_mcp_oauth_client_registrations.sql', import.meta.url),

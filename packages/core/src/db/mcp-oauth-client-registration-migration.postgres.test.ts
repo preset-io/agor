@@ -24,7 +24,6 @@ const oldHeadFixture = resolve(
   'test-fixtures/b0585d76/0100_mcp_oauth_client_registrations.sql'
 );
 const OLD_HEAD_WATERMARK = 1_788_292_800_000;
-const FINAL_RECONCILIATION_WATERMARK = 1_788_728_664_647;
 const OLD_HEAD_MIGRATION_SHA256 =
   'f1e964942fd61182d564cf45dfcf5b13218b1eee242a3927a7fc9fba168fe7c5';
 
@@ -205,6 +204,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
           '0101_environment_command_discovery',
           '0102_mcp_oauth_client_registrations',
           '0103_oauth_authority_watermark_reconciliation',
+          '0104_mcp_slack_recovery_due',
         ],
         dbAheadOfBinary: false,
       });
@@ -261,7 +261,10 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
         )
       );
       const finalWatermark = Number(ledger[0]?.max_ts);
-      expect(finalWatermark).toBe(FINAL_RECONCILIATION_WATERMARK);
+      const currentJournal = JSON.parse(
+        await readFile(join(migrationsFolder, 'meta', '_journal.json'), 'utf8')
+      ) as { entries: Array<{ when: number }> };
+      expect(finalWatermark).toBe(Math.max(...currentJournal.entries.map(({ when }) => when)));
       const oldHeadJournal = JSON.parse(
         await readFile(join(oldHeadFolder!, 'meta', '_journal.json'), 'utf8')
       ) as { entries: Array<{ tag: string; when: number }> };
@@ -317,6 +320,11 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
         );
       });
 
+      // This fixture reuses the database upgraded by the preceding test. Remove
+      // the later Slack recovery addition as well as rewinding the ledger so
+      // the simulated old head has its actual schema, not a future column.
+      await executeRaw(db, sql`ALTER TABLE tasks DROP COLUMN mcp_slack_recovery_due_at`);
+
       // Reproduce the previous reviewed head's timestamp-only final watermark.
       // Its authority schema is identical; the rebased bootstrap must not try
       // to CREATE it again or discard its rows before exact reconciliation.
@@ -334,6 +342,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
           '0101_environment_command_discovery',
           '0102_mcp_oauth_client_registrations',
           '0103_oauth_authority_watermark_reconciliation',
+          '0104_mcp_slack_recovery_due',
         ],
         dbAheadOfBinary: false,
       });

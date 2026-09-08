@@ -326,6 +326,10 @@ export const REALTIME_PUBLISH_POLICY = {
     audience: 'none',
     why: 'Caller-scoped advisory read with no mutations or events.',
   },
+  'mcp-slack-recovery': {
+    audience: 'none',
+    why: 'Authenticated recovery preflight belongs only to the caller; never broadcast its result.',
+  },
   'mcp-marketplace': {
     audience: 'none',
     why: 'Caller-private overview returned only to the requesting connection.',
