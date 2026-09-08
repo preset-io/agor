@@ -165,13 +165,13 @@ describe('Postgres migrations', () => {
     expect(
       pendingOfflineCutoverMigrations('postgresql', {
         applied: ['0100_claude_oauth_attempts'],
-        pending: ['0101_mcp_oauth_client_registrations'],
+        pending: ['0102_mcp_oauth_client_registrations'],
       })
-    ).toEqual(['0101_mcp_oauth_client_registrations']);
+    ).toEqual(['0102_mcp_oauth_client_registrations']);
     expect(
       pendingOfflineCutoverMigrations('postgresql', {
         applied: [],
-        pending: ['0000_cuddly_captain_america', '0101_mcp_oauth_client_registrations'],
+        pending: ['0000_cuddly_captain_america', '0102_mcp_oauth_client_registrations'],
       })
     ).toEqual([]);
   });
@@ -180,9 +180,9 @@ describe('Postgres migrations', () => {
     expect(
       pendingOfflineCutoverMigrations('postgresql', {
         applied: ['0099_shared_session_prompting'],
-        pending: ['0102_oauth_authority_watermark_reconciliation'],
+        pending: ['0103_oauth_authority_watermark_reconciliation'],
       })
-    ).toEqual(['0102_oauth_authority_watermark_reconciliation']);
+    ).toEqual(['0103_oauth_authority_watermark_reconciliation']);
   });
 
   it('assigns GitHub install state unique post-HA migration watermarks', async () => {
@@ -943,19 +943,20 @@ describe('MCP OAuth client-registration migrations', () => {
 
   it('follows current main and binds PostgreSQL authority to tenant/server UUID with forced RLS', async () => {
     const [postgresJournal] = await readJournals();
-    expect(postgresJournal.entries.slice(-3)).toEqual([
+    expect(postgresJournal.entries.slice(-4)).toEqual([
       expect.objectContaining({ idx: 100, tag: '0100_claude_oauth_attempts' }),
-      expect.objectContaining({ idx: 101, tag: '0101_mcp_oauth_client_registrations' }),
+      expect.objectContaining({ idx: 101, tag: '0101_environment_command_discovery' }),
+      expect.objectContaining({ idx: 102, tag: '0102_mcp_oauth_client_registrations' }),
       expect.objectContaining({
-        idx: 102,
-        tag: '0102_oauth_authority_watermark_reconciliation',
+        idx: 103,
+        tag: '0103_oauth_authority_watermark_reconciliation',
       }),
     ]);
     expect(postgresJournal.entries.at(-1)!.when).toBeGreaterThan(
       postgresJournal.entries.at(-2)!.when
     );
     const migration = await readFile(
-      new URL('../../drizzle/postgres/0101_mcp_oauth_client_registrations.sql', import.meta.url),
+      new URL('../../drizzle/postgres/0102_mcp_oauth_client_registrations.sql', import.meta.url),
       'utf8'
     );
     expect(migration).toContain('FOREIGN KEY ("tenant_id", "mcp_server_id")');
@@ -977,7 +978,7 @@ describe('MCP OAuth client-registration migrations', () => {
 
     const reconciliation = await readFile(
       new URL(
-        '../../drizzle/postgres/0102_oauth_authority_watermark_reconciliation.sql',
+        '../../drizzle/postgres/0103_oauth_authority_watermark_reconciliation.sql',
         import.meta.url
       ),
       'utf8'

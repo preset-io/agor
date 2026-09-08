@@ -1,6 +1,12 @@
 -- Fleet-wide, tenant-bound Dynamic Client Registration authority.
 SET LOCAL lock_timeout = '3s';
 --> statement-breakpoint
+-- The pre-rebase heads may already own this table (legacy or final shape).
+-- Defer existing relations to 0103's exact fingerprint validation/reconciliation,
+-- in the same offline migrator transaction. Unknown shapes still fail closed.
+DO $agor_dcr_bootstrap$
+BEGIN
+IF to_regclass('public.mcp_oauth_client_registrations') IS NULL THEN
 CREATE TABLE "mcp_oauth_client_registrations" (
   "tenant_id" text DEFAULT 'default' NOT NULL,
   "registration_id" varchar(36) PRIMARY KEY NOT NULL,
@@ -49,36 +55,27 @@ CREATE TABLE "mcp_oauth_client_registrations" (
       AND "finished_at" IS NOT NULL)
   )
 );
---> statement-breakpoint
 CREATE UNIQUE INDEX "mcp_oauth_client_registrations_current_server_uq"
   ON "mcp_oauth_client_registrations" ("tenant_id", "mcp_server_id")
   WHERE "is_current" = true;
---> statement-breakpoint
 CREATE INDEX "mcp_oauth_client_registrations_tenant_server_idx"
   ON "mcp_oauth_client_registrations"
   ("tenant_id", "mcp_server_id", "created_at");
---> statement-breakpoint
 CREATE INDEX "mcp_oauth_client_registrations_binding_idx"
   ON "mcp_oauth_client_registrations"
   ("tenant_id", "mcp_server_id", "binding_fingerprint");
---> statement-breakpoint
 CREATE INDEX "mcp_oauth_client_registrations_registering_maintenance_idx"
   ON "mcp_oauth_client_registrations" ("lease_expires_at")
   WHERE "status" = 'registering' AND "is_current" = true;
---> statement-breakpoint
 CREATE INDEX "mcp_oauth_client_registrations_registered_maintenance_idx"
   ON "mcp_oauth_client_registrations" ("client_secret_expires_at")
   WHERE "status" = 'registered' AND "is_current" = true
     AND "client_secret_expires_at" IS NOT NULL;
---> statement-breakpoint
 CREATE INDEX "mcp_oauth_client_registrations_terminal_maintenance_idx"
   ON "mcp_oauth_client_registrations" ("finished_at")
   WHERE "status" IN ('failed','ambiguous','superseded','expired');
---> statement-breakpoint
 ALTER TABLE "mcp_oauth_client_registrations" ENABLE ROW LEVEL SECURITY;
---> statement-breakpoint
 ALTER TABLE "mcp_oauth_client_registrations" FORCE ROW LEVEL SECURITY;
---> statement-breakpoint
 CREATE POLICY "tenant_isolation_mcp_oauth_client_registrations" ON "mcp_oauth_client_registrations"
   USING (
     COALESCE(current_setting('agor.system_scope', true), '') = ''
@@ -88,7 +85,6 @@ CREATE POLICY "tenant_isolation_mcp_oauth_client_registrations" ON "mcp_oauth_cl
     COALESCE(current_setting('agor.system_scope', true), '') = ''
     AND "tenant_id" = COALESCE(NULLIF(current_setting('agor.tenant_id', true), ''), 'default')
   );
---> statement-breakpoint
 CREATE POLICY "mcp_oauth_client_registration_maintenance_select"
   ON "mcp_oauth_client_registrations"
   FOR SELECT
@@ -105,7 +101,6 @@ CREATE POLICY "mcp_oauth_client_registration_maintenance_select"
         AND "sealed_material" IS NULL AND "finished_at" >= CURRENT_TIMESTAMP)
     )
   );
---> statement-breakpoint
 CREATE POLICY "mcp_oauth_client_registration_maintenance_update"
   ON "mcp_oauth_client_registrations"
   FOR UPDATE
@@ -125,7 +120,6 @@ CREATE POLICY "mcp_oauth_client_registration_maintenance_update"
     AND "is_current" = false AND "sealed_material" IS NULL
     AND "finished_at" >= CURRENT_TIMESTAMP
   );
---> statement-breakpoint
 CREATE POLICY "mcp_oauth_client_registration_maintenance_delete"
   ON "mcp_oauth_client_registrations"
   FOR DELETE
@@ -135,5 +129,8 @@ CREATE POLICY "mcp_oauth_client_registration_maintenance_delete"
     AND "status" IN ('failed','ambiguous','superseded','expired')
     AND "finished_at" <= clock_timestamp() - INTERVAL '24 hours'
   );
+END IF;
+END;
+$agor_dcr_bootstrap$;
 --> statement-breakpoint
 SET LOCAL lock_timeout = DEFAULT;

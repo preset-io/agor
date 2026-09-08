@@ -270,7 +270,7 @@ or database error detail.
    because plaintext/unfenced rows are structurally incompatible; users must
    reconnect.
 3. Apply PostgreSQL migrations through
-   `0102_oauth_authority_watermark_reconciliation` before OAuth activation. Do
+   `0103_oauth_authority_watermark_reconciliation` before OAuth activation. Do
    not canary or mix old/new cohorts: old constrained-HA daemons keep OAuth
    gated and do not implement the final DCR authority. `0102` also repairs
    databases that ran old PR head `b0585d76`, whose DCR migration collided with
