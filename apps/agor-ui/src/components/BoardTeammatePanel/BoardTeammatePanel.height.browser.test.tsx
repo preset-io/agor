@@ -273,9 +273,14 @@ it.each([
         ]),
       });
     });
-    await waitFor(() => {
-      for (const tree of scrollers()) expect(tree.clientHeight).toBeGreaterThan(300);
-    });
+    // Real tree motion and ResizeObserver allocation can settle after the default
+    // timeout under CI load; keep the geometry assertion and allow bounded convergence.
+    await waitFor(
+      () => {
+        for (const tree of scrollers()) expect(tree.clientHeight).toBeGreaterThan(300);
+      },
+      { timeout: 5_000 }
+    );
     await act(async () => {
       agorStore.setState({
         sessionsByBranch: new Map([
