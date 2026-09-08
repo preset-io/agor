@@ -1,6 +1,12 @@
 {
   "$schema": "https://turbo.build/schema.json",
-  "globalDependencies": ["**/.env.*local", "pnpm-lock.yaml"],
+  "globalDependencies": [
+    "**/.env.*local",
+    "pnpm-lock.yaml",
+    "test/isolate-host-env.ts",
+    "apps/*/vitest.config.ts",
+    "packages/*/vitest.config.ts"
+  ],
   "globalPassThroughEnv": [
     "AGOR_ADMIN_PASSWORD",
     "AGOR_ALLOW_DEVELOPMENT_DEFAULT_ADMIN",
