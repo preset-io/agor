@@ -88,6 +88,7 @@ vi.mock('@agor/core/tools/mcp/oauth-mcp-transport', async (importOriginal) => {
               tokenEndpoint: 'https://provider.example.test/token',
               redirectUri,
               clientName: 'Agor MCP Client',
+              applicationType: 'web',
               compatibilityMode: 'strict',
               dcrMode: 'advertised',
             },

@@ -98,6 +98,53 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       if (oldHeadFolder) await rm(oldHeadFolder, { recursive: true, force: true });
     });
 
+    it.each([
+      ['missing', 'DELETE FROM drizzle.__drizzle_migrations WHERE created_at = 1788292800000'],
+      [
+        'wrong hash',
+        "UPDATE drizzle.__drizzle_migrations SET hash = 'unknown' WHERE created_at = 1788292800000",
+      ],
+      [
+        'duplicate',
+        'INSERT INTO drizzle.__drizzle_migrations (hash, created_at) SELECT hash, created_at FROM drizzle.__drizzle_migrations WHERE created_at = 1788292800000',
+      ],
+    ])(
+      'refuses destructive reconciliation with a %s legacy ledger row',
+      async (_label, mutation) => {
+        if (!db || !isPostgresDatabase(db)) throw new Error('PostgreSQL test requires PostgreSQL');
+        const relations = async () =>
+          rawRows(
+            await executeRaw(
+              db!,
+              sql`SELECT 'public.mcp_oauth_client_registrations'::regclass::oid AS table_oid,
+                    'public.mcp_oauth_client_registration_generation_seq'::regclass::oid AS sequence_oid`
+            )
+          );
+        const before = await relations();
+        await expect(
+          (
+            db as Database & {
+              $client: {
+                begin: (body: (tx: PostgresTestTransaction) => Promise<void>) => Promise<void>;
+              };
+            }
+          ).$client.begin(async (transaction) => {
+            await transaction.unsafe(mutation);
+            await executeReconciliationTransaction(transaction);
+          })
+        ).rejects.toThrow('unrecognized legacy OAuth migration ledger');
+        expect(await relations()).toEqual(before);
+        expect(
+          rawRows(
+            await executeRaw(
+              db,
+              sql`SELECT hash FROM drizzle.__drizzle_migrations WHERE created_at = 1788292800000`
+            )
+          )
+        ).toEqual([{ hash: OLD_HEAD_MIGRATION_SHA256 }]);
+      }
+    );
+
     it('detects the collision, requires an offline cutover, and reconciles both authorities', async () => {
       if (!db) throw new Error('PostgreSQL test database was not initialized');
 

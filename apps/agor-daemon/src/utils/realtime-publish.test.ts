@@ -662,6 +662,7 @@ describe('HA Feathers publication relay', () => {
         'external-launch',
         'executor-git-environment',
         'mcp-servers/oauth-auth-headers',
+        'mcp-servers/oauth-client-registration-reset',
         'codex-auth/device',
         // Claude subscription control-plane results must never enter shared Redis,
         // exactly like the codex-auth endpoints: oauth carries the paste-back

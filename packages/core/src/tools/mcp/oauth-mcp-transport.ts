@@ -656,8 +656,17 @@ export function __seedDynamicClientCacheForTests(
   dynamicClientCache.set(registrationEndpoint, entry);
 }
 
+/** Classify the already-validated callback, never the provider's endpoint. */
+function dcrApplicationType(redirectUri: string): 'native' | 'web' {
+  const callback = new URL(redirectUri);
+  return callback.protocol === 'http:' &&
+    ['127.0.0.1', '[::1]', 'localhost'].includes(callback.hostname)
+    ? 'native'
+    : 'web';
+}
+
 /**
- * Perform Dynamic Client Registration (RFC 7591)
+ * Dynamic Client Registration (RFC 7591)
  *
  * Registers a new OAuth client with the authorization server.
  * Results are cached per authorization server to avoid repeated registrations.
@@ -686,6 +695,7 @@ async function registerDynamicClient(
   // biome-ignore lint/suspicious/noExplicitAny: DCR request shape varies per RFC 7591
   const registrationRequest: any = {
     client_name: clientName,
+    application_type: dcrApplicationType(redirectUri),
     redirect_uris: [redirectUri],
     grant_types: ['authorization_code', 'refresh_token'],
     response_types: ['code'],
@@ -1498,6 +1508,7 @@ export interface MCPOAuthDynamicClientRegistrationRequest {
   tokenEndpoint: string;
   redirectUri: string;
   clientName: string;
+  applicationType: 'native' | 'web';
   scope?: string;
   compatibilityMode: MCPOAuthRuntimeCompatibilityMode;
   dcrMode: MCPOAuthDCRMode;
@@ -1608,6 +1619,7 @@ async function resolveOAuthClient(options: {
             tokenEndpoint: options.tokenEndpoint,
             redirectUri: options.actualRedirectUri,
             clientName: 'Agor MCP Client',
+            applicationType: dcrApplicationType(options.actualRedirectUri),
             scope: options.scope,
             compatibilityMode: options.compatibilityMode,
             dcrMode: options.dcrMode,

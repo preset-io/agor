@@ -72,6 +72,7 @@ function bindingFingerprint(
         authorizationEndpoint: input.authorizationEndpoint,
         tokenEndpoint: input.tokenEndpoint,
         redirectUri: input.redirectUri,
+        applicationType: input.applicationType,
         clientName: input.clientName,
         scope: input.scope ?? null,
         compatibilityMode: input.compatibilityMode,
@@ -104,6 +105,7 @@ function isMaterial(value: unknown): value is MCPOAuthClientRegistrationSealedMa
     typeof material.authorizationEndpoint === 'string' &&
     typeof material.tokenEndpoint === 'string' &&
     typeof material.redirectUri === 'string' &&
+    (material.applicationType === 'native' || material.applicationType === 'web') &&
     (material.scope === undefined || typeof material.scope === 'string') &&
     (material.compatibilityMode === 'strict' ||
       material.compatibilityMode === 'legacy' ||
@@ -180,6 +182,7 @@ export class MCPOAuthClientRegistrationAuthority {
       parsed.authorizationEndpoint !== expected.authorizationEndpoint ||
       parsed.tokenEndpoint !== expected.tokenEndpoint ||
       parsed.redirectUri !== expected.redirectUri ||
+      parsed.applicationType !== expected.applicationType ||
       parsed.scope !== expected.scope ||
       parsed.compatibilityMode !== expected.compatibilityMode ||
       parsed.dcrMode !== expected.dcrMode ||
@@ -291,6 +294,7 @@ export class MCPOAuthClientRegistrationAuthority {
           authorizationEndpoint: input.authorizationEndpoint,
           tokenEndpoint: input.tokenEndpoint,
           redirectUri: input.redirectUri,
+          applicationType: input.applicationType,
           ...(input.scope ? { scope: input.scope } : {}),
           compatibilityMode: input.compatibilityMode,
           dcrMode: input.dcrMode,

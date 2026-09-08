@@ -1,6 +1,6 @@
 -- Reconcile the timestamp-only migration collision shipped on the old PR head
 -- b0585d76. Destructive replacement is permitted only for its exact archived
--- DCR schema. Every catalog comparison below is against a temporary reference
+-- DCR schema AND the authenticated applied migration ledger. Every catalog comparison below is against a temporary reference
 -- relation built by this PostgreSQL server from the known DDL, avoiding
 -- version-sensitive hard-coded pg_get_expr/pg_get_indexdef output.
 SET LOCAL lock_timeout = '3s';
@@ -277,6 +277,18 @@ BEGIN
         legacy_sequence, 'pg_temp.agor_0102_legacy_generation_expected'::regclass
       );
     IF exact_legacy THEN
+      -- A matching shape is not provenance. Authenticate the applied old-head
+      -- migration before either destructive operation, and prevent ledger
+      -- mutation until this offline migration transaction completes.
+      LOCK TABLE drizzle.__drizzle_migrations IN SHARE MODE;
+      IF NOT (
+        SELECT COUNT(*) = 1 AND COALESCE(bool_and(
+          hash = 'f1e964942fd61182d564cf45dfcf5b13218b1eee242a3927a7fc9fba168fe7c5'
+        ), false)
+        FROM drizzle.__drizzle_migrations WHERE created_at = 1788292800000
+      ) THEN
+        RAISE EXCEPTION 'unrecognized legacy OAuth migration ledger; refusing automatic reconciliation';
+      END IF;
       DROP TABLE public.mcp_oauth_client_registrations;
       DROP SEQUENCE public.mcp_oauth_client_registration_generation_seq;
     END IF;

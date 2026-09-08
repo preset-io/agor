@@ -1098,44 +1098,60 @@ describe('startMCPOAuthFlow with prefetchedAuthServerMetadata', () => {
     expect(authUrl.searchParams.get('redirect_uri')).toBe('http://127.0.0.1:9999/oauth/callback');
   });
 
-  it('routes validated DCR through an injected fleet authority with exact discovery binding', async () => {
-    let observedRequest: unknown;
-    const resolver: MCPOAuthDynamicClientRegistrationResolver = vi.fn(async (request, register) => {
-      observedRequest = request;
-      return { registration: await register() };
-    });
-    globalThis.fetch = vi.fn().mockResolvedValue(
-      new Response(
-        JSON.stringify({
-          client_id: 'fleet-authority-client',
-          redirect_uris: [redirectUri],
-          token_endpoint_auth_method: 'none',
-        }),
-        { status: 201, headers: { 'content-type': 'application/json' } }
-      )
-    ) as unknown as typeof fetch;
+  it.each([
+    ['http://127.0.0.1:9999/oauth/callback', 'native'],
+    ['http://localhost:9999/oauth/callback', 'native'],
+    ['http://[::1]:9999/oauth/callback', 'native'],
+    ['https://agor.example.test/mcp-servers/oauth-callback', 'web'],
+  ])(
+    'binds DCR callback %s as %s through the fleet authority',
+    async (redirectUri, applicationType) => {
+      let observedRequest: unknown;
+      const resolver: MCPOAuthDynamicClientRegistrationResolver = vi.fn(
+        async (request, register) => {
+          observedRequest = request;
+          return { registration: await register() };
+        }
+      );
+      globalThis.fetch = vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            client_id: 'fleet-authority-client',
+            redirect_uris: [redirectUri],
+            token_endpoint_auth_method: 'none',
+          }),
+          { status: 201, headers: { 'content-type': 'application/json' } }
+        )
+      ) as unknown as typeof fetch;
 
-    const context = await startMCPOAuthFlow('', undefined, redirectUri, {
-      ...prefetchedOptions,
-      resolveDynamicClientRegistration: resolver,
-    });
+      const context = await startMCPOAuthFlow('', undefined, redirectUri, {
+        ...prefetchedOptions,
+        resolveDynamicClientRegistration: resolver,
+      });
 
-    expect(resolver).toHaveBeenCalledTimes(1);
-    expect(observedRequest).toMatchObject({
-      registrationEndpoint: 'https://auth.reo.dev/oauth/register',
-      registrationEndpointSource: 'metadata',
-      metadataUrl: 'https://mcp.reo.dev/mcp',
-      resourceUri: 'https://mcp.reo.dev/mcp',
-      issuer: 'https://auth.reo.dev',
-      authorizationEndpoint: 'https://auth.reo.dev/oauth/authorize',
-      tokenEndpoint: 'https://auth.reo.dev/oauth/token',
-      redirectUri,
-      compatibilityMode: 'legacy',
-      dcrMode: 'fallback',
-    });
-    expect(globalThis.fetch).toHaveBeenCalledTimes(1);
-    expect(context.clientId).toBe('fleet-authority-client');
-  });
+      expect(resolver).toHaveBeenCalledTimes(1);
+      expect(observedRequest).toMatchObject({
+        registrationEndpoint: 'https://auth.reo.dev/oauth/register',
+        registrationEndpointSource: 'metadata',
+        metadataUrl: 'https://mcp.reo.dev/mcp',
+        resourceUri: 'https://mcp.reo.dev/mcp',
+        issuer: 'https://auth.reo.dev',
+        authorizationEndpoint: 'https://auth.reo.dev/oauth/authorize',
+        tokenEndpoint: 'https://auth.reo.dev/oauth/token',
+        redirectUri,
+        applicationType,
+        compatibilityMode: 'legacy',
+        dcrMode: 'fallback',
+      });
+      expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+      const requestBody = JSON.parse(String(vi.mocked(globalThis.fetch).mock.calls[0][1]?.body));
+      expect(requestBody).toMatchObject({
+        application_type: applicationType,
+        redirect_uris: [redirectUri],
+      });
+      expect(context.clientId).toBe('fleet-authority-client');
+    }
+  );
 
   it('accepts a confidential client when DCR returns a secret with auth method none/omitted, then uses HTTP Basic on token exchange', async () => {
     // Reproduces Atlassian's remote MCP: we request a public client

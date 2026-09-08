@@ -307,6 +307,7 @@ export const REDIS_FEATHERS_DENIED_PATHS = new Set([
   'mcp-servers/oauth-callback',
   'mcp-servers/oauth-complete',
   'mcp-servers/oauth-disconnect',
+  'mcp-servers/oauth-client-registration-reset',
   'mcp-servers/oauth-status',
   'mcp-servers/oauth-auth-headers',
   'mcp-servers/oauth-refresh',

@@ -77,6 +77,7 @@ vi.mock('@agor/core/tools/mcp/oauth-mcp-transport', async (importOriginal) => {
                 tokenEndpoint: 'https://provider.example.test/token',
                 redirectUri,
                 clientName: 'Agor MCP Client',
+                applicationType: 'web',
                 compatibilityMode: 'strict',
                 dcrMode: 'advertised',
               },
@@ -638,12 +639,13 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
 
       const older = connectWithToken(actor.user, actor.tenantId, OLD_KEY, app);
       await atProbe;
-      const newerPending = connectWithToken(actor.user, actor.tenantId, NEW_KEY, app);
-      await Promise.resolve();
-      expect(probeRemoteBearerToken).not.toHaveBeenCalledWith(RESOURCE, NEW_KEY);
+      // The connect-generation claim commits before the provider probe; it
+      // intentionally does not hold a transaction over that network request.
+      // Finish the newer rotation before releasing the stale one, rather than
+      // assuming one microtask orders two independent PostgreSQL connections.
+      const newer = await connectWithToken(actor.user, actor.tenantId, NEW_KEY, app);
       releaseOld();
-      await older;
-      const newer = await newerPending;
+      await expect(older).rejects.toThrow(/newer marketplace connect superseded/i);
       expect(newer.reused_existing_server).toBe(true);
       await runWithTenantDatabaseScope(db, actor.tenantId, async (scoped) => {
         const rows = await new MCPServerRepository(scoped).findAll({

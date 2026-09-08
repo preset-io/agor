@@ -53,6 +53,7 @@ function inputFor(seed: TenantSeed, suffix = 'v1'): DurableMCPOAuthClientRegistr
     tokenEndpoint: `${issuer}/token`,
     redirectUri: 'https://agor.example.test/mcp-servers/oauth-callback',
     clientName: 'Agor MCP Client',
+    applicationType: 'web',
     scope: 'mcp:read mcp:write',
     compatibilityMode: 'strict',
     dcrMode: 'advertised',
@@ -160,6 +161,23 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       expect(stored?.lease_expires_at).toBeNull();
       expect(JSON.stringify(stored)).not.toContain('fleet-client-id');
       expect(JSON.stringify(stored)).not.toContain('fleet-client-secret');
+    });
+
+    it('binds application type into the fingerprint and rotates mismatched material', async () => {
+      const input = inputFor(await seed('application-type'));
+      const nativeInput = { ...input, applicationType: 'native' as const };
+      expect(__fingerprintMCPOAuthClientRegistrationForTests(masterSecret, nativeInput)).not.toBe(
+        __fingerprintMCPOAuthClientRegistrationForTests(masterSecret, input)
+      );
+      const first = await authorityA.resolve(input, async () => ({ client_id: 'web-client' }));
+      const next = await authorityB.resolve(nativeInput, async () => ({
+        client_id: 'native-client',
+      }));
+      expect(next.registrationId).not.toBe(first.registrationId);
+      const reused = await authorityA.resolve(nativeInput, async () => {
+        throw new Error('must reuse the exact application binding');
+      });
+      expect(reused.registration.client_id).toBe('native-client');
     });
 
     it('does not invalidate a reusable fleet credential when caller authority is lost', async () => {

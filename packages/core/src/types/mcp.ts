@@ -249,6 +249,7 @@ export interface MCPOAuthClientRegistrationSealedMaterial {
   authorizationEndpoint: string;
   tokenEndpoint: string;
   redirectUri: string;
+  applicationType: 'native' | 'web';
   scope?: string;
   compatibilityMode: MCPOAuthRuntimeCompatibilityMode;
   dcrMode: MCPOAuthDCRMode;

@@ -15,6 +15,26 @@ Catalog's pre-connect readiness is advisory from catalog and saved-connection da
 
 For unsupported schemes, configure the server in **Settings → MCP Servers**. Custom headers still support alternatives such as Datadog API/application-key pairs; Catalog's Datadog entry uses Datadog's recommended browser OAuth flow instead of asking users to manage a long-lived PAT or SAT. That card targets Datadog's US1 MCP endpoint. Other Datadog sites need their regional endpoint configured manually, and an organisation may need to allow-list the Agor callback under **MCP OAuth Redirect URLs** before sign-in completes.
 
+### Recovering a provider-deleted OAuth client (administrators)
+
+If sign-in repeatedly fails at the provider with an unknown/deleted client, ordinary reconnect may keep selecting the same saved Dynamic Client Registration (DCR). Agor automatically retires that exact registration only when the provider's token endpoint returns a structured `invalid_client` or `unauthorized_client` error. A browser/authorization-page error alone does not authorize retirement.
+
+On **PostgreSQL deployments**, an authenticated administrator in the server's tenant can explicitly reset it through the daemon REST API:
+
+```http
+POST /mcp-servers/oauth-client-registration-reset
+Authorization: Bearer <Agor administrator access token>
+Content-Type: application/json
+
+{"mcp_server_id":"<saved MCP server UUID>"}
+```
+
+Use your existing authenticated API client and the saved server's `mcp_server_id` from **Settings → MCP Servers** or `GET /mcp-servers`; this is an **Agor** credential, not a provider token. Do not paste credentials into chat or logs. A successful response is `{"success":true}`. Missing authentication, non-admin callers, and servers in another tenant are refused.
+
+**Coordinate this reset with affected users:** it advances the server's configuration epoch and atomically retires the current DCR material, pending sign-in attempts, and **all users' Agor-stored OAuth grants for that server**. It does not delete the server or revoke tokens at the provider. Close old sign-in windows, reload any open settings form, then reconnect/sign in again to register a fresh client. Configured/static client IDs must instead be repaired in the server configuration; reset does not replace them. SQLite intentionally uses process-local DCR and rejects this durable reset endpoint.
+
+DCR requests identify standalone HTTP loopback callbacks as `native` and public HTTPS callbacks as `web`. That choice is part of the durable credential binding, so a registration created under an older or different binding is not reused. HA activation and upgrades still require the public callback origin and offline cutover described in [Daemon HA](/guide/daemon-ha).
+
 ### Capability metadata
 
 Remote tool, resource, and prompt descriptions are untrusted optional free text. Agor keeps every valid capability name and schema, but deterministically shortens descriptions that exceed the per-field or aggregate safe metadata budget. **Test Connection** (or **Save & Test Connection** for a saved/OAuth server) reports when this happened. Malformed names, schemas, or non-string descriptions still fail validation instead of being silently repaired. The same bounded tool descriptions are stored for display and applied by the mediated MCP egress path used in `compatibility` and `enforced` gateway modes.
