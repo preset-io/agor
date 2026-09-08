@@ -275,7 +275,10 @@ describe.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
               process.stdout.write(
                 `INVENTORY_PLAN s${sessionsPerBranch}-${name}-${queryCount === 1 ? 'all' : i === 0 ? 'count' : 'page'} branches=${branchCount} sessions=${branchCount * sessionsPerBranch} ${JSON.stringify(plan)}\n`
               );
-              expect(Math.max(...policyLoops(plan))).toBeLessThanOrEqual(bound);
+              const loops = policyLoops(plan);
+              // A changed plan/extractor must not silently turn this bound into -Infinity.
+              expect(loops.length).toBeGreaterThan(0);
+              expect(Math.max(...loops)).toBeLessThanOrEqual(bound);
             }
           }
         });
