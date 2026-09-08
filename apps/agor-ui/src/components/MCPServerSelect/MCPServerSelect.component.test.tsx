@@ -12,7 +12,7 @@ const disabledId = '01900000-0000-7000-8000-000000000002';
 const unavailableId = '01900000-0000-7000-8000-000000000003';
 const servers = [
   { mcp_server_id: enabledId, name: 'Enabled', transport: 'http', enabled: true },
-  { mcp_server_id: disabledId, name: 'Disabled', transport: 'http', enabled: false },
+  { mcp_server_id: disabledId, name: 'Paused integration', transport: 'http', enabled: false },
 ] as MCPServer[];
 
 function Picker(props: Partial<MCPServerSelectProps>) {
@@ -35,7 +35,7 @@ describe('MCPServerSelect native attachment controls', () => {
     const onChange = vi.fn();
     render(<Picker onChange={onChange} />);
     fireEvent.mouseDown(screen.getByRole('combobox'));
-    expect(screen.queryByText('Disabled (http)')).not.toBeInTheDocument();
+    expect(screen.queryByText('Disabled · Paused integration (http)')).not.toBeInTheDocument();
     fireEvent.click(screen.getByText('Enabled (http)'));
     expect(onChange).toHaveBeenLastCalledWith([enabledId]);
   });
@@ -52,7 +52,7 @@ describe('MCPServerSelect native attachment controls', () => {
       expect(onChange).toHaveBeenLastCalledWith([]);
       fireEvent.mouseDown(screen.getByRole('combobox'));
       expect(screen.getByText('Enabled (http)')).toBeInTheDocument();
-      expect(screen.queryByText('Disabled (http)')).not.toBeInTheDocument();
+      expect(screen.queryByText('Disabled · Paused integration (http)')).not.toBeInTheDocument();
       expect(screen.queryByText(/Unavailable MCP server/)).not.toBeInTheDocument();
     }
   );
@@ -108,14 +108,36 @@ describe('MCPServerSelect native attachment controls', () => {
     render(<Picker mcpServers={[]} value={[unavailableId]} />);
     expect(screen.getByText(/Unavailable MCP server/)).toBeInTheDocument();
     expect(screen.queryByText('Enabled (http)')).not.toBeInTheDocument();
-    expect(screen.queryByText('Disabled (http)')).not.toBeInTheDocument();
+    expect(screen.queryByText('Disabled · Paused integration (http)')).not.toBeInTheDocument();
   });
 
-  it('anchors to the field parent by default and preserves explicit popup ownership', () => {
+  it.each(['onOpenChange', 'onDropdownVisibleChange'] as const)(
+    'preserves the caller’s %s callback',
+    (callback) => {
+      const onOpen = vi.fn();
+      render(<Picker {...{ [callback]: onOpen }} />);
+      fireEvent.mouseDown(screen.getByRole('combobox'));
+      expect(onOpen).toHaveBeenCalledWith(true);
+    }
+  );
+
+  it('uses a viewport host by default and preserves explicit popup overrides', () => {
     const { container, unmount } = render(<Picker open />);
-    expect(container.querySelector('.ant-select-dropdown')).not.toBeNull();
-    unmount();
-    render(<Picker open getPopupContainer={() => document.body} />);
+    expect(container.querySelector('.ant-select-dropdown')).toBeNull();
     expect(document.body.querySelector(':scope > .ant-select-dropdown')).not.toBeNull();
+    unmount();
+    render(
+      <Picker
+        open
+        getPopupContainer={() => container}
+        placement="topRight"
+        popupAlign={{ offset: [0, 10] }}
+        listHeight={80}
+      />
+    );
+    expect(container.querySelector('.ant-select-dropdown')).not.toBeNull();
+    expect(container.querySelector<HTMLElement>('.ant-select-dropdown')?.style.position).not.toBe(
+      'fixed'
+    );
   });
 });

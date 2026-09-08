@@ -25,7 +25,7 @@ describe('buildMcpServerOptions', () => {
     const options = buildMcpServerOptions([disabled], [disabled.mcp_server_id]);
     expect(options).toEqual([
       expect.objectContaining({
-        label: expect.stringContaining('Friendly server'),
+        label: 'Disabled · Friendly server (http)',
         value: disabled.mcp_server_id,
         disabled: false,
       }),
