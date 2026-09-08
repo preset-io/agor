@@ -9,9 +9,11 @@ const PAGE_SIZE = 20;
 export function PagedSessions({
   sessions,
   children,
+  fillHeight = false,
 }: {
   sessions: Session[];
   children: (session: Session) => ReactNode;
+  fillHeight?: boolean;
 }) {
   const [requestedPage, setPage] = useState(1);
   // Archive/removal events can shrink the collection while a later page is open.
@@ -20,11 +22,21 @@ export function PagedSessions({
   // to a page that disappeared during the removal.
   if (page !== requestedPage) setPage(page);
   return (
-    <Flex vertical gap={4} className="nodrag nowheel">
+    <Flex
+      vertical
+      gap={4}
+      className="nodrag nowheel"
+      style={fillHeight ? { height: '100%', minHeight: 0, flex: 1 } : undefined}
+    >
       <Flex
         vertical
         gap={4}
-        style={{ maxHeight: BRANCH_SESSION_VIEWPORT_HEIGHT, overflowY: 'auto' }}
+        style={{
+          ...(fillHeight
+            ? { flex: 1, minHeight: 0 }
+            : { maxHeight: BRANCH_SESSION_VIEWPORT_HEIGHT }),
+          overflowY: 'auto',
+        }}
         key={page}
       >
         {sessions.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE).map(children)}
@@ -38,6 +50,7 @@ export function PagedSessions({
           showSizeChanger={false}
           onChange={setPage}
           size="small"
+          style={{ flexShrink: 0 }}
         />
       )}
     </Flex>
