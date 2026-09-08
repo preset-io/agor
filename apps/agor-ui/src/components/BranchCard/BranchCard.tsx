@@ -26,6 +26,7 @@ import { readCollapsedBranchNode } from '../../utils/collapsedBranchNodes';
 import {
   REACT_FLOW_DRAG_HANDLE_CLASS,
   REACT_FLOW_NO_DRAG_CLASS,
+  REACT_FLOW_NO_WHEEL_CLASS,
 } from '../../utils/reactFlowDragClasses';
 import { ensureColorVisible, isDarkTheme } from '../../utils/theme';
 import { ArchiveActionButton } from '../ArchiveButton';
@@ -37,7 +38,6 @@ import { IssuePill, PullRequestPill } from '../Pill';
 import { BranchSessionPeekSection } from './BranchSessionPeekSection';
 import { BranchSessionSections } from './BranchSessionSections';
 import { estimateBranchSessionSectionsHeight } from './branchCardLayout';
-import { useBranchCardWheelZoom } from './useBranchCardWheelZoom';
 
 const _BRANCH_CARD_MAX_WIDTH = 600;
 const PEEK_SESSIONS_STORAGE_KEY_PREFIX = 'agor:branch-card:peeked-session-ids:';
@@ -112,7 +112,31 @@ const BranchCardComponent = ({
   const connectionDisabled = useConnectionDisabled();
 
   const branchBoardId = (branch as { board_id?: string | null }).board_id;
-  const wheelZoomRef = useBranchCardWheelZoom(!inPopover && !panelMode);
+  const cardRef = React.useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const card = cardRef.current;
+    if (!card || inPopover || panelMode) return;
+
+    const onWheel = (event: WheelEvent) => {
+      // Trackpad pinch is Ctrl+wheel, often without a Control keydown.
+      if (!(event.ctrlKey || event.metaKey) || !(event.target instanceof Element)) return;
+      const scrollArea = event.target.closest(`.${REACT_FLOW_NO_WHEEL_CLASS}`);
+      const renderer = card.closest('.react-flow__renderer');
+      if (!scrollArea || !card.contains(scrollArea) || !renderer) return;
+
+      // nowheel excludes pinch as well as scrolling in React Flow 11. Capture
+      // before the virtual tree consumes it, then let React Flow own zoom,
+      // pointer anchoring and limits. Ordinary inner scrolling stays untouched.
+      event.preventDefault();
+      event.stopPropagation();
+      renderer.dispatchEvent(new WheelEvent(event.type, event));
+    };
+
+    // React's delegated wheel listeners are passive; cancellation must be native.
+    card.addEventListener('wheel', onWheel, { capture: true, passive: false });
+    return () => card.removeEventListener('wheel', onWheel, { capture: true });
+  }, [inPopover, panelMode]);
 
   // Canvas cards hydrate their session sections in chunks after the board
   // shell commits (#1768); panel/popover surfaces render a single card, so
@@ -316,7 +340,7 @@ const BranchCardComponent = ({
 
   return (
     <Card
-      ref={wheelZoomRef}
+      ref={cardRef}
       style={{
         width: panelMode ? '100%' : peekedSessions.length > 0 ? 880 : 500,
         cursor: 'default', // Override React Flow's drag cursor - only drag handles should show grab cursor

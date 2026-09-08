@@ -19,7 +19,9 @@ const branch = {
 const repo = { repo_id: 'repo-1', slug: 'preset-io/agor' } as Repo;
 const onSessionClick = vi.fn();
 
-function CardNode({ data }: NodeProps<{ sessions: Session[] }>) {
+function CardNode({
+  data,
+}: NodeProps<{ sessions: Session[]; panelMode?: boolean; inPopover?: boolean }>) {
   return (
     <BranchCard
       branch={branch}
@@ -28,6 +30,8 @@ function CardNode({ data }: NodeProps<{ sessions: Session[] }>) {
       userById={new Map()}
       client={null}
       onSessionClick={onSessionClick}
+      panelMode={data.panelMode}
+      inPopover={data.inPopover}
     />
   );
 }
@@ -309,6 +313,12 @@ it('leaves outside-canvas wheel and browser keyboard zoom shortcuts uncanceled',
   const { flow } = await mount(2);
   const outside = screen.getByRole('button', { name: 'Outside canvas' });
   const before = flow.getViewport();
+  for (const modifiers of [{}, { shiftKey: true }, { altKey: true }]) {
+    expect(
+      wheel(screen.getByRole('button', { name: 'Open session Conversation 0' }), modifiers)
+        .defaultPrevented
+    ).toBe(false);
+  }
   for (const modifiers of [{ ctrlKey: true }, { metaKey: true }]) {
     expect(wheel(outside, modifiers).defaultPrevented).toBe(false);
     for (const key of ['+', '-', '0']) {
@@ -325,4 +335,56 @@ it('leaves outside-canvas wheel and browser keyboard zoom shortcuts uncanceled',
     }
   }
   expect(flow.getViewport()).toEqual(before);
+});
+
+it('opts panel/popover cards out, cleans up mode changes, and leaves standalone cards alone', async () => {
+  const { flow, rerender, unmount } = await mount(2);
+  const sessions: Session[] = flow.getNodes()[0].data.sessions;
+  for (const mode of [
+    { panelMode: true, inPopover: false },
+    { panelMode: false, inPopover: true },
+    { panelMode: false, inPopover: false },
+  ]) {
+    act(() =>
+      flow.setNodes((nodes) => nodes.map((node) => ({ ...node, data: { ...node.data, ...mode } })))
+    );
+    await settle();
+    const row = screen.getByRole('button', { name: 'Open session Conversation 0' });
+    expect(wheel(row, { ctrlKey: true }).defaultPrevented).toBe(!mode.panelMode && !mode.inPopover);
+  }
+  rerender(
+    <App>
+      <BranchCard
+        branch={branch}
+        repo={repo}
+        sessions={sessions}
+        userById={new Map()}
+        client={null}
+      />
+    </App>
+  );
+  const row = await screen.findByRole('button', { name: 'Open session Conversation 0' });
+  expect(wheel(row, { ctrlKey: true }).defaultPrevented).toBe(false);
+  unmount();
+  expect(wheel(row, { ctrlKey: true }).defaultPrevented).toBe(false);
+});
+
+it('retains pointer anchoring and line-mode deltas when forwarding pinch', async () => {
+  const { flow } = await mount(2);
+  const row = screen.getByRole('button', { name: 'Open session Conversation 0' });
+  const rect = row.getBoundingClientRect();
+  // Chromium's constructed WheelEvent uses integer client coordinates.
+  const pointer = {
+    x: Math.trunc(rect.x + rect.width / 2),
+    y: Math.trunc(rect.y + rect.height / 2),
+  };
+  const before = flow.screenToFlowPosition(pointer);
+  const zoom = flow.getZoom();
+  expect(
+    wheel(row, { ctrlKey: true, deltaMode: WheelEvent.DOM_DELTA_LINE, deltaY: -1 }).defaultPrevented
+  ).toBe(true);
+  expect(flow.getZoom()).toBeCloseTo(zoom * 2 ** 0.05);
+  const after = flow.screenToFlowPosition(pointer);
+  expect(after.x).toBeCloseTo(before.x);
+  expect(after.y).toBeCloseTo(before.y);
 });
