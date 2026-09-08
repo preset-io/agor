@@ -4,7 +4,14 @@
  * Tests for type-safe CRUD operations on tasks with short ID support.
  */
 
-import type { MessageID, Task, TaskPendingDispatchStatus, UserID, UUID } from '@agor/core/types';
+import type {
+  MCPServerID,
+  MessageID,
+  Task,
+  TaskPendingDispatchStatus,
+  UserID,
+  UUID,
+} from '@agor/core/types';
 import { MessageRole, SessionStatus, TaskStatus } from '@agor/core/types';
 import { describe, expect, vi } from 'vitest';
 import { generateId, toShortId } from '../../lib/ids';
@@ -3846,5 +3853,131 @@ describe('TaskRepository sentinel invariants', () => {
         expect(task.git_state.sha_at_start).not.toBe('');
       }
     }
+  });
+});
+
+describe('TaskRepository MCP Slack recovery notice CAS', () => {
+  dbTest('allows only one exact single-use claim and rejects stale identities', async ({ db }) => {
+    const tasks = new TaskRepository(db);
+    const sessionId = await createSessionWithDeps(db);
+    const task = await tasks.create(
+      createTaskData({
+        session_id: sessionId,
+        metadata: {
+          mcp_slack_recovery_notice: {
+            notice_id: 'notice-1',
+            token_jti: 'jti-1',
+            issued_at: '2026-08-26T12:00:00.000Z',
+            expires_at: '2026-08-26T12:10:00.000Z',
+            principal_user_id: 'test-user' as UUID,
+            credential_user_id: 'test-user' as UUID,
+            slack_user_id: 'U1',
+            slack_team_id: 'T1',
+            gateway_channel_id: 'gateway-1',
+            gateway_config_generation: 1,
+            slack_channel_id: 'C1',
+            slack_thread_id: 'C1-1.1',
+            session_id: sessionId,
+            task_id: 'placeholder',
+            mcp_server_id: generateId() as MCPServerID,
+            mcp_server_config_version: 1,
+            recovery_generation: 3,
+            recovery_request_id: 'request-1',
+            provider_dispatch: 'not_started',
+            delivery_id: 'delivery-1',
+            next_repair_at: '2026-08-26T12:00:00.000Z',
+          },
+        },
+      })
+    );
+    // Align the durable task binding after creation, just as the gateway's
+    // row-locked notice projection does.
+    await tasks.mutateMCPSlackRecoveryNotice(task.task_id, (current) =>
+      current ? { ...current, task_id: task.task_id } : null
+    );
+
+    const consume = (jti: string, requestId: string) =>
+      tasks.mutateMCPSlackRecoveryNotice(task.task_id, (current) =>
+        current?.token_jti === jti &&
+        current.recovery_request_id === requestId &&
+        !current.token_consumed_at
+          ? { ...current, token_consumed_at: '2026-08-26T12:01:00.000Z' }
+          : null
+      );
+
+    const [first, duplicate] = await Promise.all([
+      consume('jti-1', 'request-1'),
+      consume('jti-1', 'request-1'),
+    ]);
+    expect([first.changed, duplicate.changed].sort()).toEqual([false, true]);
+    expect((await consume('jti-stale', 'request-1')).changed).toBe(false);
+    expect((await consume('jti-1', 'request-stale')).changed).toBe(false);
+    expect(
+      (await tasks.findById(task.task_id))?.metadata?.mcp_slack_recovery_notice?.token_consumed_at
+    ).toBe('2026-08-26T12:01:00.000Z');
+
+    await tasks.update(task.task_id, { status: TaskStatus.COMPLETED });
+    const repair = await tasks.findMcpSlackRecoveryNoticePage({
+      limit: 1,
+      now: new Date('2026-08-26T12:02:00.000Z'),
+      horizon: new Date('2026-08-25T12:02:00.000Z'),
+    });
+    expect(repair.tasks.map((candidate) => candidate.task_id)).toContain(task.task_id);
+
+    await tasks.mutateMCPSlackRecoveryNotice(task.task_id, (current) =>
+      current ? { ...current, next_repair_at: undefined } : null
+    );
+    expect(
+      (
+        await tasks.findMcpSlackRecoveryNoticePage({
+          limit: 1,
+          now: new Date('2026-08-26T12:02:00.000Z'),
+          horizon: new Date('2026-08-25T12:02:00.000Z'),
+        })
+      ).tasks
+    ).toEqual([]);
+
+    const firstDue = await tasks.mutateMCPSlackRecoveryNotice(task.task_id, (current) =>
+      current ? { ...current, next_repair_at: '2026-08-26T12:00:00.000Z' } : null
+    );
+    const template = firstDue.task.metadata?.mcp_slack_recovery_notice;
+    expect(template).toBeDefined();
+    const secondSessionId = await createSessionWithDeps(db);
+    const second = await tasks.create(
+      createTaskData({
+        session_id: secondSessionId,
+        metadata: {
+          mcp_slack_recovery_notice: {
+            ...template!,
+            notice_id: 'notice-2',
+            token_jti: 'jti-2',
+            task_id: 'placeholder-2',
+            session_id: secondSessionId,
+            next_repair_at: '2026-08-26T12:00:01.000Z',
+          },
+        },
+      })
+    );
+    expect(
+      (
+        await tasks.findMcpSlackRecoveryNoticePage({
+          limit: 1,
+          now: new Date('2026-08-26T12:02:00.000Z'),
+          horizon: new Date('2026-08-25T12:02:00.000Z'),
+        })
+      ).tasks
+    ).toHaveLength(1);
+    await tasks.mutateMCPSlackRecoveryNotice(task.task_id, (current) =>
+      current ? { ...current, next_repair_at: '2026-08-20T12:00:00.000Z' } : null
+    );
+    const recentOnly = await tasks.findMcpSlackRecoveryNoticePage({
+      limit: 10,
+      now: new Date('2026-08-26T12:02:00.000Z'),
+      horizon: new Date('2026-08-25T12:02:00.000Z'),
+    });
+    expect(recentOnly.tasks.map((candidate) => candidate.task_id)).toEqual([second.task_id]);
+    await expect(tasks.findMcpSlackRecoveryNoticePage({ limit: 101 })).rejects.toThrow(
+      /between 1 and 100/
+    );
   });
 });

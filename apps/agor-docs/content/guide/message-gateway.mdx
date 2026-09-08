@@ -594,6 +594,41 @@ Implement this interface, register it in the connector registry, and the gateway
 
 The `blocks` field is opaque platform-specific data. Currently only the Slack connector uses it (to emit Block Kit `table` blocks for markdown tables). Other connectors can ignore it and rely on `text`.
 
+### Recovering MCP sign-in from Slack
+
+When a Slack-originated Task reaches an actionable MCP OAuth recovery, Agor posts a
+**Reconnect MCP** action in the originating thread and updates that message as recovery
+progresses. The link opens an authenticated Agor page, starts the normal MCP OAuth flow, and
+reconnects MCP capabilities to the same Task without replacing its conversation history. The
+Slack post is visible to everyone who can read the thread, but the action works only for the
+bound Agor user. Slack requires an `action_id` on URL buttons; Agor does not accept that value as
+an interactive authentication callback.
+
+The action is short-lived, single-use, and bound to the Agor user, Slack identity, tenant,
+Task, Session, MCP server configuration, and original channel/thread. A changed role, detached
+server, replaced configuration, completed Task, newer recovery request, or different signed-in
+user invalidates it. The page never asks for a Slack bot, app, or broad user token: Slack gateway
+credentials and MCP OAuth grants are separate.
+
+Agor does not automatically replay the interrupted MCP invocation. After recovery, the thread
+states whether you may explicitly request a retry or whether the provider might already have
+observed the call and you should instead tell the assistant what to do next. If the active agent
+cannot accept live MCP reprojection, the thread truthfully asks for a new turn while retaining the
+existing conversation.
+
+Slack delivery is deliberately at least once. Agor attaches secret-free Slack message metadata
+and performs one bounded thread-history reconciliation after an ambiguous/crashed send when the
+workspace permits that read. Slack does not deduplicate posts by `client_msg_id`, so Agor makes no
+such claim. A provider outage or a crash at the send/commit boundary can briefly leave a duplicate;
+every copy carries the same expiring, single-use, user-bound action, and later recovery generations
+supersede it safely. Terminal thread updates have their own bounded retry window and do not depend
+on whether the browser action is still valid.
+
+Process-local timers are only a best-effort latency optimization. An indexed, tenant-scoped repair
+query runs at listener startup and in a periodic sweep. Each pass has a hard task and tenant budget
+and a 24-hour due-work horizon; it never scans a tenant's historical Tasks or calls Slack inside an
+authoritative mutation transaction.
+
 ## Best Practices
 
 - **Use trust or auto mode for unattended agents.** If you want the agent to operate without human approval on each tool call, set the permission mode accordingly.

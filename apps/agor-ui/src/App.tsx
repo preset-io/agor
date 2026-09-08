@@ -87,6 +87,7 @@ import {
   ARTIFACT_FULLSCREEN_ROUTE_PATHS,
   KNOWLEDGE_ROUTE_PATHS,
   MARKETPLACE_ROUTE_PATHS,
+  MCP_RECOVERY_ROUTE_PATHS,
   RBAC_POLICY_PROTOTYPE_ROUTE_PATH,
   routeUsesDeviceRouter,
 } from './surfaces/surfaceRegistry';
@@ -214,6 +215,11 @@ const loadArtifactFullscreenPage = cacheRouteLoader(
   () => import('./pages/ArtifactFullscreenPage'),
   (module) => ({ default: module.ArtifactFullscreenPage })
 );
+const loadMcpRecoveryPage = cacheRouteLoader(
+  'mcp-recovery',
+  () => import('./pages/MCPSlackRecoveryPage'),
+  (module) => ({ default: module.MCPSlackRecoveryPage })
+);
 const loadMobileApp = cacheRouteLoader(
   'mobile',
   () => import('./components/mobile/MobileApp'),
@@ -246,6 +252,7 @@ const AgorApp = lazy(loadAgorApp);
 const KnowledgePage = lazy(loadKnowledgePage);
 const MarketplacePage = lazy(loadMarketplacePage);
 const ArtifactFullscreenPage = lazy(loadArtifactFullscreenPage);
+const MCPSlackRecoveryPage = lazy(loadMcpRecoveryPage);
 const MobileApp = lazy(loadMobileApp);
 const StreamdownDemoPage = lazy(loadStreamdownDemoPage);
 
@@ -254,6 +261,7 @@ const routeModuleLoaders = {
   knowledge: loadKnowledgePage,
   marketplace: loadMarketplacePage,
   'artifact-fullscreen': loadArtifactFullscreenPage,
+  'mcp-recovery': loadMcpRecoveryPage,
   demo: loadStreamdownDemoPage,
   mobile: loadMobileApp,
 } satisfies Record<RouteModuleKey, () => Promise<unknown>>;
@@ -2144,6 +2152,8 @@ function AppContent() {
     />
   );
 
+  const mcpRecoveryElement = <MCPSlackRecoveryPage client={client} />;
+
   // All desktop entity URLs (/b/, /s/, /w/, /a/) render the same
   // AgorApp — the multiple routes exist so react-router's useParams
   // (read inside useUrlState) populates the right named params for
@@ -2380,6 +2390,10 @@ function AppContent() {
                 the tenant's board/session store. */}
           {MARKETPLACE_ROUTE_PATHS.map((path) => (
             <Route key={path} path={path} element={marketplacePageElement} />
+          ))}
+
+          {MCP_RECOVERY_ROUTE_PATHS.map((path) => (
+            <Route key={path} path={path} element={mcpRecoveryElement} />
           ))}
 
           {/* Lightweight artifact fullscreen surface. Uses the shared auth shell,

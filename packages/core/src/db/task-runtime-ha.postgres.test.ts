@@ -576,4 +576,75 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('Task runtime HA (PostgreSQ
       ).rejects.toThrow();
     });
   });
+
+  it('keeps Slack recovery single-use CAS tenant-scoped under forced RLS', async () => {
+    const a = await seedTenant(db, 'slack-recovery-a');
+    const b = await seedTenant(db, 'slack-recovery-b');
+    const task = await runWithTenantDatabaseScope(db, a.tenantId, (scoped) =>
+      new TaskRepository(scoped).create(taskInput(a, TaskStatus.RUNNING))
+    );
+    await runWithTenantDatabaseScope(db, a.tenantId, async (scoped) => {
+      await new TaskRepository(scoped).mutateMCPSlackRecoveryNotice(task.task_id, () => ({
+        notice_id: 'notice-rls',
+        token_jti: 'jti-rls',
+        issued_at: '2026-08-26T12:00:00.000Z',
+        expires_at: '2026-08-26T12:10:00.000Z',
+        principal_user_id: a.userId,
+        credential_user_id: a.userId,
+        slack_user_id: 'U1',
+        slack_team_id: 'T1',
+        gateway_channel_id: 'gateway-1',
+        gateway_config_generation: 1,
+        slack_channel_id: 'C1',
+        slack_thread_id: 'C1-1.1',
+        session_id: a.sessionId,
+        task_id: task.task_id,
+        mcp_server_id: generateId() as never,
+        mcp_server_config_version: 1,
+        recovery_generation: 1,
+        recovery_request_id: 'request-rls',
+        provider_dispatch: 'not_started',
+        delivery_id: 'delivery-rls',
+        next_repair_at: '2026-08-26T12:00:00.000Z',
+      }));
+    });
+    const consume = (database: Database) =>
+      runWithTenantDatabaseScope(database, a.tenantId, (scoped) =>
+        new TaskRepository(scoped).mutateMCPSlackRecoveryNotice(task.task_id, (current) =>
+          current?.token_jti === 'jti-rls' && !current.token_consumed_at
+            ? { ...current, token_consumed_at: '2026-08-26T12:01:00.000Z' }
+            : null
+        )
+      );
+    const results = await Promise.all([consume(db), consume(peerDb)]);
+    expect(results.map((result) => result.changed).sort()).toEqual([false, true]);
+    await runWithTenantDatabaseScope(db, a.tenantId, async (scoped) => {
+      const tasks = new TaskRepository(scoped);
+      expect(
+        (
+          await tasks.findMcpSlackRecoveryNoticePage({
+            now: new Date('2026-08-26T12:02:00.000Z'),
+            horizon: new Date('2026-08-25T12:02:00.000Z'),
+            limit: 10,
+          })
+        ).tasks.map((candidate) => candidate.task_id)
+      ).toContain(task.task_id);
+    });
+    await runWithTenantDatabaseScope(db, b.tenantId, async (scoped) => {
+      const tasks = new TaskRepository(scoped);
+      expect(await tasks.findById(task.task_id)).toBeNull();
+      expect(
+        (
+          await tasks.findMcpSlackRecoveryNoticePage({
+            now: new Date('2026-08-26T12:02:00.000Z'),
+            horizon: new Date('2026-08-25T12:02:00.000Z'),
+            limit: 10,
+          })
+        ).tasks
+      ).toEqual([]);
+      await expect(
+        tasks.mutateMCPSlackRecoveryNotice(task.task_id, (current) => current ?? null)
+      ).rejects.toThrow();
+    });
+  });
 });

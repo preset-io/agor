@@ -183,7 +183,10 @@ import {
   redactMCPServerSecrets,
   shouldExposeMCPServerSecrets,
 } from './utils/mcp-header-secrets.js';
-import { redactMcpRecoveryTopology } from './utils/mcp-recovery-redaction.js';
+import {
+  redactMcpRecoveryTopology,
+  stripMcpSlackRecoveryNotice,
+} from './utils/mcp-recovery-redaction.js';
 import {
   didMcpPrincipalRoleChange,
   isMcpRuntimeRecoveryEnabled,
@@ -945,13 +948,13 @@ export function createRedactTaskMcpRecoveryAfter(
   sessionsRepository: Pick<SessionRepository, 'findById'>
 ): (context: HookContext) => Promise<HookContext> {
   return async (context: HookContext): Promise<HookContext> => {
-    if (!context.params.provider || hasMinimumRole(context.params.user?.role, ROLES.ADMIN)) {
-      return context;
-    }
+    if (!context.params.provider) return context;
+    const isAdmin = hasMinimumRole(context.params.user?.role, ROLES.ADMIN);
     const viewerId = context.params.user?.user_id;
     const sessions = new Map<string, Session | null>();
     const redact = async (task: Task): Promise<Task> => {
-      if (!task.metadata?.mcp_recovery) return task;
+      const stripped = stripMcpSlackRecoveryNotice(task);
+      if (isAdmin || !stripped.metadata?.mcp_recovery) return stripped;
       if (!sessions.has(task.session_id)) {
         sessions.set(
           task.session_id,
@@ -959,8 +962,8 @@ export function createRedactTaskMcpRecoveryAfter(
         );
       }
       return sessions.get(task.session_id)?.created_by === viewerId
-        ? task
-        : redactMcpRecoveryTopology(task);
+        ? stripped
+        : redactMcpRecoveryTopology(stripped);
     };
     let dispatch = context.result;
     if (Array.isArray(context.result)) {

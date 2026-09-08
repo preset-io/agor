@@ -12,6 +12,7 @@ import type {
   ExecutorTerminationCompleteInput,
   MCPRuntimeRecovery,
   MCPServerID,
+  MCPSlackRecoveryNotice,
   SdkFailure,
   SessionID,
   Task,
@@ -37,6 +38,7 @@ import {
   desc,
   eq,
   gt,
+  gte,
   inArray,
   isNotNull,
   isNull,
@@ -541,6 +543,9 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
       status: task.status ?? TaskStatus.CREATED,
       queue_position: task.queue_position ?? null,
       created_by: task.created_by,
+      mcp_slack_recovery_due_at: task.metadata?.mcp_slack_recovery_notice?.next_repair_at
+        ? new Date(task.metadata.mcp_slack_recovery_notice.next_repair_at)
+        : undefined,
       data: {
         full_prompt: task.full_prompt ?? '',
         message_range: task.message_range ?? {
@@ -915,6 +920,41 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
       if (error instanceof RepositoryError) throw error;
       throw new RepositoryError(
         `Failed to page active MCP Tasks: ${error instanceof Error ? error.message : String(error)}`,
+        error
+      );
+    }
+  }
+
+  /** One hard-bounded due-work batch backed by a tenant-aware partial index. */
+  async findMcpSlackRecoveryNoticePage(
+    options: { now?: Date; horizon?: Date; limit?: number } = {}
+  ): Promise<{ tasks: Task[] }> {
+    const limit = options.limit ?? 100;
+    if (!Number.isInteger(limit) || limit < 1 || limit > 100) {
+      throw new RepositoryError('MCP Slack recovery repair limit must be between 1 and 100');
+    }
+    try {
+      const now = options.now ?? new Date();
+      const horizon = options.horizon ?? new Date(now.getTime() - 24 * 60 * 60_000);
+      const rows = await select(this.db)
+        .from(tasks)
+        .where(
+          and(
+            isNotNull(tasks.mcp_slack_recovery_due_at),
+            lte(tasks.mcp_slack_recovery_due_at, now),
+            gte(tasks.mcp_slack_recovery_due_at, horizon)
+          )
+        )
+        .orderBy(asc(tasks.mcp_slack_recovery_due_at), asc(tasks.task_id))
+        .limit(limit)
+        .all();
+      return {
+        tasks: rows.map((row: TaskRow) => this.rowToTask(row)),
+      };
+    } catch (error) {
+      if (error instanceof RepositoryError) throw error;
+      throw new RepositoryError(
+        `Failed to page MCP Slack recovery notices: ${error instanceof Error ? error.message : String(error)}`,
         error
       );
     }
@@ -1921,6 +1961,48 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
             .returning()
             .one();
           return this.rowToTask(updated);
+        },
+        { sqliteImmediate: true }
+      )
+    );
+  }
+
+  /**
+   * Serialize internal Slack notice delivery against the same Task row that
+   * owns authoritative MCP recovery. Callers must perform provider I/O only
+   * after this short transaction returns.
+   */
+  async mutateMCPSlackRecoveryNotice(
+    id: string,
+    build: (
+      current: MCPSlackRecoveryNotice | undefined,
+      task: Task,
+      txDb: Database
+    ) => MCPSlackRecoveryNotice | null | Promise<MCPSlackRecoveryNotice | null>
+  ): Promise<{ task: Task; changed: boolean }> {
+    return this.runTaskMutation(() =>
+      runDatabaseTransaction(
+        this.db,
+        async (txDb) => {
+          const fullId = await this.resolveId(id);
+          await lockRowForUpdate(txDb, this.db, tasks, eq(tasks.task_id, fullId));
+          const row = await select(txDb).from(tasks).where(eq(tasks.task_id, fullId)).one();
+          if (!row) throw new EntityNotFoundError('Task', id);
+          const task = this.rowToTask(row);
+          const next = await build(task.metadata?.mcp_slack_recovery_notice, task, txDb);
+          if (!next) return { task, changed: false };
+          const updated = await update(txDb, tasks)
+            .set({
+              mcp_slack_recovery_due_at: next.next_repair_at ? new Date(next.next_repair_at) : null,
+              data: {
+                ...row.data,
+                metadata: { ...task.metadata, mcp_slack_recovery_notice: next },
+              },
+            })
+            .where(eq(tasks.task_id, fullId))
+            .returning()
+            .one();
+          return { task: this.rowToTask(updated), changed: true };
         },
         { sqliteImmediate: true }
       )

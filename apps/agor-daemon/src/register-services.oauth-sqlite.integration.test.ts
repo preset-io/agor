@@ -1,12 +1,21 @@
 import http, { type Server as HttpServer } from 'node:http';
 import {
+  BranchRepository,
   createDatabaseAsync,
   eq,
+  GatewayChannelRepository,
+  generateId,
   MCPServerRepository,
   mcpServers,
+  RepoRepository,
   runMigrations,
+  SessionMCPServerRepository,
+  SessionRepository,
+  setMCPEgressGatewayMode,
   shortId,
+  TaskRepository,
   type TenantScopeAwareDatabase,
+  ThreadSessionMapRepository,
   UserMCPOAuthTokenRepository,
   UsersRepository,
   update,
@@ -30,6 +39,7 @@ import type {
   User,
   UserID,
 } from '@agor/core/types';
+import { TaskStatus } from '@agor/core/types';
 import type { OutboundDnsLookup } from '@agor/core/utils/safe-outbound-fetch';
 import { type Socket as ClientSocket, io as createSocketClient } from 'socket.io-client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -42,6 +52,7 @@ import {
 import { createRegisteredMCPCatalogConnectService } from './register-routes.js';
 import { type RegisterServicesContext, registerMCPServices } from './register-services.js';
 import { createSocketIOConfig } from './setup/socketio.js';
+import { issueMCPSlackRecoveryToken } from './utils/mcp-slack-recovery-token.js';
 import {
   AGOR_SOCKET_AUTHORITY_ID_PROPERTY,
   installSocketAuthorityId,
@@ -380,6 +391,12 @@ type SQLiteHarness = {
   user: User;
   server: MCPServer;
   emittedBrowserEvents: Array<Record<string, unknown>>;
+  gatewayOAuthResults: Array<{
+    taskId: string;
+    noticeId: string;
+    attemptId: string;
+    success: boolean;
+  }>;
   nextAuthorizationUrl: () => Promise<string>;
   callback: (state: string) => Promise<{ status: number; body: string }>;
   deny: (state: string) => Promise<{ status: number; body: string }>;
@@ -459,6 +476,17 @@ async function createHarness(
   };
   const app = feathers() as Application & { io: typeof io };
   app.io = io;
+  const gatewayOAuthResults: SQLiteHarness['gatewayOAuthResults'] = [];
+  app.use(
+    '/gateway',
+    {
+      async syncMcpSlackRecoveryNoticeAfterCommit() {},
+      async markMcpSlackOAuthResult(input: SQLiteHarness['gatewayOAuthResults'][number]) {
+        gatewayOAuthResults.push(input);
+      },
+    },
+    { methods: ['syncMcpSlackRecoveryNoticeAfterCommit', 'markMcpSlackOAuthResult'] }
+  );
   const { oauthCallbackHandler } = await registerMCPServices({
     db,
     app,
@@ -528,6 +556,7 @@ async function createHarness(
     user,
     server,
     emittedBrowserEvents,
+    gatewayOAuthResults,
     nextAuthorizationUrl: async () => {
       const value = await nextUrl.promise;
       nextUrl = deferred<string>();
@@ -647,6 +676,156 @@ async function authorizeSavedServer(harness: SQLiteHarness): Promise<void> {
   const state = new URL(started.authorizationUrl).searchParams.get('state');
   expect(state).toBeTruthy();
   expect((await harness.callback(state!)).status).toBe(200);
+}
+
+async function seedSlackRecoveryAction(harness: SQLiteHarness): Promise<{
+  token: string;
+  taskId: string;
+  sessionId: string;
+}> {
+  const repo = await new RepoRepository(harness.rawDb).create({
+    repo_id: generateId(),
+    slug: `slack-recovery-${generateId()}`,
+    name: 'Slack recovery integration',
+    repo_type: 'remote',
+    remote_url: 'https://example.invalid/slack-recovery.git',
+    local_path: `/tmp/slack-recovery-${generateId()}`,
+    default_branch: 'main',
+  });
+  const branch = await new BranchRepository(harness.rawDb).create({
+    branch_id: generateId(),
+    repo_id: repo.repo_id,
+    name: `slack-recovery-${generateId()}`,
+    ref: 'main',
+    branch_unique_id: 100_000 + Math.floor(Math.random() * 1_000_000_000),
+    path: `/tmp/slack-recovery-${generateId()}/branch`,
+    created_by: harness.user.user_id,
+  });
+  const session = await new SessionRepository(harness.rawDb).create({
+    session_id: generateId(),
+    branch_id: branch.branch_id,
+    agentic_tool: 'claude-code',
+    created_by: harness.user.user_id,
+    sdk_session_id: 'sdk-session-preserved',
+  });
+  await new SessionMCPServerRepository(harness.rawDb).addServer(
+    session.session_id,
+    harness.server.mcp_server_id
+  );
+  const channel = await new GatewayChannelRepository(harness.rawDb).create({
+    name: 'Slack recovery',
+    channel_type: 'slack',
+    enabled: true,
+    created_by: harness.user.user_id,
+    agor_user_id: harness.user.user_id,
+    target_branch_id: branch.branch_id,
+    config: { bot_token: 'xoxb-test-only', app_token: 'xapp-test-only' },
+  });
+  const threadId = 'C2515-1756200000.000001';
+  await new ThreadSessionMapRepository(harness.rawDb).create({
+    channel_id: channel.id,
+    thread_id: threadId,
+    session_id: session.session_id,
+    branch_id: branch.branch_id,
+  });
+  await setMCPEgressGatewayMode(harness.rawDb, 'compatibility', harness.user.user_id);
+
+  const issued = new Date(Math.floor(Date.now() / 1_000) * 1_000);
+  const expires = new Date(issued.getTime() + 10 * 60_000);
+  const taskId = generateId();
+  const noticeId = generateId();
+  const jti = generateId();
+  const requestId = generateId();
+  const generation = 7;
+  const task = await new TaskRepository(harness.rawDb).create({
+    task_id: taskId,
+    session_id: session.session_id,
+    created_by: harness.user.user_id,
+    full_prompt: 'recover MCP in this same Slack Task',
+    status: TaskStatus.RUNNING,
+    message_range: {
+      start_index: 0,
+      end_index: 0,
+      start_timestamp: issued.toISOString(),
+    },
+    git_state: { ref_at_start: 'main', sha_at_start: 'slack-recovery' },
+    tool_use_count: 0,
+    metadata: {
+      gateway_task_source: {
+        gateway_channel_id: channel.id,
+        channel_type: 'slack',
+        thread_id: threadId,
+        provider_user_id: 'U2515',
+        slack_team_id: 'T2515',
+        slack_channel_id: 'C2515',
+      },
+      mcp_recovery_generation: generation,
+      mcp_recovery: {
+        generation,
+        code: 'oauth_reauth_required',
+        status: 'action_required',
+        task_id: taskId,
+        session_id: session.session_id,
+        mcp_server_id: harness.server.mcp_server_id,
+        provider: { mode: 'in_place', transport_reload: true, retries_unstarted_call: false },
+        action: 'reauthenticate',
+        message: 'MCP sign-in required',
+        observed_at: issued.toISOString(),
+        request_id: requestId,
+        provider_dispatch: 'not_started',
+      },
+      mcp_slack_recovery_notice: {
+        notice_id: noticeId,
+        token_jti: jti,
+        issued_at: issued.toISOString(),
+        expires_at: expires.toISOString(),
+        principal_user_id: harness.user.user_id,
+        credential_user_id: harness.user.user_id,
+        slack_user_id: 'U2515',
+        slack_team_id: 'T2515',
+        gateway_channel_id: channel.id,
+        gateway_config_generation: channel.provider_config_generation,
+        slack_channel_id: 'C2515',
+        slack_thread_id: threadId,
+        session_id: session.session_id,
+        task_id: taskId,
+        mcp_server_id: harness.server.mcp_server_id,
+        mcp_server_config_version: harness.server.config_version ?? 1,
+        recovery_generation: generation,
+        recovery_request_id: requestId,
+        provider_dispatch: 'not_started',
+        delivery_id: generateId(),
+        next_repair_at: issued.toISOString(),
+      },
+    },
+  });
+  expect(task.task_id).toBe(taskId);
+  const token = issueMCPSlackRecoveryToken(
+    {
+      type: 'mcp-slack-recovery',
+      tid: 'default',
+      sub: harness.user.user_id,
+      credential_user_id: harness.user.user_id,
+      slack_user_id: 'U2515',
+      slack_team_id: 'T2515',
+      gateway_channel_id: channel.id,
+      gateway_config_generation: channel.provider_config_generation,
+      slack_channel_id: 'C2515',
+      slack_thread_id: threadId,
+      task_id: taskId,
+      session_id: session.session_id,
+      mcp_server_id: harness.server.mcp_server_id,
+      mcp_server_config_version: harness.server.config_version ?? 1,
+      recovery_generation: generation,
+      recovery_request_id: requestId,
+      notice_id: noticeId,
+      jti,
+      expiresAt: expires,
+    },
+    process.env.AGOR_MASTER_SECRET!,
+    issued
+  );
+  return { token, taskId, sessionId: session.session_id };
 }
 
 async function replaceWithNewAuthorization(harness: SQLiteHarness): Promise<number> {
@@ -919,6 +1098,111 @@ afterEach(async () => {
   else process.env.AGOR_BASE_URL = previousBaseUrl;
   if (previousMasterSecret === undefined) delete process.env.AGOR_MASTER_SECRET;
   else process.env.AGOR_MASTER_SECRET = previousMasterSecret;
+});
+
+describe('Slack MCP recovery authenticated route', () => {
+  it('preflights, consumes once, and propagates the exact reserved OAuth attempt', async () => {
+    const provider = await createTestProvider();
+    providers.push(provider);
+    const harness = await createHarness(provider);
+    databases.push(harness.rawDb);
+    const seeded = await seedSlackRecoveryAction(harness);
+    const params = paramsFor(harness);
+
+    const preflight = (await harness.app
+      .service('mcp-slack-recovery')
+      .create({ token: seeded.token }, params)) as { state: string; return_to_slack_url: string };
+    expect(preflight).toMatchObject({ state: 'reconnect_required' });
+    expect(preflight.return_to_slack_url).toContain('team=T2515');
+
+    const started = (await harness.app
+      .service('mcp-servers/oauth-start')
+      .create({ slack_recovery_token: seeded.token }, params)) as {
+      success: boolean;
+      attempt_id: string;
+      authorizationUrl: string;
+    };
+    expect(started.success).toBe(true);
+    expect(new URL(started.authorizationUrl).searchParams.get('state')).toBeTruthy();
+
+    const task = await new TaskRepository(harness.rawDb).findById(seeded.taskId);
+    expect(task?.metadata?.mcp_slack_recovery_notice).toMatchObject({
+      token_consumed_at: expect.any(String),
+      oauth_attempt_id: started.attempt_id,
+      oauth_started_at: expect.any(String),
+    });
+    expect(task?.metadata?.mcp_slack_recovery_notice?.oauth_start_claim_expires_at).toBeUndefined();
+    expect(
+      (await new SessionRepository(harness.rawDb).findById(seeded.sessionId))?.sdk_session_id
+    ).toBe('sdk-session-preserved');
+
+    const duplicate = (await harness.app
+      .service('mcp-servers/oauth-start')
+      .create({ slack_recovery_token: seeded.token }, params)) as { success: boolean };
+    expect(duplicate.success).toBe(false);
+
+    const state = new URL(started.authorizationUrl).searchParams.get('state');
+    expect(state).toBeTruthy();
+    expect((await harness.callback(state!)).status).toBe(200);
+    expect(harness.gatewayOAuthResults).toContainEqual({
+      taskId: seeded.taskId,
+      noticeId: task?.metadata?.mcp_slack_recovery_notice?.notice_id,
+      attemptId: started.attempt_id,
+      success: true,
+    });
+    expect(
+      (await new SessionRepository(harness.rawDb).findById(seeded.sessionId))?.sdk_session_id
+    ).toBe('sdk-session-preserved');
+  });
+
+  it('fails closed after preflight when the Agor principal is revoked', async () => {
+    const provider = await createTestProvider();
+    providers.push(provider);
+    const harness = await createHarness(provider);
+    databases.push(harness.rawDb);
+    const seeded = await seedSlackRecoveryAction(harness);
+    const params = paramsFor(harness);
+
+    await harness.app.service('mcp-slack-recovery').create({ token: seeded.token }, params);
+    await new UsersRepository(harness.rawDb).update(harness.user.user_id, { role: 'viewer' });
+    const revoked = (await harness.app
+      .service('mcp-servers/oauth-start')
+      .create({ slack_recovery_token: seeded.token }, params)) as { success: boolean };
+    expect(revoked.success).toBe(false);
+    expect(provider.requests).toHaveLength(0);
+  });
+
+  it('projects provider success as superseded when authority changes during exchange', async () => {
+    const provider = await createTestProvider({ holdToken: true });
+    providers.push(provider);
+    const harness = await createHarness(provider);
+    databases.push(harness.rawDb);
+    const seeded = await seedSlackRecoveryAction(harness);
+    const params = paramsFor(harness);
+    const started = (await harness.app
+      .service('mcp-servers/oauth-start')
+      .create({ slack_recovery_token: seeded.token }, params)) as {
+      success: boolean;
+      attempt_id: string;
+      authorizationUrl: string;
+    };
+    expect(started.success).toBe(true);
+    const state = new URL(started.authorizationUrl).searchParams.get('state');
+    expect(state).toBeTruthy();
+
+    const callback = harness.callback(state!);
+    await provider.tokenRequested.promise;
+    await new UsersRepository(harness.rawDb).update(harness.user.user_id, { role: 'viewer' });
+    provider.releaseToken();
+
+    expect((await callback).status).toBe(409);
+    expect(harness.gatewayOAuthResults).toContainEqual({
+      taskId: seeded.taskId,
+      noticeId: expect.any(String),
+      attemptId: started.attempt_id,
+      success: true,
+    });
+  });
 });
 
 describe('real Feathers Socket.IO request authority', () => {

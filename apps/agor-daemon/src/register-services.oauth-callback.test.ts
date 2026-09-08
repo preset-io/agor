@@ -243,7 +243,7 @@ describe('register-services OAuth callback URL regression', () => {
     const hintIndex = successBody.indexOf("code: 'runtime_authority_hint'");
     const notifyIndex = successBody.indexOf('emitOAuthCompletion(pendingFlow, true)');
     const resolveIndex = successBody.indexOf('pendingFlow.tokenResolve?.(tokenResponse)');
-    const renderIndex = successBody.indexOf('sendOAuthResultPage(res, true');
+    const renderIndex = successBody.indexOf('sendOAuthResultPage(');
 
     expect(persistIndex).toBeGreaterThanOrEqual(0);
     expect(hintIndex).toBeGreaterThan(persistIndex);

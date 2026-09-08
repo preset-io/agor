@@ -359,6 +359,9 @@ export const tasks = pgTable(
     // User attribution
     created_by: varchar('created_by', { length: 36 }).notNull(),
 
+    // Indexed due-work projection for bounded Slack MCP recovery repair.
+    mcp_slack_recovery_due_at: t.timestamp('mcp_slack_recovery_due_at'),
+
     data: t
       .json<unknown>('data')
       .$type<{
@@ -413,6 +416,9 @@ export const tasks = pgTable(
     sessionTaskIdIdx: index('tasks_session_task_id_idx').on(table.session_id, table.task_id),
     statusIdx: index('tasks_status_idx').on(table.status),
     createdIdx: index('tasks_created_idx').on(table.created_at),
+    mcpSlackRecoveryDueIdx: index('tasks_mcp_slack_recovery_due_idx')
+      .on(table.tenant_id, table.mcp_slack_recovery_due_at, table.task_id)
+      .where(sql`${table.mcp_slack_recovery_due_at} IS NOT NULL`),
     // Composite for "latest task for session" queries (ORDER BY created_at DESC LIMIT 1).
     sessionCreatedIdx: index('tasks_session_created_idx').on(table.session_id, table.created_at),
     queueIdx: index('tasks_queue_idx').on(table.session_id, table.status, table.queue_position),

@@ -46,7 +46,10 @@ import {
   isKnowledgeRealtimeSuppressedEvent,
   resolveKnowledgeRealtimeUserIds,
 } from './knowledge-realtime-publish.js';
-import { redactMcpRecoveryTopology } from './mcp-recovery-redaction.js';
+import {
+  redactMcpRecoveryTopology,
+  stripMcpSlackRecoveryNotice,
+} from './mcp-recovery-redaction.js';
 import {
   type RealtimeAccessBranchRepository,
   RealtimeAccessCache,
@@ -1122,6 +1125,14 @@ export function configureRealtimePublish(options: RealtimePublishOptions): void 
     const taskData = data as Task | undefined;
     if (
       context.path === 'tasks' &&
+      (taskData?.metadata?.mcp_slack_recovery_notice || taskData?.metadata?.gateway_task_source) &&
+      !taskData.metadata.mcp_recovery
+    ) {
+      const channels = Array.isArray(delivery) ? delivery : [delivery];
+      delivery = channels.map((channel) => channel.send(stripMcpSlackRecoveryNotice(taskData)));
+    }
+    if (
+      context.path === 'tasks' &&
       taskData?.metadata?.mcp_recovery &&
       typeof taskData.session_id === 'string'
     ) {
@@ -1136,7 +1147,7 @@ export function configureRealtimePublish(options: RealtimePublishOptions): void 
           }
           return ownerId !== null && userFromConnection(connection)?.user_id === ownerId;
         })
-        .send(taskData);
+        .send(stripMcpSlackRecoveryNotice(taskData));
       const redacted = tenantScoped
         .filter((connection: unknown) => {
           if (!authorizedConnections.has(connection)) return false;

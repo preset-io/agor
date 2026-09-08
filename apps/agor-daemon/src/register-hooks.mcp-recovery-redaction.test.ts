@@ -47,4 +47,44 @@ describe('production Task MCP recovery response hook', () => {
     expect(returned.dispatch).not.toBe(task);
     expect(JSON.stringify(returned.dispatch)).not.toContain('Private CRM');
   });
+
+  it('strips Slack action authority from an admin transport response without mutating the row', async () => {
+    const task = {
+      task_id: 'task-1',
+      session_id: 'session-1',
+      created_by: 'owner',
+      metadata: {
+        mcp_slack_recovery_notice: {
+          notice_id: 'notice-secret',
+          token_jti: 'jti-secret',
+          slack_thread_id: 'C1-1.1',
+        },
+        gateway_task_source: {
+          gateway_channel_id: 'gateway-secret',
+          channel_type: 'slack',
+          thread_id: 'C1-1.1',
+        },
+      },
+    } as unknown as Task;
+    const hook = createRedactTaskMcpRecoveryAfter({
+      findById: async () => ({ created_by: 'owner' }),
+    } as Pick<SessionRepository, 'findById'>);
+    const context = {
+      event: 'patched',
+      method: 'patch',
+      params: {
+        provider: 'socketio',
+        user: { user_id: 'admin', role: ROLES.ADMIN } as User,
+      },
+      result: task,
+    } as HookContext;
+
+    const returned = await hook(context);
+
+    expect(returned.result).toBe(task);
+    expect(JSON.stringify(returned.result)).toContain('notice-secret');
+    expect(JSON.stringify(returned.dispatch)).not.toMatch(
+      /notice-secret|jti-secret|gateway-secret/
+    );
+  });
 });
