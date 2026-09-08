@@ -63,6 +63,7 @@ it('does not admit a second reclaimer while the first holds a stale observation'
       ...(secondRelease ? [secondRelease()] : []),
       ...(result[0].status === 'fulfilled' ? [result[0].value()] : []),
     ]);
+    expect(result[0].status, 'the paused installer recovers after resuming').toBe('fulfilled');
   }
 });
 
