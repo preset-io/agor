@@ -121,6 +121,40 @@ describe('branch-local session archive planning', () => {
     ).toEqual(['root']);
   });
 
+  it('preserves independent coverage through a deep unordered mixed genealogy', () => {
+    const root = session('root', { archived: true, archived_reason: 'manual' });
+    const independent = session('independent', { archived: true, archived_reason: 'manual' });
+    const descendants = [independent];
+    let parentId = independent.session_id;
+    for (let index = 0; index < 2000; index++) {
+      const child = session(`child-${index}`, {
+        archived: index !== 1000,
+        archived_reason: index === 1000 ? undefined : 'parent_archived',
+        genealogy: {
+          ...(index % 2 === 0
+            ? { parent_session_id: parentId }
+            : { forked_from_session_id: parentId }),
+          children: [],
+        },
+      });
+      descendants.push(child);
+      parentId = child.session_id;
+    }
+    const uncovered = session('uncovered', {
+      archived: true,
+      archived_reason: 'parent_archived',
+      genealogy: { parent_session_id: root.session_id, children: [] },
+    });
+    expect(
+      planSessionTreeArchiveTransition({
+        root,
+        descendants: [...descendants.reverse(), uncovered],
+        archived: false,
+        rootReason: 'manual',
+      }).map((target) => target.session.session_id)
+    ).toEqual(['root', 'uncovered']);
+  });
+
   it('deduplicates overlapping bulk trees while keeping matched descendants as roots', () => {
     const root = session('root');
     const selectedChild = session('selected-child');

@@ -388,7 +388,7 @@ describe('MCPServerEditModal legacy DCR compatibility', () => {
   it('drops a delayed saved-server discovery browser event across admin A -> admin B', async () => {
     let resolveDiscover: ((value: { success: boolean }) => void) | undefined;
     const discover = vi.fn(
-      () =>
+      (_request: { oauth_browser_event: { reservation_token: string } }) =>
         new Promise<{ success: boolean }>((resolve) => {
           resolveDiscover = resolve;
         })
@@ -402,7 +402,7 @@ describe('MCPServerEditModal legacy DCR compatibility', () => {
       service: vi.fn((path: string) => {
         if (path === 'mcp-servers/discover') return { create: discover };
         if (path === 'mcp-servers/oauth-browser-reservations') return { create: reserve };
-        return { patch: vi.fn() };
+        return { patch: vi.fn().mockResolvedValue({ config_version: 2 }) };
       }),
       io: {
         on: vi.fn((_event: string, listener: (event: Record<string, unknown>) => void) =>

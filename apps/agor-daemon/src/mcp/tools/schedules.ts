@@ -86,7 +86,7 @@ const agenticToolConfigSchema = z
     }
   })
   .describe(
-    'Agentic-tool configuration. MCP capability selection is configured separately on the schedule.'
+    'Agentic-tool configuration. Do not combine preset_id, configuration_reference, or inline fields (permission_mode, model_config, context_files). MCP capability selection is configured separately on the schedule.'
   );
 
 export function registerScheduleTools(server: McpServer, ctx: McpContext): void {
@@ -202,7 +202,7 @@ export function registerScheduleTools(server: McpServer, ctx: McpContext): void 
             .describe("'local' uses `timezone`; 'utc' fires in UTC."),
           timezone: mcpOptionalString(
             'timezone',
-            "IANA timezone (required when timezone_mode='local'), e.g. 'America/Los_Angeles'"
+            "IANA timezone (required when timezone_mode='local'; omit when timezone_mode='utc'), e.g. 'America/Los_Angeles'"
           ),
           prompt: mcpRequiredString('prompt', 'Handlebars prompt template'),
           agentic_tool_config: agenticToolConfigSchema,

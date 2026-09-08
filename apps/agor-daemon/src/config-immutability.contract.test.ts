@@ -21,7 +21,7 @@ describe('immutable config.yaml boundary', () => {
     const offenders = sourceFiles(sourceRoot).filter(
       (file) =>
         !allowed.has(resolve(file)) &&
-        /\b(?:loadConfig|loadConfigSync|loadConfigFromFile|isBranchRbacEnabled|isUnixImpersonationEnabled|isUnixGroupRefreshNeeded|getDaemonUser)\b/.test(
+        /\b(?:loadConfig|loadConfigSync|loadConfigFromFile|isUnixImpersonationEnabled|isUnixGroupRefreshNeeded|getDaemonUser)\b/.test(
           readFileSync(file, 'utf8')
         )
     );

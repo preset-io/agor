@@ -169,10 +169,41 @@ describe('agor_execute_tool', () => {
     const parsed = JSON.parse(result.content[0].text);
 
     expect(result.isError).toBe(true);
-    expect(parsed.error).toMatch(/unknown argument "definitelyNotAParam"/);
+    expect(parsed.error).toMatch(/unknown argument/);
+    expect(parsed.code).toBe('invalid_tool_arguments');
     expect(parsed.error).toMatch(/agor_get_tool_details/);
     expect(targetHandler).not.toHaveBeenCalled();
   });
+
+  it.each([
+    { limit: 'sensitive-invalid-value' },
+    { branchId: { secret: 'sensitive-invalid-value' } },
+  ])('returns safe field/code guidance for malformed agent arguments', async (arguments_) => {
+    const { handler, targetHandler } = captureExecuteTool();
+    const result = await handler({ tool_name: 'agor_sessions_list', arguments: arguments_ });
+    const parsed = JSON.parse(result.content[0].text);
+    expect(parsed).toMatchObject({
+      code: 'invalid_tool_arguments',
+      validation_stage: 'tool_input',
+      retryable: false,
+      issues: [{ field: Object.keys(arguments_)[0], code: 'invalid_type' }],
+    });
+    expect(result.content[0].text).not.toContain('sensitive-invalid-value');
+    expect(targetHandler).not.toHaveBeenCalled();
+  });
+
+  it.each(['not-json', '[]', null, 5])(
+    'rejects malformed proxy arguments without executing the tool',
+    async (arguments_) => {
+      const { handler, targetHandler } = captureExecuteTool();
+      const result = await handler({ tool_name: 'agor_sessions_list', arguments: arguments_ });
+      expect(JSON.parse(result.content[0].text)).toMatchObject({
+        code: 'invalid_tool_arguments',
+        retryable: false,
+      });
+      expect(targetHandler).not.toHaveBeenCalled();
+    }
+  );
 });
 
 describe('agor_get_tool_details', () => {

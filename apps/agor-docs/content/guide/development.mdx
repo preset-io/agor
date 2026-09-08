@@ -16,7 +16,7 @@ docker compose up
 # Visit http://localhost:5173 → Login: admin@agor.live / admin
 ```
 
-That gives you SQLite, single-user, no RBAC, the fastest path to a running daemon. For Postgres, RBAC + sandbox testing, HA smoke testing, or the docs site, see the variant system below.
+That gives you SQLite, single-user, always-on RBAC, and no executor sandbox — the fastest path to a running daemon. For Postgres, RBAC + sandbox testing, HA smoke testing, or the docs site, see the variant system below.
 
 The fixed login is an intentionally narrow bootstrap exception, not a weak
 deployment-wide password profile. It requires all three checked-in values:
@@ -79,11 +79,11 @@ Agor's repo ships [`.agor.yml`](https://github.com/preset-io/agor/blob/main/.ago
 
 | Variant                  | What you get                                                                                                                                                                                                                                   | Base ports                                        |
 | ------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------- |
-| **`sqlite`** _(default)_ | Standalone source-mode dev with SQLite, no branch RBAC, and no Agor executor sandbox. Fastest to boot.                                                                                                                                         | daemon: `3000 + branch.unique_id`, UI: `5000 + …` |
-| **`postgres`**           | `sqlite` topology with PostgreSQL schema parity. RBAC and the Agor sandbox remain off. **Requires Postgres 13+** (migrations use `gen_random_uuid()` from `pg_catalog`).                                                                       | same as `sqlite`                                  |
-| **`sandbox`**            | SQLite plus the tunable, shared-home bubblewrap filesystem sandbox. RBAC remains off and sandbox unavailability is not fail-closed.                                                                                                            | same as `sqlite`                                  |
-| **`sandbox-peruser`**    | SQLite plus `execution.unix_user_mode: sandbox`, which forces branch RBAC, a per-user home, and fail-closed bubblewrap isolation. It does not impersonate host users.                                                                          | same as `sqlite`                                  |
-| **`rich`**               | Standalone PostgreSQL + branch RBAC + fail-closed per-user sandbox profile. Also creates Alice/Bob RBAC fixtures. HA remains a separate variant.                                                                                               | same as `sqlite`                                  |
+| **`sqlite`** _(default)_ | Standalone source-mode dev with SQLite, always-on branch RBAC, and no Agor executor sandbox. Fastest to boot.                                                                                                                                  | daemon: `3000 + branch.unique_id`, UI: `5000 + …` |
+| **`postgres`**           | `sqlite` topology with PostgreSQL schema parity. Application RBAC is always on; the Agor executor sandbox remains off. **Requires Postgres 13+** (migrations use `gen_random_uuid()` from `pg_catalog`).                                       | same as `sqlite`                                  |
+| **`sandbox`**            | SQLite plus the tunable, shared-home bubblewrap filesystem sandbox. Application RBAC is always on; sandbox unavailability is not fail-closed.                                                                                                  | same as `sqlite`                                  |
+| **`sandbox-peruser`**    | SQLite plus `execution.unix_user_mode: sandbox`, a per-user home, and fail-closed bubblewrap isolation. It does not impersonate host users.                                                                                                    | same as `sqlite`                                  |
+| **`rich`**               | Standalone PostgreSQL + fail-closed per-user sandbox profile. Also creates Alice/Bob RBAC fixtures. HA remains a separate variant.                                                                                                             | same as `sqlite`                                  |
 | **`full`**               | Deprecated compatibility alias for `rich`, retained so existing branches can still re-render safely.                                                                                                                                           | same as `rich`                                    |
 | **`ha`**                 | Hosted control-plane smoke: PostgreSQL/RLS, ephemeral Redis, two production-source daemons, nginx affinity, auth-resolved Acme/Globex personas, RBAC, and per-user sandbox homes. The Compose-only picker intentionally has no authentication. | ingress: `3000 + branch.unique_id`                |
 | **`docs`**               | Nextra docs site (`apps/agor-docs`) in a self-contained container. No daemon or database.                                                                                                                                                      | `7000 + branch.unique_id`                         |
@@ -98,7 +98,7 @@ A representative variant block, abridged from the file:
 
 ```yaml
 sqlite:
-  description: Single-user dev with SQLite. No RBAC. Fastest to boot.
+  description: Single-user dev with SQLite. Always-on RBAC, no executor sandbox. Fastest to boot.
   start: >-
     DAEMON_PORT={{add 3000 branch.unique_id}}
     UI_PORT={{add 5000 branch.unique_id}}

@@ -1,9 +1,9 @@
 # PostgreSQL development profile
 
 The `docker-compose.postgres.yml` overlay runs Agor against PostgreSQL with
-branch RBAC, the fail-closed per-user sandbox, and Alice/Bob fixtures. It does
+the fail-closed per-user sandbox and Alice/Bob RBAC fixtures. It does
 not create host Unix accounts or POSIX branch groups. The Compose `postgres`
-profile by itself only activates the database service; it does not enable RBAC.
+profile by itself only activates the database service; RBAC is always enabled.
 
 Because `agor init` is the SQLite bootstrap, source-mode PostgreSQL startup
 creates only the missing deployment config on first boot. Its generated
@@ -51,7 +51,6 @@ branch-owned SDK state; set it to `inherit` to test legacy execution homes.
 ```text
 AGOR_DB_DIALECT=postgresql
 DATABASE_URL=postgresql://...
-AGOR_RBAC_ENABLED=true
 AGOR_UNIX_USER_MODE=simple|sandbox|delegated
 AGOR_SANDBOX_SDK_HOME_MODE=inherit|per_branch
 CREATE_RBAC_TEST_USERS=true

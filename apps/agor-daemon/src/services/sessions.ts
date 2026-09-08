@@ -207,7 +207,7 @@ export type SessionParams = QueryParams<{
  * (SQL board filter + recency sort + limit/offset) rather than the generic
  * in-memory path. We only divert the loader's bounded list queries — those that
  * sort by `updated_at` and/or scope to a `board_id`/`branch_id` — and only when the rest of
- * the query is a shape findPage fully models (archived + pagination). Anything
+ * the query is a shape findPage fully models (archived/status + pagination). Anything
  * with extra filters, operators, or `$select` falls through to the existing path
  * so we never silently drop semantics findPage doesn't implement.
  */
@@ -221,11 +221,24 @@ function shouldSqlPageSessionQuery(query?: Record<string, unknown>, forcePage = 
   const wantsBranch = query.branch_id !== undefined;
   if (!wantsRecency && !wantsCreatedAt && !wantsBoard && !wantsBranch && !forcePage) return false;
 
-  const allowedKeys = new Set(['archived', 'board_id', 'branch_id', '$sort', '$limit', '$skip']);
+  const allowedKeys = new Set([
+    'archived',
+    'status',
+    'board_id',
+    'branch_id',
+    '$sort',
+    '$limit',
+    '$skip',
+  ]);
   for (const key of Object.keys(query)) {
     if (!allowedKeys.has(key)) return false;
   }
   if (query.archived !== undefined && typeof query.archived !== 'boolean') return false;
+  if (
+    query.status !== undefined &&
+    !Object.values(SessionStatus).includes(query.status as SessionStatus)
+  )
+    return false;
   if (wantsBoard && typeof query.board_id !== 'string') return false;
   if (wantsBranch) {
     const branchFilter = query.branch_id;
@@ -680,7 +693,9 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
   }
 
   async enrichRemoteRelationships(sessionList: Session[]): Promise<Session[]> {
-    const sessionIds = sessionList.map((session) => session.session_id);
+    // A generic $select can intentionally omit the ID. Do not send undefined
+    // SQL parameters or reintroduce fields the caller did not select.
+    const sessionIds = sessionList.map((session) => session.session_id).filter(Boolean);
     if (sessionIds.length === 0) return sessionList;
 
     const relationships = await this.sessionRelationshipRepo.findForSessions(sessionIds);
@@ -1268,7 +1283,6 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
   private getRuntimeExecutionConfig():
     | {
         execution?: {
-          branch_rbac?: boolean;
           allow_superadmin?: boolean;
         };
       }
@@ -1281,7 +1295,6 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
       ).get?.('config') as
         | {
             execution?: {
-              branch_rbac?: boolean;
               allow_superadmin?: boolean;
             };
           }
@@ -1289,10 +1302,6 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
     } catch {
       return undefined;
     }
-  }
-
-  private shouldEnforceBranchRbac(): boolean {
-    return this.getRuntimeExecutionConfig()?.execution?.branch_rbac === true;
   }
 
   private shouldAllowSuperadminBypass(): boolean {
@@ -1304,7 +1313,7 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
     archived: boolean,
     params?: SessionParams
   ): Promise<void> {
-    if (!params?.provider || !this.shouldEnforceBranchRbac()) return;
+    if (!params?.provider) return;
 
     const user = params.user;
     if (!user) {
@@ -1505,7 +1514,7 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
     const plan = planBranchLocalArchiveRoots({
       roots,
       descendantsByRoot,
-      includeChildren: options.includeChildren !== false,
+      includeChildren: options.includeChildren === true,
     });
     const skipped: SessionBulkArchiveResult['skipped'] = [];
     const authorizedTargets: SessionArchiveTarget[] = [];
@@ -1801,9 +1810,8 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
    */
   async find(params?: SessionParams): Promise<Paginated<Session> | Session[]> {
     // SQL-pushdown path for the recency-sorted / board-scoped list queries the
-    // first-paint loader issues. In RBAC mode the before-hook stamps a marker
-    // here so the same SQL path can compose branch visibility into the query;
-    // in open-access mode this path still handles board_id + `$sort:{updated_at}`.
+    // first-paint loader issues. The before-hook stamps a marker here so the
+    // same SQL path can compose branch visibility into the query.
     //
     // We can't lean on DrizzleService's generic path: (1) its filter matches
     // `item.board_id`, but sessions expose the board as `branch_board_id`, so a
@@ -1821,9 +1829,13 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
         Array.isArray((branchFilter as { $in?: unknown }).$in)
           ? ((branchFilter as { $in: BranchID[] }).$in ?? [])
           : undefined;
-      const limit = (query?.$limit as number | undefined) ?? PAGINATION.DEFAULT_LIMIT;
+      const limit = Math.min(
+        (query?.$limit as number | undefined) ?? this.paginate?.default ?? PAGINATION.DEFAULT_LIMIT,
+        this.paginate?.max ?? 1000 // Same fallback as DrizzleService.paginateData.
+      );
       const skip = (query?.$skip as number | undefined) ?? 0;
       const { data, total } = await this.sessionRepo.findPage({
+        status: query?.status as SessionStatus | undefined,
         boardId: query?.board_id as string | undefined,
         branchId: typeof branchFilter === 'string' ? (branchFilter as BranchID) : undefined,
         branchIds,

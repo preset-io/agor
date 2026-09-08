@@ -1,5 +1,6 @@
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import ts from 'typescript';
 import { describe, expect, it } from 'vitest';
 
 /**
@@ -88,6 +89,8 @@ const MUTATION_TOKENS = new Set([
   'boardsService.unarchive',
   'sessionsService.archive',
   'sessionsService.unarchive',
+  'sessionsService.spawn',
+  'sessionsService.fork',
 ]);
 
 /** Balanced-paren spans of every call matching `opener`. */
@@ -186,6 +189,45 @@ describe('MCP tool tenant database scope audit', () => {
     expect(stale, `Stale MUTATION_TOKENS entries (no longer called): ${stale.join(', ')}`).toEqual(
       []
     );
+  });
+
+  it('does not let inline service casts hide unscoped custom methods from the audit', () => {
+    const violations: string[] = [];
+    for (const file of files) {
+      const code = readFileSync(join(TOOLS_DIR, file), 'utf8');
+      const source = ts.createSourceFile(file, code, ts.ScriptTarget.Latest, true);
+      const spans = scopeSpans(code);
+      const visit = (node: ts.Node): void => {
+        if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression)) {
+          const method = node.expression.name.text;
+          let receiver: ts.Expression = node.expression.expression;
+          while (ts.isParenthesizedExpression(receiver) || ts.isAsExpression(receiver)) {
+            receiver = receiver.expression;
+          }
+          if (
+            !TRANSPORT_METHODS.has(method) &&
+            ts.isCallExpression(receiver) &&
+            ts.isPropertyAccessExpression(receiver.expression) &&
+            receiver.expression.name.text === 'service'
+          ) {
+            const service = receiver.arguments[0];
+            if (
+              service &&
+              ts.isStringLiteral(service) &&
+              CALL_SITE_SCOPED_SERVICES.includes(service.text) &&
+              !spans.some(([start, end]) => node.getStart(source) >= start && node.end <= end + 1)
+            ) {
+              violations.push(
+                `${file}:${lineOf(code, node.getStart(source))} ${service.text}.${method}`
+              );
+            }
+          }
+        }
+        ts.forEachChild(node, visit);
+      };
+      visit(source);
+    }
+    expect(violations, 'Inline custom service calls must enter a tenant DB unit').toEqual([]);
   });
 
   it('does not alias a call-site-scoped service to a non-<name>Service local (which would evade the scan)', () => {

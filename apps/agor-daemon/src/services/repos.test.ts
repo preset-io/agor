@@ -12,7 +12,6 @@ vi.mock('@agor/core/config', async (importOriginal) => {
       allowedModes: ['worktree', 'clone'],
     })),
     resolveExecutionSecurityMode: vi.fn(() => ({
-      appRbacEnabled: true,
       unixUserMode: 'simple',
       requiresExecutionHomeKey: false,
     })),

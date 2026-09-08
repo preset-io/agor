@@ -5,6 +5,11 @@ import { ToolDispatcher } from '../register-tool-proxy.js';
 import { mcpPositiveIntWithDefault, mcpRequiredString } from '../schema.js';
 import { coerceJsonRecord, textResult } from '../server.js';
 import { ToolRegistry } from '../tool-registry.js';
+import {
+  inputValidationIssues,
+  McpInputValidationError,
+  mcpValidationFailure,
+} from '../validation-errors.js';
 
 const DISCOVERY_HINT =
   'Discover tool names with agor_search_tools (call with no args for domains, or with { "query": "sessions" }). Get an exact schema with agor_get_tool_details({ "tool_name": "..." }).';
@@ -30,8 +35,16 @@ function resolveToolArgs(
 ): Record<string, unknown> {
   // Defense-in-depth: coerce stringified arguments even if Zod preprocess
   // already handled it (e.g. if the SDK bypasses schema validation).
-  let toolArgs: Record<string, unknown> =
-    (coerceJsonRecord(proxyArgs.arguments) as Record<string, unknown>) ?? {};
+  const nested = coerceJsonRecord(proxyArgs.arguments);
+  if (
+    nested !== undefined &&
+    (nested === null || typeof nested !== 'object' || Array.isArray(nested))
+  ) {
+    throw new McpInputValidationError(
+      'Invalid arguments: expected an object (or a JSON-encoded object).'
+    );
+  }
+  let toolArgs: Record<string, unknown> = (nested as Record<string, unknown>) ?? {};
 
   if (Object.keys(toolArgs).length === 0) {
     // No nested arguments — check for flattened params at top level
@@ -55,20 +68,21 @@ function resolveToolArgs(
       const parsedArgs = parseResult.data as Record<string, unknown>;
       const unknownArgs = Object.keys(toolArgs).filter((key) => !Object.hasOwn(parsedArgs, key));
       if (unknownArgs.length > 0) {
-        throw new Error(
-          `Invalid arguments for tool ${toolName}: unknown argument${unknownArgs.length === 1 ? '' : 's'} ${unknownArgs.map((arg) => `"${arg}"`).join(', ')}. ` +
-            `Call agor_get_tool_details({ "tool_name": "${toolName}" }) for the exact schema.`
+        throw new McpInputValidationError(
+          `Invalid arguments for tool ${toolName}: unknown argument${unknownArgs.length === 1 ? '' : 's'}. ` +
+            `Call agor_get_tool_details({ "tool_name": "${toolName}" }) for the exact schema.`,
+          [{ field: 'arguments', code: 'unrecognized_keys' }]
         );
       }
       return parsedArgs;
     }
     // Surface validation errors instead of letting them manifest as
     // confusing downstream failures (e.g. "Board not found: undefined").
-    const errorDetail =
-      parseResult.error && typeof parseResult.error === 'object' && 'message' in parseResult.error
-        ? (parseResult.error as { message: string }).message
-        : JSON.stringify(parseResult.error);
-    throw new Error(`Invalid arguments for tool ${toolName}: ${errorDetail}`);
+    const issues = inputValidationIssues(parseResult.error, tool.inputSchema);
+    throw new McpInputValidationError(
+      `Invalid arguments for tool ${toolName}: ${issues.map(({ field, code }) => `${field} (${code})`).join(', ') || 'schema validation failed'}.`,
+      issues
+    );
   }
 
   return toolArgs;
@@ -272,6 +286,8 @@ export function registerSearchTools(
         const result = await tool.handler(toolArgs, requestContext);
         return result as { content: Array<{ type: 'text'; text: string }> };
       } catch (error) {
+        const failure = mcpValidationFailure(error, toolName ?? 'agor_execute_tool');
+        if (failure) return failure;
         return {
           content: [
             {

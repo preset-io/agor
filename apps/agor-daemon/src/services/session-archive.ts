@@ -71,21 +71,24 @@ export function planSessionTreeArchiveTransition(input: {
       .filter((session) => session.archived && session.archived_reason !== PARENT_ARCHIVED_REASON)
       .map((session) => session.session_id)
   );
-  let discoveredCoveredDescendant = true;
-  while (discoveredCoveredDescendant) {
-    discoveredCoveredDescendant = false;
-    for (const session of descendants) {
-      if (coveredByIndependentArchive.has(session.session_id)) {
-        continue;
-      }
-      const parentIds = [
-        session.genealogy?.parent_session_id,
-        session.genealogy?.forked_from_session_id,
-      ];
-      if (parentIds.some((parentId) => parentId && coveredByIndependentArchive.has(parentId))) {
-        coveredByIndependentArchive.add(session.session_id);
-        discoveredCoveredDescendant = true;
-      }
+  const childrenByParent = new Map<Session['session_id'], Session['session_id'][]>();
+  for (const session of descendants) {
+    for (const parentId of [
+      session.genealogy?.parent_session_id,
+      session.genealogy?.forked_from_session_id,
+    ]) {
+      if (!parentId) continue;
+      const children = childrenByParent.get(parentId) ?? [];
+      children.push(session.session_id);
+      childrenByParent.set(parentId, children);
+    }
+  }
+  const pending = [...coveredByIndependentArchive];
+  for (let index = 0; index < pending.length; index++) {
+    for (const childId of childrenByParent.get(pending[index]!) ?? []) {
+      if (coveredByIndependentArchive.has(childId)) continue;
+      coveredByIndependentArchive.add(childId);
+      pending.push(childId);
     }
   }
   for (const session of descendants) {

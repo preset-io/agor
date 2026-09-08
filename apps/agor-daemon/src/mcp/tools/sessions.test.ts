@@ -16,6 +16,7 @@
 import { AGENTIC_TOOL_NAMES } from '@agor/core/types';
 import type { McpServer } from '@modelcontextprotocol/server';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { z } from 'zod';
 
 vi.mock('../resolve-ids.js', () => ({
   resolveBoardId: async (_ctx: unknown, id: string) => id,
@@ -70,7 +71,8 @@ vi.mock('@agor/core/db', () => ({
 // Helper to build a minimal fake Feathers app. Each test supplies spies for
 // the services it exercises; unknown services throw so we don't silently drop
 // side-effects the assertion cares about.
-type ServiceStub = Record<string, (...args: unknown[]) => unknown>;
+// These stubs are passed to the runtime, not invoked through this erased type.
+type ServiceStub = Record<string, (...args: never[]) => unknown>;
 function makeFakeApp(services: Record<string, ServiceStub>) {
   return {
     service: (name: string) => {
@@ -92,7 +94,7 @@ type ToolHandler = (args: Record<string, unknown>) => Promise<{
  * exercise Zod validation/coercion (the fake server below bypasses the SDK's
  * automatic schema parsing). */
 type CapturedTool = {
-  cfg: { inputSchema?: { parse: (v: unknown) => unknown; safeParse: (v: unknown) => any } };
+  cfg: { inputSchema?: z.ZodType };
   cb: ToolHandler;
 };
 
@@ -236,6 +238,171 @@ describe('agor_sessions_list', () => {
     vi.clearAllMocks();
   });
 
+  it.each([
+    {},
+    { branchId: 'branch-1' },
+    { boardId: 'board-1' },
+    { branchId: 'branch-1', boardId: 'board-1' },
+  ])('preserves totals, continuation and trusted context for optional scope %j', async (scope) => {
+    const baseServiceParams = {
+      provider: 'rest',
+      authenticated: true,
+      user: { user_id: 'user-1' },
+      tenant: { tenant_id: 'tenant-1' },
+    };
+    const find = vi.fn(async () => ({
+      total: 53,
+      limit: 2,
+      skip: 2,
+      data: [2, 3].map((id) => ({
+        session_id: `session-${id}`,
+        branch_id: 'branch-1',
+        branch_board_id: 'board-1',
+        mcp_token: 'must-not-leak',
+        tasks: [],
+      })),
+    }));
+    const app = makeFakeApp({
+      branches: { get: async () => ({ branch_id: 'branch-1' }) },
+      sessions: { find },
+    });
+    const { agor_sessions_list } = await registerAndCaptureHandlers(
+      { app, userId: 'user-1', baseServiceParams },
+      ['agor_sessions_list']
+    );
+    const result = JSON.parse(
+      (await agor_sessions_list({ ...scope, limit: 2, offset: 2 })).content[0].text
+    );
+    expect(result).toMatchObject({ total: 53, limit: 2, offset: 2, hasMore: true, nextOffset: 4 });
+    expect(result.data).toHaveLength(2);
+    expect(result.data[0]).not.toHaveProperty('mcp_token');
+    expect(find).toHaveBeenCalledWith({
+      ...baseServiceParams,
+      query: {
+        $limit: 2,
+        $skip: 2,
+        $sort: { created_at: -1 },
+        archived: false,
+        ...(scope.branchId ? { branch_id: scope.branchId } : {}),
+        ...(scope.boardId ? { board_id: scope.boardId } : {}),
+      },
+    });
+  });
+
+  it('paginates a complete derived-type scan with the requested envelope, including the last page', async () => {
+    const app = makeFakeApp({
+      sessions: {
+        find: async () => ({
+          total: 4,
+          limit: 10000,
+          skip: 0,
+          data: [0, 1, 2, 3].map((id) => ({
+            session_id: `session-${id}`,
+            tasks: [],
+            scheduled_from_branch: id !== 0,
+            mcp_token: 'must-not-leak',
+          })),
+        }),
+      },
+    });
+    const { agor_sessions_list } = await registerAndCaptureHandlers({ app, userId: 'user-1' }, [
+      'agor_sessions_list',
+    ]);
+    const page = JSON.parse(
+      (await agor_sessions_list({ sessionType: 'scheduled', limit: 2, offset: 1, lean: false }))
+        .content[0].text
+    );
+    expect(page).toMatchObject({ total: 3, limit: 2, offset: 1, hasMore: false, nextOffset: null });
+    expect(page.data.map((s: { session_id: string }) => s.session_id)).toEqual([
+      'session-2',
+      'session-3',
+    ]);
+    expect(page.data[0]).not.toHaveProperty('mcp_token');
+  });
+
+  it('fails closed on a truncated derived-type scan rather than claiming an empty or complete result', async () => {
+    const find = vi
+      .fn()
+      .mockResolvedValueOnce({ total: 10001, limit: 10000, skip: 0, data: [] })
+      .mockResolvedValueOnce([]);
+    const app = makeFakeApp({
+      sessions: { find },
+    });
+    const { agor_sessions_list } = await registerAndCaptureHandlers({ app, userId: 'user-1' }, [
+      'agor_sessions_list',
+    ]);
+    await expect(agor_sessions_list({ sessionType: 'scheduled' })).rejects.toThrow(
+      /Narrow with branchId, boardId/
+    );
+    // Legacy bare-array adapters supply no evidence that their scan is complete.
+    await expect(agor_sessions_list({ sessionType: 'scheduled' })).rejects.toThrow(/complete scan/);
+  });
+
+  it('rejects an adapter response larger than the requested page', async () => {
+    const app = makeFakeApp({
+      sessions: { find: async () => [{ session_id: 'one' }, { session_id: 'two' }] },
+    });
+    const { agor_sessions_list } = await registerAndCaptureHandlers({ app, userId: 'user-1' }, [
+      'agor_sessions_list',
+    ]);
+    await expect(agor_sessions_list({ limit: 1 })).rejects.toThrow(
+      'exceeded the requested page limit'
+    );
+  });
+
+  it('accepts the exact derived scan ceiling and the maximum output page', async () => {
+    const app = makeFakeApp({
+      sessions: {
+        find: async () => ({
+          total: 10000,
+          limit: 10000,
+          skip: 0,
+          data: Array.from({ length: 10000 }, (_, index) => ({
+            session_id: `session-${index}`,
+            tasks: [],
+          })),
+        }),
+      },
+    });
+    const { agor_sessions_list } = await registerAndCaptureHandlers({ app, userId: 'user-1' }, [
+      'agor_sessions_list',
+    ]);
+    const page = JSON.parse(
+      (await agor_sessions_list({ sessionType: 'agent', limit: 100 })).content[0].text
+    );
+    expect(page).toMatchObject({
+      total: 10000,
+      limit: 100,
+      offset: 0,
+      hasMore: true,
+      nextOffset: 100,
+    });
+    expect(page.data).toHaveLength(100);
+  });
+
+  it('does not broaden to a global list when the requested branch cannot be authorized', async () => {
+    const resolvers = await import('../resolve-ids.js');
+    const actualResolvers =
+      await vi.importActual<typeof import('../resolve-ids.js')>('../resolve-ids.js');
+    const resolver = vi
+      .spyOn(resolvers, 'resolveBranchId')
+      .mockImplementationOnce(actualResolvers.resolveBranchId);
+    const find = vi.fn();
+    const get = vi.fn().mockRejectedValue(new Error('Branch not found'));
+    const baseServiceParams = { provider: 'rest', tenant: { tenant_id: 'tenant-b' } };
+    const app = makeFakeApp({ branches: { get }, sessions: { find } });
+    const { agor_sessions_list } = await registerAndCaptureHandlers(
+      { app, userId: 'user-b', baseServiceParams },
+      ['agor_sessions_list']
+    );
+    await expect(agor_sessions_list({ branchId: 'tenant-a-branch' })).rejects.toThrow(
+      'Branch not found'
+    );
+    expect(get).toHaveBeenCalledWith('tenant-a-branch', baseServiceParams);
+    expect(find).not.toHaveBeenCalled();
+    resolver.mockRestore();
+  });
+
   it('enforces branchId filtering even if the sessions service returns broader data', async () => {
     const findCalls: unknown[] = [];
     const app = makeFakeApp({
@@ -261,14 +428,10 @@ describe('agor_sessions_list', () => {
       ['agor_sessions_list']
     );
 
-    const result = await agor_sessions_list({ branchId: 'wt-1' });
-    const parsed = JSON.parse(result.content[0].text);
-
+    await expect(agor_sessions_list({ branchId: 'wt-1' })).rejects.toThrow(
+      'outside the requested branch or board scope'
+    );
     expect(findCalls[0]).toMatchObject({ query: { branch_id: 'wt-1', archived: false } });
-    expect(parsed.total).toBe(1);
-    expect(parsed.data).toHaveLength(1);
-    expect(parsed.data[0].session_id).toBe('sess-target');
-    expect(parsed.data[0]).not.toHaveProperty('mcp_token');
   });
 
   it('filters boardId using session.branch_board_id instead of legacy sessions.board_id', async () => {
@@ -307,17 +470,12 @@ describe('agor_sessions_list', () => {
       ['agor_sessions_list']
     );
 
-    const result = await agor_sessions_list({ boardId: 'board-1', limit: 10 });
-    const parsed = JSON.parse(result.content[0].text);
-
+    await expect(agor_sessions_list({ boardId: 'board-1', limit: 10 })).rejects.toThrow(
+      'outside the requested branch or board scope'
+    );
     expect(findCalls[0]).toMatchObject({
-      query: { archived: false, $limit: 10000 },
+      query: { board_id: 'board-1', archived: false, $limit: 10, $skip: 0 },
     });
-    expect(findCalls[0]).not.toMatchObject({ query: { board_id: 'board-1' } });
-    expect(parsed.total).toBe(1);
-    expect(parsed.data).toHaveLength(1);
-    expect(parsed.data[0].session_id).toBe('sess-on-board');
-    expect(parsed.data[0]).not.toHaveProperty('mcp_token');
   });
 });
 
@@ -1574,7 +1732,7 @@ describe('MCP session input validation clarity', () => {
     const result = tools.agor_sessions_get.cfg.inputSchema!.safeParse({});
 
     expect(result.success).toBe(false);
-    expect(String(result.error.message)).toMatch(/sessionId is required and must be a string/);
+    expect(String(result.error?.message)).toMatch(/sessionId is required and must be a string/);
   });
 
   it('rejects empty required prompts and optional titles when provided', async () => {
@@ -1589,7 +1747,7 @@ describe('MCP session input validation clarity', () => {
       prompt: '',
     });
     expect(emptyPrompt.success).toBe(false);
-    expect(String(emptyPrompt.error.message)).toMatch(/prompt cannot be empty/);
+    expect(String(emptyPrompt.error?.message)).toMatch(/prompt cannot be empty/);
 
     const emptyTitle = tools.agor_sessions_prompt.cfg.inputSchema!.safeParse({
       sessionId: 'sess-target',
@@ -1598,7 +1756,7 @@ describe('MCP session input validation clarity', () => {
       title: '',
     });
     expect(emptyTitle.success).toBe(false);
-    expect(String(emptyTitle.error.message)).toMatch(/title cannot be empty/);
+    expect(String(emptyTitle.error?.message)).toMatch(/title cannot be empty/);
   });
 
   it('rejects invalid pagination limits before handlers run', async () => {
@@ -1610,7 +1768,20 @@ describe('MCP session input validation clarity', () => {
     const result = tools.agor_sessions_list.cfg.inputSchema!.safeParse({ limit: 0 });
 
     expect(result.success).toBe(false);
-    expect(String(result.error.message)).toMatch(/limit must be greater than 0/);
+    expect(String(result.error?.message)).toMatch(/limit must be greater than 0/);
+    const schema = tools.agor_sessions_list.cfg.inputSchema!;
+    expect(schema.parse({})).toMatchObject({ limit: 25, offset: 0 });
+    expect(schema.safeParse({ limit: 100 }).success).toBe(true);
+    for (const invalid of [
+      { limit: 101 },
+      { limit: 1.5 },
+      { offset: -1 },
+      { offset: 0.5 },
+      { branchId: '' },
+      { boardId: null },
+    ]) {
+      expect(schema.safeParse(invalid).success).toBe(false);
+    }
   });
 });
 
@@ -1873,10 +2044,7 @@ describe('inputSchema → JSON Schema conversion (MCP discovery)', () => {
 
     for (const name of ['agor_sessions_create', 'agor_sessions_spawn', 'agor_sessions_prompt']) {
       const schema = tools[name].cfg.inputSchema!;
-      const jsonSchema = toJSONSchema(schema as Parameters<typeof toJSONSchema>[0]) as Record<
-        string,
-        any
-      >;
+      const jsonSchema = toJSONSchema(schema) as Record<string, any>;
 
       // Sanity: real param surface, not the `{ type: 'object' }` fallback
       expect(jsonSchema.type).toBe('object');

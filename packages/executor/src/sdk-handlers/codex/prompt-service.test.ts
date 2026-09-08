@@ -554,6 +554,8 @@ describe('CodexPromptService - prompt flow client initialization', () => {
       expect(mockInstanceConfigs).toEqual([
         {
           features: { goals: false, multi_agent: false },
+          // Agor always opts Codex into its sticky-task-list planning tool.
+          tools: { update_plan: { enabled: true } },
           model_instructions_file: '/tmp/agor-codex-instructions-flow.md',
           mcp_servers: {
             agor: {

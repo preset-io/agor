@@ -160,12 +160,15 @@ services:
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - GEMINI_API_KEY=${GEMINI_API_KEY:-}
 
-      # Branch RBAC + execution mode (resolved in memory; config.yaml is
-      # never rewritten). Both are optional.
-      #   AGOR_RBAC_ENABLED=true         → execution.branch_rbac: true
+      # Board and branch RBAC is always enabled; this variable is retired.
+      # Forwarded only during the compatibility window so an existing
+      # deployment still setting it gets the migration error instead of a
+      # silently ignored value: `true` is an accepted no-op, `false`/malformed
+      # fail startup. Remove it from your env once migrated.
+      - AGOR_RBAC_ENABLED=${AGOR_RBAC_ENABLED:-}
+      # Execution mode (resolved in memory; config.yaml is never rewritten).
       #   AGOR_UNIX_USER_MODE=sandbox    → execution.unix_user_mode: sandbox
       #                                    (simple | sandbox | delegated)
-      - AGOR_RBAC_ENABLED=${AGOR_RBAC_ENABLED:-}
       - AGOR_UNIX_USER_MODE=${AGOR_UNIX_USER_MODE:-}
       # OS-level executor filesystem sandbox (bubblewrap). AGOR_SANDBOX_ENABLED=true
       # → execution.sandbox.enabled: true (resolved in memory). Used by the
