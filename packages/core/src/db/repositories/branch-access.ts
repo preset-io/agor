@@ -1,10 +1,21 @@
 /** Shared SQL predicates for normalized board/branch capability policies. */
 
-import type { BranchID, CapabilityPolicyFsAccess, SessionID, UserID, UUID } from '@agor/core/types';
+import type {
+  BoardPolicyCapability,
+  BranchID,
+  BranchPolicyCapability,
+  CapabilityPolicyFsAccess,
+  SessionID,
+  UserID,
+  UUID,
+} from '@agor/core/types';
 import { and, eq, exists, inArray, or, type SQL, type SQLWrapper, sql } from 'drizzle-orm';
 import {
+  BOARD_POLICY_CAPABILITIES,
+  BRANCH_POLICY_CAPABILITIES,
   CAPABILITY_POLICY_SESSION_SHARING_KEY,
   CAPABILITY_POLICY_WORKSPACE_PREFERENCES_NAMESPACE,
+  capabilityPolicyPresetsGrantingCapability,
 } from '../../types/capability-policy';
 import type { Database } from '../client';
 import { isPostgresDatabase, select } from '../database-wrapper';
@@ -26,23 +37,21 @@ import {
 
 type UserIdExpression = UUID | SQLWrapper;
 
-const BOARD_ROLES_BY_CAPABILITY = {
-  'board.view': ['viewer', 'editor', 'manager'],
-  'board.edit': ['editor', 'manager'],
-  'board.attach_branch': ['editor', 'manager'],
-  'board.policy.manage': ['manager'],
-} as const;
-
-const BRANCH_ROLES_BY_CAPABILITY = {
-  'branch.view': ['viewer', 'collaborator', 'manager'],
-  'sessions.create': ['collaborator', 'manager'],
-  'sessions.prompt_own': ['collaborator', 'manager'],
-  'sessions.manage_others': ['manager'],
-  'branch.manage': ['manager'],
-  'environment.control': ['manager'],
-  'terminal.open': ['collaborator', 'manager'],
-  'branch.policy.manage': ['manager'],
-} as const;
+// Static product definitions only, never principal/resource authorization state.
+// Expand with filesystem access so terminal's role half is included; SQL below
+// still checks actual filesystem grants (including additive group dimensions).
+const BOARD_ROLES_BY_CAPABILITY = Object.fromEntries(
+  BOARD_POLICY_CAPABILITIES.map((capability) => [
+    capability,
+    capabilityPolicyPresetsGrantingCapability('board_access', capability),
+  ])
+);
+const BRANCH_ROLES_BY_CAPABILITY = Object.fromEntries(
+  BRANCH_POLICY_CAPABILITIES.map((capability) => [
+    capability,
+    capabilityPolicyPresetsGrantingCapability('branch_access', capability, 'read'),
+  ])
+);
 
 function roleGrantsCapability(
   column: SQLWrapper,
@@ -368,11 +377,17 @@ function selectRaw(db: Database): any {
   return (db as any).select({ _: sql`1` });
 }
 
-function branchCapabilityCondition(
+/**
+ * Row predicate for an authenticated, existing same-tenant principal. Requires
+ * branches in the outer query and the caller's tenant DB scope; no admin bypass.
+ * This is not a principal-existence check or foreign-session prompt authority.
+ */
+export function branchCapabilityCondition(
   db: Database,
   userId: UserIdExpression,
-  capability: string
+  capability: BranchPolicyCapability
 ): SQL {
+  if (!BRANCH_POLICY_CAPABILITIES.includes(capability)) return sql`false`;
   const directMatch = directBranchEntryExists(db, userId);
   const groupMatch = activeBranchGroupEntryExists(db, userId);
   return (
@@ -493,14 +508,20 @@ function activeBoardGroupEntryExists(
   );
 }
 
-export function visibleBoardAccessCondition(db: Database, userId: UserIdExpression): SQL {
+/** Same authenticated-principal contract as branchCapabilityCondition; outer table is boards. */
+export function boardCapabilityCondition(
+  db: Database,
+  userId: UserIdExpression,
+  capability: BoardPolicyCapability
+): SQL {
+  if (!BOARD_POLICY_CAPABILITIES.includes(capability)) return sql`false`;
   const directMatch = directBoardEntryExists(db, userId);
   const groupMatch = activeBoardGroupEntryExists(db, userId);
   return (
     or(
       eq(boards.primary_owner_user_id, userId),
-      directBoardEntryExists(db, userId, 'board.view'),
-      and(sql`NOT ${directMatch}`, activeBoardGroupEntryExists(db, userId, 'board.view')),
+      directBoardEntryExists(db, userId, capability),
+      and(sql`NOT ${directMatch}`, activeBoardGroupEntryExists(db, userId, capability)),
       and(
         sql`NOT ${directMatch}`,
         sql`NOT ${groupMatch}`,
@@ -511,13 +532,17 @@ export function visibleBoardAccessCondition(db: Database, userId: UserIdExpressi
               and(
                 eq(boardAccessPolicies.board_id, boards.board_id),
                 eq(boardAccessPolicies.sharing_mode, 'shared'),
-                roleGrantsCapability(boardAccessPolicies.others_role, 'board', 'board.view')
+                roleGrantsCapability(boardAccessPolicies.others_role, 'board', capability)
               )
             )
         )
       )
     ) ?? sql`false`
   );
+}
+
+export function visibleBoardAccessCondition(db: Database, userId: UserIdExpression): SQL {
+  return boardCapabilityCondition(db, userId, 'board.view');
 }
 
 export function visibleBoardReferenceAccessExists(

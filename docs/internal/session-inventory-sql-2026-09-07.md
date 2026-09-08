@@ -267,3 +267,51 @@ an already efficient shared primitive, documenting why, and adding repeatable
 regressions is the evidence-backed extension here. This does not establish
 optimal plans for every possible filter, data distribution or database version.
 Full validation and managed message/task smoke results are in the PR body.
+
+## Canonical capability definitions and broader predicate parity (2026-09-08)
+
+The next user-approved follow-up started at
+`b2e6dce995af8591ea1bdfd695a8ad13268d5989`. A fresh fetch confirmed main
+was still `8f8b3ec764a9c28ee658b4f2d5cedf95265c5e47`; no rebase or
+clone-diagnostics edits were needed.
+
+Review found a concrete maintainability hazard, not a reproduced authorization
+bug: SQL kept independent board/branch capability-to-role tables alongside the
+canonical role expansion used by policy writes and rich point resolution.
+`capabilityPolicyPresetsGrantingCapability` now inverts that canonical expansion;
+SQL derives its static allow-lists once from it. These are product definitions,
+not cached user/resource decisions. Terminal's SQL still requires actual
+filesystem grants, including role/file contributions from different groups.
+
+`branchCapabilityCondition` is now a typed reusable row predicate, and
+`boardCapabilityCondition` generalizes the existing board visibility predicate.
+The existing visibility/admission wrappers use them without changing their SQL
+policy precedence. Unsupported capability values fail closed, even for owners.
+Both predicates require the resource table in the outer query and an existing
+authenticated same-tenant principal in trusted tenant DB scope. They neither
+implement admin bypass nor replace principal-existence checks or foreign-session
+prompt authority. No new public service method, query operator or permission
+was introduced.
+
+The new persisted-policy matrix compares SQL against rich point resolution for
+all four board and eight branch capabilities, all roles and valid filesystem
+dimensions, across direct/group/Others grants. It exercises an owner, a member,
+and an admin-ID principal; direct entries shadow stronger group grants and
+matched groups suppress stronger Others grants. Both inherited and overridden
+branches are checked. Split group role/filesystem grants, group archive and
+membership removal cover terminal derivation and immediate revocation.
+PostgreSQL repeats the matrix in isolated tenant scopes and checks foreign
+board/branch IDs for every capability, including an attempted foreign-owner-ID
+bypass. Existing inventory/count and cross-tenant regressions remain intact.
+
+Before replacing the role tables, the initial SQLite matrix and capability tests
+passed with the historical tables temporarily restored (13 tests). The expanded
+matrix passes with canonical-derived tables. Explicit role-expansion assertions
+preserve the historical allow-lists independently of the differential checks.
+No authorization mismatch reproduced; this follow-up removes drift risk rather
+than claiming a new access fix or speedup. Production inventory SQL composition,
+query counts, pagination, residual filters, RLS and HA boundaries are unchanged.
+The plan regressions remain the performance guardrail; nested-predicate rewrites
+or a universal fenced query are not justified by this change.
+
+Final validation totals and managed smoke results are recorded in the PR body.
