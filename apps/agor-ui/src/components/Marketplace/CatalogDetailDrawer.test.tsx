@@ -723,9 +723,9 @@ describe('CatalogDetailDrawer API key', () => {
   });
 
   it('discards the pasted key while the successful next step remains on screen', () => {
-    const { succeed, answerFromEndpoint } = renderWithConnect(DATADOG);
+    const { succeed, answerFromEndpoint } = renderWithConnect(GITHUB);
     fireEvent.click(screen.getByRole('checkbox'));
-    fireEvent.change(keyField() as HTMLElement, { target: { value: 'fake-datadog-key' } });
+    fireEvent.change(keyField() as HTMLElement, { target: { value: 'fake-github-key' } });
 
     succeed();
     expect(screen.getByText('Connected and ready')).toBeInTheDocument();
@@ -787,7 +787,7 @@ describe('CatalogDetailDrawer API key', () => {
   });
 
   it('updates technical authentication from the live endpoint instead of stale metadata', async () => {
-    const { answerFromEndpoint } = renderWithConnect(DATADOG);
+    const { answerFromEndpoint } = renderWithConnect(GITHUB);
     answerFromEndpoint('not_accepted');
 
     fireEvent.click(screen.getByText('Technical details'));

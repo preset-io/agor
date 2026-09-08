@@ -73,6 +73,23 @@ describe('resolveSecurity — CSP defaults', () => {
     }
   });
 
+  it('allows GitHub catalog assets only as images from the exact reviewed origin', () => {
+    const { csp } = resolveSecurity(EMPTY);
+    const origin = 'https://github.githubassets.com';
+    expect(csp.directives['img-src']).toContain(origin);
+    for (const directive of ['script-src', 'connect-src']) {
+      expect(csp.directives[directive]).not.toContain(origin);
+    }
+    for (const url of [
+      'https://other.githubassets.com/logo.png',
+      'http://github.githubassets.com/logo.png',
+    ]) {
+      expect(
+        csp.directives['img-src']?.some((source) => cspSourceAllowsUrl(source, new URL(url)))
+      ).toBe(false);
+    }
+  });
+
   it('honours allowSandpack=false by dropping *.codesandbox.io from frame-src', () => {
     const { csp } = resolveSecurity(
       { security: { cors: { allow_sandpack: false } } },
