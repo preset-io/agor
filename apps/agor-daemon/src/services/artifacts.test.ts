@@ -25,7 +25,14 @@ import {
   update,
 } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
-import type { Artifact, BoardID, BranchID, SessionID, UUID } from '@agor/core/types';
+import type {
+  Artifact,
+  ArtifactStatus,
+  BoardID,
+  BranchID,
+  SessionID,
+  UUID,
+} from '@agor/core/types';
 import { describe, expect, it, vi } from 'vitest';
 import { dbTest } from '../../../../packages/core/src/db/test-helpers';
 import { requestExecutor } from '../utils/spawn-executor';
@@ -50,6 +57,31 @@ it('quotes dotenv values without permitting CR/LF record injection', () => {
   expect(escaped).toBe('"first\\rINJECTED=value\\nlast\\\\\\""');
   expect(escaped).not.toContain('\r');
   expect(escaped).not.toContain('\n');
+});
+
+describe('artifact status diagnosis', () => {
+  it.each([
+    [`Unexpected token '<', "<!doctype "... is not valid JSON`, 'html_instead_of_json'],
+    ['Unexpected token < in JSON at position 0', 'html_instead_of_json'],
+    [
+      'package.json: Expected property name in JSON at position 2',
+      'malformed_package_json_or_syntax',
+    ],
+    ["/App.tsx: Unexpected token '<'", 'malformed_package_json_or_syntax'],
+    ["Cannot use 'import.meta' outside a module", 'environment_variable_access'],
+    ["Cannot find module './missing'", 'missing_local_import_or_dependency'],
+  ])('classifies %s without inventing a failed endpoint', (message, diagnosis) => {
+    const status: ArtifactStatus = {
+      artifact_id: generateId(),
+      build_status: 'error',
+      sandpack_error: { message },
+      console_logs: [],
+    };
+    expect(ArtifactsService.prototype.buildStatusDiagnostic(status)).toMatchObject({
+      diagnosis,
+      primary_error: message,
+    });
+  });
 });
 
 /**
@@ -1152,6 +1184,173 @@ describe('ArtifactsService.grantTrust', () => {
 });
 
 describe('ArtifactsService.getStatus + console isolation', () => {
+  dbTest(
+    'explicit completion succeeds while the provider stays running, only for its viewer',
+    async ({ db }) => {
+      const service = new ArtifactsService(db, makeFakeApp());
+      const board = await seedBoard(db);
+      const artifact = await seedArtifact(db, board.board_id);
+      const payload = await service.getPayload(artifact.artifact_id, 'viewer-A' as never);
+      await service.setSandpackError(
+        artifact.artifact_id,
+        'viewer-A',
+        null,
+        'running',
+        payload.runtime_report_hash,
+        'success'
+      );
+
+      const result = await service.waitForRuntimeStatus(artifact.artifact_id, 'viewer-A' as never, {
+        settleMs: 0,
+      });
+      expect(result).toMatchObject({
+        ok: true,
+        observed: true,
+        timed_out: false,
+        sandpack_status: 'running',
+        compilation_status: 'success',
+      });
+      const other = await service.waitForRuntimeStatus(artifact.artifact_id, 'viewer-B' as never, {
+        timeoutMs: 500,
+        settleMs: 0,
+      });
+      expect(other).toMatchObject({ ok: false, observed: false, timed_out: true });
+      expect(other.compilation_status).toBeUndefined();
+    }
+  );
+
+  for (const status of ['idle', 'initial', 'running']) {
+    dbTest(
+      `legacy provider ${status} is observation, not successful compilation`,
+      async ({ db }) => {
+        const service = new ArtifactsService(db, makeFakeApp());
+        const artifact = await seedArtifact(db, (await seedBoard(db)).board_id);
+        await service.setSandpackError(artifact.artifact_id, 'viewer-A', null, status);
+        const result = await service.waitForRuntimeStatus(
+          artifact.artifact_id,
+          'viewer-A' as never,
+          { timeoutMs: 500, settleMs: 0 }
+        );
+        expect(result).toMatchObject({ ok: false, observed: true, timed_out: true });
+        expect(result.note).toContain('does not prove the app is broken');
+      }
+    );
+  }
+
+  dbTest(
+    'compilation failure without an error object is still an observed failure',
+    async ({ db }) => {
+      const service = new ArtifactsService(db, makeFakeApp());
+      const artifact = await seedArtifact(db, (await seedBoard(db)).board_id);
+      await service.setSandpackError(
+        artifact.artifact_id,
+        'viewer-A',
+        null,
+        'running',
+        undefined,
+        'error'
+      );
+      expect(
+        await service.waitForRuntimeStatus(artifact.artifact_id, 'viewer-A' as never)
+      ).toMatchObject({ ok: false, observed: true, timed_out: false, build_status: 'error' });
+    }
+  );
+
+  dbTest('a legacy report clears old completion rather than inheriting success', async ({ db }) => {
+    const service = new ArtifactsService(db, makeFakeApp());
+    const artifact = await seedArtifact(db, (await seedBoard(db)).board_id);
+    await service.setSandpackError(
+      artifact.artifact_id,
+      'viewer-A',
+      null,
+      'running',
+      undefined,
+      'success'
+    );
+    await service.setSandpackError(artifact.artifact_id, 'viewer-A', null, 'running');
+    expect(
+      (await service.getStatus(artifact.artifact_id, 'viewer-A' as never)).compilation_status
+    ).toBeUndefined();
+  });
+
+  dbTest(
+    'the settle window catches early runtime errors after successful compilation',
+    async ({ db }) => {
+      const service = new ArtifactsService(db, makeFakeApp());
+      const artifact = await seedArtifact(db, (await seedBoard(db)).board_id);
+      await service.setSandpackError(
+        artifact.artifact_id,
+        'viewer-A',
+        null,
+        'running',
+        undefined,
+        'success'
+      );
+      const waiting = service.waitForRuntimeStatus(artifact.artifact_id, 'viewer-A' as never, {
+        timeoutMs: 2000,
+        settleMs: 1000,
+      });
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      await service.appendConsoleLogs(artifact.artifact_id, 'viewer-A', [
+        { timestamp: 1, level: 'error', message: 'boot failed' },
+      ]);
+      expect(await waiting).toMatchObject({ ok: false, observed: true, build_status: 'error' });
+    }
+  );
+
+  dbTest('HA still rejects process-local runtime waits', async ({ db }) => {
+    const service = new ArtifactsService(db, makeFakeApp(), { runtimeIntrospectionEnabled: false });
+    await expect(
+      service.waitForRuntimeStatus('unobserved', 'viewer-A' as never)
+    ).rejects.toMatchObject({ data: { code: 'HA_FEATURE_UNSUPPORTED' } });
+  });
+
+  dbTest('completion must finish the settle window before the wait deadline', async ({ db }) => {
+    const service = new ArtifactsService(db, makeFakeApp());
+    const artifact = await seedArtifact(db, (await seedBoard(db)).board_id);
+    await service.setSandpackError(
+      artifact.artifact_id,
+      'viewer-A',
+      null,
+      'running',
+      undefined,
+      'success'
+    );
+    expect(
+      await service.waitForRuntimeStatus(artifact.artifact_id, 'viewer-A' as never, {
+        timeoutMs: 500,
+        settleMs: 25,
+      })
+    ).toMatchObject({ ok: true, observed: true, timed_out: false });
+    expect(
+      await service.waitForRuntimeStatus(artifact.artifact_id, 'viewer-A' as never, {
+        timeoutMs: 500,
+        settleMs: 1000,
+      })
+    ).toMatchObject({ ok: false, observed: true, timed_out: true });
+  });
+
+  dbTest(
+    'rejects invalid completion reports without recording browser activity',
+    async ({ db }) => {
+      const service = new ArtifactsService(db, makeFakeApp());
+      const artifact = await seedArtifact(db, (await seedBoard(db)).board_id);
+      await expect(
+        service.setSandpackError(
+          artifact.artifact_id,
+          'viewer-A',
+          null,
+          'running',
+          undefined,
+          'ready' as never
+        )
+      ).rejects.toMatchObject({ code: 400 });
+      const status = await service.getStatus(artifact.artifact_id, 'viewer-A' as never);
+      expect(status.compilation_status).toBeUndefined();
+      expect(status.runtime_observed_at).toBeUndefined();
+    }
+  );
+
   dbTest('console logs and sandpack errors are scoped per viewer', async ({ db }) => {
     const service = new ArtifactsService(db, makeFakeApp());
     const board = await seedBoard(db);
@@ -1246,7 +1445,14 @@ describe('ArtifactsService.getStatus + console isolation', () => {
           timeoutMs: 500,
           settleMs: 0,
         });
-        await service.setSandpackError(created.artifact_id, 'viewer-A', null, 'idle', 'old');
+        await service.setSandpackError(
+          created.artifact_id,
+          'viewer-A',
+          null,
+          'running',
+          'old',
+          'success'
+        );
         await vi.advanceTimersByTimeAsync(600);
 
         const result = await waitPromise;
@@ -1254,6 +1460,7 @@ describe('ArtifactsService.getStatus + console isolation', () => {
         expect(result.observed).toBe(false);
         expect(result.timed_out).toBe(true);
         expect(result.sandpack_status).toBeUndefined();
+        expect(result.compilation_status).toBeUndefined();
       } finally {
         vi.useRealTimers();
       }
@@ -1296,8 +1503,9 @@ describe('ArtifactsService.getStatus + console isolation', () => {
           created.artifact_id,
           'viewer-A',
           null,
-          'idle',
-          beforePayload.runtime_report_hash
+          'running',
+          beforePayload.runtime_report_hash,
+          'success'
         );
         await vi.advanceTimersByTimeAsync(600);
 

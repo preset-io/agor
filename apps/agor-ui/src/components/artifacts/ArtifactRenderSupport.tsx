@@ -10,7 +10,6 @@ import { getAuthHeaders, getCurrentUserIdFromJwt } from '@/utils/authHeaders';
 /** Max console entries to send per batch, and minimum interval between sends. */
 const CONSOLE_BATCH_MAX = 50;
 const CONSOLE_THROTTLE_MS = 2000;
-const SANDPACK_ERROR_THROTTLE_MS = 1000;
 const RUNTIME_QUERY_DEFAULT_TIMEOUT_MS = 6000;
 
 /**
@@ -81,77 +80,7 @@ export function ArtifactConsoleReporter({
   return null;
 }
 
-/**
- * Captures Sandpack bundler/runtime errors and forwards them to the daemon.
- * Must be rendered inside a SandpackProvider.
- */
-export function ArtifactSandpackErrorReporter({
-  artifactId,
-  contentHash,
-}: {
-  artifactId: string;
-  contentHash?: string;
-}) {
-  const { sandpack } = useSandpack();
-  const lastSentRef = useRef<string | null>(null);
-  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const pendingSendRef = useRef<(() => void) | null>(null);
-
-  useEffect(() => {
-    const stateKey = `${sandpack.error?.message ?? ''}\0${sandpack.status}`;
-    if (stateKey === lastSentRef.current) return;
-
-    const sendError = () => {
-      lastSentRef.current = stateKey;
-      pendingSendRef.current = null;
-
-      const payload: {
-        error: {
-          message: string;
-          title?: string;
-          path?: string;
-          line?: number;
-          column?: number;
-        } | null;
-        status: string;
-      } = {
-        error: sandpack.error
-          ? {
-              message: sandpack.error.message,
-              ...(sandpack.error.title ? { title: sandpack.error.title } : {}),
-              ...(sandpack.error.path ? { path: sandpack.error.path } : {}),
-              ...(sandpack.error.line != null ? { line: sandpack.error.line } : {}),
-              ...(sandpack.error.column != null ? { column: sandpack.error.column } : {}),
-            }
-          : null,
-        status: sandpack.status,
-      };
-
-      fetch(`${getDaemonUrl()}/artifacts/${artifactId}/sandpack-error`, {
-        method: 'POST',
-        headers: getAuthHeaders(),
-        body: JSON.stringify({ ...payload, content_hash: contentHash }),
-      }).catch(() => {});
-    };
-
-    if (timerRef.current) clearTimeout(timerRef.current);
-    pendingSendRef.current = sendError;
-    timerRef.current = setTimeout(() => {
-      timerRef.current = null;
-      sendError();
-    }, SANDPACK_ERROR_THROTTLE_MS);
-
-    return () => {
-      if (timerRef.current) {
-        clearTimeout(timerRef.current);
-        timerRef.current = null;
-        pendingSendRef.current?.();
-      }
-    };
-  }, [sandpack.error, sandpack.status, artifactId, contentHash]);
-
-  return null;
-}
+export { ArtifactSandpackErrorReporter } from './ArtifactSandpackErrorReporter';
 
 /**
  * Bridges agent-driven runtime queries: daemon WebSocket event → parent page →

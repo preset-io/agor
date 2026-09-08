@@ -1889,11 +1889,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       '/artifacts/:id/sandpack-error',
       {
         async create(
-          data: {
-            error: import('@agor/core/types').SandpackError | null;
-            status?: string;
-            content_hash?: string;
-          },
+          data: import('@agor/core/types').ArtifactSandpackReport,
           _params: RouteParams
         ) {
           const artifactId = _params.route?.id;
@@ -1910,7 +1906,8 @@ export function registerHooks(ctx: RegisterHooksContext): void {
             userId,
             data.error,
             data.status,
-            data.content_hash
+            data.content_hash,
+            data.compilation_status
           );
           return { success: true };
         },
