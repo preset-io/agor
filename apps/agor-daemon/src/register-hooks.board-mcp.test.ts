@@ -51,6 +51,43 @@ dbTest(
       return parsed.result as { isError?: boolean; content: { text: string }[] };
     };
     try {
+      // These refinements are not represented by published JSON Schema keywords.
+      // The facade's safe field/code error must lead to usable guidance.
+      for (const toolName of ['agor_schedules_create', 'agor_schedules_patch']) {
+        const details = JSON.parse(
+          (await call('agor_get_tool_details', { tool_name: toolName })).content[0].text
+        );
+        expect(details.tool.inputSchema.properties.agentic_tool_config.description).toMatch(
+          /Do not combine preset_id, configuration_reference, or inline fields \(permission_mode, model_config, context_files\)/
+        );
+      }
+      const getBranch = vi.spyOn(server.app.service('branches'), 'get');
+      const invalidConfig = await call('agor_execute_tool', {
+        tool_name: 'agor_schedules_create',
+        arguments: {
+          branchId: fixture.entities[1].branch_id,
+          name: 'Invalid configuration',
+          cron_expression: '0 9 * * *',
+          timezone_mode: 'utc',
+          prompt: 'private-prompt-value',
+          agentic_tool_config: {
+            agentic_tool: 'codex',
+            preset_id: 'private-preset-value',
+            model_config: { model: 'private-model-value' },
+          },
+        },
+      });
+      expect(invalidConfig.isError).toBe(true);
+      expect(JSON.parse(invalidConfig.content[0].text)).toMatchObject({
+        code: 'invalid_tool_arguments',
+        validation_stage: 'tool_input',
+        issues: [{ field: 'agentic_tool_config', code: 'custom' }],
+        hint: expect.stringContaining('agor_get_tool_details'),
+      });
+      expect(invalidConfig.content[0].text).not.toContain('private-');
+      expect(getBranch).not.toHaveBeenCalled();
+      getBranch.mockRestore();
+
       for (const toolName of ['agor_boards_list', 'agor_branches_list']) {
         const details = JSON.parse(
           (await call('agor_get_tool_details', { tool_name: toolName })).content[0].text

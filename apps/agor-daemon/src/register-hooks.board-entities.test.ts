@@ -2,6 +2,7 @@ import { createClient, createRestClient } from '@agor/core/api';
 import {
   BoardObjectRepository,
   BranchRepository,
+  CardRepository,
   createTenantScopedDatabaseProxy,
 } from '@agor/core/db';
 import type { McpServer } from '@modelcontextprotocol/server';
@@ -159,6 +160,39 @@ dbTest(
       expect(branchPage.data[0].branch_id).toBe(fixture.entities[2].branch_id);
       expect(execute).toHaveBeenCalledTimes(2);
       execute.mockRestore();
+
+      // Exceed the default 100-row page even after skipping the original three
+      // visible entities: omitted limits must still return the entire tail.
+      const cards = new CardRepository(db);
+      const addedObjects = [];
+      for (let index = 0; index < 105; index++) {
+        const card = await cards.create({
+          board_id: fixture.board.board_id,
+          title: `Unlimited-read fixture ${index}`,
+          created_by: fixture.owner.user_id,
+        });
+        addedObjects.push(
+          await objects.create({
+            board_id: fixture.board.board_id,
+            card_id: card.card_id,
+            position: { x: index, y: 1 },
+            zone_id: 'zone-review',
+          })
+        );
+      }
+      const unlimited = await getBoard({});
+      expect(unlimited.entities_pagination).toEqual({ total: 108, limit: null, skip: 0 });
+      expect(unlimited.entities).toHaveLength(108);
+      expect(unlimited.entities).toEqual(
+        expect.arrayContaining(
+          addedObjects.map(({ object_id }) => expect.objectContaining({ object_id }))
+        )
+      );
+      const tail = await getBoard({ entitiesSkip: 3 });
+      expect(tail.entities_pagination).toEqual({ total: 108, limit: null, skip: 3 });
+      expect(tail.entities).toHaveLength(105);
+      expect(tail.entities).toEqual(unlimited.entities.slice(3));
+      expect(findBranches).not.toHaveBeenCalled();
     } finally {
       socket.io.disconnect();
       await server.close();
