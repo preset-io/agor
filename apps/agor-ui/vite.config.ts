@@ -87,6 +87,10 @@ export default defineConfig({
           // registration can never pull it into the initial Streamdown chunk.
           if (/node_modules\/(?:vega(?:-|\/))/.test(id)) return 'vega';
           if (id.includes('streamdown')) return 'streamdown';
+          // Keep transformers.js + onnxruntime out of the initial bundle.
+          // These are dynamically imported on first mic click only.
+          if (id.includes('@huggingface/transformers') || id.includes('onnxruntime-web'))
+            return 'transformers';
           return undefined;
         },
       },
