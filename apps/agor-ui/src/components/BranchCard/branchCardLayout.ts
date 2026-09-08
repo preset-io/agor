@@ -1,7 +1,7 @@
 import type { Session } from '@agor-live/client';
 import { isGatewaySession } from '@agor-live/client';
 
-// Keep mounted lists and the deferred card's fit-to-view footprint in sync.
+// Keep auto-sized card lists and the deferred card's fit-to-view footprint in sync.
 export const BRANCH_SESSION_VIEWPORT_HEIGHT = 400;
 
 const EMPTY_SESSIONS_SHELL_HEIGHT = 72;
