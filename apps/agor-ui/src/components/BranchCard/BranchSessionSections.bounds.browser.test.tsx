@@ -3,6 +3,7 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 import { App } from 'antd';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { userEvent } from 'vitest/browser';
+import '../../index.css';
 import { EMPTY_MAPS } from '../../store/agorMaps';
 import { agorStore } from '../../store/agorStore';
 import { BoardTeammatePanel } from '../BoardTeammatePanel/BoardTeammatePanel';
@@ -36,6 +37,7 @@ function mount(sessions: Session[], mode: 'card' | 'panel' = 'card') {
           userById={new Map()}
           client={null}
           mode={mode}
+          fillAvailableHeight={mode === 'panel'}
           onSessionClick={onSessionClick}
         />
       </div>

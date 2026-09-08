@@ -178,7 +178,10 @@ import {
   redactMCPServerSecrets,
   shouldExposeMCPServerSecrets,
 } from './utils/mcp-header-secrets.js';
-import { createMcpServerWriteAuthorizationHook } from './utils/mcp-server-authorization.js';
+import {
+  createMcpServerWriteAuthorizationHook,
+  resolveMcpCaller,
+} from './utils/mcp-server-authorization.js';
 import { realignRepoOriginAfterPatchHook } from './utils/realign-repo-origin.js';
 import {
   bindRealtimeAccessCacheInvalidation,
@@ -2319,9 +2322,10 @@ export function registerHooks(ctx: RegisterHooksContext): void {
   };
 
   const scopeMcpServerFindToUsable = async (context: HookContext): Promise<HookContext> => {
-    if (!context.params.provider) return context;
-    const user = context.params.user;
-    if (!user || (user as { _isServiceAccount?: boolean })._isServiceAccount) return context;
+    const caller = resolveMcpCaller(context.params);
+    if (caller.kind === 'internal' || caller.kind === 'service-account') return context;
+    if (caller.kind === 'anonymous') throw new NotAuthenticated('Authentication required');
+    const user = caller.user;
     if (!hasMinimumRole(user.role, ROLES.ADMIN)) {
       // Do not trust a caller-supplied usableByUserId; it is an internal
       // authorization filter, not a public query capability.
@@ -2336,15 +2340,11 @@ export function registerHooks(ctx: RegisterHooksContext): void {
   const denyMcpServerGetOfAnotherUsersPrivate = async (
     context: HookContext
   ): Promise<HookContext> => {
-    if (!context.params.provider) return context;
-    const user = context.params.user;
-    if (
-      !user ||
-      (user as { _isServiceAccount?: boolean })._isServiceAccount ||
-      hasMinimumRole(user.role, ROLES.ADMIN)
-    ) {
-      return context;
-    }
+    const caller = resolveMcpCaller(context.params);
+    if (caller.kind === 'internal' || caller.kind === 'service-account') return context;
+    if (caller.kind === 'anonymous') throw new NotAuthenticated('Authentication required');
+    const user = caller.user;
+    if (hasMinimumRole(user.role, ROLES.ADMIN)) return context;
     if (!isMCPServerUsableBy(context.result as MCPServer, user.user_id)) {
       throw new NotFound(`MCP server not found: ${String(context.id)}`);
     }

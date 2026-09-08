@@ -279,8 +279,8 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
             style={{
               display: 'flex',
               flexDirection: 'column',
-              flexShrink: 0,
               gap: 10,
+              flexShrink: 0,
               paddingBottom: 12,
               marginBottom: 4,
               borderBottom: `1px solid ${token.colorBorderSecondary}`,
@@ -358,6 +358,7 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
               onSpawnSession={onSpawnSession}
               onOpenSessionSettings={onOpenSessionSettings}
               mode="panel"
+              fillAvailableHeight
               client={client}
             />
           ) : (

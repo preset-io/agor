@@ -138,6 +138,7 @@ export const MCP_AUTH_RECOVERY_CATEGORIES = [
   'provider_unavailable',
   'provider_rejected',
   'invalid_response',
+  'storage_policy_rejected',
   'configuration_required',
   'unknown',
 ] as const;
@@ -447,7 +448,13 @@ export type MCPDiscoveryResult =
       resources: Pick<MCPResource, 'name' | 'uri' | 'mimeType'>[];
       prompts: Pick<MCPPrompt, 'name' | 'description'>[];
     }
-  | { success: false; error: string; recovery?: MCPAuthRecovery; category?: string };
+  | {
+      success: false;
+      error: string;
+      recovery?: MCPAuthRecovery;
+      category?: string;
+      action?: MCPAuthRecoveryAction;
+    };
 
 /**
  * MCP Server Capabilities

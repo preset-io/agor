@@ -56,23 +56,27 @@ const { probeRemoteAuthType, probeRemoteBearerToken } = vi.hoisted(() => ({
 }));
 vi.mock('@agor/core/mcp-catalog', () => ({ probeRemoteAuthType, probeRemoteBearerToken }));
 
-const DATADOG = 'com.datadoghq/mcp';
-const DISCLOSURE = 'Reads metrics, logs, traces, monitors, and incidents.';
+const GITHUB = 'io.github.github/github-mcp-server';
+const DISCLOSURE = 'Reads repositories and issues you authorise.';
 
 /** The one curated entry that states `credentials`, trimmed to what is used. */
 const CURATED = {
-  name: DATADOG,
-  title: 'Datadog',
+  name: GITHUB,
+  title: 'GitHub',
   transport: 'streamable-http',
-  remote_url: 'https://mcp.datadoghq.com/api/unstable/mcp-server/mcp',
+  remote_url: 'https://api.githubcopilot.com/mcp/',
   has_remote: true,
   auth_type: 'credentials',
-  credentials: { scheme: 'bearer', acquisition_url: 'https://example.com/tokens' },
+  credentials: {
+    scheme: 'bearer',
+    acquisition_url: 'https://example.com/tokens',
+    oauth_challenge_compatible: true,
+  },
   permission_disclosure: DISCLOSURE,
 } as unknown as MCPCatalogEntry;
 
 const CONNECT_REQUEST = {
-  catalog_key: DATADOG,
+  catalog_key: GITHUB,
   branch_id: 'branch-1',
   agentic_tool: 'claude-code' as const,
   acknowledged_disclosure: DISCLOSURE,
@@ -288,8 +292,8 @@ async function buildDaemon(entry: MCPCatalogEntry = CURATED) {
   };
 }
 
-const WORKING_KEY = 'fake-datadog-key-aaaa';
-const ROTATED_KEY = 'fake-datadog-key-bbbb';
+const WORKING_KEY = 'fake-github-key-aaaa';
+const ROTATED_KEY = 'fake-github-key-bbbb';
 
 describe('an API-key install, end to end', () => {
   beforeEach(() => {
@@ -314,7 +318,7 @@ describe('an API-key install, end to end', () => {
       url: CURATED.remote_url,
       scope: 'session',
       source: 'catalog',
-      catalog_entry_name: DATADOG,
+      catalog_entry_name: GITHUB,
       owner_user_id: alice.user_id,
       enabled: true,
       auth: { type: 'bearer', token: WORKING_KEY },
@@ -660,7 +664,7 @@ describe('the paths an API key does not change', () => {
 
   it('installs an OAuth endpoint configured-but-unauthenticated, as before', async () => {
     probeRemoteAuthType.mockResolvedValue('oauth');
-    const daemon = await buildDaemon({ ...CURATED, auth_type: 'oauth' });
+    const daemon = await buildDaemon({ ...CURATED, auth_type: 'oauth', credentials: undefined });
     const alice = await daemon.addUser('alice@agor.live');
 
     await daemon.connectAs(alice);
@@ -668,6 +672,26 @@ describe('the paths an API key does not change', () => {
     const [row] = await daemon.stored();
     expect(row?.auth).toEqual({ type: 'oauth', oauth_mode: 'per_user' });
     expect(probeRemoteBearerToken).not.toHaveBeenCalled();
+  });
+
+  it('uses a reviewed bearer route when the endpoint advertises OAuth', async () => {
+    probeRemoteAuthType.mockResolvedValue('oauth');
+    probeRemoteBearerToken.mockResolvedValue('accepted');
+    const daemon = await buildDaemon({
+      ...CURATED,
+      credentials: {
+        scheme: 'bearer',
+        acquisition_url: 'https://example.com/tokens',
+        oauth_challenge_compatible: true,
+      },
+    });
+    const alice = await daemon.addUser('github-pat@agor.live');
+
+    await daemon.connectAs(alice, WORKING_KEY);
+
+    const [row] = await daemon.stored();
+    expect(row?.auth).toEqual({ type: 'bearer', token: WORKING_KEY });
+    expect(probeRemoteBearerToken).toHaveBeenCalledWith(CURATED.remote_url, WORKING_KEY);
   });
 
   it('still lets two users share one unauthenticated install', async () => {

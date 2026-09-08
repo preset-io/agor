@@ -3,11 +3,6 @@ import { runWithTenantContext, UsersRepository } from '@agor/core/db';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createOpenCodeModelsService } from './models-service';
 
-const resolveBinary = vi.hoisted(() => vi.fn());
-vi.mock('@agor/agentic-tool-opencode/runtime/binary', () => ({
-  resolvePackagedOpenCodeBinary: resolveBinary,
-}));
-
 vi.mock('@agor/core/config', async () => {
   const actual = await vi.importActual<typeof import('@agor/core/config')>('@agor/core/config');
   return {
@@ -79,7 +74,6 @@ beforeEach(() => {
     return { findById: vi.fn(async () => ({ unix_username: 'alice' })) };
   } as never);
   runCommand.mockResolvedValue({ success: true, data: catalog });
-  resolveBinary.mockResolvedValue('/packaged/opencode');
 });
 
 describe('OpenCode model catalog service', () => {
@@ -101,10 +95,6 @@ describe('OpenCode model catalog service', () => {
     const result = await runWithTenantContext('tenant-a', () => service().find(params));
 
     expect(result).toEqual(catalog);
-    expect(resolveBinary).toHaveBeenCalledOnce();
-    expect(resolveBinary.mock.invocationCallOrder[0]).toBeLessThan(
-      runCommand.mock.invocationCallOrder[0] ?? Infinity
-    );
     expect(runCommand).toHaveBeenCalledWith(
       expect.objectContaining({
         command: 'agentic-tool.invoke',
@@ -119,25 +109,66 @@ describe('OpenCode model catalog service', () => {
     );
   });
 
-  it.each(['missing', 'not executable'])(
-    'uses catalog readiness failure when the packaged binary is %s',
-    async () => {
-      resolveBinary.mockRejectedValueOnce(new Error('private binary detail'));
+  it('reads the server-free catalog without daemon runtime binary preflight', async () => {
+    await runWithTenantContext('tenant-a', async () => {
+      await expect(service().find(params)).resolves.toEqual(catalog);
+    });
 
-      await runWithTenantContext('tenant-a', async () => {
-        await expect(service().find(params)).rejects.toThrow(MODEL_CATALOG_ERROR);
-      });
-      expect(runCommand).not.toHaveBeenCalled();
-    }
-  );
+    expect(runCommand).toHaveBeenCalledOnce();
+  });
 
-  it('uses catalog readiness failure for an SDK/CLI version mismatch', async () => {
-    resolveBinary.mockRejectedValueOnce(new Error('private SDK/CLI versions'));
+  it.each([
+    undefined,
+    {},
+    { runtimeVersion: '1.14.33' },
+    { runtimeVersion: '1.14.33', providers: [{}] },
+    ...[null, false, 1, 'invalid', []].map((suggestedSelection) => ({
+      ...catalog,
+      suggestedSelection,
+    })),
+    { runtimeVersion: '1.14.33', providers: [], suggestedSelection: { providerId: 'openai' } },
+    {
+      runtimeVersion: '1.14.33',
+      providers: [
+        {
+          id: 'openai',
+          name: 'OpenAI',
+          availableForSelection: true,
+          models: [{ id: 'gpt-test', name: 'GPT test', status: 'unknown' }],
+        },
+      ],
+    },
+  ])('rejects malformed executor catalog data without exposing details', async (data) => {
+    runCommand.mockResolvedValueOnce({ success: true, data });
 
     await runWithTenantContext('tenant-a', async () => {
-      await expect(service().find(params)).rejects.toThrow(MODEL_CATALOG_ERROR);
+      await expect(service().find(params)).rejects.toMatchObject({
+        name: 'BadRequest',
+        code: 400,
+        message: MODEL_CATALOG_ERROR,
+      });
     });
-    expect(runCommand).not.toHaveBeenCalled();
+  });
+
+  it('accepts an empty valid catalog so the UI can keep exact manual entry available', async () => {
+    const empty = { runtimeVersion: '1.14.33', providers: [] };
+    runCommand.mockResolvedValueOnce({ success: true, data: empty });
+
+    await runWithTenantContext('tenant-a', async () => {
+      await expect(service().find(params)).resolves.toEqual(empty);
+    });
+  });
+
+  it('preserves a valid suggested provider/model selection', async () => {
+    const data = {
+      ...catalog,
+      suggestedSelection: { providerId: 'openai', modelId: 'gpt-5' },
+    };
+    runCommand.mockResolvedValueOnce({ success: true, data });
+
+    await runWithTenantContext('tenant-a', async () => {
+      await expect(service().find(params)).resolves.toEqual(data);
+    });
   });
 
   it('routes identical user IDs in different tenants to isolated opaque namespaces', async () => {

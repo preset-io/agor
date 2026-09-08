@@ -29,12 +29,11 @@ import {
   Space,
   Spin,
   Tooltip,
-  Tree,
   Typography,
   theme,
 } from 'antd';
 import type React from 'react';
-import { useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useMemo, useRef, useState } from 'react';
 import { useConnectionDisabled } from '../../contexts/ConnectionContext';
 import { useLocalStorage } from '../../hooks/useLocalStorage';
 import { useSessionActions } from '../../hooks/useSessionActions';
@@ -69,7 +68,7 @@ import {
   SessionSortButton,
 } from '../SessionSearchControls';
 import { ToolIcon } from '../ToolIcon';
-import { BRANCH_SESSION_VIEWPORT_HEIGHT } from './branchCardLayout';
+import { BranchSessionTree } from './BranchSessionTree';
 import {
   buildSessionTree,
   collectSessionSubtreeIds,
@@ -79,35 +78,6 @@ import { PagedSessions } from './PagedSessions';
 
 // Stable theme object so the ConfigProvider context value doesn't churn.
 const NO_MOTION_THEME = { token: { motion: false } };
-
-/** Give the virtual tree a numeric viewport without coupling panels to the card cap. */
-function SessionTreeViewport({
-  fillHeight,
-  children,
-}: {
-  fillHeight: boolean;
-  children: (height: number) => React.ReactNode;
-}) {
-  const ref = useRef<HTMLDivElement>(null);
-  const [height, setHeight] = useState(BRANCH_SESSION_VIEWPORT_HEIGHT);
-  useLayoutEffect(() => {
-    const element = ref.current;
-    if (!fillHeight || !element) return;
-    const measure = () => setHeight(Math.max(1, element.clientHeight));
-    measure();
-    const observer = new ResizeObserver(measure);
-    observer.observe(element);
-    return () => observer.disconnect();
-  }, [fillHeight]);
-
-  if (!fillHeight) return children(BRANCH_SESSION_VIEWPORT_HEIGHT);
-
-  return (
-    <div ref={ref} style={{ height: '100%', minHeight: 0 }}>
-      {children(height)}
-    </div>
-  );
-}
 
 const SECTION_KEYS: BranchSectionKey[] = ['sessions', 'scheduled-runs', 'gateway-sessions'];
 
@@ -149,6 +119,8 @@ export interface BranchSessionSectionsProps {
   peekedSessionIds?: Set<string>;
   onTogglePeekSession?: (sessionId: string) => void;
   mode?: BranchSessionSectionsMode;
+  /** The caller supplies a bounded flex-column container (not an auto-sized card). */
+  fillAvailableHeight?: boolean;
   client: AgorClient | null;
 }
 
@@ -299,6 +271,19 @@ const SessionItemWithActions: React.FC<{
   );
 };
 
+/** Cap a section at its actual content plus measured chrome, freeing space for siblings. */
+function useTreeSectionHeight() {
+  const ref = useRef<HTMLDivElement>(null);
+  const [maxHeight, setMaxHeight] = useState<number>();
+  const onContentSizeChange = useCallback((contentHeight: number, viewportHeight: number) => {
+    const sectionHeight = ref.current?.clientHeight;
+    if (!sectionHeight) return;
+    // Header/padding remain owned by Collapse/theme; do not duplicate their sizes.
+    setMaxHeight(sectionHeight - viewportHeight + contentHeight);
+  }, []);
+  return { ref, maxHeight, onContentSizeChange };
+}
+
 export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
   branch,
   sessions,
@@ -313,6 +298,7 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
   peekedSessionIds,
   onTogglePeekSession,
   mode = 'card',
+  fillAvailableHeight = false,
   client,
 }) => {
   const { token } = theme.useToken();
@@ -335,23 +321,9 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
   const [sort, setSort] = useLocalStorage<SessionSort>(SESSION_SORT_STORAGE_KEY, 'recent');
 
   const isPanel = mode === 'panel';
-  // Keep a header and a row reachable in very short panels; the panel itself
-  // can scroll when its chrome and all expanded sections cannot fit. Paged
-  // sections also need room for body padding, pagination, and the row viewport.
-  const panelSectionStyle = (open: boolean, paged = false): React.CSSProperties | undefined =>
-    isPanel
-      ? {
-          flex: open ? '1 1 0' : '0 0 auto',
-          minHeight: open ? token.controlHeight * (paged ? 6 : 3) : undefined,
-        }
-      : undefined;
-  const panelItemStyle: React.CSSProperties | undefined = isPanel
-    ? { height: '100%', display: 'grid', gridTemplateRows: 'auto minmax(0, 1fr)' }
-    : undefined;
-  const sectionBodyStyle: React.CSSProperties = {
-    background: 'transparent',
-    ...(isPanel ? { paddingInline: 0, height: '100%', boxSizing: 'border-box', minHeight: 0 } : {}),
-  };
+  const fillPanel = isPanel && fillAvailableHeight;
+  const manualTreeSection = useTreeSectionHeight();
+  const gatewayTreeSection = useTreeSectionHeight();
   // Every collapsible node (sections + parent sessions in the tree) defaults
   // to expanded; only user-collapsed exceptions are kept. Board cards persist
   // them per branch in the shared collapsedBranchNodes store; the teammate
@@ -1025,30 +997,50 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
   const renderSessionTree = (
     treeData: SessionTreeNode[],
     expandedKeys: React.Key[],
-    expandableKeys: React.Key[]
+    expandableKeys: React.Key[],
+    onContentSizeChange: (contentHeight: number, viewportHeight: number) => void
   ) => (
-    <SessionTreeViewport fillHeight={isPanel}>
-      {(height) => (
-        <Tree
-          className="agor-flat-tree nodrag nowheel"
-          height={height}
-          virtual
-          treeData={treeData}
-          expandedKeys={expandedKeys}
-          onExpand={(keys) => handleSessionTreeExpand(keys as React.Key[], expandableKeys)}
-          showLine
-          switcherIcon={renderTreeSwitcherIcon}
-          showIcon={false}
-          blockNode
-          selectable={false}
-          titleRender={renderSessionNode}
-        />
-      )}
-    </SessionTreeViewport>
+    <BranchSessionTree
+      className="agor-flat-tree nodrag nowheel"
+      fillAvailableHeight={fillPanel}
+      onContentSizeChange={onContentSizeChange}
+      treeData={treeData}
+      expandedKeys={expandedKeys}
+      onExpand={(keys) => handleSessionTreeExpand(keys as React.Key[], expandableKeys)}
+      showLine
+      switcherIcon={renderTreeSwitcherIcon}
+      showIcon={false}
+      blockNode
+      selectable={false}
+      titleRender={renderSessionNode}
+    />
   );
 
+  const panelFlexStyle: React.CSSProperties | undefined = fillPanel
+    ? { display: 'flex', flexDirection: 'column', flexGrow: 1, flexBasis: 0, minHeight: 0 }
+    : undefined;
+  const treeBodyStyles = {
+    header: { flexShrink: 0 },
+    body: {
+      ...panelFlexStyle,
+      background: 'transparent',
+      paddingInline: isPanel ? 0 : undefined,
+    },
+  };
+  // Leave a few rows reachable when headers/other sections exceed a short
+  // panel. The outer teammate viewport then scrolls instead of clipping them.
+  const expandedPanelStyle = (maxHeight?: number): React.CSSProperties | undefined =>
+    fillPanel
+      ? { ...panelFlexStyle, minHeight: Math.min(140, maxHeight ?? 140), maxHeight }
+      : undefined;
+
   const sessionListContent = isManualSessionsOpen
-    ? renderSessionTree(sessionTreeData, expandedManualKeys, manualExpandableKeys)
+    ? renderSessionTree(
+        sessionTreeData,
+        expandedManualKeys,
+        manualExpandableKeys,
+        manualTreeSection.onContentSizeChange
+      )
     : null;
 
   const sessionListHeader = (
@@ -1100,7 +1092,7 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
   );
 
   const scheduledRunsContent = isScheduledRunsOpen ? (
-    <PagedSessions key={branch.branch_id} sessions={scheduledSessions} fillHeight={isPanel}>
+    <PagedSessions key={branch.branch_id} sessions={scheduledSessions} fillHeight={fillPanel}>
       {(session) => {
         const isActive = isSessionExecuting(session);
         const callbackToggle = getCallbackToggle(session);
@@ -1167,7 +1159,12 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
   );
 
   const gatewaySessionsContent = isGatewaySessionsOpen
-    ? renderSessionTree(gatewaySessionTreeData, expandedGatewayKeys, gatewayExpandableKeys)
+    ? renderSessionTree(
+        gatewaySessionTreeData,
+        expandedGatewayKeys,
+        gatewayExpandableKeys,
+        gatewayTreeSection.onContentSizeChange
+      )
     : null;
 
   const sessionSearchBar =
@@ -1185,7 +1182,7 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
 
   if (isPanel && searchActive && searchablePanelSessions.length > 0) {
     return (
-      <Flex vertical flex={1} style={{ minHeight: 0 }}>
+      <Flex vertical flex={fillPanel ? 1 : undefined} style={{ minHeight: 0 }}>
         {sessionSearchBar}
         {searchResults.length > 0 && (
           <Typography.Text
@@ -1219,7 +1216,7 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
           <PagedSessions
             key={`${branch.branch_id}:${trimmedSearchQuery}`}
             sessions={searchResults}
-            fillHeight
+            fillHeight={fillPanel}
           >
             {(session) => renderFlatSessionRow(session, trimmedSearchQuery)}
           </PagedSessions>
@@ -1242,7 +1239,7 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
     );
   }
 
-  const sections = (
+  return (
     // Card mode disables antd motion: 30 cards animating their collapse/tree
     // mounts multiplies board-mount commits (#1768). Panel mode keeps motion.
     <ConfigProvider theme={isPanel ? undefined : NO_MOTION_THEME}>
@@ -1302,21 +1299,29 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
         <>
           {manualSessions.length > 0 ? (
             <Collapse
+              ref={manualTreeSection.ref}
+              className={
+                fillPanel && isManualSessionsOpen ? 'agor-panel-session-tree-section' : undefined
+              }
               activeKey={openSectionKeys}
               onChange={handleManualSessionsChange}
               items={[
                 {
                   key: 'sessions',
-                  style: isManualSessionsOpen ? panelItemStyle : undefined,
                   label: sessionListHeader,
                   children: sessionListContent,
-                  styles: {
-                    body: sectionBodyStyle,
-                  },
+                  style: panelFlexStyle,
+                  styles: treeBodyStyles,
                 },
               ]}
               ghost
-              style={{ marginTop: 8, ...panelSectionStyle(isManualSessionsOpen) }}
+              style={{
+                marginTop: 8,
+                flexShrink: 0,
+                ...(isManualSessionsOpen
+                  ? expandedPanelStyle(manualTreeSection.maxHeight)
+                  : undefined),
+              }}
             />
           ) : onCreateSession ? (
             <div style={{ marginTop: 8 }}>{sessionListHeader}</div>
@@ -1329,41 +1334,59 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
               items={[
                 {
                   key: 'scheduled-runs',
-                  style: isScheduledRunsOpen ? panelItemStyle : undefined,
+                  style:
+                    fillPanel && isScheduledRunsOpen
+                      ? { height: '100%', display: 'grid', gridTemplateRows: 'auto minmax(0, 1fr)' }
+                      : undefined,
                   label: scheduledRunsHeader,
                   children: scheduledRunsContent,
                   styles: {
-                    body: sectionBodyStyle,
+                    body: {
+                      background: 'transparent',
+                      paddingInline: isPanel ? 0 : undefined,
+                      ...(fillPanel
+                        ? { height: '100%', boxSizing: 'border-box', minHeight: 0 }
+                        : {}),
+                    },
                   },
                 },
               ]}
               ghost
               style={{
                 marginTop: manualSessions.length > 0 ? 0 : 8,
-                ...panelSectionStyle(isScheduledRunsOpen, true),
+                flexShrink: 0,
+                // Reserve the header, row viewport and pagination in short panels.
+                ...(fillPanel && isScheduledRunsOpen
+                  ? { flexGrow: 1, flexShrink: 1, flexBasis: 0, minHeight: token.controlHeight * 6 }
+                  : {}),
               }}
             />
           )}
 
           {gatewayRootSessions.length > 0 && (
             <Collapse
+              ref={gatewayTreeSection.ref}
+              className={
+                fillPanel && isGatewaySessionsOpen ? 'agor-panel-session-tree-section' : undefined
+              }
               activeKey={openSectionKeys}
               onChange={handleGatewaySessionsChange}
               items={[
                 {
                   key: 'gateway-sessions',
-                  style: isGatewaySessionsOpen ? panelItemStyle : undefined,
                   label: gatewaySessionsHeader,
                   children: gatewaySessionsContent,
-                  styles: {
-                    body: sectionBodyStyle,
-                  },
+                  style: panelFlexStyle,
+                  styles: treeBodyStyles,
                 },
               ]}
               ghost
               style={{
                 marginTop: manualSessions.length > 0 || scheduledSessions.length > 0 ? 0 : 8,
-                ...panelSectionStyle(isGatewaySessionsOpen),
+                flexShrink: 0,
+                ...(isGatewaySessionsOpen
+                  ? expandedPanelStyle(gatewayTreeSection.maxHeight)
+                  : undefined),
               }}
             />
           )}
@@ -1384,13 +1407,5 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
         />
       )}
     </ConfigProvider>
-  );
-
-  return isPanel ? (
-    <Flex vertical flex={1} style={{ minHeight: 0 }}>
-      {sections}
-    </Flex>
-  ) : (
-    sections
   );
 };

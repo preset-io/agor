@@ -264,6 +264,12 @@ function assertDisclosureAcknowledged(entry: MCPCatalogEntry, acknowledged: unkn
  * from.
  */
 function logProbeDisagreement(entry: MCPCatalogEntry, probed: MCPCatalogProbedAuthType): void {
+  if (
+    probed === 'oauth' &&
+    entry.auth_type === 'credentials' &&
+    entry.credentials?.oauth_challenge_compatible
+  )
+    return;
   if (entry.auth_type === 'unknown' || probed === entry.auth_type) return;
   if (probed !== 'none' && probed !== 'oauth' && probed !== 'credentials') return;
   console.warn(
@@ -343,6 +349,19 @@ async function resolveAuthRequirement(
   const probed = await probeRemoteAuthType(entry.remote_url);
   logProbeDisagreement(entry, probed);
 
+  // Some vendors publish a first-class bearer route while their unauthenticated
+  // endpoint advertises an OAuth flow that Agor cannot safely enter (for
+  // example, no DCR and no public client). This exception is reviewed per
+  // catalog entry and never inferred from the challenge. The supplied token is
+  // still checked by a second pinned initialize before it is persisted.
+  if (
+    probed === 'oauth' &&
+    entry.credentials?.scheme === 'bearer' &&
+    entry.credentials.oauth_challenge_compatible
+  ) {
+    return resolveBearerTokenAuth(entry, bearerToken);
+  }
+
   if (probed === 'none' || probed === 'oauth') {
     if (bearerToken !== undefined) {
       throw new CatalogCredentialRequirementError(
@@ -368,6 +387,18 @@ async function resolveAuthRequirement(
     }
     return resolveBearerTokenAuth(entry, bearerToken);
   }
+
+  // `probeRemoteAuthType` deliberately retains no provider exception or body,
+  // but an unreachable/invalid probe is still an operational external failure.
+  // Log the closed outcome here before converting it to the safe Marketplace
+  // control error; otherwise Catalog clicks (for example Sentry or Figma) leave
+  // no named discovery/OAuth event at all.
+  const category = probed === 'unreachable' ? 'provider_unavailable' : 'invalid_response';
+  const reason =
+    probed === 'unreachable' ? 'catalog_probe_unreachable' : 'catalog_probe_unrecognized';
+  console.error(
+    `[mcp-catalog/connect] event=mcp_external_failure stage=discovery category=${category} type=UnknownError reason=${reason} catalog_entry=${entry.name}`
+  );
 
   throw new CatalogConnectControlError(
     `${catalogDisplayName(entry)} could not be reached, so it cannot be connected`
@@ -930,8 +961,9 @@ export function createMCPCatalogConnectService(
       } catch (error) {
         if (isCatalogConnectControlError(error)) throw error;
         const safe = sanitizeMCPExternalError(error, { stage: 'discovery' });
+        const { type, code, status, reason } = safe.diagnostic;
         console.error(
-          `[mcp-catalog/connect] event=mcp_external_failure stage=discovery category=${safe.category} type=${safe.diagnostic.type}`
+          `[mcp-catalog/connect] event=mcp_external_failure stage=discovery category=${safe.category} type=${type}${status !== undefined ? ` status=${status}` : ''}${code ? ` code=${code}` : ''}${reason ? ` reason=${reason}` : ''}`
         );
         throw new BadRequest(safe.message, { category: safe.category });
       }

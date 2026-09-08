@@ -164,12 +164,15 @@ const CatalogDetailDrawerForIdentity: React.FC<CatalogDetailDrawerProps> = ({
           label: 'No account needed',
           detail: 'Connect in one step and try the starter prompt.',
         };
-      case 'bearer_required':
+      case 'bearer_required': {
+        const credentialName =
+          entry?.credentials?.label?.trim().toLocaleLowerCase() ?? 'bearer access token';
         return {
           readiness: 'api-key' as const,
-          label: 'Use your API key',
-          detail: 'Verify a key from your own account before a session is created.',
+          label: `Use your ${credentialName}`,
+          detail: `Verify the ${credentialName} from your own account before a session is created.`,
         };
+      }
       case 'oauth_required':
         return {
           readiness: 'sign-in' as const,
