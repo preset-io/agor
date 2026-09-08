@@ -5,7 +5,14 @@ import {
   isValidMCPHttpUrlTemplate,
 } from '../../mcp/template-patterns';
 import { isCanonicalFullUuid } from '../../types/id';
-import { MCP_SCOPES, MCP_TRANSPORTS, type MCPServer } from '../../types/mcp';
+import {
+  MCP_SCOPES,
+  MCP_TRANSPORTS,
+  type MCPPrompt,
+  type MCPResource,
+  type MCPServer,
+  type MCPTool,
+} from '../../types/mcp';
 import { assertValidMCPAuthPatch } from './auth-patch';
 import {
   findDuplicateMCPCustomHeaderName,
@@ -69,6 +76,11 @@ const MAX_NAME_LENGTH = 255;
 const MAX_TEXT_LENGTH = 16_384;
 const MAX_COLLECTION_ENTRIES = 256;
 const MAX_VALUE_LENGTH = 65_536;
+/** Per-field persistence ceiling for provider-controlled capability descriptions. */
+export const MAX_MCP_CAPABILITY_DESCRIPTION_LENGTH = MAX_VALUE_LENGTH;
+/** Total persisted description budget for one discovered server. */
+export const MAX_MCP_CAPABILITY_DESCRIPTION_BUDGET = 256 * 1024;
+export const MCP_DESCRIPTION_TRUNCATION_SUFFIX = '\n\n[Description truncated by Agor]';
 const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 function hasControlCharacter(value: string): boolean {
@@ -76,6 +88,14 @@ function hasControlCharacter(value: string): boolean {
     const code = character.charCodeAt(0);
     return code <= 31 || code === 127;
   });
+}
+
+function hasUnsafeDescriptionControlCharacter(value: string): boolean {
+  for (const character of value) {
+    const code = character.charCodeAt(0);
+    if ((code <= 31 && code !== 9 && code !== 10 && code !== 13) || code === 127) return true;
+  }
+  return false;
 }
 
 export interface MCPServerWriteValidationOptions {
@@ -244,11 +264,16 @@ function boundedRequiredString(
 function boundedOptionalString(
   record: Record<string, unknown>,
   field: string,
-  label: string
+  label: string,
+  options: { allowOverlongDescription?: boolean } = {}
 ): void {
   const value = record[field];
   if (value === undefined) return;
-  if (typeof value !== 'string' || value.length > MAX_VALUE_LENGTH || hasControlCharacter(value)) {
+  if (
+    typeof value !== 'string' ||
+    (!options.allowOverlongDescription && value.length > MAX_VALUE_LENGTH) ||
+    hasUnsafeDescriptionControlCharacter(value)
+  ) {
     throw new Error(`${label}.${field} must be a bounded string`);
   }
 }
@@ -267,7 +292,10 @@ function boundedJsonValue(value: unknown, label: string): void {
       return;
     }
     if (typeof nested === 'string') {
-      if (nested.length > MAX_VALUE_LENGTH || hasControlCharacter(nested)) {
+      // Schema annotations and literal enum/default values are JSON strings,
+      // not identifiers. Preserve whitespace and escaped control characters;
+      // only NUL is unrepresentable in PostgreSQL jsonb (keep SQLite parity).
+      if (nested.length > MAX_VALUE_LENGTH || nested.includes('\0')) {
         throw new Error(`${path} contains an invalid string`);
       }
       return;
@@ -292,7 +320,10 @@ function boundedJsonValue(value: unknown, label: string): void {
   visit(value, label, 0);
 }
 
-function capabilities(record: Record<string, unknown>): void {
+function capabilities(
+  record: Record<string, unknown>,
+  options: { allowOverlongDescriptions?: boolean } = {}
+): void {
   if (record.tools !== undefined) {
     if (!Array.isArray(record.tools) || record.tools.length > MAX_COLLECTION_ENTRIES) {
       throw new Error(`tools must be an array of at most ${MAX_COLLECTION_ENTRIES} entries`);
@@ -300,7 +331,9 @@ function capabilities(record: Record<string, unknown>): void {
     for (const [index, value] of record.tools.entries()) {
       const tool = closedObject(value, `tools[${index}]`, ['name', 'description', 'input_schema']);
       boundedRequiredString(tool, 'name', `tools[${index}]`);
-      boundedOptionalString(tool, 'description', `tools[${index}]`);
+      boundedOptionalString(tool, 'description', `tools[${index}]`, {
+        allowOverlongDescription: options.allowOverlongDescriptions,
+      });
       if (tool.input_schema !== undefined) {
         recordOf(tool.input_schema, `tools[${index}].input_schema`);
         boundedJsonValue(tool.input_schema, `tools[${index}].input_schema`);
@@ -320,7 +353,9 @@ function capabilities(record: Record<string, unknown>): void {
       ]);
       boundedRequiredString(resource, 'uri', `resources[${index}]`);
       boundedRequiredString(resource, 'name', `resources[${index}]`);
-      boundedOptionalString(resource, 'description', `resources[${index}]`);
+      boundedOptionalString(resource, 'description', `resources[${index}]`, {
+        allowOverlongDescription: options.allowOverlongDescriptions,
+      });
       if (resource.mimeType !== undefined) {
         boundedRequiredString(resource, 'mimeType', `resources[${index}]`);
       }
@@ -333,7 +368,9 @@ function capabilities(record: Record<string, unknown>): void {
     for (const [index, value] of record.prompts.entries()) {
       const prompt = closedObject(value, `prompts[${index}]`, ['name', 'description', 'arguments']);
       boundedRequiredString(prompt, 'name', `prompts[${index}]`);
-      boundedOptionalString(prompt, 'description', `prompts[${index}]`);
+      boundedOptionalString(prompt, 'description', `prompts[${index}]`, {
+        allowOverlongDescription: options.allowOverlongDescriptions,
+      });
       if (prompt.arguments === undefined) continue;
       if (!Array.isArray(prompt.arguments) || prompt.arguments.length > MAX_COLLECTION_ENTRIES) {
         throw new Error(
@@ -350,7 +387,8 @@ function capabilities(record: Record<string, unknown>): void {
         boundedOptionalString(
           argument,
           'description',
-          `prompts[${index}].arguments[${argumentIndex}]`
+          `prompts[${index}].arguments[${argumentIndex}]`,
+          { allowOverlongDescription: options.allowOverlongDescriptions }
         );
         if (argument.required !== undefined && typeof argument.required !== 'boolean') {
           throw new Error(`prompts[${index}].arguments[${argumentIndex}].required must be boolean`);
@@ -581,6 +619,116 @@ export function assertValidDiscoveredMCPCapabilities(value: unknown): void {
       }
     }
     capabilities(record);
+  } catch (error) {
+    if (error instanceof MCPServerWriteValidationError) throw error;
+    throw new MCPServerWriteValidationError(
+      error instanceof Error ? error.message : 'Invalid discovered MCP capabilities'
+    );
+  }
+}
+
+export interface NormalizedDiscoveredMCPCapabilities {
+  capabilities: {
+    tools: MCPTool[];
+    resources: MCPResource[];
+    prompts: MCPPrompt[];
+  };
+  /** Number of optional descriptions shortened or omitted to meet the budget. */
+  truncatedDescriptions: number;
+}
+
+function truncateDescription(value: string, limit: number): string | undefined {
+  if (value.length <= limit) return value;
+  if (limit < MCP_DESCRIPTION_TRUNCATION_SUFFIX.length) return undefined;
+  const prefixLimit = limit - MCP_DESCRIPTION_TRUNCATION_SUFFIX.length;
+  let prefix = '';
+  // Grapheme segmentation keeps emoji ZWJ sequences and combining marks intact;
+  // the explicit code-unit check also guarantees the persisted string ceiling.
+  const segments = new Intl.Segmenter('en', { granularity: 'grapheme' }).segment(value);
+  for (const { segment } of segments) {
+    if (prefix.length + segment.length > prefixLimit) break;
+    prefix += segment;
+  }
+  return `${prefix}${MCP_DESCRIPTION_TRUNCATION_SUFFIX}`;
+}
+
+/**
+ * Normalize provider-controlled MCP metadata once at discovery ingress.
+ *
+ * MCP descriptions are optional free text and the protocol does not impose a
+ * length limit. Agor does impose persistence/prompt budgets, so valid long
+ * descriptions are shortened deterministically instead of rejecting the
+ * entire provider. Names, schemas, collection sizes, and malformed description
+ * values remain fail-closed with their existing path-specific diagnostics.
+ */
+export function normalizeDiscoveredMCPCapabilities(
+  value: unknown
+): NormalizedDiscoveredMCPCapabilities {
+  try {
+    const record = recordOf(value, 'discovered MCP capabilities');
+    for (const key of Object.keys(record)) {
+      if (!['tools', 'resources', 'prompts'].includes(key)) {
+        throw new Error(`Unknown discovered MCP capabilities field: ${key}`);
+      }
+    }
+    capabilities(record, { allowOverlongDescriptions: true });
+
+    let remaining = MAX_MCP_CAPABILITY_DESCRIPTION_BUDGET;
+    let truncatedDescriptions = 0;
+    const normalizeDescription = (description: string | undefined): string | undefined => {
+      if (description === undefined) return undefined;
+      const limit = Math.min(MAX_MCP_CAPABILITY_DESCRIPTION_LENGTH, remaining);
+      const normalized = truncateDescription(description, limit);
+      if (normalized !== description) truncatedDescriptions += 1;
+      if (normalized !== undefined) remaining -= normalized.length;
+      return normalized;
+    };
+
+    const tools = (record.tools ?? []) as MCPTool[];
+    const resources = (record.resources ?? []) as MCPResource[];
+    const prompts = (record.prompts ?? []) as MCPPrompt[];
+    const normalized = {
+      tools: tools.map((tool) => {
+        const description = normalizeDescription(tool.description);
+        return {
+          name: tool.name,
+          ...(description === undefined ? {} : { description }),
+          ...(tool.input_schema === undefined ? {} : { input_schema: tool.input_schema }),
+        };
+      }),
+      resources: resources.map((resource) => {
+        const description = normalizeDescription(resource.description);
+        return {
+          uri: resource.uri,
+          name: resource.name,
+          ...(description === undefined ? {} : { description }),
+          ...(resource.mimeType === undefined ? {} : { mimeType: resource.mimeType }),
+        };
+      }),
+      prompts: prompts.map((prompt) => {
+        const description = normalizeDescription(prompt.description);
+        return {
+          name: prompt.name,
+          ...(description === undefined ? {} : { description }),
+          ...(prompt.arguments === undefined
+            ? {}
+            : {
+                arguments: prompt.arguments.map((argument) => {
+                  const argumentDescription = normalizeDescription(argument.description);
+                  return {
+                    name: argument.name,
+                    ...(argumentDescription === undefined
+                      ? {}
+                      : { description: argumentDescription }),
+                    ...(argument.required === undefined ? {} : { required: argument.required }),
+                  };
+                }),
+              }),
+        };
+      }),
+    };
+    assertValidDiscoveredMCPCapabilities(normalized);
+    return { capabilities: normalized, truncatedDescriptions };
   } catch (error) {
     if (error instanceof MCPServerWriteValidationError) throw error;
     throw new MCPServerWriteValidationError(

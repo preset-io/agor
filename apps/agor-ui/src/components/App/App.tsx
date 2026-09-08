@@ -69,7 +69,7 @@ import { initializeAudioOnInteraction } from '../../utils/audio';
 import { useThemedMessage } from '../../utils/message';
 import type { OnboardingReopenMode } from '../../utils/onboardingLifecycle';
 import { resolveQuickStartMcpServerIds } from '../../utils/resolveQuickStartMcpServerIds';
-import { hasExplicitEntityRouteTarget } from '../../utils/routeTargets';
+import { getShellSurfacePath, hasExplicitEntityRouteTarget } from '../../utils/routeTargets';
 import { startTeammateBootstrapSession } from '../../utils/startTeammateBootstrapSession';
 import {
   buildTeammateBootstrapPrompt,
@@ -394,9 +394,10 @@ export const App: React.FC<AppProps> = ({
     branchShortId?: string;
     artifactShortId?: string;
   }>();
-  const isRootHomePath = location.pathname === '/';
+  // Settings owns the address bar, not the surface behind its modal.
+  // Preserve the Home/board background recorded by useSettingsRoute.
+  const isRootHomePath = getShellSurfacePath(location) === '/';
   const hasExplicitEntityTarget = hasExplicitEntityRouteTarget(routeParams);
-  const [pendingHomeNavigation, setPendingHomeNavigation] = useState(false);
   const sessionCanvasRef = useRef<SessionCanvasRef>(null);
   const [newSessionBranchId, setNewSessionBranchId] = useState<string | null>(null);
   // Set instead of creating a session immediately when quick-start can't
@@ -437,9 +438,7 @@ export const App: React.FC<AppProps> = ({
     useMemo(() => makeSessionExistsSelector(selectedSessionId), [selectedSessionId])
   );
   const effectiveSelectedSessionId =
-    !isRootHomePath && !pendingHomeNavigation && selectedSessionId && selectedSessionExists
-      ? selectedSessionId
-      : null;
+    !isRootHomePath && selectedSessionId && selectedSessionExists ? selectedSessionId : null;
 
   // A real selected session always wins; the pending tool-choice empty state
   // only matters when there's no real session to show yet (see
@@ -531,7 +530,7 @@ export const App: React.FC<AppProps> = ({
   const currentBoard = useAgorStore(
     useMemo(() => makeBoardSelector(currentBoardId), [currentBoardId])
   );
-  const isHomeSurface = (isRootHomePath || pendingHomeNavigation) && !hasExplicitEntityTarget;
+  const isHomeSurface = isRootHomePath && !hasExplicitEntityTarget;
   const headerBoardId = isHomeSurface ? '' : currentBoardId;
   const wasHomeSurfaceRef = useRef(isHomeSurface);
   const isLeavingHomeSurface = wasHomeSurfaceRef.current && !isHomeSurface;
@@ -566,26 +565,17 @@ export const App: React.FC<AppProps> = ({
     setHomeExitPanelDetailsDeferred(false);
   }, []);
 
-  // Home is route-authoritative. Do not clear board/session state while the
-  // old `/b/...` URL is still active — that creates a transient no-board
-  // canvas render. Instead, render Home immediately via `pendingHomeNavigation`
-  // during the route transition, then clean stale board/session state only once
-  // the `/` route has committed. Layout timing keeps the header/board picker
-  // from painting stale board identity on Home.
+  // Let the committed route choose Home before clearing stale selection.
+  // Optimistically hiding the session at the OLD path lets URL self-healing
+  // cancel the Home navigation. A separate pending flag can also outlive a
+  // superseded navigation. Route-derived rendering avoids both races and a
+  // boardless canvas flash; layout cleanup keeps stale identity off Home.
   useLayoutEffect(() => {
     if (!isRootHomePath || hasExplicitEntityTarget) return;
     if (currentBoardId) setCurrentBoardIdInternal('');
     if (selectedSessionId) setSelectedSessionId(null);
     if (activeUrlTarget) setActiveUrlTarget(null);
-    if (pendingHomeNavigation) setPendingHomeNavigation(false);
-  }, [
-    activeUrlTarget,
-    currentBoardId,
-    hasExplicitEntityTarget,
-    isRootHomePath,
-    pendingHomeNavigation,
-    selectedSessionId,
-  ]);
+  }, [activeUrlTarget, currentBoardId, hasExplicitEntityTarget, isRootHomePath, selectedSessionId]);
 
   const leftPanelCollapsed =
     commentsPanelCollapsed ||
@@ -1423,10 +1413,7 @@ export const App: React.FC<AppProps> = ({
   // isn't defeated by a fresh inline-arrow identity on every App re-render. Each
   // delegates to the latest impl via useStableCallback, so they read current
   // state (selection, panel, board) at call time without re-rendering the header.
-  const handleHomeClick = useStableCallback(() => {
-    setPendingHomeNavigation(true);
-    navigation.goHome();
-  });
+  const handleHomeClick = useStableCallback(() => navigation.goHome());
   const handleEventStreamClick = useStableCallback(() => {
     // If a session is open, close it and reveal the event stream; otherwise
     // toggle the event stream panel.

@@ -13,6 +13,10 @@ Marketplace checks the live endpoint before installing it. An entry may be:
 
 For unsupported schemes, configure the server in **Settings → MCP Servers**. Custom headers support services such as Datadog API/application-key pairs; Marketplace's Datadog entry instead asks for the bearer PAT/SAT described in Datadog's MCP setup guide.
 
+### Capability metadata
+
+Remote tool, resource, and prompt descriptions are untrusted optional free text. Agor keeps every valid capability name and schema, but deterministically shortens descriptions that exceed the per-field or aggregate safe metadata budget. **Test Connection** (or **Save & Test Connection** for a saved/OAuth server) reports when this happened. Malformed names, schemas, or non-string descriptions still fail validation instead of being silently repaired. The same bounded tool descriptions are stored for display and applied by the mediated MCP egress path used in `compatibility` and `enforced` gateway modes.
+
 ### Local stdio servers
 
 An stdio configuration uses only its command, arguments, and environment. HTTP/SSE authentication, URL, and custom-header fields do not apply. Agor does not download the command: it must already be available in the actual executor environment, which may differ from the daemon host. Store a per-user token in **Settings → Environment Variables**, then reference it from the server environment, for example `{"SHORTCUT_API_TOKEN":"{{ user.env.SHORTCUT_API_TOKEN }}"}`. The managed value is encrypted and resolved only for the authenticated user whose task is running; do not paste the token directly into the MCP server definition.
@@ -22,6 +26,8 @@ Upgrading Agor removes obsolete remote-auth, URL, and header fields from existin
 ## Safe edits, storage, and removal
 
 Bearer tokens and other MCP auth/header/env secrets are stored in MCP server JSON according to the deployment's storage security. Catalog installs are private to their owner, access controls restrict the row, and API, realtime, and UI projections redact secrets. Redaction is an output-boundary control, not application-level encryption; encryption at rest applies only when the deployment's documented database or storage configuration guarantees it. OAuth access and refresh tokens use Agor's per-user OAuth token store.
+
+**Test Authentication** on a new form checks authentication setup; **Test Connection** lists capabilities. Saved servers and new OAuth servers use **Save & Test Connection**: it saves the current form first, then probes only that durable server configuration. This preserves saved secrets and binds OAuth grants to the correct endpoint. A failed save prevents the probe. After OAuth creates a server, **Save** saves subsequent edits rather than simply dismissing the form. Results are cleared when the draft, server, or authenticated caller changes.
 
 Editing authentication is patch-safe: leaving a saved secret blank preserves it, while **Clear saved secret** explicitly removes it. Other omitted authentication fields are preserved; switching authentication type replaces the old mode. The edit form uses a configuration revision to detect another device's concurrent save. If that happens, **Reload latest** fetches the authoritative row and deliberately discards the local unsaved form before another save. OAuth shared/per-user mode changes remove credentials and grants that belong to the previous subject mode.
 

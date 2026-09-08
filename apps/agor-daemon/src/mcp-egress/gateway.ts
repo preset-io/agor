@@ -21,6 +21,7 @@ import {
   buildMCPTemplateContextFromEnv,
   extractMCPTemplateDependencies,
   isMCPServerUsableBy,
+  normalizeDiscoveredMCPCapabilities,
   resolveMcpServerTemplates,
 } from '@agor/core/mcp';
 import { mergeMCPRemoteHeaders } from '@agor/core/tools/mcp/http-headers';
@@ -290,15 +291,24 @@ function assertNoDecodedSecret(value: unknown, secrets: string[]): void {
 function validateBufferedMCPResponse(
   response: Response,
   body: Uint8Array,
-  secrets: string[]
+  secrets: string[],
+  requestBody?: Uint8Array
 ): Uint8Array {
   if (body.byteLength === 0) return body;
   const contentType = response.headers.get('content-type')?.split(';', 1)[0]?.trim().toLowerCase();
   const text = Buffer.from(body).toString('utf8');
   if (contentType === 'application/json' || contentType?.endsWith('+json')) {
     try {
-      assertNoDecodedSecret(JSON.parse(text), secrets);
-      return body;
+      const parsed = JSON.parse(text);
+      // Check the original decoded payload: shortening a description can cut
+      // through a reflected credential and hide the full match from the scan.
+      assertNoDecodedSecret(parsed, secrets);
+      // Unrelated JSON-RPC results are not metadata. Preserve their wire bytes
+      // (including numbers that a non-JavaScript client can decode losslessly).
+      if (toolsListRequestIds(requestBody).size === 0) return body;
+      return new TextEncoder().encode(
+        JSON.stringify(normalizeToolsListResponse(parsed, requestBody))
+      );
     } catch (error) {
       if (error instanceof MCPEgressGatewayError) throw error;
       throw new MCPEgressGatewayError(
@@ -321,7 +331,9 @@ function validateBufferedMCPResponse(
       try {
         const parsed = JSON.parse(data);
         assertNoDecodedSecret(parsed, secrets);
-        released.push(`data: ${JSON.stringify(parsed)}\n\n`);
+        released.push(
+          `data: ${JSON.stringify(normalizeToolsListResponse(parsed, requestBody))}\n\n`
+        );
       } catch (error) {
         if (error instanceof MCPEgressGatewayError) throw error;
         throw new MCPEgressGatewayError(
@@ -338,6 +350,72 @@ function validateBufferedMCPResponse(
     'unstructured_response_not_mediated',
     'Only bounded JSON or JSON SSE MCP responses are mediated'
   );
+}
+
+function toolsListRequestIds(body?: Uint8Array): Set<string> {
+  if (!body?.byteLength) return new Set();
+  try {
+    const parsed = JSON.parse(Buffer.from(body).toString('utf8')) as unknown;
+    const requests = Array.isArray(parsed) ? parsed : [parsed];
+    return new Set(
+      requests.flatMap((request) => {
+        if (!request || typeof request !== 'object') return [];
+        const record = request as { id?: unknown; method?: unknown };
+        return record.method === 'tools/list' && record.id !== undefined
+          ? [JSON.stringify(record.id)]
+          : [];
+      })
+    );
+  } catch {
+    return new Set();
+  }
+}
+
+/** Normalize tool metadata on the mediated agent path as well as discovery. */
+function normalizeToolsListResponse(value: unknown, requestBody?: Uint8Array): unknown {
+  const ids = toolsListRequestIds(requestBody);
+  if (ids.size === 0) return value;
+  const responses = Array.isArray(value) ? value : [value];
+  for (const response of responses) {
+    if (!response || typeof response !== 'object') continue;
+    const record = response as { id?: unknown; result?: { tools?: unknown } };
+    if (!ids.has(JSON.stringify(record.id)) || !Array.isArray(record.result?.tools)) continue;
+    try {
+      const normalized = normalizeDiscoveredMCPCapabilities({
+        tools: record.result.tools.map((tool, index) => {
+          if (!tool || typeof tool !== 'object' || Array.isArray(tool)) {
+            throw new Error(`tools[${index}] must be an object`);
+          }
+          const candidate = tool as {
+            name?: unknown;
+            description?: unknown;
+            inputSchema?: unknown;
+          };
+          return {
+            name: candidate.name,
+            ...(candidate.description === undefined ? {} : { description: candidate.description }),
+            ...(candidate.inputSchema === undefined ? {} : { input_schema: candidate.inputSchema }),
+          };
+        }),
+        resources: [],
+        prompts: [],
+      }).capabilities.tools;
+      record.result.tools = record.result.tools.map((tool, index) => {
+        const original = { ...(tool as Record<string, unknown>) };
+        const description = normalized[index]?.description;
+        if (description === undefined) delete original.description;
+        else original.description = description;
+        return original;
+      });
+    } catch {
+      throw new MCPEgressGatewayError(
+        502,
+        'invalid_mcp_tool_metadata',
+        'Provider returned invalid MCP tool metadata'
+      );
+    }
+  }
+  return value;
 }
 
 function requestedToolNames(body?: Uint8Array): string[] {
@@ -921,7 +999,7 @@ export class MCPEgressGateway {
         admitted.env,
         finalHeaders
       );
-      const releasedBody = validateBufferedMCPResponse(response, body, secrets);
+      const releasedBody = validateBufferedMCPResponse(response, body, secrets, input.body);
       timer({ outcome: 'complete' });
       return {
         response: new Response(releasedBody, {
