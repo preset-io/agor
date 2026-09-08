@@ -1,6 +1,7 @@
 import { fireEvent, render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { MCPCatalogModalProvider, useMCPCatalogModal } from '../../contexts/MCPCatalogModalContext';
 import { AppHeader } from './AppHeader';
 
 const mockNavigate = vi.hoisted(() => vi.fn());
@@ -44,10 +45,18 @@ vi.mock('./GlobalPresenceFacepile', () => ({
   GlobalPresenceFacepile: () => <div data-testid="presence-facepile" />,
 }));
 
+function CatalogState() {
+  const catalog = useMCPCatalogModal();
+  return <output data-testid="catalog-open">{String(catalog?.open)}</output>;
+}
+
 function renderHeader(props?: Partial<React.ComponentProps<typeof AppHeader>>) {
   return render(
     <MemoryRouter basename="/ui" initialEntries={['/ui/']}>
-      <AppHeader {...props} />
+      <MCPCatalogModalProvider>
+        <AppHeader {...props} />
+        <CatalogState />
+      </MCPCatalogModalProvider>
     </MemoryRouter>
   );
 }
@@ -101,23 +110,24 @@ describe('AppHeader navigation entries', () => {
       .getAllByRole('link')
       .map((link) => link.getAttribute('aria-label') ?? link.textContent?.trim());
 
-    expect(linkNames).toEqual(['Knowledge Base', 'Catalog']);
+    expect(linkNames).toEqual(['Knowledge Base']);
+    expect(screen.getByRole('button', { name: 'Open MCP Catalog' })).toBeVisible();
   });
 
-  it('renders the Catalog entry as a real link to /catalog', () => {
+  it('opens Catalog without navigation', () => {
     renderHeader();
-
-    // The href is what makes middle-click and cmd-click open a tab, so assert
-    // the resolved basename-aware path rather than merely that a button exists.
-    expect(screen.getByRole('link', { name: 'Catalog' })).toHaveAttribute('href', '/ui/catalog');
+    fireEvent.click(screen.getByRole('button', { name: 'Open MCP Catalog' }));
+    expect(screen.getByTestId('catalog-open')).toHaveTextContent('true');
+    expect(mockNavigate).not.toHaveBeenCalled();
   });
 
-  it('navigates to /catalog via SPA navigation on plain click', () => {
-    renderHeader();
-
-    fireEvent.click(screen.getByRole('link', { name: 'Catalog' }));
-
-    expect(mockNavigate).toHaveBeenCalledExactlyOnceWith('/catalog');
+  it('omits Catalog safely in provider-free marketing headers', () => {
+    render(
+      <MemoryRouter>
+        <AppHeader />
+      </MemoryRouter>
+    );
+    expect(screen.queryByRole('button', { name: 'Open MCP Catalog' })).not.toBeInTheDocument();
   });
 
   it('promotes Catalog to the header rather than the gear dropdown', async () => {
@@ -131,7 +141,7 @@ describe('AppHeader navigation entries', () => {
     // The header entry is an icon button carrying its name on aria-label, so a
     // rendered "Catalog" text node could only be a dropdown menu item.
     expect(screen.queryByText('Catalog')).not.toBeInTheDocument();
-    expect(screen.getByRole('link', { name: 'Catalog' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Open MCP Catalog' })).toBeInTheDocument();
   });
 
   it('shows the Catalog entry to a viewer', () => {
@@ -139,7 +149,7 @@ describe('AppHeader navigation entries', () => {
     // filtered out of the entry. Connect is gated separately, in the surface.
     renderHeader({ user: { user_id: 'u1', email: 'v@agor.live', role: 'viewer' } as never });
 
-    expect(screen.getByRole('link', { name: 'Catalog' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Open MCP Catalog' })).toBeInTheDocument();
   });
 
   it('bounds the always-visible board switcher slot', () => {

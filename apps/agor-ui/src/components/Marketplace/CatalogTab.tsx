@@ -100,7 +100,7 @@ const CatalogGrid = memo<{
 ));
 
 export interface CatalogTabProps {
-  /** Whether this tab is the active route; inactive drawers must not portal over another tab. */
+  /** Whether this tab is the active tab; inactive drawers must not portal over another tab. */
   active?: boolean;
   client: AgorClient | null;
   /** The socket has connected and authenticated, so reads will be answered. */
@@ -112,6 +112,7 @@ export interface CatalogTabProps {
   /** Whose server-provided capability decides whether Connect is offered. */
   currentUser?: User | null;
   /** Refresh the shared four-tab projection after durable OAuth confirmation. */
+  onOpenSession?: (sessionId: SessionID) => void;
   refreshMarketplaceOverview?: () => Promise<unknown>;
 }
 
@@ -123,14 +124,14 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
   authGeneration,
   currentUser,
   refreshMarketplaceOverview,
+  onOpenSession,
 }) => {
   const { token } = theme.useToken();
   const navigate = useNavigate();
   // Same set the session panel reads, so "is this install finished?" is one
-  // question with one answer wherever it is asked. On this surface it is
-  // usually empty — the marketplace is standalone chrome and does not hydrate
-  // the workspace store — which costs nothing: `mcpServerNeedsAuth` falls back
-  // to the token the daemon injects on the read that produced `mcp_server`.
+  // question with one answer wherever it is asked. The modal reuses the
+  // workspace projection; `mcpServerNeedsAuth` also handles the token returned
+  // by the daemon for a newly connected server.
   const userAuthenticatedMcpServerIds = useAgorStore(selectUserAuthenticatedMcpServerIds);
 
   const [filters, setFilters] = useState<CatalogFilterState>(INITIAL_FILTERS);
@@ -138,6 +139,14 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
   const [selected, setSelected] = useState<MCPCatalogEntry | null>(null);
   const drawerOpen = useRef(false);
   const drawerTrigger = useRef<HTMLElement | null>(null);
+  const drawerFocusTimer = useRef<number | undefined>(undefined);
+  useEffect(
+    () => () => {
+      window.clearTimeout(drawerFocusTimer.current);
+      drawerTrigger.current = null;
+    },
+    []
+  );
   const [connecting, setConnecting] = useState(false);
   const [connectError, setConnectError] = useState<string | null>(null);
   const [connectSuccess, setConnectSuccess] = useState<{
@@ -387,6 +396,7 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
 
   const restoreDrawerFocus = useCallback((trigger: HTMLElement | null) => {
     if (drawerOpen.current || !trigger?.isConnected || drawerTrigger.current !== trigger) return;
+    window.clearTimeout(drawerFocusTimer.current);
     drawerTrigger.current = null;
     trigger.focus();
   }, []);
@@ -402,7 +412,11 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
     // `afterOpenChange(false)` is the normal restoration boundary. Keep a
     // guarded fallback for browsers that cancel the exit motion after Escape
     // (for example when reduced-motion state changes during the animation).
-    window.setTimeout(() => restoreDrawerFocus(trigger), MARKETPLACE_DRAWER_FOCUS_FALLBACK_MS);
+    window.clearTimeout(drawerFocusTimer.current);
+    drawerFocusTimer.current = window.setTimeout(
+      () => restoreDrawerFocus(trigger),
+      MARKETPLACE_DRAWER_FOCUS_FALLBACK_MS
+    );
   }, [restoreDrawerFocus]);
 
   const handleDrawerOpenChange = useCallback(
@@ -740,7 +754,7 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
         readinessLoading={readiness.loading}
         readinessError={readiness.error}
         success={connectSuccess}
-        onOpenSession={(sessionId) => navigate(sessionPath(sessionId))}
+        onOpenSession={onOpenSession ?? ((sessionId) => navigate(sessionPath(sessionId)))}
         onContinueOAuth={continueSurpriseOAuth}
         onConnect={handleConnect}
       />

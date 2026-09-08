@@ -1,4 +1,4 @@
-import type { MCPMarketplaceAttachment, MCPMarketplaceOverview } from '@agor/core/types';
+import type { MCPMarketplaceAttachment, MCPMarketplaceOverview, SessionID } from '@agor/core/types';
 import type { AgorClient } from '@agor-live/client';
 import { sessionPath, shortId } from '@agor-live/client';
 import { ArrowRightOutlined, RobotOutlined } from '@ant-design/icons';
@@ -36,8 +36,18 @@ export const SessionsTab: React.FC<{
   loading: boolean;
   error: string | null;
   refresh: () => Promise<unknown>;
+  onOpenSession?: (sessionId: SessionID) => void;
   onBrowseCatalog?: () => void;
-}> = ({ client, authorityKey, overview, loading, error, refresh, onBrowseCatalog }) => {
+}> = ({
+  client,
+  authorityKey,
+  overview,
+  loading,
+  error,
+  refresh,
+  onBrowseCatalog,
+  onOpenSession,
+}) => {
   const { token } = theme.useToken();
   const navigate = useNavigate();
   const guard = useAuthorityOperationGuard(authorityKey);
@@ -103,7 +113,11 @@ export const SessionsTab: React.FC<{
                           <Button
                             type="link"
                             style={{ padding: 0, height: 'auto', alignSelf: 'flex-start' }}
-                            onClick={() => navigate(sessionPath(attachment.session_id))}
+                            onClick={() =>
+                              onOpenSession
+                                ? onOpenSession(attachment.session_id)
+                                : navigate(sessionPath(attachment.session_id))
+                            }
                             title={`Open session ${sessionName}`}
                           >
                             <Typography.Text strong ellipsis={{ tooltip: sessionName }}>
@@ -131,7 +145,11 @@ export const SessionsTab: React.FC<{
                           aria-label={`Open session ${sessionName}`}
                           title={`Open session ${sessionName}`}
                           icon={<ArrowRightOutlined />}
-                          onClick={() => navigate(sessionPath(attachment.session_id))}
+                          onClick={() =>
+                            onOpenSession
+                              ? onOpenSession(attachment.session_id)
+                              : navigate(sessionPath(attachment.session_id))
+                          }
                         >
                           Open session
                         </Button>

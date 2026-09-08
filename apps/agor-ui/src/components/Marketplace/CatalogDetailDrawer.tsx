@@ -203,6 +203,7 @@ const CatalogDetailDrawerForIdentity: React.FC<CatalogDetailDrawerProps> = ({
   onConnect,
 }) => {
   const { token } = theme.useToken();
+  const titleId = useId();
   const successActionRef = useRef<HTMLButtonElement | null>(null);
   const [branchId, setBranchId] = useState<string | undefined>();
   const [agenticTool, setAgenticTool] = useState<AgenticToolName>(DEFAULT_AGENT);
@@ -395,6 +396,7 @@ const CatalogDetailDrawerForIdentity: React.FC<CatalogDetailDrawerProps> = ({
 
   return (
     <Drawer
+      aria-labelledby={titleId}
       open={open}
       onClose={onClose}
       afterOpenChange={onAfterOpenChange}
@@ -402,7 +404,7 @@ const CatalogDetailDrawerForIdentity: React.FC<CatalogDetailDrawerProps> = ({
       destroyOnHidden
       title={
         entry && (
-          <Space align="center" size={token.marginSM}>
+          <Space id={titleId} align="center" size={token.marginSM}>
             <CatalogEntryAvatar iconUrl={entry.icon_url} title={title} />
             <Flex vertical style={{ minWidth: 0 }}>
               <Text strong ellipsis>

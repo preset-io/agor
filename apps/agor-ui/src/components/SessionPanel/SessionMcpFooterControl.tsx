@@ -1,9 +1,10 @@
 import type { AgorClient, MCPServer } from '@agor-live/client';
 import { ROLES } from '@agor-live/client';
-import { ApiOutlined } from '@ant-design/icons';
-import { Tag as AntTag, Space, Typography, theme } from 'antd';
+import { ApiOutlined, ShopOutlined } from '@ant-design/icons';
+import { Tag as AntTag, Button, Flex, Space, Tooltip, Typography, theme } from 'antd';
 import React from 'react';
 import { useConnectionState } from '@/contexts/ConnectionContext';
+import { useMCPCatalogModal } from '@/contexts/MCPCatalogModalContext';
 import { useAuthorityOperationGuard } from '@/hooks/useAuthorityOperationGuard';
 import { usePermissions } from '@/hooks/usePermissions';
 import { markMarketplacePromptAttempt } from '../../utils/marketplaceOAuthPrompt';
@@ -33,6 +34,7 @@ const SessionMcpFooterControlForIdentity: React.FC<SessionMcpFooterControlProps>
   userAuthenticatedMcpServerIds,
 }) => {
   const { token } = theme.useToken();
+  const catalog = useMCPCatalogModal();
   const { showSuccess, showError } = useThemedMessage();
   const { hasRole, isAdmin, role } = usePermissions();
   const { connected, connecting, authGeneration } = useConnectionState();
@@ -117,6 +119,11 @@ const SessionMcpFooterControlForIdentity: React.FC<SessionMcpFooterControlProps>
     setEditModalOpen(true);
   }, []);
 
+  const handleBrowseCatalog = () => {
+    setOpen(false);
+    catalog?.openCatalog(triggerRef.current);
+  };
+
   const finishEditModalClose = React.useCallback(() => {
     setEditingServer(null);
     triggerRef.current?.focus();
@@ -197,9 +204,22 @@ const SessionMcpFooterControlForIdentity: React.FC<SessionMcpFooterControlProps>
     <div style={{ width: 340, maxWidth: 'min(340px, 80vw)' }}>
       <Space orientation="vertical" size={10} style={{ width: '100%' }}>
         <div>
-          <Typography.Text id={headingId} strong>
-            Session MCP servers
-          </Typography.Text>
+          <Flex align="center" justify="space-between">
+            <Typography.Text id={headingId} strong>
+              Session MCP servers
+            </Typography.Text>
+            {catalog && (
+              <Tooltip title="Open MCP Catalog">
+                <Button
+                  type="text"
+                  size="small"
+                  icon={<ShopOutlined />}
+                  aria-label="Open MCP Catalog"
+                  onClick={handleBrowseCatalog}
+                />
+              </Tooltip>
+            )}
+          </Flex>
           <Typography.Paragraph type="secondary" style={{ margin: `${token.sizeUnit}px 0 0` }}>
             Attach tools/connectors that the agent can use in this conversation.
           </Typography.Paragraph>
@@ -234,6 +254,7 @@ const SessionMcpFooterControlForIdentity: React.FC<SessionMcpFooterControlProps>
         )}
 
         <MCPServerSelect
+          onBrowseCatalog={catalog ? handleBrowseCatalog : undefined}
           mcpServers={Array.from(mcpServerById.values())}
           placeholder="Attach MCP servers…"
           value={sessionMcpServerIds}
@@ -245,6 +266,12 @@ const SessionMcpFooterControlForIdentity: React.FC<SessionMcpFooterControlProps>
             popupRef.current ?? trigger.parentElement ?? document.body
           }
         />
+        {catalog && (
+          <Typography.Text type="secondary">
+            Catalog Connect creates a new session. Select an existing server above to attach it
+            here.
+          </Typography.Text>
+        )}
       </Space>
     </div>
   );

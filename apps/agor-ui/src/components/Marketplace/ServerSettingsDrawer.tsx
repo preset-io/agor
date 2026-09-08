@@ -21,7 +21,7 @@ import {
   Typography,
   theme,
 } from 'antd';
-import { useEffect, useState } from 'react';
+import { useEffect, useId, useState } from 'react';
 import { MARKETPLACE_SERVER_DRAWER_WIDTH } from './marketplaceLayout';
 import {
   type MarketplaceCredentialPresentation,
@@ -88,6 +88,7 @@ export const ServerSettingsDrawer: React.FC<ServerSettingsDrawerProps> = ({
   onRemove,
 }) => {
   const { token } = theme.useToken();
+  const titleId = useId();
   const [removeConfirm, setRemoveConfirm] = useState(false);
   useEffect(() => {
     if (!server || !canRemove) setRemoveConfirm(false);
@@ -100,6 +101,7 @@ export const ServerSettingsDrawer: React.FC<ServerSettingsDrawerProps> = ({
 
   return (
     <Drawer
+      aria-labelledby={titleId}
       open={server !== null}
       size={MARKETPLACE_SERVER_DRAWER_WIDTH}
       destroyOnHidden
@@ -107,7 +109,7 @@ export const ServerSettingsDrawer: React.FC<ServerSettingsDrawerProps> = ({
       afterOpenChange={onAfterOpenChange}
       title={
         server && (
-          <Space size={token.marginSM}>
+          <Space id={titleId} size={token.marginSM}>
             <Avatar shape="square">{marketplaceServerTitle(server).charAt(0).toUpperCase()}</Avatar>
             <Flex vertical style={{ minWidth: 0 }}>
               <Text strong ellipsis>

@@ -94,7 +94,7 @@ function uniqueTools(tools: readonly MCPMarketplaceTool[]): MCPMarketplaceTool[]
 }
 
 export interface MyServersTabProps {
-  /** Whether this tab is the active route; inactive drawers must not portal over another tab. */
+  /** Whether this tab is active; inactive drawers must not portal over another tab. */
   active?: boolean;
   client: AgorClient | null;
   connected: boolean;
@@ -201,6 +201,14 @@ export const MyServersTab: React.FC<MyServersTabProps> = ({
   const [selectedServerId, setSelectedServerId] = useState<string | null>(null);
   const [editingCredentialServer, setEditingCredentialServer] = useState<MCPServer | null>(null);
   const drawerTrigger = useRef<HTMLElement | null>(null);
+  const drawerFocusTimer = useRef<number | undefined>(undefined);
+  useEffect(
+    () => () => {
+      window.clearTimeout(drawerFocusTimer.current);
+      drawerTrigger.current = null;
+    },
+    []
+  );
   const drawerOpen = useRef(false);
   const inventoryFocusTarget = useRef<HTMLElement | null>(null);
   const removalFocusAuthority = useRef<RemovalFocusAuthority | null>(null);
@@ -599,7 +607,10 @@ export const MyServersTab: React.FC<MyServersTabProps> = ({
   const restoreDrawerFocus = useCallback((trigger: HTMLElement | null, settled = true) => {
     if (drawerOpen.current || !trigger?.isConnected || drawerTrigger.current !== trigger) return;
     trigger.focus();
-    if (settled) drawerTrigger.current = null;
+    if (settled) {
+      window.clearTimeout(drawerFocusTimer.current);
+      drawerTrigger.current = null;
+    }
   }, []);
 
   useEffect(() => {
@@ -639,7 +650,8 @@ export const MyServersTab: React.FC<MyServersTabProps> = ({
     // the element focused when it opened, which can be a hidden Credentials
     // action during a cross-tab handoff. The lifecycle callback below performs
     // the final, authoritative restoration after that built-in behavior.
-    window.setTimeout(
+    window.clearTimeout(drawerFocusTimer.current);
+    drawerFocusTimer.current = window.setTimeout(
       () => restoreDrawerFocus(trigger, false),
       MARKETPLACE_DRAWER_FOCUS_FALLBACK_MS
     );
@@ -896,7 +908,8 @@ export const MyServersTab: React.FC<MyServersTabProps> = ({
         onAfterOpenChange={(open) => {
           if (open || drawerOpen.current) return;
           const trigger = drawerTrigger.current;
-          window.setTimeout(() => restoreDrawerFocus(trigger), 0);
+          window.clearTimeout(drawerFocusTimer.current);
+          drawerFocusTimer.current = window.setTimeout(() => restoreDrawerFocus(trigger), 0);
         }}
         reconnectingOAuth={oauth.startingOAuthFlow}
         onReconnectOAuth={
