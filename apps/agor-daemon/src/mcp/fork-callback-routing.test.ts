@@ -34,6 +34,7 @@ vi.mock('@agor/core/agentic-integrations', async (original) => ({
 }));
 
 afterEach(() => {
+  vi.unstubAllEnvs();
   shutdownMcpTokens();
   vi.restoreAllMocks();
 });
@@ -147,12 +148,15 @@ dbTest(
     await new Promise<void>((resolve) => server.once('listening', resolve));
     try {
       const address = server.address() as { port: number };
+      const daemonUrl = `http://127.0.0.1:${address.port}`;
+      // setupQuery reads this at call time, as it would in a spawned executor.
+      vi.stubEnv('DAEMON_URL', daemonUrl);
       const call = async (
         headers: Record<string, string>,
         tool: string,
         args: Record<string, unknown>
       ) => {
-        const response = await fetch(`http://127.0.0.1:${address.port}/mcp`, {
+        const response = await fetch(`${daemonUrl}/mcp`, {
           method: 'POST',
           headers: {
             ...headers,
