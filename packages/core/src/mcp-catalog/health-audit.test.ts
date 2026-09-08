@@ -1,5 +1,6 @@
 import type { MCPCatalogEntry } from '@agor/core/types';
 import { describe, expect, it, vi } from 'vitest';
+import { MCPExternalError, sanitizeMCPExternalError } from '../tools/mcp/external-error';
 import { OAuthConfigurationError } from '../tools/mcp/oauth-mcp-transport';
 import { auditCatalogHealth } from './health-audit';
 
@@ -29,6 +30,25 @@ function entry(auth_type: MCPCatalogEntry['auth_type']): MCPCatalogEntry {
 }
 
 describe('auditCatalogHealth', () => {
+  it('retains the closed storage-policy reason without provider prose', async () => {
+    const [result] = await auditCatalogHealth([entry('oauth')], {
+      probe: async () => ({ authType: 'oauth' }),
+      oauthMetadataReady: async () => {
+        throw new MCPExternalError(
+          sanitizeMCPExternalError(new Error('SENTINEL_PROVIDER_SECRET'), {
+            stage: 'oauth_metadata',
+            category: 'storage_policy_rejected',
+          })
+        );
+      },
+    });
+    expect(result).toMatchObject({
+      status: 'oauth-metadata-not-ready',
+      reason: 'external_storage_policy_rejected',
+    });
+    expect(JSON.stringify(result)).not.toContain('SENTINEL');
+  });
+
   it('classifies reachability and auth drift without public network access', async () => {
     const results = await auditCatalogHealth([entry('none'), entry('oauth')], {
       probe: vi

@@ -1,5 +1,5 @@
 import type { MCPCatalogEntry, MCPCatalogProbedAuthType } from '@agor/core/types';
-import { MCPExternalError } from '../tools/mcp/external-error';
+import { MCPExternalError, type MCPExternalErrorCategory } from '../tools/mcp/external-error';
 import {
   OAuthConfigurationError,
   resolveMCPOAuthDiscovery,
@@ -27,11 +27,7 @@ export type CatalogHealthReason =
   | 'issuer_mismatch'
   | 'pkce_required'
   | 'client_registration_required'
-  | 'external_provider_unavailable'
-  | 'external_provider_rejected'
-  | 'external_invalid_response'
-  | 'external_configuration_required'
-  | 'external_unknown'
+  | `external_${MCPExternalErrorCategory}`
   | 'unexpected_error';
 
 export interface CatalogHealthResult {

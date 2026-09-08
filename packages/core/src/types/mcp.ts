@@ -448,7 +448,13 @@ export type MCPDiscoveryResult =
       resources: Pick<MCPResource, 'name' | 'uri' | 'mimeType'>[];
       prompts: Pick<MCPPrompt, 'name' | 'description'>[];
     }
-  | { success: false; error: string; recovery?: MCPAuthRecovery; category?: string };
+  | {
+      success: false;
+      error: string;
+      recovery?: MCPAuthRecovery;
+      category?: string;
+      action?: MCPAuthRecoveryAction;
+    };
 
 /**
  * MCP Server Capabilities

@@ -75,6 +75,17 @@ describe('discovered MCP capability validation', () => {
     ).toThrow(/tools\[0\]\.description must be a bounded string/);
   });
 
+  it.each(['\0', '\u0007', '\u001f', '\u007f'])(
+    'rejects non-whitespace controls in schema keys: %j',
+    (control) => {
+      expect(() =>
+        assertValidDiscoveredMCPCapabilities({
+          tools: [{ name: 'search', input_schema: { properties: { [`key${control}`]: {} } } }],
+        })
+      ).toThrow(/contains an invalid key/);
+    }
+  );
+
   it('classifies validator errors without invoking a hostile prototype trap', () => {
     const getPrototypeOf = vi.fn(() => {
       throw new Error('provider-controlled trap');

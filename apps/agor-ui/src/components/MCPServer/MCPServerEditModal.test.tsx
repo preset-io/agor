@@ -77,8 +77,10 @@ describe('MCPServerEditModal legacy DCR compatibility', () => {
       reservation_token: 'storage-policy-reservation-00000001',
       expires_at: Date.now() + 60_000,
     });
+    const patch = vi.fn().mockResolvedValue({ config_version: 2 });
     const client = {
       service: vi.fn((path: string) => {
+        if (path === 'mcp-servers') return { patch };
         if (path === 'mcp-servers/discover') return { create: discover };
         if (path === 'mcp-servers/oauth-browser-reservations') return { create: reserve };
         return {};
@@ -111,7 +113,9 @@ describe('MCPServerEditModal legacy DCR compatibility', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Test Connection' }));
 
     expect(await screen.findByText(error)).toBeVisible();
+    expect(patch).toHaveBeenCalledOnce();
     expect(discover).toHaveBeenCalledOnce();
+    expect(patch.mock.invocationCallOrder[0]).toBeLessThan(discover.mock.invocationCallOrder[0]!);
   });
 
   it('keeps oauth_dcr_mode absent when an unrelated field is saved', async () => {
