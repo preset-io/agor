@@ -23,6 +23,15 @@ export interface AppActionsContextValue {
     prompt: string,
     permissionMode?: PermissionMode
   ) => boolean | undefined | Promise<boolean | undefined>;
+  /**
+   * Post a human-to-human "ping" note — never sent to the agent, never
+   * creates a Task. See `client.sessions.ping` / `POST /sessions/:id/ping`.
+   */
+  onSendPing?: (
+    sessionId: string,
+    text: string,
+    mentionedUserIds?: string[]
+  ) => boolean | undefined | Promise<boolean | undefined>;
   onFork?: (sessionId: string, prompt: string) => Promise<void>;
   onBtwFork?: (sessionId: string, prompt: string) => Promise<void>;
   onSubsession?: (sessionId: string, config: string | Partial<SpawnConfig>) => Promise<void>;

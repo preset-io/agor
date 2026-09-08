@@ -6,7 +6,7 @@
  */
 
 import type { PersistedAgenticToolName } from './agentic-tool';
-import type { MessageID, SessionID, TaskID } from './id';
+import type { MessageID, SessionID, TaskID, UserID } from './id';
 import type { WidgetMessageMetadata } from './widget';
 
 /**
@@ -56,6 +56,7 @@ export const MESSAGE_TYPE_VALUES = [
   'daemon_restart',
   'daemon_crash',
   'widget_request',
+  'mention',
 ] as const;
 
 export type MessageType = (typeof MESSAGE_TYPE_VALUES)[number];
@@ -280,6 +281,24 @@ export interface Message {
      * messages. Discriminated by `widget_type`; see `types/widget.ts`.
      */
     widget?: WidgetMessageMetadata;
+
+    /**
+     * @mentioned user IDs. Only populated on `type === 'mention'` messages
+     * (the ping/comment compose action — see `context/explorations/` or PR
+     * description for design). Mirrors `BoardComment.mentions`. These
+     * messages are human-to-human notes: never dispatched to the agent and
+     * excluded from agent-facing message search (see mcp/tools/messages.ts).
+     */
+    mentions?: UserID[];
+
+    /**
+     * The user who posted this message. Only populated on `type ===
+     * 'mention'` messages — Message has no general `created_by` column, and
+     * ordinary user/assistant messages are attributed to the session's
+     * current viewer instead. Pings need explicit attribution because any
+     * collaborator with session access can post one.
+     */
+    author_user_id?: UserID;
 
     /**
      * Marks the user-role message / task as having been authored by the
