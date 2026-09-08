@@ -317,6 +317,21 @@ bounded, content-free executor operational logs; it does not grant access to log
 or expose the provider payload. High-volume diagnostics are summarized after the
 per-run log limit, without hiding notices or tool failures in the conversation.
 
+### Credential reminders
+
+After onboarding, Agor may show a credential reminder for the enabled agent that
+New Session initially selects. It checks only that agent, not the health of all
+your AIs. Loading, network errors and unverified native logins are inconclusive,
+so they do not produce a disconnected reminder.
+
+**Don't remind me about this agent** is a persistent opt-out in this browser,
+scoped to your workspace, user and agent. It stays dismissed after credential
+changes and reconnects, and stops the reminder's background checks. No other
+setup reminder replaces it while that agent is selected. It does not
+change authentication, permissions, or errors reported by sessions. Clearing
+this site's browser storage resets the opt-out. Older temporary credential
+snoozes are not migrated to permanent opt-outs; you may see one fresh reminder.
+
 ### Historical Claude CLI sessions
 
 Agor previously included an experimental `claude-code-cli` runtime. That integration has been
