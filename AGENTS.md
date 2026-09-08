@@ -16,6 +16,11 @@ This file is intentionally high-level. There are three places to look:
 
 **Rule of thumb:** If a topic has a guide page, read the guide. `context/` is for orientation, not exposition.
 
+**Do not accumulate task reports in the repo.** Routine bug investigations, audit snapshots,
+before/after evidence, and validation receipts belong in the issue or PR, not new dated
+`docs/internal/` files. Update an existing guide or code comment for durable behavior changes;
+retain separate docs only for lasting design/security contracts or operational runbooks.
+
 ---
 
 ## Quick Start

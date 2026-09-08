@@ -75,6 +75,13 @@ Keep the full value in the control's accessible name. Do not add a nested tab st
 a tooltip keyboard-triggerable; interactive library surfaces need a component-level focus pattern
 that has been tested with the library's own keyboard behavior.
 
+## Modal lifecycle
+
+Mount rare/heavy dialogs in lists or canvas nodes on demand. Keep the mounted entity separate
+from the controlled `open` state: close with `open=false`, then unmount in `afterClose` so AntD's
+exit motion and cleanup still run. Preserve intentionally retained drafts and singleton modal
+state; use `destroyOnHidden` when the wrapper must stay mounted but its contents need not.
+
 ## Accessibility and testing
 
 - Preserve keyboard operation, visible focus, accessible names, correct semantic elements, and
