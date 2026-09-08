@@ -1153,6 +1153,43 @@ describe('startMCPOAuthFlow with prefetchedAuthServerMetadata', () => {
     }
   );
 
+  it.each([
+    [{ token_endpoint: '' }, /token endpoint/],
+    [{ code_challenge_methods_supported: ['plain'] }, /PKCE S256/],
+    [{ authorization_endpoint: 'http://unsafe.example.test/authorize' }, /HTTPS/],
+  ])('shares audit validation before durable client resolution: %j', async (invalid, message) => {
+    const authServerMetadata = {
+      ...prefetchedOptions.prefetchedAuthServerMetadata,
+      issuer: 'https://mcp.reo.dev',
+      ...invalid,
+    };
+    const resolver: MCPOAuthDynamicClientRegistrationResolver = vi.fn(async () => {
+      throw new Error('invalid metadata must never reach the durable authority');
+    });
+    globalThis.fetch = vi.fn() as unknown as typeof fetch;
+    await expect(
+      validateMCPOAuthMetadata(
+        {
+          kind: 'authorization-server',
+          discoveredAt: 'https://mcp.reo.dev/.well-known/oauth-authorization-server',
+          authServerMetadata,
+        },
+        prefetchedOptions.resourceUri,
+        { compatibilityMode: 'marketplace' }
+      )
+    ).rejects.toThrow(message);
+    await expect(
+      startMCPOAuthFlow('', undefined, redirectUri, {
+        ...prefetchedOptions,
+        compatibilityMode: 'marketplace',
+        prefetchedAuthServerMetadata: authServerMetadata,
+        resolveDynamicClientRegistration: resolver,
+      })
+    ).rejects.toThrow(message);
+    expect(resolver).not.toHaveBeenCalled();
+    expect(globalThis.fetch).not.toHaveBeenCalled();
+  });
+
   it('accepts a confidential client when DCR returns a secret with auth method none/omitted, then uses HTTP Basic on token exchange', async () => {
     // Reproduces Atlassian's remote MCP: we request a public client
     // (token_endpoint_auth_method: 'none'), but the provider registers a *confidential* client —

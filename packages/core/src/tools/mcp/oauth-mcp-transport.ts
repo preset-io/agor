@@ -2047,7 +2047,6 @@ async function startMCPOAuthFlowWithAS(opts: {
     assertCurrent: opts.assertCurrent,
   });
 
-
   // CSRF state
   const state = crypto.randomUUID();
 
