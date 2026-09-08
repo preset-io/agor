@@ -1,5 +1,5 @@
 import type { Session } from '@agor-live/client';
-import { Flex, Pagination } from 'antd';
+import { Flex, Pagination, theme } from 'antd';
 import { type ReactNode, useState } from 'react';
 import { BRANCH_SESSION_VIEWPORT_HEIGHT } from './branchCardLayout';
 
@@ -15,6 +15,7 @@ export function PagedSessions({
   children: (session: Session) => ReactNode;
   fillHeight?: boolean;
 }) {
+  const { token } = theme.useToken();
   const [requestedPage, setPage] = useState(1);
   // Archive/removal events can shrink the collection while a later page is open.
   const page = Math.min(requestedPage, Math.max(1, Math.ceil(sessions.length / PAGE_SIZE)));
@@ -26,7 +27,11 @@ export function PagedSessions({
       vertical
       gap={4}
       className="nodrag nowheel"
-      style={fillHeight ? { height: '100%', minHeight: 0, flex: 1 } : undefined}
+      // Reserve rows plus pagination; short panels scroll outside this list
+      // rather than shrinking its overflow clip to zero.
+      style={
+        fillHeight ? { height: '100%', minHeight: token.controlHeight * 3, flex: 1 } : undefined
+      }
     >
       <Flex
         vertical

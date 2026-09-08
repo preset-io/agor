@@ -336,10 +336,14 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
 
   const isPanel = mode === 'panel';
   // Keep a header and a row reachable in very short panels; the panel itself
-  // can scroll when its chrome and all expanded sections cannot fit.
-  const panelSectionStyle = (open: boolean): React.CSSProperties | undefined =>
+  // can scroll when its chrome and all expanded sections cannot fit. Paged
+  // sections also need room for body padding, pagination, and the row viewport.
+  const panelSectionStyle = (open: boolean, paged = false): React.CSSProperties | undefined =>
     isPanel
-      ? { flex: open ? '1 1 0' : '0 0 auto', minHeight: open ? token.controlHeight * 3 : undefined }
+      ? {
+          flex: open ? '1 1 0' : '0 0 auto',
+          minHeight: open ? token.controlHeight * (paged ? 6 : 3) : undefined,
+        }
       : undefined;
   const panelItemStyle: React.CSSProperties | undefined = isPanel
     ? { height: '100%', display: 'grid', gridTemplateRows: 'auto minmax(0, 1fr)' }
@@ -1336,7 +1340,7 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
               ghost
               style={{
                 marginTop: manualSessions.length > 0 ? 0 : 8,
-                ...panelSectionStyle(isScheduledRunsOpen),
+                ...panelSectionStyle(isScheduledRunsOpen, true),
               }}
             />
           )}

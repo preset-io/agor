@@ -1,7 +1,8 @@
 import type { Board, Branch, Repo, Session } from '@agor-live/client';
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { App } from 'antd';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { userEvent } from 'vitest/browser';
 import { EMPTY_MAPS } from '../../store/agorMaps';
 import { agorStore } from '../../store/agorStore';
 import { BoardTeammatePanel } from '../BoardTeammatePanel/BoardTeammatePanel';
@@ -211,4 +212,88 @@ describe('large branch session collections', () => {
       );
     });
   });
+});
+
+describe('short teammate panels', () => {
+  it.each(['search', 'expanded sections'] as const)(
+    'keeps rows and pagination reachable with %s at 350×200',
+    async (scenario) => {
+      const sessions = Array.from({ length: 100 }, (_, index) =>
+        makeSession(
+          index,
+          scenario === 'search' || index < 30
+            ? {}
+            : index < 70
+              ? { scheduled_from_branch: true, scheduled_run_at: 100 - index }
+              : {
+                  custom_context: {
+                    gateway_source: {
+                      channel_id: 'channel-1',
+                      channel_type: 'slack',
+                      channel_name: 'Team',
+                      thread_id: `thread-${index}`,
+                    },
+                  },
+                }
+        )
+      );
+      agorStore.setState({
+        ...EMPTY_MAPS,
+        sessionsByBranch: new Map([[branch.branch_id, sessions]]),
+      });
+      const onSessionClick = vi.fn();
+      const { container } = render(
+        <App>
+          <div style={{ width: 350, height: 200 }}>
+            <BoardTeammatePanel
+              board={{ board_id: 'board-1', name: 'Board' } as Board}
+              primaryTeammateBranch={branch}
+              primaryTeammateRepo={{ repo_id: 'repo-1', slug: 'example/repo' } as Repo}
+              primaryTeammateInaccessible={false}
+              onSessionClick={onSessionClick}
+              client={null}
+            />
+          </div>
+        </App>
+      );
+      if (scenario === 'search') {
+        fireEvent.change(screen.getByPlaceholderText('Search sessions...'), {
+          target: { value: 'Conversation' },
+        });
+      }
+      const first = scenario === 'search' ? 0 : 30;
+      const row = await screen.findByRole('button', { name: `Open session Conversation ${first}` });
+      const viewport = row.parentElement!.parentElement!;
+      // Visibility matchers alone do not detect a zero-height overflow clip.
+      await waitFor(() => expect(viewport.clientHeight).toBeGreaterThanOrEqual(row.offsetHeight));
+      expect(viewport.scrollHeight).toBeGreaterThan(viewport.clientHeight);
+      expect(within(viewport).getAllByRole('button', { name: /^Open session/ })).toHaveLength(20);
+      await act(async () => userEvent.click(row));
+      expect(onSessionClick).toHaveBeenLastCalledWith(`session-${first}`);
+      const tail = screen.getByRole('button', { name: `Open session Conversation ${first + 19}` });
+      await act(async () => userEvent.click(tail));
+      expect(onSessionClick).toHaveBeenLastCalledWith(`session-${first + 19}`);
+      await act(async () => userEvent.click(screen.getByTitle('Next Page')));
+      const next = await screen.findByRole('button', {
+        name: `Open session Conversation ${first + 20}`,
+      });
+      await act(async () => userEvent.click(next));
+      expect(onSessionClick).toHaveBeenLastCalledWith(`session-${first + 20}`);
+      expect(screen.getAllByRole('button', { name: /^Open session/ }).length).toBeLessThan(80);
+      const shortHeight = next.parentElement!.parentElement!.clientHeight;
+      const panel = container.querySelector<HTMLElement>('.ant-app > div')!;
+      panel.style.height = '1000px';
+      await waitFor(() =>
+        expect(next.parentElement!.parentElement!.clientHeight).toBeGreaterThan(shortHeight)
+      );
+      panel.style.height = '200px';
+      await waitFor(() =>
+        expect(next.parentElement!.parentElement!.clientHeight).toBeGreaterThanOrEqual(
+          next.offsetHeight
+        )
+      );
+      await act(async () => userEvent.click(next));
+      expect(onSessionClick).toHaveBeenLastCalledWith(`session-${first + 20}`);
+    }
+  );
 });
