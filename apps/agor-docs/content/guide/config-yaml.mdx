@@ -356,7 +356,7 @@ by [single-step instrumentation](https://docs.datadoghq.com/tracing/trace_collec
 via `NODE_OPTIONS` — HTTP, Express, Postgres, and Redis are auto-instrumented.
 FeathersJS and postgres.js are not: dd-trace ships no native plugins for
 Feathers service methods or the postgres.js driver used by Drizzle. This setting
-controls both custom layers. It adds an app-level hook that wraps each service
+controls the custom Feathers, PostgreSQL and MCP layers. It adds an app-level hook that wraps each service
 method in a `feathers.request` span whose **resource** name is
 `<service>.<method>` (for example `sessions.find`), and enables the Drizzle
 `postgres.query` shim. Service spans nest under the active HTTP span, with
@@ -365,18 +365,30 @@ their child Postgres queries beneath the method that issued them:
 ```yaml
 metrics:
   apm:
-    trace_services: off # off | entrypoint | full; controls Feathers + PostgreSQL tracing
+    trace_services: off # off | entrypoint | full; controls Feathers + PostgreSQL + MCP tracing
 ```
 
-- **`off`** (default) — neither custom tracing layer is registered; zero custom
+- **`off`** (default) — all custom tracing layers are disabled; zero custom
   tracing overhead, including no PostgreSQL shim patch or tracer resolution.
-- **`entrypoint`** — one span per top-level request; nested service-to-service
+- **`entrypoint`** — one Feathers span per top-level service request; nested service-to-service
   fan-out is suppressed. PostgreSQL query spans are also enabled. Cheap and
   bounded — safe to leave on in production.
 - **`full`** — a span per service-method invocation including nested calls, so
   the full fan-out and its child queries are visible. Highest span volume (and
   ingestion cost); PostgreSQL query spans are also enabled. Intended for active
   investigation, not steady state.
+
+Both enabled depths also add an `mcp.request` span covering MCP admission and
+protocol handling, plus `mcp.tool` spans for registered tool handlers. Filter by
+`mcp.method` to separate protocol methods and by `mcp.tool` to identify the actual
+Agor tool. Calls through `agor_execute_tool` have nested facade and target-tool
+spans; do not sum those durations as independent requests. Method labels are
+bounded (`other` for unknown/malformed methods, `batch` for arrays), and tool
+names come from server registration, never arbitrary request arguments.
+Arguments, results, credentials and user/session/tenant IDs are not added to
+these tags. Tool spans measure handler execution, not pre-handler SDK validation;
+an MCP result containing `isError: true` remains a returned result rather than
+an exception. Use the protocol response to assess application success.
 
 `AGOR_APM_TRACE_SERVICES` (`off`, `entrypoint`, or `full`) overrides the YAML
 value so depth can be changed without editing config. Like all metrics

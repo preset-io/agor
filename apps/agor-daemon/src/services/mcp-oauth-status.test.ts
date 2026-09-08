@@ -30,6 +30,27 @@ function buildDeps(overrides: Partial<OAuthStatusDeps> = {}): OAuthStatusDeps {
 }
 
 describe('resolveAuthenticatedServerIds', () => {
+  it.each(['listForUser', 'listShared'] as const)(
+    'propagates %s envelope failures without returning partial status',
+    async (failedList) => {
+      const error = new Error('Unsupported bound secret envelope');
+      const findServer = vi.fn(async () => serverOwnedBy('server-valid'));
+      const deps = buildDeps({
+        listForUser: async () => [grantFor('server-valid')],
+        listShared: async () => [grantFor('server-valid')],
+        findServer,
+        [failedList]: async () => {
+          throw error;
+        },
+      });
+
+      // The endpoint catches this and returns an empty authenticated set. A
+      // projection must not silently turn a failed list into partial success.
+      await expect(resolveAuthenticatedServerIds(deps)).rejects.toBe(error);
+      expect(findServer).not.toHaveBeenCalled();
+    }
+  );
+
   it("does not name another user's private server through its shared grant", async () => {
     // A shared grant belongs to the server, so it is returned to everybody who
     // asks. The server behind it may still be private, and a private server is

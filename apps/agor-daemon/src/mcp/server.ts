@@ -59,6 +59,7 @@ import { registerSessionTools } from './tools/sessions.js';
 import { registerTaskTools } from './tools/tasks.js';
 import { registerUserTools } from './tools/users.js';
 import { registerWidgetTools } from './tools/widgets.js';
+import { createMcpTracing } from './tracing.js';
 
 const DEBUG_MCP_REQUESTS =
   process.env.AGOR_DEBUG_MCP_REQUESTS === '1' || process.env.DEBUG?.includes('mcp-requests');
@@ -336,7 +337,8 @@ function getRegistry(): {
 function createMcpServer(
   ctx: McpContext,
   toolSearchEnabled: boolean,
-  serverVersion: string
+  serverVersion: string,
+  tracing: ReturnType<typeof createMcpTracing>
 ): McpServer {
   const server = new McpServer(
     {
@@ -368,10 +370,13 @@ function createMcpServer(
     // though progressive discovery intentionally omits it from tools/list.
     // Both paths retain the same authenticated tenant wrapper and SDK input /
     // output validation.
-    registerDomainTools(tenantScopedToolProxy(toolDispatcherProxy(server, dispatcher), ctx), ctx);
+    registerDomainTools(
+      tenantScopedToolProxy(tracing.toolProxy(toolDispatcherProxy(server, dispatcher)), ctx),
+      ctx
+    );
 
     // Register search/detail/execute as the complete visible MCP catalog.
-    registerSearchTools(server, registry, dispatcher);
+    registerSearchTools(tracing.toolProxy(server), registry, dispatcher);
 
     // Keep the advertised catalog to the three progressive-discovery facade
     // tools without removing direct tools/call compatibility. This uses the
@@ -385,7 +390,7 @@ function createMcpServer(
       throw new Error(`Expected 3 progressive-discovery MCP tools, got ${toolsList.tools.length}`);
     }
   } else {
-    registerDomainTools(tenantScopedToolProxy(server, ctx), ctx);
+    registerDomainTools(tenantScopedToolProxy(tracing.toolProxy(server), ctx), ctx);
   }
 
   // McpServer.registerTool() conservatively advertises listChanged=true.
@@ -409,10 +414,11 @@ export function setupMCPRoutes(
   app: Application,
   db: TenantScopeAwareDatabase,
   toolSearchEnabled = true,
-  config: Pick<AgorConfig, 'multi_tenancy'> = { multi_tenancy: undefined },
+  config: Pick<AgorConfig, 'multi_tenancy' | 'metrics'> = { multi_tenancy: undefined },
   options: { serverVersion?: string } = {}
 ): void {
   const serverVersion = options.serverVersion ?? '0.0.0';
+  const tracing = createMcpTracing(config.metrics?.apm?.trace_services ?? 'off');
   // Eagerly build the registry at startup so first request isn't slower
   if (toolSearchEnabled) {
     getRegistry();
@@ -430,7 +436,7 @@ export function setupMCPRoutes(
         throw new Error('Authenticated MCP request context is unavailable');
       }
       mcpRequestDebug(`🔌 Serving MCP ${era} protocol request`);
-      return createMcpServer(ctx, toolSearchEnabled, serverVersion);
+      return createMcpServer(ctx, toolSearchEnabled, serverVersion, tracing);
     },
     {
       // One endpoint serves the 2026-07-28 per-request protocol and every
@@ -539,7 +545,7 @@ export function setupMCPRoutes(
     return fromHeader ?? fromQuery;
   };
 
-  const handler = async (req: Request, res: Response) => {
+  const handleRequest = async (req: Request, res: Response) => {
     try {
       mcpRequestDebug(`🔌 Incoming MCP request: ${req.method} /mcp`);
 
@@ -794,6 +800,9 @@ export function setupMCPRoutes(
       }
     }
   };
+
+  const handler = (req: Request, res: Response) =>
+    tracing.request(req.body, () => handleRequest(req, res));
 
   // GET and DELETE remain registered only to return an explicit, authenticated
   // 405 response to Streamable HTTP clients that optimistically probe them.
