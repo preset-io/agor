@@ -66,6 +66,11 @@ import { resolveContextUserId } from '../base/context-user.js';
 import type { TasksService } from '../base/index.js';
 import { forkCodexThreadViaAppServer } from './app-server-client.js';
 import { applyAgorCodexLaunchPolicy } from './launch-policy.js';
+import {
+  CODEX_MCP_UNKNOWN_FAILURE,
+  CodexRuntimeDiagnostics,
+  codexRuntimeNotice,
+} from './runtime-diagnostics.js';
 import { extractCodexContextSnapshotFromEvent, extractCodexTokenUsage } from './usage.js';
 
 type CodexSdkReasoningEffort = NonNullable<
@@ -201,6 +206,7 @@ function logCodexRuntimeFailure(
   event: 'stream_error_observed' | 'turn_completed_without_response' | 'turn_failed',
   error: unknown,
   sessionId: SessionID,
+  taskId?: TaskID,
   category?: 'configuration_required'
 ): void {
   const safe = sanitizeMCPExternalError(error, {
@@ -208,7 +214,7 @@ function logCodexRuntimeFailure(
     ...(category ? { category } : {}),
   });
   const code = safe.diagnostic.code;
-  const message = `[codex.runtime] event=${event} session_id=${sessionId} category=${safe.category} type=${safe.diagnostic.type}${code ? ` code=${code}` : ''}`;
+  const message = `[codex.runtime] event=${event} session_id=${sessionId}${taskId ? ` task_id=${taskId}` : ''} category=${safe.category} type=${safe.diagnostic.type}${code ? ` code=${code}` : ''}`;
   if (event === 'stream_error_observed') {
     console.warn(`${message} outcome=awaiting_terminal_event`);
   } else {
@@ -1001,12 +1007,16 @@ export class CodexPromptService {
         // This matches Claude's "start/end + payload" visibility model.
         let mcpOutput: string | Array<Record<string, unknown>> | undefined;
         if (status === 'completed') {
-          if (Array.isArray(item.result?.content) && item.result.content.length > 0) {
+          if (item.error) {
+            const safe = sanitizeMCPExternalError(item.error, { stage: 'runtime' });
+            mcpOutput =
+              safe.category === 'unknown'
+                ? CODEX_MCP_UNKNOWN_FAILURE
+                : `${safe.message} Before retrying a write, check whether it already took effect.`;
+          } else if (Array.isArray(item.result?.content) && item.result.content.length > 0) {
             mcpOutput = item.result.content as Array<Record<string, unknown>>;
           } else if (item.result?.structured_content !== undefined) {
             mcpOutput = JSON.stringify(item.result.structured_content, null, 2);
-          } else if (item.error) {
-            mcpOutput = sanitizeMCPExternalError(item.error, { stage: 'runtime' }).message;
           }
         }
         return {
@@ -1020,7 +1030,7 @@ export class CodexPromptService {
             output: mcpOutput,
           }),
           ...(status === 'completed' && {
-            status: item.status,
+            status: item.error ? 'failed' : item.status,
           }),
         };
       }
@@ -1366,6 +1376,7 @@ export class CodexPromptService {
       thread = this.getCodexClient().startThread(threadOptions);
     }
 
+    const diagnostics = new CodexRuntimeDiagnostics(sessionId, taskId);
     let receivedTerminalEvent = false;
     const clearFreshThreadResumeState = async () => {
       if (startedFreshThread) {
@@ -1514,7 +1525,8 @@ export class CodexPromptService {
               logCodexRuntimeFailure(
                 'turn_completed_without_response',
                 observedStreamError,
-                sessionId
+                sessionId,
+                taskId
               );
               throw new CodexLifecycleError('completed_without_response');
             }
@@ -1585,6 +1597,26 @@ export class CodexPromptService {
               // Emit tool_complete for tool items
               const toolUseComplete = this.itemToToolUse(event.item, 'completed');
               if (toolUseComplete) {
+                if (event.item.type === 'mcp_tool_call' && toolUseComplete.status === 'failed') {
+                  // The SDK retains failed result content (including MCP isError),
+                  // but call errors expose only opaque prose: transport vs JSON-RPC
+                  // cannot safely be inferred from that error field alone.
+                  const failureKind = event.item.error
+                    ? 'call_error'
+                    : event.item.result
+                      ? 'failed_result'
+                      : 'failed_item';
+                  const reference = diagnostics.record(
+                    'mcp_tool_failed',
+                    event.item.error,
+                    failureKind
+                  );
+                  const detail = `MCP call failed; check write outcomes before retrying (reference=${reference}).`;
+                  toolUseComplete.output = Array.isArray(toolUseComplete.output)
+                    ? [...toolUseComplete.output, { type: 'text', text: detail }]
+                    : `${toolUseComplete.output || '[failed]'} ${detail}`;
+                }
+
                 const isDuplicateTodoCompletion =
                   event.item.type === 'todo_list' &&
                   todoIdsEmittedViaUpdate.has(toolUseComplete.id);
@@ -1663,9 +1695,9 @@ export class CodexPromptService {
 
               // Surface non-fatal item-level errors as assistant text so users can see
               // what happened instead of dropping them silently.
-              if ('message' in event.item && event.item.type === 'error') {
-                const safe = sanitizeMCPExternalError(event.item, { stage: 'runtime' });
-                const errorContent = [{ type: 'text', text: `[Codex item error] ${safe.message}` }];
+              if (event.item.type === 'error') {
+                const reference = diagnostics.record('item_notice', event.item);
+                const errorContent = [{ type: 'text', text: codexRuntimeNotice(reference) }];
                 yield {
                   type: 'complete',
                   content: errorContent,
@@ -1683,7 +1715,8 @@ export class CodexPromptService {
               logCodexRuntimeFailure(
                 'turn_completed_without_response',
                 observedStreamError,
-                sessionId
+                sessionId,
+                taskId
               );
               throw new CodexLifecycleError('completed_without_response');
             }
@@ -1716,6 +1749,7 @@ export class CodexPromptService {
               'turn_failed',
               event.error,
               sessionId,
+              taskId,
               missingAuthentication ? 'configuration_required' : undefined
             );
             throw new CodexLifecycleError(
@@ -1731,7 +1765,7 @@ export class CodexPromptService {
             // not parse provider prose or terminate early: remember the error
             // and wait for the authoritative turn.completed / turn.failed / EOF.
             observedStreamError = event;
-            logCodexRuntimeFailure('stream_error_observed', event, sessionId);
+            logCodexRuntimeFailure('stream_error_observed', event, sessionId, taskId);
             break;
           }
 
@@ -1772,6 +1806,8 @@ export class CodexPromptService {
       throw new CodexLifecycleError(
         runtimePhase === 'starting' ? 'stream_start_failed' : 'stream_interrupted'
       );
+    } finally {
+      diagnostics.finish();
     }
   }
 

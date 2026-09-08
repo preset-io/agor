@@ -1366,6 +1366,34 @@ describe('CodexPromptService - tool payload mapping', () => {
     });
   });
 
+  it('does not hide an explicit MCP error behind result content or a success status', () => {
+    const service = new CodexPromptService(
+      mockMessagesRepo,
+      mockSessionsRepo,
+      mockSessionMCPServerRepo,
+      mockBranchesRepo,
+      undefined,
+      'test-api-key',
+      mockDb
+    );
+    const toolUse = (service as any).itemToToolUse(
+      {
+        id: 'mcp-conflicting',
+        type: 'mcp_tool_call',
+        server: 'agor',
+        tool: 'write',
+        arguments: {},
+        status: 'completed',
+        result: { content: [{ type: 'text', text: 'partial result' }] },
+        error: { message: 'SENTINEL_PROVIDER_BODY' },
+      },
+      'completed'
+    );
+    expect(toolUse.status).toBe('failed');
+    expect(toolUse.output).toContain('check the resulting state before retrying');
+    expect(JSON.stringify(toolUse)).not.toContain('SENTINEL_PROVIDER_BODY');
+  });
+
   it('sanitizes MCP provider error messages on failure', () => {
     const service = new CodexPromptService(
       mockMessagesRepo,
@@ -1397,7 +1425,7 @@ describe('CodexPromptService - tool payload mapping', () => {
       name: 'agor.agor_execute_tool',
       input: {},
       output:
-        'The MCP operation failed. Retry, then ask an administrator to review the secure operational event if it continues.',
+        'The MCP tool call failed. A write may already have taken effect; check the resulting state before retrying. If it continues, ask an administrator to review the operational diagnostics.',
       status: 'failed',
     });
   });
@@ -1441,7 +1469,7 @@ describe('CodexPromptService - tool payload mapping', () => {
     );
 
     expect(JSON.stringify(toolUse)).not.toContain(sentinel);
-    expect(toolUse.output).toContain('The MCP operation failed');
+    expect(toolUse.output).toContain('The MCP tool call failed');
   });
 
   it('falls back to structured_content when MCP content blocks are empty', () => {
@@ -1978,6 +2006,119 @@ describe('CodexPromptService - event_msg terminal handling (issue #1749)', () =>
       totalTokens: 30_000,
       maxTokens: 272_000,
     });
+  });
+
+  it('persists a failed MCP result as is_error even when the Codex turn subsequently completes', async () => {
+    const { service } = await makeInitializedStreamingService(null);
+    const initialRuns = mockRunStreamedInputs.length;
+    const messagesRepo = {
+      findInitialUserMessagesByTaskId: vi.fn(async () => []),
+      getNextIndexBySessionId: vi.fn(async () => 0),
+    };
+    const messagesService = {
+      create: vi.fn(async (message: Partial<Message>) => message as Message),
+      patch: vi.fn(async (_id: string, message: Partial<Message>) => message as Message),
+    } satisfies MessagesService;
+    const tool = new CodexTool(
+      messagesRepo as unknown as MessagesRepository,
+      mockSessionsRepo,
+      mockSessionMCPServerRepo,
+      mockBranchesRepo,
+      undefined,
+      'test-api-key',
+      messagesService
+    );
+    (tool as unknown as { promptService: CodexPromptService }).promptService = service;
+    mockBranchesRepo.findById.mockResolvedValue({ branch_id: 'branch-1' });
+    // The CLI maps MCP isError:true to failed status while retaining result content.
+    mockStreamEvents = [
+      {
+        type: 'item.completed',
+        item: {
+          id: 'failed-call',
+          type: 'mcp_tool_call',
+          server: 'agor',
+          tool: 'agor_execute_tool',
+          arguments: {},
+          status: 'failed',
+          result: { content: [{ type: 'text', text: '{"code":"invalid_tool_arguments"}' }] },
+        },
+      },
+      {
+        type: 'item.completed',
+        item: { id: 'answer', type: 'agent_message', text: 'Please correct the input.' },
+      },
+      {
+        type: 'turn.completed',
+        usage: { input_tokens: 1, output_tokens: 1, cached_input_tokens: 0 },
+      },
+    ];
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      const result = await tool.executePromptWithStreaming(testSessionId, 'go');
+      expect(result.rawSdkResponse).toMatchObject({ type: 'turn.completed' });
+      const saved = messagesService.create.mock.calls.flatMap(([message]) => message.content ?? []);
+      expect(saved).toContainEqual(
+        expect.objectContaining({ type: 'tool_result', is_error: true })
+      );
+      expect(JSON.stringify(saved)).toContain('invalid_tool_arguments');
+      const reference = JSON.stringify(saved).match(/reference=([a-f0-9-]+:\d+)/)?.[1];
+      expect(reference).toBeDefined();
+      expect(JSON.stringify(warn.mock.calls)).toContain(`reference=${reference}`);
+      expect(JSON.stringify(warn.mock.calls)).toContain('failure_kind=failed_result');
+      expect(mockRunStreamedInputs).toHaveLength(initialRuns + 1);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it('does not let a nonfatal notice mask a later failed turn', async () => {
+    const { service } = await makeInitializedStreamingService(null);
+    mockStreamEvents = [
+      { type: 'item.completed', item: { id: 'notice', type: 'error', message: 'SENTINEL_NOTICE' } },
+      { type: 'turn.failed', error: { message: 'SENTINEL_FAILURE' } },
+    ];
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    try {
+      await expect(drain(service)).rejects.toThrow('Codex failed the turn');
+      expect(JSON.stringify([...warn.mock.calls, ...error.mock.calls])).not.toContain('SENTINEL_');
+    } finally {
+      warn.mockRestore();
+      error.mockRestore();
+    }
+  });
+
+  it('surfaces opaque Codex notices without inventing an MCP failure or losing correlation', async () => {
+    const { service } = await makeInitializedStreamingService(null);
+    const initialRuns = mockRunStreamedInputs.length;
+    mockStreamEvents = [
+      {
+        type: 'item.completed',
+        item: { type: 'error', id: 'SENTINEL_ITEM_ID', message: 'SENTINEL_CONFIG_WARNING' },
+      },
+      { type: 'item.completed', item: { type: 'agent_message', id: 'answer', text: 'Done.' } },
+      {
+        type: 'turn.completed',
+        usage: { input_tokens: 1, output_tokens: 1, cached_input_tokens: 0 },
+      },
+    ];
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      const emitted = await drain(service);
+      const serialized = JSON.stringify(emitted);
+      expect(serialized).toContain('[Codex runtime notice]');
+      expect(serialized).not.toContain('MCP operation failed');
+      expect(serialized).not.toContain('SENTINEL_');
+      expect(serialized).toContain('Done.');
+      const reference = serialized.match(/reference=([a-f0-9-]+:\d+)/)?.[1];
+      expect(reference).toBeDefined();
+      expect(JSON.stringify(warn.mock.calls)).toContain(`reference=${reference}`);
+      expect(JSON.stringify(warn.mock.calls)).not.toContain('SENTINEL_');
+      expect(mockRunStreamedInputs).toHaveLength(initialRuns + 1);
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it.each([
