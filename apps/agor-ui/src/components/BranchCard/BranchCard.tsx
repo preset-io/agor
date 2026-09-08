@@ -37,6 +37,7 @@ import { IssuePill, PullRequestPill } from '../Pill';
 import { BranchSessionPeekSection } from './BranchSessionPeekSection';
 import { BranchSessionSections } from './BranchSessionSections';
 import { estimateBranchSessionSectionsHeight } from './branchCardLayout';
+import { useBranchCardWheelZoom } from './useBranchCardWheelZoom';
 
 const _BRANCH_CARD_MAX_WIDTH = 600;
 const PEEK_SESSIONS_STORAGE_KEY_PREFIX = 'agor:branch-card:peeked-session-ids:';
@@ -111,6 +112,7 @@ const BranchCardComponent = ({
   const connectionDisabled = useConnectionDisabled();
 
   const branchBoardId = (branch as { board_id?: string | null }).board_id;
+  const wheelZoomRef = useBranchCardWheelZoom(!inPopover && !panelMode);
 
   // Canvas cards hydrate their session sections in chunks after the board
   // shell commits (#1768); panel/popover surfaces render a single card, so
@@ -314,6 +316,7 @@ const BranchCardComponent = ({
 
   return (
     <Card
+      ref={wheelZoomRef}
       style={{
         width: panelMode ? '100%' : peekedSessions.length > 0 ? 880 : 500,
         cursor: 'default', // Override React Flow's drag cursor - only drag handles should show grab cursor
