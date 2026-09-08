@@ -75,7 +75,7 @@ describe.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
       });
       const guarded = createTenantScopedDatabaseProxy(db);
       const repo = new ArtifactRepository(guarded);
-      await expect(repo.findVisibleReferenceIds([foreignId])).rejects.toThrow();
+      await expect(repo.findBoardReferenceVisibleIds([foreignId])).rejects.toThrow();
       await runWithTenantDatabaseScope(guarded, tenantA, async (scoped) => {
         const owner = await new UsersRepository(scoped).create({
           user_id: ownerAId,
@@ -111,7 +111,7 @@ describe.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
         ];
         capture = true;
         try {
-          expect(await repo.findVisibleReferenceIds(refs, owner.user_id)).toEqual(
+          expect(await repo.findBoardReferenceVisibleIds(refs, owner.user_id)).toEqual(
             new Set([uniqueId, uniquePrefix, publicId, privateId])
           );
         } finally {
@@ -121,7 +121,7 @@ describe.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
         expect(queries.join('\n')).not.toMatch(
           /\b(files|agor_runtime|sandpack_config|dependencies|required_env_vars|agor_grants)\b/
         );
-        expect(await repo.findVisibleReferenceIds(refs, generateId())).toEqual(
+        expect(await repo.findBoardReferenceVisibleIds(refs, generateId())).toEqual(
           new Set([uniqueId, uniquePrefix, publicId])
         );
       });
@@ -147,7 +147,7 @@ describe.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
         failQueryNumber = 2;
         capture = true;
         try {
-          expect(await repo.findVisibleReferenceIds(ids, owner.user_id)).toEqual(
+          expect(await repo.findBoardReferenceVisibleIds(ids, owner.user_id)).toEqual(
             new Set([ids[0], ids[400]])
           );
           expect(queries).toHaveLength(3);

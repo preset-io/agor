@@ -24,10 +24,10 @@ describe('board artifact visibility after hooks', () => {
   it.each(['get', 'find'] as const)(
     'preserves %s no-op identity and hidden tenant metadata',
     async (method) => {
-      const findVisibleReferenceIds = vi
-        .fn<ArtifactRepository['findVisibleReferenceIds']>()
+      const findBoardReferenceVisibleIds = vi
+        .fn<ArtifactRepository['findBoardReferenceVisibleIds']>()
         .mockResolvedValue(new Set(['visible']));
-      const hook = filterBoardArtifactObjects({ findVisibleReferenceIds });
+      const hook = filterBoardArtifactObjects({ findBoardReferenceVisibleIds });
       const variants: Board['objects'][] = [undefined, {}, { note }, { ref: artifact('visible') }];
       for (const objects of variants) {
         const original = attachHiddenTenant(board(objects), { tenant_id: 'tenant-a' });
@@ -42,14 +42,14 @@ describe('board artifact visibility after hooks', () => {
   );
 
   it('retains hidden tenant metadata when get replaces a filtered board', async () => {
-    const findVisibleReferenceIds = vi
-      .fn<ArtifactRepository['findVisibleReferenceIds']>()
+    const findBoardReferenceVisibleIds = vi
+      .fn<ArtifactRepository['findBoardReferenceVisibleIds']>()
       .mockResolvedValue(new Set());
     const original = attachHiddenTenant(board({ hidden: artifact('private'), note }), {
       tenant_id: 'tenant-a',
     });
     const ctx = context('get', original);
-    await filterBoardArtifactObjects({ findVisibleReferenceIds })(ctx);
+    await filterBoardArtifactObjects({ findBoardReferenceVisibleIds })(ctx);
     expect(ctx.result).not.toBe(original);
     expect(ctx.result!.objects).toEqual({ note });
     expect(original.objects!.hidden).toBeDefined();
@@ -60,8 +60,8 @@ describe('board artifact visibility after hooks', () => {
   it.each(['array', 'paginated', 'get'] as const)(
     'batches %s results without changing keys, order or pagination',
     async (shape) => {
-      const findVisibleReferenceIds = vi
-        .fn<ArtifactRepository['findVisibleReferenceIds']>()
+      const findBoardReferenceVisibleIds = vi
+        .fn<ArtifactRepository['findBoardReferenceVisibleIds']>()
         .mockResolvedValue(new Set(['public', 'own-short']));
       const objects = {
         first: artifact('public'),
@@ -80,8 +80,8 @@ describe('board artifact visibility after hooks', () => {
             ? boards
             : { data: boards, total: 42, limit: 2, skip: 4 };
       const ctx = context(shape === 'get' ? 'get' : 'find', result);
-      await filterBoardArtifactObjects({ findVisibleReferenceIds })(ctx);
-      expect(findVisibleReferenceIds).toHaveBeenCalledExactlyOnceWith(
+      await filterBoardArtifactObjects({ findBoardReferenceVisibleIds })(ctx);
+      expect(findBoardReferenceVisibleIds).toHaveBeenCalledExactlyOnceWith(
         ['public', 'private', 'own-short', 'missing'],
         'viewer'
       );
@@ -102,27 +102,27 @@ describe('board artifact visibility after hooks', () => {
   );
 
   it('fails closed on a read error without removing other object types', async () => {
-    const findVisibleReferenceIds = vi
-      .fn<ArtifactRepository['findVisibleReferenceIds']>()
+    const findBoardReferenceVisibleIds = vi
+      .fn<ArtifactRepository['findBoardReferenceVisibleIds']>()
       .mockRejectedValue(new Error('database unavailable'));
     const ctx = context('get', board({ hidden: artifact('private'), note }));
-    await filterBoardArtifactObjects({ findVisibleReferenceIds })(ctx);
+    await filterBoardArtifactObjects({ findBoardReferenceVisibleIds })(ctx);
     expect(Object.keys(ctx.result!.objects!)).toEqual(['note']);
   });
 
   it('does no lookup for an empty page or non-artifact objects and never caches across requests', async () => {
-    const findVisibleReferenceIds = vi
-      .fn<ArtifactRepository['findVisibleReferenceIds']>()
+    const findBoardReferenceVisibleIds = vi
+      .fn<ArtifactRepository['findBoardReferenceVisibleIds']>()
       .mockResolvedValueOnce(new Set(['id']))
       .mockResolvedValueOnce(new Set());
-    const hook = filterBoardArtifactObjects({ findVisibleReferenceIds });
+    const hook = filterBoardArtifactObjects({ findBoardReferenceVisibleIds });
     await hook(context('find', { data: [], total: 0 }));
     await hook(context('get', board({ note })));
-    expect(findVisibleReferenceIds).not.toHaveBeenCalled();
+    expect(findBoardReferenceVisibleIds).not.toHaveBeenCalled();
     await hook(context('get', board({ ref: artifact('id') })));
     const second = context('get', board({ ref: artifact('id') }));
     await hook(second);
     expect(second.result!.objects).toEqual({});
-    expect(findVisibleReferenceIds).toHaveBeenCalledTimes(2);
+    expect(findBoardReferenceVisibleIds).toHaveBeenCalledTimes(2);
   });
 });

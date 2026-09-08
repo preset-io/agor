@@ -38,7 +38,7 @@ describe('ArtifactRepository board visibility projection', () => {
     for (const ref of refs) await repo.findById(ref);
     expect(queries).toHaveBeenCalledTimes(84); // 72 exact + 6 (resolve + full read)
     queries.mockClear();
-    const visible = await repo.findVisibleReferenceIds([...refs, ...refs], 'test-user');
+    const visible = await repo.findBoardReferenceVisibleIds([...refs, ...refs], 'test-user');
     expect(visible).toEqual(new Set(refs));
     expect(queries).toHaveBeenCalledTimes(2);
     for (const [query] of queries.mock.calls) {
@@ -49,7 +49,7 @@ describe('ArtifactRepository board visibility projection', () => {
       expect(query).not.toMatch(/\b(name|description|board_id|branch_id|created_at|updated_at)\b/);
     }
     queries.mockClear();
-    expect(await repo.findVisibleReferenceIds([], 'test-user')).toEqual(new Set());
+    expect(await repo.findBoardReferenceVisibleIds([], 'test-user')).toEqual(new Set());
     expect(queries).not.toHaveBeenCalled();
   });
 
@@ -76,21 +76,23 @@ describe('ArtifactRepository board visibility projection', () => {
       const ownPrefix = privateId.replace(/-/g, '');
       const ambiguous = shortId(publicId);
       const refs = [publicId, privateId, ownPrefix, ambiguous, generateId(), 'missing', '%', '_'];
-      expect(await repo.findVisibleReferenceIds(refs, 'test-user')).toEqual(
+      expect(await repo.findBoardReferenceVisibleIds(refs, 'test-user')).toEqual(
         new Set([publicId, privateId, ownPrefix])
       );
-      expect(await repo.findVisibleReferenceIds(refs, 'another-user')).toEqual(new Set([publicId]));
-      expect(await repo.findVisibleReferenceIds(refs)).toEqual(new Set([publicId]));
-      expect(await repo.findVisibleReferenceIds([ownPrefix.toUpperCase()], 'test-user')).toEqual(
-        new Set([ownPrefix.toUpperCase()])
+      expect(await repo.findBoardReferenceVisibleIds(refs, 'another-user')).toEqual(
+        new Set([publicId])
       );
+      expect(await repo.findBoardReferenceVisibleIds(refs)).toEqual(new Set([publicId]));
+      expect(
+        await repo.findBoardReferenceVisibleIds([ownPrefix.toUpperCase()], 'test-user')
+      ).toEqual(new Set([ownPrefix.toUpperCase()]));
       // Preserve the old DTO comparison for internal callers with no user;
       // normal authenticated callers cannot see an ownerless private artifact.
       const ownerless = await repo.create({ board_id: board.board_id, public: false });
-      expect(await repo.findVisibleReferenceIds([ownerless.artifact_id], 'test-user')).toEqual(
+      expect(await repo.findBoardReferenceVisibleIds([ownerless.artifact_id], 'test-user')).toEqual(
         new Set()
       );
-      expect(await repo.findVisibleReferenceIds([ownerless.artifact_id])).toEqual(
+      expect(await repo.findBoardReferenceVisibleIds([ownerless.artifact_id])).toEqual(
         new Set([ownerless.artifact_id])
       );
     }
@@ -101,21 +103,21 @@ describe('ArtifactRepository board visibility projection', () => {
     const queries = vi.spyOn(logger, 'logQuery');
     const repo = new ArtifactRepository(db);
     expect(
-      await repo.findVisibleReferenceIds(Array.from({ length: 401 }, () => generateId()))
+      await repo.findBoardReferenceVisibleIds(Array.from({ length: 401 }, () => generateId()))
     ).toEqual(new Set());
     expect(queries).toHaveBeenCalledTimes(3);
     queries.mockClear();
     const prefixes = Array.from({ length: 101 }, () => shortId(generateId()));
-    expect(await repo.findVisibleReferenceIds([...prefixes, ...prefixes])).toEqual(new Set());
+    expect(await repo.findBoardReferenceVisibleIds([...prefixes, ...prefixes])).toEqual(new Set());
     expect(queries).toHaveBeenCalledTimes(2);
     expect(queries.mock.calls.every(([query]) => query.includes('LIMIT 2'))).toBe(true);
     queries.mockImplementationOnce(() => {
       throw new Error('read unavailable');
     });
-    expect(await repo.findVisibleReferenceIds([generateId()])).toEqual(new Set());
+    expect(await repo.findBoardReferenceVisibleIds([generateId()])).toEqual(new Set());
     const guarded = new ArtifactRepository(createTenantScopedDatabaseProxy(db));
     for (const id of [generateId(), shortId(generateId())]) {
-      await expect(guarded.findVisibleReferenceIds([id])).rejects.toThrow(
+      await expect(guarded.findBoardReferenceVisibleIds([id])).rejects.toThrow(
         'Missing tenant database scope'
       );
     }
@@ -153,9 +155,9 @@ describe('ArtifactRepository board visibility projection', () => {
             throw new Error('middle chunk unavailable');
           })
           .mockImplementationOnce(() => undefined);
-        expect(await new ArtifactRepository(db).findVisibleReferenceIds(refs, 'test-user')).toEqual(
-          new Set([refs[0], refs[chunkSize * 2]])
-        );
+        expect(
+          await new ArtifactRepository(db).findBoardReferenceVisibleIds(refs, 'test-user')
+        ).toEqual(new Set([refs[0], refs[chunkSize * 2]]));
         expect(queries).toHaveBeenCalledTimes(3);
       }
     );

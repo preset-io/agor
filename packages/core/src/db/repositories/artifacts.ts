@@ -95,7 +95,10 @@ export class ArtifactRepository implements BaseRepository<Artifact, Partial<Arti
   constructor(private db: Database) {}
 
   /**
-   * Board-reference visibility only, inside the caller's trusted tenant scope.
+   * Board-reference visibility only, after board authorization and inside the
+   * caller's trusted tenant scope. Not a general artifact authorization API:
+   * preserves the board hook's legacy comparison for userless internal calls.
+   * External board calls must pass their authenticated user ID.
    * Never load source/runtime JSON or resolve share URLs. Resolve ambiguity
    * BEFORE visibility: a hidden second match must not authorize a prefix.
    * Exact IDs use bounded IN queries; prefixes use bounded UNION ALL probes,
@@ -106,7 +109,10 @@ export class ArtifactRepository implements BaseRepository<Artifact, Partial<Arti
    * An unusable transaction/connection can make subsequent chunks fail too;
    * this read path does not recover or replace the caller's transaction.
    */
-  async findVisibleReferenceIds(ids: readonly string[], userId?: string): Promise<Set<string>> {
+  async findBoardReferenceVisibleIds(
+    ids: readonly string[],
+    userId?: string
+  ): Promise<Set<string>> {
     const references = [...new Set(ids)];
     const exact = references.filter(isValidUUID);
     const prefixes = new Map<string, string[]>();

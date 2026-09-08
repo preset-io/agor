@@ -3,7 +3,7 @@ import type { Board, HookContext } from '@agor/core/types';
 
 /** Filter only artifact references; board authorization and tenant scope are upstream. */
 export function filterBoardArtifactObjects(
-  artifacts: Pick<ArtifactRepository, 'findVisibleReferenceIds'>
+  artifacts: Pick<ArtifactRepository, 'findBoardReferenceVisibleIds'>
 ) {
   return async (context: HookContext<Board>) => {
     const result = context.result;
@@ -32,7 +32,7 @@ export function filterBoardArtifactObjects(
     let visible = new Set<string>();
     if (references.size) {
       try {
-        visible = await artifacts.findVisibleReferenceIds([...references], userId);
+        visible = await artifacts.findBoardReferenceVisibleIds([...references], userId);
       } catch {
         // Ordinary query failures are denied per bounded repository chunk,
         // retaining other verified successes. A boundary/unexpected failure
