@@ -113,21 +113,28 @@ const BranchCardComponent = ({
 
   const branchBoardId = (branch as { board_id?: string | null }).board_id;
   const cardRef = React.useRef<HTMLDivElement>(null);
+  const sessionSectionsRef = React.useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const card = cardRef.current;
     if (!card || inPopover || panelMode) return;
 
     const onWheel = (event: WheelEvent) => {
-      // Trackpad pinch is Ctrl+wheel, often without a Control keydown.
-      if (!(event.ctrlKey || event.metaKey) || !(event.target instanceof Element)) return;
+      if (!(event.target instanceof Element)) return;
       const scrollArea = event.target.closest(`.${REACT_FLOW_NO_WHEEL_CLASS}`);
       const renderer = card.closest('.react-flow__renderer');
       if (!scrollArea || !card.contains(scrollArea) || !renderer) return;
 
-      // nowheel excludes pinch as well as scrolling in React Flow 11. Capture
-      // before the virtual tree consumes it, then let React Flow own zoom,
-      // pointer anchoring and limits. Ordinary inner scrolling stays untouched.
+      // Session lists belong to the canvas gesture surface, even when virtual.
+      // Expanded descriptions/peeks retain ordinary scrolling only if they overflow.
+      const isSessionList = sessionSectionsRef.current?.contains(scrollArea);
+      const overflows =
+        scrollArea.scrollHeight > scrollArea.clientHeight ||
+        scrollArea.scrollWidth > scrollArea.clientWidth;
+      if (!event.ctrlKey && !event.metaKey && !isSessionList && overflows) return;
+
+      // Removing nowheel alone is insufficient: the virtual list still consumes
+      // wheel. Capture first, then let React Flow own pan/zoom and anchoring.
       event.preventDefault();
       event.stopPropagation();
       renderer.dispatchEvent(new WheelEvent(event.type, event));
@@ -567,6 +574,7 @@ const BranchCardComponent = ({
 
       {/* Sessions & Scheduled Runs - composable content shared with the teammate panel */}
       <div
+        ref={sessionSectionsRef}
         className={REACT_FLOW_NO_DRAG_CLASS}
         style={sectionsReady ? undefined : { minHeight: sessionShellMinHeight }}
       >

@@ -21,10 +21,10 @@ const onSessionClick = vi.fn();
 
 function CardNode({
   data,
-}: NodeProps<{ sessions: Session[]; panelMode?: boolean; inPopover?: boolean }>) {
+}: NodeProps<{ sessions: Session[]; panelMode?: boolean; inPopover?: boolean; notes?: string }>) {
   return (
     <BranchCard
-      branch={branch}
+      branch={{ ...branch, notes: data.notes }}
       repo={repo}
       sessions={data.sessions}
       userById={new Map()}
@@ -37,7 +37,7 @@ function CardNode({
 }
 const nodeTypes = { branch: CardNode };
 
-async function mount(count: number, scheduled = false) {
+async function mount(count: number, scheduled = false, notes?: string) {
   let flow: ReactFlowInstance | undefined;
   const sessions = Array.from(
     { length: count },
@@ -85,7 +85,7 @@ async function mount(count: number, scheduled = false) {
                 type: 'branch',
                 position: { x: 70, y: 70 },
                 dragHandle: REACT_FLOW_DRAG_HANDLE_SELECTOR,
-                data: { sessions },
+                data: { sessions, notes },
               },
             ]}
             nodeTypes={nodeTypes}
@@ -187,24 +187,26 @@ it.each([2, 100])(
   }
 );
 
-it('keeps trusted plain wheel scrolling inside an overflowing tree', async () => {
-  const { flow, scroller } = await mount(100);
+it.each([2, 100])('pans the canvas over a %s-session tree without scrolling it', async (count) => {
+  const { flow, scroller } = await mount(count);
   const before = flow.getViewport();
   await act(async () =>
     userEvent.wheel(screen.getByRole('button', { name: 'Open session Conversation 0' }), {
       delta: { y: 150 },
     })
   );
-  await waitFor(() => expect(scroller.scrollTop).toBeGreaterThan(0));
-  expect(flow.getViewport()).toEqual(before);
+  await waitFor(() => expect(flow.getViewport().y).not.toBe(before.y));
+  expect(flow.getZoom()).toBe(before.zoom);
+  expect(scroller.scrollTop).toBe(0);
 });
 
-it('preserves native scrolling and pagination in scheduled lists while routing pinch to the canvas', async () => {
+it('pans and zooms the canvas over scheduled lists while preserving pagination', async () => {
   const { flow, scroller } = await mount(100, true);
   const before = flow.getViewport();
   await act(async () => userEvent.wheel(scroller, { delta: { y: 150 } }));
-  await waitFor(() => expect(scroller.scrollTop).toBeGreaterThan(0));
-  expect(flow.getViewport()).toEqual(before);
+  await waitFor(() => expect(flow.getViewport().y).not.toBe(before.y));
+  expect(flow.getZoom()).toBe(before.zoom);
+  expect(scroller.scrollTop).toBe(0);
   const scrollTop = scroller.scrollTop;
   expect(wheel(scroller, { ctrlKey: true }).defaultPrevented).toBe(true);
   await settle();
@@ -218,6 +220,43 @@ it('preserves native scrolling and pagination in scheduled lists while routing p
   );
   expect(onSessionClick).toHaveBeenCalledWith('session-20');
 });
+
+it.each([6, 40])(
+  'scrolls a %s-paragraph description only when expanded and overflowing',
+  async (count) => {
+    const notes = Array.from(
+      { length: count },
+      (_, index) => `Description paragraph ${index}.`
+    ).join('\n\n');
+    const { flow } = await mount(2, false, notes);
+    const more = await screen.findByRole('button', { name: 'See more' });
+    const viewport = document.getElementById(more.getAttribute('aria-controls')!)!;
+    const initialViewport = flow.getViewport();
+    wheel(viewport, { deltaY: 30 });
+    expect(flow.getViewport().y).not.toBe(initialViewport.y);
+    expect(viewport.scrollTop).toBe(0);
+    await act(async () => flow.setViewport(initialViewport));
+    await act(async () => userEvent.click(more));
+    await settle();
+    expect(viewport.scrollHeight > viewport.clientHeight).toBe(count === 40);
+    const beforeScroll = flow.getViewport();
+    await act(async () => userEvent.wheel(viewport, { delta: { y: 60 } }));
+    await settle();
+    if (count === 40) {
+      expect(viewport.scrollTop).toBeGreaterThan(0);
+      expect(flow.getViewport()).toEqual(beforeScroll);
+    } else {
+      expect(viewport.scrollTop).toBe(0);
+      expect(flow.getViewport().y).not.toBe(beforeScroll.y);
+    }
+    const scrollTop = viewport.scrollTop;
+    const zoom = flow.getZoom();
+    expect(wheel(viewport, { ctrlKey: true }).defaultPrevented).toBe(true);
+    await settle();
+    expect(flow.getZoom()).toBeGreaterThan(zoom);
+    expect(viewport.scrollTop).toBe(scrollTop);
+  }
+);
 
 it.each(['Control', 'Meta'])(
   'cancels trusted %s+wheel and changes the rendered canvas transform, not inner scroll',
@@ -274,9 +313,12 @@ it('keeps pinch at both scroll edges and canvas zoom limits from escaping to bro
     await settle();
     expect(flow.getZoom()).toBe(zoom);
     expect(scroller.scrollTop).toBe(top);
-    // No modifier: retain inner-scroll ownership even at an edge.
+    // No modifier: pan the canvas even at a tree scroll edge.
+    const beforePan = flow.getViewport();
     wheel(scroller, { deltaY });
     await settle();
+    expect(flow.getViewport().y).not.toBe(beforePan.y);
+    expect(scroller.scrollTop).toBe(top);
     expect(flow.getZoom()).toBe(zoom);
   }
 });
@@ -317,8 +359,10 @@ it('leaves outside-canvas wheel and browser keyboard zoom shortcuts uncanceled',
     expect(
       wheel(screen.getByRole('button', { name: 'Open session Conversation 0' }), modifiers)
         .defaultPrevented
-    ).toBe(false);
+    ).toBe(true);
   }
+  expect(flow.getZoom()).toBe(before.zoom);
+  const afterPan = flow.getViewport();
   for (const modifiers of [{ ctrlKey: true }, { metaKey: true }]) {
     expect(wheel(outside, modifiers).defaultPrevented).toBe(false);
     for (const key of ['+', '-', '0']) {
@@ -334,7 +378,7 @@ it('leaves outside-canvas wheel and browser keyboard zoom shortcuts uncanceled',
       expect(event.defaultPrevented).toBe(false);
     }
   }
-  expect(flow.getViewport()).toEqual(before);
+  expect(flow.getViewport()).toEqual(afterPan);
 });
 
 it('opts panel/popover cards out, cleans up mode changes, and leaves standalone cards alone', async () => {
