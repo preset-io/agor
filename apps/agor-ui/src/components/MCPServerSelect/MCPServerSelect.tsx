@@ -52,7 +52,11 @@ export function buildMcpServerOptions(
       return {
         label: `${name} (${server.transport})${authSuffix}${needsAuthSuffix}`,
         value: server.mcp_server_id,
-        disabled: !server.enabled,
+        // Disabled servers reach here only while selected. Let AntD remove
+        // them (including with Backspace); after removal the filter above
+        // drops the option, so they cannot be newly attached. Using the native
+        // tags also preserves whole-field disabled and overflow behavior.
+        disabled: false,
       };
     });
 
@@ -114,6 +118,21 @@ export const MCPServerSelect: React.FC<MCPServerSelectProps> = ({
       value={value}
       onChange={onChange}
       options={options}
+      getPopupContainer={(trigger: HTMLElement) =>
+        // Stay with the owning overlay, but outside independently scrolling
+        // modal/drawer bodies so their overflow does not clip the options.
+        trigger.closest<HTMLElement>('.ant-popover, .ant-modal-container, .ant-drawer-content') ??
+        trigger.parentElement ??
+        document.body
+      }
+      // Select defaults to the scroll region and no horizontal adjustment for
+      // matching-width popups. Keep long lists inside the visible viewport;
+      // a zero gap also keeps shifted edges inside that boundary.
+      popupAlign={{
+        htmlRegion: 'visible',
+        offset: [0, 0],
+        overflow: { adjustX: true, adjustY: true, shiftX: true, shiftY: true },
+      }}
       {...selectProps}
     />
   );
