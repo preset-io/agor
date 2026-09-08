@@ -67,6 +67,18 @@ let oauthStartImpl: (data: Record<string, unknown>) => Promise<unknown>;
 let catalogFindError: Error | null;
 let marketplaceCredentials: Array<Record<string, unknown>>;
 let oauthAttemptStatus: { status: string; mcp_server_id?: string };
+const oauthAttemptStatusRead = vi.fn<(attemptId: string) => Promise<typeof oauthAttemptStatus>>();
+
+function deferOAuthAttemptStatus() {
+  let complete!: (status: typeof oauthAttemptStatus) => void;
+  oauthAttemptStatusRead.mockReturnValue(
+    new Promise<typeof oauthAttemptStatus>((resolve) => {
+      complete = resolve;
+    })
+  );
+  return complete;
+}
+
 type OAuthCompletedListener = (event: {
   attempt_id: string;
   mcp_server_id: string;
@@ -133,7 +145,7 @@ function makeClient(): AgorClient {
       };
     }
     if (path === 'mcp-servers/oauth-attempt-status') {
-      return { get: async () => oauthAttemptStatus };
+      return { get: oauthAttemptStatusRead };
     }
     if (path === 'mcp-marketplace') {
       return {
@@ -251,6 +263,7 @@ beforeEach(() => {
   oauthStartCalls = [];
   marketplaceCredentials = [];
   oauthAttemptStatus = { status: 'pending', mcp_server_id: 'server-1' };
+  oauthAttemptStatusRead.mockReset().mockImplementation(async () => oauthAttemptStatus);
   oauthCompletedListeners = new Set();
   memberPolicyAnswer = { policy: 'allow_crud', can_configure: true };
   connectImpl = async () => ({
@@ -866,8 +879,9 @@ describe('connect', () => {
   });
 
   it('shows an authoritative OAuth failure without claiming the session was removed', async () => {
+    const completeAttemptRead = deferOAuthAttemptStatus();
     const drawer = await connectOAuth();
-    oauthAttemptStatus = { status: 'failed', mcp_server_id: 'server-1' };
+    await waitFor(() => expect(oauthAttemptStatusRead).toHaveBeenCalledWith('attempt-1'));
 
     act(() =>
       oauthCompletedListeners.forEach((listener) => {
@@ -878,13 +892,24 @@ describe('connect', () => {
         });
       })
     );
+    expect(drawer.getByText('Sign-in pending')).toBeInTheDocument();
+    expect(drawer.queryByText('Sign-in not completed')).not.toBeInTheDocument();
+    await act(async () => {
+      completeAttemptRead({ status: 'failed', mcp_server_id: 'server-1' });
+    });
     expect(await drawer.findByText('Sign-in not completed')).toBeInTheDocument();
     expect(drawer.getByRole('button', { name: 'Open session' })).toBeEnabled();
   });
 
   it('renders an ambiguous durable OAuth result as needing verification', async () => {
+    // Exercise the durable response, not a race between the next 1s poll and
+    // Testing Library's 1s wait. Realtime/popup hints remain non-authoritative.
+    const completeAttemptRead = deferOAuthAttemptStatus();
     const drawer = await connectOAuth();
-    oauthAttemptStatus = { status: 'ambiguous', mcp_server_id: 'server-1' };
+    await waitFor(() => expect(oauthAttemptStatusRead).toHaveBeenCalledWith('attempt-1'));
+    await act(async () => {
+      completeAttemptRead({ status: 'ambiguous', mcp_server_id: 'server-1' });
+    });
 
     expect(await drawer.findByText('Sign-in needs verification')).toBeInTheDocument();
     expect(drawer.queryByText('Sign-in not completed')).not.toBeInTheDocument();
