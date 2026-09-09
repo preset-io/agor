@@ -133,8 +133,11 @@ describe('onboarding Catalog handoff', () => {
   it('opens the reviewed PAT drawer for the new branch, never connects eagerly, and forgets it on close', async () => {
     const api = makeCatalogClient([githubHandoffEntry]);
     const consumed = vi.fn();
+    // This jsdom case tests a continuous close/reopen lifecycle, not animation.
+    // Browser fixtures retain motion; keep the normal timeout and real components.
     render(
       <CatalogHarness
+        motion={false}
         client={api.client}
         handoff={{ entryName: githubHandoffEntry.name, branchId: 'branch-1' }}
         onHandoffConsumed={consumed}
@@ -148,13 +151,14 @@ describe('onboarding Catalog handoff', () => {
     expect(api.connect).not.toHaveBeenCalled();
     expect(consumed).toHaveBeenCalledTimes(1);
     fireEvent.click(within(drawer).getByRole('button', { name: 'Close' }));
-    await waitFor(() =>
-      expect(screen.queryByRole('dialog', { name: /GitHub/ })).not.toBeInTheDocument()
-    );
+    // Assert actual teardown, not a temporarily inaccessible animated node.
+    await waitFor(() => expect(drawer).not.toBeInTheDocument());
+    expect(screen.queryByRole('dialog', { name: /GitHub/ })).not.toBeInTheDocument();
     expect(api.connect).not.toHaveBeenCalled();
     const modal = screen.getByRole('dialog', { name: 'MCP Catalog' });
     fireEvent.click(within(modal).getByRole('button', { name: 'Close' }));
-    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    await waitFor(() => expect(modal).not.toBeInTheDocument());
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Open MCP Catalog' }));
     await screen.findByRole('dialog', { name: 'MCP Catalog' });
     expect(screen.queryByRole('dialog', { name: /GitHub/ })).not.toBeInTheDocument();
