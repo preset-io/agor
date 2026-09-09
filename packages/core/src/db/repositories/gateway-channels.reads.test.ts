@@ -59,6 +59,42 @@ afterEach(() => {
 });
 
 describe('gateway credential hydration', () => {
+  it('display list and detail redact without any KDF and retain tenant identity', async () => {
+    const id = '00000000-0000-4000-8000-000000000001';
+    query.rows = [row(id)];
+    const open = vi.spyOn(encryption, 'decryptApiKeyAsync');
+    const repo = new GatewayChannelRepository({} as Database);
+    const [display] = await repo.findDisplayAll();
+    expect(display).toMatchObject({
+      config: { bot_token: '••••••••', app_token: '••••••••', label: 'public' },
+      agentic_config: { envVars: [{ key: 'API_KEY', value: '••••••••' }] },
+      channel_key: '••••••••',
+    });
+    expect(Object.getOwnPropertyDescriptor(display, 'tenant_id')).toMatchObject({
+      value: 'tenant-a',
+      enumerable: false,
+    });
+    expect(await repo.findDisplayById(id)).toEqual(display);
+    expect(open).not.toHaveBeenCalled();
+    expect((await repo.findById(id))?.config.bot_token).toBe('bot');
+    expect(open).toHaveBeenCalledTimes(3);
+  });
+
+  it('display normalizes legacy env maps and never exposes unreadable stored material', async () => {
+    query.rows = [
+      {
+        ...row(),
+        config: { bot_token: 'invalid-ciphertext' },
+        agentic_config: { envVars: { LEGACY: 'invalid-ciphertext' } },
+      },
+    ];
+    const open = vi.spyOn(encryption, 'decryptApiKeyAsync');
+    const [display] = await new GatewayChannelRepository({} as Database).findDisplayAll();
+    expect(display.agentic_config?.envVars).toEqual([{ key: 'LEGACY', value: '••••••••' }]);
+    expect(JSON.stringify(display)).not.toContain('invalid-ciphertext');
+    expect(open).not.toHaveBeenCalled();
+  });
+
   it('discovers IDs with one narrow query and no credential decryption', async () => {
     const first = '00000000-0000-4000-8000-000000000001';
     query.rows = [row(first), row('second')];

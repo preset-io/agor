@@ -847,7 +847,9 @@ describe('GatewayService multi-tenant process state', () => {
     );
     const mapping = makeMapping({ channel_id: tenantAChannel.id });
     const channelRepo = {
-      findAll: vi.fn(async () => (getCurrentTenantId() === 'tenant-a' ? [tenantAChannel] : [])),
+      findDisplayAll: vi.fn(async () =>
+        getCurrentTenantId() === 'tenant-a' ? [tenantAChannel] : []
+      ),
       findById: vi.fn(async () => tenantAChannel),
       updateLastMessage: vi.fn(async () => undefined),
     };
