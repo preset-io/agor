@@ -101,7 +101,12 @@ it.each(['dcr_disabled', 'protected_resource_mismatch'] as const)(
         dcr_mode_source: 'explicit',
       },
     } as MCPServer;
-    const patch = vi.fn().mockResolvedValue({ ...server, config_version: 2 });
+    const patch = vi.fn().mockResolvedValue({
+      ...server,
+      config_version: 2,
+      oauth_compatibility_policy: undefined,
+    });
+    const get = vi.fn().mockResolvedValue({ ...server, config_version: 2 });
     const failureMessage =
       failureReason === 'dcr_disabled'
         ? 'Dynamic Client Registration is explicitly disabled. Save a pre-registered Client ID.'
@@ -125,7 +130,7 @@ it.each(['dcr_disabled', 'protected_resource_mismatch'] as const)(
       },
     });
     const service = vi.fn((path: string) => {
-      if (path === 'mcp-servers') return { patch };
+      if (path === 'mcp-servers') return { patch, get };
       if (path === 'mcp-servers/oauth-start') return { create: start };
       throw new Error(`Unexpected inspection side effect: ${path}`);
     });
@@ -161,6 +166,108 @@ it.each(['dcr_disabled', 'protected_resource_mismatch'] as const)(
       oauth_compatibility_mode: 'strict',
     });
     expect(start).toHaveBeenCalledOnce();
+    expect(get).toHaveBeenCalledOnce();
+    expect(screen.getByText(/Saved OAuth policy:/)).toHaveTextContent(
+      'compatibility strict; DCR disabled (explicit).'
+    );
     expect(document.documentElement.scrollWidth).toBeLessThanOrEqual(window.innerWidth + 1);
   }
 );
+
+it('reloads saved policy after Save & Test and projection-less realtime without replacing the draft', async () => {
+  const server = {
+    mcp_server_id: '01900000-0000-7000-8000-000000000003',
+    name: 'OAuth save-test fixture',
+    transport: 'http',
+    url: 'https://fixture.example/mcp',
+    scope: 'global',
+    enabled: true,
+    config_version: 1,
+    auth: { type: 'oauth', oauth_grant_type: 'authorization_code' },
+    oauth_compatibility_policy: {
+      effective_mode: 'strict',
+      managed_by_catalog: false,
+      effective_dcr_mode: 'advertised',
+      dcr_mode_source: 'default',
+    },
+  } as MCPServer;
+  const saved = {
+    ...server,
+    config_version: 2,
+    auth: { ...server.auth, oauth_dcr_mode: 'disabled' },
+    oauth_compatibility_policy: undefined,
+  } as MCPServer;
+  const get = vi.fn().mockResolvedValue({
+    ...saved,
+    oauth_compatibility_policy: {
+      ...server.oauth_compatibility_policy,
+      effective_dcr_mode: 'disabled',
+      dcr_mode_source: 'explicit',
+    },
+  });
+  const patch = vi.fn().mockResolvedValue(saved);
+  const discover = vi.fn().mockResolvedValue({
+    success: true,
+    capabilities: { tools: 1, resources: 0, prompts: 0 },
+  });
+  const reserve = vi.fn().mockResolvedValue({
+    reservation_token: 'browser-policy-read-reservation-000001',
+    expires_at: Date.now() + 60_000,
+  });
+  const client = {
+    service: (path: string) => {
+      if (path === 'mcp-servers') return { patch, get };
+      if (path === 'mcp-servers/discover') return { create: discover };
+      if (path === 'mcp-servers/oauth-browser-reservations') return { create: reserve };
+      throw new Error(`Unexpected service: ${path}`);
+    },
+    io: { on: vi.fn(), off: vi.fn() },
+  } as unknown as AgorClient;
+  const view = (row: MCPServer) => (
+    <ConfigProvider theme={{ algorithm: theme.darkAlgorithm, token: { motion: false } }}>
+      <App>
+        <MCPServerEditModal
+          server={row}
+          open
+          client={client}
+          identityKey="user-a"
+          authorityKey="user-a:admin:1"
+          authGeneration={1}
+          mutationAllowed
+          onClose={vi.fn()}
+        />
+      </App>
+    </ConfigProvider>
+  );
+  const rendered = render(view(server));
+  expect(await screen.findByText(/Saved OAuth policy:/)).toHaveTextContent(
+    'DCR advertised (default)'
+  );
+  await act(() => userEvent.click(screen.getByText('Advanced — OAuth settings')));
+  await act(() => userEvent.click(screen.getByLabelText('Dynamic Client Registration')));
+  await act(() => userEvent.click(screen.getByText('Disabled — pre-registered client')));
+  // An unsaved field is not evidence of saved policy.
+  expect(screen.getByText(/Saved OAuth policy:/)).toHaveTextContent('DCR advertised (default)');
+  await act(() => userEvent.click(screen.getByRole('button', { name: /Save & Test Connection/ })));
+  await screen.findByText('Connected: 1 tools, 0 resources, 0 prompts');
+  expect(screen.getByText(/Saved OAuth policy:/)).toHaveTextContent('DCR disabled (explicit)');
+  expect(patch.mock.calls[0]?.[1]?.auth.oauth_dcr_mode).toBe('disabled');
+  expect(get).toHaveBeenCalledOnce();
+  expect(discover).toHaveBeenCalledOnce();
+
+  await act(() => userEvent.fill(screen.getByLabelText('URL'), 'https://unsaved.example/mcp'));
+  const realtime = { ...saved, config_version: 3, auth: server.auth };
+  get.mockResolvedValueOnce({
+    ...realtime,
+    oauth_compatibility_policy: server.oauth_compatibility_policy,
+  });
+  rendered.rerender(view(realtime));
+  await vi.waitFor(() =>
+    expect(screen.getByText(/Saved OAuth policy:/)).toHaveTextContent('DCR advertised (default)')
+  );
+  expect(screen.getByLabelText('URL')).toHaveValue('https://unsaved.example/mcp');
+  expect(get).toHaveBeenCalledTimes(2);
+  expect(patch).toHaveBeenCalledOnce();
+  expect(discover).toHaveBeenCalledOnce();
+  expect(document.documentElement.scrollWidth).toBeLessThanOrEqual(window.innerWidth + 1);
+});

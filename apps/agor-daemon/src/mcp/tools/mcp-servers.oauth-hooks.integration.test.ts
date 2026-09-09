@@ -126,7 +126,7 @@ describe('MCP OAuth status through Feathers response hooks', () => {
     ).toBe(true);
 
     const app = feathers() as Application;
-    (app as Application & { publish: (publisher: unknown) => Application }).publish = () => app;
+    app.publish = () => app;
     app.use('mcp-servers', createMCPServersService(db));
     const placeholderService = () => ({
       async find() {
@@ -323,5 +323,44 @@ describe('MCP OAuth status through Feathers response hooks', () => {
         oauth_authenticated: true,
       })
     );
+
+    // Production writes and their realtime replacement rows do NOT carry the
+    // read-only policy projection. The editor must GET the committed revision.
+    const patched = vi.fn();
+    app.service('mcp-servers').on('patched', patched);
+    const adminParams = { ...baseServiceParams, user: { ...user, role: 'admin' as const } };
+    const updated = await app.service('mcp-servers').patch(
+      server.mcp_server_id as MCPServerID,
+      {
+        expected_config_version: server.config_version,
+        auth: { type: 'oauth', oauth_dcr_mode: 'disabled' },
+      },
+      adminParams
+    );
+    const savedVersion = (server.config_version ?? 1) + 1;
+    expect(updated).toMatchObject({ config_version: savedVersion });
+    expect(updated).not.toHaveProperty('oauth_compatibility_policy');
+    expect(patched).toHaveBeenCalledOnce();
+    const realtime = patched.mock.calls[0]![0];
+    expect(realtime.config_version).toBe(savedVersion);
+    expect(realtime.oauth_compatibility_policy).toBeUndefined();
+    expect(JSON.stringify([updated, realtime])).not.toMatch(
+      /configured-client-secret|configured-static-access|configured-static-refresh/
+    );
+    const postSave = await app.service('mcp-servers').get(server.mcp_server_id, baseServiceParams);
+    expect(postSave.config_version).toBe(savedVersion);
+    expect(postSave.oauth_compatibility_policy).toEqual({
+      effective_mode: 'strict',
+      managed_by_catalog: false,
+      effective_dcr_mode: 'disabled',
+      dcr_mode_source: 'explicit',
+    });
+    const foreignTenantParams = {
+      ...baseServiceParams,
+      tenant: { tenant_id: 'other-tenant', source: 'static' as const },
+    };
+    await expect(
+      app.service('mcp-servers').get(server.mcp_server_id, foreignTenantParams)
+    ).rejects.toThrow();
   });
 });

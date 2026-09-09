@@ -22,6 +22,7 @@ import {
 } from './mcp-form-requirements';
 import { buildAuthFromValues, parseEnvJSON, parseHeadersJSON } from './mcp-oauth-utils';
 import { useMCPServerDiscovery } from './useMCPServerDiscovery';
+import { useSavedMCPOAuthPolicy } from './useSavedMCPOAuthPolicy';
 
 export interface MCPServerEditModalProps {
   /** The server being edited. Modal opens when this is non-null and `open` is true. */
@@ -79,11 +80,17 @@ const MCPServerEditModalForIdentity: React.FC<MCPServerEditModalProps> = ({
   const [modal, modalContextHolder] = Modal.useModal();
   const [form] = Form.useForm();
   const [policySnapshot, setPolicySnapshot] = useState<MCPServer | null>(null);
-  const policyServer =
+  const newestServer =
     policySnapshot?.mcp_server_id === server?.mcp_server_id &&
     (policySnapshot?.config_version ?? 0) > (server?.config_version ?? 1)
       ? policySnapshot
       : server;
+  const { policyServer, policyUnavailable, retryPolicy } = useSavedMCPOAuthPolicy({
+    server: newestServer,
+    client,
+    authorityKey,
+    open,
+  });
   const [transport, setTransport] = useState<MCPTransport>('stdio');
   const [authType, setAuthType] = useState<'none' | 'bearer' | 'jwt' | 'oauth'>('none');
   const [preserveAbsentDcrMode, setPreserveAbsentDcrMode] = useState(false);
@@ -202,13 +209,7 @@ const MCPServerEditModalForIdentity: React.FC<MCPServerEditModalProps> = ({
     form.setFieldsValue(formValues);
     setFormHydrated(true);
     bumpFormRevision();
-  }, [
-    open,
-    server?.mcp_server_id,
-    server?.oauth_compatibility_policy?.effective_mode,
-    server?.oauth_compatibility_policy?.managed_by_catalog,
-    form,
-  ]);
+  }, [open, server?.mcp_server_id, form]);
 
   const closeAndReset = () => {
     form.resetFields();
@@ -455,6 +456,17 @@ const MCPServerEditModalForIdentity: React.FC<MCPServerEditModalProps> = ({
           <MCPOAuthPolicySummary
             policy={policyServer.oauth_compatibility_policy}
             label="Saved OAuth policy"
+          />
+        )}
+        {policyServer?.auth?.type === 'oauth' && !policyServer.oauth_compatibility_policy && (
+          <Alert
+            type={policyUnavailable ? 'warning' : 'info'}
+            title={
+              policyUnavailable
+                ? 'Saved OAuth policy is unavailable'
+                : 'Loading saved OAuth policy…'
+            }
+            action={policyUnavailable && <Button onClick={retryPolicy}>Retry policy read</Button>}
           />
         )}
         {!mutationAllowed && (
