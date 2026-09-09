@@ -9,7 +9,7 @@ import type {
   AgorAnalyticsSettings,
   AgorAnalyticsStdoutPluginSettings,
 } from '../config/types.js';
-import type { ResolvedAnalyticsPlugin } from './types.js';
+import { OPERATOR_OWNED_ANALYTICS_CONTEXT_KEYS, type ResolvedAnalyticsPlugin } from './types.js';
 
 interface AnalyticsTrackPayload {
   type?: string;
@@ -60,7 +60,9 @@ export function toSegmentLikeTrack(
     context: {
       ...Object.fromEntries(
         Object.entries(payload.options?.context ?? {}).filter(
-          ([key]) => isSafeAnalyticsKey(key) && (!metadata || !['app', 'extras'].includes(key))
+          ([key]) =>
+            isSafeAnalyticsKey(key) &&
+            (!metadata || !OPERATOR_OWNED_ANALYTICS_CONTEXT_KEYS.includes(key))
         )
       ),
       ...(metadata
