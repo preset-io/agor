@@ -8,6 +8,7 @@ import type { BoardID, BranchID, UUID } from '@agor/core/types';
 import { eq } from 'drizzle-orm';
 import { describe, expect, vi } from 'vitest';
 import { generateId, shortId } from '../../lib/ids';
+import { BRANCH_ENVIRONMENT_SNAPSHOT_FIELDS } from '../../types/branch';
 import { update } from '../database-wrapper';
 import { boards, branches } from '../schema';
 import { ownedDbTest as dbTest } from '../test-helpers';
@@ -69,7 +70,6 @@ function createBranchData(overrides?: {
   permission_source?: 'board' | 'override';
   others_can?: 'none' | 'view' | 'session' | 'prompt' | 'all';
   others_fs_access?: 'none' | 'read' | 'write';
-  dangerously_allow_session_sharing?: boolean;
 }) {
   const name = overrides?.name ?? 'feature-branch';
   const repoId = overrides?.repo_id ?? (generateId() as UUID);
@@ -105,7 +105,6 @@ function createBranchData(overrides?: {
     permission_source: overrides?.permission_source,
     others_can: overrides?.others_can,
     others_fs_access: overrides?.others_fs_access,
-    dangerously_allow_session_sharing: overrides?.dangerously_allow_session_sharing,
   } as const;
 }
 
@@ -872,6 +871,37 @@ describe('BranchRepository.findByRepoAndName', () => {
 // ============================================================================
 
 describe('BranchRepository.update', () => {
+  dbTest('keeps SDK-home intent out of generic branch updates', async ({ db }) => {
+    const repoRepo = new RepoRepository(db);
+    const branchRepo = new BranchRepository(db);
+    const repo = await repoRepo.create(createRepoData());
+    const branch = await branchRepo.create(createBranchData({ repo_id: repo.repo_id }));
+
+    await expect(branchRepo.update(branch.branch_id, { sdk_home: 'per_branch' })).rejects.toThrow(
+      /server-managed/
+    );
+    await expect(branchRepo.findById(branch.branch_id)).resolves.toMatchObject({
+      sdk_home: undefined,
+    });
+  });
+
+  dbTest('adopts an SDK home stickily through the narrow transition', async ({ db }) => {
+    const repoRepo = new RepoRepository(db);
+    const branchRepo = new BranchRepository(db);
+    const repo = await repoRepo.create(createRepoData());
+    const branch = await branchRepo.create(createBranchData({ repo_id: repo.repo_id }));
+
+    await expect(branchRepo.adoptSdkHome(branch.branch_id)).resolves.toMatchObject({
+      sdk_home: 'per_branch',
+    });
+    await expect(branchRepo.adoptSdkHome(branch.branch_id)).resolves.toMatchObject({
+      sdk_home: 'per_branch',
+    });
+    await expect(branchRepo.findById(branch.branch_id)).resolves.toMatchObject({
+      sdk_home: 'per_branch',
+    });
+  });
+
   dbTest(
     'revalidates inherited binding under the row lock before moving boards',
     async ({ db }) => {
@@ -905,6 +935,70 @@ describe('BranchRepository.update', () => {
         board_id: sourceBoardId,
         permission_binding: 'inherit',
       });
+    }
+  );
+
+  dbTest(
+    'environment clears are explicit while omitted and nested patch fields still merge',
+    async ({ db }) => {
+      const repo = await new RepoRepository(db).create(createRepoData());
+      const branches = new BranchRepository(db);
+      const branch = await branches.create(
+        createBranchData({
+          repo_id: repo.repo_id,
+          environment_instance: {
+            status: 'error',
+            last_error: 'failed',
+            process: { pid: 123, started_at: 'old' },
+          },
+        })
+      );
+      await branches.update(branch.branch_id, {
+        environment_instance: { status: 'starting', process: { started_at: 'new' } },
+      });
+      expect((await branches.findById(branch.branch_id))?.environment_instance).toEqual({
+        status: 'starting',
+        last_error: 'failed',
+        process: { pid: 123, started_at: 'new' },
+      });
+      await branches.update(branch.branch_id, {
+        environment_instance: { status: 'stopped', process: undefined, last_error: undefined },
+      });
+      expect((await branches.findById(branch.branch_id))?.environment_instance).toEqual({
+        status: 'stopped',
+      });
+    }
+  );
+
+  dbTest(
+    'clears only explicitly supplied snapshot fields, preserving omitted fields',
+    async ({ db }) => {
+      const repo = await new RepoRepository(db).create(createRepoData());
+      const repository = new BranchRepository(db);
+      const snapshot = Object.fromEntries(
+        BRANCH_ENVIRONMENT_SNAPSHOT_FIELDS.map((key) => [key, 'old'])
+      );
+      const branch = await repository.create({
+        ...createBranchData({ repo_id: repo.repo_id }),
+        ...snapshot,
+      });
+      await repository.update(branch.branch_id, {
+        notes: 'unrelated patch',
+        health_check_url: undefined,
+      });
+      const partial = await repository.findById(branch.branch_id);
+      expect(partial?.health_check_url).toBeUndefined();
+      expect(partial?.start_command).toBe('old');
+      expect(partial?.app_url).toBe('old');
+
+      await repository.update(
+        branch.branch_id,
+        Object.fromEntries(BRANCH_ENVIRONMENT_SNAPSHOT_FIELDS.map((key) => [key, undefined]))
+      );
+      const cleared = await repository.findById(branch.branch_id);
+      for (const field of BRANCH_ENVIRONMENT_SNAPSHOT_FIELDS)
+        expect(cleared?.[field]).toBeUndefined();
+      expect(cleared?.notes).toBe('unrelated patch');
     }
   );
 

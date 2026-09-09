@@ -33,7 +33,6 @@ import { DrizzleService, type Repository } from '../adapters/drizzle';
  */
 export type MCPServerParams = QueryParams<{
   scope?: string;
-  scopeId?: string;
   transport?: string;
   enabled?: boolean;
   source?: string;
@@ -105,7 +104,6 @@ export class MCPServersService extends DrizzleService<
 
     if (params?.query) {
       if (params.query.scope) filters.scope = params.query.scope as MCPScope;
-      if (params.query.scopeId) filters.scopeId = params.query.scopeId;
       if (params.query.transport) filters.transport = params.query.transport as MCPTransport;
       if (params.query.enabled !== undefined) filters.enabled = params.query.enabled;
       if (params.query.source) filters.source = params.query.source as MCPSource;
@@ -133,17 +131,6 @@ export class MCPServersService extends DrizzleService<
     }
 
     return data as MCPServer[] | Paginated<MCPServer>;
-  }
-
-  /**
-   * Custom method: Find by scope
-   */
-  async findByScope(
-    scope: string,
-    scopeId?: string,
-    _params?: MCPServerParams
-  ): Promise<MCPServer[]> {
-    return this.mcpServerRepo.findByScope(scope, scopeId);
   }
 
   override async update(

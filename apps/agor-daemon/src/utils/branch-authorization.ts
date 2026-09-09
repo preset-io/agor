@@ -17,7 +17,7 @@ import type {
   SessionRepository,
 } from '@agor/core/db';
 import { shortId } from '@agor/core/db';
-import { Forbidden, NotAuthenticated, NotFound } from '@agor/core/feathers';
+import { BadRequest, Forbidden, NotAuthenticated, NotFound } from '@agor/core/feathers';
 import type {
   AuthenticatedParams,
   Branch,
@@ -25,6 +25,7 @@ import type {
   BranchPermissionLevel,
   HookContext,
   Session,
+  SessionPromptAuthority,
   UUID,
 } from '@agor/core/types';
 import { BRANCH_PERMISSION_LEVELS, hasMinimumRole, ROLES } from '@agor/core/types';
@@ -38,9 +39,10 @@ import { executorRuntimeScopeSessionId } from '../auth/executor-runtime-scope.js
  * owner. They may add an explicit Manager entry when ordinary policy-based
  * access is needed.
  *
- * Note: This does NOT grant automatic prompt access. Superadmins must
- * add explicit access for their own sessions, and foreign sessions still
- * require an owner-authored personal sharing grant.
+ * Note: This does NOT grant automatic prompt access. Superadmins must add
+ * explicit branch access. Foreign branch-home Sessions then follow the
+ * tenant and branch sharing switches; execution-home Sessions are never
+ * shareable.
  *
  * The allow_superadmin config flag gates this. When false, superadmins
  * are treated as regular admins (no branch RBAC bypass).
@@ -57,6 +59,38 @@ export function isSuperAdmin(role: string | undefined, allowSuperadmin = true): 
 export const PERMISSION_RANK: Record<BranchPermissionLevel, number> = Object.fromEntries(
   BRANCH_PERMISSION_LEVELS.map((level, i) => [level, i - 1])
 ) as Record<BranchPermissionLevel, number>;
+
+/**
+ * Render the canonical, transport-safe denial for prompting a session.
+ *
+ * Keep the compatibility explanation here so browser, API, MCP, scheduler,
+ * widgets, and gateways do not drift. We intentionally say "uses its owner's
+ * execution home" rather than "predates the feature": deployments may create
+ * new execution-home sessions by opting out with `sdk_home_mode: inherit`.
+ */
+export function sessionPromptDeniedMessage(
+  authority: Pick<SessionPromptAuthority, 'denial_reason'>
+): string {
+  switch (authority.denial_reason) {
+    case 'execution_home_sharing_disabled':
+      return (
+        "This session uses its owner's execution home and cannot be shared. Start a separate " +
+        'session you own, or start a new branch-home session on this branch.'
+      );
+    case 'workspace_session_sharing_disabled':
+      return 'Session sharing is disabled for this workspace. Start a separate session you own.';
+    case 'branch_session_sharing_disabled':
+      return (
+        'This branch does not allow shared session prompting. Ask a Branch Manager to enable it, ' +
+        'or start a separate session you own.'
+      );
+    default:
+      return (
+        "You don't have permission to prompt this branch. Only Collaborators and Managers can " +
+        'prompt sessions on it.'
+      );
+  }
+}
 
 const REQUEST_RBAC_CACHE_LIMIT = 32;
 
@@ -252,8 +286,9 @@ export function resolveBranchPermission(
 
 /**
  * Resolve the one prompt-level policy shared by hooks and custom routes.
- * Branch management never implies authority over another user's home: a
- * foreign session requires an owner-authored personal sharing grant.
+ * Branch-scoped sessions run as the caller and require Collaborator/Manager
+ * access plus both explicit sharing switches. Execution-home sessions are an
+ * immutable compatibility boundary and are never shareable.
  */
 export async function resolveSessionPromptAccess(input: {
   branchRepository: Pick<
@@ -267,14 +302,16 @@ export async function resolveSessionPromptAccess(input: {
   allowed: boolean;
   effectiveLevel: BranchPermissionLevel;
   executionUserId?: UUID;
-  source: 'own_session' | 'personal_session_sharing' | 'denied';
+  source: SessionPromptAuthority['source'];
+  denialReason?: SessionPromptAuthority['denial_reason'];
 }> {
   const [effectiveLevel, authority] = await Promise.all([
     input.branchRepository.resolveUserPermission(input.branch, input.userId),
     input.branchRepository.resolveSessionPromptAuthority(
       input.branch.branch_id,
       input.userId,
-      input.session.created_by as UUID
+      input.session.created_by as UUID,
+      input.session.sdk_home_scope
     ),
   ]);
   return {
@@ -282,6 +319,7 @@ export async function resolveSessionPromptAccess(input: {
     effectiveLevel,
     executionUserId: authority.execution_user_id as UUID | undefined,
     source: authority.source,
+    denialReason: authority.denial_reason,
   };
 }
 
@@ -501,106 +539,16 @@ export function ensureBranchPermission(
 }
 
 /**
- * Destructive fallback used when branch RBAC is disabled. Preserve the legacy
- * owner/admin boundary while allowing internal and service-account maintenance.
- */
-export function ensureBranchOwnerOrAdmin(action: string) {
-  return (context: HookContext) => {
-    if (!context.params.provider || context.params.user?._isServiceAccount) return context;
-    if (context.params.isBranchOwner || hasMinimumRole(context.params.user?.role, ROLES.ADMIN)) {
-      return context;
-    }
-    throw new Forbidden(`You must be the branch owner or a global admin to ${action}`);
-  };
-}
-
-/**
- * Scope branch query to only return authorized branches (OPTIMIZED SQL VERSION)
- *
- * Replaces the default find() query with an optimized SQL query that uses JOIN
- * to filter branches by access in a single database query instead of N+1 queries.
- *
- * This is a BEFORE hook that modifies the query to use the repository's
- * findAccessibleBranches method which does a LEFT JOIN with branch_owners.
- *
- * @param branchRepo - BranchRepository instance
- * @returns Feathers hook
- */
-export function scopeBranchQuery(
-  branchRepo: BranchRepository,
-  options?: { allowSuperadmin?: boolean }
-) {
-  return async (context: HookContext) => {
-    // Skip for internal calls
-    if (!context.params.provider) {
-      return context;
-    }
-
-    // Service accounts (executor) bypass RBAC
-    if (context.params.user?._isServiceAccount) {
-      return context;
-    }
-
-    const userId = context.params.user?.user_id as UUID | undefined;
-    if (!userId) {
-      // Not authenticated - return empty results
-      context.result = {
-        total: 0,
-        limit: 0,
-        skip: 0,
-        data: [],
-      };
-      return context;
-    }
-
-    // Superadmins see all branches (bypass access filtering)
-    const userRole = context.params.user?.role as string | undefined;
-    const allowSuperadmin = options?.allowSuperadmin ?? true;
-
-    // Use optimized repository method (single SQL query with JOIN)
-    const query = context.params.query ?? {};
-    let accessibleBranches: Branch[];
-    if (isSuperAdmin(userRole, allowSuperadmin)) {
-      // Superadmins see all branches — use findAll and apply archived filter manually
-      const all = await branchRepo.findAll({ includeArchived: true });
-      if (query.archived === true) {
-        accessibleBranches = all.filter((wt) => wt.archived === true);
-      } else if (query.archived === false) {
-        accessibleBranches = all.filter((wt) => !wt.archived);
-      } else {
-        accessibleBranches = all;
-      }
-    } else {
-      accessibleBranches = await branchRepo.findAccessibleBranches(userId, {
-        archived: query.archived,
-      });
-    }
-
-    // `archived` is already applied at the repo level; everything else
-    // (repo_id, name, etc.) goes through the generic client-side pass.
-    context.result = paginateClientSide(
-      accessibleBranches,
-      query as Record<string, unknown>,
-      new Set(['archived'])
-    );
-    return context;
-  };
-}
-
-/**
- * Shared filter / sort / paginate pass for `scope*Query` hooks.
+ * Shared filter / sort / paginate pass for access-scoped repository results.
  *
  * After the SQL-side access query returns the user's accessible rows,
- * all three scope hooks (`scopeBranchQuery`, `scopeSessionQuery`,
- * `scopeScheduleQuery`) need to:
+ * callers such as `scopeScheduleQuery` need to:
  *   1. Apply Feathers query filters that the SQL layer didn't already
  *      handle (e.g. `schedule_id` on sessions).
  *   2. Apply `$sort` with null-safe comparison.
  *   3. Apply `$limit` / `$skip` pagination.
  *
- * Diverging implementations of this drift quickly (`scopeSessionQuery`
- * previously dropped all non-`$` filters silently, which broke the
- * schedules runs panel). Centralizing keeps the semantics aligned.
+ * Centralizing keeps filter and pagination semantics aligned.
  *
  * @param rows                — the accessible rows from the repo
  * @param query               — the Feathers query object
@@ -649,175 +597,6 @@ export function paginateClientSide<T>(
     limit,
     skip,
     data: filtered.slice(skip, skip + limit),
-  };
-}
-
-/**
- * Scope session query to only return sessions from authorized branches (OPTIMIZED SQL VERSION)
- *
- * Uses an optimized SQL query with JOINs to filter sessions by branch access
- * in a single database query instead of N+1 queries.
- *
- * This is a BEFORE hook that replaces the default find() query.
- *
- * @param sessionRepo - SessionRepository instance
- * @returns Feathers hook
- */
-export function scopeSessionQuery(
-  sessionRepo: SessionRepository,
-  options?: { allowSuperadmin?: boolean }
-) {
-  return async (context: HookContext) => {
-    // Skip for internal calls
-    if (!context.params.provider) {
-      return context;
-    }
-
-    // Service accounts (executor) bypass RBAC
-    if (context.params.user?._isServiceAccount) {
-      return context;
-    }
-
-    // Only apply to find() method
-    if (context.method !== 'find') {
-      return context;
-    }
-
-    const userId = context.params.user?.user_id as UUID | undefined;
-    if (!userId) {
-      // Not authenticated - return empty results
-      context.result = {
-        total: 0,
-        limit: 0,
-        skip: 0,
-        data: [],
-      };
-      return context;
-    }
-
-    // Superadmins see all sessions (bypass access filtering)
-    const userRole = context.params.user?.role as string | undefined;
-    const allowSuperadmin = options?.allowSuperadmin ?? true;
-
-    // Push board_id down to SQL via the branch join (session → branch →
-    // board). The client-side pass below CANNOT filter board_id: sessions
-    // expose the board as `branch_board_id`, never `board_id`, so a generic
-    // `item.board_id === value` would wipe every row. We therefore both
-    // push it to SQL here AND skip it in paginateClientSide.
-    const query = context.params.query as Record<string, unknown> | undefined;
-    const boardId = query?.board_id as UUID | undefined;
-
-    // Use optimized repository method (single SQL query with JOINs)
-    const accessibleSessions = isSuperAdmin(userRole, allowSuperadmin)
-      ? boardId
-        ? await sessionRepo.findByBoard(boardId)
-        : await sessionRepo.findAll()
-      : await sessionRepo.findAccessibleSessions(userId, boardId);
-
-    // `updated_at` is the ONE sort key paginateClientSide can't order: the
-    // Session object exposes that timestamp as `last_updated`, so its
-    // `item.updated_at` lookup is undefined → a silent no-op. Handle exactly
-    // that single-key case here on the real field and strip it below. EVERY
-    // OTHER sort (created_at, scheduled_run_at, last_updated, …) maps to a real
-    // Session field, so it MUST pass through to paginateClientSide unchanged —
-    // dropping it here would silently break the ScheduleRunsPanel
-    // (`$sort:{scheduled_run_at:-1}`), branch/session/CLI lists
-    // (`$sort:{created_at:-1}`), and the MCP sessions tool (`$sort:{last_updated:-1}`).
-    const sortSpec = query?.$sort as Record<string, 1 | -1> | undefined;
-    const sortKeys = sortSpec ? Object.keys(sortSpec) : [];
-    const isUpdatedAtSort = sortKeys.length === 1 && sortKeys[0] === 'updated_at';
-    if (isUpdatedAtSort) {
-      const dir = sortSpec!.updated_at;
-      accessibleSessions.sort((a, b) => {
-        const av = a.last_updated ?? '';
-        const bv = b.last_updated ?? '';
-        if (av < bv) return dir === -1 ? 1 : -1;
-        if (av > bv) return dir === -1 ? -1 : 1;
-        return 0;
-      });
-    }
-
-    // Apply remaining query filters (branch_id, schedule_id, status, $sort, …)
-    // client-side. Without this pass, `sessions.find({ schedule_id })` silently
-    // returns all accessible sessions — which is what the ScheduleRunsPanel was
-    // hitting before this fix. board_id is already applied SQL-side above; the
-    // `updated_at`-only sort is applied above on the real field, so it's the
-    // only `$sort` we drop here (every other sort flows through).
-    let paginateQuery: Record<string, unknown> = query ?? {};
-    if (isUpdatedAtSort) {
-      const { $sort: _ignoredUpdatedAtSort, ...rest } = paginateQuery;
-      paginateQuery = rest;
-    }
-    context.result = paginateClientSide(accessibleSessions, paginateQuery, new Set(['board_id']));
-    return context;
-  };
-}
-
-/**
- * Filter branches by permission in find() results (DEPRECATED - use scopeBranchQuery instead)
- *
- * This is a post-query hook that filters out branches the user cannot access.
- * Should run AFTER the database query.
- *
- * WARNING: This has an N+1 query problem. Use scopeBranchQuery instead.
- *
- * @param branchRepo - BranchRepository instance
- * @returns Feathers hook
- * @deprecated Use scopeBranchQuery for optimized SQL-based filtering
- */
-export function filterBranchesByPermission(branchRepo: BranchRepository) {
-  return async (context: HookContext) => {
-    // Skip for internal calls
-    if (!context.params.provider) {
-      return context;
-    }
-
-    // Service accounts (executor) bypass RBAC
-    if (context.params.user?._isServiceAccount) {
-      return context;
-    }
-
-    // Only apply to find() method
-    if (context.method !== 'find') {
-      return context;
-    }
-
-    const userId = context.params.user?.user_id as UUID | undefined;
-    if (!userId) {
-      // Not authenticated - return empty results
-      context.result = {
-        total: 0,
-        limit: context.result?.limit ?? 0,
-        skip: context.result?.skip ?? 0,
-        data: [],
-      };
-      return context;
-    }
-
-    // Get all branches from result
-    const branches: Branch[] = context.result?.data ?? context.result ?? [];
-
-    // Filter branches by permission
-    const authorizedBranches = [];
-    for (const branch of branches) {
-      const effective = await branchRepo.resolveUserAccess(branch, userId);
-      const hasAccess =
-        effective.is_owner || PERMISSION_RANK[effective.can] >= PERMISSION_RANK.view;
-
-      if (hasAccess) {
-        authorizedBranches.push(branch);
-      }
-    }
-
-    // Update result
-    if (context.result?.data) {
-      context.result.data = authorizedBranches;
-      context.result.total = authorizedBranches.length;
-    } else {
-      context.result = authorizedBranches;
-    }
-
-    return context;
   };
 }
 
@@ -1100,36 +879,31 @@ export function ensureSessionImmutability() {
 }
 
 /**
- * Decide which `unix_username` to stamp on a child session created via
- * fork() or spawn(). Pure function — no DB, no context — so it can be unit
- * tested directly and kept aligned with {@link determineSpawnIdentity}.
+ * Keep gateway provenance under daemon ownership.
  *
- * Rules:
- * - Personal Session sharing → inherit the parent execution-home key. The
- *   genealogy stays in the Session owner's home while Task credentials still
- *   resolve from the human prompter.
- * - Otherwise (including the common same-user path) → use the caller's CURRENT
- *   `unix_username`. We must NOT fall back to `parent.unix_username` just because
- *   caller and parent owner share an id: the user's unix_username may have drifted
- *   since the parent was created, and `validateSessionUnixUsername` would then
- *   reject every prompt on the child.
- *
- * @param parentUnixUsername  - `parent.unix_username` from the parent session (may be null)
- * @param callerUnixUsername  - Caller's CURRENT unix_username (loaded fresh via
- *                              {@link loadUnixUsernameForUser}); may be null
- * @param usesSharedHome      - Whether an owner-authored sharing grant permits
- *                              use of the parent Session owner's home
- * @returns The unix_username to stamp on the child (string or null)
+ * Gateway integrations create sessions through provider-less service calls.
+ * Browser, REST, Socket.IO, and MCP callers may still use the rest of
+ * `custom_context`, but cannot create, replace, or clear `gateway_source`.
+ * Session repository patches deep-merge nested context, so omitting this key
+ * preserves an existing gateway stamp.
  */
-export function resolveChildUnixUsername(
-  parentUnixUsername: string | null | undefined,
-  callerUnixUsername: string | null,
-  usesSharedHome: boolean
-): string | null {
-  if (usesSharedHome) {
-    return parentUnixUsername ?? null;
+export function protectGatewaySourceMetadata(context: HookContext): HookContext {
+  if (!context.params.provider) return context;
+
+  const writes = Array.isArray(context.data) ? context.data : [context.data];
+  for (const write of writes) {
+    if (!write || typeof write !== 'object') continue;
+    const customContext = (write as { custom_context?: unknown }).custom_context;
+    if (customContext === undefined) continue;
+    if (!customContext || typeof customContext !== 'object' || Array.isArray(customContext)) {
+      throw new BadRequest('session.custom_context must be an object');
+    }
+    if (Object.hasOwn(customContext, 'gateway_source')) {
+      throw new Forbidden('session.custom_context.gateway_source is server-managed');
+    }
   }
-  return callerUnixUsername;
+
+  return context;
 }
 
 /**
@@ -1263,7 +1037,7 @@ export async function assertSessionUnixIdentityUnchanged(
 }
 
 /**
- * Validate session unix_username before prompting
+ * Validate an execution-home Session's unix_username before prompting.
  *
  * DEFENSIVE CHECK: Before allowing operations that execute code (create tasks/messages),
  * verify that the session creator's current unix_username matches the session's stamped unix_username.
@@ -1310,6 +1084,11 @@ export function validateSessionUnixUsername(
       return context;
     }
 
+    // Branch-scoped Sessions use the current prompt actor's home key and the
+    // branch-owned SDK state. The creator's historical stamp is intentionally
+    // irrelevant, just as it is at executor startup.
+    if ((session.sdk_home_scope ?? 'execution_home') === 'branch') return context;
+
     await assertSessionUnixIdentityUnchanged(session, (userId) => userRepo.findById(userId));
 
     return context;
@@ -1322,8 +1101,8 @@ export function validateSessionUnixUsername(
  * Standalone helper (not a Feathers hook) — usable from MCP tools, service hooks, or anywhere
  * with access to the app and branch repository. Resolves branch ownership internally.
  *
- * Respects the 'session' tier: users with 'session' permission can prompt their own sessions
- * but not sessions created by other users.
+ * Respects Session scope and both sharing switches. Foreign execution-home
+ * Sessions are always denied.
  *
  * Use case: validating callback targets ("can this user queue a prompt to that session?").
  *
@@ -1359,12 +1138,12 @@ export async function ensureCanPromptTargetSession(
   const authority = await branchRepo.resolveSessionPromptAuthority(
     branch.branch_id,
     userId as UUID,
-    targetSession.created_by as UUID
+    targetSession.created_by as UUID,
+    targetSession.sdk_home_scope
   );
   if (authority.allowed) return targetSession;
   throw new Forbidden(
-    `Cannot prompt session ${shortId(targetSession.session_id)}. You need Collaborator access, ` +
-      `and the session owner must explicitly share their sessions with you.`
+    `Cannot prompt session ${shortId(targetSession.session_id)}. ${sessionPromptDeniedMessage(authority)}`
   );
 }
 
@@ -1442,14 +1221,11 @@ export function ensureCanPromptInSession(options?: {
     const authority = await options.branchRepository.resolveSessionPromptAuthority(
       branch.branch_id,
       userId,
-      session.created_by as UUID
+      session.created_by as UUID,
+      session.sdk_home_scope
     );
     if (authority.allowed) return context;
-    throw new Forbidden(
-      session.created_by === userId
-        ? 'Collaborator access is required to prompt this session.'
-        : 'The session owner has not shared their sessions with you.'
-    );
+    throw new Forbidden(sessionPromptDeniedMessage(authority));
   };
 }
 
@@ -1856,52 +1632,45 @@ export function ensureSessionOwnerOrAdmin(options?: { allowSuperadmin?: boolean 
  * fork (sessions service: spawn() / fork(), or MCP tools agor_sessions_spawn /
  * agor_sessions_prompt(mode:"fork"|"subsession")).
  *
- * A cross-user child is legal only after an owner-authored personal session
- * sharing grant. It remains attributed to the parent Session owner so a
- * genealogy never crosses execution homes. The Task records the human caller.
+ * A cross-user child can only come from a branch-home Session and is attributed
+ * to the caller. Historical execution-home Sessions are never shareable.
  *
  * Pure function — no DB, no FeathersJS context — so it can be unit tested
  * directly and invoked from both service methods and MCP tool handlers.
  *
  * @param parent  - Parent session (must include created_by)
  * @param caller  - Authenticated caller (MCP-authenticated user / Feathers user)
- * @param sharing - Resolved, owner-authored session sharing decision
+ * @param sharing - Resolved branch-session sharing decision
  * @returns The created_by UUID to stamp on the child session
  */
 export function determineSpawnIdentity(
   parent: { created_by: string },
   caller: { user_id?: string; role?: string; _isServiceAccount?: boolean },
-  sharing: { branch_id: string; share_owner_home: boolean } | undefined
-): { created_by: string; usesSharedHome: boolean } {
+  sharing: { allow_caller_identity?: boolean } | undefined
+): { created_by: string } {
   const callerId = caller.user_id;
 
   // Service accounts (executor, internal jobs) preserve parent attribution.
   // They have no human user_id to attribute to, and their callers (the
   // scheduler, callbacks) already ran their own RBAC checks.
   if (caller._isServiceAccount) {
-    return { created_by: parent.created_by, usesSharedHome: false };
+    return { created_by: parent.created_by };
   }
 
   // Same user spawning their own session → attribute to caller (same value
   // as parent.created_by, but explicit).
   if (callerId && parent.created_by === callerId) {
-    return { created_by: callerId, usesSharedHome: false };
+    return { created_by: callerId };
   }
 
-  if (callerId && sharing?.share_owner_home === true) {
-    console.warn('[SECURITY] personal_session_sharing', {
-      event: 'personal_session_sharing',
-      caller_id: callerId ?? null,
-      session_owner_id: parent.created_by,
-      branch_id: sharing.branch_id,
-    });
-    return { created_by: parent.created_by, usesSharedHome: true };
+  if (callerId && sharing?.allow_caller_identity === true) {
+    return { created_by: callerId };
   }
 
   if (!callerId) {
     throw new Forbidden('Cannot spawn/fork session without an authenticated caller identity.');
   }
-  throw new Forbidden('The session owner has not shared their sessions with you.');
+  throw new Forbidden('This branch does not allow shared session prompting.');
 }
 
 // ============================================================================
@@ -1913,8 +1682,7 @@ export function determineSpawnIdentity(
 /**
  * Scope schedules.find() to schedules whose parent branch the user can view.
  *
- * Sibling of `scopeSessionQuery` — uses an indexed SQL JOIN rather than
- * an N+1 fan-out.
+ * Uses an indexed SQL JOIN rather than an N+1 fan-out.
  *
  * @param scheduleRepo - ScheduleRepository instance
  * @returns Feathers hook

@@ -47,9 +47,11 @@ describe('buildTenantInsertOrder', () => {
   it('deletes but never exports transient authorities or deployment-bound grants', () => {
     const nonPortable = nonPortableTenantTableNames();
     expect(nonPortable).toEqual([
+      'claude_oauth_attempts',
       'codex_device_auth_attempts',
       'executor_session_token_authorities',
       'github_install_states',
+      'mcp_oauth_client_registrations',
       'mcp_oauth_pending_flows',
       'user_mcp_oauth_tokens',
     ]);
@@ -63,7 +65,7 @@ describe('buildTenantInsertOrder', () => {
 describe('tenantPortabilityForeignKeys', () => {
   it('freezes the exact schema-derived movable FK set', () => {
     const foreignKeys = tenantPortabilityForeignKeys();
-    expect(foreignKeys).toHaveLength(114);
+    expect(foreignKeys).toHaveLength(109);
     expect(Object.isFrozen(foreignKeys)).toBe(true);
     const structuralKeys = foreignKeys.map((foreignKey) =>
       [
@@ -96,13 +98,6 @@ describe('tenantPortabilityForeignKeys', () => {
           childColumns: ['tenant_id', 'config_id'],
           parentTable: 'branch_permission_configs',
           parentColumns: ['tenant_id', 'config_id'],
-          onDelete: 'cascade',
-        }),
-        expect.objectContaining({
-          childTable: 'branch_session_sharing_grants',
-          childColumns: ['tenant_id', 'config_id', 'session_owner_user_id'],
-          parentTable: 'branch_session_sharing_rules',
-          parentColumns: ['tenant_id', 'config_id', 'session_owner_user_id'],
           onDelete: 'cascade',
         }),
       ])

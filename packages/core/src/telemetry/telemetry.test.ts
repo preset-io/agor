@@ -65,6 +65,7 @@ describe('open-source telemetry payload hygiene', () => {
     expect(normalizeTelemetryProvider('Gemini')).toBe('google');
     expect(normalizeTelemetryProvider('AcmeInternal')).toBe('other');
     expect(normalizeTelemetryModelFamily('claude-sonnet-4-5')).toBe('claude-sonnet');
+    expect(normalizeTelemetryModelFamily('gpt-6-astra')).toBe('gpt-6');
     expect(normalizeTelemetryModelFamily('acme-prod-secure-westus')).toBe('custom');
   });
 
@@ -91,9 +92,9 @@ describe('open-source telemetry payload hygiene', () => {
     expect(transport.batches).toHaveLength(1);
     expect(transport.batches[0].batch[0]).toMatchObject({
       type: 'track',
-      event: 'install.completed',
+      event: 'agor_event',
       anonymousId: 'instance-1',
-      properties: { ongoing_telemetry_enabled: true },
+      properties: { ongoing_telemetry_enabled: true, event_type: 'install.completed' },
     });
     vi.useRealTimers();
   });

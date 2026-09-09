@@ -162,42 +162,12 @@ const privatePolicy = (
   others: closedOthers(),
 });
 
-const emptySessionSharingFixture = () => ({
-  owner_rules: [
-    {
-      session_owner_user_id: PROTOTYPE_USERS.kasia,
-      enabled: false,
-      grantees: [],
-    },
-  ],
-});
-
-const sessionSharingFixture = () => ({
-  owner_rules: [
-    {
-      session_owner_user_id: PROTOTYPE_USERS.kasia,
-      enabled: false,
-      grantees: [],
-    },
-    {
-      session_owner_user_id: PROTOTYPE_USERS.seb,
-      enabled: true,
-      grantees: [
-        {
-          grant_id: entryId('50'),
-          principal: { principal_type: 'group' as const, group_id: PROTOTYPE_GROUPS.gtm },
-        },
-      ],
-    },
-  ],
-});
-
 export const PRIVATE_BOARD_FIXTURE: BoardCapabilityPoliciesDraft = {
   primary_owner_user_id: PROTOTYPE_USERS.max,
   board_access: privatePolicy('board_access'),
   branch_template: {
     access: privatePolicy('branch_access'),
-    session_sharing: emptySessionSharingFixture(),
+    allow_shared_session_prompts: false,
   },
 };
 
@@ -301,7 +271,7 @@ export const SHARED_BOARD_FIXTURE: BoardCapabilityPoliciesDraft = {
       ],
       others: { preset: 'viewer', capabilities: ['branch.view'], fs_access: 'none' },
     },
-    session_sharing: sessionSharingFixture(),
+    allow_shared_session_prompts: true,
   },
 };
 
@@ -363,7 +333,7 @@ export const OVERRIDDEN_BRANCH_FIXTURE: BranchCapabilityPolicyDraft = {
       ],
       others: closedOthers(),
     },
-    session_sharing: sessionSharingFixture(),
+    allow_shared_session_prompts: true,
   },
 };
 

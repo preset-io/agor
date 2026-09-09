@@ -212,6 +212,17 @@ export interface CodexConfig {
 export type AgenticAuthMethod = 'api_key' | 'subscription';
 export type AgenticAuthMethods = Partial<Record<'claude-code' | 'codex', AgenticAuthMethod>>;
 
+/**
+ * Authoritative source for a user's Claude credential.
+ *
+ * `agentic_auth_methods` intentionally remains the coarse UI/provider choice,
+ * while this value distinguishes the two subscription implementations. In
+ * particular, `none` is a durable opt-out: an old `.credentials.json` must not
+ * become active merely because a pasted token was cleared.
+ */
+export type ClaudeCredentialSource = 'api_key' | 'subscription_token' | 'managed_file' | 'none';
+export type AgenticCredentialSources = Partial<Record<'claude-code', ClaudeCredentialSource>>;
+
 export interface GeminiConfig {
   GEMINI_API_KEY?: string;
 }
@@ -352,10 +363,10 @@ export type AgenticToolsPublicValues = {
  * The caller is responsible for the self-only authorization check — this
  * helper assumes the requester is already authorized to see the values.
  */
-export function extractAgenticToolsPublicValues(
+export async function extractAgenticToolsPublicValuesAsync(
   stored: StoredAgenticTools | undefined,
-  decrypt: (ciphertext: string) => string
-): AgenticToolsPublicValues | undefined {
+  decrypt: (ciphertext: string) => Promise<string>
+): Promise<AgenticToolsPublicValues | undefined> {
   if (!stored) return undefined;
   const out: Record<string, Record<string, string>> = {};
   for (const [tool, fields] of Object.entries(stored) as Array<
@@ -369,7 +380,7 @@ export function extractAgenticToolsPublicValues(
       const ciphertext = fields[field as string];
       if (!ciphertext) continue;
       try {
-        plaintext[field as string] = decrypt(ciphertext);
+        plaintext[field as string] = await decrypt(ciphertext);
       } catch {
         // Silently skip undecryptable values; the boolean status flag will
         // still indicate presence so the user can clear and re-set.
@@ -420,6 +431,11 @@ export interface EventStreamPreferences {
  * Per-user onboarding state (stored in user.preferences)
  */
 export interface OnboardingState {
+  /**
+   * ISO timestamp recorded when the user closes onboarding to finish later.
+   * Deferral is distinct from completion and never provisions resources.
+   */
+  deferredAt?: string;
   /**
    * Onboarding goal ids the user selected, order-preserving (primary first),
    * max 2. See ONBOARDING_GOALS in agor-ui. Written once at completion.
@@ -535,6 +551,8 @@ export interface User extends BaseUserFields {
   agentic_tools?: AgenticToolsStatus;
   /** Explicit authentication method; inactive credentials remain stored but are never resolved. */
   agentic_auth_methods?: AgenticAuthMethods;
+  /** Explicit credential source; `none` prevents fallback to dormant native files or secrets. */
+  agentic_credential_sources?: AgenticCredentialSources;
   /**
    * Plaintext values for fields listed in `AGENTIC_TOOLS_PUBLIC_FIELDS` —
    * only populated when the requester is the field's owner. Lets the UI
@@ -713,6 +731,7 @@ export interface UpdateUserInput extends Partial<BaseUserFields> {
    */
   agentic_tools?: AgenticToolsUpdate;
   agentic_auth_methods?: AgenticAuthMethods;
+  agentic_credential_sources?: AgenticCredentialSources;
   // Environment variables for update (accepts plaintext, encrypted before storage).
   // `null` clears the variable. A plain `string` creates/updates the value and leaves
   // the existing scope in place (defaults to 'global' for new vars).

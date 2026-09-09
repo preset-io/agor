@@ -18,6 +18,7 @@ import type {
   MessageID,
   MessageSource,
   PermissionMode,
+  PromptOrigin,
   SessionID,
   StreamingEventType,
   Task,
@@ -116,7 +117,8 @@ export interface BaseTool {
     permissionMode?: PermissionMode,
     callbacks?: StreamingCallbacks,
     abortController?: AbortController,
-    messageSource?: MessageSource
+    messageSource?: MessageSource,
+    promptOrigin?: PromptOrigin
   ): Promise<{
     userMessageId: MessageID;
     assistantMessageIds: MessageID[];
@@ -480,6 +482,7 @@ export async function executeToolTask(params: {
   toolName: AgenticToolName;
   onPulse?: StreamingCallbacks['onPulse'];
   messageSource?: MessageSource;
+  promptOrigin?: PromptOrigin;
   createTool: (
     repos: ReturnType<typeof createFeathersBackedRepositories>,
     apiKey: string,
@@ -588,7 +591,8 @@ export async function executeToolTask(params: {
       permissionMode,
       ctx.callbacks,
       params.abortController,
-      params.messageSource
+      params.messageSource,
+      params.promptOrigin
     );
 
     if (daemonOwnsTerminality()) return;

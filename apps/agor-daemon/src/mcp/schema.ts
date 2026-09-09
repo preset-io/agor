@@ -111,26 +111,28 @@ export function mcpRequiredPositiveInt(fieldName: string, description: string) {
     .describe(description);
 }
 
-export function mcpOptionalPositiveInt(fieldName: string, description: string) {
-  return z
+export function mcpOptionalPositiveInt(fieldName: string, description: string, maxValue?: number) {
+  const value = z
     .number({
       error: `${fieldName} must be a positive integer when provided.`,
     })
     .int(`${fieldName} must be an integer.`)
-    .positive(`${fieldName} must be greater than 0.`)
-    .optional()
-    .describe(description);
+    .positive(`${fieldName} must be greater than 0.`);
+  return (maxValue === undefined ? value : value.max(maxValue)).optional().describe(description);
 }
 
-export function mcpOptionalNonNegativeInt(fieldName: string, description: string) {
-  return z
+export function mcpOptionalNonNegativeInt(
+  fieldName: string,
+  description: string,
+  maxValue?: number
+) {
+  const value = z
     .number({
       error: `${fieldName} must be a non-negative integer when provided.`,
     })
     .int(`${fieldName} must be an integer.`)
-    .nonnegative(`${fieldName} must be greater than or equal to 0.`)
-    .optional()
-    .describe(description);
+    .nonnegative(`${fieldName} must be greater than or equal to 0.`);
+  return (maxValue === undefined ? value : value.max(maxValue)).optional().describe(description);
 }
 
 export function mcpPositiveIntWithDefault(
@@ -206,17 +208,21 @@ export function mcpPageResult<T>(result: unknown, requestedLimit: number, reques
   };
 }
 
-export function mcpOffset(defaultValue = 0) {
+export function mcpOffset(defaultValue = 0, maxValue?: number) {
   if (!Number.isSafeInteger(defaultValue) || defaultValue < 0) {
     throw new Error('MCP offset default must be a non-negative safe integer');
   }
 
-  return z
+  if (maxValue !== undefined && (!Number.isSafeInteger(maxValue) || maxValue < defaultValue)) {
+    throw new Error('MCP offset maximum must be a safe integer at least as large as its default');
+  }
+  const offset = z
     .number({
       error: 'offset must be a non-negative integer when provided.',
     })
     .int('offset must be an integer.')
-    .nonnegative('offset must be greater than or equal to 0.')
+    .nonnegative('offset must be greater than or equal to 0.');
+  return (maxValue === undefined ? offset : offset.max(maxValue))
     .optional()
     .default(defaultValue)
     .describe(`Number of results to skip (default: ${defaultValue})`);

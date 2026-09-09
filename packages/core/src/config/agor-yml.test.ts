@@ -273,14 +273,29 @@ describe('parseAgorYml — repo .agor.yml demo variants', () => {
     if (ha === null) throw new Error('ha variant must resolve');
 
     expect(ha.start).toContain('AGOR_EXTERNAL_LAUNCH_SHARED_SECRET=');
+    expect(ha.start).toContain(
+      `AGOR_HA_PUBLIC_ORIGIN="\${AGOR_HA_PUBLIC_ORIGIN:-http://{{host.ip_address}}:`
+    );
     expect(ha.start).not.toContain('AGOR_ADMIN_PASSWORD=');
     expect(ha.app).toMatch(/\/dev-auth\/$/);
-    expect(ha.description).toMatch(/auth-resolved tenants/);
+    expect(ha.description).toMatch(/auth-resolved multi-tenancy/);
   });
 
   it('forwards the RBAC fixture flag used by .env.postgres', () => {
     const compose = fs.readFileSync(path.join(REPO_ROOT, 'docker-compose.yml'), 'utf8');
     expect(compose).toMatch(/- CREATE_RBAC_TEST_USERS=\$\{CREATE_RBAC_TEST_USERS:-\}/);
+  });
+
+  it('makes branch SDK homes the rich/full RBAC fixture default', () => {
+    const baseCompose = fs.readFileSync(path.join(REPO_ROOT, 'docker-compose.yml'), 'utf8');
+    const richOverlay = fs.readFileSync(
+      path.join(REPO_ROOT, 'docker-compose.postgres.yml'),
+      'utf8'
+    );
+    expect(baseCompose).toMatch(/AGOR_SANDBOX_SDK_HOME_MODE=\$\{AGOR_SANDBOX_SDK_HOME_MODE:-\}/);
+    expect(richOverlay).toMatch(
+      /AGOR_SANDBOX_SDK_HOME_MODE=\$\{AGOR_SANDBOX_SDK_HOME_MODE:-per_branch\}/
+    );
   });
 
   it('keeps persisted deployment secrets stable when switching postgres variants', () => {

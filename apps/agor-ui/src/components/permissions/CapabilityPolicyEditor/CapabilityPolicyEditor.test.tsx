@@ -25,7 +25,6 @@ describe('shared capability policy forms', () => {
         principals={PROTOTYPE_PRINCIPALS}
         subjects={EFFECTIVE_ACCESS_SUBJECTS}
         sampleBranchOwnerUserId={PROTOTYPE_USERS.leo}
-        currentUserId={PROTOTYPE_USERS.kasia}
       />
     );
 
@@ -46,7 +45,6 @@ describe('shared capability policy forms', () => {
           principals={PROTOTYPE_PRINCIPALS}
           subjects={EFFECTIVE_ACCESS_SUBJECTS}
           sampleBranchOwnerUserId={PROTOTYPE_USERS.leo}
-          currentUserId={PROTOTYPE_USERS.kasia}
         />
       );
     };
@@ -81,7 +79,6 @@ describe('shared capability policy forms', () => {
           }}
           principals={PROTOTYPE_PRINCIPALS}
           subjects={EFFECTIVE_ACCESS_SUBJECTS}
-          currentUserId={PROTOTYPE_USERS.kasia}
         />
       );
     };
@@ -90,11 +87,7 @@ describe('shared capability policy forms', () => {
     expect(screen.getByRole('radio', { name: 'Board defaults' })).toBeChecked();
     expect(screen.getByText('Branch access')).toBeInTheDocument();
     expect(screen.queryByLabelText('Branch access sharing mode')).not.toBeInTheDocument();
-    expect(screen.queryByText('My sessions')).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: /Session sharing/ }));
-    expect(
-      screen.getByRole('switch', { name: 'Allow others to use sessions owned by Kasia D.' })
-    ).toBeDisabled();
+    expect(screen.getByRole('switch', { name: 'Allow shared session prompting' })).toBeDisabled();
     fireEvent.click(screen.getByRole('radio', { name: 'Shared' }));
 
     await waitFor(() => {
@@ -103,10 +96,7 @@ describe('shared capability policy forms', () => {
     expect(latestValue.binding_mode).toBe('override');
     expect(latestValue.override_config).toEqual(initial.inherited_config);
     expect(screen.getByRole('button', { name: 'Add user/group' })).toBeEnabled();
-    expect(
-      screen.getByRole('switch', { name: 'Allow others to use sessions owned by Kasia D.' })
-    ).toBeEnabled();
-    expect(screen.getByText('Seb V. shares with')).toBeInTheDocument();
+    expect(screen.getByRole('switch', { name: 'Allow shared session prompting' })).toBeEnabled();
   }, 30_000);
 
   it('warns before replacing a shared inherited package with a private override', async () => {
@@ -123,7 +113,6 @@ describe('shared capability policy forms', () => {
           }}
           principals={PROTOTYPE_PRINCIPALS}
           subjects={EFFECTIVE_ACCESS_SUBJECTS}
-          currentUserId={PROTOTYPE_USERS.kasia}
         />
       );
     };
@@ -141,8 +130,8 @@ describe('shared capability policy forms', () => {
       entries: [],
       others: { preset: 'none', capabilities: [], fs_access: 'none' },
     });
-    expect(latestValue.override_config?.session_sharing).toEqual(
-      initial.inherited_config?.session_sharing
+    expect(latestValue.override_config?.allow_shared_session_prompts).toBe(
+      initial.inherited_config?.allow_shared_session_prompts
     );
   });
 
@@ -156,7 +145,6 @@ describe('shared capability policy forms', () => {
           principals={PROTOTYPE_PRINCIPALS}
           subjects={EFFECTIVE_ACCESS_SUBJECTS}
           sampleBranchOwnerUserId={PROTOTYPE_USERS.leo}
-          currentUserId={PROTOTYPE_USERS.kasia}
         />
       );
     };
@@ -177,7 +165,6 @@ describe('shared capability policy forms', () => {
         onChange={() => undefined}
         principals={PROTOTYPE_PRINCIPALS}
         subjects={EFFECTIVE_ACCESS_SUBJECTS}
-        currentUserId={PROTOTYPE_USERS.kasia}
       />
     );
 
@@ -203,7 +190,6 @@ describe('shared capability policy forms', () => {
         principals={PROTOTYPE_PRINCIPALS}
         subjects={EFFECTIVE_ACCESS_SUBJECTS}
         sampleBranchOwnerUserId={PROTOTYPE_USERS.leo}
-        currentUserId={PROTOTYPE_USERS.kasia}
       />
     );
 
@@ -225,24 +211,20 @@ describe('shared capability policy forms', () => {
           principals={PROTOTYPE_PRINCIPALS}
           subjects={EFFECTIVE_ACCESS_SUBJECTS}
           sampleBranchOwnerUserId={PROTOTYPE_USERS.leo}
-          currentUserId={PROTOTYPE_USERS.kasia}
         />
       );
     };
     renderWithTheme(<Harness />);
 
     fireEvent.click(screen.getByRole('tab', { name: /Branch defaults/ }));
-    const sessionSharing = await screen.findByRole('button', { name: /Session sharing/ });
-    expect(screen.queryByText('My sessions')).not.toBeInTheDocument();
-    fireEvent.click(sessionSharing);
-    expect(screen.getByText('My sessions')).toBeInTheDocument();
-    expect(screen.getByText(/branches using these settings/)).toBeInTheDocument();
-    expect(
-      screen.getByRole('switch', { name: 'Allow others to use sessions owned by Kasia D.' })
-    ).toBeEnabled();
+    const sessionSharing = await screen.findByRole('switch', {
+      name: 'Allow shared session prompting',
+    });
+    expect(screen.getByText(/branches that inherit these settings/)).toBeInTheDocument();
+    expect(sessionSharing).toBeEnabled();
   });
 
-  it('keeps personal session sharing owner-authored and foreign rules read only', () => {
+  it('explains the shared conversation boundary when branch sharing is enabled', () => {
     const initial = cloneBranchPrototypeFixture('overridden-branch');
     const Harness = () => {
       const [value, setValue] = useState(initial);
@@ -252,36 +234,45 @@ describe('shared capability policy forms', () => {
           onChange={setValue}
           principals={PROTOTYPE_PRINCIPALS}
           subjects={EFFECTIVE_ACCESS_SUBJECTS}
-          currentUserId={PROTOTYPE_USERS.kasia}
         />
       );
     };
     renderWithTheme(<Harness />);
 
-    expect(screen.getByRole('button', { name: /Session sharing/ })).toHaveAttribute(
-      'aria-expanded',
-      'false'
-    );
-    fireEvent.click(screen.getByRole('button', { name: /Session sharing/ }));
-    expect(screen.getByText('Seb V. shares with')).toBeInTheDocument();
-    expect(screen.getByText('GTM')).toBeInTheDocument();
-    expect(screen.getByText('Other people’s sessions')).toBeInTheDocument();
+    expect(screen.getByRole('switch', { name: 'Allow shared session prompting' })).toBeChecked();
+    expect(
+      screen.getByText(/read its conversation and influence its future context/)
+    ).toBeVisible();
+    expect(screen.getByText(/caller’s identity and credentials/)).toBeVisible();
+  });
 
-    fireEvent.click(
-      screen.getByRole('switch', { name: 'Allow others to use sessions owned by Kasia D.' })
+  it('disables the switch without policy-manager authority or the workspace gate', async () => {
+    const branch = renderWithTheme(
+      <BranchCapabilityPolicyForm
+        value={cloneBranchPrototypeFixture('overridden-branch')}
+        onChange={() => undefined}
+        principals={PROTOTYPE_PRINCIPALS}
+        subjects={EFFECTIVE_ACCESS_SUBJECTS}
+        canManageAccess={false}
+      />
     );
-    expect(
-      screen.getByText(/Listed people can prompt your sessions from your home/)
-    ).toBeInTheDocument();
-    expect(
-      screen.getByText(/use their Agor-managed environment variables and credentials/)
-    ).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: 'Learn more in the FAQ.' })).toHaveAttribute(
-      'href',
-      'https://agor.live/faq#session-sharing-home-access'
+    expect(screen.getByRole('switch', { name: 'Allow shared session prompting' })).toBeDisabled();
+    branch.unmount();
+
+    renderWithTheme(
+      <BoardCapabilityPolicyForm
+        value={cloneBoardPrototypeFixture('shared-board')}
+        onChange={() => undefined}
+        principals={PROTOTYPE_PRINCIPALS}
+        subjects={EFFECTIVE_ACCESS_SUBJECTS}
+        sampleBranchOwnerUserId={PROTOTYPE_USERS.leo}
+        sessionSharingWorkspaceEnabled={false}
+      />
     );
+    fireEvent.click(screen.getByRole('tab', { name: /Branch defaults/ }));
     expect(
-      screen.getByLabelText('Add one person or group to my session sharing')
-    ).toBeInTheDocument();
+      await screen.findByRole('switch', { name: 'Allow shared session prompting' })
+    ).toBeDisabled();
+    expect(screen.getByText(/Disabled in Workspace Preferences/)).toBeVisible();
   });
 });

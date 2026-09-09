@@ -140,6 +140,51 @@ describe('Postgres migrations', () => {
     ).toEqual([]);
   });
 
+  it('enforces the Claude OAuth mutation-authority migration as an offline cutover', () => {
+    expect(
+      pendingOfflineCutoverMigrations('postgresql', {
+        applied: ['0093_scheduler_poison_recovery'],
+        pending: ['0100_claude_oauth_attempts'],
+      })
+    ).toEqual(['0100_claude_oauth_attempts']);
+    expect(
+      pendingOfflineCutoverMigrations('sqlite', {
+        applied: ['0096_scheduler_poison_recovery'],
+        pending: ['0103_claude_oauth_attempts'],
+      })
+    ).toEqual([]);
+    expect(
+      pendingOfflineCutoverMigrations('postgresql', {
+        applied: [],
+        pending: ['0000_cuddly_captain_america', '0100_claude_oauth_attempts'],
+      })
+    ).toEqual([]);
+  });
+
+  it('enforces the PostgreSQL DCR authority as an offline cohort cutover after current main', () => {
+    expect(
+      pendingOfflineCutoverMigrations('postgresql', {
+        applied: ['0100_claude_oauth_attempts'],
+        pending: ['0102_mcp_oauth_client_registrations'],
+      })
+    ).toEqual(['0102_mcp_oauth_client_registrations']);
+    expect(
+      pendingOfflineCutoverMigrations('postgresql', {
+        applied: [],
+        pending: ['0000_cuddly_captain_america', '0102_mcp_oauth_client_registrations'],
+      })
+    ).toEqual([]);
+  });
+
+  it('enforces the old-PR OAuth authority collision repair as an offline cohort cutover', () => {
+    expect(
+      pendingOfflineCutoverMigrations('postgresql', {
+        applied: ['0099_shared_session_prompting'],
+        pending: ['0103_oauth_authority_watermark_reconciliation'],
+      })
+    ).toEqual(['0103_oauth_authority_watermark_reconciliation']);
+  });
+
   it('assigns GitHub install state unique post-HA migration watermarks', async () => {
     const [postgresJournal, sqliteJournal] = await readJournals();
 
@@ -741,6 +786,59 @@ describe('Board and branch capability-policy migration', () => {
       'FOREIGN KEY ("tenant_id","config_id","session_owner_user_id") REFERENCES "branch_session_sharing_rules"("tenant_id","config_id","session_owner_user_id")'
     );
   });
+
+  it('replaces personal grants with closed shared-session switches in SQLite', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'agor-session-sharing-migration-'));
+    const client = createClient({ url: `file:${join(directory, 'migration.db')}` });
+    try {
+      await client.executeMultiple(`
+        CREATE TABLE branch_permission_configs (config_id text PRIMARY KEY NOT NULL);
+        CREATE TABLE branch_session_sharing_rules (
+          config_id text NOT NULL, session_owner_user_id text NOT NULL,
+          PRIMARY KEY (config_id,session_owner_user_id)
+        );
+        CREATE TABLE branch_session_sharing_grants (grant_id text PRIMARY KEY NOT NULL);
+        CREATE TABLE app_variables (namespace text NOT NULL, key text NOT NULL);
+        CREATE TABLE branches (branch_id text PRIMARY KEY NOT NULL, data text NOT NULL);
+        CREATE TABLE boards (board_id text PRIMARY KEY NOT NULL, data text NOT NULL);
+        INSERT INTO branch_permission_configs VALUES ('config-1');
+        INSERT INTO branch_session_sharing_rules VALUES ('config-1','owner-1');
+        INSERT INTO branch_session_sharing_grants VALUES ('grant-1');
+        INSERT INTO app_variables VALUES ('workspace_preferences','personal_session_sharing_enabled');
+        INSERT INTO branches VALUES ('branch-1','{"dangerously_allow_session_sharing":true,"keep":1}');
+        INSERT INTO boards VALUES ('board-1','{"default_dangerously_allow_session_sharing":true,"keep":1}');
+      `);
+      const migration = await readFile(
+        new URL('../../drizzle/sqlite/0102_shared_session_prompting.sql', import.meta.url),
+        'utf8'
+      );
+      for (const statement of migration.split('--> statement-breakpoint')) {
+        if (statement.trim()) await client.execute(statement);
+      }
+
+      const config = await client.execute(
+        'SELECT allow_shared_session_prompts FROM branch_permission_configs'
+      );
+      expect(config.rows).toEqual([{ allow_shared_session_prompts: 0 }]);
+      const tables = await client.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'branch_session_sharing_%'"
+      );
+      expect(tables.rows).toEqual([]);
+      const preference = await client.execute('SELECT count(*) AS count FROM app_variables');
+      expect(Number(preference.rows[0]?.count)).toBe(0);
+      const legacyJson = await client.execute(`
+        SELECT json_extract(data,'$.dangerously_allow_session_sharing') AS branch_sharing,
+               json_extract((SELECT data FROM boards WHERE board_id='board-1'),
+                            '$.default_dangerously_allow_session_sharing') AS board_sharing,
+               json_extract(data,'$.keep') AS kept
+        FROM branches WHERE branch_id='branch-1'
+      `);
+      expect(legacyJson.rows[0]).toEqual({ branch_sharing: null, board_sharing: null, kept: 1 });
+    } finally {
+      client.close();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
 });
 
 describe('Executor session token authority migrations', () => {
@@ -827,6 +925,78 @@ describe('MCP OAuth pending-flow migrations', () => {
       client.close();
       await rm(directory, { recursive: true, force: true });
     }
+  });
+});
+
+describe('MCP OAuth client-registration migrations', () => {
+  it('does not advance SQLite schema history for PostgreSQL-only DCR authority', async () => {
+    const [, sqliteJournal] = await readJournals();
+    expect(sqliteJournal.entries.find(({ idx }) => idx === 103)).toMatchObject({
+      idx: 103,
+      tag: '0103_claude_oauth_attempts',
+    });
+    expect(sqliteJournal.entries.some(({ tag }) => tag.includes('client_registrations'))).toBe(
+      false
+    );
+    expect(await import('./schema.sqlite')).not.toHaveProperty('mcpOauthClientRegistrations');
+  });
+
+  it('follows current main and binds PostgreSQL authority to tenant/server UUID with forced RLS', async () => {
+    const [postgresJournal] = await readJournals();
+    expect(postgresJournal.entries.filter(({ idx }) => idx >= 100 && idx <= 103)).toEqual([
+      expect.objectContaining({ idx: 100, tag: '0100_claude_oauth_attempts' }),
+      expect.objectContaining({ idx: 101, tag: '0101_environment_command_discovery' }),
+      expect.objectContaining({ idx: 102, tag: '0102_mcp_oauth_client_registrations' }),
+      expect.objectContaining({
+        idx: 103,
+        tag: '0103_oauth_authority_watermark_reconciliation',
+      }),
+    ]);
+    expect(postgresJournal.entries.find(({ idx }) => idx === 103)!.when).toBeGreaterThan(
+      postgresJournal.entries.find(({ idx }) => idx === 102)!.when
+    );
+    const migration = await readFile(
+      new URL('../../drizzle/postgres/0102_mcp_oauth_client_registrations.sql', import.meta.url),
+      'utf8'
+    );
+    expect(migration).toContain('FOREIGN KEY ("tenant_id", "mcp_server_id")');
+    expect(migration).toContain('DEFERRABLE INITIALLY IMMEDIATE');
+    expect(migration).toContain(
+      'ALTER TABLE "mcp_oauth_client_registrations" FORCE ROW LEVEL SECURITY'
+    );
+    expect(migration).toContain("'mcp_oauth_client_registration_maintenance'");
+    expect(migration).toContain('"sealed_material" text');
+    expect(migration).toContain('"claim_generation" bigint');
+    expect(migration).toContain('"lease_expires_at" timestamp with time zone');
+    expect(migration).toContain('mcp_oauth_client_registrations_registering_maintenance_idx');
+    expect(migration).toContain('mcp_oauth_client_registrations_registered_maintenance_idx');
+    expect(migration).toContain('mcp_oauth_client_registrations_terminal_maintenance_idx');
+    expect(migration).not.toContain('CREATE SEQUENCE');
+    expect(migration).not.toContain('registration_generation');
+    expect(migration).not.toMatch(/"client_id"\s/);
+    expect(migration).not.toMatch(/"client_secret"\s/);
+
+    const reconciliation = await readFile(
+      new URL(
+        '../../drizzle/postgres/0103_oauth_authority_watermark_reconciliation.sql',
+        import.meta.url
+      ),
+      'utf8'
+    );
+    expect(reconciliation).toContain('agor_0102_relation_fingerprint');
+    expect(reconciliation).toContain('agor_0102_legacy_dcr_expected');
+    expect(reconciliation).toContain('agor_0102_final_dcr_expected');
+    expect(reconciliation).toContain('agor_0102_claude_expected');
+    expect(reconciliation).toContain('pg_temp.agor_0102_relation_matches');
+    expect(reconciliation).toContain(
+      'DROP SEQUENCE public.mcp_oauth_client_registration_generation_seq'
+    );
+    expect(reconciliation).not.toContain(
+      'DROP SEQUENCE IF EXISTS "mcp_oauth_client_registration_generation_seq"'
+    );
+    expect(reconciliation).toContain('CREATE TABLE IF NOT EXISTS "claude_oauth_attempts"');
+    expect(reconciliation).toContain('CREATE TABLE IF NOT EXISTS "mcp_oauth_client_registrations"');
+    expect(reconciliation).toContain('unrecognized mcp_oauth_client_registrations schema');
   });
 });
 
@@ -1013,5 +1183,118 @@ describe('MCP catalog install identity migration', () => {
     expect(sqlite).toContain('owner_user_id` IS loser.`owner_user_id');
     expect(sqlite).toContain("coalesce(`owner_user_id`,'')");
     expect(postgres).toContain('coalesce("owner_user_id",\'\')');
+  });
+});
+
+describe('MCP stdio transport repair migrations', () => {
+  it('removes only remote fields from SQLite stdio rows', async () => {
+    const client = createClient({ url: ':memory:' });
+    await client.executeMultiple(`
+      CREATE TABLE mcp_servers (
+        mcp_server_id text PRIMARY KEY,
+        transport text NOT NULL,
+        tenant_id text NOT NULL,
+        data text NOT NULL
+      );
+      CREATE TABLE user_mcp_oauth_tokens (
+        user_id text,
+        mcp_server_id text NOT NULL,
+        oauth_access_token text NOT NULL
+      );
+      CREATE TABLE mcp_oauth_pending_flows (
+        attempt_id text PRIMARY KEY,
+        mcp_server_id text NOT NULL,
+        sealed_material text
+      );
+      INSERT INTO mcp_servers VALUES (
+        'legacy-stdio',
+        'stdio',
+        'tenant-a',
+        '{"command":"mcp-server-shortcut","args":[""],"env":{"SHORTCUT_API_TOKEN":"{{ user.env.SHORTCUT_API_TOKEN }}"},"auth":{"type":"bearer","token":"obsolete"},"url":"https://unused.example","headers":{"X-Unused":"obsolete"},"config_version":7}'
+      );
+      INSERT INTO mcp_servers VALUES (
+        'clean-stdio',
+        'stdio',
+        'tenant-b',
+        '{"command":"other-server","env":{"TOKEN":"{{ user.env.OTHER_TOKEN }}"}}'
+      );
+      INSERT INTO mcp_servers VALUES (
+        'remote',
+        'http',
+        'tenant-a',
+        '{"url":"https://mcp.example.com","headers":{"X-Key":"kept"},"auth":{"type":"bearer","token":"kept"}}'
+      );
+      INSERT INTO user_mcp_oauth_tokens VALUES
+        ('user-a', 'legacy-stdio', 'obsolete-legacy-grant'),
+        ('user-b', 'clean-stdio', 'obsolete-clean-grant'),
+        ('user-a', 'remote', 'kept-remote-grant');
+      INSERT INTO mcp_oauth_pending_flows VALUES
+        ('legacy-flow', 'legacy-stdio', 'obsolete-legacy-sealed-material'),
+        ('clean-flow', 'clean-stdio', 'obsolete-clean-sealed-material'),
+        ('remote-flow', 'remote', 'kept-remote-sealed-material');
+    `);
+
+    const migration = await readFile(
+      new URL('../../drizzle/sqlite/0099_strip_stdio_remote_fields.sql', import.meta.url),
+      'utf8'
+    );
+    await client.executeMultiple(migration.replaceAll('--> statement-breakpoint', ''));
+
+    const rows = await client.execute(
+      'SELECT mcp_server_id, tenant_id, data FROM mcp_servers ORDER BY mcp_server_id'
+    );
+    const decoded = Object.fromEntries(
+      rows.rows.map((row) => [row.mcp_server_id, JSON.parse(row.data as string)])
+    );
+    expect(decoded['legacy-stdio']).toEqual({
+      command: 'mcp-server-shortcut',
+      args: [''],
+      env: { SHORTCUT_API_TOKEN: '{{ user.env.SHORTCUT_API_TOKEN }}' },
+      config_version: 7,
+    });
+    expect(decoded['clean-stdio']).toEqual({
+      command: 'other-server',
+      env: { TOKEN: '{{ user.env.OTHER_TOKEN }}' },
+    });
+    expect(decoded.remote).toEqual({
+      url: 'https://mcp.example.com',
+      headers: { 'X-Key': 'kept' },
+      auth: { type: 'bearer', token: 'kept' },
+    });
+    expect(rows.rows.map((row) => [row.mcp_server_id, row.tenant_id])).toEqual([
+      ['clean-stdio', 'tenant-b'],
+      ['legacy-stdio', 'tenant-a'],
+      ['remote', 'tenant-a'],
+    ]);
+    const grants = await client.execute(
+      'SELECT mcp_server_id FROM user_mcp_oauth_tokens ORDER BY mcp_server_id'
+    );
+    expect(grants.rows.map((row) => row.mcp_server_id)).toEqual(['remote']);
+    const pendingFlows = await client.execute(
+      'SELECT mcp_server_id, sealed_material FROM mcp_oauth_pending_flows ORDER BY mcp_server_id'
+    );
+    expect(pendingFlows.rows).toEqual([
+      {
+        mcp_server_id: 'remote',
+        sealed_material: 'kept-remote-sealed-material',
+      },
+    ]);
+    client.close();
+  });
+
+  it('bounds the PostgreSQL cross-tenant repair to a temporary exact capability', async () => {
+    const migration = await readFile(
+      new URL('../../drizzle/postgres/0096_strip_stdio_remote_fields.sql', import.meta.url),
+      'utf8'
+    );
+
+    expect(migration).toContain(`SET "data" = server."data" - 'auth' - 'url' - 'headers'`);
+    expect(migration).toContain(`WHERE "transport" = 'stdio'`);
+    expect(migration).toContain('DELETE FROM "user_mcp_oauth_tokens"');
+    expect(migration).toContain('DELETE FROM "mcp_oauth_pending_flows"');
+    expect(migration).toContain("= 'stdio_remote_repair_0096'");
+    expect(migration.match(/CREATE POLICY "stdio_repair_0096_/g)).toHaveLength(6);
+    expect(migration.match(/DROP POLICY "stdio_repair_0096_/g)).toHaveLength(6);
+    expect(migration).toContain("SELECT set_config('agor.system_scope', '', true)");
   });
 });

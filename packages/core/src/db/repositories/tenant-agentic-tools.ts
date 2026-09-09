@@ -13,6 +13,7 @@ import {
   DEFAULT_PROVIDER_RESOLUTION_POLICY,
   isProviderConnectionTool,
   PROVIDER_RESOLUTION_POLICIES,
+  TENANT_AGENTIC_TOOL_NAMES,
   TENANT_PROVIDER_CONNECTION_FIELDS,
 } from '../../types';
 import type { Database } from '../client';
@@ -41,11 +42,18 @@ function parseSettings(
     throw new Error(`Invalid stored tenant agentic-tool settings for ${tool}`);
   }
   const input = parsed as {
+    revision?: unknown;
     enabled?: unknown;
     resolution_policy?: unknown;
     inline_configuration_allowed?: unknown;
     connection?: unknown;
   };
+  if (
+    input.revision !== undefined &&
+    (!Number.isSafeInteger(input.revision) || (input.revision as number) < 1)
+  ) {
+    throw new Error(`Invalid revision in tenant agentic-tool settings for ${tool}`);
+  }
   if (input.enabled !== undefined && typeof input.enabled !== 'boolean') {
     throw new Error(`Invalid enabled value in tenant agentic-tool settings for ${tool}`);
   }
@@ -79,6 +87,7 @@ function parseSettings(
   }
   const resolutionPolicy = input.resolution_policy as ProviderResolutionPolicy | undefined;
   return {
+    ...(input.revision !== undefined ? { revision: input.revision as number } : {}),
     ...(input.enabled === false ? { enabled: false } : {}),
     ...(resolutionPolicy && resolutionPolicy !== DEFAULT_PROVIDER_RESOLUTION_POLICY
       ? { resolution_policy: resolutionPolicy }
@@ -101,6 +110,19 @@ export class TenantAgenticToolSettingsRepository {
   async find(tool: TenantAgenticToolName): Promise<StoredTenantAgenticToolSettings> {
     const plaintext = await this.variables.getPlain(TENANT_AGENTIC_TOOLS_NAMESPACE, tool);
     return plaintext ? parseSettings(tool, plaintext) : {};
+  }
+
+  async findAll(): Promise<Map<TenantAgenticToolName, StoredTenantAgenticToolSettings>> {
+    const values = await this.variables.getPlainMany(
+      TENANT_AGENTIC_TOOLS_NAMESPACE,
+      TENANT_AGENTIC_TOOL_NAMES
+    );
+    return new Map(
+      TENANT_AGENTIC_TOOL_NAMES.map((tool) => {
+        const plaintext = values.get(tool);
+        return [tool, plaintext ? parseSettings(tool, plaintext) : {}];
+      })
+    );
   }
 
   async isEnabled(tool: TenantAgenticToolName): Promise<boolean> {
@@ -155,7 +177,12 @@ export class TenantAgenticToolSettingsRepository {
       }
       const resolutionPolicy =
         patch.resolution_policy ?? current.resolution_policy ?? DEFAULT_PROVIDER_RESOLUTION_POLICY;
+      const revision = (current.revision ?? 0) + 1;
+      if (!Number.isSafeInteger(revision)) {
+        throw new Error(`Tenant agentic-tool settings revision overflow for ${tool}`);
+      }
       const next: StoredTenantAgenticToolSettings = {
+        revision,
         ...((patch.enabled ?? current.enabled) === false ? { enabled: false } : {}),
         ...(resolutionPolicy !== DEFAULT_PROVIDER_RESOLUTION_POLICY
           ? { resolution_policy: resolutionPolicy }
@@ -166,18 +193,14 @@ export class TenantAgenticToolSettingsRepository {
         ...(Object.keys(connection).length > 0 ? { connection } : {}),
       };
 
-      if (Object.keys(next).length === 0) {
-        await variables.delete(TENANT_AGENTIC_TOOLS_NAMESPACE, tool);
-      } else {
-        await variables.set({
-          namespace: TENANT_AGENTIC_TOOLS_NAMESPACE,
-          key: tool,
-          value: JSON.stringify(next),
-          encrypted: true,
-          content_type: 'application/json',
-          updated_by: updatedBy ?? null,
-        });
-      }
+      await variables.set({
+        namespace: TENANT_AGENTIC_TOOLS_NAMESPACE,
+        key: tool,
+        value: JSON.stringify(next),
+        encrypted: true,
+        content_type: 'application/json',
+        updated_by: updatedBy ?? null,
+      });
       return next;
     };
 

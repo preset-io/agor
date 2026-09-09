@@ -23,6 +23,9 @@ export const DAEMON = {
  * Environment Management Constants
  */
 export const ENVIRONMENT = {
+  /** Maximum operator guidance length, also enforced before Markdown rendering. */
+  DISCLAIMER_MAX_LENGTH: 4000,
+
   /**
    * Health check interval in milliseconds
    * How often to poll environment health when status is 'running'
@@ -114,6 +117,9 @@ export const PAGINATION = {
    * Maximum allowed limit - prevents accidental DoS from unbounded queries
    */
   MAX_LIMIT: 10_000,
+
+  /** Offset ceiling for services using the common Feathers query schema. */
+  MAX_SKIP: 10_000,
 
   /**
    * Default limit for CLI list commands - reasonable for terminal display

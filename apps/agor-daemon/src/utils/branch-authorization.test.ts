@@ -5,7 +5,7 @@
  * Covers the security invariants introduced by the superadmin role feature.
  */
 
-import type { BranchRepository, SessionRepository } from '@agor/core/db';
+import type { BranchRepository } from '@agor/core/db';
 import type { Branch, BranchPermissionLevel, HookContext, Session } from '@agor/core/types';
 import { ROLES } from '@agor/core/types';
 import { describe, expect, it, vi } from 'vitest';
@@ -17,11 +17,59 @@ import {
   loadSession,
   loadSessionBranch,
   paginateClientSide,
+  protectGatewaySourceMetadata,
   resolveBranchPermission,
   resolveSessionContext,
-  scopeSessionQuery,
   setSessionUnixUsername,
 } from './branch-authorization';
+
+describe('protectGatewaySourceMetadata', () => {
+  const context = (
+    data: unknown,
+    provider: string | null = 'rest',
+    method: 'create' | 'patch' = 'patch'
+  ) => ({ data, method, params: { provider } }) as HookContext;
+
+  it.each(['create', 'patch'] as const)(
+    'rejects external %s writes of gateway provenance',
+    (method) => {
+      expect(() =>
+        protectGatewaySourceMetadata(
+          context(
+            {
+              custom_context: {
+                gateway_source: {
+                  channel_id: 'channel-1',
+                  channel_name: 'general',
+                  channel_type: 'slack',
+                  thread_id: 'thread-1',
+                },
+              },
+            },
+            'rest',
+            method
+          )
+        )
+      ).toThrow('gateway_source is server-managed');
+    }
+  );
+
+  it('allows external user context that omits the reserved key', () => {
+    const hook = context({ custom_context: { project: 'agor' } });
+    expect(protectGatewaySourceMetadata(hook)).toBe(hook);
+  });
+
+  it('rejects clearing the context through a non-object patch', () => {
+    expect(() => protectGatewaySourceMetadata(context({ custom_context: null }))).toThrow(
+      'custom_context must be an object'
+    );
+  });
+
+  it('allows trusted gateway service writes', () => {
+    const hook = context({ custom_context: { gateway_source: { channel_type: 'slack' } } }, null);
+    expect(protectGatewaySourceMetadata(hook)).toBe(hook);
+  });
+});
 
 /** Minimal branch fixture for permission tests */
 function makeBranch(overrides: Partial<Branch> = {}): Branch {
@@ -226,12 +274,18 @@ function makeHookContext(overrides: {
 }
 
 describe('ensureCanPromptInSession', () => {
-  const hookWithAuthority = (allowed: boolean) =>
+  const hookWithAuthority = (
+    allowed: boolean,
+    denialReason:
+      | 'branch_access_required'
+      | 'branch_session_sharing_disabled' = 'branch_session_sharing_disabled'
+  ) =>
     ensureCanPromptInSession({
       branchRepository: {
         resolveSessionPromptAuthority: vi.fn().mockResolvedValue({
           allowed,
-          reason: allowed ? 'own_session' : 'session_owner_did_not_share',
+          source: allowed ? 'own_session' : 'denied',
+          ...(allowed ? {} : { denial_reason: denialReason }),
         }),
       } as unknown as BranchRepository,
     });
@@ -248,7 +302,7 @@ describe('ensureCanPromptInSession', () => {
       await expect(hook(ctx)).resolves.toBe(ctx);
     });
 
-    it('denies prompting another user session without an owner grant', async () => {
+    it('denies prompting another user session when branch sharing is disabled', async () => {
       const hook = hookWithAuthority(false);
       const wt = makeBranch({ others_can: 'session' });
       const ctx = makeHookContext({
@@ -256,7 +310,7 @@ describe('ensureCanPromptInSession', () => {
         session: { created_by: OTHER_USER_ID },
         userId: USER_ID,
       });
-      await expect(hook(ctx)).rejects.toThrow(/owner has not shared/i);
+      await expect(hook(ctx)).rejects.toThrow(/branch does not allow shared session prompting/i);
     });
 
     it('allows prompting another user session when canonical authority allows it', async () => {
@@ -271,14 +325,14 @@ describe('ensureCanPromptInSession', () => {
     });
 
     it('denies prompting an own session without Collaborator access', async () => {
-      const hook = hookWithAuthority(false);
+      const hook = hookWithAuthority(false, 'branch_access_required');
       const wt = makeBranch({ others_can: 'view' });
       const ctx = makeHookContext({
         branch: wt,
         session: { created_by: USER_ID },
         userId: USER_ID,
       });
-      await expect(hook(ctx)).rejects.toThrow(/Collaborator access is required/i);
+      await expect(hook(ctx)).rejects.toThrow(/Only Collaborators and Managers/i);
     });
 
     it('accepts repository-authorized primary-owner access', async () => {
@@ -549,77 +603,6 @@ describe('paginateClientSide', () => {
       expect(result.total).toBe(0);
       expect(result.data).toEqual([]);
     });
-  });
-});
-
-describe('scopeSessionQuery — $sort handling', () => {
-  const SUPERADMIN_USER = {
-    user_id: 'user-super-0001' as import('@agor/core/types').UUID,
-    role: ROLES.SUPERADMIN,
-  };
-
-  function makeSession(id: string, overrides: Partial<Session> = {}): Session {
-    return {
-      session_id: id,
-      branch_id: 'wt-1',
-      status: 'idle',
-      archived: false,
-      created_at: '2026-01-01T00:00:00.000Z',
-      last_updated: '2026-01-01T00:00:00.000Z',
-      ...overrides,
-    } as unknown as Session;
-  }
-
-  function makeCtx(query: Record<string, unknown>): HookContext {
-    return {
-      method: 'find',
-      params: { provider: 'socketio', user: SUPERADMIN_USER, query },
-    } as unknown as HookContext;
-  }
-
-  function repoReturning(sessions: Session[]): SessionRepository {
-    return { findAll: vi.fn(async () => sessions) } as unknown as SessionRepository;
-  }
-
-  function resultIds(ctx: HookContext): string[] {
-    const result = ctx.result as { data: Session[] };
-    return result.data.map((s) => s.session_id);
-  }
-
-  it('passes a non-updated_at $sort (created_at) through to the client-side sort', async () => {
-    // REGRESSION GUARD: scopeSessionQuery must NOT strip every $sort — only the
-    // special `updated_at` case it sorts manually. created_at exists on the
-    // Session object, so paginateClientSide can order it.
-    const sessions = [
-      makeSession('s-old', { created_at: '2026-01-01T00:00:00.000Z' }),
-      makeSession('s-new', { created_at: '2026-03-01T00:00:00.000Z' }),
-      makeSession('s-mid', { created_at: '2026-02-01T00:00:00.000Z' }),
-    ];
-    const ctx = makeCtx({ $sort: { created_at: -1 }, $limit: 10 });
-    await scopeSessionQuery(repoReturning(sessions))(ctx);
-    expect(resultIds(ctx)).toEqual(['s-new', 's-mid', 's-old']);
-  });
-
-  it('passes a scheduled_run_at $sort through (ScheduleRunsPanel)', async () => {
-    const sessions = [
-      makeSession('r1', { scheduled_run_at: 100 }),
-      makeSession('r3', { scheduled_run_at: 300 }),
-      makeSession('r2', { scheduled_run_at: 200 }),
-    ];
-    const ctx = makeCtx({ $sort: { scheduled_run_at: -1 }, $limit: 10 });
-    await scopeSessionQuery(repoReturning(sessions))(ctx);
-    expect(resultIds(ctx)).toEqual(['r3', 'r2', 'r1']);
-  });
-
-  it('orders the updated_at $sort on the real last_updated field', async () => {
-    const sessions = [
-      makeSession('u-old', { last_updated: '2026-01-01T00:00:00.000Z' }),
-      makeSession('u-new', { last_updated: '2026-03-01T00:00:00.000Z' }),
-      makeSession('u-mid', { last_updated: '2026-02-01T00:00:00.000Z' }),
-    ];
-    const ctx = makeCtx({ $sort: { updated_at: -1 }, $limit: 10 });
-    await scopeSessionQuery(repoReturning(sessions))(ctx);
-    expect(resultIds(ctx)).toEqual(['u-new', 'u-mid', 'u-old']);
   });
 });
 

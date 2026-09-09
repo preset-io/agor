@@ -86,6 +86,7 @@ function createPostgresStyleSessionRow(overrides?: Partial<SessionRow> & { tenan
     updated_at: now,
     created_by: generateId(),
     unix_username: null,
+    sdk_home_scope: 'execution_home',
     status: SessionStatus.IDLE,
     agentic_tool: 'claude-code',
     agentic_tool_preset_id: null,
@@ -173,6 +174,18 @@ describe('SessionRepository.create', () => {
     expect(created.description).toBe('Test description');
     expect(created.created_at).toBeDefined();
     expect(created.last_updated).toBeDefined();
+    expect(created.sdk_home_scope).toBe('execution_home');
+  });
+
+  dbTest('persists an explicitly admitted branch SDK-home scope', async ({ db }) => {
+    const repo = new SessionRepository(db);
+    const branch = await createTestBranch(db);
+
+    const created = await repo.create(
+      createSessionData({ branch_id: branch.branch_id, sdk_home_scope: 'branch' })
+    );
+
+    expect(created.sdk_home_scope).toBe('branch');
   });
 
   dbTest('should generate session_id if not provided', async ({ db }) => {
@@ -581,6 +594,22 @@ describe('SessionRepository.findAll', () => {
       const page = await repo.findPage({ visibleToUserId: userId, limit: 10, skip: 0 });
       expect(page.total).toBe(1);
       expect(page.data.map((session) => session.session_id)).toEqual([visibleSession.session_id]);
+      const statusPage = await repo.findPage({
+        visibleToUserId: userId,
+        status: visibleSession.status,
+        limit: 1,
+      });
+      expect(statusPage.total).toBe(1);
+      expect(statusPage.data.map((session) => session.session_id)).toEqual([
+        visibleSession.session_id,
+      ]);
+      const hiddenStatusPage = await repo.findPage({
+        visibleToUserId: userId,
+        status: visibleSession.status,
+        branchId: hiddenBranch.branch_id,
+        limit: 1,
+      });
+      expect(hiddenStatusPage).toEqual({ data: [], total: 0 });
     }
   );
 });
@@ -1024,6 +1053,16 @@ describe('SessionRepository.findAncestors', () => {
 // ============================================================================
 
 describe('SessionRepository.update', () => {
+  dbTest('rejects attempts to mutate the immutable SDK-home scope', async ({ db }) => {
+    const repo = new SessionRepository(db);
+    const branch = await createTestBranch(db);
+    const created = await repo.create(createSessionData({ branch_id: branch.branch_id }));
+
+    await expect(
+      repo.update(created.session_id, { sdk_home_scope: 'branch' } as never)
+    ).rejects.toThrow(/sdk_home_scope is immutable/);
+  });
+
   dbTest('should update session by full UUID', async ({ db }) => {
     const repo = new SessionRepository(db);
     const branch = await createTestBranch(db);

@@ -106,6 +106,9 @@ describe('executor token Feathers authentication contract', () => {
           user_id: input.userId,
         };
       },
+      async isCurrent() {
+        return true;
+      },
       async revoke() {
         return true;
       },
@@ -460,6 +463,38 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       await expect(daemonB.validateToken(token, { tenantId })).resolves.toBeNull();
     });
 
+    it('revalidates a Task fingerprint on a peer without relying on revocation fanout', async () => {
+      const tenantId = `executor-heartbeat-authority-${randomUUID()}`;
+      const token = await runWithTenantDatabaseScope(dbA, tenantId, () =>
+        daemonA.generateToken('session-heartbeat', 'user-heartbeat', {
+          taskId: 'task-heartbeat',
+          branchId: 'branch-heartbeat',
+          maxUses: -1,
+        })
+      );
+      const authority = {
+        tenantId,
+        tokenFingerprint: fingerprint(token),
+        sessionId: 'session-heartbeat',
+        taskId: 'task-heartbeat',
+        branchId: 'branch-heartbeat',
+        userId: 'user-heartbeat',
+      };
+
+      await expect(daemonB.isTaskTokenAuthorityCurrent(authority)).resolves.toBe(true);
+      await expect(
+        daemonB.isTaskTokenAuthorityCurrent({ ...authority, sessionId: 'session-other' })
+      ).resolves.toBe(false);
+
+      // No realtime/Redis listener is installed between these service
+      // instances. The peer's next exact PostgreSQL check still observes the
+      // committed tombstone.
+      await expect(
+        runWithTenantDatabaseScope(dbA, tenantId, () => daemonA.revokeToken(token))
+      ).resolves.toBe(true);
+      await expect(daemonB.isTaskTokenAuthorityCurrent(authority)).resolves.toBe(false);
+    });
+
     it('revokes every retry credential for one terminal task without widening to its session', async () => {
       const tenantId = `executor-task-revoke-${randomUUID()}`;
       const [first, retry, sibling] = await runWithTenantDatabaseScope(dbA, tenantId, () =>
@@ -548,9 +583,8 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       // is scoped to tenant B. It would return the row if FORCE RLS were
       // removed, so this is negative proof rather than two positive examples.
       await runWithTenantDatabaseScope(dbB, tenantB, async (scoped) => {
-        const crossTenant = await new ExecutorSessionTokenAuthorityRepository(
-          scoped
-        ).validateAndConsume({
+        const repository = new ExecutorSessionTokenAuthorityRepository(scoped);
+        const crossTenant = await repository.validateAndConsume({
           tenantId: tenantA,
           tokenFingerprint: fingerprint(token),
           tokenType: EXECUTOR_SESSION_TOKEN_TYPE,
@@ -561,6 +595,16 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
           userId: 'user-tenant',
         });
         expect(crossTenant).toBeNull();
+        await expect(
+          repository.isCurrent({
+            tenantId: tenantA,
+            tokenFingerprint: fingerprint(token),
+            sessionId: 'session-tenant',
+            taskId: 'task-tenant',
+            branchId: 'branch-tenant',
+            userId: 'user-tenant',
+          })
+        ).resolves.toBe(false);
       });
 
       await expect(daemonB.validateToken(token, { tenantId: tenantA })).resolves.toMatchObject({

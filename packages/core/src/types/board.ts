@@ -292,9 +292,6 @@ export interface Board {
   /** Default filesystem access for new/aligned branches on this board. */
   default_others_fs_access?: BoardDefaultFsAccess;
 
-  /** Default legacy session sharing behavior for new/aligned branches on this board. */
-  default_dangerously_allow_session_sharing?: boolean;
-
   /** Hex color for visual distinction */
   color?: string;
 
@@ -356,7 +353,6 @@ export interface BoardExportBlob {
   access_mode?: BoardAccessMode;
   default_others_can?: BranchPermissionLevel;
   default_others_fs_access?: BoardDefaultFsAccess;
-  default_dangerously_allow_session_sharing?: boolean;
 
   // Annotations (zones, text, markdown)
   objects?: {

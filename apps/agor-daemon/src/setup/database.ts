@@ -13,6 +13,7 @@ import type { ApmTraceServiceDepth } from '@agor/core/config';
 import { ensureAgorHome, getAgorHome } from '@agor/core/config';
 import {
   checkMigrationStatus,
+  configureSecretKeyDerivationTracing,
   createDatabaseAsync,
   createTenantScopedDatabaseProxy,
   detectDialectFromUrl,
@@ -126,7 +127,6 @@ export async function initializeDatabase(
   dbPath: string,
   options: {
     tenantId?: TenantID | string;
-    requireTenantScope?: boolean;
     skipFirstRunAdminBootstrap?: boolean;
     /** PostgreSQL per-replica connection limit. PostgreSQL only. */
     pool?: { max: number };
@@ -145,6 +145,7 @@ export async function initializeDatabase(
   // path free of per-query and startup module-resolution overhead.
   const tracingEnabled = (options.traceServices ?? 'off') !== 'off';
   const tracer = tracingEnabled ? resolveDatadogTracer(createRequire(import.meta.url)) : null;
+  configureSecretKeyDerivationTracing(tracer);
 
   // Create database with foreign keys enabled
   const databaseConfig = {
@@ -154,8 +155,12 @@ export async function initializeDatabase(
   const db = tracer
     ? await createDatabaseAsync(databaseConfig, { tracer })
     : await createDatabaseAsync(databaseConfig);
+  // The scope guard is armed in every mode (SQLite/static included), not only
+  // HA `required_from_auth`. A missing tenant/system scope is a bug in any
+  // deployment; catching it here (and in tests) is what makes the invariant
+  // structural instead of HA-only. On non-Postgres this is free — a scope is a
+  // cheap AsyncLocalStorage store with no transaction.
   const scopedDb = createTenantScopedDatabaseProxy(db, {
-    requireScope: options.requireTenantScope === true,
     label: 'daemon database',
   });
 

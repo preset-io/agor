@@ -56,9 +56,13 @@ import {
   gatewaySlackUploadExecutorCommandId,
   uploadMaterializeExecutorCommandId,
 } from '../../auth/executor-command-ids.js';
+import { resolveExecutionCredentialHome } from '../../services/credential-home-identity.js';
 import type { GatewayService } from '../../services/gateway.js';
 import { issueExecutorCommandToken } from '../../services/session-token-service.js';
-import { hasBranchPermission } from '../../utils/branch-authorization.js';
+import {
+  hasBranchPermission,
+  sessionPromptDeniedMessage,
+} from '../../utils/branch-authorization.js';
 import { ensureBranchWorkspaceAccess } from '../../utils/branch-workspace-path.js';
 import { resolveDelegatedExecutionHomeKey } from '../../utils/executor-delegated-home.js';
 import { ingestInboundAttachments, isIngestableFile } from '../../utils/gateway-attachments.js';
@@ -78,6 +82,7 @@ import { textResult } from '../server.js';
 import {
   bindMcpRepositoryToTenantUnitOfWork,
   runWithMcpTenantDatabaseScope,
+  runWithMcpTenantDatabaseUnit,
 } from '../tenant-scope.js';
 
 function requireAdmin(ctx: McpContext, action: string): void {
@@ -1468,10 +1473,30 @@ export function registerGatewayChannelTools(server: McpServer, ctx: McpContext):
       if (!tenantId || !session || !ctx.sessionId) {
         throw new Error('Upload materialization requires tenant-bound session context');
       }
+      const config = ctx.app.get('config');
       const workspace = await runWithMcpTenantDatabaseScope(ctx, async (db) => {
         const branchRepo = new BranchRepository(db);
         const branch = await branchRepo.findById(session.branch_id);
         if (!branch) throw new Error(`Branch not found: ${session.branch_id}`);
+        // Reuse the canonical Session prompt authority instead of inferring an
+        // execution-home owner from the Branch or raw request identity. It is
+        // the owner/caller compatibility seam used by normal executor
+        // admission, including private branches and shared branch-home
+        // Sessions, and rejects foreign execution-home Sessions fail closed.
+        const authority = await branchRepo.resolveSessionPromptAuthority(
+          branch.branch_id,
+          ctx.userId,
+          session.created_by as UUID,
+          session.sdk_home_scope
+        );
+        if (!authority.allowed) {
+          throw new Error(sessionPromptDeniedMessage(authority));
+        }
+        if (!authority.execution_user_id) {
+          throw new Error(
+            'Upload materialization could not resolve an execution-home owner; refusing to use a shared home (fail closed).'
+          );
+        }
         const fsAccess = await ensureBranchWorkspaceAccess(
           branchRepo,
           branch,
@@ -1479,10 +1504,31 @@ export function registerGatewayChannelTools(server: McpServer, ctx: McpContext):
           ctx.authenticatedUser.role as UserRole,
           'session',
           'write',
-          ctx.app.get('config').execution?.allow_superadmin === true
+          config.execution?.allow_superadmin === true
         );
-        return { branch, fsAccess };
+        return { branch, fsAccess, executionUserId: authority.execution_user_id };
       });
+      const sandboxCfg = config.execution?.sandbox;
+      const sandboxHomeStore =
+        sandboxCfg?.enabled === true && sandboxCfg.home_mode === 'per_user'
+          ? (
+              await resolveExecutionCredentialHome({
+                userId: workspace.executionUserId,
+                tenantId,
+                config,
+                withTenantDatabase: (work) => runWithMcpTenantDatabaseUnit(ctx, work),
+              })
+            ).homeStore
+          : null;
+      if (
+        sandboxCfg?.enabled === true &&
+        sandboxCfg.home_mode === 'per_user' &&
+        !sandboxHomeStore
+      ) {
+        throw new Error(
+          'Upload materialization could not resolve an owner home store; refusing to use a shared home (fail closed).'
+        );
+      }
       const ref = args.uploadRef as import('@agor/core/types').UploadRef;
       const store = getUploadStagingStore();
       const metadata = await store.inspect({
@@ -1508,20 +1554,17 @@ export function registerGatewayChannelTools(server: McpServer, ctx: McpContext):
             filename: metadata.name,
             cwd: workspace.branch.path,
             principalBranchAccess: workspace.fsAccess,
+            ...(sandboxHomeStore ? { sandboxHomeStore } : {}),
           },
         },
         {
           logPrefix: `[Upload materialize ${ctx.sessionId}]`,
           delegatedHomeKey: await runWithMcpTenantDatabaseScope(ctx, (db) =>
-            resolveDelegatedExecutionHomeKey(
-              db,
-              ctx.authenticatedUser.user_id,
-              ctx.app.get('config')
-            )
+            resolveDelegatedExecutionHomeKey(db, workspace.executionUserId, config)
           ),
           templateVariables: {
             branch_id: workspace.branch.branch_id,
-            user_id: ctx.userId,
+            user_id: workspace.executionUserId,
             branch_fs_access: workspace.fsAccess,
           },
         }

@@ -217,6 +217,14 @@ export function buildAuthFromValues(
     forPatch?: boolean;
   } = {}
 ): BuiltAuth | MCPAuthPatch | null | undefined {
+  // Authentication belongs to remote HTTP/SSE transports. A stale hidden
+  // auth_type can remain in the form after switching transports, and sending
+  // it would either create an invalid stdio row or prevent an existing legacy
+  // row from repairing itself on edit.
+  if (values.transport === 'stdio') {
+    return options.forPatch ? null : undefined;
+  }
+
   const authType = values.auth_type;
   if (authType !== 'bearer' && authType !== 'jwt' && authType !== 'oauth') {
     return options.forPatch ? null : undefined;
@@ -348,5 +356,24 @@ export function validateHeadersJSON(headersValue: unknown): string | undefined {
     if (typeof value !== 'string') return 'Custom HTTP header values must be strings';
   }
 
+  return undefined;
+}
+
+/** Environment edits must not silently disappear on malformed JSON. */
+export function validateEnvJSON(value: unknown): string | undefined {
+  if (typeof value !== 'string' || !value.trim()) return undefined;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    return 'Environment variables must be valid JSON';
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed))
+    return 'Environment variables must be a JSON object';
+  for (const [key, entry] of Object.entries(parsed)) {
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key))
+      return 'Environment variable names must be valid identifiers';
+    if (typeof entry !== 'string') return 'Environment variable values must be strings';
+  }
   return undefined;
 }

@@ -4,7 +4,14 @@
  * Tests for type-safe CRUD operations on tasks with short ID support.
  */
 
-import type { MessageID, Task, TaskPendingDispatchStatus, UserID, UUID } from '@agor/core/types';
+import type {
+  MCPServerID,
+  MessageID,
+  Task,
+  TaskPendingDispatchStatus,
+  UserID,
+  UUID,
+} from '@agor/core/types';
 import { MessageRole, SessionStatus, TaskStatus } from '@agor/core/types';
 import { describe, expect, vi } from 'vitest';
 import { generateId, toShortId } from '../../lib/ids';
@@ -12,8 +19,10 @@ import type { Database } from '../client';
 import { ownedDbTest as dbTest, setTestBranchUserRole } from '../test-helpers';
 import { AmbiguousIdError, EntityNotFoundError, RepositoryError } from './base';
 import { BranchRepository } from './branches';
+import { MCPServerRepository } from './mcp-servers';
 import { MessagesRepository } from './messages';
 import { RepoRepository } from './repos';
+import { SessionMCPServerRepository } from './session-mcp-servers';
 import { SessionRepository } from './sessions';
 import { MISSING_TASK_ACTOR_ERROR, TaskRepository } from './tasks';
 import { UsersRepository } from './users';
@@ -86,6 +95,19 @@ async function createSessionWithDeps(db: Database): Promise<UUID> {
   });
 
   return session.session_id;
+}
+
+async function bindTestRuntimeAuthority(db: Database, taskRepo: TaskRepository, task: Task) {
+  const session = await new SessionRepository(db).findById(task.session_id);
+  if (!session?.branch_id) throw new Error('Test runtime Session Branch is unavailable');
+  await taskRepo.bindExecutorLaunchAuthority(task.task_id);
+  return {
+    token_fingerprint: 'a'.repeat(64),
+    principal_user_id: task.created_by,
+    session_id: task.session_id,
+    branch_id: session.branch_id,
+    standalone_token_current: true,
+  };
 }
 
 // ============================================================================
@@ -872,6 +894,482 @@ describe('TaskRepository.findBySession', () => {
   });
 });
 
+describe('TaskRepository MCP runtime fanout', () => {
+  dbTest('filters authority and credential fanout by the immutable Task actor', async ({ db }) => {
+    const taskRepo = new TaskRepository(db);
+    const sessionId = await createSessionWithDeps(db);
+    const actor = await new UsersRepository(db).create({
+      email: `mcp-actor-${generateId()}@example.com`,
+      name: 'MCP task actor',
+    });
+    const ownerTask = await taskRepo.create(
+      createTaskData({ session_id: sessionId, status: TaskStatus.RUNNING })
+    );
+    const actorTask = await taskRepo.create(
+      createTaskData({
+        session_id: sessionId,
+        created_by: actor.user_id,
+        status: TaskStatus.RUNNING,
+      })
+    );
+
+    for (const filter of [
+      { authorityUserId: actor.user_id },
+      { credentialUserId: actor.user_id },
+    ]) {
+      const page = await taskRepo.findActiveMCPRefreshPage({ ...filter, limit: 100 });
+      expect(page.tasks.map((task) => task.task_id)).toEqual([actorTask.task_id]);
+      expect(page.tasks.map((task) => task.task_id)).not.toContain(ownerTask.task_id);
+    }
+  });
+
+  dbTest('pages only refresh-eligible active Tasks in deterministic order', async ({ db }) => {
+    const taskRepo = new TaskRepository(db);
+    const sessionId = await createSessionWithDeps(db);
+    const otherSessionId = await createSessionWithDeps(db);
+    const active = await Promise.all(
+      [TaskStatus.RUNNING, TaskStatus.AWAITING_PERMISSION, TaskStatus.AWAITING_INPUT].map(
+        (status) => taskRepo.create(createTaskData({ session_id: sessionId, status }))
+      )
+    );
+    await taskRepo.create(createTaskData({ session_id: sessionId, status: TaskStatus.COMPLETED }));
+    await taskRepo.create(createTaskData({ session_id: sessionId, status: TaskStatus.STOPPING }));
+    await taskRepo.create(
+      createTaskData({ session_id: otherSessionId, status: TaskStatus.RUNNING })
+    );
+
+    const first = await taskRepo.findActiveMCPRefreshPage({ sessionId, limit: 2 });
+    const second = await taskRepo.findActiveMCPRefreshPage({
+      sessionId,
+      beforeTaskId: first.nextTaskId,
+      limit: 2,
+    });
+
+    expect([...first.tasks, ...second.tasks].map((task) => task.task_id)).toEqual(
+      active
+        .map((task) => task.task_id)
+        .sort()
+        .reverse()
+    );
+    expect(first.nextTaskId).toBe(first.tasks[1]?.task_id);
+    expect(second.nextTaskId).toBeUndefined();
+  });
+
+  dbTest(
+    'spends a bounded server fanout page on affected tasks beyond 500 newer tasks',
+    async ({ db }) => {
+      const taskRepo = new TaskRepository(db);
+      const affectedSessionId = await createSessionWithDeps(db);
+      const unrelatedSessionId = await createSessionWithDeps(db);
+      const server = await new MCPServerRepository(db).create({
+        name: `fanout-${generateId()}`,
+        transport: 'http',
+        url: 'https://example.invalid/mcp',
+        auth: { type: 'none' },
+        scope: 'session',
+        source: 'user',
+        enabled: true,
+      });
+      await new SessionMCPServerRepository(db).addServer(affectedSessionId, server.mcp_server_id);
+      const affected = await taskRepo.create(
+        createTaskData({ session_id: affectedSessionId, status: TaskStatus.RUNNING })
+      );
+      for (let index = 0; index < 501; index += 1) {
+        await taskRepo.create(
+          createTaskData({ session_id: unrelatedSessionId, status: TaskStatus.RUNNING })
+        );
+      }
+
+      const page = await taskRepo.findActiveMCPRefreshPage({
+        attachedServerId: server.mcp_server_id,
+        limit: 1,
+      });
+      expect(page.tasks.map((task) => task.task_id)).toEqual([affected.task_id]);
+      expect(page.nextTaskId).toBeUndefined();
+    }
+  );
+
+  dbTest('clears only the exact successful recovery request', async ({ db }) => {
+    const taskRepo = new TaskRepository(db);
+    const sessionId = await createSessionWithDeps(db);
+    const task = await taskRepo.create(
+      createTaskData({
+        session_id: sessionId,
+        status: TaskStatus.RUNNING,
+        executor_connected_at: new Date().toISOString(),
+      })
+    );
+    await taskRepo.recordMCPRecovery(task.task_id, () => ({
+      generation: 1,
+      code: 'stale_capability',
+      status: 'refresh_requested',
+      task_id: task.task_id,
+      session_id: sessionId,
+      provider: {
+        mode: 'in_place',
+        transport_reload: true,
+        retries_unstarted_call: false,
+      },
+      action: 'reconnect_mcp',
+      message: 'Refreshing current MCP authority.',
+      observed_at: new Date().toISOString(),
+      request_id: 'request-current',
+      refresh_deadline_at: new Date(Date.now() + 30_000).toISOString(),
+      provider_dispatch: 'not_started',
+    }));
+
+    const stale = await taskRepo.clearMCPRecovery(
+      task.task_id,
+      (current) => current.request_id === 'request-stale'
+    );
+    expect(stale.metadata?.mcp_recovery?.request_id).toBe('request-current');
+
+    const cleared = await taskRepo.clearMCPRecovery(
+      task.task_id,
+      (current, lockedTask) =>
+        current.request_id === 'request-current' && lockedTask.status === TaskStatus.RUNNING
+    );
+    expect(cleared.metadata?.mcp_recovery).toBeUndefined();
+    expect(cleared.metadata?.mcp_reprojection_claim).toBeUndefined();
+    expect(cleared.metadata?.mcp_recovery_generation).toBe(1);
+    expect(cleared.metadata?.mcp_recovery_settled_request_id).toBe('request-current');
+
+    const next = await taskRepo.recordMCPRecovery(task.task_id, () => ({
+      generation: 1,
+      code: 'grant_changed',
+      status: 'refresh_requested',
+      task_id: task.task_id,
+      session_id: sessionId,
+      provider: {
+        mode: 'in_place',
+        transport_reload: true,
+        retries_unstarted_call: false,
+      },
+      action: 'reconnect_mcp',
+      message: 'New authority after a successful refresh.',
+      observed_at: new Date().toISOString(),
+      request_id: 'request-next',
+      provider_dispatch: 'not_started',
+    }));
+    expect(next.metadata?.mcp_recovery?.generation).toBe(2);
+    await expect(
+      taskRepo.claimMCPReprojection(task.task_id, {
+        sessionId,
+        principalUserId: task.created_by,
+        requestId: 'request-current',
+        expectedGeneration: 1,
+        fingerprint: 'stale-tab',
+      })
+    ).resolves.toMatchObject({ outcome: 'stale' });
+    await expect(
+      taskRepo.claimMCPReprojection(task.task_id, {
+        sessionId,
+        principalUserId: task.created_by,
+        requestId: 'request-next',
+        expectedGeneration: 2,
+        fingerprint: 'current-tab',
+      })
+    ).resolves.toMatchObject({ outcome: 'claimed' });
+    await expect(
+      taskRepo.settleMCPReprojection(task.task_id, {
+        sessionId,
+        principalUserId: task.created_by,
+        requestId: 'request-next',
+        expectedGeneration: 2,
+        ok: true,
+      })
+    ).resolves.toMatchObject({ outcome: 'stale' });
+    await expect(
+      taskRepo.bindMCPReprojectionAuthority(task.task_id, {
+        sessionId,
+        principalUserId: task.created_by,
+        requestId: 'request-next',
+        expectedGeneration: 2,
+        fingerprint: 'current-tab',
+        authorityFingerprints: ['authority-next'],
+      })
+    ).resolves.toMatchObject({ outcome: 'bound' });
+    const settled = await taskRepo.settleMCPReprojection(task.task_id, {
+      sessionId,
+      principalUserId: task.created_by,
+      requestId: 'request-next',
+      expectedGeneration: 2,
+      ok: true,
+    });
+    expect(settled).toMatchObject({
+      outcome: 'settled',
+      task: {
+        metadata: {
+          mcp_recovery_settled_request_id: 'request-next',
+          mcp_recovery_settled_authority_fingerprints: ['authority-next'],
+        },
+      },
+    });
+    expect(settled.task.metadata?.mcp_recovery).toBeUndefined();
+    expect(settled.task.metadata?.mcp_recovery_settled_projection_fingerprint).toBeDefined();
+  });
+
+  dbTest(
+    'converges an uncertain transport timeout without claiming provider failure',
+    async ({ db }) => {
+      const tasks = new TaskRepository(db);
+      const sessionId = await createSessionWithDeps(db);
+      const task = await tasks.create(
+        createTaskData({
+          session_id: sessionId,
+          status: TaskStatus.RUNNING,
+          executor_connected_at: new Date().toISOString(),
+        })
+      );
+      await tasks.recordMCPRecovery(task.task_id, () => ({
+        generation: 1,
+        code: 'stale_capability',
+        status: 'refresh_requested',
+        task_id: task.task_id,
+        session_id: sessionId,
+        provider: {
+          mode: 'in_place',
+          transport_reload: true,
+          retries_unstarted_call: false,
+        },
+        action: 'reconnect_mcp',
+        message: 'Refreshing current MCP authority.',
+        observed_at: new Date().toISOString(),
+        request_id: 'uncertain-request',
+        refresh_deadline_at: new Date(Date.now() + 30_000).toISOString(),
+        provider_dispatch: 'not_started',
+      }));
+      const claim = {
+        sessionId,
+        principalUserId: task.created_by,
+        requestId: 'uncertain-request',
+        expectedGeneration: 1,
+        fingerprint: 'uncertain-fingerprint',
+      };
+      await expect(tasks.claimMCPReprojection(task.task_id, claim)).resolves.toMatchObject({
+        outcome: 'claimed',
+      });
+      await expect(
+        tasks.bindMCPReprojectionAuthority(task.task_id, {
+          ...claim,
+          authorityFingerprints: ['authority-a'],
+        })
+      ).resolves.toMatchObject({ outcome: 'bound' });
+
+      const settled = await tasks.settleMCPReprojection(task.task_id, {
+        sessionId,
+        principalUserId: task.created_by,
+        requestId: 'uncertain-request',
+        expectedGeneration: 1,
+        ok: false,
+        failure: 'transport_outcome_uncertain',
+      });
+      expect(settled).toMatchObject({
+        outcome: 'settled',
+        task: {
+          metadata: {
+            mcp_recovery: {
+              generation: 2,
+              code: 'transport_refresh_uncertain',
+              status: 'action_required',
+              action: 'retry_next_turn',
+            },
+          },
+        },
+      });
+      expect(settled.task.metadata?.mcp_recovery?.refresh_deadline_at).toBeUndefined();
+      expect(settled.task.metadata?.mcp_recovery?.message).not.toContain(
+        'provider could not rebuild'
+      );
+    }
+  );
+
+  dbTest('atomically rejects a stale tab after concurrent new authority', async ({ db }) => {
+    const firstRepo = new TaskRepository(db);
+    const secondRepo = new TaskRepository(db);
+    const sessionId = await createSessionWithDeps(db);
+    const task = await firstRepo.create(
+      createTaskData({
+        session_id: sessionId,
+        status: TaskStatus.RUNNING,
+        executor_connected_at: new Date().toISOString(),
+      })
+    );
+    const provider = {
+      mode: 'in_place' as const,
+      transport_reload: true,
+      retries_unstarted_call: false,
+    };
+    await firstRepo.recordMCPRecovery(task.task_id, () => ({
+      generation: 1,
+      code: 'stale_capability',
+      status: 'refresh_requested',
+      task_id: task.task_id,
+      session_id: sessionId,
+      provider,
+      action: 'reconnect_mcp',
+      message: 'First authority request.',
+      observed_at: new Date().toISOString(),
+      request_id: 'request-old',
+      provider_dispatch: 'not_started',
+    }));
+
+    await Promise.all([
+      secondRepo.recordMCPRecovery(task.task_id, (current) => ({
+        generation: (current?.generation ?? 1) + 1,
+        code: 'grant_changed',
+        status: 'refresh_requested',
+        task_id: task.task_id,
+        session_id: sessionId,
+        provider,
+        action: 'reconnect_mcp',
+        message: 'New authority request.',
+        observed_at: new Date().toISOString(),
+        request_id: 'request-new',
+        provider_dispatch: 'not_started',
+      })),
+      firstRepo.claimMCPReprojection(task.task_id, {
+        sessionId,
+        principalUserId: task.created_by,
+        requestId: 'request-old',
+        expectedGeneration: 1,
+        fingerprint: 'old-fingerprint',
+      }),
+    ]);
+
+    const stale = await firstRepo.claimMCPReprojection(task.task_id, {
+      sessionId,
+      principalUserId: task.created_by,
+      requestId: 'request-old',
+      expectedGeneration: 1,
+      fingerprint: 'old-fingerprint',
+    });
+    expect(stale.outcome).toBe('stale');
+    expect(stale.task.metadata?.mcp_recovery).toMatchObject({
+      generation: 2,
+      request_id: 'request-new',
+    });
+  });
+
+  dbTest(
+    'validates a duplicate claim after restart and settles a mixed projection partially',
+    async ({ db }) => {
+      const firstDaemon = new TaskRepository(db);
+      const sessionId = await createSessionWithDeps(db);
+      const task = await firstDaemon.create(
+        createTaskData({
+          session_id: sessionId,
+          status: TaskStatus.RUNNING,
+          executor_connected_at: new Date().toISOString(),
+        })
+      );
+      const provider = {
+        mode: 'in_place' as const,
+        transport_reload: true,
+        retries_unstarted_call: false,
+      };
+      await firstDaemon.recordMCPRecovery(task.task_id, () => ({
+        generation: 1,
+        code: 'stale_capability',
+        status: 'refresh_requested',
+        task_id: task.task_id,
+        session_id: sessionId,
+        provider,
+        action: 'reconnect_mcp',
+        message: 'Refresh ready and excluded servers.',
+        observed_at: new Date().toISOString(),
+        request_id: 'mixed-request',
+        provider_dispatch: 'not_started',
+      }));
+      const claimInput = {
+        sessionId,
+        principalUserId: task.created_by,
+        requestId: 'mixed-request',
+        expectedGeneration: 1,
+        fingerprint: 'mixed-fingerprint',
+      };
+      await expect(
+        firstDaemon.claimMCPReprojection(task.task_id, claimInput)
+      ).resolves.toMatchObject({
+        outcome: 'claimed',
+      });
+
+      // This is a new repository/process with no response cache. The exact
+      // durable duplicate remains derivable and valid.
+      const restartedDaemon = new TaskRepository(db);
+      await expect(
+        restartedDaemon.claimMCPReprojection(task.task_id, claimInput)
+      ).resolves.toMatchObject({ outcome: 'duplicate' });
+      await restartedDaemon.recordMCPRecovery(task.task_id, (current) => ({
+        ...current!,
+        status: 'action_required',
+        mcp_server_id: 'server-stdio' as never,
+        mcp_server_name: 'Local tools',
+        server_states: [
+          {
+            mcp_server_id: 'server-stdio' as never,
+            name: 'Local tools',
+            code: 'transport_not_mediated',
+            action: 'review_configuration',
+            message: 'This server configuration cannot be mediated by the live MCP gateway.',
+          },
+        ],
+        action: 'contact_admin',
+        message: 'This server configuration cannot be mediated by the live MCP gateway.',
+      }));
+      await expect(
+        restartedDaemon.claimMCPReprojection(task.task_id, claimInput)
+      ).resolves.toMatchObject({ outcome: 'duplicate' });
+      await expect(
+        restartedDaemon.validateMCPReprojectionClaim(task.task_id, claimInput)
+      ).resolves.toMatchObject({ outcome: 'current' });
+      await expect(
+        restartedDaemon.bindMCPReprojectionAuthority(task.task_id, {
+          ...claimInput,
+          authorityFingerprints: ['authority-ready'],
+        })
+      ).resolves.toMatchObject({ outcome: 'bound' });
+      await expect(
+        restartedDaemon.bindMCPReprojectionAuthority(task.task_id, {
+          ...claimInput,
+          authorityFingerprints: ['authority-ready'],
+        })
+      ).resolves.toMatchObject({ outcome: 'bound' });
+      await expect(
+        restartedDaemon.bindMCPReprojectionAuthority(task.task_id, {
+          ...claimInput,
+          authorityFingerprints: ['newer-authority-must-not-rebind'],
+        })
+      ).resolves.toMatchObject({ outcome: 'stale' });
+      const immutableClaim = (await restartedDaemon.findById(task.task_id))?.metadata
+        ?.mcp_reprojection_claim;
+      expect(immutableClaim?.projection_fingerprint).toBeDefined();
+      expect(immutableClaim?.authority_fingerprints).toEqual(['authority-ready']);
+      const settled = await restartedDaemon.settleMCPReprojection(task.task_id, {
+        sessionId,
+        principalUserId: task.created_by,
+        requestId: 'mixed-request',
+        expectedGeneration: 1,
+        ok: true,
+      });
+      expect(settled).toMatchObject({
+        outcome: 'settled',
+        task: {
+          metadata: {
+            mcp_recovery: {
+              generation: 1,
+              status: 'action_required',
+              mcp_server_name: 'Local tools',
+              server_states: [{ name: 'Local tools', code: 'transport_not_mediated' }],
+            },
+          },
+        },
+      });
+      expect(settled.task.metadata?.mcp_reprojection_claim).toBeUndefined();
+    }
+  );
+});
+
 // ============================================================================
 // Nonterminal cascade guards
 // ============================================================================
@@ -980,6 +1478,55 @@ describe('TaskRepository.findRunning', () => {
     const running = await taskRepo.findRunning();
 
     expect(running).toHaveLength(2);
+  });
+});
+
+describe('TaskRepository.findExecutingByCreator', () => {
+  dbTest('returns every executing state for only the immutable prompt actor', async ({ db }) => {
+    const taskRepo = new TaskRepository(db);
+    const users = new UsersRepository(db);
+    const sessionId = await createSessionWithDeps(db);
+    const actor = await users.create({ email: `actor-${generateId()}@example.com`, name: 'Actor' });
+    const other = await users.create({ email: `other-${generateId()}@example.com`, name: 'Other' });
+
+    for (const status of [
+      TaskStatus.DISPATCHING,
+      TaskStatus.RUNNING,
+      TaskStatus.STOPPING,
+      TaskStatus.AWAITING_PERMISSION,
+      TaskStatus.AWAITING_INPUT,
+    ]) {
+      await taskRepo.create(
+        createTaskData({ session_id: sessionId, created_by: actor.user_id, status })
+      );
+    }
+    await taskRepo.create(
+      createTaskData({
+        session_id: sessionId,
+        created_by: actor.user_id,
+        status: TaskStatus.COMPLETED,
+      })
+    );
+    await taskRepo.create(
+      createTaskData({
+        session_id: sessionId,
+        created_by: other.user_id,
+        status: TaskStatus.RUNNING,
+      })
+    );
+
+    const executing = await taskRepo.findExecutingByCreator(actor.user_id);
+    expect(executing).toHaveLength(5);
+    expect(executing.every((task) => task.created_by === actor.user_id)).toBe(true);
+    expect(new Set(executing.map((task) => task.status))).toEqual(
+      new Set([
+        TaskStatus.DISPATCHING,
+        TaskStatus.RUNNING,
+        TaskStatus.STOPPING,
+        TaskStatus.AWAITING_PERMISSION,
+        TaskStatus.AWAITING_INPUT,
+      ])
+    );
   });
 });
 
@@ -1241,31 +1788,41 @@ describe('TaskRepository.reportRuntimeTelemetry', () => {
     const task = await taskRepo.create(
       createTaskData({ session_id: sessionId, status: TaskStatus.DISPATCHING })
     );
+    const authority = await bindTestRuntimeAuthority(db, taskRepo, task);
     await taskRepo.connectExecutor(task.task_id);
 
     const first = await taskRepo.reportRuntimeTelemetry(
       task.task_id,
+      authority,
       { sequence: 2, kind: 'progress', detail: 'tool.start' },
       new Date('2026-01-01T00:00:02.000Z')
     );
     const retry = await taskRepo.reportRuntimeTelemetry(
       task.task_id,
+      authority,
       { sequence: 2, kind: 'waiting' },
       new Date('2026-01-01T00:00:03.000Z')
     );
 
     expect(first).toMatchObject({
-      last_executor_heartbeat_at: '2026-01-01T00:00:02.000Z',
-      latest_executor_pulse: {
-        sequence: 2,
-        kind: 'progress',
-        detail: 'tool.start',
-        observed_at: '2026-01-01T00:00:02.000Z',
+      outcome: 'continued',
+      task: {
+        last_executor_heartbeat_at: '2026-01-01T00:00:02.000Z',
+        latest_executor_pulse: {
+          sequence: 2,
+          kind: 'progress',
+          detail: 'tool.start',
+          observed_at: '2026-01-01T00:00:02.000Z',
+        },
       },
     });
     expect(retry).toMatchObject({
-      last_executor_heartbeat_at: '2026-01-01T00:00:03.000Z',
-      latest_executor_pulse: first?.latest_executor_pulse,
+      outcome: 'continued',
+      task: {
+        last_executor_heartbeat_at: '2026-01-01T00:00:03.000Z',
+        latest_executor_pulse:
+          first.outcome === 'continued' ? first.task.latest_executor_pulse : {},
+      },
     });
   });
 
@@ -1277,6 +1834,7 @@ describe('TaskRepository.reportRuntimeTelemetry', () => {
       const task = await taskRepo.create(
         createTaskData({ session_id: sessionId, status: TaskStatus.DISPATCHING })
       );
+      const authority = await bindTestRuntimeAuthority(db, taskRepo, task);
       await taskRepo.connectExecutor(task.task_id);
       await taskRepo.claimTermination({
         taskId: task.task_id,
@@ -1288,16 +1846,20 @@ describe('TaskRepository.reportRuntimeTelemetry', () => {
       await expect(
         taskRepo.reportRuntimeTelemetry(
           task.task_id,
+          authority,
           { sequence: 3, kind: 'progress', detail: 'provider.cancel.pending' },
           new Date('2026-01-01T00:00:03.000Z')
         )
       ).resolves.toMatchObject({
-        status: TaskStatus.STOPPING,
-        last_executor_heartbeat_at: '2026-01-01T00:00:03.000Z',
-        latest_executor_pulse: {
-          sequence: 3,
-          kind: 'progress',
-          detail: 'provider.cancel.pending',
+        outcome: 'continued',
+        task: {
+          status: TaskStatus.STOPPING,
+          last_executor_heartbeat_at: '2026-01-01T00:00:03.000Z',
+          latest_executor_pulse: {
+            sequence: 3,
+            kind: 'progress',
+            detail: 'provider.cancel.pending',
+          },
         },
       });
     }
@@ -1309,6 +1871,7 @@ describe('TaskRepository.reportRuntimeTelemetry', () => {
     const task = await taskRepo.create(
       createTaskData({ session_id: sessionId, status: TaskStatus.DISPATCHING })
     );
+    const authority = await bindTestRuntimeAuthority(db, taskRepo, task);
     await taskRepo.connectExecutor(task.task_id);
     const claim = await taskRepo.claimTermination({
       taskId: task.task_id,
@@ -1324,7 +1887,10 @@ describe('TaskRepository.reportRuntimeTelemetry', () => {
       new Date('2026-01-01T00:00:03.000Z')
     );
 
-    await expect(taskRepo.reportRuntimeTelemetry(task.task_id)).resolves.toBeNull();
+    await expect(taskRepo.reportRuntimeTelemetry(task.task_id, authority)).resolves.toMatchObject({
+      outcome: 'control',
+      task: { status: TaskStatus.STOPPING },
+    });
   });
 
   dbTest(
@@ -1335,6 +1901,7 @@ describe('TaskRepository.reportRuntimeTelemetry', () => {
       const task = await taskRepo.create(
         createTaskData({ session_id: sessionId, status: TaskStatus.DISPATCHING })
       );
+      const authority = await bindTestRuntimeAuthority(db, taskRepo, task);
       await taskRepo.connectExecutor(task.task_id);
       await taskRepo.claimTermination({
         taskId: task.task_id,
@@ -1364,14 +1931,18 @@ describe('TaskRepository.reportRuntimeTelemetry', () => {
       await expect(
         taskRepo.reportRuntimeTelemetry(
           task.task_id,
+          authority,
           { sequence: 4, kind: 'progress', detail: 'provider.cancel.still_pending' },
           new Date('2026-01-01T00:00:04.000Z')
         )
       ).resolves.toMatchObject({
-        status: TaskStatus.STOPPING,
-        sdk_failure: { termination: 'unverified' },
-        last_executor_heartbeat_at: '2026-01-01T00:00:04.000Z',
-        latest_executor_pulse: { sequence: 4, detail: 'provider.cancel.still_pending' },
+        outcome: 'continued',
+        task: {
+          status: TaskStatus.STOPPING,
+          sdk_failure: { termination: 'unverified' },
+          last_executor_heartbeat_at: '2026-01-01T00:00:04.000Z',
+          latest_executor_pulse: { sequence: 4, detail: 'provider.cancel.still_pending' },
+        },
       });
     }
   );
@@ -1382,11 +1953,16 @@ describe('TaskRepository.reportRuntimeTelemetry', () => {
     const task = await taskRepo.create(
       createTaskData({ session_id: sessionId, status: TaskStatus.DISPATCHING })
     );
+    const authority = await bindTestRuntimeAuthority(db, taskRepo, task);
 
-    expect(await taskRepo.reportRuntimeTelemetry(task.task_id)).toBeNull();
+    expect(await taskRepo.reportRuntimeTelemetry(task.task_id, authority)).toMatchObject({
+      outcome: 'control',
+    });
     await taskRepo.connectExecutor(task.task_id);
     await taskRepo.update(task.task_id, { status: TaskStatus.COMPLETED });
-    expect(await taskRepo.reportRuntimeTelemetry(task.task_id)).toBeNull();
+    expect(await taskRepo.reportRuntimeTelemetry(task.task_id, authority)).toMatchObject({
+      outcome: 'control',
+    });
   });
 });
 
@@ -1654,13 +2230,14 @@ describe('TaskRepository.update', () => {
     const task = await taskRepo.create(
       createTaskData({
         session_id: sessionId,
-        status: TaskStatus.RUNNING,
-        executor_connected_at: '2026-07-10T20:00:00.000Z',
-        last_executor_heartbeat_at: '2026-07-10T20:00:01.000Z',
+        status: TaskStatus.DISPATCHING,
       })
     );
+    const authority = await bindTestRuntimeAuthority(db, taskRepo, task);
+    await taskRepo.connectExecutor(task.task_id, new Date('2026-07-10T20:00:01.000Z'));
     await taskRepo.reportRuntimeTelemetry(
       task.task_id,
+      authority,
       undefined,
       new Date('2026-07-10T20:00:05Z')
     );
@@ -3273,5 +3850,131 @@ describe('TaskRepository sentinel invariants', () => {
         expect(task.git_state.sha_at_start).not.toBe('');
       }
     }
+  });
+});
+
+describe('TaskRepository MCP Slack recovery notice CAS', () => {
+  dbTest('allows only one exact single-use claim and rejects stale identities', async ({ db }) => {
+    const tasks = new TaskRepository(db);
+    const sessionId = await createSessionWithDeps(db);
+    const task = await tasks.create(
+      createTaskData({
+        session_id: sessionId,
+        metadata: {
+          mcp_slack_recovery_notice: {
+            notice_id: 'notice-1',
+            token_jti: 'jti-1',
+            issued_at: '2026-08-26T12:00:00.000Z',
+            expires_at: '2026-08-26T12:10:00.000Z',
+            principal_user_id: 'test-user' as UUID,
+            credential_user_id: 'test-user' as UUID,
+            slack_user_id: 'U1',
+            slack_team_id: 'T1',
+            gateway_channel_id: 'gateway-1',
+            gateway_config_generation: 1,
+            slack_channel_id: 'C1',
+            slack_thread_id: 'C1-1.1',
+            session_id: sessionId,
+            task_id: 'placeholder',
+            mcp_server_id: generateId() as MCPServerID,
+            mcp_server_config_version: 1,
+            recovery_generation: 3,
+            recovery_request_id: 'request-1',
+            provider_dispatch: 'not_started',
+            delivery_id: 'delivery-1',
+            next_repair_at: '2026-08-26T12:00:00.000Z',
+          },
+        },
+      })
+    );
+    // Align the durable task binding after creation, just as the gateway's
+    // row-locked notice projection does.
+    await tasks.mutateMCPSlackRecoveryNotice(task.task_id, (current) =>
+      current ? { ...current, task_id: task.task_id } : null
+    );
+
+    const consume = (jti: string, requestId: string) =>
+      tasks.mutateMCPSlackRecoveryNotice(task.task_id, (current) =>
+        current?.token_jti === jti &&
+        current.recovery_request_id === requestId &&
+        !current.token_consumed_at
+          ? { ...current, token_consumed_at: '2026-08-26T12:01:00.000Z' }
+          : null
+      );
+
+    const [first, duplicate] = await Promise.all([
+      consume('jti-1', 'request-1'),
+      consume('jti-1', 'request-1'),
+    ]);
+    expect([first.changed, duplicate.changed].sort()).toEqual([false, true]);
+    expect((await consume('jti-stale', 'request-1')).changed).toBe(false);
+    expect((await consume('jti-1', 'request-stale')).changed).toBe(false);
+    expect(
+      (await tasks.findById(task.task_id))?.metadata?.mcp_slack_recovery_notice?.token_consumed_at
+    ).toBe('2026-08-26T12:01:00.000Z');
+
+    await tasks.update(task.task_id, { status: TaskStatus.COMPLETED });
+    const repair = await tasks.findMcpSlackRecoveryNoticePage({
+      limit: 1,
+      now: new Date('2026-08-26T12:02:00.000Z'),
+      horizon: new Date('2026-08-25T12:02:00.000Z'),
+    });
+    expect(repair.tasks.map((candidate) => candidate.task_id)).toContain(task.task_id);
+
+    await tasks.mutateMCPSlackRecoveryNotice(task.task_id, (current) =>
+      current ? { ...current, next_repair_at: undefined } : null
+    );
+    expect(
+      (
+        await tasks.findMcpSlackRecoveryNoticePage({
+          limit: 1,
+          now: new Date('2026-08-26T12:02:00.000Z'),
+          horizon: new Date('2026-08-25T12:02:00.000Z'),
+        })
+      ).tasks
+    ).toEqual([]);
+
+    const firstDue = await tasks.mutateMCPSlackRecoveryNotice(task.task_id, (current) =>
+      current ? { ...current, next_repair_at: '2026-08-26T12:00:00.000Z' } : null
+    );
+    const template = firstDue.task.metadata?.mcp_slack_recovery_notice;
+    expect(template).toBeDefined();
+    const secondSessionId = await createSessionWithDeps(db);
+    const second = await tasks.create(
+      createTaskData({
+        session_id: secondSessionId,
+        metadata: {
+          mcp_slack_recovery_notice: {
+            ...template!,
+            notice_id: 'notice-2',
+            token_jti: 'jti-2',
+            task_id: 'placeholder-2',
+            session_id: secondSessionId,
+            next_repair_at: '2026-08-26T12:00:01.000Z',
+          },
+        },
+      })
+    );
+    expect(
+      (
+        await tasks.findMcpSlackRecoveryNoticePage({
+          limit: 1,
+          now: new Date('2026-08-26T12:02:00.000Z'),
+          horizon: new Date('2026-08-25T12:02:00.000Z'),
+        })
+      ).tasks
+    ).toHaveLength(1);
+    await tasks.mutateMCPSlackRecoveryNotice(task.task_id, (current) =>
+      current ? { ...current, next_repair_at: '2026-08-20T12:00:00.000Z' } : null
+    );
+    const recentOnly = await tasks.findMcpSlackRecoveryNoticePage({
+      limit: 10,
+      now: new Date('2026-08-26T12:02:00.000Z'),
+      horizon: new Date('2026-08-25T12:02:00.000Z'),
+    });
+    expect(recentOnly.tasks.map((candidate) => candidate.task_id)).toEqual([second.task_id]);
+    await expect(tasks.findMcpSlackRecoveryNoticePage({ limit: 101 })).rejects.toThrow(
+      /between 1 and 100/
+    );
   });
 });

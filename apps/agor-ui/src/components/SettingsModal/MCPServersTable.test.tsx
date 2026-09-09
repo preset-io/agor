@@ -80,16 +80,17 @@ function makeClient(
       ? ({ ...data } as { policy: MCPMemberPolicy; can_configure: boolean })
       : { ...data, can_configure: canConfigureMCPServers(role, data.policy) }
   );
+  const service = vi.fn((path: string) => {
+    if (path === 'mcp-member-policy') return { find, patch };
+    if (path === 'mcp-servers') return { on: vi.fn(), removeListener: vi.fn() };
+    return {};
+  });
   const client = {
     // The create form subscribes to the OAuth browser-flow hint on mount.
     io: { on: vi.fn(), off: vi.fn() },
-    service: (path: string) => {
-      if (path === 'mcp-member-policy') return { find, patch };
-      if (path === 'mcp-servers') return { on: vi.fn(), removeListener: vi.fn() };
-      return {};
-    },
+    service,
   } as unknown as AgorClient;
-  return { client, find, patch };
+  return { client, find, patch, service };
 }
 
 function renderTable(options: {
@@ -102,7 +103,7 @@ function renderTable(options: {
   /** Hold the read in flight, for the state between mount and an answer. */
   findPending?: boolean;
 }) {
-  const { client, find, patch } = makeClient(
+  const { client, find, patch, service } = makeClient(
     options.policy,
     options.currentUser.role,
     options.findError,
@@ -133,7 +134,7 @@ function renderTable(options: {
       </ConnectionProvider>
     </AntdApp>
   );
-  return { find, patch };
+  return { find, patch, service };
 }
 
 // The hints the servers pane gives instead of a policy it has not read. Matched
@@ -174,8 +175,11 @@ async function openCreateForm(): Promise<void> {
 const openPolicyPane = () => fireEvent.click(screen.getByRole('tab', { name: 'Member policy' }));
 
 describe('MCPServersTable member policy', { timeout: ANT_FORM_INTEGRATION_TIMEOUT }, () => {
-  it('opens on the servers, with the policy a pane away', async () => {
-    const { find } = renderTable({ policy: 'use_existing_only', currentUser: ADMIN });
+  it('opens on servers without mounting gateway status or controls', async () => {
+    const { find, service } = renderTable({
+      policy: 'use_existing_only',
+      currentUser: ADMIN,
+    });
 
     await waitFor(() => expect(find).toHaveBeenCalledTimes(1));
 
@@ -185,6 +189,12 @@ describe('MCPServersTable member policy', { timeout: ANT_FORM_INTEGRATION_TIMEOU
     expect(screen.getByRole('button', { name: /New MCP Server/i })).toBeInTheDocument();
     expect(screen.queryByRole('radio')).not.toBeInTheDocument();
     expect(screen.queryByText(/One setting for the whole workspace/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/MCP gateway is/i)).not.toBeInTheDocument();
+    expect(screen.queryByText('MCP gateway status unavailable')).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('combobox', { name: 'MCP gateway rollout mode' })
+    ).not.toBeInTheDocument();
+    expect(service).not.toHaveBeenCalledWith('mcp-egress/status');
   });
 
   it('lets an admin read the policy in plain language and change it', async () => {
@@ -572,6 +582,48 @@ async function chooseSelect(label: string, option: string): Promise<void> {
   });
   fireEvent.click(optionContent);
 }
+
+describe('MCPServersTable transport form state', { timeout: ANT_FORM_INTEGRATION_TIMEOUT }, () => {
+  it('does not submit preserved remote fields after switching the create form to stdio', async () => {
+    const seam = renderTransitionTable({ currentUser: ADMIN, policy: 'allow_crud' });
+    await waitFor(() => expect(seam.find).toHaveBeenCalledTimes(1));
+    await openCreateForm();
+
+    fireEvent.change(screen.getByLabelText('Name (Internal ID)'), {
+      target: { value: 'transport-switch-server' },
+    });
+    await chooseSelect('Transport', 'HTTP');
+    fireEvent.change(await screen.findByLabelText('URL'), {
+      target: { value: 'https://stale-remote.example/mcp' },
+    });
+    await chooseSelect('Auth Type', 'Bearer Token');
+    fireEvent.change(await screen.findByLabelText('Token'), {
+      target: { value: 'stale-remote-token' },
+    });
+    fireEvent.click(screen.getByText('Advanced Configuration'));
+    fireEvent.change(await screen.findByLabelText('Custom HTTP Headers'), {
+      target: { value: '{"X-Stale":"remote"}' },
+    });
+
+    await chooseSelect('Transport', 'stdio (Local process)');
+    fireEvent.change(await screen.findByLabelText('Command'), {
+      target: { value: 'mcp-server-shortcut' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Create' }));
+
+    await waitFor(() => expect(seam.onCreate).toHaveBeenCalledOnce());
+    const submitted = seam.onCreate.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(submitted).toMatchObject({
+      name: 'transport-switch-server',
+      transport: 'stdio',
+      command: 'mcp-server-shortcut',
+      args: [],
+    });
+    expect(submitted).not.toHaveProperty('url');
+    expect(submitted).not.toHaveProperty('headers');
+    expect(submitted).not.toHaveProperty('auth');
+  });
+});
 
 describe('MCPServersTable open-dialog authority transitions', {
   timeout: AUTHORITY_TRANSITION_TIMEOUT,

@@ -9,7 +9,12 @@
  * rather than through a close/reopen that only approximates it.
  */
 
-import type { Branch, MCPCatalogCredentialRequirement, MCPCatalogEntry } from '@agor/core/types';
+import type {
+  Branch,
+  MCPCatalogCredentialRequirement,
+  MCPCatalogEntry,
+  SessionID,
+} from '@agor/core/types';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { type MCPServerCapabilityContext, POLICY_LOADING_HINT } from '../MCPServer/memberPolicy';
@@ -200,7 +205,99 @@ describe('CatalogDetailDrawer branch destination', () => {
       defaultBranchId: 'branch-1',
     });
 
-    expect(document.querySelector('.ant-drawer-content-wrapper')).toHaveStyle({ width: '480px' });
+    expect(document.querySelector('.ant-drawer-content-wrapper')).toHaveStyle({ width: '520px' });
+  });
+
+  it('keeps the catalog ID copyable inside collapsed technical details', async () => {
+    renderBranchDrawer({ branches: TWO_BRANCHES, defaultBranchId: 'branch-1' });
+
+    fireEvent.click(screen.getByText('Technical details'));
+    expect(await screen.findByRole('button', { name: 'Copy' })).toBeInTheDocument();
+  });
+});
+
+describe('CatalogDetailDrawer connected state', () => {
+  it('keeps one persistent live region and mutates its truthful OAuth state', () => {
+    const base = {
+      identityKey: 'user-admin',
+      entry: OAUTH_LINEAR,
+      open: true,
+      onClose: vi.fn(),
+      branches: BRANCHES,
+      branchesLoading: false,
+      branchesError: null,
+      defaultBranchId: 'branch-1',
+      connecting: false,
+      connectError: null,
+      connectCapability: ALLOWED,
+      policyPending: false,
+      policyPendingHint: POLICY_LOADING_HINT,
+      onConnect: vi.fn(),
+    };
+    const view = render(
+      <CatalogDetailDrawer
+        {...base}
+        success={{
+          sessionId: 'session-1' as SessionID,
+          authentication: 'pending',
+          reusedExistingServer: false,
+        }}
+      />
+    );
+    const liveRegion = screen.getByRole('status');
+    expect(liveRegion).toHaveTextContent('Connection status: Sign-in pending.');
+
+    view.rerender(
+      <CatalogDetailDrawer
+        {...base}
+        success={{
+          sessionId: 'session-1' as SessionID,
+          authentication: 'ready',
+          reusedExistingServer: false,
+        }}
+      />
+    );
+    expect(screen.getByRole('status')).toBe(liveRegion);
+    expect(liveRegion).toHaveTextContent('Connection status: Connected and ready.');
+  });
+
+  it('retains server context and focuses the truthful next step', async () => {
+    const openSession = vi.fn();
+    render(
+      <CatalogDetailDrawer
+        identityKey="user-admin"
+        entry={DEEPWIKI}
+        open
+        onClose={vi.fn()}
+        branches={BRANCHES}
+        branchesLoading={false}
+        branchesError={null}
+        defaultBranchId="branch-1"
+        connecting={false}
+        connectError={null}
+        connectCapability={ALLOWED}
+        policyPending={false}
+        policyPendingHint={POLICY_LOADING_HINT}
+        success={{
+          sessionId: 'session-1',
+          sessionTitle: 'Try DeepWiki',
+          branchName: 'mkt-slice',
+          authentication: 'ready',
+          reusedExistingServer: false,
+        }}
+        onOpenSession={openSession}
+        onConnect={vi.fn()}
+      />
+    );
+
+    expect(screen.getByText('Connected and ready')).toBeInTheDocument();
+    expect(screen.getByText(DEEPWIKI.benefit)).toBeInTheDocument();
+    expect(screen.queryByRole('checkbox')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Connect/ })).not.toBeInTheDocument();
+    const open = screen.getByRole('button', { name: 'Open session' });
+    await waitFor(() => expect(open).toHaveFocus());
+    fireEvent.click(open);
+    expect(openSession).toHaveBeenCalledWith('session-1');
   });
 });
 
@@ -421,25 +518,32 @@ describe('CatalogDetailDrawer connect capability', () => {
  *
  * The keys here are obvious fakes.
  */
-const DATADOG = {
+const GITHUB = {
   ...DEEPWIKI,
-  name: 'com.datadoghq/mcp',
-  title: 'Datadog',
-  permission_disclosure: 'Reads metrics, logs, traces, monitors, and incidents.',
-  website_url: 'https://docs.datadoghq.com/account_management/api-app-keys/',
+  name: 'io.github.github/github-mcp-server',
+  title: 'GitHub',
+  permission_disclosure: 'Reads repositories and issues you authorise.',
+  website_url: 'https://docs.github.com/authentication/keeping-your-account-and-data-secure/',
   auth_type: 'credentials',
   credentials: {
     scheme: 'bearer',
-    label: 'Personal access token',
-    acquisition_url: 'https://docs.datadoghq.com/mcp_server/setup/',
+    label: 'Fine-grained personal access token',
+    acquisition_url:
+      'https://docs.github.com/authentication/keeping-your-account-and-data-secure/managing-your-personal-access-tokens',
+    oauth_challenge_compatible: true,
   },
 } as unknown as MCPCatalogEntry;
 
 const SENTRY = {
-  ...DATADOG,
+  ...GITHUB,
   name: 'io.sentry/mcp',
   title: 'Sentry',
   permission_disclosure: 'Reads issues and events from the Sentry organisations you authorise.',
+  credentials: {
+    scheme: 'bearer',
+    label: 'Personal access token',
+    acquisition_url: 'https://docs.sentry.io/account/auth-tokens/',
+  },
 } as unknown as MCPCatalogEntry;
 
 function renderWithConnect(entry: MCPCatalogEntry) {
@@ -482,6 +586,17 @@ function renderWithConnect(entry: MCPCatalogEntry) {
     /** What `CatalogTab` does after a refusal that named a requirement. */
     answerFromEndpoint: (requirement: MCPCatalogCredentialRequirement) =>
       view.rerender(<CatalogDetailDrawer {...props(entry, true, requirement)} />),
+    succeed: () =>
+      view.rerender(
+        <CatalogDetailDrawer
+          {...props(entry)}
+          success={{
+            sessionId: '019fd25a-7065-75f8-b6e6-f1963f9817d6' as SessionID,
+            authentication: 'ready',
+            reusedExistingServer: false,
+          }}
+        />
+      ),
     replaceIdentity: (identityKey: string) =>
       view.rerender(<CatalogDetailDrawer {...props(entry, true, null, identityKey)} />),
   };
@@ -490,8 +605,27 @@ function renderWithConnect(entry: MCPCatalogEntry) {
 const keyField = () => screen.queryByPlaceholderText(/Paste your .* bearer access token/);
 
 describe('CatalogDetailDrawer API key', () => {
+  it('uses the catalog PAT terminology instead of calling GitHub credentials API keys', () => {
+    renderWithConnect(GITHUB);
+
+    expect(screen.getByText('Use your fine-grained personal access token')).toBeVisible();
+    expect(screen.queryByText('Use your API key')).not.toBeInTheDocument();
+  });
+
+  it('presents advisory no-account readiness without claiming a live check', () => {
+    renderWithConnect(DEEPWIKI);
+
+    expect(
+      screen.getByText(
+        'Catalog and saved connection data indicate no account is needed. Agor checks the endpoint when you connect.'
+      )
+    ).toBeVisible();
+    expect(screen.getByRole('alert')).toHaveClass('ant-alert-info');
+    expect(connectButton()).toHaveTextContent('Check & connect');
+  });
+
   it('erases same-entry consent and the pasted key on same-role identity replacement', () => {
-    const { onConnect, replaceIdentity } = renderWithConnect(DATADOG);
+    const { onConnect, replaceIdentity } = renderWithConnect(GITHUB);
     fireEvent.click(screen.getByRole('checkbox'));
     fireEvent.change(keyField() as HTMLElement, { target: { value: 'admin-a-private-key' } });
     expect(connectButton()).toBeEnabled();
@@ -506,13 +640,15 @@ describe('CatalogDetailDrawer API key', () => {
   });
 
   it('offers a key field for an entry that needs one, and gates connect on it', () => {
-    renderWithConnect(DATADOG);
+    renderWithConnect(GITHUB);
     fireEvent.click(screen.getByRole('checkbox'));
 
     // Acknowledged, branch chosen — and still not connectable, because the
     // endpoint will refuse an install without a key anyway. Finding that out
     // at the button beats finding it out from the daemon.
     expect(keyField()).toBeVisible();
+    expect(screen.getByText('Use your fine-grained personal access token')).toBeVisible();
+    expect(screen.queryByText('Use your API key')).not.toBeInTheDocument();
     expect(connectButton()).toBeDisabled();
 
     fireEvent.change(keyField() as HTMLElement, { target: { value: 'fake-key-1111' } });
@@ -521,7 +657,7 @@ describe('CatalogDetailDrawer API key', () => {
   });
 
   it('hands the pasted key to the connect callback', () => {
-    const { onConnect } = renderWithConnect(DATADOG);
+    const { onConnect } = renderWithConnect(GITHUB);
     fireEvent.click(screen.getByRole('checkbox'));
     fireEvent.change(keyField() as HTMLElement, { target: { value: '  fake-key-1111  ' } });
 
@@ -536,7 +672,7 @@ describe('CatalogDetailDrawer API key', () => {
   });
 
   it('does not enable connect for a field holding only whitespace', () => {
-    renderWithConnect(DATADOG);
+    renderWithConnect(GITHUB);
     fireEvent.click(screen.getByRole('checkbox'));
 
     fireEvent.change(keyField() as HTMLElement, { target: { value: '   ' } });
@@ -546,11 +682,11 @@ describe('CatalogDetailDrawer API key', () => {
 
   it('does not carry a key typed for one server to the next one shown', () => {
     // The hazard the field is keyed by entry to prevent: the drawer stays open
-    // across a change of entry, so a bare string would leave Datadog's key in
+    // across a change of entry, so a bare string would leave GitHub's key in
     // the box for a connect to Sentry.
-    const { show } = renderWithConnect(DATADOG);
+    const { show } = renderWithConnect(GITHUB);
     fireEvent.click(screen.getByRole('checkbox'));
-    fireEvent.change(keyField() as HTMLElement, { target: { value: 'fake-datadog-key' } });
+    fireEvent.change(keyField() as HTMLElement, { target: { value: 'fake-github-key' } });
 
     show(SENTRY);
 
@@ -563,9 +699,9 @@ describe('CatalogDetailDrawer API key', () => {
     // reveal toggle — but this component stays mounted for as long as the
     // Marketplace is open. Without an explicit discard the pasted key sat in
     // React state indefinitely and came back, revealable, on reopening.
-    const { setOpen } = renderWithConnect(DATADOG);
+    const { setOpen } = renderWithConnect(GITHUB);
     fireEvent.click(screen.getByRole('checkbox'));
-    fireEvent.change(keyField() as HTMLElement, { target: { value: 'fake-datadog-key' } });
+    fireEvent.change(keyField() as HTMLElement, { target: { value: 'fake-github-key' } });
 
     setOpen(false);
     setOpen(true);
@@ -578,25 +714,40 @@ describe('CatalogDetailDrawer API key', () => {
     // The other half of the rule. A connect that failed leaves the drawer open,
     // and a user who mistyped one character should not have to find the key
     // again to fix it.
-    renderWithConnect(DATADOG);
+    renderWithConnect(GITHUB);
     fireEvent.click(screen.getByRole('checkbox'));
-    fireEvent.change(keyField() as HTMLElement, { target: { value: 'fake-datadog-key' } });
+    fireEvent.change(keyField() as HTMLElement, { target: { value: 'fake-github-key' } });
 
-    expect(keyField()).toHaveValue('fake-datadog-key');
+    expect(keyField()).toHaveValue('fake-github-key');
     expect(connectButton()).toBeEnabled();
+  });
+
+  it('discards the pasted key while the successful next step remains on screen', () => {
+    const { succeed, answerFromEndpoint } = renderWithConnect(GITHUB);
+    fireEvent.click(screen.getByRole('checkbox'));
+    fireEvent.change(keyField() as HTMLElement, { target: { value: 'fake-github-key' } });
+
+    succeed();
+    expect(screen.getByText('Connected and ready')).toBeInTheDocument();
+    expect(keyField()).toBeNull();
+
+    // If the view returns to a credential form, the discarded value must not
+    // come back from React state.
+    answerFromEndpoint('required');
+    expect(keyField()).toHaveValue('');
   });
 
   it('points at the vendor’s own page for where to get a key', () => {
     // "API key" is ambiguous on a page that also mentions Agor, and without a
     // pointer the answer is a search engine.
-    renderWithConnect(DATADOG);
+    renderWithConnect(GITHUB);
 
     const link = screen.getByRole('link', { name: /Where to find it/ });
-    expect(link).toHaveAttribute('href', DATADOG.credentials?.acquisition_url);
+    expect(link).toHaveAttribute('href', GITHUB.credentials?.acquisition_url);
   });
 
   it('keeps the prescribed bearer field when the endpoint confirms credentials', () => {
-    const { answerFromEndpoint } = renderWithConnect(DATADOG);
+    const { answerFromEndpoint } = renderWithConnect(GITHUB);
     fireEvent.click(screen.getByRole('checkbox'));
     answerFromEndpoint('required');
 
@@ -609,7 +760,7 @@ describe('CatalogDetailDrawer API key', () => {
   it('sends the key on the retry the endpoint asked for', () => {
     // The whole point of one extra round trip: the second attempt carries what
     // the first was refused for lacking.
-    const { answerFromEndpoint, onConnect } = renderWithConnect(DATADOG);
+    const { answerFromEndpoint, onConnect } = renderWithConnect(GITHUB);
     fireEvent.click(screen.getByRole('checkbox'));
     answerFromEndpoint('required');
     fireEvent.change(keyField() as HTMLElement, { target: { value: 'fake-key-1111' } });
@@ -625,9 +776,9 @@ describe('CatalogDetailDrawer API key', () => {
     // The other direction: the entry says `credentials`, the vendor has opened
     // the endpoint up, and the daemon refuses every keyed request. The button
     // was unreachable because it demanded a key that guaranteed refusal.
-    const { answerFromEndpoint } = renderWithConnect(DATADOG);
+    const { answerFromEndpoint } = renderWithConnect(GITHUB);
     fireEvent.click(screen.getByRole('checkbox'));
-    fireEvent.change(keyField() as HTMLElement, { target: { value: 'fake-datadog-key' } });
+    fireEvent.change(keyField() as HTMLElement, { target: { value: 'fake-github-key' } });
 
     answerFromEndpoint('not_accepted');
 
@@ -635,13 +786,36 @@ describe('CatalogDetailDrawer API key', () => {
     expect(connectButton()).toBeEnabled();
   });
 
+  it('updates technical authentication from the live endpoint instead of stale metadata', async () => {
+    const { answerFromEndpoint } = renderWithConnect(GITHUB);
+    answerFromEndpoint('not_accepted');
+
+    fireEvent.click(screen.getByText('Technical details'));
+    expect(await screen.findByText('No credential accepted · Live endpoint check')).toBeVisible();
+    expect(screen.queryByText('Bearer credential')).not.toBeInTheDocument();
+  });
+
+  it('does not open a stale catalog OAuth popup after the endpoint confirms no account', () => {
+    const open = vi.spyOn(window, 'open');
+    const { answerFromEndpoint, onConnect } = renderWithConnect(OAUTH_LINEAR);
+    answerFromEndpoint('not_accepted');
+    fireEvent.click(screen.getByRole('checkbox'));
+    fireEvent.click(connectButton());
+
+    expect(open).not.toHaveBeenCalled();
+    expect(onConnect).toHaveBeenCalledWith(
+      expect.not.objectContaining({ oauthPopup: expect.anything() })
+    );
+    open.mockRestore();
+  });
+
   it('does not send — or keep — a key the endpoint refused to take', () => {
     // Hiding the field while still holding what was typed in it would be the
     // retention bug one state further along, and submitting it would repeat the
     // refusal the retry exists to escape.
-    const { answerFromEndpoint, onConnect } = renderWithConnect(DATADOG);
+    const { answerFromEndpoint, onConnect } = renderWithConnect(GITHUB);
     fireEvent.click(screen.getByRole('checkbox'));
-    fireEvent.change(keyField() as HTMLElement, { target: { value: 'fake-datadog-key' } });
+    fireEvent.change(keyField() as HTMLElement, { target: { value: 'fake-github-key' } });
     answerFromEndpoint('not_accepted');
 
     fireEvent.click(connectButton());
@@ -673,7 +847,7 @@ describe('CatalogDetailDrawer API key', () => {
   it('still removes the whole form for an entry the marketplace cannot install', () => {
     // `blocked` and `api-key` are different answers. The key field must not
     // resurrect a form for an entry with no endpoint to send anything to.
-    renderWithConnect({ ...DATADOG, remote_url: undefined, has_remote: false } as MCPCatalogEntry);
+    renderWithConnect({ ...GITHUB, remote_url: undefined, has_remote: false } as MCPCatalogEntry);
 
     expect(keyField()).toBeNull();
     expect(screen.queryByRole('button', { name: /Connect/ })).toBeNull();

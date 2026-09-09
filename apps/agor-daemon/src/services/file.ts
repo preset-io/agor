@@ -16,10 +16,15 @@ import type {
   QueryParams,
   RBACParams,
   ServiceMethods,
+  UserID,
   UserRole,
 } from '@agor/core/types';
 import { ROLES } from '@agor/core/types';
 import { ensureMinimumRole } from '../utils/authorization';
+import {
+  type BranchExecutorSandboxMounts,
+  resolveBranchExecutorSandboxMounts,
+} from '../utils/branch-executor-sandbox.js';
 import { ensureBranchWorkspaceAccess } from '../utils/branch-workspace-path.js';
 import { resolveDelegatedExecutionHomeKey } from '../utils/executor-delegated-home.js';
 import { getDaemonUrl, requestExecutor } from '../utils/spawn-executor.js';
@@ -60,7 +65,8 @@ export class FileService
       resolved.userId,
       resolved.delegatedHomeKey,
       resolved.branchPath,
-      resolved.fsAccess
+      resolved.fsAccess,
+      resolved.sandboxMounts
     );
     if (!result.success) {
       throw new Error(
@@ -83,6 +89,7 @@ export class FileService
       resolved.delegatedHomeKey,
       resolved.branchPath,
       resolved.fsAccess,
+      resolved.sandboxMounts,
       {
         filePath: id.toString(),
       }
@@ -102,6 +109,7 @@ export class FileService
     delegatedHomeKey: string | undefined,
     branchPath: string,
     fsAccess: 'read' | 'write',
+    sandboxMounts: BranchExecutorSandboxMounts,
     extraParams: Record<string, unknown> = {}
   ) {
     const sessionToken = await issueExecutorCommandToken(this.app, command, userId, branchId);
@@ -115,6 +123,7 @@ export class FileService
           ...extraParams,
           cwd: branchPath,
           principalBranchAccess: fsAccess,
+          ...sandboxMounts,
         },
       },
       {
@@ -156,12 +165,22 @@ export class FileService
         userId,
         this.app.get('config')
       );
+      // Branch browsing is stateless executor work. Its private home belongs
+      // to the authenticated caller, never the branch or Session owner.
+      const sandboxMounts = await resolveBranchExecutorSandboxMounts({
+        config: this.app.get('config'),
+        tenantId,
+        executionUserId: userId as UserID,
+        branch,
+        db: this.db,
+      });
       return {
         branchId: branch.branch_id,
         branchPath: branch.path,
         delegatedHomeKey,
         fsAccess,
         userId,
+        sandboxMounts,
       };
     });
   }

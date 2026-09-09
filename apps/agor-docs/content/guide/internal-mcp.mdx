@@ -226,6 +226,24 @@ Ask the client to call `agor_search_tools` with no arguments, then
 `agor_boards_list` with `{ "limit": 1 }`. A successful response should show
 tool domains and one accessible board page.
 
+For positioned branches/cards, use `agor_boards_get` with `includeEntities: true`.
+Optional `entityZoneId`, `entityType`, `entitiesLimit`, and `entitiesSkip` filter
+and page the authorized entities. Archived branches are excluded before counting
+and paging unless `includeArchived: true`; card entities are preserved. Omitting
+the limit retains the existing all-matched-entities behavior, so prefer an explicit
+limit for large boards. `entities_pagination.total` counts the filtered visible
+entities, not just the returned page.
+
+The execution facade reports malformed target-tool arguments with
+`code: "invalid_tool_arguments"`, `validation_stage: "tool_input"`, and bounded
+field/code `issues`. Fetch `agor_get_tool_details`, correct the indicated fields,
+and retry. A `service_validation_failed` response instead identifies downstream
+service validation; it does not by itself mean the agent supplied a bad payload.
+If the payload matches the published tool schema, report the tool/service mismatch
+rather than retrying unchanged. These failures retain the `error`/`tool` fields
+and MCP `isError: true`; diagnostic issues omit input values. Direct tool calls
+retain the MCP SDK's native input-validation errors.
+
 - **401:** confirm `AGOR_API_KEY` exists in the environment that launched the
   client, the header is exactly `X-API-Key`, and the key has not been revoked.
   Re-register if the client stored a literal secret or an unexpanded shell

@@ -1,4 +1,8 @@
+import { assertSafeOAuthUrl } from '../utils/safe-outbound-fetch';
+import { isPublicHttpUrl } from '../utils/url';
+import { assertAsyncEnvironmentCommandConfig } from './environment-commands';
 import {
+  hasContainedClaudeRuntimeCredentials,
   hasCrossReplicaExecutorCredentialLock,
   hasExactUserExecutorCredentialHome,
   hasTenantSafeExecutorCredentialHome,
@@ -73,18 +77,25 @@ export type ResolvedDeploymentConfig =
         taskRuntimeReconciliation: true;
         knowledgeEmbeddingIndexer: true;
         statelessMcp: true;
+        /** Browser OAuth requires a trusted, public HTTPS callback origin. */
+        mcpOAuth: boolean;
         completionCallbackDurableAdmission: true;
         completionCallbackPreAdmissionRecovery: false;
         widgetResolutionDurableClaim: true;
         githubInstall: true;
         codexCredentialFiles: boolean;
         codexDeviceAuth: boolean;
+        /** Claude OAuth + logout generation-fenced exact-user mutation authority. */
+        claudeOAuth: boolean;
+        claudeAuth: boolean;
         processAffineAuth: false;
         gatewayListeners: true;
         gatewayOutboundExactlyOnce: false;
         environmentHealthMonitor: true;
         artifactRuntimeIntrospection: false;
       };
+      /** Exact startup-resolved redirect used whenever mcpOAuth is advertised. */
+      mcpOAuthCallbackUrl: string | null;
       redis: ResolvedRedisSettings;
       environmentHealthMonitor: ResolvedEnvironmentHealthMonitorSettings;
       executorStorage: ResolvedExecutorStorageSettings;
@@ -94,6 +105,13 @@ export type ResolvedDeploymentConfig =
     };
 
 type DeploymentEnv = Record<string, string | undefined>;
+
+export interface ResolvedMcpOAuthCallbackOrigin {
+  /** Safe for a standalone daemon, including the deliberate loopback HTTP exception. */
+  standaloneCallbackUrl: string | null;
+  /** Safe for HA/public ingress: globally routable HTTPS only. */
+  haCallbackUrl: string | null;
+}
 
 function envInteger(env: DeploymentEnv, name: string): number | undefined {
   const value = env[name];
@@ -125,6 +143,64 @@ function envBoolean(env: DeploymentEnv, name: string): boolean | undefined {
   if (value === 'true') return true;
   if (value === 'false') return false;
   throw new Error(`Config error: ${name} must be true or false`);
+}
+
+/**
+ * HA browser OAuth is advertised only when its redirect origin is explicitly
+ * public and HTTPS. `daemon.public_url` is intentionally excluded: it is the
+ * executor/backend callback URL and may be an internal service address.
+ */
+export function resolveMcpOAuthCallbackOrigin(
+  config: AgorConfig,
+  env: DeploymentEnv = process.env
+): ResolvedMcpOAuthCallbackOrigin {
+  const raw = env.AGOR_BASE_URL ?? config.daemon?.base_url ?? config.ui?.base_url;
+  if (!raw) return { standaloneCallbackUrl: null, haCallbackUrl: null };
+
+  let configured: URL;
+  try {
+    configured = new URL(raw.trim());
+  } catch {
+    return { standaloneCallbackUrl: null, haCallbackUrl: null };
+  }
+
+  if (configured.protocol !== 'http:' && configured.protocol !== 'https:') {
+    return { standaloneCallbackUrl: null, haCallbackUrl: null };
+  }
+
+  // A leading slash intentionally makes the provider callback an origin-root
+  // route even when an old base_url contains a path. Resolve it once here;
+  // OAuth runtime code must never reload configuration or rebuild this URL.
+  const callbackUrl = new URL('/mcp-servers/oauth-callback', configured).toString();
+  let standaloneCallbackUrl: string | null = null;
+  try {
+    assertSafeOAuthUrl(callbackUrl, { allowLocalhostHttp: true });
+    standaloneCallbackUrl = callbackUrl;
+  } catch {
+    // Unsafe explicit configuration disables the flow rather than turning an
+    // internal/private endpoint into a provider callback capability.
+  }
+
+  const haCallbackUrl =
+    standaloneCallbackUrl &&
+    configured.protocol === 'https:' &&
+    isPublicHttpUrl(configured.toString()) &&
+    !configured.username &&
+    !configured.password &&
+    !configured.search &&
+    !configured.hash
+      ? callbackUrl
+      : null;
+
+  return { standaloneCallbackUrl, haCallbackUrl };
+}
+
+/** Backward-compatible capability predicate backed by the shared resolver. */
+export function hasSafeHaMcpOAuthPublicOrigin(
+  config: AgorConfig,
+  env: DeploymentEnv = process.env
+): boolean {
+  return resolveMcpOAuthCallbackOrigin(config, env).haCallbackUrl !== null;
 }
 
 function positiveInteger(value: number, path: string): number {
@@ -257,7 +333,8 @@ function effectiveDatabaseDialect(config: AgorConfig, env: DeploymentEnv): 'sqli
 export function resolveDeploymentConfig(
   config: AgorConfig,
   env: DeploymentEnv = process.env,
-  runtimeDatabaseUrl?: string
+  runtimeDatabaseUrl?: string,
+  oauthCallbackOrigin: ResolvedMcpOAuthCallbackOrigin = resolveMcpOAuthCallbackOrigin(config, env)
 ): ResolvedDeploymentConfig {
   const mode = (env.AGOR_DEPLOYMENT_MODE ??
     config.deployment?.mode ??
@@ -362,11 +439,14 @@ export function resolveDeploymentConfig(
       'Config error: HA web terminals require execution_topology shared-local; external terminal runtimes do not yet have owner-affine routing'
     );
   }
-  if (config.execution?.managed_envs_execution_mode !== 'webhook-only') {
-    throw new Error(
-      'Config error: HA currently requires execution.managed_envs_execution_mode: webhook-only'
-    );
-  }
+  assertAsyncEnvironmentCommandConfig({
+    ...config,
+    deployment: {
+      ...config.deployment,
+      mode: 'ha',
+      ha: { ...config.deployment?.ha, execution_topology: executionTopology },
+    },
+  });
 
   const executorStorage = config.execution?.executor_storage;
   if (
@@ -381,6 +461,8 @@ export function resolveDeploymentConfig(
   const tenantSafeCredentialHome = hasTenantSafeExecutorCredentialHome(config);
   const exactUserCredentialHome = hasExactUserExecutorCredentialHome(config);
   const crossReplicaCredentialLock = hasCrossReplicaExecutorCredentialLock(config);
+  const containedClaudeRuntimeCredentials =
+    executionTopology === 'shared-local' && hasContainedClaudeRuntimeCredentials(config);
   if (!tenantSafeCredentialHome) {
     throw new Error(
       'Config error: HA auth-resolved execution requires execution.executor_storage.user_home: persistent-per-user'
@@ -470,6 +552,7 @@ export function resolveDeploymentConfig(
       taskRuntimeReconciliation: true,
       knowledgeEmbeddingIndexer: true,
       statelessMcp: true,
+      mcpOAuth: oauthCallbackOrigin.haCallbackUrl !== null,
       completionCallbackDurableAdmission: true,
       completionCallbackPreAdmissionRecovery: false,
       widgetResolutionDurableClaim: true,
@@ -483,12 +566,25 @@ export function resolveDeploymentConfig(
       // deployment's intentional shared Unix identity would let users replace
       // each other's login. Admit only a concrete tenant/user-keyed route.
       codexDeviceAuth: exactUserCredentialHome && crossReplicaCredentialLock,
+      // Claude additionally requires concrete runtime containment: exact
+      // routing and a shared lock protect daemon writers, while the bubblewrap
+      // mask proves the provider runtime cannot mutate the canonical grant.
+      claudeOAuth:
+        exactUserCredentialHome && crossReplicaCredentialLock && containedClaudeRuntimeCredentials,
+      // Cleanup must remain available after a containment-policy downgrade so
+      // an operator can remove credentials written by the formerly-admitted
+      // configuration. It still requires local exact routing + writer lock.
+      claudeAuth:
+        executionTopology === 'shared-local' &&
+        exactUserCredentialHome &&
+        crossReplicaCredentialLock,
       processAffineAuth: false,
       gatewayListeners: true,
       gatewayOutboundExactlyOnce: false,
       environmentHealthMonitor: true,
       artifactRuntimeIntrospection: false,
     },
+    mcpOAuthCallbackUrl: oauthCallbackOrigin.haCallbackUrl,
     redis: {
       url,
       keyPrefix,

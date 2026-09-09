@@ -19,8 +19,10 @@ import type {
 } from './agentic-tool';
 import type { AgenticToolConfigurationReference } from './agentic-tool-preset';
 import type { ContextFilePath } from './context';
+import type { ChannelType } from './gateway';
 import type { BoardID, BranchID, SessionID, SessionRelationshipID, TaskID, UserID } from './id';
 import type { ScheduleID } from './schedule';
+import type { TaskStatus, TerminationCoordinationPendingCode } from './task';
 
 export const SessionStatus = {
   IDLE: 'idle',
@@ -34,6 +36,81 @@ export const SessionStatus = {
 } as const;
 
 export type SessionStatus = (typeof SessionStatus)[keyof typeof SessionStatus];
+
+/** Durable outcome reported by the authenticated Session Stop endpoint. */
+export const SESSION_STOP_OUTCOMES = [
+  'stopped',
+  'already_idle',
+  'pending',
+  'unverified',
+  'condition_changed',
+  'not_stoppable',
+  'force_failed',
+] as const;
+
+export type SessionStopOutcome = (typeof SESSION_STOP_OUTCOMES)[number];
+
+/** Authenticated Session Stop endpoint request. */
+export type SessionStopRequest =
+  | {
+      force_unverified?: false;
+      reason?: string;
+      expected_task_id?: TaskID;
+      task_id?: never;
+      termination_requested_at?: never;
+      confirmation?: never;
+    }
+  | {
+      force_unverified: true;
+      task_id: TaskID;
+      termination_requested_at: string;
+      confirmation: string;
+      reason?: never;
+      expected_task_id?: never;
+    };
+
+interface SessionStopResultBase {
+  reason?: string;
+  stoppedTaskId?: TaskID;
+  queuedTasksPreserved?: number;
+}
+
+/** Result returned by the authenticated Session Stop endpoint. */
+export type SessionStopResult =
+  | (SessionStopResultBase & {
+      success: true;
+      outcome: 'stopped' | 'already_idle';
+      status: typeof SessionStatus.IDLE;
+    })
+  | (SessionStopResultBase & {
+      /** The Stop claim is durable; a different HA coordination step owns containment. */
+      success: false;
+      outcome: 'pending';
+      status: typeof SessionStatus.STOPPING;
+      reason: string;
+      stoppedTaskId: TaskID;
+      pendingCode: TerminationCoordinationPendingCode;
+    })
+  | (SessionStopResultBase & {
+      success: false;
+      outcome: 'unverified';
+      status: typeof SessionStatus.STOPPING;
+      reason: string;
+      stoppedTaskId: TaskID;
+    })
+  | (SessionStopResultBase & {
+      success: false;
+      outcome: 'condition_changed' | 'not_stoppable';
+      status?: SessionStatus;
+      reason: string;
+    })
+  | {
+      /** Explicit owner/admin recovery; does not prove executor containment. */
+      success: true;
+      outcome: 'force_failed';
+      status: typeof TaskStatus.FAILED;
+      stoppedTaskId: TaskID;
+    };
 
 /**
  * Permission mode controls how agentic tools handle execution approvals
@@ -130,6 +207,17 @@ export function getDefaultPermissionMode(agenticTool: AgenticToolName): Permissi
   }
 }
 
+/**
+ * Durable SDK-state boundary for a session.
+ *
+ * This is stamped once when the session is created. It is deliberately not
+ * derived from the branch or the live deployment flag at prompt time: doing
+ * so would silently move a resumable SDK conversation between homes after an
+ * upgrade or configuration change.
+ */
+export const SESSION_SDK_HOME_SCOPES = ['execution_home', 'branch'] as const;
+export type SessionSdkHomeScope = (typeof SESSION_SDK_HOME_SCOPES)[number];
+
 export interface Session {
   /** Unique session identifier (UUIDv7) */
   session_id: SessionID;
@@ -162,9 +250,22 @@ export interface Session {
    * - Changing it would break access to existing SDK session state
    * - If the delegated home key changes or disappears, resumable state may be unreachable
    *
-   * Before prompting, the creator's current key is checked against the stamp.
+   * Before prompting an execution-home Session, the creator's current key is
+   * checked against the stamp. Branch-home Sessions execute as the current
+   * prompt actor and do not consult this historical compatibility key.
    */
   unix_username: string | null;
+
+  /**
+   * Immutable owner of this session's resumable SDK/config state.
+   *
+   * `execution_home` preserves the historical behavior: the session resumes
+   * from the execution home stamped by `unix_username`. `branch` uses the
+   * branch-owned SDK home and the current prompt actor's execution identity.
+   * Existing rows are backfilled to `execution_home`; only newly admitted
+   * sessions may opt into `branch`.
+   */
+  sdk_home_scope: SessionSdkHomeScope;
 
   /** Branch ID - all sessions must be associated with an Agor-managed branch */
   branch_id: BranchID;
@@ -299,6 +400,8 @@ export interface Session {
    * Access in templates: {{ session.context.teamName }}
    */
   custom_context?: Record<string, unknown> & {
+    /** Server-owned provenance for sessions admitted by a gateway channel. */
+    gateway_source?: GatewaySource;
     /**
      * Scheduled run metadata (populated by scheduler)
      *
@@ -521,15 +624,17 @@ export type SchedulerInitializationFailureCode =
 /** Session data accepted before defaults and configuration references are materialized. */
 export type CreateSessionInput = Omit<
   Partial<Session>,
-  'agentic_tool' | 'agentic_tool_preset_id' | 'model_config'
+  'agentic_tool' | 'agentic_tool_preset_id' | 'model_config' | 'sdk_home_scope'
 > & {
   agentic_tool?: AgenticToolName;
   agentic_tool_preset_id?: AgenticToolConfigurationReference | null;
   model_config?: Partial<NonNullable<Session['model_config']>> | null;
+  /** MCP server IDs to attach in the same create call (issue #2629). */
+  mcpServerIds?: string[];
 };
 
 /** Session patch semantics: omit/undefined preserves, string sets, null clears. */
-export type SessionUpdate = Omit<Partial<Session>, 'sdk_session_id'> & {
+export type SessionUpdate = Omit<Partial<Session>, 'sdk_session_id' | 'sdk_home_scope'> & {
   sdk_session_id?: string | null;
 };
 
@@ -608,7 +713,7 @@ export interface SessionRelationship {
 export interface GatewaySource {
   channel_id: string;
   channel_name: string;
-  channel_type: string;
+  channel_type: ChannelType;
   thread_id: string;
   /** GitHub-specific: "owner/repo" format */
   github_repo?: string;

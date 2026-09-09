@@ -1,4 +1,4 @@
-import type { AgenticToolName, AgorClient, User } from '@agor-live/client';
+import type { AgenticToolName, AgorClient, UpdateUserInput, User } from '@agor-live/client';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { App as AntApp, ConfigProvider, type FormInstance, Grid } from 'antd';
 import { type ReactNode, useState } from 'react';
@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ConnectionProvider } from '../../contexts/ConnectionContext';
 import { __resetAuthConfigForTests, __setAuthConfigForTests } from '../../hooks/useAuthConfig';
 import { agorStore } from '../../store/agorStore';
-import { UserSettingsModal } from './UserSettingsModal';
+import { UserSettingsModal, type UserSettingsModalProps } from './UserSettingsModal';
 
 const { syncGroupsForUser } = vi.hoisted(() => ({ syncGroupsForUser: vi.fn() }));
 vi.mock('./groupMembershipSync', () => ({ syncGroupsForUser }));
@@ -159,7 +159,7 @@ function renderWithApp(children: ReactNode) {
 
 function makeUser(overrides: Partial<User> = {}): User {
   return {
-    user_id: 'user-1',
+    user_id: 'user-1' as User['user_id'],
     email: 'admin@agor.live',
     name: 'Admin',
     role: 'member',
@@ -175,14 +175,68 @@ function makeUser(overrides: Partial<User> = {}): User {
 const ASYNC = { timeout: 10_000 };
 
 describe('UserSettingsModal', { timeout: 60_000 }, () => {
+  it('keeps deferred resume distinct from destructive restart', async () => {
+    const onReopenOnboarding = vi.fn(async () => undefined);
+    const user = makeUser({
+      onboarding_completed: false,
+      preferences: {
+        onboarding: {
+          boardId: '01933e4a-7b89-7c35-a8f3-9d2e1c4b5a6f',
+          deferredAt: '2026-08-29T12:00:00.000Z',
+        },
+      },
+    });
+
+    renderWithApp(
+      <UserSettingsModal
+        open
+        onClose={vi.fn()}
+        user={user}
+        currentUser={user}
+        client={null}
+        onUpdate={vi.fn()}
+        onReopenOnboarding={onReopenOnboarding}
+      />
+    );
+
+    expect(screen.getByRole('button', { name: 'Resume onboarding' })).toBeInTheDocument();
+    expect(screen.getByText(/from your saved progress/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Restart from beginning' })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Resume onboarding' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Resume' }));
+    await waitFor(() =>
+      expect(onReopenOnboarding).toHaveBeenCalledWith('resume', expect.any(Function))
+    );
+  });
+
+  it('offers a from-scratch restart when onboarding is not deferred', () => {
+    const user = makeUser({ onboarding_completed: true });
+
+    renderWithApp(
+      <UserSettingsModal
+        open
+        onClose={vi.fn()}
+        user={user}
+        currentUser={user}
+        client={null}
+        onUpdate={vi.fn()}
+        onReopenOnboarding={vi.fn()}
+      />
+    );
+
+    expect(screen.getByRole('button', { name: 'Restart onboarding' })).toBeInTheDocument();
+    expect(screen.getByText(/from the beginning/i)).toBeInTheDocument();
+  });
+
   it('fails closed when an admin opens a superadmin settings modal', () => {
     const currentAdmin = makeUser({
-      user_id: 'admin-1',
+      user_id: 'admin-1' as User['user_id'],
       email: 'admin@example.test',
       role: 'admin',
     });
     const targetSuperadmin = makeUser({
-      user_id: 'superadmin-1',
+      user_id: 'superadmin-1' as User['user_id'],
       email: 'superadmin@example.test',
       role: 'superadmin',
     });
@@ -209,12 +263,12 @@ describe('UserSettingsModal', { timeout: 60_000 }, () => {
 
   it('lets a superadmin manage an admin while locking self role changes', () => {
     const currentSuperadmin = makeUser({
-      user_id: 'superadmin-1',
+      user_id: 'superadmin-1' as User['user_id'],
       email: 'superadmin@example.test',
       role: 'superadmin',
     });
     const targetAdmin = makeUser({
-      user_id: 'admin-1',
+      user_id: 'admin-1' as User['user_id'],
       email: 'admin@example.test',
       role: 'admin',
     });
@@ -254,7 +308,7 @@ describe('UserSettingsModal', { timeout: 60_000 }, () => {
         codex: { permissionMode: 'ask' },
       },
     });
-    const onUpdate = vi.fn();
+    const onUpdate = vi.fn<NonNullable<UserSettingsModalProps['onUpdate']>>();
     const onClose = vi.fn();
 
     renderWithApp(
@@ -276,7 +330,7 @@ describe('UserSettingsModal', { timeout: 60_000 }, () => {
 
     fireEvent.click(screen.getByRole('menuitem', { name: /codex/i }));
     await screen.findByRole('heading', { name: 'Codex' });
-    fireEvent.click(screen.getByText('Session defaults'));
+    fireEvent.click(screen.getByRole('tab', { name: 'Session defaults' }));
     fireEvent.click(screen.getByLabelText('codex allow-all'));
 
     fireEvent.click(screen.getByRole('button', { name: /^save$/i }));
@@ -324,6 +378,76 @@ describe('UserSettingsModal', { timeout: 60_000 }, () => {
     expect(screen.getByText(/Sign in with your ChatGPT account/i)).toBeInTheDocument();
   });
 
+  it.each([
+    [
+      'an explicit none source with a dormant API key',
+      {
+        agentic_auth_methods: { 'claude-code': 'api_key' as const },
+        agentic_credential_sources: { 'claude-code': 'none' as const },
+        agentic_tools: { 'claude-code': { ANTHROPIC_API_KEY: true } },
+      },
+    ],
+    [
+      'a legacy empty subscription marker',
+      { agentic_auth_methods: { 'claude-code': 'subscription' as const } },
+    ],
+  ])('shows Claude as disconnected for %s', async (_case, overrides) => {
+    const user = makeUser(overrides);
+    renderWithApp(
+      <UserSettingsModal
+        open
+        onClose={vi.fn()}
+        user={user}
+        currentUser={user}
+        client={null}
+        onUpdate={vi.fn()}
+      />
+    );
+
+    const claudeItem = screen.getByRole('menuitem', { name: /^claude code/i });
+    expect(claudeItem).toHaveTextContent('Not connected');
+  });
+
+  it('shows an explicit managed-file Claude source as connected without a stored env token', () => {
+    const user = makeUser({
+      agentic_auth_methods: { 'claude-code': 'subscription' },
+      agentic_credential_sources: { 'claude-code': 'managed_file' },
+    });
+    renderWithApp(
+      <UserSettingsModal
+        open
+        onClose={vi.fn()}
+        user={user}
+        currentUser={user}
+        client={null}
+        onUpdate={vi.fn()}
+      />
+    );
+
+    expect(screen.getByRole('menuitem', { name: /^claude code/i })).toHaveTextContent('Connected');
+  });
+
+  it('shows a legacy API-method row as connected when both credential families are stored', () => {
+    const user = makeUser({
+      agentic_auth_methods: { 'claude-code': 'api_key' },
+      agentic_tools: {
+        'claude-code': { ANTHROPIC_API_KEY: true, CLAUDE_CODE_OAUTH_TOKEN: true },
+      },
+    });
+    renderWithApp(
+      <UserSettingsModal
+        open
+        onClose={vi.fn()}
+        user={user}
+        currentUser={user}
+        client={null}
+        onUpdate={vi.fn()}
+      />
+    );
+
+    expect(screen.getByRole('menuitem', { name: /^claude code/i })).toHaveTextContent('Connected');
+  });
+
   it('saves a Claude model alias before closing', async () => {
     // Stale `user` prop that never reflects the save — mirrors the realtime lag
     // between the resolved patch and the Feathers `patched` event that refreshes
@@ -337,7 +461,7 @@ describe('UserSettingsModal', { timeout: 60_000 }, () => {
         },
       },
     });
-    const onUpdate = vi.fn(async () => {});
+    const onUpdate = vi.fn<NonNullable<UserSettingsModalProps['onUpdate']>>(async () => {});
     const onClose = vi.fn();
 
     renderWithApp(
@@ -385,7 +509,7 @@ describe('UserSettingsModal', { timeout: 60_000 }, () => {
 
   it('saves a new password from the Security panel and closes from the footer', async () => {
     const user = makeUser({ role: 'member', unix_username: 'member-home' });
-    const onUpdate = vi.fn(async () => {});
+    const onUpdate = vi.fn<NonNullable<UserSettingsModalProps['onUpdate']>>(async () => {});
     const onClose = vi.fn();
 
     renderWithApp(
@@ -455,7 +579,7 @@ describe('UserSettingsModal', { timeout: 60_000 }, () => {
       })
     );
     const user = makeUser({ role: 'admin' });
-    const onUpdate = vi.fn(async () => {});
+    const onUpdate = vi.fn<NonNullable<UserSettingsModalProps['onUpdate']>>(async () => {});
 
     renderWithApp(
       <UserSettingsModal
@@ -497,11 +621,10 @@ describe('UserSettingsModal', { timeout: 60_000 }, () => {
 
   it('keeps the modal open when saving Profile settings fails', async () => {
     const user = makeUser();
-    const onUpdate = vi.fn(async () => {
+    const onUpdate = vi.fn<NonNullable<UserSettingsModalProps['onUpdate']>>(async () => {
       throw new Error('save failed');
     });
     const onClose = vi.fn();
-    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
 
     renderWithApp(
       <UserSettingsModal
@@ -518,20 +641,17 @@ describe('UserSettingsModal', { timeout: 60_000 }, () => {
 
     await waitFor(() => {
       expect(onUpdate).toHaveBeenCalledTimes(1);
-      expect(consoleError).toHaveBeenCalled();
+      expect(screen.getByRole('alert')).toHaveTextContent('save failed');
     }, ASYNC);
     expect(onClose).not.toHaveBeenCalled();
-
-    consoleError.mockRestore();
   });
 
   it('keeps the modal open when saving Preferences settings fails', async () => {
     const user = makeUser();
-    const onUpdate = vi.fn(async () => {
+    const onUpdate = vi.fn<NonNullable<UserSettingsModalProps['onUpdate']>>(async () => {
       throw new Error('save failed');
     });
     const onClose = vi.fn();
-    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
 
     renderWithApp(
       <UserSettingsModal
@@ -550,11 +670,9 @@ describe('UserSettingsModal', { timeout: 60_000 }, () => {
 
     await waitFor(() => {
       expect(onUpdate).toHaveBeenCalledTimes(1);
-      expect(consoleError).toHaveBeenCalled();
+      expect(screen.getByRole('alert')).toHaveTextContent('save failed');
     }, ASYNC);
     expect(onClose).not.toHaveBeenCalled();
-
-    consoleError.mockRestore();
   });
 
   it('keeps the Env Vars section selected after saving and receiving updated user props', async () => {
@@ -629,8 +747,8 @@ describe('UserSettingsModal', { timeout: 60_000 }, () => {
   });
 
   it('shows the target-user identity and admin-only access when an admin edits another user', async () => {
-    const admin = makeUser({ user_id: 'admin-1', name: 'Ada', role: 'admin' });
-    const target = makeUser({ user_id: 'user-2', name: 'Bob', role: 'member' });
+    const admin = makeUser({ user_id: 'admin-1' as User['user_id'], name: 'Ada', role: 'admin' });
+    const target = makeUser({ user_id: 'user-2' as User['user_id'], name: 'Bob', role: 'member' });
 
     renderWithApp(
       <UserSettingsModal
@@ -654,9 +772,9 @@ describe('UserSettingsModal', { timeout: 60_000 }, () => {
   });
 
   it('hides caller-scoped Codex ChatGPT controls when an admin edits another user', async () => {
-    const admin = makeUser({ user_id: 'admin-1', name: 'Ada', role: 'admin' });
+    const admin = makeUser({ user_id: 'admin-1' as User['user_id'], name: 'Ada', role: 'admin' });
     const target = makeUser({
-      user_id: 'user-2',
+      user_id: 'user-2' as User['user_id'],
       name: 'Bob',
       agentic_auth_methods: { codex: 'subscription' },
     });
@@ -815,7 +933,7 @@ describe('UserSettingsModal', { timeout: 60_000 }, () => {
 
   it('flushes edits from a panel the user navigated away from (no data loss)', async () => {
     const user = makeUser();
-    const onUpdate = vi.fn(async () => {});
+    const onUpdate = vi.fn<NonNullable<UserSettingsModalProps['onUpdate']>>(async () => {});
     const onClose = vi.fn();
 
     renderWithApp(
@@ -848,7 +966,7 @@ describe('UserSettingsModal', { timeout: 60_000 }, () => {
 
   it('flushes a dirty main-panel edit when saving from a provider tab', async () => {
     const user = makeUser();
-    const onUpdate = vi.fn(async () => {});
+    const onUpdate = vi.fn<NonNullable<UserSettingsModalProps['onUpdate']>>(async () => {});
     const onClose = vi.fn();
 
     renderWithApp(
@@ -868,10 +986,12 @@ describe('UserSettingsModal', { timeout: 60_000 }, () => {
     await screen.findByRole('heading', { name: 'Claude Code' });
     fireEvent.click(screen.getByRole('button', { name: /^save$/i }));
 
-    // The provider Save path must still commit the dirty Profile edit.
+    // All panels share one patch (including password edits that reauthenticate).
     await waitFor(() => {
       expect(onUpdate.mock.calls.some(([, patch]) => patch?.name === 'Renamed')).toBe(true);
     }, ASYNC);
+    expect(onUpdate).toHaveBeenCalledTimes(1);
+    expect(onUpdate.mock.calls[0][1]).toHaveProperty('default_agentic_selection');
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
@@ -887,7 +1007,7 @@ describe('UserSettingsModal', { timeout: 60_000 }, () => {
       },
       default_mcp_server_ids: [],
     });
-    const onUpdate = vi.fn(async () => {});
+    const onUpdate = vi.fn<NonNullable<UserSettingsModalProps['onUpdate']>>(async () => {});
     const onClose = vi.fn();
 
     renderWithApp(
@@ -911,7 +1031,7 @@ describe('UserSettingsModal', { timeout: 60_000 }, () => {
 
     fireEvent.click(screen.getByRole('menuitem', { name: /codex/i }));
     await screen.findByRole('heading', { name: 'Codex' });
-    fireEvent.click(screen.getByText('Session defaults'));
+    fireEvent.click(screen.getByRole('tab', { name: 'Session defaults' }));
     fireEvent.click(await screen.findByRole('button', { name: 'pick-mcp' }));
 
     fireEvent.click(screen.getByRole('button', { name: /^save$/i }));
@@ -960,8 +1080,8 @@ describe('UserSettingsModal', { timeout: 60_000 }, () => {
       },
     } as unknown as AgorClient;
 
-    const admin = makeUser({ user_id: 'admin-1', name: 'Ada', role: 'admin' });
-    const target = makeUser({ user_id: 'user-2', name: 'Bob', role: 'member' });
+    const admin = makeUser({ user_id: 'admin-1' as User['user_id'], name: 'Ada', role: 'admin' });
+    const target = makeUser({ user_id: 'user-2' as User['user_id'], name: 'Bob', role: 'member' });
 
     renderWithApp(
       <UserSettingsModal
@@ -983,11 +1103,22 @@ describe('UserSettingsModal', { timeout: 60_000 }, () => {
   });
 
   it('cancels group sync and onClose when caller identity changes during a multi-step save', async () => {
-    const adminA = makeUser({ user_id: 'admin-a', email: 'a@example.test', role: 'admin' });
-    const adminB = makeUser({ user_id: 'admin-b', email: 'b@example.test', role: 'admin' });
-    const target = makeUser({ user_id: 'target-user', email: 'target@example.test' });
+    const adminA = makeUser({
+      user_id: 'admin-a' as User['user_id'],
+      email: 'a@example.test',
+      role: 'admin',
+    });
+    const adminB = makeUser({
+      user_id: 'admin-b' as User['user_id'],
+      email: 'b@example.test',
+      role: 'admin',
+    });
+    const target = makeUser({
+      user_id: 'target-user' as User['user_id'],
+      email: 'target@example.test',
+    });
     let resolveUpdate: (() => void) | undefined;
-    const onUpdate = vi.fn(
+    const onUpdate = vi.fn<NonNullable<UserSettingsModalProps['onUpdate']>>(
       () =>
         new Promise<void>((resolve) => {
           resolveUpdate = resolve;
@@ -1066,7 +1197,7 @@ describe('UserSettingsModal', { timeout: 60_000 }, () => {
 
   it('preserves an in-progress audio edit across navigation (no draft loss)', async () => {
     const user = makeUser();
-    const onUpdate = vi.fn(async () => {});
+    const onUpdate = vi.fn<NonNullable<UserSettingsModalProps['onUpdate']>>(async () => {});
     const onClose = vi.fn();
 
     renderWithApp(
@@ -1108,7 +1239,7 @@ describe('UserSettingsModal', { timeout: 60_000 }, () => {
 
   it('shows and saves the primary coding agent from Preferences', async () => {
     const user = makeUser({ primary_agentic_tool: 'codex' });
-    const onUpdate = vi.fn(async () => {});
+    const onUpdate = vi.fn<NonNullable<UserSettingsModalProps['onUpdate']>>(async () => {});
     const onClose = vi.fn();
 
     renderWithApp(
@@ -1434,8 +1565,8 @@ describe('UserSettingsModal', { timeout: 60_000 }, () => {
   });
 
   it('hides the caller-scoped Primary Assistant preference when an admin edits another user', async () => {
-    const admin = makeUser({ user_id: 'admin-1', name: 'Ada', role: 'admin' });
-    const target = makeUser({ user_id: 'user-2', name: 'Bob', role: 'member' });
+    const admin = makeUser({ user_id: 'admin-1' as User['user_id'], name: 'Ada', role: 'admin' });
+    const target = makeUser({ user_id: 'user-2' as User['user_id'], name: 'Bob', role: 'member' });
 
     renderWithApp(
       <UserSettingsModal
@@ -1481,7 +1612,7 @@ afterEach(() => {
 describe('UserSettingsModal — administrative fields in save payloads', () => {
   it('omits role when a member saves their own profile', async () => {
     const user = makeUser({ role: 'member', unix_username: 'bob' });
-    const onUpdate = vi.fn(async () => {});
+    const onUpdate = vi.fn<NonNullable<UserSettingsModalProps['onUpdate']>>(async () => {});
 
     renderWithApp(
       <UserSettingsModal
@@ -1512,7 +1643,7 @@ describe('UserSettingsModal — administrative fields in save payloads', () => {
 
   it('does not submit the disabled role selector when an admin edits themselves', async () => {
     const admin = makeUser({ role: 'admin' });
-    const onUpdate = vi.fn(async () => {});
+    const onUpdate = vi.fn<NonNullable<UserSettingsModalProps['onUpdate']>>(async () => {});
 
     renderWithApp(
       <UserSettingsModal
@@ -1535,9 +1666,9 @@ describe('UserSettingsModal — administrative fields in save payloads', () => {
   });
 
   it('still sends role when an admin edits someone', async () => {
-    const target = makeUser({ user_id: 'user-2', role: 'member' });
-    const admin = makeUser({ user_id: 'user-1', role: 'admin' });
-    const onUpdate = vi.fn(async () => {});
+    const target = makeUser({ user_id: 'user-2' as User['user_id'], role: 'member' });
+    const admin = makeUser({ user_id: 'user-1' as User['user_id'], role: 'admin' });
+    const onUpdate = vi.fn<NonNullable<UserSettingsModalProps['onUpdate']>>(async () => {});
 
     renderWithApp(
       <UserSettingsModal
@@ -1567,9 +1698,9 @@ describe('UserSettingsModal — socket authority generations', () => {
     const pending = new Promise<void>((done) => {
       resolve = done;
     });
-    const onUpdate = vi.fn(() => pending);
+    const onUpdate = vi.fn<NonNullable<UserSettingsModalProps['onUpdate']>>(() => pending);
     const onClose = vi.fn();
-    const user = makeUser({ user_id: 'same-user', role: 'member' });
+    const user = makeUser({ user_id: 'same-user' as User['user_id'], role: 'member' });
     const view = (generation: number) => (
       <ConfigProvider theme={{ hashed: false }}>
         <AntApp>
@@ -1612,4 +1743,215 @@ describe('UserSettingsModal — socket authority generations', () => {
     expect(screen.getByPlaceholderText('••••••••')).toHaveValue('same-user-password-draft');
     expect(screen.getByRole('button', { name: /^save$/i })).not.toBeDisabled();
   }, 30_000);
+  it('validates a dirty Profile before saving from another panel', async () => {
+    const user = makeUser();
+    const onUpdate = vi.fn<NonNullable<UserSettingsModalProps['onUpdate']>>(
+      async (_userId: string, _updates: UpdateUserInput) => {}
+    );
+    const onClose = vi.fn();
+    renderWithApp(
+      <UserSettingsModal
+        open
+        user={user}
+        currentUser={user}
+        client={null}
+        onUpdate={onUpdate}
+        onClose={onClose}
+      />
+    );
+    fireEvent.change(screen.getByLabelText('Email'), { target: { value: 'invalid-email' } });
+    fireEvent.click(screen.getByRole('menuitem', { name: /security/i }));
+    fireEvent.click(screen.getByRole('button', { name: /^save$/i }));
+    await screen.findByText('Please enter a valid email');
+    expect(screen.getByRole('heading', { name: 'Profile' })).toBeVisible();
+    expect(onUpdate).not.toHaveBeenCalled();
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it('saves the complete audio draft while Preferences is inactive', async () => {
+    const user = makeUser({
+      preferences: {
+        audio: {
+          enabled: false,
+          chime: 'notification-bell',
+          volume: 0.4,
+          minDurationSeconds: 17,
+        },
+      },
+    });
+    const onUpdate = vi.fn<NonNullable<UserSettingsModalProps['onUpdate']>>(
+      async (_userId: string, _updates: UpdateUserInput) => {}
+    );
+    renderWithApp(
+      <UserSettingsModal
+        open
+        user={user}
+        currentUser={user}
+        client={null}
+        onUpdate={onUpdate}
+        onClose={vi.fn()}
+        initialTab="preferences"
+      />
+    );
+    fireEvent.click(await screen.findByLabelText('Enable chimes'));
+    fireEvent.click(screen.getByRole('menuitem', { name: /security/i }));
+    fireEvent.click(screen.getByRole('button', { name: /^save$/i }));
+    await waitFor(() => expect(onUpdate).toHaveBeenCalled(), ASYNC);
+    expect(onUpdate.mock.calls[0][1].preferences?.audio).toEqual({
+      enabled: true,
+      chime: 'notification-bell',
+      volume: 0.4,
+      minDurationSeconds: 17,
+    });
+  });
+
+  it('preserves a provider source and MCP draft through navigation and a user refresh', async () => {
+    const user = makeUser();
+    const onUpdate = vi.fn<NonNullable<UserSettingsModalProps['onUpdate']>>(
+      async (_userId: string, _updates: UpdateUserInput) => {}
+    );
+    const view = (value: User) => (
+      <ConfigProvider theme={{ hashed: false }}>
+        <AntApp>
+          <UserSettingsModal
+            open
+            user={value}
+            currentUser={value}
+            client={null}
+            onUpdate={onUpdate}
+            onClose={vi.fn()}
+            initialTab="claude-code"
+          />
+        </AntApp>
+      </ConfigProvider>
+    );
+    const rendered = render(view(user));
+    fireEvent.mouseDown(await screen.findByLabelText('Default for new configurations'));
+    fireEvent.click(await screen.findByText('Define my own configuration'));
+    fireEvent.click(await screen.findByLabelText('claude-code acceptEdits'));
+    fireEvent.click(screen.getByRole('button', { name: 'pick-mcp' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: /security/i }));
+    rendered.rerender(view({ ...user, name: 'Refreshed name' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: /^claude code/i }));
+    expect(await screen.findByLabelText('claude-code acceptEdits')).toBeChecked();
+    fireEvent.click(screen.getByRole('button', { name: /^save$/i }));
+    await waitFor(() => expect(onUpdate).toHaveBeenCalled(), ASYNC);
+    expect(onUpdate.mock.calls[0][1]).toMatchObject({
+      default_agentic_selection: { 'claude-code': { source: 'inline' } },
+      default_mcp_server_ids: ['mcp-picked'],
+    });
+  });
+
+  it('submits password and provider defaults together before reauthentication', async () => {
+    const user = makeUser({
+      default_agentic_config: { 'claude-code': { permissionMode: 'default' } },
+    });
+    const onUpdate = vi.fn<NonNullable<UserSettingsModalProps['onUpdate']>>(
+      async (_userId: string, _updates: UpdateUserInput) => {}
+    );
+    renderWithApp(
+      <UserSettingsModal
+        open
+        user={user}
+        currentUser={user}
+        client={null}
+        onUpdate={onUpdate}
+        onClose={vi.fn()}
+        initialTab="security"
+      />
+    );
+    fireEvent.change(await screen.findByPlaceholderText('••••••••'), {
+      target: { value: 'new-secure-password' },
+    });
+    fireEvent.click(screen.getByRole('menuitem', { name: /^claude code/i }));
+    fireEvent.click(await screen.findByLabelText('claude-code acceptEdits'));
+    fireEvent.click(screen.getByRole('button', { name: /^save$/i }));
+    await waitFor(() => expect(onUpdate).toHaveBeenCalledOnce(), ASYNC);
+    expect(onUpdate.mock.calls[0][1]).toMatchObject({
+      password: 'new-secure-password',
+      default_agentic_config: { 'claude-code': { permissionMode: 'acceptEdits' } },
+    });
+  });
+
+  it('unmounts a disabled provider and refuses to submit its retained draft', async () => {
+    const user = makeUser({
+      default_agentic_config: { 'claude-code': { permissionMode: 'default' } },
+    });
+    const onUpdate = vi.fn<NonNullable<UserSettingsModalProps['onUpdate']>>(async () => {});
+    renderWithApp(
+      <UserSettingsModal
+        open
+        user={user}
+        currentUser={user}
+        client={null}
+        onUpdate={onUpdate}
+        onClose={vi.fn()}
+        initialTab="claude-code"
+      />
+    );
+    fireEvent.click(await screen.findByLabelText('claude-code acceptEdits'));
+    act(() =>
+      agorStore.getState().setAgenticToolSettings([
+        {
+          tool: 'claude-code',
+          deployment_available: true,
+          enabled: false,
+          resolution_policy: 'user_preferred',
+          inline_configuration_allowed: true,
+          connection: {},
+        },
+      ])
+    );
+    expect(screen.queryByLabelText('claude-code acceptEdits')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: /^save$/i }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('Provider availability changed');
+    expect(onUpdate).not.toHaveBeenCalled();
+  });
+  it('falls back to Profile for an unknown settings deep link', async () => {
+    const user = makeUser();
+    renderWithApp(
+      <UserSettingsModal
+        open
+        user={user}
+        currentUser={user}
+        client={null}
+        onClose={vi.fn()}
+        initialTab="unknown-panel"
+      />
+    );
+    await waitFor(
+      () => expect(screen.getByRole('heading', { name: 'Profile' })).toBeVisible(),
+      ASYNC
+    );
+  });
+
+  it('clears the provider default strategy without deleting the shared MCP selection', async () => {
+    const user = makeUser({
+      default_agentic_config: { 'claude-code': { permissionMode: 'acceptEdits' } },
+      default_mcp_server_ids: ['mcp-existing'],
+    });
+    const onUpdate = vi.fn<NonNullable<UserSettingsModalProps['onUpdate']>>(async () => {});
+    renderWithApp(
+      <UserSettingsModal
+        open
+        user={user}
+        currentUser={user}
+        client={null}
+        onUpdate={onUpdate}
+        onClose={vi.fn()}
+        initialTab="claude-code"
+      />
+    );
+    fireEvent.click(await screen.findByRole('button', { name: 'Clear defaults' }));
+    await waitFor(
+      () => expect(screen.queryByLabelText('claude-code acceptEdits')).toBeNull(),
+      ASYNC
+    );
+    fireEvent.click(screen.getByRole('button', { name: /^save$/i }));
+    await waitFor(() => expect(onUpdate).toHaveBeenCalledOnce(), ASYNC);
+    expect(onUpdate.mock.calls[0][1]).toMatchObject({
+      default_agentic_selection: { 'claude-code': { source: 'workspace_default' } },
+      default_mcp_server_ids: ['mcp-existing'],
+    });
+  });
 });

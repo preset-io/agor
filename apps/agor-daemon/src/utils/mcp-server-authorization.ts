@@ -48,10 +48,46 @@ import type {
   MCPTransport,
   UserID,
 } from '@agor/core/types';
-import { hasMinimumRole, ROLES } from '@agor/core/types';
+import { hasMinimumRole, isCanonicalFullUuid, ROLES } from '@agor/core/types';
 import { runInOAuthTenantScope } from '../oauth-auth-helpers.js';
 
 export type McpServerWriteMethod = 'create' | 'update' | 'patch' | 'remove';
+
+/**
+ * Who is calling an MCP authorization boundary.
+ *
+ * `anonymous` is authenticated-but-userless. Every site must treat it as
+ * fail-closed; it is deliberately a separate case from `service-account` so
+ * neither can be reached by accident when only one was intended.
+ */
+export type McpCaller =
+  | { kind: 'internal' }
+  | { kind: 'service-account' }
+  | { kind: 'user'; user: NonNullable<AuthenticatedParams['user']> }
+  | { kind: 'anonymous' };
+
+/**
+ * Resolve the caller behind an MCP request.
+ *
+ * Feathers leaves `params.provider` undefined for internal, server-side calls
+ * and populates it for external transports, so its absence is what marks a
+ * daemon-internal caller — the same test each MCP site applied before this was
+ * consolidated. Service accounts are authenticated but carry no membership.
+ *
+ * Reading `params.user` before the service-account flag is what keeps
+ * "no user" and "service account" apart. Sites that folded them into one
+ * `||` branch could not tell them apart, and so let an authenticated caller
+ * with no user through on the service-account exemption.
+ */
+export function resolveMcpCaller(params: AuthenticatedParams | undefined): McpCaller {
+  if (!params?.provider) return { kind: 'internal' };
+  const user = params.user;
+  if (!user) return { kind: 'anonymous' };
+  if ((user as { _isServiceAccount?: boolean })._isServiceAccount === true) {
+    return { kind: 'service-account' };
+  }
+  return { kind: 'user', user };
+}
 
 export interface McpServerWriteRequest {
   method: McpServerWriteMethod;
@@ -126,8 +162,11 @@ export interface McpCatalogInstallParams {
  * — it is what `POST /mcp-servers` is for.
  *
  * The owner is read from the authenticated caller, not from the install params:
- * connect only ever installs for its own caller, and taking it from `params.user`
- * means no daemon-side caller can name someone else's identity by mistake.
+ * every authentication strategy hydrates `params.user` from the users table,
+ * so its full canonical ID is trusted here. A member's request-supplied owner
+ * remains untrusted and is policy-stamped or rejected below. Connect only ever
+ * installs for its own caller, so no daemon-side caller can name someone else's
+ * identity by mistake.
  */
 function resolveCatalogInstall(
   params: AuthenticatedParams | undefined,
@@ -457,11 +496,19 @@ async function decidePolicyAndOwnership(
 ): Promise<McpServerWriteDecision> {
   // Internal daemon calls and explicit daemon service accounts are not members;
   // they carry no policy and no ownership, matching `ensureMinimumRole`.
-  if (!params?.provider) return {};
-  const user = params.user;
-  if (!user) throw new NotAuthenticated('Authentication required');
-  if ((user as { _isServiceAccount?: boolean })._isServiceAccount === true) return {};
+  const caller = resolveMcpCaller(params);
+  if (caller.kind === 'internal' || caller.kind === 'service-account') return {};
+  if (caller.kind === 'anonymous') throw new NotAuthenticated('Authentication required');
+  const user = caller.user;
 
+  // Keep the role floor ahead of identity validation and all policy/database
+  // work. Authentication supplies the users-table key; short IDs are public
+  // addressing conveniences and are never resolved at this ownership boundary.
+  const isAdmin = hasMinimumRole(user.role, ROLES.ADMIN);
+  if (!isAdmin) assertAtLeastMember(user.role);
+  if (!isCanonicalFullUuid(user.user_id)) {
+    throw new NotAuthenticated('Authenticated user identity must be a canonical full UUID');
+  }
   const userId = user.user_id as UserID;
 
   // Ownership binds a configured credential to one execution identity, so
@@ -481,15 +528,14 @@ async function decidePolicyAndOwnership(
 
   // Admins administer every server, including private ones. They still cannot
   // use one they do not own — that is the session-side rule, not this one.
-  if (hasMinimumRole(user.role, ROLES.ADMIN)) return {};
+  if (isAdmin) return {};
 
-  assertAtLeastMember(user.role);
-
-  const policy = await resolveMcpMemberPolicy(db, userId, params.tenant?.tenant_id);
+  const policy = await resolveMcpMemberPolicy(db, userId, params?.tenant?.tenant_id);
   // Only the marketplace connect service sets this, and it cannot arrive on a
   // request — see `McpCatalogInstallParams`. So it is a safe way to tell the
   // caller which of the two things they were refused.
-  const isCatalogInstall = (params as McpCatalogInstallParams).mcpCatalogInstall !== undefined;
+  const isCatalogInstall =
+    (params as McpCatalogInstallParams | undefined)?.mcpCatalogInstall !== undefined;
   assertPolicyAllowsWrite(policy, isCatalogInstall);
 
   if (request.method === 'create') {
@@ -627,10 +673,10 @@ export function isSessionMcpServerLinkVisibleToCaller(
   row: SessionMcpServerVisibilityRow,
   params: AuthenticatedParams | undefined
 ): boolean {
-  if (!params?.provider) return true;
-  const user = params.user;
-  if (!user) return false;
-  if ((user as { _isServiceAccount?: boolean })._isServiceAccount) return true;
+  const caller = resolveMcpCaller(params);
+  if (caller.kind === 'internal' || caller.kind === 'service-account') return true;
+  if (caller.kind === 'anonymous') return false;
+  const user = caller.user;
   if (hasMinimumRole(user.role, ROLES.ADMIN)) return true;
   return isMCPServerUsableBy(row, row.session_created_by) && isMCPServerUsableBy(row, user.user_id);
 }
@@ -639,10 +685,10 @@ export function isMcpServerUsableByCaller(
   server: MCPServer,
   params: AuthenticatedParams | undefined
 ): boolean {
-  if (!params?.provider) return true;
-  const user = params.user;
-  if (!user) return false;
-  if ((user as { _isServiceAccount?: boolean })._isServiceAccount) return true;
+  const caller = resolveMcpCaller(params);
+  if (caller.kind === 'internal' || caller.kind === 'service-account') return true;
+  if (caller.kind === 'anonymous') return false;
+  const user = caller.user;
   return hasMinimumRole(user.role, ROLES.ADMIN) || isMCPServerUsableBy(server, user.user_id);
 }
 
@@ -659,8 +705,9 @@ export async function loadMcpServerForCaller(
   const server = await new MCPServerRepository(db).findById(serverId);
   if (!server) throw new NotFound(`MCP server not found: ${serverId}`);
 
-  if (!params?.provider) return server;
-  if (!params.user) throw new NotAuthenticated('Authentication required');
+  const caller = resolveMcpCaller(params);
+  if (caller.kind === 'internal') return server;
+  if (caller.kind === 'anonymous') throw new NotAuthenticated('Authentication required');
   if (isMcpServerUsableByCaller(server, params)) return server;
 
   // Avoid an existence oracle for private server definitions.

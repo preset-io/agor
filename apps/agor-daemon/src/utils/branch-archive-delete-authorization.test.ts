@@ -42,7 +42,6 @@ describe('authorizeBranchArchiveDelete', () => {
     await expect(
       authorizeBranchArchiveDelete(hook, {
         branchRepository,
-        branchRbacEnabled: true,
       })
     ).rejects.toBeInstanceOf(Forbidden);
 
@@ -72,7 +71,6 @@ describe('authorizeBranchArchiveDelete', () => {
     await expect(
       authorizeBranchArchiveDelete(hook, {
         branchRepository,
-        branchRbacEnabled: true,
       })
     ).resolves.toBe(hook);
 

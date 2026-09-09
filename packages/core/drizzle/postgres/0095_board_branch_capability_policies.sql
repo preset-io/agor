@@ -265,12 +265,18 @@ FROM board_group_grants bg JOIN boards b ON b.tenant_id=bg.tenant_id AND b.board
 WHERE bg.can<>'none' AND COALESCE(b.data->>'access_mode','shared')='shared';
 --> statement-breakpoint
 
+-- A branch may carry a stale permission_source='board' while its board_id is
+-- NULL or dangling (the board was deleted). The board_config LEFT JOIN is then
+-- unmatched, so inheriting its others_role/others_fs_access would insert NULL
+-- into NOT NULL columns. Guard every board-inheritance branch on a resolved
+-- board_config and otherwise fall back to the branch's own others_can/fs, the
+-- same path used for genuine 'override' branches.
 INSERT INTO branch_permission_configs
 SELECT br.tenant_id,gen_random_uuid()::text,NULL,br.branch_id,1,
- CASE WHEN br.permission_source='board' THEN 'shared'
+ CASE WHEN br.permission_source='board' AND board_config.config_id IS NOT NULL THEN 'shared'
   WHEN COALESCE(br.others_can,'session')<>'none' OR EXISTS(SELECT 1 FROM branch_owners bo WHERE bo.tenant_id=br.tenant_id AND bo.branch_id=br.branch_id AND bo.user_id<>br.primary_owner_user_id) OR EXISTS(SELECT 1 FROM branch_group_grants bg WHERE bg.tenant_id=br.tenant_id AND bg.branch_id=br.branch_id AND bg.can<>'none') THEN 'shared' ELSE 'private' END,
- CASE WHEN br.permission_source='board' THEN board_config.others_role ELSE CASE COALESCE(br.others_can,'session') WHEN 'none' THEN 'none' WHEN 'view' THEN 'viewer' WHEN 'all' THEN 'manager' ELSE 'collaborator' END END,
- CASE WHEN br.permission_source='board' THEN board_config.others_fs_access WHEN COALESCE(br.others_can,'session')='none' THEN 'none' ELSE COALESCE(br.others_fs_access,'read') END,
+ CASE WHEN br.permission_source='board' AND board_config.config_id IS NOT NULL THEN board_config.others_role ELSE CASE COALESCE(br.others_can,'session') WHEN 'none' THEN 'none' WHEN 'view' THEN 'viewer' WHEN 'all' THEN 'manager' ELSE 'collaborator' END END,
+ CASE WHEN br.permission_source='board' AND board_config.config_id IS NOT NULL THEN board_config.others_fs_access WHEN COALESCE(br.others_can,'session')='none' THEN 'none' ELSE COALESCE(br.others_fs_access,'read') END,
  1,br.primary_owner_user_id,COALESCE(br.created_at,now()),COALESCE(br.updated_at,br.created_at,now())
 FROM branches br
 LEFT JOIN branch_permission_configs board_config ON board_config.tenant_id=br.tenant_id AND board_config.board_id=br.board_id

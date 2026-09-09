@@ -56,7 +56,6 @@ interface HealthInfo {
     method: string | null;
   };
   execution?: {
-    branchRbac: boolean;
     unixUserMode: UnixUserMode;
   };
   security?: {
@@ -242,11 +241,7 @@ export const AboutTab: React.FC<AboutTabProps> = ({
                   {healthInfo?.execution && (
                     <>
                       <Descriptions.Item label="Branch RBAC">
-                        {healthInfo.execution.branchRbac ? (
-                          <Typography.Text type="success">🛡️ Enabled</Typography.Text>
-                        ) : (
-                          <Typography.Text type="warning">⚠️ Disabled (open access)</Typography.Text>
-                        )}
+                        <Typography.Text type="success">🛡️ Always enabled</Typography.Text>
                       </Descriptions.Item>
                       <Descriptions.Item label="Execution Mode">
                         <code>{healthInfo.execution.unixUserMode}</code>

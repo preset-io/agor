@@ -8,6 +8,7 @@ import type {
   Task,
   TaskID,
   TerminationCause,
+  TerminationCoordinationPendingCode,
 } from '@agor/core/types';
 import { isAgenticToolName, isTerminalTaskStatus, TaskStatus } from '@agor/core/types';
 import type { TasksServiceImpl } from './declarations.js';
@@ -19,11 +20,15 @@ import {
   untrackExecutorProcess,
 } from './executor-tracking.js';
 
-export interface TerminationResult {
-  status: 'terminal' | 'unverified' | 'condition_changed';
-  task: Task;
-  reason?: string;
-}
+export type TerminationResult =
+  | { status: 'terminal' | 'condition_changed'; task: Task }
+  | { status: 'unverified'; task: Task; reason: string }
+  | {
+      status: 'pending';
+      task: Task;
+      reason: string;
+      pendingCode: TerminationCoordinationPendingCode;
+    };
 
 export interface TerminationInput {
   app: Application;
@@ -303,7 +308,13 @@ async function claimContainmentCoordination(
   task: Task
 ): Promise<
   | { outcome: 'claimed'; task: Task; token: string }
-  | { outcome: 'pending' | 'condition_changed'; task: Task; reason?: string }
+  | {
+      outcome: 'pending';
+      task: Task;
+      reason: string;
+      pendingCode: TerminationCoordinationPendingCode;
+    }
+  | { outcome: 'condition_changed'; task: Task }
 > {
   const localMode = task.executor_mode !== 'templated';
   const ownsLocalHandle = !!getTrackedExecutor(task.session_id, input.app);
@@ -317,6 +328,7 @@ async function claimContainmentCoordination(
       outcome: 'pending',
       task,
       reason: 'Waiting for the daemon that owns the local executor process handle.',
+      pendingCode: 'non_owner_replica',
     };
   }
 
@@ -349,6 +361,7 @@ async function claimContainmentCoordination(
     outcome: 'pending',
     task: claim.task,
     reason: 'Another daemon currently coordinates executor containment.',
+    pendingCode: 'coordination_in_progress',
   };
 }
 
@@ -373,7 +386,12 @@ export async function requestExecutorTermination(
     if (coordination.outcome === 'condition_changed') {
       return { status: 'condition_changed', task: coordination.task };
     }
-    return { status: 'unverified', task: coordination.task, reason: coordination.reason };
+    return {
+      status: 'pending',
+      task: coordination.task,
+      reason: coordination.reason,
+      pendingCode: coordination.pendingCode,
+    };
   }
   return startContainment(input, coordination.task, tool, coordination.token);
 }
@@ -420,13 +438,17 @@ export async function beginExecutorTermination(input: TerminationInput): Promise
   return coordination.task;
 }
 
+export type ForceFailUnverifiedResult =
+  | { outcome: 'force_failed'; task: Task }
+  | { outcome: 'already_terminal'; task: Task };
+
 export async function forceFailUnverifiedTask(input: {
   app: Application;
   taskId: TaskID | string;
   terminationRequestedAt: string;
   confirmation: string;
   params?: Params;
-}): Promise<Task> {
+}): Promise<ForceFailUnverifiedResult> {
   const tasks = input.app.service('tasks') as unknown as TasksServiceImpl;
   const current = await tasks.get(input.taskId, input.params);
   if (input.confirmation !== 'STOP') {
@@ -442,9 +464,6 @@ export async function forceFailUnverifiedTask(input: {
       'The Task termination state changed. Review the current Task before force-failing.'
     );
   }
-  console.warn(
-    `[SECURITY] Force-failing Task ${shortId(current.task_id)} without verified executor termination`
-  );
   const settlement = await tasks.settleTermination(
     {
       taskId: current.task_id,
@@ -454,9 +473,19 @@ export async function forceFailUnverifiedTask(input: {
     },
     { ...internalParams(input.params), suppressTerminalQueueProcessing: true } as Params
   );
-  if (settlement.outcome !== 'transitioned' && settlement.outcome !== 'terminal') {
+  if (settlement.outcome === 'terminal') {
+    untrackExecutorProcess(settlement.task.session_id, settlement.task.task_id, input.app);
+    return { outcome: 'already_terminal', task: settlement.task };
+  }
+  if (settlement.outcome !== 'transitioned') {
     throw new Conflict('Task termination state changed before force-fail could be applied.');
   }
+  if (settlement.task.status !== TaskStatus.FAILED) {
+    throw new Conflict('Task termination state changed before force-fail could be applied.');
+  }
+  console.warn(
+    `[SECURITY] Force-failing Task ${shortId(current.task_id)} without verified executor termination`
+  );
   untrackExecutorProcess(settlement.task.session_id, settlement.task.task_id, input.app);
-  return settlement.task;
+  return { outcome: 'force_failed', task: settlement.task };
 }

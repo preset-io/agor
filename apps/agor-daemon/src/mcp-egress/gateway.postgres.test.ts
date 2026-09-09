@@ -153,7 +153,6 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
         db: dbA,
         app: { get: () => undefined, service: () => ({}) } as unknown as Application,
         jwtSecret,
-        branchRbacEnabled: false,
         allowLocalhostHttp: true,
         resolveDns: async () => {
           dnsStarted();
@@ -192,7 +191,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       );
       releaseDns();
 
-      await expect(pending).rejects.toMatchObject({ code: 'stale_capability' });
+      await expect(pending).rejects.toMatchObject({ code: 'tool_permission_changed' });
       expect(providerRequests).toBe(0);
 
       const wrongTenantCapability = issueMCPEgressCapability(
@@ -241,7 +240,6 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
         db: dbA,
         app: { get: () => undefined, service: () => ({}) } as unknown as Application,
         jwtSecret,
-        branchRbacEnabled: false,
         allowLocalhostHttp: true,
         resolveDns: async () => [{ address: '127.0.0.1', family: 4 }],
       });
@@ -299,7 +297,6 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
         db: dbA,
         app: { get: () => undefined, service: () => ({}) } as unknown as Application,
         jwtSecret,
-        branchRbacEnabled: false,
         allowLocalhostHttp: true,
         resolveDns: async () => [{ address: '127.0.0.1', family: 4 }],
         authoritySnapshotCheckpoint: async () => {

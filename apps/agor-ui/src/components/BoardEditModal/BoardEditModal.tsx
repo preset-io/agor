@@ -3,13 +3,13 @@ import type {
   Board,
   BoardCapabilityPolicies,
   CapabilityPolicyWorkspacePreferences,
+  EffectiveCapabilityPolicyAccess,
   Group,
   User,
 } from '@agor-live/client';
 import { Alert, Form, Modal, Skeleton } from 'antd';
 import { useEffect, useMemo, useState } from 'react';
 import { useThemedMessage } from '@/utils/message';
-import { useAuthConfig } from '../../hooks/useAuthConfig';
 import { useAgorStore } from '../../store/agorStore';
 import { selectUserById } from '../../store/selectors';
 import { BoardFormFields, extractBoardFormValues } from '../forms/BoardFormFields';
@@ -35,19 +35,18 @@ export function BoardEditModal({
   currentUser,
 }: BoardEditModalProps) {
   const userById = useAgorStore(selectUserById);
-  const { featuresConfig } = useAuthConfig();
-  // Do not mount the normalized policy editor against a daemon that has not
-  // explicitly enabled the feature. Legacy board permission fields remain
-  // available in that mode, matching the pre-remodel UI behavior.
-  const branchRbacEnabled = featuresConfig?.branchRbac === true;
   const [form] = Form.useForm();
   const { showError } = useThemedMessage();
   const [loading, setLoading] = useState(false);
   const [allUsers, setAllUsers] = useState<User[]>([]);
   const [allGroups, setAllGroups] = useState<Group[]>([]);
   const [policy, setPolicy] = useState<BoardCapabilityPolicies | null>(null);
+  const [loadedPolicy, setLoadedPolicy] = useState<BoardCapabilityPolicies | null>(null);
   const [workspacePreferences, setWorkspacePreferences] =
-    useState<CapabilityPolicyWorkspacePreferences>({ personal_session_sharing_enabled: false });
+    useState<CapabilityPolicyWorkspacePreferences>({ session_sharing_enabled: false });
+  const [effectiveAccess, setEffectiveAccess] = useState<EffectiveCapabilityPolicyAccess | null>(
+    null
+  );
   const [loadedBoard, setLoadedBoard] = useState<Board | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -64,6 +63,8 @@ export function BoardEditModal({
     setLoadError(null);
     setLoadedBoard(null);
     setPolicy(null);
+    setLoadedPolicy(null);
+    setEffectiveAccess(null);
 
     // Re-read the board as the modal opens. The selector uses a lean board list,
     // while this form must always start from the full, latest representation.
@@ -71,9 +72,6 @@ export function BoardEditModal({
       try {
         if (!client) throw new Error('Agor client is unavailable');
         const fresh = await client.service('boards').get(board.board_id);
-        // The legacy board permissions tab still needs the principal
-        // directory when normalized RBAC is disabled. Only the normalized
-        // policy package and workspace preference are feature-gated.
         const [usersResult, groupsResult] = await Promise.allSettled([
           client.service('users').findAll({}),
           client.service('groups').findAll({ query: { archived: false } }),
@@ -93,24 +91,26 @@ export function BoardEditModal({
           console.warn('Failed to load groups for board permissions:', groupsResult.reason);
         }
 
-        if (branchRbacEnabled) {
-          const [policyResult, preferencesResult] = await Promise.allSettled([
-            client.service('boards/:id/permissions').find({ route: { id: board.board_id } }),
-            client.service('workspace-preferences').find(),
-          ]);
-          if (cancelled) return;
-          if (policyResult.status === 'fulfilled') {
-            setPolicy(policyResult.value);
-          } else {
-            throw policyResult.reason;
-          }
-          if (preferencesResult.status === 'fulfilled') {
-            setWorkspacePreferences(preferencesResult.value);
-          }
+        const [policyResult, preferencesResult, accessResult] = await Promise.allSettled([
+          client.service('boards/:id/permissions').find({ route: { id: board.board_id } }),
+          client.service('workspace-preferences').find(),
+          client.service('boards/:id/effective-access').find({ route: { id: board.board_id } }),
+        ]);
+        if (cancelled) return;
+        if (policyResult.status === 'fulfilled') {
+          setPolicy(policyResult.value);
+          setLoadedPolicy(policyResult.value);
         } else {
-          setPolicy(null);
-          setWorkspacePreferences({ personal_session_sharing_enabled: false });
+          throw policyResult.reason;
         }
+        if (preferencesResult.status === 'fulfilled') {
+          setWorkspacePreferences(preferencesResult.value);
+        }
+        // A failed projection is not a policy denial. Surface the load error
+        // and prevent saving rather than silently locking the owner's fields.
+        // Do not replace server authority with a client-side ownership bypass.
+        if (accessResult.status === 'rejected') throw accessResult.reason;
+        setEffectiveAccess(accessResult.value as unknown as EffectiveCapabilityPolicyAccess);
         if (cancelled) return;
         // Populate the form BEFORE exposing loadedBoard so the background
         // editor mounts against fully-initialized field values (rather than
@@ -122,14 +122,6 @@ export function BoardEditModal({
           description: fresh.description,
           background_color: fresh.background_color,
           custom_css: fresh.custom_css,
-          access_mode: fresh.access_mode || 'shared',
-          default_others_can: fresh.default_others_can || 'session',
-          default_others_fs_access: fresh.default_others_fs_access || 'read',
-          default_dangerously_allow_session_sharing: Boolean(
-            fresh.default_dangerously_allow_session_sharing
-          ),
-          owner_ids: fresh.created_by ? [fresh.created_by] : [],
-          board_group_grants: [],
           custom_context: fresh.custom_context ? JSON.stringify(fresh.custom_context, null, 2) : '',
         });
         // Expose the loaded board last: this is what un-gates the form render.
@@ -147,14 +139,23 @@ export function BoardEditModal({
     return () => {
       cancelled = true;
     };
-  }, [board, branchRbacEnabled, client, form, open]);
+  }, [board, client, form, open]);
+
+  const canEditGeneral = Boolean(effectiveAccess?.capabilities.includes('board.edit'));
 
   const syncPermissions = async () => {
-    if (!branchRbacEnabled || !client || !board || !policy) return;
+    // Metadata-only saves must not require board.policy.manage or rewrite a
+    // policy the user did not edit (including its optimistic revisions).
+    // Compare JSON drafts like the branch editor: change-then-revert creates
+    // new objects but must not trigger a permission write.
+    if (!client || !board || !policy || JSON.stringify(policy) === JSON.stringify(loadedPolicy)) {
+      return;
+    }
     const saved = await client
       .service('boards/:id/permissions')
       .patch(null, policy, { route: { id: board.board_id } });
     setPolicy(saved);
+    setLoadedPolicy(saved);
   };
 
   const close = () => {
@@ -163,13 +164,13 @@ export function BoardEditModal({
   };
 
   const save = async () => {
-    if (!board) return;
+    if (!board || loading || loadError || !canEditGeneral) return;
     try {
       setSaving(true);
       await form.validateFields();
       const updated = await onUpdate?.(
         board.board_id,
-        extractBoardFormValues(form, { includeLegacyPermissions: !branchRbacEnabled })
+        extractBoardFormValues(form, { includeLegacyPermissions: false })
       );
       if (updated === false) return;
       await syncPermissions();
@@ -187,7 +188,7 @@ export function BoardEditModal({
       open={open}
       width={760}
       confirmLoading={loading || saving}
-      okButtonProps={{ disabled: loading || saving || Boolean(loadError) }}
+      okButtonProps={{ disabled: loading || saving || Boolean(loadError) || !canEditGeneral }}
       onOk={() => void save()}
       onCancel={close}
       okText="Save"
@@ -207,25 +208,21 @@ export function BoardEditModal({
             key={loadedBoard.board_id}
             form={form}
             backgroundResetSignal={loadedBoard.board_id}
-            rbacEnabled={branchRbacEnabled}
-            allUsers={allUsers}
-            allGroups={allGroups}
+            canEditGeneral={canEditGeneral}
             capabilityPolicyEditor={
-              branchRbacEnabled ? (
-                policy ? (
-                  <BoardCapabilityPolicyModalEditor
-                    value={policy}
-                    onChange={setPolicy}
-                    client={client}
-                    users={permissionUsers}
-                    groups={allGroups}
-                    currentUser={currentUser}
-                    workspacePreferences={workspacePreferences}
-                  />
-                ) : (
-                  <Alert type="error" showIcon description="Permissions are unavailable." />
-                )
-              ) : undefined
+              policy ? (
+                <BoardCapabilityPolicyModalEditor
+                  value={policy}
+                  onChange={setPolicy}
+                  client={client}
+                  users={permissionUsers}
+                  groups={allGroups}
+                  currentUser={currentUser}
+                  workspacePreferences={workspacePreferences}
+                />
+              ) : (
+                <Alert type="error" showIcon description="Permissions are unavailable." />
+              )
             }
             extra={
               <Form.Item
@@ -234,7 +231,11 @@ export function BoardEditModal({
                 help="Add custom fields for use in zone trigger templates (e.g., {{ board.context.yourField }})"
                 rules={[{ validator: validateJSON }]}
               >
-                <JSONEditor placeholder='{"team": "Backend", "sprint": 42}' rows={4} />
+                <JSONEditor
+                  placeholder='{"team": "Backend", "sprint": 42}'
+                  rows={4}
+                  disabled={!canEditGeneral}
+                />
               </Form.Item>
             }
           />

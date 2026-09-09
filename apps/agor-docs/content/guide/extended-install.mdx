@@ -21,6 +21,24 @@ Agor supports Node releases that are Current, Active LTS, or Maintenance LTS ups
 the Node ≥ 22.12 minimum. The packaged release gate currently runs Node 22, 24, and 26 end to end.
 Upstream EOL releases such as Node 25 are not supported production runtimes.
 
+### Diagnosing repository clone failures
+
+Remote repository creation is asynchronous. Poll `agor_repos_get` with the returned
+`repo_id` until `clone_status` is `ready` or `failed`. On failure, `clone_error.message`
+includes credential-redacted multiline Git diagnostics (up to 4,000 characters;
+oversized output retains the tail and marks the truncation), not just the
+`Cloning into ...` progress line. Existing failed rows keep their recorded diagnostics;
+retry to capture a new error after upgrading.
+
+`not_found` is Git's reported result, not proof that a repository is absent or
+public. Check the URL and the calling user's Git credentials and repository access.
+Agor does not automatically retry anonymously after an authenticated failure.
+After correcting access or Git/CA prerequisites, repeat `agor_repos_create_remote`
+with the same slug: the failed database row is replaced and a new `repo_id` is
+returned. A ready or in-progress repository is not replaced. Retrying does not
+delete repository files; if Git reports a nonempty invalid destination, have an
+operator inspect it before removing anything.
+
 ## Install paths
 
 Use whichever install method fits your setup:
@@ -78,6 +96,17 @@ choose tools interactively. New init flows always create a declarative list.
 but installs into Agor's private runtime directory rather than changing global npm state. Installation
 is staged and swapped into place only after the exact Agor package version is verified. It does not
 replace Claude, Codex, or other tools you may already use from your terminal.
+
+Run only one installer at a time, including across Agor versions. Installation uses a
+heartbeat lease and a short-lived `.install.acquire.lock` directory under the managed
+agentic-tools root to serialize acquisition and stale-lease recovery across processes.
+The acquisition guard never expires automatically: deleting it based on age could let
+two installers proceed together. If an installer is killed during acquisition, the next
+attempt reports the exact guard path. First verify that **no installer is running**,
+then remove only that empty directory with `rmdir` and retry. Do not remove an active
+guard or recursively delete the managed tools directory. Normal completion removes the
+guard before package installation starts; an expired installation lease is still
+recovered automatically.
 
 Inspect the managed integrations at any time:
 
@@ -266,6 +295,8 @@ Some migrations change authorization, distributed ownership, or callback protoco
 - `0091_codex_device_auth_attempts` moves Codex device authorization polling and exchange ownership into a fenced PostgreSQL protocol.
 - `0092_add_user_credential_generation` makes password-change revocation use generation-bearing tokens. Old daemons do not understand the claim and must not share a cohort once a password changes.
 - `0095_board_branch_capability_policies` (PostgreSQL) / `0098_board_branch_capability_policies` (SQLite) replaces board and branch RBAC with normalized capability policies. Its best-effort conversion is intentionally equal-or-less privilege: legacy prompt sharing is reduced to independent collaboration, and rules that cannot be represented safely may lose access rather than gain it.
+- `0100_claude_oauth_attempts` (PostgreSQL) / `0103_claude_oauth_attempts` (SQLite) moves Claude paste-back attempts and credential-file mutations into generation-fenced authority. Old daemons do not participate in that protocol and must not overlap the new cohort.
+- `0102_mcp_oauth_client_registrations` (PostgreSQL only) moves Dynamic Client Registration ownership into encrypted UUID/CAS authority. SQLite deliberately keeps process-local registration and has no matching migration.
 
 Rolling old and new daemons against the same database across any cutover is not supported.
 
@@ -284,11 +315,17 @@ Before the board/branch RBAC cutover, take a complete database backup and review
 
 Migration `0078` deletes existing MCP OAuth grant rows because the old plaintext, unfenced rows are not compatible with active-active callback and rotating-refresh ownership. Users must reconnect MCP OAuth after the upgrade. Take a backup before the cutover. A rollback to an older daemon requires restoring the pre-cutover backup; do not run an older cohort against the new OAuth schema.
 
+Migrations `0100` and `0101` are additive, but their distributed protocols are not rollback compatible. Stop every new daemon first and do not run mixed cohorts. Normal startup refuses a database whose migration watermark is newer than the binary's journal, so a binary that predates either migration requires the tested pre-cutover backup or a coordinated schema-and-ledger rollback; do not bypass that guard. Never advertise Claude HA credential mutation without the `0100` generation/tombstone authority or MCP HA OAuth without the `0101` DCR lease/CAS authority. Drain managed-file Claude tasks before rolling back to a runtime that can read or refresh the canonical file directly. Current-version standalone writers share one process-global queue and do not advance durable file tombstones; after an offline HA → standalone → HA deployment-mode transition, retained PostgreSQL sequences resume above the prior HA tombstones. This does not permit concurrent standalone/HA writers.
+
 Tenant archives deliberately omit MCP OAuth grants. The encrypted grant envelope is bound to the source tenant ID, server, generation, and deployment master secret, so importing or re-homing a tenant restores the MCP server configuration but requires users to reconnect OAuth. Pending OAuth attempts, executor token authorities, and GitHub install state are likewise non-portable.
+
+Constrained active-active OAuth additionally requires additive PostgreSQL migration `0102_mcp_oauth_client_registrations`. It stores fleet-wide Dynamic Client Registration ownership and encrypted client credentials bound to tenant, MCP server/config generation, issuer/resource, redirect URI, and DCR policy. SQLite deliberately has no corresponding schema: standalone DCR remains process-local. Apply the PostgreSQL migration with the offline-cutover acknowledgement before enabling a new OAuth-capable HA cohort, and replace the cohort all at once; older constrained-HA daemons keep OAuth gated. These registration rows are non-portable and tenant deletion removes them. HA activation also requires a safe HTTPS browser origin from `AGOR_BASE_URL`, `daemon.base_url`, or the legacy `ui.base_url`; internal `daemon.public_url` is never used as an OAuth redirect origin.
 
 GitHub App setup URLs necessarily carry a short-lived one-time `state` value in their query string. The daemon does not log or persist that raw value and sends `Cache-Control: no-store` and `Referrer-Policy: no-referrer`, but those response headers cannot stop an ingress, load balancer, or reverse proxy from logging the incoming request target first. Configure every HTTP logging layer to omit or redact query strings for `/api/github/setup/new` and `/api/github/setup/callback` (or globally), including failure-path and upstream error logs. Some proxies use fixed error-log formats that cannot redact the request target; suppress those route-specific error logs while retaining a redacted access log with status and upstream diagnostics. A route-specific rule must match the application's path semantics, including case and optional trailing slashes; the checked-in nginx matcher is case-insensitive because Express is case-insensitive by default. Treat copied browser/GitHub setup URLs as secrets until the 10-minute state expires or is consumed.
 
-A binary rollback does not automatically reverse database migrations. Stop the new cohort before starting only old-version daemons. After a rollback across `0082`, the old version ignores PostgreSQL install-state hashes and uses its former per-process flow; those hash rows contain no raw bearer but will remain inert until the new version resumes expiry cleanup, a new-version tenant deletion removes them, or an operator deliberately rolls back/drops the additive table. Older tenant-deletion code refuses to delete against a database whose migration watermark is ahead of that binary.
+The same ingress rule applies to `/mcp-servers/oauth-callback`: authorization code, issuer, provider error, and one-time state arrive in its query string. The checked-in HA nginx configuration omits query strings globally and suppresses unredactable error logs for the case-insensitive callback route while retaining the redacted access log. Preserve that behavior at every production HTTPS edge.
+
+A binary rollback does not automatically reverse database migrations. Stop the new cohort before starting any rollback binary. Daemon startup refuses when the database migration watermark is ahead of that binary, including a rollback below `0101`; restore a tested backup or coordinate reverse DDL with the migration ledger rather than forcing startup. If a rollback binary knows the current watermark, abandoned protocol rows remain inert only while its capability guards stay disabled.
 
 ---
 
@@ -322,6 +359,21 @@ Each tool may have one workspace default preset. Users can choose that moving wo
 Agor uses these credentials only to authenticate the agent runtime with the provider SDK/CLI. Stored secrets are encrypted at rest and are not written into the prompt transcript or intentionally sent to the model as text.
 
 Mixing is fine: one user can run on a Claude subscription token while teammates use a workspace API key.
+
+The in-app **Sign in with Claude** OAuth flow is intentionally not a default
+authentication option. Operators must explicitly enable
+`agentic_tools.claude_subscription_oauth: true` after obtaining the appropriate
+provider authorization/client contract; see [Operator configuration](./config-yaml).
+Absent that clearance flag, Agor continues to support Anthropic API keys and
+manually pasted `claude setup-token` credentials without exposing the OAuth
+endpoint or tab. Managed sign-in additionally requires local sandbox execution
+with persistent per-user homes and `sandbox.home_mode: per_user`; other
+topologies fail closed. In that profile the daemon, not Claude Code, owns token
+refresh. Before each sandbox spawn Agor safely prepares the real `.claude`
+store; bubblewrap binds that writable directory as an immutable mountpoint and
+masks the credential, generation, and mutation-lock leaves. Claude settings,
+plugins, projects, and fork/resume state remain writable at their canonical
+paths.
 
 <a id="claude-max-pro" />
 
@@ -377,7 +429,7 @@ AGOR_CONFIG_PATH=/etc/agor/config.yaml agor daemon start
 
 Agor ships a browsable catalog of MCP servers. It is a reviewed file in the repository, parsed lazily
 on the daemon's first catalog read and then cached for the life of the process, so browsing the
-marketplace requires no external catalog service and there is nothing to configure.
+Catalog requires no external catalog service and there is nothing to configure.
 
 What the catalog offers is therefore a function of the deployed binary: rolling
 back to an older release withdraws entries added since, until you roll forward
@@ -391,7 +443,7 @@ user's connect generation so a slower, older reconnect cannot overwrite a newer 
 token against the catalog URL and writes the server/session only after the probe accepts it. A stale
 catalog auth label therefore does not silently install a connection that the live endpoint will reject.
 
-Marketplace OAuth uses a bounded compatibility profile for current, unmodified catalog installs. It
+Catalog OAuth uses a bounded compatibility profile for current, unmodified catalog installs. It
 accepts only reviewed discovery differences while retaining same-origin bounds on those fallbacks,
 resource and issuer binding, the exact MCP URL in authorization and token requests, PKCE S256, and
 callback issuer checks. This profile is derived by the daemon; it cannot be selected or persisted as a
@@ -400,10 +452,17 @@ authoritative; Legacy is the deliberately broader operator override. Entries tha
 strict boundary can require it in the catalog — Monday, Cloudflare, and ClickUp currently do — and an
 edited or imported connection, a removed entry, or catalog-configuration drift falls back to Strict.
 
-Agor removed GitHub, Prisma, MongoDB, Box, HubSpot, Slack, PagerDuty, and Kagi from the catalog. The
-review could not establish a safely bound client-registration or issuer path for those endpoints. Their
-absence is not the earlier state where OAuth cards were offered but failed after Connect; unsupported
-providers are removed from the shelf instead.
+GitHub is a narrow reviewed exception to that OAuth rule. Its remote endpoint challenges for OAuth but
+does not publish Dynamic Client Registration, so Marketplace requests a fine-grained personal access
+token through GitHub's documented bearer route and verifies it against the pinned catalog endpoint
+before storage. Scope the token to only the repositories and operations needed; organisation policy can
+restrict PATs, Enterprise Managed User PATs are disabled by default, and individual tools can still
+require paid GitHub or Copilot features.
+
+Prisma, MongoDB, Box, HubSpot, Slack, PagerDuty, and Kagi remain absent because review could not
+establish a safely bound client-registration or issuer path. Their absence is not the earlier state where
+OAuth cards were offered but failed after Connect; unsupported providers are removed from the shelf
+instead.
 
 Connect may reuse an OAuth credential the caller already holds when it is a live per-user grant for the
 same endpoint, protected resource, requested scope, and catalog OAuth policy. It never reuses another
@@ -412,12 +471,17 @@ configuration. An expired matching grant may be refreshed before reuse. Reconnec
 entry reuses only that user's catalog connection and rotates the token after the new session and
 attachment have succeeded.
 
-Every successful Connect creates a new idle session, attaches the server, and opens that session. For an
-open server, a bearer-token server, or OAuth with a reusable live grant, the starter prompt is loaded in
-the composer. A new OAuth connection that still needs sign-in lands in the same session without the
-starter prompt. The dismissible notice above the composer and the warning MCP badge identify the
-unfinished connection; open the badge and activate the server pill to sign in. Agor does not auto-open
-OAuth after navigation because browsers require a short-lived user activation for a reliable popup.
+Every successful Connect creates a new idle session and attaches the server, but keeps the catalog
+drawer open so you can review the result and choose **Open session**. For an open server, a bearer-token
+server, or OAuth with a reusable live grant, the starter prompt is staged for that session. A new OAuth
+connection pre-opens the provider window while browser user activation is available. The drawer stays
+at **Sign-in pending** until Agor confirms the durable grant; navigating the popup is not treated as
+success. If sign-in does not finish, the session's dismissible notice and warning MCP badge remain the
+recovery path.
+
+**What this can access** is expanded by default and must be acknowledged before Connect is enabled.
+Agor records the exact disclosure text shown; collapsing it is not consent. Technical details are
+collapsed separately because they are not part of that consent record.
 
 If you previously set an `mcp_catalog:` block in `~/.agor/config.yaml`, leave it
 or delete it — either works. The daemon still accepts the section so an upgrade

@@ -14,7 +14,10 @@ import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { loadManagedAgenticToolSdk } from '@agor/core/agentic-integrations';
-import { renderAgorSystemPrompt } from '@agor/core/templates/session-context';
+import {
+  renderAgorSessionIdentity,
+  renderAgorSystemPrompt,
+} from '@agor/core/templates/session-context';
 import { mergeMCPRemoteHeaders } from '@agor/core/tools/mcp/http-headers';
 import type * as GeminiTypes from '@google/gemini-cli-core';
 import type { Part } from '@google/genai';
@@ -186,7 +189,7 @@ export class GeminiPromptService {
       const configuredModel = session.model_config?.model;
 
       // Prepare initial prompt (just text for now - can enhance with file paths later)
-      let parts: Part[] = [{ text: prompt }];
+      let parts: Part[] = [{ text: prompt }, { text: renderAgorSessionIdentity(sessionId) }];
 
       // Generate unique prompt ID for this turn
       const promptId = `${sessionId}-${Date.now()}`;
@@ -529,7 +532,13 @@ export class GeminiPromptService {
     try {
       // Calculate project hash (same as SDK does)
       const projectHash = crypto.createHash('sha256').update(projectRoot).digest('hex');
-      const chatsDir = path.join(os.homedir(), '.gemini', 'tmp', projectHash, 'chats');
+      // Read from the SAME location the Gemini CLI writes to. GEMINI_CLI_HOME is
+      // a home ROOT (the CLI appends `.gemini`), so honor it when a per-branch
+      // SDK home relocates it (design §8 item 3); else fall back to the passwd
+      // home. Without this, Agor would read the old `~/.gemini` while the SDK
+      // wrote to the relocated branch home (silent split-brain).
+      const geminiHomeRoot = process.env.GEMINI_CLI_HOME || os.homedir();
+      const chatsDir = path.join(geminiHomeRoot, '.gemini', 'tmp', projectHash, 'chats');
 
       // Check if chats directory exists
       try {

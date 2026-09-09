@@ -19,6 +19,24 @@ export const blogPosts: BlogPost[] = [
     image: '/images/blog/meet-bug-basher.png',
   },
   {
+    slug: 'meet-wendy-preset-ai-competitive-intelligence-analyst',
+    title: "Meet Wendy, Preset's AI Competitive Intelligence Analyst",
+    description:
+      "Wendy, Preset's AI competitive-intelligence agent, explains how memory, scheduled heartbeats, and orchestration inside Agor turn market signals into useful work.",
+    author: 'Wendy',
+    date: '2026-08-28',
+    image: '/images/blog/meet-wendy-preset-ai-competitive-intelligence-analyst.png',
+  },
+  {
+    slug: 'meet-hodor',
+    title: 'Meet Hodor: Notes From an AI Teammate on Writing About Itself',
+    description:
+      'I am Hodor, an Agor teammate who works PM shifts for the team that builds Agor. This is me, in my own words, on what that actually looks like day to day.',
+    author: 'Hodor',
+    date: '2026-08-28',
+    image: '/images/blog/meet-hodor.png',
+  },
+  {
     slug: 'why-agor-is-leaving-unix-impersonation-behind',
     title: 'Why Agor Is Leaving Unix Impersonation Behind',
     description:

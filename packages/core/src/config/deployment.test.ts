@@ -6,6 +6,7 @@ const secrets = {
   AGOR_JWT_SECRET: 'j'.repeat(32),
   AGOR_MASTER_SECRET: 'm'.repeat(32),
   AGOR_ADMIN_PASSWORD: 'bootstrap-admin-password',
+  AGOR_BASE_URL: 'https://agor.example.test',
 };
 
 const haConfig: AgorConfig = {
@@ -51,12 +52,15 @@ describe('resolveDeploymentConfig', () => {
         gatewayOutboundExactlyOnce: false,
         environmentHealthMonitor: true,
         statelessMcp: true,
+        mcpOAuth: true,
         completionCallbackDurableAdmission: true,
         completionCallbackPreAdmissionRecovery: false,
         widgetResolutionDurableClaim: true,
         githubInstall: true,
         codexCredentialFiles: true,
         codexDeviceAuth: false,
+        claudeAuth: false,
+        claudeOAuth: false,
       },
       redis: {
         url: 'rediss://redis.internal:6380/2',
@@ -96,6 +100,42 @@ describe('resolveDeploymentConfig', () => {
         AGOR_HA_SUPPORT_PROFILE: 'constrained-active-active',
       })
     ).toMatchObject({ mode: 'ha', supportProfile: 'constrained-active-active' });
+  });
+
+  it('keeps HA MCP OAuth unavailable until a public HTTPS callback origin is configured', () => {
+    const { AGOR_BASE_URL: _omitted, ...withoutPublicOrigin } = secrets;
+    expect(resolveDeploymentConfig(haConfig, withoutPublicOrigin)).toMatchObject({
+      capabilities: { mcpOAuth: false },
+    });
+    expect(
+      resolveDeploymentConfig(
+        {
+          ...haConfig,
+          daemon: { public_url: 'http://agor-daemon.runtime.svc.cluster.local:3030' },
+        },
+        withoutPublicOrigin
+      )
+    ).toMatchObject({ capabilities: { mcpOAuth: false } });
+    expect(
+      resolveDeploymentConfig(
+        {
+          ...haConfig,
+          daemon: {
+            public_url: 'http://agor-daemon.runtime.svc.cluster.local:3030',
+            base_url: 'https://agor.example.test',
+          },
+        },
+        withoutPublicOrigin
+      )
+    ).toMatchObject({ capabilities: { mcpOAuth: true } });
+    for (const unsafeOrigin of ['https://localhost:3030', 'https://10.0.0.1']) {
+      expect(
+        resolveDeploymentConfig(haConfig, {
+          ...withoutPublicOrigin,
+          AGOR_BASE_URL: unsafeOrigin,
+        })
+      ).toMatchObject({ capabilities: { mcpOAuth: false } });
+    }
   });
 
   it.each([
@@ -251,11 +291,49 @@ describe('resolveDeploymentConfig', () => {
 
     expect(resolveDeploymentConfig(external, secrets)).toMatchObject({
       topology: { execution: 'external', sharedFilesystem: false },
+      capabilities: { claudeAuth: false, claudeOAuth: false },
       executorStorage: {
         userHome: 'persistent-per-user',
         branchWorkspace: 'persistent-per-branch',
         baseRepository: 'unavailable',
       },
+    });
+  });
+
+  it('never advertises Claude containment through an external sandbox-labelled template', () => {
+    const external = {
+      ...haConfig,
+      deployment: {
+        ...haConfig.deployment,
+        ha: {
+          support_profile: 'constrained-active-active',
+          execution_topology: 'external',
+          ingress_affinity: true,
+        },
+      },
+      execution: {
+        ...haConfig.execution,
+        unix_user_mode: 'sandbox',
+        executor_command_template: 'cell launch --tenant {tenant_id} -- {command}',
+        executor_storage: {
+          user_home: 'persistent-per-user',
+          user_home_locking: 'cross-replica-flock',
+          branch_workspace: 'persistent-per-branch',
+          base_repository: 'unavailable',
+        },
+        branch_storage: {
+          default_mode: 'clone',
+          allowed_modes: ['clone'],
+          allow_shallow_clones: false,
+        },
+        sandbox: { enabled: true, home_mode: 'per_user' },
+      },
+      daemon: { public_url: 'https://agor.internal.example' },
+    } as AgorConfig;
+
+    expect(resolveDeploymentConfig(external, secrets)).toMatchObject({
+      topology: { execution: 'external', sharedFilesystem: false },
+      capabilities: { claudeAuth: false, claudeOAuth: false },
     });
   });
 
@@ -292,8 +370,85 @@ describe('resolveDeploymentConfig', () => {
     if (deployment.mode !== 'ha') throw new Error('Expected HA deployment');
     expect(deployment.capabilities.codexCredentialFiles).toBe(true);
     expect(deployment.capabilities.codexDeviceAuth).toBe(false);
+    expect(deployment.capabilities.claudeAuth).toBe(false);
+    expect(deployment.capabilities.claudeOAuth).toBe(false);
   });
 
+  it('keeps Claude OAuth gated without containment while admitting safe cleanup', () => {
+    const deployment = resolveDeploymentConfig(
+      {
+        ...haConfig,
+        execution: {
+          ...haConfig.execution,
+          unix_user_mode: 'sandbox',
+          executor_storage: {
+            user_home: 'persistent-per-user',
+            user_home_locking: 'cross-replica-flock',
+            branch_workspace: 'shared',
+            base_repository: 'shared',
+          },
+        },
+      },
+      secrets
+    );
+    expect(deployment.mode).toBe('ha');
+    if (deployment.mode !== 'ha') throw new Error('Expected HA deployment');
+    expect(deployment.capabilities.codexDeviceAuth).toBe(true);
+    expect(deployment.capabilities.claudeAuth).toBe(true);
+    expect(deployment.capabilities.claudeOAuth).toBe(false);
+  });
+
+  it('admits Claude HA only with exact-user routing, cross-replica locking, and containment', () => {
+    const deployment = resolveDeploymentConfig(
+      {
+        ...haConfig,
+        execution: {
+          ...haConfig.execution,
+          unix_user_mode: 'sandbox',
+          executor_storage: {
+            user_home: 'persistent-per-user',
+            user_home_locking: 'cross-replica-flock',
+            branch_workspace: 'shared',
+            base_repository: 'shared',
+          },
+          sandbox: { enabled: true, home_mode: 'per_user' },
+        },
+      },
+      secrets
+    );
+    expect(deployment.mode).toBe('ha');
+    if (deployment.mode !== 'ha') throw new Error('Expected HA deployment');
+    expect(deployment.capabilities.claudeAuth).toBe(true);
+    expect(deployment.capabilities.claudeOAuth).toBe(true);
+  });
+
+  it('gates Claude HA when an extra writable path can re-expose the physical home store', () => {
+    const deployment = resolveDeploymentConfig(
+      {
+        ...haConfig,
+        execution: {
+          ...haConfig.execution,
+          unix_user_mode: 'sandbox',
+          executor_storage: {
+            user_home: 'persistent-per-user',
+            user_home_locking: 'cross-replica-flock',
+            branch_workspace: 'shared',
+            base_repository: 'shared',
+          },
+          sandbox: {
+            enabled: true,
+            home_mode: 'per_user',
+            extra_allow_write: ['/home/agor/.agor'],
+          },
+        },
+      },
+      secrets
+    );
+    expect(deployment.mode).toBe('ha');
+    if (deployment.mode !== 'ha') throw new Error('Expected HA deployment');
+    expect(deployment.capabilities.claudeAuth).toBe(true);
+    expect(deployment.capabilities.claudeOAuth).toBe(false);
+  });
   it.each(['sandbox', 'delegated'] as const)(
     'admits HA device auth with a concrete %s exact-user credential route',
     (unixUserMode) => {
@@ -340,6 +495,8 @@ describe('resolveDeploymentConfig', () => {
     if (deployment.mode !== 'ha') throw new Error('Expected HA deployment');
     expect(deployment.capabilities.codexCredentialFiles).toBe(false);
     expect(deployment.capabilities.codexDeviceAuth).toBe(false);
+    expect(deployment.capabilities.claudeAuth).toBe(false);
+    expect(deployment.capabilities.claudeOAuth).toBe(false);
   });
 
   it('rejects HA when the executor storage contract is omitted', () => {

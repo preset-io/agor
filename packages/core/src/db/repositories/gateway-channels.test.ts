@@ -55,6 +55,38 @@ async function seedBranch(db: Database) {
 }
 
 describe('GatewayChannelRepository', () => {
+  dbTest(
+    'listener discovery preserves enabled filtering, ID order and keyset pagination',
+    async ({ db }) => {
+      const branch = await seedBranch(db);
+      const repo = new GatewayChannelRepository(db);
+      const channels = [];
+      for (const enabled of [true, false, true]) {
+        channels.push(
+          await repo.create({
+            name: `Discovery ${channels.length}`,
+            created_by: generateId() as UUID,
+            target_branch_id: branch.branch_id as UUID,
+            enabled,
+            config: { bot_token: 'bot-test', app_token: 'app-test' },
+          })
+        );
+      }
+      const expected = channels
+        .filter((channel) => channel.enabled)
+        .map((channel) => channel.id)
+        .sort();
+      expect(await repo.findEnabledListenerCandidateIds(1)).toEqual(expected.slice(0, 1));
+      expect(await repo.findEnabledListenerCandidateIds(1, expected[0])).toEqual(expected.slice(1));
+      expect(await repo.findEnabledListenerCandidateIds(1, expected[1])).toEqual([]);
+      for (const limit of [0, -1, 1.5, 1001]) {
+        await expect(repo.findEnabledListenerCandidateIds(limit)).rejects.toThrow(
+          'between 1 and 1000'
+        );
+      }
+    }
+  );
+
   dbTest('create throws when created_by is missing', async ({ db }) => {
     const repo = new GatewayChannelRepository(db);
     await expect(repo.create({ name: 'Test Channel' })).rejects.toThrow(

@@ -6,6 +6,7 @@ export interface JSONEditorProps {
   onChange?: (value: string) => void;
   placeholder?: string;
   rows?: number;
+  disabled?: boolean;
 }
 
 /**
@@ -23,6 +24,7 @@ export const JSONEditor: React.FC<JSONEditorProps> = ({
   onChange,
   placeholder = '{"key": "value"}',
   rows = 4,
+  disabled = false,
 }) => (
   <CodeEditor
     value={value ?? ''}
@@ -30,6 +32,7 @@ export const JSONEditor: React.FC<JSONEditorProps> = ({
     language="json"
     placeholder={placeholder}
     rows={rows}
+    readOnly={disabled}
   />
 );
 

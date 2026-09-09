@@ -12,6 +12,7 @@ import {
   initializeDatabase,
   isPostgresDatabase,
   MCPServerRepository,
+  type RawDatabase,
   runWithTenantDatabaseScope,
   setMcpMemberPolicy,
   sql,
@@ -24,6 +25,7 @@ import type { AuthenticatedParams, MCPCatalogEntry, MCPServer, User } from '@ago
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { type RegisterHooksContext, registerHooks } from '../register-hooks.js';
 import { createRegisteredMCPCatalogConnectService } from '../register-routes.js';
+import { type RegisterServicesContext, registerMCPServices } from '../register-services.js';
 import { fingerprintMCPOAuthGrantConfiguration } from './mcp-oauth-grant-binding.js';
 import { createMCPServersService } from './mcp-servers.js';
 
@@ -31,6 +33,90 @@ const { probeRemoteAuthType, probeRemoteBearerToken } = vi.hoisted(() => ({
   probeRemoteAuthType: vi.fn(),
   probeRemoteBearerToken: vi.fn(),
 }));
+
+const oauthProviderFixture = vi.hoisted(() => ({ discoveries: 0, registrations: 0 }));
+
+vi.mock('@agor/core/tools/mcp/oauth-mcp-transport', async (importOriginal) => {
+  const original =
+    await importOriginal<typeof import('@agor/core/tools/mcp/oauth-mcp-transport')>();
+  return {
+    ...original,
+    resolveMCPOAuthDiscovery: vi.fn(async () => {
+      oauthProviderFixture.discoveries += 1;
+      return {
+        kind: 'resource-metadata' as const,
+        metadataUrl: 'https://mcp.example.test/.well-known/oauth-protected-resource',
+        source: 'header' as const,
+      };
+    }),
+    startMCPOAuthFlow: vi.fn(
+      async (
+        _wwwAuthenticate: string,
+        clientId: string | undefined,
+        redirectUri: string,
+        options: {
+          resolveDynamicClientRegistration?: (
+            request: Record<string, unknown>,
+            register: () => Promise<Record<string, unknown>>
+          ) => Promise<{
+            registration: { client_id: string; client_secret?: string };
+            registrationId?: string;
+          }>;
+        }
+      ) => {
+        const resolved = clientId
+          ? { registration: { client_id: clientId } }
+          : await options.resolveDynamicClientRegistration?.(
+              {
+                registrationEndpoint: 'https://provider.example.test/register',
+                registrationEndpointSource: 'metadata',
+                metadataUrl: RESOURCE,
+                resourceUri: RESOURCE,
+                issuer: 'https://provider.example.test',
+                authorizationEndpoint: 'https://provider.example.test/authorize',
+                tokenEndpoint: 'https://provider.example.test/token',
+                redirectUri,
+                clientName: 'Agor MCP Client',
+                applicationType: 'web',
+                compatibilityMode: 'strict',
+                dcrMode: 'advertised',
+              },
+              async () => {
+                oauthProviderFixture.registrations += 1;
+                return {
+                  client_id: 'catalog-ha-dcr-client',
+                  client_secret: 'catalog-ha-dcr-secret',
+                  redirect_uris: [redirectUri],
+                  token_endpoint_auth_method: 'client_secret_post',
+                };
+              }
+            );
+        if (!resolved) throw new Error('durable DCR resolver was not supplied');
+        const registration = resolved.registration;
+        const state = `catalog-ha-state-${crypto.randomUUID()}`;
+        const authorizationUrl = new URL('https://provider.example.test/authorize');
+        authorizationUrl.searchParams.set('state', state);
+        authorizationUrl.searchParams.set('redirect_uri', redirectUri);
+        return {
+          metadataUrl: RESOURCE,
+          resourceUri: RESOURCE,
+          issuer: 'https://provider.example.test',
+          authorizationEndpoint: 'https://provider.example.test/authorize',
+          tokenEndpoint: 'https://provider.example.test/token',
+          redirectUri,
+          pkceVerifier: `catalog-ha-verifier-${crypto.randomUUID()}`,
+          clientId: registration.client_id,
+          clientSecret: registration.client_secret,
+          state,
+          authorizationUrl: authorizationUrl.toString(),
+          compatibilityMode: 'strict' as const,
+          authorizationResponseIssuerParameterSupported: true,
+          allowLocalhostHttp: false,
+        };
+      }
+    ),
+  };
+});
 vi.mock('@agor/core/mcp-catalog', () => ({
   loadCatalog: vi.fn().mockResolvedValue([]),
   probeRemoteAuthType,
@@ -74,6 +160,7 @@ function rowsOf(result: unknown): Array<Record<string, unknown>> {
 
 function registeredMcpServerHooks(db: TenantScopeAwareDatabase) {
   const captured = {
+    aroundAll: [] as unknown[],
     beforeAll: [] as unknown[],
     beforeFind: [] as unknown[],
     beforeCreate: [] as unknown[],
@@ -84,10 +171,12 @@ function registeredMcpServerHooks(db: TenantScopeAwareDatabase) {
     service(path: string) {
       return {
         hooks(hooks: {
+          around?: { all?: unknown[] };
           before?: { all?: unknown[]; find?: unknown[]; create?: unknown[] };
           after?: { find?: unknown[]; get?: unknown[] };
         }) {
           if (path.replace(/^\//, '') !== 'mcp-servers') return;
+          captured.aroundAll.push(...(hooks.around?.all ?? []));
           captured.beforeAll.push(...(hooks.before?.all ?? []));
           captured.beforeFind.push(...(hooks.before?.find ?? []));
           captured.beforeCreate.push(...(hooks.before?.create ?? []));
@@ -238,6 +327,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       const app = feathers();
       app.use('mcp-servers', createMCPServersService(db));
       app.service('mcp-servers').hooks({
+        around: { all: hooks.aroundAll },
         before: {
           all: hooks.beforeAll,
           find: hooks.beforeFind,
@@ -285,8 +375,14 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       entry: MCPCatalogEntry = ENTRY,
       app = connectApp(entry)
     ) {
-      return runWithTenantDatabaseScope(db, tenantId, () =>
-        createRegisteredMCPCatalogConnectService(app, db).create(REQUEST, params(user, tenantId))
+      // Deliberately no ambient database scope here. This is the production
+      // long-route shape: authenticated tenant identity is present, while each
+      // database phase must open its own short scope on the required-scope
+      // proxy. Wrapping this whole call would hide the regression this test
+      // guards and would hold a PostgreSQL transaction across the remote probe.
+      return createRegisteredMCPCatalogConnectService(app, db).create(
+        REQUEST,
+        params(user, tenantId)
       );
     }
 
@@ -296,15 +392,13 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       token: string,
       app = connectApp(CREDENTIAL_ENTRY)
     ) {
-      return runWithTenantDatabaseScope(db, tenantId, () =>
-        createRegisteredMCPCatalogConnectService(app, db).create(
-          {
-            ...REQUEST,
-            catalog_key: CREDENTIAL_ENTRY.name,
-            bearer_token: token,
-          },
-          params(user, tenantId)
-        )
+      return createRegisteredMCPCatalogConnectService(app, db).create(
+        {
+          ...REQUEST,
+          catalog_key: CREDENTIAL_ENTRY.name,
+          bearer_token: token,
+        },
+        params(user, tenantId)
       );
     }
 
@@ -394,6 +488,132 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       expect(result.mcp_server.auth?.oauth_compatibility_mode).toBe('strict');
     });
 
+    it('automatically starts durable OAuth with the replica startup callback frozen', async () => {
+      const actor = await buildTenant('automatic-ha-oauth');
+      const catalogReplica = connectApp();
+      const connected = await connect(actor.user, actor.tenantId, ENTRY, catalogReplica);
+      expect(connected).toMatchObject({
+        reused_existing_server: false,
+        reuse_kind: 'new_catalog_install',
+        mcp_server: {
+          source: 'catalog',
+          catalog_entry_name: ENTRY.name,
+          owner_user_id: actor.user.user_id,
+          auth: { type: 'oauth', oauth_mode: 'per_user' },
+        },
+      });
+
+      const originalBaseUrl = process.env.AGOR_BASE_URL;
+      const oauthRaw = createDatabase({ dialect: 'postgresql', url: postgresUrl! });
+      if (!isPostgresDatabase(oauthRaw)) throw new Error('PostgreSQL test requires PostgreSQL');
+      const oauthDb = createTenantScopedDatabaseProxy(oauthRaw, {
+        requireScope: true,
+        label: 'catalog OAuth replica B',
+      });
+      const oauthApp = feathers() as ReturnType<typeof feathers> & { io: unknown };
+      oauthApp.io = {
+        local: { to: () => ({ emit() {} }) },
+        to: () => ({ emit() {} }),
+        sockets: { sockets: new Map() },
+      };
+      oauthProviderFixture.discoveries = 0;
+      oauthProviderFixture.registrations = 0;
+      process.env.AGOR_BASE_URL = 'https://public-agor.example.test';
+      try {
+        await registerMCPServices({
+          db: oauthDb,
+          app: oauthApp as RegisterServicesContext['app'],
+          config: {} as RegisterServicesContext['config'],
+          jwtSecret: 'test-jwt',
+          daemonUrl: 'https://public-agor.example.test',
+          bundledUiAvailable: false,
+          DAEMON_PORT: 3030,
+          UI_PORT: 5173,
+          allowSuperadmin: false,
+          requireAuth: async (context) => context,
+          deployment: {
+            mode: 'ha',
+            capabilities: { mcpOAuth: true },
+            mcpOAuthCallbackUrl: 'https://public-agor.example.test/mcp-servers/oauth-callback',
+          } as RegisterServicesContext['deployment'],
+          mcpOAuthCallbackUrl: 'https://public-agor.example.test/mcp-servers/oauth-callback',
+          mcpOAuthFetch: async (_input, _init, assertCurrent) => {
+            assertCurrent?.();
+            return new Response('', {
+              status: 401,
+              headers: {
+                'www-authenticate':
+                  'Bearer resource_metadata="https://mcp.example.test/.well-known/oauth-protected-resource"',
+              },
+            });
+          },
+        });
+
+        const started = (await oauthApp
+          .service('mcp-servers/oauth-start')
+          .create(
+            { mcp_server_id: connected.mcp_server.mcp_server_id },
+            params(actor.user, actor.tenantId)
+          )) as {
+          success: boolean;
+          authorizationUrl?: string;
+          attempt_id?: string;
+        };
+        expect(started).toMatchObject({ success: true, attempt_id: expect.any(String) });
+        const authorizationUrl = new URL(started.authorizationUrl!);
+        expect(authorizationUrl.origin).toBe('https://provider.example.test');
+        expect(authorizationUrl.searchParams.get('redirect_uri')).toBe(
+          'https://public-agor.example.test/mcp-servers/oauth-callback'
+        );
+        expect(authorizationUrl.searchParams.get('state')).toBeTruthy();
+        expect(oauthProviderFixture.discoveries).toBe(1);
+        expect(oauthProviderFixture.registrations).toBe(1);
+
+        const durable = await runWithTenantDatabaseScope(oauthDb, actor.tenantId, async (scoped) =>
+          rowsOf(
+            await executeRaw(
+              scoped,
+              sql`SELECT flow.attempt_id, flow.status,
+                         registration.status AS registration_status,
+                         registration.sealed_material AS registration_sealed_material
+                  FROM mcp_oauth_pending_flows flow
+                  JOIN mcp_oauth_client_registrations registration
+                    ON registration.mcp_server_id = flow.mcp_server_id
+                  WHERE flow.attempt_id = ${started.attempt_id}`
+            )
+          )
+        );
+        expect(durable).toEqual([
+          expect.objectContaining({
+            attempt_id: started.attempt_id,
+            status: 'pending',
+            registration_status: 'registered',
+            registration_sealed_material: expect.any(String),
+          }),
+        ]);
+
+        oauthProviderFixture.discoveries = 0;
+        oauthProviderFixture.registrations = 0;
+        process.env.AGOR_BASE_URL = 'http://10.33.92.175:3030';
+        const restarted = (await oauthApp
+          .service('mcp-servers/oauth-start')
+          .create(
+            { mcp_server_id: connected.mcp_server.mcp_server_id },
+            params(actor.user, actor.tenantId)
+          )) as { success: boolean; authorizationUrl?: string };
+        expect(restarted.success).toBe(true);
+        expect(new URL(restarted.authorizationUrl!).searchParams.get('redirect_uri')).toBe(
+          'https://public-agor.example.test/mcp-servers/oauth-callback'
+        );
+        expect(oauthProviderFixture.discoveries).toBe(1);
+        expect(oauthProviderFixture.registrations).toBe(0);
+      } finally {
+        if (originalBaseUrl === undefined) delete process.env.AGOR_BASE_URL;
+        else process.env.AGOR_BASE_URL = originalBaseUrl;
+        await (oauthRaw as RawDatabase & { $client: { end: () => Promise<void> } }).$client.end();
+      }
+    });
+
     it('keeps the newer bearer credential when an older PostgreSQL rotation resumes', async () => {
       probeRemoteAuthType.mockResolvedValue('credentials');
       const actor = await buildTenant('bearer-rotation-race');
@@ -419,12 +639,13 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
 
       const older = connectWithToken(actor.user, actor.tenantId, OLD_KEY, app);
       await atProbe;
-      const newerPending = connectWithToken(actor.user, actor.tenantId, NEW_KEY, app);
-      await Promise.resolve();
-      expect(probeRemoteBearerToken).not.toHaveBeenCalledWith(RESOURCE, NEW_KEY);
+      // The connect-generation claim commits before the provider probe; it
+      // intentionally does not hold a transaction over that network request.
+      // Finish the newer rotation before releasing the stale one, rather than
+      // assuming one microtask orders two independent PostgreSQL connections.
+      const newer = await connectWithToken(actor.user, actor.tenantId, NEW_KEY, app);
       releaseOld();
-      await older;
-      const newer = await newerPending;
+      await expect(older).rejects.toThrow(/newer marketplace connect superseded/i);
       expect(newer.reused_existing_server).toBe(true);
       await runWithTenantDatabaseScope(db, actor.tenantId, async (scoped) => {
         const rows = await new MCPServerRepository(scoped).findAll({
@@ -435,7 +656,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       });
     });
 
-    it('serializes delayed PostgreSQL first connects before adoption and preserves the newer key', async () => {
+    it('fences a delayed PostgreSQL first connect after newer adoption and preserves the newer key', async () => {
       probeRemoteAuthType.mockResolvedValue('credentials');
       const actor = await buildTenant('bearer-first-race');
       const app = connectApp(CREDENTIAL_ENTRY);
@@ -459,13 +680,10 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
 
       const older = connectWithToken(actor.user, actor.tenantId, OLD_KEY, app);
       await atProbe;
-      const newerPending = connectWithToken(actor.user, actor.tenantId, NEW_KEY, app);
-      await Promise.resolve();
-      expect(probeRemoteBearerToken).not.toHaveBeenCalledWith(RESOURCE, NEW_KEY);
+      const newer = await connectWithToken(actor.user, actor.tenantId, NEW_KEY, app);
+      expect(newer.reused_existing_server).toBe(false);
       releaseOld();
-      await older;
-      const newer = await newerPending;
-      expect(newer.reused_existing_server).toBe(true);
+      await expect(older).rejects.toThrow(/newer marketplace connect superseded/i);
       await runWithTenantDatabaseScope(db, actor.tenantId, async (scoped) => {
         const rows = await new MCPServerRepository(scoped).findAll({
           catalogEntryName: CREDENTIAL_ENTRY.name,

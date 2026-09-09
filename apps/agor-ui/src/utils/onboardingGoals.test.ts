@@ -14,7 +14,11 @@ describe('buildCompletedOnboardingPreferences', () => {
       buildCompletedOnboardingPreferences(
         {
           use_slack_avatar: false,
-          onboarding: { goals: ['stale-goal'], repoId: 'repo-1' },
+          onboarding: {
+            goals: ['stale-goal'],
+            repoId: 'repo-1',
+            deferredAt: '2026-08-28T22:00:00.000Z',
+          },
         },
         { boardId: 'board-1', branchId: '', path: 'teammate', goals: [] }
       )
@@ -29,6 +33,12 @@ describe('buildCompletedOnboardingPreferences', () => {
         path: 'teammate',
       },
     });
+    expect(
+      buildCompletedOnboardingPreferences(
+        { onboarding: { deferredAt: '2026-08-28T22:00:00.000Z' } },
+        { boardId: 'board-1', branchId: '', path: 'teammate', goals: [] }
+      ).onboarding
+    ).not.toHaveProperty('deferredAt');
   });
 
   it('persists resumable teammate identity and clears it on an authoritative skip', () => {

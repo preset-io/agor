@@ -213,45 +213,52 @@ describe('useGlobalPresenceHeartbeat', () => {
     });
   });
 
-  it('keeps periodic heartbeats boardless after a failed latest route generation', () => {
-    vi.useFakeTimers();
-    const { client, emit } = makeMockClient();
-    const acknowledgements: Array<
-      (error: Error | null, result?: PresenceSubscriptionAcknowledgement) => void
-    > = [];
-    emit.mockImplementation((event, _payload, callback) => {
-      if (event === PRESENCE_SOCKET_EVENTS.subscribeBoardAssociations && callback) {
-        acknowledgements.push(
-          callback as (error: Error | null, result?: PresenceSubscriptionAcknowledgement) => void
-        );
-      }
-    });
-    const { rerender } = renderHook(
-      ({ currentBoardId }: { currentBoardId: BoardID }) =>
-        useGlobalPresenceHeartbeat({
-          client,
-          currentBoardId,
-          visibleBoardIds: [boardId('board-a'), boardId('board-b')],
-        }),
-      { initialProps: { currentBoardId: boardId('board-a') } }
-    );
-    act(() => acknowledgements[0]?.(null, { ok: true }));
-    expect(emit).toHaveBeenLastCalledWith(PRESENCE_SOCKET_EVENTS.heartbeat, {
-      boardId: boardId('board-a'),
-    });
+  it.each(['timeout', 'validation-rejection'] as const)(
+    'keeps periodic heartbeats boardless after %s and recovers on focus',
+    (failure) => {
+      vi.useFakeTimers();
+      const { client, emit } = makeMockClient();
+      const acknowledgements: Array<
+        (error: Error | null, result?: PresenceSubscriptionAcknowledgement) => void
+      > = [];
+      emit.mockImplementation((event, _payload, callback) => {
+        if (event === PRESENCE_SOCKET_EVENTS.subscribeBoardAssociations && callback) {
+          acknowledgements.push(
+            callback as (error: Error | null, result?: PresenceSubscriptionAcknowledgement) => void
+          );
+        }
+      });
+      const { rerender } = renderHook(
+        ({ currentBoardId }: { currentBoardId: BoardID }) =>
+          useGlobalPresenceHeartbeat({
+            client,
+            currentBoardId,
+            visibleBoardIds: [boardId('board-a'), boardId('board-b')],
+          }),
+        { initialProps: { currentBoardId: boardId('board-a') } }
+      );
+      act(() => acknowledgements[0]?.(null, { ok: true }));
+      expect(emit).toHaveBeenLastCalledWith(PRESENCE_SOCKET_EVENTS.heartbeat, {
+        boardId: boardId('board-a'),
+      });
 
-    rerender({ currentBoardId: boardId('board-b') });
-    expect(
-      emit.mock.calls.filter(([event]) => event === PRESENCE_SOCKET_EVENTS.heartbeat).at(-1)?.[1]
-    ).toEqual({ boardId: null });
-    act(() => acknowledgements[1]?.(new Error('authorization timed out')));
-    act(() => vi.advanceTimersByTime(PRESENCE_CONFIG.HEARTBEAT_INTERVAL_MS));
-    expect(emit).toHaveBeenLastCalledWith(PRESENCE_SOCKET_EVENTS.heartbeat, { boardId: null });
+      rerender({ currentBoardId: boardId('board-b') });
+      expect(
+        emit.mock.calls.filter(([event]) => event === PRESENCE_SOCKET_EVENTS.heartbeat).at(-1)?.[1]
+      ).toEqual({ boardId: null });
+      act(() =>
+        failure === 'timeout'
+          ? acknowledgements[1]?.(new Error('authorization timed out'))
+          : acknowledgements[1]?.(null, { ok: false })
+      );
+      act(() => vi.advanceTimersByTime(PRESENCE_CONFIG.HEARTBEAT_INTERVAL_MS));
+      expect(emit).toHaveBeenLastCalledWith(PRESENCE_SOCKET_EVENTS.heartbeat, { boardId: null });
 
-    act(() => window.dispatchEvent(new Event('focus')));
-    act(() => acknowledgements[2]?.(null, { ok: true }));
-    expect(emit).toHaveBeenLastCalledWith(PRESENCE_SOCKET_EVENTS.heartbeat, {
-      boardId: boardId('board-b'),
-    });
-  });
+      act(() => window.dispatchEvent(new Event('focus')));
+      act(() => acknowledgements[2]?.(null, { ok: true }));
+      expect(emit).toHaveBeenLastCalledWith(PRESENCE_SOCKET_EVENTS.heartbeat, {
+        boardId: boardId('board-b'),
+      });
+    }
+  );
 });

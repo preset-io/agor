@@ -29,6 +29,20 @@ export function isBranchArchiveOrDeleteOptions(
 export type BranchArchiveOrDeleteResult = Branch | { deleted: true; branch_id: BranchID };
 
 /**
+ * Rendered environment snapshot fields. In branch updates, an own null/undefined
+ * value clears these fields; omitting a key preserves it. Rendering supplies all
+ * six keys so an absent template value cannot retain another variant's command.
+ */
+export const BRANCH_ENVIRONMENT_SNAPSHOT_FIELDS = [
+  'start_command',
+  'stop_command',
+  'nuke_command',
+  'logs_command',
+  'health_check_url',
+  'app_url',
+] as const satisfies readonly (keyof Branch)[];
+
+/**
  * Git branch - First-class entity for isolated development contexts
  *
  * Branches are persistent work contexts that outlive individual sessions.
@@ -419,29 +433,26 @@ export interface Branch {
    */
   clone_depth?: number;
 
-  // ===== Session Sharing (legacy identity-borrow opt-in) =====
-
   /**
-   * DANGEROUS: Allow legacy "identity borrowing" on session spawn/fork.
+   * Per-branch SDK home intent (design §9.2).
    *
-   * Default (false / undefined): When user A calls `agor_sessions_spawn` or
-   * `agor_sessions_prompt(mode:"fork"|"subsession")` against user B's session,
-   * the new child session is attributed to A — `child.created_by = A.id` —
-   * and uses A's execution-home, credentials, and env vars.
+   * `undefined`/`null` = inherit today's behavior — no relocated SDK home; the
+   * agentic tool's state lives in whatever home the sandbox `home_mode`
+   * presents. `'per_branch'` = this branch has its own SDK home under
+   * `branch-homes/<branchId>` (path derived from `branch_id` by
+   * `getBranchHomePath`; only the intent is stored, never a path).
+   * This is a server-managed read model; generic Branch create/patch callers
+   * cannot set or clear it.
    *
-   * When true: legacy behavior is preserved — the child inherits
-   * `parent.created_by`, so it executes under the *parent owner's* identity
-   * even when spawned by a different caller. This effectively lets a
-   * collaborator run code as the session creator (similar to what
-   * `others_can: 'prompt'` already permits for direct prompts), and is
-   * preserved only for parity with pre-existing automation that relies on it.
-   *
-   * Admins (role >= admin) are *always* attributed to themselves regardless
-   * of this flag.
-   *
-   * Cross-user spawns under this flag are logged loudly by the daemon.
+   * STICKY: once set, this value — not the live
+   * `execution.sandbox.sdk_home_mode` deployment flag — is the default for
+   * future independent Sessions and owns the directory lifecycle. Each
+   * Session's immutable `sdk_home_scope` governs its actual mount, so older
+   * Sessions deliberately continue using their historical execution home.
+   * Flipping the flag back to `inherit` only stops unadopted branches from
+   * transitioning; it never strands accumulated Claude/Codex/… history.
    */
-  dangerously_allow_session_sharing?: boolean;
+  sdk_home?: 'per_branch' | null;
 }
 
 export type BranchFilesystemReadinessState = 'pending' | 'ready' | 'failed' | 'unavailable';
@@ -505,6 +516,12 @@ export type BranchPermissionSource = 'board' | 'override';
  * - Custom: branch.custom_context (JSON object)
  */
 export interface BranchEnvironmentInstance {
+  /** Daemon-owned bounded command tracking; lifecycle status below remains authoritative. */
+  command_attempt?: import('./environment-command').EnvironmentCommandAttempt;
+  command_history?: Array<{
+    attempt: import('./environment-command').EnvironmentCommandAttempt;
+    result?: BranchEnvironmentInstance['last_command'];
+  }>;
   /**
    * Current environment status
    */
@@ -568,7 +585,9 @@ export interface BranchEnvironmentInstance {
    */
   last_command?: {
     action: 'start' | 'stop' | 'restart' | 'nuke';
-    status: 'succeeded' | 'failed';
+    status: 'succeeded' | 'failed' | 'unknown';
+    attempt_id?: string;
+    output_truncated?: boolean;
     timestamp: string;
     message?: string;
     output?: string;
@@ -590,8 +609,9 @@ export type BranchEnvironmentClearableField = (typeof BRANCH_ENVIRONMENT_CLEARAB
  *
  * `null` is accepted for clearable optional runtime fields because executor
  * callbacks cross a JSON boundary, where `undefined` values are dropped.
- * The daemon normalizes both explicit `null` and in-process `undefined` by
- * deleting these fields before persisting the merged environment instance.
+ * The daemon normalizes explicit `null` to an own `undefined` clear marker.
+ * The repository deletes marked fields after its atomic merge, before storage.
+ * Omitted fields preserve existing values.
  */
 export type BranchEnvironmentUpdate = Omit<
   Partial<BranchEnvironmentInstance>,

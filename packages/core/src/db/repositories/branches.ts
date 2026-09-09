@@ -12,12 +12,18 @@ import type {
   EffectiveBranchAccess,
   GroupID,
   SessionPromptAuthority,
+  SessionSdkHomeScope,
   SessionStatus,
   UUID,
 } from '@agor/core/types';
-import { and, asc, desc, eq, exists, inArray, like, or, type SQL, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, exists, inArray, isNull, like, or, type SQL, sql } from 'drizzle-orm';
 import { getBaseUrl } from '../../config/config-manager';
 import { generateId } from '../../lib/ids';
+import {
+  BRANCH_ENVIRONMENT_CLEARABLE_FIELDS,
+  BRANCH_ENVIRONMENT_SNAPSHOT_FIELDS,
+} from '../../types/branch';
+import { hasActiveEnvironmentCommand } from '../../types/environment-command';
 import { getBranchUrl } from '../../utils/url';
 import type { Database } from '../client';
 import {
@@ -34,6 +40,7 @@ import {
 import {
   type BranchInsert,
   type BranchRow,
+  boardObjects,
   branches,
   branchPermissionConfigs,
   branchPermissionEntries,
@@ -156,6 +163,8 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
         // Branch storage mode
         storage_mode: row.storage_mode ?? 'worktree',
         clone_depth: row.clone_depth ?? undefined,
+        // Per-branch SDK home intent (design §9.2)
+        sdk_home: row.sdk_home ?? undefined,
         ...row.data,
         url,
       },
@@ -427,6 +436,7 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
   async findPage(opts: {
     repo_id?: UUID;
     board_id?: BoardID;
+    zone_id?: string;
     archived?: boolean;
     branchIds?: BranchID[];
     visibleToUserId?: UUID;
@@ -439,6 +449,13 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
     const conditions: SQL[] = [];
     if (opts.repo_id) conditions.push(eq(branches.repo_id, opts.repo_id));
     if (opts.board_id) conditions.push(eq(branches.board_id, opts.board_id));
+    if (opts.zone_id) {
+      conditions.push(
+        sql`exists (select 1 from ${boardObjects}
+          where ${boardObjects.branch_id} = ${branches.branch_id}
+            and ${jsonExtract(this.db, boardObjects.data, 'zone_id')} = ${opts.zone_id})`
+      );
+    }
     if (opts.archived !== undefined) conditions.push(eq(branches.archived, opts.archived));
     if (opts.branchIds) conditions.push(inArray(branches.branch_id, opts.branchIds));
     if (opts.visibleToUserId) {
@@ -599,14 +616,15 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
     if (Object.hasOwn(updates, 'primary_owner_user_id')) {
       throw new RepositoryError('Primary ownership is immutable');
     }
+    if (Object.hasOwn(updates, 'sdk_home')) {
+      throw new RepositoryError(
+        'Branch SDK-home intent is server-managed and must be adopted through adoptSdkHome()'
+      );
+    }
     if (
-      [
-        'permission_binding',
-        'permission_source',
-        'others_can',
-        'others_fs_access',
-        'dangerously_allow_session_sharing',
-      ].some((field) => Object.hasOwn(updates, field))
+      ['permission_binding', 'permission_source', 'others_can', 'others_fs_access'].some((field) =>
+        Object.hasOwn(updates, field)
+      )
     ) {
       throw new RepositoryError(
         'Branch permissions must be changed through the branch permission policy service'
@@ -651,6 +669,31 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
       }
 
       const current = this.rowToBranch(currentRow, baseUrl);
+      if (
+        Object.hasOwn(updates, 'environment_instance') &&
+        (current.environment_instance?.command_attempt ||
+          updates.environment_instance?.command_attempt ||
+          updates.environment_instance?.command_history)
+      ) {
+        throw new RepositoryError(
+          'Executor-backed environment state must be changed through attempt-scoped reports'
+        );
+      }
+      if (
+        hasActiveEnvironmentCommand(current.environment_instance) &&
+        [
+          'archived',
+          'filesystem_status',
+          'path',
+          'ref',
+          ...BRANCH_ENVIRONMENT_SNAPSHOT_FIELDS,
+          'environment_variant',
+        ].some((field) => Object.hasOwn(updates, field))
+      ) {
+        throw new RepositoryError(
+          'Wait for the active environment command before changing its branch or configuration'
+        );
+      }
 
       // STEP 3: Deep merge updates into current branch (in memory)
       // Preserves nested objects like schedule, environment_instance, custom_context
@@ -661,6 +704,26 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
         created_at: current.created_at, // Never change created timestamp
         updated_at: options?.preserveUpdatedAt ? current.updated_at : new Date().toISOString(),
       });
+      // A rendered snapshot must also remove fields absent from its variant.
+      // Keep this narrow: omitted keys and other branch fields still deep-merge.
+      for (const key of BRANCH_ENVIRONMENT_SNAPSHOT_FIELDS) {
+        if (Object.hasOwn(updates, key) && updates[key] == null) {
+          delete merged[key];
+        }
+      }
+      // Environment callbacks have an explicit-clear contract. Apply its
+      // tombstones AFTER merging under the row lock so stale runtime fields
+      // cannot reappear. Omitted fields and other nested patches still merge.
+      if (merged.environment_instance && updates.environment_instance) {
+        for (const key of BRANCH_ENVIRONMENT_CLEARABLE_FIELDS) {
+          if (
+            Object.hasOwn(updates.environment_instance, key) &&
+            updates.environment_instance[key] == null
+          ) {
+            delete merged.environment_instance[key];
+          }
+        }
+      }
       // A materialization error describes only the failed filesystem state.
       // Clear it atomically with every explicit transition away from failed
       // so a successful retry/unarchive cannot remain visually poisoned by
@@ -711,6 +774,35 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
   }
 
   /**
+   * Stickily adopt the server-managed per-branch SDK-home intent.
+   *
+   * This is deliberately separate from generic branch CRUD: clients may not
+   * opt a branch in or clear an adopted home through create/patch, and the
+   * only supported transition is the idempotent null -> per_branch adoption
+   * performed by supported-tool session admission.
+   */
+  async adoptSdkHome(id: string): Promise<Branch> {
+    const existing = await this.findById(id);
+    if (!existing) {
+      throw new EntityNotFoundError('Branch', id);
+    }
+    if (existing.sdk_home === 'per_branch') return existing;
+
+    const row = await update(this.db, branches)
+      .set({ sdk_home: 'per_branch', updated_at: new Date() })
+      .where(and(eq(branches.branch_id, existing.branch_id), isNull(branches.sdk_home)))
+      .returning()
+      .one();
+    if (!row) {
+      const current = await this.findById(existing.branch_id);
+      if (!current) throw new EntityNotFoundError('Branch', id);
+      return current;
+    }
+
+    return this.rowToBranch(row, await getBaseUrl());
+  }
+
+  /**
    * Delete branch by ID
    */
   async delete(id: string): Promise<void> {
@@ -719,7 +811,23 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
       throw new EntityNotFoundError('Branch', id);
     }
 
-    await deleteFrom(this.db, branches).where(eq(branches.branch_id, existing.branch_id)).run();
+    await runDatabaseTransaction(
+      this.db,
+      async (tx) => {
+        await lockRowForUpdate(tx, this.db, branches, eq(branches.branch_id, existing.branch_id));
+        const row = await select(tx)
+          .from(branches)
+          .where(eq(branches.branch_id, existing.branch_id))
+          .one();
+        if (hasActiveEnvironmentCommand(row?.data.environment_instance)) {
+          throw new RepositoryError(
+            'Wait for the active environment command before deleting its branch'
+          );
+        }
+        await deleteFrom(tx, branches).where(eq(branches.branch_id, existing.branch_id)).run();
+      },
+      { sqliteImmediate: true }
+    );
   }
 
   /**
@@ -822,12 +930,14 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
   async resolveSessionPromptAuthority(
     branchId: BranchID,
     callerUserId: UUID,
-    sessionOwnerUserId: UUID
+    sessionOwnerUserId: UUID,
+    sessionSdkHomeScope: SessionSdkHomeScope
   ): Promise<SessionPromptAuthority> {
     return new CapabilityPolicyRepository(this.db).resolveSessionPromptAuthority({
       branch_id: branchId,
       caller_user_id: callerUserId as import('@agor/core/types').UserID,
       session_owner_user_id: sessionOwnerUserId as import('@agor/core/types').UserID,
+      session_sdk_home_scope: sessionSdkHomeScope,
     });
   }
 
@@ -1055,10 +1165,8 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
    * N+1 point checks. Direct user entries shadow groups, active groups are
    * additive, and Others applies only when neither one matches.
    *
-   * NOTE: This method should only be called when RBAC is enabled. The branch
-   * find RBAC hook uses it to resolve accessible branch IDs and compose them
-   * into the service query; when RBAC is disabled, default Feathers query
-   * handling returns all branches without access filtering.
+   * The branch authorization hook uses this to resolve accessible Branch IDs
+   * and compose them into the service query.
    *
    * @param userId - User ID to check access for
    * @param filter - Optional filters
@@ -1098,7 +1206,7 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
     options: {
       /** Minimum app-layer permission required when access enforcement is enabled. */
       minimumPermission?: NonNullable<Branch['others_can']>;
-      /** Disable the point check when branch RBAC is disabled instance-wide. */
+      /** Disable the point check only for a separately authorized administrative bypass. */
       enforceAccess?: boolean;
     } = {}
   ): Promise<Branch | null> {

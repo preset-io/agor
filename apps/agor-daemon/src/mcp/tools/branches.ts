@@ -1,3 +1,4 @@
+import { PAGINATION } from '@agor/core/config';
 import { BranchRepository, CapabilityPolicyRepository, shortId } from '@agor/core/db';
 import type {
   Board,
@@ -53,7 +54,7 @@ import {
 } from '../schema.js';
 import type { McpContext } from '../server.js';
 import { coerceString, sessionContextRequiredResult, textResult } from '../server.js';
-import { runWithMcpTenantDatabaseScope } from '../tenant-scope.js';
+import { runWithMcpTenantDatabaseScope, runWithMcpTenantDatabaseWrite } from '../tenant-scope.js';
 import { assertValidVariant } from './_environment-helpers.js';
 
 const BRANCH_NAME_PATTERN = /^[a-z0-9-]+$/;
@@ -207,7 +208,6 @@ function notesPreview(notes: string | undefined, maxLength = 200): string | null
 }
 
 async function shouldScopeTeammateDiscoveryToUser(ctx: McpContext): Promise<boolean> {
-  if (ctx.app.get('config').execution?.branch_rbac !== true) return false;
   if (ctx.authenticatedUser?._isServiceAccount) return false;
 
   const config = ctx.app.get('config');
@@ -336,7 +336,7 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
       inputSchema: z.object({
         repoId: mcpOptionalId('repoId', 'Repository', 'Repository ID to filter by'),
         limit: mcpLimit(BRANCH_LIST_DEFAULT_LIMIT, BRANCH_LIST_MAX_LIMIT),
-        offset: mcpOffset(0),
+        offset: mcpOffset(0, PAGINATION.MAX_SKIP),
         includeArchived: z
           .boolean()
           .optional()
@@ -969,25 +969,35 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
       const storageMode = args.storage_mode as 'worktree' | 'clone' | undefined;
       const cloneDepth = typeof args.clone_depth === 'number' ? args.clone_depth : undefined;
 
-      const branch = await reposService.createBranch(
-        repoId,
-        {
-          name: branchName,
-          ref,
-          createBranch,
-          refType,
-          ...(pullLatest !== undefined ? { pullLatest } : {}),
-          ...(sourceBranch ? { sourceBranch } : {}),
-          ...(issueUrl ? { issue_url: issueUrl } : {}),
-          ...(pullRequestUrl ? { pull_request_url: pullRequestUrl } : {}),
-          boardId,
-          ...(zoneId ? { zoneId } : {}),
-          ...(variant ? { environment_variant: variant } : {}),
-          ...(storageMode ? { storage_mode: storageMode } : {}),
-          ...(cloneDepth !== undefined ? { clone_depth: cloneDepth } : {}),
-          ...(teammateConfig ? { custom_context: { teammate: teammateConfig } } : {}),
-        },
-        ctx.baseServiceParams
+      // `createBranch` is deliberately NOT a Feathers transport method (it takes
+      // `(id, data)`), so this direct call bypasses the around hooks that enter
+      // the tenant database scope for the HTTP `/repos/:id/branches` route. In
+      // `required_from_auth` mode the guarded daemon-database proxy then throws
+      // `MissingTenantDatabaseScopeError` on the first `this.db` touch. Re-enter
+      // the authenticated tenant scope here so the metadata writes join one
+      // tenant transaction — exactly like the HTTP route — while the readiness
+      // wait below stays outside it and never holds a transaction across polls.
+      const branch = await runWithMcpTenantDatabaseWrite(ctx, () =>
+        reposService.createBranch(
+          repoId,
+          {
+            name: branchName,
+            ref,
+            createBranch,
+            refType,
+            ...(pullLatest !== undefined ? { pullLatest } : {}),
+            ...(sourceBranch ? { sourceBranch } : {}),
+            ...(issueUrl ? { issue_url: issueUrl } : {}),
+            ...(pullRequestUrl ? { pull_request_url: pullRequestUrl } : {}),
+            boardId,
+            ...(zoneId ? { zoneId } : {}),
+            ...(variant ? { environment_variant: variant } : {}),
+            ...(storageMode ? { storage_mode: storageMode } : {}),
+            ...(cloneDepth !== undefined ? { clone_depth: cloneDepth } : {}),
+            ...(teammateConfig ? { custom_context: { teammate: teammateConfig } } : {}),
+          },
+          ctx.baseServiceParams
+        )
       );
 
       const readinessResult = args.waitForReady
@@ -1206,7 +1216,7 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
     'agor_branches_permissions_update',
     {
       description:
-        'Replace a branch permission package, including its inherit/override binding and personal session sharing rules. ' +
+        'Replace a branch permission package, including its inherit/override binding and shared-session switch. ' +
         'Read the current revision with agor_branches_get first. Primary ownership is immutable.',
       annotations: { idempotentHint: true },
       inputSchema: z.object({
@@ -1228,7 +1238,7 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
     'agor_branches_set_zone',
     {
       description:
-        "Pin a branch to a zone on a board, clear its current zone pin with zoneId:null, and optionally trigger the zone's prompt template. Calculates zone center position automatically and creates board association. If the zone has an 'always_new' trigger, a new session is automatically created and the prompt template is executed (matching UI drag-drop behavior). For 'show_picker' zones, use triggerTemplate + targetSessionId to send to an existing session on the branch being moved (targetSessionId must live on that branch — cross-branch targets are rejected, since the trigger prompt acts on the moved branch's files). A remote orchestrator on a different branch does NOT target itself here; to be notified when the work finishes, register a completion callback instead (agor_sessions_create enableCallback/callbackSessionId, or agor_sessions_prompt callback).",
+        "Pin a branch to a zone on a board, clear its current zone pin with zoneId:null, and optionally trigger the zone's prompt template. Calculates zone center position automatically and creates board association. If the zone has an 'always_new' trigger, a new session is automatically created and the prompt template is executed (matching UI drag-drop behavior). For 'show_picker' zones, use triggerTemplate + targetSessionId to send to an existing session on the branch being moved (targetSessionId must live on that branch — cross-branch targets are rejected, since the trigger prompt acts on the moved branch's files). A remote orchestrator on a different branch does NOT target itself here; to be notified when the work finishes, register a completion callback instead (agor_sessions_create with enableCallback:true and omit callbackSessionId for the current caller, or agor_sessions_prompt callback). Only supply callbackSessionId for an intentional authorized alternate destination.",
       inputSchema: z.object({
         branchId: mcpRequiredId(
           'branchId',
@@ -1322,9 +1332,12 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
       };
 
       if (zoneId === null) {
-        const boardObject = await boardObjectsService.findByBranchId(
-          branchId as BranchID,
-          ctx.baseServiceParams
+        // findByBranchId is a custom (non-transport) method on the board-objects
+        // service and reads `this.db` directly without an internal scope helper,
+        // so enter the tenant DB scope for this read (the surrounding patch/create
+        // are transport methods that enter it via their own hooks).
+        const boardObject = await runWithMcpTenantDatabaseScope(ctx, () =>
+          boardObjectsService.findByBranchId(branchId as BranchID, ctx.baseServiceParams)
         );
         if (!boardObject) {
           return textResult({
@@ -1365,7 +1378,9 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
       const { x: relativeX, y: relativeY } = computeZoneRelativePosition(zone as ZoneBoardObject);
 
       let boardObject: import('@agor/core/types').BoardEntityObject | null =
-        await boardObjectsService.findByBranchId(branchId as BranchID, ctx.baseServiceParams);
+        await runWithMcpTenantDatabaseScope(ctx, () =>
+          boardObjectsService.findByBranchId(branchId as BranchID, ctx.baseServiceParams)
+        );
 
       if (!boardObject) {
         // Create new board object
@@ -1433,12 +1448,14 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
         const renderedPrompt = renderTemplate(zone.trigger!.template, templateContext);
 
         if (renderedPrompt) {
-          const task = await ctx.app
-            .service('/sessions/:id/prompt')
-            .create(
-              { prompt: renderedPrompt, stream: true },
-              { ...ctx.baseServiceParams, route: { id: targetSessionId } }
-            );
+          const task = await ctx.app.service('/sessions/:id/prompt').create(
+            {
+              prompt: renderedPrompt,
+              stream: true,
+              metadata: { system_authored: true },
+            },
+            { ...ctx.baseServiceParams, provider: undefined, route: { id: targetSessionId } }
+          );
 
           if (task.status === 'queued') {
             promptResult = {

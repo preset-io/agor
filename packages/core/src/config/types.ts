@@ -13,6 +13,12 @@ export type ManagedEnvsExecutionMode = ManagedEnvExecutionMode;
 export interface AgorAgenticToolsSettings {
   /** Integrations that must match the running Agor version exactly. */
   installed?: InstallableAgenticTool[];
+
+  /**
+   * Enable daemon-driven Claude subscription OAuth after the operator has an
+   * authorized provider/client contract. Default: false.
+   */
+  claude_subscription_oauth?: boolean;
 }
 
 /**
@@ -524,17 +530,36 @@ export interface AgorSandboxSettings {
    * How the executor's `$HOME` is presented inside the sandbox:
    *  - `shared` (default): the daemon user's real home, with tool state/cache
    *    dirs writable and the daemon trust-root + credential dirs masked.
-   *  - `per_user`: overlay a **per-owner home store**
-   *    (`<data_home>/tenants/<tenant>/homes/<owner_id>`) at the passwd home, so
-   *    `~` is a private, persistent home per session owner. The overlay hides
-   *    the entire daemon `.agor` tree (config, db, worktrees, repos) and every
-   *    other user's home by construction. When the data root lives outside the
-   *    passwd home, Agor masks that root explicitly. Symlink aliases of the
-   *    home and data root are masked as well. The branch, base repo, and
-   *    managed agentic-tools are re-exposed on top. This is the substrate that
-   *    lets per-user isolation work without host accounts. Default: `shared`.
+   *  - `per_user`: overlay a **per-execution-user home store**
+   *    (`<data_home>/tenants/<tenant>/homes/<user_id>`) at the passwd home, so
+   *    `~` is a private, persistent home. Historical execution-home sessions
+   *    select their owner; branch-home sessions select the current prompt
+   *    actor. The overlay hides the entire daemon `.agor` tree (config, db,
+   *    worktrees, repos) and every other user's home by construction. When the
+   *    data root lives outside the passwd home, Agor masks that root explicitly.
+   *    Symlink aliases of the home and data root are masked as well. The branch,
+   *    base repo, and managed agentic-tools are re-exposed on top. This is the
+   *    substrate that lets per-user isolation work without host accounts.
+   *    Default: `shared`.
    */
   home_mode?: 'shared' | 'per_user';
+  /**
+   * Whether fresh sessions on an unadopted branch receive a per-branch SDK
+   * home (relocating the agentic tool's config/state dir —
+   * `.claude`/`.codex`/… — to a branch-keyed directory under
+   * `<tenantDataRoot>/branch-homes/<branchId>`) instead of inheriting the
+   * session-owner's home:
+   *  - `inherit` (default): an unadopted branch creates execution-home sessions.
+   *    Existing sessions and previously adopted branches retain their durable
+   *    behavior. Byte-for-byte identical to a deployment that never set this key.
+   *  - `per_branch`: the first supported independent session on an unadopted
+   *    branch records branch intent and is stamped to use the branch SDK home.
+   *    The branch record governs future independent sessions; the immutable
+   *    Session stamp governs resume. Flipping back to `inherit` stops adoption
+   *    of other branches without moving any existing SDK conversation.
+   * Default: `inherit`.
+   */
+  sdk_home_mode?: 'inherit' | 'per_branch';
   /**
    * Preserve a symlinked daemon home's canonical alias inside a per-user
    * sandbox. The owner store and authorized dynamic paths are exposed at both
@@ -549,9 +574,10 @@ export interface AgorSandboxSettings {
   /** Extra denied-read paths added to `protect_secrets` (escape hatch). */
   extra_deny_read?: string[];
   /**
-   * Hard-fail a task if the sandbox cannot start (missing `bwrap` / unsupported
-   * platform) instead of running unsandboxed. Recommended `true` for
-   * production security gates. Default: false.
+   * Hard-fail a task if the sandbox cannot start (missing bubblewrap 0.12.0+,
+   * unavailable `--bind-fd`, blocked user namespaces, or unsupported platform)
+   * instead of running unsandboxed. Recommended `true` for production security
+   * gates. Default: false.
    */
   fail_if_unavailable?: boolean;
 }
@@ -585,7 +611,10 @@ export interface AgorExecutionSettings {
   /** Execution mode: trusted local, delegated external, or local Linux sandbox. */
   unix_user_mode?: UnixUserMode;
 
-  /** Enable branch RBAC and ownership enforcement (default: false). */
+  /**
+   * @deprecated Board and branch RBAC is always enabled. Omit this key.
+   * `true` remains accepted as a compatibility no-op; `false` is rejected.
+   */
   branch_rbac?: boolean;
 
   /**
@@ -674,6 +703,8 @@ export interface AgorExecutionSettings {
    * - {branch_id} - Branch ID (if available)
    * - {user_id} - Trusted authenticated Agor user UUID (if available)
    * - {branch_fs_access} - Actor's branch projection: none, read, or write
+   * - {branch_sdk_home} - Absolute path for a branch-home Session, or empty for
+   *   an execution-home Session
    * - {tenant_id} - Trusted ambient tenant ID (shell-escaped; fails if unavailable)
    *
    * The template command receives JSON payload via stdin and should pipe it
@@ -748,6 +779,8 @@ export interface AgorExecutionSettings {
    * Default: `'hybrid'`.
    */
   managed_envs_execution_mode?: ManagedEnvsExecutionMode;
+  /** External Job lifetime INCLUDING forced cleanup, in ms. Required for HA hybrid commands. */
+  environment_command_job_deadline_ms?: number;
 
   /**
    * Branch storage configuration — operator gate for which storage modes a
@@ -1207,17 +1240,17 @@ export type ApmTraceServiceDepth = (typeof APM_TRACE_SERVICE_DEPTHS)[number];
  * The tracer itself is loaded process-wide (single-step / `NODE_OPTIONS`
  * injection), which already auto-instruments HTTP, Express, Postgres, and
  * Redis. These settings govern Agor's custom tracing layers: the FeathersJS
- * service-method layer and the postgres.js Drizzle query shim, both of which
- * dd-trace has no native plugin for. `off` disables both custom layers.
+ * service-method layer, postgres.js Drizzle queries/transactions, async secret
+ * key derivation, and MCP admission/tool handlers. `off` disables these layers.
  */
 export interface AgorApmSettings {
   /**
    * Depth of custom Agor tracing. Defaults to `off`.
    *
-   * PostgreSQL query tracing is enabled for either `entrypoint` or `full` and
+   * PostgreSQL and async key-derivation tracing are enabled for `entrypoint` or `full` and
    * disabled for `off`. The depth only affects FeathersJS service spans.
    *
-   * - `off`: neither custom tracing layer is registered — zero custom tracing
+   * - `off`: no custom tracing layer is registered — zero custom tracing
    *   overhead (including no database shim patch and no tracer resolution).
    * - `entrypoint`: one span per top-level request; nested service-to-service
    *   fan-out is suppressed (mirrors the StatsD metrics hook). Cheap and
@@ -1257,6 +1290,9 @@ export interface AgorAnalyticsSettings {
     debug?: boolean;
   };
 
+  /** Operator-owned, flat non-secret deployment metadata. See the config guide for bounds. */
+  extras?: Record<string, string | number | boolean>;
+
   /** Simple event-name filters. */
   filters?: {
     /** Exact names or simple `*` globs to exclude before delivery. */
@@ -1289,8 +1325,10 @@ export interface AgorAnalyticsHttpBatchPluginSettings {
     flush_interval_ms?: number;
     max_batch_size?: number;
     timeout_ms?: number;
-    /** Static headers only. */
+    /** Static non-secret headers. Use headers_from_env for credentials. */
     headers?: Record<string, string>;
+    /** Header names mapped to daemon environment variable names, never resolved into config. */
+    headers_from_env?: Record<string, string>;
   };
 }
 
@@ -1452,6 +1490,13 @@ export interface AgorDeploymentSettings {
  * Complete Agor configuration
  */
 export interface AgorConfig {
+  /**
+   * Instance-owned Environment-tab guidance (never read from repository config).
+   * At most 4000 UTF-16 code units. The UI permits only basic prose/list Markdown
+   * and absolute HTTP(S) documentation links; HTML, images, and plugins are disabled.
+   */
+  environment_disclaimer_markdown?: string;
+
   /** Deployment-owned agentic-tool package selection. */
   agentic_tools?: AgorAgenticToolsSettings;
 

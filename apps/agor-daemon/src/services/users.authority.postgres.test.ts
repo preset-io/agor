@@ -18,7 +18,7 @@ import {
   type TenantScopeAwareDatabase,
   UsersRepository,
 } from '@agor/core/db';
-import type { AuthenticatedParams, User, UserID, UserRole } from '@agor/core/types';
+import type { AuthenticatedParams, Params, User, UserID, UserRole } from '@agor/core/types';
 import jwt from 'jsonwebtoken';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { createRefreshTokenService } from '../auth/refresh-token-service.js';
@@ -29,6 +29,7 @@ import {
   authTokenIssuedAtClaim,
 } from '../auth/token-invalidation.js';
 import { createGroupMembershipsService } from './groups.js';
+import { markTrustedUserMutation } from './user-mutation-trust.js';
 import { UsersService } from './users.js';
 
 const postgresUrl = process.env.AGOR_TEST_POSTGRES_URL;
@@ -150,6 +151,63 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
         );
         expect(visible).toHaveLength(1);
         expect(visible[0]?.name).toBe('superadmin-b');
+      });
+    });
+
+    it('persists Claude source transitions atomically under PostgreSQL RLS', async () => {
+      const tenantA = `users-claude-source-a-${generateId()}`;
+      const tenantB = `users-claude-source-b-${generateId()}`;
+      const memberA = await seed(tenantA, 'member', 'claude-source-a');
+      const memberB = await seed(tenantB, 'member', 'claude-source-b');
+      const service = new UsersService(db);
+
+      await runWithTenantDatabaseScope(db, tenantA, async () => {
+        const trustedParams = {
+          ...params(memberA, tenantA),
+          provider: undefined,
+        } as Params;
+        markTrustedUserMutation(trustedParams, 'claude-auth');
+        await service.patch(
+          memberA.user_id as UserID,
+          { agentic_credential_sources: { 'claude-code': 'managed_file' } },
+          trustedParams
+        );
+
+        await expect(
+          service.patch(
+            memberA.user_id as UserID,
+            {
+              agentic_tools: {
+                'claude-code': { CLAUDE_CODE_OAUTH_TOKEN: 'sk-ant-oat01-postgres' },
+              },
+            },
+            params(memberA, tenantA)
+          )
+        ).resolves.toMatchObject({
+          agentic_credential_sources: { 'claude-code': 'subscription_token' },
+        });
+
+        await expect(
+          service.patch(
+            memberA.user_id as UserID,
+            { agentic_tools: { 'claude-code': { CLAUDE_CODE_OAUTH_TOKEN: null } } },
+            params(memberA, tenantA)
+          )
+        ).resolves.toMatchObject({
+          agentic_credential_sources: { 'claude-code': 'none' },
+        });
+
+        await expect(
+          service.patch(
+            memberB.user_id as UserID,
+            {
+              agentic_tools: {
+                'claude-code': { CLAUDE_CODE_OAUTH_TOKEN: 'cross-tenant' },
+              },
+            },
+            params(memberA, tenantA)
+          )
+        ).rejects.toMatchObject({ code: 403 });
       });
     });
 

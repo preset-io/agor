@@ -778,7 +778,7 @@ describe('scheduler HA occurrence recovery', () => {
 
     const { app, prompt } = createSchedulerApp(db);
     await expect(
-      new SchedulerService(db, app, { appRbacEnabled: true }).executeScheduleNow({
+      new SchedulerService(db, app, {}).executeScheduleNow({
         scheduleId: schedule.schedule_id,
         triggeredBy: collaborator.user_id,
       })
@@ -1074,6 +1074,30 @@ describe('materializeScheduleAgenticToolConfig', () => {
       model_config: { mode: 'exact', model: 'gpt-5.4' },
     });
     expect(prompt).toHaveBeenCalledOnce();
+  });
+
+  dbTest('stamps and adopts branch SDK state for a fresh scheduled session', async ({ db }) => {
+    const { branch, creator, schedule } = await seedRunnableSchedule(
+      db,
+      {
+        email: `scheduler-sdk-home-${Date.now()}-${Math.random()}@example.com`,
+        name: 'Schedule creator',
+      },
+      { agentic_tool: 'claude-code' }
+    );
+    const { app } = createSchedulerApp(db);
+    const scheduler = new SchedulerService(db, app, { sdkHomeMode: 'per_branch' });
+
+    await scheduler.executeScheduleNow({
+      scheduleId: schedule.schedule_id,
+      triggeredBy: creator.user_id,
+    });
+
+    const [created] = await new SessionRepository(db).findByScheduleId(schedule.schedule_id);
+    expect(created.sdk_home_scope).toBe('branch');
+    await expect(new BranchRepository(db).findById(branch.branch_id)).resolves.toMatchObject({
+      sdk_home: 'per_branch',
+    });
   });
 
   dbTest(

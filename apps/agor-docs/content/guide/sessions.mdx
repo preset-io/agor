@@ -42,7 +42,7 @@ Session: "Built user authentication feature"
 └─ Fork: "Generate API documentation"
 ```
 
-Use forks when downstream work needs the _same starting knowledge_ but different focus. (Currently Claude Code only. Other SDKs don't yet expose conversation copy.)
+Use forks when downstream work needs the _same starting knowledge_ but different focus. Agor supports session forks for Claude Code and Codex. Gemini, OpenCode, GitHub Copilot, and Cursor do not currently support session forks in Agor.
 
 ### Spawn — delegate with fresh context
 
@@ -65,7 +65,7 @@ The "btw" button (❓) sits next to the prompt input. Click it, type your questi
 
 For orchestrating agents, the same thing is exposed via `agor_sessions_prompt` with `mode: "btw"`. Agents can ask peer sessions quick questions without breaking their flow.
 
-> BTW uses session forking under the hood, so it's currently Claude-only. For tools without fork support (Codex, Gemini), use `mode: "subsession"` instead.
+> BTW uses session forking under the hood and is supported for Claude Code and Codex. For tools without fork support (Gemini, OpenCode, GitHub Copilot, and Cursor), use `mode: "subsession"` instead.
 
 <img
   src="/screenshots/btw-inline.png"
@@ -89,6 +89,38 @@ _A btw question runs in an ephemeral fork; the answer is delivered back inline i
 - **Resumable**: Prompt any session in the tree at any time, even after it "completed."
 
 The tree is rendered on the branch card on the board, and in full detail in the session view.
+
+### Large session lists
+
+Branch cards and the branch teammate panel keep manual and gateway genealogy
+trees in a virtual, scrollable viewport. Board cards keep a 400-pixel maximum;
+the teammate panel sizes trees to its available height and resizes with its
+container. Expanded manual and gateway trees share the remaining space; short
+trees release unused space to overflowing siblings. On board cards,
+two-finger scrolling over a session tree pans the canvas, and pinching zooms it;
+drag the tree's scrollbar to reach older sessions. In the branch teammate panel,
+scroll inside the tree normally. Collapsing a parent still hides its descendants.
+Expanded, overflowing descriptions and task peeks retain ordinary inner scrolling
+on board cards, while pinching still zooms the canvas.
+Scheduled runs and panel search results show 20 sessions per page. Search matches
+the loaded collection, not just the current page. The branch settings Sessions
+tab also paginates its table.
+
+These are rendering bounds, not a retention policy or a data-fetch limit: the
+UI still hydrates accessible sessions, and no sessions are deleted or archived
+because a list is large.
+
+For integrations, `agor_sessions_list` supports optional `branchId` and `boardId`
+filters; omitting both lists across the caller's accessible branches in the
+authenticated workspace, not across tenants. A session must belong to a branch,
+but a list query need not name one. MCP list pages default to 25 records, with
+a maximum requested limit of 100. The derived `sessionType` filter scans at most
+10,000 candidate sessions; if the complete candidate set does not fit, the tool
+returns an error rather than an incomplete result. Narrow with branch, board,
+status, or archive filters, or omit `sessionType` and page normally. The Feathers API uses `branch_id` / `board_id`
+and `$limit` / `$skip` instead. Use `find()` for one page: the TypeScript client's
+`findAll()` follows continuation pages and accumulates the entire result, even
+when its query includes `$limit`.
 
 ---
 
@@ -197,6 +229,8 @@ Each level delegates to specialized agents. Each session has a focused context w
 
 **Use callbacks wisely.** Include the last message for quick status updates. Include the original prompt only when context might be lost. Add extra instructions when you need a specific report format ("include line numbers for all changes").
 
+**Use the current caller for self callbacks.** With `agor_sessions_create`, set `enableCallback: true` and omit `callbackSessionId` to receive completion in the calling session—even from a fork, nested coordinator, or across branches. Only supply `callbackSessionId` for an intentional authorized alternate destination. Inherited conversation examples and shared workspace IDs may refer to an earlier session; the runtime-supplied Agor session identity is distinct from fork ancestry and the provider SDK thread ID.
+
 **Remote callbacks stay linked by default.** Sessions created with callbacks report after each completion until you unlink callbacks from the session relationship control. Unlinking stops delivery without deleting the relationship; select `once` when you only want the next completion. Spawned subsessions and `btw` side questions remain one-shot.
 
 **Post-prompt anytime.** Subsessions persist after completion. "Can you add error handling to the code you wrote?" is a valid follow-up at any point.
@@ -224,7 +258,30 @@ All of this is changeable at any point. You don't have to start a new session to
 
 _Session Settings modal: model, effort, permissions, MCP, env vars, callbacks, all editable mid-session for supported runtimes._
 
-Forks and spawned children copy selection names for continuity, never stored values. Each child resolves the copied names against the child session's own attributed owner. With `dangerously_allow_session_sharing` off (the default), a cross-user child is attributed to the caller, so a copied name cannot borrow the parent's secret. Callbacks carry message content, not an environment grant.
+Forks and spawned children copy selection names for continuity, never stored values. Each child
+resolves the copied names against its attributed owner. When a collaborator forks or spawns from a
+shared branch-scoped session, the child is attributed to that collaborator, so a copied name cannot
+borrow the parent's secret. Execution-home sessions cannot be continued across users. Callbacks
+carry message content, not an environment grant.
+
+### Codex runtime notices and tool failures
+
+A **Codex runtime notice** is non-fatal at the time it is emitted, not proof that
+an MCP operation failed or succeeded. Codex uses the same item shape for several
+kinds of warnings, including configuration and deprecation notices, without
+preserving their classification. Agor keeps the notice visible but does not copy
+provider error text, which can contain sensitive data.
+
+A **failed MCP tool result** remains marked as an error even if Codex continues
+and completes the turn. Before retrying a write, check its resulting state: a
+transport error can occur after a change has committed. An empty tool catalog is
+not itself an error, and a failed turn is separate from an individual tool failure.
+
+Recurring notices and failed MCP calls include a diagnostic reference. Give that
+reference and the task to an authorized administrator. The reference correlates
+bounded, content-free executor operational logs; it does not grant access to logs
+or expose the provider payload. High-volume diagnostics are summarized after the
+per-run log limit, without hiding notices or tool failures in the conversation.
 
 ### Historical Claude CLI sessions
 

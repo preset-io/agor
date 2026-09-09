@@ -535,6 +535,7 @@ describe('agor_widgets_request_env_vars', () => {
     expect(promptData.metadata.widget_id).toBe(widgetId);
     expect(promptData.idempotencyTaskId).toBe(widgetAutoResumeTaskId(widgetId as MessageID));
     expect(promptData.idempotencyTaskId).not.toBe(widgetId);
+    expect((promptCall!.args[1] as { provider?: string }).provider).toBeUndefined();
   });
 
   it('reads the prompt actor env vars rather than the shared Session owner', async () => {

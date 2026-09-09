@@ -150,6 +150,25 @@ The typical agent workflow: **publish** the folder, **iterate** by editing files
 
 `agor_artifacts_publish({ waitForStatus: true })` is synchronous-ish, not a server-side build. Sandpack boots in the viewer's browser, and runtime logs are scoped per viewer because rendered code may include secret-derived values. If the publishing user has the artifact open on the board or fullscreen page, publish waits for that browser to report Sandpack status, bundler/runtime errors, and early `console.error` output. If no browser render reports before `waitTimeoutMs`, the tool returns `publish_validation.observed: false` with guidance instead of claiming the artifact rendered successfully. `agor_artifacts_validate_folder` / `agor_artifacts_check_build` are browserless smoke checks only: they catch obvious file/import/config mistakes, but they do not run Sandpack.
 
+Runtime status distinguishes the Sandpack **provider lifecycle** (`sandpack_status`)
+from **compilation progress** (`compilation_status`: `pending`, `compiling`,
+`success`, or `error`). A provider can stay `running` after an app appears;
+`idle` can mean it has not started. Neither alone confirms a successful build.
+`waitForStatus` requires explicit compilation completion and a short interval
+without reported errors. This is a boot smoke check, not proof of DOM correctness
+or all application behavior. An observed-but-incomplete wait returns
+`observed: true`, `ok: false`, and `timed_out: true`, without declaring the app
+broken. Older tabs may need a reload to send completion reports. Synchronous
+runtime observation remains unavailable in the constrained HA support profile.
+
+If an error says `Unexpected token '<' ... is not valid JSON`, do not assume the
+app's `package.json` is malformed. HTML may have come from an app API, Agor
+ingress, a proxy, or Sandpack's hosted dependency services. Inspect the first
+causal request in the **viewing browser's** Network panel: status, content type,
+redirects, and CSP/CORS messages. Share only sanitized URL/path and diagnostics,
+never cookies, authorization headers, env values, or an unredacted HAR. A daemon
+network check cannot establish what the viewer's browser can reach.
+
 ---
 
 ## Interacting with artifacts

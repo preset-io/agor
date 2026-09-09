@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { resolveDatadogTracer } from './datadog';
+import { type DatadogTracer, resolveDatadogTracer, setSpanTag, traceBestEffort } from './datadog';
 
 describe('resolveDatadogTracer', () => {
   const validTracer = { trace: () => undefined };
@@ -31,5 +31,64 @@ describe('resolveDatadogTracer', () => {
     ).toBe(validTracer);
     expect(resolveDatadogTracer(notFound)).toBeNull();
     expect(resolveDatadogTracer(() => ({}))).toBeNull(); // no callable .trace
+  });
+});
+
+describe('best-effort tracing', () => {
+  it('runs work once when disabled or tracing throws before/after invocation', async () => {
+    const tracers: (DatadogTracer | null)[] = [
+      null,
+      {
+        trace() {
+          throw new Error('tracer failed');
+        },
+      },
+      {
+        trace(_name, _options, fn) {
+          fn();
+          throw new Error('tracer failed');
+        },
+      },
+    ];
+    for (const tracer of tracers) {
+      let runs = 0;
+      await expect(
+        traceBestEffort(tracer, 'test', {}, async () => {
+          runs++;
+          return 42;
+        })
+      ).resolves.toBe(42);
+      expect(runs).toBe(1);
+    }
+  });
+
+  it('preserves sync and async work errors, and ignores tag failures', async () => {
+    const failure = new Error('work failed');
+    const tracer: DatadogTracer = {
+      trace(_name, _options, fn) {
+        return fn();
+      },
+    };
+    expect(() =>
+      traceBestEffort(tracer, 'test', {}, () => {
+        throw failure;
+      })
+    ).toThrow(failure);
+    await expect(
+      traceBestEffort(tracer, 'test', {}, async () => {
+        throw failure;
+      })
+    ).rejects.toBe(failure);
+    expect(() =>
+      setSpanTag(
+        {
+          setTag() {
+            throw new Error('tag failed');
+          },
+        },
+        'test',
+        1
+      )
+    ).not.toThrow();
   });
 });

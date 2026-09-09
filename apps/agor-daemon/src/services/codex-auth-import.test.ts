@@ -60,8 +60,13 @@ const AUTH_PARAMS = {
   user: { user_id: 'user-1', email: 'u@example.com', role: 'member' },
 } as never;
 
-function service(app: { service: () => unknown }) {
-  const delegate = createCodexAuthImportService(app as never, TEST_DB);
+function service(app: { service: () => unknown }, invalidateCredentialBinds = vi.fn()) {
+  const delegate = createCodexAuthImportService(
+    app as never,
+    TEST_DB,
+    undefined,
+    invalidateCredentialBinds
+  );
   return {
     create: (...args: Parameters<typeof delegate.create>) =>
       runWithTenantContext('tenant-test', () => delegate.create(...args)),
@@ -137,7 +142,11 @@ describe('codex-auth-import', () => {
 
   it('writes, verifies, flips the auth method, and returns non-secret metadata only', async () => {
     const { app, usersService } = makeApp();
-    const result = await service(app).create({ authJson: VALID_AUTH_JSON }, AUTH_PARAMS);
+    const invalidateCredentialBinds = vi.fn(async () => undefined);
+    const result = await service(app, invalidateCredentialBinds).create(
+      { authJson: VALID_AUTH_JSON },
+      AUTH_PARAMS
+    );
 
     expect(writeCodexAuthCredentialMock).toHaveBeenCalledTimes(1);
     const [writtenContent, routing] = writeCodexAuthCredentialMock.mock.calls[0];
@@ -146,11 +155,16 @@ describe('codex-auth-import', () => {
 
     expect(usersService.patch).toHaveBeenCalledWith(
       'user-1',
-      { agentic_auth_methods: { 'claude-code': 'api_key', codex: 'subscription' } },
+      { agentic_auth_methods: { codex: 'subscription' } },
       expect.objectContaining({ authenticated: true })
     );
 
     expect(result).toMatchObject({ status: 'authenticated', authMode: 'chatgpt' });
+    expect(invalidateCredentialBinds).toHaveBeenCalledWith({
+      tenantId: 'tenant-test',
+      userId: 'user-1',
+      reason: 'credentials_imported',
+    });
     expect(JSON.stringify(result)).not.toContain('refresh-xyz');
     expect(JSON.stringify(result)).not.toContain('access-abc');
   });
@@ -182,6 +196,35 @@ describe('codex-auth-import', () => {
       authenticated: true,
       [CODEX_AUTH_DEFER_USER_REALTIME]: true,
     });
+  });
+
+  it('revalidates the route after mutation authority wins and never writes a retired home', async () => {
+    const { app } = makeApp();
+    const coordinator = {
+      runCredentialMutation: vi.fn(
+        async (
+          _tenantId: string,
+          _userId: string,
+          _reason: string,
+          work: (generation?: number) => Promise<unknown>,
+          preflight?: () => Promise<void>
+        ) => {
+          loadConfigSyncMock.mockReturnValue({
+            multi_tenancy: { mode: 'required_from_auth' },
+          } as never);
+          await preflight?.();
+          return work(undefined);
+        }
+      ),
+    };
+    const delegate = createCodexAuthImportService(app as never, TEST_DB, coordinator);
+
+    await expect(
+      runWithTenantContext('tenant-test', () =>
+        delegate.create({ authJson: VALID_AUTH_JSON }, AUTH_PARAMS)
+      )
+    ).rejects.toThrow(/execution home changed/i);
+    expect(writeCodexAuthCredentialMock).not.toHaveBeenCalled();
   });
 
   it('maps write failures to a friendly error and logs only the error class', async () => {

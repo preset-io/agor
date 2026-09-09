@@ -28,7 +28,7 @@ import {
   UserMCPOAuthTokenRepository,
   UsersRepository,
 } from '@agor/core/db';
-import type { MCPServerID, UserID } from '@agor/core/types';
+import type { MCPOAuthClientRegistrationID, MCPServerID, UserID } from '@agor/core/types';
 import { isMCPOAuthGrantBindingVersion } from '@agor/core/types';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { lockMCPOAuthGrantConfiguration } from './mcp-oauth-grant-binding.js';
@@ -66,6 +66,7 @@ function flowContext(label: string): DurableMCPOAuthFlowContext {
     pkceVerifier: `pkce-verifier-${label}`,
     clientId: `client-id-${label}`,
     clientSecret: `client-secret-${label}`,
+    clientRegistrationId: '01991ea2-58f0-7000-8000-000000000001' as MCPOAuthClientRegistrationID,
     state: `state-capability-${label}`,
     authorizationUrl: `https://provider.example.test/${label}/authorize?state=state-capability-${label}`,
     compatibilityMode: 'strict',
@@ -148,6 +149,14 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
         mcpServerId: bound.serverId,
         oauthMode: 'per_user',
         configFingerprint: 'a'.repeat(64),
+        slackRecovery: {
+          notice_id: 'notice-peer-callback',
+          task_id: 'task-peer-callback',
+          session_id: 'session-peer-callback',
+          mcp_server_id: bound.serverId,
+          recovery_generation: 7,
+          recovery_request_id: 'request-peer-callback',
+        },
       } satisfies DurableMCPOAuthFlowCreate);
 
       const stored = await runWithTenantDatabaseScope(dbB, bound.tenantId, async (scoped) => {
@@ -171,6 +180,14 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
         throw new Error('Expected a supported grant binding version');
       }
       const opened = authorityB.openClaim(claimed.flow, context.state);
+      expect(opened.slackRecovery).toEqual({
+        notice_id: 'notice-peer-callback',
+        task_id: 'task-peer-callback',
+        session_id: 'session-peer-callback',
+        mcp_server_id: bound.serverId,
+        recovery_generation: 7,
+        recovery_request_id: 'request-peer-callback',
+      });
       await runWithTenantDatabaseScope(dbB, bound.tenantId, async (scoped) => {
         await new UserMCPOAuthTokenRepository(scoped, masterSecret).saveToken(
           bound.userId,
@@ -200,12 +217,14 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
         outcome: 'claimed' as const,
         pkceVerifier: opened.context.pkceVerifier,
         clientId: opened.context.clientId,
+        clientRegistrationId: opened.context.clientRegistrationId,
         clientSecret: opened.context.clientSecret,
       };
       expect(completed).toMatchObject({
         outcome: 'claimed',
         pkceVerifier: context.pkceVerifier,
         clientId: context.clientId,
+        clientRegistrationId: context.clientRegistrationId,
         clientSecret: context.clientSecret,
       });
       await expect(

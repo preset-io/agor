@@ -50,9 +50,9 @@ interface OnboardingGoalDefinition {
 /**
  * Tools and connections referenced by goals + the skip fallback, keyed by id.
  *
- * Keep every setup route explicit. Marketplace entries must name a currently
+ * Keep every setup route explicit. Catalog entries must name a currently
  * curated catalog identity; custom MCP endpoints and Agor-native repository
- * access must never be described as Marketplace installs.
+ * access must never be described as Catalog installs.
  */
 export const ONBOARDING_INTEGRATION_RECOMMENDATIONS: Record<
   string,
@@ -230,6 +230,7 @@ export function buildCompletedOnboardingPreferences(
   result: CompletedOnboardingPreferencesInput
 ): UserPreferences {
   const retainedOnboarding = { ...(latest?.onboarding ?? {}) };
+  delete retainedOnboarding.deferredAt;
   delete retainedOnboarding.teammateDisplayName;
   delete retainedOnboarding.teammateEmoji;
   delete retainedOnboarding.teammateTemplateId;

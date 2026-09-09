@@ -85,6 +85,7 @@ function makeService() {
   const findById = vi.fn(async () => channel);
   const channelRepo = {
     findById,
+    findDisplayById: vi.fn(async () => channel),
     updateWithVerifiedDiscordInstallation,
   } as unknown as GatewayChannelRepository;
   const repository = {

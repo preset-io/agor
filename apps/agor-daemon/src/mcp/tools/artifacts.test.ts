@@ -157,6 +157,42 @@ describe('artifact MCP tool input schemas', () => {
   });
 });
 
+describe('artifact publish runtime instructions', () => {
+  it.each([true, false])(
+    'keeps a timed-out wait inconclusive when observed=%s',
+    async (observed) => {
+      const artifactService = {
+        publishArtifact: vi.fn(async () => ({ artifact_id: 'artifact-1', files: {} })),
+        waitForRuntimeStatus: vi.fn(async () => ({ ok: false, observed, timed_out: true })),
+        buildStatusDiagnostic: vi.fn(() => null),
+      };
+      const ctx = {
+        app: {
+          service: (name: string) =>
+            name === 'branches'
+              ? { get: async () => ({ branch_id: 'branch-1' }) }
+              : artifactService,
+        },
+        userId: 'viewer-1',
+        baseServiceParams: { tenant: { tenant_id: 'tenant-a', source: 'auth_claim' } },
+      } as unknown as Parameters<typeof registerArtifactTools>[1];
+      const result = (await captureHandler(
+        'agor_artifacts_publish',
+        ctx
+      )({
+        branchId: 'branch-1',
+        subpath: 'synthetic-app',
+        waitForStatus: true,
+      })) as { content: Array<{ text: string }> };
+      const payload = JSON.parse(result.content[0].text);
+      expect(payload.instructions).toContain('inconclusive');
+      expect(payload.instructions).not.toContain('observed a failure');
+      expect(payload.instructions).not.toContain('fix and republish');
+      expect(payload.publish_validation).toMatchObject({ observed, timed_out: true, ok: false });
+    }
+  );
+});
+
 describe('artifact MCP list projection', () => {
   it('requests the legacy list shape without source files', async () => {
     const find = vi.fn(async () => ({

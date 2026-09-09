@@ -16,6 +16,8 @@ import type {
   GatewayChannel,
   GatewayOutboundMessage,
   SessionID,
+  SessionPromptAuthority,
+  SessionSdkHomeScope,
   ThreadSessionMap,
   User,
   UserID,
@@ -54,7 +56,6 @@ vi.mock('@agor/core/config', async (importOriginal) => {
     assertInlineAgenticConfigurationAllowed: vi.fn(async () => undefined),
     getBaseUrl: vi.fn(async () => 'https://agor.example.com'),
     resolveExecutionSecurityMode: vi.fn(() => ({
-      appRbacEnabled: true,
       unixUserMode: 'simple',
       requiresExecutionHomeKey: false,
     })),
@@ -164,8 +165,10 @@ function makeGatewayHarness(args: {
   promptAuthority?: {
     allowed: boolean;
     execution_user_id?: UserID;
-    source: 'own_session' | 'personal_session_sharing' | 'denied';
+    source: SessionPromptAuthority['source'];
+    denial_reason?: SessionPromptAuthority['denial_reason'];
   };
+  sessionSdkHomeScope?: SessionSdkHomeScope;
   sessionOwnerUserId?: UserID;
   outboundSeed?: GatewayOutboundMessage | null;
   setMCPServers?: (sessionId: SessionID, serverIds: string[], label: string) => Promise<void>;
@@ -241,7 +244,7 @@ function makeGatewayHarness(args: {
         execution_user_id: args.sessionOwnerUserId ?? executionUser.user_id,
         source:
           args.sessionOwnerUserId && args.sessionOwnerUserId !== executionUser.user_id
-            ? 'personal_session_sharing'
+            ? 'branch_session'
             : 'own_session',
       }
   );
@@ -256,6 +259,7 @@ function makeGatewayHarness(args: {
       branch_id: channel.target_branch_id,
       created_by: args.sessionOwnerUserId ?? executionUser.user_id,
       status: SessionStatus.IDLE,
+      sdk_home_scope: args.sessionSdkHomeScope ?? 'execution_home',
     })),
   };
   const threadMapRepo = {
@@ -477,12 +481,18 @@ describe('GatewayService inbound permission admission', () => {
     expect(promptCreate).not.toHaveBeenCalled();
   });
 
-  it('rejects a mapped foreign session unless its owner shared their sessions', async () => {
+  it('surfaces a mapped execution-home denial without retrying the gateway event', async () => {
     const sessionOwnerUserId = 'session-owner' as UserID;
+    const sendMessage = vi.fn(async () => undefined);
     const { service, promptCreate, resolveSessionPromptAuthority } = makeGatewayHarness({
       existingMapping: makeMapping(),
       sessionOwnerUserId,
-      promptAuthority: { allowed: false, source: 'denied' },
+      connector: { sendMessage },
+      promptAuthority: {
+        allowed: false,
+        source: 'denied',
+        denial_reason: 'execution_home_sharing_disabled',
+      },
     });
 
     await expect(
@@ -497,25 +507,34 @@ describe('GatewayService inbound permission admission', () => {
           slack_message_ts: '103.000000',
         },
       })
-    ).rejects.toThrow(/session owner has not shared their sessions/);
+    ).resolves.toEqual({ success: false, sessionId: '', created: false });
 
     expect(resolveSessionPromptAuthority).toHaveBeenCalledWith(
       slackChannel.target_branch_id,
       user.user_id,
-      sessionOwnerUserId
+      sessionOwnerUserId,
+      'execution_home'
+    );
+    await vi.waitFor(() =>
+      expect(sendMessage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          text: expect.stringMatching(/uses its owner's execution home/i),
+        })
+      )
     );
     expect(promptCreate).not.toHaveBeenCalled();
   });
 
-  it('rechecks an owner-authored sharing grant before prompting a mapped foreign session', async () => {
+  it('allows a foreign collaborator to prompt a branch-scoped mapped session', async () => {
     const sessionOwnerUserId = 'session-owner' as UserID;
     const { service, promptCreate, resolveSessionPromptAuthority } = makeGatewayHarness({
       existingMapping: makeMapping(),
       sessionOwnerUserId,
+      sessionSdkHomeScope: 'branch',
       promptAuthority: {
         allowed: true,
-        execution_user_id: sessionOwnerUserId,
-        source: 'personal_session_sharing',
+        execution_user_id: user.user_id,
+        source: 'branch_session',
       },
     });
 
@@ -533,8 +552,51 @@ describe('GatewayService inbound permission admission', () => {
       })
     ).resolves.toMatchObject({ success: true, sessionId: 'sess-1', created: false });
 
-    expect(resolveSessionPromptAuthority).toHaveBeenCalledTimes(2);
+    expect(resolveSessionPromptAuthority).toHaveBeenCalledWith(
+      slackChannel.target_branch_id,
+      user.user_id,
+      sessionOwnerUserId,
+      'branch'
+    );
     expect(promptCreate).toHaveBeenCalledOnce();
+  });
+
+  it('edits a GitHub processing acknowledgement with the execution-home denial', async () => {
+    const githubChannel = {
+      ...slackChannel,
+      id: 'chan-github-denial',
+      channel_type: 'github',
+      channel_key: 'github-denial-key',
+      config: {},
+    } as GatewayChannel;
+    const sendMessage = vi.fn(async () => undefined);
+    const { service, promptCreate } = makeGatewayHarness({
+      channel: githubChannel,
+      existingMapping: makeMapping(),
+      sessionOwnerUserId: 'session-owner' as UserID,
+      connector: { sendMessage },
+      promptAuthority: {
+        allowed: false,
+        source: 'denied',
+        denial_reason: 'execution_home_sharing_disabled',
+      },
+    });
+
+    await expect(
+      service.create({
+        channel_key: githubChannel.channel_key,
+        thread_id: 'preset-io/agor#2587',
+        text: '@agor continue',
+        metadata: { processing_comment_id: 42 },
+      })
+    ).resolves.toEqual({ success: false, sessionId: '', created: false });
+
+    expect(sendMessage).toHaveBeenCalledWith({
+      threadId: 'preset-io/agor#2587',
+      text: expect.stringMatching(/uses its owner's execution home/i),
+      metadata: { edit_comment_id: 42 },
+    });
+    expect(promptCreate).not.toHaveBeenCalled();
   });
 });
 
@@ -785,7 +847,9 @@ describe('GatewayService multi-tenant process state', () => {
     );
     const mapping = makeMapping({ channel_id: tenantAChannel.id });
     const channelRepo = {
-      findAll: vi.fn(async () => (getCurrentTenantId() === 'tenant-a' ? [tenantAChannel] : [])),
+      findDisplayAll: vi.fn(async () =>
+        getCurrentTenantId() === 'tenant-a' ? [tenantAChannel] : []
+      ),
       findById: vi.fn(async () => tenantAChannel),
       updateLastMessage: vi.fn(async () => undefined),
     };
@@ -889,6 +953,12 @@ describe('GatewayService multi-tenant process state', () => {
     );
     const channelRepo = { findAll: vi.fn(async () => [channel]) };
     (service as unknown as { channelRepo: typeof channelRepo }).channelRepo = channelRepo;
+    const findMcpSlackRecoveryNoticePage = vi.fn(async () => ({ tasks: [] }));
+    (
+      service as unknown as {
+        taskRepo: { findMcpSlackRecoveryNoticePage: typeof findMcpSlackRecoveryNoticePage };
+      }
+    ).taskRepo = { findMcpSlackRecoveryNoticePage };
     const startListening = vi.fn(async () => undefined);
     vi.mocked(getConnector).mockReturnValue({
       startListening,
@@ -896,6 +966,7 @@ describe('GatewayService multi-tenant process state', () => {
     });
 
     await runWithTenantContext('static-tenant', () => service.startListeners());
+    await vi.waitFor(() => expect(findMcpSlackRecoveryNoticePage).toHaveBeenCalledOnce());
 
     expect(channelRepo.findAll).toHaveBeenCalledOnce();
     expect(startListening).toHaveBeenCalledOnce();
@@ -905,6 +976,10 @@ describe('GatewayService multi-tenant process state', () => {
     expect([
       ...(service as unknown as { activeListeners: Map<string, unknown> }).activeListeners.keys(),
     ]).toEqual(['static-tenant\0static-channel']);
+    expect(findMcpSlackRecoveryNoticePage).toHaveBeenCalledWith(
+      expect.objectContaining({ limit: 50, now: expect.any(Date), horizon: expect.any(Date) })
+    );
+    await service.stopListeners();
   });
 
   it('fails closed on a discovered tenant mismatch while continuing other tenants', async () => {
@@ -1235,6 +1310,87 @@ describe('GatewayService Slack thread catch-up', () => {
     expect(promptCreate).not.toHaveBeenCalled();
     expect(sessionsCreate).not.toHaveBeenCalled();
     expect(threadMapRepo.updateLastMessage).not.toHaveBeenCalled();
+  });
+});
+
+describe('GatewayService mapped-thread follow-ups', () => {
+  const mappedThreadId = 'C123-100.000000';
+
+  function makeSeedInMappedThread(): GatewayOutboundMessage {
+    return {
+      id: 'seed-in-mapped-thread',
+      gateway_channel_id: slackChannel.id,
+      channel_type: 'slack',
+      platform_channel_id: 'C123',
+      platform_message_id: '102.000000',
+      platform_thread_id: mappedThreadId,
+      platform_permalink: null,
+      target_branch_id: slackChannel.target_branch_id,
+      emitted_by_user_id: 'user-1',
+      emitted_by_session_id: 'sess-1',
+      emitted_by_task_id: 'task-origin',
+      emitted_by_schedule_id: null,
+      message_text: 'Status update from the mapped session.',
+      message_preview: 'Status update from the mapped session.',
+      metadata: null,
+      consumed_by_session_id: null,
+      consumed_at: null,
+      created_at: '2026-06-22T00:00:00.000Z',
+      updated_at: '2026-06-22T00:00:00.000Z',
+    } as unknown as GatewayOutboundMessage;
+  }
+
+  it('prompts the mapped session after a proactive message was emitted into the same thread', async () => {
+    const fetchThreadHistory = vi.fn(async () => ({
+      threadId: mappedThreadId,
+      channel: 'C123',
+      thread_ts: '100.000000',
+      has_more: false,
+      messages: [
+        {
+          ts: '103.000000',
+          iso_time: '2026-06-22T00:00:03.000Z',
+          actor_label: 'Alice',
+          text: '<@U_BOT> any update?',
+          is_bot: false,
+          is_trigger: true,
+        },
+      ],
+    }));
+    const sendMessage = vi.fn(async () => '104.000000');
+    const { service, promptCreate, sessionsCreate, admitReplySession, completeReplyAdmission } =
+      makeGatewayHarness({
+        existingMapping: makeMapping({ thread_id: mappedThreadId }),
+        connector: { fetchThreadHistory, sendMessage },
+        outboundSeed: makeSeedInMappedThread(),
+      });
+
+    const result = await service.create({
+      channel_key: 'slack-key',
+      thread_id: mappedThreadId,
+      text: 'any update?',
+      metadata: {
+        channel: 'C123',
+        channel_type: 'channel',
+        slack_has_mention: true,
+        slack_message_ts: '103.000000',
+        slack_thread_ts: '100.000000',
+      },
+    });
+
+    expect(result).toMatchObject({ success: true, sessionId: 'sess-1', created: false });
+    expect(promptCreate).toHaveBeenCalledTimes(1);
+    expect(promptCreate.mock.calls[0][1]).toMatchObject({ route: { id: 'sess-1' } });
+    expect(sessionsCreate).not.toHaveBeenCalled();
+    // The mapping — not the proactive message — owns the thread, so the seed
+    // is never reserved or consumed and the reply keeps ordinary follow-up
+    // shape instead of a seeded thread's initial prompt.
+    expect(admitReplySession).not.toHaveBeenCalled();
+    expect(completeReplyAdmission).not.toHaveBeenCalled();
+    expect(fetchThreadHistory).toHaveBeenCalledOnce();
+    const prompt = promptCreate.mock.calls[0][0].prompt as string;
+    expect(prompt).toContain('any update?');
+    expect(prompt).not.toContain('This Slack thread began from a proactive Agor gateway message');
   });
 });
 
