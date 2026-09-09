@@ -19,7 +19,7 @@ import type {
   Session,
 } from '@agor/core/types';
 import { catalogDisplayName } from '@agor/core/types';
-import { catalogServerTransport } from './mcp-catalog-install-policy.js';
+import { catalogServerTransport, sameCatalogEndpoint } from './mcp-catalog-install-policy.js';
 
 export interface MCPCatalogStartSessionService {
   create(
@@ -56,7 +56,8 @@ export function createMCPCatalogStartSessionService(
       const server = (await service('mcp-servers').get(data.mcp_server_id, params)) as MCPServer;
       const matchesEntry =
         (server.owner_user_id == null || server.owner_user_id === userId) &&
-        server.url === entry.remote_url &&
+        !!entry.remote_url &&
+        sameCatalogEndpoint(server.url, entry.remote_url) &&
         server.transport === catalogServerTransport(entry) &&
         (server.source !== 'catalog' || server.catalog_entry_name === entry.name);
       if (!matchesEntry) {

@@ -159,3 +159,16 @@ it('fails before reads or writes without authenticated caller identity', async (
   expect(built.getCandidates).not.toHaveBeenCalled();
   expect(built.sessionsCreate).not.toHaveBeenCalled();
 });
+
+it.each([
+  'https://other.example/mcp/',
+  'http://mcp.deepwiki.com/mcp/',
+  'https://mcp.deepwiki.com/other/',
+  'https://mcp.deepwiki.com/mcp/?account=other',
+])('still rejects a different endpoint %s', async (url) => {
+  const built = buildApp({ savedServer: { ...server, url } });
+  await expect(
+    createMCPCatalogStartSessionService(built.app).create(request, params)
+  ).rejects.toThrow(/not the selected/);
+  expect(built.sessionsCreate).not.toHaveBeenCalled();
+});

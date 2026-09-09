@@ -17,7 +17,6 @@ import type {
 import { getTeammateConfig } from '@agor-live/client';
 import {
   CheckCircleFilled,
-  RightOutlined,
   SafetyCertificateOutlined,
   ThunderboltOutlined,
 } from '@ant-design/icons';
@@ -26,7 +25,6 @@ import {
   Button,
   Checkbox,
   Descriptions,
-  Drawer,
   Flex,
   Form,
   Input,
@@ -44,6 +42,8 @@ import {
   explainAddRestriction,
   type MCPServerCapabilityContext,
 } from '../MCPServer/memberPolicy';
+import { CatalogDetailSection } from './CatalogDetailSection';
+import { CatalogDrawer } from './CatalogDrawer';
 import { CatalogEntryAvatar } from './CatalogEntryAvatar';
 import {
   capabilityLabel,
@@ -51,7 +51,6 @@ import {
   connectStatus,
   entryTitle,
 } from './catalogPresentation';
-import { MARKETPLACE_CATALOG_DRAWER_WIDTH } from './marketplaceLayout';
 import { type MarketplaceOAuthPopup, openMarketplaceOAuthPopup } from './marketplaceOAuthPopup';
 
 const { Title, Paragraph, Text, Link } = Typography;
@@ -66,58 +65,13 @@ const AGENT_OPTIONS = AVAILABLE_AGENTS.map((agent) => ({
 const FALLBACK_DISCLOSURE =
   'This server has published no access statement. Anything it exposes becomes available to the agent in the session you connect it to.';
 
-const CatalogDetailSection: React.FC<{
-  label: ReactNode;
-  defaultOpen?: boolean;
-  children: ReactNode;
-}> = ({ label, defaultOpen = false, children }) => {
-  const { token } = theme.useToken();
-  const contentId = useId();
-  const [open, setOpen] = useState(defaultOpen);
-
-  return (
-    <div
-      style={{
-        borderWidth: token.lineWidth,
-        borderStyle: 'solid',
-        borderColor: token.colorBorder,
-        borderRadius: token.borderRadiusLG,
-        overflow: 'hidden',
-      }}
-    >
-      <Button
-        type="text"
-        block
-        aria-expanded={open}
-        aria-controls={contentId}
-        onClick={() => setOpen((current) => !current)}
-        style={{ height: 'auto', justifyContent: 'flex-start', padding: token.paddingSM }}
-      >
-        <RightOutlined rotate={open ? 90 : 0} />
-        {label}
-      </Button>
-      {open && (
-        <div
-          id={contentId}
-          style={{
-            borderTopWidth: token.lineWidth,
-            borderTopStyle: 'solid',
-            borderTopColor: token.colorBorderSecondary,
-            padding: token.padding,
-          }}
-        >
-          {children}
-        </div>
-      )}
-    </div>
-  );
-};
-
 export interface CatalogDetailDrawerProps {
   /** Authenticated identity that owns consent, selections, and pasted credentials. */
   identityKey: string | null;
   entry: MCPCatalogEntry | null;
   open: boolean;
+  /** In-place loading/error content before an entry resolves; the drawer stays mounted. */
+  emptyContent?: ReactNode;
   onClose: () => void;
   /** Restore focus to the catalog trigger after the drawer has actually closed. */
   onAfterOpenChange?: (open: boolean) => void;
@@ -186,6 +140,7 @@ const CatalogDetailDrawerForIdentity: React.FC<CatalogDetailDrawerProps> = ({
   entry,
   open,
   onClose,
+  emptyContent,
   onAfterOpenChange,
   teammates,
   teammatesLoading,
@@ -397,15 +352,13 @@ const CatalogDetailDrawerForIdentity: React.FC<CatalogDetailDrawerProps> = ({
         : undefined;
 
   return (
-    <Drawer
+    <CatalogDrawer
       aria-labelledby={titleId}
       open={open}
       onClose={onClose}
       afterOpenChange={onAfterOpenChange}
-      size={MARKETPLACE_CATALOG_DRAWER_WIDTH}
-      destroyOnHidden
       title={
-        entry && (
+        entry ? (
           <Space id={titleId} align="center" size={token.marginSM}>
             <CatalogEntryAvatar iconUrl={entry.icon_url} title={title} />
             <Flex vertical style={{ minWidth: 0 }}>
@@ -417,11 +370,13 @@ const CatalogDetailDrawerForIdentity: React.FC<CatalogDetailDrawerProps> = ({
               </Text>
             </Flex>
           </Space>
+        ) : (
+          <span id={titleId}>Catalog</span>
         )
       }
     >
-      {entry && (
-        <Flex vertical gap={token.margin}>
+      {entry ? (
+        <>
           <span role="status" aria-live="polite" aria-atomic="true" style={VISUALLY_HIDDEN_STYLE}>
             {success?.authentication === 'ready'
               ? 'Connection status: Connected and ready.'
@@ -628,7 +583,7 @@ const CatalogDetailDrawerForIdentity: React.FC<CatalogDetailDrawerProps> = ({
               defaultOpen
               label={
                 <Space size={token.marginXS}>
-                  <SafetyCertificateOutlined />
+                  <SafetyCertificateOutlined aria-hidden />
                   <Text strong>What this can access</Text>
                 </Space>
               }
@@ -797,9 +752,11 @@ const CatalogDetailDrawerForIdentity: React.FC<CatalogDetailDrawerProps> = ({
               </Text>
             </Flex>
           )}
-        </Flex>
+        </>
+      ) : (
+        emptyContent
       )}
-    </Drawer>
+    </CatalogDrawer>
   );
 };
 
