@@ -505,17 +505,35 @@ metrics:
   ingestion cost); PostgreSQL query spans are also enabled. Intended for active
   investigation, not steady state.
 
-Both enabled depths also add an `mcp.request` span covering MCP admission and
-protocol handling, plus `mcp.tool` spans for registered tool handlers. Filter by
-`mcp.method` to separate protocol methods and by `mcp.tool` to identify the actual
-Agor tool. Calls through `agor_execute_tool` have nested facade and target-tool
-spans; do not sum those durations as independent requests. Method labels are
-bounded (`other` for unknown/malformed methods, `batch` for arrays), and tool
-names come from server registration, never arbitrary request arguments.
+Both enabled depths add an `mcp.request` span covering MCP admission and
+protocol handling, plus one measured `mcp.tool` server-operation span per logical
+tool invocation. The service remains `agor-daemon`; the resource is the registered
+tool name. Select **All server operations** (or `mcp.tool`) on the Datadog service
+page to inspect per-tool latency distributions, throughput, errors, and time.
+The existing HTTP primary operation, `POST /mcp` resource, and Feathers spans
+are unchanged; tool spans remain nested in the same trace.
+
+Calls through `agor_execute_tool` use the registered target's resource, without
+an additional facade span. Unknown targets retain `agor_execute_tool` as a bounded
+fallback. Search and detail tools remain separate resources. `mcp.outcome` is
+`success`, `tool_error` (returned `isError: true`), or `exception`; both failure
+outcomes set the span error flag without copying error messages or stacks.
+Results and exceptions delivered to callers are unchanged.
+
+Filter transport spans by `mcp.method` to separate initialization, discovery,
+tool listing/calling, and resource methods. Method labels are bounded (`other`
+for unknown/malformed methods, `batch` for arrays); resource URIs are never tags.
 Arguments, results, credentials and user/session/tenant IDs are not added to
-these tags. Tool spans measure handler execution, not pre-handler SDK validation;
-an MCP result containing `isError: true` remains a returned result rather than
-an exception. Use the protocol response to assess application success.
+these spans. Tool spans include facade argument validation but not pre-handler
+SDK validation, and end at handler completion, not SSE flush or completion of
+background work initiated by the tool. HTTP status alone does not establish
+tool success.
+
+Tracing inherits the operator's sampling settings; it does not force retention
+or add per-call logs. Aggregate logical invocations using `mcp.tool` only, not
+HTTP, transport, and nested Feathers spans together. Existing lower-layer
+instrumentation has its own error/tag policies; this does not redact all spans
+in a trace.
 
 Both enabled depths also expose capacity-related waits without per-request logs:
 
