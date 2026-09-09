@@ -45,6 +45,80 @@ required for the next heartbeat decision.
 
 `users.filesystem_home` can point at a migrated home. Otherwise Agor uses its canonical tenant-scoped home store. Never derive this path from untrusted request data.
 
+### Docker bind mounts from a sandbox
+
+Docker resolves bind-mount source paths in the **Docker daemon's filesystem**, not
+in the calling session. A sandbox path is not necessarily a host path:
+
+- The private home store is mounted onto the session's home aliases. A file
+  written under `$HOME` persists in that user's store, not at the same home path
+  seen by a host Docker daemon.
+- With the default per-user temporary storage, `/tmp` is backed by the user's
+  private `tmp` directory; `/var/tmp` is a private tmpfs.
+- The authorized Agor branch is re-exposed from its host directory. Newly written
+  files beneath that mount can be bind-mounted when Docker sees the same directory
+  at the same path. Creating a directory elsewhere with an Agor-like worktree name
+  does **not** register a branch or grant it a host-identity mount.
+
+Mount propagation controls mount/unmount events, not ordinary writes to an
+existing filesystem. `private` or `slave` propagation alone does not make files
+invisible. Do not change propagation to `rshared`, join the host mount namespace,
+or disable sandboxing to repair a path mismatch: those changes do not preserve
+Agor's isolation contract. `realpath` resolves symlinks inside the session; it
+cannot translate a private home overlay into a Docker-host path.
+
+#### Verify the exact source before provisioning
+
+Only use a Docker endpoint that the operator has authorized for this workload.
+Run this Bash probe **from the intended source directory**, using an already
+available, approved image with `cat`. It writes only a disposable canary, mounts
+it read-only, and removes it on exit:
+
+```bash
+set -euo pipefail
+image=alpine:3.19 # Replace with your approved local image.
+probe=$(mktemp -d "$(pwd -P)/.docker-source-check-XXXXXX")
+cleanup() { unlink "$probe/canary"; rmdir "$probe"; }
+trap cleanup EXIT
+printf '%s\n' "${probe##*/}" > "$probe/canary"
+actual=$(docker run --rm --pull=never --network=none --read-only \
+  --mount "type=bind,src=$probe,dst=/probe,readonly" "$image" cat /probe/canary)
+test "$actual" = "${probe##*/}"
+```
+
+Prefer `--mount` without `bind-create-src` for diagnostics: it rejects a missing
+host source, whereas `-v` can create an empty host directory and hide the mismatch.
+Repeat the canary for each source root, not just the driver checkout. See
+[Docker's bind-mount constraints](https://docs.docker.com/engine/storage/bind-mounts/#considerations-and-constraints).
+
+#### Choose the workflow boundary
+
+- **Same-host source:** keep temporary source checkouts beneath an authorized
+  branch mount that passes the probe. Account for generated files, cleanup, and
+  concurrent runs; do not place them in sibling branches or guess another user's
+  physical home path.
+- **Session-private or remote source:** transfer only the required source bytes
+  using a client-side build context or a tar stream into a fresh per-run Docker
+  volume. Remove all original source bind mounts from the consuming configuration;
+  copying bytes alone does not change Compose mounts. Track the volume/container
+  IDs and clean up only that run's resources on every exit path.
+- **Isolated container workloads:** use an operator-reviewed delegated substrate
+  with explicit tenant/user storage and Docker access policy when host Docker
+  access is not appropriate.
+
+Docker volumes and containers do not inherit Agor's tenant/branch RBAC. A unique
+resource name prevents accidental collisions, not unauthorized access. Access to
+an unrestricted host Docker daemon is a separate privileged capability; the
+filesystem sandbox does not constrain what that daemon can mount. Do not expose
+it to untrusted tenants as a workaround. See
+[Docker daemon security](https://docs.docker.com/engine/security/#docker-daemon-attack-surface).
+
+In HA or remote-Docker deployments, a local canary is insufficient: it must pass
+against the endpoint that will provision the workload. Local volumes belong to
+that Docker host; cleanup and retries must target the same host, or the workflow
+must explicitly restage its source. No database setting makes these files or
+volumes portable between hosts.
+
 ### Per-branch SDK homes
 
 Agent SDK state can be relocated from the session owner's home into a directory
