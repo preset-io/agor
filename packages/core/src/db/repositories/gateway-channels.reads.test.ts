@@ -2,16 +2,27 @@ import { setImmediate as nextTurn } from 'node:timers/promises';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Database } from '../client';
 import * as encryption from '../encryption';
+import { gatewayChannels } from '../schema';
 import { GatewayChannelRepository } from './gateway-channels';
 
-const query = vi.hoisted(() => ({ rows: [] as Record<string, unknown>[], selects: 0 }));
+const query = vi.hoisted(() => ({
+  rows: [] as Record<string, unknown>[],
+  selects: 0,
+  projection: undefined as unknown,
+}));
 vi.mock('../database-wrapper', async (importOriginal) => {
   const original = await importOriginal<typeof import('../database-wrapper')>();
   return {
     ...original,
-    select: () => {
+    select: (_db: unknown, projection: unknown) => {
+      query.projection = projection;
       query.selects++;
-      const result = { all: async () => query.rows, one: async () => query.rows[0] };
+      const result = {
+        all: async () => query.rows,
+        one: async () => query.rows[0],
+        orderBy: () => result,
+        limit: () => result,
+      };
       return { from: () => ({ ...result, where: () => result }) };
     },
   };
@@ -48,6 +59,21 @@ afterEach(() => {
 });
 
 describe('gateway credential hydration', () => {
+  it('discovers IDs with one narrow query and no credential decryption', async () => {
+    const first = '00000000-0000-4000-8000-000000000001';
+    query.rows = [row(first), row('second')];
+    const open = vi.spyOn(encryption, 'decryptApiKeyAsync');
+    const repo = new GatewayChannelRepository({} as Database);
+    expect(await repo.findEnabledListenerCandidateIds(2)).toEqual([first, 'second']);
+    expect(query.projection).toEqual({ id: gatewayChannels.id });
+    expect(query.selects).toBe(1);
+    expect(open).not.toHaveBeenCalled();
+    // Discovery is not a credential cache: the later authoritative read opens
+    // the current row, including all three secret fields.
+    await repo.findById(first);
+    expect(open).toHaveBeenCalledTimes(3);
+  });
+
   it('opens rows and fields serially, preserves order and hidden tenant, and does not cache', async () => {
     query.rows = [row('second'), row('first')];
     let active = 0;
@@ -120,6 +146,30 @@ describe('gateway credential hydration', () => {
       expect(logs).toHaveBeenCalledTimes(2);
       expect(JSON.stringify(logs.mock.calls)).not.toContain('corrupt:');
     }
+  );
+
+  it.skipIf(process.env.AGOR_BENCH_GATEWAY_DISCOVERY !== '1')(
+    'benchmarks discovery hydration versus ID projection with real crypto',
+    async () => {
+      query.rows = Array.from({ length: 6 }, (_, i) => row(String(i)));
+      const repo = new GatewayChannelRepository({} as Database);
+      const samples: Record<string, number[]> = { hydrated: [], ids: [] };
+      for (let round = 0; round < 4; round++) {
+        for (const mode of round % 2 ? ['ids', 'hydrated'] : ['hydrated', 'ids']) {
+          const start = performance.now();
+          const result =
+            mode === 'ids'
+              ? await repo.findEnabledListenerCandidateIds(6)
+              : (await repo.findAll()).map((channel) => channel.id);
+          expect(result).toEqual(['0', '1', '2', '3', '4', '5']);
+          if (round) samples[mode].push(performance.now() - start);
+        }
+      }
+      process.stdout.write(
+        `Discovery-only benchmark, mock SQL / real crypto, ms: ${JSON.stringify(samples)}\n`
+      );
+    },
+    30000
   );
 
   it.skipIf(process.env.AGOR_BENCH_GATEWAY_READ !== '1')(

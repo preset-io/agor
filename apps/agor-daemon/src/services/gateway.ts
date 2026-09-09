@@ -4826,12 +4826,12 @@ export class GatewayService {
 
     const refs = this.listenerDiscoveryTenantId
       ? await this.runWithListenerTenantIdentity(this.listenerDiscoveryTenantId, async () => {
-          const channels = await this.channelRepo.findEnabledListenerCandidates(
+          const channelIds = await this.channelRepo.findEnabledListenerCandidateIds(
             GATEWAY_LISTENER_SCAN_BATCH,
             this.listenerDiscoveryCursor?.channel_id
           );
-          return channels.map((channel) => ({
-            channel_id: channel.id,
+          return channelIds.map((channelId) => ({
+            channel_id: channelId,
             tenant_id: this.listenerDiscoveryTenantId!,
           }));
         })

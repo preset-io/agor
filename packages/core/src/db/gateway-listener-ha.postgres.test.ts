@@ -317,11 +317,11 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('gateway listener HA (Postg
     expect(refs).toContainEqual({ channel_id: discord.channel.id, tenant_id: tenantA });
 
     await runWithTenantDatabaseScope(db, tenantA, async (scoped) => {
-      const candidates = await new GatewayChannelRepository(scoped).findEnabledListenerCandidates(
+      const candidates = await new GatewayChannelRepository(scoped).findEnabledListenerCandidateIds(
         100
       );
-      expect(candidates.some((channel) => channel.id === a.channel.id)).toBe(true);
-      expect(candidates.some((channel) => channel.id === discord.channel.id)).toBe(true);
+      expect(candidates.includes(a.channel.id)).toBe(true);
+      expect(candidates.includes(discord.channel.id)).toBe(true);
 
       await new GatewayChannelRepository(scoped).claimListener({
         channelId: a.channel.id,
@@ -343,6 +343,9 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('gateway listener HA (Postg
     });
 
     await runWithTenantDatabaseScope(db, tenantB, async (scoped) => {
+      expect(
+        await new GatewayChannelRepository(scoped).findEnabledListenerCandidateIds(100)
+      ).not.toContain(a.channel.id);
       expect(await new GatewayChannelRepository(scoped).findById(a.channel.id)).toBeNull();
       expect(
         await new GatewayChannelRepository(scoped).claimListener({

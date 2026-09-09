@@ -493,11 +493,14 @@ export class GatewayChannelRepository
     return result.rowsAffected > 0;
   }
 
-  /** Bounded tenant-local candidates for static PostgreSQL deployments. */
-  async findEnabledListenerCandidates(
+  /**
+   * Bounded tenant-local discovery, without loading credentials. The listener
+   * worker reloads each candidate under tenant scope before claiming/starting it.
+   */
+  async findEnabledListenerCandidateIds(
     limit = 25,
     afterId?: GatewayChannelID
-  ): Promise<GatewayChannel[]> {
+  ): Promise<GatewayChannelID[]> {
     if (!Number.isInteger(limit) || limit <= 0 || limit > 1_000) {
       throw new RepositoryError('Gateway listener candidate limit must be between 1 and 1000');
     }
@@ -511,34 +514,20 @@ export class GatewayChannelRepository
     const auditedProvider = isPostgresDatabase(this.db)
       ? inArray(gatewayChannels.channel_type, [...DURABLE_GATEWAY_LISTENER_CHANNEL_TYPES])
       : undefined;
-    const candidates: GatewayChannel[] = [];
-    let rawAfterId = afterId;
-    while (candidates.length < limit) {
-      const rows = await select(this.db)
-        .from(gatewayChannels)
-        .where(
-          and(
-            eq(gatewayChannels.enabled, true),
-            auditedProvider,
-            claimable,
-            rawAfterId ? gt(gatewayChannels.id, rawAfterId) : undefined
-          )
+    const rows = await select(this.db, { id: gatewayChannels.id })
+      .from(gatewayChannels)
+      .where(
+        and(
+          eq(gatewayChannels.enabled, true),
+          auditedProvider,
+          claimable,
+          afterId ? gt(gatewayChannels.id, afterId) : undefined
         )
-        .orderBy(asc(gatewayChannels.id))
-        .limit(limit)
-        .all();
-
-      for (const row of rows as GatewayChannelRow[]) {
-        candidates.push(await this.rowToChannel(row));
-        if (candidates.length === limit) break;
-      }
-
-      if (rows.length < limit || candidates.length === limit) break;
-      const last = rows.at(-1) as GatewayChannelRow | undefined;
-      if (!last) break;
-      rawAfterId = last.id as GatewayChannelID;
-    }
-    return candidates;
+      )
+      .orderBy(asc(gatewayChannels.id))
+      .limit(limit)
+      .all();
+    return (rows as Pick<GatewayChannelRow, 'id'>[]).map((row) => row.id as GatewayChannelID);
   }
 
   /**
