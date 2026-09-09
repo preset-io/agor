@@ -1,8 +1,12 @@
 import { act, cleanup, configure, render, screen, waitFor, within } from '@testing-library/react';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { userEvent } from 'vitest/browser';
 import { checkBrowserSanity } from '../../test/browserSanity';
-import { CatalogHarness, makeCatalogClient } from './MCPCatalogModal.test-fixtures';
+import {
+  CatalogHarness,
+  githubHandoffEntry,
+  makeCatalogClient,
+} from './MCPCatalogModal.test-fixtures';
 
 checkBrowserSanity();
 // Native Playwright input must commit mousedown before focus/mouseup. Wrapping
@@ -40,6 +44,56 @@ function expectInViewport(element: HTMLElement) {
 }
 
 describe('MCP Catalog real Chromium flows', () => {
+  it('opens the reviewed PAT drawer for the new branch, never connects eagerly, and forgets it on close', async () => {
+    const api = makeCatalogClient([githubHandoffEntry]);
+    const consumed = vi.fn();
+    // Keep the original 15-second budget and every lifecycle assertion, but
+    // use actual browser rendering/motion instead of repeated jsdom CSS parsing.
+    render(
+      <CatalogHarness
+        client={api.client}
+        handoff={{ entryName: githubHandoffEntry.name, branchId: 'branch-1' }}
+        onHandoffConsumed={consumed}
+      />
+    );
+    const drawer = await screen.findByRole('dialog', { name: /GitHub/ });
+    await within(drawer).findByText('Catalog QA');
+    await waitFor(() => {
+      expect(drawer.getBoundingClientRect().right).toBeCloseTo(window.innerWidth, 1);
+      expect(
+        drawer
+          .closest('.ant-drawer-content-wrapper')!
+          .getAnimations()
+          .some((animation) => animation.playState === 'running')
+      ).toBe(false);
+    });
+    expect(
+      within(drawer).getByPlaceholderText('Paste your GitHub bearer access token')
+    ).toHaveValue('');
+    expect(api.connect).not.toHaveBeenCalled();
+    expect(consumed).toHaveBeenCalledTimes(1);
+    await userEvent.click(within(drawer).getByRole('button', { name: 'Close' }));
+    // Assert actual teardown, not a temporarily inaccessible animated node.
+    await waitFor(() => expect(drawer).not.toBeInTheDocument());
+    expect(screen.queryByRole('dialog', { name: /GitHub/ })).not.toBeInTheDocument();
+    expect(api.connect).not.toHaveBeenCalled();
+    const modal = await findCatalogModal();
+    await userEvent.click(within(modal).getByRole('button', { name: 'Close' }));
+    await waitFor(() => expect(modal).not.toBeInTheDocument());
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: 'Open MCP Catalog' }));
+    const reopened = await findCatalogModal();
+    // Handoff replay is gated by afterOpenChange: absence during entry motion
+    // is not proof that the old intent was consumed.
+    await waitFor(() =>
+      expect(reopened.getAnimations().some((animation) => animation.playState === 'running')).toBe(
+        false
+      )
+    );
+    await screen.findByRole('button', { name: 'Open GitHub' });
+    expect(screen.queryByRole('dialog', { name: /GitHub/ })).not.toBeInTheDocument();
+  }, 15_000);
+
   it('opens from the header with Enter/Space, searches, closes with Escape, tears down and restores focus', async () => {
     const api = makeCatalogClient();
     render(<CatalogHarness client={api.client} />);
