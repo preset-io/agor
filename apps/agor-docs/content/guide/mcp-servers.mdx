@@ -71,10 +71,12 @@ established by someone else. This policy concerns hard deletion, not a role
 change, and does not transfer consent to the server owner.
 
 Retirement deletes Agor's stored access/refresh tokens and grant-bound client
-material. It is **not synchronous provider-side revocation**. Already-admitted
-mediated requests may finish; new mediated hops and fresh authentication-status
-reads no longer accept the removed grant. Direct provider connections in `off`
-or `observe` mode remain subject to the provider's own lifetime/revocation rules.
+material. **Agor makes no provider revocation request**, synchronously or
+asynchronously; use the provider's security settings if revocation is required.
+Already-admitted mediated requests may finish; new mediated hops and fresh
+authentication-status reads no longer accept the removed grant. Direct provider
+connections in `off` or `observe` mode remain subject to the provider's own
+lifetime/revocation rules.
 
 Browser callbacks and manual OAuth completion use the trusted initiating user,
 not request fields. The client-credentials **Test Authentication** path is a
@@ -84,10 +86,16 @@ a stored grant; a successful probe alone is not durable shared authorization.
 
 ### Upgrade: shared-grant attribution (`0105`, both databases)
 
-1. Stop **all** daemons against the database and close outstanding sign-in windows.
-2. Back up the database, then run `agor db migrate --offline-cutover` with the new binary.
-3. Start only the new binaries and have a current administrator authorize each
-   shared OAuth server again.
+1. Inventory affected shared OAuth servers in each tenant and identify a current
+   administrator in that tenant to own reauthorization.
+2. Quiesce OAuth exchanges and refreshes: stop new sign-ins and OAuth-using work,
+   let in-flight exchanges/refreshes settle, close outstanding sign-in windows,
+   and stop **all** daemons against the database.
+3. Take and verify a database backup, then run `agor db migrate --offline-cutover`
+   with the new binary.
+4. Start only the new binaries and have the identified administrators authorize
+   their shared servers again. Verify fresh authentication status and **Save & Test
+   Connection** for each affected server before resuming OAuth-using work.
 
 The migration preserves per-user grants, including tokens, configuration
 bindings, refresh state and timestamps. It cannot know historical shared
@@ -101,8 +109,9 @@ successful migration's deleted shared grants cannot be recovered by a schema
 rollback. Older binaries cannot supply the new required attribution and must
 not run against the upgraded schema. Returning to an older binary requires a
 coordinated offline restoration of a pre-upgrade backup, which also restores
-its old credential-retention behavior and may reintroduce retired credentials;
-prefer a forward fix and fresh consent.
+its old credential-retention behavior and may reintroduce retired credentials.
+Restoring a backup cannot undo provider-side authorization-code consumption or
+token rotation; prefer a forward fix and fresh consent.
 
 ## Catalog curation for operators
 

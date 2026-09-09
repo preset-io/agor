@@ -297,6 +297,7 @@ Some migrations change authorization, distributed ownership, or callback protoco
 - `0095_board_branch_capability_policies` (PostgreSQL) / `0098_board_branch_capability_policies` (SQLite) replaces board and branch RBAC with normalized capability policies. Its best-effort conversion is intentionally equal-or-less privilege: legacy prompt sharing is reduced to independent collaboration, and rules that cannot be represented safely may lose access rather than gain it.
 - `0100_claude_oauth_attempts` (PostgreSQL) / `0103_claude_oauth_attempts` (SQLite) moves Claude paste-back attempts and credential-file mutations into generation-fenced authority. Old daemons do not participate in that protocol and must not overlap the new cohort.
 - `0102_mcp_oauth_client_registrations` (PostgreSQL only) moves Dynamic Client Registration ownership into encrypted UUID/CAS authority. SQLite deliberately keeps process-local registration and has no matching migration.
+- `0105_mcp_oauth_grant_attribution` (both databases) retires historical shared MCP OAuth grants while preserving per-user grants. Follow the [shared-grant upgrade checklist](/guide/mcp-servers#upgrade-shared-grant-attribution-0105-both-databases) for inventory, quiescing exchanges/refreshes, reauthorization ownership, post-cutover verification, and backup restoration limits.
 
 Rolling old and new daemons against the same database across any cutover is not supported.
 

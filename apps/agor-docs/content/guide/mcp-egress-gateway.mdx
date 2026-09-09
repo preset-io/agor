@@ -40,8 +40,8 @@ Credential rotation that preserves an OAuth grant's generation and binding does
 not invalidate that grant. Disconnect, `invalid_grant` deletion, grant
 replacement, hard deletion of the shared grant's consenting account, binding
 change, configuration change, detach, task completion, or principal/role loss
-prevents the next admission. Consenter deletion retires the local grant; it does
-not claim synchronous provider-side revocation.
+prevents the next admission. Consenter deletion retires the local grant; Agor
+makes no provider revocation request, synchronously or asynchronously.
 
 OAuth refresh is part of this boundary: after token-endpoint DNS resolution and
 immediately before a refresh token, client secret, or Basic header is sent, the
