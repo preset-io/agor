@@ -2,6 +2,15 @@ import { PublicBaseUrlNotConfiguredError } from '@agor/core/config';
 import { BadRequest, Conflict, Forbidden } from '@agor/core/feathers';
 import { sanitizeMCPExternalError } from '@agor/core/mcp';
 import { OAuthConfigurationError, OAuthDCRFailure } from '@agor/core/tools/mcp/oauth-mcp-transport';
+import {
+  AmbiguousRefreshError,
+  GrantConfigurationChangedError,
+  InvalidGrantError,
+  MissingClientIdError,
+  MissingRefreshTokenError,
+  MissingTokenEndpointError,
+  OAuthRefreshExchangeError,
+} from '@agor/core/tools/mcp/oauth-refresh';
 import type { MCPAuthRecovery, MCPServerID } from '@agor/core/types';
 
 function target(mcpServerId?: string) {
@@ -11,6 +20,13 @@ function target(mcpServerId?: string) {
 }
 
 type TrustedRecoveryErrorConstructor =
+  | typeof AmbiguousRefreshError
+  | typeof InvalidGrantError
+  | typeof MissingRefreshTokenError
+  | typeof MissingClientIdError
+  | typeof MissingTokenEndpointError
+  | typeof GrantConfigurationChangedError
+  | typeof OAuthRefreshExchangeError
   | typeof Forbidden
   | typeof Conflict
   | typeof BadRequest
@@ -132,6 +148,36 @@ export function classifyMCPAuthRecovery(
       message:
         'OAuth needs a browser-reachable Agor callback URL. Configure the deployment public URL and register the callback with the provider, then retry.',
       ...(options.redirectUri ? { redirect_uri: options.redirectUri } : {}),
+    };
+  }
+
+  if (
+    [
+      AmbiguousRefreshError,
+      InvalidGrantError,
+      MissingRefreshTokenError,
+      MissingClientIdError,
+      MissingTokenEndpointError,
+      GrantConfigurationChangedError,
+    ].some((errorClass) => safeInstanceOf(error, errorClass))
+  ) {
+    return {
+      ...common,
+      category: 'authentication_required',
+      action: 'reauthenticate',
+      message:
+        'The saved OAuth grant cannot be used safely. Sign in again to reconnect this server.',
+    };
+  }
+  if (safeInstanceOf(error, OAuthRefreshExchangeError)) {
+    return {
+      ...common,
+      category: 'authentication_required',
+      action: safeOwnDataValue(error, 'ambiguous') === true ? 'reauthenticate' : 'retry',
+      message:
+        safeOwnDataValue(error, 'ambiguous') === true
+          ? 'The provider refresh outcome is unknown. Sign in again; Agor will not replay a possibly consumed refresh token.'
+          : 'The provider refused to refresh access. Retry, or review the saved OAuth client configuration.',
     };
   }
 

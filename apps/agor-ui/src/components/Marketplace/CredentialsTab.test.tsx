@@ -51,7 +51,7 @@ describe('Marketplace credential metadata', () => {
     const active = screen.getByText('Active server').closest('tr');
     expect(active).not.toBeNull();
     expect(within(active!).getByText('OAuth')).toBeInTheDocument();
-    expect(within(active!).getByText('Connected')).toBeInTheDocument();
+    expect(within(active!).getByText('Access expired')).toBeInTheDocument();
     expect(within(active!).getAllByText(new Date(TIMESTAMP).toLocaleString())).toHaveLength(2);
     fireEvent.click(
       screen.getByRole('button', {
@@ -65,7 +65,7 @@ describe('Marketplace credential metadata', () => {
     const statuses = [
       ['active', 'Connected', 'success', 'Settings'],
       ['configured', 'Credential stored', 'default', 'Settings'],
-      ['refreshable', 'Connected', 'success', 'Settings'],
+      ['refreshable', 'Refresh needed', 'warning', 'Settings'],
       ['refreshing', 'Refreshing', 'processing', 'Settings'],
       ['reauthentication_required', 'Reconnect required', 'error', 'Reconnect'],
       ['not_connected', 'Sign-in required', 'warning', 'Connect'],

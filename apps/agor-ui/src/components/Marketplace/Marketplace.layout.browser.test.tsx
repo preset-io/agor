@@ -5,7 +5,7 @@
  * cover the browser result at the desktop, phone, and short-landscape viewports
  * configured in `vitest.browser.config.ts`, without screenshot pixel churn.
  */
-import type { MCPCatalogEntry, MCPMarketplaceOverview } from '@agor/core/types';
+import type { MCPCatalogEntry, MCPMarketplaceOverview, MCPServerID } from '@agor/core/types';
 import type { AgorClient, User } from '@agor-live/client';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { ConfigProvider } from 'antd';
@@ -21,6 +21,8 @@ import {
   MARKETPLACE_CATALOG_DRAWER_WIDTH,
   MARKETPLACE_SERVER_DRAWER_WIDTH,
 } from './marketplaceLayout';
+import { marketplaceCredentialPresentation } from './marketplacePresentation';
+import { ServerSettingsDrawer } from './ServerSettingsDrawer';
 import { SessionsTab } from './SessionsTab';
 
 const CATALOG_ENTRY: MCPCatalogEntry = {
@@ -388,6 +390,78 @@ describe('Catalog responsive layout (real browser)', () => {
     const manage = screen.getByRole('button', { name: /OAuth connection/ });
     expect(document.querySelector('.ant-table-content')).toBeNull();
     expectReachableInViewport(manage);
+  });
+
+  it('shows expired GitLab refresh pending, then actionable reauth without claiming Connected', async () => {
+    const server = {
+      mcp_server_id: 'gitlab' as MCPServerID,
+      name: 'GitLab',
+      source: 'user',
+      transport: 'http',
+      enabled: true,
+      tools: [],
+      session_count: 0,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    } satisfies MCPMarketplaceOverview['servers'][number];
+    const reconnect = vi.fn();
+    const refreshTools = vi.fn();
+    const props = {
+      server,
+      attachments: [],
+      cursorAttached: false,
+      canRefresh: true,
+      canChangeTools: true,
+      canReconnect: true,
+      canRemove: true,
+      busy: new Set<string>(),
+      onClose: vi.fn(),
+      onAfterOpenChange: vi.fn(),
+      onReconnectOAuth: reconnect,
+      onRefreshTools: refreshTools,
+      onToggleTool: vi.fn(),
+      onRemove: vi.fn(),
+    };
+    const renewable = {
+      mcp_server_id: 'gitlab' as MCPServerID,
+      server_name: 'GitLab',
+      method: 'oauth',
+      status: 'expired',
+      detail_status: 'refreshable',
+      expires_at: new Date(1).toISOString(),
+    } satisfies MCPMarketplaceOverview['credentials'][number];
+    const view = render(
+      <ServerSettingsDrawer
+        {...props}
+        credential={renewable}
+        connection={marketplaceCredentialPresentation(renewable)}
+      />
+    );
+    expect(await screen.findByText(/OAuth.*Refresh needed/)).toBeVisible();
+    expect(screen.queryByText(/OAuth.*Connected/)).not.toBeInTheDocument();
+    expect(refreshTools).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh tools' }));
+    expect(refreshTools).toHaveBeenCalledTimes(1);
+    const failed = {
+      ...renewable,
+      status: 'attention',
+      detail_status: 'reauthentication_required',
+    } as const;
+    view.rerender(
+      <ServerSettingsDrawer
+        {...props}
+        credential={failed}
+        connection={marketplaceCredentialPresentation(failed)}
+      />
+    );
+    const reconnectButton = await screen.findByRole('button', { name: 'Reconnect GitLab account' });
+    await waitFor(() => {
+      reconnectButton.scrollIntoView({ block: 'center', inline: 'nearest' });
+      expectReachableInViewport(reconnectButton);
+    });
+    fireEvent.click(reconnectButton);
+    expect(reconnect).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText(/OAuth.*Connected/)).not.toBeInTheDocument();
   });
 
   it('keeps the primary My Servers action directly reachable on a phone', async () => {

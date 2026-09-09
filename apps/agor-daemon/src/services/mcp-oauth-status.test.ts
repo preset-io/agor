@@ -111,14 +111,17 @@ describe('resolveAuthenticatedServerIds', () => {
     await expect(resolveAuthenticatedServerIds(deps)).resolves.toEqual(['server-alices-private']);
   });
 
-  it('never advertises a refresh-ambiguous grant as authenticated', async () => {
-    const deps = buildDeps({
-      listShared: async () => [grantFor('server-shared', { refresh_status: 'ambiguous' })],
-      findServers: async () => [serverOwnedBy('server-shared')],
-    });
+  it.each(['ambiguous', 'refreshing'] as const)(
+    'never advertises a %s grant as authenticated',
+    async (refresh_status) => {
+      const deps = buildDeps({
+        listShared: async () => [grantFor('server-shared', { refresh_status })],
+        findServers: async () => [serverOwnedBy('server-shared')],
+      });
 
-    await expect(resolveAuthenticatedServerIds(deps)).resolves.toEqual([]);
-  });
+      await expect(resolveAuthenticatedServerIds(deps)).resolves.toEqual([]);
+    }
+  );
 
   it('never advertises an expired grant', async () => {
     const deps = buildDeps({

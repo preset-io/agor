@@ -48,6 +48,14 @@ export function marketplaceCredentialPresentation(
 
   switch (credentialDetailStatus(credential)) {
     case 'active':
+      if (credential.expires_at && Date.parse(credential.expires_at) <= Date.now()) {
+        return {
+          label: 'Access expired',
+          badge: 'warning',
+          detail:
+            'Access has expired. Refresh status to check whether the saved grant can be renewed.',
+        };
+      }
       return {
         label: 'Connected',
         badge: 'success',
@@ -62,15 +70,16 @@ export function marketplaceCredentialPresentation(
       };
     case 'refreshable':
       return {
-        label: 'Connected',
-        badge: 'success',
-        detail: 'Access will refresh securely when this server is used.',
+        label: 'Refresh needed',
+        badge: 'warning',
+        detail:
+          'Access has expired. Agor will try the saved refresh grant when this server is used.',
       };
     case 'refreshing':
       return {
         label: 'Refreshing',
         badge: 'processing',
-        detail: 'Agor is refreshing this connection. No new sign-in is needed.',
+        detail: 'Agor is refreshing this connection. Wait for the result.',
       };
     case 'reauthentication_required':
       return {

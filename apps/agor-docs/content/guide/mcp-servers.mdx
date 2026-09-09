@@ -15,6 +15,31 @@ Catalog's pre-connect readiness is advisory from catalog and saved-connection da
 
 For unsupported schemes, configure the server in **Settings → MCP Servers**. Custom headers still support alternatives such as Datadog API/application-key pairs; Catalog's Datadog entry uses Datadog's recommended browser OAuth flow instead of asking users to manage a long-lived PAT or SAT. That card targets Datadog's US1 MCP endpoint. Other Datadog sites need their regional endpoint configured manually, and an organisation may need to allow-list the Agor callback under **MCP OAuth Redirect URLs** before sign-in completes.
 
+### Expiring OAuth access and refresh
+
+**Connected** means the saved access grant is currently usable according to its stored
+expiry and configuration binding; it is not a live provider health check. **Refresh needed**
+means access has expired and a refresh credential is stored. Agor attempts refresh just before
+use, including **Refresh tools** and saved-server connection tests, without opening a sign-in
+window. Inventory reads never contact providers. A successful refresh atomically replaces the
+access token and any rotated refresh token; an omitted refresh token preserves the old one.
+
+GitLab normally issues access tokens lasting two hours (`expires_in: 7200`). This is the
+provider's access-token lifetime, not an Agor daily sign-in limit. Agor sends the grant's
+original redirect URI and client credentials when refreshing. A valid stored refresh grant
+can renew access without user interaction.
+
+If the token endpoint definitively rejects the grant/client, Agor retires that exact grant.
+If an exchange may have consumed a rotating refresh token but its result was lost or malformed,
+Agor quarantines it instead of replaying it. Use **Connect** or **Reconnect** in the server's
+settings to sign in again. Temporary, unambiguous provider rejections preserve the grant for
+retry; a missing refresh token or incompatible saved client may also require sign-in.
+
+Existing bound grants with valid refresh credentials can recover on their next use after an
+upgrade. A missing original redirect/client, revoked grant, or quarantined/lost rotation may
+need one new sign-in. Upgrading cannot recover a token pair the provider issued but Agor never
+received. Do not disconnect a working refreshable grant merely because access expired.
+
 ### Recovering a provider-deleted OAuth client (administrators)
 
 If sign-in repeatedly fails at the provider with an unknown/deleted client, ordinary reconnect may keep selecting the same saved Dynamic Client Registration (DCR). Agor automatically retires that exact registration only when the provider's token endpoint returns a structured `invalid_client` or `unauthorized_client` error. A browser/authorization-page error alone does not authorize retirement.
