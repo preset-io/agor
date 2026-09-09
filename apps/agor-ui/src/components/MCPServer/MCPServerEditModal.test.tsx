@@ -597,6 +597,8 @@ describe('MCPServerEditModal legacy DCR compatibility', () => {
       oauth_compatibility_policy: {
         effective_mode: 'marketplace',
         managed_by_catalog: true,
+        effective_dcr_mode: 'advertised',
+        dcr_mode_source: 'default',
       },
     } as MCPServer;
     const get = vi.fn().mockResolvedValue(latest);
@@ -634,6 +636,9 @@ describe('MCPServerEditModal legacy DCR compatibility', () => {
       expect(screen.getByLabelText('Description')).toHaveValue('edited elsewhere')
     );
     expect(screen.getByLabelText('OAuth Compatibility')).toHaveValue('marketplace');
+    expect(screen.getByText(/Saved OAuth policy:/)).toHaveTextContent(
+      'compatibility marketplace; DCR advertised (default).'
+    );
 
     fireEvent.change(screen.getByLabelText('Description'), { target: { value: 'retry edit' } });
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));

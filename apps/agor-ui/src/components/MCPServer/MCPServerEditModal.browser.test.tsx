@@ -80,3 +80,87 @@ it('can edit, save, discover, inspect the notice, and save again at every viewpo
     expected_config_version: 8,
   });
 });
+
+it.each(['dcr_disabled', 'protected_resource_mismatch'] as const)(
+  'inspects saved policy without side effects and renders %s',
+  async (failureReason) => {
+    const server = {
+      mcp_server_id: '01900000-0000-7000-8000-000000000002',
+      name: 'OAuth diagnostics fixture',
+      transport: 'http',
+      url: 'https://fixture.example/mcp',
+      scope: 'global',
+      enabled: true,
+      config_version: 1,
+      source: 'user',
+      auth: { type: 'oauth', oauth_compatibility_mode: 'strict', oauth_dcr_mode: 'disabled' },
+      oauth_compatibility_policy: {
+        effective_mode: 'strict',
+        managed_by_catalog: false,
+        effective_dcr_mode: 'disabled',
+        dcr_mode_source: 'explicit',
+      },
+    } as MCPServer;
+    const patch = vi.fn().mockResolvedValue({ ...server, config_version: 2 });
+    const failureMessage =
+      failureReason === 'dcr_disabled'
+        ? 'Dynamic Client Registration is explicitly disabled. Save a pre-registered Client ID.'
+        : 'The protected-resource metadata does not match the saved MCP resource URL. Verify the MCP URL and provider resource metadata.';
+    const start = vi.fn().mockResolvedValue({
+      success: false,
+      error: failureMessage,
+      recovery: {
+        category:
+          failureReason === 'dcr_disabled'
+            ? 'client_registration_required'
+            : 'metadata_incompatible',
+        action: failureReason === 'dcr_disabled' ? 'configure_client' : 'review_compatibility',
+        message: failureMessage,
+        failure_reason: failureReason,
+        oauth_policy: {
+          effective_mode: 'strict',
+          effective_dcr_mode: 'disabled',
+          dcr_mode_source: 'explicit',
+        },
+      },
+    });
+    const service = vi.fn((path: string) => {
+      if (path === 'mcp-servers') return { patch };
+      if (path === 'mcp-servers/oauth-start') return { create: start };
+      throw new Error(`Unexpected inspection side effect: ${path}`);
+    });
+    const client = { service, io: { on: vi.fn(), off: vi.fn() } } as unknown as AgorClient;
+    render(
+      <ConfigProvider theme={{ algorithm: theme.darkAlgorithm, token: { motion: false } }}>
+        <App>
+          <MCPServerEditModal
+            server={server}
+            open
+            client={client}
+            identityKey="user-a"
+            authorityKey="user-a:admin:1"
+            authGeneration={1}
+            mutationAllowed
+            onClose={vi.fn()}
+          />
+        </App>
+      </ConfigProvider>
+    );
+    const summary = await screen.findByText(/Saved OAuth policy:/);
+    expect(summary).toHaveTextContent('compatibility strict; DCR disabled (explicit).');
+    expect(service).not.toHaveBeenCalled();
+    await act(() => userEvent.click(screen.getByRole('button', { name: /Start OAuth Flow/ })));
+    const reason = await screen.findByText(failureReason);
+    reason.scrollIntoView();
+    expect(reason).toBeVisible();
+    expect(screen.getByText(/Policy at failure:/)).toHaveTextContent(
+      'compatibility strict; DCR disabled (explicit).'
+    );
+    expect(patch.mock.calls[0]?.[1]?.auth).toMatchObject({
+      oauth_dcr_mode: 'disabled',
+      oauth_compatibility_mode: 'strict',
+    });
+    expect(start).toHaveBeenCalledOnce();
+    expect(document.documentElement.scrollWidth).toBeLessThanOrEqual(window.innerWidth + 1);
+  }
+);

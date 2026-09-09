@@ -155,6 +155,9 @@ async function createTestProvider(
     holdDynamicRegistration?: boolean;
     resourceScopes?: string[];
     resourcePath?: string;
+    metadataIssuer?: string;
+    pkceMethods?: readonly string[];
+    callbackIssuerSupported?: boolean;
     holdMcpChallenge?: boolean;
   } = {}
 ): Promise<TestProvider> {
@@ -212,20 +215,23 @@ async function createTestProvider(
       response.writeHead(200, { 'content-type': 'application/json' });
       response.end(
         JSON.stringify({
-          issuer: baseUrl,
+          issuer: options.metadataIssuer ?? baseUrl,
           authorization_endpoint: `${baseUrl}/authorize`,
           token_endpoint: `${baseUrl}/token`,
           ...(options.rejectDynamicRegistration || options.holdDynamicRegistration
             ? { registration_endpoint: `${baseUrl}/register` }
             : {}),
           response_types_supported: ['code'],
-          code_challenge_methods_supported: ['S256'],
+          code_challenge_methods_supported: options.pkceMethods ?? ['S256'],
           // The DCR fixture deliberately omits RFC 9207 response-issuer
           // support. Reaching /register therefore proves that the canonical
           // catalog row selected Marketplace policy rather than strict.
           ...(options.rejectDynamicRegistration || options.holdDynamicRegistration
             ? {}
-            : { authorization_response_iss_parameter_supported: true }),
+            : {
+                authorization_response_iss_parameter_supported:
+                  options.callbackIssuerSupported ?? true,
+              }),
         })
       );
       return;
@@ -418,6 +424,7 @@ async function createHarness(
   oauthMode?: 'per_user' | 'shared',
   options: {
     catalogPeer?: boolean;
+    withoutClient?: boolean;
     catalogEntry?: MCPCatalogEntry;
     durableAuthority?: NonNullable<RegisterServicesContext['mcpOAuthPendingFlowAuthority']>;
     durableClientRegistrationAuthority?: NonNullable<
@@ -447,7 +454,7 @@ async function createHarness(
     ...(catalogEntry ? { source: 'catalog' as const, catalog_entry_name: catalogEntry.name } : {}),
     auth: {
       type: 'oauth',
-      ...(catalogEntry ? {} : { oauth_client_id: 'saved-client-id' }),
+      ...(catalogEntry || options.withoutClient ? {} : { oauth_client_id: 'saved-client-id' }),
       ...(options.catalogPeer ? { oauth_compatibility_mode: 'strict' as const } : {}),
       ...(catalogEntry || oauthMode ? { oauth_mode: oauthMode ?? 'per_user' } : {}),
     },
@@ -1914,6 +1921,91 @@ describe('SQLite saved-row OAuth authority', () => {
     }
   );
 
+  it.each([
+    [{}, 'disabled', 'dcr_disabled'],
+    [{}, 'advertised', 'registration_endpoint_missing'],
+    [{}, undefined, 'registration_endpoint_missing'],
+    [{ resourcePath: '/wrong/mcp' }, 'advertised', 'protected_resource_mismatch'],
+    [{ metadataIssuer: 'https://wrong.example' }, 'advertised', 'issuer_mismatch'],
+    [{ pkceMethods: ['plain'] }, 'advertised', 'pkce_required'],
+    [{ callbackIssuerSupported: false }, 'advertised', 'profile_rejected'],
+  ] as const)(
+    'returns exact saved policy and reason %s / %s / %s',
+    async (providerOptions, dcrMode, reason) => {
+      const provider = await createTestProvider(providerOptions);
+      providers.push(provider);
+      const harness = await createHarness(provider, undefined, { withoutClient: true });
+      databases.push(harness.rawDb);
+      const repository = new MCPServerRepository(harness.rawDb);
+      await repository.update(harness.server.mcp_server_id, {
+        auth: { type: 'oauth', oauth_dcr_mode: dcrMode, oauth_compatibility_mode: 'strict' },
+      });
+      const before = await repository.findById(harness.server.mcp_server_id);
+      const result = await harness.app.service('mcp-servers/oauth-start').create(
+        {
+          mcp_server_id: harness.server.mcp_server_id,
+          client_id: 'untrusted-client-must-not-bypass-saved-policy',
+        },
+        paramsFor(harness)
+      );
+      expect(result).toMatchObject({
+        success: false,
+        recovery: {
+          failure_reason: reason,
+          oauth_policy: {
+            effective_mode: 'strict',
+            effective_dcr_mode: dcrMode ?? 'advertised',
+            dcr_mode_source: dcrMode ? 'explicit' : 'default',
+          },
+        },
+      });
+      expect(await repository.findById(harness.server.mcp_server_id)).toEqual(before);
+      expect(
+        await new UserMCPOAuthTokenRepository(harness.rawDb).listForUser(
+          harness.user.user_id as UserID
+        )
+      ).toEqual([]);
+      expect(
+        provider.requests.some(({ path }) => ['/register', '/authorize', '/token'].includes(path))
+      ).toBe(false);
+      expect(harness.emittedBrowserEvents).toEqual([]);
+      expect(JSON.stringify(result)).not.toContain('untrusted-client');
+    }
+  );
+
+  it('reports the policy actually reloaded at the flow boundary, not the earlier probe snapshot', async () => {
+    const provider = await createTestProvider({ holdMcpChallenge: true });
+    providers.push(provider);
+    const harness = await createHarness(provider, undefined, { withoutClient: true });
+    databases.push(harness.rawDb);
+    const repository = new MCPServerRepository(harness.rawDb);
+    await repository.update(harness.server.mcp_server_id, {
+      auth: { type: 'oauth', oauth_dcr_mode: 'disabled', oauth_compatibility_mode: 'strict' },
+    });
+    const starting = harness.app
+      .service('mcp-servers/oauth-start')
+      .create({ mcp_server_id: harness.server.mcp_server_id }, paramsFor(harness));
+    await provider.mcpRequested.promise;
+    await repository.update(harness.server.mcp_server_id, {
+      auth: { type: 'oauth', oauth_compatibility_mode: 'legacy' },
+    });
+    provider.releaseMcp();
+    expect(await starting).toMatchObject({
+      success: false,
+      recovery: {
+        failure_reason: 'dcr_disabled',
+        oauth_policy: {
+          effective_mode: 'legacy',
+          effective_dcr_mode: 'disabled',
+          dcr_mode_source: 'explicit',
+        },
+      },
+    });
+    expect(provider.requests.some(({ path }) => ['/register', '/token'].includes(path))).toBe(
+      false
+    );
+  });
+
   it('logs closed Context7-style OAuth metadata incompatibility diagnostics', async () => {
     const provider = await createTestProvider({ resourcePath: '/different/mcp' });
     providers.push(provider);
@@ -2702,6 +2794,11 @@ describe('SQLite saved-row OAuth authority', () => {
         redirect_uri: 'https://agor.example.test/mcp-servers/oauth-callback',
         recovery: {
           category: 'client_registration_failed',
+          oauth_policy: {
+            effective_mode: 'marketplace',
+            effective_dcr_mode: 'advertised',
+            dcr_mode_source: 'default',
+          },
           action: 'configure_client',
           redirect_uri: 'https://agor.example.test/mcp-servers/oauth-callback',
         },

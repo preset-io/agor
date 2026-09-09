@@ -105,6 +105,7 @@ import type {
   MCPOAuthClientRegistrationResetRequest,
   MCPOAuthClientRegistrationResetResult,
   MCPOAuthDCRMode,
+  MCPOAuthEffectivePolicy,
   MCPOAuthPendingFlowStatus,
   MCPOAuthRuntimeCompatibilityMode,
   MCPOAuthStartFailure,
@@ -259,6 +260,7 @@ import {
 import { MCPOAuthClientRegistrationAuthority } from './services/mcp-oauth-client-registration-authority.js';
 import {
   logMCPOAuthCompatibilityPolicy,
+  presentMCPOAuthEffectivePolicy,
   resolveMCPOAuthCompatibilityPolicy,
 } from './services/mcp-oauth-compatibility.js';
 import {
@@ -2243,6 +2245,8 @@ export async function registerMCPServices(
     scope?: string;
     compatibilityMode?: MCPOAuthRuntimeCompatibilityMode;
     dcrMode?: MCPOAuthDCRMode;
+    /** Reports the exact policy after the authoritative saved-row reload. */
+    onPolicyResolved?: (policy: MCPOAuthEffectivePolicy) => void;
     socketId?: string;
     browserReservation?: OAuthBrowserReservationClaim;
     /**
@@ -2453,6 +2457,9 @@ export async function registerMCPServices(
           });
         }
       : undefined;
+    opts.onPolicyResolved?.(
+      presentMCPOAuthEffectivePolicy(effectiveCompatibilityMode, effectiveDcrMode)
+    );
     const context = await runWithinOAuthAuthority(assertFlowAuthority, () =>
       startMCPOAuthFlow(opts.wwwAuthenticate, effectiveClientId, redirectUri, {
         authorizationUrlOverride: effectiveAuthorizationUrlOverride,
@@ -4883,6 +4890,7 @@ export async function registerMCPServices(
       params?: AuthenticatedParams
     ) {
       const assertRequestAuthority = requestAuthorityAssertion(params);
+      let oauthPolicy: MCPOAuthEffectivePolicy | undefined;
       let slackRecoveryBinding: SlackRecoveryBinding | undefined;
       let slackStartLeaseTimer: NodeJS.Timeout | undefined;
       let slackStartLeaseLost = false;
@@ -5081,6 +5089,7 @@ export async function registerMCPServices(
             compatibilityPolicy
           );
           dcrMode = savedServer.auth.oauth_dcr_mode;
+          oauthPolicy = presentMCPOAuthEffectivePolicy(compatibilityMode, dcrMode);
           if (oauthMode === 'shared') {
             const currentUser =
               durableOAuthFlows && tenantId && userId
@@ -5095,6 +5104,8 @@ export async function registerMCPServices(
             }
           }
         }
+
+        oauthPolicy ??= presentMCPOAuthEffectivePolicy(compatibilityMode, dcrMode);
 
         // Resolve the deployment-owned callback only after the saved row and
         // caller have been authorized, but before entering provider metadata
@@ -5160,6 +5171,7 @@ export async function registerMCPServices(
             new OAuthConfigurationError('metadata_unavailable'),
             {
               mcpServerId: savedServerId,
+              oauthPolicy,
             }
           );
           await markSlackRecoveryStartFailed();
@@ -5193,6 +5205,9 @@ export async function registerMCPServices(
             socketId,
             compatibilityMode,
             dcrMode,
+            onPolicyResolved: (policy) => {
+              oauthPolicy = policy;
+            },
             requestAuthority: assertRequestAuthority,
             slackRecovery: slackRecoveryBinding?.oauthContext,
             attemptId: reservedSlackAttemptId,
@@ -5201,6 +5216,7 @@ export async function registerMCPServices(
         } catch (err) {
           const recovery = classifyMCPAuthRecovery(err, {
             mcpServerId: data.mcp_server_id,
+            oauthPolicy,
           });
           if (recovery.category === 'redirect_configuration_required') {
             externalFailure(
@@ -5293,6 +5309,7 @@ export async function registerMCPServices(
         assertRequestAuthority?.();
         const preliminaryRecovery = classifyMCPAuthRecovery(error, {
           mcpServerId: data.mcp_server_id,
+          oauthPolicy,
         });
         let redirectUri: string | null = null;
         if (
@@ -5312,6 +5329,7 @@ export async function registerMCPServices(
         const recovery = redirectUri
           ? classifyMCPAuthRecovery(error, {
               mcpServerId: data.mcp_server_id,
+              oauthPolicy,
               redirectUri,
             })
           : preliminaryRecovery;

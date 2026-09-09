@@ -10,7 +10,7 @@ import { type Application, feathers } from '@agor/core/feathers';
 import { MCP_HEADER_REDACTED_SENTINEL } from '@agor/core/tools/mcp/http-headers';
 import type { MCPServerID, UserID } from '@agor/core/types';
 import type { McpServer } from '@modelcontextprotocol/server';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mcpEgressMaterialHash } from '../../mcp-egress/gateway.js';
 import { type RegisterHooksContext, registerHooks } from '../../register-hooks.js';
 import {
@@ -200,6 +200,46 @@ describe('MCP OAuth status through Feathers response hooks', () => {
       user,
       tenant: { tenant_id: 'default', source: 'static' },
     } as const;
+    // Status inspection is an ordinary authorized read, not a live probe or
+    // validation flow. Keep the grant and entire saved configuration unchanged.
+    const fetchSpy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockRejectedValue(new Error('inspection must not fetch'));
+    try {
+      const projected = await app
+        .service('mcp-servers')
+        .get(server.mcp_server_id, baseServiceParams);
+      expect(projected.oauth_compatibility_policy).toEqual({
+        effective_mode: 'strict',
+        managed_by_catalog: false,
+        effective_dcr_mode: 'advertised',
+        dcr_mode_source: 'default',
+      });
+      expect(JSON.stringify(projected)).not.toMatch(
+        /configured-client-secret|configured-static-access|durable-grant-access/
+      );
+      const unrelated = await new UsersRepository(rawDb).create({
+        email: 'unrelated-policy@example.test',
+        role: 'member',
+      });
+      const unrelatedParams = { ...baseServiceParams, user: unrelated };
+      await expect(
+        app.service('mcp-servers').get(server.mcp_server_id, unrelatedParams)
+      ).rejects.toThrow();
+      expect(fetchSpy).not.toHaveBeenCalled();
+      expect(await new MCPServerRepository(rawDb).findById(server.mcp_server_id)).toEqual(
+        savedServer
+      );
+      expect(
+        await new UserMCPOAuthTokenRepository(rawDb).getToken(
+          user.user_id as UserID,
+          server.mcp_server_id
+        )
+      ).toEqual(savedGrant);
+    } finally {
+      fetchSpy.mockRestore();
+    }
+
     const context = {
       app,
       db,
