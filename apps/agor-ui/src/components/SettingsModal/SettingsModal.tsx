@@ -24,6 +24,7 @@ import {
   ClusterOutlined,
   CreditCardOutlined,
   ExperimentOutlined,
+  ExportOutlined,
   FolderOutlined,
   InfoCircleOutlined,
   MessageOutlined,
@@ -33,6 +34,7 @@ import {
 import type { MenuProps } from 'antd';
 import { Button, Layout, Menu, Modal, Tag, theme } from 'antd';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import type { BranchStorageConfig } from '@/utils/branchStorage';
 import { mapToArray } from '@/utils/mapHelpers';
 import { SETTINGS_SECTIONS, type SettingsSection } from '../../hooks/useSettingsRoute';
@@ -64,7 +66,6 @@ import { BranchesTable } from './BranchesTable';
 import { CardTypesPanel } from './CardTypesPanel';
 import { GatewayChannelsTable } from './GatewayChannelsTable';
 import { GroupsTable } from './GroupsTable';
-import { MCPServersTable } from './MCPServersTable';
 import { ReposTable } from './ReposTable';
 import {
   type DrillController,
@@ -176,8 +177,6 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
   onCreateUser,
   onUpdateUser,
   onDeleteUser,
-  onCreateMCPServer,
-  onDeleteMCPServer,
   onCreateGatewayChannel,
   onUpdateGatewayChannel,
   onDeleteGatewayChannel,
@@ -206,6 +205,7 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
   const boardObjects = useMemo(() => mapToArray(boardObjectById), [boardObjectById]);
 
   const { token } = theme.useToken();
+  const navigate = useNavigate();
   const settingsSectionKeys = useMemo(() => new Set<string>(SETTINGS_SECTIONS), []);
 
   // Drill-in navigation: the Content pane swaps between a section's list view
@@ -272,6 +272,13 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
 
   const handleNavClick = useCallback(
     (key: string) => {
+      // MCP server configuration lives in the MCP Marketplace (its own top-level
+      // route), not in Settings. This entry is a pointer out to it.
+      if (key === 'mcp-marketplace') {
+        navigate('/marketplace');
+        onClose();
+        return;
+      }
       // Per-tool Agentic Tools entries route to the shared 'agentic-tools'
       // section and set which tool's panel shows.
       const isAgenticTool = key.startsWith(AGENTIC_NAV_PREFIX);
@@ -302,6 +309,8 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
       closeDrill,
       confirmLeaveIfDirty,
       drill,
+      navigate,
+      onClose,
       onTabChange,
       settingsSectionKeys,
     ]
@@ -510,8 +519,18 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
               type: 'group' as const,
               children: [
                 {
-                  key: 'mcp',
-                  label: 'MCP Servers',
+                  // MCP servers are configured in the MCP Marketplace now, not
+                  // here. This entry navigates out to it rather than leaving a
+                  // dead end where the MCP Servers table used to be.
+                  key: 'mcp-marketplace',
+                  label: (
+                    <span>
+                      MCP Marketplace{' '}
+                      <ExportOutlined
+                        style={{ fontSize: token.fontSizeSM, color: token.colorTextTertiary }}
+                      />
+                    </span>
+                  ),
                   icon: <ApiOutlined />,
                 },
                 {
@@ -656,17 +675,6 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
             onUpdate={onUpdateArtifact}
             onDelete={onDeleteArtifact}
             onClose={onClose}
-          />
-        );
-      case 'mcp':
-        return (
-          <MCPServersTable
-            mcpServerById={mcpServerById}
-            client={client}
-            userById={userById}
-            currentUser={currentUser}
-            onCreate={onCreateMCPServer}
-            onDelete={onDeleteMCPServer}
           />
         );
       case 'agentic-tools':

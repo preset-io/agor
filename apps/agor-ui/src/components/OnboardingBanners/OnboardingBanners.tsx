@@ -13,6 +13,7 @@
 import type { AgenticToolName, AuthCheckResult, User } from '@agor-live/client';
 import { Alert, Button, Space } from 'antd';
 import { useEffect, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useAgorStore } from '../../store/agorStore';
 import {
   BannerDecision,
@@ -94,6 +95,7 @@ export function OnboardingBanners({
   onCheckAuth,
   credentialVersion,
 }: OnboardingBannersProps) {
+  const navigate = useNavigate();
   const [probeState, setProbeState] = useState<ProbeState>(ProbeState.Unknown);
   const [integrationsBannerDismissed, setIntegrationsBannerDismissed] = useState(false);
   const agenticToolSettings = useAgorStore((state) => state.agenticToolSettingsByName);
@@ -210,7 +212,7 @@ export function OnboardingBanners({
               <Button type="text" size="small" onClick={() => setIntegrationsBannerDismissed(true)}>
                 Maybe later
               </Button>
-              <Button type="primary" size="small" onClick={() => onOpenWorkspaceSettings('mcp')}>
+              <Button type="primary" size="small" onClick={() => navigate('/marketplace')}>
                 Connect tools
               </Button>
             </Space>

@@ -13,7 +13,6 @@ export const SETTINGS_SECTIONS = [
   'card-types',
   'cards',
   'artifacts',
-  'mcp',
   'agentic-tools',
   'gateway',
   'groups',
@@ -48,7 +47,6 @@ export interface SettingsRouteState {
  * - /settings/ → Settings modal open at default section (boards)
  * - /settings/users/ → Settings modal open at Users section
  * - /settings/users/:userId/ → Settings modal + User edit modal for specific user
- * - /settings/mcp/:serverId/ → Settings modal + MCP server edit modal
  *
  * The settings routes work as overlays on top of the current board view.
  * When navigating to /settings/*, the board remains visible behind the modal.

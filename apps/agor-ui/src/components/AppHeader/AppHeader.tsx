@@ -293,7 +293,6 @@ const AppHeaderInner: React.FC<AppHeaderProps> = ({
           currentUserId={currentUserId}
           branchById={branchById}
           boardById={boardById}
-          onSettingsClick={onSettingsClick}
         />
         {/* No Marketplace entry: the surface exists and answers at
             /marketplace, but is not advertised while the feature is
