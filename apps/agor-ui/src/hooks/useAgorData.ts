@@ -37,8 +37,6 @@ import {
 } from '@agor-live/client';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 
-const MCP_OAUTH_STATUS_POLL_INTERVAL_MS = 60_000;
-
 import {
   bumpFirstPaintMergeRevisions,
   bumpRevision,
@@ -416,9 +414,9 @@ export function useAgorData(
   const oauthStatusRequestGenerationRef = useRef(0);
 
   /**
-   * One latest-request-wins coordinator for initial hydration, polling, and
+   * One latest-request-wins coordinator for initial hydration and
    * realtime OAuth hints. A later request invalidates every earlier response,
-   * preventing an old poll from overwriting a newer disconnect/re-auth result.
+   * preventing an old read from overwriting a newer disconnect/re-auth result.
    */
   const refetchOAuthDurableState = useCallback(
     async (requestAuthorityScope: string, mcpServerId?: string): Promise<boolean> => {
@@ -1246,20 +1244,9 @@ export function useAgorData(
   // after teardown. Generation bump = cancellation; see `runHydration`.
   useEffect(() => () => cancelAllHydrations(), []);
 
-  // OAuth status is intentionally separate from generic MCP server reads so
-  // listing servers never loads credentials. Poll the non-secret status path
-  // as well as reacting to OAuth events; otherwise a grant that expires while
-  // a tab is idle could remain displayed as authenticated indefinitely.
-  useEffect(() => {
-    if (!client || !enabled || !authorityScopeKey) return;
-    const pollAuthorityScope = authorityScopeKey;
-    const interval = window.setInterval(() => {
-      void refetchOAuthDurableState(pollAuthorityScope).catch(() => {
-        // Transient disconnects are handled by the next poll/realtime refetch.
-      });
-    }, MCP_OAUTH_STATUS_POLL_INTERVAL_MS);
-    return () => window.clearInterval(interval);
-  }, [authorityScopeKey, client, enabled, refetchOAuthDurableState]);
+  // Auth badges reflect the last durable observation. Refresh on bootstrap,
+  // reconnect and explicit OAuth events, not on an idle-tab timer. Execution
+  // independently resolves credentials; this UI snapshot never authorizes use.
 
   // If the user navigates to /s/<id>/ after the initial active-session fetch,
   // load that one session by ID as well. This keeps direct links to archived

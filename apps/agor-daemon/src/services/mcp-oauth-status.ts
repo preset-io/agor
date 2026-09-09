@@ -14,7 +14,7 @@
  * leaves here.
  */
 
-import type { UserMCPOAuthToken } from '@agor/core/db';
+import type { MCPOAuthGrantStatusRecord } from '@agor/core/db';
 import { isMCPServerUsableBy } from '@agor/core/mcp';
 import type { MCPServer, MCPServerID, UserID } from '@agor/core/types';
 import { hasMinimumRole, ROLES } from '@agor/core/types';
@@ -26,8 +26,9 @@ export interface OAuthStatusViewer {
 
 export interface OAuthStatusDeps {
   viewer: OAuthStatusViewer;
-  listForUser(userId: UserID): Promise<UserMCPOAuthToken[]>;
-  listShared(): Promise<UserMCPOAuthToken[]>;
+  listForUser(userId: UserID): Promise<MCPOAuthGrantStatusRecord[]>;
+  listShared(): Promise<MCPOAuthGrantStatusRecord[]>;
+  findServers?(serverIds: MCPServerID[]): Promise<MCPServer[]>;
   findServer(serverId: string): Promise<MCPServer | null>;
   /**
    * Whether to recompute each grant's binding to its server's configuration.
@@ -35,7 +36,10 @@ export interface OAuthStatusDeps {
    * and lets the verifier grandfather only historical unbound SQLite rows.
    */
   requireGrantBinding: boolean;
-  isGrantBoundToServer(server: MCPServer, grant: UserMCPOAuthToken): boolean | Promise<boolean>;
+  isGrantBoundToServer(
+    server: MCPServer,
+    grant: MCPOAuthGrantStatusRecord
+  ): boolean | Promise<boolean>;
   now?: Date;
 }
 
@@ -59,12 +63,26 @@ export async function resolveAuthenticatedServerIds(deps: OAuthStatusDeps): Prom
     deps.listShared(),
   ]);
 
+  const tokens = [...perUserTokens, ...sharedTokens].filter(
+    (token) =>
+      !(token.oauth_token_expires_at && token.oauth_token_expires_at <= now) &&
+      token.refresh_status !== 'ambiguous'
+  );
+  const servers = deps.findServers
+    ? new Map(
+        (await deps.findServers([...new Set(tokens.map((token) => token.mcp_server_id))])).map(
+          (server) => [server.mcp_server_id, server]
+        )
+      )
+    : undefined;
   const authenticatedServerIds = new Set<MCPServerID>();
-  for (const token of [...perUserTokens, ...sharedTokens]) {
+  for (const token of tokens) {
     if (token.oauth_token_expires_at && token.oauth_token_expires_at <= now) continue;
     if (token.refresh_status === 'ambiguous') continue;
 
-    const server = await deps.findServer(token.mcp_server_id);
+    const server = servers
+      ? servers.get(token.mcp_server_id)
+      : await deps.findServer(token.mcp_server_id);
     if (!server || !isVisibleTo(server, deps.viewer)) continue;
 
     // Durable status is authoritative. A realtime hint or stale row must never

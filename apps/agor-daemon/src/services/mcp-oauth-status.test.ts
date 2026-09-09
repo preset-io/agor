@@ -30,6 +30,25 @@ function buildDeps(overrides: Partial<OAuthStatusDeps> = {}): OAuthStatusDeps {
 }
 
 describe('resolveAuthenticatedServerIds', () => {
+  it('batch reads distinct servers and retains private-server visibility checks', async () => {
+    const findServers = vi.fn(async () => [
+      serverOwnedBy('visible'),
+      serverOwnedBy('private', ALICE),
+    ]);
+    const findServer = vi.fn();
+    const result = await resolveAuthenticatedServerIds(
+      buildDeps({
+        listForUser: async () => [grantFor('visible')],
+        listShared: async () => [grantFor('visible'), grantFor('private')],
+        findServers,
+        findServer,
+      })
+    );
+    expect(result).toEqual(['visible']);
+    expect(findServers).toHaveBeenCalledExactlyOnceWith(['visible', 'private']);
+    expect(findServer).not.toHaveBeenCalled();
+  });
+
   it.each(['listForUser', 'listShared'] as const)(
     'propagates %s envelope failures without returning partial status',
     async (failedList) => {

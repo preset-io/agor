@@ -35,6 +35,16 @@ Use your existing authenticated API client and the saved server's `mcp_server_id
 
 DCR requests identify standalone HTTP loopback callbacks as `native` and public HTTPS callbacks as `web`. That choice is part of the durable credential binding, so a registration created under an older or different binding is not reused. HA activation and upgrades still require the public callback origin and offline cutover described in [Daemon HA](/guide/daemon-ha).
 
+### Saved OAuth status
+
+OAuth badges reflect the last saved-grant check, refreshed when the UI loads or
+reconnects and after explicit OAuth actions/events. Idle tabs do not scan all
+grants on a timer. The badge is not a live provider-health guarantee: credentials
+can expire or be revoked between observations. Runtime credential resolution
+independently validates the effective session servers (attached and enabled global
+servers), and refreshes credentials when needed. A provider timeout is not proof
+that authentication has been revoked.
+
 ### Capability metadata
 
 Remote tool, resource, and prompt descriptions are untrusted optional free text. Agor keeps every valid capability name and schema, but deterministically shortens descriptions that exceed the per-field or aggregate safe metadata budget. **Test Connection** (or **Save & Test Connection** for a saved/OAuth server) reports when this happened. Malformed names, schemas, or non-string descriptions still fail validation instead of being silently repaired. The same bounded tool descriptions are stored for display and applied by the mediated MCP egress path used in `compatibility` and `enforced` gateway modes.

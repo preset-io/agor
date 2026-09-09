@@ -100,6 +100,10 @@ type MCPOAuthGrantAuthorityRow = Pick<
   | 'oauth_redirect_uri'
 >;
 
+/** Status authority excludes access and refresh token plaintext. */
+export type MCPOAuthGrantStatusRecord = MCPOAuthGrantAuthorityRecord &
+  Pick<UserMCPOAuthToken, 'oauth_token_expires_at' | 'refresh_status'>;
+
 /** Input shape for `saveToken`. */
 export interface SaveTokenInput {
   accessToken: string;
@@ -1021,6 +1025,54 @@ export class UserMCPOAuthTokenRepository {
         error
       );
     }
+  }
+
+  /** Read saved-grant status without opening access/refresh tokens. */
+  async listStatusForSubject(userId: UserID | null): Promise<MCPOAuthGrantStatusRecord[]> {
+    const rows = await select(this.db, {
+      has_access_token: sql<boolean>`${userMcpOauthTokens.oauth_access_token} is not null and ${userMcpOauthTokens.oauth_access_token} <> ''`,
+      user_id: userMcpOauthTokens.user_id,
+      mcp_server_id: userMcpOauthTokens.mcp_server_id,
+      oauth_client_id: userMcpOauthTokens.oauth_client_id,
+      oauth_client_secret: userMcpOauthTokens.oauth_client_secret,
+      grant_generation: userMcpOauthTokens.grant_generation,
+      grant_binding_version: userMcpOauthTokens.grant_binding_version,
+      grant_binding_fingerprint: userMcpOauthTokens.grant_binding_fingerprint,
+      oauth_metadata_uri: userMcpOauthTokens.oauth_metadata_uri,
+      oauth_resource_uri: userMcpOauthTokens.oauth_resource_uri,
+      oauth_issuer: userMcpOauthTokens.oauth_issuer,
+      oauth_authorization_endpoint: userMcpOauthTokens.oauth_authorization_endpoint,
+      oauth_token_endpoint: userMcpOauthTokens.oauth_token_endpoint,
+      oauth_redirect_uri: userMcpOauthTokens.oauth_redirect_uri,
+      oauth_token_expires_at: userMcpOauthTokens.oauth_token_expires_at,
+      refresh_status: userMcpOauthTokens.refresh_status,
+    })
+      .from(userMcpOauthTokens)
+      .where(
+        userId === null
+          ? isNull(userMcpOauthTokens.user_id)
+          : eq(userMcpOauthTokens.user_id, userId)
+      )
+      .all();
+    const records: MCPOAuthGrantStatusRecord[] = [];
+    const now = new Date();
+    for (const row of rows) {
+      const expiresAt = row.oauth_token_expires_at
+        ? new Date(row.oauth_token_expires_at)
+        : undefined;
+      if (
+        !row.has_access_token ||
+        row.refresh_status === 'ambiguous' ||
+        (expiresAt && expiresAt <= now)
+      )
+        continue;
+      records.push({
+        ...(await this.mapAuthorityRow(row)),
+        oauth_token_expires_at: expiresAt,
+        refresh_status: row.refresh_status as UserMCPOAuthToken['refresh_status'],
+      });
+    }
+    return records;
   }
 
   async listForUser(userId: UserID): Promise<UserMCPOAuthToken[]> {

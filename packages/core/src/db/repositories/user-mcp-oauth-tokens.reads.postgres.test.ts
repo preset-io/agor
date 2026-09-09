@@ -103,6 +103,20 @@ describe.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
                 oauth_refresh_token: 'synthetic-refresh',
               },
             ]);
+            const status = await repo.listStatusForSubject(own.user);
+            expect(status).toHaveLength(1);
+            expect(status[0]).not.toHaveProperty('oauth_access_token');
+            expect(status[0]).not.toHaveProperty('oauth_refresh_token');
+            await expect(repo.listStatusForSubject(foreign.user)).resolves.toEqual([]);
+            const sharedStatus = await repo.listStatusForSubject(null);
+            expect(sharedStatus).toHaveLength(1);
+            expect(sharedStatus[0].mcp_server_id).toBe(own.server);
+            const servers = await new MCPServerRepository(scoped).findByIds([
+              own.server,
+              foreign.server,
+              own.server,
+            ]);
+            expect(servers.map((server) => server.mcp_server_id)).toEqual([own.server]);
             expect(personal).toHaveLength(1);
             expect(shared).toHaveLength(1);
             await expect(repo.listForUser(foreign.user)).resolves.toEqual([]);

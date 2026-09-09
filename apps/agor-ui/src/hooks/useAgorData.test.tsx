@@ -225,6 +225,24 @@ function deferred() {
   return { promise, resolve };
 }
 
+it('does not rescan OAuth grants on an idle 60-second timer', async () => {
+  const { client, fetchCount } = makeMockClient();
+  const { result, unmount } = renderHook(() => useAgorData(client));
+  try {
+    await waitForInitialLoad(result);
+    await waitFor(() => expect(fetchCount('mcp-servers/oauth-status', 'find')).toBeGreaterThan(0));
+    const initial = fetchCount('mcp-servers/oauth-status', 'find');
+    vi.useFakeTimers();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(180_000);
+    });
+    expect(fetchCount('mcp-servers/oauth-status', 'find')).toBe(initial);
+  } finally {
+    unmount();
+    vi.useRealTimers();
+  }
+});
+
 describe('useAgorData — socket-event bailouts', () => {
   it('scopes the real cold mobile board load before fetching board entities', async () => {
     const boardId = '01a012d8-1b9b-7909-b6f4-2024dfc7c51e';
