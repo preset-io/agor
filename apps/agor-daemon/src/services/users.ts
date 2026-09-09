@@ -35,7 +35,7 @@ import {
   boards,
   branches,
   compare,
-  decryptApiKey,
+  decryptApiKeyAsync,
   deleteFrom,
   encryptApiKey,
   eq,
@@ -94,7 +94,7 @@ import type {
 import {
   AGENTIC_TOOL_NAMES,
   canAssignUserRole,
-  extractAgenticToolsPublicValues,
+  extractAgenticToolsPublicValuesAsync,
   hasMinimumRole,
   hasRoleAuthorityOver,
   isAgenticToolName,
@@ -818,9 +818,10 @@ export class UsersService {
       limit === undefined ? rows.slice(skip) : rows.slice(skip, skip + Math.max(limit, 0));
 
     const includeAuthMetadata = shouldIncludeAuthMetadata(params, includePassword);
-    const results = pageRows.map((row) =>
-      this.rowToUser(row, includePassword, requesterId, includeAuthMetadata)
-    );
+    const results = [];
+    for (const row of pageRows) {
+      results.push(await this.rowToUser(row, includePassword, requesterId, includeAuthMetadata));
+    }
 
     return {
       total,
@@ -1080,12 +1081,9 @@ export class UsersService {
       data.default_agentic_selection ||
       data.default_mcp_server_ids !== undefined
     ) {
-      const current = this.rowToUser(
-        authority.target,
-        false,
-        (params as AuthenticatedParams | undefined)?.user?.user_id as UserID | undefined,
-        shouldIncludeAuthMetadata(params)
-      );
+      // Internal merge inputs need metadata, not owner-only presentation values.
+      // Decrypt public values only for the final response, after the update.
+      const current = await this.rowToUser(authority.target, false, undefined, false);
       const currentRow = authority.target;
       const currentData = currentRow?.data as {
         avatar_url?: string;
@@ -1540,7 +1538,7 @@ export class UsersService {
     const requesterId = (params as AuthenticatedParams | undefined)?.user?.user_id as
       | UserID
       | undefined;
-    const user = this.rowToUser(
+    const user = await this.rowToUser(
       authority.target,
       false,
       requesterId,
@@ -1702,7 +1700,7 @@ export class UsersService {
       path: 'users',
       event: 'patched',
       id: userId,
-      data: this.rowToUser(row, false, undefined, false),
+      data: await this.rowToUser(row, false, undefined, false),
       params,
     });
   }
@@ -1832,7 +1830,12 @@ export class UsersService {
       primary_agentic_tool?: AgenticToolName;
     };
     if (currentData.primary_agentic_tool !== undefined) {
-      return this.rowToUser(currentRow, false, userId, shouldIncludeAuthMetadata(params)) as User;
+      return (await this.rowToUser(
+        currentRow,
+        false,
+        userId,
+        shouldIncludeAuthMetadata(params)
+      )) as User;
     }
 
     const updatedRow = await update(this.db, users)
@@ -1859,12 +1862,17 @@ export class UsersService {
         event: 'patched',
         id: userId,
         // Owner-only decrypted presentation values must never ride a broadcast.
-        data: this.rowToUser(updatedRow, false, undefined, false),
+        data: await this.rowToUser(updatedRow, false, undefined, false),
         params,
       });
     }
 
-    return this.rowToUser(effectiveRow, false, userId, shouldIncludeAuthMetadata(params)) as User;
+    return (await this.rowToUser(
+      effectiveRow,
+      false,
+      userId,
+      shouldIncludeAuthMetadata(params)
+    )) as User;
   }
 
   private requireMemberCaller(params: Params | undefined, action: string): UserID {
@@ -1892,12 +1900,12 @@ export class UsersService {
    *   including admins viewing someone else's profile — public values are
    *   omitted, since base URLs can leak internal hostnames.
    */
-  private rowToUser(
+  private async rowToUser(
     row: typeof users.$inferSelect,
     includePassword = false,
     requesterId?: UserID,
     includeAuthMetadata = true
-  ): (User | InternalUser) & { password?: string } {
+  ): Promise<(User | InternalUser) & { password?: string }> {
     const data = row.data as {
       avatar_url?: string;
       avatar?: string;
@@ -1953,7 +1961,7 @@ export class UsersService {
       // secrets are NEVER on the whitelist; see `AGENTIC_TOOLS_PUBLIC_FIELDS`.
       agentic_tools_public_values:
         requesterId === row.user_id
-          ? extractAgenticToolsPublicValues(data.agentic_tools, decryptApiKey)
+          ? await extractAgenticToolsPublicValuesAsync(data.agentic_tools, decryptApiKeyAsync)
           : undefined,
       // Return env var metadata (presence + scope), NOT actual values
       env_vars: envVarMetadata,

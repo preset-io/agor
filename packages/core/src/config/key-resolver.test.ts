@@ -147,6 +147,58 @@ describe('resolveApiKey — per-tool credential scoping', () => {
     });
   });
 
+  for (const policy of ['tenant_required', 'tenant_preferred'] as const) {
+    dbTest(`${policy} does not read or decrypt an unused user connection`, async ({ db }) => {
+      const userId = await createUserWithToolCreds(db, {
+        codex: {
+          OPENAI_API_KEY: encryptApiKey('unused-user-key'),
+          OPENAI_BASE_URL: encryptApiKey('https://unused.invalid/v1'),
+        },
+      });
+      await new TenantAgenticToolSettingsRepository(db).patch('codex', {
+        resolution_policy: policy,
+        connection: { OPENAI_API_KEY: 'tenant-key' },
+      });
+      const reads = vi.spyOn(wrapper, 'select');
+      const open = vi.spyOn(encryption, 'decryptApiKeyAsync');
+      expect(await resolveApiKey('OPENAI_API_KEY', { userId, db, tool: 'codex' })).toMatchObject({
+        apiKey: 'tenant-key',
+        source: 'tenant',
+      });
+      expect(reads).toHaveBeenCalledTimes(1);
+      expect(open).toHaveBeenCalledTimes(1); // Only the tenant settings document.
+    });
+  }
+
+  dbTest(
+    'tenant-preferred rechecks settings and retains the user fallback and corruption contract',
+    async ({ db }) => {
+      const userId = await createUserWithToolCreds(db, {
+        codex: { OPENAI_API_KEY: encryptApiKey('user-key') },
+      });
+      const settings = new TenantAgenticToolSettingsRepository(db);
+      await settings.patch('codex', {
+        resolution_policy: 'tenant_preferred',
+        connection: { OPENAI_API_KEY: 'tenant-key' },
+      });
+      const resolve = () => resolveApiKey('OPENAI_API_KEY', { userId, db, tool: 'codex' });
+      expect(await resolve()).toMatchObject({ apiKey: 'tenant-key', source: 'tenant' });
+      await settings.patch('codex', {
+        connection: { OPENAI_API_KEY: null, OPENAI_BASE_URL: 'https://tenant.invalid' },
+      });
+      expect(await resolve()).toMatchObject({ apiKey: 'user-key', source: 'user' });
+      const native = encryption.decryptApiKeyAsync;
+      vi.spyOn(encryption, 'decryptApiKeyAsync').mockImplementation(async (value) => {
+        const plain = await native(value);
+        if (plain === 'user-key') throw new Error('synthetic corrupt user field');
+        return plain;
+      });
+      expect(await resolve()).toMatchObject({ source: 'user', decryptionFailed: true });
+      await settings.patch('codex', { resolution_policy: 'tenant_required' });
+      expect(await resolve()).toMatchObject({ source: 'none', apiKey: undefined });
+    }
+  );
+
   dbTest('required policies fail closed instead of using the other scope', async ({ db }) => {
     const userId = await createUserWithToolCreds(db, {
       codex: { OPENAI_API_KEY: encryptApiKey('user-key') },
@@ -281,6 +333,32 @@ describe('resolveApiKey — per-tool credential scoping', () => {
         source: 'user',
         decryptionFailed: true,
       });
+    }
+  );
+
+  dbTest.skipIf(process.env.AGOR_BENCH_PROVIDER_READ !== '1')(
+    'benchmarks tenant-selected provider resolution',
+    async ({ db }) => {
+      const userId = await createUserWithToolCreds(db, {
+        codex: {
+          OPENAI_API_KEY: encryptApiKey('unused-user-key'),
+          OPENAI_BASE_URL: encryptApiKey('https://unused.invalid'),
+        },
+      });
+      await new TenantAgenticToolSettingsRepository(db).patch('codex', {
+        resolution_policy: 'tenant_preferred',
+        connection: { OPENAI_API_KEY: 'workspace-key' },
+      });
+      const elapsedMs = [];
+      for (let round = 0; round < 8; round++) {
+        const start = performance.now();
+        const result = await resolveApiKey('OPENAI_API_KEY', { userId, db, tool: 'codex' });
+        expect(result.apiKey).toBe('workspace-key');
+        if (round) elapsedMs.push(performance.now() - start);
+      }
+      process.stdout.write(
+        `Tenant-selected resolution, real SQLite, 1 settings document + 2 unused user fields: ${JSON.stringify(elapsedMs)}\n`
+      );
     }
   );
 
