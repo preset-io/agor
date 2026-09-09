@@ -1,12 +1,13 @@
 import type { AgorClient, User } from '@agor-live/client';
 import { hasMinimumRole, ROLES } from '@agor-live/client';
-import { Alert, Button, Card, Checkbox, Drawer, Flex, Spin, Typography, theme } from 'antd';
+import { Alert, Button, Card, Checkbox, Flex, Spin, Typography, theme } from 'antd';
 import { useEffect, useRef, useState } from 'react';
 import type { OnboardingIntegrationRecommendation } from '../../utils/onboardingGoals';
 import {
   type OnboardingSlackGatewayIntent,
   readOnboardingSlackGateways,
 } from '../../utils/onboardingSlack';
+import { CatalogDrawer } from '../Marketplace/CatalogDrawer';
 import { CatalogTab } from '../Marketplace/CatalogTab';
 import { OnboardingToolRow } from './OnboardingToolRow';
 
@@ -139,7 +140,7 @@ function ToolsForIdentity(props: Props) {
           )}
         </Card>
       )}
-      <Drawer open={slackOpen} title="Slack MCP" onClose={close} destroyOnHidden>
+      <CatalogDrawer open={slackOpen} title="Slack MCP" onClose={close}>
         <Alert
           type="info"
           title="Slack MCP is not currently available in Catalog"
@@ -158,7 +159,7 @@ function ToolsForIdentity(props: Props) {
           Official Slack MCP requirements
         </Typography.Link>
         <Button onClick={close}>Return to onboarding</Button>
-      </Drawer>
+      </CatalogDrawer>
       {entry && (
         <CatalogTab
           client={client}

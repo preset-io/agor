@@ -76,7 +76,118 @@ async function openGitHub() {
   return { input, drawer: within(input.closest<HTMLElement>('[role="dialog"]')!) };
 }
 
+/** Measure the real portalled drawer, not the modal behind it. */
+function drawerSpacing(dialog: HTMLElement) {
+  const root = dialog.closest('.ant-drawer')!;
+  const header = root.querySelector<HTMLElement>('.ant-drawer-header')!;
+  const body = root.querySelector<HTMLElement>('.ant-drawer-body')!;
+  const content = body.firstElementChild as HTMLElement;
+  const disclosure = within(dialog).getByRole('button', { name: 'What this can access' });
+  const sections = disclosure.parentElement!;
+  const sectionBody = sections.querySelector<HTMLElement>('[id]')!;
+  const agent = within(dialog).getByText('Agent', { selector: 'label' }).closest('.ant-form-item')!;
+  const connect = within(dialog).getByRole('button', {
+    name: /Verify key & connect|Connect with GitHub/,
+  });
+  const spacing = (element: Element) => {
+    const style = getComputedStyle(element);
+    return [
+      'paddingTop',
+      'paddingRight',
+      'paddingBottom',
+      'paddingLeft',
+      'marginTop',
+      'marginBottom',
+      'rowGap',
+    ].map((property) => style[property as keyof CSSStyleDeclaration]);
+  };
+  expect(body.scrollWidth).toBeLessThanOrEqual(body.clientWidth);
+  expect(root.querySelector('.ant-drawer-footer')).toBeNull(); // Both use in-body actions.
+  expect(content).toHaveClass('ant-flex');
+  expect(content.parentElement).toBe(body); // No onboarding padding wrapper.
+  return {
+    width: dialog.getBoundingClientRect().width,
+    headerHeight: header.getBoundingClientRect().height,
+    header: spacing(header),
+    body: spacing(body),
+    content: spacing(content),
+    disclosure: spacing(disclosure),
+    sectionBody: spacing(sectionBody),
+    agent: spacing(agent),
+    action: spacing(connect),
+    actionWidth: connect.getBoundingClientRect().width,
+  };
+}
+
 describe('onboarding-owned Catalog in Chromium', () => {
+  it.each(['credentials', 'oauth'] as const)(
+    'shares Catalog header/body/inline-action spacing and responsive width for %s auth',
+    async (authType) => {
+      const entry = {
+        ...githubHandoffEntry,
+        auth_type: authType,
+        credentials: authType === 'credentials' ? githubHandoffEntry.credentials : undefined,
+      };
+      const api = makeCatalogClient([entry]);
+      vi.mocked(api.client.service('mcp-catalog/readiness').get).mockResolvedValue({
+        catalog_key: entry.name,
+        state: authType === 'credentials' ? 'bearer_required' : 'oauth_required',
+      });
+      const standard = render(
+        <CatalogHarness
+          client={api.client}
+          handoff={{ entryName: entry.name, branchId: 'branch-1' }}
+        />
+      );
+      const catalogDialog = await screen.findByRole('dialog', { name: /GitHub/ });
+      await within(catalogDialog).findByText('Catalog QA');
+      await within(catalogDialog).findByRole('button', {
+        name: /Verify key & connect|Connect with GitHub/,
+      });
+      await waitFor(() =>
+        expect(catalogDialog.getBoundingClientRect().right).toBeCloseTo(window.innerWidth, 0)
+      );
+      const expected = drawerSpacing(catalogDialog);
+      expect(expected.width).toBe(Math.min(520, window.innerWidth));
+      standard.unmount();
+
+      const prepare = vi.fn(async () => 'branch-1');
+      render(<Harness api={api} prepare={prepare} complete={vi.fn()} update={vi.fn()} />);
+      const row = screen.getByText('GitHub').closest<HTMLElement>('.ant-card')!;
+      await userEvent.click(within(row).getByRole('button', { name: /^Sign in through Catalog/ }));
+      const onboardingDialog = await screen.findByRole('dialog', { name: /GitHub/ });
+      await within(onboardingDialog).findByText('Workspace', { selector: 'label' });
+      await within(onboardingDialog).findByRole('button', {
+        name: /Verify key & connect|Connect with GitHub/,
+      });
+      await waitFor(() =>
+        expect(onboardingDialog.getBoundingClientRect().right).toBeCloseTo(window.innerWidth, 0)
+      );
+      const actual = drawerSpacing(onboardingDialog);
+      // Browser transforms can introduce tiny fractional CSS-pixel rounding.
+      // Spacing tokens stay exact; geometry must agree to 0.01 CSS pixels.
+      const { width, headerHeight, actionWidth, ...spacing } = actual;
+      const {
+        width: expectedWidth,
+        headerHeight: expectedHeaderHeight,
+        actionWidth: expectedActionWidth,
+        ...expectedSpacing
+      } = expected;
+      expect(spacing).toEqual(expectedSpacing);
+      expect(width).toBeCloseTo(expectedWidth, 2);
+      expect(headerHeight).toBeCloseTo(expectedHeaderHeight, 2);
+      expect(actionWidth).toBeCloseTo(expectedActionWidth, 2);
+      expect(document.querySelectorAll('.ant-drawer-open')).toHaveLength(1);
+      expect(prepare).not.toHaveBeenCalled();
+      expect(api.connect).not.toHaveBeenCalled();
+      await userEvent.click(within(onboardingDialog).getByRole('button', { name: 'Close' }));
+      await waitFor(() => expect(onboardingDialog).not.toBeInTheDocument());
+      await waitFor(() =>
+        expect(within(row).getByRole('button', { name: /^Sign in through Catalog/ })).toHaveFocus()
+      );
+    }
+  );
+
   it('supports keyboard selection, Back, PAT cancellation and focus restoration without provisioning', async () => {
     const api = makeCatalogClient([githubHandoffEntry]);
     const prepare = vi.fn(async () => 'branch-1');

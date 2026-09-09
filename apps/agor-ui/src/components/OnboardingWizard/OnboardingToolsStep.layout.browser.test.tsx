@@ -88,9 +88,14 @@ function assertFlushActions(root: HTMLElement) {
 
 describe('Kasia-derived MCP rows — real layout', () => {
   it('uses one full-width provider per row, quieter descriptions, aligned uncropped local logos and flush actions', async () => {
-    const { props } = fixture();
+    const { props, api } = fixture();
+    vi.mocked(api.client.service('mcp-catalog/readiness').get).mockImplementation(async (key) => ({
+      catalog_key: key,
+      state: key === githubHandoffEntry.name ? 'bearer_required' : 'oauth_required',
+    }));
     render(<Harness props={props} />);
     await screen.findByText('Token required');
+    await waitFor(() => expect(screen.getAllByText('Sign in required')).toHaveLength(3));
     const list = screen.getByRole('list', { name: 'Suggested MCP tools' });
     const rows = within(list).getAllByRole('listitem');
     expect(rows).toHaveLength(4);
@@ -105,6 +110,15 @@ describe('Kasia-derived MCP rows — real layout', () => {
       const description = document.getElementById(descriptionId)!;
       expect(parseFloat(getComputedStyle(heading).fontSize)).toBe(14);
       expect(parseFloat(getComputedStyle(description).fontSize)).toBe(12);
+      expect(getComputedStyle(action).fontSize).toBe(getComputedStyle(description).fontSize);
+      expect(action.getBoundingClientRect().height).toBeGreaterThanOrEqual(32);
+      const state = document.getElementById(stateId)!;
+      expect(state).toHaveClass('ant-tag', 'ant-tag-warning');
+      expect(state).toHaveTextContent(/Token required|Sign in required/);
+      expect(getComputedStyle(state).fontSize).toBe(getComputedStyle(description).fontSize);
+      expect(state.getBoundingClientRect().left).toBe(description.getBoundingClientRect().left);
+      expect(state.getBoundingClientRect().width).toBeLessThan(row.clientWidth);
+      expect(action).toHaveAccessibleDescription(/Token required|Sign in required/);
       expect(Number(getComputedStyle(heading.querySelector('strong')!).fontWeight)).toBeGreaterThan(
         Number(getComputedStyle(description).fontWeight)
       );
@@ -153,6 +167,9 @@ describe('Kasia-derived MCP rows — real layout', () => {
         name: /Sign in through Catalog for VeryLong/,
       });
       expect(action.getAttribute('aria-label')).toContain(longName);
+      const desc = document.getElementById(action.getAttribute('aria-describedby')!.split(' ')[0])!;
+      expect(getComputedStyle(action).fontSize).toBe(getComputedStyle(desc).fontSize);
+      expect(action.getBoundingClientRect().height).toBeGreaterThanOrEqual(32);
       expect(action).toHaveAccessibleDescription(/A long purpose description/);
     }
     const first = document.getElementById(rows[0].getAttribute('aria-labelledby')!)!;

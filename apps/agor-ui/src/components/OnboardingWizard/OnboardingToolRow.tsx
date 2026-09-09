@@ -4,6 +4,7 @@ import { type MouseEvent, useId } from 'react';
 import type { OnboardingIntegrationRecommendation } from '../../utils/onboardingGoals';
 import { useCatalogReadiness } from '../Marketplace/useCatalogReadiness';
 import { McpLogo } from '../McpLogo';
+import { Tag } from '../Tag';
 
 interface Props {
   recommendation: OnboardingIntegrationRecommendation;
@@ -60,7 +61,7 @@ export function OnboardingToolRow({
               : readiness?.state === 'bearer_required'
                 ? 'Token required'
                 : readiness?.state === 'oauth_required'
-                  ? 'Sign-in required'
+                  ? 'Sign in required'
                   : readiness?.state === 'no_auth'
                     ? 'No account expected'
                     : 'Connection status unavailable';
@@ -112,9 +113,19 @@ export function OnboardingToolRow({
           >
             {rec.description}
           </Typography.Text>
-          <Typography.Text id={statusId} type="secondary" style={{ fontSize: token.fontSizeSM }}>
-            {state}
-          </Typography.Text>
+          {state === 'Token required' || state === 'Sign in required' ? (
+            <Tag
+              id={statusId}
+              color="warning"
+              style={{ alignSelf: 'flex-start', marginInlineEnd: 0 }}
+            >
+              {state}
+            </Tag>
+          ) : (
+            <Typography.Text id={statusId} type="secondary" style={{ fontSize: token.fontSizeSM }}>
+              {state}
+            </Typography.Text>
+          )}
           <Flex wrap gap="small">
             <Button
               type="link"
@@ -127,6 +138,8 @@ export function OnboardingToolRow({
                 paddingInlineStart: 0,
                 whiteSpace: 'normal',
                 height: 'auto',
+                minHeight: token.controlHeight,
+                fontSize: token.fontSizeSM,
                 textAlign: 'left',
               }}
             >
@@ -137,7 +150,7 @@ export function OnboardingToolRow({
                 type="link"
                 aria-label={`Retry connection check for ${rec.name}`}
                 onClick={() => void refresh()}
-                style={{ paddingLeft: 0, paddingInlineStart: 0 }}
+                style={{ paddingLeft: 0, paddingInlineStart: 0, fontSize: token.fontSizeSM }}
               >
                 Retry
               </Button>

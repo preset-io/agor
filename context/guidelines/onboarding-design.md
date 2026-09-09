@@ -268,3 +268,20 @@ SVG marks avoid remote-image/CSP failures; missing marks use the same fixed-size
 neutral Agor fallback. Read readiness with the existing caller-scoped Catalog
 hook, never infer authorization from a selected row. Link/text actions in the
 step and its onboarding Catalog drawer have zero left padding.
+
+Auth requirements use Agor's outlined `Tag` with semantic `warning` color,
+matching MCP's existing authentication-needed convention. The Catalog text
+action uses the same `fontSizeSM` as the description, with a standard
+`controlHeight` minimum target and zero left padding; typography must not shrink
+the keyboard/touch target.
+
+The onboarding auth flow reuses `CatalogTab` and `CatalogDetailDrawer` directly;
+it is not a visually reimplemented auth drawer. `CatalogDrawer` is their shared
+presentation seam for detail/auth, pre-selection loading/error, and Slack
+availability: one 520px responsive AntD drawer, default header/body padding,
+token-spaced body flow, and no separate footer padding. Onboarding returns only
+these drawers, not an empty Catalog grid wrapper. Disclosure spacing and the
+destination `Form.Item` layout belong to the shared detail component; onboarding
+supplies workspace context instead of a Branch selector and a Return callback
+instead of navigation, not spacing overrides. Real-browser parity tests compare
+both entry points for token and OAuth setup at all four supported viewports.

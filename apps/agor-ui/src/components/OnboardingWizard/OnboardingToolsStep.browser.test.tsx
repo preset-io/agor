@@ -88,7 +88,17 @@ function Harness({
 async function openTool(title: string) {
   const card = screen.getByText(title).closest<HTMLElement>('.ant-card')!;
   await userEvent.click(within(card).getByRole('button', { name: /^Sign in through Catalog/ }));
-  return within(await screen.findByRole('dialog', { name: new RegExp(title) }));
+  const dialog = await screen.findByRole('dialog', { name: new RegExp(title) });
+  const wrapper = dialog.closest('.ant-drawer-content-wrapper')!;
+  // The form can render before the drawer's enter animation finishes. Wait
+  // for the real motion, rather than clicking a consent target still moving.
+  await waitFor(() => {
+    expect(dialog.getBoundingClientRect().right).toBeCloseTo(window.innerWidth, 1);
+    expect(wrapper.getAnimations().some((animation) => animation.playState === 'running')).toBe(
+      false
+    );
+  });
+  return within(dialog);
 }
 
 describe('onboarding Slack and authority boundaries in Chromium', () => {
