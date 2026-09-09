@@ -6,7 +6,7 @@ Open **MCP Catalog** from the header’s shop icon or the same icon in the sessi
 
 ## Authentication
 
-Catalog's pre-connect readiness is advisory from catalog and saved-connection data; it does not probe the endpoint. Agor checks the live endpoint only when you choose **Connect** and before installing it. Reviewed **Provider setup required** entries are an exception: they show a setup guide and cannot auto-connect, regardless of a successful metadata probe. Other entries may be:
+Catalog's pre-connect readiness is advisory from catalog and saved-connection data; it does not probe the endpoint. Agor checks the live endpoint only when you choose **Connect** and before installing it. Entries may be:
 
 - **Open:** Agor creates and attaches a new idle session, stages the starter prompt, and keeps the Catalog drawer open so you can choose **Open session**.
 - **OAuth:** Agor creates the server and session and pre-opens the provider sign-in window. The Catalog drawer remains at **Sign-in pending** until the durable per-user grant is confirmed; the session notice and MCP badge remain the recovery path if sign-in is not completed.
@@ -17,14 +17,13 @@ For unsupported schemes, configure the server in **Settings → MCP Servers**. C
 
 ### Providers that need setup or approval
 
-**Provider setup required** is a reviewed Catalog restriction, not a transient
-readiness probe. These entries remain searchable for their setup guide, but
-Catalog does not create a server, session, popup, or client registration for them.
-Existing matching Catalog installs without a configured Client ID also stop
-before automatic registration. Existing grants are not deleted. Configuring a
-client deliberately uses the normal OAuth checks; it does **not** prove provider
-approval or make the connection verified. Custom/edited server configurations do
-not acquire Catalog compatibility through this restriction.
+Catalog offers the normal **Connect** / **Sign in** flow for all of these providers,
+subject to the existing workspace, tenant, server, and branch permissions. Discovery
+or a generated client ID does not prove that a provider permits access or accepts
+the callback. Provider rejections surface after an attempted connection with safe
+recovery guidance; removing a Catalog gate does not resolve external approval requirements.
+No provider registration is made until a user starts the normal connection flow.
+Existing grants and configured OAuth security policies are unchanged.
 
 | Provider  | Required next step                                                                                                                                                                                                                                                                                                                                                                          |
 | --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -43,8 +42,8 @@ for another. A provider's registration endpoint in metadata proves neither open
 registration nor authorization of arbitrary HTTPS callbacks. Do not change to
 legacy compatibility to bypass provider approval. Do not reset registrations to
 try to fix an authorization-page redirect error: that page is not authority to
-retire a stored client. Re-enable automatic Catalog connection only after a
-reviewed provider-specific change establishes the supported path.
+retire a stored client. Use the safe failure evidence to establish whether a
+provider-specific protocol change or provider/admin configuration is needed.
 
 ### Safe registration diagnostics
 

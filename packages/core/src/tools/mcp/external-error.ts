@@ -48,8 +48,7 @@ export type MCPExternalErrorReason =
   | 'oauth_metadata_incompatible'
   | 'oauth_redirect_configuration_required'
   | 'catalog_probe_unreachable'
-  | 'catalog_probe_unrecognized'
-  | 'catalog_setup_required';
+  | 'catalog_probe_unrecognized';
 
 const ALLOWED_EXTERNAL_CODES = new Set([
   'ABORT_ERR',
@@ -173,8 +172,7 @@ function safeReason(reason: unknown): MCPExternalErrorReason | undefined {
     reason === 'oauth_metadata_incompatible' ||
     reason === 'oauth_redirect_configuration_required' ||
     reason === 'catalog_probe_unreachable' ||
-    reason === 'catalog_probe_unrecognized' ||
-    reason === 'catalog_setup_required'
+    reason === 'catalog_probe_unrecognized'
     ? reason
     : undefined;
 }

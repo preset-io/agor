@@ -501,28 +501,27 @@ describe('stateful mcp-servers.find harness', () => {
 
 describe('mcp-catalog/connect', () => {
   it.each(OAUTH_PROVIDER_FIXTURES)(
-    '$label requires setup before any probe, credential, generation or session side effect',
+    '$label ordinary member can connect using the standard disclosure and install path',
     async ({ name }) => {
       const entry = (await loadCuratedCatalog()).find((entry) => entry.name === name)!;
       const { app, created, deps, generationClaims } = buildApp(entry);
+      expect(entry).not.toHaveProperty('setup_required');
+      probeRemoteAuthType.mockResolvedValue('oauth');
+      const service = createMCPCatalogConnectService(app, deps);
       await expect(
-        createMCPCatalogConnectService(app, deps).create(
-          {
-            ...request,
-            catalog_key: name,
-            acknowledged_disclosure: entry.permission_disclosure,
-            bearer_token: 'SENTINEL-do-not-send',
-          },
-          params
-        )
-      ).rejects.toThrow(entry.setup_required!.message);
+        service.create({ ...request, catalog_key: name, acknowledged_disclosure: '' }, params)
+      ).rejects.toThrow();
       expect(probeRemoteAuthType).not.toHaveBeenCalled();
-      expect(probeRemoteBearerToken).not.toHaveBeenCalled();
-      expect(deps.listCandidates).not.toHaveBeenCalled();
-      expect(generationClaims).toEqual([]);
-      expect(created.mcpServers).toEqual([]);
-      expect(created.sessions).toEqual([]);
-      expect(created.attachments).toEqual([]);
+      const result = await service.create(
+        { ...request, catalog_key: name, acknowledged_disclosure: entry.permission_disclosure },
+        params
+      );
+      expect(probeRemoteAuthType).toHaveBeenCalledOnce();
+      expect(generationClaims).toHaveLength(1);
+      expect(created.mcpServers).toHaveLength(1);
+      expect(created.sessions).toHaveLength(1);
+      expect(created.attachments).toHaveLength(1);
+      expect(result.mcp_server.auth).toMatchObject({ type: 'oauth', oauth_mode: 'per_user' });
     }
   );
 

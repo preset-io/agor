@@ -279,7 +279,6 @@ import {
   shouldVerifyMCPOAuthGrantBinding,
 } from './services/mcp-oauth-grant-binding.js';
 import { MCPOAuthPendingFlowAuthority } from './services/mcp-oauth-pending-flow-authority.js';
-import { catalogOAuthSetupRecovery } from './services/mcp-oauth-provider-setup.js';
 import { resolveAuthenticatedServerIds } from './services/mcp-oauth-status.js';
 import {
   createMCPServersService,
@@ -2378,11 +2377,6 @@ export async function registerMCPServices(
         throw new Error(
           'The saved MCP server no longer matches this OAuth request. Save changes, then restart OAuth.'
         );
-      }
-      if (
-        await runWithinOAuthAuthority(assertFlowAuthority, () => catalogOAuthSetupRecovery(server))
-      ) {
-        throw new OAuthConfigurationError('provider_setup_required');
       }
       const compatibilityPolicy = await runWithinOAuthAuthority(assertFlowAuthority, () =>
         resolveMCPOAuthCompatibilityPolicy(server)
@@ -5071,24 +5065,6 @@ export async function registerMCPServices(
         }
 
         if (savedServer?.auth?.type === 'oauth') {
-          const setupRecovery = await runWithinOAuthAuthority(assertRequestAuthority, () =>
-            catalogOAuthSetupRecovery(savedServer)
-          );
-          if (setupRecovery) {
-            await markSlackRecoveryStartFailed();
-            assertRequestAuthority?.();
-            externalFailure('OAuth Start', 'oauth', null, {
-              category: 'configuration_required',
-              type: 'ConfigurationError',
-              reason: 'catalog_setup_required',
-            });
-            return {
-              success: false,
-              error: setupRecovery.message,
-              recovery: setupRecovery,
-            } satisfies MCPOAuthStartFailure;
-          }
-
           oauthMode = savedServer.auth.oauth_mode || 'per_user';
           authorizationUrlOverride = savedServer.auth.oauth_authorization_url;
           tokenUrlOverride = savedServer.auth.oauth_token_url;

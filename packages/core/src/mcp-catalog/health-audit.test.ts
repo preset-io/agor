@@ -190,22 +190,17 @@ describe('auditCatalogHealth', () => {
 });
 
 it.each(OAUTH_PROVIDER_FIXTURES)(
-  '$label setup is not reported as ready by the metadata audit',
+  '$label is probed normally, not skipped by a provider policy gate',
   async ({ name }) => {
     const catalog = await loadCuratedCatalog();
     const provider = catalog.find((entry) => entry.name === name)!;
-    const probe = vi.fn();
-    const oauthMetadataReady = vi.fn();
+    expect(provider).not.toHaveProperty('setup_required');
+    const probe = vi.fn(async () => ({ authType: 'oauth' as const }));
+    const oauthMetadataReady = vi.fn(async () => {});
     await expect(auditCatalogHealth([provider], { probe, oauthMetadataReady })).resolves.toEqual([
-      {
-        name,
-        status: 'setup-required',
-        expectedAuth: 'oauth',
-        observedAuth: 'unknown',
-        reason: 'provider_setup_required',
-      },
+      { name, status: 'ready', expectedAuth: 'oauth', observedAuth: 'oauth' },
     ]);
-    expect(probe).not.toHaveBeenCalled();
-    expect(oauthMetadataReady).not.toHaveBeenCalled();
+    expect(probe).toHaveBeenCalledWith(provider.remote_url);
+    expect(oauthMetadataReady).toHaveBeenCalledOnce();
   }
 );

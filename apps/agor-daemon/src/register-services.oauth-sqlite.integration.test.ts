@@ -1173,6 +1173,7 @@ async function createRealSocketHarness(
   };
 }
 
+const defaultLoadCatalog = vi.mocked(loadCatalog).getMockImplementation()!;
 const providers: TestProvider[] = [];
 const databases: SQLiteHarness['rawDb'][] = [];
 const realSocketHarnesses: RealSocketHarness[] = [];
@@ -1187,6 +1188,9 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
+  // Removed setup gates no longer consume extra catalog reads. Never let a
+  // fixture's unused one-shot responses change the next test's OAuth policy.
+  vi.mocked(loadCatalog).mockReset().mockImplementation(defaultLoadCatalog);
   mcpClientTestState.connectError = undefined;
   mcpClientTestState.tools = [];
   await Promise.all(realSocketHarnesses.splice(0).map((harness) => harness.close()));
@@ -1717,50 +1721,97 @@ describe('real Feathers Socket.IO request authority', () => {
 
 describe('SQLite saved-row OAuth authority', () => {
   it.each(OAUTH_PROVIDER_FIXTURES)(
-    '$label refuses saved catalog DCR before provider I/O; foreign tenant cannot obtain recovery',
+    '$label ordinary member reaches normal DCR and safe failure; foreign tenant is denied before I/O',
     async ({ name }) => {
-      const provider = await createTestProvider();
+      const provider = await createTestProvider({ rejectDynamicRegistration: true });
       providers.push(provider);
       const official = (await loadCuratedCatalog()).find((entry) => entry.name === name)!;
-      // Route the official restriction through the existing loopback provider
-      // seam; no test calls the live provider or creates a real client.
+      // A provider-shaped catalog identity on the existing loopback fixture.
+      // No live provider POST; 418 is synthetic, not a production finding.
       const catalogEntry = {
         ...official,
         transport: 'streamable-http' as const,
         remote_url: provider.savedMcpUrl,
       };
-      vi.mocked(loadCatalog).mockResolvedValueOnce([catalogEntry]);
-      const harness = await createHarness(provider, undefined, { catalogEntry });
-      databases.push(harness.rawDb);
-      const result = await harness.app.service('mcp-servers/oauth-start').create(
-        {
+      const originalCatalog = vi.mocked(loadCatalog).getMockImplementation()!;
+      vi.mocked(loadCatalog).mockResolvedValue([catalogEntry]);
+      const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+      try {
+        const harness = await createHarness(provider, undefined, { catalogEntry });
+        databases.push(harness.rawDb);
+        await new UsersRepository(harness.rawDb).update(harness.user.user_id, { role: 'member' });
+        harness.liveSocket.feathers.user = { ...harness.user, role: 'member' };
+        const request = {
           mcp_server_id: harness.server.mcp_server_id,
-          client_id: 'SENTINEL-request-bypass',
-        },
-        paramsFor(harness)
-      );
-      expect(result).toMatchObject({
-        success: false,
-        recovery: {
-          category: 'configuration_required',
-          action: 'contact_admin',
-          message: official.setup_required!.message,
-        },
-      });
-      expect(JSON.stringify(result)).not.toContain('SENTINEL');
-      expect(provider.requests).toEqual([]);
-      expect(harness.emittedBrowserEvents).toEqual([]);
-      await expect(
-        harness.app.service('mcp-servers/oauth-start').create(
-          {
-            mcp_server_id: harness.server.mcp_server_id,
-          },
-          { ...paramsFor(harness), tenant: { tenant_id: 'other-tenant', source: 'auth' } }
-        )
-      ).rejects.toThrow();
-      expect(provider.requests).toEqual([]);
+          client_id: 'SENTINEL-request-client-ignored',
+        };
+        await expect(
+          harness.app.service('mcp-servers/oauth-start').create(request, {
+            ...paramsFor(harness),
+            tenant: { tenant_id: 'foreign', source: 'auth' },
+          })
+        ).rejects.toThrow();
+        expect(provider.requests).toEqual([]);
+        const result = await harness.app
+          .service('mcp-servers/oauth-start')
+          .create(request, paramsFor(harness));
+        expect(result).toMatchObject({
+          success: false,
+          recovery: { category: 'client_registration_failed', action: 'configure_client' },
+        });
+        expect(provider.requests.filter((r) => r.path === '/register')).toHaveLength(1);
+        expect(provider.requests.find((r) => r.path === '/register')?.jsonBody).toMatchObject({
+          redirect_uris: ['https://agor.example.test/mcp-servers/oauth-callback'],
+          token_endpoint_auth_method: 'none',
+          application_type: 'web',
+        });
+        expect(errors).toHaveBeenCalledWith(
+          '[OAuth Start] event=mcp_external_failure stage=dcr_registration category=provider_rejected type=OAuthDCRFailure status=418 reason=registration_rejected registration_endpoint_source=metadata'
+        );
+        expect(JSON.stringify(result)).not.toContain('SENTINEL');
+        expect(harness.emittedBrowserEvents).toEqual([]);
+      } finally {
+        vi.mocked(loadCatalog).mockImplementation(originalCatalog);
+        errors.mockRestore();
+      }
     }
   );
+
+  it('ordinary member obtains an authorization URL after accepted DCR without any special mode', async () => {
+    const provider = await createTestProvider({ holdDynamicRegistration: true });
+    providers.push(provider);
+    provider.releaseDcr();
+    const official = (await loadCuratedCatalog()).find((entry) => entry.name === 'com.canva/mcp')!;
+    const catalogEntry = {
+      ...official,
+      transport: 'streamable-http' as const,
+      remote_url: provider.savedMcpUrl,
+    };
+    const originalCatalog = vi.mocked(loadCatalog).getMockImplementation()!;
+    vi.mocked(loadCatalog).mockResolvedValue([catalogEntry]);
+    try {
+      const harness = await createHarness(provider, undefined, { catalogEntry });
+      databases.push(harness.rawDb);
+      await new UsersRepository(harness.rawDb).update(harness.user.user_id, { role: 'member' });
+      harness.liveSocket.feathers.user = { ...harness.user, role: 'member' };
+      const result = (await harness.app.service('mcp-servers/oauth-start').create(
+        {
+          mcp_server_id: harness.server.mcp_server_id,
+        },
+        paramsFor(harness)
+      )) as { success: boolean; authorizationUrl: string };
+      expect(result.success).toBe(true);
+      const authorization = new URL(result.authorizationUrl);
+      expect(authorization.searchParams.get('code_challenge_method')).toBe('S256');
+      expect(authorization.searchParams.get('redirect_uri')).toBe(
+        'https://agor.example.test/mcp-servers/oauth-callback'
+      );
+      expect(authorization.searchParams.get('resource')).toBe(provider.savedMcpUrl);
+      expect(provider.requests.filter((r) => r.path === '/register')).toHaveLength(1);
+    } finally {
+      vi.mocked(loadCatalog).mockImplementation(originalCatalog);
+    }
+  });
 
   it('keeps a committed OAuth completion successful when its runtime-hint lookup rejects', async () => {
     const provider = await createTestProvider();

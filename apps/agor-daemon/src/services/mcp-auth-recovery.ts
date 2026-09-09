@@ -104,14 +104,6 @@ export function classifyMCPAuthRecovery(
 
   if (safeInstanceOf(error, OAuthConfigurationError)) {
     const failureCode = safeOwnDataValue(error, 'failureCode');
-    if (failureCode === 'provider_setup_required')
-      return {
-        ...common,
-        category: 'configuration_required',
-        action: 'contact_admin',
-        message:
-          'This provider needs setup or approval before Agor can sign in. Review its Catalog setup guide and verify the exact callback with the provider before retrying.',
-      };
     if (failureCode === 'client_registration_required') {
       return {
         ...common,

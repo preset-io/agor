@@ -32,7 +32,6 @@ let loaded: Promise<readonly MCPCatalogEntry[]> | null = null;
  */
 function freezeEntry(entry: MCPCatalogEntry): MCPCatalogEntry {
   Object.freeze(entry.capabilities);
-  if (entry.setup_required) Object.freeze(entry.setup_required);
   if (entry.oauth) Object.freeze(entry.oauth);
   if (entry.credentials) Object.freeze(entry.credentials);
   return Object.freeze(entry);

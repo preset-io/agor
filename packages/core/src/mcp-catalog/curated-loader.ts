@@ -14,7 +14,6 @@ import {
   MCP_CATALOG_AUTHORED_AUTH_TYPES,
   MCP_CATALOG_CAPABILITIES,
   MCP_CATALOG_CATEGORIES,
-  MCP_CATALOG_SETUP_REASONS,
   MCP_OAUTH_COMPATIBILITY_MODES,
   MCP_OAUTH_DCR_MODES,
 } from '@agor/core/types';
@@ -119,29 +118,6 @@ const catalogEntrySchema = z
      */
     oauth: catalogEntryOAuthSchema.optional(),
     credentials: catalogEntryCredentialsSchema.optional(),
-    setup_required: z
-      .object({
-        reason: z.enum(MCP_CATALOG_SETUP_REASONS),
-        message: nonEmpty.max(1000),
-        documentation_url: httpUrl.refine(
-          (value) => {
-            const url = new URL(value);
-            return (
-              url.protocol === 'https:' &&
-              !url.username &&
-              !url.password &&
-              !url.search &&
-              !url.hash
-            );
-          },
-          {
-            message:
-              'must be a public HTTPS documentation URL without credentials, query or fragment',
-          }
-        ),
-      })
-      .strict()
-      .optional(),
   })
   .strict()
   .superRefine((entry, context) => {

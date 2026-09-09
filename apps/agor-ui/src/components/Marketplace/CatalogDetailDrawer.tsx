@@ -281,7 +281,6 @@ const CatalogDetailDrawerForIdentity: React.FC<CatalogDetailDrawerProps> = ({
   })();
   const advisoryStatus = connect?.readiness === 'blocked' ? connect : readinessPresentation;
   const runtimeStatus = (() => {
-    if (entry?.setup_required) return connect;
     switch (credentialRequirement) {
       case 'required':
         return {
@@ -649,25 +648,7 @@ const CatalogDetailDrawerForIdentity: React.FC<CatalogDetailDrawerProps> = ({
           </Flex>
 
           {success ? null : blockedReason ? (
-            <Alert
-              type="info"
-              showIcon
-              title={entry?.setup_required ? 'Provider setup required' : blockedReason}
-              description={
-                entry?.setup_required ? (
-                  <Space orientation="vertical">
-                    <Text>{blockedReason}</Text>
-                    <Link
-                      href={entry.setup_required.documentation_url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                    >
-                      Provider setup guide
-                    </Link>
-                  </Space>
-                ) : undefined
-              }
-            />
+            <Alert type="info" showIcon title={blockedReason} />
           ) : (
             <Flex vertical gap={token.marginXS}>
               <Form layout="vertical" size="middle" component="div">

@@ -17,7 +17,6 @@ const actionable = results.filter(({ status }) =>
 );
 const advisory = results.filter(({ status }) => ['unreachable', 'indeterminate'].includes(status));
 const credentialRequired = results.filter(({ status }) => status === 'credential-required');
-const setupRequired = results.filter(({ status }) => status === 'setup-required');
 const ready = results.filter(({ status }) => status === 'ready');
 
 function resultLine(result: CatalogHealthResult): string {
@@ -59,7 +58,7 @@ const noteworthy = results.filter(({ status }) => status !== 'ready');
 const summary = [
   '## MCP catalog health audit',
   '',
-  `Checked ${results.length} entries: ${ready.length} fully ready, ${setupRequired.length} setup-required (not probed), ${credentialRequired.length} credential-required (public challenge only), ${advisory.length} advisory, ${actionable.length} actionable.`,
+  `Checked ${results.length} entries: ${ready.length} fully ready, ${credentialRequired.length} credential-required (public challenge only), ${advisory.length} advisory, ${actionable.length} actionable.`,
   '',
   '| Entry | Status | Expected | Observed | Reason | Error |',
   '| --- | --- | --- | --- | --- | --- |',
@@ -77,7 +76,7 @@ if (summaryFile) await appendFile(summaryFile, `${summary}\n`);
 
 console.log(
   `[mcp-catalog/audit] complete total=${results.length} ready=${ready.length}` +
-    ` setup_required=${setupRequired.length} credential_required=${credentialRequired.length} advisory=${advisory.length}` +
+    ` credential_required=${credentialRequired.length} advisory=${advisory.length}` +
     ` actionable=${actionable.length}`
 );
 if (actionable.length > 0) process.exitCode = 1;

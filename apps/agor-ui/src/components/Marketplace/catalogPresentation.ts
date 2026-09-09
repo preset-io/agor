@@ -259,12 +259,6 @@ export const CONNECTABLE_AUTH_TYPES: MCPCatalogAuthType[] = [
 ];
 
 export function connectStatus(entry: MCPCatalogEntry): ConnectStatus {
-  if (entry.setup_required)
-    return {
-      readiness: 'blocked',
-      label: 'Provider setup required',
-      detail: entry.setup_required.message,
-    };
   // `has_remote` is derived from `remote_url`, so testing the URL tests both.
   // Unreachable for anything the loader served; see `unavailable` above.
   if (!entry.remote_url || entry.transport === 'stdio') return CONNECT_STATUSES.unavailable;

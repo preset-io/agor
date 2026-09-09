@@ -139,8 +139,7 @@ export class OAuthConfigurationError extends Error {
       | 'endpoint_override_mismatch'
       | 'issuer_mismatch'
       | 'pkce_required'
-      | 'client_registration_required'
-      | 'provider_setup_required',
+      | 'client_registration_required',
     message = `OAuth configuration failed (${failureCode})`
   ) {
     super(message);
