@@ -48,8 +48,24 @@ dbTest(
     await expect(repo.getToken(owner, server.mcp_server_id)).resolves.toEqual(personal[0]);
     await expect(repo.listForUser(other)).resolves.toEqual([]);
     await expect(repo.getToken(other, server.mcp_server_id)).resolves.toBeNull();
+    await expect(repo.getCatalogGrantAuthority(owner, server.mcp_server_id)).resolves.toMatchObject(
+      { oauth_client_id: 'client', oauth_client_secret: 'secret' }
+    );
+    const authority = await repo.listAuthorityForUserAndSharedByServerIds(owner, [
+      server.mcp_server_id,
+    ]);
+    expect(authority).toHaveLength(2);
+    expect(authority.find((record) => record.user_id === owner)).toMatchObject({
+      oauth_client_id: 'client',
+      oauth_client_secret: 'secret',
+    });
+    expect(authority.find((record) => record.user_id === null)?.oauth_client_id).toBeUndefined();
+    expect(
+      await repo.listAuthorityForUserAndSharedByServerIds(other, [server.mcp_server_id])
+    ).toHaveLength(1);
     await repo.deleteToken(owner, server.mcp_server_id);
     await expect(repo.listForUser(owner)).resolves.toEqual([]);
+    await expect(repo.getCatalogGrantAuthority(owner, server.mcp_server_id)).resolves.toBeNull();
     await expect(repo.getToken(null, server.mcp_server_id)).resolves.toEqual(shared[0]);
   }
 );

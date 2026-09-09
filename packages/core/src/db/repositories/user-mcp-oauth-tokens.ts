@@ -22,7 +22,7 @@ import {
   select,
   update,
 } from '../database-wrapper';
-import { openBoundSecret, openBoundSecretAsync, sealBoundSecret } from '../oauth-secret-envelope';
+import { openBoundSecretAsync, sealBoundSecret } from '../oauth-secret-envelope';
 import {
   type UserMCPOAuthTokenInsert,
   type UserMCPOAuthTokenRow,
@@ -301,22 +301,24 @@ export class UserMCPOAuthTokenRepository {
     return tokens;
   }
 
-  private mapAuthorityRow(row: MCPOAuthGrantAuthorityRow): MCPOAuthGrantAuthorityRecord {
+  private async mapAuthorityRow(
+    row: MCPOAuthGrantAuthorityRow
+  ): Promise<MCPOAuthGrantAuthorityRecord> {
     const userId = (row.user_id as UserID | null) ?? null;
     const serverId = row.mcp_server_id as MCPServerID;
     const generation = Number(row.grant_generation ?? 0);
     const tenantId = this.tenantId();
-    const openClientMaterial = (
+    const openClientMaterial = async (
       value: unknown,
       purpose: 'client-id' | 'client-secret',
       field: string
-    ): string | undefined => {
+    ): Promise<string | undefined> => {
       if (value == null || value === '') return undefined;
       if (!this.postgres) return String(value);
       if (!tenantId || !this.masterSecret) {
         throw new RepositoryError('PostgreSQL MCP OAuth token decryption is not configured');
       }
-      return openBoundSecret(
+      return openBoundSecretAsync(
         String(value),
         this.masterSecret,
         purpose,
@@ -326,8 +328,8 @@ export class UserMCPOAuthTokenRepository {
     return {
       user_id: userId,
       mcp_server_id: serverId,
-      oauth_client_id: openClientMaterial(row.oauth_client_id, 'client-id', 'client-id'),
-      oauth_client_secret: openClientMaterial(
+      oauth_client_id: await openClientMaterial(row.oauth_client_id, 'client-id', 'client-id'),
+      oauth_client_secret: await openClientMaterial(
         row.oauth_client_secret,
         'client-secret',
         'client-secret'
@@ -441,18 +443,18 @@ export class UserMCPOAuthTokenRepository {
         .one()) as Record<string, unknown> | undefined;
       if (!row) return null;
       const generation = Number(row.grant_generation ?? 0);
-      const openClient = (
+      const openClient = async (
         value: unknown,
         purpose: 'client-id' | 'client-secret',
         field: string
-      ): string | undefined => {
+      ): Promise<string | undefined> => {
         if (value == null || value === '') return undefined;
         if (!this.postgres) return String(value);
         const tenantId = this.tenantId();
         if (!tenantId || !this.masterSecret) {
           throw new RepositoryError('PostgreSQL MCP OAuth client decryption is not configured');
         }
-        return openBoundSecret(
+        return openBoundSecretAsync(
           String(value),
           this.masterSecret,
           purpose,
@@ -469,8 +471,12 @@ export class UserMCPOAuthTokenRepository {
         oauth_token_expires_at: row.oauth_token_expires_at
           ? new Date(row.oauth_token_expires_at as Date | string | number)
           : undefined,
-        oauth_client_id: openClient(row.oauth_client_id, 'client-id', 'client-id'),
-        oauth_client_secret: openClient(row.oauth_client_secret, 'client-secret', 'client-secret'),
+        oauth_client_id: await openClient(row.oauth_client_id, 'client-id', 'client-id'),
+        oauth_client_secret: await openClient(
+          row.oauth_client_secret,
+          'client-secret',
+          'client-secret'
+        ),
         grant_generation: generation,
         grant_binding_version:
           row.grant_binding_version == null ? undefined : Number(row.grant_binding_version),
@@ -1080,7 +1086,9 @@ export class UserMCPOAuthTokenRepository {
             .all())
         );
       }
-      return rows.map((row) => this.mapAuthorityRow(row));
+      const records: MCPOAuthGrantAuthorityRecord[] = [];
+      for (const row of rows) records.push(await this.mapAuthorityRow(row));
+      return records;
     } catch (error) {
       throw new RepositoryError(
         `Failed to list OAuth grants for authority projection: ${error instanceof Error ? error.message : String(error)}`,

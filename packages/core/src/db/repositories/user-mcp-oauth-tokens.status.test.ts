@@ -181,11 +181,13 @@ describe('OAuth status grant read integrity and cost', () => {
 
     expect(syncOpen).not.toHaveBeenCalled();
     query.projections = [];
+    open.mockClear();
     const authority = await repo.getCatalogGrantAuthority(userId, serverId);
     expect(query.projections).toHaveLength(1);
     expect(query.projections[0]).not.toHaveProperty('oauth_access_token');
     expect(query.projections[0]).not.toHaveProperty('oauth_refresh_token');
-    expect(syncOpen.mock.calls.map((call) => call[2])).toEqual(['client-id', 'client-secret']);
+    expect(open.mock.calls.map((call) => call[2])).toEqual(['client-id', 'client-secret']);
+    expect(syncOpen).not.toHaveBeenCalled();
     expect(authority).toMatchObject({
       oauth_access_token: '<present>',
       oauth_client_id: 'client',
@@ -257,5 +259,53 @@ describe('OAuth status grant read integrity and cost', () => {
     await expect(repo.getCatalogGrantAuthority(userId, serverId)).rejects.toThrow(
       'Failed to read OAuth grant authority'
     );
+  });
+  it('authority inventories open client fields serially and never hydrate access/refresh tokens', async () => {
+    query.rows = [grant(), grant(null)];
+    const native = envelope.openBoundSecretAsync;
+    let active = 0;
+    let peak = 0;
+    const open = vi.spyOn(envelope, 'openBoundSecretAsync').mockImplementation(async (...args) => {
+      peak = Math.max(peak, ++active);
+      try {
+        return await native(...args);
+      } finally {
+        active--;
+      }
+    });
+    const repo = new UserMCPOAuthTokenRepository({} as Database, master);
+    const records = await repo.listAuthorityForUserAndSharedByServerIds(userId, [serverId]);
+    expect(records.map((record) => record.user_id)).toEqual([userId, null]);
+    expect(records.every((record) => record.oauth_client_secret === 'secret')).toBe(true);
+    expect(open.mock.calls.map((call) => call[2])).toEqual([
+      'client-id',
+      'client-secret',
+      'client-id',
+      'client-secret',
+    ]);
+    expect(peak).toBe(1);
+    expect(query.projections).toHaveLength(1);
+    expect(query.projections[0]).not.toHaveProperty('oauth_access_token');
+    expect(query.projections[0]).not.toHaveProperty('oauth_refresh_token');
+  });
+
+  it.each([
+    'oauth_client_id',
+    'oauth_client_secret',
+    'grant_generation',
+    'user_id',
+    'mcp_server_id',
+  ])('authority reads retain asynchronous corruption/binding failure for %s', async (field) => {
+    const repo = new UserMCPOAuthTokenRepository({} as Database, master);
+    query.rows = [{ ...grant(), [field]: field === 'grant_generation' ? 2 : 'foreign-or-corrupt' }];
+    await expect(repo.listAuthorityForUserAndSharedByServerIds(userId, [serverId])).rejects.toThrow(
+      'Failed to list OAuth grants for authority projection'
+    );
+    // Point reads bind to the requested subject/server, not caller-supplied row IDs.
+    if (field !== 'user_id' && field !== 'mcp_server_id') {
+      await expect(repo.getCatalogGrantAuthority(userId, serverId)).rejects.toThrow(
+        'Failed to read OAuth grant authority'
+      );
+    }
   });
 });

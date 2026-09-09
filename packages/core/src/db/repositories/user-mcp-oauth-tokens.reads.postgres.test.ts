@@ -47,7 +47,7 @@ describe.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
           for (const subject of [user, null]) {
             const seal = (
               value: string,
-              purpose: 'access-token' | 'refresh-token',
+              purpose: 'access-token' | 'refresh-token' | 'client-id' | 'client-secret',
               field: string
             ) =>
               sealBoundSecret(
@@ -63,6 +63,8 @@ describe.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
                 mcp_server_id: server.mcp_server_id,
                 oauth_access_token: seal('synthetic-access', 'access-token', 'access'),
                 oauth_refresh_token: seal('synthetic-refresh', 'refresh-token', 'refresh'),
+                oauth_client_id: seal('synthetic-client', 'client-id', 'client-id'),
+                oauth_client_secret: seal('synthetic-secret', 'client-secret', 'client-secret'),
                 grant_generation: 1,
                 created_at: new Date(),
               })
@@ -106,10 +108,35 @@ describe.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
             await expect(repo.listForUser(foreign.user)).resolves.toEqual([]);
             await expect(repo.getToken(foreign.user, foreign.server)).resolves.toBeNull();
             await expect(repo.getToken(null, foreign.server)).resolves.toBeNull();
+            const authority = await repo.listAuthorityForUserAndSharedByServerIds(own.user, [
+              own.server,
+              foreign.server,
+            ]);
+            expect(authority).toHaveLength(2);
+            expect(
+              authority.every(
+                (record) =>
+                  record.mcp_server_id === own.server &&
+                  record.oauth_client_secret === 'synthetic-secret'
+              )
+            ).toBe(true);
+            expect(await repo.getCatalogGrantAuthority(own.user, own.server)).toMatchObject({
+              oauth_client_id: 'synthetic-client',
+              oauth_client_secret: 'synthetic-secret',
+            });
+            await expect(
+              repo.getCatalogGrantAuthority(foreign.user, foreign.server)
+            ).resolves.toBeNull();
             // A valid same-tenant row belonging to a different user is not returned.
             const other = await ensureTestUser(scoped, generateId() as UserID);
             await expect(repo.listForUser(other)).resolves.toEqual([]);
             await expect(repo.getToken(other, own.server)).resolves.toBeNull();
+            const otherAuthority = await repo.listAuthorityForUserAndSharedByServerIds(other, [
+              own.server,
+            ]);
+            expect(otherAuthority).toHaveLength(1);
+            expect(otherAuthority[0].user_id).toBeNull();
+            await expect(repo.getCatalogGrantAuthority(other, own.server)).resolves.toBeNull();
             const rows = await select(scoped)
               .from(userMcpOauthTokens)
               .where(eq(userMcpOauthTokens.mcp_server_id, foreign.server))
