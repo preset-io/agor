@@ -285,6 +285,89 @@ stamps the stable operational defaults needed for a working deployment, but deli
 materialize every optional long-tail field. Leaving those absent preserves their documented
 default-following semantics across upgrades.
 
+## Operator-configured analytics
+
+Analytics is disabled by default. It sends curated analytics events to the configured
+`stdout` (JSON) and/or `http_batch` plugins. It does **not** tag all application logs,
+enable opt-in open-source telemetry, or configure DogStatsD/APM metrics.
+
+```yaml
+analytics:
+  enabled: true
+  client: { app: agor-cloud-daemon, version: '1.0', debug: false }
+  extras:
+    environment: cloud
+    deployment: agor-cloud-production-aws-us1a
+  filters:
+    exclude_events: ['private.*']
+  plugins:
+    - type: http_batch
+      enabled: true
+      options:
+        url: https://api.segment.io/v1/batch
+        headers_from_env: { Authorization: AGOR_ANALYTICS_AUTHORIZATION }
+        flush_interval_ms: 1000
+        max_batch_size: 50
+        timeout_ms: 3000
+```
+
+Both built-in transports emit `context.app.name` from `client.app`,
+`context.app.version` from `client.version` (finite numbers become strings), and
+`context.extras` from the configured extras, or `{}` when absent. Client defaults
+remain `app: agor-daemon`, `version: dev`, `debug: false`. App/version strings must
+be nonblank and at most 256 UTF-8 bytes. Metadata is snapshotted at initialization;
+restart the daemon to apply a change.
+
+App and extras are operator-owned deployment metadata, not tenant identity.
+Callers cannot override either reserved context field. `context.tenant_id` comes
+only from the trusted ambient runtime tenant scope; it is absent outside that
+scope, even if a caller supplies one. Other caller context, event properties,
+`userId`, and `anonymousId` are preserved. Exact-name and simple `*`-glob exclusions
+run before delivery. Prototype-poison context keys are discarded before passing
+options to the analytics client.
+
+`extras` is a flat mapping with at most **32 keys**. Keys match
+`[A-Za-z0-9_][A-Za-z0-9_.-]{0,63}` (1–64 ASCII characters); `__proto__`,
+`prototype`, and `constructor` are rejected. Values are strings of at most
+**1024 UTF-8 bytes**, finite numbers, or booleans—not null, arrays, or objects.
+Only use non-secret, non-PII deployment labels. Bounds are structural validation,
+not a PII detector; operators own field selection and destination access/retention.
+
+### HTTP authentication from daemon environment
+
+`options.headers_from_env` maps HTTP header names to **environment variable names**.
+Provision the complete header value (for example, the required authorization scheme
+and token) separately in the daemon's secret environment. Do not put credentials
+in YAML, `extras`, static `headers`, URLs, or event data. No generic interpolation
+or startup config rewrite occurs. Values resolve only inside the transport at
+analytics initialization; they never enter exported/resolved config or the analytics
+SDK's plugin configuration. Rotate a credential by replacing the daemon secret and
+restarting every replica. HTTP redirects are refused.
+
+Each of `headers` and `headers_from_env` permits at most 32 entries. Header names
+are HTTP token names, at most 128 ASCII characters, excluding prototype-poison
+names (case-insensitive). Duplicate names within or across the maps are rejected
+case-insensitively. Env names match `[A-Z_][A-Z0-9_]*`, at most 128 characters.
+Names inherited by child processes (the runtime env allowlist, `LC_*`, and the
+reserved launcher namespace `AGOR_CLOUD_*`) cannot be used for analytics secrets;
+use a dedicated name such as `AGOR_ANALYTICS_AUTHORIZATION`. The daemon's minimal
+child-env allowlist withholds these dedicated names from executors and tools, and
+the executor resolved-config projection excludes analytics entirely. Do not separately
+map daemon credentials into user/tool environments. `simple` execution remains
+trusted-local execution, not filesystem or host-account isolation.
+
+Header values allow only horizontal tab and printable ASCII, at most **8192
+characters/bytes**. Env-backed values must also be present and nonblank. Invalid,
+missing, empty, or conflicting auth fails closed: analytics initialization fails,
+the daemon logs a bounded warning without credential values and continues with
+analytics disabled. Delivery failures never log raw fetch exceptions. Config shape
+validation still applies to disabled plugins, but disabled analytics/plugins never
+read or require env values. Static non-secret headers remain supported.
+
+Older runtimes reject the new config keys. Roll out an Agor runtime containing this
+contract to every replica **before** enabling these fields in deployment config;
+do not assume an older published release supports them.
+
 ## DogStatsD daemon metrics
 
 Operational daemon metrics can be sent over UDP to a locally reachable

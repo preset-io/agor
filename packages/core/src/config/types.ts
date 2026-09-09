@@ -1290,6 +1290,9 @@ export interface AgorAnalyticsSettings {
     debug?: boolean;
   };
 
+  /** Operator-owned, flat non-secret deployment metadata. See the config guide for bounds. */
+  extras?: Record<string, string | number | boolean>;
+
   /** Simple event-name filters. */
   filters?: {
     /** Exact names or simple `*` globs to exclude before delivery. */
@@ -1322,8 +1325,10 @@ export interface AgorAnalyticsHttpBatchPluginSettings {
     flush_interval_ms?: number;
     max_batch_size?: number;
     timeout_ms?: number;
-    /** Static headers only. */
+    /** Static non-secret headers. Use headers_from_env for credentials. */
     headers?: Record<string, string>;
+    /** Header names mapped to daemon environment variable names, never resolved into config. */
+    headers_from_env?: Record<string, string>;
   };
 }
 

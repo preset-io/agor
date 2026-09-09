@@ -1,6 +1,7 @@
 import type { AnalyticsInstance } from 'analytics';
 import { Analytics } from 'analytics';
 import { getDefaultAnalyticsConfig } from '../config/analytics-defaults.js';
+import { isSafeAnalyticsKey } from '../config/analytics-validation.js';
 import type { AgorAnalyticsSettings, AgorConfig } from '../config/types.js';
 import { getCurrentTenantId } from '../db/tenant-context.js';
 import { isAnalyticsEventExcluded } from './filters.js';
@@ -68,8 +69,12 @@ export class AnalyticsPackageLogger implements AnalyticsLogger {
     const trackOptions: Record<string, unknown> = {};
     const tenantId = getCurrentTenantId();
     if (options.context || tenantId) {
-      const callerContext = { ...options.context };
-      delete callerContext.tenant_id;
+      // Strip reserved and poison keys before the analytics package can merge options.
+      const callerContext = Object.fromEntries(
+        Object.entries(options.context ?? {}).filter(
+          ([key]) => isSafeAnalyticsKey(key) && !['tenant_id', 'app', 'extras'].includes(key)
+        )
+      );
       trackOptions.context = {
         ...callerContext,
         ...(tenantId ? { tenant_id: tenantId } : {}),
