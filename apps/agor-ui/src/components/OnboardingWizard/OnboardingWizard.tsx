@@ -9,8 +9,8 @@
  * flow creates + navigates to a session and needs an existing branch, neither
  * of which exists mid-wizard, so this step selects rather than connects. The
  * selection (plus the always-on Ask items) feeds the first-session prompt so
- * the teammate connects them through the one-click catalog, and a
- * browse-catalog link reaches the real connect UX now.
+ * completion opens the existing Catalog drawer for the newly created branch.
+ * No provider credentials or connection requests are collected in the wizard.
  */
 
 import { TOOL_API_KEY_NAMES } from '@agor/agentic-tools';
@@ -26,7 +26,6 @@ import type {
   User,
   UserPreferences,
 } from '@agor-live/client';
-import { hasMinimumRole, ROLES } from '@agor-live/client';
 import {
   ArrowRightOutlined,
   CheckCircleOutlined,
@@ -39,10 +38,8 @@ import { Alert, Button, Input, Modal, Spin, Tag, Tooltip, Typography, theme } fr
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { VISUALLY_HIDDEN_STYLE } from '@/utils/accessibility';
 import { sanitizeSecretValue } from '@/utils/sanitizeSecret';
-import { uiRouteHref } from '@/utils/uiRoutes';
 import { useAuthenticatedAuthorityScope } from '../../hooks/useAuthorityOperationGuard';
 import { useAgorStore } from '../../store/agorStore';
-import { MARKETPLACE_CATALOG_PATH } from '../../surfaces/surfaceRegistry';
 import {
   MAX_ONBOARDING_GOALS,
   mergeGoalIntegrationRecs,
@@ -394,6 +391,8 @@ export interface OnboardingCompletionResult {
   agent?: AgenticToolName | null;
   /** Goal-tailored tools/connections with their real Agor setup surface. */
   suggestedIntegrations?: OnboardingIntegrationRecommendation[];
+  /** In-memory Catalog handoff only, after durable completion; null browses all entries. */
+  catalogEntryName?: string | null;
   /** Goal ids chosen in step 1 (order-preserving, primary first; [] if
    * skipped), threaded straight through so the completion handler never has
    * to wait on the async preference save. */
@@ -525,15 +524,13 @@ export function OnboardingWizard({
     });
   }, []);
 
-  // ── Step 4: tools — curate the goal-tailored Connect kit ──────────────────
-  // Connect items are shown selected by default; this holds the ones the user
-  // removed, so an untouched/skipped step still threads the full kit through
-  // (matching the pre-revival suggestedIntegrations behavior). Ask items
-  // (Slack/GitHub) are never counted here — they always flow to the first
-  // session regardless of the toggle below.
+  // Selection is not authorization or a connection. Catalog owns policy and secrets.
   const [deselectedToolIds, setDeselectedToolIds] = useState<Set<string>>(new Set());
-  const [askToolsWanted, setAskToolsWanted] = useState(true);
+  const [toolsSkipped, setToolsSkipped] = useState(false);
+  const [toolsConfirmed, setToolsConfirmed] = useState(false);
+  const [browseCatalog, setBrowseCatalog] = useState(false);
   const toggleTool = useCallback((id: string) => {
+    setToolsSkipped(false);
     setDeselectedToolIds((prev) => {
       const next = new Set(prev);
       if (next.has(id)) next.delete(id);
@@ -541,9 +538,6 @@ export function OnboardingWizard({
       return next;
     });
   }, []);
-  // Only admins (MCP manage) get Connect toggles; others see a read-only teaser
-  // plus the browse-catalog link. Reuses the same role signal as the app shell.
-  const canManageMcp = hasMinimumRole(user?.role, ROLES.ADMIN);
 
   // ── Step 3: LLM ─────────────────────────────────────────────────────────
   const [selectedAgent, setSelectedAgent] = useState<AgenticToolName | null>(null);
@@ -595,7 +589,9 @@ export function OnboardingWizard({
     setCurrentStep(initialStep || 'goals');
     setSelectedGoals([]);
     setDeselectedToolIds(new Set());
-    setAskToolsWanted(true);
+    setToolsSkipped(false);
+    setToolsConfirmed(false);
+    setBrowseCatalog(false);
     setSelectedAgent(null);
     setApiKey('');
     setAuthMethod('api-key');
@@ -976,6 +972,11 @@ export function OnboardingWizard({
     // Skip means "decide later", even if the user experimented with a card
     // first. Do not silently submit a selection they explicitly skipped.
     if (currentStep === 'goals') setSelectedGoals([]);
+    if (currentStep === 'tools') {
+      setDeselectedToolIds(new Set(mergeGoalIntegrationRecs(selectedGoals).map((rec) => rec.id)));
+      setToolsSkipped(true);
+      setBrowseCatalog(false);
+    }
     // The teammate step is optional. Skip is authoritative: do not carry a
     // typed name or an experimental template into completion after the user
     // explicitly chose to continue without creating a teammate.
@@ -995,7 +996,7 @@ export function OnboardingWizard({
       setLlmError(null);
     }
     goToStep(STEPS[stepIndex + 1]);
-  }, [currentStep, stepIndex, goToStep, selectedAgent, agentHasKey]);
+  }, [currentStep, stepIndex, goToStep, selectedAgent, agentHasKey, selectedGoals]);
 
   const handleDismiss = useCallback(() => {
     if (!onDismiss) return;
@@ -1107,6 +1108,7 @@ export function OnboardingWizard({
         break;
       }
       case 'tools': {
+        setToolsConfirmed(true);
         // No inline connect (see the tools-step feasibility note): selections
         // are threaded into the first-session prompt at completion.
         goToStep('done');
@@ -1126,13 +1128,23 @@ export function OnboardingWizard({
             isCurrent() && completionAttemptGenerationRef.current === attemptGeneration,
         };
         const name = teammateName.trim();
-        // Merged MCP integrations for the chosen goals, threaded into the
-        // teammate's bootstrap prompt. The tools step lets the user drop Connect
-        // items from this set; Ask items (Slack/GitHub) always flow through so
-        // the teammate still offers to set them up.
-        const suggestedIntegrations = mergeGoalIntegrationRecs(selectedGoals).filter(
-          (rec) => rec.connectMode === 'ask' || !deselectedToolIds.has(rec.id)
+        const suggestedIntegrations =
+          !toolsConfirmed || toolsSkipped
+            ? []
+            : mergeGoalIntegrationRecs(selectedGoals).filter(
+                (rec) => !deselectedToolIds.has(rec.id)
+              );
+        const firstCatalogTool = suggestedIntegrations.find(
+          (rec) => rec.setup.surface === 'marketplace'
         );
+        const catalogEntryName =
+          !toolsConfirmed || toolsSkipped
+            ? undefined
+            : browseCatalog
+              ? null
+              : firstCatalogTool?.setup.surface === 'marketplace'
+                ? firstCatalogTool.setup.catalogEntryName
+                : undefined;
         // Keep the modal up in a loading state until creation + navigation
         // finish (onComplete may run async), then it closes from the parent.
         setCompleting(true);
@@ -1203,6 +1215,7 @@ export function OnboardingWizard({
                   templateId: selectedTemplateId,
                   agent: selectedAgent,
                   suggestedIntegrations,
+                  catalogEntryName,
                   goals: selectedGoals,
                 },
                 completionAttempt
@@ -1241,6 +1254,9 @@ export function OnboardingWizard({
     isCurrent,
     selectedGoals,
     deselectedToolIds,
+    toolsSkipped,
+    toolsConfirmed,
+    browseCatalog,
     selectedAgent,
     agentIsVerifiedConnected,
     agentHasKey,
@@ -1913,173 +1929,71 @@ export function OnboardingWizard({
 
   const renderTools = () => {
     const kit = mergeGoalIntegrationRecs(selectedGoals);
-    const connectItems = kit.filter((rec) => rec.connectMode !== 'ask');
-    const askItems = kit.filter((rec) => rec.connectMode === 'ask');
     const teammateLabel = teammateName.trim() || 'your teammate';
-    const catalogHref = uiRouteHref(MARKETPLACE_CATALOG_PATH);
-    const LOGO_TINT = 'rgba(255,255,255,0.82)';
-
-    const cardBody = (rec: OnboardingIntegrationRecommendation) => (
-      <>
-        <span
-          style={{
-            display: 'inline-flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            width: 32,
-            height: 32,
-            flexShrink: 0,
-            borderRadius: 8,
-            background: 'rgba(255,255,255,0.06)',
-            border: '1px solid rgba(255,255,255,0.1)',
-          }}
-        >
-          <McpLogo id={rec.id} name={rec.name} size={18} color={LOGO_TINT} />
-        </span>
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ color: TEXT_PRIMARY, fontWeight: 600, fontSize: 13.5 }}>{rec.name}</div>
-          <div style={{ color: TEXT_MUTED, fontSize: 11.5, lineHeight: 1.4 }}>
-            {rec.description}
-          </div>
-        </div>
-      </>
-    );
-
     return (
       <div>
-        {renderStepBadge('Connect your tools')}
-        <Paragraph style={{ color: TEXT_SECONDARY, marginBottom: 18 }}>
-          {canManageMcp
-            ? `Pick what ${teammateLabel} should set up first — most connect in one click from the catalog. You can skip this.`
-            : `Here's what ${teammateLabel} can set up for you. Browse the catalog to connect them.`}
+        {renderStepBadge('Choose your tools')}
+        <Paragraph type="secondary">
+          Pick tools for {teammateLabel}. After setup, review your first selected tool in Catalog.
+          Nothing connects until you approve it there. You can connect the others later.
         </Paragraph>
-
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
-          {connectItems.map((rec) => {
-            const isSelected = !deselectedToolIds.has(rec.id);
-            const cardStyle = {
-              display: 'flex',
-              gap: 10,
-              alignItems: 'flex-start',
-              width: '100%',
-              textAlign: 'left' as const,
-              padding: 12,
-              borderRadius: 12,
-              backdropFilter: 'blur(20px)',
-              WebkitBackdropFilter: 'blur(20px)',
-              background: isSelected && canManageMcp ? CARD_SELECTED_BG : GLASS_CARD_BG,
-              border: isSelected && canManageMcp ? CARD_SELECTED_BORDER : SELECTABLE_CARD_BORDER,
-              boxShadow: isSelected && canManageMcp ? CARD_SELECTED_SHADOW : GLASS_CARD_SHADOW,
-            };
-            // Non-admins get a read-only teaser (no toggle); the catalog link below
-            // is their action, so it never reads as the old dead recommendation list.
-            if (!canManageMcp) {
-              return (
-                <div key={rec.id} style={cardStyle}>
-                  {cardBody(rec)}
-                </div>
-              );
-            }
-            return (
-              <button
-                key={rec.id}
-                type="button"
-                aria-pressed={isSelected}
-                className="onb-card"
-                onClick={() => toggleTool(rec.id)}
-                style={{ ...cardStyle, cursor: 'pointer', transition: 'all 0.15s ease' }}
-              >
-                {cardBody(rec)}
-                <span
-                  aria-hidden="true"
-                  style={{
-                    flexShrink: 0,
-                    width: 18,
-                    height: 18,
-                    marginTop: 2,
-                    borderRadius: '50%',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    background: isSelected ? 'rgba(46,154,146,0.9)' : 'transparent',
-                    border: isSelected
-                      ? '1.5px solid rgba(46,154,146,0.95)'
-                      : '1.5px solid rgba(255,255,255,0.25)',
-                  }}
-                >
-                  {isSelected && (
-                    <CheckOutlined style={{ color: token.colorTextLightSolid, fontSize: 9 }} />
-                  )}
-                </span>
-              </button>
-            );
-          })}
-        </div>
-
-        {askItems.length > 0 && (
-          <div style={{ marginTop: 12 }}>
-            {canManageMcp ? (
-              <button
-                type="button"
-                aria-pressed={askToolsWanted}
-                className="onb-card"
-                onClick={() => setAskToolsWanted((wanted) => !wanted)}
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 10,
-                  width: '100%',
-                  textAlign: 'left',
-                  padding: '10px 12px',
-                  borderRadius: 10,
-                  cursor: 'pointer',
-                  backdropFilter: 'blur(20px)',
-                  WebkitBackdropFilter: 'blur(20px)',
-                  background: askToolsWanted ? CARD_SELECTED_BG : GLASS_CARD_BG,
-                  border: askToolsWanted ? CARD_SELECTED_BORDER : SELECTABLE_CARD_BORDER,
-                  boxShadow: askToolsWanted ? CARD_SELECTED_SHADOW : GLASS_CARD_SHADOW,
-                }}
-              >
-                <span style={{ display: 'inline-flex', gap: 6, flexShrink: 0 }}>
-                  {askItems.map((rec) => (
-                    <McpLogo key={rec.id} id={rec.id} name={rec.name} size={16} color={LOGO_TINT} />
-                  ))}
-                </span>
-                <span style={{ flex: 1, minWidth: 0, color: TEXT_SECONDARY, fontSize: 12.5 }}>
-                  Ask {teammateLabel} to set up:{' '}
-                  <span style={{ color: TEXT_PRIMARY, fontWeight: 600 }}>
-                    {askItems.map((rec) => rec.name).join(', ')}
-                  </span>
-                </span>
-              </button>
-            ) : (
-              <Text style={{ color: TEXT_MUTED, fontSize: 12.5 }}>
-                {teammateLabel} can also set up {askItems.map((rec) => rec.name).join(' and ')} for
-                you.
-              </Text>
-            )}
-          </div>
-        )}
-
         <div
           style={{
-            marginTop: 16,
-            display: 'flex',
-            alignItems: 'center',
-            gap: 8,
-            flexWrap: 'wrap',
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 240px), 1fr))',
+            gap: token.marginSM,
           }}
         >
-          <Typography.Link
-            href={catalogHref}
-            target="_blank"
-            rel="noopener noreferrer"
-            style={{ color: PRIMARY, fontSize: 13, fontWeight: 500 }}
-          >
-            Browse the full catalog <ArrowRightOutlined style={{ fontSize: 11 }} />
-          </Typography.Link>
-          <Text style={{ color: TEXT_MUTED, fontSize: 12 }}>— dozens more tools to connect.</Text>
+          {kit.map((rec) => (
+            <Button
+              key={rec.id}
+              aria-pressed={!toolsSkipped && !deselectedToolIds.has(rec.id)}
+              onClick={() => toggleTool(rec.id)}
+              block
+              style={{
+                height: 'auto',
+                whiteSpace: 'normal',
+                textAlign: 'left',
+                padding: token.paddingSM,
+              }}
+            >
+              <McpLogo id={rec.id} name={rec.name} size={20} />
+              <span style={{ flex: 1, minWidth: 0 }}>
+                <Text strong>{rec.name}</Text>
+                <br />
+                <Text type="secondary">{rec.description}</Text>
+                <br />
+                <Text type="secondary">
+                  {rec.connectMode === 'credentials'
+                    ? 'Personal access token · entered securely in Catalog'
+                    : rec.connectMode === 'oauth'
+                      ? 'Sign in through Catalog'
+                      : rec.connectMode === 'none'
+                        ? 'No sign-in required'
+                        : 'Ask your teammate about setup'}
+                </Text>
+              </span>
+              {!toolsSkipped && !deselectedToolIds.has(rec.id) && (
+                <CheckOutlined aria-label="Selected" />
+              )}
+            </Button>
+          ))}
         </div>
+        <Button
+          type="link"
+          aria-pressed={browseCatalog && !toolsSkipped}
+          onClick={() => {
+            setToolsSkipped(false);
+            setBrowseCatalog((value) => !value);
+          }}
+          style={{ marginTop: token.marginSM }}
+        >
+          Browse the full catalog after setup <ArrowRightOutlined />
+          {browseCatalog && !toolsSkipped && <CheckOutlined aria-label="Selected" />}
+        </Button>
+        <Paragraph type="secondary">
+          You can skip this step. Access depends on your workspace policy.
+        </Paragraph>
       </div>
     );
   };

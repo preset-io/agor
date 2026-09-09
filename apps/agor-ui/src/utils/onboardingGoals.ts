@@ -28,9 +28,10 @@ export type IntegrationSetup =
  * How the tools step lets a user set this up, without re-deriving it from `setup`:
  * - `oauth`  one-click catalog OAuth (most curated servers).
  * - `none`   catalog connect with no sign-in (keyless endpoints).
- * - `ask`    handed to the first-session teammate to arrange (Slack, GitHub).
+ * - `credentials` reviewed catalog bearer/PAT flow, entered only in its drawer.
+ * - `ask`    handed to the first-session teammate to arrange (Slack).
  */
-export type IntegrationConnectMode = 'oauth' | 'none' | 'ask';
+export type IntegrationConnectMode = 'oauth' | 'none' | 'credentials' | 'ask';
 
 export interface OnboardingIntegrationRecommendation {
   id: string;
@@ -73,7 +74,7 @@ export const ONBOARDING_INTEGRATION_RECOMMENDATIONS: Record<
     name: 'Slack',
     emoji: '💬',
     description:
-      'Get notified when sessions finish, send prompts from Slack, and schedule agents that report back to you.',
+      'Read Slack conversations for summaries and recurring updates. Gateway messaging is configured separately.',
     setup: { surface: 'mcp-settings', endpoint: 'https://mcp.slack.com/mcp' },
     connectMode: 'ask',
   },
@@ -81,9 +82,9 @@ export const ONBOARDING_INTEGRATION_RECOMMENDATIONS: Record<
     id: 'github',
     name: 'GitHub',
     emoji: '🐙',
-    description: 'Your AI opens PRs, reviews code, and syncs issues automatically.',
-    setup: { surface: 'connected-repository' },
-    connectMode: 'ask',
+    description: 'Investigate repositories, issues, pull requests, and failing checks.',
+    setup: { surface: 'marketplace', catalogEntryName: 'io.github.github/github-mcp-server' },
+    connectMode: 'credentials',
   },
   linear: {
     id: 'linear',
@@ -217,7 +218,7 @@ export const CONNECT_KIT_SIZE = 4;
 
 /**
  * Rec set shown when onboarding is skipped / no goal is picked. No goal bias:
- * generic popular Connect tools plus the two Ask-the-teammate extras.
+ * generic popular Connect tools plus the Slack setup suggestion.
  */
 export const DEFAULT_INTEGRATION_REC_IDS = ['linear', 'notion', 'firecrawl', 'slack', 'github'];
 
@@ -252,7 +253,7 @@ export const ONBOARDING_GOALS = [
     title: 'Ship without the busywork',
     description: 'PRs, bug triage, and release notes, all handled.',
     icon: RocketOutlined,
-    integrationRecs: ['sentry', 'gitlab', 'linear', 'semgrep', 'github'],
+    integrationRecs: ['github', 'sentry', 'gitlab', 'linear', 'semgrep'],
     bootstrapLine:
       'Desired outcome: less shipping busywork. A first win is scanning the relevant repo for an actionable issue or pull request.',
   },
@@ -270,7 +271,7 @@ export const ONBOARDING_GOALS = [
     title: 'Build me an app',
     description: 'A working app or dashboard on a live test env.',
     icon: BuildOutlined,
-    integrationRecs: ['gitlab', 'supabase', 'figma', 'context7', 'github'],
+    integrationRecs: ['github', 'supabase', 'figma', 'context7', 'gitlab'],
     bootstrapLine:
       'Desired outcome: a working build, not a spec. A first win is starting the requested prototype, internal tool, or dashboard live on the board.',
   },
@@ -352,7 +353,7 @@ const isAskRec = (rec: OnboardingIntegrationRecommendation) => rec.connectMode =
  * Build the routed tool/connection recommendations for the selected goals.
  *
  * The returned list is Connect items first (capped at {@link CONNECT_KIT_SIZE}),
- * then the Ask-the-teammate extras (Slack/GitHub) — which are never counted
+ * then the Ask-the-teammate extras (Slack) — which are never counted
  * against the Connect cap. The first Connect item is flagged `featured`.
  *
  * Connect-item selection:

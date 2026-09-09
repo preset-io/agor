@@ -14,6 +14,7 @@ import { AGENTIC_TOOL_DISPLAY_NAMES } from '@agor/agentic-tools';
 import type { AgenticToolName, AuthCheckResult, User } from '@agor-live/client';
 import { Alert, Button, Space } from 'antd';
 import { useEffect, useRef, useState } from 'react';
+import { useMCPCatalogModal } from '../../contexts/MCPCatalogModalContext';
 import { useAgorStore } from '../../store/agorStore';
 import {
   BannerDecision,
@@ -47,7 +48,7 @@ export interface OnboardingBannersProps {
   /** Opens workspace settings at the given tab key (used for MCP). */
   onOpenWorkspaceSettings: (tab: string) => void;
   /** Opens the MCP catalog (browse + one-click connect) — the integrations CTA target. */
-  onOpenCatalog: () => void;
+  onOpenCatalog?: () => void;
   /** Server-side credential probe — resolves creds exactly as the executor, including executor-filesystem auth (`claude /login`). */
   onCheckAuth: (tool: AgenticToolName, apiKey?: string) => Promise<AuthCheckResult>;
   /** Bumped by the parent whenever credentials are saved — forces a re-probe even if key presence is unchanged (e.g. key rotation). */
@@ -118,6 +119,7 @@ export function OnboardingBanners({
   credentialVersion,
   connectionReady,
 }: OnboardingBannersProps) {
+  const catalog = useMCPCatalogModal();
   const [probeResult, setProbeResult] = useState<{ owner: string; state: ProbeState }>({
     owner: '',
     state: ProbeState.Unknown,
@@ -385,7 +387,11 @@ export function OnboardingBanners({
               <Button type="text" size="small" onClick={() => setIntegrationsBannerDismissed(true)}>
                 Maybe later
               </Button>
-              <Button type="primary" size="small" onClick={onOpenCatalog}>
+              <Button
+                type="primary"
+                size="small"
+                onClick={onOpenCatalog ?? (() => catalog?.openCatalog())}
+              >
                 Browse the catalog
               </Button>
             </Space>

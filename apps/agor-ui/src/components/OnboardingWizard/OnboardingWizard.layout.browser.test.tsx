@@ -192,7 +192,7 @@ describe('OnboardingWizard layout (real browser)', () => {
     fireEvent.click(screen.getByText(/skip for now/i).closest('button')!);
     await screen.findByText('Connect your AI');
     fireEvent.click(screen.getByText(/skip for now/i).closest('button')!);
-    await screen.findByText('Connect your tools');
+    await screen.findByText('Choose your tools');
     fireEvent.click(screen.getByText(/skip for now/i).closest('button')!);
     await screen.findByText("You're ready to build.");
     const closeRect = screen.getByRole('button', { name: 'Close' }).getBoundingClientRect();
@@ -456,6 +456,9 @@ describe('OnboardingWizard layout (real browser)', () => {
     const key = `sk-ant-api03-${'x'.repeat(40)}`;
     fireEvent.change(screen.getByLabelText('Anthropic API key'), { target: { value: key } });
     fireEvent.click(screen.getByText(/^connect →/i).closest('button') as HTMLElement);
+
+    await screen.findByText('Choose your tools');
+    fireEvent.click(screen.getByText(/^continue →/i).closest('button') as HTMLElement);
 
     // done — teammate-centric success screen.
     await screen.findByText('Rusty is ready.');

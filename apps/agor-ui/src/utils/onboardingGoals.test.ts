@@ -1,3 +1,4 @@
+import { loadCatalog } from '@agor/core/mcp-catalog';
 import { describe, expect, it } from 'vitest';
 import {
   buildCompletedOnboardingPreferences,
@@ -102,35 +103,28 @@ const askNames = (goalIds: string[]) =>
 
 describe('mergeGoalIntegrationRecs', () => {
   it('falls back to the default set when no goal is picked (Connect items first, then Ask extras)', () => {
-    expect(names([])).toEqual(['Linear', 'Notion', 'Firecrawl', 'Slack', 'GitHub']);
+    expect(names([])).toEqual(['Linear', 'Notion', 'Firecrawl', 'GitHub', 'Slack']);
   });
 
   it('ignores unknown goal ids', () => {
-    expect(names(['not-a-goal'])).toEqual(['Linear', 'Notion', 'Firecrawl', 'Slack', 'GitHub']);
+    expect(names(['not-a-goal'])).toEqual(['Linear', 'Notion', 'Firecrawl', 'GitHub', 'Slack']);
   });
 
   it('shows a single goal Connect kit, then its Ask extra', () => {
-    // hand-off-build: Connect [GitLab, Supabase, Figma, Context7] + Ask [GitHub].
-    expect(names(['hand-off-build'])).toEqual([
-      'GitLab',
-      'Supabase',
-      'Figma',
-      'Context7',
-      'GitHub',
-    ]);
+    // hand-off-build prioritizes the reviewed GitHub PAT entry.
+    expect(names(['hand-off-build'])).toEqual(['GitHub', 'Supabase', 'Figma', 'Context7']);
     // status-updates: Connect [Linear, Notion, Atlassian, Asana] + Ask [Slack].
     expect(names(['status-updates'])).toEqual(['Linear', 'Notion', 'Atlassian', 'Asana', 'Slack']);
   });
 
   it('merges two goals: first two Connect items of primary, then first two of secondary', () => {
-    // primary ship [Sentry, GitLab, Linear, Semgrep] + Ask GitHub;
+    // primary ship starts with GitHub and Sentry;
     // secondary dig [Exa, Firecrawl, Tavily, Amplitude], no Ask.
     expect(names(['ship-without-busywork', 'dig-into-anything'])).toEqual([
+      'GitHub',
       'Sentry',
-      'GitLab',
       'Exa',
       'Firecrawl',
-      'GitHub',
     ]);
   });
 
@@ -152,9 +146,8 @@ describe('mergeGoalIntegrationRecs', () => {
     expect(names(['dig-into-anything', 'ship-without-busywork'])).toEqual([
       'Exa',
       'Firecrawl',
-      'Sentry',
-      'GitLab',
       'GitHub',
+      'Sentry',
     ]);
   });
 
@@ -176,7 +169,7 @@ describe('mergeGoalIntegrationRecs', () => {
     expect(ONBOARDING_INTEGRATION_RECOMMENDATIONS.context7.connectMode).toBe('none');
     expect(ONBOARDING_INTEGRATION_RECOMMENDATIONS.exa.connectMode).toBe('none');
     expect(ONBOARDING_INTEGRATION_RECOMMENDATIONS.slack.connectMode).toBe('ask');
-    expect(ONBOARDING_INTEGRATION_RECOMMENDATIONS.github.connectMode).toBe('ask');
+    expect(ONBOARDING_INTEGRATION_RECOMMENDATIONS.github.connectMode).toBe('credentials');
   });
 
   it('flags only the first rec as featured', () => {
@@ -191,7 +184,8 @@ describe('mergeGoalIntegrationRecs', () => {
       endpoint: 'https://mcp.slack.com/mcp',
     });
     expect(ONBOARDING_INTEGRATION_RECOMMENDATIONS.github.setup).toEqual({
-      surface: 'connected-repository',
+      surface: 'marketplace',
+      catalogEntryName: 'io.github.github/github-mcp-server',
     });
     expect(ONBOARDING_INTEGRATION_RECOMMENDATIONS.linear.setup).toEqual({
       surface: 'marketplace',
@@ -229,5 +223,18 @@ describe('buildGoalBootstrapGuidance', () => {
     expect(lines[2]).toContain('"Build me an app"');
     expect(lines[2]).toContain('"Dig into anything"');
     expect(lines[2]).toMatch(/do not ask which matters more/i);
+  });
+});
+
+describe('onboarding catalog contract', () => {
+  it('uses only reviewed identities and truthful auth modes from the current catalog', async () => {
+    const catalog = await loadCatalog();
+    for (const rec of Object.values(ONBOARDING_INTEGRATION_RECOMMENDATIONS)) {
+      if (rec.setup.surface !== 'marketplace') continue;
+      const entryName = rec.setup.catalogEntryName;
+      const entry = catalog.find((item) => item.name === entryName);
+      expect(entry, entryName).toBeDefined();
+      expect(rec.connectMode, entryName).toBe(entry?.auth_type);
+    }
   });
 });

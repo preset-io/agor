@@ -293,7 +293,7 @@ describe('OnboardingWizard', () => {
     clickButton(/^continue/i);
     await findAndClickButton(/skip for now/i); // workspace
     clickButton(/skip for now/i); // llm
-    clickButton(/skip for now/i); // tools
+    clickButton(/^continue/i); // tools
     clickButton(/open my board/i);
 
     // Completion is async (board creation, then onComplete), so wait for it.
@@ -320,7 +320,7 @@ describe('OnboardingWizard', () => {
     clickButton(/skip for now/i);
     await findAndClickButton(/skip for now/i); // workspace
     clickButton(/skip for now/i); // llm
-    clickButton(/skip for now/i); // tools
+    clickButton(/^continue/i); // tools
     clickButton(/open my board/i);
 
     await waitFor(() => expect(onComplete).toHaveBeenCalledTimes(1));
@@ -357,7 +357,7 @@ describe('OnboardingWizard', () => {
     clickButton(/skip for now/i);
     await findAndClickButton(/skip for now/i); // workspace
     clickButton(/skip for now/i); // llm
-    clickButton(/skip for now/i); // tools
+    clickButton(/^continue/i); // tools
     clickButton(/open my board/i);
 
     // Completion is async (board creation, then onComplete), so wait for it.
@@ -1111,7 +1111,8 @@ describe('OnboardingWizard', () => {
           agent: 'claude-code',
           // Goals were skipped → the default MCP suggestion set flows through, and
           // the goals threaded to the completion handler are empty.
-          suggestedIntegrations: mergeGoalIntegrationRecs([]),
+          suggestedIntegrations: [],
+          catalogEntryName: undefined,
           goals: [],
         },
         expect.objectContaining({ isCurrent: expect.any(Function) })
@@ -1201,7 +1202,7 @@ describe('OnboardingWizard', () => {
     expect(await screen.findByText('Connect your AI')).toBeInTheDocument();
     clickButton(/skip for now/i);
 
-    expect(await screen.findByText('Connect your tools')).toBeInTheDocument();
+    expect(await screen.findByText('Choose your tools')).toBeInTheDocument();
     clickButton(/skip for now/i);
 
     expect(await screen.findByText("You're ready to build.")).toBeInTheDocument();
@@ -1225,7 +1226,8 @@ describe('OnboardingWizard', () => {
           sourceRemoteUrl: undefined,
           templateId: null,
           agent: null,
-          suggestedIntegrations: mergeGoalIntegrationRecs([]),
+          suggestedIntegrations: [],
+          catalogEntryName: undefined,
           goals: [],
         },
         expect.objectContaining({ isCurrent: expect.any(Function) })
@@ -1437,7 +1439,7 @@ describe('OnboardingWizard', () => {
     // Recovery clears the derived validation error immediately rather than
     // leaving a stale copy in the independent board-creation error state.
     clickButton('Back'); // done → tools
-    await screen.findByText('Connect your tools');
+    await screen.findByText('Choose your tools');
     clickButton('Back'); // tools → llm
     await screen.findByText('Connect your AI');
     clickButton('Back'); // llm → workspace
@@ -1446,7 +1448,7 @@ describe('OnboardingWizard', () => {
     clickButton(/^continue →$/i);
     await screen.findByText('Connect your AI');
     clickButton(/skip for now/i); // llm → tools
-    await screen.findByText('Connect your tools');
+    await screen.findByText('Choose your tools');
     clickButton(/skip for now/i); // tools → done
 
     expect(await screen.findByText('Rusty is ready.')).toBeInTheDocument();
@@ -1535,7 +1537,7 @@ describe('OnboardingWizard', () => {
     expect(attempt.isCurrent()).toBe(false);
   });
 
-  it('tools step lets an admin drop a Connect tool while Ask tools always flow to the first session', async () => {
+  it('tools step lets an admin drop a tool and hands off to the first selected catalog entry', async () => {
     const onComplete = vi.fn();
     renderWizard({
       onComplete,
@@ -1543,7 +1545,7 @@ describe('OnboardingWizard', () => {
       user: makeUser({ role: 'admin' }),
     });
 
-    expect(screen.getByText('Connect your tools')).toBeInTheDocument();
+    expect(screen.getByText('Choose your tools')).toBeInTheDocument();
     // Default (no-goal) kit: Connect [Linear, Notion, Firecrawl] + Ask [Slack, GitHub].
     const notion = screen.getByText('Notion').closest('button');
     expect(notion).toHaveAttribute('aria-pressed', 'true');
@@ -1560,15 +1562,16 @@ describe('OnboardingWizard', () => {
     // The deselected Connect tool is gone; the others stay.
     expect(emitted).not.toContain('Notion');
     expect(emitted).toContain('Linear');
-    // Ask tools are extras — never removable, always threaded through.
+    expect(onComplete.mock.calls[0][0].catalogEntryName).toBe('app.linear/linear');
+    // Untouched suggestions are retained.
     expect(emitted).toEqual(expect.arrayContaining(['Slack', 'GitHub']));
   });
 
-  it('keeps Ask tools in the first session even when the admin toggles the Ask row off', async () => {
+  it('honors deselecting the teammate-assisted Slack recommendation', async () => {
     const onComplete = vi.fn();
     renderWizard({ onComplete, initialStep: 'tools', user: makeUser({ role: 'admin' }) });
 
-    const askRow = screen.getByText(/ask your teammate to set up/i).closest('button');
+    const askRow = screen.getByText('Slack').closest('button');
     fireEvent.click(askRow as HTMLButtonElement);
 
     clickButton(/^continue →/i); // tools → done
@@ -1578,18 +1581,91 @@ describe('OnboardingWizard', () => {
     const emitted = (onComplete.mock.calls[0][0].suggestedIntegrations ?? []).map(
       (rec: { name: string }) => rec.name
     );
-    expect(emitted).toEqual(expect.arrayContaining(['Slack', 'GitHub']));
+    expect(emitted).not.toContain('Slack');
+    expect(emitted).toContain('GitHub');
   });
 
-  it('shows non-admins a read-only kit with the browse-catalog link and no Connect toggles', () => {
+  it('lets members select tools without claiming that selection authorizes a connection', () => {
     renderWizard({ initialStep: 'tools', user: makeUser({ role: 'member' }) });
+    expect(screen.getByText('Choose your tools')).toBeInTheDocument();
+    expect(screen.getByText('Linear').closest('button')).toHaveAttribute('aria-pressed', 'true');
+    expect(
+      screen.getByRole('button', { name: /browse the full catalog after setup/i })
+    ).toBeEnabled();
+    expect(screen.getByText(/access depends on your workspace policy/i)).toBeInTheDocument();
+    expect(screen.queryByRole('textbox')).not.toBeInTheDocument();
+  });
 
-    expect(screen.getByText('Connect your tools')).toBeInTheDocument();
-    // Read-only teaser: the tool cards are not interactive toggle buttons.
-    expect(screen.getByText('Linear').closest('button')).toBeNull();
-    // The action is the catalog link, so it never reads as the old dead list.
-    const link = screen.getByText(/browse the full catalog/i).closest('a');
-    expect(link?.getAttribute('href')).toContain('/marketplace/catalog');
+  it('resuming directly at completion does not invent unreviewed tool selections', async () => {
+    const onComplete = vi.fn();
+    renderWizard({ onComplete, initialStep: 'done' });
+    clickButton(/open my board/i);
+    await waitFor(() => expect(onComplete).toHaveBeenCalledTimes(1));
+    expect(onComplete.mock.calls[0][0]).toMatchObject({
+      suggestedIntegrations: [],
+      catalogEntryName: undefined,
+    });
+  });
+
+  it('skipping tools suppresses both suggestions and the catalog handoff', async () => {
+    const onComplete = vi.fn();
+    renderWizard({ onComplete, initialStep: 'tools' });
+    clickButton(/browse the full catalog after setup/i);
+    clickButton(/skip for now/i);
+    clickButton(/open my board/i);
+    await waitFor(() => expect(onComplete).toHaveBeenCalledTimes(1));
+    expect(onComplete.mock.calls[0][0]).toMatchObject({
+      suggestedIntegrations: [],
+      catalogEntryName: undefined,
+    });
+  });
+
+  it('selecting one tool after Skip and Back does not re-enable the other tools', async () => {
+    const onComplete = vi.fn();
+    renderWizard({ onComplete, initialStep: 'tools' });
+    clickButton(/skip for now/i);
+    clickButton('Back');
+    clickButton('GitHub');
+    expect(screen.getByText('GitHub').closest('button')).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByText('Linear').closest('button')).toHaveAttribute('aria-pressed', 'false');
+    clickButton(/^continue/i);
+    clickButton(/open my board/i);
+    await waitFor(() => expect(onComplete).toHaveBeenCalledTimes(1));
+    expect(
+      onComplete.mock.calls[0][0].suggestedIntegrations.map((rec: { id: string }) => rec.id)
+    ).toEqual(['github']);
+    expect(onComplete.mock.calls[0][0].catalogEntryName).toBe('io.github.github/github-mcp-server');
+  });
+
+  it('deselecting every tool suppresses the handoff, including after Back', async () => {
+    const onComplete = vi.fn();
+    renderWizard({ onComplete, initialStep: 'tools' });
+    for (const rec of mergeGoalIntegrationRecs([])) clickButton(rec.name);
+    clickButton(/^continue/i);
+    clickButton('Back');
+    expect(screen.getByText('GitHub').closest('button')).toHaveAttribute('aria-pressed', 'false');
+    clickButton(/^continue/i);
+    clickButton(/open my board/i);
+    await waitFor(() => expect(onComplete).toHaveBeenCalledTimes(1));
+    expect(onComplete.mock.calls[0][0]).toMatchObject({
+      suggestedIntegrations: [],
+      catalogEntryName: undefined,
+    });
+  });
+
+  it('hands off GitHub by reviewed catalog identity after completing the shipping goal', async () => {
+    const onComplete = vi.fn();
+    renderWizard({ onComplete });
+    clickButton('Ship without the busywork');
+    clickButton(/^continue/i);
+    await findAndClickButton(/skip for now/i);
+    clickButton(/skip for now/i);
+    expect(screen.getByText(/personal access token/i)).toBeInTheDocument();
+    expect(onComplete).not.toHaveBeenCalled();
+    clickButton(/^continue/i);
+    clickButton(/open my board/i);
+    await waitFor(() => expect(onComplete).toHaveBeenCalledTimes(1));
+    expect(onComplete.mock.calls[0][0].catalogEntryName).toBe('io.github.github/github-mcp-server');
   });
 });
 

@@ -9,8 +9,13 @@ import {
   waitFor,
   within,
 } from '@testing-library/react';
-import { afterEach, describe, expect, it } from 'vitest';
-import { CatalogHarness, catalogUser, makeCatalogClient } from './MCPCatalogModal.test-fixtures';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import {
+  CatalogHarness,
+  catalogUser,
+  githubHandoffEntry,
+  makeCatalogClient,
+} from './MCPCatalogModal.test-fixtures';
 
 configure({ asyncUtilTimeout: 10_000 });
 afterEach(cleanup);
@@ -122,4 +127,113 @@ describe('app-owned MCP Catalog', () => {
       expect(api.overviewRead).not.toHaveBeenCalled();
     }
   );
+});
+
+describe('onboarding Catalog handoff', () => {
+  it('opens the reviewed PAT drawer for the new branch, never connects eagerly, and forgets it on close', async () => {
+    const api = makeCatalogClient([githubHandoffEntry]);
+    const consumed = vi.fn();
+    render(
+      <CatalogHarness
+        client={api.client}
+        handoff={{ entryName: githubHandoffEntry.name, branchId: 'branch-1' }}
+        onHandoffConsumed={consumed}
+      />
+    );
+    const drawer = await screen.findByRole('dialog', { name: /GitHub/ });
+    await within(drawer).findByText('Catalog QA');
+    expect(
+      within(drawer).getByPlaceholderText('Paste your GitHub bearer access token')
+    ).toHaveValue('');
+    expect(api.connect).not.toHaveBeenCalled();
+    expect(consumed).toHaveBeenCalledTimes(1);
+    fireEvent.click(within(drawer).getByRole('button', { name: 'Close' }));
+    await waitFor(() =>
+      expect(screen.queryByRole('dialog', { name: /GitHub/ })).not.toBeInTheDocument()
+    );
+    expect(api.connect).not.toHaveBeenCalled();
+    const modal = screen.getByRole('dialog', { name: 'MCP Catalog' });
+    fireEvent.click(within(modal).getByRole('button', { name: 'Close' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: 'Open MCP Catalog' }));
+    await screen.findByRole('dialog', { name: 'MCP Catalog' });
+    expect(screen.queryByRole('dialog', { name: /GitHub/ })).not.toBeInTheDocument();
+  });
+
+  it('does not silently use another branch if the onboarding branch is not visible', async () => {
+    const api = makeCatalogClient([githubHandoffEntry]);
+    render(
+      <CatalogHarness
+        client={api.client}
+        handoff={{ entryName: githubHandoffEntry.name, branchId: 'foreign-or-deleted-branch' }}
+      />
+    );
+    const drawer = await screen.findByRole('dialog', { name: /GitHub/ });
+    await within(drawer).findByPlaceholderText('Paste your GitHub bearer access token');
+    expect(within(drawer).queryByText('Catalog QA')).not.toBeInTheDocument();
+    expect(api.connect).not.toHaveBeenCalled();
+  });
+
+  it('keeps invalid PAT setup in the existing drawer without claiming a usable session', async () => {
+    const api = makeCatalogClient([githubHandoffEntry]);
+    api.connect.mockRejectedValueOnce(new Error('Credential rejected'));
+    render(
+      <CatalogHarness
+        client={api.client}
+        handoff={{ entryName: githubHandoffEntry.name, branchId: 'branch-1' }}
+      />
+    );
+    const input = await screen.findByPlaceholderText('Paste your GitHub bearer access token');
+    const drawer = input.closest<HTMLElement>('[role="dialog"]')!;
+    await within(drawer).findByText('Catalog QA');
+    fireEvent.change(input, { target: { value: 'test-only-invalid-credential' } });
+    fireEvent.click(within(drawer).getByRole('checkbox', { name: /I understand/ }));
+    const connect = within(drawer).getByRole('button', { name: /Verify key/ });
+    await waitFor(() => expect(connect).toBeEnabled());
+    fireEvent.click(connect);
+    await within(drawer).findByText('Credential rejected');
+    expect(api.connect).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole('button', { name: 'Open session' })).not.toBeInTheDocument();
+    expect(screen.getByTestId('route')).toHaveTextContent('/');
+  });
+
+  it('clears a handoff PAT and does not replay the intent for a replacement user', async () => {
+    const api = makeCatalogClient([githubHandoffEntry]);
+    const view = render(
+      <CatalogHarness
+        client={api.client}
+        handoff={{ entryName: githubHandoffEntry.name, branchId: 'branch-1' }}
+      />
+    );
+    const input = await screen.findByPlaceholderText('Paste your GitHub bearer access token');
+    fireEvent.change(input, { target: { value: 'test-only-alice-credential' } });
+    view.rerender(
+      <CatalogHarness client={api.client} user={{ ...catalogUser, user_id: 'bob' as UserID }} />
+    );
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Open MCP Catalog' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Open GitHub' }));
+    expect(await screen.findByPlaceholderText('Paste your GitHub bearer access token')).toHaveValue(
+      ''
+    );
+    expect(api.connect).not.toHaveBeenCalled();
+  });
+
+  it('retains the existing member-policy refusal instead of an admin-only wizard gate', async () => {
+    const api = makeCatalogClient([githubHandoffEntry], {
+      policy: 'use_existing_only',
+      can_configure: false,
+    });
+    render(
+      <CatalogHarness
+        client={api.client}
+        handoff={{ entryName: githubHandoffEntry.name, branchId: 'branch-1' }}
+      />
+    );
+    const drawer = await screen.findByRole('dialog', { name: /GitHub/ });
+    await waitFor(() =>
+      expect(within(drawer).getByRole('button', { name: /connect/i })).toBeDisabled()
+    );
+    expect(api.connect).not.toHaveBeenCalled();
+  });
 });

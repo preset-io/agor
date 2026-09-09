@@ -99,12 +99,13 @@ selections in an **order-preserving array** (append on select, splice on deselec
 any unordered structure, which would silently break "first-picked = primary."
 
 **Recommendation merge** — the union routinely exceeds 4 (e.g. goal 2 + goal 4 = 6 unique), so "cap at 4"
-must say _which_ 4 survive. Build the list of **4 shown** in this exact order:
+must say _which_ 4 survive. Build the list of **up to 4 Catalog tools** in this exact order:
 
-1. Take the first **2** recs from the **primary** goal's list (in the order listed).
-2. Append the first **2** recs from the **secondary** goal's list (in the order listed).
-3. **Dedup** against what's already included — drop any that repeat.
-4. If dedup left fewer than 4, **refill** from the **primary** goal's remaining recs (in order),
+1. Exclude teammate-assisted custom setup suggestions (currently Slack) from the four Catalog slots; append them separately. All suggestions remain deselectable.
+2. Take the first **2** recs from the **primary** goal's list (in the order listed).
+3. Append the first **2** recs from the **secondary** goal's list (in the order listed).
+4. **Dedup** against what's already included — drop any that repeat.
+5. If dedup left fewer than 4, **refill** from the **primary** goal's remaining recs (in order),
    then the secondary's, until you reach 4 or both lists are exhausted.
 
 **Bootstrap-prompt composition** — render one canonical opening, rather than concatenating two
@@ -131,14 +132,14 @@ coverage.
 
 ### Per-goal blocks (reference)
 
-| Goal                      | MCP recs                         | Desired outcome                                  | First win                                                                     |
-| ------------------------- | -------------------------------- | ------------------------------------------------ | ----------------------------------------------------------------------------- |
-| Get a personal teammate   | Slack                            | A useful recurring brief from connected sources. | A Slack digest based on the channels the user cares about.                    |
-| Never chase an update     | Linear, Atlassian, Notion, Slack | Fewer status chases.                             | A draft recap and action list for the current project or latest meeting.      |
-| Ship without the busywork | GitHub, Sentry, Datadog          | Less shipping busywork.                          | Scan the relevant repo for an actionable issue or pull request.               |
-| A teammate for the team   | Slack, Notion, Linear, Datadog   | A shared teammate for repeated team work.        | Identify one repeated workflow to run from the team board.                    |
-| Build me an app           | GitHub, Figma                    | A working build, not a spec.                     | Start the requested prototype, internal tool, or dashboard live on the board. |
-| Dig into anything         | Amplitude, Firecrawl             | Active research on demand.                       | One evidence-backed finding about the competitor, market, or dataset.         |
+| Goal                      | MCP recs                                  | Desired outcome                                  | First win                                                                     |
+| ------------------------- | ----------------------------------------- | ------------------------------------------------ | ----------------------------------------------------------------------------- |
+| Get a personal teammate   | Notion, Linear, Firecrawl, Slack          | A useful recurring brief from connected sources. | A Slack digest based on the channels the user cares about.                    |
+| Never chase an update     | Linear, Notion, Atlassian, Asana, Slack   | Fewer status chases.                             | A draft recap and action list for the current project or latest meeting.      |
+| Ship without the busywork | GitHub, Sentry, GitLab, Linear, Semgrep   | Less shipping busywork.                          | Scan the relevant repo for an actionable issue or pull request.               |
+| A teammate for the team   | Notion, Linear, Atlassian, Miro, Slack    | A shared teammate for repeated team work.        | Identify one repeated workflow to run from the team board.                    |
+| Build me an app           | GitHub, Supabase, Figma, Context7, GitLab | A working build, not a spec.                     | Start the requested prototype, internal tool, or dashboard live on the board. |
+| Dig into anything         | Exa, Firecrawl, Tavily, Amplitude         | Active research on demand.                       | One evidence-backed finding about the competitor, market, or dataset.         |
 
 ---
 
@@ -212,3 +213,22 @@ email or news promise until the product has a supported connector for it.
 - [ ] No card headline/subtext uses reserved technical jargon ("git branches", "sessions", "isolation modes").
 - [ ] Card 1 says "teammate" (not "assistant") — a copy-consistency check against the product's established noun, not a decision awaiting sign-off.
 - [ ] Card 1 promises only supported Slack/recurring-update behavior unless a real email/news connector has landed.
+
+## Tools selection and Catalog handoff
+
+The skippable Tools step selects suggestions; it neither installs servers nor
+collects provider credentials. Members can select tools; the existing Catalog
+policy controls whether they may connect them. Skip suppresses all suggestions
+and the handoff; deselection is honored for custom setup suggestions too.
+
+After durable onboarding completion and successful teammate branch creation,
+open the app-owned Catalog modal at the first selected Catalog identity with
+that branch preselected. Never revive obsolete `/catalog*` or `/marketplace*`
+routes, auto-connect, or auto-launch an OAuth popup. Browsing the full catalog
+after setup is an explicit alternative. No branch means no automatic handoff.
+The intent is transient and caller-bound, not a preference or a URL parameter.
+
+GitHub MCP is the reviewed `io.github.github/github-mcp-server` Catalog entry
+and uses its PAT drawer, not connected-repository setup and not OAuth.
+Catalog, readiness, policy, connection, credential, and session owners remain
+the same as the ordinary header entry point. See the getting-started guide.

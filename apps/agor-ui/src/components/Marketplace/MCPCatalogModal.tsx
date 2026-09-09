@@ -4,6 +4,7 @@ import { hasMinimumRole, ROLES } from '@agor-live/client';
 import { ShopOutlined } from '@ant-design/icons';
 import { Modal, Space, Tabs, Typography, theme } from 'antd';
 import { useId, useState } from 'react';
+import type { MCPCatalogSelection } from '../../contexts/MCPCatalogModalContext';
 import {
   CatalogTab,
   CredentialsTab,
@@ -13,6 +14,7 @@ import {
 } from './index';
 
 export interface MCPCatalogModalProps {
+  initialSelection?: MCPCatalogSelection;
   client: AgorClient | null;
   connected: boolean;
   connecting: boolean;
@@ -26,6 +28,7 @@ export interface MCPCatalogModalProps {
 
 /** One ephemeral shell around the existing Catalog and caller-scoped personal tabs. */
 export function MCPCatalogModal({
+  initialSelection,
   client,
   connected,
   connecting,
@@ -39,6 +42,7 @@ export function MCPCatalogModal({
   const { token } = theme.useToken();
   const tabsId = useId();
   const [activeTab, setActiveTab] = useState('catalog');
+  const [presented, setPresented] = useState(false);
   const overview = useMarketplaceOverview({
     client,
     connected,
@@ -68,6 +72,7 @@ export function MCPCatalogModal({
       open={open}
       onCancel={onClose}
       afterClose={afterClose}
+      afterOpenChange={setPresented}
       focusable={{ focusTriggerAfterClose: false }}
       footer={null}
       width={1200}
@@ -96,6 +101,8 @@ export function MCPCatalogModal({
             label: 'Catalog',
             children: (
               <CatalogTab
+                // Let the modal finish its focus transition before opening a portaled drawer.
+                initialSelection={presented ? initialSelection : undefined}
                 onOpenSession={onOpenSession}
                 active={open && activeTab === 'catalog'}
                 client={client}

@@ -228,11 +228,13 @@ describe('seedOnboardingTeammate', () => {
     // though no goal was picked.
     expect(initialPrompt).toContain('- Created from the Legal Analyst template.');
     expect(initialPrompt).toMatch(/Open as yourself: one warm line/);
-    // The official MCP route keeps safe, session-scoped agency while GitHub
-    // remains native repository access rather than an invented MCP install.
+    // Slack keeps safe, session-scoped agency while GitHub
+    // now points to the reviewed PAT-based Catalog entry.
     expect(initialPrompt).toContain('https://mcp.slack.com/mcp');
     expect(initialPrompt).toMatch(/use session scope and attach it to this session/i);
-    expect(initialPrompt).toContain('GitHub: use the repository already connected to Agor');
+    expect(initialPrompt).toContain(
+      'GitHub: use the reviewed Catalog entry io.github.github/github-mcp-server'
+    );
   });
 
   it('forwards the template source branch to createTeammateBranch', async () => {

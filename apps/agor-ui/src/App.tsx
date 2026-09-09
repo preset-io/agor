@@ -51,7 +51,10 @@ import { StreamdownPortalApp } from './components/StreamdownPortalApp';
 import { getDaemonUrl } from './config/daemon';
 import { CanvasNavigationProvider } from './contexts/CanvasNavigationContext';
 import { ConnectionProvider } from './contexts/ConnectionContext';
-import { MCPCatalogModalProvider } from './contexts/MCPCatalogModalContext';
+import {
+  MCPCatalogModalProvider,
+  type MCPCatalogSelection,
+} from './contexts/MCPCatalogModalContext';
 import { ThemeProvider, useTheme } from './contexts/ThemeContext';
 import { setPrimaryAgenticToolIfUnset } from './domain/primaryAgenticTool';
 import {
@@ -614,11 +617,8 @@ function AppContent() {
   const integrationsHydrated = useAgorStore(
     (s) => s.mcpServersHydrated && s.gatewayChannelsHydrated
   );
-  // The "Connect tools" banner asks for workspace-wide setup — MCP servers and
-  // Slack/GitHub channels — so it is offered to the role that can complete it.
-  // Members reach the MCP settings tab without it, to read the policy that
-  // governs them.
-  const canManageMcp = hasMinimumRole(currentUser?.role, ROLES.ADMIN);
+  // Members can browse Catalog; its existing policy gate owns connection authority.
+  const canManageMcp = hasMinimumRole(currentUser?.role, ROLES.MEMBER);
   // Onboarding provisions boards, repos, branches and sessions. A viewer is a
   // read-only role, so its first login must enter the workspace without opening
   // a flow the daemon will correctly refuse at every write boundary.
@@ -662,6 +662,12 @@ function AppContent() {
     deferred: onboardingDeferred,
     isAuthenticationOwnerCurrent,
   });
+  const [onboardingCatalogHandoff, setOnboardingCatalogHandoff] = useState<{
+    userId: UUID;
+    authenticationGeneration: number;
+    selection: MCPCatalogSelection;
+  } | null>(null);
+  const consumeOnboardingCatalogHandoff = useCallback(() => setOnboardingCatalogHandoff(null), []);
   const onboardingSeedResultRef = useRef(
     new Map<string, { branchId?: string; sessionId?: string }>()
   );
@@ -1031,6 +1037,32 @@ function AppContent() {
       navigate(sessionPath(sessionId as SessionID));
     } else if (targetBoardId) {
       navigate(boardPath(targetBoardId as BoardID, boardById.get(targetBoardId)?.slug));
+    }
+
+    if (
+      branchId &&
+      result.catalogEntryName !== undefined &&
+      isAuthenticationOwnerCurrent(owner.userId, owner.authenticationGeneration)
+    ) {
+      setOnboardingCatalogHandoff({
+        userId: owner.userId,
+        authenticationGeneration: owner.authenticationGeneration,
+        selection: {
+          branchId,
+          ...(result.catalogEntryName ? { entryName: result.catalogEntryName } : {}),
+        },
+      });
+    }
+
+    if (
+      !branchId &&
+      result.catalogEntryName !== undefined &&
+      isAuthenticationOwnerCurrent(owner.userId, owner.authenticationGeneration)
+    ) {
+      showWarning('Your board is ready. Add a teammate, then open Catalog to connect your tools.', {
+        key: 'onboarding-catalog',
+        duration: 8,
+      });
     }
 
     // `currentUser` keeps login gates from the authenticated principal rather
@@ -2170,7 +2202,6 @@ function AppContent() {
             setOpenUserSettings(true);
           }}
           onOpenWorkspaceSettings={(tab) => setSettingsTabToOpen(tab)}
-          onOpenCatalog={() => navigate(MARKETPLACE_CATALOG_PATH)}
           onCheckAuth={handleCheckAuth}
           credentialVersion={credentialVersion}
           connectionReady={connected && !connecting}
@@ -2238,6 +2269,16 @@ function AppContent() {
         key={`${currentUser?.user_id ?? 'anonymous'}:${currentUser?.role ?? 'none'}`}
       >
         <MCPCatalogModalHost
+          onboardingHandoff={
+            onboardingCatalogHandoff &&
+            isAuthenticationOwnerCurrent(
+              onboardingCatalogHandoff.userId,
+              onboardingCatalogHandoff.authenticationGeneration
+            )
+              ? onboardingCatalogHandoff.selection
+              : undefined
+          }
+          onHandoffConsumed={consumeOnboardingCatalogHandoff}
           client={client}
           connected={connected}
           connecting={connecting}
