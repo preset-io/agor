@@ -22,7 +22,7 @@ import {
   select,
   update,
 } from '../database-wrapper';
-import { openBoundSecret, sealBoundSecret } from '../oauth-secret-envelope';
+import { openBoundSecret, openBoundSecretAsync, sealBoundSecret } from '../oauth-secret-envelope';
 import {
   type UserMCPOAuthTokenInsert,
   type UserMCPOAuthTokenRow,
@@ -188,10 +188,10 @@ function grantSecretBinding(
   return [tenantId, userId ?? '<shared>', serverId, String(generation), field].join('\0');
 }
 
-function rowToToken(
+async function rowToToken(
   row: UserMCPOAuthTokenRow,
   options: { postgres: boolean; tenantId?: string; masterSecret?: string }
-): UserMCPOAuthToken {
+): Promise<UserMCPOAuthToken> {
   const raw = row as UserMCPOAuthTokenRow & Record<string, unknown>;
   const userId = (row.user_id as UserID | null) ?? null;
   const serverId = row.mcp_server_id as MCPServerID;
@@ -206,7 +206,7 @@ function rowToToken(
     if (!options.tenantId || !options.masterSecret) {
       throw new RepositoryError('PostgreSQL MCP OAuth token decryption is not configured');
     }
-    return openBoundSecret(
+    return openBoundSecretAsync(
       String(value),
       options.masterSecret,
       purpose,
@@ -216,13 +216,13 @@ function rowToToken(
   return {
     user_id: userId,
     mcp_server_id: serverId,
-    oauth_access_token: open(row.oauth_access_token, 'access-token', 'access')!,
+    oauth_access_token: (await open(row.oauth_access_token, 'access-token', 'access'))!,
     oauth_token_expires_at: row.oauth_token_expires_at
       ? new Date(row.oauth_token_expires_at)
       : undefined,
-    oauth_refresh_token: open(row.oauth_refresh_token, 'refresh-token', 'refresh'),
-    oauth_client_id: open(row.oauth_client_id, 'client-id', 'client-id'),
-    oauth_client_secret: open(row.oauth_client_secret, 'client-secret', 'client-secret'),
+    oauth_refresh_token: await open(row.oauth_refresh_token, 'refresh-token', 'refresh'),
+    oauth_client_id: await open(row.oauth_client_id, 'client-id', 'client-id'),
+    oauth_client_secret: await open(row.oauth_client_secret, 'client-secret', 'client-secret'),
     grant_generation: generation,
     grant_binding_version:
       raw.grant_binding_version == null ? undefined : Number(raw.grant_binding_version),
@@ -284,12 +284,21 @@ export class UserMCPOAuthTokenRepository {
     return tenantId;
   }
 
-  private mapRow(row: UserMCPOAuthTokenRow): UserMCPOAuthToken {
+  private mapRow(row: UserMCPOAuthTokenRow): Promise<UserMCPOAuthToken> {
     return rowToToken(row, {
       postgres: this.postgres,
       tenantId: this.tenantId(),
       masterSecret: this.masterSecret,
     });
+  }
+
+  private async mapRows(rows: UserMCPOAuthTokenRow[]): Promise<UserMCPOAuthToken[]> {
+    // One KDF at a time per read, regardless of inventory size. Preserve row
+    // order and validate all envelopes (even expired/ambiguous grants) before
+    // returning anything. Promise.all here would flood the shared worker pool.
+    const tokens: UserMCPOAuthToken[] = [];
+    for (const row of rows) tokens.push(await this.mapRow(row));
+    return tokens;
   }
 
   private mapAuthorityRow(row: MCPOAuthGrantAuthorityRow): MCPOAuthGrantAuthorityRecord {
@@ -346,7 +355,7 @@ export class UserMCPOAuthTokenRepository {
         .where(matchKey(userId, serverId))
         .one();
 
-      return row ? this.mapRow(row) : null;
+      return row ? await this.mapRow(row) : null;
     } catch (error) {
       throw new RepositoryError(
         `Failed to get OAuth token: ${error instanceof Error ? error.message : String(error)}`,
@@ -822,7 +831,7 @@ export class UserMCPOAuthTokenRepository {
       );
       const row = rowsOf(claimed)[0];
       if (!row) return { outcome: 'observed', token: await this.getToken(userId, serverId) };
-      const token = this.mapRow(row as unknown as UserMCPOAuthTokenRow);
+      const token = await this.mapRow(row as unknown as UserMCPOAuthTokenRow);
       return {
         outcome: 'claimed',
         token,
@@ -1015,7 +1024,7 @@ export class UserMCPOAuthTokenRepository {
         .where(eq(userMcpOauthTokens.user_id, userId))
         .all();
 
-      return rows.map((row: UserMCPOAuthTokenRow) => this.mapRow(row));
+      return await this.mapRows(rows);
     } catch (error) {
       throw new RepositoryError(
         `Failed to list OAuth tokens for user: ${error instanceof Error ? error.message : String(error)}`,
@@ -1088,7 +1097,7 @@ export class UserMCPOAuthTokenRepository {
         .where(isNull(userMcpOauthTokens.user_id))
         .all();
 
-      return rows.map((row: UserMCPOAuthTokenRow) => this.mapRow(row));
+      return await this.mapRows(rows);
     } catch (error) {
       throw new RepositoryError(
         `Failed to list shared OAuth tokens: ${error instanceof Error ? error.message : String(error)}`,

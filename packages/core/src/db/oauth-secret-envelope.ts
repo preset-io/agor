@@ -1,4 +1,4 @@
-import { createCipheriv, createDecipheriv, randomBytes, scryptSync } from 'node:crypto';
+import { createCipheriv, createDecipheriv, randomBytes, scrypt, scryptSync } from 'node:crypto';
 
 const PREFIX = 'agor-mcp-oauth';
 const FORMAT_VERSION = 'v1';
@@ -66,6 +66,33 @@ export function openBoundSecret(
   purpose: BoundSecretPurpose,
   binding: string
 ): string {
+  const parsed = parseEnvelope(envelope, masterSecret, purpose);
+  return decryptEnvelope(parsed, deriveKey(masterSecret, parsed.salt), purpose, binding);
+}
+
+/**
+ * Same envelope and AAD checks as the synchronous opener, without running the
+ * expensive KDF on the event loop. Callers processing inventories must await
+ * each field/row rather than enqueue the entire inventory on the worker pool.
+ * No keys or plaintext are cached across calls.
+ */
+export async function openBoundSecretAsync(
+  envelope: string,
+  masterSecret: string,
+  purpose: BoundSecretPurpose,
+  binding: string
+): Promise<string> {
+  const parsed = parseEnvelope(envelope, masterSecret, purpose);
+  const key = await new Promise<Buffer>((resolve, reject) => {
+    scrypt(masterSecret, parsed.salt, KEY_LENGTH, (error, derivedKey) => {
+      if (error) reject(error);
+      else resolve(derivedKey);
+    });
+  });
+  return decryptEnvelope(parsed, key, purpose, binding);
+}
+
+function parseEnvelope(envelope: string, masterSecret: string, purpose: BoundSecretPurpose) {
   if (!masterSecret) throw new Error('Bound secret opening requires AGOR_MASTER_SECRET');
   const [prefix, version, storedPurpose, salt, iv, tag, encrypted, ...extra] = envelope.split(':');
   if (
@@ -80,17 +107,24 @@ export function openBoundSecret(
   ) {
     throw new Error('Unsupported bound secret envelope');
   }
-  const decipher = createDecipheriv(
-    ALGORITHM,
-    deriveKey(masterSecret, Buffer.from(salt, 'base64url')),
-    Buffer.from(iv, 'base64url')
-  );
+  return {
+    salt: Buffer.from(salt, 'base64url'),
+    iv: Buffer.from(iv, 'base64url'),
+    tag: Buffer.from(tag, 'base64url'),
+    encrypted: Buffer.from(encrypted, 'base64url'),
+  };
+}
+
+function decryptEnvelope(
+  parsed: ReturnType<typeof parseEnvelope>,
+  key: Buffer,
+  purpose: BoundSecretPurpose,
+  binding: string
+): string {
+  const decipher = createDecipheriv(ALGORITHM, key, parsed.iv);
   decipher.setAAD(aad(purpose, binding));
-  decipher.setAuthTag(Buffer.from(tag, 'base64url'));
-  return Buffer.concat([
-    decipher.update(Buffer.from(encrypted, 'base64url')),
-    decipher.final(),
-  ]).toString('utf8');
+  decipher.setAuthTag(parsed.tag);
+  return Buffer.concat([decipher.update(parsed.encrypted), decipher.final()]).toString('utf8');
 }
 
 export function isBoundSecretEnvelope(value: string): boolean {

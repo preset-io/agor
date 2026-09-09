@@ -1,4 +1,6 @@
 /** Characterize the envelope-integrity boundary before optimizing status reads. */
+
+import { setImmediate as nextTurn } from 'node:timers/promises';
 import type { MCPServerID, UserID } from '@agor/core/types';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Database } from '../client';
@@ -75,9 +77,96 @@ beforeEach(() => {
 });
 
 describe('OAuth status grant read integrity and cost', () => {
+  it('awaits fields and rows serially, preserves order, and never caches a read', async () => {
+    query.rows = [grant(), { ...grant(), created_at: new Date('2026-02-01T00:00:00Z') }];
+    let active = 0;
+    let peak = 0;
+    const open = vi.spyOn(envelope, 'openBoundSecretAsync').mockImplementation(async (...args) => {
+      peak = Math.max(peak, ++active);
+      await nextTurn();
+      try {
+        return envelope.openBoundSecret(...args);
+      } finally {
+        active--;
+      }
+    });
+    const repo = new UserMCPOAuthTokenRepository({} as Database, master);
+    const tokens = await repo.listForUser(userId);
+    expect(peak).toBe(1);
+    expect(open).toHaveBeenCalledTimes(8);
+    expect(query.projections).toEqual([undefined]);
+    expect(tokens.map((token) => token.created_at.toISOString())).toEqual([
+      '2026-01-01T00:00:00.000Z',
+      '2026-02-01T00:00:00.000Z',
+    ]);
+    query.rows = [];
+    await expect(repo.listForUser(userId)).resolves.toEqual([]);
+    expect(query.projections).toEqual([undefined, undefined]);
+  });
+
+  it.each(['user_id', 'mcp_server_id', 'grant_generation'])(
+    'rejects a grant transplanted to a different %s and wraps async errors on point reads',
+    async (field) => {
+      query.rows = [{ ...grant(), [field]: field === 'grant_generation' ? 2 : 'other' }];
+      const repo = new UserMCPOAuthTokenRepository({} as Database, master);
+      await expect(repo.getToken(userId, serverId)).rejects.toThrow('Failed to get OAuth token');
+      await expect(repo.listForUser(userId)).rejects.toThrow(
+        'Failed to list OAuth tokens for user'
+      );
+    }
+  );
+
+  it.skipIf(process.env.AGOR_BENCH_OAUTH_READ !== '1')(
+    'benchmarks grant hydration and unrelated event-loop progress (synthetic, no DB timing)',
+    async () => {
+      query.rows = Array.from({ length: 6 }, () => grant());
+      const repo = new UserMCPOAuthTokenRepository({} as Database, master);
+      const nativeOpen = envelope.openBoundSecretAsync;
+      const samples: Record<string, Array<{ elapsedMs: number; maxTickGapMs: number }>> = {
+        sync: [],
+        async: [],
+      };
+      for (let round = 0; round < 4; round++) {
+        for (const mode of round % 2 ? ['async', 'sync'] : ['sync', 'async']) {
+          const spy = vi
+            .spyOn(envelope, 'openBoundSecretAsync')
+            .mockImplementation(
+              mode === 'sync' ? async (...args) => envelope.openBoundSecret(...args) : nativeOpen
+            );
+          let last = performance.now();
+          let maxTickGapMs = 0;
+          const tick = () => {
+            const now = performance.now();
+            maxTickGapMs = Math.max(maxTickGapMs, now - last);
+            last = now;
+          };
+          const timer = setInterval(tick, 5);
+          const start = performance.now();
+          try {
+            const tokens = await repo.listForUser(userId);
+            const elapsedMs = performance.now() - start;
+            await nextTurn();
+            tick();
+            expect(tokens).toHaveLength(6);
+            expect(tokens.every((token) => token.oauth_refresh_token === 'refresh')).toBe(true);
+            if (round) samples[mode].push({ elapsedMs, maxTickGapMs });
+          } finally {
+            clearInterval(timer);
+            spy.mockRestore();
+          }
+        }
+      }
+      process.stdout.write(
+        `OAuth read benchmark: 6 grants x 4 envelopes, 1 warmup, 3 samples\n${JSON.stringify(samples)}\n`
+      );
+    },
+    30000
+  );
+
   it('opens four envelopes on a full read versus two on catalog authority', async () => {
     query.rows = [grant()];
-    const open = vi.spyOn(envelope, 'openBoundSecret');
+    const open = vi.spyOn(envelope, 'openBoundSecretAsync');
+    const syncOpen = vi.spyOn(envelope, 'openBoundSecret');
     const repo = new UserMCPOAuthTokenRepository({} as Database, master);
     await expect(repo.listForUser(userId)).resolves.toMatchObject([
       { oauth_access_token: 'access', oauth_refresh_token: 'refresh' },
@@ -90,13 +179,13 @@ describe('OAuth status grant read integrity and cost', () => {
       'client-secret',
     ]);
 
-    open.mockClear();
+    expect(syncOpen).not.toHaveBeenCalled();
     query.projections = [];
     const authority = await repo.getCatalogGrantAuthority(userId, serverId);
     expect(query.projections).toHaveLength(1);
     expect(query.projections[0]).not.toHaveProperty('oauth_access_token');
     expect(query.projections[0]).not.toHaveProperty('oauth_refresh_token');
-    expect(open.mock.calls.map((call) => call[2])).toEqual(['client-id', 'client-secret']);
+    expect(syncOpen.mock.calls.map((call) => call[2])).toEqual(['client-id', 'client-secret']);
     expect(authority).toMatchObject({
       oauth_access_token: '<present>',
       oauth_client_id: 'client',
