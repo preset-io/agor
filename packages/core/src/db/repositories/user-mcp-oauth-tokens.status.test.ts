@@ -25,7 +25,9 @@ vi.mock('../database-wrapper', () => ({
           ? Object.fromEntries(
               Object.keys(projection).map((key) => [
                 key,
-                key === 'has_access_token' ? row.oauth_access_token != null : row[key],
+                key === 'has_access_token'
+                  ? row.oauth_access_token != null && row.oauth_access_token !== ''
+                  : row[key],
               ])
             )
           : row
@@ -108,6 +110,18 @@ describe('OAuth status grant read integrity and cost', () => {
     ).resolves.toEqual([]);
     expect(open).not.toHaveBeenCalled();
   });
+
+  it.each([null, ''])(
+    'status excludes access token %s before opening client material',
+    async (accessToken) => {
+      query.rows = [{ ...grant(), oauth_access_token: accessToken, oauth_client_secret: 'unread' }];
+      const open = vi.spyOn(envelope, 'openBoundSecretAsync');
+      await expect(
+        new UserMCPOAuthTokenRepository({} as Database, master).listStatusForSubject(userId)
+      ).resolves.toEqual([]);
+      expect(open).not.toHaveBeenCalled();
+    }
+  );
 
   it('status still rejects client material transplanted across tenants', async () => {
     query.rows = [grant()];

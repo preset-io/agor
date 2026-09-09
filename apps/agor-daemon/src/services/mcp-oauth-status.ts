@@ -28,8 +28,7 @@ export interface OAuthStatusDeps {
   viewer: OAuthStatusViewer;
   listForUser(userId: UserID): Promise<MCPOAuthGrantStatusRecord[]>;
   listShared(): Promise<MCPOAuthGrantStatusRecord[]>;
-  findServers?(serverIds: MCPServerID[]): Promise<MCPServer[]>;
-  findServer(serverId: string): Promise<MCPServer | null>;
+  findServers(serverIds: MCPServerID[]): Promise<MCPServer[]>;
   /**
    * Whether to recompute each grant's binding to its server's configuration.
    * The daemon may keep this false for a legacy caller; production enables it
@@ -68,25 +67,18 @@ export async function resolveAuthenticatedServerIds(deps: OAuthStatusDeps): Prom
       !(token.oauth_token_expires_at && token.oauth_token_expires_at <= now) &&
       token.refresh_status !== 'ambiguous'
   );
-  const servers = deps.findServers
-    ? new Map(
-        (await deps.findServers([...new Set(tokens.map((token) => token.mcp_server_id))])).map(
-          (server) => [server.mcp_server_id, server]
-        )
-      )
-    : undefined;
+  const servers = new Map(
+    (await deps.findServers([...new Set(tokens.map((token) => token.mcp_server_id))])).map(
+      (server) => [server.mcp_server_id, server]
+    )
+  );
   const authenticatedServerIds = new Set<MCPServerID>();
   for (const token of tokens) {
-    if (token.oauth_token_expires_at && token.oauth_token_expires_at <= now) continue;
-    if (token.refresh_status === 'ambiguous') continue;
-
-    const server = servers
-      ? servers.get(token.mcp_server_id)
-      : await deps.findServer(token.mcp_server_id);
+    const server = servers.get(token.mcp_server_id);
     if (!server || !isVisibleTo(server, deps.viewer)) continue;
 
-    // Durable status is authoritative. A realtime hint or stale row must never
-    // make the UI advertise a grant which the request path would refuse to use.
+    // Verify saved configuration binding rather than trusting realtime hints.
+    // Execution separately validates token material and provider acceptance.
     if (deps.requireGrantBinding && !(await deps.isGrantBoundToServer(server, token))) continue;
 
     authenticatedServerIds.add(token.mcp_server_id);

@@ -5702,7 +5702,6 @@ export async function registerMCPServices(
           viewer: { user_id: userId as UserID, role: params?.user?.role },
           listForUser: (id) => userTokenRepo.listStatusForSubject(id),
           listShared: () => userTokenRepo.listStatusForSubject(null),
-          findServer: (serverId) => serverRepo.findById(serverId),
           findServers: (serverIds) => serverRepo.findByIds(serverIds),
           requireGrantBinding: true,
           isGrantBoundToServer: (server, grant) =>
