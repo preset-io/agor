@@ -33,6 +33,18 @@ const oauthFixture = vi.hoisted(() => ({
   beforeGrantLock: undefined as undefined | (() => Promise<void>),
 }));
 
+// These tests stop before MCP transport. Avoid loading the SDK's published
+// TypeScript parser in Node's test loader; constructing either client is a bug.
+const unexpectedMcpTransport = vi.hoisted(() =>
+  vi.fn(() => {
+    throw new Error('MCP transport must not be constructed before grant acquisition');
+  })
+);
+vi.mock('@modelcontextprotocol/sdk/client/index.js', () => ({ Client: unexpectedMcpTransport }));
+vi.mock('@modelcontextprotocol/sdk/client/streamableHttp.js', () => ({
+  StreamableHTTPClientTransport: unexpectedMcpTransport,
+}));
+
 vi.mock('@agor/core/tools/mcp/oauth-mcp-transport', async (importOriginal) => {
   const original =
     await importOriginal<typeof import('@agor/core/tools/mcp/oauth-mcp-transport')>();
@@ -334,6 +346,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
         .create({ mcp_server_id: machine.mcp_server_id }, params(user));
       expect(discovered).toMatchObject({
         success: false,
+        error: expect.stringContaining('No bound OAuth grant'),
         recovery: { category: 'configuration_required', action: 'review_configuration' },
       });
       const headers = await replicaB.app
@@ -354,6 +367,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
         );
       expect(foreign.headers[machine.mcp_server_id]).toEqual({ error: 'server_not_found' });
       expect({ starts: oauthFixture.starts, exchanges: oauthFixture.exchanges }).toEqual(before);
+      expect(unexpectedMcpTransport).not.toHaveBeenCalled();
     });
 
     it('serializes concurrent starts and completes the winner on the other replica', async () => {
