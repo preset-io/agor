@@ -1,5 +1,6 @@
 import { sql } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { resolveProviderConnection } from '../../config/tenant-agentic-tool-resolver';
 import { generateId } from '../../lib/ids';
 import type { GatewayChannel, UserID } from '../../types';
 import { createDatabase, type Database } from '../client';
@@ -66,6 +67,12 @@ describe.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
             config: { bot_token: `bot-${tenant}`, app_token: `app-${tenant}` },
           });
           owners.set(tenant, { user: user.user_id, channel });
+          await new UsersRepository(scoped).setToolConfigField(
+            user.user_id,
+            'codex',
+            'OPENAI_API_KEY',
+            `user-key-${tenant}`
+          );
           await new TenantAgenticToolSettingsRepository(scoped).patch('codex', {
             connection: { OPENAI_API_KEY: `key-${tenant}` },
           });
@@ -97,6 +104,16 @@ describe.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
               enumerable: false,
             });
             expect(tools.get('codex')?.connection?.OPENAI_API_KEY).toBe(`key-${tenant}`);
+            expect(
+              await resolveProviderConnection('codex', { userId: own.user, db: scoped })
+            ).toMatchObject({
+              source: 'user',
+              connection: { OPENAI_API_KEY: `user-key-${tenant}` },
+            });
+            // A foreign user ID cannot select their credential; normal tenant fallback remains local.
+            expect(
+              await resolveProviderConnection('codex', { userId: foreign.user, db: scoped })
+            ).toMatchObject({ source: 'tenant', connection: { OPENAI_API_KEY: `key-${tenant}` } });
             expect((await channels.findByUser(own.user)).map((channel) => channel.id)).toEqual([
               own.channel.id,
             ]);
