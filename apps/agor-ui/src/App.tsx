@@ -51,10 +51,7 @@ import { StreamdownPortalApp } from './components/StreamdownPortalApp';
 import { getDaemonUrl } from './config/daemon';
 import { CanvasNavigationProvider } from './contexts/CanvasNavigationContext';
 import { ConnectionProvider } from './contexts/ConnectionContext';
-import {
-  MCPCatalogModalProvider,
-  type MCPCatalogSelection,
-} from './contexts/MCPCatalogModalContext';
+import { MCPCatalogModalProvider } from './contexts/MCPCatalogModalContext';
 import { ThemeProvider, useTheme } from './contexts/ThemeContext';
 import { setPrimaryAgenticToolIfUnset } from './domain/primaryAgenticTool';
 import {
@@ -113,6 +110,7 @@ import {
   isOnboardingDeferred,
   type OnboardingReopenMode,
 } from './utils/onboardingLifecycle';
+import { resolveOnboardingSlackIntent } from './utils/onboardingSlack';
 import { savePromptDraft } from './utils/promptDrafts';
 import { seedOnboardingTeammate } from './utils/seedOnboardingTeammate';
 import { updateSessionMcpServers } from './utils/sessionMcpServers';
@@ -662,12 +660,6 @@ function AppContent() {
     deferred: onboardingDeferred,
     isAuthenticationOwnerCurrent,
   });
-  const [onboardingCatalogHandoff, setOnboardingCatalogHandoff] = useState<{
-    userId: UUID;
-    authenticationGeneration: number;
-    selection: MCPCatalogSelection;
-  } | null>(null);
-  const consumeOnboardingCatalogHandoff = useCallback(() => setOnboardingCatalogHandoff(null), []);
   const onboardingSeedResultRef = useRef(
     new Map<string, { branchId?: string; sessionId?: string }>()
   );
@@ -880,7 +872,8 @@ function AppContent() {
   const handleOnboardingComplete = async (
     owner: OnboardingOperationOwner,
     result: OnboardingCompletionResult,
-    isAttemptCurrent: () => boolean
+    isAttemptCurrent: () => boolean,
+    prepareOnly = false
   ) => {
     // The wizard awaits this and stays open while resource creation and
     // navigation run. The durable completion write then closes it before the
@@ -894,7 +887,7 @@ function AppContent() {
     // Completing onboarding is an explicit tool choice. Seed it only while the
     // preference is unset; a Settings selection made concurrently always wins.
     if (!isCurrentUser()) return;
-    if (result.agent && client) {
+    if (result.agent && client && !prepareOnly) {
       try {
         await setPrimaryAgenticToolIfUnset(client, currentUser, result.agent);
       } catch (error) {
@@ -934,8 +927,15 @@ function AppContent() {
     }
     if (!isCurrentUser()) return;
 
+    const slackGatewayIntent = prepareOnly
+      ? undefined
+      : await resolveOnboardingSlackIntent(client, currentUser, result.slackGatewayIntent);
+    if (!isCurrentUser()) return;
     const retainedSeed = onboardingSeedResultRef.current.get(result.boardId);
     const seeded = await seedOnboardingTeammate({
+      prepareOnly,
+      slackGatewayIntent,
+      connectedMcpServerIds: result.connectedMcpServerIds,
       frameworkRepo: readyFrameworkRepo,
       boardId: result.boardId,
       teammateName: result.teammateName,
@@ -984,6 +984,8 @@ function AppContent() {
       ...(branchId ? { branchId } : {}),
       ...(sessionId ? { sessionId } : {}),
     });
+
+    if (prepareOnly) return branchId;
 
     // Completion is the commit point of the client-side saga. Do it only after
     // durable teammate work has either succeeded or reached its documented
@@ -1037,32 +1039,6 @@ function AppContent() {
       navigate(sessionPath(sessionId as SessionID));
     } else if (targetBoardId) {
       navigate(boardPath(targetBoardId as BoardID, boardById.get(targetBoardId)?.slug));
-    }
-
-    if (
-      branchId &&
-      result.catalogEntryName !== undefined &&
-      isAuthenticationOwnerCurrent(owner.userId, owner.authenticationGeneration)
-    ) {
-      setOnboardingCatalogHandoff({
-        userId: owner.userId,
-        authenticationGeneration: owner.authenticationGeneration,
-        selection: {
-          branchId,
-          ...(result.catalogEntryName ? { entryName: result.catalogEntryName } : {}),
-        },
-      });
-    }
-
-    if (
-      !branchId &&
-      result.catalogEntryName !== undefined &&
-      isAuthenticationOwnerCurrent(owner.userId, owner.authenticationGeneration)
-    ) {
-      showWarning('Your board is ready. Add a teammate, then open Catalog to connect your tools.', {
-        key: 'onboarding-catalog',
-        duration: 8,
-      });
     }
 
     // `currentUser` keeps login gates from the authenticated principal rather
@@ -2269,16 +2245,6 @@ function AppContent() {
         key={`${currentUser?.user_id ?? 'anonymous'}:${currentUser?.role ?? 'none'}`}
       >
         <MCPCatalogModalHost
-          onboardingHandoff={
-            onboardingCatalogHandoff &&
-            isAuthenticationOwnerCurrent(
-              onboardingCatalogHandoff.userId,
-              onboardingCatalogHandoff.authenticationGeneration
-            )
-              ? onboardingCatalogHandoff.selection
-              : undefined
-          }
-          onHandoffConsumed={consumeOnboardingCatalogHandoff}
           client={client}
           connected={connected}
           connecting={connecting}
@@ -2367,7 +2333,21 @@ function AppContent() {
             onComplete={(result, attempt) => {
               if (!onboardingWizardOwner || !isOnboardingOwnerCurrent(onboardingWizardOwner))
                 return;
-              return handleOnboardingComplete(onboardingWizardOwner, result, attempt.isCurrent);
+              return handleOnboardingComplete(
+                onboardingWizardOwner,
+                result,
+                attempt.isCurrent
+              ).then(() => undefined);
+            }}
+            onPrepareTools={(result, attempt) => {
+              if (!onboardingWizardOwner || !isOnboardingOwnerCurrent(onboardingWizardOwner))
+                return Promise.resolve(undefined);
+              return handleOnboardingComplete(
+                onboardingWizardOwner,
+                result,
+                attempt.isCurrent,
+                true
+              );
             }}
             onDismiss={(progress) => {
               if (!onboardingWizardOwner || !isOnboardingOwnerCurrent(onboardingWizardOwner))

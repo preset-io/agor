@@ -116,11 +116,9 @@ describe('buildTeammateBootstrapPrompt', () => {
     });
     expect(prompt).toContain('- Suggested tools and connections: Slack, GitHub, Sentry');
 
-    expect(prompt).toContain('Slack: first check whether a configured server is already available');
-    expect(prompt).toContain('https://mcp.slack.com/mcp');
-    expect(prompt).toMatch(/use session scope and attach it to this session/i);
-    expect(prompt).toMatch(/workspace member policy/i);
-    expect(prompt).not.toMatch(/admin-only MCP settings/i);
+    expect(prompt).toContain('Slack MCP tool access is separate from Slack gateway messaging');
+    expect(prompt).toContain('do not offer generic connector registration');
+    expect(prompt).not.toContain('offer to register the official endpoint');
 
     expect(prompt).toContain(
       'GitHub: use the reviewed Catalog entry io.github.github/github-mcp-server'

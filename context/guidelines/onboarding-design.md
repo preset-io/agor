@@ -214,21 +214,39 @@ email or news promise until the product has a supported connector for it.
 - [ ] Card 1 says "teammate" (not "assistant") — a copy-consistency check against the product's established noun, not a decision awaiting sign-off.
 - [ ] Card 1 promises only supported Slack/recurring-update behavior unless a real email/news connector has landed.
 
-## Tools selection and Catalog handoff
+## Tools selection and in-context Catalog
 
-The skippable Tools step selects suggestions; it neither installs servers nor
-collects provider credentials. Members can select tools; the existing Catalog
-policy controls whether they may connect them. Skip suppresses all suggestions
-and the handoff; deselection is honored for custom setup suggestions too.
+The skippable Tools step keeps suggestions separate from connections. Every
+suggestion is deselectable; Skip suppresses bootstrap suggestions, not an
+already-saved connection. Text-style **Sign in through Catalog** opens the
+existing Catalog controller/detail drawer in onboarding presentation. Do not
+add a second auth API or auth state machine, restore obsolete Catalog routes,
+or complete onboarding just to open a connection drawer.
 
-After durable onboarding completion and successful teammate branch creation,
-open the app-owned Catalog modal at the first selected Catalog identity with
-that branch preselected. Never revive obsolete `/catalog*` or `/marketplace*`
-routes, auto-connect, or auto-launch an OAuth popup. Browsing the full catalog
-after setup is an explicit alternative. No branch means no automatic handoff.
-The intent is transient and caller-bound, not a preference or a URL parameter.
+Browsing creates nothing. Explicit Connect prepares the same resumable board
+and teammate branch used by completion, without starting the bootstrap session.
+Catalog then uses its ordinary consent, live readiness, policy, OAuth, secure
+credential input, and connection services. OAuth pre-opens its isolated popup
+on the Connect gesture before asynchronous workspace preparation. Ready means
+a verified key/open connection or durable OAuth attempt plus caller-scoped
+credential confirmation, never popup navigation alone. Return to onboarding
+closes the drawer without navigation. Cancellation erases private input;
+authenticated-owner/generation replacement fences stale continuations.
 
-GitHub MCP is the reviewed `io.github.github/github-mcp-server` Catalog entry
-and uses its PAT drawer, not connected-repository setup and not OAuth.
-Catalog, readiness, policy, connection, credential, and session owners remain
-the same as the ordinary header entry point. See the getting-started guide.
+Connect may already have saved a workspace, server, and idle tool session when
+the drawer is closed. Back/Skip do not roll those resources back. Reload resumes
+the saved workspace; saved tool sessions remain its recovery surface. Only
+server IDs, never tokens/auth state, are forwarded to bootstrap attachment.
+Catalog tool sessions must not be mistaken for the teammate bootstrap session.
+
+GitHub uses the reviewed `io.github.github/github-mcp-server` PAT recipe.
+Slack is deliberately separate: enabled, permission-usable gateways are
+preferred without changing their branch-bound teammate destination. Only an
+admin with a successfully checked empty inventory may request new-gateway help;
+completion and the teammate must recheck. That request is intent, not authority:
+use one disabled draft and the secure gateway token widget before enabling.
+
+Slack MCP is absent from Catalog because its official endpoint has no DCR and
+requires a registered internal/approved confidential app. Do not re-add an
+unusable entry, offer generic registration, or use gateway tokens for MCP.
+Expose truthful availability and existing approved MCP settings instead.

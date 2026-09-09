@@ -135,6 +135,43 @@ describe('seedOnboardingTeammate', () => {
     expect(onWarn).not.toHaveBeenCalled();
   });
 
+  it('prepares a resumable workspace for Catalog without starting a bootstrap session', async () => {
+    createTeammateBranchMock.mockResolvedValue({
+      branch_id: 'branch-1',
+      board_id: 'board-1',
+    } as Branch);
+    const { input, onWarn } = setup({ prepareOnly: true });
+    expect(await seedOnboardingTeammate(input)).toEqual({ branchId: 'branch-1' });
+    expect(startTeammateBootstrapSessionMock).not.toHaveBeenCalled();
+    expect(onWarn).not.toHaveBeenCalled();
+  });
+
+  it('attaches confirmed Catalog tools without confusing their idle session with the bootstrap', async () => {
+    createTeammateBranchMock.mockResolvedValue({
+      branch_id: 'branch-1',
+      board_id: 'board-1',
+    } as Branch);
+    startTeammateBootstrapSessionMock.mockResolvedValue(completeInitialization);
+    const { input } = setup({
+      connectedMcpServerIds: ['server-1'],
+      sessionById: new Map([
+        [
+          'catalog-session',
+          { session_id: 'catalog-session', branch_id: 'branch-1', title: 'GitHub' } as Session,
+        ],
+      ]),
+    });
+    await seedOnboardingTeammate(input);
+    expect(startTeammateBootstrapSessionMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionConfig: expect.objectContaining({
+          mcpServerIds: ['server-1'],
+          title: '🤖 Rusty — first session',
+        }),
+      })
+    );
+  });
+
   it('returns the durable session when daemon-side initialization is incomplete', async () => {
     createTeammateBranchMock.mockResolvedValue({
       branch_id: 'branch-1',
@@ -230,8 +267,10 @@ describe('seedOnboardingTeammate', () => {
     expect(initialPrompt).toMatch(/Open as yourself: one warm line/);
     // Slack keeps safe, session-scoped agency while GitHub
     // now points to the reviewed PAT-based Catalog entry.
-    expect(initialPrompt).toContain('https://mcp.slack.com/mcp');
-    expect(initialPrompt).toMatch(/use session scope and attach it to this session/i);
+    expect(initialPrompt).toContain(
+      'Slack MCP tool access is separate from Slack gateway messaging'
+    );
+    expect(initialPrompt).toContain('do not offer generic connector registration');
     expect(initialPrompt).toContain(
       'GitHub: use the reviewed Catalog entry io.github.github/github-mcp-server'
     );
@@ -321,6 +360,7 @@ describe('seedOnboardingTeammate', () => {
     } as Branch;
     const existingSession = {
       session_id: 'session-existing',
+      title: '🤖 Rusty — first session',
       branch_id: 'branch-existing',
     } as Session;
     const setPrimaryTeammate = vi.fn(async () => undefined);
@@ -364,6 +404,7 @@ describe('seedOnboardingTeammate', () => {
     } as Branch;
     const existingSession = {
       session_id: 'session-existing',
+      title: '🤖 Rusty — first session',
       branch_id: 'branch-existing',
     } as Session;
     const setPrimaryTeammate = vi.fn(async () => undefined);
@@ -395,7 +436,7 @@ describe('seedOnboardingTeammate', () => {
       query: { board_id: 'board-1', archived: false, $limit: 100 },
     });
     expect(sessionFind).toHaveBeenCalledWith({
-      query: { branch_id: 'branch-existing', archived: false, $limit: 1 },
+      query: { branch_id: 'branch-existing', archived: false, $limit: 100 },
     });
     expect(createTeammateBranchMock).not.toHaveBeenCalled();
     expect(startTeammateBootstrapSessionMock).not.toHaveBeenCalled();

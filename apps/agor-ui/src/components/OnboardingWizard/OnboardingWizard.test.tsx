@@ -1112,7 +1112,8 @@ describe('OnboardingWizard', () => {
           // Goals were skipped → the default MCP suggestion set flows through, and
           // the goals threaded to the completion handler are empty.
           suggestedIntegrations: [],
-          catalogEntryName: undefined,
+          slackGatewayIntent: undefined,
+          connectedMcpServerIds: [],
           goals: [],
         },
         expect.objectContaining({ isCurrent: expect.any(Function) })
@@ -1227,7 +1228,8 @@ describe('OnboardingWizard', () => {
           templateId: null,
           agent: null,
           suggestedIntegrations: [],
-          catalogEntryName: undefined,
+          slackGatewayIntent: undefined,
+          connectedMcpServerIds: [],
           goals: [],
         },
         expect.objectContaining({ isCurrent: expect.any(Function) })
@@ -1537,7 +1539,7 @@ describe('OnboardingWizard', () => {
     expect(attempt.isCurrent()).toBe(false);
   });
 
-  it('tools step lets an admin drop a tool and hands off to the first selected catalog entry', async () => {
+  it('tools step lets an admin drop a tool and does not open a second Catalog after completion', async () => {
     const onComplete = vi.fn();
     renderWizard({
       onComplete,
@@ -1547,10 +1549,10 @@ describe('OnboardingWizard', () => {
 
     expect(screen.getByText('Choose your tools')).toBeInTheDocument();
     // Default (no-goal) kit: Connect [Linear, Notion, Firecrawl] + Ask [Slack, GitHub].
-    const notion = screen.getByText('Notion').closest('button');
-    expect(notion).toHaveAttribute('aria-pressed', 'true');
+    const notion = screen.getByRole('checkbox', { name: 'Suggest Notion to my teammate' });
+    expect(notion).toBeChecked();
     fireEvent.click(notion as HTMLButtonElement);
-    expect(notion).toHaveAttribute('aria-pressed', 'false');
+    expect(notion).not.toBeChecked();
 
     clickButton(/^continue →/i); // tools → done
     clickButton(/open my board/i);
@@ -1562,7 +1564,7 @@ describe('OnboardingWizard', () => {
     // The deselected Connect tool is gone; the others stay.
     expect(emitted).not.toContain('Notion');
     expect(emitted).toContain('Linear');
-    expect(onComplete.mock.calls[0][0].catalogEntryName).toBe('app.linear/linear');
+    expect(onComplete.mock.calls[0][0].catalogEntryName).toBeUndefined();
     // Untouched suggestions are retained.
     expect(emitted).toEqual(expect.arrayContaining(['Slack', 'GitHub']));
   });
@@ -1571,7 +1573,7 @@ describe('OnboardingWizard', () => {
     const onComplete = vi.fn();
     renderWizard({ onComplete, initialStep: 'tools', user: makeUser({ role: 'admin' }) });
 
-    const askRow = screen.getByText('Slack').closest('button');
+    const askRow = screen.getByRole('checkbox', { name: 'Suggest Slack to my teammate' });
     fireEvent.click(askRow as HTMLButtonElement);
 
     clickButton(/^continue →/i); // tools → done
@@ -1588,11 +1590,9 @@ describe('OnboardingWizard', () => {
   it('lets members select tools without claiming that selection authorizes a connection', () => {
     renderWizard({ initialStep: 'tools', user: makeUser({ role: 'member' }) });
     expect(screen.getByText('Choose your tools')).toBeInTheDocument();
-    expect(screen.getByText('Linear').closest('button')).toHaveAttribute('aria-pressed', 'true');
-    expect(
-      screen.getByRole('button', { name: /browse the full catalog after setup/i })
-    ).toBeEnabled();
-    expect(screen.getByText(/access depends on your workspace policy/i)).toBeInTheDocument();
+    expect(screen.getByRole('checkbox', { name: 'Suggest Linear to my teammate' })).toBeChecked();
+    expect(screen.getAllByRole('button', { name: 'Sign in through Catalog' })[0]).toBeEnabled();
+    expect(screen.getByText(/Connections are optional/i)).toBeInTheDocument();
     expect(screen.queryByRole('textbox')).not.toBeInTheDocument();
   });
 
@@ -1603,20 +1603,19 @@ describe('OnboardingWizard', () => {
     await waitFor(() => expect(onComplete).toHaveBeenCalledTimes(1));
     expect(onComplete.mock.calls[0][0]).toMatchObject({
       suggestedIntegrations: [],
-      catalogEntryName: undefined,
+      slackGatewayIntent: undefined,
     });
   });
 
   it('skipping tools suppresses both suggestions and the catalog handoff', async () => {
     const onComplete = vi.fn();
     renderWizard({ onComplete, initialStep: 'tools' });
-    clickButton(/browse the full catalog after setup/i);
     clickButton(/skip for now/i);
     clickButton(/open my board/i);
     await waitFor(() => expect(onComplete).toHaveBeenCalledTimes(1));
     expect(onComplete.mock.calls[0][0]).toMatchObject({
       suggestedIntegrations: [],
-      catalogEntryName: undefined,
+      slackGatewayIntent: undefined,
     });
   });
 
@@ -1625,47 +1624,52 @@ describe('OnboardingWizard', () => {
     renderWizard({ onComplete, initialStep: 'tools' });
     clickButton(/skip for now/i);
     clickButton('Back');
-    clickButton('GitHub');
-    expect(screen.getByText('GitHub').closest('button')).toHaveAttribute('aria-pressed', 'true');
-    expect(screen.getByText('Linear').closest('button')).toHaveAttribute('aria-pressed', 'false');
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Suggest GitHub to my teammate' }));
+    expect(screen.getByRole('checkbox', { name: 'Suggest GitHub to my teammate' })).toBeChecked();
+    expect(
+      screen.getByRole('checkbox', { name: 'Suggest Linear to my teammate' })
+    ).not.toBeChecked();
     clickButton(/^continue/i);
     clickButton(/open my board/i);
     await waitFor(() => expect(onComplete).toHaveBeenCalledTimes(1));
     expect(
       onComplete.mock.calls[0][0].suggestedIntegrations.map((rec: { id: string }) => rec.id)
     ).toEqual(['github']);
-    expect(onComplete.mock.calls[0][0].catalogEntryName).toBe('io.github.github/github-mcp-server');
+    expect(onComplete.mock.calls[0][0].catalogEntryName).toBeUndefined();
   });
 
   it('deselecting every tool suppresses the handoff, including after Back', async () => {
     const onComplete = vi.fn();
     renderWizard({ onComplete, initialStep: 'tools' });
-    for (const rec of mergeGoalIntegrationRecs([])) clickButton(rec.name);
+    for (const rec of mergeGoalIntegrationRecs([]))
+      fireEvent.click(screen.getByRole('checkbox', { name: `Suggest ${rec.name} to my teammate` }));
     clickButton(/^continue/i);
     clickButton('Back');
-    expect(screen.getByText('GitHub').closest('button')).toHaveAttribute('aria-pressed', 'false');
+    expect(
+      screen.getByRole('checkbox', { name: 'Suggest GitHub to my teammate' })
+    ).not.toBeChecked();
     clickButton(/^continue/i);
     clickButton(/open my board/i);
     await waitFor(() => expect(onComplete).toHaveBeenCalledTimes(1));
     expect(onComplete.mock.calls[0][0]).toMatchObject({
       suggestedIntegrations: [],
-      catalogEntryName: undefined,
+      slackGatewayIntent: undefined,
     });
   });
 
-  it('hands off GitHub by reviewed catalog identity after completing the shipping goal', async () => {
+  it('offers in-context Catalog actions for the shipping goal', async () => {
     const onComplete = vi.fn();
     renderWizard({ onComplete });
     clickButton('Ship without the busywork');
     clickButton(/^continue/i);
     await findAndClickButton(/skip for now/i);
     clickButton(/skip for now/i);
-    expect(screen.getByText(/personal access token/i)).toBeInTheDocument();
+    expect(screen.getAllByRole('button', { name: 'Sign in through Catalog' })).toHaveLength(4);
     expect(onComplete).not.toHaveBeenCalled();
     clickButton(/^continue/i);
     clickButton(/open my board/i);
     await waitFor(() => expect(onComplete).toHaveBeenCalledTimes(1));
-    expect(onComplete.mock.calls[0][0].catalogEntryName).toBe('io.github.github/github-mcp-server');
+    expect(onComplete.mock.calls[0][0].catalogEntryName).toBeUndefined();
   });
 });
 

@@ -21,7 +21,7 @@ import type { AntdIconProps } from '@ant-design/icons/lib/components/AntdIcon';
 
 export type IntegrationSetup =
   | { surface: 'marketplace'; catalogEntryName: string }
-  | { surface: 'mcp-settings'; endpoint: string }
+  | { surface: 'slack' }
   | { surface: 'connected-repository' };
 
 /**
@@ -75,7 +75,7 @@ export const ONBOARDING_INTEGRATION_RECOMMENDATIONS: Record<
     emoji: '💬',
     description:
       'Read Slack conversations for summaries and recurring updates. Gateway messaging is configured separately.',
-    setup: { surface: 'mcp-settings', endpoint: 'https://mcp.slack.com/mcp' },
+    setup: { surface: 'slack' },
     connectMode: 'ask',
   },
   github: {

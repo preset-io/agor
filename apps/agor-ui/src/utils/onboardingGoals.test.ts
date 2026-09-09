@@ -180,8 +180,7 @@ describe('mergeGoalIntegrationRecs', () => {
 
   it('routes recommendations only to their real current Agor surface', () => {
     expect(ONBOARDING_INTEGRATION_RECOMMENDATIONS.slack.setup).toEqual({
-      surface: 'mcp-settings',
-      endpoint: 'https://mcp.slack.com/mcp',
+      surface: 'slack',
     });
     expect(ONBOARDING_INTEGRATION_RECOMMENDATIONS.github.setup).toEqual({
       surface: 'marketplace',

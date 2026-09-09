@@ -4,13 +4,9 @@
  *
  * Steps: goals → workspace (name + template gallery) → llm → tools → done
  *
- * The tools step is an actionable-but-deferred curation of the goal-tailored
- * Connect kit (see the tools-step feasibility note): the real catalog connect
- * flow creates + navigates to a session and needs an existing branch, neither
- * of which exists mid-wizard, so this step selects rather than connects. The
- * selection (plus the always-on Ask items) feeds the first-session prompt so
- * completion opens the existing Catalog drawer for the newly created branch.
- * No provider credentials or connection requests are collected in the wizard.
+ * Tools use the existing Catalog controller and secure drawer in context.
+ * Explicit Connect prepares a resumable workspace without completing onboarding;
+ * ordinary Back/Skip never create resources or discard completed connections.
  */
 
 import { TOOL_API_KEY_NAMES } from '@agor/agentic-tools';
@@ -27,7 +23,6 @@ import type {
   UserPreferences,
 } from '@agor-live/client';
 import {
-  ArrowRightOutlined,
   CheckCircleOutlined,
   CheckOutlined,
   CloseOutlined,
@@ -46,6 +41,7 @@ import {
   ONBOARDING_GOALS,
   type OnboardingIntegrationRecommendation,
 } from '../../utils/onboardingGoals';
+import type { OnboardingSlackGatewayIntent } from '../../utils/onboardingSlack';
 import {
   BLANK_TEMPLATE_ID,
   getTeammateTemplate,
@@ -56,9 +52,9 @@ import {
 import { CLAUDE_OAUTH_STORAGE_DESCRIPTION, ClaudeOAuthSignIn } from '../ClaudeAuth';
 import { type CodexAuthFallback, CodexDeviceSignIn, CodexImportAuthJson } from '../CodexAuth';
 import { GlassPanelHighlights } from '../GlassSurface/GlassPanel';
-import { McpLogo } from '../McpLogo';
 import { ToolIcon } from '../ToolIcon';
 import { OnboardingTeammateGalleryStep } from './OnboardingTeammateGalleryStep';
+import { OnboardingToolsStep } from './OnboardingToolsStep';
 
 const { Text, Title, Paragraph } = Typography;
 const { useToken } = theme;
@@ -391,8 +387,8 @@ export interface OnboardingCompletionResult {
   agent?: AgenticToolName | null;
   /** Goal-tailored tools/connections with their real Agor setup surface. */
   suggestedIntegrations?: OnboardingIntegrationRecommendation[];
-  /** In-memory Catalog handoff only, after durable completion; null browses all entries. */
-  catalogEntryName?: string | null;
+  slackGatewayIntent?: OnboardingSlackGatewayIntent;
+  connectedMcpServerIds?: string[];
   /** Goal ids chosen in step 1 (order-preserving, primary first; [] if
    * skipped), threaded straight through so the completion handler never has
    * to wait on the async preference save. */
@@ -414,6 +410,11 @@ export interface OnboardingWizardProps {
     result: OnboardingCompletionResult,
     attempt: OnboardingCompletionAttempt
   ) => void | Promise<void>;
+  /** Prepare only the resumable workspace on an explicit Catalog Connect. */
+  onPrepareTools?: (
+    result: OnboardingCompletionResult,
+    attempt: OnboardingCompletionAttempt
+  ) => Promise<string | undefined>;
   /** Called when the user dismisses the wizard without completing it. */
   onDismiss?: (progress: Partial<OnboardingState>) => void;
 
@@ -479,6 +480,7 @@ export function OnboardingWizard({
   open,
   isCurrent = ALWAYS_CURRENT,
   onComplete,
+  onPrepareTools,
   onDismiss,
   user,
   client,
@@ -528,7 +530,12 @@ export function OnboardingWizard({
   const [deselectedToolIds, setDeselectedToolIds] = useState<Set<string>>(new Set());
   const [toolsSkipped, setToolsSkipped] = useState(false);
   const [toolsConfirmed, setToolsConfirmed] = useState(false);
-  const [browseCatalog, setBrowseCatalog] = useState(false);
+  const [slackGatewayIntent, setSlackGatewayIntent] =
+    useState<OnboardingSlackGatewayIntent>('prefer-existing');
+  const [preparedBranchId, setPreparedBranchId] = useState<string>();
+  const [connectedMcpServerIds, setConnectedMcpServerIds] = useState<string[]>([]);
+  const createdBoardIdRef = useRef<string | null>(null);
+  const prepareToolsInFlight = useRef<Promise<string> | null>(null);
   const toggleTool = useCallback((id: string) => {
     setToolsSkipped(false);
     setDeselectedToolIds((prev) => {
@@ -566,9 +573,7 @@ export function OnboardingWizard({
   // avatar and the teammate's framework source branch — never the name.
   const [selectedTemplateId, setSelectedTemplateId] = useState<TeammateGalleryCardId | null>(null);
   const [invalidSavedTemplateId, setInvalidSavedTemplateId] = useState<string | null>(null);
-  // The teammate's board is created ONLY at completion (the `done` handler) — a
-  // fresh board named after the teammate, never before, so an abandoned run
-  // leaves no orphan board. Errors from that final creation surface on step 4.
+  // Connect and Done share the same resumable board saga. Browsing alone creates nothing.
   const [boardError, setBoardError] = useState<string | null>(null);
   const [createdBoardId, setCreatedBoardId] = useState<string | null>(null);
   const boardCreationConfirmedRef = useRef(false);
@@ -591,7 +596,10 @@ export function OnboardingWizard({
     setDeselectedToolIds(new Set());
     setToolsSkipped(false);
     setToolsConfirmed(false);
-    setBrowseCatalog(false);
+    setSlackGatewayIntent('prefer-existing');
+    setPreparedBranchId(undefined);
+    setConnectedMcpServerIds([]);
+    createdBoardIdRef.current = null;
     setSelectedAgent(null);
     setApiKey('');
     setAuthMethod('api-key');
@@ -629,6 +637,8 @@ export function OnboardingWizard({
     const seedKey = `${user?.user_id ?? '__no_user__'}:${savedBoardId ?? ''}`;
     if (userSeedRef.current === seedKey) return;
     userSeedRef.current = seedKey;
+    // Our own preparation write must not reseed the wizard onto Ready mid-drawer.
+    if (createdBoardId && createdBoardId === savedBoardId) return;
     // Pre-select LLM if user already has one configured
     if (hasAnyLlmKey(user, managedClaudeLoginAvailable)) {
       const codex = user?.agentic_tools?.codex;
@@ -656,6 +666,7 @@ export function OnboardingWizard({
       setSelectedTemplateId(savedTemplate?.id ?? null);
       setInvalidSavedTemplateId(savedTemplateId && !savedTemplate ? savedTemplateId : null);
       setCreatedBoardId(savedBoardId);
+      createdBoardIdRef.current = savedBoardId;
       boardCreationConfirmedRef.current = !!savedBoard;
       if (!initialStep) setCurrentStep('done');
     } else {
@@ -669,6 +680,7 @@ export function OnboardingWizard({
     savedOnboarding,
     initialStep,
     managedClaudeLoginAvailable,
+    createdBoardId,
   ]);
 
   // ─── Derived values ──────────────────────────────────────────────────────
@@ -934,6 +946,109 @@ export function OnboardingWizard({
     [client, isCurrent, onUpdateUser, user]
   );
 
+  const ensureBoard = useCallback(async () => {
+    const name = teammateName.trim();
+    if (!client || !isCurrent()) throw new Error('Reconnect to continue setup.');
+    // This is a small resumable saga. Persist the client-generated id
+    // BEFORE issuing create: a reload after a committed response was lost
+    // must discover the same board instead of allocating another id.
+    let boardId = createdBoardIdRef.current ?? createdBoardId ?? '';
+    if (!boardId) {
+      boardId = generateId();
+      setCreatedBoardId(boardId);
+      createdBoardIdRef.current = boardId;
+    }
+    const progressSaved = await saveOnboardingProgress({
+      path: 'teammate',
+      boardId,
+      goals: selectedGoals,
+      teammateDisplayName: name || undefined,
+      teammateEmoji: name ? teammateEmoji : undefined,
+      teammateTemplateId: name ? (selectedTemplateId ?? undefined) : undefined,
+    });
+    if (!progressSaved || !isCurrent()) throw new Error('Setup was cancelled.');
+    if (!boardCreationConfirmedRef.current) {
+      let board: Board | undefined;
+      try {
+        board = await client.service('boards').create({
+          board_id: boardId,
+          name: name || (user?.name ? `${user.name}'s board` : 'My board'),
+          icon: teammateEmoji,
+        });
+      } catch (createError) {
+        // The response can fail after the server committed. Resolve the
+        // client-generated ID before offering retry, so an ambiguous
+        // transport failure cannot create a second board.
+        try {
+          board = await client.service('boards').get(boardId);
+        } catch {
+          throw createError;
+        }
+      }
+      if (!isCurrent()) throw new Error('Setup was cancelled.');
+      if (board?.board_id !== boardId) {
+        throw new Error('Board creation returned an unexpected ID - try again.');
+      }
+      boardCreationConfirmedRef.current = true;
+    }
+    if (!isCurrent()) throw new Error('Setup was cancelled.');
+    return boardId;
+  }, [
+    client,
+    isCurrent,
+    createdBoardId,
+    saveOnboardingProgress,
+    selectedGoals,
+    teammateName,
+    teammateEmoji,
+    selectedTemplateId,
+    user,
+  ]);
+
+  const prepareToolsWorkspace = async (): Promise<string> => {
+    if (prepareToolsInFlight.current) return prepareToolsInFlight.current;
+    if (!teammateName.trim())
+      throw new Error('Go Back and name your teammate before connecting tools.');
+    if (!onPrepareTools) throw new Error('Workspace preparation is unavailable. Try again.');
+    const generation = completionAttemptGenerationRef.current;
+    const attempt = {
+      isCurrent: () => isCurrent() && generation === completionAttemptGenerationRef.current,
+    };
+    const promise = (async () => {
+      const boardId = await ensureBoard();
+      if (!attempt.isCurrent()) throw new Error('Setup was cancelled.');
+      const branchId = await onPrepareTools(
+        {
+          boardId,
+          branchId: preparedBranchId ?? '',
+          sessionId: '',
+          path: 'teammate',
+          teammateName: teammateName.trim(),
+          teammateEmoji,
+          sourceBranch: resolveTemplateSourceBranch(selectedTemplateId),
+          sourceRemoteUrl: resolveTemplateSourceRemoteUrl(selectedTemplateId),
+          templateId: selectedTemplateId,
+          agent: selectedAgent,
+          goals: selectedGoals,
+        },
+        attempt
+      );
+      if (!attempt.isCurrent()) throw new Error('Setup was cancelled.');
+      if (!branchId)
+        throw new Error('Your teammate workspace is not ready. Retry when setup is available.');
+      setPreparedBranchId(branchId);
+      await saveOnboardingProgress({ branchId });
+      if (!attempt.isCurrent()) throw new Error('Setup was cancelled.');
+      return branchId;
+    })();
+    prepareToolsInFlight.current = promise;
+    try {
+      return await promise;
+    } finally {
+      prepareToolsInFlight.current = null;
+    }
+  };
+
   const goToStep = useCallback((step: WizardStep) => {
     setCurrentStep(step);
   }, []);
@@ -975,7 +1090,7 @@ export function OnboardingWizard({
     if (currentStep === 'tools') {
       setDeselectedToolIds(new Set(mergeGoalIntegrationRecs(selectedGoals).map((rec) => rec.id)));
       setToolsSkipped(true);
-      setBrowseCatalog(false);
+      setSlackGatewayIntent('prefer-existing');
     }
     // The teammate step is optional. Skip is authoritative: do not carry a
     // typed name or an experimental template into completion after the user
@@ -1040,7 +1155,7 @@ export function OnboardingWizard({
           return;
         }
         if (selectedAgent === 'claude-code' && effectiveAuthMethod === 'claude-oauth') {
-          if (allowClaudeOAuthSignIn && llmAuthVerified['claude-code'] === true) goToStep('done');
+          if (allowClaudeOAuthSignIn && llmAuthVerified['claude-code'] === true) goToStep('tools');
           return;
         }
         // Key stored, auth check still running — proceed optimistically
@@ -1100,17 +1215,14 @@ export function OnboardingWizard({
         break;
       }
       case 'workspace': {
-        // Step 2 no longer creates the board — that happens ONLY at completion
-        // (the `done` case below), so an abandoned run never leaves an orphan
-        // board. Continue requires a name; Skip remains the explicit no-teammate
-        // path. When present, the name is also what the board is named after.
+        // Naming does not provision. Explicit Catalog Connect or final completion
+        // prepares the resumable workspace. Skip remains the no-teammate path.
         goToStep('llm');
         break;
       }
       case 'tools': {
         setToolsConfirmed(true);
-        // No inline connect (see the tools-step feasibility note): selections
-        // are threaded into the first-session prompt at completion.
+        // Suggestions are separate from connections already made in the drawer.
         goToStep('done');
         break;
       }
@@ -1134,17 +1246,6 @@ export function OnboardingWizard({
             : mergeGoalIntegrationRecs(selectedGoals).filter(
                 (rec) => !deselectedToolIds.has(rec.id)
               );
-        const firstCatalogTool = suggestedIntegrations.find(
-          (rec) => rec.setup.surface === 'marketplace'
-        );
-        const catalogEntryName =
-          !toolsConfirmed || toolsSkipped
-            ? undefined
-            : browseCatalog
-              ? null
-              : firstCatalogTool?.setup.surface === 'marketplace'
-                ? firstCatalogTool.setup.catalogEntryName
-                : undefined;
         // Keep the modal up in a loading state until creation + navigation
         // finish (onComplete may run async), then it closes from the parent.
         setCompleting(true);
@@ -1154,54 +1255,16 @@ export function OnboardingWizard({
           if (!isCurrent()) return;
           if (!client) throw new Error('Not connected - try again when Agor reconnects.');
 
-          // This is a small resumable saga. Persist the client-generated id
-          // BEFORE issuing create: a reload after a committed response was lost
-          // must discover the same board instead of allocating another id.
-          let boardId = createdBoardId ?? '';
-          if (!boardId) {
-            boardId = generateId();
-            setCreatedBoardId(boardId);
-          }
-          const progressSaved = await saveOnboardingProgress({
-            path: 'teammate',
-            boardId,
-            goals: selectedGoals,
-            teammateDisplayName: name || undefined,
-            teammateEmoji: name ? teammateEmoji : undefined,
-            teammateTemplateId: name ? (selectedTemplateId ?? undefined) : undefined,
-          });
-          if (!progressSaved || !completionAttempt.isCurrent()) return;
-          if (!boardCreationConfirmedRef.current) {
-            let board: Board | undefined;
-            try {
-              board = await client.service('boards').create({
-                board_id: boardId,
-                name: name || (user?.name ? `${user.name}'s board` : 'My board'),
-                icon: teammateEmoji,
-              });
-            } catch (createError) {
-              // The response can fail after the server committed. Resolve the
-              // client-generated ID before offering retry, so an ambiguous
-              // transport failure cannot create a second board.
-              try {
-                board = await client.service('boards').get(boardId);
-              } catch {
-                throw createError;
-              }
-            }
-            if (!isCurrent()) return;
-            if (board?.board_id !== boardId) {
-              setBoardError('Board creation returned an unexpected ID - try again.');
-              return;
-            }
-            boardCreationConfirmedRef.current = true;
-          }
-          if (!isCurrent()) return;
+          // An abandoned drawer may still be preparing the same workspace.
+          // Settle that one operation before final completion resumes it.
+          await prepareToolsInFlight.current?.catch(() => undefined);
+          const boardId = await ensureBoard();
+          if (!completionAttempt.isCurrent()) return;
           await observeSlowCompletion(
             Promise.resolve(
               onComplete(
                 {
-                  branchId: '',
+                  branchId: preparedBranchId ?? '',
                   sessionId: '',
                   boardId,
                   path: 'teammate',
@@ -1215,7 +1278,13 @@ export function OnboardingWizard({
                   templateId: selectedTemplateId,
                   agent: selectedAgent,
                   suggestedIntegrations,
-                  catalogEntryName,
+                  connectedMcpServerIds,
+                  slackGatewayIntent:
+                    toolsConfirmed &&
+                    !toolsSkipped &&
+                    suggestedIntegrations.some((rec) => rec.id === 'slack')
+                      ? slackGatewayIntent
+                      : undefined,
                   goals: selectedGoals,
                 },
                 completionAttempt
@@ -1256,7 +1325,10 @@ export function OnboardingWizard({
     deselectedToolIds,
     toolsSkipped,
     toolsConfirmed,
-    browseCatalog,
+    slackGatewayIntent,
+    preparedBranchId,
+    connectedMcpServerIds,
+    ensureBoard,
     selectedAgent,
     agentIsVerifiedConnected,
     agentHasKey,
@@ -1272,8 +1344,6 @@ export function OnboardingWizard({
     teammateEmoji,
     selectedTemplateId,
     invalidSavedTemplateId,
-    createdBoardId,
-    saveOnboardingProgress,
     onComplete,
     completionSlowThresholdMs,
     goToStep,
@@ -1927,76 +1997,26 @@ export function OnboardingWizard({
     />
   );
 
-  const renderTools = () => {
-    const kit = mergeGoalIntegrationRecs(selectedGoals);
-    const teammateLabel = teammateName.trim() || 'your teammate';
-    return (
-      <div>
-        {renderStepBadge('Choose your tools')}
-        <Paragraph type="secondary">
-          Pick tools for {teammateLabel}. After setup, review your first selected tool in Catalog.
-          Nothing connects until you approve it there. You can connect the others later.
-        </Paragraph>
-        <div
-          style={{
-            display: 'grid',
-            gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 240px), 1fr))',
-            gap: token.marginSM,
-          }}
-        >
-          {kit.map((rec) => (
-            <Button
-              key={rec.id}
-              aria-pressed={!toolsSkipped && !deselectedToolIds.has(rec.id)}
-              onClick={() => toggleTool(rec.id)}
-              block
-              style={{
-                height: 'auto',
-                whiteSpace: 'normal',
-                textAlign: 'left',
-                padding: token.paddingSM,
-              }}
-            >
-              <McpLogo id={rec.id} name={rec.name} size={20} />
-              <span style={{ flex: 1, minWidth: 0 }}>
-                <Text strong>{rec.name}</Text>
-                <br />
-                <Text type="secondary">{rec.description}</Text>
-                <br />
-                <Text type="secondary">
-                  {rec.connectMode === 'credentials'
-                    ? 'Personal access token · entered securely in Catalog'
-                    : rec.connectMode === 'oauth'
-                      ? 'Sign in through Catalog'
-                      : rec.connectMode === 'none'
-                        ? 'No sign-in required'
-                        : 'Ask your teammate about setup'}
-                </Text>
-              </span>
-              {!toolsSkipped && !deselectedToolIds.has(rec.id) && (
-                <CheckOutlined aria-label="Selected" />
-              )}
-            </Button>
-          ))}
-        </div>
-        <Button
-          type="link"
-          aria-pressed={browseCatalog && !toolsSkipped}
-          onClick={() => {
-            setToolsSkipped(false);
-            setBrowseCatalog((value) => !value);
-          }}
-          style={{ marginTop: token.marginSM }}
-        >
-          Browse the full catalog after setup <ArrowRightOutlined />
-          {browseCatalog && !toolsSkipped && <CheckOutlined aria-label="Selected" />}
-        </Button>
-        <Paragraph type="secondary">
-          You can skip this step. Access depends on your workspace policy.
-        </Paragraph>
-      </div>
-    );
-  };
+  const renderTools = () => (
+    <div>
+      {renderStepBadge('Choose your tools')}
+      <OnboardingToolsStep
+        client={client}
+        user={user}
+        connected={onboardingAuthority.connectionReady && isCurrent()}
+        authGeneration={onboardingAuthority.authGeneration}
+        kit={mergeGoalIntegrationRecs(selectedGoals)}
+        isSelected={(id) => !toolsSkipped && !deselectedToolIds.has(id)}
+        onToggle={toggleTool}
+        prepareBranch={prepareToolsWorkspace}
+        onConnected={(serverId) =>
+          setConnectedMcpServerIds((ids) => (ids.includes(serverId) ? ids : [...ids, serverId]))
+        }
+        gatewayIntent={slackGatewayIntent}
+        onGatewayIntent={setSlackGatewayIntent}
+      />
+    </div>
+  );
 
   const renderDone = () => {
     const name = teammateName.trim();
