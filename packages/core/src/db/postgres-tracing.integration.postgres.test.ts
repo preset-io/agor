@@ -2,6 +2,7 @@ import { sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import postgres from 'postgres';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { isPostgresDatabase } from './database-wrapper';
 import { type DatadogTracer, instrumentDrizzlePostgresForTracing } from './postgres-tracing';
 import * as postgresSchema from './schema.postgres';
 import { runWithTenantDatabaseScope } from './tenant-scope';
@@ -81,9 +82,8 @@ describe.skipIf(!url)('postgres-tracing against real Drizzle postgres.js', () =>
     });
     await ready;
     const second = runWithTenantDatabaseScope(db, tenantB, async (scoped) => {
-      const rows = await (scoped as typeof db).execute(
-        sql`select current_setting('agor.tenant_id') as tenant`
-      );
+      if (!isPostgresDatabase(scoped)) throw new Error('PostgreSQL test requires PostgreSQL');
+      const rows = await scoped.execute(sql`select current_setting('agor.tenant_id') as tenant`);
       expect((rows as unknown as { tenant: string }[])[0].tenant).toBe(tenantB);
       await expect(
         runWithTenantDatabaseScope(db, tenantA, async () => undefined)
