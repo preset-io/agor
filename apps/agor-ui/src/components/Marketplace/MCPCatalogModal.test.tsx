@@ -186,11 +186,16 @@ describe('onboarding Catalog handoff', () => {
     const input = await screen.findByPlaceholderText('Paste your GitHub bearer access token');
     const drawer = input.closest<HTMLElement>('[role="dialog"]')!;
     await within(drawer).findByText('Catalog QA');
+    // The key field can render from catalog metadata before the debounced
+    // readiness read completes. Unknown readiness deliberately reserves an
+    // OAuth popup; this case tests a known PAT refusal, not that fallback.
+    await within(drawer).findByText('Use your fine-grained personal access token');
     fireEvent.change(input, { target: { value: 'test-only-invalid-credential' } });
     fireEvent.click(within(drawer).getByRole('checkbox', { name: /I understand/ }));
     const connect = within(drawer).getByRole('button', { name: /Verify key/ });
     await waitFor(() => expect(connect).toBeEnabled());
     fireEvent.click(connect);
+    await waitFor(() => expect(api.connect).toHaveBeenCalledTimes(1));
     await within(drawer).findByText('Credential rejected');
     expect(api.connect).toHaveBeenCalledTimes(1);
     expect(screen.queryByRole('button', { name: 'Open session' })).not.toBeInTheDocument();
