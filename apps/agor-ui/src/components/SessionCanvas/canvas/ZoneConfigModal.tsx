@@ -202,7 +202,9 @@ export const ZoneConfigModal = ({
       if (hasChanges) {
         const saved = await onUpdate(objectId, {
           ...zone,
-          label: values.name,
+          // Fall back to the current name if the field didn't register (e.g.
+          // an inactive/unmounted tab), so saving never wipes the zone label.
+          label: values.name ?? zoneName,
           locked: Boolean(values.locked),
           borderColor,
           backgroundColor,
@@ -483,6 +485,10 @@ export const ZoneConfigModal = ({
               key: 'appearance',
               label: 'Appearance & placement',
               children: generalContent,
+              // Force-render so Form.Item name="name" registers with the Form
+              // instance even if the user saves without ever visiting this tab
+              // (otherwise validateFields() omits `name` and the save wipes it).
+              forceRender: true,
             },
           ]}
         />
