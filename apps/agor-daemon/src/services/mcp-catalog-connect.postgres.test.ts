@@ -117,7 +117,8 @@ vi.mock('@agor/core/tools/mcp/oauth-mcp-transport', async (importOriginal) => {
     ),
   };
 });
-vi.mock('@agor/core/mcp-catalog', () => ({
+vi.mock('@agor/core/mcp-catalog', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@agor/core/mcp-catalog')>()),
   loadCatalog: vi.fn().mockResolvedValue([]),
   probeRemoteAuthType,
   probeRemoteBearerToken,
