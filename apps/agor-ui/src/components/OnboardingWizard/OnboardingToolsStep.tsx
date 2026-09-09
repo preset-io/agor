@@ -78,28 +78,42 @@ function ToolsForIdentity(props: Props) {
         MCP connection; Back and Skip do not delete saved connections.
       </Typography.Paragraph>
       <Flex vertical role="list" aria-label="Suggested MCP tools" gap={token.marginXS}>
-        {kit.map((rec) => (
-          <OnboardingToolRow
-            key={rec.id}
-            readinessRevision={readinessRevision}
-            recommendation={rec}
-            client={client}
-            userId={user?.user_id}
-            connected={connected}
-            authGeneration={authGeneration}
-            selected={isSelected(rec.id)}
-            onToggle={() => onToggle(rec.id)}
-            onOpen={(event) => {
-              trigger.current = event.currentTarget;
-              if (rec.setup.surface === 'marketplace') setEntry(rec.setup.catalogEntryName);
-              else if (rec.id === 'slack') setSlackOpen(true);
-            }}
-          />
-        ))}
+        {kit
+          .filter((rec) => rec.setup.surface !== 'slack')
+          .map((rec) => (
+            <OnboardingToolRow
+              key={rec.id}
+              readinessRevision={readinessRevision}
+              recommendation={rec}
+              client={client}
+              userId={user?.user_id}
+              connected={connected}
+              authGeneration={authGeneration}
+              selected={isSelected(rec.id)}
+              onToggle={() => onToggle(rec.id)}
+              onOpen={(event) => {
+                trigger.current = event.currentTarget;
+                if (rec.setup.surface === 'marketplace') setEntry(rec.setup.catalogEntryName);
+              }}
+            />
+          ))}
       </Flex>
       {hasSlack && (
-        <Card size="small" title="Slack gateway messaging">
-          <Typography.Paragraph>
+        <Card
+          size="small"
+          title="Slack gateway messaging"
+          extra={
+            <Checkbox
+              aria-label="Suggest Slack gateway messaging to my teammate"
+              checked={isSelected('slack')}
+              onChange={() => {
+                onToggle('slack');
+                onGatewayIntent('prefer-existing');
+              }}
+            />
+          }
+        >
+          <Typography.Paragraph type="secondary" style={{ fontSize: token.fontSizeSM }}>
             Message a teammate through a Slack bot. This is separate from Slack MCP tool access.
           </Typography.Paragraph>
           {!connected ? (
@@ -125,7 +139,8 @@ function ToolsForIdentity(props: Props) {
             </>
           ) : hasMinimumRole(user?.role, ROLES.ADMIN) ? (
             <Checkbox
-              checked={gatewayIntent === 'request-new'}
+              disabled={!isSelected('slack')}
+              checked={isSelected('slack') && gatewayIntent === 'request-new'}
               onChange={(event) =>
                 onGatewayIntent(event.target.checked ? 'request-new' : 'prefer-existing')
               }
@@ -138,6 +153,27 @@ function ToolsForIdentity(props: Props) {
               be requested.
             </Typography.Text>
           )}
+          <Flex vertical gap={token.marginXXS} style={{ marginTop: token.marginXS }}>
+            <Typography.Text type="secondary" style={{ fontSize: token.fontSizeSM }}>
+              Slack MCP tool access is not available in Catalog and is not selected here.
+            </Typography.Text>
+            <Button
+              type="link"
+              aria-haspopup="dialog"
+              onClick={(event) => {
+                trigger.current = event.currentTarget;
+                setSlackOpen(true);
+              }}
+              style={{
+                alignSelf: 'flex-start',
+                paddingLeft: 0,
+                paddingInlineStart: 0,
+                fontSize: token.fontSizeSM,
+              }}
+            >
+              Slack MCP availability
+            </Button>
+          </Flex>
         </Card>
       )}
       <CatalogDrawer open={slackOpen} title="Slack MCP" onClose={close}>

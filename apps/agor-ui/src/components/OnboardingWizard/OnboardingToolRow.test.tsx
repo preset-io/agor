@@ -12,7 +12,7 @@ describe('onboarding auth status presentation', () => {
     ['bearer_required', 'Token required'],
     ['oauth_required', 'Sign in required'],
   ] as const)(
-    'uses the established warning Tag for %s without authorizing a connection',
+    'uses the established info Tag for %s without authorizing a connection',
     (state, label) => {
       vi.mocked(useCatalogReadiness).mockReturnValue({
         readiness: { catalog_key: 'github', state },
@@ -34,7 +34,7 @@ describe('onboarding auth status presentation', () => {
         />
       );
       const status = screen.getByText(label);
-      expect(status).toHaveClass('ant-tag', 'ant-tag-warning');
+      expect(status).toHaveClass('ant-tag', 'ant-tag-processing');
       expect(status).not.toHaveAttribute('tabindex');
       const action = screen.getByRole('button', { name: 'Sign in through Catalog for GitHub' });
       expect(action).toHaveAccessibleDescription(new RegExp(label));

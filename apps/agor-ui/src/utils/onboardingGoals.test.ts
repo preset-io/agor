@@ -103,18 +103,36 @@ const askNames = (goalIds: string[]) =>
 
 describe('mergeGoalIntegrationRecs', () => {
   it('falls back to the default set when no goal is picked (Connect items first, then Ask extras)', () => {
-    expect(names([])).toEqual(['Linear', 'Notion', 'Firecrawl', 'GitHub', 'Slack']);
+    expect(names([])).toEqual([
+      'Linear',
+      'Notion',
+      'Firecrawl',
+      'GitHub',
+      'Slack gateway messaging',
+    ]);
   });
 
   it('ignores unknown goal ids', () => {
-    expect(names(['not-a-goal'])).toEqual(['Linear', 'Notion', 'Firecrawl', 'GitHub', 'Slack']);
+    expect(names(['not-a-goal'])).toEqual([
+      'Linear',
+      'Notion',
+      'Firecrawl',
+      'GitHub',
+      'Slack gateway messaging',
+    ]);
   });
 
   it('shows a single goal Connect kit, then its Ask extra', () => {
     // hand-off-build prioritizes the reviewed GitHub PAT entry.
     expect(names(['hand-off-build'])).toEqual(['GitHub', 'Supabase', 'Figma', 'Context7']);
     // status-updates: Connect [Linear, Notion, Atlassian, Asana] + Ask [Slack].
-    expect(names(['status-updates'])).toEqual(['Linear', 'Notion', 'Atlassian', 'Asana', 'Slack']);
+    expect(names(['status-updates'])).toEqual([
+      'Linear',
+      'Notion',
+      'Atlassian',
+      'Asana',
+      'Slack gateway messaging',
+    ]);
   });
 
   it('merges two goals: first two Connect items of primary, then first two of secondary', () => {
@@ -138,7 +156,7 @@ describe('mergeGoalIntegrationRecs', () => {
       'Linear',
       'Atlassian',
       'Miro',
-      'Slack',
+      'Slack gateway messaging',
     ]);
   });
 
@@ -160,7 +178,7 @@ describe('mergeGoalIntegrationRecs', () => {
       'Asana',
     ]);
     // Slack (Ask) still flows through as an extra beyond the four.
-    expect(askNames(['status-updates', 'team-teammate'])).toEqual(['Slack']);
+    expect(askNames(['status-updates', 'team-teammate'])).toEqual(['Slack gateway messaging']);
   });
 
   it('discriminates connectMode: oauth / none / ask', () => {

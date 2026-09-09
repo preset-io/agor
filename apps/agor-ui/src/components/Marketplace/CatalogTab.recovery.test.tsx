@@ -40,6 +40,7 @@ const ENTRY: MCPCatalogEntry = {
 };
 
 function buildClient() {
+  const catalogRead = vi.fn(async () => ({ total: 1, limit: 1, skip: 0, data: [ENTRY] }));
   const connect = vi.fn(async () => ({
     mcp_server: {
       mcp_server_id: 'server-1',
@@ -66,7 +67,7 @@ function buildClient() {
     service: vi.fn((path: string) => {
       if (path === 'mcp-catalog') {
         return {
-          find: vi.fn(async () => ({ total: 1, limit: 1, skip: 0, data: [ENTRY] })),
+          find: catalogRead,
         };
       }
       if (path === 'mcp-catalog/readiness') {
@@ -82,7 +83,14 @@ function buildClient() {
       throw new Error(`Unexpected service ${path}`);
     }),
   } as unknown as AgorClient;
-  return { client, connect, startSession, getPrimaryTeammate, getPrimaryTeammateCandidates };
+  return {
+    client,
+    catalogRead,
+    connect,
+    startSession,
+    getPrimaryTeammate,
+    getPrimaryTeammateCandidates,
+  };
 }
 
 async function openDrawer() {
@@ -391,3 +399,41 @@ describe('explicit onboarding context', () => {
     expect(onConnected).toHaveBeenCalledExactlyOnceWith('server-1');
   });
 });
+
+it.each(['missing', 'error'] as const)(
+  'keeps the onboarding drawer mounted across %s Catalog retry',
+  async (initial) => {
+    const api = buildClient();
+    if (initial === 'missing')
+      api.catalogRead.mockResolvedValueOnce({ total: 0, limit: 1, skip: 0, data: [] });
+    else api.catalogRead.mockRejectedValueOnce(new Error('fixture catalog unavailable'));
+    render(
+      <MemoryRouter>
+        <CatalogTab
+          client={api.client}
+          connected
+          connecting={false}
+          authGeneration={1}
+          currentUser={USER}
+          context={{
+            mode: 'onboarding',
+            entryName: ENTRY.name,
+            onConnected: vi.fn(),
+            onClose: vi.fn(),
+          }}
+        />
+      </MemoryRouter>
+    );
+    const dialog = await screen.findByRole('dialog', { name: 'Catalog' });
+    const root = dialog.closest('.ant-drawer');
+    const retry = await within(dialog).findByRole('button', { name: 'Retry' });
+    fireEvent.click(retry);
+    await screen.findByText(ENTRY.benefit);
+    expect(document.querySelector('.ant-drawer')).toBe(root);
+    expect(document.querySelectorAll('.ant-drawer')).toHaveLength(1);
+    expect(api.catalogRead).toHaveBeenCalledTimes(2);
+    expect(api.connect).not.toHaveBeenCalled();
+    expect(api.startSession).not.toHaveBeenCalled();
+    expect(mockNavigate).not.toHaveBeenCalled();
+  }
+);

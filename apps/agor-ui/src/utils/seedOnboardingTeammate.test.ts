@@ -119,7 +119,9 @@ describe('seedOnboardingTeammate', () => {
     expect(initialPrompt).toContain('Rusty');
     // The selected goal's bootstrap line is threaded into the first-session prompt.
     expect(initialPrompt).toContain('Desired outcome: less shipping busywork');
-    expect(initialPrompt).toContain('- Suggested tools and connections: Slack, GitHub');
+    expect(initialPrompt).toContain(
+      '- Suggested tools and connections: Slack gateway messaging, GitHub'
+    );
     expect(initialPrompt).toContain('Read ONBOARDING.md');
     expect(initialPrompt).toContain('otherwise, read BOOTSTRAP.md');
 
@@ -257,9 +259,9 @@ describe('seedOnboardingTeammate', () => {
     // Slack keeps safe, session-scoped agency while GitHub
     // now points to the reviewed PAT-based Catalog entry.
     expect(initialPrompt).toContain(
-      'Slack MCP tool access is separate from Slack gateway messaging'
+      'Slack means gateway messaging here, not an MCP recommendation'
     );
-    expect(initialPrompt).toContain('do not offer generic connector registration');
+    expect(initialPrompt).toContain('Do not offer generic connector registration');
     expect(initialPrompt).toContain(
       'GitHub: use the reviewed Catalog entry io.github.github/github-mcp-server'
     );

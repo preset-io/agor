@@ -121,7 +121,7 @@ export function OnboardingToolRow({
           {state === 'Token required' || state === 'Sign in required' ? (
             <Tag
               id={statusId}
-              color="warning"
+              color="processing"
               style={{ alignSelf: 'flex-start', marginInlineEnd: 0 }}
             >
               {state}
@@ -141,6 +141,12 @@ export function OnboardingToolRow({
               style={{
                 paddingLeft: 0,
                 paddingInlineStart: 0,
+                // Keep the visible link one token gap below the Tag. The
+                // touch target extends below its line, not above it.
+                paddingBlock: 0,
+                border: 'none',
+                alignItems: 'flex-start',
+                lineHeight: token.lineHeightSM,
                 whiteSpace: 'normal',
                 height: 'auto',
                 minHeight: token.controlHeight,

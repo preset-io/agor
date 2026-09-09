@@ -71,10 +71,10 @@ export const ONBOARDING_INTEGRATION_RECOMMENDATIONS: Record<
 > = {
   slack: {
     id: 'slack',
-    name: 'Slack',
+    name: 'Slack gateway messaging',
     emoji: '💬',
     description:
-      'Read Slack conversations for summaries and recurring updates. Gateway messaging is configured separately.',
+      'Message a teammate through Slack. Prefer an existing gateway; creating a new one requires administrator permission.',
     setup: { surface: 'slack' },
     connectMode: 'ask',
   },

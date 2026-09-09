@@ -114,10 +114,12 @@ describe('buildTeammateBootstrapPrompt', () => {
         ONBOARDING_INTEGRATION_RECOMMENDATIONS.sentry,
       ],
     });
-    expect(prompt).toContain('- Suggested tools and connections: Slack, GitHub, Sentry');
+    expect(prompt).toContain(
+      '- Suggested tools and connections: Slack gateway messaging, GitHub, Sentry'
+    );
 
-    expect(prompt).toContain('Slack MCP tool access is separate from Slack gateway messaging');
-    expect(prompt).toContain('do not offer generic connector registration');
+    expect(prompt).toContain('Slack means gateway messaging here, not an MCP recommendation');
+    expect(prompt).toContain('Do not offer generic connector registration');
     expect(prompt).not.toContain('offer to register the official endpoint');
 
     expect(prompt).toContain(

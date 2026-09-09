@@ -149,7 +149,7 @@ function formatTeammateBootstrapPrompt(context: TeammateBootstrapPromptContext):
           break;
         case 'slack':
           lines.push(
-            '- Slack MCP tool access is separate from Slack gateway messaging. Slack MCP is not in the reviewed Catalog: it requires a registered Slack app and has no DCR. Prefer an already configured, approved server; do not offer generic connector registration, invent Catalog availability, or reuse gateway tokens for MCP.'
+            '- Slack means gateway messaging here, not an MCP recommendation. Follow the explicit gateway intent below; if absent, do not create a gateway. Slack MCP tool access is separate and not selected: it is unavailable in the reviewed Catalog because registered-client requirements remain unresolved. Do not offer generic connector registration, invent Catalog availability, or reuse gateway tokens for MCP.'
           );
           break;
         case 'connected-repository':

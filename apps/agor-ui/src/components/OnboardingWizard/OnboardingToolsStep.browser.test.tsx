@@ -59,6 +59,7 @@ function Harness({
   generation?: number;
   onConnected?: (id: string) => void;
 }) {
+  const [slackSelected, setSlackSelected] = useState(true);
   const [intent, setIntent] = useState<OnboardingSlackGatewayIntent>('prefer-existing');
   return (
     <ConfigProvider>
@@ -70,8 +71,10 @@ function Harness({
             connected
             authGeneration={generation}
             kit={[recs.github, recs.linear, recs.slack]}
-            isSelected={() => true}
-            onToggle={() => {}}
+            isSelected={(id) => id !== 'slack' || slackSelected}
+            onToggle={(id) => {
+              if (id === 'slack') setSlackSelected((value) => !value);
+            }}
             onConnected={onConnected}
             gatewayIntent={intent}
             onGatewayIntent={setIntent}
@@ -99,6 +102,84 @@ async function openTool(title: string) {
 }
 
 describe('onboarding Slack and authority boundaries in Chromium', () => {
+  it('resolves loading in one persistent drawer without a second portal, opening animation or focus reset', async () => {
+    const api = apiFor();
+    const find = vi.mocked(api.client.service('mcp-catalog').find);
+    const result = await find();
+    let resolve!: (value: typeof result) => void;
+    find.mockImplementationOnce(
+      () =>
+        new Promise((done) => {
+          resolve = done;
+        })
+    );
+    const pushState = vi.spyOn(window.history, 'pushState');
+    render(<Harness api={api} />);
+    const action = screen.getByRole('button', { name: 'Sign in through Catalog for GitHub' });
+    await userEvent.click(action);
+    const loading = await screen.findByRole('dialog', { name: 'Catalog' });
+    const root = loading.closest('.ant-drawer')!;
+    const wrapper = loading.closest('.ant-drawer-content-wrapper')!;
+    await waitFor(() => {
+      expect(loading.getBoundingClientRect().right).toBeCloseTo(window.innerWidth, 1);
+      expect(wrapper.getAnimations().some((animation) => animation.playState === 'running')).toBe(
+        false
+      );
+    });
+    const cancel = within(loading).getByRole('button', { name: 'Close' });
+    cancel.focus();
+    const mounts: Element[] = [];
+    const observer = new MutationObserver((records) => {
+      for (const record of records)
+        for (const node of record.addedNodes) {
+          if (
+            node instanceof Element &&
+            (node.matches('.ant-drawer') || node.querySelector('.ant-drawer'))
+          )
+            mounts.push(node);
+        }
+    });
+    observer.observe(document.body, { childList: true, subtree: true });
+    resolve(result);
+    await screen.findByPlaceholderText('Paste your GitHub bearer access token');
+    expect(document.querySelectorAll('.ant-drawer')).toHaveLength(1);
+    expect(document.querySelector('.ant-drawer')).toBe(root);
+    expect(document.querySelector('.ant-drawer-content-wrapper')).toBe(wrapper);
+    expect(wrapper.getAnimations()).toHaveLength(0);
+    expect(cancel).toHaveFocus();
+    expect(mounts).toHaveLength(0);
+    observer.disconnect();
+    expect(pushState).not.toHaveBeenCalled();
+    expect(api.client.service('mcp-catalog/start-session').create).not.toHaveBeenCalled();
+    expect(api.client.service('users').getPrimaryTeammateCandidates).not.toHaveBeenCalled();
+    await userEvent.click(cancel);
+    await waitFor(() => expect(action).toHaveFocus());
+  });
+  it.each(['missing', 'error'] as const)(
+    'retries %s Catalog locally in the same drawer',
+    async (initial) => {
+      const api = apiFor();
+      const find = vi.mocked(api.client.service('mcp-catalog').find);
+      if (initial === 'missing')
+        find.mockResolvedValueOnce({ data: [], total: 0, limit: 1, skip: 0 });
+      else find.mockRejectedValueOnce(new Error('fixture unavailable'));
+      render(<Harness api={api} />);
+      await userEvent.click(
+        screen.getByRole('button', { name: 'Sign in through Catalog for GitHub' })
+      );
+      const dialog = await screen.findByRole('dialog', { name: 'Catalog' });
+      const root = dialog.closest('.ant-drawer');
+      const wrapper = dialog.closest('.ant-drawer-content-wrapper');
+      await userEvent.click(await within(dialog).findByRole('button', { name: 'Retry' }));
+      await screen.findByPlaceholderText('Paste your GitHub bearer access token');
+      expect(document.querySelector('.ant-drawer')).toBe(root);
+      expect(document.querySelector('.ant-drawer-content-wrapper')).toBe(wrapper);
+      expect(document.querySelectorAll('.ant-drawer')).toHaveLength(1);
+      expect(find).toHaveBeenCalledTimes(2);
+      expect(api.connect).not.toHaveBeenCalled();
+      expect(api.client.service('mcp-catalog/start-session').create).not.toHaveBeenCalled();
+    }
+  );
   it('prefers the usable existing gateway without exposing duplicate creation', async () => {
     const api = apiFor([existing]);
     render(<Harness api={api} />);
@@ -108,6 +189,18 @@ describe('onboarding Slack and authority boundaries in Chromium', () => {
     ).not.toBeInTheDocument();
     expect(screen.getByTestId('gateway-intent')).toHaveTextContent('prefer-existing');
     expect(api.connect).not.toHaveBeenCalled();
+    const list = screen.getByRole('list', { name: 'Suggested MCP tools' });
+    expect(within(list).queryByText(/Slack/)).not.toBeInTheDocument();
+    expect(screen.getAllByRole('checkbox', { name: /Suggest Slack/ })).toHaveLength(1);
+    expect(
+      screen.getByRole('checkbox', { name: 'Suggest Slack gateway messaging to my teammate' })
+    ).toBeChecked();
+    expect(
+      screen.queryByRole('checkbox', { name: 'Suggest Slack to my teammate' })
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByText(/Slack MCP tool access is not available.*not selected/)
+    ).toBeInTheDocument();
   });
   it('exposes new-gateway intent only for an authorized admin, never creates one on selection', async () => {
     const api = apiFor();
@@ -116,6 +209,12 @@ describe('onboarding Slack and authority boundaries in Chromium', () => {
       await screen.findByRole('checkbox', { name: /create a new Slack gateway/ })
     );
     expect(screen.getByTestId('gateway-intent')).toHaveTextContent('request-new');
+    await userEvent.click(
+      screen.getByRole('checkbox', { name: 'Suggest Slack gateway messaging to my teammate' })
+    );
+    expect(screen.getByTestId('gateway-intent')).toHaveTextContent('prefer-existing');
+    expect(screen.getByRole('checkbox', { name: /create a new Slack gateway/ })).toBeDisabled();
+    expect(screen.getByRole('checkbox', { name: /create a new Slack gateway/ })).not.toBeChecked();
     expect(api.client.service('gateway-channels').create).not.toHaveBeenCalled();
     expect(api.connect).not.toHaveBeenCalled();
   });

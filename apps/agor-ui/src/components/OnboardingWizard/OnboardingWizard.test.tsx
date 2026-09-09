@@ -1566,14 +1566,16 @@ describe('OnboardingWizard', () => {
     expect(emitted).toContain('Linear');
     expect(onComplete.mock.calls[0][0].catalogEntryName).toBeUndefined();
     // Untouched suggestions are retained.
-    expect(emitted).toEqual(expect.arrayContaining(['Slack', 'GitHub']));
+    expect(emitted).toEqual(expect.arrayContaining(['Slack gateway messaging', 'GitHub']));
   });
 
   it('honors deselecting the teammate-assisted Slack recommendation', async () => {
     const onComplete = vi.fn();
     renderWizard({ onComplete, initialStep: 'tools', user: makeUser({ role: 'admin' }) });
 
-    const askRow = screen.getByRole('checkbox', { name: 'Suggest Slack to my teammate' });
+    const askRow = screen.getByRole('checkbox', {
+      name: 'Suggest Slack gateway messaging to my teammate',
+    });
     fireEvent.click(askRow as HTMLButtonElement);
 
     clickButton(/^continue →/i); // tools → done
@@ -1583,7 +1585,8 @@ describe('OnboardingWizard', () => {
     const emitted = (onComplete.mock.calls[0][0].suggestedIntegrations ?? []).map(
       (rec: { name: string }) => rec.name
     );
-    expect(emitted).not.toContain('Slack');
+    expect(emitted).not.toContain('Slack gateway messaging');
+    expect(onComplete.mock.calls[0][0].slackGatewayIntent).toBeUndefined();
     expect(emitted).toContain('GitHub');
   });
 

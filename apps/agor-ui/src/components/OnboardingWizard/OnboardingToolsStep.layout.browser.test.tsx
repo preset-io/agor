@@ -112,11 +112,26 @@ describe('Kasia-derived MCP rows — real layout', () => {
       expect(getComputedStyle(action).fontSize).toBe(getComputedStyle(description).fontSize);
       expect(action.getBoundingClientRect().height).toBeGreaterThanOrEqual(32);
       const state = document.getElementById(stateId)!;
-      expect(state).toHaveClass('ant-tag', 'ant-tag-warning');
+      expect(state).toHaveClass('ant-tag', 'ant-tag-processing');
       expect(state).toHaveTextContent(/Token required|Sign in required/);
       expect(getComputedStyle(state).fontSize).toBe(getComputedStyle(description).fontSize);
       expect(state.getBoundingClientRect().left).toBe(description.getBoundingClientRect().left);
       expect(state.getBoundingClientRect().width).toBeLessThan(row.clientWidth);
+      // Compare visible text lines, not just Flex's equal outer gaps. The
+      // former centered 32px action added an extra blank half-target above it.
+      const textBounds = (element: Element) => {
+        const range = document.createRange();
+        range.selectNodeContents(element);
+        return range.getBoundingClientRect();
+      };
+      const descriptionBounds = textBounds(description);
+      const actionBounds = textBounds(action.querySelector('span')!);
+      const tagBounds = state.getBoundingClientRect();
+      expect(tagBounds.top - descriptionBounds.bottom).toBeCloseTo(
+        actionBounds.top - tagBounds.bottom,
+        1
+      );
+      expect(getComputedStyle(action).paddingTop).toBe('0px');
       expect(action).toHaveAccessibleDescription(/Token required|Sign in required/);
       expect(Number(getComputedStyle(heading.querySelector('strong')!).fontWeight)).toBeGreaterThan(
         Number(getComputedStyle(description).fontWeight)

@@ -91,7 +91,7 @@ function drawerSpacing(dialog: HTMLElement) {
   const content = body.firstElementChild as HTMLElement;
   const disclosure = within(dialog).getByRole('button', { name: 'What this can access' });
   const sections = disclosure.parentElement!;
-  const sectionBody = sections.querySelector<HTMLElement>('[id]')!;
+  const sectionBody = sections.querySelector<HTMLElement>('.ant-collapse-body')!;
   const connect = within(dialog).getByRole('button', {
     name: 'Connect',
   });

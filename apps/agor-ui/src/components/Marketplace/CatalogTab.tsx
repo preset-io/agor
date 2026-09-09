@@ -31,7 +31,6 @@ import { stagePromptDraftSeed } from '../../utils/promptDrafts';
 import { type MCPServerCapabilityContext, policyPendingState } from '../MCPServer/memberPolicy';
 import { CatalogCard } from './CatalogCard';
 import { CatalogDetailDrawer } from './CatalogDetailDrawer';
-import { CatalogDrawer } from './CatalogDrawer';
 import { CatalogToolbar } from './CatalogToolbar';
 import { DEFAULT_SORT } from './catalogPresentation';
 import {
@@ -446,10 +445,12 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
       status !== 'ready'
     )
       return;
-    handoffConsumed.current = true;
     const entry = allEntries.find((item) => item.name === onboarding.entryName);
-    if (entry) openEntry(entry);
-    // Removed entries remain an ordinary browse surface, never a guessed endpoint.
+    if (entry) {
+      handoffConsumed.current = true;
+      openEntry(entry);
+    }
+    // A missing entry may become available after Retry; never guess an endpoint.
   }, [onboarding, active, connectionReady, status, allEntries, openEntry]);
 
   const restoreDrawerFocus = useCallback((trigger: HTMLElement | null) => {
@@ -754,24 +755,6 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
 
   const drawers = (
     <>
-      {onboarding && !selected && (
-        <CatalogDrawer open title="Catalog" onClose={onboarding.onClose}>
-          {status === 'loading' ? (
-            <Skeleton active aria-label="Loading Catalog" />
-          ) : (
-            <Alert
-              type="warning"
-              title={
-                status === 'error'
-                  ? 'Could not load Catalog'
-                  : 'This tool is not currently in Catalog'
-              }
-              action={<Button onClick={retry}>Retry</Button>}
-            />
-          )}
-          <Button onClick={onboarding.onClose}>Return to onboarding</Button>
-        </CatalogDrawer>
-      )}
       <CatalogDetailDrawer
         mode={onboarding ? 'onboarding' : 'catalog'}
         onRetryConnection={() => {
@@ -782,7 +765,27 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
         }}
         identityKey={currentUser?.user_id ?? null}
         entry={selected}
-        open={selected !== null}
+        open={Boolean(onboarding) || selected !== null}
+        emptyContent={
+          onboarding && (
+            <>
+              {status === 'loading' ? (
+                <Skeleton active aria-label="Loading Catalog" />
+              ) : (
+                <Alert
+                  type="warning"
+                  title={
+                    status === 'error'
+                      ? 'Could not load Catalog'
+                      : 'This tool is not currently in Catalog'
+                  }
+                  action={<Button onClick={retry}>Retry</Button>}
+                />
+              )}
+              <Button onClick={onboarding.onClose}>Return to onboarding</Button>
+            </>
+          )
+        }
         onClose={closeDrawer}
         onAfterOpenChange={handleDrawerOpenChange}
         teammates={sessionTeammates.teammates}

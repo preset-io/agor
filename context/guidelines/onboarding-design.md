@@ -255,7 +255,7 @@ use one disabled draft and the secure gateway token widget before enabling.
 Slack MCP is absent from Catalog because its official endpoint has no DCR and
 requires a registered internal/approved confidential app. Do not re-add an
 unusable entry, offer generic registration, or use gateway tokens for MCP.
-Expose truthful availability and existing approved MCP settings instead.
+Present one deselectable Slack gateway messaging goal, not an actionable or preselected Slack MCP row. Keep MCP availability as non-selected information only. Deselecting the gateway goal clears new-gateway intent. A gateway does not provide Slack history/tool access, even when the broader goal mentions digests.
 
 ## Tools row visual provenance
 
@@ -275,18 +275,27 @@ neutral Agor fallback. Read readiness with the existing caller-scoped Catalog
 hook, never infer authorization from a selected row. Link/text actions in the
 step and its onboarding Catalog drawer have zero left padding.
 
-Auth requirements use Agor's outlined `Tag` with semantic `warning` color,
-matching MCP's existing authentication-needed convention. The Catalog text
+Auth requirements use Agor's outlined `Tag` with the established info tone
+(`processing` in AntD), not a warning. The Catalog text
 action uses the same `fontSizeSM` as the description, with a standard
 `controlHeight` minimum target and zero left padding; typography must not shrink
-the keyboard/touch target.
+the keyboard/touch target. Align the action text at the top of that target so
+description→Tag and Tag→action have equal visible spacing; do not center the
+text inside extra padding above the line.
 
 The onboarding auth flow reuses `CatalogTab` and `CatalogDetailDrawer` directly;
 it is not a visually reimplemented auth drawer. `CatalogDrawer` is their shared
-presentation seam for detail/auth, pre-selection loading/error, and Slack
-availability: one 520px responsive AntD drawer, default header/body padding,
+presentation seam for detail/auth and Slack availability. CatalogDetailDrawer
+owns one persistent instance from pre-selection loading/error through content: one 520px responsive AntD drawer, default header/body padding,
 token-spaced body flow, and no separate footer padding. Onboarding returns only
 these drawers, not an empty Catalog grid wrapper. Disclosure and auth form spacing belong to the shared detail component, extracted
 from #2715’s actual drawer implementation. Onboarding supplies a connection-only
 mode and Return callback, not spacing overrides or a destination selector. Real-browser parity tests compare
 both entry points for token and OAuth setup at all four supported viewports.
+
+Disclosure layout uses the parent-owned `CatalogDetailSection` AntD Collapse,
+not a text button subject to the flush-action rule. Historical pre-tryout
+`364c5311` (#2565) / `9dbfec95` spacing is `paddingSM` on the header and `padding`
+on the body. AntD owns arrow alignment; Enter and Space toggle only the header,
+never intercepting keys in consent or credential controls. Loading must not
+mount another portal, retrigger opening motion, or move focus on entry resolve.
