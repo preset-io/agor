@@ -1,6 +1,6 @@
 import type { AgorClient, User } from '@agor-live/client';
 import { hasMinimumRole, ROLES } from '@agor-live/client';
-import { Alert, Button, Card, Checkbox, Drawer, Flex, Spin, Typography } from 'antd';
+import { Alert, Button, Card, Checkbox, Drawer, Flex, Spin, Typography, theme } from 'antd';
 import { useEffect, useRef, useState } from 'react';
 import type { OnboardingIntegrationRecommendation } from '../../utils/onboardingGoals';
 import {
@@ -8,7 +8,7 @@ import {
   readOnboardingSlackGateways,
 } from '../../utils/onboardingSlack';
 import { CatalogTab } from '../Marketplace/CatalogTab';
-import { McpLogo } from '../McpLogo';
+import { OnboardingToolRow } from './OnboardingToolRow';
 
 interface Props {
   client: AgorClient | null;
@@ -25,6 +25,7 @@ interface Props {
 }
 
 function ToolsForIdentity(props: Props) {
+  const { token } = theme.useToken();
   const {
     client,
     user,
@@ -72,45 +73,29 @@ function ToolsForIdentity(props: Props) {
   };
   return (
     <Flex vertical gap="small">
-      <Typography.Paragraph type="secondary">
+      <Typography.Paragraph type="secondary" style={{ fontSize: token.fontSizeSM }}>
         Connect tools here without leaving setup. Connections are optional. Each Connect saves a
         tool session in your teammate workspace; Back and Skip do not delete saved connections.
       </Typography.Paragraph>
-      {kit.map((rec) => (
-        <Card
-          key={rec.id}
-          size="small"
-          title={
-            <Flex align="center" gap="small">
-              <McpLogo id={rec.id} name={rec.name} size={20} />
-              {rec.id === 'slack' ? 'Slack MCP' : rec.name}
-            </Flex>
-          }
-          extra={
-            <Checkbox
-              aria-label={`Suggest ${rec.name} to my teammate`}
-              checked={isSelected(rec.id)}
-              onChange={() => onToggle(rec.id)}
-            />
-          }
-        >
-          <Typography.Paragraph type="secondary">{rec.description}</Typography.Paragraph>
-          <Button
-            type="link"
-            onClick={(event) => {
+      <Flex vertical role="list" aria-label="Suggested MCP tools" gap={token.marginXS}>
+        {kit.map((rec) => (
+          <OnboardingToolRow
+            key={rec.id}
+            recommendation={rec}
+            client={client}
+            userId={user?.user_id}
+            connected={connected}
+            authGeneration={authGeneration}
+            selected={isSelected(rec.id)}
+            onToggle={() => onToggle(rec.id)}
+            onOpen={(event) => {
               trigger.current = event.currentTarget;
               if (rec.setup.surface === 'marketplace') setEntry(rec.setup.catalogEntryName);
               else if (rec.id === 'slack') setSlackOpen(true);
             }}
-          >
-            {rec.id === 'slack'
-              ? 'Slack MCP availability'
-              : rec.connectMode === 'none'
-                ? 'Connect through Catalog'
-                : 'Sign in through Catalog'}
-          </Button>
-        </Card>
-      ))}
+          />
+        ))}
+      </Flex>
       {hasSlack && (
         <Card size="small" title="Slack gateway messaging">
           <Typography.Paragraph>

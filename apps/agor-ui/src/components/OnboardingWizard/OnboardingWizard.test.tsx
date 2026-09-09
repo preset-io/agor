@@ -102,7 +102,7 @@ function renderWizard(
     service: vi.fn((name: string) => {
       if (name === 'boards') return boardsService;
       if (name === 'users') return usersService;
-      return {};
+      return { on: vi.fn(), off: vi.fn(), get: vi.fn(async () => ({ state: 'no_auth' })) };
     }),
   };
   const onCreateRepo = vi.fn(async () => undefined);
@@ -768,7 +768,7 @@ describe('OnboardingWizard', () => {
       service: vi.fn((name: string) => {
         if (name === 'boards') return boardsService;
         if (name === 'users') return { get: vi.fn(async () => user) };
-        return {};
+        return { on: vi.fn(), off: vi.fn(), get: vi.fn(async () => ({ state: 'no_auth' })) };
       }),
     };
 
@@ -800,7 +800,7 @@ describe('OnboardingWizard', () => {
       service: vi.fn((name: string) => {
         if (name === 'boards') return boardsService;
         if (name === 'users') return usersService;
-        return {};
+        return { on: vi.fn(), off: vi.fn(), get: vi.fn(async () => ({ state: 'no_auth' })) };
       }),
     };
     const onComplete = vi.fn();
@@ -836,7 +836,7 @@ describe('OnboardingWizard', () => {
       service: vi.fn((name: string) => {
         if (name === 'boards') return boardsService;
         if (name === 'users') return usersService;
-        return {};
+        return { on: vi.fn(), off: vi.fn(), get: vi.fn(async () => ({ state: 'no_auth' })) };
       }),
     };
     const onUpdateUser = vi.fn(async () => undefined);
@@ -905,7 +905,7 @@ describe('OnboardingWizard', () => {
       service: vi.fn((name: string) => {
         if (name === 'boards') return boardsService;
         if (name === 'users') return usersService;
-        return {};
+        return { on: vi.fn(), off: vi.fn(), get: vi.fn(async () => ({ state: 'no_auth' })) };
       }),
     };
     const onUpdateUser = vi.fn(async () => undefined);
@@ -1591,7 +1591,7 @@ describe('OnboardingWizard', () => {
     renderWizard({ initialStep: 'tools', user: makeUser({ role: 'member' }) });
     expect(screen.getByText('Choose your tools')).toBeInTheDocument();
     expect(screen.getByRole('checkbox', { name: 'Suggest Linear to my teammate' })).toBeChecked();
-    expect(screen.getAllByRole('button', { name: 'Sign in through Catalog' })[0]).toBeEnabled();
+    expect(screen.getAllByRole('button', { name: /^Sign in through Catalog/ })[0]).toBeEnabled();
     expect(screen.getByText(/Connections are optional/i)).toBeInTheDocument();
     expect(screen.queryByRole('textbox')).not.toBeInTheDocument();
   });
@@ -1664,7 +1664,7 @@ describe('OnboardingWizard', () => {
     clickButton(/^continue/i);
     await findAndClickButton(/skip for now/i);
     clickButton(/skip for now/i);
-    expect(screen.getAllByRole('button', { name: 'Sign in through Catalog' })).toHaveLength(4);
+    expect(screen.getAllByRole('button', { name: /^Sign in through Catalog/ })).toHaveLength(4);
     expect(onComplete).not.toHaveBeenCalled();
     clickButton(/^continue/i);
     clickButton(/open my board/i);
@@ -1682,7 +1682,11 @@ describe('Codex ChatGPT login import', () => {
     const client = {
       io: { on: vi.fn(), off: vi.fn() },
       service: vi.fn((name: string) =>
-        name === 'boards' ? boardsService : name === 'codex-auth/import' ? { create } : {}
+        name === 'boards'
+          ? boardsService
+          : name === 'codex-auth/import'
+            ? { create }
+            : { on: vi.fn(), off: vi.fn(), get: vi.fn(async () => ({ state: 'no_auth' })) }
       ),
     };
     const rendered = renderWizard({ initialStep: 'llm', client: client as never });
@@ -1829,7 +1833,15 @@ describe('Codex ChatGPT device sign-in', () => {
     const client = {
       io: { on: vi.fn(), off: vi.fn() },
       service: vi.fn((name: string) =>
-        name === 'codex-auth/device' ? { create, find } : { create: vi.fn(), find: vi.fn() }
+        name === 'codex-auth/device'
+          ? { create, find }
+          : {
+              create: vi.fn(),
+              find: vi.fn(),
+              on: vi.fn(),
+              off: vi.fn(),
+              get: vi.fn(async () => ({ state: 'no_auth' })),
+            }
       ),
     };
     const rendered = renderWizard({ initialStep: 'llm', client: client as never });

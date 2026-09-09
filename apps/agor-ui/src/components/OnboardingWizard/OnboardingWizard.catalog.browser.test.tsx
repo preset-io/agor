@@ -71,7 +71,7 @@ async function click(name: RegExp | string) {
 }
 async function openGitHub() {
   const card = screen.getByText('GitHub').closest<HTMLElement>('.ant-card')!;
-  await userEvent.click(within(card).getByRole('button', { name: 'Sign in through Catalog' }));
+  await userEvent.click(within(card).getByRole('button', { name: /^Sign in through Catalog/ }));
   const input = await screen.findByPlaceholderText('Paste your GitHub bearer access token');
   return { input, drawer: within(input.closest<HTMLElement>('[role="dialog"]')!) };
 }
@@ -86,6 +86,12 @@ describe('onboarding-owned Catalog in Chromium', () => {
     await waitFor(() =>
       expect(screen.getByRole('heading', { name: 'Choose your tools' })).toHaveFocus()
     );
+    for (const name of [/Back$/, /Skip for now/, /^Continue/]) {
+      const button = screen.getByRole('button', { name });
+      const rect = button.getBoundingClientRect();
+      expect(rect.left).toBeGreaterThanOrEqual(0);
+      expect(rect.right).toBeLessThanOrEqual(window.innerWidth);
+    }
     const suggestion = screen.getByRole('checkbox', { name: 'Suggest GitHub to my teammate' });
     suggestion.focus();
     await userEvent.keyboard(' ');
@@ -97,6 +103,11 @@ describe('onboarding-owned Catalog in Chromium', () => {
     ).not.toBeChecked();
     const { input, drawer } = await openGitHub();
     expect(input).toHaveAttribute('type', 'password');
+    for (const action of document.querySelectorAll<HTMLElement>(
+      '.ant-modal .ant-btn-text, .ant-modal .ant-btn-link, .ant-drawer .ant-btn-text, .ant-drawer .ant-btn-link'
+    )) {
+      expect(getComputedStyle(action).paddingLeft).toBe('0px');
+    }
     await waitFor(() => {
       const rect = input.getBoundingClientRect();
       expect(rect.left).toBeGreaterThanOrEqual(0);
@@ -121,7 +132,7 @@ describe('onboarding-owned Catalog in Chromium', () => {
     await waitFor(() =>
       expect(
         within(screen.getByText('GitHub').closest<HTMLElement>('.ant-card')!).getByRole('button', {
-          name: 'Sign in through Catalog',
+          name: /^Sign in through Catalog/,
         })
       ).toHaveFocus()
     );

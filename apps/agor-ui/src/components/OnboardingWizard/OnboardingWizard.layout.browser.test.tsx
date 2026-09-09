@@ -65,7 +65,7 @@ function renderWizardAt(
     service: vi.fn((name: string) => {
       if (name === 'boards') return boardsService;
       if (name === 'users') return { get: vi.fn(async () => user) };
-      return {};
+      return { on: vi.fn(), off: vi.fn(), get: vi.fn(async () => ({ state: 'no_auth' })) };
     }),
   };
   const props = {
@@ -115,7 +115,7 @@ describe('OnboardingWizard layout (real browser)', () => {
       service: vi.fn((name: string) => {
         if (name === 'boards') return boardsService;
         if (name === 'users') return usersService;
-        return {};
+        return { on: vi.fn(), off: vi.fn(), get: vi.fn(async () => ({ state: 'no_auth' })) };
       }),
     };
     const onUpdateUser = vi.fn(async () => undefined);

@@ -52,11 +52,23 @@ export const McpLogo: React.FC<McpLogoProps> = ({ id, name, size = 20, color }) 
   const { token } = theme.useToken();
   const tint = color ?? token.colorTextSecondary;
   const label = name ? `${name} logo` : 'MCP logo';
-  const path = mcpLogoPaths[id];
+  const path = Object.hasOwn(mcpLogoPaths, id) ? mcpLogoPaths[id] : undefined;
 
   if (!path) {
     return (
-      <ApiOutlined aria-label={label} style={{ fontSize: size, color: tint, flexShrink: 0 }} />
+      <ApiOutlined
+        aria-label={label}
+        style={{
+          width: size,
+          height: size,
+          display: 'inline-flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          fontSize: size,
+          color: tint,
+          flexShrink: 0,
+        }}
+      />
     );
   }
 
@@ -65,6 +77,7 @@ export const McpLogo: React.FC<McpLogoProps> = ({ id, name, size = 20, color }) 
       role="img"
       aria-label={label}
       viewBox="0 0 24 24"
+      preserveAspectRatio="xMidYMid meet"
       width={size}
       height={size}
       fill="currentColor"

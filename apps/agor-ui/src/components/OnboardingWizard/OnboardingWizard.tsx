@@ -2185,6 +2185,8 @@ export function OnboardingWizard({
         display: 'flex',
         justifyContent: 'space-between',
         alignItems: 'center',
+        flexWrap: 'wrap',
+        gap: token.marginXS,
         padding: '14px clamp(16px, 4.4vw, 32px)',
         boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.07)',
         position: 'relative',
@@ -2204,7 +2206,7 @@ export function OnboardingWizard({
           </Button>
         )}
       </div>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+      <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: token.marginXS }}>
         {isSkippable && (
           <Button
             type="link"
@@ -2289,8 +2291,8 @@ export function OnboardingWizard({
               icon={<CloseOutlined style={{ fontSize: 12 }} />}
               style={{
                 position: 'absolute',
-                top: 16,
-                right: 16,
+                top: 0,
+                right: 0,
                 zIndex: 10,
                 background:
                   'linear-gradient(135deg, rgba(255,255,255,0.1) 0%, rgba(255,255,255,0.05) 100%)',
@@ -2300,6 +2302,7 @@ export function OnboardingWizard({
                 borderRadius: 8,
                 width: 30,
                 height: 30,
+                paddingLeft: 0,
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',

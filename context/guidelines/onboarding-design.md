@@ -250,3 +250,21 @@ Slack MCP is absent from Catalog because its official endpoint has no DCR and
 requires a registered internal/approved confidential app. Do not re-add an
 unusable entry, offer generic registration, or use gateway tokens for MCP.
 Expose truthful availability and existing approved MCP settings instead.
+
+## Tools row visual provenance
+
+Use Kasia's `renderIntegrations` in commit
+`637d38a712eca0c48ae510c0a5bcfa8c3c913243` (#2293, lines 1648–1708)
+as the primary visual reference: one full-width row per provider, aligned
+20px monochrome `McpLogo`, semibold name, smaller secondary description. The
+original #2651 `c5c901ba975ecdb697f075c5072c480d999a520b` reintroduced a
+two-column grid; do not restore that grid. Map the earlier 13px/12px hierarchy
+to current `fontSize`/`fontSizeSM` tokens rather than copying literal styles.
+
+Rows use standard AntD Card/Flex/Typography, not bespoke glass CSS. Names and
+descriptions wrap (including long unbroken names); action labels retain the
+full provider name and describe the purpose/current Catalog readiness. Inline
+SVG marks avoid remote-image/CSP failures; missing marks use the same fixed-size
+neutral Agor fallback. Read readiness with the existing caller-scoped Catalog
+hook, never infer authorization from a selected row. Link/text actions in the
+step and its onboarding Catalog drawer have zero left padding.

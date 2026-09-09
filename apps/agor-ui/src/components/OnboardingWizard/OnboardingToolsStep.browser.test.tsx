@@ -87,7 +87,7 @@ function Harness({
 }
 async function openTool(title: string) {
   const card = screen.getByText(title).closest<HTMLElement>('.ant-card')!;
-  await userEvent.click(within(card).getByRole('button', { name: 'Sign in through Catalog' }));
+  await userEvent.click(within(card).getByRole('button', { name: /^Sign in through Catalog/ }));
   return within(await screen.findByRole('dialog', { name: new RegExp(title) }));
 }
 
