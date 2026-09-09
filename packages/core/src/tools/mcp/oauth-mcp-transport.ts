@@ -8,6 +8,7 @@
 
 import crypto from 'node:crypto';
 import http from 'node:http';
+import { OAuthDCRFailure } from '@agor/core/tools/mcp/oauth-dcr-error';
 import { z } from 'zod';
 import type {
   MCPOAuthClientRegistrationID,
@@ -19,6 +20,8 @@ import { assertSafeOAuthUrl, safeOutboundFetch } from '../../utils/safe-outbound
 import { asMCPExternalError } from './external-error.js';
 import type { OAuthTokenResponse } from './oauth-auth.js';
 import { resolveTokenExpiry } from './oauth-token-expiry.js';
+
+export { getOAuthDCRDiagnostic, OAuthDCRFailure } from '@agor/core/tools/mcp/oauth-dcr-error';
 
 export interface OAuthMetadata {
   /** RFC 9728 says string; marketplace compatibility also recognizes one observed singleton array. */
@@ -127,23 +130,6 @@ export class OAuthCallbackValidationError extends Error {
   }
 }
 
-/**
- * A safe, actionable Dynamic Client Registration failure.
- *
- * The diagnostic is intentionally structured so daemon/UI callers do not need
- * to parse provider response text. Only closed diagnostic fields are carried;
- * response bodies and registration credentials are never retained.
- */
-export class OAuthDCRFailure extends Error {
-  constructor(
-    message: string,
-    readonly diagnostic: MCPOAuthDCRDiagnostic
-  ) {
-    super(message);
-    this.name = 'OAuthDCRFailure';
-  }
-}
-
 /** Stable classification for OAuth discovery/configuration policy failures. */
 export class OAuthConfigurationError extends Error {
   constructor(
@@ -153,7 +139,8 @@ export class OAuthConfigurationError extends Error {
       | 'endpoint_override_mismatch'
       | 'issuer_mismatch'
       | 'pkce_required'
-      | 'client_registration_required',
+      | 'client_registration_required'
+      | 'provider_setup_required',
     message = `OAuth configuration failed (${failureCode})`
   ) {
     super(message);
@@ -585,43 +572,49 @@ function validateDynamicClientRegistration(
   const parsed = dynamicClientRegistrationSchema.safeParse(responseBody);
   if (!parsed.success) {
     throw registrationFailure(
-      diagnostic,
+      { ...diagnostic, reason: 'registration_response_invalid' },
       'Dynamic Client Registration returned an invalid response'
     );
   }
   const result: DynamicClientRegistrationResponse = parsed.data;
   if (!result.redirect_uris?.includes(redirectUri)) {
     throw registrationFailure(
-      diagnostic,
+      { ...diagnostic, reason: 'registration_redirect_mismatch' },
       'Dynamic Client Registration did not bind the required redirect URI'
     );
   }
-  // A returned secret is authoritative even when the provider echoes `none`.
-  // The token exchange routes any present secret through HTTP Basic.
-  const authMethod = result.client_secret
-    ? 'client_secret_basic'
-    : (result.token_endpoint_auth_method ?? 'none');
+  // Preserve the reviewed confidential-client response that echoes `none`,
+  // but never ignore an explicit alternative method (e.g. client_secret_post).
+  // Exchange and refresh currently support Basic only; method propagation is
+  // separate work, not permission to send a credential using the wrong method.
+  const declaredMethod = result.token_endpoint_auth_method;
+  const authMethod =
+    !declaredMethod || declaredMethod === 'none'
+      ? result.client_secret
+        ? 'client_secret_basic'
+        : 'none'
+      : declaredMethod;
   if (!['none', 'client_secret_basic'].includes(authMethod)) {
     throw registrationFailure(
-      diagnostic,
+      { ...diagnostic, reason: 'registration_auth_method_unsupported' },
       'Dynamic Client Registration returned an unsupported token auth method'
     );
   }
   if (authMethod === 'client_secret_basic' && !result.client_secret) {
     throw registrationFailure(
-      diagnostic,
+      { ...diagnostic, reason: 'registration_secret_missing' },
       'Dynamic Client Registration omitted the required client secret'
     );
   }
   if (result.grant_types && !result.grant_types.includes('authorization_code')) {
     throw registrationFailure(
-      diagnostic,
+      { ...diagnostic, reason: 'registration_grant_unsupported' },
       'Dynamic Client Registration did not enable the authorization-code grant'
     );
   }
   if (result.response_types && !result.response_types.includes('code')) {
     throw registrationFailure(
-      diagnostic,
+      { ...diagnostic, reason: 'registration_response_type_unsupported' },
       'Dynamic Client Registration did not enable the code response type'
     );
   }
@@ -629,7 +622,10 @@ function validateDynamicClientRegistration(
 }
 
 function missingRegistrationEndpointFailure(): OAuthDCRFailure {
-  const diagnostic: MCPOAuthDCRDiagnostic = { stage: 'dcr_endpoint_discovery' };
+  const diagnostic: MCPOAuthDCRDiagnostic = {
+    stage: 'dcr_endpoint_discovery',
+    reason: 'registration_endpoint_missing',
+  };
   return new OAuthDCRFailure(
     'OAuth client_id is required because the authorization server does not advertise a Dynamic Client Registration endpoint (stage: dcr_endpoint_discovery). The provider may require a pre-registered OAuth app. Enter the Client ID and Client Secret in Advanced — OAuth settings, then retry.',
     diagnostic
@@ -730,7 +726,19 @@ async function registerDynamicClient(
   assertCurrent?.();
 
   if (!response.ok) {
-    throw registrationFailure(registrationDiagnostic(response.status, registrationEndpointSource));
+    // RFC 7591 section 3.2.2 has two standardized error codes. Never retain
+    // error_description, arbitrary codes, bodies, or URLs in an exception.
+    const body: unknown = await response.json().catch(() => null);
+    assertCurrent?.();
+    const code = body && typeof body === 'object' && 'error' in body ? body.error : undefined;
+    const reason =
+      code === 'invalid_redirect_uri' || code === 'invalid_client_metadata'
+        ? code
+        : 'registration_rejected';
+    throw registrationFailure({
+      ...registrationDiagnostic(response.status, registrationEndpointSource),
+      reason,
+    });
   }
 
   const diagnostic = registrationDiagnostic(response.status, registrationEndpointSource);
@@ -1645,6 +1653,7 @@ async function resolveOAuthClient(options: {
     if (error instanceof OAuthDCRFailure) throw error;
     throw registrationFailure({
       stage: 'dcr_registration',
+      reason: 'registration_transport_failed',
       registration_endpoint_source: registrationEndpointSource,
     });
   }

@@ -1,3 +1,5 @@
+import { loadCuratedCatalog } from '../../../../packages/core/src/mcp-catalog/curated-loader';
+import { OAUTH_PROVIDER_FIXTURES } from '../../../../packages/core/src/tools/mcp/oauth-provider.test-fixtures';
 /**
  * Marketplace connect: what the endpoint derives from the catalog rather than
  * from its caller, and what it refuses.
@@ -354,7 +356,9 @@ function buildApp(
     },
   };
   const deps: {
-    readGrantResourceUri: ReturnType<typeof vi.fn>;
+    readGrantResourceUri: ReturnType<
+      typeof vi.fn<(serverId: string) => Promise<string | undefined>>
+    >;
     runInTenantDatabaseScope: MCPCatalogConnectDeps['runInTenantDatabaseScope'];
     listCandidates: (
       userId: UserID,
@@ -404,7 +408,7 @@ function buildApp(
         enabled: true,
         created_at: new Date(0),
         updated_at: new Date(0),
-        ...(server as unknown as MCPServer),
+        ...(server as unknown as Partial<MCPServer> & Pick<MCPServer, 'mcp_server_id'>),
         headers: Object.keys((server.headers as Record<string, string> | undefined) ?? {}).length
           ? { __configured__: MCP_HEADER_REDACTED_SENTINEL }
           : {},
@@ -467,7 +471,7 @@ const request = {
 };
 
 /** Typed access to the stub services a test needs to make fail. */
-type StubFn = ReturnType<typeof vi.fn>;
+type StubFn = ReturnType<typeof vi.fn<(...args: unknown[]) => unknown>>;
 const serversOf = (app: { service: (p: string) => unknown }) =>
   app.service('mcp-servers') as {
     find: StubFn;
@@ -496,6 +500,32 @@ describe('stateful mcp-servers.find harness', () => {
 });
 
 describe('mcp-catalog/connect', () => {
+  it.each(OAUTH_PROVIDER_FIXTURES)(
+    '$label requires setup before any probe, credential, generation or session side effect',
+    async ({ name }) => {
+      const entry = (await loadCuratedCatalog()).find((entry) => entry.name === name)!;
+      const { app, created, deps, generationClaims } = buildApp(entry);
+      await expect(
+        createMCPCatalogConnectService(app, deps).create(
+          {
+            ...request,
+            catalog_key: name,
+            acknowledged_disclosure: entry.permission_disclosure,
+            bearer_token: 'SENTINEL-do-not-send',
+          },
+          params
+        )
+      ).rejects.toThrow(entry.setup_required!.message);
+      expect(probeRemoteAuthType).not.toHaveBeenCalled();
+      expect(probeRemoteBearerToken).not.toHaveBeenCalled();
+      expect(deps.listCandidates).not.toHaveBeenCalled();
+      expect(generationClaims).toEqual([]);
+      expect(created.mcpServers).toEqual([]);
+      expect(created.sessions).toEqual([]);
+      expect(created.attachments).toEqual([]);
+    }
+  );
+
   beforeEach(() => {
     probeRemoteAuthType.mockReset();
     // Connect checks the endpoint on every install, so the accepting answer is

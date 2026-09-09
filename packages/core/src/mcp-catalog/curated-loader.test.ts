@@ -744,3 +744,34 @@ describe('the shipped catalog — everything on the shelf can be taken off it', 
     expect(entries.filter((entry) => entry.transport === 'stdio')).toEqual([]);
   });
 });
+
+describe('reviewed provider setup requirements', () => {
+  const withSetup = (url: string, extra = '') =>
+    VALID_ENTRY +
+    `
+    setup_required:
+      reason: provider_approval
+      message: Ask the provider to approve the deployment callback.
+      documentation_url: ${url}
+      ${extra}
+`;
+  it('preserves a bounded requirement instead of pretending OAuth discovery proves access', () => {
+    expect(
+      parseCuratedCatalog(withSetup('https://provider.example/docs'))[0].setup_required
+    ).toMatchObject({ reason: 'provider_approval' });
+  });
+  it.each([
+    'javascript:alert(1)',
+    'http://provider.example/docs',
+    'https://user:secret@provider.example/docs',
+    'https://provider.example/docs?secret=x',
+    'https://provider.example/docs#token',
+  ])('refuses an unsafe guidance URL %s', (url) => {
+    expect(() => parseCuratedCatalog(withSetup(url))).toThrow(CuratedCatalogError);
+  });
+  it('refuses credentials in setup policy', () => {
+    expect(() =>
+      parseCuratedCatalog(withSetup('https://provider.example/docs', 'client_secret: SENTINEL'))
+    ).toThrow(CuratedCatalogError);
+  });
+});

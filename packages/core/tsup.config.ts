@@ -8,6 +8,7 @@ export default defineConfig({
     'telemetry/index': 'src/telemetry/index.ts', // Community install telemetry helpers
     'tracing/datadog': 'src/tracing/datadog.ts', // Shared Datadog tracer type + optional-peer resolver
     'types/index': 'src/types/index.ts',
+    'tools/mcp/oauth-dcr-error': 'src/tools/mcp/oauth-dcr-error.ts', // Single nominal DCR diagnostic authority across bundles
     'realtime/index': 'src/realtime/index.ts',
     'executor-protocol': 'src/executor-protocol.ts',
     'db/index': 'src/db/index.ts',
@@ -91,6 +92,9 @@ export default defineConfig({
   shims: true, // Enable shims for import.meta.url in CJS builds
   // Don't bundle agent SDKs and Node.js-only dependencies
   external: [
+    // splitting:false otherwise duplicates the nominal WeakMap in the MCP and
+    // transport entrypoints, making source tests pass while packaged logs fail.
+    '@agor/core/tools/mcp/oauth-dcr-error',
     '@anthropic-ai/claude-agent-sdk',
     '@openai/codex-sdk',
     '@google/gemini-cli-core',

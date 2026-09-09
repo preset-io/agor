@@ -28,7 +28,7 @@ describe('MCP auth recovery contract', () => {
     );
     expect(recovery).toMatchObject({
       category: 'client_registration_failed',
-      action: 'configure_client',
+      action: 'retry',
       mcp_server_id: 'server-a',
     });
     expect(JSON.stringify(recovery)).not.toContain('secret=abc');
@@ -104,5 +104,30 @@ describe('MCP auth recovery contract', () => {
     expect(JSON.stringify(recovery)).not.toContain(sentinel);
     expect(getter).not.toHaveBeenCalled();
     expect(getPrototypeOf).toHaveBeenCalled();
+  });
+});
+
+describe('DCR reason-specific recovery', () => {
+  it.each([
+    ['invalid_redirect_uri', /verify callback approval/],
+    ['registration_redirect_mismatch', /verify callback approval/],
+    ['invalid_client_metadata', /provider setup guide/],
+    ['registration_auth_method_unsupported', /provider setup guide/],
+  ] as const)('renders safe guidance for %s', (reason, guidance) => {
+    const error = new OAuthDCRFailure('SENTINEL-provider-body?secret=x', {
+      stage: 'dcr_registration',
+      reason,
+      http_status: 400,
+    });
+    const recovery = classifyMCPAuthRecovery(error);
+    expect(recovery.message).toMatch(guidance);
+    expect(JSON.stringify(recovery)).not.toContain('SENTINEL');
+    expect(recovery.message).not.toContain('Client ID and Client Secret');
+  });
+  it('does not turn browser invalid_request/redirect errors into authority to retire a client', () => {
+    for (const reason of ['invalid_request', 'invalid_redirect_uri']) {
+      const recovery = recoveryForOAuthAttemptFailure(reason);
+      expect(recovery?.message).not.toMatch(/replacement client|register a replacement/);
+    }
   });
 });

@@ -83,6 +83,10 @@ entries:
     auth_type: oauth
 
   - name: com.figma.mcp/mcp
+    setup_required:
+      reason: provider_approval
+      message: 'Figma remote MCP access is limited to catalog-approved clients. A regular Figma OAuth app does not grant mcp:connect access. Request client approval from Figma; organizations needing an internal gateway should contact their Figma account representative. Agor access is not established.'
+      documentation_url: https://developers.figma.com/docs/figma-mcp-server/rate-limits-access/
     category: dev-tools
     capabilities: [design, notes]
     benefit: Give an agent the actual design file so generated UI matches the spec instead of approximating it.
@@ -95,6 +99,10 @@ entries:
     auth_type: oauth
 
   - name: com.vercel/vercel-mcp
+    setup_required:
+      reason: provider_approval
+      message: 'Vercel only permits reviewed, approved MCP clients. Agor access is not established. Ask Vercel to approve this deployment before configuring a connection; changing OAuth compatibility cannot grant approval.'
+      documentation_url: https://vercel.com/docs/agent-resources/vercel-mcp
     category: dev-tools
     capabilities: [deployments, projects, logs]
     benefit: Inspect deployments and read build logs so an agent can diagnose a failed ship on its own.
@@ -305,6 +313,10 @@ entries:
     auth_type: oauth
 
   - name: com.newrelic/mcp-server
+    setup_required:
+      reason: callback_unverified
+      message: 'New Relic accepted registration but rejected the deployment callback during authorization. Support for arbitrary Agor cell callbacks is not verified. Ask New Relic to verify the client and exact callback before configuring OAuth. Do not substitute its documented shared client ID or repeatedly reset registrations.'
+      documentation_url: https://docs.newrelic.com/docs/agentic-ai/mcp/overview/
     category: observability
     capabilities: [metrics, logs, alerts, sql]
     benefit: Run NRQL and read APM data so performance questions get answered with numbers.
@@ -581,6 +593,10 @@ unpublished:
     website_url: https://preset.io/
 
   - name: com.dropbox/mcp
+    setup_required:
+      reason: provider_approval
+      message: 'Dropbox restricts automatic registration to trusted MCP clients. Request Agor support from Dropbox, or have an administrator configure a Dropbox app with the required permissions and exact Agor callback using the official guide. A standard app setup still needs end-to-end verification.'
+      documentation_url: https://help.dropbox.com/integrations/connect-dropbox-mcp-server
     category: data-storage
     capabilities: [files, web-search]
     benefit: Give an agent read access to project files without copying them into the repository.
@@ -593,6 +609,10 @@ unpublished:
     auth_type: oauth
 
   - name: com.asana/mcp
+    setup_required:
+      reason: preregistered_client
+      message: 'This catalog URL is the retired Asana V1 endpoint. Asana V2 does not support automatic client registration. Create an MCP app in the Asana developer console, register the exact Agor callback, and configure a custom server with the V2 endpoint and app credentials. V2 compatibility in Agor still needs verification.'
+      documentation_url: https://developers.asana.com/docs/integrating-with-asanas-mcp-server
     category: productivity
     capabilities: [tasks, projects, notes]
     benefit: Keep Asana in sync with what the agents actually finished, without manual status updates.
@@ -619,6 +639,10 @@ unpublished:
       compatibility_mode: strict
 
   - name: com.squareup/mcp
+    setup_required:
+      reason: provider_approval
+      message: 'Square restricts MCP client registration to an allowlist. Request approval for Agor and its exact deployment callback in the Square developer forum before configuring a connection. Repeated registration attempts cannot grant approval.'
+      documentation_url: https://developer.squareup.com/docs/mcp
     category: productivity
     capabilities: [payments, crm]
     benefit: Read Square orders and catalog data so an agent can reconcile sales without exporting CSVs.
@@ -631,6 +655,10 @@ unpublished:
     auth_type: oauth
 
   - name: com.intercom/mcp
+    setup_required:
+      reason: provider_approval
+      message: 'Intercom requires redirect URI approval. Contact Intercom support through your workspace with the exact Agor callback, production or staging designation, MCP endpoint, and integration use case. Retry only after approval; ordinary Intercom app credentials are not a verified workaround.'
+      documentation_url: https://community.intercom.com/apps-integrations-25/requesting-redirect-uri-allowlist-for-mcp-dcr-14501
     category: productivity
     capabilities: [crm, docs]
     benefit: Read support conversations so an agent can turn recurring complaints into concrete issues.
@@ -643,6 +671,10 @@ unpublished:
     auth_type: oauth
 
   - name: com.canva/mcp
+    setup_required:
+      reason: provider_approval
+      message: 'Canva requires redirect URI allowlisting even when registration returns a client ID. Apply through the Canva MCP waitlist for the exact Agor callback before configuring a connection. A generated client ID does not prove that callback is approved.'
+      documentation_url: https://www.canva.dev/docs/mcp/
     category: productivity
     capabilities: [design]
     benefit: Generate and export Canva designs from a session instead of switching to the editor.

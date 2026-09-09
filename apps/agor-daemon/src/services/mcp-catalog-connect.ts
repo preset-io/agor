@@ -929,6 +929,9 @@ export function createMCPCatalogConnectService(
         throw new NotFound(`MCP catalog entry not found: ${data.catalog_key}`);
       }
 
+      // Reviewed catalog restrictions precede probes, generation claims,
+      // credentials, server/session creation and browser/DCR side effects.
+      if (entry.setup_required) throw new BadRequest(entry.setup_required.message);
       assertConnectableEntry(entry);
       assertDisclosureAcknowledged(entry, data.acknowledged_disclosure);
       // Derived from the entry and the live endpoint, never from `data` — with

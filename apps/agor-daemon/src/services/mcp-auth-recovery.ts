@@ -1,7 +1,11 @@
 import { PublicBaseUrlNotConfiguredError } from '@agor/core/config';
 import { BadRequest, Conflict, Forbidden } from '@agor/core/feathers';
 import { sanitizeMCPExternalError } from '@agor/core/mcp';
-import { OAuthConfigurationError, OAuthDCRFailure } from '@agor/core/tools/mcp/oauth-mcp-transport';
+import {
+  getOAuthDCRDiagnostic,
+  OAuthConfigurationError,
+  type OAuthDCRFailure,
+} from '@agor/core/tools/mcp/oauth-mcp-transport';
 import type { MCPAuthRecovery, MCPServerID } from '@agor/core/types';
 
 function target(mcpServerId?: string) {
@@ -75,29 +79,46 @@ export function classifyMCPAuthRecovery(
     };
   }
 
-  if (safeInstanceOf(error, OAuthDCRFailure)) {
-    const diagnostic = safeOwnDataValue(error, 'diagnostic');
-    const missingEndpoint = safeOwnDataValue(diagnostic, 'stage') === 'dcr_endpoint_discovery';
+  const diagnostic = getOAuthDCRDiagnostic(error);
+  if (diagnostic) {
+    const missingEndpoint = diagnostic.stage === 'dcr_endpoint_discovery';
+    const invalidRedirect =
+      diagnostic.reason === 'invalid_redirect_uri' ||
+      diagnostic.reason === 'registration_redirect_mismatch';
+    const temporary =
+      sanitizeMCPExternalError(error, { stage: 'oauth' }).category === 'provider_unavailable';
     return {
       ...common,
       category: missingEndpoint ? 'client_registration_required' : 'client_registration_failed',
-      action: 'configure_client',
-      message: missingEndpoint
-        ? 'This provider requires a pre-registered OAuth client. Save a Client ID and Client Secret on this MCP server, then retry.'
-        : 'The provider could not register an OAuth client automatically. Save a pre-registered Client ID and Client Secret on this MCP server, verify the provider registration, then retry.',
+      action: temporary ? 'retry' : 'configure_client',
+      message: temporary
+        ? 'The provider registration service is temporarily unavailable. Retry later; if the request outcome is uncertain, ask an administrator to check the provider registration before retrying.'
+        : invalidRedirect
+          ? 'The provider did not accept or bind the exact Agor callback. Ask an administrator to verify callback approval and the registered redirect URI with the provider before retrying. Repeated registrations will not fix provider approval.'
+          : missingEndpoint
+            ? 'This provider requires a pre-registered OAuth client. Save a provider-approved Client ID (and Client Secret only if issued) on this MCP server, then retry.'
+            : 'The provider could not register an OAuth client automatically. Review the provider setup guide with an administrator before retrying; some providers require client or callback approval. Configure a pre-registered client only if the provider supports it.',
       ...(options.redirectUri ? { redirect_uri: options.redirectUri } : {}),
     };
   }
 
   if (safeInstanceOf(error, OAuthConfigurationError)) {
     const failureCode = safeOwnDataValue(error, 'failureCode');
+    if (failureCode === 'provider_setup_required')
+      return {
+        ...common,
+        category: 'configuration_required',
+        action: 'contact_admin',
+        message:
+          'This provider needs setup or approval before Agor can sign in. Review its Catalog setup guide and verify the exact callback with the provider before retrying.',
+      };
     if (failureCode === 'client_registration_required') {
       return {
         ...common,
         category: 'client_registration_required',
         action: 'configure_client',
         message:
-          'This provider requires a pre-registered OAuth client. Save a Client ID and Client Secret on this MCP server, then retry.',
+          'This provider requires a pre-registered OAuth client. Save a provider-approved Client ID (and Client Secret only if issued) on this MCP server, then retry.',
         ...(options.redirectUri ? { redirect_uri: options.redirectUri } : {}),
       };
     }

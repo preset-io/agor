@@ -1,4 +1,6 @@
+import { getOAuthDCRDiagnostic } from '@agor/core/tools/mcp/oauth-dcr-error';
 import { FeathersError } from '@feathersjs/errors';
+import { MCP_OAUTH_DCR_FAILURE_REASONS, type MCPOAuthDCRFailureReason } from '../../types/mcp.js';
 
 /**
  * Closed, value-free classification for failures originating outside Agor's
@@ -11,6 +13,8 @@ export const MCP_EXTERNAL_ERROR_STAGES = [
   'jwt',
   'oauth',
   'oauth_metadata',
+  'dcr_endpoint_discovery',
+  'dcr_registration',
   'oauth_callback',
   'discovery',
   'runtime',
@@ -35,14 +39,17 @@ export type MCPExternalErrorType =
   | 'AbortError'
   | 'HTTPError'
   | 'NetworkError'
+  | 'OAuthDCRFailure'
   | 'ConfigurationError'
   | 'UnknownError';
 export type MCPExternalErrorReason =
+  | MCPOAuthDCRFailureReason
   | 'capability_persistence_validation_rejected'
   | 'oauth_metadata_incompatible'
   | 'oauth_redirect_configuration_required'
   | 'catalog_probe_unreachable'
-  | 'catalog_probe_unrecognized';
+  | 'catalog_probe_unrecognized'
+  | 'catalog_setup_required';
 
 const ALLOWED_EXTERNAL_CODES = new Set([
   'ABORT_ERR',
@@ -81,6 +88,7 @@ export interface SanitizedMCPExternalError {
     /** Closed HTTP status from a transport exception; never response prose. */
     status?: number;
     reason?: MCPExternalErrorReason;
+    registration_endpoint_source?: 'metadata' | 'legacy_fallback';
   };
 }
 
@@ -107,13 +115,15 @@ export class MCPExternalError extends Error {
       ...(safeAllowedCode(sanitized.diagnostic?.code)
         ? { code: safeAllowedCode(sanitized.diagnostic?.code) }
         : {}),
-      ...(safeHTTPStatus(sanitized.diagnostic) !== undefined
-        ? { status: safeHTTPStatus(sanitized.diagnostic) }
+      ...(safeHTTPStatus(sanitized.diagnostic, 200) !== undefined
+        ? { status: safeHTTPStatus(sanitized.diagnostic, 200) }
         : {}),
       ...(safeReason(sanitized.diagnostic?.reason)
         ? { reason: safeReason(sanitized.diagnostic?.reason) }
         : {}),
     };
+    const source = safeRegistrationSource(sanitized.diagnostic?.registration_endpoint_source);
+    if (source) this.diagnostic.registration_endpoint_source = source;
     trustedMCPExternalErrors.add(this);
   }
 }
@@ -143,6 +153,7 @@ function safeDiagnosticType(type: unknown): MCPExternalErrorType {
     type === 'HTTPError' ||
     type === 'NetworkError' ||
     type === 'ConfigurationError' ||
+    type === 'OAuthDCRFailure' ||
     type === 'UnknownError'
     ? type
     : 'UnknownError';
@@ -153,13 +164,23 @@ function safeAllowedCode(code: unknown): string | undefined {
 }
 
 function safeReason(reason: unknown): MCPExternalErrorReason | undefined {
+  if (
+    typeof reason === 'string' &&
+    MCP_OAUTH_DCR_FAILURE_REASONS.includes(reason as MCPOAuthDCRFailureReason)
+  )
+    return reason as MCPOAuthDCRFailureReason;
   return reason === 'capability_persistence_validation_rejected' ||
     reason === 'oauth_metadata_incompatible' ||
     reason === 'oauth_redirect_configuration_required' ||
     reason === 'catalog_probe_unreachable' ||
-    reason === 'catalog_probe_unrecognized'
+    reason === 'catalog_probe_unrecognized' ||
+    reason === 'catalog_setup_required'
     ? reason
     : undefined;
+}
+
+function safeRegistrationSource(source: unknown): 'metadata' | 'legacy_fallback' | undefined {
+  return source === 'metadata' || source === 'legacy_fallback' ? source : undefined;
 }
 
 function safeInstanceOf(
@@ -200,7 +221,7 @@ function safeOwnDataValue(error: unknown, property: string): unknown {
  * numeric `code` field. Accept only the closed HTTP error range; negative
  * JSON-RPC codes and arbitrary provider strings remain untrusted.
  */
-function safeHTTPStatus(error: unknown): number | undefined {
+function safeHTTPStatus(error: unknown, minimum = 300): number | undefined {
   // Feathers control-plane errors use the same own numeric `code` shape as
   // StreamableHTTPError. Their nominal identity is trusted; do not reinterpret
   // Agor authorization or configuration failures as provider responses.
@@ -208,7 +229,7 @@ function safeHTTPStatus(error: unknown): number | undefined {
 
   for (const field of ['status', 'statusCode', 'code']) {
     const value = safeOwnDataValue(error, field);
-    if (typeof value === 'number' && Number.isInteger(value) && value >= 300 && value <= 599) {
+    if (typeof value === 'number' && Number.isInteger(value) && value >= minimum && value <= 599) {
       return value;
     }
   }
@@ -308,6 +329,42 @@ export function sanitizeMCPExternalError(
     reason?: MCPExternalErrorReason;
   }
 ): SanitizedMCPExternalError {
+  const dcr = getOAuthDCRDiagnostic(error);
+  if (dcr) {
+    const category: MCPExternalErrorCategory =
+      dcr.stage === 'dcr_endpoint_discovery'
+        ? 'configuration_required'
+        : dcr.http_status === undefined
+          ? dcr.reason === 'registration_transport_failed'
+            ? 'provider_unavailable'
+            : 'invalid_response'
+          : dcr.http_status === 408 ||
+              dcr.http_status === 425 ||
+              dcr.http_status === 429 ||
+              dcr.http_status >= 500
+            ? 'provider_unavailable'
+            : dcr.http_status >= 300
+              ? 'provider_rejected'
+              : 'invalid_response';
+    return {
+      category,
+      ...fixedContract(category),
+      diagnostic: {
+        event: 'mcp_external_failure',
+        stage: dcr.stage,
+        type: 'OAuthDCRFailure',
+        ...(dcr.http_status !== undefined ? { status: dcr.http_status } : {}),
+        reason:
+          dcr.reason ??
+          (dcr.stage === 'dcr_endpoint_discovery'
+            ? 'registration_endpoint_missing'
+            : 'registration_rejected'),
+        ...(dcr.registration_endpoint_source
+          ? { registration_endpoint_source: dcr.registration_endpoint_source }
+          : {}),
+      },
+    };
+  }
   if (
     error !== null &&
     (typeof error === 'object' || typeof error === 'function') &&
@@ -318,18 +375,26 @@ export function sanitizeMCPExternalError(
       const contract = fixedContract(category);
       const diagnostic = safeOwnDataValue(error, 'diagnostic');
       const code = safeAllowedCode(safeOwnDataValue(diagnostic, 'code'));
-      const status = safeHTTPStatus(diagnostic);
+      const status = safeHTTPStatus(diagnostic, 200);
+      const source = safeRegistrationSource(
+        safeOwnDataValue(diagnostic, 'registration_endpoint_source')
+      );
+      const originalStage = safeOwnDataValue(diagnostic, 'stage');
       const reason = safeReason(safeOwnDataValue(diagnostic, 'reason'));
       return {
         category,
         ...contract,
         diagnostic: {
           event: 'mcp_external_failure',
-          stage: safeStage(options.stage),
+          stage:
+            originalStage === 'dcr_registration' || originalStage === 'dcr_endpoint_discovery'
+              ? originalStage
+              : safeStage(options.stage),
           type: safeDiagnosticType(safeOwnDataValue(diagnostic, 'type')),
           ...(code ? { code } : {}),
           ...(status !== undefined ? { status } : {}),
           ...(reason ? { reason } : {}),
+          ...(source ? { registration_endpoint_source: source } : {}),
         },
       };
     } catch {

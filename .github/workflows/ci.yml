@@ -98,6 +98,12 @@ jobs:
       # Docs have their own PR/push workflow and are intentionally excluded.
       - run: pnpm turbo run build typecheck --filter='!@agor/docs'
 
+      # DCR diagnostics use one nominal authority across independent bundles.
+      # Source-only unit lanes cannot verify the packaged ESM/CJS identity.
+      - run: |
+          test -f packages/core/dist/tools/mcp/oauth-dcr-error.js
+          pnpm --filter @agor/core exec vitest run src/tools/mcp/oauth-dcr-entrypoints.test.ts
+
       # @agor/executor#test includes this runtime check, which requires dist.
       # Keep both executor checks here: a filtered test runner cannot compile
       # all of its workspace declaration dependencies cheaply or reliably.

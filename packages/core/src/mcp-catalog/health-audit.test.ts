@@ -2,6 +2,8 @@ import type { MCPCatalogEntry } from '@agor/core/types';
 import { describe, expect, it, vi } from 'vitest';
 import { MCPExternalError, sanitizeMCPExternalError } from '../tools/mcp/external-error';
 import { OAuthConfigurationError } from '../tools/mcp/oauth-mcp-transport';
+import { OAUTH_PROVIDER_FIXTURES } from '../tools/mcp/oauth-provider.test-fixtures';
+import { loadCuratedCatalog } from './curated-loader';
 import { auditCatalogHealth } from './health-audit';
 
 const oauthMocks = vi.hoisted(() => ({
@@ -186,3 +188,24 @@ describe('auditCatalogHealth', () => {
     ]);
   });
 });
+
+it.each(OAUTH_PROVIDER_FIXTURES)(
+  '$label setup is not reported as ready by the metadata audit',
+  async ({ name }) => {
+    const catalog = await loadCuratedCatalog();
+    const provider = catalog.find((entry) => entry.name === name)!;
+    const probe = vi.fn();
+    const oauthMetadataReady = vi.fn();
+    await expect(auditCatalogHealth([provider], { probe, oauthMetadataReady })).resolves.toEqual([
+      {
+        name,
+        status: 'setup-required',
+        expectedAuth: 'oauth',
+        observedAuth: 'unknown',
+        reason: 'provider_setup_required',
+      },
+    ]);
+    expect(probe).not.toHaveBeenCalled();
+    expect(oauthMetadataReady).not.toHaveBeenCalled();
+  }
+);

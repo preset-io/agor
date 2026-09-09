@@ -44,6 +44,8 @@ import { TaskStatus } from '@agor/core/types';
 import type { OutboundDnsLookup } from '@agor/core/utils/safe-outbound-fetch';
 import { type Socket as ClientSocket, io as createSocketClient } from 'socket.io-client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { loadCuratedCatalog } from '../../../packages/core/src/mcp-catalog/curated-loader';
+import { OAUTH_PROVIDER_FIXTURES } from '../../../packages/core/src/tools/mcp/oauth-provider.test-fixtures';
 import { RuntimeJWTStrategy } from './auth/runtime-jwt-strategy.js';
 import {
   issueRuntimeToken,
@@ -1714,6 +1716,52 @@ describe('real Feathers Socket.IO request authority', () => {
 });
 
 describe('SQLite saved-row OAuth authority', () => {
+  it.each(OAUTH_PROVIDER_FIXTURES)(
+    '$label refuses saved catalog DCR before provider I/O; foreign tenant cannot obtain recovery',
+    async ({ name }) => {
+      const provider = await createTestProvider();
+      providers.push(provider);
+      const official = (await loadCuratedCatalog()).find((entry) => entry.name === name)!;
+      // Route the official restriction through the existing loopback provider
+      // seam; no test calls the live provider or creates a real client.
+      const catalogEntry = {
+        ...official,
+        transport: 'streamable-http' as const,
+        remote_url: provider.savedMcpUrl,
+      };
+      vi.mocked(loadCatalog).mockResolvedValueOnce([catalogEntry]);
+      const harness = await createHarness(provider, undefined, { catalogEntry });
+      databases.push(harness.rawDb);
+      const result = await harness.app.service('mcp-servers/oauth-start').create(
+        {
+          mcp_server_id: harness.server.mcp_server_id,
+          client_id: 'SENTINEL-request-bypass',
+        },
+        paramsFor(harness)
+      );
+      expect(result).toMatchObject({
+        success: false,
+        recovery: {
+          category: 'configuration_required',
+          action: 'contact_admin',
+          message: official.setup_required!.message,
+        },
+      });
+      expect(JSON.stringify(result)).not.toContain('SENTINEL');
+      expect(provider.requests).toEqual([]);
+      expect(harness.emittedBrowserEvents).toEqual([]);
+      await expect(
+        harness.app.service('mcp-servers/oauth-start').create(
+          {
+            mcp_server_id: harness.server.mcp_server_id,
+          },
+          { ...paramsFor(harness), tenant: { tenant_id: 'other-tenant', source: 'auth' } }
+        )
+      ).rejects.toThrow();
+      expect(provider.requests).toEqual([]);
+    }
+  );
+
   it('keeps a committed OAuth completion successful when its runtime-hint lookup rejects', async () => {
     const provider = await createTestProvider();
     providers.push(provider);
@@ -2473,6 +2521,8 @@ describe('SQLite saved-row OAuth authority', () => {
     } as MCPCatalogEntry;
     vi.mocked(loadCatalog)
       .mockResolvedValueOnce([catalogEntry])
+      .mockResolvedValueOnce([catalogEntry])
+      .mockResolvedValueOnce([catalogEntry])
       .mockResolvedValueOnce([catalogEntry]);
     const harness = await createHarness(provider, undefined, { catalogEntry });
     databases.push(harness.rawDb);
@@ -2579,6 +2629,8 @@ describe('SQLite saved-row OAuth authority', () => {
     } as MCPCatalogEntry;
     vi.mocked(loadCatalog)
       .mockResolvedValueOnce([catalogEntry])
+      .mockResolvedValueOnce([catalogEntry])
+      .mockResolvedValueOnce([catalogEntry])
       .mockResolvedValueOnce([catalogEntry]);
     const registrationId = crypto.randomUUID();
     const resolve = vi.fn(async () => ({
@@ -2675,8 +2727,11 @@ describe('SQLite saved-row OAuth authority', () => {
     // independently. Both must derive authority from the same canonical row.
     vi.mocked(loadCatalog)
       .mockResolvedValueOnce([catalogEntry])
+      .mockResolvedValueOnce([catalogEntry])
+      .mockResolvedValueOnce([catalogEntry])
       .mockResolvedValueOnce([catalogEntry]);
     const policyLog = vi.spyOn(console, 'info').mockImplementation(() => {});
+    const failureLog = vi.spyOn(console, 'error').mockImplementation(() => {});
 
     const harness = await createHarness(provider, undefined, { catalogEntry });
     databases.push(harness.rawDb);
@@ -2713,6 +2768,10 @@ describe('SQLite saved-row OAuth authority', () => {
         expect.stringContaining('mode=marketplace reason=current_catalog_marketplace')
       );
 
+      expect(failureLog).toHaveBeenCalledWith(
+        '[OAuth Start] event=mcp_external_failure stage=dcr_registration category=provider_rejected type=OAuthDCRFailure status=418 reason=registration_rejected registration_endpoint_source=metadata'
+      );
+
       const registrationRequests = provider.requests.filter(
         (request) => request.path === '/register'
       );
@@ -2726,6 +2785,7 @@ describe('SQLite saved-row OAuth authority', () => {
       expect(provider.requests.some((request) => request.path === '/token')).toBe(false);
     } finally {
       policyLog.mockRestore();
+      failureLog.mockRestore();
     }
   });
 

@@ -6,7 +6,9 @@ describe('MCP SDK external error integration', () => {
     const output = execFileSync(
       process.execPath,
       [
-        '--experimental-strip-types',
+        '--import',
+        'tsx',
+        '--conditions=source',
         '--input-type=module',
         '--eval',
         `

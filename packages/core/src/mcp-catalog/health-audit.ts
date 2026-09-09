@@ -9,6 +9,7 @@ import { assertSafeOutboundUrl, UnsafeOutboundUrlError } from '../utils/safe-out
 import { probeRemoteAuth, type RemoteAuthProbeResult } from './auth-probe';
 
 export type CatalogHealthStatus =
+  | 'setup-required'
   | 'ready'
   | 'credential-required'
   | 'oauth-now-available'
@@ -18,6 +19,7 @@ export type CatalogHealthStatus =
   | 'oauth-metadata-not-ready';
 
 export type CatalogHealthReason =
+  | 'provider_setup_required'
   | 'probe_failed'
   | 'auth_mismatch'
   | 'credential_not_verified'
@@ -136,6 +138,14 @@ export async function auditCatalogHealth(
   const results = new Array<CatalogHealthResult>(entries.length);
   let nextIndex = 0;
   const auditOne = async (entry: MCPCatalogEntry): Promise<CatalogHealthResult> => {
+    if (entry.setup_required)
+      return {
+        name: entry.name,
+        status: 'setup-required',
+        expectedAuth: entry.auth_type,
+        observedAuth: 'unknown',
+        reason: 'provider_setup_required',
+      };
     const observed = entry.remote_url
       ? await probe(entry.remote_url)
       : ({ authType: 'unknown' } satisfies RemoteAuthProbeResult);

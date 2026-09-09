@@ -165,6 +165,13 @@ export interface MCPCatalogEntry {
 
   auth_type: MCPCatalogAuthType;
 
+  /** Reviewed global restriction: browse for guidance, but never auto-install/register. */
+  setup_required?: {
+    reason: 'provider_approval' | 'preregistered_client' | 'callback_unverified';
+    message: string;
+    documentation_url: string;
+  };
+
   /** Reviewed instructions for a non-OAuth credential. Generic 401/403 responses never imply a scheme. */
   credentials?: MCPCatalogEntryCredentials;
 
@@ -233,7 +240,7 @@ export interface MCPCatalogEntryCredentials {
  * - **No client secret.** `curated.yaml` is checked into a public repository
  *   and is byte-identical for every tenant, so a secret in it is a published
  *   secret shared by everyone. A server that cannot work without a confidential
- *   client cannot be a catalog entry.
+ *   client must be marked setup_required; it cannot be auto-installed.
  * - **No `authorization_url` / `token_url`.** These are where an authorization
  *   code and a client credential are sent, so a stale one does not fail closed
  *   — it delivers a live grant to whatever now answers at that hostname. They

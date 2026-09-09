@@ -6,7 +6,7 @@ Open **MCP Catalog** from the header’s shop icon or the same icon in the sessi
 
 ## Authentication
 
-Catalog's pre-connect readiness is advisory from catalog and saved-connection data; it does not probe the endpoint. Agor checks the live endpoint only when you choose **Connect** and before installing it. An entry may be:
+Catalog's pre-connect readiness is advisory from catalog and saved-connection data; it does not probe the endpoint. Agor checks the live endpoint only when you choose **Connect** and before installing it. Reviewed **Provider setup required** entries are an exception: they show a setup guide and cannot auto-connect, regardless of a successful metadata probe. Other entries may be:
 
 - **Open:** Agor creates and attaches a new idle session, stages the starter prompt, and keeps the Catalog drawer open so you can choose **Open session**.
 - **OAuth:** Agor creates the server and session and pre-opens the provider sign-in window. The Catalog drawer remains at **Sign-in pending** until the durable per-user grant is confirmed; the session notice and MCP badge remain the recovery path if sign-in is not completed.
@@ -15,7 +15,51 @@ Catalog's pre-connect readiness is advisory from catalog and saved-connection da
 
 For unsupported schemes, configure the server in **Settings → MCP Servers**. Custom headers still support alternatives such as Datadog API/application-key pairs; Catalog's Datadog entry uses Datadog's recommended browser OAuth flow instead of asking users to manage a long-lived PAT or SAT. That card targets Datadog's US1 MCP endpoint. Other Datadog sites need their regional endpoint configured manually, and an organisation may need to allow-list the Agor callback under **MCP OAuth Redirect URLs** before sign-in completes.
 
-### Recovering a provider-deleted OAuth client (administrators)
+### Providers that need setup or approval
+
+**Provider setup required** is a reviewed Catalog restriction, not a transient
+readiness probe. These entries remain searchable for their setup guide, but
+Catalog does not create a server, session, popup, or client registration for them.
+Existing matching Catalog installs without a configured Client ID also stop
+before automatic registration. Existing grants are not deleted. Configuring a
+client deliberately uses the normal OAuth checks; it does **not** prove provider
+approval or make the connection verified. Custom/edited server configurations do
+not acquire Catalog compatibility through this restriction.
+
+| Provider  | Required next step                                                                                                                                                                                                                                                                                                                                                                          |
+| --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Vercel    | Only reviewed clients can connect. Obtain Vercel approval for Agor before configuring a connection. See [Vercel MCP](https://vercel.com/docs/agent-resources/vercel-mcp).                                                                                                                                                                                                                   |
+| Asana     | The catalog's V1 `/sse` endpoint is retired. V2 requires an MCP app created in the developer console and the exact callback registered there; it does not support DCR. Configure the V2 endpoint and app credentials manually. Agor's V2 end-to-end compatibility is not yet verified. See [Asana integration guide](https://developers.asana.com/docs/integrating-with-asanas-mcp-server). |
+| Dropbox   | DCR is restricted to trusted MCP clients. Request Agor support from Dropbox, or have an administrator follow the documented app/permissions/callback setup for other clients. This manual route still needs Agor end-to-end verification. See [Dropbox MCP setup](https://help.dropbox.com/integrations/connect-dropbox-mcp-server).                                                        |
+| Intercom  | Ask workspace support to approve the exact production/staging callback and MCP endpoint. Ordinary Intercom app credentials are not a verified substitute. See [Intercom support guidance](https://community.intercom.com/apps-integrations-25/requesting-redirect-uri-allowlist-for-mcp-dcr-14501).                                                                                         |
+| Square    | Request MCP client/callback allowlisting through the developer forum. See [Square MCP](https://developer.squareup.com/docs/mcp).                                                                                                                                                                                                                                                            |
+| New Relic | Registration succeeded far enough to authorize, but a deployed cell callback was rejected. Arbitrary per-cell callback support remains unverified; ask New Relic to verify the client and callback. Do not substitute the shared client ID in its [overview](https://docs.newrelic.com/docs/agentic-ai/mcp/overview/) or repeatedly reset registrations.                                    |
+| Canva     | Apply for exact redirect URI allowlisting through the MCP waitlist. A generated client ID does not establish approval. See [Canva MCP access](https://www.canva.dev/docs/mcp/).                                                                                                                                                                                                             |
+| Figma     | Remote MCP is limited to approved catalog clients. Ordinary OAuth apps do not grant `mcp:connect`. Request client approval, or discuss an internal gateway with your Figma representative. See [Figma access policy](https://developers.figma.com/docs/figma-mcp-server/rate-limits-access/).                                                                                               |
+
+Use the callback shown by your deployment's OAuth settings, exactly, including
+`/mcp-servers/oauth-callback`. Approval for one cell does not establish approval
+for another. A provider's registration endpoint in metadata proves neither open
+registration nor authorization of arbitrary HTTPS callbacks. Do not change to
+legacy compatibility to bypass provider approval. Do not reset registrations to
+try to fix an authorization-page redirect error: that page is not authority to
+retire a stored client. Re-enable automatic Catalog connection only after a
+reviewed provider-specific change establishes the supported path.
+
+### Safe registration diagnostics
+
+Operational DCR failures carry `type=OAuthDCRFailure`, stage
+`dcr_endpoint_discovery` or `dcr_registration`, a closed reason, the HTTP status
+when available (including a successful status followed by response validation
+failure), and `registration_endpoint_source=metadata|legacy_fallback` when known.
+Only the standardized `invalid_redirect_uri` and `invalid_client_metadata` error
+codes are recognized from a bounded registration response. Unknown codes become
+`registration_rejected`; provider descriptions, bodies, credentials, endpoints,
+and tenant/user identifiers are not added to these events. Transport failures
+are classified separately from incompatible responses. Public recovery text is
+fixed prose, not provider error text.
+
+## Recovering a provider-deleted OAuth client (administrators)
 
 If sign-in repeatedly fails at the provider with an unknown/deleted client, ordinary reconnect may keep selecting the same saved Dynamic Client Registration (DCR). Agor automatically retires that exact registration only when the provider's token endpoint returns a structured `invalid_client` or `unauthorized_client` error. A browser/authorization-page error alone does not authorize retirement.
 

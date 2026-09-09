@@ -483,6 +483,12 @@
       "types": "./dist/agentic-integrations.d.ts",
       "import": "./dist/agentic-integrations.js",
       "require": "./dist/agentic-integrations.cjs"
+    },
+    "./tools/mcp/oauth-dcr-error": {
+      "source": "./src/tools/mcp/oauth-dcr-error.ts",
+      "types": "./dist/tools/mcp/oauth-dcr-error.d.ts",
+      "import": "./dist/tools/mcp/oauth-dcr-error.js",
+      "require": "./dist/tools/mcp/oauth-dcr-error.cjs"
     }
   },
   "scripts": {

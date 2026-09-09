@@ -124,8 +124,24 @@ export type MCPOAuthRuntimeCompatibilityMode = MCPOAuthCompatibilityMode | 'mark
  * This closed shape classifies recovery without carrying provider response
  * text, credentials, or OAuth protocol secrets across the process boundary.
  */
+export const MCP_OAUTH_DCR_FAILURE_REASONS = [
+  'registration_endpoint_missing',
+  'registration_rejected',
+  'invalid_redirect_uri',
+  'invalid_client_metadata',
+  'registration_transport_failed',
+  'registration_response_invalid',
+  'registration_redirect_mismatch',
+  'registration_auth_method_unsupported',
+  'registration_secret_missing',
+  'registration_grant_unsupported',
+  'registration_response_type_unsupported',
+] as const;
+export type MCPOAuthDCRFailureReason = (typeof MCP_OAUTH_DCR_FAILURE_REASONS)[number];
+
 export interface MCPOAuthDCRDiagnostic {
   stage: 'dcr_endpoint_discovery' | 'dcr_registration';
+  reason?: MCPOAuthDCRFailureReason;
   http_status?: number;
   registration_endpoint_source?: 'metadata' | 'legacy_fallback';
 }
