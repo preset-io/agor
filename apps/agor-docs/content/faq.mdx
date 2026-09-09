@@ -698,6 +698,12 @@ When ongoing telemetry is enabled, Agor sends lightweight install and aggregate 
 
 Agor does **not** send prompts, messages, repo names or remotes, file paths, user emails or names, branch/session/task IDs, code, tool output, secrets, tokens, or raw custom model names.
 
+The outbound Segment Track name is `agor_event`; `properties.event_type` retains
+semantic names such as `daemon.start` and `usage.daily_summary`. See the
+[analytics rollout notes](/guide/config-yaml#segment-event-naming-and-rollout)
+for the breaking rename and warehouse limitations. This does not change consent
+or the collected fields.
+
 You can inspect the setting with `agor telemetry`. Change it in deployment-owned
 `config.yaml`, or use an environment override:
 

@@ -92,6 +92,9 @@ describe('actual Analytics client delivery', () => {
         expect(init?.headers).toMatchObject({ Authorization: SECRET, 'x-source': 'agor' });
         expect(init?.redirect).toBe('error');
         const event = JSON.parse(init?.body as string).batch[0];
+        expect(event.type).toBe('track');
+        expect(event.event).toBe('agor_event');
+        expect(event.properties.event_type).toBe(tenant ? 'task.completed' : 'daemon.event');
         expect(event.context).toEqual({
           source: 'caller',
           app: { name: `agor-${environment}-daemon`, version: '1' },
@@ -177,12 +180,18 @@ describe('actual Analytics client delivery', () => {
 
   it('does not resolve missing credentials for disabled analytics or plugins', async () => {
     vi.stubEnv(ENV_NAME, undefined);
-    expect((await createAnalyticsLogger({ ...settings(), enabled: false })).isEnabled()).toBe(
-      false
-    );
+    const fetchMock = vi.fn<typeof fetch>();
+    vi.stubGlobal('fetch', fetchMock);
+    const disabled = await createAnalyticsLogger({ ...settings(), enabled: false });
+    expect(disabled.isEnabled()).toBe(false);
+    disabled.track('task.completed');
     const config = settings();
     for (const plugin of config.plugins ?? []) plugin.enabled = false;
-    expect((await createAnalyticsLogger(config)).isEnabled()).toBe(true);
+    const logger = await createAnalyticsLogger(config);
+    expect(logger.isEnabled()).toBe(true);
+    logger.track('task.completed');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it('fails closed on a static/env header collision without sending or logging either value', async () => {

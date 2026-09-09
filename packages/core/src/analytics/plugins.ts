@@ -9,6 +9,7 @@ import type {
   AgorAnalyticsSettings,
   AgorAnalyticsStdoutPluginSettings,
 } from '../config/types.js';
+import { segmentTrackFields } from './segment.js';
 import { OPERATOR_OWNED_ANALYTICS_CONTEXT_KEYS, type ResolvedAnalyticsPlugin } from './types.js';
 
 interface AnalyticsTrackPayload {
@@ -55,8 +56,7 @@ export function toSegmentLikeTrack(
 
   const event: Record<string, unknown> = {
     type: 'track',
-    event: payload.event,
-    properties: payload.properties ?? {},
+    ...segmentTrackFields(payload.event, payload.properties),
     context: {
       ...Object.fromEntries(
         Object.entries(payload.options?.context ?? {}).filter(

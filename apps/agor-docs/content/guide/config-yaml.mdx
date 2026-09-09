@@ -333,6 +333,50 @@ options to the analytics client.
 Only use non-secret, non-PII deployment labels. Bounds are structural validation,
 not a PII detector; operators own field selection and destination access/retention.
 
+### Segment event naming and rollout
+
+Both built-in analytics transports now emit `type: 'track'`, `event: 'agor_event'`,
+and `properties.event_type` containing the original semantic name (for example,
+`task.completed`). Community telemetry uses the same wire convention but retains
+its separate opt-in and privacy rules. The canonical original name wins over a
+caller-supplied `properties.event_type`; other properties, including nested values,
+keep their current shape. Internal event names and app analytics remain unchanged;
+`exclude_events` still matches original names, not `agor_event`.
+
+This is a **breaking outbound rename**, including stdout and non-Segment HTTP
+consumers. Segment's [Track spec](https://www.twilio.com/docs/segment/connections/spec/track)
+distinguishes the protocol `type` from the `event` name. `event_type` is not a
+listed common reserved Track property or warehouse column; validate destination-specific
+rules before rollout. Do not substitute `agor_event` for the protocol `track` type.
+
+Segment's [warehouse schema](https://www.twilio.com/docs/segment/connections/storage/warehouses/schema)
+creates event-specific tables within each source schema. New Track events therefore
+target `<source>.agor_event` in the standard warehouse mapping (alongside `tracks`).
+This does not combine sources/schemas or Identify, Page, Group, or other method tables.
+The connector flattens nested objects but generally stringifies arrays; a constant
+name does not guarantee arbitrary JSON becomes flat columns. Reserved column collisions
+(such as `id`, `event`, or `user_id`), normalized-name collisions, inferred types,
+column limits, and destination mappings still require review. Agor adds no flattening.
+
+Rollout checklist (operator work, not performed automatically):
+
+- Update destination action mappings, filters, transformations, and tracking plans
+  to accept `agor_event` and branch on `properties.event_type` for semantic actions.
+- Review downstream queries/dashboards and property types across previously separate
+  events; retain original-name Agor exclusion filters.
+- Record the cutover for every replica/source. Buffered events from an older process
+  retain the older payload; newly converted events use the new name. There is no dual-write.
+- Keep historical tables. A rename does not consolidate them; if needed, separately
+  authorize a historical UNION/view with aligned columns/types and deduplication.
+  See Segment's [historical data FAQ](https://www.twilio.com/docs/segment/connections/storage/warehouses/faq).
+- Validate destination delivery and schema after the separately authorized rollout.
+  No warehouse migration, backfill, live destination configuration, or dashboard edit
+  is included in this change.
+
+These transports use best-effort in-memory batches, not a persisted event outbox;
+failed HTTP batches are not retried. This rename does not change those guarantees
+or introduce event IDs/message IDs that the existing adapters did not send.
+
 ### HTTP authentication from daemon environment
 
 `options.headers_from_env` maps HTTP header names to **environment variable names**.
