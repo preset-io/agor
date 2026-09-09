@@ -10,12 +10,7 @@ import {
   within,
 } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
-import {
-  CatalogHarness,
-  catalogUser,
-  githubHandoffEntry,
-  makeCatalogClient,
-} from './MCPCatalogModal.test-fixtures';
+import { CatalogHarness, catalogUser, makeCatalogClient } from './MCPCatalogModal.test-fixtures';
 
 configure({ asyncUtilTimeout: 10_000 });
 afterEach(cleanup);
@@ -127,91 +122,4 @@ describe('app-owned MCP Catalog', () => {
       expect(api.overviewRead).not.toHaveBeenCalled();
     }
   );
-});
-
-describe('onboarding Catalog handoff', () => {
-  // The continuous handoff close/reopen lifecycle runs with real motion in
-  // MCPCatalogModal.browser.test.tsx; keep state/authority cases here.
-
-  it('does not silently use another branch if the onboarding branch is not visible', async () => {
-    const api = makeCatalogClient([githubHandoffEntry]);
-    render(
-      <CatalogHarness
-        client={api.client}
-        handoff={{ entryName: githubHandoffEntry.name, branchId: 'foreign-or-deleted-branch' }}
-      />
-    );
-    const drawer = await screen.findByRole('dialog', { name: /GitHub/ });
-    await within(drawer).findByPlaceholderText('Paste your GitHub bearer access token');
-    expect(within(drawer).queryByText('Catalog QA')).not.toBeInTheDocument();
-    expect(api.connect).not.toHaveBeenCalled();
-  });
-
-  it('keeps invalid PAT setup in the existing drawer without claiming a usable session', async () => {
-    const api = makeCatalogClient([githubHandoffEntry]);
-    api.connect.mockRejectedValueOnce(new Error('Credential rejected'));
-    render(
-      <CatalogHarness
-        client={api.client}
-        handoff={{ entryName: githubHandoffEntry.name, branchId: 'branch-1' }}
-      />
-    );
-    const input = await screen.findByPlaceholderText('Paste your GitHub bearer access token');
-    const drawer = input.closest<HTMLElement>('[role="dialog"]')!;
-    await within(drawer).findByText('Catalog QA');
-    // The key field can render from catalog metadata before the debounced
-    // readiness read completes. Unknown readiness deliberately reserves an
-    // OAuth popup; this case tests a known PAT refusal, not that fallback.
-    await within(drawer).findByText('Use your fine-grained personal access token');
-    fireEvent.change(input, { target: { value: 'test-only-invalid-credential' } });
-    fireEvent.click(within(drawer).getByRole('checkbox', { name: /I understand/ }));
-    const connect = within(drawer).getByRole('button', { name: /Verify key/ });
-    await waitFor(() => expect(connect).toBeEnabled());
-    fireEvent.click(connect);
-    await waitFor(() => expect(api.connect).toHaveBeenCalledTimes(1));
-    await within(drawer).findByText('Credential rejected');
-    expect(api.connect).toHaveBeenCalledTimes(1);
-    expect(screen.queryByRole('button', { name: 'Open session' })).not.toBeInTheDocument();
-    expect(screen.getByTestId('route')).toHaveTextContent('/');
-  });
-
-  it('clears a handoff PAT and does not replay the intent for a replacement user', async () => {
-    const api = makeCatalogClient([githubHandoffEntry]);
-    const view = render(
-      <CatalogHarness
-        client={api.client}
-        handoff={{ entryName: githubHandoffEntry.name, branchId: 'branch-1' }}
-      />
-    );
-    const input = await screen.findByPlaceholderText('Paste your GitHub bearer access token');
-    fireEvent.change(input, { target: { value: 'test-only-alice-credential' } });
-    view.rerender(
-      <CatalogHarness client={api.client} user={{ ...catalogUser, user_id: 'bob' as UserID }} />
-    );
-    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Open MCP Catalog' }));
-    fireEvent.click(await screen.findByRole('button', { name: 'Open GitHub' }));
-    expect(await screen.findByPlaceholderText('Paste your GitHub bearer access token')).toHaveValue(
-      ''
-    );
-    expect(api.connect).not.toHaveBeenCalled();
-  });
-
-  it('retains the existing member-policy refusal instead of an admin-only wizard gate', async () => {
-    const api = makeCatalogClient([githubHandoffEntry], {
-      policy: 'use_existing_only',
-      can_configure: false,
-    });
-    render(
-      <CatalogHarness
-        client={api.client}
-        handoff={{ entryName: githubHandoffEntry.name, branchId: 'branch-1' }}
-      />
-    );
-    const drawer = await screen.findByRole('dialog', { name: /GitHub/ });
-    await waitFor(() =>
-      expect(within(drawer).getByRole('button', { name: /connect/i })).toBeDisabled()
-    );
-    expect(api.connect).not.toHaveBeenCalled();
-  });
 });

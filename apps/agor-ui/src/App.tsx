@@ -872,8 +872,7 @@ function AppContent() {
   const handleOnboardingComplete = async (
     owner: OnboardingOperationOwner,
     result: OnboardingCompletionResult,
-    isAttemptCurrent: () => boolean,
-    prepareOnly = false
+    isAttemptCurrent: () => boolean
   ) => {
     // The wizard awaits this and stays open while resource creation and
     // navigation run. The durable completion write then closes it before the
@@ -887,7 +886,7 @@ function AppContent() {
     // Completing onboarding is an explicit tool choice. Seed it only while the
     // preference is unset; a Settings selection made concurrently always wins.
     if (!isCurrentUser()) return;
-    if (result.agent && client && !prepareOnly) {
+    if (result.agent && client) {
       try {
         await setPrimaryAgenticToolIfUnset(client, currentUser, result.agent);
       } catch (error) {
@@ -927,13 +926,14 @@ function AppContent() {
     }
     if (!isCurrentUser()) return;
 
-    const slackGatewayIntent = prepareOnly
-      ? undefined
-      : await resolveOnboardingSlackIntent(client, currentUser, result.slackGatewayIntent);
+    const slackGatewayIntent = await resolveOnboardingSlackIntent(
+      client,
+      currentUser,
+      result.slackGatewayIntent
+    );
     if (!isCurrentUser()) return;
     const retainedSeed = onboardingSeedResultRef.current.get(result.boardId);
     const seeded = await seedOnboardingTeammate({
-      prepareOnly,
       slackGatewayIntent,
       connectedMcpServerIds: result.connectedMcpServerIds,
       frameworkRepo: readyFrameworkRepo,
@@ -984,8 +984,6 @@ function AppContent() {
       ...(branchId ? { branchId } : {}),
       ...(sessionId ? { sessionId } : {}),
     });
-
-    if (prepareOnly) return branchId;
 
     // Completion is the commit point of the client-side saga. Do it only after
     // durable teammate work has either succeeded or reached its documented
@@ -2338,16 +2336,6 @@ function AppContent() {
                 result,
                 attempt.isCurrent
               ).then(() => undefined);
-            }}
-            onPrepareTools={(result, attempt) => {
-              if (!onboardingWizardOwner || !isOnboardingOwnerCurrent(onboardingWizardOwner))
-                return Promise.resolve(undefined);
-              return handleOnboardingComplete(
-                onboardingWizardOwner,
-                result,
-                attempt.isCurrent,
-                true
-              );
             }}
             onDismiss={(progress) => {
               if (!onboardingWizardOwner || !isOnboardingOwnerCurrent(onboardingWizardOwner))

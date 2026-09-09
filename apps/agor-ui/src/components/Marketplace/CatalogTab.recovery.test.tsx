@@ -317,3 +317,77 @@ it('can connect again after closing a drawer with a pending installation', async
   await reopened.findByText('Added to My Servers');
   expect(api.connect).toHaveBeenCalledTimes(2);
 });
+
+describe('explicit onboarding context', () => {
+  it('installs without teammate reads, sessions, navigation or prompt staging and returns locally', async () => {
+    const api = buildClient();
+    const onConnected = vi.fn();
+    const onClose = vi.fn();
+    render(
+      <MemoryRouter>
+        <CatalogTab
+          client={api.client}
+          connected
+          connecting={false}
+          authGeneration={1}
+          currentUser={USER}
+          context={{ mode: 'onboarding', entryName: ENTRY.name, onConnected, onClose }}
+        />
+      </MemoryRouter>
+    );
+    const dialog = within(await screen.findByRole('dialog', { name: /DeepWiki/ }));
+    await dialog.findByText('No account expected');
+    fireEvent.click(
+      dialog.getByRole('checkbox', { name: 'I understand what this server can access' })
+    );
+    fireEvent.click(dialog.getByRole('button', { name: 'Connect' }));
+    await dialog.findByText('Connected and ready');
+    expect(api.connect).toHaveBeenCalledWith({
+      catalog_key: ENTRY.name,
+      acknowledged_disclosure: ENTRY.permission_disclosure,
+    });
+    expect(onConnected).toHaveBeenCalledExactlyOnceWith('server-1');
+    expect(api.getPrimaryTeammateCandidates).not.toHaveBeenCalled();
+    expect(api.getPrimaryTeammate).not.toHaveBeenCalled();
+    expect(api.startSession).not.toHaveBeenCalled();
+    expect(mockNavigate).not.toHaveBeenCalled();
+    expect(consumePromptDraftSeed(USER.user_id, SESSION_ID)).toBe('');
+    expect(dialog.queryByRole('combobox')).not.toBeInTheDocument();
+    expect(dialog.queryByRole('button', { name: /Start.*session/ })).not.toBeInTheDocument();
+    expect(dialog.queryByText(/new session|try.*server|starter prompt/i)).not.toBeInTheDocument();
+    fireEvent.click(dialog.getByRole('button', { name: 'Return to onboarding' }));
+    expect(onClose).toHaveBeenCalledOnce();
+  });
+
+  it('redacts failed installation details and retries locally without session side effects', async () => {
+    const api = buildClient();
+    api.connect.mockRejectedValueOnce(new Error('secret-test-value echoed by a failed provider'));
+    const onConnected = vi.fn();
+    render(
+      <MemoryRouter>
+        <CatalogTab
+          client={api.client}
+          connected
+          connecting={false}
+          authGeneration={1}
+          currentUser={USER}
+          context={{ mode: 'onboarding', entryName: ENTRY.name, onConnected, onClose: vi.fn() }}
+        />
+      </MemoryRouter>
+    );
+    const dialog = within(await screen.findByRole('dialog', { name: /DeepWiki/ }));
+    await dialog.findByText('No account expected');
+    fireEvent.click(
+      dialog.getByRole('checkbox', { name: 'I understand what this server can access' })
+    );
+    fireEvent.click(dialog.getByRole('button', { name: 'Connect' }));
+    await dialog.findByText('Could not connect this server. Check your credentials and try again.');
+    expect(screen.queryByText(/secret-test-value/)).not.toBeInTheDocument();
+    fireEvent.click(dialog.getByRole('button', { name: 'Connect' }));
+    await dialog.findByText('Connected and ready');
+    expect(api.connect).toHaveBeenCalledTimes(2);
+    expect(api.startSession).not.toHaveBeenCalled();
+    expect(api.getPrimaryTeammateCandidates).not.toHaveBeenCalled();
+    expect(onConnected).toHaveBeenCalledExactlyOnceWith('server-1');
+  });
+});

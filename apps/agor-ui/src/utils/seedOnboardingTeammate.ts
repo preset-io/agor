@@ -10,8 +10,6 @@ import {
 import { createTeammateBranch, type TeammateCreationDeps } from './teammateCreation';
 
 export interface SeedOnboardingTeammateInput {
-  /** Explicit Catalog Connect prepares a workspace without starting the bootstrap. */
-  prepareOnly?: boolean;
   connectedMcpServerIds?: string[];
   slackGatewayIntent?: OnboardingSlackGatewayIntent;
   /** Framework repo the teammate branches from — undefined while it's still cloning. */
@@ -143,6 +141,9 @@ async function findExistingSession(
       }
     }
   }
+  // Earlier onboarding revisions could leave idle Catalog tryouts here. They
+  // are not the bootstrap, nor are normal Catalog tryouts on this teammate.
+  // A retained exact session ID above wins even if its title has since changed.
   const isBootstrap = (session: Session) =>
     session.branch_id === branchId &&
     session.title ===
@@ -245,8 +246,6 @@ export async function seedOnboardingTeammate(input: SeedOnboardingTeammateInput)
       }
     }
     if (!isCurrentUser()) return {};
-
-    if (input.prepareOnly) return { branchId: branch.branch_id };
 
     const existingSession = await findExistingSession(input, branch.branch_id);
     if (!isCurrentUser()) return {};

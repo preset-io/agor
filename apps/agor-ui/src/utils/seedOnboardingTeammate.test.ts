@@ -135,17 +135,6 @@ describe('seedOnboardingTeammate', () => {
     expect(onWarn).not.toHaveBeenCalled();
   });
 
-  it('prepares a resumable workspace for Catalog without starting a bootstrap session', async () => {
-    createTeammateBranchMock.mockResolvedValue({
-      branch_id: 'branch-1',
-      board_id: 'board-1',
-    } as Branch);
-    const { input, onWarn } = setup({ prepareOnly: true });
-    expect(await seedOnboardingTeammate(input)).toEqual({ branchId: 'branch-1' });
-    expect(startTeammateBootstrapSessionMock).not.toHaveBeenCalled();
-    expect(onWarn).not.toHaveBeenCalled();
-  });
-
   it('attaches confirmed Catalog tools without confusing their idle session with the bootstrap', async () => {
     createTeammateBranchMock.mockResolvedValue({
       branch_id: 'branch-1',

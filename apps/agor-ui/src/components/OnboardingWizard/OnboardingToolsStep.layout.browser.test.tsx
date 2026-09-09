@@ -31,7 +31,6 @@ function fixture(overrides: Partial<Props> = {}) {
     kit: [recs.github, recs.linear, recs.notion, recs.firecrawl],
     isSelected: () => true,
     onToggle: vi.fn(),
-    prepareBranch: vi.fn(async () => 'branch-1'),
     onConnected: vi.fn(),
     gatewayIntent: 'prefer-existing',
     onGatewayIntent: vi.fn(),
@@ -212,6 +211,5 @@ describe('Kasia-derived MCP rows — real layout', () => {
     const action = screen.getByRole('button', { name: 'Sign in through Catalog for GitHub' });
     expect(action).toHaveAccessibleDescription(/Ready to use/);
     expect(api.connect).not.toHaveBeenCalled();
-    expect(props.prepareBranch).not.toHaveBeenCalled();
   });
 });

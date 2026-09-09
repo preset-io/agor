@@ -31,12 +31,10 @@ afterEach(cleanup);
 // Real wizard and Catalog controller/drawer. API/provisioning fixtures are NOT vendor success.
 function Harness({
   api,
-  prepare,
   complete,
   update,
 }: {
   api: ReturnType<typeof makeCatalogClient>;
-  prepare: () => Promise<string>;
   complete: (result: OnboardingCompletionResult) => void;
   update: (...args: unknown[]) => void;
 }) {
@@ -56,7 +54,6 @@ function Harness({
         onUpdateUser={async (...args) => {
           update(...args);
         }}
-        onPrepareTools={prepare}
         onDismiss={() => setOpen(false)}
         onComplete={(result) => {
           complete(result);
@@ -73,7 +70,17 @@ async function openGitHub() {
   const card = screen.getByText('GitHub').closest<HTMLElement>('.ant-card')!;
   await userEvent.click(within(card).getByRole('button', { name: /^Sign in through Catalog/ }));
   const input = await screen.findByPlaceholderText('Paste your GitHub bearer access token');
-  return { input, drawer: within(input.closest<HTMLElement>('[role="dialog"]')!) };
+  const dialog = input.closest<HTMLElement>('[role="dialog"]')!;
+  await waitFor(() => {
+    expect(dialog.getBoundingClientRect().right).toBeCloseTo(window.innerWidth, 1);
+    expect(
+      dialog
+        .closest('.ant-drawer-content-wrapper')!
+        .getAnimations()
+        .some((animation) => animation.playState === 'running')
+    ).toBe(false);
+  });
+  return { input, drawer: within(dialog) };
 }
 
 /** Measure the real portalled drawer, not the modal behind it. */
@@ -85,9 +92,8 @@ function drawerSpacing(dialog: HTMLElement) {
   const disclosure = within(dialog).getByRole('button', { name: 'What this can access' });
   const sections = disclosure.parentElement!;
   const sectionBody = sections.querySelector<HTMLElement>('[id]')!;
-  const agent = within(dialog).getByText('Agent', { selector: 'label' }).closest('.ant-form-item')!;
   const connect = within(dialog).getByRole('button', {
-    name: /Verify key & connect|Connect with GitHub/,
+    name: 'Connect',
   });
   const spacing = (element: Element) => {
     const style = getComputedStyle(element);
@@ -113,7 +119,6 @@ function drawerSpacing(dialog: HTMLElement) {
     content: spacing(content),
     disclosure: spacing(disclosure),
     sectionBody: spacing(sectionBody),
-    agent: spacing(agent),
     action: spacing(connect),
     actionWidth: connect.getBoundingClientRect().width,
   };
@@ -133,16 +138,12 @@ describe('onboarding-owned Catalog in Chromium', () => {
         catalog_key: entry.name,
         state: authType === 'credentials' ? 'bearer_required' : 'oauth_required',
       });
-      const standard = render(
-        <CatalogHarness
-          client={api.client}
-          handoff={{ entryName: entry.name, branchId: 'branch-1' }}
-        />
-      );
+      const standard = render(<CatalogHarness client={api.client} />);
+      await userEvent.click(screen.getByRole('button', { name: 'Open MCP Catalog' }));
+      await userEvent.click(await screen.findByRole('button', { name: 'Open GitHub' }));
       const catalogDialog = await screen.findByRole('dialog', { name: /GitHub/ });
-      await within(catalogDialog).findByText('Catalog QA');
       await within(catalogDialog).findByRole('button', {
-        name: /Verify key & connect|Connect with GitHub/,
+        name: 'Connect',
       });
       await waitFor(() =>
         expect(catalogDialog.getBoundingClientRect().right).toBeCloseTo(window.innerWidth, 0)
@@ -151,14 +152,12 @@ describe('onboarding-owned Catalog in Chromium', () => {
       expect(expected.width).toBe(Math.min(520, window.innerWidth));
       standard.unmount();
 
-      const prepare = vi.fn(async () => 'branch-1');
-      render(<Harness api={api} prepare={prepare} complete={vi.fn()} update={vi.fn()} />);
+      render(<Harness api={api} complete={vi.fn()} update={vi.fn()} />);
       const row = screen.getByText('GitHub').closest<HTMLElement>('.ant-card')!;
       await userEvent.click(within(row).getByRole('button', { name: /^Sign in through Catalog/ }));
       const onboardingDialog = await screen.findByRole('dialog', { name: /GitHub/ });
-      await within(onboardingDialog).findByText('Workspace', { selector: 'label' });
       await within(onboardingDialog).findByRole('button', {
-        name: /Verify key & connect|Connect with GitHub/,
+        name: 'Connect',
       });
       await waitFor(() =>
         expect(onboardingDialog.getBoundingClientRect().right).toBeCloseTo(window.innerWidth, 0)
@@ -178,7 +177,6 @@ describe('onboarding-owned Catalog in Chromium', () => {
       expect(headerHeight).toBeCloseTo(expectedHeaderHeight, 2);
       expect(actionWidth).toBeCloseTo(expectedActionWidth, 2);
       expect(document.querySelectorAll('.ant-drawer-open')).toHaveLength(1);
-      expect(prepare).not.toHaveBeenCalled();
       expect(api.connect).not.toHaveBeenCalled();
       await userEvent.click(within(onboardingDialog).getByRole('button', { name: 'Close' }));
       await waitFor(() => expect(onboardingDialog).not.toBeInTheDocument());
@@ -190,10 +188,9 @@ describe('onboarding-owned Catalog in Chromium', () => {
 
   it('supports keyboard selection, Back, PAT cancellation and focus restoration without provisioning', async () => {
     const api = makeCatalogClient([githubHandoffEntry]);
-    const prepare = vi.fn(async () => 'branch-1');
     const complete = vi.fn();
     const update = vi.fn();
-    render(<Harness api={api} prepare={prepare} complete={complete} update={update} />);
+    render(<Harness api={api} complete={complete} update={update} />);
     await waitFor(() =>
       expect(screen.getByRole('heading', { name: 'Choose your tools' })).toHaveFocus()
     );
@@ -229,7 +226,6 @@ describe('onboarding-owned Catalog in Chromium', () => {
     await waitFor(() =>
       expect(screen.queryByPlaceholderText(/bearer access token/)).not.toBeInTheDocument()
     );
-    expect(prepare).not.toHaveBeenCalled();
     expect(api.connect).not.toHaveBeenCalled();
     expect(complete).not.toHaveBeenCalled();
     const reopened = await openGitHub();
@@ -253,32 +249,36 @@ describe('onboarding-owned Catalog in Chromium', () => {
     expect(JSON.stringify(update.mock.calls)).not.toContain('test-only-not-a-provider-credential');
   });
 
-  it('prepares only on Connect, retries a refused PAT and returns in context before completion', async () => {
+  it('installs without workspace or session creation, retries a refused PAT and returns in context before completion', async () => {
     const api = makeCatalogClient([githubHandoffEntry]);
-    api.connect.mockRejectedValueOnce(new Error('Credential not accepted. Try again.'));
-    const prepare = vi.fn(async () => 'branch-1');
+    api.connect.mockRejectedValueOnce(
+      new Error('Could not connect this server. Check your credentials and try again.')
+    );
     const complete = vi.fn();
     const update = vi.fn();
-    render(<Harness api={api} prepare={prepare} complete={complete} update={update} />);
+    render(<Harness api={api} complete={complete} update={update} />);
     const { input, drawer } = await openGitHub();
-    expect(prepare).not.toHaveBeenCalled();
     await userEvent.fill(input, 'test-only-credential');
     await userEvent.click(
       drawer.getByRole('checkbox', { name: 'I understand what this server can access' })
     );
-    await userEvent.click(drawer.getByRole('button', { name: /Verify key & connect/ }));
-    await drawer.findByText('Credential not accepted. Try again.');
+    await userEvent.click(drawer.getByRole('button', { name: 'Connect' }));
+    await drawer.findByText('Could not connect this server. Check your credentials and try again.');
     await userEvent.fill(input, 'test-only-retry');
-    await userEvent.click(drawer.getByRole('button', { name: /Verify key & connect/ }));
+    await userEvent.click(drawer.getByRole('button', { name: 'Connect' }));
     await drawer.findByText('Connected and ready');
     expect(api.connect).toHaveBeenLastCalledWith(
       expect.objectContaining({
-        branch_id: 'branch-1',
         bearer_token: 'test-only-retry',
         acknowledged_disclosure: githubHandoffEntry.permission_disclosure,
       })
     );
     expect(complete).not.toHaveBeenCalled();
+    expect(api.client.service('mcp-catalog/start-session').create).not.toHaveBeenCalled();
+    expect(api.client.service('sessions').create).not.toHaveBeenCalled();
+    expect(api.client.service('boards').create).not.toHaveBeenCalled();
+    expect(drawer.queryByRole('button', { name: /Start.*session/ })).not.toBeInTheDocument();
+    expect(drawer.queryByRole('combobox')).not.toBeInTheDocument();
     await userEvent.click(drawer.getByRole('button', { name: 'Return to onboarding' }));
     await click(/^Continue/);
     await click(/Meet QA/);

@@ -1,6 +1,6 @@
 import type { AgorClient } from '@agor-live/client';
 import { Button, Card, Checkbox, Flex, Typography, theme } from 'antd';
-import { type MouseEvent, useId } from 'react';
+import { type MouseEvent, useEffect, useId } from 'react';
 import type { OnboardingIntegrationRecommendation } from '../../utils/onboardingGoals';
 import { useCatalogReadiness } from '../Marketplace/useCatalogReadiness';
 import { McpLogo } from '../McpLogo';
@@ -11,6 +11,7 @@ interface Props {
   client: AgorClient | null;
   connected: boolean;
   authGeneration: number;
+  readinessRevision?: number;
   userId?: string;
   selected: boolean;
   onToggle: () => void;
@@ -28,6 +29,7 @@ export function OnboardingToolRow({
   client,
   connected,
   authGeneration,
+  readinessRevision = 0,
   userId,
   selected,
   onToggle,
@@ -45,6 +47,9 @@ export function OnboardingToolRow({
     authGeneration,
     userId,
   });
+  useEffect(() => {
+    if (readinessRevision > 0) void refresh();
+  }, [readinessRevision, refresh]);
   const name = rec.id === 'slack' ? 'Slack MCP' : rec.name;
   const state = !catalogKey
     ? 'Not available in Catalog'

@@ -5,7 +5,7 @@
  * Steps: goals → workspace (name + template gallery) → llm → tools → done
  *
  * Tools use the existing Catalog controller and secure drawer in context.
- * Explicit Connect prepares a resumable workspace without completing onboarding;
+ * Explicit Connect saves only the MCP connection, without provisioning a workspace;
  * ordinary Back/Skip never create resources or discard completed connections.
  */
 
@@ -410,11 +410,6 @@ export interface OnboardingWizardProps {
     result: OnboardingCompletionResult,
     attempt: OnboardingCompletionAttempt
   ) => void | Promise<void>;
-  /** Prepare only the resumable workspace on an explicit Catalog Connect. */
-  onPrepareTools?: (
-    result: OnboardingCompletionResult,
-    attempt: OnboardingCompletionAttempt
-  ) => Promise<string | undefined>;
   /** Called when the user dismisses the wizard without completing it. */
   onDismiss?: (progress: Partial<OnboardingState>) => void;
 
@@ -480,7 +475,6 @@ export function OnboardingWizard({
   open,
   isCurrent = ALWAYS_CURRENT,
   onComplete,
-  onPrepareTools,
   onDismiss,
   user,
   client,
@@ -532,10 +526,8 @@ export function OnboardingWizard({
   const [toolsConfirmed, setToolsConfirmed] = useState(false);
   const [slackGatewayIntent, setSlackGatewayIntent] =
     useState<OnboardingSlackGatewayIntent>('prefer-existing');
-  const [preparedBranchId, setPreparedBranchId] = useState<string>();
   const [connectedMcpServerIds, setConnectedMcpServerIds] = useState<string[]>([]);
   const createdBoardIdRef = useRef<string | null>(null);
-  const prepareToolsInFlight = useRef<Promise<string> | null>(null);
   const toggleTool = useCallback((id: string) => {
     setToolsSkipped(false);
     setDeselectedToolIds((prev) => {
@@ -573,7 +565,7 @@ export function OnboardingWizard({
   // avatar and the teammate's framework source branch — never the name.
   const [selectedTemplateId, setSelectedTemplateId] = useState<TeammateGalleryCardId | null>(null);
   const [invalidSavedTemplateId, setInvalidSavedTemplateId] = useState<string | null>(null);
-  // Connect and Done share the same resumable board saga. Browsing alone creates nothing.
+  // Final completion owns the resumable board saga. Connecting tools creates no workspace.
   const [boardError, setBoardError] = useState<string | null>(null);
   const [createdBoardId, setCreatedBoardId] = useState<string | null>(null);
   const boardCreationConfirmedRef = useRef(false);
@@ -597,7 +589,6 @@ export function OnboardingWizard({
     setToolsSkipped(false);
     setToolsConfirmed(false);
     setSlackGatewayIntent('prefer-existing');
-    setPreparedBranchId(undefined);
     setConnectedMcpServerIds([]);
     createdBoardIdRef.current = null;
     setSelectedAgent(null);
@@ -637,7 +628,7 @@ export function OnboardingWizard({
     const seedKey = `${user?.user_id ?? '__no_user__'}:${savedBoardId ?? ''}`;
     if (userSeedRef.current === seedKey) return;
     userSeedRef.current = seedKey;
-    // Our own preparation write must not reseed the wizard onto Ready mid-drawer.
+    // Our own progress writes must not reseed an open wizard onto Ready.
     if (createdBoardId && createdBoardId === savedBoardId) return;
     // Pre-select LLM if user already has one configured
     if (hasAnyLlmKey(user, managedClaudeLoginAvailable)) {
@@ -1005,50 +996,6 @@ export function OnboardingWizard({
     user,
   ]);
 
-  const prepareToolsWorkspace = async (): Promise<string> => {
-    if (prepareToolsInFlight.current) return prepareToolsInFlight.current;
-    if (!teammateName.trim())
-      throw new Error('Go Back and name your teammate before connecting tools.');
-    if (!onPrepareTools) throw new Error('Workspace preparation is unavailable. Try again.');
-    const generation = completionAttemptGenerationRef.current;
-    const attempt = {
-      isCurrent: () => isCurrent() && generation === completionAttemptGenerationRef.current,
-    };
-    const promise = (async () => {
-      const boardId = await ensureBoard();
-      if (!attempt.isCurrent()) throw new Error('Setup was cancelled.');
-      const branchId = await onPrepareTools(
-        {
-          boardId,
-          branchId: preparedBranchId ?? '',
-          sessionId: '',
-          path: 'teammate',
-          teammateName: teammateName.trim(),
-          teammateEmoji,
-          sourceBranch: resolveTemplateSourceBranch(selectedTemplateId),
-          sourceRemoteUrl: resolveTemplateSourceRemoteUrl(selectedTemplateId),
-          templateId: selectedTemplateId,
-          agent: selectedAgent,
-          goals: selectedGoals,
-        },
-        attempt
-      );
-      if (!attempt.isCurrent()) throw new Error('Setup was cancelled.');
-      if (!branchId)
-        throw new Error('Your teammate workspace is not ready. Retry when setup is available.');
-      setPreparedBranchId(branchId);
-      await saveOnboardingProgress({ branchId });
-      if (!attempt.isCurrent()) throw new Error('Setup was cancelled.');
-      return branchId;
-    })();
-    prepareToolsInFlight.current = promise;
-    try {
-      return await promise;
-    } finally {
-      prepareToolsInFlight.current = null;
-    }
-  };
-
   const goToStep = useCallback((step: WizardStep) => {
     setCurrentStep(step);
   }, []);
@@ -1215,8 +1162,8 @@ export function OnboardingWizard({
         break;
       }
       case 'workspace': {
-        // Naming does not provision. Explicit Catalog Connect or final completion
-        // prepares the resumable workspace. Skip remains the no-teammate path.
+        // Naming and Catalog Connect do not provision a workspace. Final completion
+        // owns provisioning. Skip remains the no-teammate path.
         goToStep('llm');
         break;
       }
@@ -1255,16 +1202,13 @@ export function OnboardingWizard({
           if (!isCurrent()) return;
           if (!client) throw new Error('Not connected - try again when Agor reconnects.');
 
-          // An abandoned drawer may still be preparing the same workspace.
-          // Settle that one operation before final completion resumes it.
-          await prepareToolsInFlight.current?.catch(() => undefined);
           const boardId = await ensureBoard();
           if (!completionAttempt.isCurrent()) return;
           await observeSlowCompletion(
             Promise.resolve(
               onComplete(
                 {
-                  branchId: preparedBranchId ?? '',
+                  branchId: '',
                   sessionId: '',
                   boardId,
                   path: 'teammate',
@@ -1326,7 +1270,6 @@ export function OnboardingWizard({
     toolsSkipped,
     toolsConfirmed,
     slackGatewayIntent,
-    preparedBranchId,
     connectedMcpServerIds,
     ensureBoard,
     selectedAgent,
@@ -2008,7 +1951,6 @@ export function OnboardingWizard({
         kit={mergeGoalIntegrationRecs(selectedGoals)}
         isSelected={(id) => !toolsSkipped && !deselectedToolIds.has(id)}
         onToggle={toggleTool}
-        prepareBranch={prepareToolsWorkspace}
         onConnected={(serverId) =>
           setConnectedMcpServerIds((ids) => (ids.includes(serverId) ? ids : [...ids, serverId]))
         }

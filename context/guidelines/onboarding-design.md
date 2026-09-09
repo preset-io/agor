@@ -223,21 +223,27 @@ existing Catalog controller/detail drawer in onboarding presentation. Do not
 add a second auth API or auth state machine, restore obsolete Catalog routes,
 or complete onboarding just to open a connection drawer.
 
-Browsing creates nothing. Explicit Connect prepares the same resumable board
-and teammate branch used by completion, without starting the bootstrap session.
-Catalog then uses its ordinary consent, live readiness, policy, OAuth, secure
-credential input, and connection services. OAuth pre-opens its isolated popup
-on the Connect gesture before asynchronous workspace preparation. Ready means
-a verified key/open connection or durable OAuth attempt plus caller-scoped
-credential confirmation, never popup navigation alone. Return to onboarding
-closes the drawer without navigation. Cancellation erases private input;
-authenticated-owner/generation replacement fences stale continuations.
+Browsing creates nothing. Explicit Connect uses Catalog's install-only service:
+it saves or reuses an MCP server without creating a board, branch, or session.
+Onboarding explicitly supplies `context.mode: 'onboarding'` to `CatalogTab`;
+the shared detail drawer receives the same mode. No pathname detection or
+context-specific spacing is used. Consent, live readiness, policy, secure token
+input, isolated OAuth popup, and durable attempt plus caller-scoped credential
+confirmation remain owned by Catalog.
 
-Connect may already have saved a workspace, server, and idle tool session when
-the drawer is closed. Back/Skip do not roll those resources back. Reload resumes
-the saved workspace; saved tool sessions remain its recovery surface. Only
-server IDs, never tokens/auth state, are forwarded to bootstrap attachment.
-Catalog tool sessions must not be mistaken for the teammate bootstrap session.
+Onboarding never loads tryout teammates, exposes session actions, creates or
+navigates to a tryout, or stages a starter prompt. Ready connections offer
+**Return to onboarding**; unconfirmed OAuth can be retried locally or deferred.
+Outside onboarding the normal Catalog retains install-first → **Start new
+session** → teammate/agent selection → explicit tryout with editable unsent
+starter text. Installation is not proof of OAuth success.
+
+Cancellation erases private input; authenticated-owner/generation replacement
+fences stale continuations. Back/Skip do not delete saved connections. Saved
+connections can be recovered through My Servers after reload; only confirmed
+server IDs, never tokens/auth state, are forwarded to the first teammate
+session when onboarding completes. Workspace creation occurs at completion,
+not in the auth drawer.
 
 GitHub uses the reviewed `io.github.github/github-mcp-server` PAT recipe.
 Slack is deliberately separate: enabled, permission-usable gateways are
@@ -280,8 +286,7 @@ it is not a visually reimplemented auth drawer. `CatalogDrawer` is their shared
 presentation seam for detail/auth, pre-selection loading/error, and Slack
 availability: one 520px responsive AntD drawer, default header/body padding,
 token-spaced body flow, and no separate footer padding. Onboarding returns only
-these drawers, not an empty Catalog grid wrapper. Disclosure spacing and the
-destination `Form.Item` layout belong to the shared detail component; onboarding
-supplies workspace context instead of a Branch selector and a Return callback
-instead of navigation, not spacing overrides. Real-browser parity tests compare
+these drawers, not an empty Catalog grid wrapper. Disclosure and auth form spacing belong to the shared detail component, extracted
+from #2715’s actual drawer implementation. Onboarding supplies a connection-only
+mode and Return callback, not spacing overrides or a destination selector. Real-browser parity tests compare
 both entry points for token and OAuth setup at all four supported viewports.

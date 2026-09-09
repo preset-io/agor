@@ -19,7 +19,6 @@ interface Props {
   kit: OnboardingIntegrationRecommendation[];
   isSelected: (id: string) => boolean;
   onToggle: (id: string) => void;
-  prepareBranch: () => Promise<string>;
   onConnected: (serverId: string) => void;
   gatewayIntent: OnboardingSlackGatewayIntent;
   onGatewayIntent: (intent: OnboardingSlackGatewayIntent) => void;
@@ -35,10 +34,10 @@ function ToolsForIdentity(props: Props) {
     kit,
     isSelected,
     onToggle,
-    prepareBranch,
     gatewayIntent,
     onGatewayIntent,
   } = props;
+  const [readinessRevision, setReadinessRevision] = useState(0);
   const [entry, setEntry] = useState<string>();
   const [slackOpen, setSlackOpen] = useState(false);
   const trigger = useRef<HTMLElement | null>(null);
@@ -75,13 +74,14 @@ function ToolsForIdentity(props: Props) {
   return (
     <Flex vertical gap="small">
       <Typography.Paragraph type="secondary" style={{ fontSize: token.fontSizeSM }}>
-        Connect tools here without leaving setup. Connections are optional. Each Connect saves a
-        tool session in your teammate workspace; Back and Skip do not delete saved connections.
+        Connect tools here without leaving setup. Connections are optional. Connect saves only your
+        MCP connection; Back and Skip do not delete saved connections.
       </Typography.Paragraph>
       <Flex vertical role="list" aria-label="Suggested MCP tools" gap={token.marginXS}>
         {kit.map((rec) => (
           <OnboardingToolRow
             key={rec.id}
+            readinessRevision={readinessRevision}
             recommendation={rec}
             client={client}
             userId={user?.user_id}
@@ -167,8 +167,15 @@ function ToolsForIdentity(props: Props) {
           connected={connected}
           connecting={!connected}
           authGeneration={authGeneration}
-          initialSelection={{ entryName: entry }}
-          onboarding={{ prepareBranch, onClose: close, onConnected: props.onConnected }}
+          context={{
+            mode: 'onboarding',
+            entryName: entry,
+            onClose: close,
+            onConnected: (serverId) => {
+              props.onConnected(serverId);
+              setReadinessRevision((value) => value + 1);
+            },
+          }}
         />
       )}
     </Flex>

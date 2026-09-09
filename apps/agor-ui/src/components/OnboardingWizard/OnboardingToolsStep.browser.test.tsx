@@ -52,13 +52,11 @@ function Harness({
   api,
   user = admin,
   generation = 1,
-  prepare = async () => 'branch-1',
   onConnected = vi.fn(),
 }: {
   api: ReturnType<typeof apiFor>;
   user?: User;
   generation?: number;
-  prepare?: () => Promise<string>;
   onConnected?: (id: string) => void;
 }) {
   const [intent, setIntent] = useState<OnboardingSlackGatewayIntent>('prefer-existing');
@@ -74,7 +72,6 @@ function Harness({
             kit={[recs.github, recs.linear, recs.slack]}
             isSelected={() => true}
             onToggle={() => {}}
-            prepareBranch={prepare}
             onConnected={onConnected}
             gatewayIntent={intent}
             onGatewayIntent={setIntent}
@@ -150,17 +147,20 @@ describe('onboarding Slack and authority boundaries in Chromium', () => {
     await screen.findByText(/Prefer your existing Slack gateway: Team bot/);
   });
   it.each(['identity', 'tenant-generation', 'cancel'] as const)(
-    'discards PAT and prevents a stale connect after %s during preparation',
+    'discards PAT and prevents a stale connect after %s during installation',
     async (change) => {
       const api = apiFor();
-      let resolve!: (branch: string) => void;
-      const prepare = vi.fn(
+      const connected = vi.fn();
+      const result = await api.connect();
+      api.connect.mockClear();
+      let resolve!: (value: typeof result) => void;
+      api.connect.mockImplementation(
         () =>
-          new Promise<string>((done) => {
+          new Promise((done) => {
             resolve = done;
           })
       );
-      const view = render(<Harness api={api} prepare={prepare} />);
+      const view = render(<Harness api={api} onConnected={connected} />);
       const drawer = await openTool('GitHub');
       await userEvent.fill(
         await drawer.findByPlaceholderText('Paste your GitHub bearer access token'),
@@ -169,23 +169,23 @@ describe('onboarding Slack and authority boundaries in Chromium', () => {
       await userEvent.click(
         drawer.getByRole('checkbox', { name: 'I understand what this server can access' })
       );
-      await userEvent.click(drawer.getByRole('button', { name: /Verify key & connect/ }));
-      await waitFor(() => expect(prepare).toHaveBeenCalledOnce());
+      await userEvent.click(drawer.getByRole('button', { name: 'Connect' }));
+      await waitFor(() => expect(api.connect).toHaveBeenCalledOnce());
       if (change === 'cancel') await userEvent.click(drawer.getByRole('button', { name: 'Close' }));
       else
         view.rerender(
           <Harness
             api={api}
-            prepare={prepare}
             generation={change === 'tenant-generation' ? 2 : 1}
             user={change === 'identity' ? ({ ...admin, user_id: 'bob' } as User) : admin}
           />
         );
-      resolve('old-tenant-branch');
+      resolve(result);
       await waitFor(() =>
         expect(screen.queryByPlaceholderText(/bearer access token/)).not.toBeInTheDocument()
       );
-      expect(api.connect).not.toHaveBeenCalled();
+      expect(connected).not.toHaveBeenCalled();
+      expect(api.client.service('mcp-catalog/start-session').create).not.toHaveBeenCalled();
       const reopened = await openTool('GitHub');
       expect(await reopened.findByPlaceholderText(/bearer access token/)).toHaveValue('');
       expect(JSON.stringify({ ...localStorage, ...sessionStorage })).not.toContain(
@@ -193,47 +193,77 @@ describe('onboarding Slack and authority boundaries in Chromium', () => {
       );
     }
   );
-  it('keeps OAuth pending until durable attempt AND caller credential confirmation, then returns in context', async () => {
-    const api = apiFor([], true);
-    const onConnected = vi.fn();
-    const popup = {
-      opener: null,
-      document: { title: '', body: { textContent: '' } },
-      closed: false,
-      location: { replace: vi.fn() },
-      close: vi.fn(),
-    };
-    vi.spyOn(window, 'open').mockReturnValue(popup as unknown as Window);
-    vi.mocked(api.client.service('mcp-catalog/readiness').get).mockResolvedValue({
-      catalog_key: oauthEntry.name,
-      state: 'oauth_required',
-    } as never);
-    const base = await api.connect();
-    api.connect.mockClear();
-    api.connect.mockResolvedValue({
-      ...base,
-      mcp_server: { ...base.mcp_server, auth: { type: 'oauth' } },
-    } as never);
-    vi.mocked(api.client.service('mcp-servers/oauth-start').create).mockResolvedValue({
-      success: true,
-      authorizationUrl: 'https://accounts.example.test/authorize',
-      attempt_id: 'attempt-1',
-    } as never);
-    const status = vi.mocked(api.client.service('mcp-servers/oauth-attempt-status').get);
-    status.mockResolvedValue({ status: 'pending', mcp_server_id: 'server-1' } as never);
-    render(<Harness api={api} onConnected={onConnected} />);
-    const drawer = await openTool('Linear');
-    await userEvent.click(
-      drawer.getByRole('checkbox', { name: 'I understand what this server can access' })
-    );
-    await userEvent.click(drawer.getByRole('button', { name: /Connect with Linear/ }));
-    await drawer.findByText('Sign-in pending');
-    expect(popup.location.replace).toHaveBeenCalledWith('https://accounts.example.test/authorize');
-    expect(onConnected).not.toHaveBeenCalled();
-    status.mockResolvedValue({ status: 'succeeded', mcp_server_id: 'server-1' } as never);
-    await drawer.findByText('Connected and ready');
-    await waitFor(() => expect(onConnected).toHaveBeenCalledWith('server-1'));
-    await userEvent.click(drawer.getByRole('button', { name: 'Return to onboarding' }));
-    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
-  });
+  it.each([false, true])(
+    'keeps OAuth pending until durable attempt AND caller credential confirmation, then returns in context (retry: %s)',
+    async (retry) => {
+      const api = apiFor([], true);
+      const onConnected = vi.fn();
+      const popup = {
+        opener: null,
+        document: { title: '', body: { textContent: '' } },
+        closed: false,
+        location: { replace: vi.fn() },
+        close: vi.fn(),
+      };
+      vi.spyOn(window, 'open').mockReturnValue(popup as unknown as Window);
+      vi.mocked(api.client.service('mcp-catalog/readiness').get).mockResolvedValue({
+        catalog_key: oauthEntry.name,
+        state: 'oauth_required',
+      } as never);
+      const base = await api.connect();
+      api.connect.mockClear();
+      api.connect.mockResolvedValue({
+        ...base,
+        mcp_server: { ...base.mcp_server, auth: { type: 'oauth' } },
+      } as never);
+      vi.mocked(api.client.service('mcp-servers/oauth-start').create).mockResolvedValue({
+        success: true,
+        authorizationUrl: 'https://accounts.example.test/authorize',
+        attempt_id: 'attempt-1',
+      } as never);
+      if (retry)
+        vi.mocked(api.client.service('mcp-servers/oauth-start').create).mockRejectedValueOnce(
+          new Error('secret-provider-response-do-not-display')
+        );
+      const status = vi.mocked(api.client.service('mcp-servers/oauth-attempt-status').get);
+      status.mockResolvedValue({ status: 'pending', mcp_server_id: 'server-1' } as never);
+      render(<Harness api={api} onConnected={onConnected} />);
+      const drawer = await openTool('Linear');
+      await userEvent.click(
+        drawer.getByRole('checkbox', { name: 'I understand what this server can access' })
+      );
+      await userEvent.click(drawer.getByRole('button', { name: 'Connect' }));
+      if (retry) {
+        await drawer.findByText('Sign-in not completed');
+        expect(screen.queryByText(/secret-provider-response/)).not.toBeInTheDocument();
+        expect(onConnected).not.toHaveBeenCalled();
+        await userEvent.click(drawer.getByRole('button', { name: 'Retry sign-in' }));
+        await userEvent.click(await drawer.findByRole('button', { name: 'Connect' }));
+      }
+      await drawer.findByText('Sign-in pending');
+      expect(drawer.queryByRole('button', { name: /Start.*session/ })).not.toBeInTheDocument();
+      expect(drawer.queryByRole('combobox')).not.toBeInTheDocument();
+      expect(popup.location.replace).toHaveBeenCalledWith(
+        'https://accounts.example.test/authorize'
+      );
+      expect(onConnected).not.toHaveBeenCalled();
+      vi.mocked(api.client.service('mcp-catalog/readiness').get).mockResolvedValue({
+        catalog_key: oauthEntry.name,
+        state: 'installed_ready',
+      } as never);
+      status.mockResolvedValue({ status: 'succeeded', mcp_server_id: 'server-1' } as never);
+      await drawer.findByText('Connected and ready');
+      expect(api.client.service('mcp-catalog/start-session').create).not.toHaveBeenCalled();
+      expect(api.client.service('sessions').create).not.toHaveBeenCalled();
+      expect(JSON.stringify({ ...localStorage, ...sessionStorage })).not.toContain(
+        'Explain this repository.'
+      );
+      await waitFor(() => expect(onConnected).toHaveBeenCalledWith('server-1'));
+      await userEvent.click(drawer.getByRole('button', { name: 'Return to onboarding' }));
+      await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+      const row = screen.getByText('Linear').closest<HTMLElement>('.ant-card')!;
+      expect(await within(row).findByText('Ready to use')).toBeInTheDocument();
+      expect(within(row).getByRole('button', { name: /^Sign in through Catalog/ })).toHaveFocus();
+    }
+  );
 });
