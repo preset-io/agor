@@ -46,6 +46,15 @@ describe('MCP Catalog real Chromium flows', () => {
     const trigger = screen.getByRole('button', { name: 'Open MCP Catalog' });
     // Header may horizontally overflow on phone; scroll the actual entry into view.
     trigger.scrollIntoView();
+    // Normalize inherited pointer/tooltip state before the keyboard flow:
+    // a hovered header tooltip can consume Escape instead of the modal.
+    // Start hovered to cover that race, then wait for the tooltip's exit motion.
+    await userEvent.hover(trigger);
+    await screen.findByRole('tooltip', { name: 'Open MCP Catalog' });
+    await userEvent.unhover(trigger);
+    await waitFor(() =>
+      expect(screen.queryByRole('tooltip', { name: 'Open MCP Catalog' })).not.toBeInTheDocument()
+    );
     act(() => trigger.focus());
     await userEvent.keyboard('{Enter}');
     const modal = await findCatalogModal();
@@ -105,7 +114,11 @@ describe('MCP Catalog real Chromium flows', () => {
     const card = await screen.findByRole('button', { name: 'Open DeepWiki' });
     await userEvent.click(card);
     const drawer = await screen.findByRole('dialog', { name: /DeepWiki/ });
-    await userEvent.click(within(drawer).getByRole('checkbox', { name: /I understand/ }));
+    // This flow tests the handoff, not pointer hit-testing during drawer entry.
+    const consent = within(drawer).getByRole('checkbox', { name: /I understand/ });
+    act(() => consent.focus());
+    await userEvent.keyboard(' ');
+    expect(consent).toBeChecked();
     const connect = within(drawer).getByRole('button', { name: /Check & connect/ });
     await waitFor(() => expect(connect).toBeEnabled());
     await userEvent.click(connect);
