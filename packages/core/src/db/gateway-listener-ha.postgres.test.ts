@@ -303,7 +303,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('gateway listener HA (Postg
     const tenantA = `gateway-a-${generateId()}` as TenantID;
     const tenantB = `gateway-b-${generateId()}` as TenantID;
     const a = await seedChannel(db, tenantA);
-    await seedChannel(db, tenantB);
+    const b = await seedChannel(db, tenantB);
     const discord = await seedChannel(db, tenantA, { channelType: 'discord' });
 
     const refs = await runWithSystemDatabaseScope(
@@ -343,9 +343,13 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('gateway listener HA (Postg
     });
 
     await runWithTenantDatabaseScope(db, tenantB, async (scoped) => {
-      expect(
-        await new GatewayChannelRepository(scoped).findEnabledListenerCandidateIds(100)
-      ).not.toContain(a.channel.id);
+      const candidates = await new GatewayChannelRepository(scoped).findEnabledListenerCandidateIds(
+        100
+      );
+      expect(candidates).toContain(b.channel.id);
+      // Use an unclaimed foreign channel: a held lease would independently
+      // exclude the row and mask a missing tenant boundary.
+      expect(candidates).not.toContain(discord.channel.id);
       expect(await new GatewayChannelRepository(scoped).findById(a.channel.id)).toBeNull();
       expect(
         await new GatewayChannelRepository(scoped).claimListener({
