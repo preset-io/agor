@@ -98,7 +98,7 @@ describe('MCP Catalog real Chromium flows', () => {
     await waitFor(() => expect(api.listenerCount()).toBe(0));
   });
 
-  it('Connect then Open session removes the portaled detail drawer before the destination renders', async () => {
+  it('Connect then Start session removes the portaled detail drawer before the destination renders', async () => {
     const api = makeCatalogClient();
     render(<CatalogHarness client={api.client} />);
     await userEvent.click(screen.getByRole('button', { name: 'Open MCP Catalog' }));
@@ -106,10 +106,12 @@ describe('MCP Catalog real Chromium flows', () => {
     await userEvent.click(card);
     const drawer = await screen.findByRole('dialog', { name: /DeepWiki/ });
     await userEvent.click(within(drawer).getByRole('checkbox', { name: /I understand/ }));
-    const connect = within(drawer).getByRole('button', { name: /Check & connect/ });
+    const connect = within(drawer).getByRole('button', { name: /Connect/ });
     await waitFor(() => expect(connect).toBeEnabled());
     await userEvent.click(connect);
-    const open = await screen.findByRole('button', { name: 'Open session' });
+    await userEvent.click(await screen.findByRole('button', { name: 'Start new session' }));
+    const open = await screen.findByRole('button', { name: 'Start session', exact: true });
+    await waitFor(() => expect(open).toBeEnabled());
     await userEvent.click(open);
     await waitFor(() => expect(screen.getByTestId('route').textContent).toMatch(/^\/s\//));
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();

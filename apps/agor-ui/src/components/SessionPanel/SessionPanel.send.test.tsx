@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { AppActionsProvider } from '../../contexts/AppActionsContext';
 import { ConnectionProvider } from '../../contexts/ConnectionContext';
 import { agorStore } from '../../store/agorStore';
+import { savePromptDraft, stagePromptDraftSeed } from '../../utils/promptDrafts';
 import type { UploadFilesToSessionResult } from '../FileUpload/upload';
 import SessionPanel from './SessionPanel';
 
@@ -122,6 +123,7 @@ describe('SessionPanel composer send', () => {
     agorStore.getState().reset();
     uploadMockState.uploadFilesToSession.mockReset();
     localStorage.clear();
+    sessionStorage.clear();
     Object.defineProperty(URL, 'createObjectURL', {
       value: vi.fn(() => 'blob:preview'),
       configurable: true,
@@ -130,6 +132,46 @@ describe('SessionPanel composer send', () => {
       value: vi.fn(),
       configurable: true,
     });
+  });
+
+  it('hydrates a Catalog starter prompt as a one-shot editable unsent draft', async () => {
+    const onSendPrompt = vi.fn();
+    stagePromptDraftSeed('user-a', 'session-1', 'Editable Catalog starter');
+
+    const { container } = renderSessionPanel({ onSendPrompt });
+    const textarea = screen.getByPlaceholderText(/Prompt here/i);
+    expect(textarea).toHaveValue('Editable Catalog starter');
+    expect(onSendPrompt).not.toHaveBeenCalled();
+    expect(screen.queryByText('Starter prompt suggestion')).not.toBeInTheDocument();
+
+    fireEvent.change(textarea, { target: { value: 'Edited before sending' } });
+    fireEvent.click(container.querySelector('button.ant-btn-primary') as HTMLButtonElement);
+
+    await waitFor(() =>
+      expect(onSendPrompt).toHaveBeenCalledWith(
+        'session-1',
+        'Edited before sending',
+        expect.any(String)
+      )
+    );
+    expect(sessionStorage.getItem('agor:prompt-draft-seed')).toBeNull();
+  });
+
+  it('preserves an existing user draft instead of replacing it with a starter', () => {
+    savePromptDraft('user-a', 'session-1', 'Already typed');
+    stagePromptDraftSeed('user-a', 'session-1', 'Catalog starter');
+    renderSessionPanel();
+    expect(screen.getByPlaceholderText(/Prompt here/i)).toHaveValue('Already typed');
+    expect(sessionStorage.getItem('agor:prompt-draft-seed')).toBeNull();
+  });
+
+  it('retains the seed until authenticated composer bootstrap completes', () => {
+    stagePromptDraftSeed('user-a', 'session-1', 'Catalog starter');
+    const view = renderSessionPanel({ currentUserId: '' });
+    expect(screen.getByPlaceholderText(/Prompt here/i)).toHaveValue('');
+    view.rerenderUser('user-a');
+    expect(screen.getByPlaceholderText(/Prompt here/i)).toHaveValue('Catalog starter');
+    expect(view.onSendPrompt).not.toHaveBeenCalled();
   });
 
   it('sends prompt edits typed while attachment upload is in flight with the upload-start attachments', async () => {

@@ -66,8 +66,6 @@ const CURATED = {
  */
 const CONNECT_REQUEST = {
   catalog_key: DEEPWIKI,
-  branch_id: 'branch-1',
-  agentic_tool: 'claude-code' as const,
   acknowledged_disclosure: 'Reads public GitHub repository content only.',
 };
 

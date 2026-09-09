@@ -32,8 +32,6 @@ interface UseAgorClientOptions {
   accessToken?: string | null;
   /** Identity of the authenticated authority represented by accessToken. */
   authorityGeneration: number;
-  /** Runs synchronously before a successful socket generation is published. */
-  onBeforeAuthGenerationChange?: (previousGeneration: number, nextGeneration: number) => void;
 }
 
 interface BoundAgorClient {
@@ -50,20 +48,13 @@ interface BoundAgorClient {
  * @returns Client instance, connection state, and error
  */
 export function useAgorClient(options: UseAgorClientOptions): UseAgorClientResult {
-  const {
-    url = getDaemonUrl(),
-    accessToken,
-    authorityGeneration,
-    onBeforeAuthGenerationChange,
-  } = options;
+  const { url = getDaemonUrl(), accessToken, authorityGeneration } = options;
   const [connected, setConnected] = useState(false);
   const [connecting, setConnecting] = useState(!!accessToken);
   const [authGeneration, setAuthGeneration] = useState(0);
   const authGenerationRef = useRef(0);
   const [error, setError] = useState<string | null>(null);
   const clientBindingRef = useRef<BoundAgorClient | null>(null);
-  const beforeAuthGenerationChangeRef = useRef(onBeforeAuthGenerationChange);
-  beforeAuthGenerationChangeRef.current = onBeforeAuthGenerationChange;
   const hasToken = !!accessToken;
 
   // A render for a new authenticated authority must never expose the old
@@ -251,9 +242,6 @@ export function useAgorClient(options: UseAgorClientOptions): UseAgorClientResul
         announceSessionStreamsCapability(socketClient);
         const previousGeneration = authGenerationRef.current;
         const nextGeneration = previousGeneration + 1;
-        // Discard caller-private handoffs before routed children can render
-        // against the newly authenticated socket generation.
-        beforeAuthGenerationChangeRef.current?.(previousGeneration, nextGeneration);
         authGenerationRef.current = nextGeneration;
         setAuthGeneration(nextGeneration);
         setConnected(true);

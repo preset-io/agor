@@ -8,12 +8,18 @@
  */
 
 const DRAFT_KEY = 'agor:prompt-draft';
+const DRAFT_SEED_KEY = 'agor:prompt-draft-seed';
 const LEGACY_DRAFT_KEY_PREFIX = 'agor-draft-';
+const DRAFT_SEED_TTL_MS = 10 * 60 * 1000;
 
 interface StoredPromptDraft {
   ownerId: string;
   sessionId: string;
   text: string;
+}
+
+interface StoredPromptDraftSeed extends StoredPromptDraft {
+  createdAt: number;
 }
 
 function pruneLegacyDraftKeys(): void {
@@ -89,5 +95,76 @@ export function deletePromptDraft(
     }
   } catch {
     // ignore
+  }
+}
+
+/**
+ * Stage starter text across the modal-close/navigation boundary. This lives in
+ * sessionStorage separately from the current composer's draft so the old
+ * composer's unmount flush cannot overwrite it.
+ */
+export function stagePromptDraftSeed(ownerId: string, sessionId: string, text: string): void {
+  if (!text.trim()) return;
+  try {
+    sessionStorage.setItem(
+      DRAFT_SEED_KEY,
+      JSON.stringify({ ownerId, sessionId, text, createdAt: Date.now() })
+    );
+  } catch {
+    // sessionStorage unavailable
+  }
+}
+
+/** Consume starter text only for its exact user/session, once and within TTL. */
+export function consumePromptDraftSeed(
+  ownerId: string | undefined,
+  sessionId: string,
+  now = Date.now()
+): string {
+  if (!ownerId) return '';
+  try {
+    const raw = sessionStorage.getItem(DRAFT_SEED_KEY);
+    if (!raw) return '';
+    const seed = JSON.parse(raw) as Partial<StoredPromptDraftSeed>;
+    const seedOwnerId = seed.ownerId;
+    const seedSessionId = seed.sessionId;
+    const seedText = seed.text;
+    const seedCreatedAt = seed.createdAt;
+    const valid =
+      typeof seedOwnerId === 'string' &&
+      typeof seedSessionId === 'string' &&
+      typeof seedText === 'string' &&
+      typeof seedCreatedAt === 'number' &&
+      Number.isFinite(seedCreatedAt);
+    if (
+      !valid ||
+      typeof seedCreatedAt !== 'number' ||
+      now < seedCreatedAt ||
+      now - seedCreatedAt > DRAFT_SEED_TTL_MS ||
+      seedOwnerId !== ownerId
+    ) {
+      sessionStorage.removeItem(DRAFT_SEED_KEY);
+      return '';
+    }
+    if (seedSessionId !== sessionId) return '';
+    sessionStorage.removeItem(DRAFT_SEED_KEY);
+    return typeof seedText === 'string' ? seedText : '';
+  } catch {
+    try {
+      sessionStorage.removeItem(DRAFT_SEED_KEY);
+    } catch {
+      // ignore
+    }
+    return '';
+  }
+}
+
+/** Clear only the departing caller's handoff, even when no composer is mounted. */
+export function discardPromptDraftSeed(ownerId: string): void {
+  try {
+    const raw = sessionStorage.getItem(DRAFT_SEED_KEY);
+    if (raw && JSON.parse(raw)?.ownerId === ownerId) sessionStorage.removeItem(DRAFT_SEED_KEY);
+  } catch {
+    // Storage may be unavailable; an unreadable seed cannot hydrate a composer.
   }
 }
