@@ -36,6 +36,7 @@ import {
   branches,
   compare,
   decryptApiKey,
+  decryptApiKeyAsync,
   deleteFrom,
   encryptApiKey,
   eq,
@@ -1628,7 +1629,7 @@ export class UsersService {
     if (!encrypted) return undefined;
 
     try {
-      return decryptApiKey(encrypted);
+      return await decryptApiKeyAsync(encrypted);
     } catch (err) {
       console.error(`Failed to decrypt agentic_tools.${tool}.${field} for user ${userId}:`, err);
       return undefined;
@@ -1655,7 +1656,7 @@ export class UsersService {
     for (const [field, encrypted] of Object.entries(fields)) {
       if (!encrypted) continue;
       try {
-        out[field] = decryptApiKey(encrypted);
+        out[field] = await decryptApiKeyAsync(encrypted);
       } catch (err) {
         console.error(`Failed to decrypt agentic_tools.${tool}.${field} for user ${userId}:`, err);
       }

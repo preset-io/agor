@@ -1,7 +1,7 @@
 import { eq } from 'drizzle-orm';
 import type { Database } from '../db/client';
 import { select } from '../db/database-wrapper';
-import { decryptApiKey } from '../db/encryption';
+import { decryptApiKeyAsync } from '../db/encryption';
 import { SessionEnvSelectionRepository } from '../db/repositories/session-env-selections';
 import { users } from '../db/schema';
 import type {
@@ -197,7 +197,7 @@ export async function resolveUserEnvironment(
         }
 
         try {
-          const decryptedValue = decryptApiKey(entry.value_encrypted);
+          const decryptedValue = await decryptApiKeyAsync(entry.value_encrypted);
           if (decryptedValue && decryptedValue.trim() !== '') {
             env[key] = decryptedValue;
           }
@@ -215,7 +215,7 @@ export async function resolveUserEnvironment(
           for (const [key, encryptedValue] of Object.entries(toolFields)) {
             if (!encryptedValue) continue;
             try {
-              const decryptedValue = decryptApiKey(encryptedValue);
+              const decryptedValue = await decryptApiKeyAsync(encryptedValue);
               if (decryptedValue && decryptedValue.trim() !== '') {
                 env[key] = decryptedValue;
               }

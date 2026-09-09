@@ -1,5 +1,6 @@
 import { sql } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { resolveUserEnvironment } from '../../config/env-resolver';
 import { resolveProviderConnection } from '../../config/tenant-agentic-tool-resolver';
 import { generateId } from '../../lib/ids';
 import type { GatewayChannel, UserID } from '../../types';
@@ -110,6 +111,23 @@ describe.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
               source: 'user',
               connection: { OPENAI_API_KEY: `user-key-${tenant}` },
             });
+            const users = new UsersRepository(scoped);
+            expect(await users.getToolConfigField(own.user, 'codex', 'OPENAI_API_KEY')).toBe(
+              `user-key-${tenant}`
+            );
+            expect(await users.getToolConfig(own.user, 'codex')).toMatchObject({
+              OPENAI_API_KEY: `user-key-${tenant}`,
+            });
+            await expect(users.getToolConfig(foreign.user, 'codex')).resolves.toBeNull();
+            await expect(
+              users.getToolConfigField(foreign.user, 'codex', 'OPENAI_API_KEY')
+            ).resolves.toBeNull();
+            expect(await resolveUserEnvironment(own.user, scoped, { tool: 'codex' })).toMatchObject(
+              { OPENAI_API_KEY: `user-key-${tenant}` }
+            );
+            expect(
+              await resolveUserEnvironment(foreign.user, scoped, { tool: 'codex' })
+            ).not.toHaveProperty('OPENAI_API_KEY');
             // A foreign user ID cannot select their credential; normal tenant fallback remains local.
             expect(
               await resolveProviderConnection('codex', { userId: foreign.user, db: scoped })
