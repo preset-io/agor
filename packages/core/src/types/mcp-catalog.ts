@@ -81,6 +81,14 @@ export const MCP_CATALOG_CAPABILITIES = [
 
 export type MCPCatalogCapability = (typeof MCP_CATALOG_CAPABILITIES)[number];
 
+/** Reviewed reasons why Catalog must not attempt automatic installation. */
+export const MCP_CATALOG_SETUP_REASONS = [
+  'provider_approval',
+  'preregistered_client',
+  'callback_unverified',
+] as const;
+export type MCPCatalogSetupReason = (typeof MCP_CATALOG_SETUP_REASONS)[number];
+
 /**
  * What an entry states about the credentials its endpoint requires.
  *
@@ -167,7 +175,7 @@ export interface MCPCatalogEntry {
 
   /** Reviewed global restriction: browse for guidance, but never auto-install/register. */
   setup_required?: {
-    reason: 'provider_approval' | 'preregistered_client' | 'callback_unverified';
+    reason: MCPCatalogSetupReason;
     message: string;
     documentation_url: string;
   };

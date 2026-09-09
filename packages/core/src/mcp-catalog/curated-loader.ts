@@ -14,6 +14,7 @@ import {
   MCP_CATALOG_AUTHORED_AUTH_TYPES,
   MCP_CATALOG_CAPABILITIES,
   MCP_CATALOG_CATEGORIES,
+  MCP_CATALOG_SETUP_REASONS,
   MCP_OAUTH_COMPATIBILITY_MODES,
   MCP_OAUTH_DCR_MODES,
 } from '@agor/core/types';
@@ -120,7 +121,7 @@ const catalogEntrySchema = z
     credentials: catalogEntryCredentialsSchema.optional(),
     setup_required: z
       .object({
-        reason: z.enum(['provider_approval', 'preregistered_client', 'callback_unverified']),
+        reason: z.enum(MCP_CATALOG_SETUP_REASONS),
         message: nonEmpty.max(1000),
         documentation_url: httpUrl.refine(
           (value) => {
