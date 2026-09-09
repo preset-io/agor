@@ -517,6 +517,37 @@ these tags. Tool spans measure handler execution, not pre-handler SDK validation
 an MCP result containing `isError: true` remains a returned result rather than
 an exception. Use the protocol response to assess application success.
 
+Both enabled depths also expose capacity-related waits without per-request logs:
+
+- `postgres.transaction` covers a root transaction from acquisition through
+  commit/rollback. `db.transaction.acquire_ms` measures the interval until its
+  callback starts, including pool queueing, connection establishment, BEGIN and
+  transaction setup—not pure database lock wait. `db.pool.max` records the
+  configured connection limit. Its child `postgres.transaction.work` covers the
+  callback body. Nested savepoints are not counted as new pool acquisitions.
+- `crypto.scrypt` covers async secret-key derivation from submission through
+  completion, including native worker queueing and execution—not pure queue
+  wait. `crypto.pending_at_submit` counts other outstanding Agor derivations,
+  not all work in Node's shared pool. `crypto.in_tenant_transaction` identifies
+  derivations started inside a tenant database transaction, which can keep a
+  connection occupied while waiting. `crypto.envelope` is `legacy` or `bound`.
+  `crypto.configured_pool_size` records the startup `UV_THREADPOOL_SIZE` setting
+  (Node defaults to 4); it is not a measurement of active worker threads.
+
+These added tags contain no credentials, ciphertext, salts, bindings, or
+user/session/tenant IDs. Counts are process-wide capacity observations. The
+spans share the existing APM sampling and delivery path; a parent transaction
+and its nested work/crypto/query spans must not be summed as independent time.
+Acquisition failures have no `acquire_ms` value because the callback never ran.
+
+For long service spans with short SQL spans, inspect transaction acquisition
+first. For long transaction bodies, inspect nested crypto and other work before
+increasing either pool. PostgreSQL connections default to 10 per client unless
+`database.postgresql.pool.max` is configured. The separate libuv pool is shared
+by async crypto, filesystem and some DNS operations. A larger
+`UV_THREADPOOL_SIZE` must be set before starting Node; more workers can improve
+throughput with spare CPU/memory, but do not remove the work or its resource cost.
+
 `AGOR_APM_TRACE_SERVICES` (`off`, `entrypoint`, or `full`) overrides the YAML
 value so depth can be changed without editing config. Like all metrics
 settings, this is resolved into the daemon's immutable startup snapshot and

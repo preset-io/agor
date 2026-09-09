@@ -1,4 +1,5 @@
-import { createCipheriv, createDecipheriv, randomBytes, scrypt, scryptSync } from 'node:crypto';
+import { createCipheriv, createDecipheriv, randomBytes, scryptSync } from 'node:crypto';
+import { deriveSecretKeyAsync } from './secret-key-derivation';
 
 const ALGORITHM = 'aes-256-gcm';
 const KEY_LENGTH = 32;
@@ -88,12 +89,7 @@ export async function decryptApiKeyAsync(ciphertext: string, secret?: string): P
 
   try {
     const envelope = parseEnvelope(ciphertext);
-    const key = await new Promise<Buffer>((resolve, reject) => {
-      scrypt(masterSecret, envelope.salt, KEY_LENGTH, (error, derivedKey) => {
-        if (error) reject(error);
-        else resolve(derivedKey);
-      });
-    });
+    const key = await deriveSecretKeyAsync(masterSecret, envelope.salt, 'legacy');
     return decryptEnvelope(envelope, key);
   } catch {
     throw new Error('Secret decryption failed');

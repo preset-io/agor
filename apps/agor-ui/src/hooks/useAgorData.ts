@@ -662,17 +662,18 @@ export function useAgorData(
         ]);
         if (!authorityIsCurrent()) return false;
 
-        // Branches healed into first paint by a direct deep link — the URL
-        // session's branch, or a `/w/<id>` branch link. They seed `branchById`
+        // Branches healed into first paint by a `/w/<id>` branch link. They seed `branchById`
         // ahead of the board-scoped branch fetch so the displayed board can be
         // resolved and its target card paints immediately.
         const healedBranches: Branch[] = [];
 
         // Direct /s/<id>/ opens should work for archived sessions without broadening
         // the recent-session slice. If it missed the URL target, fetch just that
-        // session by ID/short ID. Its branch is only hydrated when it is still
-        // active; adding archived branches to `branchById` would make board-object
-        // joins render archived cards back onto active boards.
+        // session by ID/short ID. Do not await a separate branches.get here:
+        // sessions carry branch_board_id for board resolution, and the scoped
+        // branch batch / authority-fenced background hydration below loads active
+        // branches. Optional branch enrichment must not block session first paint.
+        // Older responses without branch_board_id use global background hydration.
         if (
           directSessionId &&
           !hasIdMatchingPrefix(directSessionId, sessionsList, (s) => s.session_id)
@@ -683,19 +684,6 @@ export function useAgorData(
               .get(directSessionId)) as Session;
             if (!sessionsList.some((s) => s.session_id === directSession.session_id)) {
               sessionsList.push(directSession);
-            }
-            if (!directSession.archived && directSession.branch_id) {
-              try {
-                const directBranch = (await client
-                  .service('branches')
-                  .get(directSession.branch_id)) as Branch;
-                if (!directBranch.archived) {
-                  healedBranches.push(directBranch);
-                }
-              } catch {
-                // The session can still open; it just won't be able to switch/recenter
-                // if the branch is inaccessible or gone.
-              }
             }
           } catch {
             // Leave normal URL resolution to report/not-heal unresolved session links.
