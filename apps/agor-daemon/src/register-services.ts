@@ -4618,7 +4618,9 @@ export async function registerMCPServices(
                   data.mcp_server_id ?? '<unsaved>',
                   (params as AuthenticatedParams | undefined)?.user?.user_id ?? '<unknown-user>',
                 ].join(':'),
-                cache: !durableOAuthFlows,
+                // A client-credentials test is probe-only, not durable consent.
+                // Never retain its token outside this request in either dialect.
+                cache: false,
                 assertCurrent: assertInitialRequestAuthority,
               },
               true
@@ -6107,8 +6109,9 @@ export async function registerMCPServices(
       } = await import('@agor/core/tools/mcp/oauth-refresh');
 
       try {
-        // In `shared` mode this refreshes a token nobody in particular owns,
-        // so the server row is the only thing that says who may ask.
+        // Shared refresh is authorized by server access and the caller's role;
+        // it retains the original consenter attribution rather than adopting
+        // the refreshing caller.
         const server = await runInOAuthTenantScope(db, tenantId, () =>
           loadMcpServerForCaller(db, serverId, params)
         );

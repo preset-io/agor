@@ -1573,6 +1573,9 @@ export class UsersService {
     }
 
     const authorityActorPredicate = this.actorStillCurrentPredicate(authority.actor, params);
+    // Immediate consenting-user FKs retire local shared MCP OAuth grants here,
+    // including direct DB deletes. No MCP lock acquisition: callback persistence
+    // orders user KEY SHARE before grant writes to match this cascade order.
     const removed = await deleteFrom(this.db, users)
       .where(
         withTenantPredicate(

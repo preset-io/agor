@@ -169,6 +169,30 @@ those Compose projects own isolated database volumes. HA keeps using its
 dedicated one-shot migrator before either daemon replica starts. Never set this
 variable or `SEED=true` merely to make a shared or production database boot.
 
+### Shared MCP OAuth grant attribution (0105)
+
+Both current-main journals allocate `0105_mcp_oauth_grant_attribution` after
+`0104_mcp_slack_recovery_due` (not the pre-merge #2647 ordinals). This is an
+incompatible offline cutover: historical per-user rows are copied unchanged
+apart from attribution to their own `user_id`; historical shared rows are
+retired, never attributed from server ownership. See the operator steps and
+rollback consequences in `apps/agor-docs/content/guide/mcp-servers.mdx`.
+
+SQLite remains one tenant per database; immediate FKs bind the consenter and
+server to that database. PostgreSQL uses the existing tenant/server FK plus a
+new `(tenant_id, granted_by_user_id)` cascading FK, under unchanged FORCE RLS.
+Its temporary migration-only SELECT/UPDATE/DELETE policies apply only to the
+grant table, are removed before commit, and work under NOSUPERUSER/NOBYPASSRLS.
+OAuth grant tables are deployment-bound, excluded from tenant portability, so
+the new FK intentionally remains non-deferrable.
+
+Establishment orders existing config/subject locks before consenter KEY SHARE
+and token writes. Hard user deletion acquires no MCP advisory lock: the user
+row and immediate FK cascade are its fence. Refresh is update-only with exact
+grant/refresh fences and never changes attribution. Keep this ordering when
+adding writers; taking a user lock after a token-row lock reverses the cascade
+order. No provider round-trip is held inside the persistence transaction.
+
 ### Schemas drifting
 
 If you only update one schema, generation succeeds for that dialect and silently leaves the other one stale. Catch it before merge:

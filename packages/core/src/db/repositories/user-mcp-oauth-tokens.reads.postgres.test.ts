@@ -60,6 +60,7 @@ describe.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
               .values({
                 tenant_id: tenant,
                 user_id: subject,
+                granted_by_user_id: user,
                 mcp_server_id: server.mcp_server_id,
                 oauth_access_token: seal('synthetic-access', 'access-token', 'access'),
                 oauth_refresh_token: seal('synthetic-refresh', 'refresh-token', 'refresh'),

@@ -2088,6 +2088,9 @@ export const userMcpOauthTokens = pgTable(
     mcp_server_id: varchar('mcp_server_id', { length: 36 })
       .notNull()
       .references(() => mcpServers.mcp_server_id, { onDelete: 'cascade' }),
+    // Trusted flow/caller attribution, independent of the shared NULL subject
+    // and server ownership. Hard deletion retires the local grant via CASCADE.
+    granted_by_user_id: varchar('granted_by_user_id', { length: 36 }).notNull(),
     oauth_access_token: text('oauth_access_token').notNull(),
     oauth_token_expires_at: t.timestamp('oauth_token_expires_at'), // Unix timestamp in milliseconds
     oauth_refresh_token: text('oauth_refresh_token'),
@@ -2129,6 +2132,16 @@ export const userMcpOauthTokens = pgTable(
       foreignColumns: [mcpServers.tenant_id, mcpServers.mcp_server_id],
     }).onDelete('cascade'),
     tenantIdx: index('user_mcp_oauth_tokens_tenant_id_idx').on(table.tenant_id),
+    tenantGrantedByFk: foreignKey({
+      name: 'user_mcp_oauth_tokens_tenant_granted_by_fk',
+      columns: [table.tenant_id, table.granted_by_user_id],
+      foreignColumns: [users.tenant_id, users.user_id],
+    }).onDelete('cascade'),
+    consenterSubjectCheck: check(
+      'user_mcp_oauth_tokens_consenter_subject_check',
+      sql`${table.user_id} IS NULL OR ${table.user_id} = ${table.granted_by_user_id}`
+    ),
+    grantedByIdx: index('user_mcp_oauth_tokens_granted_by_idx').on(table.granted_by_user_id),
     // Composite lookup indexes. Uniqueness enforced via partial unique indexes
     // created in the migration (one for per-user rows, one for the shared row).
     pk: index('user_mcp_oauth_tokens_pk').on(table.user_id, table.mcp_server_id),

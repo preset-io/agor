@@ -156,6 +156,7 @@ async function createTestProvider(
     resourceScopes?: string[];
     resourcePath?: string;
     holdMcpChallenge?: boolean;
+    clientCredentialsOnly?: boolean;
   } = {}
 ): Promise<TestProvider> {
   const requests: TestProvider['requests'] = [];
@@ -197,6 +198,11 @@ async function createTestProvider(
     };
     requests.push(recordedRequest);
 
+    if (options.clientCredentialsOnly && url.pathname.includes('.well-known')) {
+      response.writeHead(404);
+      response.end();
+      return;
+    }
     if (url.pathname === '/.well-known/oauth-protected-resource') {
       response.writeHead(200, { 'content-type': 'application/json' });
       response.end(
@@ -318,7 +324,9 @@ async function createTestProvider(
       if (options.holdMcpChallenge) await releaseMcp.promise;
       if (request.headers.authorization !== 'Bearer sqlite-access-token') {
         response.writeHead(401, {
-          'www-authenticate': `Bearer resource_metadata="${baseUrl}/.well-known/oauth-protected-resource"`,
+          'www-authenticate': options.clientCredentialsOnly
+            ? 'Bearer'
+            : `Bearer resource_metadata="${baseUrl}/.well-known/oauth-protected-resource"`,
         });
         response.end();
         return;
@@ -3232,7 +3240,7 @@ describe('SQLite saved-row OAuth authority', () => {
       let heldGrantPreparation = false;
       const lookupSpy = vi
         .spyOn(UserMCPOAuthTokenRepository.prototype, 'getToken')
-        .mockImplementation(async function (...args) {
+        .mockImplementation(async function (this: UserMCPOAuthTokenRepository, ...args) {
           const providerDiscoveryFinished = provider.requests.some(
             (request) => request.path === '/.well-known/oauth-authorization-server'
           );
@@ -3768,6 +3776,121 @@ describe('SQLite saved-row OAuth authority', () => {
     });
   });
 
+  it('keeps shared client-credentials token tests probe-only, without retaining or replacing consent', async () => {
+    const { getOAuthCacheStats } = await import('@agor/core/tools/mcp/oauth-auth');
+    const provider = await createTestProvider({ clientCredentialsOnly: true });
+    providers.push(provider);
+    const harness = await createHarness(provider, 'shared');
+    databases.push(harness.rawDb);
+    await new MCPServerRepository(harness.rawDb).update(harness.server.mcp_server_id, {
+      auth: {
+        type: 'oauth',
+        oauth_mode: 'shared',
+        oauth_client_id: 'saved-client-id',
+        oauth_client_secret: 'saved-client-secret',
+        oauth_token_url: `${provider.baseUrl}/token`,
+      },
+    });
+    const grants = new UserMCPOAuthTokenRepository(harness.rawDb);
+    const cacheSize = getOAuthCacheStats().totalEntries;
+    for (const existingGrant of [false, true]) {
+      if (existingGrant)
+        await grants.saveToken(
+          null,
+          harness.server.mcp_server_id,
+          {
+            accessToken: 'existing-shared-consent',
+          },
+          harness.user.user_id
+        );
+      const before = await grants.getToken(null, harness.server.mcp_server_id);
+      const tested = await harness.app.service('mcp-servers/test-oauth').create(
+        {
+          mcp_server_id: harness.server.mcp_server_id,
+          mcp_url: provider.savedMcpUrl,
+          granted_by_user_id: 'untrusted-request-consenter',
+        },
+        paramsFor(harness)
+      );
+      expect(tested).toMatchObject({
+        success: true,
+        oauthType: 'client_credentials',
+        tokenValid: true,
+      });
+      expect(await grants.getToken(null, harness.server.mcp_server_id)).toEqual(before);
+      expect(getOAuthCacheStats().totalEntries).toBe(cacheSize);
+    }
+    expect(provider.requests.filter((request) => request.path === '/token')).toHaveLength(2);
+  });
+
+  it.each(['provider-exchange', 'persistence'] as const)(
+    'retires shared consent when A is hard-deleted during %s, including status for B',
+    async (phase) => {
+      const provider = await createTestProvider({ holdTokenRequests: [1] });
+      providers.push(provider);
+      const harness = await createHarness(provider, 'shared');
+      databases.push(harness.rawDb);
+      const b = await new UsersRepository(harness.rawDb).create({
+        email: `remaining-admin-${generateId()}@example.test`,
+        role: 'admin',
+      });
+      // Keep server ownership/configuration and B's access independent of A.
+      await update(harness.rawDb, mcpServers)
+        .set({ owner_user_id: b.user_id })
+        .where(eq(mcpServers.mcp_server_id, harness.server.mcp_server_id))
+        .run();
+      const started = (await harness.app
+        .service('mcp-servers/oauth-start')
+        .create({ mcp_server_id: harness.server.mcp_server_id }, paramsFor(harness))) as {
+        authorizationUrl: string;
+      };
+      const callback = harness.callback(
+        new URL(started.authorizationUrl).searchParams.get('state')!
+      );
+      await provider.waitForTokenRequest(1);
+      const atWrite = deferred<void>();
+      const releaseWrite = deferred<void>();
+      const original = UserMCPOAuthTokenRepository.prototype.saveToken;
+      const spy =
+        phase === 'persistence'
+          ? vi
+              .spyOn(UserMCPOAuthTokenRepository.prototype, 'saveToken')
+              .mockImplementation(async function (this: UserMCPOAuthTokenRepository, ...args) {
+                atWrite.resolve();
+                await releaseWrite.promise;
+                return original.apply(this, args);
+              })
+          : undefined;
+      try {
+        if (phase === 'persistence') {
+          provider.releaseTokenRequest(1);
+          await atWrite.promise;
+        }
+        await new UsersRepository(harness.rawDb).delete(harness.user.user_id);
+      } finally {
+        provider.releaseTokenRequest(1);
+        releaseWrite.resolve();
+        spy?.mockRestore();
+      }
+      expect((await callback).status).not.toBe(200);
+      expect(
+        await new UserMCPOAuthTokenRepository(harness.rawDb).getToken(
+          null,
+          harness.server.mcp_server_id
+        )
+      ).toBeNull();
+      const statusParams: AuthenticatedParams = {
+        ...paramsFor(harness),
+        provider: 'rest',
+        user: b,
+        connection: undefined,
+      };
+      expect(await harness.app.service('mcp-servers/oauth-status').find(statusParams)).toEqual({
+        authenticated_server_ids: [],
+      });
+    }
+  );
+
   it.each([
     {
       mode: 'per_user' as const,
@@ -3869,6 +3992,7 @@ describe('SQLite saved-row OAuth authority', () => {
     );
     expect(durable).toMatchObject({
       user_id: subjectUserId,
+      granted_by_user_id: harness.user.user_id,
       mcp_server_id: harness.server.mcp_server_id,
       grant_generation: 2,
       grant_binding_version: 4,
@@ -3880,22 +4004,27 @@ describe('SQLite saved-row OAuth authority', () => {
     expect(durable?.grant_binding_fingerprint).toMatch(/^[a-f0-9]{64}$/);
 
     const attemptReplacement = (generation: number, accessToken: string) =>
-      repository.saveToken(subjectUserId, harness.server.mcp_server_id as MCPServerID, {
-        accessToken,
-        refreshToken: `${accessToken}-refresh`,
-        clientId: durable!.oauth_client_id,
-        grantBinding: {
-          generation,
-          version: 4,
-          fingerprint: durable!.grant_binding_fingerprint!,
-          metadataUri: durable!.oauth_metadata_uri!,
-          resourceUri: durable!.oauth_resource_uri!,
-          issuer: durable!.oauth_issuer!,
-          authorizationEndpoint: durable!.oauth_authorization_endpoint!,
-          tokenEndpoint: durable!.oauth_token_endpoint!,
-          redirectUri: durable!.oauth_redirect_uri!,
+      repository.saveToken(
+        subjectUserId,
+        harness.server.mcp_server_id as MCPServerID,
+        {
+          accessToken,
+          refreshToken: `${accessToken}-refresh`,
+          clientId: durable!.oauth_client_id,
+          grantBinding: {
+            generation,
+            version: 4,
+            fingerprint: durable!.grant_binding_fingerprint!,
+            metadataUri: durable!.oauth_metadata_uri!,
+            resourceUri: durable!.oauth_resource_uri!,
+            issuer: durable!.oauth_issuer!,
+            authorizationEndpoint: durable!.oauth_authorization_endpoint!,
+            tokenEndpoint: durable!.oauth_token_endpoint!,
+            redirectUri: durable!.oauth_redirect_uri!,
+          },
         },
-      });
+        harness.user.user_id as UserID
+      );
     await expect(attemptReplacement(1, 'lower-generation')).rejects.toThrow(
       'A newer MCP OAuth grant superseded this attempt'
     );

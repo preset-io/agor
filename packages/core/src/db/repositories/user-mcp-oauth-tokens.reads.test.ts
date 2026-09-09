@@ -27,7 +27,12 @@ dbTest(
       clientSecret: 'secret',
       expiresAt: new Date('2030-01-01T00:00:00Z'),
     });
-    await repo.saveToken(null, server.mcp_server_id, { accessToken: 'shared', expiresAt: null });
+    await repo.saveToken(
+      null,
+      server.mcp_server_id,
+      { accessToken: 'shared', expiresAt: null },
+      owner
+    );
     const [personal, shared] = await Promise.all([repo.listForUser(owner), repo.listShared()]);
     expect(personal).toHaveLength(1);
     expect(personal[0]).toMatchObject({

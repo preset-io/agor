@@ -571,7 +571,11 @@ export class UsersRepository
   }
 
   /**
-   * Delete user by ID
+   * Delete user by ID. The grant consenter FK retires shared MCP OAuth grants
+   * alongside per-user grants. Do not acquire MCP config/grant locks here:
+   * persistence locks the consenting user before the token row, while this
+   * delete locks the user before FK cascades. Local retirement is not provider
+   * revocation, and a newer grant attributed to someone else is unaffected.
    */
   async delete(id: string): Promise<void> {
     const fullId = await this.resolveId(id);

@@ -57,6 +57,53 @@ Connecting an entry again opens a new session but reuses the same owner-specific
 
 > **Revocation depends on gateway mode:** In `off` and `observe`, an active SDK may own a direct provider connection, so an edit is not a synchronous revocation boundary. In `compatibility` and `enforced`, eligible bounded Streamable HTTP servers use task-scoped daemon capabilities; all stdio, legacy SSE endpoint handoff, WebSocket, unbounded streaming, and servers requiring `ask` approval are omitted or fail closed. No new request hop is admitted after a relevant mutation commits, but a request admitted before that commit may complete. See [MCP egress operations](/guide/mcp-egress-gateway).
 
+## Shared OAuth consent and account deletion
+
+A tenant-shared OAuth grant records the authenticated user who established it,
+independently of the MCP server's owner. Routine token refresh keeps that
+attribution. When another currently authorized administrator completes new
+consent, the token and its attribution are replaced together.
+
+**Hard-deleting the consenting account retires its locally stored shared grant**
+as well as its personal grants. A current administrator must authorize the
+shared server again. Deleting a former consenter does not remove a newer grant
+established by someone else. This policy concerns hard deletion, not a role
+change, and does not transfer consent to the server owner.
+
+Retirement deletes Agor's stored access/refresh tokens and grant-bound client
+material. It is **not synchronous provider-side revocation**. Already-admitted
+mediated requests may finish; new mediated hops and fresh authentication-status
+reads no longer accept the removed grant. Direct provider connections in `off`
+or `observe` mode remain subject to the provider's own lifetime/revocation rules.
+
+Browser callbacks and manual OAuth completion use the trusted initiating user,
+not request fields. The client-credentials **Test Authentication** path is a
+request-local probe: it neither establishes/replaces a durable shared grant nor
+retains its token in a process cache. Saved client configuration is distinct from
+a stored grant; a successful probe alone is not durable shared authorization.
+
+### Upgrade: shared-grant attribution (`0105`, both databases)
+
+1. Stop **all** daemons against the database and close outstanding sign-in windows.
+2. Back up the database, then run `agor db migrate --offline-cutover` with the new binary.
+3. Start only the new binaries and have a current administrator authorize each
+   shared OAuth server again.
+
+The migration preserves per-user grants, including tokens, configuration
+bindings, refresh state and timestamps. It cannot know historical shared
+consenters and does **not** guess from ownership: all historical shared grant
+rows are removed. Server definitions, configured clients and per-user grants
+are retained. This is local retirement, not a provider revocation request.
+
+The migration is transactional; a failed migration rolls back, and a bounded
+PostgreSQL lock timeout can be retried after stopping competing workers. A
+successful migration's deleted shared grants cannot be recovered by a schema
+rollback. Older binaries cannot supply the new required attribution and must
+not run against the upgraded schema. Returning to an older binary requires a
+coordinated offline restoration of a pre-upgrade backup, which also restores
+its old credential-retention behavior and may reintroduce retired credentials;
+prefer a forward fix and fresh consent.
+
 ## Catalog curation for operators
 
 The public catalog is `packages/core/src/mcp-catalog/curated.yaml`. `auth_type` is presentation policy, while the connect-time live probe remains authoritative. The readiness read itself is side-effect-free and does not probe. Every `credentials` entry must include a reviewed `credentials` block with `scheme: bearer`, an accurate vendor `acquisition_url`, and an optional user-facing label. Never put a secret in the catalog.
