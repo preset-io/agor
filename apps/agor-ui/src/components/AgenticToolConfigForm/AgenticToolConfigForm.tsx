@@ -16,9 +16,10 @@
 
 import { AGENTIC_TOOL_CAPABILITIES, getAgenticToolModelSelectionError } from '@agor/agentic-tools';
 import { getAgenticToolUIIntegration } from '@agor/agentic-tools/ui';
-import type { AgenticToolName, AgorClient } from '@agor-live/client';
+import type { AgenticToolName, AgorClient, EffortLevel } from '@agor-live/client';
 import { DEFAULT_CLAUDE_MODEL } from '@agor-live/client';
 import { Form, Select } from 'antd';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { CodexNetworkAccessToggle } from '../CodexNetworkAccessToggle';
 import { EffortSelector } from '../EffortSelector';
 import { ModelSelector } from '../ModelSelector';
@@ -75,10 +76,54 @@ export const AgenticToolConfigForm: React.FC<AgenticToolConfigFormProps> = ({
   branchId,
   showAdvisor = true,
 }) => {
+  const form = Form.useFormInstance();
+  const selectedModel = Form.useWatch('modelConfig', form) as
+    | { provider?: string; model?: string }
+    | undefined;
+  const selectedEffort = Form.useWatch('effort', form) as EffortLevel | undefined;
   const modelLabel = modelLabelForTool(agenticTool);
   const showCodexFields = agenticTool === 'codex' && !compact;
   const toolCapabilities = AGENTIC_TOOL_CAPABILITIES[agenticTool];
-  const effortLevels = toolCapabilities.reasoningEffortLevels;
+  const toolEffortLevels = toolCapabilities.reasoningEffortLevels;
+  const [openCodeEffortAvailability, setOpenCodeEffortAvailability] = useState<{
+    provider: string;
+    model: string;
+    levels: readonly EffortLevel[] | undefined;
+  }>();
+  const modelSelectionCommittedRef = useRef(false);
+  const onReasoningEffortLevelsChange = useCallback(
+    (availability: {
+      provider: string;
+      model: string;
+      levels: readonly EffortLevel[] | undefined;
+    }) => setOpenCodeEffortAvailability(availability),
+    []
+  );
+  const selectedPairMatchesAvailability =
+    agenticTool === 'opencode' &&
+    openCodeEffortAvailability?.provider === selectedModel?.provider &&
+    openCodeEffortAvailability?.model === selectedModel?.model;
+  const modelEffortLevels = selectedPairMatchesAvailability
+    ? openCodeEffortAvailability?.levels
+    : undefined;
+  const modelEffortMetadataKnown =
+    selectedPairMatchesAvailability && modelEffortLevels !== undefined;
+  const effortLevels = modelEffortMetadataKnown ? modelEffortLevels : toolEffortLevels;
+  const effortIncompatible = Boolean(
+    modelEffortMetadataKnown && selectedEffort && !modelEffortLevels.includes(selectedEffort)
+  );
+
+  useEffect(() => {
+    if (agenticTool !== 'opencode') {
+      modelSelectionCommittedRef.current = false;
+      return;
+    }
+    if (!modelSelectionCommittedRef.current || !modelEffortMetadataKnown) return;
+    if (selectedEffort && !modelEffortLevels?.includes(selectedEffort)) {
+      form.setFieldValue('effort', undefined);
+    }
+    modelSelectionCommittedRef.current = false;
+  }, [agenticTool, form, modelEffortLevels, modelEffortMetadataKnown, selectedEffort]);
 
   return (
     <>
@@ -104,6 +149,10 @@ export const AgenticToolConfigForm: React.FC<AgenticToolConfigFormProps> = ({
           client={client}
           branchId={branchId}
           showAdvisor={showAdvisor}
+          onCommit={() => {
+            modelSelectionCommittedRef.current = true;
+          }}
+          onReasoningEffortLevelsChange={onReasoningEffortLevelsChange}
         />
       </Form.Item>
 
@@ -115,16 +164,39 @@ export const AgenticToolConfigForm: React.FC<AgenticToolConfigFormProps> = ({
         <PermissionModeSelector agentic_tool={agenticTool} compact={compact} fullWidth />
       </Form.Item>
 
-      {effortLevels && (
+      {toolEffortLevels && (
         <Form.Item
           name="effort"
           label="Reasoning Effort"
+          rules={[
+            {
+              validator: (_, value: EffortLevel | undefined) =>
+                modelEffortMetadataKnown && value && !modelEffortLevels?.includes(value)
+                  ? Promise.reject(
+                      new Error(
+                        (modelEffortLevels?.length ?? 0) > 0
+                          ? `Choose a supported effort: ${modelEffortLevels?.join(', ')}`
+                          : 'This model has no explicit effort in the configured OpenCode runtime; use inherited.'
+                      )
+                    )
+                  : Promise.resolve(),
+            },
+          ]}
+          validateStatus={effortIncompatible ? 'error' : undefined}
           help={
-            showHelpText
-              ? toolCapabilities.defaultReasoningEffort
-                ? 'Control how much reasoning the agent applies'
-                : 'Control how much reasoning the agent applies; inherited uses the runtime configuration'
-              : undefined
+            effortIncompatible
+              ? (modelEffortLevels?.length ?? 0) > 0
+                ? `Choose a supported effort: ${modelEffortLevels?.join(', ')}`
+                : 'This model has no explicit effort in the configured OpenCode runtime; use inherited.'
+              : showHelpText
+                ? agenticTool === 'opencode' && !modelEffortMetadataKnown
+                  ? 'Available efforts are unknown for this exact model and will be validated at runtime; inherited uses the model default.'
+                  : agenticTool === 'opencode' && modelEffortLevels?.length === 0
+                    ? 'This model has no explicit effort in the configured OpenCode runtime; use inherited.'
+                    : toolCapabilities.defaultReasoningEffort
+                      ? 'Control how much reasoning the agent applies'
+                      : 'Control how much reasoning the agent applies; inherited uses the runtime configuration'
+                : undefined
           }
         >
           <EffortSelector
