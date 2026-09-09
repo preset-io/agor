@@ -116,10 +116,11 @@ export function stagePromptDraftSeed(ownerId: string, sessionId: string, text: s
 }
 
 /** Consume starter text only for its exact user/session, once and within TTL. */
-export function consumePromptDraftSeed(
+function readSeed(
   ownerId: string | undefined,
   sessionId: string,
-  now = Date.now()
+  now: number,
+  consume: boolean
 ): string {
   if (!ownerId) return '';
   try {
@@ -147,7 +148,7 @@ export function consumePromptDraftSeed(
       return '';
     }
     if (seedSessionId !== sessionId) return '';
-    sessionStorage.removeItem(DRAFT_SEED_KEY);
+    if (consume) sessionStorage.removeItem(DRAFT_SEED_KEY);
     return typeof seedText === 'string' ? seedText : '';
   } catch {
     try {
@@ -159,11 +160,37 @@ export function consumePromptDraftSeed(
   }
 }
 
+/** Read an untouched starter without moving it into browser-global draft storage. */
+export function readPromptDraftSeed(ownerId: string | undefined, sessionId: string): string {
+  return readSeed(ownerId, sessionId, Date.now(), false);
+}
+
+/** Consume the matching starter once, when the composer edits, sends, or already has a draft. */
+export function consumePromptDraftSeed(
+  ownerId: string | undefined,
+  sessionId: string,
+  now = Date.now()
+): string {
+  return readSeed(ownerId, sessionId, now, true);
+}
+
 /** Clear only the departing caller's handoff, even when no composer is mounted. */
-export function discardPromptDraftSeed(ownerId: string): void {
+export function discardPromptDraftSeed(
+  ownerId: string | undefined,
+  sessionId?: string,
+  expectedText?: string
+): void {
+  if (!ownerId) return;
   try {
     const raw = sessionStorage.getItem(DRAFT_SEED_KEY);
-    if (raw && JSON.parse(raw)?.ownerId === ownerId) sessionStorage.removeItem(DRAFT_SEED_KEY);
+    const seed = raw ? (JSON.parse(raw) as Partial<StoredPromptDraftSeed>) : null;
+    if (
+      seed?.ownerId === ownerId &&
+      (sessionId === undefined || seed.sessionId === sessionId) &&
+      (expectedText === undefined || seed.text === expectedText)
+    ) {
+      sessionStorage.removeItem(DRAFT_SEED_KEY);
+    }
   } catch {
     // Storage may be unavailable; an unreadable seed cannot hydrate a composer.
   }

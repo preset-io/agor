@@ -49,6 +49,7 @@ const teammates = ['Ada', 'Grace'].map((name, index) => ({
 const session = {
   session_id: 'tryout-session' as SessionID,
   branch_id: teammates[1].branch_id,
+  title: 'DeepWiki',
   status: 'idle',
   agentic_tool: 'codex',
   created_by: user.user_id,
@@ -201,6 +202,7 @@ describe('recovered Catalog tryout flow in Chromium', () => {
     expect(
       screen.queryByRole('button', { name: /^(Insert prompt|Copy|Dismiss)$/i })
     ).not.toBeInTheDocument();
+    await page.screenshot({ path: `./__screenshots__/tryout-hydrated-${window.innerWidth}.png` });
     await userEvent.fill(composer, 'My edited starter — still not sent');
     expect(composer).toHaveValue('My edited starter — still not sent');
     expect(api.send).not.toHaveBeenCalled();

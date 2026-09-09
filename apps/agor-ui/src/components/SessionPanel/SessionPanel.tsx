@@ -69,7 +69,9 @@ import { useThemedMessage } from '../../utils/message';
 import {
   consumePromptDraftSeed,
   deletePromptDraft,
+  discardPromptDraftSeed,
   getPromptDraft,
+  readPromptDraftSeed,
   savePromptDraft,
 } from '../../utils/promptDrafts';
 import { getSessionDisplayTitle, getSessionTitleStyles } from '../../utils/sessionTitle';
@@ -120,6 +122,8 @@ export interface PromptInputHandle {
 interface PromptInputProps {
   sessionId: SessionID;
   getDraft: (id: string) => string;
+  getDraftSeed: (id: string) => string;
+  discardDraftSeed: (id: string) => void;
   saveDraft: (id: string, value: string) => void;
   deleteDraft: (id: string, expectedText?: string) => void;
   /** Fires only on empty↔non-empty transitions, not every keystroke */
@@ -147,6 +151,8 @@ const PromptInput = React.forwardRef<PromptInputHandle, PromptInputProps>(
     {
       sessionId,
       getDraft,
+      getDraftSeed,
+      discardDraftSeed,
       saveDraft,
       deleteDraft,
       onHasInputChange,
@@ -169,6 +175,32 @@ const PromptInput = React.forwardRef<PromptInputHandle, PromptInputProps>(
     const [value, setValue] = React.useState(() => getDraft(sessionId));
     const valueRef = React.useRef(value);
     const textareaElementRef = React.useRef<HTMLTextAreaElement | null>(null);
+    const untouchedSeedRef = React.useRef(false);
+    const bootstrappedSessionRef = React.useRef<string | null>(null);
+
+    // Claim bootstrap only after commit, not in a render initializer (which
+    // React may replay/discard). Untouched starters stay tab-local, so opening
+    // a tryout cannot overwrite another tab's sole persisted user draft.
+    React.useLayoutEffect(() => {
+      if (bootstrappedSessionRef.current === sessionId) return;
+      bootstrappedSessionRef.current = sessionId;
+      const seed = getDraftSeed(sessionId);
+      if (valueRef.current) {
+        discardDraftSeed(sessionId);
+      } else if (seed) {
+        untouchedSeedRef.current = true;
+        valueRef.current = seed;
+        inputValueRef.current = seed;
+        setValue(seed);
+      }
+    }, [sessionId, getDraftSeed, discardDraftSeed, inputValueRef]);
+
+    const persistDraft = React.useCallback(
+      (id: string, text: string) => {
+        if (!untouchedSeedRef.current) saveDraft(id, text);
+      },
+      [saveDraft]
+    );
 
     // Keep refs in sync (zero-cost, no re-render)
     valueRef.current = value;
@@ -176,11 +208,13 @@ const PromptInput = React.forwardRef<PromptInputHandle, PromptInputProps>(
 
     const handlePromptChange = React.useCallback(
       (nextValue: string) => {
+        untouchedSeedRef.current = false;
+        discardDraftSeed(sessionId);
         valueRef.current = nextValue;
         inputValueRef.current = nextValue;
         setValue(nextValue);
       },
-      [inputValueRef]
+      [inputValueRef, discardDraftSeed, sessionId]
     );
 
     // Track empty↔non-empty transitions → notify parent (minimal re-renders)
@@ -199,6 +233,8 @@ const PromptInput = React.forwardRef<PromptInputHandle, PromptInputProps>(
       () => ({
         getValue: () => textareaElementRef.current?.value ?? valueRef.current,
         clear: () => {
+          untouchedSeedRef.current = false;
+          discardDraftSeed(sessionId);
           valueRef.current = '';
           inputValueRef.current = '';
           if (textareaElementRef.current) {
@@ -208,6 +244,8 @@ const PromptInput = React.forwardRef<PromptInputHandle, PromptInputProps>(
           deleteDraft(sessionId);
         },
         insertText: (text: string) => {
+          untouchedSeedRef.current = false;
+          discardDraftSeed(sessionId);
           setValue((prev) => {
             const nextValue = appendComposerText(prev, text);
             valueRef.current = nextValue;
@@ -216,30 +254,30 @@ const PromptInput = React.forwardRef<PromptInputHandle, PromptInputProps>(
           });
         },
       }),
-      [sessionId, deleteDraft, inputValueRef]
+      [sessionId, deleteDraft, discardDraftSeed, inputValueRef]
     );
 
     // Session switch: save old draft, load new one
     const prevSessionId = React.useRef(sessionId);
     React.useEffect(() => {
       if (prevSessionId.current !== sessionId) {
-        saveDraft(prevSessionId.current, valueRef.current);
+        persistDraft(prevSessionId.current, valueRef.current);
         setValue(getDraft(sessionId));
         prevSessionId.current = sessionId;
       }
-    }, [sessionId, saveDraft, getDraft]);
+    }, [sessionId, persistDraft, getDraft]);
 
     // Debounced draft persistence (300ms)
     React.useEffect(() => {
-      const timer = setTimeout(() => saveDraft(sessionId, value), 300);
+      const timer = setTimeout(() => persistDraft(sessionId, value), 300);
       return () => clearTimeout(timer);
-    }, [value, sessionId, saveDraft]);
+    }, [value, sessionId, persistDraft]);
 
     // Flush draft on unmount so in-flight debounced writes aren't lost.
     // Uses refs to capture the latest values without adding deps that would
     // cause the effect to re-run (we only want the cleanup to fire on unmount).
-    const saveDraftRef = React.useRef(saveDraft);
-    saveDraftRef.current = saveDraft;
+    const saveDraftRef = React.useRef(persistDraft);
+    saveDraftRef.current = persistDraft;
     const sessionIdRef = React.useRef(sessionId);
     sessionIdRef.current = sessionId;
     React.useEffect(() => {
@@ -417,12 +455,16 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   // Aliased as stable callbacks because they're threaded through props and
   // effect deps below.
   const getDraft = React.useCallback(
+    (sessionId: string) => getPromptDraft(currentUserId, sessionId),
+    [currentUserId]
+  );
+  const getDraftSeed = React.useCallback(
+    (sessionId: string) => readPromptDraftSeed(currentUserId, sessionId),
+    [currentUserId]
+  );
+  const discardDraftSeed = React.useCallback(
     (sessionId: string) => {
-      const existing = getPromptDraft(currentUserId, sessionId);
-      const seed = consumePromptDraftSeed(currentUserId, sessionId);
-      if (existing) return existing;
-      if (seed) savePromptDraft(currentUserId, sessionId, seed);
-      return seed;
+      consumePromptDraftSeed(currentUserId, sessionId);
     },
     [currentUserId]
   );
@@ -431,8 +473,12 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     [currentUserId]
   );
   const deleteDraft = React.useCallback(
-    (sessionId: string, expectedText?: string) =>
-      deletePromptDraft(currentUserId, sessionId, expectedText),
+    (sessionId: string, expectedText?: string) => {
+      deletePromptDraft(currentUserId, sessionId, expectedText);
+      // Admission may complete after navigation. Retire the original seed
+      // without clearing a different caller/session or replacement starter.
+      discardPromptDraftSeed(currentUserId, sessionId, expectedText);
+    },
     [currentUserId]
   );
 
@@ -879,6 +925,8 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
           ref={promptRef}
           sessionId={session.session_id}
           getDraft={getDraft}
+          getDraftSeed={getDraftSeed}
+          discardDraftSeed={discardDraftSeed}
           saveDraft={saveDraft}
           deleteDraft={deleteDraft}
           onHasInputChange={handleHasInputChange}
@@ -935,6 +983,8 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     addComposerAttachments,
     removeComposerAttachment,
     getDraft,
+    getDraftSeed,
+    discardDraftSeed,
     saveDraft,
     deleteDraft,
     handleHasInputChange,

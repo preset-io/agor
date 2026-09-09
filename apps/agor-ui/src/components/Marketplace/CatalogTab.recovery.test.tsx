@@ -217,18 +217,18 @@ it.each(['close', 'identity', 'generation'] as const)(
     const view = render(tree());
     const drawer = await openDrawer();
     await drawer.findByText('No account expected');
-    fireEvent.click(drawer.getByRole('checkbox'));
-    const connect = drawer.getByRole('button', { name: 'Connect', exact: true });
+    fireEvent.click(drawer.container.querySelector('input[type=checkbox]')!);
+    const connect = drawer.getByText('Connect').closest('button')!;
     await waitFor(() => expect(connect).toBeEnabled());
     fireEvent.click(connect);
-    fireEvent.click(await drawer.findByRole('button', { name: 'Start new session' }));
-    const start = await drawer.findByRole('button', { name: 'Start session', exact: true });
+    fireEvent.click((await drawer.findByText('Start new session')).closest('button')!);
+    const start = (await drawer.findByText('Start session')).closest('button')!;
     await waitFor(() => expect(start).toBeEnabled());
     fireEvent.click(start);
     fireEvent.click(start);
     expect(api.startSession).toHaveBeenCalledOnce();
     if (transition === 'close')
-      fireEvent.click(drawer.getByRole('button', { name: 'Close', exact: true }));
+      fireEvent.click(drawer.container.querySelector('button.ant-drawer-close')!);
     else
       view.rerender(
         tree(transition === 'identity' ? ({ ...USER, user_id: 'other-user' } as User) : USER, 2)
@@ -260,15 +260,60 @@ it('keeps setup and reports a refused session start without navigating or seedin
   );
   const drawer = await openDrawer();
   await drawer.findByText('No account expected');
-  fireEvent.click(drawer.getByRole('checkbox'));
-  const connect = drawer.getByRole('button', { name: 'Connect', exact: true });
+  fireEvent.click(drawer.container.querySelector('input[type=checkbox]')!);
+  const connect = drawer.getByText('Connect').closest('button')!;
   await waitFor(() => expect(connect).toBeEnabled());
   fireEvent.click(connect);
-  fireEvent.click(await drawer.findByRole('button', { name: 'Start new session' }));
-  const start = await drawer.findByRole('button', { name: 'Start session', exact: true });
+  fireEvent.click((await drawer.findByText('Start new session')).closest('button')!);
+  const start = (await drawer.findByText('Start session')).closest('button')!;
   await waitFor(() => expect(start).toBeEnabled());
   fireEvent.click(start);
   await drawer.findByText('Teammate access was revoked');
   expect(mockNavigate).not.toHaveBeenCalled();
   expect(consumePromptDraftSeed(USER.user_id, SESSION_ID)).toBe('');
+});
+
+it('can connect again after closing a drawer with a pending installation', async () => {
+  const api = buildClient();
+  const installed = await api.connect();
+  api.connect.mockClear();
+  let resolve!: (value: typeof installed) => void;
+  api.connect.mockImplementationOnce(
+    () =>
+      new Promise((done) => {
+        resolve = done;
+      })
+  );
+  render(
+    <MemoryRouter>
+      <CatalogTab
+        client={api.client}
+        connected
+        connecting={false}
+        currentUser={USER}
+        authGeneration={1}
+      />
+    </MemoryRouter>
+  );
+  const first = await openDrawer();
+  await first.findByText('No account expected');
+  fireEvent.click(first.container.querySelector('input[type=checkbox]')!);
+  const connect = first.getByText('Connect').closest('button')!;
+  await waitFor(() => expect(connect).toBeEnabled());
+  fireEvent.click(connect);
+  expect(api.connect).toHaveBeenCalledOnce();
+  fireEvent.click(first.container.querySelector('button.ant-drawer-close')!);
+  const reopened = await openDrawer();
+  await reopened.findByText('No account expected');
+  const consent = reopened.container.querySelector('input[type=checkbox]')! as HTMLInputElement;
+  if (!consent.checked) fireEvent.click(consent);
+  const retry = reopened.getByText('Connect').closest('button')!;
+  await waitFor(() => expect(retry).toBeEnabled());
+  await act(async () => {
+    resolve(installed);
+  });
+  expect(reopened.queryByText('Added to My Servers')).not.toBeInTheDocument();
+  fireEvent.click(retry);
+  await reopened.findByText('Added to My Servers');
+  expect(api.connect).toHaveBeenCalledTimes(2);
 });

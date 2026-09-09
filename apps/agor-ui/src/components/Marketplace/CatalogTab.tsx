@@ -407,6 +407,7 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
     drawerOpen.current = true;
     drawerTrigger.current =
       document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    setConnecting(false);
     setConnectError(null);
     setConnectSuccess(null);
     setStartSessionError(null);
@@ -430,6 +431,10 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
     startingSessionRef.current = false;
     drawerOpen.current = false;
     const trigger = drawerTrigger.current;
+    setConnecting(false);
+    setStartingSession(false);
+    setSessionSetupRequested(false);
+    setStartSessionError(null);
     setKeyRequirement(null);
     setSelected(null);
     setConnectError(null);

@@ -1,11 +1,12 @@
 import type { AgorClient, Session } from '@agor-live/client';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { App } from 'antd';
+import { StrictMode } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { AppActionsProvider } from '../../contexts/AppActionsContext';
 import { ConnectionProvider } from '../../contexts/ConnectionContext';
 import { agorStore } from '../../store/agorStore';
-import { savePromptDraft, stagePromptDraftSeed } from '../../utils/promptDrafts';
+import { getPromptDraft, savePromptDraft, stagePromptDraftSeed } from '../../utils/promptDrafts';
 import type { UploadFilesToSessionResult } from '../FileUpload/upload';
 import SessionPanel from './SessionPanel';
 
@@ -66,6 +67,7 @@ function renderSessionPanel({
   onBtwFork = vi.fn(),
   session = makeSession(),
   currentUserId = 'user-a',
+  strictMode = false,
 }: {
   onSendPrompt?: (
     sessionId: string,
@@ -75,6 +77,7 @@ function renderSessionPanel({
   onBtwFork?: (sessionId: string, prompt: string) => Promise<void>;
   session?: Session;
   currentUserId?: string;
+  strictMode?: boolean;
 } = {}) {
   let activeSession = session;
   let activeUserId: string | undefined = currentUserId;
@@ -101,7 +104,7 @@ function renderSessionPanel({
       </ConnectionProvider>
     </App>
   );
-  const renderResult = render(renderTree());
+  const renderResult = render(renderTree(), { wrapper: strictMode ? StrictMode : undefined });
   return {
     onSendPrompt,
     onFork,
@@ -172,6 +175,51 @@ describe('SessionPanel composer send', () => {
     view.rerenderUser('user-a');
     expect(screen.getByPlaceholderText(/Prompt here/i)).toHaveValue('Catalog starter');
     expect(view.onSendPrompt).not.toHaveBeenCalled();
+  });
+
+  it('keeps an untouched starter tab-local through debounce, unmount, and remount', async () => {
+    savePromptDraft('user-a', 'session-other-tab', 'Important typed text');
+    stagePromptDraftSeed('user-a', 'session-1', 'Catalog starter');
+    const view = renderSessionPanel({ strictMode: true });
+    expect(screen.getByPlaceholderText(/Prompt here/i)).toHaveValue('Catalog starter');
+    await new Promise((resolve) => setTimeout(resolve, 350));
+    expect(getPromptDraft('user-a', 'session-other-tab')).toBe('Important typed text');
+    view.unmount();
+    expect(getPromptDraft('user-a', 'session-other-tab')).toBe('Important typed text');
+    const next = renderSessionPanel();
+    expect(screen.getByPlaceholderText(/Prompt here/i)).toHaveValue('Catalog starter');
+    expect(next.onSendPrompt).not.toHaveBeenCalled();
+  });
+
+  it('hydrates exactly once under StrictMode even when localStorage writes are denied', () => {
+    stagePromptDraftSeed('user-a', 'session-1', 'Catalog starter');
+    const write = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new Error('Storage denied');
+    });
+    try {
+      const view = renderSessionPanel({ strictMode: true });
+      expect(screen.getByPlaceholderText(/Prompt here/i)).toHaveValue('Catalog starter');
+      expect(view.onSendPrompt).not.toHaveBeenCalled();
+      view.unmount();
+    } finally {
+      write.mockRestore();
+    }
+  });
+
+  it('does not rehydrate an already-sent starter when admission completes after navigation', async () => {
+    const admitted = deferred<boolean>();
+    const onSendPrompt = vi.fn(() => admitted.promise);
+    stagePromptDraftSeed('user-a', 'session-1', 'Catalog starter');
+    const view = renderSessionPanel({ onSendPrompt });
+    fireEvent.click(view.container.querySelector('button.ant-btn-primary') as HTMLButtonElement);
+    await waitFor(() => expect(onSendPrompt).toHaveBeenCalledOnce());
+    view.rerenderSession(makeSession({ session_id: 'session-other' as Session['session_id'] }));
+    await act(async () => {
+      admitted.resolve(true);
+    });
+    view.rerenderSession(makeSession());
+    expect(screen.getByPlaceholderText(/Prompt here/i)).toHaveValue('');
+    expect(sessionStorage.getItem('agor:prompt-draft-seed')).toBeNull();
   });
 
   it('sends prompt edits typed while attachment upload is in flight with the upload-start attachments', async () => {
