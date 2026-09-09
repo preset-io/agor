@@ -307,6 +307,55 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       );
     });
 
+    it('reports saved machine-only configuration consistently across HA discovery and execution', async () => {
+      const machine = await runWithTenantDatabaseScope(replicaA.db, tenantId, (scoped) =>
+        new MCPServerRepository(scoped).create({
+          name: `machine-${crypto.randomUUID()}`,
+          display_name: 'Machine-only fixture',
+          transport: 'http',
+          url: 'https://mcp.provider.example.test/mcp',
+          scope: 'global',
+          enabled: true,
+          source: 'user',
+          owner_user_id: user.user_id,
+          auth: {
+            type: 'oauth',
+            oauth_mode: 'per_user',
+            oauth_grant_type: 'client_credentials',
+            oauth_client_id: 'synthetic-machine-client',
+            oauth_client_secret: 'synthetic-machine-secret',
+            oauth_token_url: 'https://provider.example.test/token',
+          },
+        })
+      );
+      const before = { starts: oauthFixture.starts, exchanges: oauthFixture.exchanges };
+      const discovered = await replicaA.app
+        .service('mcp-servers/discover')
+        .create({ mcp_server_id: machine.mcp_server_id }, params(user));
+      expect(discovered).toMatchObject({
+        success: false,
+        recovery: { category: 'configuration_required', action: 'review_configuration' },
+      });
+      const headers = await replicaB.app
+        .service('mcp-servers/oauth-auth-headers')
+        .create(
+          { mcp_server_ids: [machine.mcp_server_id] },
+          { ...params(user), provider: undefined }
+        );
+      expect(headers.headers[machine.mcp_server_id]).toMatchObject({
+        error: 'client_credentials_configuration_required',
+        recovery: { action: 'review_configuration' },
+      });
+      const foreign = await replicaB.app
+        .service('mcp-servers/oauth-auth-headers')
+        .create(
+          { mcp_server_ids: [machine.mcp_server_id] },
+          { ...params(user, `${tenantId}-foreign`), provider: undefined }
+        );
+      expect(foreign.headers[machine.mcp_server_id]).toEqual({ error: 'server_not_found' });
+      expect({ starts: oauthFixture.starts, exchanges: oauthFixture.exchanges }).toEqual(before);
+    });
+
     it('serializes concurrent starts and completes the winner on the other replica', async () => {
       const start = (replica: Replica) =>
         replica.app

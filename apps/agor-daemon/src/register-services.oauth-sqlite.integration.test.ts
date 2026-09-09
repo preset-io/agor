@@ -54,6 +54,7 @@ import {
 import { type RegisterHooksContext, registerHooks } from './register-hooks.js';
 import { createRegisteredMCPCatalogConnectService } from './register-routes.js';
 import { type RegisterServicesContext, registerMCPServices } from './register-services.js';
+import * as oauthUse from './services/mcp-oauth-use.js';
 import { createSocketIOConfig } from './setup/socketio.js';
 import { issueMCPSlackRecoveryToken } from './utils/mcp-slack-recovery-token.js';
 import {
@@ -3695,6 +3696,73 @@ describe('SQLite saved-row OAuth authority', () => {
     ).toBeNull();
   });
 
+  it.each(['client_credentials', undefined] as const)(
+    'saved machine configuration (%s) returns configuration recovery without provider work',
+    async (grantType) => {
+      const provider = await createTestProvider();
+      providers.push(provider);
+      const harness = await createHarness(provider);
+      databases.push(harness.rawDb);
+      await new MCPServerRepository(harness.rawDb).update(harness.server.mcp_server_id, {
+        auth: {
+          ...harness.server.auth!,
+          oauth_grant_type: grantType,
+          oauth_client_id: 'machine-client',
+          oauth_client_secret: 'synthetic-machine-secret',
+          oauth_token_url: `${provider.baseUrl}/token`,
+        },
+      });
+      const requestsBefore = provider.requests.length;
+      const result = await harness.app
+        .service('mcp-servers/discover')
+        .create({ mcp_server_id: harness.server.mcp_server_id }, paramsFor(harness));
+      expect(result).toMatchObject({
+        success: false,
+        recovery: { category: 'configuration_required', action: 'review_configuration' },
+      });
+      const execution = await harness.app
+        .service('mcp-servers/oauth-auth-headers')
+        .create(
+          { mcp_server_ids: [harness.server.mcp_server_id] },
+          { ...paramsFor(harness), provider: undefined }
+        );
+      expect(execution.headers[harness.server.mcp_server_id]).toMatchObject({
+        error: 'client_credentials_configuration_required',
+        recovery: { action: 'review_configuration' },
+      });
+      expect(provider.requests).toHaveLength(requestsBefore);
+    }
+  );
+
+  it('does not convert transient acquisition contention into reauth at either service boundary', async () => {
+    const provider = await createTestProvider();
+    providers.push(provider);
+    const harness = await createHarness(provider);
+    databases.push(harness.rawDb);
+    const acquire = vi
+      .spyOn(oauthUse, 'acquireMCPOAuthGrant')
+      .mockRejectedValue(new oauthUse.MCPOAuthRefreshBusyError());
+    try {
+      const result = await harness.app
+        .service('mcp-servers/discover')
+        .create({ mcp_server_id: harness.server.mcp_server_id }, paramsFor(harness));
+      expect(result).toMatchObject({ success: false, recovery: { action: 'retry' } });
+      const execution = await harness.app
+        .service('mcp-servers/oauth-auth-headers')
+        .create(
+          { mcp_server_ids: [harness.server.mcp_server_id] },
+          { ...paramsFor(harness), provider: undefined }
+        );
+      expect(execution.headers[harness.server.mcp_server_id]).toMatchObject({
+        error: 'refresh_in_progress',
+        recovery: { action: 'retry' },
+      });
+      expect(provider.requests).toHaveLength(0);
+    } finally {
+      acquire.mockRestore();
+    }
+  });
+
   it.each(['per_user', 'shared'] as const)(
     'GitLab-shaped %s callback expires then discovery rotates the durable pair',
     async (mode) => {
@@ -3702,6 +3770,11 @@ describe('SQLite saved-row OAuth authority', () => {
       providers.push(provider);
       const harness = await createHarness(provider, mode);
       databases.push(harness.rawDb);
+      // Legacy forms could save this default even for browser OAuth. A bound
+      // grant, not the form default, remains the credential authority.
+      await new MCPServerRepository(harness.rawDb).update(harness.server.mcp_server_id, {
+        auth: { ...harness.server.auth!, oauth_grant_type: 'client_credentials' },
+      });
       const started = Date.now();
       await authorizeSavedServer(harness);
       const subject = mode === 'shared' ? null : (harness.user.user_id as UserID);

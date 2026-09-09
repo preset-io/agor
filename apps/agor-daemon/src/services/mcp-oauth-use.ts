@@ -8,6 +8,35 @@ import {
   type RefreshAndPersistDeps,
   refreshAndPersistToken,
 } from '@agor/core/tools/mcp/oauth-refresh';
+import type { MCPAuth } from '@agor/core/types';
+
+/** A live newer rotation is contention, not lost authorization. */
+export class MCPOAuthRefreshBusyError extends Error {
+  constructor() {
+    super('OAuth access changed during refresh. Retry using the current grant.');
+    this.name = 'MCPOAuthRefreshBusyError';
+  }
+}
+
+/** Ephemeral machine tokens are not durable browser grants. */
+export class MCPClientCredentialsConfigurationError extends Error {
+  constructor() {
+    super('Saved client-credentials OAuth requires a supported authentication configuration.');
+    this.name = 'MCPClientCredentialsConfigurationError';
+  }
+}
+
+export function missingMCPOAuthGrantError(auth: MCPAuth): Error {
+  // Legacy forms defaulted an omitted grant type to client_credentials. Do not
+  // mint a machine token here: a missing row can also be a retired browser grant.
+  if (
+    auth.oauth_grant_type === 'client_credentials' ||
+    (!auth.oauth_grant_type && auth.oauth_client_id && auth.oauth_client_secret)
+  ) {
+    return new MCPClientCredentialsConfigurationError();
+  }
+  return new MissingRefreshTokenError();
+}
 
 /**
  * One use-time boundary for execution and capability discovery. Never call
@@ -57,10 +86,24 @@ export async function acquireMCPOAuthGrant(
       !committed ||
       committed.grant_generation !== grant.grant_generation ||
       committed.grant_binding_fingerprint !== grant.grant_binding_fingerprint ||
-      committed.refresh_status !== 'idle' ||
-      committed.oauth_access_token !== accessToken
+      committed.refresh_generation < grant.refresh_generation
     ) {
       throw new GrantConfigurationChangedError();
+    }
+    if (committed.refresh_status === 'ambiguous') throw new AmbiguousRefreshError();
+    // Another replica may have claimed/completed the next rotation after our
+    // exchange committed. Never vend the superseded token or replay a refresh.
+    // A successful newer idle row is authoritative; an active/failed newer
+    // claim is retryable contention, not a configuration/reauthentication error.
+    if (
+      committed.refresh_status !== 'idle' ||
+      committed.refresh_success_generation !== committed.refresh_generation ||
+      !committed.oauth_access_token ||
+      (committed.oauth_access_token !== accessToken &&
+        committed.refresh_success_generation <= grant.refresh_generation) ||
+      (committed.oauth_token_expires_at && committed.oauth_token_expires_at.getTime() <= Date.now())
+    ) {
+      throw new MCPOAuthRefreshBusyError();
     }
     return committed;
   }

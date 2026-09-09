@@ -12,6 +12,7 @@ import {
   OAuthRefreshExchangeError,
 } from '@agor/core/tools/mcp/oauth-refresh';
 import type { MCPAuthRecovery, MCPServerID } from '@agor/core/types';
+import { MCPClientCredentialsConfigurationError, MCPOAuthRefreshBusyError } from './mcp-oauth-use';
 
 function target(mcpServerId?: string) {
   return {
@@ -20,6 +21,8 @@ function target(mcpServerId?: string) {
 }
 
 type TrustedRecoveryErrorConstructor =
+  | typeof MCPClientCredentialsConfigurationError
+  | typeof MCPOAuthRefreshBusyError
   | typeof AmbiguousRefreshError
   | typeof InvalidGrantError
   | typeof MissingRefreshTokenError
@@ -63,6 +66,24 @@ export function classifyMCPAuthRecovery(
 ): MCPAuthRecovery {
   const common = target(options.mcpServerId);
 
+  if (safeInstanceOf(error, MCPOAuthRefreshBusyError)) {
+    return {
+      ...common,
+      category: 'authentication_required',
+      action: 'retry',
+      message:
+        'OAuth access changed during refresh. Retry to use the current grant; no additional refresh was attempted.',
+    };
+  }
+  if (safeInstanceOf(error, MCPClientCredentialsConfigurationError)) {
+    return {
+      ...common,
+      category: 'configuration_required',
+      action: 'review_configuration',
+      message:
+        'No bound OAuth grant is available. Legacy client-credential fields alone do not establish a saved machine-token connection. For browser-capable providers, configure authorization-code OAuth and reconnect. For a client-credentials-only server, use a supported bearer credential instead; browser sign-in cannot repair it.',
+    };
+  }
   if (safeInstanceOf(error, Forbidden)) {
     return {
       ...common,

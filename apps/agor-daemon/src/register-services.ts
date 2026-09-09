@@ -88,10 +88,7 @@ import {
   OAuthCodeExchangeError,
   OAuthConfigurationError,
 } from '@agor/core/tools/mcp/oauth-mcp-transport';
-import {
-  MissingRefreshTokenError,
-  type RefreshAndPersistDeps,
-} from '@agor/core/tools/mcp/oauth-refresh';
+import type { RefreshAndPersistDeps } from '@agor/core/tools/mcp/oauth-refresh';
 import type {
   AgenticToolName,
   AuthenticatedParams,
@@ -281,7 +278,12 @@ import {
 } from './services/mcp-oauth-grant-binding.js';
 import { MCPOAuthPendingFlowAuthority } from './services/mcp-oauth-pending-flow-authority.js';
 import { resolveAuthenticatedServerIds } from './services/mcp-oauth-status.js';
-import { acquireMCPOAuthGrant } from './services/mcp-oauth-use.js';
+import {
+  acquireMCPOAuthGrant,
+  MCPClientCredentialsConfigurationError,
+  MCPOAuthRefreshBusyError,
+  missingMCPOAuthGrantError,
+} from './services/mcp-oauth-use.js';
 import {
   createMCPServersService,
   runWithMCPServerMutationDatabase,
@@ -5798,7 +5800,10 @@ export async function registerMCPServices(
       data: { mcp_server_ids: string[] },
       params?: AuthenticatedParams
     ): Promise<{
-      headers: Record<string, { authorization?: string; error?: string }>;
+      headers: Record<
+        string,
+        { authorization?: string; error?: string; recovery?: MCPAuthRecovery }
+      >;
     }> {
       const userId = params?.user?.user_id;
       if (!userId && params?.provider) {
@@ -5806,7 +5811,10 @@ export async function registerMCPServices(
       }
 
       const serverIds = Array.isArray(data?.mcp_server_ids) ? data.mcp_server_ids : [];
-      const headers: Record<string, { authorization?: string; error?: string }> = {};
+      const headers: Record<
+        string,
+        { authorization?: string; error?: string; recovery?: MCPAuthRecovery }
+      > = {};
 
       if (serverIds.length === 0) {
         return { headers };
@@ -5912,12 +5920,21 @@ export async function registerMCPServices(
                 assertCurrent: mcpEgressAssertCurrent,
                 resolveDns: ctx.mcpOutboundDnsLookup,
               });
-              headers[serverId] = grant
-                ? { authorization: `Bearer ${grant.oauth_access_token}` }
-                : { error: 'needs_reauth' };
+              if (!grant) throw missingMCPOAuthGrantError(server.auth);
+              headers[serverId] = { authorization: `Bearer ${grant.oauth_access_token}` };
             } catch (error) {
               if (error instanceof OAuthRefreshAuthorityCancelledError) throw error;
-              headers[serverId] = { error: 'needs_reauth' };
+              headers[serverId] =
+                error instanceof MCPOAuthRefreshBusyError ||
+                error instanceof MCPClientCredentialsConfigurationError
+                  ? {
+                      error:
+                        error instanceof MCPOAuthRefreshBusyError
+                          ? 'refresh_in_progress'
+                          : 'client_credentials_configuration_required',
+                      recovery: classifyMCPAuthRecovery(error, { mcpServerId: serverId }),
+                    }
+                  : { error: 'needs_reauth' };
             }
           } catch (err) {
             if (err instanceof OAuthRefreshAuthorityCancelledError) throw err;
@@ -6526,7 +6543,8 @@ export async function registerMCPServices(
                 resolveDns: ctx.mcpOutboundDnsLookup,
               })
             );
-            if (!selectedGrant && !browserReservation) throw new MissingRefreshTokenError();
+            if (!selectedGrant && !browserReservation)
+              throw missingMCPOAuthGrantError(serverConfig.auth);
             oauthToken = selectedGrant?.oauth_access_token;
             if (selectedGrant && discoveryAuthority) {
               discoveryAuthority = bindMCPDiscoveryOAuthGrant(
@@ -6767,7 +6785,8 @@ export async function registerMCPServices(
         if (
           recovery.category === 'authentication_required' ||
           recovery.category === 'permission_changed' ||
-          recovery.category === 'configuration_changed'
+          recovery.category === 'configuration_changed' ||
+          recovery.category === 'configuration_required'
         ) {
           return { success: false, error: recovery.message, recovery };
         }
