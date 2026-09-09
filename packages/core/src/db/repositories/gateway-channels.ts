@@ -539,7 +539,7 @@ export class GatewayChannelRepository
     const storedAgenticConfig = (row.agentic_config as Record<string, unknown> | null) ?? null;
     // Normalize legacy env maps before using the shared transport redactor.
     // Never open a credential merely to replace it with a display sentinel.
-    const displayAgenticConfig = storedAgenticConfig && {
+    const displayAgenticConfig: Record<string, unknown> | null = storedAgenticConfig && {
       ...storedAgenticConfig,
       ...(storedAgenticConfig.envVars && !Array.isArray(storedAgenticConfig.envVars)
         ? {
