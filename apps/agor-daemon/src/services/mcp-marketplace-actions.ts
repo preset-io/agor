@@ -18,13 +18,29 @@ import { authorizeMcpServerWrite } from '../utils/mcp-server-authorization.js';
 
 type MarketplaceMutationInvalidator = (
   userIds: readonly UserID[],
-  params: AuthenticatedParams
-) => void;
+  params: AuthenticatedParams,
+  serverId: string
+) => void | Promise<void>;
 
 function caller(params?: AuthenticatedParams): UserID {
   const userId = params?.user?.user_id as UserID | undefined;
   if (!userId) throw new NotAuthenticated('Authentication required');
   return userId;
+}
+
+function notifyMarketplaceMutation(
+  invalidate: MarketplaceMutationInvalidator,
+  userIds: readonly UserID[],
+  params: AuthenticatedParams,
+  serverId: string
+): void {
+  try {
+    void Promise.resolve(invalidate(userIds, params, serverId)).catch(() => {
+      console.warn('[MCP Runtime] event=marketplace_hint_failed code=async_failure');
+    });
+  } catch {
+    console.warn('[MCP Runtime] event=marketplace_hint_failed code=sync_failure');
+  }
 }
 
 /** Marketplace-only CAS removal. Ordinary MCP remove is deliberately bypassed. */
@@ -68,9 +84,11 @@ export class MCPMarketplaceRemoveServerService {
         return server;
       }
     );
-    this.invalidate(
+    notifyMarketplaceMutation(
+      this.invalidate,
       [...new Set([userId, existing.owner_user_id].filter(Boolean) as UserID[])],
-      params!
+      params!,
+      existing.mcp_server_id
     );
     return { mcp_server_id: existing.mcp_server_id, removed: true };
   }
@@ -127,9 +145,11 @@ export class MCPMarketplaceToolPermissionService {
         return server;
       }
     );
-    this.invalidate(
+    notifyMarketplaceMutation(
+      this.invalidate,
       [...new Set([userId, existing.owner_user_id].filter(Boolean) as UserID[])],
-      params!
+      params!,
+      existing.mcp_server_id
     );
     return {
       mcp_server_id: existing.mcp_server_id,

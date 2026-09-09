@@ -1,10 +1,10 @@
 import { createHmac } from 'node:crypto';
 import {
   executeRaw,
+  type MCPOAuthGrantAuthorityRecord,
   sql,
   type TenantScopeAwareDatabase,
   type TenantScopedDatabase,
-  type UserMCPOAuthToken,
 } from '@agor/core/db';
 import { canonicalMCPCustomHeaderEntries } from '@agor/core/tools/mcp/http-headers';
 import type {
@@ -192,7 +192,7 @@ export function isMCPOAuthGrantBoundToServer(
     | 'headers'
     | 'auth'
   >,
-  grant: UserMCPOAuthToken,
+  grant: MCPOAuthGrantAuthorityRecord,
   effectiveMode: MCPOAuthRuntimeCompatibilityMode
 ): boolean {
   if (

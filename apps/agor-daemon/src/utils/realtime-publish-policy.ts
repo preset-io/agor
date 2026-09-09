@@ -284,6 +284,10 @@ export const REALTIME_PUBLISH_POLICY = {
     audience: 'none',
     why: 'Signalled by the native oauth:disconnected packet.',
   },
+  'mcp-servers/oauth-client-registration-reset': {
+    audience: 'none',
+    why: 'Admin-only OAuth registration recovery control plane.',
+  },
   'mcp-servers/oauth-status': { audience: 'none', why: 'Per-user token status.' },
   'mcp-servers/oauth-attempt-status': {
     audience: 'none',
@@ -291,6 +295,22 @@ export const REALTIME_PUBLISH_POLICY = {
   },
   'mcp-servers/oauth-auth-headers': { audience: 'none', why: 'Returns bearer headers.' },
   'mcp-servers/oauth-refresh': { audience: 'none', why: 'Returns refreshed tokens.' },
+  'tasks/:id/mcp-reprojection': {
+    audience: 'none',
+    why: 'Executor-only RPC returns opaque task-scoped gateway capabilities to its caller.',
+  },
+  'tasks/:id/mcp-reprojection-validate': {
+    audience: 'none',
+    why: 'Executor-only durable fence returns no projection and belongs only to its caller.',
+  },
+  'tasks/:id/mcp-reconnect': {
+    audience: 'none',
+    why: 'RPC result belongs to the caller; Task events carry the scoped state change.',
+  },
+  'tasks/:id/mcp-refresh-result': {
+    audience: 'none',
+    why: 'Executor acknowledgement is projected through the scoped Task event.',
+  },
   'mcp-servers/test-oauth': { audience: 'none', why: 'Probe result belongs to the caller.' },
   'mcp-servers/test-jwt': { audience: 'none', why: 'Probe result belongs to the caller.' },
   'mcp-servers/discover': {
@@ -306,17 +326,21 @@ export const REALTIME_PUBLISH_POLICY = {
     audience: 'none',
     why: 'Caller-scoped advisory read with no mutations or events.',
   },
+  'mcp-slack-recovery': {
+    audience: 'none',
+    why: 'Authenticated recovery preflight belongs only to the caller; never broadcast its result.',
+  },
   'mcp-marketplace': {
     audience: 'none',
     why: 'Caller-private overview returned only to the requesting connection.',
   },
   'mcp-marketplace/remove-unattached': {
     audience: 'none',
-    why: 'Caller-private acknowledgement; an explicit empty user-room invalidation refreshes every owner device.',
+    why: 'Caller-private acknowledgement; an explicit empty user-room freshness hint refreshes every owner device.',
   },
   'mcp-marketplace/tool-permission': {
     audience: 'none',
-    why: 'Caller-private acknowledgement; an explicit empty user-room invalidation refreshes every affected owner/admin device.',
+    why: 'Caller-private acknowledgement; an explicit empty user-room freshness hint refreshes every affected owner/admin device.',
   },
   'mcp-member-policy': { audience: 'none', why: 'Policy read for the caller.' },
   'mcp-egress/status': {

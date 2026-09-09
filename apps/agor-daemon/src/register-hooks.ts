@@ -34,6 +34,7 @@ import {
   requireCurrentTenantId,
   runWithTenantDatabaseScope,
   ScheduleRepository,
+  SessionMCPServerRepository,
   type SessionRepository,
   shortId,
   TaskRepository,
@@ -70,7 +71,11 @@ import {
   typedValidateQuery,
   userQueryValidator,
 } from '@agor/core/lib/feathers-validation';
-import { assertValidMCPServerWrite, isMCPServerUsableBy } from '@agor/core/mcp';
+import {
+  assertValidMCPServerWrite,
+  isMCPServerUsableBy,
+  isMCPServerUsableInSession,
+} from '@agor/core/mcp';
 import type {
   AuthenticatedParams,
   Board,
@@ -85,6 +90,7 @@ import type {
   Params,
   Session,
   Task,
+  TaskID,
   User,
   UserID,
   UUID,
@@ -111,6 +117,7 @@ import type {
   TasksServiceImpl,
 } from './declarations.js';
 import { rejectInConstrainedHa } from './ha-support.js';
+import { filterBoardArtifactObjects } from './hooks/board-artifact-visibility.js';
 import {
   classifyMissingCredentialFailure,
   protectExternalProviderFailureMetadata,
@@ -178,6 +185,15 @@ import {
   redactMCPServerSecrets,
   shouldExposeMCPServerSecrets,
 } from './utils/mcp-header-secrets.js';
+import {
+  redactMcpRecoveryTopology,
+  stripMcpSlackRecoveryNotice,
+} from './utils/mcp-recovery-redaction.js';
+import {
+  didMcpPrincipalRoleChange,
+  isMcpRuntimeRecoveryEnabled,
+  scheduleMcpRuntimeHint,
+} from './utils/mcp-runtime-hints.js';
 import {
   createMcpServerWriteAuthorizationHook,
   resolveMcpCaller,
@@ -481,6 +497,10 @@ export const TENANT_OWNED_SERVICE_PATHS = [
   ENVIRONMENT_COMMAND_REPORT_SERVICE,
   'sessions',
   'sessions/:id/mcp-servers',
+  'tasks/:id/mcp-reprojection',
+  'tasks/:id/mcp-reprojection-validate',
+  'tasks/:id/mcp-reconnect',
+  'tasks/:id/mcp-refresh-result',
   'session-relationships',
   'tasks',
   'messages',
@@ -498,6 +518,7 @@ export const TENANT_OWNED_SERVICE_PATHS = [
   'mcp-servers',
   'mcp-servers/oauth-attempt-status',
   'mcp-servers/oauth-disconnect',
+  'mcp-servers/oauth-client-registration-reset',
   'mcp-servers/oauth-status',
   'mcp-catalog/readiness',
   'mcp-marketplace',
@@ -633,18 +654,11 @@ export function suppressKnowledgeCommandRealtimeEvent(context: HookContext): Hoo
  * Service endpoints whose implementation retains process-local credentials,
  * provider handshakes, or native runtime state. Keep this inventory exported
  * so the constrained HA fail-closed boundary has direct regression coverage.
- * `mcp-servers/discover` is included because an OAuth-protected probe can start
- * the same pending PKCE/callback flow as the explicit OAuth endpoints.
+ * MCP discovery is deliberately absent: its ordinary capability probe is HA
+ * safe, while its optional OAuth escalation is stopped inside the endpoint
+ * before provider discovery or flow creation.
  */
 export const CONSTRAINED_HA_PROCESS_AFFINE_SERVICE_GATES = [
-  ['mcp-servers/discover', 'mcpOAuth'],
-  ['mcp-servers/oauth-auth-headers', 'mcpOAuth'],
-  ['mcp-servers/oauth-complete', 'mcpOAuth'],
-  ['mcp-servers/oauth-disconnect', 'mcpOAuth'],
-  ['mcp-servers/oauth-refresh', 'mcpOAuth'],
-  ['mcp-servers/oauth-start', 'mcpOAuth'],
-  ['mcp-servers/oauth-status', 'mcpOAuth'],
-  ['mcp-servers/test-oauth', 'mcpOAuth'],
   ['codex-auth/device', 'codexDeviceAuth'],
   ['codex-auth/import', 'codexAuth'],
   ['codex-auth/logout', 'codexAuth'],
@@ -953,6 +967,48 @@ export const redactMCPServerSecretFields = async (context: HookContext) => {
   return context;
 };
 
+/** Keep the authoritative Task result intact while projecting the external caller response. */
+export function createRedactTaskMcpRecoveryAfter(
+  sessionsRepository: Pick<SessionRepository, 'findById'>
+): (context: HookContext) => Promise<HookContext> {
+  return async (context: HookContext): Promise<HookContext> => {
+    if (!context.params.provider) return context;
+    const isAdmin = hasMinimumRole(context.params.user?.role, ROLES.ADMIN);
+    const viewerId = context.params.user?.user_id;
+    const sessions = new Map<string, Session | null>();
+    const redact = async (task: Task): Promise<Task> => {
+      const stripped = stripMcpSlackRecoveryNotice(task);
+      if (isAdmin || !stripped.metadata?.mcp_recovery) return stripped;
+      if (!sessions.has(task.session_id)) {
+        sessions.set(
+          task.session_id,
+          await sessionsRepository.findById(task.session_id).catch(() => null)
+        );
+      }
+      return sessions.get(task.session_id)?.created_by === viewerId
+        ? stripped
+        : redactMcpRecoveryTopology(stripped);
+    };
+    let dispatch = context.result;
+    if (Array.isArray(context.result)) {
+      dispatch = await Promise.all((context.result as Task[]).map(redact));
+    } else if (
+      context.result &&
+      typeof context.result === 'object' &&
+      Array.isArray((context.result as { data?: unknown }).data)
+    ) {
+      const page = context.result as { data: Task[] } & Record<string, unknown>;
+      dispatch = { ...page, data: await Promise.all(page.data.map(redact)) };
+    } else if (context.result && typeof context.result === 'object') {
+      dispatch = await redact(context.result as Task);
+    }
+    // Keep the authoritative result intact for audience-specific publishers.
+    // `dispatch` is only the direct external caller's response projection.
+    context.dispatch = dispatch;
+    return context;
+  };
+}
+
 /** Redact gateway channel results for both REST callers and realtime dispatch. */
 export function redactGatewayChannelResultsForTransport(context: HookContext): HookContext {
   const redact = (channel: Record<string, unknown>) =>
@@ -1117,7 +1173,128 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       }
     ).mcpEgressGateway;
     coordinateMCPServerMutationAfterWrite(context, gateway);
+    const serverId = (context.result as { mcp_server_id?: unknown } | undefined)?.mcp_server_id;
+    if (typeof serverId === 'string') {
+      const exactTasks = (context.params as HookContext['params'] & { _mcpRemovalTargets?: Task[] })
+        ._mcpRemovalTargets;
+      scheduleMcpRuntimeHint(
+        db,
+        context.params.tenant?.tenant_id,
+        'server_authority_changed',
+        () =>
+          (
+            app as unknown as {
+              signalMcpServerAuthorityChange?: (
+                serverId: string,
+                params: HookContext['params'],
+                affectedCredentialUserId?: string,
+                exactTasks?: Task[],
+                code?: 'stale_capability' | 'tool_permission_changed'
+              ) => Promise<void>;
+            }
+          ).signalMcpServerAuthorityChange?.(
+            serverId,
+            context.params,
+            undefined,
+            exactTasks,
+            context.method !== 'remove' &&
+              (context.data as { tool_permissions?: unknown } | undefined)?.tool_permissions
+              ? 'tool_permission_changed'
+              : 'stale_capability'
+          ) ?? Promise.resolve()
+      );
+    }
     return context;
+  };
+
+  const captureMcpRemovalTargets = async (context: HookContext): Promise<HookContext> => {
+    if (!context.id) return context;
+    try {
+      if (!(await isMcpRuntimeRecoveryEnabled(db))) {
+        (
+          context.params as HookContext['params'] & { _mcpRemovalTargets?: Task[] }
+        )._mcpRemovalTargets = [];
+        return context;
+      }
+      const server = await app.service('mcp-servers').get(context.id, {
+        ...context.params,
+        provider: undefined,
+      });
+      const repository = new TaskRepository(db);
+      const targetTasks: Task[] = [];
+      const sessions = new Map<string, Session | null>();
+      const attached = new Map<string, boolean>();
+      let beforeTaskId: TaskID | undefined;
+      let visited = 0;
+      // One newest-first page only. This pre-delete snapshot is an accelerator;
+      // gateway admission remains correct for tasks outside the bounded page.
+      const limit = 100;
+      while (visited < limit) {
+        const page = await repository
+          .findActiveMCPRefreshPage({
+            beforeTaskId,
+            ...(server.scope === 'session'
+              ? { attachedServerId: server.mcp_server_id }
+              : server.owner_user_id
+                ? { credentialUserId: server.owner_user_id }
+                : {}),
+            limit: Math.min(100, limit - visited),
+          })
+          .catch(() => null);
+        if (!page) {
+          console.warn(
+            `[MCP Runtime] event=remove_target_page_failed code=server_removed continuation_task_id=${beforeTaskId ? shortId(beforeTaskId) : 'start'}`
+          );
+          break;
+        }
+        for (const task of page.tasks) {
+          try {
+            if (!sessions.has(task.session_id)) {
+              sessions.set(task.session_id, await sessionsRepository.findById(task.session_id));
+            }
+            const session = sessions.get(task.session_id);
+            if (!session) continue;
+            if (!attached.has(task.session_id)) {
+              attached.set(
+                task.session_id,
+                await new SessionMCPServerRepository(db)
+                  .listServers(task.session_id, false)
+                  .then((servers) =>
+                    servers.some((item) => item.mcp_server_id === server.mcp_server_id)
+                  )
+              );
+            }
+            if (
+              attached.get(task.session_id) ||
+              (server.scope === 'global' && isMCPServerUsableInSession(server, session))
+            ) {
+              targetTasks.push(task);
+            }
+          } catch {
+            console.warn(
+              `[MCP Runtime] event=remove_target_failed task_id=${shortId(task.task_id)} code=server_removed`
+            );
+          }
+        }
+        visited += page.tasks.length;
+        if (!page.nextTaskId) break;
+        beforeTaskId = page.nextTaskId;
+      }
+      if (visited >= limit && beforeTaskId) {
+        console.warn(
+          `[MCP Runtime] event=remove_target_truncated code=server_removed limit=${limit} continuation_task_id=${shortId(beforeTaskId)}`
+        );
+      }
+      (
+        context.params as HookContext['params'] & { _mcpRemovalTargets?: Task[] }
+      )._mcpRemovalTargets = targetTasks;
+      return context;
+    } catch {
+      // This pre-scan is an availability hint only. Never fail the
+      // authoritative server deletion when capture is unavailable.
+      console.warn('[MCP Runtime] event=remove_target_capture_failed code=server_removed');
+      return context;
+    }
   };
 
   // Used by classifyMissingCredentialFailure to look up the acting user for
@@ -2372,7 +2549,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
         (context) => validateMcpServerWriteInput(context, false),
         validateMcpServerOAuthCompatibility,
       ],
-      remove: [authorizeMcpServerWriteHook],
+      remove: [authorizeMcpServerWriteHook, captureMcpRemovalTargets],
     },
     after: {
       find: [presentMcpOAuthPolicies, redactMCPServerSecretFieldsForGatewayMode],
@@ -2815,6 +2992,20 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       create: [(context) => protectFilesystemHomeWrite(context, config)],
       patch: [
         (context) => protectFilesystemHomeWrite(context, config),
+        async (context: HookContext) => {
+          if (
+            context.id &&
+            context.data &&
+            typeof context.data === 'object' &&
+            'role' in context.data
+          ) {
+            const previous = await usersRepository.findById(String(context.id));
+            (
+              context.params as HookContext['params'] & { _mcpPreviousRole?: User['role'] }
+            )._mcpPreviousRole = previous?.role;
+          }
+          return context;
+        },
         captureMarketplaceInvalidationTargets,
       ],
     },
@@ -2848,6 +3039,34 @@ export function registerHooks(ctx: RegisterHooksContext): void {
         },
       ],
       patch: [
+        async (context: HookContext) => {
+          if (
+            didMcpPrincipalRoleChange(
+              context.data,
+              (context.params as HookContext['params'] & { _mcpPreviousRole?: User['role'] })
+                ._mcpPreviousRole,
+              (context.result as User | undefined)?.role
+            ) &&
+            typeof (context.result as { user_id?: unknown } | undefined)?.user_id === 'string'
+          ) {
+            const userId = (context.result as { user_id: string }).user_id;
+            scheduleMcpRuntimeHint(
+              db,
+              context.params.tenant?.tenant_id,
+              'principal_authority_changed',
+              () =>
+                (
+                  app as unknown as {
+                    signalMcpPrincipalAuthorityChange?: (
+                      userId: string,
+                      params: HookContext['params']
+                    ) => Promise<void>;
+                  }
+                ).signalMcpPrincipalAuthorityChange?.(userId, context.params) ?? Promise.resolve()
+            );
+          }
+          return context;
+        },
         (context: HookContext) => {
           const params = context.params as HookContext['params'] & {
             [CODEX_AUTH_DEFER_USER_REALTIME]?: boolean;
@@ -3200,6 +3419,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
   // ============================================================================
 
   const tasksService = app.service('tasks') as FeathersService<Application, TasksServiceImpl>;
+  const redactTaskMcpRecoveryAfter = createRedactTaskMcpRecoveryAfter(sessionsRepository);
   tasksService.hooks({
     before: {
       all: [typedValidateQuery(taskQueryValidator), requireAuth],
@@ -3239,6 +3459,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
         ensureBranchPermission('all', 'delete tasks', superadminOpts),
       ],
     },
+    after: { all: [redactTaskMcpRecoveryAfter] },
   });
 
   // ============================================================================
@@ -3550,74 +3771,9 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       ],
     },
     after: {
-      // Strip private artifact objects from board.objects for non-owners
-      get: [
-        async (context: HookContext<Board>) => {
-          const board = context.result;
-          if (!board?.objects) return context;
-          const userId = (context.params as { user?: { user_id: string } }).user?.user_id;
-          const artifactObjectIds = Object.entries(board.objects)
-            .filter(([, obj]) => obj && (obj as { type?: string }).type === 'artifact')
-            .map(([id, obj]) => ({
-              id,
-              artifactId: (obj as { artifact_id?: string }).artifact_id,
-            }));
-          if (artifactObjectIds.length === 0) return context;
-
-          const artifactRepo = new ArtifactRepository(db);
-          const filtered = { ...board.objects };
-          for (const { id, artifactId } of artifactObjectIds) {
-            if (!artifactId) continue;
-            try {
-              const artifact = await artifactRepo.findById(artifactId);
-              if (!artifact) {
-                delete filtered[id]; // orphaned reference
-              } else if (!artifact.public && artifact.created_by !== userId) {
-                delete filtered[id]; // private, not owned
-              }
-            } catch {
-              // artifact not found, remove stale reference
-              delete filtered[id];
-            }
-          }
-          context.result = { ...board, objects: filtered };
-          return context;
-        },
-      ],
-      find: [
-        async (context: HookContext<Board>) => {
-          const result = context.result;
-          if (!result) return context;
-          const boards = Array.isArray(result) ? result : (result as { data: Board[] }).data;
-          if (!boards?.length) return context;
-          const userId = (context.params as { user?: { user_id: string } }).user?.user_id;
-          const artifactRepo = new ArtifactRepository(db);
-
-          for (const board of boards) {
-            if (!board.objects) continue;
-            const artifactEntries = Object.entries(board.objects).filter(
-              ([, obj]) => obj && (obj as { type?: string }).type === 'artifact'
-            );
-            if (artifactEntries.length === 0) continue;
-
-            const filtered = { ...board.objects };
-            for (const [id, obj] of artifactEntries) {
-              const artifactId = (obj as { artifact_id?: string }).artifact_id;
-              if (!artifactId) continue;
-              try {
-                const artifact = await artifactRepo.findById(artifactId);
-                if (!artifact || (!artifact.public && artifact.created_by !== userId)) {
-                  delete filtered[id];
-                }
-              } catch {
-                delete filtered[id];
-              }
-            }
-            board.objects = filtered;
-          }
-          return context;
-        },
-      ],
+      // Batch minimal visibility reads across the complete returned board page.
+      get: [filterBoardArtifactObjects(new ArtifactRepository(db))],
+      find: [filterBoardArtifactObjects(new ArtifactRepository(db))],
       update: [clearRealtimeBranchVisibility, publishMarketplaceInvalidation],
       patch: [clearRealtimeBranchVisibility, publishMarketplaceInvalidation],
       remove: [clearRealtimeBranchVisibility, publishMarketplaceInvalidation],

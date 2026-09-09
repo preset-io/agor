@@ -45,6 +45,7 @@ const TRUSTED_CREATE_FIELDS = new Set([
   'tools',
   'resources',
   'prompts',
+  'capabilities_discovered_at',
   'tool_permissions',
 ]);
 
@@ -779,6 +780,7 @@ const ARCHIVED_MCP_SERVER_DATA_FIELDS = new Set([
   'tools',
   'resources',
   'prompts',
+  'capabilities_discovered_at',
   'tool_permissions',
 ]);
 
@@ -839,6 +841,13 @@ export function assertValidArchivedMCPServerRow(value: unknown): void {
         Number(revision) >= Number.MAX_SAFE_INTEGER)
     ) {
       throw new Error('archived MCP config_version must be a non-exhausted positive safe integer');
+    }
+    if (
+      data.capabilities_discovered_at !== undefined &&
+      (typeof data.capabilities_discovered_at !== 'string' ||
+        Number.isNaN(Date.parse(data.capabilities_discovered_at)))
+    ) {
+      throw new Error('archived MCP capabilities_discovered_at must be an ISO timestamp');
     }
     if (
       row.catalog_entry_name !== undefined &&

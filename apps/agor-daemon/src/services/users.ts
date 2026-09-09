@@ -56,6 +56,7 @@ import {
   type TenantScopeAwareDatabase,
   type TenantScopedDatabase,
   UserPrimaryTeammateRepository,
+  UsersRepository,
   update,
   users,
 } from '@agor/core/db';
@@ -1620,19 +1621,11 @@ export class UsersService {
     tool: T,
     field: keyof AgenticToolsConfig[T] & string
   ): Promise<string | undefined> {
-    const row = await select(this.db).from(users).where(eq(users.user_id, userId)).one();
-    if (!row) return undefined;
-
-    const data = row.data as { agentic_tools?: StoredAgenticTools };
-    const encrypted = data.agentic_tools?.[tool]?.[field];
-    if (!encrypted) return undefined;
-
-    try {
-      return decryptApiKey(encrypted);
-    } catch (err) {
-      console.error(`Failed to decrypt agentic_tools.${tool}.${field} for user ${userId}:`, err);
-      return undefined;
-    }
+    // Preserve the service's undefined contract; storage and corruption handling
+    // belong to the repository shared with other credential consumers.
+    return (
+      (await new UsersRepository(this.db).getToolConfigField(userId, tool, field)) ?? undefined
+    );
   }
 
   /**
@@ -1644,24 +1637,7 @@ export class UsersService {
     userId: UserID,
     tool: T
   ): Promise<AgenticToolsConfig[T] | null> {
-    const row = await select(this.db).from(users).where(eq(users.user_id, userId)).one();
-    if (!row) return null;
-
-    const data = row.data as { agentic_tools?: StoredAgenticTools };
-    const fields = data.agentic_tools?.[tool];
-    if (!fields || Object.keys(fields).length === 0) return null;
-
-    const out: Record<string, string> = {};
-    for (const [field, encrypted] of Object.entries(fields)) {
-      if (!encrypted) continue;
-      try {
-        out[field] = decryptApiKey(encrypted);
-      } catch (err) {
-        console.error(`Failed to decrypt agentic_tools.${tool}.${field} for user ${userId}:`, err);
-      }
-    }
-
-    return Object.keys(out).length > 0 ? (out as AgenticToolsConfig[T]) : null;
+    return new UsersRepository(this.db).getToolConfig(userId, tool);
   }
 
   /**

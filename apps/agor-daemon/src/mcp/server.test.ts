@@ -136,7 +136,7 @@ describe('MCP tool registry', () => {
  */
 function captureMcpHandler(
   config: Parameters<typeof setupMCPRoutes>[3] = { multi_tenancy: undefined }
-) {
+): (req: Request, res: Response) => Promise<unknown> | unknown {
   let handler: ((req: Request, res: Response) => Promise<unknown> | unknown) | null = null;
   const register = (_path: string, fn: typeof handler) => {
     handler = fn;
@@ -186,6 +186,34 @@ describe('POST /mcp token source', () => {
     // Restore any spies installed per-test (e.g. console.warn) so later
     // suites start from a clean slate.
     vi.restoreAllMocks();
+  });
+
+  it('attributes admission failures without recording the credential or arbitrary method', async () => {
+    const { resolveTracerModule } = await import('../tracing/feathers.js');
+    const tracingModule = await import('../tracing/feathers.js');
+    const calls: unknown[] = [];
+    vi.spyOn(tracingModule, 'resolveTracerModule').mockReturnValue({
+      trace(name, options, work) {
+        calls.push({ name, options });
+        return work();
+      },
+    } satisfies NonNullable<ReturnType<typeof resolveTracerModule>>);
+    const handler = captureMcpHandler({ metrics: { apm: { trace_services: 'full' } } });
+    const res = buildRes();
+    await handler(
+      {
+        method: 'POST',
+        query: {},
+        headers: {},
+        body: { method: 'secret-method', params: { token: 'secret-token' } },
+      } as unknown as Request,
+      res as unknown as Response
+    );
+    expect(res.statusCode).toBe(401);
+    expect(calls).toEqual([
+      { name: 'mcp.request', options: { resource: 'other', tags: { 'mcp.method': 'other' } } },
+    ]);
+    expect(JSON.stringify(calls)).not.toContain('secret');
   });
 
   it('rejects requests with ?sessionToken= query param (400)', async () => {
@@ -424,6 +452,68 @@ describe('POST /mcp with personal API keys', () => {
       error?: { message: string };
     };
   }
+
+  it.each([
+    { search: false, facade: false },
+    { search: true, facade: false },
+    { search: true, facade: true },
+  ])(
+    'traces the registered tool with search=$search facade=$facade',
+    async ({ search, facade }) => {
+      await mockPersonalApiKeyUser();
+      const tracingModule = await import('../tracing/feathers.js');
+      const calls: { name: string; resource?: string }[] = [];
+      vi.spyOn(tracingModule, 'resolveTracerModule').mockReturnValue({
+        trace(name, options, work) {
+          calls.push({ name, resource: options.resource });
+          return work();
+        },
+      });
+      await withMcpServer(
+        {
+          users: {
+            get: vi.fn(async () => ({
+              user_id: 'user-1',
+              email: 'alice@example.com',
+              role: 'member',
+            })),
+          },
+        },
+        async (baseUrl) => {
+          const resp = await fetch(`${baseUrl}/mcp`, {
+            method: 'POST',
+            headers: {
+              Accept: 'application/json, text/event-stream',
+              'Content-Type': 'application/json',
+              'X-API-Key': 'agor_sk_valid',
+            },
+            body: JSON.stringify({
+              jsonrpc: '2.0',
+              id: 1,
+              method: 'tools/call',
+              params: facade
+                ? {
+                    name: 'agor_execute_tool',
+                    arguments: { tool_name: 'agor_users_get_current', arguments: {} },
+                  }
+                : { name: 'agor_users_get_current', arguments: {} },
+            }),
+          });
+          expect(resp.status).toBe(200);
+          const parsed = parseMcpResponse(await resp.text());
+          expect(parsed.error).toBeUndefined();
+          expect(JSON.parse(parsed.result!.content![0].text)).toMatchObject({ user_id: 'user-1' });
+        },
+        { metrics: { apm: { trace_services: 'entrypoint' } } },
+        search
+      );
+      expect(calls).toEqual([
+        { name: 'mcp.request', resource: 'tools/call' },
+        ...(facade ? [{ name: 'mcp.tool', resource: 'agor_execute_tool' }] : []),
+        { name: 'mcp.tool', resource: 'agor_users_get_current' },
+      ]);
+    }
+  );
 
   it('can call a non-session-scoped tool without X-Agor-Session-Id / ?sessionId', async () => {
     const { UserApiKeysRepository } = await import('@agor/core/db');

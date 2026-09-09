@@ -2,9 +2,19 @@ import type { Request, Response } from 'express';
 import { type MCPEgressGateway, MCPEgressGatewayError } from './gateway.js';
 
 /** The production Express boundary for mediated MCP provider requests. */
-export function createMCPEgressHttpHandler(gateway: Pick<MCPEgressGateway, 'forward'>) {
+export function createMCPEgressHttpHandler(
+  gateway: Pick<MCPEgressGateway, 'forward'> &
+    Partial<Pick<MCPEgressGateway, 'recordRejectedRequest'>>
+) {
   return async (req: Request, res: Response): Promise<void> => {
+    let gatewayHeaders: Headers | undefined;
     try {
+      const parsedHeaders = new Headers();
+      for (const [name, rawValue] of Object.entries(req.headers)) {
+        if (typeof rawValue === 'string') parsedHeaders.set(name, rawValue);
+        else if (Array.isArray(rawValue)) parsedHeaders.set(name, rawValue.join(', '));
+      }
+      gatewayHeaders = parsedHeaders;
       const serverId = String(req.params.serverId ?? '');
       const body =
         req.body == null
@@ -14,11 +24,6 @@ export function createMCPEgressHttpHandler(gateway: Pick<MCPEgressGateway, 'forw
             : new TextEncoder().encode(
                 typeof req.body === 'string' ? req.body : JSON.stringify(req.body)
               );
-      const gatewayHeaders = new Headers();
-      for (const [name, rawValue] of Object.entries(req.headers)) {
-        if (typeof rawValue === 'string') gatewayHeaders.set(name, rawValue);
-        else if (Array.isArray(rawValue)) gatewayHeaders.set(name, rawValue.join(', '));
-      }
       const forwarded = await gateway.forward({
         serverId,
         headers: gatewayHeaders,
@@ -37,12 +42,28 @@ export function createMCPEgressHttpHandler(gateway: Pick<MCPEgressGateway, 'forw
           : new MCPEgressGatewayError(
               503,
               'egress_unavailable',
-              'MCP gateway egress is temporarily unavailable'
+              'MCP gateway egress is temporarily unavailable',
+              'ambiguous'
             );
       const safeServerId = String(req.params.serverId ?? '').replace(/[^A-Za-z0-9_-]/g, '_');
       console.warn(
         `[MCP Egress] event=request_rejected server_id=${safeServerId || '<invalid>'} code=${gatewayError.code}`
       );
+      // Recovery projection must never delay the provider-facing rejection:
+      // the authority snapshot that produced this error may still hold a
+      // SQLite writer transaction until the caller observes the response.
+      const recoveryProjection = gatewayHeaders
+        ? gateway.recordRejectedRequest?.(
+            gatewayHeaders,
+            String(req.params.serverId ?? ''),
+            gatewayError
+          )
+        : undefined;
+      if (recoveryProjection) {
+        void recoveryProjection.catch(() => {
+          console.warn('[MCP Egress] event=recovery_projection_failed');
+        });
+      }
       if (!res.headersSent) {
         const id =
           req.body && typeof req.body === 'object' && 'id' in req.body
@@ -51,7 +72,15 @@ export function createMCPEgressHttpHandler(gateway: Pick<MCPEgressGateway, 'forw
         res.status(gatewayError.status).json({
           jsonrpc: '2.0',
           id,
-          error: { code: -32003, message: gatewayError.message, data: { code: gatewayError.code } },
+          error: {
+            code: -32003,
+            message: gatewayError.message,
+            data: {
+              code: gatewayError.code,
+              provider_dispatch: gatewayError.dispatch,
+              automatic_retry_allowed: false,
+            },
+          },
         });
       } else {
         res.end();

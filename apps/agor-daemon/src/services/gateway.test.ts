@@ -951,6 +951,12 @@ describe('GatewayService multi-tenant process state', () => {
     );
     const channelRepo = { findAll: vi.fn(async () => [channel]) };
     (service as unknown as { channelRepo: typeof channelRepo }).channelRepo = channelRepo;
+    const findMcpSlackRecoveryNoticePage = vi.fn(async () => ({ tasks: [] }));
+    (
+      service as unknown as {
+        taskRepo: { findMcpSlackRecoveryNoticePage: typeof findMcpSlackRecoveryNoticePage };
+      }
+    ).taskRepo = { findMcpSlackRecoveryNoticePage };
     const startListening = vi.fn(async () => undefined);
     vi.mocked(getConnector).mockReturnValue({
       startListening,
@@ -958,6 +964,7 @@ describe('GatewayService multi-tenant process state', () => {
     });
 
     await runWithTenantContext('static-tenant', () => service.startListeners());
+    await vi.waitFor(() => expect(findMcpSlackRecoveryNoticePage).toHaveBeenCalledOnce());
 
     expect(channelRepo.findAll).toHaveBeenCalledOnce();
     expect(startListening).toHaveBeenCalledOnce();
@@ -967,6 +974,10 @@ describe('GatewayService multi-tenant process state', () => {
     expect([
       ...(service as unknown as { activeListeners: Map<string, unknown> }).activeListeners.keys(),
     ]).toEqual(['static-tenant\0static-channel']);
+    expect(findMcpSlackRecoveryNoticePage).toHaveBeenCalledWith(
+      expect.objectContaining({ limit: 50, now: expect.any(Date), horizon: expect.any(Date) })
+    );
+    await service.stopListeners();
   });
 
   it('fails closed on a discovered tenant mismatch while continuing other tenants', async () => {

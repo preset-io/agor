@@ -1,12 +1,22 @@
 import http, { type Server as HttpServer } from 'node:http';
+import { resolveMcpOAuthCallbackOrigin } from '@agor/core/config';
 import {
+  BranchRepository,
   createDatabaseAsync,
   eq,
+  GatewayChannelRepository,
+  generateId,
   MCPServerRepository,
   mcpServers,
+  RepoRepository,
   runMigrations,
+  SessionMCPServerRepository,
+  SessionRepository,
+  setMCPEgressGatewayMode,
   shortId,
+  TaskRepository,
   type TenantScopeAwareDatabase,
+  ThreadSessionMapRepository,
   UserMCPOAuthTokenRepository,
   UsersRepository,
   update,
@@ -30,6 +40,7 @@ import type {
   User,
   UserID,
 } from '@agor/core/types';
+import { TaskStatus } from '@agor/core/types';
 import type { OutboundDnsLookup } from '@agor/core/utils/safe-outbound-fetch';
 import { type Socket as ClientSocket, io as createSocketClient } from 'socket.io-client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -39,9 +50,11 @@ import {
   RUNTIME_JWT_AUDIENCE,
   RUNTIME_JWT_ISSUER,
 } from './auth/runtime-tokens.js';
+import { type RegisterHooksContext, registerHooks } from './register-hooks.js';
 import { createRegisteredMCPCatalogConnectService } from './register-routes.js';
 import { type RegisterServicesContext, registerMCPServices } from './register-services.js';
 import { createSocketIOConfig } from './setup/socketio.js';
+import { issueMCPSlackRecoveryToken } from './utils/mcp-slack-recovery-token.js';
 import {
   AGOR_SOCKET_AUTHORITY_ID_PROPERTY,
   installSocketAuthorityId,
@@ -384,6 +397,12 @@ type SQLiteHarness = {
   user: User;
   server: MCPServer;
   emittedBrowserEvents: Array<Record<string, unknown>>;
+  gatewayOAuthResults: Array<{
+    taskId: string;
+    noticeId: string;
+    attemptId: string;
+    success: boolean;
+  }>;
   nextAuthorizationUrl: () => Promise<string>;
   callback: (state: string) => Promise<{ status: number; body: string }>;
   deny: (state: string) => Promise<{ status: number; body: string }>;
@@ -401,9 +420,13 @@ async function createHarness(
     catalogPeer?: boolean;
     catalogEntry?: MCPCatalogEntry;
     durableAuthority?: NonNullable<RegisterServicesContext['mcpOAuthPendingFlowAuthority']>;
+    durableClientRegistrationAuthority?: NonNullable<
+      RegisterServicesContext['mcpOAuthClientRegistrationAuthority']
+    >;
     lockGrantConfiguration?: NonNullable<RegisterServicesContext['lockMcpOAuthGrantConfiguration']>;
     outboundDnsLookup?: OutboundDnsLookup;
     requireAuth?: RegisterServicesContext['requireAuth'];
+    deployment?: RegisterServicesContext['deployment'];
   } = {}
 ) {
   const rawDb = await createDatabaseAsync({ dialect: 'sqlite', url: ':memory:' });
@@ -463,6 +486,23 @@ async function createHarness(
   };
   const app = feathers() as Application & { io: typeof io };
   app.io = io;
+  const gatewayOAuthResults: SQLiteHarness['gatewayOAuthResults'] = [];
+  app.use(
+    '/gateway',
+    {
+      async syncMcpSlackRecoveryNoticeAfterCommit() {},
+      async markMcpSlackOAuthResult(input: SQLiteHarness['gatewayOAuthResults'][number]) {
+        gatewayOAuthResults.push(input);
+      },
+    },
+    { methods: ['syncMcpSlackRecoveryNoticeAfterCommit', 'markMcpSlackOAuthResult'] }
+  );
+  const deployment = options.deployment ?? ({} as RegisterServicesContext['deployment']);
+  const callbackOrigin = resolveMcpOAuthCallbackOrigin({}, process.env);
+  const mcpOAuthCallbackUrl =
+    deployment.mode === 'ha'
+      ? (callbackOrigin.haCallbackUrl ?? undefined)
+      : (callbackOrigin.standaloneCallbackUrl ?? undefined);
   const { oauthCallbackHandler } = await registerMCPServices({
     db,
     app,
@@ -474,8 +514,10 @@ async function createHarness(
     UI_PORT: 5173,
     allowSuperadmin: false,
     requireAuth: options.requireAuth ?? (async (context) => context),
-    deployment: {} as RegisterServicesContext['deployment'],
+    deployment,
+    mcpOAuthCallbackUrl,
     mcpOAuthPendingFlowAuthority: options.durableAuthority,
+    mcpOAuthClientRegistrationAuthority: options.durableClientRegistrationAuthority,
     lockMcpOAuthGrantConfiguration: options.lockGrantConfiguration,
     mcpOutboundDnsLookup: options.outboundDnsLookup,
   });
@@ -531,6 +573,7 @@ async function createHarness(
     user,
     server,
     emittedBrowserEvents,
+    gatewayOAuthResults,
     nextAuthorizationUrl: async () => {
       const value = await nextUrl.promise;
       nextUrl = deferred<string>();
@@ -551,6 +594,85 @@ function paramsFor(harness: SQLiteHarness): AuthenticatedParams {
     connection: harness.liveSocket.feathers,
     authentication: harness.liveSocket.feathers.authentication,
   } as AuthenticatedParams;
+}
+
+const constrainedHaDeployment = {
+  mode: 'ha',
+  supportProfile: 'constrained-active-active',
+  capabilities: {
+    taskExecution: true,
+    executorTokenAuthority: true,
+    agorManagedInteractivePermissions: true,
+    scheduler: true,
+    sessionQueue: true,
+    taskRuntimeReconciliation: true,
+    knowledgeEmbeddingIndexer: true,
+    statelessMcp: true,
+    mcpOAuth: true,
+    completionCallbackDurableAdmission: true,
+    completionCallbackPreAdmissionRecovery: false,
+    widgetResolutionDurableClaim: true,
+    githubInstall: true,
+    codexCredentialFiles: false,
+    codexDeviceAuth: false,
+    processAffineAuth: false,
+    gatewayListeners: true,
+    gatewayOutboundExactlyOnce: false,
+    environmentHealthMonitor: true,
+    artifactRuntimeIntrospection: false,
+  },
+  redis: {},
+  environmentHealthMonitor: {},
+  executorStorage: {
+    userHome: 'replica-local',
+    branchWorkspace: 'shared',
+    baseRepository: 'shared',
+  },
+  topology: {
+    execution: 'shared-local',
+    sharedFilesystem: true,
+    ingressAffinity: true,
+  },
+  mcpOAuthCallbackUrl: 'https://agor.example.test/mcp-servers/oauth-callback',
+} as RegisterHooksContext['deployment'];
+
+/**
+ * Install the same hook registrar used by daemon boot while letting this MCP-
+ * focused harness stand in empty services for unrelated product surfaces.
+ */
+function registerProductionHooksForHarness(harness: SQLiteHarness): void {
+  const emptyService = { hooks() {}, on() {}, emit() {} };
+  const registrationApp = {
+    service(path: string) {
+      try {
+        return harness.app.service(path);
+      } catch {
+        return emptyService;
+      }
+    },
+    use() {},
+    publish() {},
+    emit() {},
+  } as unknown as RegisterHooksContext['app'];
+
+  registerHooks({
+    db: harness.db,
+    app: registrationApp,
+    config: {
+      database: { dialect: 'sqlite' },
+      multi_tenancy: { mode: 'static', static_tenant_id: 'default' },
+    } as RegisterHooksContext['config'],
+    jwtSecret: 'ha-discovery-registration-test',
+    requireAuth: async (context) => context,
+    superadminOpts: { allowSuperadmin: false },
+    sessionsService: emptyService as RegisterHooksContext['sessionsService'],
+    messagesService: emptyService as RegisterHooksContext['messagesService'],
+    boardsService: undefined,
+    branchRepository: {} as RegisterHooksContext['branchRepository'],
+    usersRepository: {} as RegisterHooksContext['usersRepository'],
+    sessionsRepository: {} as RegisterHooksContext['sessionsRepository'],
+    deployment: constrainedHaDeployment,
+  });
 }
 
 function replaceLiveSocketAuthority(harness: SQLiteHarness, suffix = 'replacement'): void {
@@ -650,6 +772,156 @@ async function authorizeSavedServer(harness: SQLiteHarness): Promise<void> {
   const state = new URL(started.authorizationUrl).searchParams.get('state');
   expect(state).toBeTruthy();
   expect((await harness.callback(state!)).status).toBe(200);
+}
+
+async function seedSlackRecoveryAction(harness: SQLiteHarness): Promise<{
+  token: string;
+  taskId: string;
+  sessionId: string;
+}> {
+  const repo = await new RepoRepository(harness.rawDb).create({
+    repo_id: generateId(),
+    slug: `slack-recovery-${generateId()}`,
+    name: 'Slack recovery integration',
+    repo_type: 'remote',
+    remote_url: 'https://example.invalid/slack-recovery.git',
+    local_path: `/tmp/slack-recovery-${generateId()}`,
+    default_branch: 'main',
+  });
+  const branch = await new BranchRepository(harness.rawDb).create({
+    branch_id: generateId(),
+    repo_id: repo.repo_id,
+    name: `slack-recovery-${generateId()}`,
+    ref: 'main',
+    branch_unique_id: 100_000 + Math.floor(Math.random() * 1_000_000_000),
+    path: `/tmp/slack-recovery-${generateId()}/branch`,
+    created_by: harness.user.user_id,
+  });
+  const session = await new SessionRepository(harness.rawDb).create({
+    session_id: generateId(),
+    branch_id: branch.branch_id,
+    agentic_tool: 'claude-code',
+    created_by: harness.user.user_id,
+    sdk_session_id: 'sdk-session-preserved',
+  });
+  await new SessionMCPServerRepository(harness.rawDb).addServer(
+    session.session_id,
+    harness.server.mcp_server_id
+  );
+  const channel = await new GatewayChannelRepository(harness.rawDb).create({
+    name: 'Slack recovery',
+    channel_type: 'slack',
+    enabled: true,
+    created_by: harness.user.user_id,
+    agor_user_id: harness.user.user_id,
+    target_branch_id: branch.branch_id,
+    config: { bot_token: 'xoxb-test-only', app_token: 'xapp-test-only' },
+  });
+  const threadId = 'C2515-1756200000.000001';
+  await new ThreadSessionMapRepository(harness.rawDb).create({
+    channel_id: channel.id,
+    thread_id: threadId,
+    session_id: session.session_id,
+    branch_id: branch.branch_id,
+  });
+  await setMCPEgressGatewayMode(harness.rawDb, 'compatibility', harness.user.user_id);
+
+  const issued = new Date(Math.floor(Date.now() / 1_000) * 1_000);
+  const expires = new Date(issued.getTime() + 10 * 60_000);
+  const taskId = generateId();
+  const noticeId = generateId();
+  const jti = generateId();
+  const requestId = generateId();
+  const generation = 7;
+  const task = await new TaskRepository(harness.rawDb).create({
+    task_id: taskId,
+    session_id: session.session_id,
+    created_by: harness.user.user_id,
+    full_prompt: 'recover MCP in this same Slack Task',
+    status: TaskStatus.RUNNING,
+    message_range: {
+      start_index: 0,
+      end_index: 0,
+      start_timestamp: issued.toISOString(),
+    },
+    git_state: { ref_at_start: 'main', sha_at_start: 'slack-recovery' },
+    tool_use_count: 0,
+    metadata: {
+      gateway_task_source: {
+        gateway_channel_id: channel.id,
+        channel_type: 'slack',
+        thread_id: threadId,
+        provider_user_id: 'U2515',
+        slack_team_id: 'T2515',
+        slack_channel_id: 'C2515',
+      },
+      mcp_recovery_generation: generation,
+      mcp_recovery: {
+        generation,
+        code: 'oauth_reauth_required',
+        status: 'action_required',
+        task_id: taskId,
+        session_id: session.session_id,
+        mcp_server_id: harness.server.mcp_server_id,
+        provider: { mode: 'in_place', transport_reload: true, retries_unstarted_call: false },
+        action: 'reauthenticate',
+        message: 'MCP sign-in required',
+        observed_at: issued.toISOString(),
+        request_id: requestId,
+        provider_dispatch: 'not_started',
+      },
+      mcp_slack_recovery_notice: {
+        notice_id: noticeId,
+        token_jti: jti,
+        issued_at: issued.toISOString(),
+        expires_at: expires.toISOString(),
+        principal_user_id: harness.user.user_id,
+        credential_user_id: harness.user.user_id,
+        slack_user_id: 'U2515',
+        slack_team_id: 'T2515',
+        gateway_channel_id: channel.id,
+        gateway_config_generation: channel.provider_config_generation,
+        slack_channel_id: 'C2515',
+        slack_thread_id: threadId,
+        session_id: session.session_id,
+        task_id: taskId,
+        mcp_server_id: harness.server.mcp_server_id,
+        mcp_server_config_version: harness.server.config_version ?? 1,
+        recovery_generation: generation,
+        recovery_request_id: requestId,
+        provider_dispatch: 'not_started',
+        delivery_id: generateId(),
+        next_repair_at: issued.toISOString(),
+      },
+    },
+  });
+  expect(task.task_id).toBe(taskId);
+  const token = issueMCPSlackRecoveryToken(
+    {
+      type: 'mcp-slack-recovery',
+      tid: 'default',
+      sub: harness.user.user_id,
+      credential_user_id: harness.user.user_id,
+      slack_user_id: 'U2515',
+      slack_team_id: 'T2515',
+      gateway_channel_id: channel.id,
+      gateway_config_generation: channel.provider_config_generation,
+      slack_channel_id: 'C2515',
+      slack_thread_id: threadId,
+      task_id: taskId,
+      session_id: session.session_id,
+      mcp_server_id: harness.server.mcp_server_id,
+      mcp_server_config_version: harness.server.config_version ?? 1,
+      recovery_generation: generation,
+      recovery_request_id: requestId,
+      notice_id: noticeId,
+      jti,
+      expiresAt: expires,
+    },
+    process.env.AGOR_MASTER_SECRET!,
+    issued
+  );
+  return { token, taskId, sessionId: session.session_id };
 }
 
 async function replaceWithNewAuthorization(harness: SQLiteHarness): Promise<number> {
@@ -824,6 +1096,8 @@ async function createRealSocketHarness(
       return context;
     },
     deployment: {} as RegisterServicesContext['deployment'],
+    mcpOAuthCallbackUrl:
+      resolveMcpOAuthCallbackOrigin({}, process.env).standaloneCallbackUrl ?? undefined,
     mcpOutboundDnsLookup: options.outboundDnsLookup,
   });
 
@@ -922,6 +1196,111 @@ afterEach(async () => {
   else process.env.AGOR_BASE_URL = previousBaseUrl;
   if (previousMasterSecret === undefined) delete process.env.AGOR_MASTER_SECRET;
   else process.env.AGOR_MASTER_SECRET = previousMasterSecret;
+});
+
+describe('Slack MCP recovery authenticated route', () => {
+  it('preflights, consumes once, and propagates the exact reserved OAuth attempt', async () => {
+    const provider = await createTestProvider();
+    providers.push(provider);
+    const harness = await createHarness(provider);
+    databases.push(harness.rawDb);
+    const seeded = await seedSlackRecoveryAction(harness);
+    const params = paramsFor(harness);
+
+    const preflight = (await harness.app
+      .service('mcp-slack-recovery')
+      .create({ token: seeded.token }, params)) as { state: string; return_to_slack_url: string };
+    expect(preflight).toMatchObject({ state: 'reconnect_required' });
+    expect(preflight.return_to_slack_url).toContain('team=T2515');
+
+    const started = (await harness.app
+      .service('mcp-servers/oauth-start')
+      .create({ slack_recovery_token: seeded.token }, params)) as {
+      success: boolean;
+      attempt_id: string;
+      authorizationUrl: string;
+    };
+    expect(started.success).toBe(true);
+    expect(new URL(started.authorizationUrl).searchParams.get('state')).toBeTruthy();
+
+    const task = await new TaskRepository(harness.rawDb).findById(seeded.taskId);
+    expect(task?.metadata?.mcp_slack_recovery_notice).toMatchObject({
+      token_consumed_at: expect.any(String),
+      oauth_attempt_id: started.attempt_id,
+      oauth_started_at: expect.any(String),
+    });
+    expect(task?.metadata?.mcp_slack_recovery_notice?.oauth_start_claim_expires_at).toBeUndefined();
+    expect(
+      (await new SessionRepository(harness.rawDb).findById(seeded.sessionId))?.sdk_session_id
+    ).toBe('sdk-session-preserved');
+
+    const duplicate = (await harness.app
+      .service('mcp-servers/oauth-start')
+      .create({ slack_recovery_token: seeded.token }, params)) as { success: boolean };
+    expect(duplicate.success).toBe(false);
+
+    const state = new URL(started.authorizationUrl).searchParams.get('state');
+    expect(state).toBeTruthy();
+    expect((await harness.callback(state!)).status).toBe(200);
+    expect(harness.gatewayOAuthResults).toContainEqual({
+      taskId: seeded.taskId,
+      noticeId: task?.metadata?.mcp_slack_recovery_notice?.notice_id,
+      attemptId: started.attempt_id,
+      success: true,
+    });
+    expect(
+      (await new SessionRepository(harness.rawDb).findById(seeded.sessionId))?.sdk_session_id
+    ).toBe('sdk-session-preserved');
+  });
+
+  it('fails closed after preflight when the Agor principal is revoked', async () => {
+    const provider = await createTestProvider();
+    providers.push(provider);
+    const harness = await createHarness(provider);
+    databases.push(harness.rawDb);
+    const seeded = await seedSlackRecoveryAction(harness);
+    const params = paramsFor(harness);
+
+    await harness.app.service('mcp-slack-recovery').create({ token: seeded.token }, params);
+    await new UsersRepository(harness.rawDb).update(harness.user.user_id, { role: 'viewer' });
+    const revoked = (await harness.app
+      .service('mcp-servers/oauth-start')
+      .create({ slack_recovery_token: seeded.token }, params)) as { success: boolean };
+    expect(revoked.success).toBe(false);
+    expect(provider.requests).toHaveLength(0);
+  });
+
+  it('projects provider success as superseded when authority changes during exchange', async () => {
+    const provider = await createTestProvider({ holdToken: true });
+    providers.push(provider);
+    const harness = await createHarness(provider);
+    databases.push(harness.rawDb);
+    const seeded = await seedSlackRecoveryAction(harness);
+    const params = paramsFor(harness);
+    const started = (await harness.app
+      .service('mcp-servers/oauth-start')
+      .create({ slack_recovery_token: seeded.token }, params)) as {
+      success: boolean;
+      attempt_id: string;
+      authorizationUrl: string;
+    };
+    expect(started.success).toBe(true);
+    const state = new URL(started.authorizationUrl).searchParams.get('state');
+    expect(state).toBeTruthy();
+
+    const callback = harness.callback(state!);
+    await provider.tokenRequested.promise;
+    await new UsersRepository(harness.rawDb).update(harness.user.user_id, { role: 'viewer' });
+    provider.releaseToken();
+
+    expect((await callback).status).toBe(409);
+    expect(harness.gatewayOAuthResults).toContainEqual({
+      taskId: seeded.taskId,
+      noticeId: expect.any(String),
+      attemptId: started.attempt_id,
+      success: true,
+    });
+  });
 });
 
 describe('saved-server capability discovery', () => {
@@ -1335,12 +1714,148 @@ describe('real Feathers Socket.IO request authority', () => {
 });
 
 describe('SQLite saved-row OAuth authority', () => {
+  it('keeps a committed OAuth completion successful when its runtime-hint lookup rejects', async () => {
+    const provider = await createTestProvider();
+    providers.push(provider);
+    const harness = await createHarness(provider, 'per_user');
+    databases.push(harness.rawDb);
+    const started = (await harness.app
+      .service('mcp-servers/oauth-start')
+      .create({ mcp_server_id: harness.server.mcp_server_id }, paramsFor(harness))) as {
+      authorizationUrl: string;
+    };
+    const state = new URL(started.authorizationUrl).searchParams.get('state')!;
+    const tokens = new UserMCPOAuthTokenRepository(harness.rawDb);
+    const originalFindById = MCPServerRepository.prototype.findById;
+    let lookupCalls = 0;
+    const lookup = vi
+      .spyOn(MCPServerRepository.prototype, 'findById')
+      .mockImplementation(async function (id) {
+        lookupCalls += 1;
+        const committed = await tokens.getToken(
+          harness.user.user_id as UserID,
+          harness.server.mcp_server_id as MCPServerID
+        );
+        if (committed && lookupCalls === 4) {
+          throw new Error('SECRET_POST_COMMIT_LOOKUP_FAILURE');
+        }
+        return originalFindById.call(this, id);
+      });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      await expect(
+        harness.app
+          .service('mcp-servers/oauth-complete')
+          .create({ code: 'authorization-code', state, iss: provider.baseUrl }, paramsFor(harness))
+      ).resolves.toMatchObject({ success: true, tokenObtained: true });
+      await expect(
+        tokens.getToken(harness.user.user_id as UserID, harness.server.mcp_server_id as MCPServerID)
+      ).resolves.toMatchObject({ oauth_access_token: 'sqlite-access-token' });
+      await vi.waitFor(() =>
+        expect(warn).toHaveBeenCalledWith(
+          '[MCP Runtime] event=hint_failed code=oauth_authority_changed'
+        )
+      );
+      expect(lookupCalls).toBe(4);
+      expect(JSON.stringify(warn.mock.calls)).not.toContain('SECRET_POST_COMMIT_LOOKUP_FAILURE');
+    } finally {
+      lookup.mockRestore();
+      warn.mockRestore();
+    }
+  });
+
+  it('keeps a committed OAuth completion successful when Socket.IO throws synchronously', async () => {
+    const provider = await createTestProvider();
+    providers.push(provider);
+    const harness = await createHarness(provider, 'per_user');
+    databases.push(harness.rawDb);
+    const started = (await harness.app
+      .service('mcp-servers/oauth-start')
+      .create({ mcp_server_id: harness.server.mcp_server_id }, paramsFor(harness))) as {
+      authorizationUrl: string;
+    };
+    const state = new URL(started.authorizationUrl).searchParams.get('state')!;
+    const io = harness.app.io as { to: (room: string) => { emit: () => unknown } };
+    const originalTo = io.to;
+    io.to = () => ({
+      emit: () => {
+        throw new Error('SECRET_SYNC_COMPLETION_SOCKET_FAILURE');
+      },
+    });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      await expect(
+        harness.app
+          .service('mcp-servers/oauth-complete')
+          .create({ code: 'authorization-code', state, iss: provider.baseUrl }, paramsFor(harness))
+      ).resolves.toMatchObject({ success: true, tokenObtained: true });
+      await expect(
+        new UserMCPOAuthTokenRepository(harness.rawDb).getToken(
+          harness.user.user_id as UserID,
+          harness.server.mcp_server_id as MCPServerID
+        )
+      ).resolves.toMatchObject({ oauth_access_token: 'sqlite-access-token' });
+      await vi.waitFor(() =>
+        expect(warn).toHaveBeenCalledWith(
+          '[MCP Runtime] event=oauth_post_commit_tail_failed code=completion_notification'
+        )
+      );
+      expect(JSON.stringify(warn.mock.calls)).not.toContain(
+        'SECRET_SYNC_COMPLETION_SOCKET_FAILURE'
+      );
+    } finally {
+      io.to = originalTo;
+      warn.mockRestore();
+    }
+  });
+
+  it('keeps a committed disconnect successful when Socket.IO rejects asynchronously', async () => {
+    const provider = await createTestProvider();
+    providers.push(provider);
+    const harness = await createHarness(provider, 'per_user');
+    databases.push(harness.rawDb);
+    await authorizeSavedServer(harness);
+    const io = harness.app.io as { to: (room: string) => { emit: () => unknown } };
+    const originalTo = io.to;
+    io.to = () => ({
+      emit: () => Promise.reject(new Error('SECRET_ASYNC_DISCONNECT_SOCKET_FAILURE')),
+    });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      await expect(
+        harness.app
+          .service('mcp-servers/oauth-disconnect')
+          .create({ mcp_server_id: harness.server.mcp_server_id }, paramsFor(harness))
+      ).resolves.toMatchObject({ success: true });
+      await expect(
+        new UserMCPOAuthTokenRepository(harness.rawDb).getToken(
+          harness.user.user_id as UserID,
+          harness.server.mcp_server_id as MCPServerID
+        )
+      ).resolves.toBeNull();
+      await vi.waitFor(() =>
+        expect(warn).toHaveBeenCalledWith(
+          '[MCP Runtime] event=oauth_post_commit_tail_failed code=disconnect_notification'
+        )
+      );
+      expect(JSON.stringify(warn.mock.calls)).not.toContain(
+        'SECRET_ASYNC_DISCONNECT_SOCKET_FAILURE'
+      );
+    } finally {
+      io.to = originalTo;
+      warn.mockRestore();
+    }
+  });
+
   it('logs a closed deployment-configuration diagnostic when the public callback is missing', async () => {
     const provider = await createTestProvider();
     providers.push(provider);
-    const harness = await createHarness(provider);
-    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    // Callback configuration is frozen when services are registered, not read
+    // again from the process environment when the browser flow starts.
     delete process.env.AGOR_BASE_URL;
+    const harness = await createHarness(provider);
+    databases.push(harness.rawDb);
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
 
     try {
       const result = await harness.app
@@ -1354,6 +1869,8 @@ describe('SQLite saved-row OAuth authority', () => {
           action: 'configure_redirect',
         },
       });
+      expect(provider.requests).toEqual([]);
+      expect(harness.emittedBrowserEvents).toEqual([]);
       expect(errorSpy).toHaveBeenCalledWith(
         expect.stringContaining(
           'event=mcp_external_failure stage=oauth category=configuration_required type=ConfigurationError code=PUBLIC_BASE_URL_NOT_CONFIGURED reason=oauth_redirect_configuration_required'
@@ -1365,10 +1882,43 @@ describe('SQLite saved-row OAuth authority', () => {
     }
   });
 
+  it.each([undefined, 'https://changed.example.test'])(
+    'keeps the startup callback when AGOR_BASE_URL later becomes %s',
+    async (changedBaseUrl) => {
+      const provider = await createTestProvider();
+      providers.push(provider);
+      const harness = await createHarness(provider, 'per_user');
+      databases.push(harness.rawDb);
+
+      if (changedBaseUrl === undefined) delete process.env.AGOR_BASE_URL;
+      else process.env.AGOR_BASE_URL = changedBaseUrl;
+
+      const started = await harness.app
+        .service('mcp-servers/oauth-start')
+        .create({ mcp_server_id: harness.server.mcp_server_id }, paramsFor(harness));
+
+      expect(started.success).toBe(true);
+      const authorizationUrl = new URL(started.authorizationUrl);
+      expect(authorizationUrl.searchParams.get('redirect_uri')).toBe(
+        'https://agor.example.test/mcp-servers/oauth-callback'
+      );
+      const state = authorizationUrl.searchParams.get('state');
+      expect(state).toBeTruthy();
+      expect((await harness.callback(state!)).status).toBe(200);
+      await expect(
+        new UserMCPOAuthTokenRepository(harness.rawDb).getToken(
+          harness.user.user_id as UserID,
+          harness.server.mcp_server_id as MCPServerID
+        )
+      ).resolves.toMatchObject({ oauth_access_token: 'sqlite-access-token' });
+    }
+  );
+
   it('logs closed Context7-style OAuth metadata incompatibility diagnostics', async () => {
     const provider = await createTestProvider({ resourcePath: '/different/mcp' });
     providers.push(provider);
     const harness = await createHarness(provider);
+    databases.push(harness.rawDb);
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
 
     try {
@@ -1388,6 +1938,64 @@ describe('SQLite saved-row OAuth authority', () => {
     } finally {
       errorSpy.mockRestore();
     }
+  });
+
+  it('supports explicit OAuth start through the production HA hook chain', async () => {
+    const provider = await createTestProvider();
+    providers.push(provider);
+    const harness = await createHarness(provider, 'per_user', {
+      deployment: constrainedHaDeployment,
+    });
+    databases.push(harness.rawDb);
+    await new UserMCPOAuthTokenRepository(harness.rawDb).saveToken(
+      harness.user.user_id as UserID,
+      harness.server.mcp_server_id as MCPServerID,
+      {
+        accessToken: 'sqlite-access-token',
+        refreshToken: 'refresh',
+        clientId: 'saved-client-id',
+        expiresAt: new Date(Date.now() + 3_600_000),
+      }
+    );
+    registerProductionHooksForHarness(harness);
+
+    await expect(
+      harness.app
+        .service('mcp-servers/discover')
+        .create({ mcp_server_id: harness.server.mcp_server_id }, paramsFor(harness))
+    ).resolves.toMatchObject({ success: true, tools: [] });
+    const started = await harness.app
+      .service('mcp-servers/oauth-start')
+      .create({ mcp_server_id: harness.server.mcp_server_id }, paramsFor(harness));
+    expect(started).toMatchObject({ success: true, attempt_id: expect.any(String) });
+    expect(started).not.toHaveProperty('state');
+  });
+
+  it('promotes an HA capability probe into the durable browser flow', async () => {
+    const provider = await createTestProvider();
+    providers.push(provider);
+    const harness = await createHarness(provider, 'per_user', {
+      deployment: constrainedHaDeployment,
+    });
+    databases.push(harness.rawDb);
+    registerProductionHooksForHarness(harness);
+    const browserReservation = await reserveBrowserEvent(harness, 'discover');
+
+    const discovery = harness.app.service('mcp-servers/discover').create(
+      {
+        mcp_server_id: harness.server.mcp_server_id,
+        oauth_browser_event: browserReservation,
+      },
+      paramsFor(harness)
+    );
+
+    const authorizationUrl = await harness.nextAuthorizationUrl();
+    const state = new URL(authorizationUrl).searchParams.get('state');
+    expect(state).toBeTruthy();
+    expect((await harness.callback(state!)).status).toBe(200);
+    await expect(discovery).resolves.toMatchObject({ success: true, tools: [] });
+    expect(provider.requests.map((request) => request.path)).toContain('/token');
+    expect(harness.emittedBrowserEvents).toHaveLength(1);
   });
 
   it('authenticates REST mutations before the MCP OAuth around hook can read or write', async () => {
@@ -1880,6 +2488,165 @@ describe('SQLite saved-row OAuth authority', () => {
     expect(provider.requests.filter((entry) => entry.path === '/register')).toHaveLength(1);
     expect(provider.requests.filter((entry) => entry.path === '/token')).toEqual([]);
     expect(harness.emittedBrowserEvents).toEqual([]);
+  });
+
+  it('rejects an unsafe deployment callback before OAuth discovery or durable DCR', async () => {
+    const provider = await createTestProvider({ rejectDynamicRegistration: true });
+    providers.push(provider);
+    const catalogEntry = {
+      name: 'test/oauth-start-unsafe-callback',
+      title: 'Unsafe callback ordering fixture',
+      category: 'developer-tools',
+      capabilities: ['testing'],
+      benefit: 'Exercises callback validation before provider discovery.',
+      starter_prompt: 'Exercise callback validation ordering.',
+      permission_disclosure: 'Fixture only.',
+      popularity_rank: 999_997,
+      transport: 'streamable-http',
+      remote_url: provider.savedMcpUrl,
+      has_remote: true,
+      has_package: false,
+      auth_type: 'oauth',
+    } as MCPCatalogEntry;
+    vi.mocked(loadCatalog).mockResolvedValueOnce([catalogEntry]);
+    const resolveDynamicClientRegistration = vi.fn();
+    process.env.AGOR_BASE_URL = 'http://10.33.92.175:3030';
+    const harness = await createHarness(provider, undefined, {
+      catalogEntry,
+      durableAuthority: durableAuthorityWithCreate(async () => crypto.randomUUID() as never),
+      durableClientRegistrationAuthority: {
+        resolve: resolveDynamicClientRegistration,
+        lockExactCurrentForAttempt: vi.fn(async () => true),
+        invalidateForServer: vi.fn(),
+        maintain: vi.fn(),
+      } as unknown as NonNullable<RegisterServicesContext['mcpOAuthClientRegistrationAuthority']>,
+      lockGrantConfiguration: vi.fn(async () => undefined),
+    });
+    databases.push(harness.rawDb);
+
+    const result = await harness.app
+      .service('mcp-servers/oauth-start')
+      .create({ mcp_server_id: harness.server.mcp_server_id }, paramsFor(harness));
+
+    expect(result).toMatchObject({
+      success: false,
+      recovery: { category: 'redirect_configuration_required' },
+    });
+    expect(provider.requests).toEqual([]);
+    expect(resolveDynamicClientRegistration).not.toHaveBeenCalled();
+    expect(harness.emittedBrowserEvents).toEqual([]);
+  });
+
+  it('does not activate constrained-HA OAuth when public-origin capability is false', async () => {
+    const provider = await createTestProvider();
+    providers.push(provider);
+    const harness = await createHarness(provider, undefined, {
+      deployment: {
+        mode: 'ha',
+        capabilities: { mcpOAuth: false },
+      } as RegisterServicesContext['deployment'],
+    });
+    databases.push(harness.rawDb);
+
+    const result = await harness.app
+      .service('mcp-servers/oauth-start')
+      .create({ mcp_server_id: harness.server.mcp_server_id }, paramsFor(harness));
+
+    expect(result).toMatchObject({
+      success: false,
+      recovery: { category: 'redirect_configuration_required' },
+    });
+    expect(provider.requests).toEqual([]);
+  });
+
+  it('routes saved-row DCR through the durable fleet authority before creating a flow', async () => {
+    const provider = await createTestProvider({ rejectDynamicRegistration: true });
+    providers.push(provider);
+    const catalogEntry = {
+      name: 'test/durable-dcr-authority',
+      title: 'Durable DCR authority fixture',
+      category: 'developer-tools',
+      capabilities: ['testing'],
+      benefit: 'Exercises fleet DCR wiring.',
+      starter_prompt: 'Exercise durable DCR.',
+      permission_disclosure: 'Fixture only.',
+      popularity_rank: 999_997,
+      transport: 'streamable-http',
+      remote_url: provider.savedMcpUrl,
+      has_remote: true,
+      has_package: false,
+      auth_type: 'oauth',
+    } as MCPCatalogEntry;
+    vi.mocked(loadCatalog)
+      .mockResolvedValueOnce([catalogEntry])
+      .mockResolvedValueOnce([catalogEntry]);
+    const registrationId = crypto.randomUUID();
+    const resolve = vi.fn(async () => ({
+      registration: {
+        client_id: 'durably-reused-client',
+        redirect_uris: ['https://agor.example.test/mcp-servers/oauth-callback'],
+        token_endpoint_auth_method: 'none',
+      },
+      registrationId,
+    }));
+    const lockExactCurrentForAttempt = vi.fn(async () => true);
+    const durableClientRegistrationAuthority = {
+      resolve,
+      lockExactCurrentForAttempt,
+      invalidateForServer: vi.fn(),
+      maintain: vi.fn(),
+    } as unknown as NonNullable<RegisterServicesContext['mcpOAuthClientRegistrationAuthority']>;
+    const harness = await createHarness(provider, undefined, {
+      catalogEntry,
+      durableAuthority: durableAuthorityWithCreate(async () => crypto.randomUUID() as never),
+      durableClientRegistrationAuthority,
+      lockGrantConfiguration: vi.fn(async () => undefined),
+    });
+    databases.push(harness.rawDb);
+
+    const started = await harness.app
+      .service('mcp-servers/oauth-start')
+      .create({ mcp_server_id: harness.server.mcp_server_id }, paramsFor(harness));
+
+    expect(started).toMatchObject({ success: true, attempt_id: expect.any(String) });
+    expect(resolve).toHaveBeenCalledWith(
+      expect.objectContaining({
+        tenantId: 'default',
+        mcpServerId: harness.server.mcp_server_id,
+        serverConfigVersion: harness.server.config_version,
+        registrationEndpoint: `${provider.baseUrl}/register`,
+        resourceUri: provider.savedMcpUrl,
+        redirectUri: 'https://agor.example.test/mcp-servers/oauth-callback',
+        compatibilityMode: 'marketplace',
+      }),
+      expect.any(Function),
+      expect.objectContaining({
+        assertCurrent: expect.any(Function),
+        assertServerCurrent: expect.any(Function),
+      })
+    );
+    expect(lockExactCurrentForAttempt).toHaveBeenCalledWith(
+      expect.objectContaining({
+        tenantId: 'default',
+        serverId: harness.server.mcp_server_id,
+        serverConfigVersion: harness.server.config_version,
+        registrationId,
+      })
+    );
+    expect(provider.requests.filter((entry) => entry.path === '/register')).toEqual([]);
+  });
+
+  it('keeps SQLite DCR process-local and refuses the PostgreSQL registration reset path', async () => {
+    const provider = await createTestProvider();
+    providers.push(provider);
+    const harness = await createHarness(provider);
+    databases.push(harness.rawDb);
+
+    await expect(
+      harness.app
+        .service('mcp-servers/oauth-client-registration-reset')
+        .create({ mcp_server_id: harness.server.mcp_server_id }, paramsFor(harness))
+    ).rejects.toThrow(/only on PostgreSQL/i);
   });
 
   it('derives Marketplace policy and all advertised scopes at the service DCR boundary', async () => {
@@ -2686,18 +3453,21 @@ describe('SQLite saved-row OAuth authority', () => {
     // worker contention. Freeze issuance so this quota contract tests its
     // own explicit expiry transition rather than ambient wall-clock speed.
     const clock = vi.spyOn(Date, 'now').mockReturnValue(issuedAt);
+    let reservationExpiresAt: number | null = null;
 
-    const reserve = (tenant: number, user: number, socket: number) => {
+    const reserve = async (tenant: number, user: number, socket: number) => {
       const params = addLiveAuthority(
         harness,
         `tenant-${tenant}`,
         `tenant-${tenant}-user-${user}`,
         `tenant-${tenant}-user-${user}-socket-${socket}`
       );
-      return service.create(
+      const reservation = (await service.create(
         { operation: 'discover', mcp_server_id: harness.server.mcp_server_id },
         params
-      );
+      )) as MCPOAuthBrowserReservation;
+      reservationExpiresAt ??= reservation.expires_at;
+      return reservation;
     };
 
     try {
@@ -2746,7 +3516,8 @@ describe('SQLite saved-row OAuth authority', () => {
       }
       await expect(reserve(9, 1, 1)).rejects.toThrow(/pending OAuth browser reservations$/i);
 
-      clock.mockReturnValue(issuedAt + 60_001);
+      expect(reservationExpiresAt).not.toBeNull();
+      clock.mockReturnValue(reservationExpiresAt! + 1);
       await expect(reserve(9, 1, 1)).resolves.toMatchObject({
         reservation_token: expect.any(String),
       });

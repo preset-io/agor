@@ -462,9 +462,9 @@ describe('GatewayService GitHub integration', () => {
 
     expect(harness.promptCreate).toHaveBeenCalledWith(
       expect.objectContaining({
-        metadata: {
+        metadata: expect.objectContaining({
           gateway_reply_metadata: { processing_comment_id: 905 },
-        },
+        }),
       }),
       expect.anything()
     );

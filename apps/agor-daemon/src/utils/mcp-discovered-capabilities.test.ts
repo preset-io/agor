@@ -115,6 +115,7 @@ describe('discovery authority/configuration CAS (SQLite)', () => {
         tools: capabilities.tools,
         resources: capabilities.resources,
         prompts: capabilities.prompts,
+        capabilities_discovered_at: expect.any(Date),
         tool_permissions: { remembered: 'ask' },
       }
     );
@@ -139,7 +140,35 @@ describe('discovery authority/configuration CAS (SQLite)', () => {
     );
     await expect(
       new MCPServerRepository(db).update(server.mcp_server_id, { display_name: 'Still editable' })
-    ).resolves.toMatchObject({ display_name: 'Still editable', ...legal });
+    ).resolves.toMatchObject({
+      display_name: 'Still editable',
+      ...legal,
+      capabilities_discovered_at: expect.any(Date),
+    });
+  });
+
+  it('persists and returns one deterministic tool per provider-reported name', async () => {
+    const snapshot = await captureSnapshot();
+    const duplicateTools = {
+      tools: [
+        { name: 'search', description: 'First provider description' },
+        { name: 'lookup', description: 'Lookup' },
+        { name: 'search', description: 'Conflicting later description' },
+      ],
+      resources: [],
+      prompts: [],
+    };
+    const canonical = await runWithTenantDatabaseTransaction(db, undefined, (scopedDb) =>
+      persistDiscoveredMCPCapabilities(scopedDb, undefined, snapshot, duplicateTools, masterSecret)
+    );
+
+    expect(canonical.capabilities.tools).toEqual([
+      { name: 'search', description: 'First provider description' },
+      { name: 'lookup', description: 'Lookup' },
+    ]);
+    await expect(new MCPServerRepository(db).findById(server.mcp_server_id)).resolves.toMatchObject(
+      { tools: canonical.capabilities.tools }
+    );
   });
 
   it('persists the same bounded representation returned to Test Authentication', async () => {
@@ -157,6 +186,7 @@ describe('discovery authority/configuration CAS (SQLite)', () => {
               description: providerDescription,
               input_schema: { type: 'object' },
             },
+            { name: 'fictional_mail_search', description: 'Conflicting duplicate' },
           ],
           resources: [],
           prompts: [],
@@ -166,6 +196,7 @@ describe('discovery authority/configuration CAS (SQLite)', () => {
     );
 
     expect(result.truncatedDescriptions).toBe(1);
+    expect(result.capabilities.tools).toHaveLength(1);
     const description = result.capabilities.tools[0]?.description ?? '';
     expect(description.length).toBeLessThanOrEqual(MAX_MCP_CAPABILITY_DESCRIPTION_LENGTH);
     expect(description.endsWith(MCP_DESCRIPTION_TRUNCATION_SUFFIX)).toBe(true);

@@ -1480,6 +1480,43 @@ describe('loadConfig cache', () => {
     }
   );
 
+  it('keeps analytics env references unresolved across load/export paths without rewriting YAML', async () => {
+    const body = `# Deployment-owned configuration\nanalytics:
+  enabled: true
+  client: { app: agor-cloud-daemon, version: "1.0", debug: false }
+  extras: { environment: cloud, deployment: agor-cloud-production-aws-us1a }
+  plugins:
+    - type: http_batch
+      enabled: true
+      options:
+        url: https://example.test/batch
+        headers_from_env: { Authorization: AGOR_ANALYTICS_TEST_EXPORT_AUTH }
+`;
+    const configPath = await writeConfigFile(body);
+    vi.stubEnv('AGOR_ANALYTICS_TEST_EXPORT_AUTH', 'synthetic-secret-not-for-config');
+    try {
+      for (const loaded of [await loadConfig(), loadConfigSync()]) {
+        const resolved = resolveEffectiveConfig(loaded);
+        expect(resolved.analytics?.extras).toEqual({
+          environment: 'cloud',
+          deployment: 'agor-cloud-production-aws-us1a',
+        });
+        expect(yaml.dump(resolved)).toContain('AGOR_ANALYTICS_TEST_EXPORT_AUTH');
+        expect(yaml.dump(resolved)).not.toContain('synthetic-secret-not-for-config');
+        expect(JSON.stringify(resolved)).not.toContain('synthetic-secret-not-for-config');
+      }
+      expect(await fs.readFile(configPath, 'utf-8')).toBe(body);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it('rejects poisoned analytics extras on both YAML load paths', async () => {
+    await writeConfigFile('analytics:\n  extras:\n    __proto__: poisoned\n');
+    expect(() => loadConfigSync()).toThrow('invalid analytics extras');
+    await expect(loadConfig()).rejects.toThrow('invalid analytics extras');
+  });
+
   it('rejects removed analytics module plugins on every load path', async () => {
     await writeConfigFile(
       'analytics:\n  enabled: false\n  plugins:\n    - type: module\n      enabled: false\n      options:\n        module_path: /opt/agor/plugin.js\n'
@@ -1585,6 +1622,27 @@ describe('base URL resolution', () => {
     await expect(getBaseUrl()).resolves.toBe('https://agor.sandbox.example.com');
     await expect(getDaemonBaseUrl()).resolves.toBe('https://agor.sandbox.example.com');
     await expect(requirePublicBaseUrl()).resolves.toBe('https://agor.sandbox.example.com');
+  });
+
+  it('keeps the public browser origin separate from an HA internal daemon URL', async () => {
+    const agorDir = path.join(tempDir, '.agor');
+    await fs.mkdir(agorDir, { recursive: true });
+    await fs.writeFile(
+      path.join(agorDir, 'config.yaml'),
+      yaml.dump({
+        daemon: {
+          // Production HA charts use this fleet-internal URL for executor callbacks.
+          public_url: 'http://agor-runtime-daemon.runtime.svc.cluster.local:3030',
+          // OAuth callbacks must use this deployment-owned public ingress origin.
+          base_url: 'https://sdx-us1a-v2.dp-sdx-us1a.cloud-sdx.agor.live',
+        },
+      }),
+      'utf-8'
+    );
+
+    await expect(requirePublicBaseUrl()).resolves.toBe(
+      'https://sdx-us1a-v2.dp-sdx-us1a.cloud-sdx.agor.live'
+    );
   });
 
   it('returns ui.base_url from legacy config when daemon.base_url is unset', async () => {

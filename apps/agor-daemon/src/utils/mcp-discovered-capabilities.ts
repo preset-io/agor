@@ -34,6 +34,25 @@ export interface DiscoveredMCPCapabilities {
   prompts: MCPPrompt[];
 }
 
+/**
+ * Tool names are protocol identities. Keep the provider's first occurrence
+ * (including its metadata) and its first-seen order so persistence and the
+ * response expose one deterministic switch per identity.
+ */
+function canonicalizeDiscoveredMCPCapabilities(
+  capabilities: DiscoveredMCPCapabilities
+): DiscoveredMCPCapabilities {
+  const names = new Set<string>();
+  return {
+    ...capabilities,
+    tools: capabilities.tools.filter((tool) => {
+      if (names.has(tool.name)) return false;
+      names.add(tool.name);
+      return true;
+    }),
+  };
+}
+
 interface ResolvedDiscoveryConfiguration {
   url: string;
   transport: MCPServer['transport'];
@@ -238,6 +257,7 @@ export async function persistDiscoveredMCPCapabilities(
   // any durable work so an oversized or extension-bearing response cannot be
   // persisted and later bypass API redaction/export assumptions.
   const normalized = normalizeDiscoveredMCPCapabilities(capabilities);
+  normalized.capabilities = canonicalizeDiscoveredMCPCapabilities(normalized.capabilities);
   assertTenantDiscoveryScope(db, true);
   if (tenantId) await assertTenantWritable(db, tenantId);
 

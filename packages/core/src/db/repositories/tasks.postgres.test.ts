@@ -245,4 +245,115 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('TaskRepository PostgreSQL'
       queue_position: undefined,
     });
   });
+
+  it('serializes exact Slack recovery notice consumption under PostgreSQL row locks', async () => {
+    const label = crypto.randomUUID();
+    const owner = await new UsersRepository(db).create({
+      email: `postgres-slack-recovery-${label}@example.invalid`,
+      role: 'member',
+    });
+    const repo = await new RepoRepository(db).create({
+      repo_id: generateId(),
+      slug: `postgres-slack-recovery-${label}`,
+      name: 'Postgres Slack recovery',
+      repo_type: 'remote',
+      remote_url: 'https://example.invalid/postgres-slack-recovery.git',
+      local_path: `/tmp/postgres-slack-recovery-${label}`,
+      default_branch: 'main',
+    });
+    const branch = await new BranchRepository(db).create({
+      branch_id: generateId(),
+      repo_id: repo.repo_id,
+      name: `postgres-slack-recovery-${label}`,
+      ref: 'main',
+      branch_unique_id: 100_000 + Math.floor(Math.random() * 900_000),
+      path: `/tmp/postgres-slack-recovery-${label}/branch`,
+      created_by: owner.user_id,
+    });
+    const session = await new SessionRepository(db).create({
+      session_id: generateId(),
+      branch_id: branch.branch_id,
+      agentic_tool: 'claude-code',
+      created_by: owner.user_id,
+    });
+    const tasks = new TaskRepository(db);
+    const taskId = generateId();
+    await tasks.create({
+      task_id: taskId,
+      session_id: session.session_id,
+      created_by: owner.user_id,
+      full_prompt: 'postgres Slack recovery CAS',
+      status: TaskStatus.RUNNING,
+      message_range: {
+        start_index: 0,
+        end_index: 0,
+        start_timestamp: new Date().toISOString(),
+      },
+      git_state: { ref_at_start: 'main', sha_at_start: 'postgres-test' },
+      tool_use_count: 0,
+      metadata: {
+        mcp_slack_recovery_notice: {
+          notice_id: 'notice-postgres',
+          token_jti: 'jti-postgres',
+          issued_at: '2026-08-26T12:00:00.000Z',
+          expires_at: '2026-08-26T12:10:00.000Z',
+          principal_user_id: owner.user_id,
+          credential_user_id: owner.user_id,
+          slack_user_id: 'U1',
+          slack_team_id: 'T1',
+          gateway_channel_id: 'gateway-1',
+          gateway_config_generation: 1,
+          slack_channel_id: 'C1',
+          slack_thread_id: 'C1-1.1',
+          session_id: session.session_id,
+          task_id: taskId,
+          mcp_server_id: generateId() as never,
+          mcp_server_config_version: 1,
+          recovery_generation: 2,
+          recovery_request_id: 'request-postgres',
+          provider_dispatch: 'not_started',
+          delivery_id: 'delivery-postgres',
+          next_repair_at: '2026-08-26T12:00:00.000Z',
+        },
+      },
+    });
+
+    const consume = () =>
+      tasks.mutateMCPSlackRecoveryNotice(taskId, (current) =>
+        current?.notice_id === 'notice-postgres' &&
+        current.token_jti === 'jti-postgres' &&
+        current.recovery_request_id === 'request-postgres' &&
+        !current.token_consumed_at
+          ? { ...current, token_consumed_at: '2026-08-26T12:01:00.000Z' }
+          : null
+      );
+    const results = await Promise.all([consume(), consume()]);
+    expect(results.map((result) => result.changed).sort()).toEqual([false, true]);
+    const due = await tasks.findMcpSlackRecoveryNoticePage({
+      now: new Date('2026-08-26T12:02:00.000Z'),
+      horizon: new Date('2026-08-25T12:02:00.000Z'),
+      limit: 1,
+    });
+    expect(due.tasks.map((candidate) => candidate.task_id)).toContain(taskId);
+
+    if (!isPostgresDatabase(db)) throw new Error('PostgreSQL test requires PostgreSQL');
+    const columns = await db.execute(sql`
+      SELECT column_name, data_type
+      FROM information_schema.columns
+      WHERE table_schema = 'public'
+        AND table_name = 'tasks'
+        AND column_name = 'mcp_slack_recovery_due_at'
+    `);
+    expect(columns).toEqual([
+      { column_name: 'mcp_slack_recovery_due_at', data_type: 'timestamp with time zone' },
+    ]);
+    const indexes = await db.execute(sql`
+      SELECT indexname
+      FROM pg_indexes
+      WHERE schemaname = 'public'
+        AND tablename = 'tasks'
+        AND indexname = 'tasks_mcp_slack_recovery_due_idx'
+    `);
+    expect(indexes).toEqual([{ indexname: 'tasks_mcp_slack_recovery_due_idx' }]);
+  });
 });

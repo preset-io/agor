@@ -716,11 +716,12 @@ describe('tenant-owned service registration', () => {
     );
   });
 
-  it('fails closed for discovery that can enter the process-local MCP OAuth flow in HA', () => {
-    expect(CONSTRAINED_HA_PROCESS_AFFINE_SERVICE_GATES).toContainEqual([
-      'mcp-servers/discover',
-      'mcpOAuth',
-    ]);
+  it('admits durable MCP OAuth endpoints in the constrained HA profile', () => {
+    expect(
+      CONSTRAINED_HA_PROCESS_AFFINE_SERVICE_GATES.some(([, feature]) =>
+        String(feature).includes('mcpOAuth')
+      )
+    ).toBe(false);
   });
 
   // These remain in the capability-gate inventory, but a safe constrained-HA

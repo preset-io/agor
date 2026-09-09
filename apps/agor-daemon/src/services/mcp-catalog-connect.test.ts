@@ -46,6 +46,9 @@ function createMCPCatalogConnectService(
     has_row_secret: Boolean(value.auth?.type === 'bearer' && value.auth.token),
   });
   const fallback: MCPCatalogConnectDeps = {
+    async runInTenantDatabaseScope(_params, work) {
+      return work();
+    },
     async listCandidates(_userId, params) {
       const result = await app.service('mcp-servers').find(params);
       return (Array.isArray(result) ? result : result.data).map(candidate);
@@ -352,6 +355,7 @@ function buildApp(
   };
   const deps: {
     readGrantResourceUri: ReturnType<typeof vi.fn>;
+    runInTenantDatabaseScope: MCPCatalogConnectDeps['runInTenantDatabaseScope'];
     listCandidates: (
       userId: UserID,
       params: AuthenticatedParams
@@ -370,6 +374,7 @@ function buildApp(
         (server) => server.mcp_server_id === serverId
       )?.url;
     }),
+    runInTenantDatabaseScope: async (_params, work) => work(),
     listCandidates: async () => [],
     getCandidate: async () => undefined,
     isGrantAuthorized: async () => true,

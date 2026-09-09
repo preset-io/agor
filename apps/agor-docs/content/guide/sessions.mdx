@@ -264,6 +264,25 @@ shared branch-scoped session, the child is attributed to that collaborator, so a
 borrow the parent's secret. Execution-home sessions cannot be continued across users. Callbacks
 carry message content, not an environment grant.
 
+### Codex runtime notices and tool failures
+
+A **Codex runtime notice** is non-fatal at the time it is emitted, not proof that
+an MCP operation failed or succeeded. Codex uses the same item shape for several
+kinds of warnings, including configuration and deprecation notices, without
+preserving their classification. Agor keeps the notice visible but does not copy
+provider error text, which can contain sensitive data.
+
+A **failed MCP tool result** remains marked as an error even if Codex continues
+and completes the turn. Before retrying a write, check its resulting state: a
+transport error can occur after a change has committed. An empty tool catalog is
+not itself an error, and a failed turn is separate from an individual tool failure.
+
+Recurring notices and failed MCP calls include a diagnostic reference. Give that
+reference and the task to an authorized administrator. The reference correlates
+bounded, content-free executor operational logs; it does not grant access to logs
+or expose the provider payload. High-volume diagnostics are summarized after the
+per-run log limit, without hiding notices or tool failures in the conversation.
+
 ### Historical Claude CLI sessions
 
 Agor previously included an experimental `claude-code-cli` runtime. That integration has been

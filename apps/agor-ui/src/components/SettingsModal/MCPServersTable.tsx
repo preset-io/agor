@@ -17,12 +17,15 @@ import {
   TeamOutlined,
   UserOutlined,
 } from '@ant-design/icons';
+import type { TableColumnsType } from 'antd';
 import {
   Alert,
   Badge,
   Button,
   Descriptions,
+  Flex,
   Form,
+  Grid,
   Input,
   Popconfirm,
   Space,
@@ -31,6 +34,7 @@ import {
   Tag,
   Tooltip,
   Typography,
+  theme,
 } from 'antd';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useConnectionState } from '@/contexts/ConnectionContext';
@@ -65,7 +69,6 @@ import {
 } from '../MCPServer/memberPolicy';
 import { useMCPServerDiscovery } from '../MCPServer/useMCPServerDiscovery';
 import { AdaptiveSettingsModal } from './AdaptiveSettingsModal';
-import { MCPEgressGatewayStatus } from './MCPEgressGatewayStatus';
 import { MCPMemberPolicySetting } from './MCPMemberPolicySetting';
 import { ResponsiveSettingsHeader } from './ResponsiveSettingsHeader';
 import { SettingsActionGroup } from './SettingsActionGroup';
@@ -206,6 +209,8 @@ const MCPServersTableForIdentity: React.FC<MCPServersTableProps> = ({
   const [createdServerId, setCreatedServerId] = useState<string | null>(null);
   const createdConfigVersion = useRef(1);
   const [searchTerm, setSearchTerm] = useState('');
+  const screens = Grid.useBreakpoint();
+  const { token } = theme.useToken();
 
   const [formRevision, bumpFormRevision] = useFormRevision();
   const createOperationGuard = useAuthorityOperationGuard(
@@ -461,29 +466,102 @@ const MCPServersTableForIdentity: React.FC<MCPServersTableProps> = ({
     [userById, currentUser?.user_id]
   );
 
-  const columns = useMemo(
+  const renderOwner = useCallback(
+    (server: MCPServer) => {
+      const owner = describeOwner(server);
+      return (
+        <Tooltip title={owner.hint}>
+          <Tag
+            icon={owner.shared ? <TeamOutlined /> : <UserOutlined />}
+            color={owner.shared ? 'default' : 'geekblue'}
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              maxWidth: '100%',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+            }}
+          >
+            <HighlightMatch text={owner.text} query={searchTerm} />
+          </Tag>
+        </Tooltip>
+      );
+    },
+    [describeOwner, searchTerm]
+  );
+
+  // At xl the 1200px Settings modal leaves about 896px after its navigation
+  // rail and padding. Below xl, the name column becomes a composed summary so
+  // every value remains visible while Actions keeps its own usable column.
+  const compactTable = !screens.xl;
+  const columns = useMemo<TableColumnsType<MCPServer>>(
     () => [
       {
-        title: 'Name',
+        title: compactTable ? 'Server' : 'Name',
         dataIndex: 'name',
         key: 'name',
-        width: 180,
-        render: (_: string, server: MCPServer) => (
-          <div>
-            <div>
-              <HighlightMatch text={server.display_name || server.name} query={searchTerm} />
-            </div>
-            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-              <HighlightMatch text={server.name} query={searchTerm} />
-            </Typography.Text>
-          </div>
-        ),
+        width: compactTable ? undefined : 160,
+        render: (_: string, server: MCPServer) => {
+          const displayName = server.display_name || server.name;
+          const health = getServerHealth(server, userAuthenticatedMcpServerIds);
+          const scopeColors: Record<string, string> = {
+            global: 'purple',
+            repo: 'cyan',
+            session: 'magenta',
+          };
+          return (
+            <Flex vertical gap={compactTable ? token.marginXXS : 0} style={{ minWidth: 0 }}>
+              <Flex vertical style={{ minWidth: 0 }}>
+                <Typography.Text strong ellipsis={{ tooltip: displayName }}>
+                  <HighlightMatch text={displayName} query={searchTerm} />
+                </Typography.Text>
+                <Typography.Text
+                  type="secondary"
+                  ellipsis={{ tooltip: server.name }}
+                  style={{ fontSize: token.fontSizeSM }}
+                >
+                  <HighlightMatch text={server.name} query={searchTerm} />
+                </Typography.Text>
+              </Flex>
+              {compactTable && (
+                <>
+                  <Flex wrap gap={token.marginXXS} align="center">
+                    <Tag color={server.transport === 'stdio' ? 'blue' : 'green'}>
+                      {server.transport.toUpperCase()}
+                    </Tag>
+                    <Tag color={scopeColors[server.scope]}>{server.scope}</Tag>
+                    <Badge
+                      status={server.enabled ? 'success' : 'default'}
+                      text={server.enabled ? 'Enabled' : 'Disabled'}
+                    />
+                    <Badge status={health.status} text={health.text} />
+                  </Flex>
+                  <div style={{ minWidth: 0 }}>{renderOwner(server)}</div>
+                  <Flex gap={token.marginXXS} style={{ minWidth: 0 }}>
+                    <Typography.Text type="secondary" style={{ flex: '0 0 auto' }}>
+                      Source:
+                    </Typography.Text>
+                    <Typography.Text
+                      type="secondary"
+                      ellipsis={{ tooltip: server.source }}
+                      style={{ minWidth: 0 }}
+                    >
+                      <HighlightMatch text={server.source} query={searchTerm} />
+                    </Typography.Text>
+                  </Flex>
+                </>
+              )}
+            </Flex>
+          );
+        },
       },
       {
         title: 'Transport',
         dataIndex: 'transport',
         key: 'transport',
-        width: 100,
+        width: 90,
+        responsive: ['xl'],
         render: (transport: string) => (
           <Tag color={transport === 'stdio' ? 'blue' : 'green'}>{transport.toUpperCase()}</Tag>
         ),
@@ -492,7 +570,8 @@ const MCPServersTableForIdentity: React.FC<MCPServersTableProps> = ({
         title: 'Scope',
         dataIndex: 'scope',
         key: 'scope',
-        width: 100,
+        width: 76,
+        responsive: ['xl'],
         render: (scope: string) => {
           const colors: Record<string, string> = {
             global: 'purple',
@@ -506,18 +585,17 @@ const MCPServersTableForIdentity: React.FC<MCPServersTableProps> = ({
         title: 'Status',
         dataIndex: 'enabled',
         key: 'enabled',
-        width: 80,
-        render: (enabled: boolean) =>
-          enabled ? (
-            <Badge status="success" text="Enabled" />
-          ) : (
-            <Badge status="default" text="Disabled" />
-          ),
+        width: 90,
+        responsive: ['xl'],
+        render: (enabled: boolean) => (
+          <Badge status={enabled ? 'success' : 'default'} text={enabled ? 'Enabled' : 'Disabled'} />
+        ),
       },
       {
         title: 'Health',
         key: 'health',
-        width: 120,
+        width: 108,
+        responsive: ['xl'],
         render: (_: unknown, server: MCPServer) => {
           const health = getServerHealth(server, userAuthenticatedMcpServerIds);
           return <Badge status={health.status} text={health.text} />;
@@ -527,28 +605,18 @@ const MCPServersTableForIdentity: React.FC<MCPServersTableProps> = ({
         title: 'Owner',
         dataIndex: 'owner_user_id',
         key: 'owner',
-        width: 170,
-        render: (_: string | undefined, server: MCPServer) => {
-          const owner = describeOwner(server);
-          return (
-            <Tooltip title={owner.hint}>
-              <Tag
-                icon={owner.shared ? <TeamOutlined /> : <UserOutlined />}
-                color={owner.shared ? 'default' : 'geekblue'}
-              >
-                <HighlightMatch text={owner.text} query={searchTerm} />
-              </Tag>
-            </Tooltip>
-          );
-        },
+        width: 145,
+        responsive: ['xl'],
+        render: (_: string | undefined, server: MCPServer) => renderOwner(server),
       },
       {
         title: 'Source',
         dataIndex: 'source',
         key: 'source',
-        width: 100,
+        width: 80,
+        responsive: ['xl'],
         render: (source: string) => (
-          <Typography.Text type="secondary">
+          <Typography.Text type="secondary" ellipsis={{ tooltip: source }}>
             <HighlightMatch text={source} query={searchTerm} />
           </Typography.Text>
         ),
@@ -557,6 +625,7 @@ const MCPServersTableForIdentity: React.FC<MCPServersTableProps> = ({
         title: 'Actions',
         key: 'actions',
         width: 96,
+        align: compactTable ? 'right' : undefined,
         render: (_: unknown, server: MCPServer) => {
           const editable = canEditMcpServer(server, capability);
           const deletable = canDeleteMcpServer(server, capability);
@@ -570,6 +639,7 @@ const MCPServersTableForIdentity: React.FC<MCPServersTableProps> = ({
                 size="small"
                 icon={<EyeOutlined />}
                 onClick={() => handleView(server)}
+                aria-label="View details"
                 title="View details"
               />
               {editable ? (
@@ -578,6 +648,7 @@ const MCPServersTableForIdentity: React.FC<MCPServersTableProps> = ({
                   size="small"
                   icon={<EditOutlined />}
                   onClick={() => handleEdit(server)}
+                  aria-label="Edit"
                   title="Edit"
                 />
               ) : (
@@ -607,6 +678,7 @@ const MCPServersTableForIdentity: React.FC<MCPServersTableProps> = ({
                     size="small"
                     icon={<DeleteOutlined />}
                     danger
+                    aria-label="Delete"
                     title="Delete"
                   />
                 </Popconfirm>
@@ -631,13 +703,16 @@ const MCPServersTableForIdentity: React.FC<MCPServersTableProps> = ({
     ],
     [
       capability,
-      describeOwner,
+      compactTable,
       handleDelete,
       handleEdit,
       handleView,
       policyPending,
       policyPendingHint,
+      renderOwner,
       searchTerm,
+      token.fontSizeSM,
+      token.marginXXS,
       userAuthenticatedMcpServerIds,
     ]
   );
@@ -704,7 +779,8 @@ const MCPServersTableForIdentity: React.FC<MCPServersTableProps> = ({
         rowKey="mcp_server_id"
         pagination={{ defaultPageSize: 10, showSizeChanger: true }}
         size="small"
-        scroll={{ x: 1000 }}
+        tableLayout="fixed"
+        style={{ width: '100%', minWidth: 0 }}
       />
 
       {/* Create MCP Server Modal */}
@@ -922,16 +998,7 @@ const MCPServersTableForIdentity: React.FC<MCPServersTableProps> = ({
         {
           key: 'servers',
           label: 'Servers',
-          children: (
-            <>
-              <MCPEgressGatewayStatus
-                key={durableAuthorityKey ?? '__mcp-egress-status__'}
-                client={client}
-                connectionReady={connectionReady}
-              />
-              {serversPane}
-            </>
-          ),
+          children: serversPane,
         },
         {
           key: 'policy',

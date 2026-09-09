@@ -338,6 +338,9 @@ export const tasks = sqliteTable(
     // User attribution
     created_by: text('created_by', { length: 36 }).notNull(),
 
+    // Indexed due-work projection for bounded Slack MCP recovery repair.
+    mcp_slack_recovery_due_at: t.timestamp('mcp_slack_recovery_due_at'),
+
     data: t
       .json<unknown>('data')
       .$type<{
@@ -391,6 +394,9 @@ export const tasks = sqliteTable(
     sessionTaskIdIdx: index('tasks_session_task_id_idx').on(table.session_id, table.task_id),
     statusIdx: index('tasks_status_idx').on(table.status),
     createdIdx: index('tasks_created_idx').on(table.created_at),
+    mcpSlackRecoveryDueIdx: index('tasks_mcp_slack_recovery_due_idx')
+      .on(table.mcp_slack_recovery_due_at, table.task_id)
+      .where(sql`${table.mcp_slack_recovery_due_at} IS NOT NULL`),
     queueIdx: index('tasks_queue_idx').on(table.session_id, table.status, table.queue_position),
     runtimeDispatchIdx: index('tasks_runtime_dispatch_idx')
       .on(table.started_at, table.task_id)
@@ -1645,6 +1651,7 @@ export const mcpServers = sqliteTable(
             required?: boolean;
           }>;
         }>;
+        capabilities_discovered_at?: string;
 
         // Tool permissions configuration
         tool_permissions?: Record<string, 'ask' | 'allow' | 'deny'>;

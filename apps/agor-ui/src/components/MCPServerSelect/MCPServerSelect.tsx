@@ -1,5 +1,6 @@
 import { type MCPServer, shortId } from '@agor-live/client';
-import { Select, type SelectProps } from 'antd';
+import { ShopOutlined } from '@ant-design/icons';
+import { Button, Empty, Select, type SelectProps } from 'antd';
 import type { RefSelectProps } from 'antd/es/select';
 import { type Ref, useImperativeHandle } from 'react';
 import { useAgorStore } from '../../store/agorStore';
@@ -13,6 +14,7 @@ export interface MCPServerSelectProps extends Omit<SelectProps, 'options'> {
   value?: string[];
   onChange?: (value: string[]) => void;
   placeholder?: string;
+  onBrowseCatalog?: () => void;
   filterByScope?: 'global' | 'repo' | 'session';
 }
 
@@ -102,6 +104,7 @@ export const MCPServerSelect: React.FC<MCPServerSelectProps> = ({
   onDropdownVisibleChange,
   ref: forwardedRef,
   styles,
+  onBrowseCatalog,
   ...selectProps
 }) => {
   // Read here rather than as a prop: every caller of this picker would
@@ -138,7 +141,19 @@ export const MCPServerSelect: React.FC<MCPServerSelectProps> = ({
       allowClear
       showSearch
       optionFilterProp="label"
-      notFoundContent={mcpServers.length === 0 ? 'No MCP servers available' : 'No matching servers'}
+      notFoundContent={
+        onBrowseCatalog ? (
+          <Empty image={<ShopOutlined />} description="No matching MCP servers">
+            <Button type="link" onClick={onBrowseCatalog}>
+              Browse the MCP Catalog for all available MCPs
+            </Button>
+          </Empty>
+        ) : mcpServers.length === 0 ? (
+          'No MCP servers available'
+        ) : (
+          'No matching servers'
+        )
+      }
       value={value}
       onChange={onChange}
       options={options}

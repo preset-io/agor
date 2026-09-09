@@ -310,6 +310,8 @@ describe('configured executor spawning', () => {
       GOOGLE_APPLICATION_CREDENTIALS: '/synthetic/daemon/google-credentials.json',
       AWS_SECRET_ACCESS_KEY: 'synthetic-object-store-credential',
       SYNTHETIC_DAEMON_INTERNAL_SECRET: 'synthetic-unknown-future-daemon-secret',
+      AGOR_ANALYTICS_AUTHORIZATION: 'synthetic-analytics-credential',
+      CUSTOM_ANALYTICS_AUTH: 'synthetic-custom-analytics-credential',
     } as const;
     const ambient = { ...launcherCredentials, ...withheldDaemonEnvironment };
     const previous = Object.fromEntries(Object.keys(ambient).map((key) => [key, process.env[key]]));
