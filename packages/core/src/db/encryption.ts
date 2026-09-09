@@ -1,4 +1,4 @@
-import { createCipheriv, createDecipheriv, randomBytes, scryptSync } from 'node:crypto';
+import { createCipheriv, createDecipheriv, randomBytes, scrypt, scryptSync } from 'node:crypto';
 
 const ALGORITHM = 'aes-256-gcm';
 const KEY_LENGTH = 32;
@@ -71,31 +71,59 @@ export function decryptApiKey(ciphertext: string, secret?: string): string {
   if (!masterSecret) throw new Error('Secret decryption requires AGOR_MASTER_SECRET');
 
   try {
-    const parts = ciphertext.split(':');
-    if (parts.length !== 4) throw new Error('invalid envelope');
-    const [saltHex, ivHex, authTagHex, encryptedHex] = parts;
-    if (
-      !isHexOfBytes(saltHex, SALT_LENGTH) ||
-      !isHexOfBytes(ivHex, IV_LENGTH) ||
-      !isHexOfBytes(authTagHex, 16) ||
-      !isEvenHex(encryptedHex)
-    ) {
-      throw new Error('invalid envelope');
-    }
-
-    const salt = Buffer.from(saltHex, 'hex');
-    const iv = Buffer.from(ivHex, 'hex');
-    const authTag = Buffer.from(authTagHex, 'hex');
-    const encrypted = Buffer.from(encryptedHex, 'hex');
-    const decipher = createDecipheriv(ALGORITHM, deriveKey(masterSecret, salt), iv);
-    decipher.setAuthTag(authTag);
-    return Buffer.concat([decipher.update(encrypted), decipher.final()]).toString('utf8');
+    const envelope = parseEnvelope(ciphertext);
+    return decryptEnvelope(envelope, deriveKey(masterSecret, envelope.salt));
   } catch {
     // Do not expose parser-vs-authentication distinctions (or OpenSSL details)
     // through API errors and logs. Operators only need to know that this field
     // cannot be opened with the active deployment key.
     throw new Error('Secret decryption failed');
   }
+}
+
+/** Same envelope and failure contract, with the expensive KDF on Node's worker pool. */
+export async function decryptApiKeyAsync(ciphertext: string, secret?: string): Promise<string> {
+  const masterSecret = secret ?? getMasterSecret('decryption');
+  if (!masterSecret) throw new Error('Secret decryption requires AGOR_MASTER_SECRET');
+
+  try {
+    const envelope = parseEnvelope(ciphertext);
+    const key = await new Promise<Buffer>((resolve, reject) => {
+      scrypt(masterSecret, envelope.salt, KEY_LENGTH, (error, derivedKey) => {
+        if (error) reject(error);
+        else resolve(derivedKey);
+      });
+    });
+    return decryptEnvelope(envelope, key);
+  } catch {
+    throw new Error('Secret decryption failed');
+  }
+}
+
+function parseEnvelope(ciphertext: string) {
+  const parts = ciphertext.split(':');
+  if (parts.length !== 4) throw new Error('invalid envelope');
+  const [saltHex, ivHex, authTagHex, encryptedHex] = parts;
+  if (
+    !isHexOfBytes(saltHex, SALT_LENGTH) ||
+    !isHexOfBytes(ivHex, IV_LENGTH) ||
+    !isHexOfBytes(authTagHex, 16) ||
+    !isEvenHex(encryptedHex)
+  ) {
+    throw new Error('invalid envelope');
+  }
+  return {
+    salt: Buffer.from(saltHex, 'hex'),
+    iv: Buffer.from(ivHex, 'hex'),
+    authTag: Buffer.from(authTagHex, 'hex'),
+    encrypted: Buffer.from(encryptedHex, 'hex'),
+  };
+}
+
+function decryptEnvelope(envelope: ReturnType<typeof parseEnvelope>, key: Buffer): string {
+  const decipher = createDecipheriv(ALGORITHM, key, envelope.iv);
+  decipher.setAuthTag(envelope.authTag);
+  return Buffer.concat([decipher.update(envelope.encrypted), decipher.final()]).toString('utf8');
 }
 
 function isEvenHex(value: string): boolean {
