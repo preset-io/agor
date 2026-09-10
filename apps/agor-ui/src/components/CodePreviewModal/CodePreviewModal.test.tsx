@@ -17,13 +17,15 @@ vi.mock('../ToolUseRenderer/renderers/DiffBlock', () => ({
     oldContent,
     newContent,
     operationType,
+    rawContentKind,
   }: {
     oldContent: string;
     newContent: string;
     operationType: string;
+    rawContentKind?: string;
   }) => (
     <div data-testid="file-diff">
-      {operationType}:{oldContent}:{newContent}
+      {operationType}:{rawContentKind}:{oldContent}:{newContent}
     </div>
   ),
 }));
@@ -51,7 +53,7 @@ describe('CodePreviewModal git changes', () => {
     fireEvent.click(screen.getByText('Changes'));
 
     expect(screen.getByTestId('file-diff')).toHaveTextContent(
-      'edit:const value = 1; :const value = 2;'
+      'edit:full-file:const value = 1; :const value = 2;'
     );
   });
 
@@ -69,7 +71,9 @@ describe('CodePreviewModal git changes', () => {
       />
     );
 
-    expect(screen.getByTestId('file-diff')).toHaveTextContent('delete:const value = 1; :');
+    expect(screen.getByTestId('file-diff')).toHaveTextContent(
+      'delete:full-file:const value = 1; :'
+    );
     expect(screen.queryByTestId('file-content')).not.toBeInTheDocument();
   });
 });

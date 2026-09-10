@@ -3,13 +3,14 @@
  *
  * Two rendering tiers:
  * 1. Rich: With structuredPatch from executor (line numbers + context)
- * 2. Fallback: Client-side diffLines from old/new strings (no line numbers)
+ * 2. Fallback: Client-side diffLines from bounded raw old/new strings. Complete
+ *    files have line numbers; unknown-position fragments do not.
  *
  * Collapsed by default for large diffs (>10 lines), expanded for small ones.
  */
 
 import { CopyOutlined, DownOutlined, RightOutlined } from '@ant-design/icons';
-import { Tooltip, Typography, theme } from 'antd';
+import { Alert, Button, Tooltip, Typography, theme } from 'antd';
 import { createPatch } from 'diff';
 import type React from 'react';
 import { useState } from 'react';
@@ -17,7 +18,14 @@ import { copyToClipboard } from '@/utils/clipboard';
 import { useThemedMessage } from '@/utils/message';
 import { isDarkTheme } from '@/utils/theme';
 import { getDiffPalette } from './diffPalette';
-import { type DiffLine, type StructuredPatchHunk, useDiff, type WordSegment } from './useDiff';
+import {
+  type DiffLine,
+  RAW_DIFF_LIMITS,
+  type RawContentKind,
+  type StructuredPatchHunk,
+  useDiff,
+  type WordSegment,
+} from './useDiff';
 
 /** Lines of diff output before we collapse by default */
 const COLLAPSE_THRESHOLD = 10;
@@ -35,6 +43,8 @@ export interface DiffBlockProps {
   errorMessage?: string;
   /** Override the default expand/collapse heuristic */
   forceExpanded?: boolean;
+  /** Whether raw old/new strings are complete files or unknown-position fragments. */
+  rawContentKind?: RawContentKind;
 }
 
 /** Shorten an absolute file path for display */
@@ -79,14 +89,16 @@ export const DiffBlock: React.FC<DiffBlockProps> = ({
   isError,
   errorMessage,
   forceExpanded,
+  rawContentKind,
 }) => {
   const { token } = theme.useToken();
-  const { showSuccess } = useThemedMessage();
+  const { showSuccess, showWarning } = useThemedMessage();
   const isDark = isDarkTheme(token);
-  const diff = useDiff(oldContent, newContent, structuredPatch);
+  const diff = useDiff(oldContent, newContent, structuredPatch, rawContentKind);
 
   const defaultExpanded =
-    forceExpanded ?? (diff.totalLines <= COLLAPSE_THRESHOLD && diff.totalLines > 0);
+    forceExpanded ??
+    (diff.limited || (diff.totalLines <= COLLAPSE_THRESHOLD && diff.totalLines > 0));
   const [expanded, setExpanded] = useState(defaultExpanded);
   const [showAll, setShowAll] = useState(false);
 
@@ -113,14 +125,28 @@ export const DiffBlock: React.FC<DiffBlockProps> = ({
     );
   }
 
-  if (diff.totalLines === 0) return null;
+  if (diff.totalLines === 0 && !diff.limited) return null;
 
   const handleCopyDiff = async () => {
     let diffText: string;
     if (oldContent !== undefined && newContent !== undefined) {
-      diffText = createPatch(filePath, oldContent, newContent);
+      const patch = createPatch(filePath, oldContent, newContent, undefined, undefined, {
+        ...RAW_DIFF_LIMITS,
+      });
+      if (!patch) {
+        showWarning('Diff is too complex to copy safely');
+        return;
+      }
+      diffText = patch;
     } else if (newContent !== undefined) {
-      diffText = createPatch(filePath, '', newContent);
+      const patch = createPatch(filePath, '', newContent, undefined, undefined, {
+        ...RAW_DIFF_LIMITS,
+      });
+      if (!patch) {
+        showWarning('Diff is too complex to copy safely');
+        return;
+      }
+      diffText = patch;
     } else {
       // Reconstruct from lines
       diffText = diff.lines
@@ -334,7 +360,17 @@ export const DiffBlock: React.FC<DiffBlockProps> = ({
             overflow: 'hidden',
           }}
         >
-          <div style={{ overflowX: 'auto' }}>{visibleLines.map(renderLine)}</div>
+          {diff.limited ? (
+            <Alert
+              type="warning"
+              showIcon
+              title="Diff preview limited"
+              description="This change is too complex to compute safely in the browser. Open the file or use local Git to inspect the complete diff."
+              style={{ borderRadius: 0 }}
+            />
+          ) : (
+            <div style={{ overflowX: 'auto' }}>{visibleLines.map(renderLine)}</div>
+          )}
 
           {/* Truncation notice */}
           {needsTruncation && (
@@ -358,30 +394,33 @@ export const DiffBlock: React.FC<DiffBlockProps> = ({
           )}
 
           {/* Actions bar */}
-          <div
-            style={{
-              display: 'flex',
-              justifyContent: 'flex-end',
-              padding: `3px ${token.sizeUnit}px`,
-              borderTop: `1px solid ${token.colorBorderSecondary}`,
-              background: token.colorBgLayout,
-            }}
-          >
-            <Tooltip title="Copy diff">
-              <CopyOutlined
-                onClick={(e) => {
-                  e.stopPropagation();
-                  handleCopyDiff();
-                }}
-                style={{
-                  fontSize: 12,
-                  color: token.colorTextTertiary,
-                  cursor: 'pointer',
-                  padding: 4,
-                }}
-              />
-            </Tooltip>
-          </div>
+          {!diff.limited && (
+            <div
+              style={{
+                display: 'flex',
+                justifyContent: 'flex-end',
+                padding: `3px ${token.sizeUnit}px`,
+                borderTop: `1px solid ${token.colorBorderSecondary}`,
+                background: token.colorBgLayout,
+              }}
+            >
+              <Tooltip title="Copy diff">
+                <Button
+                  type="text"
+                  size="small"
+                  aria-label="Copy diff"
+                  icon={<CopyOutlined />}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handleCopyDiff();
+                  }}
+                  style={{
+                    color: token.colorTextTertiary,
+                  }}
+                />
+              </Tooltip>
+            </div>
+          )}
         </div>
       )}
     </div>
