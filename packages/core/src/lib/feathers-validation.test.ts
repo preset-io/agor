@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
+import { MAX_PRESENCE_BOARD_SUBSCRIPTIONS } from '../types/presence';
 import {
   boardObjectQueryValidator,
+  boardQueryValidator,
   branchQueryValidator,
   mcpCatalogQueryValidator,
   mcpServerQueryValidator,
@@ -10,6 +12,51 @@ import {
   typedValidateQuery,
   userQueryValidator,
 } from './feathers-validation';
+
+describe('boardQueryValidator', () => {
+  const id = '019e8e1c-1234-7123-8123-123456789abc';
+
+  it.each([id, '019e8e1c', { $in: [id, '019e8e1d'] }, { $in: [] }])(
+    'preserves scalar and bounded set filters with REST coercion',
+    async (board_id) => {
+      const query = { board_id, lean: 'true', archived: 'false', $limit: '512', $skip: '0' };
+      expect(await boardQueryValidator(query)).toEqual({
+        board_id,
+        lean: true,
+        archived: false,
+        $limit: 512,
+        $skip: 0,
+      });
+    }
+  );
+
+  it('accepts the maximum presence set without dropping the ID restriction', async () => {
+    const query = { board_id: { $in: Array(MAX_PRESENCE_BOARD_SUBSCRIPTIONS).fill(id) } };
+    expect(await boardQueryValidator(structuredClone(query))).toEqual(query);
+  });
+
+  it.each([
+    { board_id: { $in: ['not-a-uuid'] } },
+    { board_id: { $in: [id, { $ne: id }] } },
+    { board_id: { $in: id } },
+    { board_id: { $in: Array(MAX_PRESENCE_BOARD_SUBSCRIPTIONS + 1).fill(id) } },
+    { board_id: { $ne: id } },
+    { board_id: {} },
+    { board_id: 'not-a-uuid' },
+    { $limit: 10001 },
+    { $skip: 10001 },
+    { $skip: -1 },
+    { lean: 'invalid' },
+  ])('rejects malformed or unbounded board queries: %j', async (query) => {
+    await expect(boardQueryValidator(query)).rejects.toThrow();
+  });
+
+  it('retains the existing unknown-property stripping contract without widening a set filter', async () => {
+    expect(
+      await boardQueryValidator({ board_id: { $in: [id], unexpected: true }, unexpected: true })
+    ).toEqual({ board_id: { $in: [id] } });
+  });
+});
 
 describe('boardObjectQueryValidator', () => {
   it('preserves supported board-object filters through Feathers query validation', async () => {
@@ -21,6 +68,7 @@ describe('boardObjectQueryValidator', () => {
           card_id: '019e8e1e',
           zone_id: 'zone-review',
           entity_type: 'branch',
+          exclude_archived_branches: 'true',
           $limit: 25,
           $skip: 5,
           unknown: 'removed',
@@ -36,6 +84,7 @@ describe('boardObjectQueryValidator', () => {
       card_id: '019e8e1e',
       zone_id: 'zone-review',
       entity_type: 'branch',
+      exclude_archived_branches: true,
       $limit: 25,
       $skip: 5,
     });

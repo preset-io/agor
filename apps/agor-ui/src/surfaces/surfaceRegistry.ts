@@ -4,7 +4,7 @@ import { surfaceTitle } from '../branding/brand';
 export type RouteSurfaceId =
   | 'workspace'
   | 'knowledge'
-  | 'marketplace'
+  | 'mcp-recovery'
   | 'artifact-fullscreen'
   | 'demo';
 
@@ -70,28 +70,19 @@ export const KNOWLEDGE_SURFACE = defineSurface({
   branding: surfaceTitle('Knowledge'),
 });
 
-export const MARKETPLACE_ROUTE_PATHS = [
-  '/marketplace',
-  '/marketplace/catalog',
-  '/marketplace/servers',
-  '/marketplace/sessions',
-  '/marketplace/credentials',
-] as const;
+export const ARTIFACT_FULLSCREEN_ROUTE_PATHS = ['/a/:artifactShortId/fullscreen'] as const;
 
-export const MARKETPLACE_SURFACE = defineSurface({
-  id: 'marketplace',
-  label: 'Marketplace',
-  routePaths: MARKETPLACE_ROUTE_PATHS,
-  // Browsing the catalog reads the checked-in curated file the daemon serves
-  // whole, not the tenant's boards and sessions, so the workspace store stays
-  // cold until connect navigates into a session.
+export const MCP_RECOVERY_ROUTE_PATHS = ['/recover/mcp'] as const;
+
+export const MCP_RECOVERY_SURFACE = defineSurface({
+  id: 'mcp-recovery',
+  label: 'MCP recovery',
+  routePaths: MCP_RECOVERY_ROUTE_PATHS,
   startsWorkspaceRuntime: false,
   usesDeviceRouter: false,
   usesSharedUserSettings: true,
-  branding: surfaceTitle('Marketplace'),
+  branding: surfaceTitle('MCP recovery'),
 });
-
-export const ARTIFACT_FULLSCREEN_ROUTE_PATHS = ['/a/:artifactShortId/fullscreen'] as const;
 
 export const ARTIFACT_FULLSCREEN_SURFACE = defineSurface({
   id: 'artifact-fullscreen',
@@ -143,7 +134,7 @@ export const WORKSPACE_SURFACE = defineSurface({
 
 export const SURFACE_REGISTRY = [
   KNOWLEDGE_SURFACE,
-  MARKETPLACE_SURFACE,
+  MCP_RECOVERY_SURFACE,
   ARTIFACT_FULLSCREEN_SURFACE,
   DEMO_SURFACE,
   WORKSPACE_SURFACE,

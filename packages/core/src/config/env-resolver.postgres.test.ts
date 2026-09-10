@@ -12,12 +12,14 @@ import {
   RepoRepository,
   SessionEnvSelectionRepository,
   SessionRepository,
+  TenantAgenticToolSettingsRepository,
   UsersRepository,
 } from '../db/repositories';
 import { users } from '../db/schema';
 import { createTenantScopedDatabaseProxy, runWithTenantDatabaseScope } from '../db/tenant-scope';
 import { generateId } from '../lib/ids';
 import { resolveUserEnvironment } from './env-resolver';
+import { resolveApiKey } from './key-resolver';
 
 const postgresUrl = process.env.AGOR_TEST_POSTGRES_URL;
 const usesPostgresSchema = process.env.AGOR_DB_DIALECT === 'postgresql';
@@ -172,6 +174,39 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
           {}
         );
       });
+    });
+
+    it('keeps workspace-selected provider credentials tenant-bound and observes rotation', async () => {
+      const tenantA = `provider-a-${generateId()}` as TenantID;
+      const tenantB = `provider-b-${generateId()}` as TenantID;
+      const scopedDb = createTenantScopedDatabaseProxy(rawA, {
+        requireScope: true,
+        label: 'provider-policy',
+      });
+      for (const [tenant, value] of [
+        [tenantA, 'credential-a'],
+        [tenantB, 'credential-b'],
+      ] as const) {
+        await runWithTenantDatabaseScope(scopedDb, tenant, async (db) => {
+          await new TenantAgenticToolSettingsRepository(db).patch('codex', {
+            resolution_policy: 'tenant_preferred',
+            connection: { OPENAI_API_KEY: value },
+          });
+        });
+      }
+      const resolve = (tenant: TenantID) =>
+        runWithTenantDatabaseScope(scopedDb, tenant, (db) =>
+          resolveApiKey('OPENAI_API_KEY', { db, tool: 'codex' })
+        );
+      expect(await resolve(tenantA)).toMatchObject({ apiKey: 'credential-a', source: 'tenant' });
+      expect(await resolve(tenantB)).toMatchObject({ apiKey: 'credential-b', source: 'tenant' });
+      await runWithTenantDatabaseScope(scopedDb, tenantA, async (db) => {
+        await new TenantAgenticToolSettingsRepository(db).patch('codex', {
+          connection: { OPENAI_API_KEY: 'rotated-a' },
+        });
+      });
+      expect(await resolve(tenantA)).toMatchObject({ apiKey: 'rotated-a' });
+      expect(await resolve(tenantB)).toMatchObject({ apiKey: 'credential-b' });
     });
 
     it('serializes selection replacement across replica connections', async () => {

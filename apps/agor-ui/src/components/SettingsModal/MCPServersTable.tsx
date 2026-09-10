@@ -17,12 +17,15 @@ import {
   TeamOutlined,
   UserOutlined,
 } from '@ant-design/icons';
+import type { TableColumnsType } from 'antd';
 import {
   Alert,
   Badge,
   Button,
   Descriptions,
+  Flex,
   Form,
+  Grid,
   Input,
   Popconfirm,
   Space,
@@ -31,6 +34,7 @@ import {
   Tag,
   Tooltip,
   Typography,
+  theme,
 } from 'antd';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useConnectionState } from '@/contexts/ConnectionContext';
@@ -63,9 +67,8 @@ import {
   type MCPServerCapabilityContext,
   policyPendingState,
 } from '../MCPServer/memberPolicy';
-import { useOAuthBrowserEventAttempt } from '../MCPServer/useOAuthBrowserEventAttempt';
+import { useMCPServerDiscovery } from '../MCPServer/useMCPServerDiscovery';
 import { AdaptiveSettingsModal } from './AdaptiveSettingsModal';
-import { MCPEgressGatewayStatus } from './MCPEgressGatewayStatus';
 import { MCPMemberPolicySetting } from './MCPMemberPolicySetting';
 import { ResponsiveSettingsHeader } from './ResponsiveSettingsHeader';
 import { SettingsActionGroup } from './SettingsActionGroup';
@@ -123,17 +126,6 @@ const getServerHealth = (
   };
 };
 
-interface TestResult {
-  success: boolean;
-  toolCount: number;
-  resourceCount: number;
-  promptCount: number;
-  error?: string;
-  tools?: Array<{ name: string; description: string }>;
-  resources?: Array<{ name: string; uri: string; mimeType?: string }>;
-  prompts?: Array<{ name: string; description: string }>;
-}
-
 const MCPServersTableForIdentity: React.FC<MCPServersTableProps> = ({
   mcpServerById,
   client,
@@ -184,12 +176,6 @@ const MCPServersTableForIdentity: React.FC<MCPServersTableProps> = ({
       ? [durableAuthorityKey, client, memberPolicy.policy, memberPolicy.canConfigure]
       : null
   );
-  const oauthBrowserEvents = useOAuthBrowserEventAttempt({
-    client,
-    currentUserId: currentUser?.user_id ?? null,
-    authGeneration,
-    authorityGuard: operationGuard,
-  });
   const capabilityRef = useRef({ capability, policyPending, addRestriction });
   capabilityRef.current = { capability, policyPending, addRestriction };
   const addIsCurrentlyAllowed = () => {
@@ -220,23 +206,35 @@ const MCPServersTableForIdentity: React.FC<MCPServersTableProps> = ({
   const [chosenTransport, setChosenTransport] = useState<MCPTransport | null>(null);
   const transport = chosenTransport ?? offeredTransports[0];
   const [authType, setAuthType] = useState<'none' | 'bearer' | 'jwt' | 'oauth'>('none');
-  const [testing, setTesting] = useState(false);
   const [createdServerId, setCreatedServerId] = useState<string | null>(null);
-  const [testResult, setTestResult] = useState<TestResult | null>(null);
+  const createdConfigVersion = useRef(1);
   const [searchTerm, setSearchTerm] = useState('');
+  const screens = Grid.useBreakpoint();
+  const { token } = theme.useToken();
 
   const [formRevision, bumpFormRevision] = useFormRevision();
+  const createOperationGuard = useAuthorityOperationGuard(
+    createModalOpen && canAdd && durableAuthorityKey
+      ? [durableAuthorityKey, client, createModalOpen]
+      : null
+  );
+  const { testing, testResult, testConnection } = useMCPServerDiscovery({
+    client,
+    authorityKey: canAdd ? durableAuthorityKey : null,
+    currentUserId: currentUser?.user_id ?? null,
+    authGeneration,
+    formRevision,
+    contextKey: createModalOpen ? 'create' : null,
+  });
   // Only ask the form once it is rendered — an unmounted instance warns.
   const missingRequiredFields = createModalOpen
     ? missingMCPFieldLabels(createForm.getFieldsValue(true), {
-        mode: 'create',
+        mode: createdServerId ? 'edit' : 'create',
         transport,
         authType,
       })
     : [];
-  // Once the row exists the button only dismisses the modal, so nothing about
-  // the form should be able to trap the user behind it.
-  const createBlocked = !createdServerId && (!canAdd || missingRequiredFields.length > 0);
+  const createBlocked = !canAdd || testing || missingRequiredFields.length > 0;
 
   // Sync modal records when mcpServerById updates (real-time WebSocket
   // updates). An absent row is authoritative too: retaining the previous
@@ -294,8 +292,9 @@ const MCPServersTableForIdentity: React.FC<MCPServersTableProps> = ({
 
   // Persist the current form before every OAuth start. The saved row is the
   // daemon's tenant-scoped authority for provider URL and client credentials.
-  const prepareOAuthStartForCreate = async (): Promise<string | null> => {
-    const operation = operationGuard.begin();
+  const prepareOAuthStartForCreate = async (
+    operation = createOperationGuard.begin()
+  ): Promise<string | null> => {
     if (!client || !operation.isCurrent()) return null;
     if (!addIsCurrentlyAllowed()) {
       showError(capabilityRef.current.addRestriction);
@@ -315,14 +314,24 @@ const MCPServersTableForIdentity: React.FC<MCPServersTableProps> = ({
         const result = await client.service('mcp-servers').create(data);
         if (!operation.isCurrent()) return null;
         const newServerId = (result as MCPServer).mcp_server_id || null;
+        createdConfigVersion.current = (result as MCPServer).config_version ?? 1;
         setCreatedServerId(newServerId);
         return newServerId;
       }
 
       const { name: _name, ...updates } = data;
       if (!operation.isCurrent() || !addIsCurrentlyAllowed()) return null;
-      await client.service('mcp-servers').patch(createdServerId, updates as UpdateMCPServerInput);
+      const updated = await client.service('mcp-servers').patch(createdServerId, {
+        ...updates,
+        auth: buildAuthFromValues(createForm.getFieldsValue(true), { forPatch: true }),
+        expected_config_version: createdConfigVersion.current,
+        env: parseEnvJSON(createForm.getFieldValue('env')) ?? {},
+        ...(data.transport === 'stdio'
+          ? {}
+          : { headers: parseHeadersJSON(createForm.getFieldValue('headers')) ?? {} }),
+      } as UpdateMCPServerInput);
       if (!operation.isCurrent()) return null;
+      createdConfigVersion.current = updated.config_version ?? createdConfigVersion.current + 1;
       return createdServerId;
     } catch (error) {
       if (!operation.isCurrent()) return null;
@@ -341,13 +350,13 @@ const MCPServersTableForIdentity: React.FC<MCPServersTableProps> = ({
     setCreateModalOpen(false);
     setChosenTransport(null);
     setAuthType('none');
-    setTestResult(null);
     setCreatedServerId(null);
+    bumpFormRevision();
   };
 
   const handleCreate = async () => {
     if (createdServerId) {
-      resetCreateModal();
+      if (await prepareOAuthStartForCreate()) resetCreateModal();
       return;
     }
 
@@ -356,7 +365,7 @@ const MCPServersTableForIdentity: React.FC<MCPServersTableProps> = ({
       return;
     }
 
-    const operation = operationGuard.begin();
+    const operation = createOperationGuard.begin();
     try {
       await createForm.validateFields();
       if (!operation.isCurrent()) return;
@@ -371,96 +380,34 @@ const MCPServersTableForIdentity: React.FC<MCPServersTableProps> = ({
       resetCreateModal();
     } catch (error) {
       if (!operation.isCurrent()) return;
-      console.error('Form validation failed:', error);
       showError(firstFormErrorMessage(error) || 'Please fill in required fields');
     }
   };
 
-  // Test connection from create modal (always inline config, no persistence).
-  const handleCreateTestConnection = async () => {
-    const operation = operationGuard.begin();
-    if (!operation.isCurrent()) return;
-    if (!client) {
-      showError('Client not available');
-      return;
-    }
-
-    const values = createForm.getFieldsValue(true);
-
-    if (!values.url) {
-      showError('URL is required to test connection');
-      return;
-    }
-    if (values.transport === 'stdio') {
-      showError('Connection test is not available for stdio transport');
-      return;
-    }
-    try {
-      await createForm.validateFields(['headers']);
-    } catch {
-      if (!operation.isCurrent()) return;
-      showError('Please fix custom HTTP headers before testing');
-      return;
-    }
-    if (!operation.isCurrent()) return;
-
-    let browserAttempt: Awaited<ReturnType<typeof oauthBrowserEvents.begin>> = null;
-    try {
-      setTesting(true);
-      setTestResult(null);
-      browserAttempt = await oauthBrowserEvents.begin({ operation: 'discover' });
-      if (!operation.isCurrent()) return;
-      const data = (await client.service('mcp-servers/discover').create({
+  const handleCreateTestConnection = () =>
+    testConnection(async (operation) => {
+      const values = createForm.getFieldsValue(true);
+      if (createdServerId || values.auth_type === 'oauth') {
+        const id = await prepareOAuthStartForCreate(operation);
+        return id ? { mcp_server_id: id } : null;
+      }
+      try {
+        await createForm.validateFields(['url', 'headers']);
+      } catch (error) {
+        if (operation.isCurrent())
+          showError(
+            firstFormErrorMessage(error) ?? 'Please fix connection settings before testing'
+          );
+        return null;
+      }
+      if (!values.url || values.transport === 'stdio') return null;
+      return {
         url: values.url,
         transport: values.transport || 'http',
         auth: buildAuthFromValues(values),
         headers: parseHeadersJSON(values.headers),
-        ...(browserAttempt ? { oauth_browser_event: browserAttempt.request } : {}),
-      })) as {
-        success: boolean;
-        error?: string;
-        capabilities?: { tools: number; resources: number; prompts: number };
-        tools?: Array<{ name: string; description: string }>;
-        resources?: Array<{ name: string; uri: string; mimeType?: string }>;
-        prompts?: Array<{ name: string; description: string }>;
       };
-
-      if (!operation.isCurrent()) return;
-
-      if (data.success && data.capabilities) {
-        setTestResult({
-          success: true,
-          toolCount: data.capabilities.tools,
-          resourceCount: data.capabilities.resources,
-          promptCount: data.capabilities.prompts,
-          tools: data.tools,
-          resources: data.resources,
-          prompts: data.prompts,
-        });
-      } else {
-        setTestResult({
-          success: false,
-          toolCount: 0,
-          resourceCount: 0,
-          promptCount: 0,
-          error: data.error || 'Connection test failed',
-        });
-      }
-    } catch (error) {
-      if (!operation.isCurrent()) return;
-      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-      setTestResult({
-        success: false,
-        toolCount: 0,
-        resourceCount: 0,
-        promptCount: 0,
-        error: errorMessage,
-      });
-    } finally {
-      browserAttempt?.cleanup();
-      if (operation.isCurrent()) setTesting(false);
-    }
-  };
+    });
 
   const handleEdit = useCallback((server: MCPServer) => {
     setEditingServer(server);
@@ -519,29 +466,102 @@ const MCPServersTableForIdentity: React.FC<MCPServersTableProps> = ({
     [userById, currentUser?.user_id]
   );
 
-  const columns = useMemo(
+  const renderOwner = useCallback(
+    (server: MCPServer) => {
+      const owner = describeOwner(server);
+      return (
+        <Tooltip title={owner.hint}>
+          <Tag
+            icon={owner.shared ? <TeamOutlined /> : <UserOutlined />}
+            color={owner.shared ? 'default' : 'geekblue'}
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              maxWidth: '100%',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+            }}
+          >
+            <HighlightMatch text={owner.text} query={searchTerm} />
+          </Tag>
+        </Tooltip>
+      );
+    },
+    [describeOwner, searchTerm]
+  );
+
+  // At xl the 1200px Settings modal leaves about 896px after its navigation
+  // rail and padding. Below xl, the name column becomes a composed summary so
+  // every value remains visible while Actions keeps its own usable column.
+  const compactTable = !screens.xl;
+  const columns = useMemo<TableColumnsType<MCPServer>>(
     () => [
       {
-        title: 'Name',
+        title: compactTable ? 'Server' : 'Name',
         dataIndex: 'name',
         key: 'name',
-        width: 180,
-        render: (_: string, server: MCPServer) => (
-          <div>
-            <div>
-              <HighlightMatch text={server.display_name || server.name} query={searchTerm} />
-            </div>
-            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-              <HighlightMatch text={server.name} query={searchTerm} />
-            </Typography.Text>
-          </div>
-        ),
+        width: compactTable ? undefined : 160,
+        render: (_: string, server: MCPServer) => {
+          const displayName = server.display_name || server.name;
+          const health = getServerHealth(server, userAuthenticatedMcpServerIds);
+          const scopeColors: Record<string, string> = {
+            global: 'purple',
+            repo: 'cyan',
+            session: 'magenta',
+          };
+          return (
+            <Flex vertical gap={compactTable ? token.marginXXS : 0} style={{ minWidth: 0 }}>
+              <Flex vertical style={{ minWidth: 0 }}>
+                <Typography.Text strong ellipsis={{ tooltip: displayName }}>
+                  <HighlightMatch text={displayName} query={searchTerm} />
+                </Typography.Text>
+                <Typography.Text
+                  type="secondary"
+                  ellipsis={{ tooltip: server.name }}
+                  style={{ fontSize: token.fontSizeSM }}
+                >
+                  <HighlightMatch text={server.name} query={searchTerm} />
+                </Typography.Text>
+              </Flex>
+              {compactTable && (
+                <>
+                  <Flex wrap gap={token.marginXXS} align="center">
+                    <Tag color={server.transport === 'stdio' ? 'blue' : 'green'}>
+                      {server.transport.toUpperCase()}
+                    </Tag>
+                    <Tag color={scopeColors[server.scope]}>{server.scope}</Tag>
+                    <Badge
+                      status={server.enabled ? 'success' : 'default'}
+                      text={server.enabled ? 'Enabled' : 'Disabled'}
+                    />
+                    <Badge status={health.status} text={health.text} />
+                  </Flex>
+                  <div style={{ minWidth: 0 }}>{renderOwner(server)}</div>
+                  <Flex gap={token.marginXXS} style={{ minWidth: 0 }}>
+                    <Typography.Text type="secondary" style={{ flex: '0 0 auto' }}>
+                      Source:
+                    </Typography.Text>
+                    <Typography.Text
+                      type="secondary"
+                      ellipsis={{ tooltip: server.source }}
+                      style={{ minWidth: 0 }}
+                    >
+                      <HighlightMatch text={server.source} query={searchTerm} />
+                    </Typography.Text>
+                  </Flex>
+                </>
+              )}
+            </Flex>
+          );
+        },
       },
       {
         title: 'Transport',
         dataIndex: 'transport',
         key: 'transport',
-        width: 100,
+        width: 90,
+        responsive: ['xl'],
         render: (transport: string) => (
           <Tag color={transport === 'stdio' ? 'blue' : 'green'}>{transport.toUpperCase()}</Tag>
         ),
@@ -550,7 +570,8 @@ const MCPServersTableForIdentity: React.FC<MCPServersTableProps> = ({
         title: 'Scope',
         dataIndex: 'scope',
         key: 'scope',
-        width: 100,
+        width: 76,
+        responsive: ['xl'],
         render: (scope: string) => {
           const colors: Record<string, string> = {
             global: 'purple',
@@ -564,18 +585,17 @@ const MCPServersTableForIdentity: React.FC<MCPServersTableProps> = ({
         title: 'Status',
         dataIndex: 'enabled',
         key: 'enabled',
-        width: 80,
-        render: (enabled: boolean) =>
-          enabled ? (
-            <Badge status="success" text="Enabled" />
-          ) : (
-            <Badge status="default" text="Disabled" />
-          ),
+        width: 90,
+        responsive: ['xl'],
+        render: (enabled: boolean) => (
+          <Badge status={enabled ? 'success' : 'default'} text={enabled ? 'Enabled' : 'Disabled'} />
+        ),
       },
       {
         title: 'Health',
         key: 'health',
-        width: 120,
+        width: 108,
+        responsive: ['xl'],
         render: (_: unknown, server: MCPServer) => {
           const health = getServerHealth(server, userAuthenticatedMcpServerIds);
           return <Badge status={health.status} text={health.text} />;
@@ -585,28 +605,18 @@ const MCPServersTableForIdentity: React.FC<MCPServersTableProps> = ({
         title: 'Owner',
         dataIndex: 'owner_user_id',
         key: 'owner',
-        width: 170,
-        render: (_: string | undefined, server: MCPServer) => {
-          const owner = describeOwner(server);
-          return (
-            <Tooltip title={owner.hint}>
-              <Tag
-                icon={owner.shared ? <TeamOutlined /> : <UserOutlined />}
-                color={owner.shared ? 'default' : 'geekblue'}
-              >
-                <HighlightMatch text={owner.text} query={searchTerm} />
-              </Tag>
-            </Tooltip>
-          );
-        },
+        width: 145,
+        responsive: ['xl'],
+        render: (_: string | undefined, server: MCPServer) => renderOwner(server),
       },
       {
         title: 'Source',
         dataIndex: 'source',
         key: 'source',
-        width: 100,
+        width: 80,
+        responsive: ['xl'],
         render: (source: string) => (
-          <Typography.Text type="secondary">
+          <Typography.Text type="secondary" ellipsis={{ tooltip: source }}>
             <HighlightMatch text={source} query={searchTerm} />
           </Typography.Text>
         ),
@@ -615,6 +625,7 @@ const MCPServersTableForIdentity: React.FC<MCPServersTableProps> = ({
         title: 'Actions',
         key: 'actions',
         width: 96,
+        align: compactTable ? 'right' : undefined,
         render: (_: unknown, server: MCPServer) => {
           const editable = canEditMcpServer(server, capability);
           const deletable = canDeleteMcpServer(server, capability);
@@ -628,6 +639,7 @@ const MCPServersTableForIdentity: React.FC<MCPServersTableProps> = ({
                 size="small"
                 icon={<EyeOutlined />}
                 onClick={() => handleView(server)}
+                aria-label="View details"
                 title="View details"
               />
               {editable ? (
@@ -636,6 +648,7 @@ const MCPServersTableForIdentity: React.FC<MCPServersTableProps> = ({
                   size="small"
                   icon={<EditOutlined />}
                   onClick={() => handleEdit(server)}
+                  aria-label="Edit"
                   title="Edit"
                 />
               ) : (
@@ -665,6 +678,7 @@ const MCPServersTableForIdentity: React.FC<MCPServersTableProps> = ({
                     size="small"
                     icon={<DeleteOutlined />}
                     danger
+                    aria-label="Delete"
                     title="Delete"
                   />
                 </Popconfirm>
@@ -689,13 +703,16 @@ const MCPServersTableForIdentity: React.FC<MCPServersTableProps> = ({
     ],
     [
       capability,
-      describeOwner,
+      compactTable,
       handleDelete,
       handleEdit,
       handleView,
       policyPending,
       policyPendingHint,
+      renderOwner,
       searchTerm,
+      token.fontSizeSM,
+      token.marginXXS,
       userAuthenticatedMcpServerIds,
     ]
   );
@@ -762,7 +779,8 @@ const MCPServersTableForIdentity: React.FC<MCPServersTableProps> = ({
         rowKey="mcp_server_id"
         pagination={{ defaultPageSize: 10, showSizeChanger: true }}
         size="small"
-        scroll={{ x: 1000 }}
+        tableLayout="fixed"
+        style={{ width: '100%', minWidth: 0 }}
       />
 
       {/* Create MCP Server Modal */}
@@ -778,16 +796,18 @@ const MCPServersTableForIdentity: React.FC<MCPServersTableProps> = ({
             {/* A disabled button can't host a tooltip of its own — hence the span. */}
             <Tooltip
               title={
-                !createdServerId && !canAdd
+                !canAdd
                   ? addRestriction
-                  : createBlocked
-                    ? describeMissingForSave(missingRequiredFields)
-                    : undefined
+                  : testing
+                    ? 'Wait for the connection test to finish.'
+                    : missingRequiredFields.length > 0
+                      ? describeMissingForSave(missingRequiredFields)
+                      : undefined
               }
             >
               <span>
                 <Button type="primary" disabled={createBlocked} onClick={handleCreate}>
-                  {createdServerId ? 'Done' : 'Create'}
+                  {createdServerId ? 'Save' : 'Create'}
                 </Button>
               </span>
             </Tooltip>
@@ -810,7 +830,7 @@ const MCPServersTableForIdentity: React.FC<MCPServersTableProps> = ({
           onValuesChange={bumpFormRevision}
         >
           <MCPServerFormFields
-            mode="create"
+            mode={createdServerId ? 'edit' : 'create'}
             transport={transport}
             onTransportChange={setChosenTransport}
             offeredTransports={offeredTransports}
@@ -978,16 +998,7 @@ const MCPServersTableForIdentity: React.FC<MCPServersTableProps> = ({
         {
           key: 'servers',
           label: 'Servers',
-          children: (
-            <>
-              <MCPEgressGatewayStatus
-                key={durableAuthorityKey ?? '__mcp-egress-status__'}
-                client={client}
-                connectionReady={connectionReady}
-              />
-              {serversPane}
-            </>
-          ),
+          children: serversPane,
         },
         {
           key: 'policy',

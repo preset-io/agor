@@ -1,10 +1,5 @@
-import type {
-  Board,
-  BoardEntityType,
-  BoardObject,
-  BoardObjectType,
-  BranchID,
-} from '@agor/core/types';
+import { PAGINATION } from '@agor/core/config';
+import type { Board, BoardEntityType, BoardObject, BoardObjectType } from '@agor/core/types';
 import { BRANCH_PERMISSION_LEVELS } from '@agor/core/types';
 import type { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
@@ -91,26 +86,14 @@ export function registerBoardTools(server: McpServer, ctx: McpContext): void {
           ),
         entitiesLimit: mcpOptionalPositiveInt(
           'entitiesLimit',
-          'When includeEntities=true, maximum number of positioned entities to return. Omit to preserve legacy behavior returning all matched entities.'
-        )
-          .refine(
-            (value) => value === undefined || value <= 10000,
-            'entitiesLimit must be less than or equal to 10000.'
-          )
-          .describe(
-            'When includeEntities=true, maximum number of positioned entities to return. Omit to preserve legacy behavior returning all matched entities.'
-          ),
+          'When includeEntities=true, maximum number of positioned entities to return. Omit to preserve legacy behavior returning all matched entities.',
+          PAGINATION.MAX_LIMIT
+        ),
         entitiesSkip: mcpOptionalNonNegativeInt(
           'entitiesSkip',
-          'When includeEntities=true, number of matched positioned entities to skip for pagination (default: 0).'
-        )
-          .refine(
-            (value) => value === undefined || value <= 10000,
-            'entitiesSkip must be less than or equal to 10000.'
-          )
-          .describe(
-            'When includeEntities=true, number of matched positioned entities to skip for pagination (default: 0).'
-          ),
+          'When includeEntities=true, number of matched positioned entities to skip for pagination (default: 0).',
+          PAGINATION.MAX_SKIP
+        ),
       }),
     },
     async (args) => {
@@ -130,50 +113,18 @@ export function registerBoardTools(server: McpServer, ctx: McpContext): void {
         const entityZoneId = coerceString(args.entityZoneId);
         if (entityZoneId) entityQuery.zone_id = entityZoneId;
         if (args.entityType) entityQuery.entity_type = args.entityType as BoardEntityType;
+        // Filter before count/page in SQL; never hydrate all entities and then
+        // issue a second branches.find (or one branches.get per entity).
+        entityQuery.exclude_archived_branches = args.includeArchived !== true;
+        if (args.entitiesLimit !== undefined) entityQuery.$limit = args.entitiesLimit;
+        if (args.entitiesSkip !== undefined) entityQuery.$skip = args.entitiesSkip;
 
         const boardObjectsResult = await ctx.app
           .service('board-objects')
           .find({ query: entityQuery, ...ctx.baseServiceParams });
-        const matchedEntities = (
-          boardObjectsResult as { data: import('@agor/core/types').BoardEntityObject[] }
-        ).data;
-        let visibleEntities = matchedEntities;
-
-        if (args.includeArchived !== true) {
-          const branchIds = matchedEntities
-            .map((entity) => entity.branch_id)
-            .filter((branchId): branchId is BranchID => typeof branchId === 'string');
-
-          if (branchIds.length > 0) {
-            const activeBranchesResult = await ctx.app.service('branches').find({
-              query: {
-                branch_id: { $in: Array.from(new Set(branchIds)) },
-                archived: false,
-              },
-              paginate: false,
-              ...ctx.baseServiceParams,
-            });
-            const activeBranches = Array.isArray(activeBranchesResult)
-              ? activeBranchesResult
-              : (activeBranchesResult as { data: Array<{ branch_id: string }> }).data;
-            const activeBranchIds = new Set(activeBranches.map((branch) => branch.branch_id));
-
-            visibleEntities = matchedEntities.filter(
-              (entity) => !entity.branch_id || activeBranchIds.has(entity.branch_id)
-            );
-          }
-        }
-
-        const total = visibleEntities.length;
+        const { data: entities, total } = boardObjectsResult;
         const skip = args.entitiesSkip ?? 0;
         const limit = args.entitiesLimit ?? null;
-        const entities =
-          args.entitiesLimit !== undefined || args.entitiesSkip !== undefined
-            ? visibleEntities.slice(
-                skip,
-                args.entitiesLimit === undefined ? undefined : skip + args.entitiesLimit
-              )
-            : visibleEntities;
 
         return textResult({
           ...board,
@@ -196,7 +147,7 @@ export function registerBoardTools(server: McpServer, ctx: McpContext): void {
       annotations: { readOnlyHint: true },
       inputSchema: z.object({
         limit: mcpListLimit(),
-        offset: mcpOffset(),
+        offset: mcpOffset(0, PAGINATION.MAX_SKIP),
         includeArchived: z
           .boolean()
           .optional()

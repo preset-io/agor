@@ -1010,6 +1010,106 @@ describe('SlackConnector.fetchChannelHistory', () => {
 const SECTION_MAX_CHARS_TEST = 3000;
 
 describe('SlackConnector.sendMessage', () => {
+  it('attaches supported message metadata to the initial post, not a false client_msg_id', async () => {
+    const posts: unknown[] = [];
+    const updates: unknown[] = [];
+    const connector = new SlackConnector({ bot_token: 'xoxb-test' });
+    (connector as unknown as { web: unknown }).web = {
+      chat: {
+        postMessage: async (args: unknown) => {
+          posts.push(args);
+          return { ok: true, ts: '1700000000.000001' };
+        },
+        update: async (args: unknown) => {
+          updates.push(args);
+          return { ok: true, ts: '1700000000.000001' };
+        },
+      },
+    };
+
+    await connector.sendMessage({
+      threadId: 'C123-1700000000.000000',
+      text: 'Reconnect required',
+      metadata: {
+        slack_message_metadata: {
+          event_type: 'agor_mcp_recovery',
+          event_payload: { delivery_id: 'delivery-1' },
+        },
+      },
+    });
+    await connector.sendMessage({
+      threadId: 'C123-1700000000.000000',
+      text: 'Recovered',
+      metadata: {
+        slack_update_ts: '1700000000.000001',
+      },
+    });
+
+    expect(posts).toEqual([
+      expect.objectContaining({
+        channel: 'C123',
+        thread_ts: '1700000000.000000',
+        metadata: {
+          event_type: 'agor_mcp_recovery',
+          event_payload: { delivery_id: 'delivery-1' },
+        },
+      }),
+    ]);
+    expect(updates).toEqual([
+      expect.objectContaining({ channel: 'C123', ts: '1700000000.000001' }),
+    ]);
+    expect(posts[0]).not.toHaveProperty('client_msg_id');
+    expect(updates[0]).not.toHaveProperty('metadata');
+  });
+
+  it('reconciles one bounded ambiguous post by durable Slack metadata', async () => {
+    const calls: unknown[] = [];
+    const connector = new SlackConnector({
+      bot_token: 'xoxb-test',
+      allowed_channel_ids: ['C123'],
+    });
+    (connector as unknown as { web: unknown }).web = {
+      conversations: {
+        replies: async (args: unknown) => {
+          calls.push(args);
+          return {
+            ok: true,
+            messages: [
+              { ts: '1.1', metadata: { event_type: 'other', event_payload: {} } },
+              {
+                ts: '1.2',
+                metadata: {
+                  event_type: 'agor_mcp_recovery',
+                  event_payload: { delivery_id: 'delivery-1' },
+                },
+              },
+            ],
+          };
+        },
+      },
+    };
+
+    await expect(
+      connector.findMessageByMetadata({
+        threadId: 'C123-1.0',
+        eventType: 'agor_mcp_recovery',
+        payloadKey: 'delivery_id',
+        payloadValue: 'delivery-1',
+        limit: 500,
+      })
+    ).resolves.toBe('1.2');
+    expect(calls).toEqual([{ channel: 'C123', ts: '1.0', limit: 100, include_all_metadata: true }]);
+    await expect(
+      connector.findMessageByMetadata({
+        threadId: 'C_OTHER-1.0',
+        eventType: 'agor_mcp_recovery',
+        payloadKey: 'delivery_id',
+        payloadValue: 'delivery-1',
+      })
+    ).rejects.toThrow(/allowlist/);
+    expect(calls).toHaveLength(1);
+  });
+
   it('updates an existing Slack message when slack_update_ts metadata is present', async () => {
     const calls: unknown[] = [];
     const connector = new SlackConnector({ bot_token: 'xoxb-test' });

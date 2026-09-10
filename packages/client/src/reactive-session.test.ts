@@ -330,6 +330,28 @@ describe('ReactiveSessionHandle bootstrap hydration', () => {
 });
 
 describe('ReactiveSessionHandle message snapshot reconciliation', () => {
+  it('delivers structured Claude task results unchanged over the message realtime path', async () => {
+    const task = makeTask('task-tools', TaskStatus.RUNNING);
+    const mock = createMockClient({ tasks: [task], messagesByTask: { [task.task_id]: [] } });
+    const handle = new ReactiveSessionHandle(mock.client, SESSION_ID, { taskHydration: 'lazy' });
+    await handle.ready();
+
+    const result = {
+      ...makeMessage(task.task_id, 0),
+      content: [
+        {
+          type: 'tool_result',
+          tool_use_id: 'create-1',
+          content: 'Task created',
+          tool_use_result: { task: { id: 'task-7', subject: 'Verify the fix' } },
+        },
+      ],
+    } as Message;
+    mock.emitServiceEvent('messages', 'created', result);
+
+    expect(handle.getTaskMessages(task.task_id)).toEqual([result]);
+  });
+
   it.each([
     ['immediate', false],
     ['drained queue', true],

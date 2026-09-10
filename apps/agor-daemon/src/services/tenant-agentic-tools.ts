@@ -7,6 +7,7 @@ import { AgenticToolPresetRepository, TenantAgenticToolSettingsRepository } from
 import { BadRequest } from '@agor/core/feathers';
 import type {
   Params,
+  StoredTenantAgenticToolSettings,
   TenantAgenticToolName,
   TenantAgenticToolSettings,
   TenantAgenticToolSettingsPatch,
@@ -40,8 +41,10 @@ export class TenantAgenticToolSettingsService {
     this.presets = new AgenticToolPresetRepository(db);
   }
 
-  private async publicSettings(tool: TenantAgenticToolName): Promise<TenantAgenticToolSettings> {
-    const stored = await this.repository.find(tool);
+  private publicSettings(
+    tool: TenantAgenticToolName,
+    stored: StoredTenantAgenticToolSettings
+  ): TenantAgenticToolSettings {
     const deploymentEnabled = this.deploymentAvailable(tool);
     const connection: TenantAgenticToolSettings['connection'] = {};
     if (isProviderConnectionTool(tool)) {
@@ -61,11 +64,13 @@ export class TenantAgenticToolSettingsService {
   }
 
   async find(_params?: Params): Promise<TenantAgenticToolSettings[]> {
-    return Promise.all(TENANT_AGENTIC_TOOL_NAMES.map((tool) => this.publicSettings(tool)));
+    const stored = await this.repository.findAll();
+    return TENANT_AGENTIC_TOOL_NAMES.map((tool) => this.publicSettings(tool, stored.get(tool)!));
   }
 
   async get(id: string, _params?: Params): Promise<TenantAgenticToolSettings> {
-    return this.publicSettings(parseTool(id));
+    const tool = parseTool(id);
+    return this.publicSettings(tool, await this.repository.find(tool));
   }
 
   async patch(
@@ -119,7 +124,7 @@ export class TenantAgenticToolSettingsService {
       }
       throw error;
     }
-    return this.publicSettings(tool);
+    return this.publicSettings(tool, await this.repository.find(tool));
   }
 }
 

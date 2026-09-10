@@ -62,6 +62,7 @@ let mockStartThreadId: string | undefined = 'mock-thread-id';
 let mockStreamFailure: Error | undefined;
 let mockStartThreadOptions: unknown[] = [];
 let mockResumeThreadOptions: unknown[] = [];
+let mockRunStreamedInputs: string[] = [];
 
 async function* streamMockEvents() {
   for (const event of mockStreamEvents) {
@@ -111,7 +112,10 @@ vi.mock('@openai/codex-sdk', () => {
       return {
         id: mockStartThreadId,
         run: vi.fn(),
-        runStreamed: vi.fn().mockResolvedValue({ events: streamMockEvents() }),
+        runStreamed: vi.fn(async (input: string) => {
+          mockRunStreamedInputs.push(input);
+          return { events: streamMockEvents() };
+        }),
       };
     }
 
@@ -120,7 +124,10 @@ vi.mock('@openai/codex-sdk', () => {
       return {
         id: threadId,
         run: vi.fn(),
-        runStreamed: vi.fn().mockResolvedValue({ events: streamMockEvents() }),
+        runStreamed: vi.fn(async (input: string) => {
+          mockRunStreamedInputs.push(input);
+          return { events: streamMockEvents() };
+        }),
       };
     }
   }
@@ -153,6 +160,7 @@ describe('CodexPromptService - SDK Instance Caching (issue #133)', () => {
     mockStartThreadId = 'mock-thread-id';
     mockStartThreadOptions = [];
     mockResumeThreadOptions = [];
+    mockRunStreamedInputs = [];
     delete process.env.OPENAI_BASE_URL;
     vi.clearAllMocks();
     appServerMocks.forkCodexThreadViaAppServer.mockReset();
@@ -347,6 +355,7 @@ describe('CodexPromptService - prompt flow client initialization', () => {
     mockStreamEvents = [];
     mockStartThreadOptions = [];
     mockResumeThreadOptions = [];
+    mockRunStreamedInputs = [];
     delete process.env.OPENAI_BASE_URL;
     delete process.env.AGOR_CODEX_SANDBOX_MODE;
     // These cases exercise Codex's own sandbox policy. The Agor test runner
@@ -554,6 +563,8 @@ describe('CodexPromptService - prompt flow client initialization', () => {
       expect(mockInstanceConfigs).toEqual([
         {
           features: { goals: false, multi_agent: false },
+          // Agor always opts Codex into its sticky-task-list planning tool.
+          tools: { update_plan: { enabled: true } },
           model_instructions_file: '/tmp/agor-codex-instructions-flow.md',
           mcp_servers: {
             agor: {
@@ -567,6 +578,7 @@ describe('CodexPromptService - prompt flow client initialization', () => {
       expect(emitted.find((event) => event.type === 'complete')).toMatchObject({
         threadId: 'mock-thread-id',
       });
+      expect(mockRunStreamedInputs.at(-1)).toContain('Current Agor session ID: session-flow');
       expect(mockStartThreadOptions.at(-1)).toMatchObject({
         model: 'gpt-5.4',
         modelReasoningEffort: 'medium',
@@ -766,93 +778,130 @@ describe('CodexPromptService - forked sessions', () => {
     mockStreamEvents = [];
     mockStartThreadOptions = [];
     mockResumeThreadOptions = [];
+    mockRunStreamedInputs = [];
     delete process.env.OPENAI_BASE_URL;
     vi.clearAllMocks();
     appServerMocks.forkCodexThreadViaAppServer.mockReset();
   });
 
-  it('forks the parent Codex thread via app-server before resuming the child thread', async () => {
-    const service = new CodexPromptService(
-      mockMessagesRepo,
-      mockSessionsRepo,
-      mockSessionMCPServerRepo,
-      mockBranchesRepo,
-      undefined,
-      'test-api-key',
-      mockDb
-    );
+  it.each(['direct', 'nested'])(
+    'forks %s parent history with fresh model-visible and MCP identity on both turns',
+    async (kind) => {
+      const service = new CodexPromptService(
+        mockMessagesRepo,
+        mockSessionsRepo,
+        mockSessionMCPServerRepo,
+        mockBranchesRepo,
+        undefined,
+        'test-api-key',
+        mockDb
+      );
 
-    const serviceWithPrivates = service as any;
-    serviceWithPrivates.ensureCodexInstructionsFile = vi
-      .fn()
-      .mockResolvedValue('/tmp/agor-codex-instructions-child.md');
-    serviceWithPrivates.buildMcpServersConfig = vi
-      .fn()
-      .mockResolvedValue({ servers: {}, total: 0 });
-    await serviceWithPrivates.ensureCodexClient({
-      model_instructions_file: '/tmp/agor-codex-instructions-mock.md',
-    });
-    serviceWithPrivates.ensureCodexClient = vi.fn();
-    serviceWithPrivates.refreshClient = vi.fn();
+      // Exercise actual instruction-file and MCP config construction, not a
+      // preconfigured client that hides whether a fork retained its parent's
+      // bearer. The SDK/app-server remain mocked: this cannot prove which
+      // callbackSessionId a model chooses from inherited conversation history.
+      configMocks.getDaemonUrl.mockResolvedValue('http://localhost:3030');
+      mcpScopingMocks.getMcpServersForSession.mockResolvedValue([]);
 
-    const childSession = {
-      session_id: 'child-session',
-      branch_id: 'branch-1',
-      created_at: new Date().toISOString(),
-      sdk_session_id: null,
-      genealogy: { forked_from_session_id: 'parent-session' },
-      permission_config: { codex: {} },
-      model_config: { effort: 'max' },
-      mcp_token: 'test-token',
-    };
-    const parentSession = {
-      session_id: 'parent-session',
-      branch_id: 'branch-1',
-      created_at: new Date().toISOString(),
-      sdk_session_id: 'parent-thread-id',
-      permission_config: { codex: {} },
-      model_config: {},
-      mcp_token: 'test-token',
-    };
+      const childSession = {
+        session_id: 'child-session',
+        branch_id: 'branch-1',
+        created_at: new Date().toISOString(),
+        sdk_session_id: null,
+        genealogy: { forked_from_session_id: 'parent-session' },
+        permission_config: { codex: {} },
+        model_config: { effort: 'max' },
+        mcp_token: 'child-test-token',
+      };
+      const parentSession = {
+        session_id: 'parent-session',
+        branch_id: 'branch-1',
+        created_at: new Date().toISOString(),
+        sdk_session_id: 'parent-thread-id',
+        genealogy: kind === 'nested' ? { forked_from_session_id: 'root-session' } : undefined,
+        permission_config: { codex: {} },
+        model_config: {},
+        mcp_token: 'parent-test-token',
+      };
 
-    mockSessionsRepo.findById.mockImplementation(async (id: string) => {
-      if (id === 'child-session') return childSession;
-      if (id === 'parent-session') return parentSession;
-      return null;
-    });
-    mockSessionsRepo.update.mockResolvedValue(undefined);
-    mockBranchesRepo.findById.mockResolvedValue({
-      branch_id: 'branch-1',
-      path: process.cwd(),
-    });
-    appServerMocks.forkCodexThreadViaAppServer.mockResolvedValue('forked-thread-id');
+      mockSessionsRepo.findById.mockImplementation(async (id: string) => {
+        if (id === 'child-session') return childSession;
+        if (id === 'parent-session') return parentSession;
+        return null;
+      });
+      mockSessionsRepo.update.mockResolvedValue(undefined);
+      mockBranchesRepo.findById.mockResolvedValue({
+        branch_id: 'branch-1',
+        path: process.cwd(),
+      });
+      appServerMocks.forkCodexThreadViaAppServer.mockResolvedValue('forked-thread-id');
 
-    mockStreamEvents = [
-      {
-        type: 'turn.completed',
-        usage: { input_tokens: 1, cached_input_tokens: 0, output_tokens: 1 },
-      },
-    ];
+      mockStreamEvents = [
+        {
+          type: 'turn.completed',
+          usage: { input_tokens: 1, cached_input_tokens: 0, output_tokens: 1 },
+        },
+      ];
 
-    const emitted: Array<Record<string, unknown>> = [];
-    for await (const event of service.promptSessionStreaming('child-session' as any, 'continue')) {
-      emitted.push(event as Record<string, unknown>);
+      try {
+        for (const prompt of [
+          'Inherited example: callbackSessionId=parent-session. First fork turn.',
+          'Resume fork; inherited context still identifies parent-session.',
+        ]) {
+          const emitted: Array<Record<string, unknown>> = [];
+          for await (const event of service.promptSessionStreaming(
+            'child-session' as SessionID,
+            prompt
+          )) {
+            emitted.push(event as Record<string, unknown>);
+          }
+
+          const config = mockInstanceConfigs.at(-1) as {
+            model_instructions_file: string;
+            mcp_servers: { agor: { url: string; bearer_token_env_var: string } };
+          };
+          expect(path.basename(config.model_instructions_file)).toBe(
+            'agor-codex-instructions-child-session.md'
+          );
+          expect(await fs.readFile(config.model_instructions_file, 'utf8')).toContain(
+            'agor_sessions_get_current_context'
+          );
+          expect(config.mcp_servers.agor.url).toBe('http://localhost:3030/mcp');
+          expect(process.env[config.mcp_servers.agor.bearer_token_env_var]).toBe(
+            'child-test-token'
+          );
+          expect(emitted.find((event) => event.type === 'complete')).toMatchObject({
+            threadId: 'forked-thread-id',
+          });
+        }
+
+        expect(appServerMocks.forkCodexThreadViaAppServer).toHaveBeenCalledTimes(1);
+        expect(appServerMocks.forkCodexThreadViaAppServer).toHaveBeenCalledWith(
+          'parent-thread-id',
+          expect.objectContaining({ env: expect.any(Object) })
+        );
+        expect(mockSessionsRepo.update).toHaveBeenCalledWith('child-session', {
+          sdk_session_id: 'forked-thread-id',
+        });
+        expect(mockRunStreamedInputs).toHaveLength(2);
+        for (const input of mockRunStreamedInputs) {
+          expect(input).toContain('parent-session');
+          expect(input).toContain('Current Agor session ID: child-session');
+          expect(input).toContain('omit callbackSessionId');
+          expect(input).not.toContain('Current Agor session ID: parent-session');
+          expect(input).not.toContain('forked-thread-id');
+          expect(input).not.toContain('child-test-token');
+        }
+        expect(mockInstanceCount).toBe(1);
+        expect(mockSessionsRepo.findById).not.toHaveBeenCalledWith('root-session');
+        expect(mockResumeThreadOptions).toHaveLength(2);
+        expect(mockResumeThreadOptions.at(-1)).toMatchObject({ modelReasoningEffort: 'max' });
+      } finally {
+        await service.closeSession('child-session' as SessionID);
+      }
     }
-
-    expect(appServerMocks.forkCodexThreadViaAppServer).toHaveBeenCalledWith(
-      'parent-thread-id',
-      expect.objectContaining({ env: expect.any(Object) })
-    );
-    expect(mockSessionsRepo.update).toHaveBeenCalledWith('child-session', {
-      sdk_session_id: 'forked-thread-id',
-    });
-    expect(emitted.find((event) => event.type === 'complete')).toMatchObject({
-      threadId: 'forked-thread-id',
-    });
-    expect(mockResumeThreadOptions.at(-1)).toMatchObject({
-      modelReasoningEffort: 'max',
-    });
-  });
+  );
 });
 
 describe('CodexPromptService - Todo normalization', () => {
@@ -1317,6 +1366,34 @@ describe('CodexPromptService - tool payload mapping', () => {
     });
   });
 
+  it('does not hide an explicit MCP error behind result content or a success status', () => {
+    const service = new CodexPromptService(
+      mockMessagesRepo,
+      mockSessionsRepo,
+      mockSessionMCPServerRepo,
+      mockBranchesRepo,
+      undefined,
+      'test-api-key',
+      mockDb
+    );
+    const toolUse = (service as any).itemToToolUse(
+      {
+        id: 'mcp-conflicting',
+        type: 'mcp_tool_call',
+        server: 'agor',
+        tool: 'write',
+        arguments: {},
+        status: 'completed',
+        result: { content: [{ type: 'text', text: 'partial result' }] },
+        error: { message: 'SENTINEL_PROVIDER_BODY' },
+      },
+      'completed'
+    );
+    expect(toolUse.status).toBe('failed');
+    expect(toolUse.output).toContain('check the resulting state before retrying');
+    expect(JSON.stringify(toolUse)).not.toContain('SENTINEL_PROVIDER_BODY');
+  });
+
   it('sanitizes MCP provider error messages on failure', () => {
     const service = new CodexPromptService(
       mockMessagesRepo,
@@ -1348,7 +1425,7 @@ describe('CodexPromptService - tool payload mapping', () => {
       name: 'agor.agor_execute_tool',
       input: {},
       output:
-        'The MCP operation failed. Retry, then ask an administrator to review the secure operational event if it continues.',
+        'The MCP tool call failed. A write may already have taken effect; check the resulting state before retrying. If it continues, ask an administrator to review the operational diagnostics.',
       status: 'failed',
     });
   });
@@ -1392,7 +1469,7 @@ describe('CodexPromptService - tool payload mapping', () => {
     );
 
     expect(JSON.stringify(toolUse)).not.toContain(sentinel);
-    expect(toolUse.output).toContain('The MCP operation failed');
+    expect(toolUse.output).toContain('The MCP tool call failed');
   });
 
   it('falls back to structured_content when MCP content blocks are empty', () => {
@@ -1615,6 +1692,7 @@ describe('CodexPromptService - event_msg terminal handling (issue #1749)', () =>
         usage: {
           input_tokens: 8,
           cached_input_tokens: 2,
+          cache_write_input_tokens: 1,
           output_tokens: 3,
           reasoning_output_tokens: 1,
         },
@@ -1629,6 +1707,7 @@ describe('CodexPromptService - event_msg terminal handling (issue #1749)', () =>
       usage: {
         input_tokens: 8,
         cached_input_tokens: 2,
+        cache_write_input_tokens: 1,
         output_tokens: 3,
         reasoning_output_tokens: 1,
       },
@@ -1927,6 +2006,119 @@ describe('CodexPromptService - event_msg terminal handling (issue #1749)', () =>
       totalTokens: 30_000,
       maxTokens: 272_000,
     });
+  });
+
+  it('persists a failed MCP result as is_error even when the Codex turn subsequently completes', async () => {
+    const { service } = await makeInitializedStreamingService(null);
+    const initialRuns = mockRunStreamedInputs.length;
+    const messagesRepo = {
+      findInitialUserMessagesByTaskId: vi.fn(async () => []),
+      getNextIndexBySessionId: vi.fn(async () => 0),
+    };
+    const messagesService = {
+      create: vi.fn(async (message: Partial<Message>) => message as Message),
+      patch: vi.fn(async (_id: string, message: Partial<Message>) => message as Message),
+    } satisfies MessagesService;
+    const tool = new CodexTool(
+      messagesRepo as unknown as MessagesRepository,
+      mockSessionsRepo,
+      mockSessionMCPServerRepo,
+      mockBranchesRepo,
+      undefined,
+      'test-api-key',
+      messagesService
+    );
+    (tool as unknown as { promptService: CodexPromptService }).promptService = service;
+    mockBranchesRepo.findById.mockResolvedValue({ branch_id: 'branch-1' });
+    // The CLI maps MCP isError:true to failed status while retaining result content.
+    mockStreamEvents = [
+      {
+        type: 'item.completed',
+        item: {
+          id: 'failed-call',
+          type: 'mcp_tool_call',
+          server: 'agor',
+          tool: 'agor_execute_tool',
+          arguments: {},
+          status: 'failed',
+          result: { content: [{ type: 'text', text: '{"code":"invalid_tool_arguments"}' }] },
+        },
+      },
+      {
+        type: 'item.completed',
+        item: { id: 'answer', type: 'agent_message', text: 'Please correct the input.' },
+      },
+      {
+        type: 'turn.completed',
+        usage: { input_tokens: 1, output_tokens: 1, cached_input_tokens: 0 },
+      },
+    ];
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      const result = await tool.executePromptWithStreaming(testSessionId, 'go');
+      expect(result.rawSdkResponse).toMatchObject({ type: 'turn.completed' });
+      const saved = messagesService.create.mock.calls.flatMap(([message]) => message.content ?? []);
+      expect(saved).toContainEqual(
+        expect.objectContaining({ type: 'tool_result', is_error: true })
+      );
+      expect(JSON.stringify(saved)).toContain('invalid_tool_arguments');
+      const reference = JSON.stringify(saved).match(/reference=([a-f0-9-]+:\d+)/)?.[1];
+      expect(reference).toBeDefined();
+      expect(JSON.stringify(warn.mock.calls)).toContain(`reference=${reference}`);
+      expect(JSON.stringify(warn.mock.calls)).toContain('failure_kind=failed_result');
+      expect(mockRunStreamedInputs).toHaveLength(initialRuns + 1);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it('does not let a nonfatal notice mask a later failed turn', async () => {
+    const { service } = await makeInitializedStreamingService(null);
+    mockStreamEvents = [
+      { type: 'item.completed', item: { id: 'notice', type: 'error', message: 'SENTINEL_NOTICE' } },
+      { type: 'turn.failed', error: { message: 'SENTINEL_FAILURE' } },
+    ];
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    try {
+      await expect(drain(service)).rejects.toThrow('Codex failed the turn');
+      expect(JSON.stringify([...warn.mock.calls, ...error.mock.calls])).not.toContain('SENTINEL_');
+    } finally {
+      warn.mockRestore();
+      error.mockRestore();
+    }
+  });
+
+  it('surfaces opaque Codex notices without inventing an MCP failure or losing correlation', async () => {
+    const { service } = await makeInitializedStreamingService(null);
+    const initialRuns = mockRunStreamedInputs.length;
+    mockStreamEvents = [
+      {
+        type: 'item.completed',
+        item: { type: 'error', id: 'SENTINEL_ITEM_ID', message: 'SENTINEL_CONFIG_WARNING' },
+      },
+      { type: 'item.completed', item: { type: 'agent_message', id: 'answer', text: 'Done.' } },
+      {
+        type: 'turn.completed',
+        usage: { input_tokens: 1, output_tokens: 1, cached_input_tokens: 0 },
+      },
+    ];
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      const emitted = await drain(service);
+      const serialized = JSON.stringify(emitted);
+      expect(serialized).toContain('[Codex runtime notice]');
+      expect(serialized).not.toContain('MCP operation failed');
+      expect(serialized).not.toContain('SENTINEL_');
+      expect(serialized).toContain('Done.');
+      const reference = serialized.match(/reference=([a-f0-9-]+:\d+)/)?.[1];
+      expect(reference).toBeDefined();
+      expect(JSON.stringify(warn.mock.calls)).toContain(`reference=${reference}`);
+      expect(JSON.stringify(warn.mock.calls)).not.toContain('SENTINEL_');
+      expect(mockRunStreamedInputs).toHaveLength(initialRuns + 1);
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it.each([

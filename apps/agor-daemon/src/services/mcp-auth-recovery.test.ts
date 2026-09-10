@@ -1,9 +1,34 @@
+import { Conflict, Forbidden } from '@agor/core/feathers';
 import { asMCPExternalError } from '@agor/core/mcp';
 import { OAuthConfigurationError, OAuthDCRFailure } from '@agor/core/tools/mcp/oauth-mcp-transport';
 import { describe, expect, it, vi } from 'vitest';
 import { classifyMCPAuthRecovery, recoveryForOAuthAttemptFailure } from './mcp-auth-recovery';
+import { MCPClientCredentialsConfigurationError, MCPOAuthRefreshBusyError } from './mcp-oauth-use';
 
 describe('MCP auth recovery contract', () => {
+  it('distinguishes transient rotation and machine configuration from browser reauth', () => {
+    expect(classifyMCPAuthRecovery(new MCPOAuthRefreshBusyError())).toMatchObject({
+      action: 'retry',
+    });
+    expect(classifyMCPAuthRecovery(new MCPClientCredentialsConfigurationError())).toMatchObject({
+      category: 'configuration_required',
+      action: 'review_configuration',
+      message: expect.stringContaining('client-credentials-only'),
+    });
+  });
+  it.each([
+    [new Forbidden('SENTINEL_FORBIDDEN'), 'permission_changed', 'retry'],
+    [new Conflict('SENTINEL_CONFLICT'), 'configuration_changed', 'save_and_retry'],
+  ] as const)(
+    'preserves public recovery for trusted control error %#',
+    (error, category, action) => {
+      const recovery = classifyMCPAuthRecovery(error);
+
+      expect(recovery).toMatchObject({ category, action });
+      expect(JSON.stringify(recovery)).not.toContain('SENTINEL');
+    }
+  );
+
   it('maps DCR diagnostics to actionable public state without provider text', () => {
     const recovery = classifyMCPAuthRecovery(
       new OAuthDCRFailure('provider leaked secret=abc', {
@@ -52,6 +77,7 @@ describe('MCP auth recovery contract', () => {
   it.each([
     ['provider_rejected', 'reauthenticate'],
     ['invalid_response', 'retry'],
+    ['storage_policy_rejected', 'contact_admin'],
     ['configuration_required', 'review_configuration'],
   ] as const)('preserves the shared closed %s recovery contract', (category, action) => {
     const recovery = classifyMCPAuthRecovery(

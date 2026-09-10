@@ -20,6 +20,7 @@ for (const name of [
 
 const ingress = process.env.HA_URL ?? `http://127.0.0.1:${process.env.HA_PORT ?? '3030'}`;
 const publicOrigin = process.env.AGOR_HA_PUBLIC_ORIGIN ?? ingress;
+const mcpOAuthExpected = new URL(publicOrigin).protocol === 'https:';
 const daemonA = `http://127.0.0.1:${process.env.HA_DAEMON_A_PORT ?? '13031'}`;
 const daemonB = `http://127.0.0.1:${process.env.HA_DAEMON_B_PORT ?? '13032'}`;
 const project = process.env.COMPOSE_PROJECT_NAME ?? 'agor-ha-integration';
@@ -617,6 +618,18 @@ try {
   assert(!ingressLogs.includes(ingressState), 'nginx logs retained raw GitHub setup state');
   console.log('ok - HA ingress logs redact GitHub setup query state');
 
+  const invalidOAuthState = `ha-invalid-oauth-${Date.now()}`;
+  const invalidOAuthCode = `ha-invalid-code-${Date.now()}`;
+  const invalidOAuthCallback = await fetch(
+    `${ingress}/mcp-servers/oauth-callback?code=${encodeURIComponent(invalidOAuthCode)}&state=${encodeURIComponent(invalidOAuthState)}`
+  );
+  assert.equal(invalidOAuthCallback.status, 409);
+  await invalidOAuthCallback.text();
+  const oauthIngressLogs = dockerOutput('logs', '--no-color', 'ingress');
+  assert(!oauthIngressLogs.includes(invalidOAuthState), 'nginx logs retained raw MCP OAuth state');
+  assert(!oauthIngressLogs.includes(invalidOAuthCode), 'nginx logs retained raw OAuth code');
+  console.log('ok - MCP OAuth callback route is fleet-routed and ingress logs redact secrets');
+
   if (process.env.AGOR_HA_INTEGRATION_FAILURES === '1') {
     // nginx's built-in error format includes the complete request and upstream
     // URI. Prove the sensitive route suppresses that unformattable log path
@@ -630,6 +643,16 @@ try {
     for (const callbackPath of ['/api/github/setup/callback', '/API/GITHUB/SETUP/CALLBACK']) {
       const failedCallback = await fetch(
         `${ingress}${callbackPath}?installation_id=4444&state=${encodeURIComponent(failedUpstreamState)}`
+      );
+      assert(
+        [502, 504].includes(failedCallback.status),
+        `expected an upstream failure for ${callbackPath}, received ${failedCallback.status}`
+      );
+      await failedCallback.text();
+    }
+    for (const callbackPath of ['/mcp-servers/oauth-callback', '/MCP-SERVERS/OAUTH-CALLBACK']) {
+      const failedCallback = await fetch(
+        `${ingress}${callbackPath}?code=unconsumed-code&state=${encodeURIComponent(failedUpstreamState)}`
       );
       assert(
         [502, 504].includes(failedCallback.status),
@@ -685,6 +708,7 @@ try {
     assert.equal(health.deployment.capabilities.taskRuntimeReconciliation, true);
     assert.equal(health.deployment.capabilities.knowledgeEmbeddingIndexer, true);
     assert.equal(health.deployment.capabilities.statelessMcp, true);
+    assert.equal(health.deployment.capabilities.mcpOAuth, mcpOAuthExpected);
     assert.equal(health.deployment.capabilities.completionCallbackDurableAdmission, true);
     assert.equal(health.deployment.capabilities.completionCallbackPreAdmissionRecovery, false);
     assert.equal(health.deployment.capabilities.widgetResolutionDurableClaim, true);
@@ -1256,6 +1280,7 @@ try {
   assert.equal(health.deployment.supportProfile, 'constrained-active-active');
   assert.equal(health.deployment.capabilities.taskExecution, true);
   assert.equal(health.deployment.capabilities.agorManagedInteractivePermissions, true);
+  assert.equal(health.deployment.capabilities.mcpOAuth, mcpOAuthExpected);
   assert.deepEqual(health.features.branchStorage, {
     defaultMode: 'clone',
     allowedModes: ['clone'],

@@ -9,7 +9,7 @@
 
 import { request as httpRequest } from 'node:http';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { MCPOAuthDCRDiagnostic } from '../../types/mcp.js';
+import type { MCPOAuthClientRegistrationID, MCPOAuthDCRDiagnostic } from '../../types/mcp.js';
 
 vi.mock('../../utils/safe-outbound-fetch', () => ({
   assertSafeOAuthUrl: (input: string, options: { allowLocalhostHttp?: boolean } = {}) => {
@@ -33,6 +33,7 @@ vi.mock('../../utils/safe-outbound-fetch', () => ({
 }));
 
 import { safeOutboundFetch } from '../../utils/safe-outbound-fetch';
+import type { MCPOAuthDynamicClientRegistrationResolver } from './oauth-mcp-transport';
 import {
   __dynamicClientCacheSizeForTests,
   __seedAuthCodeTokenCacheForTests,
@@ -50,6 +51,7 @@ import {
   resolveMCPOAuthDiscovery,
   resolveResourceMetadataUrl,
   startMCPOAuthFlow,
+  validateMCPOAuthMetadata,
 } from './oauth-mcp-transport';
 
 async function rejectedError<T extends Error>(promise: Promise<unknown>): Promise<T> {
@@ -301,6 +303,55 @@ describe('completeMCPOAuthFlow token exchange', () => {
     expect(failure).toMatchObject({ ambiguous: false, failureCode: 'provider_rejected' });
   });
 
+  it.each(['invalid_client', 'unauthorized_client'] as const)(
+    'classifies %s as an unambiguous stale client registration without retaining provider text',
+    async (providerCode) => {
+      globalThis.fetch = vi
+        .fn()
+        .mockResolvedValue(
+          new Response(
+            JSON.stringify({ error: providerCode, error_description: 'SECRET provider detail' }),
+            { status: 401, headers: { 'Content-Type': 'application/json' } }
+          )
+        ) as unknown as typeof fetch;
+
+      const failure = await completeMCPOAuthFlow(
+        {
+          ...context,
+          clientRegistrationId:
+            '01991ea2-58f0-7000-8000-000000000001' as MCPOAuthClientRegistrationID,
+        },
+        'code',
+        'state',
+        { cacheToken: false }
+      ).catch((error: unknown) => error);
+      expect(failure).toBeInstanceOf(OAuthCodeExchangeError);
+      expect(failure).toMatchObject({
+        ambiguous: false,
+        failureCode: 'client_registration_invalidated',
+        invalidClientRegistration: true,
+      });
+      expect(String(failure)).not.toContain('SECRET provider detail');
+      expect(String(failure)).not.toContain(providerCode);
+    }
+  );
+
+  it('does not classify an invalid configured client as an invalidatable DCR row', async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ error: 'invalid_client' }), {
+        status: 401,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    ) as unknown as typeof fetch;
+
+    await expect(
+      completeMCPOAuthFlow(context, 'code', 'state', { cacheToken: false })
+    ).rejects.toMatchObject({
+      failureCode: 'provider_rejected',
+      invalidClientRegistration: false,
+    });
+  });
+
   it.each([
     ['wrong state', 'wrong-state', 'https://provider.example.test', 'callback_state_mismatch'],
     ['missing issuer', 'state', undefined, 'callback_issuer_missing'],
@@ -364,6 +415,21 @@ describe('completeMCPOAuthFlow token exchange', () => {
       expect(String(error)).not.toContain('CODE-SECRET');
       expect(String(error)).not.toContain(callback);
     }
+  });
+
+  it('returns only closed front-channel rejection evidence and the state capability', () => {
+    const parsed = parseOAuthCallback(
+      'https://agor.example.test/mcp-servers/oauth-callback?error=invalid_client&error_description=SECRET&state=state'
+    );
+
+    expect(parsed).toEqual({
+      code: null,
+      state: 'state',
+      issuer: undefined,
+      authorizationRejected: true,
+    });
+    expect(JSON.stringify(parsed)).not.toContain('invalid_client');
+    expect(JSON.stringify(parsed)).not.toContain('SECRET');
   });
 });
 
@@ -1032,6 +1098,98 @@ describe('startMCPOAuthFlow with prefetchedAuthServerMetadata', () => {
     expect(authUrl.searchParams.get('redirect_uri')).toBe('http://127.0.0.1:9999/oauth/callback');
   });
 
+  it.each([
+    ['http://127.0.0.1:9999/oauth/callback', 'native'],
+    ['http://localhost:9999/oauth/callback', 'native'],
+    ['http://[::1]:9999/oauth/callback', 'native'],
+    ['https://agor.example.test/mcp-servers/oauth-callback', 'web'],
+  ])(
+    'binds DCR callback %s as %s through the fleet authority',
+    async (redirectUri, applicationType) => {
+      let observedRequest: unknown;
+      const resolver: MCPOAuthDynamicClientRegistrationResolver = vi.fn(
+        async (request, register) => {
+          observedRequest = request;
+          return { registration: await register() };
+        }
+      );
+      globalThis.fetch = vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            client_id: 'fleet-authority-client',
+            redirect_uris: [redirectUri],
+            token_endpoint_auth_method: 'none',
+          }),
+          { status: 201, headers: { 'content-type': 'application/json' } }
+        )
+      ) as unknown as typeof fetch;
+
+      const context = await startMCPOAuthFlow('', undefined, redirectUri, {
+        ...prefetchedOptions,
+        resolveDynamicClientRegistration: resolver,
+      });
+
+      expect(resolver).toHaveBeenCalledTimes(1);
+      expect(observedRequest).toMatchObject({
+        registrationEndpoint: 'https://auth.reo.dev/oauth/register',
+        registrationEndpointSource: 'metadata',
+        metadataUrl: 'https://mcp.reo.dev/mcp',
+        resourceUri: 'https://mcp.reo.dev/mcp',
+        issuer: 'https://auth.reo.dev',
+        authorizationEndpoint: 'https://auth.reo.dev/oauth/authorize',
+        tokenEndpoint: 'https://auth.reo.dev/oauth/token',
+        redirectUri,
+        applicationType,
+        compatibilityMode: 'legacy',
+        dcrMode: 'fallback',
+      });
+      expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+      const requestBody = JSON.parse(String(vi.mocked(globalThis.fetch).mock.calls[0][1]?.body));
+      expect(requestBody).toMatchObject({
+        application_type: applicationType,
+        redirect_uris: [redirectUri],
+      });
+      expect(context.clientId).toBe('fleet-authority-client');
+    }
+  );
+
+  it.each([
+    [{ token_endpoint: '' }, /token endpoint/],
+    [{ code_challenge_methods_supported: ['plain'] }, /PKCE S256/],
+    [{ authorization_endpoint: 'http://unsafe.example.test/authorize' }, /HTTPS/],
+  ])('shares audit validation before durable client resolution: %j', async (invalid, message) => {
+    const authServerMetadata = {
+      ...prefetchedOptions.prefetchedAuthServerMetadata,
+      issuer: 'https://mcp.reo.dev',
+      ...invalid,
+    };
+    const resolver: MCPOAuthDynamicClientRegistrationResolver = vi.fn(async () => {
+      throw new Error('invalid metadata must never reach the durable authority');
+    });
+    globalThis.fetch = vi.fn() as unknown as typeof fetch;
+    await expect(
+      validateMCPOAuthMetadata(
+        {
+          kind: 'authorization-server',
+          discoveredAt: 'https://mcp.reo.dev/.well-known/oauth-authorization-server',
+          authServerMetadata,
+        },
+        prefetchedOptions.resourceUri,
+        { compatibilityMode: 'marketplace' }
+      )
+    ).rejects.toThrow(message);
+    await expect(
+      startMCPOAuthFlow('', undefined, redirectUri, {
+        ...prefetchedOptions,
+        compatibilityMode: 'marketplace',
+        prefetchedAuthServerMetadata: authServerMetadata,
+        resolveDynamicClientRegistration: resolver,
+      })
+    ).rejects.toThrow(message);
+    expect(resolver).not.toHaveBeenCalled();
+    expect(globalThis.fetch).not.toHaveBeenCalled();
+  });
+
   it('accepts a confidential client when DCR returns a secret with auth method none/omitted, then uses HTTP Basic on token exchange', async () => {
     // Reproduces Atlassian's remote MCP: we request a public client
     // (token_endpoint_auth_method: 'none'), but the provider registers a *confidential* client —
@@ -1474,6 +1632,131 @@ describe('marketplace oauth-start production boundary', () => {
     await expect(
       completeMCPOAuthFlow(context, 'code', context.state, { cacheToken: false })
     ).rejects.toMatchObject({ failureCode: 'callback_issuer_missing' });
+  });
+});
+
+describe('side-effect-free production OAuth metadata validation', () => {
+  const originalFetch = globalThis.fetch;
+  const resourceUri = 'https://mcp.example.com/mcp';
+  const metadataUrl = 'https://mcp.example.com/.well-known/oauth-protected-resource/mcp';
+  const issuer = 'https://auth.example.com';
+  const discovery = {
+    kind: 'resource-metadata' as const,
+    metadataUrl,
+    source: 'header' as const,
+  };
+  const json = (body: unknown) =>
+    new Response(JSON.stringify(body), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    });
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+    vi.restoreAllMocks();
+  });
+
+  function fetchMetadata(resource: unknown, metadataDocumentUrl = metadataUrl) {
+    globalThis.fetch = vi.fn(async (input: string | URL) => {
+      const url = String(input);
+      if (url === metadataDocumentUrl) {
+        return json({
+          ...(resource === undefined ? {} : { resource }),
+          authorization_servers: [issuer],
+        });
+      }
+      if (url === `${issuer}/.well-known/oauth-authorization-server`) {
+        return json({
+          issuer,
+          authorization_endpoint: `${issuer}/authorize`,
+          token_endpoint: `${issuer}/token`,
+          registration_endpoint: `${issuer}/register`,
+          code_challenge_methods_supported: ['S256'],
+        });
+      }
+      return new Response(null, { status: 404 });
+    }) as unknown as typeof fetch;
+  }
+
+  it.each([
+    ['an omitted resource', undefined],
+    ['multiple resource alternatives', [resourceUri, 'https://mcp.example.com/other']],
+    ['an empty resource', ''],
+    ['a parent resource carrying a query', 'https://mcp.example.com?tenant=other'],
+  ])('rejects %s under the marketplace production contract', async (_label, resource) => {
+    fetchMetadata(resource);
+    await expect(
+      validateMCPOAuthMetadata(discovery, resourceUri, { compatibilityMode: 'marketplace' })
+    ).rejects.toMatchObject({ failureCode: 'metadata_incompatible' });
+  });
+
+  it('binds a marketplace protected-resource metadata document to the MCP origin', async () => {
+    const crossOriginMetadataUrl =
+      'https://attacker.example/.well-known/oauth-protected-resource/mcp';
+    fetchMetadata('https://mcp.example.com', crossOriginMetadataUrl);
+    await expect(
+      validateMCPOAuthMetadata({ ...discovery, metadataUrl: crossOriginMetadataUrl }, resourceUri, {
+        compatibilityMode: 'marketplace',
+      })
+    ).rejects.toMatchObject({ failureCode: 'metadata_incompatible' });
+  });
+
+  it('keeps strict resource equality exact, including a trailing slash', async () => {
+    fetchMetadata(`${resourceUri}/`);
+    await expect(
+      validateMCPOAuthMetadata(discovery, resourceUri, { compatibilityMode: 'strict' })
+    ).rejects.toMatchObject({ failureCode: 'metadata_incompatible' });
+  });
+
+  it('requires authorization and token endpoints in direct metadata', async () => {
+    await expect(
+      validateMCPOAuthMetadata(
+        {
+          kind: 'authorization-server',
+          discoveredAt: 'https://mcp.example.com/.well-known/oauth-authorization-server',
+          authServerMetadata: {
+            issuer: 'https://mcp.example.com',
+            authorization_endpoint: '',
+            token_endpoint: '',
+            registration_endpoint: 'https://mcp.example.com/register',
+            code_challenge_methods_supported: ['S256'],
+          },
+        },
+        resourceUri,
+        { compatibilityMode: 'marketplace' }
+      )
+    ).rejects.toMatchObject({ failureCode: 'metadata_incompatible' });
+  });
+
+  it('rejects a cross-origin issuer from direct marketplace discovery', async () => {
+    await expect(
+      validateMCPOAuthMetadata(
+        {
+          kind: 'authorization-server',
+          discoveredAt: 'https://mcp.example.com/.well-known/oauth-authorization-server',
+          authServerMetadata: {
+            issuer: 'https://attacker.example',
+            authorization_endpoint: 'https://attacker.example/authorize',
+            token_endpoint: 'https://attacker.example/token',
+            registration_endpoint: 'https://attacker.example/register',
+            code_challenge_methods_supported: ['S256'],
+          },
+        },
+        resourceUri,
+        { compatibilityMode: 'marketplace' }
+      )
+    ).rejects.toMatchObject({ failureCode: 'issuer_mismatch' });
+  });
+
+  it('returns DCR readiness without registering a client', async () => {
+    fetchMetadata('https://mcp.example.com');
+    await expect(
+      validateMCPOAuthMetadata(discovery, resourceUri, { compatibilityMode: 'marketplace' })
+    ).resolves.toMatchObject({ registrationEndpoint: `${issuer}/register` });
+    expect(globalThis.fetch).not.toHaveBeenCalledWith(
+      `${issuer}/register`,
+      expect.objectContaining({ method: 'POST' })
+    );
   });
 });
 

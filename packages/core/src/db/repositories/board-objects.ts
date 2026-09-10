@@ -17,7 +17,14 @@ import { and, asc, eq, getTableColumns, isNotNull, isNull, or, type SQL, sql } f
 import { generateId } from '../../lib/ids';
 import { toAbsolutePosition } from '../../utils/board-placement.js';
 import type { Database } from '../client';
-import { deleteFrom, insert, jsonExtract, select, update } from '../database-wrapper';
+import {
+  deleteFrom,
+  insert,
+  isSQLiteDatabase,
+  jsonExtract,
+  select,
+  update,
+} from '../database-wrapper';
 import { type BoardObjectInsert, type BoardObjectRow, boardObjects, branches } from '../schema';
 import { EntityNotFoundError, RepositoryError } from './base';
 import {
@@ -31,6 +38,8 @@ export interface BoardObjectFindFilters {
   card_id?: CardID;
   zone_id?: string;
   entity_type?: BoardEntityType;
+  /** Exclude archived/missing branch references, preserving card entities. */
+  exclude_archived_branches?: boolean;
 }
 
 export interface BoardObjectFindOptions {
@@ -65,6 +74,18 @@ export class BoardObjectRepository {
       conditions.push(isNull(boardObjects.card_id));
     } else if (filters.entity_type === 'card') {
       conditions.push(isNotNull(boardObjects.card_id));
+    }
+    if (filters.exclude_archived_branches) {
+      // Keep archive filtering in the same query as visibility and pagination.
+      // EXISTS avoids hydrating branches or building an unbounded client ID set.
+      conditions.push(
+        or(
+          isNull(boardObjects.branch_id),
+          sql`exists (select 1 from ${branches}
+            where ${branches.branch_id} = ${boardObjects.branch_id}
+              and ${branches.archived} = false)`
+        )!
+      );
     }
 
     return conditions;
@@ -104,6 +125,9 @@ export class BoardObjectRepository {
       query = query.orderBy(asc(boardObjects.created_at), asc(boardObjects.object_id));
       if (options.limit !== undefined) {
         query = query.limit(options.limit);
+      } else if (options.offset !== undefined && isSQLiteDatabase(this.db)) {
+        // SQLite requires LIMIT with OFFSET; -1 preserves the unbounded contract.
+        query = query.limit(sql`-1`);
       }
       if (options.offset !== undefined) {
         query = query.offset(options.offset);
@@ -162,6 +186,8 @@ export class BoardObjectRepository {
       query = query.orderBy(asc(boardObjects.created_at), asc(boardObjects.object_id));
       if (options.limit !== undefined) {
         query = query.limit(options.limit);
+      } else if (options.offset !== undefined && isSQLiteDatabase(this.db)) {
+        query = query.limit(sql`-1`);
       }
       if (options.offset !== undefined) {
         query = query.offset(options.offset);

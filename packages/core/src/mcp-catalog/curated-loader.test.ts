@@ -151,6 +151,18 @@ describe('auth_type', () => {
     });
   });
 
+  it('accepts only an explicit true OAuth-challenge bearer exception', () => {
+    const entry = parseCuratedCatalog(
+      `${VALID_ENTRY}    auth_type: credentials\n    credentials:\n      scheme: bearer\n      acquisition_url: https://example.com/tokens\n      oauth_challenge_compatible: true\n`
+    )[0];
+    expect(entry.credentials?.oauth_challenge_compatible).toBe(true);
+    expect(() =>
+      parseCuratedCatalog(
+        `${VALID_ENTRY}    auth_type: credentials\n    credentials:\n      scheme: bearer\n      acquisition_url: https://example.com/tokens\n      oauth_challenge_compatible: false\n`
+      )
+    ).toThrow(CuratedCatalogError);
+  });
+
   it('refuses a verdict only a live check could produce', () => {
     // `unreachable` describes one moment, so a checked-in file cannot claim it.
     expect(() => withAuth('auth_type: unreachable')).toThrow(CuratedCatalogError);
@@ -531,25 +543,75 @@ describe('the shipped catalog', () => {
     );
   });
 
-  it('opts the providers that pass the strict production boundary into strict mode', async () => {
+  it('keeps the GitHub PAT and Twilio Public Beta limitations visible on their cards', async () => {
+    const entries = await loadCuratedCatalog();
+    const github = entries.find((entry) => entry.name === 'io.github.github/github-mcp-server');
+    expect(github).toMatchObject({
+      website_url:
+        'https://docs.github.com/en/copilot/how-tos/provide-context/use-mcp-in-your-ide/set-up-the-github-mcp-server',
+      credentials: { label: 'Fine-grained personal access token' },
+    });
+    expect(github?.permission_disclosure).toMatch(/Enterprise Managed User/i);
+    expect(github?.permission_disclosure).toMatch(/Organisation policy/i);
+    expect(github?.permission_disclosure).toMatch(/paid GitHub or Copilot feature requirements/i);
+
+    const twilio = entries.find((entry) => entry.name === 'com.twilio/docs-mcp');
+    expect(twilio).toMatchObject({ website_url: 'https://www.twilio.com/docs/ai/mcp' });
+    expect(twilio?.permission_disclosure).toMatch(/Public Beta/i);
+    expect(twilio?.permission_disclosure).toMatch(/Support Terms/i);
+    expect(twilio?.permission_disclosure).toMatch(/Service Level Agreement/i);
+  });
+
+  it('keeps the explicit strict-mode policy inventory', async () => {
     // Marketplace installs with no statement use the daemon's bounded
-    // interoperability profile. These three publish the exact PRM/issuer,
+    // interoperability profile. Monday, Cloudflare and ClickUp publish the exact PRM/issuer,
     // S256 and RFC 9207 contracts, so keep the stronger policy explicit and
-    // make any later expansion a reviewed curation change.
+    // make any later expansion a reviewed curation change. Preset is pinned
+    // defensively pending production validation, not claimed to have passed it.
     const entries = await loadCuratedCatalog();
     expect(
       entries.filter((entry) => entry.oauth !== undefined).map((entry) => [entry.name, entry.oauth])
     ).toEqual([
       ['com.monday/monday.com', { compatibility_mode: 'strict' }],
       ['com.cloudflare/mcp', { compatibility_mode: 'strict' }],
+      ['io.preset/mcp-gateway', { compatibility_mode: 'strict' }],
       ['com.clickup/mcp', { compatibility_mode: 'strict' }],
     ]);
+  });
+
+  it('preserves Preset install identity and requires strict OAuth without hiding write authority', async () => {
+    const entries = await loadCuratedCatalog();
+    // catalog_entry_name is persisted on installs: this is a release identity,
+    // not display copy. A rename requires an explicit migration decision.
+    const preset = entries.find((entry) => entry.name === 'io.preset/mcp-gateway');
+    expect(preset).toMatchObject({
+      remote_url: 'https://mcp.app.preset.io/mcp',
+      transport: 'streamable-http',
+      auth_type: 'oauth',
+      oauth: { compatibility_mode: 'strict' },
+    });
+    // The initial task is intentionally read-only, not an authorization limit.
+    expect(preset!.starter_prompt).toContain('Do not change any data.');
+    expect(preset!.permission_disclosure).toContain('run SQL');
+    expect(preset!.permission_disclosure).toContain(
+      'create, edit, soft-delete, or restore Knowledge documents'
+    );
+  });
+
+  it('keeps Datadog on its validated OAuth path rather than the bearer fallback', async () => {
+    const entries = await loadCuratedCatalog();
+    const datadog = entries.find((entry) => entry.name === 'com.datadoghq/mcp');
+
+    expect(datadog).toMatchObject({
+      remote_url: 'https://mcp.datadoghq.com/api/unstable/mcp-server/mcp',
+      auth_type: 'oauth',
+    });
+    expect(datadog?.credentials).toBeUndefined();
   });
 
   it('does not advertise OAuth endpoints that cannot reach a safely bound client-registration boundary', async () => {
     const entries = await loadCuratedCatalog();
     const unsupported = [
-      'io.github.github/github-mcp-server',
       'io.prisma/mcp',
       'com.mongodb/mcp',
       'com.box/mcp',
@@ -558,9 +620,30 @@ describe('the shipped catalog', () => {
       'com.pagerduty/mcp',
       'com.kagi/mcp',
       'com.render/mcp',
+      // Explicit 2026-09-01 exclusions: customer OAuth clients, tenant/admin
+      // gates, callback allowlisting, preview constraints, or unusable live
+      // metadata keep these off the one-click shelf.
+      'com.google.gmail/mcp',
+      'com.google.drive/mcp',
+      'com.google.calendar/mcp',
+      'com.google.chat/mcp',
+      'com.google.docs/mcp',
+      'com.google.sheets/mcp',
+      'com.google.slides/mcp',
+      'com.google.tasks/mcp',
+      'com.microsoft.powerbi/mcp',
+      'com.typeform/mcp',
+      'com.contentful/mcp',
+      'com.mongodb.atlas/mcp',
     ];
 
     expect(entries.filter((entry) => unsupported.includes(entry.name))).toEqual([]);
+    expect(
+      entries.find((entry) => entry.name === 'io.github.github/github-mcp-server')
+    ).toMatchObject({
+      auth_type: 'credentials',
+      credentials: { scheme: 'bearer', oauth_challenge_compatible: true },
+    });
   });
 
   it('carries no secret-shaped value anywhere in the file', async () => {

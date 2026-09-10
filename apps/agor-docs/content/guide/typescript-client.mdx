@@ -66,6 +66,8 @@ await client.tasks.run(task.task_id, { stream: true });
 ```
 
 `client.tasks.run()` calls `POST /tasks/:id/run`, the explicit "fire this task now" trigger. It accepts `created` tasks on idle sessions; `queued` tasks drain automatically in order, and busy sessions should be prompted via `client.sessions.prompt()` (which queues atomically).
+Both authenticated forms are classified server-side as direct human prompts;
+clients cannot select provider trust metadata themselves.
 
 ## Quickstart (Real-time)
 

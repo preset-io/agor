@@ -171,12 +171,8 @@ export function registerRepoTools(server: McpServer, ctx: McpContext): void {
       if (!path) throw new Error('path is required');
       const slug = coerceString(args.slug);
       const reposService = ctx.app.service('repos') as unknown as ReposServiceImpl;
-      // Intentionally NOT wrapped in runWithMcpTenantDatabaseScope:
-      // addLocalRepository is rejected outright in `required_from_auth` mode
-      // (BadRequest before any DB touch), so the scope guard can never fire
-      // here. Wrapping would only risk holding a Postgres transaction across the
-      // method's awaited `git.repo.inspect` executor call if that guard were ever
-      // lifted. Local-repo registration stays a static/single-tenant path.
+      // The service owns short, write-gated DB units in every mode, including
+      // guarded SQLite. Do not wrap its executor inspection in a transaction.
       const repo = await reposService.addLocalRepository({ path, slug }, ctx.baseServiceParams);
       return textResult(repo);
     }

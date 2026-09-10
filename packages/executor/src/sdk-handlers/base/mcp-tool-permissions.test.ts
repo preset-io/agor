@@ -145,7 +145,8 @@ describe('resolveMcpToolPermission', () => {
  *     let t = e.replace(/[^a-zA-Z0-9_-]/g, "_");
  *     if (e.startsWith("claude.ai ")) t = t.replace(/_+/g, "_").replace(/^_|_$/g, "");
  *
- * Transcribed from the shipped 0.3.197 CLI. It matters because those are
+ * Originally transcribed from the shipped 0.3.197 CLI and retained as a
+ * compatibility contract across SDK upgrades. It matters because those are
  * exactly the names claude.ai connectors carry, and a name that misses reads
  * as unconfigured -- which is `allow`.
  */

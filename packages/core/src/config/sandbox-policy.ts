@@ -125,6 +125,12 @@ export interface SandboxPathContext {
    * the daemon guarantees it exists before spawn.
    */
   ownerHomeStore?: string;
+  /**
+   * Child-process fd pinning the validated `<ownerHomeStore>/tmp` directory.
+   * Required when per-user persistent tmp is enabled so bubblewrap never
+   * resolves an actor-replaceable bind-source pathname.
+   */
+  ownerTmpBindFd?: number;
   /** Canonical target of {@link ownerHomeStore}, when it differs through symlinks. */
   canonicalOwnerHomeStore?: string;
   /** Canonical targets used only to analyze final `extra_allow_write` aliases. */
@@ -297,11 +303,14 @@ export function resolveBwrapArgs(sandbox: AgorSandboxSettings, ctx: SandboxPathC
     if (include.tmp) {
       // /tmp lives in the user's OWN home (on disk, per-user, persists across
       // turns) — NOT a RAM tmpfs (which can OOM on big builds) and NOT a shared
-      // host /tmp (leaky). Bind <store>/tmp over /tmp; the daemon guarantees the
-      // dir exists. It is the SAME underlying dir as ~/tmp (the overlay maps the
-      // store to the home), so `/tmp` and `~/tmp` are one place. /var/tmp stays
-      // a small ephemeral tmpfs. TMPDIR is pinned below so tools agree.
-      args.push('--bind', join(ctx.ownerHomeStore as string, 'tmp'), '/tmp');
+      // host /tmp (leaky). The daemon creates and opens <store>/tmp without
+      // following symlinks, then keeps that exact inode pinned through spawn.
+      // A pathname bind here would let another live sandbox swap tmp to a host
+      // symlink between validation and bwrap setup.
+      if (!Number.isSafeInteger(ctx.ownerTmpBindFd) || (ctx.ownerTmpBindFd as number) < 3) {
+        throw new Error('Per-user persistent tmp requires a validated directory bind fd');
+      }
+      args.push('--bind-fd', String(ctx.ownerTmpBindFd), '/tmp');
       args.push('--tmpfs', '/var/tmp');
     }
     // Re-expose the branch (its worktrees ancestor is hidden by the overlay),

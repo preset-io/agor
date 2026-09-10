@@ -2,6 +2,8 @@ import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { dirname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { feathers } from '@agor/core/feathers';
+import { ENVIRONMENT_COMMAND_REPORT_SERVICE } from '@agor/core/types';
 import { describe, expect, it } from 'vitest';
 import {
   assertRealtimePublishPolicyCoverage,
@@ -38,10 +40,13 @@ describe('realtimePublishPolicyFor', () => {
     expect(realtimePublishPolicyFor('boards')?.minimumRole).toBeUndefined();
   });
 
-  it('treats an explicit none declaration as not allowed', () => {
-    expect(realtimePublishPolicyFor('mcp-catalog/connect')?.audience).toBe('none');
-    expect(isRealtimePublishAllowed('mcp-catalog/connect')).toBe(false);
-  });
+  it.each(['mcp-catalog/connect', 'mcp-catalog/start-session', 'mcp-slack-recovery'])(
+    'keeps %s replies private to the caller',
+    (path) => {
+      expect(realtimePublishPolicyFor(path)?.audience).toBe('none');
+      expect(isRealtimePublishAllowed(path)).toBe(false);
+    }
+  );
 
   it('requires every entry to explain itself', () => {
     for (const [path, policy] of Object.entries(REALTIME_PUBLISH_POLICY)) {
@@ -51,6 +56,21 @@ describe('realtimePublishPolicyFor', () => {
 });
 
 describe('assertRealtimePublishPolicyCoverage', () => {
+  it('covers the constant-named environment report RPC even with no custom events', () => {
+    const app = feathers();
+    app.use(
+      ENVIRONMENT_COMMAND_REPORT_SERVICE,
+      {
+        async create() {
+          return {};
+        },
+      },
+      { methods: ['create'], events: [] }
+    );
+    expect(() => assertRealtimePublishPolicyCoverage(app)).not.toThrow();
+    expect(realtimePublishPolicyFor(ENVIRONMENT_COMMAND_REPORT_SERVICE)?.audience).toBe('none');
+  });
+
   it('accepts an app whose services are all declared', () => {
     const app = { services: { sessions: {}, 'mcp-catalog/connect': {}, '/branches': {} } };
     expect(() => assertRealtimePublishPolicyCoverage(app)).not.toThrow();
@@ -121,7 +141,13 @@ describe('source scan: every registered path is declared', () => {
 
   /** Extract every registered path from one file's source. Pure, so it can be driven against a fixture. */
   function extractRegisteredPaths(source: string): Array<{ path: string; line: number }> {
-    const lines = source.split('\n');
+    // Resolve the shared constant before the literal-only scan; do not duplicate its value.
+    const lines = source
+      .replace(
+        /\bENVIRONMENT_COMMAND_REPORT_SERVICE\b/g,
+        JSON.stringify(ENVIRONMENT_COMMAND_REPORT_SERVICE)
+      )
+      .split('\n');
     const found: Array<{ path: string; line: number }> = [];
     lines.forEach((line, index) => {
       const start = line.search(REGISTRATION_CALL);
@@ -181,6 +207,13 @@ describe('source scan: every registered path is declared', () => {
       'multiline-receiver',
       'long-route',
     ]);
+  });
+
+  it('recognizes the shared environment report service identifier', () => {
+    expect(extractRegisteredPaths('app.use(ENVIRONMENT_COMMAND_REPORT_SERVICE, service);')).toEqual(
+      [{ path: ENVIRONMENT_COMMAND_REPORT_SERVICE, line: 1 }]
+    );
+    expect(registeredPathsInSource().has(ENVIRONMENT_COMMAND_REPORT_SERVICE)).toBe(true);
   });
 
   it('ignores middleware mounted without a path', () => {

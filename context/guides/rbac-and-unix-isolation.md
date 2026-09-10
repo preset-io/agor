@@ -8,7 +8,6 @@ is the source of truth; the user-facing guide is
 
 ```yaml
 execution:
-  branch_rbac: true
   unix_user_mode: sandbox # simple | sandbox | delegated
 ```
 
@@ -24,7 +23,7 @@ sudo to launch executors.
 
 ## Capability policy model
 
-When `execution.branch_rbac` is enabled, normalized capability-policy tables
+Board and branch RBAC is always enabled. Normalized capability-policy tables
 are the only authorization source. The historical owner/grant rows and
 `others_can` fields remain empty, fail-closed compatibility shells; runtime
 code does not read or write them.
@@ -134,11 +133,36 @@ same normalized policies through `CapabilityPolicyRepository`:
 - `resolveBranchAccess(branchId, userId)`
 - `resolveSessionPromptAuthority({ branch_id, caller_user_id, session_owner_user_id, session_sdk_home_scope })`
 
+For capability-specific SQL, `boardCapabilityCondition` and
+`branchCapabilityCondition` are typed row predicates (their resource table must
+be in the outer query). Existing visibility/admission wrappers delegate to them.
+Their role allow-lists derive from the canonical
+`capabilityPolicyPresetCapabilities` expansion, via its inverse
+`capabilityPolicyPresetsGrantingCapability`; do not add independent SQL role maps.
+Terminal still requires actual filesystem access, possibly contributed by a
+different active group. SQL and rich point resolution retain different execution
+models; the cross-dialect `branch-access` parity matrix checks every capability,
+role and valid filesystem dimension, including precedence and revocation.
+These predicates do not replace the richer foreign-session prompt check above.
+
 `BranchRepository.resolveUserAccess` is the compatibility projection used by
 existing hooks; it is backed exclusively by the normalized resolver. SQL list
 queries mirror direct-user shadowing, additive active groups, and unmatched
-`Others`. PostgreSQL RLS and tenant-qualified foreign keys remain an additional
+`Others`. For many child rows referring to branches, `inVisibleBranchSet` composes
+that predicate into a statement-local branch-ID set, with optional intersecting
+branch/branch-set/board scopes. Session inventory uses it to avoid evaluating
+policy per Session. Use `visibleBranchReferenceAccessExists` for selective
+exact-branch references or outer-user audience enumeration; use the rich point
+resolver when effective capabilities or principal existence must be resolved.
+The inventory primitives require an already authenticated, existing same-tenant
+principal; none implements tenant-admin bypass or replaces trusted tenant scope.
+PostgreSQL RLS and tenant-qualified foreign keys remain an additional
 boundary, not a substitute for application authorization.
+Message/task inventories already reuse `visibleSessionReferenceAccessExists`:
+its INNER JOIN permits branch-first filtering for broad queries and a selective
+parent lookup for exact IDs. Their isolated PostgreSQL plan tests cover both
+shapes at multiple session/child ratios. Do not mechanically replace this with
+a fenced global inventory merely because both helpers answer visibility.
 
 Realtime delivery materializes the exact current set of viewers with that same
 SQL predicate. A permissive `Others` role is never represented as a tenant-wide

@@ -25,7 +25,7 @@ import {
   getCurrentTenantId,
   runWithTenantContext,
 } from '@agor/core/db';
-import { type Branch, type HookContext, TaskStatus } from '@agor/core/types';
+import { type Branch, type HookContext, type Task, TaskStatus } from '@agor/core/types';
 import { describe, expect, it, vi } from 'vitest';
 
 import {
@@ -53,6 +53,7 @@ import {
   validateBranchEnvPolicyHook,
 } from './register-hooks';
 import { canReceiveMcpTokenForSession } from './utils/mcp-token-authorization';
+import { resolvePromptOrigin } from './utils/prompt-origin';
 
 const makeSession = (sessionId: string): import('@agor/core/types').Session =>
   ({
@@ -204,7 +205,7 @@ describe('registered primary-teammate invalidation lifecycle', () => {
         config: {
           database: { dialect: 'sqlite' },
           multi_tenancy: { mode: 'static', static_tenant_id: 'registration-test' },
-          execution: { branch_rbac: false },
+          execution: {},
         } as RegisterHooksContext['config'],
         jwtSecret: 'registration-test-secret',
         requireAuth: async (context) => context,
@@ -228,7 +229,7 @@ describe('registered primary-teammate invalidation lifecycle', () => {
         params: {
           tenant: { tenant_id: 'registration-test', source: 'static' },
           provider: 'socketio',
-          user: { user_id: 'member-1', role: 'member' },
+          user: { user_id: 'member-1', role: 'admin' },
         },
         result: board,
         arguments: [firstArgument],
@@ -327,7 +328,11 @@ describe('protectExternalTaskCreate', () => {
       session_id: 'session-1',
       full_prompt: 'hello',
       status: TaskStatus.CREATED,
+      metadata: { source: 'agor' },
     });
+    expect(
+      resolvePromptOrigin(hook.data as Pick<Task, 'metadata'>, { custom_context: undefined })
+    ).toEqual({ kind: 'human' });
   });
 
   it.each(['running', 'queued', 'completed'])('rejects externally forged status %s', (status) => {
@@ -616,7 +621,7 @@ describe('tenant-owned service registration', () => {
       config: {
         database: { dialect: 'postgresql' },
         multi_tenancy: { mode: 'static', static_tenant_id: 'registration-test' },
-        execution: { branch_rbac: false },
+        execution: {},
       } as RegisterHooksContext['config'],
       jwtSecret: 'registration-test-secret',
       requireAuth: async (context) => context,
@@ -624,7 +629,15 @@ describe('tenant-owned service registration', () => {
       sessionsService: {} as RegisterHooksContext['sessionsService'],
       messagesService: {} as RegisterHooksContext['messagesService'],
       boardsService: undefined,
-      branchRepository: {} as RegisterHooksContext['branchRepository'],
+      branchRepository: {
+        findById: vi.fn(async (branchId: string) => ({
+          branch_id: branchId,
+          created_by: 'registration-test-user',
+          primary_owner_user_id: 'registration-test-user',
+        })),
+        isOwner: vi.fn(async () => true),
+        resolveUserPermission: vi.fn(async () => 'all'),
+      } as unknown as RegisterHooksContext['branchRepository'],
       usersRepository: {} as RegisterHooksContext['usersRepository'],
       sessionsRepository: {} as RegisterHooksContext['sessionsRepository'],
       deployment: { mode: 'standalone' },
@@ -703,11 +716,12 @@ describe('tenant-owned service registration', () => {
     );
   });
 
-  it('fails closed for discovery that can enter the process-local MCP OAuth flow in HA', () => {
-    expect(CONSTRAINED_HA_PROCESS_AFFINE_SERVICE_GATES).toContainEqual([
-      'mcp-servers/discover',
-      'mcpOAuth',
-    ]);
+  it('admits durable MCP OAuth endpoints in the constrained HA profile', () => {
+    expect(
+      CONSTRAINED_HA_PROCESS_AFFINE_SERVICE_GATES.some(([, feature]) =>
+        String(feature).includes('mcpOAuth')
+      )
+    ).toBe(false);
   });
 
   // These remain in the capability-gate inventory, but a safe constrained-HA
@@ -769,7 +783,7 @@ describe('registered RBAC authentication boundary', () => {
       config: {
         database: { dialect: 'postgresql' },
         multi_tenancy: { mode: 'static', static_tenant_id: 'rbac-auth-test' },
-        execution: { branch_rbac: true },
+        execution: {},
       } as RegisterHooksContext['config'],
       jwtSecret: 'rbac-auth-test-secret',
       requireAuth,
@@ -787,6 +801,9 @@ describe('registered RBAC authentication boundary', () => {
   };
 
   it('keeps every authenticated RBAC service inside tenant database scope', () => {
+    // Pin the board projection explicitly: iterating the registry alone cannot
+    // detect a service accidentally omitted from that registry.
+    expect(AUTHENTICATED_RBAC_SERVICE_PATHS).toContain('boards/:id/effective-access');
     expect(TENANT_OWNED_SERVICE_PATHS).toEqual(
       expect.arrayContaining([...AUTHENTICATED_RBAC_SERVICE_PATHS])
     );
@@ -865,7 +882,7 @@ describe('registered tenant write-gate classification', () => {
       config: {
         database: { dialect: 'postgresql' },
         multi_tenancy: { mode: 'static', static_tenant_id: 'registration-test' },
-        execution: { branch_rbac: false },
+        execution: {},
       } as RegisterHooksContext['config'],
       jwtSecret: 'registration-test-secret',
       requireAuth: async (context) => context,
@@ -935,7 +952,7 @@ describe('registered external board-comment mutation boundary', () => {
       config: {
         database: { dialect: 'sqlite' },
         multi_tenancy: { mode: 'static', static_tenant_id: 'registration-test' },
-        execution: { branch_rbac: false },
+        execution: {},
       } as RegisterHooksContext['config'],
       jwtSecret: 'registration-test-secret',
       requireAuth: async (context) => context,
@@ -959,7 +976,7 @@ describe('registered external board-comment mutation boundary', () => {
       data,
       params: {
         provider: 'socketio',
-        user: { user_id: 'member-1', role: 'member' },
+        user: { user_id: 'member-1', role: 'admin' },
       },
     } as HookContext;
     for (const registration of captureBoardCommentHooks()) {
@@ -1019,7 +1036,7 @@ describe('registered board admin authority', () => {
       config: {
         database: { dialect: 'sqlite' },
         multi_tenancy: { mode: 'static', static_tenant_id: 'registration-test' },
-        execution: { branch_rbac: true },
+        execution: {},
       } as RegisterHooksContext['config'],
       jwtSecret: 'registration-test-secret',
       requireAuth: async (context) => context,
@@ -1331,11 +1348,6 @@ describe('isPromptFlowPatchOnly', () => {
       expect(isPromptFlowPatchOnly({ tasks: ['task-1', 'task-2'] })).toBe(true);
     });
 
-    it('accepts the prompt-route auto-unarchive shape', () => {
-      // register-routes.ts: /sessions/:id/prompt auto-unarchives before sending
-      expect(isPromptFlowPatchOnly({ archived: false, archived_reason: undefined })).toBe(true);
-    });
-
     it('accepts the stop-route idle shape', () => {
       // register-routes.ts: /sessions/:id/stop sets status + ready_for_prompt
       // (ready_for_prompt: true so the post-patch hook drains any QUEUED tasks)
@@ -1349,6 +1361,10 @@ describe('isPromptFlowPatchOnly', () => {
   });
 
   describe('rejects mixed or metadata patches', () => {
+    it('rejects archive state so callers use the dedicated lifecycle operation', () => {
+      expect(isPromptFlowPatchOnly({ archived: false, archived_reason: undefined })).toBe(false);
+    });
+
     it('rejects a patch that mixes whitelist + metadata field', () => {
       // Prevents partial-trust escalation: if `tasks` is allowed at session-tier,
       // a caller must NOT be able to piggyback `name` (metadata) onto the same patch.
@@ -1465,10 +1481,13 @@ describe('canReceiveMcpTokenForSession', () => {
 });
 
 describe('TENANT_IDENTITY_ONLY_SERVICE_PATHS', () => {
-  it.each(['file', 'files'])('%s is identity-only and never request-transaction owned', (path) => {
-    expect(TENANT_IDENTITY_ONLY_SERVICE_PATHS).toContain(path);
-    expect(TENANT_OWNED_SERVICE_PATHS).not.toContain(path);
-  });
+  it.each(['file', 'files', 'gateway-channels/test', 'gateway-channels/app-info'])(
+    '%s is identity-only and never request-transaction owned',
+    (path) => {
+      expect(TENANT_IDENTITY_ONLY_SERVICE_PATHS).toContain(path);
+      expect(TENANT_OWNED_SERVICE_PATHS).not.toContain(path);
+    }
+  );
 
   // Regression: the codex-auth endpoints do network/process work after a short
   // tenant DB read, then call getCurrentTenantId() to open their own units of
@@ -1546,7 +1565,6 @@ describe('TENANT_IDENTITY_ONLY_SERVICE_PATHS', () => {
         multi_tenancy: { mode: 'static', static_tenant_id: 'registration-test' },
       } as RegisterHooksContext['config'],
       jwtSecret: 'registration-test-secret',
-      branchRbacEnabled: false,
       requireAuth: async (context) => context,
       superadminOpts: { allowSuperadmin: true },
       sessionsService: {} as RegisterHooksContext['sessionsService'],
@@ -1645,7 +1663,7 @@ describe('registered file service RBAC database preload', () => {
         config: {
           database: { dialect: 'postgresql' },
           multi_tenancy: { mode: 'static', static_tenant_id: 'tenant-a' },
-          execution: { branch_rbac: true },
+          execution: {},
         } as RegisterHooksContext['config'],
         jwtSecret: 'registration-test-secret',
         requireAuth: async (context) => context,

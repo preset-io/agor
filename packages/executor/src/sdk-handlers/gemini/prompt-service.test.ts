@@ -64,6 +64,35 @@ describe('GeminiPromptService', () => {
     vi.clearAllMocks();
   });
 
+  it('sends fresh execution identity after inherited text on every turn', async () => {
+    vi.mocked(mockSessionsRepo.findById).mockResolvedValue({
+      created_by: 'session-owner',
+      sdk_session_id: 'provider-thread-A',
+    } as never);
+    const sendMessageStream = vi.fn(async function* () {});
+    (
+      service as unknown as {
+        getOrCreateClient: () => Promise<{ sendMessageStream: typeof sendMessageStream }>;
+      }
+    ).getOrCreateClient = vi.fn().mockResolvedValue({ sendMessageStream });
+    for (const id of ['fork-B', 'fork-B', 'nested-C']) {
+      for await (const _event of service.promptSessionStreaming(
+        id as SessionID,
+        'Inherited ID: A'
+      )) {
+        // Consume the provider turn.
+      }
+      expect(sendMessageStream).toHaveBeenLastCalledWith(
+        [
+          { text: 'Inherited ID: A' },
+          { text: expect.stringContaining(`Current Agor session ID: ${id}`) },
+        ],
+        expect.any(AbortSignal),
+        expect.any(String)
+      );
+    }
+  });
+
   describe('Constructor', () => {
     it('should initialize with all dependencies', () => {
       expect(service).toBeInstanceOf(GeminiPromptService);

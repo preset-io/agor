@@ -173,7 +173,7 @@ describe('resolveSessionDefaults', () => {
       const r = resolveSessionDefaults({ agenticTool: 'codex', now });
       expect(r.model_config).toMatchObject({
         mode: 'alias',
-        model: 'gpt-5.6-sol',
+        model: 'gpt-6-astra',
       });
       expect(r.model_config).not.toHaveProperty('effort');
     });
@@ -185,7 +185,7 @@ describe('resolveSessionDefaults', () => {
         now,
       });
       expect(r.model_config).toMatchObject({
-        model: 'gpt-5.6-sol',
+        model: 'gpt-6-astra',
         effort: 'xhigh',
       });
     });
