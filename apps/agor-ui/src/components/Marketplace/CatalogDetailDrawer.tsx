@@ -9,14 +9,14 @@
 import type {
   AgenticToolName,
   Branch,
+  BranchID,
   MCPCatalogCredentialRequirement,
   MCPCatalogEntry,
   MCPCatalogReadiness,
-  SessionID,
 } from '@agor/core/types';
+import { getTeammateConfig } from '@agor-live/client';
 import {
-  ArrowRightOutlined,
-  RightOutlined,
+  CheckCircleFilled,
   SafetyCertificateOutlined,
   ThunderboltOutlined,
 } from '@ant-design/icons';
@@ -25,7 +25,6 @@ import {
   Button,
   Checkbox,
   Descriptions,
-  Drawer,
   Flex,
   Form,
   Input,
@@ -43,6 +42,8 @@ import {
   explainAddRestriction,
   type MCPServerCapabilityContext,
 } from '../MCPServer/memberPolicy';
+import { CatalogDetailSection } from './CatalogDetailSection';
+import { CatalogDrawer } from './CatalogDrawer';
 import { CatalogEntryAvatar } from './CatalogEntryAvatar';
 import {
   capabilityLabel,
@@ -50,7 +51,6 @@ import {
   connectStatus,
   entryTitle,
 } from './catalogPresentation';
-import { MARKETPLACE_CATALOG_DRAWER_WIDTH } from './marketplaceLayout';
 import { type MarketplaceOAuthPopup, openMarketplaceOAuthPopup } from './marketplaceOAuthPopup';
 
 const { Title, Paragraph, Text, Link } = Typography;
@@ -65,66 +65,23 @@ const AGENT_OPTIONS = AVAILABLE_AGENTS.map((agent) => ({
 const FALLBACK_DISCLOSURE =
   'This server has published no access statement. Anything it exposes becomes available to the agent in the session you connect it to.';
 
-const CatalogDetailSection: React.FC<{
-  label: ReactNode;
-  defaultOpen?: boolean;
-  children: ReactNode;
-}> = ({ label, defaultOpen = false, children }) => {
-  const { token } = theme.useToken();
-  const contentId = useId();
-  const [open, setOpen] = useState(defaultOpen);
-
-  return (
-    <div
-      style={{
-        borderWidth: token.lineWidth,
-        borderStyle: 'solid',
-        borderColor: token.colorBorder,
-        borderRadius: token.borderRadiusLG,
-        overflow: 'hidden',
-      }}
-    >
-      <Button
-        type="text"
-        block
-        aria-expanded={open}
-        aria-controls={contentId}
-        onClick={() => setOpen((current) => !current)}
-        style={{ height: 'auto', justifyContent: 'flex-start', padding: token.paddingSM }}
-      >
-        <RightOutlined rotate={open ? 90 : 0} />
-        {label}
-      </Button>
-      {open && (
-        <div
-          id={contentId}
-          style={{
-            borderTopWidth: token.lineWidth,
-            borderTopStyle: 'solid',
-            borderTopColor: token.colorBorderSecondary,
-            padding: token.padding,
-          }}
-        >
-          {children}
-        </div>
-      )}
-    </div>
-  );
-};
-
 export interface CatalogDetailDrawerProps {
   /** Authenticated identity that owns consent, selections, and pasted credentials. */
   identityKey: string | null;
   entry: MCPCatalogEntry | null;
   open: boolean;
+  /** In-place loading/error content before an entry resolves; the drawer stays mounted. */
+  emptyContent?: ReactNode;
   onClose: () => void;
   /** Restore focus to the catalog trigger after the drawer has actually closed. */
   onAfterOpenChange?: (open: boolean) => void;
-  branches: Branch[];
-  branchesLoading: boolean;
-  branchesError: string | null;
-  defaultBranchId: string | null;
+  teammates: Branch[];
+  teammatesLoading: boolean;
+  teammatesError: string | null;
+  defaultTeammateId: BranchID | null;
   connecting: boolean;
+  startingSession: boolean;
+  startSessionError: string | null;
   connectError: string | null;
   /**
    * What the live endpoint said it wanted, if a previous connect was refused
@@ -151,13 +108,15 @@ export interface CatalogDetailDrawerProps {
   readinessLoading?: boolean;
   readinessError?: string | null;
   success?: {
-    sessionId: SessionID;
-    sessionTitle?: string;
-    branchName?: string;
+    catalogKey: string;
+    serverId: string;
+    starterPrompt?: string;
     authentication: 'ready' | 'action_required' | 'pending' | 'failed' | 'unknown';
     reusedExistingServer: boolean;
   } | null;
-  onOpenSession?: (sessionId: SessionID) => void;
+  onKeepBrowsing?: () => void;
+  onBeginSessionSetup?: () => void;
+  onStartSession?: (input: { teammateBranchId: BranchID; agenticTool: AgenticToolName }) => void;
   /** Continue surprise OAuth from a fresh direct user gesture. */
   onContinueOAuth?: (popup: MarketplaceOAuthPopup) => void;
   /**
@@ -170,8 +129,6 @@ export interface CatalogDetailDrawerProps {
    * is the catalog's, resolved on the daemon from `catalog_key`.
    */
   onConnect: (input: {
-    branchId: string;
-    agenticTool: AgenticToolName;
     acknowledgedDisclosure: string;
     bearerToken?: string;
     oauthPopup?: MarketplaceOAuthPopup;
@@ -183,12 +140,15 @@ const CatalogDetailDrawerForIdentity: React.FC<CatalogDetailDrawerProps> = ({
   entry,
   open,
   onClose,
+  emptyContent,
   onAfterOpenChange,
-  branches,
-  branchesLoading,
-  branchesError,
-  defaultBranchId,
+  teammates,
+  teammatesLoading,
+  teammatesError,
+  defaultTeammateId,
   connecting,
+  startingSession,
+  startSessionError,
   connectError,
   credentialRequirement,
   connectCapability,
@@ -198,35 +158,41 @@ const CatalogDetailDrawerForIdentity: React.FC<CatalogDetailDrawerProps> = ({
   readinessLoading = false,
   readinessError = null,
   success = null,
-  onOpenSession,
+  onKeepBrowsing,
+  onBeginSessionSetup,
+  onStartSession,
   onContinueOAuth,
   onConnect,
 }) => {
   const { token } = theme.useToken();
   const titleId = useId();
   const successActionRef = useRef<HTMLButtonElement | null>(null);
-  const [branchId, setBranchId] = useState<string | undefined>();
+  const [teammateId, setTeammateId] = useState<BranchID | undefined>();
   const [agenticTool, setAgenticTool] = useState<AgenticToolName>(DEFAULT_AGENT);
+  const [showSessionSetup, setShowSessionSetup] = useState(false);
 
   const entryId = entry?.name;
 
-  const branchOptions = useMemo(
+  const teammateOptions = useMemo(
     () =>
-      branches.map((branch) => ({
-        label: branch.name as string,
-        value: branch.branch_id as string,
+      teammates.map((teammate) => ({
+        label: getTeammateConfig(teammate)?.displayName ?? teammate.name,
+        value: teammate.branch_id,
       })),
-    [branches]
+    [teammates]
   );
 
   useEffect(() => {
-    if (branchId && branchOptions.some((option) => option.value === branchId)) return;
+    if (teammateId && teammateOptions.some((option) => option.value === teammateId)) return;
     const preferred =
-      defaultBranchId && branchOptions.some((option) => option.value === defaultBranchId)
-        ? defaultBranchId
-        : branchOptions[0]?.value;
-    setBranchId(preferred);
-  }, [branchOptions, defaultBranchId, branchId]);
+      defaultTeammateId && teammateOptions.some((option) => option.value === defaultTeammateId)
+        ? (defaultTeammateId as BranchID)
+        : teammateOptions[0]?.value;
+    setTeammateId(preferred);
+  }, [teammateOptions, defaultTeammateId, teammateId]);
+
+  // biome-ignore lint/correctness/useExhaustiveDependencies: switching entry/install resets staged setup
+  useEffect(() => setShowSessionSetup(false), [entryId, success?.serverId]);
 
   useEffect(() => {
     if (!open || !success) return;
@@ -254,7 +220,7 @@ const CatalogDetailDrawerForIdentity: React.FC<CatalogDetailDrawerProps> = ({
         return {
           readiness: 'api-key' as const,
           label: `Use your ${credentialName}`,
-          detail: `Verify the ${credentialName} from your own account before a session is created.`,
+          detail: `Verify the ${credentialName} from your own account before the server is added.`,
         };
       }
       case 'oauth_required':
@@ -375,35 +341,24 @@ const CatalogDetailDrawerForIdentity: React.FC<CatalogDetailDrawerProps> = ({
       ? undefined
       : explainAddRestriction(connectCapability);
   const canConnect = Boolean(
-    !blockedReason &&
-      !policyRefusal &&
-      acknowledged &&
-      branchId &&
-      !connecting &&
-      (!needsApiKey || bearerToken)
+    !blockedReason && !policyRefusal && acknowledged && !connecting && (!needsApiKey || bearerToken)
   );
   const connectDisabledReason = connecting
     ? 'Connection in progress.'
     : !acknowledged
       ? 'Review the access disclosure and acknowledge it to continue.'
-      : branchesLoading
-        ? 'Loading branches…'
-        : !branchId
-          ? 'Choose an available branch to continue.'
-          : needsApiKey && !bearerToken
-            ? `Enter your ${title} bearer access token to continue.`
-            : undefined;
+      : needsApiKey && !bearerToken
+        ? `Enter your ${title} bearer access token to continue.`
+        : undefined;
 
   return (
-    <Drawer
+    <CatalogDrawer
       aria-labelledby={titleId}
       open={open}
       onClose={onClose}
       afterOpenChange={onAfterOpenChange}
-      size={MARKETPLACE_CATALOG_DRAWER_WIDTH}
-      destroyOnHidden
       title={
-        entry && (
+        entry ? (
           <Space id={titleId} align="center" size={token.marginSM}>
             <CatalogEntryAvatar iconUrl={entry.icon_url} title={title} />
             <Flex vertical style={{ minWidth: 0 }}>
@@ -415,11 +370,13 @@ const CatalogDetailDrawerForIdentity: React.FC<CatalogDetailDrawerProps> = ({
               </Text>
             </Flex>
           </Space>
+        ) : (
+          <span id={titleId}>Catalog</span>
         )
       }
     >
-      {entry && (
-        <Flex vertical gap={token.margin}>
+      {entry ? (
+        <>
           <span role="status" aria-live="polite" aria-atomic="true" style={VISUALLY_HIDDEN_STYLE}>
             {success?.authentication === 'ready'
               ? 'Connection status: Connected and ready.'
@@ -468,92 +425,127 @@ const CatalogDetailDrawerForIdentity: React.FC<CatalogDetailDrawerProps> = ({
           )}
 
           {success ? (
-            <Flex vertical gap={token.marginSM}>
-              <Alert
-                type={
-                  success.authentication === 'ready'
-                    ? 'success'
-                    : success.authentication === 'action_required'
-                      ? 'info'
-                      : success.authentication === 'failed'
-                        ? 'error'
-                        : success.authentication === 'unknown'
-                          ? 'warning'
-                          : 'info'
-                }
-                showIcon
-                title={
-                  success.authentication === 'ready'
-                    ? 'Connected and ready'
-                    : success.authentication === 'action_required'
-                      ? 'Sign in to continue'
-                      : success.authentication === 'failed'
-                        ? 'Sign-in not completed'
-                        : success.authentication === 'unknown'
-                          ? 'Sign-in needs verification'
-                          : 'Sign-in pending'
-                }
-                description={
-                  success.authentication === 'ready'
-                    ? `${title} is attached to ${success.sessionTitle || 'your new session'}${success.branchName ? ` on ${success.branchName}` : ''}.`
-                    : success.authentication === 'action_required'
-                      ? `${title} requires OAuth. Continue to open the provider sign-in; no sign-in is pending yet.`
-                      : success.authentication === 'failed'
-                        ? `The session is available, but ${title} is not connected. Open it to retry through the MCP badge.`
-                        : success.authentication === 'unknown'
-                          ? `Agor could not verify the final ${title} sign-in result. Open the session to check or retry through the MCP badge.`
-                          : `Complete ${title} sign-in in the provider window. Agor will show success only after the saved grant is confirmed.`
-                }
-                action={
-                  success.authentication === 'action_required' ? (
-                    <Flex gap={token.marginXS} wrap>
-                      <Button
-                        ref={successActionRef}
-                        type="primary"
-                        loading={connecting}
-                        disabled={!onContinueOAuth}
-                        onClick={() => {
-                          if (!onContinueOAuth) return;
-                          const opened = openMarketplaceOAuthPopup();
-                          if (!opened) {
-                            setPopupBlocked(true);
-                            return;
-                          }
-                          setPopupBlocked(false);
-                          onContinueOAuth(opened);
-                        }}
-                      >
-                        Continue to provider
-                      </Button>
-                      <Button
-                        type="link"
-                        aria-label="Open session"
-                        icon={<ArrowRightOutlined />}
-                        onClick={() => onOpenSession?.(success.sessionId)}
-                      >
-                        Open session
-                      </Button>
-                    </Flex>
-                  ) : (
-                    <Button
-                      ref={successActionRef}
-                      type="primary"
-                      aria-label="Open session"
-                      icon={<ArrowRightOutlined />}
-                      onClick={() => onOpenSession?.(success.sessionId)}
-                    >
-                      Open session
-                    </Button>
-                  )
-                }
+            <Flex
+              vertical
+              align="center"
+              gap={token.marginSM}
+              style={{
+                padding: `${token.paddingLG}px ${token.padding}px`,
+                borderRadius: token.borderRadiusLG,
+                background: token.colorFillQuaternary,
+                textAlign: 'center',
+              }}
+            >
+              <CheckCircleFilled
+                aria-hidden
+                style={{ color: token.colorSuccess, fontSize: token.fontSizeHeading2 }}
               />
+              <div>
+                <Title level={4} style={{ margin: 0 }}>
+                  Added to My Servers
+                </Title>
+                <Paragraph type="secondary" style={{ margin: `${token.marginXXS}px 0 0` }}>
+                  {success.authentication === 'ready'
+                    ? `${title} is ready. Start a session now or keep browsing the MCP Catalog.`
+                    : success.authentication === 'action_required'
+                      ? `${title} was added. Continue sign-in now, or start a session and finish connecting later.`
+                      : success.authentication === 'pending'
+                        ? `${title} was added. Finish sign-in in the provider window while you choose what to do next.`
+                        : success.authentication === 'failed'
+                          ? `${title} was added, but sign-in did not finish. You can retry from My Servers.`
+                          : `${title} was added. Agor could not verify the final sign-in result; check My Servers when ready.`}
+                </Paragraph>
+              </div>
+
+              {success.authentication === 'action_required' && (
+                <Button
+                  loading={connecting}
+                  disabled={!onContinueOAuth}
+                  onClick={() => {
+                    if (!onContinueOAuth) return;
+                    const opened = openMarketplaceOAuthPopup();
+                    if (!opened) {
+                      setPopupBlocked(true);
+                      return;
+                    }
+                    setPopupBlocked(false);
+                    onContinueOAuth(opened);
+                  }}
+                >
+                  Continue sign-in
+                </Button>
+              )}
+
               {success.reusedExistingServer && (
-                <Alert
-                  type="info"
-                  showIcon
-                  title="Your existing connection was reused"
-                  description="No duplicate server was installed; the new session uses the connection you already had."
-                />
+                <Text type="secondary" style={{ fontSize: token.fontSizeSM }}>
+                  Your existing connection was reused; no duplicate server was added.
+                </Text>
+              )}
+
+              {showSessionSetup ? (
+                <Flex vertical gap={token.marginSM} style={{ width: '100%', textAlign: 'start' }}>
+                  <Form layout="vertical" component="div">
+                    <Form.Item label="Teammate" style={{ marginBottom: token.marginSM }}>
+                      <Select<BranchID>
+                        aria-label="Teammate"
+                        showSearch
+                        optionFilterProp="label"
+                        loading={teammatesLoading}
+                        value={teammateId}
+                        onChange={setTeammateId}
+                        options={teammateOptions}
+                        placeholder={teammatesLoading ? 'Loading teammates…' : 'Select a teammate'}
+                        notFoundContent={
+                          teammatesLoading ? 'Loading teammates…' : 'No eligible teammates'
+                        }
+                      />
+                    </Form.Item>
+                    <Form.Item label="Agent tool" style={{ marginBottom: 0 }}>
+                      <Select<AgenticToolName>
+                        aria-label="Agent tool"
+                        value={agenticTool}
+                        onChange={setAgenticTool}
+                        options={AGENT_OPTIONS}
+                      />
+                    </Form.Item>
+                  </Form>
+                  {teammatesError && <Alert type="error" showIcon title={teammatesError} />}
+                  {startSessionError && <Alert type="error" showIcon title={startSessionError} />}
+                  {!teammatesLoading && !teammatesError && teammates.length === 0 && (
+                    <Text type="secondary">No active teammate is available for a new session.</Text>
+                  )}
+                  <Flex gap={token.marginXS} wrap justify="center">
+                    <Button onClick={() => setShowSessionSetup(false)}>Back</Button>
+                    <Button
+                      type="primary"
+                      icon={<ThunderboltOutlined aria-hidden />}
+                      loading={startingSession}
+                      disabled={!teammateId || teammatesLoading || Boolean(teammatesError)}
+                      onClick={() =>
+                        teammateId &&
+                        onStartSession?.({ teammateBranchId: teammateId, agenticTool })
+                      }
+                    >
+                      Start session
+                    </Button>
+                  </Flex>
+                </Flex>
+              ) : (
+                <Flex gap={token.marginXS} wrap justify="center">
+                  <Button type="text" onClick={onKeepBrowsing}>
+                    Keep browsing
+                  </Button>
+                  <Button
+                    ref={successActionRef}
+                    type="primary"
+                    onClick={() => {
+                      onBeginSessionSetup?.();
+                      setShowSessionSetup(true);
+                    }}
+                  >
+                    Start new session
+                  </Button>
+                </Flex>
               )}
             </Flex>
           ) : runtimeStatus && runtimeStatus.readiness !== 'blocked' ? (
@@ -591,7 +583,7 @@ const CatalogDetailDrawerForIdentity: React.FC<CatalogDetailDrawerProps> = ({
               defaultOpen
               label={
                 <Space size={token.marginXS}>
-                  <SafetyCertificateOutlined />
+                  <SafetyCertificateOutlined aria-hidden />
                   <Text strong>What this can access</Text>
                 </Space>
               }
@@ -651,27 +643,8 @@ const CatalogDetailDrawerForIdentity: React.FC<CatalogDetailDrawerProps> = ({
             <Alert type="info" showIcon title={blockedReason} />
           ) : (
             <Flex vertical gap={token.marginXS}>
-              <Form layout="vertical" size="middle" component="div">
-                <Form.Item label="Branch" style={{ marginBottom: token.marginXS }}>
-                  <Select
-                    showSearch
-                    optionFilterProp="label"
-                    loading={branchesLoading}
-                    value={branchId}
-                    onChange={setBranchId}
-                    options={branchOptions}
-                    placeholder={branchesLoading ? 'Loading branches…' : 'Select a branch'}
-                    notFoundContent={branchesLoading ? 'Loading branches…' : 'No branches yet'}
-                  />
-                </Form.Item>
-                <Form.Item label="Agent" style={{ marginBottom: needsApiKey ? token.marginXS : 0 }}>
-                  <Select<AgenticToolName>
-                    value={agenticTool}
-                    onChange={setAgenticTool}
-                    options={AGENT_OPTIONS}
-                  />
-                </Form.Item>
-                {needsApiKey && (
+              {needsApiKey && (
+                <Form layout="vertical" size="middle" component="div">
                   <Form.Item
                     label={entry.credentials?.label ?? 'Bearer access token'}
                     required
@@ -718,21 +691,20 @@ const CatalogDetailDrawerForIdentity: React.FC<CatalogDetailDrawerProps> = ({
                       spellCheck={false}
                     />
                   </Form.Item>
-                )}
-              </Form>
+                </Form>
+              )}
 
-              {branchesError && <Alert type="error" showIcon title={branchesError} />}
               {connectError && <Alert type="error" showIcon title={connectError} />}
               {policyRefusal && <Alert type="info" showIcon title={policyRefusal} />}
 
               <Button
                 type="primary"
                 block
-                icon={<ThunderboltOutlined />}
+                icon={<ThunderboltOutlined aria-hidden />}
+                aria-label="Connect"
                 loading={connecting}
                 disabled={!canConnect}
                 onClick={() => {
-                  if (!branchId) return;
                   let oauthPopup: MarketplaceOAuthPopup | undefined;
                   const hasLiveCredentialRequirement = credentialRequirement != null;
                   const needsOAuthWindow =
@@ -754,8 +726,6 @@ const CatalogDetailDrawerForIdentity: React.FC<CatalogDetailDrawerProps> = ({
                   }
                   setPopupBlocked(false);
                   onConnect({
-                    branchId,
-                    agenticTool,
                     acknowledgedDisclosure: disclosure,
                     // Only for an entry that asks. Sending a key to an endpoint
                     // that never wanted one is refused by the daemon, and the
@@ -765,17 +735,7 @@ const CatalogDetailDrawerForIdentity: React.FC<CatalogDetailDrawerProps> = ({
                   });
                 }}
               >
-                {runtimeStatus?.readiness === 'sign-in'
-                  ? `Connect with ${title}`
-                  : runtimeStatus?.readiness === 'api-key'
-                    ? 'Verify key & connect'
-                    : credentialRequirement == null &&
-                        (readiness?.state === 'installed_ready' ||
-                          readiness?.state === 'reusable_oauth')
-                      ? 'Use in a new session'
-                      : runtimeStatus?.readiness === 'unchecked'
-                        ? 'Check & connect'
-                        : 'Connect & try it'}
+                Connect
               </Button>
               <Text
                 type="secondary"
@@ -785,22 +745,24 @@ const CatalogDetailDrawerForIdentity: React.FC<CatalogDetailDrawerProps> = ({
               >
                 {connectDisabledReason ??
                   (runtimeStatus?.readiness === 'sign-in'
-                    ? `Opens ${title}'s sign-in popup and a recoverable new session; its starter prompt appears after sign-in succeeds.`
+                    ? `Adds ${title} to My Servers and opens its sign-in popup.`
                     : runtimeStatus?.readiness === 'unchecked'
-                      ? `Checks ${title}'s live authentication requirement before opening a session.`
-                      : `Opens a new session on that branch with ${title} attached and a starter prompt ready to send.`)}
+                      ? `Checks ${title}'s live authentication requirement before adding it.`
+                      : `Adds ${title} to My Servers. No session is created yet.`)}
               </Text>
             </Flex>
           )}
-        </Flex>
+        </>
+      ) : (
+        emptyContent
       )}
-    </Drawer>
+    </CatalogDrawer>
   );
 };
 
 /**
- * Consent, branch/agent selections, and bearer credentials are caller-entered
- * authority. A keyed state owner destroys all of them during the A -> B render,
+ * Consent and bearer credentials are caller-entered authority. A keyed state
+ * owner destroys both during the A -> B render,
  * including the same-role/same-entry case that entry-keying alone cannot see.
  * Connection/auth-generation churn for one identity deliberately keeps them.
  */

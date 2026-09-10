@@ -250,21 +250,27 @@ it.each([
       ...makeGatewaySessions(gatewayCount),
     ]);
     const scrollers = () => [...container.querySelectorAll<HTMLElement>('.ant-tree-list-holder')];
-    await waitFor(() => {
-      expect(scrollers()).toHaveLength(2);
-      for (const [index, count] of [manualCount, gatewayCount].entries()) {
-        const tree = scrollers()[index];
-        if (count <= 2) {
-          const section = tree.closest('.ant-collapse')!;
-          // Only the Collapse body padding may follow the rendered short tree.
-          expect(
-            section.getBoundingClientRect().bottom - tree.getBoundingClientRect().bottom
-          ).toBeLessThan(20);
-        } else {
-          expect(tree.clientHeight).toBeGreaterThan(500);
+    // Initial allocation also waits for Collapse motion and ResizeObserver
+    // redistribution. Use the same bounded convergence window as live growth
+    // below; an intermediate equal split must not satisfy the geometry checks.
+    await waitFor(
+      () => {
+        expect(scrollers()).toHaveLength(2);
+        for (const [index, count] of [manualCount, gatewayCount].entries()) {
+          const tree = scrollers()[index];
+          if (count <= 2) {
+            const section = tree.closest('.ant-collapse')!;
+            // Only the Collapse body padding may follow the rendered short tree.
+            expect(
+              section.getBoundingClientRect().bottom - tree.getBoundingClientRect().bottom
+            ).toBeLessThan(20);
+          } else {
+            expect(tree.clientHeight).toBeGreaterThan(500);
+          }
         }
-      }
-    });
+      },
+      { timeout: 5_000 }
+    );
     // Realtime growth must remove the short-tree cap; later shrink must restore it.
     await act(async () => {
       agorStore.setState({

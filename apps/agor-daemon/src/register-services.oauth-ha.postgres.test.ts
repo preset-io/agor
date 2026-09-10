@@ -33,6 +33,18 @@ const oauthFixture = vi.hoisted(() => ({
   beforeGrantLock: undefined as undefined | (() => Promise<void>),
 }));
 
+// These tests stop before MCP transport. Avoid loading the SDK's published
+// TypeScript parser in Node's test loader; constructing either client is a bug.
+const unexpectedMcpTransport = vi.hoisted(() =>
+  vi.fn(() => {
+    throw new Error('MCP transport must not be constructed before grant acquisition');
+  })
+);
+vi.mock('@modelcontextprotocol/sdk/client/index.js', () => ({ Client: unexpectedMcpTransport }));
+vi.mock('@modelcontextprotocol/sdk/client/streamableHttp.js', () => ({
+  StreamableHTTPClientTransport: unexpectedMcpTransport,
+}));
+
 vi.mock('@agor/core/tools/mcp/oauth-mcp-transport', async (importOriginal) => {
   const original =
     await importOriginal<typeof import('@agor/core/tools/mcp/oauth-mcp-transport')>();
@@ -305,6 +317,57 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
           (replica.raw as RawDatabase & { $client: { end: () => Promise<void> } }).$client.end()
         )
       );
+    });
+
+    it('reports saved machine-only configuration consistently across HA discovery and execution', async () => {
+      const machine = await runWithTenantDatabaseScope(replicaA.db, tenantId, (scoped) =>
+        new MCPServerRepository(scoped).create({
+          name: `machine-${crypto.randomUUID()}`,
+          display_name: 'Machine-only fixture',
+          transport: 'http',
+          url: 'https://mcp.provider.example.test/mcp',
+          scope: 'global',
+          enabled: true,
+          source: 'user',
+          owner_user_id: user.user_id,
+          auth: {
+            type: 'oauth',
+            oauth_mode: 'per_user',
+            oauth_grant_type: 'client_credentials',
+            oauth_client_id: 'synthetic-machine-client',
+            oauth_client_secret: 'synthetic-machine-secret',
+            oauth_token_url: 'https://provider.example.test/token',
+          },
+        })
+      );
+      const before = { starts: oauthFixture.starts, exchanges: oauthFixture.exchanges };
+      const discovered = await replicaA.app
+        .service('mcp-servers/discover')
+        .create({ mcp_server_id: machine.mcp_server_id }, params(user));
+      expect(discovered).toMatchObject({
+        success: false,
+        error: expect.stringContaining('No bound OAuth grant'),
+        recovery: { category: 'configuration_required', action: 'review_configuration' },
+      });
+      const headers = await replicaB.app
+        .service('mcp-servers/oauth-auth-headers')
+        .create(
+          { mcp_server_ids: [machine.mcp_server_id] },
+          { ...params(user), provider: undefined }
+        );
+      expect(headers.headers[machine.mcp_server_id]).toMatchObject({
+        error: 'client_credentials_configuration_required',
+        recovery: { action: 'review_configuration' },
+      });
+      const foreign = await replicaB.app
+        .service('mcp-servers/oauth-auth-headers')
+        .create(
+          { mcp_server_ids: [machine.mcp_server_id] },
+          { ...params(user, `${tenantId}-foreign`), provider: undefined }
+        );
+      expect(foreign.headers[machine.mcp_server_id]).toEqual({ error: 'server_not_found' });
+      expect({ starts: oauthFixture.starts, exchanges: oauthFixture.exchanges }).toEqual(before);
+      expect(unexpectedMcpTransport).not.toHaveBeenCalled();
     });
 
     it('serializes concurrent starts and completes the winner on the other replica', async () => {

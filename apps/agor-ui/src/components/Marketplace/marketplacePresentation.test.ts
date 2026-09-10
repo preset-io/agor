@@ -1,5 +1,5 @@
 import type { MCPMarketplaceCredential } from '@agor/core/types';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   formatMarketplaceDate,
   marketplaceCredentialActionLabel,
@@ -80,6 +80,36 @@ describe('Marketplace presentation vocabulary', () => {
       detail:
         'Your credential is stored securely. The remote provider verifies it when this server is used.',
     });
+  });
+
+  it('never labels an active projection Connected after its known expiry', () => {
+    const now = Date.parse('2026-09-09T12:00:00Z');
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(now);
+    try {
+      const credential: MCPMarketplaceCredential = {
+        mcp_server_id: 'server-1',
+        server_name: 'GitLab',
+        method: 'oauth',
+        status: 'active',
+        detail_status: 'active',
+        expires_at: new Date(now).toISOString(),
+      };
+      expect(marketplaceCredentialPresentation(credential)).toEqual({
+        label: 'Access expired',
+        badge: 'warning',
+        detail:
+          'Access has expired. Refresh status to check whether the saved grant can be renewed.',
+      });
+      expect(marketplaceCredentialActionLabel(credential)).toBe('Settings');
+      expect(
+        marketplaceCredentialPresentation({
+          ...credential,
+          expires_at: new Date(now + 1).toISOString(),
+        }).label
+      ).toBe('Connected');
+    } finally {
+      clock.mockRestore();
+    }
   });
 
   it('returns a safe dash for absent or invalid dates', () => {

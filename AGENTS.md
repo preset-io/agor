@@ -453,7 +453,7 @@ lives and therefore what `redactMCPAuthSecrets` already covers on read. Before
 the authenticated probe, Connect durably claims the caller's generation for
 that catalog install so an older concurrent request cannot later overwrite a
 newer key. It then tries the key against the endpoint (`probeRemoteBearerToken`)
-and writes the server/session only after acceptance, rather than installing a
+and writes the server only after acceptance, rather than installing a
 server whose every tool would fail. Reuse of a row that
 keeps a secret in its own columns is restricted to the row's owner, so two users
 connecting the same entry get two rows and two keys; re-connecting with a new
@@ -467,15 +467,16 @@ overrides, custom headers, stale bindings, and mismatched resources are not
 eligible. This can reuse a user-configured peer without converting its
 provenance or lifecycle into a catalog install.
 
-Every successful Connect creates and attaches a new idle session, while the
-Catalog keeps the server drawer open with an explicit **Open session** next
-step. It does not navigate automatically. Open, bearer-key, and
-already-authenticated OAuth results stage the entry's starter prompt. For a new
-OAuth grant, Connect pre-opens the provider window while user activation is
-available and the drawer remains in **Sign-in pending** until a durable attempt
-and the caller-scoped credential projection confirm success. Popup navigation
-alone is never success. The session retains its disconnected notice and warning
-MCP badge as the recovery path when sign-in does not complete.
+Every successful Connect adds or reuses the server without creating a session.
+The Catalog keeps the drawer open with **Keep browsing** and **Start new
+session** next steps. Starting a session explicitly asks for an eligible
+teammate and agent tool, creates a caller-owned idle session through the normal
+session service, attaches the selected server, and seeds the entry's starter
+prompt into the composer as editable, unsent text. For a new OAuth grant,
+Connect pre-opens the provider window while user activation is available and
+the drawer remains in **Sign-in pending** until a durable attempt and the
+caller-scoped credential projection confirm success. Popup navigation alone is
+never success; **My Servers** remains the recovery path.
 
 The drawer's **What this can access** disclosure is expanded by default. Its
 checkbox stays inside that disclosure, before the destination fields and
