@@ -9,6 +9,7 @@ import type {
   AgorGrants,
   AgorRuntimeConfig,
   BranchEnvironmentInstance,
+  BranchStorageRecord,
   CodexApprovalPolicy,
   CodexSandboxMode,
   EffortLevel,
@@ -764,6 +765,7 @@ export const branches = sqliteTable(
     archived: t.bool('archived').notNull().default(false),
     archived_at: t.timestamp('archived_at'),
     archived_by: text('archived_by', { length: 36 }),
+    workspace_storage: t.json<BranchStorageRecord>('workspace_storage'),
     filesystem_status: text('filesystem_status', {
       enum: ['creating', 'ready', 'failed', 'preserved', 'cleaned', 'deleted'],
     }),

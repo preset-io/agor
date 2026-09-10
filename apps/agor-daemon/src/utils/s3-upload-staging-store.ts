@@ -19,6 +19,7 @@ import {
   type S3ClientConfig,
 } from '@aws-sdk/client-s3';
 import { Upload } from '@aws-sdk/lib-storage';
+import { S3BranchBundleStore } from './s3-branch-bundle-store.js';
 import { DEFAULT_UPLOAD_MAX_BYTES, DEFAULT_UPLOAD_TTL_MS } from './upload-staging-defaults.js';
 
 const HANDLE_PATTERN = /^upl_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
@@ -128,6 +129,11 @@ export class S3UploadStagingStore implements UploadStagingStore {
   private readonly client: S3Client;
   private readonly maxBytes: number;
   private readonly ttlMs: number;
+
+  /** Durable workspace bundles share this configured client, never upload expiry semantics. */
+  branchBundles(): S3BranchBundleStore {
+    return new S3BranchBundleStore(this.location, this.client);
+  }
 
   constructor(
     private readonly location: S3UploadLocation,

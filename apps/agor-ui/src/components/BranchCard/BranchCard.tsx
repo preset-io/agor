@@ -37,6 +37,7 @@ import { CreatedByTag } from '../metadata';
 import { IssuePill, PullRequestPill } from '../Pill';
 import { BranchSessionPeekSection } from './BranchSessionPeekSection';
 import { BranchSessionSections } from './BranchSessionSections';
+import { BranchStorageControl } from './BranchStorageControl';
 import { estimateBranchSessionSectionsHeight } from './branchCardLayout';
 
 const _BRANCH_CARD_MAX_WIDTH = 600;
@@ -489,6 +490,11 @@ const BranchCardComponent = ({
                 type="text"
                 size="small"
                 icon={<CodeOutlined />}
+                disabled={
+                  connectionDisabled ||
+                  (branch.workspace_storage != null &&
+                    branch.workspace_storage.residency !== 'warm')
+                }
                 onClick={(e) => {
                   e.stopPropagation();
                   onOpenTerminal([], branch.branch_id);
@@ -531,6 +537,9 @@ const BranchCardComponent = ({
       </div>
 
       {/* Branch metadata - all pills on one row with wrapping */}
+      <div className={REACT_FLOW_NO_DRAG_CLASS}>
+        <BranchStorageControl branch={branch} client={client} />
+      </div>
       <div className={REACT_FLOW_NO_DRAG_CLASS} style={{ marginBottom: 8 }}>
         <Space size={4} wrap>
           {branch.created_by && (
@@ -553,7 +562,10 @@ const BranchCardComponent = ({
             onStopEnvironment={onStopEnvironment}
             onViewLogs={onViewLogs}
             onNukeEnvironment={onNukeEnvironment}
-            connectionDisabled={connectionDisabled}
+            connectionDisabled={
+              connectionDisabled ||
+              (branch.workspace_storage != null && branch.workspace_storage.residency !== 'warm')
+            }
             showNukeEnvironment={false}
           />
         </Space>

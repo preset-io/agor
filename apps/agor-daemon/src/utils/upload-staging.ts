@@ -3,6 +3,7 @@ import { type AgorConfig, expandHomePath, getManagedStorageSegments } from '@ago
 import type { UploadStagingStore } from '@agor/core/types';
 import { LocalUploadStagingStore } from '../host/local/upload-staging-store.js';
 import { MetadataUploadStagingStore } from './metadata-upload-staging-store.js';
+import type { S3BranchBundleStore } from './s3-branch-bundle-store.js';
 import { parseS3UploadLocation, S3UploadStagingStore } from './s3-upload-staging-store.js';
 import { configureUploadLimits, getUploadDirectory } from './upload.js';
 
@@ -21,11 +22,19 @@ export function resolveLocalUploadDirectory(
 let factory: UploadStagingStoreFactory = () =>
   new LocalUploadStagingStore((tenantId) => getUploadDirectory(tenantId));
 let instance: UploadStagingStore | undefined;
+let branchBundleStore: S3BranchBundleStore | undefined;
+
+export function getBranchBundleStore(): S3BranchBundleStore {
+  getUploadStagingStore();
+  if (!branchBundleStore) throw new Error('Durable workspace bundle storage is not configured');
+  return branchBundleStore;
+}
 
 /** Application composition seam used by local self-hosted and Cloud adapters. */
 export function configureUploadStagingStore(next: UploadStagingStoreFactory): void {
   factory = next;
   instance = undefined;
+  branchBundleStore = undefined;
 }
 
 /**
@@ -48,6 +57,7 @@ export function configureUploadStagingStoreFromConfig(
       const adapter = s3Factory
         ? s3Factory(url, config)
         : new S3UploadStagingStore(parseS3UploadLocation(url), { maxBytes, ttlMs });
+      if (adapter instanceof S3UploadStagingStore) branchBundleStore = adapter.branchBundles();
       return db ? new MetadataUploadStagingStore(db, adapter) : adapter;
     });
     return;
@@ -74,4 +84,5 @@ export function resetUploadStagingStoreForTests(): void {
   configureUploadLimits(50 * 1024 * 1024);
   factory = () => new LocalUploadStagingStore((tenantId) => getUploadDirectory(tenantId));
   instance = undefined;
+  branchBundleStore = undefined;
 }

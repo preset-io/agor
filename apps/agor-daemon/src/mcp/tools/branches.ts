@@ -254,6 +254,32 @@ async function findAllArchivedBranchesForCleanup(
 }
 
 export function registerBranchTools(server: McpServer, ctx: McpContext): void {
+  for (const action of ['cool', 'restore'] as const) {
+    server.registerTool(
+      `agor_branches_${action}`,
+      {
+        description:
+          action === 'cool'
+            ? 'Move a self-contained clone workspace to cold storage, preserving dirty, staged, untracked and ignored files. Requires idle tasks, closed terminals and a stopped environment. Stop external writers and detached shells first; closing a browser tab does not stop Zellij.'
+            : 'Restore a branch workspace from cold storage without changing its archive state. Concurrent prompts remain in the normal task queue until restore succeeds.',
+        annotations: { destructiveHint: action === 'cool' },
+        inputSchema: z.object({
+          branchId: mcpRequiredId('branchId', 'Branch', 'Branch ID (UUIDv7 or short ID)'),
+        }),
+      },
+      async (args) => {
+        const branchId = await resolveBranchId(ctx, coerceString(args.branchId)!);
+        const branch = await ctx.app.service('/branches/:id/storage').create(
+          { action },
+          {
+            ...ctx.baseServiceParams,
+            route: { id: branchId },
+          }
+        );
+        return textResult({ branch });
+      }
+    );
+  }
   // Tool 1: agor_branches_get
   server.registerTool(
     'agor_branches_get',
@@ -1558,6 +1584,12 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
       annotations: { destructiveHint: true },
       inputSchema: z.object({
         branchId: mcpRequiredId('branchId', 'Branch', 'Branch ID to archive (UUIDv7 or short ID)'),
+        coolWorkspace: z
+          .boolean()
+          .optional()
+          .describe(
+            'Cool the complete workspace before archiving; incompatible with cleaning/deletion. Default false.'
+          ),
         filesystemAction: z
           .enum(['preserved', 'cleaned', 'deleted'])
           .optional()
@@ -1568,13 +1600,17 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
     },
     async (args) => {
       const branchId = await resolveBranchId(ctx, coerceString(args.branchId)!);
-      const filesystemAction = (args.filesystemAction as BranchFilesystemAction) || 'cleaned';
-      const result = await ctx.app
-        .service('/branches/:id/archive-or-delete')
-        .create(
-          { metadataAction: 'archive', filesystemAction },
-          { ...ctx.baseServiceParams, route: { id: branchId } }
-        );
+      const filesystemAction =
+        (args.filesystemAction as BranchFilesystemAction) ||
+        (args.coolWorkspace ? 'preserved' : 'cleaned');
+      const result = await ctx.app.service('/branches/:id/archive-or-delete').create(
+        {
+          metadataAction: 'archive',
+          filesystemAction,
+          coolWorkspace: args.coolWorkspace === true,
+        },
+        { ...ctx.baseServiceParams, route: { id: branchId } }
+      );
       return textResult({
         success: true,
         branch: result,

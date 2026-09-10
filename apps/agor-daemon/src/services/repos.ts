@@ -1243,6 +1243,24 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
       return found;
     };
     const branches = await findRepoBranches(repo.repo_id as UUID);
+    if (
+      branches.some(
+        (branch) => branch.workspace_storage && branch.workspace_storage.residency !== 'warm'
+      )
+    ) {
+      throw new Error('Restore all workspaces before deleting this repository');
+    }
+    if (
+      cleanup &&
+      branches.length &&
+      config.execution?.branch_storage?.cold_storage_enabled === true
+    ) {
+      // The legacy bulk filesystem delete runs before per-branch locks. Keep
+      // it out of the cooling race rather than add a repository purge workflow.
+      throw new Error(
+        'Repository filesystem cleanup is unavailable while cold storage is enabled; remove warm branches individually first'
+      );
+    }
 
     console.log(
       `🗑️  Repo deletion: Found ${branches.length} branch(s) for repo ${repo.slug} (${repo.repo_id})`

@@ -4,8 +4,9 @@ import type {
   BranchFilesystemAction,
   BranchMetadataAction,
 } from '@agor-live/client';
-import { Alert, Modal, Radio, Space, Typography } from 'antd';
+import { Alert, Checkbox, Modal, Radio, Space, Typography } from 'antd';
 import { useEffect, useState } from 'react';
+import { useAuthConfig } from '../../hooks/useAuthConfig';
 
 const { Text } = Typography;
 
@@ -30,17 +31,31 @@ export const ArchiveDeleteBranchModal: React.FC<ArchiveDeleteBranchModalProps> =
   onCancel,
   afterClose,
 }) => {
+  const { featuresConfig } = useAuthConfig();
+  const coolingSupported =
+    featuresConfig?.branchStorage?.coldStorageEnabled === true &&
+    branch.storage_mode === 'clone' &&
+    (!branch.workspace_storage || branch.workspace_storage.residency === 'warm');
+  const [alsoCool, setAlsoCool] = useState(coolingSupported);
   const [filesystemAction, setFilesystemAction] = useState<BranchFilesystemAction>('cleaned');
   const [metadataAction, setMetadataAction] = useState<BranchMetadataAction>(initialMetadataAction);
 
   useEffect(() => {
     if (open) {
       setMetadataAction(initialMetadataAction);
+      setAlsoCool(coolingSupported);
+      if (coolingSupported || branch.workspace_storage?.residency === 'cold')
+        setFilesystemAction('preserved');
     }
-  }, [initialMetadataAction, open]);
+  }, [initialMetadataAction, open, coolingSupported, branch.workspace_storage?.residency]);
 
   const handleOk = () => {
-    onConfirm({ metadataAction, filesystemAction });
+    const coolWorkspace = metadataAction === 'archive' && coolingSupported && alsoCool;
+    onConfirm({
+      metadataAction,
+      filesystemAction: coolWorkspace ? 'preserved' : filesystemAction,
+      ...(coolWorkspace ? { coolWorkspace: true } : {}),
+    });
   };
 
   // Determine button text and style based on metadata action
@@ -72,7 +87,11 @@ export const ArchiveDeleteBranchModal: React.FC<ArchiveDeleteBranchModalProps> =
         {/* Environment Warning */}
         {environmentRunning && (
           <Alert
-            title="Environment is running and will be stopped"
+            title={
+              alsoCool && metadataAction === 'archive'
+                ? 'Stop the environment before moving the workspace to cold storage'
+                : 'Environment is running and will be stopped'
+            }
             type="warning"
             showIcon
             style={{ marginBottom: 0 }}
@@ -80,11 +99,24 @@ export const ArchiveDeleteBranchModal: React.FC<ArchiveDeleteBranchModalProps> =
         )}
 
         {/* Filesystem Options */}
+        {coolingSupported && metadataAction === 'archive' && (
+          <Checkbox checked={alsoCool} onChange={(event) => setAlsoCool(event.target.checked)}>
+            Also move workspace to cold storage
+          </Checkbox>
+        )}
+        {coolingSupported && alsoCool && metadataAction === 'archive' && (
+          <Alert
+            type="info"
+            showIcon
+            title="Preserves dirty, staged, untracked and ignored files. Stop external writers and quit detached terminal shells first."
+          />
+        )}
         <div>
           <Text strong style={{ display: 'block', marginBottom: 8 }}>
             Filesystem
           </Text>
           <Radio.Group
+            disabled={alsoCool && coolingSupported && metadataAction === 'archive'}
             value={filesystemAction}
             onChange={(e) => setFilesystemAction(e.target.value)}
           >

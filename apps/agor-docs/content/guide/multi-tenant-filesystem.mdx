@@ -87,7 +87,7 @@ the workload identity (recommended), environment, or shared AWS configuration;
 never embed credentials in the URI. Set the region through workload/shared
 configuration or `AWS_REGION`.
 
-S3 objects always use the same tenant-first partition. Operators provide only
+Temporary upload objects use the same tenant-first partition. Operators provide only
 the bucket and optional base prefix; Agor manages everything below it:
 
 ```text
@@ -97,10 +97,15 @@ the bucket and optional base prefix; Agor manages everything below it:
 Agor enforces tenant, branch, and session ownership before every read or delete.
 The bucket policy should grant the daemon only the configured prefix. Agor does
 not list or reconcile the bucket during upload requests. Configure S3 lifecycle
-rules to expire objects after the configured retention and abort incomplete
+rules scoped to temporary upload objects to expire them after the configured retention and abort incomplete
 multipart uploads. Failed transfers are also aborted directly by the uploader.
 When `max_age_days` is zero, omit object expiration if permanent retention is
 intended.
+
+If [workspace cold storage](./branches#workspace-cold-storage-opt-in) is enabled,
+exclude its durable `<prefix>/branch-bundles/` namespace from expiration. Bundle
+receipts may reference the only remaining copy of a workspace; upload retention
+and consume-on-read never apply to them.
 
 The daemon needs `s3:GetObject`, `s3:PutObject`, and `s3:DeleteObject` on the
 configured object prefix, plus `s3:AbortMultipartUpload` for failed multipart
