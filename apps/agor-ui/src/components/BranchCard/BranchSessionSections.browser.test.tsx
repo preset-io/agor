@@ -173,6 +173,10 @@ it.each(['dirty', 'failure'])(
     const gate = new Promise<void>((resolve) => {
       release = resolve;
     });
+    let confirm!: () => void;
+    const confirmation = new Promise<void>((resolve) => {
+      confirm = resolve;
+    });
     let reads = 0;
     const terminal = { ...runningSession, status: 'idle' as const, ready_for_prompt: true };
     const emit = () => {
@@ -191,6 +195,7 @@ it.each(['dirty', 'failure'])(
               if (mode === 'failure') throw new Error('temporary server error');
               return runningSession;
             }
+            await confirmation;
             return terminal;
           },
           on: (event: string, listener: (session: Session) => void) => {
@@ -257,6 +262,10 @@ it.each(['dirty', 'failure'])(
     await act(async () => release());
     expect(rowSpinner()).toBe(spinner);
     await waitFor(() => expect(reads).toBe(2));
+    // The follow-up is deliberately pending too: retention must not depend
+    // on the runner completing an assertion before the retry delay elapses.
+    expect(rowSpinner()).toBe(spinner);
+    await act(async () => confirm());
     act(() => flushRealtimeNow());
     await waitFor(() => expect(rowSpinner()).toBeNull());
     expect(spinner!.isConnected).toBe(false);
