@@ -41,6 +41,19 @@ describe('OpenCodeReadiness', () => {
     }
   );
 
+  it('reports a permanent workspace limitation when the deployment cannot run OpenCode', async () => {
+    const find = vi.fn().mockResolvedValue({
+      runtimeVersion: '1.14.33',
+      providers: [{ availableForSelection: false }],
+      unsupported: { code: 'hosted_native_state_disabled', message: 'not enabled' },
+    });
+
+    renderStatus({ service: vi.fn(() => ({ find })) });
+
+    expect(await screen.findByText('neutral:Not available in this workspace')).toBeInTheDocument();
+    expect(find).toHaveBeenCalledOnce();
+  });
+
   it('reports an unavailable status when the shared catalog read fails', async () => {
     const find = vi.fn().mockRejectedValue(new Error('catalog unavailable'));
 

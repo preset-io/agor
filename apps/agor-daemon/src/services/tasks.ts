@@ -826,7 +826,11 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
       nextStatus === TaskStatus.RUNNING && currentTask?.status !== TaskStatus.RUNNING;
 
     const result = params?.provider
-      ? await this.taskRepo.updateFromExecutor(id, data)
+      ? data.native_state_attempt !== undefined
+        ? // Hosted OpenCode: the checkpoint pointer is accepted only together
+          // with completion, Session lock first (see the repository method).
+          await this.taskRepo.completeWithNativeStatePublication(id, data)
+        : await this.taskRepo.updateFromExecutor(id, data)
       : await super.patch(id, data, params);
 
     // Task terminality is the one lifecycle boundary shared by local and

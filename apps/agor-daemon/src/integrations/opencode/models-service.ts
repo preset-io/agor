@@ -1,9 +1,14 @@
+import { createOpenCodeKnownModelCatalog, OPENCODE_VERSION } from '@agor/agentic-tool-opencode';
+import { resolveOpenCodeCapabilities } from '@agor/agentic-tool-opencode/daemon';
 import type { AgorConfig } from '@agor/core/config';
 import type { TenantScopeAwareDatabase } from '@agor/core/db';
-import { BadRequest } from '@agor/core/feathers';
+import { BadRequest, NotAuthenticated } from '@agor/core/feathers';
 import type { AuthenticatedParams, DeepReadonly, OpenCodeModelCatalog } from '@agor/core/types';
 import type { ExecutorCommandResult } from '../../utils/spawn-executor.js';
-import { resolveAuthenticatedOpenCodeSubjectContext } from './credential-namespace.js';
+import {
+  resolveAuthenticatedOpenCodeSubjectContext,
+  resolveManagedOpenCodeSubject,
+} from './credential-namespace.js';
 import { startOpenCodeExecutorInvocation } from './executor-command.js';
 import { blockOpenCodeNativeStateNamespace } from './native-state-coordinator.js';
 
@@ -84,6 +89,31 @@ export class OpenCodeModelsService {
   async find(params?: AuthenticatedParams): Promise<OpenCodeModelCatalog> {
     if (Object.keys(params?.query ?? {}).length > 0) {
       throw new BadRequest('OpenCode model catalog does not accept query parameters.');
+    }
+    if (!params?.user?.user_id) throw new NotAuthenticated('Sign in before using OpenCode.');
+    // Unsupported deployments answer with the known catalog marked unavailable
+    // plus the structured reason, so readiness renders a permanent notice
+    // instead of retrying an operation that can never succeed here.
+    const capabilities = resolveOpenCodeCapabilities(this.config);
+    if (capabilities.mode === 'unsupported') {
+      const known = createOpenCodeKnownModelCatalog(null);
+      return {
+        runtimeVersion: OPENCODE_VERSION,
+        providers: known.providers.map((provider) => ({
+          ...provider,
+          availableForSelection: false,
+        })),
+        unsupported: capabilities.reason,
+      };
+    }
+    if (capabilities.mode === 'managed-projection') {
+      // Saved-key presence is the only availability evidence in hosted mode;
+      // no executor or OpenCode server is started to read a catalog.
+      const subject = await resolveManagedOpenCodeSubject(this.db, params);
+      return {
+        runtimeVersion: OPENCODE_VERSION,
+        ...createOpenCodeKnownModelCatalog(subject.savedProviderIds),
+      };
     }
     return readModelCatalog(this.db, this.config, params);
   }

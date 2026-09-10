@@ -94,3 +94,62 @@ describe('OpenCode known model catalog', () => {
     });
   });
 });
+
+describe('OpenCode hosted provider projection', () => {
+  it('projects only reviewed providers and registers every key as a redaction secret', async () => {
+    const { buildOpenCodeAuthContent, hostedProviderIdsFromConnection } = await import(
+      './known-models.js'
+    );
+    const projected = buildOpenCodeAuthContent({
+      OPENCODE_API_KEY_ANTHROPIC: ' sk-ant-test ',
+      OPENCODE_API_KEY_OPENAI: '',
+      SOMETHING_ELSE: 'ignored',
+    });
+    expect(projected.providerIds).toEqual(['anthropic']);
+    expect(JSON.parse(projected.content ?? '')).toEqual({
+      anthropic: { type: 'api', key: 'sk-ant-test' },
+    });
+    expect(projected.secrets).toEqual(['sk-ant-test', projected.content]);
+    expect(buildOpenCodeAuthContent({})).toEqual({
+      content: undefined,
+      providerIds: [],
+      secrets: [],
+    });
+    expect([...hostedProviderIdsFromConnection({ OPENCODE_API_KEY_OPENAI: true })]).toEqual([
+      'openai',
+    ]);
+  });
+
+  it('keeps the hosted field map aligned with the core provider-connection fields', async () => {
+    const { OPENCODE_HOSTED_PROVIDER_FIELDS } = await import('./known-models.js');
+    const { PROVIDER_CONNECTION_FIELDS } = await import('@agor/core/types');
+    expect([...Object.values(OPENCODE_HOSTED_PROVIDER_FIELDS)].sort()).toEqual(
+      [...PROVIDER_CONNECTION_FIELDS.opencode].sort()
+    );
+  });
+
+  it('derives hosted provider settings from saved-key presence without OAuth methods', async () => {
+    const { createOpenCodeHostedProviderDiscovery } = await import('./known-models.js');
+    const discovery = createOpenCodeHostedProviderDiscovery(new Set(['openai']));
+    const openai = discovery.providers.find((provider) => provider.id === 'openai');
+    const zen = discovery.providers.find((provider) => provider.id === 'opencode');
+    expect(discovery.runtime).toBe('available');
+    expect(openai).toMatchObject({
+      credentialPresence: 'present',
+      runtimeAvailable: true,
+      authMethods: [{ index: 0, type: 'api', label: 'API key' }],
+    });
+    expect(zen).toMatchObject({
+      credentialPresence: 'absent',
+      runtimeAvailable: true,
+      authMethods: [],
+    });
+    expect(
+      discovery.providers.every((provider) => provider.authMethods.every((m) => m.type === 'api'))
+    ).toBe(true);
+    expect(discovery.suggestedSelection).toEqual({
+      providerId: 'openai',
+      modelId: 'gpt-5.6-terra-pro',
+    });
+  });
+});

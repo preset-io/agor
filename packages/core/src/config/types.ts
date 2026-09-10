@@ -19,6 +19,15 @@ export interface AgorAgenticToolsSettings {
    * authorized provider/client contract. Default: false.
    */
   claude_subscription_oauth?: boolean;
+
+  /**
+   * Operator opt-in for OpenCode in hosted (delegated, templated) deployments.
+   * `checkpointed` selects the managed credential projection plus checkpointed
+   * native-state contract in `context/explorations/opencode-cloud.md`; it is
+   * admitted only when every other hosted prerequisite holds. Absent: OpenCode
+   * reports itself unsupported in such deployments and starts nothing.
+   */
+  opencode_hosted_native_state?: 'checkpointed';
 }
 
 /**

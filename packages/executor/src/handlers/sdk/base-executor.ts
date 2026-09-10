@@ -44,7 +44,7 @@ function sdkDebug(...args: unknown[]): void {
   }
 }
 
-class MissingCredentialError extends Error {
+export class MissingCredentialError extends Error {
   override readonly name = 'MissingCredentialError';
 }
 

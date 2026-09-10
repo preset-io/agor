@@ -70,7 +70,8 @@ function collectEnvironmentSecrets(environment: NodeJS.ProcessEnv): string[] {
       .filter(Boolean)
   );
   return Object.entries(environment).flatMap(([key, value]) =>
-    value && (declared.has(key) || /(?:KEY|TOKEN|SECRET|PASSWORD|AUTH|CREDENTIAL)$/i.test(key))
+    value &&
+    (declared.has(key) || /(?:KEY|TOKEN|SECRET|PASSWORD|AUTH|CREDENTIAL|CONTENT)$/i.test(key))
       ? [value]
       : []
   );

@@ -1,4 +1,7 @@
-import { parseOpenCodeExecutorContext } from '../shared/executor-context.js';
+import {
+  isOpenCodeManagedExecutorContext,
+  parseOpenCodeExecutorContext,
+} from '../shared/executor-context.js';
 import {
   handleOpenCodeAuth,
   handleOpenCodeOAuth,
@@ -17,10 +20,19 @@ interface InteractiveChannel {
   read(): Promise<unknown>;
 }
 
+/** Auxiliary provider operations exist only for the native-file authority. */
+function nativeFileDataHome(context: unknown): string {
+  const parsed = parseOpenCodeExecutorContext(context);
+  if (isOpenCodeManagedExecutorContext(parsed)) {
+    throw new Error('OpenCode auxiliary operations are not available in managed-projection mode');
+  }
+  return parsed.dataHome;
+}
+
 function payloadFor(input: AuxiliaryInput): OpenCodeAuthPayload {
   return {
     command: 'opencode.auth',
-    dataHome: parseOpenCodeExecutorContext(input.context).dataHome,
+    dataHome: nativeFileDataHome(input.context),
     params: OpenCodeAuthParamsSchema.parse(input.request),
   };
 }
