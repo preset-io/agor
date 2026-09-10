@@ -1,4 +1,5 @@
 import { OPENCODE_DAEMON_CONTRIBUTION } from '@agor/agentic-tool-opencode/daemon';
+import type { AgorConfig } from '@agor/core/config';
 import type { AgenticToolName, Session } from '@agor/core/types';
 
 /**
@@ -28,8 +29,10 @@ export interface AgenticToolDaemonContribution {
    */
   getExecutorLaunch?: (input: {
     tenantId: string;
-    session: Pick<Session, 'created_by' | 'unix_username'>;
+    session: Pick<Session, 'created_by' | 'unix_username' | 'session_id' | 'sdk_native_state'>;
+    taskId: string;
     homeDir: string;
+    config: Pick<AgorConfig, 'execution' | 'multi_tenancy' | 'agentic_tools'>;
   }) => ExecutorLaunchContribution;
 }
 

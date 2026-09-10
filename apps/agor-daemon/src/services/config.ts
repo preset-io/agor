@@ -49,6 +49,9 @@ const RESOLVABLE_API_KEY_NAMES: Record<ApiKeyName, true> = {
   GEMINI_API_KEY: true,
   COPILOT_GITHUB_TOKEN: true,
   CURSOR_API_KEY: true,
+  OPENCODE_API_KEY_ANTHROPIC: true,
+  OPENCODE_API_KEY_OPENAI: true,
+  OPENCODE_API_KEY_KIMI_FOR_CODING: true,
 };
 
 function isResolvableApiKeyName(value: string): value is ApiKeyName {

@@ -25,6 +25,25 @@ describe('OpenCode execution admission', () => {
         ...allowed,
         config: { execution: { executor_command_template: 'launch {command}' } },
       })
-    ).toThrow(/locally containable/i);
+    ).toThrow(/locally containable executor process/i);
+  });
+
+  it('reports a hosted workspace with the structured unsupported reason', () => {
+    let caught: unknown;
+    try {
+      assertOpenCodeExecutionAllowed({
+        ...allowed,
+        config: {
+          multi_tenancy: { mode: 'required_from_auth' },
+          execution: { unix_user_mode: 'delegated', executor_command_template: 'launch' },
+        },
+      });
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toMatchObject({
+      message: expect.stringMatching(/not been enabled/),
+      data: { code: 'hosted_native_state_disabled' },
+    });
   });
 });

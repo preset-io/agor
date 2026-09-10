@@ -20,9 +20,13 @@ export interface OpenCodeCatalogProvider {
   models: OpenCodeCatalogModel[];
 }
 
+import type { OpenCodeUnsupportedReason } from './opencode-auth';
+
 /** Secret-safe, versioned choices returned without starting an OpenCode server. */
 export interface OpenCodeModelCatalog {
   runtimeVersion: string;
   suggestedSelection?: OpenCodeModelPair;
   providers: OpenCodeCatalogProvider[];
+  /** Present when this deployment cannot run OpenCode; every provider is then unavailable. */
+  unsupported?: OpenCodeUnsupportedReason;
 }

@@ -22,6 +22,17 @@ export {
   verifyOpenCodeAuthFileBoundary,
 } from './managed-server.js';
 export {
+  discardOpenCodeScratch,
+  OPENCODE_SCRATCH_ROOT,
+  OpenCodeNativeStateError,
+  type OpenCodeNativeStateLayout,
+  prepareOpenCodeScratch,
+  pruneOpenCodeAttempts,
+  publishOpenCodeCheckpoint,
+  resolveOpenCodeNativeStateLayout,
+  restoreOpenCodeAcceptedState,
+} from './native-state.js';
+export {
   type OpenCodeCanUseToolCallback,
   OpenCodeInteractionTimeoutError,
   type OpenCodeInvocationConfig,

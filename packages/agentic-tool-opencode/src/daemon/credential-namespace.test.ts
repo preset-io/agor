@@ -77,11 +77,63 @@ describe('OpenCode credential namespace routing', () => {
       homeDir: '/home/alice',
     };
     const namespace = resolveOpenCodeTaskCredentialNamespace(input);
+    const launch = {
+      ...input,
+      session: {
+        ...input.session,
+        session_id: '01a08d5f-775f-73f6-86a1-624b43050180',
+        sdk_native_state: undefined,
+      },
+      taskId: '01a08d5f-7773-77fa-a7dc-2575cfe6727e',
+      config: {},
+    };
 
-    expect(OPENCODE_DAEMON_CONTRIBUTION.getExecutorLaunch(input)).toEqual({
+    expect(OPENCODE_DAEMON_CONTRIBUTION.getExecutorLaunch(launch)).toEqual({
       namespaceKey: namespace.namespaceKey,
       executorPayload: { agenticToolContext: { dataHome: namespace.dataHome } },
     });
+  });
+
+  it('emits the logical managed-projection context instead of a daemon path in hosted mode', () => {
+    const accepted = {
+      version: 1 as const,
+      attemptTaskId: '01a08d5f-7773-77fa-a7dc-2575cfe6727d',
+      digest: `sha256:${'a'.repeat(64)}`,
+      bytes: 4096,
+      openCodeSessionId: 'ses_1',
+      publishedAt: '2026-09-10T22:18:55.000Z',
+    };
+    const launch = OPENCODE_DAEMON_CONTRIBUTION.getExecutorLaunch({
+      tenantId: 'tenant-a',
+      session: {
+        created_by: 'owner',
+        unix_username: 'alice',
+        session_id: '01a08d5f-775f-73f6-86a1-624b43050180',
+        sdk_native_state: accepted,
+      },
+      taskId: '01a08d5f-7773-77fa-a7dc-2575cfe6727e',
+      homeDir: '/home/daemon',
+      config: {
+        multi_tenancy: { mode: 'required_from_auth', auth_claim: 'tenant_id' },
+        execution: {
+          unix_user_mode: 'delegated',
+          executor_command_template: 'launch',
+          executor_storage: { user_home: 'persistent-per-user' },
+        },
+        agentic_tools: { opencode_hosted_native_state: 'checkpointed' },
+      },
+    });
+    const context = launch.executorPayload.agenticToolContext as Record<string, unknown>;
+    expect(context).toEqual({
+      version: 2,
+      mode: 'managed-projection',
+      namespaceKey: launch.namespaceKey,
+      agorSessionId: '01a08d5f-775f-73f6-86a1-624b43050180',
+      taskId: '01a08d5f-7773-77fa-a7dc-2575cfe6727e',
+      accepted,
+    });
+    expect(JSON.stringify(context)).not.toContain('/home/daemon');
+    expect(JSON.stringify(context)).not.toContain('tenant-a');
   });
 
   it('rejects hosted auth-resolved tenancy before native OpenCode work', () => {
@@ -89,7 +141,7 @@ describe('OpenCode credential namespace routing', () => {
       assertOpenCodeNativeAuthSupported({
         multi_tenancy: { mode: 'required_from_auth', auth_claim: 'tenant_id' },
       })
-    ).toThrow(/unavailable in hosted multi-tenant mode/i);
+    ).toThrow(/hosted native-state execution has not been enabled/i);
   });
 
   it('rejects delegated execution before deriving native OpenCode paths', () => {
@@ -97,7 +149,28 @@ describe('OpenCode credential namespace routing', () => {
       assertOpenCodeNativeAuthSupported({
         execution: { unix_user_mode: 'delegated' },
       })
-    ).toThrow(/unavailable in delegated execution mode/i);
+    ).toThrow(/delegated execution provides no native-state home boundary/i);
+  });
+
+  it('rejects managed projection for native-file credential operations with a structured reason', () => {
+    let caught: unknown;
+    try {
+      assertOpenCodeNativeAuthSupported({
+        multi_tenancy: { mode: 'required_from_auth', auth_claim: 'tenant_id' },
+        execution: {
+          unix_user_mode: 'delegated',
+          executor_command_template: 'launch',
+          executor_storage: { user_home: 'persistent-per-user' },
+        },
+        agentic_tools: { opencode_hosted_native_state: 'checkpointed' },
+      });
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toMatchObject({
+      message: expect.stringMatching(/not available in managed-projection mode/),
+      data: { code: 'mode_not_admitted', mode: 'managed-projection' },
+    });
   });
 
   it.each(['simple', 'sandbox'] as const)(

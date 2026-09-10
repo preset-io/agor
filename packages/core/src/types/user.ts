@@ -236,6 +236,20 @@ export interface CursorConfig {
 }
 
 /**
+ * Hosted OpenCode provider keys (`managed-projection` credential authority).
+ * One static, env-safe field per reviewed key-bearing provider; the OpenCode
+ * executor converts the resolved connection into `OPENCODE_AUTH_CONTENT` and
+ * these names never enter a process environment. Local (`native-file`)
+ * deployments keep credentials in OpenCode's own `auth.json` and leave this
+ * bucket empty. See `context/explorations/opencode-cloud.md` §4.
+ */
+export interface OpenCodeConfig {
+  OPENCODE_API_KEY_ANTHROPIC?: string;
+  OPENCODE_API_KEY_OPENAI?: string;
+  OPENCODE_API_KEY_KIMI_FOR_CODING?: string;
+}
+
+/**
  * Per-tool credential map. Each tool's config is independent and
  * scoped to its own SDK at session-spawn time.
  */
@@ -245,7 +259,7 @@ export interface AgenticToolsConfig {
   gemini?: GeminiConfig;
   copilot?: CopilotConfig;
   cursor?: CursorConfig;
-  opencode?: Record<string, never>;
+  opencode?: OpenCodeConfig;
 }
 
 /** Union of all valid env-var-named fields across all tool configs. */
@@ -254,7 +268,8 @@ export type AgenticToolConfigField =
   | keyof CodexConfig
   | keyof GeminiConfig
   | keyof CopilotConfig
-  | keyof CursorConfig;
+  | keyof CursorConfig
+  | keyof OpenCodeConfig;
 
 /**
  * Public DTO shape: per-tool credential presence flags.

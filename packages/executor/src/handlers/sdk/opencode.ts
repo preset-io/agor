@@ -6,12 +6,19 @@
  */
 
 import {
+  buildOpenCodeAuthContent,
+  isOpenCodeManagedExecutorContext,
   OPENCODE_MODEL_CONFIG_PAIR_ERROR,
   parseOpenCodeExecutorContext,
 } from '@agor/agentic-tool-opencode';
 import {
+  discardOpenCodeScratch,
   isOpenCodeCleanupUnverifiedError,
   OpenCodeTool,
+  prepareOpenCodeScratch,
+  pruneOpenCodeAttempts,
+  resolveOpenCodeNativeStateLayout,
+  restoreOpenCodeAcceptedState,
 } from '@agor/agentic-tool-opencode/runtime';
 import { generateId, shortId } from '@agor/core';
 import { getMcpServersForSession } from '@agor/core/mcp';
@@ -39,7 +46,12 @@ import {
 } from '../../sdk-handlers/base/withheld-mcp-report.js';
 import { createUserMessage } from '../../sdk-handlers/claude/message-builder.js';
 import type { AgorClient } from '../../services/feathers-client.js';
-import { createStreamingCallbacks, settleTaskFailure } from './base-executor.js';
+import {
+  createStreamingCallbacks,
+  MissingCredentialError,
+  resolveApiKeyForTask,
+  settleTaskFailure,
+} from './base-executor.js';
 
 export async function executeOpenCodeTask(params: {
   client: AgorClient;
@@ -62,13 +74,19 @@ export async function executeOpenCodeTask(params: {
     client.service('sessions').emit(event, data);
   }, params.resolvedConfig?.execution?.permission_timeout_ms ?? 600_000);
   globalPermissionManager.register(sessionId, permissionService);
+  let managedScratch: Parameters<typeof discardOpenCodeScratch>[0] | undefined;
 
   try {
     const session = await client.service('sessions').get(sessionId);
     if (!session.model_config?.provider?.trim() || !session.model_config.model?.trim()) {
       throw new Error(OPENCODE_MODEL_CONFIG_PAIR_ERROR);
     }
-    const { dataHome } = parseOpenCodeExecutorContext(params.agenticToolContext);
+    const context = parseOpenCodeExecutorContext(params.agenticToolContext);
+    const managedContext = isOpenCodeManagedExecutorContext(context) ? context : undefined;
+    const dataHome = isOpenCodeManagedExecutorContext(context) ? undefined : context.dataHome;
+    if (managedContext && managedContext.taskId !== taskId) {
+      throw new Error('OpenCode managed executor context does not belong to this task');
+    }
 
     const repos = createFeathersBackedRepositories(client);
     const contextUserId = await resolveContextUserId({
@@ -87,6 +105,48 @@ export async function executeOpenCodeTask(params: {
       messageSource: params.messageSource,
       existingMessages: messages,
     });
+
+    // Hosted managed projection: pull the owner's reviewed provider keys
+    // through the task-scoped daemon read (never the payload), prepare the
+    // Job-local scratch, prune stale attempts, and restore the accepted
+    // checkpoint. Credentials stay in memory; nothing enters process.env.
+    let managed: NonNullable<Parameters<OpenCodeTool['runTurn']>[0]['managed']> | undefined;
+    if (managedContext) {
+      const resolution = await resolveApiKeyForTask(
+        'OPENCODE_API_KEY_ANTHROPIC',
+        client,
+        taskId,
+        'opencode'
+      );
+      if (resolution.decryptionFailed) {
+        throw new Error(
+          'A saved OpenCode provider key could not be decrypted. Re-enter it in Settings > OpenCode.'
+        );
+      }
+      const projected = buildOpenCodeAuthContent(resolution.connection ?? {});
+      if (!projected.content) {
+        throw new MissingCredentialError(
+          'No OpenCode provider key is saved for this session owner. Save one in Settings > OpenCode.'
+        );
+      }
+      const nativeState = resolveOpenCodeNativeStateLayout({
+        namespaceKey: managedContext.namespaceKey,
+        agorSessionId: managedContext.agorSessionId,
+        taskId,
+      });
+      await prepareOpenCodeScratch(nativeState);
+      managedScratch = nativeState;
+      await pruneOpenCodeAttempts(nativeState, managedContext.accepted);
+      if (managedContext.accepted) {
+        await restoreOpenCodeAcceptedState(nativeState, managedContext.accepted);
+      }
+      managed = {
+        authContent: projected.content,
+        authSecrets: projected.secrets,
+        nativeState,
+        accepted: managedContext.accepted,
+      };
+    }
 
     const assistantMessageId = generateId() as MessageID;
     const permissionLocks = new Map<SessionID, Promise<void>>();
@@ -150,7 +210,11 @@ export async function executeOpenCodeTask(params: {
         taskId,
         prompt,
         agorAssistantMessageId: assistantMessageId,
-        existingOpenCodeSessionId: session.sdk_session_id,
+        // Managed turns resume only the accepted checkpoint's native session;
+        // an unpublished sdk_session_id from a failed turn is never reused.
+        existingOpenCodeSessionId: managed
+          ? (managed.accepted?.openCodeSessionId ?? undefined)
+          : session.sdk_session_id,
         title: session.title || `Task ${shortId(taskId)}`,
         directory: branch.path,
         provider: session.model_config.provider,
@@ -160,6 +224,7 @@ export async function executeOpenCodeTask(params: {
         permissionMode: params.permissionMode,
         signal: params.abortController.signal,
         dataHome,
+        managed,
         persistOpenCodeSessionId: async (openCodeSessionId) => {
           await client.service('sessions').patch(sessionId, { sdk_session_id: openCodeSessionId });
         },
@@ -168,6 +233,9 @@ export async function executeOpenCodeTask(params: {
     );
 
     if (params.abortController.signal.aborted) return;
+    if (managed && !result.nativeStateAttempt) {
+      throw new Error('OpenCode managed turn completed without a published checkpoint');
+    }
 
     const finalIndex = await repos.messages.getNextIndexBySessionId(sessionId);
     await repos.messagesService.create({
@@ -187,6 +255,9 @@ export async function executeOpenCodeTask(params: {
       status: 'completed',
       completed_at: new Date().toISOString(),
       model: `${session.model_config.provider}/${session.model_config.model}`,
+      // The daemon accepts this pointer only together with completion, Session
+      // lock first; a terminal task refuses it (stale writer fence).
+      ...(result.nativeStateAttempt ? { native_state_attempt: result.nativeStateAttempt } : {}),
     });
   } catch (error) {
     const failure = error instanceof Error ? error : new Error(String(error));
@@ -207,5 +278,6 @@ export async function executeOpenCodeTask(params: {
     throw failure;
   } finally {
     globalPermissionManager.unregister(sessionId);
+    if (managedScratch) await discardOpenCodeScratch(managedScratch);
   }
 }

@@ -2,9 +2,70 @@ import type {
   OpenCodeCatalogModel,
   OpenCodeCatalogProvider,
   OpenCodeModelCatalog,
+  OpenCodeProviderConnection,
+  OpenCodeProviderDiscovery,
 } from '@agor/core/types';
 
 export const OPENCODE_VERSION = '1.14.33';
+
+/**
+ * Reviewed key-bearing providers offered in hosted (`managed-projection`)
+ * deployments, mapped to the static encrypted field that stores each key in
+ * the caller's per-tool credential bucket. Providers outside this map are
+ * never projected, even if a field for them somehow exists.
+ */
+export const OPENCODE_HOSTED_PROVIDER_FIELDS = Object.freeze({
+  anthropic: 'OPENCODE_API_KEY_ANTHROPIC',
+  openai: 'OPENCODE_API_KEY_OPENAI',
+  'kimi-for-coding': 'OPENCODE_API_KEY_KIMI_FOR_CODING',
+} as const);
+
+export type OpenCodeHostedProviderId = keyof typeof OPENCODE_HOSTED_PROVIDER_FIELDS;
+export type OpenCodeHostedCredentialField =
+  (typeof OPENCODE_HOSTED_PROVIDER_FIELDS)[OpenCodeHostedProviderId];
+
+export function hostedCredentialFieldForProvider(
+  providerId: string
+): OpenCodeHostedCredentialField | undefined {
+  return Object.hasOwn(OPENCODE_HOSTED_PROVIDER_FIELDS, providerId)
+    ? OPENCODE_HOSTED_PROVIDER_FIELDS[providerId as OpenCodeHostedProviderId]
+    : undefined;
+}
+
+/** Provider ids whose hosted key field is present (non-empty) in a resolved connection. */
+export function hostedProviderIdsFromConnection(
+  connection: Readonly<Record<string, string | boolean | undefined>>
+): Set<string> {
+  const saved = new Set<string>();
+  for (const [providerId, field] of Object.entries(OPENCODE_HOSTED_PROVIDER_FIELDS)) {
+    const value = connection[field];
+    if (value === true || (typeof value === 'string' && value.trim())) saved.add(providerId);
+  }
+  return saved;
+}
+
+/**
+ * Convert a resolved OpenCode connection into the `OPENCODE_AUTH_CONTENT`
+ * map the pinned runtime reads in place of `auth.json`. Only reviewed
+ * providers are projected. `secrets` lists every individual key so the
+ * managed-server sanitizer can redact a bare key, not just the whole map.
+ */
+export function buildOpenCodeAuthContent(
+  connection: Readonly<Record<string, string | undefined>>
+): { content: string | undefined; providerIds: string[]; secrets: string[] } {
+  const auth: Record<string, { type: 'api'; key: string }> = {};
+  const secrets: string[] = [];
+  for (const [providerId, field] of Object.entries(OPENCODE_HOSTED_PROVIDER_FIELDS)) {
+    const key = connection[field]?.trim();
+    if (!key) continue;
+    auth[providerId] = { type: 'api', key };
+    secrets.push(key);
+  }
+  const providerIds = Object.keys(auth);
+  if (providerIds.length === 0) return { content: undefined, providerIds, secrets };
+  const content = JSON.stringify(auth);
+  return { content, providerIds, secrets: [...secrets, content] };
+}
 
 interface KnownProvider {
   id: string;
@@ -144,6 +205,37 @@ export function createOpenCodeKnownModelCatalog(
           },
         }
       : {}),
+    providers,
+  };
+}
+
+/**
+ * Provider settings for hosted deployments, derived from saved-key presence
+ * without starting an OpenCode server. Every reviewed key-bearing provider
+ * offers exactly one API-key method; OAuth is never listed. A saved key is
+ * reported as present but is verified only by the first prompt.
+ */
+export function createOpenCodeHostedProviderDiscovery(
+  savedProviderIds: ReadonlySet<string>
+): OpenCodeProviderDiscovery {
+  const providers: OpenCodeProviderConnection[] = KNOWN_PROVIDERS.map((provider) => {
+    const hostedField = hostedCredentialFieldForProvider(provider.id);
+    const saved = savedProviderIds.has(provider.id);
+    return {
+      id: provider.id,
+      name: provider.name,
+      runtimeAvailable: provider.availableWithoutCredentials || saved,
+      credentialPresence: saved ? 'present' : 'absent',
+      authMethods: hostedField ? [{ index: 0, type: 'api', label: 'API key' }] : [],
+      suggestedModel: provider.suggestedModel,
+      models: provider.models.map((model) => ({ ...model })),
+    };
+  });
+  const catalog = createOpenCodeKnownModelCatalog(savedProviderIds);
+  return {
+    runtime: 'available',
+    runtimeVersion: OPENCODE_VERSION,
+    ...(catalog.suggestedSelection ? { suggestedSelection: catalog.suggestedSelection } : {}),
     providers,
   };
 }

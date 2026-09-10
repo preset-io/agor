@@ -6,6 +6,7 @@
  * Extracted from index.ts for maintainability.
  */
 
+import { resolveOpenCodeCapabilities } from '@agor/agentic-tool-opencode/daemon';
 import { AGENTIC_TOOL_DISPLAY_NAMES } from '@agor/agentic-tools';
 import { projectClaudeResultResponse, projectNormalizedSdkResponse } from '@agor/core';
 import { analyticsLogger } from '@agor/core/analytics';
@@ -686,7 +687,8 @@ const EXECUTOR_TASK_PATCH_FIELDS = taskFieldSet(
   'agent_session_id',
   'error_message',
   'report',
-  'permission_request'
+  'permission_request',
+  'native_state_attempt'
 );
 
 const EXTERNAL_TASK_CREATE_FIELDS = taskFieldSet('session_id', 'full_prompt', 'status');
@@ -1311,7 +1313,13 @@ export function registerHooks(ctx: RegisterHooksContext): void {
   };
 
   if (deployment.mode === 'ha') {
+    // OpenCode's hosted managed-projection authority keeps no daemon-local
+    // native state (keys live in the users row, native state is checkpointed
+    // by the executor), so any replica may serve its settings/catalog. The
+    // process-affine native-file authority stays rejected under constrained HA.
+    const openCodeManaged = resolveOpenCodeCapabilities(config).mode === 'managed-projection';
     for (const [path, feature] of CONSTRAINED_HA_PROCESS_AFFINE_SERVICE_GATES) {
+      if (feature === 'openCodeAuth' && openCodeManaged) continue;
       safeService(path)?.hooks({ before: { all: [rejectInConstrainedHa(deployment, feature)] } });
     }
   }

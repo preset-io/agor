@@ -388,6 +388,13 @@ export interface Task {
   agent_session_id?: string; // SDK's internal session ID for debugging
 
   /**
+   * Hosted OpenCode checkpoint published by this task's executor. Accepted
+   * only through the completion transition that also stamps the Session
+   * pointer; see `packages/core/src/types/opencode-native-state.ts`.
+   */
+  native_state_attempt?: import('./opencode-native-state').OpenCodeNativeStateAttempt;
+
+  /**
    * Human-readable error message populated when the task transitions to the
    * `failed` state. Captures the reason so UI and logs can surface a clear
    * cause instead of silently leaving the session idle with a ghost task.

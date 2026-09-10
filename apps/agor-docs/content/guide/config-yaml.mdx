@@ -91,6 +91,27 @@ tombstone. Settings, plugins, projects, new files, and fork/resume state remain
 writable; Codex native auth is not masked by this change and requires separate
 parity work.
 
+### Hosted OpenCode (`opencode_hosted_native_state`)
+
+OpenCode reports itself as unsupported in hosted, delegated, templated
+deployments until the operator opts in. Setting the key selects the managed
+credential projection plus checkpointed native-state contract described in the
+runtime design (`context/explorations/opencode-cloud.md`): provider API keys are
+stored encrypted per user and pulled by each user's own executor run, and the
+native conversation state is checkpointed to the user's persistent executor home
+after every completed turn. It is admitted only when `multi_tenancy.mode` is
+`required_from_auth`, `execution.unix_user_mode` is `delegated`, an
+`executor_command_template` is set, and `executor_storage.user_home` is
+`persistent-per-user`; otherwise OpenCode stays unsupported with a specific reason.
+
+```yaml
+agentic_tools:
+  opencode_hosted_native_state: checkpointed
+```
+
+Local `simple`/`sandbox` deployments ignore this key and keep OpenCode's native
+credential file authority.
+
 For rollout, deploy/restart this version and confirm the per-user sandbox
 settings on every instance before enabling the default-off flag. For rollback,
 disable the flag and restart first; existing API keys and pasted subscription

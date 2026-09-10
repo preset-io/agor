@@ -12,7 +12,12 @@ export const TENANT_AGENTIC_TOOL_NAMES = [
 ] as const;
 
 export type TenantAgenticToolName = (typeof TENANT_AGENTIC_TOOL_NAMES)[number];
-export type ProviderConnectionTool = Exclude<TenantAgenticToolName, 'opencode'>;
+/**
+ * Every tenant tool now carries a provider connection. OpenCode joined with
+ * its hosted (`managed-projection`) per-provider keys; its local `native-file`
+ * mode simply never stores anything in the bucket.
+ */
+export type ProviderConnectionTool = TenantAgenticToolName;
 
 export const PROVIDER_RESOLUTION_POLICIES = [
   'user_required',
@@ -38,6 +43,11 @@ export const PROVIDER_CONNECTION_FIELDS = {
   gemini: ['GEMINI_API_KEY'],
   copilot: ['COPILOT_GITHUB_TOKEN'],
   cursor: ['CURSOR_API_KEY'],
+  opencode: [
+    'OPENCODE_API_KEY_ANTHROPIC',
+    'OPENCODE_API_KEY_OPENAI',
+    'OPENCODE_API_KEY_KIMI_FOR_CODING',
+  ],
 } as const satisfies Record<ProviderConnectionTool, readonly AgenticToolConfigField[]>;
 
 /** Credential-bearing subset of each atomic provider connection (excludes endpoints). */
@@ -47,6 +57,11 @@ export const PROVIDER_CREDENTIAL_FIELDS = {
   gemini: ['GEMINI_API_KEY'],
   copilot: ['COPILOT_GITHUB_TOKEN'],
   cursor: ['CURSOR_API_KEY'],
+  opencode: [
+    'OPENCODE_API_KEY_ANTHROPIC',
+    'OPENCODE_API_KEY_OPENAI',
+    'OPENCODE_API_KEY_KIMI_FOR_CODING',
+  ],
 } as const satisfies Record<ProviderConnectionTool, readonly AgenticToolConfigField[]>;
 
 export const TENANT_PROVIDER_CONNECTION_FIELDS = {
@@ -54,6 +69,10 @@ export const TENANT_PROVIDER_CONNECTION_FIELDS = {
   'claude-code': PROVIDER_CONNECTION_FIELDS['claude-code'].filter(
     (field) => field !== 'CLAUDE_CODE_OAUTH_TOKEN'
   ),
+  // Workspace-level OpenCode keys are not offered in the first hosted release;
+  // each user saves their own keys and the resolver never selects a tenant
+  // connection for OpenCode.
+  opencode: [],
 } as const satisfies Record<ProviderConnectionTool, readonly AgenticToolConfigField[]>;
 
 export interface StoredTenantAgenticToolSettings {
@@ -99,7 +118,7 @@ export function canonicalTenantAgenticTool(tool: AgenticToolName): TenantAgentic
 export function isProviderConnectionTool(
   tool: TenantAgenticToolName
 ): tool is ProviderConnectionTool {
-  return tool !== 'opencode';
+  return (TENANT_AGENTIC_TOOL_NAMES as readonly string[]).includes(tool);
 }
 
 export function providerToolForField(field: AgenticToolConfigField): ProviderConnectionTool | null {

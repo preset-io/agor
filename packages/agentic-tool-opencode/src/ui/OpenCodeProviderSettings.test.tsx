@@ -126,6 +126,32 @@ function deviceCodeAttempt(attemptId: string) {
 }
 
 describe('OpenCodeProviderSettings', () => {
+  it('renders a permanent capability notice without Retry when the deployment cannot run OpenCode', async () => {
+    const service = createAuthService({
+      find: vi.fn().mockResolvedValue({
+        runtime: 'unsupported',
+        runtimeVersion: '1.14.33',
+        unsupported: {
+          code: 'hosted_native_state_disabled',
+          message:
+            'OpenCode is not available in this workspace: hosted native-state execution has not been enabled for this deployment.',
+        },
+        providers: [],
+      } satisfies Settings),
+    });
+
+    renderSettings(service);
+
+    expect(
+      await screen.findByText('OpenCode is not available in this workspace')
+    ).toBeInTheDocument();
+    expect(screen.getByText(/has not been enabled for this deployment/)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Retry' })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Provider to connect')).not.toBeInTheDocument();
+    expect(service.find).toHaveBeenCalledOnce();
+    expect(service.create).not.toHaveBeenCalled();
+  });
+
   it('keeps the selected provider credential draft isolated from visible runtime providers', async () => {
     const providers: Settings = {
       ...initial,

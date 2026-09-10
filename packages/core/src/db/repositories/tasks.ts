@@ -26,6 +26,7 @@ import type {
 } from '@agor/core/types';
 import {
   EXECUTING_TASK_STATUSES,
+  isOpenCodeNativeStateAttempt,
   isTerminalTaskStatus,
   NONTERMINAL_TASK_STATUSES,
   SessionStatus,
@@ -555,6 +556,7 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
         tool_use_count: task.tool_use_count ?? 0,
         duration_ms: task.duration_ms, // Task execution duration
         agent_session_id: task.agent_session_id, // SDK session ID
+        native_state_attempt: task.native_state_attempt, // Hosted OpenCode checkpoint pointer
         error_message: task.error_message, // Human-readable failure reason when status='failed'
         raw_sdk_response: task.raw_sdk_response, // Raw SDK response - single source of truth for token accounting
         normalized_sdk_response: task.normalized_sdk_response, // Normalized for UI consumption
@@ -1802,101 +1804,9 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
     executorUpdate: boolean
   ): Promise<Task> {
     try {
-      return await this.mutateLockedTask(id, async (txDb, currentRow, fullId) => {
-        console.debug(
-          `🔄 [TaskRepo] Updating task ${shortId(fullId)}${updates.status ? ` (status: ${updates.status})` : ''}`
-        );
-        const current = this.rowToTask(currentRow);
-
-        if (executorUpdate) {
-          if (!executorOwnsTask(currentRow)) {
-            throw new RepositoryError('Task is not connected and executor-writable');
-          }
-          if (updates.status !== undefined && !isExecutorResultStatus(updates.status)) {
-            throw new RepositoryError('Task status is not executor-managed');
-          }
-          if (
-            updates.status === TaskStatus.RUNNING &&
-            current.status !== TaskStatus.AWAITING_PERMISSION &&
-            current.status !== TaskStatus.AWAITING_INPUT
-          ) {
-            throw new RepositoryError('running task status is server-managed');
-          }
-        }
-
-        // Terminal task status is immutable at the row-locked mutation boundary.
-        // Service-level checks are useful for friendly idempotence, but cannot
-        // make a terminal-vs-resume race safe because their read happens before
-        // this transaction acquires the lock. Metadata-only updates remain
-        // allowed for existing callers.
-        if (
-          isTerminalTaskStatus(current.status) &&
-          updates.status !== undefined &&
-          updates.status !== current.status
-        ) {
-          throw new RepositoryError(
-            `terminal task status cannot be changed from ${current.status}`
-          );
-        }
-
-        // The authenticated executor claim is the only path allowed to cross
-        // this boundary. connectExecutor performs its own guarded SQL update
-        // above; generic service update/patch calls flow through this method.
-        if (current.status === TaskStatus.DISPATCHING && updates.status === TaskStatus.RUNNING) {
-          throw new RepositoryError('dispatching tasks must be claimed through connectExecutor');
-        }
-        if (updates.status === TaskStatus.STOPPING && current.status !== TaskStatus.STOPPING) {
-          throw new RepositoryError('stopping tasks must be claimed through claimTermination');
-        }
-        if (
-          current.status === TaskStatus.STOPPING &&
-          current.termination_request &&
-          updates.status !== undefined &&
-          updates.status !== TaskStatus.STOPPING
-        ) {
-          throw new RepositoryError(
-            'termination-owned tasks must be settled through settleTermination'
-          );
-        }
-
-        const merged = {
-          ...deepMerge(current, withTerminalTiming(current, updates)),
-          task_id: current.task_id,
-          session_id: current.session_id,
-          created_by: current.created_by,
-          created_at: current.created_at,
-        };
-        const insertData = this.taskToInsert(merged);
-
-        await update(txDb, tasks)
-          .set({
-            status: insertData.status,
-            queue_position: insertData.queue_position,
-            started_at: insertData.started_at,
-            executor_connected_at: insertData.executor_connected_at,
-            completed_at: insertData.completed_at,
-            last_executor_heartbeat_at: insertData.last_executor_heartbeat_at,
-            termination_coordination_token: insertData.termination_coordination_token,
-            termination_coordination_claimed_at: insertData.termination_coordination_claimed_at,
-            termination_coordination_expires_at: insertData.termination_coordination_expires_at,
-            termination_coordination_instance_id: insertData.termination_coordination_instance_id,
-            termination_coordination_boot_id: insertData.termination_coordination_boot_id,
-            termination_unverified_at: insertData.termination_unverified_at,
-            data: {
-              ...insertData.data,
-              ...(currentRow.data.executor_launch_fs_access_floor
-                ? {
-                    executor_launch_fs_access_floor:
-                      currentRow.data.executor_launch_fs_access_floor,
-                  }
-                : {}),
-            },
-          })
-          .where(eq(tasks.task_id, fullId))
-          .run();
-
-        return merged;
-      });
+      return await this.mutateLockedTask(id, (txDb, currentRow, fullId) =>
+        this.applyTaskUpdate(txDb, currentRow, fullId, updates, executorUpdate)
+      );
     } catch (error) {
       if (error instanceof RepositoryError) throw error;
       throw new RepositoryError(
@@ -1904,6 +1814,153 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
         error
       );
     }
+  }
+
+  /**
+   * Executor completion that also publishes a hosted OpenCode checkpoint.
+   *
+   * The Session row is locked before the Task row (the same order as
+   * `settleTermination`), and the accepted pointer plus `sdk_session_id` are
+   * written in the same transaction as `status = completed`. A terminal task
+   * is refused by `applyTaskUpdate`, so a late publication from a stale
+   * executor cannot become the session's current native state.
+   */
+  async completeWithNativeStatePublication(id: string, updates: Partial<Task>): Promise<Task> {
+    const attempt = updates.native_state_attempt;
+    if (!isOpenCodeNativeStateAttempt(attempt)) {
+      throw new RepositoryError('native_state_attempt is malformed');
+    }
+    if (updates.status !== TaskStatus.COMPLETED) {
+      throw new RepositoryError('native state is published only with a completed status');
+    }
+    try {
+      return await this.mutateLockedSessionTask(id, async (txDb, taskRow, sessionRow, fullId) => {
+        if (attempt.attemptTaskId !== fullId) {
+          throw new RepositoryError('native_state_attempt must name the completing task');
+        }
+        const task = await this.applyTaskUpdate(txDb, taskRow, fullId, updates, true);
+        const projection = await update(txDb, sessions)
+          .set({
+            data: {
+              ...sessionRow.data,
+              sdk_session_id: attempt.openCodeSessionId,
+              sdk_native_state: attempt,
+            },
+            updated_at: new Date(),
+          })
+          .where(eq(sessions.session_id, sessionRow.session_id))
+          .run();
+        if (projection.rowsAffected === 0) {
+          throw new EntityNotFoundError('Session', sessionRow.session_id);
+        }
+        return task;
+      });
+    } catch (error) {
+      if (error instanceof RepositoryError) throw error;
+      throw new RepositoryError(
+        `Failed to publish native state: ${error instanceof Error ? error.message : String(error)}`,
+        error
+      );
+    }
+  }
+
+  private async applyTaskUpdate(
+    txDb: Database,
+    currentRow: TaskRow,
+    fullId: string,
+    updates: Partial<Task>,
+    executorUpdate: boolean
+  ): Promise<Task> {
+    console.debug(
+      `🔄 [TaskRepo] Updating task ${shortId(fullId)}${updates.status ? ` (status: ${updates.status})` : ''}`
+    );
+    const current = this.rowToTask(currentRow);
+
+    if (executorUpdate) {
+      if (!executorOwnsTask(currentRow)) {
+        throw new RepositoryError('Task is not connected and executor-writable');
+      }
+      if (updates.status !== undefined && !isExecutorResultStatus(updates.status)) {
+        throw new RepositoryError('Task status is not executor-managed');
+      }
+      if (
+        updates.status === TaskStatus.RUNNING &&
+        current.status !== TaskStatus.AWAITING_PERMISSION &&
+        current.status !== TaskStatus.AWAITING_INPUT
+      ) {
+        throw new RepositoryError('running task status is server-managed');
+      }
+    }
+
+    // Terminal task status is immutable at the row-locked mutation boundary.
+    // Service-level checks are useful for friendly idempotence, but cannot
+    // make a terminal-vs-resume race safe because their read happens before
+    // this transaction acquires the lock. Metadata-only updates remain
+    // allowed for existing callers.
+    if (
+      isTerminalTaskStatus(current.status) &&
+      updates.status !== undefined &&
+      updates.status !== current.status
+    ) {
+      throw new RepositoryError(`terminal task status cannot be changed from ${current.status}`);
+    }
+
+    // The authenticated executor claim is the only path allowed to cross
+    // this boundary. connectExecutor performs its own guarded SQL update
+    // above; generic service update/patch calls flow through this method.
+    if (current.status === TaskStatus.DISPATCHING && updates.status === TaskStatus.RUNNING) {
+      throw new RepositoryError('dispatching tasks must be claimed through connectExecutor');
+    }
+    if (updates.status === TaskStatus.STOPPING && current.status !== TaskStatus.STOPPING) {
+      throw new RepositoryError('stopping tasks must be claimed through claimTermination');
+    }
+    if (
+      current.status === TaskStatus.STOPPING &&
+      current.termination_request &&
+      updates.status !== undefined &&
+      updates.status !== TaskStatus.STOPPING
+    ) {
+      throw new RepositoryError(
+        'termination-owned tasks must be settled through settleTermination'
+      );
+    }
+
+    const merged = {
+      ...deepMerge(current, withTerminalTiming(current, updates)),
+      task_id: current.task_id,
+      session_id: current.session_id,
+      created_by: current.created_by,
+      created_at: current.created_at,
+    };
+    const insertData = this.taskToInsert(merged);
+
+    await update(txDb, tasks)
+      .set({
+        status: insertData.status,
+        queue_position: insertData.queue_position,
+        started_at: insertData.started_at,
+        executor_connected_at: insertData.executor_connected_at,
+        completed_at: insertData.completed_at,
+        last_executor_heartbeat_at: insertData.last_executor_heartbeat_at,
+        termination_coordination_token: insertData.termination_coordination_token,
+        termination_coordination_claimed_at: insertData.termination_coordination_claimed_at,
+        termination_coordination_expires_at: insertData.termination_coordination_expires_at,
+        termination_coordination_instance_id: insertData.termination_coordination_instance_id,
+        termination_coordination_boot_id: insertData.termination_coordination_boot_id,
+        termination_unverified_at: insertData.termination_unverified_at,
+        data: {
+          ...insertData.data,
+          ...(currentRow.data.executor_launch_fs_access_floor
+            ? {
+                executor_launch_fs_access_floor: currentRow.data.executor_launch_fs_access_floor,
+              }
+            : {}),
+        },
+      })
+      .where(eq(tasks.task_id, fullId))
+      .run();
+
+    return merged;
   }
 
   async update(id: string, updates: Partial<Task>): Promise<Task> {

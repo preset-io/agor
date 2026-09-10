@@ -20,6 +20,13 @@ vi.mock('@agor/core/mcp', async (importOriginal) => ({
   getMcpServersForSession: mocks.getMcpServersForSession,
 }));
 
+const nativeState = vi.hoisted(() => ({
+  prepare: vi.fn(async () => undefined),
+  prune: vi.fn(async () => []),
+  restore: vi.fn(async () => undefined),
+  discard: vi.fn(async () => undefined),
+}));
+
 vi.mock('@agor/agentic-tool-opencode/runtime', () => ({
   isOpenCodeCleanupUnverifiedError: (error: unknown) =>
     error instanceof Error && error.name === 'OpenCodeCleanupUnverifiedError',
@@ -29,6 +36,21 @@ vi.mock('@agor/agentic-tool-opencode/runtime', () => ({
     }
     runTurn = mocks.runTurn;
   },
+  resolveOpenCodeNativeStateLayout: (input: { taskId: string }) => ({
+    scratchRoot: `/scratch/${input.taskId}`,
+    xdg: {
+      data: `/scratch/${input.taskId}/xdg-data`,
+      config: `/scratch/${input.taskId}/xdg-config`,
+      cache: `/scratch/${input.taskId}/xdg-cache`,
+      state: `/scratch/${input.taskId}/xdg-state`,
+    },
+    liveDbPath: `/scratch/${input.taskId}/opencode.db`,
+    attemptsDir: '/home/user/attempts',
+  }),
+  prepareOpenCodeScratch: nativeState.prepare,
+  pruneOpenCodeAttempts: nativeState.prune,
+  restoreOpenCodeAcceptedState: nativeState.restore,
+  discardOpenCodeScratch: nativeState.discard,
 }));
 
 vi.mock('../../db/feathers-repositories.js', () => ({
@@ -90,6 +112,14 @@ function client(sessionOverrides: Record<string, unknown> = {}) {
       find: vi.fn(async () => ({ total: 0, limit: 1, skip: 0, data: [] })),
       create: vi.fn(async () => ({})),
     },
+    'config/resolve-api-key': {
+      create: vi.fn(async () => ({
+        apiKey: null,
+        connection: { OPENCODE_API_KEY_ANTHROPIC: 'sk-ant-test' },
+        source: 'user',
+        useNativeAuth: false,
+      })),
+    },
   };
   return {
     services,
@@ -97,9 +127,27 @@ function client(sessionOverrides: Record<string, unknown> = {}) {
   };
 }
 
+const managedContext = {
+  version: 2 as const,
+  mode: 'managed-projection' as const,
+  namespaceKey: 'e'.repeat(64),
+  agorSessionId: sessionId,
+  taskId,
+  accepted: null,
+};
+const acceptedAttempt = {
+  version: 1 as const,
+  attemptTaskId: '01a08d5f-7773-77fa-a7dc-2575cfe6727f',
+  digest: `sha256:${'a'.repeat(64)}`,
+  bytes: 4096,
+  openCodeSessionId: 'oc-accepted',
+  publishedAt: '2026-09-10T22:18:55.000Z',
+};
+
 function execute(
   value: ReturnType<typeof client>['value'],
-  abortController = new AbortController()
+  abortController = new AbortController(),
+  agenticToolContext: Record<string, unknown> = { dataHome: '/opaque/opencode-home' }
 ) {
   return executeOpenCodeTask({
     client: value as never,
@@ -107,7 +155,7 @@ function execute(
     taskId: taskId as never,
     prompt: 'Continue',
     abortController,
-    agenticToolContext: { dataHome: '/opaque/opencode-home' },
+    agenticToolContext,
   });
 }
 
@@ -282,5 +330,102 @@ describe('OpenCode executor adapter', () => {
 
     expect(state.services.tasks.patch).not.toHaveBeenCalled();
     expect(state.services.messages.create).not.toHaveBeenCalled();
+  });
+});
+
+describe('OpenCode executor adapter (hosted managed projection)', () => {
+  it('pulls reviewed keys through the task-scoped read, restores the accepted checkpoint, and publishes with completion', async () => {
+    const state = client({
+      sdk_session_id: 'oc-stale-unpublished',
+      model_config: { mode: 'exact', provider: 'anthropic', model: 'claude-test' },
+    });
+    const published = {
+      ...acceptedAttempt,
+      attemptTaskId: taskId,
+      openCodeSessionId: 'oc-accepted',
+    };
+    mocks.runTurn.mockResolvedValueOnce({
+      openCodeSessionId: 'oc-accepted',
+      sessionWasCreated: false,
+      nativeStateAttempt: published,
+      finalMessage: { content: 'done', contentBlocks: [], toolUses: [], metadata: {} },
+    });
+
+    await execute(state.value, new AbortController(), {
+      ...managedContext,
+      accepted: acceptedAttempt,
+    });
+
+    expect(state.services['config/resolve-api-key'].create).toHaveBeenCalledWith({
+      taskId,
+      keyName: 'OPENCODE_API_KEY_ANTHROPIC',
+      tool: 'opencode',
+    });
+    expect(nativeState.prepare).toHaveBeenCalledOnce();
+    expect(nativeState.prune).toHaveBeenCalledWith(expect.anything(), acceptedAttempt);
+    expect(nativeState.restore).toHaveBeenCalledWith(expect.anything(), acceptedAttempt);
+    const turn = mocks.runTurn.mock.calls[0][0] as {
+      existingOpenCodeSessionId?: string;
+      dataHome?: string;
+      managed?: { authContent?: string; authSecrets: string[]; accepted: unknown };
+    };
+    expect(turn.existingOpenCodeSessionId).toBe('oc-accepted');
+    expect(turn.dataHome).toBeUndefined();
+    expect(JSON.parse(turn.managed?.authContent ?? '{}')).toEqual({
+      anthropic: { type: 'api', key: 'sk-ant-test' },
+    });
+    expect(turn.managed?.authSecrets).toContain('sk-ant-test');
+    expect(process.env.OPENCODE_API_KEY_ANTHROPIC).toBeUndefined();
+    expect(process.env.OPENCODE_AUTH_CONTENT).toBeUndefined();
+    expect(state.services.sessions.patch).not.toHaveBeenCalled();
+    expect(state.services.tasks.patch).toHaveBeenCalledWith(
+      taskId,
+      expect.objectContaining({ status: 'completed', native_state_attempt: published })
+    );
+    expect(nativeState.discard).toHaveBeenCalledOnce();
+  });
+
+  it('fails the turn as a missing credential when no reviewed key is saved', async () => {
+    const state = client({ model_config: { mode: 'exact', provider: 'anthropic', model: 'm' } });
+    state.services['config/resolve-api-key'].create.mockResolvedValueOnce({
+      apiKey: null,
+      connection: {},
+      source: 'none',
+      useNativeAuth: false,
+    });
+
+    await expect(execute(state.value, new AbortController(), managedContext)).rejects.toThrow(
+      /No OpenCode provider key is saved/
+    );
+    expect(mocks.runTurn).not.toHaveBeenCalled();
+    expect(state.services.tasks.patch).toHaveBeenCalledWith(
+      taskId,
+      expect.objectContaining({ status: 'failed' })
+    );
+  });
+
+  it('refuses a managed context that names another task and a turn without a checkpoint', async () => {
+    const state = client({ model_config: { mode: 'exact', provider: 'anthropic', model: 'm' } });
+    await expect(
+      execute(state.value, new AbortController(), {
+        ...managedContext,
+        taskId: '01a08d5f-7773-77fa-a7dc-2575cfe6727f',
+      })
+    ).rejects.toThrow(/does not belong to this task/);
+    expect(mocks.runTurn).not.toHaveBeenCalled();
+
+    mocks.runTurn.mockResolvedValueOnce({
+      openCodeSessionId: 'oc-new',
+      sessionWasCreated: true,
+      finalMessage: { content: 'done', contentBlocks: [], toolUses: [], metadata: {} },
+    });
+    const second = client({ model_config: { mode: 'exact', provider: 'anthropic', model: 'm' } });
+    await expect(execute(second.value, new AbortController(), managedContext)).rejects.toThrow(
+      /without a published checkpoint/
+    );
+    expect(second.services.tasks.patch).not.toHaveBeenCalledWith(
+      taskId,
+      expect.objectContaining({ status: 'completed' })
+    );
   });
 });

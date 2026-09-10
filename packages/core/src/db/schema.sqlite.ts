@@ -146,6 +146,7 @@ export const sessions = sqliteTable(
       .$type<{
         agentic_tool_version?: string;
         sdk_session_id?: string; // SDK session ID for conversation continuity (Claude Agent SDK, Codex SDK, etc.)
+        sdk_native_state?: Session['sdk_native_state']; // Accepted hosted OpenCode checkpoint pointer
         mcp_token?: string; // MCP authentication token for Agor self-access
         title?: string; // Session title (user-provided or auto-generated)
         description?: string; // Legacy field, may contain first prompt
@@ -355,6 +356,7 @@ export const tasks = sqliteTable(
 
         duration_ms?: number;
         agent_session_id?: string;
+        native_state_attempt?: Task['native_state_attempt']; // Hosted OpenCode checkpoint pointer (executor-reported)
 
         // Populated when a task transitions to `failed` so the cause is
         // preserved instead of the session silently sitting idle.

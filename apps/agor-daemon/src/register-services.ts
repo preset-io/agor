@@ -10,7 +10,11 @@ import { type FileHandle, mkdir } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { performance } from 'node:perf_hooks';
-import { OPENCODE_DAEMON_CONTRIBUTION } from '@agor/agentic-tool-opencode/daemon';
+import {
+  OPENCODE_DAEMON_CONTRIBUTION,
+  OpenCodeUnsupportedError,
+  resolveOpenCodeCapabilities,
+} from '@agor/agentic-tool-opencode/daemon';
 import { AGENTIC_TOOL_DISPLAY_NAMES } from '@agor/agentic-tools';
 import { mutateCredentialFile, openCredentialFileForBind } from '@agor/core/codex/credential-file';
 import {
@@ -492,8 +496,17 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   // Core services: sessions, tasks, messages
   // ============================================================================
 
-  const sessionsService = createSessionsService(db, app, (tool) =>
-    isDeploymentAgenticToolAvailable(tool, deploymentAgenticToolPolicy)
+  const sessionsService = createSessionsService(
+    db,
+    app,
+    (tool) => isDeploymentAgenticToolAvailable(tool, deploymentAgenticToolPolicy),
+    (tool) => {
+      if (tool !== 'opencode') return undefined;
+      const capabilities = resolveOpenCodeCapabilities(config);
+      return capabilities.mode === 'unsupported'
+        ? new OpenCodeUnsupportedError(capabilities.reason)
+        : undefined;
+    }
   ) as unknown as SessionsServiceImpl;
   const tasksService = createTasksService(db, app, sessionTokenService);
   app.use('/sessions', sessionsService, {
@@ -1619,7 +1632,9 @@ function createExecuteHandler(
       return contribution.getExecutorLaunch({
         tenantId,
         session,
+        taskId: data.taskId,
         homeDir: executorHomeDir,
+        config,
       });
     })();
 

@@ -269,26 +269,43 @@ describe('OpenCode provider auth service', () => {
     expect(seen.join(' ')).not.toContain('same-user');
   });
 
-  it('rejects hosted auth-resolved tenancy before executor or provider activity', async () => {
+  it('reports hosted auth-resolved tenancy as unsupported without executor or provider activity', async () => {
     loadConfig.mockReturnValue({
       multi_tenancy: { mode: 'required_from_auth', auth_claim: 'tenant_id' },
     } as never);
 
     await runWithTenantContext('tenant-a', async () => {
-      await expect(service().find(params)).rejects.toThrow(/hosted multi-tenant/i);
+      await expect(service().find(params)).resolves.toEqual({
+        runtime: 'unsupported',
+        runtimeVersion: '1.14.33',
+        unsupported: {
+          code: 'hosted_native_state_disabled',
+          message: expect.stringMatching(/not been enabled/),
+        },
+        providers: [],
+      });
+      // Mutations still fail closed with the same structured reason.
+      await expect(
+        service().create({ providerId: 'openai', apiKey: 'sk-test' }, params)
+      ).rejects.toMatchObject({ data: { code: 'hosted_native_state_disabled' } });
+      await expect(service().find()).rejects.toThrow(/sign in/i);
     });
 
     expect(runCommand).not.toHaveBeenCalled();
   });
 
-  it('rejects delegated mode before executor or provider activity', async () => {
+  it('reports delegated mode as unsupported before executor or provider activity', async () => {
     loadConfig.mockReturnValue({
       execution: { unix_user_mode: 'delegated' },
     } as never);
 
     await runWithTenantContext('tenant-a', async () => {
-      await expect(service().find(params)).rejects.toThrow(
-        /unavailable in delegated execution mode/i
+      await expect(service().find(params)).resolves.toMatchObject({
+        runtime: 'unsupported',
+        unsupported: { code: 'delegated_execution' },
+      });
+      await expect(service().remove('openai', params)).rejects.toThrow(
+        /delegated execution provides no native-state home boundary/i
       );
     });
 
@@ -932,5 +949,98 @@ describe('OpenCode provider auth service', () => {
       const result = await runWithTenantContext('tenant-a', () => service().find(params));
       expect(result.isolation).toEqual({ mode, boundary: 'logical' });
     }
+  });
+});
+
+describe('OpenCode provider auth service (hosted managed projection)', () => {
+  const hostedConfig = {
+    multi_tenancy: { mode: 'required_from_auth', auth_claim: 'tenant_id' },
+    execution: {
+      unix_user_mode: 'delegated',
+      executor_command_template: 'launch',
+      executor_storage: { user_home: 'persistent-per-user' },
+    },
+    agentic_tools: { opencode_hosted_native_state: 'checkpointed' },
+  };
+
+  function hostedService(patch = vi.fn(async () => ({}))) {
+    loadConfig.mockReturnValue(hostedConfig as never);
+    usersRepository.mockImplementation(function repository() {
+      return {
+        findById: vi.fn(async () => ({
+          user_id: 'same-user',
+          agentic_tools: { opencode: { OPENCODE_API_KEY_OPENAI: true } },
+        })),
+      };
+    } as never);
+    const host = { service: vi.fn(() => ({ patch })) };
+    return { service: createOpenCodeAuthService(db, loadConfigSync(), host as never), patch };
+  }
+
+  it('reports saved-key presence on the reviewed provider list without an executor', async () => {
+    const { service } = hostedService();
+    const settings = await runWithTenantContext('tenant-a', () => service.find(params));
+    expect(settings.runtime).toBe('available');
+    if (settings.runtime !== 'available') throw new Error('expected available settings');
+    expect(settings.isolation).toEqual({ mode: 'managed-projection', boundary: 'executor-run' });
+    expect(settings.providers.find((p) => p.id === 'openai')).toMatchObject({
+      credentialPresence: 'present',
+      authMethods: [{ type: 'api' }],
+    });
+    expect(settings.providers.every((p) => p.authMethods.every((m) => m.type !== 'oauth'))).toBe(
+      true
+    );
+    expect(runCommand).not.toHaveBeenCalled();
+  });
+
+  it('saves and clears a reviewed provider key through the users service as the caller', async () => {
+    const { service, patch } = hostedService();
+    await runWithTenantContext('tenant-a', async () => {
+      const saved = await service.create({ providerId: 'anthropic', apiKey: ' sk-ant-test ' }, {
+        ...params,
+        query: { branch_id: 'x' },
+      } as never);
+      if (saved.runtime !== 'available' || !('isolation' in saved)) throw new Error('unexpected');
+      expect(saved.providers.find((p) => p.id === 'anthropic')?.credentialPresence).toBe('present');
+      const removed = await service.remove('openai', params);
+      if (removed.runtime !== 'available') throw new Error('unexpected');
+      expect(removed.providers.find((p) => p.id === 'openai')?.credentialPresence).toBe('absent');
+    });
+    expect(patch).toHaveBeenNthCalledWith(
+      1,
+      'same-user',
+      { agentic_tools: { opencode: { OPENCODE_API_KEY_ANTHROPIC: 'sk-ant-test' } } },
+      expect.not.objectContaining({ query: expect.anything() })
+    );
+    expect(patch).toHaveBeenNthCalledWith(
+      2,
+      'same-user',
+      { agentic_tools: { opencode: { OPENCODE_API_KEY_OPENAI: null } } },
+      expect.anything()
+    );
+    expect(runCommand).not.toHaveBeenCalled();
+  });
+
+  it('refuses unreviewed providers, metadata, OAuth, and removal of an absent key', async () => {
+    const { service, patch } = hostedService();
+    await runWithTenantContext('tenant-a', async () => {
+      await expect(service.create({ providerId: 'zhipuai', apiKey: 'k' }, params)).rejects.toThrow(
+        /not available for hosted OpenCode/
+      );
+      await expect(
+        service.create({ providerId: 'openai', apiKey: 'k', metadata: { region: 'us' } }, params)
+      ).rejects.toThrow(/API key only/);
+      await expect(
+        service.create({ operation: 'connect-oauth', providerId: 'openai', method: 0 }, params)
+      ).rejects.toMatchObject({ data: { code: 'mode_not_admitted', mode: 'managed-projection' } });
+      await expect(service.remove('anthropic', params)).rejects.toThrow(
+        /No saved OpenCode credential/
+      );
+      await expect(service.find({ ...params, query: { branch_id: 'b' } } as never)).rejects.toThrow(
+        /do not accept branch discovery/
+      );
+    });
+    expect(patch).not.toHaveBeenCalled();
+    expect(startOAuth).not.toHaveBeenCalled();
   });
 });

@@ -55,6 +55,9 @@ const PROVIDER_AMBIENT_ENV: Record<
     prefixes: [],
   },
   cursor: { keys: [], prefixes: [] },
+  // OpenCode reads no ambient provider env: the executor projects the resolved
+  // keys through OPENCODE_AUTH_CONTENT on the managed server only.
+  opencode: { keys: [], prefixes: [] },
 };
 
 export type ProviderConnectionSource = 'user' | 'tenant' | 'none';
