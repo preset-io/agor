@@ -79,6 +79,43 @@ describe('FileService executor failures', () => {
     ).rejects.toThrow('Failed to browse files: executor unavailable');
   });
 
+  it('passes the requested git snapshot to file previews', async () => {
+    vi.mocked(requestExecutor).mockResolvedValue({
+      success: true,
+      data: {
+        file: {
+          path: 'added.txt',
+          title: 'added.txt',
+          size: 6,
+          lastModified: '',
+          isText: true,
+          gitStatus: 'added',
+          content: 'staged',
+          encoding: 'utf-8',
+        },
+      },
+    });
+    const service = new FileService(createBranchRepo(), { run: vi.fn() } as never, createApp());
+
+    await runWithTenantContext('tenant-a', () =>
+      service.get('added.txt', {
+        query: { branch_id: 'branch-1', git_status_source: 'staged' },
+        user: { user_id: 'user-1', email: 'member@example.com', role: 'member' },
+      })
+    );
+
+    expect(requestExecutor).toHaveBeenCalledWith(
+      expect.objectContaining({
+        command: 'branch.files.read',
+        params: expect.objectContaining({
+          filePath: 'added.txt',
+          gitStatusSource: 'staged',
+        }),
+      }),
+      expect.anything()
+    );
+  });
+
   it.each([
     {
       operation: 'listing',

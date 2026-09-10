@@ -13,7 +13,7 @@
  * - Supports all file types (text and binary)
  */
 
-import type { GitFileStatus } from '@agor-live/client';
+import type { FileListItem, GitFileStatus, GitFileStatusSource } from '@agor-live/client';
 import {
   CopyOutlined,
   DownloadOutlined,
@@ -33,15 +33,7 @@ const { Search } = Input;
 // Debounce delay for live search (milliseconds)
 const SEARCH_DEBOUNCE_MS = 300;
 
-export type FileItem = {
-  path: string;
-  title: string;
-  size: number;
-  lastModified: string;
-  isText?: boolean;
-  mimeType?: string;
-  gitStatus?: GitFileStatus;
-};
+export type FileItem = FileListItem;
 
 /** VSCode-style badge letter + theme color for each git status. */
 interface GitStatusMeta {
@@ -96,6 +88,18 @@ export interface FileCollectionProps {
 
   /** Message to show when no files found */
   emptyMessage?: string;
+
+  /** Which git status dimension supplies file and folder badges. */
+  gitStatusSource?: GitFileStatusSource;
+}
+
+function getDisplayedGitStatus(
+  file: FileItem,
+  source: GitFileStatusSource
+): GitFileStatus | undefined {
+  if (source === 'workingTree') return file.gitWorkingTreeStatus;
+  if (source === 'staged') return file.gitStagedStatus;
+  return file.gitStatus;
 }
 
 /**
@@ -118,6 +122,7 @@ function buildTree(
   files: FileItem[],
   searchQuery: string,
   statusMeta: Record<GitFileStatus, GitStatusMeta>,
+  gitStatusSource: GitFileStatusSource,
   onDownload?: (file: FileItem) => void,
   onCopyPath?: (file: FileItem) => void
 ): TreeNode[] {
@@ -134,13 +139,14 @@ function buildTree(
   // containing edits can be tinted like an IDE explorer. `ignored` is skipped.
   const dirStatus = new Map<string, GitFileStatus>();
   for (const file of filteredFiles) {
-    if (!file.gitStatus || file.gitStatus === 'ignored') continue;
+    const status = getDisplayedGitStatus(file, gitStatusSource);
+    if (!status || status === 'ignored') continue;
     const parts = file.path.split('/');
     for (let i = 1; i < parts.length; i++) {
       const dir = parts.slice(0, i).join('/');
       const current = dirStatus.get(dir);
-      if (!current || GIT_STATUS_SEVERITY[file.gitStatus] > GIT_STATUS_SEVERITY[current]) {
-        dirStatus.set(dir, file.gitStatus);
+      if (!current || GIT_STATUS_SEVERITY[status] > GIT_STATUS_SEVERITY[current]) {
+        dirStatus.set(dir, status);
       }
     }
   }
@@ -202,8 +208,9 @@ function buildTree(
     };
 
     const fileSize = formatSize(file.size);
-    const meta = file.gitStatus ? statusMeta[file.gitStatus] : undefined;
-    const isDeleted = file.gitStatus === 'deleted';
+    const displayedStatus = getDisplayedGitStatus(file, gitStatusSource);
+    const meta = displayedStatus ? statusMeta[displayedStatus] : undefined;
+    const isDeleted = displayedStatus === 'deleted';
     const tooltipText = meta
       ? `${file.path} — ${meta.label}${isDeleted ? '' : ` (${fileSize})`}`
       : `${file.path} (${fileSize})`;
@@ -345,6 +352,7 @@ const FileCollectionInner: React.FC<FileCollectionProps> = ({
   onDownload,
   loading = false,
   emptyMessage = 'No files found',
+  gitStatusSource = 'combined',
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [searchInput, setSearchInput] = useState('');
@@ -383,8 +391,9 @@ const FileCollectionInner: React.FC<FileCollectionProps> = ({
   // Build tree structure - only depends on files, searchQuery, status colors,
   // and stable callbacks
   const treeData = useMemo(
-    () => buildTree(files, searchQuery, statusMeta, stableOnDownload, handleCopyPath),
-    [files, searchQuery, statusMeta, stableOnDownload, handleCopyPath]
+    () =>
+      buildTree(files, searchQuery, statusMeta, gitStatusSource, stableOnDownload, handleCopyPath),
+    [files, searchQuery, statusMeta, gitStatusSource, stableOnDownload, handleCopyPath]
   );
 
   // Handle node selection - stable callback using ref
@@ -531,6 +540,7 @@ export const FileCollection = memo(FileCollectionInner, (prevProps, nextProps) =
   return (
     prevProps.loading === nextProps.loading &&
     prevProps.emptyMessage === nextProps.emptyMessage &&
+    prevProps.gitStatusSource === nextProps.gitStatusSource &&
     prevProps.files === nextProps.files
     // Note: we intentionally don't compare onFileClick and onDownload
     // since we use refs internally to always get the latest callback

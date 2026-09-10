@@ -1,6 +1,13 @@
-import type { AgorClient, Branch, FileDetail, FileListItem } from '@agor-live/client';
-import { Alert, Space } from 'antd';
-import { memo, useCallback, useEffect, useRef, useState } from 'react';
+import type {
+  AgorClient,
+  Branch,
+  FileDetail,
+  FileListItem,
+  GitFileStatusSource,
+} from '@agor-live/client';
+import { ReloadOutlined } from '@ant-design/icons';
+import { Alert, Button, Space, Tabs } from 'antd';
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useThemedMessage } from '../../../utils/message';
 import { CodePreviewModal } from '../../CodePreviewModal/CodePreviewModal';
 import type { FileItem } from '../../FileCollection/FileCollection';
@@ -16,7 +23,9 @@ interface FilesTabProps {
 const FilesTabInner: React.FC<FilesTabProps> = ({ branch, client }) => {
   const [files, setFiles] = useState<FileListItem[]>([]);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const fileRequestIdRef = useRef(0);
 
   // Modal state
   const [selectedFile, setSelectedFile] = useState<FileDetail | null>(null);
@@ -32,32 +41,61 @@ const FilesTabInner: React.FC<FilesTabProps> = ({ branch, client }) => {
 
   const { showLoading, showSuccess, showError } = useThemedMessage();
 
-  // Fetch files when tab is opened
-  useEffect(() => {
-    if (!client) {
-      setLoading(false);
-      return;
-    }
+  // The endpoint reads the worktree and git status on every request, so the
+  // same operation handles both the initial load and an in-place refresh.
+  const fetchFiles = useCallback(
+    async (initialLoad = false) => {
+      const requestId = ++fileRequestIdRef.current;
 
-    const fetchFiles = async () => {
-      try {
+      if (!client) {
+        setLoading(false);
+        setRefreshing(false);
+        return;
+      }
+
+      if (initialLoad) {
         setLoading(true);
-        setError(null);
+      } else {
+        setRefreshing(true);
+      }
+      setError(null);
 
+      try {
         const data = await client.service('file').findAll({
           query: { branch_id: branch.branch_id },
         });
-        setFiles(data as FileListItem[]);
+
+        if (fileRequestIdRef.current === requestId) {
+          setFiles(data as FileListItem[]);
+        }
       } catch (err) {
         console.error('Failed to fetch files:', err);
-        setError(err instanceof Error ? err.message : String(err));
+        if (fileRequestIdRef.current === requestId) {
+          setError(err instanceof Error ? err.message : String(err));
+        }
       } finally {
-        setLoading(false);
+        if (fileRequestIdRef.current === requestId) {
+          setLoading(false);
+          setRefreshing(false);
+        }
       }
-    };
+    },
+    [client, branch.branch_id]
+  );
 
-    fetchFiles();
-  }, [client, branch.branch_id]);
+  // Fetch files when tab is opened or switches to a different branch.
+  useEffect(() => {
+    void fetchFiles(true);
+
+    return () => {
+      // Ignore a response from a branch that is no longer being displayed.
+      fileRequestIdRef.current += 1;
+    };
+  }, [fetchFiles]);
+
+  const handleRefresh = useCallback(() => {
+    void fetchFiles();
+  }, [fetchFiles]);
 
   // Download file (handles both UTF-8 text and base64 binary)
   const downloadFile = useCallback(
@@ -118,7 +156,7 @@ const FilesTabInner: React.FC<FilesTabProps> = ({ branch, client }) => {
 
   // Handle file click - preview text files or download others - stable callback
   const handleFileClick = useCallback(
-    async (file: FileItem) => {
+    async (file: FileItem, gitStatusSource: GitFileStatusSource = 'combined') => {
       const currentClient = clientRef.current;
       if (!currentClient) return;
 
@@ -130,7 +168,10 @@ const FilesTabInner: React.FC<FilesTabProps> = ({ branch, client }) => {
 
           // Fetch full file detail with content
           const detail = await currentClient.service('file').get(file.path, {
-            query: { branch_id: branchIdRef.current },
+            query: {
+              branch_id: branchIdRef.current,
+              git_status_source: gitStatusSource,
+            },
           });
 
           setSelectedFile(detail as FileDetail);
@@ -149,6 +190,15 @@ const FilesTabInner: React.FC<FilesTabProps> = ({ branch, client }) => {
     [downloadFile, showError]
   );
 
+  const handleWorkingTreeFileClick = useCallback(
+    (file: FileItem) => handleFileClick(file, 'workingTree'),
+    [handleFileClick]
+  );
+  const handleStagedFileClick = useCallback(
+    (file: FileItem) => handleFileClick(file, 'staged'),
+    [handleFileClick]
+  );
+
   // Handle modal close - stable callback
   const handleModalClose = useCallback(() => {
     setModalOpen(false);
@@ -156,6 +206,21 @@ const FilesTabInner: React.FC<FilesTabProps> = ({ branch, client }) => {
   }, []);
 
   const isTruncated = files.length >= MAX_FILES;
+  const visibleFiles = useMemo(
+    // Deleted entries are synthesized by the executor for source-control
+    // views; the regular file browser mirrors the actual worktree instead.
+    () => files.filter((file) => file.gitStatus !== 'deleted'),
+    [files]
+  );
+  const workingTreeChanges = useMemo(
+    () =>
+      files.filter((file) => file.gitWorkingTreeStatus && file.gitWorkingTreeStatus !== 'ignored'),
+    [files]
+  );
+  const stagedChanges = useMemo(
+    () => files.filter((file) => file.gitStagedStatus !== undefined),
+    [files]
+  );
 
   return (
     <div style={{ width: '100%', maxHeight: '70vh', overflowY: 'auto' }}>
@@ -180,12 +245,63 @@ const FilesTabInner: React.FC<FilesTabProps> = ({ branch, client }) => {
 
         {error && <Alert title="Error" description={error} type="error" showIcon />}
 
-        <FileCollection
-          files={files}
-          loading={loading}
-          onFileClick={handleFileClick}
-          onDownload={downloadFile}
-          emptyMessage="No files found in branch"
+        <Tabs
+          destroyOnHidden
+          tabBarStyle={{ marginInline: 24 }}
+          tabBarExtraContent={
+            <Button
+              icon={<ReloadOutlined />}
+              aria-label="Refresh files"
+              loading={refreshing}
+              disabled={!client || loading}
+              onClick={handleRefresh}
+            >
+              Refresh
+            </Button>
+          }
+          items={[
+            {
+              key: 'all-files',
+              label: 'All files',
+              children: (
+                <FileCollection
+                  files={visibleFiles}
+                  loading={loading}
+                  onFileClick={handleFileClick}
+                  onDownload={downloadFile}
+                  emptyMessage="No files found in branch"
+                />
+              ),
+            },
+            {
+              key: 'changes',
+              label: `Changes (${workingTreeChanges.length})`,
+              children: (
+                <FileCollection
+                  files={workingTreeChanges}
+                  loading={loading}
+                  onFileClick={handleWorkingTreeFileClick}
+                  onDownload={downloadFile}
+                  emptyMessage="No unstaged changes"
+                  gitStatusSource="workingTree"
+                />
+              ),
+            },
+            {
+              key: 'staged-changes',
+              label: `Staged changes (${stagedChanges.length})`,
+              children: (
+                <FileCollection
+                  files={stagedChanges}
+                  loading={loading}
+                  onFileClick={handleStagedFileClick}
+                  onDownload={downloadFile}
+                  emptyMessage="No staged changes"
+                  gitStatusSource="staged"
+                />
+              ),
+            },
+          ]}
         />
 
         <CodePreviewModal

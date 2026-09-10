@@ -11,7 +11,9 @@
 export type FilePath = string;
 
 /**
- * Working-tree git status for a single file, relative to HEAD.
+ * Git status for a single file. `FileListItem.gitStatus` is the combined
+ * status used by the all-files view; the staged and working-tree fields retain
+ * the two porcelain dimensions separately.
  *
  * Mirrors the VSCode / IDE source-control vocabulary so the UI can color-code
  * and badge entries consistently:
@@ -36,6 +38,9 @@ export type GitFileStatus =
   | 'untracked'
   | 'conflicted'
   | 'ignored';
+
+/** Git snapshot used when opening a source-control file preview. */
+export type GitFileStatusSource = 'combined' | 'workingTree' | 'staged';
 
 /**
  * File list response (lightweight, for browsing)
@@ -78,10 +83,24 @@ export interface FileListItem {
   mimeType?: string;
 
   /**
-   * Working-tree git status relative to HEAD. Omitted when the file is
+   * Combined source-control status relative to HEAD. Omitted when the file is
    * unchanged or status could not be computed (non-git branch, git error).
    */
   gitStatus?: GitFileStatus;
+
+  /**
+   * Change in the working tree relative to the index. Omitted when the file
+   * has no unstaged change. Untracked files are working-tree changes; ignored
+   * files may also carry `ignored` so callers can exclude them explicitly.
+   */
+  gitWorkingTreeStatus?: GitFileStatus;
+
+  /**
+   * Change in the index relative to HEAD. Omitted when the file has no staged
+   * change. A file can have both staged and working-tree statuses (for example
+   * porcelain `MM`).
+   */
+  gitStagedStatus?: GitFileStatus;
 }
 
 /**

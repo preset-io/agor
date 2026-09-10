@@ -105,6 +105,7 @@ export const CodePreviewModal = ({ file, open, onClose, loading }: CodePreviewMo
                 oldContent={file.gitDiff?.baseContent}
                 newContent={file.content}
                 forceExpanded
+                rawContentKind="full-file"
               />
             )
           ) : isMarkdown ? (
