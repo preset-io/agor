@@ -74,7 +74,7 @@ export const ONBOARDING_INTEGRATION_RECOMMENDATIONS: Record<
     name: 'Slack gateway messaging',
     emoji: '💬',
     description:
-      'Message a teammate through Slack. Prefer an existing gateway; creating a new one requires administrator permission.',
+      'Your agent will attempt to use an existing Slack gateway channel, or help create a new one if none exists and permissions allow.',
     setup: { surface: 'slack' },
     connectMode: 'ask',
   },

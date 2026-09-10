@@ -38,11 +38,19 @@ function fixture(overrides: Partial<Props> = {}) {
   };
   return { api, props };
 }
-function Harness({ props, largeType = false }: { props: Props; largeType?: boolean }) {
+function Harness({
+  props,
+  largeType = false,
+  light = false,
+}: {
+  props: Props;
+  largeType?: boolean;
+  light?: boolean;
+}) {
   return (
     <ConfigProvider
       theme={{
-        algorithm: theme.darkAlgorithm,
+        algorithm: light ? theme.defaultAlgorithm : theme.darkAlgorithm,
         token: { motion: false, ...(largeType ? { fontSize: 16 } : {}) },
       }}
     >
@@ -86,13 +94,13 @@ function assertFlushActions(root: HTMLElement) {
 }
 
 describe('Kasia-derived MCP rows — real layout', () => {
-  it('uses one full-width provider per row, quieter descriptions, aligned uncropped local logos and flush actions', async () => {
+  it.each([false, true])('uses aligned rows and distinct inline tags (light=%s)', async (light) => {
     const { props, api } = fixture();
     vi.mocked(api.client.service('mcp-catalog/readiness').get).mockImplementation(async (key) => ({
       catalog_key: key,
       state: key === githubHandoffEntry.name ? 'bearer_required' : 'oauth_required',
     }));
-    render(<Harness props={props} />);
+    render(<Harness props={props} light={light} />);
     await screen.findByText('Token required');
     await waitFor(() => expect(screen.getAllByText('Sign in required')).toHaveLength(3));
     const list = screen.getByRole('list', { name: 'Suggested MCP tools' });
@@ -112,25 +120,20 @@ describe('Kasia-derived MCP rows — real layout', () => {
       expect(getComputedStyle(action).fontSize).toBe(getComputedStyle(description).fontSize);
       expect(action.getBoundingClientRect().height).toBeGreaterThanOrEqual(32);
       const state = document.getElementById(stateId)!;
-      expect(state).toHaveClass('ant-tag', 'ant-tag-processing');
+      expect(state).toHaveClass('ant-tag', 'ant-tag-default');
       expect(state).toHaveTextContent(/Token required|Sign in required/);
       expect(getComputedStyle(state).fontSize).toBe(getComputedStyle(description).fontSize);
-      expect(state.getBoundingClientRect().left).toBe(description.getBoundingClientRect().left);
-      expect(state.getBoundingClientRect().width).toBeLessThan(row.clientWidth);
-      // Compare visible text lines, not just Flex's equal outer gaps. The
-      // former centered 32px action added an extra blank half-target above it.
-      const textBounds = (element: Element) => {
-        const range = document.createRange();
-        range.selectNodeContents(element);
-        return range.getBoundingClientRect();
-      };
-      const descriptionBounds = textBounds(description);
-      const actionBounds = textBounds(action.querySelector('span')!);
+      expect(state.parentElement).toBe(heading.parentElement);
+      expect(getComputedStyle(state).color).not.toBe(getComputedStyle(action).color);
       const tagBounds = state.getBoundingClientRect();
-      expect(tagBounds.top - descriptionBounds.bottom).toBeCloseTo(
-        actionBounds.top - tagBounds.bottom,
-        1
-      );
+      const headingBounds = heading.getBoundingClientRect();
+      const checkboxBounds = within(row).getByRole('checkbox').getBoundingClientRect();
+      expect(tagBounds.right).toBeLessThan(checkboxBounds.left);
+      expect(description.getBoundingClientRect().top).toBeGreaterThan(tagBounds.bottom);
+      if (window.innerWidth >= 768) {
+        expect(tagBounds.left - headingBounds.right).toBeCloseTo(8, 0);
+        expect(Math.abs(tagBounds.top - headingBounds.top)).toBeLessThan(3);
+      }
       expect(getComputedStyle(action).paddingTop).toBe('0px');
       expect(action).toHaveAccessibleDescription(/Token required|Sign in required/);
       expect(Number(getComputedStyle(heading.querySelector('strong')!).fontWeight)).toBeGreaterThan(
@@ -167,7 +170,12 @@ describe('Kasia-derived MCP rows — real layout', () => {
       name: `${longName} ${i}`,
       description: longDescription,
     }));
-    const { props } = fixture({ kit });
+    const { props, api } = fixture({ kit });
+    vi.mocked(api.client.service('mcp-catalog/readiness').get).mockResolvedValue({
+      catalog_key: githubHandoffEntry.name,
+      state: 'oauth_required',
+    });
+
     render(<Harness props={props} largeType />);
     const list = screen.getByRole('list', { name: 'Suggested MCP tools' });
     const rows = within(list).getAllByRole('listitem');

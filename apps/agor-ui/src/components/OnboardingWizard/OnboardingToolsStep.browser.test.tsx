@@ -115,6 +115,8 @@ describe('onboarding Slack and authority boundaries in Chromium', () => {
     );
     const pushState = vi.spyOn(window.history, 'pushState');
     render(<Harness api={api} />);
+    // Exercise a native click after readiness resolves, including the focus-triggered refresh.
+    await screen.findByText('Token required');
     const action = screen.getByRole('button', { name: 'Sign in through Catalog for GitHub' });
     await userEvent.click(action);
     const loading = await screen.findByRole('dialog', { name: 'Catalog' });
@@ -213,18 +215,64 @@ describe('onboarding Slack and authority boundaries in Chromium', () => {
   it('exposes new-gateway intent only for an authorized admin, never creates one on selection', async () => {
     const api = apiFor();
     render(<Harness api={api} />);
-    await userEvent.click(
-      await screen.findByRole('checkbox', { name: /create a new Slack gateway/ })
+    await waitFor(() =>
+      expect(screen.getByTestId('gateway-intent')).toHaveTextContent('request-new')
     );
-    expect(screen.getByTestId('gateway-intent')).toHaveTextContent('request-new');
+    const choice = screen.getByRole('checkbox', {
+      name: 'Suggest Slack gateway messaging to my teammate',
+    });
+    const card = choice.closest<HTMLElement>('.ant-card')!;
+    expect(within(card).getAllByRole('checkbox')).toHaveLength(1);
+    expect(choice).toHaveAccessibleDescription(
+      /existing Slack gateway channel.*none exists and permissions allow/
+    );
+    const github = screen.getByText('GitHub').closest<HTMLElement>('.ant-card')!;
+    const logo = within(card).getByRole('img', { name: /logo/ });
+    expect(logo.getBoundingClientRect().left).toBe(
+      within(github).getByRole('img').getBoundingClientRect().left
+    );
+    expect(logo.getBoundingClientRect().width).toBe(20);
+    expect(card.querySelector('.ant-card-head')).toBeNull();
+    expect(getComputedStyle(within(card).getByText('Slack gateway messaging')).fontSize).toBe(
+      '14px'
+    );
     await userEvent.click(
       screen.getByRole('checkbox', { name: 'Suggest Slack gateway messaging to my teammate' })
     );
     expect(screen.getByTestId('gateway-intent')).toHaveTextContent('prefer-existing');
-    expect(screen.getByRole('checkbox', { name: /create a new Slack gateway/ })).toBeDisabled();
-    expect(screen.getByRole('checkbox', { name: /create a new Slack gateway/ })).not.toBeChecked();
+    expect(choice).not.toBeChecked();
+    choice.focus();
+    await userEvent.keyboard(' ');
+    await waitFor(() =>
+      expect(screen.getByTestId('gateway-intent')).toHaveTextContent('request-new')
+    );
+    expect(choice).toHaveFocus();
     expect(api.client.service('gateway-channels').create).not.toHaveBeenCalled();
     expect(api.connect).not.toHaveBeenCalled();
+  });
+  it('resets assistance intent on identity/role change and ignores a stale empty inventory', async () => {
+    const api = apiFor();
+    const view = render(<Harness api={api} />);
+    await waitFor(() =>
+      expect(screen.getByTestId('gateway-intent')).toHaveTextContent('request-new')
+    );
+    let resolve!: (value: GatewayChannel[]) => void;
+    vi.mocked(api.client.service('gateway-channels').findAll).mockImplementationOnce(
+      () =>
+        new Promise((done) => {
+          resolve = done;
+        })
+    );
+    view.rerender(<Harness api={api} generation={2} />);
+    await screen.findByLabelText('Checking Slack gateways');
+    expect(screen.getByTestId('gateway-intent')).toHaveTextContent('prefer-existing');
+    view.rerender(<Harness api={api} generation={3} user={catalogUser} />);
+    await screen.findByText(/An administrator must create one/);
+    resolve([]);
+    await waitFor(() =>
+      expect(screen.getByTestId('gateway-intent')).toHaveTextContent('prefer-existing')
+    );
+    expect(api.client.service('gateway-channels').create).not.toHaveBeenCalled();
   });
   it('denies new-gateway intent to a member and explains unavailable Slack MCP without generic registration', async () => {
     const api = apiFor();
@@ -247,6 +295,7 @@ describe('onboarding Slack and authority boundaries in Chromium', () => {
     );
     render(<Harness api={api} />);
     await screen.findByText('Could not check Slack gateways');
+    await screen.findByText('Token required');
     expect(
       screen.queryByRole('checkbox', { name: /create a new Slack gateway/ })
     ).not.toBeInTheDocument();
@@ -370,7 +419,9 @@ describe('onboarding Slack and authority boundaries in Chromium', () => {
       await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
       const row = screen.getByText('Linear').closest<HTMLElement>('.ant-card')!;
       expect(await within(row).findByText('Ready to use')).toBeInTheDocument();
-      expect(within(row).getByRole('button', { name: /^Sign in through Catalog/ })).toHaveFocus();
+      await waitFor(() =>
+        expect(within(row).getByRole('button', { name: /^Sign in through Catalog/ })).toHaveFocus()
+      );
     }
   );
 });

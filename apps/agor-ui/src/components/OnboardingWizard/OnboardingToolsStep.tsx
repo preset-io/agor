@@ -1,7 +1,7 @@
 import type { AgorClient, User } from '@agor-live/client';
 import { hasMinimumRole, ROLES } from '@agor-live/client';
-import { Alert, Button, Card, Checkbox, Flex, Spin, Typography, theme } from 'antd';
-import { useEffect, useRef, useState } from 'react';
+import { Alert, Button, Flex, Spin, Typography, theme } from 'antd';
+import { useEffect, useId, useRef, useState } from 'react';
 import type { OnboardingIntegrationRecommendation } from '../../utils/onboardingGoals';
 import {
   type OnboardingSlackGatewayIntent,
@@ -9,6 +9,7 @@ import {
 } from '../../utils/onboardingSlack';
 import { CatalogDrawer } from '../Marketplace/CatalogDrawer';
 import { CatalogTab } from '../Marketplace/CatalogTab';
+import { OnboardingRecommendationCard, OnboardingToolAction } from './OnboardingRecommendationCard';
 import { OnboardingToolRow } from './OnboardingToolRow';
 
 interface Props {
@@ -45,7 +46,23 @@ function ToolsForIdentity(props: Props) {
     useState<Awaited<ReturnType<typeof readOnboardingSlackGateways>>>();
   const [gatewayError, setGatewayError] = useState(false);
   const [retry, setRetry] = useState(0);
-  const hasSlack = kit.some((rec) => rec.id === 'slack');
+  const slack = kit.find((rec) => rec.id === 'slack');
+  const hasSlack = !!slack;
+  const slackDescriptionId = useId();
+  const slackSelected = hasSlack && isSelected('slack');
+  const canRequestGateway =
+    slackSelected &&
+    !!client &&
+    connected &&
+    !gatewayError &&
+    gateways?.length === 0 &&
+    hasMinimumRole(user?.role, ROLES.ADMIN);
+  useEffect(() => {
+    // The single selection is an opt-in to assistance, not resource creation.
+    // Completion still rechecks the caller's role and fresh scoped inventory.
+    const intent = canRequestGateway ? 'request-new' : 'prefer-existing';
+    if (gatewayIntent !== intent) onGatewayIntent(intent);
+  }, [canRequestGateway, gatewayIntent, onGatewayIntent]);
   // biome-ignore lint/correctness/useExhaustiveDependencies: retry explicitly refreshes the permission-scoped inventory
   useEffect(() => {
     if (!client || !connected || !hasSlack) return;
@@ -98,24 +115,13 @@ function ToolsForIdentity(props: Props) {
             />
           ))}
       </Flex>
-      {hasSlack && (
-        <Card
-          size="small"
-          title="Slack gateway messaging"
-          extra={
-            <Checkbox
-              aria-label="Suggest Slack gateway messaging to my teammate"
-              checked={isSelected('slack')}
-              onChange={() => {
-                onToggle('slack');
-                onGatewayIntent('prefer-existing');
-              }}
-            />
-          }
+      {slack && (
+        <OnboardingRecommendationCard
+          recommendation={slack}
+          descriptionId={slackDescriptionId}
+          selected={slackSelected}
+          onToggle={() => onToggle('slack')}
         >
-          <Typography.Paragraph type="secondary" style={{ fontSize: token.fontSizeSM }}>
-            Message a teammate through a Slack bot. This is separate from Slack MCP tool access.
-          </Typography.Paragraph>
           {!connected ? (
             <Alert type="info" title="Reconnect to check Slack gateways." />
           ) : gatewayError ? (
@@ -128,53 +134,41 @@ function ToolsForIdentity(props: Props) {
             <Spin aria-label="Checking Slack gateways" />
           ) : gateways.length ? (
             <>
-              <Typography.Paragraph>
+              <Typography.Text type="secondary" style={{ fontSize: token.fontSizeSM }}>
                 Prefer your existing Slack gateway:{' '}
                 {gateways.map((gateway) => gateway.name).join(', ')}.
-              </Typography.Paragraph>
-              <Typography.Text type="secondary">
+              </Typography.Text>
+              <Typography.Text type="secondary" style={{ fontSize: token.fontSizeSM }}>
                 It continues to serve its current teammate. We will not retarget it or create a
                 duplicate. Your new teammate must not use another branch’s gateway.
               </Typography.Text>
             </>
           ) : hasMinimumRole(user?.role, ROLES.ADMIN) ? (
-            <Checkbox
-              disabled={!isSelected('slack')}
-              checked={isSelected('slack') && gatewayIntent === 'request-new'}
-              onChange={(event) =>
-                onGatewayIntent(event.target.checked ? 'request-new' : 'prefer-existing')
-              }
-            >
-              Ask my teammate to help create a new Slack gateway
-            </Checkbox>
+            <Typography.Text type="secondary" style={{ fontSize: token.fontSizeSM }}>
+              No usable Slack gateway found. Your teammate can help create one if permissions allow.
+            </Typography.Text>
           ) : (
-            <Typography.Text type="secondary">
+            <Typography.Text type="secondary" style={{ fontSize: token.fontSizeSM }}>
               No usable Slack gateway found. An administrator must create one; no new gateway will
               be requested.
             </Typography.Text>
           )}
-          <Flex vertical gap={token.marginXXS} style={{ marginTop: token.marginXS }}>
+          <Flex vertical gap={token.marginXXS}>
             <Typography.Text type="secondary" style={{ fontSize: token.fontSizeSM }}>
               Slack MCP tool access is not available in Catalog and is not selected here.
             </Typography.Text>
-            <Button
-              type="link"
+            <OnboardingToolAction
+              aria-describedby={slackDescriptionId}
               aria-haspopup="dialog"
               onClick={(event) => {
                 trigger.current = event.currentTarget;
                 setSlackOpen(true);
               }}
-              style={{
-                alignSelf: 'flex-start',
-                paddingLeft: 0,
-                paddingInlineStart: 0,
-                fontSize: token.fontSizeSM,
-              }}
             >
               Slack MCP availability
-            </Button>
+            </OnboardingToolAction>
           </Flex>
-        </Card>
+        </OnboardingRecommendationCard>
       )}
       <CatalogDrawer open={slackOpen} title="Slack MCP" onClose={close}>
         <Alert
