@@ -13,6 +13,7 @@
  * - Supports all file types (text and binary)
  */
 
+import type { FileListItem, GitFileStatus, GitFileStatusSource } from '@agor-live/client';
 import {
   CopyOutlined,
   DownloadOutlined,
@@ -20,7 +21,8 @@ import {
   FileOutlined,
   FolderOutlined,
 } from '@ant-design/icons';
-import { Button, Empty, Input, Spin, Tooltip, Tree } from 'antd';
+import type { GlobalToken } from 'antd';
+import { Button, Empty, Input, Spin, Tooltip, Tree, theme } from 'antd';
 import type React from 'react';
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { copyToClipboard } from '../../utils/clipboard';
@@ -31,13 +33,44 @@ const { Search } = Input;
 // Debounce delay for live search (milliseconds)
 const SEARCH_DEBOUNCE_MS = 300;
 
-export type FileItem = {
-  path: string;
-  title: string;
-  size: number;
-  lastModified: string;
-  isText?: boolean;
-  mimeType?: string;
+export type FileItem = FileListItem;
+
+/** VSCode-style badge letter + theme color for each git status. */
+interface GitStatusMeta {
+  color: string;
+  letter: string;
+  label: string;
+}
+
+/**
+ * Map each git status to a theme-token color + single-letter badge, matching
+ * the VSCode / IDE source-control vocabulary. Colors come from `theme.useToken()`
+ * so they adapt to light and dark automatically.
+ */
+function buildGitStatusMeta(token: GlobalToken): Record<GitFileStatus, GitStatusMeta> {
+  return {
+    added: { color: token.colorSuccess, letter: 'A', label: 'Added' },
+    untracked: { color: token.colorSuccess, letter: 'U', label: 'Untracked' },
+    copied: { color: token.colorSuccess, letter: 'C', label: 'Copied' },
+    modified: { color: token.colorWarning, letter: 'M', label: 'Modified' },
+    renamed: { color: token.colorInfo, letter: 'R', label: 'Renamed' },
+    deleted: { color: token.colorError, letter: 'D', label: 'Deleted' },
+    conflicted: { color: token.colorError, letter: '!', label: 'Conflicted' },
+    ignored: { color: token.colorTextTertiary, letter: 'I', label: 'Ignored' },
+  };
+}
+
+// Folder tint severity: a directory is colored by its most significant
+// descendant change. `ignored` is excluded so ignored subtrees stay neutral.
+const GIT_STATUS_SEVERITY: Record<GitFileStatus, number> = {
+  conflicted: 7,
+  deleted: 6,
+  modified: 5,
+  renamed: 4,
+  added: 3,
+  copied: 2,
+  untracked: 1,
+  ignored: 0,
 };
 
 export interface FileCollectionProps {
@@ -55,6 +88,18 @@ export interface FileCollectionProps {
 
   /** Message to show when no files found */
   emptyMessage?: string;
+
+  /** Which git status dimension supplies file and folder badges. */
+  gitStatusSource?: GitFileStatusSource;
+}
+
+function getDisplayedGitStatus(
+  file: FileItem,
+  source: GitFileStatusSource
+): GitFileStatus | undefined {
+  if (source === 'workingTree') return file.gitWorkingTreeStatus;
+  if (source === 'staged') return file.gitStagedStatus;
+  return file.gitStatus;
 }
 
 /**
@@ -76,6 +121,8 @@ interface TreeNode {
 function buildTree(
   files: FileItem[],
   searchQuery: string,
+  statusMeta: Record<GitFileStatus, GitStatusMeta>,
+  gitStatusSource: GitFileStatusSource,
   onDownload?: (file: FileItem) => void,
   onCopyPath?: (file: FileItem) => void
 ): TreeNode[] {
@@ -87,6 +134,22 @@ function buildTree(
           f.path.toLowerCase().includes(searchQuery.toLowerCase())
       )
     : files;
+
+  // Aggregate each directory's most-significant descendant change so folders
+  // containing edits can be tinted like an IDE explorer. `ignored` is skipped.
+  const dirStatus = new Map<string, GitFileStatus>();
+  for (const file of filteredFiles) {
+    const status = getDisplayedGitStatus(file, gitStatusSource);
+    if (!status || status === 'ignored') continue;
+    const parts = file.path.split('/');
+    for (let i = 1; i < parts.length; i++) {
+      const dir = parts.slice(0, i).join('/');
+      const current = dirStatus.get(dir);
+      if (!current || GIT_STATUS_SEVERITY[status] > GIT_STATUS_SEVERITY[current]) {
+        dirStatus.set(dir, status);
+      }
+    }
+  }
 
   // Group files by directory
   const tree: Map<string, TreeNode> = new Map();
@@ -105,10 +168,14 @@ function buildTree(
 
       // Create directory node if it doesn't exist
       if (!tree.has(currentPath)) {
+        const folderStatus = dirStatus.get(currentPath);
+        const folderColor = folderStatus ? statusMeta[folderStatus].color : undefined;
         tree.set(currentPath, {
           key: currentPath,
           title: (
-            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+            <span
+              style={{ display: 'inline-flex', alignItems: 'center', gap: 8, color: folderColor }}
+            >
               <FolderOutlined />
               <strong>{part}</strong>
             </span>
@@ -141,7 +208,12 @@ function buildTree(
     };
 
     const fileSize = formatSize(file.size);
-    const tooltipText = `${file.path} (${fileSize})`;
+    const displayedStatus = getDisplayedGitStatus(file, gitStatusSource);
+    const meta = displayedStatus ? statusMeta[displayedStatus] : undefined;
+    const isDeleted = displayedStatus === 'deleted';
+    const tooltipText = meta
+      ? `${file.path} — ${meta.label}${isDeleted ? '' : ` (${fileSize})`}`
+      : `${file.path} (${fileSize})`;
 
     const fileNode: TreeNode = {
       key: file.path,
@@ -156,10 +228,42 @@ function buildTree(
             }}
           >
             <span
-              style={{ flex: 1, minWidth: 0, display: 'inline-flex', alignItems: 'center', gap: 8 }}
+              style={{
+                flex: 1,
+                minWidth: 0,
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 8,
+                color: meta?.color,
+                textDecoration: isDeleted ? 'line-through' : undefined,
+              }}
             >
               <FileIcon />
-              {fileName}
+              <span
+                style={{
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                {fileName}
+              </span>
+              {meta && (
+                <span
+                  role="img"
+                  aria-label={meta.label}
+                  style={{
+                    color: meta.color,
+                    fontFamily: 'monospace',
+                    fontWeight: 600,
+                    fontSize: 12,
+                    lineHeight: 1,
+                    textDecoration: 'none',
+                  }}
+                >
+                  {meta.letter}
+                </span>
+              )}
             </span>
             <span style={{ marginLeft: 8, whiteSpace: 'nowrap', display: 'inline-flex', gap: 4 }}>
               <Tooltip title="Copy path">
@@ -248,11 +352,14 @@ const FileCollectionInner: React.FC<FileCollectionProps> = ({
   onDownload,
   loading = false,
   emptyMessage = 'No files found',
+  gitStatusSource = 'combined',
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [searchInput, setSearchInput] = useState('');
   const [expandedKeys, setExpandedKeys] = useState<string[]>([]);
   const { showSuccess } = useThemedMessage();
+  const { token } = theme.useToken();
+  const statusMeta = useMemo(() => buildGitStatusMeta(token), [token]);
 
   // Use refs to store stable callback references
   const onDownloadRef = useRef(onDownload);
@@ -281,10 +388,12 @@ const FileCollectionInner: React.FC<FileCollectionProps> = ({
     onDownloadRef.current?.(file);
   }, []);
 
-  // Build tree structure - only depends on files, searchQuery, and stable callbacks
+  // Build tree structure - only depends on files, searchQuery, status colors,
+  // and stable callbacks
   const treeData = useMemo(
-    () => buildTree(files, searchQuery, stableOnDownload, handleCopyPath),
-    [files, searchQuery, stableOnDownload, handleCopyPath]
+    () =>
+      buildTree(files, searchQuery, statusMeta, gitStatusSource, stableOnDownload, handleCopyPath),
+    [files, searchQuery, statusMeta, gitStatusSource, stableOnDownload, handleCopyPath]
   );
 
   // Handle node selection - stable callback using ref
@@ -431,6 +540,7 @@ export const FileCollection = memo(FileCollectionInner, (prevProps, nextProps) =
   return (
     prevProps.loading === nextProps.loading &&
     prevProps.emptyMessage === nextProps.emptyMessage &&
+    prevProps.gitStatusSource === nextProps.gitStatusSource &&
     prevProps.files === nextProps.files
     // Note: we intentionally don't compare onFileClick and onDownload
     // since we use refs internally to always get the latest callback

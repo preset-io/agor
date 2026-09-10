@@ -422,6 +422,7 @@ export const BranchFilesReadPayloadSchema = BasePayloadSchema.extend({
   params: z.object({
     branchId: z.string().uuid(),
     filePath: z.string().min(1),
+    gitStatusSource: z.enum(['combined', 'workingTree', 'staged']).optional().default('combined'),
   }),
 });
 

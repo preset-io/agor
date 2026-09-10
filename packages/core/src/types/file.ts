@@ -11,6 +11,38 @@
 export type FilePath = string;
 
 /**
+ * Git status for a single file. `FileListItem.gitStatus` is the combined
+ * status used by the all-files view; the staged and working-tree fields retain
+ * the two porcelain dimensions separately.
+ *
+ * Mirrors the VSCode / IDE source-control vocabulary so the UI can color-code
+ * and badge entries consistently:
+ * - `added`      — staged new file (index `A`)
+ * - `modified`   — content changed (index/worktree `M`/`T`)
+ * - `deleted`    — removed from the working tree (index/worktree `D`)
+ * - `renamed`    — moved/renamed (index/worktree `R`)
+ * - `copied`     — copied from another tracked file (index/worktree `C`)
+ * - `untracked`  — new, not yet tracked by git (`??`)
+ * - `conflicted` — unmerged / merge conflict (`U`, `AA`, `DD`, …)
+ * - `ignored`    — matched by a gitignore rule (`!!`)
+ *
+ * `undefined` means the file is unchanged relative to HEAD (or status could
+ * not be computed, e.g. the branch is not a git repository).
+ */
+export type GitFileStatus =
+  | 'added'
+  | 'modified'
+  | 'deleted'
+  | 'renamed'
+  | 'copied'
+  | 'untracked'
+  | 'conflicted'
+  | 'ignored';
+
+/** Git snapshot used when opening a source-control file preview. */
+export type GitFileStatusSource = 'combined' | 'workingTree' | 'staged';
+
+/**
  * File list response (lightweight, for browsing)
  * Returned by GET /file
  */
@@ -49,6 +81,26 @@ export interface FileListItem {
 
   /** Detected MIME type (optional) */
   mimeType?: string;
+
+  /**
+   * Combined source-control status relative to HEAD. Omitted when the file is
+   * unchanged or status could not be computed (non-git branch, git error).
+   */
+  gitStatus?: GitFileStatus;
+
+  /**
+   * Change in the working tree relative to the index. Omitted when the file
+   * has no unstaged change. Untracked files are working-tree changes; ignored
+   * files may also carry `ignored` so callers can exclude them explicitly.
+   */
+  gitWorkingTreeStatus?: GitFileStatus;
+
+  /**
+   * Change in the index relative to HEAD. Omitted when the file has no staged
+   * change. A file can have both staged and working-tree statuses (for example
+   * porcelain `MM`).
+   */
+  gitStagedStatus?: GitFileStatus;
 }
 
 /**
@@ -61,4 +113,20 @@ export interface FileDetail extends FileListItem {
 
   /** Content encoding: 'utf-8' for text files, 'base64' for binary files */
   encoding: 'utf-8' | 'base64';
+
+  /**
+   * Text content from HEAD used to compare the checked-out file with its
+   * committed version. Present only for previewable working-tree changes.
+   * Added/untracked files use an empty base; deleted files use empty current
+   * `content` and retain their committed text here.
+   */
+  gitDiff?: FileGitDiff;
+}
+
+export interface FileGitDiff {
+  /** UTF-8 content of the file at HEAD (or an empty string for a new file). */
+  baseContent: string;
+
+  /** Original HEAD path when git reports a rename or copy. */
+  basePath?: FilePath;
 }
