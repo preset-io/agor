@@ -9,6 +9,7 @@
 import crypto from 'node:crypto';
 import http from 'node:http';
 import { z } from 'zod';
+import { hasTemplateMarker } from '../../mcp/template-patterns.js';
 import type {
   MCPOAuthClientRegistrationID,
   MCPOAuthDCRDiagnostic,
@@ -56,6 +57,14 @@ export function __seedAuthCodeTokenCacheForTests(
 // value. The persisted lifecycle is handled in `oauth-cache.ts` (initial
 // auth) and `oauth-refresh.ts` (refresh) which both use the resolver.
 const UNKNOWN_EXPIRY_CACHE_TTL_SECONDS = 3600;
+
+// Reviewed V2 contract. These bounds only tighten existing compatibility
+// policy: Asana does not advertise RFC 9207, so catalog installs use the
+// existing marketplace callback handling, but none of its discovery/resource
+// fallbacks are needed here. Never treat V1 or the documentation's /v2 example
+// as the resource for a V2 grant.
+const ASANA_V2_RESOURCE = 'https://mcp.asana.com/v2/mcp';
+const ASANA_V2_ISSUER = 'https://app.asana.com';
 
 /**
  * Raw OAuth 2.0 token response shape.
@@ -174,6 +183,7 @@ export interface AuthorizationServerMetadata {
   grant_types_supported?: string[];
   code_challenge_methods_supported?: string[];
   authorization_response_iss_parameter_supported?: boolean;
+  token_endpoint_auth_methods_supported?: string[];
 }
 
 // Re-export the canonical OAuthTokenResponse from oauth-auth to avoid duplication
@@ -1562,6 +1572,20 @@ async function resolveOAuthClient(options: {
   resolveDynamicClientRegistration?: MCPOAuthDynamicClientRegistrationResolver;
   assertCurrent?: () => void;
 }): Promise<MCPOAuthResolvedClient> {
+  if (
+    options.resourceUri === ASANA_V2_RESOURCE &&
+    (!options.clientId?.trim() ||
+      !options.clientSecret?.trim() ||
+      hasTemplateMarker(options.clientId) ||
+      hasTemplateMarker(options.clientSecret))
+  ) {
+    throw new OAuthConfigurationError(
+      'client_registration_required',
+      'Asana V2 requires the Client ID and Client Secret of a pre-registered MCP app. ' +
+        'Save literal values in Advanced — OAuth settings, then sign in again; ' +
+        'environment templates are not supported by this browser OAuth flow.'
+    );
+  }
   if (options.clientId) {
     return {
       clientId: options.clientId,
@@ -1705,7 +1729,7 @@ function assertOAuthProtectedResourceMetadata(
   compatibilityMode: MCPOAuthRuntimeCompatibilityMode
 ): void {
   if (
-    compatibilityMode === 'strict'
+    compatibilityMode === 'strict' || resourceUri === ASANA_V2_RESOURCE
       ? statedResource !== resourceUri
       : compatibilityMode === 'marketplace' &&
         !marketplaceResourceMetadataMatches(metadataUrl, statedResource, resourceUri)
@@ -1722,7 +1746,7 @@ function assertOAuthDirectDiscoveryIssuer(
   resourceUri: string,
   compatibilityMode: MCPOAuthRuntimeCompatibilityMode
 ): void {
-  if (compatibilityMode === 'strict') {
+  if (compatibilityMode === 'strict' || resourceUri === ASANA_V2_RESOURCE) {
     throw new OAuthConfigurationError(
       'metadata_incompatible',
       'Authorization-server-direct discovery requires explicit marketplace or legacy mode'
@@ -1767,6 +1791,23 @@ function resolveOAuthAuthorizationContract(options: OAuthAuthorizationContractOp
     authorizationUrlOverride,
     tokenUrlOverride,
   } = options;
+  if (
+    resourceUri === ASANA_V2_RESOURCE &&
+    (issuer !== ASANA_V2_ISSUER ||
+      authServerMetadata?.issuer !== ASANA_V2_ISSUER ||
+      authServerMetadata.authorization_endpoint !== `${ASANA_V2_ISSUER}/-/oauth_authorize` ||
+      authServerMetadata.token_endpoint !== `${ASANA_V2_ISSUER}/-/oauth_token` ||
+      !authServerMetadata.code_challenge_methods_supported?.includes('S256') ||
+      !authServerMetadata.token_endpoint_auth_methods_supported?.includes('client_secret_basic') ||
+      (authorizationUrlOverride !== undefined &&
+        authorizationUrlOverride !== authServerMetadata.authorization_endpoint) ||
+      (tokenUrlOverride !== undefined && tokenUrlOverride !== authServerMetadata.token_endpoint))
+  ) {
+    throw new OAuthConfigurationError(
+      'metadata_incompatible',
+      'Asana V2 metadata no longer matches its reviewed issuer, endpoints, PKCE and client authentication contract.'
+    );
+  }
   const tokenEndpoint = tokenUrlOverride || authServerMetadata?.token_endpoint;
   if (!tokenEndpoint) {
     throw new OAuthConfigurationError(
@@ -2329,7 +2370,7 @@ export async function completeMCPOAuthFlow(
     throw new OAuthCallbackValidationError('callback_issuer_missing');
   }
   if (
-    context.compatibilityMode !== 'legacy' &&
+    (context.compatibilityMode !== 'legacy' || context.resourceUri === ASANA_V2_RESOURCE) &&
     options.issuer != null &&
     options.issuer !== context.issuer
   ) {

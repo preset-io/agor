@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import http, { type Server as HttpServer } from 'node:http';
 import { resolveMcpOAuthCallbackOrigin } from '@agor/core/config';
 import {
@@ -132,6 +133,7 @@ type TestProvider = {
     authorization?: string;
     transientHeader?: string;
     jsonBody?: Record<string, unknown>;
+    formBody?: Record<string, string>;
   }>;
   tokenRequested: Deferred<void>;
   refreshRequested: Deferred<void>;
@@ -148,6 +150,7 @@ type TestProvider = {
 
 async function createTestProvider(
   options: {
+    configuredClientMetadata?: boolean;
     holdToken?: boolean;
     holdTokenRequests?: number[];
     numberedTokenResponses?: boolean;
@@ -223,12 +226,17 @@ async function createTestProvider(
           ...(options.rejectDynamicRegistration || options.holdDynamicRegistration
             ? { registration_endpoint: `${baseUrl}/register` }
             : {}),
+          ...(options.configuredClientMetadata
+            ? { token_endpoint_auth_methods_supported: ['client_secret_basic'] }
+            : {}),
           response_types_supported: ['code'],
           code_challenge_methods_supported: ['S256'],
           // The DCR fixture deliberately omits RFC 9207 response-issuer
           // support. Reaching /register therefore proves that the canonical
           // catalog row selected Marketplace policy rather than strict.
-          ...(options.rejectDynamicRegistration || options.holdDynamicRegistration
+          ...(options.configuredClientMetadata ||
+          options.rejectDynamicRegistration ||
+          options.holdDynamicRegistration
             ? {}
             : { authorization_response_iss_parameter_supported: true }),
         })
@@ -270,6 +278,7 @@ async function createTestProvider(
     if (url.pathname === '/token') {
       let body = '';
       for await (const chunk of request) body += String(chunk);
+      recordedRequest.formBody = Object.fromEntries(new URLSearchParams(body));
       const isRefresh = new URLSearchParams(body).get('grant_type') === 'refresh_token';
       if (isRefresh) {
         if (options.gitlab) {
@@ -411,6 +420,7 @@ type SQLiteHarness = {
   db: TenantScopeAwareDatabase;
   rawDb: Awaited<ReturnType<typeof createDatabaseAsync>>;
   user: User;
+  ownerUser: User;
   server: MCPServer;
   emittedBrowserEvents: Array<Record<string, unknown>>;
   gatewayOAuthResults: Array<{
@@ -420,7 +430,7 @@ type SQLiteHarness = {
     success: boolean;
   }>;
   nextAuthorizationUrl: () => Promise<string>;
-  callback: (state: string) => Promise<{ status: number; body: string }>;
+  callback: (state: string, issuer?: string | null) => Promise<{ status: number; body: string }>;
   deny: (state: string) => Promise<{ status: number; body: string }>;
   liveSocket: {
     id: string;
@@ -433,6 +443,7 @@ async function createHarness(
   provider: TestProvider,
   oauthMode?: 'per_user' | 'shared',
   options: {
+    memberOwned?: boolean;
     catalogPeer?: boolean;
     catalogEntry?: MCPCatalogEntry;
     durableAuthority?: NonNullable<RegisterServicesContext['mcpOAuthPendingFlowAuthority']>;
@@ -452,6 +463,12 @@ async function createHarness(
     email: `sqlite-oauth-${Math.random()}@example.com`,
     role: 'admin',
   });
+  const ownerUser = options.memberOwned
+    ? await new UsersRepository(rawDb).create({
+        email: `member-${generateId()}@example.test`,
+        role: 'member',
+      })
+    : user;
   const catalogEntry = options.catalogEntry;
   const server = await new MCPServerRepository(rawDb).create({
     name: 'sqlite-oauth-authority',
@@ -459,7 +476,7 @@ async function createHarness(
     url: provider.savedMcpUrl,
     headers: options.catalogPeer || catalogEntry ? undefined : { 'X-Saved-Config': 'true' },
     scope: 'global',
-    owner_user_id: user.user_id as UserID,
+    owner_user_id: ownerUser.user_id as UserID,
     ...(catalogEntry ? { source: 'catalog' as const, catalog_entry_name: catalogEntry.name } : {}),
     auth: {
       type: 'oauth',
@@ -587,6 +604,7 @@ async function createHarness(
     db,
     rawDb,
     user,
+    ownerUser,
     server,
     emittedBrowserEvents,
     gatewayOAuthResults,
@@ -595,8 +613,12 @@ async function createHarness(
       nextUrl = deferred<string>();
       return value;
     },
-    callback: (state: string) =>
-      invokeCallback({ code: 'authorization-code', state, iss: provider.baseUrl }),
+    callback: (state: string, issuer: string | null = provider.baseUrl) =>
+      invokeCallback({
+        code: 'authorization-code',
+        state,
+        ...(issuer === null ? {} : { iss: issuer }),
+      }),
     deny: (state: string) => invokeCallback({ error: 'access_denied', state }),
     liveSocket,
   } satisfies SQLiteHarness;
@@ -1212,6 +1234,251 @@ afterEach(async () => {
   else process.env.AGOR_BASE_URL = previousBaseUrl;
   if (previousMasterSecret === undefined) delete process.env.AGOR_MASTER_SECRET;
   else process.env.AGOR_MASTER_SECRET = previousMasterSecret;
+});
+
+describe('configured-client catalog OAuth through registered services', () => {
+  const clientId = 'fixture-configured-client';
+  const clientSecret = 'fixture-only-not-a-real-secret';
+  const redirectUri = 'https://agor.example.test/mcp-servers/oauth-callback';
+
+  afterEach(async () => {
+    const original =
+      await vi.importActual<typeof import('@agor/core/mcp-catalog')>('@agor/core/mcp-catalog');
+    vi.mocked(loadCatalog).mockImplementation(original.loadCatalog);
+  });
+
+  async function configuredFixture() {
+    // Local analogue of the Asana V2 recipe, not a live Asana request. Keep
+    // the AS's absent RFC 9207 declaration, S256 and Basic advertisement.
+    // Advertising a registration endpoint makes any unintended DCR visible.
+    const provider = await createTestProvider({
+      configuredClientMetadata: true,
+      rejectDynamicRegistration: true,
+    });
+    providers.push(provider);
+    const catalogEntry: MCPCatalogEntry = {
+      name: 'test/configured-client-v2',
+      title: 'Configured client V2 fixture',
+      category: 'productivity',
+      capabilities: ['tasks', 'projects'],
+      benefit: 'Exercises configured client sign-in.',
+      starter_prompt: 'Exercise configured client sign-in.',
+      permission_disclosure: 'Local fixture only.',
+      popularity_rank: 999_999,
+      transport: 'streamable-http',
+      remote_url: provider.savedMcpUrl,
+      has_remote: true,
+      auth_type: 'oauth',
+      oauth: { configured_client: true, dcr_mode: 'disabled' },
+    };
+    vi.mocked(loadCatalog).mockResolvedValue([catalogEntry]);
+    const harness = await createHarness(provider, 'per_user', { catalogEntry, memberOwned: true });
+    databases.push(harness.rawDb);
+    await harness.app.service('mcp-servers').patch(
+      harness.server.mcp_server_id,
+      {
+        auth: {
+          type: 'oauth',
+          oauth_mode: 'per_user',
+          oauth_dcr_mode: 'disabled',
+          oauth_client_id: clientId,
+          oauth_client_secret: clientSecret,
+        },
+      },
+      paramsFor(harness)
+    );
+    const member = harness.ownerUser;
+    const memberParams = addLiveAuthority(harness, 'default', member.user_id, 'configured-member');
+    const start = async () => {
+      const result = await harness.app
+        .service('mcp-servers/oauth-start')
+        .create(
+          { mcp_server_id: harness.server.mcp_server_id, client_id: 'untrusted-request-client' },
+          memberParams
+        );
+      expect(result, JSON.stringify(result)).toMatchObject({ success: true });
+      return new URL(result.authorizationUrl);
+    };
+    const tokens = new UserMCPOAuthTokenRepository(harness.rawDb);
+    const readGrant = () =>
+      tokens.getToken(member.user_id as UserID, harness.server.mcp_server_id as MCPServerID);
+    return { provider, harness, member, memberParams, start, tokens, readGrant };
+  }
+
+  it('lets a member sign in without DCR, persists exact binding and refreshes the same client/resource', async () => {
+    const { provider, harness, member, memberParams, start, tokens, readGrant } =
+      await configuredFixture();
+    const authorization = await start();
+    expect(authorization.origin + authorization.pathname).toBe(`${provider.baseUrl}/authorize`);
+    expect(Object.fromEntries(authorization.searchParams)).toMatchObject({
+      client_id: clientId,
+      response_type: 'code',
+      redirect_uri: redirectUri,
+      resource: provider.savedMcpUrl,
+      code_challenge_method: 'S256',
+    });
+    const state = authorization.searchParams.get('state')!;
+    expect(state).toBeTruthy();
+    expect(authorization.searchParams.get('code_challenge')).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    // Marketplace tolerates an absent issuer parameter only when it was not
+    // advertised; metadata and persisted grant still bind the exact issuer.
+    expect((await harness.callback(state, null)).status).toBe(200);
+    const exchange = provider.requests.filter((request) => request.path === '/token');
+    expect(exchange).toHaveLength(1);
+    expect(exchange[0].formBody).toMatchObject({
+      grant_type: 'authorization_code',
+      code: 'authorization-code',
+      redirect_uri: redirectUri,
+      resource: provider.savedMcpUrl,
+    });
+    expect(
+      createHash('sha256').update(exchange[0].formBody!.code_verifier).digest('base64url')
+    ).toBe(authorization.searchParams.get('code_challenge'));
+    const grant = await readGrant();
+    expect(grant).toMatchObject({
+      user_id: member.user_id,
+      oauth_access_token: 'sqlite-access-token',
+      oauth_refresh_token: 'refresh',
+      oauth_client_id: clientId,
+      oauth_resource_uri: provider.savedMcpUrl,
+      oauth_issuer: provider.baseUrl,
+      oauth_authorization_endpoint: `${provider.baseUrl}/authorize`,
+      oauth_token_endpoint: `${provider.baseUrl}/token`,
+      oauth_redirect_uri: redirectUri,
+      grant_binding_version: 4,
+    });
+    expect(grant?.grant_binding_fingerprint).toMatch(/^[a-f0-9]{64}$/);
+    await expect(
+      tokens.getToken(null, harness.server.mcp_server_id as MCPServerID)
+    ).resolves.toBeNull();
+    await expect(
+      tokens.getToken(harness.user.user_id as UserID, harness.server.mcp_server_id as MCPServerID)
+    ).resolves.toBeNull();
+
+    await expect(
+      harness.app
+        .service('mcp-servers/oauth-refresh')
+        .create({ mcp_server_id: harness.server.mcp_server_id }, memberParams)
+    ).resolves.toMatchObject({ success: true });
+    const requests = provider.requests.filter((request) => request.path === '/token');
+    expect(requests).toHaveLength(2);
+    expect(requests[1].formBody).toMatchObject({
+      grant_type: 'refresh_token',
+      refresh_token: 'refresh',
+      resource: provider.savedMcpUrl,
+    });
+    for (const request of requests) {
+      expect(request.authorization).toBe(
+        `Basic ${Buffer.from(`${clientId}:${clientSecret}`).toString('base64')}`
+      );
+      expect(request.formBody).not.toHaveProperty('client_secret');
+    }
+    await expect(readGrant()).resolves.toMatchObject({
+      oauth_access_token: 'stale-refreshed-access-token',
+      oauth_client_id: clientId,
+      oauth_resource_uri: provider.savedMcpUrl,
+    });
+    expect((await harness.callback(state, null)).status).not.toBe(200);
+    expect(provider.requests.filter((request) => request.path === '/token')).toHaveLength(2);
+    expect(
+      provider.requests.filter((request) => ['/register', '/authorize'].includes(request.path))
+    ).toEqual([]);
+  });
+
+  it('rejects foreign-user/tenant completion and another user refresh before provider I/O', async () => {
+    const { provider, harness, start, readGrant } = await configuredFixture();
+    const authorization = await start();
+    const state = authorization.searchParams.get('state')!;
+    const before = provider.requests.length;
+    const deniedMember = await new UsersRepository(harness.rawDb).create({
+      email: `denied-member-${generateId()}@example.test`,
+      role: 'member',
+    });
+    const deniedParams = addLiveAuthority(
+      harness,
+      'default',
+      deniedMember.user_id,
+      'denied-configured-member'
+    );
+    await expect(
+      harness.app
+        .service('mcp-servers/oauth-start')
+        .create({ mcp_server_id: harness.server.mcp_server_id }, deniedParams)
+    ).resolves.toMatchObject({ success: false });
+    expect(provider.requests).toHaveLength(before);
+    for (const params of [
+      paramsFor(harness),
+      addLiveAuthority(
+        harness,
+        'foreign-tenant',
+        harness.ownerUser.user_id,
+        'foreign-configured-member'
+      ),
+    ]) {
+      await expect(
+        harness.app
+          .service('mcp-servers/oauth-complete')
+          .create({ code: 'authorization-code', state }, params)
+      ).resolves.toMatchObject({ success: false });
+      expect(provider.requests).toHaveLength(before);
+    }
+    expect((await harness.callback(state, null)).status).toBe(200);
+    const after = provider.requests.length;
+    await expect(
+      harness.app
+        .service('mcp-servers/oauth-refresh')
+        .create({ mcp_server_id: harness.server.mcp_server_id }, paramsFor(harness))
+    ).resolves.toMatchObject({ success: false });
+    expect(provider.requests).toHaveLength(after);
+    await expect(readGrant()).resolves.toMatchObject({ oauth_access_token: 'sqlite-access-token' });
+  });
+
+  it('rejects incorrect callback issuer and unknown state before token exchange', async () => {
+    const { provider, harness, start, readGrant } = await configuredFixture();
+    const authorization = await start();
+    const before = provider.requests.length;
+    expect((await harness.callback('unknown-configured-state', null)).status).not.toBe(200);
+    expect(
+      (
+        await harness.callback(
+          authorization.searchParams.get('state')!,
+          'https://foreign-issuer.example'
+        )
+      ).status
+    ).not.toBe(200);
+    expect(provider.requests).toHaveLength(before);
+    await expect(readGrant()).resolves.toBeNull();
+  });
+
+  it('revokes the member grant on an explicit saved client configuration change', async () => {
+    const { provider, harness, memberParams, start, readGrant } = await configuredFixture();
+    const authorization = await start();
+    expect((await harness.callback(authorization.searchParams.get('state')!, null)).status).toBe(
+      200
+    );
+    await expect(readGrant()).resolves.not.toBeNull();
+    const before = provider.requests.length;
+    await harness.app.service('mcp-servers').patch(
+      harness.server.mcp_server_id,
+      {
+        auth: {
+          type: 'oauth',
+          oauth_mode: 'per_user',
+          oauth_dcr_mode: 'disabled',
+          oauth_client_id: 'replacement-fixture-client',
+          oauth_client_secret: 'replacement-fixture-secret',
+        },
+      },
+      paramsFor(harness)
+    );
+    await expect(readGrant()).resolves.toBeNull();
+    await expect(
+      harness.app
+        .service('mcp-servers/oauth-refresh')
+        .create({ mcp_server_id: harness.server.mcp_server_id }, memberParams)
+    ).resolves.toMatchObject({ success: false });
+    expect(provider.requests).toHaveLength(before);
+  });
 });
 
 describe('Slack MCP recovery authenticated route', () => {

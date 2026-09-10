@@ -716,6 +716,23 @@ export function createMCPCatalogConnectService(
         kind: selected.liveKind!,
       };
     }
+    // Configured app secrets deliberately remain ineligible as arbitrary
+    // credential peers. The caller's own canonical install can nevertheless
+    // refresh its own bound per-user grant through the existing authority.
+    if (
+      entry.oauth?.configured_client &&
+      selected.currentCatalog?.server.owner_user_id === userId &&
+      selected.currentCatalog.grant?.has_access_token &&
+      selected.currentCatalog.grant.resource_uri === entry.remote_url
+    ) {
+      const refreshed = await findReusableCredential(
+        entry,
+        [selected.currentCatalog],
+        userId,
+        params
+      );
+      if (refreshed) return { ...refreshed, kind: 'catalog_install' };
+    }
     const revived = await findReusableCredential(entry, selected.compatibleOAuth, userId, params);
     if (revived) return revived;
     if (selected.ownedCatalog) {
@@ -1025,6 +1042,16 @@ export function createMCPCatalogConnectService(
           !isCurrentCatalogInstall(mcpServer, entry, auth, {
             reconcileMissingCompatibilityMode: true,
           }));
+      // Configured app credentials and old V1 grants are user-owned. Connect
+      // must never replace their URL/auth under an existing consent binding.
+      // Current installs still take the normal Connect / Sign in path.
+      if (needsReconciliation && entry.oauth?.configured_client) {
+        throw new CatalogConnectControlError(
+          `The saved ${catalogDisplayName(entry)} configuration differs from the current catalog. ` +
+            'Edit its URL, transport and OAuth app settings explicitly, then sign in again; ' +
+            'Catalog has not changed the saved configuration or grants.'
+        );
+      }
       const preservedCompatibilityOverride =
         selection?.kind === 'catalog_install' &&
         mcpServer.auth?.type === 'oauth' &&

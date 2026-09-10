@@ -63,6 +63,68 @@ require replacing a healthy grant. For rotating credentials, even a crash after 
 dispatch fence but before network dispatch can require one sign-in: Agor cannot safely prove
 that the provider did not consume the token and will not replay it.
 
+### Asana V2: configure an MCP app, then sign in
+
+Asana V2 uses **Streamable HTTP** at `https://mcp.asana.com/v2/mcp` (the saved-server
+transport is **HTTP**). It requires a pre-registered **MCP app**, not an Asana API
+app or PAT, and does not support Dynamic Client Registration. Catalog Connect
+and **Sign in** remain the normal flow; registration credentials are configured
+on the saved server, not published in the catalog.
+
+An administrator responsible for the Asana app must explicitly perform these
+provider-side steps in the [Asana developer console](https://app.asana.com/my-apps):
+
+1. Create an app with type **MCP app**.
+2. In **OAuth**, register the exact callback URL shown by Agor's OAuth settings:
+   the deployment's public callback origin followed by `/mcp-servers/oauth-callback`.
+   Register each intended deployment callback explicitly; do not substitute a
+   wildcard, another cell's URL, or a loopback URL for a public deployment.
+3. In **Manage distribution**, select the intended workspaces and add at least
+   one, or explicitly choose **Any workspace** if that is the intended policy.
+4. Configure the saved Asana Catalog server under **Advanced — OAuth settings**
+   with the app's **Client ID** and **Client Secret**, and **DCR disabled**. Leave
+   the scope and endpoint overrides empty and retain **Catalog compatibility
+   (managed)**. Save, then choose **Sign in**.
+
+Use Agor's existing protected credential-entry surfaces; never put the client
+secret into chat, URLs, logs, source code, or `curated.yaml`. An agent collecting
+credentials must use Agor's secure environment-variable widget, not ask for
+values in chat. Environment variables are not automatically wired to this
+browser OAuth flow: the administrator must configure the saved OAuth client
+fields through a secure surface. See the storage guarantees below.
+
+Each authorized user signs in as themselves and gets their own grant. App
+credentials are not shared Asana user consent. The existing saved-server access
+rules still apply, and Catalog never borrows another owner's row-level client
+secret. An administrator may manage an appropriately shared saved server with
+**per-user OAuth** for users to attach and sign into individually; this is not
+the **shared OAuth grant** mode. No installation-wide app secret is introduced.
+
+Asana's current authorization metadata omits an RFC 9207 `iss` support
+declaration. A current configured Catalog install therefore retains Agor's
+catalog compatibility handling. Asana V2 additionally requires the exact
+`/v2/mcp` resource, the reviewed Asana issuer/endpoints, S256 and HTTP Basic
+client authentication. Returned callback `iss` values, when present, must match
+exactly. An explicit **Strict** setting remains strict and can refuse this
+metadata; it is never automatically relaxed.
+
+**Existing V1 installs:** updating Agor does not rewrite the saved `/sse` URL,
+transport, app configuration, or grants. Catalog reconnect will not silently
+reconcile an old/edited configured-client install. Explicitly edit the existing
+row to the V2 URL and HTTP transport, configure the MCP app and disable DCR,
+then sign in again. The edit invalidates old Agor grant bindings; it does not
+revoke tokens at Asana. Other users must sign in again on a shared saved server.
+Explicit compatibility overrides remain unchanged. Deleting an obsolete row
+and connecting a fresh V2 catalog install is another explicit migration choice.
+
+See [Asana's integration guide](https://developers.asana.com/docs/integrating-with-asanas-mcp-server).
+Its example `resource=https://mcp.asana.com/v2` is not Agor's resource: current
+path-specific metadata at
+`https://mcp.asana.com/.well-known/oauth-protected-resource/v2/mcp` identifies
+the exact `/v2/mcp` endpoint. The catalog health audit checks metadata without
+creating apps or obtaining tokens, and reports **credential-required**, not
+live authentication verified.
+
 ### Recovering a provider-deleted OAuth client (administrators)
 
 If sign-in repeatedly fails at the provider with an unknown/deleted client, ordinary reconnect may keep selecting the same saved Dynamic Client Registration (DCR). Agor automatically retires that exact registration only when the provider's token endpoint returns a structured `invalid_client` or `unauthorized_client` error. A browser/authorization-page error alone does not authorize retirement.

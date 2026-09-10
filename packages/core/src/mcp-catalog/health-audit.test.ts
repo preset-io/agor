@@ -30,6 +30,32 @@ function entry(auth_type: MCPCatalogEntry['auth_type']): MCPCatalogEntry {
 }
 
 describe('auditCatalogHealth', () => {
+  it('validates configured-app metadata but does not claim live client authentication', async () => {
+    const asana = {
+      ...entry('oauth'),
+      oauth: { configured_client: true, dcr_mode: 'disabled' },
+    } satisfies MCPCatalogEntry;
+    oauthMocks.resolveMCPOAuthDiscovery.mockResolvedValue({
+      kind: 'resource-metadata',
+      metadataUrl: 'https://mcp.example.com/metadata',
+      source: 'well-known',
+    });
+    oauthMocks.validateMCPOAuthMetadata.mockResolvedValue({ registrationEndpoint: undefined });
+    const [result] = await auditCatalogHealth([asana], {
+      probe: async () => ({ authType: 'oauth' }),
+    });
+    expect(result).toMatchObject({
+      status: 'credential-required',
+      reason: 'credential_not_verified',
+    });
+    oauthMocks.validateMCPOAuthMetadata.mockRejectedValueOnce(
+      new OAuthConfigurationError('issuer_mismatch')
+    );
+    const [drift] = await auditCatalogHealth([asana], {
+      probe: async () => ({ authType: 'oauth' }),
+    });
+    expect(drift).toMatchObject({ status: 'oauth-metadata-not-ready', reason: 'issuer_mismatch' });
+  });
   it('retains the closed storage-policy reason without provider prose', async () => {
     const [result] = await auditCatalogHealth([entry('oauth')], {
       probe: async () => ({ authType: 'oauth' }),
