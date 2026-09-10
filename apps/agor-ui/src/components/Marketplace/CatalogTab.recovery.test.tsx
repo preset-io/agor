@@ -1,3 +1,4 @@
+import { MCP_HEADER_REDACTED_SENTINEL } from '@agor/core/tools/mcp/http-headers';
 import type { Branch, MCPCatalogEntry, SessionID } from '@agor/core/types';
 import type { AgorClient, User } from '@agor-live/client';
 import { sessionPath } from '@agor-live/client';
@@ -437,3 +438,93 @@ it.each(['missing', 'error'] as const)(
     expect(mockNavigate).not.toHaveBeenCalled();
   }
 );
+
+describe.each(['catalog', 'onboarding'] as const)('fresh Connect OAuth authority in %s', (mode) => {
+  it.each([
+    {
+      name: 'stale positive badge, no live grant',
+      cached: true,
+      live: false,
+      expires: undefined,
+      ready: false,
+    },
+    {
+      name: 'absent badge, live expiring grant',
+      cached: false,
+      live: true,
+      expires: Date.now() + 3600000,
+      ready: true,
+    },
+    {
+      name: 'absent badge, live non-expiring grant',
+      cached: false,
+      live: true,
+      expires: undefined,
+      ready: true,
+    },
+    {
+      name: 'stale positive badge, expired grant',
+      cached: true,
+      live: true,
+      expires: 1,
+      ready: false,
+    },
+    {
+      name: 'stale positive badge, invalid expiry',
+      cached: true,
+      live: true,
+      expires: Number.NaN,
+      ready: false,
+    },
+  ])('$name', async ({ cached, live, expires, ready }) => {
+    const api = buildClient();
+    const response = await api.connect();
+    api.connect.mockClear();
+    const auth = {
+      type: 'oauth',
+      ...(live ? { oauth_access_token: MCP_HEADER_REDACTED_SENTINEL } : {}),
+      ...(expires !== undefined ? { oauth_token_expires_at: expires } : {}),
+    };
+    api.connect.mockResolvedValue({ ...response, mcp_server: { ...response.mcp_server, auth } });
+    agorStore.setState({ userAuthenticatedMcpServerIds: new Set(cached ? ['server-1'] : []) });
+    const onConnected = vi.fn();
+    render(
+      <MemoryRouter>
+        <CatalogTab
+          client={api.client}
+          connected
+          connecting={false}
+          authGeneration={1}
+          currentUser={USER}
+          context={
+            mode === 'onboarding'
+              ? { mode, entryName: ENTRY.name, onConnected, onClose: vi.fn() }
+              : undefined
+          }
+        />
+      </MemoryRouter>
+    );
+    if (mode === 'catalog') await openDrawer();
+    const dialog = within(await screen.findByRole('dialog', { name: /DeepWiki/ }));
+    await dialog.findByText('No account expected');
+    fireEvent.click(
+      dialog.getByRole('checkbox', { name: 'I understand what this server can access' })
+    );
+    fireEvent.click(dialog.getByRole('button', { name: 'Connect' }));
+    if (ready) {
+      await dialog.findByText(
+        mode === 'onboarding' ? 'Connected and ready' : 'Added to My Servers'
+      );
+      expect(dialog.queryByRole('button', { name: /Continue sign-in/ })).not.toBeInTheDocument();
+    } else {
+      await dialog.findByRole('button', { name: /Continue sign-in/ });
+      expect(dialog.queryByText('Connected and ready')).not.toBeInTheDocument();
+    }
+    expect(onConnected).toHaveBeenCalledTimes(mode === 'onboarding' && ready ? 1 : 0);
+    expect(api.client.service).not.toHaveBeenCalledWith('mcp-servers/oauth-start');
+    expect(api.getPrimaryTeammateCandidates).not.toHaveBeenCalled();
+    expect(api.startSession).not.toHaveBeenCalled();
+    expect(mockNavigate).not.toHaveBeenCalled();
+    expect(consumePromptDraftSeed(USER.user_id, SESSION_ID)).toBe('');
+  });
+});

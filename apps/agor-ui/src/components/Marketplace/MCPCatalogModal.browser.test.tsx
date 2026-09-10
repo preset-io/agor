@@ -114,6 +114,15 @@ describe('MCP Catalog real Chromium flows', () => {
     const card = await screen.findByRole('button', { name: 'Open DeepWiki' });
     await userEvent.click(card);
     const drawer = await screen.findByRole('dialog', { name: /DeepWiki/ });
+    const wrapper = drawer.closest('.ant-drawer-content-wrapper');
+    if (!wrapper) throw new Error('Drawer content wrapper not found');
+    // Let the real slide-in motion finish before interacting with the drawer.
+    await waitFor(() => {
+      expect(drawer.getBoundingClientRect().right).toBeCloseTo(window.innerWidth, 1);
+      expect(wrapper.getAnimations().some((animation) => animation.playState === 'running')).toBe(
+        false
+      );
+    });
     // This flow tests the handoff, not pointer hit-testing during drawer entry.
     const consent = within(drawer).getByRole('checkbox', { name: /I understand/ });
     act(() => consent.focus());

@@ -24,9 +24,6 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuthorityOperationGuard } from '@/hooks/useAuthorityOperationGuard';
 import { useMcpMemberPolicy } from '../../hooks/useMcpMemberPolicy';
-import { useAgorStore } from '../../store/agorStore';
-import { selectUserAuthenticatedMcpServerIds } from '../../store/selectors';
-import { mcpServerNeedsAuth } from '../../utils/mcpAuth';
 import { stagePromptDraftSeed } from '../../utils/promptDrafts';
 import { type MCPServerCapabilityContext, policyPendingState } from '../MCPServer/memberPolicy';
 import { CatalogCard } from './CatalogCard';
@@ -37,7 +34,10 @@ import {
   MARKETPLACE_DRAWER_FOCUS_FALLBACK_MS,
   MARKETPLACE_OAUTH_POLL_DELAYS_MS,
 } from './marketplaceLayout';
-import { launchMarketplaceOAuth } from './marketplaceOAuthLaunch';
+import {
+  catalogConnectNeedsAuthentication,
+  launchMarketplaceOAuth,
+} from './marketplaceOAuthLaunch';
 import type { MarketplaceOAuthPopup } from './marketplaceOAuthPopup';
 import { marketplaceCredentialIsUsable } from './marketplacePresentation';
 import { useCatalogReadiness } from './useCatalogReadiness';
@@ -136,12 +136,6 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
   const onboarding = context?.mode === 'onboarding' ? context : undefined;
   const { token } = theme.useToken();
   const navigate = useNavigate();
-  // Same set the session panel reads, so "is this install finished?" is one
-  // question with one answer wherever it is asked. The modal reuses the
-  // workspace projection; `mcpServerNeedsAuth` also handles the token returned
-  // by the daemon for a newly connected server.
-  const userAuthenticatedMcpServerIds = useAgorStore(selectUserAuthenticatedMcpServerIds);
-
   const [filters, setFilters] = useState<CatalogFilterState>(INITIAL_FILTERS);
   const [page, setPage] = useState(1);
   const [selected, setSelected] = useState<MCPCatalogEntry | null>(null);
@@ -539,10 +533,7 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
           return;
         }
 
-        const needsAuthentication = mcpServerNeedsAuth(
-          result.mcp_server,
-          userAuthenticatedMcpServerIds
-        );
+        const needsAuthentication = catalogConnectNeedsAuthentication(result);
         let authentication: 'ready' | 'action_required' | 'pending' | 'failed' | 'unknown' =
           'ready';
         let oauthAttemptId: string | undefined;
@@ -612,7 +603,7 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
         if (operation.isCurrent()) setConnecting(false);
       }
     },
-    [client, operationGuard, selected, userAuthenticatedMcpServerIds, onboarding]
+    [client, operationGuard, selected, onboarding]
   );
 
   const continueSurpriseOAuth = useCallback(
