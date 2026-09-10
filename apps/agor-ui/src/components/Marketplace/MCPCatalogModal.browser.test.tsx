@@ -102,11 +102,27 @@ describe('MCP Catalog real Chromium flows', () => {
     const api = makeCatalogClient();
     render(<CatalogHarness client={api.client} />);
     await userEvent.click(screen.getByRole('button', { name: 'Open MCP Catalog' }));
+    const modal = await findCatalogModal();
+    await waitFor(() =>
+      expect(modal.getAnimations().some((animation) => animation.playState === 'running')).toBe(
+        false
+      )
+    );
     const card = await screen.findByRole('button', { name: 'Open DeepWiki' });
     await userEvent.click(card);
     const drawer = await screen.findByRole('dialog', { name: /DeepWiki/ });
-    await userEvent.click(within(drawer).getByRole('checkbox', { name: /I understand/ }));
+    // Input belongs to the settled drawer, not its moving/focus-trapped portal.
+    await waitFor(() => {
+      expect(drawer).toBeVisible();
+      const bounds = drawer.getBoundingClientRect();
+      expect(bounds.right).toBeLessThanOrEqual(window.innerWidth);
+      expect(bounds.left).toBeGreaterThanOrEqual(0);
+    });
+    const consent = within(drawer).getByRole('checkbox', { name: /I understand/ });
     const connect = within(drawer).getByRole('button', { name: /Connect/ });
+    expect(connect).toBeDisabled();
+    await userEvent.click(consent);
+    await waitFor(() => expect(consent).toBeChecked());
     await waitFor(() => expect(connect).toBeEnabled());
     await userEvent.click(connect);
     await userEvent.click(await screen.findByRole('button', { name: 'Start new session' }));
