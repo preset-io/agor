@@ -25,6 +25,54 @@ When **Start OAuth Flow** fails, the existing recovery alert and `recovery` API 
 
 Opening the editor or reading saved policy does **not** discover metadata, register clients, request consent, or change grants. It is not a live provider health check. Starting OAuth and **Save & Test Connection** remain explicit operations with side effects. No diagnostic action automatically retries a weaker compatibility policy or enables DCR. These reads retain the existing tenant and server-visibility authorization.
 
+### Expiring OAuth access and refresh
+
+**Connected** means the saved access grant is currently usable according to its stored
+expiry and configuration binding; it is not a live provider health check. **Refresh needed**
+means access has expired and a refresh credential is stored. Agor attempts refresh just before
+use, including **Refresh tools** and saved-server connection tests, without opening a sign-in
+window. Inventory reads never contact providers. A successful refresh atomically replaces the
+access token and any rotated refresh token; an omitted refresh token preserves the old one.
+
+GitLab normally issues access tokens lasting two hours (`expires_in: 7200`). This is the
+provider's access-token lifetime, not an Agor daily sign-in limit. Agor sends the grant's
+original redirect URI and client credentials when refreshing. A valid stored refresh grant
+can renew access without user interaction.
+
+If the token endpoint definitively rejects the grant/client, Agor retires that exact grant.
+If an exchange may have consumed a rotating refresh token but its result was lost or malformed,
+Agor quarantines it instead of replaying it. Use **Connect** or **Reconnect** in the server's
+settings to sign in again. Temporary, unambiguous provider rejections preserve the grant for
+retry; a missing refresh token or incompatible saved client may also require sign-in.
+
+Existing bound grants with valid refresh credentials can recover on their next use after an
+upgrade. A missing original redirect/client, revoked grant, or quarantined/lost rotation may
+need one new sign-in. Upgrading cannot recover a token pair the provider issued but Agor never
+received. Do not disconnect a working refreshable grant merely because access expired.
+
+### Saved client-credentials configurations
+
+Client credentials (machine-to-machine OAuth) and browser authorization-code grants are
+not interchangeable. **Test Authentication** and direct standalone core integrations retain
+their legacy client-credentials exchange, but it does not persist a browser grant or establish
+that a saved server is usable for tasks. Daemon-backed execution and HA discovery require a
+bound durable OAuth grant. Saved standalone discovery now follows the same boundary rather
+than minting an untracked machine token. This is a compatibility change for installations
+that previously used standalone **Refresh tools** with client credentials alone.
+
+When no durable grant exists for a client-credentials configuration, discovery reports
+**Review configuration**, not browser reauthentication. Configure authorization-code OAuth if
+the provider supports it, or use a provider-supported bearer credential. A machine-only
+provider cannot be repaired by repeatedly opening browser sign-in. Configured client IDs and
+secrets can also belong to browser OAuth; an existing bound grant continues to work regardless
+of the legacy form's grant-type default. Agor never falls back to machine-token minting after
+a browser grant fails or is retired.
+
+A newer refresh on another daemon may temporarily require retrying a request; it does not
+require replacing a healthy grant. For rotating credentials, even a crash after the durable
+dispatch fence but before network dispatch can require one sign-in: Agor cannot safely prove
+that the provider did not consume the token and will not replay it.
+
 ### Recovering a provider-deleted OAuth client (administrators)
 
 If sign-in repeatedly fails at the provider with an unknown/deleted client, ordinary reconnect may keep selecting the same saved Dynamic Client Registration (DCR). Agor automatically retires that exact registration only when the provider's token endpoint returns a structured `invalid_client` or `unauthorized_client` error. A browser/authorization-page error alone does not authorize retirement.

@@ -3,8 +3,19 @@ import { asMCPExternalError } from '@agor/core/mcp';
 import { OAuthConfigurationError, OAuthDCRFailure } from '@agor/core/tools/mcp/oauth-mcp-transport';
 import { describe, expect, it, vi } from 'vitest';
 import { classifyMCPAuthRecovery, recoveryForOAuthAttemptFailure } from './mcp-auth-recovery';
+import { MCPClientCredentialsConfigurationError, MCPOAuthRefreshBusyError } from './mcp-oauth-use';
 
 describe('MCP auth recovery contract', () => {
+  it('distinguishes transient rotation and machine configuration from browser reauth', () => {
+    expect(classifyMCPAuthRecovery(new MCPOAuthRefreshBusyError())).toMatchObject({
+      action: 'retry',
+    });
+    expect(classifyMCPAuthRecovery(new MCPClientCredentialsConfigurationError())).toMatchObject({
+      category: 'configuration_required',
+      action: 'review_configuration',
+      message: expect.stringContaining('client-credentials-only'),
+    });
+  });
   it.each([
     [new Forbidden('SENTINEL_FORBIDDEN'), 'permission_changed', 'retry'],
     [new Conflict('SENTINEL_CONFLICT'), 'configuration_changed', 'save_and_retry'],

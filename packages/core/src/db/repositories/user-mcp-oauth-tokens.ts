@@ -751,6 +751,30 @@ export class UserMCPOAuthTokenRepository {
     }
   }
 
+  /** SQLite has one daemon, but its dispatch fence must survive a restart. */
+  async setStandaloneRefreshState(
+    userId: UserID | null,
+    serverId: MCPServerID,
+    expected: MCPOAuthRefreshVersion,
+    from: 'idle' | 'refreshing',
+    to: 'refreshing' | 'idle' | 'ambiguous'
+  ): Promise<boolean> {
+    if (this.postgres) throw new RepositoryError('Standalone refresh state requires SQLite');
+    const result = await update(this.db, userMcpOauthTokens)
+      .set({ refresh_status: to, updated_at: new Date() })
+      .where(
+        and(
+          matchKey(userId, serverId),
+          eq(userMcpOauthTokens.grant_generation, expected.grantGeneration),
+          eq(userMcpOauthTokens.refresh_generation, expected.refreshGeneration),
+          eq(userMcpOauthTokens.refresh_status, from),
+          sql`${userMcpOauthTokens.grant_binding_fingerprint} IS NOT DISTINCT FROM ${expected.grantBindingFingerprint ?? null}`
+        )
+      )
+      .run();
+    return result.rowsAffected === 1;
+  }
+
   /**
    * Commit a standalone/SQLite refresh only onto the exact grant which was
    * verified before the provider exchange. This is deliberately update-only:
@@ -760,7 +784,7 @@ export class UserMCPOAuthTokenRepository {
   async completeStandaloneRefresh(
     userId: UserID | null,
     serverId: MCPServerID,
-    expected: Pick<MCPOAuthRefreshVersion, 'grantGeneration' | 'grantBindingFingerprint'>,
+    expected: MCPOAuthRefreshVersion,
     input: { accessToken: string; refreshToken?: string; expiresAt: Date | null }
   ): Promise<boolean> {
     if (this.postgres) {
@@ -773,12 +797,17 @@ export class UserMCPOAuthTokenRepository {
           oauth_access_token: input.accessToken,
           oauth_token_expires_at: input.expiresAt,
           ...(input.refreshToken !== undefined ? { oauth_refresh_token: input.refreshToken } : {}),
+          refresh_status: 'idle',
+          refresh_generation: expected.refreshGeneration + 1,
+          refresh_success_generation: expected.refreshGeneration + 1,
           updated_at: new Date(),
         })
         .where(
           and(
             matchKey(userId, serverId),
             eq(userMcpOauthTokens.grant_generation, expected.grantGeneration),
+            eq(userMcpOauthTokens.refresh_generation, expected.refreshGeneration),
+            eq(userMcpOauthTokens.refresh_status, 'refreshing'),
             sql`${userMcpOauthTokens.grant_binding_fingerprint} IS NOT DISTINCT FROM ${fingerprint}`
           )
         )
