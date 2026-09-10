@@ -72,8 +72,9 @@ describe('Branch Session active indicator in a real browser', () => {
     const firstAnimation = firstSpinner!.getAnimations()[0];
     expect(firstAnimation?.playState).toBe('running');
     const before = Number(firstAnimation?.currentTime);
-    await act(async () => new Promise((resolve) => setTimeout(resolve, 100)));
-    expect(Number(firstAnimation?.currentTime)).toBeGreaterThan(before);
+    // Observe actual animation progress; a fixed sleep can finish before the
+    // first compositor frame on a busy multi-viewport browser runner.
+    await expect.poll(() => Number(firstAnimation?.currentTime)).toBeGreaterThan(before);
 
     view.rerender(
       <ConnectionProvider
