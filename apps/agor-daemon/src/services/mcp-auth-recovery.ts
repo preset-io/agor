@@ -2,7 +2,17 @@ import { PublicBaseUrlNotConfiguredError } from '@agor/core/config';
 import { BadRequest, Conflict, Forbidden } from '@agor/core/feathers';
 import { sanitizeMCPExternalError } from '@agor/core/mcp';
 import { OAuthConfigurationError, OAuthDCRFailure } from '@agor/core/tools/mcp/oauth-mcp-transport';
+import {
+  AmbiguousRefreshError,
+  GrantConfigurationChangedError,
+  InvalidGrantError,
+  MissingClientIdError,
+  MissingRefreshTokenError,
+  MissingTokenEndpointError,
+  OAuthRefreshExchangeError,
+} from '@agor/core/tools/mcp/oauth-refresh';
 import type { MCPAuthRecovery, MCPServerID } from '@agor/core/types';
+import { MCPClientCredentialsConfigurationError, MCPOAuthRefreshBusyError } from './mcp-oauth-use';
 
 function target(mcpServerId?: string) {
   return {
@@ -11,6 +21,15 @@ function target(mcpServerId?: string) {
 }
 
 type TrustedRecoveryErrorConstructor =
+  | typeof MCPClientCredentialsConfigurationError
+  | typeof MCPOAuthRefreshBusyError
+  | typeof AmbiguousRefreshError
+  | typeof InvalidGrantError
+  | typeof MissingRefreshTokenError
+  | typeof MissingClientIdError
+  | typeof MissingTokenEndpointError
+  | typeof GrantConfigurationChangedError
+  | typeof OAuthRefreshExchangeError
   | typeof Forbidden
   | typeof Conflict
   | typeof BadRequest
@@ -47,6 +66,24 @@ export function classifyMCPAuthRecovery(
 ): MCPAuthRecovery {
   const common = target(options.mcpServerId);
 
+  if (safeInstanceOf(error, MCPOAuthRefreshBusyError)) {
+    return {
+      ...common,
+      category: 'authentication_required',
+      action: 'retry',
+      message:
+        'OAuth access changed during refresh. Retry to use the current grant; no additional refresh was attempted.',
+    };
+  }
+  if (safeInstanceOf(error, MCPClientCredentialsConfigurationError)) {
+    return {
+      ...common,
+      category: 'configuration_required',
+      action: 'review_configuration',
+      message:
+        'No bound OAuth grant is available. Legacy client-credential fields alone do not establish a saved machine-token connection. For browser-capable providers, configure authorization-code OAuth and reconnect. For a client-credentials-only server, use a supported bearer credential instead; browser sign-in cannot repair it.',
+    };
+  }
   if (safeInstanceOf(error, Forbidden)) {
     return {
       ...common,
@@ -132,6 +169,36 @@ export function classifyMCPAuthRecovery(
       message:
         'OAuth needs a browser-reachable Agor callback URL. Configure the deployment public URL and register the callback with the provider, then retry.',
       ...(options.redirectUri ? { redirect_uri: options.redirectUri } : {}),
+    };
+  }
+
+  if (
+    [
+      AmbiguousRefreshError,
+      InvalidGrantError,
+      MissingRefreshTokenError,
+      MissingClientIdError,
+      MissingTokenEndpointError,
+      GrantConfigurationChangedError,
+    ].some((errorClass) => safeInstanceOf(error, errorClass))
+  ) {
+    return {
+      ...common,
+      category: 'authentication_required',
+      action: 'reauthenticate',
+      message:
+        'The saved OAuth grant cannot be used safely. Sign in again to reconnect this server.',
+    };
+  }
+  if (safeInstanceOf(error, OAuthRefreshExchangeError)) {
+    return {
+      ...common,
+      category: 'authentication_required',
+      action: safeOwnDataValue(error, 'ambiguous') === true ? 'reauthenticate' : 'retry',
+      message:
+        safeOwnDataValue(error, 'ambiguous') === true
+          ? 'The provider refresh outcome is unknown. Sign in again; Agor will not replay a possibly consumed refresh token.'
+          : 'The provider refused to refresh access. Retry, or review the saved OAuth client configuration.',
     };
   }
 

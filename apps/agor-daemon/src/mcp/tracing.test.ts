@@ -17,6 +17,127 @@ function recordingTracer() {
 }
 
 describe('MCP tracing', () => {
+  it('keeps one measured server span per facade call, async parentage and caller isolation', async () => {
+    const active = new AsyncLocalStorage<string>();
+    const tenant = new AsyncLocalStorage<string>();
+    const calls: { resource: string; parent?: string; tags: Record<string, unknown> }[] = [];
+    const tracer: DatadogTracer = {
+      trace(_name, options, work) {
+        const tags = { ...options.tags };
+        calls.push({ resource: options.resource!, parent: active.getStore(), tags });
+        expect(options.measured).toBe(true);
+        return active.run(options.resource!, () =>
+          work({
+            setTag: (key, value) => {
+              tags[key] = value;
+            },
+          })
+        );
+      },
+    };
+    const tracing = createMcpTracing('entrypoint', { tracer });
+    const handlers = new Map<string, ToolHandler>();
+    const server = {
+      registerTool: (name: string, _config: unknown, handler: ToolHandler) =>
+        handlers.set(name, handler),
+    } as unknown as McpServer;
+    const dispatcher = new ToolDispatcher();
+    const failure = new Error('secret exception');
+    tracing
+      .toolProxy(toolDispatcherProxy(server, dispatcher))
+      .registerTool('agor_test', {}, async () => {
+        await Promise.resolve();
+        expect(active.getStore()).toBe('agor_test');
+        if (tenant.getStore() === 'tenant-b') throw failure;
+        return { content: [], tenant: tenant.getStore() };
+      });
+    tracing.toolProxy(server, dispatcher).registerTool('agor_execute_tool', {}, async () => {
+      try {
+        return await dispatcher.get('agor_test')!.handler({ secret: 'private args' });
+      } catch {
+        return { isError: true, content: [{ type: 'text' as const, text: 'secret result' }] };
+      }
+    });
+    const results = await Promise.all(
+      ['tenant-a', 'tenant-b'].map((id) =>
+        tenant.run(id, () =>
+          active.run(id, () => handlers.get('agor_execute_tool')!({ tool_name: 'agor_test' }))
+        )
+      )
+    );
+    expect(results).toEqual([
+      { content: [], tenant: 'tenant-a' },
+      { isError: true, content: [{ type: 'text', text: 'secret result' }] },
+    ]);
+    expect(calls).toEqual([
+      {
+        resource: 'agor_test',
+        parent: 'tenant-a',
+        tags: { 'mcp.tool': 'agor_test', 'span.kind': 'server', 'mcp.outcome': 'success' },
+      },
+      {
+        resource: 'agor_test',
+        parent: 'tenant-b',
+        tags: {
+          'mcp.tool': 'agor_test',
+          'span.kind': 'server',
+          'mcp.outcome': 'exception',
+          error: true,
+        },
+      },
+    ]);
+    expect(active.getStore()).toBeUndefined();
+    expect(tenant.getStore()).toBeUndefined();
+    expect(JSON.stringify(calls.map((call) => call.tags))).not.toMatch(/secret|tenant/);
+  });
+
+  it('records safe errors without exposing exceptions to the tracer, even when instrumentation fails', async () => {
+    for (const mode of ['normal', 'before', 'after', 'tag'] as const) {
+      const tags: Record<string, unknown>[] = [];
+      const tracer: DatadogTracer = {
+        trace(_name, _options, work) {
+          if (mode === 'before') throw new Error('tracer failed');
+          const data: Record<string, unknown> = {};
+          tags.push(data);
+          const result = work({
+            setTag: (key, value) => {
+              if (mode === 'tag') throw new Error('tag failed');
+              data[key] = value;
+            },
+          });
+          if (mode === 'after') throw new Error('tracer failed');
+          // The traced callback must resolve, never hand the tracer a raw error.
+          Promise.resolve(result).catch(() => {
+            throw new Error('raw error reached tracer');
+          });
+          return result;
+        },
+      };
+      const handlers = new Map<string, ToolHandler>();
+      const server = {
+        registerTool: (name: string, _config: unknown, handler: ToolHandler) =>
+          handlers.set(name, handler),
+      } as unknown as McpServer;
+      const proxy = createMcpTracing('full', { tracer }).toolProxy(server);
+      const failure = new Error('secret credential');
+      const reject = vi.fn(() => {
+        throw failure;
+      });
+      proxy.registerTool('agor_fail', {}, reject);
+      await expect(handlers.get('agor_fail')!({})).rejects.toBe(failure);
+      expect(reject).toHaveBeenCalledTimes(1);
+      const result = { isError: true, content: [{ type: 'text' as const, text: 'secret output' }] };
+      proxy.registerTool('agor_result', {}, async () => result);
+      expect(await handlers.get('agor_result')!({})).toBe(result);
+      if (mode === 'normal')
+        expect(tags).toEqual([
+          { 'mcp.outcome': 'exception', error: true },
+          { 'mcp.outcome': 'tool_error', error: true },
+        ]);
+      expect(JSON.stringify(tags)).not.toContain('secret');
+    }
+  });
+
   it('does not resolve a tracer when tracing is off', () => {
     const resolveTracer = vi.fn();
     const tracing = createMcpTracing('off', { resolveTracer });
@@ -43,6 +164,7 @@ describe('MCP tracing', () => {
       'tools/list',
       'initialize',
       'server/discover',
+      'resources/read',
       'private-data',
     ]) {
       tracing.request(
@@ -57,6 +179,7 @@ describe('MCP tracing', () => {
       'tools/list',
       'initialize',
       'server/discover',
+      'resources/read',
       'other',
       'batch',
       'other',
@@ -93,7 +216,11 @@ describe('MCP tracing', () => {
     expect(calls).toEqual(
       Array.from({ length: 2 }, () => ({
         name: 'mcp.tool',
-        options: { resource: 'agor_boards_get', tags: { 'mcp.tool': 'agor_boards_get' } },
+        options: {
+          resource: 'agor_boards_get',
+          measured: true,
+          tags: { 'mcp.tool': 'agor_boards_get', 'span.kind': 'server' },
+        },
       }))
     );
     expect(JSON.stringify(calls)).not.toMatch(/secret|sensitive/);

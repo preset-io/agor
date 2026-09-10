@@ -65,7 +65,8 @@ export async function resolveAuthenticatedServerIds(deps: OAuthStatusDeps): Prom
   const tokens = [...perUserTokens, ...sharedTokens].filter(
     (token) =>
       !(token.oauth_token_expires_at && token.oauth_token_expires_at <= now) &&
-      token.refresh_status !== 'ambiguous'
+      token.refresh_status !== 'ambiguous' &&
+      token.refresh_status !== 'refreshing'
   );
   const servers = new Map(
     (await deps.findServers([...new Set(tokens.map((token) => token.mcp_server_id))])).map(

@@ -35,6 +35,29 @@ describe('resolveDatadogTracer', () => {
 });
 
 describe('best-effort tracing', () => {
+  it('forwards explicit resource and measurement without changing the operation or tags', () => {
+    const tags = { 'span.kind': 'server' };
+    const calls: { name: string; options: Parameters<DatadogTracer['trace']>[1] }[] = [];
+    const tracer: DatadogTracer = {
+      trace(name, options, work) {
+        calls.push({ name, options });
+        return work();
+      },
+    };
+    expect(
+      traceBestEffort(tracer, 'mcp.tool', tags, () => 42, {
+        resource: 'agor_test',
+        measured: true,
+      })
+    ).toBe(42);
+    expect(calls).toEqual([
+      {
+        name: 'mcp.tool',
+        options: { resource: 'agor_test', measured: true, tags },
+      },
+    ]);
+  });
+
   it('runs work once when disabled or tracing throws before/after invocation', async () => {
     const tracers: (DatadogTracer | null)[] = [
       null,

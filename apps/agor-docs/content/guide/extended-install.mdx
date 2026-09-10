@@ -440,7 +440,7 @@ than trusting that record. A completed MCP handshake is installed ready to use. 
 installed as a per-user connection. A non-OAuth challenge can be installed when the catalog includes a
 reviewed bearer-token recipe: the drawer asks for the token, and the daemon first durably claims this
 user's connect generation so a slower, older reconnect cannot overwrite a newer token. It then tests the
-token against the catalog URL and writes the server/session only after the probe accepts it. A stale
+token against the catalog URL and writes the server only after the probe accepts it. A stale
 catalog auth label therefore does not silently install a connection that the live endpoint will reject.
 
 Catalog OAuth uses a bounded compatibility profile for current, unmodified catalog installs. It
@@ -468,16 +468,16 @@ Connect may reuse an OAuth credential the caller already holds when it is a live
 same endpoint, protected resource, requested scope, and catalog OAuth policy. It never reuses another
 user's or a shared grant, and declines rows with custom headers, credential-routing overrides, or stale
 configuration. An expired matching grant may be refreshed before reuse. Reconnecting a bearer-token
-entry reuses only that user's catalog connection and rotates the token after the new session and
-attachment have succeeded.
+entry reuses only that user's catalog connection and rotates the token after the authenticated probe
+has succeeded.
 
-Every successful Connect creates a new idle session and attaches the server, but keeps the catalog
-drawer open so you can review the result and choose **Open session**. For an open server, a bearer-token
-server, or OAuth with a reusable live grant, the starter prompt is staged for that session. A new OAuth
-connection pre-opens the provider window while browser user activation is available. The drawer stays
-at **Sign-in pending** until Agor confirms the durable grant; navigating the popup is not treated as
-success. If sign-in does not finish, the session's dismissible notice and warning MCP badge remain the
-recovery path.
+Every successful Connect adds the server without creating a session. The drawer shows a compact next
+step: keep browsing, or choose **Start new session** and select an eligible teammate and agent tool.
+That explicit action creates a caller-owned idle session through the normal session service, attaches
+the added server, and seeds the starter prompt into the composer as editable, unsent text. A new OAuth
+connection still pre-opens the provider window while browser user activation is available. The drawer
+stays at **Sign-in pending** until Agor confirms the durable grant; navigating the popup is not treated
+as success. If sign-in does not finish, **My Servers** remains the recovery path.
 
 **What this can access** is expanded by default and must be acknowledged before Connect is enabled.
 Agor records the exact disclosure text shown; collapsing it is not consent. Technical details are

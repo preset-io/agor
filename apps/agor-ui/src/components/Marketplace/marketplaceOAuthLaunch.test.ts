@@ -2,10 +2,6 @@ import type { MCPCatalogConnectResult } from '@agor/core/types';
 import type { AgorClient } from '@agor-live/client';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
-  consumeMarketplacePromptSuggestionState,
-  saveMarketplacePromptSuggestion,
-} from '../../utils/marketplaceOAuthPrompt';
-import {
   launchMarketplaceOAuth,
   MarketplaceOAuthPopupNavigationError,
   MarketplaceOAuthStartError,
@@ -13,7 +9,6 @@ import {
 
 const result = {
   mcp_server: { mcp_server_id: 'server-oauth', auth: { type: 'oauth' } },
-  session: { session_id: 'session-oauth' },
   starter_prompt: 'Show my work',
 } as MCPCatalogConnectResult;
 
@@ -31,80 +26,6 @@ describe('Marketplace OAuth launch', () => {
     sessionStorage.clear();
   });
 
-  it('names only the authoritative saved server and stages a nonsecret prompt handoff', async () => {
-    const { client, create } = clientWith({
-      success: true,
-      authorizationUrl: 'https://accounts.example.test/authorize',
-      attempt_id: 'attempt-1',
-    });
-    const replace = vi.fn();
-    const close = vi.fn();
-    const popup = {
-      operationId: 'popup-1',
-      navigate: (url: string) => {
-        replace(url);
-        return true;
-      },
-      close,
-    };
-    await expect(
-      launchMarketplaceOAuth(client, result, popup, {
-        authority: { userId: 'alice', role: 'member', authGeneration: 3 },
-        isCurrent: () => true,
-      })
-    ).resolves.toEqual({ attemptId: 'attempt-1' });
-    expect(create).toHaveBeenCalledWith({ mcp_server_id: 'server-oauth' });
-    expect(replace).toHaveBeenCalledWith('https://accounts.example.test/authorize');
-    expect(close).not.toHaveBeenCalled();
-    expect(
-      JSON.parse(sessionStorage.getItem('agor-marketplace-oauth-prompt:session-oauth')!)
-    ).toMatchObject({
-      sessionId: 'session-oauth',
-      serverId: 'server-oauth',
-      attemptId: 'attempt-1',
-      prompt: 'Show my work',
-      userId: 'alice',
-      authGeneration: 3,
-      popupOperationId: 'popup-1',
-    });
-  });
-
-  it('fences an older suggestion when a newer OAuth attempt has no starter prompt', async () => {
-    const authority = { userId: 'alice', role: 'member', authGeneration: 3 };
-    const earlier = saveMarketplacePromptSuggestion({
-      sessionId: result.session.session_id,
-      attemptId: 'attempt-earlier',
-      prompt: 'Old suggestion',
-      authority,
-    });
-    const { client } = clientWith({
-      success: true,
-      authorizationUrl: 'https://accounts.example.test/authorize',
-      attempt_id: 'attempt-newer',
-    });
-    const popup = {
-      operationId: 'popup-newer',
-      navigate: vi.fn(() => true),
-      close: vi.fn(),
-    };
-
-    await expect(
-      launchMarketplaceOAuth(client, { ...result, starter_prompt: undefined }, popup, {
-        authority,
-        isCurrent: () => true,
-      })
-    ).resolves.toEqual({ attemptId: 'attempt-newer' });
-    expect(earlier).not.toBeNull();
-    expect(
-      consumeMarketplacePromptSuggestionState(result.session.session_id, authority)
-    ).toBeNull();
-    expect(
-      JSON.parse(
-        sessionStorage.getItem(`agor-marketplace-oauth-prompt:${result.session.session_id}`)!
-      )
-    ).toMatchObject({ attemptId: 'attempt-newer', prompt: '' });
-  });
-
   it('closes the pre-opened window and preserves the safe recovery when OAuth start is refused', async () => {
     const { client } = clientWith({
       success: false,
@@ -114,7 +35,6 @@ describe('Marketplace OAuth launch', () => {
     const popup = { operationId: 'popup-2', navigate: vi.fn(), close };
     await expect(
       launchMarketplaceOAuth(client, result, popup, {
-        authority: { userId: 'alice', role: 'member', authGeneration: 3 },
         isCurrent: () => true,
       })
     ).rejects.toEqual(
@@ -131,7 +51,6 @@ describe('Marketplace OAuth launch', () => {
     let current = true;
     const popup = { operationId: 'popup-stale', navigate: vi.fn(), close: vi.fn() };
     const launched = launchMarketplaceOAuth(client, result, popup, {
-      authority: { userId: 'alice', role: 'member', authGeneration: 3 },
       isCurrent: () => current,
     });
     current = false;
@@ -167,7 +86,6 @@ describe('Marketplace OAuth launch', () => {
 
       await expect(
         launchMarketplaceOAuth(client, result, popup, {
-          authority: { userId: 'alice', role: 'member', authGeneration: 3 },
           isCurrent: () => true,
         })
       ).rejects.toBeInstanceOf(MarketplaceOAuthPopupNavigationError);

@@ -684,7 +684,7 @@ describe('Marketplace server inventory and settings', () => {
     expect(drawer.getAllByLabelText('GitHub: read_wiki_contents on')).toHaveLength(1);
     const refreshTools = drawer.getByText('Refresh tools').closest('button');
     expect(refreshTools).toBeEnabled();
-    expect(mocked.refresh).not.toHaveBeenCalled();
+    expect(mocked.refresh).toHaveBeenCalledTimes(1);
 
     const close = drawer.getByLabelText('Close');
     fireEvent.click(close);
@@ -851,7 +851,7 @@ describe('Marketplace server inventory and settings', () => {
 
     await waitFor(() => expect(error).toHaveBeenCalledWith('Provider is unavailable'));
     expect(success).not.toHaveBeenCalled();
-    expect(refresh).not.toHaveBeenCalled();
+    expect(refresh).toHaveBeenCalledTimes(1);
   });
 
   it('fails closed when member policy permits reuse but not configuration', async () => {

@@ -305,8 +305,43 @@ function activeBranchGroupEntryExists(
   userId: UserIdExpression,
   capability?: string
 ): SQL {
-  const matchingGroupEntryExists = (entryCondition?: SQL): SQL =>
-    exists(
+  // For a fixed principal, group membership is independent of the branch.
+  // Form the matching config set once instead of walking the principal's group
+  // entries again for every branch. Keep the correlated form for SQL-valued
+  // principals (for example outer-user enumeration).
+  const matchingGroupEntryExists = (entryCondition?: SQL): SQL => {
+    if (typeof userId === 'string') {
+      const matchingConfigs = sql`
+        SELECT ${branchPermissionEntries.config_id}
+        FROM ${branchPermissionEntries}
+        INNER JOIN ${groupMemberships}
+          ON ${groupMemberships.group_id} = ${branchPermissionEntries.group_id}
+        INNER JOIN ${groups} ON ${groups.group_id} = ${branchPermissionEntries.group_id}
+        WHERE ${and(
+          eq(groupMemberships.user_id, userId),
+          eq(groups.archived, false),
+          ...(entryCondition ? [entryCondition] : [])
+        )}
+        ${isPostgresDatabase(db) ? sql`OFFSET 0` : sql`LIMIT -1 OFFSET 0`}
+      `;
+      // PostgreSQL otherwise pulls IN into a semi-join and probes every group
+      // config for every branch. ARRAY makes this an uncorrelated InitPlan;
+      // it is statement-local and still evaluated under the caller's RLS.
+      return exists(
+        selectRaw(db)
+          .from(branchPermissionConfigs)
+          .where(
+            and(
+              effectiveConfigCondition(),
+              eq(branchPermissionConfigs.sharing_mode, 'shared'),
+              isPostgresDatabase(db)
+                ? sql`${branchPermissionConfigs.config_id} = ANY(ARRAY(${matchingConfigs}))`
+                : sql`${branchPermissionConfigs.config_id} IN (${matchingConfigs})`
+            )
+          )
+      );
+    }
+    return exists(
       selectRaw(db)
         .from(branchPermissionConfigs)
         .innerJoin(
@@ -332,6 +367,7 @@ function activeBranchGroupEntryExists(
           )
         )
     );
+  };
   if (!capability) return matchingGroupEntryExists();
   if (capability === 'terminal.open') {
     return (

@@ -104,6 +104,8 @@ export interface RefreshMCPTokenOptions {
   clientId: string;
   clientSecret?: string;
   resourceUri?: string;
+  /** Exact redirect used to issue this grant (required by GitLab on refresh). */
+  redirectUri?: string;
   /** Exact loopback HTTP exception for standalone development/tests only. */
   allowLocalhostHttp?: boolean;
   /** Task/session/rollout fence checked immediately before credential dispatch. */
@@ -137,6 +139,7 @@ export async function refreshMCPToken(
     refresh_token: opts.refreshToken,
   };
   if (opts.resourceUri) body.resource = opts.resourceUri;
+  if (opts.redirectUri) body.redirect_uri = opts.redirectUri;
   const headers: Record<string, string> = {
     'Content-Type': 'application/x-www-form-urlencoded',
     Accept: 'application/json',
@@ -172,12 +175,48 @@ export async function refreshMCPToken(
   } catch {
     throw new OAuthRefreshExchangeError('response_ambiguous', true);
   }
-  if (parsed.error === 'invalid_grant') throw new InvalidGrantError();
-  if (parsed.error) throw new OAuthRefreshExchangeError('provider_rejected', false);
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new OAuthRefreshExchangeError('response_ambiguous', true);
+  }
+  if (parsed.error !== undefined) {
+    // Only an unambiguous error response proves no token pair was issued.
+    // Mixed success/error or malformed error JSON may have consumed a
+    // rotating token and must never release its dispatch fence for replay.
+    if (
+      response.ok ||
+      typeof parsed.error !== 'string' ||
+      !parsed.error ||
+      parsed.access_token !== undefined ||
+      parsed.refresh_token !== undefined
+    ) {
+      throw new OAuthRefreshExchangeError('response_ambiguous', true);
+    }
+    if (['invalid_grant', 'invalid_client', 'unauthorized_client'].includes(parsed.error)) {
+      throw new InvalidGrantError();
+    }
+    throw new OAuthRefreshExchangeError('provider_rejected', false);
+  }
   if (!response.ok || typeof parsed.access_token !== 'string' || !parsed.access_token) {
     throw new OAuthRefreshExchangeError('response_ambiguous', true);
   }
+  if (
+    (parsed.refresh_token !== undefined &&
+      (typeof parsed.refresh_token !== 'string' || !parsed.refresh_token)) ||
+    (parsed.token_type !== undefined &&
+      (typeof parsed.token_type !== 'string' || parsed.token_type.toLowerCase() !== 'bearer'))
+  ) {
+    throw new OAuthRefreshExchangeError('response_ambiguous', true);
+  }
   const expiresIn = parsed.expires_in == null ? undefined : Number(parsed.expires_in);
+  if (
+    parsed.expires_in !== undefined &&
+    ((typeof parsed.expires_in !== 'number' && typeof parsed.expires_in !== 'string') ||
+      !Number.isSafeInteger(expiresIn) ||
+      expiresIn! <= 0 ||
+      !Number.isFinite(new Date(Date.now() + expiresIn! * 1000).getTime()))
+  ) {
+    throw new OAuthRefreshExchangeError('response_ambiguous', true);
+  }
   return {
     access_token: parsed.access_token,
     refresh_token: parsed.refresh_token,
@@ -199,8 +238,12 @@ export function __resetRefreshMutexForTests(): void {
 export function __refreshMutexSizeForTests(): number {
   return _inFlightRefreshes.size;
 }
-function mutexKey(userId: UserID | null, serverId: MCPServerID): MutexKey {
-  return `${userId ?? '<shared>'}:${serverId}`;
+function mutexKey(deps: RefreshAndPersistDeps): MutexKey {
+  return JSON.stringify([
+    deps.tenantId ?? getCurrentTenantId() ?? '<standalone>',
+    deps.userId,
+    deps.mcpServerId,
+  ]);
 }
 
 export interface RefreshAndPersistDeps {
@@ -402,6 +445,7 @@ async function refreshPostgres(deps: RefreshAndPersistDeps): Promise<string> {
       clientId: row.oauth_client_id,
       clientSecret: row.oauth_client_secret,
       resourceUri: row.oauth_resource_uri,
+      redirectUri: row.oauth_redirect_uri,
       allowLocalhostHttp: deps.allowLocalhostHttpDevelopment,
       assertCurrent: deps.assertCurrent,
       resolveDns: deps.resolveDns,
@@ -503,16 +547,34 @@ async function loadObservedStandaloneGrant(
 
 async function refreshStandalone(
   deps: RefreshAndPersistDeps,
-  observedVersion: Pick<MCPOAuthRefreshVersion, 'grantGeneration' | 'grantBindingFingerprint'>
+  observedVersion: MCPOAuthRefreshVersion
 ): Promise<string> {
   const userTokenRepo = new UserMCPOAuthTokenRepository(deps.db as Database);
   const exactGrantVersion = {
     grantGeneration: observedVersion.grantGeneration,
     grantBindingFingerprint: observedVersion.grantBindingFingerprint,
+    refreshGeneration: observedVersion.refreshGeneration,
   };
   // Repeat the caller-bound check inside the mutex owner. The saved row may
   // have changed after the pre-mutex validation but before this promise ran.
   const row = await loadObservedStandaloneGrant(deps, exactGrantVersion);
+  if (row.refresh_status === 'ambiguous') throw new AmbiguousRefreshError();
+  // No in-process owner exists here. A persisted dispatch from a previous
+  // daemon may have consumed the rotating token; never replay it.
+  if (row.refresh_status === 'refreshing') {
+    await userTokenRepo.setStandaloneRefreshState(
+      deps.userId,
+      deps.mcpServerId,
+      exactGrantVersion,
+      'refreshing',
+      'ambiguous'
+    );
+    throw new AmbiguousRefreshError();
+  }
+  if (row.refresh_generation > observedVersion.refreshGeneration) {
+    return row.oauth_access_token;
+  }
+
   if (!row.oauth_refresh_token) throw new MissingRefreshTokenError();
   const server = await new MCPServerRepository(deps.db as Database).findById(deps.mcpServerId);
   const clientId = row.oauth_client_id ?? server?.auth?.oauth_client_id;
@@ -520,6 +582,16 @@ async function refreshStandalone(
   let tokenEndpoint = row.oauth_token_endpoint ?? server?.auth?.oauth_token_url;
   if (!tokenEndpoint && server?.url) tokenEndpoint = inferOAuthTokenUrl(server.url);
   if (!tokenEndpoint) throw new MissingTokenEndpointError();
+  if (
+    !(await userTokenRepo.setStandaloneRefreshState(
+      deps.userId,
+      deps.mcpServerId,
+      exactGrantVersion,
+      'idle',
+      'refreshing'
+    ))
+  )
+    throw new GrantConfigurationChangedError();
   try {
     const result = await refreshMCPToken({
       tokenEndpoint,
@@ -527,6 +599,7 @@ async function refreshStandalone(
       clientId,
       clientSecret: row.oauth_client_secret ?? server?.auth?.oauth_client_secret,
       resourceUri: row.oauth_resource_uri,
+      redirectUri: row.oauth_redirect_uri,
       allowLocalhostHttp: true,
       assertCurrent: deps.assertCurrent,
       resolveDns: deps.resolveDns,
@@ -561,6 +634,18 @@ async function refreshStandalone(
       if (deleted) notifyInvalidGrant(deps);
       else throw new GrantConfigurationChangedError();
     }
+    if (!(error instanceof InvalidGrantError)) {
+      const retrySafe =
+        error instanceof OAuthRefreshAuthorityCancelledError ||
+        (error instanceof OAuthRefreshExchangeError && !error.ambiguous);
+      await userTokenRepo.setStandaloneRefreshState(
+        deps.userId,
+        deps.mcpServerId,
+        exactGrantVersion,
+        'refreshing',
+        retrySafe ? 'idle' : 'ambiguous'
+      );
+    }
     throw error;
   }
 }
@@ -576,7 +661,7 @@ export async function refreshAndPersistToken(deps: RefreshAndPersistDeps): Promi
   // user/server mutex. A caller authorized against an old row must not learn,
   // refresh, or invalidate the replacement row occupying the same subject.
   await loadObservedStandaloneGrant(deps, expected);
-  const key = mutexKey(deps.userId, deps.mcpServerId);
+  const key = mutexKey(deps);
   const existing = _inFlightRefreshes.get(key);
   if (existing) {
     if (!exactGrantVersionsMatch(existing.version, expected)) {

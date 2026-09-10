@@ -21,7 +21,12 @@ export interface DatadogSpan {
 export interface DatadogTracer {
   trace<T>(
     name: string,
-    options: { resource?: string; type?: string; tags?: Record<string, unknown> },
+    options: {
+      resource?: string;
+      type?: string;
+      measured?: boolean;
+      tags?: Record<string, unknown>;
+    },
     fn: (span?: DatadogSpan) => T
   ): T;
 }
@@ -31,7 +36,8 @@ export function traceBestEffort<T>(
   tracer: DatadogTracer | null,
   name: string,
   tags: Record<string, unknown>,
-  work: (span?: DatadogSpan) => T
+  work: (span?: DatadogSpan) => T,
+  options: { resource?: string; measured?: boolean } = {}
 ): T {
   if (!tracer) return work();
   let ran = false;
@@ -50,7 +56,7 @@ export function traceBestEffort<T>(
     }
   };
   try {
-    return tracer.trace(name, { resource: name, tags }, invoke);
+    return tracer.trace(name, { resource: name, ...options, tags }, invoke);
   } catch {
     if (failed) throw failure;
     if (ran) return result!;

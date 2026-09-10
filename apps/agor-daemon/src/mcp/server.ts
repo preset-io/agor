@@ -376,7 +376,7 @@ function createMcpServer(
     );
 
     // Register search/detail/execute as the complete visible MCP catalog.
-    registerSearchTools(tracing.toolProxy(server), registry, dispatcher);
+    registerSearchTools(tracing.toolProxy(server, dispatcher), registry, dispatcher);
 
     // Keep the advertised catalog to the three progressive-discovery facade
     // tools without removing direct tools/call compatibility. This uses the

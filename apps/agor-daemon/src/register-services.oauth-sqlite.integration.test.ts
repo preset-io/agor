@@ -20,6 +20,7 @@ import {
   UserMCPOAuthTokenRepository,
   UsersRepository,
   update,
+  userMcpOauthTokens,
 } from '@agor/core/db';
 import {
   type Application,
@@ -53,6 +54,7 @@ import {
 import { type RegisterHooksContext, registerHooks } from './register-hooks.js';
 import { createRegisteredMCPCatalogConnectService } from './register-routes.js';
 import { type RegisterServicesContext, registerMCPServices } from './register-services.js';
+import * as oauthUse from './services/mcp-oauth-use.js';
 import { createSocketIOConfig } from './setup/socketio.js';
 import { issueMCPSlackRecoveryToken } from './utils/mcp-slack-recovery-token.js';
 import {
@@ -151,6 +153,8 @@ async function createTestProvider(
     numberedTokenResponses?: boolean;
     holdRefresh?: boolean;
     invalidRefresh?: boolean;
+    gitlab?: boolean;
+    malformedRefresh?: boolean;
     rejectDynamicRegistration?: boolean;
     holdDynamicRegistration?: boolean;
     resourceScopes?: string[];
@@ -159,6 +163,7 @@ async function createTestProvider(
   } = {}
 ): Promise<TestProvider> {
   const requests: TestProvider['requests'] = [];
+  let grantRedirectUri: string | null = null;
   const tokenRequestMilestones = new Map<number, Deferred<void>>();
   const tokenReleaseGates = new Map<number, Deferred<void>>();
   const tokenRequestMilestone = (requestNumber: number): Deferred<void> => {
@@ -267,6 +272,14 @@ async function createTestProvider(
       for await (const chunk of request) body += String(chunk);
       const isRefresh = new URLSearchParams(body).get('grant_type') === 'refresh_token';
       if (isRefresh) {
+        if (options.gitlab) {
+          const form = new URLSearchParams(body);
+          expect(form.get('redirect_uri')).toBe(grantRedirectUri);
+          expect(form.get('client_id')).toBe('saved-client-id');
+          expect(form.get('resource')).toBe(`${baseUrl}/saved/mcp`);
+          // Omitted scope means the originally granted scope, not an expansion.
+          expect(form.has('scope')).toBe(false);
+        }
         refreshRequested.resolve();
         if (options.holdRefresh) await releaseRefresh.promise;
         response.writeHead(options.invalidRefresh ? 400 : 200, {
@@ -274,17 +287,20 @@ async function createTestProvider(
         });
         response.end(
           JSON.stringify(
-            options.invalidRefresh
-              ? { error: 'invalid_grant' }
-              : {
-                  access_token: 'stale-refreshed-access-token',
-                  refresh_token: 'stale-rotated-refresh-token',
-                  expires_in: 3600,
-                }
+            options.malformedRefresh
+              ? { access_token: 'synthetic-access', refresh_token: 42 }
+              : options.invalidRefresh
+                ? { error: 'invalid_grant' }
+                : {
+                    access_token: 'stale-refreshed-access-token',
+                    refresh_token: 'stale-rotated-refresh-token',
+                    expires_in: options.gitlab ? 7200 : 3600,
+                  }
           )
         );
         return;
       }
+      grantRedirectUri = new URLSearchParams(body).get('redirect_uri');
       tokenRequestCount += 1;
       const requestRelease = tokenReleaseGate(tokenRequestCount);
       tokenRequestMilestone(tokenRequestCount).resolve();
@@ -300,7 +316,7 @@ async function createTestProvider(
           refresh_token: options.numberedTokenResponses
             ? `refresh-${tokenRequestCount}`
             : 'refresh',
-          expires_in: 3600,
+          expires_in: options.gitlab ? 7200 : 3600,
         })
       );
       return;
@@ -1308,6 +1324,8 @@ describe('saved-server capability discovery', () => {
     const provider = await createTestProvider();
     providers.push(provider);
     const harness = await createHarness(provider);
+    databases.push(harness.rawDb);
+    await authorizeSavedServer(harness);
     const sentinel = 'SENTINEL_CONTEXT7_AUTH_RESPONSE';
     mcpClientTestState.connectError = Object.assign(new Error(sentinel), { code: 401 });
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
@@ -1338,6 +1356,8 @@ describe('saved-server capability discovery', () => {
     const provider = await createTestProvider();
     providers.push(provider);
     const harness = await createHarness(provider);
+    databases.push(harness.rawDb);
+    await authorizeSavedServer(harness);
     const sentinel = 'SENTINEL_MCP_EGRESS_TIMEOUT';
     mcpClientTestState.connectError = Object.assign(new Error(sentinel), { code: 'ETIMEDOUT' });
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
@@ -2380,6 +2400,11 @@ describe('SQLite saved-row OAuth authority', () => {
       const oauthStart = await harness.app
         .service('mcp-servers/oauth-start')
         .create({ mcp_server_id: harness.server.mcp_server_id }, paramsFor(harness));
+      // Keep the SDK error seam reachable without an OAuth grant: saved OAuth
+      // discovery now correctly refuses before transport when no grant exists.
+      await new MCPServerRepository(harness.rawDb).update(harness.server.mcp_server_id, {
+        auth: { type: 'none' },
+      });
       mcpClientTestState.connectError = hostile;
       const discovery = await harness.app
         .service('mcp-servers/discover')
@@ -3669,6 +3694,193 @@ describe('SQLite saved-row OAuth authority', () => {
         harness.server.mcp_server_id as MCPServerID
       )
     ).toBeNull();
+  });
+
+  it.each(['client_credentials', undefined] as const)(
+    'saved machine configuration (%s) returns configuration recovery without provider work',
+    async (grantType) => {
+      const provider = await createTestProvider();
+      providers.push(provider);
+      const harness = await createHarness(provider);
+      databases.push(harness.rawDb);
+      await new MCPServerRepository(harness.rawDb).update(harness.server.mcp_server_id, {
+        auth: {
+          ...harness.server.auth!,
+          oauth_grant_type: grantType,
+          oauth_client_id: 'machine-client',
+          oauth_client_secret: 'synthetic-machine-secret',
+          oauth_token_url: `${provider.baseUrl}/token`,
+        },
+      });
+      const requestsBefore = provider.requests.length;
+      const result = await harness.app
+        .service('mcp-servers/discover')
+        .create({ mcp_server_id: harness.server.mcp_server_id }, paramsFor(harness));
+      expect(result).toMatchObject({
+        success: false,
+        recovery: { category: 'configuration_required', action: 'review_configuration' },
+      });
+      const execution = await harness.app
+        .service('mcp-servers/oauth-auth-headers')
+        .create(
+          { mcp_server_ids: [harness.server.mcp_server_id] },
+          { ...paramsFor(harness), provider: undefined }
+        );
+      expect(execution.headers[harness.server.mcp_server_id]).toMatchObject({
+        error: 'client_credentials_configuration_required',
+        recovery: { action: 'review_configuration' },
+      });
+      expect(provider.requests).toHaveLength(requestsBefore);
+    }
+  );
+
+  it('does not convert transient acquisition contention into reauth at either service boundary', async () => {
+    const provider = await createTestProvider();
+    providers.push(provider);
+    const harness = await createHarness(provider);
+    databases.push(harness.rawDb);
+    const acquire = vi
+      .spyOn(oauthUse, 'acquireMCPOAuthGrant')
+      .mockRejectedValue(new oauthUse.MCPOAuthRefreshBusyError());
+    try {
+      const result = await harness.app
+        .service('mcp-servers/discover')
+        .create({ mcp_server_id: harness.server.mcp_server_id }, paramsFor(harness));
+      expect(result).toMatchObject({ success: false, recovery: { action: 'retry' } });
+      const execution = await harness.app
+        .service('mcp-servers/oauth-auth-headers')
+        .create(
+          { mcp_server_ids: [harness.server.mcp_server_id] },
+          { ...paramsFor(harness), provider: undefined }
+        );
+      expect(execution.headers[harness.server.mcp_server_id]).toMatchObject({
+        error: 'refresh_in_progress',
+        recovery: { action: 'retry' },
+      });
+      expect(provider.requests).toHaveLength(0);
+    } finally {
+      acquire.mockRestore();
+    }
+  });
+
+  it.each(['per_user', 'shared'] as const)(
+    'GitLab-shaped %s callback expires then discovery rotates the durable pair',
+    async (mode) => {
+      const provider = await createTestProvider({ gitlab: true });
+      providers.push(provider);
+      const harness = await createHarness(provider, mode);
+      databases.push(harness.rawDb);
+      // Legacy forms could save this default even for browser OAuth. A bound
+      // grant, not the form default, remains the credential authority.
+      await new MCPServerRepository(harness.rawDb).update(harness.server.mcp_server_id, {
+        auth: { ...harness.server.auth!, oauth_grant_type: 'client_credentials' },
+      });
+      const started = Date.now();
+      await authorizeSavedServer(harness);
+      const subject = mode === 'shared' ? null : (harness.user.user_id as UserID);
+      const repository = new UserMCPOAuthTokenRepository(harness.rawDb);
+      const saved = await repository.getToken(subject, harness.server.mcp_server_id as MCPServerID);
+      expect(saved?.oauth_token_expires_at?.getTime()).toBeGreaterThanOrEqual(started + 7_200_000);
+      expect(saved?.oauth_refresh_token).toBe('refresh');
+      expect(saved?.oauth_redirect_uri).toBeTruthy();
+      await update(harness.rawDb, userMcpOauthTokens)
+        .set({ oauth_token_expires_at: new Date(1) })
+        .where(eq(userMcpOauthTokens.mcp_server_id, harness.server.mcp_server_id))
+        .run();
+      mcpClientTestState.tools = [{ name: 'gitlab_list_projects' }];
+      const result = await harness.app
+        .service('mcp-servers/discover')
+        .create({ mcp_server_id: harness.server.mcp_server_id }, paramsFor(harness));
+      expect(result).toMatchObject({ success: true, capabilities: { tools: 1 } });
+      const rotated = await repository.getToken(
+        subject,
+        harness.server.mcp_server_id as MCPServerID
+      );
+      expect(rotated).toMatchObject({
+        oauth_access_token: 'stale-refreshed-access-token',
+        oauth_refresh_token: 'stale-rotated-refresh-token',
+        refresh_status: 'idle',
+        refresh_generation: 1,
+        refresh_success_generation: 1,
+      });
+      expect(rotated?.oauth_token_expires_at?.getTime()).toBeGreaterThan(Date.now() + 7_190_000);
+      expect(rotated?.grant_generation).toBe(saved?.grant_generation);
+      expect(
+        (await new MCPServerRepository(harness.rawDb).findById(harness.server.mcp_server_id))?.tools
+      ).toEqual(
+        expect.arrayContaining([expect.objectContaining({ name: 'gitlab_list_projects' })])
+      );
+    }
+  );
+
+  it.each(['invalid', 'malformed'] as const)(
+    'discovery reports reauth and never replays a %s rotating refresh',
+    async (failure) => {
+      const provider = await createTestProvider({
+        gitlab: true,
+        invalidRefresh: failure === 'invalid',
+        malformedRefresh: failure === 'malformed',
+      });
+      providers.push(provider);
+      const harness = await createHarness(provider, 'per_user');
+      databases.push(harness.rawDb);
+      await authorizeSavedServer(harness);
+      await update(harness.rawDb, userMcpOauthTokens)
+        .set({ oauth_token_expires_at: new Date(1) })
+        .where(eq(userMcpOauthTokens.mcp_server_id, harness.server.mcp_server_id))
+        .run();
+      const discover = () =>
+        harness.app
+          .service('mcp-servers/discover')
+          .create({ mcp_server_id: harness.server.mcp_server_id }, paramsFor(harness));
+      expect(await discover()).toMatchObject({
+        success: false,
+        recovery: { action: 'reauthenticate' },
+      });
+      const repository = new UserMCPOAuthTokenRepository(harness.rawDb);
+      const saved = await repository.getToken(
+        harness.user.user_id as UserID,
+        harness.server.mcp_server_id as MCPServerID
+      );
+      if (failure === 'invalid') expect(saved).toBeNull();
+      else expect(saved?.refresh_status).toBe('ambiguous');
+      const before = provider.requests.filter((r) => r.path === '/token').length;
+      expect(await discover()).toMatchObject({ success: false });
+      expect(provider.requests.filter((r) => r.path === '/token')).toHaveLength(before);
+    }
+  );
+
+  it('coalesces concurrent GitLab refreshes and quarantines a dispatch left by a dead SQLite daemon', async () => {
+    const provider = await createTestProvider({ gitlab: true, holdRefresh: true });
+    providers.push(provider);
+    const harness = await createHarness(provider, 'per_user');
+    databases.push(harness.rawDb);
+    await authorizeSavedServer(harness);
+    const refresh = () =>
+      harness.app
+        .service('mcp-servers/oauth-refresh')
+        .create({ mcp_server_id: harness.server.mcp_server_id }, paramsFor(harness));
+    const first = refresh();
+    await provider.refreshRequested.promise;
+    const second = refresh();
+    provider.releaseRefresh();
+    expect(await first).toMatchObject({ success: true });
+    expect(await second).toMatchObject({ success: true });
+    expect(provider.requests.filter((r) => r.path === '/token')).toHaveLength(2); // callback + one rotation
+    await update(harness.rawDb, userMcpOauthTokens)
+      .set({ refresh_status: 'refreshing', oauth_token_expires_at: new Date(1) })
+      .where(eq(userMcpOauthTokens.mcp_server_id, harness.server.mcp_server_id))
+      .run();
+    expect(await refresh()).toMatchObject({ success: false, error: 'needs_reauth' });
+    expect(provider.requests.filter((r) => r.path === '/token')).toHaveLength(2);
+    expect(
+      (
+        await new UserMCPOAuthTokenRepository(harness.rawDb).getToken(
+          harness.user.user_id as UserID,
+          harness.server.mcp_server_id as MCPServerID
+        )
+      )?.refresh_status
+    ).toBe('ambiguous');
   });
 
   it('does not resurrect a grant deleted by a Settings mutation during refresh', async () => {

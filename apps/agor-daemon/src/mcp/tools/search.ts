@@ -1,7 +1,7 @@
 import type { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import type { DispatchableTool } from '../register-tool-proxy.js';
-import { ToolDispatcher } from '../register-tool-proxy.js';
+import { MCP_EXECUTE_TOOL_NAME, ToolDispatcher } from '../register-tool-proxy.js';
 import { mcpPositiveIntWithDefault, mcpRequiredString } from '../schema.js';
 import { coerceJsonRecord, textResult } from '../server.js';
 import { ToolRegistry } from '../tool-registry.js';
@@ -232,7 +232,7 @@ export function registerSearchTools(
   );
 
   server.registerTool(
-    'agor_execute_tool',
+    MCP_EXECUTE_TOOL_NAME,
     {
       description:
         'Execute one Agor MCP tool by name. Expected shape: { "tool_name": "agor_sessions_list", "arguments": { ... } }. Use agor_search_tools to find tools and agor_get_tool_details for the exact schema.',
@@ -286,7 +286,7 @@ export function registerSearchTools(
         const result = await tool.handler(toolArgs, requestContext);
         return result as { content: Array<{ type: 'text'; text: string }> };
       } catch (error) {
-        const failure = mcpValidationFailure(error, toolName ?? 'agor_execute_tool');
+        const failure = mcpValidationFailure(error, toolName ?? MCP_EXECUTE_TOOL_NAME);
         if (failure) return failure;
         return {
           content: [

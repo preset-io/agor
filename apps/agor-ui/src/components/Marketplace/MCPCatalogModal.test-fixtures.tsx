@@ -92,10 +92,6 @@ export function makeCatalogClient() {
   });
   const overviewRead = vi.fn(async () => catalogOverview);
   const connect = vi.fn(async () => ({
-    session: {
-      session_id: catalogOverview.attachments[0].session_id,
-      title: 'Catalog destination',
-    },
     mcp_server: { ...catalogOverview.servers[0], auth: { type: 'none' } },
     starter_prompt: catalogEntry.starter_prompt,
   }));
@@ -116,7 +112,26 @@ export function makeCatalogClient() {
               ),
         findAll: vi.fn(async () => [{ branch_id: 'branch-1', name: 'Catalog QA' }]),
         get: vi.fn(async () => ({ catalog_key: catalogEntry.name, state: 'no_auth' })),
-        create: name === 'mcp-catalog/connect' ? connect : vi.fn(async () => ({ success: true })),
+        getPrimaryTeammate: vi.fn(async () => null),
+        getPrimaryTeammateCandidates: vi.fn(async () => [
+          {
+            branch_id: 'branch-1',
+            name: 'Catalog QA',
+            custom_context: { teammate: { kind: 'teammate', displayName: 'Catalog QA' } },
+          },
+        ]),
+        create:
+          name === 'mcp-catalog/connect'
+            ? connect
+            : name === 'mcp-catalog/start-session'
+              ? vi.fn(async () => ({
+                  session: {
+                    session_id: catalogOverview.attachments[0].session_id,
+                    title: 'Catalog destination',
+                  },
+                  starter_prompt: catalogEntry.starter_prompt,
+                }))
+              : vi.fn(async () => ({ success: true })),
         remove: vi.fn(),
       });
     return services.get(name);
