@@ -13,6 +13,7 @@ import type { ApmTraceServiceDepth } from '@agor/core/config';
 import { ensureAgorHome, getAgorHome } from '@agor/core/config';
 import {
   checkMigrationStatus,
+  configureSecretKeyDerivationTracing,
   createDatabaseAsync,
   createTenantScopedDatabaseProxy,
   detectDialectFromUrl,
@@ -144,6 +145,7 @@ export async function initializeDatabase(
   // path free of per-query and startup module-resolution overhead.
   const tracingEnabled = (options.traceServices ?? 'off') !== 'off';
   const tracer = tracingEnabled ? resolveDatadogTracer(createRequire(import.meta.url)) : null;
+  configureSecretKeyDerivationTracing(tracer);
 
   // Create database with foreign keys enabled
   const databaseConfig = {

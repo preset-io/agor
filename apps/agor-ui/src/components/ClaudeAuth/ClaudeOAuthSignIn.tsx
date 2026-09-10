@@ -7,6 +7,9 @@ import { useIdentityGuardedAsync } from '../../hooks/useIdentityGuardedAsync';
 const { Text } = Typography;
 const { useToken } = theme;
 
+export const CLAUDE_OAUTH_STORAGE_DESCRIPTION =
+  'Sign in with your Claude subscription. Agor stores the resulting refreshable login in your private per-user execution home on this server. It is not shared with other Agor users, and signing in replaces only your existing Claude subscription login in that home.';
+
 export interface ClaudeOAuthSignInProps {
   client: AgorClient | null;
   /** Whether the parent currently resolves this user to a subscription login. */

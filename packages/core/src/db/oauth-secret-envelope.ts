@@ -1,4 +1,5 @@
-import { createCipheriv, createDecipheriv, randomBytes, scrypt, scryptSync } from 'node:crypto';
+import { createCipheriv, createDecipheriv, randomBytes, scryptSync } from 'node:crypto';
+import { deriveSecretKeyAsync } from './secret-key-derivation';
 
 const PREFIX = 'agor-mcp-oauth';
 const FORMAT_VERSION = 'v1';
@@ -83,12 +84,7 @@ export async function openBoundSecretAsync(
   binding: string
 ): Promise<string> {
   const parsed = parseEnvelope(envelope, masterSecret, purpose);
-  const key = await new Promise<Buffer>((resolve, reject) => {
-    scrypt(masterSecret, parsed.salt, KEY_LENGTH, (error, derivedKey) => {
-      if (error) reject(error);
-      else resolve(derivedKey);
-    });
-  });
+  const key = await deriveSecretKeyAsync(masterSecret, parsed.salt, 'bound');
   return decryptEnvelope(parsed, key, purpose, binding);
 }
 

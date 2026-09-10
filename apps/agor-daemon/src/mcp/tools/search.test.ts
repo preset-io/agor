@@ -1,9 +1,62 @@
+import type { DatadogTracer } from '@agor/core/tracing/datadog';
 import type { McpServer } from '@modelcontextprotocol/server';
 import { describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
-import { ToolDispatcher } from '../register-tool-proxy.js';
+import {
+  type ToolHandler as RegisteredToolHandler,
+  ToolDispatcher,
+  toolDispatcherProxy,
+} from '../register-tool-proxy.js';
 import { ToolRegistry } from '../tool-registry.js';
+import { createMcpTracing } from '../tracing.js';
 import { registerSearchTools } from './search.js';
+
+it('traces facade validation and unknown targets without exporting arbitrary tool names', async () => {
+  const calls: { resource?: string; tags: Record<string, unknown> }[] = [];
+  const tracer: DatadogTracer = {
+    trace(_name, options, work) {
+      const tags = { ...options.tags };
+      calls.push({ resource: options.resource, tags });
+      return work({
+        setTag: (key, value) => {
+          tags[key] = value;
+        },
+      });
+    },
+  };
+  const tracing = createMcpTracing('entrypoint', { tracer });
+  const handlers = new Map<string, RegisteredToolHandler>();
+  const server = {
+    registerTool: (name: string, _config: unknown, handler: RegisteredToolHandler) =>
+      handlers.set(name, handler),
+  } as unknown as McpServer;
+  const dispatcher = new ToolDispatcher();
+  const target = vi.fn(async () => ({ content: [] }));
+  tracing.toolProxy(toolDispatcherProxy(server, dispatcher)).registerTool(
+    'agor_test',
+    {
+      inputSchema: z.object({ limit: z.number() }),
+    },
+    target
+  );
+  registerSearchTools(tracing.toolProxy(server, dispatcher), new ToolRegistry(), dispatcher);
+  const execute = handlers.get('agor_execute_tool')!;
+  await execute({ tool_name: 'agor_test', arguments: { limit: 'secret invalid input' } });
+  await execute({ tool_name: 'secret unknown tool', arguments: {} });
+  expect(target).not.toHaveBeenCalled();
+  expect(calls).toEqual(
+    ['agor_test', 'agor_execute_tool'].map((resource) => ({
+      resource,
+      tags: {
+        'mcp.tool': resource,
+        'span.kind': 'server',
+        'mcp.outcome': 'tool_error',
+        error: true,
+      },
+    }))
+  );
+  expect(JSON.stringify(calls)).not.toContain('secret');
+});
 
 vi.mock('../server.js', () => ({
   coerceJsonRecord: (value: unknown) => {

@@ -53,6 +53,7 @@ export * from './repositories';
 export * from './sanitize-error';
 export * from './schema';
 export { type DatabaseDialect, detectDialectFromUrl, getDatabaseDialect } from './schema-factory';
+export { configureSecretKeyDerivationTracing } from './secret-key-derivation';
 // Session guard utilities (defensive programming for deleted sessions)
 export * from './session-guard';
 // Tenant database lifecycle primitives. Filesystem-backed portability operations

@@ -209,6 +209,10 @@ const checks = [
       // capabilities use a second transaction path so their RLS GUC is local
       // to one pooled connection checkout and cannot leak after discovery.
       'packages/core/src/db/tenant-scope.ts': 2,
+      // Pure in-memory transaction doubles exercise tracing timing/failure
+      // semantics. They never access a database; the real PostgreSQL tracing
+      // test goes through runWithTenantDatabaseScope instead.
+      'packages/core/src/db/postgres-transaction-tracing.test.ts': 3,
       // Test-only security harness deliberately invokes every direct libsql
       // and Drizzle transaction surface to prove the literal-memory client
       // coordinator cannot be bypassed. No application database access lives

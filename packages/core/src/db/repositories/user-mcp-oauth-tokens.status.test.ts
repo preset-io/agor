@@ -25,7 +25,9 @@ vi.mock('../database-wrapper', () => ({
           ? Object.fromEntries(
               Object.keys(projection).map((key) => [
                 key,
-                key === 'has_access_token' ? row.oauth_access_token != null : row[key],
+                key === 'has_access_token'
+                  ? row.oauth_access_token != null && row.oauth_access_token !== ''
+                  : row[key],
               ])
             )
           : row
@@ -77,6 +79,58 @@ beforeEach(() => {
 });
 
 describe('OAuth status grant read integrity and cost', () => {
+  it('status opens only client binding material, never access or refresh tokens', async () => {
+    query.rows = [
+      {
+        ...grant(),
+        oauth_access_token: 'corrupt-unread-access',
+        oauth_refresh_token: 'corrupt-unread-refresh',
+      },
+    ];
+    const open = vi.spyOn(envelope, 'openBoundSecretAsync');
+    const repo = new UserMCPOAuthTokenRepository({} as Database, master);
+    const records = await repo.listStatusForSubject(userId);
+    expect(records).toHaveLength(1);
+    expect(records[0]).toMatchObject({ oauth_client_id: 'client', oauth_client_secret: 'secret' });
+    expect(records[0]).not.toHaveProperty('oauth_access_token');
+    expect(records[0]).not.toHaveProperty('oauth_refresh_token');
+    expect(Object.keys(query.projections[0]!)).not.toContain('oauth_access_token');
+    expect(Object.keys(query.projections[0]!)).not.toContain('oauth_refresh_token');
+    expect(open).toHaveBeenCalledTimes(2);
+  });
+
+  it('status filters expired and ambiguous grants before opening client material', async () => {
+    query.rows = [
+      { ...grant(), oauth_token_expires_at: new Date('2000-01-01'), oauth_client_secret: 'unread' },
+      { ...grant(), refresh_status: 'ambiguous', oauth_client_secret: 'unread' },
+    ];
+    const open = vi.spyOn(envelope, 'openBoundSecretAsync');
+    await expect(
+      new UserMCPOAuthTokenRepository({} as Database, master).listStatusForSubject(userId)
+    ).resolves.toEqual([]);
+    expect(open).not.toHaveBeenCalled();
+  });
+
+  it.each([null, ''])(
+    'status excludes access token %s before opening client material',
+    async (accessToken) => {
+      query.rows = [{ ...grant(), oauth_access_token: accessToken, oauth_client_secret: 'unread' }];
+      const open = vi.spyOn(envelope, 'openBoundSecretAsync');
+      await expect(
+        new UserMCPOAuthTokenRepository({} as Database, master).listStatusForSubject(userId)
+      ).resolves.toEqual([]);
+      expect(open).not.toHaveBeenCalled();
+    }
+  );
+
+  it('status still rejects client material transplanted across tenants', async () => {
+    query.rows = [grant()];
+    query.tenantId = 'tenant-b';
+    await expect(
+      new UserMCPOAuthTokenRepository({} as Database, master).listStatusForSubject(userId)
+    ).rejects.toThrow();
+  });
+
   it('awaits fields and rows serially, preserves order, and never caches a read', async () => {
     query.rows = [grant(), { ...grant(), created_at: new Date('2026-02-01T00:00:00Z') }];
     let active = 0;

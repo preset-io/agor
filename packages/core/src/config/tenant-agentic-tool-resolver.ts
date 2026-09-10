@@ -162,11 +162,21 @@ export async function resolveProviderConnection(
   // reads/decryptions of the same settings document separated by user hydration.
   const settings = repository ? await repository.find(canonical) : null;
   const policy = settings?.resolution_policy ?? DEFAULT_PROVIDER_RESOLUTION_POLICY;
+  const tenantConnection = settings?.connection ?? null;
+  // Do not read/decrypt a user's credentials when policy cannot select them.
+  // A preferred workspace connection only short-circuits when it has a usable
+  // credential; incomplete workspace configuration must retain the user fallback.
+  const needsUser =
+    policy !== 'tenant_required' &&
+    !(
+      policy === 'tenant_preferred' &&
+      tenantConnection &&
+      hasCredential(canonical, tenantConnection)
+    );
   const user =
-    context.userId && context.db
+    needsUser && context.userId && context.db
       ? await resolveUserConnection(canonical, context.userId, context.db)
       : null;
-  const tenantConnection = settings?.connection ?? null;
   const userCandidate = user
     ? {
         source: 'user' as const,

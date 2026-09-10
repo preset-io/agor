@@ -15,6 +15,7 @@ import type {
   UUID,
 } from '@agor/core/types';
 import { and, asc, eq, gt, inArray, isNull, like, lte, or, sql } from 'drizzle-orm';
+import { redactGatewayChannelSecrets } from '../../gateway/redaction';
 import { generateId } from '../../lib/ids';
 import { isAgenticToolDefaultConfigurationReference } from '../../types/agentic-tool-preset';
 import {
@@ -533,41 +534,52 @@ export class GatewayChannelRepository
   /**
    * Convert database row to GatewayChannel type
    */
-  private async rowToChannel(row: GatewayChannelRow): Promise<GatewayChannel> {
+  private async rowToChannel(row: GatewayChannelRow, displayOnly = false): Promise<GatewayChannel> {
     const config = row.config as Record<string, unknown>;
-    const agenticConfig = await decryptAgenticConfig(
-      (row.agentic_config as Record<string, unknown> | null) ?? null
-    );
+    const storedAgenticConfig = (row.agentic_config as Record<string, unknown> | null) ?? null;
+    // Normalize legacy env maps before using the shared transport redactor.
+    // Never open a credential merely to replace it with a display sentinel.
+    const displayAgenticConfig: Record<string, unknown> | null = storedAgenticConfig && {
+      ...storedAgenticConfig,
+      ...(storedAgenticConfig.envVars && !Array.isArray(storedAgenticConfig.envVars)
+        ? {
+            envVars: Object.entries(storedAgenticConfig.envVars as Record<string, unknown>).map(
+              ([key, value]) => ({ key, value })
+            ),
+          }
+        : {}),
+    };
+    const agenticConfig = displayOnly
+      ? displayAgenticConfig
+      : await decryptAgenticConfig(storedAgenticConfig);
 
-    return attachHiddenTenant(
-      {
-        id: row.id as GatewayChannelID,
-        created_by: row.created_by,
-        name: row.name,
-        channel_type: row.channel_type as ChannelType,
-        target_branch_id: row.target_branch_id as UUID,
-        agor_user_id: (row.agor_user_id as UUID | null) ?? null,
-        provider_installation_id: row.provider_installation_id ?? null,
-        provider_config_generation: row.provider_config_generation ?? 1,
-        channel_key: row.channel_key,
-        config: await decryptConfig(config),
-        agentic_config: agenticConfig
-          ? ({
-              ...(agenticConfig as unknown as PersistedGatewayAgenticConfig),
-              presetId:
-                (row.agentic_tool_preset_id as PersistedGatewayAgenticConfig['presetId']) ??
-                (agenticConfig.presetId as PersistedGatewayAgenticConfig['presetId']) ??
-                undefined,
-            } as PersistedGatewayAgenticConfig)
-          : null,
-        mcp_server_ids: row.mcp_server_ids ?? undefined,
-        enabled: Boolean(row.enabled),
-        created_at: new Date(row.created_at).toISOString(),
-        updated_at: new Date(row.updated_at).toISOString(),
-        last_message_at: row.last_message_at ? new Date(row.last_message_at).toISOString() : null,
-      },
-      row
-    );
+    const channel: GatewayChannel = {
+      id: row.id as GatewayChannelID,
+      created_by: row.created_by,
+      name: row.name,
+      channel_type: row.channel_type as ChannelType,
+      target_branch_id: row.target_branch_id as UUID,
+      agor_user_id: (row.agor_user_id as UUID | null) ?? null,
+      provider_installation_id: row.provider_installation_id ?? null,
+      provider_config_generation: row.provider_config_generation ?? 1,
+      channel_key: row.channel_key,
+      config: displayOnly ? config : await decryptConfig(config),
+      agentic_config: agenticConfig
+        ? ({
+            ...(agenticConfig as unknown as PersistedGatewayAgenticConfig),
+            presetId:
+              (row.agentic_tool_preset_id as PersistedGatewayAgenticConfig['presetId']) ??
+              (agenticConfig.presetId as PersistedGatewayAgenticConfig['presetId']) ??
+              undefined,
+          } as PersistedGatewayAgenticConfig)
+        : null,
+      mcp_server_ids: row.mcp_server_ids ?? undefined,
+      enabled: Boolean(row.enabled),
+      created_at: new Date(row.created_at).toISOString(),
+      updated_at: new Date(row.updated_at).toISOString(),
+      last_message_at: row.last_message_at ? new Date(row.last_message_at).toISOString() : null,
+    };
+    return attachHiddenTenant(displayOnly ? redactGatewayChannelSecrets(channel) : channel, row);
   }
 
   private async rowsToChannels(rows: GatewayChannelRow[]): Promise<GatewayChannel[]> {
@@ -796,6 +808,15 @@ export class GatewayChannelRepository
    * Find gateway channel by ID (supports short ID)
    */
   async findById(id: string): Promise<GatewayChannel | null> {
+    return this.readById(id, false);
+  }
+
+  /** Transport-safe detail: presence is not proof of credential validity. */
+  async findDisplayById(id: string): Promise<GatewayChannel | null> {
+    return this.readById(id, true);
+  }
+
+  private async readById(id: string, displayOnly: boolean): Promise<GatewayChannel | null> {
     try {
       const fullId = await this.resolveId(id);
       const row = await select(this.db)
@@ -803,7 +824,7 @@ export class GatewayChannelRepository
         .where(eq(gatewayChannels.id, fullId))
         .one();
 
-      return row ? await this.rowToChannel(row) : null;
+      return row ? await this.rowToChannel(row, displayOnly) : null;
     } catch (error) {
       if (error instanceof EntityNotFoundError) return null;
       if (error instanceof AmbiguousIdError) throw error;
@@ -817,6 +838,13 @@ export class GatewayChannelRepository
   /**
    * Find all gateway channels
    */
+  async findDisplayAll(): Promise<GatewayChannel[]> {
+    const rows = await select(this.db).from(gatewayChannels).all();
+    const channels: GatewayChannel[] = [];
+    for (const row of rows) channels.push(await this.rowToChannel(row, true));
+    return channels;
+  }
+
   async findAll(): Promise<GatewayChannel[]> {
     try {
       const rows = await select(this.db).from(gatewayChannels).all();

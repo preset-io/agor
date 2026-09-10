@@ -1170,7 +1170,7 @@ export class GatewayService {
     const tenantId = requireCurrentTenantId(
       'Missing tenant context while refreshing gateway channel state'
     );
-    const channels = await this.channelRepo.findAll();
+    const channels = await this.channelRepo.findDisplayAll();
     if (channels.some((ch) => ch.enabled)) {
       this.activeChannelTenants.add(tenantId);
     } else {

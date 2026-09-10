@@ -111,6 +111,8 @@ function renderCatalog() {
         <CatalogTab
           client={catalogClient()}
           connected
+          startingSession={false}
+          startSessionError={null}
           connecting={false}
           authGeneration={1}
           currentUser={USER}
@@ -202,10 +204,11 @@ describe('Catalog responsive layout (real browser)', () => {
     expect(sibling).toHaveAttribute('aria-disabled', 'false');
   });
 
-  it('focuses Open session after Connect is replaced by success', async () => {
+  it('focuses Start new session after Connect is replaced by success', async () => {
     const SuccessHarness = () => {
       const [success, setSuccess] = useState<{
-        sessionId: string;
+        catalogKey: string;
+        serverId: string;
         authentication: 'ready';
         reusedExistingServer: false;
       } | null>(null);
@@ -215,10 +218,12 @@ describe('Catalog responsive layout (real browser)', () => {
           entry={CATALOG_ENTRY}
           open
           onClose={vi.fn()}
-          branches={[{ branch_id: 'branch-1', name: 'Catalog QA' }] as never}
-          branchesLoading={false}
-          branchesError={null}
-          defaultBranchId="branch-1"
+          teammates={[{ branch_id: 'branch-1', name: 'Catalog QA' }] as never}
+          teammatesLoading={false}
+          teammatesError={null}
+          defaultTeammateId="branch-1"
+          startingSession={false}
+          startSessionError={null}
           connecting={false}
           connectError={null}
           readiness={{ catalog_key: CATALOG_ENTRY.name, state: 'no_auth' }}
@@ -228,7 +233,8 @@ describe('Catalog responsive layout (real browser)', () => {
           success={success as never}
           onConnect={() =>
             setSuccess({
-              sessionId: 'session-1',
+              catalogKey: CATALOG_ENTRY.name,
+              serverId: 'server-1',
               authentication: 'ready',
               reusedExistingServer: false,
             })
@@ -238,11 +244,11 @@ describe('Catalog responsive layout (real browser)', () => {
     };
     render(<SuccessHarness />);
     fireEvent.click(screen.getByRole('checkbox'));
-    const connect = screen.getByRole('button', { name: /Check & connect$/ });
+    const connect = screen.getByRole('button', { name: /Connect$/ });
     connect.focus();
     fireEvent.click(connect);
 
-    const nextStep = await screen.findByRole('button', { name: 'Open session' });
+    const nextStep = await screen.findByRole('button', { name: 'Start new session' });
     await waitFor(() => expect(nextStep).toHaveFocus());
   });
 

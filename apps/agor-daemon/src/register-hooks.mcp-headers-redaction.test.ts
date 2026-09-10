@@ -80,6 +80,7 @@ describe('register-hooks MCP server secret redaction', () => {
     // suppressed outright rather than left depending on it. Nothing is lost:
     // `mcp-servers` and `sessions` announce the rows through their own hooks.
     expect(routesSource).toContain("app.service('mcp-catalog/connect').publish(() => []);");
+    expect(routesSource).toContain("app.service('mcp-catalog/start-session').publish(() => []);");
   });
 
   it('does not expose raw secrets to global session-token service reads', () => {
