@@ -1,4 +1,4 @@
-import type { OpenCodeNativeStateAttempt } from '@agor/core/types';
+import { isOpenCodeNativeStateAttempt, type OpenCodeNativeStateAttempt } from '@agor/core/types';
 
 /**
  * Local `native-file` context: the daemon-authorized absolute XDG data home in
@@ -83,7 +83,7 @@ export function parseOpenCodeExecutorContext(value: unknown): OpenCodeExecutorCo
       !UUID.test(candidate.agorSessionId) ||
       typeof candidate.taskId !== 'string' ||
       !UUID.test(candidate.taskId) ||
-      !(candidate.accepted === null || isAcceptedShape(candidate.accepted))
+      !(candidate.accepted === null || isOpenCodeNativeStateAttempt(candidate.accepted))
     ) {
       throw new Error('OpenCode managed executor context is malformed');
     }
@@ -101,20 +101,4 @@ export function parseOpenCodeExecutorContext(value: unknown): OpenCodeExecutorCo
     throw new Error('OpenCode executor context requires a native data home');
   }
   return { dataHome };
-}
-
-function isAcceptedShape(value: unknown): boolean {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
-  const candidate = value as Record<string, unknown>;
-  return (
-    candidate.version === 1 &&
-    typeof candidate.attemptTaskId === 'string' &&
-    UUID.test(candidate.attemptTaskId) &&
-    typeof candidate.digest === 'string' &&
-    /^sha256:[0-9a-f]{64}$/.test(candidate.digest) &&
-    typeof candidate.bytes === 'number' &&
-    typeof candidate.openCodeSessionId === 'string' &&
-    candidate.openCodeSessionId.length > 0 &&
-    typeof candidate.publishedAt === 'string'
-  );
 }

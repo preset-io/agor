@@ -12,10 +12,22 @@ import { createHash } from 'node:crypto';
 import { createReadStream } from 'node:fs';
 import { copyFile, mkdir, open, readdir, readFile, rename, rm, stat } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
-import { basename, join, resolve } from 'node:path';
+import { basename, isAbsolute, join, resolve } from 'node:path';
 import type { OpenCodeNativeStateAttempt } from '@agor/core/types';
 
-export const OPENCODE_SCRATCH_ROOT = join(tmpdir(), 'agor-opencode');
+/**
+ * Job-local scratch root. The Cloud executor pod sets `AGOR_OPENCODE_SCRATCH_ROOT`
+ * to its bounded emptyDir mount so the size limit (and "ENOSPC fails the turn")
+ * holds even when the image redirects `TMPDIR`; anything else falls back to the
+ * process temp directory.
+ */
+export const OPENCODE_SCRATCH_ROOT_ENV = 'AGOR_OPENCODE_SCRATCH_ROOT';
+
+export function resolveOpenCodeScratchRoot(env: NodeJS.ProcessEnv = process.env): string {
+  const configured = env[OPENCODE_SCRATCH_ROOT_ENV]?.trim();
+  if (configured && isAbsolute(configured)) return configured;
+  return join(tmpdir(), 'agor-opencode');
+}
 const DB_FILE = 'opencode.db';
 const MANIFEST_FILE = 'manifest.json';
 
@@ -43,7 +55,7 @@ export function resolveOpenCodeNativeStateLayout(input: {
 }): OpenCodeNativeStateLayout {
   const home = input.homeDir ?? homedir();
   if (!home) throw new OpenCodeNativeStateError('OpenCode managed state requires a home directory');
-  const scratchRoot = resolve(input.scratchRoot ?? OPENCODE_SCRATCH_ROOT, input.taskId);
+  const scratchRoot = resolve(input.scratchRoot ?? resolveOpenCodeScratchRoot(), input.taskId);
   return {
     scratchRoot,
     xdg: {
@@ -184,10 +196,11 @@ export async function restoreOpenCodeAcceptedState(
       'OpenCode native state unavailable: the accepted checkpoint file does not match its digest'
     );
   }
-  await copyFile(source, layout.liveDbPath);
-  // A fresh copy must never inherit a stale WAL/SHM pair from scratch.
+  // A fresh copy must never inherit a stale WAL/SHM pair from scratch; clear
+  // them before the copy so no window exists where they could be applied.
   await rm(`${layout.liveDbPath}-wal`, { force: true });
   await rm(`${layout.liveDbPath}-shm`, { force: true });
+  await copyFile(source, layout.liveDbPath);
 }
 
 export interface OpenCodeCheckpointDependencies {

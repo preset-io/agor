@@ -107,6 +107,18 @@ export class TenantAgenticToolSettingsService {
       throw new BadRequest(`${tool} does not use provider resolution`);
     }
     if (
+      tool === 'opencode' &&
+      data.resolution_policy !== undefined &&
+      data.resolution_policy !== 'user_required' &&
+      data.resolution_policy !== 'user_preferred'
+    ) {
+      // Hosted OpenCode offers no workspace-level keys, so a tenant-side
+      // policy could only make every prompt fail while settings say Saved.
+      throw new BadRequest(
+        'opencode keys are per user; workspace-level policies are not available'
+      );
+    }
+    if (
       data.connection !== undefined &&
       (!data.connection || typeof data.connection !== 'object')
     ) {

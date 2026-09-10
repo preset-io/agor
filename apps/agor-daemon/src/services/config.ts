@@ -21,13 +21,15 @@ import {
   type TenantScopeAwareDatabase,
 } from '@agor/core/db';
 import { type Application, BadRequest, Forbidden, NotAuthenticated } from '@agor/core/feathers';
-import type {
-  AgenticToolName,
-  AuthenticatedParams,
-  DeepReadonly,
-  Params,
-  TaskID,
-  UserID,
+import {
+  type AgenticToolName,
+  type AuthenticatedParams,
+  type DeepReadonly,
+  isProviderConnectionTool,
+  type Params,
+  PROVIDER_CONNECTION_FIELDS,
+  type TaskID,
+  type UserID,
 } from '@agor/core/types';
 import {
   authenticatedTaskExecutorRuntimeAuthority,
@@ -181,8 +183,14 @@ export class ConfigService {
       if (!tool) {
         throw new BadRequest('Tool is required for executor API key resolution');
       }
+      // A tool may resolve its canonical API key name or any field of its own
+      // provider connection (OpenCode has no single canonical key; its hosted
+      // per-provider fields are the connection). Never another tool's bucket.
       const expectedKeyName = TOOL_API_KEY_NAMES[tool];
-      if (!expectedKeyName || expectedKeyName !== keyName) {
+      const connectionFields: readonly string[] = isProviderConnectionTool(tool)
+        ? PROVIDER_CONNECTION_FIELDS[tool]
+        : [];
+      if (expectedKeyName !== keyName && !connectionFields.includes(keyName)) {
         throw new Forbidden('Executor token is not valid for this API key');
       }
       const sessionsService = this.app?.service('sessions');
