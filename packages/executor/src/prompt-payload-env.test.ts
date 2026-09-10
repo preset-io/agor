@@ -17,6 +17,7 @@ const POD_OWNED_ENVIRONMENT = {
   LD_DEBUG: 'synthetic-pod-loader-policy',
   DYLD_INSERT_LIBRARIES: '/synthetic/pod/lib/dyld-policy.dylib',
   DYLD_LIBRARY_PATH: '/synthetic/pod/lib',
+  AGOR_OPENCODE_SCRATCH_ROOT: '/synthetic/pod/opencode-scratch',
 } as const;
 
 const ORDINARY_ENV_NAME = 'SYNTHETIC_PAYLOAD_SETTING';
@@ -51,6 +52,7 @@ describe('prompt payload process environment boundary', () => {
       LD_DEBUG: 'synthetic-payload-loader-control',
       DYLD_INSERT_LIBRARIES: '/synthetic/payload/lib/inject.dylib',
       DYLD_LIBRARY_PATH: '/synthetic/payload/lib',
+      AGOR_OPENCODE_SCRATCH_ROOT: '/synthetic/persistent/home/opencode-scratch',
       [ORDINARY_ENV_NAME]: 'ordinary-payload-value',
     });
 
