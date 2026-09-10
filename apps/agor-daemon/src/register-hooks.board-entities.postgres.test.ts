@@ -1,5 +1,6 @@
 import { createRestClient } from '@agor/core/api';
 import {
+  BoardObjectRepository,
   BranchRepository,
   createDatabase,
   createTenantScopedDatabaseProxy,
@@ -124,6 +125,34 @@ describe.skipIf(!postgresUrl || process.env.AGOR_DB_DIALECT !== 'postgresql')(
               .service('board-objects')
               .find({ query: { ...query, branch_id: foreign.entities[1].branch_id, $skip: 0 } })
           ).toMatchObject({ total: 0, data: [] });
+          // A copied correlation token grants no resource/tenant authority.
+          const placementWrite = {
+            position: { x: 80, y: 120 },
+            placement_write_id: 'placement-owner-token',
+          };
+          const foreignTenantId = tenantId === 'entities-a' ? 'entities-b' : 'entities-a';
+          const readForeign = () =>
+            runWithTenantDatabaseScope(db, foreignTenantId, (scoped) =>
+              new BoardObjectRepository(scoped).findByObjectId(foreign.entities[1].object_id)
+            );
+          const beforeDenied = await readForeign();
+          const denied = await fetch(
+            `${server.url}/board-objects/${foreign.entities[1].object_id}`,
+            {
+              method: 'PATCH',
+              headers: server.headers(fixture.other.user_id, tenantId),
+              body: JSON.stringify(placementWrite),
+            }
+          );
+          expect(denied.status).toBe(403);
+          expect(await readForeign()).toEqual(beforeDenied);
+          const ownResult = await client
+            .service('board-objects')
+            .patch(fixture.entities[1].object_id, placementWrite);
+          expect(ownResult).toMatchObject(placementWrite);
+          expect(
+            await client.service('board-objects').get(fixture.entities[1].object_id)
+          ).not.toHaveProperty('placement_write_id');
           await runWithTenantDatabaseScope(db, tenantId, async (scoped) => {
             const repo = new BranchRepository(scoped);
             const page = await repo.findPage({

@@ -46,6 +46,9 @@ export interface BoardEntityObject {
   /** Zone this entity is pinned to (optional) */
   zone_id?: string;
 
+  /** Ephemeral PATCH correlation echoed in the response/event; never persisted or used for access. */
+  placement_write_id?: string;
+
   /** When this entity was added to the board */
   created_at: string;
 }

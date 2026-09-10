@@ -198,6 +198,275 @@ describe('SessionCanvas authoritative zone placement reconciliation', () => {
     vi.useRealTimers();
   });
 
+  it('persists a second drag after the first pending PATCH is acknowledged', async () => {
+    vi.useFakeTimers();
+    let release!: () => void;
+    const pending = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const patch = vi.fn(async (_id: string, data: Partial<BoardEntityObject>) => {
+      if (patch.mock.calls.length === 1) await pending;
+      const result = { ...implementingPlacement, ...data };
+      boardObjectPatched(result);
+      return result;
+    });
+    const client = { service: vi.fn(() => ({ patch })) } as unknown as AgorClient;
+    render(
+      <ConnectionProvider value={connected}>
+        <SessionCanvas board={board} client={client} branches={[branch]} />
+      </ConnectionProvider>
+    );
+    await act(async () => {});
+    const drag = (x: number) =>
+      act(() => {
+        const node = { ...currentNode(BRANCH_ID), positionAbsolute: { x, y: 200 } };
+        flowProps?.onNodeDragStart?.({}, node);
+        flowProps?.onNodeDrag?.({}, node);
+        flowProps?.onNodeDragStop?.({}, node);
+      });
+    drag(1800);
+    await act(async () => {
+      vi.advanceTimersByTime(501);
+    });
+    expect(patch).toHaveBeenCalledTimes(1);
+    drag(1900);
+    await act(async () => {
+      release();
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(501);
+    });
+    expect(patch).toHaveBeenCalledTimes(2);
+    expect(patch.mock.calls[1][1]).toMatchObject({
+      position: { x: 160, y: 120 },
+      zone_id: IMPLEMENTING_ZONE_ID,
+    });
+    expect(
+      agorStore
+        .getState()
+        .boardObjectsByBoardId.get(BOARD_ID)
+        ?.find((row) => row.branch_id === BRANCH_ID)?.position
+    ).toEqual({ x: 160, y: 120 });
+    expect(currentNode(BRANCH_ID)).toMatchObject({
+      parentId: IMPLEMENTING_ZONE_ID,
+      position: { x: 160, y: 120 },
+    });
+  });
+
+  it.each(
+    ['branch', 'card'].flatMap((entity) =>
+      [false, true].flatMap((drained) =>
+        ['before-http', 'after-http'].flatMap((ack) =>
+          [false, true].map((crossZone) => ({ entity, drained, ack, crossZone }))
+        )
+      )
+    )
+  )(
+    'preserves $entity newer intent (drained=$drained, ack=$ack, crossZone=$crossZone)',
+    async ({ entity, drained, ack, crossZone }) => {
+      vi.useFakeTimers();
+      const initial = entity === 'branch' ? implementingPlacement : reviewingCardPlacement;
+      const nodeId = entity === 'branch' ? BRANCH_ID : `card-${card.card_id}`;
+      const requests: Array<{ result: BoardEntityObject; release: () => void }> = [];
+      const patch = vi.fn(
+        (_id: string, data: Partial<BoardEntityObject>) =>
+          new Promise<BoardEntityObject>((resolve) => {
+            const result = { ...initial, ...data };
+            requests.push({ result, release: () => resolve(result) });
+          })
+      );
+      const client = { service: vi.fn(() => ({ patch })) } as unknown as AgorClient;
+      render(
+        <ConnectionProvider value={connected}>
+          <SessionCanvas board={board} client={client} branches={[branch]} />
+        </ConnectionProvider>
+      );
+      await act(async () => {});
+      const drag = (x: number) =>
+        act(() => {
+          const node = { ...currentNode(nodeId), positionAbsolute: { x, y: 200 } };
+          flowProps?.onNodeDragStart?.({}, node);
+          flowProps?.onNodeDrag?.({}, node);
+          flowProps?.onNodeDragStop?.({}, node);
+        });
+      const firstX = entity === 'branch' ? 1800 : 3000;
+      const secondX = crossZone ? (entity === 'branch' ? 3000 : 1800) : firstX + 100;
+      drag(firstX);
+      await act(async () => {
+        vi.advanceTimersByTime(501);
+      });
+      expect(patch).toHaveBeenCalledTimes(1);
+      drag(secondX);
+      if (drained)
+        await act(async () => {
+          vi.advanceTimersByTime(501);
+        });
+      // A second timer may have drained, but it must not overtake this node's HTTP write.
+      expect(patch).toHaveBeenCalledTimes(1);
+      if (ack === 'before-http') act(() => boardObjectPatched(requests[0].result));
+      await act(async () => requests[0].release());
+      if (ack === 'after-http') act(() => boardObjectPatched(requests[0].result));
+      if (!drained)
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(501);
+        });
+      expect(patch).toHaveBeenCalledTimes(2);
+      const zoneId = secondX < 2800 ? IMPLEMENTING_ZONE_ID : REVIEWING_ZONE_ID;
+      const expected = { x: secondX - (zoneId === IMPLEMENTING_ZONE_ID ? 1740 : 2890), y: 120 };
+      expect(requests[1].result).toMatchObject({ position: expected, zone_id: zoneId });
+      expect(requests[1].result.placement_write_id).not.toBe(requests[0].result.placement_write_id);
+      await act(async () => {
+        boardObjectPatched(requests[1].result);
+        requests[1].release();
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1000);
+      });
+      expect(patch).toHaveBeenCalledTimes(2);
+      expect(
+        agorStore
+          .getState()
+          .boardObjectsByBoardId.get(BOARD_ID)
+          ?.find((row) => row.object_id === initial.object_id)
+      ).toMatchObject({ position: expected, zone_id: zoneId });
+      expect(currentNode(nodeId)).toMatchObject({ position: expected, parentId: zoneId });
+    }
+  );
+
+  it.each([
+    'external',
+    'external-aba',
+    'external-matches-inflight',
+    'board-switch',
+    'auth-switch',
+    'unmount',
+    'rapid-reordered',
+  ])('fences overlapping drained writes after %s', async (change) => {
+    vi.useFakeTimers();
+    const requests: Array<{ result: BoardEntityObject; release: () => void }> = [];
+    const patch = vi.fn(
+      (_id: string, data: Partial<BoardEntityObject>) =>
+        new Promise<BoardEntityObject>((resolve) => {
+          const result = { ...implementingPlacement, ...data };
+          requests.push({ result, release: () => resolve(result) });
+        })
+    );
+    const client = { service: vi.fn(() => ({ patch })) } as unknown as AgorClient;
+    const canvas = (nextBoard = board, generation = 1) => (
+      <ConnectionProvider value={{ ...connected, authGeneration: generation }}>
+        <SessionCanvas board={nextBoard} client={client} branches={[branch]} />
+      </ConnectionProvider>
+    );
+    const view = render(canvas());
+    await act(async () => {});
+    const drag = (x: number) =>
+      act(() => {
+        const node = { ...currentNode(BRANCH_ID), positionAbsolute: { x, y: 200 } };
+        flowProps?.onNodeDragStart?.({}, node);
+        flowProps?.onNodeDrag?.({}, node);
+        flowProps?.onNodeDragStop?.({}, node);
+      });
+    drag(1800);
+    await act(async () => {
+      vi.advanceTimersByTime(501);
+    });
+    drag(1900);
+    await act(async () => {
+      vi.advanceTimersByTime(501);
+    });
+    expect(patch).toHaveBeenCalledTimes(1);
+    if (change === 'rapid-reordered') {
+      // Coalesce multiple already-drained and still-pending generations, including ABA.
+      drag(1800);
+      await act(async () => {
+        vi.advanceTimersByTime(501);
+      });
+      drag(2000);
+      await act(async () => {
+        vi.advanceTimersByTime(501);
+      });
+      await act(async () => requests[0].release()); // HTTP before its event
+      expect(patch).toHaveBeenCalledTimes(2);
+      expect(requests[1].result.position).toEqual({ x: 260, y: 120 });
+      drag(2100);
+      act(() => boardObjectPatched(requests[1].result));
+      act(() => boardObjectPatched(requests[0].result)); // old event arrives last
+      await act(async () => requests[1].release());
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(501);
+      });
+      expect(patch).toHaveBeenCalledTimes(3);
+      expect(requests[2].result.position).toEqual({ x: 360, y: 120 });
+      await act(async () => {
+        boardObjectPatched(requests[2].result);
+        requests[2].release();
+      });
+      expect(currentNode(BRANCH_ID).position).toEqual({ x: 360, y: 120 });
+    } else {
+      if (change.startsWith('external'))
+        act(() => {
+          boardObjectPatched({
+            ...implementingPlacement,
+            position:
+              change === 'external-matches-inflight'
+                ? requests[0].result.position
+                : { x: 400, y: 300 },
+          });
+          if (change === 'external-aba') boardObjectPatched(implementingPlacement);
+        });
+      else if (change === 'board-switch')
+        view.rerender(canvas({ ...board, board_id: 'other-board' } as Board));
+      else if (change === 'auth-switch') view.rerender(canvas(board, 2));
+      else view.unmount();
+      // Neither an old success nor its late realtime echo may resurrect invalidated work.
+      await act(async () => {
+        boardObjectPatched(requests[0].result);
+        requests[0].release();
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1000);
+      });
+      expect(patch).toHaveBeenCalledTimes(1);
+    }
+  });
+
+  it.each([false, true])(
+    'bases a newer drag on live authority before React renders (initially unplaced=%s)',
+    async (unplaced) => {
+      vi.useFakeTimers();
+      if (unplaced)
+        agorStore.setState({
+          boardObjectsByBoardId: new Map([[BOARD_ID, [reviewingCardPlacement]]]),
+        });
+      const patch = vi.fn(async (_id: string, data: Partial<BoardEntityObject>) => {
+        const result = { ...implementingPlacement, ...data };
+        boardObjectPatched(result);
+        return result;
+      });
+      const client = { service: () => ({ patch }) } as unknown as AgorClient;
+      render(
+        <ConnectionProvider value={connected}>
+          <SessionCanvas board={board} client={client} branches={[branch]} />
+        </ConnectionProvider>
+      );
+      await act(async () => {});
+      const beforeRender = flowProps!;
+      const node = { ...currentNode(BRANCH_ID), positionAbsolute: { x: 1900, y: 200 } };
+      act(() => {
+        boardObjectPatched({ ...implementingPlacement, position: { x: 400, y: 300 } });
+        beforeRender.onNodeDragStart?.({}, node);
+        beforeRender.onNodeDrag?.({}, node);
+        beforeRender.onNodeDragStop?.({}, node);
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(501);
+      });
+      expect(patch).toHaveBeenCalledTimes(1);
+      expect(patch.mock.calls[0][1].position).toEqual({ x: 160, y: 120 });
+      expect(currentNode(BRANCH_ID).position).toEqual({ x: 160, y: 120 });
+    }
+  );
+
   it('does not persist a stale drag after cross-zone authority advances', async () => {
     vi.useFakeTimers();
     const patch = vi.fn().mockResolvedValue({});
@@ -254,6 +523,7 @@ describe('SessionCanvas authoritative zone placement reconciliation', () => {
 
     expect(patch).toHaveBeenCalledTimes(1);
     expect(patch).toHaveBeenCalledWith('board-object-card', {
+      placement_write_id: expect.any(String),
       position: { x: 120, y: 400 },
       zone_id: REVIEWING_ZONE_ID,
     });
