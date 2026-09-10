@@ -13,9 +13,6 @@ import {
 
 import { resolveTracerModule } from './datadog.js';
 
-// Compatibility export for existing daemon integrations.
-export { resolveTracerModule } from './datadog.js';
-
 type AroundNext = () => Promise<void>;
 
 export type { DatadogTracer };
