@@ -109,6 +109,26 @@ describe('OpenCode model catalog service', () => {
     );
   });
 
+  it('returns the known catalog marked unavailable with the structured reason when unsupported', async () => {
+    loadConfig.mockReturnValue({
+      multi_tenancy: { mode: 'required_from_auth', auth_claim: 'tenant_id' },
+      execution: { unix_user_mode: 'delegated', executor_command_template: 'launch' },
+    } as never);
+
+    const result = await runWithTenantContext('tenant-a', () => service().find(params));
+
+    expect(result.unsupported).toEqual({
+      code: 'hosted_native_state_disabled',
+      message: expect.stringMatching(/not been enabled/),
+    });
+    expect(result.runtimeVersion).toBe('1.14.33');
+    expect(result.providers.length).toBeGreaterThan(0);
+    expect(result.providers.every((provider) => provider.availableForSelection === false)).toBe(
+      true
+    );
+    expect(runCommand).not.toHaveBeenCalled();
+  });
+
   it('reads the server-free catalog without daemon runtime binary preflight', async () => {
     await runWithTenantContext('tenant-a', async () => {
       await expect(service().find(params)).resolves.toEqual(catalog);
@@ -214,5 +234,38 @@ describe('OpenCode model catalog service', () => {
       if (original === undefined) delete process.env.OPENAI_API_KEY;
       else process.env.OPENAI_API_KEY = original;
     }
+  });
+});
+
+describe('OpenCode model catalog service (hosted managed projection)', () => {
+  it('derives availability from saved hosted keys without any executor', async () => {
+    loadConfig.mockReturnValue({
+      multi_tenancy: { mode: 'required_from_auth', auth_claim: 'tenant_id' },
+      execution: {
+        unix_user_mode: 'delegated',
+        executor_command_template: 'launch',
+        executor_storage: { user_home: 'persistent-per-user' },
+      },
+      agentic_tools: { opencode_hosted_native_state: 'checkpointed' },
+    } as never);
+    usersRepository.mockImplementation(function repository() {
+      return {
+        findById: vi.fn(async () => ({
+          user_id: 'same-user',
+          agentic_tools: { opencode: { OPENCODE_API_KEY_OPENAI: true } },
+        })),
+      };
+    } as never);
+
+    const result = await runWithTenantContext('tenant-a', () => service().find(params));
+
+    expect(result.unsupported).toBeUndefined();
+    expect(result.suggestedSelection).toEqual({
+      providerId: 'openai',
+      modelId: 'gpt-5.6-terra-pro',
+    });
+    expect(result.providers.find((p) => p.id === 'openai')?.availableForSelection).toBe(true);
+    expect(result.providers.find((p) => p.id === 'anthropic')?.availableForSelection).toBe(false);
+    expect(runCommand).not.toHaveBeenCalled();
   });
 });
