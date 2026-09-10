@@ -40,8 +40,9 @@ describe.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
         for (const groupId of local.groupIds) {
           await groups.addMember(groupId, local.member, local.owner);
         }
-        // Each generated matching set is an InitPlan evaluated once. Internal
-        // join nodes may legitimately execute more than once within that set.
+        // Each matching-set InitPlan runs at most once, once when needed.
+        // Short-circuited policy arms can leave their sets unused; internal
+        // join nodes may legitimately execute more than once within a set.
         const plans = await executeRaw(
           scoped,
           sql`EXPLAIN (ANALYZE, FORMAT JSON)
@@ -67,8 +68,10 @@ describe.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
         };
         visit(plans);
         expect(matchingSets.length).toBeGreaterThan(0);
-        expect(matchingSets.some((node) => Number(node['Actual Rows']) > 0)).toBe(true);
-        for (const node of matchingSets) expect(node['Actual Loops']).toBe(1);
+        expect(
+          matchingSets.some((node) => node['Actual Loops'] === 1 && Number(node['Actual Rows']) > 0)
+        ).toBe(true);
+        for (const node of matchingSets) expect([0, 1]).toContain(node['Actual Loops']);
         for (const userId of [local.owner, local.member, local.admin, foreign.owner]) {
           for (const capability of BOARD_POLICY_CAPABILITIES) {
             expect(
