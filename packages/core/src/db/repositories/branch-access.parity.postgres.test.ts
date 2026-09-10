@@ -1,4 +1,4 @@
-import { and, eq } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { generateId } from '../../lib/ids';
 import {
@@ -6,7 +6,7 @@ import {
   BRANCH_POLICY_CAPABILITIES,
 } from '../../types/capability-policy';
 import { createDatabase, type Database } from '../client';
-import { select } from '../database-wrapper';
+import { executeRaw, select } from '../database-wrapper';
 import { initializeDatabase } from '../migrate';
 import { boards, branches } from '../schema';
 import { runWithTenantDatabaseScope } from '../tenant-scope';
@@ -33,6 +33,27 @@ describe.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
       );
       await runWithTenantDatabaseScope(db, `local-${generateId()}`, async (scoped) => {
         const local = await exerciseCapabilityPredicateParity(scoped);
+        // The fixed-principal group set must be evaluated once per statement,
+        // not once per branch. This guards against PostgreSQL pulling an IN
+        // subquery back into the expensive correlated permission join.
+        const plans = await executeRaw(
+          scoped,
+          sql`EXPLAIN (ANALYZE, FORMAT JSON)
+            SELECT ${branches.branch_id} FROM ${branches}
+            WHERE ${branchCapabilityCondition(scoped, local.member, 'branch.view')}`
+        );
+        const groupScans: number[] = [];
+        const visit = (value: unknown): void => {
+          if (!value || typeof value !== 'object') return;
+          const node = value as Record<string, unknown>;
+          if (node['Relation Name'] === 'group_memberships') {
+            groupScans.push(Number(node['Actual Loops']));
+          }
+          for (const child of Object.values(node)) visit(child);
+        };
+        visit(plans);
+        expect(groupScans.length).toBeGreaterThan(0);
+        expect(Math.max(...groupScans)).toBeLessThanOrEqual(1);
         for (const userId of [local.owner, local.member, local.admin, foreign.owner]) {
           for (const capability of BOARD_POLICY_CAPABILITIES) {
             expect(
