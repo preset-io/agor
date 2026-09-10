@@ -715,6 +715,13 @@
       "when": 1788206400001,
       "tag": "0103_claude_oauth_attempts",
       "breakpoints": true
+    },
+    {
+      "idx": 104,
+      "version": "6",
+      "when": 1788292800000,
+      "tag": "0104_mcp_slack_recovery_due",
+      "breakpoints": true
     }
   ]
 }

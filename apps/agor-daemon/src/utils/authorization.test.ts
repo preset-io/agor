@@ -7,9 +7,14 @@
 
 import { Forbidden, NotAuthenticated } from '@agor/core/feathers';
 import type { AuthenticatedParams, HookContext } from '@agor/core/types';
-import { ROLES } from '@agor/core/types';
+import { BRANCH_ENVIRONMENT_SNAPSHOT_FIELDS, ROLES } from '@agor/core/types';
 import { describe, expect, it } from 'vitest';
-import { ensureMinimumRole, registerAuthenticatedRoute, requireMinimumRole } from './authorization';
+import {
+  ensureMinimumRole,
+  registerAuthenticatedRoute,
+  requireAdminForEnvConfig,
+  requireMinimumRole,
+} from './authorization';
 
 /** Helper to create authenticated params for a given role and provider */
 function makeParams(role: string, provider: string | undefined = 'rest'): AuthenticatedParams {
@@ -23,6 +28,34 @@ function makeParams(role: string, provider: string | undefined = 'rest'): Authen
     provider,
   } as AuthenticatedParams;
 }
+
+describe('environment configuration clears', () => {
+  it.each([null, undefined])(
+    'requires admin for explicit %s clears, including bulk patches',
+    (value) => {
+      const hook = requireAdminForEnvConfig();
+      for (const field of [
+        ...BRANCH_ENVIRONMENT_SNAPSHOT_FIELDS,
+        'environment',
+        'environment_config',
+        'environment_variant',
+      ]) {
+        for (const data of [{ [field]: value }, [{ notes: 'unchanged' }, { [field]: value }]]) {
+          const context = { data, params: makeParams(ROLES.MEMBER) } as HookContext;
+          expect(() => hook(context)).toThrow(Forbidden);
+          context.params = makeParams(ROLES.ADMIN);
+          expect(() => hook(context)).not.toThrow();
+        }
+      }
+      expect(() =>
+        hook({
+          data: { notes: 'not environment config' },
+          params: makeParams(ROLES.MEMBER),
+        } as HookContext)
+      ).not.toThrow();
+    }
+  );
+});
 
 describe('ensureMinimumRole', () => {
   describe('role hierarchy', () => {

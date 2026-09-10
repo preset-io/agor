@@ -778,7 +778,7 @@ describe('scheduler HA occurrence recovery', () => {
 
     const { app, prompt } = createSchedulerApp(db);
     await expect(
-      new SchedulerService(db, app, { appRbacEnabled: true }).executeScheduleNow({
+      new SchedulerService(db, app, {}).executeScheduleNow({
         scheduleId: schedule.schedule_id,
         triggeredBy: collaborator.user_id,
       })

@@ -1,7 +1,10 @@
 import type { TenantScopeAwareDatabase, UserMCPOAuthToken } from '@agor/core/db';
 import type { MCPServer, MCPServerID } from '@agor/core/types';
 import { describe, expect, it } from 'vitest';
-import { isMCPOAuthGrantAuthorizedForServer } from './mcp-oauth-grant-authority.js';
+import {
+  isMCPOAuthGrantAuthorizedForServer,
+  isMCPOAuthGrantIdentityAuthorizedForServer,
+} from './mcp-oauth-grant-authority.js';
 import { fingerprintMCPOAuthGrantConfiguration } from './mcp-oauth-grant-binding.js';
 
 const db = { run: () => undefined } as unknown as TenantScopeAwareDatabase;
@@ -81,6 +84,29 @@ describe('MCP OAuth grant authority', () => {
   it('rejects a grant subject inconsistent with the current OAuth mode', async () => {
     await expect(
       isMCPOAuthGrantAuthorizedForServer(db, server, { ...grant(undefined), user_id: null })
+    ).resolves.toBe(false);
+  });
+
+  it('keeps credential identity authoritative while a server is disabled', async () => {
+    const disabled = { ...server, enabled: false };
+    await expect(
+      isMCPOAuthGrantIdentityAuthorizedForServer(db, disabled, grant(undefined))
+    ).resolves.toBe(true);
+    await expect(isMCPOAuthGrantAuthorizedForServer(db, disabled, grant(undefined))).resolves.toBe(
+      false
+    );
+  });
+
+  it('accepts only the shared subject for shared OAuth mode', async () => {
+    const shared = { ...server, auth: { ...server.auth!, oauth_mode: 'shared' as const } };
+    await expect(
+      isMCPOAuthGrantIdentityAuthorizedForServer(db, shared, {
+        ...grant(undefined),
+        user_id: null,
+      })
+    ).resolves.toBe(true);
+    await expect(
+      isMCPOAuthGrantIdentityAuthorizedForServer(db, shared, grant(undefined))
     ).resolves.toBe(false);
   });
 });

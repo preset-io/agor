@@ -1,17 +1,53 @@
-# External MCP servers and Marketplace
+# External MCP servers and Catalog
 
-Agor can attach external MCP servers to individual sessions. Use **Marketplace** for reviewed remote endpoints, or **Settings → MCP Servers** for configurations you manage yourself.
+Agor can attach external MCP servers to individual sessions. Use **Catalog** for reviewed remote endpoints, or **Settings → MCP Servers** for configurations you manage yourself.
+
+Open **MCP Catalog** from the header’s shop icon or the same icon in the session’s **MCP** popover. Search the session picker to find existing servers; its no-match action also opens the Catalog. Catalog **Connect** adds a server to **My Servers**, without creating a session. Choose **Start new session** afterward to select an eligible teammate and agent tool; its starter prompt opens in the composer as editable, unsent text. To attach a saved server to the current conversation, select it in that picker.
 
 ## Authentication
 
-Marketplace checks the live endpoint before installing it. An entry may be:
+Catalog's pre-connect readiness is advisory from catalog and saved-connection data; it does not probe the endpoint. Agor checks the live endpoint only when you choose **Connect** and before installing it. An entry may be:
 
-- **Open:** Agor connects it and opens a session ready to use.
-- **OAuth:** Agor creates the server and session first. Complete **Sign in** in that session or in MCP Server settings before sending the starter prompt. OAuth grants are per user.
-- **Bearer token:** Marketplace accepts this only when the checked-in catalog explicitly prescribes the reviewed bearer scheme. The token is verified against the catalog endpoint before storage. A generic `401` or `403` is not proof that a bearer token will work.
+- **Open:** Agor adds the server to **My Servers**. From the inline next step, choose **Start new session** to select a teammate and agent tool, or keep browsing.
+- **OAuth:** Agor adds the server and pre-opens the provider sign-in window. The Catalog drawer remains at **Sign-in pending** until the durable per-user grant is confirmed; **My Servers** remains the recovery path if sign-in is not completed.
+- **Bearer token:** Catalog accepts this only when the checked-in catalog explicitly prescribes the reviewed bearer scheme. The token is verified against the catalog endpoint before storage. A generic `401` or `403` is not proof that a bearer token will work. A provider may advertise OAuth and separately document bearer tokens; that route is allowed only through the entry's explicit `oauth_challenge_compatible: true` review flag (GitHub is the current example), never inferred from the challenge.
 - **Unknown:** Agor checks the endpoint at connect time. If it has changed to OAuth or open access, the drawer updates. An unreviewed custom-header, Basic, multi-key, or signed scheme is refused.
 
-For unsupported schemes, configure the server in **Settings → MCP Servers**. Custom headers support services such as Datadog API/application-key pairs; Marketplace's Datadog entry instead asks for the bearer PAT/SAT described in Datadog's MCP setup guide.
+For unsupported schemes, configure the server in **Settings → MCP Servers**. Custom headers still support alternatives such as Datadog API/application-key pairs; Catalog's Datadog entry uses Datadog's recommended browser OAuth flow instead of asking users to manage a long-lived PAT or SAT. That card targets Datadog's US1 MCP endpoint. Other Datadog sites need their regional endpoint configured manually, and an organisation may need to allow-list the Agor callback under **MCP OAuth Redirect URLs** before sign-in completes.
+
+### Recovering a provider-deleted OAuth client (administrators)
+
+If sign-in repeatedly fails at the provider with an unknown/deleted client, ordinary reconnect may keep selecting the same saved Dynamic Client Registration (DCR). Agor automatically retires that exact registration only when the provider's token endpoint returns a structured `invalid_client` or `unauthorized_client` error. A browser/authorization-page error alone does not authorize retirement.
+
+On **PostgreSQL deployments**, an authenticated administrator in the server's tenant can explicitly reset it through the daemon REST API:
+
+```http
+POST /mcp-servers/oauth-client-registration-reset
+Authorization: Bearer <Agor administrator access token>
+Content-Type: application/json
+
+{"mcp_server_id":"<saved MCP server UUID>"}
+```
+
+Use your existing authenticated API client and the saved server's `mcp_server_id` from **Settings → MCP Servers** or `GET /mcp-servers`; this is an **Agor** credential, not a provider token. Do not paste credentials into chat or logs. A successful response is `{"success":true}`. Missing authentication, non-admin callers, and servers in another tenant are refused.
+
+**Coordinate this reset with affected users:** it advances the server's configuration epoch and atomically retires the current DCR material, pending sign-in attempts, and **all users' Agor-stored OAuth grants for that server**. It does not delete the server or revoke tokens at the provider. Close old sign-in windows, reload any open settings form, then reconnect/sign in again to register a fresh client. Configured/static client IDs must instead be repaired in the server configuration; reset does not replace them. SQLite intentionally uses process-local DCR and rejects this durable reset endpoint.
+
+DCR requests identify standalone HTTP loopback callbacks as `native` and public HTTPS callbacks as `web`. That choice is part of the durable credential binding, so a registration created under an older or different binding is not reused. HA activation and upgrades still require the public callback origin and offline cutover described in [Daemon HA](/guide/daemon-ha).
+
+### Saved OAuth status
+
+OAuth badges reflect the last saved-grant check, refreshed when the UI loads or
+reconnects and after explicit OAuth actions/events. Idle tabs do not scan all
+grants on a timer. The badge is not a live provider-health guarantee: credentials
+can expire or be revoked between observations. Runtime credential resolution
+independently validates the effective session servers (attached and enabled global
+servers), and refreshes credentials when needed. A provider timeout is not proof
+that authentication has been revoked.
+
+### Capability metadata
+
+Remote tool, resource, and prompt descriptions are untrusted optional free text. Agor keeps every valid capability name and schema, but deterministically shortens descriptions that exceed the per-field or aggregate safe metadata budget. **Test Connection** (or **Save & Test Connection** for a saved/OAuth server) reports when this happened. Malformed names, schemas, or non-string descriptions still fail validation instead of being silently repaired. The same bounded tool descriptions are stored for display and applied by the mediated MCP egress path used in `compatibility` and `enforced` gateway modes.
 
 ### Local stdio servers
 
@@ -23,14 +59,18 @@ Upgrading Agor removes obsolete remote-auth, URL, and header fields from existin
 
 Bearer tokens and other MCP auth/header/env secrets are stored in MCP server JSON according to the deployment's storage security. Catalog installs are private to their owner, access controls restrict the row, and API, realtime, and UI projections redact secrets. Redaction is an output-boundary control, not application-level encryption; encryption at rest applies only when the deployment's documented database or storage configuration guarantees it. OAuth access and refresh tokens use Agor's per-user OAuth token store.
 
+**Test Authentication** on a new form checks authentication setup; **Test Connection** lists capabilities. Saved servers and new OAuth servers use **Save & Test Connection**: it saves the current form first, then probes only that durable server configuration. This preserves saved secrets and binds OAuth grants to the correct endpoint. A failed save prevents the probe. After OAuth creates a server, **Save** saves subsequent edits rather than simply dismissing the form. Results are cleared when the draft, server, or authenticated caller changes.
+
 Editing authentication is patch-safe: leaving a saved secret blank preserves it, while **Clear saved secret** explicitly removes it. Other omitted authentication fields are preserved; switching authentication type replaces the old mode. The edit form uses a configuration revision to detect another device's concurrent save. If that happens, **Reload latest** fetches the authoritative row and deliberately discards the local unsaved form before another save. OAuth shared/per-user mode changes remove credentials and grants that belong to the previous subject mode.
 
-Connecting an entry again opens a new session but reuses the same owner-specific install. Supplying a new bearer token verifies and atomically rotates that stored install; the previous token is not retained in another catalog row. Remove the MCP server in **Settings → MCP Servers** to delete Agor's stored configuration and token.
+Connecting an entry again reuses the same owner-specific install; starting a session is a separate, explicit action. Supplying a new bearer token verifies and atomically rotates that stored install; the previous token is not retained in another catalog row. Remove the MCP server in **Settings → MCP Servers** to delete Agor's stored configuration and token.
 
 > **Revocation depends on gateway mode:** In `off` and `observe`, an active SDK may own a direct provider connection, so an edit is not a synchronous revocation boundary. In `compatibility` and `enforced`, eligible bounded Streamable HTTP servers use task-scoped daemon capabilities; all stdio, legacy SSE endpoint handoff, WebSocket, unbounded streaming, and servers requiring `ask` approval are omitted or fail closed. No new request hop is admitted after a relevant mutation commits, but a request admitted before that commit may complete. See [MCP egress operations](/guide/mcp-egress-gateway).
 
 ## Catalog curation for operators
 
-The public catalog is `packages/core/src/mcp-catalog/curated.yaml`. `auth_type` is presentation policy, while live probing remains authoritative. Every `credentials` entry must include a reviewed `credentials` block with `scheme: bearer`, an accurate vendor `acquisition_url`, and an optional user-facing label. Never put a secret in the catalog.
+The public catalog is `packages/core/src/mcp-catalog/curated.yaml`. `auth_type` is presentation policy, while the connect-time live probe remains authoritative. The readiness read itself is side-effect-free and does not probe. Every `credentials` entry must include a reviewed `credentials` block with `scheme: bearer`, an accurate vendor `acquisition_url`, and an optional user-facing label. Never put a secret in the catalog.
 
 Review the exact endpoint, redirect behavior, vendor authentication documentation, permission disclosure, and acquisition link. Do not classify a non-OAuth challenge as bearer support without that evidence. OAuth-specific compatibility fields are escape hatches and should be added only after reviewing the provider's discovery behavior.
+
+The `MCP catalog health` workflow runs daily and on catalog/audit pull requests. It repeats a read-only initialize/auth probe and the side-effect-free production OAuth metadata/client-readiness validation. Third-party reachability failures remain annotated advisories, while authentication contradictions, invalid OAuth contracts, and a newly usable OAuth path for a reviewed bearer exception fail with an actionable annotation. Credential/PAT entries are reported as requiring a credential rather than fully verified because the audit never holds a user's secret. Unit tests inject the network and OAuth discovery seams and never depend on public endpoints.

@@ -1,8 +1,17 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { deletePromptDraft, getPromptDraft, savePromptDraft } from './promptDrafts';
+import {
+  consumePromptDraftSeed,
+  deletePromptDraft,
+  getPromptDraft,
+  savePromptDraft,
+  stagePromptDraftSeed,
+} from './promptDrafts';
 
 describe('promptDrafts', () => {
-  beforeEach(() => localStorage.clear());
+  beforeEach(() => {
+    localStorage.clear();
+    sessionStorage.clear();
+  });
 
   it('keeps one user- and session-scoped draft across reloads', () => {
     savePromptDraft('user-a', 'session-a', 'hello');
@@ -37,5 +46,22 @@ describe('promptDrafts', () => {
 
     expect(localStorage.getItem('agor-draft-old-session')).toBeNull();
     expect(localStorage.length).toBe(1);
+  });
+
+  it('hands a staged starter prompt to only its exact user and session, once', () => {
+    stagePromptDraftSeed('user-a', 'session-new', 'Editable starter');
+
+    expect(consumePromptDraftSeed('user-a', 'session-other')).toBe('');
+    expect(consumePromptDraftSeed('user-a', 'session-new')).toBe('Editable starter');
+    expect(consumePromptDraftSeed('user-a', 'session-new')).toBe('');
+  });
+
+  it('drops a seed on an authority change or after its short bootstrap lifetime', () => {
+    const now = Date.now();
+    stagePromptDraftSeed('user-a', 'session-new', 'Private starter');
+    expect(consumePromptDraftSeed('user-b', 'session-new', now)).toBe('');
+
+    stagePromptDraftSeed('user-a', 'session-new', 'Stale starter');
+    expect(consumePromptDraftSeed('user-a', 'session-new', now + 11 * 60 * 1000)).toBe('');
   });
 });

@@ -145,6 +145,8 @@ describe('analytics logger', () => {
 describe('analytics plugins', () => {
   afterEach(() => {
     vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
   });
 
   it('stdout emits Segment-like track JSON', () => {
@@ -167,9 +169,9 @@ describe('analytics plugins', () => {
     expect(log).toHaveBeenCalledTimes(1);
     expect(JSON.parse(log.mock.calls[0][0] as string)).toEqual({
       type: 'track',
-      event: 'session.created',
+      event: 'agor_event',
       userId: 'user-1',
-      properties: { session_id: 'session-1' },
+      properties: { session_id: 'session-1', event_type: 'session.created' },
       context: { source: 'test' },
       timestamp: '2026-01-01T00:00:00.000Z',
     });
@@ -210,9 +212,9 @@ describe('analytics plugins', () => {
       batch: [
         {
           type: 'track',
-          event: 'task.completed',
+          event: 'agor_event',
           userId: 'user-1',
-          properties: { task_id: 'task-1', duration_ms: 123 },
+          properties: { task_id: 'task-1', duration_ms: 123, event_type: 'task.completed' },
           context: {},
           timestamp: '2026-01-01T00:00:00.000Z',
         },
@@ -251,7 +253,7 @@ describe('analytics plugins', () => {
     await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
     const [, secondInit] = fetchMock.mock.calls[1] as unknown as [string, RequestInit];
     expect(JSON.parse(secondInit.body as string).batch).toEqual([
-      expect.objectContaining({ event: 'second' }),
+      expect.objectContaining({ event: 'agor_event', properties: { event_type: 'second' } }),
     ]);
   });
 

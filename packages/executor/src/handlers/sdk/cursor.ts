@@ -12,6 +12,7 @@ import { loadManagedAgenticToolSdk } from '@agor/core/agentic-integrations';
 import { generateId, shortId } from '@agor/core/db';
 import { getMcpServersForSession, resolveScopedMCPAuthHeaders } from '@agor/core/mcp';
 import { DEFAULT_CURSOR_MODEL } from '@agor/core/models';
+import { renderAgorSessionIdentity } from '@agor/core/templates/session-context';
 import { mergeMCPRemoteHeaders } from '@agor/core/tools/mcp/http-headers';
 import type {
   ContentBlock,
@@ -540,7 +541,7 @@ export async function executeCursorTask(params: {
       const toolCallMessageIdsByCallId = new Map<string, MessageID>();
       const rawMessages: SDKMessage[] = [];
 
-      currentRun = await agent.send(prompt, {
+      currentRun = await agent.send(`${prompt}\n\n${renderAgorSessionIdentity(sessionId)}`, {
         model,
         mcpServers,
         idempotencyKey: taskId,

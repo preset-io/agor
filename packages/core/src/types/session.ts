@@ -19,6 +19,7 @@ import type {
 } from './agentic-tool';
 import type { AgenticToolConfigurationReference } from './agentic-tool-preset';
 import type { ContextFilePath } from './context';
+import type { ChannelType } from './gateway';
 import type { BoardID, BranchID, SessionID, SessionRelationshipID, TaskID, UserID } from './id';
 import type { ScheduleID } from './schedule';
 import type { TaskStatus, TerminationCoordinationPendingCode } from './task';
@@ -399,6 +400,8 @@ export interface Session {
    * Access in templates: {{ session.context.teamName }}
    */
   custom_context?: Record<string, unknown> & {
+    /** Server-owned provenance for sessions admitted by a gateway channel. */
+    gateway_source?: GatewaySource;
     /**
      * Scheduled run metadata (populated by scheduler)
      *
@@ -710,7 +713,7 @@ export interface SessionRelationship {
 export interface GatewaySource {
   channel_id: string;
   channel_name: string;
-  channel_type: string;
+  channel_type: ChannelType;
   thread_id: string;
   /** GitHub-specific: "owner/repo" format */
   github_repo?: string;

@@ -23,7 +23,7 @@ import { generateId, shortId } from '../../lib/ids';
 import { isValidExecutionHomeKey } from '../../types/user';
 import type { Database } from '../client';
 import { deleteFrom, insert, lockRowForUpdate, select, update } from '../database-wrapper';
-import { decryptApiKey, encryptApiKey } from '../encryption';
+import { decryptApiKeyAsync, encryptApiKey } from '../encryption';
 import { type UserInsert as SchemaUserInsert, type UserRow, users } from '../schema';
 import { isExecutionHomeKeyAvailable } from '../user-execution-home';
 import {
@@ -147,6 +147,37 @@ export class UsersRepository
     } catch (error) {
       throw new RepositoryError(
         `Failed to list user IDs: ${error instanceof Error ? error.message : String(error)}`,
+        error
+      );
+    }
+  }
+
+  /**
+   * Nonsecret projection used to resolve a user's filesystem sandbox home.
+   * Tenant scoping comes from the current database unit of work; callers do
+   * not hydrate password or encrypted credential/environment columns merely
+   * to locate the user's home store.
+   */
+  async getFilesystemHomeProjection(
+    userId: UserID | string
+  ): Promise<{ user_id: UserID; filesystem_home: string | null } | null> {
+    try {
+      const row = await select(this.db, {
+        user_id: users.user_id,
+        filesystem_home: users.filesystem_home,
+      })
+        .from(users)
+        .where(eq(users.user_id, userId))
+        .one();
+      return row
+        ? {
+            user_id: row.user_id as UserID,
+            filesystem_home: row.filesystem_home ?? null,
+          }
+        : null;
+    } catch (error) {
+      throw new RepositoryError(
+        `Failed to read user filesystem home: ${error instanceof Error ? error.message : String(error)}`,
         error
       );
     }
@@ -589,7 +620,7 @@ export class UsersRepository
     for (const [field, encrypted] of Object.entries(fields)) {
       if (!encrypted) continue;
       try {
-        out[field] = decryptApiKey(encrypted);
+        out[field] = await decryptApiKeyAsync(encrypted);
       } catch (error) {
         console.error(
           `[users] Failed to decrypt ${tool}.${field} for user ${shortId(userId)}: ${
@@ -621,7 +652,7 @@ export class UsersRepository
     if (!encrypted) return null;
 
     try {
-      return decryptApiKey(encrypted);
+      return await decryptApiKeyAsync(encrypted);
     } catch (error) {
       console.error(
         `[users] Failed to decrypt ${tool}.${field} for user ${shortId(userId)}: ${

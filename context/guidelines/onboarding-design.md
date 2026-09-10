@@ -84,7 +84,7 @@ the old string shape.
 Each goal is a small reusable **block** with two parts:
 
 1. **Tool/connection recs** — a short list whose entries name their real setup surface
-   (Marketplace, Settings → MCP Servers, or an already-connected Agor repository).
+   (Catalog, Settings → MCP Servers, or an already-connected Agor repository).
 2. **Bootstrap guidance** — the desired outcome plus a concrete first win. The shared prompt owns
    the only opening strategy, so goal blocks never introduce competing ask-vs-act instructions.
 
@@ -203,7 +203,7 @@ email or news promise until the product has a supported connector for it.
 - [ ] Selections stored in `preferences.onboarding.goals: string[]` (order-preserving, max 2); legacy `persona` left untouched and not migrated.
 - [ ] Selection state is an order-preserving array (append/splice), not a `Set`, so first-picked = primary holds.
 - [ ] Each goal is a reusable block (routed tool/connection recs + desired outcome + first win) — no per-combination copy.
-- [ ] Every recommendation names a real current setup surface; removed catalog entries are never sent to Marketplace.
+- [ ] Every recommendation names a real current setup surface; removed catalog entries are never sent to Catalog.
 - [ ] Two-goal recommendations follow the ordered 4-slot rule (2 primary, 2 secondary, dedup, refill from primary).
 - [ ] Bootstrap has one canonical ask-or-act strategy; it acts when context is sufficient and otherwise asks exactly one specific question.
 - [ ] Two-goal bootstrap keeps the first selection primary and offers the secondary after the first win is delivered or underway; it never asks the user to reprioritize.

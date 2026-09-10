@@ -20,16 +20,17 @@ describe('buildMcpServerOptions', () => {
     expect(options[0]?.label).not.toContain('11111111-2222');
   });
 
-  it('keeps a selected disabled server labelled', () => {
+  it('keeps a selected disabled server labelled and removable, but never offers it anew', () => {
     const disabled = server({ enabled: false });
     const options = buildMcpServerOptions([disabled], [disabled.mcp_server_id]);
     expect(options).toEqual([
       expect.objectContaining({
-        label: expect.stringContaining('Friendly server'),
+        label: 'Disabled · Friendly server (http)',
         value: disabled.mcp_server_id,
-        disabled: true,
+        disabled: false,
       }),
     ]);
+    expect(buildMcpServerOptions([disabled], [])).toEqual([]);
   });
 
   // Connecting a marketplace entry writes the install before anybody signs in,

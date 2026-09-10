@@ -227,6 +227,13 @@ export const BoardSwitcher: React.FC<BoardSwitcherProps> = ({
     </Tooltip>
   );
 
+  // The edit button is overlaid absolutely (it can't be a DOM child of the
+  // trigger <button>), so it reserves no layout width. Reserve matching room at
+  // the end of the name row so the ellipsized board name truncates *before* the
+  // pencil instead of rendering underneath it. Only reserve when the action can
+  // actually appear, so boards without an edit shortcut keep the full width.
+  const editActionReserve = editButton ? token.controlHeightSM + token.paddingSM : 0;
+
   return (
     <>
       <div
@@ -321,7 +328,11 @@ export const BoardSwitcher: React.FC<BoardSwitcherProps> = ({
               alignItems: 'center',
             }}
           >
-            <Flex align="center" gap={8} style={{ flex: 1, minWidth: 0 }}>
+            <Flex
+              align="center"
+              gap={8}
+              style={{ flex: 1, minWidth: 0, marginRight: editActionReserve }}
+            >
               {currentBoard ? (
                 <BoardTile emoji={getBoardEmoji(currentBoard, branchById)} size={24} />
               ) : (

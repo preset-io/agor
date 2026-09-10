@@ -21,6 +21,9 @@ import type { McpServer } from '@modelcontextprotocol/server';
  * function's signature.
  */
 
+/** Progressive execution facade, shared by registration and instrumentation. */
+export const MCP_EXECUTE_TOOL_NAME = 'agor_execute_tool';
+
 export type ToolConfig = Record<string, unknown>;
 export type ToolHandler = (args: unknown, extra?: unknown) => unknown;
 export type RegisterTool = (name: string, config: ToolConfig, handler: ToolHandler) => unknown;

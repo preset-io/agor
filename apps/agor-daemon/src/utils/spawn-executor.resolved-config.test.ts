@@ -131,6 +131,13 @@ describe('buildResolvedConfigSlice', () => {
         '  base_url: https://example.com',
         'analytics:',
         '  enabled: true',
+        '  client: { app: agor-cloud-daemon }',
+        '  extras: { environment: cloud }',
+        '  plugins:',
+        '    - type: http_batch',
+        '      enabled: true',
+        '      options:',
+        '        headers_from_env: { Authorization: AGOR_ANALYTICS_AUTHORIZATION }',
         'security:',
         '  csp:',
         '    extras:',
@@ -148,6 +155,7 @@ describe('buildResolvedConfigSlice', () => {
     expect(slice.daemon?.host_ip_address).toBe('10.0.0.5');
     // Non-allowed top-level sections are absent — slice is a strict subset.
     expect(slice).not.toHaveProperty('analytics');
+    expect(JSON.stringify(slice)).not.toContain('AGOR_ANALYTICS_AUTHORIZATION');
     expect(slice).not.toHaveProperty('security');
     // Non-allowed fields within an allowed section are also absent.
     expect(slice.execution).not.toHaveProperty('unix_user_mode');

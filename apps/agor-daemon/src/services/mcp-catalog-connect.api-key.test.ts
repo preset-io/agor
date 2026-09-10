@@ -56,25 +56,27 @@ const { probeRemoteAuthType, probeRemoteBearerToken } = vi.hoisted(() => ({
 }));
 vi.mock('@agor/core/mcp-catalog', () => ({ probeRemoteAuthType, probeRemoteBearerToken }));
 
-const DATADOG = 'com.datadoghq/mcp';
-const DISCLOSURE = 'Reads metrics, logs, traces, monitors, and incidents.';
+const GITHUB = 'io.github.github/github-mcp-server';
+const DISCLOSURE = 'Reads repositories and issues you authorise.';
 
 /** The one curated entry that states `credentials`, trimmed to what is used. */
 const CURATED = {
-  name: DATADOG,
-  title: 'Datadog',
+  name: GITHUB,
+  title: 'GitHub',
   transport: 'streamable-http',
-  remote_url: 'https://mcp.datadoghq.com/api/unstable/mcp-server/mcp',
+  remote_url: 'https://api.githubcopilot.com/mcp/',
   has_remote: true,
   auth_type: 'credentials',
-  credentials: { scheme: 'bearer', acquisition_url: 'https://example.com/tokens' },
+  credentials: {
+    scheme: 'bearer',
+    acquisition_url: 'https://example.com/tokens',
+    oauth_challenge_compatible: true,
+  },
   permission_disclosure: DISCLOSURE,
 } as unknown as MCPCatalogEntry;
 
 const CONNECT_REQUEST = {
-  catalog_key: DATADOG,
-  branch_id: 'branch-1',
-  agentic_tool: 'claude-code' as const,
+  catalog_key: GITHUB,
   acknowledged_disclosure: DISCLOSURE,
 };
 
@@ -202,35 +204,6 @@ async function buildDaemon(entry: MCPCatalogEntry = CURATED) {
       return entry;
     },
   } as never);
-  // Flipped by a test to make a step fail, which is the only way to observe
-  // what a connect leaves behind when it does not finish.
-  let sessionCreateFailure: Error | undefined;
-  let attachFailure: Error | undefined;
-
-  // A store, so "did the cleanup run" is answerable. The real `sessions`
-  // service needs a branch, a repo and a worktree that decide nothing here.
-  const sessionRows: Array<{ session_id: string }> = [];
-
-  app.use('sessions', {
-    async create(data: Record<string, unknown>) {
-      if (sessionCreateFailure) throw sessionCreateFailure;
-      const session = { ...data, session_id: `session-${sessionRows.length + 1}` };
-      sessionRows.push(session as { session_id: string });
-      return session;
-    },
-    async remove(id: string) {
-      const at = sessionRows.findIndex((row) => row.session_id === id);
-      if (at >= 0) sessionRows.splice(at, 1);
-      return { session_id: id };
-    },
-  } as never);
-  app.use('/sessions/:id/mcp-servers', {
-    async create(data: unknown) {
-      if (attachFailure) throw attachFailure;
-      return data;
-    },
-  } as never);
-
   const paramsFor = (caller: User, role: UserRole = 'member') =>
     ({
       provider: 'rest',
@@ -239,6 +212,10 @@ async function buildDaemon(entry: MCPCatalogEntry = CURATED) {
     }) as unknown as AuthenticatedParams;
   const candidateRepo = new MCPCatalogCandidateRepository(rawDb);
   const connectDeps = {
+    runInTenantDatabaseScope: <T>(
+      _params: AuthenticatedParams,
+      work: () => Promise<T>
+    ): Promise<T> => work(),
     listCandidates: (userId: User['user_id']) => candidateRepo.listForUser(userId),
     getCandidate: (userId: User['user_id'], serverId: MCPServer['mcp_server_id']) =>
       candidateRepo.getForUser(userId, serverId),
@@ -273,23 +250,11 @@ async function buildDaemon(entry: MCPCatalogEntry = CURATED) {
     },
     /** The row as it actually sits in the database, past every hook. */
     stored: () => repo.findAll({}),
-    failSessionCreate: (error: Error) => {
-      sessionCreateFailure = error;
-    },
-    failAttach: (error: Error) => {
-      attachFailure = error;
-    },
-    clearFailures: () => {
-      sessionCreateFailure = undefined;
-      attachFailure = undefined;
-    },
-    /** Sessions still standing, past any cleanup. */
-    sessions: () => [...sessionRows],
   };
 }
 
-const WORKING_KEY = 'fake-datadog-key-aaaa';
-const ROTATED_KEY = 'fake-datadog-key-bbbb';
+const WORKING_KEY = 'fake-github-key-aaaa';
+const ROTATED_KEY = 'fake-github-key-bbbb';
 
 describe('an API-key install, end to end', () => {
   beforeEach(() => {
@@ -314,7 +279,7 @@ describe('an API-key install, end to end', () => {
       url: CURATED.remote_url,
       scope: 'session',
       source: 'catalog',
-      catalog_entry_name: DATADOG,
+      catalog_entry_name: GITHUB,
       owner_user_id: alice.user_id,
       enabled: true,
       auth: { type: 'bearer', token: WORKING_KEY },
@@ -375,102 +340,6 @@ describe('an API-key install, end to end', () => {
     expect(broadcast).toHaveLength(1);
     expect(JSON.stringify(broadcast)).not.toContain(ROTATED_KEY);
     expect(JSON.stringify(broadcast)).not.toContain(WORKING_KEY);
-  });
-
-  it('leaves the stored key alone when a connect that would rotate it fails', async () => {
-    // Rotation overwrites what a previous connect established, and there is no
-    // transaction here to undo it with. Done before the session and the
-    // attachment, a connect that then failed told the caller it had failed
-    // while having already replaced their working key — every session still
-    // using the old one broken, and nothing saying so. Ordering is the fix;
-    // a compensating write would be a second thing that can fail.
-    const daemon = await buildDaemon();
-    const alice = await daemon.addUser('alice@agor.live');
-    await daemon.connectAs(alice, WORKING_KEY);
-
-    daemon.failSessionCreate(new Error('branch not found'));
-    await expect(daemon.connectAs(alice, ROTATED_KEY)).rejects.toThrow(/branch not found/);
-
-    const rows = await daemon.stored();
-    expect(rows).toHaveLength(1);
-    // The install is exactly as its owner had it: working, with the key it
-    // already held. The caller was told the connect failed, and it did.
-    expect(rows[0]?.auth?.token).toBe(WORKING_KEY);
-    // Only the session from the connect that succeeded — the failed attempt
-    // added none for a retry to duplicate.
-    expect(daemon.sessions()).toHaveLength(1);
-  });
-
-  it('leaves a disabled bearer install byte-for-byte unchanged when attachment fails', async () => {
-    const daemon = await buildDaemon();
-    const alice = await daemon.addUser('disabled-failure@agor.live');
-    const installed = await daemon.connectAs(alice, WORKING_KEY);
-    await daemon.patch(alice, installed.mcp_server.mcp_server_id, { enabled: false });
-    const [before] = await daemon.stored();
-
-    daemon.failAttach(new Error('attachment refused'));
-    await expect(daemon.connectAs(alice, ROTATED_KEY)).rejects.toThrow(/attachment refused/);
-
-    const [after] = await daemon.stored();
-    expect(after).toEqual(before);
-    expect(after?.enabled).toBe(false);
-    expect(after?.auth?.token).toBe(WORKING_KEY);
-  });
-
-  it('preserves endpoint, transport, headers, auth policy, and secrets when drift repair fails later', async () => {
-    const daemon = await buildDaemon();
-    const alice = await daemon.addUser('drift-failure@agor.live');
-    const installed = await daemon.connectAs(alice, WORKING_KEY);
-    await daemon.patch(alice, installed.mcp_server.mcp_server_id, {
-      url: 'https://old.example.invalid/mcp',
-      transport: 'sse',
-      headers: { 'X-Old-Secret': 'old-header-secret' },
-      auth: {
-        type: 'jwt',
-        api_url: 'https://old.example.invalid/token',
-        api_token: 'old-api-token',
-        api_secret: 'old-api-secret',
-      },
-    });
-    const [before] = await daemon.stored();
-
-    daemon.failSessionCreate(new Error('branch vanished'));
-    await expect(daemon.connectAs(alice, ROTATED_KEY)).rejects.toThrow(/branch vanished/);
-
-    const [after] = await daemon.stored();
-    expect(after).toEqual(before);
-    expect(after).toMatchObject({
-      url: 'https://old.example.invalid/mcp',
-      transport: 'sse',
-      headers: { 'X-Old-Secret': 'old-header-secret' },
-      auth: {
-        type: 'jwt',
-        api_token: 'old-api-token',
-        api_secret: 'old-api-secret',
-      },
-    });
-  });
-
-  it('leaves no session behind when the attachment is refused, and a retry converges', async () => {
-    // Four writes, three services, no transaction — so the question is not
-    // whether a window exists but whether a second attempt lands where the
-    // first meant to. Before this, each failed attempt left a session nobody
-    // could reach and the retry made another.
-    const daemon = await buildDaemon();
-    const alice = await daemon.addUser('alice@agor.live');
-
-    daemon.failAttach(new Error('forbidden'));
-    await expect(daemon.connectAs(alice, WORKING_KEY)).rejects.toThrow(/forbidden/);
-    expect(daemon.sessions()).toHaveLength(0);
-
-    daemon.clearFailures();
-    await daemon.connectAs(alice, WORKING_KEY);
-
-    expect(daemon.sessions()).toHaveLength(1);
-    // And exactly one install, holding the key from the attempt that worked.
-    const rows = await daemon.stored();
-    expect(rows).toHaveLength(1);
-    expect(rows[0]?.auth?.token).toBe(WORKING_KEY);
   });
 
   it('rotates the stored key in place rather than piling up rows', async () => {
@@ -540,7 +409,6 @@ describe('an API-key install, end to end', () => {
     await expect(older).rejects.toThrow(/newer marketplace connect superseded/i);
     expect(newer.reused_existing_server).toBe(true);
     expect((await daemon.stored())[0]?.auth?.token).toBe(ROTATED_KEY);
-    expect(daemon.sessions()).toHaveLength(2);
   });
 
   it('fences delayed first-connect adoption from overwriting the newer winner', async () => {
@@ -573,7 +441,6 @@ describe('an API-key install, end to end', () => {
     const rows = await daemon.stored();
     expect(rows).toHaveLength(1);
     expect(rows[0]?.auth?.token).toBe(ROTATED_KEY);
-    expect(daemon.sessions()).toHaveLength(1);
   });
 });
 
@@ -660,7 +527,7 @@ describe('the paths an API key does not change', () => {
 
   it('installs an OAuth endpoint configured-but-unauthenticated, as before', async () => {
     probeRemoteAuthType.mockResolvedValue('oauth');
-    const daemon = await buildDaemon({ ...CURATED, auth_type: 'oauth' });
+    const daemon = await buildDaemon({ ...CURATED, auth_type: 'oauth', credentials: undefined });
     const alice = await daemon.addUser('alice@agor.live');
 
     await daemon.connectAs(alice);
@@ -668,6 +535,26 @@ describe('the paths an API key does not change', () => {
     const [row] = await daemon.stored();
     expect(row?.auth).toEqual({ type: 'oauth', oauth_mode: 'per_user' });
     expect(probeRemoteBearerToken).not.toHaveBeenCalled();
+  });
+
+  it('uses a reviewed bearer route when the endpoint advertises OAuth', async () => {
+    probeRemoteAuthType.mockResolvedValue('oauth');
+    probeRemoteBearerToken.mockResolvedValue('accepted');
+    const daemon = await buildDaemon({
+      ...CURATED,
+      credentials: {
+        scheme: 'bearer',
+        acquisition_url: 'https://example.com/tokens',
+        oauth_challenge_compatible: true,
+      },
+    });
+    const alice = await daemon.addUser('github-pat@agor.live');
+
+    await daemon.connectAs(alice, WORKING_KEY);
+
+    const [row] = await daemon.stored();
+    expect(row?.auth).toEqual({ type: 'bearer', token: WORKING_KEY });
+    expect(probeRemoteBearerToken).toHaveBeenCalledWith(CURATED.remote_url, WORKING_KEY);
   });
 
   it('still lets two users share one unauthenticated install', async () => {

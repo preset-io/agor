@@ -2,7 +2,7 @@ import { feathers } from '@agor/core/feathers';
 import type { HookContext } from '@agor/core/types';
 import { describe, expect, it, vi } from 'vitest';
 import { FEATHERS_INSTRUMENTATION_REASON } from '../utils/feathers-instrumentation.js';
-import { createFeathersTracingHook, type DatadogTracer, resolveTracerModule } from './feathers.js';
+import { createFeathersTracingHook, type DatadogTracer } from './feathers.js';
 
 interface TracedCall {
   name: string;
@@ -306,40 +306,5 @@ describe('Feathers tracing hook', () => {
     expect(tracer.spans).toHaveLength(1);
     expect(tracer.spans[0]?.finished).toBe(true);
     expect(tracer.spans[0]?.error).toBe(boom);
-  });
-});
-
-describe('resolveTracerModule', () => {
-  const validTracer = { trace: () => Promise.resolve() };
-  const notFound = (id: string) => {
-    throw Object.assign(new Error(`Cannot find module '${id}'`), { code: 'MODULE_NOT_FOUND' });
-  };
-
-  it('returns dd-trace-api when present, without consulting dd-trace', () => {
-    const seen: string[] = [];
-    const resolved = resolveTracerModule((id) => {
-      seen.push(id);
-      if (id === 'dd-trace-api') return validTracer;
-      throw new Error('should not be reached');
-    });
-    expect(resolved).toBe(validTracer);
-    expect(seen).toEqual(['dd-trace-api']);
-  });
-
-  it('falls back to dd-trace when dd-trace-api is absent', () => {
-    const resolved = resolveTracerModule((id) => (id === 'dd-trace' ? validTracer : notFound(id)));
-    expect(resolved).toBe(validTracer);
-  });
-
-  it('unwraps a default export', () => {
-    const resolved = resolveTracerModule((id) =>
-      id === 'dd-trace-api' ? { default: validTracer } : notFound(id)
-    );
-    expect(resolved).toBe(validTracer);
-  });
-
-  it('skips a module without a callable trace() and returns null when both absent', () => {
-    expect(resolveTracerModule(() => ({}))).toBeNull();
-    expect(resolveTracerModule(notFound)).toBeNull();
   });
 });

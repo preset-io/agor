@@ -266,12 +266,21 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
       const isCreating = primaryTeammateBranch.filesystem_status === 'creating';
 
       return (
-        <div style={{ padding: 16 }}>
+        <div
+          style={{
+            padding: 16,
+            height: '100%',
+            boxSizing: 'border-box',
+            display: 'flex',
+            flexDirection: 'column',
+          }}
+        >
           <div
             style={{
               display: 'flex',
               flexDirection: 'column',
               gap: 10,
+              flexShrink: 0,
               paddingBottom: 12,
               marginBottom: 4,
               borderBottom: `1px solid ${token.colorBorderSecondary}`,
@@ -349,6 +358,7 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
               onSpawnSession={onSpawnSession}
               onOpenSessionSettings={onOpenSessionSettings}
               mode="panel"
+              fillAvailableHeight
               client={client}
             />
           ) : (
@@ -443,11 +453,7 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
           {
             key: 'teammate',
             label: 'Teammate',
-            children: (
-              <div style={{ height: 'calc(100vh - 112px)', overflow: 'auto' }}>
-                {teammateContent}
-              </div>
-            ),
+            children: <div style={{ height: '100%', overflow: 'auto' }}>{teammateContent}</div>,
           },
           {
             key: 'all-sessions',
@@ -529,6 +535,7 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
           },
         ]}
         style={{ height: '100%' }}
+        styles={{ body: { height: '100%' }, content: { height: '100%' } }}
         tabBarStyle={{ margin: 0, padding: '0 12px' }}
         tabBarExtraContent={{
           right: onCollapse ? (

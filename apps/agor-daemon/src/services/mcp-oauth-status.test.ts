@@ -22,7 +22,7 @@ function buildDeps(overrides: Partial<OAuthStatusDeps> = {}): OAuthStatusDeps {
     viewer: { user_id: BOB, role: 'member' },
     listForUser: async () => [],
     listShared: async () => [],
-    findServer: async () => null,
+    findServers: async () => [],
     requireGrantBinding: false,
     isGrantBoundToServer: () => true,
     ...overrides,
@@ -30,6 +30,43 @@ function buildDeps(overrides: Partial<OAuthStatusDeps> = {}): OAuthStatusDeps {
 }
 
 describe('resolveAuthenticatedServerIds', () => {
+  it('batch reads distinct servers and retains private-server visibility checks', async () => {
+    const findServers = vi.fn(async () => [
+      serverOwnedBy('visible'),
+      serverOwnedBy('private', ALICE),
+    ]);
+    const result = await resolveAuthenticatedServerIds(
+      buildDeps({
+        listForUser: async () => [grantFor('visible')],
+        listShared: async () => [grantFor('visible'), grantFor('private')],
+        findServers,
+      })
+    );
+    expect(result).toEqual(['visible']);
+    expect(findServers).toHaveBeenCalledExactlyOnceWith(['visible', 'private']);
+  });
+
+  it.each(['listForUser', 'listShared'] as const)(
+    'propagates %s envelope failures without returning partial status',
+    async (failedList) => {
+      const error = new Error('Unsupported bound secret envelope');
+      const findServers = vi.fn(async () => [serverOwnedBy('server-valid')]);
+      const deps = buildDeps({
+        listForUser: async () => [grantFor('server-valid')],
+        listShared: async () => [grantFor('server-valid')],
+        findServers,
+        [failedList]: async () => {
+          throw error;
+        },
+      });
+
+      // The endpoint catches this and returns an empty authenticated set. A
+      // projection must not silently turn a failed list into partial success.
+      await expect(resolveAuthenticatedServerIds(deps)).rejects.toBe(error);
+      expect(findServers).not.toHaveBeenCalled();
+    }
+  );
+
   it("does not name another user's private server through its shared grant", async () => {
     // A shared grant belongs to the server, so it is returned to everybody who
     // asks. The server behind it may still be private, and a private server is
@@ -37,7 +74,7 @@ describe('resolveAuthenticatedServerIds', () => {
     // one place its id is handed out.
     const deps = buildDeps({
       listShared: async () => [grantFor('server-alices-private')],
-      findServer: async () => serverOwnedBy('server-alices-private', ALICE),
+      findServers: async () => [serverOwnedBy('server-alices-private', ALICE)],
     });
 
     await expect(resolveAuthenticatedServerIds(deps)).resolves.toEqual([]);
@@ -46,7 +83,7 @@ describe('resolveAuthenticatedServerIds', () => {
   it('names a shared server to any member', async () => {
     const deps = buildDeps({
       listShared: async () => [grantFor('server-shared')],
-      findServer: async () => serverOwnedBy('server-shared'),
+      findServers: async () => [serverOwnedBy('server-shared')],
     });
 
     await expect(resolveAuthenticatedServerIds(deps)).resolves.toEqual(['server-shared']);
@@ -56,7 +93,7 @@ describe('resolveAuthenticatedServerIds', () => {
     const deps = buildDeps({
       viewer: { user_id: ALICE, role: 'member' },
       listForUser: async () => [grantFor('server-alices-private')],
-      findServer: async () => serverOwnedBy('server-alices-private', ALICE),
+      findServers: async () => [serverOwnedBy('server-alices-private', ALICE)],
     });
 
     await expect(resolveAuthenticatedServerIds(deps)).resolves.toEqual(['server-alices-private']);
@@ -68,7 +105,7 @@ describe('resolveAuthenticatedServerIds', () => {
     const deps = buildDeps({
       viewer: { user_id: BOB, role: 'admin' },
       listShared: async () => [grantFor('server-alices-private')],
-      findServer: async () => serverOwnedBy('server-alices-private', ALICE),
+      findServers: async () => [serverOwnedBy('server-alices-private', ALICE)],
     });
 
     await expect(resolveAuthenticatedServerIds(deps)).resolves.toEqual(['server-alices-private']);
@@ -77,7 +114,7 @@ describe('resolveAuthenticatedServerIds', () => {
   it('never advertises a refresh-ambiguous grant as authenticated', async () => {
     const deps = buildDeps({
       listShared: async () => [grantFor('server-shared', { refresh_status: 'ambiguous' })],
-      findServer: async () => serverOwnedBy('server-shared'),
+      findServers: async () => [serverOwnedBy('server-shared')],
     });
 
     await expect(resolveAuthenticatedServerIds(deps)).resolves.toEqual([]);
@@ -89,7 +126,7 @@ describe('resolveAuthenticatedServerIds', () => {
       listShared: async () => [
         grantFor('server-shared', { oauth_token_expires_at: new Date('2026-01-01T00:00:00.000Z') }),
       ],
-      findServer: async () => serverOwnedBy('server-shared'),
+      findServers: async () => [serverOwnedBy('server-shared')],
     });
 
     await expect(resolveAuthenticatedServerIds(deps)).resolves.toEqual([]);
@@ -101,7 +138,7 @@ describe('resolveAuthenticatedServerIds', () => {
       requireGrantBinding: true,
       isGrantBoundToServer,
       listShared: async () => [grantFor('server-shared')],
-      findServer: async () => serverOwnedBy('server-shared'),
+      findServers: async () => [serverOwnedBy('server-shared')],
     });
 
     await expect(resolveAuthenticatedServerIds(deps)).resolves.toEqual([]);
@@ -111,7 +148,7 @@ describe('resolveAuthenticatedServerIds', () => {
   it('says nothing about a grant whose server is gone', async () => {
     const deps = buildDeps({
       listShared: async () => [grantFor('server-deleted')],
-      findServer: async () => null,
+      findServers: async () => [],
     });
 
     await expect(resolveAuthenticatedServerIds(deps)).resolves.toEqual([]);

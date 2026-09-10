@@ -10,6 +10,7 @@ import { Unavailable } from '@agor/core/feathers';
 import type { McpServer } from '@modelcontextprotocol/server';
 import { wrapRegisterTool } from './register-tool-proxy.js';
 import type { McpContext } from './server.js';
+import { mcpValidationFailure } from './validation-errors.js';
 
 /**
  * Custom MCP service methods bypass the Feathers around hooks that normally
@@ -95,7 +96,15 @@ export function tenantScopedToolProxy(server: McpServer, ctx: McpContext): McpSe
   return wrapRegisterTool(server, (register, name, config, handler) =>
     register(name, config, (args, extra) => {
       const tenantId = ctx.baseServiceParams.tenant?.tenant_id;
-      const invoke = () => Promise.resolve(handler(args, extra));
+      const invoke = async () => {
+        try {
+          return await handler(args, extra);
+        } catch (error) {
+          const failure = mcpValidationFailure(error, name);
+          if (failure) return failure;
+          throw error;
+        }
+      };
       return tenantId ? runWithTenantContext(tenantId, invoke) : invoke();
     })
   );

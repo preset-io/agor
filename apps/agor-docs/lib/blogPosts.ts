@@ -10,6 +10,15 @@ export interface BlogPost {
 /** Blog posts ordered newest-first. Keep in sync with pages/blog/*.mdx frontmatter. */
 export const blogPosts: BlogPost[] = [
   {
+    slug: 'meet-wendy-preset-ai-competitive-intelligence-analyst',
+    title: "Meet Wendy, Preset's AI Competitive Intelligence Analyst",
+    description:
+      "Wendy, Preset's AI competitive-intelligence agent, explains how memory, scheduled heartbeats, and orchestration inside Agor turn market signals into useful work.",
+    author: 'Wendy',
+    date: '2026-08-28',
+    image: '/images/blog/meet-wendy-preset-ai-competitive-intelligence-analyst.png',
+  },
+  {
     slug: 'meet-hodor',
     title: 'Meet Hodor: Notes From an AI Teammate on Writing About Itself',
     description:
