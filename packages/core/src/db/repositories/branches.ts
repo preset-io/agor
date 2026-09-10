@@ -166,6 +166,16 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
         // Per-branch SDK home intent (design §9.2)
         sdk_home: row.sdk_home ?? undefined,
         ...row.data,
+        workspace_storage: row.workspace_storage
+          ? {
+              residency: row.workspace_storage.residency,
+              operationId: row.workspace_storage.operationId,
+              phase: row.workspace_storage.phase,
+              startedAt: row.workspace_storage.startedAt,
+              error: row.workspace_storage.error,
+              retryable: row.workspace_storage.retryable,
+            }
+          : { residency: 'warm' },
         url,
       },
       row
@@ -669,6 +679,20 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
       }
 
       const current = this.rowToBranch(currentRow, baseUrl);
+      if (Object.hasOwn(updates, 'workspace_storage'))
+        throw new RepositoryError('Workspace storage is server-managed');
+      if (
+        currentRow.workspace_storage &&
+        currentRow.workspace_storage.residency !== 'warm' &&
+        (['path', 'ref', 'storage_mode', 'clone_depth', 'environment_instance'].some((key) =>
+          Object.hasOwn(updates, key)
+        ) ||
+          (updates.filesystem_status &&
+            !['ready', 'preserved'].includes(updates.filesystem_status)))
+      )
+        throw new RepositoryError(
+          'Restore the workspace before changing filesystem or environment state'
+        );
       if (
         Object.hasOwn(updates, 'environment_instance') &&
         (current.environment_instance?.command_attempt ||
@@ -822,6 +846,14 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
         if (hasActiveEnvironmentCommand(row?.data.environment_instance)) {
           throw new RepositoryError(
             'Wait for the active environment command before deleting its branch'
+          );
+        }
+        if (
+          row?.workspace_storage &&
+          (row.workspace_storage.residency !== 'warm' || row.workspace_storage.admissions?.length)
+        ) {
+          throw new RepositoryError(
+            'Restore the workspace and finish filesystem operations before deleting this branch'
           );
         }
         await deleteFrom(tx, branches).where(eq(branches.branch_id, existing.branch_id)).run();

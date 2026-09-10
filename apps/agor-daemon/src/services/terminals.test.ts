@@ -360,8 +360,12 @@ describe('process-affine attachment creation', () => {
 
     await vi.waitFor(() => expect(mocks.joinRequestingSocket).toHaveBeenCalledOnce());
     expect(mocks.databaseScopeDepth).toBe(0);
+    expect(service.hasBranchActivity('tenant-x', 'branch-1' as BranchID)).toBe(true);
+    expect(service.hasBranchActivity('another-tenant', 'branch-1' as BranchID)).toBe(false);
+    expect(service.hasBranchActivity('tenant-x', 'another-branch' as BranchID)).toBe(false);
     release();
     await expect(starting).resolves.toMatchObject({ isNew: true });
+    expect(service.hasBranchActivity('tenant-x', 'branch-1' as BranchID)).toBe(true);
   });
 
   it('retains no attachment or process when the final admission commit fails', async () => {

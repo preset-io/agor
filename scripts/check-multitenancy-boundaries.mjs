@@ -220,7 +220,7 @@ const checks = [
       'packages/core/src/db/in-memory-sqlite-coordinator.test.ts': 10,
       'packages/core/src/db/repositories/branches.ts': 1,
       'packages/core/src/db/repositories/knowledge.ts': 7,
-      'packages/core/src/db/repositories/repos.ts': 3,
+      'packages/core/src/db/repositories/repos.ts': 2,
       // Session updates and archive cascades use raw repository transactions until
       // the Agor store/tenant transaction wrapper covers both patterns.
       'packages/core/src/db/repositories/sessions.ts': 2,

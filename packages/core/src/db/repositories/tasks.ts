@@ -63,6 +63,7 @@ import {
   update,
 } from '../database-wrapper';
 import {
+  branches,
   type SessionRow,
   sessionMcpServers,
   sessions,
@@ -2458,6 +2459,19 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
             .where(eq(sessions.session_id, input.session_id))
             .one();
           if (!sessionRow) throw new EntityNotFoundError('Session', input.session_id);
+          await lockRowForUpdate(
+            txDb,
+            this.db,
+            branches,
+            eq(branches.branch_id, sessionRow.branch_id)
+          );
+          const workspace = await select(txDb)
+            .from(branches)
+            .where(eq(branches.branch_id, sessionRow.branch_id))
+            .one();
+          if (workspace?.workspace_storage?.residency === 'cooling') {
+            throw new RepositoryError('Workspace is moving to cold storage; retry shortly');
+          }
           if (
             input.task_id &&
             sessionRow.scheduler_init_failure_code &&
@@ -2546,6 +2560,14 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
   ): Promise<TaskDispatchClaimResult> {
     return this.mutateLockedSessionTask(id, async (txDb, currentRow, sessionRow, fullId) => {
       const current = this.rowToTask(currentRow);
+      await lockRowForUpdate(txDb, this.db, branches, eq(branches.branch_id, sessionRow.branch_id));
+      const branch = await select(txDb)
+        .from(branches)
+        .where(eq(branches.branch_id, sessionRow.branch_id))
+        .one();
+      if (!branch || (branch.workspace_storage && branch.workspace_storage.residency !== 'warm')) {
+        return { outcome: 'condition_changed', task: current };
+      }
       if (current.status !== expectedStatus) {
         return {
           outcome:

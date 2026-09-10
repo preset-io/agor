@@ -2379,6 +2379,20 @@ describe('resolveBranchStorageConfig + ensureBranchStorageModeAllowed', () => {
     __resetConfigCacheForTests();
   }
 
+  it('defaults cooling off and validates the explicit opt-in', () => {
+    expect(resolveBranchStorageConfig({} as AgorConfig).coldStorageEnabled).toBeUndefined();
+    expect(
+      resolveBranchStorageConfig({
+        execution: { branch_storage: { cold_storage_enabled: true } },
+      } as AgorConfig).coldStorageEnabled
+    ).toBe(true);
+    expect(() =>
+      assertValidRawConfig({
+        execution: { branch_storage: { cold_storage_enabled: 'true' } },
+      } as unknown as AgorConfig)
+    ).toThrow(/cold_storage_enabled must be a boolean/);
+  });
+
   it('defaults to both modes allowed with worktree as default when execution.branch_storage is not configured', () => {
     // No config file present. v0.20+ default exposes both modes in the UI /
     // MCP create tool while keeping `default_mode='worktree'` so callers that

@@ -10,8 +10,16 @@ import { resolveVariant, wrapV1AsV2 } from '../../config/variant-resolver.js';
 import { generateId } from '../../lib/ids';
 import { httpUrlHasUserinfo, stripHttpUrlUserinfo } from '../../utils/url';
 import type { Database } from '../client';
-import { deleteFrom, insert, lockRowForUpdate, select, txAsDb, update } from '../database-wrapper';
-import { type RepoInsert, type RepoRow, repos } from '../schema';
+import {
+  deleteFrom,
+  insert,
+  lockRowForUpdate,
+  runDatabaseTransaction,
+  select,
+  txAsDb,
+  update,
+} from '../database-wrapper';
+import { branches, type RepoInsert, type RepoRow, repos } from '../schema';
 import {
   AmbiguousIdError,
   attachHiddenTenant,
@@ -456,7 +464,35 @@ export class RepoRepository implements BaseRepository<Repo, Partial<Repo>> {
     try {
       const fullId = await this.resolveId(id);
 
-      const result = await deleteFrom(this.db, repos).where(eq(repos.repo_id, fullId)).run();
+      const result = await runDatabaseTransaction(
+        this.db,
+        async (tx) => {
+          await lockRowForUpdate(tx, this.db, repos, eq(repos.repo_id, fullId));
+          const inventory = await select(tx)
+            .from(branches)
+            .where(eq(branches.repo_id, fullId))
+            .orderBy(branches.branch_id)
+            .all();
+          for (const branch of inventory) {
+            await lockRowForUpdate(tx, this.db, branches, eq(branches.branch_id, branch.branch_id));
+            const current = await select(tx)
+              .from(branches)
+              .where(eq(branches.branch_id, branch.branch_id))
+              .one();
+            if (
+              current?.workspace_storage &&
+              (current.workspace_storage.residency !== 'warm' ||
+                current.workspace_storage.admissions?.length)
+            ) {
+              throw new RepositoryError(
+                'Restore all workspaces and finish filesystem operations before deleting this repository'
+              );
+            }
+          }
+          return deleteFrom(tx, repos).where(eq(repos.repo_id, fullId)).run();
+        },
+        { sqliteImmediate: true }
+      );
 
       if (result.rowsAffected === 0) {
         throw new EntityNotFoundError('Repo', id);

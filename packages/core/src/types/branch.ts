@@ -3,6 +3,71 @@ import type { BoardID, BranchID, UUID } from './id';
 import type { KnowledgeNamespaceID, KnowledgeVisibility } from './knowledge';
 import type { BranchName } from './repo';
 
+/** SHA-256 of the exact compressed workspace bundle bytes, not a multipart ETag. */
+export interface BranchBundleDigest {
+  sha256: string;
+  bytes: number;
+}
+
+export type BranchResidency = 'warm' | 'cooling' | 'cold' | 'warming';
+export const BRANCH_STORAGE_EXECUTOR_ACTIONS = ['pack', 'cleanup', 'restore', 'publish'] as const;
+export type BranchStorageExecutorAction = (typeof BRANCH_STORAGE_EXECUTOR_ACTIONS)[number];
+export function branchStorageExecutorCommandId(
+  operationId: string,
+  action: BranchStorageExecutorAction
+): string {
+  return `branch-storage:${operationId}:${action}`;
+}
+export type BranchStoragePhase =
+  | 'packing'
+  | 'cleanup'
+  | 'stored'
+  | 'restoring'
+  | 'publishing'
+  | 'ready';
+
+/** Durable receipt; internal storage coordinates must not be accepted from a browser. */
+export interface BranchBundleReceipt extends BranchBundleDigest {
+  bucket: string;
+  key: string;
+  etag: string;
+  versionId?: string;
+  providerChecksum: string;
+}
+
+export function isBranchBundleReceipt(value: unknown): value is BranchBundleReceipt {
+  if (!value || typeof value !== 'object') return false;
+  const receipt = value as Record<string, unknown>;
+  return (
+    ['bucket', 'key', 'etag', 'providerChecksum'].every(
+      (key) => typeof receipt[key] === 'string' && receipt[key].length > 0
+    ) &&
+    typeof receipt.sha256 === 'string' &&
+    /^[a-f0-9]{64}$/.test(receipt.sha256) &&
+    typeof receipt.bytes === 'number' &&
+    Number.isSafeInteger(receipt.bytes) &&
+    receipt.bytes > 0 &&
+    (receipt.versionId === undefined || typeof receipt.versionId === 'string')
+  );
+}
+
+export interface BranchStorageStatus {
+  /** Last executor returned a settled failure; Restore may safely retry from the retained bundle. */
+  retryable?: boolean;
+  residency: BranchResidency;
+  operationId?: string;
+  phase?: BranchStoragePhase;
+  startedAt?: string;
+  error?: string;
+}
+
+/** Tenant-owned, internal branch-row record. One operation plus known FS admissions. */
+export interface BranchStorageRecord extends BranchStorageStatus {
+  replacePartial?: boolean;
+  receipt?: BranchBundleReceipt;
+  admissions?: string[];
+}
+
 export const BRANCH_METADATA_ACTIONS = ['archive', 'delete'] as const;
 export type BranchMetadataAction = (typeof BRANCH_METADATA_ACTIONS)[number];
 
@@ -11,6 +76,8 @@ export type BranchFilesystemAction = (typeof BRANCH_FILESYSTEM_ACTIONS)[number];
 
 /** Canonical request contract for the hooked branch archive/delete boundary. */
 export interface BranchArchiveOrDeleteOptions {
+  /** Archive after cooling the complete workspace; incompatible with clean/delete filesystem actions. */
+  coolWorkspace?: boolean;
   metadataAction: BranchMetadataAction;
   filesystemAction: BranchFilesystemAction;
 }
@@ -21,6 +88,7 @@ export function isBranchArchiveOrDeleteOptions(
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
   const options = value as Record<string, unknown>;
   return (
+    (options.coolWorkspace === undefined || typeof options.coolWorkspace === 'boolean') &&
     BRANCH_METADATA_ACTIONS.some((candidate) => candidate === options.metadataAction) &&
     BRANCH_FILESYSTEM_ACTIONS.some((candidate) => candidate === options.filesystemAction)
   );
@@ -58,6 +126,8 @@ export const BRANCH_ENVIRONMENT_SNAPSHOT_FIELDS = [
  * - Multiple sessions can work on the same branch over time
  */
 export interface Branch {
+  /** Server-managed residency, independent of archive and environment readiness. */
+  workspace_storage?: BranchStorageStatus;
   // ===== Identity =====
 
   /** Unique branch identifier (UUIDv7) */

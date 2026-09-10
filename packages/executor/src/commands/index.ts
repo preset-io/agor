@@ -19,6 +19,7 @@ import {
   handleBranchArtifactPublish,
   handleBranchArtifactValidate,
 } from './artifacts.js';
+import { handleBranchStorage } from './branch-storage.js';
 import { handleClaudeAuthFile } from './claude-auth-file.js';
 import { handleCodexAuthFile } from './codex-auth-file.js';
 import { handleEnvironmentLifecycle, handleEnvironmentLogs } from './environment.js';
@@ -248,6 +249,7 @@ registerCommand('branch.files.list', handleBranchFilesList);
 registerCommand('branch.files.browse', handleBranchFilesBrowse);
 registerCommand('branch.files.read', handleBranchFilesRead);
 registerCommand('branch.filesystem.status', handleBranchFilesystemStatus);
+registerCommand('branch.storage', handleBranchStorage);
 registerCommand('branch.artifact.publish', handleBranchArtifactPublish);
 registerCommand('branch.artifact.land', handleBranchArtifactLand);
 registerCommand('branch.artifact.validate', handleBranchArtifactValidate);

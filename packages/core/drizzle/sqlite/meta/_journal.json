@@ -722,6 +722,13 @@
       "when": 1788292800000,
       "tag": "0104_mcp_slack_recovery_due",
       "breakpoints": true
+    },
+    {
+      "idx": 105,
+      "version": "6",
+      "when": 1789073307455,
+      "tag": "0105_branch_workspace_storage",
+      "breakpoints": true
     }
   ]
 }

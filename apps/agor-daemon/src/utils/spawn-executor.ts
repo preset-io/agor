@@ -1207,7 +1207,30 @@ export function startContainedExecutorCommand(
  * not use this request/response path. Long-running commands and lifecycle
  * tasks should keep using spawnExecutorFireAndForget().
  */
+type BranchFilesystemAdmission = (
+  payload: Record<string, unknown>,
+  options: RunExecutorCommandOptions
+) => Promise<((result: ExecutorCommandResult) => Promise<void>) | undefined>;
+let branchFilesystemAdmission: BranchFilesystemAdmission | undefined;
+
+/** Composition seam: domain-owned residency admission, not a new executor protocol. */
+export function configureBranchFilesystemAdmission(admission: BranchFilesystemAdmission): void {
+  branchFilesystemAdmission = admission;
+}
+
 export async function requestExecutor(
+  payload: Record<string, unknown>,
+  options: RunExecutorCommandOptions = {}
+): Promise<ExecutorCommandResult> {
+  const release = await branchFilesystemAdmission?.(payload, options);
+  // A thrown/uncertain launcher outcome retains admission: it is not evidence
+  // that filesystem work stopped. Completed command results release below.
+  const result = await requestExecutorAdmitted(payload, options);
+  await release?.(result);
+  return result;
+}
+
+async function requestExecutorAdmitted(
   payload: Record<string, unknown>,
   options: RunExecutorCommandOptions = {}
 ): Promise<ExecutorCommandResult> {

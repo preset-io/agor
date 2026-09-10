@@ -857,6 +857,7 @@ export type BranchStorageMode = (typeof BRANCH_STORAGE_MODES)[number];
 export const DEFAULT_BRANCH_STORAGE_MODE: BranchStorageMode = 'worktree';
 
 export interface ResolvedBranchStorageConfig {
+  coldStorageEnabled?: boolean;
   defaultMode: BranchStorageMode;
   allowedModes: readonly BranchStorageMode[];
   allowShallowClones: boolean;
@@ -870,6 +871,8 @@ export interface ResolvedBranchStorageConfig {
  * security gradient reasons).
  */
 export interface AgorBranchStorageSettings {
+  /** Allow new manual cooling. Default false; existing bundles remain restorable when disabled. */
+  cold_storage_enabled?: boolean;
   /**
    * Mode used when a create request doesn't specify one. Must also appear
    * in `allowed_modes`. Default: `'worktree'`.

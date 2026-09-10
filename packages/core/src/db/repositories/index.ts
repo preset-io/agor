@@ -12,6 +12,7 @@ export * from './board-comments';
 export * from './board-objects';
 export * from './boards';
 export * from './branch-access';
+export * from './branch-storage';
 export * from './branches';
 export * from './capability-policies';
 export * from './card-types';

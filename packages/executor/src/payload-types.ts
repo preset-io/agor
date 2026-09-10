@@ -14,7 +14,11 @@ import {
   ExecutorCommandResultSchema,
   ExecutorResponseDescriptorSchema,
 } from '@agor/core/executor-protocol';
-import { AGENTIC_TOOL_NAMES, type AgenticToolName } from '@agor/core/types';
+import {
+  AGENTIC_TOOL_NAMES,
+  type AgenticToolName,
+  BRANCH_STORAGE_EXECUTOR_ACTIONS,
+} from '@agor/core/types';
 import { z } from 'zod';
 
 // Re-export so existing executor consumers (handlers, tool-registry, etc.)
@@ -441,6 +445,25 @@ export const BranchFilesystemStatusPayloadSchema = BasePayloadSchema.extend({
 });
 
 export type BranchFilesystemStatusPayload = z.infer<typeof BranchFilesystemStatusPayloadSchema>;
+
+export const BranchStoragePayloadSchema = BasePayloadSchema.extend({
+  command: z.literal('branch.storage'),
+  sessionToken: z.string(),
+  params: z.object({
+    branchId: z.string().uuid(),
+    operationId: z.string().uuid(),
+    action: z.enum(BRANCH_STORAGE_EXECUTOR_ACTIONS),
+    replacePartial: z.boolean().optional(),
+    digest: z
+      .object({ sha256: z.string().regex(/^[a-f0-9]{64}$/), bytes: z.number().int().positive() })
+      .optional(),
+    cwd: z.string(),
+    principalBranchAccess: z.enum(['read', 'write']),
+    sandboxHomeStore: z.string().optional(),
+    sandboxWorktreesRoot: z.string().optional(),
+  }),
+});
+export type BranchStoragePayload = z.infer<typeof BranchStoragePayloadSchema>;
 
 export const BranchArtifactPublishPayloadSchema = BasePayloadSchema.extend({
   command: z.literal('branch.artifact.publish'),
@@ -881,6 +904,7 @@ const ExecutorPayloadUnionSchema = z.discriminatedUnion('command', [
   BranchFilesBrowsePayloadSchema,
   BranchFilesReadPayloadSchema,
   BranchFilesystemStatusPayloadSchema,
+  BranchStoragePayloadSchema,
   BranchArtifactPublishPayloadSchema,
   BranchArtifactLandPayloadSchema,
   BranchArtifactValidatePayloadSchema,
@@ -961,6 +985,7 @@ export function getSupportedCommands(): string[] {
     'branch.files.browse',
     'branch.files.read',
     'branch.filesystem.status',
+    'branch.storage',
     'branch.artifact.publish',
     'branch.artifact.land',
     'branch.artifact.validate',

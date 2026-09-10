@@ -886,6 +886,7 @@ function validateConfig(config: AgorConfig): void {
   }
   resolveDispatchConnectTimeoutMs(config.execution);
   only(config.execution?.branch_storage, 'execution.branch_storage', [
+    'cold_storage_enabled',
     'default_mode',
     'allowed_modes',
     'allow_shallow_clones',
@@ -983,6 +984,14 @@ function validateConfig(config: AgorConfig): void {
     typeof config.execution.branch_storage.borrow_base_objects !== 'boolean'
   ) {
     throw new Error('Config error: execution.branch_storage.borrow_base_objects must be a boolean');
+  }
+  if (
+    config.execution?.branch_storage?.cold_storage_enabled !== undefined &&
+    typeof config.execution.branch_storage.cold_storage_enabled !== 'boolean'
+  ) {
+    throw new Error(
+      'Config error: execution.branch_storage.cold_storage_enabled must be a boolean'
+    );
   }
   only(config.security, 'security', ['csp', 'cors', 'git_config_parameters']);
   only(config.security?.csp, 'security.csp', [
@@ -2131,6 +2140,7 @@ export function resolveBranchStorageConfig(config?: AgorConfig): ResolvedBranchS
   return {
     defaultMode,
     allowedModes: allowed,
+    ...(raw?.cold_storage_enabled === true ? { coldStorageEnabled: true } : {}),
     allowShallowClones: raw?.allow_shallow_clones ?? true,
   };
 }

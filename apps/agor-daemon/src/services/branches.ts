@@ -1339,6 +1339,8 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     data: Partial<Branch>,
     params?: BranchParams
   ): Promise<BranchWithZoneAndSessions> {
+    if (Object.hasOwn(data, 'workspace_storage'))
+      throw new BadRequest('Workspace storage is server-managed');
     if (Object.hasOwn(data, 'sdk_home')) {
       throw new BadRequest(
         'sdk_home is server-managed and cannot be changed through the Branch API.'
@@ -1794,6 +1796,13 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     const { metadataAction, filesystemAction } = options;
     const branch = await this.withTenantDatabase(params, () => this.get(id, params));
     if (
+      branch.workspace_storage &&
+      branch.workspace_storage.residency !== 'warm' &&
+      (metadataAction === 'delete' || filesystemAction !== 'preserved')
+    ) {
+      throw new Conflict('Restore the workspace before deleting or cleaning this branch');
+    }
+    if (
       branch.environment_instance?.command_attempt &&
       branch.environment_instance.status !== 'stopped' &&
       branch.environment_instance.status !== 'error'
@@ -2037,6 +2046,8 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     });
 
     // Recreate the git branch on filesystem if the directory is missing
+    if (branch.workspace_storage && branch.workspace_storage.residency !== 'warm')
+      return unarchivedBranch;
     // (e.g., it was archived with filesystemAction: 'deleted')
     const userId = requestUser.user_id;
     const statusToken = await issueExecutorCommandToken(

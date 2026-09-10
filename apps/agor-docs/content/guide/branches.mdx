@@ -304,3 +304,89 @@ See **[Security](/security)** for deployment modes and the trust boundary discus
 - [Boards & Zones](/guide/boards): How branches are organized spatially
 - [Environments](/guide/environment-configuration): Per-branch dev environments
 - [Scheduler](/guide/scheduler): Time-based prompts targeting branches
+
+## Workspace cold storage (opt-in)
+
+**Move to cold storage** saves a self-contained clone's entire workspace and
+reclaims its local contents. Conversations and branch metadata remain readable.
+Dirty and staged changes, untracked and ignored files (including dependencies),
+Git state, permissions and safe relative symlinks are included. SDK/session homes
+outside the workspace stay local. Linked worktrees, external Git dependencies,
+unsafe links and special files are refused; Agor does not rewrite them.
+
+Enable new cooling in `config.yaml` only after configuring durable object storage:
+
+```yaml
+execution:
+  branch_storage:
+    cold_storage_enabled: true # default: false
+```
+
+This uses the existing `uploads.location` S3 adapter, client and credential chain,
+not new credentials. Local upload storage does not support cooling. Durable keys
+use `<prefix>/branch-bundles/<tenant-id>/<branch-id>/<operation-id>.tgz`, separate
+from temporary upload objects. **Exclude this namespace from object-expiration
+rules before enabling cooling.** Upload age/size limits and consume-on-read do not
+apply to bundles. Provider checksums and object identity must be supported.
+Retained bundles are not automatically purged, including after successful restore;
+operators should account for that storage. Disabling new cooling still permits
+restoring existing cold branches; keep their original storage configuration and
+credentials available.
+
+### Using it
+
+- Finish executing tasks across all sessions, close terminal attachments **and quit
+  their shells**, and stop the environment. Waiting-for-input/permission and
+  dispatching/stopping executions count as active. Failed activity checks refuse
+  cooling rather than assuming idle.
+- Choose **Move to cold storage** on the branch card. Stage labels show packing,
+  space reclamation, download verification and publication; **In cold storage**
+  means local cleanup completed after a durable upload receipt was saved.
+- Choose **Restore**, or send a normal prompt. Cold prompts enter the existing
+  task queue, share one restore and dispatch only after verified publication.
+  Queue ordering and cancellation remain unchanged. Cooling requests instead ask
+  you to retry shortly. Warming is not an agent task.
+- File, Git, terminal and environment operations are unavailable until warm.
+  Workspace-backed attachments may also be unavailable while conversations stay
+  readable. Cooling/restoring requires the existing branch prompting capability;
+  it does not grant permission to prompt someone else's session.
+- Archive is independent. The archive dialog defaults to **Also move workspace
+  to cold storage** when enabled for a clone; uncheck it for archive-only. Restore
+  does not unarchive. Cooling preserves everything: no optional pre-clean step.
+
+The API is `POST /branches/:id/storage` with `{ "action": "cool" }` or
+`{ "action": "restore" }`. MCP exposes `agor_branches_cool` and
+`agor_branches_restore`. Request/success/failure telemetry records stages, duration
+and byte counts without workspace paths or contents.
+
+### Safety and recovery limits
+
+Only executors read, pack, remove, extract or publish workspace bytes. The daemon
+owns tenant-scoped authorization, streaming object transfers and durable phase
+records. Admission is serialized against Agor task dispatch and known filesystem,
+terminal and environment activity. **This is best effort, not protection against
+arbitrary OS writers.** Stop external editors and detached processes before
+cooling. Closing a browser tab does not stop its Zellij shell. The current
+attachment inventory does not certify that detached Zellij sessions have exited.
+
+An upload failure before cleanup leaves the source available. Once cleanup or
+restore starts, a failure never marks a partial tree warm. A settled executor
+failure offers **Restore** again: it verifies a fresh staging copy before replacing
+partial contents. Restore temporarily needs disk space for both the compressed
+bundle and extracted tree. Publication moves verified entries into the existing
+workspace mount point while admission remains closed; it is not an atomic swap
+across the filesystem, database and object store.
+
+If an executor's outcome is unknown (timeout, daemon restart or lost completion),
+the operation stays unavailable and is **not automatically taken over**. Retain
+its receipt and workspace, establish that the original executor has stopped, and
+inspect the recorded operation ID/phase before operator-assisted recovery. The
+MVP deliberately has no force-unlock API that could race an unknown writer.
+Unresolved filesystem admissions likewise block cooling instead of expiring into
+an assumed-idle state. A timeout alone is not evidence that an executor stopped.
+
+Deleting a cold or transitioning branch/repository is refused to preserve its
+sole-copy receipt. Restore first. While cooling is enabled, legacy bulk repository
+filesystem cleanup is also refused for repositories that still contain branches;
+remove warm branches individually first. There is no automatic idle supervisor,
+bundle garbage collector or new runtime/provisioning requirement in this MVP.

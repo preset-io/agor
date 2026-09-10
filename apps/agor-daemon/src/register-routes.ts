@@ -30,6 +30,7 @@ import {
   BoardCommentsRepository,
   BoardRepository,
   BranchRepository,
+  BranchStorageRepository,
   bindRepositoryToTenantUnitOfWork,
   generateId,
   getCurrentTenantId,
@@ -187,6 +188,7 @@ import {
   type PermissionDecisionSubmission,
 } from './permissions/deliver-permission-decision.js';
 import { publicBoardCommentRepositionInput } from './services/board-comments.js';
+import { BranchStorageService } from './services/branch-storage.js';
 import type { GatewayService } from './services/gateway.js';
 import { createMCPCatalogConnectService } from './services/mcp-catalog-connect.js';
 import { createMCPCatalogStartSessionService } from './services/mcp-catalog-start-session.js';
@@ -231,6 +233,7 @@ import {
   resolveSessionPromptAccess,
   sessionPromptDeniedMessage,
 } from './utils/branch-authorization.js';
+import { registerBranchBundleTransfers } from './utils/branch-bundle-transfers.js';
 import { buildInitialUserMessage } from './utils/build-initial-user-message.js';
 import { buildPrompterPrefixedPrompt } from './utils/build-prompter-prefix.js';
 import { buildDatabaseHealthInfo } from './utils/database-health-diagnostics.js';
@@ -270,6 +273,7 @@ import {
 } from './utils/session-task-state.js';
 import { findActiveTasksForSession } from './utils/session-tasks.js';
 import { type SessionTurnLocks, withSessionTurnLock } from './utils/session-turn-lock.js';
+import { configureBranchFilesystemAdmission } from './utils/spawn-executor.js';
 import { bindStopRouteRepositories } from './utils/stop-route-repositories.js';
 import { formatStructuredLog, structuredLogErrorCode } from './utils/structured-log.js';
 import {
@@ -1763,6 +1767,21 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     if (!agenticToolEnabled) {
       throw new Forbidden(`${loadedSession.agentic_tool} is disabled for this workspace`);
     }
+    const workspace = await runWithTenantDatabaseScope(db, tenantId, () =>
+      new BranchStorageRepository(db).get(loadedSession.branch_id)
+    );
+    if (workspace.residency !== 'warm') {
+      if (workspace.residency === 'cold') {
+        deferInFreshTenantScope(params, async () => {
+          try {
+            await branchStorage.restore(loadedSession.branch_id, params, task.created_at);
+          } catch {
+            console.warn('[BranchStorage] Queued workspace restore failed; task remains queued');
+          }
+        });
+      }
+      return task;
+    }
     const session = await runWithTenantDatabaseScope(db, tenantId, () =>
       sessionsService.materializeAgenticToolPreset(loadedSession, params)
     );
@@ -2619,6 +2638,66 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   // ============================================================================
 
   const branchRepo = new BranchRepository(db);
+  const branchStorage = new BranchStorageService(app, db, config, _terminalsService);
+  configureBranchFilesystemAdmission(async (payload, options) => {
+    const command = String(payload.command ?? '');
+    if (
+      command === 'branch.storage' ||
+      command === 'branch.filesystem.status' ||
+      (!command.startsWith('branch.') &&
+        !command.startsWith('git.branch.') &&
+        !command.startsWith('environment.'))
+    )
+      return;
+    const id =
+      (payload.params as { branchId?: string } | undefined)?.branchId ??
+      options.templateVariables?.branch_id;
+    if (!id) return;
+    const tenantId = getCurrentTenantId();
+    if (!tenantId) throw new NotAuthenticated('Tenant identity required for filesystem admission');
+    const admission = await runWithTenantDatabaseScope(db, tenantId, async () => {
+      const repository = new BranchStorageRepository(db);
+      const state = await repository.get(id as import('@agor/core/types').BranchID);
+      if (state.residency !== 'warm')
+        throw new Conflict('Restore the workspace before accessing branch files');
+      return config.execution?.branch_storage?.cold_storage_enabled === true
+        ? repository.admitFilesystem(id as import('@agor/core/types').BranchID)
+        : undefined;
+    });
+    if (!admission) return;
+    return async (result) => {
+      if (!result.success && result.error?.code.startsWith('EXECUTOR_')) return;
+      await runWithTenantDatabaseScope(db, tenantId, () =>
+        new BranchStorageRepository(db).releaseFilesystem(
+          id as import('@agor/core/types').BranchID,
+          admission
+        )
+      );
+    };
+  });
+  registerBranchBundleTransfers({
+    app,
+    db,
+    config,
+    multiTenancy,
+    authenticate: authenticateBearerHttpRequest,
+  });
+  registerLongAuthenticatedRoute(
+    app,
+    '/branches/:id/storage',
+    {
+      async create(data: { action?: unknown }, params: RouteParams) {
+        if (!params.route?.id) throw new BadRequest('Branch ID required');
+        return branchStorage.create(
+          params.route.id as import('@agor/core/types').BranchID,
+          data?.action,
+          params
+        );
+      },
+    },
+    { create: { role: ROLES.MEMBER, action: 'manage workspace storage' } },
+    requireAuth
+  );
   const uploadRepo = new UploadRepository(db);
   const uploadMiddleware = createUploadMiddleware(getUploadStagingStore());
 
@@ -4190,6 +4269,14 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         throw new BadRequest('Invalid branch archive/delete options');
       }
       const options: BranchArchiveOrDeleteOptions = data;
+      if (options.coolWorkspace) {
+        if (options.metadataAction !== 'archive' || options.filesystemAction !== 'preserved') {
+          throw new BadRequest(
+            'Cooling preserves the complete workspace and cannot be combined with cleaning or deletion'
+          );
+        }
+        await branchStorage.create(id as import('@agor/core/types').BranchID, 'cool', params);
+      }
       return branchesService.archiveOrDelete(
         id as import('@agor/core/types').BranchID,
         options,

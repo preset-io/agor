@@ -12,8 +12,10 @@ import { createHash, randomUUID } from 'node:crypto';
 import { type AgorConfig, createUserProcessEnvironment } from '@agor/core/config';
 import {
   BranchRepository,
+  BranchStorageRepository,
   getCurrentTenantId,
   RepoRepository,
+  runWithTenantDatabaseScope,
   runWithTenantDatabaseTransaction,
   shortId,
   type TenantScopeAwareDatabase,
@@ -75,11 +77,13 @@ export interface TerminalAttachment {
 }
 
 interface OwnedTerminal extends TerminalAttachment {
+  filesystemAdmission?: string;
   tenantId: string;
   startedAt: Date;
 }
 
 interface TerminalStartReservation {
+  filesystemAdmission?: string;
   tenantId: string;
   branchId: BranchID;
   promise: Promise<void>;
@@ -143,6 +147,13 @@ export class TerminalsService {
   private readonly terminals = new Map<string, OwnedTerminal>();
   private readonly terminalByScope = new Map<string, string>();
   private readonly starting = new Map<string, TerminalStartReservation>();
+
+  /** Local attachment/starting inventory; detached Zellij shells are a separate limitation. */
+  hasBranchActivity(tenantId: string, branchId: BranchID): boolean {
+    return [...this.terminals.values(), ...this.starting.values()].some(
+      (entry) => entry.tenantId === tenantId && entry.branchId === branchId
+    );
+  }
 
   constructor(
     private readonly app: Application,
@@ -269,6 +280,14 @@ export class TerminalsService {
     };
     this.starting.set(scopeKey, reservation);
     try {
+      if (branch.workspace_storage && branch.workspace_storage.residency !== 'warm') {
+        throw new Forbidden('Restore the workspace before opening a terminal');
+      }
+      if (config.execution?.branch_storage?.cold_storage_enabled === true) {
+        reservation.filesystemAdmission = await runWithTenantDatabaseScope(this.db, tenantId, () =>
+          new BranchStorageRepository(this.db).admitFilesystem(branch.branch_id)
+        );
+      }
       return await this.spawnTerminal({
         tenantId,
         userId,
@@ -281,6 +300,14 @@ export class TerminalsService {
         params,
       });
     } finally {
+      if (!this.terminalByScope.has(scopeKey) && reservation.filesystemAdmission) {
+        await runWithTenantDatabaseScope(this.db, tenantId, () =>
+          new BranchStorageRepository(this.db).releaseFilesystem(
+            branch.branch_id,
+            reservation.filesystemAdmission!
+          )
+        );
+      }
       if (this.starting.get(scopeKey) === reservation) this.starting.delete(scopeKey);
       release();
     }
@@ -329,6 +356,7 @@ export class TerminalsService {
     const channel = terminalChannelName(tenantId, userId, terminalId);
     const sessionName = buildZellijSessionName(tenantId, userId, branch.branch_id);
     const terminal: OwnedTerminal = {
+      filesystemAdmission: reservation.filesystemAdmission,
       terminalId,
       tenantId,
       userId,
@@ -598,6 +626,18 @@ export class TerminalsService {
   }
 
   private deleteTerminal(terminal: OwnedTerminal): void {
+    if (terminal.filesystemAdmission) {
+      void runWithTenantDatabaseScope(this.db, terminal.tenantId, () =>
+        new BranchStorageRepository(this.db).releaseFilesystem(
+          terminal.branchId,
+          terminal.filesystemAdmission!
+        )
+      ).catch(() => {
+        console.warn(
+          '[TerminalsService] Workspace admission release failed; cooling remains blocked'
+        );
+      });
+    }
     this.terminals.delete(terminal.terminalId);
     const scopeKey = `${terminal.tenantId}:${terminal.userId}:${terminal.branchId}`;
     if (this.terminalByScope.get(scopeKey) === terminal.terminalId) {
