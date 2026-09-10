@@ -243,5 +243,12 @@ export async function exerciseCapabilityPredicateParity(db: Database) {
   await groupRepo.removeMember(files.group_id, member);
   await verify('no matching groups');
   expect((await policyRepo.resolveBranchAccess(branchIds[0], member)).capabilities).toEqual([]);
-  return { owner, member, admin, boardId: board.board_id, branchId: branchIds[0] };
+  return {
+    owner,
+    member,
+    admin,
+    boardId: board.board_id,
+    branchId: branchIds[0],
+    groupIds: [work.group_id, files.group_id],
+  };
 }
