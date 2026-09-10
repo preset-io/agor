@@ -6,6 +6,12 @@ heroImage: '/screenshots/marketing/agor-marketing-slack-thread.png'
 
 # Message Gateway
 
+Gateway channel lists and detail reads return saved metadata with secret-presence
+placeholders; they do not decrypt credentials or environment-variable values. A
+placeholder means a value is stored, not that it is valid. Connector execution
+and explicit connection tests load credentials separately and validate them when
+used.
+
 <div style={{ marginTop: '16px', marginBottom: '24px', padding: '16px 20px', border: '1px solid #4a90c0', borderRadius: '8px', backgroundColor: 'rgba(74, 144, 192, 0.08)' }}>
 
 **Security: Think Before Enabling**

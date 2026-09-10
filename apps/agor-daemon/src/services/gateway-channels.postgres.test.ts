@@ -343,6 +343,11 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       const readError = await runWithTenantContext(otherTenant, () =>
         serviceB.get(channel.id)
       ).catch((error) => error);
+      const foreignList = await runWithTenantContext(otherTenant, () => serviceB.find());
+      expect(Array.isArray(foreignList) ? foreignList : foreignList.data).toEqual([]);
+      const ownDisplay = await runWithTenantContext(ownerTenant, () => serviceB.get(channel.id));
+      expect(ownDisplay.config.bot_token).not.toBe(channel.config.bot_token);
+      expect(ownDisplay.config.bot_token).toBe('••••••••');
       const patchError = await runWithTenantContext(otherTenant, () =>
         serviceB.patch(channel.id, { config: { guild_id: '888888888888888888' } })
       ).catch((error) => error);

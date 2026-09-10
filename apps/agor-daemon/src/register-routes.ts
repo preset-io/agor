@@ -189,6 +189,7 @@ import {
 import { publicBoardCommentRepositionInput } from './services/board-comments.js';
 import type { GatewayService } from './services/gateway.js';
 import { createMCPCatalogConnectService } from './services/mcp-catalog-connect.js';
+import { createMCPCatalogStartSessionService } from './services/mcp-catalog-start-session.js';
 import { isMCPOAuthGrantAuthorizedForServer } from './services/mcp-oauth-grant-authority.js';
 import {
   ScheduleBusyError,
@@ -6099,7 +6100,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   // The daemon's global publisher (`utils/realtime-publish.ts`) has no path
   // allowlist: every service that emits `created` fans out to the whole
   // tenant's authenticated channel unless it says otherwise. That put a
-  // `{ mcp_server, session }` payload on every socket in the tenant, and now
+  // `mcp_server` payload on every socket in the tenant, and now
   // that an install can carry an API key in `mcp_server.auth.token`, this is a
   // second route out for it — one the `mcp-servers` redaction hook does not
   // cover, because that hook is registered on `mcp-servers` and this is a
@@ -6112,12 +6113,22 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   // next person to change what connect returns has no reason to know a
   // broadcast depends on it.
   //
-  // Nothing is lost by silence. The rows this creates are announced by their
-  // own services — `mcp-servers` emits `created`/`patched` for the install and
-  // `sessions` for the session, both through hooks that redact — so a client
-  // watching for either still learns about them, from the service that owns
-  // them.
+  // Nothing is lost by silence. `mcp-servers` emits `created`/`patched` for the
+  // install through its own redaction hooks, so clients still learn about it
+  // from the service that owns the row.
   app.service('mcp-catalog/connect').publish(() => []);
+
+  // Session creation is an explicit next step after a Catalog install. Keep
+  // the multi-service orchestration out of a request-wide transaction: each
+  // owning service enters its own tenant-scoped unit and runs its normal hooks.
+  registerLongAuthenticatedRoute(
+    app,
+    '/mcp-catalog/start-session',
+    createMCPCatalogStartSessionService(app),
+    { create: { role: ROLES.MEMBER, action: 'start sessions from MCP Catalog' } },
+    requireAuth
+  );
+  app.service('mcp-catalog/start-session').publish(() => []);
 
   // ============================================================================
   // Session env selections (v0.5 env-var-access)

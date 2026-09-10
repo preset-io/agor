@@ -11,6 +11,8 @@
 
 import type { Tool, ToolAnnotations } from '@modelcontextprotocol/server';
 
+import { MCP_EXECUTE_TOOL_NAME } from './register-tool-proxy.js';
+
 export interface ToolEntry {
   name: string;
   description: string;
@@ -66,7 +68,11 @@ export function formatDomainDescriptionsForInstructions(): string {
 }
 
 /** Tools always visible in `tools/list` even when search mode is enabled. */
-const ALWAYS_VISIBLE = new Set(['agor_search_tools', 'agor_get_tool_details', 'agor_execute_tool']);
+const ALWAYS_VISIBLE = new Set([
+  'agor_search_tools',
+  'agor_get_tool_details',
+  MCP_EXECUTE_TOOL_NAME,
+]);
 
 export class ToolRegistry {
   private tools: Map<string, ToolEntry> = new Map();

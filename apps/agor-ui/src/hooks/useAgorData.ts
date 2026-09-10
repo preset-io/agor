@@ -37,8 +37,6 @@ import {
 } from '@agor-live/client';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 
-const MCP_OAUTH_STATUS_POLL_INTERVAL_MS = 60_000;
-
 import {
   bumpFirstPaintMergeRevisions,
   bumpRevision,
@@ -416,9 +414,9 @@ export function useAgorData(
   const oauthStatusRequestGenerationRef = useRef(0);
 
   /**
-   * One latest-request-wins coordinator for initial hydration, polling, and
+   * One latest-request-wins coordinator for initial hydration and
    * realtime OAuth hints. A later request invalidates every earlier response,
-   * preventing an old poll from overwriting a newer disconnect/re-auth result.
+   * preventing an old read from overwriting a newer disconnect/re-auth result.
    */
   const refetchOAuthDurableState = useCallback(
     async (requestAuthorityScope: string, mcpServerId?: string): Promise<boolean> => {
@@ -662,17 +660,18 @@ export function useAgorData(
         ]);
         if (!authorityIsCurrent()) return false;
 
-        // Branches healed into first paint by a direct deep link — the URL
-        // session's branch, or a `/w/<id>` branch link. They seed `branchById`
+        // Branches healed into first paint by a `/w/<id>` branch link. They seed `branchById`
         // ahead of the board-scoped branch fetch so the displayed board can be
         // resolved and its target card paints immediately.
         const healedBranches: Branch[] = [];
 
         // Direct /s/<id>/ opens should work for archived sessions without broadening
         // the recent-session slice. If it missed the URL target, fetch just that
-        // session by ID/short ID. Its branch is only hydrated when it is still
-        // active; adding archived branches to `branchById` would make board-object
-        // joins render archived cards back onto active boards.
+        // session by ID/short ID. Do not await a separate branches.get here:
+        // sessions carry branch_board_id for board resolution, and the scoped
+        // branch batch / authority-fenced background hydration below loads active
+        // branches. Optional branch enrichment must not block session first paint.
+        // Older responses without branch_board_id use global background hydration.
         if (
           directSessionId &&
           !hasIdMatchingPrefix(directSessionId, sessionsList, (s) => s.session_id)
@@ -683,19 +682,6 @@ export function useAgorData(
               .get(directSessionId)) as Session;
             if (!sessionsList.some((s) => s.session_id === directSession.session_id)) {
               sessionsList.push(directSession);
-            }
-            if (!directSession.archived && directSession.branch_id) {
-              try {
-                const directBranch = (await client
-                  .service('branches')
-                  .get(directSession.branch_id)) as Branch;
-                if (!directBranch.archived) {
-                  healedBranches.push(directBranch);
-                }
-              } catch {
-                // The session can still open; it just won't be able to switch/recenter
-                // if the branch is inaccessible or gone.
-              }
             }
           } catch {
             // Leave normal URL resolution to report/not-heal unresolved session links.
@@ -1258,20 +1244,9 @@ export function useAgorData(
   // after teardown. Generation bump = cancellation; see `runHydration`.
   useEffect(() => () => cancelAllHydrations(), []);
 
-  // OAuth status is intentionally separate from generic MCP server reads so
-  // listing servers never loads credentials. Poll the non-secret status path
-  // as well as reacting to OAuth events; otherwise a grant that expires while
-  // a tab is idle could remain displayed as authenticated indefinitely.
-  useEffect(() => {
-    if (!client || !enabled || !authorityScopeKey) return;
-    const pollAuthorityScope = authorityScopeKey;
-    const interval = window.setInterval(() => {
-      void refetchOAuthDurableState(pollAuthorityScope).catch(() => {
-        // Transient disconnects are handled by the next poll/realtime refetch.
-      });
-    }, MCP_OAUTH_STATUS_POLL_INTERVAL_MS);
-    return () => window.clearInterval(interval);
-  }, [authorityScopeKey, client, enabled, refetchOAuthDurableState]);
+  // Auth badges reflect the last durable observation. Refresh on bootstrap,
+  // reconnect and explicit OAuth events, not on an idle-tab timer. Execution
+  // independently resolves credentials; this UI snapshot never authorizes use.
 
   // If the user navigates to /s/<id>/ after the initial active-session fetch,
   // load that one session by ID as well. This keeps direct links to archived

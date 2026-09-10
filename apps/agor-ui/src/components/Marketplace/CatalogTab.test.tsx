@@ -1,12 +1,8 @@
-import type { SessionID } from '@agor/core/types';
 import type { AgorClient, User } from '@agor-live/client';
-import { sessionPath } from '@agor-live/client';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { agorStore } from '../../store/agorStore';
-import { consumeMarketplacePromptSuggestion } from '../../utils/marketplaceOAuthPrompt';
-import { getPromptDraft } from '../../utils/promptDrafts';
 import { CatalogTab } from './CatalogTab';
 
 const mockNavigate = vi.hoisted(() => vi.fn());
@@ -237,7 +233,7 @@ async function findDrawer() {
 
 async function findNoAuthConnect(drawer: Awaited<ReturnType<typeof findDrawer>>) {
   await drawer.findByText('No account expected', undefined, { timeout: 5_000 });
-  const connect = drawer.getByText('Check & connect').closest('button');
+  const connect = drawer.getByText('Connect').closest('button');
   if (!(connect instanceof HTMLButtonElement)) throw new Error('Catalog connect button not found');
   return connect;
 }
@@ -268,7 +264,7 @@ beforeEach(() => {
   memberPolicyAnswer = { policy: 'allow_crud', can_configure: true };
   connectImpl = async () => ({
     mcp_server: { mcp_server_id: 'server-1' },
-    session: { session_id: SESSION_ID },
+
     starter_prompt: DEEPWIKI.starter_prompt,
     reused_existing_server: false,
   });
@@ -666,7 +662,7 @@ describe('connect', () => {
       releaseConnect = () =>
         resolve({
           mcp_server: { mcp_server_id: 'server-a' },
-          session: { session_id: SESSION_ID },
+
           starter_prompt: DEEPWIKI.starter_prompt,
           reused_existing_server: false,
         });
@@ -710,80 +706,10 @@ describe('connect', () => {
   // the AntD Form and its Selects twice; the drawer takes the entry as a prop
   // and states the same invariant in one mount.
 
-  it('connects by catalog key alone, retains drawer context, and stages the prompt', async () => {
-    const drawer = await openDrawer();
-    const connect = await findNoAuthConnect(drawer);
-    fireEvent.click(drawer.getByRole('checkbox'));
-    await waitFor(() => expect(connect).toBeEnabled());
-
-    fireEvent.click(connect);
-
-    await waitFor(() => expect(connectCalls).toHaveLength(1));
-    expect(connectCalls[0]).toEqual({
-      catalog_key: 'com.deepwiki/mcp',
-      branch_id: 'branch-1',
-      agentic_tool: 'claude-code',
-      // The exact text the drawer rendered, so the daemon can refuse a connect
-      // that skipped the disclosure or is holding a stale one.
-      acknowledged_disclosure: DEEPWIKI.permission_disclosure,
-    });
-
-    expect(await drawer.findByText('Connected and ready')).toBeInTheDocument();
-    expect(mockNavigate).not.toHaveBeenCalled();
-    expect(localStorage.getItem(`agor-draft-${SESSION_ID}`)).toBeNull();
-    expect(
-      consumeMarketplacePromptSuggestion(SESSION_ID, {
-        userId: DEFAULT_ADMIN.user_id,
-        role: DEFAULT_ADMIN.role,
-        authGeneration: 1,
-      })
-    ).toBe(DEEPWIKI.starter_prompt);
-    expect(localStorage.getItem(`agor-marketplace-branch:${DEFAULT_ADMIN.user_id}`)).toBe(
-      'branch-1'
-    );
-    const openSession = drawer.getByRole('button', { name: 'Open session' });
-    await waitFor(() => expect(openSession).toHaveFocus());
-    fireEvent.click(openSession);
-    expect(mockNavigate).toHaveBeenCalledWith(sessionPath(SESSION_ID as SessionID));
-  });
-
-  /**
-   * A new OAuth install with no reusable grant lands without credentials. A
-   * starter prompt is suggested to exercise the server it ships with, so
-   * presenting one here would invite a tool-less answer.
-   *
-   * These pin the split. The automatic provider popup runs alongside the new,
-   * recoverable session. Its notice, warning MCP badge, and server pill remain
-   * available if the popup is cancelled; only the loaded gun is withheld.
-   */
-  async function connectAndLand(mcpServer: Record<string, unknown>) {
-    connectImpl = async () => ({
-      mcp_server: mcpServer,
-      session: { session_id: SESSION_ID },
-      starter_prompt: DEEPWIKI.starter_prompt,
-      reused_existing_server: false,
-    });
-    const drawer = await openDrawer();
-    const connect = await findNoAuthConnect(drawer);
-    const checkbox = drawer
-      .getByText('I understand what this server can access')
-      .closest('label')
-      ?.querySelector('input');
-    if (!(checkbox instanceof HTMLInputElement)) throw new Error('Catalog consent not found');
-    fireEvent.click(checkbox);
-    await waitFor(() => expect(connect).toBeEnabled());
-    fireEvent.click(connect);
-    const openSession = (await drawer.findByText('Open session')).closest('button');
-    if (!(openSession instanceof HTMLButtonElement))
-      throw new Error('Open session button not found');
-    fireEvent.click(openSession);
-    expect(mockNavigate).toHaveBeenCalledWith(sessionPath(SESSION_ID as SessionID));
-  }
-
   async function connectOAuth() {
     connectImpl = async () => ({
       mcp_server: { mcp_server_id: 'server-1', auth: { type: 'oauth' } },
-      session: { session_id: SESSION_ID, title: 'Try Linear' },
+
       starter_prompt: LINEAR.starter_prompt,
       reused_existing_server: false,
     });
@@ -791,10 +717,10 @@ describe('connect', () => {
     fireEvent.click(await findCard('Linear'));
     const drawer = await findDrawer();
     fireEvent.click(drawer.getByRole('checkbox'));
-    const connect = drawer.getByRole('button', { name: /Connect with Linear/ });
+    const connect = drawer.getByRole('button', { name: 'Connect' });
     await waitFor(() => expect(connect).toBeEnabled());
     fireEvent.click(connect);
-    expect(await drawer.findByText('Sign-in pending')).toBeInTheDocument();
+    expect(await drawer.findByText('Connection status: Sign-in pending.')).toBeInTheDocument();
     return drawer;
   }
 
@@ -811,19 +737,19 @@ describe('connect', () => {
         'Sign-in could not start automatically. Continue from MCP settings in the new session.'
       )
     ).not.toBeInTheDocument();
-    expect(drawer.queryByText('Connected and ready')).not.toBeInTheDocument();
+    expect(drawer.queryByText('Connection status: Connected and ready.')).not.toBeInTheDocument();
   });
 
   it('requires a fresh user gesture when the live probe surprises no-auth readiness with OAuth', async () => {
     connectImpl = async () => ({
       mcp_server: { mcp_server_id: 'server-1', auth: { type: 'oauth' } },
-      session: { session_id: SESSION_ID, title: 'Try DeepWiki' },
+
       starter_prompt: DEEPWIKI.starter_prompt,
       reused_existing_server: false,
     });
     const drawer = await openDrawer();
     await drawer.findByText('No account expected');
-    const connect = drawer.getByText('Check & connect').closest('button');
+    const connect = drawer.getByText('Connect').closest('button');
     const checkbox = drawer
       .getByText('I understand what this server can access')
       .closest('label')
@@ -834,16 +760,18 @@ describe('connect', () => {
     vi.mocked(window.open).mockClear();
 
     fireEvent.click(connect);
-    expect(await drawer.findByText('Sign in to continue')).toBeInTheDocument();
-    expect(drawer.getByText(/no sign-in is pending yet/i)).toBeInTheDocument();
+    expect(
+      await drawer.findByText('Connection status: Continue to the provider to sign in.')
+    ).toBeInTheDocument();
+    expect(drawer.getByText(/Continue sign-in now/i)).toBeInTheDocument();
     expect(drawer.queryByText('Sign-in pending')).not.toBeInTheDocument();
     expect(oauthStartCalls).toHaveLength(0);
     expect(window.open).not.toHaveBeenCalled();
 
-    const continueButton = drawer.getByText('Continue to provider').closest('button');
+    const continueButton = drawer.getByText('Continue sign-in').closest('button');
     if (!continueButton) throw new Error('Continue to provider button not found');
     fireEvent.click(continueButton);
-    expect(await drawer.findByText('Sign-in pending')).toBeInTheDocument();
+    expect(await drawer.findByText('Connection status: Sign-in pending.')).toBeInTheDocument();
     expect(window.open).toHaveBeenCalledTimes(1);
     expect(oauthStartCalls).toEqual([{ mcp_server_id: 'server-1' }]);
   });
@@ -861,7 +789,7 @@ describe('connect', () => {
       });
       await Promise.resolve();
     });
-    expect(drawer.getByText('Sign-in pending')).toBeInTheDocument();
+    expect(drawer.getByText('Connection status: Sign-in pending.')).toBeInTheDocument();
   });
 
   it('shows OAuth success only after completion and a durable credential read agree', async () => {
@@ -884,7 +812,7 @@ describe('connect', () => {
         });
       });
     });
-    expect(await drawer.findByText('Connected and ready')).toBeInTheDocument();
+    expect(await drawer.findByText('Connection status: Connected and ready.')).toBeInTheDocument();
   });
 
   it('shows an authoritative OAuth failure without claiming the session was removed', async () => {
@@ -901,13 +829,15 @@ describe('connect', () => {
         });
       })
     );
-    expect(drawer.getByText('Sign-in pending')).toBeInTheDocument();
+    expect(drawer.getByText('Connection status: Sign-in pending.')).toBeInTheDocument();
     expect(drawer.queryByText('Sign-in not completed')).not.toBeInTheDocument();
     await act(async () => {
       completeAttemptRead({ status: 'failed', mcp_server_id: 'server-1' });
     });
-    expect(await drawer.findByText('Sign-in not completed')).toBeInTheDocument();
-    expect(drawer.getByRole('button', { name: 'Open session' })).toBeEnabled();
+    expect(
+      await drawer.findByText('Connection status: Sign-in not completed.')
+    ).toBeInTheDocument();
+    expect(drawer.getByRole('button', { name: 'Start new session' })).toBeEnabled();
   });
 
   it('renders an ambiguous durable OAuth result as needing verification', async () => {
@@ -920,65 +850,11 @@ describe('connect', () => {
       completeAttemptRead({ status: 'ambiguous', mcp_server_id: 'server-1' });
     });
 
-    expect(await drawer.findByText('Sign-in needs verification')).toBeInTheDocument();
-    expect(drawer.queryByText('Sign-in not completed')).not.toBeInTheDocument();
-    expect(drawer.getByRole('button', { name: 'Open session' })).toBeEnabled();
-  });
-
-  it('does not arm the composer when the install still needs signing in', async () => {
-    await connectAndLand({ mcp_server_id: 'server-1', auth: { type: 'oauth' } });
-
-    expect(getPromptDraft(CURRENT_USER_ID, SESSION_ID)).toBe('');
-  });
-
-  it('lands in the recoverable session while the automatic popup signs in', async () => {
-    await connectAndLand({ mcp_server_id: 'server-1', auth: { type: 'oauth' } });
-
-    // Withholding the prompt must not withhold the session: the MCP badge and
-    // the server recovery controls are both inside it if the popup is cancelled.
-    expect(mockNavigate).toHaveBeenCalledWith(sessionPath(SESSION_ID as SessionID));
-    expect(connectCalls).toHaveLength(1);
-  });
-
-  it('suggests the starter prompt when a reused install already holds a live token', async () => {
-    // The dedicated non-secret status resource, rather than a credential on
-    // the generic server read, is the UI's authentication authority.
-    act(() => {
-      agorStore.getState().applyMaps((prev) => ({
-        ...prev,
-        userAuthenticatedMcpServerIds: new Set(['server-1']),
-      }));
-    });
-    await connectAndLand({
-      mcp_server_id: 'server-1',
-      auth: {
-        type: 'oauth',
-        oauth_access_token: '••••••••',
-        oauth_token_expires_at: 4102444800000,
-      },
-    });
-
-    expect(localStorage.getItem(`agor-draft-${SESSION_ID}`)).toBeNull();
     expect(
-      consumeMarketplacePromptSuggestion(SESSION_ID, {
-        userId: DEFAULT_ADMIN.user_id,
-        role: DEFAULT_ADMIN.role,
-        authGeneration: 1,
-      })
-    ).toBe(DEEPWIKI.starter_prompt);
-  });
-
-  it('withholds the prompt when the token the install carries has expired', async () => {
-    await connectAndLand({
-      mcp_server_id: 'server-1',
-      auth: {
-        type: 'oauth',
-        oauth_access_token: '••••••••',
-        oauth_token_expires_at: 1,
-      },
-    });
-
-    expect(getPromptDraft(CURRENT_USER_ID, SESSION_ID)).toBe('');
+      await drawer.findByText('Connection status: Sign-in needs verification.')
+    ).toBeInTheDocument();
+    expect(drawer.queryByText('Sign-in not completed')).not.toBeInTheDocument();
+    expect(drawer.getByRole('button', { name: 'Start new session' })).toBeEnabled();
   });
 
   it('keeps the drawer open and reports why when connect fails', async () => {

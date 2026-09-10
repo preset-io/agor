@@ -8,6 +8,7 @@
 
 import type {
   AgenticToolName,
+  BranchID,
   MCPCatalogCategory,
   MCPCatalogConnectResult,
   MCPCatalogCredentialRequirement,
@@ -25,8 +26,8 @@ import { useAuthorityOperationGuard } from '@/hooks/useAuthorityOperationGuard';
 import { useMcpMemberPolicy } from '../../hooks/useMcpMemberPolicy';
 import { useAgorStore } from '../../store/agorStore';
 import { selectUserAuthenticatedMcpServerIds } from '../../store/selectors';
-import { saveMarketplacePromptSuggestion } from '../../utils/marketplaceOAuthPrompt';
 import { mcpServerNeedsAuth } from '../../utils/mcpAuth';
+import { stagePromptDraftSeed } from '../../utils/promptDrafts';
 import { type MCPServerCapabilityContext, policyPendingState } from '../MCPServer/memberPolicy';
 import { CatalogCard } from './CatalogCard';
 import { CatalogDetailDrawer } from './CatalogDetailDrawer';
@@ -46,11 +47,7 @@ import {
   isFilterActive,
   useCatalogSearch,
 } from './useCatalogSearch';
-import {
-  getLastConnectBranchId,
-  rememberConnectBranchId,
-  useConnectTargets,
-} from './useConnectTargets';
+import { useSessionTeammates } from './useSessionTeammates';
 
 const GRID_SPANS = { xs: 24, sm: 12, lg: 8, xxl: 6 } as const;
 
@@ -148,16 +145,20 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
     []
   );
   const [connecting, setConnecting] = useState(false);
+  const [sessionSetupRequested, setSessionSetupRequested] = useState(false);
+  const [startingSession, setStartingSession] = useState(false);
+  const [startSessionError, setStartSessionError] = useState<string | null>(null);
   const [connectError, setConnectError] = useState<string | null>(null);
   const [connectSuccess, setConnectSuccess] = useState<{
-    sessionId: SessionID;
-    sessionTitle?: string;
-    branchName?: string;
+    catalogKey: string;
+    serverId: string;
+    starterPrompt?: string;
     authentication: 'ready' | 'action_required' | 'pending' | 'failed' | 'unknown';
     reusedExistingServer: boolean;
-    serverId?: string;
     oauthAttemptId?: string;
   } | null>(null);
+  const interactionEpoch = useRef(0);
+  const startingSessionRef = useRef(false);
   const connectSuccessRef = useRef(connectSuccess);
   connectSuccessRef.current = connectSuccess;
   // A live probe can discover OAuth after advisory readiness said an endpoint
@@ -176,10 +177,15 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
 
   useEffect(() => {
     if (active) return;
+    interactionEpoch.current += 1;
+    startingSessionRef.current = false;
     drawerOpen.current = false;
     drawerTrigger.current = null;
     setSelected(null);
     setConnecting(false);
+    setStartingSession(false);
+    setSessionSetupRequested(false);
+    setStartSessionError(null);
     setConnectError(null);
     setConnectSuccess(null);
     setKeyRequirement(null);
@@ -192,16 +198,24 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
     filters,
     page
   );
-  const {
-    branches,
-    loading: branchesLoading,
-    error: branchesError,
-  } = useConnectTargets(client, connected && selected !== null);
+  const sessionTeammates = useSessionTeammates(
+    client,
+    active && connected && !connectionPending && sessionSetupRequested && connectSuccess !== null,
+    currentUser ? `${currentUser.user_id}:${authGeneration}` : undefined
+  );
   // `connected` deliberately stays true during disconnect grace, while a token
   // replacement keeps the same client object. Neither may preserve an enabled
   // action: capability reads are scoped to the authenticated generation and
   // connectionReady closes synchronously for both transitions.
   const connectionReady = connected && !connectionPending;
+  // A lost authentication generation invalidates in-flight work, but must not
+  // leave the next generation's controls permanently spinning.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: an auth generation is an operation boundary
+  useEffect(() => {
+    startingSessionRef.current = false;
+    setStartingSession(false);
+    setConnecting(false);
+  }, [authGeneration, connectionReady]);
   const memberPolicy = useMcpMemberPolicy(client, {
     connectionReady,
     currentUser,
@@ -226,7 +240,7 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
     ]
   );
   const operationGuard = useAuthorityOperationGuard(
-    connectionReady && currentUser?.user_id && currentUser.role && !policyPending
+    active && connectionReady && currentUser?.user_id && currentUser.role && !policyPending
       ? [
           currentUser.user_id,
           currentUser.role,
@@ -247,7 +261,12 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
 
   const confirmOAuthGrant = useCallback(
     async (attemptId: string, serverId: string) => {
-      const operation = operationGuard.begin();
+      const authority = operationGuard.begin();
+      const epoch = interactionEpoch.current;
+      const operation = {
+        isCurrent: () =>
+          authority.isCurrent() && drawerOpen.current && interactionEpoch.current === epoch,
+      };
       if (!client || !operation.isCurrent()) return false;
       try {
         const refreshed = await refreshMarketplaceOverview?.();
@@ -383,11 +402,17 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
   );
 
   const openEntry = useCallback((entry: MCPCatalogEntry) => {
+    interactionEpoch.current += 1;
+    startingSessionRef.current = false;
     drawerOpen.current = true;
     drawerTrigger.current =
       document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    setConnecting(false);
     setConnectError(null);
     setConnectSuccess(null);
+    setStartSessionError(null);
+    setStartingSession(false);
+    setSessionSetupRequested(false);
     surpriseOAuthResultRef.current = null;
     // A requirement learned about one entry says nothing about the next.
     setKeyRequirement(null);
@@ -402,8 +427,14 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
   }, []);
 
   const closeDrawer = useCallback(() => {
+    interactionEpoch.current += 1;
+    startingSessionRef.current = false;
     drawerOpen.current = false;
     const trigger = drawerTrigger.current;
+    setConnecting(false);
+    setStartingSession(false);
+    setSessionSetupRequested(false);
+    setStartSessionError(null);
     setKeyRequirement(null);
     setSelected(null);
     setConnectError(null);
@@ -442,19 +473,20 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
 
   const handleConnect = useCallback(
     async ({
-      branchId,
-      agenticTool,
       acknowledgedDisclosure,
       bearerToken,
       oauthPopup,
     }: {
-      branchId: string;
-      agenticTool: AgenticToolName;
       acknowledgedDisclosure: string;
       bearerToken?: string;
       oauthPopup?: MarketplaceOAuthPopup;
     }) => {
-      const operation = operationGuard.begin();
+      const authority = operationGuard.begin();
+      const epoch = interactionEpoch.current;
+      const operation = {
+        isCurrent: () =>
+          authority.isCurrent() && drawerOpen.current && interactionEpoch.current === epoch,
+      };
       if (!selected || !client || !operation.isCurrent()) {
         oauthPopup?.close();
         return;
@@ -464,40 +496,18 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
       try {
         const result = await client.service('mcp-catalog/connect').create({
           catalog_key: selected.name,
-          branch_id: branchId,
-          agentic_tool: agenticTool,
           acknowledged_disclosure: acknowledgedDisclosure,
-          // Spread rather than sent as `undefined`: the request carries a key
-          // or it carries no such field, and the daemon reads absence as "the
-          // user supplied nothing" rather than having to unpick which kind of
-          // empty arrived.
           ...(bearerToken ? { bearer_token: bearerToken } : {}),
         });
         if (!operation.isCurrent()) {
           oauthPopup?.close();
           return;
         }
-        rememberConnectBranchId(currentUser?.user_id, branchId);
-        // Present the starter prompt only once this server can answer it. It is
-        // a tab-local suggestion, not an automatic write into the cross-tab
-        // composer draft. A new OAuth install without a reusable grant instead
-        // lands on the recoverable authentication notice and warning MCP badge.
+
         const needsAuthentication = mcpServerNeedsAuth(
           result.mcp_server,
           userAuthenticatedMcpServerIds
         );
-        if (result.starter_prompt && !needsAuthentication) {
-          saveMarketplacePromptSuggestion({
-            sessionId: result.session.session_id,
-            prompt: result.starter_prompt,
-            authority: {
-              userId: currentUser!.user_id,
-              role: currentUser!.role,
-              authGeneration,
-            },
-          });
-        }
-
         let authentication: 'ready' | 'action_required' | 'pending' | 'failed' | 'unknown' =
           'ready';
         let oauthAttemptId: string | undefined;
@@ -505,17 +515,12 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
           if (oauthPopup && result.mcp_server.auth?.type === 'oauth') {
             try {
               const launched = await launchMarketplaceOAuth(client, result, oauthPopup, {
-                authority: {
-                  userId: currentUser!.user_id,
-                  role: currentUser!.role,
-                  authGeneration,
-                },
                 isCurrent: operation.isCurrent,
               });
               if (!launched && operation.isCurrent()) {
                 authentication = 'failed';
                 message.warning(
-                  'Sign-in could not start automatically. Continue from MCP settings in the new session.'
+                  'Sign-in could not start automatically. Retry from My Servers when ready.'
                 );
               }
               oauthAttemptId = launched?.attemptId;
@@ -525,23 +530,16 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
                 return;
               }
             } catch (cause) {
-              // The server and session now exist. Land in the recoverable
-              // session rather than pretending the whole Connect failed.
               oauthPopup.close();
               if (!operation.isCurrent()) return;
               authentication = 'failed';
               message.error(
                 cause instanceof Error
                   ? cause.message
-                  : 'Sign-in could not open. Continue from MCP settings in the new session.'
+                  : 'Sign-in could not open. Retry from My Servers when ready.'
               );
             }
           } else if (result.mcp_server.auth?.type === 'oauth') {
-            // Readiness is advisory. A formerly-open endpoint can race to
-            // OAuth after the click that did not pre-open a popup. Do not call
-            // that pending: there is no window or durable attempt yet. Retain
-            // the redacted result so a new, explicit user gesture can create
-            // both safely.
             authentication = 'action_required';
             surpriseOAuthResultRef.current = result;
           } else {
@@ -551,51 +549,35 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
         } else {
           oauthPopup?.close();
         }
-        const connectedBranch = branches.find((branch) => branch.branch_id === branchId);
         setConnectSuccess({
-          sessionId: result.session.session_id,
-          ...(result.session.title ? { sessionTitle: result.session.title } : {}),
-          ...(connectedBranch ? { branchName: connectedBranch.name as string } : {}),
+          catalogKey: selected.name,
+          serverId: result.mcp_server.mcp_server_id,
+          ...(result.starter_prompt ? { starterPrompt: result.starter_prompt } : {}),
           authentication,
           reusedExistingServer: result.reused_existing_server,
-          ...(needsAuthentication
-            ? {
-                serverId: result.mcp_server.mcp_server_id,
-                ...(oauthAttemptId ? { oauthAttemptId } : {}),
-              }
-            : {}),
+          ...(oauthAttemptId ? { oauthAttemptId } : {}),
         });
       } catch (err: unknown) {
         oauthPopup?.close();
         if (!operation.isCurrent()) return;
         setConnectError(err instanceof Error ? err.message : 'Could not connect this server');
-        // The catalog file is presentational; the endpoint decides. When those
-        // disagree the daemon says so on the refusal, and taking it here is
-        // what turns a dead end — a form demanding a key the endpoint no longer
-        // wants, or offering none where it now does — into one more attempt.
-        // Left alone when the refusal carries no requirement, so an unrelated
-        // failure does not reshape the form.
         const requirement = readCredentialRequirement(err);
         if (requirement) setKeyRequirement(requirement);
       } finally {
         if (operation.isCurrent()) setConnecting(false);
       }
     },
-    [
-      client,
-      authGeneration,
-      branches,
-      currentUser,
-      currentUser?.user_id,
-      operationGuard,
-      selected,
-      userAuthenticatedMcpServerIds,
-    ]
+    [client, operationGuard, selected, userAuthenticatedMcpServerIds]
   );
 
   const continueSurpriseOAuth = useCallback(
     async (oauthPopup: MarketplaceOAuthPopup) => {
-      const operation = operationGuard.begin();
+      const authority = operationGuard.begin();
+      const epoch = interactionEpoch.current;
+      const operation = {
+        isCurrent: () =>
+          authority.isCurrent() && drawerOpen.current && interactionEpoch.current === epoch,
+      };
       const result = surpriseOAuthResultRef.current;
       const current = connectSuccessRef.current;
       if (
@@ -603,7 +585,6 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
         !result ||
         current?.authentication !== 'action_required' ||
         current.serverId !== result.mcp_server.mcp_server_id ||
-        current.sessionId !== result.session.session_id ||
         !operation.isCurrent()
       ) {
         oauthPopup.close();
@@ -613,11 +594,6 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
       setConnecting(true);
       try {
         const launched = await launchMarketplaceOAuth(client, result, oauthPopup, {
-          authority: {
-            userId: currentUser!.user_id,
-            role: currentUser!.role,
-            authGeneration,
-          },
           isCurrent: operation.isCurrent,
         });
         if (!operation.isCurrent()) {
@@ -650,13 +626,69 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
         message.error(
           cause instanceof Error
             ? cause.message
-            : 'Sign-in could not open. Continue from MCP settings in the new session.'
+            : 'Sign-in could not open. Retry from My Servers when ready.'
         );
       } finally {
         if (operation.isCurrent()) setConnecting(false);
       }
     },
-    [authGeneration, client, currentUser, operationGuard]
+    [client, operationGuard]
+  );
+
+  const handleStartSession = useCallback(
+    async ({
+      teammateBranchId,
+      agenticTool,
+    }: {
+      teammateBranchId: BranchID;
+      agenticTool: AgenticToolName;
+    }) => {
+      const authority = operationGuard.begin();
+      const epoch = interactionEpoch.current;
+      const operation = {
+        isCurrent: () =>
+          authority.isCurrent() && drawerOpen.current && interactionEpoch.current === epoch,
+      };
+      const current = connectSuccessRef.current;
+      if (
+        !client ||
+        !currentUser ||
+        !current ||
+        !operation.isCurrent() ||
+        startingSessionRef.current
+      )
+        return;
+      startingSessionRef.current = true;
+      setStartingSession(true);
+      setStartSessionError(null);
+      try {
+        const result = await client.service('mcp-catalog/start-session').create({
+          catalog_key: current.catalogKey,
+          mcp_server_id: current.serverId,
+          teammate_branch_id: teammateBranchId,
+          agentic_tool: agenticTool,
+        });
+        if (!operation.isCurrent()) return;
+        stagePromptDraftSeed(
+          currentUser.user_id,
+          result.session.session_id,
+          result.starter_prompt ?? ''
+        );
+        if (onOpenSession) onOpenSession(result.session.session_id);
+        else navigate(sessionPath(result.session.session_id));
+      } catch (cause) {
+        if (!operation.isCurrent()) return;
+        setStartSessionError(
+          cause instanceof Error ? cause.message : 'Could not start a session with this server'
+        );
+      } finally {
+        if (operation.isCurrent()) {
+          startingSessionRef.current = false;
+          setStartingSession(false);
+        }
+      }
+    },
+    [client, currentUser, navigate, onOpenSession, operationGuard]
   );
 
   return (
@@ -740,10 +772,12 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
         open={selected !== null}
         onClose={closeDrawer}
         onAfterOpenChange={handleDrawerOpenChange}
-        branches={branches}
-        branchesLoading={branchesLoading}
-        branchesError={branchesError}
-        defaultBranchId={getLastConnectBranchId(currentUser?.user_id)}
+        teammates={sessionTeammates.teammates}
+        teammatesLoading={sessionTeammates.loading}
+        teammatesError={sessionTeammates.error}
+        defaultTeammateId={sessionTeammates.preferredTeammateId}
+        startingSession={startingSession}
+        startSessionError={startSessionError}
         connecting={connecting}
         connectError={connectError}
         credentialRequirement={keyRequirement}
@@ -754,7 +788,9 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
         readinessLoading={readiness.loading}
         readinessError={readiness.error}
         success={connectSuccess}
-        onOpenSession={onOpenSession ?? ((sessionId) => navigate(sessionPath(sessionId)))}
+        onKeepBrowsing={closeDrawer}
+        onBeginSessionSetup={() => setSessionSetupRequested(true)}
+        onStartSession={handleStartSession}
         onContinueOAuth={continueSurpriseOAuth}
         onConnect={handleConnect}
       />

@@ -3596,8 +3596,6 @@ describe('SQLite saved-row OAuth authority', () => {
     const result = await createRegisteredMCPCatalogConnectService(harness.app, harness.db).create(
       {
         catalog_key: entry.name,
-        branch_id: 'sqlite-binding-branch',
-        agentic_tool: 'claude-code',
         acknowledged_disclosure: entry.permission_disclosure,
       },
       { ...paramsFor(harness), provider: 'rest' }

@@ -141,8 +141,6 @@ const ENTRY = {
 } as unknown as MCPCatalogEntry;
 const REQUEST = {
   catalog_key: ENTRY.name,
-  branch_id: 'branch-postgres-test',
-  agentic_tool: 'claude-code' as const,
   acknowledged_disclosure: ENTRY.permission_disclosure,
 };
 const CREDENTIAL_ENTRY = {

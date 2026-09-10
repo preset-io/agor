@@ -13,7 +13,7 @@ import {
   runWithTenantDatabaseScope,
   type TenantScopeAwareDatabase,
 } from '@agor/core/db';
-import { BadRequest, Forbidden, NotAuthenticated } from '@agor/core/feathers';
+import { BadRequest, Forbidden, NotAuthenticated, NotFound } from '@agor/core/feathers';
 import {
   evaluateDiscordConnectionVerification,
   getConnector,
@@ -219,12 +219,22 @@ export class GatewayChannelsService extends DrizzleService<
     });
   }
 
+  protected async fetchData(): Promise<GatewayChannel[]> {
+    return this.channelRepo.findDisplayAll();
+  }
+
   async find(params?: Params) {
     return this.withTenantDatabase(params, () => super.find(params));
   }
 
   async get(id: string, params?: Params) {
-    return this.withTenantDatabase(params, () => super.get(id, params));
+    return this.withTenantDatabase(params, async () => {
+      const channel = await this.channelRepo.findDisplayById(id);
+      if (!channel || !this.rowBelongsToTenant(channel, this.getTenant(params))) {
+        throw new NotFound(`GatewayChannel not found: ${id}`);
+      }
+      return channel;
+    });
   }
 
   async patch(id: NullableId, data: GatewayChannelPatchData, params?: Params) {
@@ -395,7 +405,14 @@ export class GatewayChannelsService extends DrizzleService<
       throw new Forbidden('Executor token is not scoped to this Slack upload');
     }
 
-    const gatewayChannel = (await this.get(data.gatewayChannelId, params)) as GatewayChannel;
+    // This trusted execution path needs actual connector credentials, unlike
+    // public list/detail reads. Finish the DB phase before calling Slack.
+    const gatewayChannel = await this.withTenantDatabase(params, () =>
+      this.channelRepo.findById(data.gatewayChannelId)
+    );
+    if (!gatewayChannel || !this.rowBelongsToTenant(gatewayChannel, this.getTenant(params))) {
+      throw new NotFound('Gateway channel not found');
+    }
     if (!gatewayChannel.enabled) {
       throw new Forbidden('Gateway channel is disabled');
     }

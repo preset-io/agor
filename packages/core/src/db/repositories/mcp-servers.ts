@@ -610,6 +610,37 @@ export class MCPServerRepository
     }
   }
 
+  /** Tenant-scoped batch read; callers must still enforce per-user visibility. */
+  async findByIds(ids: readonly MCPServerID[]): Promise<MCPServer[]> {
+    try {
+      const uniqueIds = [...new Set(ids)];
+      const rows: MCPServerRow[] = [];
+      for (
+        let offset = 0;
+        offset < uniqueIds.length;
+        offset += MCPServerRepository.AUTHORITY_READ_BATCH_SIZE
+      ) {
+        const batch = uniqueIds.slice(
+          offset,
+          offset + MCPServerRepository.AUTHORITY_READ_BATCH_SIZE
+        );
+        if (batch.length === 0) continue;
+        rows.push(
+          ...(await select(this.db)
+            .from(mcpServers)
+            .where(inArray(mcpServers.mcp_server_id, batch))
+            .all())
+        );
+      }
+      return rows.map((row) => this.rowToMCPServer(row));
+    } catch (error) {
+      throw new RepositoryError(
+        `Failed to find MCP servers by IDs: ${error instanceof Error ? error.message : String(error)}`,
+        error
+      );
+    }
+  }
+
   /**
    * Find all MCP servers
    */

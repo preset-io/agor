@@ -1,9 +1,8 @@
 /**
- * Marketplace connect: install one catalog entry and hand back a session that
- * can use it.
+ * MCP Catalog connect: install one catalog entry for the caller.
  *
- * The request names a catalog entry, where the session should live, and — for
- * an endpoint that asks for one — the caller's own bearer access token. Nothing else. URL,
+ * The request names a catalog entry and — for an endpoint that asks for one —
+ * the caller's own bearer access token. Nothing else. URL,
  * transport, and the kind of auth are read from the catalog entry and the live
  * endpoint. Accepting those from the client would make this a way to register
  * any server at all without passing the `mcp_member_policy` gate that guards
@@ -14,10 +13,9 @@
  * already points.
  *
  * It also does not re-implement that gate. The server row is created through
- * the `mcp-servers` service and the session through `sessions`, with the
- * caller's own params, so policy, ownership stamping, the remote-transport
- * restriction, branch permissions, and execution identity all resolve exactly once,
- * in the places that already own them. The key rides along on that same row as
+ * the `mcp-servers` service with the caller's own params, so policy, ownership
+ * stamping, and the remote-transport restriction resolve exactly once in the
+ * place that already owns them. The key rides along on that same row as
  * `auth.token`, which is where every bearer credential in Agor lives — so it
  * inherits the read-path redaction, the ownership rules, and the write
  * authorizer without any of them learning that the marketplace exists.
@@ -48,7 +46,6 @@ import type {
   MCPCatalogServerCandidate,
   MCPServer,
   MCPServerID,
-  Session,
   UserID,
 } from '@agor/core/types';
 import { catalogDisplayName, catalogServerSlug, isCanonicalFullUuid } from '@agor/core/types';
@@ -916,8 +913,6 @@ export function createMCPCatalogConnectService(
   return {
     async create(data, params) {
       if (!data?.catalog_key) throw new BadRequest('catalog_key is required');
-      if (!data.branch_id) throw new BadRequest('branch_id is required');
-      if (!data.agentic_tool) throw new BadRequest('agentic_tool is required');
 
       let entry: MCPCatalogEntry;
       try {
@@ -987,8 +982,9 @@ export function createMCPCatalogConnectService(
         transport: catalogServerTransport(entry),
         url: entry.remote_url,
         auth,
-        // Session scope: an install is for the session it launched, not
-        // silently for every session its owner will ever start.
+        // Session scope keeps this caller-owned install out of the global
+        // defaults. It remains unattached until the caller explicitly starts
+        // or configures a session with it.
         scope: 'session',
         // Not `user`: nobody typed this configuration. It came from the
         // catalog, and `catalog_entry_name` below records which entry — the
@@ -1039,57 +1035,10 @@ export function createMCPCatalogConnectService(
           ? mcpServer.auth.oauth_compatibility_mode
           : undefined;
 
-      // Four writes across three services, so there is no transaction to lean
-      // on. What this request created, it takes back on failure: a server or a
-      // session nobody can see is configuration the user never asked to keep
-      // and cannot find to remove, and a retry that leaves one behind each time
-      // is worse than the failure it followed. A reused install is somebody's
-      // existing state and is left alone — see the `catch`.
-      // Held outside the `try` so the cleanup below can see it. A failure at
-      // the attachment or the rotation happens after this exists, and what is
-      // left behind is the difference between a retry that converges and one
-      // that adds a session each time.
-      let session: Session | undefined;
+      // Finalize only after the durable install exists. Connecting no longer
+      // creates or attaches a session: those are a separate, explicit next
+      // step owned by `mcp-catalog/start-session`.
       try {
-        session = (await service('sessions').create(
-          {
-            branch_id: data.branch_id,
-            agentic_tool: data.agentic_tool,
-            status: 'idle',
-            title: catalogDisplayName(entry),
-          },
-          params
-        )) as Session;
-
-        await service('/sessions/:id/mcp-servers').create(
-          { mcpServerId: mcpServer.mcp_server_id },
-          { ...params, route: { id: session.session_id } }
-        );
-
-        // Rotation is last, after everything that can fail has succeeded.
-        //
-        // It is the one write in this method that changes state a *previous*
-        // connect established, and it is not undoable in any way worth trusting:
-        // there is no transaction here, so undoing it means a second write that
-        // can itself fail. Ordering removes the need. Done earlier, a connect
-        // whose session or attachment then failed told the caller it had failed
-        // while having already replaced their working key — every session still
-        // relying on the old one broken, and nothing anywhere saying so.
-        //
-        // Nothing between here and the top needs the new key: the session is a
-        // row, the attachment is a pair of ids, and neither opens the server's
-        // transport. So the only thing later ordering costs is the case where
-        // this patch itself fails — and that leaves the install exactly as its
-        // owner had it, working with the key it already held, beside a session
-        // the caller was told they did not get. That is a state the product can
-        // survive and a user can retry out of, which the alternative is not.
-        // Reconciliation, like credential rotation, overwrites state from a
-        // previous connect and therefore happens only after the new session
-        // and attachment are established. If either earlier write fails, the
-        // reused row has not been touched; cleanup can remove only this
-        // request's new session. One final patch applies drift repair and the
-        // newly validated credential together, so there is no intermediate
-        // enabled/rerouted row carrying the old auth policy or secret.
         const finalized = Boolean(
           connectGeneration ||
             (reusedExisting && (needsReconciliation || carriesRowLevelSecret(auth)))
@@ -1116,7 +1065,6 @@ export function createMCPCatalogConnectService(
 
         return {
           mcp_server: installed,
-          session,
           starter_prompt: entry.starter_prompt,
           reused_existing_server: reusedExisting,
           reuse_kind: selection?.kind ?? 'new_catalog_install',
@@ -1134,51 +1082,11 @@ export function createMCPCatalogConnectService(
               : undefined,
         };
       } catch (error) {
-        // Take back everything this request created, so a retry lands where the
-        // first attempt meant to rather than beside it.
-        //
-        // Ordering the writes cannot fix this on its own. There are four writes
-        // across three services and no transaction, so every ordering leaves
-        // some window open — moving the rotation to the end closed the one where
-        // a failed connect had already replaced a working key, and opened one
-        // where a failed rotation left a session and an attachment the caller
-        // was told they did not get. The second attempt then made another, and
-        // the first stayed pinned to the old-key server. Accumulation, not a
-        // window, is the thing a user actually meets.
-        //
-        // Deleting is right here and reuse is not, which is worth saying plainly
-        // because reuse is what the server row does. A session is deliberately
-        // *not* deduplicated: connecting the same entry twice is an ordinary
-        // success that reuses the install and opens a second session, so there
-        // is no stable key to match a previous one on, and matching one would
-        // hand the caller somebody's earlier conversation. What this removes is
-        // a session created seconds ago by this request, never returned to
-        // anyone, holding no messages — the same argument the server row below
-        // already makes, applied to the other row this method creates.
-        //
-        // The session goes first: `session_mcp_servers.session_id` is
-        // `onDelete: 'cascade'`, so removing it takes the attachment with it and
-        // there is no third thing to undo. Internal params, because this is the
-        // daemon undoing its own write moments later rather than a new request
-        // to authorize.
-        if (session) {
-          try {
-            await service('sessions').remove(session.session_id, {
-              ...params,
-              provider: undefined,
-            });
-          } catch (cleanupError) {
-            const safe = sanitizeMCPExternalError(cleanupError, { stage: 'runtime' });
-            console.warn(
-              `[mcp-catalog/connect] compensation_failed resource=session session_id=${session.session_id} category=${safe.category} type=${safe.diagnostic.type}`
-            );
-          }
-        }
         if (createdServer) {
           try {
             // Atomic liveness/adoption check. A concurrent unique-conflict
-            // loser may now be using this row; in that case it owns the row's
-            // continued life and compensation must leave it in place.
+            // loser may now be using this row; in that case compensation must
+            // leave it in place.
             await deps.runInTenantDatabaseScope(params, () =>
               service('mcp-servers').removeIfUnattached(
                 mcpServer.mcp_server_id,
@@ -1192,12 +1100,6 @@ export function createMCPCatalogConnectService(
             );
           }
         }
-
-        // A compensating write can itself fail, and these two are the last
-        // chance to notice. Both are logged with the id rather than swallowed,
-        // because the residual — an orphan session or an orphan server row — is
-        // then something an operator can find and remove by hand. That is the
-        // documented floor: no ordering removes it, only a transaction would.
         throw error;
       }
     },

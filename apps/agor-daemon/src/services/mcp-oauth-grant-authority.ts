@@ -26,7 +26,7 @@ type GrantAuthorityDatabase = TenantScopeAwareDatabase | TenantScopedDatabase;
 export async function isMCPOAuthGrantAuthorizedForServer(
   db: GrantAuthorityDatabase,
   server: MCPServer,
-  grant: UserMCPOAuthToken
+  grant: MCPOAuthGrantAuthorityRecord
 ): Promise<boolean> {
   if (!server.enabled) return false;
   return isMCPOAuthGrantIdentityAuthorizedForServer(db, server, grant);
