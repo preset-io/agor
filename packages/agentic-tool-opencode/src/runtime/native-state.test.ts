@@ -7,6 +7,7 @@ import {
   pruneOpenCodeAttempts,
   publishOpenCodeCheckpoint,
   resolveOpenCodeNativeStateLayout,
+  resolveOpenCodeScratchRoot,
   restoreOpenCodeAcceptedState,
 } from './native-state.js';
 
@@ -172,5 +173,17 @@ describe('OpenCode hosted native state', () => {
     expect(
       await pruneOpenCodeAttempts(layoutFor('01a08d5f-7773-77fa-a7dc-2575cfe67280'), null)
     ).toEqual([]);
+  });
+});
+
+describe('OpenCode scratch root selection', () => {
+  it('honors an absolute launcher-provided scratch root and ignores anything else', () => {
+    expect(resolveOpenCodeScratchRoot({ AGOR_OPENCODE_SCRATCH_ROOT: '/tmp/agor-opencode' })).toBe(
+      '/tmp/agor-opencode'
+    );
+    expect(resolveOpenCodeScratchRoot({ AGOR_OPENCODE_SCRATCH_ROOT: 'relative/path' })).toBe(
+      join(tmpdir(), 'agor-opencode')
+    );
+    expect(resolveOpenCodeScratchRoot({})).toBe(join(tmpdir(), 'agor-opencode'));
   });
 });
