@@ -5,6 +5,7 @@
  * Uses DrizzleService adapter with TaskRepository.
  */
 
+import { resolveOpenCodeCapabilities } from '@agor/agentic-tool-opencode/daemon';
 import { analyticsLogger } from '@agor/core/analytics';
 import {
   type ChildCompletionContext,
@@ -44,6 +45,7 @@ import type {
   ExecutorTerminationCompleteInput,
   MessageID,
   Paginated,
+  Params,
   QueryParams,
   RuntimeTelemetryInput,
   SdkFailure,
@@ -783,6 +785,26 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
     }
   }
 
+  private async assertNativeStatePublicationAdmitted(
+    currentTask: Task | undefined,
+    params: TaskParams
+  ): Promise<void> {
+    if (!currentTask) throw new BadRequest('native_state_attempt requires a status transition');
+    const session = await (this.app.service('sessions') as unknown as SessionsService).get(
+      currentTask.session_id,
+      { provider: undefined, tenant: params.tenant } as Params
+    );
+    const config = this.app.get('config') as Parameters<typeof resolveOpenCodeCapabilities>[0];
+    if (
+      session?.agentic_tool !== 'opencode' ||
+      resolveOpenCodeCapabilities(config).mode !== 'managed-projection'
+    ) {
+      throw new BadRequest(
+        'native_state_attempt is accepted only for hosted managed-projection OpenCode sessions'
+      );
+    }
+  }
+
   /**
    * Override patch to detect task completion and:
    * 1. Atomically update session status to IDLE when task reaches terminal state
@@ -825,6 +847,12 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
     const isRunningTransition =
       nextStatus === TaskStatus.RUNNING && currentTask?.status !== TaskStatus.RUNNING;
 
+    if (params?.provider && data.native_state_attempt !== undefined) {
+      // Hosted OpenCode only: the pointer is meaningful solely for a managed
+      // projection turn of an OpenCode session. Any other executor carrying
+      // it is refused before the repository is touched.
+      await this.assertNativeStatePublicationAdmitted(currentTask, params);
+    }
     const result = params?.provider
       ? data.native_state_attempt !== undefined
         ? // Hosted OpenCode: the checkpoint pointer is accepted only together

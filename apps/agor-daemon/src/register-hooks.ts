@@ -386,6 +386,20 @@ export const PROMPT_FLOW_PATCH_FIELDS: readonly string[] = [
   'sdk_session_id',
 ];
 
+/**
+ * Whether a constrained-HA process-affine gate still applies under this
+ * config. OpenCode's hosted managed-projection authority keeps no daemon-local
+ * native state, so its settings/catalog services may be served by any replica;
+ * every other gated feature, and OpenCode's native-file authority, stays gated.
+ */
+export function constrainedHaGateApplies(
+  feature: (typeof CONSTRAINED_HA_PROCESS_AFFINE_SERVICE_GATES)[number][1],
+  config: Parameters<typeof resolveOpenCodeCapabilities>[0]
+): boolean {
+  if (feature !== 'openCodeAuth') return true;
+  return resolveOpenCodeCapabilities(config).mode !== 'managed-projection';
+}
+
 export function isPromptFlowPatchOnly(data: unknown): boolean {
   if (!data || typeof data !== 'object') return false;
   const keys = Object.keys(data);
@@ -1317,9 +1331,8 @@ export function registerHooks(ctx: RegisterHooksContext): void {
     // native state (keys live in the users row, native state is checkpointed
     // by the executor), so any replica may serve its settings/catalog. The
     // process-affine native-file authority stays rejected under constrained HA.
-    const openCodeManaged = resolveOpenCodeCapabilities(config).mode === 'managed-projection';
     for (const [path, feature] of CONSTRAINED_HA_PROCESS_AFFINE_SERVICE_GATES) {
-      if (feature === 'openCodeAuth' && openCodeManaged) continue;
+      if (!constrainedHaGateApplies(feature, config)) continue;
       safeService(path)?.hooks({ before: { all: [rejectInConstrainedHa(deployment, feature)] } });
     }
   }

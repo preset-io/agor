@@ -23,13 +23,14 @@ export {
 } from './managed-server.js';
 export {
   discardOpenCodeScratch,
-  OPENCODE_SCRATCH_ROOT,
+  OPENCODE_SCRATCH_ROOT_ENV,
   OpenCodeNativeStateError,
   type OpenCodeNativeStateLayout,
   prepareOpenCodeScratch,
   pruneOpenCodeAttempts,
   publishOpenCodeCheckpoint,
   resolveOpenCodeNativeStateLayout,
+  resolveOpenCodeScratchRoot,
   restoreOpenCodeAcceptedState,
 } from './native-state.js';
 export {

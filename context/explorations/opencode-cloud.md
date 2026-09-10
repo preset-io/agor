@@ -161,8 +161,12 @@ release.
 
 Executor turn (managed-projection mode), all inside `OpenCodeTool.runTurn`:
 
-1. Create a Job-private scratch root `/tmp/agor-opencode/<taskId>/` and point
-   **all four** `XDG_*` roots and `OPENCODE_DB` at it. Nothing OpenCode writes
+1. Create a Job-private scratch root `<scratch>/<taskId>/` and point
+   **all four** `XDG_*` roots and `OPENCODE_DB` at it. `<scratch>` is
+   `AGOR_OPENCODE_SCRATCH_ROOT` when set (Cloud pins it to the `emptyDir`
+   mount `/tmp/agor-opencode`), otherwise the process temp directory;
+   `TMPDIR` is never consulted so a persistent-home `TMPDIR` cannot redirect
+   live native state onto the network filesystem. Nothing OpenCode writes
    during the turn touches the network filesystem: logs, the `mkdir`-based
    state locks (whose staleness detection depends on mtime and would otherwise
    stall the next Job after a kill), cache, generated config, and the git
@@ -193,7 +197,11 @@ Executor turn (managed-projection mode), all inside `OpenCodeTool.runTurn`:
    `settleTermination`, so completion and Stop/heartbeat-loss settlement on
    one task cannot deadlock) and writes `sessions.data.sdk_native_state =
 { attemptTaskId, digest, openCodeSessionId, publishedAt }` plus
-   `sdk_session_id` in the same transaction as `status = completed`. A terminal
+   `sdk_session_id` in the same transaction as `status = completed`. Before
+   that transition the daemon re-resolves the capability resolver and admits a
+   pointer only from an executor-authenticated patch on a task whose session
+   uses OpenCode in `managed-projection` mode; any other executor is refused
+   with a client error and nothing is written. A terminal
    task (stopped, failed, force-failed) never accepts a pointer, so a stale
    executor's artifact is never referenced. This transition is the atomic,
    authorized publication decision.
@@ -310,8 +318,12 @@ operator opt-in `agentic_tools.opencode_hosted_native_state: 'checkpointed'`
 
 Consumers (all read the same resolver): `opencode-auth` find/create/remove,
 `opencode-models` find, session creation and tool switch (`sessions.ts`), task
-admission (`admitExecutor`), executor launch (`getExecutorLaunch`), and the
-settings/readiness UI. `opencode-auth.find` returns a 200 response with
+admission (`admitExecutor`), executor launch (`getExecutorLaunch`), the task
+completion publication gate (`tasks.ts`), the executor credential resolver
+(`config/resolve-api-key`, which serves a tool only its own reviewed
+provider-connection fields), and the settings/readiness UI. The tenant policy
+for OpenCode accepts only `user_required` or `user_preferred`; tenant-shared
+provider keys are refused because the tool has no tenant-level fields. `opencode-auth.find` returns a 200 response with
 `runtime: 'unsupported'` and the structured reason instead of throwing; the UI
 renders a permanent capability notice without Retry, readiness shows
 "Not available in this workspace", and New Session rejects OpenCode with the

@@ -34,6 +34,7 @@ import {
   CONSTRAINED_HA_PROCESS_AFFINE_SERVICE_GATES,
   classifyPrimaryTeammateAuthorizationInvalidation,
   classifyRealtimeAuthorizationInvalidation,
+  constrainedHaGateApplies,
   createTenantScopedBeforeHookChain,
   enrichSessionFindResultWithRemoteRelationships,
   getTrustedSessionTenantId,
@@ -1744,4 +1745,25 @@ describe('file service RBAC database preload', () => {
       expect(read).not.toHaveBeenCalled();
     }
   );
+});
+
+describe('constrained-HA gate applicability for OpenCode', () => {
+  const hosted = {
+    multi_tenancy: { mode: 'required_from_auth' as const, auth_claim: 'tenant_id' },
+    execution: {
+      unix_user_mode: 'delegated' as const,
+      executor_command_template: 'launch',
+      executor_storage: { user_home: 'persistent-per-user' as const },
+    },
+    agentic_tools: { opencode_hosted_native_state: 'checkpointed' as const },
+  };
+
+  it('lifts the OpenCode gate only for managed projection and keeps every other gate', () => {
+    expect(constrainedHaGateApplies('openCodeAuth', hosted)).toBe(false);
+    expect(
+      constrainedHaGateApplies('openCodeAuth', { execution: { unix_user_mode: 'simple' } })
+    ).toBe(true);
+    expect(constrainedHaGateApplies('codexAuth', hosted)).toBe(true);
+    expect(constrainedHaGateApplies('claudeOAuth', hosted)).toBe(true);
+  });
 });
