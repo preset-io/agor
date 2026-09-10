@@ -1,7 +1,10 @@
 /* biome-ignore-all lint/plugin/noFirstPartyCss: React Flow integration, tool cursors, and resize hit areas require third-party selectors */
-/* Adjust MiniMap panel to have more bottom spacing */
+/* Small lift so the minimap clears the React Flow attribution. (Was 75px,
+   compensating for the canvas overflowing the fold by the header height —
+   fixed at the source: SessionCanvas defaults to 100% of its panel and the
+   app shell pins Content to the viewport remainder.) */
 .react-flow__panel.react-flow__minimap.bottom.right {
-  margin-bottom: 75px;
+  margin-bottom: 20px;
 }
 
 /* Theme-aware React Flow controls */

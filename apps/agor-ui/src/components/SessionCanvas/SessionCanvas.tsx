@@ -453,7 +453,11 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
       onCommentSelect,
       staticCursors,
       staticCursorScale,
-      height = '100vh',
+      // Fill the hosting panel, not the viewport: inside the app shell the
+      // canvas sits below the 64px header, so a 100vh default overflowed the
+      // fold by exactly the header height (bottom toolbar/minimap clipped).
+      // Surfaces needing viewport sizing pass an explicit height.
+      height = '100%',
     }: SessionCanvasProps,
     ref
   ) => {
