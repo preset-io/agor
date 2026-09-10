@@ -169,7 +169,15 @@ describe('onboarding Slack and authority boundaries in Chromium', () => {
       );
       const dialog = await screen.findByRole('dialog', { name: 'Catalog' });
       const root = dialog.closest('.ant-drawer');
-      const wrapper = dialog.closest('.ant-drawer-content-wrapper');
+      const wrapper = dialog.closest('.ant-drawer-content-wrapper')!;
+      // Error content can arrive during enter motion, just like the ready form.
+      // Keep the native Retry click inside the settled drawer's hit target.
+      await waitFor(() => {
+        expect(dialog.getBoundingClientRect().right).toBeCloseTo(window.innerWidth, 1);
+        expect(wrapper.getAnimations().some((animation) => animation.playState === 'running')).toBe(
+          false
+        );
+      });
       await userEvent.click(await within(dialog).findByRole('button', { name: 'Retry' }));
       await screen.findByPlaceholderText('Paste your GitHub bearer access token');
       expect(document.querySelector('.ant-drawer')).toBe(root);
