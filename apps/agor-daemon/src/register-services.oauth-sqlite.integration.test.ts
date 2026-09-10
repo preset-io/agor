@@ -1305,6 +1305,72 @@ describe('configured-client catalog OAuth through registered services', () => {
     return { provider, harness, member, memberParams, start, tokens, readGrant };
   }
 
+  it.each([undefined, 'strict', 'legacy'] as const)(
+    'requests ordinary sign-in for a canonical configured browser client with no grant (%s)',
+    async (compatibility) => {
+      const { provider, harness, memberParams } = await configuredFixture();
+      const repo = new MCPServerRepository(harness.rawDb);
+      const saved = await repo.findById(harness.server.mcp_server_id);
+      await repo.update(harness.server.mcp_server_id, {
+        auth: { ...saved!.auth!, oauth_compatibility_mode: compatibility },
+      });
+      const result = await harness.app
+        .service('mcp-servers/discover')
+        .create({ mcp_server_id: harness.server.mcp_server_id }, memberParams);
+      expect(result).toMatchObject({
+        success: false,
+        recovery: { category: 'authentication_required', action: 'reauthenticate' },
+      });
+      const execution = await harness.app
+        .service('mcp-servers/oauth-auth-headers')
+        .create(
+          { mcp_server_ids: [harness.server.mcp_server_id] },
+          { ...memberParams, provider: undefined }
+        );
+      expect(execution.headers[harness.server.mcp_server_id]).toEqual({ error: 'needs_reauth' });
+      expect(provider.requests).toHaveLength(0);
+    }
+  );
+
+  it.each(['headers', 'endpoint', 'provenance', 'machine_grant', 'removed_entry'] as const)(
+    'does not infer browser recovery from configured credentials with %s drift',
+    async (drift) => {
+      const { provider, harness, memberParams } = await configuredFixture();
+      const repo = new MCPServerRepository(harness.rawDb);
+      const saved = await repo.findById(harness.server.mcp_server_id);
+      if (drift === 'removed_entry') vi.mocked(loadCatalog).mockResolvedValue([]);
+      else {
+        await repo.update(harness.server.mcp_server_id, {
+          ...(drift === 'headers' ? { headers: { 'X-Custom': 'fixture' } } : {}),
+          ...(drift === 'endpoint' ? { url: `${provider.savedMcpUrl}/edited` } : {}),
+          ...(drift === 'provenance'
+            ? { source: 'user' as const, catalog_entry_name: undefined }
+            : {}),
+          ...(drift === 'machine_grant'
+            ? { auth: { ...saved!.auth!, oauth_grant_type: 'client_credentials' as const } }
+            : {}),
+        });
+      }
+      const result = await harness.app
+        .service('mcp-servers/discover')
+        .create({ mcp_server_id: harness.server.mcp_server_id }, memberParams);
+      expect(result).toMatchObject({
+        success: false,
+        recovery: { category: 'configuration_required', action: 'review_configuration' },
+      });
+      const execution = await harness.app
+        .service('mcp-servers/oauth-auth-headers')
+        .create(
+          { mcp_server_ids: [harness.server.mcp_server_id] },
+          { ...memberParams, provider: undefined }
+        );
+      expect(execution.headers[harness.server.mcp_server_id]).toMatchObject({
+        error: 'client_credentials_configuration_required',
+      });
+      expect(provider.requests).toHaveLength(0);
+    }
+  );
+
   it('lets a member sign in without DCR, persists exact binding and refreshes the same client/resource', async () => {
     const { provider, harness, member, memberParams, start, tokens, readGrant } =
       await configuredFixture();

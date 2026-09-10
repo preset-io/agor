@@ -1,4 +1,5 @@
 import { runWithTenantDatabaseScope, UserMCPOAuthTokenRepository } from '@agor/core/db';
+import { findCatalogEntry, loadCatalog } from '@agor/core/mcp-catalog';
 import { assertMcpGrantSubjectEntitled } from '@agor/core/tools/mcp/grant-entitlement';
 import {
   AmbiguousRefreshError,
@@ -8,7 +9,8 @@ import {
   type RefreshAndPersistDeps,
   refreshAndPersistToken,
 } from '@agor/core/tools/mcp/oauth-refresh';
-import type { MCPAuth } from '@agor/core/types';
+import type { MCPCatalogEntry, MCPServer } from '@agor/core/types';
+import { catalogOAuthConfig, isCurrentCatalogInstall } from './mcp-catalog-install-policy.js';
 
 /** A live newer rotation is contention, not lost authorization. */
 export class MCPOAuthRefreshBusyError extends Error {
@@ -26,12 +28,36 @@ export class MCPClientCredentialsConfigurationError extends Error {
   }
 }
 
-export function missingMCPOAuthGrantError(auth: MCPAuth): Error {
+export async function missingMCPOAuthGrantError(
+  server: Pick<
+    MCPServer,
+    'source' | 'catalog_entry_name' | 'transport' | 'url' | 'auth' | 'headers'
+  >
+): Promise<Error> {
+  const auth = server.auth;
+  // A canonical configured-client recipe prescribes browser authorization,
+  // not machine-token minting. Only the saved definition can establish this;
+  // a client ID/secret, endpoint, or historical catalog stamp alone cannot.
+  if (!auth?.oauth_grant_type && server.source === 'catalog' && server.catalog_entry_name) {
+    const entry = findCatalogEntry(await loadCatalog(), server.catalog_entry_name);
+    if (
+      entry?.remote_url &&
+      entry.auth_type === 'oauth' &&
+      entry.oauth?.configured_client === true &&
+      isCurrentCatalogInstall(
+        server,
+        entry as MCPCatalogEntry & { remote_url: string },
+        catalogOAuthConfig(entry)
+      )
+    ) {
+      return new MissingRefreshTokenError();
+    }
+  }
   // Legacy forms defaulted an omitted grant type to client_credentials. Do not
   // mint a machine token here: a missing row can also be a retired browser grant.
   if (
-    auth.oauth_grant_type === 'client_credentials' ||
-    (!auth.oauth_grant_type && auth.oauth_client_id && auth.oauth_client_secret)
+    auth?.oauth_grant_type === 'client_credentials' ||
+    (!auth?.oauth_grant_type && auth?.oauth_client_id && auth.oauth_client_secret)
   ) {
     return new MCPClientCredentialsConfigurationError();
   }

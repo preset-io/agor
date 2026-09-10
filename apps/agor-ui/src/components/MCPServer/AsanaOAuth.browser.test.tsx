@@ -129,21 +129,31 @@ async function advanced() {
 }
 beforeEach(() => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = false;
+  // Static message creates a separate React root, outside Shell. Disable its
+  // presentation motion too: hosted Chromium can otherwise leave destroy()
+  // waiting indefinitely for a CSS animationend from an unmounted test tree.
+  ConfigProvider.config({
+    holderRender: (children) => (
+      <ConfigProvider theme={{ token: { motion: false } }}>{children}</ConfigProvider>
+    ),
+  });
   agorStore.getState().reset();
   vi.spyOn(window, 'open').mockReturnValue(null);
 });
 afterEach(async () => {
-  cleanup();
-  message.destroy();
-  // AntD's portal destruction is scheduled, not synchronous. Wait for the
-  // previous test's notices to leave the real document before asserting that
-  // a different OAuth attempt has not emitted success. Do not mock the toast
-  // API or weaken the within-attempt pending/identity assertions below.
-  await waitFor(() => expect(document.querySelector('.ant-message-notice')).toBeNull(), {
-    timeout: 5000,
-  });
-  agorStore.getState().reset();
-  vi.restoreAllMocks();
+  try {
+    cleanup();
+    message.destroy();
+    // Assert real portal removal, not merely an API call or hidden animation.
+    // Pending/identity negatives below still observe the actual notifications.
+    await waitFor(() => expect(document.querySelector('.ant-message-notice')).toBeNull());
+  } finally {
+    // A teardown failure must not leak popup history or global presentation
+    // settings into another test and produce misleading OAuth failures.
+    agorStore.getState().reset();
+    vi.restoreAllMocks();
+    ConfigProvider.config({ holderRender: undefined });
+  }
 });
 
 describe('Asana V2 saved OAuth in real Chromium', () => {

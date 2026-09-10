@@ -58,6 +58,10 @@ secrets can also belong to browser OAuth; an existing bound grant continues to w
 of the legacy form's grant-type default. Agor never falls back to machine-token minting after
 a browser grant fails or is retired.
 
+A current Catalog recipe for a configured browser client (such as Asana V2) still uses
+normal sign-in recovery when no grant exists. Its app credentials do not imply a
+machine-token configuration. Edited or imported configurations do not inherit that recipe.
+
 A newer refresh on another daemon may temporarily require retrying a request; it does not
 require replacing a healthy grant. For rotating credentials, even a crash after the durable
 dispatch fence but before network dispatch can require one sign-in: Agor cannot safely prove
