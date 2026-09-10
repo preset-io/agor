@@ -35,9 +35,9 @@ describe('OnboardingBanners real-browser UX', () => {
           onOpenWorkspaceSettings={vi.fn()}
           onOpenCatalog={vi.fn()}
           onCheckAuth={vi.fn(async () => ({
-            status: 'unauthenticated',
+            status: 'unauthenticated' as const,
             authenticated: false,
-            method: 'api-key',
+            method: 'api-key' as const,
           }))}
           credentialVersion={0}
           connectionReady

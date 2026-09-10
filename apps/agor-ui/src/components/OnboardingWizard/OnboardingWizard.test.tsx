@@ -9,10 +9,8 @@
  * redesign (see OnboardingWizard.tsx header comment + commit history). Repo /
  * branch / session creation is deferred to normal in-app flows: the wizard only
  * ever calls onComplete with an empty branchId/sessionId and whatever boardId it
- * created or reused. onCreateRepo / onCreateBranch / onCreateSession are accepted
- * as props (for prop-shape compatibility with the app shell) but are unused by
- * the component (`void`-ed immediately), so this file asserts they are never
- * invoked rather than asserting on their call args.
+ * created or reused. Resource creation outside the board is deferred to the
+ * app shell, so this file asserts those services are never requested.
  *
  * Note on query style: this file intentionally avoids `getByRole('button', ...)`
  * / `queryByRole(...)` for interacting with buttons. The LLM and integrations
@@ -25,7 +23,7 @@
  * the accessible-name computation entirely and are used throughout instead.
  */
 
-import type { Board, User } from '@agor-live/client';
+import type { AgorClient, Board, User } from '@agor-live/client';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { ComponentProps } from 'react';
 import { EMPTY_MAPS } from '../../store/agorMaps';
@@ -63,7 +61,9 @@ function makeUser(overrides: Partial<User> = {}): User {
   } as unknown as User;
 }
 
-function makeBoard(overrides: Partial<Board> = {}): Board {
+function makeBoard(
+  overrides: Partial<Omit<Board, 'board_id'>> & { board_id?: string } = {}
+): Board {
   return {
     board_id: 'board-existing',
     name: 'Existing board',
@@ -105,18 +105,11 @@ function renderWizard(
       return { on: vi.fn(), off: vi.fn(), get: vi.fn(async () => ({ state: 'no_auth' })) };
     }),
   };
-  const onCreateRepo = vi.fn(async () => undefined);
-  const onCreateBranch = vi.fn(async () => null);
-  const onCreateSession = vi.fn(async () => null);
   const props = {
     open: true,
     onComplete: vi.fn(),
     user: effectiveUser,
-    client,
-    onCreateRepo,
-    onCreateLocalRepo: vi.fn(),
-    onCreateBranch,
-    onCreateSession,
+    client: client as unknown as AgorClient,
     onUpdateUser: vi.fn(async () => undefined),
     ...componentOverrides,
   } satisfies ComponentProps<typeof OnboardingWizard>;
@@ -127,9 +120,6 @@ function renderWizard(
     client,
     boardsService,
     usersService,
-    onCreateRepo,
-    onCreateBranch,
-    onCreateSession,
   };
 }
 
@@ -405,7 +395,11 @@ describe('OnboardingWizard', () => {
 
   it('saves a valid Claude API key via onCheckAuth + onUpdateUser and advances to done', async () => {
     const onUpdateUser = vi.fn(async () => undefined);
-    const onCheckAuth = vi.fn(async () => ({ authenticated: true }));
+    const onCheckAuth = vi.fn(async () => ({
+      status: 'authenticated' as const,
+      authenticated: true,
+      method: 'api-key' as const,
+    }));
     renderWizard({ initialStep: 'llm', onUpdateUser, onCheckAuth });
 
     clickButton('Claude');
@@ -430,7 +424,11 @@ describe('OnboardingWizard', () => {
 
   it('proceeds to save on an unknown auth result (transient) rather than rejecting the key', async () => {
     const onUpdateUser = vi.fn(async () => undefined);
-    const onCheckAuth = vi.fn(async () => ({ status: 'unknown' as const, authenticated: false }));
+    const onCheckAuth = vi.fn(async () => ({
+      status: 'unknown' as const,
+      authenticated: false,
+      method: 'none' as const,
+    }));
     renderWizard({ initialStep: 'llm', onUpdateUser, onCheckAuth });
 
     clickButton('Claude');
@@ -456,6 +454,7 @@ describe('OnboardingWizard', () => {
     const onCheckAuth = vi.fn(async () => ({
       status: 'unauthenticated' as const,
       authenticated: false,
+      method: 'api-key' as const,
       hint: 'Key rejected by provider.',
     }));
     renderWizard({ initialStep: 'llm', onUpdateUser, onCheckAuth });
@@ -472,12 +471,18 @@ describe('OnboardingWizard', () => {
 
   it('does not save credentials after the authentication owner changes during verification', async () => {
     let current = true;
-    let resolveCheck!: (result: { authenticated: true }) => void;
+    let resolveCheck!: (result: {
+      status: 'authenticated';
+      authenticated: true;
+      method: 'api-key';
+    }) => void;
     const onCheckAuth = vi.fn(
       () =>
-        new Promise<{ authenticated: true }>((resolve) => {
-          resolveCheck = resolve;
-        })
+        new Promise<{ status: 'authenticated'; authenticated: true; method: 'api-key' }>(
+          (resolve) => {
+            resolveCheck = resolve;
+          }
+        )
     );
     const onUpdateUser = vi.fn(async () => undefined);
     renderWizard({
@@ -494,7 +499,11 @@ describe('OnboardingWizard', () => {
     await waitFor(() => expect(onCheckAuth).toHaveBeenCalledWith('claude-code', validKey));
 
     current = false;
-    resolveCheck({ authenticated: true });
+    resolveCheck({
+      status: 'authenticated' as const,
+      authenticated: true,
+      method: 'api-key' as const,
+    });
     await Promise.resolve();
 
     expect(onUpdateUser).not.toHaveBeenCalled();
@@ -603,7 +612,9 @@ describe('OnboardingWizard', () => {
     const client = {
       io: { on: vi.fn(), off: vi.fn() },
       service: vi.fn((name: string) =>
-        name === 'claude-auth/oauth' ? { create, find } : { create: vi.fn(), find: vi.fn() }
+        name === 'claude-auth/oauth'
+          ? { create, find }
+          : { create: vi.fn(), find: vi.fn(async () => ({ data: [] })), on: vi.fn(), off: vi.fn() }
       ),
     };
     renderWizard({
@@ -626,6 +637,12 @@ describe('OnboardingWizard', () => {
     );
     await waitFor(() => expect(screen.getByText(/^continue →/i).closest('button')).toBeEnabled());
     clickButton(/^continue →/i);
+    expect(await screen.findByText('Choose your tools')).toBeInTheDocument();
+    expect(screen.queryByText("You're ready to build.")).not.toBeInTheDocument();
+    for (const service of ['repos', 'branches', 'sessions']) {
+      expect(client.service).not.toHaveBeenCalledWith(service);
+    }
+    await findAndClickButton(/skip for now/i);
     expect(await screen.findByText("You're ready to build.")).toBeInTheDocument();
   });
 
@@ -656,14 +673,18 @@ describe('OnboardingWizard', () => {
   });
 
   it('shows a previously connected provider as verified and lets the user continue without re-entering a key', async () => {
-    const onCheckAuth = vi.fn(async () => ({ authenticated: true }));
+    const onCheckAuth = vi.fn(async () => ({
+      status: 'authenticated' as const,
+      authenticated: true,
+      method: 'api-key' as const,
+    }));
     const onUpdateUser = vi.fn(async () => undefined);
     renderWizard({
       initialStep: 'llm',
       onCheckAuth,
       onUpdateUser,
       user: makeUser({
-        agentic_tools: { 'claude-code': { ANTHROPIC_API_KEY: 'stored-key' } },
+        agentic_tools: { 'claude-code': { ANTHROPIC_API_KEY: true } },
       } as Partial<User>),
     });
 
@@ -1069,7 +1090,7 @@ describe('OnboardingWizard', () => {
 
   it('completes the full flow and calls onComplete with the created board', async () => {
     const onComplete = vi.fn();
-    const { onCreateRepo, onCreateBranch, onCreateSession } = renderWizard({ onComplete });
+    const { client } = renderWizard({ onComplete });
 
     // goals (optional — Continue is disabled without a selection, so skip)
     clickButton(/skip for now/i);
@@ -1120,10 +1141,10 @@ describe('OnboardingWizard', () => {
       )
     );
     // The teammate branch/session is created by the app shell on completion, not
-    // by the wizard — the wizard itself never invokes these provisioning props.
-    expect(onCreateRepo).not.toHaveBeenCalled();
-    expect(onCreateBranch).not.toHaveBeenCalled();
-    expect(onCreateSession).not.toHaveBeenCalled();
+    // by the wizard — it never requests those provisioning services.
+    for (const service of ['repos', 'branches', 'sessions']) {
+      expect(client.service).not.toHaveBeenCalledWith(service);
+    }
   });
 
   it('done step heroes the named teammate with a role pill + adaptive headline and NO recap line (template picked)', async () => {
@@ -1277,7 +1298,7 @@ describe('OnboardingWizard', () => {
     expect(boardsService.create).toHaveBeenCalledTimes(1);
     expect(usersService.get).toHaveBeenCalledTimes(1);
     expect(props.onUpdateUser).toHaveBeenCalledTimes(1);
-    expect(props.onUpdateUser.mock.invocationCallOrder[0]).toBeLessThan(
+    expect(vi.mocked(props.onUpdateUser).mock.invocationCallOrder[0]).toBeLessThan(
       boardsService.create.mock.invocationCallOrder[0]
     );
   });
@@ -1316,7 +1337,7 @@ describe('OnboardingWizard', () => {
   it('persists the candidate id before create and retries a failed progress write without an orphan', async () => {
     const onComplete = vi.fn(async () => undefined);
     const { boardsService, props } = renderWizard({ onComplete, initialStep: 'done' });
-    props.onUpdateUser.mockRejectedValueOnce(new Error('Progress write failed'));
+    vi.mocked(props.onUpdateUser).mockRejectedValueOnce(new Error('Progress write failed'));
 
     clickButton(/open my board/i);
     expect(await screen.findByText('Progress write failed')).toBeInTheDocument();
@@ -1784,6 +1805,7 @@ describe('Codex ChatGPT login import', () => {
     const onCheckAuth = vi.fn(async () => ({
       status: 'unauthenticated' as const,
       authenticated: false,
+      method: 'none' as const,
     }));
     renderWizard({
       initialStep: 'llm',
@@ -1805,6 +1827,7 @@ describe('Codex ChatGPT login import', () => {
     const onCheckAuth = vi.fn(async () => ({
       status: 'unknown' as const,
       authenticated: false,
+      method: 'none' as const,
     }));
     renderWizard({
       initialStep: 'llm',

@@ -242,7 +242,7 @@ describe('seedOnboardingTeammate', () => {
       branch_id: 'branch-1',
       board_id: 'board-1',
     } as Branch);
-    startTeammateBootstrapSessionMock.mockResolvedValue('session-1');
+    startTeammateBootstrapSessionMock.mockResolvedValue({ sessionId: 'session-1' });
 
     const { input } = setup({
       goals: [],
@@ -348,7 +348,7 @@ describe('seedOnboardingTeammate', () => {
       custom_context: {
         teammate: { kind: 'teammate', createdViaOnboarding: true, displayName: 'Rusty' },
       },
-    } as Branch;
+    } as unknown as Branch;
     const existingSession = {
       session_id: 'session-existing',
       title: '🤖 Rusty — first session',
@@ -392,7 +392,7 @@ describe('seedOnboardingTeammate', () => {
       custom_context: {
         teammate: { kind: 'teammate', createdViaOnboarding: true, displayName: 'Rusty' },
       },
-    } as Branch;
+    } as unknown as Branch;
     const existingSession = {
       session_id: 'session-existing',
       title: '🤖 Rusty — first session',
