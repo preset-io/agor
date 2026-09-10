@@ -165,7 +165,8 @@ Executor turn (managed-projection mode), all inside `OpenCodeTool.runTurn`:
    **all four** `XDG_*` roots and `OPENCODE_DB` at it. `<scratch>` is
    `AGOR_OPENCODE_SCRATCH_ROOT` when set (Cloud pins it to the `emptyDir`
    mount `/tmp/agor-opencode`), otherwise the process temp directory;
-   `TMPDIR` is never consulted so a persistent-home `TMPDIR` cannot redirect
+   `TMPDIR` is never consulted, and the executor's payload-environment boundary
+   refuses a user-defined `AGOR_OPENCODE_SCRATCH_ROOT`, so neither can redirect
    live native state onto the network filesystem. Nothing OpenCode writes
    during the turn touches the network filesystem: logs, the `mkdir`-based
    state locks (whose staleness detection depends on mtime and would otherwise
