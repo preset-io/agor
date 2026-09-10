@@ -176,6 +176,76 @@ describe('refreshMCPToken', () => {
     expect(body.get('grant_type')).toBe('refresh_token');
   });
 
+  it('uses client_secret_post (credentials in body) when negotiated', async () => {
+    mockFetchOnce({ access_token: 'new-a', expires_in: 3600 });
+
+    const result = await refreshMCPToken({
+      tokenEndpoint: 'https://auth.example.com/token',
+      refreshToken: 'rt-abc',
+      clientId: 'client-123',
+      clientSecret: 'secret-xyz',
+      tokenEndpointAuthMethod: 'client_secret_post',
+    });
+
+    expect(result.access_token).toBe('new-a');
+    expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+    const [, init] = (globalThis.fetch as unknown as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(init.headers.Authorization).toBeUndefined();
+    const body = new URLSearchParams(init.body as string);
+    expect(body.get('client_id')).toBe('client-123');
+    expect(body.get('client_secret')).toBe('secret-xyz');
+  });
+
+  it('retries with client_secret_post after a Basic client-auth rejection (HubSpot-style)', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ error: 'invalid_client' }), {
+          status: 401,
+          headers: { 'Content-Type': 'application/json' },
+        })
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ access_token: 'post-a', expires_in: 3600 }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        })
+      );
+    globalThis.fetch = fetchMock as typeof globalThis.fetch;
+
+    const result = await refreshMCPToken({
+      tokenEndpoint: 'https://auth.example.com/token',
+      refreshToken: 'rt-abc',
+      clientId: 'client-123',
+      clientSecret: 'secret-xyz',
+    });
+
+    expect(result.access_token).toBe('post-a');
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const [, first] = fetchMock.mock.calls[0];
+    expect(first.headers.Authorization).toBe(
+      `Basic ${Buffer.from('client-123:secret-xyz').toString('base64')}`
+    );
+    const [, second] = fetchMock.mock.calls[1];
+    expect(second.headers.Authorization).toBeUndefined();
+    const body = new URLSearchParams(second.body as string);
+    expect(body.get('client_id')).toBe('client-123');
+    expect(body.get('client_secret')).toBe('secret-xyz');
+  });
+
+  it('does not retry a public client (no secret) on invalid_client', async () => {
+    mockFetchOnce({ error: 'invalid_client' }, { status: 401 });
+
+    await expect(
+      refreshMCPToken({
+        tokenEndpoint: 'https://auth.example.com/token',
+        refreshToken: 'rt-abc',
+        clientId: 'public-client-42',
+      })
+    ).rejects.toThrow(/provider_rejected/);
+    expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+  });
+
   it('surfaces invalid_grant as InvalidGrantError', async () => {
     mockFetchOnce(
       {

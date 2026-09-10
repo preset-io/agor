@@ -16,6 +16,10 @@ import {
 } from '../../utils/safe-outbound-fetch';
 import { assertMcpGrantSubjectEntitled } from './grant-entitlement';
 import { inferOAuthTokenUrl } from './oauth-auth';
+import {
+  applyClientAuthentication,
+  type MCPOAuthTokenEndpointAuthMethod,
+} from './oauth-mcp-transport';
 import { resolveTokenExpiry } from './oauth-token-expiry';
 
 export const REFRESH_BUFFER_MS = 60_000;
@@ -104,6 +108,12 @@ export interface RefreshMCPTokenOptions {
   clientId: string;
   clientSecret?: string;
   resourceUri?: string;
+  /**
+   * Token-endpoint client-authentication method to try first. Defaults to
+   * `client_secret_basic`; `refreshMCPToken` safely retries the alternate
+   * method on an explicit client-authentication rejection.
+   */
+  tokenEndpointAuthMethod?: MCPOAuthTokenEndpointAuthMethod;
   /** Exact loopback HTTP exception for standalone development/tests only. */
   allowLocalhostHttp?: boolean;
   /** Task/session/rollout fence checked immediately before credential dispatch. */
@@ -132,59 +142,88 @@ interface OAuthRefreshRawResponse {
 export async function refreshMCPToken(
   opts: RefreshMCPTokenOptions
 ): Promise<RefreshMCPTokenResult> {
-  const body: Record<string, string> = {
-    grant_type: 'refresh_token',
-    refresh_token: opts.refreshToken,
-  };
-  if (opts.resourceUri) body.resource = opts.resourceUri;
-  const headers: Record<string, string> = {
-    'Content-Type': 'application/x-www-form-urlencoded',
-    Accept: 'application/json',
-  };
-  if (opts.clientSecret) {
-    headers.Authorization = `Basic ${Buffer.from(`${opts.clientId}:${opts.clientSecret}`).toString('base64')}`;
-  } else {
-    body.client_id = opts.clientId;
-  }
+  // Present client credentials per the provider's auth method. Agor does not
+  // persist the method negotiated at grant time, so when a confidential
+  // client's first attempt is rejected specifically for client authentication
+  // (`invalid_client`/`unauthorized_client`) we retry once with the alternate
+  // presentation. A client-auth failure never redeems the refresh token, so the
+  // rotating credential is not consumed and the retry is safe. Providers that
+  // accept the first method (the common case) behave exactly as before.
+  const primary = opts.tokenEndpointAuthMethod ?? 'client_secret_basic';
+  const candidateMethods: MCPOAuthTokenEndpointAuthMethod[] = opts.clientSecret
+    ? primary === 'client_secret_post'
+      ? ['client_secret_post', 'client_secret_basic']
+      : ['client_secret_basic', 'client_secret_post']
+    : ['client_secret_basic']; // public client: only client_id in body, no retry
 
-  let response: Response;
-  try {
-    response = await safeOutboundFetch(opts.tokenEndpoint, {
-      method: 'POST',
+  let clientAuthRejection: OAuthRefreshExchangeError | undefined;
+  for (let attempt = 0; attempt < candidateMethods.length; attempt++) {
+    const isLastCandidate = attempt === candidateMethods.length - 1;
+    const body: Record<string, string> = {
+      grant_type: 'refresh_token',
+      refresh_token: opts.refreshToken,
+    };
+    if (opts.resourceUri) body.resource = opts.resourceUri;
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/x-www-form-urlencoded',
+      Accept: 'application/json',
+    };
+    applyClientAuthentication(
+      body,
       headers,
-      body: new URLSearchParams(body).toString(),
-      redirect: 'error',
-      timeoutMs: 15_000,
-      allowLocalhostHttp: opts.allowLocalhostHttp,
-      assertCurrent: opts.assertCurrent,
-      resolveDns: opts.resolveDns,
-    });
-  } catch (error) {
-    if (error instanceof OutboundPreDispatchAuthorityError) {
-      throw new OAuthRefreshAuthorityCancelledError(error.authorityCause);
-    }
-    throw new OAuthRefreshExchangeError('transport_ambiguous', true);
-  }
+      opts.clientId,
+      opts.clientSecret,
+      candidateMethods[attempt]
+    );
 
-  let parsed: OAuthRefreshRawResponse;
-  try {
-    parsed = (await response.json()) as OAuthRefreshRawResponse;
-  } catch {
-    throw new OAuthRefreshExchangeError('response_ambiguous', true);
+    let response: Response;
+    try {
+      response = await safeOutboundFetch(opts.tokenEndpoint, {
+        method: 'POST',
+        headers,
+        body: new URLSearchParams(body).toString(),
+        redirect: 'error',
+        timeoutMs: 15_000,
+        allowLocalhostHttp: opts.allowLocalhostHttp,
+        assertCurrent: opts.assertCurrent,
+        resolveDns: opts.resolveDns,
+      });
+    } catch (error) {
+      if (error instanceof OutboundPreDispatchAuthorityError) {
+        throw new OAuthRefreshAuthorityCancelledError(error.authorityCause);
+      }
+      throw new OAuthRefreshExchangeError('transport_ambiguous', true);
+    }
+
+    let parsed: OAuthRefreshRawResponse;
+    try {
+      parsed = (await response.json()) as OAuthRefreshRawResponse;
+    } catch {
+      throw new OAuthRefreshExchangeError('response_ambiguous', true);
+    }
+    if (parsed.error === 'invalid_grant') throw new InvalidGrantError();
+    if (parsed.error === 'invalid_client' || parsed.error === 'unauthorized_client') {
+      // Wrong credential presentation for this provider. Retry with the
+      // alternate method if one remains; otherwise surface the rejection.
+      clientAuthRejection = new OAuthRefreshExchangeError('provider_rejected', false);
+      if (!isLastCandidate) continue;
+      throw clientAuthRejection;
+    }
+    if (parsed.error) throw new OAuthRefreshExchangeError('provider_rejected', false);
+    if (!response.ok || typeof parsed.access_token !== 'string' || !parsed.access_token) {
+      throw new OAuthRefreshExchangeError('response_ambiguous', true);
+    }
+    const expiresIn = parsed.expires_in == null ? undefined : Number(parsed.expires_in);
+    return {
+      access_token: parsed.access_token,
+      refresh_token: parsed.refresh_token,
+      expires_in: Number.isFinite(expiresIn) ? expiresIn : undefined,
+      token_type: parsed.token_type,
+      scope: parsed.scope,
+    };
   }
-  if (parsed.error === 'invalid_grant') throw new InvalidGrantError();
-  if (parsed.error) throw new OAuthRefreshExchangeError('provider_rejected', false);
-  if (!response.ok || typeof parsed.access_token !== 'string' || !parsed.access_token) {
-    throw new OAuthRefreshExchangeError('response_ambiguous', true);
-  }
-  const expiresIn = parsed.expires_in == null ? undefined : Number(parsed.expires_in);
-  return {
-    access_token: parsed.access_token,
-    refresh_token: parsed.refresh_token,
-    expires_in: Number.isFinite(expiresIn) ? expiresIn : undefined,
-    token_type: parsed.token_type,
-    scope: parsed.scope,
-  };
+  // Unreachable: the loop returns or throws on every candidate.
+  throw clientAuthRejection ?? new OAuthRefreshExchangeError('provider_rejected', false);
 }
 
 type MutexKey = string;

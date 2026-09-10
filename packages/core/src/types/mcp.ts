@@ -219,6 +219,12 @@ export interface MCPOAuthPendingFlowSealedMaterial {
   clientSecret?: string;
   /** Exact durable DCR UUID epoch used by this attempt. */
   clientRegistrationId?: MCPOAuthClientRegistrationID;
+  /**
+   * Token-endpoint client-authentication method negotiated at flow start.
+   * Optional: envelopes sealed before this field existed default to
+   * `client_secret_basic` on the exchange path.
+   */
+  tokenEndpointAuthMethod?: 'client_secret_basic' | 'client_secret_post';
   compatibilityMode: MCPOAuthRuntimeCompatibilityMode;
   /** Whether RFC 9207 says this AS will return `iss` on the callback. */
   authorizationResponseIssuerParameterSupported?: boolean;
