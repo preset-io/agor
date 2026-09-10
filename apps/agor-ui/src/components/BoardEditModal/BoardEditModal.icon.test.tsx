@@ -1,7 +1,8 @@
 import type { AgorClient, Board } from '@agor-live/client';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { App as AntApp } from 'antd';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { __setAuthConfigForTests } from '../../hooks/useAuthConfig';
 import { BoardEditModal } from './BoardEditModal';
 
 vi.mock('@/utils/message', () => ({ useThemedMessage: () => ({ showError: vi.fn() }) }));
@@ -61,6 +62,17 @@ function makeClient(getBoard: () => Board): AgorClient {
           patch: vi.fn(async (_id: unknown, value: unknown) => value),
         };
       }
+      if (name === 'boards/:id/effective-access') {
+        return {
+          find: vi.fn().mockResolvedValue({
+            capabilities: ['board.view', 'board.edit', 'board.attach_branch'],
+            fs_access: 'none',
+            source: 'primary_owner',
+            group_ids: [],
+            is_primary_owner: true,
+          }),
+        };
+      }
       if (name === 'workspace-preferences') {
         return { find: vi.fn().mockResolvedValue({ session_sharing_enabled: false }) };
       }
@@ -70,19 +82,26 @@ function makeClient(getBoard: () => Board): AgorClient {
 }
 
 describe('BoardEditModal — board icon', () => {
+  beforeEach(() => {
+    // Exercise the normalized permission path from the first render, rather
+    // than letting asynchronous config resolution change the fixture midway.
+    __setAuthConfigForTests({ requireAuth: true }, { branchRbac: true });
+  });
+
   it('selects and persists a multi-codepoint emoji, then restores it on reopen', async () => {
     let savedBoard = { ...listedBoard, icon: '🚩' } as Board;
     const onUpdate = vi.fn(async (_id: string, updates: Partial<Board>) => {
       savedBoard = { ...savedBoard, ...updates };
     });
     const client = makeClient(() => savedBoard);
+    const onClose = vi.fn();
     const view = render(
       <AntApp>
         <BoardEditModal
           board={listedBoard}
           client={client}
           open
-          onClose={vi.fn()}
+          onClose={onClose}
           onUpdate={onUpdate}
         />
       </AntApp>
@@ -102,6 +121,9 @@ describe('BoardEditModal — board icon', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
     await waitFor(() => expect(onUpdate).toHaveBeenCalled());
     expect(onUpdate.mock.calls[0]?.[1]).toMatchObject({ icon: '👩🏽‍💻' });
+    // onUpdate runs before save finishes resetting the form and closing.
+    // Reopening earlier races that previous save's cleanup with the next load.
+    await waitFor(() => expect(onClose).toHaveBeenCalledOnce());
 
     view.rerender(
       <AntApp>
@@ -109,18 +131,19 @@ describe('BoardEditModal — board icon', () => {
           board={listedBoard}
           client={client}
           open={false}
-          onClose={vi.fn()}
+          onClose={onClose}
           onUpdate={onUpdate}
         />
       </AntApp>
     );
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
     view.rerender(
       <AntApp>
         <BoardEditModal
           board={listedBoard}
           client={client}
           open
-          onClose={vi.fn()}
+          onClose={onClose}
           onUpdate={onUpdate}
         />
       </AntApp>
