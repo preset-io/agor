@@ -1,6 +1,6 @@
 import type { Params } from '@agor/core/types';
 
-export type TrustedUserMutationPurpose = 'avatar-sync' | 'env-vars-widget';
+export type TrustedUserMutationPurpose = 'avatar-sync' | 'env-vars-widget' | 'claude-auth';
 
 const TRUSTED_USER_MUTATION_PARAM = Symbol('agor.users.trusted-mutation');
 

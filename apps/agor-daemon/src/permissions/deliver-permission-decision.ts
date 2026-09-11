@@ -37,7 +37,6 @@ export type PermissionDecisionResult =
     };
 
 export interface PermissionDecisionAuthorization {
-  branchRbacEnabled: boolean;
   branchRepository: Pick<
     BranchRepository,
     'findById' | 'resolveUserPermission' | 'resolveSessionPromptAuthority'
@@ -93,19 +92,17 @@ export async function deliverPermissionDecision(options: {
 
   // Viewing a Session is not sufficient to control its executor. Permission
   // decisions use the same branch-session sharing authority as prompting.
-  if (authorization.branchRbacEnabled) {
-    const branch = await authorization.branchRepository.findById(session.branch_id);
-    if (!branch) throw new NotFound(`Branch ${session.branch_id} not found`);
-    const userId = decidedBy as UUID;
-    const { allowed, denialReason } = await resolveSessionPromptAccess({
-      branchRepository: authorization.branchRepository,
-      branch,
-      session,
-      userId,
-    });
-    if (!allowed) {
-      throw new Forbidden(sessionPromptDeniedMessage({ denial_reason: denialReason }));
-    }
+  const branch = await authorization.branchRepository.findById(session.branch_id);
+  if (!branch) throw new NotFound(`Branch ${session.branch_id} not found`);
+  const userId = decidedBy as UUID;
+  const { allowed, denialReason } = await resolveSessionPromptAccess({
+    branchRepository: authorization.branchRepository,
+    branch,
+    session,
+    userId,
+  });
+  if (!allowed) {
+    throw new Forbidden(sessionPromptDeniedMessage({ denial_reason: denialReason }));
   }
 
   // taskId is an untrusted lookup selector, never an authority. The selected

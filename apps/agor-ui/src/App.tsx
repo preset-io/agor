@@ -42,6 +42,7 @@ import { uploadFilesToSession } from './components/FileUpload/upload';
 import { ForcePasswordChangeModal } from './components/ForcePasswordChangeModal';
 import { InitialLoadingScreen } from './components/InitialLoadingScreen';
 import { LoginPage } from './components/LoginPage';
+import { MCPCatalogModalHost } from './components/Marketplace/MCPCatalogModalHost';
 import { OnboardingBanners } from './components/OnboardingBanners';
 import { type OnboardingCompletionResult, OnboardingWizard } from './components/OnboardingWizard';
 import { buildPromptWithAttachments } from './components/SessionPanel/composerAttachments';
@@ -50,6 +51,7 @@ import { StreamdownPortalApp } from './components/StreamdownPortalApp';
 import { getDaemonUrl } from './config/daemon';
 import { CanvasNavigationProvider } from './contexts/CanvasNavigationContext';
 import { ConnectionProvider } from './contexts/ConnectionContext';
+import { MCPCatalogModalProvider } from './contexts/MCPCatalogModalContext';
 import { ThemeProvider, useTheme } from './contexts/ThemeContext';
 import { setPrimaryAgenticToolIfUnset } from './domain/primaryAgenticTool';
 import {
@@ -72,8 +74,8 @@ import {
 } from './hooks';
 import { useAuthorityOperationGuard } from './hooks/useAuthorityOperationGuard';
 import { useEnsureFrameworkRepo } from './hooks/useEnsureFrameworkRepo';
+import { useEnvironmentStart } from './hooks/useEnvironmentStart';
 import { findFrameworkRepo } from './hooks/useFrameworkRepo';
-import { useMarketplaceOAuthAuthorityOwner } from './hooks/useMarketplaceOAuthAuthorityOwner';
 import {
   type OnboardingOperationOwner,
   useOnboardingLifecycle,
@@ -86,7 +88,7 @@ import type { RouteSurfaceId } from './surfaces/surfaceRegistry';
 import {
   ARTIFACT_FULLSCREEN_ROUTE_PATHS,
   KNOWLEDGE_ROUTE_PATHS,
-  MARKETPLACE_ROUTE_PATHS,
+  MCP_RECOVERY_ROUTE_PATHS,
   RBAC_POLICY_PROTOTYPE_ROUTE_PATH,
   routeUsesDeviceRouter,
 } from './surfaces/surfaceRegistry';
@@ -108,6 +110,7 @@ import {
   isOnboardingDeferred,
   type OnboardingReopenMode,
 } from './utils/onboardingLifecycle';
+import { resolveOnboardingSlackIntent } from './utils/onboardingSlack';
 import { savePromptDraft } from './utils/promptDrafts';
 import { seedOnboardingTeammate } from './utils/seedOnboardingTeammate';
 import { updateSessionMcpServers } from './utils/sessionMcpServers';
@@ -204,15 +207,15 @@ const loadKnowledgePage = cacheRouteLoader(
   () => import('./pages/KnowledgePage'),
   (module) => ({ default: module.KnowledgePage })
 );
-const loadMarketplacePage = cacheRouteLoader(
-  'marketplace',
-  () => import('./pages/MarketplacePage'),
-  (module) => ({ default: module.MarketplacePage })
-);
 const loadArtifactFullscreenPage = cacheRouteLoader(
   'artifact-fullscreen',
   () => import('./pages/ArtifactFullscreenPage'),
   (module) => ({ default: module.ArtifactFullscreenPage })
+);
+const loadMcpRecoveryPage = cacheRouteLoader(
+  'mcp-recovery',
+  () => import('./pages/MCPSlackRecoveryPage'),
+  (module) => ({ default: module.MCPSlackRecoveryPage })
 );
 const loadMobileApp = cacheRouteLoader(
   'mobile',
@@ -244,16 +247,16 @@ const RbacPolicyPrototypePage = import.meta.env.DEV
 
 const AgorApp = lazy(loadAgorApp);
 const KnowledgePage = lazy(loadKnowledgePage);
-const MarketplacePage = lazy(loadMarketplacePage);
 const ArtifactFullscreenPage = lazy(loadArtifactFullscreenPage);
+const MCPSlackRecoveryPage = lazy(loadMcpRecoveryPage);
 const MobileApp = lazy(loadMobileApp);
 const StreamdownDemoPage = lazy(loadStreamdownDemoPage);
 
 const routeModuleLoaders = {
   workspace: loadAgorApp,
   knowledge: loadKnowledgePage,
-  marketplace: loadMarketplacePage,
   'artifact-fullscreen': loadArtifactFullscreenPage,
+  'mcp-recovery': loadMcpRecoveryPage,
   demo: loadStreamdownDemoPage,
   mobile: loadMobileApp,
 } satisfies Record<RouteModuleKey, () => Promise<unknown>>;
@@ -398,7 +401,6 @@ function AppContent() {
     logoutForAuthorityCycle,
     refreshCurrentUserForAuthorityCycle,
   } = useAuth();
-  const marketplaceOAuthAuthorityOwner = useMarketplaceOAuthAuthorityOwner(user);
 
   // Call ALL hooks unconditionally BEFORE any conditional returns.
   // Connect to daemon with authentication token (auth is always required —
@@ -414,11 +416,8 @@ function AppContent() {
   } = useAgorClient({
     accessToken: authenticated ? accessToken : null,
     authorityGeneration: authenticationGeneration,
-    onBeforeAuthGenerationChange: marketplaceOAuthAuthorityOwner.beforeAuthGenerationChange,
   });
-  // Ref-only observation keeps the central owner aligned across identity and
-  // role renders without performing cleanup during React render.
-  marketplaceOAuthAuthorityOwner.observeRenderedGeneration(authGeneration);
+  const startEnvironmentWithConfirmation = useEnvironmentStart(client);
   const appAuthorityGuard = useAuthorityOperationGuard(
     user?.user_id && user.role && client && connected && !connecting
       ? [user.user_id, user.role, client, authGeneration]
@@ -616,11 +615,8 @@ function AppContent() {
   const integrationsHydrated = useAgorStore(
     (s) => s.mcpServersHydrated && s.gatewayChannelsHydrated
   );
-  // The "Connect tools" banner asks for workspace-wide setup — MCP servers and
-  // Slack/GitHub channels — so it is offered to the role that can complete it.
-  // Members reach the MCP settings tab without it, to read the policy that
-  // governs them.
-  const canManageMcp = hasMinimumRole(currentUser?.role, ROLES.ADMIN);
+  // Members can browse Catalog; its existing policy gate owns connection authority.
+  const canManageMcp = hasMinimumRole(currentUser?.role, ROLES.MEMBER);
   // Onboarding provisions boards, repos, branches and sessions. A viewer is a
   // read-only role, so its first login must enter the workspace without opening
   // a flow the daemon will correctly refuse at every write boundary.
@@ -930,8 +926,16 @@ function AppContent() {
     }
     if (!isCurrentUser()) return;
 
+    const slackGatewayIntent = await resolveOnboardingSlackIntent(
+      client,
+      currentUser,
+      result.slackGatewayIntent
+    );
+    if (!isCurrentUser()) return;
     const retainedSeed = onboardingSeedResultRef.current.get(result.boardId);
     const seeded = await seedOnboardingTeammate({
+      slackGatewayIntent,
+      connectedMcpServerIds: result.connectedMcpServerIds,
       frameworkRepo: readyFrameworkRepo,
       boardId: result.boardId,
       teammateName: result.teammateName,
@@ -1828,7 +1832,11 @@ function AppContent() {
         requestedAt: Date.now(),
       });
       showLoading('Starting environment...', { key });
-      await client.service(`branches/${branchId}/start`).create({});
+      if (!(await startEnvironmentWithConfirmation(branchId))) {
+        pendingEnvironmentToastsRef.current.delete(branchId);
+        destroy(key);
+        return;
+      }
       showSuccess('Environment start requested', { key });
     } catch (error) {
       pendingEnvironmentToastsRef.current.delete(branchId);
@@ -2123,18 +2131,6 @@ function AppContent() {
     />
   );
 
-  const marketplacePageElement = (
-    <MarketplacePage
-      client={client}
-      connected={connected}
-      connecting={connecting}
-      authGeneration={authGeneration}
-      currentUser={currentUser}
-      onUserSettingsClick={() => setOpenUserSettings(true)}
-      onLogout={logout}
-    />
-  );
-
   const artifactFullscreenElement = (
     <ArtifactFullscreenPage
       client={client}
@@ -2143,6 +2139,8 @@ function AppContent() {
       onLogout={logout}
     />
   );
+
+  const mcpRecoveryElement = <MCPSlackRecoveryPage client={client} />;
 
   // All desktop entity URLs (/b/, /s/, /w/, /a/) render the same
   // AgorApp — the multiple routes exist so react-router's useParams
@@ -2211,6 +2209,7 @@ function AppContent() {
       onUpdateUser={(userId, updates, shouldApply) =>
         handleUpdateUser(userId, updates, { shouldApply })
       }
+      onRefreshCurrentUser={refreshCurrentUserForAuthorityCycle}
       onDeleteUser={handleDeleteUser}
       onCreateMCPServer={handleCreateMCPServer}
       onDeleteMCPServer={handleDeleteMCPServer}
@@ -2240,179 +2239,193 @@ function AppContent() {
   // Render main app
   return (
     <ConnectionProvider value={connectionContextValue}>
-      {/* Force Password Change Modal - shown when user.must_change_password is true */}
-      <ForcePasswordChangeModal
-        open={!!currentUser?.must_change_password && passwordWriteAvailable}
-        user={currentUser}
-        onChangePassword={handleForcePasswordChange}
-        onLogout={logout}
-      />
+      <MCPCatalogModalProvider
+        key={`${currentUser?.user_id ?? 'anonymous'}:${currentUser?.role ?? 'none'}`}
+      >
+        <MCPCatalogModalHost
+          client={client}
+          connected={connected}
+          connecting={connecting}
+          authGeneration={authGeneration}
+          currentUser={currentUser}
+        />
+        {/* Force Password Change Modal - shown when user.must_change_password is true */}
+        <ForcePasswordChangeModal
+          open={!!currentUser?.must_change_password && passwordWriteAvailable}
+          user={currentUser}
+          onChangePassword={handleForcePasswordChange}
+          onLogout={logout}
+        />
 
-      {/* Shared/current-user settings for lightweight surfaces. The full
+        {/* Shared/current-user settings for lightweight surfaces. The full
             Workspace App still owns its existing settings stack; this wrapper
             lets Knowledge expose the user menu without mounting Workspace. */}
-      {sharedSurfaceOwnsUserSettings && (
-        <SharedUserSettingsModal
-          open={openUserSettings}
-          onClose={() => {
-            setOpenUserSettings(false);
-            setUserSettingsInitialTab(undefined);
-          }}
-          user={currentUser}
-          client={client}
-          onUpdateUser={(userId, updates, shouldApply) =>
-            handleUpdateUser(userId, updates, { shouldApply })
-          }
-          onRefreshCurrentUser={refreshCurrentUserForAuthorityCycle}
-          onReopenOnboarding={canRunOnboarding ? handleReopenOnboarding : undefined}
-          initialTab={userSettingsInitialTab}
-        />
-      )}
+        {sharedSurfaceOwnsUserSettings && (
+          <SharedUserSettingsModal
+            open={openUserSettings}
+            onClose={() => {
+              setOpenUserSettings(false);
+              setUserSettingsInitialTab(undefined);
+            }}
+            user={currentUser}
+            client={client}
+            onUpdateUser={(userId, updates, shouldApply) =>
+              handleUpdateUser(userId, updates, { shouldApply })
+            }
+            onRefreshCurrentUser={refreshCurrentUserForAuthorityCycle}
+            onReopenOnboarding={canRunOnboarding ? handleReopenOnboarding : undefined}
+            initialTab={userSettingsInitialTab}
+          />
+        )}
 
-      {location.pathname.startsWith('/m') && (
-        <SettingsModal
-          open={settingsTabToOpen !== null}
-          onClose={handleSettingsClose}
-          client={client}
-          currentUser={currentUser}
-          activeTab={settingsTabToOpen ?? 'boards'}
-          onTabChange={setSettingsTabToOpen}
-          onCreateBoard={handleCreateBoard}
-          onUpdateBoard={handleUpdateBoard}
-          onDeleteBoard={handleDeleteBoard}
-          onArchiveBoard={handleArchiveBoard}
-          onUnarchiveBoard={handleUnarchiveBoard}
-          onCreateRepo={(data, shouldApply) => handleCreateRepo(data, { shouldApply })}
-          onCreateLocalRepo={handleCreateLocalRepo}
-          onUpdateRepo={handleUpdateRepo}
-          onDeleteRepo={handleDeleteRepo}
-          onArchiveOrDeleteBranch={handleArchiveOrDeleteBranch}
-          onUnarchiveBranch={handleUnarchiveBranch}
-          onUpdateBranch={handleUpdateBranch}
-          onCreateBranch={handleCreateBranch}
-          onStartEnvironment={handleStartEnvironment}
-          onStopEnvironment={handleStopEnvironment}
-          onCreateUser={handleCreateUser}
-          onUpdateUser={(userId, updates, shouldApply) =>
-            handleUpdateUser(userId, updates, { shouldApply })
-          }
-          onDeleteUser={handleDeleteUser}
-          onCreateMCPServer={handleCreateMCPServer}
-          onDeleteMCPServer={handleDeleteMCPServer}
-          onCreateGatewayChannel={handleCreateGatewayChannel}
-          onUpdateGatewayChannel={handleUpdateGatewayChannel}
-          onDeleteGatewayChannel={handleDeleteGatewayChannel}
-          onUpdateArtifact={handleUpdateArtifact}
-          onDeleteArtifact={handleDeleteArtifact}
-          branchStorageConfig={featuresConfig?.branchStorage}
-        />
-      )}
+        {location.pathname.startsWith('/m') && (
+          <SettingsModal
+            open={settingsTabToOpen !== null}
+            onClose={handleSettingsClose}
+            client={client}
+            currentUser={currentUser}
+            activeTab={settingsTabToOpen ?? 'boards'}
+            onTabChange={setSettingsTabToOpen}
+            onCreateBoard={handleCreateBoard}
+            onUpdateBoard={handleUpdateBoard}
+            onDeleteBoard={handleDeleteBoard}
+            onArchiveBoard={handleArchiveBoard}
+            onUnarchiveBoard={handleUnarchiveBoard}
+            onCreateRepo={(data, shouldApply) => handleCreateRepo(data, { shouldApply })}
+            onCreateLocalRepo={handleCreateLocalRepo}
+            onUpdateRepo={handleUpdateRepo}
+            onDeleteRepo={handleDeleteRepo}
+            onArchiveOrDeleteBranch={handleArchiveOrDeleteBranch}
+            onUnarchiveBranch={handleUnarchiveBranch}
+            onUpdateBranch={handleUpdateBranch}
+            onCreateBranch={handleCreateBranch}
+            onStartEnvironment={handleStartEnvironment}
+            onStopEnvironment={handleStopEnvironment}
+            onCreateUser={handleCreateUser}
+            onUpdateUser={(userId, updates, shouldApply) =>
+              handleUpdateUser(userId, updates, { shouldApply })
+            }
+            onDeleteUser={handleDeleteUser}
+            onCreateMCPServer={handleCreateMCPServer}
+            onDeleteMCPServer={handleDeleteMCPServer}
+            onCreateGatewayChannel={handleCreateGatewayChannel}
+            onUpdateGatewayChannel={handleUpdateGatewayChannel}
+            onDeleteGatewayChannel={handleDeleteGatewayChannel}
+            onUpdateArtifact={handleUpdateArtifact}
+            onDeleteArtifact={handleDeleteArtifact}
+            branchStorageConfig={featuresConfig?.branchStorage}
+          />
+        )}
 
-      {/* Onboarding Wizard - shown for new users. Both visibility and local
+        {/* Onboarding Wizard - shown for new users. Both visibility and local
             React state belong to one authenticated generation, not merely a
             user ID. Logout/login as the same user and principal changes both
             invalidate the old wizard and any pending completion work. */}
-      <ConfigProvider theme={ONBOARDING_DARK_THEME}>
-        <OnboardingWizard
-          key={`${onboardingWizardOwner?.userId ?? '__anon__'}:${onboardingWizardOwner?.authenticationGeneration ?? authenticationGeneration}:${onboardingWizardOwner?.activationGeneration ?? 0}`}
-          open={onboardingWizardOpen}
-          isCurrent={() =>
-            !!onboardingWizardOwner && isOnboardingOwnerCurrent(onboardingWizardOwner)
-          }
-          onComplete={(result, attempt) => {
-            if (!onboardingWizardOwner || !isOnboardingOwnerCurrent(onboardingWizardOwner)) return;
-            return handleOnboardingComplete(onboardingWizardOwner, result, attempt.isCurrent);
-          }}
-          onDismiss={(progress) => {
-            if (!onboardingWizardOwner || !isOnboardingOwnerCurrent(onboardingWizardOwner)) return;
-            handleOnboardingDismiss(onboardingWizardOwner, progress);
-          }}
-          user={currentUser}
-          client={client}
-          onUpdateUser={async (userId, updates) => {
-            if (
-              !onboardingWizardOwner ||
-              userId !== onboardingWizardOwner.userId ||
-              !isOnboardingOwnerCurrent(onboardingWizardOwner)
-            ) {
-              return;
+        <ConfigProvider theme={ONBOARDING_DARK_THEME}>
+          <OnboardingWizard
+            key={`${onboardingWizardOwner?.userId ?? '__anon__'}:${onboardingWizardOwner?.authenticationGeneration ?? authenticationGeneration}:${onboardingWizardOwner?.activationGeneration ?? 0}`}
+            open={onboardingWizardOpen}
+            isCurrent={() =>
+              !!onboardingWizardOwner && isOnboardingOwnerCurrent(onboardingWizardOwner)
             }
-            const wizardWrite = handleUpdateUser(userId, updates, { silent: true });
-            onboardingWizardWriteRef.current = {
-              owner: onboardingWizardOwner,
-              promise: wizardWrite,
-            };
-            try {
-              await wizardWrite;
-            } finally {
-              if (onboardingWizardWriteRef.current?.promise === wizardWrite) {
-                onboardingWizardWriteRef.current = null;
+            onComplete={(result, attempt) => {
+              if (!onboardingWizardOwner || !isOnboardingOwnerCurrent(onboardingWizardOwner))
+                return;
+              return handleOnboardingComplete(
+                onboardingWizardOwner,
+                result,
+                attempt.isCurrent
+              ).then(() => undefined);
+            }}
+            onDismiss={(progress) => {
+              if (!onboardingWizardOwner || !isOnboardingOwnerCurrent(onboardingWizardOwner))
+                return;
+              handleOnboardingDismiss(onboardingWizardOwner, progress);
+            }}
+            user={currentUser}
+            client={client}
+            allowClaudeOAuthSignIn={featuresConfig?.claudeSubscriptionOAuth === true}
+            onUpdateUser={async (userId, updates) => {
+              if (
+                !onboardingWizardOwner ||
+                userId !== onboardingWizardOwner.userId ||
+                !isOnboardingOwnerCurrent(onboardingWizardOwner)
+              ) {
+                return;
               }
-            }
-          }}
-          onCheckAuth={async (tool, apiKey) => {
-            if (!onboardingWizardOwner || !isOnboardingOwnerCurrent(onboardingWizardOwner)) {
-              return { status: 'unknown', authenticated: false, method: 'none' };
-            }
-            const result = await handleCheckAuth(tool, apiKey);
-            return isOnboardingOwnerCurrent(onboardingWizardOwner)
-              ? result
-              : { status: 'unknown', authenticated: false, method: 'none' };
-          }}
-        />
-      </ConfigProvider>
-
-      <DeviceRouter />
-      <Suspense fallback={routeFallback}>
-        <Routes>
-          {/* Demo routes */}
-          <Route path="/demo/streamdown" element={<StreamdownDemoPage />} />
-          <Route path="/demo/marketing-screenshots" element={<MarketingScreenshotPage />} />
-          <Route path="/demo/marketing-video" element={<MarketingVideoPage />} />
-
-          {/* Knowledge route shell. `/kb` is a short alias for the same surface. */}
-          {KNOWLEDGE_ROUTE_PATHS.map((path) => (
-            <Route key={path} path={path} element={knowledgePageElement} />
-          ))}
-
-          {/* MCP marketplace: browse the catalog and connect a server. Its own
-                surface because it reads the checked-in curated catalog, not
-                the tenant's board/session store. */}
-          {MARKETPLACE_ROUTE_PATHS.map((path) => (
-            <Route key={path} path={path} element={marketplacePageElement} />
-          ))}
-
-          {/* Lightweight artifact fullscreen surface. Uses the shared auth shell,
-                but does not start the Workspace board/session store on fresh loads. */}
-          {ARTIFACT_FULLSCREEN_ROUTE_PATHS.map((path) => (
-            <Route key={path} path={path} element={artifactFullscreenElement} />
-          ))}
-
-          {/* Mobile routes */}
-          <Route
-            path="/m/*"
-            element={
-              <MobileApp
-                client={client}
-                user={user}
-                onSendPrompt={handleSendPrompt}
-                onSendComment={handleSendComment}
-                onReplyComment={handleReplyComment}
-                onResolveComment={handleResolveComment}
-                onToggleReaction={handleToggleReaction}
-                onDeleteComment={handleDeleteComment}
-                onLogout={logout}
-                onOpenWorkspaceSettings={setSettingsTabToOpen}
-                onOpenUserSettings={() => setOpenUserSettings(true)}
-                onUpdateBranch={handleUpdateBranch}
-                onUpdateRepo={handleUpdateRepo}
-                onArchiveOrDeleteBranch={handleArchiveOrDeleteBranch}
-                onExecuteScheduleNow={handleExecuteScheduleNow}
-              />
-            }
+              const wizardWrite = handleUpdateUser(userId, updates, { silent: true });
+              onboardingWizardWriteRef.current = {
+                owner: onboardingWizardOwner,
+                promise: wizardWrite,
+              };
+              try {
+                await wizardWrite;
+              } finally {
+                if (onboardingWizardWriteRef.current?.promise === wizardWrite) {
+                  onboardingWizardWriteRef.current = null;
+                }
+              }
+            }}
+            onCheckAuth={async (tool, apiKey) => {
+              if (!onboardingWizardOwner || !isOnboardingOwnerCurrent(onboardingWizardOwner)) {
+                return { status: 'unknown', authenticated: false, method: 'none' };
+              }
+              const result = await handleCheckAuth(tool, apiKey);
+              return isOnboardingOwnerCurrent(onboardingWizardOwner)
+                ? result
+                : { status: 'unknown', authenticated: false, method: 'none' };
+            }}
           />
+        </ConfigProvider>
 
-          {/* Desktop routes — flat entity URLs. Boards have their own
+        <DeviceRouter />
+        <Suspense fallback={routeFallback}>
+          <Routes>
+            {/* Demo routes */}
+            <Route path="/demo/streamdown" element={<StreamdownDemoPage />} />
+            <Route path="/demo/marketing-screenshots" element={<MarketingScreenshotPage />} />
+            <Route path="/demo/marketing-video" element={<MarketingVideoPage />} />
+
+            {/* Knowledge route shell. `/kb` is a short alias for the same surface. */}
+            {KNOWLEDGE_ROUTE_PATHS.map((path) => (
+              <Route key={path} path={path} element={knowledgePageElement} />
+            ))}
+
+            {MCP_RECOVERY_ROUTE_PATHS.map((path) => (
+              <Route key={path} path={path} element={mcpRecoveryElement} />
+            ))}
+
+            {/* Lightweight artifact fullscreen surface. Uses the shared auth shell,
+                but does not start the Workspace board/session store on fresh loads. */}
+            {ARTIFACT_FULLSCREEN_ROUTE_PATHS.map((path) => (
+              <Route key={path} path={path} element={artifactFullscreenElement} />
+            ))}
+
+            {/* Mobile routes */}
+            <Route
+              path="/m/*"
+              element={
+                <MobileApp
+                  client={client}
+                  user={user}
+                  onSendPrompt={handleSendPrompt}
+                  onSendComment={handleSendComment}
+                  onReplyComment={handleReplyComment}
+                  onResolveComment={handleResolveComment}
+                  onToggleReaction={handleToggleReaction}
+                  onDeleteComment={handleDeleteComment}
+                  onLogout={logout}
+                  onOpenWorkspaceSettings={setSettingsTabToOpen}
+                  onOpenUserSettings={() => setOpenUserSettings(true)}
+                  onUpdateBranch={handleUpdateBranch}
+                  onUpdateRepo={handleUpdateRepo}
+                  onArchiveOrDeleteBranch={handleArchiveOrDeleteBranch}
+                  onExecuteScheduleNow={handleExecuteScheduleNow}
+                />
+              }
+            />
+
+            {/* Desktop routes — flat entity URLs. Boards have their own
                 path because they're a destination; sub-entities (session,
                 branch, artifact) get top-level paths keyed by short ID
                 so they're stable across board moves. The app resolves the
@@ -2421,24 +2434,28 @@ function AppContent() {
                 `ENTITY_PATH_SEGMENTS` constant so this list and the
                 URL/path builders can't drift. See
                 `packages/core/src/utils/url.ts`. */}
-          <Route path={`/${ENTITY_PATH_SEGMENTS.board}/:boardParam/`} element={desktopAppElement} />
-          <Route
-            path={`/${ENTITY_PATH_SEGMENTS.session}/:sessionShortId/`}
-            element={desktopAppElement}
-          />
-          <Route
-            path={`/${ENTITY_PATH_SEGMENTS.branch}/:branchShortId/`}
-            element={desktopAppElement}
-          />
-          <Route
-            path={`/${ENTITY_PATH_SEGMENTS.artifact}/:artifactShortId/`}
-            element={desktopAppElement}
-          />
+            <Route
+              path={`/${ENTITY_PATH_SEGMENTS.board}/:boardParam/`}
+              element={desktopAppElement}
+            />
+            <Route
+              path={`/${ENTITY_PATH_SEGMENTS.session}/:sessionShortId/`}
+              element={desktopAppElement}
+            />
+            <Route
+              path={`/${ENTITY_PATH_SEGMENTS.branch}/:branchShortId/`}
+              element={desktopAppElement}
+            />
+            <Route
+              path={`/${ENTITY_PATH_SEGMENTS.artifact}/:artifactShortId/`}
+              element={desktopAppElement}
+            />
 
-          {/* Fallback for unknown / root paths */}
-          <Route path="/*" element={desktopAppElement} />
-        </Routes>
-      </Suspense>
+            {/* Fallback for unknown / root paths */}
+            <Route path="/*" element={desktopAppElement} />
+          </Routes>
+        </Suspense>
+      </MCPCatalogModalProvider>
     </ConnectionProvider>
   );
 }

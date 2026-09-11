@@ -12,6 +12,8 @@
 import {
   BoardRepository,
   BranchRepository,
+  createTenantScopedDatabaseProxy,
+  type Database,
   generateId,
   RepoRepository,
   SessionRepository,
@@ -19,13 +21,22 @@ import {
 import type { Application } from '@agor/core/feathers';
 import type { Session, UUID } from '@agor/core/types';
 import { SessionStatus } from '@agor/core/types';
-import { describe, expect } from 'vitest';
+import { afterEach, describe, expect, vi } from 'vitest';
 import { ownedDbTest as dbTest } from '../../../../packages/core/src/db/test-helpers';
 import { SessionsService } from './sessions';
 
 // The find() board_id path only touches the session repos built from `db`; the
 // stored `app` is never read. A bare cast keeps the harness minimal.
 const STUB_APP = {} as unknown as Application;
+afterEach(() => vi.restoreAllMocks());
+
+function createService(db: Database) {
+  // Standalone SQLite query tests deliberately install no tenant around-hook.
+  return new SessionsService(
+    createTenantScopedDatabaseProxy(db, { requireScope: false }),
+    STUB_APP
+  );
+}
 
 async function createBoard(db: any): Promise<UUID> {
   const boardRepo = new BoardRepository(db);
@@ -93,7 +104,7 @@ function orderedIds(result: Awaited<ReturnType<SessionsService['find']>>): strin
 
 describe('SessionsService.find — board_id pushdown', () => {
   dbTest('returns only sessions whose branch is on the requested board', async ({ db }) => {
-    const service = new SessionsService(db, STUB_APP);
+    const service = createService(db);
 
     const boardA = await createBoard(db);
     const boardB = await createBoard(db);
@@ -116,7 +127,7 @@ describe('SessionsService.find — board_id pushdown', () => {
   });
 
   dbTest('returns empty for a board with no branches/sessions', async ({ db }) => {
-    const service = new SessionsService(db, STUB_APP);
+    const service = createService(db);
     const boardA = await createBoard(db);
     const emptyBoard = await createBoard(db);
     const branchA = await createBranchOnBoard(db, boardA);
@@ -127,7 +138,7 @@ describe('SessionsService.find — board_id pushdown', () => {
   });
 
   dbTest('keeps other filters working alongside board_id', async ({ db }) => {
-    const service = new SessionsService(db, STUB_APP);
+    const service = createService(db);
     const boardA = await createBoard(db);
     const branchA = await createBranchOnBoard(db, boardA);
 
@@ -166,8 +177,94 @@ describe('SessionsService.find — recency sort + pagination (SQL pushdown)', ()
   const T_MID = '2026-02-01T00:00:00.000Z';
   const T_NEW = '2026-03-01T00:00:00.000Z';
 
+  dbTest(
+    'pages exact status with board/branch intersection in SQL, without materializing candidates',
+    async ({ db }) => {
+      const service = createService(db);
+      const board = await createBoard(db);
+      const branch = await createBranchOnBoard(db, board);
+      const otherBranch = await createBranchOnBoard(db, await createBoard(db));
+      await createSession(db, branch, { status: SessionStatus.IDLE });
+      const first = await createSession(db, branch, {
+        status: SessionStatus.RUNNING,
+        created_at: T_OLD,
+      });
+      const second = await createSession(db, branch, {
+        status: SessionStatus.RUNNING,
+        created_at: T_NEW,
+      });
+      await createSession(db, otherBranch, { status: SessionStatus.RUNNING });
+      const fallback = vi
+        .spyOn(SessionRepository.prototype, 'findAll')
+        .mockRejectedValue(new Error('unbounded fallback'));
+      try {
+        const query = {
+          board_id: board,
+          branch_id: branch,
+          status: SessionStatus.RUNNING,
+          $sort: { created_at: -1 as const },
+          $limit: 1,
+        };
+        const page = await service.find({ query });
+        expect(orderedIds(page)).toEqual([second]);
+        expect(page).toMatchObject({ total: 2, limit: 1, skip: 0 });
+        expect(orderedIds(await service.find({ query: { ...query, $skip: 1 } }))).toEqual([first]);
+        expect(
+          orderedIds(await service.find({ query: { ...query, branch_id: otherBranch } }))
+        ).toEqual([]);
+        expect(fallback).not.toHaveBeenCalled();
+      } finally {
+        fallback.mockRestore();
+      }
+    }
+  );
+
+  dbTest('caps the SQL page limit and preserves count-only requests', async ({ db }) => {
+    const service = createService(db);
+    const branch = await createBranchOnBoard(db, await createBoard(db));
+    await createSession(db, branch);
+    await createSession(db, branch);
+    const pageSpy = vi.spyOn(SessionRepository.prototype, 'findPage');
+    expect(await service.find({ query: { branch_id: branch, $limit: 10000 } })).toMatchObject({
+      limit: 10000,
+    });
+    service.paginate = { default: 100, max: 1000 };
+    expect(await service.find({ query: { branch_id: branch } })).toMatchObject({ limit: 100 });
+    const capped = await service.find({ query: { branch_id: branch, $limit: 10000 } });
+    expect(capped).toMatchObject({ total: 2, limit: 1000 });
+    expect(pageSpy).toHaveBeenLastCalledWith(expect.objectContaining({ limit: 1000 }));
+    expect(await service.find({ query: { branch_id: branch, $limit: 0 } })).toMatchObject({
+      total: 2,
+      limit: 0,
+      data: [],
+    });
+  });
+
+  dbTest('keeps residual operators and field selection before pagination', async ({ db }) => {
+    const service = createService(db);
+    const board = await createBoard(db);
+    const branch = await createBranchOnBoard(db, board);
+    await createSession(db, branch, { title: 'excluded', created_at: T_OLD });
+    const first = await createSession(db, branch, { title: 'first', created_at: T_MID });
+    const second = await createSession(db, branch, { title: 'second', created_at: T_NEW });
+    for (const scope of [{ board_id: board }, { branch_id: branch }]) {
+      const result = await service.find({
+        query: {
+          ...scope,
+          status: SessionStatus.IDLE,
+          session_id: { $in: [first, second] },
+          $select: ['title'],
+          $sort: { created_at: 1 },
+          $limit: 1,
+          $skip: 1,
+        },
+      });
+      expect(result).toEqual({ total: 2, limit: 1, skip: 1, data: [{ title: 'second' }] });
+    }
+  });
+
   dbTest('orders board-scoped sessions by updated_at desc', async ({ db }) => {
-    const service = new SessionsService(db, STUB_APP);
+    const service = createService(db);
     const boardA = await createBoard(db);
     const branchA = await createBranchOnBoard(db, boardA);
 
@@ -183,7 +280,7 @@ describe('SessionsService.find — recency sort + pagination (SQL pushdown)', ()
   });
 
   dbTest('recency sort composes with $limit/$skip (board-scoped)', async ({ db }) => {
-    const service = new SessionsService(db, STUB_APP);
+    const service = createService(db);
     const boardA = await createBoard(db);
     const branchA = await createBranchOnBoard(db, boardA);
 
@@ -206,7 +303,7 @@ describe('SessionsService.find — recency sort + pagination (SQL pushdown)', ()
   });
 
   dbTest('uses the SQL page path for branch created_at pagination', async ({ db }) => {
-    const service = new SessionsService(db, STUB_APP);
+    const service = createService(db);
     const boardA = await createBoard(db);
     const branchA = await createBranchOnBoard(db, boardA);
 
@@ -245,7 +342,7 @@ describe('SessionsService.find — recency sort + pagination (SQL pushdown)', ()
   });
 
   dbTest('orders the global recent-N slice by updated_at desc across boards', async ({ db }) => {
-    const service = new SessionsService(db, STUB_APP);
+    const service = createService(db);
     const boardA = await createBoard(db);
     const boardB = await createBoard(db);
     const branchA = await createBranchOnBoard(db, boardA);
@@ -263,7 +360,7 @@ describe('SessionsService.find — recency sort + pagination (SQL pushdown)', ()
   });
 
   dbTest('board_id composes with the $in operator (generic pipeline)', async ({ db }) => {
-    const service = new SessionsService(db, STUB_APP);
+    const service = createService(db);
     const boardA = await createBoard(db);
     const branchA = await createBranchOnBoard(db, boardA);
 

@@ -22,15 +22,16 @@ import {
   AGENTIC_TOOL_NAMES,
   type AgenticToolName,
   type Board,
+  type BranchID,
   getSessionType,
   type Session,
-  type SessionType,
+  type SessionID,
   type ZoneBoardObject,
 } from '@agor/core/types';
 import type { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import type { SessionsServiceImpl } from '../../declarations.js';
-import type { SessionParams } from '../../services/sessions.js';
+import type { SessionBulkArchiveResult, SessionParams } from '../../services/sessions.js';
 import { requireActiveAgenticTool } from '../../utils/agentic-tool-runtime.js';
 import { ensureCanPromptTargetSession } from '../../utils/branch-authorization.js';
 import { emitServiceEvent } from '../../utils/emit-service-event.js';
@@ -135,29 +136,9 @@ function coerceModelConfig(
   return input;
 }
 
-function filterSessionsByBranch<T extends { branch_id?: string }>(
-  result: T[] | { data: T[]; total?: number; [key: string]: unknown },
-  branchId: string
-): T[] | { data: T[]; total?: number; [key: string]: unknown } {
-  if (Array.isArray(result)) {
-    return result.filter((session) => session.branch_id === branchId);
-  }
-
-  const data = result.data.filter((session) => session.branch_id === branchId);
-  return { ...result, data, total: data.length };
-}
-
-function filterSessionsByBoard<T extends { branch_board_id?: string | null }>(
-  result: T[] | { data: T[]; total?: number; [key: string]: unknown },
-  boardId: string
-): T[] | { data: T[]; total?: number; [key: string]: unknown } {
-  if (Array.isArray(result)) {
-    return result.filter((session) => session.branch_board_id === boardId);
-  }
-
-  const data = result.data.filter((session) => session.branch_board_id === boardId);
-  return { ...result, data, total: data.length };
-}
+// Keep derived-type scans within the existing API page ceiling. Never present
+// a truncated candidate scan as a complete filtered inventory.
+const SESSION_TYPE_SCAN_LIMIT = 10_000;
 
 function redactSessionForMcp<T extends { mcp_token?: unknown }>(session: T): Omit<T, 'mcp_token'> {
   const { mcp_token: _mcpToken, ...safeSession } = session;
@@ -183,23 +164,13 @@ function compactSessionForMcp(session: Session) {
   };
 }
 
-function redactSessionFindResult<T extends { mcp_token?: unknown }>(
-  result: T[] | { data: T[]; [key: string]: unknown }
-): Array<Omit<T, 'mcp_token'>> | { data: Array<Omit<T, 'mcp_token'>>; [key: string]: unknown } {
-  if (Array.isArray(result)) {
-    return result.map(redactSessionForMcp);
-  }
-
-  return { ...result, data: result.data.map(redactSessionForMcp) };
-}
-
 export function registerSessionTools(server: McpServer, ctx: McpContext): void {
   // Tool 1: agor_sessions_list
   server.registerTool(
     'agor_sessions_list',
     {
       description:
-        'List a lean page of sessions accessible to the current user. Runtime configuration, context files, task ID arrays, and SDK state are omitted by default; use agor_sessions_get for details or lean:false when required. Advance with offset=nextOffset while hasMore is true.',
+        'List a lean page of sessions accessible to the current user. Branch and board filters are optional. sessionType scans at most 10000 candidates and errors if the scan is incomplete. Runtime configuration, context files, task ID arrays, and SDK state are omitted by default; use agor_sessions_get for details or lean:false when required. Advance with offset=nextOffset while hasMore is true.',
       annotations: { readOnlyHint: true },
       inputSchema: z.object({
         limit: mcpListLimit(),
@@ -236,70 +207,69 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
       }),
     },
     async (args) => {
-      const query: Record<string, unknown> = {};
-      // When sessionType or boardId is set, skip service-level pagination
-      // (it runs before our post-query filters) and apply the requested limit
-      // ourselves after filtering.
-      // Keep handler defaults explicit because unit/in-process callers may
-      // invoke captured handlers without going through Zod defaulting.
+      // Handler defaults also serve captured/in-process callers. The registered
+      // schema validates positive limits (max 100) and nonnegative offsets.
       const requestedLimit = args.limit ?? 25;
       const requestedOffset = args.offset ?? 0;
       const boardId = args.boardId ? await resolveBoardId(ctx, args.boardId) : undefined;
-      const needsPostQueryLimit = Boolean(args.sessionType || boardId);
-      if (!needsPostQueryLimit) {
-        query.$limit = requestedLimit;
-        query.$skip = requestedOffset;
-      }
-      query.$sort = { created_at: -1, session_id: 1 };
-      if (args.status) query.status = args.status;
       const branchId = args.branchId ? await resolveBranchId(ctx, args.branchId) : undefined;
+      const needsTypeScan = Boolean(args.sessionType);
+      const query: Record<string, unknown> = {
+        $limit: needsTypeScan ? SESSION_TYPE_SCAN_LIMIT : requestedLimit,
+        $skip: needsTypeScan ? 0 : requestedOffset,
+        // findPage supplies the session_id tie-breaker. Adding it here would
+        // select the generic in-memory fallback instead of the SQL page path.
+        $sort: { created_at: -1 },
+      };
+      if (boardId) query.board_id = boardId;
       if (branchId) query.branch_id = branchId;
+      if (args.status) query.status = args.status;
       if (args.archived === true) {
         query.archived = true;
       } else if (!args.includeArchived) {
         query.archived = false;
       }
       const result = await ctx.app.service('sessions').find({
-        query: needsPostQueryLimit ? { ...query, $limit: 10000, $skip: 0 } : query,
+        query,
         ...ctx.baseServiceParams,
       });
+      const data: Session[] = Array.isArray(result) ? result : result.data;
+      // A dropped narrowing filter is an adapter/authorization contract error,
+      // not a reason to leak rows or fabricate a new total from this one page.
+      if (
+        data.some(
+          (session) =>
+            (branchId && session.branch_id !== branchId) ||
+            (boardId && session.branch_board_id !== boardId)
+        )
+      ) {
+        throw new Error(
+          'Session list returned records outside the requested branch or board scope.'
+        );
+      }
+      if (data.length > (needsTypeScan ? SESSION_TYPE_SCAN_LIMIT : requestedLimit)) {
+        throw new Error('Session list exceeded the requested page limit.');
+      }
+      const project = (session: Session) =>
+        args.lean === false ? redactSessionForMcp(session) : compactSessionForMcp(session);
 
-      // Defense-in-depth: the sessions service normally handles branch_id in
-      // its query filter, but MCP callers rely on this tool contract. Keep the
-      // response scoped even if an adapter/hook layer drops or rewrites the
-      // query before it reaches the repository.
-      const branchScopedResult = branchId ? filterSessionsByBranch(result, branchId) : result;
-      const boardScopedResult = boardId
-        ? filterSessionsByBoard(branchScopedResult, boardId)
-        : branchScopedResult;
-
-      // Apply post-query filters. sessionType is derived from fields that are
-      // not in the query schema. boardId is exposed on Session as
-      // branch_board_id via the branch join, not sessions.board_id (legacy
-      // column is null for branch-backed sessions).
-      if (needsPostQueryLimit) {
-        const allData: Session[] = Array.isArray(boardScopedResult)
-          ? boardScopedResult
-          : boardScopedResult.data;
-        const filtered = args.sessionType
-          ? allData.filter((s) => getSessionType(s) === (args.sessionType as SessionType))
-          : allData;
-        const limited = filtered.slice(requestedOffset, requestedOffset + requestedLimit);
-
-        if (Array.isArray(boardScopedResult)) {
-          const data = limited.map((session) =>
-            args.lean === false ? redactSessionForMcp(session) : compactSessionForMcp(session)
+      if (needsTypeScan) {
+        // A bare array cannot prove whether an adapter truncated the scan.
+        const complete =
+          !Array.isArray(result) && result.skip === 0 && result.total === data.length;
+        if (!complete) {
+          throw new Error(
+            `sessionType requires a complete scan of at most ${SESSION_TYPE_SCAN_LIMIT} candidate sessions. Narrow with branchId, boardId, status or archive filters, or omit sessionType and page normally.`
           );
-          return textResult(mcpPageResult(data, requestedLimit, requestedOffset));
         }
+        const filtered = data.filter((session) => getSessionType(session) === args.sessionType);
         return textResult(
           mcpPageResult(
             {
-              ...boardScopedResult,
-              data: limited.map((session) =>
-                args.lean === false ? redactSessionForMcp(session) : compactSessionForMcp(session)
-              ),
+              data: filtered.slice(requestedOffset, requestedOffset + requestedLimit).map(project),
               total: filtered.length,
+              limit: requestedLimit,
+              skip: requestedOffset,
             },
             requestedLimit,
             requestedOffset
@@ -307,20 +277,12 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
         );
       }
 
-      const page = mcpPageResult(
-        redactSessionFindResult(boardScopedResult) as {
-          data: Array<Omit<Session, 'mcp_token'>>;
-          total?: number;
-          limit?: number;
-          skip?: number;
-        },
-        requestedLimit,
-        requestedOffset
-      );
       return textResult(
-        args.lean === false
-          ? page
-          : { ...page, data: page.data.map((session) => compactSessionForMcp(session as Session)) }
+        mcpPageResult(
+          Array.isArray(result) ? data.map(project) : { ...result, data: data.map(project) },
+          requestedLimit,
+          requestedOffset
+        )
       );
     }
   );
@@ -359,7 +321,7 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
     'agor_sessions_get_current',
     {
       description:
-        'Get information about the current session (the one making this MCP call). Returns session details, denormalized branch/repo/board context, and the MCP servers attached to this session (each with `oauth_authenticated` so callers can spot servers needing auth). To browse the broader catalog of servers eligible to attach, use `agor_mcp_servers_list`. The returned session_id is the value a remote orchestrator passes as callbackSessionId (agor_sessions_create) to self-target cross-branch completion callbacks; agor_sessions_get_current_context is the leaner way to fetch it.',
+        'Get information about the current session (the one making this MCP call). Returns session details, denormalized branch/repo/board context, and the MCP servers attached to this session (each with `oauth_authenticated` so callers can spot servers needing auth). To browse the broader catalog of servers eligible to attach, use `agor_mcp_servers_list`. For self callbacks with agor_sessions_create, set enableCallback: true and omit callbackSessionId to target the actual calling session, including cross-branch creation. Only set callbackSessionId for an intentional authorized alternate destination. When explicit current identity is needed, make a fresh call to this tool or the leaner agor_sessions_get_current_context and use its session_id rather than inherited IDs or earlier results.',
       annotations: { readOnlyHint: true },
       inputSchema: z.object({}),
     },
@@ -443,7 +405,7 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
     'agor_sessions_get_current_context',
     {
       description:
-        'Get a lean orientation snapshot for the current session in ONE call. Returns deduplicated context: session identity, user, latest task Git boundaries, branch (zone, issue/PR, notes, environment), board (with zones), repo (slug, default branch), genealogy, and sibling sessions. Every field appears exactly once. Use get_current or entity-specific tools for full details. The returned session_id is what a remote orchestrator passes as callbackSessionId (agor_sessions_create) to self-target cross-branch completion callbacks.',
+        'Get a lean orientation snapshot for the current session in ONE call. Returns deduplicated context: session identity, user, latest task Git boundaries, branch (zone, issue/PR, notes, environment), board (with zones), repo (slug, default branch), genealogy, and sibling sessions. Every field appears exactly once. Use get_current or entity-specific tools for full details. For self callbacks with agor_sessions_create, set enableCallback: true and omit callbackSessionId to target the actual calling session, including cross-branch creation. Only set callbackSessionId for an intentional authorized alternate destination. When explicit current identity is needed, make a fresh call to this tool and use its session_id rather than inherited IDs or earlier results.',
       annotations: { readOnlyHint: true },
       inputSchema: z.object({
         includeSiblings: z
@@ -693,18 +655,24 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
         modelConfig: coerceModelConfig(args.modelConfig),
       };
 
-      const childSession = await (
-        ctx.app.service('sessions') as unknown as SessionsServiceImpl
-      ).spawn(currentSessionId, spawnData, ctx.baseServiceParams);
+      // spawn/fork are custom methods, not Feathers transport methods. Scope
+      // only child admission/persistence; prompting must run after this unit
+      // commits, without holding a transaction across executor orchestration.
+      const sessionsService = ctx.app.service('sessions') as unknown as SessionsServiceImpl;
+      const childSession = await runWithMcpTenantDatabaseWrite(ctx, () =>
+        sessionsService.spawn(currentSessionId, spawnData, ctx.baseServiceParams)
+      );
 
       const task = await ctx.app.service('/sessions/:id/prompt').create(
         {
           prompt: args.prompt,
           permissionMode: childSession.permission_config?.mode || 'acceptEdits',
           stream: true,
+          metadata: { system_authored: true },
         },
         {
           ...ctx.baseServiceParams,
+          provider: undefined,
           route: { id: childSession.session_id },
         }
       );
@@ -791,8 +759,8 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
         const task = await ctx.app
           .service('/sessions/:id/prompt')
           .create(
-            { prompt: args.prompt, stream: true },
-            { ...callbackParams, route: { id: sessionId } }
+            { prompt: args.prompt, stream: true, metadata: { system_authored: true } },
+            { ...callbackParams, provider: undefined, route: { id: sessionId } }
           );
 
         if (task.status === 'queued') {
@@ -832,9 +800,10 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
         const forkData: { prompt: string; task_id?: string } = { prompt: args.prompt };
         if (args.taskId) forkData.task_id = args.taskId;
 
-        const forkedSession = await (
-          ctx.app.service('sessions') as unknown as SessionsServiceImpl
-        ).fork(sessionId, forkData, ctx.baseServiceParams);
+        const sessionsService = ctx.app.service('sessions') as unknown as SessionsServiceImpl;
+        const forkedSession = await runWithMcpTenantDatabaseWrite(ctx, () =>
+          sessionsService.fork(sessionId, forkData, ctx.baseServiceParams)
+        );
 
         // Build patch for the fork — title for both modes, btw-specific metadata for btw
         const forkPatch: Record<string, unknown> = {};
@@ -865,8 +834,9 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
             prompt: args.prompt,
             permissionMode: updatedSession.permission_config?.mode,
             stream: true,
+            metadata: { system_authored: true },
           },
-          { ...callbackParams, route: { id: forkedSession.session_id } }
+          { ...callbackParams, provider: undefined, route: { id: forkedSession.session_id } }
         );
 
         const note =
@@ -890,17 +860,19 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
         if (args.agenticTool) spawnData.agent = args.agenticTool as AgenticToolName;
         if (args.taskId) spawnData.task_id = args.taskId;
 
-        const childSession = await (
-          ctx.app.service('sessions') as unknown as SessionsServiceImpl
-        ).spawn(sessionId, spawnData, ctx.baseServiceParams);
+        const sessionsService = ctx.app.service('sessions') as unknown as SessionsServiceImpl;
+        const childSession = await runWithMcpTenantDatabaseWrite(ctx, () =>
+          sessionsService.spawn(sessionId, spawnData, ctx.baseServiceParams)
+        );
 
         const task = await ctx.app.service('/sessions/:id/prompt').create(
           {
             prompt: args.prompt,
             permissionMode: childSession.permission_config?.mode,
             stream: true,
+            metadata: { system_authored: true },
           },
-          { ...callbackParams, route: { id: childSession.session_id } }
+          { ...callbackParams, provider: undefined, route: { id: childSession.session_id } }
         );
 
         return textResult({
@@ -1039,7 +1011,8 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
           'callbackSessionId',
           'Session',
           'Session ID to notify on completion (defaults to the current/creating session when enableCallback is true). ' +
-            'Not restricted to the target branch: this may be a session in a DIFFERENT branch — e.g. a remote orchestrator registering its own session (fetch that ID via agor_sessions_get_current_context) to be notified when cross-branch work finishes.'
+            'For callbacks to yourself, omit this field, including across branches or from a fork/nested coordinator. ' +
+            'Set it only for an intentional authorized alternate destination, which may be in a different branch.'
         ),
         includeLastMessage: z
           .boolean()
@@ -1330,8 +1303,9 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
             prompt: args.initialPrompt,
             permissionMode: session.permission_config?.mode,
             stream: true,
+            metadata: { system_authored: true },
           },
-          { ...ctx.baseServiceParams, route: { id: session.session_id } }
+          { ...ctx.baseServiceParams, provider: undefined, route: { id: session.session_id } }
         );
       }
 
@@ -1367,7 +1341,7 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
     'agor_sessions_update',
     {
       description:
-        'Update session metadata (title, description, status, archived, callback config). Useful for agents to self-document their work or manage callback settings.',
+        'Update session metadata (title, description, status, callback config). Archive state is managed by agor_sessions_archive and agor_sessions_unarchive so descendant and permission rules cannot be bypassed.',
       annotations: { idempotentHint: true },
       inputSchema: z.object({
         sessionId: mcpRequiredId(
@@ -1384,7 +1358,9 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
         archived: z
           .boolean()
           .optional()
-          .describe('Set archive state. true to archive, false to unarchive (optional)'),
+          .describe(
+            'Deprecated and rejected. Use agor_sessions_archive or agor_sessions_unarchive.'
+          ),
         enableCallback: z
           .boolean()
           .optional()
@@ -1398,14 +1374,15 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
       }),
     },
     async (args) => {
+      if (args.archived !== undefined) {
+        throw new Error(
+          'agor_sessions_update cannot change archive state. Use agor_sessions_archive or agor_sessions_unarchive.'
+        );
+      }
       const updates: Record<string, unknown> = {};
       if (args.title !== undefined) updates.title = args.title;
       if (args.description !== undefined) updates.description = args.description;
       if (args.status !== undefined) updates.status = args.status;
-      if (args.archived !== undefined) {
-        updates.archived = args.archived;
-        updates.archived_reason = args.archived ? 'manual' : undefined;
-      }
 
       // Handle callback config updates
       if (args.enableCallback !== undefined || args.callbackMode !== undefined) {
@@ -1423,7 +1400,7 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
 
       if (Object.keys(updates).length === 0) {
         throw new Error(
-          'At least one field (title, description, status, archived, enableCallback, callbackMode) must be provided'
+          'At least one field (title, description, status, enableCallback, callbackMode) must be provided'
         );
       }
 
@@ -1442,7 +1419,7 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
     'agor_sessions_archive',
     {
       description:
-        'Archive a session (soft delete). Archived sessions are hidden from listings by default but can be restored. By default, all child sessions (forks and subsessions) are also archived. Set includeChildren to false to archive only the target session.',
+        'Archive a session (soft delete). Archived sessions are hidden from listings by default but can be restored. By default, same-branch forked and spawned descendants are also archived. Remote-created sessions retain an independent lifecycle. Set includeChildren to false to archive only the target session.',
       annotations: { destructiveHint: true },
       inputSchema: z.object({
         sessionId: mcpRequiredId(
@@ -1453,7 +1430,9 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
         includeChildren: z
           .boolean()
           .optional()
-          .describe('Also archive all child sessions (forks and subsessions). Default: true.'),
+          .describe(
+            'Also archive same-branch forked and spawned descendants. Remote-created sessions are excluded. Default: true.'
+          ),
       }),
     },
     async (args) => {
@@ -1480,7 +1459,7 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
     'agor_sessions_unarchive',
     {
       description:
-        'Restore a previously archived session. By default, all child sessions are also unarchived. Set includeChildren to false to unarchive only the target session.',
+        'Restore a previously archived session. By default, same-branch descendants archived because of their parent are also restored. Remote-created sessions retain an independent lifecycle. Set includeChildren to false to restore only the target session.',
       inputSchema: z.object({
         sessionId: mcpRequiredId(
           'sessionId',
@@ -1490,7 +1469,9 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
         includeChildren: z
           .boolean()
           .optional()
-          .describe('Also unarchive all child sessions (forks and subsessions). Default: true.'),
+          .describe(
+            'Also restore same-branch descendants archived because of their parent. Remote-created sessions are excluded. Default: true.'
+          ),
       }),
     },
     async (args) => {
@@ -1514,7 +1495,7 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
     'agor_sessions_bulk_archive',
     {
       description:
-        'Archive multiple sessions matching filter criteria. Supports filtering by session type (gateway/scheduled/agent), age, status, board, and branch. Returns a dry-run preview by default — set dryRun to false to actually archive. Respects RBAC: sessions the current user cannot modify are skipped and reported as errors.',
+        'Archive multiple sessions matching filter criteria. Filters select roots only. Dry-run is the default and reports additional same-branch fork/spawn descendants, including executing descendants. Before execution, set includeChildren explicitly when descendants exist. Archiving hides sessions but does not stop their execution. Remote-created sessions have an independent lifecycle.',
       annotations: { destructiveHint: true },
       inputSchema: z.object({
         sessionType: z
@@ -1535,6 +1516,12 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
           .describe('Only archive sessions with this status'),
         boardId: mcpOptionalId('boardId', 'Board', 'Only archive sessions on this board'),
         branchId: mcpOptionalId('branchId', 'Branch', 'Only archive sessions in this branch'),
+        includeChildren: z
+          .boolean()
+          .optional()
+          .describe(
+            'true archives the complete same-branch fork/spawn trees; false intentionally archives matched roots only. Execution requires an explicit choice when additional descendants exist.'
+          ),
         dryRun: z
           .boolean()
           .optional()
@@ -1582,54 +1569,133 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
         return true;
       });
 
+      const rootsByBranch = new Map<BranchID, SessionID[]>();
+      for (const session of toArchive) {
+        const branchId = session.branch_id as BranchID;
+        const roots = rootsByBranch.get(branchId) ?? [];
+        roots.push(session.session_id);
+        rootsByBranch.set(branchId, roots);
+      }
+
+      const sessionsService = ctx.app.service('sessions') as unknown as SessionsServiceImpl;
+      const previews: SessionBulkArchiveResult[] = [];
+      for (const [branchId, rootIds] of rootsByBranch) {
+        previews.push(
+          await runWithMcpTenantDatabaseScope(ctx, () =>
+            sessionsService.archiveRootsInBranch(
+              branchId,
+              rootIds,
+              { includeChildren: args.includeChildren, dryRun: true },
+              ctx.baseServiceParams
+            )
+          )
+        );
+      }
+
+      const matchedRootCount = previews.reduce((sum, preview) => sum + preview.matchedRootCount, 0);
+      const additionalDescendantCount = previews.reduce(
+        (sum, preview) => sum + preview.additionalDescendantCount,
+        0
+      );
+      const executingDescendantCount = previews.reduce(
+        (sum, preview) => sum + preview.executingDescendantCount,
+        0
+      );
+      const withChildrenTotal = previews.reduce(
+        (sum, preview) => sum + preview.withChildrenTotal,
+        0
+      );
+      const authorizedSessionCount = previews.reduce(
+        (sum, preview) => sum + preview.authorizedSessionCount,
+        0
+      );
+      const previewErrors = previews.flatMap((preview) => preview.skipped);
+      const rootSample = toArchive.slice(0, 20).map((session) => ({
+        session_id: session.session_id,
+        title: session.title,
+        status: session.status,
+        session_type: getSessionType(session),
+        last_updated: session.last_updated,
+        created_at: session.created_at,
+        branch_id: session.branch_id,
+      }));
+      const descendantSample = previews
+        .flatMap((preview) => preview.additionalDescendants)
+        .slice(0, 20)
+        .map((session) => ({
+          session_id: session.session_id,
+          title: session.title,
+          status: session.status,
+          branch_id: session.branch_id,
+        }));
+      const sampleTruncated = additionalDescendantCount > descendantSample.length;
+
       if (dryRun) {
         return textResult({
           dryRun: true,
-          wouldArchive: toArchive.length,
+          matchedRootCount,
           totalMatched: allSessions.length,
+          additionalDescendantCount,
+          executingDescendantCount,
+          rootOnlyTotal: matchedRootCount,
+          withChildrenTotal,
+          wouldArchive: authorizedSessionCount,
+          includeChildren: args.includeChildren,
+          sessions: rootSample,
+          rootSampleTruncated: matchedRootCount > rootSample.length,
+          descendantSample,
+          sampleTruncated,
+          failedCount: previewErrors.length,
+          errors: previewErrors.length > 0 ? previewErrors : undefined,
           ...(cutoffDate && { cutoffDate: cutoffDate.toISOString() }),
-          sessions: toArchive.map((s) => ({
-            session_id: s.session_id,
-            title: s.title,
-            status: s.status,
-            session_type: getSessionType(s),
-            last_updated: s.last_updated,
-            created_at: s.created_at,
-            branch_id: s.branch_id,
-          })),
-          message: `Would archive ${toArchive.length} session(s). Set dryRun=false to proceed.`,
+          message:
+            additionalDescendantCount > 0 && args.includeChildren === undefined
+              ? `Matched ${matchedRootCount} root session(s) plus ${additionalDescendantCount} active same-branch descendant(s). Set includeChildren explicitly before dryRun=false.`
+              : `Would archive ${authorizedSessionCount} session(s). Set dryRun=false to proceed.`,
+          warning:
+            executingDescendantCount > 0
+              ? `${executingDescendantCount} descendant session(s) are executing. Archiving hides sessions but does not stop execution.`
+              : undefined,
         });
       }
 
-      // Archive each session (through service layer for RBAC)
+      if (args.includeChildren === undefined && additionalDescendantCount > 0) {
+        throw new Error(
+          `Bulk archive matched ${matchedRootCount} root session(s) with ${additionalDescendantCount} additional active same-branch descendant(s), including ${executingDescendantCount} executing. Retry with includeChildren=true to archive complete trees or includeChildren=false for intentional root-only behavior.`
+        );
+      }
+
+      const includeChildren = args.includeChildren === true;
       let archivedCount = 0;
       const errors: { session_id: string; error: string }[] = [];
-
-      for (const session of toArchive) {
-        try {
-          await ctx.app
-            .service('sessions')
-            .patch(
-              session.session_id,
-              { archived: true, archived_reason: 'manual' },
-              ctx.baseServiceParams
-            );
-          archivedCount++;
-        } catch (error) {
-          errors.push({
-            session_id: session.session_id,
-            error: error instanceof Error ? error.message : String(error),
-          });
-        }
+      for (const [branchId, rootIds] of rootsByBranch) {
+        const result = await runWithMcpTenantDatabaseWrite(ctx, () =>
+          sessionsService.archiveRootsInBranch(
+            branchId,
+            rootIds,
+            { includeChildren: args.includeChildren },
+            ctx.baseServiceParams
+          )
+        );
+        archivedCount += result.count;
+        errors.push(...result.skipped);
       }
 
       return textResult({
         success: true,
         archivedCount,
+        matchedRootCount,
+        additionalDescendantCount,
+        executingDescendantCount,
+        includeChildren,
         failedCount: errors.length,
         ...(cutoffDate && { cutoffDate: cutoffDate.toISOString() }),
         errors: errors.length > 0 ? errors : undefined,
-        message: `Archived ${archivedCount} session(s).${errors.length > 0 ? ` ${errors.length} failed (insufficient permissions or other errors).` : ''}`,
+        warning:
+          includeChildren && executingDescendantCount > 0
+            ? `${executingDescendantCount} descendant session(s) were executing. They were hidden but their execution was not stopped.`
+            : undefined,
+        message: `Archived ${archivedCount} session(s).${errors.length > 0 ? ` ${errors.length} tree(s) were skipped.` : ''}`,
       });
     }
   );
@@ -1749,7 +1815,7 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
         codex: {
           default: DEFAULT_CODEX_MODEL,
           models: codexModels,
-          note: 'Latest models are listed first; omit modelConfig to use the default. Current models are supported defaults; older entries marked provider-dependent may vary by Codex account and are checked by Codex at startup. This is Agor’s known-model registry, not a dynamic Codex CLI/provider listing. Provider-specific IDs absent from this list must be passed with mode "exact". Known unsupported legacy aliases are omitted.',
+          note: 'Latest models are listed first; omit modelConfig to use the default. Entries marked provider-dependent, including newly rolling-out models, may vary by Codex account and are checked by Codex at startup. This is Agor’s known-model registry, not a dynamic Codex CLI/provider listing. Provider-specific IDs absent from this list must be passed with mode "exact". Known unsupported legacy aliases are omitted.',
         },
         gemini: {
           default: DEFAULT_GEMINI_MODEL,

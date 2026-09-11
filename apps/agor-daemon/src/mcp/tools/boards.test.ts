@@ -237,217 +237,59 @@ describe('agor_boards_get', () => {
     expect(boardObjectsFind).not.toHaveBeenCalled();
   });
 
-  it('filters and paginates included positioned entities', async () => {
-    const boardObjectsFind = vi.fn(async () => ({
-      data: [
-        {
-          object_id: 'obj-branch-0',
+  it.each([
+    {
+      args: { entitiesLimit: 1, entitiesSkip: 1 },
+      query: { $limit: 1, $skip: 1 },
+      limit: 1,
+      skip: 1,
+    },
+    { args: { entitiesSkip: 1 }, query: { $skip: 1 }, limit: null, skip: 1 },
+    { args: {}, query: {}, limit: null, skip: 0 },
+    { args: { includeArchived: true }, query: {}, limit: null, skip: 0 },
+  ])(
+    'pushes archive filtering/count/pagination to one board-object read: $args',
+    async ({ args, query, limit, skip }) => {
+      const entity = { object_id: 'object-1', board_id: 'board-1', branch_id: 'branch-1' };
+      const boardObjectsFind = vi.fn(async () => ({
+        data: [entity],
+        total: 7,
+        limit: limit ?? 100,
+        skip,
+      }));
+      const branchesFind = vi.fn();
+      const { app } = makeApp({ boardObjectsFind, branchesFind });
+      const getBoard = registerAndCaptureHandler('agor_boards_get', {
+        app,
+        userId: 'user-1',
+        baseServiceParams,
+      });
+      const parsed = JSON.parse(
+        (
+          await getBoard({
+            boardId: 'board-1',
+            includeEntities: true,
+            entityZoneId: 'zone-review',
+            entityType: 'branch',
+            ...args,
+          })
+        ).content[0].text
+      );
+      expect(boardObjectsFind).toHaveBeenCalledExactlyOnceWith({
+        query: {
           board_id: 'board-1',
-          branch_id: 'branch-0',
-          entity_type: 'branch',
-          position: { x: 0, y: 0 },
           zone_id: 'zone-review',
-          created_at: '2026-06-01T00:00:00.000Z',
-        },
-        {
-          object_id: 'obj-branch-1',
-          board_id: 'board-1',
-          branch_id: 'branch-1',
           entity_type: 'branch',
-          position: { x: 10, y: 20 },
-          zone_id: 'zone-review',
-          created_at: '2026-06-01T00:00:00.000Z',
+          exclude_archived_branches: args.includeArchived !== true,
+          ...query,
         },
-        {
-          object_id: 'obj-branch-2',
-          board_id: 'board-1',
-          branch_id: 'branch-2',
-          entity_type: 'branch',
-          position: { x: 30, y: 40 },
-          zone_id: 'zone-review',
-          created_at: '2026-06-01T00:00:00.000Z',
-        },
-      ],
-      total: 3,
-      limit: 100,
-      skip: 0,
-    }));
-    const branchesFind = vi.fn(async () => [
-      { branch_id: 'branch-0', archived: false },
-      { branch_id: 'branch-1', archived: false },
-      { branch_id: 'branch-2', archived: false },
-    ]);
-    const { app } = makeApp({ boardObjectsFind, branchesFind });
-    const getBoard = registerAndCaptureHandler('agor_boards_get', {
-      app,
-      userId: 'user-1',
-      baseServiceParams,
-    });
-
-    const result = await getBoard({
-      boardId: 'board-1',
-      includeEntities: true,
-      entityZoneId: 'zone-review',
-      entityType: 'branch',
-      entitiesLimit: 1,
-      entitiesSkip: 1,
-    });
-    const parsed = JSON.parse(result.content[0].text);
-
-    expect(boardObjectsFind).toHaveBeenCalledWith({
-      query: {
-        board_id: 'board-1',
-        zone_id: 'zone-review',
-        entity_type: 'branch',
-      },
-      ...baseServiceParams,
-    });
-    expect(branchesFind).toHaveBeenCalledWith({
-      query: {
-        branch_id: { $in: ['branch-0', 'branch-1', 'branch-2'] },
-        archived: false,
-      },
-      paginate: false,
-      ...baseServiceParams,
-    });
-    expect(parsed.entities).toHaveLength(1);
-    expect(parsed.entities[0].branch_id).toBe('branch-1');
-    expect(parsed.entities_pagination).toEqual({ total: 3, limit: 1, skip: 1 });
-  });
-
-  it('excludes archived branch entities by default while preserving card entities', async () => {
-    const boardObjectsFind = vi.fn(async () => ({
-      data: [
-        {
-          object_id: 'obj-branch-1',
-          board_id: 'board-1',
-          branch_id: 'branch-1',
-          entity_type: 'branch',
-          position: { x: 10, y: 20 },
-          created_at: '2026-06-01T00:00:00.000Z',
-        },
-        {
-          object_id: 'obj-branch-2',
-          board_id: 'board-1',
-          branch_id: 'branch-2',
-          entity_type: 'branch',
-          position: { x: 30, y: 40 },
-          created_at: '2026-06-01T00:00:00.000Z',
-        },
-        {
-          object_id: 'obj-card-1',
-          board_id: 'board-1',
-          card_id: 'card-1',
-          entity_type: 'card',
-          position: { x: 50, y: 60 },
-          created_at: '2026-06-01T00:00:00.000Z',
-        },
-      ],
-      total: 3,
-      limit: 100,
-      skip: 0,
-    }));
-    const branchesFind = vi.fn(async () => [{ branch_id: 'branch-1', archived: false }]);
-    const { app } = makeApp({ boardObjectsFind, branchesFind });
-    const getBoard = registerAndCaptureHandler('agor_boards_get', {
-      app,
-      userId: 'user-1',
-      baseServiceParams,
-    });
-
-    const result = await getBoard({ boardId: 'board-1', includeEntities: true });
-    const parsed = JSON.parse(result.content[0].text);
-
-    expect(boardObjectsFind).toHaveBeenCalledWith({
-      query: { board_id: 'board-1' },
-      ...baseServiceParams,
-    });
-    expect(parsed.entities.map((entity: { object_id: string }) => entity.object_id)).toEqual([
-      'obj-branch-1',
-      'obj-card-1',
-    ]);
-    expect(parsed.entities_pagination).toEqual({ total: 2, limit: null, skip: 0 });
-  });
-
-  it('includes archived branch entities when includeArchived=true', async () => {
-    const boardObjectsFind = vi.fn(async () => ({
-      data: [
-        {
-          object_id: 'obj-branch-1',
-          board_id: 'board-1',
-          branch_id: 'branch-1',
-          entity_type: 'branch',
-          position: { x: 10, y: 20 },
-          created_at: '2026-06-01T00:00:00.000Z',
-        },
-      ],
-      total: 1,
-      limit: 100,
-      skip: 0,
-    }));
-    const branchesFind = vi.fn(async () => []);
-    const { app } = makeApp({ boardObjectsFind, branchesFind });
-    const getBoard = registerAndCaptureHandler('agor_boards_get', {
-      app,
-      userId: 'user-1',
-      baseServiceParams,
-    });
-
-    const result = await getBoard({
-      boardId: 'board-1',
-      includeEntities: true,
-      includeArchived: true,
-    });
-    const parsed = JSON.parse(result.content[0].text);
-
-    expect(branchesFind).not.toHaveBeenCalled();
-    expect(parsed.entities).toHaveLength(1);
-    expect(parsed.entities[0].branch_id).toBe('branch-1');
-    expect(parsed.entities_pagination).toEqual({ total: 1, limit: null, skip: 0 });
-  });
-
-  it('reports null pagination limit when only entitiesSkip is provided', async () => {
-    const boardObjectsFind = vi.fn(async () => ({
-      data: [
-        {
-          object_id: 'obj-branch-0',
-          board_id: 'board-1',
-          branch_id: 'branch-0',
-          entity_type: 'branch',
-          position: { x: 0, y: 0 },
-          created_at: '2026-06-01T00:00:00.000Z',
-        },
-        {
-          object_id: 'obj-branch-1',
-          board_id: 'board-1',
-          branch_id: 'branch-1',
-          entity_type: 'branch',
-          position: { x: 10, y: 20 },
-          created_at: '2026-06-01T00:00:00.000Z',
-        },
-      ],
-      total: 2,
-      limit: 100,
-      skip: 0,
-    }));
-    const { app } = makeApp({ boardObjectsFind });
-    const getBoard = registerAndCaptureHandler('agor_boards_get', {
-      app,
-      userId: 'user-1',
-      baseServiceParams,
-    });
-
-    const result = await getBoard({
-      boardId: 'board-1',
-      includeEntities: true,
-      entitiesSkip: 1,
-    });
-    const parsed = JSON.parse(result.content[0].text);
-
-    expect(parsed.entities).toHaveLength(1);
-    expect(parsed.entities[0].branch_id).toBe('branch-1');
-    expect(parsed.entities_pagination).toEqual({ total: 2, limit: null, skip: 1 });
-  });
+        ...baseServiceParams,
+      });
+      expect(branchesFind).not.toHaveBeenCalled();
+      expect(parsed.entities).toEqual([entity]);
+      expect(parsed.entities_pagination).toEqual({ total: 7, limit, skip });
+    }
+  );
 
   it('validates entity pagination input constraints in the MCP schema', () => {
     const { app } = makeApp();

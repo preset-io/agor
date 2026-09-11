@@ -1,10 +1,6 @@
 import { act, renderHook, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import {
-  claimMarketplaceOAuthPrompt,
-  readPendingMarketplaceOAuthPrompt,
-  savePendingMarketplaceOAuthPrompt,
-} from '../utils/marketplaceOAuthPrompt';
+import { consumePromptDraftSeed, stagePromptDraftSeed } from '../utils/promptDrafts';
 import { TOKENS_REFRESHED_EVENT } from '../utils/singleFlightRefresh';
 import { ACCESS_TOKEN_KEY, REFRESH_TOKEN_KEY } from '../utils/tokenRefresh';
 import { useAuth } from './useAuth';
@@ -119,47 +115,11 @@ describe('useAuth launch-code fallback', () => {
     });
     await waitFor(() => expect(result.current.user?.user_id).toBe('alice'));
 
-    const pending = {
-      sessionId: 'session-logout',
-      serverId: 'server-logout',
-      attemptId: 'attempt-logout',
-      popupOperationId: 'popup-logout',
-      prompt: 'Try it',
-      createdAt: Date.now(),
-      userId: 'alice',
-      role: 'member',
-      authGeneration: 9,
-    };
-    savePendingMarketplaceOAuthPrompt(pending);
-    const bobPending = {
-      ...pending,
-      sessionId: 'session-bob',
-      attemptId: 'attempt-bob',
-      popupOperationId: 'popup-bob',
-      userId: 'bob',
-    };
-    savePendingMarketplaceOAuthPrompt(bobPending);
-    let rejectAttempt!: (error: Error) => void;
-    const heldStatus = new Promise<never>((_, reject) => {
-      rejectAttempt = reject;
-    });
-    const claim = claimMarketplaceOAuthPrompt({
-      client: {
-        service: () => ({ get: () => heldStatus }),
-      } as never,
-      sessionId: pending.sessionId,
-      authenticatedServerIds: new Set(),
-      authority: pending,
-      isCurrent: () => result.current.user?.user_id === 'alice',
-    });
-
+    stagePromptDraftSeed('alice', 'session-logout', 'Try it');
     await act(async () => {
       await result.current.logout();
     });
-    rejectAttempt(new Error('offline after logout'));
-    await expect(claim).resolves.toBeNull();
-    expect(readPendingMarketplaceOAuthPrompt(pending.sessionId)).toBeNull();
-    expect(readPendingMarketplaceOAuthPrompt(bobPending.sessionId)).toEqual(bobPending);
+    expect(consumePromptDraftSeed('alice', 'session-logout')).toBe('');
   });
 
   it('cleans only the departing identity on central auth replacement', async () => {
@@ -179,27 +139,7 @@ describe('useAuth launch-code fallback', () => {
     });
     await waitFor(() => expect(result.current.user?.user_id).toBe('alice'));
 
-    const alicePending = {
-      sessionId: 'session-alice-transition',
-      serverId: 'server-alice',
-      attemptId: 'attempt-alice',
-      popupOperationId: 'popup-alice',
-      prompt: 'Alice prompt',
-      createdAt: Date.now(),
-      userId: 'alice',
-      role: 'member',
-      authGeneration: 3,
-    };
-    const bobPending = {
-      ...alicePending,
-      sessionId: 'session-bob-transition',
-      attemptId: 'attempt-bob',
-      popupOperationId: 'popup-bob',
-      userId: 'bob',
-    };
-    savePendingMarketplaceOAuthPrompt(alicePending);
-    savePendingMarketplaceOAuthPrompt(bobPending);
-
+    stagePromptDraftSeed('alice', 'session-alice-transition', 'Alice prompt');
     act(() => {
       window.dispatchEvent(
         new CustomEvent(TOKENS_REFRESHED_EVENT, {
@@ -213,8 +153,7 @@ describe('useAuth launch-code fallback', () => {
     });
     await waitFor(() => expect(result.current.user?.user_id).toBe('bob'));
 
-    expect(readPendingMarketplaceOAuthPrompt(alicePending.sessionId)).toBeNull();
-    expect(readPendingMarketplaceOAuthPrompt(bobPending.sessionId)).toEqual(bobPending);
+    expect(consumePromptDraftSeed('alice', 'session-alice-transition')).toBe('');
   });
 
   it('preserves stored tokens and restores the normal session when launch sign-in fails', async () => {

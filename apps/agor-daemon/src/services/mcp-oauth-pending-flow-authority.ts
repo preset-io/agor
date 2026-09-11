@@ -26,6 +26,7 @@ import type {
   MCPOAuthMode,
   MCPOAuthPendingFlowSealedMaterial,
   MCPServerID,
+  MCPSlackOAuthRecoveryContext,
   UserID,
 } from '@agor/core/types';
 import { isMCPOAuthGrantBindingVersion } from '@agor/core/types';
@@ -36,17 +37,20 @@ const FLOW_TTL_MS = 10 * 60 * 1000;
 export type DurableMCPOAuthFlowContext = OAuthFlowContext;
 
 export interface DurableMCPOAuthFlowCreate {
+  attemptId?: MCPOAuthAttemptID;
   context: DurableMCPOAuthFlowContext;
   tenantId: string;
   userId: UserID;
   mcpServerId: MCPServerID;
   oauthMode: MCPOAuthMode;
   configFingerprint: string;
+  slackRecovery?: MCPSlackOAuthRecoveryContext;
 }
 
 export interface ClaimedDurableMCPOAuthFlow {
   record: MCPOAuthPendingFlowRecord;
   context: DurableMCPOAuthFlowContext;
+  slackRecovery?: MCPSlackOAuthRecoveryContext;
 }
 
 export function fingerprintMCPOAuthState(state: string): string {
@@ -75,12 +79,23 @@ function hasOnlyExpectedMaterialShape(value: unknown): value is MCPOAuthPendingF
     typeof material.pkceVerifier === 'string' &&
     typeof material.clientId === 'string' &&
     (material.clientSecret === undefined || typeof material.clientSecret === 'string') &&
+    (material.clientRegistrationId === undefined ||
+      typeof material.clientRegistrationId === 'string') &&
     (material.compatibilityMode === 'strict' ||
       material.compatibilityMode === 'legacy' ||
       material.compatibilityMode === 'marketplace') &&
     (material.authorizationResponseIssuerParameterSupported === undefined ||
       typeof material.authorizationResponseIssuerParameterSupported === 'boolean') &&
-    typeof material.allowLocalhostHttp === 'boolean'
+    typeof material.allowLocalhostHttp === 'boolean' &&
+    (material.slackRecovery === undefined ||
+      (!!material.slackRecovery &&
+        typeof material.slackRecovery.notice_id === 'string' &&
+        typeof material.slackRecovery.task_id === 'string' &&
+        typeof material.slackRecovery.session_id === 'string' &&
+        typeof material.slackRecovery.mcp_server_id === 'string' &&
+        Number.isSafeInteger(material.slackRecovery.recovery_generation) &&
+        (material.slackRecovery.recovery_request_id === undefined ||
+          typeof material.slackRecovery.recovery_request_id === 'string')))
   );
 }
 
@@ -115,7 +130,7 @@ export class MCPOAuthPendingFlowAuthority {
   }
 
   async create(input: DurableMCPOAuthFlowCreate): Promise<MCPOAuthAttemptID> {
-    const attemptId = generateId() as MCPOAuthAttemptID;
+    const attemptId = input.attemptId ?? (generateId() as MCPOAuthAttemptID);
     await runWithTenantDatabaseScope(this.db, input.tenantId, async (scoped) => {
       const repository = new MCPOAuthPendingFlowRepository(scoped);
       const subjectUserId = input.oauthMode === 'per_user' ? input.userId : null;
@@ -149,10 +164,14 @@ export class MCPOAuthPendingFlowAuthority {
         pkceVerifier: input.context.pkceVerifier,
         clientId: input.context.clientId,
         ...(input.context.clientSecret ? { clientSecret: input.context.clientSecret } : {}),
+        ...(input.context.clientRegistrationId
+          ? { clientRegistrationId: input.context.clientRegistrationId }
+          : {}),
         compatibilityMode: input.context.compatibilityMode,
         authorizationResponseIssuerParameterSupported:
           input.context.authorizationResponseIssuerParameterSupported,
         allowLocalhostHttp: input.context.allowLocalhostHttp,
+        ...(input.slackRecovery ? { slackRecovery: input.slackRecovery } : {}),
       };
       const sealedMaterial = sealBoundSecret(
         JSON.stringify(material),
@@ -274,6 +293,7 @@ export class MCPOAuthPendingFlowAuthority {
 
     return {
       record,
+      ...(material.slackRecovery ? { slackRecovery: material.slackRecovery } : {}),
       context: {
         metadataUrl: material.metadataUrl,
         resourceUri: material.resourceUri,
@@ -284,6 +304,7 @@ export class MCPOAuthPendingFlowAuthority {
         pkceVerifier: material.pkceVerifier,
         clientId: material.clientId,
         clientSecret: material.clientSecret,
+        clientRegistrationId: material.clientRegistrationId,
         state: rawState,
         // Completion never reads this field. Do not persist or reconstruct the
         // secret-bearing authorization URL after the browser has opened it.

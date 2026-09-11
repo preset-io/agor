@@ -1,4 +1,3 @@
-import * as configModule from '@agor/core/config';
 import { BranchRepository, CapabilityPolicyRepository } from '@agor/core/db';
 import { Forbidden, feathers } from '@agor/core/feathers';
 import type { Branch, BranchPermissionLevel } from '@agor/core/types';
@@ -37,6 +36,7 @@ type ToolHandler = (
 }>;
 
 type ToolConfig = {
+  description?: string;
   inputSchema?: {
     safeParse: (
       value: unknown
@@ -408,7 +408,7 @@ describe('agor_branches_delete authorization boundary', () => {
     const generateToken = vi.fn();
     const app = {
       sessionTokenService: { generateToken },
-      get: () => ({ execution: { branch_rbac: true, allow_superadmin: false } }),
+      get: () => ({ execution: { allow_superadmin: false } }),
       service(name: string) {
         if (name === 'branches') {
           return {
@@ -458,7 +458,7 @@ describe('agor_branches_update', () => {
     };
     const permissionsPatch = vi.fn(async (_id, data) => data);
     const app = {
-      get: () => ({ execution: { branch_rbac: true, allow_superadmin: false } }),
+      get: () => ({ execution: { allow_superadmin: false } }),
       service(name: string) {
         if (name === 'branches/:id/permissions') return { patch: permissionsPatch };
         throw new Error(`Unexpected service call: ${name}`);
@@ -485,7 +485,7 @@ describe('agor_branches_update', () => {
     const sessionsGet = vi.fn(async () => ({ session_id: 'session-1', branch_id: 'branch-1' }));
     const branchesPatch = vi.fn(async () => ({ branch_id: 'branch-1', notes: 'updated' }));
     const app = {
-      get: () => ({ execution: { branch_rbac: true, allow_superadmin: false } }),
+      get: () => ({ execution: { allow_superadmin: false } }),
       service(name: string) {
         if (name === 'sessions') return { get: sessionsGet };
         if (name === 'branches') return { patch: branchesPatch };
@@ -1267,6 +1267,19 @@ describe('branch MCP input schemas', () => {
 });
 
 describe('agor_branches_set_zone', () => {
+  it('recommends omitted-target self callbacks while preserving alternate destinations', () => {
+    const config = registerAndCaptureConfig('agor_branches_set_zone', {
+      app: {},
+      userId: 'user-1',
+    });
+
+    expect(config.description).toContain(
+      'agor_sessions_create with enableCallback:true and omit callbackSessionId for the current caller'
+    );
+    expect(config.description).toContain('agor_sessions_prompt callback');
+    expect(config.description).toContain('intentional authorized alternate destination');
+  });
+
   it('accepts zoneId null and clears the existing board object zone pin', async () => {
     const baseServiceParams = {
       authenticated: true,
@@ -1454,8 +1467,12 @@ describe('agor_branches_set_zone', () => {
       baseServiceParams
     );
     expect(promptCreate).toHaveBeenCalledWith(
-      { prompt: 'Run Branch 1 in Evidence/QA', stream: true },
-      { ...baseServiceParams, route: { id: 'session-1' } }
+      {
+        prompt: 'Run Branch 1 in Evidence/QA',
+        stream: true,
+        metadata: { system_authored: true },
+      },
+      { ...baseServiceParams, provider: undefined, route: { id: 'session-1' } }
     );
     expect(parsed.trigger.sessionId).toBe('session-1');
   });
@@ -2138,7 +2155,12 @@ describe('agor_teammates_list', () => {
     const result = await listTeammates({ limit: 100 });
     const parsed = JSON.parse(result.content[0].text);
 
-    expect(findTeammateBranches).toHaveBeenCalledWith({ archived: false, limit: 101, offset: 0 });
+    expect(findTeammateBranches).toHaveBeenCalledWith({
+      archived: false,
+      limit: 101,
+      offset: 0,
+      userId: 'user-1',
+    });
     expect(parsed.total).toBe(1);
     expect(parsed.teammates).toEqual([
       expect.objectContaining({
@@ -2198,16 +2220,11 @@ describe('agor_teammates_list', () => {
   });
 
   it('does not scope teammate discovery for superadmins when superadmin bypass is enabled', async () => {
-    vi.spyOn(configModule, 'isBranchRbacEnabled').mockReturnValue(true);
-    vi.spyOn(configModule, 'loadConfig').mockResolvedValue({
-      execution: { allow_superadmin: true },
-    } as Awaited<ReturnType<typeof configModule.loadConfig>>);
-
     const findTeammateBranches = vi
       .spyOn(BranchRepository.prototype, 'findTeammateBranches')
       .mockResolvedValue([]);
     const app = {
-      get: () => ({ execution: { branch_rbac: true, allow_superadmin: true } }),
+      get: () => ({ execution: { allow_superadmin: true } }),
       service(name: string) {
         throw new Error(`Unexpected service call: ${name}`);
       },
@@ -2229,16 +2246,11 @@ describe('agor_teammates_list', () => {
   });
 
   it('scopes teammate discovery for superadmins when superadmin bypass is disabled', async () => {
-    vi.spyOn(configModule, 'isBranchRbacEnabled').mockReturnValue(true);
-    vi.spyOn(configModule, 'loadConfig').mockResolvedValue({
-      execution: { allow_superadmin: false },
-    } as Awaited<ReturnType<typeof configModule.loadConfig>>);
-
     const findTeammateBranches = vi
       .spyOn(BranchRepository.prototype, 'findTeammateBranches')
       .mockResolvedValue([]);
     const app = {
-      get: () => ({ execution: { branch_rbac: true, allow_superadmin: false } }),
+      get: () => ({ execution: { allow_superadmin: false } }),
       service(name: string) {
         throw new Error(`Unexpected service call: ${name}`);
       },

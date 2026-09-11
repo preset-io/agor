@@ -10,21 +10,24 @@ import { rm } from 'node:fs/promises';
 import { isDeepStrictEqual } from 'node:util';
 import { analyticsLogger } from '@agor/core/analytics';
 import {
+  assertAsyncEnvironmentCommandConfig,
   createUserProcessEnvironment,
   ENVIRONMENT,
   ensureBranchCloneDepthAllowed,
   ensureBranchStorageModeAllowed,
+  environmentCommandCapabilities,
   getBranchesDir,
   getBranchHomePath,
   PAGINATION,
   resolveBranchStorageConfig,
-  resolveExecutionSecurityMode,
   resolveMultiTenancyConfig,
+  usesAsyncEnvironmentCommands,
 } from '@agor/core/config';
 import {
   BoardRepository,
   BranchRepository,
   type BranchWithZoneAndSessions,
+  EnvironmentCommandRepository,
   type EnvironmentHealthObservation,
   EnvironmentHealthRepository,
   generateId,
@@ -74,6 +77,9 @@ import type {
 } from '@agor/core/types';
 import {
   BRANCH_ENVIRONMENT_CLEARABLE_FIELDS,
+  ENVIRONMENT_COMMAND_BUDGET,
+  type EnvironmentCommandAction,
+  environmentCommandTokenId,
   getTeammateConfig,
   hasMinimumRole,
   isTeammate,
@@ -90,6 +96,7 @@ import { captureBranchRemovalRealtimeVisibility } from '../utils/branch-removal-
 import { ensureBranchWorkspaceAccess } from '../utils/branch-workspace-path.js';
 import { shouldUseCloneReferencePath } from '../utils/clone-reference.js';
 import { emitServiceEvent } from '../utils/emit-service-event.js';
+import { dispatchEnvironmentCommand } from '../utils/environment-command-dispatch.js';
 import { resolveDelegatedExecutionHomeKey } from '../utils/executor-delegated-home.js';
 import { parseLastMessageTruncationLength } from '../utils/query-params.js';
 import { resolveOwnerHomeStore, resolveSandboxStoragePaths } from '../utils/sandbox-context.js';
@@ -97,7 +104,7 @@ import { getDaemonUrl, requestExecutor, spawnExecutor } from '../utils/spawn-exe
 import { deferWithTenantContext } from '../utils/tenant-db-scope.js';
 import { isKnowledgeAdmin } from './knowledge-access.js';
 import { issueExecutorCommandToken } from './session-token-service.js';
-import type { InternalEnrichmentParams } from './sessions';
+import type { InternalEnrichmentParams, SessionsService } from './sessions';
 import { ensureTeammateKnowledgeNamespace as ensureTeammateKnowledgeNamespaceForBranch } from './teammate-knowledge.js';
 
 /**
@@ -128,12 +135,16 @@ function shouldSqlPageBranchQuery(query?: Record<string, unknown>): boolean {
     'board_id',
     'repo_id',
     'branch_id',
+    'zone_id',
     '$limit',
     '$skip',
     '$sort',
   ]);
   if (Object.keys(query).some((key) => !allowed.has(key))) return false;
-  for (const key of ['archived', 'board_id', 'repo_id']) {
+  // An empty virtual filter historically goes through the generic adapter;
+  // do not turn it into an unrestricted SQL page.
+  if (query.zone_id === '') return false;
+  for (const key of ['archived', 'board_id', 'repo_id', 'zone_id']) {
     if (query[key] !== undefined && typeof query[key] !== 'boolean' && key === 'archived') {
       return false;
     }
@@ -216,7 +227,6 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
   private taskRepo: TaskRepository;
   private db: TenantScopeAwareDatabase;
   private app: Application;
-  private appRbacEnabled: boolean;
   private processes = new Map<BranchID, ManagedProcess>();
   // Cache board-objects service reference (lazy-loaded to avoid circular deps)
   private boardObjectsService?: {
@@ -230,11 +240,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     patch: (id: string, data: { zone_id?: string | null }) => Promise<unknown>;
   };
 
-  constructor(
-    db: TenantScopeAwareDatabase,
-    app: Application,
-    options: { appRbacEnabled?: boolean } = {}
-  ) {
+  constructor(db: TenantScopeAwareDatabase, app: Application) {
     const branchRepo = new BranchRepository(db);
     super(branchRepo, {
       id: 'branch_id',
@@ -250,7 +256,6 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     this.taskRepo = new TaskRepository(db);
     this.db = db;
     this.app = app;
-    this.appRbacEnabled = options.appRbacEnabled ?? resolveExecutionSecurityMode().appRbacEnabled;
   }
 
   /** Refuse a metadata cascade that would orphan a live executor lease. */
@@ -325,6 +330,144 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       await this.getManagedEnvExecutionMode(),
       commandType
     );
+  }
+
+  private async runAsyncEnvironmentAction(
+    branch: Branch,
+    action: EnvironmentCommandAction,
+    params?: BranchParams,
+    confirmationOf?: string
+  ): Promise<BranchWithZoneAndSessions> {
+    const config = this.app.get('config');
+    assertAsyncEnvironmentCommandConfig(config);
+    const command =
+      action === 'start'
+        ? branch.start_command
+        : action === 'stop'
+          ? branch.stop_command
+          : branch.nuke_command;
+    if (!command) throw new BadRequest(`No ${action} command configured`);
+    const execution = await this.resolveEnvironmentCommand(command, action);
+    const context =
+      execution.kind === 'command'
+        ? await this.resolveEnvironmentExecutorContext(branch, params)
+        : undefined;
+    const userId = ((params as AuthenticatedParams | undefined)?.user?.user_id ??
+      branch.created_by) as UserID;
+    const attemptId = generateId();
+    // Preparation precedes admission; the row lock rechecks the current snapshot.
+    const sessionToken = context
+      ? await this.withTenantDatabase(params, () =>
+          issueExecutorCommandToken(
+            this.app,
+            environmentCommandTokenId(action, attemptId),
+            userId,
+            branch.branch_id
+          )
+        )
+      : undefined;
+    const environment = await this.withTenantDatabase(params, () =>
+      new EnvironmentCommandRepository(this.db).admit({
+        branch,
+        action,
+        attemptId,
+        userId,
+        confirmationOf,
+      })
+    );
+    const publish = async () => {
+      const current = await this.withTenantDatabase(params, () =>
+        this.get(branch.branch_id, params)
+      );
+      emitServiceEvent(this.app, {
+        path: 'branches',
+        event: 'patched',
+        data: current,
+        params,
+        id: branch.branch_id,
+      });
+      return current;
+    };
+    await publish();
+    try {
+      if (execution.kind === 'webhook') {
+        const scope = { branch_id: branch.branch_id, attempt_id: attemptId, action };
+        await this.withTenantDatabase(params, () =>
+          new EnvironmentCommandRepository(this.db).report({ ...scope, kind: 'claim' })
+        );
+        try {
+          const result = await this.executeEnvironmentWebhook({
+            url: execution.url,
+            branch,
+            commandType: action,
+            triggeredBy: this.extractTriggeredBy(params),
+            maxBytes: ENVIRONMENT_COMMAND_BUDGET.outputBytes,
+          });
+          await this.withTenantDatabase(params, () =>
+            new EnvironmentCommandRepository(this.db).report({
+              ...scope,
+              kind: 'result',
+              outcome: 'succeeded',
+              message: `${action} webhook succeeded; remote resource cleanup/readiness is not certified`,
+              output: result.body,
+              truncated: result.truncated,
+            })
+          );
+        } catch {
+          await this.withTenantDatabase(params, () =>
+            new EnvironmentCommandRepository(this.db).report({
+              ...scope,
+              kind: 'result',
+              outcome: 'unknown',
+              message: `${action} webhook failed or timed out; remote outcome is unknown`,
+            })
+          );
+        }
+      } else {
+        await dispatchEnvironmentCommand(
+          {
+            command: 'environment.lifecycle',
+            sessionToken,
+            daemonUrl: getDaemonUrl(),
+            env: context!.env,
+            params: {
+              branchId: branch.branch_id,
+              branchPath: branch.path,
+              cwd: branch.path,
+              principalBranchAccess: context!.branchFsAccess,
+              ...context!.sandboxMounts,
+              action,
+              startCommand: action === 'start' ? command : undefined,
+              stopCommand: action === 'stop' ? command : undefined,
+              nukeCommand: action === 'nuke' ? command : undefined,
+              appUrl: branch.app_url,
+              attempt: {
+                id: attemptId,
+                claimDeadline: environment.command_attempt!.claim_deadline,
+                commandDeadline: environment.command_attempt!.command_deadline,
+                resultDeadline: environment.command_attempt!.result_deadline,
+                externalJobDeadlineMs: config.execution!.environment_command_job_deadline_ms,
+              },
+            },
+          },
+          {
+            delegatedHomeKey: context!.delegatedHomeKey,
+            preparedEnv: context!.env,
+            logPrefix: `[Environment.${action} ${branch.branch_id}]`,
+            templateVariables: {
+              branch_id: branch.branch_id,
+              user_id: userId,
+              branch_fs_access: context!.branchFsAccess,
+            },
+          }
+        );
+      }
+    } catch {
+      await this.withTenantDatabase(params, () =>
+        new EnvironmentCommandRepository(this.db).dispatchFailed(branch.branch_id, attemptId)
+      );
+    }
+    return publish();
   }
 
   private async validateRenderedEnvironmentActions(snapshot: {
@@ -675,6 +818,8 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     logsCommand: string,
     params?: BranchParams
   ): Promise<{ stdout: string; stderr: string; truncated: boolean }> {
+    const capability = environmentCommandCapabilities(this.app.get('config'));
+    if (!capability.shellLogs) throw new BadRequest(capability.shellLogsReason);
     const { delegatedHomeKey, env, executionUserId, branchFsAccess, sandboxMounts } =
       await this.resolveEnvironmentExecutorContext(branch, params, 'read');
     const sessionToken = await this.withTenantDatabase(params, () =>
@@ -1403,7 +1548,9 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     const zoneId = params?.query?.zone_id;
     let findParams = params;
 
-    if (zoneId) {
+    // Simple inventory pages can correlate zone membership in SQL rather than
+    // materializing every matching ID. Preserve the generic adapter fallback.
+    if (zoneId && !shouldSqlPageBranchQuery(params?.query)) {
       const branchIdsInZone = await this.branchRepo.findBranchIdsByZone(zoneId);
       const existingBranchFilter = params?.query?.branch_id;
       let filteredBranchIds = branchIdsInZone;
@@ -1449,6 +1596,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       const page = await this.branchRepo.findPage({
         repo_id: typeof query?.repo_id === 'string' ? (query.repo_id as UUID) : undefined,
         board_id: typeof query?.board_id === 'string' ? (query.board_id as BoardID) : undefined,
+        zone_id: typeof query?.zone_id === 'string' ? query.zone_id : undefined,
         archived: typeof query?.archived === 'boolean' ? query.archived : undefined,
         branchIds,
         visibleToUserId: findParams?._agorSqlBranchAccessUserId,
@@ -1501,17 +1649,15 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
         const branch = await branchRepo.findById(id);
         if (!branch) throw new NotFound(`Branch not found: ${id}`);
         const branchFsAccess = deleteFromFilesystem
-          ? hasMinimumRole(requestUser?.role, ROLES.ADMIN) && !this.appRbacEnabled
-            ? 'write'
-            : await ensureBranchWorkspaceAccess(
-                branchRepo,
-                branch,
-                requestUser?.user_id,
-                requestUser?.role as UserRole | undefined,
-                'all',
-                'write',
-                this.app.get('config').execution?.allow_superadmin === true
-              )
+          ? await ensureBranchWorkspaceAccess(
+              branchRepo,
+              branch,
+              requestUser?.user_id,
+              requestUser?.role as UserRole | undefined,
+              'all',
+              'write',
+              this.app.get('config').execution?.allow_superadmin === true
+            )
           : undefined;
         await this.assertNoUnfinishedTasks(branch.branch_id, taskRepo);
         // Remove from database FIRST for instant UI feedback. CASCADE cleans
@@ -1589,7 +1735,6 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
           params: removalParams,
           branchRepository: branchRepo,
           branchId: branch.branch_id,
-          branchRbacEnabled: this.appRbacEnabled,
         });
 
         // This custom method deliberately bypasses Feathers' standard method
@@ -1648,24 +1793,31 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
 
     const { metadataAction, filesystemAction } = options;
     const branch = await this.withTenantDatabase(params, () => this.get(id, params));
+    if (
+      branch.environment_instance?.command_attempt &&
+      branch.environment_instance.status !== 'stopped' &&
+      branch.environment_instance.status !== 'error'
+    ) {
+      throw new Conflict(
+        'Stop the asynchronous environment and inspect its result before archiving or deleting this branch'
+      );
+    }
     const requestUser = (params as AuthenticatedParams).user!;
     const currentUserId = requestUser.user_id as UUID;
     const branchFsAccess =
       filesystemAction === 'preserved'
         ? undefined
-        : hasMinimumRole(requestUser.role, ROLES.ADMIN) && !this.appRbacEnabled
-          ? 'write'
-          : await this.withTenantDatabase(params, () =>
-              ensureBranchWorkspaceAccess(
-                this.branchRepo,
-                branch,
-                requestUser.user_id,
-                requestUser.role as UserRole | undefined,
-                'all',
-                'write',
-                this.app.get('config').execution?.allow_superadmin === true
-              )
-            );
+        : await this.withTenantDatabase(params, () =>
+            ensureBranchWorkspaceAccess(
+              this.branchRepo,
+              branch,
+              requestUser.user_id,
+              requestUser.role as UserRole | undefined,
+              'all',
+              'write',
+              this.app.get('config').execution?.allow_superadmin === true
+            )
+          );
 
     // Stop environment if running
     if (branch.environment_instance?.status === 'running') {
@@ -1795,27 +1947,14 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
         id: archivedBranch.branch_id,
       });
 
-      // Archive all sessions in this branch
-      // Use internal call (no provider) to bypass RBAC hooks that would ignore branch_id filter
-      const sessionsService = this.app.service('sessions');
-      const sessionsResult = await sessionsService.find({
-        query: { branch_id: id, $limit: 1000 },
-        paginate: false,
-      });
-      const sessions = Array.isArray(sessionsResult) ? sessionsResult : sessionsResult.data;
+      // Archive every active session in one branch-local lifecycle operation.
+      // Existing independently archived reasons are intentionally preserved.
+      const sessionsService = this.app.service('sessions') as unknown as SessionsService;
+      const archivedSessions = await this.withTenantDatabase(params, () =>
+        sessionsService.archiveBranchSessions(id, { ...params, provider: undefined })
+      );
 
-      for (const session of sessions) {
-        await sessionsService.patch(
-          session.session_id,
-          {
-            archived: true,
-            archived_reason: 'branch_archived',
-          },
-          { provider: undefined } // Bypass RBAC - this is an internal cascade operation
-        );
-      }
-
-      console.log(`✅ Archived branch ${branch.name} and ${sessions.length} session(s)`);
+      console.log(`✅ Archived branch ${branch.name} and ${archivedSessions.count} session(s)`);
 
       retireBranchTerminals();
       dispatchFilesystemAction();
@@ -1857,20 +1996,17 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
 
     const requestUser = params?.user;
     if (!requestUser) throw new NotAuthenticated('Authentication required');
-    const branchFsAccess =
-      hasMinimumRole(requestUser.role, ROLES.ADMIN) && !this.appRbacEnabled
-        ? 'write'
-        : await this.withTenantDatabase(params, () =>
-            ensureBranchWorkspaceAccess(
-              this.branchRepo,
-              branch,
-              requestUser.user_id,
-              requestUser.role as UserRole | undefined,
-              'all',
-              'write',
-              this.app.get('config').execution?.allow_superadmin === true
-            )
-          );
+    const branchFsAccess = await this.withTenantDatabase(params, () =>
+      ensureBranchWorkspaceAccess(
+        this.branchRepo,
+        branch,
+        requestUser.user_id,
+        requestUser.role as UserRole | undefined,
+        'all',
+        'write',
+        this.app.get('config').execution?.allow_superadmin === true
+      )
+    );
 
     console.log(`📦 Unarchiving branch: ${branch.name}`);
 
@@ -2055,32 +2191,13 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       }
     }
 
-    // Unarchive all sessions that were archived due to branch archival
-    // Use internal call (no provider) to bypass RBAC hooks that would ignore branch_id filter
-    const sessionsService = this.app.service('sessions');
-    const sessionsResult = await sessionsService.find({
-      query: {
-        branch_id: id,
-        archived: true,
-        archived_reason: 'branch_archived',
-        $limit: 1000,
-      },
-      paginate: false,
-    });
-    const sessions = Array.isArray(sessionsResult) ? sessionsResult : sessionsResult.data;
+    // Restore only sessions whose independent cause was branch archival.
+    const sessionsService = this.app.service('sessions') as unknown as SessionsService;
+    const unarchivedSessions = await this.withTenantDatabase(params, () =>
+      sessionsService.unarchiveBranchSessions(id, { ...params, provider: undefined })
+    );
 
-    for (const session of sessions) {
-      await sessionsService.patch(
-        session.session_id,
-        {
-          archived: false,
-          archived_reason: undefined,
-        },
-        { provider: undefined } // Bypass RBAC - this is an internal cascade operation
-      );
-    }
-
-    console.log(`✅ Unarchived branch ${branch.name} and ${sessions.length} session(s)`);
+    console.log(`✅ Unarchived branch ${branch.name} and ${unarchivedSessions.count} session(s)`);
     return unarchivedBranch;
   }
 
@@ -2186,6 +2303,11 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     if (!environmentUpdate) {
       throw new Error('Environment update is required');
     }
+    if (resolvedParams?.provider && usesAsyncEnvironmentCommands(this.app.get('config'))) {
+      throw new Forbidden(
+        'Use attempt-scoped environment command reports, not arbitrary environment patches'
+      );
+    }
 
     const existing = await this.withTenantDatabase(resolvedParams, () =>
       this.get(id, resolvedParams)
@@ -2196,12 +2318,17 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       ...environmentUpdate,
     } as EnvironmentInstance;
 
+    // Keep explicit clears in the repository patch. Omitting a field means
+    // preserve during its atomic deep merge, not delete. The normalized copy
+    // remains tombstone-free for state-change comparison.
+    const environmentPatch = { ...updatedEnvironment };
     for (const key of BRANCH_ENVIRONMENT_CLEARABLE_FIELDS) {
       if (
         Object.hasOwn(environmentUpdate, key) &&
         (environmentUpdate[key] === undefined || environmentUpdate[key] === null)
       ) {
         delete updatedEnvironment[key];
+        environmentPatch[key] = undefined;
       }
     }
 
@@ -2246,7 +2373,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       return this.withTenantDatabase(resolvedParams, () =>
         this.branchRepo.update(
           id,
-          { environment_instance: updatedEnvironment },
+          { environment_instance: environmentPatch },
           { preserveUpdatedAt: true }
         )
       );
@@ -2257,7 +2384,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
           await this.branchRepo.update(
             id,
             {
-              environment_instance: updatedEnvironment,
+              environment_instance: environmentPatch,
               updated_at: new Date().toISOString(),
             },
             { invalidateEnvironmentObservation: true }
@@ -2268,7 +2395,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
           this.patch(
             id,
             {
-              environment_instance: updatedEnvironment,
+              environment_instance: environmentPatch,
               updated_at: new Date().toISOString(),
             },
             resolvedParams
@@ -2298,8 +2425,14 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
   /**
    * Custom method: Start environment
    */
-  async startEnvironment(id: BranchID, params?: BranchParams): Promise<BranchWithZoneAndSessions> {
+  async startEnvironment(
+    id: BranchID,
+    params?: BranchParams,
+    confirmationOf?: string
+  ): Promise<BranchWithZoneAndSessions> {
     const branch = await this.loadEnvironmentForAction(id, params, 'start branch environments');
+    if (usesAsyncEnvironmentCommands(this.app.get('config')))
+      return this.runAsyncEnvironmentAction(branch, 'start', params, confirmationOf);
 
     if (!branch.start_command) {
       throw new Error('No start command configured for this branch');
@@ -2383,6 +2516,8 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
    */
   async stopEnvironment(id: BranchID, params?: BranchParams): Promise<BranchWithZoneAndSessions> {
     const branch = await this.loadEnvironmentForAction(id, params, 'stop branch environments');
+    if (usesAsyncEnvironmentCommands(this.app.get('config')))
+      return this.runAsyncEnvironmentAction(branch, 'stop', params);
 
     await this.updateEnvironment(id, { status: 'stopping' }, params);
 
@@ -2467,6 +2602,10 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     params?: BranchParams
   ): Promise<BranchWithZoneAndSessions> {
     const branch = await this.loadEnvironmentForAction(id, params, 'restart branch environments');
+    if (usesAsyncEnvironmentCommands(this.app.get('config')))
+      throw new BadRequest(
+        'Restart is unavailable for asynchronous environments. Request Stop, inspect its outcome, then explicitly Start.'
+      );
 
     if (!branch.start_command) {
       throw new Error('No start command configured for this branch');
@@ -2520,6 +2659,8 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
    */
   async nukeEnvironment(id: BranchID, params?: BranchParams): Promise<BranchWithZoneAndSessions> {
     const branch = await this.loadEnvironmentForAction(id, params, 'nuke branch environments');
+    if (usesAsyncEnvironmentCommands(this.app.get('config')))
+      return this.runAsyncEnvironmentAction(branch, 'nuke', params);
 
     if (!branch.nuke_command) {
       throw new Error('No nuke_command configured for this branch');
@@ -2608,7 +2749,16 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       internalOptions?.intent === 'automatic'
         ? this.getCanonicalBranch(id, params)
         : this.get(id, params);
-    const branch = await this.withTenantDatabase(params, loadCurrent);
+    let branch = await this.withTenantDatabase(params, loadCurrent);
+    if (
+      branch.environment_instance?.command_attempt &&
+      (await this.withTenantDatabase(params, () =>
+        new EnvironmentCommandRepository(this.db).expire(id)
+      ))
+    ) {
+      branch = await this.withTenantDatabase(params, loadCurrent);
+      emitServiceEvent(this.app, { path: 'branches', event: 'patched', data: branch, params, id });
+    }
 
     const currentStatus = branch.environment_instance?.status;
     if (
@@ -2943,8 +3093,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
  */
 export function createBranchesService(
   db: TenantScopeAwareDatabase,
-  app: Application,
-  options?: { appRbacEnabled?: boolean }
+  app: Application
 ): BranchesService {
-  return new BranchesService(db, app, options);
+  return new BranchesService(db, app);
 }

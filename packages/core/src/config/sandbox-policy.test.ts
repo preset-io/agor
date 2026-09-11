@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { CREDENTIAL_AUTHORITY_SIDECAR_FILENAMES } from '../codex/credential-file';
 import { resolveBwrapArgs, type SandboxPathContext } from './sandbox-policy';
 
 const CTX: SandboxPathContext = {
@@ -69,7 +70,7 @@ describe('resolveBwrapArgs', () => {
     it('is INERT by default: no branch SDK home bind when unset (per_user mode)', () => {
       const args = resolveBwrapArgs(
         { home_mode: 'per_user' },
-        { ...CTX, ownerHomeStore: '/home/agor/.agor/homes/owner' }
+        { ...CTX, ownerHomeStore: '/home/agor/.agor/homes/owner', ownerTmpBindFd: 9 }
       );
       expect(args.some((a) => a.includes('branch-homes'))).toBe(false);
     });
@@ -83,7 +84,12 @@ describe('resolveBwrapArgs', () => {
       const ownerStore = '/home/agor/.agor/homes/owner';
       const args = resolveBwrapArgs(
         { home_mode: 'per_user' },
-        { ...CTX, ownerHomeStore: ownerStore, branchSdkHomeDir: BRANCH_HOME }
+        {
+          ...CTX,
+          ownerHomeStore: ownerStore,
+          ownerTmpBindFd: 9,
+          branchSdkHomeDir: BRANCH_HOME,
+        }
       );
       expect(hasTriple(args, '--bind', BRANCH_HOME, BRANCH_HOME)).toBe(true);
       const overlayIdx = args.findIndex((a, i) => a === '--bind' && args[i + 1] === ownerStore);
@@ -103,6 +109,7 @@ describe('resolveBwrapArgs', () => {
         {
           ...CTX,
           ownerHomeStore: '/home/agor/.agor/homes/owner',
+          ownerTmpBindFd: 9,
           branchSdkHomeDir: BRANCH_HOME,
           branchSdkCredentialBinds: [{ fd: 3, destination }],
         }
@@ -237,6 +244,7 @@ describe('resolveBwrapArgs — RBAC-aware branch mount', () => {
         ...CTX,
         branchAccess: 'read',
         ownerHomeStore: '/home/agor/.agor/tenants/default/homes/o',
+        ownerTmpBindFd: 9,
       }
     );
     expect(hasTriple(args, '--ro-bind', CTX.branchPath, CTX.branchPath)).toBe(true);
@@ -249,8 +257,52 @@ describe('resolveBwrapArgs — home_mode: per_user', () => {
   const PER_USER_CTX: SandboxPathContext = {
     ...CTX,
     ownerHomeStore: STORE,
+    ownerTmpBindFd: 9,
     agenticToolsPath: '/home/agor/.agor/agentic-tools',
   };
+
+  it('binds the Claude parent and masks every authority leaf from the shared source of truth', () => {
+    const args = resolveBwrapArgs({ home_mode: 'per_user' }, PER_USER_CTX);
+    expect(hasTriple(args, '--bind', `${STORE}/.claude`, `${PER_USER_CTX.homeDir}/.claude`)).toBe(
+      true
+    );
+    for (const filename of ['.credentials.json', ...CREDENTIAL_AUTHORITY_SIDECAR_FILENAMES]) {
+      expect(
+        hasTriple(args, '--ro-bind', '/dev/null', `${PER_USER_CTX.homeDir}/.claude/${filename}`)
+      ).toBe(true);
+    }
+    expect(
+      args.some(
+        (arg, index) =>
+          arg === '--ro-bind-try' &&
+          args[index + 1] === '/dev/null' &&
+          args[index + 2]?.includes('/.claude/')
+      )
+    ).toBe(false);
+    expect(args).not.toContain(`${PER_USER_CTX.homeDir}/.codex/auth.json`);
+    expect(args).not.toContain(`${PER_USER_CTX.homeDir}/.claude/settings.json`);
+    expect(args).not.toContain(`${PER_USER_CTX.homeDir}/.claude/projects`);
+  });
+
+  it('applies operator denials after the Claude parent re-bind', () => {
+    const denied = `${PER_USER_CTX.homeDir}/.claude/settings.json`;
+    const args = resolveBwrapArgs(
+      { home_mode: 'per_user', extra_deny_read: [denied] },
+      PER_USER_CTX
+    );
+    const parentBind = args.findIndex(
+      (arg, index) =>
+        arg === '--bind' &&
+        args[index + 1] === `${STORE}/.claude` &&
+        args[index + 2] === `${PER_USER_CTX.homeDir}/.claude`
+    );
+    const denial = args.findIndex(
+      (arg, index) =>
+        arg === '--ro-bind' && args[index + 1] === '/dev/null' && args[index + 2] === denied
+    );
+    expect(parentBind).toBeGreaterThanOrEqual(0);
+    expect(denial).toBeGreaterThan(parentBind);
+  });
 
   it('overlays the owner store at the passwd home and sets HOME', () => {
     const args = resolveBwrapArgs({ home_mode: 'per_user' }, PER_USER_CTX);
@@ -326,6 +378,136 @@ describe('resolveBwrapArgs — home_mode: per_user', () => {
     expect(hasPair(args, '--tmpfs', tenantsBase)).toBe(true);
   });
 
+  it('hides a physical filesystem_home outside all deployment data roots', () => {
+    const ownerHomeStore = '/srv/customer-homes/alice';
+    const args = resolveBwrapArgs({ home_mode: 'per_user' }, { ...PER_USER_CTX, ownerHomeStore });
+    const physicalParent = args.findIndex(
+      (arg, index) =>
+        arg === '--bind' &&
+        args[index + 1] === `${ownerHomeStore}/.claude` &&
+        args[index + 2] === `${ownerHomeStore}/.claude`
+    );
+    const overlay = args.findIndex(
+      (arg, index) =>
+        arg === '--bind' &&
+        args[index + 1] === ownerHomeStore &&
+        args[index + 2] === PER_USER_CTX.homeDir
+    );
+    expect(physicalParent).toBeGreaterThanOrEqual(0);
+    expect(physicalParent).toBeGreaterThan(overlay);
+    for (const filename of ['.credentials.json', ...CREDENTIAL_AUTHORITY_SIDECAR_FILENAMES]) {
+      expect(
+        hasTriple(args, '--ro-bind', '/dev/null', `${ownerHomeStore}/.claude/${filename}`)
+      ).toBe(true);
+    }
+  });
+
+  it('re-masks the physical Claude alias after an extra writable ancestor re-exposes it', () => {
+    const hiddenStore = `${PER_USER_CTX.dataHome}/tenants/default/homes/owner-123`;
+    const args = resolveBwrapArgs(
+      {
+        home_mode: 'per_user',
+        extra_allow_write: [PER_USER_CTX.dataHome!],
+      },
+      { ...PER_USER_CTX, ownerHomeStore: hiddenStore }
+    );
+    const writableAncestor = args.findIndex(
+      (arg, index) =>
+        arg === '--bind' &&
+        args[index + 1] === PER_USER_CTX.dataHome &&
+        args[index + 2] === PER_USER_CTX.dataHome
+    );
+    const physicalParent = args.findIndex(
+      (arg, index) =>
+        arg === '--bind' &&
+        args[index + 1] === `${hiddenStore}/.claude` &&
+        args[index + 2] === `${hiddenStore}/.claude`
+    );
+    expect(writableAncestor).toBeGreaterThanOrEqual(0);
+    expect(physicalParent).toBeGreaterThan(writableAncestor);
+    for (const filename of ['.credentials.json', ...CREDENTIAL_AUTHORITY_SIDECAR_FILENAMES]) {
+      expect(hasTriple(args, '--ro-bind', '/dev/null', `${hiddenStore}/.claude/${filename}`)).toBe(
+        true
+      );
+    }
+  });
+
+  it.each(['.claude', '.claude/.credentials.json'])(
+    're-masks the physical Claude alias after an extra writable %s descendant re-exposes it',
+    (relativeWritablePath) => {
+      const hiddenStore = `${PER_USER_CTX.dataHome}/tenants/default/homes/owner-123`;
+      const writableDescendant = `${hiddenStore}/${relativeWritablePath}`;
+      const args = resolveBwrapArgs(
+        {
+          home_mode: 'per_user',
+          extra_allow_write: [writableDescendant],
+        },
+        { ...PER_USER_CTX, ownerHomeStore: hiddenStore }
+      );
+      const writableDescendantIndex = args.findIndex(
+        (arg, index) =>
+          arg === '--bind' &&
+          args[index + 1] === writableDescendant &&
+          args[index + 2] === writableDescendant
+      );
+      const physicalParent = args.findIndex(
+        (arg, index) =>
+          index > writableDescendantIndex &&
+          arg === '--bind' &&
+          args[index + 1] === `${hiddenStore}/.claude` &&
+          args[index + 2] === `${hiddenStore}/.claude`
+      );
+      expect(writableDescendantIndex).toBeGreaterThanOrEqual(0);
+      expect(physicalParent).toBeGreaterThan(writableDescendantIndex);
+      for (const filename of ['.credentials.json', ...CREDENTIAL_AUTHORITY_SIDECAR_FILENAMES]) {
+        const leafMask = args.findIndex(
+          (arg, index) =>
+            arg === '--ro-bind' &&
+            args[index + 1] === '/dev/null' &&
+            args[index + 2] === `${hiddenStore}/.claude/${filename}`
+        );
+        expect(leafMask).toBeGreaterThan(physicalParent);
+      }
+    }
+  );
+
+  it('re-masks the canonical physical Claude alias exposed through a symlinked data root', () => {
+    const rawData = '/srv/agor/data-link';
+    const canonicalData = '/mnt/agor-data';
+    const rawStore = `${rawData}/tenants/default/homes/owner-123`;
+    const canonicalStore = `${canonicalData}/tenants/default/homes/owner-123`;
+    const args = resolveBwrapArgs(
+      { home_mode: 'per_user', extra_allow_write: [canonicalData] },
+      {
+        ...PER_USER_CTX,
+        dataHome: rawData,
+        canonicalDataHome: canonicalData,
+        protectedDataRoots: [rawData, canonicalData],
+        ownerHomeStore: rawStore,
+        canonicalOwnerHomeStore: canonicalStore,
+        canonicalExtraAllowWritePaths: [canonicalData],
+      }
+    );
+    const writableCanonicalRoot = args.findIndex(
+      (arg, index) =>
+        arg === '--bind' && args[index + 1] === canonicalData && args[index + 2] === canonicalData
+    );
+    const canonicalParent = args.findIndex(
+      (arg, index) =>
+        index > writableCanonicalRoot &&
+        arg === '--bind' &&
+        args[index + 1] === `${rawStore}/.claude` &&
+        args[index + 2] === `${canonicalStore}/.claude`
+    );
+    expect(writableCanonicalRoot).toBeGreaterThanOrEqual(0);
+    expect(canonicalParent).toBeGreaterThan(writableCanonicalRoot);
+    for (const filename of ['.credentials.json', ...CREDENTIAL_AUTHORITY_SIDECAR_FILENAMES]) {
+      expect(
+        hasTriple(args, '--ro-bind', '/dev/null', `${canonicalStore}/.claude/${filename}`)
+      ).toBe(true);
+    }
+  });
+
   it('emits only the outermost mask for nested data roots', () => {
     const dataHome = '/var/lib/agor';
     const tenantsBase = `${dataHome}/tenants`;
@@ -384,6 +566,15 @@ describe('resolveBwrapArgs — home_mode: per_user', () => {
     expect(hasTriple(args, '--ro-bind', '/dev/null', `${canonicalHomeDir}/.agor/config.yaml`)).toBe(
       true
     );
+    for (const home of ['/home/agor', canonicalHomeDir]) {
+      expect(hasTriple(args, '--bind', `${STORE}/.claude`, `${home}/.claude`)).toBe(true);
+      expect(hasTriple(args, '--ro-bind', '/dev/null', `${home}/.claude/.credentials.json`)).toBe(
+        true
+      );
+      for (const sidecar of CREDENTIAL_AUTHORITY_SIDECAR_FILENAMES) {
+        expect(hasTriple(args, '--ro-bind', '/dev/null', `${home}/.claude/${sidecar}`)).toBe(true);
+      }
+    }
     expect(hasPair(args, '--chdir', canonicalBranch)).toBe(true);
   });
 
@@ -437,10 +628,17 @@ describe('resolveBwrapArgs — home_mode: per_user', () => {
 
   it('binds /tmp to <store>/tmp (on-disk, per-user), keeps /var/tmp ephemeral, pins TMPDIR', () => {
     const args = resolveBwrapArgs({ home_mode: 'per_user' }, PER_USER_CTX);
-    expect(hasTriple(args, '--bind', `${STORE}/tmp`, '/tmp')).toBe(true);
+    expect(hasTriple(args, '--bind-fd', '9', '/tmp')).toBe(true);
+    expect(args).not.toContain(`${STORE}/tmp`);
     expect(hasPair(args, '--tmpfs', '/var/tmp')).toBe(true);
     expect(hasPair(args, '--tmpfs', '/tmp')).toBe(false); // NOT a RAM tmpfs
     expect(hasTriple(args, '--setenv', 'TMPDIR', '/tmp')).toBe(true);
+  });
+
+  it('fails closed when persistent tmp has no validated directory descriptor', () => {
+    expect(() =>
+      resolveBwrapArgs({ home_mode: 'per_user' }, { ...PER_USER_CTX, ownerTmpBindFd: undefined })
+    ).toThrow(/validated directory bind fd/);
   });
 
   it('wipes the homes-parent (sibling-home leak fix) BEFORE overlaying the owner store', () => {

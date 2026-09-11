@@ -40,26 +40,33 @@ describe('startExecutorHeartbeat', () => {
     }
   });
 
-  it('forwards the durable Task response so a replacement daemon can request stop', async () => {
+  it('forwards authorization termination control without treating it as a retryable write failure', async () => {
     vi.useFakeTimers();
     try {
       const stopping = {
         task_id: 'task-1',
         status: 'stopping',
-        termination_request: { cause: 'user_stop', requested_at: '2026-08-06T12:00:00.000Z' },
+        termination_request: {
+          cause: 'authorization_revoked',
+          requested_at: '2026-08-06T12:00:00.000Z',
+          error_message: 'Authorization to continue this task was revoked.',
+        },
       };
       const reportRuntimeTelemetry = vi.fn().mockResolvedValue(stopping);
       const onTask = vi.fn();
+      const warn = vi.fn();
       const client = { service: () => ({ reportRuntimeTelemetry }) } as never;
       const handle = startExecutorHeartbeat({
         client,
         taskId: 'task-1',
         intervalMs: 1000,
         onTask,
+        warn,
       });
 
       await vi.advanceTimersByTimeAsync(0);
       expect(onTask).toHaveBeenCalledWith(stopping);
+      expect(warn).not.toHaveBeenCalled();
       handle.stop();
     } finally {
       vi.useRealTimers();

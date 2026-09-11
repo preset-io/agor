@@ -25,7 +25,6 @@ vi.mock('@agor/core/config', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@agor/core/config')>();
   return {
     ...actual,
-    isBranchRbacEnabled: () => false,
   };
 });
 
@@ -153,7 +152,7 @@ describe('environment tool authorization plumbing', () => {
 
     expect(parsed.success).toBe(false);
     expect(parsed.error).toMatch(/'all' branch permission/);
-    expect(startCalls).toEqual([['wt-1', params]]);
+    expect(startCalls).toEqual([['wt-1', params, undefined]]);
   });
 
   it('runs MCP environment actions inside the tenant database scope when tenant params are present', async () => {
@@ -183,7 +182,7 @@ describe('environment tool authorization plumbing', () => {
     const parsed = JSON.parse(result.content[0].text);
 
     expect(parsed.success).toBe(true);
-    expect(startCalls).toEqual([['wt-1', params]]);
+    expect(startCalls).toEqual([['wt-1', params, undefined]]);
   });
 
   it('validates environment variants through tenant-scoped repo reads', async () => {

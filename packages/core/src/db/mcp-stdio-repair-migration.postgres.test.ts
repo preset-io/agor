@@ -139,15 +139,15 @@ async function seedFixture(db: Database, fixture: Fixture): Promise<void> {
     await insert(scoped, pg.mcpServers).values(servers).run();
 
     for (const server of servers) {
-      await insert(scoped, pg.userMcpOauthTokens)
-        .values({
-          tenant_id: fixture.tenantId,
-          user_id: fixture.userId,
-          mcp_server_id: server.mcp_server_id,
-          oauth_access_token: `sealed-test-grant-${server.mcp_server_id}`,
-          created_at: now,
-        })
-        .run();
+      // Seed the old relation explicitly, not the current schema (which now
+      // requires consenter attribution only after migration 0105).
+      await executeRaw(
+        scoped,
+        sql`INSERT INTO user_mcp_oauth_tokens
+        (tenant_id, user_id, mcp_server_id, oauth_access_token, created_at)
+        VALUES (${fixture.tenantId}, ${fixture.userId}, ${server.mcp_server_id},
+          ${`sealed-test-grant-${server.mcp_server_id}`}, ${now.toISOString()})`
+      );
     }
 
     const flowServerIds = [

@@ -41,6 +41,7 @@ import {
   type McpServerWriteHookContext,
 } from '../utils/mcp-server-authorization.js';
 import { createMCPCatalogConnectService } from './mcp-catalog-connect.js';
+import { createMCPCatalogStartSessionService } from './mcp-catalog-start-session.js';
 import { isMCPOAuthGrantAuthorizedForServer } from './mcp-oauth-grant-authority.js';
 import { createMCPServersService } from './mcp-servers.js';
 
@@ -66,8 +67,6 @@ const CURATED = {
  */
 const CONNECT_REQUEST = {
   catalog_key: DEEPWIKI,
-  branch_id: 'branch-1',
-  agentic_tool: 'claude-code' as const,
   acknowledged_disclosure: 'Reads public GitHub repository content only.',
 };
 
@@ -127,6 +126,10 @@ async function buildDaemon(
 
   const candidateRepo = new MCPCatalogCandidateRepository(rawDb);
   const connectDeps = {
+    runInTenantDatabaseScope: <T>(
+      _params: AuthenticatedParams,
+      work: () => Promise<T>
+    ): Promise<T> => work(),
     listCandidates: (userId: User['user_id']) => candidateRepo.listForUser(userId),
     getCandidate: (userId: User['user_id'], serverId: MCPServer['mcp_server_id']) =>
       candidateRepo.getForUser(userId, serverId),
@@ -143,10 +146,19 @@ async function buildDaemon(
   const installedServers = () => serverRepository.findAll({});
   const seedServer = (server: Parameters<MCPServerRepository['create']>[0]) =>
     serverRepository.create(server);
-  const addUser = (email: string, addedRole: UserRole) =>
-    users.create({ email, name: email, role: addedRole }) as Promise<User>;
+  const addUser = (email: string, addedRole: UserRole, user_id?: UserID) =>
+    users.create({ email, name: email, role: addedRole, user_id }) as Promise<User>;
 
-  return { user, connect, connectAs, addUser, installedServers, seedServer };
+  return {
+    app,
+    params: paramsFor(user, role),
+    user,
+    connect,
+    connectAs,
+    addUser,
+    installedServers,
+    seedServer,
+  };
 }
 
 describe('marketplace install, as it lands in the database', () => {
@@ -167,6 +179,21 @@ describe('marketplace install, as it lands in the database', () => {
       scope: 'session',
       catalog_entry_name: DEEPWIKI,
       owner_user_id: user.user_id,
+    });
+  });
+
+  it('accepts the authentication-hydrated legacy UUID user ID deployed in production', async () => {
+    const { connectAs, addUser, installedServers } = await buildDaemon('allow_crud');
+    const legacyUserId = '707bae66-dda5-4c01-9136-a5cda16e048e' as UserID;
+    const legacy = await addUser('legacy-production-shape@agor.live', 'member', legacyUserId);
+
+    await connectAs(legacy, 'member');
+
+    expect(
+      (await installedServers()).find((row) => row.owner_user_id === legacyUserId)
+    ).toMatchObject({
+      owner_user_id: legacyUserId,
+      catalog_entry_name: DEEPWIKI,
     });
   });
 
@@ -247,6 +274,48 @@ describe('marketplace install, as it lands in the database', () => {
     const servers = await installedServers();
     expect(servers).toHaveLength(1);
     expect(servers[0]?.owner_user_id).toBe(user.user_id);
+  });
+
+  it('Connect reuses a trailing-slash endpoint and Start accepts that same install', async () => {
+    const { app, params, user, seedServer, connect, installedServers } =
+      await buildDaemon('allow_crud');
+    const saved = await seedServer({
+      name: 'deepwiki',
+      source: 'catalog',
+      catalog_entry_name: DEEPWIKI,
+      scope: 'session',
+      transport: 'http',
+      url: 'https://mcp.deepwiki.com/mcp/',
+      auth: { type: 'none' },
+      enabled: true,
+      owner_user_id: user.user_id,
+    });
+    const result = await connect();
+    expect(result.reused_existing_server).toBe(true);
+    expect(result.mcp_server.mcp_server_id).toBe(saved.mcp_server_id);
+    expect(result.mcp_server.url).toBe('https://mcp.deepwiki.com/mcp/');
+    app.use('users', {
+      async find() {
+        return [];
+      },
+      async getPrimaryTeammateCandidates() {
+        return [{ branch_id: '00000000-0000-7000-8000-00000000b123' }];
+      },
+    } as never);
+    const started = await createMCPCatalogStartSessionService(app).create(
+      {
+        catalog_key: DEEPWIKI,
+        mcp_server_id: result.mcp_server.mcp_server_id,
+        teammate_branch_id: '00000000-0000-7000-8000-00000000b123' as never,
+        agentic_tool: 'codex',
+      },
+      params
+    );
+    expect(started.session).toMatchObject({
+      status: 'idle',
+      mcpServerIds: [saved.mcp_server_id],
+    });
+    expect(await installedServers()).toHaveLength(1);
   });
 
   it('authoritatively replaces stale same-type OAuth fields on a reused catalog install', async () => {
@@ -436,12 +505,15 @@ describe('the write hook this seam depends on', () => {
     return { bob, mallory, createAs, patchAs };
   };
 
-  it('is registered on mcp-servers create by registerHooks, not just constructible', async () => {
+  it('trusts the authentication-hydrated owner, not a request-supplied owner', async () => {
     const { bob, mallory, createAs } = await standUpDaemonHooks();
 
     await expect(
       createAs(mallory, { transport: 'http', owner_user_id: bob.user_id })
     ).rejects.toThrow(/only create MCP servers owned by yourself/);
+
+    const context = await createAs(mallory, { transport: 'http' });
+    expect((context.data as { owner_user_id?: string }).owner_user_id).toBe(mallory.user_id);
   });
 
   it('runs as the registered chain, not as a blanket denier', async () => {
@@ -633,6 +705,10 @@ describe('credential reuse, against real grants', () => {
     // grant" is decided by the same key the production wiring uses.
     const candidateRepo = new MCPCatalogCandidateRepository(rawDb);
     const deps = {
+      runInTenantDatabaseScope: <T>(
+        _params: AuthenticatedParams,
+        work: () => Promise<T>
+      ): Promise<T> => work(),
       listCandidates: (userId: User['user_id']) => candidateRepo.listForUser(userId),
       getCandidate: (userId: User['user_id'], serverId: MCPServer['mcp_server_id']) =>
         candidateRepo.getForUser(userId, serverId),

@@ -6,6 +6,7 @@
  * since it orchestrates across multiple repositories and services.
  */
 
+import { randomUUID } from 'node:crypto';
 import { materializeAgenticToolConfiguration } from '@agor/agentic-tools/config';
 import { getBaseUrl, resolveExecutionSecurityMode } from '@agor/core/config';
 import {
@@ -27,6 +28,7 @@ import {
   generateId,
   getCurrentTenantId,
   getHiddenTenantId,
+  getMCPEgressGatewayMode,
   isDatabaseUniqueConstraintError,
   isPostgresDatabase,
   MCPServerRepository,
@@ -36,6 +38,7 @@ import {
   runWithSystemDatabaseScope,
   runWithTenantContext,
   runWithTenantDatabaseScope,
+  SessionMCPServerRepository,
   SessionRepository,
   shortId,
   TaskRepository,
@@ -66,10 +69,12 @@ import {
   gatewayListenerFailure,
   getConnector,
   hasConnector,
+  isSlackWriteTargetAllowed,
   normalizeOutbound,
   normalizeSendReceipt,
   parseDiscordAuthorityMetadata,
   parseGitHubThreadId,
+  parseSlackThreadId,
 } from '@agor/core/gateway';
 import { resolveSessionMcpServerIds } from '@agor/core/sessions';
 import type {
@@ -81,7 +86,11 @@ import type {
   GatewayOutboundMessage,
   GatewayOutboundMessageID,
   GatewayOutboundReplyAdmission,
+  GatewaySource,
+  MCPOAuthAttemptID,
   MCPServerID,
+  MCPSlackRecoveryNotice,
+  MCPSlackRecoveryRenderedState,
   Message,
   MessageSource,
   Session,
@@ -97,13 +106,15 @@ import {
   DEFAULT_DISCORD_CATCH_UP,
   hasMinimumRole,
   isDiscordSnowflake,
+  isTerminalTaskStatus,
   ROLES,
   SessionStatus,
+  TaskStatus,
   USER_DEFAULT_AGENTIC_CONFIGURATION,
   validateDiscordConfig,
 } from '@agor/core/types';
 import { assertExecutionHomeKeySatisfiesMode } from '@agor/core/unix';
-import { getSessionUrl } from '@agor/core/utils/url';
+import { getMcpSlackRecoveryUrl, getSessionUrl } from '@agor/core/utils/url';
 import { gatewayAgenticConfigToInlineConfiguration } from '../utils/agentic-configuration-sources.js';
 import { requireActiveAgenticTool } from '../utils/agentic-tool-runtime.js';
 import { hasBranchPermission, sessionPromptDeniedMessage } from '../utils/branch-authorization.js';
@@ -113,6 +124,8 @@ import {
   ingestInboundAttachments,
 } from '../utils/gateway-attachments.js';
 import { fetchGatewayCatchUp, GatewayCatchUpError } from '../utils/gateway-catch-up.js';
+import { isMcpRuntimeRecoveryEnabled } from '../utils/mcp-runtime-hints.js';
+import { issueMCPSlackRecoveryToken } from '../utils/mcp-slack-recovery-token.js';
 import { deferWithTenantContext } from '../utils/tenant-db-scope.js';
 import { isMCPOAuthGrantAuthorizedForServer } from './mcp-oauth-grant-authority.js';
 import type { SessionParams } from './sessions.js';
@@ -183,6 +196,14 @@ const GATEWAY_EVENT_PROCESSING_LEASE_MS = 2 * 60_000;
 const GATEWAY_LISTENER_STOP_TIMEOUT_MS = 5_000;
 const GATEWAY_LISTENER_RETRY_BASE_MS = 5_000;
 const GATEWAY_LISTENER_RETRY_MAX_MS = 5 * 60_000;
+const MCP_SLACK_REPAIR_BATCH = 50;
+const MCP_SLACK_REPAIR_HORIZON_MS = 24 * 60 * 60_000;
+const MCP_SLACK_SWEEP_INTERVAL_MS = 30_000;
+const MCP_SLACK_SWEEP_TENANT_BUDGET = 10;
+const MCP_SLACK_ACTIVE_BACKSTOP_MS = 60_000;
+const MCP_SLACK_DELIVERY_RETRY_WINDOW_MS = 15 * 60_000;
+const MCP_SLACK_DELIVERY_MAX_ATTEMPTS = 6;
+const MCP_SLACK_DELIVERY_BACKOFF_MS = [5_000, 15_000, 30_000, 60_000, 120_000, 300_000] as const;
 
 async function withGatewayTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
   let timer: NodeJS.Timeout | undefined;
@@ -208,6 +229,39 @@ async function withGatewayTimeout<T>(promise: Promise<T>, timeoutMs: number): Pr
 interface RouteMessageResult {
   routed: boolean;
   channelType?: string;
+}
+
+interface FlushOutboundBufferOptions {
+  taskId: TaskID;
+}
+
+const GATEWAY_FINAL_REPLY_CLAIM_TIMEOUT_MS = 5 * 60 * 1000;
+const GATEWAY_FAILED_TURN_REPLY =
+  "I couldn't complete this request because the Agor session stopped with an error. Mention me again to retry.";
+const GATEWAY_STOPPED_TURN_REPLY =
+  'This request was stopped before it finished. Mention me again to continue.';
+
+type GatewayFinalReplyState =
+  | { status: 'pending' }
+  | { status: 'processing'; claim_token: string; claimed_at: string }
+  | { status: 'delivered'; delivered_at: string };
+
+function gatewayFinalReplyState(metadata: Message['metadata']): GatewayFinalReplyState | undefined {
+  const value = metadata?.gateway_final_reply;
+  if (!value || typeof value !== 'object') return undefined;
+  const state = value as Record<string, unknown>;
+  if (state.status === 'pending') return { status: 'pending' };
+  if (
+    state.status === 'processing' &&
+    typeof state.claim_token === 'string' &&
+    typeof state.claimed_at === 'string'
+  ) {
+    return { status: 'processing', claim_token: state.claim_token, claimed_at: state.claimed_at };
+  }
+  if (state.status === 'delivered' && typeof state.delivered_at === 'string') {
+    return { status: 'delivered', delivered_at: state.delivered_at };
+  }
+  return undefined;
 }
 
 interface EmitGatewayMessageData {
@@ -460,14 +514,18 @@ function previewText(text: string, maxChars = 500): string {
   return `${normalized.slice(0, Math.max(0, maxChars - 1))}…`;
 }
 
-function gatewayMessageText(content: Message['content']): string {
-  if (typeof content === 'string') return content;
-  if (!Array.isArray(content)) return '';
-  return content
-    .filter((block) => block.type === 'text')
-    .map((block) => (typeof block.text === 'string' ? block.text : ''))
-    .filter(Boolean)
-    .join('\n');
+function gatewayMessageText(message: Pick<Message, 'content' | 'content_preview'>): string {
+  const { content } = message;
+  if (typeof content === 'string' && content.trim()) return content;
+  if (Array.isArray(content)) {
+    const text = content
+      .filter((block) => block.type === 'text')
+      .map((block) => (typeof block.text === 'string' ? block.text : ''))
+      .filter(Boolean)
+      .join('\n');
+    if (text.trim()) return text;
+  }
+  return message.content_preview || '';
 }
 
 function quoteForPrompt(text: string, maxChars = 2000): string {
@@ -838,6 +896,115 @@ function buildGatewayContext(channel: GatewayChannel, data: PostMessageData): Ga
 /**
  * Gateway routing service
  */
+export function mcpSlackRecoveryRenderedState(
+  task: Task,
+  notice: MCPSlackRecoveryNotice,
+  now = Date.now()
+): MCPSlackRecoveryRenderedState {
+  const recovery = task.metadata?.mcp_recovery;
+  const settledAt = task.metadata?.mcp_recovery_settled_at;
+  const settledGeneration = task.metadata?.mcp_recovery_generation ?? 0;
+  const exactRequestSettled = notice.recovery_request_id
+    ? task.metadata?.mcp_recovery_settled_request_id === notice.recovery_request_id
+    : !!settledAt && settledGeneration >= notice.recovery_generation;
+  const settled =
+    !!settledAt && settledGeneration >= notice.recovery_generation && exactRequestSettled;
+  if (
+    [TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.STOPPED, TaskStatus.TIMED_OUT].includes(
+      task.status as never
+    )
+  ) {
+    return notice.oauth_succeeded_at && settled ? 'recovered' : 'expired_or_superseded';
+  }
+  if (notice.oauth_succeeded_at && !recovery) {
+    return settled ? 'recovered' : 'sign_in_pending';
+  }
+  if (!notice.oauth_succeeded_at && new Date(notice.expires_at).getTime() <= now) {
+    return 'expired_or_superseded';
+  }
+  if (notice.binding_invalidated_at) return 'expired_or_superseded';
+  if (notice.oauth_superseded_at) return 'expired_or_superseded';
+  if (notice.recovery_disabled_at) return 'manual_next_turn';
+  if (recovery?.action === 'retry_next_turn' || recovery?.code === 'rollout_changed') {
+    return 'manual_next_turn';
+  }
+  if (recovery && recovery.generation > notice.recovery_generation && !notice.oauth_succeeded_at) {
+    return 'expired_or_superseded';
+  }
+  if (
+    !notice.oauth_succeeded_at &&
+    (!recovery ||
+      recovery.mcp_server_id !== notice.mcp_server_id ||
+      recovery.generation !== notice.recovery_generation ||
+      recovery.request_id !== notice.recovery_request_id)
+  ) {
+    return 'expired_or_superseded';
+  }
+  if (notice.oauth_failed_at || recovery?.status === 'failed') return 'failed';
+  if (notice.oauth_started_at || notice.oauth_succeeded_at) return 'sign_in_pending';
+  return 'reconnect_required';
+}
+
+export function mcpSlackRecoveryExpiryDelay(
+  state: MCPSlackRecoveryRenderedState,
+  notice: MCPSlackRecoveryNotice,
+  now = Date.now()
+): number | undefined {
+  if (state !== 'reconnect_required' && state !== 'sign_in_pending') return undefined;
+  const expiresAt = new Date(notice.expires_at).getTime();
+  if (!Number.isFinite(expiresAt) || expiresAt <= now) return undefined;
+  return expiresAt - now + 1_000;
+}
+
+export function taskMayNeedMcpSlackRecoverySync(task: unknown): boolean {
+  if (!task || typeof task !== 'object') return false;
+  const metadata = (task as { metadata?: Task['metadata'] }).metadata;
+  return !!(
+    metadata?.mcp_slack_recovery_notice ||
+    (metadata?.gateway_task_source?.channel_type === 'slack' &&
+      metadata.mcp_recovery?.code === 'oauth_reauth_required')
+  );
+}
+
+export function mcpSlackRecoveryMessageCopy(
+  state: MCPSlackRecoveryRenderedState,
+  dispatch: MCPSlackRecoveryNotice['provider_dispatch']
+): { text: string; button?: string } {
+  switch (state) {
+    case 'reconnect_required':
+      return {
+        text:
+          dispatch === 'ambiguous'
+            ? 'MCP sign-in is required. The interrupted provider call may have started, so Agor will not replay it automatically.'
+            : 'MCP sign-in is required. Agor will not replay the interrupted call automatically.',
+        button: 'Reconnect MCP',
+      };
+    case 'sign_in_pending':
+      return {
+        text: 'MCP sign-in was opened and recovery is pending. You can return to Slack while Agor verifies the connection.',
+      };
+    case 'recovered':
+      return {
+        text:
+          dispatch === 'ambiguous'
+            ? 'MCP is reconnected for later calls. The interrupted call may have started and was not replayed. Tell the assistant what to do next.'
+            : 'MCP is reconnected. The interrupted call was not replayed; explicitly ask the assistant to retry if you still want it.',
+      };
+    case 'manual_next_turn':
+      return {
+        text: 'MCP authority is current, but this provider can apply it only on the next turn. Conversation history is preserved; send a new Slack message to continue.',
+      };
+    case 'expired_or_superseded':
+      return {
+        text: 'This MCP reconnect action expired or was superseded. Send a new Slack message if recovery is still needed.',
+      };
+    case 'failed':
+      return {
+        text: 'MCP recovery could not be completed. No provider call was replayed. Try again from a new Slack turn or contact an administrator.',
+      };
+  }
+}
+
 export class GatewayService {
   private channelRepo: GatewayChannelRepository;
   private threadMapRepo: ThreadSessionMapRepository;
@@ -852,9 +1019,9 @@ export class GatewayService {
 
   private mcpServerRepo: MCPServerRepository;
   private userTokenRepo: UserMCPOAuthTokenRepository;
+  private sessionMcpRepo: SessionMCPServerRepository;
   private db: TenantScopeAwareDatabase;
   private app: Application;
-  private appRbacEnabled: boolean;
 
   /** Active listeners keyed by immutable tenant + channel identity. */
   private activeListeners = new Map<string, GatewayConnector>();
@@ -885,15 +1052,6 @@ export class GatewayService {
   private activeChannelTenants = new Set<string>();
 
   /**
-   * GitHub message buffer: keyed by session_id, stores the latest message text.
-   * For GitHub channels, we don't send every assistant message in real-time
-   * (unlike Slack). Instead, we buffer and only send the last message when
-   * the session turn completes (goes idle). Each new message overwrites the
-   * previous one — only the final message matters.
-   */
-  private lastMessageBuffer = new Map<string, string>();
-
-  /**
    * Slack status updates are serialized and lightly throttled so concurrent
    * tool/message hooks do not race while deleting/reposting the transient row.
    * Terminal states always bypass this throttle.
@@ -905,15 +1063,18 @@ export class GatewayService {
   private slackStreamedMessageIds = new Set<string>();
   private slackStreamedTaskIds = new Set<string>();
   private slackStreamTaskByMessage = new Map<string, string>();
+  private mcpSlackRecoveryExpiryTimers = new Map<string, NodeJS.Timeout>();
+  private mcpSlackDeliveryRetryTimers = new Map<string, NodeJS.Timeout>();
+  private mcpSlackOAuthStartClaimTimers = new Map<string, NodeJS.Timeout>();
+  private mcpSlackRepairTenants = new Set<string>();
+  private mcpSlackRecoveryTenants = new Set<string>();
+  private mcpSlackSweepTimer: NodeJS.Timeout | null = null;
+  private mcpSlackSweepCursor = 0;
   private static SLACK_PROGRESS_MIN_UPDATE_MS = 2500;
   private static SLACK_STREAM_STATUS_REFRESH_MS = 300;
   private static SLACK_STREAMED_MESSAGE_CACHE_MAX = 500;
 
-  constructor(
-    db: TenantScopeAwareDatabase,
-    app: Application,
-    options: { appRbacEnabled?: boolean } = {}
-  ) {
+  constructor(db: TenantScopeAwareDatabase, app: Application) {
     // Long-lived listener orchestration carries tenant identity without
     // holding a transaction. Every repository field is therefore bound to a
     // short per-method tenant unit of work here; provider/process/network work
@@ -940,9 +1101,9 @@ export class GatewayService {
 
     this.mcpServerRepo = bindRepositoryToTenantUnitOfWork(db, new MCPServerRepository(db));
     this.userTokenRepo = bindRepositoryToTenantUnitOfWork(db, new UserMCPOAuthTokenRepository(db));
+    this.sessionMcpRepo = bindRepositoryToTenantUnitOfWork(db, new SessionMCPServerRepository(db));
     this.db = db;
     this.app = app;
-    this.appRbacEnabled = options.appRbacEnabled ?? resolveExecutionSecurityMode().appRbacEnabled;
     this.workIdentity = (
       app as unknown as { get?: (name: string) => DistributedWorkIdentity | undefined }
     ).get?.('distributedWorkIdentity') ?? {
@@ -1009,7 +1170,7 @@ export class GatewayService {
     const tenantId = requireCurrentTenantId(
       'Missing tenant context while refreshing gateway channel state'
     );
-    const channels = await this.channelRepo.findAll();
+    const channels = await this.channelRepo.findDisplayAll();
     if (channels.some((ch) => ch.enabled)) {
       this.activeChannelTenants.add(tenantId);
     } else {
@@ -1018,6 +1179,58 @@ export class GatewayService {
     console.log(
       `[gateway] refreshChannelState: tenant=${tenantId} found ${channels.length} channels, ${channels.filter((ch) => ch.enabled).length} enabled`
     );
+    // Bounded restart/lost-event repair. Never scan a tenant wholesale and
+    // never hold a database transaction while Slack is called.
+    if (channels.some((channel) => channel.enabled && channel.channel_type === 'slack')) {
+      this.mcpSlackRecoveryTenants.add(tenantId);
+      this.scheduleMcpSlackRecoveryRepair(tenantId);
+      this.ensureMcpSlackPeriodicSweep();
+    } else {
+      this.mcpSlackRecoveryTenants.delete(tenantId);
+    }
+  }
+
+  private scheduleMcpSlackRecoveryRepair(tenantId: string): void {
+    if (this.mcpSlackRepairTenants.has(tenantId)) return;
+    this.mcpSlackRepairTenants.add(tenantId);
+    setTimeout(() => {
+      if (this.listenerStopped) {
+        this.mcpSlackRepairTenants.delete(tenantId);
+        return;
+      }
+      void runWithTenantContext(tenantId, async () => {
+        const now = new Date();
+        const page = await this.taskRepo.findMcpSlackRecoveryNoticePage({
+          limit: MCP_SLACK_REPAIR_BATCH,
+          now,
+          horizon: new Date(now.getTime() - MCP_SLACK_REPAIR_HORIZON_MS),
+        });
+        for (const task of page.tasks) {
+          await this.syncMcpSlackRecoveryNotice(task.task_id).catch(() => undefined);
+        }
+      })
+        .catch(() => console.warn('[gateway] MCP Slack recovery bounded repair failed'))
+        .finally(() => this.mcpSlackRepairTenants.delete(tenantId));
+    }, 0).unref?.();
+  }
+
+  private ensureMcpSlackPeriodicSweep(): void {
+    if (this.listenerStopped || this.mcpSlackSweepTimer) return;
+    this.mcpSlackSweepTimer = setTimeout(() => {
+      this.mcpSlackSweepTimer = null;
+      if (this.listenerStopped) return;
+      const tenants = [...this.mcpSlackRecoveryTenants].sort();
+      if (tenants.length > 0) {
+        const count = Math.min(MCP_SLACK_SWEEP_TENANT_BUDGET, tenants.length);
+        for (let index = 0; index < count; index += 1) {
+          const tenant = tenants[(this.mcpSlackSweepCursor + index) % tenants.length];
+          if (tenant) this.scheduleMcpSlackRecoveryRepair(tenant);
+        }
+        this.mcpSlackSweepCursor = (this.mcpSlackSweepCursor + count) % tenants.length;
+      }
+      this.ensureMcpSlackPeriodicSweep();
+    }, MCP_SLACK_SWEEP_INTERVAL_MS);
+    this.mcpSlackSweepTimer.unref?.();
   }
 
   /**
@@ -1088,6 +1301,726 @@ export class GatewayService {
     } catch (error) {
       console.warn('[gateway] Failed to post prompt authorization denial:', error);
     }
+  }
+
+  private recoveryEnvelopeSecret(): string | null {
+    const secret = process.env.AGOR_MASTER_SECRET;
+    return typeof secret === 'string' && secret.length > 0 ? secret : null;
+  }
+
+  private async mcpSlackRecoveryUrl(
+    tenantId: string,
+    notice: MCPSlackRecoveryNotice
+  ): Promise<string | undefined> {
+    const secret = this.recoveryEnvelopeSecret();
+    if (!secret || notice.token_consumed_at) return undefined;
+    const token = issueMCPSlackRecoveryToken(
+      {
+        type: 'mcp-slack-recovery',
+        tid: tenantId,
+        sub: notice.principal_user_id,
+        credential_user_id: notice.credential_user_id,
+        slack_user_id: notice.slack_user_id,
+        slack_team_id: notice.slack_team_id,
+        gateway_channel_id: notice.gateway_channel_id,
+        gateway_config_generation: notice.gateway_config_generation,
+        slack_channel_id: notice.slack_channel_id,
+        slack_thread_id: notice.slack_thread_id,
+        task_id: notice.task_id,
+        session_id: notice.session_id,
+        mcp_server_id: notice.mcp_server_id,
+        mcp_server_config_version: notice.mcp_server_config_version,
+        recovery_generation: notice.recovery_generation,
+        recovery_request_id: notice.recovery_request_id,
+        notice_id: notice.notice_id,
+        jti: notice.token_jti,
+        expiresAt: new Date(notice.expires_at),
+      },
+      secret,
+      new Date(notice.issued_at)
+    );
+    const page = getMcpSlackRecoveryUrl(await getBaseUrl());
+    return `${page}#token=${encodeURIComponent(token)}`;
+  }
+
+  private mcpSlackNextActiveRepairAt(
+    state: MCPSlackRecoveryRenderedState,
+    notice: MCPSlackRecoveryNotice,
+    now = Date.now()
+  ): string | undefined {
+    if (state !== 'reconnect_required' && state !== 'sign_in_pending') return undefined;
+    const expiryDelay = mcpSlackRecoveryExpiryDelay(state, notice, now);
+    return new Date(
+      now + Math.min(expiryDelay ?? MCP_SLACK_ACTIVE_BACKSTOP_MS, MCP_SLACK_ACTIVE_BACKSTOP_MS)
+    ).toISOString();
+  }
+
+  private mcpSlackFailedDeliveryNotice(
+    notice: MCPSlackRecoveryNotice,
+    now = new Date()
+  ): MCPSlackRecoveryNotice {
+    const attempt = (notice.delivery_attempt_count ?? 0) + 1;
+    const retryUntil = notice.delivery_retry_until
+      ? new Date(notice.delivery_retry_until)
+      : new Date(now.getTime() + MCP_SLACK_DELIVERY_RETRY_WINDOW_MS);
+    const backoff =
+      MCP_SLACK_DELIVERY_BACKOFF_MS[
+        Math.min(attempt - 1, MCP_SLACK_DELIVERY_BACKOFF_MS.length - 1)
+      ]!;
+    const next = new Date(now.getTime() + backoff);
+    const canRetry =
+      attempt < MCP_SLACK_DELIVERY_MAX_ATTEMPTS &&
+      Number.isFinite(retryUntil.getTime()) &&
+      next.getTime() <= retryUntil.getTime();
+    return {
+      ...notice,
+      delivery_claim: undefined,
+      delivery_attempt_count: attempt,
+      delivery_last_failed_at: now.toISOString(),
+      delivery_retry_until: retryUntil.toISOString(),
+      delivery_next_retry_at: canRetry ? next.toISOString() : undefined,
+      next_repair_at: canRetry ? next.toISOString() : undefined,
+    };
+  }
+
+  private async recordMcpSlackDeliveryFailure(
+    taskId: string,
+    noticeId: string,
+    claimId: string
+  ): Promise<void> {
+    const failed = await this.taskRepo
+      .mutateMCPSlackRecoveryNotice(taskId, (current) =>
+        current?.notice_id === noticeId && current.delivery_claim?.claim_id === claimId
+          ? this.mcpSlackFailedDeliveryNotice(current)
+          : null
+      )
+      .catch(() => undefined);
+    console.warn('[gateway] MCP recovery Slack delivery failed');
+    const failedNotice = failed?.task.metadata?.mcp_slack_recovery_notice;
+    if (failed?.changed && failedNotice?.delivery_next_retry_at) {
+      this.scheduleMcpSlackDeliveryRetry(
+        taskId,
+        noticeId,
+        Math.max(100, new Date(failedNotice.delivery_next_retry_at).getTime() - Date.now())
+      );
+    }
+  }
+
+  private async deliverMcpSlackRecoveryNotice(task: Task): Promise<void> {
+    const initial = task.metadata?.mcp_slack_recovery_notice;
+    if (!initial) return;
+    const state = mcpSlackRecoveryRenderedState(task, initial);
+    this.scheduleMcpSlackRecoveryExpiry(task.task_id, initial, state);
+    if (initial.slack_message_ts && initial.rendered_state === state) {
+      const nextRepairAt = this.mcpSlackNextActiveRepairAt(state, initial);
+      if (initial.next_repair_at !== nextRepairAt) {
+        await this.taskRepo.mutateMCPSlackRecoveryNotice(task.task_id, (current) =>
+          current?.notice_id === initial.notice_id && current.rendered_state === state
+            ? { ...current, next_repair_at: nextRepairAt }
+            : null
+        );
+      }
+      return;
+    }
+    const claimId = randomUUID();
+    const now = new Date();
+    const claimExpiresAt = new Date(now.getTime() + 30_000).toISOString();
+    const claimed = await this.taskRepo.mutateMCPSlackRecoveryNotice(task.task_id, (current) => {
+      if (!current || current.notice_id !== initial.notice_id) return null;
+      if (current.slack_message_ts && current.rendered_state === state) return null;
+      if (
+        current.delivery_claim &&
+        new Date(current.delivery_claim.expires_at).getTime() > now.getTime()
+      ) {
+        return null;
+      }
+      return {
+        ...current,
+        delivery_claim: {
+          claim_id: claimId,
+          claimed_at: now.toISOString(),
+          expires_at: claimExpiresAt,
+        },
+        next_repair_at: claimExpiresAt,
+      };
+    });
+    const notice = claimed.task.metadata?.mcp_slack_recovery_notice;
+    if (!claimed.changed || notice?.delivery_claim?.claim_id !== claimId) {
+      if (
+        notice?.notice_id === initial.notice_id &&
+        notice.delivery_claim &&
+        new Date(notice.delivery_claim.expires_at).getTime() > Date.now()
+      ) {
+        this.scheduleMcpSlackDeliveryRetry(
+          task.task_id,
+          notice.notice_id,
+          Math.max(100, new Date(notice.delivery_claim.expires_at).getTime() - Date.now() + 100)
+        );
+      }
+      return;
+    }
+
+    let parsedThread: ReturnType<typeof parseSlackThreadId>;
+    try {
+      parsedThread = parseSlackThreadId(notice.slack_thread_id);
+    } catch {
+      parsedThread = { channel: '', thread_ts: '' };
+    }
+    const channel = await this.channelRepo.findById(notice.gateway_channel_id);
+    if (!channel?.enabled || channel.channel_type !== 'slack') {
+      await this.taskRepo.mutateMCPSlackRecoveryNotice(task.task_id, (current) =>
+        current?.notice_id === notice.notice_id && current.delivery_claim?.claim_id === claimId
+          ? { ...current, delivery_claim: undefined, next_repair_at: undefined }
+          : null
+      );
+      return;
+    }
+    if (
+      parsedThread.channel !== notice.slack_channel_id ||
+      !isSlackWriteTargetAllowed(channel.config, parsedThread.channel)
+    ) {
+      await this.taskRepo.mutateMCPSlackRecoveryNotice(task.task_id, (current) =>
+        current?.notice_id === notice.notice_id && current.delivery_claim?.claim_id === claimId
+          ? {
+              ...current,
+              delivery_claim: undefined,
+              binding_invalidated_at: current.binding_invalidated_at ?? new Date().toISOString(),
+              next_repair_at: undefined,
+            }
+          : null
+      );
+      return;
+    }
+    // A generation mismatch must never reuse the process-local listener: its
+    // connector can still carry the pre-mutation token while listener restart
+    // is draining. Verify and deliver only with freshly loaded credentials.
+    let connector: GatewayConnector;
+    try {
+      connector =
+        channel.provider_config_generation !== notice.gateway_config_generation
+          ? getConnector('slack', channel.config)
+          : (this.getActiveListener(channel.id) ?? getConnector('slack', channel.config));
+    } catch {
+      await this.recordMcpSlackDeliveryFailure(task.task_id, notice.notice_id, claimId);
+      return;
+    }
+    if (channel.provider_config_generation !== notice.gateway_config_generation) {
+      let currentApp: Awaited<ReturnType<NonNullable<GatewayConnector['getAppInfo']>>> | undefined;
+      try {
+        currentApp = connector.getAppInfo ? await connector.getAppInfo() : undefined;
+      } catch {
+        await this.recordMcpSlackDeliveryFailure(task.task_id, notice.notice_id, claimId);
+        return;
+      }
+      if (
+        currentApp?.teamId !== notice.slack_team_id ||
+        !isSlackWriteTargetAllowed(channel.config, parsedThread.channel)
+      ) {
+        await this.taskRepo.mutateMCPSlackRecoveryNotice(task.task_id, (current) =>
+          current?.notice_id === notice.notice_id && current.delivery_claim?.claim_id === claimId
+            ? { ...current, delivery_claim: undefined, next_repair_at: undefined }
+            : null
+        );
+        return;
+      }
+      if (!notice.binding_invalidated_at) {
+        const invalidated = await this.taskRepo.mutateMCPSlackRecoveryNotice(
+          task.task_id,
+          (current) =>
+            current?.notice_id === notice.notice_id &&
+            current.delivery_claim?.claim_id === claimId &&
+            !current.binding_invalidated_at
+              ? {
+                  ...current,
+                  delivery_claim: undefined,
+                  binding_invalidated_at: new Date().toISOString(),
+                  next_repair_at: new Date().toISOString(),
+                }
+              : null
+        );
+        if (invalidated.changed) await this.deliverMcpSlackRecoveryNotice(invalidated.task);
+        return;
+      }
+    }
+    const copy = mcpSlackRecoveryMessageCopy(state, notice.provider_dispatch);
+    const url =
+      state === 'reconnect_required'
+        ? await this.mcpSlackRecoveryUrl(requireCurrentTenantId(), notice)
+        : undefined;
+    const blocks: unknown[] = [
+      {
+        type: 'section',
+        text: { type: 'mrkdwn', text: `*MCP recovery*\n${copy.text}` },
+      },
+      ...(url && copy.button
+        ? [
+            {
+              type: 'actions',
+              elements: [
+                {
+                  type: 'button',
+                  text: { type: 'plain_text', text: copy.button },
+                  url,
+                  // Slack requires action_id even for URL buttons. Agor does
+                  // not treat this as an interactive callback or auth input.
+                  action_id: 'agor_mcp_reconnect_link',
+                  accessibility_label: 'Reconnect MCP in Agor',
+                },
+              ],
+            },
+          ]
+        : []),
+      { type: 'context', elements: [{ type: 'mrkdwn', text: 'Return here after using Agor.' }] },
+    ];
+    try {
+      let reconciledMessageTs = notice.slack_message_ts;
+      if (!reconciledMessageTs && connector.findMessageByMetadata) {
+        reconciledMessageTs = await connector
+          .findMessageByMetadata({
+            threadId: notice.slack_thread_id,
+            eventType: 'agor_mcp_recovery',
+            payloadKey: 'delivery_id',
+            payloadValue: notice.delivery_id,
+            limit: 100,
+          })
+          .catch(() => undefined);
+      }
+      const sent = await connector.sendMessage({
+        threadId: notice.slack_thread_id,
+        text: copy.text,
+        blocks,
+        metadata: {
+          ...(reconciledMessageTs ? { slack_update_ts: reconciledMessageTs } : {}),
+          ...(!reconciledMessageTs
+            ? {
+                slack_message_metadata: {
+                  event_type: 'agor_mcp_recovery',
+                  event_payload: { delivery_id: notice.delivery_id },
+                },
+              }
+            : {}),
+        },
+      });
+      const receipt = normalizeSendReceipt(sent);
+      const renderedAt = new Date();
+      await this.taskRepo.mutateMCPSlackRecoveryNotice(task.task_id, (current) =>
+        current?.notice_id === notice.notice_id && current.delivery_claim?.claim_id === claimId
+          ? {
+              ...current,
+              slack_message_ts:
+                current.slack_message_ts ?? reconciledMessageTs ?? receipt.messageId,
+              delivery_claim: undefined,
+              rendered_state: state,
+              rendered_at: renderedAt.toISOString(),
+              delivery_next_retry_at: undefined,
+              next_repair_at: this.mcpSlackNextActiveRepairAt(state, current, renderedAt.getTime()),
+            }
+          : null
+      );
+      const retry = this.mcpSlackDeliveryRetryTimers.get(notice.notice_id);
+      if (retry) clearTimeout(retry);
+      this.mcpSlackDeliveryRetryTimers.delete(notice.notice_id);
+    } catch {
+      await this.recordMcpSlackDeliveryFailure(task.task_id, notice.notice_id, claimId);
+    }
+  }
+
+  private scheduleMcpSlackDeliveryRetry(taskId: string, noticeId: string, delay = 5_000): void {
+    if (this.mcpSlackDeliveryRetryTimers.has(noticeId)) return;
+    const tenantId = requireCurrentTenantId();
+    const timer = setTimeout(() => {
+      this.mcpSlackDeliveryRetryTimers.delete(noticeId);
+      void runWithTenantContext(tenantId, async () => {
+        const task = await this.taskRepo.findById(taskId);
+        if (task?.metadata?.mcp_slack_recovery_notice?.notice_id === noticeId) {
+          await this.deliverMcpSlackRecoveryNotice(task);
+        }
+      }).catch(() => console.warn('[gateway] MCP recovery Slack retry failed'));
+    }, delay);
+    timer.unref?.();
+    this.mcpSlackDeliveryRetryTimers.set(noticeId, timer);
+  }
+
+  private scheduleMcpSlackRecoveryExpiry(
+    taskId: string,
+    notice: MCPSlackRecoveryNotice,
+    state: MCPSlackRecoveryRenderedState
+  ): void {
+    const delay = mcpSlackRecoveryExpiryDelay(state, notice);
+    if (delay === undefined) {
+      const existing = this.mcpSlackRecoveryExpiryTimers.get(notice.notice_id);
+      if (existing) clearTimeout(existing);
+      this.mcpSlackRecoveryExpiryTimers.delete(notice.notice_id);
+      return;
+    }
+    if (this.mcpSlackRecoveryExpiryTimers.has(notice.notice_id)) return;
+    const tenantId = requireCurrentTenantId();
+    const timer = setTimeout(() => {
+      this.mcpSlackRecoveryExpiryTimers.delete(notice.notice_id);
+      void runWithTenantContext(tenantId, () => this.syncMcpSlackRecoveryNotice(taskId)).catch(() =>
+        console.warn('[gateway] MCP recovery expiry projection failed')
+      );
+    }, delay);
+    timer.unref?.();
+    this.mcpSlackRecoveryExpiryTimers.set(notice.notice_id, timer);
+  }
+
+  private scheduleMcpSlackOAuthStartClaimRepair(
+    taskId: string,
+    notice: MCPSlackRecoveryNotice,
+    retryDelay?: number
+  ): void {
+    if (
+      !notice.oauth_start_claim_expires_at ||
+      notice.oauth_started_at ||
+      notice.oauth_failed_at ||
+      this.mcpSlackOAuthStartClaimTimers.has(notice.notice_id)
+    ) {
+      return;
+    }
+    const tenantId = requireCurrentTenantId();
+    const delay =
+      retryDelay ??
+      Math.max(0, new Date(notice.oauth_start_claim_expires_at).getTime() - Date.now() + 100);
+    const timer = setTimeout(() => {
+      this.mcpSlackOAuthStartClaimTimers.delete(notice.notice_id);
+      void runWithTenantContext(tenantId, () => this.syncMcpSlackRecoveryNotice(taskId)).catch(
+        () => {
+          console.warn('[gateway] MCP recovery OAuth start claim repair failed');
+          runWithTenantContext(tenantId, () =>
+            this.scheduleMcpSlackOAuthStartClaimRepair(taskId, notice, 5_000)
+          );
+        }
+      );
+    }, delay);
+    timer.unref?.();
+    this.mcpSlackOAuthStartClaimTimers.set(notice.notice_id, timer);
+  }
+
+  /** Project authoritative Task recovery into one idempotently editable Slack row. */
+  async syncMcpSlackRecoveryNotice(taskId: string): Promise<void> {
+    const recoveryEnabled = await isMcpRuntimeRecoveryEnabled(this.db);
+    const mode = await getMCPEgressGatewayMode(this.db);
+    const task = await this.taskRepo.findById(taskId);
+    if (!task) return;
+    const recovery = task.metadata?.mcp_recovery;
+    const existing = task.metadata?.mcp_slack_recovery_notice;
+
+    if (
+      existing?.oauth_start_claim_expires_at &&
+      !existing.oauth_started_at &&
+      !existing.oauth_failed_at
+    ) {
+      if (new Date(existing.oauth_start_claim_expires_at).getTime() <= Date.now()) {
+        const orphaned = await this.taskRepo.mutateMCPSlackRecoveryNotice(
+          task.task_id,
+          (current) =>
+            current?.notice_id === existing.notice_id &&
+            current.oauth_attempt_id === existing.oauth_attempt_id &&
+            current.oauth_start_claim_expires_at === existing.oauth_start_claim_expires_at &&
+            !current.oauth_started_at &&
+            !current.oauth_failed_at
+              ? {
+                  ...current,
+                  oauth_failed_at: new Date().toISOString(),
+                  next_repair_at: new Date().toISOString(),
+                }
+              : null
+        );
+        await this.deliverMcpSlackRecoveryNotice(orphaned.changed ? orphaned.task : task);
+        return;
+      }
+      this.scheduleMcpSlackOAuthStartClaimRepair(task.task_id, existing);
+    }
+
+    if (!recoveryEnabled) {
+      if (!existing) return;
+      const disabled = await this.taskRepo.mutateMCPSlackRecoveryNotice(task.task_id, (current) =>
+        current?.notice_id === existing.notice_id && !current.recovery_disabled_at
+          ? {
+              ...current,
+              recovery_disabled_at: new Date().toISOString(),
+              next_repair_at: new Date().toISOString(),
+            }
+          : null
+      );
+      await this.deliverMcpSlackRecoveryNotice(disabled.changed ? disabled.task : task);
+      return;
+    }
+
+    if (
+      recovery?.code === 'oauth_reauth_required' &&
+      recovery.action === 'reauthenticate' &&
+      recovery.status === 'action_required' &&
+      recovery.mcp_server_id &&
+      (mode === 'compatibility' || mode === 'enforced')
+    ) {
+      const source = task.metadata?.gateway_task_source;
+      let sourceThread: ReturnType<typeof parseSlackThreadId> | undefined;
+      try {
+        sourceThread = source?.thread_id ? parseSlackThreadId(source.thread_id) : undefined;
+      } catch {
+        sourceThread = undefined;
+      }
+      const session = await this.sessionRepo.findById(task.session_id);
+      const channel = source ? await this.channelRepo.findById(source.gateway_channel_id) : null;
+      const mapping = session ? await this.threadMapRepo.findBySession(session.session_id) : null;
+      const server = await this.mcpServerRepo.findById(recovery.mcp_server_id);
+      const [principal, credentialUser] = session
+        ? await Promise.all([
+            this.usersRepo.findById(task.created_by),
+            this.usersRepo.findById(session.created_by),
+          ])
+        : [null, null];
+      const attached = session
+        ? (await this.sessionMcpRepo.listServers(session.session_id, true)).some(
+            (candidate) => candidate.mcp_server_id === recovery.mcp_server_id
+          )
+        : false;
+      const existingBindingCurrent =
+        !existing ||
+        (existing.gateway_channel_id === channel?.id &&
+          existing.gateway_config_generation === channel.provider_config_generation &&
+          existing.mcp_server_id === server?.mcp_server_id &&
+          existing.mcp_server_config_version === (server.config_version ?? 1) &&
+          existing.slack_team_id === source?.slack_team_id &&
+          existing.slack_channel_id === source.slack_channel_id &&
+          existing.slack_thread_id === source.thread_id &&
+          existing.slack_user_id === source.provider_user_id);
+      const eligible =
+        source?.channel_type === 'slack' &&
+        !!source.slack_team_id &&
+        !!source.slack_channel_id &&
+        sourceThread?.channel === source.slack_channel_id &&
+        source.provider_user_id !== 'unknown' &&
+        !!session &&
+        session.created_by === task.created_by &&
+        !!principal &&
+        !!credentialUser &&
+        hasMinimumRole(principal.role, ROLES.MEMBER) &&
+        hasMinimumRole(
+          credentialUser.role,
+          server?.auth?.type === 'oauth' && (server.auth.oauth_mode ?? 'per_user') === 'shared'
+            ? ROLES.ADMIN
+            : ROLES.MEMBER
+        ) &&
+        !!channel?.enabled &&
+        channel.channel_type === 'slack' &&
+        isSlackWriteTargetAllowed(channel.config, sourceThread.channel) &&
+        mapping?.channel_id === channel.id &&
+        mapping.thread_id === source.thread_id &&
+        !!server?.enabled &&
+        server.auth?.type === 'oauth' &&
+        attached &&
+        existingBindingCurrent;
+      if (eligible) {
+        const same =
+          existing?.mcp_server_id === recovery.mcp_server_id &&
+          existing.mcp_server_config_version === (server.config_version ?? 1) &&
+          existing.gateway_config_generation === channel.provider_config_generation &&
+          existing.recovery_generation === recovery.generation &&
+          existing.recovery_request_id === recovery.request_id;
+        if (!same) {
+          const issued = new Date(Math.floor(Date.now() / 1_000) * 1_000);
+          const expires = new Date(issued.getTime() + 10 * 60_000);
+          const noticeId = randomUUID();
+          const created = await this.taskRepo.mutateMCPSlackRecoveryNotice(
+            task.task_id,
+            (current, lockedTask) => {
+              const locked = lockedTask.metadata?.mcp_recovery;
+              if (
+                locked?.code !== 'oauth_reauth_required' ||
+                locked.status !== 'action_required' ||
+                locked.mcp_server_id !== recovery.mcp_server_id ||
+                locked.generation !== recovery.generation ||
+                locked.request_id !== recovery.request_id
+              ) {
+                return null;
+              }
+              return {
+                notice_id: noticeId,
+                token_jti: randomUUID(),
+                issued_at: issued.toISOString(),
+                expires_at: expires.toISOString(),
+                principal_user_id: task.created_by as UserID,
+                credential_user_id: session.created_by as UserID,
+                slack_user_id: source.provider_user_id,
+                slack_team_id: source.slack_team_id!,
+                gateway_channel_id: channel.id,
+                gateway_config_generation: channel.provider_config_generation,
+                slack_channel_id: source.slack_channel_id!,
+                slack_thread_id: source.thread_id,
+                session_id: session.session_id,
+                task_id: task.task_id,
+                mcp_server_id: recovery.mcp_server_id!,
+                mcp_server_config_version: server.config_version ?? 1,
+                recovery_generation: recovery.generation,
+                recovery_request_id: recovery.request_id,
+                provider_dispatch: recovery.provider_dispatch,
+                delivery_id: current?.delivery_id ?? randomUUID(),
+                next_repair_at: issued.toISOString(),
+                ...(current?.slack_message_ts
+                  ? { slack_message_ts: current.slack_message_ts }
+                  : {}),
+              };
+            }
+          );
+          if (created.changed) await this.deliverMcpSlackRecoveryNotice(created.task);
+          return;
+        }
+      } else if (
+        existing?.mcp_server_id === recovery.mcp_server_id &&
+        existing.recovery_generation === recovery.generation &&
+        existing.recovery_request_id === recovery.request_id
+      ) {
+        const invalidated = await this.taskRepo.mutateMCPSlackRecoveryNotice(
+          task.task_id,
+          (current) =>
+            current?.notice_id === existing.notice_id && !current.binding_invalidated_at
+              ? {
+                  ...current,
+                  binding_invalidated_at: new Date().toISOString(),
+                  next_repair_at: new Date().toISOString(),
+                }
+              : null
+        );
+        await this.deliverMcpSlackRecoveryNotice(invalidated.changed ? invalidated.task : task);
+        return;
+      }
+    }
+
+    if (!existing) return;
+    // OAuth completion may create a newer structured recovery generation. The
+    // browser token is already consumed, so relink presentation to that exact
+    // request without minting a second action.
+    if (
+      existing.oauth_succeeded_at &&
+      recovery?.mcp_server_id === existing.mcp_server_id &&
+      recovery.generation > existing.recovery_generation
+    ) {
+      const relinked = await this.taskRepo.mutateMCPSlackRecoveryNotice(
+        task.task_id,
+        (current, lockedTask) => {
+          const locked = lockedTask.metadata?.mcp_recovery;
+          return current?.notice_id === existing.notice_id &&
+            current.oauth_succeeded_at &&
+            locked?.mcp_server_id === current.mcp_server_id &&
+            locked.generation > current.recovery_generation
+            ? {
+                ...current,
+                recovery_generation: locked.generation,
+                recovery_request_id: locked.request_id,
+                next_repair_at: new Date().toISOString(),
+              }
+            : null;
+        }
+      );
+      if (relinked.changed) {
+        await this.deliverMcpSlackRecoveryNotice(relinked.task);
+        return;
+      }
+    }
+    await this.deliverMcpSlackRecoveryNotice(task);
+  }
+
+  syncMcpSlackRecoveryNoticeAfterCommit(taskId: string, params?: unknown): void {
+    deferWithTenantContext(
+      params,
+      () => this.syncMcpSlackRecoveryNotice(taskId),
+      () => console.warn('[gateway] MCP recovery notice synchronization failed')
+    );
+  }
+
+  async markMcpSlackOAuthResult(input: {
+    taskId: string;
+    noticeId: string;
+    attemptId: MCPOAuthAttemptID;
+    success: boolean;
+  }): Promise<void> {
+    let authorityCurrent = !input.success;
+    if (input.success) {
+      const task = await this.taskRepo.findById(input.taskId);
+      const notice = task?.metadata?.mcp_slack_recovery_notice;
+      const recovery = task?.metadata?.mcp_recovery;
+      if (task && notice?.notice_id === input.noticeId && recovery) {
+        const [session, channel, mapping, server, principal, credentialUser, mode] =
+          await Promise.all([
+            this.sessionRepo.findById(task.session_id),
+            this.channelRepo.findById(notice.gateway_channel_id),
+            this.threadMapRepo.findBySession(task.session_id),
+            this.mcpServerRepo.findById(notice.mcp_server_id),
+            this.usersRepo.findById(notice.principal_user_id),
+            this.usersRepo.findById(notice.credential_user_id),
+            getMCPEgressGatewayMode(this.db),
+          ]);
+        const attached = (await this.sessionMcpRepo.listServers(task.session_id, true)).some(
+          (candidate) => candidate.mcp_server_id === notice.mcp_server_id
+        );
+        const grantUserId =
+          server?.auth?.type === 'oauth' && (server.auth.oauth_mode ?? 'per_user') === 'shared'
+            ? null
+            : notice.credential_user_id;
+        const grant = server
+          ? await this.userTokenRepo.getToken(grantUserId as UserID | null, notice.mcp_server_id)
+          : null;
+        let parsedThread: ReturnType<typeof parseSlackThreadId> | undefined;
+        try {
+          parsedThread = parseSlackThreadId(notice.slack_thread_id);
+        } catch {
+          parsedThread = undefined;
+        }
+        authorityCurrent = !!(
+          session &&
+          session.session_id === notice.session_id &&
+          session.created_by === notice.credential_user_id &&
+          task.created_by === notice.principal_user_id &&
+          [TaskStatus.RUNNING, TaskStatus.AWAITING_PERMISSION, TaskStatus.AWAITING_INPUT].includes(
+            task.status as never
+          ) &&
+          recovery.code === 'oauth_reauth_required' &&
+          recovery.status === 'action_required' &&
+          recovery.mcp_server_id === notice.mcp_server_id &&
+          recovery.generation === notice.recovery_generation &&
+          recovery.request_id === notice.recovery_request_id &&
+          channel?.enabled &&
+          channel.channel_type === 'slack' &&
+          channel.provider_config_generation === notice.gateway_config_generation &&
+          parsedThread?.channel === notice.slack_channel_id &&
+          isSlackWriteTargetAllowed(channel.config, parsedThread.channel) &&
+          mapping?.channel_id === channel.id &&
+          mapping.thread_id === notice.slack_thread_id &&
+          server?.enabled &&
+          server.auth?.type === 'oauth' &&
+          (server.config_version ?? 1) === notice.mcp_server_config_version &&
+          attached &&
+          principal &&
+          credentialUser &&
+          hasMinimumRole(principal.role, ROLES.MEMBER) &&
+          hasMinimumRole(
+            credentialUser.role,
+            (server.auth.oauth_mode ?? 'per_user') === 'shared' ? ROLES.ADMIN : ROLES.MEMBER
+          ) &&
+          grant &&
+          (await isMCPOAuthGrantAuthorizedForServer(this.db, server, grant)) &&
+          (mode === 'compatibility' || mode === 'enforced')
+        );
+      }
+    }
+    const resultAt = new Date().toISOString();
+    const changed = await this.taskRepo.mutateMCPSlackRecoveryNotice(input.taskId, (current) =>
+      current?.notice_id === input.noticeId && current.oauth_attempt_id === input.attemptId
+        ? {
+            ...current,
+            ...(input.success && authorityCurrent
+              ? { oauth_succeeded_at: resultAt }
+              : input.success
+                ? { oauth_superseded_at: resultAt }
+                : { oauth_failed_at: resultAt }),
+            next_repair_at: resultAt,
+          }
+        : null
+    );
+    if (changed.changed) await this.deliverMcpSlackRecoveryNotice(changed.task);
   }
 
   /**
@@ -1551,7 +2484,7 @@ export class GatewayService {
       async () => {
         await this.updateProgress(data);
       },
-      (error) => {
+      () => {
         console.warn('[gateway] Failed to update Slack progress after commit');
       }
     );
@@ -1930,8 +2863,6 @@ export class GatewayService {
     channel: GatewayChannel,
     userId: UserID
   ): Promise<void> {
-    if (!this.appRbacEnabled) return;
-
     const branch = await this.branchRepo.findById(channel.target_branch_id);
     if (!branch) {
       throw new Forbidden('Gateway inbound denied: target branch is unavailable');
@@ -1962,8 +2893,6 @@ export class GatewayService {
         "This gateway thread's Agor session is no longer available."
       );
     }
-    if (!this.appRbacEnabled) return session;
-
     const authority = await this.branchRepo.resolveSessionPromptAuthority(
       channel.target_branch_id,
       userId,
@@ -2086,7 +3015,7 @@ export class GatewayService {
 
   private async fetchExistingSessionUrlForGatewayUser(
     sessionId: SessionID,
-    user: User
+    user?: User
   ): Promise<string | null> {
     try {
       const baseUrl = await getBaseUrl();
@@ -2096,6 +3025,8 @@ export class GatewayService {
     } catch (_error) {
       console.warn('[gateway] Failed to build public session URL');
     }
+
+    if (!user) return null;
 
     try {
       const sessionsService = this.app.service('sessions') as {
@@ -2111,6 +3042,14 @@ export class GatewayService {
       console.warn('[gateway] Failed to fetch session URL');
       return null;
     }
+  }
+
+  private async formatTerminalGatewayReply(text: string, sessionId: SessionID): Promise<string> {
+    const sessionUrl = await this.fetchExistingSessionUrlForGatewayUser(sessionId);
+    const sessionReference = sessionUrl
+      ? `[View session](${sessionUrl})`
+      : `Session: \`${shortId(sessionId)}\``;
+    return `${text}\n\n${sessionReference}`;
   }
 
   /**
@@ -2582,7 +3521,22 @@ export class GatewayService {
     // Seed admission is the one durable mutation that must happen before
     // creating a session. It also replaces the old lookup-then-late-claim
     // sequence, so competing provider aliases receive one stable ID.
-    if (channel.channel_type === 'slack' || channel.channel_type === 'discord') {
+    //
+    // Seed admission only decides which Session a thread that has none yet
+    // belongs to. A thread that already carries a canonical mapping the seed
+    // did not create is not a seed reply: a proactive outbound message can be
+    // sent into a thread that is already routed to a Session, and the mapping
+    // stays that thread's owner. Skip admission entirely for those threads so
+    // no seed is reserved or consumed for a thread it does not own, and the
+    // message continues down the ordinary follow-up path below.
+    const existingMappingSeedId = (existingMapping?.metadata as Record<string, unknown> | null)
+      ?.outbound_seed_id;
+    const threadOwnedByUnseededMapping =
+      !!existingMapping && typeof existingMappingSeedId !== 'string';
+    if (
+      (channel.channel_type === 'slack' || channel.channel_type === 'discord') &&
+      !threadOwnedByUnseededMapping
+    ) {
       outboundAdmission = await this.outboundRepo.admitReplySession(channel.id, data.thread_id);
       if (outboundAdmission) {
         outboundSeed = outboundAdmission.message;
@@ -2750,7 +3704,7 @@ export class GatewayService {
       );
 
       // Build custom_context with gateway metadata + platform-specific fields
-      const gatewaySource: Record<string, unknown> = {
+      const gatewaySource: GatewaySource & Record<string, unknown> = {
         channel_id: channel.id,
         channel_name: channel.name,
         channel_type: channel.channel_type,
@@ -2891,7 +3845,7 @@ export class GatewayService {
           typeof priorGatewaySourceValue === 'object' &&
           priorGatewaySourceValue !== null &&
           !Array.isArray(priorGatewaySourceValue)
-            ? (priorGatewaySourceValue as Record<string, unknown>)
+            ? (priorGatewaySourceValue as unknown as GatewaySource & Record<string, unknown>)
             : null;
         const currentTenantId = getCurrentTenantId();
         const priorSeedId = priorGatewaySource?.outbound_seed_id;
@@ -3106,6 +4060,7 @@ export class GatewayService {
             metadata?: {
               gateway_inbound_event_id?: import('@agor/core/types').GatewayInboundEventID;
               gateway_reply_metadata?: Record<string, unknown>;
+              gateway_task_source?: import('@agor/core/types').TaskMetadata['gateway_task_source'];
             };
             idempotencyTaskId?: TaskID;
           },
@@ -3331,25 +4286,42 @@ export class GatewayService {
 
       await this.requireInboundPromptAuthority(channel, sessionId, user.user_id);
 
+      const gatewayTaskMetadata = {
+        ...(data.gateway_inbound_event_id
+          ? { gateway_inbound_event_id: data.gateway_inbound_event_id }
+          : {}),
+        ...(typeof data.metadata?.processing_comment_id === 'number'
+          ? {
+              gateway_reply_metadata: {
+                processing_comment_id: data.metadata.processing_comment_id,
+              },
+            }
+          : {}),
+      };
+
       const task = await promptService.create(
         {
           prompt: promptText,
           permissionMode,
           messageSource: 'gateway',
-          ...(data.gateway_inbound_event_id
-            ? {
-                metadata: {
-                  gateway_inbound_event_id: data.gateway_inbound_event_id,
-                  ...(data.metadata?.processing_comment_id
-                    ? {
-                        gateway_reply_metadata: {
-                          processing_comment_id: data.metadata.processing_comment_id,
-                        },
-                      }
-                    : {}),
-                },
-              }
-            : {}),
+          metadata: {
+            ...gatewayTaskMetadata,
+            gateway_task_source: {
+              gateway_channel_id: channel.id,
+              channel_type: channel.channel_type as ChannelType,
+              thread_id: data.thread_id,
+              provider_user_id: data.user_name ?? 'unknown',
+              ...(typeof data.metadata?.slack_message_ts === 'string'
+                ? { provider_message_id: data.metadata.slack_message_ts }
+                : {}),
+              ...(typeof data.metadata?.slack_team_id === 'string'
+                ? { slack_team_id: data.metadata.slack_team_id }
+                : {}),
+              ...(typeof data.metadata?.channel === 'string'
+                ? { slack_channel_id: data.metadata.channel }
+                : {}),
+            },
+          },
           ...(data.idempotency_task_id ? { idempotencyTaskId: data.idempotency_task_id } : {}),
         },
         {
@@ -3545,14 +4517,11 @@ export class GatewayService {
     await this.threadMapRepo.updateLastMessage(mapping.id);
     await this.channelRepo.updateLastMessage(channel.id);
 
-    // GitHub and Shortcut channels buffer the message instead of sending
-    // immediately — only the last message is posted when the session goes idle
-    // (via flushOutboundBuffer). This keeps noisy intermediate agent messages
-    // out of PR/story threads; the agent's final message IS the reply.
+    // GitHub and Shortcut replies are resolved from durable, task-scoped
+    // messages when the session turn ends. Do not stream intermediate output.
     if (channel.channel_type === 'github' || channel.channel_type === 'shortcut') {
-      this.lastMessageBuffer.set(data.session_id, data.message);
       console.log(
-        `[gateway] Buffered ${channel.channel_type} message for session ${shortId(data.session_id)} (${data.message.length} chars)`
+        `[gateway] Deferred ${channel.channel_type} message for session ${shortId(data.session_id)} (${data.message.length} chars)`
       );
       return { routed: true, channelType: channel.channel_type };
     }
@@ -3626,116 +4595,156 @@ export class GatewayService {
       async () => {
         await this.routeMessage(data);
       },
-      (error) => {
+      () => {
         console.warn('[gateway] Failed to route message after commit');
       }
     );
   }
 
-  /**
-   * Flush the buffered last message for a session (GitHub / Shortcut).
-   *
-   * Called when a session transitions to idle (turn complete). Posts the last
-   * buffered message as a PR/issue/story comment by editing the connector's
-   * processing acknowledgement. If no buffered message exists, this is a no-op.
-   */
-  async flushOutboundBuffer(sessionId: string): Promise<void> {
-    // This hook runs for every promptable Session, but only mapped GitHub and
-    // Shortcut Sessions have buffered outbound work. Reject the common no-op
-    // cases before reading durable Message history.
+  /** Deliver one task's terminal reply by editing its exact provider acknowledgement. */
+  async flushOutboundBuffer(sessionId: string, options: FlushOutboundBufferOptions): Promise<void> {
     const mapping = await this.threadMapRepo.findBySession(sessionId);
-    if (!mapping) {
-      this.lastMessageBuffer.delete(sessionId);
-      return;
-    }
+    if (!mapping) return;
 
     const channel = await this.channelRepo.findById(mapping.channel_id);
     if (
       !channel?.enabled ||
       (channel.channel_type !== 'github' && channel.channel_type !== 'shortcut')
     ) {
-      this.lastMessageBuffer.delete(sessionId);
       return;
     }
 
-    let bufferedMessage = this.lastMessageBuffer.get(sessionId);
-    let durableMessageId: string | undefined;
-    let durableReplyMetadata: Record<string, unknown> | undefined;
-    // The local buffer is only a latency cache. PostgreSQL/SQLite messages are
-    // the durable recovery source when creation and idle hooks land on
-    // different daemons or the message-producing daemon dies.
-    try {
-      const messages = await this.messagesRepo.findBySessionId(sessionId as SessionID);
-      const latest = [...messages]
-        .reverse()
-        .find((message) => message.role === 'assistant' && gatewayMessageText(message.content));
-      if (latest) {
-        bufferedMessage = gatewayMessageText(latest.content);
-        durableMessageId = latest.message_id;
-        if (latest.task_id) {
-          const task = await this.taskRepo.findById(latest.task_id);
-          durableReplyMetadata = task?.metadata?.gateway_reply_metadata;
-        }
-      }
-    } catch (error) {
-      if (!bufferedMessage) throw error;
-      console.warn('[gateway] Falling back to process-local outbound buffer');
+    const taskId = options.taskId;
+    const terminalTask = await this.taskRepo.findById(taskId);
+    if (
+      !terminalTask ||
+      terminalTask.session_id !== sessionId ||
+      !isTerminalTaskStatus(terminalTask.status)
+    ) {
+      return;
     }
-    if (!bufferedMessage) return;
-
-    this.lastMessageBuffer.delete(sessionId);
+    const processingCommentId =
+      terminalTask.metadata?.gateway_reply_metadata?.processing_comment_id;
+    if (typeof processingCommentId !== 'number') {
+      console.warn(
+        `[gateway] Task ${shortId(taskId)} has no provider acknowledgement; final reply was not sent`
+      );
+      return;
+    }
 
     const mappingMetadata = ((mapping.metadata as Record<string, unknown>) ?? {}) as Record<
       string,
       unknown
     >;
-    if (durableMessageId && mappingMetadata.gateway_last_flushed_message_id === durableMessageId) {
+
+    const messages = await this.messagesRepo.findByTaskId(taskId);
+    const latestAssistant = [...messages]
+      .reverse()
+      .find((message) => message.role === 'assistant' && gatewayMessageText(message));
+    const claimMessage = latestAssistant ?? messages.at(-1);
+    if (!claimMessage) return;
+
+    let finalMessage = latestAssistant ? gatewayMessageText(latestAssistant) : undefined;
+    if (terminalTask.status === TaskStatus.FAILED || terminalTask.status === TaskStatus.TIMED_OUT) {
+      finalMessage = await this.formatTerminalGatewayReply(
+        GATEWAY_FAILED_TURN_REPLY,
+        sessionId as SessionID
+      );
+    } else if (terminalTask.status === TaskStatus.STOPPED) {
+      finalMessage = await this.formatTerminalGatewayReply(
+        GATEWAY_STOPPED_TURN_REPLY,
+        sessionId as SessionID
+      );
+    }
+    if (!finalMessage) return;
+
+    if (
+      mappingMetadata.gateway_last_flushed_task_id === taskId ||
+      mappingMetadata.gateway_last_flushed_message_id === claimMessage.message_id
+    ) {
       return;
     }
 
+    // Reuse the existing Message metadata row-lock primitive. This is the
+    // same short claim/finish pattern used by widget resolution and avoids a
+    // new delivery table or Task-repository state machine.
+    const claimToken = generateId();
+    const claim = await this.messagesRepo.mutateMetadataLocked(
+      claimMessage.message_id,
+      (metadata) => {
+        const claimedAt = new Date();
+        const state = gatewayFinalReplyState(metadata);
+        if (state?.status === 'delivered') return null;
+        if (state?.status === 'processing') {
+          const claimAgeMs = claimedAt.getTime() - Date.parse(state.claimed_at);
+          if (Number.isFinite(claimAgeMs) && claimAgeMs < GATEWAY_FINAL_REPLY_CLAIM_TIMEOUT_MS) {
+            return null;
+          }
+        }
+        return {
+          ...(metadata ?? {}),
+          gateway_final_reply: {
+            status: 'processing',
+            claim_token: claimToken,
+            claimed_at: claimedAt.toISOString(),
+          },
+        };
+      }
+    );
+    if (!claim.changed) return;
+
     try {
       const connector = getConnector(channel.channel_type as ChannelType, channel.config);
-
       const { text, blocks } = normalizeOutbound(
-        connector.formatMessage ? connector.formatMessage(bufferedMessage) : bufferedMessage
+        connector.formatMessage ? connector.formatMessage(finalMessage) : finalMessage
       );
-
-      // Edit the "Processing..." comment with the final response
-      const outboundMetadata: Record<string, unknown> = {};
-      if (typeof durableReplyMetadata?.processing_comment_id === 'number') {
-        outboundMetadata.edit_comment_id = durableReplyMetadata.processing_comment_id;
-      } else if (
-        mapping.metadata &&
-        typeof (mapping.metadata as Record<string, unknown>).processing_comment_id === 'number'
-      ) {
-        outboundMetadata.edit_comment_id = (
-          mapping.metadata as Record<string, unknown>
-        ).processing_comment_id;
-      }
-
       await connector.sendMessage({
         threadId: mapping.thread_id,
         text,
         blocks,
-        metadata: outboundMetadata,
+        metadata: { edit_comment_id: processingCommentId },
       });
 
-      if (durableMessageId) {
+      const completed = await this.messagesRepo.mutateMetadataLocked(
+        claimMessage.message_id,
+        (metadata) => {
+          const state = gatewayFinalReplyState(metadata);
+          if (state?.status !== 'processing' || state.claim_token !== claimToken) return null;
+          return {
+            ...(metadata ?? {}),
+            gateway_final_reply: {
+              status: 'delivered',
+              delivered_at: new Date().toISOString(),
+            },
+          };
+        }
+      );
+      if (!completed.changed) throw new Error('Gateway final reply claim was lost');
+
+      try {
         await this.threadMapRepo.mergeMetadata(mapping.id, {
-          gateway_last_flushed_message_id: durableMessageId,
+          gateway_last_flushed_message_id: claimMessage.message_id,
+          gateway_last_flushed_task_id: taskId,
         });
+      } catch (_error) {
+        console.warn('[gateway] Failed to update legacy final reply markers');
       }
 
       console.log(
-        `[gateway] Flushed ${channel.channel_type} buffer for session ${shortId(sessionId)} → ${mapping.thread_id} (${bufferedMessage.length} chars)`
+        `[gateway] Flushed ${channel.channel_type} final reply for session ${shortId(sessionId)} → ${mapping.thread_id} (${finalMessage.length} chars)`
       );
     } catch (error) {
-      // Re-queue the message so it can be retried on next flush (e.g. session
-      // goes idle again, or daemon restarts). Without this, a transient GitHub
-      // API error would permanently lose the agent's final response.
-      this.lastMessageBuffer.set(sessionId, bufferedMessage);
+      try {
+        await this.messagesRepo.mutateMetadataLocked(claimMessage.message_id, (metadata) => {
+          const state = gatewayFinalReplyState(metadata);
+          if (state?.status !== 'processing' || state.claim_token !== claimToken) return null;
+          return { ...(metadata ?? {}), gateway_final_reply: { status: 'pending' } };
+        });
+      } catch (_releaseError) {
+        console.warn('[gateway] Failed to release final reply claim');
+      }
       console.error(
-        `[gateway] Failed to flush ${channel.channel_type} buffer for session ${shortId(sessionId)} (re-queued):`,
+        `[gateway] Failed to flush ${channel.channel_type} final reply for session ${shortId(sessionId)}:`,
         error
       );
     }
@@ -3817,12 +4826,12 @@ export class GatewayService {
 
     const refs = this.listenerDiscoveryTenantId
       ? await this.runWithListenerTenantIdentity(this.listenerDiscoveryTenantId, async () => {
-          const channels = await this.channelRepo.findEnabledListenerCandidates(
+          const channelIds = await this.channelRepo.findEnabledListenerCandidateIds(
             GATEWAY_LISTENER_SCAN_BATCH,
             this.listenerDiscoveryCursor?.channel_id
           );
-          return channels.map((channel) => ({
-            channel_id: channel.id,
+          return channelIds.map((channelId) => ({
+            channel_id: channelId,
             tenant_id: this.listenerDiscoveryTenantId!,
           }));
         })
@@ -3859,6 +4868,11 @@ export class GatewayService {
           );
         }
         this.activeChannelTenants.add(ref.tenant_id);
+        if (channel.channel_type === 'slack') {
+          this.mcpSlackRecoveryTenants.add(ref.tenant_id);
+          this.scheduleMcpSlackRecoveryRepair(ref.tenant_id);
+          this.ensureMcpSlackPeriodicSweep();
+        }
         if (!hasConnector(channel.channel_type as ChannelType) || !hasListeningConfig(channel)) {
           return;
         }
@@ -3893,12 +4907,18 @@ export class GatewayService {
       tenantId,
       async (scopedDb) => isPostgresDatabase(scopedDb)
     );
+    const channels = await this.channelRepo.findAll();
+    if (channels.some((channel) => channel.enabled)) this.activeChannelTenants.add(tenantId);
+    if (channels.some((channel) => channel.enabled && channel.channel_type === 'slack')) {
+      this.mcpSlackRecoveryTenants.add(tenantId);
+      this.scheduleMcpSlackRecoveryRepair(tenantId);
+      this.ensureMcpSlackPeriodicSweep();
+    }
     if (this.durableListenerOwnership) {
       this.listenerDiscoveryTenantId = tenantId;
       await this.startListenerWorker();
       return;
     }
-    const channels = await this.channelRepo.findAll();
     if (channels.some((channel) => channel.enabled)) {
       this.activeChannelTenants.add(tenantId);
     } else {
@@ -3973,6 +4993,11 @@ export class GatewayService {
           }
 
           this.activeChannelTenants.add(tenantId);
+          if (channel.channel_type === 'slack') {
+            this.mcpSlackRecoveryTenants.add(tenantId);
+            this.scheduleMcpSlackRecoveryRepair(tenantId);
+            this.ensureMcpSlackPeriodicSweep();
+          }
           if (hasConnector(channel.channel_type as ChannelType) && hasListeningConfig(channel)) {
             await this.startChannelListener(channel, tenantId);
           }
@@ -4005,6 +5030,11 @@ export class GatewayService {
     if (!channel) {
       console.warn(`[gateway] Cannot manage listener: channel ${channelId} not found`);
       return;
+    }
+    if (channel.enabled && channel.channel_type === 'slack') {
+      this.mcpSlackRecoveryTenants.add(tenantId);
+      this.scheduleMcpSlackRecoveryRepair(tenantId);
+      this.ensureMcpSlackPeriodicSweep();
     }
 
     // If channel is disabled, stop the listener
@@ -4563,6 +5593,16 @@ export class GatewayService {
     this.listenerDraining = true;
     if (this.listenerTimer) clearTimeout(this.listenerTimer);
     this.listenerTimer = null;
+    if (this.mcpSlackSweepTimer) clearTimeout(this.mcpSlackSweepTimer);
+    this.mcpSlackSweepTimer = null;
+    this.mcpSlackRecoveryTenants.clear();
+    this.mcpSlackRepairTenants.clear();
+    for (const timer of this.mcpSlackRecoveryExpiryTimers.values()) clearTimeout(timer);
+    this.mcpSlackRecoveryExpiryTimers.clear();
+    for (const timer of this.mcpSlackDeliveryRetryTimers.values()) clearTimeout(timer);
+    this.mcpSlackDeliveryRetryTimers.clear();
+    for (const timer of this.mcpSlackOAuthStartClaimTimers.values()) clearTimeout(timer);
+    this.mcpSlackOAuthStartClaimTimers.clear();
     const leases = new Map(this.activeListenerLeases);
     const retryKeys = new Set(this.listenerRetries.keys());
     for (const retry of this.listenerRetries.values()) {
@@ -4622,8 +5662,7 @@ export class GatewayService {
  */
 export function createGatewayService(
   db: TenantScopeAwareDatabase,
-  app: Application,
-  options?: { appRbacEnabled?: boolean }
+  app: Application
 ): GatewayService {
-  return new GatewayService(db, app, options);
+  return new GatewayService(db, app);
 }

@@ -48,7 +48,28 @@ describe('prompt and widget transaction scopes', () => {
     // exempt from the user-facing check.
     expect(prompt).not.toContain('const isInternalPrompt = !params.provider;');
     expect(prompt).toContain('_isServiceAccount');
-    expect(prompt).toContain('branchRbacEnabled && !isPromptServiceAccount');
+    expect(prompt).toContain('if (!isPromptServiceAccount && promptBranchId)');
+  });
+
+  it('restores only the explicitly prompted archived session', () => {
+    const promptStart = source.indexOf("'/sessions/:id/prompt'");
+    const promptEnd = source.indexOf("'/tasks/:id/run'", promptStart);
+    const prompt = source.slice(promptStart, promptEnd);
+
+    expect(prompt).toContain('sessionsService.unarchive(id, { includeChildren: false }, params)');
+    expect(prompt).not.toContain('{ archived: false, archived_reason: undefined }');
+  });
+
+  it('admits branch archive and unarchive through the tenant write gate', () => {
+    for (const path of ["'/branches/:id/archive-or-delete'", "'/branches/:id/unarchive'"]) {
+      const start = source.indexOf(path);
+      const route = source.slice(start, start + 1_000);
+
+      expect(start).toBeGreaterThan(0);
+      expect(route).toContain(
+        'around: { all: [tenantIdentityAround, tenantWriteAdmissionAround] }'
+      );
+    }
   });
 
   it('does not keep a route-wide tenant transaction over widget external work', () => {
@@ -106,14 +127,14 @@ describe('prompt and widget transaction scopes', () => {
     const scopedAuthorization = initialization.indexOf(
       'await inCurrentTenantDatabaseScope(async () => {'
     );
-    const ownerCheck = initialization.indexOf(
-      'requireSessionScopedConfigOwnerOrAdmin(id, params)',
+    const mutationAuthorization = initialization.indexOf(
+      'authorizeAndLoadSessionForMcpConfig(id, params)',
       scopedAuthorization
     );
     const stagedInitialization = initialization.indexOf('runSessionInitializationStages({');
     expect(scopedAuthorization).toBeGreaterThan(0);
-    expect(ownerCheck).toBeGreaterThan(scopedAuthorization);
-    expect(stagedInitialization).toBeGreaterThan(ownerCheck);
+    expect(mutationAuthorization).toBeGreaterThan(scopedAuthorization);
+    expect(stagedInitialization).toBeGreaterThan(mutationAuthorization);
     const mcpSetup = initialization.indexOf('sessionMCPServersService.setServers(');
     const envSetup = initialization.indexOf('sessionEnvSelectionsService.setAll(');
     const promptAdmission = initialization.indexOf("service('/sessions/:id/prompt').create(");

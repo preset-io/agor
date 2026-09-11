@@ -12,7 +12,7 @@
 
 import { randomUUID } from 'node:crypto';
 import type { MCPOAuthGrantBindingVersion, MCPServerID, UserID } from '@agor/core/types';
-import { and, eq, isNotNull, isNull, lt, sql } from 'drizzle-orm';
+import { and, eq, inArray, isNotNull, isNull, lt, or, sql } from 'drizzle-orm';
 import type { Database } from '../client';
 import {
   deleteFrom,
@@ -22,11 +22,12 @@ import {
   select,
   update,
 } from '../database-wrapper';
-import { openBoundSecret, sealBoundSecret } from '../oauth-secret-envelope';
+import { openBoundSecretAsync, sealBoundSecret } from '../oauth-secret-envelope';
 import {
   type UserMCPOAuthTokenInsert,
   type UserMCPOAuthTokenRow,
   userMcpOauthTokens,
+  users,
 } from '../schema';
 import { getCurrentTenantId } from '../tenant-context';
 import { isPostgresDatabaseHandle } from '../tenant-scope';
@@ -37,6 +38,7 @@ import { RepositoryError } from './base';
  */
 export interface UserMCPOAuthToken {
   user_id: UserID | null;
+  granted_by_user_id: UserID;
   mcp_server_id: MCPServerID;
   oauth_access_token: string;
   oauth_token_expires_at?: Date;
@@ -60,6 +62,49 @@ export interface UserMCPOAuthToken {
   created_at: Date;
   updated_at?: Date;
 }
+
+/**
+ * Minimum daemon-internal material needed to verify a grant's configuration
+ * identity. This is deliberately not a Marketplace DTO: client registration
+ * material can participate in the binding HMAC, while access and refresh
+ * tokens must never be hydrated by an inventory/status read.
+ */
+export type MCPOAuthGrantAuthorityRecord = Pick<
+  UserMCPOAuthToken,
+  | 'user_id'
+  | 'mcp_server_id'
+  | 'oauth_client_id'
+  | 'oauth_client_secret'
+  | 'grant_binding_version'
+  | 'grant_binding_fingerprint'
+  | 'oauth_metadata_uri'
+  | 'oauth_resource_uri'
+  | 'oauth_issuer'
+  | 'oauth_authorization_endpoint'
+  | 'oauth_token_endpoint'
+  | 'oauth_redirect_uri'
+>;
+
+type MCPOAuthGrantAuthorityRow = Pick<
+  UserMCPOAuthTokenRow,
+  | 'user_id'
+  | 'mcp_server_id'
+  | 'oauth_client_id'
+  | 'oauth_client_secret'
+  | 'grant_generation'
+  | 'grant_binding_version'
+  | 'grant_binding_fingerprint'
+  | 'oauth_metadata_uri'
+  | 'oauth_resource_uri'
+  | 'oauth_issuer'
+  | 'oauth_authorization_endpoint'
+  | 'oauth_token_endpoint'
+  | 'oauth_redirect_uri'
+>;
+
+/** Status authority excludes access and refresh token plaintext. */
+export type MCPOAuthGrantStatusRecord = MCPOAuthGrantAuthorityRecord &
+  Pick<UserMCPOAuthToken, 'oauth_token_expires_at' | 'refresh_status'>;
 
 /** Input shape for `saveToken`. */
 export interface SaveTokenInput {
@@ -149,10 +194,10 @@ function grantSecretBinding(
   return [tenantId, userId ?? '<shared>', serverId, String(generation), field].join('\0');
 }
 
-function rowToToken(
+async function rowToToken(
   row: UserMCPOAuthTokenRow,
   options: { postgres: boolean; tenantId?: string; masterSecret?: string }
-): UserMCPOAuthToken {
+): Promise<UserMCPOAuthToken> {
   const raw = row as UserMCPOAuthTokenRow & Record<string, unknown>;
   const userId = (row.user_id as UserID | null) ?? null;
   const serverId = row.mcp_server_id as MCPServerID;
@@ -167,7 +212,7 @@ function rowToToken(
     if (!options.tenantId || !options.masterSecret) {
       throw new RepositoryError('PostgreSQL MCP OAuth token decryption is not configured');
     }
-    return openBoundSecret(
+    return openBoundSecretAsync(
       String(value),
       options.masterSecret,
       purpose,
@@ -176,14 +221,15 @@ function rowToToken(
   };
   return {
     user_id: userId,
+    granted_by_user_id: row.granted_by_user_id as UserID,
     mcp_server_id: serverId,
-    oauth_access_token: open(row.oauth_access_token, 'access-token', 'access')!,
+    oauth_access_token: (await open(row.oauth_access_token, 'access-token', 'access'))!,
     oauth_token_expires_at: row.oauth_token_expires_at
       ? new Date(row.oauth_token_expires_at)
       : undefined,
-    oauth_refresh_token: open(row.oauth_refresh_token, 'refresh-token', 'refresh'),
-    oauth_client_id: open(row.oauth_client_id, 'client-id', 'client-id'),
-    oauth_client_secret: open(row.oauth_client_secret, 'client-secret', 'client-secret'),
+    oauth_refresh_token: await open(row.oauth_refresh_token, 'refresh-token', 'refresh'),
+    oauth_client_id: await open(row.oauth_client_id, 'client-id', 'client-id'),
+    oauth_client_secret: await open(row.oauth_client_secret, 'client-secret', 'client-secret'),
     grant_generation: generation,
     grant_binding_version:
       raw.grant_binding_version == null ? undefined : Number(raw.grant_binding_version),
@@ -219,6 +265,7 @@ function matchKey(userId: UserID | null, serverId: MCPServerID) {
 }
 
 export class UserMCPOAuthTokenRepository {
+  private static readonly AUTHORITY_READ_BATCH_SIZE = 500;
   private readonly postgres: boolean;
   private readonly masterSecret?: string;
 
@@ -244,12 +291,66 @@ export class UserMCPOAuthTokenRepository {
     return tenantId;
   }
 
-  private mapRow(row: UserMCPOAuthTokenRow): UserMCPOAuthToken {
+  private mapRow(row: UserMCPOAuthTokenRow): Promise<UserMCPOAuthToken> {
     return rowToToken(row, {
       postgres: this.postgres,
       tenantId: this.tenantId(),
       masterSecret: this.masterSecret,
     });
+  }
+
+  private async mapRows(rows: UserMCPOAuthTokenRow[]): Promise<UserMCPOAuthToken[]> {
+    // One KDF at a time per read, regardless of inventory size. Preserve row
+    // order and validate all envelopes (even expired/ambiguous grants) before
+    // returning anything. Promise.all here would flood the shared worker pool.
+    const tokens: UserMCPOAuthToken[] = [];
+    for (const row of rows) tokens.push(await this.mapRow(row));
+    return tokens;
+  }
+
+  private async mapAuthorityRow(
+    row: MCPOAuthGrantAuthorityRow
+  ): Promise<MCPOAuthGrantAuthorityRecord> {
+    const userId = (row.user_id as UserID | null) ?? null;
+    const serverId = row.mcp_server_id as MCPServerID;
+    const generation = Number(row.grant_generation ?? 0);
+    const tenantId = this.tenantId();
+    const openClientMaterial = async (
+      value: unknown,
+      purpose: 'client-id' | 'client-secret',
+      field: string
+    ): Promise<string | undefined> => {
+      if (value == null || value === '') return undefined;
+      if (!this.postgres) return String(value);
+      if (!tenantId || !this.masterSecret) {
+        throw new RepositoryError('PostgreSQL MCP OAuth token decryption is not configured');
+      }
+      return openBoundSecretAsync(
+        String(value),
+        this.masterSecret,
+        purpose,
+        grantSecretBinding(tenantId, userId, serverId, generation, field)
+      );
+    };
+    return {
+      user_id: userId,
+      mcp_server_id: serverId,
+      oauth_client_id: await openClientMaterial(row.oauth_client_id, 'client-id', 'client-id'),
+      oauth_client_secret: await openClientMaterial(
+        row.oauth_client_secret,
+        'client-secret',
+        'client-secret'
+      ),
+      grant_binding_version:
+        row.grant_binding_version == null ? undefined : Number(row.grant_binding_version),
+      grant_binding_fingerprint: stringValue(row.grant_binding_fingerprint),
+      oauth_metadata_uri: stringValue(row.oauth_metadata_uri),
+      oauth_resource_uri: stringValue(row.oauth_resource_uri),
+      oauth_issuer: stringValue(row.oauth_issuer),
+      oauth_authorization_endpoint: stringValue(row.oauth_authorization_endpoint),
+      oauth_token_endpoint: stringValue(row.oauth_token_endpoint),
+      oauth_redirect_uri: stringValue(row.oauth_redirect_uri),
+    };
   }
 
   /**
@@ -263,7 +364,7 @@ export class UserMCPOAuthTokenRepository {
         .where(matchKey(userId, serverId))
         .one();
 
-      return row ? this.mapRow(row) : null;
+      return row ? await this.mapRow(row) : null;
     } catch (error) {
       throw new RepositoryError(
         `Failed to get OAuth token: ${error instanceof Error ? error.message : String(error)}`,
@@ -324,6 +425,7 @@ export class UserMCPOAuthTokenRepository {
     try {
       const row = (await select(this.db, {
         user_id: userMcpOauthTokens.user_id,
+        granted_by_user_id: userMcpOauthTokens.granted_by_user_id,
         mcp_server_id: userMcpOauthTokens.mcp_server_id,
         has_access_token: sql<boolean>`${userMcpOauthTokens.oauth_access_token} is not null`,
         oauth_token_expires_at: userMcpOauthTokens.oauth_token_expires_at,
@@ -349,18 +451,18 @@ export class UserMCPOAuthTokenRepository {
         .one()) as Record<string, unknown> | undefined;
       if (!row) return null;
       const generation = Number(row.grant_generation ?? 0);
-      const openClient = (
+      const openClient = async (
         value: unknown,
         purpose: 'client-id' | 'client-secret',
         field: string
-      ): string | undefined => {
+      ): Promise<string | undefined> => {
         if (value == null || value === '') return undefined;
         if (!this.postgres) return String(value);
         const tenantId = this.tenantId();
         if (!tenantId || !this.masterSecret) {
           throw new RepositoryError('PostgreSQL MCP OAuth client decryption is not configured');
         }
-        return openBoundSecret(
+        return openBoundSecretAsync(
           String(value),
           this.masterSecret,
           purpose,
@@ -369,6 +471,7 @@ export class UserMCPOAuthTokenRepository {
       };
       return {
         user_id: userId,
+        granted_by_user_id: row.granted_by_user_id as UserID,
         mcp_server_id: serverId,
         // Deliberate nonsecret stand-in: binding verification never reads the
         // access value, and this object never leaves the daemon.
@@ -377,8 +480,12 @@ export class UserMCPOAuthTokenRepository {
         oauth_token_expires_at: row.oauth_token_expires_at
           ? new Date(row.oauth_token_expires_at as Date | string | number)
           : undefined,
-        oauth_client_id: openClient(row.oauth_client_id, 'client-id', 'client-id'),
-        oauth_client_secret: openClient(row.oauth_client_secret, 'client-secret', 'client-secret'),
+        oauth_client_id: await openClient(row.oauth_client_id, 'client-id', 'client-id'),
+        oauth_client_secret: await openClient(
+          row.oauth_client_secret,
+          'client-secret',
+          'client-secret'
+        ),
         grant_generation: generation,
         grant_binding_version:
           row.grant_binding_version == null ? undefined : Number(row.grant_binding_version),
@@ -439,18 +546,26 @@ export class UserMCPOAuthTokenRepository {
   }
 
   /**
-   * Save or update the token row. On update, undefined fields preserve their
+   * Establish/replace a grant, never refresh it. Shared grants require a trusted
+   * authenticated flow/caller ID in the separate authority argument, not in
+   * token response/request data and never inferred from server ownership.
+   * On update, undefined fields preserve their
    * existing value — important for refresh_token (providers may omit it if not
    * rotating) and client_id/client_secret (bound for the lifetime of the grant).
    */
   async saveToken(
     userId: UserID | null,
     serverId: MCPServerID,
-    input: SaveTokenInput
+    input: SaveTokenInput,
+    grantedByUserId?: UserID
   ): Promise<void> {
     try {
       const now = new Date();
       const tenantId = this.tenantId();
+      const consenterId = grantedByUserId ?? userId;
+      if (!consenterId || (userId !== null && consenterId !== userId)) {
+        throw new RepositoryError('MCP OAuth grant requires its trusted consenting user');
+      }
       // Three-state `expiresAt` flows straight onto Drizzle's `.set()`
       // semantics: `Date` writes, `null` writes NULL via conditional spread,
       // `undefined` preserves the existing value on update.
@@ -473,7 +588,23 @@ export class UserMCPOAuthTokenRepository {
             )
           )`
         );
+        // Lock order: caller's config lock -> subject advisory lock -> consenting
+        // user KEY SHARE -> token row. DELETE users locks the user before its
+        // FK cascades reach grants; it must never acquire our advisory locks.
+        // Taking this before any token row write avoids user/child-row inversion
+        // for a callback racing hard deletion. A committed deletion fails closed.
+        const principal = await executeRaw(
+          this.db,
+          sql`SELECT user_id FROM ${users}
+              WHERE user_id = ${consenterId} AND tenant_id = ${tenantId}
+              FOR KEY SHARE`
+        );
+        if (rowsOf(principal).length !== 1) {
+          throw new RepositoryError('MCP OAuth consenting user is no longer available');
+        }
       }
+      // SQLite's immediate FK enforces existence in its single-tenant database
+      // at the atomic write, including deletion after the entitlement read.
       const binding = input.grantBinding;
       if (this.postgres && !binding) {
         throw new RepositoryError('PostgreSQL MCP OAuth grant save requires configuration binding');
@@ -527,6 +658,7 @@ export class UserMCPOAuthTokenRepository {
         : undefined;
       const newToken: UserMCPOAuthTokenInsert = {
         user_id: userId,
+        granted_by_user_id: consenterId,
         mcp_server_id: serverId,
         oauth_access_token: sealedAccessToken,
         // On insert, `null` and `undefined` both write a missing column
@@ -576,6 +708,7 @@ export class UserMCPOAuthTokenRepository {
                 : isNotNull(userMcpOauthTokens.user_id),
             set: {
               oauth_access_token: sealedAccessToken,
+              granted_by_user_id: consenterId,
               ...(expiresAtField !== undefined ? { oauth_token_expires_at: expiresAtField } : {}),
               ...boundReplacement,
               updated_at: now,
@@ -594,6 +727,7 @@ export class UserMCPOAuthTokenRepository {
         const result = await update(this.db, userMcpOauthTokens)
           .set({
             oauth_access_token: sealedAccessToken,
+            granted_by_user_id: consenterId,
             // Spread so `undefined` ⇒ omit field (preserve), but `null` ⇒ write NULL.
             ...(expiresAtField !== undefined ? { oauth_token_expires_at: expiresAtField } : {}),
             ...(binding
@@ -649,6 +783,30 @@ export class UserMCPOAuthTokenRepository {
     }
   }
 
+  /** SQLite has one daemon, but its dispatch fence must survive a restart. */
+  async setStandaloneRefreshState(
+    userId: UserID | null,
+    serverId: MCPServerID,
+    expected: MCPOAuthRefreshVersion,
+    from: 'idle' | 'refreshing',
+    to: 'refreshing' | 'idle' | 'ambiguous'
+  ): Promise<boolean> {
+    if (this.postgres) throw new RepositoryError('Standalone refresh state requires SQLite');
+    const result = await update(this.db, userMcpOauthTokens)
+      .set({ refresh_status: to, updated_at: new Date() })
+      .where(
+        and(
+          matchKey(userId, serverId),
+          eq(userMcpOauthTokens.grant_generation, expected.grantGeneration),
+          eq(userMcpOauthTokens.refresh_generation, expected.refreshGeneration),
+          eq(userMcpOauthTokens.refresh_status, from),
+          sql`${userMcpOauthTokens.grant_binding_fingerprint} IS NOT DISTINCT FROM ${expected.grantBindingFingerprint ?? null}`
+        )
+      )
+      .run();
+    return result.rowsAffected === 1;
+  }
+
   /**
    * Commit a standalone/SQLite refresh only onto the exact grant which was
    * verified before the provider exchange. This is deliberately update-only:
@@ -658,7 +816,7 @@ export class UserMCPOAuthTokenRepository {
   async completeStandaloneRefresh(
     userId: UserID | null,
     serverId: MCPServerID,
-    expected: Pick<MCPOAuthRefreshVersion, 'grantGeneration' | 'grantBindingFingerprint'>,
+    expected: MCPOAuthRefreshVersion,
     input: { accessToken: string; refreshToken?: string; expiresAt: Date | null }
   ): Promise<boolean> {
     if (this.postgres) {
@@ -671,12 +829,17 @@ export class UserMCPOAuthTokenRepository {
           oauth_access_token: input.accessToken,
           oauth_token_expires_at: input.expiresAt,
           ...(input.refreshToken !== undefined ? { oauth_refresh_token: input.refreshToken } : {}),
+          refresh_status: 'idle',
+          refresh_generation: expected.refreshGeneration + 1,
+          refresh_success_generation: expected.refreshGeneration + 1,
           updated_at: new Date(),
         })
         .where(
           and(
             matchKey(userId, serverId),
             eq(userMcpOauthTokens.grant_generation, expected.grantGeneration),
+            eq(userMcpOauthTokens.refresh_generation, expected.refreshGeneration),
+            eq(userMcpOauthTokens.refresh_status, 'refreshing'),
             sql`${userMcpOauthTokens.grant_binding_fingerprint} IS NOT DISTINCT FROM ${fingerprint}`
           )
         )
@@ -739,7 +902,7 @@ export class UserMCPOAuthTokenRepository {
       );
       const row = rowsOf(claimed)[0];
       if (!row) return { outcome: 'observed', token: await this.getToken(userId, serverId) };
-      const token = this.mapRow(row as unknown as UserMCPOAuthTokenRow);
+      const token = await this.mapRow(row as unknown as UserMCPOAuthTokenRow);
       return {
         outcome: 'claimed',
         token,
@@ -925,6 +1088,54 @@ export class UserMCPOAuthTokenRepository {
     }
   }
 
+  /** Read saved-grant status without opening access/refresh tokens. */
+  async listStatusForSubject(userId: UserID | null): Promise<MCPOAuthGrantStatusRecord[]> {
+    const rows = await select(this.db, {
+      has_access_token: sql<boolean>`${userMcpOauthTokens.oauth_access_token} is not null and ${userMcpOauthTokens.oauth_access_token} <> ''`,
+      user_id: userMcpOauthTokens.user_id,
+      mcp_server_id: userMcpOauthTokens.mcp_server_id,
+      oauth_client_id: userMcpOauthTokens.oauth_client_id,
+      oauth_client_secret: userMcpOauthTokens.oauth_client_secret,
+      grant_generation: userMcpOauthTokens.grant_generation,
+      grant_binding_version: userMcpOauthTokens.grant_binding_version,
+      grant_binding_fingerprint: userMcpOauthTokens.grant_binding_fingerprint,
+      oauth_metadata_uri: userMcpOauthTokens.oauth_metadata_uri,
+      oauth_resource_uri: userMcpOauthTokens.oauth_resource_uri,
+      oauth_issuer: userMcpOauthTokens.oauth_issuer,
+      oauth_authorization_endpoint: userMcpOauthTokens.oauth_authorization_endpoint,
+      oauth_token_endpoint: userMcpOauthTokens.oauth_token_endpoint,
+      oauth_redirect_uri: userMcpOauthTokens.oauth_redirect_uri,
+      oauth_token_expires_at: userMcpOauthTokens.oauth_token_expires_at,
+      refresh_status: userMcpOauthTokens.refresh_status,
+    })
+      .from(userMcpOauthTokens)
+      .where(
+        userId === null
+          ? isNull(userMcpOauthTokens.user_id)
+          : eq(userMcpOauthTokens.user_id, userId)
+      )
+      .all();
+    const records: MCPOAuthGrantStatusRecord[] = [];
+    const now = new Date();
+    for (const row of rows) {
+      const expiresAt = row.oauth_token_expires_at
+        ? new Date(row.oauth_token_expires_at)
+        : undefined;
+      if (
+        !row.has_access_token ||
+        row.refresh_status === 'ambiguous' ||
+        (expiresAt && expiresAt <= now)
+      )
+        continue;
+      records.push({
+        ...(await this.mapAuthorityRow(row)),
+        oauth_token_expires_at: expiresAt,
+        refresh_status: row.refresh_status as UserMCPOAuthToken['refresh_status'],
+      });
+    }
+    return records;
+  }
+
   async listForUser(userId: UserID): Promise<UserMCPOAuthToken[]> {
     try {
       const rows = await select(this.db)
@@ -932,10 +1143,68 @@ export class UserMCPOAuthTokenRepository {
         .where(eq(userMcpOauthTokens.user_id, userId))
         .all();
 
-      return rows.map((row: UserMCPOAuthTokenRow) => this.mapRow(row));
+      return await this.mapRows(rows);
     } catch (error) {
       throw new RepositoryError(
         `Failed to list OAuth tokens for user: ${error instanceof Error ? error.message : String(error)}`,
+        error
+      );
+    }
+  }
+
+  /**
+   * Batch-read only the caller's grants plus tenant-visible shared grants for
+   * an explicit server set. Another user's per-user grant is never eligible.
+   */
+  async listAuthorityForUserAndSharedByServerIds(
+    userId: UserID,
+    serverIds: readonly MCPServerID[]
+  ): Promise<MCPOAuthGrantAuthorityRecord[]> {
+    try {
+      const uniqueIds = [...new Set(serverIds)];
+      const rows: MCPOAuthGrantAuthorityRow[] = [];
+      for (
+        let offset = 0;
+        offset < uniqueIds.length;
+        offset += UserMCPOAuthTokenRepository.AUTHORITY_READ_BATCH_SIZE
+      ) {
+        const batch = uniqueIds.slice(
+          offset,
+          offset + UserMCPOAuthTokenRepository.AUTHORITY_READ_BATCH_SIZE
+        );
+        if (batch.length === 0) continue;
+        rows.push(
+          ...(await select(this.db, {
+            user_id: userMcpOauthTokens.user_id,
+            mcp_server_id: userMcpOauthTokens.mcp_server_id,
+            oauth_client_id: userMcpOauthTokens.oauth_client_id,
+            oauth_client_secret: userMcpOauthTokens.oauth_client_secret,
+            grant_generation: userMcpOauthTokens.grant_generation,
+            grant_binding_version: userMcpOauthTokens.grant_binding_version,
+            grant_binding_fingerprint: userMcpOauthTokens.grant_binding_fingerprint,
+            oauth_metadata_uri: userMcpOauthTokens.oauth_metadata_uri,
+            oauth_resource_uri: userMcpOauthTokens.oauth_resource_uri,
+            oauth_issuer: userMcpOauthTokens.oauth_issuer,
+            oauth_authorization_endpoint: userMcpOauthTokens.oauth_authorization_endpoint,
+            oauth_token_endpoint: userMcpOauthTokens.oauth_token_endpoint,
+            oauth_redirect_uri: userMcpOauthTokens.oauth_redirect_uri,
+          })
+            .from(userMcpOauthTokens)
+            .where(
+              and(
+                inArray(userMcpOauthTokens.mcp_server_id, batch),
+                or(eq(userMcpOauthTokens.user_id, userId), isNull(userMcpOauthTokens.user_id))
+              )
+            )
+            .all())
+        );
+      }
+      const records: MCPOAuthGrantAuthorityRecord[] = [];
+      for (const row of rows) records.push(await this.mapAuthorityRow(row));
+      return records;
+    } catch (error) {
+      throw new RepositoryError(
+        `Failed to list OAuth grants for authority projection: ${error instanceof Error ? error.message : String(error)}`,
         error
       );
     }
@@ -949,7 +1218,7 @@ export class UserMCPOAuthTokenRepository {
         .where(isNull(userMcpOauthTokens.user_id))
         .all();
 
-      return rows.map((row: UserMCPOAuthTokenRow) => this.mapRow(row));
+      return await this.mapRows(rows);
     } catch (error) {
       throw new RepositoryError(
         `Failed to list shared OAuth tokens: ${error instanceof Error ? error.message : String(error)}`,

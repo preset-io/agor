@@ -9,6 +9,7 @@
 // authored text plus the transport details needed to dial the server.
 
 import type { AgenticToolName } from './agentic-tool';
+import type { BranchID } from './id';
 import type { MCPOAuthCompatibilityMode, MCPOAuthDCRMode, MCPServer } from './mcp';
 import type { Session } from './session';
 
@@ -91,8 +92,10 @@ export type MCPCatalogCapability = (typeof MCP_CATALOG_CAPABILITIES)[number];
  * - `none`        — an unauthenticated JSON-RPC `initialize` handshake is
  *                   accepted; connect can proceed.
  * - `oauth`       — the endpoint answers 401 with an OAuth challenge.
- * - `credentials` — the endpoint answers 401/403 with a non-OAuth challenge,
- *                   so it wants an API key.
+ * - `credentials` — a reviewed bearer credential is the catalog's supported
+ *                   route. Normally the endpoint answers with a non-OAuth
+ *                   challenge; a rare reviewed exception may also advertise
+ *                   OAuth while accepting bearer tokens.
  * - `unknown`     — `curated.yaml` does not state one.
  *
  * Every value here is a claim about a third party's endpoint that a checked-in
@@ -181,6 +184,13 @@ export interface MCPCatalogEntryCredentials {
   acquisition_url: string;
   /** Vendor-specific label, e.g. "personal access token". */
   label?: string;
+  /**
+   * The endpoint advertises OAuth, but the vendor also officially supports a
+   * bearer token and its OAuth server cannot register an Agor client safely.
+   * Connect still verifies the token with a pinned initialize request. This is
+   * deliberately opt-in: an OAuth challenge never implies API-key support.
+   */
+  oauth_challenge_compatible?: true;
 }
 
 /**
@@ -362,8 +372,8 @@ export interface MCPCatalogFilters {
 /**
  * Request body of `POST /mcp-catalog/connect`.
  *
- * A catalog key, where the session should live, and — for an endpoint that asks
- * for one — the caller's own API key. Nothing else. URL, transport, and the
+ * A catalog key and — for an endpoint that asks for one — the caller's own API
+ * key. Nothing else. URL, transport, and the
  * *kind* of auth still come from the catalog entry and the live endpoint
  * server-side, so this cannot be used to register an arbitrary server, and a
  * client cannot name the destination its own credential is sent to.
@@ -371,8 +381,6 @@ export interface MCPCatalogFilters {
 export interface MCPCatalogConnectData {
   /** The entry's reverse-DNS catalog name. */
   catalog_key: string;
-  branch_id: string;
-  agentic_tool: AgenticToolName;
   /**
    * An API key for an endpoint that answers unauthenticated clients with a
    * non-OAuth challenge.
@@ -392,9 +400,9 @@ export interface MCPCatalogConnectData {
   /**
    * The `permission_disclosure` the user was shown and accepted.
    *
-   * Connecting a server puts its tools, and their descriptions, inside every
-   * prompt of the session it is attached to, so the disclosure is the last
-   * thing between a user and that decision. A client-side checkbox cannot be
+   * Adding a server makes it available for later attachment to sessions, so
+   * the disclosure is the last thing between a user and that decision. A
+   * client-side checkbox cannot be
    * the only place that rule lives: the endpoint would accept a connect from
    * any caller that never rendered it. Sending back the text — rather than a
    * bare `true` — means a client cannot satisfy the check without having had
@@ -408,8 +416,7 @@ export interface MCPCatalogConnectData {
 /** What a successful connect hands back to the caller. */
 export interface MCPCatalogConnectResult {
   mcp_server: MCPServer;
-  session: Session;
-  /** The entry's demonstration prompt, for the new session's composer. */
+  /** The entry's demonstration prompt, available if the caller starts a session. */
   starter_prompt?: string;
   /** True when an existing install was reused rather than a second row created. */
   reused_existing_server: boolean;
@@ -421,6 +428,23 @@ export interface MCPCatalogConnectResult {
     | 'refreshed_credential_peer';
   /** Effective, secret-free OAuth compatibility policy for the attached row. */
   effective_oauth_policy?: NonNullable<MCPServer['oauth_compatibility_policy']>;
+}
+
+/** Request body of `POST /mcp-catalog/start-session`. */
+export interface MCPCatalogStartSessionData {
+  catalog_key: string;
+  /** The private catalog install returned by `mcp-catalog/connect`. */
+  mcp_server_id: string;
+  /** An active teammate branch returned by `users.getPrimaryTeammateCandidates`. */
+  teammate_branch_id: BranchID;
+  agentic_tool: AgenticToolName;
+}
+
+/** A new, still-idle session with the selected catalog install attached. */
+export interface MCPCatalogStartSessionResult {
+  session: Session;
+  /** Seed this into the composer as editable, unsent draft text. */
+  starter_prompt?: string;
 }
 
 /**

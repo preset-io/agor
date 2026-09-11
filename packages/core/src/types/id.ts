@@ -28,7 +28,13 @@
  */
 export type UUID = string & { readonly __brand: 'UUID' };
 
-/** Full lowercase UUID storage form accepted by query and persistence boundaries. */
+/**
+ * Full lowercase UUID storage form accepted by query and persistence boundaries.
+ *
+ * New Agor IDs are UUIDv7, but stable identities imported from external or
+ * historical user stores may be another UUID version. Persistence foreign-key
+ * values must preserve those canonical IDs rather than fabricate replacements.
+ */
 export function isCanonicalFullUuid(value: unknown): value is UUID {
   return (
     typeof value === 'string' &&

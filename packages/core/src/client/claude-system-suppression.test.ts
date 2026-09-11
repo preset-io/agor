@@ -5,6 +5,22 @@ import {
 } from './claude-system-suppression';
 
 describe('shouldHidePersistedClaudeSdkEvent', () => {
+  it('suppresses background task snapshots before and after persistence', () => {
+    const event = {
+      subtype: 'background_tasks_changed',
+      tasks: [{ task_id: 'task-1', description: 'private implementation detail' }],
+    };
+    expect(shouldSuppressClaudeSystemEvent(event)).toBe(true);
+    expect(
+      shouldHidePersistedClaudeSdkEvent({
+        type: 'sdk_event',
+        sdkType: 'system',
+        sdkSubtype: 'background_tasks_changed',
+        metadata: event,
+      })
+    ).toBe(true);
+  });
+
   it('hides task_updated rows (including ones with patch.error)', () => {
     expect(
       shouldHidePersistedClaudeSdkEvent({

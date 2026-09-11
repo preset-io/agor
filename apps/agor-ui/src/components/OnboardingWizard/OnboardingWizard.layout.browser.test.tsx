@@ -7,6 +7,8 @@
  *     (730px) modal — the whole point of the widen-the-modal pass.
  *  2. Every step-1 goal card TITLE renders on a single line at the step-1
  *     (explicit 2-column) card width — the copy pass depends on this.
+ *  3. The three Claude sign-in methods use equal tracks and stack cleanly at
+ *     the 320px phone viewport instead of leaving a ragged wrapped row.
  *
  * Run: pnpm vitest run --config vitest.browser.config.ts
  */
@@ -46,7 +48,10 @@ function makeUser(): User {
   } as unknown as User;
 }
 
-function renderWizardAt(initialStep: WizardStep) {
+function renderWizardAt(
+  initialStep: WizardStep,
+  options: { allowClaudeOAuthSignIn?: boolean } = {}
+) {
   agorStore.setState({ ...EMPTY_MAPS });
   const boardsService = {
     create: vi.fn(async (data: { board_id?: string }) => ({
@@ -60,7 +65,7 @@ function renderWizardAt(initialStep: WizardStep) {
     service: vi.fn((name: string) => {
       if (name === 'boards') return boardsService;
       if (name === 'users') return { get: vi.fn(async () => user) };
-      return {};
+      return { on: vi.fn(), off: vi.fn(), get: vi.fn(async () => ({ state: 'no_auth' })) };
     }),
   };
   const props = {
@@ -74,6 +79,7 @@ function renderWizardAt(initialStep: WizardStep) {
     onCreateBranch: vi.fn(async () => null),
     onCreateSession: vi.fn(async () => null),
     onUpdateUser: vi.fn(async () => undefined),
+    allowClaudeOAuthSignIn: options.allowClaudeOAuthSignIn,
   } as unknown as ComponentProps<typeof OnboardingWizard>;
   return render(
     <ConfigProvider theme={{ algorithm: antdTheme.darkAlgorithm, token: { motion: false } }}>
@@ -109,7 +115,7 @@ describe('OnboardingWizard layout (real browser)', () => {
       service: vi.fn((name: string) => {
         if (name === 'boards') return boardsService;
         if (name === 'users') return usersService;
-        return {};
+        return { on: vi.fn(), off: vi.fn(), get: vi.fn(async () => ({ state: 'no_auth' })) };
       }),
     };
     const onUpdateUser = vi.fn(async () => undefined);
@@ -186,6 +192,8 @@ describe('OnboardingWizard layout (real browser)', () => {
     fireEvent.click(screen.getByText(/skip for now/i).closest('button')!);
     await screen.findByText('Connect your AI');
     fireEvent.click(screen.getByText(/skip for now/i).closest('button')!);
+    await screen.findByText('Choose your tools');
+    fireEvent.click(screen.getByText(/skip for now/i).closest('button')!);
     await screen.findByText("You're ready to build.");
     const closeRect = screen.getByRole('button', { name: 'Close' }).getBoundingClientRect();
     expect(closeRect.top).toBeGreaterThanOrEqual(0);
@@ -259,6 +267,24 @@ describe('OnboardingWizard layout (real browser)', () => {
     }
 
     expect(offenders, `goal titles must stay one line:\n${offenders.join('\n')}`).toEqual([]);
+  });
+
+  it('keeps all three Claude sign-in methods in an even row or narrow stacked layout', async () => {
+    renderWizardAt('llm', { allowClaudeOAuthSignIn: true });
+    fireEvent.click((await screen.findByText('Claude')).closest('button') as HTMLElement);
+
+    const group = screen.getByRole('group', { name: 'Claude authentication method' });
+    const buttons = Array.from(group.querySelectorAll('button'));
+    expect(buttons.map((button) => button.textContent)).toEqual([
+      'API key',
+      'Sign in with Claude',
+      'Subscription token',
+    ]);
+    const rects = buttons.map((button) => button.getBoundingClientRect());
+    const renderedRows = new Set(rects.map((rect) => Math.round(rect.top))).size;
+    expect(renderedRows).toBe(window.innerWidth <= 480 ? 3 : 1);
+    expect(new Set(rects.map((rect) => Math.round(rect.width))).size).toBe(1);
+    expect(group.scrollWidth).toBeLessThanOrEqual(group.clientWidth + 1);
   });
 
   it('fits all six step-1 goal cards without internal scroll, clear of the footer', async () => {
@@ -430,6 +456,9 @@ describe('OnboardingWizard layout (real browser)', () => {
     const key = `sk-ant-api03-${'x'.repeat(40)}`;
     fireEvent.change(screen.getByLabelText('Anthropic API key'), { target: { value: key } });
     fireEvent.click(screen.getByText(/^connect →/i).closest('button') as HTMLElement);
+
+    await screen.findByText('Choose your tools');
+    fireEvent.click(screen.getByText(/^continue →/i).closest('button') as HTMLElement);
 
     // done — teammate-centric success screen.
     await screen.findByText('Rusty is ready.');

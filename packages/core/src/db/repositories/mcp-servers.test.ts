@@ -63,6 +63,35 @@ describe('MCPServerRepository.create', () => {
     expect(created.source).toBe('user');
   });
 
+  dbTest(
+    'accepts canonical UUIDv4 and UUIDv7 owners at the persistence boundary',
+    async ({ db }) => {
+      const repo = new MCPServerRepository(db);
+      const legacyUserId = '707bae66-dda5-4c01-9136-a5cda16e048e' as UserID;
+      const currentUserId = generateId() as UserID;
+
+      for (const [name, owner_user_id] of [
+        ['legacy-owner', legacyUserId],
+        ['current-owner', currentUserId],
+      ] as const) {
+        await expect(
+          repo.create(createMCPServerData({ name, owner_user_id }))
+        ).resolves.toMatchObject({ owner_user_id });
+      }
+    }
+  );
+
+  dbTest('rejects short and non-UUID owners at the persistence boundary', async ({ db }) => {
+    const repo = new MCPServerRepository(db);
+
+    for (const owner_user_id of ['01933e4a7b897c35a8f39d2e', 'not-a-uuid']) {
+      await expect(
+        repo.create(createMCPServerData({ owner_user_id: owner_user_id as UserID }))
+      ).rejects.toThrow('owner_user_id must be a canonical full UUID or null');
+    }
+    expect(await repo.findAll()).toHaveLength(0);
+  });
+
   dbTest('should create MCP server with session scope', async ({ db }) => {
     const repo = new MCPServerRepository(db);
     const data = createMCPServerData({
@@ -182,25 +211,6 @@ describe('MCPServerRepository.findAll', () => {
 
     expect(globalServers).toHaveLength(1);
     expect(globalServers[0].name).toBe('global-1');
-  });
-
-  dbTest('should filter by scope and owner (global with scopeId)', async ({ db }) => {
-    const repo = new MCPServerRepository(db);
-    const user1 = generateId() as UserID;
-    const user2 = generateId() as UserID;
-
-    await repo.create(
-      createMCPServerData({ name: 'user1-server', scope: 'global', owner_user_id: user1 })
-    );
-    await repo.create(
-      createMCPServerData({ name: 'user2-server', scope: 'global', owner_user_id: user2 })
-    );
-
-    const user1Servers = await repo.findAll({ scope: 'global', scopeId: user1 });
-
-    expect(user1Servers).toHaveLength(1);
-    expect(user1Servers[0].name).toBe('user1-server');
-    expect(user1Servers[0].owner_user_id).toBe(user1);
   });
 
   dbTest('should keep shared and caller-owned servers for usableByUserId', async ({ db }) => {
@@ -586,33 +596,6 @@ describe('MCPServerRepository scope model', () => {
       createMCPServerData({ name: 'session-server', scope: 'session' })
     );
     expect(sessionServer.scope).toBe('session');
-  });
-
-  dbTest('should filter global servers by owner', async ({ db }) => {
-    const repo = new MCPServerRepository(db);
-    const user1 = generateId() as UserID;
-    const user2 = generateId() as UserID;
-
-    // Create servers for different users
-    await repo.create(
-      createMCPServerData({ name: 'user1-fs', scope: 'global', owner_user_id: user1 })
-    );
-    await repo.create(
-      createMCPServerData({ name: 'user1-git', scope: 'global', owner_user_id: user1 })
-    );
-    await repo.create(
-      createMCPServerData({ name: 'user2-fs', scope: 'global', owner_user_id: user2 })
-    );
-
-    // Each user should only see their own servers
-    const user1Servers = await repo.findAll({ scope: 'global', scopeId: user1 });
-    const user2Servers = await repo.findAll({ scope: 'global', scopeId: user2 });
-
-    expect(user1Servers).toHaveLength(2);
-    expect(user2Servers).toHaveLength(1);
-    expect(user1Servers.map((s) => s.name)).toContain('user1-fs');
-    expect(user1Servers.map((s) => s.name)).toContain('user1-git');
-    expect(user2Servers[0].name).toBe('user2-fs');
   });
 });
 

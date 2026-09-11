@@ -19,6 +19,7 @@ import {
   handleBranchArtifactPublish,
   handleBranchArtifactValidate,
 } from './artifacts.js';
+import { handleClaudeAuthFile } from './claude-auth-file.js';
 import { handleCodexAuthFile } from './codex-auth-file.js';
 import { handleEnvironmentLifecycle, handleEnvironmentLogs } from './environment.js';
 import {
@@ -265,3 +266,4 @@ registerCommand('git.managed-credentials.reconcile', handleGitManagedCredentials
 registerCommand('zellij.attach', handleZellijAttach);
 registerCommand('zellij.tab', handleZellijTab);
 registerCommand('codex.auth-file', handleCodexAuthFile);
+registerCommand('claude.auth-file', handleClaudeAuthFile);

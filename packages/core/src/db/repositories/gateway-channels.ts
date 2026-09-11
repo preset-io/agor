@@ -15,6 +15,7 @@ import type {
   UUID,
 } from '@agor/core/types';
 import { and, asc, eq, gt, inArray, isNull, like, lte, or, sql } from 'drizzle-orm';
+import { redactGatewayChannelSecrets } from '../../gateway/redaction';
 import { generateId } from '../../lib/ids';
 import { isAgenticToolDefaultConfigurationReference } from '../../types/agentic-tool-preset';
 import {
@@ -38,7 +39,7 @@ import {
   select,
   update,
 } from '../database-wrapper';
-import { decryptApiKey, encryptApiKey } from '../encryption';
+import { decryptApiKeyAsync, encryptApiKey } from '../encryption';
 import { type GatewayChannelInsert, type GatewayChannelRow, gatewayChannels } from '../schema';
 import {
   AmbiguousIdError,
@@ -183,12 +184,12 @@ function encryptConfig(config: Record<string, unknown>): Record<string, unknown>
 /**
  * Decrypt sensitive fields within a config object
  */
-function decryptConfig(config: Record<string, unknown>): Record<string, unknown> {
+async function decryptConfig(config: Record<string, unknown>): Promise<Record<string, unknown>> {
   const decrypted = { ...config };
   for (const field of GATEWAY_SENSITIVE_CONFIG_FIELDS) {
     if (typeof decrypted[field] === 'string' && decrypted[field]) {
       try {
-        decrypted[field] = decryptApiKey(decrypted[field] as string);
+        decrypted[field] = await decryptApiKeyAsync(decrypted[field] as string);
       } catch (error) {
         console.error(
           `[gateway-channels] Failed to decrypt ${field}:`,
@@ -233,39 +234,42 @@ function encryptAgenticConfig(
   return encrypted;
 }
 
-function decryptAgenticConfig(
+async function decryptAgenticConfig(
   agenticConfig: Record<string, unknown> | null
-): Record<string, unknown> | null {
+): Promise<Record<string, unknown> | null> {
   if (!agenticConfig) return null;
 
   const decrypted = { ...agenticConfig };
   const rawEnvVars = decrypted.envVars;
 
   if (Array.isArray(rawEnvVars)) {
-    decrypted.envVars = (rawEnvVars as GatewayEnvVar[]).flatMap((envVar) => {
+    const envVars: GatewayEnvVar[] = [];
+    for (const envVar of rawEnvVars as GatewayEnvVar[]) {
       try {
-        return [
-          {
-            ...envVar,
-            value: envVar.value ? decryptApiKey(envVar.value) : envVar.value,
-          },
-        ];
+        envVars.push({
+          ...envVar,
+          value: envVar.value ? await decryptApiKeyAsync(envVar.value) : envVar.value,
+        });
       } catch {
-        return [];
+        // Preserve the existing fail-closed omission of unreadable variables.
       }
-    });
+    }
+    decrypted.envVars = envVars;
   } else if (rawEnvVars && typeof rawEnvVars === 'object') {
     // Legacy shape support: Record<string, string>
-    decrypted.envVars = Object.fromEntries(
-      Object.entries(rawEnvVars as Record<string, unknown>).flatMap(([key, value]) => {
-        if (typeof value !== 'string' || !value) return [[key, value]];
-        try {
-          return [[key, decryptApiKey(value)]];
-        } catch {
-          return [];
-        }
-      })
-    );
+    const entries: [string, unknown][] = [];
+    for (const [key, value] of Object.entries(rawEnvVars)) {
+      if (typeof value !== 'string' || !value) {
+        entries.push([key, value]);
+        continue;
+      }
+      try {
+        entries.push([key, await decryptApiKeyAsync(value)]);
+      } catch {
+        // Preserve the existing fail-closed omission of unreadable variables.
+      }
+    }
+    decrypted.envVars = Object.fromEntries(entries);
   }
 
   return decrypted;
@@ -490,11 +494,14 @@ export class GatewayChannelRepository
     return result.rowsAffected > 0;
   }
 
-  /** Bounded tenant-local candidates for static PostgreSQL deployments. */
-  async findEnabledListenerCandidates(
+  /**
+   * Bounded tenant-local discovery, without loading credentials. The listener
+   * worker reloads each candidate under tenant scope before claiming/starting it.
+   */
+  async findEnabledListenerCandidateIds(
     limit = 25,
     afterId?: GatewayChannelID
-  ): Promise<GatewayChannel[]> {
+  ): Promise<GatewayChannelID[]> {
     if (!Number.isInteger(limit) || limit <= 0 || limit > 1_000) {
       throw new RepositoryError('Gateway listener candidate limit must be between 1 and 1000');
     }
@@ -508,74 +515,78 @@ export class GatewayChannelRepository
     const auditedProvider = isPostgresDatabase(this.db)
       ? inArray(gatewayChannels.channel_type, [...DURABLE_GATEWAY_LISTENER_CHANNEL_TYPES])
       : undefined;
-    const candidates: GatewayChannel[] = [];
-    let rawAfterId = afterId;
-    while (candidates.length < limit) {
-      const rows = await select(this.db)
-        .from(gatewayChannels)
-        .where(
-          and(
-            eq(gatewayChannels.enabled, true),
-            auditedProvider,
-            claimable,
-            rawAfterId ? gt(gatewayChannels.id, rawAfterId) : undefined
-          )
+    const rows = await select(this.db, { id: gatewayChannels.id })
+      .from(gatewayChannels)
+      .where(
+        and(
+          eq(gatewayChannels.enabled, true),
+          auditedProvider,
+          claimable,
+          afterId ? gt(gatewayChannels.id, afterId) : undefined
         )
-        .orderBy(asc(gatewayChannels.id))
-        .limit(limit)
-        .all();
-
-      for (const row of rows as GatewayChannelRow[]) {
-        candidates.push(this.rowToChannel(row));
-        if (candidates.length === limit) break;
-      }
-
-      if (rows.length < limit || candidates.length === limit) break;
-      const last = rows.at(-1) as GatewayChannelRow | undefined;
-      if (!last) break;
-      rawAfterId = last.id as GatewayChannelID;
-    }
-    return candidates;
+      )
+      .orderBy(asc(gatewayChannels.id))
+      .limit(limit)
+      .all();
+    return (rows as Pick<GatewayChannelRow, 'id'>[]).map((row) => row.id as GatewayChannelID);
   }
 
   /**
    * Convert database row to GatewayChannel type
    */
-  private rowToChannel(row: GatewayChannelRow): GatewayChannel {
+  private async rowToChannel(row: GatewayChannelRow, displayOnly = false): Promise<GatewayChannel> {
     const config = row.config as Record<string, unknown>;
-    const agenticConfig = decryptAgenticConfig(
-      (row.agentic_config as Record<string, unknown> | null) ?? null
-    );
+    const storedAgenticConfig = (row.agentic_config as Record<string, unknown> | null) ?? null;
+    // Normalize legacy env maps before using the shared transport redactor.
+    // Never open a credential merely to replace it with a display sentinel.
+    const displayAgenticConfig: Record<string, unknown> | null = storedAgenticConfig && {
+      ...storedAgenticConfig,
+      ...(storedAgenticConfig.envVars && !Array.isArray(storedAgenticConfig.envVars)
+        ? {
+            envVars: Object.entries(storedAgenticConfig.envVars as Record<string, unknown>).map(
+              ([key, value]) => ({ key, value })
+            ),
+          }
+        : {}),
+    };
+    const agenticConfig = displayOnly
+      ? displayAgenticConfig
+      : await decryptAgenticConfig(storedAgenticConfig);
 
-    return attachHiddenTenant(
-      {
-        id: row.id as GatewayChannelID,
-        created_by: row.created_by,
-        name: row.name,
-        channel_type: row.channel_type as ChannelType,
-        target_branch_id: row.target_branch_id as UUID,
-        agor_user_id: (row.agor_user_id as UUID | null) ?? null,
-        provider_installation_id: row.provider_installation_id ?? null,
-        provider_config_generation: row.provider_config_generation ?? 1,
-        channel_key: row.channel_key,
-        config: decryptConfig(config),
-        agentic_config: agenticConfig
-          ? ({
-              ...(agenticConfig as unknown as PersistedGatewayAgenticConfig),
-              presetId:
-                (row.agentic_tool_preset_id as PersistedGatewayAgenticConfig['presetId']) ??
-                (agenticConfig.presetId as PersistedGatewayAgenticConfig['presetId']) ??
-                undefined,
-            } as PersistedGatewayAgenticConfig)
-          : null,
-        mcp_server_ids: row.mcp_server_ids ?? undefined,
-        enabled: Boolean(row.enabled),
-        created_at: new Date(row.created_at).toISOString(),
-        updated_at: new Date(row.updated_at).toISOString(),
-        last_message_at: row.last_message_at ? new Date(row.last_message_at).toISOString() : null,
-      },
-      row
-    );
+    const channel: GatewayChannel = {
+      id: row.id as GatewayChannelID,
+      created_by: row.created_by,
+      name: row.name,
+      channel_type: row.channel_type as ChannelType,
+      target_branch_id: row.target_branch_id as UUID,
+      agor_user_id: (row.agor_user_id as UUID | null) ?? null,
+      provider_installation_id: row.provider_installation_id ?? null,
+      provider_config_generation: row.provider_config_generation ?? 1,
+      channel_key: row.channel_key,
+      config: displayOnly ? config : await decryptConfig(config),
+      agentic_config: agenticConfig
+        ? ({
+            ...(agenticConfig as unknown as PersistedGatewayAgenticConfig),
+            presetId:
+              (row.agentic_tool_preset_id as PersistedGatewayAgenticConfig['presetId']) ??
+              (agenticConfig.presetId as PersistedGatewayAgenticConfig['presetId']) ??
+              undefined,
+          } as PersistedGatewayAgenticConfig)
+        : null,
+      mcp_server_ids: row.mcp_server_ids ?? undefined,
+      enabled: Boolean(row.enabled),
+      created_at: new Date(row.created_at).toISOString(),
+      updated_at: new Date(row.updated_at).toISOString(),
+      last_message_at: row.last_message_at ? new Date(row.last_message_at).toISOString() : null,
+    };
+    return attachHiddenTenant(displayOnly ? redactGatewayChannelSecrets(channel) : channel, row);
+  }
+
+  private async rowsToChannels(rows: GatewayChannelRow[]): Promise<GatewayChannel[]> {
+    // One KDF at a time per inventory, not a worker-pool stampede proportional to its size.
+    const channels: GatewayChannel[] = [];
+    for (const row of rows) channels.push(await this.rowToChannel(row));
+    return channels;
   }
 
   /**
@@ -780,7 +791,7 @@ export class GatewayChannelRepository
         throw new RepositoryError('Failed to retrieve created gateway channel');
       }
 
-      return this.rowToChannel(row);
+      return await this.rowToChannel(row);
     } catch (error) {
       if (this.isDiscordInstallationConflict(error)) {
         throw this.duplicateDiscordInstallationError();
@@ -797,6 +808,15 @@ export class GatewayChannelRepository
    * Find gateway channel by ID (supports short ID)
    */
   async findById(id: string): Promise<GatewayChannel | null> {
+    return this.readById(id, false);
+  }
+
+  /** Transport-safe detail: presence is not proof of credential validity. */
+  async findDisplayById(id: string): Promise<GatewayChannel | null> {
+    return this.readById(id, true);
+  }
+
+  private async readById(id: string, displayOnly: boolean): Promise<GatewayChannel | null> {
     try {
       const fullId = await this.resolveId(id);
       const row = await select(this.db)
@@ -804,7 +824,7 @@ export class GatewayChannelRepository
         .where(eq(gatewayChannels.id, fullId))
         .one();
 
-      return row ? this.rowToChannel(row) : null;
+      return row ? await this.rowToChannel(row, displayOnly) : null;
     } catch (error) {
       if (error instanceof EntityNotFoundError) return null;
       if (error instanceof AmbiguousIdError) throw error;
@@ -818,10 +838,17 @@ export class GatewayChannelRepository
   /**
    * Find all gateway channels
    */
+  async findDisplayAll(): Promise<GatewayChannel[]> {
+    const rows = await select(this.db).from(gatewayChannels).all();
+    const channels: GatewayChannel[] = [];
+    for (const row of rows) channels.push(await this.rowToChannel(row, true));
+    return channels;
+  }
+
   async findAll(): Promise<GatewayChannel[]> {
     try {
       const rows = await select(this.db).from(gatewayChannels).all();
-      return rows.map((row: GatewayChannelRow) => this.rowToChannel(row));
+      return await this.rowsToChannels(rows);
     } catch (error) {
       throw new RepositoryError(
         `Failed to find all gateway channels: ${error instanceof Error ? error.message : String(error)}`,
@@ -888,7 +915,7 @@ export class GatewayChannelRepository
         throw new RepositoryError('Failed to retrieve updated gateway channel');
       }
 
-      return this.rowToChannel(updated);
+      return await this.rowToChannel(updated);
     } catch (error) {
       if (error instanceof EntityNotFoundError) throw error;
       if (this.isDiscordInstallationConflict(error)) {
@@ -937,7 +964,7 @@ export class GatewayChannelRepository
           .one();
         if (!currentRow) throw new EntityNotFoundError('GatewayChannel', id);
 
-        const current = this.rowToChannel(currentRow);
+        const current = await this.rowToChannel(currentRow);
         if (
           expectedProviderConfigGeneration !== undefined &&
           current.provider_config_generation !== expectedProviderConfigGeneration
@@ -1102,7 +1129,7 @@ export class GatewayChannelRepository
         .where(eq(gatewayChannels.channel_key, channelKey))
         .one();
 
-      return row ? this.rowToChannel(row) : null;
+      return row ? await this.rowToChannel(row) : null;
     } catch (error) {
       throw new RepositoryError(
         `Failed to find gateway channel by key: ${error instanceof Error ? error.message : String(error)}`,
@@ -1121,7 +1148,7 @@ export class GatewayChannelRepository
         .where(eq(gatewayChannels.agor_user_id, userId))
         .all();
 
-      return rows.map((row: GatewayChannelRow) => this.rowToChannel(row));
+      return await this.rowsToChannels(rows);
     } catch (error) {
       throw new RepositoryError(
         `Failed to find gateway channels by user: ${error instanceof Error ? error.message : String(error)}`,

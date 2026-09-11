@@ -18,7 +18,7 @@ import { join } from 'node:path';
 import { eq, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { generateId } from '../lib/ids';
-import type { UUID } from '../types/id';
+import type { UserID, UUID } from '../types/id';
 import type { MCPServerID } from '../types/mcp';
 import { createDatabase, type Database } from './client';
 import { executeRaw, insert, isPostgresDatabase, select, update } from './database-wrapper';
@@ -82,9 +82,9 @@ function sqlstateOf(error: unknown): string | undefined {
   return undefined;
 }
 
-async function seedTenant(db: Database, tenantId: string): Promise<void> {
-  await runWithTenantDatabaseScope(db, tenantId, async (scoped) => {
-    const ownerId = generateId() as UUID;
+async function seedTenant(db: Database, tenantId: string): Promise<UserID> {
+  return runWithTenantDatabaseScope(db, tenantId, async (scoped) => {
+    const ownerId = generateId() as UserID;
     await new UsersRepository(scoped).create({
       user_id: ownerId,
       email: `tenant-portability-${tenantId}-${generateId()}@example.invalid`,
@@ -116,6 +116,7 @@ async function seedTenant(db: Database, tenantId: string): Promise<void> {
       agentic_tool: 'claude-code',
       created_by: ownerId,
     });
+    return ownerId;
   });
 }
 
@@ -158,7 +159,8 @@ async function seedNonPortableExecutorAuthority(db: Database, tenantId: string):
 async function seedNonPortableOAuthGrant(
   db: Database,
   tenantId: string,
-  masterSecret: string
+  masterSecret: string,
+  grantedBy: UserID
 ): Promise<string> {
   const serverId = generateId();
   await runWithTenantDatabaseScope(db, tenantId, async (scoped) => {
@@ -201,7 +203,8 @@ async function seedNonPortableOAuthGrant(
           tokenEndpoint: 'https://issuer.example.test/token',
           redirectUri: 'https://agor.example.test/oauth/callback',
         },
-      }
+      },
+      grantedBy
     );
   });
   return serverId;
@@ -768,17 +771,21 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('tenant portability (Postgr
 
     const manifest = await readManifest(archive);
     expect(manifest.database.identity.nonPortableTenantTables).toEqual([
+      'claude_oauth_attempts',
       'codex_device_auth_attempts',
       'executor_session_token_authorities',
       'github_install_states',
+      'mcp_oauth_client_registrations',
       'mcp_oauth_pending_flows',
       'user_mcp_oauth_tokens',
     ]);
     expect(manifest.database.identity.tenantTables).not.toContain('codex_device_auth_attempts');
+    expect(manifest.database.identity.tenantTables).not.toContain('claude_oauth_attempts');
     expect(manifest.database.identity.tenantTables).not.toContain(
       'executor_session_token_authorities'
     );
     expect(manifest.database.identity.tenantTables).not.toContain('mcp_oauth_pending_flows');
+    expect(manifest.database.identity.tenantTables).not.toContain('mcp_oauth_client_registrations');
     expect(manifest.database.identity.tenantTables).not.toContain('user_mcp_oauth_tokens');
     expect(manifest.database.tables.map((table) => table.name)).not.toContain(
       'executor_session_token_authorities'
@@ -787,7 +794,13 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('tenant portability (Postgr
       'codex_device_auth_attempts'
     );
     expect(manifest.database.tables.map((table) => table.name)).not.toContain(
+      'claude_oauth_attempts'
+    );
+    expect(manifest.database.tables.map((table) => table.name)).not.toContain(
       'mcp_oauth_pending_flows'
+    );
+    expect(manifest.database.tables.map((table) => table.name)).not.toContain(
+      'mcp_oauth_client_registrations'
     );
     expect(manifest.database.tables.map((table) => table.name)).not.toContain(
       'user_mcp_oauth_tokens'
@@ -812,11 +825,12 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('tenant portability (Postgr
   it('re-homes OAuth server configuration but omits grants across master secrets', async () => {
     const source = `tpog-src-${generateId()}`;
     const rehomed = `tpog-dst-${generateId()}`;
-    await seedTenant(db, source);
+    const grantedBy = await seedTenant(db, source);
     const serverId = await seedNonPortableOAuthGrant(
       db,
       source,
-      'source-master-secret-for-portability-test'
+      'source-master-secret-for-portability-test',
+      grantedBy
     );
     const archive = join(scratch, `${source}-oauth-grant-archive`);
     await exportTenant(db, source, { archivePath: archive });

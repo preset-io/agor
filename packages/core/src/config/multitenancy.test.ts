@@ -2,7 +2,9 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { MAX_TENANT_ID_LENGTH } from '../types/tenant';
 import {
   assertValidMultiTenancyConfig,
+  BootstrapTenantUnsupportedError,
   DEFAULT_STATIC_TENANT_ID,
+  resolveBootstrapTenantId,
   resolveMultiTenancyConfig,
   resolveTenantContext,
   TenantResolutionError,
@@ -316,5 +318,33 @@ describe('multi-tenancy config and tenant resolution', () => {
       { params: { tenant_id: 'tenant-job' } }
     );
     expect(ctx).toEqual({ tenant_id: 'tenant-job', source: 'explicit' });
+  });
+
+  describe('resolveBootstrapTenantId (single-tenant bootstrap tooling)', () => {
+    it('returns the default static tenant for a single-tenant install', () => {
+      expect(resolveBootstrapTenantId({})).toBe(DEFAULT_STATIC_TENANT_ID);
+    });
+
+    it('returns the configured static tenant', () => {
+      expect(
+        resolveBootstrapTenantId({ multi_tenancy: { mode: 'static', static_tenant_id: 'acme' } })
+      ).toBe('acme');
+    });
+
+    it('fails closed in required_from_auth instead of yielding an undefined tenant', () => {
+      // The prior `mode === static ? id : undefined` shape produced an
+      // undefined-tenant scope that trips the armed DB-scope guard mid-operation
+      // with an opaque error. This must reject up front with a clear message.
+      expect(() =>
+        resolveBootstrapTenantId({
+          multi_tenancy: { mode: 'required_from_auth', auth_claim: 'tenant_id' },
+        })
+      ).toThrow(BootstrapTenantUnsupportedError);
+      expect(() =>
+        resolveBootstrapTenantId({
+          multi_tenancy: { mode: 'required_from_auth', auth_claim: 'tenant_id' },
+        })
+      ).toThrow(/required_from_auth/);
+    });
   });
 });

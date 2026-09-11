@@ -35,7 +35,36 @@ Every release-version bump PR must include its finalized changelog section; a ve
 
 ### Breaking
 
-- **Board and branch permissions use a normalized capability model** — the upgrade is a coordinated offline, big-bang migration; old daemons cannot run against the migrated authority model. Legacy rules are mapped conservatively, so some access may become more restrictive; review important board and branch permissions after upgrading. Rollback requires restoring the complete pre-migration database backup. ([#2555](https://github.com/preset-io/agor/pull/2555))
+- **Board and branch RBAC is always enabled** — authentication was already mandatory; Agor now has one normalized authorization contract across REST, MCP, realtime, files, terminals, and the UI. Omit `execution.branch_rbac` and `AGOR_RBAC_ENABLED`; `true` is accepted temporarily as a deprecated no-op, while false or malformed values fail startup. ([#2669](https://github.com/preset-io/agor/pull/2669))
+  - Single-user owners keep Manager/write access. Before upgrading an installation that intentionally ran with RBAC off, back up the database, stop the whole daemon cohort, and review normalized private/shared policies; the upgrade never auto-widens them to reproduce open access.
+  - Do not mix old and new daemons. To roll back, stop the new cohort and explicitly set RBAC true for the old release before restarting it against a supported database version.
+
+### Security
+
+- **The authenticated-member open-access fallback is removed** — Board/Branch visibility, Session and Task authority, direct MCP queries and egress, filesystem projection, and realtime audiences now always enforce current normalized policy. ([#2669](https://github.com/preset-io/agor/pull/2669))
+
+### Features
+
+- **GitHub returns to the MCP Marketplace through a reviewed fine-grained-PAT exception** — GitHub's remote endpoint challenges for OAuth but does not publish Dynamic Client Registration, so Marketplace uses GitHub's documented bearer-token route and verifies each supplied PAT against the pinned catalog endpoint before storage. The 0.26.0 removal note below remains the historical state for that release. ([#2646](https://github.com/preset-io/agor/pull/2646))
+
+## 0.26.1 (2026-09-03)
+
+### Fixes
+
+- **Claude and Codex integrations track current SDK contracts** — upgrades the managed runtimes to Claude Agent SDK 0.3.259 and Codex SDK 0.153.0, including cumulative Claude result accounting, background-task snapshots, prompt provenance, and Codex cache-write usage. Adds the verified `claude-fable-5-1` alias with native 1M context while deliberately retaining OpenCode 1.14.33 pending a dedicated event/API migration. ([#2667](https://github.com/preset-io/agor/pull/2667))
+
+### Chores
+
+- **Align the 0.26.1 release train** — `agor-live`, the CLI, client, and version-aligned agentic-tool packages now share the release version. ([#2667](https://github.com/preset-io/agor/pull/2667))
+
+## 0.26.0 (2026-08-30)
+
+### Breaking
+
+- **Board and branch permissions use a normalized capability model** — the upgrade is a coordinated offline, big-bang migration; old daemons cannot run against the migrated authority model. Legacy rules are mapped conservatively, so some access may become more restrictive. ([#2555](https://github.com/preset-io/agor/pull/2555))
+  - Before upgrading, inspect `agor db status --json`, drain work, stop every daemon connected to the database, and take and test a complete database backup. Install 0.26.0 without starting its daemon.
+  - From 0.26.0, run `agor db migrate --offline-cutover --yes` once. If primary-owner attribution fails, resolve the listed board or branch IDs and retry; do not assign an arbitrary owner merely to pass migration.
+  - Start only 0.26.0 daemons, then review important board and branch permission screens, especially materialized overrides and legacy cross-user prompt access. To roll back, stop the new cohort and restore the complete pre-migration database backup; do not run an old daemon against the migrated policy schema.
 - **Socket clients authenticate only at the namespace handshake** — `createClient` requires `socketAuthentication` for protected services and no longer exposes Feathers' post-connect `authenticate`, `reAuthenticate`, or `logout` methods. Use `createRestClient` for credential exchange/refresh and let reconnect present the latest access token. ([#2520](https://github.com/preset-io/agor/pull/2520))
 
 ### Security
@@ -50,6 +79,10 @@ Every release-version bump PR must include its finalized changelog section; a ve
   - GitHub, MongoDB, Box, HubSpot, Slack, Prisma, PagerDuty, and Kagi are no longer advertised because the read-only OAuth audit could not reach a safely bound client-registration boundary. Existing saved rows are not deleted.
   - Existing strict grants retain their binding. Moving an install into or out of marketplace compatibility invalidates the old grant and requires authorization again.
   - Standalone SQLite callbacks now bind the saved server through provider exchange, and Settings shows catalog-managed Marketplace policy instead of labeling it Strict.
+
+### Chores
+
+- **Align the 0.26.0 release train** — `agor-live`, the CLI, client, and version-aligned agentic-tool packages now share the release version. Agent SDK versions remain unchanged after a conservative compatibility review. ([#2623](https://github.com/preset-io/agor/pull/2623))
 
 ## 0.25.2 (2026-08-18)
 

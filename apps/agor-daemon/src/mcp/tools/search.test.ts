@@ -1,9 +1,62 @@
+import type { DatadogTracer } from '@agor/core/tracing/datadog';
 import type { McpServer } from '@modelcontextprotocol/server';
 import { describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
-import { ToolDispatcher } from '../register-tool-proxy.js';
+import {
+  type ToolHandler as RegisteredToolHandler,
+  ToolDispatcher,
+  toolDispatcherProxy,
+} from '../register-tool-proxy.js';
 import { ToolRegistry } from '../tool-registry.js';
+import { createMcpTracing } from '../tracing.js';
 import { registerSearchTools } from './search.js';
+
+it('traces facade validation and unknown targets without exporting arbitrary tool names', async () => {
+  const calls: { resource?: string; tags: Record<string, unknown> }[] = [];
+  const tracer: DatadogTracer = {
+    trace(_name, options, work) {
+      const tags = { ...options.tags };
+      calls.push({ resource: options.resource, tags });
+      return work({
+        setTag: (key, value) => {
+          tags[key] = value;
+        },
+      });
+    },
+  };
+  const tracing = createMcpTracing('entrypoint', { tracer });
+  const handlers = new Map<string, RegisteredToolHandler>();
+  const server = {
+    registerTool: (name: string, _config: unknown, handler: RegisteredToolHandler) =>
+      handlers.set(name, handler),
+  } as unknown as McpServer;
+  const dispatcher = new ToolDispatcher();
+  const target = vi.fn(async () => ({ content: [] }));
+  tracing.toolProxy(toolDispatcherProxy(server, dispatcher)).registerTool(
+    'agor_test',
+    {
+      inputSchema: z.object({ limit: z.number() }),
+    },
+    target
+  );
+  registerSearchTools(tracing.toolProxy(server, dispatcher), new ToolRegistry(), dispatcher);
+  const execute = handlers.get('agor_execute_tool')!;
+  await execute({ tool_name: 'agor_test', arguments: { limit: 'secret invalid input' } });
+  await execute({ tool_name: 'secret unknown tool', arguments: {} });
+  expect(target).not.toHaveBeenCalled();
+  expect(calls).toEqual(
+    ['agor_test', 'agor_execute_tool'].map((resource) => ({
+      resource,
+      tags: {
+        'mcp.tool': resource,
+        'span.kind': 'server',
+        'mcp.outcome': 'tool_error',
+        error: true,
+      },
+    }))
+  );
+  expect(JSON.stringify(calls)).not.toContain('secret');
+});
 
 vi.mock('../server.js', () => ({
   coerceJsonRecord: (value: unknown) => {
@@ -169,10 +222,41 @@ describe('agor_execute_tool', () => {
     const parsed = JSON.parse(result.content[0].text);
 
     expect(result.isError).toBe(true);
-    expect(parsed.error).toMatch(/unknown argument "definitelyNotAParam"/);
+    expect(parsed.error).toMatch(/unknown argument/);
+    expect(parsed.code).toBe('invalid_tool_arguments');
     expect(parsed.error).toMatch(/agor_get_tool_details/);
     expect(targetHandler).not.toHaveBeenCalled();
   });
+
+  it.each([
+    { limit: 'sensitive-invalid-value' },
+    { branchId: { secret: 'sensitive-invalid-value' } },
+  ])('returns safe field/code guidance for malformed agent arguments', async (arguments_) => {
+    const { handler, targetHandler } = captureExecuteTool();
+    const result = await handler({ tool_name: 'agor_sessions_list', arguments: arguments_ });
+    const parsed = JSON.parse(result.content[0].text);
+    expect(parsed).toMatchObject({
+      code: 'invalid_tool_arguments',
+      validation_stage: 'tool_input',
+      retryable: false,
+      issues: [{ field: Object.keys(arguments_)[0], code: 'invalid_type' }],
+    });
+    expect(result.content[0].text).not.toContain('sensitive-invalid-value');
+    expect(targetHandler).not.toHaveBeenCalled();
+  });
+
+  it.each(['not-json', '[]', null, 5])(
+    'rejects malformed proxy arguments without executing the tool',
+    async (arguments_) => {
+      const { handler, targetHandler } = captureExecuteTool();
+      const result = await handler({ tool_name: 'agor_sessions_list', arguments: arguments_ });
+      expect(JSON.parse(result.content[0].text)).toMatchObject({
+        code: 'invalid_tool_arguments',
+        retryable: false,
+      });
+      expect(targetHandler).not.toHaveBeenCalled();
+    }
+  );
 });
 
 describe('agor_get_tool_details', () => {
