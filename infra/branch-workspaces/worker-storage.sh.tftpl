@@ -1,0 +1,28 @@
+#!/bin/bash
+set -euo pipefail
+# AMI must provide xfsprogs, nvme-cli, util-linux. Never guess a disk from enumeration order.
+if ${use_instance_store}; then
+  device="$(lsblk -dn -o PATH,MODEL | awk '/Amazon EC2 NVMe Instance Storage/ {print $1; exit}')"
+else
+  # Use the EC2 device-name mapping, not the ordinal NVMe device.
+  device="$(find /dev/disk/by-id -maxdepth 1 -name '*Amazon_Elastic_Block_Store*' -type l | while read -r candidate; do
+    if /sbin/ebsnvme-id "$candidate" 2>/dev/null | grep -qx '/dev/sdf'; then echo "$candidate"; break; fi
+  done)"
+fi
+[ -n "$device" ] && [ -b "$device" ] || { echo 'No dedicated workspace device found'; exit 1; }
+# Refuse root/partitioned/mounted disks. This must never format an existing OS volume.
+[ "$(lsblk -nr -o NAME "$device" | wc -l)" -eq 1 ] || exit 1
+if findmnt -rn -S "$device" >/dev/null; then
+  [ "$(findmnt -rn -S "$device" -o TARGET)" = /var/lib/agor ] && exit 0
+  exit 1
+fi
+fstype="$(blkid -s TYPE -o value "$device" || true)"
+if [ -z "$fstype" ]; then mkfs.xfs -m reflink=1 -n ftype=1 "$device"; elif [ "$fstype" != xfs ]; then exit 1; fi
+mkdir -p /var/lib/agor
+mount -t xfs -o noatime,nodiratime "$device" /var/lib/agor
+uuid="$(blkid -s UUID -o value "$device")"
+grep -q "UUID=$uuid " /etc/fstab || echo "UUID=$uuid /var/lib/agor xfs noatime,nodiratime,nofail 0 2" >> /etc/fstab
+chmod 0700 /var/lib/agor
+xfs_info /var/lib/agor | grep -q 'reflink=1' || exit 1
+# Controller readiness must also check PostgreSQL, scoped S3 access, and local capacity.
+# The AMI's existing service manager starts the reviewed worker controller after this unit.

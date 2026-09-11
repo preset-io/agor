@@ -1,4 +1,5 @@
 import {
+  BranchWorkspaceRepository,
   getCurrentTenantDatabaseScope,
   runWithSystemDatabaseScope,
   runWithTenantContext,
@@ -48,11 +49,33 @@ function createSessionsService() {
 
 describe('prepareSessionForExecutorStart tenant scope', () => {
   beforeEach(() => {
+    vi.restoreAllMocks();
     vi.clearAllMocks();
+    vi.spyOn(BranchWorkspaceRepository.prototype, 'read').mockResolvedValue({
+      state: null,
+      now: 1000,
+    });
     mocks.isTenantAgenticToolEnabled.mockImplementation(async (_tool, db) => {
       expect(db).toBe(getCurrentTenantDatabaseScope()?.db);
       return true;
     });
+  });
+
+  it('refuses an adopted branch even when legacy SDK-home sharing is valid', async () => {
+    vi.mocked(BranchWorkspaceRepository.prototype.read).mockResolvedValue({
+      state: { schema: 1 } as never,
+      now: 1000,
+    });
+    await expect(
+      runWithTenantContext('tenant-x', () =>
+        prepareSessionForExecutorStart(
+          { run: vi.fn() } as never,
+          createSessionsService() as never,
+          session.session_id,
+          {} as never
+        )
+      )
+    ).rejects.toThrow('awaited workspace');
   });
 
   it('opens one short tenant unit of work from identity-only context', async () => {

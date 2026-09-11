@@ -4,12 +4,20 @@ import {
   isTenantAgenticToolEnabled,
 } from '@agor/core/config';
 import {
+  BranchWorkspaceRepository,
   getCurrentTenantId,
   runWithTenantDatabaseScope,
   type TenantScopeAwareDatabase,
   type TenantScopedDatabase,
 } from '@agor/core/db';
-import type { AgenticToolName, AuthenticatedParams, Session } from '@agor/core/types';
+import type {
+  AgenticToolName,
+  AuthenticatedParams,
+  BranchID,
+  Session,
+  TenantID,
+} from '@agor/core/types';
+import { assertNativeWorkspaceAdmission } from '../branch-workspace-admission.js';
 import type { SessionsServiceImpl } from '../declarations.js';
 import { requireActiveAgenticTool } from '../utils/agentic-tool-runtime.js';
 import {
@@ -69,6 +77,18 @@ export async function prepareSessionForExecutorStart(
     // irrelevant and must not prevent legitimate branch sharing.
     if (unixIdentityGuard && (session.sdk_home_scope ?? 'execution_home') === 'execution_home') {
       await assertSessionUnixIdentityUnchanged(session, unixIdentityGuard.loadCreator(tenantDb));
+    }
+    if (session.branch_id) {
+      const workspace = await new BranchWorkspaceRepository(tenantDb, {
+        tenantId: tenantId as TenantID,
+        branchId: session.branch_id as BranchID,
+      }).read();
+      assertNativeWorkspaceAdmission({
+        config: {},
+        tenantId: tenantId as TenantID,
+        branchId: session.branch_id,
+        state: workspace.state,
+      });
     }
     const agenticTool = requireActiveAgenticTool(session.agentic_tool);
     if (!isDeploymentAgenticToolAvailable(agenticTool, deploymentPolicy)) {
