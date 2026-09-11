@@ -54,18 +54,18 @@
     "test:ha:docker": "node --test docker/ha/dev-launcher.test.mjs && node scripts/test-daemon-ha.mjs && node scripts/test-ha-mcp-branch-create.mjs"
   },
   "devDependencies": {
-    "@biomejs/biome": "2.5.7",
+    "@biomejs/biome": "2.5.12",
     "@google-analytics/admin": "^9.2.0",
     "husky": "^9.1.7",
     "knip": "^5.85.0",
-    "lint-staged": "^17.2.0",
+    "lint-staged": "^17.5.0",
     "postgres": "^3.4.9",
     "prettier": "^3.9.6",
-    "rollup": "4.62.4",
+    "rollup": "4.63.1",
     "rollup-plugin-dts": "^6.5.1",
     "socket.io-client": "^4.8.3",
-    "tsx": "4.23.11",
-    "turbo": "^2.10.9",
+    "tsx": "4.23.13",
+    "turbo": "^2.10.12",
     "typescript": "^6.0.3",
     "vitest": "^4.1.10"
   },
