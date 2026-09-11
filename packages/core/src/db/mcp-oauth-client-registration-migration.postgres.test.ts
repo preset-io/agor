@@ -205,6 +205,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
           '0102_mcp_oauth_client_registrations',
           '0103_oauth_authority_watermark_reconciliation',
           '0104_mcp_slack_recovery_due',
+          '0105_mcp_oauth_grant_attribution',
         ],
         dbAheadOfBinary: false,
       });
@@ -321,9 +322,10 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       });
 
       // This fixture reuses the database upgraded by the preceding test. Remove
-      // the later Slack recovery addition as well as rewinding the ledger so
-      // the simulated old head has its actual schema, not a future column.
+      // later Slack recovery and consent-attribution additions as well as
+      // rewinding the ledger: the old head did not have these future columns.
       await executeRaw(db, sql`ALTER TABLE tasks DROP COLUMN mcp_slack_recovery_due_at`);
+      await executeRaw(db, sql`ALTER TABLE user_mcp_oauth_tokens DROP COLUMN granted_by_user_id`);
 
       // Reproduce the previous reviewed head's timestamp-only final watermark.
       // Its authority schema is identical; the rebased bootstrap must not try
@@ -343,6 +345,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
           '0102_mcp_oauth_client_registrations',
           '0103_oauth_authority_watermark_reconciliation',
           '0104_mcp_slack_recovery_due',
+          '0105_mcp_oauth_grant_attribution',
         ],
         dbAheadOfBinary: false,
       });

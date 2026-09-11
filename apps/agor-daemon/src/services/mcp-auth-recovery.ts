@@ -11,7 +11,12 @@ import {
   MissingTokenEndpointError,
   OAuthRefreshExchangeError,
 } from '@agor/core/tools/mcp/oauth-refresh';
-import type { MCPAuthRecovery, MCPServerID } from '@agor/core/types';
+import type {
+  MCPAuthRecovery,
+  MCPOAuthEffectivePolicy,
+  MCPOAuthFailureReason,
+  MCPServerID,
+} from '@agor/core/types';
 import { MCPClientCredentialsConfigurationError, MCPOAuthRefreshBusyError } from './mcp-oauth-use';
 
 function target(mcpServerId?: string) {
@@ -55,6 +60,21 @@ function safeOwnDataValue(value: unknown, field: string): unknown {
   }
 }
 
+const OAUTH_FAILURE_GUIDANCE: Record<MCPOAuthFailureReason, string> = {
+  dcr_disabled: 'Dynamic Client Registration is explicitly disabled.',
+  registration_endpoint_missing: 'No usable registration endpoint was advertised.',
+  protected_resource_mismatch:
+    'The protected-resource metadata does not match the saved MCP resource URL. Verify the MCP URL and provider resource metadata; no weaker policy is retried automatically.',
+  issuer_mismatch:
+    'The OAuth issuer does not match the expected issuer binding. Verify the provider issuer configuration and saved OAuth endpoints before reconnecting.',
+  pkce_required:
+    'The provider metadata does not satisfy the effective policy’s PKCE S256 requirement. Ask the provider to verify its advertised PKCE support.',
+  profile_rejected:
+    'The OAuth metadata does not satisfy the effective compatibility profile. Verify the provider authorization/token endpoints and callback issuer support; no weaker policy is retried automatically.',
+  endpoint_override_mismatch:
+    'A saved OAuth endpoint override does not match the provider metadata. Review the saved authorization and token endpoints.',
+};
+
 /**
  * Convert internal/provider failures into the closed public recovery contract.
  * Provider exception text is deliberately not inspected: even local logs are
@@ -62,7 +82,11 @@ function safeOwnDataValue(value: unknown, field: string): unknown {
  */
 export function classifyMCPAuthRecovery(
   error: unknown,
-  options: { mcpServerId?: string; redirectUri?: string } = {}
+  options: {
+    mcpServerId?: string;
+    redirectUri?: string;
+    oauthPolicy?: MCPOAuthEffectivePolicy;
+  } = {}
 ): MCPAuthRecovery {
   const common = target(options.mcpServerId);
 
@@ -112,29 +136,52 @@ export function classifyMCPAuthRecovery(
     };
   }
 
+  // Only configuration/provider recovery may carry policy. Permission and
+  // stale-configuration failures above deliberately disclose no snapshot.
+  const policy = options.oauthPolicy ? { oauth_policy: options.oauthPolicy } : {};
+
   if (safeInstanceOf(error, OAuthDCRFailure)) {
     const diagnostic = safeOwnDataValue(error, 'diagnostic');
     const missingEndpoint = safeOwnDataValue(diagnostic, 'stage') === 'dcr_endpoint_discovery';
     return {
       ...common,
+      ...policy,
+      ...(missingEndpoint ? { failure_reason: 'registration_endpoint_missing' as const } : {}),
       category: missingEndpoint ? 'client_registration_required' : 'client_registration_failed',
       action: 'configure_client',
       message: missingEndpoint
-        ? 'This provider requires a pre-registered OAuth client. Save a Client ID and Client Secret on this MCP server, then retry.'
-        : 'The provider could not register an OAuth client automatically. Save a pre-registered Client ID and Client Secret on this MCP server, verify the provider registration, then retry.',
+        ? 'No usable registration endpoint was advertised for this OAuth flow. Save a pre-registered Client ID (and Client Secret if required), then retry.'
+        : 'The provider could not register an OAuth client automatically. Save a pre-registered Client ID (and Client Secret if required), verify the provider registration, then retry.',
       ...(options.redirectUri ? { redirect_uri: options.redirectUri } : {}),
     };
   }
 
   if (safeInstanceOf(error, OAuthConfigurationError)) {
     const failureCode = safeOwnDataValue(error, 'failureCode');
+    const detail = safeOwnDataValue(error, 'failureReason');
+    const reason: MCPOAuthFailureReason | undefined =
+      failureCode === 'client_registration_required' && detail === 'dcr_disabled'
+        ? 'dcr_disabled'
+        : failureCode === 'metadata_incompatible'
+          ? detail === 'protected_resource_mismatch'
+            ? detail
+            : 'profile_rejected'
+          : failureCode === 'issuer_mismatch' ||
+              failureCode === 'pkce_required' ||
+              failureCode === 'endpoint_override_mismatch'
+            ? failureCode
+            : undefined;
     if (failureCode === 'client_registration_required') {
       return {
         ...common,
+        ...policy,
+        ...(reason ? { failure_reason: reason } : {}),
         category: 'client_registration_required',
         action: 'configure_client',
         message:
-          'This provider requires a pre-registered OAuth client. Save a Client ID and Client Secret on this MCP server, then retry.',
+          reason === 'dcr_disabled'
+            ? 'Dynamic Client Registration is explicitly disabled. Save a pre-registered Client ID (and Client Secret if required). Inspection and retry do not enable DCR.'
+            : 'This OAuth configuration requires a pre-registered Client ID (and Client Secret if required). Save the client configuration, then retry.',
         ...(options.redirectUri ? { redirect_uri: options.redirectUri } : {}),
       };
     }
@@ -147,13 +194,17 @@ export function classifyMCPAuthRecovery(
     return incompatible
       ? {
           ...common,
+          ...policy,
+          ...(reason ? { failure_reason: reason } : {}),
           category: 'metadata_incompatible',
           action: 'review_compatibility',
-          message:
-            'The provider OAuth metadata does not match this MCP server configuration. Verify the saved server URL and OAuth endpoints; use legacy compatibility only for a provider that requires it.',
+          message: reason
+            ? OAUTH_FAILURE_GUIDANCE[reason]
+            : OAUTH_FAILURE_GUIDANCE.profile_rejected,
         }
       : {
           ...common,
+          ...policy,
           category: 'metadata_unavailable',
           action: 'save_and_retry',
           message:
@@ -205,6 +256,7 @@ export function classifyMCPAuthRecovery(
   const external = sanitizeMCPExternalError(error, { stage: 'oauth' });
   return {
     ...common,
+    ...policy,
     category: external.category,
     action: external.action,
     message: external.message,
@@ -218,6 +270,19 @@ export function recoveryForOAuthAttemptFailure(
 ): MCPAuthRecovery | undefined {
   if (!failureCode) return undefined;
   const common = target(mcpServerId);
+  if (failureCode === 'callback_issuer_mismatch' || failureCode === 'callback_issuer_missing') {
+    return {
+      ...common,
+      category: 'metadata_incompatible',
+      action: 'review_compatibility',
+      failure_reason:
+        failureCode === 'callback_issuer_mismatch' ? 'issuer_mismatch' : 'profile_rejected',
+      message:
+        failureCode === 'callback_issuer_mismatch'
+          ? OAUTH_FAILURE_GUIDANCE.issuer_mismatch
+          : 'The OAuth callback omitted the required issuer parameter. Ask the provider to verify callback issuer support before reconnecting.',
+    };
+  }
   if (failureCode === 'authorization_denied') {
     return {
       ...common,

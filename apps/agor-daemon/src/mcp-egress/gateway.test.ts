@@ -107,6 +107,7 @@ interface HarnessOptions {
   }) => Promise<{ headers: Record<string, { authorization?: string; error?: string }> }>;
   capabilityServerTransform?: (server: MCPServer) => MCPServer;
   initialMcpRecovery?: boolean;
+  separateOAuthConsenter?: boolean;
 }
 
 async function harness(options: HarnessOptions) {
@@ -222,24 +223,35 @@ async function harness(options: HarnessOptions) {
     server.auth?.type === 'oauth' && (server.auth.oauth_mode ?? 'per_user') === 'shared'
       ? null
       : (principal.user_id as UserID);
+  const oauthConsenter = options.separateOAuthConsenter
+    ? await new UsersRepository(rawDb).create({
+        email: `${randomUUID()}@example.test`,
+        role: 'admin',
+      })
+    : principal;
   if (server.auth?.type === 'oauth') {
-    await new UserMCPOAuthTokenRepository(rawDb).saveToken(oauthTokenUserId, server.mcp_server_id, {
-      accessToken: options.oauthAccessToken ?? 'oauth-access-token-initial',
-      refreshToken: options.oauthRefreshToken,
-      expiresAt: options.oauthExpiresAt,
-      clientId: server.auth.oauth_client_id ?? 'gateway-test-oauth-client',
-      grantBinding: {
-        generation: 1,
-        version: 4,
-        fingerprint: 'gateway-test-binding-v1',
-        metadataUri: 'https://auth.example.test/.well-known/oauth-protected-resource',
-        resourceUri: server.url ?? 'https://provider.example.test/mcp',
-        issuer: 'https://auth.example.test',
-        authorizationEndpoint: 'https://auth.example.test/authorize',
-        tokenEndpoint: server.auth.oauth_token_url ?? 'https://auth.example.test/token',
-        redirectUri: 'https://daemon.example.test/mcp-servers/oauth-callback',
+    await new UserMCPOAuthTokenRepository(rawDb).saveToken(
+      oauthTokenUserId,
+      server.mcp_server_id,
+      {
+        accessToken: options.oauthAccessToken ?? 'oauth-access-token-initial',
+        refreshToken: options.oauthRefreshToken,
+        expiresAt: options.oauthExpiresAt,
+        clientId: server.auth.oauth_client_id ?? 'gateway-test-oauth-client',
+        grantBinding: {
+          generation: 1,
+          version: 4,
+          fingerprint: 'gateway-test-binding-v1',
+          metadataUri: 'https://auth.example.test/.well-known/oauth-protected-resource',
+          resourceUri: server.url ?? 'https://provider.example.test/mcp',
+          issuer: 'https://auth.example.test',
+          authorizationEndpoint: 'https://auth.example.test/authorize',
+          tokenEndpoint: server.auth.oauth_token_url ?? 'https://auth.example.test/token',
+          redirectUri: 'https://daemon.example.test/mcp-servers/oauth-callback',
+        },
       },
-    });
+      oauthConsenter.user_id
+    );
     grantIdentity = mcpOAuthGrantIdentity(
       await new UserMCPOAuthTokenRepository(rawDb).getToken(oauthTokenUserId, server.mcp_server_id)
     );
@@ -372,6 +384,7 @@ async function harness(options: HarnessOptions) {
     capability,
     jwtSecret,
     oauthTokenUserId,
+    oauthConsenter,
     request,
     routeRequest,
   };
@@ -380,6 +393,25 @@ async function harness(options: HarnessOptions) {
 const initialize = JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize' });
 
 describe('authoritative MCP gateway real transport', () => {
+  it('rejects a new hop after the shared consenter is deleted while the task caller remains active', async () => {
+    let providerRequests = 0;
+    const provider = await listen((_request, response) => {
+      providerRequests += 1;
+      response.setHeader('content-type', 'application/json');
+      response.end(JSON.stringify({ jsonrpc: '2.0', id: 1, result: {} }));
+    });
+    const h = await harness({
+      server: { transport: 'http', url: provider, auth: { type: 'oauth', oauth_mode: 'shared' } },
+      separateOAuthConsenter: true,
+    });
+    await expect(h.request('POST', initialize)).resolves.toBeDefined();
+    expect(providerRequests).toBe(1);
+    await new UsersRepository(h.rawDb).delete(h.oauthConsenter.user_id);
+    await expect(h.request('POST', initialize)).rejects.toMatchObject({ code: 'grant_changed' });
+    expect(providerRequests).toBe(1);
+    expect(await new UsersRepository(h.rawDb).findById(h.principal.user_id)).not.toBeNull();
+  });
+
   it('returns the fixed JSON-RPC failure when request headers are malformed', async () => {
     const forward = vi.fn();
     const recordRejectedRequest = vi.fn();

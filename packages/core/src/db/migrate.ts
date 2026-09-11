@@ -133,6 +133,19 @@ export function createMigrationImpactRegistry(
 
 const MIGRATION_IMPACT_REGISTRY = createMigrationImpactRegistry([
   [
+    '0105_mcp_oauth_grant_attribution',
+    {
+      requiresOfflineCutover: true,
+      impact: defineMigrationImpact({
+        classification: 'protocol',
+        userAction: 'required',
+        rollbackCompatibility: 'incompatible',
+        summary:
+          'Retires unattributed shared MCP OAuth grants; current admins must consent again. Preserves per-user grants. Stop all daemons before migration; older writers cannot supply required attribution.',
+      }),
+    },
+  ],
+  [
     '0101_environment_command_discovery',
     {
       requiresOfflineCutover: false,

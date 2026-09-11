@@ -91,6 +91,61 @@ describe('MCP auth recovery contract', () => {
     expect(JSON.stringify(recovery)).not.toContain('SENTINEL');
   });
 
+  it.each([
+    [
+      new OAuthConfigurationError('client_registration_required', 'SECRET', 'dcr_disabled'),
+      'dcr_disabled',
+    ],
+    [
+      new OAuthDCRFailure('SECRET', { stage: 'dcr_endpoint_discovery' }),
+      'registration_endpoint_missing',
+    ],
+    [
+      new OAuthConfigurationError('metadata_incompatible', 'SECRET', 'protected_resource_mismatch'),
+      'protected_resource_mismatch',
+    ],
+    [new OAuthConfigurationError('issuer_mismatch', 'SECRET'), 'issuer_mismatch'],
+    [new OAuthConfigurationError('pkce_required', 'SECRET'), 'pkce_required'],
+    [new OAuthConfigurationError('metadata_incompatible', 'SECRET'), 'profile_rejected'],
+    [
+      new OAuthConfigurationError('endpoint_override_mismatch', 'SECRET'),
+      'endpoint_override_mismatch',
+    ],
+  ] as const)('returns closed reason and exact policy for %s', (error, reason) => {
+    const oauthPolicy = {
+      effective_mode: 'strict',
+      effective_dcr_mode: 'disabled',
+      dcr_mode_source: 'explicit',
+    } as const;
+    const recovery = classifyMCPAuthRecovery(error, { oauthPolicy });
+    expect(recovery).toMatchObject({ failure_reason: reason, oauth_policy: oauthPolicy });
+    expect(JSON.stringify(recovery)).not.toContain('SECRET');
+    expect(recovery.message).not.toContain('use legacy');
+  });
+
+  it('does not infer a reason from provider prose or disclose policy after authority loss', () => {
+    const oauthPolicy = {
+      effective_mode: 'legacy',
+      effective_dcr_mode: 'disabled',
+      dcr_mode_source: 'explicit',
+    } as const;
+    expect(
+      classifyMCPAuthRecovery(new Error('issuer_mismatch secret=abc')).failure_reason
+    ).toBeUndefined();
+    expect(
+      classifyMCPAuthRecovery(new Forbidden('private'), { oauthPolicy }).oauth_policy
+    ).toBeUndefined();
+    expect(
+      classifyMCPAuthRecovery(new Conflict('stale'), { oauthPolicy }).oauth_policy
+    ).toBeUndefined();
+    expect(recoveryForOAuthAttemptFailure('callback_issuer_mismatch')).toMatchObject({
+      failure_reason: 'issuer_mismatch',
+    });
+    expect(recoveryForOAuthAttemptFailure('callback_issuer_missing')).toMatchObject({
+      failure_reason: 'profile_rejected',
+    });
+  });
+
   it('fails closed for hostile proxies without invoking name/code accessors', () => {
     const sentinel = 'SENTINEL_HOSTILE_RECOVERY_PROXY';
     const getter = vi.fn(() => {

@@ -13,6 +13,11 @@ describe('McpLogo', () => {
     expect(el).not.toHaveClass('anticon');
   });
 
+  it('does not treat inherited object names as bundled assets', () => {
+    render(<McpLogo id="constructor" name="Unknown provider" />);
+    expect(screen.getByLabelText('Unknown provider logo')).toHaveClass('anticon');
+  });
+
   it('falls back to a neutral AntD icon when the brand path is missing', () => {
     render(<McpLogo id="amplitude" name="Amplitude" />);
     // No brand path bundled for Amplitude → the ApiOutlined fallback carries the label.

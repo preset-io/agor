@@ -1,3 +1,4 @@
+import { MCP_HEADER_REDACTED_SENTINEL } from '@agor/core/tools/mcp/http-headers';
 import type { Branch, MCPCatalogEntry, SessionID } from '@agor/core/types';
 import type { AgorClient, User } from '@agor-live/client';
 import { sessionPath } from '@agor-live/client';
@@ -40,6 +41,7 @@ const ENTRY: MCPCatalogEntry = {
 };
 
 function buildClient() {
+  const catalogRead = vi.fn(async () => ({ total: 1, limit: 1, skip: 0, data: [ENTRY] }));
   const connect = vi.fn(async () => ({
     mcp_server: {
       mcp_server_id: 'server-1',
@@ -66,7 +68,7 @@ function buildClient() {
     service: vi.fn((path: string) => {
       if (path === 'mcp-catalog') {
         return {
-          find: vi.fn(async () => ({ total: 1, limit: 1, skip: 0, data: [ENTRY] })),
+          find: catalogRead,
         };
       }
       if (path === 'mcp-catalog/readiness') {
@@ -82,7 +84,14 @@ function buildClient() {
       throw new Error(`Unexpected service ${path}`);
     }),
   } as unknown as AgorClient;
-  return { client, connect, startSession, getPrimaryTeammate, getPrimaryTeammateCandidates };
+  return {
+    client,
+    catalogRead,
+    connect,
+    startSession,
+    getPrimaryTeammate,
+    getPrimaryTeammateCandidates,
+  };
 }
 
 async function openDrawer() {
@@ -316,4 +325,206 @@ it('can connect again after closing a drawer with a pending installation', async
   fireEvent.click(retry);
   await reopened.findByText('Added to My Servers');
   expect(api.connect).toHaveBeenCalledTimes(2);
+});
+
+describe('explicit onboarding context', () => {
+  it('installs without teammate reads, sessions, navigation or prompt staging and returns locally', async () => {
+    const api = buildClient();
+    const onConnected = vi.fn();
+    const onClose = vi.fn();
+    render(
+      <MemoryRouter>
+        <CatalogTab
+          client={api.client}
+          connected
+          connecting={false}
+          authGeneration={1}
+          currentUser={USER}
+          context={{ mode: 'onboarding', entryName: ENTRY.name, onConnected, onClose }}
+        />
+      </MemoryRouter>
+    );
+    const dialog = within(await screen.findByRole('dialog', { name: /DeepWiki/ }));
+    await dialog.findByText('No account expected');
+    fireEvent.click(
+      dialog.getByRole('checkbox', { name: 'I understand what this server can access' })
+    );
+    fireEvent.click(dialog.getByRole('button', { name: 'Connect' }));
+    await dialog.findByText('Connected and ready');
+    expect(api.connect).toHaveBeenCalledWith({
+      catalog_key: ENTRY.name,
+      acknowledged_disclosure: ENTRY.permission_disclosure,
+    });
+    expect(onConnected).toHaveBeenCalledExactlyOnceWith('server-1');
+    expect(api.getPrimaryTeammateCandidates).not.toHaveBeenCalled();
+    expect(api.getPrimaryTeammate).not.toHaveBeenCalled();
+    expect(api.startSession).not.toHaveBeenCalled();
+    expect(mockNavigate).not.toHaveBeenCalled();
+    expect(consumePromptDraftSeed(USER.user_id, SESSION_ID)).toBe('');
+    expect(dialog.queryByRole('combobox')).not.toBeInTheDocument();
+    expect(dialog.queryByRole('button', { name: /Start.*session/ })).not.toBeInTheDocument();
+    expect(dialog.queryByText(/new session|try.*server|starter prompt/i)).not.toBeInTheDocument();
+    fireEvent.click(dialog.getByRole('button', { name: 'Return to onboarding' }));
+    expect(onClose).toHaveBeenCalledOnce();
+  });
+
+  it('redacts failed installation details and retries locally without session side effects', async () => {
+    const api = buildClient();
+    api.connect.mockRejectedValueOnce(new Error('secret-test-value echoed by a failed provider'));
+    const onConnected = vi.fn();
+    render(
+      <MemoryRouter>
+        <CatalogTab
+          client={api.client}
+          connected
+          connecting={false}
+          authGeneration={1}
+          currentUser={USER}
+          context={{ mode: 'onboarding', entryName: ENTRY.name, onConnected, onClose: vi.fn() }}
+        />
+      </MemoryRouter>
+    );
+    const dialog = within(await screen.findByRole('dialog', { name: /DeepWiki/ }));
+    await dialog.findByText('No account expected');
+    fireEvent.click(
+      dialog.getByRole('checkbox', { name: 'I understand what this server can access' })
+    );
+    fireEvent.click(dialog.getByRole('button', { name: 'Connect' }));
+    await dialog.findByText('Could not connect this server. Check your credentials and try again.');
+    expect(screen.queryByText(/secret-test-value/)).not.toBeInTheDocument();
+    fireEvent.click(dialog.getByRole('button', { name: 'Connect' }));
+    await dialog.findByText('Connected and ready');
+    expect(api.connect).toHaveBeenCalledTimes(2);
+    expect(api.startSession).not.toHaveBeenCalled();
+    expect(api.getPrimaryTeammateCandidates).not.toHaveBeenCalled();
+    expect(onConnected).toHaveBeenCalledExactlyOnceWith('server-1');
+  });
+});
+
+it.each(['missing', 'error'] as const)(
+  'keeps the onboarding drawer mounted across %s Catalog retry',
+  async (initial) => {
+    const api = buildClient();
+    if (initial === 'missing')
+      api.catalogRead.mockResolvedValueOnce({ total: 0, limit: 1, skip: 0, data: [] });
+    else api.catalogRead.mockRejectedValueOnce(new Error('fixture catalog unavailable'));
+    render(
+      <MemoryRouter>
+        <CatalogTab
+          client={api.client}
+          connected
+          connecting={false}
+          authGeneration={1}
+          currentUser={USER}
+          context={{
+            mode: 'onboarding',
+            entryName: ENTRY.name,
+            onConnected: vi.fn(),
+            onClose: vi.fn(),
+          }}
+        />
+      </MemoryRouter>
+    );
+    const dialog = await screen.findByRole('dialog', { name: 'Catalog' });
+    const root = dialog.closest('.ant-drawer');
+    const retry = await within(dialog).findByRole('button', { name: 'Retry' });
+    fireEvent.click(retry);
+    await screen.findByText(ENTRY.benefit);
+    expect(document.querySelector('.ant-drawer')).toBe(root);
+    expect(document.querySelectorAll('.ant-drawer')).toHaveLength(1);
+    expect(api.catalogRead).toHaveBeenCalledTimes(2);
+    expect(api.connect).not.toHaveBeenCalled();
+    expect(api.startSession).not.toHaveBeenCalled();
+    expect(mockNavigate).not.toHaveBeenCalled();
+  }
+);
+
+describe.each(['catalog', 'onboarding'] as const)('fresh Connect OAuth authority in %s', (mode) => {
+  it.each([
+    {
+      name: 'stale positive badge, no live grant',
+      cached: true,
+      live: false,
+      expires: undefined,
+      ready: false,
+    },
+    {
+      name: 'absent badge, live expiring grant',
+      cached: false,
+      live: true,
+      expires: Date.now() + 3600000,
+      ready: true,
+    },
+    {
+      name: 'absent badge, live non-expiring grant',
+      cached: false,
+      live: true,
+      expires: undefined,
+      ready: true,
+    },
+    {
+      name: 'stale positive badge, expired grant',
+      cached: true,
+      live: true,
+      expires: 1,
+      ready: false,
+    },
+    {
+      name: 'stale positive badge, invalid expiry',
+      cached: true,
+      live: true,
+      expires: Number.NaN,
+      ready: false,
+    },
+  ])('$name', async ({ cached, live, expires, ready }) => {
+    const api = buildClient();
+    const response = await api.connect();
+    api.connect.mockClear();
+    const auth = {
+      type: 'oauth',
+      ...(live ? { oauth_access_token: MCP_HEADER_REDACTED_SENTINEL } : {}),
+      ...(expires !== undefined ? { oauth_token_expires_at: expires } : {}),
+    };
+    api.connect.mockResolvedValue({ ...response, mcp_server: { ...response.mcp_server, auth } });
+    agorStore.setState({ userAuthenticatedMcpServerIds: new Set(cached ? ['server-1'] : []) });
+    const onConnected = vi.fn();
+    render(
+      <MemoryRouter>
+        <CatalogTab
+          client={api.client}
+          connected
+          connecting={false}
+          authGeneration={1}
+          currentUser={USER}
+          context={
+            mode === 'onboarding'
+              ? { mode, entryName: ENTRY.name, onConnected, onClose: vi.fn() }
+              : undefined
+          }
+        />
+      </MemoryRouter>
+    );
+    if (mode === 'catalog') await openDrawer();
+    const dialog = within(await screen.findByRole('dialog', { name: /DeepWiki/ }));
+    await dialog.findByText('No account expected');
+    fireEvent.click(
+      dialog.getByRole('checkbox', { name: 'I understand what this server can access' })
+    );
+    fireEvent.click(dialog.getByRole('button', { name: 'Connect' }));
+    if (ready) {
+      await dialog.findByText(
+        mode === 'onboarding' ? 'Connected and ready' : 'Added to My Servers'
+      );
+      expect(dialog.queryByRole('button', { name: /Continue sign-in/ })).not.toBeInTheDocument();
+    } else {
+      await dialog.findByRole('button', { name: /Continue sign-in/ });
+      expect(dialog.queryByText('Connected and ready')).not.toBeInTheDocument();
+    }
+    expect(onConnected).toHaveBeenCalledTimes(mode === 'onboarding' && ready ? 1 : 0);
+    expect(api.client.service).not.toHaveBeenCalledWith('mcp-servers/oauth-start');
+    expect(api.getPrimaryTeammateCandidates).not.toHaveBeenCalled();
+    expect(api.startSession).not.toHaveBeenCalled();
+    expect(mockNavigate).not.toHaveBeenCalled();
+    expect(consumePromptDraftSeed(USER.user_id, SESSION_ID)).toBe('');
+  });
 });

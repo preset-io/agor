@@ -31,6 +31,7 @@ const oauthFixture = vi.hoisted(() => ({
   exchangeFailure: undefined as undefined | 'invalid_client',
   afterDcrResolved: undefined as undefined | ((registrationId: string) => Promise<void>),
   beforeGrantLock: undefined as undefined | (() => Promise<void>),
+  beforeExchangeReturn: undefined as undefined | (() => Promise<void>),
 }));
 
 // These tests stop before MCP transport. Avoid loading the SDK's published
@@ -147,6 +148,7 @@ vi.mock('@agor/core/tools/mcp/oauth-mcp-transport', async (importOriginal) => {
             true
           );
         }
+        await oauthFixture.beforeExchangeReturn?.();
         return {
           access_token: `fixture-access-token-${oauthFixture.exchanges}`,
           refresh_token: 'fixture-refresh-token',
@@ -514,6 +516,194 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
             sealed_material: null,
           }),
         ]);
+      });
+    });
+
+    async function sharedConsentFixture() {
+      return runWithTenantDatabaseScope(replicaA.db, tenantId, async (scoped) => {
+        const a = await new UsersRepository(scoped).create({
+          email: `${crypto.randomUUID()}@example.test`,
+          role: 'admin',
+        });
+        const b = await new UsersRepository(scoped).create({
+          email: `${crypto.randomUUID()}@example.test`,
+          role: 'admin',
+        });
+        const server = await new MCPServerRepository(scoped).create({
+          name: `shared-consent-${crypto.randomUUID()}`,
+          transport: 'http',
+          url: 'https://mcp.provider.example.test/mcp',
+          scope: 'global',
+          enabled: true,
+          source: 'user',
+          owner_user_id: user.user_id,
+          auth: {
+            type: 'oauth',
+            oauth_mode: 'shared',
+            oauth_client_id: 'configured-shared-client',
+          },
+        });
+        return { a, b, id: server.mcp_server_id };
+      });
+    }
+
+    it('keeps a shared PostgreSQL client-credentials test nonpersistent and cache-free', async () => {
+      const oauth = await import('@agor/core/tools/mcp/oauth-auth');
+      const discovery = await import('@agor/core/tools/mcp/oauth-mcp-transport');
+      const f = await sharedConsentFixture();
+      await runWithTenantDatabaseScope(replicaA.db, tenantId, (scoped) =>
+        new MCPServerRepository(scoped).update(f.id, {
+          auth: {
+            type: 'oauth',
+            oauth_mode: 'shared',
+            oauth_client_id: 'test-client',
+            oauth_client_secret: 'test-secret',
+            oauth_token_url: 'https://provider.example.test/token',
+          },
+        })
+      );
+      const discover = vi.spyOn(discovery, 'resolveMCPOAuthDiscovery').mockResolvedValueOnce(null);
+      const exchange = vi
+        .spyOn(oauth, 'fetchOAuthToken')
+        .mockResolvedValueOnce({ token: 'probe-only-token' });
+      try {
+        const tested = await replicaA.app.service('mcp-servers/test-oauth').create(
+          {
+            mcp_server_id: f.id,
+            mcp_url: 'https://mcp.provider.example.test/mcp',
+            granted_by_user_id: user.user_id,
+          },
+          params(f.b)
+        );
+        expect(tested).toMatchObject({
+          success: true,
+          oauthType: 'client_credentials',
+          tokenValid: true,
+        });
+        expect(exchange).toHaveBeenCalledWith(expect.objectContaining({ cache: false }), true);
+        await runWithTenantDatabaseScope(replicaA.db, tenantId, async (scoped) => {
+          expect(
+            await new UserMCPOAuthTokenRepository(scoped, masterSecret).getToken(null, f.id)
+          ).toBeNull();
+        });
+      } finally {
+        discover.mockRestore();
+        exchange.mockRestore();
+      }
+    });
+
+    it.each(['provider-exchange', 'persistence'] as const)(
+      'fences shared callback hard deletion during %s across replicas',
+      async (phase) => {
+        const f = await sharedConsentFixture();
+        const started = (await replicaA.app.service('mcp-servers/oauth-start').create(
+          {
+            mcp_server_id: f.id,
+            granted_by_user_id: f.b.user_id,
+          },
+          params(f.a)
+        )) as { authorizationUrl: string };
+        const reached = Promise.withResolvers<void>();
+        const release = Promise.withResolvers<void>();
+        const pause = async () => {
+          reached.resolve();
+          await release.promise;
+        };
+        const originalSave = UserMCPOAuthTokenRepository.prototype.saveToken;
+        const spy =
+          phase === 'persistence'
+            ? vi
+                .spyOn(UserMCPOAuthTokenRepository.prototype, 'saveToken')
+                .mockImplementation(async function (this: UserMCPOAuthTokenRepository, ...args) {
+                  await pause();
+                  return originalSave.apply(this, args);
+                })
+            : undefined;
+        if (phase === 'provider-exchange') oauthFixture.beforeExchangeReturn = pause;
+        const completion = replicaB.callback({
+          code: 'code',
+          state: new URL(started.authorizationUrl).searchParams.get('state')!,
+          iss: 'https://provider.example.test',
+        });
+        try {
+          await reached.promise;
+          await runWithTenantDatabaseScope(replicaA.db, tenantId, (scoped) =>
+            new UsersRepository(scoped).delete(f.a.user_id)
+          );
+        } finally {
+          release.resolve();
+          spy?.mockRestore();
+          oauthFixture.beforeExchangeReturn = undefined;
+        }
+        expect((await completion).status).not.toBe(200);
+        await runWithTenantDatabaseScope(replicaA.db, tenantId, async (scoped) => {
+          expect(
+            await new UserMCPOAuthTokenRepository(scoped, masterSecret).getToken(null, f.id)
+          ).toBeNull();
+          expect(
+            rawRows(
+              await executeRaw(
+                scoped,
+                sql`SELECT attempt_id FROM mcp_oauth_pending_flows WHERE user_id = ${f.a.user_id}`
+              )
+            )
+          ).toEqual([]);
+          const status = (await replicaA.app
+            .service('mcp-servers/oauth-status')
+            .find(params(f.b))) as { authenticated_server_ids: string[] };
+          expect(status.authenticated_server_ids).not.toContain(f.id);
+        });
+      }
+    );
+
+    it('attributes browser and manual shared consent to the caller, never the request or MCP owner', async () => {
+      const f = await sharedConsentFixture();
+      for (const consenter of [f.a, f.b]) {
+        const started = (await replicaA.app.service('mcp-servers/oauth-start').create(
+          {
+            mcp_server_id: f.id,
+            granted_by_user_id: user.user_id,
+          },
+          params(consenter)
+        )) as { authorizationUrl: string };
+        const query = {
+          code: 'code',
+          state: new URL(started.authorizationUrl).searchParams.get('state')!,
+          iss: 'https://provider.example.test',
+        };
+        if (consenter === f.a) {
+          expect((await replicaB.callback(query)).status).toBe(200);
+        } else {
+          await expect(
+            replicaB.app.service('mcp-servers/oauth-complete').create(
+              {
+                callback_url: `https://agor.example.test/mcp-servers/oauth-callback?${new URLSearchParams(query)}`,
+                granted_by_user_id: user.user_id,
+              },
+              params(consenter)
+            )
+          ).resolves.toMatchObject({ success: true, tokenObtained: true });
+        }
+        await runWithTenantDatabaseScope(replicaA.db, tenantId, async (scoped) => {
+          expect(
+            await new UserMCPOAuthTokenRepository(scoped, masterSecret).getToken(null, f.id)
+          ).toMatchObject({ granted_by_user_id: consenter.user_id });
+        });
+      }
+      await runWithTenantDatabaseScope(replicaA.db, tenantId, async (scoped) => {
+        await new UsersRepository(scoped).delete(f.a.user_id);
+        expect(
+          await new UserMCPOAuthTokenRepository(scoped, masterSecret).getToken(null, f.id)
+        ).toMatchObject({ granted_by_user_id: f.b.user_id });
+        const before = (await replicaA.app
+          .service('mcp-servers/oauth-status')
+          .find(params(user))) as { authenticated_server_ids: string[] };
+        expect(before.authenticated_server_ids).toContain(f.id);
+        await new UsersRepository(scoped).delete(f.b.user_id);
+        const after = (await replicaA.app
+          .service('mcp-servers/oauth-status')
+          .find(params(user))) as { authenticated_server_ids: string[] };
+        expect(after.authenticated_server_ids).not.toContain(f.id);
       });
     });
 

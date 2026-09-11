@@ -81,6 +81,8 @@ export const MCP_OAUTH_DCR_MODES = ['disabled', 'advertised', 'fallback'] as con
 
 export type MCPOAuthDCRMode = (typeof MCP_OAUTH_DCR_MODES)[number];
 
+export const MCP_OAUTH_DEFAULT_DCR_MODE = 'advertised' satisfies MCPOAuthDCRMode;
+
 /** Strictness of OAuth authorization-metadata discovery. See {@link MCP_OAUTH_DCR_MODES}. */
 export const MCP_OAUTH_COMPATIBILITY_MODES = ['strict', 'legacy'] as const;
 
@@ -117,6 +119,24 @@ export function assertPublicMCPOAuthCompatibilityMode(auth: unknown): void {
  * profile that still enforces issuer/resource binding and PKCE S256.
  */
 export type MCPOAuthRuntimeCompatibilityMode = MCPOAuthCompatibilityMode | 'marketplace';
+
+/** Read-only policy evidence; never accepted as saved OAuth configuration. */
+export interface MCPOAuthEffectivePolicy {
+  effective_mode: MCPOAuthRuntimeCompatibilityMode;
+  effective_dcr_mode: MCPOAuthDCRMode;
+  dcr_mode_source: 'explicit' | 'default';
+}
+
+export const MCP_OAUTH_FAILURE_REASONS = [
+  'dcr_disabled',
+  'registration_endpoint_missing',
+  'protected_resource_mismatch',
+  'issuer_mismatch',
+  'pkce_required',
+  'profile_rejected',
+  'endpoint_override_mismatch',
+] as const;
+export type MCPOAuthFailureReason = (typeof MCP_OAUTH_FAILURE_REASONS)[number];
 
 /**
  * Safe diagnostics for a failed OAuth Dynamic Client Registration attempt.
@@ -177,6 +197,10 @@ export interface MCPAuthRecovery {
   message: string;
   mcp_server_id?: MCPServerID;
   redirect_uri?: string;
+  /** Locally known reason only; absent when the runtime cannot establish one. */
+  failure_reason?: MCPOAuthFailureReason;
+  /** Policy used by the failed operation, not a prediction from a form draft. */
+  oauth_policy?: MCPOAuthEffectivePolicy;
 }
 
 export const MCP_OAUTH_GRANT_BINDING_VERSIONS = [1, 2, 3, 4] as const;
@@ -578,6 +602,9 @@ export interface MCPServer {
   oauth_compatibility_policy?: {
     effective_mode: MCPOAuthRuntimeCompatibilityMode;
     managed_by_catalog: boolean;
+    /** Absent only on older daemon projections. */
+    effective_dcr_mode?: MCPOAuthDCRMode;
+    dcr_mode_source?: 'explicit' | 'default';
   };
 
   // Scope

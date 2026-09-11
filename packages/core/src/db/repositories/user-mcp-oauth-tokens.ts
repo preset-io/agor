@@ -27,6 +27,7 @@ import {
   type UserMCPOAuthTokenInsert,
   type UserMCPOAuthTokenRow,
   userMcpOauthTokens,
+  users,
 } from '../schema';
 import { getCurrentTenantId } from '../tenant-context';
 import { isPostgresDatabaseHandle } from '../tenant-scope';
@@ -37,6 +38,7 @@ import { RepositoryError } from './base';
  */
 export interface UserMCPOAuthToken {
   user_id: UserID | null;
+  granted_by_user_id: UserID;
   mcp_server_id: MCPServerID;
   oauth_access_token: string;
   oauth_token_expires_at?: Date;
@@ -219,6 +221,7 @@ async function rowToToken(
   };
   return {
     user_id: userId,
+    granted_by_user_id: row.granted_by_user_id as UserID,
     mcp_server_id: serverId,
     oauth_access_token: (await open(row.oauth_access_token, 'access-token', 'access'))!,
     oauth_token_expires_at: row.oauth_token_expires_at
@@ -422,6 +425,7 @@ export class UserMCPOAuthTokenRepository {
     try {
       const row = (await select(this.db, {
         user_id: userMcpOauthTokens.user_id,
+        granted_by_user_id: userMcpOauthTokens.granted_by_user_id,
         mcp_server_id: userMcpOauthTokens.mcp_server_id,
         has_access_token: sql<boolean>`${userMcpOauthTokens.oauth_access_token} is not null`,
         oauth_token_expires_at: userMcpOauthTokens.oauth_token_expires_at,
@@ -467,6 +471,7 @@ export class UserMCPOAuthTokenRepository {
       };
       return {
         user_id: userId,
+        granted_by_user_id: row.granted_by_user_id as UserID,
         mcp_server_id: serverId,
         // Deliberate nonsecret stand-in: binding verification never reads the
         // access value, and this object never leaves the daemon.
@@ -541,18 +546,26 @@ export class UserMCPOAuthTokenRepository {
   }
 
   /**
-   * Save or update the token row. On update, undefined fields preserve their
+   * Establish/replace a grant, never refresh it. Shared grants require a trusted
+   * authenticated flow/caller ID in the separate authority argument, not in
+   * token response/request data and never inferred from server ownership.
+   * On update, undefined fields preserve their
    * existing value — important for refresh_token (providers may omit it if not
    * rotating) and client_id/client_secret (bound for the lifetime of the grant).
    */
   async saveToken(
     userId: UserID | null,
     serverId: MCPServerID,
-    input: SaveTokenInput
+    input: SaveTokenInput,
+    grantedByUserId?: UserID
   ): Promise<void> {
     try {
       const now = new Date();
       const tenantId = this.tenantId();
+      const consenterId = grantedByUserId ?? userId;
+      if (!consenterId || (userId !== null && consenterId !== userId)) {
+        throw new RepositoryError('MCP OAuth grant requires its trusted consenting user');
+      }
       // Three-state `expiresAt` flows straight onto Drizzle's `.set()`
       // semantics: `Date` writes, `null` writes NULL via conditional spread,
       // `undefined` preserves the existing value on update.
@@ -575,7 +588,23 @@ export class UserMCPOAuthTokenRepository {
             )
           )`
         );
+        // Lock order: caller's config lock -> subject advisory lock -> consenting
+        // user KEY SHARE -> token row. DELETE users locks the user before its
+        // FK cascades reach grants; it must never acquire our advisory locks.
+        // Taking this before any token row write avoids user/child-row inversion
+        // for a callback racing hard deletion. A committed deletion fails closed.
+        const principal = await executeRaw(
+          this.db,
+          sql`SELECT user_id FROM ${users}
+              WHERE user_id = ${consenterId} AND tenant_id = ${tenantId}
+              FOR KEY SHARE`
+        );
+        if (rowsOf(principal).length !== 1) {
+          throw new RepositoryError('MCP OAuth consenting user is no longer available');
+        }
       }
+      // SQLite's immediate FK enforces existence in its single-tenant database
+      // at the atomic write, including deletion after the entitlement read.
       const binding = input.grantBinding;
       if (this.postgres && !binding) {
         throw new RepositoryError('PostgreSQL MCP OAuth grant save requires configuration binding');
@@ -629,6 +658,7 @@ export class UserMCPOAuthTokenRepository {
         : undefined;
       const newToken: UserMCPOAuthTokenInsert = {
         user_id: userId,
+        granted_by_user_id: consenterId,
         mcp_server_id: serverId,
         oauth_access_token: sealedAccessToken,
         // On insert, `null` and `undefined` both write a missing column
@@ -678,6 +708,7 @@ export class UserMCPOAuthTokenRepository {
                 : isNotNull(userMcpOauthTokens.user_id),
             set: {
               oauth_access_token: sealedAccessToken,
+              granted_by_user_id: consenterId,
               ...(expiresAtField !== undefined ? { oauth_token_expires_at: expiresAtField } : {}),
               ...boundReplacement,
               updated_at: now,
@@ -696,6 +727,7 @@ export class UserMCPOAuthTokenRepository {
         const result = await update(this.db, userMcpOauthTokens)
           .set({
             oauth_access_token: sealedAccessToken,
+            granted_by_user_id: consenterId,
             // Spread so `undefined` ⇒ omit field (preserve), but `null` ⇒ write NULL.
             ...(expiresAtField !== undefined ? { oauth_token_expires_at: expiresAtField } : {}),
             ...(binding
