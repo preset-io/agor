@@ -68,7 +68,7 @@ environment:
         agor-{{branch.name}} --profile postgres down
       description: >-
         PostgreSQL + fail-closed per-user sandbox + per-branch SDK homes, with
-        Alice/Bob fixtures. Standalone development only; HA remains a separate variant.
+        Alice/Bob fixtures, local S3 and clone cold storage. Standalone development only; HA remains a separate variant.
       nuke: >-
         docker compose -f docker-compose.yml -f docker-compose.postgres.yml -p
         agor-{{branch.name}} --profile postgres down -v

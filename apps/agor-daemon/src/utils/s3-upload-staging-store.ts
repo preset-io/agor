@@ -147,7 +147,16 @@ export class S3UploadStagingStore implements UploadStagingStore {
     if (!Number.isSafeInteger(this.ttlMs) || this.ttlMs < 0) {
       throw new Error('Invalid upload ttlMs');
     }
-    this.client = options.client ?? new S3Client(options.clientConfig ?? {});
+    const forcePathStyle = process.env.AGOR_S3_FORCE_PATH_STYLE;
+    if (forcePathStyle && forcePathStyle !== 'true' && forcePathStyle !== 'false') {
+      throw new Error('AGOR_S3_FORCE_PATH_STYLE must be true or false');
+    }
+    this.client =
+      options.client ??
+      new S3Client({
+        ...(forcePathStyle ? { forcePathStyle: forcePathStyle === 'true' } : {}),
+        ...options.clientConfig,
+      });
   }
 
   private tenantPrefix(tenantId: string): string {

@@ -83,7 +83,7 @@ Agor's repo ships [`.agor.yml`](https://github.com/preset-io/agor/blob/main/.ago
 | **`postgres`**           | `sqlite` topology with PostgreSQL schema parity. Application RBAC is always on; the Agor executor sandbox remains off. **Requires Postgres 13+** (migrations use `gen_random_uuid()` from `pg_catalog`).                                       | same as `sqlite`                                  |
 | **`sandbox`**            | SQLite plus the tunable, shared-home bubblewrap filesystem sandbox. Application RBAC is always on; sandbox unavailability is not fail-closed.                                                                                                  | same as `sqlite`                                  |
 | **`sandbox-peruser`**    | SQLite plus `execution.unix_user_mode: sandbox`, a per-user home, and fail-closed bubblewrap isolation. It does not impersonate host users.                                                                                                    | same as `sqlite`                                  |
-| **`rich`**               | Standalone PostgreSQL + fail-closed per-user sandbox profile. Also creates Alice/Bob RBAC fixtures. HA remains a separate variant.                                                                                                             | same as `sqlite`                                  |
+| **`rich`**               | Standalone PostgreSQL + fail-closed per-user sandbox profile. Includes Alice/Bob fixtures, branch SDK homes, local S3, and cold storage for new standalone clones. HA remains separate.                                                                                                             | same as `sqlite`                                  |
 | **`full`**               | Deprecated compatibility alias for `rich`, retained so existing branches can still re-render safely.                                                                                                                                           | same as `rich`                                    |
 | **`ha`**                 | Hosted control-plane smoke: PostgreSQL/RLS, ephemeral Redis, two production-source daemons, nginx affinity, auth-resolved Acme/Globex personas, RBAC, and per-user sandbox homes. The Compose-only picker intentionally has no authentication. | ingress: `3000 + branch.unique_id`                |
 | **`docs`**               | Nextra docs site (`apps/agor-docs`) in a self-contained container. No daemon or database.                                                                                                                                                      | `7000 + branch.unique_id`                         |
@@ -93,6 +93,52 @@ Agor's repo ships [`.agor.yml`](https://github.com/preset-io/agor/blob/main/.ago
 Ports derive from `branch.unique_id` so multiple branches run side-by-side without colliding. The `docs` variant uses `{{host.ip_address}}` in its app URL so the dev server is reachable from your laptop, not just localhost on the daemon host. Except for `ha`, daemon variants use the standalone deployment mode; a managed-environment variant name does not select a daemon deployment mode by itself.
 
 Pick a variant in the branch's environment settings or through `agor_environment_set`. There is no daemon-wide `AGOR_VARIANT` switch: variant selection is repository/branch data, and rendering stores the resolved commands on that branch.
+
+### Cold storage in rich / full
+
+Use **rich** for cold-storage testing. **full** is the same configuration via
+`extends: rich`, retained only so existing selections keep working; there is no
+second full stack to maintain. SQLite and plain Postgres remain lightweight.
+
+The rich Compose overlay enables `execution.branch_storage.cold_storage_enabled`,
+defaults new branches to `clone`, and sends uploads and durable bundles through
+the existing AWS SDK client to [S3Mock](https://github.com/adobe/S3Mock) 5.2.0.
+The emulator creates bucket `agor-dev-storage` automatically, uses dummy
+credentials, and exposes no host port. It is a development-only, unauthenticated
+service, not a production storage backend or an IAM test. Tenant/branch object
+namespacing and Agor authorization remain unchanged.
+
+These process overrides apply on startup even to an existing dev config, without
+rewriting `config.yaml`:
+
+| Environment variable | Rich value |
+| --- | --- |
+| `AGOR_COLD_STORAGE_ENABLED` | `true` |
+| `AGOR_BRANCH_STORAGE_DEFAULT_MODE` | `clone` |
+| `AGOR_UPLOADS_LOCATION` | `s3://agor-dev-storage` |
+| `AWS_ENDPOINT_URL_S3` | `http://s3mock:9090` |
+| `AGOR_S3_FORCE_PATH_STYLE` | `true` |
+
+The latter selects path-style SDK requests; normal S3 addressing stays unchanged
+when unset. Outside this overlay, cooling is still default-off. Existing Git
+worktrees are not converted, and existing local uploads are not migrated into S3.
+
+After updating source, re-render/select rich and recreate the environment when
+ready so Compose picks up the dependency and variables. Do not merely restart the
+daemon. Create a **disposable clone**, add staged/dirty/untracked/ignored files,
+stop its tasks, terminals and environment, then cool and restore it. Compare Git
+status, contents, executable permissions and symlinks afterward; also prompt a
+cold clone to exercise queued restore. Check the storage stage/error if cooling
+fails: provider checksum checks are never disabled for the emulator.
+
+Object files are retained across stop/start in the project-scoped `s3mock-data`
+volume. S3Mock does not guarantee persisted-data compatibility; test restore after
+a restart before relying on this fixture, and never keep important work solely
+in it.
+**Nuke deletes the database and object volume together**; use disposable data only.
+Do not delete that volume alone or switch storage endpoints while branches are
+cold—the database receipt points to their sole workspace copy. A successful
+emulator test is not proof of real AWS behavior.
 
 A representative variant block, abridged from the file:
 

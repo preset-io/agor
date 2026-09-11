@@ -18,7 +18,12 @@ const awsMocks = vi.hoisted(() => {
     DeleteObjectCommand: class extends Command {},
     GetObjectCommand: class extends Command {},
     HeadObjectCommand: class extends Command {},
-    S3Client: class {},
+    S3Client: class {
+      static lastConfig: unknown;
+      constructor(config: unknown) {
+        awsMocks.S3Client.lastConfig = config;
+      }
+    },
   };
 });
 const uploadState = vi.hoisted(() => ({ aborts: 0 }));
@@ -132,6 +137,28 @@ afterEach(() => {
 });
 
 describe('S3UploadStagingStore', () => {
+  it('supports explicit path-style addressing for local S3 without changing the default', () => {
+    try {
+      vi.stubEnv('AGOR_S3_FORCE_PATH_STYLE', '');
+      new S3UploadStagingStore({ bucket: 'dev', prefix: '' });
+      expect(awsMocks.S3Client.lastConfig).toEqual({});
+      vi.stubEnv('AGOR_S3_FORCE_PATH_STYLE', 'true');
+      new S3UploadStagingStore({ bucket: 'dev', prefix: '' });
+      expect(awsMocks.S3Client.lastConfig).toEqual({ forcePathStyle: true });
+      new S3UploadStagingStore(
+        { bucket: 'dev', prefix: '' },
+        { clientConfig: { forcePathStyle: false } }
+      );
+      expect(awsMocks.S3Client.lastConfig).toEqual({ forcePathStyle: false });
+      vi.stubEnv('AGOR_S3_FORCE_PATH_STYLE', 'yes');
+      expect(() => new S3UploadStagingStore({ bucket: 'dev', prefix: '' })).toThrow(
+        /AGOR_S3_FORCE_PATH_STYLE/
+      );
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it('parses bucket and prefix without accepting credentials', () => {
     expect(parseS3UploadLocation(new URL('s3://uploads/root/path/'))).toEqual({
       bucket: 'uploads',

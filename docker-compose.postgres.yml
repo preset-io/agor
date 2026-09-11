@@ -33,8 +33,46 @@ services:
       # with AGOR_SANDBOX_SDK_HOME_MODE=inherit for compatibility testing.
       - AGOR_SANDBOX_SDK_HOME_MODE=${AGOR_SANDBOX_SDK_HOME_MODE:-per_branch}
 
+      # Dev-only S3 emulator. Never inherit real AWS credentials here.
+      - AGOR_COLD_STORAGE_ENABLED=true
+      - AGOR_BRANCH_STORAGE_DEFAULT_MODE=clone
+      - AGOR_UPLOADS_LOCATION=s3://agor-dev-storage
+      - AWS_ENDPOINT_URL_S3=http://s3mock:9090
+      - AGOR_S3_FORCE_PATH_STYLE=true
+      - AWS_REGION=us-east-1
+      - AWS_ACCESS_KEY_ID=agor-local-test
+      - AWS_SECRET_ACCESS_KEY=agor-local-test
+      - AWS_SESSION_TOKEN=
+      - AWS_EC2_METADATA_DISABLED=true
+
       # Create test principals (alice, bob) on startup
       - CREATE_RBAC_TEST_USERS=${CREATE_RBAC_TEST_USERS:-true}
 
     # Use PostgreSQL+RBAC-specific entrypoint
     entrypoint: ['/usr/local/bin/docker-entrypoint-postgres.sh']
+
+    depends_on:
+      s3mock:
+        condition: service_healthy
+
+  # No host port: this unauthenticated emulator is private to the Compose project.
+  s3mock:
+    image: adobe/s3mock:5.2.0
+    # 5.2.0 has no pre-owned store directory; allow writes to this isolated
+    # named volume. No host filesystem mounts or privileged mode.
+    user: '0:0'
+    environment:
+      COM_ADOBE_TESTING_S3MOCK_STORE_INITIAL_BUCKETS: agor-dev-storage
+      COM_ADOBE_TESTING_S3MOCK_STORE_ROOT: /s3mockroot
+      COM_ADOBE_TESTING_S3MOCK_STORE_RETAIN_FILES_ON_EXIT: 'true'
+    volumes:
+      - s3mock-data:/s3mockroot
+    healthcheck:
+      test: ['CMD', 'wget', '--spider', '-q', 'http://localhost:9090/favicon.ico']
+      interval: 5s
+      timeout: 3s
+      retries: 30
+      start_period: 15s
+
+volumes:
+  s3mock-data:

@@ -1502,6 +1502,14 @@ export function resolveEffectiveConfig(
       'Config error: AGOR_RBAC_ENABLED can no longer disable board and branch RBAC. Remove the environment variable (recommended) or set it to true temporarily.'
     );
   }
+  const coldStorageEnabled = parseOptionalBooleanEnvironmentValue(
+    env.AGOR_COLD_STORAGE_ENABLED,
+    'AGOR_COLD_STORAGE_ENABLED'
+  );
+  const branchDefaultMode = env.AGOR_BRANCH_STORAGE_DEFAULT_MODE || undefined;
+  if (branchDefaultMode && branchDefaultMode !== 'clone' && branchDefaultMode !== 'worktree') {
+    throw new Error('Config error: AGOR_BRANCH_STORAGE_DEFAULT_MODE must be clone or worktree');
+  }
   const defaults = getDefaultConfig();
   const port = env.PORT ? Number.parseInt(env.PORT, 10) : undefined;
   const statsdEnabled = parseOptionalBooleanEnvironmentValue(
@@ -1607,6 +1615,19 @@ export function resolveEffectiveConfig(
       ...defaults.execution,
       ...config.execution,
       ...(resolvedExecutorResponse ? { executor_response: resolvedExecutorResponse } : {}),
+      ...(coldStorageEnabled !== undefined || branchDefaultMode
+        ? {
+            branch_storage: {
+              ...config.execution?.branch_storage,
+              ...(coldStorageEnabled !== undefined
+                ? { cold_storage_enabled: coldStorageEnabled }
+                : {}),
+              ...(branchDefaultMode
+                ? { default_mode: branchDefaultMode as BranchStorageMode }
+                : {}),
+            },
+          }
+        : {}),
       // Keep the deprecated read-model field true for old clients and internal
       // consumers during the compatibility window. It is no longer a switch.
       branch_rbac: true,
@@ -1656,7 +1677,11 @@ export function resolveEffectiveConfig(
         ...(apmTraceServices !== undefined ? { trace_services: apmTraceServices } : {}),
       },
     },
-    uploads: { ...defaults.uploads, ...config.uploads },
+    uploads: {
+      ...defaults.uploads,
+      ...config.uploads,
+      ...(env.AGOR_UPLOADS_LOCATION ? { location: env.AGOR_UPLOADS_LOCATION } : {}),
+    },
     multi_tenancy: { ...defaults.multi_tenancy, ...config.multi_tenancy },
   };
   validateStatsDConfig(resolved.metrics?.statsd);

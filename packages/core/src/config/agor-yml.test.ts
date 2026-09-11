@@ -286,6 +286,21 @@ describe('parseAgorYml — repo .agor.yml demo variants', () => {
     expect(compose).toMatch(/- CREATE_RBAC_TEST_USERS=\$\{CREATE_RBAC_TEST_USERS:-\}/);
   });
 
+  it('shares local cold storage between rich and its full compatibility alias', () => {
+    const env = parseAgorYml(REPO_ROOT_AGOR_YML)!;
+    expect(resolveVariant(env, 'full')?.start).toBe(resolveVariant(env, 'rich')?.start);
+    const overlay = fs.readFileSync(path.join(REPO_ROOT, 'docker-compose.postgres.yml'), 'utf8');
+    expect(overlay).toContain('AGOR_COLD_STORAGE_ENABLED=true');
+    expect(overlay).toContain('AGOR_BRANCH_STORAGE_DEFAULT_MODE=clone');
+    expect(overlay).toContain('AGOR_UPLOADS_LOCATION=s3://agor-dev-storage');
+    expect(overlay).toContain('AWS_ENDPOINT_URL_S3=http://s3mock:9090');
+    expect(overlay).toContain('s3mock-data:/s3mockroot');
+    expect(overlay).toContain("COM_ADOBE_TESTING_S3MOCK_STORE_RETAIN_FILES_ON_EXIT: 'true'");
+    expect(overlay).toContain('condition: service_healthy');
+    const base = fs.readFileSync(path.join(REPO_ROOT, 'docker-compose.yml'), 'utf8');
+    expect(base).not.toContain('AGOR_COLD_STORAGE_ENABLED=true');
+  });
+
   it('makes branch SDK homes the rich/full RBAC fixture default', () => {
     const baseCompose = fs.readFileSync(path.join(REPO_ROOT, 'docker-compose.yml'), 'utf8');
     const richOverlay = fs.readFileSync(

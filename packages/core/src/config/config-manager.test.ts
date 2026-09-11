@@ -107,6 +107,44 @@ describe('getDefaultConfig', () => {
 });
 
 describe('resolveEffectiveConfig', () => {
+  it('projects cold storage overrides without rewriting or dropping operator settings', () => {
+    const config = {
+      execution: {
+        branch_storage: { allowed_modes: ['clone' as const], cold_storage_enabled: false },
+      },
+      uploads: { location: '~/.agor', max_age_days: 7 },
+    };
+    const resolved = resolveEffectiveConfig(config, {
+      AGOR_COLD_STORAGE_ENABLED: 'true',
+      AGOR_BRANCH_STORAGE_DEFAULT_MODE: 'clone',
+      AGOR_UPLOADS_LOCATION: 's3://agor-dev-storage',
+    });
+    expect(resolved.execution?.branch_storage).toEqual({
+      allowed_modes: ['clone'],
+      cold_storage_enabled: true,
+      default_mode: 'clone',
+    });
+    expect(resolved.uploads).toMatchObject({ location: 's3://agor-dev-storage', max_age_days: 7 });
+    expect(config.execution.branch_storage.cold_storage_enabled).toBe(false);
+    expect(config.uploads.location).toBe('~/.agor');
+    expect(
+      resolveEffectiveConfig(resolved, { AGOR_COLD_STORAGE_ENABLED: 'false' }).execution
+        ?.branch_storage?.cold_storage_enabled
+    ).toBe(false);
+    expect(resolveEffectiveConfig({}, {}).execution?.branch_storage?.cold_storage_enabled).not.toBe(
+      true
+    );
+  });
+
+  it('rejects invalid cold storage environment overrides', () => {
+    expect(() => resolveEffectiveConfig({}, { AGOR_COLD_STORAGE_ENABLED: 'yes' })).toThrow(
+      /AGOR_COLD_STORAGE_ENABLED/
+    );
+    expect(() =>
+      resolveEffectiveConfig({}, { AGOR_BRANCH_STORAGE_DEFAULT_MODE: 'linked' })
+    ).toThrow(/AGOR_BRANCH_STORAGE_DEFAULT_MODE/);
+  });
+
   it('projects deployment environment overrides into the runtime capability configuration', () => {
     const resolved = resolveEffectiveConfig(
       {},
