@@ -77,9 +77,6 @@ environment:
         agor-{{branch.name}} --profile postgres logs --tail=100
       health: http://localhost:{{add 3000 branch.unique_id}}/health
       app: http://{{host.ip_address}}:{{add 5000 branch.unique_id}}
-    full:
-      description: Deprecated compatibility alias for `rich`; use `rich` for new branches.
-      extends: rich
     sqlite:
       start: >-
         env UID=$(id -u) GID=$(stat -c %g . 2>/dev/null || id -g) INSTANCE_LABEL={{branch.name}} DAEMON_PORT={{add 3000 branch.unique_id}} UI_PORT={{add 5000

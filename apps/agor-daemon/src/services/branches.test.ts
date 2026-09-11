@@ -2050,9 +2050,9 @@ describe('BranchesService.renderEnvironment running-guard', () => {
         default_branch: 'main',
         environment: {
           version: 2,
-          default: 'full',
+          default: 'rich',
           variants: {
-            full: {
+            rich: {
               start: 'echo start',
               stop: 'echo stop',
               nuke: 'echo nuke',
@@ -2083,7 +2083,7 @@ describe('BranchesService.renderEnvironment running-guard', () => {
       } as unknown as Application;
       const service = new BranchesService(db, app);
 
-      await service.renderEnvironment(branch.branch_id, { variant: 'full' });
+      await service.renderEnvironment(branch.branch_id, { variant: 'rich' });
       expect((await branches.findById(branch.branch_id))?.health_check_url).toBe(
         'http://127.0.0.1:18762/health'
       );
@@ -2103,13 +2103,13 @@ describe('BranchesService.renderEnvironment running-guard', () => {
         expect(minimal?.[field]).toBeUndefined();
       }
 
-      await service.renderEnvironment(branch.branch_id, { variant: 'full' });
+      await service.renderEnvironment(branch.branch_id, { variant: 'rich' });
       await repos.setEnvironment(repo.repo_id, {
         version: 2,
-        default: 'full',
-        variants: { full: { start: 'echo updated', stop: 'echo stopped' } },
+        default: 'rich',
+        variants: { rich: { start: 'echo updated', stop: 'echo stopped' } },
       });
-      await service.renderEnvironment(branch.branch_id, { variant: 'full' });
+      await service.renderEnvironment(branch.branch_id, { variant: 'rich' });
       const rerendered = await branches.findById(branch.branch_id);
       expect(rerendered?.start_command).toBe('echo updated');
       for (const field of [

@@ -1565,7 +1565,7 @@ export function resolveEffectiveConfig(
     };
   }
   // SDK-home relocation is an independent rollout control: setting it must
-  // not implicitly enable or weaken the filesystem sandbox. The rich/full
+  // not implicitly enable or weaken the filesystem sandbox. The rich
   // development profile opts in explicitly, while ordinary deployments keep
   // the legacy-safe `inherit` default when neither YAML nor env names a mode.
   if (envSdkHomeMode) {

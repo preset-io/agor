@@ -11,10 +11,10 @@ creates only the missing deployment config on first boot. Its generated
 project-scoped `agor-home` volume; an existing config is validated and never
 rewritten.
 
-### One-time upgrade from the old `full` profile
+### One-time upgrade from legacy fixed development secrets
 
-The former `full` overlay injected fixed development JWT and master secrets
-instead of relying on the project volume. An existing `full`/`rich` volume can
+Earlier versions of this overlay injected fixed development JWT and master secrets
+instead of relying on the project volume. An existing development volume can
 therefore contain different or incomplete persisted secrets. Do not preserve
 that volume and simply restart it with this profile: doing so can invalidate
 sessions or make credentials encrypted under the former master secret
@@ -40,9 +40,8 @@ project names. The `postgres` variant selects the smaller
 `docker-compose.override.postgres.yml` overlay for database parity with RBAC and
 Agor's sandbox off. The `rich` variant selects the overlay above; it requires
 bubblewrap 0.12.0+/user-namespace support and fails closed if the sandbox cannot start.
-The deprecated `full` variant is a compatibility alias for `rich`. Both
-capability profiles are standalone source-mode development stacks; HA remains
-a separate variant. The rich/full profile also defaults
+These are standalone source-mode development stacks; HA remains
+a separate variant. The rich profile also defaults
 `AGOR_SANDBOX_SDK_HOME_MODE=per_branch` so its multi-user fixtures exercise
 branch-owned SDK state; set it to `inherit` to test legacy execution homes.
 

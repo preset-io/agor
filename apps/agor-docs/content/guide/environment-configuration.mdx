@@ -5,7 +5,7 @@ description: Define named environment variants per repo, layer deployment-local 
 
 # Environment Configuration
 
-Agor's managed environments let a repo ship a **library of named variants** (`lean`, `postgres`, `full`, …) that every branch can pick from. Variants are Handlebars-templated and get **rendered into a per-branch snapshot** that the Start/Stop/Nuke/Logs buttons execute against.
+Agor's managed environments let a repo ship a **library of named variants** (`lean`, `postgres`, `rich`, …) that every branch can pick from. Variants are Handlebars-templated and get **rendered into a per-branch snapshot** that the Start/Stop/Nuke/Logs buttons execute against.
 
 This page documents the data model, the template vars, deployment-local overrides, and the permission rules.
 
@@ -54,7 +54,7 @@ Managed environments are built out of three layers, precedence **low → high**:
 ```text
   ┌────────────────────────────────────────────────────────┐
   │ 1. .agor.yml — repo-shared, committed to git           │
-  │    environment.variants.{lean,postgres,full,…}         │
+  │    environment.variants.{lean,postgres,rich,…}         │
   └───────────────────────────┬────────────────────────────┘
                               │ imported into repo.environment
                               ▼
@@ -76,22 +76,6 @@ Managed environments are built out of three layers, precedence **low → high**:
 - **Layer 3** is the output: a flat set of rendered strings attached to the branch. Executors run these verbatim, with no templating at execute time.
 
 Re-rendering is **explicit**. Editing a variant or an override does not retroactively rewrite existing branches. You hit the **Render** button when you want a branch to pick up changes.
-
-<img
-  src="/screenshots/env-variants-full.png"
-  alt="Branch Environment tab showing the YAML variant config with start/stop/nuke/logs commands, the Variant selector dropdown, and the rendered command snapshot below"
-  style={{ maxWidth: '700px', borderRadius: '8px' }}
-/>
-
-_Branch Environment tab, with variant YAML on top, picker in the middle, rendered snapshot below. The `extends: sqlite` line on the `postgres` variant shows variants can inherit from each other._
-
-<img
-  src="/screenshots/env-variants-dropdown.png"
-  alt="Variant dropdown open showing four named variants (docs, full, sqlite (default), and postgres), each with a one-line description"
-  style={{ maxWidth: '600px' }}
-/>
-
-_Picking a variant. This historical screenshot predates the rename from `full` to `rich`. `full` remains a deprecated compatibility alias; HA is still a separate variant._
 
 ---
 
@@ -171,16 +155,16 @@ always URL templates, not shell commands.
 
 ### `extends` (single-level only)
 
-A variant may extend **one** base variant. The base variant itself must **not** have an `extends` key. Chains (`full → postgres → lean`) are rejected at save time with:
+A variant may extend **one** base variant. The base variant itself must **not** have an `extends` key. Chains (`rich → postgres → lean`) are rejected at save time with:
 
 ```text
-variant 'full' extends 'postgres', which itself extends 'lean' —
+variant 'rich' extends 'postgres', which itself extends 'lean' —
 chains deeper than one level are not allowed
 ```
 
 Resolution is a straight per-field merge: child fields win, omitted fields inherit from the base.
 
-### Worked example for Superset: `lean` / `postgres` / `full`
+### Worked example for Superset: `lean` / `postgres` / `rich`
 
 ```yaml
 version: 2
@@ -205,16 +189,16 @@ environment:
       nuke: 'docker compose -p agor-{{branch.name}} down -v'
       logs: 'docker compose -p agor-{{branch.name}} logs --tail=100'
 
-    full:
+    rich:
       description: 'Postgres + Redis + Celery + worker + beat'
       extends: lean # NOT extends: postgres — chains are not allowed
-      start: 'COMPOSE_PROFILES=full docker compose -p agor-{{branch.name}} up -d --build'
+      start: 'COMPOSE_PROFILES=rich docker compose -p agor-{{branch.name}} up -d --build'
       stop: 'docker compose -p agor-{{branch.name}} down'
       nuke: 'docker compose -p agor-{{branch.name}} down -v'
       logs: 'docker compose -p agor-{{branch.name}} logs --tail=100'
 ```
 
-Notice that `postgres` and `full` both extend `lean` (not each other). That's the single-level rule. Both inherit `health` and `app` from `lean` and override the rest.
+Notice that `postgres` and `rich` both extend `lean` (not each other). That's the single-level rule. Both inherit `health` and `app` from `lean` and override the rest.
 
 ### Import / export
 

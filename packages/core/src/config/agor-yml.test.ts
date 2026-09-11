@@ -286,9 +286,9 @@ describe('parseAgorYml — repo .agor.yml demo variants', () => {
     expect(compose).toMatch(/- CREATE_RBAC_TEST_USERS=\$\{CREATE_RBAC_TEST_USERS:-\}/);
   });
 
-  it('shares local cold storage between rich and its full compatibility alias', () => {
+  it('configures local cold storage in rich', () => {
     const env = parseAgorYml(REPO_ROOT_AGOR_YML)!;
-    expect(resolveVariant(env, 'full')?.start).toBe(resolveVariant(env, 'rich')?.start);
+    expect(resolveVariant(env, 'rich')?.start).toContain('docker-compose.postgres.yml');
     const overlay = fs.readFileSync(path.join(REPO_ROOT, 'docker-compose.postgres.yml'), 'utf8');
     expect(overlay).toContain('AGOR_COLD_STORAGE_ENABLED=true');
     expect(overlay).toContain('AGOR_BRANCH_STORAGE_DEFAULT_MODE=clone');
@@ -301,7 +301,7 @@ describe('parseAgorYml — repo .agor.yml demo variants', () => {
     expect(base).not.toContain('AGOR_COLD_STORAGE_ENABLED=true');
   });
 
-  it('makes branch SDK homes the rich/full RBAC fixture default', () => {
+  it('makes branch SDK homes the rich RBAC fixture default', () => {
     const baseCompose = fs.readFileSync(path.join(REPO_ROOT, 'docker-compose.yml'), 'utf8');
     const richOverlay = fs.readFileSync(
       path.join(REPO_ROOT, 'docker-compose.postgres.yml'),
@@ -366,26 +366,6 @@ describe('parseAgorYml — repo .agor.yml demo variants', () => {
     }
   });
 
-  it('keeps full as a deprecated compatibility alias for rich', () => {
-    const env = parseAgorYml(REPO_ROOT_AGOR_YML);
-    expect(env).not.toBeNull();
-
-    expect(env!.variants.full.extends).toBe('rich');
-    expect(env!.variants.full.description).toMatch(/Deprecated compatibility alias/);
-
-    const rich = resolveVariant(env!, 'rich');
-    const full = resolveVariant(env!, 'full');
-    if (rich === null || full === null) throw new Error('rich/full variants must resolve');
-    expect(full).toMatchObject({
-      start: rich.start,
-      stop: rich.stop,
-      nuke: rich.nuke,
-      logs: rich.logs,
-      health: rich.health,
-      app: rich.app,
-    });
-  });
-
   it('resolves sqlite-demo / postgres-demo with LOAD_FIXTURES and required start/stop', () => {
     const env = parseAgorYml(REPO_ROOT_AGOR_YML);
     expect(env).not.toBeNull();
@@ -420,7 +400,6 @@ describe('parseAgorYml — repo .agor.yml demo variants', () => {
 
     for (const name of [
       'rich',
-      'full',
       'sqlite',
       'sandbox',
       'sandbox-peruser',
