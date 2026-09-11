@@ -41,6 +41,7 @@ import {
   type McpServerWriteHookContext,
 } from '../utils/mcp-server-authorization.js';
 import { createMCPCatalogConnectService } from './mcp-catalog-connect.js';
+import { createMCPCatalogStartSessionService } from './mcp-catalog-start-session.js';
 import { isMCPOAuthGrantAuthorizedForServer } from './mcp-oauth-grant-authority.js';
 import { createMCPServersService } from './mcp-servers.js';
 
@@ -66,8 +67,6 @@ const CURATED = {
  */
 const CONNECT_REQUEST = {
   catalog_key: DEEPWIKI,
-  branch_id: 'branch-1',
-  agentic_tool: 'claude-code' as const,
   acknowledged_disclosure: 'Reads public GitHub repository content only.',
 };
 
@@ -150,7 +149,16 @@ async function buildDaemon(
   const addUser = (email: string, addedRole: UserRole, user_id?: UserID) =>
     users.create({ email, name: email, role: addedRole, user_id }) as Promise<User>;
 
-  return { user, connect, connectAs, addUser, installedServers, seedServer };
+  return {
+    app,
+    params: paramsFor(user, role),
+    user,
+    connect,
+    connectAs,
+    addUser,
+    installedServers,
+    seedServer,
+  };
 }
 
 describe('marketplace install, as it lands in the database', () => {
@@ -266,6 +274,48 @@ describe('marketplace install, as it lands in the database', () => {
     const servers = await installedServers();
     expect(servers).toHaveLength(1);
     expect(servers[0]?.owner_user_id).toBe(user.user_id);
+  });
+
+  it('Connect reuses a trailing-slash endpoint and Start accepts that same install', async () => {
+    const { app, params, user, seedServer, connect, installedServers } =
+      await buildDaemon('allow_crud');
+    const saved = await seedServer({
+      name: 'deepwiki',
+      source: 'catalog',
+      catalog_entry_name: DEEPWIKI,
+      scope: 'session',
+      transport: 'http',
+      url: 'https://mcp.deepwiki.com/mcp/',
+      auth: { type: 'none' },
+      enabled: true,
+      owner_user_id: user.user_id,
+    });
+    const result = await connect();
+    expect(result.reused_existing_server).toBe(true);
+    expect(result.mcp_server.mcp_server_id).toBe(saved.mcp_server_id);
+    expect(result.mcp_server.url).toBe('https://mcp.deepwiki.com/mcp/');
+    app.use('users', {
+      async find() {
+        return [];
+      },
+      async getPrimaryTeammateCandidates() {
+        return [{ branch_id: '00000000-0000-7000-8000-00000000b123' }];
+      },
+    } as never);
+    const started = await createMCPCatalogStartSessionService(app).create(
+      {
+        catalog_key: DEEPWIKI,
+        mcp_server_id: result.mcp_server.mcp_server_id,
+        teammate_branch_id: '00000000-0000-7000-8000-00000000b123' as never,
+        agentic_tool: 'codex',
+      },
+      params
+    );
+    expect(started.session).toMatchObject({
+      status: 'idle',
+      mcpServerIds: [saved.mcp_server_id],
+    });
+    expect(await installedServers()).toHaveLength(1);
   });
 
   it('authoritatively replaces stale same-type OAuth fields on a reused catalog install', async () => {

@@ -1,26 +1,37 @@
+import { MCP_HEADER_REDACTED_SENTINEL } from '@agor/core/tools/mcp/http-headers';
 import type { MCPCatalogConnectResult, MCPOAuthStartFailure } from '@agor/core/types';
 import type { AgorClient } from '@agor-live/client';
-import {
-  discardPendingMarketplaceOAuthPrompt,
-  savePendingMarketplaceOAuthPrompt,
-} from '../../utils/marketplaceOAuthPrompt';
+import { mcpServerNeedsAuth } from '../../utils/mcpAuth';
 import type { MarketplaceOAuthPopup } from './marketplaceOAuthPopup';
+
+/**
+ * Connect projects a sentinel only for a currently live, authorized caller grant.
+ * The workspace OAuth badge Set is a last-observed saved-status snapshot, not
+ * completion authority. Keep this contract separate from generic server reads.
+ */
+export function catalogConnectNeedsAuthentication(
+  result: MCPCatalogConnectResult,
+  now = Date.now()
+): boolean {
+  const { auth } = result.mcp_server;
+  if (auth?.type !== 'oauth') return mcpServerNeedsAuth(result.mcp_server, new Set());
+  return (
+    auth.oauth_access_token !== MCP_HEADER_REDACTED_SENTINEL ||
+    (auth.oauth_token_expires_at !== undefined &&
+      !(Number.isFinite(auth.oauth_token_expires_at) && auth.oauth_token_expires_at > now))
+  );
+}
 
 export class MarketplaceOAuthPopupNavigationError extends Error {
   constructor() {
-    super(
-      'The sign-in window closed before it could open the provider. Continue sign-in from the new session.'
-    );
+    super('The sign-in window closed before it could open the provider. Try connecting again.');
     this.name = 'MarketplaceOAuthPopupNavigationError';
   }
 }
 
 export class MarketplaceOAuthStartError extends Error {
   constructor(message?: string) {
-    super(
-      message ||
-        'Sign-in could not start automatically. Continue from MCP settings in the new session.'
-    );
+    super(message || 'Sign-in could not start automatically. Retry from My Servers when ready.');
     this.name = 'MarketplaceOAuthStartError';
   }
 }
@@ -30,10 +41,7 @@ export async function launchMarketplaceOAuth(
   client: AgorClient,
   result: MCPCatalogConnectResult,
   popup: MarketplaceOAuthPopup,
-  options: {
-    authority: { userId: string; role: string; authGeneration: number };
-    isCurrent: () => boolean;
-  }
+  options: { isCurrent: () => boolean }
 ): Promise<{ attemptId: string } | null> {
   if (!options.isCurrent()) {
     popup.close();
@@ -54,35 +62,13 @@ export async function launchMarketplaceOAuth(
     popup.close();
     throw new MarketplaceOAuthStartError();
   }
-  // Record every newer Marketplace attempt, even when this catalog entry has
-  // no starter prompt. The attempt marker synchronously fences any suggestion
-  // from an earlier flow for the same session/authority.
-  savePendingMarketplaceOAuthPrompt({
-    sessionId: result.session.session_id,
-    serverId: result.mcp_server.mcp_server_id,
-    attemptId: started.attempt_id,
-    prompt: result.starter_prompt ?? '',
-    createdAt: Date.now(),
-    userId: options.authority.userId,
-    role: options.authority.role,
-    authGeneration: options.authority.authGeneration,
-    popupOperationId: popup.operationId,
-  });
-  // Guard once more inside the launch helper immediately before handing the
-  // third-party URL to the pre-opened window.
   try {
     if (popup.navigate(started.authorizationUrl, options.isCurrent)) {
       return { attemptId: started.attempt_id };
     }
   } catch {
-    // Fall through to exact-attempt cleanup. The durable server, session, and
-    // OAuth attempt remain recoverable from the session UI.
+    // The durable server and OAuth attempt remain recoverable from MCP settings.
   }
-  discardPendingMarketplaceOAuthPrompt(
-    result.session.session_id,
-    started.attempt_id,
-    popup.operationId
-  );
   popup.close();
   throw new MarketplaceOAuthPopupNavigationError();
 }

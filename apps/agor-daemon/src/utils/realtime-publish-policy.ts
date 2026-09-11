@@ -319,7 +319,11 @@ export const REALTIME_PUBLISH_POLICY = {
   },
   'mcp-catalog/connect': {
     audience: 'none',
-    why: 'Returns { mcp_server, session } where an api-key entry carries a credential belonging to the caller. This is the leak that motivated the allowlist.',
+    why: 'Returns a caller-owned MCP server where an API-key entry carries a credential belonging to the caller.',
+  },
+  'mcp-catalog/start-session': {
+    audience: 'none',
+    why: 'Caller-directed control-plane result; the session and attachment publish through their owning services.',
   },
   'mcp-catalog': { audience: 'none', why: 'find/get only — a static curated catalog, no events.' },
   'mcp-catalog/readiness': {

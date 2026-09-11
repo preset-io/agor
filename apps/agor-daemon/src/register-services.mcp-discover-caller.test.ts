@@ -87,7 +87,7 @@ async function createHarness() {
   });
   const discover = (data: MCPDiscoveryRequest, caller: AuthenticatedParams) =>
     app.service('mcp-servers/discover').create(data, caller);
-  return { rawDb, repository, owner, admin, unrelated, saved, shared, params, discover };
+  return { rawDb, repository, owner, admin, unrelated, saved, shared, params, discover, app };
 }
 
 describe('saved MCP discovery caller authority', () => {
@@ -175,6 +175,34 @@ describe('saved MCP discovery caller authority', () => {
       /authentication required/i
     );
     expect(connect).not.toHaveBeenCalled();
+  });
+
+  it('does not expose OAuth policy or touch providers for a foreign user or conflicting tenant', async () => {
+    await h.repository.update(h.saved.mcp_server_id, {
+      auth: { type: 'oauth', oauth_dcr_mode: 'disabled', oauth_compatibility_mode: 'legacy' },
+    });
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('must not fetch'));
+    const lookup = vi.spyOn(MCPServerRepository.prototype, 'findById');
+    try {
+      const foreignUser = await h.app
+        .service('mcp-servers/oauth-start')
+        .create({ mcp_server_id: h.saved.mcp_server_id }, h.params(h.unrelated));
+      expect(foreignUser).toMatchObject({ success: false });
+      expect(foreignUser.recovery?.oauth_policy).toBeUndefined();
+      lookup.mockClear();
+      const foreignTenant = await runWithTenantContext('discovery-tenant-b', () =>
+        h.app
+          .service('mcp-servers/oauth-start')
+          .create({ mcp_server_id: h.saved.mcp_server_id }, h.params(h.admin))
+      );
+      expect(foreignTenant).toMatchObject({ success: false });
+      expect(foreignTenant.recovery?.oauth_policy).toBeUndefined();
+      expect(lookup).not.toHaveBeenCalled();
+      expect(fetchSpy).not.toHaveBeenCalled();
+    } finally {
+      fetchSpy.mockRestore();
+      lookup.mockRestore();
+    }
   });
 
   it('rejects conflicting tenant authority before loading even an admin-visible saved ID', async () => {

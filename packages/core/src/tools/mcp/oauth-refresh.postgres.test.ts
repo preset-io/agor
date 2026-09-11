@@ -24,6 +24,7 @@ import {
   AmbiguousRefreshError,
   FailedRefreshError,
   GrantConfigurationChangedError,
+  InvalidGrantError,
   OAuthRefreshAuthorityCancelledError,
   OAuthRefreshExchangeError,
   refreshAndPersistToken,
@@ -224,11 +225,100 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       };
     }
 
+    it.each([false, true])(
+      'shared refresh preserves consent or fails after concurrent hard deletion: %s',
+      async (deleteDuringRefresh) => {
+        let arrive!: () => void;
+        let release!: () => void;
+        const arrived = new Promise<void>((resolve) => {
+          arrive = resolve;
+        });
+        const gate = new Promise<void>((resolve) => {
+          release = resolve;
+        });
+        const tokenProvider = await provider(async (_body, response) => {
+          arrive();
+          await gate;
+          response.writeHead(200, { 'content-type': 'application/json' });
+          response.end(
+            JSON.stringify({
+              access_token: 'shared-rotation',
+              refresh_token: 'shared-refresh-rotation',
+            })
+          );
+        });
+        const bound = await seed(`shared-offboarding-${deleteDuringRefresh}`, tokenProvider.url);
+        await runWithTenantDatabaseScope(dbA, bound.tenantId, async (scoped) => {
+          const tokens = new UserMCPOAuthTokenRepository(scoped, masterSecret);
+          const personal = await tokens.getToken(bound.userId, bound.serverId);
+          await tokens.saveToken(
+            null,
+            bound.serverId,
+            {
+              accessToken: 'shared-initial',
+              refreshToken: 'shared-refresh',
+              clientId: personal!.oauth_client_id,
+              grantBinding: {
+                generation: bound.generation,
+                version: 1,
+                fingerprint: personal!.grant_binding_fingerprint!,
+                metadataUri: personal!.oauth_metadata_uri!,
+                resourceUri: personal!.oauth_resource_uri!,
+                issuer: personal!.oauth_issuer!,
+                authorizationEndpoint: personal!.oauth_authorization_endpoint!,
+                tokenEndpoint: personal!.oauth_token_endpoint!,
+                redirectUri: personal!.oauth_redirect_uri!,
+              },
+            },
+            bound.userId
+          );
+        });
+        const refresh = refreshAndPersistToken({
+          db: dbA,
+          tenantId: bound.tenantId,
+          userId: null,
+          mcpServerId: bound.serverId,
+          validateGrant: async () => true,
+          observedRefreshVersion: initialRefreshVersion(bound),
+          allowLocalhostHttpDevelopment: true,
+        });
+        const result = deleteDuringRefresh
+          ? expect(refresh).rejects.toBeInstanceOf(InvalidGrantError)
+          : expect(refresh).resolves.toBe('shared-rotation');
+        try {
+          await arrived;
+          if (deleteDuringRefresh) {
+            await runWithTenantDatabaseScope(dbB, bound.tenantId, (scoped) =>
+              new UsersRepository(scoped).delete(bound.userId)
+            );
+          }
+        } finally {
+          release();
+        }
+        await result;
+        await runWithTenantDatabaseScope(dbB, bound.tenantId, async (scoped) => {
+          const grant = await new UserMCPOAuthTokenRepository(scoped, masterSecret).getToken(
+            null,
+            bound.serverId
+          );
+          if (deleteDuringRefresh) expect(grant).toBeNull();
+          else
+            expect(grant).toMatchObject({
+              granted_by_user_id: bound.userId,
+              oauth_access_token: 'shared-rotation',
+            });
+        });
+      }
+    );
+
     it('allows one daemon to rotate while a peer observes the committed result', async () => {
       const tokenProvider = await provider(async (body, response) => {
         expect(body.get('grant_type')).toBe('refresh_token');
         expect(body.get('refresh_token')).toBe('refresh-concurrent-0');
         expect(body.get('resource')).toBe('https://mcp.example.test/concurrent');
+        expect(body.get('redirect_uri')).toBe(
+          'https://agor.example.test/mcp-servers/oauth-callback'
+        );
         await new Promise((resolve) => setTimeout(resolve, 150));
         response.writeHead(200, { 'content-type': 'application/json' });
         response.end(
@@ -292,6 +382,43 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
         )
       ).toBe(true);
     });
+
+    it.each(['mixed-error', 'invalid-expiry'] as const)(
+      'quarantines a GitLab-shaped %s response across replicas without replay',
+      async (shape) => {
+        const tokenProvider = await provider((_body, response) => {
+          response.writeHead(200, { 'content-type': 'application/json' });
+          response.end(
+            JSON.stringify({
+              access_token: 'synthetic-next-access',
+              refresh_token: 'synthetic-rotated-refresh',
+              ...(shape === 'mixed-error'
+                ? { error: { unsafe: 'synthetic-error' } }
+                : { expires_in: 'invalid' }),
+            })
+          );
+        });
+        const bound = await seed(`malformed-${shape}`, tokenProvider.url);
+        const refresh = (db: TenantScopeAwareDatabase) =>
+          refreshAndPersistToken({
+            db,
+            tenantId: bound.tenantId,
+            userId: bound.userId,
+            mcpServerId: bound.serverId,
+            observedRefreshVersion: initialRefreshVersion(bound),
+            validateGrant: async () => true,
+            allowLocalhostHttpDevelopment: true,
+          });
+        await expect(refresh(dbA)).rejects.toMatchObject({ ambiguous: true });
+        await expect(refresh(dbB)).rejects.toBeInstanceOf(AmbiguousRefreshError);
+        expect(tokenProvider.calls()).toBe(1);
+        const saved = await runWithTenantDatabaseScope(dbB, bound.tenantId, (db) =>
+          new UserMCPOAuthTokenRepository(db, masterSecret).getToken(bound.userId, bound.serverId)
+        );
+        expect(saved?.refresh_status).toBe('ambiguous');
+        expect(saved?.oauth_refresh_token).toBe(`refresh-malformed-${shape}-0`);
+      }
+    );
 
     it('refuses completion when authoritative server configuration changes during exchange', async () => {
       let configurationStillValid = true;

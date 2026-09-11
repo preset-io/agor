@@ -7,7 +7,6 @@ import { useConnectionState } from '@/contexts/ConnectionContext';
 import { useMCPCatalogModal } from '@/contexts/MCPCatalogModalContext';
 import { useAuthorityOperationGuard } from '@/hooks/useAuthorityOperationGuard';
 import { usePermissions } from '@/hooks/usePermissions';
-import { markMarketplacePromptAttempt } from '../../utils/marketplaceOAuthPrompt';
 import { mcpServerNeedsAuth } from '../../utils/mcpAuth';
 import { useThemedMessage } from '../../utils/message';
 import { updateSessionMcpServers } from '../../utils/sessionMcpServers';
@@ -159,21 +158,6 @@ const SessionMcpFooterControlForIdentity: React.FC<SessionMcpFooterControlProps>
       attachedServers.filter((server) => mcpServerNeedsAuth(server, userAuthenticatedMcpServerIds)),
     [attachedServers, userAuthenticatedMcpServerIds]
   );
-  const markNewOAuthAttempt = React.useCallback(
-    (attemptId: string) => {
-      if (!currentUserId || !role) return;
-      markMarketplacePromptAttempt({
-        sessionId,
-        attemptId,
-        userId: currentUserId,
-        role,
-        authGeneration,
-        createdAt: Date.now(),
-      });
-    },
-    [authGeneration, currentUserId, role, sessionId]
-  );
-
   const badgeTitle =
     unauthedServers.length === 1
       ? `${unauthedServers[0].display_name || unauthedServers[0].name} isn’t connected. Open to connect.`
@@ -246,7 +230,6 @@ const SessionMcpFooterControlForIdentity: React.FC<SessionMcpFooterControlProps>
                     ? 'Reconnect to the Agor daemon before changing saved credentials.'
                     : 'Only an administrator can change saved credentials.'
                 }
-                onOAuthAttemptStarted={markNewOAuthAttempt}
                 onEdit={editMutationAllowed ? handleEditServer : undefined}
               />
             ))}

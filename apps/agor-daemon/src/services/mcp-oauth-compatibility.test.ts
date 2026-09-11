@@ -2,6 +2,7 @@ import type { MCPCatalogEntry, MCPServer } from '@agor/core/types';
 import { describe, expect, it } from 'vitest';
 import {
   presentMCPOAuthCompatibilityPolicy,
+  presentMCPOAuthEffectivePolicy,
   resolveMCPOAuthCompatibilityPolicy,
 } from './mcp-oauth-compatibility.js';
 
@@ -59,11 +60,45 @@ describe('resolveMCPOAuthCompatibilityPolicy', () => {
         mode: 'marketplace',
         reason: 'current_catalog_marketplace',
       })
-    ).toEqual({ effective_mode: 'marketplace', managed_by_catalog: true });
+    ).toEqual({
+      effective_mode: 'marketplace',
+      managed_by_catalog: true,
+      effective_dcr_mode: 'advertised',
+      dcr_mode_source: 'default',
+    });
     expect(
       presentMCPOAuthCompatibilityPolicy({ mode: 'strict', reason: 'explicit_strict' })
-    ).toEqual({ effective_mode: 'strict', managed_by_catalog: false });
+    ).toEqual({
+      effective_mode: 'strict',
+      managed_by_catalog: false,
+      effective_dcr_mode: 'advertised',
+      dcr_mode_source: 'default',
+    });
   });
+
+  it.each([undefined, 'disabled', 'advertised', 'fallback'] as const)(
+    'projects DCR %s without changing the saved choice or catalog provenance',
+    async (dcrMode) => {
+      const server = catalogServer({
+        auth: {
+          type: 'oauth',
+          oauth_mode: 'per_user',
+          ...(dcrMode ? { oauth_dcr_mode: dcrMode } : {}),
+        },
+      });
+      const before = structuredClone(server);
+      const policy = await resolveMCPOAuthCompatibilityPolicy(server, [entry]);
+      expect(presentMCPOAuthCompatibilityPolicy(policy, dcrMode)).toMatchObject({
+        effective_mode: dcrMode ? 'strict' : 'marketplace',
+        effective_dcr_mode: dcrMode ?? 'advertised',
+        dcr_mode_source: dcrMode ? 'explicit' : 'default',
+      });
+      expect(presentMCPOAuthEffectivePolicy('legacy', dcrMode).effective_dcr_mode).toBe(
+        dcrMode ?? 'advertised'
+      );
+      expect(server).toEqual(before);
+    }
+  );
 
   it('retains explicit public strict and legacy opt-ins', async () => {
     await expect(

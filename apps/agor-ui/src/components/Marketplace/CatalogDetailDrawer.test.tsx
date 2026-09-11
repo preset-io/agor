@@ -9,17 +9,11 @@
  * rather than through a close/reopen that only approximates it.
  */
 
-import type {
-  Branch,
-  MCPCatalogCredentialRequirement,
-  MCPCatalogEntry,
-  SessionID,
-} from '@agor/core/types';
+import type { Branch, MCPCatalogCredentialRequirement, MCPCatalogEntry } from '@agor/core/types';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { type MCPServerCapabilityContext, POLICY_LOADING_HINT } from '../MCPServer/memberPolicy';
 import { CatalogDetailDrawer } from './CatalogDetailDrawer';
-import { getLastConnectBranchId, rememberConnectBranchId } from './useConnectTargets';
 
 const ALLOWED: MCPServerCapabilityContext = {
   connectionReady: true,
@@ -65,10 +59,12 @@ function renderDrawer(
       entry={entry}
       open
       onClose={vi.fn()}
-      branches={BRANCHES}
-      branchesLoading={false}
-      branchesError={null}
-      defaultBranchId="branch-1"
+      teammates={BRANCHES}
+      teammatesLoading={false}
+      teammatesError={null}
+      defaultTeammateId="branch-1"
+      startingSession={false}
+      startSessionError={null}
       connecting={false}
       connectError={null}
       connectCapability={capability}
@@ -84,10 +80,12 @@ function renderDrawer(
         entry={next}
         open
         onClose={vi.fn()}
-        branches={BRANCHES}
-        branchesLoading={false}
-        branchesError={null}
-        defaultBranchId="branch-1"
+        teammates={BRANCHES}
+        teammatesLoading={false}
+        teammatesError={null}
+        defaultTeammateId="branch-1"
+        startingSession={false}
+        startSessionError={null}
         connecting={false}
         connectError={null}
         connectCapability={capability}
@@ -101,119 +99,16 @@ function renderDrawer(
 
 const connectButton = () => {
   const match = screen
-    .getAllByText(/^(Connect with .+|Verify key & connect|Check & connect|Connect & try it)$/i)
+    .getAllByText(/^(Connect with .+|Connect|Connect|Connect)$/i)
     .find((node) => node.closest('button'));
   if (!match) throw new Error('Connect button not found');
   return match.closest('button')!;
 };
 
-function branchCombobox(): HTMLElement {
-  const item = screen.getByText('Branch').closest('.ant-form-item');
-  const input = item?.querySelector('[role="combobox"]');
-  if (!(input instanceof HTMLElement)) throw new Error('Branch selector not found');
-  return input;
-}
-
-function renderBranchDrawer({
-  branches,
-  defaultBranchId,
-  loading = false,
-}: {
-  branches: Branch[];
-  defaultBranchId: string | null;
-  loading?: boolean;
-}) {
-  return render(
-    <CatalogDetailDrawer
-      identityKey="user-admin"
-      entry={DEEPWIKI}
-      open
-      onClose={vi.fn()}
-      branches={branches}
-      branchesLoading={loading}
-      branchesError={null}
-      defaultBranchId={defaultBranchId}
-      connecting={false}
-      connectError={null}
-      connectCapability={ALLOWED}
-      policyPending={false}
-      policyPendingHint={POLICY_LOADING_HINT}
-      onConnect={vi.fn()}
-    />
-  );
-}
-
-describe('CatalogDetailDrawer branch destination', () => {
-  const TWO_BRANCHES = [
-    { branch_id: 'branch-1', name: 'First branch' },
-    { branch_id: 'branch-2', name: 'Remembered branch' },
-  ] as unknown as Branch[];
-
-  it('selects the caller-persisted branch by default', async () => {
-    localStorage.clear();
-    rememberConnectBranchId('user-admin', 'branch-2');
-    renderBranchDrawer({
-      branches: TWO_BRANCHES,
-      defaultBranchId: getLastConnectBranchId('user-admin'),
-    });
-
-    await waitFor(() =>
-      expect(branchCombobox().parentElement).toHaveTextContent('Remembered branch')
-    );
-  });
-
-  it('falls back to the first accessible branch when the preference is stale', async () => {
-    renderBranchDrawer({ branches: TWO_BRANCHES, defaultBranchId: 'no-longer-visible' });
-
-    await waitFor(() => expect(branchCombobox().parentElement).toHaveTextContent('First branch'));
-    expect(branchCombobox().parentElement).not.toHaveTextContent('Remembered branch');
-  });
-
-  it('distinguishes a loading branch list from no accessible branches', async () => {
-    const view = renderBranchDrawer({ branches: [], defaultBranchId: null, loading: true });
-    expect(screen.getAllByText('Loading branches…').length).toBeGreaterThan(0);
-    expect(connectButton()).toBeDisabled();
-
-    view.rerender(
-      <CatalogDetailDrawer
-        identityKey="user-admin"
-        entry={DEEPWIKI}
-        open
-        onClose={vi.fn()}
-        branches={[]}
-        branchesLoading={false}
-        branchesError={null}
-        defaultBranchId={null}
-        connecting={false}
-        connectError={null}
-        connectCapability={ALLOWED}
-        policyPending={false}
-        policyPendingHint={POLICY_LOADING_HINT}
-        onConnect={vi.fn()}
-      />
-    );
-
-    expect(screen.getByText('Select a branch')).toBeVisible();
-    fireEvent.mouseDown(branchCombobox());
-    expect(await screen.findByText('No branches yet')).toBeInTheDocument();
-    expect(connectButton()).toBeDisabled();
-  });
-
-  it('uses a fixed desktop target width that Ant Drawer can constrain to the viewport', () => {
-    renderBranchDrawer({
-      branches: TWO_BRANCHES,
-      defaultBranchId: 'branch-1',
-    });
-
-    expect(document.querySelector('.ant-drawer-content-wrapper')).toHaveStyle({ width: '520px' });
-  });
-
-  it('keeps the catalog ID copyable inside collapsed technical details', async () => {
-    renderBranchDrawer({ branches: TWO_BRANCHES, defaultBranchId: 'branch-1' });
-
-    fireEvent.click(screen.getByText('Technical details'));
-    expect(await screen.findByRole('button', { name: 'Copy' })).toBeInTheDocument();
-  });
+it('keeps the catalog ID copyable inside collapsed technical details', async () => {
+  renderDrawer(DEEPWIKI);
+  fireEvent.click(screen.getByText('Technical details'));
+  expect(await screen.findByRole('button', { name: 'Copy' })).toBeInTheDocument();
 });
 
 describe('CatalogDetailDrawer connected state', () => {
@@ -223,10 +118,12 @@ describe('CatalogDetailDrawer connected state', () => {
       entry: OAUTH_LINEAR,
       open: true,
       onClose: vi.fn(),
-      branches: BRANCHES,
-      branchesLoading: false,
-      branchesError: null,
-      defaultBranchId: 'branch-1',
+      teammates: BRANCHES,
+      teammatesLoading: false,
+      teammatesError: null,
+      defaultTeammateId: 'branch-1',
+      startingSession: false,
+      startSessionError: null,
       connecting: false,
       connectError: null,
       connectCapability: ALLOWED,
@@ -238,7 +135,8 @@ describe('CatalogDetailDrawer connected state', () => {
       <CatalogDetailDrawer
         {...base}
         success={{
-          sessionId: 'session-1' as SessionID,
+          catalogKey: DEEPWIKI.name,
+          serverId: 'server-1',
           authentication: 'pending',
           reusedExistingServer: false,
         }}
@@ -251,7 +149,8 @@ describe('CatalogDetailDrawer connected state', () => {
       <CatalogDetailDrawer
         {...base}
         success={{
-          sessionId: 'session-1' as SessionID,
+          catalogKey: DEEPWIKI.name,
+          serverId: 'server-1',
           authentication: 'ready',
           reusedExistingServer: false,
         }}
@@ -269,35 +168,36 @@ describe('CatalogDetailDrawer connected state', () => {
         entry={DEEPWIKI}
         open
         onClose={vi.fn()}
-        branches={BRANCHES}
-        branchesLoading={false}
-        branchesError={null}
-        defaultBranchId="branch-1"
+        teammates={BRANCHES}
+        teammatesLoading={false}
+        teammatesError={null}
+        defaultTeammateId="branch-1"
+        startingSession={false}
+        startSessionError={null}
         connecting={false}
         connectError={null}
         connectCapability={ALLOWED}
         policyPending={false}
         policyPendingHint={POLICY_LOADING_HINT}
         success={{
-          sessionId: 'session-1',
-          sessionTitle: 'Try DeepWiki',
-          branchName: 'mkt-slice',
+          catalogKey: DEEPWIKI.name,
+          serverId: 'server-1',
           authentication: 'ready',
           reusedExistingServer: false,
         }}
-        onOpenSession={openSession}
+        onBeginSessionSetup={openSession}
         onConnect={vi.fn()}
       />
     );
 
-    expect(screen.getByText('Connected and ready')).toBeInTheDocument();
+    expect(screen.getByText('Added to My Servers')).toBeInTheDocument();
     expect(screen.getByText(DEEPWIKI.benefit)).toBeInTheDocument();
     expect(screen.queryByRole('checkbox')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /Connect/ })).not.toBeInTheDocument();
-    const open = screen.getByRole('button', { name: 'Open session' });
+    const open = screen.getByRole('button', { name: 'Start new session' });
     await waitFor(() => expect(open).toHaveFocus());
     fireEvent.click(open);
-    expect(openSession).toHaveBeenCalledWith('session-1');
+    expect(openSession).toHaveBeenCalledOnce();
   });
 });
 
@@ -355,10 +255,12 @@ describe('CatalogDetailDrawer OAuth activation', () => {
         entry={options.entry ?? OAUTH_LINEAR}
         open
         onClose={vi.fn()}
-        branches={BRANCHES}
-        branchesLoading={false}
-        branchesError={null}
-        defaultBranchId="branch-1"
+        teammates={BRANCHES}
+        teammatesLoading={false}
+        teammatesError={null}
+        defaultTeammateId="branch-1"
+        startingSession={false}
+        startSessionError={null}
         connecting={false}
         connectError={null}
         readiness={
@@ -558,10 +460,10 @@ function renderWithConnect(entry: MCPCatalogEntry) {
     entry: shown,
     open,
     onClose: vi.fn(),
-    branches: BRANCHES,
-    branchesLoading: false,
-    branchesError: null,
-    defaultBranchId: 'branch-1',
+    teammates: BRANCHES,
+    teammatesLoading: false,
+    teammatesError: null,
+    defaultTeammateId: 'branch-1',
     connecting: false,
     connectError: null,
     credentialRequirement,
@@ -591,7 +493,8 @@ function renderWithConnect(entry: MCPCatalogEntry) {
         <CatalogDetailDrawer
           {...props(entry)}
           success={{
-            sessionId: '019fd25a-7065-75f8-b6e6-f1963f9817d6' as SessionID,
+            catalogKey: DEEPWIKI.name,
+            serverId: 'server-1',
             authentication: 'ready',
             reusedExistingServer: false,
           }}
@@ -621,7 +524,7 @@ describe('CatalogDetailDrawer API key', () => {
       )
     ).toBeVisible();
     expect(screen.getByRole('alert')).toHaveClass('ant-alert-info');
-    expect(connectButton()).toHaveTextContent('Check & connect');
+    expect(connectButton()).toHaveTextContent('Connect');
   });
 
   it('erases same-entry consent and the pasted key on same-role identity replacement', () => {
@@ -667,7 +570,7 @@ describe('CatalogDetailDrawer API key', () => {
     // routinely arrives with surrounding whitespace, and the button should not
     // enable for a field holding only spaces.
     expect(onConnect).toHaveBeenCalledWith(
-      expect.objectContaining({ branchId: 'branch-1', bearerToken: 'fake-key-1111' })
+      expect.objectContaining({ bearerToken: 'fake-key-1111' })
     );
   });
 
@@ -728,7 +631,7 @@ describe('CatalogDetailDrawer API key', () => {
     fireEvent.change(keyField() as HTMLElement, { target: { value: 'fake-github-key' } });
 
     succeed();
-    expect(screen.getByText('Connected and ready')).toBeInTheDocument();
+    expect(screen.getByText('Added to My Servers')).toBeInTheDocument();
     expect(keyField()).toBeNull();
 
     // If the view returns to a credential form, the discarded value must not

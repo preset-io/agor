@@ -76,7 +76,6 @@ import { useAuthorityOperationGuard } from './hooks/useAuthorityOperationGuard';
 import { useEnsureFrameworkRepo } from './hooks/useEnsureFrameworkRepo';
 import { useEnvironmentStart } from './hooks/useEnvironmentStart';
 import { findFrameworkRepo } from './hooks/useFrameworkRepo';
-import { useMarketplaceOAuthAuthorityOwner } from './hooks/useMarketplaceOAuthAuthorityOwner';
 import {
   type OnboardingOperationOwner,
   useOnboardingLifecycle,
@@ -111,6 +110,7 @@ import {
   isOnboardingDeferred,
   type OnboardingReopenMode,
 } from './utils/onboardingLifecycle';
+import { resolveOnboardingSlackIntent } from './utils/onboardingSlack';
 import { savePromptDraft } from './utils/promptDrafts';
 import { seedOnboardingTeammate } from './utils/seedOnboardingTeammate';
 import { updateSessionMcpServers } from './utils/sessionMcpServers';
@@ -401,7 +401,6 @@ function AppContent() {
     logoutForAuthorityCycle,
     refreshCurrentUserForAuthorityCycle,
   } = useAuth();
-  const marketplaceOAuthAuthorityOwner = useMarketplaceOAuthAuthorityOwner(user);
 
   // Call ALL hooks unconditionally BEFORE any conditional returns.
   // Connect to daemon with authentication token (auth is always required —
@@ -417,12 +416,8 @@ function AppContent() {
   } = useAgorClient({
     accessToken: authenticated ? accessToken : null,
     authorityGeneration: authenticationGeneration,
-    onBeforeAuthGenerationChange: marketplaceOAuthAuthorityOwner.beforeAuthGenerationChange,
   });
   const startEnvironmentWithConfirmation = useEnvironmentStart(client);
-  // Ref-only observation keeps the central owner aligned across identity and
-  // role renders without performing cleanup during React render.
-  marketplaceOAuthAuthorityOwner.observeRenderedGeneration(authGeneration);
   const appAuthorityGuard = useAuthorityOperationGuard(
     user?.user_id && user.role && client && connected && !connecting
       ? [user.user_id, user.role, client, authGeneration]
@@ -620,11 +615,8 @@ function AppContent() {
   const integrationsHydrated = useAgorStore(
     (s) => s.mcpServersHydrated && s.gatewayChannelsHydrated
   );
-  // The "Connect tools" banner asks for workspace-wide setup — MCP servers and
-  // Slack/GitHub channels — so it is offered to the role that can complete it.
-  // Members reach the MCP settings tab without it, to read the policy that
-  // governs them.
-  const canManageMcp = hasMinimumRole(currentUser?.role, ROLES.ADMIN);
+  // Members can browse Catalog; its existing policy gate owns connection authority.
+  const canManageMcp = hasMinimumRole(currentUser?.role, ROLES.MEMBER);
   // Onboarding provisions boards, repos, branches and sessions. A viewer is a
   // read-only role, so its first login must enter the workspace without opening
   // a flow the daemon will correctly refuse at every write boundary.
@@ -934,8 +926,16 @@ function AppContent() {
     }
     if (!isCurrentUser()) return;
 
+    const slackGatewayIntent = await resolveOnboardingSlackIntent(
+      client,
+      currentUser,
+      result.slackGatewayIntent
+    );
+    if (!isCurrentUser()) return;
     const retainedSeed = onboardingSeedResultRef.current.get(result.boardId);
     const seeded = await seedOnboardingTeammate({
+      slackGatewayIntent,
+      connectedMcpServerIds: result.connectedMcpServerIds,
       frameworkRepo: readyFrameworkRepo,
       boardId: result.boardId,
       teammateName: result.teammateName,
@@ -2331,7 +2331,11 @@ function AppContent() {
             onComplete={(result, attempt) => {
               if (!onboardingWizardOwner || !isOnboardingOwnerCurrent(onboardingWizardOwner))
                 return;
-              return handleOnboardingComplete(onboardingWizardOwner, result, attempt.isCurrent);
+              return handleOnboardingComplete(
+                onboardingWizardOwner,
+                result,
+                attempt.isCurrent
+              ).then(() => undefined);
             }}
             onDismiss={(progress) => {
               if (!onboardingWizardOwner || !isOnboardingOwnerCurrent(onboardingWizardOwner))
@@ -2340,6 +2344,7 @@ function AppContent() {
             }}
             user={currentUser}
             client={client}
+            allowClaudeOAuthSignIn={featuresConfig?.claudeSubscriptionOAuth === true}
             onUpdateUser={async (userId, updates) => {
               if (
                 !onboardingWizardOwner ||

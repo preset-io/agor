@@ -15,13 +15,14 @@ import {
   setMCPEgressGatewayMode,
   TaskRepository,
   type TenantScopeAwareDatabase,
+  UserMCPOAuthTokenRepository,
   UsersRepository,
 } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
 import { TaskStatus, type TenantID, type UserID, type UUID } from '@agor/core/types';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { issueMCPEgressCapability } from './capability.js';
-import { MCPEgressGateway, mcpEgressMaterialHash } from './gateway.js';
+import { MCPEgressGateway, mcpEgressMaterialHash, mcpOAuthGrantIdentity } from './gateway.js';
 
 const postgresUrl = process.env.AGOR_TEST_POSTGRES_URL;
 const usesPostgresSchema = process.env.AGOR_DB_DIALECT === 'postgresql';
@@ -134,6 +135,131 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
         return { user, session, task, mcpServer };
       });
     }
+
+    it('retires shared consent on daemon B before daemon A admits a new hop', async () => {
+      const tenantId = `mcp-egress-consenter-${generateId()}` as TenantID;
+      const oldSecret = process.env.AGOR_MASTER_SECRET;
+      process.env.AGOR_MASTER_SECRET = 'synthetic-egress-consent-master';
+      let requests = 0;
+      const url = await provider((_request, response) => {
+        requests += 1;
+        response.writeHead(200, { 'content-type': 'application/json' });
+        response.end('{"jsonrpc":"2.0","id":1,"result":{}}');
+      });
+      const seeded = await seed(tenantId, url);
+      let releaseDns!: () => void;
+      let dnsArrived!: () => void;
+      const arrived = new Promise<void>((resolve) => {
+        dnsArrived = resolve;
+      });
+      const gate = new Promise<void>((resolve) => {
+        releaseDns = resolve;
+      });
+      let pauseDns = false;
+      try {
+        const shared = await runWithTenantDatabaseScope(dbA, tenantId, async (scoped) => {
+          const consenter = await new UsersRepository(scoped).create({
+            email: `${generateId()}@example.test`,
+            role: 'admin',
+          });
+          const server = await new MCPServerRepository(scoped).update(
+            seeded.mcpServer.mcp_server_id,
+            {
+              auth: { type: 'oauth', oauth_mode: 'shared' },
+            }
+          );
+          const grants = new UserMCPOAuthTokenRepository(scoped);
+          await grants.saveToken(
+            null,
+            server.mcp_server_id,
+            {
+              accessToken: 'shared-provider-token',
+              clientId: 'shared-client',
+              grantBinding: {
+                generation: 1,
+                version: 4,
+                fingerprint: 'a'.repeat(64),
+                resourceUri: url,
+                metadataUri: 'https://provider.example.test/metadata',
+                issuer: 'https://provider.example.test',
+                authorizationEndpoint: 'https://provider.example.test/authorize',
+                tokenEndpoint: 'https://provider.example.test/token',
+                redirectUri: 'https://agor.example.test/callback',
+              },
+            },
+            consenter.user_id
+          );
+          return {
+            consenter,
+            server,
+            grantIdentity: mcpOAuthGrantIdentity(await grants.getToken(null, server.mcp_server_id)),
+          };
+        });
+        const secret = 'synthetic-egress-capability';
+        const gateway = new MCPEgressGateway({
+          db: dbA,
+          jwtSecret: secret,
+          allowLocalhostHttp: true,
+          app: {
+            get: () => undefined,
+            service: () => ({
+              create: async () => ({
+                headers: {
+                  [shared.server.mcp_server_id]: { authorization: 'Bearer shared-provider-token' },
+                },
+              }),
+            }),
+          } as unknown as Application,
+          resolveDns: async () => {
+            if (pauseDns) {
+              dnsArrived();
+              await gate;
+            }
+            return [{ address: '127.0.0.1', family: 4 }];
+          },
+        });
+        const capability = issueMCPEgressCapability(
+          {
+            tid: tenantId,
+            task_id: seeded.task.task_id,
+            session_id: seeded.session.session_id,
+            principal_user_id: seeded.user.user_id,
+            credential_user_id: seeded.user.user_id,
+            mcp_server_id: shared.server.mcp_server_id,
+            config_version: shared.server.config_version ?? 1,
+            material_hash: mcpEgressMaterialHash(shared.server, {}, secret),
+            grant_identity: shared.grantIdentity,
+            rollout_mode: 'enforced',
+            jti: generateId(),
+          },
+          secret
+        );
+        const request = () =>
+          gateway.forward({
+            serverId: shared.server.mcp_server_id,
+            headers: new Headers({ 'x-agor-mcp-capability': capability }),
+            method: 'POST',
+            body: new TextEncoder().encode('{"jsonrpc":"2.0","id":1,"method":"initialize"}'),
+          });
+        await expect(request()).resolves.toBeDefined();
+        expect(requests).toBe(1);
+        pauseDns = true;
+        const pending = request();
+        const rejected = expect(pending).rejects.toMatchObject({ code: 'grant_changed' });
+        await arrived;
+        await runWithTenantDatabaseScope(dbB, tenantId, (scoped) =>
+          new UsersRepository(scoped).delete(shared.consenter.user_id)
+        );
+        releaseDns();
+        await rejected;
+        expect(requests).toBe(1);
+        await expect(request()).rejects.toMatchObject({ code: 'grant_changed' });
+      } finally {
+        releaseDns();
+        if (oldSecret === undefined) delete process.env.AGOR_MASTER_SECRET;
+        else process.env.AGOR_MASTER_SECRET = oldSecret;
+      }
+    });
 
     it('observes daemon-B commit before daemon-A final check and sends zero provider requests', async () => {
       const tenantId = `mcp-egress-ha-${generateId()}` as TenantID;

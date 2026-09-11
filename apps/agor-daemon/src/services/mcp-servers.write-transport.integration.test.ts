@@ -6,6 +6,7 @@ import {
   runMigrations,
   shortId,
   UserMCPOAuthTokenRepository,
+  UsersRepository,
 } from '@agor/core/db';
 import {
   errorHandler,
@@ -18,7 +19,7 @@ import {
 } from '@agor/core/feathers';
 import { mcpServerQueryValidator, typedValidateQuery } from '@agor/core/lib/feathers-validation';
 import { MCP_HEADER_REDACTED_SENTINEL } from '@agor/core/tools/mcp/http-headers';
-import type { HookContext, MCPAuth, MCPServer, MCPServerID } from '@agor/core/types';
+import type { HookContext, MCPAuth, MCPServer, MCPServerID, UserID } from '@agor/core/types';
 import { type Socket as ClientSocket, io as createSocketClient } from 'socket.io-client';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { redactMCPServerSecretFields, validateMcpServerWriteInput } from '../register-hooks.js';
@@ -60,6 +61,11 @@ async function createHarness(
 ): Promise<Harness> {
   const rawDb = await createDatabaseAsync({ dialect: 'sqlite', url: ':memory:' });
   await runMigrations(rawDb);
+  await new UsersRepository(rawDb).create({
+    user_id: USER_ID as UserID,
+    email: 'transport-admin@example.test',
+    role: 'admin',
+  });
   const repository = new MCPServerRepository(rawDb);
   const app = feathersExpress(feathers());
   app.use(feathersExpress.json());
@@ -877,10 +883,15 @@ describe('MCP server real REST and Socket.IO write contract', () => {
       ...createInput({ type: 'oauth', oauth_mode: 'per_user' }),
       name: 'disable-removes-oauth',
     });
-    await harness.grants.saveToken(null, created.mcp_server_id, {
-      accessToken: 'saved-access-token',
-      refreshToken: 'saved-refresh-token',
-    });
+    await harness.grants.saveToken(
+      null,
+      created.mcp_server_id,
+      {
+        accessToken: 'saved-access-token',
+        refreshToken: 'saved-refresh-token',
+      },
+      USER_ID as UserID
+    );
     probe.pendingServerIds.add(created.mcp_server_id);
 
     const patched = (await harness.client
@@ -915,9 +926,14 @@ describe('MCP server real REST and Socket.IO write contract', () => {
       });
       const fullId = created.mcp_server_id;
       const abbreviatedId = shortId(fullId);
-      await harness.grants.saveToken(null, fullId, {
-        accessToken: 'historical-access-token',
-      });
+      await harness.grants.saveToken(
+        null,
+        fullId,
+        {
+          accessToken: 'historical-access-token',
+        },
+        USER_ID as UserID
+      );
       probe.pendingServerIds.add(fullId);
 
       if (transportCase === 'rest-patch') {

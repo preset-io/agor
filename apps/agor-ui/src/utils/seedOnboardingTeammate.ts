@@ -1,6 +1,7 @@
 import type { AgenticToolName, AgorClient, Branch, Repo, Session, UserID } from '@agor-live/client';
 import type { NewSessionConfig, SessionCreationResult } from '../domain/sessionCreation';
 import type { OnboardingIntegrationRecommendation } from './onboardingGoals';
+import type { OnboardingSlackGatewayIntent } from './onboardingSlack';
 import { startTeammateBootstrapSession } from './startTeammateBootstrapSession';
 import {
   buildTeammateBootstrapPrompt,
@@ -9,6 +10,8 @@ import {
 import { createTeammateBranch, type TeammateCreationDeps } from './teammateCreation';
 
 export interface SeedOnboardingTeammateInput {
+  connectedMcpServerIds?: string[];
+  slackGatewayIntent?: OnboardingSlackGatewayIntent;
   /** Framework repo the teammate branches from — undefined while it's still cloning. */
   frameworkRepo: Repo | undefined;
   /** Board the wizard already created; the teammate is seeded onto it (no second board). */
@@ -138,14 +141,24 @@ async function findExistingSession(
       }
     }
   }
-  const fromMap = [...input.sessionById.values()].find((session) => session.branch_id === branchId);
+  // Earlier onboarding revisions could leave idle Catalog tryouts here. They
+  // are not the bootstrap, nor are normal Catalog tryouts on this teammate.
+  // A retained exact session ID above wins even if its title has since changed.
+  const isBootstrap = (session: Session) =>
+    session.branch_id === branchId &&
+    session.title ===
+      buildTeammateFirstSessionTitle({
+        displayName: input.teammateName?.trim() ?? '',
+        emoji: input.teammateEmoji,
+      });
+  const fromMap = [...input.sessionById.values()].find(isBootstrap);
   if (fromMap || !input.client) return fromMap;
 
   const result = await input.client.service('sessions').find({
-    query: { branch_id: branchId, archived: false, $limit: 1 },
+    query: { branch_id: branchId, archived: false, $limit: 100 },
   });
   const sessions = Array.isArray(result) ? result : result.data;
-  return sessions.find((session) => session.branch_id === branchId);
+  return sessions.find(isBootstrap);
 }
 
 export async function seedOnboardingTeammate(input: SeedOnboardingTeammateInput): Promise<{
@@ -258,6 +271,9 @@ export async function seedOnboardingTeammate(input: SeedOnboardingTeammateInput)
       sessionConfig: {
         branch_id: branch.branch_id,
         agent: input.agent,
+        ...(input.connectedMcpServerIds?.length
+          ? { mcpServerIds: input.connectedMcpServerIds }
+          : {}),
         title: buildTeammateFirstSessionTitle({
           displayName: teammateName,
           emoji: input.teammateEmoji,
@@ -270,6 +286,7 @@ export async function seedOnboardingTeammate(input: SeedOnboardingTeammateInput)
           goals: input.goals,
           templateId: input.templateId,
           suggestedIntegrations: input.suggestedIntegrations,
+          slackGatewayIntent: input.slackGatewayIntent,
         }),
       },
       onCreateSession: input.onCreateSession,

@@ -105,6 +105,7 @@ import type {
   MCPOAuthClientRegistrationResetRequest,
   MCPOAuthClientRegistrationResetResult,
   MCPOAuthDCRMode,
+  MCPOAuthEffectivePolicy,
   MCPOAuthPendingFlowStatus,
   MCPOAuthRuntimeCompatibilityMode,
   MCPOAuthStartFailure,
@@ -259,6 +260,7 @@ import {
 import { MCPOAuthClientRegistrationAuthority } from './services/mcp-oauth-client-registration-authority.js';
 import {
   logMCPOAuthCompatibilityPolicy,
+  presentMCPOAuthEffectivePolicy,
   resolveMCPOAuthCompatibilityPolicy,
 } from './services/mcp-oauth-compatibility.js';
 import {
@@ -274,12 +276,16 @@ import {
   fingerprintMCPOAuthGrantConfiguration,
   grantBindingVersionForCompatibilityMode,
   hasMCPOAuthRelevantServerConfigurationChanged,
-  isMCPOAuthGrantBoundToServer,
   lockMCPOAuthGrantConfiguration,
-  shouldVerifyMCPOAuthGrantBinding,
 } from './services/mcp-oauth-grant-binding.js';
 import { MCPOAuthPendingFlowAuthority } from './services/mcp-oauth-pending-flow-authority.js';
 import { resolveAuthenticatedServerIds } from './services/mcp-oauth-status.js';
+import {
+  acquireMCPOAuthGrant,
+  MCPClientCredentialsConfigurationError,
+  MCPOAuthRefreshBusyError,
+  missingMCPOAuthGrantError,
+} from './services/mcp-oauth-use.js';
 import {
   createMCPServersService,
   runWithMCPServerMutationDatabase,
@@ -2243,6 +2249,8 @@ export async function registerMCPServices(
     scope?: string;
     compatibilityMode?: MCPOAuthRuntimeCompatibilityMode;
     dcrMode?: MCPOAuthDCRMode;
+    /** Reports the exact policy after the authoritative saved-row reload. */
+    onPolicyResolved?: (policy: MCPOAuthEffectivePolicy) => void;
     socketId?: string;
     browserReservation?: OAuthBrowserReservationClaim;
     /**
@@ -2453,6 +2461,9 @@ export async function registerMCPServices(
           });
         }
       : undefined;
+    opts.onPolicyResolved?.(
+      presentMCPOAuthEffectivePolicy(effectiveCompatibilityMode, effectiveDcrMode)
+    );
     const context = await runWithinOAuthAuthority(assertFlowAuthority, () =>
       startMCPOAuthFlow(opts.wwwAuthenticate, effectiveClientId, redirectUri, {
         authorizationUrlOverride: effectiveAuthorizationUrlOverride,
@@ -4618,7 +4629,9 @@ export async function registerMCPServices(
                   data.mcp_server_id ?? '<unsaved>',
                   (params as AuthenticatedParams | undefined)?.user?.user_id ?? '<unknown-user>',
                 ].join(':'),
-                cache: !durableOAuthFlows,
+                // A client-credentials test is probe-only, not durable consent.
+                // Never retain its token outside this request in either dialect.
+                cache: false,
                 assertCurrent: assertInitialRequestAuthority,
               },
               true
@@ -4883,6 +4896,7 @@ export async function registerMCPServices(
       params?: AuthenticatedParams
     ) {
       const assertRequestAuthority = requestAuthorityAssertion(params);
+      let oauthPolicy: MCPOAuthEffectivePolicy | undefined;
       let slackRecoveryBinding: SlackRecoveryBinding | undefined;
       let slackStartLeaseTimer: NodeJS.Timeout | undefined;
       let slackStartLeaseLost = false;
@@ -5081,6 +5095,7 @@ export async function registerMCPServices(
             compatibilityPolicy
           );
           dcrMode = savedServer.auth.oauth_dcr_mode;
+          oauthPolicy = presentMCPOAuthEffectivePolicy(compatibilityMode, dcrMode);
           if (oauthMode === 'shared') {
             const currentUser =
               durableOAuthFlows && tenantId && userId
@@ -5095,6 +5110,8 @@ export async function registerMCPServices(
             }
           }
         }
+
+        oauthPolicy ??= presentMCPOAuthEffectivePolicy(compatibilityMode, dcrMode);
 
         // Resolve the deployment-owned callback only after the saved row and
         // caller have been authorized, but before entering provider metadata
@@ -5160,6 +5177,7 @@ export async function registerMCPServices(
             new OAuthConfigurationError('metadata_unavailable'),
             {
               mcpServerId: savedServerId,
+              oauthPolicy,
             }
           );
           await markSlackRecoveryStartFailed();
@@ -5193,6 +5211,9 @@ export async function registerMCPServices(
             socketId,
             compatibilityMode,
             dcrMode,
+            onPolicyResolved: (policy) => {
+              oauthPolicy = policy;
+            },
             requestAuthority: assertRequestAuthority,
             slackRecovery: slackRecoveryBinding?.oauthContext,
             attemptId: reservedSlackAttemptId,
@@ -5201,6 +5222,7 @@ export async function registerMCPServices(
         } catch (err) {
           const recovery = classifyMCPAuthRecovery(err, {
             mcpServerId: data.mcp_server_id,
+            oauthPolicy,
           });
           if (recovery.category === 'redirect_configuration_required') {
             externalFailure(
@@ -5293,6 +5315,7 @@ export async function registerMCPServices(
         assertRequestAuthority?.();
         const preliminaryRecovery = classifyMCPAuthRecovery(error, {
           mcpServerId: data.mcp_server_id,
+          oauthPolicy,
         });
         let redirectUri: string | null = null;
         if (
@@ -5312,6 +5335,7 @@ export async function registerMCPServices(
         const recovery = redirectUri
           ? classifyMCPAuthRecovery(error, {
               mcpServerId: data.mcp_server_id,
+              oauthPolicy,
               redirectUri,
             })
           : preliminaryRecovery;
@@ -5796,7 +5820,10 @@ export async function registerMCPServices(
       data: { mcp_server_ids: string[] },
       params?: AuthenticatedParams
     ): Promise<{
-      headers: Record<string, { authorization?: string; error?: string }>;
+      headers: Record<
+        string,
+        { authorization?: string; error?: string; recovery?: MCPAuthRecovery }
+      >;
     }> {
       const userId = params?.user?.user_id;
       if (!userId && params?.provider) {
@@ -5804,7 +5831,10 @@ export async function registerMCPServices(
       }
 
       const serverIds = Array.isArray(data?.mcp_server_ids) ? data.mcp_server_ids : [];
-      const headers: Record<string, { authorization?: string; error?: string }> = {};
+      const headers: Record<
+        string,
+        { authorization?: string; error?: string; recovery?: MCPAuthRecovery }
+      > = {};
 
       if (serverIds.length === 0) {
         return { headers };
@@ -5875,31 +5905,9 @@ export async function registerMCPServices(
           }
         }
       }
-      const {
-        needsRefresh,
-        refreshAndPersistToken,
-        InvalidGrantError,
-        OAuthRefreshAuthorityCancelledError,
-      } = await import('@agor/core/tools/mcp/oauth-refresh');
-
-      /**
-       * The grant owner's current standing, for the refresh paths below.
-       *
-       * A refresh is not a read: `refreshAndPersistToken` obtains and stores a
-       * *new* access token, which is issuance by the same definition the rest of
-       * this file uses. A delegated task executor already carries its user's
-       * identity; an explicit daemon service account does not. In either case,
-       * the standing that matters belongs to the user the grant is keyed on.
-       *
-       * Resolved once. Every per-user grant in one request belongs to the same
-       * user: `tokenUserId` is the caller's own id, and cross-user lookup is
-       * reserved for service accounts by `resolveForUserIdWithGate`.
-       */
-      let perUserGrantOwnerEntitled: Promise<boolean> | undefined;
-      const isPerUserGrantOwnerEntitled = (): Promise<boolean> => {
-        perUserGrantOwnerEntitled ??= isMcpGrantOwnerEntitled(db, tenantId, userId, 'per_user');
-        return perUserGrantOwnerEntitled;
-      };
+      const { OAuthRefreshAuthorityCancelledError } = await import(
+        '@agor/core/tools/mcp/oauth-refresh'
+      );
 
       await Promise.all(
         serverIds.map(async (serverId) => {
@@ -5924,132 +5932,32 @@ export async function registerMCPServices(
             }
             const tokenUserId: UserID | null = mode === 'per_user' ? (userId as UserID) : null;
 
-            const row = await runInOAuthTenantScope(db, tenantId, () =>
-              new UserMCPOAuthTokenRepository(db).getToken(tokenUserId, serverId as MCPServerID)
-            );
-            if (!row) {
-              headers[serverId] = { error: 'needs_reauth' };
-              return;
+            try {
+              const grant = await acquireMCPOAuthGrant({
+                db,
+                tenantId,
+                userId: tokenUserId,
+                mcpServerId: serverId as MCPServerID,
+                validateGrant: refreshGrantValidator(tenantId, serverId as MCPServerID),
+                assertCurrent: mcpEgressAssertCurrent,
+                resolveDns: ctx.mcpOutboundDnsLookup,
+              });
+              if (!grant) throw missingMCPOAuthGrantError(server.auth);
+              headers[serverId] = { authorization: `Bearer ${grant.oauth_access_token}` };
+            } catch (error) {
+              if (error instanceof OAuthRefreshAuthorityCancelledError) throw error;
+              headers[serverId] =
+                error instanceof MCPOAuthRefreshBusyError ||
+                error instanceof MCPClientCredentialsConfigurationError
+                  ? {
+                      error:
+                        error instanceof MCPOAuthRefreshBusyError
+                          ? 'refresh_in_progress'
+                          : 'client_credentials_configuration_required',
+                      recovery: classifyMCPAuthRecovery(error, { mcpServerId: serverId }),
+                    }
+                  : { error: 'needs_reauth' };
             }
-            const compatibilityMode = (await resolveMCPOAuthCompatibilityPolicy(server)).mode;
-            if (
-              shouldVerifyMCPOAuthGrantBinding(
-                isPostgresDatabaseHandle(db),
-                row.grant_binding_version
-              ) &&
-              !isMCPOAuthGrantBoundToServer(
-                process.env.AGOR_MASTER_SECRET!,
-                server,
-                row,
-                compatibilityMode
-              )
-            ) {
-              await runInOAuthTenantWriteScope(db, tenantId, () =>
-                new UserMCPOAuthTokenRepository(db).deleteGrantVersion(
-                  tokenUserId,
-                  serverId as MCPServerID,
-                  row.grant_generation,
-                  row.grant_binding_fingerprint
-                )
-              );
-              console.warn('[OAuth AuthHeaders] grant_rejected category=binding_mismatch');
-              headers[serverId] = { error: 'needs_reauth' };
-              return;
-            }
-            if (row.refresh_status === 'ambiguous') {
-              headers[serverId] = { error: 'needs_reauth' };
-              return;
-            }
-
-            /**
-             * Refuse to *extend* a grant whose owner no longer stands where they
-             * did, while still vending one that is already valid.
-             *
-             * That is deliberately where the line falls. A demoted user's
-             * running session keeps its MCP tools until the access token
-             * expires, then reports `needs_reauth` — an error the executor
-             * already surfaces and a person can act on, and which is literally
-             * true: re-authorizing needs member standing back. The alternative,
-             * cutting a running task off the moment its owner is demoted, fails
-             * mid-tool-call with nothing the agent or the user can do about it,
-             * and revoking a credential is not what a role change has ever meant
-             * here (#2301 — demotion is still a column write that revokes
-             * nothing).
-             *
-             * `shared` grants are out of scope: they belong to the tenant rather
-             * than to a person, are admin-only to establish, and have no owner
-             * whose demotion this could describe.
-             */
-            const refreshWouldRun =
-              row.refresh_status === 'refreshing' ||
-              (needsRefresh(row.oauth_token_expires_at) && !!row.oauth_refresh_token);
-            if (refreshWouldRun && mode === 'per_user' && !(await isPerUserGrantOwnerEntitled())) {
-              console.warn('[OAuth AuthHeaders] refresh_refused category=grant_owner_role');
-              headers[serverId] = { error: 'needs_reauth' };
-              return;
-            }
-
-            if (row.refresh_status === 'refreshing') {
-              try {
-                const observed = await refreshAndPersistToken({
-                  db,
-                  tenantId,
-                  userId: tokenUserId,
-                  mcpServerId: serverId as MCPServerID,
-                  observedRefreshVersion: {
-                    grantGeneration: row.grant_generation,
-                    grantBindingFingerprint: row.grant_binding_fingerprint,
-                    refreshGeneration: row.refresh_generation,
-                  },
-                  validateGrant: refreshGrantValidator(tenantId, serverId as MCPServerID),
-                  assertCurrent: mcpEgressAssertCurrent,
-                });
-                headers[serverId] = { authorization: `Bearer ${observed}` };
-              } catch (refreshErr) {
-                if (refreshErr instanceof OAuthRefreshAuthorityCancelledError) throw refreshErr;
-                headers[serverId] = { error: 'needs_reauth' };
-              }
-              return;
-            }
-
-            let accessToken = row.oauth_access_token;
-            if (needsRefresh(row.oauth_token_expires_at) && row.oauth_refresh_token) {
-              try {
-                accessToken = await refreshAndPersistToken({
-                  db,
-                  tenantId,
-                  userId: tokenUserId,
-                  mcpServerId: serverId as MCPServerID,
-                  observedRefreshVersion: {
-                    grantGeneration: row.grant_generation,
-                    grantBindingFingerprint: row.grant_binding_fingerprint,
-                    refreshGeneration: row.refresh_generation,
-                  },
-                  validateGrant: refreshGrantValidator(tenantId, serverId as MCPServerID),
-                  assertCurrent: mcpEgressAssertCurrent,
-                });
-              } catch (refreshErr) {
-                if (refreshErr instanceof OAuthRefreshAuthorityCancelledError) throw refreshErr;
-                if (refreshErr instanceof InvalidGrantError) {
-                  headers[serverId] = { error: 'needs_reauth' };
-                  return;
-                }
-                // A failed/ambiguous rotating-token exchange must not fall back
-                // to a stale token that may already be invalid.
-                console.warn('[OAuth AuthHeaders] refresh_failed category=reauth_or_retry');
-                headers[serverId] = { error: 'needs_reauth' };
-                return;
-              }
-            } else if (
-              !accessToken ||
-              (row.oauth_token_expires_at && row.oauth_token_expires_at <= new Date())
-            ) {
-              // Expired with no refresh_token → must re-auth.
-              headers[serverId] = { error: 'needs_reauth' };
-              return;
-            }
-
-            headers[serverId] = { authorization: `Bearer ${accessToken}` };
           } catch (err) {
             if (err instanceof OAuthRefreshAuthorityCancelledError) throw err;
             externalFailure('OAuth AuthHeaders', 'oauth', err);
@@ -6109,8 +6017,9 @@ export async function registerMCPServices(
       } = await import('@agor/core/tools/mcp/oauth-refresh');
 
       try {
-        // In `shared` mode this refreshes a token nobody in particular owns,
-        // so the server row is the only thing that says who may ask.
+        // Shared refresh is authorized by server access and the caller's role;
+        // it retains the original consenter attribution rather than adopting
+        // the refreshing caller.
         const server = await runInOAuthTenantScope(db, tenantId, () =>
           loadMcpServerForCaller(db, serverId, params)
         );
@@ -6482,7 +6391,7 @@ export async function registerMCPServices(
         // compatibility code create an unpersisted token; the durable grant
         // lookup/browser-attempt path below remains authoritative.
         let authHeaders =
-          serverConfig.auth?.type === 'oauth' && isConstrainedHa(ctx.deployment)
+          serverConfig.auth?.type === 'oauth' && (serverId || isConstrainedHa(ctx.deployment))
             ? undefined
             : await runWithinOAuthBrowserReservation(browserReservation, () =>
                 resolveMCPAuthHeaders(serverConfig.auth, serverConfig.url, {
@@ -6643,55 +6552,22 @@ export async function registerMCPServices(
           // Durable token rows are the only daemon authority. The old cache
           // keyed solely by MCP origin could cross tenant/server/user grants.
           let oauthToken: string | undefined;
-          let selectedGrant: UserMCPOAuthToken | undefined;
+          let selectedGrant: UserMCPOAuthToken | null | undefined;
           const lookupUserId = serverConfig.auth?.oauth_mode === 'shared' ? null : userId;
           if (serverId) {
             selectedGrant = await runWithinOAuthBrowserReservation(browserReservation, () =>
-              runWithTenantDatabaseScope(db, tenantId, async (scopedDb) => {
-                const tokenRepo = new UserMCPOAuthTokenRepository(scopedDb);
-                const grant = await runWithinOAuthBrowserReservation(browserReservation, () =>
-                  tokenRepo.getToken(lookupUserId, serverId as MCPServerID)
-                );
-                if (!grant) return undefined;
-                const compatibilityPolicy = await runWithinOAuthBrowserReservation(
-                  browserReservation,
-                  () =>
-                    resolveMCPOAuthCompatibilityPolicy(
-                      authoritativeServer ?? {
-                        ...serverConfig,
-                        source: serverConfig.source ?? 'user',
-                      }
-                    )
-                );
-                if (
-                  shouldVerifyMCPOAuthGrantBinding(
-                    isPostgresDatabaseHandle(db),
-                    grant.grant_binding_version
-                  ) &&
-                  !isMCPOAuthGrantBoundToServer(
-                    process.env.AGOR_MASTER_SECRET!,
-                    {
-                      mcp_server_id: serverId as MCPServerID,
-                      enabled: true,
-                      transport: serverConfig.transport,
-                      url: serverConfig.url,
-                      source: serverConfig.source ?? 'user',
-                      catalog_entry_name: serverConfig.catalog_entry_name,
-                      headers: serverConfig.headers,
-                      auth: serverConfig.auth,
-                    },
-                    grant,
-                    compatibilityPolicy.mode
-                  )
-                ) {
-                  return undefined;
-                }
-                if (grant.oauth_token_expires_at && grant.oauth_token_expires_at <= new Date()) {
-                  return undefined;
-                }
-                return grant;
+              acquireMCPOAuthGrant({
+                db,
+                tenantId,
+                userId: lookupUserId,
+                mcpServerId: serverId as MCPServerID,
+                validateGrant: refreshGrantValidator(tenantId, serverId as MCPServerID),
+                assertCurrent: assertRequestAuthority,
+                resolveDns: ctx.mcpOutboundDnsLookup,
               })
             );
+            if (!selectedGrant && !browserReservation)
+              throw missingMCPOAuthGrantError(serverConfig.auth);
             oauthToken = selectedGrant?.oauth_access_token;
             if (selectedGrant && discoveryAuthority) {
               discoveryAuthority = bindMCPDiscoveryOAuthGrant(
@@ -6932,7 +6808,8 @@ export async function registerMCPServices(
         if (
           recovery.category === 'authentication_required' ||
           recovery.category === 'permission_changed' ||
-          recovery.category === 'configuration_changed'
+          recovery.category === 'configuration_changed' ||
+          recovery.category === 'configuration_required'
         ) {
           return { success: false, error: recovery.message, recovery };
         }
