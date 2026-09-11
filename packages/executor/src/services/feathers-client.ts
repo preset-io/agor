@@ -26,6 +26,25 @@ const SERVER_DISCONNECT_RECONNECT_MAX_ATTEMPTS = 8;
 
 export const EXECUTOR_REQUEST_DATA_BUDGET_BYTES = SOCKET_IO_MAX_BUFFER_SIZE_BYTES - 200_000;
 
+export function assertExecutorRequestDataWithinBudget(
+  path: string,
+  method: string,
+  data: unknown
+): void {
+  let byteSize: number;
+  try {
+    byteSize = Buffer.byteLength(JSON.stringify(data), 'utf8');
+  } catch {
+    throw new Error(`Executor request data could not be serialized (${path}.${method})`);
+  }
+  if (byteSize > EXECUTOR_REQUEST_DATA_BUDGET_BYTES) {
+    throw new Error(
+      `Executor request data is ${byteSize} bytes, exceeding the ${EXECUTOR_REQUEST_DATA_BUDGET_BYTES}-byte transport budget (${path}.${method}). ` +
+        'Reduce the request size at the source.'
+    );
+  }
+}
+
 function feathersClientDebug(...args: unknown[]): void {
   if (DEBUG_FEATHERS_CLIENT) {
     console.debug(...args);
@@ -41,21 +60,7 @@ export function registerExecutorRequestSizeGuard(client: AgorClient): void {
           const isTranscriptWrite =
             path === 'messages' && (context.method === 'create' || context.method === 'patch');
           if (!isTranscriptWrite) return context;
-
-          let byteSize: number;
-          try {
-            byteSize = Buffer.byteLength(JSON.stringify(context.data), 'utf8');
-          } catch {
-            throw new Error(
-              `Executor transcript data could not be serialized (${path}.${context.method})`
-            );
-          }
-          if (byteSize > EXECUTOR_REQUEST_DATA_BUDGET_BYTES) {
-            throw new Error(
-              `Executor transcript data is ${byteSize} bytes, exceeding the ${EXECUTOR_REQUEST_DATA_BUDGET_BYTES}-byte transport budget (${path}.${context.method}). ` +
-                `Reduce the tool result size at the source (e.g. pagination, filtering, or result limits).`
-            );
-          }
+          assertExecutorRequestDataWithinBudget(path, context.method, context.data);
           return context;
         },
       ],
