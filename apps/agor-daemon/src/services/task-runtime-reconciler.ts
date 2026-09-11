@@ -15,13 +15,10 @@ import {
   type TenantScopeAwareDatabase,
 } from '@agor/core/db';
 import type { AuthenticatedParams, Task, TenantID } from '@agor/core/types';
-import { TaskStatus } from '@agor/core/types';
+import { isAwaitingRemoteExecutor, TaskStatus } from '@agor/core/types';
 import type { Application, TasksServiceImpl } from '../declarations.js';
 import { getTrackedExecutor } from '../executor-tracking.js';
-import {
-  isAwaitingRemoteExecutor,
-  requestExecutorTermination,
-} from '../termination-coordinator.js';
+import { requestExecutorTermination } from '../termination-coordinator.js';
 import { withFreshTenantWrite } from '../utils/tenant-db-scope.js';
 
 export const EXECUTOR_HEARTBEAT_LOST_MESSAGE =

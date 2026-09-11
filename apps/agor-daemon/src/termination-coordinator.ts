@@ -10,7 +10,12 @@ import type {
   TerminationCause,
   TerminationCoordinationPendingCode,
 } from '@agor/core/types';
-import { isAgenticToolName, isTerminalTaskStatus, TaskStatus } from '@agor/core/types';
+import {
+  isAgenticToolName,
+  isAwaitingRemoteExecutor,
+  isTerminalTaskStatus,
+  TaskStatus,
+} from '@agor/core/types';
 import type { TasksServiceImpl } from './declarations.js';
 import {
   containExecutorProcess,
@@ -123,22 +128,6 @@ function runInFreshTenantWriteDatabase<T>(
   work: () => Promise<T>
 ): Promise<T> {
   return input.runInFreshTenantWriteDatabase(work);
-}
-
-/**
- * A templated/remote executor that has not claimed its dispatch cannot have
- * received the stop request yet. Its startup path reads the durable request
- * and reports quiescence, so the request is pending rather than unverified.
- */
-export function isAwaitingRemoteExecutor(task: Task): boolean {
-  return (
-    task.status === TaskStatus.STOPPING &&
-    task.executor_mode === 'templated' &&
-    !task.executor_connected_at &&
-    !!task.termination_request &&
-    !task.termination_request.executor_quiesced_at &&
-    task.sdk_failure?.termination !== 'unverified'
-  );
 }
 
 const AWAITING_REMOTE_EXECUTOR_REASON =

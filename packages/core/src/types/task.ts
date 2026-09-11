@@ -308,6 +308,24 @@ export function isTaskPendingDispatch(task: Pick<Task, 'status'>): task is Pick<
  * continue. CREATED and QUEUED are intentionally excluded: CREATED is a
  * pre-executor row and QUEUED is waiting for a future turn.
  */
+/**
+ * A templated/remote executor that has not claimed its dispatch cannot have
+ * received the stop request yet. Its startup path reads the durable request
+ * and reports quiescence, so the request is pending rather than unverified.
+ * A pure predicate over the Task DTO; shared by the termination coordinator
+ * and the runtime reconciler.
+ */
+export function isAwaitingRemoteExecutor(task: Task): boolean {
+  return (
+    task.status === TaskStatus.STOPPING &&
+    task.executor_mode === 'templated' &&
+    !task.executor_connected_at &&
+    !!task.termination_request &&
+    !task.termination_request.executor_quiesced_at &&
+    task.sdk_failure?.termination !== 'unverified'
+  );
+}
+
 export const EXECUTING_TASK_STATUSES: ReadonlySet<TaskStatus> = new Set<TaskStatus>([
   TaskStatus.DISPATCHING,
   TaskStatus.RUNNING,
