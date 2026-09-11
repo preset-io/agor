@@ -97,6 +97,7 @@ describe('Own settings persistence (real browser)', () => {
       };
     });
     const refresh = vi.fn();
+    const closeSettings = vi.fn();
     function Harness() {
       const [user, setUser] = useState(initialUser);
       const [open, setOpen] = useState(true);
@@ -111,7 +112,10 @@ describe('Own settings persistence (real browser)', () => {
               user={user}
               client={null}
               initialTab="claude-code"
-              onClose={() => setOpen(false)}
+              onClose={() => {
+                closeSettings();
+                setOpen(false);
+              }}
               onUpdateUser={patch}
               onRefreshCurrentUser={async (shouldApply) => {
                 refresh();
@@ -123,6 +127,9 @@ describe('Own settings persistence (real browser)', () => {
       );
     }
     render(<Harness />);
+    // Presence precedes the dialog's opening animation in Chromium. Begin
+    // interaction only once the provider panel is actually visible.
+    await waitFor(() => expect(screen.getByRole('heading', { name: 'Claude Code' })).toBeVisible());
     fireEvent.click(await screen.findByRole('button', { name: /Clear$/ }));
     await waitFor(() => expect(patch).toHaveBeenCalledOnce());
     expect(screen.getByRole('button', { name: 'Done' })).toBeDisabled();
@@ -130,6 +137,7 @@ describe('Own settings persistence (real browser)', () => {
       screen.queryByRole('button', { name: 'Close user settings' }) ??
       screen.getByRole('button', { name: 'Close' });
     fireEvent.click(close);
+    expect(closeSettings).not.toHaveBeenCalled();
     expect(screen.getByRole('heading', { name: 'Claude Code' })).toBeVisible();
     await act(async () => {
       release();

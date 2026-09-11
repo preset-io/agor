@@ -123,6 +123,7 @@ import type {
 } from '@agor/core/types';
 import {
   assertPublicMCPOAuthCompatibilityMode,
+  BOARD_LAYOUT_APPLIED_EVENT,
   ENVIRONMENT_COMMAND_REPORT_SERVICE,
   hasMinimumRole,
   isMCPOAuthGrantBindingVersion,
@@ -645,6 +646,7 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
         }),
     }),
     {
+      events: [BOARD_LAYOUT_APPLIED_EVENT],
       methods: [
         'find',
         'get',

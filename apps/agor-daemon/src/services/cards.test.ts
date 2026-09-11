@@ -86,3 +86,51 @@ describe('CardsService.find SQL pushdown', () => {
     expect(result.total).toBe(0);
   });
 });
+
+describe('CardsService.moveToZone placement', () => {
+  dbTest('does not drop the moved card onto the zone occupants', async ({ db }) => {
+    const { BoardObjectRepository } = await import('@agor/core/db');
+    const boardRepo = new BoardRepository(db);
+    const cardRepo = new CardRepository(db);
+    const objectRepo = new BoardObjectRepository(db);
+    const board = (
+      await boardRepo.create({ board_id: generateId(), name: 'Z', created_by: 'test-user' })
+    ).board_id as BoardID;
+
+    // Sized so the old jitter placement is deterministically wrong rather than
+    // usually wrong: at 270px tall there is no vertical jitter range left, so
+    // every blind placement lands at y=60 and every blind placement therefore
+    // lands on the occupant below. The old behaviour was random, which is how
+    // it survived review -- it only collided some of the time.
+    const zone = { type: 'zone' as const, x: 0, y: 0, width: 620, height: 270 };
+
+    const sitting = await cardRepo.create({ board_id: board, title: 'sitting' });
+    const occupant = await objectRepo.create({
+      board_id: board,
+      card_id: sitting.card_id,
+      position: { x: 24, y: 24 },
+      size: { width: 400, height: 150 },
+      zone_id: 'zone-1',
+    });
+
+    const moving = await cardRepo.create({ board_id: board, title: 'moving' });
+    await objectRepo.create({
+      board_id: board,
+      card_id: moving.card_id,
+      position: { x: 5000, y: 5000 },
+    });
+
+    const service = new CardsService(db);
+    const placed = await service.moveToZone(moving.card_id, 'zone-1', zone);
+
+    expect(placed.zone_id).toBe('zone-1');
+    const moved = { ...placed.position, width: 400, height: 150 };
+    const other = { ...occupant.position, width: 400, height: 150 };
+    const overlaps =
+      moved.x < other.x + other.width &&
+      other.x < moved.x + moved.width &&
+      moved.y < other.y + other.height &&
+      other.y < moved.y + moved.height;
+    expect(overlaps).toBe(false);
+  });
+});

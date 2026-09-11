@@ -15,6 +15,7 @@ import { EntityNotFoundError, RepositoryError } from './base';
 import { BoardObjectRepository } from './board-objects';
 import { BoardRepository } from './boards';
 import { BranchRepository } from './branches';
+import { CardRepository } from './cards';
 import { RepoRepository } from './repos';
 
 /**
@@ -169,6 +170,26 @@ describe('BoardObjectRepository.findVisibleToUser', () => {
 // ============================================================================
 
 describe('BoardObjectRepository.create', () => {
+  dbTest('rejects non-finite geometry before resolving entity references', async ({ db }) => {
+    const boRepo = new BoardObjectRepository(db);
+
+    await expect(
+      boRepo.create({
+        board_id: 'fictional-board' as BoardID,
+        branch_id: 'fictional-branch' as BranchID,
+        position: { x: Number.NaN, y: 20 },
+      })
+    ).rejects.toThrow('requires finite x/y geometry');
+    await expect(
+      boRepo.create({
+        board_id: 'fictional-board' as BoardID,
+        branch_id: 'fictional-branch' as BranchID,
+        position: { x: 10, y: 20 },
+        size: { width: 500, height: Number.POSITIVE_INFINITY },
+      })
+    ).rejects.toThrow('requires a positive finite size');
+  });
+
   dbTest('should create board object with position', async ({ db }) => {
     const repoRepo = new RepoRepository(db);
     const wtRepo = new BranchRepository(db);
@@ -210,6 +231,30 @@ describe('BoardObjectRepository.create', () => {
 
     expect(created.position).toEqual({ x: 50, y: 75 });
     expect(created.zone_id).toBe('zone-123');
+  });
+
+  dbTest('should persist measured size with placement metadata', async ({ db }) => {
+    const repoRepo = new RepoRepository(db);
+    const wtRepo = new BranchRepository(db);
+    const boRepo = new BoardObjectRepository(db);
+
+    const repo = await repoRepo.create(createRepoData());
+    const branch = await wtRepo.create(createBranchData({ repo_id: repo.repo_id }));
+    const boardId = await createBoard(db);
+
+    const created = await boRepo.create({
+      board_id: boardId,
+      branch_id: branch.branch_id,
+      position: { x: 50, y: 75 },
+      size: { width: 486, height: 237 },
+      zone_id: 'zone-measured',
+    });
+
+    expect(created).toMatchObject({
+      position: { x: 50, y: 75 },
+      size: { width: 486, height: 237 },
+      zone_id: 'zone-measured',
+    });
   });
 
   dbTest('should prevent duplicate branch on boards', async ({ db }) => {
@@ -717,6 +762,17 @@ describe('BoardObjectRepository.findByBranchId', () => {
 // ============================================================================
 
 describe('BoardObjectRepository.updatePosition', () => {
+  dbTest('rejects non-finite positions before reading or writing a row', async ({ db }) => {
+    const boRepo = new BoardObjectRepository(db);
+
+    await expect(
+      boRepo.updatePosition('fictional-object', { x: Number.NaN, y: 20 })
+    ).rejects.toThrow('requires finite x/y geometry');
+    await expect(
+      boRepo.updatePosition('fictional-object', { x: 10, y: Number.NEGATIVE_INFINITY })
+    ).rejects.toThrow('requires finite x/y geometry');
+  });
+
   dbTest('should update position', async ({ db }) => {
     const repoRepo = new RepoRepository(db);
     const wtRepo = new BranchRepository(db);
@@ -760,6 +816,25 @@ describe('BoardObjectRepository.updatePosition', () => {
 
     expect(updated.position).toEqual({ x: 500, y: 600 });
     expect(updated.zone_id).toBe('zone-preserved');
+  });
+
+  dbTest('should preserve measured size when updating position', async ({ db }) => {
+    const repoRepo = new RepoRepository(db);
+    const wtRepo = new BranchRepository(db);
+    const boRepo = new BoardObjectRepository(db);
+    const repo = await repoRepo.create(createRepoData());
+    const branch = await wtRepo.create(createBranchData({ repo_id: repo.repo_id }));
+    const boardId = await createBoard(db);
+    const created = await boRepo.create({
+      board_id: boardId,
+      branch_id: branch.branch_id,
+      position: { x: 0, y: 0 },
+      size: { width: 500, height: 221 },
+    });
+
+    const updated = await boRepo.updatePosition(created.object_id, { x: 500, y: 600 });
+
+    expect(updated.size).toEqual({ width: 500, height: 221 });
   });
 
   dbTest('should preserve undefined zone_id', async ({ db }) => {
@@ -809,6 +884,204 @@ describe('BoardObjectRepository.updatePosition', () => {
     const updated = await boRepo.updatePosition(created.object_id, { x: -50, y: -75 });
 
     expect(updated.position).toEqual({ x: -50, y: -75 });
+  });
+});
+
+describe('BoardObjectRepository.updateSize', () => {
+  dbTest('rejects non-finite and non-positive measured sizes', async ({ db }) => {
+    const boRepo = new BoardObjectRepository(db);
+
+    await expect(
+      boRepo.updateSize('fictional-object', { width: Number.POSITIVE_INFINITY, height: 100 })
+    ).rejects.toThrow('requires a positive finite size');
+    await expect(boRepo.updateSize('fictional-object', { width: 100, height: 0 })).rejects.toThrow(
+      'requires a positive finite size'
+    );
+  });
+
+  dbTest('should update size while preserving position and zone', async ({ db }) => {
+    const repoRepo = new RepoRepository(db);
+    const wtRepo = new BranchRepository(db);
+    const boRepo = new BoardObjectRepository(db);
+    const repo = await repoRepo.create(createRepoData());
+    const branch = await wtRepo.create(createBranchData({ repo_id: repo.repo_id }));
+    const boardId = await createBoard(db);
+    const created = await boRepo.create({
+      board_id: boardId,
+      branch_id: branch.branch_id,
+      position: { x: 31, y: 47 },
+      zone_id: 'zone-sized',
+    });
+
+    const updated = await boRepo.updateSize(created.object_id, { width: 492, height: 318 });
+
+    expect(updated).toMatchObject({
+      position: { x: 31, y: 47 },
+      size: { width: 492, height: 318 },
+      zone_id: 'zone-sized',
+    });
+  });
+
+  dbTest('should throw EntityNotFoundError for a missing object', async ({ db }) => {
+    const boRepo = new BoardObjectRepository(db);
+
+    await expect(boRepo.updateSize('non-existent-id', { width: 100, height: 100 })).rejects.toThrow(
+      EntityNotFoundError
+    );
+  });
+});
+
+describe('BoardObjectRepository.updateLayout', () => {
+  dbTest('rejects non-finite combined layout geometry atomically', async ({ db }) => {
+    const boardObjectRepo = new BoardObjectRepository(db);
+
+    await expect(
+      boardObjectRepo.updateLayout('fictional-object', {
+        position: { x: 10, y: Number.NaN },
+        size: { width: 500, height: 200 },
+      })
+    ).rejects.toThrow('requires finite x/y geometry');
+  });
+
+  dbTest('commits position, size, and density in one row update', async ({ db }) => {
+    const repoRepo = new RepoRepository(db);
+    const branchRepo = new BranchRepository(db);
+    const boardObjectRepo = new BoardObjectRepository(db);
+    const repo = await repoRepo.create(createRepoData());
+    const branch = await branchRepo.create(createBranchData({ repo_id: repo.repo_id }));
+    const boardId = await createBoard(db);
+    const created = await boardObjectRepo.create({
+      board_id: boardId,
+      branch_id: branch.branch_id,
+      position: { x: 10, y: 20 },
+    });
+
+    const updated = await boardObjectRepo.updateLayout(created.object_id, {
+      position: { x: 30, y: 40 },
+      size: { width: 500, height: 88 },
+      compact: true,
+    });
+
+    expect(updated).toMatchObject({
+      position: { x: 30, y: 40 },
+      size: { width: 500, height: 88 },
+      compact: true,
+    });
+  });
+});
+
+describe('BoardObjectRepository.updateLayoutForBoard density capability', () => {
+  dbTest('rejects non-positive atomic layout sizes before resolving the row', async ({ db }) => {
+    const boardObjectRepo = new BoardObjectRepository(db);
+
+    await expect(
+      boardObjectRepo.updateLayoutForBoard('fictional-board' as BoardID, 'fictional-object', {
+        position: { x: 10, y: 20 },
+        size: { width: 500, height: 0 },
+      })
+    ).rejects.toThrow('requires complete finite position and positive size geometry');
+  });
+
+  dbTest(
+    'atomically persists compact geometry for a generic card with body content',
+    async ({ db }) => {
+      const boardId = await createBoard(db);
+      const card = await new CardRepository(db).create({
+        board_id: boardId,
+        title: 'Fictional tracker',
+        description: 'Rendered detail',
+      });
+      const boardObjectRepo = new BoardObjectRepository(db);
+      const placement = await boardObjectRepo.create({
+        board_id: boardId,
+        card_id: card.card_id,
+        position: { x: 10, y: 20 },
+      });
+
+      const result = await boardObjectRepo.updateLayoutForBoard(boardId, placement.object_id, {
+        position: { x: 20, y: 40 },
+        size: { width: 380, height: 60 },
+        compact: true,
+      });
+
+      expect(result).toMatchObject({
+        changed: true,
+        entity: { position: { x: 20, y: 40 }, size: { width: 380, height: 60 }, compact: true },
+      });
+    }
+  );
+
+  dbTest('rejects compact geometry for a header-only generic card', async ({ db }) => {
+    const boardId = await createBoard(db);
+    const card = await new CardRepository(db).create({ board_id: boardId, title: 'Header only' });
+    const boardObjectRepo = new BoardObjectRepository(db);
+    const placement = await boardObjectRepo.create({
+      board_id: boardId,
+      card_id: card.card_id,
+      position: { x: 10, y: 20 },
+    });
+
+    await expect(
+      boardObjectRepo.updateLayoutForBoard(boardId, placement.object_id, {
+        position: { x: 20, y: 40 },
+        size: { width: 380, height: 60 },
+        compact: true,
+      })
+    ).rejects.toThrow('does not own collapsible body content');
+  });
+});
+
+describe('BoardObjectRepository.updateCompact', () => {
+  dbTest('invalidates measurements when presentation mode changes', async ({ db }) => {
+    const repoRepo = new RepoRepository(db);
+    const branchRepo = new BranchRepository(db);
+    const boardObjectRepo = new BoardObjectRepository(db);
+    const repo = await repoRepo.create(createRepoData());
+    const branch = await branchRepo.create(createBranchData({ repo_id: repo.repo_id }));
+    const boardId = await createBoard(db);
+    const created = await boardObjectRepo.create({
+      board_id: boardId,
+      branch_id: branch.branch_id,
+      position: { x: 10, y: 20 },
+      size: { width: 500, height: 200 },
+    });
+
+    const compacted = await boardObjectRepo.updateCompact(created.object_id, true);
+    const moved = await boardObjectRepo.updatePosition(created.object_id, { x: 30, y: 40 });
+    const resized = await boardObjectRepo.updateSize(created.object_id, { width: 500, height: 64 });
+    const expanded = await boardObjectRepo.updateCompact(created.object_id, false);
+
+    expect(compacted).toMatchObject({ compact: true, size: undefined });
+    expect(moved).toMatchObject({ compact: true, position: { x: 30, y: 40 } });
+    expect(resized).toMatchObject({ compact: true, size: { width: 500, height: 64 } });
+    expect(expanded).toMatchObject({ compact: false, size: undefined });
+  });
+
+  dbTest('keeps the current measurement on repeated same-state actions', async ({ db }) => {
+    const repoRepo = new RepoRepository(db);
+    const branchRepo = new BranchRepository(db);
+    const boardObjectRepo = new BoardObjectRepository(db);
+    const repo = await repoRepo.create(createRepoData());
+    const branch = await branchRepo.create(createBranchData({ repo_id: repo.repo_id }));
+    const boardId = await createBoard(db);
+    const created = await boardObjectRepo.create({
+      board_id: boardId,
+      branch_id: branch.branch_id,
+      position: { x: 10, y: 20 },
+      size: { width: 500, height: 200 },
+    });
+
+    const repeatedExpanded = await boardObjectRepo.updateCompact(created.object_id, false);
+    await boardObjectRepo.updateCompact(created.object_id, true);
+    const measuredCompact = await boardObjectRepo.updateSize(created.object_id, {
+      width: 500,
+      height: 64,
+    });
+    const repeatedCompact = await boardObjectRepo.updateCompact(created.object_id, true);
+
+    expect(repeatedExpanded.size).toEqual({ width: 500, height: 200 });
+    expect(measuredCompact.size).toEqual({ width: 500, height: 64 });
+    expect(repeatedCompact).toMatchObject({ compact: true, size: { width: 500, height: 64 } });
   });
 });
 

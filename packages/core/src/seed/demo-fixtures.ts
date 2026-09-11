@@ -300,12 +300,16 @@ export async function loadDemoFixtures(
     // ── STEP 4: Board with zones ────────────────────────────────────────────
     console.log('4️⃣  Creating demo board with zones...');
     // Zones are `type: "zone"` entries in the board's `data.objects` map.
-    const ZONE_W = 420;
-    const ZONE_H = 960;
+    // Branch cards render at 500px wide. Keep fixture zones meaningfully wider
+    // so the seeded board demonstrates containment instead of shipping a
+    // permanently overflowing example.
+    const ZONE_W = 620;
+    const ZONE_H = 1200;
     const ZONE_GAP = 40;
     // Vertical layout for items stacked inside a zone. Branch cards render
     // ~280px tall, so use a generous stride to keep stacked branch/kanban cards
-    // from overlapping. Rows resolve to y = 60, 400, 740 — all within ZONE_H.
+    // from overlapping. Rows resolve to y = 60, 400, 740 with ample bottom
+    // breathing room inside ZONE_H.
     const ROW_Y0 = 60;
     const ITEM_STRIDE = 340;
     const rowY = (row: number) => ROW_Y0 + row * ITEM_STRIDE;

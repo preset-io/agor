@@ -1,5 +1,5 @@
 import type { AgorClient, Branch, User } from '@agor-live/client';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { App as AntApp, Checkbox, Form } from 'antd';
 import { useEffect } from 'react';
 import { MemoryRouter } from 'react-router-dom';
@@ -255,6 +255,24 @@ describe('NavbarComposeButton', () => {
     renderCompose({ primary: withEmoji });
     // Resolved eagerly on mount — no popover open needed.
     expect(await screen.findByText('🎨')).toBeInTheDocument();
+  });
+
+  it('does not call the lazy popover form while the composer is collapsed', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      renderCompose({ primary: primaryBranch });
+      expect(await screen.findByText('🤖')).toBeInTheDocument();
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      });
+      expect(
+        consoleError.mock.calls.some(([message]) =>
+          String(message).includes('Instance created by `useForm` is not connected')
+        )
+      ).toBe(false);
+    } finally {
+      consoleError.mockRestore();
+    }
   });
 
   it('shows the 🤖 placeholder emoji on the trigger when no primary is set', async () => {
