@@ -1,5 +1,7 @@
 import type { MCPCatalogEntry, MCPServer } from '@agor/core/types';
 import { describe, expect, it } from 'vitest';
+import { selectCatalogCandidate } from './mcp-catalog-credential-match.js';
+import { catalogOAuthConfig } from './mcp-catalog-install-policy.js';
 import {
   presentMCPOAuthCompatibilityPolicy,
   resolveMCPOAuthCompatibilityPolicy,
@@ -36,6 +38,81 @@ function catalogServer(overrides: Partial<MCPServer> = {}): MCPServer {
     ...overrides,
   };
 }
+
+describe('reviewed configured-client catalog policy', () => {
+  const asana: MCPCatalogEntry & { remote_url: string } = {
+    ...entry,
+    name: 'com.asana/mcp',
+    remote_url: 'https://mcp.asana.com/v2/mcp',
+    oauth: { configured_client: true, dcr_mode: 'disabled' },
+  };
+  const server = () =>
+    catalogServer({
+      catalog_entry_name: asana.name,
+      url: asana.remote_url,
+      owner_user_id: '01900000-0000-7000-8000-000000000002' as MCPServer['owner_user_id'],
+      auth: {
+        ...catalogOAuthConfig(asana),
+        oauth_client_id: 'fixture-client',
+        oauth_client_secret: 'fixture-secret',
+      },
+    });
+
+  it('keeps normal catalog sign-in after saving the app, without relaxing general strict', async () => {
+    await expect(resolveMCPOAuthCompatibilityPolicy(server(), [asana])).resolves.toMatchObject({
+      mode: 'marketplace',
+    });
+    for (const changed of [
+      { source: 'user' as const },
+      { source: 'imported' as const },
+      { url: 'https://mcp.asana.com/sse' },
+      { url: `${asana.remote_url}/` },
+      { transport: 'sse' as const },
+      { headers: { 'X-Custom': 'value' } },
+      { auth: { ...server().auth!, oauth_token_url: 'https://other.example/token' } },
+      { auth: { ...server().auth!, oauth_scope: 'other-scope' } },
+      { auth: { ...server().auth!, oauth_dcr_mode: 'advertised' as const } },
+      { auth: { ...server().auth!, oauth_mode: 'shared' as const } },
+      { auth: { ...server().auth!, oauth_compatibility_mode: 'strict' as const } },
+    ]) {
+      await expect(
+        resolveMCPOAuthCompatibilityPolicy({ ...server(), ...changed }, [asana])
+      ).resolves.toMatchObject({ mode: 'strict' });
+    }
+    await expect(
+      resolveMCPOAuthCompatibilityPolicy(server(), [{ ...asana, oauth: undefined }])
+    ).resolves.toMatchObject({ mode: 'strict' });
+    await expect(resolveMCPOAuthCompatibilityPolicy(server(), [])).resolves.toMatchObject({
+      mode: 'strict',
+    });
+  });
+
+  it('does not lend a row client secret to another catalog caller', async () => {
+    const candidate = { server: server(), has_row_secret: true };
+    const deps = { isGrantAuthorized: async () => false };
+    const own = await selectCatalogCandidate(
+      asana,
+      catalogOAuthConfig(asana),
+      [candidate],
+      candidate.server.owner_user_id!,
+      Date.now(),
+      deps
+    );
+    expect(own.currentCatalog).toBe(candidate);
+    const other = await selectCatalogCandidate(
+      asana,
+      catalogOAuthConfig(asana),
+      [candidate],
+      'other-user',
+      Date.now(),
+      deps
+    );
+    expect(other.currentCatalog).toBeUndefined();
+    expect(other.ownedCatalog).toBeUndefined();
+    expect(other.live).toBeUndefined();
+    expect(other.compatibleOAuth).toEqual([]);
+  });
+});
 
 describe('resolveMCPOAuthCompatibilityPolicy', () => {
   it('derives marketplace only from a canonical install of a current OAuth entry', async () => {

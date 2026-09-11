@@ -60,6 +60,7 @@ const catalogEntryOAuthSchema = z
   .object({
     scope: nonEmpty.optional(),
     client_id: nonEmpty.optional(),
+    configured_client: z.literal(true).optional(),
     dcr_mode: z.enum(MCP_OAUTH_DCR_MODES).optional(),
     compatibility_mode: z.enum(MCP_OAUTH_COMPATIBILITY_MODES).optional(),
   })
@@ -70,15 +71,19 @@ const catalogEntryOAuthSchema = z
   .refine((value) => Object.values(value).some((field) => field !== undefined), {
     message: 'must state at least one setting, or be omitted entirely',
   })
-  // `disabled` is the one mode that has to bring its own client. The other two
-  // allow registration to supply one, so an absent `client_id` there is the
-  // ordinary case; with registration off, nothing else can supply it and
-  // `startOAuthFlow` refuses the pair. That refusal lands per-user at sign-in,
-  // long after the entry was reviewed, which is the wrong place to learn that a
-  // combination could never have worked.
-  .refine((value) => value.dcr_mode !== 'disabled' || value.client_id !== undefined, {
-    message: 'must state a client_id when dcr_mode is disabled, since nothing else can supply one',
-  });
+  // Disabled DCR needs a reviewed client source: either a public catalog ID
+  // or an app configured on the saved row. The latter never supplies secret
+  // material through this public file and cannot also request registration.
+  .refine(
+    (value) =>
+      value.dcr_mode !== 'disabled' || value.client_id !== undefined || value.configured_client,
+    { message: 'must state a client_id or configured_client when dcr_mode is disabled' }
+  )
+  .refine(
+    (value) =>
+      !value.configured_client || (value.dcr_mode === 'disabled' && value.client_id === undefined),
+    { message: 'configured_client requires disabled DCR and no catalog client_id' }
+  );
 
 const catalogEntryCredentialsSchema = z
   .object({

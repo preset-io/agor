@@ -5920,7 +5920,7 @@ export async function registerMCPServices(
                 assertCurrent: mcpEgressAssertCurrent,
                 resolveDns: ctx.mcpOutboundDnsLookup,
               });
-              if (!grant) throw missingMCPOAuthGrantError(server.auth);
+              if (!grant) throw await missingMCPOAuthGrantError(server);
               headers[serverId] = { authorization: `Bearer ${grant.oauth_access_token}` };
             } catch (error) {
               if (error instanceof OAuthRefreshAuthorityCancelledError) throw error;
@@ -6543,8 +6543,12 @@ export async function registerMCPServices(
                 resolveDns: ctx.mcpOutboundDnsLookup,
               })
             );
-            if (!selectedGrant && !browserReservation)
-              throw missingMCPOAuthGrantError(serverConfig.auth);
+            if (!selectedGrant && !browserReservation) {
+              if (!authoritativeServer) {
+                throw new Conflict('Saved MCP server authority changed. Retry.');
+              }
+              throw await missingMCPOAuthGrantError(authoritativeServer);
+            }
             oauthToken = selectedGrant?.oauth_access_token;
             if (selectedGrant && discoveryAuthority) {
               discoveryAuthority = bindMCPDiscoveryOAuthGrant(

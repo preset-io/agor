@@ -72,7 +72,7 @@ async function assertOAuthMetadataReady(
   const validated = await validateMCPOAuthMetadata(discovery, entry.remote_url, {
     compatibilityMode,
   });
-  if (entry.oauth?.client_id) return;
+  if (entry.oauth?.client_id || entry.oauth?.configured_client) return;
   if (entry.oauth?.dcr_mode === 'disabled' || !validated.registrationEndpoint) {
     throw new OAuthConfigurationError(
       'client_registration_required',
@@ -182,7 +182,7 @@ export async function auditCatalogHealth(
     // The public challenge was checked, but only an authenticated initialize
     // can establish that a PAT/credential really works. Scheduled audits have
     // no user secret and must not call that state fully verified.
-    if (entry.auth_type === 'credentials') {
+    if (entry.auth_type === 'credentials' || entry.oauth?.configured_client) {
       return {
         ...base,
         status: 'credential-required',

@@ -600,9 +600,14 @@ unpublished:
     permission_disclosure: Reads and writes tasks, projects, and comments in the Asana workspaces you authorise.
     icon_url: https://api.smithery.ai/servers/asana/icon
     popularity_rank: 22
-    remote_url: https://mcp.asana.com/sse
-    transport: sse
+    remote_url: https://mcp.asana.com/v2/mcp
+    transport: streamable-http
     auth_type: oauth
+    # V2 requires a developer-console MCP app; credentials belong to the
+    # access-controlled saved server, never the public catalog. No DCR.
+    oauth:
+      configured_client: true
+      dcr_mode: disabled
 
   - name: com.clickup/mcp
     category: productivity
