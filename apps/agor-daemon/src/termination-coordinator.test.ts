@@ -26,8 +26,12 @@ function task(status = TaskStatus.RUNNING, extra: Record<string, unknown> = {}) 
   return { task_id: taskId, session_id: sessionId, status, created_at: '2026-01-01', ...extra };
 }
 
-function appDouble(tool = 'codex') {
+function appDouble(tool = 'codex', options: { getDelayMs?: number } = {}) {
   let current = task();
+  const getCurrent = async () => {
+    if (options.getDelayMs) await new Promise((resolve) => setTimeout(resolve, options.getDelayMs));
+    return current;
+  };
   const claimTermination = vi.fn();
   const claimTerminationCoordination = vi.fn(async (input: { claimToken: string }) => {
     current = {
@@ -51,7 +55,7 @@ function appDouble(tool = 'codex') {
     service: (name: string) =>
       name === 'tasks'
         ? {
-            get: async () => current,
+            get: getCurrent,
             claimTermination,
             claimTerminationCoordination,
             settleTermination,
@@ -739,7 +743,9 @@ describe('termination coordinator: remote executor not yet connected', () => {
   });
 
   it('reports the measured wait, not the configured grace, for a connected executor', async () => {
-    const state = appDouble();
+    // Each durable read takes longer than the whole grace, so the real wait is
+    // several times the configured 120ms; reporting the grace would fail.
+    const state = appDouble('codex', { getDelayMs: 250 });
     const remoteStopping = {
       ...stopping('user_stop'),
       executor_mode: 'templated',
@@ -763,7 +769,42 @@ describe('termination coordinator: remote executor not yet connected', () => {
     const reason = (result as { reason: string }).reason;
     const waited = Number(/within (\d+)ms/.exec(reason)?.[1]);
     expect(result.status).toBe('unverified');
-    expect(waited).toBeGreaterThanOrEqual(100);
+    expect(waited).toBeGreaterThanOrEqual(240);
     expect(waited).toBeLessThan(5_000);
+  });
+
+  it('does not report pending when absence is already verified', async () => {
+    const state = appDouble();
+    state.claim(remoteDispatching());
+    state.settle(task(TaskStatus.STOPPED));
+
+    await expect(
+      requestExecutorTermination({
+        app: state.app,
+        taskId,
+        cause: 'user_stop',
+        errorMessage: 'Stopped by user',
+        absenceVerified: true,
+        runInFreshTenantWriteDatabase,
+      })
+    ).resolves.toMatchObject({ status: 'terminal', task: { status: TaskStatus.STOPPED } });
+    expect(state.claimTerminationCoordination).toHaveBeenCalledOnce();
+  });
+
+  it('keeps a repeated beginExecutorTermination pending without claiming coordination', async () => {
+    const state = appDouble();
+    state.claim(remoteDispatching(), 'unchanged');
+
+    await expect(
+      beginExecutorTermination({
+        app: state.app,
+        taskId,
+        cause: 'user_stop',
+        errorMessage: 'Stopped by user',
+        runInFreshTenantWriteDatabase,
+      })
+    ).resolves.toMatchObject({ status: TaskStatus.STOPPING });
+    expect(state.claimTerminationCoordination).not.toHaveBeenCalled();
+    expect(state.settleTermination).not.toHaveBeenCalled();
   });
 });

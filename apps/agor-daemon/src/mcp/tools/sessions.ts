@@ -1705,7 +1705,7 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
     'agor_sessions_stop',
     {
       description:
-        'Request that a running session stop. The session becomes idle only after Agor verifies executor quiescence or process absence; otherwise it remains guarded in stopping. Use this for emergency stops, timeout-based cancellation, or human-in-the-loop gates. Only works on sessions in active states (running, stopping, awaiting_permission, awaiting_input).',
+        'Request that a running session stop. The session becomes idle only after Agor verifies executor quiescence or process absence. A stop can also be accepted as pending (outcome "pending" with a pendingCode such as "awaiting_remote_executor" while a remote executor has not connected yet, or an HA coordination code); the request is durable and settles later without another call. Only an "unverified" outcome leaves the task guarded in stopping and requires an owner/admin force-fail. Use this for emergency stops, timeout-based cancellation, or human-in-the-loop gates. Only works on sessions in active states (running, stopping, awaiting_permission, awaiting_input).',
       annotations: { destructiveHint: true },
       inputSchema: z.object({
         sessionId: mcpRequiredId('sessionId', 'Session', 'Session ID to stop (UUIDv7 or short ID)'),
@@ -1725,12 +1725,33 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
           { ...ctx.baseServiceParams, route: { id: sessionId } }
         );
 
-      const stopResult = result as { success: boolean; status?: string; reason?: string };
+      const stopResult = result as {
+        success: boolean;
+        outcome?: string;
+        status?: string;
+        reason?: string;
+        pendingCode?: string;
+        stoppedTaskId?: string;
+      };
 
       if (!stopResult.success) {
+        if (stopResult.outcome === 'pending') {
+          // Accepted, not failed: the durable request settles without another call.
+          return textResult({
+            success: false,
+            accepted: true,
+            sessionId,
+            outcome: 'pending',
+            status: stopResult.status,
+            pendingCode: stopResult.pendingCode,
+            stoppedTaskId: stopResult.stoppedTaskId,
+            note: stopResult.reason || 'Stop accepted; waiting for executor termination.',
+          });
+        }
         return textResult({
           success: false,
           sessionId,
+          ...(stopResult.outcome ? { outcome: stopResult.outcome } : {}),
           error: stopResult.reason || 'Failed to stop session',
         });
       }

@@ -432,59 +432,71 @@ describe('TaskRepository runtime reconciliation', () => {
     async ({ db }) => {
       const tasks = new TaskRepository(db);
       const sessionId = await createSessionWithDeps(db);
-      const dispatchedAt = new Date('2026-08-06T12:00:00.000Z');
-      const pending = await tasks.create(
+      const dispatchedAt = '2026-08-06T12:00:00.000Z';
+      const graceMs = 5 * 60_000;
+      const claimedAt = new Date('2026-08-06T12:00:30.000Z');
+      const insideWindow = new Date('2026-08-06T12:04:59.000Z');
+      const stop = async (taskId: string) =>
+        tasks.claimTermination({
+          taskId,
+          cause: 'user_stop',
+          errorMessage: 'Stopped by user.',
+          now: claimedAt,
+        });
+      const stranded = async (now: Date) =>
+        (await tasks.findStrandedTerminationRefs({ now, unconnectedGraceMs: graceMs })).map(
+          (ref) => ref.task_id
+        );
+
+      const remote = await tasks.create(
         createTaskData({
           session_id: sessionId,
+          full_prompt: 'remote, never connected',
           status: TaskStatus.DISPATCHING,
-          started_at: dispatchedAt.toISOString(),
+          started_at: dispatchedAt,
           executor_mode: 'templated',
         })
       );
-      await tasks.claimTermination({
-        taskId: pending.task_id,
-        cause: 'user_stop',
-        errorMessage: 'Stopped by user.',
-        now: new Date('2026-08-06T12:00:30.000Z'),
-      });
-      const stopped = await tasks.findById(pending.task_id);
+      const local = await tasks.create(
+        createTaskData({
+          session_id: sessionId,
+          full_prompt: 'local, never connected',
+          status: TaskStatus.DISPATCHING,
+          started_at: dispatchedAt,
+        })
+      );
+      const quiesced = await tasks.create(
+        createTaskData({
+          session_id: sessionId,
+          full_prompt: 'remote, quiesced before connecting',
+          status: TaskStatus.DISPATCHING,
+          started_at: dispatchedAt,
+          executor_mode: 'templated',
+        })
+      );
+      for (const task of [remote, local, quiesced]) await stop(task.task_id);
+      const stopped = await tasks.findById(remote.task_id);
       expect(stopped?.status).toBe(TaskStatus.STOPPING);
       expect(stopped?.executor_connected_at).toBeUndefined();
+      const quiescedTask = await tasks.findById(quiesced.task_id);
+      await tasks.recordExecutorQuiescence({
+        task_id: quiesced.task_id,
+        requested_at: quiescedTask!.termination_request!.requested_at,
+      });
 
-      const graceMs = 5 * 60_000;
-      const inside = await tasks.findStrandedTerminationRefs({
-        now: new Date('2026-08-06T12:04:59.000Z'),
-        unconnectedGraceMs: graceMs,
-      });
-      expect(inside.map((ref) => ref.task_id)).not.toContain(pending.task_id);
+      // The pending remote stop waits for the startup deadline; a local stop
+      // and a remote stop with durable quiescence evidence stay recoverable.
+      const inside = await stranded(insideWindow);
+      expect(inside).not.toContain(remote.task_id);
+      expect(inside).toContain(local.task_id);
+      expect(inside).toContain(quiesced.task_id);
 
-      // Without the grace option the row is still routable, as before.
-      const legacy = await tasks.findStrandedTerminationRefs({
-        now: new Date('2026-08-06T12:04:59.000Z'),
-      });
-      expect(legacy.map((ref) => ref.task_id)).toContain(pending.task_id);
+      // Without the grace option the remote row is still routable, as before.
+      expect(await tasks.findStrandedTerminationRefs({ now: insideWindow })).toEqual(
+        expect.arrayContaining([expect.objectContaining({ task_id: remote.task_id })])
+      );
 
-      const past = await tasks.findStrandedTerminationRefs({
-        now: new Date('2026-08-06T12:05:00.000Z'),
-        unconnectedGraceMs: graceMs,
-      });
-      expect(past.map((ref) => ref.task_id)).toContain(pending.task_id);
-
-      // A coordinator that already claimed a lease is stranded when it expires,
-      // regardless of whether the executor ever connected.
-      await tasks.claimTerminationCoordination({
-        taskId: pending.task_id,
-        claimToken: 'dead-coordinator',
-        leaseDurationMs: 1_000,
-        instanceId: 'daemon-a',
-        bootId: 'boot-a',
-        now: new Date('2026-08-06T12:00:31.000Z'),
-      });
-      const leased = await tasks.findStrandedTerminationRefs({
-        now: new Date('2026-08-06T12:00:33.000Z'),
-        unconnectedGraceMs: graceMs,
-      });
-      expect(leased.map((ref) => ref.task_id)).toContain(pending.task_id);
+      expect(await stranded(new Date('2026-08-06T12:05:00.000Z'))).toContain(remote.task_id);
     }
   );
 

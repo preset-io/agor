@@ -313,10 +313,12 @@ export interface TaskRuntimeDiscoveryOptions {
   /** Deterministic test clock. PostgreSQL uses database time when omitted. */
   now?: Date;
   /**
-   * Stranded-termination discovery only: leave a STOPPING row whose executor
-   * never connected and that no coordinator has ever claimed out of the scan
-   * until this long after dispatch. A templated stop claimed before the pod
-   * connected is pending, not stranded, during the remote startup window.
+   * Stranded-termination discovery only: leave a STOPPING templated row whose
+   * executor has neither connected nor reported quiescence out of the scan
+   * until this long after dispatch (database time). Such a stop is pending,
+   * not stranded, during the remote startup window; local rows and rows with
+   * durable quiescence evidence stay discoverable so crash recovery is not
+   * delayed.
    */
   unconnectedGraceMs?: number;
 }
@@ -988,6 +990,20 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
     }
   }
 
+  /** `data.executor_mode` is absent for local executors; only 'templated' waits for a remote pod. */
+  private executorModeIsNotTemplated() {
+    return isSQLiteDatabase(this.db)
+      ? sql`coalesce(json_extract(${tasks.data}, '$.executor_mode'), 'local') <> 'templated'`
+      : sql`coalesce(${tasks.data}->>'executor_mode', 'local') <> 'templated'`;
+  }
+
+  /** A fenced executor quiescence report is durable proof that must not wait for the startup deadline. */
+  private executorQuiescenceRecorded() {
+    return isSQLiteDatabase(this.db)
+      ? sql`json_extract(${tasks.data}, '$.termination_request.executor_quiesced_at') IS NOT NULL`
+      : sql`${tasks.data}->'termination_request'->>'executor_quiesced_at' IS NOT NULL`;
+  }
+
   private runtimeDiscoveryColumns() {
     const tenantColumn = (tasks as unknown as { tenant_id?: unknown }).tenant_id;
     return {
@@ -1166,7 +1182,8 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
           options.unconnectedGraceMs !== undefined
             ? or(
                 isNotNull(tasks.executor_connected_at),
-                isNotNull(tasks.termination_coordination_claimed_at),
+                this.executorModeIsNotTemplated(),
+                this.executorQuiescenceRecorded(),
                 isNull(tasks.started_at),
                 lte(tasks.started_at, this.databaseCutoff(options.unconnectedGraceMs, options.now))
               )

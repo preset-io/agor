@@ -191,9 +191,13 @@ an explicit mapping-review point.
 - A `stopping` request claimed before a templated executor connected is
   pending (`awaiting_remote_executor`), not stranded: it holds no coordination
   lease and no unverified guard, and the stranded-termination scan skips it
-  until the same remote startup deadline the dispatch scan uses, anchored on
-  dispatch time rather than on the Stop. Past that deadline the reconciler
-  settles it as guarded unverified with a "never connected" diagnosis.
+  until the same remote startup deadline the dispatch scan uses, evaluated in
+  database time and anchored on dispatch time rather than on the Stop. The
+  skip applies only to templated rows with neither a connection nor a fenced
+  quiescence report; local rows and quiesced rows stay discoverable so a
+  daemon crash never delays their recovery. Once discovered past that deadline
+  the reconciler settles the request as guarded unverified with a "never
+  connected" diagnosis.
 - A replacement daemon resumes an existing durable `stopping` request after
   the prior claim expires. Durable unverified containment is excluded from
   rediscovery and remains owner/admin-guarded unless a first, correctly

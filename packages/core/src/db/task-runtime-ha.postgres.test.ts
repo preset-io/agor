@@ -532,6 +532,68 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('Task runtime HA (PostgreSQ
     });
   });
 
+  it('keeps a pre-connection remote stop out of stranded discovery until the startup deadline', async () => {
+    const owner = await seedTenant(db, 'awaiting-remote');
+    const dispatchedAt = '2026-08-06T12:00:00.000Z';
+    const graceMs = 5 * 60_000;
+    const ids = await runWithTenantDatabaseScope(db, owner.tenantId, async (scoped) => {
+      const tasks = new TaskRepository(scoped);
+      const remote = await tasks.create(
+        taskInput(owner, TaskStatus.DISPATCHING, {
+          executor_mode: 'templated',
+          started_at: dispatchedAt,
+        })
+      );
+      const local = await tasks.create(
+        taskInput(owner, TaskStatus.DISPATCHING, {
+          executor_mode: 'local',
+          started_at: dispatchedAt,
+        })
+      );
+      const quiesced = await tasks.create(
+        taskInput(owner, TaskStatus.DISPATCHING, {
+          executor_mode: 'templated',
+          started_at: dispatchedAt,
+        })
+      );
+      for (const task of [remote, local, quiesced]) {
+        await tasks.claimTermination({
+          taskId: task.task_id,
+          cause: 'user_stop',
+          errorMessage: 'Stopped by user',
+          now: new Date('2026-08-06T12:00:30.000Z'),
+        });
+      }
+      const quiescedRequest = (await tasks.findById(quiesced.task_id))!.termination_request!;
+      await tasks.recordExecutorQuiescence(
+        { task_id: quiesced.task_id, requested_at: quiescedRequest.requested_at },
+        new Date('2026-08-06T12:00:31.000Z')
+      );
+      return { remote: remote.task_id, local: local.task_id, quiesced: quiesced.task_id };
+    });
+
+    const stranded = (now: Date) =>
+      runWithSystemDatabaseScope(
+        db,
+        'awaiting remote discovery',
+        async (systemDb) =>
+          (
+            await new TaskRepository(systemDb).findStrandedTerminationRefs({
+              now,
+              limit: 1_000,
+              unconnectedGraceMs: graceMs,
+            })
+          ).map((ref) => ref.task_id),
+        { capability: 'task_runtime_discovery' }
+      );
+
+    const inside = await stranded(new Date('2026-08-06T12:04:59.000Z'));
+    expect(inside).not.toContain(ids.remote);
+    expect(inside).toContain(ids.local);
+    expect(inside).toContain(ids.quiesced);
+    expect(await stranded(new Date('2026-08-06T12:05:00.000Z'))).toContain(ids.remote);
+  });
+
   it('discovers routing refs globally but rejects cross-tenant reload and mutation', async () => {
     const a = await seedTenant(db, 'tenant-a');
     const b = await seedTenant(db, 'tenant-b');

@@ -181,8 +181,10 @@ export class TaskRuntimeReconciler {
         : [];
       advanceCursor('heartbeat_stale', heartbeat);
       // A stop claimed before a remote executor connected has no lease and no
-      // guard. Keep it out of the scan until the remote startup deadline so
-      // the pending request neither churns nor masks a stranded stop.
+      // guard. The repository keeps it out of the scan until the remote startup
+      // deadline (database time, anchored on dispatch), so the pending request
+      // neither churns nor masks a stranded stop. Discovery is therefore the
+      // authoritative deadline: a discovered awaiting row has expired.
       const termination = await repo.findStrandedTerminationRefs({
         ...discoveryOptions('termination_stranded'),
         unconnectedGraceMs: this.dispatchConnectTimeoutMs(),
@@ -244,18 +246,6 @@ export class TaskRuntimeReconciler {
 
   private dispatchConnectTimeoutMs(): number {
     return this.options.dispatchConnectTimeoutMs ?? DEFAULT_DISPATCH_CONNECT_TIMEOUT_MS;
-  }
-
-  /**
-   * Whether a templated executor that never connected has exhausted the same
-   * startup window the dispatch scan allows. Anchored on dispatch time, not on
-   * the stop request, so a Stop cannot grant an overdue launch another window.
-   */
-  private remoteConnectDeadlineExpired(task: Task): boolean {
-    const anchor = Date.parse(task.started_at ?? task.termination_request?.requested_at ?? '');
-    if (!Number.isFinite(anchor)) return true;
-    const now = this.options.now?.() ?? new Date();
-    return now.getTime() - anchor >= this.dispatchConnectTimeoutMs();
   }
 
   private async reconcileDispatchTimeout(
@@ -350,8 +340,9 @@ export class TaskRuntimeReconciler {
     if (localMode && !ownsLocalHandle && task.sdk_failure?.termination === 'unverified') {
       return false;
     }
+    // Discovery already applied the dispatch-anchored startup deadline in
+    // database time; do not re-evaluate it against this daemon's clock.
     const awaitingRemoteExecutor = isAwaitingRemoteExecutor(task);
-    if (awaitingRemoteExecutor && !this.remoteConnectDeadlineExpired(task)) return false;
     const result = await requestExecutorTermination({
       app: this.options.app,
       taskId: task.task_id,
