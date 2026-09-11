@@ -1,7 +1,8 @@
 import type { AgorClient, Board, EffectiveCapabilityPolicyAccess, User } from '@agor-live/client';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { App as AntApp } from 'antd';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { __setAuthConfigForTests } from '../../hooks/useAuthConfig';
 import { BoardEditModal } from './BoardEditModal';
 
 vi.mock('@/utils/message', () => ({ useThemedMessage: () => ({ showError: vi.fn() }) }));
@@ -84,6 +85,11 @@ function makeClient(
 }
 
 describe('BoardEditModal — board metadata', () => {
+  beforeEach(() => {
+    // Keep normalized permissions active from the first render.
+    __setAuthConfigForTests({ requireAuth: true }, { branchRbac: true });
+  });
+
   it('edits name, emoji and description on an owner-only board, without rewriting permissions', async () => {
     let savedBoard = { ...listedBoard, icon: '🚩' } as Board;
     const onUpdate = vi.fn(async (_id: string, updates: Partial<Board>) => {
@@ -91,13 +97,14 @@ describe('BoardEditModal — board metadata', () => {
     });
     const permissionsPatch = vi.fn();
     const client = makeClient(() => savedBoard, undefined, permissionsPatch);
+    const onClose = vi.fn();
     const view = render(
       <AntApp>
         <BoardEditModal
           board={listedBoard}
           client={client}
           open
-          onClose={vi.fn()}
+          onClose={onClose}
           onUpdate={onUpdate}
           currentUser={owner}
         />
@@ -129,6 +136,8 @@ describe('BoardEditModal — board metadata', () => {
       description: 'New description',
     });
     expect(permissionsPatch).not.toHaveBeenCalled();
+    // Wait for save cleanup before reopening the form.
+    await waitFor(() => expect(onClose).toHaveBeenCalledOnce());
 
     view.rerender(
       <AntApp>
@@ -136,19 +145,20 @@ describe('BoardEditModal — board metadata', () => {
           board={listedBoard}
           client={client}
           open={false}
-          onClose={vi.fn()}
+          onClose={onClose}
           onUpdate={onUpdate}
           currentUser={owner}
         />
       </AntApp>
     );
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
     view.rerender(
       <AntApp>
         <BoardEditModal
           board={listedBoard}
           client={client}
           open
-          onClose={vi.fn()}
+          onClose={onClose}
           onUpdate={onUpdate}
           currentUser={owner}
         />

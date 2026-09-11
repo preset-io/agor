@@ -1319,7 +1319,9 @@ describe('OnboardingWizard', () => {
     });
 
     clickButton(/open my board/i);
-    expect(await screen.findByText(/setup is taking longer than expected/i)).toBeVisible();
+    await waitFor(() =>
+      expect(screen.getByText(/setup is taking longer than expected/i)).toBeVisible()
+    );
     expect(onComplete).toHaveBeenCalledTimes(1);
     expect(onComplete.mock.calls[0][1].isCurrent()).toBe(true);
     expect(screen.queryByText(/^try again →$/i)).not.toBeInTheDocument();

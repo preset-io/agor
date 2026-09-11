@@ -123,6 +123,8 @@ describe('Own settings persistence (real browser)', () => {
       );
     }
     render(<Harness />);
+    // Presence precedes the dialog's opening animation.
+    await waitFor(() => expect(screen.getByRole('heading', { name: 'Claude Code' })).toBeVisible());
     fireEvent.click(await screen.findByRole('button', { name: /Clear$/ }));
     await waitFor(() => expect(patch).toHaveBeenCalledOnce());
     expect(screen.getByRole('button', { name: 'Done' })).toBeDisabled();
