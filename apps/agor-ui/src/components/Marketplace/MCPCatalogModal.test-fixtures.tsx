@@ -1,11 +1,13 @@
 import type {
   MCPCatalogEntry,
   MCPMarketplaceOverview,
+  MCPMemberPolicySetting,
   MCPServerID,
   SessionID,
 } from '@agor/core/types';
 import type { AgorClient, User } from '@agor-live/client';
 import { App, ConfigProvider } from 'antd';
+import type { ReactNode } from 'react';
 import { MemoryRouter, useLocation } from 'react-router-dom';
 import { vi } from 'vitest';
 import { ConnectionProvider } from '../../contexts/ConnectionContext';
@@ -74,7 +76,10 @@ export const catalogOverview: MCPMarketplaceOverview = {
   generated_at: '2026-09-08T00:00:00.000Z',
 };
 
-export function makeCatalogClient() {
+export function makeCatalogClient(
+  entries: MCPCatalogEntry[] = [catalogEntry],
+  policy: MCPMemberPolicySetting = { policy: 'allow_crud', can_configure: true }
+) {
   const listeners = new Map<string, Set<(...args: unknown[]) => void>>();
   const events = (path: string) => ({
     on: vi.fn((event: string, listener: (...args: unknown[]) => void) => {
@@ -105,13 +110,19 @@ export function makeCatalogClient() {
             ? overviewRead
             : vi.fn(async () =>
                 name === 'mcp-catalog'
-                  ? { data: [catalogEntry], total: 1, limit: 1, skip: 0 }
+                  ? { data: entries, total: entries.length, limit: entries.length, skip: 0 }
                   : name === 'mcp-member-policy'
-                    ? { policy: 'allow_crud', can_configure: true }
+                    ? policy
                     : []
               ),
         findAll: vi.fn(async () => [{ branch_id: 'branch-1', name: 'Catalog QA' }]),
-        get: vi.fn(async () => ({ catalog_key: catalogEntry.name, state: 'no_auth' })),
+        get: vi.fn(async (key: string) => ({
+          catalog_key: key,
+          state:
+            entries.find((entry) => entry.name === key)?.auth_type === 'credentials'
+              ? 'bearer_required'
+              : 'no_auth',
+        })),
         getPrimaryTeammate: vi.fn(async () => null),
         getPrimaryTeammateCandidates: vi.fn(async () => [
           {
@@ -131,7 +142,11 @@ export function makeCatalogClient() {
                   },
                   starter_prompt: catalogEntry.starter_prompt,
                 }))
-              : vi.fn(async () => ({ success: true })),
+              : vi.fn(async (data: object) =>
+                  name === 'boards'
+                    ? { ...data, created_by: catalogUser.user_id }
+                    : { success: true }
+                ),
         remove: vi.fn(),
       });
     return services.get(name);
@@ -156,10 +171,12 @@ export function CatalogHarness({
   client,
   user = catalogUser,
   path = '/',
+  children,
 }: {
   client: AgorClient;
   user?: User;
   path?: string;
+  children?: ReactNode;
 }) {
   return (
     <ThemeProvider>
@@ -195,6 +212,7 @@ export function CatalogHarness({
                   authGeneration={1}
                   currentUser={user}
                 />
+                {children}
                 <Location />
               </MCPCatalogModalProvider>
             </ConnectionProvider>
@@ -204,3 +222,24 @@ export function CatalogHarness({
     </ThemeProvider>
   );
 }
+
+export const githubHandoffEntry: MCPCatalogEntry = {
+  name: 'io.github.github/github-mcp-server',
+  title: 'GitHub',
+  description: 'Reviewed GitHub MCP',
+  benefit: 'Review repository work.',
+  starter_prompt: 'Summarize open pull requests without making changes.',
+  transport: 'streamable-http',
+  remote_url: 'https://api.githubcopilot.com/mcp/',
+  has_remote: true,
+  category: 'dev-tools',
+  capabilities: ['code-repos'],
+  auth_type: 'credentials',
+  permission_disclosure: 'Uses only the permissions granted by your personal access token.',
+  credentials: {
+    scheme: 'bearer',
+    label: 'Fine-grained personal access token',
+    acquisition_url: 'https://github.com/settings/personal-access-tokens/new',
+    oauth_challenge_compatible: true,
+  },
+};

@@ -114,16 +114,18 @@ describe('buildTeammateBootstrapPrompt', () => {
         ONBOARDING_INTEGRATION_RECOMMENDATIONS.sentry,
       ],
     });
-    expect(prompt).toContain('- Suggested tools and connections: Slack, GitHub, Sentry');
+    expect(prompt).toContain(
+      '- Suggested tools and connections: Slack gateway messaging, GitHub, Sentry'
+    );
 
-    expect(prompt).toContain('Slack: first check whether a configured server is already available');
-    expect(prompt).toContain('https://mcp.slack.com/mcp');
-    expect(prompt).toMatch(/use session scope and attach it to this session/i);
-    expect(prompt).toMatch(/workspace member policy/i);
-    expect(prompt).not.toMatch(/admin-only MCP settings/i);
+    expect(prompt).toContain('Slack means gateway messaging here, not an MCP recommendation');
+    expect(prompt).toContain('Do not offer generic connector registration');
+    expect(prompt).not.toContain('offer to register the official endpoint');
 
-    expect(prompt).toContain('GitHub: use the repository already connected to Agor');
-    expect(prompt).toContain('Do not describe this as an MCP or Catalog install');
+    expect(prompt).toContain(
+      'GitHub: use the reviewed Catalog entry io.github.github/github-mcp-server'
+    );
+    expect(prompt).not.toContain('GitHub: use the repository already connected');
 
     expect(prompt).toContain('Sentry: use the reviewed Catalog entry io.sentry/mcp');
     expect(prompt).toMatch(/do not bypass the catalog by registering a guessed endpoint/i);

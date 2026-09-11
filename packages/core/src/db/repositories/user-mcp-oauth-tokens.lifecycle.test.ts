@@ -78,14 +78,18 @@ dbTest(
       granted_by_user_id: a,
       oauth_access_token: 'rotated',
       oauth_refresh_token: 'refresh-a',
+      refresh_generation: 1,
+      refresh_status: 'idle',
     });
-    const pending = { ...version, refreshGeneration: 1 };
+    // Begin the next exchange before deletion so rejection proves the cascade,
+    // not a stale refresh generation or a missing in-flight state transition.
+    const nextVersion = { ...version, refreshGeneration: 1 };
     await expect(
-      grants.setStandaloneRefreshState(null, serverId, pending, 'idle', 'refreshing')
+      grants.setStandaloneRefreshState(null, serverId, nextVersion, 'idle', 'refreshing')
     ).resolves.toBe(true);
     await deleteFrom(db, users).where(eq(users.user_id, a)).run();
     await expect(
-      grants.completeStandaloneRefresh(null, serverId, pending, {
+      grants.completeStandaloneRefresh(null, serverId, nextVersion, {
         accessToken: 'late-refresh',
         expiresAt: null,
       })
@@ -118,13 +122,13 @@ dbTest(
       { accessToken: 'a', clientId: 'client-a', grantBinding: binding },
       a
     );
-    const pending = {
-      grantGeneration: 1,
+    const version = {
+      grantGeneration: binding.generation,
       grantBindingFingerprint: binding.fingerprint,
       refreshGeneration: 0,
     };
     await expect(
-      grants.setStandaloneRefreshState(null, serverId, pending, 'idle', 'refreshing')
+      grants.setStandaloneRefreshState(null, serverId, version, 'idle', 'refreshing')
     ).resolves.toBe(true);
     await grants.saveToken(
       null,
@@ -150,7 +154,7 @@ dbTest(
     ).rejects.toThrow(/superseded/);
     await deleteFrom(db, users).where(eq(users.user_id, a)).run();
     await expect(
-      grants.completeStandaloneRefresh(null, serverId, pending, {
+      grants.completeStandaloneRefresh(null, serverId, version, {
         accessToken: 'late-a',
         expiresAt: null,
       })

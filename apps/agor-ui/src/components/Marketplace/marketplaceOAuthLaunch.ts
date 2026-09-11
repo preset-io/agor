@@ -1,6 +1,26 @@
+import { MCP_HEADER_REDACTED_SENTINEL } from '@agor/core/tools/mcp/http-headers';
 import type { MCPCatalogConnectResult, MCPOAuthStartFailure } from '@agor/core/types';
 import type { AgorClient } from '@agor-live/client';
+import { mcpServerNeedsAuth } from '../../utils/mcpAuth';
 import type { MarketplaceOAuthPopup } from './marketplaceOAuthPopup';
+
+/**
+ * Connect projects a sentinel only for a currently live, authorized caller grant.
+ * The workspace OAuth badge Set is a last-observed saved-status snapshot, not
+ * completion authority. Keep this contract separate from generic server reads.
+ */
+export function catalogConnectNeedsAuthentication(
+  result: MCPCatalogConnectResult,
+  now = Date.now()
+): boolean {
+  const { auth } = result.mcp_server;
+  if (auth?.type !== 'oauth') return mcpServerNeedsAuth(result.mcp_server, new Set());
+  return (
+    auth.oauth_access_token !== MCP_HEADER_REDACTED_SENTINEL ||
+    (auth.oauth_token_expires_at !== undefined &&
+      !(Number.isFinite(auth.oauth_token_expires_at) && auth.oauth_token_expires_at > now))
+  );
+}
 
 export class MarketplaceOAuthPopupNavigationError extends Error {
   constructor() {

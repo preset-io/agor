@@ -55,6 +55,8 @@ export function isFilterActive(filters: CatalogFilterState): boolean {
 export type CatalogStatus = 'loading' | 'ready' | 'error';
 
 export interface CatalogSearchResult {
+  /** Full reviewed inventory for identity-based navigation, independent of paging. */
+  allEntries: MCPCatalogEntry[];
   /** The current page of matching entries. */
   entries: MCPCatalogEntry[];
   status: CatalogStatus;
@@ -138,6 +140,7 @@ export function useCatalogSearch(
 
   return {
     entries,
+    allEntries: catalog ?? [],
     status,
     matchCount: matched.length,
     catalogSize: catalog?.length ?? null,

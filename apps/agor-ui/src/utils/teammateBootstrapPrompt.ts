@@ -3,9 +3,11 @@ import {
   findOnboardingGoal,
   type OnboardingIntegrationRecommendation,
 } from './onboardingGoals';
+import type { OnboardingSlackGatewayIntent } from './onboardingSlack';
 import { BLANK_TEMPLATE_ID, getTeammateTemplate } from './teammateTemplates';
 
 export interface TeammateBootstrapPromptInput {
+  slackGatewayIntent?: OnboardingSlackGatewayIntent;
   displayName: string;
   emoji?: string | null;
   description?: string | null;
@@ -28,6 +30,7 @@ export interface TeammateBootstrapPromptInput {
 }
 
 export interface TeammateBootstrapPromptContext {
+  slackGatewayIntent?: OnboardingSlackGatewayIntent;
   teammate: {
     displayName: string;
     emoji: string;
@@ -144,9 +147,9 @@ function formatTeammateBootstrapPrompt(context: TeammateBootstrapPromptContext):
             `- ${integration.name}: use the reviewed Catalog entry ${integration.setup.catalogEntryName}. Ask the user to connect it there; do not bypass the catalog by registering a guessed endpoint through MCP tools.`
           );
           break;
-        case 'mcp-settings':
+        case 'slack':
           lines.push(
-            `- ${integration.name}: first check whether a configured server is already available. If not, offer to register the official endpoint ${integration.setup.endpoint} through the MCP tools only after the user agrees; use session scope and attach it to this session unless they explicitly ask for workspace-wide setup. Let the service enforce the current user's workspace member policy, and explain any policy refusal instead of assuming only admins can configure MCP. Never ask for a secret in chat; if OAuth requires browser action, send the user to Settings -> MCP Servers for that action. Do not call this a Catalog entry, and keep gateway channels separate.`
+            '- Slack means gateway messaging here, not an MCP recommendation. Follow the explicit gateway intent below; if absent, do not create a gateway. Slack MCP tool access is separate and not selected: it is unavailable in the reviewed Catalog because registered-client requirements remain unresolved. Do not offer generic connector registration, invent Catalog availability, or reuse gateway tokens for MCP.'
           );
           break;
         case 'connected-repository':
@@ -155,6 +158,21 @@ function formatTeammateBootstrapPrompt(context: TeammateBootstrapPromptContext):
           );
           break;
       }
+    }
+  }
+
+  if (context.slackGatewayIntent) {
+    lines.push(
+      '- Slack messaging: prefer an existing usable gateway. Recheck live inventory and permissions; a gateway is bound to its current branch, with no cross-branch session bypass. Do not retarget it, copy its credentials, or silently create a duplicate. If it serves another teammate, explain that and guide the user to that existing teammate instead.'
+    );
+    if (context.slackGatewayIntent === 'request-new') {
+      lines.push(
+        '- The user explicitly asked for help creating a new Slack gateway if none is usable. Recheck the current caller’s admin permission and existing gateways immediately before setup. If permission is denied or uncertain, stop and explain. Collect non-secret choices, use agor_gateway_slack_manifest_generate, create one disabled draft with agor_gateway_channels_create, then agor_widgets_request_gateway_token. Never ask for tokens in chat or put them in tool arguments. Enable/report connected only after the secure widget verifies setup. Reuse a matching draft on retry.'
+      );
+    } else {
+      lines.push(
+        '- No new Slack gateway was requested. Do not create one; explain when an administrator is needed.'
+      );
     }
   }
 
@@ -174,6 +192,7 @@ export function buildTeammateBootstrapPromptContext({
   goals,
   templateId,
   suggestedIntegrations,
+  slackGatewayIntent,
 }: TeammateBootstrapPromptInput): TeammateBootstrapPromptContext {
   const normalizedUserName = userName?.trim();
   const normalizedUserEmail = userEmail?.trim();
@@ -208,6 +227,7 @@ export function buildTeammateBootstrapPromptContext({
     ...(goals?.some((id) => findOnboardingGoal(id)) ? { hasPrimaryGoal: true } : {}),
     ...(templateTitle ? { templateTitle } : {}),
     ...(normalizedIntegrations?.length ? { suggestedIntegrations: normalizedIntegrations } : {}),
+    ...(slackGatewayIntent ? { slackGatewayIntent } : {}),
     firstSession: true,
   };
 }

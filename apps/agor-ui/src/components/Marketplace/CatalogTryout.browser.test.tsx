@@ -158,7 +158,19 @@ describe('recovered Catalog tryout flow in Chromium', () => {
     );
     expect(drawer.queryByRole('combobox')).not.toBeInTheDocument();
     expect(api.candidates).not.toHaveBeenCalled();
+    const dialog = screen
+      .getByText('What this can access')
+      .closest<HTMLElement>('[role="dialog"]')!;
+    const wrapper = dialog.closest<HTMLElement>('.ant-drawer-content-wrapper')!;
+    // Native pointer input must wait for the shared drawer's slide-in motion.
+    await waitFor(() => {
+      expect(dialog.getBoundingClientRect().right).toBeCloseTo(window.innerWidth, 1);
+      expect(wrapper.getAnimations().some((animation) => animation.playState === 'running')).toBe(
+        false
+      );
+    });
     await userEvent.click(drawer.getByRole('checkbox'));
+    await waitFor(() => expect(drawer.getByRole('checkbox')).toBeChecked());
     await userEvent.click(drawer.getByRole('button', { name: 'Connect', exact: true }));
     expect(api.connect).toHaveBeenCalledWith({
       catalog_key: entry.name,
