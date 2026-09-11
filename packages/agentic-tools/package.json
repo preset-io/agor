@@ -43,7 +43,7 @@
     "concurrently": "^9.2.1",
     "tsup": "^8.5.1",
     "typescript": "^6.0.3",
-    "vitest": "^4.1.10",
+    "vitest": "^4.1.11",
     "@types/react": "^19.2.18",
     "react": "^19.2.8"
   }
