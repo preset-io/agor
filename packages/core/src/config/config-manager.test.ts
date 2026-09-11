@@ -1013,18 +1013,21 @@ describe('loadConfig', () => {
     });
   });
 
-  it('accepts only a boolean Claude subscription OAuth release flag', async () => {
+  it('accepts only a boolean Claude subscription OAuth setting', async () => {
     const agorDir = path.join(tempDir, '.agor');
     const configPath = path.join(agorDir, 'config.yaml');
     await fs.mkdir(agorDir, { recursive: true });
-    await fs.writeFile(
-      configPath,
-      yaml.dump({ agentic_tools: { claude_subscription_oauth: true } }),
-      'utf-8'
-    );
-    await expect(loadConfig()).resolves.toMatchObject({
-      agentic_tools: { claude_subscription_oauth: true },
-    });
+    for (const enabled of [true, false]) {
+      __resetConfigCacheForTests();
+      await fs.writeFile(
+        configPath,
+        yaml.dump({ agentic_tools: { claude_subscription_oauth: enabled } }),
+        'utf-8'
+      );
+      await expect(loadConfig()).resolves.toMatchObject({
+        agentic_tools: { claude_subscription_oauth: enabled },
+      });
+    }
 
     __resetConfigCacheForTests();
     await fs.writeFile(

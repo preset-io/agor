@@ -478,21 +478,21 @@ silently mutate account metadata in a background read.
 
 ---
 
-## ToS / acceptable-use considerations (NOT cleared)
+## ToS / acceptable-use considerations
 
-**Status: NOT cleared. The endpoint and UI are disabled by default.**
+**Claude subscription OAuth is enabled by default on supported topologies. This
+product default does not establish provider authorization or clear acceptable use.**
 
-The deployment operator must set
-`agentic_tools.claude_subscription_oauth: true` only after confirming an
-authorized provider/client contract. Absence or `false` returns the stable
-`CLAUDE_SUBSCRIPTION_OAUTH_DISABLED` error and hides the OAuth tab. This flag is
-an operator attestation, not a legal-policy decision made by Agor. API keys,
-pasted `claude setup-token` credentials, ordinary Claude execution, and logout
-are not gated by it. HA support remains an independent topology boundary: the
-constrained profile exposes the capability only when it also proves durable
-attempts, an exact per-user credential home, and cross-replica home locking.
-Other HA topologies remain unavailable even when the operator authorizes the
-provider flow.
+The deployment operator can set `agentic_tools.claude_subscription_oauth: false`
+to opt out. Explicit `false` returns the stable
+`CLAUDE_SUBSCRIPTION_OAUTH_DISABLED` error and hides the OAuth option in Settings
+and onboarding; omission or `true` enables the deployment setting. Operators
+remain responsible for an authorized provider/client contract. API keys, pasted
+`claude setup-token` credentials, ordinary Claude execution, and logout are not
+gated by it. Runtime containment, authentication, tenant isolation, and HA support
+remain independent boundaries: the constrained profile exposes the capability
+only when it also proves durable attempts, an exact per-user credential home,
+and cross-replica home locking. Unsupported topologies remain unavailable.
 
 - The flow drives the **fixed public Claude Code client id** programmatically.
   The user authenticates with **their own** browser + credentials, and tokens

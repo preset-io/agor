@@ -39,6 +39,7 @@ describe('constrained HA support profile', () => {
       artifactRuntimeIntrospection: false as const,
     },
     redis: {} as never,
+    mcpOAuthCallbackUrl: 'https://agor.example.test/mcp-oauth/callback',
     environmentHealthMonitor: {} as never,
     executorStorage: {
       userHome: 'persistent-per-user' as const,
@@ -194,10 +195,9 @@ describe('constrained HA support profile', () => {
     expect(isHaFeatureUnavailable(containedWithoutDurableAuthority, 'claudeOAuth')).toBe(true);
   });
 
-  it('requires operator authorization and topology support for the Claude OAuth capability', () => {
+  it('enables Claude OAuth by default only with topology support and preserves explicit opt-out', () => {
     const standalone = { mode: 'standalone' as const };
-    const authorizedContained = {
-      agentic_tools: { claude_subscription_oauth: true },
+    const contained = {
       execution: {
         unix_user_mode: 'sandbox' as const,
         executor_storage: { user_home: 'persistent-per-user' as const },
@@ -205,15 +205,25 @@ describe('constrained HA support profile', () => {
       },
     };
     expect(hasClaudeSubscriptionOAuthCapability({}, standalone)).toBe(false);
-    expect(hasClaudeSubscriptionOAuthCapability(authorizedContained, standalone)).toBe(true);
-    expect(hasClaudeSubscriptionOAuthCapability(authorizedContained, ha)).toBe(true);
+    expect(hasClaudeSubscriptionOAuthCapability(contained, standalone)).toBe(true);
+    expect(hasClaudeSubscriptionOAuthCapability(contained, ha)).toBe(true);
     expect(hasClaudeSubscriptionOAuthCapability({}, ha)).toBe(false);
+    for (const deployment of [standalone, ha]) {
+      for (const enabled of [false, true]) {
+        expect(
+          hasClaudeSubscriptionOAuthCapability(
+            { ...contained, agentic_tools: { claude_subscription_oauth: enabled } },
+            deployment
+          )
+        ).toBe(enabled);
+      }
+    }
     const writableEscape = {
-      ...authorizedContained,
+      ...contained,
       execution: {
-        ...authorizedContained.execution,
+        ...contained.execution,
         sandbox: {
-          ...authorizedContained.execution.sandbox,
+          ...contained.execution.sandbox,
           extra_allow_write: ['/home/agor/.agor'],
         },
       },
@@ -224,7 +234,7 @@ describe('constrained HA support profile', () => {
     expect(hasClaudeSubscriptionOAuthCapability(writableEscape, standalone)).toBe(false);
     expect(hasClaudeSubscriptionOAuthCapability(writableEscape, ha)).toBe(false);
     expect(
-      hasClaudeSubscriptionOAuthCapability(authorizedContained, {
+      hasClaudeSubscriptionOAuthCapability(contained, {
         ...ha,
         capabilities: { ...ha.capabilities, claudeOAuth: false },
       })

@@ -1,12 +1,19 @@
 import { createHash } from 'node:crypto';
+import type { AuthenticatedParams, UUID } from '@agor/core/types';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // ── External-dependency mocks (declared before importing the module) ─────────
-const writeClaudeAuthViaExecutor = vi.fn(async () => undefined);
-const deleteClaudeAuthViaExecutor = vi.fn(async () => undefined);
+const writeClaudeAuthViaExecutor = vi
+  .fn<typeof import('../utils/executor-claude-auth.js').writeClaudeAuthViaExecutor>()
+  .mockResolvedValue(undefined);
+const deleteClaudeAuthViaExecutor = vi
+  .fn<typeof import('../utils/executor-claude-auth.js').deleteClaudeAuthViaExecutor>()
+  .mockResolvedValue(undefined);
 vi.mock('../utils/executor-claude-auth.js', () => ({
-  writeClaudeAuthViaExecutor: (...args: unknown[]) => writeClaudeAuthViaExecutor(...args),
-  deleteClaudeAuthViaExecutor: (...args: unknown[]) => deleteClaudeAuthViaExecutor(...args),
+  writeClaudeAuthViaExecutor: (...args: Parameters<typeof writeClaudeAuthViaExecutor>) =>
+    writeClaudeAuthViaExecutor(...args),
+  deleteClaudeAuthViaExecutor: (...args: Parameters<typeof deleteClaudeAuthViaExecutor>) =>
+    deleteClaudeAuthViaExecutor(...args),
 }));
 
 let identityResult: unknown = {
@@ -22,13 +29,10 @@ vi.mock('./codex-auth-shared.js', () => ({
 
 let toolEnabled = true;
 let exactUserHome = true;
-vi.mock('@agor/core/config', () => ({
+vi.mock('@agor/core/config', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@agor/core/config')>()),
   isTenantAgenticToolEnabled: vi.fn(async () => toolEnabled),
   hasContainedClaudeRuntimeCredentials: vi.fn(() => exactUserHome),
-  isClaudeSubscriptionOAuthEnabled: vi.fn(
-    (config: { agentic_tools?: { claude_subscription_oauth?: boolean } }) =>
-      config.agentic_tools?.claude_subscription_oauth === true
-  ),
 }));
 
 let activeTenantId = 'tenant-1';
@@ -93,13 +97,8 @@ const TOKENS = {
 };
 
 // Drive an attempt to `awaiting_code` and pull the `state` back out of the URL.
-async function startAndGetState(svc: {
-  create: (
-    d: { code?: string; attemptId?: string },
-    p?: unknown
-  ) => Promise<{ attemptId?: string; verificationUrl?: string }>;
-}) {
-  const status = await svc.create({}, { user: { user_id: 'user-A' } });
+async function startAndGetState(svc: Pick<ReturnType<typeof createClaudeOAuthService>, 'create'>) {
+  const status = await svc.create({}, asUserA);
   const state = new URL(status.verificationUrl as string).searchParams.get('state');
   return { state: state as string, attemptId: status.attemptId as string };
 }
@@ -112,7 +111,7 @@ function makeService(
   const usersGet = vi.fn(async () => ({ agentic_auth_methods: {} }));
   const usersPatch = vi.fn(async () => ({}));
   const app = {
-    get: () => ({ agentic_tools: { claude_subscription_oauth: true }, ...config }),
+    get: () => config,
     service: (path: string) =>
       path === 'users' ? { get: usersGet, patch: usersPatch } : undefined,
   };
@@ -125,7 +124,9 @@ function makeService(
   return { svc, usersGet, usersPatch, app };
 }
 
-const asUserA = { user: { user_id: 'user-A' } };
+const asUserA = {
+  user: { user_id: 'user-A' as UUID, email: 'user-a@example.com', role: 'member' },
+} satisfies AuthenticatedParams;
 
 beforeEach(() => {
   writeClaudeAuthViaExecutor.mockClear();
@@ -356,9 +357,9 @@ describe('createClaudeOAuthService — flow + security', () => {
     await expect(svc.create({}, asUserA)).rejects.toThrow(/private PID namespace/);
   });
 
-  it('fails closed when the deployment has not authorized Claude subscription OAuth', async () => {
+  it('rejects start, code submission, and status when the deployment explicitly disables Claude OAuth', async () => {
     const { svc } = makeService(undefined, {
-      agentic_tools: {},
+      agentic_tools: { claude_subscription_oauth: false },
     });
     await expect(svc.create({}, asUserA)).rejects.toMatchObject({
       data: { code: 'CLAUDE_SUBSCRIPTION_OAUTH_DISABLED' },
@@ -366,6 +367,12 @@ describe('createClaudeOAuthService — flow + security', () => {
     await expect(svc.find(asUserA)).rejects.toMatchObject({
       data: { code: 'CLAUDE_SUBSCRIPTION_OAUTH_DISABLED' },
     });
+    await expect(
+      svc.create({ attemptId: 'stale-attempt', code: 'AUTHCODE#state' }, asUserA)
+    ).rejects.toMatchObject({
+      data: { code: 'CLAUDE_SUBSCRIPTION_OAUTH_DISABLED' },
+    });
+    expect(fetch).not.toHaveBeenCalled();
     expect(writeClaudeAuthViaExecutor).not.toHaveBeenCalled();
   });
 
@@ -535,7 +542,7 @@ describe('createClaudeOAuthService — flow + security', () => {
     const coordinator = new InMemoryClaudeOAuthAttemptStore();
     const { svc } = makeService(coordinator);
     const { state, attemptId } = await startAndGetState(svc);
-    const release = await coordinator.lockExternalUserMutation('tenant-1', 'user-A');
+    const release = await coordinator.lockExternalUserMutation('tenant-1', asUserA.user.user_id);
     expect(release).toBeTypeOf('function');
 
     const submit = svc.create({ attemptId, code: `AUTHCODE#${state}` }, asUserA);
@@ -544,7 +551,7 @@ describe('createClaudeOAuthService — flow + security', () => {
 
     await coordinator.completeExternalUserMutation(
       'tenant-1',
-      'user-A',
+      asUserA.user.user_id,
       async () => undefined,
       reason
     );
@@ -671,7 +678,9 @@ describe('createClaudeOAuthService — flow + security', () => {
   it('isolates attempts per user (no cross-user visibility)', async () => {
     const { svc } = makeService();
     await svc.create({}, asUserA);
-    expect((await svc.find({ user: { user_id: 'user-B' } })).phase).toBe('idle');
+    expect((await svc.find({ user: { ...asUserA.user, user_id: 'user-B' as UUID } })).phase).toBe(
+      'idle'
+    );
   });
 
   it('isolates attempts for the same user across tenants', async () => {

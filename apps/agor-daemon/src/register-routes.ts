@@ -6437,8 +6437,8 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           multiUser: (config.execution?.unix_user_mode ?? 'simple') !== 'simple',
           // Tenant agentic-tool settings provide the authoritative availability gate.
           cursorSdk: true,
-          // Provider-policy release boundary. Absence is false; the daemon
-          // independently rejects the OAuth service when disabled.
+          // Enabled by default only on supported topologies; the daemon
+          // independently enforces opt-out and OAuth security checks.
           claudeSubscriptionOAuth: hasClaudeSubscriptionOAuthCapability(config, deployment),
           // Resolved branch storage policy. The daemon still enforces this at
           // create time; the UI uses it to pick the right default and disable
