@@ -604,3 +604,166 @@ describe('termination coordinator', () => {
     securityLog.mockRestore();
   });
 });
+
+describe('termination coordinator: remote executor not yet connected', () => {
+  beforeEach(() => {
+    containExecutorProcess.mockReset();
+    getTrackedExecutor.mockReset();
+    getTrackedExecutor.mockReturnValue(undefined);
+    untrackExecutorProcess.mockReset();
+  });
+
+  const remoteDispatching = () => ({
+    ...stopping('user_stop'),
+    executor_mode: 'templated',
+    started_at: '2026-01-01T00:00:00.500Z',
+  });
+
+  it('returns pending without a lease or an unverified guard on the first Stop', async () => {
+    const state = appDouble();
+    state.claim(remoteDispatching());
+    const startedAt = Date.now();
+
+    await expect(request(state.app, 'user_stop')).resolves.toMatchObject({
+      status: 'pending',
+      pendingCode: 'awaiting_remote_executor',
+      task: { status: TaskStatus.STOPPING },
+    });
+    expect(Date.now() - startedAt).toBeLessThan(1_000);
+    expect(state.claimTerminationCoordination).not.toHaveBeenCalled();
+    expect(state.settleTermination).not.toHaveBeenCalled();
+    expect(containExecutorProcess).not.toHaveBeenCalled();
+  });
+
+  it('stays pending on a repeated Stop whose claim is unchanged', async () => {
+    const state = appDouble();
+    state.claim(remoteDispatching(), 'unchanged');
+
+    await expect(request(state.app, 'user_stop')).resolves.toMatchObject({
+      status: 'pending',
+      pendingCode: 'awaiting_remote_executor',
+    });
+    expect(state.claimTerminationCoordination).not.toHaveBeenCalled();
+    expect(state.settleTermination).not.toHaveBeenCalled();
+  });
+
+  it('does not report pending for a task already guarded as unverified', async () => {
+    const state = appDouble();
+    state.claim(
+      {
+        ...remoteDispatching(),
+        sdk_failure: { reason: 'termination_unverified', termination: 'unverified' },
+      },
+      'unchanged'
+    );
+    state.settle(
+      task(TaskStatus.STOPPING, { sdk_failure: { termination: 'unverified' } }),
+      'condition_changed'
+    );
+
+    const result = await request(state.app, 'user_stop');
+    expect(result.status).not.toBe('pending');
+  });
+
+  it('keeps the pending request out of beginExecutorTermination containment', async () => {
+    const state = appDouble();
+    state.claim(remoteDispatching());
+
+    await expect(
+      beginExecutorTermination({
+        app: state.app,
+        taskId,
+        cause: 'user_stop',
+        errorMessage: 'Stopped by user',
+        runInFreshTenantWriteDatabase,
+      })
+    ).resolves.toMatchObject({ status: TaskStatus.STOPPING });
+    expect(state.claimTerminationCoordination).not.toHaveBeenCalled();
+    expect(state.settleTermination).not.toHaveBeenCalled();
+  });
+
+  it('settles stopped when the late executor reports quiescence without ever connecting', async () => {
+    const state = appDouble();
+    state.claim(
+      {
+        ...remoteDispatching(),
+        termination_request: {
+          ...stopping('user_stop').termination_request,
+          executor_quiesced_at: '2026-01-01T00:00:40.000Z',
+        },
+      },
+      'unchanged'
+    );
+    state.settle(task(TaskStatus.STOPPED));
+
+    await expect(request(state.app, 'user_stop')).resolves.toMatchObject({
+      status: 'terminal',
+      task: { status: TaskStatus.STOPPED },
+    });
+    expect(containExecutorProcess).not.toHaveBeenCalled();
+  });
+
+  it('settles a guarded "never connected" result only when the reconciler reports the deadline expired', async () => {
+    const state = appDouble();
+    state.claim(remoteDispatching(), 'unchanged');
+    state.settle(
+      task(TaskStatus.STOPPING, {
+        ...remoteDispatching(),
+        sdk_failure: { termination: 'unverified' },
+      }),
+      'unverified'
+    );
+
+    const result = await requestExecutorTermination({
+      app: state.app,
+      taskId,
+      cause: 'user_stop',
+      errorMessage: 'Stopped by user',
+      remoteConnectDeadlineExpired: true,
+      runInFreshTenantWriteDatabase,
+    });
+
+    expect(result).toMatchObject({
+      status: 'unverified',
+      reason: expect.stringContaining('never connected before the startup deadline'),
+    });
+    expect((result as { reason: string }).reason).not.toContain('within');
+    expect(state.settleTermination).toHaveBeenCalledWith(
+      expect.objectContaining({
+        outcome: 'unverified',
+        errorMessage: expect.stringContaining('never connected before the startup deadline'),
+      }),
+      expect.anything()
+    );
+    expect(containExecutorProcess).not.toHaveBeenCalled();
+  });
+
+  it('reports the measured wait, not the configured grace, for a connected executor', async () => {
+    const state = appDouble();
+    const remoteStopping = {
+      ...stopping('user_stop'),
+      executor_mode: 'templated',
+      executor_connected_at: '2026-01-01T00:00:00.000Z',
+    };
+    state.claim(remoteStopping);
+    state.settle(
+      task(TaskStatus.STOPPING, { ...remoteStopping, sdk_failure: { termination: 'unverified' } }),
+      'unverified'
+    );
+
+    const result = await requestExecutorTermination({
+      app: state.app,
+      taskId,
+      cause: 'user_stop',
+      errorMessage: 'Stopped by user',
+      cooperativeGraceMs: 120,
+      runInFreshTenantWriteDatabase,
+    });
+
+    const reason = (result as { reason: string }).reason;
+    const waited = Number(/within (\d+)ms/.exec(reason)?.[1]);
+    expect(result.status).toBe('unverified');
+    expect(waited).toBeGreaterThanOrEqual(100);
+    expect(waited).toBeLessThan(5_000);
+  });
+});

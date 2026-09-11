@@ -90,10 +90,19 @@ export type TerminationCause =
 export const AUTHORIZATION_REVOKED_TERMINATION_MESSAGE =
   'Authorization to continue this task was revoked.';
 
-/** Why a durable termination request is waiting for another HA coordinator. */
+/**
+ * Why a durable termination request is not settled yet.
+ *
+ * `non_owner_replica` and `coordination_in_progress` wait for another HA
+ * coordinator. `awaiting_remote_executor` waits for a templated/remote
+ * executor that has not connected yet; it can still observe the durable stop
+ * request when it starts, so the daemon must not declare containment
+ * unverified before the remote startup deadline.
+ */
 export const TERMINATION_COORDINATION_PENDING_CODES = [
   'non_owner_replica',
   'coordination_in_progress',
+  'awaiting_remote_executor',
 ] as const;
 
 export type TerminationCoordinationPendingCode =

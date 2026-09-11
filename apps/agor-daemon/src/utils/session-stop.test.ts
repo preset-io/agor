@@ -378,6 +378,59 @@ describe('stopSessionPreserveQueue', () => {
     expect(requestTermination).toHaveBeenCalledOnce();
   });
 
+  it('surfaces a stop claimed before the remote executor connected as structured pending', async () => {
+    const sessionId = 'session-remote-dispatching';
+    const dispatchingTask = {
+      task_id: 'task-remote-dispatching',
+      session_id: sessionId,
+      status: 'dispatching',
+      executor_mode: 'templated',
+      created_at: '2026-01-01T00:00:00.000Z',
+    };
+    const requestTermination = vi.fn().mockResolvedValue({
+      status: 'pending',
+      task: {
+        ...dispatchingTask,
+        status: 'stopping',
+        termination_request: { cause: 'user_stop', requested_at: '2026-01-01T00:00:01.000Z' },
+      },
+      pendingCode: 'awaiting_remote_executor',
+      reason: 'Stop is recorded. The remote executor has not connected yet.',
+    });
+
+    await expect(
+      stopSessionPreserveQueue(
+        {
+          app: {} as never,
+          taskRepo: { findQueued: vi.fn().mockResolvedValue([{ task_id: 'queued-1' }]) } as never,
+          sessionsService: {
+            get: vi.fn().mockResolvedValue({
+              session_id: sessionId,
+              agentic_tool: 'codex',
+              status: 'running',
+              ready_for_prompt: false,
+              tasks: [dispatchingTask.task_id],
+            }),
+            patch: vi.fn(),
+          } as never,
+          findActiveTasks: vi.fn().mockResolvedValue([dispatchingTask]) as never,
+          requestTermination: requestTermination as never,
+          runInTenantDatabaseScope,
+          runInFreshTenantWriteDatabase,
+        },
+        sessionId as never
+      )
+    ).resolves.toEqual({
+      success: false,
+      outcome: 'pending',
+      status: 'stopping',
+      reason: 'Stop is recorded. The remote executor has not connected yet.',
+      stoppedTaskId: dispatchingTask.task_id,
+      queuedTasksPreserved: 1,
+      pendingCode: 'awaiting_remote_executor',
+    });
+  });
+
   it('does not claim a successor task when the expected execution generation changed', async () => {
     const sessionId = 'session-generation-changed';
     const runningTask = {

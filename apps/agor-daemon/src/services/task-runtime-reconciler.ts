@@ -18,7 +18,10 @@ import type { AuthenticatedParams, Task, TenantID } from '@agor/core/types';
 import { TaskStatus } from '@agor/core/types';
 import type { Application, TasksServiceImpl } from '../declarations.js';
 import { getTrackedExecutor } from '../executor-tracking.js';
-import { requestExecutorTermination } from '../termination-coordinator.js';
+import {
+  isAwaitingRemoteExecutor,
+  requestExecutorTermination,
+} from '../termination-coordinator.js';
 import { withFreshTenantWrite } from '../utils/tenant-db-scope.js';
 
 export const EXECUTOR_HEARTBEAT_LOST_MESSAGE =
@@ -62,6 +65,7 @@ const DEFAULT_SCAN_BATCH_SIZE = 25;
 const DEFAULT_MAX_IDLE_INTERVAL_MS = 60_000;
 const DEFAULT_STARTUP_OFFSET_MAX_MS = 30_000;
 const DEFAULT_LOCAL_OWNER_GRACE_MS = 15_000;
+const DEFAULT_DISPATCH_CONNECT_TIMEOUT_MS = 5 * 60_000;
 const SATURATED_DRAIN_BASE_MS = 150;
 const SATURATED_DRAIN_JITTER_RATIO = 2 / 3; // 50..250ms
 
@@ -165,7 +169,7 @@ export class TaskRuntimeReconciler {
       // postgres.js does not permit concurrent queries on one transaction
       // connection, and these scans deliberately do not lock candidate rows.
       const dispatch = await repo.findExpiredDispatchRefs(
-        this.options.dispatchConnectTimeoutMs ?? 5 * 60_000,
+        this.dispatchConnectTimeoutMs(),
         discoveryOptions('dispatch_timeout')
       );
       advanceCursor('dispatch_timeout', dispatch);
@@ -176,9 +180,13 @@ export class TaskRuntimeReconciler {
           )
         : [];
       advanceCursor('heartbeat_stale', heartbeat);
-      const termination = await repo.findStrandedTerminationRefs(
-        discoveryOptions('termination_stranded')
-      );
+      // A stop claimed before a remote executor connected has no lease and no
+      // guard. Keep it out of the scan until the remote startup deadline so
+      // the pending request neither churns nor masks a stranded stop.
+      const termination = await repo.findStrandedTerminationRefs({
+        ...discoveryOptions('termination_stranded'),
+        unconnectedGraceMs: this.dispatchConnectTimeoutMs(),
+      });
       advanceCursor('termination_stranded', termination);
       const withTenant = (ref: TaskRuntimeDiscoveryRef): TaskRuntimeDiscoveryRef => ({
         ...ref,
@@ -232,6 +240,22 @@ export class TaskRuntimeReconciler {
     work: () => Promise<T>
   ): Promise<T> {
     return withFreshTenantWrite(this.options.db, tenantId, work);
+  }
+
+  private dispatchConnectTimeoutMs(): number {
+    return this.options.dispatchConnectTimeoutMs ?? DEFAULT_DISPATCH_CONNECT_TIMEOUT_MS;
+  }
+
+  /**
+   * Whether a templated executor that never connected has exhausted the same
+   * startup window the dispatch scan allows. Anchored on dispatch time, not on
+   * the stop request, so a Stop cannot grant an overdue launch another window.
+   */
+  private remoteConnectDeadlineExpired(task: Task): boolean {
+    const anchor = Date.parse(task.started_at ?? task.termination_request?.requested_at ?? '');
+    if (!Number.isFinite(anchor)) return true;
+    const now = this.options.now?.() ?? new Date();
+    return now.getTime() - anchor >= this.dispatchConnectTimeoutMs();
   }
 
   private async reconcileDispatchTimeout(
@@ -326,12 +350,15 @@ export class TaskRuntimeReconciler {
     if (localMode && !ownsLocalHandle && task.sdk_failure?.termination === 'unverified') {
       return false;
     }
+    const awaitingRemoteExecutor = isAwaitingRemoteExecutor(task);
+    if (awaitingRemoteExecutor && !this.remoteConnectDeadlineExpired(task)) return false;
     const result = await requestExecutorTermination({
       app: this.options.app,
       taskId: task.task_id,
       cause: request.cause,
       errorMessage: request.error_message ?? 'Resuming durable executor termination.',
       params,
+      ...(awaitingRemoteExecutor ? { remoteConnectDeadlineExpired: true } : {}),
       allowUnownedLocalContainment: localMode && !ownsLocalHandle,
       ...(localMode && !ownsLocalHandle
         ? {

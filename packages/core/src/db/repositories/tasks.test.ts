@@ -428,6 +428,67 @@ describe('TaskRepository runtime reconciliation', () => {
   });
 
   dbTest(
+    'keeps a stop claimed before the remote executor connected out of stranded discovery until the startup deadline',
+    async ({ db }) => {
+      const tasks = new TaskRepository(db);
+      const sessionId = await createSessionWithDeps(db);
+      const dispatchedAt = new Date('2026-08-06T12:00:00.000Z');
+      const pending = await tasks.create(
+        createTaskData({
+          session_id: sessionId,
+          status: TaskStatus.DISPATCHING,
+          started_at: dispatchedAt.toISOString(),
+          executor_mode: 'templated',
+        })
+      );
+      await tasks.claimTermination({
+        taskId: pending.task_id,
+        cause: 'user_stop',
+        errorMessage: 'Stopped by user.',
+        now: new Date('2026-08-06T12:00:30.000Z'),
+      });
+      const stopped = await tasks.findById(pending.task_id);
+      expect(stopped?.status).toBe(TaskStatus.STOPPING);
+      expect(stopped?.executor_connected_at).toBeUndefined();
+
+      const graceMs = 5 * 60_000;
+      const inside = await tasks.findStrandedTerminationRefs({
+        now: new Date('2026-08-06T12:04:59.000Z'),
+        unconnectedGraceMs: graceMs,
+      });
+      expect(inside.map((ref) => ref.task_id)).not.toContain(pending.task_id);
+
+      // Without the grace option the row is still routable, as before.
+      const legacy = await tasks.findStrandedTerminationRefs({
+        now: new Date('2026-08-06T12:04:59.000Z'),
+      });
+      expect(legacy.map((ref) => ref.task_id)).toContain(pending.task_id);
+
+      const past = await tasks.findStrandedTerminationRefs({
+        now: new Date('2026-08-06T12:05:00.000Z'),
+        unconnectedGraceMs: graceMs,
+      });
+      expect(past.map((ref) => ref.task_id)).toContain(pending.task_id);
+
+      // A coordinator that already claimed a lease is stranded when it expires,
+      // regardless of whether the executor ever connected.
+      await tasks.claimTerminationCoordination({
+        taskId: pending.task_id,
+        claimToken: 'dead-coordinator',
+        leaseDurationMs: 1_000,
+        instanceId: 'daemon-a',
+        bootId: 'boot-a',
+        now: new Date('2026-08-06T12:00:31.000Z'),
+      });
+      const leased = await tasks.findStrandedTerminationRefs({
+        now: new Date('2026-08-06T12:00:33.000Z'),
+        unconnectedGraceMs: graceMs,
+      });
+      expect(leased.map((ref) => ref.task_id)).toContain(pending.task_id);
+    }
+  );
+
+  dbTest(
     'reclaims an expired coordinator and does not rediscover guarded unverified work',
     async ({ db }) => {
       const tasks = new TaskRepository(db);

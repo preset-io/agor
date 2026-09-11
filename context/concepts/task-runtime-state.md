@@ -188,6 +188,12 @@ an explicit mapping-review point.
   coordination token and expiring lease unconditionally fence normal
   containment settlement. Guarded-unverified state clears the token and
   rejects any later stale-coordinator settlement.
+- A `stopping` request claimed before a templated executor connected is
+  pending (`awaiting_remote_executor`), not stranded: it holds no coordination
+  lease and no unverified guard, and the stranded-termination scan skips it
+  until the same remote startup deadline the dispatch scan uses, anchored on
+  dispatch time rather than on the Stop. Past that deadline the reconciler
+  settles it as guarded unverified with a "never connected" diagnosis.
 - A replacement daemon resumes an existing durable `stopping` request after
   the prior claim expires. Durable unverified containment is excluded from
   rediscovery and remains owner/admin-guarded unless a first, correctly
@@ -242,17 +248,23 @@ transaction, eliminating a daemon-death gap between durable commits.
 
 Containment then depends on execution mode:
 
-| Runtime                   | Evidence required before terminal settlement                                                                                                                                                |
-| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Local executor            | Cooperative quiescence when available, followed by process-group absence verification by the daemon application that owns the PID/PGID handle; escalation can use `SIGTERM` then `SIGKILL`. |
-| Templated/remote executor | The scoped executor's fenced quiescence report, because the daemon cannot inspect a process group on another host.                                                                          |
-| OpenCode provider work    | Local process absence is insufficient to prove server-side work stopped, so termination can remain unverified.                                                                              |
+| Runtime                   | Evidence required before terminal settlement                                                                                                                                                   |
+| ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Local executor            | Cooperative quiescence when available, followed by process-group absence verification by the daemon application that owns the PID/PGID handle; escalation can use `SIGTERM` then `SIGKILL`.    |
+| Templated/remote executor | The scoped executor's fenced quiescence report, because the daemon cannot inspect a process group on another host. Before that executor has connected, Stop is pending rather than unverified. |
+| OpenCode provider work    | Local process absence is insufficient to prove server-side work stopped, so termination can remain unverified.                                                                                 |
 
 Local cooperative shutdown gives the process wrapper 250 ms to disappear before
 signaling. A PGID probe may still be `unverified` because of an OS inspection
 error; only an explicit later `absent` result verifies termination. Persistent
 uncertainty fails closed. Templated/remote executors get a 15 second cooperative
-window because the daemon has no local signal fallback.
+window because the daemon has no local signal fallback; the unverified
+diagnosis reports the wait actually spent. A templated executor that has not
+claimed its dispatch cannot have received the request, so Stop returns
+`pending` with `awaiting_remote_executor` and the request stays durable. The
+late executor's startup recovery reads it, reports quiescence, and settles the
+task without ever connecting. Only the remote startup deadline turns that
+pending request into a guarded unverified one.
 
 After provider cleanup returns, the executor makes bounded, idempotent retries
 to report its exact Task/request-fenced quiescence fact. A failed write is

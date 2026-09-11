@@ -312,6 +312,13 @@ export interface TaskRuntimeDiscoveryOptions {
   after?: TaskRuntimeDiscoveryCursor;
   /** Deterministic test clock. PostgreSQL uses database time when omitted. */
   now?: Date;
+  /**
+   * Stranded-termination discovery only: leave a STOPPING row whose executor
+   * never connected and that no coordinator has ever claimed out of the scan
+   * until this long after dispatch. A templated stop claimed before the pod
+   * connected is pending, not stranded, during the remote startup window.
+   */
+  unconnectedGraceMs?: number;
 }
 
 export interface TaskFindPageOptions {
@@ -1156,6 +1163,14 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
             isNull(tasks.termination_coordination_expires_at),
             lte(tasks.termination_coordination_expires_at, this.databaseNow(options.now))
           ),
+          options.unconnectedGraceMs !== undefined
+            ? or(
+                isNotNull(tasks.executor_connected_at),
+                isNotNull(tasks.termination_coordination_claimed_at),
+                isNull(tasks.started_at),
+                lte(tasks.started_at, this.databaseCutoff(options.unconnectedGraceMs, options.now))
+              )
+            : undefined,
           after
         )
       )
