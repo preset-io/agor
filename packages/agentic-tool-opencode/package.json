@@ -48,7 +48,7 @@
   },
   "dependencies": {
     "@agor/core": "workspace:*",
-    "zod": "^4.4.3"
+    "zod": "^4.5.4"
   },
   "devDependencies": {
     "@ant-design/icons": "^6.3.2",

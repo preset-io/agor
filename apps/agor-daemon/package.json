@@ -77,7 +77,7 @@
     "typescript": "^6.0.3",
     "unified": "^11.0.5",
     "vitest": "^4.1.10",
-    "zod": "^4.4.3"
+    "zod": "^4.5.4"
   },
   "peerDependencies": {
     "hot-shots": "^17.1.0"
