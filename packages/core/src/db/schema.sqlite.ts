@@ -1,3 +1,4 @@
+import type { WorkspaceState } from '../workspaces/types';
 /**
  * SQLite Schema Definition
  *
@@ -813,6 +814,7 @@ export const branches = sqliteTable(
     // existing branch keeps its home (design §8B.3). No CHECK constraint (SQLite
     // enum extension would force a table rebuild); validated at the app layer.
     sdk_home: text('sdk_home', { enum: ['per_branch'] }).$type<'per_branch'>(),
+    workspace_state: t.json<WorkspaceState>('workspace_state'),
 
     // JSON blob for everything else
     data: t

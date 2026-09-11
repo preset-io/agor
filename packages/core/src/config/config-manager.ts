@@ -1,3 +1,4 @@
+import { resolveBranchWorkspaceConfig } from './branch-workspace';
 /**
  * Agor Config Manager
  *
@@ -851,8 +852,10 @@ function validateConfig(config: AgorConfig): void {
     'managed_envs_execution_mode',
     'environment_command_job_deadline_ms',
     'branch_storage',
+    'branch_workspace',
     'sandbox',
   ]);
+  resolveBranchWorkspaceConfig(config.execution?.branch_workspace);
   only(config.execution?.executor_heartbeat, 'execution.executor_heartbeat', [
     'enabled',
     'interval_ms',

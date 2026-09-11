@@ -1,3 +1,4 @@
+import type { WorkspaceState } from '../workspaces/types';
 /**
  * PostgreSQL Schema Definition
  *
@@ -858,6 +859,7 @@ export const branches = pgTable(
     // the live `execution.sandbox.sdk_home_mode` flag — governs whether an
     // existing branch keeps its home (design §8B.3). Validated at the app layer.
     sdk_home: text('sdk_home', { enum: ['per_branch'] }).$type<'per_branch'>(),
+    workspace_state: t.json<WorkspaceState>('workspace_state'),
 
     // JSON blob for everything else
     data: t

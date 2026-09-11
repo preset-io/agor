@@ -50,6 +50,7 @@ export * from './password-credentials';
 export * from './pending-migrations';
 // Repositories
 export * from './repositories';
+export { BranchWorkspaceRepository } from './repositories/branch-workspaces';
 export * from './sanitize-error';
 export * from './schema';
 export { type DatabaseDialect, detectDialectFromUrl, getDatabaseDialect } from './schema-factory';

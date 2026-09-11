@@ -10,6 +10,8 @@ export default defineConfig({
     'types/index': 'src/types/index.ts',
     'realtime/index': 'src/realtime/index.ts',
     'executor-protocol': 'src/executor-protocol.ts',
+    'workspaces/types': 'src/workspaces/types.ts',
+    'workspaces/index': 'src/workspaces/index.ts',
     'db/index': 'src/db/index.ts',
     'db/session-guard': 'src/db/session-guard.ts', // Defensive programming for deleted sessions
     'tenant-portability/index': 'src/tenant-portability/index.ts',

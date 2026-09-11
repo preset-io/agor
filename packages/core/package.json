@@ -483,6 +483,18 @@
       "types": "./dist/agentic-integrations.d.ts",
       "import": "./dist/agentic-integrations.js",
       "require": "./dist/agentic-integrations.cjs"
+    },
+    "./workspaces": {
+      "source": "./src/workspaces/index.ts",
+      "types": "./dist/workspaces/index.d.ts",
+      "import": "./dist/workspaces/index.js",
+      "require": "./dist/workspaces/index.cjs"
+    },
+    "./workspaces/types": {
+      "source": "./src/workspaces/types.ts",
+      "types": "./dist/workspaces/types.d.ts",
+      "import": "./dist/workspaces/types.js",
+      "require": "./dist/workspaces/types.cjs"
     }
   },
   "scripts": {

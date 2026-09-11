@@ -736,6 +736,13 @@
       "when": 1788940800000,
       "tag": "0105_mcp_oauth_grant_attribution",
       "breakpoints": true
+    },
+    {
+      "idx": 106,
+      "version": "7",
+      "when": 1789171200000,
+      "tag": "0106_branch_workspace_state",
+      "breakpoints": true
     }
   ]
 }

@@ -1,3 +1,4 @@
+import type { BranchWorkspaceConfig } from './branch-workspace';
 /**
  * Agor Configuration Types
  */
@@ -813,6 +814,7 @@ export interface AgorExecutionSettings {
    * ```
    */
   branch_storage?: AgorBranchStorageSettings;
+  branch_workspace?: BranchWorkspaceConfig;
 
   /**
    * OS-level executor sandbox policy (SRT: bubblewrap / Seatbelt). Disabled by

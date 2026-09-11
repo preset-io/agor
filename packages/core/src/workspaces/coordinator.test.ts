@@ -1,0 +1,249 @@
+import {
+  chmod,
+  lstat,
+  mkdir,
+  mkdtemp,
+  readFile,
+  rename,
+  rm,
+  symlink,
+  writeFile,
+} from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { afterEach, describe, expect, it } from 'vitest';
+import type { BranchID, TenantID } from '../types';
+import { BranchWorkspaceCoordinator } from './coordinator';
+import { LocalWorkspaceBlobs } from './local-blobs';
+import { hash, scan } from './tree';
+import type { WorkspaceMetadata, WorkspaceOptions, WorkspaceState } from './types';
+
+const dirs: string[] = [];
+afterEach(async () => {
+  for (const dir of dirs.splice(0)) await rm(dir, { recursive: true, force: true });
+});
+class Authority implements WorkspaceMetadata {
+  state: WorkspaceState | null = null;
+  now = 1000;
+  failAfterCommit = false;
+  async read() {
+    return { state: structuredClone(this.state), now: this.now };
+  }
+  async mutate<T>(
+    work: (s: WorkspaceState | null, now: number) => { state: WorkspaceState; result: T }
+  ): Promise<T> {
+    const result = work(structuredClone(this.state), this.now);
+    this.state = structuredClone(result.state);
+    if (this.failAfterCommit) {
+      this.failAfterCommit = false;
+      throw new Error('lost acknowledgement');
+    }
+    return structuredClone(result.result);
+  }
+}
+async function fixture() {
+  const root = await mkdtemp(path.join(tmpdir(), 'agor-workspace-'));
+  dirs.push(root);
+  const source = path.join(root, 'source');
+  await mkdir(source);
+  await writeFile(path.join(source, 'a'), 'a0');
+  await writeFile(path.join(source, 'b'), 'b0');
+  const scope = { tenantId: 'tenant-a' as TenantID, branchId: 'branch-a' as BranchID };
+  const metadata = new Authority();
+  const blobs = new LocalWorkspaceBlobs(path.join(root, 'objects'), scope.tenantId);
+  const options: WorkspaceOptions = {
+    root: path.join(root, 'host-a'),
+    host: 'a',
+    leaseMs: 1000,
+    toolLeaseMs: 500,
+    clone: 'copy',
+    maximumBytes: 10_000_000,
+    maximumFiles: 1000,
+    minimumFreeBytes: 0,
+    minimumFreeInodes: 0,
+    maximumActiveTools: 8,
+    maximumReceipts: 1000,
+    exclude: [],
+  };
+  const c = new BranchWorkspaceCoordinator(scope, metadata, blobs, options);
+  await c.materialise(source);
+  return { root, source, scope, metadata, blobs, options, c };
+}
+describe('branch tool-boundary protocol', () => {
+  it('commits disjoint concurrent changes and refreshes without notifications', async () => {
+    const { c, metadata } = await fixture();
+    const a = await c.beginTool('one', 't1', 'k1');
+    const b = await c.beginTool('two', 't2', 'k2');
+    expect([a.ticket.baseRevision, b.ticket.baseRevision]).toEqual([0, 0]);
+    await writeFile(path.join(a.workspace, 'a'), 'a1');
+    await writeFile(path.join(b.workspace, 'b'), 'b1');
+    const outcomes = await Promise.all([c.completeTool(a.ticket), c.completeTool(b.ticket)]);
+    expect(outcomes.map((o) => o.status)).toEqual(['committed', 'committed']);
+    expect(metadata.state?.revision).toBe(2);
+    expect(await readFile(path.join(a.workspace, 'b'), 'utf8')).toBe('b0');
+    const next = await c.beginTool('one', 't3', 'k3');
+    expect(next.ticket.baseRevision).toBe(2);
+    expect(await readFile(path.join(next.workspace, 'b'), 'utf8')).toBe('b1');
+  });
+  it('rejects conflicting multi-file mutations atomically, with hashes and idempotency', async () => {
+    const { c, metadata } = await fixture();
+    const a = await c.beginTool('one', 't1', 'k1');
+    const b = await c.beginTool('two', 't2', 'k2');
+    await writeFile(path.join(a.workspace, 'a'), 'winner');
+    await writeFile(path.join(b.workspace, 'a'), 'loser');
+    await writeFile(path.join(b.workspace, 'b'), 'must-not-commit');
+    await c.completeTool(a.ticket);
+    const result = await c.completeTool(b.ticket);
+    expect(result).toMatchObject({
+      status: 'conflict',
+      baseRevision: 0,
+      currentRevision: 1,
+      executorId: 'two',
+      toolId: 't2',
+      paths: [
+        {
+          path: 'a',
+          baseHash: hash('a0'),
+          currentHash: hash('winner'),
+          proposedHash: hash('loser'),
+        },
+      ],
+    });
+    expect(metadata.state?.tree.b.hash).toBe(hash('b0'));
+    expect(await c.completeTool(b.ticket)).toEqual(result);
+  });
+  it('returns the original outcome after a lost commit acknowledgement', async () => {
+    const { c, metadata } = await fixture();
+    const a = await c.beginTool('one', 't1', 'k1');
+    await writeFile(path.join(a.workspace, 'a'), 'changed');
+    metadata.failAfterCommit = true;
+    await expect(c.completeTool(a.ticket)).rejects.toThrow('lost acknowledgement');
+    expect(await c.completeTool(a.ticket)).toEqual({ status: 'committed', revision: 1 });
+    expect(metadata.state?.revision).toBe(1);
+  });
+  it('fences stale hosts and restores post-checkpoint revisions after abrupt loss', async () => {
+    const f = await fixture();
+    await f.c.checkpoint();
+    const a = await f.c.beginTool('one', 't1', 'k1');
+    await writeFile(path.join(a.workspace, 'a'), 'durable');
+    await f.c.completeTool(a.ticket);
+    const stale = await f.c.beginTool('two', 't2', 'k2');
+    await writeFile(path.join(stale.workspace, 'b'), 'not-durable');
+    f.metadata.now += 2000;
+    const b = new BranchWorkspaceCoordinator(f.scope, f.metadata, f.blobs, {
+      ...f.options,
+      host: 'b',
+      root: path.join(f.root, 'host-b'),
+    });
+    expect(await b.restore()).toBe(1);
+    await expect(f.c.completeTool(stale.ticket)).rejects.toMatchObject({ code: 'FENCED' });
+    const next = await b.beginTool('three', 't3', 'k3');
+    expect(await readFile(path.join(next.workspace, 'a'), 'utf8')).toBe('durable');
+    expect(await readFile(path.join(next.workspace, 'b'), 'utf8')).toBe('b0');
+  });
+  it('migrates modes, symlinks, renames and empty directories', async () => {
+    const f = await fixture();
+    const a = await f.c.beginTool('one', 't1', 'k1');
+    await rename(path.join(a.workspace, 'a'), path.join(a.workspace, 'renamed'));
+    await chmod(path.join(a.workspace, 'renamed'), 0o755);
+    await symlink('renamed', path.join(a.workspace, 'link'));
+    await mkdir(path.join(a.workspace, 'empty'));
+    await f.c.completeTool(a.ticket);
+    const expected = f.metadata.state!.tree;
+    await f.c.drain();
+    await f.c.evict();
+    const b = new BranchWorkspaceCoordinator(f.scope, f.metadata, f.blobs, {
+      ...f.options,
+      host: 'b',
+      root: path.join(f.root, 'host-b'),
+    });
+    await b.restore();
+    const next = await b.beginTool('two', 't2', 'k2');
+    expect((await scan(next.workspace, [], f.options)).tree).toEqual(expected);
+    expect((await lstat(path.join(next.workspace, 'renamed'))).mode & 0o777).toBe(0o755);
+  });
+  it('excludes nested dependencies, build products and credentials', async () => {
+    const f = await fixture();
+    const a = await f.c.beginTool('one', 't1', 'k1');
+    for (const dir of ['node_modules/private', 'src/dist', '.aws', '.codex']) {
+      await mkdir(path.join(a.workspace, dir), { recursive: true });
+      await writeFile(path.join(a.workspace, dir, 'secret'), 'private');
+    }
+    await writeFile(path.join(a.workspace, '.env'), 'secret');
+    await writeFile(path.join(a.workspace, '.npmrc'), 'secret');
+    await f.c.completeTool(a.ticket);
+    await f.c.checkpoint();
+    expect(Object.keys(f.metadata.state!.tree).sort()).toEqual(['a', 'b', 'src']);
+  });
+  it('rejects symlink escapes and detects rename/edit, rename/rename and delete/edit', async () => {
+    const f = await fixture();
+    const a = await f.c.beginTool('one', 't1', 'k1');
+    await symlink('/etc/passwd', path.join(a.workspace, 'escape'));
+    await expect(f.c.completeTool(a.ticket)).rejects.toMatchObject({ code: 'INVALID' });
+    expect(f.metadata.state?.revision).toBe(0);
+    for (const mode of ['edit', 'rename', 'delete']) {
+      const g = await fixture();
+      const x = await g.c.beginTool('one', 't1', 'k1');
+      const y = await g.c.beginTool('two', 't2', 'k2');
+      await rename(path.join(x.workspace, 'a'), path.join(x.workspace, 'new-a'));
+      if (mode === 'edit') await writeFile(path.join(y.workspace, 'a'), 'edit');
+      if (mode === 'rename')
+        await rename(path.join(y.workspace, 'a'), path.join(y.workspace, 'new-b'));
+      if (mode === 'delete') await rm(path.join(y.workspace, 'a'));
+      await g.c.completeTool(x.ticket);
+      expect(await g.c.completeTool(y.ticket)).toMatchObject({ status: 'conflict' });
+    }
+  });
+  it('never publishes interrupted uploads or runs corrupted checkpoints', async () => {
+    const f = await fixture();
+    const a = await f.c.beginTool('one', 't1', 'k1');
+    await writeFile(path.join(a.workspace, 'a'), 'new');
+    const original = f.blobs.put.bind(f.blobs);
+    f.blobs.put = async () => {
+      throw new Error('S3 interrupted');
+    };
+    await expect(f.c.completeTool(a.ticket)).rejects.toThrow('S3 interrupted');
+    expect(f.metadata.state?.revision).toBe(0);
+    f.blobs.put = original;
+    await f.c.abortTool(a.ticket);
+    const cp = await f.c.checkpoint();
+    await writeFile(path.join(f.blobs.directory, cp.hash), 'corrupt');
+    await expect(f.c.restore()).rejects.toThrow();
+  });
+  it('prevents tenant confusion, active migration and capacity overruns', async () => {
+    const f = await fixture();
+    const other = new BranchWorkspaceCoordinator(
+      { ...f.scope, tenantId: 'other' as TenantID },
+      f.metadata,
+      f.blobs,
+      f.options
+    );
+    await expect(other.restore()).rejects.toMatchObject({ code: 'INVALID' });
+    const a = await f.c.beginTool('one', 't1', 'k1');
+    await expect(f.c.drain()).rejects.toMatchObject({ code: 'BUSY' });
+    await expect(f.c.beginTool('one', 't2', 'k2')).rejects.toMatchObject({ code: 'BUSY' });
+    await f.c.abortTool(a.ticket);
+    const full = new BranchWorkspaceCoordinator(f.scope, f.metadata, f.blobs, {
+      ...f.options,
+      minimumFreeInodes: Number.MAX_SAFE_INTEGER,
+    });
+    await expect(full.materialise()).rejects.toMatchObject({ code: 'CAPACITY' });
+    expect(await f.c.beginTool('one', 't2', 'k2')).toHaveProperty('workspace');
+  });
+  it('serializes eight writers without missing or duplicated revisions', async () => {
+    const f = await fixture();
+    const tools = await Promise.all(
+      Array.from({ length: 8 }, (_, i) => f.c.beginTool(`e${i}`, `t${i}`, `k${i}`))
+    );
+    await Promise.all(
+      tools.map(async (t, i) => {
+        await writeFile(path.join(t.workspace, `file-${i}`), String(i));
+        return f.c.completeTool(t.ticket);
+      })
+    );
+    expect(f.metadata.state?.revision).toBe(8);
+    expect(Object.keys(f.metadata.state!.receipts)).toHaveLength(8);
+    for (let i = 0; i < 8; i++)
+      expect(f.metadata.state!.tree[`file-${i}`].hash).toBe(hash(String(i)));
+  });
+});
