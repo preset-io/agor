@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agor — Logo Reveal</title>
+<style>
+  :root{
+    --teal:#36B7AF;
+    --bg:#0b1220;
+    --len:1500; /* fallback path length before JS measures the real one */
+  }
+  html,body{
+    height:100%;margin:0;
+    /* straight top-to-bottom, not diagonal: a diagonal gradient crosses video codecs'
+       block-based compression at an angle, which shows up as visible vertical banding
+       once the page is captured to video (each block sees a mix of two directions of
+       change, encodes it inconsistently frame to frame). A straight gradient aligns
+       with the block grid and compresses cleanly. */
+    background:linear-gradient(to bottom, #16223c 0%, #0b1220 55%, #05070d 100%);
+    display:flex;align-items:center;justify-content:center;
+    font-family:system-ui,-apple-system,"Segoe UI",sans-serif;
+  }
+  .stage{display:flex;flex-direction:column;align-items:center;gap:28px;}
+  svg{width:min(64vmin,1400px);height:min(64vmin,1400px);overflow:visible;display:block;}
+
+  /* everything starts paused at its 0% keyframe; svg.ready flips it on */
+  svg :is(.arm,.dot,.drawable,.crossbar){
+    animation-play-state:paused;
+  }
+  svg.ready :is(.arm,.dot,.drawable,.crossbar){
+    animation-play-state:running;
+  }
+
+  circle.dot{fill:var(--teal);}
+  .ring-path,.arc,.apath,.crossbar{
+    fill:none;stroke:var(--teal);stroke-width:29;
+    stroke-linecap:round;stroke-linejoin:round;
+  }
+
+  .drawable{
+    stroke-dasharray:var(--len);
+    stroke-dashoffset:var(--len);
+  }
+
+  .arm{
+    transform-box:view-box;
+  }
+
+  /* --- dot growth: pops in during the fast initial spin, growing from radius 0
+     and fading from fully transparent up to opaque together, in lockstep, across
+     that same initial lap (0%-16%, matching the rigid-spin phase). r and opacity
+     used to hit their targets at different percentages (14% vs 16%), which meant
+     a dot could be most of the way opaque while still visibly mid-grow — a
+     washed-out "translucent blob" instead of a clean materialize. Tying both to
+     the same 16% endpoint keeps them proportional the whole way. --- */
+  @keyframes grow{
+    0%{ r:0; opacity:0; animation-timing-function:linear; }
+    16%{ r:40; opacity:1; }
+    100%{ r:40; opacity:1; }
+  }
+  .dot{
+    animation:grow 4.5s ease-out forwards;
+  }
+
+  /* --- orbit collapse: alongside the grow/fade above, each dot's whole arm is
+     also scaled down to nothing at the center point and expands back out to full
+     orbit radius over the same 0%-16% window — so dots don't just fade in sitting
+     out at full orbit distance, they appear to coalesce from the center and fly
+     outward as they grow and fade on. --- */
+  @keyframes arm-scale{
+    0%{ scale:0; animation-timing-function:linear; }
+    16%{ scale:1; }
+    100%{ scale:1; }
+  }
+
+  /* --- orbit spin ---
+     Phase A (0%-16%): quick, tight rigid spin — all four dots rotate by the exact
+     same amount, linearly, so their 90°-apart spacing is preserved throughout.
+     Phase B (16%-60%): every dot eases into its own final (unevenly-spaced)
+     resting angle at the same landing time — the moment the comet-tail arcs
+     below finish drawing behind the forward dot of each pair. */
+  @keyframes spin{
+    0%{ rotate:var(--s); animation-timing-function:linear; }
+    16%{ rotate:calc(var(--s) - 270deg); animation-timing-function:cubic-bezier(.16,.84,.44,1); }
+    60%{ rotate:0deg; }
+    100%{ rotate:0deg; }
+  }
+  .arm{ animation:spin 4.5s linear forwards, arm-scale 4.5s linear forwards; }
+
+  /* --- inner ring: sweeps on concurrently with the comet-tail arcs, as the dots slow to a halt --- */
+  @keyframes ring-sweep{
+    0%{ stroke-dashoffset:var(--len); }
+    16%{ stroke-dashoffset:var(--len); animation-timing-function:cubic-bezier(.16,.84,.44,1); }
+    60%{ stroke-dashoffset:0; }
+    100%{ stroke-dashoffset:0; }
+  }
+  #ring{ animation:ring-sweep 4.5s linear forwards; }
+
+  /* --- connecting arcs: comet tails emitted behind the forward dot of each pair —
+     same keyframe timing and easing as .arm's spin, so the tail's length always
+     tracks the forward dot's current position; the trailing dot lands the instant
+     the tail reaches it. --- */
+  @keyframes draw-arc{
+    0%{ stroke-dashoffset:var(--len); }
+    16%{ stroke-dashoffset:var(--len); animation-timing-function:cubic-bezier(.16,.84,.44,1); }
+    60%{ stroke-dashoffset:0; }
+    100%{ stroke-dashoffset:0; }
+  }
+  .arc{ animation:draw-arc 4.5s linear forwards; }
+
+  /* --- the A: one continuous stroke — up the long leg, round the peak, down the
+     short leg — starts the instant the anchoring dot stops moving. --- */
+  @keyframes draw-apath{
+    0%,60%{ stroke-dashoffset:var(--len); }
+    82%{ stroke-dashoffset:0; }
+    100%{ stroke-dashoffset:0; }
+  }
+  .apath{ animation:draw-apath 4.5s ease-out forwards; }
+
+  /* --- crossbar ("shrink up" version): appears at large size right as the short leg's
+     own endpoint touches the ring (which happens to be almost exactly when the A-path
+     finishes drawing, ~82% — the leg's dot sits almost precisely on the ring's radius
+     by design). The starting curve is a true cubic-bezier approximation of the ring's
+     own circle (same center, same 189 radius) between the two points where each leg
+     crosses it — so at the moment it appears it's genuinely coincident with the ring,
+     not just a similarly-sized curve near it — then it shrinks/flattens straight up
+     into the final small curve. Ring is on top of the bar in the DOM, so the bar reads
+     as sliding out from behind it. --- */
+  @keyframes crossbar-grow{
+    0%,82%{ d:path("M261.42,523.76 C292.62,544.77 329.38,556.00 367.00,556.00 C405.39,556.00 442.88,544.31 474.46,522.48"); opacity:0; }
+    83%{ opacity:1; }
+    95%{ d:path("M293.84,404.67 C307.45,431.55 335.34,450 367.5,450 C400,450 428.13,431.17 441.58,403.83"); }
+    100%{ d:path("M293.84,404.67 C307.45,431.55 335.34,450 367.5,450 C400,450 428.13,431.17 441.58,403.83"); }
+  }
+  .crossbar{ animation:crossbar-grow 4.5s ease-out forwards; }
+
+  /* --- finishing shine: a single soft diagonal light sweep across the completed mark.
+     Masked to a static copy of the logo's own final silhouette, so only the shapes
+     light up, never the background. Runs once, on its own delay (starts right as the
+     4.5s build finishes) rather than as a percentage of the shared timeline.
+     Animates the rect's own `x` attribute rather than a CSS transform — a
+     transform on a masked SVG element breaks the mask's alignment in Chrome
+     (confirmed directly: same element, same mask, only difference is transform
+     vs plain x/y — the transformed version leaks outside the masked silhouette
+     while moving, the attribute-animated version stays perfectly confined). The
+     diagonal angle comes from the gradient's own direction instead of a skew. --- */
+  .shine{
+    animation:shine-sweep 1.1s ease-in-out 4.5s 1 both;
+  }
+  svg :is(.shine){ animation-play-state:paused; }
+  svg.ready :is(.shine){ animation-play-state:running; }
+  @keyframes shine-sweep{
+    0%{ x:-260px; opacity:0; }
+    12%{ opacity:1; }
+    50%{ opacity:1; }
+    88%{ opacity:0; }
+    100%{ x:994px; opacity:0; }
+  }
+</style>
+</head>
+<body>
+<div class="stage">
+  <svg viewBox="0 0 734 734" xmlns="http://www.w3.org/2000/svg">
+
+    <defs>
+      <linearGradient id="shine-gradient" x1="0" y1="1" x2="0.7" y2="0">
+        <stop offset="0%" stop-color="#ffffff" stop-opacity="0"/>
+        <stop offset="50%" stop-color="#ffffff" stop-opacity="0.4"/>
+        <stop offset="100%" stop-color="#ffffff" stop-opacity="0"/>
+      </linearGradient>
+      <!-- static copy of every shape at its final resting state, used only to mask the
+           shine so it only lights up the logo's own silhouette, not the background -->
+      <mask id="logo-mask" maskUnits="userSpaceOnUse" x="0" y="0" width="734" height="734">
+        <g fill="none" stroke="#fff" stroke-width="29" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M556,367 A189,189 0 1,0 178,367 A189,189 0 1,0 556,367"/>
+          <path d="M367,70 A297,297 0 0,0 188,607"/>
+          <path d="M367,664 A297,297 0 0,0 664,367"/>
+          <path d="M188,607 C188,607 306.427,380.615 351.693,294.083 C355.033,287.698 361.66,283.713 368.865,283.756 C376.071,283.799 382.649,287.862 385.914,294.286 C420.058,361.482 494,507 494,507"/>
+          <path d="M293.84,404.67 C307.45,431.55 335.34,450 367.5,450 C400,450 428.13,431.17 441.58,403.83"/>
+        </g>
+        <g fill="#fff">
+          <circle cx="367" cy="70" r="40"/>
+          <circle cx="367" cy="664" r="40"/>
+          <circle cx="188" cy="607" r="40"/>
+          <circle cx="664" cy="367" r="40"/>
+        </g>
+      </mask>
+    </defs>
+
+    <!-- the A: crossbar. Drawn before (under) the frame, so while it's growing out of the
+         apex any part of it that's briefly wider than the frame's actual spread at that
+         height gets cropped clean by the frame's own strokes on top. Ends sit exactly on
+         the leg centerlines at rest, matching the original artwork's joint (a tiny notch
+         there is inherent to the T-junction and present in the source logo too). -->
+    <path class="crossbar"
+      d="M293.84,404.67 C307.45,431.55 335.34,450 367.5,450 C400,450 428.13,431.17 441.58,403.83"/>
+
+    <!-- the A: one continuous stroke, painted over the crossbar and (via the ring/arcs
+         below) any overlap with them too — long leg, up to the peak, round the bezier
+         tip, down the short leg -->
+    <path class="apath drawable"
+      d="M188,607 C188,607 306.427,380.615 351.693,294.083 C355.033,287.698 361.66,283.713 368.865,283.756 C376.071,283.799 382.649,287.862 385.914,294.286 C420.058,361.482 494,507 494,507"/>
+
+    <!-- inner ring: radial-gauge sweep -->
+    <path id="ring" class="ring-path drawable"
+      d="M556,367 A189,189 0 1,0 178,367 A189,189 0 1,0 556,367"/>
+
+    <!-- connecting arcs, drawn by the forward dot of each pair -->
+    <path class="arc drawable" d="M367,70 A297,297 0 0,0 188,607"/>
+    <path class="arc drawable" d="M367,664 A297,297 0 0,0 664,367"/>
+
+    <!-- orbiting dots -->
+    <g class="arm" style="--s:360deg; transform-origin:367px 367px;">
+      <circle class="dot" cx="367" cy="70" r="0"/>
+    </g>
+    <g class="arm" style="--s:360deg; transform-origin:367px 367px;">
+      <circle class="dot" cx="367" cy="664" r="0"/>
+    </g>
+    <g class="arm" style="--s:413deg; transform-origin:367px 367px;">
+      <circle class="dot" cx="188" cy="607" r="0"/>
+    </g>
+    <g class="arm" style="--s:360deg; transform-origin:367px 367px;">
+      <circle class="dot" cx="664" cy="367" r="0"/>
+    </g>
+
+    <!-- finishing shine: a soft light band swept across the finished mark, masked to its silhouette -->
+    <rect class="shine" x="0" y="0" width="260" height="734" fill="url(#shine-gradient)" mask="url(#logo-mask)"/>
+
+  </svg>
+</div>
+
+<script>
+  const svg = document.querySelector('svg');
+
+  function measure(){
+    svg.querySelectorAll('.drawable').forEach(p => {
+      // pad slightly: at dashoffset === dasharray exactly, some browsers render
+      // a stray rounded-cap stub at the path's start point (a "phantom dot").
+      p.style.setProperty('--len', p.getTotalLength() + 2);
+    });
+  }
+
+  function play(){
+    svg.classList.remove('ready');
+    void svg.getBoundingClientRect(); // force reflow so the restart is picked up
+    requestAnimationFrame(() => requestAnimationFrame(() => svg.classList.add('ready')));
+  }
+
+  // scrub to a fixed point for review: index.html#0.93 freezes at 93% through the timeline
+  function scrubTo(frac){
+    const dur = 4.5; // must match the CSS animation duration
+    const all = svg.querySelectorAll('.arm,.dot,.drawable,.crossbar');
+    all.forEach(el => {
+      el.style.animationDelay = (-frac * dur) + 's';
+      el.style.animationPlayState = 'paused';
+    });
+    svg.classList.add('ready');
+  }
+
+  window.addEventListener('load', () => {
+    measure();
+    const frac = parseFloat(location.hash.slice(1));
+    if (!isNaN(frac)) scrubTo(frac);
+    else play();
+  });
+</script>
+</body>
+</html>

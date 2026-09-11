@@ -7,7 +7,7 @@
   },
   "files": {
     "ignoreUnknown": false,
-    "includes": ["**", "!apps/agor-docs/launch-video"]
+    "includes": ["**", "!apps/agor-docs/launch-video", "!apps/agor-docs/demo-videos/e2e/cassettes"]
   },
   "formatter": {
     "enabled": true,

@@ -370,6 +370,56 @@ describe('check-auth tri-state', () => {
     expect(result.status).toBe('unauthenticated');
     fetchMock.mockRestore();
   });
+
+  // The Settings UI offers ANTHROPIC_AUTH_TOKEN as a documented alternative to
+  // the API key (proxy / enterprise / token auth), and bannerLogic.ts counts it
+  // as a credential — the probe must too, or such users are permanently flagged
+  // "credentials aren't working" while their sessions run fine.
+  it('claude ANTHROPIC_AUTH_TOKEN-only connection → probed as Bearer at the connection base URL', async () => {
+    resolveApiKeyMock.mockResolvedValue({
+      apiKey: undefined,
+      source: 'user',
+      useNativeAuth: false,
+      connection: {
+        ANTHROPIC_AUTH_TOKEN: 'bearer-token',
+        ANTHROPIC_BASE_URL: 'http://localhost:8899',
+      },
+    });
+    const fetchMock = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue({ ok: true, status: 200 } as Response);
+
+    const result = await service().create({ tool: 'claude-code' }, params);
+    expect(result.status).toBe('authenticated');
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://localhost:8899/v1/models',
+      expect.objectContaining({
+        headers: expect.objectContaining({ Authorization: 'Bearer bearer-token' }),
+      })
+    );
+    fetchMock.mockRestore();
+  });
+
+  it('claude ANTHROPIC_AUTH_TOKEN rejected with 401 → unauthenticated', async () => {
+    resolveApiKeyMock.mockResolvedValue({
+      apiKey: undefined,
+      source: 'user',
+      useNativeAuth: false,
+      connection: { ANTHROPIC_AUTH_TOKEN: 'stale-bearer' },
+    });
+    const fetchMock = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue({ ok: false, status: 401 } as Response);
+
+    const result = await service().create({ tool: 'claude-code' }, params);
+    expect(result.status).toBe('unauthenticated');
+    // Defaults to the real API when the connection has no base-URL override.
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://api.anthropic.com/v1/models',
+      expect.anything()
+    );
+    fetchMock.mockRestore();
+  });
 });
 
 // Codex subscription login is verified against the auth.json of the Unix
