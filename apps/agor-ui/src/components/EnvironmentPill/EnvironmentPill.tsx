@@ -1,3 +1,4 @@
+import { hasActiveEnvironmentCommand } from '@agor/core/types';
 import type { Branch, Repo } from '@agor-live/client';
 import {
   EditOutlined,
@@ -62,6 +63,7 @@ export function EnvironmentPill({
   const environmentUrls = getEnvironmentAccessUrls(branch);
   const environmentUrl = getEnvironmentAccessUrl(branch);
   const hasHealthTarget = hasEnvironmentHealthTarget(branch);
+  const commandActive = hasActiveEnvironmentCommand(env);
 
   // Surface the active environment variant name on the pill instead of the
   // generic "env" label — but only when the repo actually defines more than one
@@ -116,8 +118,10 @@ export function EnvironmentPill({
   const isRunning = status === 'running';
   const isStarting = status === 'starting';
   const isStopping = status === 'stopping';
-  const canStop = status === 'running' || status === 'starting';
+  const canStop =
+    status === 'running' || status === 'starting' || (status === 'error' && !!env?.command_attempt);
   const startDisabled =
+    commandActive ||
     connectionDisabled ||
     !resolvedCanControlEnvironment ||
     !hasConfig ||
@@ -126,6 +130,7 @@ export function EnvironmentPill({
     isStopping ||
     isRunning;
   const stopDisabled =
+    commandActive ||
     connectionDisabled ||
     !resolvedCanControlEnvironment ||
     !hasConfig ||
@@ -324,7 +329,9 @@ export function EnvironmentPill({
                       ? 'Stop environment (cancel startup)'
                       : status === 'stopping'
                         ? 'Environment is stopping'
-                        : 'Environment not running')
+                        : status === 'error' && env?.command_attempt
+                          ? 'Retry Stop (previous outcome unconfirmed)'
+                          : 'Environment not running')
                 }
               >
                 <Button
@@ -397,7 +404,7 @@ export function EnvironmentPill({
                       confirmNuke(() => onNukeEnvironment(branch.branch_id));
                     }
                   }}
-                  disabled={connectionDisabled || !resolvedCanControlEnvironment}
+                  disabled={commandActive || connectionDisabled || !resolvedCanControlEnvironment}
                   style={{
                     height: 22,
                     width: 22,

@@ -7,12 +7,24 @@ import {
   getBoardUrl,
   getBranchUrl,
   getKnowledgeUrl,
+  getMcpSlackRecoveryUrl,
   getSessionUrl,
   isAllowedFactProbeUrl,
   isAllowedHealthCheckUrl,
   normalizeHttpBaseUrl,
   normalizeOptionalHttpUrl,
 } from './url';
+
+describe('getMcpSlackRecoveryUrl', () => {
+  it('preserves a configured base path and avoids a duplicate UI mount', () => {
+    expect(getMcpSlackRecoveryUrl('https://example.test/agor')).toBe(
+      'https://example.test/agor/ui/recover/mcp'
+    );
+    expect(getMcpSlackRecoveryUrl('https://example.test/agor/ui/')).toBe(
+      'https://example.test/agor/ui/recover/mcp'
+    );
+  });
+});
 
 // Minimal UUIDv7-shaped IDs for URL builder tests.
 const SESSION_ID = '01927f9d-0000-7000-8000-000000000001' as SessionID;

@@ -118,6 +118,7 @@ export async function createUserMessageFromContent(
     text?: string;
     tool_use_id?: string;
     content?: unknown;
+    tool_use_result?: unknown;
     is_error?: boolean;
   }>,
   taskId: TaskID | undefined,

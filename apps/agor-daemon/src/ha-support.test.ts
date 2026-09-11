@@ -23,6 +23,7 @@ describe('constrained HA support profile', () => {
       taskRuntimeReconciliation: true as const,
       knowledgeEmbeddingIndexer: true as const,
       statelessMcp: true as const,
+      mcpOAuth: true as const,
       completionCallbackDurableAdmission: true as const,
       completionCallbackPreAdmissionRecovery: false as const,
       widgetResolutionDurableClaim: true as const,
@@ -119,7 +120,6 @@ describe('constrained HA support profile', () => {
   it('keeps the audited process-affine inventory explicit', () => {
     expect(Object.keys(HA_UNSUPPORTED_FEATURES)).toEqual([
       'providerNativeInteractivePermissions',
-      'mcpOAuth',
       'codexAuth',
       'codexDeviceAuth',
       'claudeAuth',

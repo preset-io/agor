@@ -1,3 +1,4 @@
+import { PAGINATION } from '@agor/core/config';
 import { BranchRepository, CapabilityPolicyRepository, shortId } from '@agor/core/db';
 import type {
   Board,
@@ -207,7 +208,6 @@ function notesPreview(notes: string | undefined, maxLength = 200): string | null
 }
 
 async function shouldScopeTeammateDiscoveryToUser(ctx: McpContext): Promise<boolean> {
-  if (ctx.app.get('config').execution?.branch_rbac !== true) return false;
   if (ctx.authenticatedUser?._isServiceAccount) return false;
 
   const config = ctx.app.get('config');
@@ -336,7 +336,7 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
       inputSchema: z.object({
         repoId: mcpOptionalId('repoId', 'Repository', 'Repository ID to filter by'),
         limit: mcpLimit(BRANCH_LIST_DEFAULT_LIMIT, BRANCH_LIST_MAX_LIMIT),
-        offset: mcpOffset(0),
+        offset: mcpOffset(0, PAGINATION.MAX_SKIP),
         includeArchived: z
           .boolean()
           .optional()
@@ -1238,7 +1238,7 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
     'agor_branches_set_zone',
     {
       description:
-        "Pin a branch to a zone on a board, clear its current zone pin with zoneId:null, and optionally trigger the zone's prompt template. Calculates zone center position automatically and creates board association. If the zone has an 'always_new' trigger, a new session is automatically created and the prompt template is executed (matching UI drag-drop behavior). For 'show_picker' zones, use triggerTemplate + targetSessionId to send to an existing session on the branch being moved (targetSessionId must live on that branch — cross-branch targets are rejected, since the trigger prompt acts on the moved branch's files). A remote orchestrator on a different branch does NOT target itself here; to be notified when the work finishes, register a completion callback instead (agor_sessions_create enableCallback/callbackSessionId, or agor_sessions_prompt callback).",
+        "Pin a branch to a zone on a board, clear its current zone pin with zoneId:null, and optionally trigger the zone's prompt template. Calculates zone center position automatically and creates board association. If the zone has an 'always_new' trigger, a new session is automatically created and the prompt template is executed (matching UI drag-drop behavior). For 'show_picker' zones, use triggerTemplate + targetSessionId to send to an existing session on the branch being moved (targetSessionId must live on that branch — cross-branch targets are rejected, since the trigger prompt acts on the moved branch's files). A remote orchestrator on a different branch does NOT target itself here; to be notified when the work finishes, register a completion callback instead (agor_sessions_create with enableCallback:true and omit callbackSessionId for the current caller, or agor_sessions_prompt callback). Only supply callbackSessionId for an intentional authorized alternate destination.",
       inputSchema: z.object({
         branchId: mcpRequiredId(
           'branchId',

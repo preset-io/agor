@@ -101,7 +101,7 @@ export class DrizzleService<
   emit?: (event: string, ...args: any[]) => boolean;
 
   /** Extract resolved tenant context from Feathers params. */
-  private getTenant(params?: P): TenantContext | undefined {
+  protected getTenant(params?: P): TenantContext | undefined {
     return (params as (P & { tenant?: TenantContext }) | undefined)?.tenant;
   }
 
@@ -110,7 +110,7 @@ export class DrizzleService<
    * fixtures that do not expose tenant_id are treated as visible so existing
    * single-tenant unit tests keep working; migrated DB rows always carry it.
    */
-  private rowBelongsToTenant(row: T, tenant: TenantContext | undefined): boolean {
+  protected rowBelongsToTenant(row: T, tenant: TenantContext | undefined): boolean {
     if (!tenant) return true;
     const record = row as Record<string, unknown>;
     if (!('tenant_id' in record)) return true;

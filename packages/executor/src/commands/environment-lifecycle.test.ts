@@ -137,17 +137,45 @@ describe('environment lifecycle generation fencing', () => {
     });
   });
 
-  it('has no single-process restart verb that spans a stop and a start', () => {
-    // Restart is a daemon-owned sequence of a bounded Stop and a separately
-    // credentialed Start. One executor process doing both would need one
-    // credential covering both phases and could not be fenced on the Stop's
-    // settled generation.
-    expect(() =>
-      EnvironmentLifecyclePayloadSchema.parse({
-        ...payload('stop'),
-        params: { ...payload('stop').params, action: 'restart' },
-      })
-    ).toThrow();
+  it('refuses to execute a restart as one command spanning a stop and a start', async () => {
+    // The schema still ACCEPTS `restart` so the asynchronous attempt path can
+    // reject it explicitly, but no executor process may run both phases: one
+    // credential covering both could not be fenced on the Stop's settled
+    // generation, which is the whole point of the daemon sequencing it.
+    const restartPayload = EnvironmentLifecyclePayloadSchema.parse({
+      ...payload('stop'),
+      params: { ...payload('stop').params, action: 'restart' },
+    });
+    const updateEnvironment = vi.fn();
+    client({ generation: 1, updateEnvironment });
+
+    await expect(handleEnvironmentLifecycle(restartPayload, {})).resolves.toMatchObject({
+      success: false,
+      error: { code: 'ENVIRONMENT_COMMAND_FAILED', message: expect.stringMatching(/sequenced/i) },
+    });
+    expect(mocks.spawn).not.toHaveBeenCalled();
+    expect(updateEnvironment).not.toHaveBeenCalled();
+  });
+
+  it('rejects an asynchronous attempt for restart or sync', () => {
+    for (const action of ['restart', 'sync'] as const) {
+      expect(() =>
+        EnvironmentLifecyclePayloadSchema.parse({
+          ...payload('stop'),
+          params: {
+            ...payload('stop').params,
+            action,
+            attempt: {
+              id: '550e8400-e29b-41d4-a716-446655440001',
+              claimDeadline: new Date().toISOString(),
+              commandDeadline: new Date().toISOString(),
+              resultDeadline: new Date().toISOString(),
+              externalJobDeadlineMs: 310_000,
+            },
+          },
+        })
+      ).toThrow(/only Start, Stop, or Nuke/);
+    }
   });
 
   it('preserves the daemon-owned deadline for a normal start', async () => {

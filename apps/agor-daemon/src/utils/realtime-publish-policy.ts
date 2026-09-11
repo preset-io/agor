@@ -1,4 +1,4 @@
-import type { UserRole } from '@agor/core/types';
+import { ENVIRONMENT_COMMAND_REPORT_SERVICE, type UserRole } from '@agor/core/types';
 
 /**
  * The allowlist that decides which services may fan out over the socket at all.
@@ -243,6 +243,10 @@ export const REALTIME_PUBLISH_POLICY = {
   'auth/launch': { audience: 'none', why: 'Exchanges a launch token for a session.' },
   'check-auth': { audience: 'none', why: 'Echoes back the API key it was asked to validate.' },
   'config/resolve-api-key': { audience: 'none', why: 'Returns a provider API key.' },
+  [ENVIRONMENT_COMMAND_REPORT_SERVICE]: {
+    audience: 'none',
+    why: 'Attempt-scoped executor RPC; persisted environment updates publish through branches.',
+  },
   'executor-git-environment': {
     audience: 'none',
     why: 'Returns a command-scoped Git credential DTO to one executor.',
@@ -280,6 +284,10 @@ export const REALTIME_PUBLISH_POLICY = {
     audience: 'none',
     why: 'Signalled by the native oauth:disconnected packet.',
   },
+  'mcp-servers/oauth-client-registration-reset': {
+    audience: 'none',
+    why: 'Admin-only OAuth registration recovery control plane.',
+  },
   'mcp-servers/oauth-status': { audience: 'none', why: 'Per-user token status.' },
   'mcp-servers/oauth-attempt-status': {
     audience: 'none',
@@ -287,6 +295,22 @@ export const REALTIME_PUBLISH_POLICY = {
   },
   'mcp-servers/oauth-auth-headers': { audience: 'none', why: 'Returns bearer headers.' },
   'mcp-servers/oauth-refresh': { audience: 'none', why: 'Returns refreshed tokens.' },
+  'tasks/:id/mcp-reprojection': {
+    audience: 'none',
+    why: 'Executor-only RPC returns opaque task-scoped gateway capabilities to its caller.',
+  },
+  'tasks/:id/mcp-reprojection-validate': {
+    audience: 'none',
+    why: 'Executor-only durable fence returns no projection and belongs only to its caller.',
+  },
+  'tasks/:id/mcp-reconnect': {
+    audience: 'none',
+    why: 'RPC result belongs to the caller; Task events carry the scoped state change.',
+  },
+  'tasks/:id/mcp-refresh-result': {
+    audience: 'none',
+    why: 'Executor acknowledgement is projected through the scoped Task event.',
+  },
   'mcp-servers/test-oauth': { audience: 'none', why: 'Probe result belongs to the caller.' },
   'mcp-servers/test-jwt': { audience: 'none', why: 'Probe result belongs to the caller.' },
   'mcp-servers/discover': {
@@ -295,12 +319,20 @@ export const REALTIME_PUBLISH_POLICY = {
   },
   'mcp-catalog/connect': {
     audience: 'none',
-    why: 'Returns { mcp_server, session } where an api-key entry carries a credential belonging to the caller. This is the leak that motivated the allowlist.',
+    why: 'Returns a caller-owned MCP server where an API-key entry carries a credential belonging to the caller.',
+  },
+  'mcp-catalog/start-session': {
+    audience: 'none',
+    why: 'Caller-directed control-plane result; the session and attachment publish through their owning services.',
   },
   'mcp-catalog': { audience: 'none', why: 'find/get only — a static curated catalog, no events.' },
   'mcp-catalog/readiness': {
     audience: 'none',
     why: 'Caller-scoped advisory read with no mutations or events.',
+  },
+  'mcp-slack-recovery': {
+    audience: 'none',
+    why: 'Authenticated recovery preflight belongs only to the caller; never broadcast its result.',
   },
   'mcp-marketplace': {
     audience: 'none',
@@ -308,11 +340,11 @@ export const REALTIME_PUBLISH_POLICY = {
   },
   'mcp-marketplace/remove-unattached': {
     audience: 'none',
-    why: 'Caller-private acknowledgement; an explicit empty user-room invalidation refreshes every owner device.',
+    why: 'Caller-private acknowledgement; an explicit empty user-room freshness hint refreshes every owner device.',
   },
   'mcp-marketplace/tool-permission': {
     audience: 'none',
-    why: 'Caller-private acknowledgement; an explicit empty user-room invalidation refreshes every affected owner/admin device.',
+    why: 'Caller-private acknowledgement; an explicit empty user-room freshness hint refreshes every affected owner/admin device.',
   },
   'mcp-member-policy': { audience: 'none', why: 'Policy read for the caller.' },
   'mcp-egress/status': {

@@ -606,12 +606,23 @@ export const EnvironmentLifecyclePayloadSchema = BasePayloadSchema.extend({
 
       /** Lifecycle action */
       /**
-       * Restart is deliberately absent. It is a daemon-owned sequence of a
-       * bounded Stop and, once that Stop has verifiably settled, an ordinary
-       * Start with its own credential — not a single executor process holding
-       * one credential across both phases.
+       * `restart` is accepted only so the asynchronous attempt path can reject
+       * it explicitly. The synchronous daemon never emits it: Restart is a
+       * daemon-owned sequence of a bounded Stop and, once that Stop has
+       * verifiably settled, an ordinary Start with its own credential — not one
+       * executor process holding a single credential across both phases.
        */
-      action: z.enum(['start', 'stop', 'nuke', 'sync']),
+      action: z.enum(['start', 'stop', 'restart', 'nuke', 'sync']),
+      /** Only the asynchronous delegated path carries durable attempt authority. */
+      attempt: z
+        .object({
+          id: z.string().uuid(),
+          claimDeadline: z.string().datetime(),
+          commandDeadline: z.string().datetime(),
+          resultDeadline: z.string().datetime(),
+          externalJobDeadlineMs: z.number().int().min(305000).max(365000),
+        })
+        .optional(),
 
       /** Shell start command. Required for start. */
       startCommand: z.string().optional(),
@@ -661,7 +672,17 @@ export const EnvironmentLifecyclePayloadSchema = BasePayloadSchema.extend({
       lifecycleGeneration: z.number().int().nonnegative().optional(),
     })
     .superRefine((params, ctx) => {
-      if (params.action === 'start' && !params.startCommand) {
+      if (
+        params.attempt &&
+        (!params.branchPath || params.action === 'restart' || params.action === 'sync')
+      ) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['attempt'],
+          message: 'Asynchronous commands require branchPath and support only Start, Stop, or Nuke',
+        });
+      }
+      if ((params.action === 'start' || params.action === 'restart') && !params.startCommand) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
           path: ['startCommand'],
@@ -693,7 +714,7 @@ export const EnvironmentLifecyclePayloadSchema = BasePayloadSchema.extend({
           }
         }
       }
-      if (params.action !== 'start' && params.commandTimeoutMs === undefined) {
+      if (!params.attempt && params.action !== 'start' && params.commandTimeoutMs === undefined) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
           path: ['commandTimeoutMs'],

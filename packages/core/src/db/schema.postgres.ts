@@ -360,6 +360,9 @@ export const tasks = pgTable(
     // User attribution
     created_by: varchar('created_by', { length: 36 }).notNull(),
 
+    // Indexed due-work projection for bounded Slack MCP recovery repair.
+    mcp_slack_recovery_due_at: t.timestamp('mcp_slack_recovery_due_at'),
+
     data: t
       .json<unknown>('data')
       .$type<{
@@ -414,6 +417,9 @@ export const tasks = pgTable(
     sessionTaskIdIdx: index('tasks_session_task_id_idx').on(table.session_id, table.task_id),
     statusIdx: index('tasks_status_idx').on(table.status),
     createdIdx: index('tasks_created_idx').on(table.created_at),
+    mcpSlackRecoveryDueIdx: index('tasks_mcp_slack_recovery_due_idx')
+      .on(table.tenant_id, table.mcp_slack_recovery_due_at, table.task_id)
+      .where(sql`${table.mcp_slack_recovery_due_at} IS NOT NULL`),
     // Composite for "latest task for session" queries (ORDER BY created_at DESC LIMIT 1).
     sessionCreatedIdx: index('tasks_session_created_idx').on(table.session_id, table.created_at),
     queueIdx: index('tasks_queue_idx').on(table.session_id, table.status, table.queue_position),
@@ -881,27 +887,7 @@ export const branches = pgTable(
         lifecycle_timeout_ms?: number;
 
         // Environment instance (runtime state only, no variables)
-        environment_instance?: {
-          status: 'stopped' | 'starting' | 'running' | 'stopping' | 'error';
-          process?: {
-            pid?: number;
-            started_at?: string;
-            uptime?: string;
-          };
-          startup_deadline_at?: string;
-          last_health_check?: {
-            timestamp: string;
-            status: 'healthy' | 'unhealthy' | 'unknown';
-            message?: string;
-            consecutive?: number;
-          };
-          access_urls?: Array<{
-            name: string;
-            url: string;
-          }>;
-          source_sync?: BranchEnvironmentInstance['source_sync'];
-          logs?: string[];
-        };
+        environment_instance?: BranchEnvironmentInstance;
 
         last_used: string; // ISO timestamp
 
@@ -930,7 +916,7 @@ export const branches = pgTable(
     environmentHealthDiscoveryIdx: index('branches_environment_health_discovery_idx')
       .on(table.tenant_id, table.branch_id)
       .where(
-        sql`${table.archived} = false AND (${table.data}->'environment_instance'->>'status') IN ('starting', 'running')`
+        sql`${table.archived} = false AND (${table.data}->'environment_instance'->>'status') IN ('starting', 'running', 'stopping')`
       ),
     // Composite unique constraint (repo + name)
     uniqueRepoName: index('branches_repo_name_unique').on(table.repo_id, table.name),
@@ -1839,6 +1825,7 @@ export const mcpServers = pgTable(
             required?: boolean;
           }>;
         }>;
+        capabilities_discovered_at?: string;
 
         // Tool permissions configuration
         tool_permissions?: Record<string, 'ask' | 'allow' | 'deny'>;
@@ -2229,6 +2216,98 @@ export const mcpOauthPendingFlows = pgTable(
       table.exchange_started_at,
       table.finished_at
     ),
+  })
+);
+
+/**
+ * Fleet-wide Dynamic Client Registration authority for saved MCP servers.
+ *
+ * Client identifiers and secrets are stored only in `sealed_material`. A
+ * database-clock lease owns the provider POST, while registration ID + claim CAS
+ * prevents a late replica from publishing credentials after supersession.
+ */
+export const mcpOauthClientRegistrations = pgTable(
+  'mcp_oauth_client_registrations',
+  {
+    tenant_id: text('tenant_id').notNull().default('default'),
+    registration_id: varchar('registration_id', { length: 36 }).primaryKey(),
+    mcp_server_id: varchar('mcp_server_id', { length: 36 }).notNull(),
+    binding_version: integer('binding_version').notNull(),
+    binding_fingerprint: varchar('binding_fingerprint', { length: 64 }).notNull(),
+    server_config_version: integer('server_config_version').notNull(),
+    envelope_version: integer('envelope_version').notNull(),
+    is_current: boolean('is_current').notNull().default(true),
+    status: text('status', {
+      enum: ['registering', 'registered', 'failed', 'ambiguous', 'superseded', 'expired'],
+    })
+      .notNull()
+      .default('registering'),
+    sealed_material: text('sealed_material'),
+    claim_id: varchar('claim_id', { length: 36 }),
+    claim_generation: bigint('claim_generation', { mode: 'number' }).notNull().default(0),
+    lease_expires_at: t.timestamp('lease_expires_at'),
+    dispatched_at: t.timestamp('dispatched_at'),
+    client_secret_expires_at: t.timestamp('client_secret_expires_at'),
+    failure_code: text('failure_code'),
+    created_at: t.timestamp('created_at').notNull(),
+    updated_at: t.timestamp('updated_at').notNull(),
+    finished_at: t.timestamp('finished_at'),
+  },
+  (table) => ({
+    currentServerUnique: uniqueIndex('mcp_oauth_client_registrations_current_server_uq')
+      .on(table.tenant_id, table.mcp_server_id)
+      .where(sql`${table.is_current} = true`),
+    versionsCheck: check(
+      'mcp_oauth_client_registrations_versions_check',
+      sql`${table.binding_version} = 1 AND ${table.server_config_version} > 0
+          AND ${table.envelope_version} > 0
+          AND ${table.claim_generation} >= 0`
+    ),
+    lifecycleCheck: check(
+      'mcp_oauth_client_registrations_lifecycle_check',
+      sql`(
+        (${table.status} = 'registering' AND ${table.is_current} = true
+          AND ${table.sealed_material} IS NULL AND ${table.claim_id} IS NOT NULL
+          AND ${table.lease_expires_at} IS NOT NULL AND ${table.finished_at} IS NULL)
+        OR
+        (${table.status} = 'registered' AND ${table.is_current} = true
+          AND ${table.sealed_material} IS NOT NULL AND ${table.claim_id} IS NULL
+          AND ${table.lease_expires_at} IS NULL AND ${table.dispatched_at} IS NOT NULL
+          AND ${table.finished_at} IS NULL)
+        OR
+        (${table.status} IN ('failed','ambiguous','superseded','expired')
+          AND ${table.is_current} = false AND ${table.sealed_material} IS NULL
+          AND ${table.claim_id} IS NULL AND ${table.lease_expires_at} IS NULL
+          AND ${table.finished_at} IS NOT NULL)
+      )`
+    ),
+    tenantServerFk: foreignKey({
+      name: 'mcp_oauth_client_registrations_tenant_server_fk',
+      columns: [table.tenant_id, table.mcp_server_id],
+      foreignColumns: [mcpServers.tenant_id, mcpServers.mcp_server_id],
+    }).onDelete('cascade'),
+    tenantServerIdx: index('mcp_oauth_client_registrations_tenant_server_idx').on(
+      table.tenant_id,
+      table.mcp_server_id,
+      table.created_at
+    ),
+    bindingIdx: index('mcp_oauth_client_registrations_binding_idx').on(
+      table.tenant_id,
+      table.mcp_server_id,
+      table.binding_fingerprint
+    ),
+    registeringMaintenanceIdx: index('mcp_oauth_client_registrations_registering_maintenance_idx')
+      .on(table.lease_expires_at)
+      .where(sql`${table.status} = 'registering' AND ${table.is_current} = true`),
+    registeredMaintenanceIdx: index('mcp_oauth_client_registrations_registered_maintenance_idx')
+      .on(table.client_secret_expires_at)
+      .where(
+        sql`${table.status} = 'registered' AND ${table.is_current} = true
+            AND ${table.client_secret_expires_at} IS NOT NULL`
+      ),
+    terminalMaintenanceIdx: index('mcp_oauth_client_registrations_terminal_maintenance_idx')
+      .on(table.finished_at)
+      .where(sql`${table.status} IN ('failed','ambiguous','superseded','expired')`),
   })
 );
 
@@ -3358,6 +3437,8 @@ export type UserMCPOAuthTokenRow = typeof userMcpOauthTokens.$inferSelect;
 export type UserMCPOAuthTokenInsert = typeof userMcpOauthTokens.$inferInsert;
 export type MCPOAuthPendingFlowRow = typeof mcpOauthPendingFlows.$inferSelect;
 export type MCPOAuthPendingFlowInsert = typeof mcpOauthPendingFlows.$inferInsert;
+export type MCPOAuthClientRegistrationRow = typeof mcpOauthClientRegistrations.$inferSelect;
+export type MCPOAuthClientRegistrationInsert = typeof mcpOauthClientRegistrations.$inferInsert;
 export type ClaudeOAuthAttemptRow = typeof claudeOauthAttempts.$inferSelect;
 export type ClaudeOAuthAttemptInsert = typeof claudeOauthAttempts.$inferInsert;
 export type CodexDeviceAuthAttemptRow = typeof codexDeviceAuthAttempts.$inferSelect;

@@ -1,7 +1,7 @@
 import { eq } from 'drizzle-orm';
 import type { Database } from '../db/client';
 import { select } from '../db/database-wrapper';
-import { decryptApiKey } from '../db/encryption';
+import { decryptApiKeyAsync } from '../db/encryption';
 import { TenantAgenticToolSettingsRepository } from '../db/repositories/tenant-agentic-tools';
 import { users } from '../db/schema';
 import type {
@@ -138,7 +138,7 @@ async function resolveUserConnection(
       }
       const encrypted = stored[field];
       if (!encrypted) continue;
-      const value = decryptApiKey(encrypted).trim();
+      const value = (await decryptApiKeyAsync(encrypted)).trim();
       if (value) connection[field] = value;
     }
   } catch {
@@ -158,14 +158,25 @@ export async function resolveProviderConnection(
   }
 
   const repository = context.db ? new TenantAgenticToolSettingsRepository(context.db) : null;
-  const policy = repository
-    ? await repository.resolutionPolicy(canonical)
-    : DEFAULT_PROVIDER_RESOLUTION_POLICY;
+  // Resolve policy and its credential from one request-local snapshot, not two
+  // reads/decryptions of the same settings document separated by user hydration.
+  const settings = repository ? await repository.find(canonical) : null;
+  const policy = settings?.resolution_policy ?? DEFAULT_PROVIDER_RESOLUTION_POLICY;
+  const tenantConnection = settings?.connection ?? null;
+  // Do not read/decrypt a user's credentials when policy cannot select them.
+  // A preferred workspace connection only short-circuits when it has a usable
+  // credential; incomplete workspace configuration must retain the user fallback.
+  const needsUser =
+    policy !== 'tenant_required' &&
+    !(
+      policy === 'tenant_preferred' &&
+      tenantConnection &&
+      hasCredential(canonical, tenantConnection)
+    );
   const user =
-    context.userId && context.db
+    needsUser && context.userId && context.db
       ? await resolveUserConnection(canonical, context.userId, context.db)
       : null;
-  const tenantConnection = repository ? await repository.connection(canonical) : null;
   const userCandidate = user
     ? {
         source: 'user' as const,

@@ -49,6 +49,7 @@ import {
   resolveEffectiveConfig,
   resolveGitConfigParameters,
   resolveIdentityAuthority,
+  resolveMcpOAuthCallbackOrigin,
   resolveMultiTenancyConfig,
   resolveSecurity,
   resolveValidExternalLaunchProvider,
@@ -217,17 +218,6 @@ async function startDaemonWithOwnedMetrics(
     };
   }
 
-  // HA is an explicit, validated topology boundary. REDIS_URL alone never
-  // changes standalone behavior. Resolve this after immutable environment
-  // projection so every startup consumer observes one effective snapshot.
-  const deployment = resolveDeploymentConfig(config, process.env, databaseUrl);
-  console.log(`🌐 Deployment mode: ${deployment.mode}`);
-
-  const multiTenancy = resolveMultiTenancyConfig(config);
-  console.log(
-    `🏢 Multi-tenancy: mode=${multiTenancy.mode} tenant=${multiTenancy.mode === 'static' ? multiTenancy.static_tenant_id : 'auth-resolved'}`
-  );
-
   // Set GIT_CONFIG_PARAMETERS before any child-process spawn so every git
   // invocation under Agor's control inherits it. See @agor/core/config
   // (security-resolver) for the defaults + resolver semantics.
@@ -253,6 +243,26 @@ async function startDaemonWithOwnedMetrics(
   // Detach the snapshot before freezing so callers that supplied
   // DaemonStartOptions.config retain ownership of their object graph.
   const effectiveConfig = deepFreezeClone(config);
+  // Resolve the callback exactly once from the same frozen startup snapshot
+  // used by services. This prevents parameterless config reloads from reading
+  // a different ~/.agor/config.yaml than --config/AGOR_CONFIG_PATH/injection.
+  const mcpOAuthCallbackOrigin = resolveMcpOAuthCallbackOrigin(effectiveConfig, process.env);
+  const deployment = resolveDeploymentConfig(
+    effectiveConfig,
+    process.env,
+    databaseUrl,
+    mcpOAuthCallbackOrigin
+  );
+  const mcpOAuthCallbackUrl =
+    deployment.mode === 'ha'
+      ? (deployment.mcpOAuthCallbackUrl ?? undefined)
+      : (mcpOAuthCallbackOrigin.standaloneCallbackUrl ?? undefined);
+  console.log(`🌐 Deployment mode: ${deployment.mode}`);
+
+  const multiTenancy = resolveMultiTenancyConfig(effectiveConfig);
+  console.log(
+    `🏢 Multi-tenancy: mode=${multiTenancy.mode} tenant=${multiTenancy.mode === 'static' ? multiTenancy.static_tenant_id : 'auth-resolved'}`
+  );
   configureResolvedConfigSlice(effectiveConfig);
   configureOpenSourceTelemetryLogger(effectiveConfig);
   if (effectiveConfig.telemetry?.enabled === undefined) {
@@ -765,9 +775,8 @@ async function startDaemonWithOwnedMetrics(
   configureUploadStagingStoreFromConfig(effectiveConfig, undefined, db);
 
   // --------------------------------------------------------------------------
-  // RBAC flags
+  // Authorization settings
   // --------------------------------------------------------------------------
-  const branchRbacEnabled = effectiveConfig.execution?.branch_rbac === true;
   const allowSuperadmin = effectiveConfig.execution?.allow_superadmin === true;
   const superadminOpts = { allowSuperadmin };
 
@@ -788,7 +797,7 @@ async function startDaemonWithOwnedMetrics(
       db_backend: process.env.AGOR_DB_DIALECT === 'postgresql' ? 'postgresql' : 'sqlite',
       os_family: platform(),
       node_major: Number.parseInt(process.versions.node.split('.')[0] ?? '0', 10),
-      branch_rbac: branchRbacEnabled,
+      branch_rbac: true,
       unix_user_mode: effectiveConfig.execution?.unix_user_mode ?? 'simple',
     };
 
@@ -837,10 +846,10 @@ async function startDaemonWithOwnedMetrics(
     bundledUiAvailable,
     DAEMON_PORT,
     UI_PORT,
-    branchRbacEnabled,
     allowSuperadmin,
     requireAuth,
     deployment,
+    mcpOAuthCallbackUrl,
   });
 
   // --------------------------------------------------------------------------
@@ -872,7 +881,6 @@ async function startDaemonWithOwnedMetrics(
     config: effectiveConfig,
     externalLaunchProvider,
     jwtSecret,
-    branchRbacEnabled,
     requireAuth,
     enforcePasswordChange,
     superadminOpts,

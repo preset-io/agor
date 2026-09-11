@@ -25,7 +25,6 @@ import {
 } from '@ant-design/icons';
 import { Button, Collapse, Input, Modal, Space, Tag, Tooltip, Typography, theme } from 'antd';
 import React, { useCallback, useEffect, useState } from 'react';
-import { useAuthConfig } from '../../hooks/useAuthConfig';
 import { useAgorStore } from '../../store/agorStore';
 import { selectBranchById } from '../../store/selectors';
 import { useThemedMessage } from '../../utils/message';
@@ -73,8 +72,6 @@ const CardModalComponent = ({
   const { showSuccess, showError } = useThemedMessage();
   const branchById = useAgorStore(selectBranchById);
   const boardEmoji = board ? getBoardEmoji(board, branchById) : undefined;
-  const { featuresConfig } = useAuthConfig();
-  const branchRbacEnabled = featuresConfig?.branchRbac === true;
 
   // Edit state
   const [editingNote, setEditingNote] = useState(false);
@@ -100,7 +97,7 @@ const CardModalComponent = ({
   // weaker guarantee than being able to edit them.
   const boardId = board?.board_id;
   useEffect(() => {
-    if (!open || !client || !boardId || !branchRbacEnabled) {
+    if (!open || !client || !boardId) {
       setBoardAccess(null);
       return;
     }
@@ -117,11 +114,9 @@ const CardModalComponent = ({
     return () => {
       cancelled = true;
     };
-  }, [open, client, boardId, branchRbacEnabled]);
+  }, [open, client, boardId]);
 
-  const canEdit = branchRbacEnabled
-    ? Boolean(boardAccess?.capabilities.includes('board.edit'))
-    : true;
+  const canEdit = Boolean(boardAccess?.capabilities.includes('board.edit'));
   const editBlockedReason = canEdit
     ? undefined
     : "You don't have Board Editor or Manager access to change this card.";

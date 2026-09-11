@@ -8,6 +8,7 @@
  */
 
 import { spawn } from 'node:child_process';
+import { ENVIRONMENT } from '@agor/core/config';
 import { resolveEnvironmentStartupTimeoutMs } from '@agor/core/environment/health-transition';
 import {
   ENVIRONMENT_LIFECYCLE_SUPERSEDED_CODE,
@@ -21,7 +22,9 @@ import type {
   ExecutorResult,
 } from '../payload-types.js';
 import { createExecutorClient } from '../services/feathers-client.js';
+import { handleEnvironmentAttempt } from './environment-attempt.js';
 import { EnvironmentCommandOutputCapture } from './environment-command-output.js';
+import { EnvironmentOutput, runBoundedEnvironmentShell } from './environment-shell.js';
 import type { CommandOptions } from './index.js';
 
 function successMessage(action: EnvironmentLifecyclePayload['params']['action']): string {
@@ -34,6 +37,10 @@ function successMessage(action: EnvironmentLifecyclePayload['params']['action'])
       return 'Nuke command completed';
     case 'sync':
       return 'Sync command completed';
+    case 'restart':
+      // Unreachable: the daemon sequences Restart itself. Present only so the
+      // switch stays exhaustive over the shared payload action union.
+      return 'Restart command completed';
   }
 }
 
@@ -47,6 +54,8 @@ function commandForAction(payload: EnvironmentLifecyclePayload): string {
       return payload.params.nukeCommand!;
     case 'sync':
       return payload.params.syncCommand!;
+    case 'restart':
+      throw new Error('Restart is not an executor verb');
   }
 }
 
@@ -236,17 +245,22 @@ export async function handleEnvironmentLogs(
   const cwd = payload.params.branchPath || branch.path;
 
   try {
-    const result = await runShellCommand({
+    const output = new EnvironmentOutput();
+    const result = await runBoundedEnvironmentShell({
       command: payload.params.logsCommand,
       cwd,
       env: payload.env,
-      commandType: 'logs',
+      action: 'logs',
+      output,
+      deadline: Date.now() + ENVIRONMENT.LOGS_TIMEOUT_MS - 5000,
     });
+    if (result.outcome !== 'succeeded') throw new Error(result.message);
 
     return {
       success: true,
       data: {
-        logs: result.output ?? '',
+        logs: output.text(),
+        truncated: output.truncated,
         timestamp: new Date().toISOString(),
       },
     };
@@ -277,6 +291,23 @@ export async function handleEnvironmentLifecycle(
         command: 'environment.lifecycle',
         action: payload.params.action,
         branchId: payload.params.branchId,
+      },
+    };
+  }
+
+  if (payload.params.attempt) return handleEnvironmentAttempt(payload);
+
+  // Restart is not an executor verb. The daemon runs a bounded Stop and, only
+  // once that Stop has verifiably settled, an ordinary Start with its own
+  // credential. One process spanning both phases could not be fenced on the
+  // Stop's settled generation, which is the defect this path exists to avoid.
+  if (payload.params.action === 'restart') {
+    return {
+      success: false,
+      error: {
+        code: 'ENVIRONMENT_COMMAND_FAILED',
+        message: 'Restart is sequenced by the daemon, not executed as one command',
+        details: { branchId: payload.params.branchId, action: 'restart' },
       },
     };
   }

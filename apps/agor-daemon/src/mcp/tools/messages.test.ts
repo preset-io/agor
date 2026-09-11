@@ -2,8 +2,8 @@
  * Tests for the agor_messages_list MCP tool.
  *
  * Focus: the tool bypasses the Feathers hook pipeline by running a raw Drizzle
- * query against the messages table. These tests verify that when
- * `branch_rbac` is enabled, the raw query uses the shared visible-session SQL
+ * query against the messages table. These tests verify that the raw query
+ * always uses the shared visible-session SQL
  * predicate (preventing cross-branch leakage via the `search` parameter).
  */
 
@@ -11,16 +11,7 @@ import type { McpServer } from '@modelcontextprotocol/server';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // Hoist-safe mocks must be declared before the module under test is imported.
-const mockIsBranchRbacEnabled = vi.fn(() => false);
 const mockVisibleSessionReferenceAccessExists = vi.fn();
-
-vi.mock('@agor/core/config', async () => {
-  const actual = await vi.importActual<Record<string, unknown>>('@agor/core/config');
-  return {
-    ...actual,
-    isBranchRbacEnabled: () => mockIsBranchRbacEnabled(),
-  };
-});
 
 // Capture the raw query the tool builds so we can assert on its shape.
 const mockWhereSpy = vi.fn();
@@ -96,7 +87,6 @@ async function registerAndGetTool(ctx: {
     app: {
       get: () => ({
         execution: {
-          branch_rbac: mockIsBranchRbacEnabled(),
           allow_superadmin: ctx.allowSuperadmin === true,
         },
       }),
@@ -122,12 +112,10 @@ async function registerAndGetHandler(ctx: {
 
 describe('agor_messages_list MCP tool', () => {
   beforeEach(() => {
-    mockIsBranchRbacEnabled.mockReset();
     mockVisibleSessionReferenceAccessExists.mockReset();
     mockWhereSpy.mockReset();
     mockAllSpy.mockReset();
     mockAllSpy.mockResolvedValue([]);
-    mockIsBranchRbacEnabled.mockReturnValue(false);
   });
 
   afterEach(() => {
@@ -197,17 +185,14 @@ describe('agor_messages_list MCP tool', () => {
     expect(mockAllSpy).not.toHaveBeenCalled();
   });
 
-  it('does not enforce RBAC when branch_rbac is disabled', async () => {
-    mockIsBranchRbacEnabled.mockReturnValue(false);
+  it('always enforces normalized Session visibility', async () => {
     const handler = await registerAndGetHandler({ userId: 'user-1' });
     await handler({ search: 'secret', createdAfter: recentIso() });
-    expect(mockVisibleSessionReferenceAccessExists).not.toHaveBeenCalled();
+    expect(mockVisibleSessionReferenceAccessExists).toHaveBeenCalled();
     expect(mockAllSpy).toHaveBeenCalled();
   });
 
   it('restricts raw query through the shared visible-session EXISTS predicate', async () => {
-    mockIsBranchRbacEnabled.mockReturnValue(true);
-
     const handler = await registerAndGetHandler({ userId: 'user-1', role: 'member' });
     await handler({ search: 'secret', createdAfter: recentIso() });
 
@@ -217,7 +202,6 @@ describe('agor_messages_list MCP tool', () => {
   });
 
   it('bypasses the RBAC filter only when the superadmin bypass is enabled', async () => {
-    mockIsBranchRbacEnabled.mockReturnValue(true);
     const handler = await registerAndGetHandler({
       userId: 'user-1',
       role: 'superadmin',

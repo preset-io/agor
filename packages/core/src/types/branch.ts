@@ -30,6 +30,20 @@ export function isBranchArchiveOrDeleteOptions(
 export type BranchArchiveOrDeleteResult = Branch | { deleted: true; branch_id: BranchID };
 
 /**
+ * Rendered environment snapshot fields. In branch updates, an own null/undefined
+ * value clears these fields; omitting a key preserves it. Rendering supplies all
+ * six keys so an absent template value cannot retain another variant's command.
+ */
+export const BRANCH_ENVIRONMENT_SNAPSHOT_FIELDS = [
+  'start_command',
+  'stop_command',
+  'nuke_command',
+  'logs_command',
+  'health_check_url',
+  'app_url',
+] as const satisfies readonly (keyof Branch)[];
+
+/**
  * Git branch - First-class entity for isolated development contexts
  *
  * Branches are persistent work contexts that outlive individual sessions.
@@ -515,6 +529,12 @@ export type BranchPermissionSource = 'board' | 'override';
  * - Custom: branch.custom_context (JSON object)
  */
 export interface BranchEnvironmentInstance {
+  /** Daemon-owned bounded command tracking; lifecycle status below remains authoritative. */
+  command_attempt?: import('./environment-command').EnvironmentCommandAttempt;
+  command_history?: Array<{
+    attempt: import('./environment-command').EnvironmentCommandAttempt;
+    result?: BranchEnvironmentInstance['last_command'];
+  }>;
   /**
    * Current environment status
    */
@@ -640,7 +660,9 @@ export interface BranchEnvironmentInstance {
    */
   last_command?: {
     action: 'start' | 'stop' | 'restart' | 'nuke' | 'sync';
-    status: 'succeeded' | 'failed';
+    status: 'succeeded' | 'failed' | 'unknown';
+    attempt_id?: string;
+    output_truncated?: boolean;
     timestamp: string;
     message?: string;
     output?: string;
@@ -685,8 +707,9 @@ export type BranchEnvironmentClearableField = (typeof BRANCH_ENVIRONMENT_CLEARAB
  *
  * `null` is accepted for clearable optional runtime fields because executor
  * callbacks cross a JSON boundary, where `undefined` values are dropped.
- * The daemon normalizes both explicit `null` and in-process `undefined` by
- * deleting these fields before persisting the merged environment instance.
+ * The daemon normalizes explicit `null` to an own `undefined` clear marker.
+ * The repository deletes marked fields after its atomic merge, before storage.
+ * Omitted fields preserve existing values.
  */
 export type BranchEnvironmentUpdate = Omit<
   Partial<BranchEnvironmentInstance>,

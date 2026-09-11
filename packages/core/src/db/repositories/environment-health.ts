@@ -5,6 +5,7 @@ import {
   ENVIRONMENT_STARTUP_TIMEOUT_MS,
 } from '../../environment/health-transition';
 import type { BranchEnvironmentInstance, BranchID, TenantID } from '../../types';
+import { hasActiveEnvironmentCommand } from '../../types/environment-command';
 import type { Database, SystemDatabase } from '../client';
 import {
   isPostgresDatabase,
@@ -115,7 +116,11 @@ export class EnvironmentHealthDiscoveryRepository {
     })
       .from(branches)
       .where(
-        and(eq(branches.archived, false), or(eq(status, 'starting'), eq(status, 'running')), after)
+        and(
+          eq(branches.archived, false),
+          or(eq(status, 'starting'), eq(status, 'running'), eq(status, 'stopping')),
+          after
+        )
       )
       .orderBy(asc(tenantColumn), asc(branches.branch_id))
       .limit(options.limit)
@@ -407,7 +412,16 @@ export class EnvironmentHealthRepository {
           input.observation.status === 'healthy' ||
           input.observation.recordWhileStarting ||
           decision.nextStatus !== undefined;
-        const nextStatus = syncOwnsExpectedDowntime ? status : (decision.nextStatus ?? status);
+        // An in-flight asynchronous command owns the branch's status, so a
+        // readiness probe must not promote the environment underneath it. That
+        // guard applies to PROMOTION only: a demotion the streak rules or the
+        // startup deadline decided still has to be recorded.
+        const promotionBlockedByCommand =
+          decision.nextStatus === 'running' && hasActiveEnvironmentCommand(activeEnvironment);
+        const nextStatus =
+          syncOwnsExpectedDowntime || promotionBlockedByCommand
+            ? status
+            : (decision.nextStatus ?? status);
         const previousHealth = activeEnvironment.last_health_check;
         const stateChanged =
           shouldRecord &&

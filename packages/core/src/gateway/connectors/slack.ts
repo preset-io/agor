@@ -223,7 +223,7 @@ export interface SlackChannelHistoryResult {
  * Format: "{channel_id}-{thread_ts}" where thread_ts contains a dot
  * e.g. "C07ABC123-1707340800.123456" → { channel: "C07ABC123", thread_ts: "1707340800.123456" }
  */
-function parseThreadId(threadId: string): { channel: string; thread_ts: string } {
+export function parseThreadId(threadId: string): { channel: string; thread_ts: string } {
   // thread_ts always contains a dot, so split on the last hyphen before the numeric part
   const lastHyphen = threadId.lastIndexOf('-');
   if (lastHyphen === -1) {
@@ -1399,6 +1399,20 @@ export class SlackConnector implements GatewayConnector {
     const blocks = req.blocks && req.blocks.length > 0 ? (req.blocks as KnownBlock[]) : undefined;
     const updateTs =
       typeof req.metadata?.slack_update_ts === 'string' ? req.metadata.slack_update_ts : undefined;
+    const requestedMessageMetadata = req.metadata?.slack_message_metadata as
+      | { event_type?: unknown; event_payload?: { delivery_id?: unknown } }
+      | undefined;
+    const messageMetadata =
+      requestedMessageMetadata?.event_type === 'agor_mcp_recovery' &&
+      typeof requestedMessageMetadata.event_payload?.delivery_id === 'string' &&
+      requestedMessageMetadata.event_payload.delivery_id.length <= 128
+        ? {
+            event_type: 'agor_mcp_recovery',
+            event_payload: {
+              delivery_id: requestedMessageMetadata.event_payload.delivery_id,
+            },
+          }
+        : undefined;
 
     const send = (withBlocks: boolean) => {
       const base = {
@@ -1419,6 +1433,7 @@ export class SlackConnector implements GatewayConnector {
       return this.web.chat.postMessage({
         ...base,
         thread_ts,
+        ...(messageMetadata ? { metadata: messageMetadata } : {}),
       });
     };
 
@@ -1452,6 +1467,43 @@ export class SlackConnector implements GatewayConnector {
     }
 
     return result.ts;
+  }
+
+  async findMessageByMetadata(req: {
+    threadId: string;
+    eventType: string;
+    payloadKey: string;
+    payloadValue: string;
+    limit?: number;
+  }): Promise<string | undefined> {
+    const { channel, thread_ts } = parseThreadId(req.threadId);
+    if (!isSlackWriteTargetAllowed(this.config as unknown as Record<string, unknown>, channel)) {
+      throw new Error(`Slack channel ${channel} is outside the configured allowlist`);
+    }
+    try {
+      const result = await this.web.conversations.replies({
+        channel,
+        ts: thread_ts,
+        limit: Math.min(Math.max(req.limit ?? 100, 1), 100),
+        include_all_metadata: true,
+      });
+      if (!result.ok) return undefined;
+      for (const message of result.messages ?? []) {
+        const metadata = message.metadata as
+          | { event_type?: unknown; event_payload?: Record<string, unknown> }
+          | undefined;
+        if (
+          metadata?.event_type === req.eventType &&
+          metadata.event_payload?.[req.payloadKey] === req.payloadValue &&
+          typeof message.ts === 'string'
+        ) {
+          return message.ts;
+        }
+      }
+      return undefined;
+    } catch (error) {
+      throw slackProviderFailure('Slack metadata reconciliation failed', error);
+    }
   }
 
   /**

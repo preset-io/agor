@@ -1,7 +1,6 @@
 import type { AgorClient, Board, User } from '@agor-live/client';
 import { act, renderHook, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { __resetAuthConfigForTests, __setAuthConfigForTests } from './useAuthConfig';
 import { useCanManageBoard } from './useCanManageBoard';
 
 const connectionState = vi.hoisted(() => ({ authGeneration: 1 }));
@@ -23,25 +22,28 @@ const board = {
 
 afterEach(() => {
   connectionState.authGeneration = 1;
-  __resetAuthConfigForTests();
 });
 
 describe('useCanManageBoard', () => {
-  it('preserves member editing and skips policy requests when RBAC is disabled', async () => {
-    __setAuthConfigForTests({ requireAuth: true }, { branchRbac: false });
-    const service = vi.fn(() => {
-      throw new Error('permission service must not be called');
-    });
-    const client = { service } as unknown as AgorClient;
-
-    const { result } = renderHook(() => useCanManageBoard(client, board, member));
-
+  it('offers the primary owner the board editor even if ordinary access cannot be fetched', async () => {
+    const find = vi.fn().mockRejectedValue(new Error('Authentication required'));
+    const client = { service: () => ({ find }) } as unknown as AgorClient;
+    const { result } = renderHook(() =>
+      useCanManageBoard(client, board, { ...member, user_id: 'user-1' as User['user_id'] })
+    );
     await waitFor(() => expect(result.current).toBe(true));
-    expect(service).not.toHaveBeenCalled();
+    expect(find).not.toHaveBeenCalled();
+  });
+
+  it('does not offer a non-owner an edit shortcut when board.edit is absent', async () => {
+    const find = vi.fn().mockResolvedValue({ capabilities: ['board.view'] });
+    const client = { service: () => ({ find }) } as unknown as AgorClient;
+    const { result } = renderHook(() => useCanManageBoard(client, board, member));
+    await waitFor(() => expect(find).toHaveBeenCalledOnce());
+    expect(result.current).toBe(false);
   });
 
   it('ignores object patches but refetches effective access after authenticated reconnect', async () => {
-    __setAuthConfigForTests({ requireAuth: true }, { branchRbac: true });
     let resolveReconnect: ((access: { capabilities: string[] }) => void) | undefined;
     const reconnectAccess = new Promise<{ capabilities: string[] }>((resolve) => {
       resolveReconnect = resolve;

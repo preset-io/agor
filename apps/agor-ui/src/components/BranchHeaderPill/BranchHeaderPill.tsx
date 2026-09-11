@@ -1,3 +1,4 @@
+import { hasActiveEnvironmentCommand } from '@agor/core/types';
 import type { Branch, Repo } from '@agor-live/client';
 import {
   ApartmentOutlined,
@@ -102,6 +103,7 @@ export function BranchHeaderPill({
   const environmentUrls = getEnvironmentAccessUrls(branch);
   const environmentUrl = getEnvironmentAccessUrl(branch);
   const hasHealthTarget = hasEnvironmentHealthTarget(branch);
+  const commandActive = hasActiveEnvironmentCommand(env);
   // Surface the active environment variant name on the label instead of the
   // generic "env" — only when the repo defines more than one variant to
   // distinguish (single-variant / v1 repos stay quiet as "env"). Mirrors
@@ -125,8 +127,10 @@ export function BranchHeaderPill({
   const isRunning = status === 'running';
   const isStarting = status === 'starting';
   const isStopping = status === 'stopping';
-  const canStop = status === 'running' || status === 'starting';
+  const canStop =
+    status === 'running' || status === 'starting' || (status === 'error' && !!env?.command_attempt);
   const startDisabled =
+    commandActive ||
     connectionDisabled ||
     !resolvedCanControlEnvironment ||
     !hasConfig ||
@@ -135,6 +139,7 @@ export function BranchHeaderPill({
     isStopping ||
     isRunning;
   const stopDisabled =
+    commandActive ||
     connectionDisabled ||
     !resolvedCanControlEnvironment ||
     !hasConfig ||
@@ -421,7 +426,9 @@ export function BranchHeaderPill({
                         ? 'Cancel startup'
                         : isStopping
                           ? 'Stopping...'
-                          : 'Not running')
+                          : status === 'error' && env?.command_attempt
+                            ? 'Retry Stop (previous outcome unconfirmed)'
+                            : 'Not running')
                   }
                 >
                   <Button
@@ -472,7 +479,7 @@ export function BranchHeaderPill({
                         confirmNuke(() => onNukeEnvironment(branch.branch_id));
                       }
                     }}
-                    disabled={connectionDisabled || !resolvedCanControlEnvironment}
+                    disabled={commandActive || connectionDisabled || !resolvedCanControlEnvironment}
                     style={actionButtonStyle}
                   />
                 </Tooltip>

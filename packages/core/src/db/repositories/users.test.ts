@@ -14,8 +14,9 @@
 import type { UserID } from '@agor/core/types';
 import bcrypt from 'bcryptjs';
 import { eq } from 'drizzle-orm';
-import { beforeAll, describe, expect, vi } from 'vitest';
+import { afterEach, beforeAll, describe, expect, vi } from 'vitest';
 import { select, update } from '../database-wrapper';
+import * as encryption from '../encryption';
 import { users } from '../schema';
 import { dbTest } from '../test-helpers';
 import { UsersRepository } from './users';
@@ -46,6 +47,8 @@ function deferred(): { promise: Promise<void>; resolve: () => void } {
   });
   return { promise, resolve };
 }
+
+afterEach(() => vi.restoreAllMocks());
 
 describe('UsersRepository password boundary', () => {
   dbTest('rejects plaintext and pre-hashed credential smuggling', async ({ db }) => {
@@ -421,3 +424,38 @@ describe('UsersRepository.update — credential blob preservation', () => {
     });
   });
 });
+
+dbTest(
+  'async credential reads omit corrupt fields and retain per-user isolation',
+  async ({ db }) => {
+    const repo = new UsersRepository(db);
+    const own = await makeUser(repo);
+    const other = await makeUser(repo);
+    await repo.setToolConfigField(own, 'codex', 'OPENAI_API_KEY', 'own-key');
+    await repo.setToolConfigField(own, 'codex', 'OPENAI_BASE_URL', 'https://example.invalid');
+    await repo.setToolConfigField(other, 'codex', 'OPENAI_API_KEY', 'other-key');
+    const native = encryption.decryptApiKeyAsync;
+    let active = 0;
+    let peak = 0;
+    const open = vi.spyOn(encryption, 'decryptApiKeyAsync').mockImplementation(async (...args) => {
+      peak = Math.max(peak, ++active);
+      try {
+        return await native(...args);
+      } finally {
+        active--;
+      }
+    });
+    expect(await repo.getToolConfig(own, 'codex')).toMatchObject({
+      OPENAI_API_KEY: 'own-key',
+      OPENAI_BASE_URL: 'https://example.invalid',
+    });
+    expect(open).toHaveBeenCalledTimes(2);
+    expect(peak).toBe(1);
+    expect(await repo.getToolConfigField(other, 'codex', 'OPENAI_API_KEY')).toBe('other-key');
+    open.mockRejectedValue(new Error('Secret decryption failed'));
+    const logs = vi.spyOn(console, 'error').mockImplementation(() => {});
+    await expect(repo.getToolConfigField(own, 'codex', 'OPENAI_API_KEY')).resolves.toBeNull();
+    await expect(repo.getToolConfig(own, 'codex')).resolves.toBeNull();
+    expect(logs).toHaveBeenCalledTimes(3);
+  }
+);
