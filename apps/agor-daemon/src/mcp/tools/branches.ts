@@ -35,6 +35,7 @@ import {
   MIN_BRANCH_FILESYSTEM_READY_WAIT_TIMEOUT_MS,
   waitForBranchFilesystemReady,
 } from '../branch-filesystem-readiness.js';
+import { waitForBranchRefResolution } from '../branch-ref-resolution.js';
 import { branchCapabilityPolicySchema } from '../capability-policy-schema.js';
 import {
   resolveBoardId,
@@ -151,8 +152,8 @@ function readinessResponse(result: BranchFilesystemReadinessResult): {
   return { readiness, isError: true };
 }
 
-function mcpRequestSignal(requestContext: ServerContext): AbortSignal {
-  return requestContext.mcpReq.signal;
+function mcpRequestSignal(requestContext?: ServerContext): AbortSignal | undefined {
+  return requestContext?.mcpReq.signal;
 }
 
 /**
@@ -680,8 +681,9 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
         sourceBranch: mcpOptionalString(
           'sourceBranch',
           'Base branch to fork from when creating a new branch (defaults to the repo default branch, usually "main"). ' +
-            'The new branch will be created from the tip of this branch. ' +
-            'Must exist on the remote (origin) for clone storage mode; worktree storage mode may also use local refs.'
+            'Accepts local branches, remote-qualified branches (for example origin/main), tags, and commit SHAs. ' +
+            'A bare branch name is rejected when matching local or remote refs disagree; qualify it explicitly. ' +
+            'The response reports _resolution.resolved_ref and resolved_sha. Clone storage requires the resolved object to be cloneable from its selected source.'
         ),
         autoSuffix: z
           .boolean()
@@ -1000,23 +1002,43 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
         )
       );
 
+      const readCreatedBranch = (branchId: BranchID | string) =>
+        ctx.app
+          .service('branches')
+          .get(branchId, freshMcpServiceParams(ctx) as Parameters<BranchesServiceImpl['get']>[1]);
+      const resolutionResult = await waitForBranchRefResolution({
+        branch,
+        signal: mcpRequestSignal(requestContext),
+        readBranch: readCreatedBranch,
+      });
+
       const readinessResult = args.waitForReady
         ? await waitForBranchFilesystemReady({
             branchId: branch.branch_id,
             timeoutMs: args.waitTimeoutMs ?? DEFAULT_BRANCH_FILESYSTEM_READY_WAIT_TIMEOUT_MS,
             signal: mcpRequestSignal(requestContext),
-            readBranch: (branchId) =>
-              ctx.app
-                .service('branches')
-                .get(
-                  branchId,
-                  freshMcpServiceParams(ctx) as Parameters<BranchesServiceImpl['get']>[1]
-                ),
+            readBranch: readCreatedBranch,
           })
         : undefined;
 
       // Build response with appropriate notes
-      const response: Record<string, unknown> = { ...(readinessResult?.branch ?? branch) };
+      const response: Record<string, unknown> = {
+        ...(readinessResult?.branch ?? resolutionResult.branch),
+      };
+      response._resolution =
+        resolutionResult.outcome === 'resolved'
+          ? {
+              outcome: 'resolved',
+              requested_ref: sourceBranch ?? ref,
+              resolved_ref: resolutionResult.branch.base_ref,
+              resolved_sha: resolutionResult.branch.base_sha,
+            }
+          : {
+              outcome: resolutionResult.outcome,
+              message:
+                resolutionResult.branch.error_message ??
+                'Timed out before Agor could resolve the requested starting ref.',
+            };
 
       const formattedReadiness = readinessResult ? readinessResponse(readinessResult) : undefined;
       if (formattedReadiness) response._readiness = formattedReadiness.readiness;
@@ -1063,7 +1085,9 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
 
       return {
         ...textResult(response),
-        ...(formattedReadiness?.isError ? { isError: true } : {}),
+        ...(formattedReadiness?.isError || resolutionResult.outcome !== 'resolved'
+          ? { isError: true }
+          : {}),
       };
     }
   );
