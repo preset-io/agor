@@ -64,7 +64,10 @@ dbTest(
       { accessToken: 'shared-a', refreshToken: 'refresh-a' },
       a
     );
-    const version = { grantGeneration: 0 };
+    const version = { grantGeneration: 0, refreshGeneration: 0 };
+    await expect(
+      grants.setStandaloneRefreshState(null, serverId, version, 'idle', 'refreshing')
+    ).resolves.toBe(true);
     await expect(
       grants.completeStandaloneRefresh(null, serverId, version, {
         accessToken: 'rotated',
@@ -76,9 +79,13 @@ dbTest(
       oauth_access_token: 'rotated',
       oauth_refresh_token: 'refresh-a',
     });
+    const pending = { ...version, refreshGeneration: 1 };
+    await expect(
+      grants.setStandaloneRefreshState(null, serverId, pending, 'idle', 'refreshing')
+    ).resolves.toBe(true);
     await deleteFrom(db, users).where(eq(users.user_id, a)).run();
     await expect(
-      grants.completeStandaloneRefresh(null, serverId, version, {
+      grants.completeStandaloneRefresh(null, serverId, pending, {
         accessToken: 'late-refresh',
         expiresAt: null,
       })
@@ -111,6 +118,14 @@ dbTest(
       { accessToken: 'a', clientId: 'client-a', grantBinding: binding },
       a
     );
+    const pending = {
+      grantGeneration: 1,
+      grantBindingFingerprint: binding.fingerprint,
+      refreshGeneration: 0,
+    };
+    await expect(
+      grants.setStandaloneRefreshState(null, serverId, pending, 'idle', 'refreshing')
+    ).resolves.toBe(true);
     await grants.saveToken(
       null,
       serverId,
@@ -135,15 +150,10 @@ dbTest(
     ).rejects.toThrow(/superseded/);
     await deleteFrom(db, users).where(eq(users.user_id, a)).run();
     await expect(
-      grants.completeStandaloneRefresh(
-        null,
-        serverId,
-        {
-          grantGeneration: 1,
-          grantBindingFingerprint: binding.fingerprint,
-        },
-        { accessToken: 'late-a', expiresAt: null }
-      )
+      grants.completeStandaloneRefresh(null, serverId, pending, {
+        accessToken: 'late-a',
+        expiresAt: null,
+      })
     ).resolves.toBe(false);
     await expect(grants.getToken(null, serverId)).resolves.toMatchObject({
       granted_by_user_id: b,
