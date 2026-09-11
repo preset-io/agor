@@ -241,6 +241,15 @@ describe('createPinnedFetch', () => {
     await expect(pinned({ timeoutMs: 150 })(`${origin}/hang`)).rejects.toThrow(/Timed out/);
   });
 
+  it('honors caller cancellation while a request is in flight', async () => {
+    const controller = new AbortController();
+    const request = pinned({ timeoutMs: 30_000 })(`${origin}/hang`, {
+      signal: controller.signal,
+    });
+    controller.abort(new Error('health observation cancelled'));
+    await expect(request).rejects.toThrow('health observation cancelled');
+  });
+
   it.each([
     ['a literal private address', 'http://127.0.0.1:9/'],
     ['a non-HTTP scheme', 'file:///etc/passwd'],

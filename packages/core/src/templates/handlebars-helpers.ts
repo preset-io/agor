@@ -148,6 +148,12 @@ export function registerHandlebarsHelpers(): void {
       .join(replace);
   });
 
+  /** Quote one value as exactly one inert POSIX shell word. */
+  Handlebars.registerHelper('shellQuote', (value: unknown): Handlebars.SafeString => {
+    const quoted = `'${String(value ?? '').replaceAll("'", `'"'"'`)}'`;
+    return new Handlebars.SafeString(quoted);
+  });
+
   // ===== Conditional Helpers =====
 
   /**
@@ -304,16 +310,24 @@ export function renderTemplate(
  *
  * Provides scoped entity references (consistent with zone triggers):
  * - {{branch.unique_id}} - Auto-assigned unique number (1, 2, 3, ...)
+ * - {{branch.id}} - Stable UUIDv7 identity for this Agor branch
  * - {{branch.name}} - Branch name (slug format)
+ * - {{branch.ref}} - Exact git ref recorded for this branch
  * - {{branch.path}} - Absolute path to branch directory
  * - {{branch.base_ref}} - Source branch/tag name this branch was created from
  *   (the "Base Branch"/"Base Tag" from the create dialog). Empty string if unknown.
  * - {{branch.ref_type}} - 'branch' | 'tag': whether base_ref names a branch or a tag
  * - {{repo.slug}} - Repository slug
+ * - {{repo.github_slug}} - Credential-free GitHub owner/repository identity
+ *   derived from the registered github.com remote
  * - {{host.ip_address}} - Primary non-loopback IPv4 of the daemon host
  *   (for health checks/URLs that must reach the host from inside a container).
  *   Frozen at branch creation time. Empty string if not resolved.
  * - {{custom.*}} - Any custom context from branch.custom_context
+ * - {{env.*}} - Bounded values derived from `AGOR_ENVIRONMENT_RESULT`, e.g.
+ *   `{{env.url}}` for a remote environment whose address only exists after it
+ *   starts. Empty object until a lifecycle command has returned a typed result.
+ *   See `BranchEnvironmentInstance.facts`.
  *
  * Backwards-compat: also exposes the same scoped entity under `{{worktree.*}}`
  * so existing `.agor.yml` env-template configurations using the v0.19 names
@@ -322,18 +336,31 @@ export function renderTemplate(
  * a future major release.
  */
 export function buildBranchContext(branch: {
+  branch_id?: string;
   branch_unique_id: number;
   name: string;
+  ref?: string;
   path: string;
   repo_slug?: string;
+  repo_github_slug?: string;
   custom_context?: Record<string, unknown>;
   host_ip_address?: string;
   base_ref?: string;
   ref_type?: 'branch' | 'tag';
+  /**
+   * Template values derived from a prior typed lifecycle result (see
+   * `BranchEnvironmentInstance.facts`). Exposed as `{{env.*}}`. Undefined
+   * before the environment has started or when no result was emitted.
+   */
+  env_facts?: Record<string, string>;
 }): Record<string, unknown> {
   const branchEntity = {
+    id: branch.branch_id || '',
     unique_id: branch.branch_unique_id,
     name: branch.name,
+    // `ref` is intentionally empty when unavailable. Provider adapters can
+    // then fail closed instead of silently treating a display name as a ref.
+    ref: branch.ref || '',
     path: branch.path,
     base_ref: branch.base_ref || '',
     ref_type: branch.ref_type || 'branch',
@@ -346,10 +373,15 @@ export function buildBranchContext(branch: {
     worktree: branchEntity,
     repo: {
       slug: branch.repo_slug || '',
+      github_slug: branch.repo_github_slug || '',
     },
     host: {
       ip_address: branch.host_ip_address || '',
     },
+    // Post-start facts reported by a lifecycle command (accessible as
+    // {{env.key}}). Empty object when the environment has not reported any,
+    // so referencing `{{env.url}}` renders to '' rather than throwing.
+    env: branch.env_facts || {},
     // User-defined custom context (accessible as {{custom.key}})
     custom: branch.custom_context || {},
   };

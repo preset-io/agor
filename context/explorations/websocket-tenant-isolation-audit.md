@@ -370,9 +370,79 @@ task lifecycle/result mutation, private task-control rooms, streaming and
 permission-result publication, provider-failure classification, plaintext SDK
 credential resolution, session MCP/OAuth secret material, and the running
 session's execution-identity exemption. Taskless branch/environment command
-credentials cannot satisfy those boundaries and use a maximum 15-minute
-lifetime because their fire-and-forget launcher has no reliable task lifecycle
-on which to revoke them.
+credentials cannot satisfy those boundaries and use a 15-minute lifetime by
+default because their fire-and-forget launcher has no reliable task lifecycle
+on which to revoke them. Bounded environment lifecycle commands are the narrow
+exception, and each one is sized from the branch's OWN snapshotted policy rather
+than from a single global constant, so one slow provider cannot widen every
+environment credential in the deployment.
+
+Start authority lasts for the already-persisted `startup_timeout_ms` deadline
+plus one settlement margin. Stop, Nuke, and Sync are bounded by the variant's
+`lifecycle_timeout_ms`, and their credential adds two margins: the executor
+spends one acknowledgement budget on the pre-command generation check before its
+deadline begins, and needs another to record the fenced outcome afterwards.
+Both margins are derived from the shared executor acknowledgement and transport
+cleanup constants, not chosen. The unset default is in turn derived from those
+margins: it is the largest command deadline whose credential still fits inside
+the same 15-minute taskless envelope those commands already used, so an ordinary
+local Stop asks for no more authority than before. The daemon's wait for a
+command result outlives that credential by one further margin, and a durable
+Sync claim lease outlives the wait — a lease that expired mid-attempt would make
+the repository discard the settlement as stale.
+
+Two operator ceilings are applied at dispatch rather than left to surprise the
+command later: `execution.session_token_expiration_ms` caps the credential, and
+`execution.executor_response.timeout_ms.by_command['environment.lifecycle']`
+outranks the waiter the daemon would otherwise pass. Either one tighter than the
+variant asked for SHORTENS the command deadline, so the containment above still
+holds; only a ceiling with no room for any command at all is refused. Shortening
+rather than refusing matters because these commands previously accepted the
+default credential and let it be silently clamped — refusing outright would have
+broken a two-second `docker compose down` on any deployment that had merely
+hardened its token lifetime.
+
+Two rollout notes:
+
+- Start's credential margin moved from a hand-written 60 seconds to the derived 65. An operator whose `session_token_expiration_ms` sits inside that
+  five-second window above `startup_timeout_ms` now has Start refused; Start is
+  deliberately NOT clamped, because its deadline is already persisted on the
+  branch as `startup_deadline_at` and silently shortening it would desync the
+  two.
+- A daemon restart during a shell Restart now settles the branch as `error`
+  rather than letting a detached executor finish both phases unfenced. The Stop
+  command itself, being its own process group, still completes; the branch
+  records the interruption and the user starts again. That is the price of the
+  Stop phase being observable at all.
+
+A shell-to-shell Restart is two operations rather than one broad credential. Its
+Stop phase runs in authenticated request mode, because a delegated launcher may
+exit as soon as it has handed work off, so process exit proves nothing. Only
+three facts together authorize the second phase: the Stop result is not
+superseded, the branch is exactly `stopped`, and its generation is exactly the
+one the Stop settlement produced. The Start phase then claims its own boundary
+and mints its own separate, normally-scoped credential. If the Stop request
+never reaches an executor, the daemon settles the exact generation it claimed so
+the branch cannot be stranded in `stopping`; a settlement the executor already
+wrote has advanced the generation and makes that attempt a no-op.
+
+The executor records a lifecycle failure with ONE generation- and status-fenced
+write rather than re-reading the branch first. A competing action always changes
+the branch status, which advances the generation, so the CAS already rejects a
+stale failure — while the extra read cost a second acknowledgement budget that a
+command running to its own deadline may no longer be authorized for.
+
+The checked-in Codespaces provider waits remain shorter than their owning
+command deadlines. The configured session-token maximum remains authoritative;
+an insufficient maximum rejects the launch instead of silently issuing a
+credential that expires mid-command. Lifecycle-generation CAS still rejects a
+stale completion.
+
+One capacity note: Restart's Stop phase and every Sync now hold an executor
+response reservation for the duration of their command. That pool is bounded by
+`maxActiveRequests` (16 by default), so a deployment that expects many
+simultaneous long provider transitions should raise it rather than let terminals
+and other request-mode commands be refused with `EXECUTOR_RESPONSE_BUSY`.
 
 There is deliberately no polling authorization coordinator. Starting a task
 establishes its execution lease. Ordinary daemon calls made during that lease

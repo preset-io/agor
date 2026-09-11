@@ -21,6 +21,7 @@ export * from './codex-device-auth-attempts';
 export * from './discord-message-deliveries';
 export * from './environment-commands';
 export * from './environment-health';
+export * from './environment-sync';
 export * from './executor-session-token-authorities';
 export * from './gateway-channels';
 export * from './gateway-inbound-events';

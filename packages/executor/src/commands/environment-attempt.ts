@@ -42,7 +42,8 @@ export async function handleEnvironmentAttempt(
 ): Promise<ExecutorResult> {
   const attempt = payload.params.attempt!;
   const action = payload.params.action;
-  if (action === 'restart') throw new Error('Asynchronous Restart is not supported');
+  if (action === 'restart' || action === 'sync')
+    throw new Error(`Asynchronous ${action} is not supported`);
   const scope = { branch_id: payload.params.branchId as BranchID, attempt_id: attempt.id, action };
   // Never run after a failed, duplicate, late, or unacknowledged claim.
   const claimed = await report(

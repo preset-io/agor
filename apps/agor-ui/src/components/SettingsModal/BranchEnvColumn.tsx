@@ -17,6 +17,7 @@ import {
 import type { GlobalToken } from 'antd';
 import { Badge, Button, Space, Tooltip } from 'antd';
 import { getEffectiveEnv } from '../../utils/environmentConfig';
+import { getEnvironmentHealthUrl } from '../../utils/environmentUrl';
 
 /** Render environment status icon for a branch */
 export function renderEnvStatusIcon(branch: Branch, token: GlobalToken) {
@@ -94,11 +95,9 @@ export function renderEnvCell(
   const isRunningOrHealthy =
     status === 'running' || status === 'starting' || healthStatus === 'healthy';
 
-  // The "open health URL" button uses the branch's own `health_check_url`
-  // (rendered at branch creation, then user-editable via the branch
-  // modal) rather than re-rendering the repo template at click time. This
-  // honours user edits and avoids a daemon round-trip.
-  const healthUrl = branch.health_check_url;
+  // Use the same static → typed → legacy precedence and validation as the
+  // daemon instead of ignoring provider-discovered runtime health URLs.
+  const healthUrl = getEnvironmentHealthUrl(branch);
 
   return (
     <Space size={4}>
@@ -130,10 +129,11 @@ export function renderEnvCell(
             <Button
               type="text"
               size="small"
+              aria-label="Open environment health"
               icon={<GlobalOutlined />}
               onClick={(e) => {
                 e.stopPropagation();
-                window.open(healthUrl, '_blank');
+                window.open(healthUrl, '_blank', 'noopener,noreferrer');
               }}
               style={{ padding: '0 4px' }}
             />

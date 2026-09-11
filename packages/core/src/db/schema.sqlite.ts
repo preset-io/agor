@@ -835,6 +835,12 @@ export const branches = sqliteTable(
         notes?: string; // Freeform user notes
         error_message?: string; // Error details when filesystem_status is 'failed'
 
+        // Snapshotted environment startup policy.
+        startup_timeout_ms?: number;
+
+        // Snapshotted stop/nuke/sync command budget.
+        lifecycle_timeout_ms?: number;
+
         // Environment instance (runtime state only, no variables)
         environment_instance?: BranchEnvironmentInstance;
 

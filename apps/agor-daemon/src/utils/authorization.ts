@@ -63,7 +63,11 @@ const ENV_COMMAND_FIELDS = [
   'environment', // Repo-level: v2 named variants (source of truth)
   'environment_config', // Repo-level: legacy v1 view (still guarded)
   'environment_variant', // Branch-level: selected variant name
-  ...BRANCH_ENVIRONMENT_SNAPSHOT_FIELDS,
+  ...BRANCH_ENVIRONMENT_SNAPSHOT_FIELDS, // Branch-level: resolved commands and URLs
+  // Snapshotted execution budgets are rendered beside those commands and decide
+  // how long they may run, so they carry the same admin guard.
+  'startup_timeout_ms',
+  'lifecycle_timeout_ms',
 ];
 
 /**

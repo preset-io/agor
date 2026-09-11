@@ -5,7 +5,11 @@
 import { beforeAll, describe, expect, it } from 'vitest';
 import { registerHandlebarsHelpers } from '../templates/handlebars-helpers';
 import type { RepoEnvironment } from '../types/branch';
+import { resolveEnvironmentLifecycleTimeoutMs } from './health-transition';
 import { renderBranchSnapshot } from './render-snapshot';
+
+/** Snapshots always carry a resolved non-Start budget, defaulted like startup. */
+const DEFAULT_LIFECYCLE_TIMEOUT_MS = resolveEnvironmentLifecycleTimeoutMs(undefined);
 
 const branch = {
   branch_unique_id: 7,
@@ -44,6 +48,8 @@ describe('renderBranchSnapshot', () => {
     const snapshot = renderBranchSnapshot({ slug: 'r', environment: env }, branch);
     expect(snapshot).toEqual({
       variant: 'dev',
+      startup_timeout_ms: 60 * 60 * 1_000,
+      lifecycle_timeout_ms: DEFAULT_LIFECYCLE_TIMEOUT_MS,
       start: 'pnpm dev --port=3007',
       stop: 'pkill -f pnpm',
     });
@@ -66,6 +72,8 @@ describe('renderBranchSnapshot', () => {
     const snapshot = renderBranchSnapshot({ slug: 'r', environment: env }, branch, 'e2e');
     expect(snapshot).toEqual({
       variant: 'e2e',
+      startup_timeout_ms: 60 * 60 * 1_000,
+      lifecycle_timeout_ms: DEFAULT_LIFECYCLE_TIMEOUT_MS,
       start: 'pnpm e2e',
       stop: 'pnpm e2e:stop',
       health: 'http://localhost:4007/health',
@@ -91,6 +99,8 @@ describe('renderBranchSnapshot', () => {
         base: {
           start: 'pnpm dev',
           stop: 'pkill pnpm',
+          startup_timeout_ms: 45 * 60 * 1_000,
+          lifecycle_timeout_ms: 1_260_000,
           health: 'http://localhost:3000/health',
           logs: 'tail -n 100 base.log',
         },
@@ -105,6 +115,8 @@ describe('renderBranchSnapshot', () => {
     const snapshot = renderBranchSnapshot({ slug: 'r', environment: env }, branch, 'dev');
     expect(snapshot).toEqual({
       variant: 'dev',
+      startup_timeout_ms: 45 * 60 * 1_000,
+      lifecycle_timeout_ms: 1_260_000,
       start: 'pnpm dev',
       stop: 'pkill pnpm',
       health: 'http://localhost:3007/dev-health',
@@ -151,6 +163,31 @@ describe('renderBranchSnapshot', () => {
     expect(snapshot?.start).toBe('echo custom-app');
   });
 
+  it('renders the exact sync revision and does not let config shadow it', () => {
+    const revision = 'c'.repeat(40);
+    const env: RepoEnvironment = {
+      version: 2,
+      default: 'remote',
+      variants: {
+        remote: {
+          start: 'start',
+          stop: 'stop',
+          sync: 'sync --revision {{sync.revision}}',
+        },
+      },
+      template_overrides: {
+        sync: { revision: 'attacker-controlled' },
+      },
+    };
+
+    const snapshot = renderBranchSnapshot(
+      { slug: 'r', environment: env },
+      { ...branch, sync_revision: revision }
+    );
+
+    expect(snapshot?.sync).toBe(`sync --revision ${revision}`);
+  });
+
   it('deep-merges template_overrides into nested context', () => {
     const env: RepoEnvironment = {
       version: 2,
@@ -168,5 +205,36 @@ describe('renderBranchSnapshot', () => {
 
     const snapshot = renderBranchSnapshot({ slug: 'myrepo', environment: env }, branch);
     expect(snapshot?.start).toBe('echo myrepo eu-central-1');
+  });
+
+  it('renders exact, quoted provider identity without remote credentials', () => {
+    const env: RepoEnvironment = {
+      version: 2,
+      default: 'remote',
+      variants: {
+        remote: {
+          start:
+            'bridge up --binding {{shellQuote branch.id}} --ref {{shellQuote branch.ref}} --repo {{shellQuote repo.github_slug}}',
+          stop: 'bridge stop',
+        },
+      },
+    };
+    const snapshot = renderBranchSnapshot(
+      {
+        slug: 'display-slug',
+        remote_url: 'https://x-access-token:secret@github.com/preset-io/agor.git',
+        environment: env,
+      },
+      {
+        ...branch,
+        branch_id: '01999999-1111-7222-8333-444444444444',
+        ref: "feature/it's-$(inert)",
+      }
+    );
+
+    expect(snapshot?.start).toBe(
+      `bridge up --binding '01999999-1111-7222-8333-444444444444' --ref 'feature/it'"'"'s-$(inert)' --repo 'preset-io/agor'`
+    );
+    expect(snapshot?.start).not.toContain('secret');
   });
 });

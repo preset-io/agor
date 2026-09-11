@@ -43,7 +43,8 @@ export default class LocalCreateAdmin extends Command {
       default: DEVELOPMENT_DEFAULT_ADMIN_USER.email,
     }),
     password: Flags.string({
-      description: 'Admin password. If omitted, prompts interactively.',
+      description:
+        'Admin password. If omitted, uses AGOR_ADMIN_PASSWORD before prompting interactively.',
       required: false,
     }),
     name: Flags.string({
@@ -118,7 +119,7 @@ export default class LocalCreateAdmin extends Command {
           process.exit(0);
         }
 
-        let password = flags.password;
+        let password = resolveAdminPassword(flags.password);
         if (!password && !flags['dev-default']) {
           const passwordAnswer = await inquirer.prompt<{ password: string }>([
             {
@@ -229,4 +230,12 @@ export function assertDevelopmentDefaultAdminCliRequest(
     );
   }
   assertDevelopmentDefaultAdminEnvironment(env);
+}
+
+/** Resolve a bootstrap secret without requiring it in process arguments. */
+export function resolveAdminPassword(
+  flagPassword: string | undefined,
+  env: NodeJS.ProcessEnv = process.env
+): string | undefined {
+  return flagPassword ?? env.AGOR_ADMIN_PASSWORD;
 }

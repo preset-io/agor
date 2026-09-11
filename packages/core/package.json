@@ -178,11 +178,29 @@
       "import": "./dist/environment/render-snapshot.js",
       "require": "./dist/environment/render-snapshot.cjs"
     },
+    "./environment/health-transition": {
+      "source": "./src/environment/health-transition.ts",
+      "types": "./dist/environment/health-transition.d.ts",
+      "import": "./dist/environment/health-transition.js",
+      "require": "./dist/environment/health-transition.cjs"
+    },
+    "./environment/lifecycle-result": {
+      "source": "./src/environment/lifecycle-result.ts",
+      "types": "./dist/environment/lifecycle-result.d.ts",
+      "import": "./dist/environment/lifecycle-result.js",
+      "require": "./dist/environment/lifecycle-result.cjs"
+    },
     "./utils/errors": {
       "source": "./src/utils/errors.ts",
       "types": "./dist/utils/errors.d.ts",
       "import": "./dist/utils/errors.js",
       "require": "./dist/utils/errors.cjs"
+    },
+    "./utils/pinned-fetch": {
+      "source": "./src/utils/pinned-fetch.ts",
+      "types": "./dist/utils/pinned-fetch.d.ts",
+      "import": "./dist/utils/pinned-fetch.js",
+      "require": "./dist/utils/pinned-fetch.cjs"
     },
     "./yaml": {
       "source": "./src/yaml/index.ts",

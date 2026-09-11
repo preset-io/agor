@@ -149,14 +149,53 @@ describe('SessionTokenService runtime scoping', () => {
     );
   });
 
+  it('allows a server-deadline-bound command window but refuses a silent config cap', async () => {
+    const now = new Date('2026-08-23T00:00:00.000Z');
+    const store = authorityStore();
+    const service = new SessionTokenService(
+      { expiration_ms: 60 * 60_000, max_uses: -1 },
+      { authorityStore: store, now: () => now, startCleanupTimer: false }
+    );
+    service.setJwtSecret('session-token-test-secret');
+
+    const token = await runWithTenantDatabaseScope(scopeOnlyDb, 'tenant-a', () =>
+      service.generateCommandToken('environment-start', 'user-1', 'branch-1', {
+        expirationMs: 26 * 60_000,
+      })
+    );
+    const decoded = jwt.decode(token) as jwt.JwtPayload;
+
+    expect(decoded.exp! - decoded.iat!).toBe(26 * 60);
+    expect(store.issue).toHaveBeenCalledWith(
+      expect.objectContaining({
+        tenantId: 'tenant-a',
+        purpose: 'executor-command',
+        sessionId: 'environment-start',
+        branchId: 'branch-1',
+        expiresAt: new Date(now.getTime() + 26 * 60_000),
+      })
+    );
+    await expect(
+      runWithTenantDatabaseScope(scopeOnlyDb, 'tenant-a', () =>
+        service.generateCommandToken('environment-start', 'user-1', 'branch-1', {
+          expirationMs: 60 * 60_000 + 1,
+        })
+      )
+    ).rejects.toThrow('exceeds execution.session_token_expiration_ms');
+  });
+
   it('centralizes command issuance through the daemon-owned service', async () => {
     const generateCommandToken = vi.fn(async () => 'delegated-user-token');
     const app = { sessionTokenService: { generateCommandToken } };
 
     await expect(
-      issueExecutorCommandToken(app, 'branch-files-read', 'user-1', 'branch-1')
+      issueExecutorCommandToken(app, 'branch-files-read', 'user-1', 'branch-1', {
+        expirationMs: 20_000,
+      })
     ).resolves.toBe('delegated-user-token');
-    expect(generateCommandToken).toHaveBeenCalledWith('branch-files-read', 'user-1', 'branch-1');
+    expect(generateCommandToken).toHaveBeenCalledWith('branch-files-read', 'user-1', 'branch-1', {
+      expirationMs: 20_000,
+    });
     await expect(issueExecutorCommandToken({}, 'command', 'user-1')).rejects.toThrow(
       'Session token service unavailable'
     );
