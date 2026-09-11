@@ -31,6 +31,12 @@ import {
   socketioClient,
 } from '@agor/core/feathers';
 import { loadCatalog } from '@agor/core/mcp-catalog';
+import {
+  AmbiguousRefreshError,
+  FailedRefreshError,
+  InvalidGrantError,
+  OAuthRefreshExchangeError,
+} from '@agor/core/tools/mcp/oauth-refresh';
 import type {
   AuthenticatedParams,
   MCPCatalogEntry,
@@ -1749,6 +1755,109 @@ describe('real Feathers Socket.IO request authority', () => {
 });
 
 describe('SQLite saved-row OAuth authority', () => {
+  it.each([
+    [new FailedRefreshError(), 'token_refresh_failed'],
+    [new AmbiguousRefreshError(), 'token_refresh_failed'],
+    [new OAuthRefreshExchangeError('transport_ambiguous', true), 'token_refresh_failed'],
+    [new InvalidGrantError(), 'needs_reauth'],
+  ] as const)(
+    'preserves auth-header recovery for %s after centralized grant acquisition',
+    async (error, expected) => {
+      const provider = await createTestProvider();
+      providers.push(provider);
+      const harness = await createHarness(provider, 'per_user');
+      databases.push(harness.rawDb);
+      await authorizeSavedServer(harness);
+      const acquire = vi.spyOn(oauthUse, 'acquireMCPOAuthGrant').mockRejectedValueOnce(error);
+      try {
+        const result = await harness.app
+          .service('mcp-servers/oauth-auth-headers')
+          .create({ mcp_server_ids: [harness.server.mcp_server_id], force_refresh: true }, {
+            user: harness.user,
+            tenant: { tenant_id: 'default', source: 'static' },
+            authentication: { _isServiceAccount: true },
+          } as unknown as AuthenticatedParams);
+        expect(result).toEqual({
+          headers: { [harness.server.mcp_server_id]: { error: expected } },
+        });
+        expect(acquire).toHaveBeenCalledWith(
+          expect.objectContaining({
+            tenantId: 'default',
+            userId: harness.user.user_id,
+            mcpServerId: harness.server.mcp_server_id,
+            forceRefresh: true,
+          })
+        );
+        expect(provider.requests.filter((entry) => entry.path === '/token')).toHaveLength(1);
+      } finally {
+        acquire.mockRestore();
+      }
+    }
+  );
+
+  it('forces one JIT refresh for a daemon-owned retry even before recorded expiry', async () => {
+    const provider = await createTestProvider();
+    providers.push(provider);
+    const harness = await createHarness(provider, 'per_user');
+    databases.push(harness.rawDb);
+    await authorizeSavedServer(harness);
+
+    const result = (await harness.app.service('mcp-servers/oauth-auth-headers').create(
+      {
+        mcp_server_ids: [harness.server.mcp_server_id],
+        force_refresh: true,
+      },
+      {
+        provider: undefined,
+        user: harness.user,
+        tenant: { tenant_id: 'default', source: 'static' },
+        authentication: { _isServiceAccount: true },
+      } as unknown as AuthenticatedParams
+    )) as { headers: Record<string, { authorization?: string; error?: string }> };
+
+    expect(result.headers[harness.server.mcp_server_id]).toEqual({
+      authorization: 'Bearer stale-refreshed-access-token',
+    });
+    expect(provider.requests.filter((entry) => entry.path === '/token')).toHaveLength(2);
+    await expect(
+      new UserMCPOAuthTokenRepository(harness.rawDb).getToken(
+        harness.user.user_id as UserID,
+        harness.server.mcp_server_id as MCPServerID
+      )
+    ).resolves.toMatchObject({
+      oauth_access_token: 'stale-refreshed-access-token',
+      oauth_refresh_token: 'stale-rotated-refresh-token',
+    });
+  });
+
+  it('requires reauthorization when a daemon-owned forced refresh has no refresh token', async () => {
+    const provider = await createTestProvider();
+    providers.push(provider);
+    const harness = await createHarness(provider, 'per_user');
+    databases.push(harness.rawDb);
+    await authorizeSavedServer(harness);
+    await update(harness.rawDb, userMcpOauthTokens)
+      .set({ oauth_refresh_token: null })
+      .where(eq(userMcpOauthTokens.mcp_server_id, harness.server.mcp_server_id))
+      .run();
+
+    const result = (await harness.app.service('mcp-servers/oauth-auth-headers').create(
+      {
+        mcp_server_ids: [harness.server.mcp_server_id],
+        force_refresh: true,
+      },
+      {
+        provider: undefined,
+        user: harness.user,
+        tenant: { tenant_id: 'default', source: 'static' },
+        authentication: { _isServiceAccount: true },
+      } as unknown as AuthenticatedParams
+    )) as { headers: Record<string, { authorization?: string; error?: string }> };
+
+    expect(result.headers[harness.server.mcp_server_id]).toEqual({ error: 'needs_reauth' });
+    expect(provider.requests.filter((entry) => entry.path === '/token')).toHaveLength(1);
+  });
+
   it('keeps a committed OAuth completion successful when its runtime-hint lookup rejects', async () => {
     const provider = await createTestProvider();
     providers.push(provider);

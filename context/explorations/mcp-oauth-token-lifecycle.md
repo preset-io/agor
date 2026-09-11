@@ -37,9 +37,13 @@
   Standalone client-credentials caching hashes the complete credential/grant
   configuration and includes a caller namespace; authorization-code caching is
   CLI-only.
-- The shared expiry resolver shipped. Still-open lifecycle/product work includes
-  transport retry-on-401, proactive scheduled-run refresh/notification policy,
-  and provider-specific scope/rotation guidance.
+- The shared expiry resolver shipped. Expired access tokens remain authenticated
+  while a durable refresh grant exists, and daemon-mediated MCP requests force
+  one refresh and retry after an authenticated `401`. Google authorization asks
+  for offline access and consent; its reusable refresh grants remain retryable
+  after transient exchange failures. Still-open lifecycle/product work includes
+  proactive scheduled-run refresh/notification policy and broader
+  provider-specific scope/rotation guidance.
 
 ---
 

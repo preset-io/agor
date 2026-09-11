@@ -3,6 +3,7 @@ import {
   type Database,
   generateId,
   RepoRepository,
+  runWithTenantDatabaseTransaction,
   SessionRepository,
   UsersRepository,
 } from '@agor/core/db';
@@ -48,8 +49,24 @@ async function createBranch(db: Database) {
 dbTest('branch archive is complete beyond the former 1,000-session cap', async ({ db }) => {
   const branch = await createBranch(db);
   const repository = new SessionRepository(db);
-  for (let index = 0; index < 1_001; index++) {
-    await repository.create({
+  // Keep all 1,001 live rows and the independently archived control, but
+  // seed them in one transaction rather than paying one disk commit per row.
+  // Archive/unarchive below still execute outside the fixture transaction.
+  const manual = await runWithTenantDatabaseTransaction(db, undefined, async (tx) => {
+    const seedRepository = new SessionRepository(tx);
+    for (let index = 0; index < 1_001; index++) {
+      await seedRepository.create({
+        session_id: generateId(),
+        branch_id: branch.branch_id,
+        created_by: USER_ID,
+        agentic_tool: 'claude-code',
+        status: SessionStatus.IDLE,
+        tasks: [],
+        contextFiles: [],
+        genealogy: { children: [] },
+      });
+    }
+    return seedRepository.create({
       session_id: generateId(),
       branch_id: branch.branch_id,
       created_by: USER_ID,
@@ -58,19 +75,9 @@ dbTest('branch archive is complete beyond the former 1,000-session cap', async (
       tasks: [],
       contextFiles: [],
       genealogy: { children: [] },
+      archived: true,
+      archived_reason: 'manual',
     });
-  }
-  const manual = await repository.create({
-    session_id: generateId(),
-    branch_id: branch.branch_id,
-    created_by: USER_ID,
-    agentic_tool: 'claude-code',
-    status: SessionStatus.IDLE,
-    tasks: [],
-    contextFiles: [],
-    genealogy: { children: [] },
-    archived: true,
-    archived_reason: 'manual',
   });
 
   const service = new SessionsService(db, APP);

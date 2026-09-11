@@ -104,7 +104,10 @@ type MCPOAuthGrantAuthorityRow = Pick<
 
 /** Status authority excludes access and refresh token plaintext. */
 export type MCPOAuthGrantStatusRecord = MCPOAuthGrantAuthorityRecord &
-  Pick<UserMCPOAuthToken, 'oauth_token_expires_at' | 'refresh_status'>;
+  Pick<UserMCPOAuthToken, 'oauth_token_expires_at' | 'refresh_status'> & {
+    /** Presence only: status reads never select/decrypt refresh-token material. */
+    has_refresh_token: boolean;
+  };
 
 /** Input shape for `saveToken`. */
 export interface SaveTokenInput {
@@ -1092,6 +1095,7 @@ export class UserMCPOAuthTokenRepository {
   async listStatusForSubject(userId: UserID | null): Promise<MCPOAuthGrantStatusRecord[]> {
     const rows = await select(this.db, {
       has_access_token: sql<boolean>`${userMcpOauthTokens.oauth_access_token} is not null and ${userMcpOauthTokens.oauth_access_token} <> ''`,
+      has_refresh_token: sql<boolean>`${userMcpOauthTokens.oauth_refresh_token} is not null and ${userMcpOauthTokens.oauth_refresh_token} <> ''`,
       user_id: userMcpOauthTokens.user_id,
       mcp_server_id: userMcpOauthTokens.mcp_server_id,
       oauth_client_id: userMcpOauthTokens.oauth_client_id,
@@ -1124,12 +1128,13 @@ export class UserMCPOAuthTokenRepository {
       if (
         !row.has_access_token ||
         row.refresh_status === 'ambiguous' ||
-        (expiresAt && expiresAt <= now)
+        (expiresAt && expiresAt <= now && !row.has_refresh_token)
       )
         continue;
       records.push({
         ...(await this.mapAuthorityRow(row)),
         oauth_token_expires_at: expiresAt,
+        has_refresh_token: Boolean(row.has_refresh_token),
         refresh_status: row.refresh_status as UserMCPOAuthToken['refresh_status'],
       });
     }

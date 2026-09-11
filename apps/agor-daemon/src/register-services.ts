@@ -5817,7 +5817,7 @@ export async function registerMCPServices(
   // --------------------------------------------------------------------------
   app.use('/mcp-servers/oauth-auth-headers', {
     async create(
-      data: { mcp_server_ids: string[] },
+      data: { mcp_server_ids: string[]; force_refresh?: boolean },
       params?: AuthenticatedParams
     ): Promise<{
       headers: Record<
@@ -5848,6 +5848,13 @@ export async function registerMCPServices(
       if (!trustedInternalOrService && !trustedSessionExecutor) {
         throw new Forbidden('oauth-auth-headers is only available to trusted executor paths');
       }
+      // `force_refresh` is an internal accelerator for the egress gateway's
+      // post-401 retry, not a capability request data controls: only the
+      // trusted internal/service caller may set it. A session executor's own
+      // request data is otherwise agent-directed, and forcing a refresh has
+      // real side effects (provider rate limits, refresh-token rotation,
+      // fencing pressure on concurrent callers of the same grant).
+      const forceRefresh = trustedInternalOrService && data?.force_refresh === true;
       const tenantId = tenantIdFromParams(params);
       if (!tenantId) throw new NotAuthenticated('oauth-auth-headers requires tenant identity');
       const mcpEgressAssertCurrent = (
@@ -5903,9 +5910,12 @@ export async function registerMCPServices(
           }
         }
       }
-      const { OAuthRefreshAuthorityCancelledError } = await import(
-        '@agor/core/tools/mcp/oauth-refresh'
-      );
+      const {
+        AmbiguousRefreshError,
+        FailedRefreshError,
+        OAuthRefreshExchangeError,
+        OAuthRefreshAuthorityCancelledError,
+      } = await import('@agor/core/tools/mcp/oauth-refresh');
 
       await Promise.all(
         serverIds.map(async (serverId) => {
@@ -5938,6 +5948,7 @@ export async function registerMCPServices(
                 mcpServerId: serverId as MCPServerID,
                 validateGrant: refreshGrantValidator(tenantId, serverId as MCPServerID),
                 assertCurrent: mcpEgressAssertCurrent,
+                forceRefresh,
                 resolveDns: ctx.mcpOutboundDnsLookup,
               });
               if (!grant) throw missingMCPOAuthGrantError(server.auth);
@@ -5954,7 +5965,11 @@ export async function registerMCPServices(
                           : 'client_credentials_configuration_required',
                       recovery: classifyMCPAuthRecovery(error, { mcpServerId: serverId }),
                     }
-                  : { error: 'needs_reauth' };
+                  : error instanceof FailedRefreshError ||
+                      error instanceof AmbiguousRefreshError ||
+                      error instanceof OAuthRefreshExchangeError
+                    ? { error: 'token_refresh_failed' }
+                    : { error: 'needs_reauth' };
             }
           } catch (err) {
             if (err instanceof OAuthRefreshAuthorityCancelledError) throw err;
@@ -6014,6 +6029,7 @@ export async function registerMCPServices(
         GrantConfigurationChangedError,
       } = await import('@agor/core/tools/mcp/oauth-refresh');
 
+      let refreshSubject: { userId: UserID | null } | undefined;
       try {
         // Shared refresh is authorized by server access and the caller's role;
         // it retains the original consenter attribution rather than adopting
@@ -6033,6 +6049,7 @@ export async function registerMCPServices(
           }
         }
         const tokenUserId: UserID | null = mode === 'per_user' ? (userId as UserID) : null;
+        refreshSubject = { userId: tokenUserId };
 
         const currentGrant = await runInOAuthTenantScope(db, tenantId, () =>
           new UserMCPOAuthTokenRepository(db).getToken(tokenUserId, serverId as MCPServerID)
@@ -6078,15 +6095,27 @@ export async function registerMCPServices(
           if (
             err instanceof InvalidGrantError ||
             err instanceof MissingRefreshTokenError ||
-            err instanceof AmbiguousRefreshError ||
             err instanceof GrantConfigurationChangedError
           ) {
             return { success: false, error: 'needs_reauth' };
           }
-          // A peer observed a known, non-ambiguous owner failure. Match the
-          // owner's retryable response rather than forcing one daemon's caller
-          // to reconnect for the same refresh generation.
-          if (err instanceof FailedRefreshError) {
+          if (err instanceof AmbiguousRefreshError && refreshSubject) {
+            // A still-running observer timeout is retryable, but main's durable
+            // rotating-token quarantine cannot recover by replaying the grant.
+            const { userId: subjectUserId } = refreshSubject;
+            const saved = await runInOAuthTenantScope(db, tenantId, () =>
+              new UserMCPOAuthTokenRepository(db).getToken(subjectUserId, serverId as MCPServerID)
+            );
+            if (!saved || saved.refresh_status === 'ambiguous') {
+              return { success: false, error: 'needs_reauth' };
+            }
+          }
+          // A peer observed a known, non-ambiguous owner failure, or the
+          // outcome of a concurrent refresh could not be observed in time.
+          // Neither means the grant itself is invalid, so match the
+          // auth-headers path's retryable response rather than forcing the
+          // caller to reconnect for the same refresh generation.
+          if (err instanceof FailedRefreshError || err instanceof AmbiguousRefreshError) {
             return { success: false, error: 'token_refresh_failed' };
           }
           if (err instanceof MissingTokenEndpointError) {
