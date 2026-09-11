@@ -10,12 +10,14 @@ import {
   BoardCommentsRepository,
   BoardObjectRepository,
   BoardRepository,
+  BranchRepository,
+  CapabilityPolicyRepository,
   getCurrentTenantId,
   mapBoardExportBlobToCreateData,
   runWithTenantDatabaseTransaction,
   type TenantScopeAwareDatabase,
 } from '@agor/core/db';
-import { BadRequest } from '@agor/core/feathers';
+import { BadRequest, Conflict, Forbidden } from '@agor/core/feathers';
 import { isValidUUID } from '@agor/core/ids';
 import {
   buildTeammateWelcomeNoteObject,
@@ -28,8 +30,11 @@ import {
   type BoardExportBlob,
   type BoardID,
   type BoardObject,
+  type BranchID,
   boardCommentZoneParentObjectKey,
+  hasMinimumRole,
   type QueryParams,
+  ROLES,
   type TeammateWelcomeNoteRequest,
   type UUID,
 } from '@agor/core/types';
@@ -40,6 +45,10 @@ import {
   type BoardObjectPatchedEventPayload,
   toBoardObjectPatchedEventPayload,
 } from './board-objects.js';
+import {
+  lockTenantAuthorizationFence,
+  resolveCurrentTenantAuthorityActor,
+} from './tenant-authorization-fence.js';
 
 /**
  * Board service params
@@ -91,6 +100,7 @@ function shouldSqlPageBoardQuery(query?: Record<string, unknown>): boolean {
 }
 
 export interface BoardsServiceEvents {
+  moveBranch?: (branchId: BranchID, boardId: BoardID, params?: BoardParams) => Promise<unknown>;
   emitBoardObjectPatched?: (
     boardObject: BoardObjectPatchedEventPayload,
     params?: BoardParams
@@ -103,6 +113,7 @@ export interface BoardsServiceEvents {
  * Extended boards service with custom methods
  */
 export class BoardsService extends DrizzleService<Board, Partial<Board>, BoardParams> {
+  private moveBranch?: BoardsServiceEvents['moveBranch'];
   private db: TenantScopeAwareDatabase;
   private boardRepo: BoardRepository;
   private emitBoardObjectPatched?: (
@@ -124,6 +135,7 @@ export class BoardsService extends DrizzleService<Board, Partial<Board>, BoardPa
     });
 
     this.db = db;
+    this.moveBranch = events.moveBranch;
     this.boardRepo = boardRepo;
     this.emitBoardObjectPatched = events.emitBoardObjectPatched;
     this.emitBoardEvent = events.emitBoardEvent;
@@ -400,7 +412,35 @@ export class BoardsService extends DrizzleService<Board, Partial<Board>, BoardPa
     const branchId = typeof data === 'string' ? branchIdOrParams : data.branchId;
     if (!boardId) throw new Error('Board ID required');
     if (!branchId || typeof branchId !== 'string') throw new Error('Branch ID required');
-    return this.boardRepo.setPrimaryTeammate(boardId, branchId);
+    const params =
+      typeof data === 'string' ? _maybeParams : (branchIdOrParams as BoardParams | undefined);
+    return runWithTenantDatabaseTransaction(this.db, params?.tenant?.tenant_id, async (db) => {
+      await lockTenantAuthorizationFence(db, params);
+      const current = await resolveCurrentTenantAuthorityActor(db, params, {
+        allowActorlessTrusted: true,
+      });
+      const boards = new BoardRepository(db);
+      const board = await boards.findById(boardId);
+      const branch = await new BranchRepository(db).findById(branchId);
+      if (!board || !branch) throw new BadRequest('Board or teammate not found');
+      if (current && !current.service && !hasMinimumRole(current.role, ROLES.ADMIN)) {
+        const access = await new CapabilityPolicyRepository(db).resolveBoardAccess(
+          board.board_id,
+          current.user_id
+        );
+        if (!access.capabilities.includes('board.edit'))
+          throw new Forbidden('Board Editor or Manager access is required to assign a teammate');
+      }
+      if (branch.board_id !== board.board_id && this.moveBranch) {
+        // An empty-board Assign must not overwrite a primary installed since
+        // the picker loaded. The shared branch move maintains both pointers.
+        if (board.primary_teammate_id && board.primary_teammate_id !== branch.branch_id) {
+          throw new Conflict('This board already has a primary teammate. Reload before assigning.');
+        }
+        await this.moveBranch(branch.branch_id, board.board_id, params);
+      }
+      return boards.setPrimaryTeammate(board.board_id, branch.branch_id);
+    });
   }
 
   /**

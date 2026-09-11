@@ -79,4 +79,44 @@ describe('BoardTeammatePanel messages', () => {
     );
     expect(messageApi.showSuccess).not.toHaveBeenCalled();
   });
+  it('assigns an inherited teammate from another board with one atomic request', async () => {
+    agorStore.setState({
+      branchById: new Map([
+        [
+          teammate.branch_id,
+          {
+            ...teammate,
+            board_id: 'source-board' as Board['board_id'],
+            permission_binding: 'inherit',
+          },
+        ],
+      ]),
+    });
+    const setPrimaryTeammate = vi.fn().mockResolvedValue(board);
+    const patch = vi.fn();
+    const client = {
+      service: (path: string) => (path === 'boards' ? { setPrimaryTeammate } : { patch }),
+    } as unknown as AgorClient;
+    render(
+      <AntApp>
+        <BoardTeammatePanel
+          board={board}
+          activeTab="teammate"
+          onTabChange={vi.fn()}
+          primaryTeammateInaccessible={false}
+          onSessionClick={vi.fn()}
+          client={client}
+        />
+      </AntApp>
+    );
+    const assign = screen.getByRole('button', { name: 'Assign' });
+    await waitFor(() => expect(assign).toBeEnabled());
+    fireEvent.click(assign);
+    await waitFor(() => expect(messageApi.showSuccess).toHaveBeenCalledWith('Teammate assigned'));
+    expect(setPrimaryTeammate).toHaveBeenCalledWith({
+      boardId: board.board_id,
+      branchId: teammate.branch_id,
+    });
+    expect(patch).not.toHaveBeenCalled();
+  });
 });

@@ -234,11 +234,8 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
 
     setAssigningTeammate(true);
     try {
-      if (teammate.board_id !== board.board_id) {
-        await client.service('branches').patch(selectedTeammateId, {
-          board_id: board.board_id,
-        });
-      }
+      // The server performs any board move and assignment atomically through
+      // the same branch relocation path used by BranchModal Save.
       await client.service('boards').setPrimaryTeammate({
         boardId: board.board_id,
         branchId: selectedTeammateId,

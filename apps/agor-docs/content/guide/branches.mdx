@@ -274,7 +274,7 @@ The branch is also where several other features attach:
 
 Every branch has one primary owner and a complete permission package. Board and branch RBAC is always enabled, and primary ownership cannot be reassigned.
 
-A branch can inherit its board's defaults or override the whole package. Choosing an override starts with a copy of the current defaults, so you only need to change the exceptions. Moving an inherited branch to another board is blocked until you choose an override; this prevents a move from silently changing access.
+A branch can inherit its board's defaults or override the whole package. Choosing an override starts with a copy of the current defaults, so you only need to change the exceptions. To move a branch, choose its destination board and Save. You need branch Manager authority and Editor or Manager access on both boards (workspace administrative bypasses still apply). Inherited branches adopt the destination’s defaults, which can change who can access conversations and files; explicit overrides and primary ownership remain unchanged. Choose an override before moving only if you intend to preserve the current permission package.
 
 | Role         | What it allows                                                                      |
 | ------------ | ----------------------------------------------------------------------------------- |

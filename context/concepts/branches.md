@@ -32,7 +32,7 @@ Type: `packages/core/src/types/branch.ts`.
 - **Never use subprocess for git.** Always `simple-git` via `packages/core/src/git/index.ts`.
 - **Port allocation** uses `branch.unique_id` (monotonic per repo). Templates like `{{add 9000 branch.unique_id}}` resolve in environment configs.
 - **Deleting a branch** must cascade through: stop environment, kill terminals, delete normalized policy rows and sessions (including tasks/messages), then remove the git workspace. The service owns the canonical sequence.
-- **Moving a branch** while its permissions are inherited is rejected. Switch it to an override first so changing boards cannot silently change access.
+- **Moving a branch** requires branch Manager authority and Editor/Manager access on both boards. Inherited permissions follow the destination defaults; explicit overrides and primary ownership remain unchanged.
 - **Deleting a board** first materializes every inheriting branch as an override, including the shared-session prompt switch.
 - **Sessions reference branches**, not the other way around. Cascading from branch → sessions, not sessions → branch.
 - **RBAC is an invariant.** Every board/branch boundary must enforce the normalized policy; there is no open-access mode.

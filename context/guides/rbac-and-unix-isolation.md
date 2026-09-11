@@ -67,9 +67,11 @@ A branch has one monolithic binding:
 - `inherit`: use its current board's entire `branch_template`.
 - `override`: use a branch-owned copy of the complete configuration.
 
-Switching to override starts from the current board template. A branch must be
-overridden before it can be moved to another board, which prevents a board move
-from silently changing access. Deleting a board materializes every inheriting
+Switching to override starts from the current board template. Moving requires
+branch Manager authority and Board Editor/Manager access on both boards. An
+inherited branch adopts the destination template; an override stays unchanged.
+Primary ownership never changes. An inherited branch cannot be detached without
+a destination board. Deleting a board materializes every inheriting
 branch as an override before the board reference is cleared.
 
 Branch roles are cumulative:

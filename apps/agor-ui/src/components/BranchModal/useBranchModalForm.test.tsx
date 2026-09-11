@@ -186,11 +186,19 @@ describe('useBranchModalForm board-move validation', () => {
     expect(saved?.ok).toBe(false);
   });
 
-  it('allows the move once the caller has board.attach_branch on the target board', async () => {
+  it('saves an inherited board move without a permission-policy write', async () => {
     const owner = makeUser({ user_id: 'user-1', role: 'member' });
-    const branch = makeBranch();
+    const branch = makeBranch({
+      board_id: 'board-source' as Branch['board_id'],
+      permission_binding: 'inherit',
+    });
     const { client, calls } = makeStubClient({
       users: [owner],
+      capabilityPolicy: makeBranchPolicy({
+        binding_mode: 'inherit',
+        inherited_config: makeBranchPolicy().override_config,
+        override_config: undefined,
+      }),
       boardEffectiveAccessById: {
         'board-allowed': {
           capabilities: ['board.view', 'board.edit', 'board.attach_branch'],
@@ -216,6 +224,12 @@ describe('useBranchModalForm board-move validation', () => {
       saved = await result.current.save();
     });
     expect(saved).toEqual({ ok: true });
+    expect(calls.filter((call) => call.method === 'patch')).toEqual([
+      expect.objectContaining({
+        service: 'branches',
+        args: [branch.branch_id, expect.objectContaining({ board_id: 'board-allowed' }), undefined],
+      }),
+    ]);
     expect(
       calls.some((call) => call.service === 'boards/:id/effective-access' && call.method === 'find')
     ).toBe(true);
