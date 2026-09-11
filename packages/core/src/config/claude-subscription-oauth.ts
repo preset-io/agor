@@ -1,9 +1,9 @@
 import type { AgorConfig } from './types';
 
 /**
- * Provider-policy release boundary for daemon-driven Claude subscription OAuth.
- * Absence is intentionally false so upgrades cannot expose the flow.
+ * Deployment opt-out for daemon-driven Claude subscription OAuth.
+ * Enabled by default; runtime containment and authorization gates still apply.
  */
 export function isClaudeSubscriptionOAuthEnabled(config: AgorConfig): boolean {
-  return config.agentic_tools?.claude_subscription_oauth === true;
+  return config.agentic_tools?.claude_subscription_oauth !== false;
 }

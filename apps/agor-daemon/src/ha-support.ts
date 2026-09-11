@@ -52,7 +52,7 @@ export function isHaFeatureUnavailable(
   return true;
 }
 
-/** Effective UI/runtime capability: provider authorization AND topology support. */
+/** Effective UI/runtime capability: deployment setting AND topology support. */
 export function hasClaudeSubscriptionOAuthCapability(
   config: AgorConfig,
   deployment: ResolvedDeploymentConfig

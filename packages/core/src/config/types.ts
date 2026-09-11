@@ -15,8 +15,8 @@ export interface AgorAgenticToolsSettings {
   installed?: InstallableAgenticTool[];
 
   /**
-   * Enable daemon-driven Claude subscription OAuth after the operator has an
-   * authorized provider/client contract. Default: false.
+   * Enable daemon-driven Claude subscription OAuth. Default: true.
+   * Set false to opt out; runtime containment and authorization gates still apply.
    */
   claude_subscription_oauth?: boolean;
 }
