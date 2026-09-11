@@ -115,8 +115,13 @@ rewriting `config.yaml`:
 | `AGOR_UPLOADS_LOCATION` | `s3://agor-dev-storage` |
 | `AWS_ENDPOINT_URL_S3` | `http://s3mock:9090` |
 | `AGOR_S3_FORCE_PATH_STYLE` | `true` |
+| `AGOR_S3MOCK_CHECKSUM_COMPATIBILITY` | `true` |
 
-The latter selects path-style SDK requests; normal S3 addressing stays unchanged
+`AGOR_S3_FORCE_PATH_STYLE` selects path-style SDK requests. The emulator-only
+checksum compatibility switch removes the redundant SDK algorithm hint when
+an actual checksum header is present: S3Mock 5.2.0 otherwise ignores that checksum.
+SDK hashing, provider verification, and receipt checks remain enabled; never
+enable this workaround for production S3. Normal S3 addressing stays unchanged
 when unset. Outside this overlay, cooling is still default-off. Existing Git
 worktrees are not converted, and existing local uploads are not migrated into S3.
 
@@ -136,6 +141,18 @@ in it.
 Do not delete that volume alone or switch storage endpoints while branches are
 cold—the database receipt points to their sole workspace copy. A successful
 emulator test is not proof of real AWS behavior.
+
+An opt-in Vitest test exercises small uploads, checksum rejection, and a real
+dirty clone through multipart upload and staged restore against a running emulator.
+Inside the rich container (no service startup performed by the test):
+
+```bash
+AGOR_TEST_S3MOCK_ENDPOINT=http://s3mock:9090 pnpm --filter @agor/daemon exec vitest run src/utils/s3mock-bundle.integration.test.ts
+```
+
+It uses dummy credentials and removes only its disposable object prefix and clone.
+Recreate rich after adding the checksum compatibility environment variable; a
+daemon watch restart alone does not update container environment variables.
 
 A representative variant block, abridged from the file:
 

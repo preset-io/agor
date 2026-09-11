@@ -89,5 +89,17 @@ dbTest(
     // A transfer alone is not authority to delete the source.
     expect((await new BranchStorageRepository(db).get(branch.branch_id)).phase).toBe('packing');
     expect(read).not.toHaveBeenCalled();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      upload.mockRejectedValueOnce(new Error('sensitive provider URL must not be logged'));
+      const failure = await invoke(params);
+      expect(failure.status).toHaveBeenCalledWith(502);
+      expect(warn).toHaveBeenCalledWith(
+        '[BranchStorage] event=bundle_transfer_failed stage=upload category=unavailable_or_unverified'
+      );
+      expect((await new BranchStorageRepository(db).get(branch.branch_id)).phase).toBe('packing');
+    } finally {
+      warn.mockRestore();
+    }
   }
 );

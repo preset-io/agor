@@ -20,6 +20,7 @@ import {
 } from '@aws-sdk/client-s3';
 import { Upload } from '@aws-sdk/lib-storage';
 import { S3BranchBundleStore } from './s3-branch-bundle-store.js';
+import { enableS3MockChecksumCompatibility } from './s3mock-checksum-compatibility.js';
 import { DEFAULT_UPLOAD_MAX_BYTES, DEFAULT_UPLOAD_TTL_MS } from './upload-staging-defaults.js';
 
 const HANDLE_PATTERN = /^upl_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
@@ -157,6 +158,11 @@ export class S3UploadStagingStore implements UploadStagingStore {
         ...(forcePathStyle ? { forcePathStyle: forcePathStyle === 'true' } : {}),
         ...options.clientConfig,
       });
+    const s3Mock = process.env.AGOR_S3MOCK_CHECKSUM_COMPATIBILITY;
+    if (s3Mock && s3Mock !== 'true' && s3Mock !== 'false') {
+      throw new Error('AGOR_S3MOCK_CHECKSUM_COMPATIBILITY must be true or false');
+    }
+    if (s3Mock === 'true') enableS3MockChecksumCompatibility(this.client);
   }
 
   private tenantPrefix(tenantId: string): string {

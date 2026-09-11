@@ -23,6 +23,7 @@ export function registerBranchBundleTransfers(options: {
 }): void {
   const { app, db, multiTenancy, authenticate } = options;
   const handler = async (req: Request, res: Response) => {
+    let stage: 'admission' | 'upload' | 'download' = 'admission';
     try {
       const bearer = req.headers.authorization;
       if (!bearer?.startsWith('Bearer ')) {
@@ -65,6 +66,7 @@ export function registerBranchBundleTransfers(options: {
         return current;
       });
       res.setHeader('Cache-Control', 'private, no-store');
+      stage = action === 'pack' ? 'upload' : 'download';
       const store = getBranchBundleStore();
       if (action === 'pack') {
         const receipt = await store.upload({ tenantId, branchId: id, operationId }, req);
@@ -78,9 +80,20 @@ export function registerBranchBundleTransfers(options: {
         body.once('error', () => res.destroy());
         body.pipe(res);
       }
-    } catch {
+    } catch (error) {
+      // Provider messages may contain URLs/keys/credentials. Emit only a bounded
+      // category, never the exception or its message.
+      const name = error instanceof Error ? error.name : '';
+      const category = ['BadRequest', 'NoSuchBucket', 'AccessDenied', 'TimeoutError'].includes(name)
+        ? name
+        : 'unavailable_or_unverified';
+      console.warn(
+        `[BranchStorage] event=bundle_transfer_failed stage=${stage} category=${category}`
+      );
       if (!res.headersSent)
-        res.status(409).json({ error: 'Workspace bundle transfer unavailable' });
+        res
+          .status(stage === 'admission' ? 409 : 502)
+          .json({ error: 'Workspace bundle transfer unavailable' });
       else res.destroy();
     }
   };

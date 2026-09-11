@@ -59,6 +59,10 @@ export async function handleBranchStorage(
         duplex: 'half',
       } as Parameters<typeof fetch>[1])
         .then((response) => {
+          if (response.status === 502)
+            throw new Error(
+              'Bundle upload could not be verified by object storage; check daemon logs'
+            );
           if (!response.ok) throw new Error(`Bundle upload failed (${response.status})`);
           return response;
         })

@@ -151,3 +151,16 @@ it('fails an early HTTP rejection without hanging the pack stream or removing so
   expect((await run('pack')).success).toBe(false);
   expect(await readFile(join(root, 'tracked'), 'utf8')).toBe('dirty');
 });
+
+it('reports a provider verification failure without exposing response details or removing files', async () => {
+  const { root, run } = await fixture();
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async () => new Response('private provider detail', { status: 502 }))
+  );
+  const result = await run('pack');
+  expect(result.success).toBe(false);
+  expect(result.error?.message).toContain('could not be verified by object storage');
+  expect(result.error?.message).not.toContain('private provider detail');
+  expect(await readFile(join(root, 'tracked'), 'utf8')).toBe('dirty');
+});
