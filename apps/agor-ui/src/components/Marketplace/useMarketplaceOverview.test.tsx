@@ -1,4 +1,4 @@
-import type { MCPMarketplaceOverview } from '@agor/core/types';
+import type { MCPMarketplaceOverview, MCPServerID } from '@agor/core/types';
 import type { AgorClient } from '@agor-live/client';
 import { act, renderHook, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
@@ -49,6 +49,62 @@ describe('useMarketplaceOverview live recovery', () => {
 
     expect(result.current.loading).toBe(true);
     expect(result.current.overview.servers).toEqual([]);
+  });
+
+  it('revalidates expiry using inventory only, and cancels the timer on identity change', async () => {
+    vi.useFakeTimers();
+    try {
+      const find = vi.fn(
+        async (): Promise<MCPMarketplaceOverview> => ({
+          servers: [],
+          attachments: [],
+          generated_at: new Date().toISOString(),
+          credentials: [
+            {
+              mcp_server_id: 'gitlab' as MCPServerID,
+              server_name: 'GitLab',
+              method: 'oauth',
+              status: 'active',
+              detail_status: 'active',
+              expires_at: new Date(Date.now() + 7200_000).toISOString(),
+            },
+          ],
+        })
+      );
+      const service = vi.fn((path: string) => (path === 'mcp-marketplace' ? { find } : emitter()));
+      const client = { service, io: emitter() } as unknown as AgorClient;
+      const { rerender, unmount } = renderHook(
+        ({ userId }) =>
+          useMarketplaceOverview({
+            client,
+            connected: true,
+            connecting: false,
+            authGeneration: 1,
+            userId,
+            role: 'member',
+          }),
+        { initialProps: { userId: 'alice' as string | undefined } }
+      );
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(find).toHaveBeenCalledTimes(1);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(7200_025);
+      });
+      expect(find).toHaveBeenCalledTimes(2);
+      expect(
+        service.mock.calls.filter(([path]) => path.includes('discover') || path.includes('refresh'))
+      ).toEqual([]);
+      rerender({ userId: undefined });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(7200_025);
+      });
+      expect(find).toHaveBeenCalledTimes(2);
+      unmount();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('refetches for authoritative row events and window focus', async () => {

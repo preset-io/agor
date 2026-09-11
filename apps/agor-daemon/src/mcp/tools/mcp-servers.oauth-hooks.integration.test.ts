@@ -10,7 +10,7 @@ import { type Application, feathers } from '@agor/core/feathers';
 import { MCP_HEADER_REDACTED_SENTINEL } from '@agor/core/tools/mcp/http-headers';
 import type { MCPServerID, UserID } from '@agor/core/types';
 import type { McpServer } from '@modelcontextprotocol/server';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mcpEgressMaterialHash } from '../../mcp-egress/gateway.js';
 import { type RegisterHooksContext, registerHooks } from '../../register-hooks.js';
 import {
@@ -126,7 +126,7 @@ describe('MCP OAuth status through Feathers response hooks', () => {
     ).toBe(true);
 
     const app = feathers() as Application;
-    (app as Application & { publish: (publisher: unknown) => Application }).publish = () => app;
+    app.publish = () => app;
     app.use('mcp-servers', createMCPServersService(db));
     const placeholderService = () => ({
       async find() {
@@ -200,6 +200,46 @@ describe('MCP OAuth status through Feathers response hooks', () => {
       user,
       tenant: { tenant_id: 'default', source: 'static' },
     } as const;
+    // Status inspection is an ordinary authorized read, not a live probe or
+    // validation flow. Keep the grant and entire saved configuration unchanged.
+    const fetchSpy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockRejectedValue(new Error('inspection must not fetch'));
+    try {
+      const projected = await app
+        .service('mcp-servers')
+        .get(server.mcp_server_id, baseServiceParams);
+      expect(projected.oauth_compatibility_policy).toEqual({
+        effective_mode: 'strict',
+        managed_by_catalog: false,
+        effective_dcr_mode: 'advertised',
+        dcr_mode_source: 'default',
+      });
+      expect(JSON.stringify(projected)).not.toMatch(
+        /configured-client-secret|configured-static-access|durable-grant-access/
+      );
+      const unrelated = await new UsersRepository(rawDb).create({
+        email: 'unrelated-policy@example.test',
+        role: 'member',
+      });
+      const unrelatedParams = { ...baseServiceParams, user: unrelated };
+      await expect(
+        app.service('mcp-servers').get(server.mcp_server_id, unrelatedParams)
+      ).rejects.toThrow();
+      expect(fetchSpy).not.toHaveBeenCalled();
+      expect(await new MCPServerRepository(rawDb).findById(server.mcp_server_id)).toEqual(
+        savedServer
+      );
+      expect(
+        await new UserMCPOAuthTokenRepository(rawDb).getToken(
+          user.user_id as UserID,
+          server.mcp_server_id
+        )
+      ).toEqual(savedGrant);
+    } finally {
+      fetchSpy.mockRestore();
+    }
+
     const context = {
       app,
       db,
@@ -283,5 +323,44 @@ describe('MCP OAuth status through Feathers response hooks', () => {
         oauth_authenticated: true,
       })
     );
+
+    // Production writes and their realtime replacement rows do NOT carry the
+    // read-only policy projection. The editor must GET the committed revision.
+    const patched = vi.fn();
+    app.service('mcp-servers').on('patched', patched);
+    const adminParams = { ...baseServiceParams, user: { ...user, role: 'admin' as const } };
+    const updated = await app.service('mcp-servers').patch(
+      server.mcp_server_id as MCPServerID,
+      {
+        expected_config_version: server.config_version,
+        auth: { type: 'oauth', oauth_dcr_mode: 'disabled' },
+      },
+      adminParams
+    );
+    const savedVersion = (server.config_version ?? 1) + 1;
+    expect(updated).toMatchObject({ config_version: savedVersion });
+    expect(updated).not.toHaveProperty('oauth_compatibility_policy');
+    expect(patched).toHaveBeenCalledOnce();
+    const realtime = patched.mock.calls[0]![0];
+    expect(realtime.config_version).toBe(savedVersion);
+    expect(realtime.oauth_compatibility_policy).toBeUndefined();
+    expect(JSON.stringify([updated, realtime])).not.toMatch(
+      /configured-client-secret|configured-static-access|configured-static-refresh/
+    );
+    const postSave = await app.service('mcp-servers').get(server.mcp_server_id, baseServiceParams);
+    expect(postSave.config_version).toBe(savedVersion);
+    expect(postSave.oauth_compatibility_policy).toEqual({
+      effective_mode: 'strict',
+      managed_by_catalog: false,
+      effective_dcr_mode: 'disabled',
+      dcr_mode_source: 'explicit',
+    });
+    const foreignTenantParams = {
+      ...baseServiceParams,
+      tenant: { tenant_id: 'other-tenant', source: 'static' as const },
+    };
+    await expect(
+      app.service('mcp-servers').get(server.mcp_server_id, foreignTenantParams)
+    ).rejects.toThrow();
   });
 });

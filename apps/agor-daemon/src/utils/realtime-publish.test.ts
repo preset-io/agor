@@ -2556,7 +2556,8 @@ describe('configureRealtimePublish default-deny allowlist', () => {
 
   it.each([
     // The RPC route that leaked a credential-bearing mcp_server row (PR #2451).
-    ['mcp-catalog/connect', { mcp_server: { api_key: 'sk-live-leak' }, session: {} }],
+    ['mcp-catalog/connect', { mcp_server: { api_key: 'sk-live-leak' } }],
+    ['mcp-catalog/start-session', { session: { session_id: 'private-session' } }],
     // The rest of the credential control plane, each of which emits `created`
     // with its own response body purely because Feathers registers it.
     ['config/resolve-api-key', { api_key: 'sk-live-leak' }],

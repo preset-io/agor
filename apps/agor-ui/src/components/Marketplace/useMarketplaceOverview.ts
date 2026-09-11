@@ -97,6 +97,23 @@ export function useMarketplaceOverview(input: {
   }, [ready, refresh]);
 
   useEffect(() => {
+    if (!ready) return;
+    const now = Date.now();
+    const deadlines = overview.credentials
+      .filter((credential) => (credential.detail_status ?? credential.status) === 'active')
+      .map((credential) => Date.parse(credential.expires_at ?? ''))
+      .filter((expiry) => Number.isFinite(expiry) && expiry > now);
+    if (!deadlines.length) return;
+    // Inventory reads only: never contact a provider to keep a badge fresh.
+    // Bound setTimeout's signed-32-bit range for unusually long-lived grants.
+    const timer = setTimeout(
+      () => void refresh(),
+      Math.min(Math.min(...deadlines) - now + 25, 2_147_483_647)
+    );
+    return () => clearTimeout(timer);
+  }, [overview, ready, refresh]);
+
+  useEffect(() => {
     if (!client || !ready) return;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const schedule = () => {

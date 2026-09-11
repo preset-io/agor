@@ -474,10 +474,12 @@ export const MyServersTab: React.FC<MyServersTabProps> = ({
           next.delete(key);
           busyRef.current = next;
           setBusy(next);
+          // Refresh may rotate or retire a grant even when discovery fails.
+          void refresh();
         }
       }
     },
-    [client, guard]
+    [client, guard, refresh]
   );
 
   const toggleTool = useCallback(
