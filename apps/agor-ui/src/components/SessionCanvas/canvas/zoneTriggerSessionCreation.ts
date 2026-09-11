@@ -27,7 +27,7 @@ export function createZoneTriggerSession(
     agentic_tool_preset_id: input.agenticToolPresetId,
     description: `Session from zone "${input.zoneName}"`,
     status: 'idle',
-    mcpServerIds: input.mcpServerIds?.length ? input.mcpServerIds : undefined,
+    mcpServerIds: input.mcpServerIds,
     model_config: input.modelConfig
       ? {
           ...input.modelConfig,

@@ -147,6 +147,7 @@ export const sessions = sqliteTable(
         agentic_tool_version?: string;
         sdk_session_id?: string; // SDK session ID for conversation continuity (Claude Agent SDK, Codex SDK, etc.)
         mcp_token?: string; // MCP authentication token for Agor self-access
+        mcp_selection_explicit?: boolean;
         title?: string; // Session title (user-provided or auto-generated)
         description?: string; // Legacy field, may contain first prompt
 

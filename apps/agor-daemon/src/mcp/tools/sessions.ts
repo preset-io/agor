@@ -1196,6 +1196,9 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
 
       const sessionData: Record<string, unknown> = {
         branch_id: branch.branch_id,
+        // Explicit empty selection must survive the atomic create; the
+        // inherited best-effort attachment loop below cannot record it.
+        ...(mcpServerIdsFromArgs && { mcpServerIds: [] }),
         agentic_tool: agenticTool,
         status: 'idle',
         title: args.title,

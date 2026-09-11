@@ -91,6 +91,8 @@ export default defineConfig({
   shims: true, // Enable shims for import.meta.url in CJS builds
   // Don't bundle agent SDKs and Node.js-only dependencies
   external: [
+    // Stateful DB authority must be shared by independently bundled tools.
+    '@agor/core/db',
     '@anthropic-ai/claude-agent-sdk',
     '@openai/codex-sdk',
     '@google/gemini-cli-core',

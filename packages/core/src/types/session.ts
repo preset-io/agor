@@ -232,6 +232,8 @@ export interface Session {
   sdk_session_id?: string;
   /** MCP authentication token for Agor self-access */
   mcp_token?: string;
+  /** Server-owned: a complete MCP selection was supplied, including an empty set. */
+  mcp_selection_explicit?: boolean;
   status: SessionStatus;
   created_at: string;
   last_updated: string;

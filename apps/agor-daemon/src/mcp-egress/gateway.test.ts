@@ -139,7 +139,7 @@ async function harness(options: HarnessOptions) {
     default_branch: 'main',
   });
   const branch = await new BranchRepository(rawDb).create({
-    branch_id: randomUUID(),
+    branch_id: randomUUID() as UUID,
     repo_id: repo.repo_id,
     name: 'gateway-test',
     ref: 'main',
@@ -171,7 +171,7 @@ async function harness(options: HarnessOptions) {
     await policies.setWorkspacePreferences({ session_sharing_enabled: true }, user.user_id);
   }
   const session = await new SessionRepository(rawDb).create({
-    session_id: randomUUID(),
+    session_id: randomUUID() as UUID,
     branch_id: branch.branch_id,
     agentic_tool: 'codex',
     created_by: user.user_id as UserID,
@@ -393,6 +393,27 @@ async function harness(options: HarnessOptions) {
 const initialize = JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize' });
 
 describe('authoritative MCP gateway real transport', () => {
+  it('rejects an old global-server capability after explicit empty selection, before outbound access', async () => {
+    const h = await harness({
+      server: {
+        transport: 'http',
+        scope: 'global',
+        url: 'https://mcp.example.test/mcp',
+        auth: { type: 'none' },
+      },
+    });
+    await new SessionMCPServerRepository(h.rawDb).setServers(h.session.session_id, []);
+    const fetch = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('Network forbidden'));
+    try {
+      await expect(h.request('POST', initialize)).rejects.toMatchObject({
+        code: 'server_detached',
+      });
+      expect(fetch).not.toHaveBeenCalled();
+    } finally {
+      fetch.mockRestore();
+    }
+  });
+
   it('rejects a new hop after the shared consenter is deleted while the task caller remains active', async () => {
     let providerRequests = 0;
     const provider = await listen((_request, response) => {
@@ -847,7 +868,7 @@ describe('authoritative MCP gateway real transport', () => {
         transport: 'http',
         url: 'https://provider.example/mcp',
         tool_permissions: { destructive: 'ask' },
-      } as MCPServer)
+      } as unknown as MCPServer)
     ).toEqual({ eligible: false, reason: 'approval_not_mediated' });
 
     const ready = {
@@ -856,7 +877,7 @@ describe('authoritative MCP gateway real transport', () => {
       transport: 'http',
       url: 'http://daemon/mcp-egress/ready-id',
       headers: { 'X-Agor-Mcp-Capability': 'opaque' },
-    } as MCPServer;
+    } as unknown as MCPServer;
     const local = {
       mcp_server_id: 'local-id',
       name: 'Local tools',
@@ -901,7 +922,7 @@ describe('authoritative MCP gateway real transport', () => {
         env: { PROVIDER_KEY: 'never-export' },
         headers: { 'X-Provider-Key': 'never-export' },
         auth: { type: 'bearer', token: 'never-export' },
-      } as MCPServer,
+      } as unknown as MCPServer,
       'https://daemon.example/mcp-egress/server-safe-shape',
       'opaque-capability'
     );
@@ -1214,7 +1235,7 @@ describe('authoritative MCP gateway real transport', () => {
         });
       } else if (mutation === 'session detach') {
         await coordinateSessionMCPRevocation({
-          db: h.rawDb,
+          db: h.rawDb as unknown as TenantScopeAwareDatabase,
           gateway: h.gateway,
           tenantId: 'default',
           sessionId: h.session.session_id,

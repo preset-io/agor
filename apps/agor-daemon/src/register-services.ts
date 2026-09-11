@@ -5882,14 +5882,16 @@ export async function registerMCPServices(
                 executorSessionId as SessionID,
                 true
               ),
-              globalServers: await new MCPServerRepository(db).findAll({
-                scope: 'global',
-                enabled: true,
-                // The task token is issued to the actual prompter. Connector
-                // credentials and private server visibility stay with that
-                // caller rather than silently borrowing the Session owner.
-                usableByUserId: userId,
-              }),
+              globalServers: executorSession.mcp_selection_explicit
+                ? []
+                : await new MCPServerRepository(db).findAll({
+                    scope: 'global',
+                    enabled: true,
+                    // The task token is issued to the actual prompter. Connector
+                    // credentials and private server visibility stay with that
+                    // caller rather than silently borrowing the Session owner.
+                    usableByUserId: userId,
+                  }),
             };
           }
         );

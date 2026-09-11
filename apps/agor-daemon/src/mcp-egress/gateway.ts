@@ -1005,7 +1005,7 @@ export class MCPEgressGateway {
                 : 'This phase mediates only bounded Streamable HTTP; stdio and legacy SSE fail closed'
           );
         }
-        if (server.scope !== 'global') {
+        if (server.scope !== 'global' || session.mcp_selection_explicit) {
           const attached = await new SessionMCPServerRepository(tenantDb).listServers(
             claims.session_id as SessionID,
             true

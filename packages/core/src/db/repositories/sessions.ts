@@ -260,6 +260,7 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
         agentic_tool_version: session.agentic_tool_version,
         ...(session.sdk_session_id !== undefined ? { sdk_session_id: session.sdk_session_id } : {}),
         mcp_token: session.mcp_token, // MCP authentication token for Agor self-access
+        mcp_selection_explicit: session.mcp_selection_explicit,
         title: session.title,
         description: session.description,
         genealogy: session.genealogy ?? {

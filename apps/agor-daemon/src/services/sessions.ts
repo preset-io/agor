@@ -468,6 +468,9 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
     const explicitMcpServerIds = normalizeCreateMcpServerIds(
       (data as { mcpServerIds?: unknown }).mcpServerIds
     );
+    if (Object.hasOwn(data, 'mcp_selection_explicit')) {
+      throw new BadRequest('mcp_selection_explicit is server-managed');
+    }
     const agenticTool = requireActiveAgenticTool(data.agentic_tool ?? 'claude-code');
     this.assertDeploymentToolConfigured(agenticTool);
     if (!(await isTenantAgenticToolEnabled(agenticTool, this.db))) {
@@ -590,6 +593,7 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
 
       const createdSession = await new SessionRepository(scoped).create({
         ...createData,
+        ...(explicitMcpServerIds !== undefined && { mcp_selection_explicit: true }),
         sdk_home_scope: admission.scope,
       });
 
@@ -729,6 +733,9 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
    * Emits WebSocket events so the UI updates in real-time.
    */
   async setMCPServers(sessionId: SessionID, serverIds: string[], label: string): Promise<void> {
+    await runWithTenantDatabaseScope(this.db, getCurrentTenantId(), (scoped) =>
+      new SessionRepository(scoped).update(sessionId, { mcp_selection_explicit: true })
+    );
     for (const serverId of serverIds) {
       try {
         await this.sessionMCPRepo.addServer(sessionId, serverId as MCPServerID);
@@ -766,6 +773,16 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
     targetSessionId: SessionID,
     label: string
   ): Promise<void> {
+    // Record inherited explicit intent before any best-effort attachment work.
+    // Failure to read/copy intent must not silently restore implicit globals.
+    await runWithTenantDatabaseScope(this.db, getCurrentTenantId(), async (scoped) => {
+      const sessions = new SessionRepository(scoped);
+      const source = await sessions.findById(sourceSessionId);
+      if (!source) throw new EntityNotFoundError('Session', sourceSessionId);
+      if (source.mcp_selection_explicit) {
+        await sessions.update(targetSessionId, { mcp_selection_explicit: true });
+      }
+    });
     try {
       const parentServers = await this.sessionMCPRepo.listServers(sourceSessionId, true);
       for (const server of parentServers) {
@@ -925,6 +942,7 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
     const forkedSession = await this.create(
       {
         agentic_tool: parentTool,
+        ...(parent.mcp_selection_explicit && { mcpServerIds: [] }),
         agentic_tool_preset_id: inherited.agentic_tool_preset_id,
         status: SessionStatus.IDLE,
         title: data.prompt.substring(0, 100), // First 100 chars as title
@@ -1103,6 +1121,9 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
     const spawnedSession = await this.create(
       {
         agentic_tool: targetTool,
+        ...((data.mcpServerIds !== undefined || parent.mcp_selection_explicit) && {
+          mcpServerIds: [],
+        }),
         agentic_tool_preset_id: resolved.agentic_tool_preset_id,
         status: SessionStatus.IDLE,
         title: data.title || data.prompt.substring(0, 100), // Use provided title or first 100 chars
@@ -1646,6 +1667,9 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
     params?: SessionParams
   ): Promise<Session | Session[]> {
     assertSessionArchiveStateUsesDedicatedOperation(data);
+    if (Object.hasOwn(data, 'mcp_selection_explicit')) {
+      throw new BadRequest('mcp_selection_explicit is server-managed');
+    }
     if (Object.hasOwn(data, 'sdk_home_scope')) {
       throw new BadRequest('sdk_home_scope is immutable and server-managed');
     }
