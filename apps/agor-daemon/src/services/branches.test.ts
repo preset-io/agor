@@ -1,4 +1,5 @@
 import {
+  BoardObjectRepository,
   BoardRepository,
   BranchRepository,
   CapabilityPolicyRepository,
@@ -23,7 +24,7 @@ import {
   type UserID,
   type UUID,
 } from '@agor/core/types';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { dbTest } from '../../../../packages/core/src/db/test-helpers';
 import { markBranchArchiveDeleteAuthorized } from '../utils/branch-archive-delete-authorization.js';
 import { BRANCH_REMOVAL_VISIBILITY_PARAM } from '../utils/realtime-publish.js';
@@ -145,6 +146,15 @@ function createPatchHarness(opts: {
     remove: vi.fn(async () => ({})),
     patch: vi.fn(async () => ({})),
   };
+  vi.spyOn(BoardObjectRepository.prototype, 'findByBranchId').mockImplementation(
+    boardObjectsService.findByBranchId
+  );
+  vi.spyOn(BoardObjectRepository.prototype, 'create').mockImplementation(
+    boardObjectsService.create as never
+  );
+  vi.spyOn(BoardObjectRepository.prototype, 'remove').mockImplementation(
+    boardObjectsService.remove as never
+  );
   const boardsService = {
     get: vi.fn(async () => ({ objects: {} })),
     emit: vi.fn(),
@@ -174,6 +184,7 @@ function createPatchHarness(opts: {
     delete: vi.fn(),
   };
   const boardRepo = {
+    findById: vi.fn(async (boardId: string) => ({ board_id: boardId })),
     clearPrimaryTeammateIfMatches: vi.fn(async () => ({
       board_id: opts.current.board_id,
       primary_teammate_id: undefined,
@@ -291,6 +302,7 @@ function waitForDeferredWork(): Promise<void> {
 
 const mockedSpawnExecutor = vi.mocked(spawnExecutor);
 const mockedRequestExecutor = vi.mocked(requestExecutor);
+afterEach(() => vi.restoreAllMocks());
 
 beforeEach(() => {
   mockedSpawnExecutor.mockReset();
@@ -1152,7 +1164,7 @@ describe('BranchesService.patch primary teammate invariants', () => {
     expect(repository.update).not.toHaveBeenCalled();
   });
 
-  it('requires an inherited branch to materialize an override before moving boards', async () => {
+  it('moves an inherited branch without requiring a permission override', async () => {
     const branchId = 'inherited-board-move' as BranchID;
     const { service, repository } = createPatchHarness({
       current: {
@@ -1167,10 +1179,13 @@ describe('BranchesService.patch primary teammate invariants', () => {
       },
     });
 
-    await expect(service.patch(branchId, { board_id: 'board-b' as BoardID })).rejects.toThrow(
-      /explicit permission override/
-    );
-    expect(repository.update).not.toHaveBeenCalled();
+    await expect(
+      service.patch(branchId, { board_id: 'board-b' as BoardID })
+    ).resolves.toMatchObject({
+      board_id: 'board-b',
+      permission_binding: 'inherit',
+    });
+    expect(repository.update).toHaveBeenCalled();
   });
 
   it('clears the old primary and sets the new board primary when a teammate moves boards', async () => {

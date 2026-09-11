@@ -660,11 +660,11 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
 
       if (
         Object.hasOwn(updates, 'board_id') &&
-        currentRow.board_id !== (updates.board_id ?? null) &&
+        !updates.board_id &&
         currentRow.permission_binding === 'inherit'
       ) {
         throw new RepositoryError(
-          'Switch this branch to an explicit permission override before moving it to another board.'
+          'An inherited branch must belong to a board. Choose a destination board.'
         );
       }
 

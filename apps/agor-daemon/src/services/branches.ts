@@ -24,9 +24,11 @@ import {
   usesAsyncEnvironmentCommands,
 } from '@agor/core/config';
 import {
+  BoardObjectRepository,
   BoardRepository,
   BranchRepository,
   type BranchWithZoneAndSessions,
+  CapabilityPolicyRepository,
   EnvironmentCommandRepository,
   type EnvironmentHealthObservation,
   EnvironmentHealthRepository,
@@ -91,7 +93,7 @@ import { isAllowedHealthCheckUrl } from '@agor/core/utils/url';
 import { DrizzleService, type Query } from '../adapters/drizzle';
 import { buildBranchCreatedAnalyticsProperties } from '../utils/analytics-payloads.js';
 import { consumeBranchArchiveDeleteAuthorization } from '../utils/branch-archive-delete-authorization.js';
-import { ensureCanControlBranchEnvironment } from '../utils/branch-authorization.js';
+import { ensureCanControlBranchEnvironment, isSuperAdmin } from '../utils/branch-authorization.js';
 import { captureBranchRemovalRealtimeVisibility } from '../utils/branch-removal-realtime.js';
 import { ensureBranchWorkspaceAccess } from '../utils/branch-workspace-path.js';
 import { shouldUseCloneReferencePath } from '../utils/clone-reference.js';
@@ -106,6 +108,10 @@ import { isKnowledgeAdmin } from './knowledge-access.js';
 import { issueExecutorCommandToken } from './session-token-service.js';
 import type { InternalEnrichmentParams, SessionsService } from './sessions';
 import { ensureTeammateKnowledgeNamespace as ensureTeammateKnowledgeNamespaceForBranch } from './teammate-knowledge.js';
+import {
+  lockTenantAuthorizationFence,
+  resolveCurrentTenantAuthorityActor,
+} from './tenant-authorization-fence.js';
 
 /**
  * Branch service params
@@ -1265,7 +1271,8 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
   private async maintainPrimaryTeammateAfterPatch(
     previousBranch: Branch,
     updatedBranch: Branch,
-    params?: BranchParams
+    params?: BranchParams,
+    strict = false
   ): Promise<void> {
     const oldBoardId = previousBranch.board_id;
     const newBoardId = updatedBranch.board_id;
@@ -1320,6 +1327,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
         }
       }
     } catch (error) {
+      if (strict) throw error;
       console.warn(
         `⚠️ Failed to maintain primary teammate pointer for branch ${updatedBranch.branch_id}:`,
         error instanceof Error ? error.message : String(error)
@@ -1339,6 +1347,31 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     data: Partial<Branch>,
     params?: BranchParams
   ): Promise<BranchWithZoneAndSessions> {
+    return this.patchWithBoardMovement(id, data, params);
+  }
+
+  private async patchWithBoardMovement(
+    id: BranchID,
+    data: Partial<Branch>,
+    params?: BranchParams
+  ): Promise<BranchWithZoneAndSessions> {
+    if (Object.hasOwn(data, 'board_id')) {
+      return runWithTenantDatabaseTransaction(this.db, params?.tenant?.tenant_id, async (db) => {
+        // Moving changes effective authority. Serialize with policy writers and
+        // re-check the actor and both boards before any metadata/placement writes.
+        await lockTenantAuthorizationFence(db, params);
+        return this.patchBranch(id, data, params, db);
+      });
+    }
+    return this.patchBranch(id, data, params);
+  }
+
+  private async patchBranch(
+    id: BranchID,
+    data: Partial<Branch>,
+    params?: BranchParams,
+    operationDb?: TenantScopedDatabase
+  ): Promise<BranchWithZoneAndSessions> {
     if (Object.hasOwn(data, 'sdk_home')) {
       throw new BadRequest(
         'sdk_home is server-managed and cannot be changed through the Branch API.'
@@ -1357,15 +1390,54 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     const newBoardId = data.board_id;
     const boardChanged = boardIdProvided && oldBoardId !== newBoardId;
 
-    if (boardChanged && currentBranch.permission_binding === 'inherit') {
-      throw new BadRequest(
-        'Switch this branch to an explicit permission override before moving it to another board.'
-      );
+    if (boardChanged) {
+      if (!newBoardId && currentBranch.permission_binding === 'inherit') {
+        throw new BadRequest(
+          'An inherited branch must belong to a board. Choose a destination board.'
+        );
+      }
+      const targetBoard = newBoardId ? await this.boardRepo.findById(newBoardId) : null;
+      if (newBoardId && !targetBoard) throw new NotFound('Destination board not found');
+      const current = await resolveCurrentTenantAuthorityActor(operationDb!, params, {
+        allowActorlessTrusted: true,
+      });
+      if (current && !current.service) {
+        const policies = new CapabilityPolicyRepository(operationDb!);
+        const branchAccess = await policies.resolveBranchAccess(
+          currentBranch.branch_id,
+          current.user_id
+        );
+        // Only a branch Manager (or its immutable owner) can transfer its data.
+        // Board Editor on both sides is additionally required; visibility alone
+        // must never permit attaching a private branch to a more public board.
+        if (
+          !branchAccess.capabilities.includes('branch.manage') &&
+          !isSuperAdmin(current.role, this.app.get('config').execution?.allow_superadmin === true)
+        ) {
+          throw new Forbidden('Branch Manager access is required to move this branch');
+        }
+        if (!hasMinimumRole(current.role, ROLES.ADMIN)) {
+          for (const boardId of [oldBoardId, newBoardId]) {
+            if (!boardId) continue;
+            const access = await policies.resolveBoardAccess(boardId, current.user_id);
+            if (!access.capabilities.includes('board.attach_branch')) {
+              throw new Forbidden(
+                'Board Editor or Manager access is required on both boards to move a branch'
+              );
+            }
+          }
+        }
+      }
     }
 
     // Call parent patch
     const updatedBranch = (await super.patch(id, data, params)) as Branch;
-    await this.maintainPrimaryTeammateAfterPatch(currentBranch, updatedBranch, params);
+    await this.maintainPrimaryTeammateAfterPatch(
+      currentBranch,
+      updatedBranch,
+      params,
+      boardChanged
+    );
 
     // Handle board_objects changes if board_id changed
     if (!boardIdProvided) {
@@ -1383,26 +1455,38 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     }
 
     if (boardChanged) {
-      const boardObjectsService = this.getBoardObjectsService();
+      const boardObjects = new BoardObjectRepository(operationDb!);
 
       try {
         // First, check if a board_object already exists
-        const existingObject = (await boardObjectsService.findByBranchId(id)) as {
-          object_id: string;
-        } | null;
+        const existingObject = await boardObjects.findByBranchId(currentBranch.branch_id);
 
         if (existingObject) {
           // Board object exists - delete it first
-          await boardObjectsService.remove(existingObject.object_id);
+          await boardObjects.remove(existingObject.object_id);
+          emitServiceEvent(this.app, {
+            path: 'board-objects',
+            event: 'removed',
+            data: existingObject,
+            params,
+            id: existingObject.object_id,
+          });
         }
 
         // Now create new board_object if board_id is set
         if (newBoardId) {
           const position = await this.computeDefaultBoardPositionForBranch(newBoardId, id, params);
-          await boardObjectsService.create({
+          const createdObject = await boardObjects.create({
             board_id: newBoardId,
-            branch_id: id,
+            branch_id: currentBranch.branch_id,
             position,
+          });
+          emitServiceEvent(this.app, {
+            path: 'board-objects',
+            event: 'created',
+            data: createdObject,
+            params,
+            id: createdObject.object_id,
           });
         }
       } catch (error) {
@@ -1410,7 +1494,8 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
           `❌ Failed to manage board_objects for branch ${id}:`,
           error instanceof Error ? error.message : String(error)
         );
-        // Don't throw - allow branch patch to succeed even if board_object management fails
+        // The enclosing move transaction rolls back branch, pointers and placement.
+        throw error;
       }
     }
 
@@ -1428,18 +1513,9 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
   }
 
   async update(id: BranchID, data: Partial<Branch>, params?: BranchParams): Promise<Branch> {
-    const currentBranch = await super.get(id, params);
-    await this.assertCanMutateTeammateKnowledgeConfig(currentBranch, data, params);
-    this.assertTeammateKindIsStable(currentBranch, data);
-    if (
-      currentBranch.board_id !== data.board_id &&
-      currentBranch.permission_binding === 'inherit'
-    ) {
-      throw new BadRequest(
-        'Switch this branch to an explicit permission override before moving it to another board.'
-      );
-    }
-    return super.update(id, data, params) as Promise<Branch>;
+    // The adapter's update is a merge too. Use the same authorization and
+    // relocation path instead of bypassing canvas and teammate maintenance.
+    return this.patchWithBoardMovement(id, data, params);
   }
 
   /**

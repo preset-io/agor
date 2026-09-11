@@ -405,10 +405,8 @@ export function useBranchModalForm({
           updates.notes = teammate.description.trim() || null;
         }
       }
-      // Persist a policy transition first. Moving an inherited branch is
-      // intentionally rejected by the server until its current complete
-      // package has been materialized as an override, so this ordering lets a
-      // user choose Override and a new board in one explicit Save.
+      // Persist an intentional policy edit first. A board-only move needs no
+      // policy write: inheritance follows the destination, overrides stay intact.
       if (permissionsChanged && capabilityPolicy) {
         const saved = await client
           .service('branches/:id/permissions')

@@ -622,9 +622,28 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
     },
     // biome-ignore lint/suspicious/noExplicitAny: feathers-swagger docs option not typed in FeathersJS
   } as any);
+  const branchesService = createBranchesService(db, app);
   app.use(
     '/boards',
     createBoardsService(db, {
+      moveBranch: async (branchId, boardId, params) => {
+        // Raw shared path: wrapped Feathers CRUD would emit before the outer
+        // assignment transaction commits. Queue its event and eviction instead.
+        const branch = await branchesService.patch(branchId, { board_id: boardId }, params);
+        const tenantId = getCurrentTenantId();
+        if (tenantId)
+          enqueueAfterTenantDatabaseCommit(() => {
+            app.emit('realtime:authorization-invalidated', { tenantId, disconnectSockets: true });
+          });
+        emitServiceEvent(app, {
+          path: 'branches',
+          event: 'patched',
+          data: branch,
+          params,
+          id: branchId,
+        });
+        return branch;
+      },
       emitBoardObjectPatched: (boardObject, params) => {
         emitServiceEvent(app, {
           path: 'board-objects',
@@ -689,7 +708,7 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   // Branches, repos
   // ============================================================================
 
-  app.use('/branches', createBranchesService(db, app), {
+  app.use('/branches', branchesService, {
     methods: [
       'find',
       'get',
