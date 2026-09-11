@@ -22,10 +22,12 @@
  * The check reads the subject's role and the write then lands. On PostgreSQL
  * both happen inside one `runWithTenantDatabaseScope` transaction, which is why
  * the assertion is invoked inside that callback rather than before it. Even so,
- * the users row is not locked: a demotion committing between this read and the
- * grant write can still be ordered such that the write lands. The window is a
+ * the users row is not locked against role updates: a demotion between this
+ * read and the grant write can still be ordered such that the write lands. The window is a
  * few statements rather than the provider round-trip it replaced, but it is not
- * zero.
+ * zero. Hard deletion is separately fenced by the grant's consenting-user FK
+ * and the repository's user-before-token write lock; this residual warning is
+ * about role demotion, not resurrection after hard deletion.
  *
  * Closing it entirely needs the users row locked for the duration
  * (`SELECT ... FOR UPDATE`) or the grant write made conditional on the role in
@@ -59,9 +61,10 @@ export interface McpGrantSubjectCheck {
   /**
    * The user the grant is keyed on, or `null` for a tenant-owned `shared`
    * grant. `null` passes: a shared grant belongs to the workspace rather than
-   * to a person, is admin-only to establish, and has no individual standing to
-   * re-check. Where a shared flow's *initiator* is known — the callback path —
-   * callers pass that id instead, and the admin floor applies.
+   * to a person and is admin-only to establish. Refresh does not re-check the
+   * consenter's role, but retains attribution and the hard-deletion FK fence.
+   * Where a shared flow's *initiator* is known — the callback path — callers
+   * pass that id instead, and the admin floor applies.
    */
   subjectUserId: string | null | undefined;
   oauthMode: 'per_user' | 'shared';

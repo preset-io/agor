@@ -12,6 +12,7 @@ import {
   useAuthorityOperationGuard,
 } from '@/hooks/useAuthorityOperationGuard';
 import { useThemedMessage } from '@/utils/message';
+import { MCPOAuthPolicySummary } from './MCPOAuthPolicySummary';
 import { MCPServerFormFields } from './MCPServerFormFields';
 import {
   describeMissingForSave,
@@ -21,6 +22,7 @@ import {
 } from './mcp-form-requirements';
 import { buildAuthFromValues, parseEnvJSON, parseHeadersJSON } from './mcp-oauth-utils';
 import { useMCPServerDiscovery } from './useMCPServerDiscovery';
+import { useSavedMCPOAuthPolicy } from './useSavedMCPOAuthPolicy';
 
 export interface MCPServerEditModalProps {
   /** The server being edited. Modal opens when this is non-null and `open` is true. */
@@ -77,6 +79,18 @@ const MCPServerEditModalForIdentity: React.FC<MCPServerEditModalProps> = ({
   const { showSuccess, showError } = useThemedMessage();
   const [modal, modalContextHolder] = Modal.useModal();
   const [form] = Form.useForm();
+  const [policySnapshot, setPolicySnapshot] = useState<MCPServer | null>(null);
+  const newestServer =
+    policySnapshot?.mcp_server_id === server?.mcp_server_id &&
+    (policySnapshot?.config_version ?? 0) > (server?.config_version ?? 1)
+      ? policySnapshot
+      : server;
+  const { policyServer, policyUnavailable, retryPolicy } = useSavedMCPOAuthPolicy({
+    server: newestServer,
+    client,
+    authorityKey,
+    open,
+  });
   const [transport, setTransport] = useState<MCPTransport>('stdio');
   const [authType, setAuthType] = useState<'none' | 'bearer' | 'jwt' | 'oauth'>('none');
   const [preserveAbsentDcrMode, setPreserveAbsentDcrMode] = useState(false);
@@ -132,6 +146,7 @@ const MCPServerEditModalForIdentity: React.FC<MCPServerEditModalProps> = ({
   useEffect(() => {
     if (!open || !server) return;
 
+    setPolicySnapshot(null);
     setConfigConflict(false);
     configVersionRef.current = server.config_version ?? 1;
     setPreserveAbsentDcrMode(false);
@@ -194,13 +209,7 @@ const MCPServerEditModalForIdentity: React.FC<MCPServerEditModalProps> = ({
     form.setFieldsValue(formValues);
     setFormHydrated(true);
     bumpFormRevision();
-  }, [
-    open,
-    server?.mcp_server_id,
-    server?.oauth_compatibility_policy?.effective_mode,
-    server?.oauth_compatibility_policy?.managed_by_catalog,
-    form,
-  ]);
+  }, [open, server?.mcp_server_id, form]);
 
   const closeAndReset = () => {
     form.resetFields();
@@ -275,6 +284,7 @@ const MCPServerEditModalForIdentity: React.FC<MCPServerEditModalProps> = ({
       }
       const updated = await client.service('mcp-servers').patch(server.mcp_server_id, updates);
       if (!operation.isCurrent()) return false;
+      setPolicySnapshot(updated);
       configVersionRef.current = updated.config_version ?? configVersionRef.current + 1;
       return operation.isCurrent();
     } catch (error) {
@@ -340,6 +350,7 @@ const MCPServerEditModalForIdentity: React.FC<MCPServerEditModalProps> = ({
     try {
       const latest = await client.service('mcp-servers').get(server.mcp_server_id);
       if (!operation.isCurrent()) return;
+      setPolicySnapshot(latest);
       configVersionRef.current = latest.config_version ?? 1;
       const latestAuthType = latest.auth?.type || 'none';
       const latestManagedMode = latest.oauth_compatibility_policy?.managed_by_catalog
@@ -441,6 +452,23 @@ const MCPServerEditModalForIdentity: React.FC<MCPServerEditModalProps> = ({
           </Space>
         }
       >
+        {policyServer?.auth?.type === 'oauth' && policyServer.oauth_compatibility_policy && (
+          <MCPOAuthPolicySummary
+            policy={policyServer.oauth_compatibility_policy}
+            label="Saved OAuth policy"
+          />
+        )}
+        {policyServer?.auth?.type === 'oauth' && !policyServer.oauth_compatibility_policy && (
+          <Alert
+            type={policyUnavailable ? 'warning' : 'info'}
+            title={
+              policyUnavailable
+                ? 'Saved OAuth policy is unavailable'
+                : 'Loading saved OAuth policy…'
+            }
+            action={policyUnavailable && <Button onClick={retryPolicy}>Retry policy read</Button>}
+          />
+        )}
         {!mutationAllowed && (
           <Alert
             type="warning"

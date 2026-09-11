@@ -1873,6 +1873,51 @@ describe('strict current MCP OAuth profile', () => {
     );
   });
 
+  it.each([
+    [
+      { resource: 'https://other.example/mcp' },
+      'metadata_incompatible',
+      'protected_resource_mismatch',
+    ],
+    [{ metadataIssuer: 'https://other.example' }, 'issuer_mismatch', undefined],
+    [{ s256: false }, 'pkce_required', undefined],
+    [{ responseIssuer: false }, 'metadata_incompatible', undefined],
+  ] as const)(
+    'retains closed local failure evidence for %j without registration',
+    async (overrides, failureCode, failureReason) => {
+      globalThis.fetch = strictFetch({ ...overrides, registrationEndpoint: true });
+      await expect(startStrict()).rejects.toMatchObject({ failureCode, failureReason });
+      expect(
+        vi
+          .mocked(globalThis.fetch)
+          .mock.calls.every(([, init]) => !init?.method || init.method === 'GET')
+      ).toBe(true);
+    }
+  );
+
+  it('distinguishes disabled DCR from missing advertised registration without POSTs', async () => {
+    for (const dcrMode of ['disabled', 'advertised'] as const) {
+      globalThis.fetch = strictFetch();
+      await expect(
+        startMCPOAuthFlow(
+          `Bearer resource_metadata="${metadataUri}"`,
+          undefined,
+          'https://agor.example.com/mcp-servers/oauth-callback',
+          { resourceUri, dcrMode }
+        )
+      ).rejects.toMatchObject(
+        dcrMode === 'disabled'
+          ? { failureCode: 'client_registration_required', failureReason: 'dcr_disabled' }
+          : { diagnostic: { stage: 'dcr_endpoint_discovery' } }
+      );
+      expect(
+        vi
+          .mocked(globalThis.fetch)
+          .mock.calls.every(([, init]) => !init?.method || init.method === 'GET')
+      ).toBe(true);
+    }
+  });
+
   it('rejects protected-resource metadata for a different resource', async () => {
     globalThis.fetch = strictFetch({ resource: 'https://other-resource.example.com' });
     await expect(startStrict()).rejects.toThrow('Protected resource metadata does not match');

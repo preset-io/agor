@@ -25,6 +25,7 @@ const baseProps = (over: Partial<OnboardingBannersProps>): OnboardingBannersProp
   canManageMcp: false,
   onOpenUserSettings: vi.fn(),
   onOpenWorkspaceSettings: vi.fn(),
+  onOpenCatalog: vi.fn(),
   onCheckAuth: vi.fn(async () => result('unauthenticated')),
   credentialVersion: 0,
   connectionReady: true,
@@ -82,9 +83,9 @@ describe('OnboardingBanners probe effect', () => {
     const disabled = ['claude-code', 'codex', 'gemini', 'copilot', 'cursor', 'opencode'].map(
       (tool) => ({
         tool,
-        deployment_available: true,
         enabled: false,
         resolution_policy: 'user_preferred',
+        deployment_available: true,
         inline_configuration_allowed: true,
         connection: {},
       })
@@ -231,12 +232,33 @@ describe('OnboardingBanners probe effect', () => {
     expect(screen.queryByText(/Connect Slack/)).not.toBeInTheDocument();
   });
 
+  it('routes the integrations CTA to the catalog, not workspace MCP settings', async () => {
+    const onOpenCatalog = vi.fn();
+    const onOpenWorkspaceSettings = vi.fn();
+    render(
+      <OnboardingBanners
+        {...baseProps({
+          mcpServerCount: 0,
+          canManageMcp: true,
+          onOpenCatalog,
+          onOpenWorkspaceSettings,
+          onCheckAuth: async () => result('authenticated'),
+        })}
+      />
+    );
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Browse the catalog' }));
+    expect(onOpenCatalog).toHaveBeenCalledTimes(1);
+    expect(onOpenWorkspaceSettings).not.toHaveBeenCalled();
+  });
+
   it('routes tenant-preferred credential failures to workspace agentic-tool settings', async () => {
     agorStore.getState().setAgenticToolSettings([
       {
         tool: 'claude-code',
         enabled: true,
         resolution_policy: 'tenant_preferred',
+        deployment_available: true,
         inline_configuration_allowed: true,
         connection: { ANTHROPIC_API_KEY: { configured: true } },
       },
@@ -264,6 +286,7 @@ describe('OnboardingBanners probe effect', () => {
         tool: 'claude-code',
         enabled: true,
         resolution_policy: 'tenant_preferred',
+        deployment_available: true,
         inline_configuration_allowed: true,
         connection: { ANTHROPIC_API_KEY: { configured: true } },
       },
@@ -293,6 +316,7 @@ describe('OnboardingBanners probe effect', () => {
         tool: 'claude-code',
         enabled: true,
         resolution_policy: 'user_preferred',
+        deployment_available: true,
         inline_configuration_allowed: true,
         connection: { ANTHROPIC_API_KEY: { configured: true } },
       },
@@ -322,6 +346,7 @@ describe('OnboardingBanners probe effect', () => {
         tool: 'claude-code',
         enabled: false,
         resolution_policy: 'user_preferred',
+        deployment_available: true,
         inline_configuration_allowed: true,
         connection: {},
       },
@@ -329,6 +354,7 @@ describe('OnboardingBanners probe effect', () => {
         tool: 'codex',
         enabled: true,
         resolution_policy: 'user_required',
+        deployment_available: true,
         inline_configuration_allowed: true,
         connection: {},
       },

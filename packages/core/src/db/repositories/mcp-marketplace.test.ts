@@ -288,10 +288,15 @@ describe('MCPMarketplaceRepository', () => {
         owner_user_id: alice.user_id,
       });
       const tokens = new UserMCPOAuthTokenRepository(db);
-      await tokens.saveToken(null, shared.mcp_server_id, {
-        accessToken: 'tenant-shared-secret',
-        expiresAt: new Date('2030-01-01T00:00:00.000Z'),
-      });
+      await tokens.saveToken(
+        null,
+        shared.mcp_server_id,
+        {
+          accessToken: 'tenant-shared-secret',
+          expiresAt: new Date('2030-01-01T00:00:00.000Z'),
+        },
+        alice.user_id
+      );
       await tokens.saveToken(bob.user_id, otherUsersGrant.mcp_server_id, {
         accessToken: 'bob-private-secret',
         expiresAt: new Date('2030-01-01T00:00:00.000Z'),
@@ -366,10 +371,15 @@ describe('MCPMarketplaceRepository', () => {
         refreshToken: 'alice-refresh-must-not-hydrate',
         clientId: 'alice-client-id',
       });
-      await tokens.saveToken(null, sharedServer.mcp_server_id, {
-        accessToken: 'shared-access-must-not-hydrate',
-        refreshToken: 'shared-refresh-must-not-hydrate',
-      });
+      await tokens.saveToken(
+        null,
+        sharedServer.mcp_server_id,
+        {
+          accessToken: 'shared-access-must-not-hydrate',
+          refreshToken: 'shared-refresh-must-not-hydrate',
+        },
+        alice.user_id
+      );
       await tokens.saveToken(bob.user_id, bobServer.mcp_server_id, {
         accessToken: 'bob-access-must-not-cross-subject',
       });

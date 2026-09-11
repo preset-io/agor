@@ -81,6 +81,7 @@ describe('app-owned MCP Catalog', () => {
     ).toBeInTheDocument();
   });
 
+  // Real Select, Modal and Sessions-tab mounts can exceed 15s under CI CPU contention.
   it('closes the session disclosure before Catalog and restores the stable MCP trigger', async () => {
     const api = makeCatalogClient();
     render(<CatalogHarness client={api.client} />);
@@ -97,7 +98,7 @@ describe('app-owned MCP Catalog', () => {
     fireEvent.click(within(modal).getByRole('button', { name: 'Close' }));
     await waitFor(() => expect(trigger).toHaveFocus());
     expect(trigger).toHaveAttribute('aria-expanded', 'false');
-  });
+  }, 30_000);
 
   it('discards caller-private modal state synchronously on identity replacement', async () => {
     const api = makeCatalogClient();

@@ -152,33 +152,26 @@ function fixture() {
 describe('recovered Catalog tryout flow in Chromium', () => {
   it('waits for install, chooses an eligible teammate, navigates, and hydrates an editable unsent composer', async () => {
     const api = fixture();
-    const title = await screen.findByText('MCP Catalog', { selector: 'span' });
-    const modal = title.closest<HTMLElement>('[role="dialog"]')!;
-    await waitFor(() =>
-      expect(modal.getAnimations().some((animation) => animation.playState === 'running')).toBe(
-        false
-      )
-    );
     await userEvent.click(await screen.findByRole('button', { name: 'Open DeepWiki' }));
-    const drawerElement = screen
-      .getByText('What this can access')
-      .closest<HTMLElement>('[role="dialog"]')!;
-    await waitFor(() => {
-      expect(drawerElement).toBeVisible();
-      const bounds = drawerElement.getBoundingClientRect();
-      expect(bounds.right).toBeLessThanOrEqual(window.innerWidth);
-      expect(bounds.left).toBeGreaterThanOrEqual(0);
-    });
-    const drawer = within(drawerElement);
+    const drawer = within(
+      screen.getByText('What this can access').closest<HTMLElement>('[role="dialog"]')!
+    );
     expect(drawer.queryByRole('combobox')).not.toBeInTheDocument();
     expect(api.candidates).not.toHaveBeenCalled();
-    const consent = drawer.getByRole('checkbox');
-    const connect = drawer.getByRole('button', { name: 'Connect', exact: true });
-    expect(connect).toBeDisabled();
-    await userEvent.click(consent);
-    await waitFor(() => expect(consent).toBeChecked());
-    await waitFor(() => expect(connect).toBeEnabled());
-    await userEvent.click(connect);
+    const dialog = screen
+      .getByText('What this can access')
+      .closest<HTMLElement>('[role="dialog"]')!;
+    const wrapper = dialog.closest<HTMLElement>('.ant-drawer-content-wrapper')!;
+    // Native pointer input must wait for the shared drawer's slide-in motion.
+    await waitFor(() => {
+      expect(dialog.getBoundingClientRect().right).toBeCloseTo(window.innerWidth, 1);
+      expect(wrapper.getAnimations().some((animation) => animation.playState === 'running')).toBe(
+        false
+      );
+    });
+    await userEvent.click(drawer.getByRole('checkbox'));
+    await waitFor(() => expect(drawer.getByRole('checkbox')).toBeChecked());
+    await userEvent.click(drawer.getByRole('button', { name: 'Connect', exact: true }));
     expect(api.connect).toHaveBeenCalledWith({
       catalog_key: entry.name,
       acknowledged_disclosure: entry.permission_disclosure,

@@ -67,6 +67,72 @@ import { MCPServerEditModal } from './MCPServerEditModal';
 describe('MCPServerEditModal legacy DCR compatibility', () => {
   beforeEach(() => vi.clearAllMocks());
 
+  it('keeps a committed save successful when policy reload fails and retries only the read', async () => {
+    const server = {
+      mcp_server_id: '01900000-0000-7000-8000-000000000098',
+      name: 'policy-read-failure',
+      transport: 'http',
+      url: 'https://mcp.example.com/mcp',
+      scope: 'global',
+      enabled: true,
+      config_version: 1,
+      auth: { type: 'oauth' },
+      oauth_compatibility_policy: {
+        effective_mode: 'strict',
+        managed_by_catalog: false,
+        effective_dcr_mode: 'advertised',
+        dcr_mode_source: 'default',
+      },
+    } as MCPServer;
+    const updated = { ...server, config_version: 2, oauth_compatibility_policy: undefined };
+    const patch = vi.fn().mockResolvedValue(updated);
+    const get = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('private provider detail'))
+      .mockResolvedValueOnce({
+        ...updated,
+        config_version: 3,
+        oauth_compatibility_policy: server.oauth_compatibility_policy,
+      });
+    const client = {
+      service: vi.fn(() => ({ patch, get })),
+      io: { on: vi.fn(), off: vi.fn() },
+    } as unknown as AgorClient;
+    render(
+      <MCPServerEditModal
+        server={server}
+        open
+        client={client}
+        identityKey="user-a"
+        authorityKey="user-a:admin:1"
+        authGeneration={1}
+        mutationAllowed
+        onClose={vi.fn()}
+      />
+    );
+    fireEvent.click(await screen.findByRole('button', { name: 'Start OAuth Flow' }));
+    await screen.findByText('Saved OAuth policy is unavailable');
+    expect(screen.queryByText(/Saved OAuth policy:/)).not.toBeInTheDocument();
+    expect(screen.queryByText('private provider detail')).not.toBeInTheDocument();
+    expect(preparedServerId).toHaveBeenCalledWith(server.mcp_server_id);
+    expect(showError).not.toHaveBeenCalled();
+    fireEvent.change(screen.getByLabelText('URL'), {
+      target: { value: 'https://unsaved.example/mcp' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Retry policy read' }));
+    await screen.findByText(/Saved OAuth policy:/);
+    expect(screen.getByLabelText('URL')).toHaveValue('https://unsaved.example/mcp');
+    expect(patch).toHaveBeenCalledOnce();
+    expect(preparedServerId).toHaveBeenCalledOnce();
+    expect(get).toHaveBeenCalledTimes(2);
+    // GET observed another writer, but a diagnostic read must not silently
+    // rebase this draft onto their CAS revision and overwrite their changes.
+    patch.mockRejectedValueOnce(Object.assign(new Error('conflict'), { code: 409 }));
+    fireEvent.click(screen.getByRole('button', { name: 'Start OAuth Flow' }));
+    await screen.findByText('Newer MCP settings are available');
+    expect(patch.mock.calls[1]?.[1]?.expected_config_version).toBe(2);
+  });
+
   it('shows the daemon storage-policy rejection without replacing it with retry advice', async () => {
     const error =
       "The MCP server's capabilities did not meet Agor's storage safety limits, so Agor did not save them. Ask an administrator to review the secure operational event.";
@@ -597,6 +663,8 @@ describe('MCPServerEditModal legacy DCR compatibility', () => {
       oauth_compatibility_policy: {
         effective_mode: 'marketplace',
         managed_by_catalog: true,
+        effective_dcr_mode: 'advertised',
+        dcr_mode_source: 'default',
       },
     } as MCPServer;
     const get = vi.fn().mockResolvedValue(latest);
@@ -634,6 +702,9 @@ describe('MCPServerEditModal legacy DCR compatibility', () => {
       expect(screen.getByLabelText('Description')).toHaveValue('edited elsewhere')
     );
     expect(screen.getByLabelText('OAuth Compatibility')).toHaveValue('marketplace');
+    expect(screen.getByText(/Saved OAuth policy:/)).toHaveTextContent(
+      'compatibility marketplace; DCR advertised (default).'
+    );
 
     fireEvent.change(screen.getByLabelText('Description'), { target: { value: 'retry edit' } });
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));

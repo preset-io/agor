@@ -519,7 +519,10 @@ async function refreshPostgres(deps: RefreshAndPersistDeps): Promise<string> {
 /**
  * The grant subject's standing, as a precondition of persisting a refreshed
  * token. `userId === null` is the tenant-owned `shared` grant, which has no
- * individual subject to re-check.
+ * individual role to re-check. Its consenter attribution is immutable through
+ * refresh, and the immediate FK cascade retires it on hard deletion. Both
+ * completion methods are update-only and version-fenced, so neither a removed
+ * grant nor another user's replacement can be resurrected by in-flight work.
  */
 async function assertGrantSubjectForRefresh(
   deps: RefreshAndPersistDeps,

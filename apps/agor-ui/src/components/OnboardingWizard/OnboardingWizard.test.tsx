@@ -1,7 +1,7 @@
 /**
- * Tests for the redesigned 4-step OnboardingWizard (goals → workspace [name +
- * template gallery] → llm → done). The in-wizard recommendations step was
- * dropped; routed goal-tailored suggestions still flow through onComplete.
+ * Tests for the 5-step OnboardingWizard (goals → workspace [name + template
+ * gallery] → llm → tools → done). The revived tools step curates the
+ * goal-tailored Connect kit and threads the selection through onComplete.
  *
  * The wizard no longer clones a "framework" repo, auto-creates a branch/session,
  * or offers "continue without key" / codex-cli-auth / provider-combobox affordances
@@ -9,10 +9,8 @@
  * redesign (see OnboardingWizard.tsx header comment + commit history). Repo /
  * branch / session creation is deferred to normal in-app flows: the wizard only
  * ever calls onComplete with an empty branchId/sessionId and whatever boardId it
- * created or reused. onCreateRepo / onCreateBranch / onCreateSession are accepted
- * as props (for prop-shape compatibility with the app shell) but are unused by
- * the component (`void`-ed immediately), so this file asserts they are never
- * invoked rather than asserting on their call args.
+ * created or reused. Resource creation outside the board is deferred to the
+ * app shell, so this file asserts those services are never requested.
  *
  * Note on query style: this file intentionally avoids `getByRole('button', ...)`
  * / `queryByRole(...)` for interacting with buttons. The LLM and integrations
@@ -25,7 +23,7 @@
  * the accessible-name computation entirely and are used throughout instead.
  */
 
-import type { Board, User } from '@agor-live/client';
+import type { AgorClient, Board, User } from '@agor-live/client';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { ComponentProps } from 'react';
 import { EMPTY_MAPS } from '../../store/agorMaps';
@@ -63,7 +61,9 @@ function makeUser(overrides: Partial<User> = {}): User {
   } as unknown as User;
 }
 
-function makeBoard(overrides: Partial<Board> = {}): Board {
+function makeBoard(
+  overrides: Partial<Omit<Board, 'board_id'>> & { board_id?: string } = {}
+): Board {
   return {
     board_id: 'board-existing',
     name: 'Existing board',
@@ -102,21 +102,14 @@ function renderWizard(
     service: vi.fn((name: string) => {
       if (name === 'boards') return boardsService;
       if (name === 'users') return usersService;
-      return {};
+      return { on: vi.fn(), off: vi.fn(), get: vi.fn(async () => ({ state: 'no_auth' })) };
     }),
   };
-  const onCreateRepo = vi.fn(async () => undefined);
-  const onCreateBranch = vi.fn(async () => null);
-  const onCreateSession = vi.fn(async () => null);
   const props = {
     open: true,
     onComplete: vi.fn(),
     user: effectiveUser,
-    client,
-    onCreateRepo,
-    onCreateLocalRepo: vi.fn(),
-    onCreateBranch,
-    onCreateSession,
+    client: client as unknown as AgorClient,
     onUpdateUser: vi.fn(async () => undefined),
     ...componentOverrides,
   } satisfies ComponentProps<typeof OnboardingWizard>;
@@ -127,9 +120,6 @@ function renderWizard(
     client,
     boardsService,
     usersService,
-    onCreateRepo,
-    onCreateBranch,
-    onCreateSession,
   };
 }
 
@@ -293,6 +283,7 @@ describe('OnboardingWizard', () => {
     clickButton(/^continue/i);
     await findAndClickButton(/skip for now/i); // workspace
     clickButton(/skip for now/i); // llm
+    clickButton(/^continue/i); // tools
     clickButton(/open my board/i);
 
     // Completion is async (board creation, then onComplete), so wait for it.
@@ -319,6 +310,7 @@ describe('OnboardingWizard', () => {
     clickButton(/skip for now/i);
     await findAndClickButton(/skip for now/i); // workspace
     clickButton(/skip for now/i); // llm
+    clickButton(/^continue/i); // tools
     clickButton(/open my board/i);
 
     await waitFor(() => expect(onComplete).toHaveBeenCalledTimes(1));
@@ -355,6 +347,7 @@ describe('OnboardingWizard', () => {
     clickButton(/skip for now/i);
     await findAndClickButton(/skip for now/i); // workspace
     clickButton(/skip for now/i); // llm
+    clickButton(/^continue/i); // tools
     clickButton(/open my board/i);
 
     // Completion is async (board creation, then onComplete), so wait for it.
@@ -402,7 +395,11 @@ describe('OnboardingWizard', () => {
 
   it('saves a valid Claude API key via onCheckAuth + onUpdateUser and advances to done', async () => {
     const onUpdateUser = vi.fn(async () => undefined);
-    const onCheckAuth = vi.fn(async () => ({ authenticated: true }));
+    const onCheckAuth = vi.fn(async () => ({
+      status: 'authenticated' as const,
+      authenticated: true,
+      method: 'api-key' as const,
+    }));
     renderWizard({ initialStep: 'llm', onUpdateUser, onCheckAuth });
 
     clickButton('Claude');
@@ -421,12 +418,17 @@ describe('OnboardingWizard', () => {
         })
       );
     });
+    await findAndClickButton(/skip for now/i); // tools → done
     expect(await screen.findByText("You're ready to build.")).toBeInTheDocument();
   });
 
   it('proceeds to save on an unknown auth result (transient) rather than rejecting the key', async () => {
     const onUpdateUser = vi.fn(async () => undefined);
-    const onCheckAuth = vi.fn(async () => ({ status: 'unknown' as const, authenticated: false }));
+    const onCheckAuth = vi.fn(async () => ({
+      status: 'unknown' as const,
+      authenticated: false,
+      method: 'none' as const,
+    }));
     renderWizard({ initialStep: 'llm', onUpdateUser, onCheckAuth });
 
     clickButton('Claude');
@@ -443,6 +445,7 @@ describe('OnboardingWizard', () => {
         })
       );
     });
+    await findAndClickButton(/skip for now/i); // tools → done
     expect(await screen.findByText("You're ready to build.")).toBeInTheDocument();
   });
 
@@ -451,6 +454,7 @@ describe('OnboardingWizard', () => {
     const onCheckAuth = vi.fn(async () => ({
       status: 'unauthenticated' as const,
       authenticated: false,
+      method: 'api-key' as const,
       hint: 'Key rejected by provider.',
     }));
     renderWizard({ initialStep: 'llm', onUpdateUser, onCheckAuth });
@@ -467,12 +471,18 @@ describe('OnboardingWizard', () => {
 
   it('does not save credentials after the authentication owner changes during verification', async () => {
     let current = true;
-    let resolveCheck!: (result: { authenticated: true }) => void;
+    let resolveCheck!: (result: {
+      status: 'authenticated';
+      authenticated: true;
+      method: 'api-key';
+    }) => void;
     const onCheckAuth = vi.fn(
       () =>
-        new Promise<{ authenticated: true }>((resolve) => {
-          resolveCheck = resolve;
-        })
+        new Promise<{ status: 'authenticated'; authenticated: true; method: 'api-key' }>(
+          (resolve) => {
+            resolveCheck = resolve;
+          }
+        )
     );
     const onUpdateUser = vi.fn(async () => undefined);
     renderWizard({
@@ -489,7 +499,11 @@ describe('OnboardingWizard', () => {
     await waitFor(() => expect(onCheckAuth).toHaveBeenCalledWith('claude-code', validKey));
 
     current = false;
-    resolveCheck({ authenticated: true });
+    resolveCheck({
+      status: 'authenticated' as const,
+      authenticated: true,
+      method: 'api-key' as const,
+    });
     await Promise.resolve();
 
     expect(onUpdateUser).not.toHaveBeenCalled();
@@ -598,7 +612,9 @@ describe('OnboardingWizard', () => {
     const client = {
       io: { on: vi.fn(), off: vi.fn() },
       service: vi.fn((name: string) =>
-        name === 'claude-auth/oauth' ? { create, find } : { create: vi.fn(), find: vi.fn() }
+        name === 'claude-auth/oauth'
+          ? { create, find }
+          : { create: vi.fn(), find: vi.fn(async () => ({ data: [] })), on: vi.fn(), off: vi.fn() }
       ),
     };
     renderWizard({
@@ -621,6 +637,12 @@ describe('OnboardingWizard', () => {
     );
     await waitFor(() => expect(screen.getByText(/^continue →/i).closest('button')).toBeEnabled());
     clickButton(/^continue →/i);
+    expect(await screen.findByText('Choose your tools')).toBeInTheDocument();
+    expect(screen.queryByText("You're ready to build.")).not.toBeInTheDocument();
+    for (const service of ['repos', 'branches', 'sessions']) {
+      expect(client.service).not.toHaveBeenCalledWith(service);
+    }
+    await findAndClickButton(/skip for now/i);
     expect(await screen.findByText("You're ready to build.")).toBeInTheDocument();
   });
 
@@ -651,14 +673,18 @@ describe('OnboardingWizard', () => {
   });
 
   it('shows a previously connected provider as verified and lets the user continue without re-entering a key', async () => {
-    const onCheckAuth = vi.fn(async () => ({ authenticated: true }));
+    const onCheckAuth = vi.fn(async () => ({
+      status: 'authenticated' as const,
+      authenticated: true,
+      method: 'api-key' as const,
+    }));
     const onUpdateUser = vi.fn(async () => undefined);
     renderWizard({
       initialStep: 'llm',
       onCheckAuth,
       onUpdateUser,
       user: makeUser({
-        agentic_tools: { 'claude-code': { ANTHROPIC_API_KEY: 'stored-key' } },
+        agentic_tools: { 'claude-code': { ANTHROPIC_API_KEY: true } },
       } as Partial<User>),
     });
 
@@ -668,6 +694,7 @@ describe('OnboardingWizard', () => {
 
     clickButton(/^continue/i);
 
+    await findAndClickButton(/skip for now/i); // tools → done
     expect(await screen.findByText("You're ready to build.")).toBeInTheDocument();
     // Continuing with an already-verified key does not re-save it.
     expect(onUpdateUser).not.toHaveBeenCalled();
@@ -762,7 +789,7 @@ describe('OnboardingWizard', () => {
       service: vi.fn((name: string) => {
         if (name === 'boards') return boardsService;
         if (name === 'users') return { get: vi.fn(async () => user) };
-        return {};
+        return { on: vi.fn(), off: vi.fn(), get: vi.fn(async () => ({ state: 'no_auth' })) };
       }),
     };
 
@@ -770,7 +797,8 @@ describe('OnboardingWizard', () => {
 
     fireEvent.change(screen.getByLabelText('Teammate name'), { target: { value: 'Rusty' } });
     clickButton(/^continue →/i); // workspace → llm (no board yet)
-    await findAndClickButton(/skip for now/i); // llm → done
+    await findAndClickButton(/skip for now/i); // llm → tools
+    await findAndClickButton(/skip for now/i); // tools → done
     // The board is created only now, at completion; its rejection surfaces as an
     // inline Alert on the final step and the wizard stays there so the user retries.
     clickButton(/meet rusty/i);
@@ -793,7 +821,7 @@ describe('OnboardingWizard', () => {
       service: vi.fn((name: string) => {
         if (name === 'boards') return boardsService;
         if (name === 'users') return usersService;
-        return {};
+        return { on: vi.fn(), off: vi.fn(), get: vi.fn(async () => ({ state: 'no_auth' })) };
       }),
     };
     const onComplete = vi.fn();
@@ -829,7 +857,7 @@ describe('OnboardingWizard', () => {
       service: vi.fn((name: string) => {
         if (name === 'boards') return boardsService;
         if (name === 'users') return usersService;
-        return {};
+        return { on: vi.fn(), off: vi.fn(), get: vi.fn(async () => ({ state: 'no_auth' })) };
       }),
     };
     const onUpdateUser = vi.fn(async () => undefined);
@@ -898,7 +926,7 @@ describe('OnboardingWizard', () => {
       service: vi.fn((name: string) => {
         if (name === 'boards') return boardsService;
         if (name === 'users') return usersService;
-        return {};
+        return { on: vi.fn(), off: vi.fn(), get: vi.fn(async () => ({ state: 'no_auth' })) };
       }),
     };
     const onUpdateUser = vi.fn(async () => undefined);
@@ -984,7 +1012,8 @@ describe('OnboardingWizard', () => {
     expect(screen.getByLabelText('Teammate name')).toHaveValue('Rusty');
 
     clickButton(/^continue →/i); // workspace → llm
-    await findAndClickButton(/skip for now/i); // llm
+    await findAndClickButton(/skip for now/i); // llm → tools
+    await findAndClickButton(/skip for now/i); // tools → done
     clickButton(/meet rusty/i); // named teammate → verb-first primary CTA
 
     // Board creation now precedes onComplete (both at completion), so await it.
@@ -1009,7 +1038,8 @@ describe('OnboardingWizard', () => {
     fireEvent.change(screen.getByLabelText('Teammate name'), { target: { value: 'Rusty' } });
     fireEvent.click(screen.getByText('Legal Analyst').closest('[role="button"]') as HTMLElement);
     clickButton(/skip for now/i);
-    await findAndClickButton(/skip for now/i); // llm
+    await findAndClickButton(/skip for now/i); // llm → tools
+    await findAndClickButton(/skip for now/i); // tools → done
     clickButton(/open my board/i);
 
     await waitFor(() =>
@@ -1045,7 +1075,8 @@ describe('OnboardingWizard', () => {
     expect(await screen.findByText('Connect your AI')).toBeInTheDocument();
     expect(boardsService.create).not.toHaveBeenCalled();
 
-    await findAndClickButton(/skip for now/i); // llm → done
+    await findAndClickButton(/skip for now/i); // llm → tools
+    await findAndClickButton(/skip for now/i); // tools → done
     clickButton(/meet rusty/i); // completion → create the brand-new board now
 
     await waitFor(() => {
@@ -1059,7 +1090,7 @@ describe('OnboardingWizard', () => {
 
   it('completes the full flow and calls onComplete with the created board', async () => {
     const onComplete = vi.fn();
-    const { onCreateRepo, onCreateBranch, onCreateSession } = renderWizard({ onComplete });
+    const { client } = renderWizard({ onComplete });
 
     // goals (optional — Continue is disabled without a selection, so skip)
     clickButton(/skip for now/i);
@@ -1077,7 +1108,8 @@ describe('OnboardingWizard', () => {
     });
     clickButton(/^connect →/i);
 
-    // done — teammate-centric adaptive headline; the primary CTA is verb-first + named.
+    // tools — curate step skipped, then the teammate-centric done hero.
+    await findAndClickButton(/skip for now/i); // tools → done
     expect(await screen.findByText('Rusty is ready.')).toBeInTheDocument();
     clickButton(/meet rusty/i);
 
@@ -1100,17 +1132,19 @@ describe('OnboardingWizard', () => {
           agent: 'claude-code',
           // Goals were skipped → the default MCP suggestion set flows through, and
           // the goals threaded to the completion handler are empty.
-          suggestedIntegrations: mergeGoalIntegrationRecs([]),
+          suggestedIntegrations: [],
+          slackGatewayIntent: undefined,
+          connectedMcpServerIds: [],
           goals: [],
         },
         expect.objectContaining({ isCurrent: expect.any(Function) })
       )
     );
     // The teammate branch/session is created by the app shell on completion, not
-    // by the wizard — the wizard itself never invokes these provisioning props.
-    expect(onCreateRepo).not.toHaveBeenCalled();
-    expect(onCreateBranch).not.toHaveBeenCalled();
-    expect(onCreateSession).not.toHaveBeenCalled();
+    // by the wizard — it never requests those provisioning services.
+    for (const service of ['repos', 'branches', 'sessions']) {
+      expect(client.service).not.toHaveBeenCalledWith(service);
+    }
   });
 
   it('done step heroes the named teammate with a role pill + adaptive headline and NO recap line (template picked)', async () => {
@@ -1135,8 +1169,9 @@ describe('OnboardingWizard', () => {
     });
     clickButton(/^connect →/i);
 
-    // done — teammate-centric: name heroes the headline, the template is the role
-    // pill, and one warm "it's yours; shape it by chatting" subline — nothing else.
+    // tools — curate step skipped, then the teammate-centric done hero: name heroes
+    // the headline, the template is the role pill, and one warm subline — nothing else.
+    await findAndClickButton(/skip for now/i); // tools → done
     expect(await screen.findByText('Rusty is ready.')).toBeInTheDocument();
     expect(screen.getByText('Product Manager')).toBeInTheDocument(); // role pill
     expect(
@@ -1163,6 +1198,7 @@ describe('OnboardingWizard', () => {
     clickButton(/skip for now/i); // workspace — no name, no template
     expect(await screen.findByText('Connect your AI')).toBeInTheDocument();
     clickButton(/skip for now/i); // llm
+    await findAndClickButton(/skip for now/i); // tools
 
     // No teammate to hero → the warm generic headline + board-open subcopy, and the
     // old skip-hint checklist is gone entirely.
@@ -1188,6 +1224,9 @@ describe('OnboardingWizard', () => {
     expect(await screen.findByText('Connect your AI')).toBeInTheDocument();
     clickButton(/skip for now/i);
 
+    expect(await screen.findByText('Choose your tools')).toBeInTheDocument();
+    clickButton(/skip for now/i);
+
     expect(await screen.findByText("You're ready to build.")).toBeInTheDocument();
     // Final step is not skippable.
     expect(screen.queryByText(/skip for now/i)).not.toBeInTheDocument();
@@ -1209,7 +1248,9 @@ describe('OnboardingWizard', () => {
           sourceRemoteUrl: undefined,
           templateId: null,
           agent: null,
-          suggestedIntegrations: mergeGoalIntegrationRecs([]),
+          suggestedIntegrations: [],
+          slackGatewayIntent: undefined,
+          connectedMcpServerIds: [],
           goals: [],
         },
         expect.objectContaining({ isCurrent: expect.any(Function) })
@@ -1257,7 +1298,7 @@ describe('OnboardingWizard', () => {
     expect(boardsService.create).toHaveBeenCalledTimes(1);
     expect(usersService.get).toHaveBeenCalledTimes(1);
     expect(props.onUpdateUser).toHaveBeenCalledTimes(1);
-    expect(props.onUpdateUser.mock.invocationCallOrder[0]).toBeLessThan(
+    expect(vi.mocked(props.onUpdateUser).mock.invocationCallOrder[0]).toBeLessThan(
       boardsService.create.mock.invocationCallOrder[0]
     );
   });
@@ -1296,7 +1337,7 @@ describe('OnboardingWizard', () => {
   it('persists the candidate id before create and retries a failed progress write without an orphan', async () => {
     const onComplete = vi.fn(async () => undefined);
     const { boardsService, props } = renderWizard({ onComplete, initialStep: 'done' });
-    props.onUpdateUser.mockRejectedValueOnce(new Error('Progress write failed'));
+    vi.mocked(props.onUpdateUser).mockRejectedValueOnce(new Error('Progress write failed'));
 
     clickButton(/open my board/i);
     expect(await screen.findByText('Progress write failed')).toBeInTheDocument();
@@ -1420,14 +1461,18 @@ describe('OnboardingWizard', () => {
 
     // Recovery clears the derived validation error immediately rather than
     // leaving a stale copy in the independent board-creation error state.
-    clickButton('Back');
+    clickButton('Back'); // done → tools
+    await screen.findByText('Choose your tools');
+    clickButton('Back'); // tools → llm
     await screen.findByText('Connect your AI');
-    clickButton('Back');
+    clickButton('Back'); // llm → workspace
     await screen.findByText('Build your teammate');
     fireEvent.click(screen.getByText('Start blank').closest('[role="button"]') as HTMLElement);
     clickButton(/^continue →$/i);
     await screen.findByText('Connect your AI');
-    clickButton(/skip for now/i);
+    clickButton(/skip for now/i); // llm → tools
+    await screen.findByText('Choose your tools');
+    clickButton(/skip for now/i); // tools → done
 
     expect(await screen.findByText('Rusty is ready.')).toBeInTheDocument();
     expect(screen.queryByText(/removed-template.*no longer available/i)).not.toBeInTheDocument();
@@ -1448,7 +1493,7 @@ describe('OnboardingWizard', () => {
     renderWizard({ initialStep: 'goals' });
 
     const progress = screen.getByRole('list', { name: 'Onboarding progress' });
-    expect(progress).toHaveTextContent('Step 1 of 4: Goals. Current step.');
+    expect(progress).toHaveTextContent('Step 1 of 5: Goals. Current step.');
     expect(progress.querySelector('[aria-current="step"]')).toBeInTheDocument();
     await waitFor(() => expect(screen.getByText(/what do you want to get done/i)).toHaveFocus());
 
@@ -1514,6 +1559,142 @@ describe('OnboardingWizard', () => {
     );
     expect(attempt.isCurrent()).toBe(false);
   });
+
+  it('tools step lets an admin drop a tool and does not open a second Catalog after completion', async () => {
+    const onComplete = vi.fn();
+    renderWizard({
+      onComplete,
+      initialStep: 'tools',
+      user: makeUser({ role: 'admin' }),
+    });
+
+    expect(screen.getByText('Choose your tools')).toBeInTheDocument();
+    // Default (no-goal) kit: Connect [Linear, Notion, Firecrawl] + Ask [Slack, GitHub].
+    const notion = screen.getByRole('checkbox', { name: 'Suggest Notion to my teammate' });
+    expect(notion).toBeChecked();
+    fireEvent.click(notion as HTMLButtonElement);
+    expect(notion).not.toBeChecked();
+
+    clickButton(/^continue →/i); // tools → done
+    clickButton(/open my board/i);
+
+    await waitFor(() => expect(onComplete).toHaveBeenCalledTimes(1));
+    const emitted = (onComplete.mock.calls[0][0].suggestedIntegrations ?? []).map(
+      (rec: { name: string }) => rec.name
+    );
+    // The deselected Connect tool is gone; the others stay.
+    expect(emitted).not.toContain('Notion');
+    expect(emitted).toContain('Linear');
+    expect(onComplete.mock.calls[0][0].catalogEntryName).toBeUndefined();
+    // Untouched suggestions are retained.
+    expect(emitted).toEqual(expect.arrayContaining(['Slack gateway messaging', 'GitHub']));
+  });
+
+  it('honors deselecting the teammate-assisted Slack recommendation', async () => {
+    const onComplete = vi.fn();
+    renderWizard({ onComplete, initialStep: 'tools', user: makeUser({ role: 'admin' }) });
+
+    const askRow = screen.getByRole('checkbox', {
+      name: 'Suggest Slack gateway messaging to my teammate',
+    });
+    fireEvent.click(askRow as HTMLButtonElement);
+
+    clickButton(/^continue →/i); // tools → done
+    clickButton(/open my board/i);
+
+    await waitFor(() => expect(onComplete).toHaveBeenCalledTimes(1));
+    const emitted = (onComplete.mock.calls[0][0].suggestedIntegrations ?? []).map(
+      (rec: { name: string }) => rec.name
+    );
+    expect(emitted).not.toContain('Slack gateway messaging');
+    expect(onComplete.mock.calls[0][0].slackGatewayIntent).toBeUndefined();
+    expect(emitted).toContain('GitHub');
+  });
+
+  it('lets members select tools without claiming that selection authorizes a connection', () => {
+    renderWizard({ initialStep: 'tools', user: makeUser({ role: 'member' }) });
+    expect(screen.getByText('Choose your tools')).toBeInTheDocument();
+    expect(screen.getByRole('checkbox', { name: 'Suggest Linear to my teammate' })).toBeChecked();
+    expect(screen.getAllByRole('button', { name: /^Sign in through Catalog/ })[0]).toBeEnabled();
+    expect(screen.getByText(/Connections are optional/i)).toBeInTheDocument();
+    expect(screen.queryByRole('textbox')).not.toBeInTheDocument();
+  });
+
+  it('resuming directly at completion does not invent unreviewed tool selections', async () => {
+    const onComplete = vi.fn();
+    renderWizard({ onComplete, initialStep: 'done' });
+    clickButton(/open my board/i);
+    await waitFor(() => expect(onComplete).toHaveBeenCalledTimes(1));
+    expect(onComplete.mock.calls[0][0]).toMatchObject({
+      suggestedIntegrations: [],
+      slackGatewayIntent: undefined,
+    });
+  });
+
+  it('skipping tools suppresses both suggestions and the catalog handoff', async () => {
+    const onComplete = vi.fn();
+    renderWizard({ onComplete, initialStep: 'tools' });
+    clickButton(/skip for now/i);
+    clickButton(/open my board/i);
+    await waitFor(() => expect(onComplete).toHaveBeenCalledTimes(1));
+    expect(onComplete.mock.calls[0][0]).toMatchObject({
+      suggestedIntegrations: [],
+      slackGatewayIntent: undefined,
+    });
+  });
+
+  it('selecting one tool after Skip and Back does not re-enable the other tools', async () => {
+    const onComplete = vi.fn();
+    renderWizard({ onComplete, initialStep: 'tools' });
+    clickButton(/skip for now/i);
+    clickButton('Back');
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Suggest GitHub to my teammate' }));
+    expect(screen.getByRole('checkbox', { name: 'Suggest GitHub to my teammate' })).toBeChecked();
+    expect(
+      screen.getByRole('checkbox', { name: 'Suggest Linear to my teammate' })
+    ).not.toBeChecked();
+    clickButton(/^continue/i);
+    clickButton(/open my board/i);
+    await waitFor(() => expect(onComplete).toHaveBeenCalledTimes(1));
+    expect(
+      onComplete.mock.calls[0][0].suggestedIntegrations.map((rec: { id: string }) => rec.id)
+    ).toEqual(['github']);
+    expect(onComplete.mock.calls[0][0].catalogEntryName).toBeUndefined();
+  });
+
+  it('deselecting every tool suppresses the handoff, including after Back', async () => {
+    const onComplete = vi.fn();
+    renderWizard({ onComplete, initialStep: 'tools' });
+    for (const rec of mergeGoalIntegrationRecs([]))
+      fireEvent.click(screen.getByRole('checkbox', { name: `Suggest ${rec.name} to my teammate` }));
+    clickButton(/^continue/i);
+    clickButton('Back');
+    expect(
+      screen.getByRole('checkbox', { name: 'Suggest GitHub to my teammate' })
+    ).not.toBeChecked();
+    clickButton(/^continue/i);
+    clickButton(/open my board/i);
+    await waitFor(() => expect(onComplete).toHaveBeenCalledTimes(1));
+    expect(onComplete.mock.calls[0][0]).toMatchObject({
+      suggestedIntegrations: [],
+      slackGatewayIntent: undefined,
+    });
+  });
+
+  it('offers in-context Catalog actions for the shipping goal', async () => {
+    const onComplete = vi.fn();
+    renderWizard({ onComplete });
+    clickButton('Ship without the busywork');
+    clickButton(/^continue/i);
+    await findAndClickButton(/skip for now/i);
+    clickButton(/skip for now/i);
+    expect(screen.getAllByRole('button', { name: /^Sign in through Catalog/ })).toHaveLength(4);
+    expect(onComplete).not.toHaveBeenCalled();
+    clickButton(/^continue/i);
+    clickButton(/open my board/i);
+    await waitFor(() => expect(onComplete).toHaveBeenCalledTimes(1));
+    expect(onComplete.mock.calls[0][0].catalogEntryName).toBeUndefined();
+  });
 });
 
 describe('Codex ChatGPT login import', () => {
@@ -1525,7 +1706,11 @@ describe('Codex ChatGPT login import', () => {
     const client = {
       io: { on: vi.fn(), off: vi.fn() },
       service: vi.fn((name: string) =>
-        name === 'boards' ? boardsService : name === 'codex-auth/import' ? { create } : {}
+        name === 'boards'
+          ? boardsService
+          : name === 'codex-auth/import'
+            ? { create }
+            : { on: vi.fn(), off: vi.fn(), get: vi.fn(async () => ({ state: 'no_auth' })) }
       ),
     };
     const rendered = renderWizard({ initialStep: 'llm', client: client as never });
@@ -1565,6 +1750,7 @@ describe('Codex ChatGPT login import', () => {
     clickButton('Import login');
 
     await waitFor(() => expect(importCreate).toHaveBeenCalledWith({ authJson: pasted }));
+    await findAndClickButton(/skip for now/i); // tools → done
     expect(await screen.findByText("You're ready to build.")).toBeInTheDocument();
   });
 
@@ -1619,6 +1805,7 @@ describe('Codex ChatGPT login import', () => {
     const onCheckAuth = vi.fn(async () => ({
       status: 'unauthenticated' as const,
       authenticated: false,
+      method: 'none' as const,
     }));
     renderWizard({
       initialStep: 'llm',
@@ -1640,6 +1827,7 @@ describe('Codex ChatGPT login import', () => {
     const onCheckAuth = vi.fn(async () => ({
       status: 'unknown' as const,
       authenticated: false,
+      method: 'none' as const,
     }));
     renderWizard({
       initialStep: 'llm',
@@ -1671,7 +1859,15 @@ describe('Codex ChatGPT device sign-in', () => {
     const client = {
       io: { on: vi.fn(), off: vi.fn() },
       service: vi.fn((name: string) =>
-        name === 'codex-auth/device' ? { create, find } : { create: vi.fn(), find: vi.fn() }
+        name === 'codex-auth/device'
+          ? { create, find }
+          : {
+              create: vi.fn(),
+              find: vi.fn(),
+              on: vi.fn(),
+              off: vi.fn(),
+              get: vi.fn(async () => ({ state: 'no_auth' })),
+            }
       ),
     };
     const rendered = renderWizard({ initialStep: 'llm', client: client as never });
@@ -1714,6 +1910,7 @@ describe('Codex ChatGPT device sign-in', () => {
     await waitFor(() => expect(screen.getByText(/^connect →/i).closest('button')).toBeEnabled());
     const connect = screen.getByText(/^connect →/i).closest('button');
     fireEvent.click(connect as HTMLButtonElement);
+    await findAndClickButton(/skip for now/i); // tools → done
     expect(await screen.findByText("You're ready to build.")).toBeInTheDocument();
   });
 

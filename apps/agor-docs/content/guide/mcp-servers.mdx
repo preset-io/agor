@@ -15,6 +15,16 @@ Catalog's pre-connect readiness is advisory from catalog and saved-connection da
 
 For unsupported schemes, configure the server in **Settings → MCP Servers**. Custom headers still support alternatives such as Datadog API/application-key pairs; Catalog's Datadog entry uses Datadog's recommended browser OAuth flow instead of asking users to manage a long-lived PAT or SAT. That card targets Datadog's US1 MCP endpoint. Other Datadog sites need their regional endpoint configured manually, and an organisation may need to allow-list the Agor callback under **MCP OAuth Redirect URLs** before sign-in completes.
 
+### Inspecting OAuth policy and failures
+
+The saved-server editor shows **Saved OAuth policy** from the daemon, independently of unsaved form values. Ordinary `GET /mcp-servers` and `GET /mcp-servers/:id` reads include `oauth_compatibility_policy`: `effective_mode`, `managed_by_catalog`, `effective_dcr_mode`, and `dcr_mode_source` (`explicit` or `default`). Omitted DCR mode still means `advertised`; an explicit `disabled` choice remains disabled. Marketplace compatibility still requires a canonical install of the current catalog entry.
+
+Save responses and realtime replacements do not include this projection. The editor reads the saved revision again without changing your draft. Until that read succeeds, it shows loading or unavailable rather than the previous revision's policy. **Retry policy read** repeats only the read; it does not repeat the save, OAuth flow, or connection test.
+
+When **Start OAuth Flow** fails, the existing recovery alert and `recovery` API object include the policy used by the failed operation (`oauth_policy`) and a closed `failure_reason` when known: `dcr_disabled`, `registration_endpoint_missing`, `protected_resource_mismatch`, `issuer_mismatch`, `pkce_required`, `profile_rejected`, or `endpoint_override_mismatch`. Guidance comes from Agor, not provider response text. Unknown failures remain generic rather than guessing from provider prose. Callback issuer failures also carry a reason; historical attempt status does not reconstruct the policy used by an earlier flow.
+
+Opening the editor or reading saved policy does **not** discover metadata, register clients, request consent, or change grants. It is not a live provider health check. Starting OAuth and **Save & Test Connection** remain explicit operations with side effects. No diagnostic action automatically retries a weaker compatibility policy or enables DCR. These reads retain the existing tenant and server-visibility authorization.
+
 ### Expiring OAuth access and refresh
 
 **Connected** means the saved access grant is currently usable according to its stored
@@ -114,6 +124,62 @@ Editing authentication is patch-safe: leaving a saved secret blank preserves it,
 Connecting an entry again reuses the same owner-specific install; starting a session is a separate, explicit action. Supplying a new bearer token verifies and atomically rotates that stored install; the previous token is not retained in another catalog row. Remove the MCP server in **Settings → MCP Servers** to delete Agor's stored configuration and token.
 
 > **Revocation depends on gateway mode:** In `off` and `observe`, an active SDK may own a direct provider connection, so an edit is not a synchronous revocation boundary. In `compatibility` and `enforced`, eligible bounded Streamable HTTP servers use task-scoped daemon capabilities; all stdio, legacy SSE endpoint handoff, WebSocket, unbounded streaming, and servers requiring `ask` approval are omitted or fail closed. No new request hop is admitted after a relevant mutation commits, but a request admitted before that commit may complete. See [MCP egress operations](/guide/mcp-egress-gateway).
+
+## Shared OAuth consent and account deletion
+
+A tenant-shared OAuth grant records the authenticated user who established it,
+independently of the MCP server's owner. Routine token refresh keeps that
+attribution. When another currently authorized administrator completes new
+consent, the token and its attribution are replaced together.
+
+**Hard-deleting the consenting account retires its locally stored shared grant**
+as well as its personal grants. A current administrator must authorize the
+shared server again. Deleting a former consenter does not remove a newer grant
+established by someone else. This policy concerns hard deletion, not a role
+change, and does not transfer consent to the server owner.
+
+Retirement deletes Agor's stored access/refresh tokens and grant-bound client
+material. **Agor makes no provider revocation request**, synchronously or
+asynchronously; use the provider's security settings if revocation is required.
+Already-admitted mediated requests may finish; new mediated hops and fresh
+authentication-status reads no longer accept the removed grant. Direct provider
+connections in `off` or `observe` mode remain subject to the provider's own
+lifetime/revocation rules.
+
+Browser callbacks and manual OAuth completion use the trusted initiating user,
+not request fields. The client-credentials **Test Authentication** path is a
+request-local probe: it neither establishes/replaces a durable shared grant nor
+retains its token in a process cache. Saved client configuration is distinct from
+a stored grant; a successful probe alone is not durable shared authorization.
+
+### Upgrade: shared-grant attribution (`0105`, both databases)
+
+1. Inventory affected shared OAuth servers in each tenant and identify a current
+   administrator in that tenant to own reauthorization.
+2. Quiesce OAuth exchanges and refreshes: stop new sign-ins and OAuth-using work,
+   let in-flight exchanges/refreshes settle, close outstanding sign-in windows,
+   and stop **all** daemons against the database.
+3. Take and verify a database backup, then run `agor db migrate --offline-cutover`
+   with the new binary.
+4. Start only the new binaries and have the identified administrators authorize
+   their shared servers again. Verify fresh authentication status and **Save & Test
+   Connection** for each affected server before resuming OAuth-using work.
+
+The migration preserves per-user grants, including tokens, configuration
+bindings, refresh state and timestamps. It cannot know historical shared
+consenters and does **not** guess from ownership: all historical shared grant
+rows are removed. Server definitions, configured clients and per-user grants
+are retained. This is local retirement, not a provider revocation request.
+
+The migration is transactional; a failed migration rolls back, and a bounded
+PostgreSQL lock timeout can be retried after stopping competing workers. A
+successful migration's deleted shared grants cannot be recovered by a schema
+rollback. Older binaries cannot supply the new required attribution and must
+not run against the upgraded schema. Returning to an older binary requires a
+coordinated offline restoration of a pre-upgrade backup, which also restores
+its old credential-retention behavior and may reintroduce retired credentials.
+Restoring a backup cannot undo provider-side authorization-code consumption or
+token rotation; prefer a forward fix and fresh consent.
 
 ## Catalog curation for operators
 
