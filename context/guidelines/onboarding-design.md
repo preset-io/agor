@@ -255,7 +255,7 @@ use one disabled draft and the secure gateway token widget before enabling.
 Slack MCP is absent from Catalog because its official endpoint has no DCR and
 requires a registered internal/approved confidential app. Do not re-add an
 unusable entry, offer generic registration, or use gateway tokens for MCP.
-Present one deselectable Slack gateway messaging goal, not an actionable or preselected Slack MCP row. Keep MCP availability as non-selected information only. Deselecting the gateway goal clears new-gateway intent. A gateway does not provide Slack history/tool access, even when the broader goal mentions digests.
+Present one deselectable Slack gateway messaging goal, not an actionable or preselected Slack MCP row. Deselecting the gateway goal clears new-gateway intent. A gateway does not provide Slack history/tool access, even when the broader goal mentions digests.
 
 ## Tools row visual provenance
 
@@ -285,7 +285,7 @@ text inside extra padding above the line.
 
 The onboarding auth flow reuses `CatalogTab` and `CatalogDetailDrawer` directly;
 it is not a visually reimplemented auth drawer. `CatalogDrawer` is their shared
-presentation seam for detail/auth and Slack availability. CatalogDetailDrawer
+presentation seam for detail/auth. CatalogDetailDrawer
 owns one persistent instance from pre-selection loading/error through content: one 520px responsive AntD drawer, default header/body padding,
 token-spaced body flow, and no separate footer padding. Onboarding returns only
 these drawers, not an empty Catalog grid wrapper. Disclosure and auth form spacing belong to the shared detail component, extracted

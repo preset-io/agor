@@ -7,9 +7,8 @@ import {
   type OnboardingSlackGatewayIntent,
   readOnboardingSlackGateways,
 } from '../../utils/onboardingSlack';
-import { CatalogDrawer } from '../Marketplace/CatalogDrawer';
 import { CatalogTab } from '../Marketplace/CatalogTab';
-import { OnboardingRecommendationCard, OnboardingToolAction } from './OnboardingRecommendationCard';
+import { OnboardingRecommendationCard } from './OnboardingRecommendationCard';
 import { OnboardingToolRow } from './OnboardingToolRow';
 
 interface Props {
@@ -40,7 +39,6 @@ function ToolsForIdentity(props: Props) {
   } = props;
   const [readinessRevision, setReadinessRevision] = useState(0);
   const [entry, setEntry] = useState<string>();
-  const [slackOpen, setSlackOpen] = useState(false);
   const trigger = useRef<HTMLElement | null>(null);
   const [gateways, setGateways] =
     useState<Awaited<ReturnType<typeof readOnboardingSlackGateways>>>();
@@ -82,7 +80,6 @@ function ToolsForIdentity(props: Props) {
   }, [client, connected, hasSlack, retry]);
   const close = () => {
     setEntry(undefined);
-    setSlackOpen(false);
     const source = trigger.current;
     requestAnimationFrame(() => {
       if (source?.isConnected) source.focus();
@@ -153,43 +150,8 @@ function ToolsForIdentity(props: Props) {
               be requested.
             </Typography.Text>
           )}
-          <Flex vertical gap={token.marginXXS}>
-            <Typography.Text type="secondary" style={{ fontSize: token.fontSizeSM }}>
-              Slack MCP tool access is not available in Catalog and is not selected here.
-            </Typography.Text>
-            <OnboardingToolAction
-              aria-describedby={slackDescriptionId}
-              aria-haspopup="dialog"
-              onClick={(event) => {
-                trigger.current = event.currentTarget;
-                setSlackOpen(true);
-              }}
-            >
-              Slack MCP availability
-            </OnboardingToolAction>
-          </Flex>
         </OnboardingRecommendationCard>
       )}
-      <CatalogDrawer open={slackOpen} title="Slack MCP" onClose={close}>
-        <Alert
-          type="info"
-          title="Slack MCP is not currently available in Catalog"
-          description="Slack requires a registered internal or approved Slack app with client credentials and does not support dynamic client registration. Agor has no reviewed public OAuth client for this entry, so we cannot offer working Catalog sign-in yet."
-        />
-        <Typography.Paragraph>
-          Use an already configured, approved Slack MCP server through Agor’s existing MCP settings.
-          Do not register a generic connector or use a Slack gateway bot/app token as an MCP
-          credential. A gateway connection does not grant Slack MCP access.
-        </Typography.Paragraph>
-        <Typography.Link
-          href="https://docs.slack.dev/ai/slack-mcp-server/"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          Official Slack MCP requirements
-        </Typography.Link>
-        <Button onClick={close}>Return to onboarding</Button>
-      </CatalogDrawer>
       {entry && (
         <CatalogTab
           client={client}

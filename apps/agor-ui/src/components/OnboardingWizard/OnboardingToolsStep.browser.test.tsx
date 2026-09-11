@@ -209,8 +209,12 @@ describe('onboarding Slack and authority boundaries in Chromium', () => {
       screen.queryByRole('checkbox', { name: 'Suggest Slack to my teammate' })
     ).not.toBeInTheDocument();
     expect(
-      screen.getByText(/Slack MCP tool access is not available.*not selected/)
-    ).toBeInTheDocument();
+      screen.queryByText(/Slack MCP tool access is not available.*not selected/)
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: 'Slack MCP availability' })
+    ).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'Slack MCP availability' })).not.toBeInTheDocument();
   });
   it('exposes new-gateway intent only for an authorized admin, never creates one on selection', async () => {
     const api = apiFor();
@@ -274,18 +278,24 @@ describe('onboarding Slack and authority boundaries in Chromium', () => {
     );
     expect(api.client.service('gateway-channels').create).not.toHaveBeenCalled();
   });
-  it('denies new-gateway intent to a member and explains unavailable Slack MCP without generic registration', async () => {
+  it('denies new-gateway intent to a member without offering Slack MCP UI', async () => {
     const api = apiFor();
     render(<Harness api={api} user={catalogUser} />);
     await screen.findByText(/An administrator must create one/);
     expect(
       screen.queryByRole('checkbox', { name: /create a new Slack gateway/ })
     ).not.toBeInTheDocument();
-    await userEvent.click(screen.getByRole('button', { name: 'Slack MCP availability' }));
-    const drawer = within(await screen.findByRole('dialog', { name: 'Slack MCP' }));
-    await drawer.findByText('Slack MCP is not currently available in Catalog');
-    expect(drawer.queryByRole('textbox')).not.toBeInTheDocument();
-    await userEvent.click(drawer.getByRole('button', { name: 'Return to onboarding' }));
+    const choice = screen.getByRole('checkbox', {
+      name: 'Suggest Slack gateway messaging to my teammate',
+    });
+    const card = within(choice.closest<HTMLElement>('.ant-card')!);
+    expect(card.getAllByRole('checkbox')).toHaveLength(1);
+    expect(card.queryByText(/Slack MCP/)).not.toBeInTheDocument();
+    expect(card.queryByRole('button')).not.toBeInTheDocument();
+    expect(card.queryByRole('link')).not.toBeInTheDocument();
+    expect(screen.queryByRole('dialog', { name: 'Slack MCP' })).not.toBeInTheDocument();
+    expect(screen.getByTestId('gateway-intent')).toHaveTextContent('prefer-existing');
+    expect(api.client.service('gateway-channels').create).not.toHaveBeenCalled();
     expect(api.connect).not.toHaveBeenCalled();
   });
   it('fails closed on unavailable inventory and allows a fresh retry', async () => {
