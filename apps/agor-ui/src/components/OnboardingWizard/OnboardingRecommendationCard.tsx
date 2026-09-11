@@ -88,11 +88,13 @@ export function OnboardingToolAction(props: ButtonProps) {
         alignSelf: 'flex-start',
         paddingLeft: 0,
         paddingInlineStart: 0,
-        // Keep the visible link a token gap below the preceding line.
-        // The touch target extends below its line, not above it.
-        paddingBlock: 0,
+        // Use the surrounding gutters for the full target, not extra row height.
+        paddingBlock: Math.max(
+          0,
+          (token.controlHeight - token.fontSizeSM * token.lineHeightSM) / 2
+        ),
         border: 'none',
-        alignItems: 'flex-start',
+        alignItems: 'center',
         lineHeight: token.lineHeightSM,
         whiteSpace: 'normal',
         height: 'auto',
@@ -101,5 +103,19 @@ export function OnboardingToolAction(props: ButtonProps) {
         textAlign: 'left',
       }}
     />
+  );
+}
+
+export function OnboardingToolActions({ children }: { children: ReactNode }) {
+  const { token } = theme.useToken();
+  const targetPadding = Math.max(
+    0,
+    (token.controlHeight - token.fontSizeSM * token.lineHeightSM) / 2
+  );
+  return (
+    // Offset the group, not individual buttons: wrapped Retry targets must not overlap.
+    <Flex wrap gap="small" style={{ marginBlock: -targetPadding }}>
+      {children}
+    </Flex>
   );
 }

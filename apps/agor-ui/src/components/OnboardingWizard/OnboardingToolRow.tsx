@@ -1,10 +1,14 @@
 import type { AgorClient } from '@agor-live/client';
-import { Flex, Typography, theme } from 'antd';
+import { Typography, theme } from 'antd';
 import { type MouseEvent, useEffect, useId } from 'react';
 import type { OnboardingIntegrationRecommendation } from '../../utils/onboardingGoals';
 import { useCatalogReadiness } from '../Marketplace/useCatalogReadiness';
 import { Tag } from '../Tag';
-import { OnboardingRecommendationCard, OnboardingToolAction } from './OnboardingRecommendationCard';
+import {
+  OnboardingRecommendationCard,
+  OnboardingToolAction,
+  OnboardingToolActions,
+} from './OnboardingRecommendationCard';
 
 interface Props {
   recommendation: OnboardingIntegrationRecommendation;
@@ -97,7 +101,7 @@ export function OnboardingToolRow({
         )
       }
     >
-      <Flex wrap gap="small">
+      <OnboardingToolActions>
         <OnboardingToolAction
           type="link"
           aria-label={rec.id === 'slack' ? action : `${action} for ${rec.name}`}
@@ -116,7 +120,7 @@ export function OnboardingToolRow({
             Retry
           </OnboardingToolAction>
         )}
-      </Flex>
+      </OnboardingToolActions>
     </OnboardingRecommendationCard>
   );
 }

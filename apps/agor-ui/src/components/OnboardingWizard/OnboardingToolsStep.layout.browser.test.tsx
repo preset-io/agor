@@ -93,6 +93,31 @@ function assertFlushActions(root: HTMLElement) {
   }
 }
 
+function assertBalancedActionSpacing(row: HTMLElement) {
+  const body = row.querySelector<HTMLElement>('.ant-card-body')!;
+  const heading = document.getElementById(row.getAttribute('aria-labelledby')!)!;
+  const actions = [...row.querySelectorAll<HTMLButtonElement>('button')];
+  const lastLabel = actions.at(-1)!.querySelector('span')!.getBoundingClientRect();
+  const bounds = body.getBoundingClientRect();
+  const topGap = heading.getBoundingClientRect().top - bounds.top;
+  const bottomGap = bounds.bottom - lastLabel.bottom;
+  // Compare content gutters, not a hard-coded height: wrapping and theme type sizes vary.
+  expect(bottomGap).toBeCloseTo(topGap, 0);
+  for (const action of actions) {
+    const target = action.getBoundingClientRect();
+    expect(target.height).toBeGreaterThanOrEqual(32);
+    expect(target.bottom).toBeLessThan(bounds.bottom);
+    expect(target.left).toBeGreaterThan(bounds.left);
+    expect(target.right).toBeLessThan(bounds.right);
+    expect(action.scrollWidth).toBeLessThanOrEqual(action.clientWidth);
+  }
+  if (actions.length > 1) {
+    const first = actions[0].getBoundingClientRect();
+    const second = actions[1].getBoundingClientRect();
+    expect(second.left >= first.right || second.top >= first.bottom).toBe(true);
+  }
+}
+
 describe('Kasia-derived MCP rows — real layout', () => {
   it.each([false, true])('uses aligned rows and distinct inline tags (light=%s)', async (light) => {
     const { props, api } = fixture();
@@ -134,7 +159,7 @@ describe('Kasia-derived MCP rows — real layout', () => {
         expect(tagBounds.left - headingBounds.right).toBeCloseTo(8, 0);
         expect(Math.abs(tagBounds.top - headingBounds.top)).toBeLessThan(3);
       }
-      expect(getComputedStyle(action).paddingTop).toBe('0px');
+      assertBalancedActionSpacing(row);
       expect(action).toHaveAccessibleDescription(/Token required|Sign in required/);
       expect(Number(getComputedStyle(heading.querySelector('strong')!).fontWeight)).toBeGreaterThan(
         Number(getComputedStyle(description).fontWeight)
@@ -193,6 +218,7 @@ describe('Kasia-derived MCP rows — real layout', () => {
       expect(getComputedStyle(action).fontSize).toBe(getComputedStyle(desc).fontSize);
       expect(action.getBoundingClientRect().height).toBeGreaterThanOrEqual(32);
       expect(action).toHaveAccessibleDescription(/A long purpose description/);
+      assertBalancedActionSpacing(row);
     }
     const first = document.getElementById(rows[0].getAttribute('aria-labelledby')!)!;
     expect(getComputedStyle(first).fontSize).toBe('16px');
@@ -226,6 +252,7 @@ describe('Kasia-derived MCP rows — real layout', () => {
     view.rerender(<Harness props={{ ...props, authGeneration: 3 }} />);
     await screen.findByText('Could not check connection');
     expect(screen.queryByText('Do not echo provider internals')).not.toBeInTheDocument();
+    assertBalancedActionSpacing(screen.getByRole('listitem'));
     get.mockResolvedValue({ state: 'installed_ready' } as never);
     await userEvent.click(
       screen.getByRole('button', { name: 'Retry connection check for GitHub' })

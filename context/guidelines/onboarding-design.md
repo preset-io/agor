@@ -275,13 +275,14 @@ neutral Agor fallback. Read readiness with the existing caller-scoped Catalog
 hook, never infer authorization from a selected row. Link/text actions in the
 step and its onboarding Catalog drawer have zero left padding.
 
-Auth requirements use Agor's outlined `Tag` with the established info tone
-(`processing` in AntD), not a warning. The Catalog text
+Auth requirements use Agor's outlined neutral `Tag` inline beside the title,
+distinct from the link/action color. The Catalog text
 action uses the same `fontSizeSM` as the description, with a standard
 `controlHeight` minimum target and zero left padding; typography must not shrink
-the keyboard/touch target. Align the action text at the top of that target so
-description→Tag and Tag→action have equal visible spacing; do not center the
-text inside extra padding above the line.
+the keyboard/touch target. Keep balanced card gutters around the visible content.
+Center the action label within its target, offsetting the action group into the
+existing gutters rather than reserving empty layout height below the label.
+Keep wrapped action targets separated so Retry remains independently clickable.
 
 The onboarding auth flow reuses `CatalogTab` and `CatalogDetailDrawer` directly;
 it is not a visually reimplemented auth drawer. `CatalogDrawer` is their shared
