@@ -15,7 +15,7 @@ import {
   type TenantScopeAwareDatabase,
 } from '@agor/core/db';
 import type { AuthenticatedParams, Task, TenantID } from '@agor/core/types';
-import { TaskStatus } from '@agor/core/types';
+import { isAwaitingRemoteExecutor, TaskStatus } from '@agor/core/types';
 import type { Application, TasksServiceImpl } from '../declarations.js';
 import { getTrackedExecutor } from '../executor-tracking.js';
 import { requestExecutorTermination } from '../termination-coordinator.js';
@@ -62,6 +62,7 @@ const DEFAULT_SCAN_BATCH_SIZE = 25;
 const DEFAULT_MAX_IDLE_INTERVAL_MS = 60_000;
 const DEFAULT_STARTUP_OFFSET_MAX_MS = 30_000;
 const DEFAULT_LOCAL_OWNER_GRACE_MS = 15_000;
+const DEFAULT_DISPATCH_CONNECT_TIMEOUT_MS = 5 * 60_000;
 const SATURATED_DRAIN_BASE_MS = 150;
 const SATURATED_DRAIN_JITTER_RATIO = 2 / 3; // 50..250ms
 
@@ -165,7 +166,7 @@ export class TaskRuntimeReconciler {
       // postgres.js does not permit concurrent queries on one transaction
       // connection, and these scans deliberately do not lock candidate rows.
       const dispatch = await repo.findExpiredDispatchRefs(
-        this.options.dispatchConnectTimeoutMs ?? 5 * 60_000,
+        this.dispatchConnectTimeoutMs(),
         discoveryOptions('dispatch_timeout')
       );
       advanceCursor('dispatch_timeout', dispatch);
@@ -176,9 +177,15 @@ export class TaskRuntimeReconciler {
           )
         : [];
       advanceCursor('heartbeat_stale', heartbeat);
-      const termination = await repo.findStrandedTerminationRefs(
-        discoveryOptions('termination_stranded')
-      );
+      // A stop claimed before a remote executor connected has no lease and no
+      // guard. The repository keeps it out of the scan until the remote startup
+      // deadline (database time, anchored on dispatch), so the pending request
+      // neither churns nor masks a stranded stop. Discovery is therefore the
+      // authoritative deadline: a discovered awaiting row has expired.
+      const termination = await repo.findStrandedTerminationRefs({
+        ...discoveryOptions('termination_stranded'),
+        unconnectedGraceMs: this.dispatchConnectTimeoutMs(),
+      });
       advanceCursor('termination_stranded', termination);
       const withTenant = (ref: TaskRuntimeDiscoveryRef): TaskRuntimeDiscoveryRef => ({
         ...ref,
@@ -232,6 +239,10 @@ export class TaskRuntimeReconciler {
     work: () => Promise<T>
   ): Promise<T> {
     return withFreshTenantWrite(this.options.db, tenantId, work);
+  }
+
+  private dispatchConnectTimeoutMs(): number {
+    return this.options.dispatchConnectTimeoutMs ?? DEFAULT_DISPATCH_CONNECT_TIMEOUT_MS;
   }
 
   private async reconcileDispatchTimeout(
@@ -326,12 +337,16 @@ export class TaskRuntimeReconciler {
     if (localMode && !ownsLocalHandle && task.sdk_failure?.termination === 'unverified') {
       return false;
     }
+    // Discovery already applied the dispatch-anchored startup deadline in
+    // database time; do not re-evaluate it against this daemon's clock.
+    const awaitingRemoteExecutor = isAwaitingRemoteExecutor(task);
     const result = await requestExecutorTermination({
       app: this.options.app,
       taskId: task.task_id,
       cause: request.cause,
       errorMessage: request.error_message ?? 'Resuming durable executor termination.',
       params,
+      ...(awaitingRemoteExecutor ? { remoteConnectDeadlineExpired: true } : {}),
       allowUnownedLocalContainment: localMode && !ownsLocalHandle,
       ...(localMode && !ownsLocalHandle
         ? {
