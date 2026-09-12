@@ -22,6 +22,7 @@ env_file='/opt/agor/workspace/app.env'
 with open(env_file,'w') as f:f.write('\n'.join(values)+'\n')
 os.chmod(env_file,0o600)
 image='agor-workspace:'+release
+os.chmod('/opt/agor/workspace/enable.mjs',0o644)
 try:
  docker('stop','agor');docker('rename','agor',backup)
  try:
