@@ -1,0 +1,566 @@
+{
+  "schema": 1,
+  "createdAt": "2026-09-11T23:37:02.888Z",
+  "environment": {
+    "platform": "darwin",
+    "release": "25.6.0",
+    "cpu": "Apple M5 Pro",
+    "cores": 18,
+    "memoryBytes": 25769803776,
+    "filesystemType": 26,
+    "storageClass": "local-unverified-not-NVMe-certified"
+  },
+  "metadata": "in-memory serialized authority; commit timing excludes production SQL and S3",
+  "source": "/Users/mattfitzgerald/dev/preset/agor",
+  "samples": [
+    {
+      "name": "materialise_ms",
+      "clone": "copy",
+      "ms": 11138.511792000001,
+      "outcome": "ok"
+    },
+    {
+      "name": "cold_materialisation",
+      "clone": "copy",
+      "ms": 11138.640083999999,
+      "outcome": "ok"
+    },
+    {
+      "name": "replica_refresh_ms",
+      "clone": "copy",
+      "ms": 3886.0097079999996,
+      "outcome": "ok"
+    },
+    {
+      "name": "replica_refresh_ms",
+      "clone": "copy",
+      "ms": 3769.576416,
+      "outcome": "ok"
+    },
+    {
+      "name": "replica_refresh_ms",
+      "clone": "copy",
+      "ms": 3542.6359999999986,
+      "outcome": "ok"
+    },
+    {
+      "name": "replica_refresh_ms",
+      "clone": "copy",
+      "ms": 3981.3755829999973,
+      "outcome": "ok"
+    },
+    {
+      "name": "replica_refresh_ms",
+      "clone": "copy",
+      "ms": 3943.959708999999,
+      "outcome": "ok"
+    },
+    {
+      "name": "replica_refresh_ms",
+      "clone": "copy",
+      "ms": 3095.2551250000033,
+      "outcome": "ok"
+    },
+    {
+      "name": "mutation_extract_ms",
+      "clone": "copy",
+      "ms": 1275.4540419999976,
+      "outcome": "ok"
+    },
+    {
+      "name": "commit_ms",
+      "clone": "copy",
+      "ms": 17.165750000000116,
+      "outcome": "ok"
+    },
+    {
+      "name": "publish_1_files",
+      "clone": "copy",
+      "ms": 1298.360332999997,
+      "outcome": "ok"
+    },
+    {
+      "name": "replica_refresh_ms",
+      "clone": "copy",
+      "ms": 7216.6312499999985,
+      "outcome": "ok"
+    },
+    {
+      "name": "mutation_extract_ms",
+      "clone": "copy",
+      "ms": 1427.8046669999967,
+      "outcome": "ok"
+    },
+    {
+      "name": "commit_ms",
+      "clone": "copy",
+      "ms": 13.329249999995227,
+      "outcome": "ok"
+    },
+    {
+      "name": "publish_100_files",
+      "clone": "copy",
+      "ms": 1447.1600410000028,
+      "outcome": "ok"
+    },
+    {
+      "name": "replica_refresh_ms",
+      "clone": "copy",
+      "ms": 7112.352083999998,
+      "outcome": "ok"
+    },
+    {
+      "name": "mutation_extract_ms",
+      "clone": "copy",
+      "ms": 1331.050209000001,
+      "outcome": "ok"
+    },
+    {
+      "name": "commit_ms",
+      "clone": "copy",
+      "ms": 14.435790999996243,
+      "outcome": "ok"
+    },
+    {
+      "name": "excluded_64MiB",
+      "clone": "copy",
+      "ms": 1353.286500000002,
+      "outcome": "ok"
+    },
+    {
+      "name": "replica_refresh_ms",
+      "clone": "copy",
+      "ms": 3482.730208000001,
+      "outcome": "ok"
+    },
+    {
+      "name": "replica_refresh_ms",
+      "clone": "copy",
+      "ms": 3495.5451669999966,
+      "outcome": "ok"
+    },
+    {
+      "name": "mutation_extract_ms",
+      "clone": "copy",
+      "ms": 1627.2322920000006,
+      "outcome": "ok"
+    },
+    {
+      "name": "commit_ms",
+      "clone": "copy",
+      "ms": 13.590791999995417,
+      "outcome": "ok"
+    },
+    {
+      "name": "mutation_extract_ms",
+      "clone": "copy",
+      "ms": 1579.3648749999993,
+      "outcome": "ok"
+    },
+    {
+      "name": "commit_ms",
+      "clone": "copy",
+      "ms": 16.01279199999408,
+      "outcome": "ok"
+    },
+    {
+      "name": "concurrent_2",
+      "clone": "copy",
+      "ms": 6743.814750000005,
+      "outcome": "ok"
+    },
+    {
+      "name": "replica_refresh_ms",
+      "clone": "copy",
+      "ms": 13086.163083000007,
+      "outcome": "ok"
+    },
+    {
+      "name": "replica_refresh_ms",
+      "clone": "copy",
+      "ms": 13090.853791000001,
+      "outcome": "ok"
+    },
+    {
+      "name": "replica_refresh_ms",
+      "clone": "copy",
+      "ms": 13952.670167000004,
+      "outcome": "ok"
+    },
+    {
+      "name": "replica_refresh_ms",
+      "clone": "copy",
+      "ms": 13953.868875,
+      "outcome": "ok"
+    },
+    {
+      "name": "mutation_extract_ms",
+      "clone": "copy",
+      "ms": 1449.1025840000075,
+      "outcome": "ok"
+    },
+    {
+      "name": "commit_ms",
+      "clone": "copy",
+      "ms": 11.90350000000035,
+      "outcome": "ok"
+    },
+    {
+      "name": "mutation_extract_ms",
+      "clone": "copy",
+      "ms": 1679.8753330000036,
+      "outcome": "ok"
+    },
+    {
+      "name": "commit_ms",
+      "clone": "copy",
+      "ms": 12.192332999999053,
+      "outcome": "ok"
+    },
+    {
+      "name": "mutation_extract_ms",
+      "clone": "copy",
+      "ms": 1636.4744590000046,
+      "outcome": "ok"
+    },
+    {
+      "name": "commit_ms",
+      "clone": "copy",
+      "ms": 12.63383399999293,
+      "outcome": "ok"
+    },
+    {
+      "name": "mutation_extract_ms",
+      "clone": "copy",
+      "ms": 1633.9510829999927,
+      "outcome": "ok"
+    },
+    {
+      "name": "commit_ms",
+      "clone": "copy",
+      "ms": 14.044792000000598,
+      "outcome": "ok"
+    },
+    {
+      "name": "concurrent_4",
+      "clone": "copy",
+      "ms": 20439.296790999993,
+      "outcome": "ok"
+    },
+    {
+      "name": "replica_refresh_ms",
+      "clone": "copy",
+      "ms": 24345.298584000004,
+      "outcome": "ok"
+    },
+    {
+      "name": "replica_refresh_ms",
+      "clone": "copy",
+      "ms": 24383.526499999993,
+      "outcome": "ok"
+    },
+    {
+      "name": "replica_refresh_ms",
+      "clone": "copy",
+      "ms": 24372.406707999995,
+      "outcome": "ok"
+    },
+    {
+      "name": "replica_refresh_ms",
+      "clone": "copy",
+      "ms": 24395.793917000003,
+      "outcome": "ok"
+    },
+    {
+      "name": "replica_refresh_ms",
+      "clone": "copy",
+      "ms": 26212.296749999994,
+      "outcome": "ok"
+    },
+    {
+      "name": "replica_refresh_ms",
+      "clone": "copy",
+      "ms": 26230.481165999998,
+      "outcome": "ok"
+    },
+    {
+      "name": "replica_refresh_ms",
+      "clone": "copy",
+      "ms": 26241.416666999998,
+      "outcome": "ok"
+    },
+    {
+      "name": "replica_refresh_ms",
+      "clone": "copy",
+      "ms": 26232.06020899999,
+      "outcome": "ok"
+    },
+    {
+      "name": "mutation_extract_ms",
+      "clone": "copy",
+      "ms": 1666.6507499999861,
+      "outcome": "ok"
+    },
+    {
+      "name": "commit_ms",
+      "clone": "copy",
+      "ms": 11.546875,
+      "outcome": "ok"
+    },
+    {
+      "name": "mutation_extract_ms",
+      "clone": "copy",
+      "ms": 1717.6807919999992,
+      "outcome": "ok"
+    },
+    {
+      "name": "commit_ms",
+      "clone": "copy",
+      "ms": 12.27820800000336,
+      "outcome": "ok"
+    },
+    {
+      "name": "mutation_extract_ms",
+      "clone": "copy",
+      "ms": 1682.9148339999956,
+      "outcome": "ok"
+    },
+    {
+      "name": "commit_ms",
+      "clone": "copy",
+      "ms": 13.420874999996158,
+      "outcome": "ok"
+    },
+    {
+      "name": "mutation_extract_ms",
+      "clone": "copy",
+      "ms": 1672.8851660000073,
+      "outcome": "ok"
+    },
+    {
+      "name": "commit_ms",
+      "clone": "copy",
+      "ms": 12.667167000006884,
+      "outcome": "ok"
+    },
+    {
+      "name": "mutation_extract_ms",
+      "clone": "copy",
+      "ms": 1716.4354590000003,
+      "outcome": "ok"
+    },
+    {
+      "name": "commit_ms",
+      "clone": "copy",
+      "ms": 13.224791999993613,
+      "outcome": "ok"
+    },
+    {
+      "name": "mutation_extract_ms",
+      "clone": "copy",
+      "ms": 1888.6806249999936,
+      "outcome": "ok"
+    },
+    {
+      "name": "commit_ms",
+      "clone": "copy",
+      "ms": 14.324625000008382,
+      "outcome": "ok"
+    },
+    {
+      "name": "mutation_extract_ms",
+      "clone": "copy",
+      "ms": 1741.4549579999875,
+      "outcome": "ok"
+    },
+    {
+      "name": "commit_ms",
+      "clone": "copy",
+      "ms": 17.656709000002593,
+      "outcome": "ok"
+    },
+    {
+      "name": "mutation_extract_ms",
+      "clone": "copy",
+      "ms": 2090.1039579999924,
+      "outcome": "ok"
+    },
+    {
+      "name": "commit_ms",
+      "clone": "copy",
+      "ms": 18.538166999991518,
+      "outcome": "ok"
+    },
+    {
+      "name": "concurrent_8",
+      "clone": "copy",
+      "ms": 40593.142875000005,
+      "outcome": "ok"
+    },
+    {
+      "name": "replica_refresh_ms",
+      "clone": "reflink",
+      "ms": 4310.0007500000065,
+      "outcome": "error"
+    },
+    {
+      "name": "checkpoint_ms",
+      "clone": "reflink",
+      "ms": 28.4382079999923,
+      "outcome": "ok"
+    },
+    {
+      "name": "checkpoint",
+      "clone": "reflink",
+      "ms": 28.50304200001119,
+      "outcome": "ok"
+    },
+    {
+      "name": "materialise_ms",
+      "clone": "reflink",
+      "ms": 10.745499999989988,
+      "outcome": "ok"
+    },
+    {
+      "name": "warm_activation",
+      "clone": "reflink",
+      "ms": 10.781916000007186,
+      "outcome": "ok"
+    },
+    {
+      "name": "checkpoint_ms",
+      "clone": "reflink",
+      "ms": 18.04237499998999,
+      "outcome": "ok"
+    },
+    {
+      "name": "materialise_ms",
+      "clone": "reflink",
+      "ms": 3620.3573749999923,
+      "outcome": "ok"
+    },
+    {
+      "name": "restore_ms",
+      "clone": "reflink",
+      "ms": 3631.714458000002,
+      "outcome": "ok"
+    },
+    {
+      "name": "cold_restore",
+      "clone": "reflink",
+      "ms": 3631.748542000001,
+      "outcome": "ok"
+    }
+  ],
+  "groups": [
+    {
+      "key": "copy/materialise_ms",
+      "count": 1,
+      "p50_ms": 11138.511792000001,
+      "p95_ms": 11138.511792000001
+    },
+    {
+      "key": "copy/cold_materialisation",
+      "count": 1,
+      "p50_ms": 11138.640083999999,
+      "p95_ms": 11138.640083999999
+    },
+    {
+      "key": "copy/replica_refresh_ms",
+      "count": 22,
+      "p50_ms": 13090.853791000001,
+      "p95_ms": 26232.06020899999
+    },
+    {
+      "key": "copy/mutation_extract_ms",
+      "count": 17,
+      "p50_ms": 1666.6507499999861,
+      "p95_ms": 2090.1039579999924
+    },
+    {
+      "key": "copy/commit_ms",
+      "count": 17,
+      "p50_ms": 13.420874999996158,
+      "p95_ms": 18.538166999991518
+    },
+    {
+      "key": "copy/publish_1_files",
+      "count": 1,
+      "p50_ms": 1298.360332999997,
+      "p95_ms": 1298.360332999997
+    },
+    {
+      "key": "copy/publish_100_files",
+      "count": 1,
+      "p50_ms": 1447.1600410000028,
+      "p95_ms": 1447.1600410000028
+    },
+    {
+      "key": "copy/excluded_64MiB",
+      "count": 1,
+      "p50_ms": 1353.286500000002,
+      "p95_ms": 1353.286500000002
+    },
+    {
+      "key": "copy/concurrent_2",
+      "count": 1,
+      "p50_ms": 6743.814750000005,
+      "p95_ms": 6743.814750000005
+    },
+    {
+      "key": "copy/concurrent_4",
+      "count": 1,
+      "p50_ms": 20439.296790999993,
+      "p95_ms": 20439.296790999993
+    },
+    {
+      "key": "copy/concurrent_8",
+      "count": 1,
+      "p50_ms": 40593.142875000005,
+      "p95_ms": 40593.142875000005
+    },
+    {
+      "key": "reflink/replica_refresh_ms",
+      "count": 0,
+      "p50_ms": null,
+      "p95_ms": null
+    },
+    {
+      "key": "reflink/checkpoint_ms",
+      "count": 2,
+      "p50_ms": 28.4382079999923,
+      "p95_ms": 28.4382079999923
+    },
+    {
+      "key": "reflink/checkpoint",
+      "count": 1,
+      "p50_ms": 28.50304200001119,
+      "p95_ms": 28.50304200001119
+    },
+    {
+      "key": "reflink/materialise_ms",
+      "count": 2,
+      "p50_ms": 3620.3573749999923,
+      "p95_ms": 3620.3573749999923
+    },
+    {
+      "key": "reflink/warm_activation",
+      "count": 1,
+      "p50_ms": 10.781916000007186,
+      "p95_ms": 10.781916000007186
+    },
+    {
+      "key": "reflink/restore_ms",
+      "count": 1,
+      "p50_ms": 3631.714458000002,
+      "p95_ms": 3631.714458000002
+    },
+    {
+      "key": "reflink/cold_restore",
+      "count": 1,
+      "p50_ms": 3631.748542000001,
+      "p95_ms": 3631.748542000001
+    }
+  ],
+  "commandBenchmarks": "Use scripts/benchmark-workspace-commands.mjs on the same NVMe host for paired install/typecheck/build trials"
+}

@@ -1,0 +1,102 @@
+{
+  "schema": 1,
+  "trials": [
+    {
+      "name": "install",
+      "warmth": "cold",
+      "kind": "baseline",
+      "ms": 70413.013125,
+      "code": 0,
+      "signal": null
+    },
+    {
+      "name": "install",
+      "warmth": "cold",
+      "kind": "replica",
+      "ms": 60729.17841700002,
+      "code": 0,
+      "signal": null
+    },
+    {
+      "name": "install",
+      "warmth": "warm",
+      "kind": "baseline",
+      "ms": 758.0083750000049,
+      "code": 0,
+      "signal": null
+    },
+    {
+      "name": "install",
+      "warmth": "warm",
+      "kind": "replica",
+      "ms": 740.7222499999916,
+      "code": 0,
+      "signal": null
+    },
+    {
+      "name": "typecheck",
+      "warmth": "cold",
+      "kind": "baseline",
+      "ms": 31714.341958000005,
+      "code": 2,
+      "signal": null
+    },
+    {
+      "name": "typecheck",
+      "warmth": "cold",
+      "kind": "replica",
+      "ms": 29282.918208000017,
+      "code": 2,
+      "signal": null
+    },
+    {
+      "name": "typecheck",
+      "warmth": "warm",
+      "kind": "baseline",
+      "ms": 5145.550999999978,
+      "code": 1,
+      "signal": null
+    },
+    {
+      "name": "typecheck",
+      "warmth": "warm",
+      "kind": "replica",
+      "ms": 5225.982416999992,
+      "code": 1,
+      "signal": null
+    },
+    {
+      "name": "build",
+      "warmth": "cold",
+      "kind": "baseline",
+      "ms": 27769.329582999984,
+      "code": 2,
+      "signal": null
+    },
+    {
+      "name": "build",
+      "warmth": "cold",
+      "kind": "replica",
+      "ms": 28489.008125000022,
+      "code": 2,
+      "signal": null
+    },
+    {
+      "name": "build",
+      "warmth": "warm",
+      "kind": "baseline",
+      "ms": 12242.440832999971,
+      "code": 2,
+      "signal": null
+    },
+    {
+      "name": "build",
+      "warmth": "warm",
+      "kind": "replica",
+      "ms": 12764.636999999988,
+      "code": 2,
+      "signal": null
+    }
+  ],
+  "coldDefinition": "local application caches cleared; OS cache not flushed"
+}

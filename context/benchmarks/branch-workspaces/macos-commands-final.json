@@ -1,0 +1,70 @@
+{
+  "schema": 1,
+  "trials": [
+    {
+      "name": "typecheck",
+      "warmth": "cold",
+      "kind": "baseline",
+      "ms": 39164.620125,
+      "code": 0,
+      "signal": null
+    },
+    {
+      "name": "typecheck",
+      "warmth": "cold",
+      "kind": "replica",
+      "ms": 41083.13854099999,
+      "code": 0,
+      "signal": null
+    },
+    {
+      "name": "typecheck",
+      "warmth": "warm",
+      "kind": "baseline",
+      "ms": 1494.2477910000016,
+      "code": 0,
+      "signal": null
+    },
+    {
+      "name": "typecheck",
+      "warmth": "warm",
+      "kind": "replica",
+      "ms": 1407.5544580000133,
+      "code": 0,
+      "signal": null
+    },
+    {
+      "name": "build",
+      "warmth": "cold",
+      "kind": "baseline",
+      "ms": 55120.84333300001,
+      "code": 0,
+      "signal": null
+    },
+    {
+      "name": "build",
+      "warmth": "cold",
+      "kind": "replica",
+      "ms": 55272.252666000015,
+      "code": 0,
+      "signal": null
+    },
+    {
+      "name": "build",
+      "warmth": "warm",
+      "kind": "baseline",
+      "ms": 1391.5394999999844,
+      "code": 0,
+      "signal": null
+    },
+    {
+      "name": "build",
+      "warmth": "warm",
+      "kind": "replica",
+      "ms": 1340.381167000014,
+      "code": 0,
+      "signal": null
+    }
+  ],
+  "coldDefinition": "local application caches cleared; OS cache not flushed"
+}
