@@ -20,24 +20,26 @@ resource "aws_security_group" "metadata" {
   }
 }
 resource "aws_db_instance" "workspace" {
-  identifier                  = "agor-workspace-authority"
-  engine                      = "postgres"
-  instance_class              = "db.t4g.micro"
-  allocated_storage           = 20
-  storage_type                = "gp3"
-  storage_encrypted           = true
-  db_name                     = "agor_workspace"
-  username                    = "agor_bootstrap"
-  manage_master_user_password = true
-  multi_az                    = true
-  publicly_accessible         = false
-  db_subnet_group_name        = aws_db_subnet_group.workspace.name
-  vpc_security_group_ids      = [aws_security_group.metadata.id]
-  backup_retention_period     = 7
-  deletion_protection         = true
-  skip_final_snapshot         = false
-  final_snapshot_identifier   = "agor-workspace-authority-final"
-  auto_minor_version_upgrade  = true
+  identifier                          = "agor-workspace-authority"
+  engine                              = "postgres"
+  instance_class                      = "db.t4g.micro"
+  allocated_storage                   = 20
+  storage_type                        = "gp3"
+  storage_encrypted                   = true
+  db_name                             = "agor_workspace"
+  username                            = "agor_bootstrap"
+  manage_master_user_password         = true
+  multi_az                            = true
+  iam_database_authentication_enabled = true
+  apply_immediately                   = true
+  publicly_accessible                 = false
+  db_subnet_group_name                = aws_db_subnet_group.workspace.name
+  vpc_security_group_ids              = [aws_security_group.metadata.id]
+  backup_retention_period             = 7
+  deletion_protection                 = true
+  skip_final_snapshot                 = false
+  final_snapshot_identifier           = "agor-workspace-authority-final"
+  auto_minor_version_upgrade          = true
 }
 resource "aws_kms_key" "workspace" {
   description             = "Agor isolated test workspace blobs"
@@ -72,14 +74,15 @@ resource "aws_s3_bucket_policy" "workspace" {
 }
 resource "aws_secretsmanager_secret" "workspace_runtime" {
   name        = "agor-workspace-runtime"
-  description = "Trusted worker SQL credential and control capability; never injected into SDK containers"
+  description = "Trusted worker database address and control capability; SQL uses short-lived IAM authentication"
 }
 resource "aws_iam_role_policy" "workspace" {
   role = aws_iam_role.app.id
   policy = jsonencode({ Version = "2012-10-17", Statement = [
     { Effect = "Allow", Action = ["s3:GetObject", "s3:PutObject"], Resource = "${aws_s3_bucket.workspace.arn}/tenants/*/workspace-blobs/*" },
     { Effect = "Allow", Action = ["kms:Decrypt", "kms:GenerateDataKey"], Resource = aws_kms_key.workspace.arn, Condition = { StringEquals = { "kms:ViaService" = "s3.ap-southeast-2.amazonaws.com" } } },
-    { Effect = "Allow", Action = ["secretsmanager:GetSecretValue"], Resource = aws_secretsmanager_secret.workspace_runtime.arn }
+    { Effect = "Allow", Action = ["secretsmanager:GetSecretValue"], Resource = aws_secretsmanager_secret.workspace_runtime.arn },
+    { Effect = "Allow", Action = ["rds-db:connect"], Resource = "arn:aws:rds-db:ap-southeast-2:${data.aws_caller_identity.current.account_id}:dbuser:${aws_db_instance.workspace.resource_id}/agor_worker" }
   ] })
 }
 resource "aws_security_group" "worker_rpc" {

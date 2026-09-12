@@ -10,7 +10,6 @@ import { availableParallelism, totalmem } from 'node:os';
 import path from 'node:path';
 import type { BranchID, TenantID } from '@agor/core/types';
 import { BranchWorkspaceCoordinator, hash, type WorkspaceOptions } from '@agor/core/workspaces';
-import postgres from 'postgres';
 import { z } from 'zod';
 import { browseBranchFiles, readBranchFile } from '../commands/files.js';
 import { buildFileResults } from '../commands/git.js';
@@ -20,11 +19,14 @@ import {
   BranchFilesReadPayloadSchema,
   PromptPayloadSchema,
 } from '../payload-types.js';
+import { connectWorkspaceAuthority } from './connection.js';
 import { S3WorkspaceBlobs } from './s3-blobs.js';
 import { WorkerSqlAuthority } from './sql-authority.js';
 
 const Config = z.object({
   databaseUrl: z.string(),
+  databaseIamAuth: z.boolean().default(false),
+  region: z.string().default('ap-southeast-2'),
   sslCaPath: z.string(),
   bucket: z.string(),
   root: z.string(),
@@ -81,10 +83,7 @@ function json(res: ServerResponse, status: number, value: unknown) {
 
 export async function startWorker(configPath: string) {
   const config = Config.parse(JSON.parse(await readFile(configPath, 'utf8')));
-  const sql = postgres(config.databaseUrl, {
-    max: 10,
-    ssl: { ca: await readFile(config.sslCaPath, 'utf8'), rejectUnauthorized: true },
-  });
+  const sql = await connectWorkspaceAuthority(config);
   const host = `${config.origin}#${randomUUID()}`;
   const options: WorkspaceOptions = {
     root: config.root,

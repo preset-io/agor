@@ -92,16 +92,16 @@ Set `workspace_release = { archive = "/absolute/source.tar.gz", sha = "<content-
 when publishing a corrected runtime. Preserve the initial `source_sha` to avoid
 replacing the application host. `build-workspace-runtime.sh <digest>` builds the
 same source image on both hosts. `configure-workspace-worker.sh <digest>` installs
-Claude through Agor, reads the runtime secret into a root-only controller config,
+Claude through Agor, reads the control capability into a root-only controller config,
 and starts the trusted worker service. Initialize `workspace-authority.sql` once
 using the database owner and grant a NOSUPERUSER/NOBYPASSRLS worker role only
-SELECT/INSERT/UPDATE. RDS connections verify the AWS CA bundle and hostname.
+SELECT/INSERT/UPDATE plus `rds_iam`. Set its password to NULL. RDS connections obtain a fresh IAM authentication token for each connection and verify the AWS CA bundle and hostname. The EC2 role has `rds-db:connect` only for this database/user.
 
 Copy `enable-workspace-runtime.mjs` to `/opt/agor/workspace/enable.mjs`, then run
 `rollout-workspace.py <digest>` on the app host. It refuses active tasks, preserves
 the user data bind and a rollback container/config, enables the existing executor
 command template, and verifies application health. The dispatcher capability is
-mounted only into the daemon. The SQL credential, AWS role and Docker socket are
+mounted only into the daemon. The AWS role and Docker socket are
 available only to the trusted controller. Child SDK/tool containers receive
 neither cloud authority nor another branch's filesystem.
 

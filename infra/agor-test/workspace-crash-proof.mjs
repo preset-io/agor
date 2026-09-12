@@ -4,7 +4,9 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 
 const require = createRequire('/opt/agor-runtime/lib/node_modules/agor-live/package.json');
-const postgres = require('postgres');
+const { connectWorkspaceAuthority } = await import(
+  '/opt/agor-runtime/lib/node_modules/agor-live/dist/executor/workspaces/connection.js'
+);
 const { BranchWorkspaceCoordinator } = await import(require.resolve('@agor/core/workspaces'));
 const { WorkerSqlAuthority } = await import(
   '/opt/agor-runtime/lib/node_modules/agor-live/dist/executor/workspaces/sql-authority.js'
@@ -15,10 +17,7 @@ const { S3WorkspaceBlobs } = await import(
 const config = JSON.parse(await readFile('/run/proof/config.json', 'utf8'));
 const scope = JSON.parse(await readFile('/run/proof/crash-scope.json', 'utf8'));
 const phase = process.argv[2];
-const sql = postgres(config.databaseUrl, {
-  ssl: { ca: await readFile(config.sslCaPath, 'utf8'), rejectUnauthorized: true },
-  max: 2,
-});
+const sql = await connectWorkspaceAuthority(config);
 const metadata = new WorkerSqlAuthority(sql, scope);
 const c = new BranchWorkspaceCoordinator(
   scope,

@@ -13,7 +13,7 @@ release=sys.argv[1]
 secret=json.load(open('/opt/agor/workspace/runtime-secret.json'))
 ip=subprocess.check_output(['hostname','-I'],text=True).split()[0]
 entry='/opt/agor-runtime/lib/node_modules/agor-live/dist/executor/cli.js'
-config={**secret,'sslCaPath':'/run/agor-worker/rds-ca.pem','bucket':'agor-workspace-blobs-148253003792','root':'/var/lib/agor','origin':'http://'+ip+':8787','image':'agor-workspace:'+release,'port':8787,'daemonUrl':'https://agor.skellige.com.au','managedToolsRoot':'/opt/agor/agentic-tools','sourceHome':'/home/agor','executorEntry':entry,'clone':'reflink'}
+config={**secret,'databaseIamAuth':True,'sslCaPath':'/run/agor-worker/rds-ca.pem','bucket':'agor-workspace-blobs-148253003792','root':'/var/lib/agor','origin':'http://'+ip+':8787','image':'agor-workspace:'+release,'port':8787,'daemonUrl':'https://agor.skellige.com.au','managedToolsRoot':'/opt/agor/agentic-tools','sourceHome':'/home/agor','executorEntry':entry,'clone':'reflink'}
 json.dump(config,open('/opt/agor/workspace/config.json','w'))
 if ip=='10.87.2.164':
  json.dump({'workers':['http://10.87.2.164:8787','http://10.87.1.107:8787'],'controlToken':secret['controlToken'],'executorEntry':entry},open('/srv/agor/dispatcher.json','w'))

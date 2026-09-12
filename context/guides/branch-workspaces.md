@@ -81,7 +81,7 @@ disabled. Its `agor_workspace.execute` MCP tool calls the trusted controller,
 which refreshes a private replica, starts a separate local Docker tool container,
 removes the entire container before publication, and returns the structured
 commit/conflict result. A repeated HTTP invocation returns its first result and
-does not execute the command again. SQL/S3 authority and the Docker socket are
+does not execute the command again. IAM database/S3 authority and the Docker socket are
 never mounted into either child container. The worker verifies the task token
 through Agor and rechecks task authority before publication.
 
