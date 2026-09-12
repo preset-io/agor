@@ -2330,6 +2330,25 @@ export async function deleteBranch(repoPath: string, branchName: string): Promis
  */
 export { simpleGit };
 
+async function cloneReflinkTree(source: string, destination: string): Promise<void> {
+  if (process.platform === 'linux') {
+    await promisify(execFile)('cp', [
+      '-a',
+      '--reflink=always',
+      '--no-preserve=ownership',
+      '--',
+      `${source}/.`,
+      destination,
+    ]);
+  } else {
+    await cp(source, destination, {
+      recursive: true,
+      verbatimSymlinks: true,
+      mode: constants.COPYFILE_FICLONE_FORCE,
+    });
+  }
+}
+
 /** Create private Git/workspace files from an immutable local checkout using COW extents.
  * The cache belongs to the trusted executor, never a model/tool mount. Authenticated
  * fetch only sees a clean staging repo; mutable repository config/hooks are not copied.
@@ -2363,7 +2382,7 @@ export async function createBranchAsReflink(options: {
         origin,
         options.depth,
         options.ref,
-        options.refType,
+        options.refType ?? 'branch',
       ])
     )
     .digest('hex');
@@ -2376,14 +2395,22 @@ export async function createBranchAsReflink(options: {
     await git.init();
     await rm(join(stage, '.git', 'hooks'), { recursive: true, force: true });
     let reference = options.referencePath;
+    let trustedTemplate = false;
     try {
       const latest = (await readFile(join(cache, 'latest'), 'utf8')).trim();
       if (!/^[a-f0-9]{40,64}$/.test(latest)) throw new Error('Invalid reflink cache pointer');
       reference = join(cache, latest);
+      trustedTemplate = true;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
     }
-    if (reference && existsSync(reference)) {
+    if (trustedTemplate && reference) {
+      // Only our immutable cache may supply config and refs. Unlike a mutable
+      // repository it contains no user hooks, helpers, includes or credentials.
+      // Cloning the whole private Git tree also avoids hundreds of update-ref
+      // processes just to recreate tags already present in the cache.
+      await cloneReflinkTree(join(reference, '.git'), join(stage, '.git'));
+    } else if (reference && existsSync(reference)) {
       const { git: source } = createGit(reference);
       const objects = resolve(reference, (await source.revparse(['--git-path', 'objects'])).trim());
       // Refuse external object stores rather than inheriting alternates or following symlinks.
@@ -2418,6 +2445,7 @@ export async function createBranchAsReflink(options: {
       if (/^[a-f0-9]{40,64}$/.test(tip)) await git.raw(['update-ref', 'refs/heads/seed', tip]);
     }
     const namespace = options.refType === 'tag' ? 'refs/tags' : 'refs/heads';
+    const seedMs = Math.round(performance.now() - started);
     const fetchStarted = performance.now();
     const { git: transport } = createAuthenticatedGitTransport(remote, options.env, stage);
     await transport.fetch([
@@ -2446,7 +2474,7 @@ export async function createBranchAsReflink(options: {
         const tag = (await git.revparse(['refs/agor/base'])).trim();
         await git.raw(['update-ref', `refs/tags/${options.ref}`, tag]);
       }
-      await git.addRemote('origin', origin);
+      if (!trustedTemplate) await git.addRemote('origin', origin);
       await git.raw(['reset', '--hard', commit]);
       try {
         await rename(stage, template);
@@ -2464,24 +2492,7 @@ export async function createBranchAsReflink(options: {
     await mkdir(options.targetPath, { mode: 0o700 });
     destinationCreated = true;
     const cloneStarted = performance.now();
-    if (process.platform === 'linux') {
-      // GNU cp batches traversal in native code. Node's per-file asynchronous
-      // copy loop adds tens of seconds on a large tree even when data is reflinked.
-      await promisify(execFile)('cp', [
-        '-a',
-        '--reflink=always',
-        '--no-preserve=ownership',
-        '--',
-        `${template}/.`,
-        options.targetPath,
-      ]);
-    } else {
-      await cp(template, options.targetPath, {
-        recursive: true,
-        verbatimSymlinks: true,
-        mode: constants.COPYFILE_FICLONE_FORCE,
-      });
-    }
+    await cloneReflinkTree(template, options.targetPath);
     const reflinkMs = Math.round(performance.now() - cloneStarted);
     const { git: branchGit } = createGit(options.targetPath);
     if (options.newBranchName || options.refType !== 'tag') {
@@ -2498,6 +2509,7 @@ export async function createBranchAsReflink(options: {
         event: 'branch_reflink_created',
         cacheHit,
         commit,
+        seedMs,
         fetchMs,
         reflinkMs,
         totalMs: Math.round(performance.now() - started),
