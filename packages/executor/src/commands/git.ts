@@ -29,6 +29,7 @@ import {
   cloneRepo,
   createBranch,
   createBranchAsClone,
+  createBranchAsReflink,
   createGit,
   deleteBranch,
   deleteBranchDirectory,
@@ -924,7 +925,8 @@ export async function handleGitBranchAdd(
           `ref=${cloneRef}${newBranchName ? `, newBranch=${newBranchName}` : ''}, ` +
           `depth=${cloneDepth ?? 'full'}, referenceHint=${referencePath ?? 'none'})`
       );
-      await createBranchAsClone({
+      const reflinkRoot = process.env.AGOR_BRANCH_REFLINK_ROOT;
+      const cloneOptions = {
         remoteUrl: cloneRemoteUrl,
         ...(cloneRemoteUrl !== remoteUrl ? { originRemoteUrl: remoteUrl } : {}),
         targetPath: branchPath,
@@ -936,7 +938,16 @@ export async function handleGitBranchAdd(
         // gracefully if the path isn't actually mounted here.
         ...(referencePath ? { referencePath } : {}),
         env,
-      });
+      };
+      if (reflinkRoot) {
+        await createBranchAsReflink({
+          ...cloneOptions,
+          referencePath: cloneRemoteUrl === remoteUrl ? repo.local_path : undefined,
+          cacheRoot: reflinkRoot,
+          cacheScope: `${repoId}/${payload.params.userId ?? 'executor'}`,
+          refType,
+        });
+      } else await createBranchAsClone(cloneOptions);
     } else if (restoreMode && sourceBranch) {
       // Restore mode: smart branch detection — checks if branch exists on remote,
       // falls back to creating from base ref if not. Safe because it only creates

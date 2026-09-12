@@ -10,6 +10,7 @@ const config = z
     workers: z.array(z.string().url()).min(1),
     controlToken: z.string().min(32),
     executorEntry: z.string(),
+    branchReflinkRoot: z.string().optional(),
   })
   .parse(JSON.parse(await readFile(process.argv[2], 'utf8')));
 const tenantId = process.argv[3];
@@ -111,7 +112,7 @@ if (payload.command === 'prompt' && payload.requiresReplicatedWorkspace) {
 } else {
   const child = spawn(process.execPath, [config.executorEntry, '--stdin'], {
     stdio: ['pipe', 'inherit', 'inherit'],
-    env: process.env,
+    env: { ...process.env, AGOR_BRANCH_REFLINK_ROOT: config.branchReflinkRoot ?? '' },
   });
   child.stdin.end(raw);
   child.once('exit', (code) => {

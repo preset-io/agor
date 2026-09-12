@@ -5,7 +5,7 @@ release=sys.argv[1]
 assert re.fullmatch(r'[a-f0-9]{16,64}',release)
 def docker(*args):
  return subprocess.check_output(['docker',*args],text=True).strip()
-backup='agor-pre-workspace'
+backup='agor-before-'+release
 if backup in docker('ps','-a','--format','{{.Names}}').splitlines():
  raise SystemExit('A prior workspace rollback container exists; inspect it before another rollout')
 c=sqlite3.connect('file:/srv/agor/home/.agor/agor.db?mode=ro',uri=True)
@@ -13,7 +13,7 @@ assert c.execute("select count(*) from tasks where status in ('running','dispatc
 c.close()
 info=json.loads(docker('inspect','agor'))[0]
 config='/srv/agor/home/.agor/config.yaml'
-config_backup='/opt/agor/workspace/config-before-rollout.yaml'
+config_backup='/opt/agor/workspace/config-before-'+release+'.yaml'
 assert not os.path.exists(config_backup)
 shutil.copyfile(config,config_backup);os.chmod(config_backup,0o600)
 values=[v for v in info['Config']['Env'] if not v.startswith(('AGOR_AGENTIC_TOOLS=','AGOR_AGENTIC_TOOLS_DIR=','AGOR_MANAGED_AGENTIC_TOOLS='))]

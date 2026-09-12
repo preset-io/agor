@@ -5,9 +5,21 @@
  * Supports SSH keys, user environment variables (GITHUB_TOKEN), and system credential helpers.
  */
 
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { constants, existsSync } from 'node:fs';
-import { lstat, mkdir, mkdtemp, open, readdir, readFile, rm, stat } from 'node:fs/promises';
+import {
+  cp,
+  lstat,
+  mkdir,
+  mkdtemp,
+  open,
+  readdir,
+  readFile,
+  rename,
+  rm,
+  stat,
+  writeFile,
+} from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import { simpleGit } from 'simple-git';
@@ -2315,3 +2327,168 @@ export async function deleteBranch(repoPath: string, branchName: string): Promis
  * env hardening, and consistent git binary selection.
  */
 export { simpleGit };
+
+/** Create private Git/workspace files from an immutable local checkout using COW extents.
+ * The cache belongs to the trusted executor, never a model/tool mount. Authenticated
+ * fetch only sees a clean staging repo; mutable repository config/hooks are not copied.
+ */
+export async function createBranchAsReflink(options: {
+  remoteUrl: string;
+  originRemoteUrl?: string;
+  referencePath?: string;
+  cacheRoot: string;
+  cacheScope: string;
+  targetPath: string;
+  ref: string;
+  refType?: 'branch' | 'tag';
+  newBranchName?: string;
+  depth?: number;
+  env?: UserGitEnvironment;
+}): Promise<void> {
+  const started = performance.now();
+  const remote = assertSafeGitRemoteUrl(stripGitUrlCredentials(options.remoteUrl));
+  const origin = assertSafeGitRemoteUrl(stripGitUrlCredentials(options.originRemoteUrl ?? remote));
+  await validateGitRef(options.ref);
+  if (options.newBranchName) await validateGitRef(options.newBranchName);
+  if (options.depth !== undefined && (!Number.isInteger(options.depth) || options.depth < 1))
+    throw new Error('Invalid clone depth');
+  if (existsSync(options.targetPath)) throw new Error('Branch destination already exists');
+  const key = createHash('sha256')
+    .update(
+      JSON.stringify([
+        options.cacheScope,
+        remote,
+        origin,
+        options.depth,
+        options.ref,
+        options.refType,
+      ])
+    )
+    .digest('hex');
+  const cache = join(options.cacheRoot, key);
+  await mkdir(cache, { recursive: true, mode: 0o700 });
+  const stage = await mkdtemp(join(cache, 'fetch-'));
+  let destinationCreated = false;
+  try {
+    const { git } = createGit(stage);
+    await git.init();
+    await rm(join(stage, '.git', 'hooks'), { recursive: true, force: true });
+    let reference = options.referencePath;
+    try {
+      const latest = (await readFile(join(cache, 'latest'), 'utf8')).trim();
+      if (!/^[a-f0-9]{40,64}$/.test(latest)) throw new Error('Invalid reflink cache pointer');
+      reference = join(cache, latest);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    }
+    if (reference && existsSync(reference)) {
+      const { git: source } = createGit(reference);
+      const objects = resolve(reference, (await source.revparse(['--git-path', 'objects'])).trim());
+      // Refuse external object stores rather than inheriting alternates or following symlinks.
+      if (existsSync(join(objects, 'info', 'alternates')))
+        throw new Error('Reflink seed has external Git alternates');
+      await cp(objects, join(stage, '.git', 'objects'), {
+        recursive: true,
+        mode: constants.COPYFILE_FICLONE_FORCE,
+        filter: async (entry) => {
+          if ((await lstat(entry)).isSymbolicLink()) throw new Error('Symlink in Git object seed');
+          return true;
+        },
+      });
+      const tags = (
+        await source.raw(['for-each-ref', '--format=%(refname) %(objectname)', 'refs/tags'])
+      ).trim();
+      for (const line of tags.split('\n').filter(Boolean)) {
+        const [ref, oid] = line.split(' ');
+        await git.raw(['update-ref', ref, oid]);
+      }
+      const shallow = resolve(reference, (await source.revparse(['--git-path', 'shallow'])).trim());
+      if (existsSync(shallow)) await cp(shallow, join(stage, '.git', 'shallow'));
+      const candidate =
+        reference === options.referencePath
+          ? options.refType === 'tag'
+            ? `refs/tags/${options.ref}`
+            : `refs/remotes/origin/${options.ref}`
+          : 'HEAD';
+      const tip = (
+        await source.revparse(['--verify', `${candidate}^{commit}`]).catch(() => '')
+      ).trim();
+      if (/^[a-f0-9]{40,64}$/.test(tip)) await git.raw(['update-ref', 'refs/heads/seed', tip]);
+    }
+    const namespace = options.refType === 'tag' ? 'refs/tags' : 'refs/heads';
+    const fetchStarted = performance.now();
+    const { git: transport } = createAuthenticatedGitTransport(remote, options.env, stage);
+    await transport.fetch([
+      ...(existsSync(join(stage, '.git', 'shallow')) && !options.depth ? ['--unshallow'] : []),
+      ...(options.depth ? [`--depth=${options.depth}`] : []),
+      remote,
+      `+${namespace}/${options.ref}:refs/agor/base`,
+    ]);
+    const fetchMs = Math.round(performance.now() - fetchStarted);
+    const commit = (await git.revparse(['--verify', 'refs/agor/base^{commit}'])).trim();
+    const tagIdentity = await git.raw([
+      'for-each-ref',
+      '--format=%(refname) %(objectname)',
+      'refs/tags',
+    ]);
+    const treeKey = createHash('sha256')
+      .update(commit + tagIdentity)
+      .digest('hex');
+    const template = join(cache, treeKey);
+    let cacheHit = existsSync(template);
+    if (!cacheHit) {
+      await git.raw(['update-ref', '-d', 'refs/heads/seed']);
+      await git.raw(['symbolic-ref', 'HEAD', 'refs/heads/base']);
+      await git.raw(['update-ref', 'refs/heads/base', commit]);
+      if (options.refType === 'tag') {
+        const tag = (await git.revparse(['refs/agor/base'])).trim();
+        await git.raw(['update-ref', `refs/tags/${options.ref}`, tag]);
+      }
+      await git.addRemote('origin', origin);
+      await git.raw(['reset', '--hard', commit]);
+      try {
+        await rename(stage, template);
+      } catch (error) {
+        if (!['EEXIST', 'ENOTEMPTY'].includes((error as NodeJS.ErrnoException).code ?? ''))
+          throw error;
+        cacheHit = true;
+      }
+    }
+    const pointer = join(cache, `latest-${randomUUID()}`);
+    await writeFile(pointer, treeKey, { mode: 0o600 });
+    await rename(pointer, join(cache, 'latest'));
+    await mkdir(dirname(options.targetPath), { recursive: true });
+    // Exclusive reservation avoids overwriting another operation's destination.
+    await mkdir(options.targetPath, { mode: 0o700 });
+    destinationCreated = true;
+    await cp(template, options.targetPath, {
+      recursive: true,
+      verbatimSymlinks: true,
+      mode: constants.COPYFILE_FICLONE_FORCE,
+    });
+    const { git: branchGit } = createGit(options.targetPath);
+    if (options.newBranchName || options.refType !== 'tag') {
+      const branch = options.newBranchName ?? options.ref;
+      await branchGit.raw(['symbolic-ref', 'HEAD', `refs/heads/${branch}`]);
+      await branchGit.raw(['update-ref', `refs/heads/${branch}`, commit]);
+      if (branch !== 'base') await branchGit.raw(['update-ref', '-d', 'refs/heads/base']);
+      if (remote === origin && options.refType !== 'tag')
+        await branchGit.raw(['update-ref', `refs/remotes/origin/${options.ref}`, commit]);
+    } else await branchGit.raw(['checkout', '--detach', commit]);
+    await addSafeDirectoryBestEffort(options.targetPath);
+    console.log(
+      JSON.stringify({
+        event: 'branch_reflink_created',
+        cacheHit,
+        commit,
+        fetchMs,
+        totalMs: Math.round(performance.now() - started),
+      })
+    );
+  } catch (error) {
+    if (destinationCreated) await rm(options.targetPath, { recursive: true, force: true });
+    throw error;
+  } finally {
+    await rm(stage, { recursive: true, force: true });
+  }
+}

@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => ({
   deleteRepoDirectory: vi.fn(),
   cloneRepo: vi.fn(),
   createBranchAsClone: vi.fn(),
+  createBranchAsReflink: vi.fn(),
   isRemoteRefVisibleForClone: vi.fn(),
   getReposDir: vi.fn(() => '/safe/repos'),
   addConfig: vi.fn(),
@@ -51,6 +52,7 @@ vi.mock('../git/index.js', async () => {
     createGit: vi.fn(() => ({ git: { addConfig: mocks.addConfig, raw: mocks.gitRaw } })),
     cloneRepo: mocks.cloneRepo,
     createBranchAsClone: mocks.createBranchAsClone,
+    createBranchAsReflink: mocks.createBranchAsReflink,
     isRemoteRefVisibleForClone: mocks.isRemoteRefVisibleForClone,
     deleteBranchDirectory: mocks.deleteBranchDirectory,
     deleteRepoDirectory: mocks.deleteRepoDirectory,
@@ -963,4 +965,49 @@ describe('managed executor git/fs commands', () => {
       environment
     );
   });
+});
+
+it('uses the trusted reflink cache for clone branches and publishes ready only after creation', async () => {
+  process.env.AGOR_BRANCH_REFLINK_ROOT = '/trusted/cache';
+  const patchedBranches: Array<Record<string, unknown>> = [];
+  createClient({
+    repo: {
+      repo_id: repoId,
+      local_path: '/trusted/repo',
+      remote_url: 'https://github.com/apache/superset.git',
+    },
+    branch: {
+      branch_id: branchId,
+      repo_id: repoId,
+      path: '/trusted/branch',
+      name: 'feature',
+      ref: 'feature',
+      base_ref: 'master',
+      new_branch: true,
+      storage_mode: 'clone',
+    },
+    patchedBranches,
+  });
+  mocks.createBranchAsReflink.mockImplementation(async () => {
+    expect(patchedBranches).not.toContainEqual({ filesystem_status: 'ready' });
+  });
+  try {
+    const result = await handleGitBranchAdd(
+      { command: 'git.branch.add', sessionToken: 'token', params: { branchId, repoId } },
+      {}
+    );
+    expect(result.success).toBe(true);
+    expect(mocks.createBranchAsReflink).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cacheRoot: '/trusted/cache',
+        referencePath: '/trusted/repo',
+        ref: 'master',
+        newBranchName: 'feature',
+      })
+    );
+    expect(patchedBranches).toContainEqual({ filesystem_status: 'ready' });
+    expect(mocks.createBranchAsClone).not.toHaveBeenCalled();
+  } finally {
+    delete process.env.AGOR_BRANCH_REFLINK_ROOT;
+  }
 });

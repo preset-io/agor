@@ -10,6 +10,11 @@ config.agentic_tools = { ...config.agentic_tools, installed: ['claude-code'] };
 config.execution = {
   ...config.execution,
   unix_user_mode: 'simple',
+  branch_storage: {
+    ...config.execution?.branch_storage,
+    default_mode: 'clone',
+    allowed_modes: ['clone'],
+  },
   executor_command_template:
     'node /opt/agor-runtime/lib/node_modules/agor-live/dist/executor/workspaces/dispatch-cli.js /run/agor/dispatcher.json {tenant_id}',
   executor_response: {

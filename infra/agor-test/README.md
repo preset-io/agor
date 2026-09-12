@@ -212,3 +212,24 @@ Immutable base caches are keyed by source content, independently of fencing epoc
 Warm replica and transcript admission refreshes metadata without an eager base
 render or redundant initial source scan. Task and tool authority checks remain in
 place; the launch lease is renewed alongside the conversation lease.
+
+### Reflink branch creation
+
+The deployment selects clone storage for new branches and enables a trusted
+`branchReflinkRoot` in the dispatcher configuration. The Git command executor on
+the app EC2 instance caches immutable source checkouts on its XFS/EBS filesystem,
+scoped by repository, initiating user, remote, base ref and depth. It seeds a clean
+fetch repository with reflinked Git objects, fetches the selected ref with scoped
+credentials, and reflinks the matching cached checkout into the branch path.
+Every branch has private files, index, refs and config; no hardlinks or Git
+alternates connect it to its source. Relative symlinks retain their original targets.
+New commits incur one cold checkout; a warm creation still contacts the remote
+before reusing a tree. Cache directories remain outside all SDK/tool mounts.
+The existing worker protocol adopts this branch on the first session tool call.
+
+`branch-reflink-proof.mjs` exercises cold/warm Superset creation on EC2 with forced
+reflinks and checks sibling isolation and Git status. The app must also be rolled
+to the release image with `rollout-workspace.py` because the initial Git lifecycle
+runs in its command executor. The rollout preserves its data, waits for health,
+and retains a release-specific rollback container/config. Existing branches are
+not converted. Both worker upgrades and app rollout require idle tasks.
