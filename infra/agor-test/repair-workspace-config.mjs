@@ -5,6 +5,7 @@ import { randomUUID } from 'node:crypto';
 import { chown, lchown, readFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import path from 'node:path';
+import { ownWorkspaceSource } from './workspace-ownership.mjs';
 
 const require = createRequire('/opt/agor-runtime/lib/node_modules/agor-live/package.json');
 const runtime = '/opt/agor-runtime/lib/node_modules/agor-live/dist/executor/workspaces';
@@ -76,6 +77,7 @@ try {
   const outcome = await c.completeTool(tool.ticket);
   assert.equal(outcome.status, 'committed');
   ticket = undefined;
+  await ownWorkspaceSource(tool.workspace, (await metadata.read()).state.tree);
   await c.drain();
   const { git } = require('@agor/git').createGit(tool.workspace);
   const status = await git.status();
