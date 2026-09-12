@@ -18,8 +18,8 @@ import path from 'node:path';
 import type { BranchID, TenantID } from '@agor/core/types';
 import {
   BranchWorkspaceCoordinator,
+  DEFAULT_EXCLUDES,
   hash,
-  included,
   type WorkspaceOptions,
 } from '@agor/core/workspaces';
 import { z } from 'zod';
@@ -71,7 +71,12 @@ async function ownTree(root: string, signal?: AbortSignal, skipLocal = false): P
   signal?.throwIfAborted();
   const stat = await lstat(root);
   if (stat.isSymbolicLink()) return;
-  if (skipLocal && stat.isDirectory() && stat.uid === 1000 && !included(path.basename(root), []))
+  if (
+    skipLocal &&
+    stat.isDirectory() &&
+    stat.uid === 1000 &&
+    DEFAULT_EXCLUDES.includes(path.basename(root))
+  )
     return;
   if (stat.uid !== 1000 || stat.gid !== 1000) await chown(root, 1000, 1000);
   if (stat.isDirectory())
