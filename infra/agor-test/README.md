@@ -42,6 +42,31 @@ securely to update or remove this deployment. Changing user-data replaces the
 instance; root EBS is deliberately retained on termination, so reattach/migrate
 state explicitly before replacement. There is no automatic backup/restore.
 
+## EC2 NAT egress
+
+`nat.tf` provisions a dedicated Amazon Linux 2023 ARM `t4g.nano` NAT instance,
+an Elastic IP, and an app-subnet route table. There is no NAT gateway. Forwarding
+and masquerading persist through a systemd service; source/destination checking
+is disabled. The instance accepts forwarded traffic only from the app subnet,
+uses IMDSv2, and is managed through SSM without an inbound SSH rule.
+
+For initial deployment, apply with `-var=nat_egress_enabled=false`, then verify
+`cloud-init status --wait`, `systemctl is-active agor-nat`, and
+`nft list table ip agor_nat` through SSM. Apply again with the default `true` to
+switch only subnet `test[2]` to NAT egress. Verify the app container's external IP
+matches `terraform output -raw nat_public_ip` and perform a GitHub clone/fetch.
+Setting the flag false restores the previous direct internet route. Existing
+app public-IP allocation is retained to avoid replacing its stateful EC2 host.
+
+The second worker shares public subnet `test[1]` with the ALB and retains direct
+internet egress. Do not point that subnet's default route at NAT: the ALB needs
+its internet-gateway route. Moving that worker to a private subnet is a separate
+host migration. This single NAT instance is a test-environment availability
+tradeoff: its failure interrupts app internet egress until it is recovered.
+
+NAT provides connectivity, not GitHub authentication or support for native Git
+operations on branches already adopted by the replicated workspace backend.
+
 ## Teardown
 
 Back up application data, then review `terraform plan -destroy` and apply the

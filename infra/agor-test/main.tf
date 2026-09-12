@@ -36,7 +36,7 @@ resource "aws_route_table" "internet" {
 resource "aws_route_table_association" "internet" {
   count          = 3
   subnet_id      = aws_subnet.test[count.index].id
-  route_table_id = aws_route_table.internet.id
+  route_table_id = count.index == 2 && var.nat_egress_enabled ? aws_route_table.app_egress.id : aws_route_table.internet.id
 }
 resource "aws_security_group" "alb" {
   name_prefix = "agor-test-alb-"
