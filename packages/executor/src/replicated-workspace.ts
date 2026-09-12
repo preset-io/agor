@@ -75,9 +75,9 @@ export function configureReplicatedClaude(
           'Run a shell command in your isolated branch replica. Use this for ALL code reads, edits, searches, installs and tests. At start it refreshes committed changes; on completion your entire source mutation is atomically committed or returns an explicit conflict. Your private Git checkout, dependencies, virtual environments, caches and build products persist locally across tools and prompts in this session. Other sessions receive source changes, not your Git index or local refs. Each command starts in /workspace with a fresh shell: repeat cd, PATH changes and virtualenv activation as needed. Use workspace .venv/node_modules for dependencies; user installs and caches in ~/.local, ~/.npm, ~/.cache and ~/.nvm also persist locally. The rest of your user home is ephemeral. Local Git commits and caches are not source revisions or durable checkpoints. Use the configured origin to publish Git commits. Shell pipelines use pipefail. For long installs or builds request timeout_ms up to 900000 (15 minutes). Background processes do not survive this tool. Never automatically retry a command after an uncertain response.',
           {
             command: z.string().min(1).max(65536),
-            timeout_ms: z.number().int().min(1000).max(900000).default(120000),
+            timeout_ms: z.number().int().min(1000).max(900000).optional(),
           },
-          async ({ command, timeout_ms }) => {
+          async ({ command, timeout_ms = 120000 }) => {
             const idempotencyKey = randomUUID();
             // Never retry an uncertain response by running the shell again.
             const response = await request(`${workspace.endpoint}/execute`, {

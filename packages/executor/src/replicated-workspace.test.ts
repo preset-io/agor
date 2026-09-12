@@ -1,3 +1,4 @@
+import * as realSdk from '@anthropic-ai/claude-agent-sdk';
 import { describe, expect, it, vi } from 'vitest';
 import {
   configureReplicatedClaude,
@@ -13,6 +14,23 @@ const descriptor = {
   cwd: '/workspace',
 };
 describe('native replicated workspace boundary', () => {
+  it('accepts omitted timeout through the real SDK and applies it in the handler', async () => {
+    const request = vi
+      .fn()
+      .mockResolvedValue(
+        new Response(JSON.stringify({ exitCode: 0, outcome: { status: 'committed' } }))
+      );
+    const options: Record<string, any> = {};
+    configureReplicatedClaude(realSdk, options, descriptor, request);
+    const server = options.mcpServers.agor_workspace.instance;
+    const entry = server._registeredTools.execute;
+    const args = await server.validateToolInput(entry, { command: 'pwd' }, 'execute');
+    await entry.handler(args, {});
+    expect(JSON.parse(request.mock.calls[0][1].body).timeout_ms).toBe(120000);
+    await expect(
+      server.validateToolInput(entry, { command: 'pwd', timeout_ms: 0 }, 'execute')
+    ).rejects.toThrow();
+  });
   it('refuses unsupported providers and keeps contexts isolated', async () => {
     await expect(withReplicatedWorkspace(descriptor, 'codex', async () => {})).rejects.toThrow();
     await withReplicatedWorkspace(descriptor, 'claude-code', async () =>

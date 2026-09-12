@@ -1,9 +1,11 @@
 /** Existing executor template transport. Control credentials never enter SDK containers. */
+
 import { spawn } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
 import { z } from 'zod';
 import { ExecutorResponsePublisher } from '../executor-response.js';
 import type { ExecutorResult } from '../payload-types.js';
+import { recordDispatchRejection } from './dispatch-diagnostic.js';
 
 const config = z
   .object({
@@ -72,10 +74,14 @@ if (payload.command === 'prompt' && payload.requiresReplicatedWorkspace) {
     headers,
     body: JSON.stringify({ tenantId, branchId, payload }),
   });
-  if (!response.ok)
-    throw new Error(
-      `Workspace dispatch rejected (${response.status}): ${(await response.text()).slice(0, 2048)}`
+  if (!response.ok) {
+    const code = await recordDispatchRejection(
+      response.status,
+      await response.text(),
+      payload.params?.taskId
     );
+    throw new Error(`${code} (${response.status})`);
+  }
   if (!response.body) throw new Error('Workspace dispatch response missing');
   for await (const chunk of response.body) process.stdout.write(chunk);
 } else if (adopted) {
