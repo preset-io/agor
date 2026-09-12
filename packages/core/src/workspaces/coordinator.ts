@@ -210,7 +210,14 @@ export class BranchWorkspaceCoordinator {
   private async base(s: WorkspaceState, signal?: AbortSignal): Promise<string> {
     const dir = path.join(this.directory, 'base');
     await mkdir(dir, { recursive: true, mode: 0o700 });
-    const target = path.join(dir, `${s.epoch}-${hash(JSON.stringify(s.tree))}`);
+    // PostgreSQL JSONB reorders object keys. Cache identity must survive a SQL round trip.
+    const identity = Object.keys(s.tree)
+      .sort()
+      .map((name) => {
+        const e = s.tree[name];
+        return [name, e.kind, e.hash, e.mode, e.size, e.target ?? null];
+      });
+    const target = path.join(dir, `${s.epoch}-${hash(JSON.stringify(identity))}`);
     try {
       if ((await lstat(target)).isDirectory()) return target;
     } catch (e) {
@@ -242,9 +249,11 @@ export class BranchWorkspaceCoordinator {
   async beginTool(
     executorId: string,
     toolId: string,
-    idempotencyKey: string
+    idempotencyKey: string,
+    signal?: AbortSignal
   ): Promise<{ ticket: ToolTicket; workspace: string }> {
     return this.measured('replica_refresh_ms', async () => {
+      signal?.throwIfAborted();
       const workspace = this.replicaPath(executorId);
       if (!toolId || !idempotencyKey) throw new WorkspaceError('INVALID', 'Tool identity required');
       const key = hash(idempotencyKey);
@@ -293,7 +302,7 @@ export class BranchWorkspaceCoordinator {
         if (previous) {
           await refresh(workspace, previous, state.tree, this.blobs, this.options.exclude);
         } else {
-          const base = await this.base(state);
+          const base = await this.base(state, signal);
           const staging = `${workspace}.${randomUUID()}`;
           try {
             await render(
@@ -302,7 +311,8 @@ export class BranchWorkspaceCoordinator {
               this.blobs,
               this.options.exclude,
               base,
-              this.options.clone
+              this.options.clone,
+              signal
             );
             // Disposable data is private to this replica. Preserve caches across tool boundaries.
             try {
@@ -336,6 +346,7 @@ export class BranchWorkspaceCoordinator {
           JSON.stringify({ ticket, tree: state.tree }),
           { mode: 0o600 }
         );
+        signal?.throwIfAborted();
         // Rendering may outlive a lease or race migration. Recheck before returning a runnable path.
         await this.metadata.mutate((raw, now) => {
           const s = this.owned(raw, now, ticket.epoch);

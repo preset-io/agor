@@ -54,12 +54,13 @@ const Execute = z.object({
 });
 type DispatchInput = z.infer<typeof Dispatch>;
 
-async function ownTree(root: string): Promise<void> {
+async function ownTree(root: string, signal?: AbortSignal): Promise<void> {
+  signal?.throwIfAborted();
   const stat = await lstat(root);
   if (stat.isSymbolicLink()) return;
   await chown(root, 1000, 1000);
   if (stat.isDirectory())
-    for (const name of await readdir(root)) await ownTree(path.join(root, name));
+    for (const name of await readdir(root)) await ownTree(path.join(root, name), signal);
 }
 
 async function body(req: IncomingMessage): Promise<unknown> {
@@ -319,192 +320,211 @@ export async function startWorker(configPath: string) {
       throw new Error('Initial source outside configured Agor home');
     await c.materialise(source, signal);
     signal.throwIfAborted();
-    const initial = await c.beginTool(
-      payload.params.taskId,
-      `initial-${payload.params.taskId}`,
-      `initial-${payload.params.taskId}`
-    );
-    await c.completeTool(initial.ticket);
-    await ownTree(initial.workspace);
-    const sdk = coordinator(tenantId, branchId, `claude/${payload.params.sessionId}`);
-    const seed = path.join(config.root, 'sdk-seeds', randomUUID());
-    await mkdir(seed, { recursive: true, mode: 0o700 });
-    if (!(await sdk.metadata.read()).state) {
-      let resumeId = session.sdk_session_id;
-      let fromSession = payload.params.sessionId;
-      if (!resumeId && session.genealogy?.forked_from_session_id) {
-        fromSession = session.genealogy.forked_from_session_id;
-        const parentResponse = await fetch(`${config.daemonUrl}/sessions/${fromSession}`, {
-          headers: { authorization: `Bearer ${payload.sessionToken}` },
-          signal: AbortSignal.timeout(10000),
-        });
-        if (!parentResponse.ok) throw new Error('Fork parent authority rejected');
-        const parent = (await parentResponse.json()) as {
-          branch_id: string;
-          sdk_session_id?: string;
-        };
-        if (parent.branch_id !== branchId)
-          throw new Error('Cross-branch transcript import requires explicit migration');
-        resumeId = parent.sdk_session_id;
-      }
-      if (resumeId) {
-        const parentState = await coordinator(
-          tenantId,
-          branchId,
-          `claude/${fromSession}`
-        ).metadata.read();
-        if (parentState.state) {
-          // Read the immutable committed transcript tree without taking the
-          // parent's lease or touching an active parent's local files.
-          const { render } = await import('@agor/core/workspaces');
-          await rm(seed, { recursive: true });
-          await render(
-            seed,
-            parentState.state.tree,
-            new S3WorkspaceBlobs(config.bucket, tenantId as TenantID),
-            []
-          );
-        } else {
-          const legacyHome =
-            payload.env?.CLAUDE_CONFIG_DIR ?? path.join(config.sourceHome, '.claude');
-          if (!legacyHome)
-            throw new Error(
-              'Resumable session has no durable transcript; explicit legacy SDK home required'
-            );
-          const canonicalHome = await realpath(legacyHome);
-          if (!canonicalHome.startsWith(`${await realpath(config.sourceHome)}/`))
-            throw new Error('Legacy SDK home outside authorized data root');
-          await importClaudeSession(canonicalHome, seed, resumeId);
-        }
-      }
-    }
-    try {
-      await sdk.materialise(seed, signal);
-    } finally {
-      await rm(seed, { recursive: true, force: true });
-    }
-    const sdkTicket = await sdk.beginTool('session', payload.params.taskId, payload.params.taskId);
-    const sdkHome = path.join(path.dirname(sdkTicket.workspace), `live-${randomUUID()}`);
-    await mkdir(sdkHome, { mode: 0o700 });
-    await copyClaudeTranscripts(sdkTicket.workspace, sdkHome);
-    await ownTree(sdkHome);
-    signal.throwIfAborted();
-    const capability = randomUUID() + randomUUID();
-    const job = {
-      input,
-      coordinator: c,
-      workspace: initial.workspace,
-      queue: Promise.resolve() as Promise<unknown>,
-      stopping: false,
-      outcomes: new Map<string, { request: string; result: Promise<unknown> }>(),
-      containers: new Set<string>(),
-      finalize: async (): Promise<void> => {
-        throw new Error('Session not ready');
-      },
-    };
-    jobs.set(capability, job);
-    const name = `agor-sdk-${payload.params.taskId}`;
-    job.containers.add(name);
-    let fenced = false;
-    let finalized = false;
-    let finalization: Promise<void> | undefined;
-    const finalize = async () => {
-      if (finalized) return;
-      job.stopping = true;
-      await job.queue;
-      const processes = await docker(['top', name, '-eo', SDK_PROCESS_COLUMNS]);
-      if (!isQuiescentSdkTree(processes.exitCode, processes.output))
-        throw new Error('SDK descendants are still running; transcript snapshot refused');
-      if (fenced) throw new Error('SDK host was fenced');
-      for (const item of await readdir(sdkTicket.workspace))
-        await rm(path.join(sdkTicket.workspace, item), { recursive: true, force: true });
-      await copyClaudeTranscripts(sdkHome, sdkTicket.workspace);
-      const outcome = await sdk.completeTool(sdkTicket.ticket);
-      if (outcome.status !== 'committed') throw new Error('SDK transcript publication conflict');
-      finalized = true;
-      await sdk.drain();
-    };
-    job.finalize = () => (finalization ??= finalize());
-    const renewal = setInterval(() => {
-      void Promise.all([
-        c.renew(),
-        ...(finalized
-          ? []
-          : [
-              sdk.renew().catch((error) => {
-                if (!finalized) throw error;
-              }),
-            ]),
-      ]).catch(async () => {
-        fenced = true;
-        for (const container of job.containers)
-          await removeContainer(container).catch((error) =>
-            console.error('Containment failed', String(error))
-          );
+    let preparationLeaseError: unknown;
+    const preparationRenewal = setInterval(() => {
+      void c.renew().catch((error) => {
+        preparationLeaseError ??= error;
       });
     }, 10000);
-    res.writeHead(200, { 'content-type': 'text/plain' });
     try {
-      const forwarded = {
-        ...payload,
-        daemonUrl: config.daemonUrl,
-        replicatedWorkspace: {
-          endpoint: `http://host.docker.internal:${config.port}`,
-          capability,
-          cwd: '/workspace',
-        },
-        env: {
-          ...payload.env,
-          CLAUDE_CONFIG_DIR: '/home/agor/.claude',
-          AGOR_AGENTIC_TOOLS_DIR: '/opt/agentic-tools',
-          AGOR_MANAGED_AGENTIC_TOOLS: '1',
+      const initial = await c.beginTool(
+        payload.params.taskId,
+        `initial-${payload.params.taskId}`,
+        `initial-${payload.params.taskId}`,
+        signal
+      );
+      await c.completeTool(initial.ticket);
+      signal.throwIfAborted();
+      await ownTree(initial.workspace, signal);
+      const sdk = coordinator(tenantId, branchId, `claude/${payload.params.sessionId}`);
+      const seed = path.join(config.root, 'sdk-seeds', randomUUID());
+      await mkdir(seed, { recursive: true, mode: 0o700 });
+      if (!(await sdk.metadata.read()).state) {
+        let resumeId = session.sdk_session_id;
+        let fromSession = payload.params.sessionId;
+        if (!resumeId && session.genealogy?.forked_from_session_id) {
+          fromSession = session.genealogy.forked_from_session_id;
+          const parentResponse = await fetch(`${config.daemonUrl}/sessions/${fromSession}`, {
+            headers: { authorization: `Bearer ${payload.sessionToken}` },
+            signal: AbortSignal.timeout(10000),
+          });
+          if (!parentResponse.ok) throw new Error('Fork parent authority rejected');
+          const parent = (await parentResponse.json()) as {
+            branch_id: string;
+            sdk_session_id?: string;
+          };
+          if (parent.branch_id !== branchId)
+            throw new Error('Cross-branch transcript import requires explicit migration');
+          resumeId = parent.sdk_session_id;
+        }
+        if (resumeId) {
+          const parentState = await coordinator(
+            tenantId,
+            branchId,
+            `claude/${fromSession}`
+          ).metadata.read();
+          if (parentState.state) {
+            // Read the immutable committed transcript tree without taking the
+            // parent's lease or touching an active parent's local files.
+            const { render } = await import('@agor/core/workspaces');
+            await rm(seed, { recursive: true });
+            await render(
+              seed,
+              parentState.state.tree,
+              new S3WorkspaceBlobs(config.bucket, tenantId as TenantID),
+              []
+            );
+          } else {
+            const legacyHome =
+              payload.env?.CLAUDE_CONFIG_DIR ?? path.join(config.sourceHome, '.claude');
+            if (!legacyHome)
+              throw new Error(
+                'Resumable session has no durable transcript; explicit legacy SDK home required'
+              );
+            const canonicalHome = await realpath(legacyHome);
+            if (!canonicalHome.startsWith(`${await realpath(config.sourceHome)}/`))
+              throw new Error('Legacy SDK home outside authorized data root');
+            await importClaudeSession(canonicalHome, seed, resumeId);
+          }
+        }
+      }
+      try {
+        await sdk.materialise(seed, signal);
+      } finally {
+        await rm(seed, { recursive: true, force: true });
+      }
+      const sdkTicket = await sdk.beginTool(
+        'session',
+        payload.params.taskId,
+        payload.params.taskId
+      );
+      const sdkHome = path.join(path.dirname(sdkTicket.workspace), `live-${randomUUID()}`);
+      await mkdir(sdkHome, { mode: 0o700 });
+      await copyClaudeTranscripts(sdkTicket.workspace, sdkHome);
+      await ownTree(sdkHome, signal);
+      signal.throwIfAborted();
+      const capability = randomUUID() + randomUUID();
+      const job = {
+        input,
+        coordinator: c,
+        workspace: initial.workspace,
+        queue: Promise.resolve() as Promise<unknown>,
+        stopping: false,
+        outcomes: new Map<string, { request: string; result: Promise<unknown> }>(),
+        containers: new Set<string>(),
+        finalize: async (): Promise<void> => {
+          throw new Error('Session not ready');
         },
       };
-      // Cloud authority never enters the SDK container, even if the daemon's
-      // inherited environment accidentally contains an AWS or SQL credential.
-      for (const key of Object.keys(forwarded.env))
-        if (/^(AWS_|DATABASE_URL$|PGPASSWORD$)/.test(key))
-          delete forwarded.env[key as keyof typeof forwarded.env];
-      handoff();
-      await docker(
-        [
-          ...containerBase(name),
-          '-i',
-          '-v',
-          `${initial.workspace}:/workspace:ro`,
-          '-v',
-          `${sdkHome}:/home/agor/.claude`,
-          '-v',
-          `${config.managedToolsRoot}:/opt/agentic-tools:ro`,
-          '-w',
-          '/workspace',
-          '--entrypoint',
-          'node',
-          config.image,
-          config.executorEntry,
-          '--stdin',
-        ],
-        JSON.stringify(forwarded),
-        3600000,
-        res
-      );
-      await removeContainer(name);
-      job.containers.delete(name);
-      await job.queue;
-      if (fenced) throw new Error('SDK host was fenced');
-      if (!finalized) throw new Error('Executor exited without durable SDK finalization');
-      await c
-        .checkpoint()
-        .catch((error) => console.warn('Idle checkpoint deferred', String(error)));
-      res.end();
-    } catch (error) {
-      await sdk.abortTool(sdkTicket.ticket).catch(() => {});
-      if (signal.aborted) throw error;
-      res.end(`\nWorkspace failure: ${String(error)}\n`);
+      jobs.set(capability, job);
+      const name = `agor-sdk-${payload.params.taskId}`;
+      job.containers.add(name);
+      let fenced = false;
+      let finalized = false;
+      let finalization: Promise<void> | undefined;
+      const finalize = async () => {
+        if (finalized) return;
+        job.stopping = true;
+        await job.queue;
+        const processes = await docker(['top', name, '-eo', SDK_PROCESS_COLUMNS]);
+        if (!isQuiescentSdkTree(processes.exitCode, processes.output))
+          throw new Error('SDK descendants are still running; transcript snapshot refused');
+        if (fenced) throw new Error('SDK host was fenced');
+        for (const item of await readdir(sdkTicket.workspace))
+          await rm(path.join(sdkTicket.workspace, item), { recursive: true, force: true });
+        await copyClaudeTranscripts(sdkHome, sdkTicket.workspace);
+        const outcome = await sdk.completeTool(sdkTicket.ticket);
+        if (outcome.status !== 'committed') throw new Error('SDK transcript publication conflict');
+        finalized = true;
+        await sdk.drain();
+      };
+      job.finalize = () => (finalization ??= finalize());
+      const renewal = setInterval(() => {
+        void Promise.all([
+          c.renew(),
+          ...(finalized
+            ? []
+            : [
+                sdk.renew().catch((error) => {
+                  if (!finalized) throw error;
+                }),
+              ]),
+        ]).catch(async () => {
+          fenced = true;
+          for (const container of job.containers)
+            await removeContainer(container).catch((error) =>
+              console.error('Containment failed', String(error))
+            );
+        });
+      }, 10000);
+      res.writeHead(200, { 'content-type': 'text/plain' });
+      try {
+        const forwarded = {
+          ...payload,
+          daemonUrl: config.daemonUrl,
+          replicatedWorkspace: {
+            endpoint: `http://host.docker.internal:${config.port}`,
+            capability,
+            cwd: '/workspace',
+          },
+          env: {
+            ...payload.env,
+            CLAUDE_CONFIG_DIR: '/home/agor/.claude',
+            AGOR_AGENTIC_TOOLS_DIR: '/opt/agentic-tools',
+            AGOR_MANAGED_AGENTIC_TOOLS: '1',
+          },
+        };
+        // Cloud authority never enters the SDK container, even if the daemon's
+        // inherited environment accidentally contains an AWS or SQL credential.
+        for (const key of Object.keys(forwarded.env))
+          if (/^(AWS_|DATABASE_URL$|PGPASSWORD$)/.test(key))
+            delete forwarded.env[key as keyof typeof forwarded.env];
+        signal.throwIfAborted();
+        if (preparationLeaseError) throw preparationLeaseError;
+        clearInterval(preparationRenewal);
+        handoff();
+        await docker(
+          [
+            ...containerBase(name),
+            '-i',
+            '-v',
+            `${initial.workspace}:/workspace:ro`,
+            '-v',
+            `${sdkHome}:/home/agor/.claude`,
+            '-v',
+            `${config.managedToolsRoot}:/opt/agentic-tools:ro`,
+            '-w',
+            '/workspace',
+            '--entrypoint',
+            'node',
+            config.image,
+            config.executorEntry,
+            '--stdin',
+          ],
+          JSON.stringify(forwarded),
+          3600000,
+          res
+        );
+        await removeContainer(name);
+        job.containers.delete(name);
+        await job.queue;
+        if (fenced) throw new Error('SDK host was fenced');
+        if (!finalized) throw new Error('Executor exited without durable SDK finalization');
+        await c
+          .checkpoint()
+          .catch((error) => console.warn('Idle checkpoint deferred', String(error)));
+        res.end();
+      } catch (error) {
+        await sdk.abortTool(sdkTicket.ticket).catch(() => {});
+        if (signal.aborted) throw error;
+        res.end(`\nWorkspace failure: ${String(error)}\n`);
+      } finally {
+        clearInterval(renewal);
+        jobs.delete(capability);
+        for (const container of job.containers) await removeContainer(container);
+      }
     } finally {
-      clearInterval(renewal);
-      jobs.delete(capability);
-      for (const container of job.containers) await removeContainer(container);
+      clearInterval(preparationRenewal);
     }
   }
   async function readCommand(raw: unknown) {

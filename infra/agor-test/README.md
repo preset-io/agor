@@ -130,6 +130,14 @@ mounted only into the daemon. The AWS role and Docker socket are
 available only to the trusted controller. Child SDK/tool containers receive
 neither cloud authority nor another branch's filesystem.
 
+Workspace preparation claims the scoped task before importing storage, emits
+`preparing_workspace` telemetry, and listens for Stop. A cancelled preparation
+acknowledges quiescence only after its pending storage work has settled and no
+SDK can be launched. Imports and cold restores use at most eight concurrent
+file transfers, and ownership is renewed while a cold base is rendered. Large
+repositories can still take time on first use; task heartbeats distinguish this
+phase from a disconnected executor.
+
 `workspace-protocol-proof.mjs` and `workspace-proof-executor.mjs` exercise real
 worker HTTP/Docker, PostgreSQL and S3 using an isolated tenant/branch and a mock
 Agor authorization endpoint. They cover concurrent disjoint commits, same-base

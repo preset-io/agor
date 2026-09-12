@@ -325,3 +325,31 @@ it('does not publish initial metadata after import cancellation', async () => {
   await expect(cancelled.materialise(source, abort.signal)).rejects.toThrow();
   expect(metadata.state).toBeNull();
 });
+
+it('reuses the rendered base after PostgreSQL JSONB reorders manifest keys', async () => {
+  const { source, scope, options, blobs } = await fixture();
+  const metadata = new Authority();
+  let downloads = 0;
+  const c = new BranchWorkspaceCoordinator(
+    scope,
+    metadata,
+    {
+      put: blobs.put.bind(blobs),
+      get: async (key) => {
+        downloads++;
+        return blobs.get(key);
+      },
+    },
+    { ...options, root: `${options.root}-jsonb` }
+  );
+  await c.materialise(source);
+  const initialDownloads = downloads;
+  metadata.state!.tree = Object.fromEntries(
+    Object.entries(metadata.state!.tree)
+      .reverse()
+      .map(([name, entry]) => [name, Object.fromEntries(Object.entries(entry).reverse())])
+  ) as WorkspaceState['tree'];
+  const next = await c.beginTool('one', 'tool', 'key');
+  expect(downloads).toBe(initialDownloads);
+  await c.abortTool(next.ticket);
+});
