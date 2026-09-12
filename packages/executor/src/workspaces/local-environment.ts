@@ -12,12 +12,16 @@ const Seed = z.object({
     .nullable(),
   branch: z.string().regex(/^refs\/heads\/[A-Za-z0-9._/-]+$/),
   remote: z.string().optional(),
+  tags: z
+    .array(z.tuple([z.string().startsWith('refs/tags/'), z.string().regex(/^[a-f0-9]{40,64}$/)]))
+    .default([]),
 });
 
 /** Export reachable history only, never source config, hooks, credentials or worktree pointers. */
 export async function exportGitSeed(source: string, destination: string): Promise<void> {
   await mkdir(destination, { recursive: true, mode: 0o700 });
   const { git } = createGit(source);
+  if (!(await git.checkIsRepo())) throw new Error('Authorized branch source has no Git repository');
   const branch = (await git.raw(['symbolic-ref', '-q', 'HEAD']).catch(() => '')).trim();
   const head = (await git.revparse(['--verify', 'HEAD']).catch(() => '')).trim() || null;
   const remote = (await git.raw(['remote', 'get-url', 'origin']).catch(() => '')).trim();
@@ -35,8 +39,34 @@ export async function exportGitSeed(source: string, destination: string): Promis
       safeRemote = assertSafeGitRemoteUrl(candidate);
     }
   }
-  const seed = Seed.parse({ head, branch: branch || 'refs/heads/workspace', remote: safeRemote });
-  if (head) await git.raw(['bundle', 'create', path.join(destination, 'history.bundle'), 'HEAD']);
+  const tags = head
+    ? (
+        await git.raw([
+          'for-each-ref',
+          '--merged=HEAD',
+          '--format=%(refname) %(objectname)',
+          'refs/tags',
+        ])
+      )
+        .trim()
+        .split('\n')
+        .filter(Boolean)
+        .map((line) => line.split(' '))
+    : [];
+  const seed = Seed.parse({
+    head,
+    branch: branch || 'refs/heads/workspace',
+    remote: safeRemote,
+    tags,
+  });
+  if (head)
+    await git.raw([
+      'bundle',
+      'create',
+      path.join(destination, 'history.bundle'),
+      'HEAD',
+      ...seed.tags.map(([ref]) => ref),
+    ]);
   await writeFile(path.join(destination, 'seed.json'), JSON.stringify(seed), { mode: 0o600 });
 }
 
@@ -64,6 +94,10 @@ export async function installGitSeed(seedDirectory: string, workspace: string): 
       await git.raw(['bundle', 'unbundle', path.join(seedDirectory, 'history.bundle')]);
       await git.raw(['update-ref', seed.branch, seed.head]);
       await git.raw(['read-tree', seed.head]);
+      for (const [ref, object] of seed.tags) {
+        await git.raw(['check-ref-format', ref]);
+        await git.raw(['update-ref', ref, object]);
+      }
     }
     if (seed.remote) await git.addRemote('origin', assertSafeGitRemoteUrl(seed.remote));
     await git.addConfig('user.name', 'Agor');

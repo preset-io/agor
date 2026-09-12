@@ -17,6 +17,7 @@ it('restores real history and index without overwriting source, and keeps indepe
     await writeFile(path.join(source, 'file'), 'original');
     await git.add('file');
     await git.commit('original');
+    await git.addAnnotatedTag('v1.0.0', 'fixture version');
     const head = await git.revparse(['HEAD']);
     await git.addRemote('origin', 'https://user:secret@example.test/repo?token=secret');
     const seed = path.join(root, 'seed');
@@ -28,6 +29,7 @@ it('restores real history and index without overwriting source, and keeps indepe
       await writeFile(path.join(workspace, 'file'), 'coordinator revision');
       await installGitSeed(seed, workspace);
       expect(await createGit(workspace).git.revparse(['HEAD'])).toBe(head);
+      expect((await createGit(workspace).git.raw(['describe', '--tags'])).trim()).toBe('v1.0.0');
       expect((await createGit(workspace).git.status()).modified).toEqual(['file']);
     }
     const one = createGit(path.join(root, 'one')).git;

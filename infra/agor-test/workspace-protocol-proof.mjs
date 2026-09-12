@@ -233,6 +233,11 @@ try {
     );
     nextPrompt();
     assert.match(await dispatch(0, 'false | cat', 'committed', false, 1), /PROOF_EXECUTOR_OK/);
+    nextPrompt();
+    assert.match(
+      await dispatch(0, "python3 -c 'a=bytearray(4*1024**3)' || true", 'committed', false, 137),
+      /PROOF_EXECUTOR_OK/
+    );
     await call('/drain', {});
     console.log(
       JSON.stringify({
@@ -251,6 +256,7 @@ try {
           'private Git history and commits across prompts',
           'local user tools and caches across prompts',
           'pipeline failures remain failures',
+          'OOM remains failure even when shell masks it',
           'checkpoint and drain',
         ],
       })
@@ -258,7 +264,7 @@ try {
   } else {
     const output = await dispatch(
       0,
-      'test "$(cat alpha.txt)" = alpha; test "$(cat beta.txt)" = beta; test -f shared.txt; test -f foreground.txt; test ! -e late.txt; test ! -e node_modules/ignored',
+      'test "$(cat alpha.txt)" = alpha; test "$(cat beta.txt)" = beta; test -f shared.txt; test -f foreground.txt; test ! -e late.txt; test ! -e node_modules/ignored; test -f .git/HEAD; test ! -e .venv',
       'committed',
       true
     );
