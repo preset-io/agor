@@ -82,6 +82,6 @@ to the custom HTTPS hostname. The app host remains reachable only from the ALB.
 Before handing over the custom URL, recreate the existing Agor container with
 `AGOR_BASE_URL=https://agor.skellige.com.au` and matching `CORS_ORIGIN`, preserving
 its image, mounted `/srv/agor/home` directory and other environment settings.
-Do this through SSM; changing EC2 user-data would replace the instance. Verify
+Run `python3 /opt/agor/set-public-url.py https://agor.skellige.com.au` through SSM after copying `set-public-url.py` to that path. The script verifies the deployment shape, preserves existing environment and data mounts, retains the stopped previous container as `agor-url-backup`, and rolls back if health checks fail. Changing EC2 user-data would replace the instance. Verify
 HTTPS, authentication, browser rendering and WebSocket connectivity. The
 certificate-only phase does not make the HTTPS endpoint live.
