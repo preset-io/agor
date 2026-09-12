@@ -9,6 +9,7 @@ import {
   readFile,
   rename,
   rm,
+  symlink,
   writeFile,
 } from 'node:fs/promises';
 import path from 'node:path';
@@ -251,13 +252,29 @@ export async function restoreMissingRepositoryConfiguration(
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
     }
     const entry = await git.raw(['ls-files', '--stage', '--', name]);
-    if (!/^100[67][45][45] [a-f0-9]+ 0\t/.test(entry))
-      throw new Error('Configuration must be an unconflicted regular file');
+    if (!/^(100644|100755|120000) [a-f0-9]+ 0\t/.test(entry))
+      throw new Error('Configuration must be an unconflicted file or symlink');
     const bytes = await git.showBuffer([`:${name}`]);
-    await writeFile(destination, bytes, {
-      flag: 'wx',
-      mode: entry.startsWith('100755') ? 0o755 : 0o644,
-    });
+    if (entry.startsWith('120000')) {
+      const target = bytes.toString('utf8');
+      const resolved = path.posix.normalize(path.posix.join(path.posix.dirname(name), target));
+      if (
+        !target ||
+        target.includes('\0') ||
+        target.includes('\\') ||
+        path.posix.isAbsolute(target) ||
+        resolved === '..' ||
+        resolved.startsWith('../') ||
+        !included(resolved, [], tracked)
+      )
+        throw new Error('Configuration symlink escapes synchronized content');
+      await symlink(target, destination);
+    } else {
+      await writeFile(destination, bytes, {
+        flag: 'wx',
+        mode: entry.startsWith('100755') ? 0o755 : 0o644,
+      });
+    }
     restored.push(name);
   }
   return restored;

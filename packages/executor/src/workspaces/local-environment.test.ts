@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readlink, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { createGit } from '@agor/git';
@@ -67,7 +67,9 @@ it('repairs only explicitly named missing tracked configuration and preserves ex
     await mkdir(path.join(root, 'frontend'));
     await writeFile(path.join(root, 'frontend/.npmrc'), 'min-release-age=3\n');
     await writeFile(path.join(root, '.env.example'), 'TEMPLATE=yes\n');
-    await git.add(['frontend/.npmrc', '.env.example']);
+    await symlink('frontend/.npmrc', path.join(root, '.npmrc'));
+    await git.add(['frontend/.npmrc', '.env.example', '.npmrc']);
+    await rm(path.join(root, '.npmrc'));
     await rm(path.join(root, 'frontend/.npmrc'));
     await writeFile(path.join(root, '.env.example'), 'user edit');
     expect(
@@ -76,6 +78,8 @@ it('repairs only explicitly named missing tracked configuration and preserves ex
     expect(await readFile(path.join(root, 'frontend/.npmrc'), 'utf8')).toBe('min-release-age=3\n');
     expect(await readFile(path.join(root, '.env.example'), 'utf8')).toBe('user edit');
     expect(await restoreMissingRepositoryConfiguration(root, ['frontend/.npmrc'])).toEqual([]);
+    expect(await restoreMissingRepositoryConfiguration(root, ['.npmrc'])).toEqual(['.npmrc']);
+    expect(await readlink(path.join(root, '.npmrc'))).toBe('frontend/.npmrc');
     await expect(
       restoreMissingRepositoryConfiguration(root, ['.aws/credentials'])
     ).rejects.toThrow();

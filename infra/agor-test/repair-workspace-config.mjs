@@ -2,7 +2,7 @@
 // resurrecting intentional deletions; existing files are never overwritten.
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
-import { chown, readFile } from 'node:fs/promises';
+import { chown, lchown, readFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import path from 'node:path';
 
@@ -20,12 +20,16 @@ assert(names.length > 0);
 const config = JSON.parse(await readFile(configFile, 'utf8'));
 const sql = await connectWorkspaceAuthority(config);
 let renewal;
+let coordinator;
+let ticket;
 try {
   const scope = { tenantId, branchId };
   const metadata = new WorkerSqlAuthority(sql, scope, 'code');
   const snapshot = await metadata.read();
   assert(
-    snapshot.state && Object.keys(snapshot.state.active).length === 0,
+    snapshot.state &&
+      (Object.keys(snapshot.state.active).length === 0 ||
+        snapshot.state.leaseUntil <= snapshot.now),
     'Active workspace tools prevent repair'
   );
   const c = new BranchWorkspaceCoordinator(
@@ -47,6 +51,7 @@ try {
       exclude: [],
     }
   );
+  coordinator = c;
   await c.materialise();
   let leaseError;
   renewal = setInterval(() => {
@@ -56,9 +61,12 @@ try {
   }, 10000);
   const id = randomUUID();
   const tool = await c.beginTool(sessionId, id, id);
+  ticket = tool.ticket;
   const restored = await restoreMissingRepositoryConfiguration(tool.workspace, names);
   for (const name of restored) {
     let filename = path.join(tool.workspace, name);
+    await lchown(filename, 1000, 1000);
+    filename = path.dirname(filename);
     while (filename !== tool.workspace) {
       await chown(filename, 1000, 1000);
       filename = path.dirname(filename);
@@ -67,11 +75,16 @@ try {
   if (leaseError) throw leaseError;
   const outcome = await c.completeTool(tool.ticket);
   assert.equal(outcome.status, 'committed');
+  ticket = undefined;
   await c.drain();
   const { git } = require('@agor/git').createGit(tool.workspace);
   const status = await git.status();
   console.log(JSON.stringify({ restored, outcome, remainingDeletedPaths: status.deleted }));
 } finally {
+  if (ticket) {
+    await coordinator.abortTool(ticket).catch(() => {});
+    await coordinator.drain().catch(() => {});
+  }
   clearInterval(renewal);
   await sql.end();
 }

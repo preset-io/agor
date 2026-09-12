@@ -402,6 +402,7 @@ it('retains tracked repository configuration through tools and Git-less host rec
     '.claude/settings.json',
     'docs/.claude/instructions.md',
     '.env.example',
+    'sdk/.npmrc',
   ];
   const f = await fixture(async (source) => {
     const { git } = createGit(source);
@@ -410,6 +411,8 @@ it('retains tracked repository configuration through tools and Git-less host rec
       await mkdir(path.dirname(path.join(source, name)), { recursive: true });
       await writeFile(path.join(source, name), 'repository configuration');
     }
+    await rm(path.join(source, 'sdk/.npmrc'));
+    await symlink('../frontend/.npmrc', path.join(source, 'sdk/.npmrc'));
     await git.add(tracked);
     for (const name of [
       '.npmrc',
@@ -447,6 +450,10 @@ it('retains tracked repository configuration through tools and Git-less host rec
   await restored.restore();
   const b = await restored.beginTool('two', 't2', 'k2');
   expect(await readFile(path.join(b.workspace, 'frontend/.npmrc'), 'utf8')).toBe(
+    'edited repository configuration'
+  );
+  expect((await lstat(path.join(b.workspace, 'sdk/.npmrc'))).isSymbolicLink()).toBe(true);
+  expect(await readFile(path.join(b.workspace, 'sdk/.npmrc'), 'utf8')).toBe(
     'edited repository configuration'
   );
   expect(await readFile(path.join(b.workspace, '.claude/settings.json'), 'utf8')).toBe(

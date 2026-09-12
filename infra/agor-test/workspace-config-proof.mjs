@@ -1,7 +1,7 @@
 // Real RDS/S3 configuration round trip. Run initial and restore on different hosts.
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
-import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, readlink, rm, symlink, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import path from 'node:path';
 
@@ -22,6 +22,7 @@ const tracked = [
   'docker/.env',
   '.claude/settings.json',
   'docs/.claude/instructions.md',
+  'sdk/.npmrc',
 ];
 const sql = await connectWorkspaceAuthority(config);
 try {
@@ -55,6 +56,8 @@ try {
       await mkdir(path.dirname(path.join(source, name)), { recursive: true });
       await writeFile(path.join(source, name), 'tracked configuration');
     }
+    await rm(path.join(source, 'sdk/.npmrc'));
+    await symlink('../frontend/.npmrc', path.join(source, 'sdk/.npmrc'));
     await git.add(tracked);
     await writeFile(path.join(source, '.npmrc'), 'private token');
     await writeFile(path.join(source, '.claude/settings.local.json'), 'private local settings');
@@ -66,6 +69,7 @@ try {
     assert.equal(await readFile(path.join(tool.workspace, name), 'utf8'), 'tracked configuration');
   for (const name of ['.npmrc', '.claude/settings.local.json'])
     await assert.rejects(readFile(path.join(tool.workspace, name)), { code: 'ENOENT' });
+  assert.equal(await readlink(path.join(tool.workspace, 'sdk/.npmrc')), '../frontend/.npmrc');
   const before = (await metadata.read()).state.revision;
   assert.equal((await c.completeTool(tool.ticket)).status, 'committed');
   assert.equal((await metadata.read()).state.revision, before);
