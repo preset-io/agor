@@ -1,0 +1,15 @@
+#!/bin/bash
+set -euo pipefail
+exec > >(tee -a /var/log/agor-bootstrap.log) 2>&1
+dnf install -y docker
+systemctl enable --now docker
+mkdir -p /opt/agor/source /srv/agor/home
+chown 1000:1000 /srv/agor/home
+chmod 700 /srv/agor/home
+aws s3 cp 's3://${bucket}/${key}' /opt/agor/source.tar.gz --region ap-southeast-2
+tar -xzf /opt/agor/source.tar.gz -C /opt/agor/source
+docker build --target production-source --build-arg AGOR_BUILD_SHA=${sha} -t agor:${sha} -f /opt/agor/source/docker/Dockerfile /opt/agor/source
+docker run -d --name agor --restart unless-stopped -p 3030:3030 \
+  -e NODE_ENV=production -e DAEMON_HOST=0.0.0.0 -e DAEMON_PORT=3030 \
+  -e AGOR_BASE_URL=http://${hostname} -e CORS_ORIGIN=http://${hostname} \
+  -e AGOR_AGENTIC_TOOLS=none -v /srv/agor/home:/home/agor agor:${sha}
