@@ -27,6 +27,12 @@ if (!(await sourceGit.checkIsRepo())) {
   await sourceGit.commit('fixture history');
 }
 
+if (!(await sourceGit.tags()).all.includes('proof-version'))
+  await sourceGit.addAnnotatedTag('proof-version', 'fixture version');
+await writeFile(
+  path.join(source, 'expected-head.txt'),
+  (await sourceGit.revparse(['HEAD'])).trim()
+);
 const claims = (index) =>
   Buffer.from(
     JSON.stringify({
@@ -118,6 +124,11 @@ const dispatch = (index, command, expected, checkTranscript = false, expectedExi
       },
     },
   });
+const gitCommand = (code) => {
+  const script = `const g=require('/opt/agor-runtime/lib/node_modules/agor-live/node_modules/simple-git')('/workspace'); (async()=>{${code}})().catch(e=>{console.error(e);process.exit(1)});`;
+  return `node -e '${script.replaceAll("'", "'\\''")}'`;
+};
+
 try {
   if (phase === 'initial') {
     const outputs = await Promise.all([
@@ -184,10 +195,6 @@ try {
       tasks[0] = randomUUID();
       tokens[0] = `fixture.${claims(0)}.fixture`;
     };
-    const gitCommand = (code) => {
-      const script = `const g=require('/opt/agor-runtime/lib/node_modules/agor-live/node_modules/simple-git')('/workspace'); (async()=>{${code}})().catch(e=>{console.error(e);process.exit(1)});`;
-      return `node -e '${script.replaceAll("'", "'\\''")}'`;
-    };
     nextPrompt();
     assert.match(
       await dispatch(
@@ -197,7 +204,7 @@ try {
           'mkdir -p frontend npm-fixture .cache',
           `printf '%s' '{"name":"local-proof","version":"1.0.0","main":"index.js"}' > npm-fixture/package.json`,
           `printf '%s' 'module.exports=42' > npm-fixture/index.js`,
-          'npm install --prefix frontend --no-audit --no-fund ../npm-fixture',
+          'npm install --prefix frontend --no-audit --no-fund /workspace/npm-fixture',
           'python3 -m venv .venv',
           '.venv/bin/pip install --disable-pip-version-check six==1.17.0',
           'mkdir -p ~/.local/bin ~/.cache/pip ~/.nvm',
@@ -264,7 +271,7 @@ try {
   } else {
     const output = await dispatch(
       0,
-      'test "$(cat alpha.txt)" = alpha; test "$(cat beta.txt)" = beta; test -f shared.txt; test -f foreground.txt; test ! -e late.txt; test ! -e node_modules/ignored; test -f .git/HEAD; test ! -e .venv',
+      `set -e; test "$(cat alpha.txt)" = alpha; test "$(cat beta.txt)" = beta; test -f shared.txt; test -f foreground.txt; test ! -e late.txt; test ! -e node_modules/ignored; test ! -e .venv; ${gitCommand("require('assert').equal((await g.revparse(['HEAD'])).trim(),require('fs').readFileSync('expected-head.txt','utf8')); require('assert').equal((await g.raw(['describe','--tags'])).trim(),'proof-version');")}`,
       'committed',
       true
     );
@@ -277,6 +284,7 @@ try {
         tests: [
           'cross-AZ worker activation',
           'S3-backed code restoration',
+          'initial Git history restored with matching HEAD',
           'filtered SDK transcript restoration',
           'next tool on recovered revision',
         ],
