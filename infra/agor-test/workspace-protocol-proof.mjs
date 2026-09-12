@@ -53,9 +53,7 @@ const require = createRequire('/opt/agor-runtime/lib/node_modules/agor-live/pack
 const io = new (require('socket.io').Server)(api);
 io.use((socket, next) =>
   next(
-    tokens.includes(socket.handshake.auth.accessToken)
-      ? undefined
-      : new Error('Invalid fixture token')
+    tokens.includes(socket.handshake.auth.token) ? undefined : new Error('Invalid fixture token')
   )
 );
 io.on('connection', (socket) => {
