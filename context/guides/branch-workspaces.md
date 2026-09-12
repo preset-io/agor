@@ -94,13 +94,28 @@ Forks copy the parent's last committed transcript; resumes use the stable
 provider session, never credentials or settings. Cross-branch transcript imports
 require an explicit migration.
 
+Sessions reuse their local replica across prompts. Private Git metadata, nested
+dependency directories and build outputs survive tool boundaries; a crash rebuild
+retains excluded descendants beneath surviving source directories. Only package
+caches and user tools (`~/.cache`, `~/.npm`, `~/.local`, `~/.nvm`) are retained from
+the tool home. Shell activation and working-directory changes must be repeated.
+
+Fresh replicas import the real initial Git history, branch ref and reachable tags
+without overwriting source files. A separately stored, credential-free Git bundle
+uses verified 64-MiB chunks so large histories fit the source blob size limit.
+Local Git refs, index and commits are private to each session and persist while
+its replica is retained. They are not synchronized source revisions: publish
+commits to the remote before migration/eviction if their identity must survive.
+Recovery reconstructs initial Git history plus current source as working-tree
+changes. Package caches and build outputs are disposable and rebuilt after loss.
+
 File browse/read/autocomplete operations read a stable committed replica.
 Unsupported commands on an adopted branch fail explicitly instead of running
 against its old checkout. This slice does not support persistent dev servers,
-interactive terminals, native Git-management operations on replicated code,
+interactive terminals, Agor UI Git-management operations on replicated code,
 additional MCP servers, Codex or Gemini. Source edits, searches, installs and
-tests run through the managed Claude tool. Each host currently admits at most
-two concurrent sessions, reserving capacity for their SDK and tool containers.
+tests run through the managed Claude tool. Admission reserves memory and CPU for both SDK and tool containers; the configured
+session ceiling is further constrained by those reservations and host capacity.
 
 See `infra/agor-test/README.md` for the reproducible AWS runtime deployment and
 its protocol proof. The proof uses real Docker workers, PostgreSQL and S3 with a

@@ -1,5 +1,6 @@
 // Optional trusted-host prewarm for an inactive branch before enabling local Git.
 // Run with the worker's IAM role, read-only config/source mounts and local storage.
+import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { mkdir, readFile, realpath, rm } from 'node:fs/promises';
 import { createRequire } from 'node:module';
@@ -11,7 +12,7 @@ const { BranchWorkspaceCoordinator, hash } = await import(require.resolve('@agor
 const { connectWorkspaceAuthority } = await import(`${runtime}/connection.js`);
 const { WorkerSqlAuthority } = await import(`${runtime}/sql-authority.js`);
 const { S3WorkspaceBlobs } = await import(`${runtime}/s3-blobs.js`);
-const { exportGitSeed } = await import(`${runtime}/local-environment.js`);
+const { exportGitSeed, installGitSeed } = await import(`${runtime}/local-environment.js`);
 const [configFile, tenantId, branchId, sourcePath] = process.argv.slice(2);
 if (!/^[A-Za-z0-9_-]+$/.test(tenantId) || !/^[a-f0-9-]{36}$/.test(branchId))
   throw new Error('Invalid scope');
@@ -50,6 +51,15 @@ try {
   const replica = await c.beginTool('seed', id, id);
   await c.completeTool(replica.ticket);
   await c.drain();
+  const verification = path.join(seed, 'verify');
+  await mkdir(verification);
+  await installGitSeed(replica.workspace, verification);
+  const restored = JSON.parse(await readFile(path.join(replica.workspace, 'seed.json'), 'utf8'));
+  if (restored.head)
+    assert.equal(
+      (await require('@agor/git').createGit(verification).git.revparse(['HEAD'])).trim(),
+      restored.head
+    );
   console.log(JSON.stringify({ branchId, gitHistoryReady: true }));
 } finally {
   await sql.end();

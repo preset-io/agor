@@ -202,9 +202,12 @@ try {
         [
           'set -e',
           'mkdir -p frontend npm-fixture .cache',
-          `printf '%s' '{"name":"local-proof","version":"1.0.0","main":"index.js"}' > npm-fixture/package.json`,
+          `printf '%s' '{"name":"local-proof","version":"1.0.0","main":"index.js","bin":{"local-proof":"cli.js"}}' > npm-fixture/package.json`,
           `printf '%s' 'module.exports=42' > npm-fixture/index.js`,
+          `printf '#!/usr/bin/env node\\nconsole.log(42)\\n' > npm-fixture/cli.js`,
+          'chmod +x npm-fixture/cli.js',
           'npm install --prefix frontend --no-audit --no-fund /workspace/npm-fixture',
+          'npm install -g --no-audit --no-fund /workspace/npm-fixture',
           'python3 -m venv .venv',
           '.venv/bin/pip install --disable-pip-version-check six==1.17.0',
           'mkdir -p ~/.local/bin ~/.cache/pip ~/.nvm',
@@ -228,6 +231,7 @@ try {
           `node -e "require('assert').equal(require('./frontend/node_modules/local-proof'),42)"`,
           `.venv/bin/python -c "import six; assert six.__version__ == '1.17.0'"`,
           'test "$(cat ~/.local/bin/retained-proof)" = retained',
+          'test "$(local-proof)" = 42',
           'test "$(cat ~/.cache/pip/retained-proof)" = retained',
           'test "$(cat ~/.nvm/retained-proof)" = retained',
           gitCommand(
