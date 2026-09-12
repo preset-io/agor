@@ -27,3 +27,5 @@ PY
 docker stop agor-workspace-worker
 docker rename agor-workspace-worker "agor-workspace-worker-before-$release"
 bash "/opt/agor/releases/$release/infra/agor-test/configure-workspace-worker.sh" "$release"
+# A successful docker run means started, not yet ready for dependent operations.
+curl --fail --silent --show-error --retry 30 --retry-connrefused --retry-delay 1 http://127.0.0.1:8787/health
