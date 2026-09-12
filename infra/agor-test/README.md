@@ -49,3 +49,20 @@ reviewed plan. S3 must be emptied explicitly if it contains additional objects.
 Retained root EBS volumes are not automatically removed by instance teardown;
 inspect and delete them only after verifying backups. Ongoing charges include
 EC2, EBS, ALB, public IPv4, storage and transfer until resources are removed.
+
+## Packaged runtime smoke test
+
+Copy `workspace-smoke.mjs` to the host and mount it read-only into a disposable
+container from the deployed image. Run Node with the script path and the
+bundled core workspace module URL as arguments, overriding the entrypoint:
+
+```sh
+docker run --rm --entrypoint node \
+  -v /opt/agor/workspace-smoke.mjs:/tmp/workspace-smoke.mjs:ro \
+  agor:COMMIT /tmp/workspace-smoke.mjs \
+  file:///opt/agor-runtime/lib/node_modules/agor-live/node_modules/@agor/core/workspaces/index.js
+```
+
+This uses actual child processes and temporary local files, but an in-memory
+metadata authority and local blobs. It validates packaging and the Linux tool
+boundary path; it does not validate PostgreSQL, S3 or native SDK wiring.
