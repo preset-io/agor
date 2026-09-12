@@ -277,6 +277,8 @@ async function handlePromptPayload(
     messageSource: payload.params.messageSource,
     promptOrigin: payload.params.promptOrigin,
     agenticToolContext: payload.agenticToolContext,
+    replicatedWorkspace: payload.replicatedWorkspace,
+    requiresReplicatedWorkspace: payload.requiresReplicatedWorkspace,
     resolvedConfig: payload.resolvedConfig,
   });
 

@@ -1,3 +1,4 @@
+import { finalizeReplicatedSession } from '../../replicated-workspace.js';
 /**
  * Base Executor - Shared execution logic for all SDK tools
  *
@@ -601,6 +602,8 @@ export async function executeToolTask(params: {
       `[${toolName}] Execution completed: user=${result.userMessageId}, assistant=${result.assistantMessageIds.length} messages`
     );
 
+    await finalizeReplicatedSession();
+
     // Capture git SHA at task end
     const gitStateAtEnd = await captureGitStateForSession(client, sessionId, taskId, 'end');
 
@@ -714,6 +717,8 @@ export async function executeToolTask(params: {
     if (daemonOwnsTerminality()) return;
     const err = error instanceof Error ? error : new Error(String(error));
     console.error(`[${toolName}] execution failed category=task_execution`);
+
+    await finalizeReplicatedSession();
 
     // Capture git SHA at task end (even for failed tasks)
     const gitStateAtEnd = await captureGitStateForSession(client, sessionId, taskId, 'end');

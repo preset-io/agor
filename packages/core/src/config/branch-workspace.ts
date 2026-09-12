@@ -4,6 +4,7 @@ import { z } from 'zod';
 export const BranchWorkspaceConfigSchema = z
   .object({
     enabled: z.boolean().default(false),
+    native_adapter: z.literal('claude_workspace').optional(),
     backend: z.literal('local_replicated').default('local_replicated'),
     tool_boundary_sync: z.literal(true).default(true),
     local_root: z.string().startsWith('/').default('/var/lib/agor'),

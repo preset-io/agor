@@ -1,3 +1,7 @@
+import {
+  configureReplicatedClaude,
+  currentReplicatedWorkspace,
+} from '../../replicated-workspace.js';
 /**
  * Query Builder for Claude Agent SDK
  *
@@ -217,6 +221,9 @@ export async function setupQuery(
     console.warn(`⚠️  Session ${sessionId} has no branch_id, using process.cwd(): ${cwd}`);
   }
 
+  const replicatedWorkspace = currentReplicatedWorkspace();
+  if (replicatedWorkspace) cwd = replicatedWorkspace.cwd;
+
   logPromptStart(sessionId);
 
   // Validate CWD exists before calling SDK
@@ -379,7 +386,7 @@ export async function setupQuery(
       // Claude Agent SDK locks in MCP configuration at session creation time
       // If MCP servers were added later, we need to start fresh to pick them up
       let mcpServersAddedAfterCreation = false;
-      if (deps.sessionMCPRepo) {
+      if (deps.sessionMCPRepo && !replicatedWorkspace) {
         try {
           const sessionMCPServers = await deps.sessionMCPRepo.listServersWithMetadata(
             sessionId,
@@ -430,9 +437,7 @@ export async function setupQuery(
           ? (Date.now() - new Date(session.last_updated).getTime()) / (1000 * 60 * 60)
           : 999;
 
-        const isLikelyStale =
-          hoursSinceUpdate > 24 || // Session older than 24 hours
-          !session.branch_id; // No branch = can't resume properly
+        const isLikelyStale = !replicatedWorkspace && (hoursSinceUpdate > 24 || !session.branch_id);
 
         if (isLikelyStale) {
           console.warn(
@@ -696,6 +701,7 @@ export async function setupQuery(
   let result: AsyncGenerator<unknown>;
   try {
     const Claude = await loadManagedAgenticToolSdk<typeof ClaudeSdk>('claude-code');
+    if (replicatedWorkspace) configureReplicatedClaude(Claude, queryOptions, replicatedWorkspace);
     result = Claude.query({
       prompt: asUserMessageIterable(prompt),
       // queryOptions uses Record<string,unknown> to accommodate apiKey, which is valid at
@@ -739,7 +745,7 @@ export async function setupQuery(
   };
 
   const refreshMcp =
-    taskId && deps.sessionMCPRepo
+    taskId && deps.sessionMCPRepo && !replicatedWorkspace
       ? async (request: MCPRuntimeRefreshRequest): Promise<MCPRuntimeReprojection> => {
           // Projection/claim failures are daemon authority failures. They must
           // never be mislabeled as provider transport failures because the SDK

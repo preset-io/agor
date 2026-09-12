@@ -224,7 +224,7 @@ interface FileResult {
   type: 'file' | 'folder';
 }
 
-function buildFileResults(rawLsFiles: string, search: string, limit: number): FileResult[] {
+export function buildFileResults(rawLsFiles: string, search: string, limit: number): FileResult[] {
   if (!search || search.trim() === '') return [];
 
   const allFiles = rawLsFiles.split('\0').filter((filePath) => filePath.length > 0);

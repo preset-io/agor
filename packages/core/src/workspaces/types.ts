@@ -54,6 +54,7 @@ export interface Receipt {
 }
 export interface WorkspaceState {
   schema: 1;
+  authority?: 'worker-sql';
   scope: WorkspaceScope;
   revision: number;
   epoch: number;

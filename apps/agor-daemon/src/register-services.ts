@@ -23,6 +23,7 @@ import {
   resolveDeploymentAgenticToolPolicy,
   resolveExecutionSecurityMode,
   resolveMultiTenancyConfig,
+  usesReplicatedWorkspace,
 } from '@agor/core/config';
 import {
   AmbiguousIdError,
@@ -1244,7 +1245,8 @@ function createExecuteHandler(
       sessionId,
       params,
       deploymentAgenticToolPolicy,
-      unixIdentityGuard
+      unixIdentityGuard,
+      config.execution?.branch_workspace
     );
     assertHaTaskPermissionSupported(ctx.deployment, {
       session,
@@ -1639,6 +1641,9 @@ function createExecuteHandler(
     // Build executor payload
     const executorPayload = {
       command: 'prompt' as const,
+      requiresReplicatedWorkspace:
+        config.execution?.branch_workspace?.native_adapter === 'claude_workspace' &&
+        usesReplicatedWorkspace(config.execution.branch_workspace, tenantId, session.branch_id),
       sessionToken,
       daemonUrl,
       ...(executorLaunch?.executorPayload ?? {}),

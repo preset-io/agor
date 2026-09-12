@@ -29,8 +29,9 @@ import { AUTHORIZATION_REVOKED_TERMINATION_MESSAGE, TaskStatus } from '@agor/cor
 import { patchConsole } from '@agor/core/utils/logger';
 import { type ExecutorHeartbeatHandle, startExecutorHeartbeat } from './executor-heartbeat.js';
 import { requestMCPRuntimeRefresh } from './mcp-runtime-refresh.js';
-import type { ResolvedConfigSlice } from './payload-types.js';
+import type { ReplicatedWorkspaceDescriptor, ResolvedConfigSlice } from './payload-types.js';
 import { globalPermissionManager } from './permissions/permission-manager.js';
+import { withReplicatedWorkspace } from './replicated-workspace.js';
 import { formatExecutorFailure } from './safe-executor-error.js';
 import { getSdkActivityVersion, markSdkHealthAbort, SdkWatchdog } from './sdk-watchdog.js';
 import { type AgorClient, createExecutorClient } from './services/feathers-client.js';
@@ -61,6 +62,8 @@ type TerminationObservationSource =
   | 'unknown';
 
 export interface ExecutorConfig {
+  replicatedWorkspace?: ReplicatedWorkspaceDescriptor;
+  requiresReplicatedWorkspace?: boolean;
   sessionToken: string;
   sessionId: string;
   taskId: string;
@@ -430,6 +433,10 @@ export class AgorExecutor {
     }
     if (this.terminationRequest || this.abortController.signal.aborted) return;
 
+    if (this.config.requiresReplicatedWorkspace && !this.config.replicatedWorkspace)
+      throw new Error(
+        'Required replicated workspace controller was not supplied; legacy execution refused'
+      );
     this.isRunning = true;
 
     const heartbeatConfig = this.config.resolvedConfig?.execution?.executor_heartbeat;
@@ -464,19 +471,21 @@ export class AgorExecutor {
       await initializeToolRegistry();
 
       // Execute using registry
-      await ToolRegistry.execute(this.config.tool, {
-        client: this.client,
-        sessionId: this.config.sessionId as SessionID,
-        taskId: this.config.taskId as TaskID,
-        prompt: this.config.prompt,
-        permissionMode: this.config.permissionMode,
-        abortController: this.abortController,
-        messageSource: this.config.messageSource,
-        promptOrigin: this.config.promptOrigin,
-        agenticToolContext: this.config.agenticToolContext,
-        resolvedConfig: this.config.resolvedConfig,
-        onPulse: (kind, detail) => this.recordPulse(kind, detail),
-      });
+      await withReplicatedWorkspace(this.config.replicatedWorkspace, this.config.tool, () =>
+        ToolRegistry.execute(this.config.tool, {
+          client: this.client!,
+          sessionId: this.config.sessionId as SessionID,
+          taskId: this.config.taskId as TaskID,
+          prompt: this.config.prompt,
+          permissionMode: this.config.permissionMode,
+          abortController: this.abortController,
+          messageSource: this.config.messageSource,
+          promptOrigin: this.config.promptOrigin,
+          agenticToolContext: this.config.agenticToolContext,
+          resolvedConfig: this.config.resolvedConfig,
+          onPulse: (kind, detail) => this.recordPulse(kind, detail),
+        })
+      );
     } finally {
       if (this.providerCleanupSlowTimer) {
         clearTimeout(this.providerCleanupSlowTimer);

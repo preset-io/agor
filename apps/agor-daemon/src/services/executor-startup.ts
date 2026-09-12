@@ -1,7 +1,9 @@
 import {
+  type BranchWorkspaceConfig,
   type DeploymentAgenticToolPolicy,
   isDeploymentAgenticToolAvailable,
   isTenantAgenticToolEnabled,
+  usesReplicatedWorkspace,
 } from '@agor/core/config';
 import {
   BranchWorkspaceRepository,
@@ -63,7 +65,8 @@ export async function prepareSessionForExecutorStart(
   sessionId: string,
   params: AuthenticatedParams,
   deploymentPolicy: DeploymentAgenticToolPolicy = { managed: false, installed: new Set() },
-  unixIdentityGuard?: ExecutorStartupUnixIdentityGuard
+  unixIdentityGuard?: ExecutorStartupUnixIdentityGuard,
+  workspaceConfig?: BranchWorkspaceConfig
 ): Promise<ActiveExecutorSession> {
   const tenantId = getCurrentTenantId();
   if (!tenantId) throw new Error('Missing active tenant context for executor startup');
@@ -78,17 +81,51 @@ export async function prepareSessionForExecutorStart(
     if (unixIdentityGuard && (session.sdk_home_scope ?? 'execution_home') === 'execution_home') {
       await assertSessionUnixIdentityUnchanged(session, unixIdentityGuard.loadCreator(tenantDb));
     }
+    const replicatedRequired =
+      workspaceConfig?.native_adapter === 'claude_workspace' &&
+      !!session.branch_id &&
+      usesReplicatedWorkspace(workspaceConfig, tenantId, session.branch_id);
     if (session.branch_id) {
       const workspace = await new BranchWorkspaceRepository(tenantDb, {
         tenantId: tenantId as TenantID,
         branchId: session.branch_id as BranchID,
       }).read();
-      assertNativeWorkspaceAdmission({
-        config: {},
-        tenantId: tenantId as TenantID,
-        branchId: session.branch_id,
-        state: workspace.state,
-      });
+      if (replicatedRequired) {
+        if (session.agentic_tool !== 'claude-code')
+          throw new Error(
+            'This branch requires the Claude replicated workspace adapter; legacy execution is refused'
+          );
+        if (workspace.state && workspace.state.authority !== 'worker-sql')
+          throw new Error('Existing workspace authority requires explicit migration');
+        if (!workspace.state)
+          await new BranchWorkspaceRepository(tenantDb, {
+            tenantId: tenantId as TenantID,
+            branchId: session.branch_id as BranchID,
+          }).mutate((state, now) => ({
+            state: state ?? {
+              schema: 1,
+              authority: 'worker-sql',
+              scope: { tenantId: tenantId as TenantID, branchId: session.branch_id as BranchID },
+              revision: 0,
+              epoch: 0,
+              host: null,
+              leaseUntil: 0,
+              tree: {},
+              versions: {},
+              active: {},
+              receipts: {},
+              updatedAt: now,
+            },
+            result: undefined,
+          }));
+      } else {
+        assertNativeWorkspaceAdmission({
+          config: {},
+          tenantId,
+          branchId: session.branch_id,
+          state: workspace.state,
+        });
+      }
     }
     const agenticTool = requireActiveAgenticTool(session.agentic_tool);
     if (!isDeploymentAgenticToolAvailable(agenticTool, deploymentPolicy)) {

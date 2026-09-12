@@ -1,3 +1,4 @@
+import { markUnverifiedSdkTeardown } from '../../replicated-workspace.js';
 /**
  * Claude Prompt Service
  *
@@ -588,6 +589,7 @@ If you continue to see authentication errors, please contact your Agor administr
           await awaitWithTimeout(closing, ClaudePromptService.QUERY_CLOSE_TIMEOUT_MS);
         }
       } catch {
+        markUnverifiedSdkTeardown();
         // best-effort — teardown must never turn a settled turn into a failure
       }
     }

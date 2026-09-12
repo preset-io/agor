@@ -118,7 +118,16 @@ export type PermissionMode = z.infer<typeof PermissionModeSchema>;
  * NOTE: Delegated launcher identity is not in the payload. It is handled at
  * spawn time by the daemon and external launcher.
  */
+export const ReplicatedWorkspaceDescriptorSchema = z.object({
+  endpoint: z.string().url(),
+  capability: z.string().min(32),
+  cwd: z.string().startsWith('/'),
+});
+export type ReplicatedWorkspaceDescriptor = z.infer<typeof ReplicatedWorkspaceDescriptorSchema>;
+
 export const BasePayloadSchema = z.object({
+  replicatedWorkspace: ReplicatedWorkspaceDescriptorSchema.optional(),
+  requiresReplicatedWorkspace: z.boolean().optional(),
   /** Executor command identifier */
   command: z.string(),
 
@@ -165,6 +174,7 @@ export const PromptPayloadSchema = BasePayloadSchema.extend({
     tool: ToolTypeSchema,
     permissionMode: PermissionModeSchema.optional(),
     cwd: z.string(),
+    principalBranchAccess: z.enum(['none', 'read', 'write']).optional(),
     messageSource: z.enum(['gateway', 'agor']).optional(),
     promptOrigin: z
       .discriminatedUnion('kind', [

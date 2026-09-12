@@ -48,6 +48,7 @@
     "@agor/core": "workspace:*",
     "@agor/git": "workspace:*",
     "@anthropic-ai/sdk": "^0.109.0",
+    "@aws-sdk/client-s3": "^3.1107.0",
     "@discordjs/rest": "^2.6.3",
     "@discordjs/ws": "^2.0.4",
     "@feathersjs/authentication": "^5.0.46",
