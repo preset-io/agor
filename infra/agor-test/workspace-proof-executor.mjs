@@ -9,7 +9,7 @@ const payload = JSON.parse(Buffer.concat(chunks).toString());
 const input = JSON.parse(payload.params.prompt);
 const transcript = `/home/agor/.claude/projects/-workspace/${payload.params.sessionId}.jsonl`;
 if (input.checkTranscript) assert.equal(await readFile(transcript, 'utf8'), 'fixture transcript\n');
-const request = { command: input.command, timeout_ms: 10000, idempotencyKey: randomUUID() };
+const request = { command: input.command, timeout_ms: 120000, idempotencyKey: randomUUID() };
 const invoke = async () => {
   const r = await fetch(`${payload.replicatedWorkspace.endpoint}/execute`, {
     method: 'POST',
@@ -43,7 +43,7 @@ if (input.expected === 'stopped') {
 }
 const result = await invoke();
 assert.deepEqual(await invoke(), result);
-assert.equal(result.exitCode, 0, result.output);
+assert.equal(result.exitCode, input.expectedExit ?? 0, result.output);
 if (input.expected !== 'either') assert.equal(result.outcome.status, input.expected);
 await mkdir('/home/agor/.claude/projects/-workspace', { recursive: true });
 await writeFile(transcript, 'fixture transcript\n');

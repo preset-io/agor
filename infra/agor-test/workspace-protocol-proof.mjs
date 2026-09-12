@@ -17,6 +17,16 @@ if (phase === 'restore') tasks[0] = randomUUID();
 const source = '/var/lib/agor-proof/source';
 await mkdir(source, { recursive: true });
 await writeFile(path.join(source, 'base.txt'), 'original');
+const gitRequire = createRequire('/opt/agor-runtime/lib/node_modules/agor-live/package.json');
+const sourceGit = gitRequire('simple-git')(source);
+if (!(await sourceGit.checkIsRepo())) {
+  await sourceGit.init();
+  await sourceGit.addConfig('user.name', 'Workspace proof');
+  await sourceGit.addConfig('user.email', 'proof@agor.test');
+  await sourceGit.add('base.txt');
+  await sourceGit.commit('fixture history');
+}
+
 const claims = (index) =>
   Buffer.from(
     JSON.stringify({
@@ -90,7 +100,7 @@ const call = async (route, input) => {
   assert.equal(res.status, 200, text);
   return text;
 };
-const dispatch = (index, command, expected, checkTranscript = false) =>
+const dispatch = (index, command, expected, checkTranscript = false, expectedExit = 0) =>
   call('/dispatch', {
     tenantId,
     branchId,
@@ -104,7 +114,7 @@ const dispatch = (index, command, expected, checkTranscript = false) =>
         tool: 'claude-code',
         cwd: source,
         principalBranchAccess: 'write',
-        prompt: JSON.stringify({ command, expected, checkTranscript }),
+        prompt: JSON.stringify({ command, expected, checkTranscript, expectedExit }),
       },
     },
   });
@@ -169,6 +179,60 @@ try {
           f.path.includes('node_modules')
       )
     );
+    // Reuse the same session with new task ids, as successive user prompts do.
+    const nextPrompt = () => {
+      tasks[0] = randomUUID();
+      tokens[0] = `fixture.${claims(0)}.fixture`;
+    };
+    const gitCommand = (code) => {
+      const script = `const g=require('/opt/agor-runtime/lib/node_modules/agor-live/node_modules/simple-git')('/workspace'); (async()=>{${code}})().catch(e=>{console.error(e);process.exit(1)});`;
+      return `node -e '${script.replaceAll("'", "'\\''")}'`;
+    };
+    nextPrompt();
+    assert.match(
+      await dispatch(
+        0,
+        [
+          'set -e',
+          'mkdir -p frontend npm-fixture .cache',
+          `printf '%s' '{"name":"local-proof","version":"1.0.0","main":"index.js"}' > npm-fixture/package.json`,
+          `printf '%s' 'module.exports=42' > npm-fixture/index.js`,
+          'npm install --prefix frontend --no-audit --no-fund ../npm-fixture',
+          'python3 -m venv .venv',
+          '.venv/bin/pip install --disable-pip-version-check six==1.17.0',
+          'mkdir -p ~/.local/bin ~/.cache/pip ~/.nvm',
+          'printf retained > ~/.local/bin/retained-proof',
+          'printf retained > ~/.cache/pip/retained-proof',
+          'printf retained > ~/.nvm/retained-proof',
+          gitCommand(
+            "await g.add(['alpha.txt']); await g.commit('private local commit'); require('fs').writeFileSync('.cache/private-head',await g.revparse(['HEAD']));"
+          ),
+        ].join('\n'),
+        'committed'
+      ),
+      /PROOF_EXECUTOR_OK/
+    );
+    nextPrompt();
+    assert.match(
+      await dispatch(
+        0,
+        [
+          'set -e',
+          `node -e "require('assert').equal(require('./frontend/node_modules/local-proof'),42)"`,
+          `.venv/bin/python -c "import six; assert six.__version__ == '1.17.0'"`,
+          'test "$(cat ~/.local/bin/retained-proof)" = retained',
+          'test "$(cat ~/.cache/pip/retained-proof)" = retained',
+          'test "$(cat ~/.nvm/retained-proof)" = retained',
+          gitCommand(
+            "require('assert').equal(await g.revparse(['HEAD']),require('fs').readFileSync('.cache/private-head','utf8'));"
+          ),
+        ].join('\n'),
+        'committed'
+      ),
+      /PROOF_EXECUTOR_OK/
+    );
+    nextPrompt();
+    assert.match(await dispatch(0, 'false | cat', 'committed', false, 1), /PROOF_EXECUTOR_OK/);
     await call('/drain', {});
     console.log(
       JSON.stringify({
@@ -183,6 +247,10 @@ try {
           'background process reaping',
           'Stop contains tools before acknowledgement',
           'excluded dependencies',
+          'npm and pip reuse across prompts',
+          'private Git history and commits across prompts',
+          'local user tools and caches across prompts',
+          'pipeline failures remain failures',
           'checkpoint and drain',
         ],
       })
