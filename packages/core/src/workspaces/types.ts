@@ -11,6 +11,8 @@ export interface Entry {
   mode: number;
   size: number;
   target?: string;
+  /** Tracked repository configuration admitted at extraction, retained across Git-less restore. */
+  repositoryConfig?: true;
 }
 export type Tree = Record<string, Entry>;
 export interface Mutation {

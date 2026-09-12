@@ -12,6 +12,7 @@ import {
   writeFile,
 } from 'node:fs/promises';
 import path from 'node:path';
+import { included, isRepositoryConfiguration, validPath } from '@agor/core/workspaces';
 import { createGit } from '@agor/git';
 import { assertSafeGitRemoteUrl, stripGitUrlCredentials } from '@agor/git/pure';
 import { z } from 'zod';
@@ -212,3 +213,52 @@ export const LOCAL_TOOL_ENV = [
   'PYTHONUSERBASE=/home/agor/.local',
   'PATH=/home/agor/.local/bin:/usr/local/bin:/usr/bin:/bin',
 ];
+
+/** Explicit one-time repair of named files omitted by the old source filter.
+ * Never run automatically: an absent tracked file may be an intentional deletion.
+ */
+export async function restoreMissingRepositoryConfiguration(
+  workspace: string,
+  names: string[]
+): Promise<string[]> {
+  const { git } = createGit(workspace);
+  const tracked = new Set(
+    (await git.raw(['ls-files', '-z', '--cached'])).split('\0').filter(Boolean)
+  );
+  const restored: string[] = [];
+  for (const name of names) {
+    validPath(name);
+    if (
+      !isRepositoryConfiguration(name) ||
+      !tracked.has(name) ||
+      !included(name, [], new Set([name]))
+    )
+      throw new Error(`Not tracked repository configuration: ${name}`);
+    const parts = name.split('/');
+    let parent = workspace;
+    for (const component of parts.slice(0, -1)) {
+      parent = path.join(parent, component);
+      await mkdir(parent, { recursive: true });
+      const stat = await lstat(parent);
+      if (!stat.isDirectory() || stat.isSymbolicLink())
+        throw new Error('Unsafe configuration ancestor');
+    }
+    const destination = path.join(workspace, name);
+    try {
+      await lstat(destination);
+      continue;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    }
+    const entry = await git.raw(['ls-files', '--stage', '--', name]);
+    if (!/^100[67][45][45] [a-f0-9]+ 0\t/.test(entry))
+      throw new Error('Configuration must be an unconflicted regular file');
+    const bytes = await git.showBuffer([`:${name}`]);
+    await writeFile(destination, bytes, {
+      flag: 'wx',
+      mode: entry.startsWith('100755') ? 0o755 : 0o644,
+    });
+    restored.push(name);
+  }
+  return restored;
+}

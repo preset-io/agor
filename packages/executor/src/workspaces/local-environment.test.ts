@@ -57,3 +57,29 @@ it('restores real history and index without overwriting source, and keeps indepe
     await rm(root, { recursive: true, force: true });
   }
 });
+
+it('repairs only explicitly named missing tracked configuration and preserves existing edits', async () => {
+  const { restoreMissingRepositoryConfiguration } = await import('./local-environment');
+  const root = await mkdtemp(path.join(tmpdir(), 'agor-config-repair-'));
+  try {
+    const { git } = createGit(root);
+    await git.init();
+    await mkdir(path.join(root, 'frontend'));
+    await writeFile(path.join(root, 'frontend/.npmrc'), 'min-release-age=3\n');
+    await writeFile(path.join(root, '.env.example'), 'TEMPLATE=yes\n');
+    await git.add(['frontend/.npmrc', '.env.example']);
+    await rm(path.join(root, 'frontend/.npmrc'));
+    await writeFile(path.join(root, '.env.example'), 'user edit');
+    expect(
+      await restoreMissingRepositoryConfiguration(root, ['frontend/.npmrc', '.env.example'])
+    ).toEqual(['frontend/.npmrc']);
+    expect(await readFile(path.join(root, 'frontend/.npmrc'), 'utf8')).toBe('min-release-age=3\n');
+    expect(await readFile(path.join(root, '.env.example'), 'utf8')).toBe('user edit');
+    expect(await restoreMissingRepositoryConfiguration(root, ['frontend/.npmrc'])).toEqual([]);
+    await expect(
+      restoreMissingRepositoryConfiguration(root, ['.aws/credentials'])
+    ).rejects.toThrow();
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});

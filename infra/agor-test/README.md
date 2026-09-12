@@ -182,3 +182,21 @@ and report container OOM failures. Tool memory/CPU reservations are configurable
 through `toolMemoryGiB` and `toolCpus` (defaults 8 GiB and 2 CPUs); admission also
 reserves 3 GiB/1 CPU for each SDK and 2 GiB for the host. A 16-GiB worker therefore
 admits one such session; smaller tool budgets or larger workers permit concurrency.
+
+Tracked `.npmrc`, `.env*` and repository `.claude` files are synchronized as
+repository configuration. Untracked files with those names remain local; credential
+stores such as `.aws`, `.netrc` and `.claude/auth.json` stay excluded even if tracked.
+Configuration provenance travels in the source manifest, including during restore
+before local Git metadata exists. Once admitted, configuration remains source content
+until deleted; removing it from the Git index alone does not make it private again.
+
+Use `upgrade-workspace-worker.sh <release>` after building to drain and replace an
+idle worker while retaining the previous container. Do not roll a workspace containing
+configuration provenance back to an older worker that does not understand it.
+For branches imported by the old filter, `repair-workspace-config.mjs <config>
+<tenant> <branch> <session> <paths...>` restores explicitly named missing tracked
+configuration from the session's Git index, then commits it through the normal
+workspace protocol and drains to durable storage. Run it in the new runtime image
+on the owning host with the worker stopped after draining. It preserves existing
+files; it is deliberately an operator action so normal tracked deletions never
+get automatically resurrected.

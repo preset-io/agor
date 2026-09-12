@@ -11,6 +11,7 @@ import {
 } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { createGit } from '@agor/git';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { BranchID, TenantID } from '../types';
 import { BranchWorkspaceCoordinator } from './coordinator';
@@ -41,7 +42,7 @@ class Authority implements WorkspaceMetadata {
     return structuredClone(result.result);
   }
 }
-async function fixture() {
+async function fixture(prepare?: (source: string) => Promise<void>) {
   const root = await mkdtemp(path.join(tmpdir(), 'agor-workspace-'));
   dirs.push(root);
   const source = path.join(root, 'source');
@@ -65,6 +66,7 @@ async function fixture() {
     maximumReceipts: 1000,
     exclude: [],
   };
+  await prepare?.(source);
   const c = new BranchWorkspaceCoordinator(scope, metadata, blobs, options);
   await c.materialise(source);
   return { root, source, scope, metadata, blobs, options, c };
@@ -361,6 +363,7 @@ it('retains nested local packages, environments and Git state after a tool abort
   await writeFile(path.join(a.workspace, 'frontend/package.json'), '{}');
   await c.completeTool(a.ticket);
   const b = await c.beginTool('session-a', 'install', 'install');
+  await createGit(b.workspace).git.init();
   for (const directory of [
     'frontend/node_modules/pkg',
     '.venv/lib/pkg',
@@ -390,4 +393,69 @@ it('retains nested local packages, environments and Git state after a tool abort
     code: 'ENOENT',
   });
   await c.abortTool(other.ticket);
+});
+
+it('retains tracked repository configuration through tools and Git-less host recovery, excluding private files', async () => {
+  const tracked = [
+    'frontend/.npmrc',
+    'docker/.env',
+    '.claude/settings.json',
+    'docs/.claude/instructions.md',
+    '.env.example',
+  ];
+  const f = await fixture(async (source) => {
+    const { git } = createGit(source);
+    await git.init();
+    for (const name of tracked) {
+      await mkdir(path.dirname(path.join(source, name)), { recursive: true });
+      await writeFile(path.join(source, name), 'repository configuration');
+    }
+    await git.add(tracked);
+    for (const name of [
+      '.npmrc',
+      '.env',
+      '.claude/auth.json',
+      '.claude/settings.local.json',
+      '.aws/credentials',
+    ]) {
+      await mkdir(path.dirname(path.join(source, name)), { recursive: true });
+      await writeFile(path.join(source, name), 'private credential');
+    }
+    // Even explicitly tracked credential stores are never admitted by the config exception.
+    await git.add(['.claude/auth.json', '.aws/credentials']);
+  });
+  for (const name of tracked) expect(f.metadata.state!.tree[name]?.repositoryConfig).toBe(true);
+  for (const name of [
+    '.npmrc',
+    '.env',
+    '.claude/auth.json',
+    '.claude/settings.local.json',
+    '.aws/credentials',
+  ])
+    expect(f.metadata.state!.tree[name]).toBeUndefined();
+  const a = await f.c.beginTool('one', 't1', 'k1');
+  await writeFile(path.join(a.workspace, 'frontend/.npmrc'), 'edited repository configuration');
+  await rm(path.join(a.workspace, '.env.example'));
+  await f.c.completeTool(a.ticket);
+  await f.c.drain();
+  await f.c.evict();
+  const restored = new BranchWorkspaceCoordinator(f.scope, f.metadata, f.blobs, {
+    ...f.options,
+    host: 'b',
+    root: path.join(f.root, 'host-b'),
+  });
+  await restored.restore();
+  const b = await restored.beginTool('two', 't2', 'k2');
+  expect(await readFile(path.join(b.workspace, 'frontend/.npmrc'), 'utf8')).toBe(
+    'edited repository configuration'
+  );
+  expect(await readFile(path.join(b.workspace, '.claude/settings.json'), 'utf8')).toBe(
+    'repository configuration'
+  );
+  await expect(lstat(path.join(b.workspace, '.env.example'))).rejects.toMatchObject({
+    code: 'ENOENT',
+  });
+  const revision = f.metadata.state!.revision;
+  await restored.completeTool(b.ticket);
+  expect(f.metadata.state!.revision).toBe(revision);
 });

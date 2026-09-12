@@ -12,6 +12,7 @@ import {
   writeFile,
 } from 'node:fs/promises';
 import path from 'node:path';
+import { createGit } from '@agor/git';
 import type { Entry, Mutation, Tree, WorkspaceBlobs } from './types';
 import { WorkspaceError } from './types';
 
@@ -35,15 +36,48 @@ export const DEFAULT_EXCLUDES = [
 const SECRET_NAMES = new Set([
   'auth.json',
   '.credentials.json',
-  '.npmrc',
   '.pypirc',
   '.netrc',
   '.ssh',
   '.aws',
   '.kube',
   '.codex',
-  '.claude',
 ]);
+/** Repository configuration may share names with private home configuration. */
+export function isRepositoryConfiguration(value: string): boolean {
+  return value
+    .split('/')
+    .some((p) => p === '.npmrc' || p === '.claude' || p === '.env' || p.startsWith('.env.'));
+}
+export function repositoryPaths(tree: Tree): Set<string> {
+  return new Set(
+    Object.entries(tree)
+      .filter(([, e]) => e.repositoryConfig === true)
+      .map(([name]) => name)
+  );
+}
+async function trackedConfiguration(root: string, known: Set<string>): Promise<Set<string>> {
+  const admitted = new Set(known);
+  // Do not accidentally discover a parent repository for a Git-less replica.
+  try {
+    await lstat(path.join(root, '.git'));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return admitted;
+    throw error;
+  }
+  const { git } = createGit(root);
+  for (const name of (await git.raw(['ls-files', '-z', '--cached'])).split('\0').filter(Boolean)) {
+    if (!isRepositoryConfiguration(name)) continue;
+    validPath(name);
+    admitted.add(name);
+    let parent = path.posix.dirname(name);
+    while (parent !== '.') {
+      admitted.add(parent);
+      parent = path.posix.dirname(parent);
+    }
+  }
+  return admitted;
+}
 export function hash(content: Buffer | string): string {
   return createHash('sha256').update(content).digest('hex');
 }
@@ -62,15 +96,14 @@ export function validPath(value: string): void {
   )
     throw new WorkspaceError('INVALID', 'Invalid workspace-relative path');
 }
-export function included(value: string, excludes: string[]): boolean {
+export function included(value: string, excludes: string[], admitted = new Set<string>()): boolean {
   validPath(value);
   return !value
     .split('/')
     .some(
       (p) =>
         SECRET_NAMES.has(p) ||
-        p === '.env' ||
-        p.startsWith('.env.') ||
+        (isRepositoryConfiguration(p) && !admitted.has(value)) ||
         DEFAULT_EXCLUDES.includes(p) ||
         excludes.includes(p)
     );
@@ -82,12 +115,15 @@ export function equal(a?: Entry, b?: Entry): boolean {
     a.hash === b.hash &&
     a.mode === b.mode &&
     a.size === b.size &&
-    a.target === b.target
+    a.target === b.target &&
+    a.repositoryConfig === b.repositoryConfig
   );
 }
 export function validateTree(tree: Tree, excludes: string[]): void {
+  const admitted = repositoryPaths(tree);
   for (const [name, entry] of Object.entries(tree)) {
-    if (!included(name, excludes)) throw new WorkspaceError('INVALID', `Excluded path: ${name}`);
+    if (!included(name, excludes, admitted))
+      throw new WorkspaceError('INVALID', `Excluded path: ${name}`);
     if (
       !['file', 'directory', 'symlink'].includes(entry.kind) ||
       !/^[a-f0-9]{64}$/.test(entry.hash) ||
@@ -117,7 +153,7 @@ export function validateTree(tree: Tree, excludes: string[]): void {
       if (
         resolved === '..' ||
         resolved.startsWith('../') ||
-        (resolved !== '.' && !included(resolved, excludes))
+        (resolved !== '.' && !included(resolved, excludes, admitted))
       )
         throw new WorkspaceError('INVALID', `Symlink escapes synchronized content: ${name}`);
       if (entry.hash !== hash(target))
@@ -132,9 +168,11 @@ export async function scan(
   excludes: string[],
   limits: { maximumBytes: number; maximumFiles: number },
   onFile?: (name: string, entry: Entry, bytes: Buffer) => Promise<void>,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  knownRepositoryPaths = new Set<string>()
 ): Promise<{ tree: Tree; excluded: number }> {
   const tree: Tree = Object.create(null);
+  const admitted = await trackedConfiguration(root, knownRepositoryPaths);
   let total = 0;
   let count = 0;
   let excluded = 0;
@@ -148,7 +186,7 @@ export async function scan(
     for (const name of (await readdir(path.join(root, dir))).sort()) {
       check();
       const relative = dir ? `${dir}/${name}` : name;
-      if (!included(relative, excludes)) {
+      if (!included(relative, excludes, admitted)) {
         excluded++;
         continue;
       }
@@ -209,6 +247,8 @@ export async function scan(
     await Promise.all(pending);
   }
   check();
+  for (const [name, entry] of Object.entries(tree))
+    if (admitted.has(name)) entry.repositoryConfig = true;
   validateTree(tree, excludes);
   return { tree, excluded };
 }
@@ -348,14 +388,16 @@ export async function refresh(
 export async function preserveLocalPaths(
   source: string,
   destination: string,
-  excludes: string[]
+  excludes: string[],
+  restoredTree: Tree = {}
 ): Promise<void> {
+  const admitted = await trackedConfiguration(source, repositoryPaths(restoredTree));
   const fs = await import('node:fs/promises');
   async function visit(relative: string): Promise<void> {
     for (const entry of await fs.readdir(path.join(source, relative), { withFileTypes: true })) {
       const name = relative ? `${relative}/${entry.name}` : entry.name;
       const target = path.join(destination, name);
-      if (!included(name, excludes)) {
+      if (!included(name, excludes, admitted)) {
         await fs.mkdir(path.dirname(target), { recursive: true });
         await fs.rename(path.join(source, name), target);
       } else if (entry.isDirectory()) {

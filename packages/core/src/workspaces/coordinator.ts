@@ -12,6 +12,7 @@ import {
   preserveLocalPaths,
   refresh,
   render,
+  repositoryPaths,
   scan,
   validateTree,
 } from './tree';
@@ -324,7 +325,7 @@ export class BranchWorkspaceCoordinator {
               signal
             );
             // Keep nested dependencies, build products and private Git metadata.
-            await preserveLocalPaths(workspace, staging, this.options.exclude);
+            await preserveLocalPaths(workspace, staging, this.options.exclude, state.tree);
             await rm(workspace, { recursive: true, force: true });
             await rename(staging, workspace);
             await writeFile(
@@ -378,9 +379,16 @@ export class BranchWorkspaceCoordinator {
       ) as { ticket: ToolTicket; tree: Tree };
       this.sameTicket(baseline.ticket, ticket);
       const extracted = await this.measured('mutation_extract_ms', () =>
-        scan(workspace, this.options.exclude, this.options, async (name, entry, bytes) => {
-          if (!equal(baseline.tree[name], entry)) await this.blobs.put(entry.hash, bytes);
-        })
+        scan(
+          workspace,
+          this.options.exclude,
+          this.options,
+          async (name, entry, bytes) => {
+            if (!equal(baseline.tree[name], entry)) await this.blobs.put(entry.hash, bytes);
+          },
+          undefined,
+          repositoryPaths(baseline.tree)
+        )
       );
       const changes = mutations(baseline.tree, extracted.tree);
       this.event('excluded_paths', extracted.excluded);
