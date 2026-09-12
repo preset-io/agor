@@ -71,8 +71,10 @@ it('reflinks cached checkouts with private Git, fresh remote commits and no inhe
   await g.raw(['update-ref', 'refs/remotes/origin/main', (await g.revparse(['HEAD'])).trim()]);
   await g.raw(['update-server-info']);
   let requests = 0;
+  let objectRequests = 0;
   const server = createServer(async (req, res) => {
     requests++;
+    if (req.url?.includes('/objects/')) objectRequests++;
     const name = resolve(
       source,
       '.git',
@@ -140,6 +142,18 @@ it('reflinks cached checkouts with private Git, fresh remote commits and no inhe
     (await g.revparse(['HEAD'])).trim()
   );
   expect(await readFile(join(b, 'README.md'), 'utf8')).toBe('first\n');
+  const objectsBefore = objectRequests;
+  const isolated = join(root, 'other-tenant');
+  await createBranchAsReflink({
+    ...options,
+    cacheScope: 'other-tenant-repo/user',
+    referencePath: undefined,
+    targetPath: isolated,
+  });
+  // A different tenant-owned repository must fetch its own objects; it cannot
+  // discover or seed from this repository's cache even for the same remote.
+  expect(objectRequests).toBeGreaterThan(objectsBefore);
+  expect((await createGit(isolated).git.status()).isClean()).toBe(true);
   const missing = join(root, 'missing');
   await expect(
     createBranchAsReflink({ ...options, ref: 'missing-ref', targetPath: missing })

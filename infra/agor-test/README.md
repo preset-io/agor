@@ -223,6 +223,9 @@ fetch repository with reflinked Git objects, fetches the selected ref with scope
 credentials, and reflinks the matching cached checkout into the branch path.
 Every branch has private files, index, refs and config; no hardlinks or Git
 alternates connect it to its source. Relative symlinks retain their original targets.
+Different history depths reuse trusted files and Git data within the same scope;
+the fetch adjusts shallow history without repeating the checkout when the commit
+is unchanged. Cold tag seeds use one packed-refs file instead of a process per tag.
 New commits incur one cold checkout; a warm creation still contacts the remote
 before reusing a tree. Cache directories remain outside all SDK/tool mounts.
 The existing worker protocol adopts this branch on the first session tool call.

@@ -2374,18 +2374,23 @@ export async function createBranchAsReflink(options: {
   if (options.depth !== undefined && (!Number.isInteger(options.depth) || options.depth < 1))
     throw new Error('Invalid clone depth');
   if (existsSync(options.targetPath)) throw new Error('Branch destination already exists');
-  const key = createHash('sha256')
-    .update(
-      JSON.stringify([
-        options.cacheScope,
-        remote,
-        origin,
-        options.depth,
-        options.ref,
-        options.refType ?? 'branch',
-      ])
-    )
-    .digest('hex');
+  // Keep checkout histories distinct, but allow a trusted seed from another
+  // depth belonging to exactly the same repository, principal and remote/ref.
+  const cacheKey = (depth: number | undefined) =>
+    createHash('sha256')
+      .update(
+        JSON.stringify([
+          options.cacheScope,
+          remote,
+          origin,
+          depth,
+          options.ref,
+          options.refType ?? 'branch',
+        ])
+      )
+      .digest('hex');
+  const key = cacheKey(options.depth);
+  const family = join(options.cacheRoot, `seed-${cacheKey(undefined)}`);
   const cache = join(options.cacheRoot, key);
   await mkdir(cache, { recursive: true, mode: 0o700 });
   const stage = await mkdtemp(join(cache, 'fetch-'));
@@ -2396,20 +2401,33 @@ export async function createBranchAsReflink(options: {
     await rm(join(stage, '.git', 'hooks'), { recursive: true, force: true });
     let reference = options.referencePath;
     let trustedTemplate = false;
-    try {
-      const latest = (await readFile(join(cache, 'latest'), 'utf8')).trim();
-      if (!/^[a-f0-9]{40,64}$/.test(latest)) throw new Error('Invalid reflink cache pointer');
-      reference = join(cache, latest);
-      trustedTemplate = true;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    let seedCache = cache;
+    for (const candidate of [cache, join(options.cacheRoot, cacheKey(undefined)), family]) {
+      try {
+        const latest = (await readFile(join(candidate, 'latest'), 'utf8')).trim();
+        if (!/^[a-f0-9]{64}(\/[a-f0-9]{64})?$/.test(latest))
+          throw new Error('Invalid reflink cache pointer');
+        // Family pointers include the depth-specific cache directory.
+        if (candidate !== family && latest.includes('/'))
+          throw new Error('Invalid reflink cache pointer');
+        reference = join(candidate === family ? options.cacheRoot : candidate, latest);
+        seedCache = dirname(reference);
+        trustedTemplate = true;
+        break;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      }
     }
+    const reuseCheckout = trustedTemplate && seedCache !== cache;
     if (trustedTemplate && reference) {
       // Only our immutable cache may supply config and refs. Unlike a mutable
       // repository it contains no user hooks, helpers, includes or credentials.
       // Cloning the whole private Git tree also avoids hundreds of update-ref
       // processes just to recreate tags already present in the cache.
-      await cloneReflinkTree(join(reference, '.git'), join(stage, '.git'));
+      await cloneReflinkTree(
+        reuseCheckout ? reference : join(reference, '.git'),
+        reuseCheckout ? stage : join(stage, '.git')
+      );
     } else if (reference && existsSync(reference)) {
       const { git: source } = createGit(reference);
       const objects = resolve(reference, (await source.revparse(['--git-path', 'objects'])).trim());
@@ -2427,10 +2445,18 @@ export async function createBranchAsReflink(options: {
       const tags = (
         await source.raw(['for-each-ref', '--format=%(refname) %(objectname)', 'refs/tags'])
       ).trim();
-      for (const line of tags.split('\n').filter(Boolean)) {
-        const [ref, oid] = line.split(' ');
-        await git.raw(['update-ref', ref, oid]);
-      }
+      // One Git invocation rather than one process per tag (Superset has hundreds).
+      if (tags)
+        await writeFile(
+          join(stage, '.git', 'packed-refs'),
+          `${tags
+            .split('\n')
+            .map((line) => {
+              const [ref, oid] = line.split(' ');
+              return `${oid} ${ref}`;
+            })
+            .join('\n')}\n`
+        );
       const shallow = resolve(reference, (await source.revparse(['--git-path', 'shallow'])).trim());
       if (existsSync(shallow)) await cp(shallow, join(stage, '.git', 'shallow'));
       const candidate =
@@ -2461,12 +2487,19 @@ export async function createBranchAsReflink(options: {
       '--format=%(refname) %(objectname)',
       'refs/tags',
     ]);
+    const shallowIdentity = await readFile(join(stage, '.git', 'shallow'), 'utf8').catch(
+      (error) => {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+        return '';
+      }
+    );
     const treeKey = createHash('sha256')
-      .update(commit + tagIdentity)
+      .update(commit + tagIdentity + shallowIdentity)
       .digest('hex');
     const template = join(cache, treeKey);
     let cacheHit = existsSync(template);
     if (!cacheHit) {
+      const checkoutMatches = reuseCheckout && (await git.revparse(['HEAD'])).trim() === commit;
       await git.raw(['update-ref', '-d', 'refs/heads/seed']);
       await git.raw(['symbolic-ref', 'HEAD', 'refs/heads/base']);
       await git.raw(['update-ref', 'refs/heads/base', commit]);
@@ -2475,7 +2508,7 @@ export async function createBranchAsReflink(options: {
         await git.raw(['update-ref', `refs/tags/${options.ref}`, tag]);
       }
       if (!trustedTemplate) await git.addRemote('origin', origin);
-      await git.raw(['reset', '--hard', commit]);
+      if (!checkoutMatches) await git.raw(['reset', '--hard', commit]);
       try {
         await rename(stage, template);
       } catch (error) {
@@ -2487,6 +2520,10 @@ export async function createBranchAsReflink(options: {
     const pointer = join(cache, `latest-${randomUUID()}`);
     await writeFile(pointer, treeKey, { mode: 0o600 });
     await rename(pointer, join(cache, 'latest'));
+    await mkdir(family, { recursive: true, mode: 0o700 });
+    const familyPointer = join(family, `latest-${randomUUID()}`);
+    await writeFile(familyPointer, `${key}/${treeKey}`, { mode: 0o600 });
+    await rename(familyPointer, join(family, 'latest'));
     await mkdir(dirname(options.targetPath), { recursive: true });
     // Exclusive reservation avoids overwriting another operation's destination.
     await mkdir(options.targetPath, { mode: 0o700 });
@@ -2508,6 +2545,7 @@ export async function createBranchAsReflink(options: {
       JSON.stringify({
         event: 'branch_reflink_created',
         cacheHit,
+        reusedDepthSeed: reuseCheckout,
         commit,
         seedMs,
         fetchMs,

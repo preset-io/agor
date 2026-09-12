@@ -25,6 +25,27 @@ try {
     });
     durations.push(Math.round(performance.now() - started));
   }
+  // Reproduce the actual UI history-depth transition, then deepen and return
+  // to full history. Every checkout must have correct Git shallow semantics.
+  const depthDurations = {};
+  for (const depth of [100, 200]) {
+    const targetPath = path.join(root, `depth-${depth}`);
+    const started = performance.now();
+    await createBranchAsReflink({ ...base, depth, targetPath });
+    depthDurations[depth] = Math.round(performance.now() - started);
+    const git = createGit(targetPath).git;
+    assert.equal((await git.raw(['rev-parse', '--is-shallow-repository'])).trim(), 'true');
+    assert.equal(
+      Number((await git.raw(['rev-list', '--first-parent', '--count', 'HEAD'])).trim()) > 0,
+      true
+    );
+    assert((await git.status()).isClean());
+    assert.equal(
+      (await git.revparse(['HEAD'])).trim(),
+      (await createGit(path.join(root, 'first')).git.revparse(['HEAD'])).trim()
+    );
+  }
+  console.log(JSON.stringify({ depthDurations }));
   const a = path.join(root, 'first'),
     b = path.join(root, 'second');
   const ga = createGit(a).git,
