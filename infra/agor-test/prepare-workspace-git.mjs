@@ -2,7 +2,7 @@
 // Run with the worker's IAM role, read-only config/source mounts and local storage.
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
-import { mkdir, readFile, realpath, rm } from 'node:fs/promises';
+import { lstat, mkdir, readFile, realpath, rm } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import path from 'node:path';
 
@@ -53,14 +53,24 @@ try {
   await c.drain();
   const verification = path.join(seed, 'verify');
   await mkdir(verification);
-  await installGitSeed(replica.workspace, verification);
+  await installGitSeed(replica.workspace, verification, config.clone);
   const restored = JSON.parse(await readFile(path.join(replica.workspace, 'seed.json'), 'utf8'));
   if (restored.head)
     assert.equal(
       (await require('@agor/git').createGit(verification).git.revparse(['HEAD'])).trim(),
       restored.head
     );
-  console.log(JSON.stringify({ branchId, gitHistoryReady: true }));
+  const warm = path.join(seed, 'verify-warm');
+  await mkdir(warm);
+  const started = performance.now();
+  await installGitSeed(replica.workspace, warm, config.clone);
+  const warmGitCloneMs = Math.round(performance.now() - started);
+  if (restored.head)
+    assert.notEqual(
+      (await lstat(path.join(verification, '.git/index'))).ino,
+      (await lstat(path.join(warm, '.git/index'))).ino
+    );
+  console.log(JSON.stringify({ branchId, gitHistoryReady: true, warmGitCloneMs }));
 } finally {
   await sql.end();
   await rm(seed, { recursive: true, force: true });

@@ -396,9 +396,10 @@ export async function startWorker(configPath: string) {
       signal.throwIfAborted();
       await installGitSeed(
         await gitSeed(tenantId, branchId, branch.path, signal),
-        initial.workspace
+        initial.workspace,
+        config.clone
       );
-      await ownTree(initial.workspace, signal);
+      await ownTree(initial.workspace, signal, true);
       const localHome = path.join(path.dirname(initial.workspace), 'local-home');
       for (const directory of LOCAL_HOME_DIRECTORIES) {
         const location = path.join(localHome, directory);

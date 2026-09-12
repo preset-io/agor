@@ -37,6 +37,11 @@ it('restores real history and index without overwriting source, and keeps indepe
       await mkdir(workspace);
       await writeFile(path.join(workspace, 'file'), 'coordinator revision');
       await installGitSeed(seed, workspace);
+      if (name === 'one') {
+        // The second replica must reuse prepared metadata, not unpack history again.
+        for (let i = 0; i < metadata.bundleParts; i++)
+          await rm(path.join(seed, `history.part-${i}`));
+      }
       expect(await createGit(workspace).git.revparse(['HEAD'])).toBe(head);
       expect((await createGit(workspace).git.raw(['describe', '--tags'])).trim()).toBe('v1.0.0');
       expect((await createGit(workspace).git.status()).modified).toEqual(['file']);

@@ -103,6 +103,8 @@ the tool home. Shell activation and working-directory changes must be repeated.
 Fresh replicas import the real initial Git history, branch ref and reachable tags
 without overwriting source files. A separately stored, credential-free Git bundle
 uses verified 64-MiB chunks so large histories fit the source blob size limit.
+Each worker prepares an immutable local Git template once; new sessions clone
+private metadata using reflinks instead of repeatedly unpacking history.
 Local Git refs, index and commits are private to each session and persist while
 its replica is retained. They are not synchronized source revisions: publish
 commits to the remote before migration/eviction if their identity must survive.

@@ -1,5 +1,16 @@
-import { randomUUID } from 'node:crypto';
-import { appendFile, lstat, mkdir, open, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { createHash, randomUUID } from 'node:crypto';
+import { constants } from 'node:fs';
+import {
+  appendFile,
+  cp,
+  lstat,
+  mkdir,
+  open,
+  readFile,
+  rename,
+  rm,
+  writeFile,
+} from 'node:fs/promises';
 import path from 'node:path';
 import { createGit } from '@agor/git';
 import { assertSafeGitRemoteUrl, stripGitUrlCredentials } from '@agor/git/pure';
@@ -100,20 +111,20 @@ export async function exportGitSeed(source: string, destination: string): Promis
   await writeFile(path.join(destination, 'seed.json'), JSON.stringify(seed), { mode: 0o600 });
 }
 
-/** Populate a fresh private Git directory without checking out over authoritative source files. */
-export async function installGitSeed(seedDirectory: string, workspace: string): Promise<void> {
+const templates = new Map<string, Promise<void>>();
+async function prepareGitTemplate(
+  seedDirectory: string,
+  template: string,
+  seed: z.infer<typeof Seed>
+): Promise<void> {
   try {
-    const stat = await lstat(path.join(workspace, '.git'));
-    if (!stat.isDirectory() || stat.isSymbolicLink())
-      throw new Error('Replica Git metadata must be a private directory');
-    return; // Preserve this replica's index, refs, commits and configuration.
+    const stat = await lstat(template);
+    if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error('Invalid Git template');
+    return;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
   }
-  const seed = Seed.parse(
-    JSON.parse(await readFile(path.join(seedDirectory, 'seed.json'), 'utf8'))
-  );
-  const staging = path.join(path.dirname(workspace), `git-init-${randomUUID()}`);
+  const staging = path.join(path.dirname(template), `git-init-${randomUUID()}`);
   await mkdir(staging, { mode: 0o700 });
   try {
     const { git } = createGit(staging);
@@ -139,7 +150,53 @@ export async function installGitSeed(seedDirectory: string, workspace: string): 
     if (seed.remote) await git.addRemote('origin', assertSafeGitRemoteUrl(seed.remote));
     await git.addConfig('user.name', 'Agor');
     await git.addConfig('user.email', 'agor@localhost');
-    await rename(path.join(staging, '.git'), path.join(workspace, '.git'));
+    try {
+      await rename(path.join(staging, '.git'), template);
+    } catch (error) {
+      if (!['EEXIST', 'ENOTEMPTY'].includes((error as NodeJS.ErrnoException).code ?? ''))
+        throw error;
+      if (!(await lstat(template)).isDirectory()) throw error;
+    }
+  } finally {
+    await rm(staging, { recursive: true, force: true });
+  }
+}
+/** Clone private Git state from a trusted immutable template; never share mutable inodes. */
+export async function installGitSeed(
+  seedDirectory: string,
+  workspace: string,
+  clone: 'copy' | 'reflink' = 'copy'
+): Promise<void> {
+  try {
+    const stat = await lstat(path.join(workspace, '.git'));
+    if (!stat.isDirectory() || stat.isSymbolicLink())
+      throw new Error('Replica Git metadata must be a private directory');
+    return;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+  }
+  const raw = await readFile(path.join(seedDirectory, 'seed.json'), 'utf8');
+  const seed = Seed.parse(JSON.parse(raw));
+  const key = createHash('sha256').update(raw).digest('hex');
+  // This lives OUTSIDE the synchronized seed workspace and is never given to a tool.
+  const template = path.join(path.dirname(seedDirectory), `git-template-${key}`);
+  let pending = templates.get(template);
+  if (!pending) {
+    pending = prepareGitTemplate(seedDirectory, template, seed);
+    templates.set(template, pending);
+  }
+  try {
+    await pending;
+  } finally {
+    if (templates.get(template) === pending) templates.delete(template);
+  }
+  const staging = path.join(path.dirname(workspace), `git-copy-${randomUUID()}`);
+  try {
+    await cp(template, staging, {
+      recursive: true,
+      mode: clone === 'reflink' ? constants.COPYFILE_FICLONE_FORCE : 0,
+    });
+    await rename(staging, path.join(workspace, '.git'));
   } finally {
     await rm(staging, { recursive: true, force: true });
   }
