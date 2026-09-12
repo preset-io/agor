@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
+import { createRequire } from 'node:module';
 import path from 'node:path';
 
 const runtime = '/opt/agor-runtime/lib/node_modules/agor-live/dist/executor';
@@ -45,6 +46,34 @@ const api = createServer((req, res) => {
   if (req.url.startsWith('/tasks/')) return res.end(JSON.stringify({ status: 'running' }));
   res.writeHead(404);
   res.end();
+});
+// The production worker claims its Task and sends startup telemetry over the
+// same authenticated Socket.IO protocol as the native executor.
+const require = createRequire('/opt/agor-runtime/lib/node_modules/agor-live/package.json');
+const io = new (require('socket.io').Server)(api);
+io.use((socket, next) =>
+  next(
+    tokens.includes(socket.handshake.auth.accessToken)
+      ? undefined
+      : new Error('Invalid fixture token')
+  )
+);
+io.on('connection', (socket) => {
+  for (const method of [
+    'connectExecutor',
+    'reportRuntimeTelemetry',
+    'get',
+    'patch',
+    'reportTerminationComplete',
+  ]) {
+    socket.on(method, (service, input, ...args) => {
+      const acknowledge = args.at(-1);
+      if (typeof acknowledge !== 'function') return;
+      if (service !== 'tasks') return acknowledge({ message: 'Unknown fixture service' });
+      const taskId = typeof input === 'string' ? input : input.task_id;
+      acknowledge(null, { task_id: taskId, status: 'running' });
+    });
+  }
 });
 await new Promise((resolve) => api.listen(18888, '0.0.0.0', resolve));
 const worker = await startWorker('/run/proof/config.json');
@@ -185,5 +214,5 @@ try {
 } finally {
   await new Promise((resolve) => worker.server.close(resolve));
   await worker.sql.end();
-  await new Promise((resolve) => api.close(resolve));
+  await new Promise((resolve) => io.close(resolve));
 }
