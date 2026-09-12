@@ -33,9 +33,10 @@ export function useTeammateForm(frameworkRepo: Repo | undefined) {
     validateForm();
   }, [frameworkRepo, form, validateForm]);
 
-  const handleDisplayNameChange = useCallback(
-    (e: React.ChangeEvent<HTMLInputElement>) => {
-      const displayName = e.target.value;
+  // Sync the auto-generated branch name from a display name and re-validate.
+  // Shared by the name input and template prefill.
+  const applyDisplayName = useCallback(
+    (displayName: string) => {
       const currentName = form.getFieldValue('name');
       const autoName = `private-${slugify(displayName)}`;
       if (!currentName || currentName === lastAutoName.current) {
@@ -45,6 +46,11 @@ export function useTeammateForm(frameworkRepo: Repo | undefined) {
       validateForm();
     },
     [form, validateForm]
+  );
+
+  const handleDisplayNameChange = useCallback(
+    (e: React.ChangeEvent<HTMLInputElement>) => applyDisplayName(e.target.value),
+    [applyDisplayName]
   );
 
   const resetForm = useCallback(() => {
@@ -61,6 +67,7 @@ export function useTeammateForm(frameworkRepo: Repo | undefined) {
     customRepoSelected,
     setCustomRepoSelected,
     validateForm,
+    applyDisplayName,
     handleDisplayNameChange,
     resetForm,
   };

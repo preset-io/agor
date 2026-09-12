@@ -1,5 +1,6 @@
 import type { KnowledgeDocument as CoreKnowledgeDocument } from '@agor/core/types';
 import type { AgorClient } from '@agor-live/client';
+import type { CreateModalKind } from '../CreateMenu';
 
 export interface HomePageProps {
   client: AgorClient | null;
@@ -9,10 +10,7 @@ export interface HomePageProps {
   onBoardClick: (boardId: string) => void;
   onBranchClick: (branchId: string) => void;
   onSessionClick: (sessionId: string) => void;
-  onOpenCreateDialog: (
-    tab: 'teammate' | 'branch' | 'board' | 'repository',
-    boardId?: string
-  ) => void;
+  onOpenCreateDialog: (kind: CreateModalKind) => void;
   onOpenSettings: (section: 'repos' | 'mcp' | 'users') => void;
 }
 

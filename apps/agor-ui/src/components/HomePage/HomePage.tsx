@@ -1,6 +1,5 @@
-import { AppstoreOutlined, BranchesOutlined, PlusOutlined, RobotOutlined } from '@ant-design/icons';
-import type { MenuProps } from 'antd';
-import { Button, Dropdown, Layout, Modal, Segmented, Select, Space, Typography, theme } from 'antd';
+import { PlusOutlined } from '@ant-design/icons';
+import { Button, Layout, Typography, theme } from 'antd';
 import type React from 'react';
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { DEFAULT_BACKGROUNDS } from '../../constants/ui';
@@ -11,9 +10,8 @@ import {
   useAgorStore,
   useStoreWithEqualityFn,
 } from '../../store/agorStore';
-import { selectBoardById, selectBranchById } from '../../store/selectors';
 import { isDarkTheme } from '../../utils/theme';
-import { BoardTile, getBoardEmoji } from '../BoardTile';
+import { CreateMenu } from '../CreateMenu';
 import { HomeActivitySection } from './HomeActivitySection';
 import { HomeBoardsSection } from './HomeBoardsSection';
 import { HomeKnowledgeSection } from './HomeKnowledgeSection';
@@ -41,12 +39,6 @@ function hasVisibleSession(sessionById: AgorState['sessionById'], currentUserId?
   }
   return false;
 }
-
-const NEW_MENU_ITEMS: MenuProps['items'] = [
-  { key: 'teammate', label: 'New AI teammate', icon: <RobotOutlined /> },
-  { key: 'branch', label: 'New branch', icon: <BranchesOutlined /> },
-  { key: 'board', label: 'New board', icon: <AppstoreOutlined /> },
-];
 
 /**
  * Gate around OnboardingCard that owns the onboarding-progress subscription,
@@ -140,12 +132,7 @@ export const HomePage = memo(function HomePage(props: HomePageProps) {
 
   // HomePage deliberately subscribes to NOTHING session-shaped: sections that
   // display session data subscribe themselves, so a streaming session patch
-  // wakes only those sections — never this whole page. Boards are the one
-  // whole-map subscription left (board options + default board for the create
-  // modal); board patches are rare.
-  const boardById = useAgorStore(selectBoardById);
-  const branchById = useAgorStore(selectBranchById);
-
+  // wakes only those sections — never this whole page.
   const [onboardingHidden, setOnboardingHidden] = useState(
     () => localStorage.getItem(ONBOARDING_HIDDEN_KEY) === 'true'
   );
@@ -228,302 +215,173 @@ export const HomePage = memo(function HomePage(props: HomePageProps) {
   // Tear down an in-progress drag if the page unmounts mid-drag.
   useEffect(() => () => dragCleanupRef.current?.(), []);
 
-  const defaultBoardId = useMemo(() => {
-    const firstRecent = (props.recentBoardIds ?? []).find(
-      (id) => boardById.get(id)?.archived === false
-    );
-    if (firstRecent) return firstRecent;
-    for (const board of boardById.values()) {
-      if (!board.archived) return board.board_id;
-    }
-    return undefined;
-  }, [boardById, props.recentBoardIds]);
-
-  const boardOptions = useMemo(
-    () =>
-      Array.from(boardById.values())
-        .filter((b) => !b.archived)
-        .map((b) => ({
-          value: b.board_id,
-          label: (
-            <Space size={8}>
-              <BoardTile emoji={getBoardEmoji(b, branchById)} size={20} />
-              <span>{b.name}</span>
-            </Space>
-          ),
-        })),
-    [boardById, branchById]
-  );
-
-  const [createOpen, setCreateOpen] = useState(false);
-  const [selectedBoardId, setSelectedBoardId] = useState<string | undefined>();
-  const [createType, setCreateType] = useState<'teammate' | 'branch'>('teammate');
-
-  const handleNewSession = useCallback(
-    (defaultType: 'teammate' | 'branch' = 'teammate') => {
-      setCreateType(defaultType);
-      setSelectedBoardId(defaultBoardId);
-      setCreateOpen(true);
-    },
-    [defaultBoardId]
-  );
-
-  const handleConfirmCreate = useCallback(() => {
-    setCreateOpen(false);
-    props.onOpenCreateDialog(createType, selectedBoardId);
-  }, [props.onOpenCreateDialog, createType, selectedBoardId]);
-
   return (
-    <>
-      <div style={{ height: '100%', overflow: 'hidden', background: homeBackground }}>
-        <Layout hasSider style={{ height: '100%', background: 'transparent' }}>
-          <Content
+    <div style={{ height: '100%', overflow: 'hidden', background: homeBackground }}>
+      <Layout hasSider style={{ height: '100%', background: 'transparent' }}>
+        <Content
+          style={{
+            overflowY: 'auto',
+            display: 'flex',
+            flexDirection: 'column',
+            padding: 'clamp(16px, 3vw, 28px) clamp(16px, 3vw, 32px) 80px',
+          }}
+        >
+          <div
             style={{
-              overflowY: 'auto',
               display: 'flex',
               flexDirection: 'column',
-              padding: 'clamp(16px, 3vw, 28px) clamp(16px, 3vw, 32px) 80px',
+              height: '100%',
+              minHeight: 0,
             }}
           >
+            {/* Greeting */}
+            <header
+              style={{
+                display: 'flex',
+                alignItems: 'flex-start',
+                justifyContent: 'space-between',
+                gap: 16,
+                marginBottom: 24,
+              }}
+            >
+              <div>
+                <Title level={5} style={{ margin: 0, fontWeight: 700 }}>
+                  Hi, {username}! 👋
+                </Title>
+                <Text type="secondary" style={{ fontSize: 14 }}>
+                  Here's an overview of your workspace.
+                </Text>
+              </div>
+              <CreateMenu onSelect={props.onOpenCreateDialog}>
+                <Button type="primary" icon={<PlusOutlined />}>
+                  New
+                </Button>
+              </CreateMenu>
+            </header>
+
+            {/* Get started onboarding card — gate unmounted once dismissed */}
+            {!onboardingHidden && (
+              <HomeOnboarding
+                currentUserId={props.currentUserId}
+                onNewSession={() => props.onOpenCreateDialog('teammate')}
+                onOpenCreateDialog={props.onOpenCreateDialog}
+                onOpenSettings={props.onOpenSettings}
+                onDismiss={() => {
+                  localStorage.setItem(ONBOARDING_HIDDEN_KEY, 'true');
+                  setOnboardingHidden(true);
+                }}
+              />
+            )}
+
+            {/* Jump back in — awaiting sessions (renders nothing when none) */}
+            <JumpBackInSection
+              currentUserId={props.currentUserId}
+              onSessionClick={props.onSessionClick}
+            />
+
+            {/* Workspace stats */}
+            <HomeStatsBar currentUserId={props.currentUserId} />
+
+            {/* My Sessions — flex: 1 fills remaining viewport height */}
+            <HomeSessionsSection
+              currentUserId={props.currentUserId}
+              onSessionClick={props.onSessionClick}
+            />
+
+            {/* Boards grid */}
+            <div style={{ marginTop: 24 }}>
+              <HomeBoardsSection
+                recentBoardIds={props.recentBoardIds}
+                onBoardClick={props.onBoardClick}
+                onOpenCreateDialog={props.onOpenCreateDialog}
+              />
+            </div>
+          </div>
+        </Content>
+
+        {/* Resizable right sidebar — hidden below 992px */}
+        {sidebarVisible && (
+          <aside
+            style={{
+              width: sidebarWidth,
+              flexShrink: 0,
+              position: 'relative',
+              borderLeft: `1px solid ${token.colorBorderSecondary}`,
+              ...glassCardStyle(token, 0.5),
+              overflow: 'hidden',
+              display: 'flex',
+              flexDirection: 'column',
+            }}
+          >
+            {/* Drag handle — biome-ignore lint/a11y/useSemanticElements: needs position:absolute full-height layout; <hr> can't serve as an interactive resize slider */}
+            {/* biome-ignore lint/a11y/useSemanticElements: interactive resize handle */}
+            <div
+              role="separator"
+              aria-orientation="vertical"
+              aria-label="Resize sidebar"
+              aria-valuenow={Math.round(sidebarWidth)}
+              aria-valuemin={SIDEBAR_MIN}
+              aria-valuemax={Math.round(
+                typeof window !== 'undefined'
+                  ? window.innerWidth * SIDEBAR_MAX_RATIO
+                  : SIDEBAR_DEFAULT
+              )}
+              tabIndex={0}
+              onMouseDown={handleDragStart}
+              onMouseEnter={() => setDragHandleHovered(true)}
+              onMouseLeave={() => setDragHandleHovered(false)}
+              onKeyDown={(e) => {
+                const delta = e.key === 'ArrowLeft' ? 8 : e.key === 'ArrowRight' ? -8 : 0;
+                if (delta) {
+                  e.preventDefault();
+                  setSidebarWidth((w) => {
+                    const maxW =
+                      typeof window !== 'undefined'
+                        ? window.innerWidth * SIDEBAR_MAX_RATIO
+                        : SIDEBAR_DEFAULT;
+                    const newW = Math.max(SIDEBAR_MIN, Math.min(maxW, w + delta));
+                    try {
+                      localStorage.setItem(SIDEBAR_STORAGE_KEY, String(Math.round(newW)));
+                    } catch {}
+                    return newW;
+                  });
+                }
+              }}
+              title="Drag or use arrow keys to resize"
+              style={{
+                position: 'absolute',
+                left: 0,
+                top: 0,
+                bottom: 0,
+                width: 4,
+                cursor: 'col-resize',
+                zIndex: 10,
+                background: dragHandleHovered ? token.colorPrimary : 'transparent',
+                transition: 'background 0.15s',
+              }}
+            />
             <div
               style={{
-                display: 'flex',
-                flexDirection: 'column',
-                height: '100%',
+                flex: 1,
                 minHeight: 0,
-              }}
-            >
-              {/* Greeting */}
-              <header
-                style={{
-                  display: 'flex',
-                  alignItems: 'flex-start',
-                  justifyContent: 'space-between',
-                  gap: 16,
-                  marginBottom: 24,
-                }}
-              >
-                <div>
-                  <Title level={5} style={{ margin: 0, fontWeight: 700 }}>
-                    Hi, {username}! 👋
-                  </Title>
-                  <Text type="secondary" style={{ fontSize: 14 }}>
-                    Here's an overview of your workspace.
-                  </Text>
-                </div>
-                <Dropdown
-                  menu={{
-                    items: NEW_MENU_ITEMS,
-                    onClick: ({ key }) => {
-                      if (key === 'teammate' || key === 'branch') {
-                        handleNewSession(key);
-                      } else {
-                        props.onOpenCreateDialog(key as 'board');
-                      }
-                    },
-                  }}
-                  trigger={['click']}
-                >
-                  <Button type="primary" icon={<PlusOutlined />}>
-                    New
-                  </Button>
-                </Dropdown>
-              </header>
-
-              {/* Get started onboarding card — gate unmounted once dismissed */}
-              {!onboardingHidden && (
-                <HomeOnboarding
-                  currentUserId={props.currentUserId}
-                  onNewSession={handleNewSession}
-                  onOpenCreateDialog={props.onOpenCreateDialog}
-                  onOpenSettings={props.onOpenSettings}
-                  onDismiss={() => {
-                    localStorage.setItem(ONBOARDING_HIDDEN_KEY, 'true');
-                    setOnboardingHidden(true);
-                  }}
-                />
-              )}
-
-              {/* Jump back in — awaiting sessions (renders nothing when none) */}
-              <JumpBackInSection
-                currentUserId={props.currentUserId}
-                onSessionClick={props.onSessionClick}
-              />
-
-              {/* Workspace stats */}
-              <HomeStatsBar currentUserId={props.currentUserId} />
-
-              {/* My Sessions — flex: 1 fills remaining viewport height */}
-              <HomeSessionsSection
-                currentUserId={props.currentUserId}
-                onSessionClick={props.onSessionClick}
-              />
-
-              {/* Boards grid */}
-              <div style={{ marginTop: 24 }}>
-                <HomeBoardsSection
-                  recentBoardIds={props.recentBoardIds}
-                  onBoardClick={props.onBoardClick}
-                  onOpenCreateDialog={props.onOpenCreateDialog}
-                />
-              </div>
-            </div>
-          </Content>
-
-          {/* Resizable right sidebar — hidden below 992px */}
-          {sidebarVisible && (
-            <aside
-              style={{
-                width: sidebarWidth,
-                flexShrink: 0,
-                position: 'relative',
-                borderLeft: `1px solid ${token.colorBorderSecondary}`,
-                ...glassCardStyle(token, 0.5),
-                overflow: 'hidden',
                 display: 'flex',
                 flexDirection: 'column',
+                overflow: 'hidden',
+                padding: '16px 12px 16px 16px',
+                gap: 32,
               }}
             >
-              {/* Drag handle — biome-ignore lint/a11y/useSemanticElements: needs position:absolute full-height layout; <hr> can't serve as an interactive resize slider */}
-              {/* biome-ignore lint/a11y/useSemanticElements: interactive resize handle */}
-              <div
-                role="separator"
-                aria-orientation="vertical"
-                aria-label="Resize sidebar"
-                aria-valuenow={Math.round(sidebarWidth)}
-                aria-valuemin={SIDEBAR_MIN}
-                aria-valuemax={Math.round(
-                  typeof window !== 'undefined'
-                    ? window.innerWidth * SIDEBAR_MAX_RATIO
-                    : SIDEBAR_DEFAULT
-                )}
-                tabIndex={0}
-                onMouseDown={handleDragStart}
-                onMouseEnter={() => setDragHandleHovered(true)}
-                onMouseLeave={() => setDragHandleHovered(false)}
-                onKeyDown={(e) => {
-                  const delta = e.key === 'ArrowLeft' ? 8 : e.key === 'ArrowRight' ? -8 : 0;
-                  if (delta) {
-                    e.preventDefault();
-                    setSidebarWidth((w) => {
-                      const maxW =
-                        typeof window !== 'undefined'
-                          ? window.innerWidth * SIDEBAR_MAX_RATIO
-                          : SIDEBAR_DEFAULT;
-                      const newW = Math.max(SIDEBAR_MIN, Math.min(maxW, w + delta));
-                      try {
-                        localStorage.setItem(SIDEBAR_STORAGE_KEY, String(Math.round(newW)));
-                      } catch {}
-                      return newW;
-                    });
-                  }
-                }}
-                title="Drag or use arrow keys to resize"
-                style={{
-                  position: 'absolute',
-                  left: 0,
-                  top: 0,
-                  bottom: 0,
-                  width: 4,
-                  cursor: 'col-resize',
-                  zIndex: 10,
-                  background: dragHandleHovered ? token.colorPrimary : 'transparent',
-                  transition: 'background 0.15s',
-                }}
+              <HomeActivitySection
+                onBoardClick={props.onBoardClick}
+                onBranchClick={props.onBranchClick}
+                onSessionClick={props.onSessionClick}
               />
-              <div
-                style={{
-                  flex: 1,
-                  minHeight: 0,
-                  display: 'flex',
-                  flexDirection: 'column',
-                  overflow: 'hidden',
-                  padding: '16px 12px 16px 16px',
-                  gap: 32,
-                }}
-              >
-                <HomeActivitySection
-                  onBoardClick={props.onBoardClick}
-                  onBranchClick={props.onBranchClick}
-                  onSessionClick={props.onSessionClick}
-                />
-                <HomeKnowledgeSection client={props.client} connected={props.connected} />
-              </div>
-            </aside>
-          )}
-        </Layout>
-      </div>
-
-      <Modal
-        title={createType === 'branch' ? 'New branch' : 'New AI teammate'}
-        open={createOpen}
-        onCancel={() => setCreateOpen(false)}
-        width={420}
-        footer={
-          boardOptions.length === 0
-            ? [
-                <Button key="cancel" onClick={() => setCreateOpen(false)}>
-                  Cancel
-                </Button>,
-                <Button
-                  key="create"
-                  type="primary"
-                  onClick={() => {
-                    setCreateOpen(false);
-                    props.onOpenCreateDialog('board');
-                  }}
-                >
-                  Create a board first
-                </Button>,
-              ]
-            : [
-                <Button key="cancel" onClick={() => setCreateOpen(false)}>
-                  Cancel
-                </Button>,
-                <Button
-                  key="start"
-                  type="primary"
-                  disabled={!selectedBoardId}
-                  onClick={handleConfirmCreate}
-                >
-                  {createType === 'teammate' ? 'Start AI teammate' : 'Create branch'}
-                </Button>,
-              ]
-        }
-      >
-        {boardOptions.length === 0 ? (
-          <div style={{ padding: '8px 0 4px' }}>
-            <Typography.Text type="secondary" style={{ display: 'block', fontSize: 13 }}>
-              You don't have any boards yet. Create one first to organise your work.
-            </Typography.Text>
-          </div>
-        ) : (
-          <div style={{ padding: '8px 0 4px', display: 'flex', flexDirection: 'column', gap: 14 }}>
-            <Segmented
-              value={createType}
-              onChange={(v) => setCreateType(v as 'teammate' | 'branch')}
-              block
-              options={[
-                { value: 'teammate', label: 'AI teammate', icon: <RobotOutlined /> },
-                { value: 'branch', label: 'Branch / Worktree', icon: <BranchesOutlined /> },
-              ]}
-            />
-            <div>
-              <Typography.Text style={{ display: 'block', marginBottom: 8, fontSize: 13 }}>
-                Which board?
-              </Typography.Text>
-              <Select
-                value={selectedBoardId}
-                onChange={setSelectedBoardId}
-                options={boardOptions}
-                placeholder="Select a board"
-                style={{ width: '100%' }}
-              />
+              <HomeKnowledgeSection client={props.client} connected={props.connected} />
             </div>
-          </div>
+          </aside>
         )}
-      </Modal>
-    </>
+      </Layout>
+    </div>
   );
 });
 
