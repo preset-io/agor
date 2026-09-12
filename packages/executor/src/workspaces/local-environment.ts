@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { lstat, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { appendFile, lstat, mkdir, open, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { createGit } from '@agor/git';
 import { assertSafeGitRemoteUrl, stripGitUrlCredentials } from '@agor/git/pure';
@@ -12,10 +12,38 @@ const Seed = z.object({
     .nullable(),
   branch: z.string().regex(/^refs\/heads\/[A-Za-z0-9._/-]+$/),
   remote: z.string().optional(),
+  bundleParts: z.number().int().min(0).max(1024).default(0),
   tags: z
     .array(z.tuple([z.string().startsWith('refs/tags/'), z.string().regex(/^[a-f0-9]{40,64}$/)]))
     .default([]),
 });
+
+// The source protocol bounds individual blobs to 128 MiB. Large repositories
+// therefore store a Git bundle as independently verified 64-MiB parts.
+export async function splitGitBundle(
+  directory: string,
+  partBytes = 64 * 1024 ** 2
+): Promise<number> {
+  const bundle = path.join(directory, 'history.bundle');
+  const file = await open(bundle, 'r');
+  let count = 0;
+  try {
+    const buffer = Buffer.allocUnsafe(partBytes);
+    while (true) {
+      const { bytesRead } = await file.read(buffer, 0, buffer.length, null);
+      if (!bytesRead) break;
+      await writeFile(
+        path.join(directory, `history.part-${count++}`),
+        buffer.subarray(0, bytesRead),
+        { mode: 0o600 }
+      );
+    }
+  } finally {
+    await file.close();
+  }
+  await rm(bundle);
+  return count;
+}
 
 /** Export reachable history only, never source config, hooks, credentials or worktree pointers. */
 export async function exportGitSeed(source: string, destination: string): Promise<void> {
@@ -59,7 +87,7 @@ export async function exportGitSeed(source: string, destination: string): Promis
     remote: safeRemote,
     tags,
   });
-  if (head)
+  if (head) {
     await git.raw([
       'bundle',
       'create',
@@ -67,6 +95,8 @@ export async function exportGitSeed(source: string, destination: string): Promis
       'HEAD',
       ...seed.tags.map(([ref]) => ref),
     ]);
+    seed.bundleParts = await splitGitBundle(destination);
+  }
   await writeFile(path.join(destination, 'seed.json'), JSON.stringify(seed), { mode: 0o600 });
 }
 
@@ -91,7 +121,14 @@ export async function installGitSeed(seedDirectory: string, workspace: string): 
     await git.raw(['check-ref-format', seed.branch]);
     await git.raw(['symbolic-ref', 'HEAD', seed.branch]);
     if (seed.head) {
-      await git.raw(['bundle', 'unbundle', path.join(seedDirectory, 'history.bundle')]);
+      let bundle = path.join(seedDirectory, 'history.bundle');
+      if (seed.bundleParts) {
+        bundle = path.join(staging, 'history.bundle');
+        await writeFile(bundle, '', { mode: 0o600 });
+        for (let i = 0; i < seed.bundleParts; i++)
+          await appendFile(bundle, await readFile(path.join(seedDirectory, `history.part-${i}`)));
+      }
+      await git.raw(['bundle', 'unbundle', bundle]);
       await git.raw(['update-ref', seed.branch, seed.head]);
       await git.raw(['read-tree', seed.head]);
       for (const [ref, object] of seed.tags) {

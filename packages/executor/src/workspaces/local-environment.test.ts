@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { createGit } from '@agor/git';
 import { expect, it } from 'vitest';
-import { exportGitSeed, installGitSeed } from './local-environment';
+import { exportGitSeed, installGitSeed, splitGitBundle } from './local-environment';
 
 it('restores real history and index without overwriting source, and keeps independent local Git state', async () => {
   const root = await mkdtemp(path.join(tmpdir(), 'agor-local-git-'));
@@ -23,6 +23,15 @@ it('restores real history and index without overwriting source, and keeps indepe
     const seed = path.join(root, 'seed');
     await exportGitSeed(source, seed);
     expect(await readFile(path.join(seed, 'seed.json'), 'utf8')).not.toContain('secret');
+    // Exercise multiple parts with a small fixture instead of allocating a 128-MiB test file.
+    const metadata = JSON.parse(await readFile(path.join(seed, 'seed.json'), 'utf8'));
+    await writeFile(
+      path.join(seed, 'history.bundle'),
+      await readFile(path.join(seed, 'history.part-0'))
+    );
+    metadata.bundleParts = await splitGitBundle(seed, 128);
+    expect(metadata.bundleParts).toBeGreaterThan(1);
+    await writeFile(path.join(seed, 'seed.json'), JSON.stringify(metadata));
     for (const name of ['one', 'two']) {
       const workspace = path.join(root, name);
       await mkdir(workspace);
