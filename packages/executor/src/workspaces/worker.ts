@@ -1,3 +1,4 @@
+import { isQuiescentSdkTree, SDK_PROCESS_COLUMNS } from './quiescence.js';
 import { copyClaudeTranscripts, importClaudeSession } from './sdk-transcripts.js';
 /** Trusted controller process. Never mounted into or executed as an SDK child. */
 
@@ -396,17 +397,8 @@ export async function startWorker(configPath: string) {
     const finalize = async () => {
       if (finalized) return;
       await job.queue;
-      const processes = await docker(['top', name, '-eo', 'comm']);
-      const names = processes.output
-        .trim()
-        .split('\n')
-        .slice(1)
-        .map((s) => s.trim());
-      if (
-        processes.exitCode !== 0 ||
-        names.length > 2 ||
-        names.some((n) => !['node', 'docker-init'].includes(n))
-      )
+      const processes = await docker(['top', name, '-eo', SDK_PROCESS_COLUMNS]);
+      if (!isQuiescentSdkTree(processes.exitCode, processes.output))
         throw new Error('SDK descendants are still running; transcript snapshot refused');
       if (fenced) throw new Error('SDK host was fenced');
       for (const item of await readdir(sdkTicket.workspace))
