@@ -47,6 +47,15 @@ resource "aws_security_group" "alb" {
     protocol    = "tcp"
     cidr_blocks = [var.allowed_cidr]
   }
+  dynamic "ingress" {
+    for_each = var.enable_https ? [1] : []
+    content {
+      from_port   = 443
+      to_port     = 443
+      protocol    = "tcp"
+      cidr_blocks = ["0.0.0.0/0"]
+    }
+  }
   egress {
     from_port   = 3030
     to_port     = 3030
@@ -134,8 +143,17 @@ resource "aws_lb_listener" "app" {
   port              = 80
   protocol          = "HTTP"
   default_action {
-    type             = "forward"
-    target_group_arn = aws_lb_target_group.app.arn
+    type             = var.enable_https ? "redirect" : "forward"
+    target_group_arn = var.enable_https ? null : aws_lb_target_group.app.arn
+    dynamic "redirect" {
+      for_each = var.enable_https ? [1] : []
+      content {
+        protocol    = "HTTPS"
+        port        = "443"
+        host        = var.public_hostname
+        status_code = "HTTP_301"
+      }
+    }
   }
 }
 resource "aws_instance" "app" {
@@ -168,6 +186,6 @@ resource "aws_lb_target_group_attachment" "app" {
   port             = 3030
 }
 output "fqdn" { value = aws_lb.app.dns_name }
-output "url" { value = "http://${aws_lb.app.dns_name}/ui/" }
+output "url" { value = var.enable_https ? "https://${var.public_hostname}/ui/" : "http://${aws_lb.app.dns_name}/ui/" }
 output "instance_id" { value = aws_instance.app.id }
 output "source_sha" { value = var.source_sha }

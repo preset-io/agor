@@ -66,3 +66,22 @@ docker run --rm --entrypoint node \
 This uses actual child processes and temporary local files, but an in-memory
 metadata authority and local blobs. It validates packaging and the Linux tool
 boundary path; it does not validate PostgreSQL, S3 or native SDK wiring.
+
+## Custom-domain HTTPS
+
+`https.tf` requests a DNS-validated ACM certificate for `agor.skellige.com.au`.
+Keep `enable_https=false` while adding the two records from
+`terraform output certificate_dns_records` and `application_dns_record` in
+the external DNS provider. Retain the validation CNAME for automatic renewal.
+
+After DNS resolves, set `enable_https=true`, plan and apply. Terraform waits
+for certificate issuance, creates a TLS 1.2/1.3 listener and permits any IPv4
+client on port 443. Port 80 remains restricted to `allowed_cidr` and redirects
+to the custom HTTPS hostname. The app host remains reachable only from the ALB.
+
+Before handing over the custom URL, recreate the existing Agor container with
+`AGOR_BASE_URL=https://agor.skellige.com.au` and matching `CORS_ORIGIN`, preserving
+its image, mounted `/srv/agor/home` directory and other environment settings.
+Do this through SSM; changing EC2 user-data would replace the instance. Verify
+HTTPS, authentication, browser rendering and WebSocket connectivity. The
+certificate-only phase does not make the HTTPS endpoint live.
