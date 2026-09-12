@@ -95,7 +95,7 @@ export class BranchWorkspaceCoordinator {
     for (const [key, ticket] of Object.entries(s.active))
       if (ticket.expiresAt <= now) {
         delete s.active[key];
-        this.event('abandoned_tool', 1, 'error', {
+        this.event(s.receipts[key] ? 'unfinished_local_cleanup' : 'abandoned_tool', 1, 'error', {
           executorId: ticket.executorId,
           toolId: ticket.toolId,
         });
@@ -169,6 +169,13 @@ export class BranchWorkspaceCoordinator {
       });
       await this.base(state);
       return state.revision;
+    });
+  }
+  async reapExpiredTools(): Promise<void> {
+    await this.metadata.mutate((raw, now) => {
+      const s = this.owned(raw, now);
+      this.reap(s, now);
+      return { state: s, result: undefined };
     });
   }
   async renew(): Promise<void> {

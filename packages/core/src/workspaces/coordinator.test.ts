@@ -246,4 +246,36 @@ describe('branch tool-boundary protocol', () => {
     for (let i = 0; i < 8; i++)
       expect(f.metadata.state!.tree[`file-${i}`].hash).toBe(hash(String(i)));
   });
+  it('fences released executor identities and rebuilds an interrupted idle refresh', async () => {
+    const f = await fixture();
+    const old = await f.c.beginTool('one', 'old', 'old');
+    await f.c.completeTool(old.ticket);
+    const writer = await f.c.beginTool('two', 'writer', 'writer');
+    await writeFile(path.join(writer.workspace, 'a'), 'a-new');
+    await writeFile(path.join(writer.workspace, 'b'), 'b-new');
+    await f.c.completeTool(writer.ticket);
+    const get = f.blobs.get.bind(f.blobs);
+    f.blobs.get = async (key) => {
+      if (key === hash('b-new')) throw new Error('interrupted refresh');
+      return get(key);
+    };
+    await expect(f.c.beginTool('one', 'failed', 'failed')).rejects.toThrow('interrupted refresh');
+    f.blobs.get = get;
+    const next = await f.c.beginTool('one', 'recovered', 'recovered');
+    expect(await readFile(path.join(next.workspace, 'a'), 'utf8')).toBe('a-new');
+    expect(await readFile(path.join(next.workspace, 'b'), 'utf8')).toBe('b-new');
+    await f.c.abortTool(next.ticket);
+    await f.c.releaseReplica('one');
+    await expect(f.c.beginTool('one', 'reused', 'reused')).rejects.toMatchObject({
+      code: 'FENCED',
+    });
+  });
+  it('reaps crashed tool reservations before inactivity maintenance', async () => {
+    const f = await fixture();
+    await f.c.beginTool('one', 'crashed', 'crashed');
+    f.metadata.now += 501;
+    await f.c.reapExpiredTools();
+    expect(Object.keys(f.metadata.state!.active)).toHaveLength(0);
+    await expect(f.c.checkpoint()).resolves.toHaveProperty('revision', 0);
+  });
 });

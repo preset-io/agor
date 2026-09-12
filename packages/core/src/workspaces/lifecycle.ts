@@ -99,6 +99,12 @@ export async function maintainBranchWorkspace(
   idleSeconds: number,
   draining = false
 ): Promise<'busy' | 'checkpointed' | 'drained' | 'active'> {
+  const ownership = await coordinator.metadata.read();
+  if (
+    ownership.state?.host === coordinator.options.host &&
+    ownership.state.leaseUntil > ownership.now
+  )
+    await coordinator.reapExpiredTools();
   const { state, now } = await coordinator.metadata.read();
   if (!state || state.host !== coordinator.options.host) return 'active';
   if (Object.keys(state.active).length) return 'busy';

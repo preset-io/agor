@@ -102,6 +102,29 @@ describe.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
         expect((await one.metadata.read()).state?.revision).toBe(2);
         // JSONB reorders object keys; retry identity must compare fields, not serialized order.
         expect(await one.completeTool(a.ticket)).toEqual(outcomes[0]);
+        const x = await one.beginTool('x', 'x', 'x');
+        const y = await two.beginTool('y', 'y', 'y');
+        await writeFile(path.join(x.workspace, 'a'), 'winner');
+        await writeFile(path.join(y.workspace, 'a'), 'loser');
+        const conflicting = await Promise.all([
+          one.completeTool(x.ticket),
+          two.completeTool(y.ticket),
+        ]);
+        expect(conflicting.filter((o) => o.status === 'committed')).toHaveLength(1);
+        expect(conflicting.filter((o) => o.status === 'conflict')).toHaveLength(1);
+        const stale = await one.beginTool('stale', 'stale', 'stale');
+        await one.metadata.mutate((s) => {
+          s!.leaseUntil = 0;
+          return { state: s!, result: undefined };
+        });
+        const replacement = new BranchWorkspaceCoordinator(
+          scope,
+          new BranchWorkspaceRepository(db, scope),
+          blobs,
+          { ...options, host: 'replacement', root: path.join(root, 'replacement') }
+        );
+        expect(await replacement.restore()).toBe(3);
+        await expect(one.completeTool(stale.ticket)).rejects.toMatchObject({ code: 'FENCED' });
       });
       const foreign = { tenantId: 'other-tenant' as TenantID, branchId: branch.branch_id };
       await runWithTenantContext(foreign.tenantId, async () => {
