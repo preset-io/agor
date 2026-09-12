@@ -254,6 +254,13 @@ error; only an explicit later `absent` result verifies termination. Persistent
 uncertainty fails closed. Templated/remote executors get a 15 second cooperative
 window because the daemon has no local signal fallback.
 
+For the replicated Claude adapter, the executor first calls its worker's
+`/quiesce` capability. The worker closes tool admission, removes outstanding tool
+containers, waits for their commit/abort paths, and verifies that only the SDK
+wrapper and init remain before publishing the filtered transcript. An uncertain
+worker response prevents the existing termination acknowledgement; wrapper exit
+alone is still insufficient proof.
+
 After provider cleanup returns, the executor makes bounded, idempotent retries
 to report its exact Task/request-fenced quiescence fact. A failed write is
 followed by a bounded durable Task read so a lost response after commit does

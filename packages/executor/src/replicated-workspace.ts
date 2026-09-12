@@ -37,16 +37,25 @@ export function configureReplicatedClaude(
   options.tools = [];
   options.settingSources = [];
   options.additionalDirectories = [];
-  options.allowedTools = ['mcp__agor_workspace__execute'];
+  const permissionGate = options.canUseTool as
+    | ((name: string, input: unknown, context: unknown) => Promise<unknown>)
+    | undefined;
+  const bypass = options.permissionMode === 'bypassPermissions';
+  options.allowedTools = bypass ? ['mcp__agor_workspace__execute'] : [];
+  options.strictMcpConfig = true;
+  if (bypass) options.allowDangerouslySkipPermissions = true;
   options.disallowedTools = [];
   options.hooks = {};
-  options.canUseTool = async (name: string, input: unknown) =>
-    name === 'mcp__agor_workspace__execute'
-      ? { behavior: 'allow', updatedInput: input }
-      : {
-          behavior: 'deny',
-          message: 'This tool cannot bypass the replicated workspace controller',
-        };
+  options.canUseTool = async (name: string, input: unknown, context: unknown) => {
+    if (name !== 'mcp__agor_workspace__execute')
+      return {
+        behavior: 'deny',
+        message: 'This tool cannot bypass the replicated workspace controller',
+      };
+    if (bypass) return { behavior: 'allow', updatedInput: input };
+    if (permissionGate) return permissionGate(name, input, context);
+    return { behavior: 'deny', message: 'Workspace tool approval is unavailable for this session' };
+  };
   options.mcpServers = {
     agor_workspace: sdk.createSdkMcpServer({
       name: 'agor_workspace',

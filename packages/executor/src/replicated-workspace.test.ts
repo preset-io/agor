@@ -60,4 +60,26 @@ describe('native replicated workspace boundary', () => {
       await expect(finalizeReplicatedSession()).rejects.toThrow('teardown unverified');
     });
   });
+  it('preserves explicit approval modes and refuses tools without an approval channel', async () => {
+    const sdk = { createSdkMcpServer: (value: unknown) => value, tool: () => ({}) };
+    const approve = vi.fn().mockResolvedValue({ behavior: 'deny', message: 'user denied' });
+    const options: Record<string, unknown> = { canUseTool: approve, permissionMode: 'default' };
+    configureReplicatedClaude(sdk as never, options, descriptor);
+    expect(options.allowedTools).toEqual([]);
+    expect(options.strictMcpConfig).toBe(true);
+    const gate = options.canUseTool as (
+      name: string,
+      input: unknown,
+      context: unknown
+    ) => Promise<unknown>;
+    expect(await gate('mcp__agor_workspace__execute', { command: 'test' }, {})).toMatchObject({
+      behavior: 'deny',
+    });
+    expect(approve).toHaveBeenCalledTimes(1);
+    expect(await gate('Bash', {}, {})).toMatchObject({ behavior: 'deny' });
+    expect(approve).toHaveBeenCalledTimes(1);
+    const bypass: Record<string, unknown> = { permissionMode: 'bypassPermissions' };
+    configureReplicatedClaude(sdk as never, bypass, descriptor);
+    expect(bypass.allowedTools).toEqual(['mcp__agor_workspace__execute']);
+  });
 });

@@ -1,16 +1,16 @@
 # Isolated Agor AWS test deployment
 
-This root deploys Agor from the source archive built from the committed branch.
-It creates a dedicated VPC, three subnets, routing, an IP-restricted HTTP ALB,
-one EC2 application host, encrypted gp3 disk, private source bucket and scoped
-instance role. There are no inbound SSH rules. EC2 management uses SSM.
-The instance has outbound internet access for source builds and agent tools.
+This root deploys the Agor application and two local workspace workers in a
+dedicated VPC. HTTPS uses the externally managed `agor.skellige.com.au` DNS
+record and ACM certificate. The workers use encrypted local gp3/XFS storage;
+workspace metadata lives in private Multi-AZ PostgreSQL and compressed immutable
+content in a private KMS-encrypted, versioned S3 bucket. There is no network
+filesystem or EBS Multi-Attach. Management uses SSM, with no inbound SSH.
 
-This is a single-host test deployment using the existing SQLite backend. The
-experimental replicated workspace backend remains disabled for native SDKs.
-It is not an HA/AZ-recovery demonstration. No shared filesystem or EBS
-Multi-Attach is required. No provider subscription credentials are uploaded.
-Install and authenticate agent tools through the existing Agor workflow.
+The application retains its existing SQLite accounts/tasks/sessions. This test
+proves workspace placement and recovery across workers, not whole-application
+HA. Claude is the integrated provider; other providers are rejected on adopted
+branches. Users configure Claude authentication through the existing Agor UI.
 
 ## Apply
 
@@ -85,3 +85,39 @@ its image, mounted `/srv/agor/home` directory and other environment settings.
 Run `python3 /opt/agor/set-public-url.py https://agor.skellige.com.au` through SSM after copying `set-public-url.py` to that path. The script verifies the deployment shape, preserves existing environment and data mounts, retains the stopped previous container as `agor-url-backup`, and rolls back if health checks fail. Changing EC2 user-data would replace the instance. Verify
 HTTPS, authentication, browser rendering and WebSocket connectivity. The
 certificate-only phase does not make the HTTPS endpoint live.
+
+## Replicated worker runtime
+
+Set `workspace_release = { archive = "/absolute/source.tar.gz", sha = "<content-digest>" }`
+when publishing a corrected runtime. Preserve the initial `source_sha` to avoid
+replacing the application host. `build-workspace-runtime.sh <digest>` builds the
+same source image on both hosts. `configure-workspace-worker.sh <digest>` installs
+Claude through Agor, reads the runtime secret into a root-only controller config,
+and starts the trusted worker service. Initialize `workspace-authority.sql` once
+using the database owner and grant a NOSUPERUSER/NOBYPASSRLS worker role only
+SELECT/INSERT/UPDATE. RDS connections verify the AWS CA bundle and hostname.
+
+Copy `enable-workspace-runtime.mjs` to `/opt/agor/workspace/enable.mjs`, then run
+`rollout-workspace.py <digest>` on the app host. It refuses active tasks, preserves
+the user data bind and a rollback container/config, enables the existing executor
+command template, and verifies application health. The dispatcher capability is
+mounted only into the daemon. The SQL credential, AWS role and Docker socket are
+available only to the trusted controller. Child SDK/tool containers receive
+neither cloud authority nor another branch's filesystem.
+
+`workspace-protocol-proof.mjs` and `workspace-proof-executor.mjs` exercise real
+worker HTTP/Docker, PostgreSQL and S3 using an isolated tenant/branch and a mock
+Agor authorization endpoint. They cover concurrent disjoint commits, same-base
+conflicts, refresh, duplicate invocation, background-process cleanup, Stop,
+excluded dependencies, checkpoint/drain, and recovery on a second worker. The
+executor fixture is deterministic: passing it must not be described as a real
+Claude model test. A final user-session test requires configured Claude auth.
+
+The first supported user flow is Claude source editing, shell tests/installs,
+and reading committed files in Agor. Persistent terminals/dev servers, additional
+MCP servers, native Git-management operations on adopted branches, and other
+providers remain unsupported. Old-checkout fallback is refused for adopted
+branches. To roll back, export the newest durable tree to a reviewed fresh legacy
+checkout before clearing its sticky adoption marker; changing the flag alone is
+not a data migration. See `context/guides/branch-workspaces.md` for recovery and
+retention limits.

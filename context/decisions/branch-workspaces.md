@@ -1,6 +1,6 @@
 # Branch revisions over local executor workspaces
 
-Status: implemented managed-tool vertical slice; **not approved for native SDK or production rollout**.
+Status: implemented Claude worker vertical slice for controlled testing; other providers and broad production rollout remain gated.
 
 ## Existing control flow and insertion points
 
@@ -127,17 +127,15 @@ not an AZ-failure guarantee.
 SDK processes can mutate session state between tool invocations, and Codex
 SQLite state cannot be safely copied live. Streaming tool-start events in
 several integrations are **not blocking hooks**. Wiring synchronization to
-those events would violate the protocol. This slice therefore supports managed
-awaited tools only and does not snapshot native SDK homes. Native launch is
-refused once the branch has workspace state; existing unadopted branches retain
-all existing Codex/Claude home and session-sharing behavior. Regression tests
-cover the unchanged SDK-home policy.
+those events would violate the protocol. The Claude adapter therefore replaces
+native coding tools with one awaited SDK MCP tool, backed by an isolated worker
+container. Other providers are refused once a branch is adopted; unadopted
+branches keep their existing home/session behavior.
 
-Full native adoption requires a separate serialized/versioned SDK-state commit
-path at a quiescent SDK-process boundary, with reviewed per-provider state
-allowlists and credential overlays, plus genuine before/after tool hooks for
-all enabled providers. No claim is made that this work is implemented by the
-managed-tool slice. A subscription home is never copied wholesale into S3.
+Claude transcript JSONL state is serialized separately and published only after
+the SDK process has stopped. The worker never copies a subscription home
+wholesale into S3. See the integration details below for the quiescence,
+credential filtering, resume and fork contract.
 
 ## Alternatives and limits
 
@@ -155,3 +153,26 @@ Receipt limits fail closed rather than forgetting idempotency. Whole-tree
 hashing remains a measured publication bottleneck. Performance targets remain
 500 ms p95 creation and 100 ms publication/application; this implementation
 does not yet meet all of them.
+
+## Claude worker integration
+
+The implemented Claude adapter uses the existing executor command template and
+task-scoped authorization. An SDK MCP tool delegates each coding operation to a
+trusted controller and a separate Docker process namespace. This was chosen over
+post-Bash hooks because a hook returning does not prove that detached descendants
+have stopped. Native tools and alternate MCP transports are disabled for adopted
+branches. A controller-side PID-aware process-tree check gates SDK transcript
+publication; Stop acknowledgement also waits for remote tool containment.
+
+The AWS test deployment retains existing SQLite application data and uses a
+separate PostgreSQL authority table with tenant RLS for workspace metadata.
+This is an operational compromise for the test environment, not a second task
+scheduler: existing Agor sessions, tasks, permissions and queues still own work.
+S3 stores compressed immutable content before SQL acknowledges a revision.
+The application daemon remains a single instance; workspace cross-host recovery
+does not imply whole-application HA.
+
+Claude transcript JSONL files use serialized per-session slots, under their
+branch identity. Forks read only committed parent history. Credentials, settings
+and machine caches are excluded. Other providers and persistent background
+services remain explicit rollout limitations.

@@ -1,7 +1,7 @@
 # Managed branch workspace operations
 
 Read `context/decisions/branch-workspaces.md` before enabling this backend.
-This is a functioning managed-tool slice, not a drop-in native SDK deployment.
+The Claude worker adapter integrates this protocol with ordinary Agor prompt dispatch. Other providers remain gated on adopted branches.
 
 ## Configuration
 
@@ -9,6 +9,7 @@ This is a functioning managed-tool slice, not a drop-in native SDK deployment.
 execution:
   branch_workspace:
     enabled: false
+    native_adapter: claude_workspace
     backend: local_replicated
     tool_boundary_sync: true
     local_root: /var/lib/agor
@@ -54,8 +55,7 @@ executor demand through `selectWorkspaceHost`.
 5. Schedule managed tools on the selected host. `runWorkspaceTool` reserves,
    refreshes, invokes the awaited local callback and publishes. The callback
    must reap every descendant before resolving, including failed commands.
-   Containment must use the existing sandbox/delegated substrate. Background
-   servers and native SDKs are not supported by this adapter.
+   Containment must use the existing sandbox/delegated substrate. Background servers are not supported. The Claude adapter described below supplies the native SDK boundary.
 6. Renew placement before lease expiry. Invoke `maintainBranchWorkspace` from
    the controller's maintenance loop for inactivity checkpoints; on drain,
    stop admission first, await active tools, call it with `draining=true`, then
@@ -63,11 +63,48 @@ executor demand through `selectWorkspaceHost`.
    provides the grace period; the environment-specific hook consumer is not
    shipped in this checkout.
 
-Do not enable the flag expecting existing Codex/Claude prompts to use this
-backend. No production worker service, remote metadata RPC, native SDK hook
-adapter or external scheduler routing has been enabled by this change. These
-are explicit rollout blockers. The exported worker APIs and actual-process SQL
-integration test are the executable integration contract.
+### Claude worker deployment
+
+`packages/executor/src/workspaces/worker-cli.ts` runs a trusted worker controller.
+`dispatch-cli.ts` plugs into `execution.executor_command_template`; it follows
+SQL branch affinity and never retries an uncertain prompt dispatch. The daemon
+stores a sticky `authority: worker-sql` admission marker, while the worker's
+PostgreSQL row is authoritative for revisions, placement and receipts. Existing
+application accounts and task/session rows keep using the existing database.
+The test environment provisions a separate Multi-AZ PostgreSQL authority to
+preserve its existing SQLite application data. This does not make the application
+daemon itself highly available.
+
+The SDK container receives a read-only code mount and an ephemeral provider
+home. Claude's native tools, project hooks and alternate MCP transports are
+disabled. Its `agor_workspace.execute` MCP tool calls the trusted controller,
+which refreshes a private replica, starts a separate local Docker tool container,
+removes the entire container before publication, and returns the structured
+commit/conflict result. A repeated HTTP invocation returns its first result and
+does not execute the command again. SQL/S3 authority and the Docker socket are
+never mounted into either child container. The worker verifies the task token
+through Agor and rechecks task authority before publication.
+
+SDK transcript JSONL files have a separate serialized SQL slot per Agor Session,
+within the branch and tenant. The SDK subprocess must be gone before snapshots
+are committed. A task cannot report normal completion before that publication.
+Stop also contains outstanding tool containers before acknowledging quiescence.
+Forks copy the parent's last committed transcript; resumes use the stable
+`/workspace` cwd across workers. Legacy imports select only the authorized
+provider session, never credentials or settings. Cross-branch transcript imports
+require an explicit migration.
+
+File browse/read/autocomplete operations read a stable committed replica.
+Unsupported commands on an adopted branch fail explicitly instead of running
+against its old checkout. This slice does not support persistent dev servers,
+interactive terminals, native Git-management operations on replicated code,
+additional MCP servers, Codex or Gemini. Source edits, searches, installs and
+tests run through the managed Claude tool. Each host currently admits at most
+two concurrent sessions, reserving capacity for their SDK and tool containers.
+
+See `infra/agor-test/README.md` for the reproducible AWS runtime deployment and
+its protocol proof. The proof uses real Docker workers, PostgreSQL and S3 with a
+deterministic executor and authorization fixture; it is not a real-model test.
 
 ## Recovery and rollback
 
@@ -93,8 +130,7 @@ integration test are the executable integration contract.
 
 SQL backups/PITR and S3 objects must be retained together. Restoring SQL to an
 older point may roll back acknowledged revisions; fence all workers before a
-metadata disaster restore. The infrastructure module expects the deployment's
-existing PostgreSQL HA/PITR setup and does not provision another database.
+metadata disaster restore. The generic infrastructure module expects an existing PostgreSQL HA/PITR setup; the isolated AWS test root provisions its own Multi-AZ metadata database.
 
 ## Retention and observability
 

@@ -161,7 +161,7 @@ resource "aws_instance" "app" {
   instance_type               = "m7i.xlarge"
   subnet_id                   = aws_subnet.test[2].id
   associate_public_ip_address = true
-  vpc_security_group_ids      = [aws_security_group.app.id]
+  vpc_security_group_ids      = [aws_security_group.app.id, aws_security_group.worker_rpc.id]
   iam_instance_profile        = aws_iam_instance_profile.app.name
   metadata_options {
     http_tokens                 = "required"
