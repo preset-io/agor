@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
+import { constants } from 'node:fs';
 import {
+  copyFile,
   mkdir,
   mkdtemp,
   readdir,
@@ -32,9 +34,26 @@ const cleanups: Array<() => Promise<unknown>> = [];
 afterEach(async () => {
   for (const cleanup of cleanups.splice(0).reverse()) await cleanup();
 });
-it('reflinks cached checkouts with private Git, fresh remote commits and no inherited hooks/config', async () => {
+it('reflinks cached checkouts with private Git, fresh remote commits and no inherited hooks/config', async (context) => {
   const root = await mkdtemp(join(tmpdir(), 'agor-reflink-'));
   cleanups.push(() => rm(root, { recursive: true, force: true }));
+  if (process.platform === 'linux') {
+    const probe = join(root, 'probe');
+    await writeFile(probe, 'reflink capability');
+    try {
+      await copyFile(probe, `${probe}.clone`, constants.COPYFILE_FICLONE_FORCE);
+    } catch (error) {
+      if (
+        ['ENOTSUP', 'EOPNOTSUPP', 'ENOSYS', 'EXDEV'].includes(
+          (error as NodeJS.ErrnoException).code ?? ''
+        )
+      ) {
+        context.skip();
+        return;
+      }
+      throw error;
+    }
+  }
   const source = join(root, 'source');
   await mkdir(source);
   const g = createGit(source).git;

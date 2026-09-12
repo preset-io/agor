@@ -5,6 +5,7 @@
  * Supports SSH keys, user environment variables (GITHUB_TOKEN), and system credential helpers.
  */
 
+import { execFile } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { constants, existsSync } from 'node:fs';
 import {
@@ -22,6 +23,7 @@ import {
 } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
+import { promisify } from 'node:util';
 import { simpleGit } from 'simple-git';
 import { resolveGitBinary } from './git-binary';
 import {
@@ -2461,11 +2463,26 @@ export async function createBranchAsReflink(options: {
     // Exclusive reservation avoids overwriting another operation's destination.
     await mkdir(options.targetPath, { mode: 0o700 });
     destinationCreated = true;
-    await cp(template, options.targetPath, {
-      recursive: true,
-      verbatimSymlinks: true,
-      mode: constants.COPYFILE_FICLONE_FORCE,
-    });
+    const cloneStarted = performance.now();
+    if (process.platform === 'linux') {
+      // GNU cp batches traversal in native code. Node's per-file asynchronous
+      // copy loop adds tens of seconds on a large tree even when data is reflinked.
+      await promisify(execFile)('cp', [
+        '-a',
+        '--reflink=always',
+        '--no-preserve=ownership',
+        '--',
+        `${template}/.`,
+        options.targetPath,
+      ]);
+    } else {
+      await cp(template, options.targetPath, {
+        recursive: true,
+        verbatimSymlinks: true,
+        mode: constants.COPYFILE_FICLONE_FORCE,
+      });
+    }
+    const reflinkMs = Math.round(performance.now() - cloneStarted);
     const { git: branchGit } = createGit(options.targetPath);
     if (options.newBranchName || options.refType !== 'tag') {
       const branch = options.newBranchName ?? options.ref;
@@ -2482,6 +2499,7 @@ export async function createBranchAsReflink(options: {
         cacheHit,
         commit,
         fetchMs,
+        reflinkMs,
         totalMs: Math.round(performance.now() - started),
       })
     );
