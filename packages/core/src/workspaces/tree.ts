@@ -177,6 +177,7 @@ export async function scan(
   let count = 0;
   let excluded = 0;
   const pending = new Set<Promise<void>>();
+  let pendingBytes = 0;
   let failure: unknown;
   const check = () => {
     signal?.throwIfAborted();
@@ -229,8 +230,17 @@ export async function scan(
               failure ??= error;
             });
             pending.add(operation);
-            void operation.then(() => pending.delete(operation));
-            if (pending.size >= 8) await Promise.race(pending);
+            pendingBytes += bytes.length;
+            void operation.then(() => {
+              pending.delete(operation);
+              pendingBytes -= bytes.length;
+            });
+            // Keep small-file S3 requests in flight without retaining 32 large
+            // buffers. At most one admitted file can exceed the byte budget.
+            while (pending.size >= 32 || pendingBytes >= 16 * 1024 * 1024) {
+              await Promise.race(pending);
+              check();
+            }
             check();
           }
         } finally {

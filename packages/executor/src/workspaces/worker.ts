@@ -149,7 +149,13 @@ export async function startWorker(configPath: string) {
       c = new BranchWorkspaceCoordinator(
         scope,
         new WorkerSqlAuthority(sql, scope, slot),
-        new S3WorkspaceBlobs(config.bucket, scope.tenantId),
+        new S3WorkspaceBlobs(
+          config.bucket,
+          scope.tenantId,
+          undefined,
+          undefined,
+          path.join(config.root, 'blob-cache')
+        ),
         {
           ...options,
           root: slot === 'code' ? config.root : path.join(config.root, 'sdk', hash(slot)),
