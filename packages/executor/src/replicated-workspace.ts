@@ -33,6 +33,16 @@ export function configureReplicatedClaude(
 ): void {
   // An explicit empty native tool set prevents Bash, subagents and project hooks
   // from writing around the publication boundary. Do not silently fall back.
+  const guidance =
+    'Before your first workspace tool call, briefly tell the user what you will do. Your launcher directory contains no branch files; use agor_workspace execute for all repository access. The first call may prepare the workspace while Agor displays its progress.';
+  const prompt = options.systemPrompt;
+  if (typeof prompt === 'string') options.systemPrompt = `${prompt}\n\n${guidance}`;
+  else if (prompt && typeof prompt === 'object')
+    options.systemPrompt = {
+      ...prompt,
+      append: `${(prompt as { append?: string }).append ?? ''}\n\n${guidance}`,
+    };
+  else options.systemPrompt = { type: 'preset', preset: 'claude_code', append: guidance };
   options.cwd = workspace.cwd;
   options.tools = [];
   options.settingSources = [];
@@ -77,7 +87,7 @@ export function configureReplicatedClaude(
                 'content-type': 'application/json',
               },
               body: JSON.stringify({ command, timeout_ms, idempotencyKey }),
-              signal: AbortSignal.timeout(timeout_ms + 60000),
+              signal: AbortSignal.timeout(timeout_ms + 900000),
             });
             const result = await response.text();
             if (!response.ok)

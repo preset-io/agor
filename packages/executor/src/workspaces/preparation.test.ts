@@ -68,3 +68,38 @@ it('publishes startup failures instead of leaving a spinner', async () => {
     })
   );
 });
+
+it('publishes and updates a visible system progress row, not an assistant response', async () => {
+  const messages = {
+    find: vi.fn(async () => ({ data: [{ index: 3 }] })),
+    create: vi.fn(async (value) => value),
+    patch: vi.fn(async () => ({})),
+  };
+  mocks.connect.mockResolvedValue({
+    service: (name) => (name === 'messages' ? messages : service),
+    io: { close },
+  });
+  await withWorkspacePreparation(
+    'url',
+    'token',
+    'task',
+    async (_, handoff, progress) => {
+      handoff();
+      await progress('Preparing branch files…');
+      await progress('Workspace ready.');
+    },
+    'session'
+  );
+  expect(messages.create).toHaveBeenCalledTimes(1);
+  expect(messages.create).toHaveBeenCalledWith(
+    expect.objectContaining({
+      role: 'system',
+      index: 4,
+      content: [{ type: 'sdk_event', text: 'Starting Claude…' }],
+    })
+  );
+  expect(messages.patch).toHaveBeenLastCalledWith(
+    expect.any(String),
+    expect.objectContaining({ content: [{ type: 'sdk_event', text: 'Workspace ready.' }] })
+  );
+});

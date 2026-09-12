@@ -2,7 +2,7 @@
 // PostgreSQL and S3; the Agor authorization API and model process are fixtures.
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { createRequire } from 'node:module';
 import path from 'node:path';
@@ -74,6 +74,8 @@ io.use((socket, next) =>
 );
 io.on('connection', (socket) => {
   for (const method of [
+    'find',
+    'create',
     'connectExecutor',
     'reportRuntimeTelemetry',
     'get',
@@ -83,6 +85,10 @@ io.on('connection', (socket) => {
     socket.on(method, (service, input, ...args) => {
       const acknowledge = args.at(-1);
       if (typeof acknowledge !== 'function') return;
+      if (service === 'messages') {
+        if (method === 'find') return acknowledge(null, { data: [], total: 0 });
+        return acknowledge(null, typeof input === 'object' ? input : { message_id: input });
+      }
       if (service !== 'tasks') return acknowledge({ message: 'Unknown fixture service' });
       const taskId = typeof input === 'string' ? input : input.task_id;
       acknowledge(null, { task_id: taskId, status: 'running' });
@@ -131,6 +137,44 @@ const gitCommand = (code) => {
 
 try {
   if (phase === 'initial') {
+    const started = performance.now();
+    const conversation = await dispatch(0, '', 'no-tools');
+    assert.match(conversation, /PROOF_SDK_READY_BEFORE_FILES/);
+    assert.match(conversation, /PROOF_EXECUTOR_OK/);
+    assert.equal(
+      JSON.parse(await call('/placement', { tenantId, branchId })).revision,
+      null,
+      'Conversation-only prompt must not materialise source'
+    );
+    console.log(
+      JSON.stringify({
+        conversationWithoutFilesMs: Math.round(performance.now() - started),
+        sourceUntouched: true,
+      })
+    );
+    tasks[0] = randomUUID();
+    tokens[0] = `fixture.${claims(0)}.fixture`;
+    const { S3WorkspaceBlobs } = await import(`${runtime}/workspaces/s3-blobs.js`);
+    const originalPut = S3WorkspaceBlobs.prototype.put;
+    const delayMarker = Buffer.from('startup cancellation fixture');
+    await writeFile(path.join(source, 'startup-delay.txt'), delayMarker);
+    S3WorkspaceBlobs.prototype.put = async function (hash, content) {
+      if (content.equals(delayMarker)) await new Promise((resolve) => setTimeout(resolve, 3000));
+      return originalPut.call(this, hash, content);
+    };
+    try {
+      assert.match(
+        await dispatch(0, 'printf unsafe > preparation-stop.txt', 'stopped'),
+        /PROOF_EXECUTOR_OK/
+      );
+      assert.equal(JSON.parse(await call('/placement', { tenantId, branchId })).revision, null);
+      console.log(JSON.stringify({ stopDuringPreparation: true, sourceUntouched: true }));
+    } finally {
+      S3WorkspaceBlobs.prototype.put = originalPut;
+      await rm(path.join(source, 'startup-delay.txt'));
+    }
+    tasks[0] = randomUUID();
+    tokens[0] = `fixture.${claims(0)}.fixture`;
     const outputs = await Promise.all([
       dispatch(
         0,

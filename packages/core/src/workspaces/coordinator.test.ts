@@ -466,3 +466,50 @@ it('retains tracked repository configuration through tools and Git-less host rec
   await restored.completeTool(b.ticket);
   expect(f.metadata.state!.revision).toBe(revision);
 });
+
+it('reuses immutable source bytes across expired placement leases while fencing old tools', async () => {
+  const f = await fixture();
+  const old = await f.c.beginTool('one', 'old', 'old');
+  f.metadata.now += f.options.leaseMs + 1;
+  let downloads = 0;
+  const c = new BranchWorkspaceCoordinator(
+    f.scope,
+    f.metadata,
+    {
+      put: f.blobs.put.bind(f.blobs),
+      get: async (key) => {
+        downloads++;
+        return f.blobs.get(key);
+      },
+    },
+    { ...f.options, host: 'replacement' }
+  );
+  await c.materialise();
+  const tool = await c.beginTool('two', 'new', 'new');
+  expect(downloads).toBe(0);
+  await expect(f.c.completeTool(old.ticket)).rejects.toMatchObject({ code: 'FENCED' });
+  await c.completeTool(tool.ticket);
+});
+it('can claim a restored branch without downloading source until its first tool', async () => {
+  const f = await fixture();
+  await f.c.drain();
+  let downloads = 0;
+  const c = new BranchWorkspaceCoordinator(
+    f.scope,
+    f.metadata,
+    {
+      put: f.blobs.put.bind(f.blobs),
+      get: async (key) => {
+        downloads++;
+        return f.blobs.get(key);
+      },
+    },
+    { ...f.options, root: `${f.options.root}-lazy`, host: 'lazy' }
+  );
+  await c.materialise(undefined, undefined, false);
+  expect(downloads).toBe(0);
+  const tool = await c.beginTool('one', 'first', 'first');
+  expect(downloads).toBeGreaterThan(0);
+  expect(await readFile(path.join(tool.workspace, 'a'), 'utf8')).toBe('a0');
+  await c.completeTool(tool.ticket);
+});

@@ -132,7 +132,7 @@ export class BranchWorkspaceCoordinator {
       throw new WorkspaceError('CAPACITY', 'Insufficient local bytes or inodes');
   }
   /** Initial import must run with legacy writers stopped. All later activations use durable metadata. */
-  async materialise(source?: string, signal?: AbortSignal): Promise<number> {
+  async materialise(source?: string, signal?: AbortSignal, prepareBase = true): Promise<number> {
     return this.measured('materialise_ms', async () => {
       signal?.throwIfAborted();
       await this.capacity();
@@ -193,7 +193,7 @@ export class BranchWorkspaceCoordinator {
         Math.max(10, Math.floor(this.options.leaseMs / 3))
       );
       try {
-        await this.base(state, signal);
+        if (prepareBase) await this.base(state, signal);
         if (renewalError) throw renewalError;
         signal?.throwIfAborted();
         await this.renew();
@@ -227,7 +227,7 @@ export class BranchWorkspaceCoordinator {
         const e = s.tree[name];
         return [name, e.kind, e.hash, e.mode, e.size, e.target ?? null];
       });
-    const target = path.join(dir, `${s.epoch}-${hash(JSON.stringify(identity))}`);
+    const target = path.join(dir, `tree-${hash(JSON.stringify(identity))}`);
     try {
       if ((await lstat(target)).isDirectory()) return target;
     } catch (e) {

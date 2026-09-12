@@ -200,3 +200,15 @@ workspace protocol and drains to durable storage. Run it in the new runtime imag
 on the owning host with the worker stopped after draining. It preserves existing
 files; it is deliberately an operator action so normal tracked deletions never
 get automatically resurrected.
+
+Claude startup uses a read-only empty launcher; repository access is exclusively
+through the managed workspace tool. A small branch launch lease pins placement
+while Claude thinks, without importing or rendering the source tree. Source/Git
+preparation waits until the first tool, remains cancellable, and holds the normal
+branch lease before any command is admitted. Conversation-only prompts leave the
+source authority untouched. Agor shows a system progress row for startup and file
+preparation; Claude is instructed to explain its next action before calling a tool.
+Immutable base caches are keyed by source content, independently of fencing epochs.
+Warm replica and transcript admission refreshes metadata without an eager base
+render or redundant initial source scan. Task and tool authority checks remain in
+place; the launch lease is renewed alongside the conversation lease.

@@ -36,11 +36,16 @@ describe('native replicated workspace boundary', () => {
         new Response(JSON.stringify({ exitCode: 0, outcome: { status: 'committed', revision: 2 } }))
       );
     const options: Record<string, unknown> = {
+      systemPrompt: { type: 'preset', preset: 'claude_code', append: 'Original instructions' },
+      includePartialMessages: true,
       tools: ['Bash'],
       settingSources: ['project'],
       mcpServers: { unsafe: {} },
     };
     configureReplicatedClaude(sdk as never, options, descriptor, request);
+    expect(options.includePartialMessages).toBe(true);
+    expect((options.systemPrompt as { append: string }).append).toContain('Original instructions');
+    expect((options.systemPrompt as { append: string }).append).toContain('briefly tell the user');
     expect(options.tools).toEqual([]);
     expect(options.settingSources).toEqual([]);
     expect(Object.keys(options.mcpServers as object)).toEqual(['agor_workspace']);

@@ -129,7 +129,10 @@ export async function startWorker(configPath: string) {
     {
       input: DispatchInput;
       coordinator: BranchWorkspaceCoordinator;
-      workspace: string;
+      prepare: () => Promise<string>;
+      abortPreparation: AbortController;
+      progress: (text: string) => Promise<void>;
+      filesReady: boolean;
       localHome: string;
       queue: Promise<unknown>;
       stopping: boolean;
@@ -238,16 +241,33 @@ export async function startWorker(configPath: string) {
         if (task.termination_request) throw new Error('Task termination requested');
       };
       await checkAuthority();
+      const seed = await job.prepare().catch(async (error) => {
+        await job.progress(
+          job.abortPreparation.signal.aborted
+            ? 'Workspace preparation stopped.'
+            : 'Workspace preparation failed.'
+        );
+        throw error;
+      });
+      await checkAuthority();
       const c = job.coordinator;
       const tool = await c.beginTool(
         job.input.payload.params.sessionId,
         data.idempotencyKey,
-        data.idempotencyKey
+        data.idempotencyKey,
+        job.abortPreparation.signal
       );
-      await ownTree(tool.workspace, undefined, true);
       const name = `agor-tool-${randomUUID()}`;
       job.containers.add(name);
       try {
+        if (!job.filesReady) await job.progress('Preparing local Git and build environment…');
+        await installGitSeed(seed, tool.workspace, config.clone);
+        await ownTree(tool.workspace, job.abortPreparation.signal, true);
+        await checkAuthority();
+        if (!job.filesReady) {
+          job.filesReady = true;
+          await job.progress('Workspace ready.');
+        }
         const result = await docker(
           [
             ...containerBase(name, true),
@@ -315,7 +335,7 @@ export async function startWorker(configPath: string) {
               throw new Error('Git source outside configured Agor home');
             await exportGitSeed(source, seed);
           }
-          await gitState.materialise(seed, signal);
+          await gitState.materialise(seed, signal, false);
           const id = randomUUID();
           const replica = await gitState.beginTool('seed', id, id, signal);
           await gitState.completeTool(replica.ticket);
@@ -334,7 +354,8 @@ export async function startWorker(configPath: string) {
     input: DispatchInput,
     res: ServerResponse,
     signal: AbortSignal,
-    handoff: () => void
+    handoff: () => void,
+    progress: (text: string) => Promise<void>
   ) {
     if (input.payload.params.tool !== 'claude-code')
       throw new Error('Only Claude Code supports this replicated execution adapter');
@@ -364,7 +385,14 @@ export async function startWorker(configPath: string) {
       throw new Error('Authenticated executor authority scope mismatch');
     if (session.branch_id !== branchId) throw new Error('Session/branch mismatch');
     const c = coordinator(tenantId, branchId);
-    const placement = await c.metadata.read();
+    const launch = coordinator(tenantId, branchId, 'launch');
+    const [placement, launching] = await Promise.all([c.metadata.read(), launch.metadata.read()]);
+    if (
+      launching.state?.host &&
+      launching.state.host !== host &&
+      launching.state.leaseUntil > launching.now
+    )
+      return json(res, 409, { owner: launching.state.host.split('#')[0] });
     if (
       placement.state?.host &&
       placement.state.host !== host &&
@@ -382,35 +410,41 @@ export async function startWorker(configPath: string) {
     const source = placement.state ? undefined : await realpath(branch.path);
     if (source && !source.startsWith(`${await realpath(config.sourceHome)}/`))
       throw new Error('Initial source outside configured Agor home');
-    await c.materialise(source, signal);
-    signal.throwIfAborted();
+    const launchSeed = path.join(config.root, 'launch-seeds', randomUUID());
+    await mkdir(launchSeed, { recursive: true, mode: 0o700 });
+    try {
+      await launch.materialise(launchSeed, signal, false);
+    } finally {
+      await rm(launchSeed, { recursive: true, force: true });
+    }
+    let codeOwned = false;
+    const codeAbort = new AbortController();
     let preparationLeaseError: unknown;
+    let preparingSdk: BranchWorkspaceCoordinator | undefined;
     const preparationRenewal = setInterval(() => {
-      void c.renew().catch((error) => {
+      void Promise.all([
+        launch.renew(),
+        ...(preparingSdk ? [preparingSdk.renew()] : []),
+        ...(codeOwned ? [c.renew()] : []),
+      ]).catch((error) => {
         preparationLeaseError ??= error;
       });
     }, 10000);
     try {
-      const initial = await c.beginTool(
-        payload.params.sessionId,
-        `initial-${payload.params.taskId}`,
-        `initial-${payload.params.taskId}`,
-        signal
-      );
-      await c.completeTool(initial.ticket);
-      signal.throwIfAborted();
-      await installGitSeed(
-        await gitSeed(tenantId, branchId, branch.path, signal),
-        initial.workspace,
-        config.clone
-      );
-      await ownTree(initial.workspace, signal, true);
-      const localHome = path.join(path.dirname(initial.workspace), 'local-home');
+      const localHome = path.join(c.directory, 'replicas', payload.params.sessionId, 'local-home');
       for (const directory of LOCAL_HOME_DIRECTORIES) {
         const location = path.join(localHome, directory);
         await mkdir(location, { recursive: true, mode: 0o700 });
         await chown(location, 1000, 1000);
       }
+      let codePreparation: Promise<string> | undefined;
+      const prepare = () =>
+        (codePreparation ??= (async () => {
+          await progress('Preparing branch files…');
+          await c.materialise(source, codeAbort.signal, false);
+          codeOwned = true;
+          return gitSeed(tenantId, branchId, branch.path, codeAbort.signal);
+        })());
       const sdk = coordinator(tenantId, branchId, `claude/${payload.params.sessionId}`);
       const seed = path.join(config.root, 'sdk-seeds', randomUUID());
       await mkdir(seed, { recursive: true, mode: 0o700 });
@@ -464,7 +498,8 @@ export async function startWorker(configPath: string) {
         }
       }
       try {
-        await sdk.materialise(seed, signal);
+        await sdk.materialise(seed, signal, false);
+        preparingSdk = sdk;
       } finally {
         await rm(seed, { recursive: true, force: true });
       }
@@ -478,11 +513,18 @@ export async function startWorker(configPath: string) {
       await copyClaudeTranscripts(sdkTicket.workspace, sdkHome);
       await ownTree(sdkHome, signal);
       signal.throwIfAborted();
+      // Claude starts in an empty read-only launcher. All branch access remains
+      // behind execute, which waits for preparation before admitting a tool.
+      const launcher = path.join(sdkHome, 'launcher');
+      await mkdir(launcher, { mode: 0o755 });
       const capability = randomUUID() + randomUUID();
       const job = {
         input,
         coordinator: c,
-        workspace: initial.workspace,
+        prepare,
+        abortPreparation: codeAbort,
+        progress,
+        filesReady: false,
         localHome,
         queue: Promise.resolve() as Promise<unknown>,
         stopping: false,
@@ -513,11 +555,15 @@ export async function startWorker(configPath: string) {
         if (outcome.status !== 'committed') throw new Error('SDK transcript publication conflict');
         finalized = true;
         await sdk.drain();
+        await progress(
+          job.stopping && codeAbort.signal.aborted ? 'Session stopped.' : 'Session finished.'
+        );
       };
       job.finalize = () => (finalization ??= finalize());
       const renewal = setInterval(() => {
         void Promise.all([
-          c.renew(),
+          launch.renew(),
+          ...(codeOwned ? [c.renew()] : []),
           ...(finalized
             ? []
             : [
@@ -527,6 +573,7 @@ export async function startWorker(configPath: string) {
               ]),
         ]).catch(async () => {
           fenced = true;
+          codeAbort.abort(new Error('Workspace host was fenced'));
           for (const container of job.containers)
             await removeContainer(container).catch((error) =>
               console.error('Containment failed', String(error))
@@ -564,7 +611,7 @@ export async function startWorker(configPath: string) {
             ...containerBase(name),
             '-i',
             '-v',
-            `${initial.workspace}:/workspace:ro`,
+            `${launcher}:/workspace:ro`,
             '-v',
             `${sdkHome}:/home/agor/.claude`,
             '-v',
@@ -586,15 +633,18 @@ export async function startWorker(configPath: string) {
         await job.queue;
         if (fenced) throw new Error('SDK host was fenced');
         if (!finalized) throw new Error('Executor exited without durable SDK finalization');
-        await c
-          .checkpoint()
-          .catch((error) => console.warn('Idle checkpoint deferred', String(error)));
+        if (codeOwned)
+          await c
+            .checkpoint()
+            .catch((error) => console.warn('Idle checkpoint deferred', String(error)));
         res.end();
       } catch (error) {
         await sdk.abortTool(sdkTicket.ticket).catch(() => {});
         if (signal.aborted) throw error;
         res.end(`\nWorkspace failure: ${String(error)}\n`);
       } finally {
+        codeAbort.abort(new Error('SDK session ended'));
+        await job.queue;
         clearInterval(renewal);
         jobs.delete(capability);
         for (const container of job.containers) await removeContainer(container);
@@ -672,6 +722,7 @@ export async function startWorker(configPath: string) {
         const job = jobs.get(capability);
         if (!job) return json(res, 403, { error: 'Invalid capability' });
         job.stopping = true;
+        job.abortPreparation.abort(new Error('Workspace preparation stopped'));
         for (const name of job.containers)
           if (name.startsWith('agor-tool-')) await removeContainer(name);
         await job.queue;
@@ -717,7 +768,8 @@ export async function startWorker(configPath: string) {
             config.daemonUrl,
             input.payload.sessionToken,
             input.payload.params.taskId,
-            (signal, handoff) => dispatch(input, res, signal, handoff)
+            (signal, handoff, progress) => dispatch(input, res, signal, handoff, progress),
+            input.payload.params.sessionId
           );
           if (!res.writableEnded) res.end();
           return;
@@ -730,17 +782,22 @@ export async function startWorker(configPath: string) {
         const scope = z
           .object({ tenantId: z.string().regex(/^[A-Za-z0-9_-]+$/), branchId: z.string().uuid() })
           .parse(await body(req));
-        const { state, now } = await coordinator(scope.tenantId, scope.branchId).metadata.read();
+        const [code, launch] = await Promise.all([
+          coordinator(scope.tenantId, scope.branchId).metadata.read(),
+          coordinator(scope.tenantId, scope.branchId, 'launch').metadata.read(),
+        ]);
+        const owner = [launch, code].find(({ state, now }) => state?.host && state.leaseUntil > now)
+          ?.state?.host;
         return json(res, 200, {
-          owner: state?.host && state.leaseUntil > now ? state.host.split('#')[0] : null,
-          revision: state?.revision ?? null,
+          owner: owner?.split('#')[0] ?? null,
+          revision: code.state?.revision ?? null,
         });
       }
       if (req.method === 'POST' && req.url === '/drain') {
         if (jobs.size) return json(res, 409, { error: 'SDK sessions active' });
         for (const c of coordinators.values()) {
-          const { state } = await c.metadata.read();
-          if (state?.host === host) await c.drain();
+          const { state, now } = await c.metadata.read();
+          if (state?.host === host && state.leaseUntil > now) await c.drain();
         }
         return json(res, 200, { drained: true });
       }
