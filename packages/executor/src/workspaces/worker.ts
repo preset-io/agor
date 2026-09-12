@@ -6,6 +6,7 @@ import { spawn } from 'node:child_process';
 import { randomUUID, timingSafeEqual } from 'node:crypto';
 import { chown, lstat, mkdir, readdir, readFile, realpath, rm } from 'node:fs/promises';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
+import { availableParallelism, totalmem } from 'node:os';
 import path from 'node:path';
 import type { BranchID, TenantID } from '@agor/core/types';
 import { BranchWorkspaceCoordinator, hash, type WorkspaceOptions } from '@agor/core/workspaces';
@@ -31,6 +32,7 @@ const Config = z.object({
   controlToken: z.string().min(32),
   image: z.string(),
   port: z.number().default(8787),
+  maximumSessions: z.number().int().positive().default(2),
   daemonUrl: z.string().url(),
   managedToolsRoot: z.string(),
   sourceHome: z.string(),
@@ -108,6 +110,7 @@ export async function startWorker(configPath: string) {
       coordinator: BranchWorkspaceCoordinator;
       workspace: string;
       queue: Promise<unknown>;
+      stopping: boolean;
       outcomes: Map<string, { request: string; result: Promise<unknown> }>;
       containers: Set<string>;
       finalize: () => Promise<void>;
@@ -186,13 +189,13 @@ export async function startWorker(configPath: string) {
     '--memory',
     '3g',
     '--cpus',
-    '2',
+    '1',
     '--add-host',
     'host.docker.internal:host-gateway',
   ];
   async function execute(capability: string, data: z.infer<typeof Execute>) {
     const job = jobs.get(capability);
-    if (!job) throw new Error('Expired workspace capability');
+    if (!job || job.stopping) throw new Error('Expired or stopped workspace capability');
     const previous = job.outcomes.get(data.idempotencyKey);
     const request = JSON.stringify(data);
     if (previous) {
@@ -207,7 +210,9 @@ export async function startWorker(configPath: string) {
           signal: AbortSignal.timeout(10000),
         });
         if (!result.ok) throw new Error('Task authority expired or revoked');
-        const task = (await result.json()) as { termination_request?: unknown };
+        const task = (await result.json()) as { termination_request?: unknown; status: string };
+        if (job.stopping || !['running', 'awaiting_permission'].includes(task.status))
+          throw new Error('Task is no longer authorized to execute tools');
         if (task.termination_request) throw new Error('Task termination requested');
       };
       await checkAuthority();
@@ -354,7 +359,8 @@ export async function startWorker(configPath: string) {
             []
           );
         } else {
-          const legacyHome = payload.env?.CLAUDE_CONFIG_DIR;
+          const legacyHome =
+            payload.env?.CLAUDE_CONFIG_DIR ?? path.join(config.sourceHome, '.claude');
           if (!legacyHome)
             throw new Error(
               'Resumable session has no durable transcript; explicit legacy SDK home required'
@@ -382,6 +388,7 @@ export async function startWorker(configPath: string) {
       coordinator: c,
       workspace: initial.workspace,
       queue: Promise.resolve() as Promise<unknown>,
+      stopping: false,
       outcomes: new Map<string, { request: string; result: Promise<unknown> }>(),
       containers: new Set<string>(),
       finalize: async (): Promise<void> => {
@@ -396,6 +403,7 @@ export async function startWorker(configPath: string) {
     let finalization: Promise<void> | undefined;
     const finalize = async () => {
       if (finalized) return;
+      job.stopping = true;
       await job.queue;
       const processes = await docker(['top', name, '-eo', SDK_PROCESS_COLUMNS]);
       if (!isQuiescentSdkTree(processes.exitCode, processes.output))
@@ -543,10 +551,27 @@ export async function startWorker(configPath: string) {
       await c.abortTool(tool.ticket);
     }
   }
+  let reservations = 0;
+  const maximumSessions = Math.min(
+    config.maximumSessions,
+    Math.floor(availableParallelism() / 2),
+    Math.floor((totalmem() - 1024 ** 3) / (6 * 1024 ** 3))
+  );
   const server = createServer(async (req, res) => {
     try {
       if (req.method === 'GET' && req.url === '/health')
         return json(res, 200, { status: 'ok', host });
+      if (req.method === 'POST' && req.url === '/quiesce') {
+        const capability = req.headers.authorization?.replace(/^Bearer /, '') ?? '';
+        const job = jobs.get(capability);
+        if (!job) return json(res, 403, { error: 'Invalid capability' });
+        job.stopping = true;
+        for (const name of job.containers)
+          if (name.startsWith('agor-tool-')) await removeContainer(name);
+        await job.queue;
+        await job.finalize();
+        return json(res, 200, { quiescent: true });
+      }
       if (req.method === 'POST' && req.url === '/finalize') {
         const capability = req.headers.authorization?.replace(/^Bearer /, '') ?? '';
         const job = jobs.get(capability);
@@ -563,8 +588,25 @@ export async function startWorker(configPath: string) {
         return json(res, 403, { error: 'Unauthorized controller' });
       if (req.method === 'POST' && req.url === '/read-command')
         return json(res, 200, await readCommand(await body(req)));
-      if (req.method === 'POST' && req.url === '/dispatch')
-        return await dispatch(Dispatch.parse(await body(req)), res);
+      if (req.method === 'POST' && req.url === '/dispatch') {
+        if (reservations >= maximumSessions) {
+          console.warn(
+            JSON.stringify({
+              event: 'workspace_admission_rejected',
+              reason: 'cpu_memory_reservations',
+              reservations,
+              maximumSessions,
+            })
+          );
+          return json(res, 429, { error: 'Worker CPU/memory admission capacity exhausted' });
+        }
+        reservations++;
+        try {
+          return await dispatch(Dispatch.parse(await body(req)), res);
+        } finally {
+          reservations--;
+        }
+      }
       if (req.method === 'POST' && req.url === '/placement') {
         const scope = z
           .object({ tenantId: z.string().regex(/^[A-Za-z0-9_-]+$/), branchId: z.string().uuid() })

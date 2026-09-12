@@ -377,6 +377,16 @@ export class AgorExecutor {
 
   private async reportTerminationComplete(): Promise<void> {
     if (!this.client || !this.terminationRequest) return;
+    if (this.config.replicatedWorkspace) {
+      const workspace = this.config.replicatedWorkspace;
+      const response = await fetch(`${workspace.endpoint}/quiesce`, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${workspace.capability}` },
+        signal: AbortSignal.timeout(15000),
+      });
+      if (!response.ok)
+        throw new Error('Worker containment unverified; termination acknowledgement refused');
+    }
     if (!this.terminationReport) {
       const client = this.client;
       const requestedAt = this.terminationRequest.requested_at;
