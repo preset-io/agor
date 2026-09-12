@@ -154,3 +154,31 @@ branches. To roll back, export the newest durable tree to a reviewed fresh legac
 checkout before clearing its sticky adoption marker; changing the flag alone is
 not a data migration. See `context/guides/branch-workspaces.md` for recovery and
 retention limits.
+
+### Local development state
+
+A session reuses one isolated replica across successive prompts. `node_modules`,
+virtual environments, nested build directories and private `.git` metadata stay
+on that host across tool calls, including replica recovery after an aborted tool.
+They are excluded from source revisions and checkpoints. Source changes from other
+sessions appear as working-tree changes against the replica's own Git index.
+
+Each fresh replica receives the branch's real initial Git history from a
+credential-free, branch-scoped bundle stored separately through the workspace
+persistence protocol. No source hooks, configuration or external worktree pointers
+are copied. Local commits and refs survive while that replica is retained; they
+are not shared Git refs or durable source revisions. Publish commits to the Git
+remote before eviction or migration if their commit identity must survive.
+Restoring elsewhere reconstructs the initial Git history plus the current source
+revision as working-tree changes. Agor UI Git-management commands still require
+separate integration; local Git commands inside the workspace now work.
+
+The tool runtime includes Node, Python, pip, venv, a compiler toolchain and zstd.
+Only `~/.cache`, `~/.npm`, `~/.local` and `~/.nvm` are retained from the tool home,
+in replica-private local directories. npm user-global installs use `~/.local`.
+Shell state is fresh each invocation: repeat directory changes and environment
+activation. Commands support an explicit timeout up to 15 minutes, use `pipefail`,
+and report container OOM failures. Tool memory/CPU reservations are configurable
+through `toolMemoryGiB` and `toolCpus` (defaults 8 GiB and 2 CPUs); admission also
+reserves 3 GiB/1 CPU for each SDK and 2 GiB for the host. A 16-GiB worker therefore
+admits one such session; smaller tool budgets or larger workers permit concurrency.

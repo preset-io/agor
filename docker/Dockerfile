@@ -54,6 +54,11 @@ FROM node:22-slim AS base
 # Install system dependencies (including git for repo cloning)
 RUN apt-get update && apt-get install -y \
   sqlite3 \
+  python3 \
+  python3-pip \
+  python3-venv \
+  build-essential \
+  zstd \
   git \
   curl \
   sudo \

@@ -5,7 +5,16 @@ import { getManagedStorageSegments } from '../config/storage-layout';
 import { traceBestEffort } from '../tracing/datadog';
 import { evictLocalWorkspace } from './local-eviction';
 import { applyWorkspaceMutations } from './revisions';
-import { equal, hash, mutations, refresh, render, scan, validateTree } from './tree';
+import {
+  equal,
+  hash,
+  mutations,
+  preserveLocalPaths,
+  refresh,
+  render,
+  scan,
+  validateTree,
+} from './tree';
 import type {
   CommitOutcome,
   Mutation,
@@ -314,22 +323,8 @@ export class BranchWorkspaceCoordinator {
               this.options.clone,
               signal
             );
-            // Disposable data is private to this replica. Preserve caches across tool boundaries.
-            try {
-              for (const name of await import('node:fs/promises').then((fs) =>
-                fs.readdir(workspace)
-              )) {
-                if (
-                  this.options.exclude.includes(name) ||
-                  ['node_modules', '.pnpm-store', '.cache', 'dist', 'build', 'target'].includes(
-                    name
-                  )
-                )
-                  await rename(path.join(workspace, name), path.join(staging, name));
-              }
-            } catch (e) {
-              if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e;
-            }
+            // Keep nested dependencies, build products and private Git metadata.
+            await preserveLocalPaths(workspace, staging, this.options.exclude);
             await rm(workspace, { recursive: true, force: true });
             await rename(staging, workspace);
             await writeFile(

@@ -1,3 +1,9 @@
+import {
+  exportGitSeed,
+  installGitSeed,
+  LOCAL_HOME_DIRECTORIES,
+  LOCAL_TOOL_ENV,
+} from './local-environment.js';
 import { withWorkspacePreparation } from './preparation.js';
 import { isQuiescentSdkTree, SDK_PROCESS_COLUMNS } from './quiescence.js';
 import { copyClaudeTranscripts, importClaudeSession } from './sdk-transcripts.js';
@@ -10,7 +16,12 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import { availableParallelism, totalmem } from 'node:os';
 import path from 'node:path';
 import type { BranchID, TenantID } from '@agor/core/types';
-import { BranchWorkspaceCoordinator, hash, type WorkspaceOptions } from '@agor/core/workspaces';
+import {
+  BranchWorkspaceCoordinator,
+  hash,
+  included,
+  type WorkspaceOptions,
+} from '@agor/core/workspaces';
 import { z } from 'zod';
 import { browseBranchFiles, readBranchFile } from '../commands/files.js';
 import { buildFileResults } from '../commands/git.js';
@@ -34,6 +45,8 @@ const Config = z.object({
   origin: z.string().url(),
   controlToken: z.string().min(32),
   image: z.string(),
+  toolMemoryGiB: z.number().int().min(1).max(64).default(8),
+  toolCpus: z.number().min(0.5).max(64).default(2),
   port: z.number().default(8787),
   maximumSessions: z.number().int().positive().default(2),
   daemonUrl: z.string().url(),
@@ -49,18 +62,20 @@ const Dispatch = z.object({
 });
 const Execute = z.object({
   command: z.string().min(1).max(65536),
-  timeout_ms: z.number().int().min(1000).max(120000),
+  timeout_ms: z.number().int().min(1000).max(900000),
   idempotencyKey: z.string().uuid(),
 });
 type DispatchInput = z.infer<typeof Dispatch>;
 
-async function ownTree(root: string, signal?: AbortSignal): Promise<void> {
+async function ownTree(root: string, signal?: AbortSignal, skipLocal = false): Promise<void> {
   signal?.throwIfAborted();
   const stat = await lstat(root);
   if (stat.isSymbolicLink()) return;
-  await chown(root, 1000, 1000);
+  if (skipLocal && stat.isDirectory() && stat.uid === 1000 && !included(path.basename(root), []))
+    return;
+  if (stat.uid !== 1000 || stat.gid !== 1000) await chown(root, 1000, 1000);
   if (stat.isDirectory())
-    for (const name of await readdir(root)) await ownTree(path.join(root, name), signal);
+    for (const name of await readdir(root)) await ownTree(path.join(root, name), signal, skipLocal);
 }
 
 async function body(req: IncomingMessage): Promise<unknown> {
@@ -110,6 +125,7 @@ export async function startWorker(configPath: string) {
       input: DispatchInput;
       coordinator: BranchWorkspaceCoordinator;
       workspace: string;
+      localHome: string;
       queue: Promise<unknown>;
       stopping: boolean;
       outcomes: Map<string, { request: string; result: Promise<unknown> }>;
@@ -174,7 +190,7 @@ export async function startWorker(configPath: string) {
         throw new Error('Container quiescence could not be verified');
     }
   }
-  const containerBase = (name: string) => [
+  const containerBase = (name: string, tool = false) => [
     'run',
     '--name',
     name,
@@ -188,9 +204,9 @@ export async function startWorker(configPath: string) {
     '--pids-limit',
     '256',
     '--memory',
-    '3g',
+    tool ? `${config.toolMemoryGiB}g` : '3g',
     '--cpus',
-    '1',
+    tool ? String(config.toolCpus) : '1',
     '--add-host',
     'host.docker.internal:host-gateway',
   ];
@@ -219,17 +235,22 @@ export async function startWorker(configPath: string) {
       await checkAuthority();
       const c = job.coordinator;
       const tool = await c.beginTool(
-        job.input.payload.params.taskId,
+        job.input.payload.params.sessionId,
         data.idempotencyKey,
         data.idempotencyKey
       );
-      await ownTree(tool.workspace);
+      await ownTree(tool.workspace, undefined, true);
       const name = `agor-tool-${randomUUID()}`;
       job.containers.add(name);
       try {
         const result = await docker(
           [
-            ...containerBase(name),
+            ...containerBase(name, true),
+            ...LOCAL_HOME_DIRECTORIES.flatMap((directory) => [
+              '-v',
+              `${job.localHome}/${directory}:/home/agor/${directory}`,
+            ]),
+            ...LOCAL_TOOL_ENV.flatMap((value) => ['-e', value]),
             '-v',
             `${tool.workspace}:/workspace${job.input.payload.params.principalBranchAccess === 'write' ? '' : ':ro'}`,
             '-w',
@@ -237,12 +258,20 @@ export async function startWorker(configPath: string) {
             '--entrypoint',
             '/bin/bash',
             config.image,
-            '-lc',
+            '-o',
+            'pipefail',
+            '-c',
             data.command,
           ],
           undefined,
           data.timeout_ms
         );
+        const state = await docker(['inspect', '--format', '{{.State.OOMKilled}}', name]);
+        if (state.exitCode !== 0) throw new Error('Unable to verify tool resource outcome');
+        if (state.output.trim() === 'true') {
+          result.exitCode = 137;
+          result.output += '\nAgor: tool exceeded its memory limit (OOM killed).\n';
+        }
         // docker run can return while detached descendants remain; destroy the
         // entire container namespace BEFORE examining or publishing mutations.
         await removeContainer(name);
@@ -265,6 +294,36 @@ export async function startWorker(configPath: string) {
     job.outcomes.set(data.idempotencyKey, { request, result: operation });
     job.queue = operation.catch(() => {});
     return operation;
+  }
+  const gitSeeds = new Map<string, Promise<string>>();
+  function gitSeed(tenantId: string, branchId: string, sourcePath: string, signal: AbortSignal) {
+    const key = `${tenantId}/${branchId}`;
+    let pending = gitSeeds.get(key);
+    if (!pending) {
+      pending = (async () => {
+        const gitState = coordinator(tenantId, branchId, 'git-seed');
+        const seed = path.join(config.root, 'git-seeds', randomUUID());
+        try {
+          if (!(await gitState.metadata.read()).state) {
+            const source = await realpath(sourcePath);
+            if (!source.startsWith(`${await realpath(config.sourceHome)}/`))
+              throw new Error('Git source outside configured Agor home');
+            await exportGitSeed(source, seed);
+          }
+          await gitState.materialise(seed, signal);
+          const id = randomUUID();
+          const replica = await gitState.beginTool('seed', id, id, signal);
+          await gitState.completeTool(replica.ticket);
+          await gitState.drain();
+          return replica.workspace;
+        } finally {
+          await rm(seed, { recursive: true, force: true });
+        }
+      })();
+      gitSeeds.set(key, pending);
+      void pending.catch(() => gitSeeds.delete(key));
+    }
+    return pending;
   }
   async function dispatch(
     input: DispatchInput,
@@ -328,14 +387,24 @@ export async function startWorker(configPath: string) {
     }, 10000);
     try {
       const initial = await c.beginTool(
-        payload.params.taskId,
+        payload.params.sessionId,
         `initial-${payload.params.taskId}`,
         `initial-${payload.params.taskId}`,
         signal
       );
       await c.completeTool(initial.ticket);
       signal.throwIfAborted();
+      await installGitSeed(
+        await gitSeed(tenantId, branchId, branch.path, signal),
+        initial.workspace
+      );
       await ownTree(initial.workspace, signal);
+      const localHome = path.join(path.dirname(initial.workspace), 'local-home');
+      for (const directory of LOCAL_HOME_DIRECTORIES) {
+        const location = path.join(localHome, directory);
+        await mkdir(location, { recursive: true, mode: 0o700 });
+        await chown(location, 1000, 1000);
+      }
       const sdk = coordinator(tenantId, branchId, `claude/${payload.params.sessionId}`);
       const seed = path.join(config.root, 'sdk-seeds', randomUUID());
       await mkdir(seed, { recursive: true, mode: 0o700 });
@@ -408,6 +477,7 @@ export async function startWorker(configPath: string) {
         input,
         coordinator: c,
         workspace: initial.workspace,
+        localHome,
         queue: Promise.resolve() as Promise<unknown>,
         stopping: false,
         outcomes: new Map<string, { request: string; result: Promise<unknown> }>(),
@@ -583,9 +653,10 @@ export async function startWorker(configPath: string) {
   let reservations = 0;
   const maximumSessions = Math.min(
     config.maximumSessions,
-    Math.floor(availableParallelism() / 2),
-    Math.floor((totalmem() - 1024 ** 3) / (6 * 1024 ** 3))
+    Math.floor(availableParallelism() / (config.toolCpus + 1)),
+    Math.floor((totalmem() - 2 * 1024 ** 3) / ((config.toolMemoryGiB + 3) * 1024 ** 3))
   );
+  const activeSessions = new Set<string>();
   const server = createServer(async (req, res) => {
     try {
       if (req.method === 'GET' && req.url === '/health')
@@ -629,9 +700,13 @@ export async function startWorker(configPath: string) {
           );
           return json(res, 429, { error: 'Worker CPU/memory admission capacity exhausted' });
         }
+        const input = Dispatch.parse(await body(req));
+        const sessionKey = `${input.tenantId}/${input.branchId}/${input.payload.params.sessionId}`;
+        if (activeSessions.has(sessionKey))
+          return json(res, 409, { error: 'Session already active' });
+        activeSessions.add(sessionKey);
         reservations++;
         try {
-          const input = Dispatch.parse(await body(req));
           await withWorkspacePreparation(
             config.daemonUrl,
             input.payload.sessionToken,
@@ -642,6 +717,7 @@ export async function startWorker(configPath: string) {
           return;
         } finally {
           reservations--;
+          activeSessions.delete(sessionKey);
         }
       }
       if (req.method === 'POST' && req.url === '/placement') {

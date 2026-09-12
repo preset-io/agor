@@ -353,3 +353,41 @@ it('reuses the rendered base after PostgreSQL JSONB reorders manifest keys', asy
   expect(downloads).toBe(initialDownloads);
   await c.abortTool(next.ticket);
 });
+
+it('retains nested local packages, environments and Git state after a tool abort and source refresh', async () => {
+  const { c, metadata } = await fixture();
+  const a = await c.beginTool('session-a', 'first', 'first');
+  await mkdir(path.join(a.workspace, 'frontend'));
+  await writeFile(path.join(a.workspace, 'frontend/package.json'), '{}');
+  await c.completeTool(a.ticket);
+  const b = await c.beginTool('session-a', 'install', 'install');
+  for (const directory of [
+    'frontend/node_modules/pkg',
+    '.venv/lib/pkg',
+    '.git/refs/heads',
+    '.cache/pip',
+  ]) {
+    await mkdir(path.join(b.workspace, directory), { recursive: true });
+    await writeFile(path.join(b.workspace, directory, 'local'), 'retained');
+  }
+  await writeFile(path.join(b.workspace, 'a'), 'uncommitted crash');
+  await c.abortTool(b.ticket);
+  const next = await c.beginTool('session-a', 'next-prompt', 'next-prompt');
+  expect(await readFile(path.join(next.workspace, 'a'), 'utf8')).toBe('a0');
+  for (const directory of [
+    'frontend/node_modules/pkg',
+    '.venv/lib/pkg',
+    '.git/refs/heads',
+    '.cache/pip',
+  ])
+    expect(await readFile(path.join(next.workspace, directory, 'local'), 'utf8')).toBe('retained');
+  await c.completeTool(next.ticket);
+  expect(
+    Object.keys(metadata.state!.tree).some((name) => /node_modules|\.venv|\.git|\.cache/.test(name))
+  ).toBe(false);
+  const other = await c.beginTool('session-b', 'other', 'other');
+  await expect(lstat(path.join(other.workspace, '.venv'))).rejects.toMatchObject({
+    code: 'ENOENT',
+  });
+  await c.abortTool(other.ticket);
+});

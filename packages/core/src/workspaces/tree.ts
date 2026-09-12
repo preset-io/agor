@@ -341,3 +341,33 @@ export async function refresh(
   for (const name of [...touchedDirs].sort((a, b) => b.length - a.length))
     if (after[name]?.kind === 'directory') await fs.chmod(path.join(root, name), after[name].mode);
 }
+
+/** Move excluded descendants into a rebuilt replica without following user symlinks.
+ * Included files are always restored from authority, never salvaged after a crash.
+ */
+export async function preserveLocalPaths(
+  source: string,
+  destination: string,
+  excludes: string[]
+): Promise<void> {
+  const fs = await import('node:fs/promises');
+  async function visit(relative: string): Promise<void> {
+    for (const entry of await fs.readdir(path.join(source, relative), { withFileTypes: true })) {
+      const name = relative ? `${relative}/${entry.name}` : entry.name;
+      const target = path.join(destination, name);
+      if (!included(name, excludes)) {
+        await fs.mkdir(path.dirname(target), { recursive: true });
+        await fs.rename(path.join(source, name), target);
+      } else if (entry.isDirectory()) {
+        // A source deletion/type change wins over caches beneath that directory.
+        const stat = await fs.lstat(target).catch(() => undefined);
+        if (stat?.isDirectory() && !stat.isSymbolicLink()) await visit(name);
+      }
+    }
+  }
+  try {
+    await visit('');
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+  }
+}
