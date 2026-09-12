@@ -1,3 +1,4 @@
+import { withWorkspacePreparation } from './preparation.js';
 import { isQuiescentSdkTree, SDK_PROCESS_COLUMNS } from './quiescence.js';
 import { copyClaudeTranscripts, importClaudeSession } from './sdk-transcripts.js';
 /** Trusted controller process. Never mounted into or executed as an SDK child. */
@@ -264,7 +265,12 @@ export async function startWorker(configPath: string) {
     job.queue = operation.catch(() => {});
     return operation;
   }
-  async function dispatch(input: DispatchInput, res: ServerResponse) {
+  async function dispatch(
+    input: DispatchInput,
+    res: ServerResponse,
+    signal: AbortSignal,
+    handoff: () => void
+  ) {
     if (input.payload.params.tool !== 'claude-code')
       throw new Error('Only Claude Code supports this replicated execution adapter');
     const { tenantId, branchId, payload } = input;
@@ -311,7 +317,8 @@ export async function startWorker(configPath: string) {
     const source = placement.state ? undefined : await realpath(branch.path);
     if (source && !source.startsWith(`${await realpath(config.sourceHome)}/`))
       throw new Error('Initial source outside configured Agor home');
-    await c.materialise(source);
+    await c.materialise(source, signal);
+    signal.throwIfAborted();
     const initial = await c.beginTool(
       payload.params.taskId,
       `initial-${payload.params.taskId}`,
@@ -372,7 +379,7 @@ export async function startWorker(configPath: string) {
       }
     }
     try {
-      await sdk.materialise(seed);
+      await sdk.materialise(seed, signal);
     } finally {
       await rm(seed, { recursive: true, force: true });
     }
@@ -381,6 +388,7 @@ export async function startWorker(configPath: string) {
     await mkdir(sdkHome, { mode: 0o700 });
     await copyClaudeTranscripts(sdkTicket.workspace, sdkHome);
     await ownTree(sdkHome);
+    signal.throwIfAborted();
     const capability = randomUUID() + randomUUID();
     const job = {
       input,
@@ -457,6 +465,7 @@ export async function startWorker(configPath: string) {
       for (const key of Object.keys(forwarded.env))
         if (/^(AWS_|DATABASE_URL$|PGPASSWORD$)/.test(key))
           delete forwarded.env[key as keyof typeof forwarded.env];
+      handoff();
       await docker(
         [
           ...containerBase(name),
@@ -490,6 +499,7 @@ export async function startWorker(configPath: string) {
       res.end();
     } catch (error) {
       await sdk.abortTool(sdkTicket.ticket).catch(() => {});
+      if (signal.aborted) throw error;
       res.end(`\nWorkspace failure: ${String(error)}\n`);
     } finally {
       clearInterval(renewal);
@@ -601,7 +611,15 @@ export async function startWorker(configPath: string) {
         }
         reservations++;
         try {
-          return await dispatch(Dispatch.parse(await body(req)), res);
+          const input = Dispatch.parse(await body(req));
+          await withWorkspacePreparation(
+            config.daemonUrl,
+            input.payload.sessionToken,
+            input.payload.params.taskId,
+            (signal, handoff) => dispatch(input, res, signal, handoff)
+          );
+          if (!res.writableEnded) res.end();
+          return;
         } finally {
           reservations--;
         }

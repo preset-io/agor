@@ -131,14 +131,22 @@ export async function scan(
   root: string,
   excludes: string[],
   limits: { maximumBytes: number; maximumFiles: number },
-  onFile?: (name: string, entry: Entry, bytes: Buffer) => Promise<void>
+  onFile?: (name: string, entry: Entry, bytes: Buffer) => Promise<void>,
+  signal?: AbortSignal
 ): Promise<{ tree: Tree; excluded: number }> {
   const tree: Tree = Object.create(null);
   let total = 0;
   let count = 0;
   let excluded = 0;
+  const pending = new Set<Promise<void>>();
+  let failure: unknown;
+  const check = () => {
+    signal?.throwIfAborted();
+    if (failure) throw failure;
+  };
   const visit = async (dir: string) => {
     for (const name of (await readdir(path.join(root, dir))).sort()) {
+      check();
       const relative = dir ? `${dir}/${name}` : name;
       if (!included(relative, excludes)) {
         excluded++;
@@ -178,7 +186,15 @@ export async function scan(
             throw new WorkspaceError('BUSY', 'Workspace changed during extraction');
           const entry: Entry = { kind: 'file', hash: hash(bytes), mode, size: bytes.length };
           tree[relative] = entry;
-          await onFile?.(relative, entry, bytes);
+          if (onFile) {
+            const operation = onFile(relative, entry, bytes).catch((error) => {
+              failure ??= error;
+            });
+            pending.add(operation);
+            void operation.then(() => pending.delete(operation));
+            if (pending.size >= 8) await Promise.race(pending);
+            check();
+          }
         } finally {
           await file.close();
         }
@@ -187,7 +203,12 @@ export async function scan(
   };
   if (!(await lstat(root)).isDirectory())
     throw new WorkspaceError('INVALID', 'Workspace root must be a directory');
-  await visit('');
+  try {
+    await visit('');
+  } finally {
+    await Promise.all(pending);
+  }
+  check();
   validateTree(tree, excludes);
   return { tree, excluded };
 }
@@ -231,7 +252,8 @@ export async function render(
   blobs: WorkspaceBlobs,
   excludes: string[],
   source?: string,
-  clone: 'copy' | 'reflink' = 'copy'
+  clone: 'copy' | 'reflink' = 'copy',
+  signal?: AbortSignal
 ): Promise<void> {
   validateTree(tree, excludes);
   await mkdir(root, { recursive: false, mode: 0o700 });
@@ -239,24 +261,33 @@ export async function render(
     .filter(([, e]) => e.kind === 'directory')
     .sort(([a], [b]) => a.length - b.length);
   for (const [name] of directories) await mkdir(path.join(root, name), { mode: 0o700 });
-  for (const [name, entry] of Object.entries(tree)) {
-    const dest = path.join(root, name);
-    if (entry.kind === 'file') {
-      if (source)
-        await copyFile(
-          path.join(source, name),
-          dest,
-          clone === 'reflink' ? constants.COPYFILE_FICLONE_FORCE : 0
-        );
-      else {
-        const bytes = await blobs.get(entry.hash);
-        if (hash(bytes) !== entry.hash || bytes.length !== entry.size)
-          throw new WorkspaceError('CORRUPT', `Blob checksum mismatch: ${name}`);
-        await writeFile(dest, bytes, { flag: 'wx', mode: 0o600 });
-      }
-      await chmod(dest, entry.mode);
-    } else if (entry.kind === 'symlink') await symlink(entry.target!, dest);
+  const files = Object.entries(tree);
+  for (let start = 0; start < files.length; start += 8) {
+    signal?.throwIfAborted();
+    const results = await Promise.allSettled(
+      files.slice(start, start + 8).map(async ([name, entry]) => {
+        const dest = path.join(root, name);
+        if (entry.kind === 'file') {
+          if (source)
+            await copyFile(
+              path.join(source, name),
+              dest,
+              clone === 'reflink' ? constants.COPYFILE_FICLONE_FORCE : 0
+            );
+          else {
+            const bytes = await blobs.get(entry.hash);
+            if (hash(bytes) !== entry.hash || bytes.length !== entry.size)
+              throw new WorkspaceError('CORRUPT', `Blob checksum mismatch: ${name}`);
+            await writeFile(dest, bytes, { flag: 'wx', mode: 0o600 });
+          }
+          await chmod(dest, entry.mode);
+        } else if (entry.kind === 'symlink') await symlink(entry.target!, dest);
+      })
+    );
+    const failed = results.find((result) => result.status === 'rejected');
+    if (failed?.status === 'rejected') throw failed.reason;
   }
+  signal?.throwIfAborted();
   for (const [name, entry] of directories.reverse()) await chmod(path.join(root, name), entry.mode);
 }
 

@@ -122,18 +122,24 @@ export class BranchWorkspaceCoordinator {
       throw new WorkspaceError('CAPACITY', 'Insufficient local bytes or inodes');
   }
   /** Initial import must run with legacy writers stopped. All later activations use durable metadata. */
-  async materialise(source?: string): Promise<number> {
+  async materialise(source?: string, signal?: AbortSignal): Promise<number> {
     return this.measured('materialise_ms', async () => {
+      signal?.throwIfAborted();
       await this.capacity();
       let initial: Tree | undefined;
       if (!(await this.metadata.read()).state) {
         if (!source) throw new WorkspaceError('INVALID', 'Initial workspace source required');
         initial = (
-          await scan(source, this.options.exclude, this.options, async (_name, entry, bytes) =>
-            this.blobs.put(entry.hash, bytes)
+          await scan(
+            source,
+            this.options.exclude,
+            this.options,
+            async (_name, entry, bytes) => this.blobs.put(entry.hash, bytes),
+            signal
           )
         ).tree;
       }
+      signal?.throwIfAborted();
       const state = await this.metadata.mutate((existing, now) => {
         const s: WorkspaceState = existing
           ? this.requireScope(existing)
@@ -167,8 +173,24 @@ export class BranchWorkspaceCoordinator {
         s.leaseUntil = now + this.options.leaseMs;
         return { state: s, result: s };
       });
-      await this.base(state);
-      return state.revision;
+      let renewalError: unknown;
+      const renewal = setInterval(
+        () => {
+          void this.renew().catch((error) => {
+            renewalError = error;
+          });
+        },
+        Math.max(10, Math.floor(this.options.leaseMs / 3))
+      );
+      try {
+        await this.base(state, signal);
+        if (renewalError) throw renewalError;
+        signal?.throwIfAborted();
+        await this.renew();
+        return state.revision;
+      } finally {
+        clearInterval(renewal);
+      }
     });
   }
   async reapExpiredTools(): Promise<void> {
@@ -185,7 +207,7 @@ export class BranchWorkspaceCoordinator {
       return { state: s, result: undefined };
     });
   }
-  private async base(s: WorkspaceState): Promise<string> {
+  private async base(s: WorkspaceState, signal?: AbortSignal): Promise<string> {
     const dir = path.join(this.directory, 'base');
     await mkdir(dir, { recursive: true, mode: 0o700 });
     const target = path.join(dir, `${s.epoch}-${hash(JSON.stringify(s.tree))}`);
@@ -200,7 +222,7 @@ export class BranchWorkspaceCoordinator {
       Object.keys(s.tree).length
     );
     try {
-      await render(temp, s.tree, this.blobs, this.options.exclude);
+      await render(temp, s.tree, this.blobs, this.options.exclude, undefined, 'copy', signal);
       try {
         await rename(temp, target);
       } catch (e) {

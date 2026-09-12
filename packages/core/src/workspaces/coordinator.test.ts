@@ -279,3 +279,49 @@ describe('branch tool-boundary protocol', () => {
     await expect(f.c.checkpoint()).resolves.toHaveProperty('revision', 0);
   });
 });
+
+it('renews ownership while a cold restore exceeds the original lease', async () => {
+  const { metadata, blobs, scope, options } = await fixture();
+  metadata.now = Date.now();
+  metadata.state!.leaseUntil = 0;
+  const originalMutate = metadata.mutate.bind(metadata);
+  metadata.mutate = async (work) => {
+    metadata.now = Date.now();
+    return originalMutate(work);
+  };
+  const recovering = new BranchWorkspaceCoordinator(
+    scope,
+    metadata,
+    {
+      put: blobs.put.bind(blobs),
+      get: async (key) => {
+        await new Promise((resolve) => setTimeout(resolve, 120));
+        return blobs.get(key);
+      },
+    },
+    { ...options, root: `${options.root}-cold`, host: 'cold', leaseMs: 60 }
+  );
+  await recovering.materialise();
+  const tool = await recovering.beginTool('recovered', 'tool', 'key');
+  expect(tool.ticket.baseRevision).toBe(0);
+  await recovering.abortTool(tool.ticket);
+});
+it('does not publish initial metadata after import cancellation', async () => {
+  const { source, scope, options, blobs } = await fixture();
+  const metadata = new Authority();
+  const abort = new AbortController();
+  const cancelled = new BranchWorkspaceCoordinator(
+    scope,
+    metadata,
+    {
+      put: async (key, bytes) => {
+        await blobs.put(key, bytes);
+        abort.abort();
+      },
+      get: blobs.get.bind(blobs),
+    },
+    { ...options, root: `${options.root}-cancelled` }
+  );
+  await expect(cancelled.materialise(source, abort.signal)).rejects.toThrow();
+  expect(metadata.state).toBeNull();
+});
