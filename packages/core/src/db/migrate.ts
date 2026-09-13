@@ -133,6 +133,19 @@ export function createMigrationImpactRegistry(
 
 const MIGRATION_IMPACT_REGISTRY = createMigrationImpactRegistry([
   [
+    '0106_branch_deletion_ledger',
+    {
+      requiresOfflineCutover: false,
+      impact: defineMigrationImpact({
+        classification: 'schema',
+        userAction: 'none',
+        rollbackCompatibility: 'compatible',
+        summary:
+          'Adds tenant-scoped deletion checkpoint storage. Does not enable permanent deletion or change branch admission.',
+      }),
+    },
+  ],
+  [
     '0105_mcp_oauth_grant_attribution',
     {
       requiresOfflineCutover: true,

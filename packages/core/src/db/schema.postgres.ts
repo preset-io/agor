@@ -927,6 +927,85 @@ export const branches = pgTable(
 );
 
 /**
+ * Durable deletion receipts and bounded resource checkpoints. Deliberately no
+ * branch/user FK: removing the subject must not erase its reconciliation handle.
+ * FORCE RLS and the composite resource FK bind the ledger to its tenant.
+ * This is NOT maintenance admission.
+ */
+export const branchDeletionOperations = pgTable(
+  'branch_deletion_operations',
+  {
+    operation_id: text('operation_id').primaryKey(),
+    tenant_id: text('tenant_id').notNull(),
+    branch_id: text('branch_id').notNull(),
+    requested_by: text('requested_by').notNull(),
+    confirmed_at: t.timestamp('confirmed_at').notNull(),
+    updated_at: t.timestamp('updated_at').notNull(),
+    completed_at: t.timestamp('completed_at'),
+    status: text('status')
+      .$type<import('../types/branch-deletion').BranchDeletionStatus>()
+      .notNull(),
+    stage: text('stage').$type<import('../types/branch-deletion').BranchDeletionStage>().notNull(),
+    error_code:
+      text('error_code').$type<import('../types/branch-deletion').BranchDeletionErrorCode>(),
+    revision: integer('revision').notNull().default(0),
+    inventory_sealed: t.bool('inventory_sealed').notNull().default(false),
+  },
+  (table) => ({
+    branchUnique: uniqueIndex('branch_deletion_operations_branch_unique').on(
+      table.tenant_id,
+      table.branch_id
+    ),
+    tenantOperationUnique: uniqueIndex('branch_deletion_operations_tenant_operation_unique').on(
+      table.tenant_id,
+      table.operation_id
+    ),
+    pendingIdx: index('branch_deletion_operations_pending_idx').on(
+      table.tenant_id,
+      table.status,
+      table.operation_id
+    ),
+  })
+);
+
+export const branchDeletionResources = pgTable(
+  'branch_deletion_resources',
+  {
+    tenant_id: text('tenant_id').notNull(),
+    operation_id: text('operation_id').notNull(),
+    resource_id: text('resource_id').notNull(),
+    kind: text('kind')
+      .$type<import('../types/branch-deletion').BranchDeletionResourceKind>()
+      .notNull(),
+    owner: text('owner').notNull(),
+    locator: text('locator').notNull(),
+    version: text('version').notNull(),
+    state: text('state')
+      .$type<import('../types/branch-deletion').BranchDeletionResourceState>()
+      .notNull(),
+    invocation_id: text('invocation_id'),
+    retention_reason:
+      text('retention_reason').$type<
+        import('../types/branch-deletion').BranchDeletionRetentionReason
+      >(),
+  },
+  (table) => ({
+    pk: primaryKey({ columns: [table.tenant_id, table.operation_id, table.resource_id] }),
+    operationFk: foreignKey({
+      columns: [table.tenant_id, table.operation_id],
+      foreignColumns: [branchDeletionOperations.tenant_id, branchDeletionOperations.operation_id],
+      name: 'branch_deletion_resources_operation_fk',
+    }).onDelete('restrict'),
+    pendingIdx: index('branch_deletion_resources_pending_idx').on(
+      table.tenant_id,
+      table.operation_id,
+      table.state,
+      table.resource_id
+    ),
+  })
+);
+
+/**
  * Branch Owners - RBAC junction table
  *
  * Many-to-many relationship between users and branches.

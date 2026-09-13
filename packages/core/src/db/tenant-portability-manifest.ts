@@ -39,6 +39,10 @@ import { IMPERATIVE_TENANT_TABLES } from './tenant-imperative-tables';
  * made portable by rewriting only tenant_id. Imports require reauthorization.
  */
 export const NON_PORTABLE_TENANT_TABLES: ReadonlySet<string> = new Set([
+  // In-progress erasure and storage locators are deployment-bound authority.
+  // Import must never replay them against a restored branch or new storage.
+  'branch_deletion_operations',
+  'branch_deletion_resources',
   'executor_session_token_authorities',
   'mcp_oauth_client_registrations',
   'mcp_oauth_pending_flows',

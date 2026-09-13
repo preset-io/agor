@@ -27,6 +27,25 @@ Repository: `packages/core/src/db/repositories/branches.ts`.
 Service: `apps/agor-daemon/src/services/branches.ts`.
 Type: `packages/core/src/types/branch.ts`.
 
+### Permanent-deletion persistence boundary
+
+`db/repositories/branch-deletions.ts` owns only checkpoint persistence; it does not
+authorize deletion, acquire branch maintenance admission, supervise executors, or
+delete the branch. Do not expose its methods as generic CRUD. The coordinator must
+record acceptance in the same short transaction as authorized lifecycle admission.
+An empty/sealed ledger alone never proves that the authoritative inventory is empty.
+
+`db/branch-deletion-manifest.ts` declares ownership-review dispositions for inbound
+FKs plus known plain-ID, JSON and external relations. Its dual-schema test detects
+new inbound FKs; it is not an executable cascade plan or proof of exhaustive runtime
+inventory. In particular, Knowledge namespaces require ownership classification,
+and published artifacts belong to boards rather than their provenance branch.
+
+Deletion operations and resource locators are deployment-bound and excluded from
+tenant portability: importing them could replay deletion against restored storage.
+They remain part of tenant erasure. Unsettled invocation identity must survive
+restart; lease expiry alone must never make an external deletion safe to retry.
+
 ## Things that bite
 
 - **Never use subprocess for git.** Always `simple-git` via `packages/core/src/git/index.ts`.

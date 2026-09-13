@@ -47,6 +47,8 @@ describe('buildTenantInsertOrder', () => {
   it('deletes but never exports transient authorities or deployment-bound grants', () => {
     const nonPortable = nonPortableTenantTableNames();
     expect(nonPortable).toEqual([
+      'branch_deletion_operations',
+      'branch_deletion_resources',
       'claude_oauth_attempts',
       'codex_device_auth_attempts',
       'executor_session_token_authorities',

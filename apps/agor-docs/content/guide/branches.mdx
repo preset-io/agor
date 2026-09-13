@@ -257,6 +257,19 @@ When a feature ships and the PR merges, you usually want to clean up disk withou
 
 **Best practice:** Archive with filesystem cleanup after PR merge. Only delete permanently for experimental branches with no valuable data.
 
+### Deletion and retained data
+
+Permanent deletion is not account-wide or provider-wide erasure. Shared repositories,
+user homes, account credentials, boards, and published board-owned artifacts are not
+exclusively owned by one branch. External provider conversations and remote Git refs
+are separate resources. Backups and versioned object storage remain subject to their
+configured retention and locks.
+
+The current deletion response and disappearance of a branch card are **not proof of
+verified removal of all filesystem and descendant resources**. Do not use them as an
+erasure receipt. Internal deletion checkpoints do not by themselves provide a public
+deletion-status API or guarantee that every deletion entry point is durable.
+
 ---
 
 ## Branch-level features

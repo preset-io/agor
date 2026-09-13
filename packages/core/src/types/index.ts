@@ -8,6 +8,7 @@ export * from './artifact-grants';
 export * from './board';
 export * from './board-comment';
 export * from './branch';
+export * from './branch-deletion';
 export * from './capability-policy';
 export * from './card';
 export * from './context';
