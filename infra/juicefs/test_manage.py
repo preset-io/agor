@@ -30,6 +30,17 @@ class StorageBoundaryTests(unittest.TestCase):
         self.c['home'] = self.c['mount']+'/home'
         with self.assertRaises(ValueError): self.load()
 
+    def test_private_https_backend_configuration(self):
+        self.c.update(bind_address='10.87.2.164', public_origin='https://juicefs.skellige.com.au')
+        args = manage.docker_command(self.load())
+        self.assertIn('10.87.2.164:3031:3030', args)
+        self.assertIn('CORS_ORIGIN=https://juicefs.skellige.com.au', args)
+        self.c['bind_address'] = '0.0.0.0'
+        with self.assertRaises(ValueError): self.load()
+        self.c['bind_address'] = '127.0.0.1'
+        self.c['public_origin'] = 'https://host/path'
+        with self.assertRaises(ValueError): self.load()
+
     def test_password_cannot_enter_argv_or_public_file(self):
         self.c['metadata_url'] = 'postgres://user:secret@localhost/juicefs'
         with self.assertRaises(ValueError): self.load()

@@ -118,3 +118,20 @@ storage module above.
 References: [JuiceFS architecture](https://juicefs.com/docs/community/architecture/),
 [cache consistency](https://juicefs.com/docs/community/guide/cache/), and
 [PostgreSQL setup](https://juicefs.com/docs/community/databases_for_metadata/).
+
+## HTTPS on the existing comparison load balancer
+
+`endpoint/` manages an additional certificate, target group on port 3031, and a
+host-specific HTTPS listener rule. First apply with `enable_https=false`, publish
+its `dns_records` output, then apply with `enable_https=true`. This attaches the
+validated certificate and enables routing without changing the existing default
+application route.
+
+Set `bind_address` to the worker's specific private IPv4 address and
+`public_origin` to the HTTPS origin in the runtime config, then recreate the
+comparison app container. The shared load-balancer stack on
+`codex/local-branch-workspaces` owns its security groups: set its
+`juicefs_backend_enabled=true` to permit ALB-to-worker TCP 3031. Keeping those
+rules in their original owning stack avoids conflicting Terraform ownership.
+The metadata proof still uses local PostgreSQL; exposing HTTPS does not convert
+it into the dedicated RDS deployment or enable agent tools automatically.

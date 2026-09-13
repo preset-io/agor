@@ -2,6 +2,7 @@
 """Single-tenant Agor comparison deployment. JuiceFS authority stays on the host."""
 import argparse
 import json
+import ipaddress
 import os
 from pathlib import Path
 import re
@@ -36,6 +37,14 @@ def config(filename):
         raise ValueError('Mount, application home and cache must be separate directories')
     if not 1024 <= int(c.get('port', 3031)) <= 65535:
         raise ValueError('Invalid port')
+    bind = ipaddress.ip_address(c.get('bind_address', '127.0.0.1'))
+    if bind.version != 4 or bind.is_unspecified or not bind.is_private:
+        raise ValueError('Bind to a specific private or loopback IPv4 address')
+    if c.get('public_origin'):
+        origin = urlparse(c['public_origin'])
+        if (origin.scheme != 'https' or not origin.hostname or origin.username
+                or origin.path or origin.query or origin.fragment):
+            raise ValueError('Public origin must be an HTTPS origin without credentials or path')
     return c
 
 
@@ -91,12 +100,14 @@ def prepare(c):
 def docker_command(c):
     root = Path(c['mount'])
     return ['docker', 'run', '-d', '--name', c['name'], '--restart', 'unless-stopped',
-            '-p', f"127.0.0.1:{int(c.get('port', 3031))}:3030",
+            '-p', f"{c.get('bind_address', '127.0.0.1')}:{int(c.get('port', 3031))}:3030",
             '-e', 'NODE_ENV=production', '-e', 'DAEMON_HOST=0.0.0.0',
             '-e', 'DAEMON_PORT=3030', '-e', 'AGOR_AGENTIC_TOOLS=none',
             '--mount', f"type=bind,src={c['home']},dst=/home/agor",
             '--mount', f'type=bind,src={root}/repos,dst=/home/agor/.agor/repos',
             '--mount', f'type=bind,src={root}/worktrees,dst=/home/agor/.agor/worktrees',
+            *(['-e', 'AGOR_BASE_URL='+c['public_origin'], '-e', 'CORS_ORIGIN='+c['public_origin']]
+              if c.get('public_origin') else []),
             c['image']]
 
 
