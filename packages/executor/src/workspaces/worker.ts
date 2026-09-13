@@ -1006,6 +1006,21 @@ export async function startWorker(configPath: string) {
           });
       }, policy.heartbeatMs)
     : undefined;
+  async function enterBranch(tenant: string, branch: string, res: ServerResponse) {
+    const stopped = new AbortController();
+    const close = () => stopped.abort(new Error('Caller disconnected during branch capture'));
+    res.once('close', close);
+    if (res.destroyed) close();
+    try {
+      return await admission.enterWhenReady(
+        tenant,
+        branch,
+        AbortSignal.any([stopped.signal, AbortSignal.timeout(120000)])
+      );
+    } finally {
+      res.off('close', close);
+    }
+  }
   const server = createServer(async (req, res) => {
     try {
       if (req.method === 'GET' && req.url === '/health')
@@ -1041,8 +1056,11 @@ export async function startWorker(configPath: string) {
         const raw = await body(req);
         const scope = Dispatch.pick({ tenantId: true, branchId: true }).parse(raw);
         if (maintaining) return json(res, 429, { error: 'Worker cache maintenance' });
-        const leave = admission.enter(scope.tenantId, scope.branchId);
-        if (!leave) return json(res, 429, { error: 'Branch checkpoint capture' });
+        const leave = await enterBranch(scope.tenantId, scope.branchId, res);
+        if (maintaining) {
+          leave();
+          return json(res, 429, { error: 'Worker cache maintenance' });
+        }
         reading++;
         try {
           return json(res, 200, await readCommand(raw));
@@ -1085,8 +1103,12 @@ export async function startWorker(configPath: string) {
         const sessionKey = `${input.tenantId}/${input.branchId}/${input.payload.params.sessionId}`;
         if (activeSessions.has(sessionKey))
           return json(res, 409, { error: 'Session already active' });
-        const leave = admission.enter(input.tenantId, input.branchId);
-        if (!leave) return json(res, 429, { error: 'Branch checkpoint capture' });
+        const leave = await enterBranch(input.tenantId, input.branchId, res);
+        // A waiter consumes no execution slot until capture ends. Recheck after the await.
+        if (maintaining || reservations >= maximumSessions || activeSessions.has(sessionKey)) {
+          leave();
+          return json(res, 429, { error: 'Worker admission capacity exhausted' });
+        }
         activeSessions.add(sessionKey);
         reservations++;
         try {

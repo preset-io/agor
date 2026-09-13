@@ -239,7 +239,9 @@ of retaining a warm replica.
 
 Maintenance briefly closes worker admission to verify no untracked SDK/tool
 containers survive. It then uses tenant-and-branch admission locks for capture
-and final detachment; other branches can run while a checkpoint uploads. Worker
+and final detachment; other branches can run while a checkpoint uploads.
+Requests arriving during capture wait for that branch lock (up to two minutes,
+cancelled on disconnect), then recheck execution capacity before admission. Worker
 heartbeats continue during uploads. Every accepted dispatch or file reader changes
 a local generation counter, including commands that modify only private files.
 An intervening admission, source revision, ownership epoch change, or conflict
