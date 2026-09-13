@@ -53,6 +53,7 @@ describe.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
           '0103_oauth_authority_watermark_reconciliation',
           '0104_mcp_slack_recovery_due',
           '0105_mcp_oauth_grant_attribution',
+          '0106_branch_deletion_ledger',
         ],
         dbAheadOfBinary: false,
       });

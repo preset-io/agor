@@ -54,6 +54,16 @@ describe('branch deletion ownership review coverage', () => {
     }
   );
 
+  it('audits descendants of every declared owned or mixed relation', () => {
+    expect(owned.has('board_comments')).toBe(true);
+    expect(owned.has('gateway_outbound_messages')).toBe(true);
+    for (const [relation, policy] of Object.entries(BRANCH_DELETION_RELATIONS)) {
+      if (['delete_owned', 'classify'].includes(policy.disposition)) {
+        expect(owned.has(relation.split('.')[0]!)).toBe(true);
+      }
+    }
+  });
+
   it('pins non-FK uploads and token authorities instead of trusting cascade deletion', () => {
     for (const table of [sqlite.uploads, sqlite.executorSessionTokenAuthorities]) {
       const config = sqliteConfig(table);

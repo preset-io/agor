@@ -253,7 +253,7 @@ When a feature ships and the PR merges, you usually want to clean up disk withou
 **Metadata options:**
 
 - **Archive (recommended)**: Hides from board, preserves all sessions and conversations for analytics and history.
-- **Delete permanently**: Removes all data including sessions and conversations. No undo.
+- **Delete permanently**: Irreversibly removes branch metadata and its sessions and conversations through the current metadata-first path. This is not proof of complete storage or external-resource erasure; see the limitations below.
 
 **Best practice:** Archive with filesystem cleanup after PR merge. Only delete permanently for experimental branches with no valuable data.
 

@@ -1,27 +1,5 @@
 import type { BranchDeletionRelationPolicy } from '../types/branch-deletion';
 
-/**
- * Ownership review contract, not an executable FK-cascade plan. Some rows in
- * these families are exclusively branch-owned, others are shared. Every inbound
- * FK into these families is pinned by the dual-schema audit test. Unknown
- * ownership must block finalization; adding a table here never authorizes DML.
- */
-export const BRANCH_DELETION_RESOURCE_FAMILIES = [
-  'branches',
-  'sessions',
-  'tasks',
-  'messages',
-  'schedules',
-  'branch_permission_configs',
-  'gateway_channels',
-  'thread_session_map',
-  'kb_namespaces',
-  'kb_documents',
-  'kb_document_versions',
-  'kb_document_units',
-  'kb_graph_nodes',
-] as const;
-
 const owned = (reason: string): BranchDeletionRelationPolicy => ({
   disposition: 'delete_owned',
   reason,
@@ -176,6 +154,23 @@ export const BRANCH_DELETION_RELATIONS: Readonly<Record<string, BranchDeletionRe
     'Remove edges incident to deleted nodes; preserve opposite nodes.'
   ),
 };
+
+/**
+ * Ownership review contract, not an executable FK-cascade plan. Some rows in
+ * these families are exclusively branch-owned, others are shared. Every inbound
+ * FK into these families is pinned by the dual-schema audit test. Unknown
+ * ownership must block finalization; this list never authorizes DML. Derive it
+ * from owned/mixed relation sources so their descendants cannot silently fall
+ * outside the audit when a new ownership classification is added.
+ */
+export const BRANCH_DELETION_RESOURCE_FAMILIES: readonly string[] = [
+  'branches',
+  ...new Set(
+    Object.entries(BRANCH_DELETION_RELATIONS)
+      .filter(([, policy]) => ['delete_owned', 'classify'].includes(policy.disposition))
+      .map(([relation]) => relation.split('.')[0]!)
+  ),
+];
 
 /** Plain IDs, JSON pointers and runtime/external resources missed by FK traversal. */
 export const BRANCH_DELETION_NON_FK_RELATIONS: Readonly<

@@ -9,6 +9,7 @@ import { BranchDeletionRepository } from './repositories/branch-deletions';
 import { BranchRepository } from './repositories/branches';
 import { RepoRepository } from './repositories/repos';
 import { UsersRepository } from './repositories/users';
+import { deleteTenantData } from './tenant-deletion';
 import { runWithTenantDatabaseScope } from './tenant-scope';
 import { acquireTenantWriteGate, releaseTenantWriteGate } from './tenant-write-gate';
 
@@ -157,6 +158,48 @@ it.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
         { relrowsecurity: true, relforcerowsecurity: true },
         { relrowsecurity: true, relforcerowsecurity: true },
       ]);
+      // Tenant maintenance must accept these strict policies and erase the
+      // deployment-bound ledger, without touching a second tenant's receipts.
+      const otherOperation = generateId();
+      await runWithTenantDatabaseScope(db, tenantB, async (scoped) => {
+        await executeRaw(
+          scoped,
+          sql`INSERT INTO branch_deletion_operations
+            (tenant_id, operation_id, branch_id, requested_by, confirmed_at, updated_at, status, stage)
+            VALUES (${tenantB}, ${otherOperation}, ${generateId()}, ${generateId()},
+              CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 'pending', 'requested')`
+        );
+        await executeRaw(
+          scoped,
+          sql`INSERT INTO branch_deletion_resources
+            (tenant_id, operation_id, resource_id, kind, owner, locator, version, state)
+            VALUES (${tenantB}, ${otherOperation}, 'other', 'upload', 'fixture', 'opaque', 'one', 'pending')`
+        );
+      });
+      const dry = await deleteTenantData(db, tenantA, { dryRun: true });
+      expect(dry.tenantDataDeleted).toBe(false);
+      expect(dry.rowCounts.branch_deletion_operations).toBe(1);
+      expect(dry.rowCounts.branch_deletion_resources).toBe(1);
+      await runWithTenantDatabaseScope(db, tenantA, async (scoped) => {
+        expect(await new BranchDeletionRepository(scoped).listResources(ref)).toHaveLength(1);
+      });
+      const deleted = await deleteTenantData(db, tenantA);
+      expect(deleted.tenantDataDeleted).toBe(true);
+      expect(deleted.rowCounts.branch_deletion_operations).toBe(1);
+      expect(deleted.rowCounts.branch_deletion_resources).toBe(1);
+      const other = await deleteTenantData(db, tenantB, { dryRun: true });
+      expect(other.rowCounts.branch_deletion_operations).toBe(1);
+      expect(other.rowCounts.branch_deletion_resources).toBe(1);
+      await runWithTenantDatabaseScope(db, tenantB, async (scoped) => {
+        expect(
+          rawRows(
+            await executeRaw(
+              scoped,
+              sql`SELECT resource_id, locator FROM branch_deletion_resources WHERE operation_id = ${otherOperation}`
+            )
+          )
+        ).toEqual([{ resource_id: 'other', locator: 'opaque' }]);
+      });
     } finally {
       await (db as typeof db & { $client: { end(): Promise<void> } }).$client.end();
     }
