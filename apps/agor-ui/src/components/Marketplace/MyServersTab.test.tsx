@@ -103,7 +103,10 @@ function settingsAction(serverId: string): HTMLButtonElement {
 }
 
 async function confirmServerRemoval(title: string): Promise<void> {
-  fireEvent.click(await screen.findByLabelText(`Remove ${title} server`));
+  const remove = await screen.findByLabelText(`Remove ${title} server`);
+  // The drawer renders before the asynchronous member-policy request settles.
+  await waitFor(() => expect(remove).toBeEnabled());
+  fireEvent.click(remove);
   const prompt = await screen.findByText(`Remove ${title}?`);
   let confirm: HTMLButtonElement | undefined;
   await waitFor(() => {
