@@ -230,9 +230,9 @@ Initial repository preparation still uses existing branch/Git seed paths; sharin
 a repository is a placement preference, not a guarantee of a dependency cache hit.
 
 Local inventory persists outside SDK mounts in `controller-cache/residency.json`.
-Workers only automatically reclaim tracked branches. Pre-existing untracked
-workspaces enter inventory when used; unknown directories are never adopted or
-deleted by a filesystem crawl. Inventory is a hint, not proof of ownership or
+Workers only automatically reclaim tracked branches. Pre-existing replicas with durable branch authority are registered lazily on
+placement lookup, preserving session locality across upgrades. Unknown directories
+without authority are never adopted or deleted by a filesystem crawl. Inventory is a hint, not proof of ownership or
 permission to delete. One preferred worker is selected per branch; no background
 replication to other nodes occurs. Idle ownership can be released independently
 of retaining a warm replica.

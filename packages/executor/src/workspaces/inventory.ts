@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, readdir, readFile, rename, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import type postgres from 'postgres';
 import type { Candidate, Resident, WorkerInventory } from './placement.js';
@@ -55,6 +55,43 @@ export class WorkspaceInventory {
     if (session && !entry.sessions.includes(session)) entry.sessions.push(session);
     this.entries.set(key, entry);
     return entry;
+  }
+  /** Lazy upgrade registration: caller must first verify durable branch authority.
+   * Only inspect known controller paths; never crawl or adopt arbitrary directories.
+   */
+  async registerExisting(
+    tenant: string,
+    branch: string,
+    repository: string,
+    directory: string,
+    revision: number
+  ) {
+    if (this.entries.has(this.key(tenant, branch))) return;
+    try {
+      const root = await lstat(directory),
+        replicas = path.join(directory, 'replicas');
+      if (!root.isDirectory() || root.isSymbolicLink()) return;
+      const st = await lstat(replicas);
+      if (!st.isDirectory() || st.isSymbolicLink()) return;
+      const sessions: string[] = [];
+      for (const item of await readdir(replicas, { withFileTypes: true })) {
+        if (!item.isDirectory() || !/^[A-Za-z0-9_-]{1,128}$/.test(item.name)) continue;
+        try {
+          const workspace = await lstat(path.join(replicas, item.name, 'workspace'));
+          if (workspace.isDirectory() && !workspace.isSymbolicLink()) sessions.push(item.name);
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+        }
+      }
+      if (!sessions.length) return;
+      const entry = this.touch(tenant, branch, repository);
+      entry.sessions = sessions;
+      entry.resident = true;
+      entry.revision = revision;
+      await this.save();
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    }
   }
   tenantEntries(tenant: string) {
     return [...this.entries].filter(([key]) => key.startsWith(`${tenant}/`)).map(([, r]) => r);

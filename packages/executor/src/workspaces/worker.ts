@@ -985,20 +985,32 @@ export async function startWorker(configPath: string) {
         }
       }
       if (req.method === 'POST' && req.url === '/dispatch') {
-        if (
-          maintaining ||
-          reservations >= maximumSessions ||
-          (policy && underPressure(await capacity(), { ...policy, highWatermark: 0.99 }))
-        ) {
+        const diskPressure =
+          policy && underPressure(await capacity(), { ...policy, highWatermark: 0.99 });
+        const reason = maintaining
+          ? 'cache_maintenance'
+          : reservations >= maximumSessions
+            ? 'cpu_memory_reservations'
+            : diskPressure
+              ? 'disk_inode_reserve'
+              : undefined;
+        if (reason) {
           console.warn(
             JSON.stringify({
               event: 'workspace_admission_rejected',
-              reason: 'cpu_memory_reservations',
+              reason,
               reservations,
               maximumSessions,
             })
           );
-          return json(res, 429, { error: 'Worker CPU/memory admission capacity exhausted' });
+          return json(res, 429, {
+            error:
+              reason === 'cache_maintenance'
+                ? 'Worker cache maintenance'
+                : reason === 'disk_inode_reserve'
+                  ? 'Worker disk/inode reserve exhausted'
+                  : 'Worker CPU/memory admission capacity exhausted',
+          });
         }
         const input = Dispatch.parse(await body(req));
         if (maintaining || reservations >= maximumSessions)
@@ -1037,6 +1049,19 @@ export async function startWorker(configPath: string) {
         ]);
         const owner = [launch, code].find(({ state, now }) => state?.host && state.leaseUntil > now)
           ?.state?.host;
+        if (policy && code.state) {
+          await inventory
+            .registerExisting(
+              scope.tenantId,
+              scope.branchId,
+              path.dirname(scope.sourcePath ?? scope.branchId),
+              coordinator(scope.tenantId, scope.branchId).directory,
+              code.state.revision
+            )
+            .catch((error) =>
+              console.warn('Legacy inventory registration deferred', String(error))
+            );
+        }
         let sourceAvailable = false;
         if (scope.sourcePath) {
           try {
