@@ -360,10 +360,12 @@ dbTest(
     let client: AgorClient | undefined;
     f.app.service('boards').hooks({
       before: {
-        setPrimaryTeammate: [
+        all: [
           (context) => {
-            context.params.user = f.params.user;
-            context.params.tenant = { tenant_id: tenantId, source: 'explicit' };
+            Object.assign(context.params, {
+              user: f.params.user,
+              tenant: { tenant_id: tenantId, source: 'explicit' },
+            });
           },
         ],
       },
