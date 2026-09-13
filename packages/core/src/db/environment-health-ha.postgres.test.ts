@@ -94,6 +94,158 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       ]);
     });
 
+    it('admits exactly one lifecycle boundary across two daemon connections', async () => {
+      const tenantId = `env-lifecycle-${generateId()}` as TenantID;
+      const branch = await seedBranch(dbA, tenantId, 'stopped');
+      const claim = (db: Database) =>
+        runWithTenantDatabaseScope(db, tenantId, (scoped) =>
+          new BranchRepository(scoped).update(
+            branch.branch_id,
+            { environment_instance: { status: 'starting' } },
+            {
+              invalidateEnvironmentObservation: true,
+              expectedEnvironmentGeneration: branch.environment_generation,
+              expectedEnvironmentStatus: 'stopped',
+            }
+          )
+        );
+
+      const results = await Promise.allSettled([claim(dbA), claim(dbB)]);
+
+      expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
+      expect(results.filter((result) => result.status === 'rejected')).toHaveLength(1);
+      await expect(
+        runWithTenantDatabaseScope(dbA, tenantId, (scoped) =>
+          new BranchRepository(scoped).findById(branch.branch_id)
+        )
+      ).resolves.toMatchObject({
+        environment_generation: 1,
+        environment_instance: { status: 'starting' },
+      });
+    });
+
+    it('does not let a lifecycle generation cross a tenant boundary', async () => {
+      const tenantA = `env-lifecycle-a-${generateId()}` as TenantID;
+      const tenantB = `env-lifecycle-b-${generateId()}` as TenantID;
+      await seedBranch(dbA, tenantA, 'stopped');
+      const branchB = await seedBranch(dbA, tenantB, 'stopped');
+
+      await expect(
+        runWithTenantDatabaseScope(dbA, tenantA, (scoped) =>
+          new BranchRepository(scoped).update(
+            branchB.branch_id,
+            { environment_instance: { status: 'starting' } },
+            {
+              invalidateEnvironmentObservation: true,
+              expectedEnvironmentGeneration: branchB.environment_generation,
+              expectedEnvironmentStatus: 'stopped',
+            }
+          )
+        )
+      ).rejects.toThrow();
+      await expect(
+        runWithTenantDatabaseScope(dbB, tenantB, (scoped) =>
+          new BranchRepository(scoped).findById(branchB.branch_id)
+        )
+      ).resolves.toMatchObject({
+        environment_generation: 0,
+        environment_instance: { status: 'stopped' },
+      });
+    });
+
+    it('invalidates a timed-out Start before its late callback can publish', async () => {
+      const tenantId = `env-timeout-${generateId()}` as TenantID;
+      const seeded = await seedBranch(dbA, tenantId, 'starting');
+
+      await runWithTenantDatabaseScope(dbA, tenantId, async (scoped) => {
+        const branchesRepo = new BranchRepository(scoped);
+        await branchesRepo.update(seeded.branch_id, {
+          environment_instance: {
+            status: 'starting',
+            process: { started_at: '2000-01-01T00:00:00.000Z' },
+            startup_deadline_at: '2000-01-01T01:00:00.000Z',
+          },
+        });
+        const health = new EnvironmentHealthRepository(scoped);
+        const claim = await health.claim({
+          branchId: seeded.branch_id,
+          claimToken: 'postgres-late-start',
+          leaseDurationMs: 30_000,
+          identity: { instanceId: 'daemon-a', bootId: 'boot-a' },
+        });
+        if (claim.outcome !== 'claimed') throw new Error('Expected timeout claim');
+
+        await expect(
+          health.commit({
+            branchId: seeded.branch_id,
+            claimToken: claim.claim.claim_token,
+            environmentGeneration: claim.claim.environment_generation,
+            observation: {
+              status: 'unhealthy',
+              message: 'Startup deadline expired',
+              recordWhileStarting: false,
+            },
+          })
+        ).resolves.toMatchObject({ outcome: 'committed', environmentStatus: 'error' });
+
+        await expect(
+          branchesRepo.update(
+            seeded.branch_id,
+            {
+              environment_instance: {
+                status: 'running',
+                access_urls: [{ name: 'App', url: 'https://late.example.test/' }],
+              },
+            },
+            { expectedEnvironmentGeneration: claim.claim.environment_generation }
+          )
+        ).rejects.toThrow(/superseded/i);
+        await expect(branchesRepo.findById(seeded.branch_id)).resolves.toMatchObject({
+          environment_generation: claim.claim.environment_generation + 1,
+          environment_instance: { status: 'error' },
+        });
+      });
+    });
+
+    it('rejects a stale variant render after Start claims the old variant', async () => {
+      const tenantId = `env-variant-${generateId()}` as TenantID;
+      const seeded = await seedBranch(dbA, tenantId, 'stopped');
+
+      await runWithTenantDatabaseScope(dbA, tenantId, async (scoped) => {
+        const branchesRepo = new BranchRepository(scoped);
+        const configured = await branchesRepo.update(seeded.branch_id, {
+          environment_variant: 'dev',
+          start_command: 'echo dev',
+          stop_command: 'echo stop-dev',
+        });
+        await branchesRepo.update(
+          seeded.branch_id,
+          { environment_instance: { status: 'starting' } },
+          {
+            invalidateEnvironmentObservation: true,
+            expectedEnvironmentGeneration: configured.environment_generation,
+            expectedEnvironmentStatus: 'stopped',
+          }
+        );
+
+        await expect(
+          branchesRepo.update(
+            seeded.branch_id,
+            { environment_variant: 'e2e', start_command: 'echo e2e' },
+            {
+              expectedEnvironmentGeneration: configured.environment_generation,
+              expectedEnvironmentStatus: 'stopped',
+            }
+          )
+        ).rejects.toThrow(/superseded/i);
+        await expect(branchesRepo.findById(seeded.branch_id)).resolves.toMatchObject({
+          environment_variant: 'dev',
+          start_command: 'echo dev',
+          environment_instance: { status: 'starting' },
+        });
+      });
+    });
+
     it('elects one owner, renews only the current token, takes over, and fences stale results', async () => {
       const tenantId = `env-owner-${generateId()}` as TenantID;
       const branch = await seedBranch(dbA, tenantId);
@@ -266,6 +418,21 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
           identity: { instanceId: 'daemon-a', bootId: 'boot-a' },
         });
         if (first.outcome !== 'claimed') throw new Error('Expected claim');
+        // Readiness needs CONSECUTIVE successes: a resuming tunnel can answer
+        // one stale 200 while the app behind it is still booting, so the first
+        // healthy observation records but must not promote.
+        expect(
+          await health.commit({
+            branchId: branch.branch_id,
+            claimToken: first.claim.claim_token,
+            environmentGeneration: first.claim.environment_generation,
+            observation: {
+              status: 'healthy',
+              message: 'HTTP 200',
+              recordWhileStarting: true,
+            },
+          })
+        ).toMatchObject({ outcome: 'committed', environmentStatus: 'starting' });
         expect(
           await health.commit({
             branchId: branch.branch_id,

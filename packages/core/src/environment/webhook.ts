@@ -12,7 +12,7 @@ import { isAllowedHealthCheckUrl, normalizeOptionalHttpUrl } from '../utils/url.
  */
 export type ManagedEnvExecutionMode = 'hybrid' | 'webhook-only';
 
-export const MANAGED_ENV_LIFECYCLE_FIELDS = ['start', 'stop', 'nuke', 'logs'] as const;
+export const MANAGED_ENV_LIFECYCLE_FIELDS = ['start', 'stop', 'nuke', 'logs', 'sync'] as const;
 
 export type ManagedEnvLifecycleField = (typeof MANAGED_ENV_LIFECYCLE_FIELDS)[number];
 export type ManagedEnvCommandType = ManagedEnvLifecycleField;
@@ -185,6 +185,7 @@ export function validateRepoEnvironmentLifecyclePolicy(
       stop: resolved.stop,
       nuke: resolved.nuke,
       logs: resolved.logs,
+      sync: resolved.sync,
     } satisfies Partial<Record<ManagedEnvLifecycleField, string | null | undefined>>;
 
     for (const field of MANAGED_ENV_LIFECYCLE_FIELDS) {
@@ -229,6 +230,8 @@ function commandTypeLabel(commandType: ManagedEnvCommandType): string {
       return 'nuke';
     case 'logs':
       return 'logs';
+    case 'sync':
+      return 'sync';
   }
 }
 

@@ -60,7 +60,15 @@ export interface HealthMonitorOptions {
   tenantId?: TenantID | string;
   /** Fail closed for event-driven monitoring when branch events do not carry tenant metadata. */
   requireTenantParams?: boolean;
-  /** Test seam for startup discovery. Production uses BranchRepository when db is provided. */
+  /**
+   * Statuses whose environments the monitor keeps a polling timer for.
+   *
+   * Deliberately NOT `error`: an errored environment is diagnosed on demand (an
+   * explicit status request returns an ephemeral observation) but is never
+   * automatically revived, and `EnvironmentHealthRepository.claim` refuses it, so
+   * scheduling a timer for one would only burn claim attempts. Recovery is an
+   * explicit Start, which `error` re-enables in the UI.
+   */
   discoverActiveEnvironmentRefs?: () => Promise<HealthMonitorActiveEnvironmentRef[]>;
   /** Maximum time shutdown waits for aborted observations to settle. */
   shutdownDrainTimeoutMs?: number;
@@ -69,6 +77,22 @@ export interface HealthMonitorOptions {
 interface HealthMonitorTimer {
   handle: NodeJS.Timeout;
   phase: 'grace' | 'interval';
+}
+
+/**
+ * Statuses the monitor keeps polling.
+ *
+ * `error` is included deliberately. An environment is demoted to `error` when
+ * it becomes unreachable, but "unreachable" is frequently temporary — a Codespace
+ * whose app is still booting, or a lifecycle command that raced. If the monitor
+ * stopped polling on `error`, such an environment could never return to
+ * `running` on its own: it would sit red while serving HTTP 200, and a human
+ * would have to press Start on a perfectly healthy app. `BranchesService.checkHealth`
+ * already implements the `error → running` recovery path; this keeps the monitor
+ * consistent with it.
+ */
+function isMonitorableStatus(status: string | undefined): boolean {
+  return status === 'running' || status === 'starting';
 }
 
 function tenantParamsFromBranch(branch: Branch): HealthMonitorParams | undefined {
@@ -156,9 +180,9 @@ export class HealthMonitor {
 
     const status = branch.environment_instance?.status;
 
-    if (!branch.archived && (status === 'running' || status === 'starting')) {
-      // Start monitoring if not already monitored.
-      // Monitor both 'running' and 'starting' - health checks will transition 'starting' → 'running'.
+    if (!branch.archived && isMonitorableStatus(status)) {
+      // Start monitoring if not already monitored. Health checks transition
+      // 'starting' → 'running' and recover 'error' → 'running'.
       const params = this.paramsForBranch(branch);
       if (!params && this.requireTenantParams) {
         console.error(
@@ -308,8 +332,8 @@ export class HealthMonitor {
         // commit without its realtime hint reaching this replica. The canonical
         // result returned by checkHealth is the same live fact the removed
         // preflight inspected, so stop locally when it is no longer eligible.
-        const status = branch?.environment_instance?.status;
-        if (!branch || branch.archived || (status !== 'running' && status !== 'starting')) {
+        const status = branch.environment_instance?.status;
+        if (branch.archived || !isMonitorableStatus(status)) {
           this.stopMonitoring(branchId);
         }
       };
@@ -375,10 +399,7 @@ export class HealthMonitor {
 
     // Start monitoring running or starting branches
     const activeBranches = branches.filter(
-      (w) =>
-        !w.archived &&
-        (w.environment_instance?.status === 'running' ||
-          w.environment_instance?.status === 'starting')
+      (w) => !w.archived && isMonitorableStatus(w.environment_instance?.status)
     );
 
     for (const branch of activeBranches) {
@@ -420,7 +441,7 @@ export class HealthMonitor {
         const loadAndStart = async () => {
           const branch = await branchesService.get(ref.branchId, params as never);
           const status = branch.environment_instance?.status;
-          if (branch.archived || (status !== 'running' && status !== 'starting')) return;
+          if (branch.archived || !isMonitorableStatus(status)) return;
           this.branchParams.set(branch.branch_id, tenantParamsFromBranch(branch) ?? params);
           this.startMonitoring(branch.branch_id, this.branchParams.get(branch.branch_id));
           activeCount += 1;
