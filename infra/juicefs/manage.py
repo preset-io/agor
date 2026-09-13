@@ -114,6 +114,20 @@ def start(c):
         binding.write_text(json.dumps(identity(c)))
         binding.chmod(0o600)
     os.chown(home, 1000, 1000)
+    state = home / '.agor'
+    if not (state / 'config.yaml').exists() and not (state / 'agor.db').exists():
+        # Standard init deliberately rejects pre-existing repository directories.
+        # Initialize private state before projecting the shared directories.
+        for name in ('repos', 'worktrees'):
+            empty = state / name
+            if empty.exists():
+                empty.rmdir()  # Refuses nonempty directories; never deletes source.
+        subprocess.run(['docker', 'run', '--rm', '--mount',
+                        f'type=bind,src={home},dst=/home/agor', '--entrypoint', 'agor',
+                        c['image'], 'init', '--non-interactive', '--agentic-tools', 'none',
+                        '--daemon-host', '0.0.0.0', '--daemon-port', '3030'], check=True)
+    if not (state / 'config.yaml').is_file() or not (state / 'agor.db').is_file():
+        raise ValueError('Application state is incomplete; refusing automatic reinitialization')
     for p in (home / '.agor', home / '.agor/repos', home / '.agor/worktrees'):
         p.mkdir(mode=0o700, exist_ok=True)
         os.chown(p, 1000, 1000)

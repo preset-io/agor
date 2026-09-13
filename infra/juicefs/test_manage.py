@@ -61,6 +61,25 @@ class StorageBoundaryTests(unittest.TestCase):
             manage.prepare(self.c)
             manage.verify(self.c)
 
+    def test_initializes_private_state_before_binding_shared_workspaces(self):
+        root = Path(self.c['mount']); root.mkdir()
+        commands = []
+        def run(args, **kwargs):
+            commands.append(args)
+            if '--entrypoint' in args:
+                home = Path(self.c['home'])/'.agor'
+                self.assertFalse((home/'repos').exists())
+                home.mkdir(exist_ok=True)
+                (home/'config.yaml').write_text('test config')
+                (home/'agor.db').touch()
+        with patch('manage.mounted'), patch('manage.os.chown'), patch('manage.subprocess.run', side_effect=run):
+            manage.prepare(self.c)
+            manage.start(self.c)
+        self.assertEqual(len(commands), 2)
+        self.assertIn('init', commands[0])
+        self.assertNotIn(str(root), ' '.join(commands[0]))
+        self.assertEqual(commands[1], manage.docker_command(self.c))
+
     def test_container_gets_workspaces_but_no_storage_authority(self):
         args = manage.docker_command(self.c)
         binds = [args[i+1] for i, a in enumerate(args) if a == '--mount']
