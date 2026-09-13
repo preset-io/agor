@@ -135,3 +135,21 @@ comparison app container. The shared load-balancer stack on
 rules in their original owning stack avoids conflicting Terraform ownership.
 The metadata proof still uses local PostgreSQL; exposing HTTPS does not convert
 it into the dedicated RDS deployment or enable agent tools automatically.
+
+## Enable Claude Code and Codex
+
+The managed integrations are installed into the private, persistent application
+home. Configure them explicitly, then use Agor's version-aligned installer:
+
+```sh
+docker exec -i agor-juicefs-proof node --input-type=module - claude-code codex < infra/juicefs/configure-tools.mjs
+docker exec agor-juicefs-proof agor install --sync
+# Restart only after active tasks finish.
+docker restart agor-juicefs-proof
+docker exec agor-juicefs-proof agor doctor --json
+```
+
+Replace the container name for another deployment. Each user still connects their
+own provider account through Agor; installing packages does not transfer logins
+from another instance. Fresh administrator credentials are in the private
+application home's `.agor/admin-credentials` file. Never commit that file.
