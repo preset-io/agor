@@ -910,7 +910,7 @@ importers:
         version: 5.11.1(supports-color@8.1.1)
       js-yaml:
         specifier: '>=4.3.1 <5'
-        version: 4.3.1
+        version: 4.3.2
       jsonwebtoken:
         specifier: ^9.0.3
         version: 9.0.3
@@ -981,7 +981,7 @@ importers:
         version: 5.0.46
       js-yaml:
         specifier: '>=4.3.1 <5'
-        version: 4.3.1
+        version: 4.3.2
       socket.io-client:
         specifier: ^4.8.3
         version: 4.8.3(supports-color@8.1.1)
@@ -1087,7 +1087,7 @@ importers:
         version: 17.0.0(emojibase@17.0.0)
       js-yaml:
         specifier: '>=4.3.1 <5'
-        version: 4.3.1
+        version: 4.3.2
       postgres:
         specifier: ^3.4.9
         version: 3.4.9
@@ -7646,6 +7646,10 @@ packages:
 
   js-yaml@4.3.1:
     resolution: {integrity: sha512-CY6crGq313MX8GkwvB7tzgp99vjQxY1++5y10/BKN/GUfHqWaOGQMNZkBvqSzsZKWk/ijwHlWzzkLulsGHhjWQ==}
+    hasBin: true
+
+  js-yaml@4.3.2:
+    resolution: {integrity: sha512-SFNOvSJ+Dgf/9An904Yx+CgSlIPCkIpao4qo51lpee25TIRejdH3rhR4EZMGoNx3/TP3O+wzWuiTFl4sqbltzA==}
     hasBin: true
 
   jsdom@27.1.0:
@@ -18323,6 +18327,10 @@ snapshots:
   js-tokens@4.0.0: {}
 
   js-yaml@4.3.1:
+    dependencies:
+      argparse: 2.0.1
+
+  js-yaml@4.3.2:
     dependencies:
       argparse: 2.0.1
 

@@ -529,7 +529,7 @@
     "discord-api-types": "^0.38.53",
     "drizzle-orm": "^0.45.2",
     "emojibase-data": "^17.0.0",
-    "js-yaml": "^5.2.3",
+    "js-yaml": "^4.3.2",
     "postgres": "^3.4.9",
     "simple-git": "^3.36.0",
     "slackify-markdown": "^5.0.0",
