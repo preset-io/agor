@@ -187,3 +187,95 @@ bootstrap/reboot, lifecycle-hook consumption, controller sandbox mounts, native
 SDK-state persistence, credential filtering, Linux reflink/OverlayFS, bounded
 automatic cache eviction/GC, and the NVMe performance suite. Local SQLite and
 mocked-provider tests cannot certify those guarantees.
+
+### Worker affinity and automatic local reclamation
+
+The custom worker supports an explicit `cachePolicy` in both worker and dispatcher
+JSON. Omission retains the old placement behaviour. Apply
+`infra/agor-test/workspace-inventory.sql` as the metadata owner first, then grant
+`SELECT, INSERT, UPDATE` on `agor_workspace_inventory` to the existing restricted
+worker role. The table enforces the same tenant session setting and forced RLS
+as workspace authority. SDK containers receive neither inventory access nor
+recovery credentials.
+
+On each worker, persist the policy in
+`/opt/agor/workspace/cache-policy.json`; `configure-workspace-worker.sh` reads it
+on immutable upgrades and also configures the dispatcher on the application
+host. Use the same values on all workers:
+
+```json
+{
+  "mode": "observe",
+  "highWatermark": 0.8,
+  "lowWatermark": 0.65,
+  "minimumFreeBytes": 10737418240,
+  "minimumFreeInodes": 100000,
+  "idleMs": 300000,
+  "heartbeatMs": 10000,
+  "affinityWaitMs": 15000
+}
+```
+
+Promote through `observe`, `affinity`, `caches`, then `workspaces`. Observation
+reports reclamation candidates without deleting them. Affinity enables placement;
+`caches` additionally reclaims the dedicated S3 disk cache; `workspaces` additionally
+archives and removes idle code replicas under pressure. A worker advertises
+capacity and tenant-local residency using SQL server timestamps. Dispatch rejects
+expired advertisements, requires a responding worker, honours a live owner even
+when unavailable, then prefers a warm session, warm branch, warm repository, and
+stable tenant/repository rendezvous placement. Warm capacity can queue for up to
+15 seconds; an uncertain prompt submission is never retried. A branch's first
+import must use a worker with the original authorized checkout locally available.
+Initial repository preparation still uses existing branch/Git seed paths; sharing
+a repository is a placement preference, not a guarantee of a dependency cache hit.
+
+Local inventory persists outside SDK mounts in `controller-cache/residency.json`.
+Workers only automatically reclaim tracked branches. Pre-existing untracked
+workspaces enter inventory when used; unknown directories are never adopted or
+deleted by a filesystem crawl. Inventory is a hint, not proof of ownership or
+permission to delete. One preferred worker is selected per branch; no background
+replication to other nodes occurs. Idle ownership can be released independently
+of retaining a warm replica.
+
+Maintenance closes local admission, waits for no local reservations/readers/jobs,
+and checks Docker for surviving SDK/tool containers before touching files. It
+starts at 80% byte or inode usage and stops below 65%, checking actual filesystem
+free space between batches rather than assuming reflink directory sizes represent
+reclaimable blocks. The minimum free reserve also gates admission. The S3 cache
+is reclaimed first, then older idle replicas. Active local source tickets defer workspace eviction. A stale local copy can be
+archived while a different worker owns the branch; that path only appends recovery
+metadata and removes local files, without changing the remote owner or its epoch. Capacity exhaustion with no safe victim
+rejects new work; it never kills a running task to make room.
+
+Source checkpoints alone do not preserve private Git or home state. Before
+removing a replica, the worker streams **all** its private files (including Git,
+local home, dependencies and build output) into tenant-scoped, checksummed 16 MiB
+S3 chunks and publishes a recovery manifest pointer under the branch lease.
+Recovery uploads bypass the local blob cache to avoid filling the disk being
+reclaimed. This first version deliberately preserves excluded files rather than
+assuming arbitrary ignored directories are disposable. Large dependency trees
+therefore make full replica eviction expensive; use `caches` mode when that cost
+is undesirable. A failed upload, special file, active local tool or conflict receipt
+prevents deletion. Conflict receipts remain pinned conservatively until a future
+explicit resolution lifecycle can establish that the proposal is no longer needed.
+
+After durability is acknowledged, eviction drains ownership and atomically moves
+the local directory to a unique trash path. Cleanup only deletes that captured
+path, never the replacement branch directory. The admission gate protects local
+recreation. On return, a missing session restores from retained manifests before
+source refresh. Existing sessions are never overwritten by restoration. Recovery
+checks tenant/branch identity, content hashes, path traversal and symlink ancestors.
+Old manifests remain referenced so evicting a newer, partial set of local sessions
+does not discard an earlier session's Git/home snapshot. Offline source blob GC
+fails closed when recovery roots are present until recursive recovery marking is
+implemented. These are eviction checkpoints, not continuous backups of running
+or abruptly lost workers.
+
+Operational events include `workspace_placement`, `workspace_cache_reclamation`,
+`workspace_eviction_candidate`, and `workspace_eviction_deferred`, alongside
+existing preparation timings. Compare warm-hit reasons, queued milliseconds,
+preparation time and physical disk/inode recovery before promoting each mode.
+Rollback by restoring the previous policy or removing it from worker and dispatcher
+configuration and performing the normal idle worker upgrade; retain recovery
+manifests and S3 objects. Do not roll back to a binary that ignores recovery pointers
+after replica eviction without first restoring affected sessions.

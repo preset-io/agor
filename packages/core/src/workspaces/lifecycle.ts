@@ -152,6 +152,10 @@ export function workspaceBlobRoots(states: WorkspaceState[], now: number): Set<s
       throw new WorkspaceError('BUSY', 'Content GC requires fully drained placements');
     for (const entry of Object.values(state.tree)) if (entry.kind === 'file') live.add(entry.hash);
     if (state.checkpoint) live.add(state.checkpoint.hash);
+    // Recovery manifests reference chunk blobs. Offline GC must expand these roots
+    // before sweeping; fail closed until the caller supports that graph.
+    if (state.localRecovery || Object.keys(state.localRecoveries ?? {}).length)
+      throw new WorkspaceError('BUSY', 'Recovery manifests require recursive blob marking');
     // Retained receipts are recovery/debug history and keep referenced versions alive.
     for (const receipt of Object.values(state.receipts))
       for (const mutation of receipt.mutations)

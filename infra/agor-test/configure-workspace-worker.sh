@@ -14,9 +14,13 @@ secret=json.load(open('/opt/agor/workspace/runtime-secret.json'))
 ip=subprocess.check_output(['hostname','-I'],text=True).split()[0]
 entry='/opt/agor-runtime/lib/node_modules/agor-live/dist/executor/cli.js'
 config={**secret,'databaseIamAuth':True,'sslCaPath':'/run/agor-worker/rds-ca.pem','bucket':'agor-workspace-blobs-148253003792','root':'/var/lib/agor','origin':'http://'+ip+':8787','image':'agor-workspace:'+release,'port':8787,'daemonUrl':'https://agor.skellige.com.au','managedToolsRoot':'/opt/agor/agentic-tools','sourceHome':'/home/agor','executorEntry':entry,'clone':'reflink'}
+# An explicit policy file survives immutable worker upgrades; omission retains legacy placement.
+policy_path='/opt/agor/workspace/cache-policy.json'
+policy=json.load(open(policy_path)) if os.path.exists(policy_path) else None
+if policy is not None: config['cachePolicy']=policy
 json.dump(config,open('/opt/agor/workspace/config.json','w'))
 if ip=='10.87.2.164':
- json.dump({'workers':['http://10.87.2.164:8787','http://10.87.1.107:8787'],'controlToken':secret['controlToken'],'executorEntry':entry,'branchReflinkRoot':'/home/agor/.agor/branch-bases'},open('/srv/agor/dispatcher.json','w'))
+ json.dump({'workers':['http://10.87.2.164:8787','http://10.87.1.107:8787'],'controlToken':secret['controlToken'],'executorEntry':entry,'branchReflinkRoot':'/home/agor/.agor/branch-bases',**({'cachePolicy':policy} if policy is not None else {})},open('/srv/agor/dispatcher.json','w'))
  os.chown('/srv/agor/dispatcher.json',1000,1000)
 os.unlink('/opt/agor/workspace/runtime-secret.json')
 PY

@@ -1,3 +1,5 @@
+import path from 'node:path';
+import { CachePolicy, type Candidate, choosePlacement } from './placement.js';
 /** Existing executor template transport. Control credentials never enter SDK containers. */
 
 import { spawn } from 'node:child_process';
@@ -13,6 +15,7 @@ const config = z
     controlToken: z.string().min(32),
     executorEntry: z.string(),
     branchReflinkRoot: z.string().optional(),
+    cachePolicy: CachePolicy.optional(),
   })
   .parse(JSON.parse(await readFile(process.argv[2], 'utf8')));
 const tenantId = process.argv[3];
@@ -41,28 +44,86 @@ const headers = {
 let selected: string | undefined;
 let adopted = false;
 if (branchId) {
-  for (const worker of config.workers) {
-    try {
-      const response = await fetch(`${worker}/placement`, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify({ tenantId, branchId }),
-        signal: AbortSignal.timeout(5000),
-      });
-      if (!response.ok) continue;
-      const placement = (await response.json()) as {
-        owner: string | null;
-        revision: number | null;
-      };
-      if (placement.owner && !config.workers.includes(placement.owner))
-        throw new Error('Unknown workspace owner');
-      selected = placement.owner ?? worker;
-      adopted = placement.revision !== null;
+  const started = Date.now();
+  const policy = config.cachePolicy;
+  do {
+    const replies = await Promise.all(
+      config.workers.map(async (worker) => {
+        try {
+          const response = await fetch(`${worker}/placement`, {
+            method: 'POST',
+            headers,
+            body: JSON.stringify({ tenantId, branchId, sourcePath: payload.params?.cwd }),
+            signal: AbortSignal.timeout(5000),
+          });
+          if (!response.ok) return undefined;
+          return {
+            worker,
+            ...((await response.json()) as {
+              owner: string | null;
+              revision: number | null;
+              sourceAvailable?: boolean;
+              workers?: Candidate[];
+            }),
+          };
+        } catch {
+          return undefined;
+        }
+      })
+    );
+    const placements = replies.filter((p) => p !== undefined);
+    const owners = new Set(placements.map((p) => p.owner).filter((p): p is string => !!p));
+    if ([...owners].some((owner) => !config.workers.includes(owner)))
+      throw new Error('Unknown workspace owner');
+    if (owners.size > 1)
+      throw new Error('Placement authority changed during lookup; retry before dispatch');
+    const owner = [...owners][0] ?? null;
+    adopted = placements.some((p) => p.revision !== null);
+    if (!adopted && !(payload.command === 'prompt' && payload.requiresReplicatedWorkspace)) {
+      selected = owner ?? placements[0]?.worker;
       break;
-    } catch {
-      /* Another reachable host can inspect the durable authority. */
     }
-  }
+    if (!policy) {
+      selected = owner ?? placements[0]?.worker;
+      break;
+    }
+    // Only a direct successful response makes an origin reachable; SQL heartbeats
+    // alone never override an unreachable live owner or authorize dispatch retries.
+    const candidates = new Map<string, Candidate>();
+    for (const placement of placements)
+      for (const candidate of placement.workers ?? []) {
+        if (
+          !config.workers.includes(candidate.origin) ||
+          !placements.some((p) => p.worker === candidate.origin && (adopted || p.sourceAvailable))
+        )
+          continue;
+        const old = candidates.get(candidate.origin);
+        if (!old || candidate.ageMs < old.ageMs) candidates.set(candidate.origin, candidate);
+      }
+    const choice = choosePlacement({
+      owner,
+      workers: [...candidates.values()],
+      tenantId,
+      branchId,
+      repository: path.dirname(payload.params?.cwd ?? branchId),
+      sessionId: payload.params?.sessionId,
+      waitedMs: Date.now() - started,
+      policy,
+    });
+    console.error(
+      JSON.stringify({
+        event: 'workspace_placement',
+        ...choice,
+        branchId,
+        waitedMs: Date.now() - started,
+      })
+    );
+    selected = policy.mode === 'observe' ? (owner ?? placements[0]?.worker) : choice.origin;
+    if (selected || Date.now() - started >= policy.affinityWaitMs) break;
+    await new Promise((resolve) =>
+      setTimeout(resolve, Math.min(1000, policy.affinityWaitMs - (Date.now() - started)))
+    );
+  } while (!selected);
   if (!selected)
     throw new Error('No workspace authority reachable; stale checkout fallback refused');
 }

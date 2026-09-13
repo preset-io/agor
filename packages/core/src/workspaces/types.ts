@@ -70,6 +70,18 @@ export interface WorkspaceState {
   retiredExecutors?: Record<string, true>;
   maintenance?: string;
   checkpoint?: { hash: string; revision: number };
+  /** Private replica recovery, retained by blob GC alongside source checkpoints. */
+  localRecoveries?: Record<
+    string,
+    { hash: string; revision: number; origin: string; createdAt: number; epoch?: number }
+  >;
+  localRecovery?: {
+    hash: string;
+    revision: number;
+    origin: string;
+    createdAt: number;
+    epoch?: number;
+  };
   updatedAt: number;
 }
 export interface WorkspaceMetadata {

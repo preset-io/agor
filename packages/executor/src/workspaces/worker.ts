@@ -1,17 +1,21 @@
+import { WorkspaceInventory } from './inventory.js';
 import {
   exportGitSeed,
   installGitSeed,
   LOCAL_HOME_DIRECTORIES,
   LOCAL_TOOL_ENV,
 } from './local-environment.js';
+import { CachePolicy, evictionOrder, underPressure, type WorkerInventory } from './placement.js';
 import { withWorkspacePreparation } from './preparation.js';
 import { isQuiescentSdkTree, SDK_PROCESS_COLUMNS } from './quiescence.js';
+import { reclaimBlobCache, reclaimWorkspace } from './reclamation.js';
+import { restoreReplicas } from './recovery.js';
 import { copyClaudeTranscripts, importClaudeSession } from './sdk-transcripts.js';
 /** Trusted controller process. Never mounted into or executed as an SDK child. */
 
 import { spawn } from 'node:child_process';
 import { randomUUID, timingSafeEqual } from 'node:crypto';
-import { chown, lstat, mkdir, readdir, readFile, realpath, rm } from 'node:fs/promises';
+import { chown, lstat, mkdir, readdir, readFile, realpath, rm, statfs } from 'node:fs/promises';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { availableParallelism, totalmem } from 'node:os';
 import path from 'node:path';
@@ -54,6 +58,7 @@ const Config = z.object({
   sourceHome: z.string(),
   executorEntry: z.string(),
   clone: z.enum(['copy', 'reflink']).default('reflink'),
+  cachePolicy: CachePolicy.optional(),
 });
 const Dispatch = z.object({
   tenantId: z.string().regex(/^[A-Za-z0-9_-]+$/),
@@ -107,6 +112,19 @@ export async function startWorker(configPath: string) {
   const config = Config.parse(JSON.parse(await readFile(configPath, 'utf8')));
   const sql = await connectWorkspaceAuthority(config);
   const host = `${config.origin}#${randomUUID()}`;
+  const policy = config.cachePolicy;
+  const inventory = new WorkspaceInventory(
+    path.join(config.root, 'controller-cache'),
+    sql,
+    config.origin
+  );
+  if (policy) {
+    await sql`select tenant_id from agor_workspace_inventory limit 0`;
+    await inventory.load();
+  }
+  let maintaining = false;
+  let reading = 0;
+  const restoring = new Map<string, Promise<void>>();
   const options: WorkspaceOptions = {
     root: config.root,
     host,
@@ -115,8 +133,8 @@ export async function startWorker(configPath: string) {
     toolLeaseMs: 3600000,
     maximumBytes: 20 * 1024 ** 3,
     maximumFiles: 250000,
-    minimumFreeBytes: 5 * 1024 ** 3,
-    minimumFreeInodes: 100000,
+    minimumFreeBytes: policy?.minimumFreeBytes ?? 5 * 1024 ** 3,
+    minimumFreeInodes: policy?.minimumFreeInodes ?? 100000,
     maximumActiveTools: 16,
     maximumReceipts: 10000,
     exclude: [],
@@ -410,7 +428,10 @@ export async function startWorker(configPath: string) {
       signal: AbortSignal.timeout(10000),
     });
     if (!branchResponse.ok) throw new Error('Branch authority rejected');
-    const branch = (await branchResponse.json()) as { path: string };
+    const branch = (await branchResponse.json()) as { path: string; repo_id?: string };
+    const resident = policy
+      ? inventory.touch(tenantId, branchId, path.dirname(branch.path), payload.params.sessionId)
+      : undefined;
     if (branch.path !== payload.params.cwd)
       throw new Error('Initial source differs from authorized branch');
     const source = placement.state ? undefined : await realpath(branch.path);
@@ -437,6 +458,48 @@ export async function startWorker(configPath: string) {
       });
     }, 10000);
     try {
+      if (policy) {
+        const key = `${tenantId}/${branchId}/${payload.params.sessionId}`;
+        let pending = restoring.get(key);
+        if (!pending) {
+          pending = (async () => {
+            const state = (await c.metadata.read()).state;
+            const recoveries = Object.values(
+              state?.localRecoveries ??
+                (state?.localRecovery ? { latest: state.localRecovery } : {})
+            ).sort(
+              (a, b) =>
+                (b.epoch ?? 0) - (a.epoch ?? 0) ||
+                b.revision - a.revision ||
+                b.createdAt - a.createdAt
+            );
+            const replicas = path.join(c.directory, 'replicas');
+            const sessionPath = path.join(replicas, payload.params.sessionId);
+            for (const recovery of recoveries) {
+              try {
+                await lstat(sessionPath);
+                return;
+              } catch (error) {
+                if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+              }
+              await mkdir(c.directory, { recursive: true, mode: 0o700 });
+              await restoreReplicas(
+                replicas,
+                c.scope,
+                recovery.hash,
+                new S3WorkspaceBlobs(config.bucket, c.scope.tenantId),
+                payload.params.sessionId
+              );
+            }
+          })();
+          restoring.set(key, pending);
+        }
+        try {
+          await pending;
+        } finally {
+          if (restoring.get(key) === pending) restoring.delete(key);
+        }
+      }
       const localHome = path.join(c.directory, 'replicas', payload.params.sessionId, 'local-home');
       for (const directory of LOCAL_HOME_DIRECTORIES) {
         const location = path.join(localHome, directory);
@@ -447,8 +510,20 @@ export async function startWorker(configPath: string) {
       const prepare = () =>
         (codePreparation ??= (async () => {
           await progress('Preparing branch files…');
-          await c.materialise(source, codeAbort.signal, false);
+          const started = performance.now();
+          const revision = await c.materialise(source, codeAbort.signal, false);
           codeOwned = true;
+          if (resident) {
+            resident.revision = revision;
+            resident.epoch = (await c.metadata.read()).state?.epoch;
+            resident.resident = true;
+            resident.preparationMs = performance.now() - started;
+            await inventory
+              .save()
+              .catch((error) =>
+                console.warn('Workspace inventory persistence deferred', String(error))
+              );
+          }
           return gitSeed(tenantId, branchId, branch.path, codeAbort.signal);
         })());
       const sdk = coordinator(tenantId, branchId, `claude/${payload.params.sessionId}`);
@@ -657,6 +732,14 @@ export async function startWorker(configPath: string) {
       }
     } finally {
       clearInterval(preparationRenewal);
+      if (resident) {
+        resident.lastUsed = Date.now();
+        await inventory
+          .save()
+          .catch((error) =>
+            console.warn('Workspace inventory persistence deferred', String(error))
+          );
+      }
     }
   }
   async function readCommand(raw: unknown) {
@@ -719,6 +802,136 @@ export async function startWorker(configPath: string) {
     Math.floor((totalmem() - 2 * 1024 ** 3) / ((config.toolMemoryGiB + 3) * 1024 ** 3))
   );
   const activeSessions = new Set<string>();
+  async function capacity(): Promise<WorkerInventory> {
+    const fs = await statfs(config.root);
+    const slots = Math.max(0, maximumSessions - reservations);
+    return {
+      origin: config.origin,
+      incarnation: host,
+      freeBytes: fs.bavail * fs.bsize,
+      totalBytes: fs.blocks * fs.bsize,
+      freeInodes: fs.ffree,
+      totalInodes: fs.files,
+      freeSlots: slots,
+      freeCpu: slots * (config.toolCpus + 1),
+      freeMemoryBytes: slots * (config.toolMemoryGiB + 3) * 1024 ** 3,
+      accepting: !maintaining,
+      residents: [],
+    };
+  }
+  async function maintenance() {
+    if (!policy || maintaining) return;
+    // The synchronous gate also fences admission during awaits below.
+    if (reservations || jobs.size || reading) return;
+    maintaining = true;
+    const started = performance.now();
+    let beforeCapacity: WorkerInventory | undefined;
+    try {
+      beforeCapacity = await capacity();
+      const processes = await docker(['ps', '--format', '{{.Names}}']);
+      if (
+        processes.exitCode !== 0 ||
+        processes.output.split('\n').some((n) => /^agor-(tool|sdk)-/.test(n))
+      )
+        return;
+      // Release idle ownership without discarding the warm local replica.
+      for (const tenant of inventory.tenants())
+        for (const entry of inventory.tenantEntries(tenant)) {
+          if (policy.mode === 'observe' || Date.now() - entry.lastUsed < policy.idleMs) continue;
+          for (const slot of ['code', 'launch']) {
+            const c = coordinator(tenant, entry.branchId, slot);
+            const { state, now } = await c.metadata.read();
+            if (state?.host === host && state.leaseUntil > now && !Object.keys(state.active).length)
+              await c.drain();
+          }
+        }
+      const pressure = underPressure(await capacity(), policy);
+      if (!pressure) return;
+      const enough = async () => !underPressure(await capacity(), policy, true);
+      const observe = ['observe', 'affinity'].includes(policy.mode);
+      const blobs = await reclaimBlobCache(path.join(config.root, 'blob-cache'), enough, observe);
+      console.log(
+        JSON.stringify({ event: 'workspace_cache_reclamation', mode: policy.mode, blobs })
+      );
+      if (policy.mode === 'caches' || (await enough())) return;
+      for (const tenant of inventory.tenants()) {
+        for (const entry of inventory.tenantEntries(tenant)) {
+          const { state } = await coordinator(tenant, entry.branchId).metadata.read();
+          entry.stale = !!state?.host && state.host.split('#')[0] !== config.origin;
+        }
+        for (const entry of evictionOrder(
+          inventory.tenantEntries(tenant),
+          Date.now(),
+          policy.idleMs
+        )) {
+          console.log(
+            JSON.stringify({
+              event: 'workspace_eviction_candidate',
+              tenant,
+              branchId: entry.branchId,
+              mode: policy.mode,
+            })
+          );
+          if (observe) continue;
+          try {
+            const c = coordinator(tenant, entry.branchId);
+            await reclaimWorkspace(c, entry, new S3WorkspaceBlobs(config.bucket, c.scope.tenantId));
+            await inventory
+              .save()
+              .catch((error) =>
+                console.warn('Workspace inventory persistence deferred', String(error))
+              );
+          } catch (error) {
+            // Transient ownership pressure is retried next cycle. Never discard on error.
+            console.warn(
+              JSON.stringify({
+                event: 'workspace_eviction_deferred',
+                branchId: entry.branchId,
+                error: String(error),
+              })
+            );
+          }
+          if (await enough()) return;
+        }
+      }
+    } finally {
+      try {
+        const after = await capacity();
+        console.log(
+          JSON.stringify({
+            event: 'workspace_maintenance',
+            mode: policy.mode,
+            durationMs: performance.now() - started,
+            freeBytes: after.freeBytes,
+            freeInodes: after.freeInodes,
+            reclaimedBytes: beforeCapacity ? after.freeBytes - beforeCapacity.freeBytes : 0,
+            reclaimedInodes: beforeCapacity ? after.freeInodes - beforeCapacity.freeInodes : 0,
+          })
+        );
+      } finally {
+        maintaining = false;
+      }
+    }
+  }
+  let heartbeatRunning = false;
+  const heartbeat = policy
+    ? setInterval(() => {
+        if (heartbeatRunning) return;
+        heartbeatRunning = true;
+        void (async () => {
+          for (const tenant of inventory.tenants())
+            await inventory.advertise(tenant, {
+              ...(await capacity()),
+              residents: inventory.tenantEntries(tenant),
+            });
+          await maintenance();
+        })()
+          .catch((error) => console.warn('Workspace cache maintenance deferred', String(error)))
+          .finally(() => {
+            heartbeatRunning = false;
+          });
+      }, policy.heartbeatMs)
+    : undefined;
   const server = createServer(async (req, res) => {
     try {
       if (req.method === 'GET' && req.url === '/health')
@@ -749,10 +962,21 @@ export async function startWorker(configPath: string) {
       }
       if (!authorized(req, config.controlToken))
         return json(res, 403, { error: 'Unauthorized controller' });
-      if (req.method === 'POST' && req.url === '/read-command')
-        return json(res, 200, await readCommand(await body(req)));
+      if (req.method === 'POST' && req.url === '/read-command') {
+        if (maintaining) return json(res, 429, { error: 'Worker cache maintenance' });
+        reading++;
+        try {
+          return json(res, 200, await readCommand(await body(req)));
+        } finally {
+          reading--;
+        }
+      }
       if (req.method === 'POST' && req.url === '/dispatch') {
-        if (reservations >= maximumSessions) {
+        if (
+          maintaining ||
+          reservations >= maximumSessions ||
+          (policy && underPressure(await capacity(), { ...policy, highWatermark: 0.99 }))
+        ) {
           console.warn(
             JSON.stringify({
               event: 'workspace_admission_rejected',
@@ -764,6 +988,8 @@ export async function startWorker(configPath: string) {
           return json(res, 429, { error: 'Worker CPU/memory admission capacity exhausted' });
         }
         const input = Dispatch.parse(await body(req));
+        if (maintaining || reservations >= maximumSessions)
+          return json(res, 429, { error: 'Worker admission capacity exhausted' });
         const sessionKey = `${input.tenantId}/${input.branchId}/${input.payload.params.sessionId}`;
         if (activeSessions.has(sessionKey))
           return json(res, 409, { error: 'Session already active' });
@@ -786,7 +1012,11 @@ export async function startWorker(configPath: string) {
       }
       if (req.method === 'POST' && req.url === '/placement') {
         const scope = z
-          .object({ tenantId: z.string().regex(/^[A-Za-z0-9_-]+$/), branchId: z.string().uuid() })
+          .object({
+            tenantId: z.string().regex(/^[A-Za-z0-9_-]+$/),
+            branchId: z.string().uuid(),
+            sourcePath: z.string().optional(),
+          })
           .parse(await body(req));
         const [code, launch] = await Promise.all([
           coordinator(scope.tenantId, scope.branchId).metadata.read(),
@@ -794,24 +1024,52 @@ export async function startWorker(configPath: string) {
         ]);
         const owner = [launch, code].find(({ state, now }) => state?.host && state.leaseUntil > now)
           ?.state?.host;
+        let sourceAvailable = false;
+        if (scope.sourcePath) {
+          try {
+            sourceAvailable = (await realpath(scope.sourcePath)).startsWith(
+              `${await realpath(config.sourceHome)}/`
+            );
+          } catch {
+            /* Cold sources are host-local. */
+          }
+        }
+        if (policy)
+          await inventory.advertise(scope.tenantId, {
+            ...(await capacity()),
+            residents: inventory.tenantEntries(scope.tenantId),
+          });
         return json(res, 200, {
+          ...(policy
+            ? { workers: await inventory.candidates(scope.tenantId), cachePolicy: policy }
+            : {}),
           owner: owner?.split('#')[0] ?? null,
           revision: code.state?.revision ?? null,
+          sourceAvailable,
         });
       }
       if (req.method === 'POST' && req.url === '/drain') {
-        if (jobs.size) return json(res, 409, { error: 'SDK sessions active' });
-        for (const c of coordinators.values()) {
-          const { state, now } = await c.metadata.read();
-          if (state?.host === host && state.leaseUntil > now) await c.drain();
+        if (jobs.size || reservations || reading || maintaining)
+          return json(res, 409, { error: 'Worker active' });
+        maintaining = true;
+        try {
+          for (const c of coordinators.values()) {
+            const { state, now } = await c.metadata.read();
+            if (state?.host === host && state.leaseUntil > now) await c.drain();
+          }
+          return json(res, 200, { drained: true });
+        } finally {
+          maintaining = false;
         }
-        return json(res, 200, { drained: true });
       }
       return json(res, 404, { error: 'Not found' });
     } catch (error) {
       if (!res.headersSent) json(res, 409, { error: String(error) });
       else res.end();
     }
+  });
+  server.on('close', () => {
+    if (heartbeat) clearInterval(heartbeat);
   });
   server.listen(config.port, '0.0.0.0');
   console.log(JSON.stringify({ event: 'workspace_worker_ready', host, port: config.port }));
