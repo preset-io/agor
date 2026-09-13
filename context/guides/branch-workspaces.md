@@ -246,7 +246,9 @@ An intervening admission, source revision, ownership epoch change, or conflict
 invalidates eviction. A lock is acquired again before publishing the manifest.
 
 In `workspaces` mode, idle replicas are checkpointed before pressure occurs.
-Reclamation starts at 80% byte or inode usage and stops below 65%, checking actual
+An unchanged, precheckpointed local generation can be evicted without copying or
+transferring it again; the durable pointer, source revision, ownership epoch and
+local admission generation must still match. Reclamation starts at 80% byte or inode usage and stops below 65%, checking actual
 free space between candidates. The minimum free reserve also gates admission.
 The disposable S3 read cache is reclaimed first, then older idle replicas.
 Capacity exhaustion with no safe victim rejects new work rather than killing tasks.

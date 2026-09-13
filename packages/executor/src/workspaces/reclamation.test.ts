@@ -211,4 +211,23 @@ describe('fenced workspace reclamation', () => {
     expect(f.entry.resident).toBe(true);
     expect(f.metadata.state!.localRecovery).toBeUndefined();
   });
+  it('evicts an unchanged precheckpointed generation without any recovery transfers', async () => {
+    const f = await fixture();
+    const reuse = await reclaimWorkspace(f.c, f.entry, f.blobs, { checkpointOnly: true });
+    expect(reuse).toBeDefined();
+    await reclaimWorkspace(
+      f.c,
+      f.entry,
+      {
+        get: async () => {
+          throw new Error('Unexpected GET');
+        },
+        put: async () => {
+          throw new Error('Unexpected PUT');
+        },
+      },
+      { reuse }
+    );
+    expect(f.entry.resident).toBe(false);
+  });
 });

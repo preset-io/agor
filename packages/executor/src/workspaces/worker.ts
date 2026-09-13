@@ -9,7 +9,7 @@ import {
 import { CachePolicy, evictionOrder, underPressure, type WorkerInventory } from './placement.js';
 import { withWorkspacePreparation } from './preparation.js';
 import { isQuiescentSdkTree, SDK_PROCESS_COLUMNS } from './quiescence.js';
-import { reclaimBlobCache, reclaimWorkspace } from './reclamation.js';
+import { type CompletedRecovery, reclaimBlobCache, reclaimWorkspace } from './reclamation.js';
 import { restoreReplicas } from './recovery.js';
 import { copyClaudeTranscripts, importClaudeSession } from './sdk-transcripts.js';
 /** Trusted controller process. Never mounted into or executed as an SDK child. */
@@ -126,7 +126,7 @@ export async function startWorker(configPath: string) {
   let maintaining = false;
   let maintenanceRunning = false;
   const admission = new BranchAdmission();
-  const checkpointed = new Map<string, string>();
+  const checkpointed = new Map<string, { stamp: string; recovery?: CompletedRecovery }>();
   let reading = 0;
   const restoring = new Map<string, Promise<void>>();
   const options: WorkspaceOptions = {
@@ -913,11 +913,11 @@ export async function startWorker(configPath: string) {
           if (observe) continue;
           const key = `${tenant}/${entry.branchId}`;
           const stamp = `${entry.generation}/${admission.version(tenant, entry.branchId)}/${entry.revision}/${entry.epoch}`;
-          if (!pressure && checkpointed.get(key) === stamp) continue;
+          if (!pressure && checkpointed.get(key)?.stamp === stamp) continue;
           try {
             const c = coordinator(tenant, entry.branchId);
             const signal = AbortSignal.timeout(15 * 60 * 1000);
-            await reclaimWorkspace(
+            const completed = await reclaimWorkspace(
               c,
               entry,
               new S3WorkspaceBlobs(
@@ -938,11 +938,15 @@ export async function startWorker(configPath: string) {
                   tenant,
                   entry.branchId
                 ),
+                reuse:
+                  checkpointed.get(key)?.stamp === stamp
+                    ? checkpointed.get(key)?.recovery
+                    : undefined,
                 checkpointOnly: !pressure,
                 signal,
               }
             );
-            if (!pressure) checkpointed.set(key, stamp);
+            if (!pressure) checkpointed.set(key, { stamp, recovery: completed });
             await inventory
               .save()
               .catch((error) =>

@@ -8,7 +8,13 @@ import type { WorkspaceBlobs } from '@agor/core/workspaces/types';
 import type { Resident } from './placement.js';
 import { snapshotReplicas } from './recovery.js';
 
+export interface CompletedRecovery {
+  hash: string;
+  revision: number;
+  epoch: number;
+}
 export interface ReclamationOptions {
+  reuse?: CompletedRecovery;
   /** A synchronous, tenant/branch-scoped lock; the caller tracks dispatches AND reads. */
   lock?: () => (() => void) | undefined;
   version?: () => number;
@@ -23,7 +29,7 @@ export async function reclaimWorkspace(
   entry: Resident,
   recoveryBlobs: WorkspaceBlobs = c.blobs,
   options: ReclamationOptions = {}
-): Promise<void> {
+): Promise<CompletedRecovery | undefined> {
   let unlock = options.lock ? options.lock() : () => {};
   if (!unlock) throw new Error('Branch active during checkpoint');
   const version = options.version?.();
@@ -57,12 +63,19 @@ export async function reclaimWorkspace(
           Math.max(10, c.options.leaseMs / 3)
         );
     const replicas = path.join(c.directory, 'replicas');
-    let recovery: string | undefined;
+    const reuse = options.reuse;
+    let recovery =
+      reuse &&
+      before.state.revision === reuse.revision &&
+      before.state.epoch === reuse.epoch &&
+      before.state.localRecoveries?.[reuse.hash]
+        ? reuse.hash
+        : undefined;
     const st = await lstat(replicas).catch((error) => {
       if (error.code === 'ENOENT') return undefined;
       throw error;
     });
-    if (st) {
+    if (st && !recovery) {
       if (!st.isDirectory() || st.isSymbolicLink()) throw new Error('Invalid replica directory');
       await mkdir(path.dirname(snapshot), { recursive: true, mode: 0o700 });
       // cp -a preserves ownership and links. FORCE reflinks on the production XFS path.
@@ -109,7 +122,10 @@ export async function reclaimWorkspace(
       return { state, result: undefined };
     });
     if (!staleCopy) await c.drain();
-    if (options.checkpointOnly) return;
+    const completed = recovery
+      ? { hash: recovery, revision: captured.revision, epoch: captured.epoch + (staleCopy ? 0 : 1) }
+      : undefined;
+    if (options.checkpointOnly) return completed;
     // Atomic detachment under the local admission gate. Late rm only sees this UUID,
     // never a recreated branch path. Recovery was acknowledged before detachment.
     const trash = path.join(c.options.root, 'eviction-trash', randomUUID());
@@ -121,6 +137,7 @@ export async function reclaimWorkspace(
     unlock();
     unlock = undefined;
     await rm(trash, { recursive: true, force: true });
+    return completed;
   } finally {
     if (renewal) clearInterval(renewal);
     unlock?.();
