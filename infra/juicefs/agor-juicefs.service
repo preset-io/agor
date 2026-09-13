@@ -1,0 +1,14 @@
+[Unit]
+Description=JuiceFS storage for Agor comparison
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /opt/agor-juicefs/manage.py mount /etc/agor-juicefs/config.json
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=90
+
+[Install]
+WantedBy=multi-user.target

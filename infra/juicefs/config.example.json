@@ -1,0 +1,12 @@
+{
+  "name": "agor-juicefs",
+  "tenant": "default",
+  "metadata_url": "postgres://juicefs@METADATA_HOST:5432/juicefs?sslmode=require",
+  "password_file": "/etc/agor-juicefs/metadata-password",
+  "bucket": "https://YOUR_BUCKET.s3.ap-southeast-2.amazonaws.com",
+  "mount": "/srv/agor-juicefs/mount",
+  "cache": "/var/cache/agor-juicefs",
+  "home": "/srv/agor-juicefs/home",
+  "image": "agor-juicefs:local",
+  "port": 3031
+}

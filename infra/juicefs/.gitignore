@@ -1,0 +1,7 @@
+__pycache__/
+.terraform/
+*.tfstate*
+*.tfplan
+*.tfvars*
+config.json
+metadata-password
