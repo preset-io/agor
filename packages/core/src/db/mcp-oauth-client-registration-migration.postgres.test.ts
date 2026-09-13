@@ -323,10 +323,12 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       });
 
       // This fixture reuses the database upgraded by the preceding test. Remove
-      // later Slack recovery and consent-attribution additions as well as
-      // rewinding the ledger: the old head did not have these future columns.
+      // later schema additions as well as rewinding migration history: the old
+      // head did not have these columns or deletion-checkpoint tables.
       await executeRaw(db, sql`ALTER TABLE tasks DROP COLUMN mcp_slack_recovery_due_at`);
       await executeRaw(db, sql`ALTER TABLE user_mcp_oauth_tokens DROP COLUMN granted_by_user_id`);
+      await executeRaw(db, sql`DROP TABLE branch_deletion_resources`);
+      await executeRaw(db, sql`DROP TABLE branch_deletion_operations`);
 
       // Reproduce the previous reviewed head's timestamp-only final watermark.
       // Its authority schema is identical; the rebased bootstrap must not try
