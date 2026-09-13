@@ -4,6 +4,7 @@ import { mkdir, open, rename, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import { gunzip, gzip } from 'node:zlib';
+import { blobMetric } from './ops-metrics.js';
 
 const compress = promisify(gzip),
   decompress = promisify(gunzip);
@@ -77,8 +78,13 @@ export class S3WorkspaceBlobs implements WorkspaceBlobs {
       throw new Error('Invalid workspace blob size or checksum');
     // Cache entries are published only after S3 acknowledgment or verified GET.
     // Thus existing bytes avoid duplicate PUT + 412 + GET round trips per branch.
-    if (await this.cached(hash)) return;
+    if (await this.cached(hash)) {
+      blobMetric(this.bucket, 'putCacheHits');
+      return;
+    }
     const body = await compress(content);
+    blobMetric(this.bucket, 'putCalls');
+    const started = performance.now();
     try {
       await this.client.send(
         new PutObjectCommand({
@@ -92,7 +98,11 @@ export class S3WorkspaceBlobs implements WorkspaceBlobs {
         }),
         { abortSignal: this.signal }
       );
+      blobMetric(this.bucket, 'putSuccess');
+      blobMetric(this.bucket, 'uploadedBytes', body.length);
+      blobMetric(this.bucket, 'putMs', performance.now() - started);
     } catch (error) {
+      blobMetric(this.bucket, 'putErrors');
       if ((error as { $metadata?: { httpStatusCode?: number } }).$metadata?.httpStatusCode !== 412)
         throw error;
       // A pre-existing key must still contain the expected immutable bytes.
@@ -102,18 +112,31 @@ export class S3WorkspaceBlobs implements WorkspaceBlobs {
   }
   async get(hash: string): Promise<Buffer> {
     const cached = await this.cached(hash);
-    if (cached) return cached;
-    const result = await this.client.send(
-      new GetObjectCommand({ Bucket: this.bucket, Key: this.key(hash), ChecksumMode: 'ENABLED' }),
-      { abortSignal: this.signal }
-    );
-    if (!result.Body || (result.ContentLength ?? 0) > this.maximumBlobBytes + 65536)
-      throw new Error('Invalid workspace blob response');
-    const content = await decompress(await result.Body.transformToByteArray(), {
-      maxOutputLength: this.maximumBlobBytes,
-    });
-    if (digest(content) !== hash) throw new Error('Workspace blob checksum mismatch');
-    await this.remember(hash, content);
-    return content;
+    if (cached) {
+      blobMetric(this.bucket, 'getCacheHits');
+      return cached;
+    }
+    blobMetric(this.bucket, 'getCalls');
+    const started = performance.now();
+    try {
+      const result = await this.client.send(
+        new GetObjectCommand({ Bucket: this.bucket, Key: this.key(hash), ChecksumMode: 'ENABLED' }),
+        { abortSignal: this.signal }
+      );
+      if (!result.Body || (result.ContentLength ?? 0) > this.maximumBlobBytes + 65536)
+        throw new Error('Invalid workspace blob response');
+      const content = await decompress(await result.Body.transformToByteArray(), {
+        maxOutputLength: this.maximumBlobBytes,
+      });
+      if (digest(content) !== hash) throw new Error('Workspace blob checksum mismatch');
+      await this.remember(hash, content);
+      blobMetric(this.bucket, 'getSuccess');
+      blobMetric(this.bucket, 'downloadedBytes', result.ContentLength ?? 0);
+      blobMetric(this.bucket, 'getMs', performance.now() - started);
+      return content;
+    } catch (error) {
+      blobMetric(this.bucket, 'getErrors');
+      throw error;
+    }
   }
 }

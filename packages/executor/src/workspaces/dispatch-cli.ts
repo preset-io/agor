@@ -15,9 +15,24 @@ const config = z
     controlToken: z.string().min(32),
     executorEntry: z.string(),
     branchReflinkRoot: z.string().optional(),
+    discoveryUrl: z.string().url().optional(),
     cachePolicy: CachePolicy.optional(),
   })
   .parse(JSON.parse(await readFile(process.argv[2], 'utf8')));
+if (config.discoveryUrl) {
+  try {
+    const response = await fetch(config.discoveryUrl, {
+      headers: { authorization: `Bearer ${config.controlToken}` },
+      signal: AbortSignal.timeout(3000),
+    });
+    if (response.ok) {
+      const workers = z.object({ workers: z.array(z.string().url()) }).parse(await response.json());
+      config.workers = [...new Set([...config.workers, ...workers.workers])];
+    }
+  } catch {
+    /* Existing workers remain available when discovery is unavailable. */
+  }
+}
 const tenantId = process.argv[3];
 if (!tenantId || !/^[A-Za-z0-9_-]+$/.test(tenantId))
   throw new Error('Trusted tenant argument required');

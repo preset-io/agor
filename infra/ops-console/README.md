@@ -1,0 +1,71 @@
+# Agor operations console
+
+Operator-only control plane for the custom EC2 workspace deployment. Served at
+`https://agor.skellige.com.au/ops/`. This is a separate fleet-admin capability,
+not a tenant-facing Agor API. It can inspect all registered tenants; ordinary
+Agor sessions cannot authenticate to it. Worker control tokens, AWS credentials
+and object contents never reach the browser.
+
+The Python service uses standard-library HTTP and the host AWS CLI. It polls
+registered workers every 15 seconds and bucket-wide CloudWatch metrics every
+minute. UI assets have no external dependencies. Runtime secrets are supplied
+in `/etc/agor-ops.json` (0600); only a salted password hash is stored. Sessions
+are HttpOnly/Secure/SameSite cookies with origin and CSRF checks on mutations.
+The first deployment has one named operator, matt; SSO and per-operator RBAC
+are subsequent production work, not claimed by this prototype.
+
+## Operations
+
+Transfers require both whole workers to be idle. Durable holds reject new
+work and survive controller restarts. Checkpoints use the existing scoped
+metadata, conflict checks and packed recovery format. The destination restores
+and acquires code authority. Its newer inventory timestamp makes it preferable
+for subsequent affinity placement; this is not a permanent scheduling pin.
+Source copies remain. Previous destination replicas are moved to `ops-retained`
+and require deliberate cleanup. No automatic deletion is performed by this UI.
+A failed or interrupted transfer retains any acquired holds. Inspect its status
+before explicitly releasing them. In-flight commands and SDK process memory
+are never migrated. SDK transcript portability across hosts remains subject to
+the existing executor's recovery support.
+
+Add worker increments the desired capacity of the Terraform-owned
+`agor-ops-workers` Auto Scaling group, bounded at four additional m7i.xlarge
+workers. User data loads an immutable runtime image and starts the controller.
+Dispatcher discovery merges healthy new workers with the original configured
+hosts. No scale-down action is exposed: safe fleet contraction is separate work.
+Scale-in protection and suspended unhealthy replacement/AZ rebalance prevent
+ASG churn from silently discarding private workspaces. EBS survives termination.
+This means failed hosts and orphan volumes require operator intervention.
+
+## Metrics
+
+Controller PUT/GET calls, successes, errors, compressed transfer bytes and cache
+hits reset on controller restart. They count logical AWS SDK calls, not SDK retry
+attempts, and exclude the daemon's separate blob client. PUT precondition
+failures count as errors even when the following verification succeeds.
+CloudWatch request metrics cover the whole configured bucket, are delayed and
+best-effort, and are not billing records. Empty samples are unavailable, not zero.
+Memory is total minus OS free, including reclaimable page cache. Disk statistics
+cover the entire worker filesystem. Residency and session counts describe saved
+inventory, not current distributed ownership or running sessions.
+
+## Deployment
+
+The parent `infra/agor-test` Terraform stack owns HTTPS routing, network rules,
+S3 request metrics, IAM, the launch template and Auto Scaling group. Set
+`ops_enabled=true` and `ops_worker_release` to the deployed immutable image tag.
+Keep desired capacity operational; Terraform ignores changes to that field.
+Publish the source archive and `ops-image-<release>.tar.gz` under the existing
+private source bucket's `workspace-releases/` prefix before provisioning workers.
+Run `install.sh` on the primary after securely supplying `/etc/agor-ops.json`.
+Runtime state and journals stay outside Git. The app/worker rollout uses the
+existing guarded deployment scripts; no active user task should be interrupted.
+
+## Verification
+
+- `python3 -m unittest discover -s infra/ops-console -p 'test_*.py'`
+- `node --check infra/ops-console/app.js`
+- Executor workspace hold, recovery, reclamation and S3 blob tests.
+- Real AWS checks: authentication and CSRF rejection, live worker responses,
+  isolated synthetic transfer with hashes/home/Git preserved, EC2 bootstrap and
+  dispatcher discovery. Record actual rollout results outside the repository.

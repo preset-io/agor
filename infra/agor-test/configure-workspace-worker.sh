@@ -20,7 +20,7 @@ policy=json.load(open(policy_path)) if os.path.exists(policy_path) else None
 if policy is not None: config['cachePolicy']=policy
 json.dump(config,open('/opt/agor/workspace/config.json','w'))
 if ip=='10.87.2.164':
- json.dump({'workers':['http://10.87.2.164:8787','http://10.87.1.107:8787'],'controlToken':secret['controlToken'],'executorEntry':entry,'branchReflinkRoot':'/home/agor/.agor/branch-bases',**({'cachePolicy':policy} if policy is not None else {})},open('/srv/agor/dispatcher.json','w'))
+ json.dump({'discoveryUrl':'http://10.87.2.164:8790/internal/workers','workers':['http://10.87.2.164:8787','http://10.87.1.107:8787'],'controlToken':secret['controlToken'],'executorEntry':entry,'branchReflinkRoot':'/home/agor/.agor/branch-bases',**({'cachePolicy':policy} if policy is not None else {})},open('/srv/agor/dispatcher.json','w'))
  os.chown('/srv/agor/dispatcher.json',1000,1000)
 os.unlink('/opt/agor/workspace/runtime-secret.json')
 PY

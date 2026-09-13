@@ -6,6 +6,8 @@ import {
   LOCAL_HOME_DIRECTORIES,
   LOCAL_TOOL_ENV,
 } from './local-environment.js';
+import { OpsHold } from './ops-hold.js';
+import { blobMetrics } from './ops-metrics.js';
 import { CachePolicy, evictionOrder, underPressure, type WorkerInventory } from './placement.js';
 import { withWorkspacePreparation } from './preparation.js';
 import { isQuiescentSdkTree, SDK_PROCESS_COLUMNS } from './quiescence.js';
@@ -16,9 +18,19 @@ import { copyClaudeTranscripts, importClaudeSession } from './sdk-transcripts.js
 
 import { spawn } from 'node:child_process';
 import { randomUUID, timingSafeEqual } from 'node:crypto';
-import { chown, lstat, mkdir, readdir, readFile, realpath, rm, statfs } from 'node:fs/promises';
+import {
+  chown,
+  lstat,
+  mkdir,
+  readdir,
+  readFile,
+  realpath,
+  rename,
+  rm,
+  statfs,
+} from 'node:fs/promises';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
-import { availableParallelism, totalmem } from 'node:os';
+import { availableParallelism, freemem, loadavg, totalmem } from 'node:os';
 import path from 'node:path';
 import type { BranchID, TenantID } from '@agor/core/types';
 import {
@@ -123,6 +135,8 @@ export async function startWorker(configPath: string) {
     await sql`select tenant_id from agor_workspace_inventory limit 0`;
     await inventory.load();
   }
+  const opsHold = new OpsHold(path.join(config.root, 'controller-cache', 'ops-hold'));
+  await opsHold.load();
   let maintaining = false;
   let maintenanceRunning = false;
   const admission = new BranchAdmission();
@@ -829,12 +843,12 @@ export async function startWorker(configPath: string) {
       freeSlots: slots,
       freeCpu: slots * (config.toolCpus + 1),
       freeMemoryBytes: slots * (config.toolMemoryGiB + 3) * 1024 ** 3,
-      accepting: !maintaining,
+      accepting: !maintaining && !opsHold.id,
       residents: [],
     };
   }
   async function maintenance() {
-    if (!policy || maintaining || maintenanceRunning) return;
+    if (!policy || maintaining || maintenanceRunning || opsHold.id) return;
     // The synchronous gate also fences admission during awaits below.
     if (reservations || jobs.size || reading || activeSessions.size) return;
     maintaining = true;
@@ -1056,13 +1070,225 @@ export async function startWorker(configPath: string) {
       }
       if (!authorized(req, config.controlToken))
         return json(res, 403, { error: 'Unauthorized controller' });
+      // System-wide operations require the existing trusted control capability above.
+      if (req.method === 'GET' && req.url === '/ops/status') {
+        const residents = [...inventory.entries].map(([key, entry]) => ({
+          tenantId: key.split('/')[0],
+          ...entry,
+        }));
+        return json(res, 200, {
+          ...(await capacity()),
+          residents,
+          bucket: config.bucket,
+          image: config.image,
+          hold: opsHold.id,
+          operationRunning: opsHold.busy,
+          maintenanceRunning,
+          activeJobs: jobs.size,
+          reservations,
+          activeSessions: activeSessions.size,
+          maximumSessions,
+          hostMemory: { total: totalmem(), free: freemem() },
+          load: loadavg(),
+          cpuCount: availableParallelism(),
+          metrics: blobMetrics(),
+          cachePolicy: policy,
+          sampledAt: new Date().toISOString(),
+        });
+      }
+      if (req.method === 'POST' && req.url?.startsWith('/ops/')) {
+        const scope = z
+          .object({
+            operationId: z.string().uuid(),
+            tenantId: z
+              .string()
+              .regex(/^[A-Za-z0-9_-]+$/)
+              .optional(),
+            branchId: z.string().uuid().optional(),
+            recovery: z
+              .string()
+              .regex(/^[a-f0-9]{64}$/)
+              .optional(),
+            repository: z.string().optional(),
+          })
+          .parse(await body(req));
+        if (req.url === '/ops/hold') {
+          await opsHold.acquire(
+            scope.operationId,
+            !(
+              jobs.size ||
+              reservations ||
+              reading ||
+              activeSessions.size ||
+              maintaining ||
+              maintenanceRunning
+            )
+          );
+          const processes = await docker(['ps', '--format', '{{.Names}}']);
+          if (
+            processes.exitCode ||
+            processes.output.split('\n').some((n) => /^agor-(tool|sdk)-/.test(n))
+          )
+            throw new Error('Worker held; executor containment could not be verified');
+          return json(res, 200, { held: true });
+        }
+        if (req.url === '/ops/release') {
+          await opsHold.release(scope.operationId);
+          return json(res, 200, { released: true });
+        }
+        if (!scope.tenantId || !scope.branchId) throw new Error('Tenant and branch required');
+        const tenant = scope.tenantId,
+          branch = scope.branchId;
+        const value = await opsHold.run(scope.operationId, async () => {
+          const c = coordinator(tenant, branch);
+          const signal = AbortSignal.timeout(15 * 60 * 1000);
+          if (req.url === '/ops/export') {
+            const entry = inventory.entries.get(`${tenant}/${branch}`);
+            if (!entry?.resident)
+              throw new Error('No resident workspace for this tenant and branch');
+            const { state } = await c.metadata.read();
+            if (!state || (state.host && state.host !== host))
+              throw new Error('Source is not branch authority');
+            for (const slot of ['launch']) {
+              const other = coordinator(tenant, branch, slot),
+                current = await other.metadata.read();
+              if (current.state?.host && current.state.leaseUntil > current.now) {
+                if (current.state.host !== host)
+                  throw new Error('Launch authority on another worker');
+                await other.drain();
+              }
+            }
+            const recovery = await reclaimWorkspace(
+              c,
+              entry,
+              new S3WorkspaceBlobs(
+                config.bucket,
+                c.scope.tenantId,
+                undefined,
+                undefined,
+                undefined,
+                signal
+              ),
+              {
+                checkpointOnly: true,
+                signal,
+                lock: () => admission.lock(tenant, branch),
+                version: () => admission.version(tenant, branch),
+                journal: path.join(
+                  config.root,
+                  'recovery-receipts',
+                  hash(Buffer.from(config.bucket)),
+                  tenant,
+                  branch
+                ),
+              }
+            );
+            if (!recovery) throw new Error('No private recovery snapshot available');
+            return { ...recovery, repository: entry.repository };
+          }
+          if (req.url === '/ops/import') {
+            if (!scope.recovery) throw new Error('Recovery required');
+            const before = await c.metadata.read();
+            const recovery = before.state?.localRecovery;
+            if (!recovery || recovery.hash !== scope.recovery)
+              throw new Error('Recovery is no longer current');
+            if (
+              before.state?.host &&
+              before.state.leaseUntil > before.now &&
+              before.state.host !== host
+            )
+              throw new Error('Branch still owned elsewhere');
+            if (
+              Object.keys(before.state?.active ?? {}).length ||
+              Object.values(before.state?.receipts ?? {}).some(
+                (r) => r.outcome.status === 'conflict'
+              )
+            )
+              throw new Error('Active or conflicted workspace');
+            const manifest = JSON.parse((await c.blobs.get(scope.recovery)).toString());
+            const bytes = (manifest.entries ?? []).reduce(
+              (n: number, e: { size?: number }) => n + (e.size ?? 0),
+              0
+            );
+            await c.capacity(bytes, (manifest.entries ?? []).length);
+            const replicas = path.join(c.directory, 'replicas');
+            const retained = path.join(
+              config.root,
+              'ops-retained',
+              scope.operationId,
+              tenant,
+              branch
+            );
+            let saved = false;
+            try {
+              await lstat(replicas);
+              await mkdir(path.dirname(retained), { recursive: true });
+              await rename(replicas, retained);
+              saved = true;
+            } catch (e) {
+              if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e;
+            }
+            try {
+              await restoreReplicas(
+                replicas,
+                c.scope,
+                scope.recovery,
+                new S3WorkspaceBlobs(
+                  config.bucket,
+                  c.scope.tenantId,
+                  undefined,
+                  undefined,
+                  undefined,
+                  signal
+                ),
+                undefined,
+                signal
+              );
+            } catch (e) {
+              if (saved) await rename(retained, replicas);
+              throw e;
+            }
+            await c.materialise(undefined, signal, false);
+            const current = (await c.metadata.read()).state!;
+            if (current.localRecovery?.hash !== scope.recovery)
+              throw new Error('Recovery changed during import; worker remains held');
+            const entry = inventory.touch(tenant, branch, scope.repository ?? branch);
+            entry.resident = true;
+            entry.sessions = (await readdir(replicas, { withFileTypes: true }))
+              .filter((e) => e.isDirectory())
+              .map((e) => e.name);
+            entry.revision = current.revision;
+            entry.epoch = recovery.epoch;
+            entry.generation = randomUUID();
+            await inventory.save();
+            await inventory.advertise(tenant, {
+              ...(await capacity()),
+              residents: inventory.tenantEntries(tenant),
+            });
+            return {
+              restored: true,
+              revision: current.revision,
+              sessions: entry.sessions.length,
+              retainedPrevious: saved,
+            };
+          }
+          throw new Error('Unknown operator action');
+        });
+        return json(res, 200, value);
+      }
+      if (
+        opsHold.id &&
+        req.method === 'POST' &&
+        ['/dispatch', '/read-command', '/drain'].includes(req.url ?? '')
+      )
+        return json(res, 409, { error: 'Worker held for operator transfer' });
       if (req.method === 'POST' && req.url === '/read-command') {
-        if (maintaining) return json(res, 429, { error: 'Worker cache maintenance' });
+        if (maintaining || opsHold.id) return json(res, 429, { error: 'Worker cache maintenance' });
         const raw = await body(req);
         const scope = Dispatch.pick({ tenantId: true, branchId: true }).parse(raw);
-        if (maintaining) return json(res, 429, { error: 'Worker cache maintenance' });
+        if (maintaining || opsHold.id) return json(res, 429, { error: 'Worker cache maintenance' });
         const leave = await enterBranch(scope.tenantId, scope.branchId, res);
-        if (maintaining) {
+        if (maintaining || opsHold.id) {
           leave();
           return json(res, 429, { error: 'Worker cache maintenance' });
         }
@@ -1077,13 +1303,14 @@ export async function startWorker(configPath: string) {
       if (req.method === 'POST' && req.url === '/dispatch') {
         const diskPressure =
           policy && underPressure(await capacity(), { ...policy, highWatermark: 0.99 });
-        const reason = maintaining
-          ? 'cache_maintenance'
-          : reservations >= maximumSessions
-            ? 'cpu_memory_reservations'
-            : diskPressure
-              ? 'disk_inode_reserve'
-              : undefined;
+        const reason =
+          maintaining || opsHold.id
+            ? 'cache_maintenance'
+            : reservations >= maximumSessions
+              ? 'cpu_memory_reservations'
+              : diskPressure
+                ? 'disk_inode_reserve'
+                : undefined;
         if (reason) {
           console.warn(
             JSON.stringify({
@@ -1103,7 +1330,7 @@ export async function startWorker(configPath: string) {
           });
         }
         const input = Dispatch.parse(await body(req));
-        if (maintaining || reservations >= maximumSessions)
+        if (maintaining || opsHold.id || reservations >= maximumSessions)
           return json(res, 429, { error: 'Worker admission capacity exhausted' });
         const sessionKey = `${input.tenantId}/${input.branchId}/${input.payload.params.sessionId}`;
         if (activeSessions.has(sessionKey))
@@ -1118,7 +1345,7 @@ export async function startWorker(configPath: string) {
               // Claim/heartbeat/Stop cover the wait; no SDK or CPU slot is reserved yet.
               await progress('Preparing branch files…');
               const leave = await enterBranch(input.tenantId, input.branchId, res, signal);
-              if (maintaining || reservations >= maximumSessions) {
+              if (maintaining || opsHold.id || reservations >= maximumSessions) {
                 leave();
                 throw new Error('Worker admission capacity exhausted after capture');
               }

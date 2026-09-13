@@ -65,6 +65,15 @@ resource "aws_security_group" "alb" {
       cidr_blocks = [aws_subnet.test[2].cidr_block]
     }
   }
+  dynamic "egress" {
+    for_each = var.ops_enabled ? [1] : []
+    content {
+      from_port   = 8790
+      to_port     = 8790
+      protocol    = "tcp"
+      cidr_blocks = [aws_subnet.test[2].cidr_block]
+    }
+  }
   egress {
     from_port   = 3030
     to_port     = 3030
@@ -82,6 +91,16 @@ resource "aws_security_group" "app" {
       to_port         = 3031
       protocol        = "tcp"
       security_groups = [aws_security_group.alb.id]
+    }
+  }
+  dynamic "ingress" {
+    for_each = var.ops_enabled ? [1] : []
+    content {
+      from_port       = 8790
+      to_port         = 8790
+      protocol        = "tcp"
+      security_groups = [aws_security_group.alb.id]
+      self            = true
     }
   }
   ingress {
