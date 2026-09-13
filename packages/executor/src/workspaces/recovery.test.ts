@@ -82,4 +82,26 @@ describe('private local-state recovery', () => {
     ).rejects.toThrow('S3 down');
     expect(await readFile(path.join(source, 'file'), 'utf8')).toBe('important');
   });
+  it('cancels a restore without exposing a partially restored session', async () => {
+    const { root, source, blobs } = await fixture();
+    await mkdir(path.join(source, 'session'));
+    await writeFile(path.join(source, 'session/file'), 'private');
+    const digest = await snapshotReplicas(source, scope, blobs);
+    const controller = new AbortController();
+    const target = path.join(root, 'cancelled');
+    const store = {
+      put: blobs.put.bind(blobs),
+      get: async (key: string) => {
+        const bytes = await blobs.get(key);
+        if (key !== digest) controller.abort(new Error('Task stopped'));
+        return bytes;
+      },
+    };
+    await expect(
+      restoreReplicas(target, scope, digest, store, 'session', controller.signal)
+    ).rejects.toThrow('Task stopped');
+    await expect(readFile(path.join(target, 'session/file'))).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
+  });
 });

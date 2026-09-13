@@ -482,13 +482,16 @@ export async function startWorker(configPath: string) {
               } catch (error) {
                 if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
               }
+              await progress('Restoring cached session files…');
+              signal.throwIfAborted();
               await mkdir(c.directory, { recursive: true, mode: 0o700 });
               await restoreReplicas(
                 replicas,
                 c.scope,
                 recovery.hash,
                 new S3WorkspaceBlobs(config.bucket, c.scope.tenantId),
-                payload.params.sessionId
+                payload.params.sessionId,
+                signal
               );
             }
           })();

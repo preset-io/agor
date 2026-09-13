@@ -100,9 +100,12 @@ export async function restoreReplicas(
   scope: WorkspaceScope,
   digest: string,
   blobs: WorkspaceBlobs,
-  sessionId?: string
+  sessionId?: string,
+  signal?: AbortSignal
 ) {
+  signal?.throwIfAborted();
   const bytes = await blobs.get(digest);
+  signal?.throwIfAborted();
   if (hash(bytes) !== digest) throw new Error('Recovery manifest checksum mismatch');
   const manifest = Manifest.parse(JSON.parse(bytes.toString()));
   if (manifest.tenantId !== scope.tenantId || manifest.branchId !== scope.branchId)
@@ -139,6 +142,7 @@ export async function restoreReplicas(
     for (const item of [...manifest.entries].sort(
       (a, b) => a.path.split('/').length - b.path.split('/').length
     )) {
+      signal?.throwIfAborted();
       const file = path.join(temp, item.path);
       if (item.kind === 'directory') await mkdir(file, { mode: 0o700 });
       else if (item.kind === 'symlink') await symlink(item.target!, file);
@@ -146,7 +150,9 @@ export async function restoreReplicas(
         const fd = await open(file, 'wx', 0o600);
         try {
           for (const part of item.parts) {
+            signal?.throwIfAborted();
             const content = await blobs.get(part);
+            signal?.throwIfAborted();
             if (hash(content) !== part) throw new Error('Recovery part checksum mismatch');
             await fd.writeFile(content);
           }
@@ -158,12 +164,14 @@ export async function restoreReplicas(
     // Apply restrictive directory modes after their children have been populated.
     for (const item of [...manifest.entries].reverse())
       if (item.kind !== 'symlink') {
+        signal?.throwIfAborted();
         const file = path.join(temp, item.path);
         if (process.getuid?.() === 0) await chown(file, item.uid, item.gid);
         await chmod(file, item.mode);
         if (item.mtimeMs !== undefined)
           await utimes(file, item.mtimeMs / 1000, item.mtimeMs / 1000);
       }
+    signal?.throwIfAborted();
     if (sessionId) {
       await mkdir(root, { recursive: true, mode: 0o700 });
       await rename(path.join(temp, sessionId), path.join(root, sessionId));
