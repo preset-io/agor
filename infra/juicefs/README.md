@@ -89,8 +89,14 @@ and verifies the official release SHA-256 before installing.
    bootstrap; there are no fixed default credentials. Configure agent tools and
    authentication normally in the fresh instance.
 
-Mounts use normal close-to-open consistency, verified local cache contents, and
-no writeback or relaxed open-cache options. Application container restarts retain
+Mounts default to verified local cache contents with writeback disabled and no
+relaxed open-cache options. Set `writeback: true` in the host config to stage
+writes on the persistent local disk and upload asynchronously, with no added
+upload delay. Stop active work and the application before restarting the mount;
+restart the application afterward so its bind mounts refer to the new mount.
+Wait for `juicefs_staging_blocks` and `juicefs_staging_block_bytes` to reach zero
+before deliberately retiring a worker. Do not delete the cache while uploads
+remain: successful writes may not yet be durable in S3. Application container restarts retain
 the bind mount; a failed FUSE mount produces errors rather than local fallback.
 At host boot, ensure the mount is ready before starting the application.
 

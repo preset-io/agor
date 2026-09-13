@@ -8,5 +8,6 @@
   "cache": "/var/cache/agor-juicefs",
   "home": "/srv/agor-juicefs/home",
   "image": "agor-juicefs:local",
-  "port": 3031
+  "port": 3031,
+  "writeback": false
 }

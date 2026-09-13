@@ -37,6 +37,8 @@ def config(filename):
         raise ValueError('Mount, application home and cache must be separate directories')
     if not 1024 <= int(c.get('port', 3031)) <= 65535:
         raise ValueError('Invalid port')
+    if type(c.get('writeback', False)) is not bool:
+        raise ValueError('writeback must be a boolean')
     bind = ipaddress.ip_address(c.get('bind_address', '127.0.0.1'))
     if bind.version != 4 or bind.is_unspecified or not bind.is_private:
         raise ValueError('Bind to a specific private or loopback IPv4 address')
@@ -145,6 +147,15 @@ def start(c):
     subprocess.run(docker_command(c), check=True)
 
 
+def mount_command(c):
+    # No upload delay: asynchronous uploads start immediately. Staging remains
+    # on persistent local disk, separate from the application home.
+    return [BINARY, 'mount', '-o', 'allow_other', '--cache-dir', c['cache'],
+            '--cache-size', '4096', '--verify-cache-checksum', 'full',
+            *(['--writeback', '--upload-delay', '0'] if c.get('writeback', False) else []),
+            c['metadata_url'], c['mount']]
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('action', choices=['format', 'mount', 'prepare', 'verify', 'start'])
@@ -157,10 +168,7 @@ def main():
     elif args.action == 'mount':
         Path(c['mount']).mkdir(parents=True, exist_ok=True)
         Path(c['cache']).mkdir(parents=True, mode=0o700, exist_ok=True)
-        # Default close-to-open consistency, no writeback or relaxed open cache.
-        os.execve(BINARY, [BINARY, 'mount', '-o', 'allow_other', '--cache-dir', c['cache'],
-                          '--cache-size', '4096', '--verify-cache-checksum', 'full',
-                          c['metadata_url'], c['mount']], environment(c))
+        os.execve(BINARY, mount_command(c), environment(c))
     else:
         {'prepare': prepare, 'verify': verify, 'start': start}[args.action](c)
 

@@ -30,6 +30,15 @@ class StorageBoundaryTests(unittest.TestCase):
         self.c['home'] = self.c['mount']+'/home'
         with self.assertRaises(ValueError): self.load()
 
+    def test_writeback_is_explicit_and_has_no_extra_upload_delay(self):
+        self.assertNotIn('--writeback', manage.mount_command(self.load()))
+        self.c['writeback'] = True
+        command = manage.mount_command(self.load())
+        self.assertIn('--writeback', command)
+        self.assertEqual(command[command.index('--upload-delay')+1], '0')
+        self.c['writeback'] = 'false'
+        with self.assertRaises(ValueError): self.load()
+
     def test_private_https_backend_configuration(self):
         self.c.update(bind_address='10.87.2.164', public_origin='https://juicefs.skellige.com.au')
         args = manage.docker_command(self.load())
