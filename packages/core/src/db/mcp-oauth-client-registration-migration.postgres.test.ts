@@ -48,6 +48,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
   () => {
     let db: Database | null = null;
     let oldHeadFolder: string | null = null;
+    let pendingMigrations: string[];
 
     beforeAll(async () => {
       db = createDatabase({ dialect: 'postgresql', url: postgresUrl! });
@@ -80,6 +81,17 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
           breakpoints: boolean;
         }>;
       };
+      // Pin the historical cutover while allowing independent later migrations.
+      pendingMigrations = journal.entries
+        .filter(({ when }) => when > OLD_HEAD_WATERMARK)
+        .map(({ tag }) => tag);
+      expect(pendingMigrations.slice(0, 5)).toEqual([
+        '0101_environment_command_discovery',
+        '0102_mcp_oauth_client_registrations',
+        '0103_oauth_authority_watermark_reconciliation',
+        '0104_mcp_slack_recovery_due',
+        '0105_mcp_oauth_grant_attribution',
+      ]);
       journal.entries = journal.entries.filter((entry) => entry.idx <= 99);
       journal.entries.push({
         idx: 100,
@@ -200,15 +212,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       // later than the archived timestamp. Bootstrap defers this existing
       // legacy table to exact reconciliation in the same offline transaction.
       await expect(checkMigrationStatus(db)).resolves.toMatchObject({
-        pending: [
-          '0101_environment_command_discovery',
-          '0102_mcp_oauth_client_registrations',
-          '0103_oauth_authority_watermark_reconciliation',
-          '0104_mcp_slack_recovery_due',
-          '0105_mcp_oauth_grant_attribution',
-          '0107_branch_permanent_deletion',
-          '0108_branch_deletion_recovery',
-        ],
+        pending: pendingMigrations,
         dbAheadOfBinary: false,
       });
       await expect(runMigrations(db)).rejects.toThrow('Offline migration cutover required');
@@ -324,7 +328,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       });
 
       // This fixture reuses the database upgraded by the preceding test. Remove
-      // later Slack recovery and consent-attribution additions as well as
+      // later Slack recovery, consent-attribution, and cleanup policy additions as well as
       // rewinding the ledger: the old head did not have these future columns.
       await executeRaw(db, sql`ALTER TABLE tasks DROP COLUMN mcp_slack_recovery_due_at`);
       await executeRaw(db, sql`ALTER TABLE user_mcp_oauth_tokens DROP COLUMN granted_by_user_id`);
@@ -332,6 +336,8 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       await executeRaw(db, sql`ALTER TABLE branches DROP COLUMN deletion_status`);
       await executeRaw(db, sql`ALTER TABLE branches DROP COLUMN deletion_error`);
       await executeRaw(db, sql`ALTER TABLE branches DROP COLUMN deletion_updated_at`);
+      await executeRaw(db, sql`ALTER TABLE repos DROP COLUMN cleanup_policy`);
+      await executeRaw(db, sql`ALTER TABLE branches DROP COLUMN cleanup_protected`);
 
       // Reproduce the previous reviewed head's timestamp-only final watermark.
       // Its authority schema is identical; the rebased bootstrap must not try
@@ -346,15 +352,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
             VALUES ('pre-rebase-final-watermark', 1788379200000)`
       );
       await expect(checkMigrationStatus(db)).resolves.toMatchObject({
-        pending: [
-          '0101_environment_command_discovery',
-          '0102_mcp_oauth_client_registrations',
-          '0103_oauth_authority_watermark_reconciliation',
-          '0104_mcp_slack_recovery_due',
-          '0105_mcp_oauth_grant_attribution',
-          '0107_branch_permanent_deletion',
-          '0108_branch_deletion_recovery',
-        ],
+        pending: pendingMigrations,
         dbAheadOfBinary: false,
       });
       await expect(runMigrations(db)).rejects.toThrow('Offline migration cutover required');

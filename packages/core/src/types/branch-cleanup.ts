@@ -50,8 +50,7 @@ export function getBranchCleanupPolicyBlockReason(
   protectedPreference: boolean
 ): string | undefined {
   const effective = resolveRepoCleanupPolicy(policy);
-  if (!effective.enabled)
-    return 'Cleanup is disabled for this repository. Archiving will keep workspace files on disk.';
+  if (!effective.enabled) return 'Cleanup is disabled for this repository.';
   if (effective.allow_branch_protection && protectedPreference)
     return 'This branch is protected from workspace cleanup.';
   return undefined;

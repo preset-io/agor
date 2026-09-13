@@ -13,7 +13,9 @@ describe('repository cleanup policy', () => {
       command: 'git clean -fdX',
       allow_branch_protection: true,
     });
-    expect(getBranchCleanupPolicyBlockReason(undefined, false)).toContain('disabled');
+    expect(getBranchCleanupPolicyBlockReason(undefined, false)).toBe(
+      'Cleanup is disabled for this repository.'
+    );
     expect(
       getBranchCleanupPolicyBlockReason({ ...DEFAULT_REPO_CLEANUP_POLICY, enabled: true }, false)
     ).toBeUndefined();
