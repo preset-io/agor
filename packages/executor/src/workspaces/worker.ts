@@ -836,7 +836,7 @@ export async function startWorker(configPath: string) {
   async function maintenance() {
     if (!policy || maintaining || maintenanceRunning) return;
     // The synchronous gate also fences admission during awaits below.
-    if (reservations || jobs.size || reading) return;
+    if (reservations || jobs.size || reading || activeSessions.size) return;
     maintaining = true;
     maintenanceRunning = true;
     const started = performance.now();
@@ -1006,7 +1006,12 @@ export async function startWorker(configPath: string) {
           });
       }, policy.heartbeatMs)
     : undefined;
-  async function enterBranch(tenant: string, branch: string, res: ServerResponse) {
+  async function enterBranch(
+    tenant: string,
+    branch: string,
+    res: ServerResponse,
+    signal?: AbortSignal
+  ) {
     const stopped = new AbortController();
     const close = () => stopped.abort(new Error('Caller disconnected during branch capture'));
     res.once('close', close);
@@ -1015,7 +1020,7 @@ export async function startWorker(configPath: string) {
       return await admission.enterWhenReady(
         tenant,
         branch,
-        AbortSignal.any([stopped.signal, AbortSignal.timeout(120000)])
+        AbortSignal.any([stopped.signal, AbortSignal.timeout(120000), ...(signal ? [signal] : [])])
       );
     } finally {
       res.off('close', close);
@@ -1103,27 +1108,33 @@ export async function startWorker(configPath: string) {
         const sessionKey = `${input.tenantId}/${input.branchId}/${input.payload.params.sessionId}`;
         if (activeSessions.has(sessionKey))
           return json(res, 409, { error: 'Session already active' });
-        const leave = await enterBranch(input.tenantId, input.branchId, res);
-        // A waiter consumes no execution slot until capture ends. Recheck after the await.
-        if (maintaining || reservations >= maximumSessions || activeSessions.has(sessionKey)) {
-          leave();
-          return json(res, 429, { error: 'Worker admission capacity exhausted' });
-        }
         activeSessions.add(sessionKey);
-        reservations++;
         try {
           await withWorkspacePreparation(
             config.daemonUrl,
             input.payload.sessionToken,
             input.payload.params.taskId,
-            (signal, handoff, progress) => dispatch(input, res, signal, handoff, progress),
+            async (signal, handoff, progress) => {
+              // Claim/heartbeat/Stop cover the wait; no SDK or CPU slot is reserved yet.
+              await progress('Preparing branch files…');
+              const leave = await enterBranch(input.tenantId, input.branchId, res, signal);
+              if (maintaining || reservations >= maximumSessions) {
+                leave();
+                throw new Error('Worker admission capacity exhausted after capture');
+              }
+              reservations++;
+              try {
+                return await dispatch(input, res, signal, handoff, progress);
+              } finally {
+                reservations--;
+                leave();
+              }
+            },
             input.payload.params.sessionId
           );
           if (!res.writableEnded) res.end();
           return;
         } finally {
-          reservations--;
-          leave();
           activeSessions.delete(sessionKey);
         }
       }
@@ -1179,7 +1190,14 @@ export async function startWorker(configPath: string) {
         });
       }
       if (req.method === 'POST' && req.url === '/drain') {
-        if (jobs.size || reservations || reading || maintaining || maintenanceRunning)
+        if (
+          jobs.size ||
+          reservations ||
+          reading ||
+          activeSessions.size ||
+          maintaining ||
+          maintenanceRunning
+        )
           return json(res, 409, { error: 'Worker active' });
         maintaining = true;
         try {

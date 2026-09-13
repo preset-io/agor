@@ -6,6 +6,7 @@ vi.mock('../services/feathers-client.js', () => ({ createExecutorClient: mocks.c
 vi.mock('../executor-heartbeat.js', () => ({ startExecutorHeartbeat: mocks.heartbeat }));
 vi.mock('../termination-report.js', () => ({ reportExecutorQuiescence: mocks.report }));
 
+import { BranchAdmission } from './admission';
 import { withWorkspacePreparation } from './preparation';
 
 let task: any;
@@ -102,4 +103,20 @@ it('publishes and updates a visible system progress row, not an assistant respon
     expect.any(String),
     expect.objectContaining({ content: [{ type: 'sdk_event', text: 'Workspace ready.' }] })
   );
+});
+
+it('keeps a capture waiter supervised and settles Stop without admitting it', async () => {
+  const gate = new BranchAdmission();
+  const unlock = gate.lock('tenant', 'branch')!;
+  await withWorkspacePreparation('url', 'token', 'task', async (signal) => {
+    expect(mocks.heartbeat).toHaveBeenCalled();
+    const waiting = gate.enterWhenReady('tenant', 'branch', signal);
+    task = { ...task, status: 'stopping', termination_request: { requested_at: 'now' } };
+    service.emit('termination_requested', task);
+    await waiting;
+    throw new Error('Stopped waiter was admitted');
+  });
+  expect(service.reportTerminationComplete).toHaveBeenCalled();
+  unlock();
+  expect(gate.lock('tenant', 'branch')).toBeDefined();
 });
