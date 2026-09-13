@@ -1,49 +1,90 @@
+import { execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { lstat, mkdir, readdir, rename, rm } from 'node:fs/promises';
 import path from 'node:path';
+import { promisify } from 'node:util';
 import type { BranchWorkspaceCoordinator } from '@agor/core/workspaces';
 import type { WorkspaceBlobs } from '@agor/core/workspaces/types';
 import type { Resident } from './placement.js';
 import { snapshotReplicas } from './recovery.js';
 
-/** Caller holds the worker admission gate and has verified physical executor quiescence. */
+export interface ReclamationOptions {
+  /** A synchronous, tenant/branch-scoped lock; the caller tracks dispatches AND reads. */
+  lock?: () => (() => void) | undefined;
+  version?: () => number;
+  journal?: string;
+  checkpointOnly?: boolean;
+  signal?: AbortSignal;
+}
+/** Caller verifies physical executor containment. Only snapshot capture and final detach
+ * hold branch admission; immutable upload runs without a worker-wide gate. */
 export async function reclaimWorkspace(
   c: BranchWorkspaceCoordinator,
   entry: Resident,
-  recoveryBlobs: WorkspaceBlobs = c.blobs
+  recoveryBlobs: WorkspaceBlobs = c.blobs,
+  options: ReclamationOptions = {}
 ): Promise<void> {
-  const before = await c.metadata.read();
-  if (!before.state) throw new Error('Unrecognized workspace');
-  const staleCopy = !!before.state.host && before.state.host !== c.options.host;
-  if (!staleCopy && Object.keys(before.state.active).length) throw new Error('Active workspace');
-  if (Object.values(before.state.receipts).some((r) => r.outcome.status === 'conflict'))
-    throw new Error('Unresolved conflict pins workspace');
-  if (!staleCopy) await c.materialise(undefined, undefined, false);
-  let renewalError: unknown;
-  const renewal = staleCopy
-    ? undefined
-    : setInterval(
-        () => {
-          void c.renew().catch((e) => {
-            renewalError = e;
-          });
-        },
-        Math.max(10, c.options.leaseMs / 3)
-      );
+  let unlock = options.lock ? options.lock() : () => {};
+  if (!unlock) throw new Error('Branch active during checkpoint');
+  const version = options.version?.();
+  const generation = entry.generation;
+  const snapshot = path.join(
+    c.options.root,
+    'recovery-snapshots',
+    c.scope.tenantId,
+    c.scope.branchId,
+    randomUUID()
+  );
+  let renewal: ReturnType<typeof setInterval> | undefined;
   try {
+    const before = await c.metadata.read();
+    if (!before.state) throw new Error('Unrecognized workspace');
+    const staleCopy = !!before.state.host && before.state.host !== c.options.host;
+    if (!staleCopy && Object.keys(before.state.active).length) throw new Error('Active workspace');
+    if (Object.values(before.state.receipts).some((r) => r.outcome.status === 'conflict'))
+      throw new Error('Unresolved conflict pins workspace');
+    if (!staleCopy) await c.materialise(undefined, undefined, false);
+    const captured = (await c.metadata.read()).state!;
+    let renewalError: unknown;
+    renewal = staleCopy
+      ? undefined
+      : setInterval(
+          () => {
+            void c.renew().catch((e) => {
+              renewalError = e;
+            });
+          },
+          Math.max(10, c.options.leaseMs / 3)
+        );
     const replicas = path.join(c.directory, 'replicas');
     let recovery: string | undefined;
-    try {
-      const st = await lstat(replicas);
+    const st = await lstat(replicas).catch((error) => {
+      if (error.code === 'ENOENT') return undefined;
+      throw error;
+    });
+    if (st) {
       if (!st.isDirectory() || st.isSymbolicLink()) throw new Error('Invalid replica directory');
-      recovery = await snapshotReplicas(replicas, c.scope, recoveryBlobs);
-    } catch (e) {
-      if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e;
+      await mkdir(path.dirname(snapshot), { recursive: true, mode: 0o700 });
+      // cp -a preserves ownership and links. FORCE reflinks on the production XFS path.
+      await promisify(execFile)(
+        'cp',
+        ['-a', ...(c.options.clone === 'reflink' ? ['--reflink=always'] : []), replicas, snapshot],
+        { signal: options.signal }
+      );
+      unlock();
+      unlock = undefined;
+      recovery = await snapshotReplicas(snapshot, c.scope, recoveryBlobs, options);
     }
     if (renewalError) throw renewalError;
+    if (!unlock) unlock = options.lock ? options.lock() : () => {};
+    if (!unlock || options.version?.() !== version || entry.generation !== generation)
+      throw new Error('Branch changed during checkpoint');
+    options.signal?.throwIfAborted();
     await c.metadata.mutate((state, now) => {
       if (
         !state ||
+        state.revision !== captured.revision ||
+        state.epoch !== captured.epoch ||
         (!staleCopy &&
           (state.host !== c.options.host ||
             state.leaseUntil <= now ||
@@ -59,7 +100,7 @@ export async function reclaimWorkspace(
           revision: staleCopy ? (entry.revision ?? 0) : state.revision,
           origin: c.options.host.split('#')[0],
           createdAt: now,
-          epoch: entry.epoch ?? 0,
+          epoch: staleCopy ? (entry.epoch ?? 0) : captured.epoch,
         };
         state.localRecoveries ??= {};
         state.localRecoveries[recovery] = checkpoint;
@@ -68,6 +109,7 @@ export async function reclaimWorkspace(
       return { state, result: undefined };
     });
     if (!staleCopy) await c.drain();
+    if (options.checkpointOnly) return;
     // Atomic detachment under the local admission gate. Late rm only sees this UUID,
     // never a recreated branch path. Recovery was acknowledged before detachment.
     const trash = path.join(c.options.root, 'eviction-trash', randomUUID());
@@ -76,9 +118,13 @@ export async function reclaimWorkspace(
     entry.resident = false;
     entry.sessions = [];
     entry.generation = randomUUID();
+    unlock();
+    unlock = undefined;
     await rm(trash, { recursive: true, force: true });
   } finally {
     if (renewal) clearInterval(renewal);
+    unlock?.();
+    await rm(snapshot, { recursive: true, force: true });
   }
 }
 

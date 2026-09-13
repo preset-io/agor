@@ -237,27 +237,38 @@ permission to delete. One preferred worker is selected per branch; no background
 replication to other nodes occurs. Idle ownership can be released independently
 of retaining a warm replica.
 
-Maintenance closes local admission, waits for no local reservations/readers/jobs,
-and checks Docker for surviving SDK/tool containers before touching files. It
-starts at 80% byte or inode usage and stops below 65%, checking actual filesystem
-free space between batches rather than assuming reflink directory sizes represent
-reclaimable blocks. The minimum free reserve also gates admission. The S3 cache
-is reclaimed first, then older idle replicas. Active local source tickets defer workspace eviction. A stale local copy can be
-archived while a different worker owns the branch; that path only appends recovery
-metadata and removes local files, without changing the remote owner or its epoch. Capacity exhaustion with no safe victim
-rejects new work; it never kills a running task to make room.
+Maintenance briefly closes worker admission to verify no untracked SDK/tool
+containers survive. It then uses tenant-and-branch admission locks for capture
+and final detachment; other branches can run while a checkpoint uploads. Worker
+heartbeats continue during uploads. Every accepted dispatch or file reader changes
+a local generation counter, including commands that modify only private files.
+An intervening admission, source revision, ownership epoch change, or conflict
+invalidates eviction. A lock is acquired again before publishing the manifest.
 
-Source checkpoints alone do not preserve private Git or home state. Before
-removing a replica, the worker streams **all** its private files (including Git,
-local home, dependencies and build output) into tenant-scoped, checksummed 16 MiB
-S3 chunks and publishes a recovery manifest pointer under the branch lease.
-Recovery uploads bypass the local blob cache to avoid filling the disk being
-reclaimed. This first version deliberately preserves excluded files rather than
-assuming arbitrary ignored directories are disposable. Large dependency trees
-therefore make full replica eviction expensive; use `caches` mode when that cost
-is undesirable. A failed upload, special file, active local tool or conflict receipt
-prevents deletion. Conflict receipts remain pinned conservatively until a future
-explicit resolution lifecycle can establish that the proposal is no longer needed.
+In `workspaces` mode, idle replicas are checkpointed before pressure occurs.
+Reclamation starts at 80% byte or inode usage and stops below 65%, checking actual
+free space between candidates. The minimum free reserve also gates admission.
+The disposable S3 read cache is reclaimed first, then older idle replicas.
+Capacity exhaustion with no safe victim rejects new work rather than killing tasks.
+
+New private checkpoints use schema 2: a reflink copy captures the idle replica,
+then up to eight concurrent workers pack its files into checksummed 32 MiB S3
+objects. A deterministic 64-way path shard limits how far an edit changes pack
+boundaries. The manifest indexes file slices within packs and preserves Git,
+private homes, dependencies, build output, permissions and symlinks. Schema 1
+manifests remain readable. Restore verifies packs and writes file slices with
+bounded concurrency into a temporary directory before publishing the session.
+Compression runs asynchronously outside the controller event loop.
+
+Controller-owned `recovery-receipts/<bucket-hash>/<tenant>/<branch>` directories
+record acknowledged immutable objects. Retries and later checkpoints reuse those
+objects, including uploads completed before an interrupted checkpoint. Receipts
+are never created before S3 acknowledgment and are not mounted into SDKs. This
+assumes immutable recovery objects remain retained; offline GC still fails closed
+while recovery roots exist. No payload copies are added to the local S3 read cache.
+The worker allows 15 minutes per checkpoint attempt, then defers without deleting
+the original. Reflink capture requires spare inodes and can itself fail safely
+under pressure. Special files and unresolved conflicts also prevent eviction.
 
 After durability is acknowledged, eviction drains ownership and atomically moves
 the local directory to a unique trash path. Cleanup only deletes that captured
@@ -268,8 +279,7 @@ checks tenant/branch identity, content hashes, path traversal and symlink ancest
 Old manifests remain referenced so evicting a newer, partial set of local sessions
 does not discard an earlier session's Git/home snapshot. Offline source blob GC
 fails closed when recovery roots are present until recursive recovery marking is
-implemented. These are eviction checkpoints, not continuous backups of running
-or abruptly lost workers.
+implemented. Idle and eviction checkpoints are not continuous backups of running or abruptly lost workers.
 
 Operational events include `workspace_placement`, `workspace_cache_reclamation`,
 `workspace_eviction_candidate`, and `workspace_eviction_deferred`, alongside
@@ -279,3 +289,7 @@ Rollback by restoring the previous policy or removing it from worker and dispatc
 configuration and performing the normal idle worker upgrade; retain recovery
 manifests and S3 objects. Do not roll back to a binary that ignores recovery pointers
 after replica eviction without first restoring affected sessions.
+
+Schema 2 checkpoints require a schema-2-capable worker for restoration. Roll out
+read support to every worker before allowing new packed evictions; an older
+schema-1-only binary is not a safe rollback once packed checkpoints are published.

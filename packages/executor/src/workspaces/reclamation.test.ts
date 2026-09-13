@@ -5,6 +5,7 @@ import type { BranchID, TenantID } from '@agor/core/types';
 import { BranchWorkspaceCoordinator, LocalWorkspaceBlobs } from '@agor/core/workspaces';
 import type { WorkspaceMetadata, WorkspaceState } from '@agor/core/workspaces/types';
 import { afterEach, describe, expect, it } from 'vitest';
+import { BranchAdmission } from './admission';
 import type { Resident } from './placement';
 import { reclaimBlobCache, reclaimWorkspace } from './reclamation';
 import { restoreReplicas } from './recovery';
@@ -135,5 +136,79 @@ describe('fenced workspace reclamation', () => {
     let checks = 0;
     expect(await reclaimBlobCache(cache, async () => ++checks > 1)).toBe(32);
     expect(await readFile(path.join(cache, 'private'), 'utf8')).toBe('keep');
+  });
+  it('allows unrelated work during upload and refuses eviction after private-only activity', async () => {
+    const f = await fixture(),
+      admission = new BranchAdmission();
+    let exercised = false;
+    await expect(
+      reclaimWorkspace(
+        f.c,
+        f.entry,
+        {
+          get: f.blobs.get.bind(f.blobs),
+          put: async (key, bytes) => {
+            if (!exercised) {
+              exercised = true;
+              const other = admission.enter('other-tenant', 'branch');
+              expect(other).toBeDefined();
+              other!();
+              const leave = admission.enter('tenant', 'branch');
+              expect(leave).toBeDefined();
+              await writeFile(path.join(f.c.replicaPath('session'), 'private-new'), 'keep');
+              leave!();
+            }
+            await f.blobs.put(key, bytes);
+          },
+        },
+        {
+          lock: () => admission.lock('tenant', 'branch'),
+          version: () => admission.version('tenant', 'branch'),
+        }
+      )
+    ).rejects.toThrow('changed');
+    expect(f.entry.resident).toBe(true);
+    expect(f.metadata.state!.localRecovery).toBeUndefined();
+    expect(await readFile(path.join(f.c.replicaPath('session'), 'private-new'), 'utf8')).toBe(
+      'keep'
+    );
+  });
+  it('publishes an idle checkpoint without deleting its warm replica', async () => {
+    const f = await fixture();
+    await reclaimWorkspace(f.c, f.entry, f.blobs, { checkpointOnly: true });
+    expect(f.metadata.state!.localRecovery).toBeDefined();
+    expect(f.entry.resident).toBe(true);
+    expect(await readFile(path.join(f.c.replicaPath('session'), 'file'), 'utf8')).toBe('source');
+  });
+  it('does not turn ENOENT during upload into a successful eviction', async () => {
+    const f = await fixture();
+    await expect(
+      reclaimWorkspace(f.c, f.entry, {
+        get: f.blobs.get.bind(f.blobs),
+        put: async () => {
+          throw Object.assign(new Error('missing upload input'), { code: 'ENOENT' });
+        },
+      })
+    ).rejects.toThrow('missing upload input');
+    expect(f.entry.resident).toBe(true);
+    expect(f.metadata.state!.localRecovery).toBeUndefined();
+  });
+  it('rejects ownership epoch changes during upload even without local activity', async () => {
+    const f = await fixture();
+    let changed = false;
+    await expect(
+      reclaimWorkspace(f.c, f.entry, {
+        get: f.blobs.get.bind(f.blobs),
+        put: async (key, bytes) => {
+          if (!changed) {
+            changed = true;
+            f.metadata.state!.epoch++;
+          }
+          await f.blobs.put(key, bytes);
+        },
+      })
+    ).rejects.toThrow('ownership');
+    expect(f.entry.resident).toBe(true);
+    expect(f.metadata.state!.localRecovery).toBeUndefined();
   });
 });

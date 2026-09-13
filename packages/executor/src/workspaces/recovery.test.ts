@@ -104,4 +104,110 @@ describe('private local-state recovery', () => {
       code: 'ENOENT',
     });
   });
+  it('packs thousands of small files, bounds transfers, and reuses acknowledged packs', async () => {
+    const { root, source, blobs } = await fixture();
+    await mkdir(path.join(source, 'session'));
+    for (let i = 0; i < 1024; i++)
+      await writeFile(path.join(source, 'session', String(i)), `value-${i}`);
+    let puts = 0,
+      active = 0,
+      maximum = 0;
+    const store = {
+      get: blobs.get.bind(blobs),
+      put: async (key: string, bytes: Buffer) => {
+        puts++;
+        active++;
+        maximum = Math.max(maximum, active);
+        try {
+          await new Promise((r) => setTimeout(r, 2));
+          await blobs.put(key, bytes);
+        } finally {
+          active--;
+        }
+      },
+    };
+    const options = { journal: path.join(root, 'receipts') };
+    const first = await snapshotReplicas(source, scope, store, options);
+    expect(puts).toBeLessThanOrEqual(65);
+    expect(maximum).toBeGreaterThan(1);
+    expect(maximum).toBeLessThanOrEqual(8);
+    puts = 0;
+    expect(await snapshotReplicas(source, scope, store, options)).toBe(first);
+    expect(puts).toBe(0);
+    await writeFile(path.join(source, 'session/7'), 'changed');
+    const changed = await snapshotReplicas(source, scope, store, options);
+    expect(puts).toBe(2); // one path shard and its manifest
+    const target = path.join(root, 'restored');
+    await restoreReplicas(target, scope, changed, store);
+    expect(await readFile(path.join(target, 'session/7'), 'utf8')).toBe('changed');
+    expect(await readFile(path.join(target, 'session/1023'), 'utf8')).toBe('value-1023');
+  }, 30000);
+  it('restores files spanning packs and rejects corrupt packed ranges atomically', async () => {
+    const { root, source, blobs } = await fixture();
+    const content = Buffer.alloc(33 * 1024 ** 2, 91);
+    await writeFile(path.join(source, 'large'), content);
+    const digest = await snapshotReplicas(source, scope, blobs);
+    await restoreReplicas(path.join(root, 'large-restored'), scope, digest, blobs);
+    expect((await readFile(path.join(root, 'large-restored/large'))).equals(content)).toBe(true);
+    const manifest = JSON.parse((await blobs.get(digest)).toString());
+    manifest.entries[0].parts[0].offset = 32 * 1024 ** 2;
+    const invalid = Buffer.from(JSON.stringify(manifest));
+    await blobs.put(hash(invalid), invalid);
+    await expect(
+      restoreReplicas(path.join(root, 'bad'), scope, hash(invalid), blobs)
+    ).rejects.toThrow('outside pack');
+    await expect(readFile(path.join(root, 'bad/large'))).rejects.toMatchObject({ code: 'ENOENT' });
+  }, 30000);
+  it('continues to read v1 recovery manifests', async () => {
+    const { root, blobs } = await fixture();
+    const content = Buffer.from('legacy');
+    await blobs.put(hash(content), content);
+    const bytes = Buffer.from(
+      JSON.stringify({
+        schema: 1,
+        ...scope,
+        entries: [
+          { path: 'file', kind: 'file', mode: 0o600, uid: 0, gid: 0, parts: [hash(content)] },
+        ],
+      })
+    );
+    await blobs.put(hash(bytes), bytes);
+    await restoreReplicas(path.join(root, 'legacy'), scope, hash(bytes), blobs);
+    expect(await readFile(path.join(root, 'legacy/file'), 'utf8')).toBe('legacy');
+  });
+  it('resumes acknowledged packs after a partial upload failure', async () => {
+    const { root, source, blobs } = await fixture();
+    for (let i = 0; i < 100; i++) await writeFile(path.join(source, String(i)), String(i));
+    const good = new Set<string>();
+    let attempts = 0;
+    const journal = path.join(root, 'resume');
+    await expect(
+      snapshotReplicas(
+        source,
+        scope,
+        {
+          get: blobs.get.bind(blobs),
+          put: async (key, bytes) => {
+            if (++attempts > 8) throw new Error('interrupted');
+            await blobs.put(key, bytes);
+            good.add(key);
+          },
+        },
+        { journal }
+      )
+    ).rejects.toThrow('interrupted');
+    expect(good.size).toBeGreaterThan(0);
+    await snapshotReplicas(
+      source,
+      scope,
+      {
+        get: blobs.get.bind(blobs),
+        put: async (key, bytes) => {
+          expect(good.has(key)).toBe(false);
+          await blobs.put(key, bytes);
+        },
+      },
+      { journal }
+    );
+  });
 });

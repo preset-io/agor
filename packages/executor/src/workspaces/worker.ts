@@ -1,3 +1,4 @@
+import { BranchAdmission } from './admission.js';
 import { WorkspaceInventory } from './inventory.js';
 import {
   exportGitSeed,
@@ -123,6 +124,9 @@ export async function startWorker(configPath: string) {
     await inventory.load();
   }
   let maintaining = false;
+  let maintenanceRunning = false;
+  const admission = new BranchAdmission();
+  const checkpointed = new Map<string, string>();
   let reading = 0;
   const restoring = new Map<string, Promise<void>>();
   const options: WorkspaceOptions = {
@@ -489,7 +493,14 @@ export async function startWorker(configPath: string) {
                 replicas,
                 c.scope,
                 recovery.hash,
-                new S3WorkspaceBlobs(config.bucket, c.scope.tenantId),
+                new S3WorkspaceBlobs(
+                  config.bucket,
+                  c.scope.tenantId,
+                  undefined,
+                  undefined,
+                  undefined,
+                  signal
+                ),
                 payload.params.sessionId,
                 signal
               );
@@ -823,10 +834,11 @@ export async function startWorker(configPath: string) {
     };
   }
   async function maintenance() {
-    if (!policy || maintaining) return;
+    if (!policy || maintaining || maintenanceRunning) return;
     // The synchronous gate also fences admission during awaits below.
     if (reservations || jobs.size || reading) return;
     maintaining = true;
+    maintenanceRunning = true;
     const started = performance.now();
     let beforeCapacity: WorkerInventory | undefined;
     try {
@@ -837,26 +849,39 @@ export async function startWorker(configPath: string) {
         processes.output.split('\n').some((n) => /^agor-(tool|sdk)-/.test(n))
       )
         return;
+      maintaining = false;
       // Release idle ownership without discarding the warm local replica.
       for (const tenant of inventory.tenants())
         for (const entry of inventory.tenantEntries(tenant)) {
           if (policy.mode === 'observe' || Date.now() - entry.lastUsed < policy.idleMs) continue;
-          for (const slot of ['code', 'launch']) {
-            const c = coordinator(tenant, entry.branchId, slot);
-            const { state, now } = await c.metadata.read();
-            if (state?.host === host && state.leaseUntil > now && !Object.keys(state.active).length)
-              await c.drain();
+          const unlock = admission.lock(tenant, entry.branchId);
+          if (!unlock) continue;
+          try {
+            for (const slot of ['code', 'launch']) {
+              const c = coordinator(tenant, entry.branchId, slot);
+              const { state, now } = await c.metadata.read();
+              if (
+                state?.host === host &&
+                state.leaseUntil > now &&
+                !Object.keys(state.active).length
+              )
+                await c.drain();
+            }
+          } finally {
+            unlock();
           }
         }
       const pressure = underPressure(await capacity(), policy);
-      if (!pressure) return;
+      if (!pressure && policy.mode !== 'workspaces') return;
       const enough = async () => !underPressure(await capacity(), policy, true);
       const observe = ['observe', 'affinity'].includes(policy.mode);
-      const blobs = await reclaimBlobCache(path.join(config.root, 'blob-cache'), enough, observe);
+      const blobs = pressure
+        ? await reclaimBlobCache(path.join(config.root, 'blob-cache'), enough, observe)
+        : 0;
       console.log(
         JSON.stringify({ event: 'workspace_cache_reclamation', mode: policy.mode, blobs })
       );
-      if (policy.mode === 'caches' || (await enough())) return;
+      if (policy.mode === 'caches' || (pressure && (await enough()))) return;
       for (const tenant of inventory.tenants()) {
         for (const entry of inventory.tenantEntries(tenant)) {
           const { state } = await coordinator(tenant, entry.branchId).metadata.read();
@@ -886,9 +911,38 @@ export async function startWorker(configPath: string) {
             })
           );
           if (observe) continue;
+          const key = `${tenant}/${entry.branchId}`;
+          const stamp = `${entry.generation}/${admission.version(tenant, entry.branchId)}/${entry.revision}/${entry.epoch}`;
+          if (!pressure && checkpointed.get(key) === stamp) continue;
           try {
             const c = coordinator(tenant, entry.branchId);
-            await reclaimWorkspace(c, entry, new S3WorkspaceBlobs(config.bucket, c.scope.tenantId));
+            const signal = AbortSignal.timeout(15 * 60 * 1000);
+            await reclaimWorkspace(
+              c,
+              entry,
+              new S3WorkspaceBlobs(
+                config.bucket,
+                c.scope.tenantId,
+                undefined,
+                undefined,
+                undefined,
+                signal
+              ),
+              {
+                lock: () => admission.lock(tenant, entry.branchId),
+                version: () => admission.version(tenant, entry.branchId),
+                journal: path.join(
+                  config.root,
+                  'recovery-receipts',
+                  hash(Buffer.from(config.bucket)),
+                  tenant,
+                  entry.branchId
+                ),
+                checkpointOnly: !pressure,
+                signal,
+              }
+            );
+            if (!pressure) checkpointed.set(key, stamp);
             await inventory
               .save()
               .catch((error) =>
@@ -904,7 +958,7 @@ export async function startWorker(configPath: string) {
               })
             );
           }
-          if (await enough()) return;
+          if (!pressure || (await enough())) return;
         }
       }
     } finally {
@@ -923,6 +977,7 @@ export async function startWorker(configPath: string) {
         );
       } finally {
         maintaining = false;
+        maintenanceRunning = false;
       }
     }
   }
@@ -937,7 +992,9 @@ export async function startWorker(configPath: string) {
               ...(await capacity()),
               residents: inventory.tenantEntries(tenant),
             });
-          await maintenance();
+          void maintenance().catch((error) =>
+            console.warn('Workspace maintenance deferred', String(error))
+          );
         })()
           .catch((error) => console.warn('Workspace cache maintenance deferred', String(error)))
           .finally(() => {
@@ -977,11 +1034,17 @@ export async function startWorker(configPath: string) {
         return json(res, 403, { error: 'Unauthorized controller' });
       if (req.method === 'POST' && req.url === '/read-command') {
         if (maintaining) return json(res, 429, { error: 'Worker cache maintenance' });
+        const raw = await body(req);
+        const scope = Dispatch.pick({ tenantId: true, branchId: true }).parse(raw);
+        if (maintaining) return json(res, 429, { error: 'Worker cache maintenance' });
+        const leave = admission.enter(scope.tenantId, scope.branchId);
+        if (!leave) return json(res, 429, { error: 'Branch checkpoint capture' });
         reading++;
         try {
-          return json(res, 200, await readCommand(await body(req)));
+          return json(res, 200, await readCommand(raw));
         } finally {
           reading--;
+          leave();
         }
       }
       if (req.method === 'POST' && req.url === '/dispatch') {
@@ -1018,6 +1081,8 @@ export async function startWorker(configPath: string) {
         const sessionKey = `${input.tenantId}/${input.branchId}/${input.payload.params.sessionId}`;
         if (activeSessions.has(sessionKey))
           return json(res, 409, { error: 'Session already active' });
+        const leave = admission.enter(input.tenantId, input.branchId);
+        if (!leave) return json(res, 429, { error: 'Branch checkpoint capture' });
         activeSessions.add(sessionKey);
         reservations++;
         try {
@@ -1032,6 +1097,7 @@ export async function startWorker(configPath: string) {
           return;
         } finally {
           reservations--;
+          leave();
           activeSessions.delete(sessionKey);
         }
       }
@@ -1087,7 +1153,7 @@ export async function startWorker(configPath: string) {
         });
       }
       if (req.method === 'POST' && req.url === '/drain') {
-        if (jobs.size || reservations || reading || maintaining)
+        if (jobs.size || reservations || reading || maintaining || maintenanceRunning)
           return json(res, 409, { error: 'Worker active' });
         maintaining = true;
         try {

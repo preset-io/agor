@@ -2,7 +2,12 @@ import { createHash, randomUUID } from 'node:crypto';
 import { constants } from 'node:fs';
 import { mkdir, open, rename, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import { gunzipSync, gzipSync } from 'node:zlib';
+import { promisify } from 'node:util';
+import { gunzip, gzip } from 'node:zlib';
+
+const compress = promisify(gzip),
+  decompress = promisify(gunzip);
+
 import { getManagedStorageSegments } from '@agor/core/config';
 import type { TenantID } from '@agor/core/types';
 import type { WorkspaceBlobs } from '@agor/core/workspaces/types';
@@ -17,7 +22,8 @@ export class S3WorkspaceBlobs implements WorkspaceBlobs {
     tenantId: TenantID,
     private readonly client = new S3Client({}),
     private readonly maximumBlobBytes = 128 * 1024 * 1024,
-    private readonly cacheRoot?: string
+    private readonly cacheRoot?: string,
+    private readonly signal?: AbortSignal
   ) {
     this.prefix = getManagedStorageSegments('workspace-blobs', {
       tenantId,
@@ -72,7 +78,7 @@ export class S3WorkspaceBlobs implements WorkspaceBlobs {
     // Cache entries are published only after S3 acknowledgment or verified GET.
     // Thus existing bytes avoid duplicate PUT + 412 + GET round trips per branch.
     if (await this.cached(hash)) return;
-    const body = gzipSync(content);
+    const body = await compress(content);
     try {
       await this.client.send(
         new PutObjectCommand({
@@ -83,7 +89,8 @@ export class S3WorkspaceBlobs implements WorkspaceBlobs {
           ContentEncoding: 'gzip',
           IfNoneMatch: '*',
           ChecksumSHA256: createHash('sha256').update(body).digest('base64'),
-        })
+        }),
+        { abortSignal: this.signal }
       );
     } catch (error) {
       if ((error as { $metadata?: { httpStatusCode?: number } }).$metadata?.httpStatusCode !== 412)
@@ -97,11 +104,12 @@ export class S3WorkspaceBlobs implements WorkspaceBlobs {
     const cached = await this.cached(hash);
     if (cached) return cached;
     const result = await this.client.send(
-      new GetObjectCommand({ Bucket: this.bucket, Key: this.key(hash), ChecksumMode: 'ENABLED' })
+      new GetObjectCommand({ Bucket: this.bucket, Key: this.key(hash), ChecksumMode: 'ENABLED' }),
+      { abortSignal: this.signal }
     );
     if (!result.Body || (result.ContentLength ?? 0) > this.maximumBlobBytes + 65536)
       throw new Error('Invalid workspace blob response');
-    const content = gunzipSync(await result.Body.transformToByteArray(), {
+    const content = await decompress(await result.Body.transformToByteArray(), {
       maxOutputLength: this.maximumBlobBytes,
     });
     if (digest(content) !== hash) throw new Error('Workspace blob checksum mismatch');
