@@ -8,6 +8,7 @@ import {
 } from './local-environment.js';
 import { OpsHold } from './ops-hold.js';
 import { blobMetrics } from './ops-metrics.js';
+import { claimTransfer } from './ops-transfer.js';
 import { CachePolicy, evictionOrder, underPressure, type WorkerInventory } from './placement.js';
 import { withWorkspacePreparation } from './preparation.js';
 import { isQuiescentSdkTree, SDK_PROCESS_COLUMNS } from './quiescence.js';
@@ -1110,6 +1111,7 @@ export async function startWorker(configPath: string) {
               .regex(/^[a-f0-9]{64}$/)
               .optional(),
             repository: z.string().optional(),
+            epoch: z.number().int().nonnegative().optional(),
           })
           .parse(await body(req));
         if (req.url === '/ops/hold') {
@@ -1205,72 +1207,96 @@ export async function startWorker(configPath: string) {
               )
             )
               throw new Error('Active or conflicted workspace');
-            const manifest = JSON.parse((await c.blobs.get(scope.recovery)).toString());
-            const bytes = (manifest.entries ?? []).reduce(
-              (n: number, e: { size?: number }) => n + (e.size ?? 0),
-              0
-            );
-            await c.capacity(bytes, (manifest.entries ?? []).length);
-            const replicas = path.join(c.directory, 'replicas');
-            const retained = path.join(
-              config.root,
-              'ops-retained',
-              scope.operationId,
-              tenant,
-              branch
-            );
-            let saved = false;
+            if (scope.epoch === undefined) throw new Error('Exported ownership epoch required');
+            // Claim the exact exported generation atomically before touching local replicas.
+            // A third worker winning the handover gap makes this transfer fail closed.
+            await c.metadata.mutate((state, now) => ({
+              state: claimTransfer(state, now, {
+                scope: c.scope,
+                epoch: scope.epoch!,
+                recovery: scope.recovery!,
+                host,
+                leaseMs: options.leaseMs,
+              }),
+              result: undefined,
+            }));
+            let renewalError: unknown;
+            const renewal = setInterval(() => {
+              void c.renew().catch((e) => {
+                renewalError = e;
+              });
+            }, 10000);
             try {
-              await lstat(replicas);
-              await mkdir(path.dirname(retained), { recursive: true });
-              await rename(replicas, retained);
-              saved = true;
-            } catch (e) {
-              if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e;
-            }
-            try {
-              await restoreReplicas(
-                replicas,
-                c.scope,
-                scope.recovery,
-                new S3WorkspaceBlobs(
-                  config.bucket,
-                  c.scope.tenantId,
-                  undefined,
-                  undefined,
+              const manifest = JSON.parse((await c.blobs.get(scope.recovery)).toString());
+              const bytes = (manifest.entries ?? []).reduce(
+                (n: number, e: { size?: number }) => n + (e.size ?? 0),
+                0
+              );
+              await c.capacity(bytes, (manifest.entries ?? []).length);
+              const replicas = path.join(c.directory, 'replicas');
+              const retained = path.join(
+                config.root,
+                'ops-retained',
+                scope.operationId,
+                tenant,
+                branch
+              );
+              let saved = false;
+              try {
+                await lstat(replicas);
+                await mkdir(path.dirname(retained), { recursive: true });
+                await rename(replicas, retained);
+                saved = true;
+              } catch (e) {
+                if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e;
+              }
+              try {
+                await restoreReplicas(
+                  replicas,
+                  c.scope,
+                  scope.recovery,
+                  new S3WorkspaceBlobs(
+                    config.bucket,
+                    c.scope.tenantId,
+                    undefined,
+                    undefined,
+                    undefined,
+                    signal
+                  ),
                   undefined,
                   signal
-                ),
-                undefined,
-                signal
-              );
-            } catch (e) {
-              if (saved) await rename(retained, replicas);
-              throw e;
+                );
+              } catch (e) {
+                if (saved) await rename(retained, replicas);
+                throw e;
+              }
+              if (renewalError) throw renewalError;
+              await c.renew();
+              const current = (await c.metadata.read()).state!;
+              if (current.localRecovery?.hash !== scope.recovery)
+                throw new Error('Recovery changed during import; worker remains held');
+              const entry = inventory.touch(tenant, branch, scope.repository ?? branch);
+              entry.resident = true;
+              entry.sessions = (await readdir(replicas, { withFileTypes: true }))
+                .filter((e) => e.isDirectory())
+                .map((e) => e.name);
+              entry.revision = current.revision;
+              entry.epoch = recovery.epoch;
+              entry.generation = randomUUID();
+              await inventory.save();
+              await inventory.advertise(tenant, {
+                ...(await capacity()),
+                residents: inventory.tenantEntries(tenant),
+              });
+              return {
+                restored: true,
+                revision: current.revision,
+                sessions: entry.sessions.length,
+                retainedPrevious: saved,
+              };
+            } finally {
+              clearInterval(renewal);
             }
-            await c.materialise(undefined, signal, false);
-            const current = (await c.metadata.read()).state!;
-            if (current.localRecovery?.hash !== scope.recovery)
-              throw new Error('Recovery changed during import; worker remains held');
-            const entry = inventory.touch(tenant, branch, scope.repository ?? branch);
-            entry.resident = true;
-            entry.sessions = (await readdir(replicas, { withFileTypes: true }))
-              .filter((e) => e.isDirectory())
-              .map((e) => e.name);
-            entry.revision = current.revision;
-            entry.epoch = recovery.epoch;
-            entry.generation = randomUUID();
-            await inventory.save();
-            await inventory.advertise(tenant, {
-              ...(await capacity()),
-              residents: inventory.tenantEntries(tenant),
-            });
-            return {
-              restored: true,
-              revision: current.revision,
-              sessions: entry.sessions.length,
-              retainedPrevious: saved,
-            };
           }
           throw new Error('Unknown operator action');
         });

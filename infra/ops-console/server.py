@@ -95,7 +95,7 @@ def transfer(op, source, target, tenant, branch):
         update(op,'Saving private workspace to S3. Source files remain in place.')
         exported=rpc(source['origin'],'/ops/export',payload,960)
         update(op,'Checkpoint acknowledged. Restoring onto destination.')
-        restored=rpc(target['origin'],'/ops/import',{**payload,'recovery':exported['hash'],'repository':exported['repository']},960)
+        restored=rpc(target['origin'],'/ops/import',{**payload,'recovery':exported['hash'],'epoch':exported['epoch'],'repository':exported['repository']},960)
         update(op,'Destination verified. Releasing workers.')
         rpc(target['origin'],'/ops/release',payload); rpc(source['origin'],'/ops/release',payload)
         update(op,'Transfer complete. '+str(restored['sessions'])+' sessions restored; source copy retained.','complete')

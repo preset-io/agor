@@ -88,7 +88,7 @@ function stats() {
     res = rows().filter((r) => r.resident),
     total = live.reduce((n, w) => n + w.totalBytes, 0),
     free = live.reduce((n, w) => n + w.freeBytes, 0);
-  return `<div class="stats"><div class="stat"><div class="stat-label">Workers online</div><div class="stat-value">${live.length} <small>/ ${data.workers.length}</small></div><div class="stat-note">${live.filter((w) => w.accepting && w.freeSlots > 0).length} with available admission slots</div></div><div class="stat"><div class="stat-label">Resident workspaces</div><div class="stat-value">${res.length}</div><div class="stat-note">${new Set(res.map((r) => `${r.tenantId}/${r.branchId}`)).size} distinct branches across the fleet</div></div><div class="stat"><div class="stat-label">Local disk used</div><div class="stat-value">${live.length ? bytes(total - free) : '—'}</div><div class="stat-note">${bytes(free)} available · includes non-workspace files</div></div><div class="stat"><div class="stat-label">S3 calls · current worker processes</div><div class="stat-value">${num(live.length ? (c.getCalls || 0) + (c.putCalls || 0) : null)}</div><div class="stat-note">${num(c.getCalls || 0)} GET · ${num(c.putCalls || 0)} PUT · SDK calls, excluding retries</div></div></div>`;
+  return `<div class="stats"><div class="stat"><div class="stat-label">Workers online</div><div class="stat-value">${live.length} <small>/ ${data.workers.length}</small></div><div class="stat-note">${live.filter((w) => w.accepting && w.freeSlots > 0).length} with available admission slots</div></div><div class="stat"><div class="stat-label">Resident workspaces</div><div class="stat-value">${live.length ? res.length : '—'}</div><div class="stat-note">${new Set(res.map((r) => `${r.tenantId}/${r.branchId}`)).size} distinct branches across the fleet</div></div><div class="stat"><div class="stat-label">Local disk used</div><div class="stat-value">${live.length ? bytes(total - free) : '—'}</div><div class="stat-note">${bytes(live.length ? free : null)} available · includes non-workspace files</div></div><div class="stat"><div class="stat-label">S3 calls · current worker processes</div><div class="stat-value">${num(live.length ? (c.getCalls || 0) + (c.putCalls || 0) : null)}</div><div class="stat-note">${num(c.getCalls || 0)} GET · ${num(c.putCalls || 0)} PUT · SDK calls, excluding retries</div></div></div>`;
 }
 function workerCard(w) {
   const healthy = w.reachable;
@@ -158,7 +158,11 @@ function render() {
     view === 'overview' ? 'Overview' : view[0].toUpperCase() + view.slice(1);
   const stale =
     data.collectionError || !data.sampledAt || Date.now() - new Date(data.sampledAt) > 45000;
-  $('#connection').textContent = stale ? 'Sample stale' : 'Live telemetry';
+  $('#connection').textContent = stale
+    ? 'Sample stale'
+    : good().length !== data.workers.length
+      ? 'Telemetry incomplete'
+      : 'Live telemetry';
   $('#banner').hidden = !stale;
   if (stale)
     $('#banner').textContent =

@@ -22,7 +22,7 @@ export class OpsHold {
     this.id = id;
     // Persistence failure deliberately retains the in-memory hold.
     await mkdir(path.dirname(this.file), { recursive: true, mode: 0o700 });
-    await writeFile(this.file, id, { mode: 0o600, flag: 'wx' });
+    await writeFile(this.file, id, { mode: 0o600, flag: 'wx', flush: true });
   }
   require(id: string) {
     if (this.id !== id) throw new Error('Matching durable worker hold required');
