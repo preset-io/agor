@@ -175,6 +175,7 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
         deletion_status: row.deletion_status ?? undefined,
         deletion_error: row.deletion_error ?? undefined,
         deletion_updated_at: row.deletion_updated_at?.toISOString(),
+        cleanup_protected: row.cleanup_protected ?? false,
         url,
       },
       row
@@ -207,6 +208,7 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
       repo_id: branch.repo_id!,
       created_at: branch.created_at ? new Date(branch.created_at) : new Date(now),
       updated_at: new Date(now),
+      cleanup_protected: branch.cleanup_protected ?? false,
       created_by: branch.created_by,
       primary_owner_user_id: branch.primary_owner_user_id ?? branch.created_by,
       name: branch.name!,

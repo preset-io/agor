@@ -90,6 +90,7 @@ import {
   hasMinimumRole,
   isTeammate,
   ROLES,
+  resolveRepoCleanupPolicy,
   TEAMMATE_FRAMEWORK_REPO_URL,
 } from '@agor/core/types';
 import { resolveHostIpAddress } from '@agor/core/utils/host-ip';
@@ -998,6 +999,11 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       if (!item.board_id) {
         throw new BadRequest('board_id is required when creating a branch');
       }
+      if (Object.hasOwn(item, 'cleanup_protected')) {
+        throw new BadRequest(
+          'Set cleanup protection through the Manager-authorized branch patch after creation'
+        );
+      }
       if (Object.hasOwn(item, 'sdk_home')) {
         throw new BadRequest(
           'sdk_home is server-managed and cannot be set through the Branch API.'
@@ -1190,6 +1196,29 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     );
   }
 
+  private async validateCleanupProtectionWrite(
+    branch: Branch,
+    data: Partial<Branch>,
+    params?: BranchParams
+  ): Promise<void> {
+    if (!Object.hasOwn(data, 'cleanup_protected')) return;
+    if (typeof data.cleanup_protected !== 'boolean')
+      throw new BadRequest('cleanup_protected must be a boolean');
+    const user = params?.user;
+    if (!user) throw new NotAuthenticated('Authentication required');
+    const access = await this.branchRepo.resolveUserAccess(branch, user.user_id as UserID);
+    if (!access.is_owner && access.can !== 'all') {
+      throw new Forbidden('Branch Manager access is required to change cleanup protection');
+    }
+    const repo = await new RepoRepository(this.db).findById(branch.repo_id);
+    if (!repo) throw new NotFound('Repository not found');
+    if (!resolveRepoCleanupPolicy(repo.cleanup_policy).allow_branch_protection) {
+      throw new Forbidden(
+        'Repository policy currently overrides branch protection; the saved preference is preserved'
+      );
+    }
+  }
+
   private isPlainObject(value: unknown): value is Record<string, unknown> {
     return (
       value !== null &&
@@ -1374,6 +1403,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     }
     // Get current branch to check type/board changes
     const currentBranch = await super.get(id, params);
+    await this.validateCleanupProtectionWrite(currentBranch, data, params);
     await this.assertCanMutateTeammateKnowledgeConfig(currentBranch, data, params);
     this.assertTeammateKindIsStable(currentBranch, data);
 

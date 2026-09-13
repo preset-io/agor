@@ -59,6 +59,9 @@ export const BRANCH_ENVIRONMENT_SNAPSHOT_FIELDS = [
  * - Multiple sessions can work on the same branch over time
  */
 export interface Branch {
+  /** Stored preference; effective only when the repo allows branch protection. */
+  cleanup_protected?: boolean;
+
   // ===== Identity =====
 
   /** Unique branch identifier (UUIDv7) */

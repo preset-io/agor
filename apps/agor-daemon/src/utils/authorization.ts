@@ -60,6 +60,7 @@ export function requireMinimumRole(minimumRole: Role, action?: string) {
  * may write them.
  */
 const ENV_COMMAND_FIELDS = [
+  'cleanup_policy', // Executable repository cleanup configuration
   'environment', // Repo-level: v2 named variants (source of truth)
   'environment_config', // Repo-level: legacy v1 view (still guarded)
   'environment_variant', // Branch-level: selected variant name
