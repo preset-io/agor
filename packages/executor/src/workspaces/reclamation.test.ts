@@ -230,4 +230,15 @@ describe('fenced workspace reclamation', () => {
     );
     expect(f.entry.resident).toBe(false);
   });
+  it('does not promote an old private copy just because maintenance reacquires ownership', async () => {
+    const f = await fixture();
+    f.entry.epoch = f.metadata.state!.epoch;
+    const privateEpoch = f.entry.epoch;
+    f.metadata.state!.epoch += 10;
+    f.metadata.state!.host = null;
+    f.metadata.state!.leaseUntil = 0;
+    await reclaimWorkspace(f.c, f.entry, f.blobs, { checkpointOnly: true });
+    expect(f.metadata.state!.localRecovery!.epoch).toBe(privateEpoch);
+    expect(f.metadata.state!.epoch).toBeGreaterThan(privateEpoch!);
+  });
 });

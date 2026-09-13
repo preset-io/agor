@@ -113,7 +113,8 @@ export async function reclaimWorkspace(
           revision: staleCopy ? (entry.revision ?? 0) : state.revision,
           origin: c.options.host.split('#')[0],
           createdAt: now,
-          epoch: staleCopy ? (entry.epoch ?? 0) : captured.epoch,
+          // Ownership reacquisition does not make an older private replica newer.
+          epoch: entry.epoch ?? 0,
         };
         state.localRecoveries ??= {};
         state.localRecoveries[recovery] = checkpoint;
