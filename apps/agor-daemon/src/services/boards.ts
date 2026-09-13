@@ -99,8 +99,8 @@ function shouldSqlPageBoardQuery(query?: Record<string, unknown>): boolean {
   return true;
 }
 
-export interface BoardsServiceEvents {
-  moveBranch?: (branchId: BranchID, boardId: BoardID, params?: BoardParams) => Promise<unknown>;
+export interface BoardsServiceDependencies {
+  moveBranch?: (branchId: BranchID, boardId: BoardID, params?: BoardParams) => Promise<void>;
   emitBoardObjectPatched?: (
     boardObject: BoardObjectPatchedEventPayload,
     params?: BoardParams
@@ -113,7 +113,7 @@ export interface BoardsServiceEvents {
  * Extended boards service with custom methods
  */
 export class BoardsService extends DrizzleService<Board, Partial<Board>, BoardParams> {
-  private moveBranch?: BoardsServiceEvents['moveBranch'];
+  private moveBranch?: BoardsServiceDependencies['moveBranch'];
   private db: TenantScopeAwareDatabase;
   private boardRepo: BoardRepository;
   private emitBoardObjectPatched?: (
@@ -123,7 +123,7 @@ export class BoardsService extends DrizzleService<Board, Partial<Board>, BoardPa
   private emitBoardEvent?: (event: Omit<ManualServiceEvent, 'path'>) => void;
   private emitBoardCommentPatched?: (comment: BoardComment, params?: BoardParams) => void;
 
-  constructor(db: TenantScopeAwareDatabase, events: BoardsServiceEvents = {}) {
+  constructor(db: TenantScopeAwareDatabase, dependencies: BoardsServiceDependencies = {}) {
     const boardRepo = new BoardRepository(db);
     super(boardRepo, {
       id: 'board_id',
@@ -135,11 +135,11 @@ export class BoardsService extends DrizzleService<Board, Partial<Board>, BoardPa
     });
 
     this.db = db;
-    this.moveBranch = events.moveBranch;
+    this.moveBranch = dependencies.moveBranch;
     this.boardRepo = boardRepo;
-    this.emitBoardObjectPatched = events.emitBoardObjectPatched;
-    this.emitBoardEvent = events.emitBoardEvent;
-    this.emitBoardCommentPatched = events.emitBoardCommentPatched;
+    this.emitBoardObjectPatched = dependencies.emitBoardObjectPatched;
+    this.emitBoardEvent = dependencies.emitBoardEvent;
+    this.emitBoardCommentPatched = dependencies.emitBoardCommentPatched;
   }
 
   /**
@@ -676,7 +676,7 @@ export class BoardsService extends DrizzleService<Board, Partial<Board>, BoardPa
  */
 export function createBoardsService(
   db: TenantScopeAwareDatabase,
-  events: BoardsServiceEvents = {}
+  dependencies: BoardsServiceDependencies = {}
 ): BoardsService {
-  return new BoardsService(db, events);
+  return new BoardsService(db, dependencies);
 }

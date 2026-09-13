@@ -179,6 +179,7 @@ import {
   ARTIFACTS_SERVICE_TRANSPORT_METHODS,
   createArtifactsService,
 } from './services/artifacts.js';
+import { createBoardBranchMover } from './services/board-branch-move.js';
 import { createBoardCommentsService } from './services/board-comments.js';
 import { createBoardObjectsService } from './services/board-objects.js';
 import { createBoardsService } from './services/boards.js';
@@ -626,24 +627,7 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   app.use(
     '/boards',
     createBoardsService(db, {
-      moveBranch: async (branchId, boardId, params) => {
-        // Raw shared path: wrapped Feathers CRUD would emit before the outer
-        // assignment transaction commits. Queue its event and eviction instead.
-        const branch = await branchesService.patch(branchId, { board_id: boardId }, params);
-        const tenantId = getCurrentTenantId();
-        if (tenantId)
-          enqueueAfterTenantDatabaseCommit(() => {
-            app.emit('realtime:authorization-invalidated', { tenantId, disconnectSockets: true });
-          });
-        emitServiceEvent(app, {
-          path: 'branches',
-          event: 'patched',
-          data: branch,
-          params,
-          id: branchId,
-        });
-        return branch;
-      },
+      moveBranch: createBoardBranchMover(app, branchesService),
       emitBoardObjectPatched: (boardObject, params) => {
         emitServiceEvent(app, {
           path: 'board-objects',

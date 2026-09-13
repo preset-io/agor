@@ -1,3 +1,5 @@
+import type { Server } from 'node:http';
+import { type AgorClient, createClient } from '@agor/core/api';
 import {
   BoardObjectRepository,
   BoardRepository,
@@ -9,16 +11,19 @@ import {
   RepoRepository,
   UsersRepository,
 } from '@agor/core/db';
-import { feathers } from '@agor/core/feathers';
+import { feathers, feathersExpress, socketio } from '@agor/core/feathers';
 import {
   type BoardID,
   type BranchID,
   capabilityPolicyPresetCapabilities,
+  type TenantID,
   type UserID,
   type UUID,
 } from '@agor/core/types';
 import { afterEach, expect, vi } from 'vitest';
 import { dbTest } from '../../../../packages/core/src/db/test-helpers';
+import { LOCAL_AUTHORIZATION_CACHE_INVALIDATION_EVENT } from '../realtime/routing';
+import { createBoardBranchMover } from './board-branch-move';
 import { BoardObjectsService } from './board-objects';
 import { BoardsService } from './boards';
 import { BranchesService } from './branches';
@@ -82,15 +87,17 @@ async function fixture(raw: Database) {
     position: { x: 10, y: 20 },
     zone_id: 'old-zone',
   });
-  const app = feathers();
+  const app = feathersExpress(feathers());
   app.set('config', {});
   const service = new BranchesService(db, app);
   const boardService = new BoardsService(db, {
-    moveBranch: (id, boardId, params) => service.patch(id, { board_id: boardId }, params),
+    moveBranch: createBoardBranchMover(app, service),
   });
   app.use('branches', service);
   app.use('boards', boardService, { methods: ['get', 'find', 'setPrimaryTeammate'] });
   app.use('board-objects', new BoardObjectsService(db));
+  const branchEvents = vi.fn();
+  app.service('branches').on('patched', branchEvents);
   const boardEvents = vi.fn();
   const objectEvents = vi.fn();
   app.service('boards').on('patched', boardEvents);
@@ -118,6 +125,7 @@ async function fixture(raw: Database) {
     service,
     boardService,
     params,
+    branchEvents,
     boardEvents,
     objectEvents,
   };
@@ -169,6 +177,7 @@ async function expectUnchanged(f: Awaited<ReturnType<typeof fixture>>) {
     f.branch.branch_id
   );
   expect((await f.boards.findById(f.target.board_id))?.primary_teammate_id).toBeUndefined();
+  expect(f.branchEvents).not.toHaveBeenCalled();
   expect(f.boardEvents).not.toHaveBeenCalled();
   expect(f.objectEvents).not.toHaveBeenCalled();
 }
@@ -338,5 +347,80 @@ dbTest(
     await f.service.patch(f.branch.branch_id, { board_id: f.target.board_id }, f.params);
     expect((await f.boards.findById(f.target.board_id))?.primary_teammate_id).toBe(other.branch_id);
     expect((await f.boards.findById(f.source.board_id))?.primary_teammate_id).toBeUndefined();
+  }
+);
+
+dbTest(
+  'cross-board Assign acknowledges over Socket.IO before full authorization eviction',
+  async ({ db }) => {
+    const f = await fixture(db);
+    const tenantId = 'default' as TenantID;
+    const order: string[] = [];
+    let server: Server | undefined;
+    let client: AgorClient | undefined;
+    f.app.service('boards').hooks({
+      before: {
+        setPrimaryTeammate: [
+          (context) => {
+            context.params.user = f.params.user;
+            context.params.tenant = { tenant_id: tenantId, source: 'explicit' };
+          },
+        ],
+      },
+    });
+    f.app.on(LOCAL_AUTHORIZATION_CACHE_INVALIDATION_EVENT, () => order.push('cache-cleared'));
+    f.app.service('branches').on('patched', () => order.push('published'));
+    f.app.configure(
+      socketio({}, (io) => {
+        // Match the production invalidation listener's synchronous disconnection.
+        f.app.on('realtime:authorization-invalidated', (data) => {
+          expect(data).toEqual({ tenantId, disconnectSockets: true });
+          order.push('evicted');
+          io.disconnectSockets(true);
+        });
+        io.on('connection', (socket) => {
+          socket.use((packet, next) => {
+            if (packet[0] === 'setPrimaryTeammate' && packet[1] === 'boards') {
+              const acknowledge = packet[packet.length - 1];
+              packet[packet.length - 1] = (...args: unknown[]) => {
+                order.push('acknowledged');
+                acknowledge(...args);
+              };
+            }
+            next();
+          });
+        });
+      })
+    );
+    try {
+      server = await new Promise<Server>((resolve) => {
+        const listening = f.app.listen(0, '127.0.0.1', () => resolve(listening));
+      });
+      const address = server.address();
+      if (!address || typeof address === 'string') throw new Error('Expected TCP server');
+      client = createClient(`http://127.0.0.1:${address.port}`, true, {
+        ackTimeout: 5000,
+        reconnectionAttempts: 0,
+      });
+      await new Promise<void>((resolve) => client!.io.once('connect', resolve));
+      const disconnected = new Promise<void>((resolve) =>
+        client!.io.once('disconnect', () => resolve())
+      );
+      await expect(
+        client
+          .service('boards')
+          .setPrimaryTeammate({ boardId: f.target.board_id, branchId: f.branch.branch_id })
+      ).resolves.toMatchObject({ primary_teammate_id: f.branch.branch_id });
+      await disconnected;
+      expect(order).toEqual(['cache-cleared', 'published', 'acknowledged', 'evicted']);
+      expect((await f.branches.findById(f.branch.branch_id))?.board_id).toBe(f.target.board_id);
+      expect((await f.boards.findById(f.source.board_id))?.primary_teammate_id).toBeUndefined();
+    } finally {
+      client?.io.close();
+      if (server)
+        await new Promise<void>((resolve, reject) =>
+          server!.close((error) => (error ? reject(error) : resolve()))
+        );
+    }
   }
 );
