@@ -858,6 +858,16 @@ export async function startWorker(configPath: string) {
         for (const entry of inventory.tenantEntries(tenant)) {
           const { state } = await coordinator(tenant, entry.branchId).metadata.read();
           entry.stale = !!state?.host && state.host.split('#')[0] !== config.origin;
+          entry.pinned = !state
+            ? 'unknown_authority'
+            : Object.values(state.receipts).some((r) => r.outcome.status === 'conflict')
+              ? 'unresolved_conflict'
+              : state.host === host && Object.keys(state.active).length
+                ? 'active_tool'
+                : undefined;
+          entry.approximateBytes = state
+            ? Object.values(state.tree).reduce((total, item) => total + item.size, 0)
+            : undefined;
         }
         for (const entry of evictionOrder(
           inventory.tenantEntries(tenant),
