@@ -265,6 +265,13 @@ exclusively owned by one branch. External provider conversations and remote Git 
 are separate resources. Backups and versioned object storage remain subject to their
 configured retention and locks.
 
+Archive with workspace removal and permanent deletion share the same verified
+workspace-removal implementation. The executor uses the daemon's authoritative
+repository location and exact workspace path, not a repository inferred from the
+workspace's `.git` file. Workspace removal alone does not erase SDK homes or history.
+Selecting metadata deletion always requires complete owned-storage removal; preserve
+and clean are archive-only choices.
+
 The CLI `agor branch rm <id>` asks for confirmation; `--force` explicitly confirms
 non-interactive deletion. The former `--from-filesystem` flag is now redundant.
 

@@ -1716,6 +1716,13 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     return this.requestPermanentDeletion(id, params);
   }
 
+  /** Best-effort attachment closure shared by archive and permanent deletion. */
+  private closeBranchTerminals(branchId: BranchID, tenantId: string): void {
+    const event = { tenantId, branchId };
+    this.app.emit?.('terminal:close-branch', event);
+    this.app.io?.serverSideEmit?.('terminal:close-branch', event);
+  }
+
   private async requestPermanentDeletion(id: BranchID, params?: BranchParams): Promise<Branch> {
     const user = (params as AuthenticatedParams | undefined)?.user;
     if (!user) throw new NotAuthenticated('Authenticated branch management authority is required');
@@ -1789,9 +1796,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
         )
       );
       const dispatch = () => {
-        const terminalClose = { tenantId: String(tenantId), branchId: branch.branch_id };
-        this.app.emit?.('terminal:close-branch', terminalClose);
-        this.app.io?.serverSideEmit?.('terminal:close-branch', terminalClose);
+        this.closeBranchTerminals(branch.branch_id, String(tenantId));
         // No daemon waits for completion; the executor drives scoped DB steps.
         // Unacknowledged dispatch is diagnosed by runtime reconciliation.
         spawnExecutor(
@@ -1896,6 +1901,16 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
             )
           );
 
+    const removalRepo =
+      filesystemAction === 'deleted'
+        ? await this.withTenantDatabase(
+            params,
+            () => this.app.service('repos').get(branch.repo_id, params) as Promise<Repo>
+          )
+        : undefined;
+    if (filesystemAction === 'deleted' && !removalRepo?.local_path)
+      throw new Conflict('Authoritative base repository location is unavailable');
+
     // Stop environment if running
     if (branch.environment_instance?.status === 'running') {
       console.log(`⚠️  Stopping environment for branch ${branch.name} before ${metadataAction}`);
@@ -1958,6 +1973,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
             branchId: branch.branch_id,
             branchPath: branch.path,
             branchesRoot: getBranchesDir(tenantId),
+            repoPath: removalRepo!.local_path,
             // Clean up the branch if it was created by Agor.
             branch: branch.ref,
             deleteBranch: branch.new_branch,
@@ -1983,14 +1999,6 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     // trusted tenant/branch lifecycle tuple to peers.
     const terminalTenantId = params?.tenant?.tenant_id ?? getCurrentTenantId();
     if (!terminalTenantId) throw new Error('Missing tenant context for branch terminal cleanup');
-    const retireBranchTerminals = (): void => {
-      const terminalClose = {
-        tenantId: String(terminalTenantId),
-        branchId: branch.branch_id,
-      };
-      this.app.emit?.('terminal:close-branch', terminalClose);
-      this.app.io?.serverSideEmit?.('terminal:close-branch', terminalClose);
-    };
 
     // Metadata action: archive or delete
     if (metadataAction === 'archive') {
@@ -2033,7 +2041,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
 
       console.log(`✅ Archived branch ${branch.name} and ${archivedSessions.count} session(s)`);
 
-      retireBranchTerminals();
+      this.closeBranchTerminals(branch.branch_id, String(terminalTenantId));
       dispatchFilesystemAction();
       return archivedBranch;
     }

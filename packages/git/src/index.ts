@@ -9,7 +9,7 @@ import { randomUUID } from 'node:crypto';
 import { constants, existsSync } from 'node:fs';
 import { lstat, mkdir, mkdtemp, open, readdir, readFile, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
+import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path';
 import { simpleGit } from 'simple-git';
 import { resolveGitBinary } from './git-binary';
 import {
@@ -2299,6 +2299,37 @@ export async function resolveManagedBranchDeletionPath(
       throw new Error('Safety check failed: Branch deletion path is not a directory');
   }
   return target;
+}
+
+/**
+ * Remove only a branch workspace, retaining SDK homes and database metadata.
+ * Both archive and permanent deletion use this verified storage primitive.
+ * Paths/mode must come from authoritative records, never the checkout's .git.
+ * Does not delete Git refs or own admission/executor settlement.
+ */
+export async function removeBranchWorkspace(options: {
+  branchPath: string;
+  branchesRoot: string;
+  repoPath: string;
+  storageMode: 'clone' | 'worktree';
+}): Promise<void> {
+  const { branchPath, branchesRoot, repoPath, storageMode } = options;
+  const target = await resolveManagedBranchDeletionPath(branchPath, branchesRoot);
+  const { realpath } = await import('node:fs/promises');
+  // Require the authoritative repo to be available; canonicalize its root, not
+  // the victim (whose symlink descendants are rejected by the validator).
+  const repository = await realpath(repoPath);
+  if (repository === target || repository.startsWith(`${target}${sep}`))
+    throw new Error('Cannot delete the shared base repository');
+  if (storageMode === 'worktree') {
+    const registrations = await listGitWorktrees(repository);
+    if (registrations.some((item) => resolve(item.path) === target)) {
+      await removeGitWorktree(repository, target);
+    }
+    if ((await listGitWorktrees(repository)).some((item) => resolve(item.path) === target))
+      throw new Error('Worktree registration remains');
+  }
+  await deleteBranchDirectory(branchPath, branchesRoot);
 }
 
 /**

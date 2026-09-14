@@ -40,10 +40,11 @@ export const ArchiveDeleteBranchModal: React.FC<ArchiveDeleteBranchModalProps> =
   }, [initialMetadataAction, open, branch.deletion_status]);
 
   const handleOk = () => {
-    onConfirm({
-      metadataAction,
-      filesystemAction: metadataAction === 'delete' ? 'deleted' : filesystemAction,
-    });
+    onConfirm(
+      metadataAction === 'delete'
+        ? { metadataAction: 'delete', filesystemAction: 'deleted' }
+        : { metadataAction: 'archive', filesystemAction }
+    );
   };
 
   // Determine button text and style based on metadata action

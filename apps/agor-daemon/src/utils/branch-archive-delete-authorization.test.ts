@@ -1,5 +1,5 @@
 import type { BranchRepository } from '@agor/core/db';
-import { Forbidden } from '@agor/core/feathers';
+import { BadRequest, Forbidden } from '@agor/core/feathers';
 import type { HookContext } from '@agor/core/types';
 import { describe, expect, it, vi } from 'vitest';
 import {
@@ -24,6 +24,21 @@ function context(): HookContext {
 }
 
 describe('authorizeBranchArchiveDelete', () => {
+  it.each(['preserved', 'cleaned'])(
+    'rejects metadata deletion with %s files before authorization',
+    async (filesystemAction) => {
+      const hook = context();
+      hook.data = { metadataAction: 'delete', filesystemAction };
+      const findById = vi.fn();
+      await expect(
+        authorizeBranchArchiveDelete(hook, {
+          branchRepository: { findById } as unknown as BranchRepository,
+        })
+      ).rejects.toThrow(BadRequest);
+      expect(findById).not.toHaveBeenCalled();
+    }
+  );
+
   it('rejects a view-only MCP caller before granting destructive authority', async () => {
     const branch = {
       branch_id: '00000000-0000-7000-8000-000000000001',

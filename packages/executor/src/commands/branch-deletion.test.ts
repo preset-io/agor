@@ -85,6 +85,8 @@ describe('executor-owned branch deletion', () => {
 describe('concrete deletion command with disposable storage', () => {
   it.each([
     { unknownUpload: false, slow: false, malformedData: false },
+    { unknownUpload: false, slow: false, malformedData: false, archive: true },
+    { unknownUpload: false, slow: false, malformedData: false, archive: true, worktree: true },
     { unknownUpload: false, slow: false, malformedData: false, missingHome: true },
     { unknownUpload: false, slow: false, malformedData: false, missingHome: true, worktree: true },
     { unknownUpload: false, slow: false, malformedData: false, unsafeHome: 'foreign' },
@@ -95,7 +97,7 @@ describe('concrete deletion command with disposable storage', () => {
     { unknownUpload: false, slow: false, malformedData: true },
   ])(
     'deletes only verified storage: %j',
-    async ({ unknownUpload, slow, malformedData, missingHome, unsafeHome, worktree }) => {
+    async ({ unknownUpload, slow, malformedData, missingHome, unsafeHome, worktree, archive }) => {
       const { mkdtemp, mkdir, writeFile, stat, rm, symlink } = await import('node:fs/promises');
       const { tmpdir } = await import('node:os');
       const { join } = await import('node:path');
@@ -114,10 +116,10 @@ describe('concrete deletion command with disposable storage', () => {
           await mkdir(dir, { recursive: true });
           await writeFile(join(dir, 'fixture.txt'), 'fixture');
         }
+        await mkdir(join(root, 'base'));
         if (worktree) {
           const { simpleGit } = await import('@agor/git');
           const base = join(root, 'base');
-          await mkdir(base);
           const git = simpleGit(base);
           await git.init();
           await git.addConfig('user.email', 'fixture@example.invalid');
@@ -156,6 +158,29 @@ describe('concrete deletion command with disposable storage', () => {
             return new Response(JSON.stringify({ remaining: false }), { status: 200 });
           })
         );
+        if (archive) {
+          const { handleGitBranchRemove } = await import('./git');
+          const result = await handleGitBranchRemove(
+            {
+              command: 'git.branch.remove',
+              params: {
+                branchId: id,
+                branchPath: workspace,
+                branchesRoot: join(root, 'branches'),
+                repoPath: join(root, 'base'),
+                storageMode: worktree ? 'worktree' : 'clone',
+                deleteBranch: false,
+              },
+            },
+            {}
+          );
+          expect(result.success).toBe(true);
+          await expect(stat(workspace)).rejects.toMatchObject({ code: 'ENOENT' });
+          expect((await stat(home)).isDirectory()).toBe(true);
+          expect((await stat(neighbor)).isDirectory()).toBe(true);
+          expect(actions).toEqual([]);
+          return;
+        }
         const pending = handleBranchDelete(
           {
             command: 'branch.delete',

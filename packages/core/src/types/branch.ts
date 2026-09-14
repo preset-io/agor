@@ -11,10 +11,9 @@ export const BRANCH_FILESYSTEM_ACTIONS = ['preserved', 'cleaned', 'deleted'] as 
 export type BranchFilesystemAction = (typeof BRANCH_FILESYSTEM_ACTIONS)[number];
 
 /** Canonical request contract for the hooked branch archive/delete boundary. */
-export interface BranchArchiveOrDeleteOptions {
-  metadataAction: BranchMetadataAction;
-  filesystemAction: BranchFilesystemAction;
-}
+export type BranchArchiveOrDeleteOptions =
+  | { metadataAction: 'archive'; filesystemAction: BranchFilesystemAction }
+  | { metadataAction: 'delete'; filesystemAction: 'deleted' };
 
 export function isBranchArchiveOrDeleteOptions(
   value: unknown
@@ -23,7 +22,8 @@ export function isBranchArchiveOrDeleteOptions(
   const options = value as Record<string, unknown>;
   return (
     BRANCH_METADATA_ACTIONS.some((candidate) => candidate === options.metadataAction) &&
-    BRANCH_FILESYSTEM_ACTIONS.some((candidate) => candidate === options.filesystemAction)
+    BRANCH_FILESYSTEM_ACTIONS.some((candidate) => candidate === options.filesystemAction) &&
+    (options.metadataAction !== 'delete' || options.filesystemAction === 'deleted')
   );
 }
 

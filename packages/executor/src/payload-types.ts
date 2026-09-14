@@ -335,6 +335,9 @@ export const GitBranchRemovePayloadSchema = BasePayloadSchema.extend({
     /** Tenant-aware root that must contain branchPath */
     branchesRoot: z.string(),
 
+    /** Authoritative base repository; never infer it from the victim .git file. */
+    repoPath: z.string().min(1),
+
     /** Force removal even if dirty */
     force: z.boolean().optional(),
 

@@ -7,8 +7,7 @@ import type {
 import { BRANCH_DELETION_REPORT_SERVICE } from '@agor/core/types';
 import {
   deleteBranchDirectory,
-  listGitWorktrees,
-  removeGitWorktree,
+  removeBranchWorkspace,
   resolveManagedBranchDeletionPath,
 } from '@agor/git';
 import type { BranchDeletePayload, ExecutorResult } from '../payload-types.js';
@@ -197,7 +196,7 @@ export async function handleBranchDelete(
 
       // Validate ALL roots before starting destructive work. The SDK home is
       // UUID-owned; never erase a user's shared provider/execution home.
-      const target = await storageStep('validate_workspace', () =>
+      await storageStep('validate_workspace', () =>
         resolveManagedBranchDeletionPath(p.branchPath, p.branchesRoot)
       );
       await storageStep('validate_sdk_home', async () => {
@@ -211,23 +210,7 @@ export async function handleBranchDelete(
         // tenant root must still exist; symlinked descendants remain forbidden.
         await resolveManagedBranchDeletionPath(p.branchHome, p.tenantDataRoot);
       });
-      await storageStep('worktree_registration', async () => {
-        if (p.storageMode === 'worktree') {
-          const worktrees = await listGitWorktrees(p.repoPath);
-          if (resolve(p.repoPath) === target)
-            throw new Error('Cannot delete the shared base repository');
-          if (worktrees.some((item) => resolve(item.path) === target)) {
-            // Use the authoritative exact path, not basename matching or a .git
-            // pointer controlled by workspace contents.
-            await removeGitWorktree(p.repoPath, target);
-          }
-          if ((await listGitWorktrees(p.repoPath)).some((item) => resolve(item.path) === target))
-            throw new Error('Worktree registration remains');
-        }
-      });
-      await storageStep('remove_workspace', () =>
-        deleteBranchDirectory(p.branchPath, p.branchesRoot)
-      );
+      await storageStep('remove_workspace', () => removeBranchWorkspace(p));
       await storageStep('remove_sdk_home', () =>
         deleteBranchDirectory(p.branchHome, p.tenantDataRoot)
       );

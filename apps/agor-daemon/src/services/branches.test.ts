@@ -1595,6 +1595,7 @@ describe('BranchesService.archiveOrDelete', () => {
         params: expect.objectContaining({
           branchId,
           branchPath: branch.path,
+          repoPath: '/tmp/repo',
           storageMode: 'clone',
         }),
       }),
