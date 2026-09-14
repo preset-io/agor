@@ -141,7 +141,9 @@ describe('ZoneConfigModal historical tool migration', () => {
     expect(screen.getByText('No prompt configured')).toBeInTheDocument();
     expect(screen.getByLabelText('Prompt template')).toBeInTheDocument();
     expect(screen.getByLabelText('Trigger behavior')).toBeInTheDocument();
-    expect(screen.queryByText('Appearance')).not.toBeInTheDocument();
+    // The Appearance pane is force-rendered (but hidden) so its Name field
+    // registers with the Form even if the operator never opens this tab.
+    expect(screen.getByText('Appearance')).not.toBeVisible();
 
     fireEvent.click(screen.getByRole('tab', { name: 'Appearance & placement' }));
     expect(await screen.findByText('Appearance')).toBeInTheDocument();
@@ -190,6 +192,42 @@ describe('ZoneConfigModal historical tool migration', () => {
       borderColor: '#123456',
       backgroundColor: 'rgba(255, 0, 0, 0.1)',
     });
+  });
+
+  it('preserves the zone name when saving a prompt template without visiting the Appearance tab', async () => {
+    const onUpdate = vi.fn().mockResolvedValue(true);
+    render(
+      <AntdApp>
+        <ZoneConfigModal
+          open
+          onCancel={vi.fn()}
+          zoneName="Review"
+          objectId="zone-1"
+          onUpdate={onUpdate}
+          zoneData={{
+            type: 'zone',
+            x: 0,
+            y: 0,
+            width: 200,
+            height: 100,
+            label: 'Review',
+          }}
+        />
+      </AntdApp>
+    );
+
+    expect(screen.getByRole('tab', { name: /Automation/ })).toHaveAttribute(
+      'aria-selected',
+      'true'
+    );
+
+    fireEvent.change(screen.getByLabelText('Prompt template'), {
+      target: { value: 'Review this branch' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => expect(onUpdate).toHaveBeenCalledTimes(1));
+    expect(onUpdate.mock.calls[0][1]).toMatchObject({ label: 'Review' });
   });
 
   it('keeps automation edits open when persistence reports failure', async () => {
