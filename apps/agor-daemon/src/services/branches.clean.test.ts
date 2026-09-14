@@ -1,6 +1,15 @@
-import { BoardRepository, BranchRepository, RepoRepository, UsersRepository } from '@agor/core/db';
+import {
+  BoardRepository,
+  BranchRepository,
+  CapabilityPolicyRepository,
+  GroupRepository,
+  generateId,
+  RepoRepository,
+  UsersRepository,
+} from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
-import type { BranchID, TenantID } from '@agor/core/types';
+import type { BranchID, EffectiveBranchAccess, Params, TenantID } from '@agor/core/types';
+import { capabilityPolicyPresetCapabilities } from '@agor/core/types';
 import { beforeEach, expect, vi } from 'vitest';
 import { seedEnvironmentCommandBranch } from '../../../../packages/core/src/db/repositories/environment-commands.test-support';
 import {
@@ -10,6 +19,7 @@ import {
 import { markBranchArchiveDeleteAuthorized } from '../utils/branch-archive-delete-authorization';
 import { requestExecutor, spawnExecutor } from '../utils/spawn-executor';
 import { BranchesService } from './branches';
+import { setupBranchEffectiveAccessService } from './groups';
 
 vi.mock('../utils/spawn-executor', () => ({
   requestExecutor: vi.fn(),
@@ -21,11 +31,11 @@ beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(requestExecutor).mockResolvedValue({ success: true, data: { exists: true } });
 });
-function setup(db: ConstructorParameters<typeof BranchesService>[0]) {
+function setup(db: ConstructorParameters<typeof BranchesService>[0], allowSuperadmin = false) {
   const archiveBranchSessions = vi.fn().mockResolvedValue({ count: 0 });
   const emit = vi.fn();
   const app = {
-    get: () => ({ execution: {} }),
+    get: () => ({ execution: { allow_superadmin: allowSuperadmin } }),
     emit: vi.fn(),
     sessionTokenService: { generateCommandToken: vi.fn().mockResolvedValue('fixture-token') },
     service: () => ({ emit, archiveBranchSessions }),
@@ -190,3 +200,155 @@ test('archive removal uses the shared workspace worker and does not claim filesy
     workspace_operation: { status: 'accepted' },
   });
 });
+
+for (const binding of ['inherit', 'override'] as const) {
+  for (const authority of ['owner', 'direct', 'group', 'superadmin', 'superadmin-owner'] as const) {
+    test(`${binding} ${authority}: effective-access agrees with shared cleanup admission`, async ({
+      db,
+    }) => {
+      const { branch: seed, user: creator } = await seedEnvironmentCommandBranch(db);
+      const owner = await new UsersRepository(db).create({
+        email: `${generateId()}@example.test`,
+        role: authority === 'superadmin-owner' ? 'superadmin' : 'member',
+      });
+      const actor =
+        authority === 'owner' || authority === 'superadmin-owner'
+          ? owner
+          : await new UsersRepository(db).create({
+              email: `${generateId()}@example.test`,
+              role: authority === 'superadmin' ? 'superadmin' : 'member',
+            });
+      const board = await new BoardRepository(db).create({
+        name: 'Cleanup authority fixture',
+        created_by: owner.user_id,
+      });
+      const repository = new BranchRepository(db);
+      // Ownership is immutable today. Seed the historical transferred-owner state
+      // directly at creation: creator is NOT primary owner, and has no ACL entry.
+      const branch = await repository.create({
+        repo_id: seed.repo_id,
+        name: `owner-cleanup-${generateId()}`,
+        ref: seed.ref,
+        path: `/tmp/cleanup-owner-${generateId()}`,
+        filesystem_status: 'ready',
+        environment_instance: { status: 'stopped' },
+        created_by: creator.user_id,
+        branch_id: generateId() as BranchID,
+        branch_unique_id: seed.branch_unique_id + 100000,
+        primary_owner_user_id: owner.user_id,
+        board_id: board.board_id,
+        permission_binding: binding,
+      });
+      const policies = new CapabilityPolicyRepository(db);
+      if (authority === 'direct' || authority === 'group') {
+        const group = await new GroupRepository(db).create({
+          name: `Managers ${generateId()}`,
+          created_by: owner.user_id,
+        });
+        if (authority === 'group')
+          await new GroupRepository(db).addMember(group.group_id, actor.user_id, owner.user_id);
+        const entry = {
+          entry_id: generateId(),
+          principal:
+            authority === 'direct'
+              ? { principal_type: 'user' as const, user_id: actor.user_id }
+              : { principal_type: 'group' as const, group_id: group.group_id },
+          preset: 'manager' as const,
+          fs_access: 'write' as const,
+          capabilities: capabilityPolicyPresetCapabilities('branch_access', 'manager', 'write')!,
+        };
+        if (binding === 'inherit') {
+          const current = await policies.getBoardPolicies(board.board_id);
+          await policies.replaceBoardPolicies(
+            board.board_id,
+            {
+              ...current,
+              branch_template: {
+                ...current.branch_template,
+                access: {
+                  ...current.branch_template.access,
+                  sharing_mode: 'shared',
+                  entries: [entry],
+                },
+              },
+            },
+            owner.user_id
+          );
+        } else {
+          const current = await policies.getBranchPolicy(branch.branch_id);
+          await policies.replaceBranchPolicy(
+            branch.branch_id,
+            {
+              ...current,
+              override_config: {
+                ...current.override_config!,
+                access: {
+                  ...current.override_config!.access,
+                  sharing_mode: 'shared',
+                  entries: [entry],
+                },
+              },
+            },
+            owner.user_id
+          );
+        }
+      }
+      await new RepoRepository(db).update(branch.repo_id, {
+        cleanup_policy: { enabled: true, command: 'git clean -fdX', allow_branch_protection: true },
+      });
+      let accessService!: { find(params: Params): Promise<EffectiveBranchAccess> };
+      setupBranchEffectiveAccessService(
+        {
+          use: (_path: string, service: typeof accessService) => {
+            accessService = service;
+          },
+        } as unknown as Application,
+        repository,
+        { allowSuperadmin: true }
+      );
+      const preview = await accessService.find({
+        route: { id: branch.branch_id },
+        user: actor,
+      } as Params);
+      expect(preview).toMatchObject({ can: 'all', fs_access: 'write' });
+      expect((await repository.resolveUserAccess(branch, creator.user_id)).can).not.toBe('all');
+      if (authority === 'superadmin') {
+        await expect(
+          setup(db).service.clean({ branchId: branch.branch_id }, { user: actor, tenant })
+        ).rejects.toThrow('Forbidden');
+      }
+      const { service } = setup(db, true);
+      await expect(
+        service.clean({ branchId: branch.branch_id }, { user: creator, tenant })
+      ).rejects.toThrow('Forbidden');
+      // A successful preview is not an authorization token: fresh action admission
+      // must reject an intervening policy revocation.
+      if (authority === 'direct' || authority === 'group') {
+        await setTestBranchUserRole(
+          db,
+          branch.branch_id,
+          actor.user_id,
+          'viewer',
+          'read',
+          owner.user_id
+        );
+        await expect(
+          service.clean({ branchId: branch.branch_id }, { user: actor, tenant })
+        ).rejects.toThrow('Forbidden');
+        expect(spawnExecutor).not.toHaveBeenCalled();
+        await setTestBranchUserRole(
+          db,
+          branch.branch_id,
+          actor.user_id,
+          'manager',
+          'write',
+          owner.user_id
+        );
+      }
+      await expect(
+        service.clean({ branchId: branch.branch_id }, { user: actor, tenant })
+      ).resolves.toMatchObject({ status: 'accepted' });
+      expect(spawnExecutor).toHaveBeenCalledOnce();
+    });
+  }
+}

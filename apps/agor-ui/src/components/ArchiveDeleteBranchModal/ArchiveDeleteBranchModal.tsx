@@ -76,9 +76,14 @@ export const ArchiveDeleteBranchModal: React.FC<ArchiveDeleteBranchModalProps> =
         : 'cleaned'
       : filesystemAction;
 
+  const actionReason =
+    metadataAction === 'delete' || selectedFilesystemAction === 'deleted'
+      ? cleanup.workspaceReason
+      : selectedFilesystemAction === 'cleaned'
+        ? cleanup.reason
+        : cleanup.managementReason;
   const handleOk = () => {
-    if (metadataAction === 'archive' && selectedFilesystemAction === 'cleaned' && cleanup.reason)
-      return;
+    if (actionReason) return;
     onConfirm(
       metadataAction === 'delete'
         ? { metadataAction: 'delete', filesystemAction: 'deleted' }
@@ -88,7 +93,7 @@ export const ArchiveDeleteBranchModal: React.FC<ArchiveDeleteBranchModalProps> =
 
   // Determine button text and style based on metadata action
   const okText = metadataAction === 'archive' ? 'Archive Branch' : 'Delete Permanently';
-  const okButtonProps = metadataAction === 'delete' ? { danger: true } : {};
+  const okButtonProps = { danger: metadataAction === 'delete', disabled: !!actionReason };
 
   return (
     <Modal
@@ -125,6 +130,9 @@ export const ArchiveDeleteBranchModal: React.FC<ArchiveDeleteBranchModalProps> =
             }
           />
         )}
+        {metadataAction === 'delete' && actionReason && (
+          <Alert type="warning" showIcon title={actionReason} />
+        )}
         {/* Environment Warning */}
         {environmentRunning && (
           <Alert
@@ -151,7 +159,7 @@ export const ArchiveDeleteBranchModal: React.FC<ArchiveDeleteBranchModalProps> =
           <Radio.Group
             name={`${radioGroupId}-filesystem`}
             value={metadataAction === 'delete' ? 'deleted' : selectedFilesystemAction}
-            disabled={metadataAction === 'delete'}
+            disabled={metadataAction === 'delete' || !!cleanup.managementReason}
             onChange={(e) => {
               setSelectionTouched(true);
               setFilesystemAction(e.target.value);
@@ -175,7 +183,7 @@ export const ArchiveDeleteBranchModal: React.FC<ArchiveDeleteBranchModalProps> =
                   </Text>
                 </div>
               </Radio>
-              <Radio value="deleted">
+              <Radio value="deleted" disabled={!!cleanup.workspaceReason}>
                 <div>
                   <div>Delete completely</div>
                   <Text type="secondary" style={{ fontSize: 12 }}>
@@ -192,12 +200,16 @@ export const ArchiveDeleteBranchModal: React.FC<ArchiveDeleteBranchModalProps> =
             type="warning"
             showIcon
             title={
-              cleanup.policy?.enabled === false && selectedFilesystemAction === 'preserved'
+              !cleanup.workspaceReason &&
+              cleanup.policy?.enabled === false &&
+              selectedFilesystemAction === 'preserved'
                 ? 'Cleanup is disabled for this repository. Archiving will keep workspace files on disk.'
                 : cleanup.reason
             }
             description={
-              canConfigure ? undefined : 'A repository administrator can configure branch cleanup.'
+              canConfigure || cleanup.workspaceReason
+                ? undefined
+                : 'A repository administrator can configure branch cleanup.'
             }
             action={
               canConfigure &&
@@ -223,6 +235,7 @@ export const ArchiveDeleteBranchModal: React.FC<ArchiveDeleteBranchModalProps> =
           <Radio.Group
             name={`${radioGroupId}-metadata`}
             value={metadataAction}
+            disabled={!!cleanup.managementReason}
             onChange={(e) => setMetadataAction(e.target.value)}
           >
             <Space orientation="vertical">
@@ -234,7 +247,7 @@ export const ArchiveDeleteBranchModal: React.FC<ArchiveDeleteBranchModalProps> =
                   </Text>
                 </div>
               </Radio>
-              <Radio value="delete">
+              <Radio value="delete" disabled={!!cleanup.workspaceReason}>
                 <div>
                   <div>Delete permanently</div>
                   <Text type="secondary" style={{ fontSize: 12 }}>

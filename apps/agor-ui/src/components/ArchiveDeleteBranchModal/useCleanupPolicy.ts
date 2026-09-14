@@ -72,14 +72,30 @@ export function useCleanupPolicy(
       ? loaded
       : null;
   const policy = current ? resolveRepoCleanupPolicy(current.repo.cleanup_policy) : null;
+  const managementReason = !current
+    ? loadError
+      ? 'Branch permissions could not be loaded.'
+      : 'Loading branch permissions…'
+    : !(current.access.is_owner || current.access.can === 'all')
+      ? 'Branch Manager authority is required to archive or delete.'
+      : undefined;
+  const workspaceReason =
+    managementReason ??
+    (current?.access.fs_access !== 'write'
+      ? 'Writable workspace access is required to clean or delete files.'
+      : undefined);
   const reason = !current
     ? loadError
       ? 'Cleanup policy or permissions could not be loaded.'
       : 'Loading cleanup policy and permissions…'
-    : (getBranchCleanupBlockReason(policy, current.branch.cleanup_protected ?? false) ??
-      (!(current.access.is_owner || current.access.can === 'all') ||
-      current.access.fs_access !== 'write'
-        ? 'Cleanup requires Branch Manager authority and writable workspace access.'
-        : undefined));
-  return { policy, reason, repo: current?.repo, refresh: () => setRevision((value) => value + 1) };
+    : (workspaceReason ??
+      getBranchCleanupBlockReason(policy, current.branch.cleanup_protected ?? false));
+  return {
+    policy,
+    reason,
+    managementReason,
+    workspaceReason,
+    repo: current?.repo,
+    refresh: () => setRevision((value) => value + 1),
+  };
 }
