@@ -18,7 +18,7 @@ import type {
   DiffEnrichment,
   TranscriptTruncation,
 } from '@agor-live/client';
-import { Typography, theme } from 'antd';
+import { theme } from 'antd';
 import type React from 'react';
 import { shouldUseAnsiRendering } from '../../utils/ansi';
 import { toolResultToDisplayText } from '../../utils/toolResultToDisplayText';
@@ -26,6 +26,7 @@ import { CollapsibleText } from '../CollapsibleText';
 import { CollapsibleAnsiText } from '../CollapsibleText/CollapsibleAnsiText';
 import { ThemedSyntaxHighlighter } from '../ThemedSyntaxHighlighter';
 import { getToolRenderer } from './renderers';
+import { TranscriptTruncationNotice } from './TranscriptTruncationNotice';
 
 interface ToolUseBlock {
   transcript_truncation?: TranscriptTruncation;
@@ -67,18 +68,11 @@ export const ToolUseRenderer: React.FC<ToolUseRendererProps> = ({ toolUse, toolR
     ...Object.entries(toolResult?.transcript_truncation ?? {}),
   ];
   const isProjected = shortenedFields.length > 0;
-  const truncationNotice = isProjected ? (
-    <Typography.Paragraph type="secondary" role="note">
-      Transcript shortened:{' '}
-      {shortenedFields
-        .map(
-          ([field, size]) =>
-            `${field} (originally ${size.original_bytes.toLocaleString()} serialized bytes)`
-        )
-        .join(', ')}
-      . Some tool data was omitted or shortened; execution was not changed.
-    </Typography.Paragraph>
-  ) : null;
+  const truncationNotice = (
+    <TranscriptTruncationNotice
+      truncations={[toolUse.transcript_truncation, toolResult?.transcript_truncation]}
+    />
+  );
 
   // A partial input/result is not valid input to a specialized renderer. In
   // particular, do not recompute an apparently complete diff from a projection.
