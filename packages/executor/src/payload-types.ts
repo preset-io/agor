@@ -887,7 +887,8 @@ export const BranchDeletePayloadSchema = BasePayloadSchema.extend({
     branchesRoot: z.string(),
     repoPath: z.string(),
     branchHome: z.string(),
-    branchHomesRoot: z.string(),
+    /** Existing tenant storage anchor; branch-homes itself is lazily created. */
+    tenantDataRoot: z.string(),
     storageMode: z.enum(['clone', 'worktree']),
   }),
 });

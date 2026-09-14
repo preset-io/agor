@@ -295,7 +295,10 @@ using a shared execution home also block deletion until their owned storage is
 reconciled; the shared user home is never recursively removed. Remote Git refs and
 shared base-repository Git history are retained. Missing ownership metadata or an
 unavailable storage root blocks deletion rather than being treated as successful
-erasure. Repository deletion requires its branches to finish permanent deletion first.
+erasure. The lazy `branch-homes` directory may be absent before the first SDK
+launch; its tenant data root must still be available. Storage failures log a safe
+substep and error category, not raw filesystem paths or credentials.
+Repository deletion requires its branches to finish permanent deletion first.
 
 New teammate Knowledge bindings cannot target a branch under deletion, and a
 namespace cannot move into or out of that branch while deletion is fenced.

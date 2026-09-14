@@ -1,4 +1,4 @@
-import { basename, resolve } from 'node:path';
+import { basename, dirname, resolve } from 'node:path';
 import type {
   BranchDeletionAction,
   BranchDeletionExecutionResult,
@@ -169,6 +169,20 @@ export async function handleBranchDelete(
       throw error;
     }
   };
+  // Only controlled step labels and allowlisted filesystem codes reach logs.
+  // Never print an exception: Git/API errors may contain paths or credentials.
+  const storageStep = async <T>(step: string, work: () => Promise<T>): Promise<T> => {
+    try {
+      return await work();
+    } catch (error) {
+      const errno = (error as NodeJS.ErrnoException | null)?.code;
+      const code = ['ENOENT', 'EACCES', 'EPERM', 'EBUSY', 'ENOTDIR', 'EIO'].includes(errno ?? '')
+        ? errno
+        : 'verification_failed';
+      console.error(`[branch.delete] event=storage_failed step=${step} code=${code}`);
+      throw error;
+    }
+  };
   const result = await runBranchDeletion({
     claim: async () => {
       await report('claim');
@@ -177,35 +191,51 @@ export async function handleBranchDelete(
       await report('heartbeat');
     },
     removeStorage: async () => {
-      while ((await report('quiesce')).remaining) {
+      while ((await storageStep('quiesce', () => report('quiesce'))).remaining) {
         /* disable a bounded page of durable producers */
       }
 
       // Validate ALL roots before starting destructive work. The SDK home is
       // UUID-owned; never erase a user's shared provider/execution home.
-      if (basename(p.branchHome) !== p.branchId)
-        throw new Error('Branch SDK home identity mismatch');
-      const target = await resolveManagedBranchDeletionPath(p.branchPath, p.branchesRoot);
-      await resolveManagedBranchDeletionPath(p.branchHome, p.branchHomesRoot);
-      if (p.storageMode === 'worktree') {
-        const worktrees = await listGitWorktrees(p.repoPath);
-        if (resolve(p.repoPath) === target)
-          throw new Error('Cannot delete the shared base repository');
-        if (worktrees.some((item) => resolve(item.path) === target)) {
-          // Use the authoritative exact path, not basename matching or a .git
-          // pointer controlled by workspace contents.
-          await removeGitWorktree(p.repoPath, target);
+      const target = await storageStep('validate_workspace', () =>
+        resolveManagedBranchDeletionPath(p.branchPath, p.branchesRoot)
+      );
+      await storageStep('validate_sdk_home', async () => {
+        if (
+          basename(p.branchHome) !== p.branchId ||
+          dirname(dirname(resolve(p.branchHome))) !== resolve(p.tenantDataRoot)
+        )
+          throw new Error('Branch SDK home identity mismatch');
+        // SDK homes are lazy children of the tenant data root, not independent
+        // storage roots. Absence before the first SDK launch is normal. The
+        // tenant root must still exist; symlinked descendants remain forbidden.
+        await resolveManagedBranchDeletionPath(p.branchHome, p.tenantDataRoot);
+      });
+      await storageStep('worktree_registration', async () => {
+        if (p.storageMode === 'worktree') {
+          const worktrees = await listGitWorktrees(p.repoPath);
+          if (resolve(p.repoPath) === target)
+            throw new Error('Cannot delete the shared base repository');
+          if (worktrees.some((item) => resolve(item.path) === target)) {
+            // Use the authoritative exact path, not basename matching or a .git
+            // pointer controlled by workspace contents.
+            await removeGitWorktree(p.repoPath, target);
+          }
+          if ((await listGitWorktrees(p.repoPath)).some((item) => resolve(item.path) === target))
+            throw new Error('Worktree registration remains');
         }
-        if ((await listGitWorktrees(p.repoPath)).some((item) => resolve(item.path) === target))
-          throw new Error('Worktree registration remains');
-      }
-      await deleteBranchDirectory(p.branchPath, p.branchesRoot);
-      await deleteBranchDirectory(p.branchHome, p.branchHomesRoot);
+      });
+      await storageStep('remove_workspace', () =>
+        deleteBranchDirectory(p.branchPath, p.branchesRoot)
+      );
+      await storageStep('remove_sdk_home', () =>
+        deleteBranchDirectory(p.branchHome, p.tenantDataRoot)
+      );
       // Storage adapters retain lookup rows until their bytes are removed.
-      while ((await report('upload')).remaining) {
+      while ((await storageStep('remove_upload', () => report('upload'))).remaining) {
         /* one immutable upload per request */
       }
-      await report('storage');
+      await storageStep('verify_storage', () => report('storage'));
     },
     deleteDataBatch: () => report('data'),
     finalize: async () => {

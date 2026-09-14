@@ -85,13 +85,18 @@ describe('executor-owned branch deletion', () => {
 describe('concrete deletion command with disposable storage', () => {
   it.each([
     { unknownUpload: false, slow: false, malformedData: false },
+    { unknownUpload: false, slow: false, malformedData: false, missingHome: true },
+    { unknownUpload: false, slow: false, malformedData: false, missingHome: true, worktree: true },
+    { unknownUpload: false, slow: false, malformedData: false, unsafeHome: 'foreign' },
+    { unknownUpload: false, slow: false, malformedData: false, unsafeHome: 'symlink' },
+    { unknownUpload: false, slow: false, malformedData: false, unsafeHome: 'missing_root' },
     { unknownUpload: true, slow: false, malformedData: false },
     { unknownUpload: false, slow: true, malformedData: false },
     { unknownUpload: false, slow: false, malformedData: true },
   ])(
-    'removes owned storage; unknown upload=$unknownUpload, exceeds original token lifetime=$slow, malformed progress=$malformedData',
-    async ({ unknownUpload, slow, malformedData }) => {
-      const { mkdtemp, mkdir, writeFile, stat, rm } = await import('node:fs/promises');
+    'deletes only verified storage: %j',
+    async ({ unknownUpload, slow, malformedData, missingHome, unsafeHome, worktree }) => {
+      const { mkdtemp, mkdir, writeFile, stat, rm, symlink } = await import('node:fs/promises');
       const { tmpdir } = await import('node:os');
       const { join } = await import('node:path');
       const { handleBranchDelete } = await import('./branch-deletion');
@@ -100,13 +105,32 @@ describe('concrete deletion command with disposable storage', () => {
       const workspace = join(root, 'branches', 'victim');
       const home = join(root, 'homes', id);
       const neighbor = join(root, 'branches', 'neighbor');
+      const log = vi.spyOn(console, 'error').mockImplementation(() => {});
       const actions: string[] = [];
       let releaseQuiesce: (() => void) | undefined;
       let renewed = false;
       try {
-        for (const dir of [workspace, home, neighbor]) {
+        for (const dir of [workspace, ...(missingHome ? [] : [home]), neighbor]) {
           await mkdir(dir, { recursive: true });
           await writeFile(join(dir, 'fixture.txt'), 'fixture');
+        }
+        if (worktree) {
+          const { simpleGit } = await import('@agor/git');
+          const base = join(root, 'base');
+          await mkdir(base);
+          const git = simpleGit(base);
+          await git.init();
+          await git.addConfig('user.email', 'fixture@example.invalid');
+          await git.addConfig('user.name', 'Disposable fixture');
+          await writeFile(join(base, 'tracked'), 'fixture');
+          await git.add('.');
+          await git.commit('fixture');
+          await rm(workspace, { recursive: true });
+          await git.raw(['worktree', 'add', '-b', 'victim', workspace]);
+        }
+        if (unsafeHome === 'symlink') {
+          await rm(join(root, 'homes'), { recursive: true });
+          await symlink(join(root, 'branches'), join(root, 'homes'));
         }
         if (slow) vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'Date'] });
         vi.stubGlobal(
@@ -145,9 +169,13 @@ describe('concrete deletion command with disposable storage', () => {
               branchPath: workspace,
               branchesRoot: join(root, 'branches'),
               repoPath: join(root, 'base'),
-              branchHome: home,
-              branchHomesRoot: join(root, 'homes'),
-              storageMode: 'clone',
+              branchHome:
+                unsafeHome === 'missing_root' ? join(root, 'other-tenant', 'homes', id) : home,
+              tenantDataRoot:
+                unsafeHome === 'foreign' || unsafeHome === 'missing_root'
+                  ? join(root, 'other-tenant')
+                  : root,
+              storageMode: worktree ? 'worktree' : 'clone',
             },
           },
           {}
@@ -160,10 +188,28 @@ describe('concrete deletion command with disposable storage', () => {
           releaseQuiesce();
         }
         const result = await pending;
+        if (unsafeHome) {
+          expect(result.success).toBe(false);
+          expect((await stat(workspace)).isDirectory()).toBe(true);
+          expect((await stat(neighbor)).isDirectory()).toBe(true);
+          expect(actions).toEqual(['claim', 'quiesce', 'failed']);
+          expect(log).toHaveBeenCalledWith(
+            `[branch.delete] event=storage_failed step=validate_sdk_home code=${unsafeHome === 'missing_root' ? 'ENOENT' : 'verification_failed'}`
+          );
+          expect(JSON.stringify(log.mock.calls)).not.toContain(root);
+          return;
+        }
         expect(result.success).toBe(!unknownUpload && !malformedData);
         await expect(stat(workspace)).rejects.toMatchObject({ code: 'ENOENT' });
         await expect(stat(home)).rejects.toMatchObject({ code: 'ENOENT' });
         expect((await stat(neighbor)).isDirectory()).toBe(true);
+        if (worktree) {
+          const { listGitWorktrees } = await import('@agor/git');
+          expect(
+            (await listGitWorktrees(join(root, 'base'))).some((entry) => entry.path === workspace)
+          ).toBe(false);
+          expect(await stat(join(root, 'base', 'tracked'))).toBeDefined();
+        }
         expect(actions).toEqual(
           unknownUpload
             ? ['claim', 'quiesce', 'upload']
@@ -172,6 +218,7 @@ describe('concrete deletion command with disposable storage', () => {
               : ['claim', 'quiesce', 'upload', 'storage', 'data', 'finalize']
         );
       } finally {
+        log.mockRestore();
         vi.unstubAllGlobals();
         await rm(root, { recursive: true, force: true });
       }
