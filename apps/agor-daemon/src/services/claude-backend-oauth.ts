@@ -1,6 +1,7 @@
 /** Daemon-only grant adapter. No helper executor, native home, or plaintext cache. */
 import { isTenantAgenticToolEnabled, resolveProviderConnection } from '@agor/core/config';
 import {
+  assertTenantWritable,
   ClaudeOAuthAttemptRepository,
   type ProviderOAuthGrant,
   type ProviderOAuthTokenPair,
@@ -64,6 +65,18 @@ export class ClaudeBackendOAuth {
     return runWithTenantDatabaseScope(this.db, tenantId, work);
   }
 
+  private writeUnit<T>(tenantId: string, work: (db: TenantScopedDatabase) => Promise<T>) {
+    return this.unit(tenantId, async (db) => {
+      await assertTenantWritable(db, tenantId);
+      return work(db);
+    });
+  }
+
+  /** Also checked immediately before an already-claimed provider request. */
+  async assertWritable(tenantId: string): Promise<void> {
+    await this.writeUnit(tenantId, async () => {});
+  }
+
   /** No role can borrow another user's private grant. Callers derive this ID from auth. */
   async authorize(tenantId: string, userId: UserID, selected = false): Promise<void> {
     const capability = this.capability();
@@ -97,7 +110,7 @@ export class ClaudeBackendOAuth {
     pair: ProviderOAuthTokenPair,
     attemptId: string
   ): Promise<void> {
-    await this.unit(tenantId, async (db) => {
+    await this.writeUnit(tenantId, async (db) => {
       await new ClaudeOAuthAttemptRepository(db).lockUser(tenantId, userId);
       await new UsersRepository(db).getDiscoveryAuthorityProjectionForUpdate(userId);
       await this.authorize(tenantId, userId);
@@ -114,7 +127,7 @@ export class ClaudeBackendOAuth {
   }
 
   async retire(tenantId: string, userId: UserID, generation: number): Promise<void> {
-    await this.unit(tenantId, (db) =>
+    await this.writeUnit(tenantId, (db) =>
       new UserProviderOAuthGrantRepository(db).retire(tenantId, userId, generation)
     );
   }
@@ -126,31 +139,41 @@ export class ClaudeBackendOAuth {
   }
 
   /** Inventory/status never decrypts or refreshes. Saved is not provider validation. */
-  async status(tenantId: string, userId: UserID): Promise<{ usable: boolean; hint: string }> {
+  async status(
+    tenantId: string,
+    userId: UserID
+  ): Promise<{ saved: boolean; usable: boolean; hint: string }> {
     const row = await this.get(tenantId, userId);
     if (!row || row.state === 'disconnected')
-      return { usable: false, hint: 'No saved Claude login. Sign in again.' };
+      return { saved: false, usable: false, hint: 'No saved Claude login. Sign in again.' };
     if (
       row.binding_version !== 1 ||
       row.binding_fingerprint !== CLAUDE_OAUTH_BINDING ||
       !row.sealed_access_token ||
       !row.sealed_refresh_token
     ) {
-      return { usable: false, hint: 'Saved Claude login is unavailable. Reconnect in Settings.' };
+      return {
+        saved: true,
+        usable: false,
+        hint: 'Saved Claude login is unavailable. Reconnect in Settings.',
+      };
     }
     if (row.state === 'ambiguous' || row.state === 'reauth_required') {
       return {
+        saved: true,
         usable: false,
         hint: 'Claude login needs reconnection. A previous refresh may have been consumed.',
       };
     }
     if (!row.expires_at || row.expires_at.getTime() <= this.now()) {
       return {
+        saved: true,
         usable: false,
         hint: 'Saved Claude access token has expired. A new task can attempt a safe refresh.',
       };
     }
     return {
+      saved: true,
       usable: true,
       hint: 'Claude login is saved with the backend; provider validation has not been performed.',
     };
@@ -314,6 +337,7 @@ export class ClaudeBackendOAuth {
       );
     };
     const currentClaim = async ({ fence }: Claim) => {
+      await this.assertWritable(tenantId);
       await authorize();
       const row = await this.get(tenantId, userId);
       if (
@@ -328,7 +352,7 @@ export class ClaudeBackendOAuth {
     return refreshRotatingGrant<Claim, ProviderOAuthTokenPair, Awaited<ReturnType<typeof deliver>>>(
       {
         claim: () =>
-          this.unit(tenantId, async (db) => {
+          this.writeUnit(tenantId, async (db) => {
             await new ClaudeOAuthAttemptRepository(db).lockUser(tenantId, userId);
             await authorize();
             const result = await new UserProviderOAuthGrantRepository(db).claim(tenantId, userId, {
@@ -360,10 +384,12 @@ export class ClaudeBackendOAuth {
           return this.exchange(claim.row, refresh, () => currentClaim(claim));
         },
         commit: ({ fence }, pair) =>
-          this.unit(tenantId, async (db) => {
+          this.writeUnit(tenantId, async (db) => {
             await new ClaudeOAuthAttemptRepository(db).lockUser(tenantId, userId);
             await new UsersRepository(db).getDiscoveryAuthorityProjectionForUpdate(userId);
-            await authorize();
+            // A stopped task loses delivery, not ownership of this user's received rotation.
+            // Persist only under current personal source/policy/capability and exact claim.
+            await this.authorize(tenantId, userId, true);
             return new UserProviderOAuthGrantRepository(db).complete(
               tenantId,
               userId,
@@ -385,7 +411,7 @@ export class ClaudeBackendOAuth {
         classify: (error) =>
           error instanceof BackendRefreshFailure ? error.category : 'ambiguous',
         settle: ({ fence }, outcome, error) =>
-          this.unit(tenantId, async (db) => {
+          this.writeUnit(tenantId, async (db) => {
             await new UserProviderOAuthGrantRepository(db).finish(
               tenantId,
               userId,

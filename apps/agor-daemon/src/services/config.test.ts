@@ -38,9 +38,11 @@ import { ConfigService } from './config.js';
 describe('ConfigService.resolveApiKey', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    dbMocks.TaskRepository.mockImplementation(() => ({
-      assertRuntimeCredentialAuthority: dbMocks.assertRuntimeCredentialAuthority,
-    }));
+    dbMocks.TaskRepository.mockImplementation(
+      class {
+        assertRuntimeCredentialAuthority = dbMocks.assertRuntimeCredentialAuthority;
+      }
+    );
     configMocks.hasCrossReplicaExecutorCredentialLock.mockReturnValue(false);
     configMocks.hasExactUserExecutorCredentialHome.mockReturnValue(false);
     homeMocks.resolveExecutionCredentialHome.mockImplementation(async ({ userId }) => ({

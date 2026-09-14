@@ -45,6 +45,10 @@ describe('ClaudeOAuthSignIn', () => {
     );
     await waitFor(() => expect(check).toHaveBeenCalled());
     expect(onVerified).not.toHaveBeenCalled();
+    expect(await screen.findByRole('button', { name: 'Start over' })).toBeInTheDocument();
+    check.mockResolvedValueOnce({ status: 'unknown', managedOAuth: { saved: true, usable: true } });
+    fireEvent.click(screen.getByRole('button', { name: 'Retry confirmation' }));
+    await waitFor(() => expect(onVerified).toHaveBeenCalledTimes(1));
   });
 
   it('echoes the adopted attempt id when submitting the pasted code', async () => {

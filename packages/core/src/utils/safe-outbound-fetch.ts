@@ -341,20 +341,31 @@ async function requestOnce(
         });
         response.on('end', () => {
           if (settled) return;
-          settled = true;
-          cleanup();
-          const responseHeaders = new Headers();
-          for (const [name, value] of Object.entries(response.headers)) {
-            if (Array.isArray(value)) for (const item of value) responseHeaders.append(name, item);
-            else if (value != null) responseHeaders.set(name, value);
+          try {
+            const responseHeaders = new Headers();
+            for (const [name, value] of Object.entries(response.headers)) {
+              if (Array.isArray(value))
+                for (const item of value) responseHeaders.append(name, item);
+              else if (value != null) responseHeaders.set(name, value);
+            }
+            const status = response.statusCode ?? 500;
+            // Fetch forbids even an empty Buffer for these statuses. Construct
+            // before settling, so malformed response metadata cannot escape the
+            // callback and strand the promise after its abort listener is removed.
+            const result = new Response(
+              [204, 205, 304].includes(status) ? null : Buffer.concat(chunks),
+              {
+                status,
+                statusText: response.statusMessage,
+                headers: responseHeaders,
+              }
+            );
+            settled = true;
+            cleanup();
+            resolve(result);
+          } catch {
+            fail(new UnsafeOutboundUrlError('Outbound OAuth response is invalid'));
           }
-          resolve(
-            new Response(Buffer.concat(chunks), {
-              status: response.statusCode ?? 500,
-              statusText: response.statusMessage,
-              headers: responseHeaders,
-            })
-          );
         });
         response.on('error', fail);
       }

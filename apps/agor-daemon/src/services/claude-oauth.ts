@@ -680,6 +680,7 @@ export function createClaudeOAuthService(
                 maxResponseBytes: 64 * 1024,
                 redirect: 'error',
                 assertCurrent: async () => {
+                  await backend!.assertWritable(ctx.tenantId);
                   if (!(await claimRouteIsCurrent(ctx, claim)))
                     throw new BadRequest('Claude sign-in authority changed.');
                   const status = await store.status(ctx, claim.attemptId);

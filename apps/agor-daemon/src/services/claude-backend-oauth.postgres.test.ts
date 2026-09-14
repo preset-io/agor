@@ -1,30 +1,42 @@
-import { randomBytes, randomUUID } from 'node:crypto';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import {
+  acquireTenantWriteGate,
+  BranchRepository,
+  CapabilityPolicyRepository,
   ClaudeOAuthAttemptRepository,
   createDatabase,
   createTenantScopedDatabaseProxy,
+  ExecutorSessionTokenAuthorityRepository,
   executeRaw,
   initializeDatabase,
   openBoundSecretAsync,
   providerGrantSecretBinding,
   type RawDatabase,
+  RepoRepository,
+  releaseTenantWriteGate,
   runWithTenantContext,
   runWithTenantDatabaseScope,
+  SessionRepository,
   sql,
+  TaskRepository,
   type TenantScopeAwareDatabase,
   UserProviderOAuthGrantRepository,
   UsersRepository,
 } from '@agor/core/db';
+import { generateId } from '@agor/core/ids';
 import type { ClaudeOAuthCapability, UserID } from '@agor/core/types';
+import { type SessionID, type TaskID, TaskStatus } from '@agor/core/types';
+import jwt from 'jsonwebtoken';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { setTestBranchUserRole } from '../../../../packages/core/src/db/test-helpers.js';
 import { createClaudeAuthLogoutService } from './claude-auth-logout.js';
 import { ClaudeBackendOAuth } from './claude-backend-oauth.js';
 import { createClaudeUserCredentialPatchCoordinator } from './claude-credential-mutation.js';
-
 import { createClaudeOAuthService } from './claude-oauth.js';
 import { ClaudeOAuthAttemptAuthority } from './claude-oauth-attempt-authority.js';
 import { DurableClaudeOAuthAttemptStore } from './claude-oauth-attempt-store.js';
 import { CLAUDE_OAUTH_BINDING } from './claude-oauth-policy.js';
+import { ConfigService } from './config.js';
 import { UsersService } from './users.js';
 
 const providerMock = vi.hoisted(() => ({ request: vi.fn(), write: vi.fn(), remove: vi.fn() }));
@@ -287,6 +299,261 @@ describe.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
       }
     });
 
+    it.each([false, true])(
+      'binds a verified JWT to the real PG shared-session task actor; revoke after dispatch=%s',
+      async (revoke) => {
+        const actor = await seed();
+        const owner = await seed(actor.tenantId);
+        await save(actor);
+        await save(owner, 7200_000);
+        const runtime = await unit(dbA, actor.tenantId, async (db) => {
+          const repo = await new RepoRepository(db).create({
+            repo_id: generateId(),
+            slug: `oauth-${randomUUID()}`,
+            name: 'Synthetic OAuth',
+            repo_type: 'remote',
+            remote_url: 'https://example.invalid/repo',
+            local_path: '/tmp/synthetic',
+            default_branch: 'main',
+          });
+          const branch = await new BranchRepository(db).create({
+            branch_id: generateId(),
+            repo_id: repo.repo_id,
+            name: 'synthetic',
+            ref: 'main',
+            branch_unique_id: Math.floor(Math.random() * 100_000_000),
+            path: '/tmp/synthetic',
+            created_by: owner.userId,
+          });
+          await setTestBranchUserRole(
+            db,
+            branch.branch_id,
+            actor.userId,
+            'collaborator',
+            'write',
+            owner.userId
+          );
+          const policies = new CapabilityPolicyRepository(db);
+          await policies.setWorkspacePreferences({ session_sharing_enabled: true }, owner.userId);
+          const policy = await policies.getBranchPolicy(branch.branch_id);
+          await policies.replaceBranchPolicy(
+            branch.branch_id,
+            {
+              ...policy,
+              override_config: { ...policy.override_config!, allow_shared_session_prompts: true },
+            },
+            owner.userId
+          );
+          const session = await new SessionRepository(db).create({
+            session_id: generateId() as SessionID,
+            branch_id: branch.branch_id,
+            created_by: owner.userId,
+            agentic_tool: 'claude-code',
+            sdk_home_scope: 'branch',
+          });
+          const task = await new TaskRepository(db).create({
+            task_id: generateId() as TaskID,
+            session_id: session.session_id,
+            created_by: actor.userId,
+            full_prompt: 'Synthetic credential boundary',
+            status: TaskStatus.DISPATCHING,
+            message_range: {
+              start_index: 0,
+              end_index: 0,
+              start_timestamp: new Date().toISOString(),
+            },
+            git_state: { ref_at_start: 'main', sha_at_start: 'synthetic' },
+            tool_use_count: 0,
+          });
+          await new TaskRepository(db).bindExecutorLaunchAuthority(task.task_id);
+          await new TaskRepository(db).connectExecutor(task.task_id, new Date());
+          const bearer = jwt.sign(
+            {
+              type: 'executor-session',
+              purpose: 'executor-task',
+              tenant_id: actor.tenantId,
+              sub: actor.userId,
+              task_id: task.task_id,
+              session_id: session.session_id,
+              branch_id: branch.branch_id,
+            },
+            'synthetic-jwt-signing-key',
+            { expiresIn: 60 }
+          );
+          const fingerprint = createHash('sha256').update(bearer).digest('hex');
+          await new ExecutorSessionTokenAuthorityRepository(db).issue({
+            tenantId: actor.tenantId,
+            tokenFingerprint: fingerprint,
+            tokenType: 'executor-session',
+            purpose: 'executor-task',
+            sessionId: session.session_id,
+            taskId: task.task_id,
+            branchId: branch.branch_id,
+            userId: actor.userId,
+            createdAt: new Date(),
+            expiresAt: new Date(Date.now() + 60_000),
+            maxUses: -1,
+          });
+          return { task, bearer, fingerprint };
+        });
+        const request = vi.fn(async (_url, options) => {
+          await options.assertCurrent();
+          if (revoke)
+            await unit(dbB, actor.tenantId, (db) =>
+              new ExecutorSessionTokenAuthorityRepository(db).revoke(
+                runtime.fingerprint,
+                actor.tenantId
+              )
+            );
+          return success();
+        });
+        const backend = new ClaudeBackendOAuth(dbA, () => ready, { request, masterSecret });
+        const config = new ConfigService(dbA, {}, undefined, backend);
+        config.app = {
+          service: (name: string) => ({
+            get: (id: string, params: { tenant: { tenant_id: string } }) =>
+              unit(dbA, params.tenant.tenant_id, (db) =>
+                name === 'tasks'
+                  ? new TaskRepository(db).findById(id as TaskID)
+                  : new SessionRepository(db).findById(id as SessionID)
+              ),
+          }),
+        } as never;
+        const params = {
+          provider: 'rest',
+          authenticated: true,
+          tenant: { tenant_id: actor.tenantId },
+          user: { user_id: actor.userId },
+          authentication: {
+            strategy: 'jwt',
+            accessToken: runtime.bearer,
+            payload: jwt.verify(runtime.bearer, 'synthetic-jwt-signing-key'),
+          },
+        };
+        const input = {
+          taskId: runtime.task.task_id,
+          keyName: 'ANTHROPIC_API_KEY',
+          tool: 'claude-code' as const,
+        };
+        await expect(
+          config.resolveApiKey(input, {
+            ...params,
+            tenant: { tenant_id: 'foreign-tenant' },
+          } as never)
+        ).rejects.toThrow();
+        expect(request).not.toHaveBeenCalled();
+        const result = config.resolveApiKey(input, params as never);
+        if (revoke) await expect(result).rejects.toThrow();
+        else {
+          const delivered = await result;
+          expect(delivered.connection).toEqual({ CLAUDE_CODE_OAUTH_TOKEN: 'synthetic-access-new' });
+          expect(JSON.stringify(delivered)).not.toContain(refreshSentinel);
+          await unit(dbB, actor.tenantId, (db) =>
+            new ExecutorSessionTokenAuthorityRepository(db).revoke(
+              runtime.fingerprint,
+              actor.tenantId
+            )
+          );
+          await expect(config.resolveApiKey(input, params as never)).rejects.toThrow();
+        }
+        expect(request).toHaveBeenCalledTimes(1);
+        expect((await backend.get(owner.tenantId, owner.userId))?.refresh_generation).toBe(0);
+      }
+    );
+
+    it('recovers a lost driver acknowledgement after a real committed rotation without replay', async () => {
+      const subject = await seed();
+      await save(subject);
+      let loseAcknowledgement = false;
+      const originalComplete = UserProviderOAuthGrantRepository.prototype.complete;
+      const complete = vi
+        .spyOn(UserProviderOAuthGrantRepository.prototype, 'complete')
+        .mockImplementation(async function (...args) {
+          const result = await originalComplete.apply(this, args);
+          if (result) loseAcknowledgement = true;
+          return result;
+        });
+      const originalTransaction = rawA.transaction.bind(rawA);
+      const transaction = vi.spyOn(rawA, 'transaction').mockImplementation((async (
+        ...args: Parameters<typeof rawA.transaction>
+      ) => {
+        const result = await originalTransaction(...args);
+        if (loseAcknowledgement) {
+          loseAcknowledgement = false;
+          throw new Error('synthetic lost COMMIT acknowledgement');
+        }
+        return result;
+      }) as typeof rawA.transaction);
+      const request = vi.fn(async (_url, options) => {
+        await options.assertCurrent();
+        return success();
+      });
+      const backend = new ClaudeBackendOAuth(dbA, () => ready, { request, masterSecret });
+      try {
+        const result = await backend.resolve(subject.tenantId, subject.userId, async () => {});
+        expect(result.connection.CLAUDE_CODE_OAUTH_TOKEN).toBe('synthetic-access-new');
+        expect(request).toHaveBeenCalledTimes(1);
+        expect(await backend.get(subject.tenantId, subject.userId)).toMatchObject({
+          state: 'idle',
+          refresh_success_generation: 1,
+        });
+      } finally {
+        transaction.mockRestore();
+        complete.mockRestore();
+      }
+    });
+
+    it('does not claim or dispatch for a frozen tenant', async () => {
+      const subject = await seed();
+      const before = await save(subject);
+      const gate = await acquireTenantWriteGate(rawB, subject.tenantId, {
+        holder: 'synthetic-test',
+      });
+      const request = vi.fn();
+      const backend = new ClaudeBackendOAuth(dbA, () => ready, { request, masterSecret });
+      try {
+        await expect(
+          backend.resolve(subject.tenantId, subject.userId, async () => {})
+        ).rejects.toThrow();
+        expect(request).not.toHaveBeenCalled();
+        expect(await backend.get(subject.tenantId, subject.userId)).toEqual(before);
+      } finally {
+        await releaseTenantWriteGate(rawB, subject.tenantId, { generation: gate.generation });
+      }
+    });
+
+    it('leaves a post-dispatch freeze unresolved and never replays its rotating token', async () => {
+      const subject = await seed();
+      await save(subject);
+      let gate: Awaited<ReturnType<typeof acquireTenantWriteGate>>;
+      const request = vi.fn(async (_url, options) => {
+        await options.assertCurrent();
+        gate = await acquireTenantWriteGate(rawB, subject.tenantId, { holder: 'synthetic-test' });
+        return success();
+      });
+      const backend = new ClaudeBackendOAuth(dbA, () => ready, { request, masterSecret });
+      try {
+        await expect(
+          backend.resolve(subject.tenantId, subject.userId, async () => {})
+        ).rejects.toThrow();
+        expect((await backend.get(subject.tenantId, subject.userId))?.state).toBe('refreshing');
+        expect(request).toHaveBeenCalledTimes(1);
+      } finally {
+        await releaseTenantWriteGate(rawB, subject.tenantId, { generation: gate!.generation });
+      }
+      await unit(dbB, subject.tenantId, (db) =>
+        executeRaw(
+          db,
+          sql`UPDATE user_provider_oauth_grants SET refresh_claimed_at = CURRENT_TIMESTAMP - INTERVAL '3 minutes' WHERE user_id = ${subject.userId}`
+        )
+      );
+      await expect(
+        backend.resolve(subject.tenantId, subject.userId, async () => {})
+      ).rejects.toThrow();
+      expect((await backend.get(subject.tenantId, subject.userId))?.state).toBe('ambiguous');
+      expect(request).toHaveBeenCalledTimes(1);
+    });
+
     it('settles abandoned claims using database time without dispatch or theft', async () => {
       const subject = await seed();
       const row = await save(subject);
@@ -364,7 +631,13 @@ describe.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
         await rejection;
         expect(request).toHaveBeenCalledTimes(1);
         const current = await backend.get(subject.tenantId, subject.userId);
-        expect(current?.refresh_success_generation).toBe(0);
+        expect(current?.refresh_success_generation).toBe(mutation === 'task' ? 1 : 0);
+        if (mutation === 'task') {
+          expect(current?.state).toBe('idle');
+          const nextTask = await backend.resolve(subject.tenantId, subject.userId, async () => {});
+          expect(nextTask.connection.CLAUDE_CODE_OAUTH_TOKEN).toBe('synthetic-access-new');
+          expect(request).toHaveBeenCalledTimes(1);
+        }
         if (mutation === 'reconnect') expect(current?.state).toBe('idle');
         if (mutation === 'disconnect') expect(current?.sealed_refresh_token).toBeNull();
       }

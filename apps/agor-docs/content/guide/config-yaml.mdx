@@ -87,7 +87,10 @@ approval for offering third-party Claude login before enabling a real service.
 Refresh claims are database-fenced across replicas. An uncertain exchange is not
 retried with the possibly consumed refresh token; reconnect in Settings. The
 backend status poll reports saved/usable state without refreshing or spawning an
-auth helper, and does not claim successful provider validation.
+auth helper, and does not claim successful provider validation. A tenant write
+freeze refuses new refresh claims and dispatch. If a freeze begins after
+dispatch, the claim stays unresolved rather than writing through the freeze;
+after thaw it is conservatively settled as ambiguous, never replayed.
 
 Access is refreshed before SDK launch, not inside an already-running SDK. A long
 task or permission wait can outlive its token. After authentication expiry, use

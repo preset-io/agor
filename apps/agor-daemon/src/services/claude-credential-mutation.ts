@@ -12,7 +12,7 @@ import {
   type TenantScopedDatabase,
 } from '@agor/core/db';
 import { BadRequest } from '@agor/core/feathers';
-import type { Params, UserID } from '@agor/core/types';
+import { hasMinimumRole, type Params, type UserID } from '@agor/core/types';
 import {
   deleteClaudeAuthViaExecutor,
   fenceClaudeAuthCredential,
@@ -128,7 +128,8 @@ export function createClaudeUserCredentialPatchCoordinator(
     ) {
       return false;
     }
-    if (options.backend && Object.hasOwn(data, 'role')) return true;
+    if (options.backend && Object.hasOwn(data, 'role') && !hasMinimumRole(data.role, 'member'))
+      return true;
     if (Object.hasOwn(data.agentic_auth_methods ?? {}, 'claude-code')) return true;
     if (Object.hasOwn(data.agentic_credential_sources ?? {}, 'claude-code')) return true;
     const patch = data.agentic_tools?.['claude-code'];
@@ -237,6 +238,8 @@ export function createClaudeUserCredentialPatchCoordinator(
       // Trusted OAuth/logout metadata patches may bypass the recursive source
       // fence, but never a route change. A future internal caller carrying the
       // symbol must not gain a way around execution-home lifecycle authority.
+      // Eligible role changes still synchronize with refresh, without retiring the grant.
+      if (options.backend && Object.hasOwn(data, 'role')) return true;
       if (changesRoute(data)) return true;
       return changesSource(data, params);
     },

@@ -53,6 +53,7 @@ export const ClaudeOAuthSignIn = memo(function ClaudeOAuthSignIn({
   const [status, setStatus] = useState<ClaudeOAuthStatus>({ phase: 'idle' });
   const [starting, setStarting] = useState(false);
   const [backendConfirmed, setBackendConfirmed] = useState(false);
+  const [confirmationFailed, setConfirmationFailed] = useState(false);
   const [code, setCode] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
@@ -63,6 +64,7 @@ export const ClaudeOAuthSignIn = memo(function ClaudeOAuthSignIn({
   useEffect(() => {
     if (wasConnected.current && !connected) {
       setStatus({ phase: 'idle' });
+      setBackendConfirmed(false);
       setCode('');
       setSubmitError(null);
     }
@@ -91,6 +93,7 @@ export const ClaudeOAuthSignIn = memo(function ClaudeOAuthSignIn({
     () => {
       setStarting(false);
       setBackendConfirmed(false);
+      setConfirmationFailed(false);
       setSubmitting(false);
       setStatus({ phase: 'idle' });
       setCode('');
@@ -101,6 +104,8 @@ export const ClaudeOAuthSignIn = memo(function ClaudeOAuthSignIn({
   const requestLink = useCallback(async () => {
     if (!service || !operationAvailable) return;
     setStarting(true);
+    setBackendConfirmed(false);
+    setConfirmationFailed(false);
     setSubmitError(null);
     setCode('');
     try {
@@ -228,16 +233,33 @@ export const ClaudeOAuthSignIn = memo(function ClaudeOAuthSignIn({
         (await client!.service('check-auth').create({ tool: 'claude-code' })) as AuthCheckResult
     )
       .then((result) => {
-        if (!cancelled && isCurrent() && result.managedOAuth?.saved && result.managedOAuth.usable) {
+        if (cancelled || !isCurrent()) return;
+        if (result.managedOAuth?.saved && result.managedOAuth.usable) {
           setBackendConfirmed(true);
           onVerified();
+        } else {
+          setConfirmationFailed(true);
+          setStatus({
+            phase: 'error',
+            attemptId: status.attemptId,
+            hint: 'The current Claude login could not be confirmed. Reconnect to continue.',
+          });
         }
       })
-      .catch(() => undefined);
+      .catch(() => {
+        if (!cancelled && isCurrent()) {
+          setConfirmationFailed(true);
+          setStatus({
+            phase: 'error',
+            attemptId: status.attemptId,
+            hint: 'Could not confirm the saved Claude login. Recheck Settings or start over.',
+          });
+        }
+      });
     return () => {
       cancelled = true;
     };
-  }, [status.phase, onVerified, isCurrent, storage, client, run]);
+  }, [status.phase, status.attemptId, onVerified, isCurrent, storage, client, run]);
 
   if (starting || (status.phase === 'idle' && autoStart)) {
     return (
@@ -321,7 +343,11 @@ export const ClaudeOAuthSignIn = memo(function ClaudeOAuthSignIn({
     return (
       <Flex align="center" gap={8} style={{ padding: '12px 0' }}>
         <CheckCircleOutlined style={{ color: token.colorSuccess, fontSize: token.fontSizeSM }} />
-        <Text style={{ color: token.colorSuccess }}>{status.hint ?? 'Signed in with Claude.'}</Text>
+        <Text style={{ color: token.colorSuccess }}>
+          {storage === 'backend'
+            ? 'Claude login saved.'
+            : (status.hint ?? 'Signed in with Claude.')}
+        </Text>
       </Flex>
     );
   }
@@ -337,9 +363,19 @@ export const ClaudeOAuthSignIn = memo(function ClaudeOAuthSignIn({
           (status.phase === 'expired' ? 'The sign-in link expired.' : 'The Claude sign-in failed.')
         }
       />
-      <div>
+      <Space>
+        {confirmationFailed && storage === 'backend' && (
+          <Button
+            onClick={() => {
+              setConfirmationFailed(false);
+              setStatus({ phase: 'success', attemptId: status.attemptId });
+            }}
+          >
+            Retry confirmation
+          </Button>
+        )}
         <Button onClick={requestLink}>Start over</Button>
-      </div>
+      </Space>
     </Space>
   );
 });

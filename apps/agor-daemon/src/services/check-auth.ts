@@ -455,7 +455,7 @@ export function createCheckAuthService(
           // or false claim of a successful provider validation.
           return {
             ...(status.usable ? unknown(status.hint) : unauthenticated('none', status.hint)),
-            managedOAuth: { saved: true, usable: status.usable },
+            managedOAuth: { saved: status.saved, usable: status.usable },
           };
         } catch {
           return unknown(

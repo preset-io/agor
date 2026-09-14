@@ -717,16 +717,27 @@ export function OnboardingWizard({
     [managedClaudeLoginAvailable, user]
   );
 
+  const agentHasUsableStoredKey = useCallback(
+    (agent: AgenticToolName) =>
+      agentHasKey(agent) &&
+      !(
+        agent === 'claude-code' &&
+        user?.agentic_credential_sources?.['claude-code'] === 'managed_oauth' &&
+        llmAuthVerified['claude-code'] !== true
+      ),
+    [agentHasKey, user?.agentic_credential_sources?.['claude-code'], llmAuthVerified]
+  );
+
   const agentIsVerifiedConnected = useCallback(
     (agent: AgenticToolName): boolean => {
-      if (!agentHasKey(agent)) return false;
+      if (!agentHasUsableStoredKey(agent)) return false;
       // No auth checker available — trust the stored key
       if (!onCheckAuth) return true;
       const verified = llmAuthVerified[agent];
       if (verified === undefined) return false;
       return verified;
     },
-    [agentHasKey, llmAuthVerified, onCheckAuth]
+    [agentHasUsableStoredKey, llmAuthVerified, onCheckAuth]
   );
 
   // Verify stored keys when entering the LLM step.
@@ -786,12 +797,6 @@ export function OnboardingWizard({
         return selectedGoals.length > 0;
       case 'llm': {
         if (!selectedAgent) return false;
-        if (
-          selectedAgent === 'claude-code' &&
-          user?.agentic_credential_sources?.['claude-code'] === 'managed_oauth' &&
-          llmAuthVerified['claude-code'] !== true
-        )
-          return false;
         if (agentIsVerifiedConnected(selectedAgent)) return true;
         // Device sign-in and login-file import both complete inside their own
         // pane — no typed input to validate. They enable once the daemon
@@ -806,7 +811,8 @@ export function OnboardingWizard({
           return allowClaudeOAuthSignIn && llmAuthVerified['claude-code'] === true;
         }
         // Key stored, check still in progress — keep enabled so user isn't stuck
-        if (agentHasKey(selectedAgent) && llmAuthVerified[selectedAgent] === undefined) return true;
+        if (agentHasUsableStoredKey(selectedAgent) && llmAuthVerified[selectedAgent] === undefined)
+          return true;
         // Require a new key with valid format (stored key absent or broken)
         if (!sanitizeSecretValue(apiKey)) return false;
         // Subscription tokens have no fixed format — any non-empty string is
@@ -828,13 +834,12 @@ export function OnboardingWizard({
     selectedGoals,
     selectedAgent,
     agentIsVerifiedConnected,
-    agentHasKey,
+    agentHasUsableStoredKey,
     llmAuthVerified,
     apiKey,
     effectiveAuthMethod,
     allowClaudeOAuthSignIn,
     teammateName,
-    user?.agentic_credential_sources?.['claude-code'],
   ]);
 
   const disabledReason = useMemo((): string | null => {
@@ -858,7 +863,8 @@ export function OnboardingWizard({
             ? null
             : 'Complete Claude sign-in to continue';
         }
-        if (agentHasKey(selectedAgent) && llmAuthVerified[selectedAgent] === undefined) return null;
+        if (agentHasUsableStoredKey(selectedAgent) && llmAuthVerified[selectedAgent] === undefined)
+          return null;
         if (!sanitizeSecretValue(apiKey)) {
           return 'Enter your API key to continue';
         }
@@ -875,7 +881,7 @@ export function OnboardingWizard({
     selectedGoals,
     selectedAgent,
     agentIsVerifiedConnected,
-    agentHasKey,
+    agentHasUsableStoredKey,
     llmAuthVerified,
     apiKey,
     effectiveAuthMethod,
@@ -892,7 +898,7 @@ export function OnboardingWizard({
       case 'llm': {
         if (
           selectedAgent &&
-          agentHasKey(selectedAgent) &&
+          agentHasUsableStoredKey(selectedAgent) &&
           llmAuthVerified[selectedAgent] === undefined
         )
           return 'Checking…';
@@ -923,7 +929,7 @@ export function OnboardingWizard({
     completing,
     completionSlow,
     selectedAgent,
-    agentHasKey,
+    agentHasUsableStoredKey,
     llmAuthVerified,
     agentIsVerifiedConnected,
     effectiveAuthMethod,
@@ -1072,13 +1078,13 @@ export function OnboardingWizard({
     // and completion reads a non-null agent as "there is a model to run on" —
     // which would bootstrap the teammate's first session with no credentials.
     // Clear it unless the provider is genuinely configured.
-    if (currentStep === 'llm' && selectedAgent && !agentHasKey(selectedAgent)) {
+    if (currentStep === 'llm' && selectedAgent && !agentHasUsableStoredKey(selectedAgent)) {
       setSelectedAgent(null);
       setApiKey('');
       setLlmError(null);
     }
     goToStep(STEPS[stepIndex + 1]);
-  }, [currentStep, stepIndex, goToStep, selectedAgent, agentHasKey, selectedGoals]);
+  }, [currentStep, stepIndex, goToStep, selectedAgent, agentHasUsableStoredKey, selectedGoals]);
 
   const handleDismiss = useCallback(() => {
     if (!onDismiss) return;
@@ -1126,7 +1132,10 @@ export function OnboardingWizard({
           return;
         }
         // Key stored, auth check still running — proceed optimistically
-        if (agentHasKey(selectedAgent) && llmAuthVerified[selectedAgent] === undefined) {
+        if (
+          agentHasUsableStoredKey(selectedAgent) &&
+          llmAuthVerified[selectedAgent] === undefined
+        ) {
           goToStep('tools');
           return;
         }
@@ -1294,7 +1303,7 @@ export function OnboardingWizard({
     ensureBoard,
     selectedAgent,
     agentIsVerifiedConnected,
-    agentHasKey,
+    agentHasUsableStoredKey,
     llmAuthVerified,
     user,
     apiKey,
