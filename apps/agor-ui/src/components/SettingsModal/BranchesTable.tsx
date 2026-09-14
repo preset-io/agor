@@ -16,19 +16,7 @@ import {
   PlusOutlined,
   RobotOutlined,
 } from '@ant-design/icons';
-import {
-  Button,
-  Empty,
-  Form,
-  Input,
-  Modal,
-  Select,
-  Space,
-  Table,
-  Tooltip,
-  Typography,
-  theme,
-} from 'antd';
+import { Button, Empty, Form, Input, Select, Space, Table, Tooltip, Typography, theme } from 'antd';
 import { type Key, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { BranchStorageConfig } from '@/utils/branchStorage';
 import { normalizeBranchStorageMode } from '@/utils/branchStorage';
@@ -41,6 +29,7 @@ import { HighlightMatch } from '../HighlightMatch';
 import { renderEnvCell } from './BranchEnvColumn';
 import { ListPanelHeader } from './panelPrimitives';
 import { SettingsActionGroup } from './SettingsActionGroup';
+import { DrillInFrame, useSettingsDrill } from './SettingsDrill';
 
 interface BranchesTableProps {
   client: AgorClient | null;
@@ -108,7 +97,10 @@ export const BranchesTable: React.FC<BranchesTableProps> = ({
     },
     [onClose, navigation]
   );
-  const [createModalOpen, setCreateModalOpen] = useState(false);
+  // "Create Branch" opens in place as the section's drill-in (like branch edit
+  // and teammate create) rather than stacking a Modal on top of Settings.
+  const { drill, openDrill, closeDrill } = useSettingsDrill();
+  const createModalOpen = drill?.kind === 'branches' && drill.mode === 'create';
   const [form] = Form.useForm();
   const [useSameBranchName, setUseSameBranchName] = useState(true);
   const [selectedRepoId, setSelectedRepoId] = useState<string | null>(null);
@@ -298,7 +290,7 @@ export const BranchesTable: React.FC<BranchesTableProps> = ({
         storage_mode: storageMode,
         ...(cloneDepth !== undefined ? { clone_depth: cloneDepth } : {}),
       });
-      setCreateModalOpen(false);
+      closeDrill();
       form.resetFields();
       setUseSameBranchName(true);
       setSelectedRepoId(null);
@@ -308,7 +300,7 @@ export const BranchesTable: React.FC<BranchesTableProps> = ({
   };
 
   const handleCancel = () => {
-    setCreateModalOpen(false);
+    closeDrill();
     form.resetFields();
     setUseSameBranchName(true);
     setSelectedRepoId(null);
@@ -557,6 +549,38 @@ export const BranchesTable: React.FC<BranchesTableProps> = ({
   }, [archiveFilter, archivedBranches, repoById, searchTerm, branchById]);
   const hasAnyBranches = branchById.size > 0 || archivedBranches.length > 0;
 
+  // "Create Branch" renders in place (drill-in) instead of a stacked Modal,
+  // matching branch edit (embedded BranchModal) and teammate create.
+  if (createModalOpen) {
+    return (
+      <DrillInFrame
+        title="Create Branch"
+        saveLabel="Create"
+        saveDisabled={!isFormValid}
+        onSave={handleCreate}
+        onBack={handleCancel}
+      >
+        <div style={{ maxWidth: 640 }}>
+          <Form form={form} layout="vertical" onFieldsChange={validateForm}>
+            <BranchFormFields
+              repoById={repoById}
+              boardById={boardById}
+              selectedRepoId={selectedRepoId}
+              onRepoChange={handleRepoChange}
+              defaultBranch={getDefaultBranch()}
+              showBoardSelector={true}
+              requireBoard
+              onFormChange={validateForm}
+              useSameBranchName={useSameBranchName}
+              onUseSameBranchNameChange={setUseSameBranchName}
+              branchStorageConfig={branchStorageConfig}
+            />
+          </Form>
+        </div>
+      </DrillInFrame>
+    );
+  }
+
   return (
     <div>
       <ListPanelHeader
@@ -589,7 +613,7 @@ export const BranchesTable: React.FC<BranchesTableProps> = ({
           <Button
             type="primary"
             icon={<PlusOutlined />}
-            onClick={() => setCreateModalOpen(true)}
+            onClick={() => openDrill({ kind: 'branches', mode: 'create' })}
             disabled={repos.length === 0}
           >
             Create Branch
@@ -640,33 +664,6 @@ export const BranchesTable: React.FC<BranchesTableProps> = ({
           size="small"
         />
       )}
-
-      <Modal
-        title="Create Branch"
-        open={createModalOpen}
-        onOk={handleCreate}
-        onCancel={handleCancel}
-        okText="Create"
-        okButtonProps={{
-          disabled: !isFormValid,
-        }}
-      >
-        <Form form={form} layout="vertical" onFieldsChange={validateForm}>
-          <BranchFormFields
-            repoById={repoById}
-            boardById={boardById}
-            selectedRepoId={selectedRepoId}
-            onRepoChange={handleRepoChange}
-            defaultBranch={getDefaultBranch()}
-            showBoardSelector={true}
-            requireBoard
-            onFormChange={validateForm}
-            useSameBranchName={useSameBranchName}
-            onUseSameBranchNameChange={setUseSameBranchName}
-            branchStorageConfig={branchStorageConfig}
-          />
-        </Form>
-      </Modal>
 
       {selectedBranch && (
         <ArchiveDeleteBranchModal
