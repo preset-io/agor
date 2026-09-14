@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { ExecutionCredentialHome } from './credential-home-identity.js';
 
 const configMocks = vi.hoisted(() => ({
   hasCrossReplicaExecutorCredentialLock: vi.fn(() => false),
@@ -8,13 +9,15 @@ const configMocks = vi.hoisted(() => ({
 }));
 
 const homeMocks = vi.hoisted(() => ({
-  resolveExecutionCredentialHome: vi.fn(async ({ userId }: { userId: string }) => ({
-    delegatedHomeKey: null,
-    homeStore: `/homes/${userId}`,
-    homeStoreSource: 'canonical',
-  })),
+  resolveExecutionCredentialHome: vi.fn(
+    async ({ userId }: { userId: string }): Promise<ExecutionCredentialHome> => ({
+      delegatedHomeKey: null,
+      homeStore: `/homes/${userId}`,
+      homeStoreSource: 'canonical',
+    })
+  ),
   sameExecutionCredentialHome: vi.fn(
-    (a: { homeStore: string }, b: { homeStore: string }) => a.homeStore === b.homeStore
+    (a: ExecutionCredentialHome, b: ExecutionCredentialHome) => a.homeStore === b.homeStore
   ),
 }));
 
@@ -24,7 +27,11 @@ const dbMocks = vi.hoisted(() => ({
   ),
   UsersRepository: vi.fn(),
   assertRuntimeCredentialAuthority: vi.fn(async () => {}),
-  TaskRepository: vi.fn(),
+  TaskRepository: vi.fn(
+    class {
+      async assertRuntimeCredentialAuthority() {}
+    }
+  ),
 }));
 
 vi.mock('@agor/core/config', () => configMocks);
@@ -938,7 +945,7 @@ describe('ConfigService.resolveApiKey', () => {
       {
         resolve: vi.fn(async () => ({
           connection: { CLAUDE_CODE_OAUTH_TOKEN: 'sk-ant-oat01-ha-managed' },
-          useNativeAuth: false,
+          useNativeAuth: false as const,
         })),
       }
     );

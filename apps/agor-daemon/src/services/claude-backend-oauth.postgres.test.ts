@@ -412,7 +412,7 @@ describe.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
         config.app = {
           service: (name: string) => ({
             get: (id: string, params: { tenant: { tenant_id: string } }) =>
-              unit(dbA, params.tenant.tenant_id, (db) =>
+              unit(dbA, params.tenant.tenant_id, async (db) =>
                 name === 'tasks'
                   ? new TaskRepository(db).findById(id as TaskID)
                   : new SessionRepository(db).findById(id as SessionID)
@@ -468,7 +468,7 @@ describe.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
       const originalComplete = UserProviderOAuthGrantRepository.prototype.complete;
       const complete = vi
         .spyOn(UserProviderOAuthGrantRepository.prototype, 'complete')
-        .mockImplementation(async function (...args) {
+        .mockImplementation(async function (this: UserProviderOAuthGrantRepository, ...args) {
           const result = await originalComplete.apply(this, args);
           if (result) loseAcknowledgement = true;
           return result;
@@ -477,7 +477,7 @@ describe.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
       const transaction = vi.spyOn(rawA, 'transaction').mockImplementation((async (
         ...args: Parameters<typeof rawA.transaction>
       ) => {
-        const result = await originalTransaction(...args);
+        const result = await Reflect.apply(originalTransaction, rawA, args);
         if (loseAcknowledgement) {
           loseAcknowledgement = false;
           throw new Error('synthetic lost COMMIT acknowledgement');
