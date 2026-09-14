@@ -1,0 +1,219 @@
+import { generateId } from '@agor/core/ids/browser';
+import {
+  type ContentBlock,
+  type Message,
+  MessageRole,
+  type Task,
+  TaskStatus,
+} from '@agor-live/client';
+import { fireEvent, render, screen, within } from '@testing-library/react';
+import { useState } from 'react';
+import { describe, expect, it } from 'vitest';
+import { projectMessageData } from '../../../../../packages/executor/src/services/tool-result-truncator';
+import { groupMessagesIntoBlocks, TaskBlock } from './TaskBlock';
+
+const timestamp = '2026-09-14T00:00:00.000Z';
+const summary = 'Synthetic short summary';
+const persist = (message: Message): Message =>
+  JSON.parse(JSON.stringify(projectMessageData(message, 800_000)));
+
+function fixture(content: string | ContentBlock[], extra: Partial<ContentBlock> = {}) {
+  const task: Task = {
+    task_id: generateId(),
+    session_id: generateId(),
+    created_by: '',
+    full_prompt: 'Synthetic projection task',
+    status: TaskStatus.COMPLETED,
+    created_at: timestamp,
+    tool_use_count: 1,
+    message_range: { start_index: 0, end_index: 2, start_timestamp: timestamp },
+    git_state: { ref_at_start: 'synthetic', sha_at_start: 'unknown' },
+  };
+  const call: Message = {
+    message_id: generateId(),
+    session_id: task.session_id,
+    task_id: task.task_id,
+    type: 'assistant',
+    role: MessageRole.ASSISTANT,
+    index: 0,
+    timestamp,
+    content_preview: '',
+    content: [
+      { type: 'tool_use', id: 'task-call', name: 'Task', input: { description: 'Synthetic Task' } },
+    ],
+    tool_uses: [{ id: 'task-call', name: 'Task', input: { description: 'Synthetic Task' } }],
+  };
+  const result = persist({
+    ...call,
+    message_id: generateId(),
+    type: 'user',
+    role: MessageRole.USER,
+    index: 2,
+    tool_uses: undefined,
+    content: [{ type: 'tool_result', tool_use_id: 'task-call', content, ...extra }],
+  });
+  return { task, call, result };
+}
+
+function Harness({
+  task,
+  messages,
+  initiallyExpanded = true,
+}: {
+  task: Task;
+  messages: Message[];
+  initiallyExpanded?: boolean;
+}) {
+  const [expanded, setExpanded] = useState(initiallyExpanded);
+  return (
+    <TaskBlock
+      task={task}
+      taskMessages={messages}
+      taskMessagesLoaded
+      isExpanded={expanded}
+      onExpandChange={(_, value) => setExpanded(value)}
+      onLoadTaskMessages={() => {}}
+      onUnloadTaskMessages={() => {}}
+    />
+  );
+}
+
+describe('TaskBlock persisted result projections (production grouping and renderers)', () => {
+  it.each(['array', 'string'] as const)(
+    'discloses a projected Task %s result with the thought collapsed and expanded',
+    (kind) => {
+      const content =
+        kind === 'array'
+          ? [
+              { type: 'text' as const, text: summary },
+              { type: 'text' as const, text: 'x'.repeat(810_000) },
+            ]
+          : `${summary}\n${'x'.repeat(810_000)}`;
+      const { task, call, result } = fixture(content);
+      const originalBytes = Buffer.byteLength(JSON.stringify(content));
+      expect(result.content).toEqual([
+        expect.objectContaining({
+          tool_use_id: 'task-call',
+          transcript_truncation: { content: { original_bytes: originalBytes } },
+        }),
+      ]);
+      // The parent Task call is a MessageBlock; its correlated result is NOT.
+      expect(groupMessagesIntoBlocks([call, result])).toEqual([
+        { type: 'message', message: call },
+        { type: 'agent-chain', messages: [result] },
+      ]);
+      if (kind === 'array') {
+        expect((result.content as ContentBlock[])[0].content).toEqual([
+          content[0],
+          expect.stringContaining('more items truncated'),
+        ]);
+      }
+      render(<Harness task={task} messages={[call, result]} initiallyExpanded={false} />);
+      expect(screen.queryByRole('note')).not.toBeInTheDocument();
+      fireEvent.keyDown(screen.getByRole('button', { expanded: false }), {
+        key: 'Enter',
+        keyCode: 13,
+      });
+      expect(screen.getByText(/Task \(Task\)/)).toBeVisible();
+      const chain = screen.getByRole('note').closest('[data-conversation-block]')! as HTMLElement;
+      const assertNotice = () => {
+        expect(screen.getAllByRole('note')).toHaveLength(1);
+        expect(within(chain).getByRole('note')).toBeVisible();
+        expect(screen.getByRole('note')).toHaveTextContent(
+          `content (originally ${originalBytes.toLocaleString()} serialized bytes)`
+        );
+        expect(screen.getByRole('note')).toHaveTextContent('execution was not changed');
+      };
+      assertNotice();
+      fireEvent.click(within(chain).getByText('Thinking', { exact: true }));
+      assertNotice();
+      expect(within(chain).getAllByText((text) => text.startsWith(summary)).length).toBeGreaterThan(
+        0
+      );
+      fireEvent.click(within(chain).getByText('Thinking', { exact: true }));
+      assertNotice();
+      // Closing the whole chain hides both its result and notice; reopening restores one.
+      fireEvent.click(within(chain).getByText('1 thoughts'));
+      expect(screen.queryByRole('note')).not.toBeInTheDocument();
+      fireEvent.click(within(chain).getByText('1 thoughts'));
+      assertNotice();
+    }
+  );
+
+  it('retains a metadata-only Task result when enrichment was omitted and text is empty', () => {
+    const diff = {
+      structuredPatch: [
+        { oldStart: 1, oldLines: 1, newStart: 1, newLines: 1, lines: ['x'.repeat(810_000)] },
+      ],
+    };
+    const { task, call, result } = fixture('', { diff });
+    render(<Harness task={task} messages={[call, result]} />);
+    expect(screen.getByRole('note')).toHaveTextContent(
+      `diff (originally ${Buffer.byteLength(JSON.stringify(diff)).toLocaleString()} serialized bytes)`
+    );
+    expect(screen.getByRole('note')).not.toHaveTextContent('content (originally');
+  });
+
+  it('does not disclose shortening for an intact Task result', () => {
+    const { task, call, result } = fixture([{ type: 'text', text: summary }]);
+    render(<Harness task={task} messages={[call, result]} />);
+    fireEvent.click(screen.getByText('Thinking', { exact: true }));
+    expect(screen.getAllByText(summary).length).toBeGreaterThan(0);
+    expect(screen.queryByRole('note')).not.toBeInTheDocument();
+  });
+
+  it('keeps nested paired-result disclosure with its tool renderer, without a second thought notice', () => {
+    const { task, call, result } = fixture(summary);
+    const nestedCall: Message = {
+      ...call,
+      message_id: generateId(),
+      index: 1,
+      parent_tool_use_id: 'task-call',
+      content: [
+        {
+          type: 'tool_use',
+          id: 'nested-call',
+          name: 'Read',
+          input: { file_path: 'synthetic.txt' },
+        },
+      ],
+      tool_uses: [{ id: 'nested-call', name: 'Read', input: { file_path: 'synthetic.txt' } }],
+    };
+    const nestedResult = persist({
+      ...nestedCall,
+      message_id: generateId(),
+      type: 'user',
+      role: MessageRole.USER,
+      tool_uses: undefined,
+      content: [
+        {
+          type: 'tool_result',
+          tool_use_id: 'nested-call',
+          content: [
+            { type: 'text', text: 'Nested synthetic summary' },
+            { type: 'text', text: 'x'.repeat(810_000) },
+          ],
+          is_error: true,
+        },
+      ],
+    });
+    expect(groupMessagesIntoBlocks([call, nestedCall, nestedResult, result])).toEqual([
+      { type: 'message', message: call },
+      { type: 'agent-chain', messages: [nestedCall, nestedResult, result] },
+    ]);
+    render(<Harness task={task} messages={[call, nestedCall, nestedResult, result]} />);
+    expect(screen.queryByRole('note')).not.toBeInTheDocument();
+    // Do not expose a second shortened result preview while its owning tool
+    // (and notice) is collapsed. The intact outer Task thought remains.
+    expect(screen.queryByText('Nested synthetic summary')).not.toBeInTheDocument();
+    expect(screen.getAllByText('Thinking', { exact: true })).toHaveLength(1);
+    fireEvent.click(screen.getByText('Read', { exact: true }));
+    expect(screen.getAllByRole('note')).toHaveLength(1);
+    expect(screen.getAllByText('Nested synthetic summary')).toHaveLength(1);
+    expect(screen.getByRole('note')).toHaveTextContent('Transcript shortened: content');
+    for (const thought of screen.getAllByText('Thinking', { exact: true }))
+      fireEvent.click(thought);
+    expect(screen.getAllByRole('note')).toHaveLength(1);
+    expect(screen.getByText('synthetic.txt', { exact: true })).toBeVisible();
+  });
+});
