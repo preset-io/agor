@@ -35,7 +35,7 @@ export const MobileSessionsPage: React.FC<MobileSessionsPageProps> = ({
 
   return (
     <div style={{ height: '100%', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
-      <MobileHeader title="Sessions" />
+      <MobileHeader title="Sessions" onSearch={() => navigate('/m/search')} />
       <div style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
         {sessions.length === 0 ? (
           <div

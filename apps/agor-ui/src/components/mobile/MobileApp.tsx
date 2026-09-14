@@ -36,6 +36,7 @@ import { resolveAskPrimaryTarget } from './askPrimary';
 import { MobileBoardPage } from './MobileBoardPage';
 import { MobileCommentsPage } from './MobileCommentsPage';
 import { MobileMoreSheet } from './MobileMoreSheet';
+import { MobileSearchPage } from './MobileSearchPage';
 import { MobileSessionsPage } from './MobileSessionsPage';
 import { type MobileTab, MobileTabBar } from './MobileTabBar';
 import { SessionPage } from './SessionPage';
@@ -311,6 +312,15 @@ export const MobileApp: React.FC<MobileAppProps> = ({
                 sessionById={sessionById}
                 branchById={branchById}
                 currentUser={user}
+              />
+            }
+          />
+          <Route
+            path="search"
+            element={
+              <MobileSearchPage
+                currentUser={user}
+                onOpenWorkspaceSettings={onOpenWorkspaceSettings}
               />
             }
           />
