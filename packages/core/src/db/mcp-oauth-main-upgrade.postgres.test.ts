@@ -55,6 +55,7 @@ describe.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
           '0105_mcp_oauth_grant_attribution',
           '0107_branch_permanent_deletion',
           '0108_branch_deletion_recovery',
+          '0109_user_provider_oauth_grants',
         ],
         dbAheadOfBinary: false,
       });

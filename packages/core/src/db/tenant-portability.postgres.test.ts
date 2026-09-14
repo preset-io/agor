@@ -778,6 +778,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('tenant portability (Postgr
       'mcp_oauth_client_registrations',
       'mcp_oauth_pending_flows',
       'user_mcp_oauth_tokens',
+      'user_provider_oauth_grants',
     ]);
     expect(manifest.database.identity.tenantTables).not.toContain('codex_device_auth_attempts');
     expect(manifest.database.identity.tenantTables).not.toContain('claude_oauth_attempts');
@@ -804,6 +805,10 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('tenant portability (Postgr
     );
     expect(manifest.database.tables.map((table) => table.name)).not.toContain(
       'user_mcp_oauth_tokens'
+    );
+    expect(manifest.database.identity.tenantTables).not.toContain('user_provider_oauth_grants');
+    expect(manifest.database.tables.map((table) => table.name)).not.toContain(
+      'user_provider_oauth_grants'
     );
     expect(manifest.database.identity.tenantTables).not.toContain('github_install_states');
     expect(manifest.database.tables.map((table) => table.name)).not.toContain(

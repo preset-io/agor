@@ -420,10 +420,11 @@ const STRICT_TENANT_POLICY_EXPRESSION =
 //
 const MCP_OAUTH_PENDING_TENANT_POLICY_EXPRESSION =
   "(coalesce(current_setting('agor.system_scope',true),'')='')and(tenant_id=coalesce(nullif(current_setting('agor.tenant_id',true),''),'default'))";
-// Claude has no unauthenticated callback. Its ordinary tenant arm additionally
+// Claude attempts and backend provider grants have no unauthenticated callback.
+// Their ordinary tenant arm additionally
 // requires an explicit tenant GUC, including for `default`; the system-scope
 // guard prevents the permissive maintenance policy from being ORed with it.
-const CLAUDE_OAUTH_ATTEMPT_TENANT_POLICY_EXPRESSION =
+const STRICT_SYSTEM_GUARDED_TENANT_POLICY_EXPRESSION =
   "(coalesce(current_setting('agor.system_scope',true),'')='')and(tenant_id=nullif(current_setting('agor.tenant_id',true),''))";
 
 function stripOuterParentheses(expression: string): string {
@@ -469,8 +470,9 @@ function assertSupportedPolicies(relation: CatalogRelation): void {
     relation.tableName === 'mcp_oauth_client_registrations' ||
     relation.tableName === 'codex_device_auth_attempts'
       ? MCP_OAUTH_PENDING_TENANT_POLICY_EXPRESSION
-      : relation.tableName === 'claude_oauth_attempts'
-        ? CLAUDE_OAUTH_ATTEMPT_TENANT_POLICY_EXPRESSION
+      : relation.tableName === 'claude_oauth_attempts' ||
+          relation.tableName === 'user_provider_oauth_grants'
+        ? STRICT_SYSTEM_GUARDED_TENANT_POLICY_EXPRESSION
         : relation.tableName === 'github_install_states'
           ? STRICT_TENANT_POLICY_EXPRESSION
           : CANONICAL_TENANT_POLICY_EXPRESSION;

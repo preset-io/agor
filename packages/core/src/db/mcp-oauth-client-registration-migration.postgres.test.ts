@@ -208,6 +208,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
           '0105_mcp_oauth_grant_attribution',
           '0107_branch_permanent_deletion',
           '0108_branch_deletion_recovery',
+          '0109_user_provider_oauth_grants',
         ],
         dbAheadOfBinary: false,
       });
@@ -333,6 +334,9 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       await executeRaw(db, sql`ALTER TABLE branches DROP COLUMN deletion_error`);
       await executeRaw(db, sql`ALTER TABLE branches DROP COLUMN deletion_updated_at`);
 
+      await executeRaw(db, sql`DROP TABLE user_provider_oauth_grants`);
+      await executeRaw(db, sql`ALTER TABLE claude_oauth_attempts DROP COLUMN submission_count`);
+
       // Reproduce the previous reviewed head's timestamp-only final watermark.
       // Its authority schema is identical; the rebased bootstrap must not try
       // to CREATE it again or discard its rows before exact reconciliation.
@@ -354,6 +358,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
           '0105_mcp_oauth_grant_attribution',
           '0107_branch_permanent_deletion',
           '0108_branch_deletion_recovery',
+          '0109_user_provider_oauth_grants',
         ],
         dbAheadOfBinary: false,
       });
@@ -425,6 +430,12 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
             };
           }
         ).$client.begin(async (transaction) => {
+          // Reconciliation 0103 validates the pre-0109 authority shape. Remove
+          // only the later additive column inside this rolled-back transaction,
+          // so the rejection proves the named mutation rather than schema age.
+          await transaction.unsafe(
+            'ALTER TABLE claude_oauth_attempts DROP COLUMN submission_count'
+          );
           await transaction.unsafe(mutation);
           await executeReconciliationTransaction(transaction);
         })
@@ -462,6 +473,12 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
             };
           }
         ).$client.begin(async (transaction) => {
+          // Reconciliation 0103 validates the pre-0109 authority shape. Remove
+          // only the later additive column inside this rolled-back transaction,
+          // so the rejection proves the named mutation rather than schema age.
+          await transaction.unsafe(
+            'ALTER TABLE claude_oauth_attempts DROP COLUMN submission_count'
+          );
           await transaction.unsafe(mutation);
           await executeReconciliationTransaction(transaction);
         })

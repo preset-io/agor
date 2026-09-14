@@ -724,17 +724,15 @@ describe('tenant-owned service registration', () => {
     ).toBe(false);
   });
 
-  // These remain in the capability-gate inventory, but a safe constrained-HA
-  // deployment resolves both capabilities true and admits the durable paths.
-  it('capability-gates the Claude OAuth attempt flow and credential-file logout in HA', () => {
+  it('gates Claude OAuth start but leaves mode-aware logout available after a downgrade', () => {
     expect(CONSTRAINED_HA_PROCESS_AFFINE_SERVICE_GATES).toContainEqual([
       'claude-auth/oauth',
       'claudeOAuth',
     ]);
-    expect(CONSTRAINED_HA_PROCESS_AFFINE_SERVICE_GATES).toContainEqual([
-      'claude-auth/logout',
-      'claudeAuth',
-    ]);
+    expect(
+      CONSTRAINED_HA_PROCESS_AFFINE_SERVICE_GATES.some(([path]) => path === 'claude-auth/logout')
+    ).toBe(false);
+    expect(TENANT_IDENTITY_ONLY_SERVICE_PATHS).toContain('claude-auth/logout');
   });
 
   it('wraps Knowledge policy and indexing admin services in tenant database scope', () => {
