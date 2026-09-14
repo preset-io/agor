@@ -63,17 +63,26 @@ export const ArchiveDeleteBranchModal: React.FC<ArchiveDeleteBranchModalProps> =
 
   useEffect(() => {
     if (!open) return;
-    if (!selectionTouched) setFilesystemAction(cleanup.reason ? 'preserved' : 'cleaned');
-    else if (cleanup.reason)
+    if (selectionTouched && cleanup.reason)
       setFilesystemAction((previous) => (previous === 'cleaned' ? 'preserved' : previous));
   }, [open, cleanup.reason, selectionTouched]);
 
+  // Derive the untouched default from current eligibility, rather than racing
+  // asynchronous policy refreshes against another state update.
+  const selectedFilesystemAction =
+    !selectionTouched || (filesystemAction === 'cleaned' && cleanup.reason)
+      ? cleanup.reason
+        ? 'preserved'
+        : 'cleaned'
+      : filesystemAction;
+
   const handleOk = () => {
-    if (metadataAction === 'archive' && filesystemAction === 'cleaned' && cleanup.reason) return;
+    if (metadataAction === 'archive' && selectedFilesystemAction === 'cleaned' && cleanup.reason)
+      return;
     onConfirm(
       metadataAction === 'delete'
         ? { metadataAction: 'delete', filesystemAction: 'deleted' }
-        : { metadataAction: 'archive', filesystemAction }
+        : { metadataAction: 'archive', filesystemAction: selectedFilesystemAction }
     );
   };
 
@@ -130,7 +139,9 @@ export const ArchiveDeleteBranchModal: React.FC<ArchiveDeleteBranchModalProps> =
           />
         )}
 
-        {metadataAction === 'archive' && filesystemAction === 'cleaned' && <BranchCleanupWarning />}
+        {metadataAction === 'archive' && selectedFilesystemAction === 'cleaned' && (
+          <BranchCleanupWarning />
+        )}
 
         {/* Filesystem Options */}
         <div>
@@ -139,7 +150,7 @@ export const ArchiveDeleteBranchModal: React.FC<ArchiveDeleteBranchModalProps> =
           </Text>
           <Radio.Group
             name={`${radioGroupId}-filesystem`}
-            value={metadataAction === 'delete' ? 'deleted' : filesystemAction}
+            value={metadataAction === 'delete' ? 'deleted' : selectedFilesystemAction}
             disabled={metadataAction === 'delete'}
             onChange={(e) => {
               setSelectionTouched(true);
