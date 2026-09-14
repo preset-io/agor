@@ -8,7 +8,7 @@ import type {
   User,
 } from '@agor-live/client';
 import { DEFAULT_AGENTIC_TOOL_NAME, getTeammateConfig } from '@agor-live/client';
-import { Alert, Layout } from 'antd';
+import { Alert, Button, Drawer, Layout, Typography } from 'antd';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import { useConnectionState } from '../../contexts/ConnectionContext';
@@ -27,10 +27,12 @@ import {
   selectUserById,
 } from '../../store/selectors';
 import { getSessionStatusTone } from '../../utils/sessionStatus';
-import { AVAILABLE_AGENTS } from '../AgentSelectionGrid';
+import { AgentSelectionGrid, AVAILABLE_AGENTS } from '../AgentSelectionGrid';
 import { resolveAvailableUserAgenticTool } from '../AgentSelectionGrid/availableAgents';
 import { BranchModal, type BranchModalTab } from '../BranchModal';
 import type { BranchUpdate } from '../BranchModal/useBranchModalForm';
+import { PrimaryTeammatePicker } from '../SettingsModal/PrimaryTeammatePicker';
+import { resolveAskPrimaryTarget } from './askPrimary';
 import { MobileBoardPage } from './MobileBoardPage';
 import { MobileCommentsPage } from './MobileCommentsPage';
 import { MobileMoreSheet } from './MobileMoreSheet';
@@ -71,12 +73,6 @@ interface MobileAppProps {
   onUpdateRepo?: (repoId: string, updates: Partial<Repo>) => void;
   onArchiveOrDeleteBranch?: (branchId: string, options: BranchArchiveOrDeleteOptions) => void;
   onExecuteScheduleNow?: (branchId: string) => Promise<void>;
-}
-
-function latestSession(sessions: Session[]): Session | undefined {
-  return sessions
-    .filter((s) => !s.archived)
-    .sort((a, b) => (b.last_updated ?? '').localeCompare(a.last_updated ?? ''))[0];
 }
 
 export const MobileApp: React.FC<MobileAppProps> = ({
@@ -122,6 +118,8 @@ export const MobileApp: React.FC<MobileAppProps> = ({
   const agenticToolSettings = useAgorStore((s) => s.agenticToolSettingsByName);
 
   const [moreOpen, setMoreOpen] = useState(false);
+  const [askPickerOpen, setAskPickerOpen] = useState(false);
+  const [newSessionBranchId, setNewSessionBranchId] = useState<string | null>(null);
   const [primaryBranch, setPrimaryBranch] = useState<Branch | null>(null);
   const [branchEditor, setBranchEditor] = useState<{
     branchId: string;
@@ -196,45 +194,63 @@ export const MobileApp: React.FC<MobileAppProps> = ({
     return count;
   }, [commentById, effectiveBoardId]);
 
+  // Continue the branch's live session, else start a fresh one, and land in the
+  // full-screen composer.
+  const startPrimarySession = useCallback(
+    async (branch: Branch) => {
+      const target = resolveAskPrimaryTarget(branch, sessionsByBranch.get(branch.branch_id) ?? []);
+      if (target.kind === 'continue') {
+        navigate(`/m/session/${target.sessionId}`);
+        return;
+      }
+      if (target.kind !== 'create') return; // a real branch never resolves to 'pick'
+      const agent = resolveAvailableUserAgenticTool(user, agenticToolSettings, AVAILABLE_AGENTS);
+      const result = await onCreateSession(
+        {
+          branch_id: target.branchId,
+          agent: agent ?? DEFAULT_AGENTIC_TOOL_NAME,
+          initialPrompt: '',
+        },
+        target.boardId
+      );
+      if (result?.sessionId) navigate(`/m/session/${result.sessionId}`);
+    },
+    [sessionsByBranch, navigate, user, agenticToolSettings, onCreateSession]
+  );
+
+  // Create a session on any branch with a chosen agent, then open its composer.
+  const createSessionOnBranch = useCallback(
+    async (branchId: string, agent: string) => {
+      const boardId = branchById.get(branchId)?.board_id ?? '';
+      setNewSessionBranchId(null);
+      const result = await onCreateSession(
+        { branch_id: branchId, agent, initialPrompt: '' },
+        boardId
+      );
+      if (result?.sessionId) navigate(`/m/session/${result.sessionId}`);
+    },
+    [branchById, onCreateSession, navigate]
+  );
+
   const askPrimaryAssistant = useCallback(async () => {
     if (!client) return;
     let branch = primaryBranch;
     if (!branch) {
       try {
         branch = await client.service('users').getPrimaryTeammate();
-        setPrimaryBranch(branch);
+        if (branch) setPrimaryBranch(branch);
       } catch {
         branch = null;
       }
     }
+    // No primary (or a transient resolve failure): open the mobile-native
+    // picker — never fall through to the desktop Settings modal.
     if (!branch) {
-      // No primary assistant yet; send the user to pick or create one.
-      onOpenWorkspaceSettings('teammates');
+      setAskPickerOpen(true);
       return;
     }
-    const live = latestSession(sessionsByBranch.get(branch.branch_id) ?? []);
-    if (live) {
-      navigate(`/m/session/${live.session_id}`);
-      return;
-    }
-    // Start fresh: create a blank session on the primary branch, then drop the
-    // user into the full-screen composer to type their first prompt.
-    const agent = resolveAvailableUserAgenticTool(user, agenticToolSettings, AVAILABLE_AGENTS);
-    const result = await onCreateSession(
-      { branch_id: branch.branch_id, agent: agent ?? DEFAULT_AGENTIC_TOOL_NAME, initialPrompt: '' },
-      branch.board_id ?? ''
-    );
-    if (result?.sessionId) navigate(`/m/session/${result.sessionId}`);
-  }, [
-    client,
-    primaryBranch,
-    sessionsByBranch,
-    navigate,
-    onCreateSession,
-    onOpenWorkspaceSettings,
-    user,
-    agenticToolSettings,
-  ]);
+    await startPrimarySession(branch);
+  }, [client, primaryBranch, startPrimarySession]);
 
   const handleTabSelect = useCallback(
     (tab: MobileTab) => {
@@ -310,6 +326,7 @@ export const MobileApp: React.FC<MobileAppProps> = ({
                 cardById={cardById}
                 artifactById={artifactById}
                 onOpenBranch={(branchId, tab) => setBranchEditor({ branchId, tab })}
+                onNewSession={(branchId) => setNewSessionBranchId(branchId)}
                 onGiveFirstTask={() => void askPrimaryAssistant()}
                 firstTaskAssistantName={
                   primaryBranch ? getTeammateConfig(primaryBranch)?.displayName : undefined
@@ -365,6 +382,59 @@ export const MobileApp: React.FC<MobileAppProps> = ({
           commentsBadge={commentsBadge}
         />
       )}
+
+      <Drawer
+        open={askPickerOpen}
+        onClose={() => setAskPickerOpen(false)}
+        placement="bottom"
+        height="auto"
+        title="Choose your primary assistant"
+        styles={{ body: { paddingBottom: 'env(safe-area-inset-bottom)' } }}
+      >
+        <Typography.Paragraph type="secondary">
+          Pick the teammate to message from the Ask button. You can change it later in Settings.
+        </Typography.Paragraph>
+        <PrimaryTeammatePicker
+          client={client}
+          currentUserId={user?.user_id}
+          compact
+          onPicked={(branch) => {
+            setPrimaryBranch(branch);
+            setAskPickerOpen(false);
+            void startPrimarySession(branch);
+          }}
+        />
+        <Button
+          type="link"
+          style={{ paddingInline: 0 }}
+          onClick={() => {
+            setAskPickerOpen(false);
+            onOpenWorkspaceSettings('teammates');
+          }}
+        >
+          Create a new teammate
+        </Button>
+      </Drawer>
+
+      <Drawer
+        open={newSessionBranchId !== null}
+        onClose={() => setNewSessionBranchId(null)}
+        placement="bottom"
+        height="auto"
+        title="Choose a coding agent"
+        styles={{ body: { paddingBottom: 'env(safe-area-inset-bottom)' } }}
+      >
+        <AgentSelectionGrid
+          agents={AVAILABLE_AGENTS}
+          selectedAgentId={null}
+          onSelect={(agent) => {
+            if (newSessionBranchId) void createSessionOnBranch(newSessionBranchId, agent);
+          }}
+          columns={2}
+          size="small"
+          showComparisonLink={false}
+        />
+      </Drawer>
 
       <MobileMoreSheet
         open={moreOpen}

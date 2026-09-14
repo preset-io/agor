@@ -68,6 +68,7 @@ export const MobileCommentsPage: React.FC<MobileCommentsPageProps> = ({
       <MobileHeader title={board.name} user={currentUser} boardSwitcher={boardSwitcher} />
       <div style={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
         <CommentsPanel
+          alwaysShowActions
           client={client}
           boardId={boardId}
           comments={boardComments}
