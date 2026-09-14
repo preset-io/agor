@@ -3,6 +3,7 @@ import { Flex, Input, Typography, theme } from 'antd';
 import { type Ref, useState } from 'react';
 import type { GalleryFilter, TeammateGalleryCardId } from '../../utils/teammateTemplates';
 import { EmojiPickerInput } from '../EmojiPickerInput/EmojiPickerInput';
+import { TeammateRepositoryGuidance } from '../forms/TeammateRepositoryGuidance';
 import { TeammateGalleryCards, TeammateGalleryFilters } from '../TeammateGallery/TeammateGallery';
 
 const { Paragraph, Text, Title } = Typography;
@@ -132,6 +133,7 @@ export const OnboardingTeammateGalleryStep: React.FC<OnboardingTeammateGallerySt
         }}
         style={{ flex: '1 1 auto', minHeight: 0, overflowY: 'auto' }}
       >
+        <TeammateRepositoryGuidance onboarding />
         <TeammateGalleryCards
           goals={goals}
           value={selectedTemplateId}

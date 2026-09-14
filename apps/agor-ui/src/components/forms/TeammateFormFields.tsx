@@ -3,6 +3,7 @@ import { DownOutlined, InfoCircleOutlined, LoadingOutlined } from '@ant-design/i
 import type { FormInstance } from 'antd';
 import { Alert, Collapse, Form, Input, Select, Space, Tooltip, Typography, theme } from 'antd';
 import { FormEmojiPickerInput } from '../EmojiPickerInput/EmojiPickerInput';
+import { TeammateRepositoryGuidance } from './TeammateRepositoryGuidance';
 
 export interface TeammateFormFieldsProps {
   form: FormInstance;
@@ -12,15 +13,15 @@ export interface TeammateFormFieldsProps {
   onDisplayNameChange: (e: React.ChangeEvent<HTMLInputElement>) => void;
   customRepoSelected: boolean;
   onCustomRepoChange: (selected: boolean) => void;
-  /** Optional section inserted before the repo/branch advanced settings collapse. */
+  /** Optional section inserted after repository selection, before advanced branch settings. */
   extraBeforeAdvanced?: React.ReactNode;
 }
 
 /**
  * Shared teammate form fields used by the CreateDialog Teammate tab.
  *
- * Renders: Name + icon, teammate board advice Alert, Advanced collapse
- * (Framework Repository, Branch Name, Source Branch).
+ * Renders: Name + icon, teammate board advice, repository guidance + selection,
+ * Advanced collapse (Branch Name, Source Branch).
  * Does NOT render a <Form> wrapper — the parent owns the form instance.
  */
 export const TeammateFormFields: React.FC<TeammateFormFieldsProps> = ({
@@ -82,8 +83,6 @@ export const TeammateFormFields: React.FC<TeammateFormFieldsProps> = ({
         }
       />
 
-      {extraBeforeAdvanced}
-
       {isCloning && !frameworkRepo && (
         <Alert
           type="info"
@@ -99,6 +98,51 @@ export const TeammateFormFields: React.FC<TeammateFormFieldsProps> = ({
         />
       )}
 
+      <TeammateRepositoryGuidance />
+
+      <Form.Item name="repoId" label="Framework Repository">
+        <Select
+          placeholder={repoPlaceholder}
+          allowClear
+          showSearch
+          disabled={isCloning && !frameworkRepo}
+          filterOption={(input, option) =>
+            String(option?.label ?? '')
+              .toLowerCase()
+              .includes(input.toLowerCase())
+          }
+          options={[...repos]
+            .sort((a, b) => (a.name || a.slug).localeCompare(b.name || b.slug))
+            .map((repo: Repo) => ({
+              value: repo.repo_id,
+              label: `${repo.name || repo.slug}${repo.repo_id === frameworkRepo?.repo_id ? ' (default)' : ''}`,
+            }))}
+          onChange={(value) => {
+            onCustomRepoChange(!!value && value !== frameworkRepo?.repo_id);
+          }}
+          onClear={() => onCustomRepoChange(false)}
+        />
+      </Form.Item>
+
+      {customRepoSelected && (
+        <Alert
+          type="warning"
+          showIcon
+          icon={<InfoCircleOutlined />}
+          style={{ marginBottom: 16 }}
+          title="Custom repository selected"
+          description={
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+              The repository should contain the teammate framework or a fork/derivative. It contains
+              an OpenClaw-inspired agent framework adapted for Agor that your teammate needs to
+              operate. Legacy agor-assistant forks are still detected.
+            </Typography.Text>
+          }
+        />
+      )}
+
+      {extraBeforeAdvanced}
+
       <Collapse
         ghost
         size="small"
@@ -110,54 +154,13 @@ export const TeammateFormFields: React.FC<TeammateFormFieldsProps> = ({
             label: (
               <Space size={6}>
                 <Typography.Text type="secondary">Advanced Teammate Settings</Typography.Text>
-                <Tooltip title="Teammates live in an Agor branch. These settings control the framework repository, branch name, and source branch used to create that teammate branch.">
+                <Tooltip title="Teammates live in an Agor branch. These settings control the branch name and source branch used to create that teammate branch.">
                   <InfoCircleOutlined style={{ color: token.colorTextTertiary }} />
                 </Tooltip>
               </Space>
             ),
             children: (
               <>
-                <Form.Item name="repoId" label="Framework Repository">
-                  <Select
-                    placeholder={repoPlaceholder}
-                    allowClear
-                    showSearch
-                    disabled={isCloning && !frameworkRepo}
-                    filterOption={(input, option) =>
-                      String(option?.label ?? '')
-                        .toLowerCase()
-                        .includes(input.toLowerCase())
-                    }
-                    options={[...repos]
-                      .sort((a, b) => (a.name || a.slug).localeCompare(b.name || b.slug))
-                      .map((repo: Repo) => ({
-                        value: repo.repo_id,
-                        label: `${repo.name || repo.slug}${repo.repo_id === frameworkRepo?.repo_id ? ' (default)' : ''}`,
-                      }))}
-                    onChange={(value) => {
-                      onCustomRepoChange(!!value && value !== frameworkRepo?.repo_id);
-                    }}
-                    onClear={() => onCustomRepoChange(false)}
-                  />
-                </Form.Item>
-
-                {customRepoSelected && (
-                  <Alert
-                    type="warning"
-                    showIcon
-                    icon={<InfoCircleOutlined />}
-                    style={{ marginBottom: 16 }}
-                    title="Custom repository selected"
-                    description={
-                      <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                        The repository should be preset-io/agor-teammate or a fork/derivative. It
-                        contains an OpenClaw-inspired agent framework adapted for Agor that your
-                        teammate needs to operate. Legacy agor-assistant forks are still detected.
-                      </Typography.Text>
-                    }
-                  />
-                )}
-
                 <Form.Item
                   name="name"
                   label="Branch Name"

@@ -18,7 +18,7 @@
  * own slot, and the footer reads `validByTab[activeTab]`.
  */
 
-import type { Repo } from '@agor-live/client';
+import type { Repo, UUID } from '@agor-live/client';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { EMPTY_MAPS } from '../../store/agorMaps';
@@ -39,14 +39,14 @@ function makeRepo(overrides: Partial<Repo> = {}): Repo {
 }
 
 const frameworkRepo = makeRepo({
-  repo_id: 'framework-repo',
+  repo_id: 'framework-repo' as UUID,
   slug: 'preset-io/agor-teammate',
   name: 'agor-teammate',
   remote_url: 'https://github.com/preset-io/agor-teammate.git',
 });
 
 const userRepo = makeRepo({
-  repo_id: 'user-repo',
+  repo_id: 'user-repo' as UUID,
   slug: 'org/user-repo',
   name: 'user-repo',
 });
@@ -95,6 +95,13 @@ describe('CreateDialog — per-tab validity scoping', { timeout: 60_000 }, () =>
       'true'
     );
     expect(screen.getByRole('button', { name: /Create AI teammate/i })).toBeDisabled();
+    await waitFor(
+      () => expect(screen.getByText('Choose a repository you can push to')).toBeVisible(),
+      ASYNC
+    );
+    expect(screen.getByText(/A public fork or a branch named private-\*/)).toBeVisible();
+    expect(screen.getByRole('combobox', { name: 'Framework Repository' })).toBeVisible();
+    expect(screen.queryByPlaceholderText('private-my-teammate')).not.toBeInTheDocument();
   });
 
   it('enables Create AI teammate once Name is typed', async () => {
@@ -165,6 +172,32 @@ describe('CreateDialog — per-tab validity scoping', { timeout: 60_000 }, () =>
           permissionMode: 'auto',
         }),
         expect.objectContaining({ onStatusChange: expect.any(Function) })
+      );
+    }, ASYNC);
+  });
+
+  it('keeps an explicit repository selection instead of submitting the public default', async () => {
+    const onCreateTeammate = vi.fn();
+    renderDialog({ defaultTab: 'teammate', onCreateTeammate });
+
+    fireEvent.change(await screen.findByPlaceholderText(/PR Reviewer/i, undefined, ASYNC), {
+      target: { value: 'Owned Home' },
+    });
+    const repositorySelect = screen.getByRole('combobox', { name: 'Framework Repository' });
+    await waitFor(() => expect(repositorySelect).toBeVisible(), ASYNC);
+    fireEvent.mouseDown(repositorySelect);
+    fireEvent.keyDown(repositorySelect, { key: 'ArrowDown', code: 'ArrowDown', keyCode: 40 });
+    fireEvent.click(await screen.findByTitle(userRepo.name, undefined, ASYNC));
+    expect(screen.getByText(/credentials used by your teammate can push/)).toBeVisible();
+    expect(screen.getByText(/Local\/offline\s+use can continue without push access/)).toBeVisible();
+
+    const button = screen.getByRole('button', { name: /Create AI teammate/i });
+    await waitFor(() => expect(button).not.toBeDisabled(), ASYNC);
+    fireEvent.click(button);
+    await waitFor(() => {
+      expect(onCreateTeammate).toHaveBeenCalledWith(
+        expect.objectContaining({ repoId: userRepo.repo_id, displayName: 'Owned Home' }),
+        expect.anything()
       );
     }, ASYNC);
   });

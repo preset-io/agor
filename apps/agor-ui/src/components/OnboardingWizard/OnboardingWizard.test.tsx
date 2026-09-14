@@ -1219,6 +1219,13 @@ describe('OnboardingWizard', () => {
     clickButton(/skip for now/i);
 
     expect(await screen.findByText('Build your teammate')).toBeInTheDocument();
+    // Guidance is visible before creation, and its skip path emits no teammate.
+    await waitFor(() =>
+      expect(screen.getByText('Choose a repository you can push to')).toBeVisible()
+    );
+    expect(screen.getByText(/Skip this Teammate step/)).toBeVisible();
+    expect(screen.getByText(/public template does not grant push access/)).toBeVisible();
+    expect(onComplete).not.toHaveBeenCalled();
     clickButton(/skip for now/i);
 
     expect(await screen.findByText('Connect your AI')).toBeInTheDocument();

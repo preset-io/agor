@@ -28,7 +28,7 @@ The teammate framework is heavily inspired by [OpenClaw](https://github.com/rick
 
 An AI teammate is a special branch backed by the **framework repository**, a template repo containing memory files, identity configuration, skills, and task templates. When you create a teammate, Agor:
 
-1. Forks the framework repo into a new branch
+1. Creates a branch in the selected framework repository (not a fork on your Git host)
 2. Tags the branch with teammate metadata (name, framework version)
 3. Creates a dedicated board for the teammate's work
 4. Launches your first session, beginning the guided experience in `ONBOARDING.md`
@@ -109,17 +109,48 @@ As your teammate works with you, it naturally improves:
 
 ## Creating a teammate
 
+### Choose a writable home before creating
+
+The public `preset-io/agor-teammate` repository is a starting template. Cloning it
+does **not** grant permission to push your teammate's memory branches upstream.
+
+1. Fork or copy the framework into your own account or organization. **Prefer a
+   private repository** for personal or team memory. A public fork is still public;
+   neither a repository name ending in `-private` nor a branch named `private-*`
+   changes the Git host's visibility settings.
+2. Add that repository through **Create → Repository** (clone its URL, or register
+   an existing local clone where your installation permits it).
+3. Open **Create → Teammate**, select your copy in **Framework Repository**, and
+   confirm that the credentials used by the teammate can push to that remote.
+   Being able to clone a repository is not proof of write access.
+
+Automatic framework detection prefers registered repositories whose slug or remote
+URL contains `agor-teammate-private` (or legacy `agor-assistant-private`) over the
+public template. This is a naming convention, **not a privacy or permission check**.
+You can explicitly select a differently named copy in the teammate form. Agor does
+not create a remote repository, change its visibility, or rewrite your remotes.
+
+Local/offline use remains possible without upstream write access. Changes stay in
+the local clone/branch until backed up or pushed to a writable remote. Repository
+ownership and executor push credentials are separate requirements; choosing an
+owned repository does not itself configure credentials.
+
 ### From the onboarding wizard
 
-The [first-run wizard](/guide/getting-started#follow-the-onboarding-wizard) (**Goals → AI → Workspace → Tools**) ends by seeding your first teammate: it clones the [teammate framework repository](https://github.com/preset-io/agor-teammate) and creates the teammate's branch on the board you named. If you connected an AI model, it also launches the first session (which follows `ONBOARDING.md`), briefed with the goals you selected and the tools the wizard recommended. If you skipped AI setup, the board is still ready and you can connect a model later.
+The [first-run wizard](/guide/getting-started#follow-the-onboarding-wizard) (**Goals → Teammate → AI → Tools**) ends by seeding your first teammate using a detected framework repository, cloning the public [teammate template](https://github.com/preset-io/agor-teammate) if none is registered. It creates the teammate's branch on the board you named. If you connected an AI model, it also launches the first session (which follows `ONBOARDING.md`), briefed with the goals you selected and the tools the wizard recommended. If you skipped AI setup, the board is still ready and you can connect a model later.
+
+If your writable framework copy is not already registered, choose **Skip for now**
+on the **Teammate** step. After finishing the wizard, add your repository and create
+the teammate as described above. Skipping this step creates no teammate; skipping
+only the AI step does not skip teammate creation.
 
 ### From Settings
 
 Go to **Settings > Teammates > Create AI teammate**:
 
 1. Enter a display name (e.g., "PR Reviewer", "Command Center")
-2. Choose or create a board
-3. Optionally customize the framework repo and branch
+2. Select a framework repository you can push to (prefer a private copy)
+3. Optionally customize the branch under Advanced Teammate Settings
 4. Click Create
 
 ### From the CLI
