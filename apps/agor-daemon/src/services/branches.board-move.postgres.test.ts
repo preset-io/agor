@@ -1,6 +1,8 @@
 import {
   BoardObjectRepository,
   BoardRepository,
+  BranchDeletionRepository,
+  BranchMaintenanceRepository,
   BranchRepository,
   CapabilityPolicyRepository,
   createDatabase,
@@ -9,7 +11,9 @@ import {
   executeRaw,
   generateId,
   initializeDatabase,
+  lockBranchReferenceMutation,
   RepoRepository,
+  rawRows,
   runWithTenantDatabaseScope,
   sql,
   UsersRepository,
@@ -44,7 +48,7 @@ describe.skipIf(!postgresUrl || process.env.AGOR_DB_DIALECT !== 'postgresql')(
       await (raw as Database & { $client: { end: () => Promise<void> } }).$client.end();
     });
 
-    it('allows same-tenant inherited movement and refuses a foreign board or branch without mutation', async () => {
+    it('isolates board moves and serializes teammate movement against deletion reference scans', async () => {
       const db = createTenantScopedDatabaseProxy(raw, { requireScope: true });
       const a = `move-a-${generateId()}` as TenantID;
       const b = `move-b-${generateId()}` as TenantID;
@@ -121,6 +125,100 @@ describe.skipIf(!postgresUrl || process.env.AGOR_DB_DIALECT !== 'postgresql')(
         expect(placement?.board_id).toBe(fa.target.board_id);
         expect(placement?.zone_id).toBeUndefined();
       });
+      // Hold deletion's reference lock, then admit a move on an independent
+      // connection. The move must wait BEFORE taking this same actor's User row.
+      const peerRaw = createDatabase({ dialect: 'postgresql', url: postgresUrl! });
+      const peer = createTenantScopedDatabaseProxy(peerRaw, { requireScope: true });
+      try {
+        const fixture = await runWithTenantDatabaseScope(db, a, async (scoped) => {
+          const branches = new BranchRepository(scoped);
+          const victim = await branches.create({
+            ...fa.branch,
+            branch_id: generateId() as BranchID,
+            name: 'victim',
+            path: `/tmp/${a}/victim`,
+            branch_unique_id: 2,
+          });
+          const teammate = await branches.create({
+            ...fa.branch,
+            branch_id: generateId() as BranchID,
+            name: 'teammate',
+            path: `/tmp/${a}/teammate`,
+            branch_unique_id: 3,
+            custom_context: { teammate: { kind: 'teammate', displayName: 'Fixture' } },
+          });
+          const maintenance = new BranchMaintenanceRepository(scoped);
+          const { claim } = await maintenance.claim(victim.branch_id, 'delete');
+          const invocation = await maintenance.beginExecution(claim);
+          await maintenance.claimExecution(claim, invocation);
+          // Disposable fixture starts exactly at the user-reference page.
+          await executeRaw(
+            scoped,
+            sql`UPDATE branches SET data = jsonb_set(data,
+            '{maintenance,reference_cursor}', '{"table":3}'::jsonb)
+            WHERE branch_id = ${victim.branch_id}`
+          );
+          return { claim, invocation, teammate };
+        });
+        const peerApp = feathers();
+        peerApp.set('config', {});
+        const movingService = new BranchesService(peer, peerApp);
+        peerApp.use('branches', movingService);
+        peerApp.use('boards', new BoardsService(peer));
+        peerApp.use('board-objects', new BoardObjectsService(peer));
+        let moving: Promise<unknown> | undefined;
+        let pid: number | undefined;
+        try {
+          await runWithTenantDatabaseScope(db, a, async (scoped) => {
+            await lockBranchReferenceMutation(scoped);
+            moving = runWithTenantDatabaseScope(peer, a, async (movingDb) => {
+              pid = Number(
+                rawRows(await executeRaw(movingDb, sql`SELECT pg_backend_pid() AS pid`))[0]!.pid
+              );
+              return movingService.patch(
+                fixture.teammate.branch_id,
+                {
+                  board_id: fa.target.board_id,
+                  custom_context: { teammate: { kind: 'teammate', displayName: 'Moved fixture' } },
+                },
+                params
+              );
+            });
+            // Attach a rejection handler immediately; await the original below.
+            void moving.catch(() => {});
+            const deadline = Date.now() + 5000;
+            for (;;) {
+              const waiting =
+                pid &&
+                rawRows(
+                  await executeRaw(
+                    raw,
+                    sql`SELECT 1 FROM pg_locks WHERE pid = ${pid} AND locktype = 'advisory' AND NOT granted`
+                  )
+                ).length;
+              if (waiting) break;
+              if (Date.now() > deadline)
+                throw new Error('Move did not reach the reference-lock boundary');
+              await new Promise((resolve) => setTimeout(resolve, 10));
+            }
+            // Under the old lock order this page and the move deadlock on User.
+            await new BranchDeletionRepository(scoped).quiescePage(
+              fixture.claim,
+              fixture.invocation
+            );
+          });
+        } finally {
+          // Releasing the deletion transaction lets the admitted move finish.
+          await moving;
+        }
+        await runWithTenantDatabaseScope(peer, a, async (scoped) => {
+          expect(
+            (await new BranchRepository(scoped).findById(fixture.teammate.branch_id))?.board_id
+          ).toBe(fa.target.board_id);
+        });
+      } finally {
+        await (peerRaw as Database & { $client: { end: () => Promise<void> } }).$client.end();
+      }
       await runWithTenantDatabaseScope(db, b, async () => {
         expect(await new BranchRepository(db).findById(fb.branch.branch_id)).toEqual(fb.branch);
         expect(await new BoardObjectRepository(db).findByBranchId(fb.branch.branch_id)).toEqual(

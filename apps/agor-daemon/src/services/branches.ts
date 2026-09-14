@@ -37,6 +37,7 @@ import {
   generateId,
   getCurrentTenantId,
   KnowledgeNamespaceRepository,
+  lockBranchReferenceMutation,
   RepoRepository,
   runWithTenantDatabaseScope,
   runWithTenantDatabaseTransaction,
@@ -1336,6 +1337,9 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
         // Moving changes effective authority. Serialize with policy writers and
         // re-check the actor and both boards before any metadata/placement writes.
         await lockTenantAuthorizationFence(db, params);
+        // Reference reconciliation locks User rows too. Take its lock before
+        // resolving/locking the actor, even when custom_context accompanies a move.
+        await lockBranchReferenceMutation(db);
         return this.patchBranch(id, data, params, db);
       });
     }

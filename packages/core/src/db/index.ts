@@ -32,6 +32,7 @@ export { generateId, IdResolutionError, resolveShortId, shortId } from '../lib/i
 // Slug utilities
 export { generateSlug, generateUniqueSlug, identifyUrlParam, isShortId } from '../lib/slugs';
 export * from './branch-admission';
+export { lockBranchReferenceMutation } from './branch-reference-admission';
 // Client and database
 export * from './client';
 // Database wrapper utilities (type-safe operations for union Database type)
