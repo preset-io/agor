@@ -77,7 +77,7 @@ import { UserIdentityAvatar } from '../UserIdentityAvatar';
 import { AudioSettingsTab } from './AudioSettingsTab';
 import { syncGroupsForUser } from './groupMembershipSync';
 import { PersonalApiKeysTab } from './PersonalApiKeysTab';
-import { FieldRow, PanelHeader, SectionDivider } from './panelPrimitives';
+import { FIELD_WIDTHS, FieldRow, PanelHeader, SectionDivider } from './panelPrimitives';
 import { UploadsTab } from './UploadsTab';
 import { UserAgenticDefaultEditor } from './UserAgenticDefaultEditor';
 
@@ -298,6 +298,12 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
     null
   );
   const isAdmin = hasMinimumRole(currentUser?.role, ROLES.ADMIN);
+  // Only a superadmin may grant the superadmin role (backend-enforced), so a
+  // plain admin should never see the option to assign it.
+  const isSuperadmin = hasMinimumRole(currentUser?.role, ROLES.SUPERADMIN);
+  const assignableRoleOptions = ROLE_OPTIONS.filter(
+    (opt) => isSuperadmin || opt.value !== ROLES.SUPERADMIN
+  );
   const isEditingOther = !!user && !!currentUser && user.user_id !== currentUser.user_id;
   const isSelf = !!user && !!currentUser && user.user_id === currentUser.user_id;
 
@@ -1490,8 +1496,8 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
         >
           <Select
             disabled={!isAdmin}
-            style={{ maxWidth: 320 }}
-            options={ROLE_OPTIONS.map((opt) => ({
+            style={FIELD_WIDTHS.short}
+            options={assignableRoleOptions.map((opt) => ({
               value: opt.value,
               label: opt.label,
               description: opt.description,
@@ -1533,7 +1539,21 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
     <>
       <PanelHeader title={PANEL_META.security.title} />
       <Form form={form} layout="vertical" onValuesChange={() => markMainPanelDirty('security')}>
-        <FieldRow label="Password" name="password" help="Leave blank to keep current password">
+        <FieldRow
+          label="Password"
+          name="password"
+          help="Leave blank to keep current password"
+          // Matches the create path's min:8, but only when a new password is
+          // actually entered — an empty field still means "keep current".
+          rules={[
+            {
+              validator: (_rule, value: string | undefined) =>
+                !value || value.length >= 8
+                  ? Promise.resolve()
+                  : Promise.reject(new Error('Password must be at least 8 characters')),
+            },
+          ]}
+        >
           <Input.Password placeholder="••••••••" />
         </FieldRow>
 

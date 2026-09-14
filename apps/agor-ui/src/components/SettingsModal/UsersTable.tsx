@@ -65,6 +65,12 @@ export const UsersTable: React.FC<UsersTableProps> = ({
   const [createDirty, setCreateDirty] = useState(false);
   const [form] = Form.useForm();
   const isAdmin = hasMinimumRole(currentUser?.role, ROLES.ADMIN);
+  // Only a superadmin may grant the superadmin role (the backend enforces this
+  // and rejects it otherwise), so a plain admin should never see the option.
+  const isSuperadmin = hasMinimumRole(currentUser?.role, ROLES.SUPERADMIN);
+  const assignableRoleOptions = ROLE_OPTIONS.filter(
+    (opt) => isSuperadmin || opt.value !== ROLES.SUPERADMIN
+  );
 
   // Editing / creating swaps this section's Content pane for a drill-in instead
   // of stacking a second modal (Edit previously popped the whole UserSettingsModal
@@ -250,33 +256,40 @@ export const UsersTable: React.FC<UsersTableProps> = ({
         );
       },
     },
-    {
-      title: 'Actions',
-      key: 'actions',
-      width: 88,
-      render: (_: unknown, user: User) => (
-        <SettingsActionGroup>
-          <Tooltip title="Edit user">
-            <Button
-              type="text"
-              size="small"
-              icon={<EditOutlined />}
-              onClick={() => openEdit(user)}
-            />
-          </Tooltip>
-          <Popconfirm
-            title="Delete user?"
-            description={`Are you sure you want to delete user "${user.email}"?`}
-            onConfirm={() => handleDelete(user.user_id)}
-            okText="Delete"
-            cancelText="Cancel"
-            okButtonProps={{ danger: true }}
-          >
-            <Button type="text" size="small" icon={<DeleteOutlined />} danger />
-          </Popconfirm>
-        </SettingsActionGroup>
-      ),
-    },
+    // Edit/Delete are admin-only mutations (the backend rejects them for
+    // members), so the whole Actions column is dropped for non-admins. Members
+    // keep the read-only list, matching the backend's MEMBER list floor.
+    ...(isAdmin
+      ? [
+          {
+            title: 'Actions',
+            key: 'actions',
+            width: 88,
+            render: (_: unknown, user: User) => (
+              <SettingsActionGroup>
+                <Tooltip title="Edit user">
+                  <Button
+                    type="text"
+                    size="small"
+                    icon={<EditOutlined />}
+                    onClick={() => openEdit(user)}
+                  />
+                </Tooltip>
+                <Popconfirm
+                  title="Delete user?"
+                  description={`Are you sure you want to delete user "${user.email}"?`}
+                  onConfirm={() => handleDelete(user.user_id)}
+                  okText="Delete"
+                  cancelText="Cancel"
+                  okButtonProps={{ danger: true }}
+                >
+                  <Button type="text" size="small" icon={<DeleteOutlined />} danger />
+                </Popconfirm>
+              </SettingsActionGroup>
+            ),
+          },
+        ]
+      : []),
   ];
 
   const usersTable = (
@@ -294,9 +307,11 @@ export const UsersTable: React.FC<UsersTableProps> = ({
           />
         }
         actions={
-          <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
-            New User
-          </Button>
+          isAdmin ? (
+            <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
+              New User
+            </Button>
+          ) : undefined
         }
       />
 
@@ -373,7 +388,7 @@ export const UsersTable: React.FC<UsersTableProps> = ({
         rules={[{ required: true, message: 'Please select a role' }]}
       >
         <Select
-          options={ROLE_OPTIONS.map((opt) => ({
+          options={assignableRoleOptions.map((opt) => ({
             value: opt.value,
             label: opt.label,
             title: opt.description,
