@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Small operator-only control plane. No tenant API, shell endpoint or browser AWS credentials."""
-import concurrent.futures, datetime, hashlib, hmac, http.cookies, json, os, pathlib, secrets, subprocess, threading, time, urllib.request, uuid
+import base64, concurrent.futures, datetime, hmac, json, os, pathlib, subprocess, threading, time, urllib.request, uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 ROOT = pathlib.Path(__file__).parent
@@ -8,7 +8,7 @@ CONFIG = json.loads(pathlib.Path(os.environ.get('AGOR_OPS_CONFIG', '/etc/agor-op
 DATA = pathlib.Path(CONFIG.get('dataDir', '/var/lib/agor-ops')); DATA.mkdir(mode=0o700, parents=True, exist_ok=True)
 RUNTIME = json.loads(pathlib.Path(CONFIG['workerConfig']).read_text())
 TOKEN = RUNTIME['controlToken']
-lock = threading.RLock(); operation_lock = threading.Lock(); sessions = {}; attempts = []
+lock = threading.RLock(); operation_lock = threading.Lock()
 state = {'workers': [], 'cloud': None, 'sampledAt': None, 'collectionError': None}
 journal = DATA / 'operations.json'
 operations = json.loads(journal.read_text()) if journal.exists() else []
@@ -153,12 +153,22 @@ class Handler(BaseHTTPRequestHandler):
         for k,v in {'Content-Type':content,'Content-Length':str(len(data)),'Cache-Control':'no-store','X-Content-Type-Options':'nosniff','Referrer-Policy':'no-referrer','Content-Security-Policy':"default-src 'self'; style-src 'self'; script-src 'self'; img-src 'self' data:; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",**(extra or {})}.items(): self.send_header(k,v)
         self.end_headers(); self.wfile.write(data)
     def session(self):
+        bearer=self.headers.get('Authorization','')
+        if not bearer.startswith('Bearer ') or len(bearer)>16384: return None
         try:
-            cookie=http.cookies.SimpleCookie(self.headers.get('Cookie','')); token=cookie['agor_ops'].value
-            with lock: session=sessions.get(token)
-            if session and session['expires']>time.time(): return session
-        except (KeyError, http.cookies.CookieError): pass
-        return None
+            # Decode only to select the subject and reject non-browser credential
+            # families. Agor verifies this exact token before any authority is used.
+            encoded=bearer[7:].split('.')[1]
+            claims=json.loads(base64.urlsafe_b64decode(encoded+'='*(-len(encoded)%4)))
+            subject=str(uuid.UUID(claims['sub']))
+            if claims.get('type')!='access': return None
+            if claims.get('tenant_id')!=CONFIG['operatorTenant']: return None
+            request=urllib.request.Request(CONFIG['agorOrigin']+'/users/'+subject,
+                headers={'Authorization':bearer})
+            with urllib.request.urlopen(request,timeout=5) as response: user=json.load(response)
+            if user.get('user_id')!=subject or user.get('role')!='superadmin': return None
+            return {'user':{'id':subject,'name':user.get('name') or user.get('email') or subject},'csrf':'agor-session'}
+        except (ValueError,KeyError,IndexError,urllib.error.URLError,TimeoutError): return None
     def body(self):
         size=int(self.headers.get('Content-Length','0'))
         if size<1 or size>16384: raise ValueError('Invalid request size')
@@ -175,36 +185,22 @@ class Handler(BaseHTTPRequestHandler):
         session=self.session()
         if not session: return self.reply(401,{'error':'Sign in to view fleet status'})
         if self.path=='/ops/api/state':
-            with lock: snapshot=json.loads(json.dumps({**state,'operations':operations[-50:][::-1],'csrf':session['csrf'],'region':CONFIG['region'],'bucket':RUNTIME['bucket'],'group':CONFIG['group'],'maxAdditionalWorkers':CONFIG.get('maxWorkers',4)}))
+            with lock: snapshot=json.loads(json.dumps({**state,'operations':operations[-50:][::-1],'csrf':session['csrf'],'operator':session['user'],'region':CONFIG['region'],'bucket':RUNTIME['bucket'],'group':CONFIG['group'],'maxAdditionalWorkers':CONFIG.get('maxWorkers',4)}))
             return self.reply(200,snapshot)
         return self.reply(404,{'error':'Not found'})
     def do_POST(self):
         try:
             if self.headers.get('Origin') != CONFIG['publicOrigin']: return self.reply(403,{'error':'Origin rejected'})
             body=self.body()
-            if self.path=='/ops/api/login':
-                with lock:
-                    attempts[:]=[t for t in attempts if time.time()-t<60]
-                    if len(attempts)>=10: return self.reply(429,{'error':'Too many attempts. Try again in one minute.'})
-                    attempts.append(time.time())
-                candidate=hashlib.pbkdf2_hmac('sha256',str(body.get('password','')).encode(),bytes.fromhex(CONFIG['salt']),200000).hex()
-                if body.get('username')!='matt' or not hmac.compare_digest(candidate,CONFIG['passwordHash']): return self.reply(401,{'error':'Incorrect username or password'})
-                token=secrets.token_urlsafe(32)
-                with lock: sessions[token]={'expires':time.time()+43200,'csrf':secrets.token_urlsafe(32)}
-                return self.reply(200,{'ok':True},extra={'Set-Cookie':'agor_ops='+token+'; Path=/ops; HttpOnly; Secure; SameSite=Strict; Max-Age=43200'})
             session=self.session()
             if not session or not hmac.compare_digest(self.headers.get('X-Ops-CSRF',''),session['csrf']): return self.reply(403,{'error':'Session expired; sign in again'})
-            if self.path=='/ops/api/logout':
-                cookie=http.cookies.SimpleCookie(self.headers.get('Cookie',''))
-                with lock: sessions.pop(cookie['agor_ops'].value,None)
-                return self.reply(200,{'ok':True},extra={'Set-Cookie':'agor_ops=; Path=/ops; HttpOnly; Secure; SameSite=Strict; Max-Age=0'})
             with lock: workers={w['id']:dict(w) for w in state['workers']}
             if self.path=='/ops/api/release':
                 worker=workers.get(body.get('worker'))
                 if not worker or not worker.get('hold') or worker.get('operationRunning'): raise ValueError('No releasable hold on this worker')
                 rpc(worker['origin'],'/ops/release',{'operationId':worker['hold']})
                 with lock:
-                    operations.append({'id':str(uuid.uuid4()),'kind':'release','status':'complete','detail':'Operator released '+worker['id'],'createdAt':now(),'steps':[]});save()
+                    operations.append({'id':str(uuid.uuid4()),'kind':'release','status':'complete','operator':session['user'],'detail':'Operator released '+worker['id'],'createdAt':now(),'steps':[]});save()
                 return self.reply(200,{'ok':True})
             if self.path not in ('/ops/api/transfer','/ops/api/provision'): return self.reply(404,{'error':'Not found'})
             args=[]
@@ -216,7 +212,7 @@ class Handler(BaseHTTPRequestHandler):
                 if not source.get('reachable') or not target.get('reachable'): raise ValueError('Both workers must be reachable')
                 args=[source,target,tenant,branch,list(workers.values())]
             if not operation_lock.acquire(blocking=False): raise ValueError('Another fleet operation is running')
-            op={'id':str(uuid.uuid4()),'kind':'transfer' if args else 'provision','status':'queued','detail':'Queued by matt','createdAt':now(),'steps':[]}
+            op={'id':str(uuid.uuid4()),'kind':'transfer' if args else 'provision','status':'queued','detail':'Queued by '+session['user']['name'],'operator':session['user'],'createdAt':now(),'steps':[]}
             if args: op.update(source=source['id'],target=target['id'],tenant=tenant,branch=branch)
             with lock: operations.append(op); save()
             threading.Thread(target=transfer if args else provision,args=(op,*args),daemon=True).start()

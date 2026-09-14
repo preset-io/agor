@@ -38,16 +38,36 @@ const counters = () => {
       for (const [k, v] of Object.entries(c)) out[k] = (out[k] || 0) + v;
   return out;
 };
-async function api(route, body) {
+async function api(route, body, retried = false) {
   const r = await fetch(`/ops/api/${route}`, {
     method: body ? 'POST' : 'GET',
-    headers: body ? { 'Content-Type': 'application/json', 'X-Ops-CSRF': data?.csrf || '' } : {},
+    headers: {
+      Authorization: `Bearer ${localStorage.getItem('agor-access-token') || ''}`,
+      ...(body ? { 'Content-Type': 'application/json', 'X-Ops-CSRF': data?.csrf || '' } : {}),
+    },
     body: body ? JSON.stringify(body) : undefined,
     signal: AbortSignal.timeout(20000),
   });
+  if (r.status === 401 && !retried && localStorage.getItem('agor-refresh-token')) {
+    const renewed = await fetch('/authentication/refresh', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ refreshToken: localStorage.getItem('agor-refresh-token') }),
+      signal: AbortSignal.timeout(10000),
+    });
+    if (renewed.ok) {
+      const tokens = await renewed.json();
+      localStorage.setItem('agor-access-token', tokens.accessToken);
+      localStorage.setItem('agor-refresh-token', tokens.refreshToken);
+      return api(route, body, true);
+    }
+  }
   const result = await r.json();
   if (!r.ok) {
-    if (r.status === 401 && route !== 'login') showLogin();
+    if (r.status === 401 || r.status === 403) {
+      data = null;
+      showLogin();
+    }
     throw Error(result.error || 'Request failed');
   }
   return result;
@@ -69,6 +89,8 @@ async function refresh() {
     data = await api('state');
     $('#login').hidden = true;
     $('#app').hidden = false;
+    $('#logout').textContent = (data.operator.name || '?').slice(0, 2).toUpperCase();
+    $('#logout').title = data.operator.name + ' · Manage Agor account';
     render();
   } catch (e) {
     if (data) {
@@ -305,26 +327,12 @@ document.addEventListener('click', (e) => {
   }
 });
 $('#refresh').onclick = refresh;
-$('#logout').onclick = async () => {
-  await api('logout', {});
-  data = null;
-  showLogin();
+$('#logout').onclick = () => {
+  location.href = '/ui/';
 };
-$('#login-form').onsubmit = async (e) => {
+$('#login-form').onsubmit = (e) => {
   e.preventDefault();
-  $('#login-error').textContent = '';
-  const b = e.target.querySelector('button');
-  b.disabled = true;
-  try {
-    const values = Object.fromEntries(new FormData(e.target));
-    await api('login', values);
-    e.target.password.value = '';
-    await refresh();
-  } catch (err) {
-    $('#login-error').textContent = err.message;
-  } finally {
-    b.disabled = false;
-  }
+  location.href = '/ui/';
 };
 refresh();
 setInterval(() => {

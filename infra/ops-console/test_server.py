@@ -21,15 +21,34 @@ class OpsTest(unittest.TestCase):
  def test_auth_and_csrf(self):
   self.assertEqual(self.request('/ops/api/state').status,401)
   self.assertEqual(self.request('/internal/workers').status,403)
-  self.assertEqual(self.request('/ops/api/login',{'username':'matt','password':'test-password'}).status,403)
-  login=self.request('/ops/api/login',{'username':'matt','password':'test-password'},{'Origin':'https://ops.test'})
-  self.assertEqual(login.status,200);cookie=login.headers['Set-Cookie'];self.assertIn('HttpOnly',cookie);self.assertIn('Secure',cookie)
-  headers={'Cookie':cookie.split(';')[0],'Origin':'https://ops.test'}
-  self.assertEqual(self.request('/ops/api/provision',{},headers).status,403)
-  data=json.load(self.request('/ops/api/state',headers=headers));headers['X-Ops-CSRF']=data['csrf']
-  self.assertEqual(self.request('/ops/api/transfer',{'source':'injected-host','target':'other','tenant':'other-tenant','branch':'x'},headers).status,409)
-  self.assertEqual(self.request('/ops/api/logout',{},headers).status,200)
-  self.assertEqual(self.request('/ops/api/state',headers=headers).status,401)
+  self.assertEqual(self.request('/ops/api/state',headers={'Cookie':'agor_ops=old-password-session'}).status,401)
+  identity={'user':{'id':'operator','name':'Max'},'csrf':'agor-session'}
+  with patch.object(self.module.Handler,'session',return_value=identity):
+   self.assertEqual(self.request('/ops/api/provision',{},{}).status,403)
+   headers={'Origin':'https://ops.test','X-Ops-CSRF':'wrong'}
+   self.assertEqual(self.request('/ops/api/provision',{},headers).status,403)
+   headers['X-Ops-CSRF']='agor-session'
+   self.assertEqual(self.request('/ops/api/transfer',{'source':'injected-host','target':'other','tenant':'other-tenant','branch':'x'},headers).status,409)
+ def test_live_agor_authority(self):
+  import base64,io
+  m=self.module;m.CONFIG.update(operatorTenant='default',agorOrigin='http://127.0.0.1:3030')
+  uid='57a26c48-a521-4ba4-b248-dfd5f104fe17'
+  def token(**changes):
+   claims={'sub':uid,'type':'access','tenant_id':'default',**changes}
+   return 'Bearer header.'+base64.urlsafe_b64encode(json.dumps(claims).encode()).decode().rstrip('=')+'.signature'
+  handler=object.__new__(m.Handler)
+  for role in ['superadmin','admin','member']:
+   handler.headers={'Authorization':token()}
+   with patch.object(m.urllib.request,'urlopen',return_value=io.BytesIO(json.dumps({'user_id':uid,'role':role,'name':'Max'}).encode())) as call:
+    self.assertEqual(bool(handler.session()),role=='superadmin')
+    self.assertEqual(call.call_args.args[0].headers['Authorization'],token())
+  for claims in [{'type':'refresh'},{'type':'service'},{'tenant_id':'other'},{'tenant_id':None}]:
+   handler.headers={'Authorization':token(**claims)}
+   with patch.object(m.urllib.request,'urlopen') as call:
+    self.assertIsNone(handler.session());call.assert_not_called()
+  handler.headers={'Authorization':token()}
+  with patch.object(m.urllib.request,'urlopen',side_effect=urllib.error.URLError('revoked')):
+   self.assertIsNone(handler.session())
  def test_failed_transfer_retains_holds(self):
   m=self.module;op={'id':'test','status':'queued','steps':[]};m.operation_lock.acquire()
   def rpc(origin,route,payload=None,timeout=12):

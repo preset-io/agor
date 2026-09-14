@@ -2,17 +2,26 @@
 
 Operator-only control plane for the custom EC2 workspace deployment. Served at
 `https://agor.skellige.com.au/ops/`. This is a separate fleet-admin capability,
-not a tenant-facing Agor API. It can inspect all registered tenants; ordinary
-Agor sessions cannot authenticate to it. Worker control tokens, AWS credentials
-and object contents never reach the browser.
+not a tenant-facing Agor API. It can inspect all registered tenants. Only Agor
+super-admin users from the explicitly configured operator tenant can access it.
+Worker control tokens, AWS credentials and object contents never reach the browser.
 
 The Python service uses standard-library HTTP and the host AWS CLI. It polls
-registered workers every 15 seconds and bucket-wide CloudWatch metrics every
-minute. UI assets have no external dependencies. Runtime secrets are supplied
-in `/etc/agor-ops.json` (0600); only a salted password hash is stored. Sessions
-are HttpOnly/Secure/SameSite cookies with origin and CSRF checks on mutations.
-The first deployment has one named operator, matt; SSO and per-operator RBAC
-are subsequent production work, not claimed by this prototype.
+workers every 15 seconds and CloudWatch every minute. The browser reuses Agor's
+same-origin access token and standard refresh endpoint. Each API request sends
+that bearer to the configured Agor `/users/<subject>` endpoint, which verifies
+its signature, expiry and credential revocation. The console requires the live
+user role to be `superadmin`; it does not authorize from decoded JWT role claims.
+Only ordinary access tokens for `operatorTenant` are accepted. Configure
+`agorOrigin` as the trusted local daemon origin (here `http://127.0.0.1:3030`) and
+`operatorTenant` as `default` in `/etc/agor-ops.json`. Do not point this at an
+untrusted endpoint. Other tenant administrators cannot gain fleet access.
+
+There is no separate password or ops cookie. Mutations require both exact
+same-origin Origin and a custom CSRF header, plus current Agor authorization.
+Operation records carry the initiating Agor user ID and name. An accepted
+background operation completes independently of subsequent browser logout.
+Sign in at `/ui/`, then open `/ops/`; the account button returns to Agor.
 
 ## Operations
 
