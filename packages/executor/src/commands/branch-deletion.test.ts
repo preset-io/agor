@@ -84,12 +84,13 @@ describe('executor-owned branch deletion', () => {
 
 describe('concrete deletion command with disposable storage', () => {
   it.each([
-    { unknownUpload: false, slow: false },
-    { unknownUpload: true, slow: false },
-    { unknownUpload: false, slow: true },
+    { unknownUpload: false, slow: false, malformedData: false },
+    { unknownUpload: true, slow: false, malformedData: false },
+    { unknownUpload: false, slow: true, malformedData: false },
+    { unknownUpload: false, slow: false, malformedData: true },
   ])(
-    'removes owned storage; unknown upload=$unknownUpload, exceeds original token lifetime=$slow',
-    async ({ unknownUpload, slow }) => {
+    'removes owned storage; unknown upload=$unknownUpload, exceeds original token lifetime=$slow, malformed progress=$malformedData',
+    async ({ unknownUpload, slow, malformedData }) => {
       const { mkdtemp, mkdir, writeFile, stat, rm } = await import('node:fs/promises');
       const { tmpdir } = await import('node:os');
       const { join } = await import('node:path');
@@ -125,6 +126,7 @@ describe('concrete deletion command with disposable storage', () => {
                 releaseQuiesce = resolve;
               });
             expect(body.branch_id).toBe(id);
+            if (body.action === 'data' && malformedData) return new Response('{}');
             if (body.action === 'upload' && unknownUpload)
               throw new Error('fixture transport loss');
             return new Response(JSON.stringify({ remaining: false }), { status: 200 });
@@ -158,14 +160,16 @@ describe('concrete deletion command with disposable storage', () => {
           releaseQuiesce();
         }
         const result = await pending;
-        expect(result.success).toBe(!unknownUpload);
+        expect(result.success).toBe(!unknownUpload && !malformedData);
         await expect(stat(workspace)).rejects.toMatchObject({ code: 'ENOENT' });
         await expect(stat(home)).rejects.toMatchObject({ code: 'ENOENT' });
         expect((await stat(neighbor)).isDirectory()).toBe(true);
         expect(actions).toEqual(
           unknownUpload
             ? ['claim', 'quiesce', 'upload']
-            : ['claim', 'quiesce', 'upload', 'storage', 'data', 'finalize']
+            : malformedData
+              ? ['claim', 'quiesce', 'upload', 'storage', 'data']
+              : ['claim', 'quiesce', 'upload', 'storage', 'data', 'finalize']
         );
       } finally {
         vi.unstubAllGlobals();

@@ -1,5 +1,9 @@
 import { basename, resolve } from 'node:path';
-import type { BranchDeletionExecutionResult, BranchDeletionStage } from '@agor/core/types';
+import type {
+  BranchDeletionAction,
+  BranchDeletionExecutionResult,
+  BranchDeletionStage,
+} from '@agor/core/types';
 import { BRANCH_DELETION_REPORT_SERVICE } from '@agor/core/types';
 import {
   deleteBranchDirectory,
@@ -127,15 +131,7 @@ export async function handleBranchDelete(
   let reportOutcomeUnknown = false;
   let sessionToken = payload.sessionToken;
   const report = async (
-    action:
-      | 'claim'
-      | 'heartbeat'
-      | 'quiesce'
-      | 'upload'
-      | 'storage'
-      | 'data'
-      | 'finalize'
-      | 'failed',
+    action: BranchDeletionAction,
     stage?: BranchDeletionStage
   ): Promise<{ remaining: boolean }> => {
     try {
@@ -153,14 +149,19 @@ export async function handleBranchDelete(
         }
       );
       if (!response.ok) throw new Error(`Deletion ${action} rejected (HTTP ${response.status})`);
-      const result = (await response.json()) as { remaining: boolean; sessionToken?: string };
+      const result = (await response.json()) as { remaining?: boolean; sessionToken?: string };
       if (
         action === 'heartbeat' &&
         typeof result.sessionToken === 'string' &&
         result.sessionToken.length > 0
       )
         sessionToken = result.sessionToken;
-      return result;
+      // Only page actions carry progress. Reject a missing progress flag rather
+      // than silently treating a malformed response as a completed data drain.
+      const page = action === 'quiesce' || action === 'upload' || action === 'data';
+      if (page && typeof result.remaining !== 'boolean')
+        throw new Error('Invalid deletion progress response');
+      return { remaining: result.remaining ?? false };
     } catch (error) {
       // Transport failure does not cancel a daemon storage step. Never release
       // its invocation while that request may still be deleting bytes.

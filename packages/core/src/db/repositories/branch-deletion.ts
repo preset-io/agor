@@ -15,7 +15,6 @@ import {
   isPostgresDatabase,
   rawRows,
   runDatabaseTransaction,
-  select,
   update,
 } from '../database-wrapper';
 import { branches } from '../schema';
@@ -32,14 +31,14 @@ export class BranchDeletionRepository {
     work: (tx: Database, row: typeof branches.$inferSelect) => Promise<T>
   ) {
     if (claim.kind !== 'delete') throw new RepositoryError('A deletion claim is required');
-    return new BranchMaintenanceRepository(this.db).withExecution(claim, invocation, async (tx) => {
-      const row = await select(tx)
-        .from(branches)
-        .where(eq(branches.branch_id, claim.branch_id))
-        .one();
-      if (!row?.deletion_status) throw new RepositoryError('Branch deletion is not active');
-      return work(tx, row);
-    });
+    return new BranchMaintenanceRepository(this.db).withExecution(
+      claim,
+      invocation,
+      async (tx, row) => {
+        if (!row.deletion_status) throw new RepositoryError('Branch deletion is not active');
+        return work(tx, row);
+      }
+    );
   }
 
   /** Lock before the subject Branch: two pages must not lock A→B and B→A. */

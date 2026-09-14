@@ -1,11 +1,21 @@
 import { and, eq, sql } from 'drizzle-orm';
 import { generateId } from '../../lib/ids';
-import type { BranchID, BranchMaintenanceClaim, UserID, UUID } from '../../types';
+import {
+  BRANCH_MAINTENANCE_DISCOVERY_PAGE_SIZE,
+  type BranchID,
+  type BranchMaintenanceClaim,
+  type BranchMaintenanceRoutingRef,
+  type TenantID,
+  type UserID,
+  type UUID,
+} from '../../types';
 import { hasActiveEnvironmentCommand } from '../../types/environment-command';
 import type { Database } from '../client';
 import {
+  executeRaw,
   isPostgresDatabase,
   lockRowForUpdate,
+  rawRows,
   runDatabaseTransaction,
   select,
   update,
@@ -181,7 +191,7 @@ export class BranchMaintenanceRepository {
   async withExecution<T>(
     claim: BranchMaintenanceClaim,
     executionId: UUID,
-    work: (db: Database) => Promise<T>
+    work: (db: Database, row: typeof branches.$inferSelect) => Promise<T>
   ): Promise<T> {
     return this.locked(claim.branch_id, async (tx, row) => {
       const current = this.assertClaim(row, claim);
@@ -190,7 +200,7 @@ export class BranchMaintenanceRepository {
       }
       if (!current.execution_claimed_at)
         throw new RepositoryError('Executor invocation is not claimed');
-      return work(tx);
+      return work(tx, row);
     });
   }
 
@@ -369,5 +379,36 @@ export class BranchMaintenanceRepository {
         .where(eq(branches.branch_id, claim.branch_id))
         .run();
     });
+  }
+}
+
+/** Routing-only queries; caller supplies tenant scope or the narrow system discovery capability. */
+export class BranchMaintenanceDiscoveryRepository {
+  constructor(private readonly db: Database) {}
+
+  async findDeletingRefs(options: {
+    tenantId?: string;
+    after?: BranchMaintenanceRoutingRef;
+  }): Promise<BranchMaintenanceRoutingRef[]> {
+    if (!options.tenantId && !isPostgresDatabase(this.db)) {
+      throw new RepositoryError('Cross-tenant maintenance discovery requires PostgreSQL');
+    }
+    const after = options.after;
+    const rows = rawRows(
+      await executeRaw(
+        this.db,
+        options.tenantId
+          ? sql`SELECT branch_id, ${options.tenantId} AS tenant_id FROM branches
+          WHERE deletion_status = 'deleting' AND branch_id > ${after?.branch_id ?? ''}
+          ORDER BY branch_id LIMIT ${BRANCH_MAINTENANCE_DISCOVERY_PAGE_SIZE}`
+          : sql`SELECT branch_id, tenant_id FROM branches WHERE deletion_status = 'deleting'
+          AND (tenant_id, branch_id) > (${after?.tenant_id ?? ''}, ${after?.branch_id ?? ''})
+          ORDER BY tenant_id, branch_id LIMIT ${BRANCH_MAINTENANCE_DISCOVERY_PAGE_SIZE}`
+      )
+    );
+    return rows.map((row) => ({
+      tenant_id: String(row.tenant_id) as TenantID,
+      branch_id: String(row.branch_id) as BranchID,
+    }));
   }
 }

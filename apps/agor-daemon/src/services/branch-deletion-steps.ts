@@ -17,6 +17,8 @@ import {
 import { type Application, BadRequest, Forbidden } from '@agor/core/feathers';
 import {
   type AuthenticatedParams,
+  BRANCH_DELETION_ACTIONS,
+  BRANCH_DELETION_STAGES,
   type BranchID,
   type BranchMaintenanceClaim,
   branchDeletionCommandId,
@@ -40,18 +42,9 @@ const reportSchema = z
     operation_id: z.string().uuid(),
     generation: z.number().int().positive(),
     execution_id: z.string().uuid(),
-    action: z.enum([
-      'claim',
-      'heartbeat',
-      'quiesce',
-      'upload',
-      'storage',
-      'data',
-      'finalize',
-      'failed',
-    ]),
+    action: z.enum(BRANCH_DELETION_ACTIONS),
     // This is a controlled stage summary, never a raw exception, path or token.
-    stage: z.enum(['claim', 'storage', 'data', 'finalize']).optional(),
+    stage: z.enum(BRANCH_DELETION_STAGES).optional(),
   })
   .strict();
 

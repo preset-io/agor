@@ -4,7 +4,10 @@ import type { UserID } from '../../types';
 import { lockBranchForAdmission } from '../branch-admission';
 import { runDatabaseTransaction } from '../database-wrapper';
 import { ownedDbTest } from '../test-helpers';
-import { BranchMaintenanceRepository } from './branch-maintenance';
+import {
+  BranchMaintenanceDiscoveryRepository,
+  BranchMaintenanceRepository,
+} from './branch-maintenance';
 import { BranchRepository } from './branches';
 import { EnvironmentCommandRepository } from './environment-commands';
 import { seedEnvironmentCommandBranch } from './environment-commands.test-support';
@@ -220,4 +223,20 @@ test('materialization and taskless writes exclude permanent deletion through the
   await maintenance.settleExecution(claim, invocation);
   await maintenance.release(claim);
   expect((await maintenance.claim(branch.branch_id, 'delete')).acquired).toBe(true);
+});
+
+test('maintenance discovery returns only deleting routing identities and honors its cursor', async ({
+  db,
+}) => {
+  const { branch } = await seedEnvironmentCommandBranch(db);
+  const discovery = new BranchMaintenanceDiscoveryRepository(db);
+  expect(await discovery.findDeletingRefs({ tenantId: 'default' })).toEqual([]);
+  const maintenance = new BranchMaintenanceRepository(db);
+  const { claim } = await maintenance.claim(branch.branch_id, 'delete');
+  const refs = await discovery.findDeletingRefs({ tenantId: 'default' });
+  expect(refs).toEqual([{ tenant_id: 'default', branch_id: branch.branch_id }]);
+  expect(await discovery.findDeletingRefs({ tenantId: 'default', after: refs[0] })).toEqual([]);
+  await maintenance.fail(claim, 'Fixture settled before dispatch');
+  expect(await discovery.findDeletingRefs({ tenantId: 'default' })).toEqual([]);
+  await expect(discovery.findDeletingRefs({})).rejects.toThrow('PostgreSQL');
 });

@@ -1,4 +1,5 @@
 import type { BranchID, UserID, UUID } from './id';
+import type { TenantID } from './tenant';
 
 export const BRANCH_DELETION_COMMAND = 'branch.delete';
 export const BRANCH_DELETION_REPORT_SERVICE = 'branch-deletion-steps';
@@ -33,7 +34,21 @@ export const BRANCH_DELETION_STATUSES = ['deleting', 'deletion_failed'] as const
 export type BranchDeletionStatus = (typeof BRANCH_DELETION_STATUSES)[number];
 
 /** Bounded diagnostics, never resource contents or raw provider exceptions. */
-export type BranchDeletionStage = 'claim' | 'storage' | 'data' | 'finalize';
+export const BRANCH_DELETION_STAGES = ['claim', 'storage', 'data', 'finalize'] as const;
+export type BranchDeletionStage = (typeof BRANCH_DELETION_STAGES)[number];
+
+/** Shared executor/daemon wire vocabulary; authorization remains daemon-owned. */
+export const BRANCH_DELETION_ACTIONS = [
+  'claim',
+  'heartbeat',
+  'quiesce',
+  'upload',
+  'storage',
+  'data',
+  'finalize',
+  'failed',
+] as const;
+export type BranchDeletionAction = (typeof BRANCH_DELETION_ACTIONS)[number];
 
 export type BranchDeletionExecutionResult =
   | { outcome: 'deleted' }
@@ -44,3 +59,10 @@ export interface BranchDeletionRelationPolicy {
   disposition: 'delete_owned' | 'clear_reference' | 'retain' | 'classify';
   reason: string;
 }
+
+/** Identity-only discovery cursor; never carries branch contents across tenants. */
+export interface BranchMaintenanceRoutingRef {
+  tenant_id: TenantID;
+  branch_id: BranchID;
+}
+export const BRANCH_MAINTENANCE_DISCOVERY_PAGE_SIZE = 25;

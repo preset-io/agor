@@ -39,7 +39,9 @@ import {
   KnowledgeNamespaceRepository,
   RepoRepository,
   runWithTenantDatabaseScope,
+  runWithTenantDatabaseTransaction,
   type TenantScopeAwareDatabase,
+  type TenantScopedDatabase,
   UsersRepository,
 } from '@agor/core/db';
 import { renderBranchSnapshot } from '@agor/core/environment/render-snapshot';
@@ -58,6 +60,7 @@ import {
   Conflict,
   Forbidden,
   NotAuthenticated,
+  NotFound,
 } from '@agor/core/feathers';
 import type {
   AuthenticatedParams,

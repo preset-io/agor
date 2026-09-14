@@ -1,23 +1,24 @@
 import {
+  BranchMaintenanceDiscoveryRepository,
   BranchMaintenanceRepository,
   BranchRepository,
   branches,
   eq,
-  executeRaw,
-  rawRows,
   runWithSystemDatabaseScope,
   runWithTenantDatabaseScope,
   select,
-  sql,
   type TenantScopeAwareDatabase,
 } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
-import type { BranchID, TenantID } from '@agor/core/types';
+import {
+  BRANCH_MAINTENANCE_DISCOVERY_PAGE_SIZE,
+  type BranchMaintenanceRoutingRef,
+} from '@agor/core/types';
 import { emitServiceEvent } from '../utils/emit-service-event.js';
 
 /** Observer only: scheduling belongs to the existing runtime loop, not a new process/worker. */
 export class BranchDeletionReconciler {
-  private cursor: { tenant: string; branch: string } | undefined;
+  private cursor: BranchMaintenanceRoutingRef | undefined;
   constructor(
     private readonly db: TenantScopeAwareDatabase,
     private readonly app: Application,
@@ -25,32 +26,27 @@ export class BranchDeletionReconciler {
   ) {}
 
   async checkOnce(): Promise<void> {
-    const after = this.cursor ?? { tenant: '', branch: '' };
     const candidates = this.tenantId
       ? await runWithTenantDatabaseScope(this.db, this.tenantId, (db) =>
-          executeRaw(
-            db,
-            sql`SELECT branch_id, ${this.tenantId} AS tenant_id FROM branches WHERE deletion_status = 'deleting' AND branch_id > ${after.branch} ORDER BY branch_id LIMIT 25`
-          ).then(rawRows)
+          new BranchMaintenanceDiscoveryRepository(db).findDeletingRefs({
+            tenantId: this.tenantId,
+            after: this.cursor,
+          })
         )
       : await runWithSystemDatabaseScope(
           this.db,
           'branch deletion runtime routing discovery',
           (db) =>
-            executeRaw(
-              db,
-              sql`SELECT branch_id, tenant_id FROM branches WHERE deletion_status = 'deleting' AND (tenant_id, branch_id) > (${after.tenant}, ${after.branch}) ORDER BY tenant_id, branch_id LIMIT 25`
-            ).then(rawRows),
+            new BranchMaintenanceDiscoveryRepository(db).findDeletingRefs({ after: this.cursor }),
           { capability: 'branch_maintenance_discovery' }
         );
-    const last = candidates[candidates.length - 1];
     this.cursor =
-      candidates.length === 25 && last
-        ? { tenant: String(last.tenant_id), branch: String(last.branch_id) }
+      candidates.length === BRANCH_MAINTENANCE_DISCOVERY_PAGE_SIZE
+        ? candidates[candidates.length - 1]
         : undefined;
     for (const ref of candidates) {
-      const tenantId = String(ref.tenant_id) as TenantID;
-      const branchId = String(ref.branch_id) as BranchID;
+      const tenantId = ref.tenant_id;
+      const branchId = ref.branch_id;
       try {
         await runWithTenantDatabaseScope(this.db, tenantId, async (db) => {
           const row = await select(db).from(branches).where(eq(branches.branch_id, branchId)).one();
