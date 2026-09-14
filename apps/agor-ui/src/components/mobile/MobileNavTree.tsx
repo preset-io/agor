@@ -14,6 +14,7 @@ import {
   LogoutOutlined,
   MessageOutlined,
   RobotOutlined,
+  SearchOutlined,
   SettingOutlined,
   TeamOutlined,
   ThunderboltOutlined,
@@ -137,6 +138,7 @@ export const MobileNavTree: React.FC<MobileNavTreeProps> = ({
     onNavigate?.();
   };
   const utilityItems: MenuProps['items'] = [
+    { key: 'search', label: 'Search', icon: <SearchOutlined /> },
     { key: 'knowledge', label: 'Knowledge Base', icon: <BulbOutlined /> },
     {
       key: 'workspace-settings',
@@ -330,7 +332,8 @@ export const MobileNavTree: React.FC<MobileNavTreeProps> = ({
         selectable={false}
         items={utilityItems}
         onClick={({ key }) => {
-          if (key === 'knowledge') navigate('/knowledge');
+          if (key === 'search') navigate('/m/search');
+          else if (key === 'knowledge') navigate('/knowledge');
           else if (key === 'user-settings') onOpenUserSettings();
           else if (key === 'documentation')
             window.open('https://agor.live/guide/getting-started', '_blank', 'noopener,noreferrer');

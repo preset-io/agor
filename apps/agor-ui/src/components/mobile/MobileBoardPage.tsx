@@ -131,7 +131,11 @@ export const MobileBoardPage: React.FC<MobileBoardPageProps> = ({
   if (!board) {
     return (
       <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
-        <MobileHeader title="Board" boardSwitcher={boardSwitcher} />
+        <MobileHeader
+          title="Board"
+          boardSwitcher={boardSwitcher}
+          onSearch={() => navigate('/m/search')}
+        />
         <Content style={{ flex: 1, minHeight: 0, padding: token.padding }}>
           <Empty description="Board not found" />
         </Content>
@@ -275,7 +279,11 @@ export const MobileBoardPage: React.FC<MobileBoardPageProps> = ({
 
   return (
     <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
-      <MobileHeader title={board.name} boardSwitcher={boardSwitcher} />
+      <MobileHeader
+        title={board.name}
+        boardSwitcher={boardSwitcher}
+        onSearch={() => navigate('/m/search')}
+      />
       <Content
         style={{
           flex: 1,

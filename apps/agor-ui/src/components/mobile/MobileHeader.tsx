@@ -1,4 +1,4 @@
-import { ArrowLeftOutlined, CheckOutlined, DownOutlined } from '@ant-design/icons';
+import { ArrowLeftOutlined, CheckOutlined, DownOutlined, SearchOutlined } from '@ant-design/icons';
 import { Button, Drawer, Flex, Layout, List, Space, Typography, theme } from 'antd';
 import { useState } from 'react';
 import { BrandMark } from '../BrandMark';
@@ -17,6 +17,8 @@ interface MobileHeaderProps {
   showLogo?: boolean;
   /** When set, a back arrow appears on the left. */
   onBack?: () => void;
+  /** When set, a search icon appears on the right (opens the search screen). */
+  onSearch?: () => void;
   /**
    * When set, the title becomes a button with a chevron that opens a compact
    * board-switch sheet.
@@ -34,6 +36,7 @@ export const MobileHeader: React.FC<MobileHeaderProps> = ({
   title,
   showLogo = false,
   onBack,
+  onSearch,
   boardSwitcher,
 }) => {
   const { token } = theme.useToken();
@@ -98,6 +101,10 @@ export const MobileHeader: React.FC<MobileHeaderProps> = ({
           </Title>
         )}
       </Space>
+
+      {onSearch && (
+        <Button type="text" aria-label="Search" icon={<SearchOutlined />} onClick={onSearch} />
+      )}
 
       {boardSwitcher && (
         <Drawer

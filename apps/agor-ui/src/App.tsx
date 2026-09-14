@@ -36,6 +36,7 @@ import { Alert, Button, ConfigProvider, theme } from 'antd';
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { BrowserRouter, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import { AVAILABLE_AGENTS } from './components/AgentSelectionGrid';
+import { resolveAvailableUserAgenticTool } from './components/AgentSelectionGrid/availableAgents';
 import type { BranchUpdate } from './components/BranchModal/tabs/GeneralTab';
 import { ErrorBoundary, setCrashContext } from './components/ErrorBoundary';
 import { uploadFilesToSession } from './components/FileUpload/upload';
@@ -933,6 +934,18 @@ function AppContent() {
     );
     if (!isCurrentUser()) return;
     const retainedSeed = onboardingSeedResultRef.current.get(result.boardId);
+    // Always end onboarding inside the first-task composer: if the user skipped
+    // the LLM step, fall back to their governed default agent so the pre-seeded
+    // bootstrap session still opens. When no model is connected, that session's
+    // first turn surfaces the inline connect-model panel (MissingCredentialPanel)
+    // rather than dropping the user on a bare board with a passive banner.
+    const bootstrapAgent =
+      result.agent ??
+      resolveAvailableUserAgenticTool(
+        currentUser,
+        agorStore.getState().agenticToolSettingsByName,
+        AVAILABLE_AGENTS
+      );
     const seeded = await seedOnboardingTeammate({
       slackGatewayIntent,
       connectedMcpServerIds: result.connectedMcpServerIds,
@@ -942,7 +955,7 @@ function AppContent() {
       teammateEmoji: result.teammateEmoji,
       sourceBranch: result.sourceBranch,
       sourceRemoteUrl: result.sourceRemoteUrl,
-      agent: result.agent,
+      agent: bootstrapAgent,
       suggestedIntegrations: result.suggestedIntegrations,
       // Goals drive the first-session prompt; [] (skipped) yields the generic
       // follow-the-user guidance. Passed straight from the wizard.
