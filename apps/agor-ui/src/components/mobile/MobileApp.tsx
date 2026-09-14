@@ -8,9 +8,10 @@ import type {
   User,
 } from '@agor-live/client';
 import { DEFAULT_AGENTIC_TOOL_NAME, getTeammateConfig } from '@agor-live/client';
-import { Layout } from 'antd';
+import { Alert, Layout } from 'antd';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
+import { useConnectionState } from '../../contexts/ConnectionContext';
 import type { NewSessionConfig, SessionCreationResult } from '../../domain/sessionCreation';
 import { useAgorStore } from '../../store/agorStore';
 import {
@@ -104,6 +105,7 @@ export const MobileApp: React.FC<MobileAppProps> = ({
 }) => {
   const navigate = useNavigate();
   const location = useLocation();
+  const { connected, connecting } = useConnectionState();
   // Self-subscribe to the entity maps this surface drills into. The subscription
   // used to live in the outer App shell; relocating it here makes MobileApp the
   // subscription boundary so the shell re-renders only on load-state.
@@ -259,6 +261,19 @@ export const MobileApp: React.FC<MobileAppProps> = ({
 
   return (
     <Layout style={{ height: '100dvh' }}>
+      {!connected && (
+        <Alert
+          banner
+          type={connecting ? 'info' : 'warning'}
+          showIcon
+          message={
+            connecting
+              ? 'Reconnecting…'
+              : 'You’re offline. Changes may not be saved until you reconnect.'
+          }
+          style={{ flexShrink: 0 }}
+        />
+      )}
       <div
         style={{
           flex: 1,
