@@ -38,6 +38,11 @@ export function RepoCleanupSettingsModal({
     setSaving(false);
     setError(undefined);
   }, [open, repo.repo_id, scope.identityKey, form]);
+  // Preserve the reconnect draft, but release the obsolete operation's spinner.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: guard identity denotes the authority epoch
+  useLayoutEffect(() => {
+    setSaving(false);
+  }, [guard]);
   const save = async () => {
     if (!canSave) return;
     const operation = guard.begin();

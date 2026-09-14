@@ -200,3 +200,23 @@ it('a failed deletion cannot be changed back into archive', async () => {
   fireEvent.click(screen.getByRole('button', { name: 'Delete Permanently' }));
   expect(confirm).toHaveBeenCalledWith({ metadataAction: 'delete', filesystemAction: 'deleted' });
 });
+
+it('does not promise to preserve files when archive explicitly removes the workspace', async () => {
+  const { client, branch } = fixture();
+  render(
+    <ArchiveDeleteBranchModal
+      client={client}
+      currentUser={makeUser({ role: 'admin' })}
+      branch={branch}
+      open
+      onConfirm={vi.fn()}
+      onCancel={vi.fn()}
+    />
+  );
+  await screen.findByText(
+    'Cleanup is disabled for this repository. Archiving will keep workspace files on disk.'
+  );
+  fireEvent.click(screen.getByRole('radio', { name: /Delete completely/ }));
+  expect(screen.queryByText(/Archiving will keep workspace files/)).not.toBeInTheDocument();
+  expect(screen.getAllByText('Cleanup is disabled for this repository.').length).toBeGreaterThan(0);
+});

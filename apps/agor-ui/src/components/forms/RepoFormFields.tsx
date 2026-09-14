@@ -6,6 +6,7 @@ import { RepoCleanupPolicyFields } from './RepoCleanupPolicyFields';
 
 export interface RepoFormFieldsProps {
   form: FormInstance;
+  canConfigureCleanup?: boolean;
   mode: 'create' | 'edit';
   repoMode: 'remote' | 'local';
   onRepoModeChange: (e: RadioChangeEvent) => void;
@@ -20,6 +21,7 @@ export interface RepoFormFieldsProps {
  */
 export const RepoFormFields: React.FC<RepoFormFieldsProps> = ({
   form,
+  canConfigureCleanup = false,
   mode,
   repoMode,
   onRepoModeChange,
@@ -123,7 +125,7 @@ export const RepoFormFields: React.FC<RepoFormFieldsProps> = ({
         </Form.Item>
       )}
 
-      {isEditing && <RepoCleanupPolicyFields />}
+      {isEditing && canConfigureCleanup && <RepoCleanupPolicyFields />}
 
       {!isEditing && (
         <Typography.Text type="secondary" style={{ fontSize: 12 }}>

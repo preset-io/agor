@@ -460,6 +460,7 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
       case 'repos':
         return (
           <ReposTable
+            canConfigureCleanup={isAdmin}
             repoById={repoById}
             identityKey={settingsAuthority.identityKey}
             operationScope={settingsAuthority.operationScope}

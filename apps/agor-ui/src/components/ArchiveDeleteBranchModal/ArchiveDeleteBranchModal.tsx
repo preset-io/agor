@@ -192,7 +192,7 @@ export const ArchiveDeleteBranchModal: React.FC<ArchiveDeleteBranchModalProps> =
             type="warning"
             showIcon
             title={
-              cleanup.policy?.enabled === false
+              cleanup.policy?.enabled === false && selectedFilesystemAction === 'preserved'
                 ? 'Cleanup is disabled for this repository. Archiving will keep workspace files on disk.'
                 : cleanup.reason
             }

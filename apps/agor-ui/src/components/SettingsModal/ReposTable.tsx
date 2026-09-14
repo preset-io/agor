@@ -15,6 +15,7 @@ import { ResponsiveSettingsHeader } from './ResponsiveSettingsHeader';
 
 interface ReposTableProps {
   repoById: Map<string, Repo>;
+  canConfigureCleanup?: boolean;
   identityKey: string | null;
   operationScope: readonly unknown[] | null;
   onCreate?: (data: CreateRepoRequest, shouldApply?: () => boolean) => unknown;
@@ -36,6 +37,7 @@ interface ReposTableProps {
 
 export const ReposTable: React.FC<ReposTableProps> = ({
   repoById,
+  canConfigureCleanup = false,
   identityKey,
   operationScope,
   onCreate,
@@ -125,8 +127,18 @@ export const ReposTable: React.FC<ReposTableProps> = ({
       if (isEditing && editingRepo) {
         const updates: Partial<Repo> = {
           slug: values.slug,
-          cleanup_policy: values.cleanup_policy,
         };
+        // Metadata-only saves must neither require executable-config authority
+        // nor overwrite an administrator's concurrent policy edit.
+        if (
+          canConfigureCleanup &&
+          values.cleanup_policy &&
+          Object.entries(resolveRepoCleanupPolicy(editingRepo.cleanup_policy)).some(
+            ([key, value]) => values.cleanup_policy[key] !== value
+          )
+        ) {
+          updates.cleanup_policy = values.cleanup_policy;
+        }
         if (values.default_branch) {
           updates.default_branch = values.default_branch;
         }
@@ -325,6 +337,7 @@ export const ReposTable: React.FC<ReposTableProps> = ({
         <Form form={repoForm} layout="vertical" style={{ marginTop: 16 }}>
           <RepoFormFields
             form={repoForm}
+            canConfigureCleanup={canConfigureCleanup}
             mode={isEditing ? 'edit' : 'create'}
             repoMode={repoMode}
             onRepoModeChange={handleModeChange}

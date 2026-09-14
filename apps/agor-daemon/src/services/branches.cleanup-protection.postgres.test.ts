@@ -38,7 +38,7 @@ describe.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
           service.patch(branch.branch_id, { cleanup_protected: true }, { user })
         ).rejects.toThrow(/not found/i);
         await expect(
-          service.update(branch.branch_id, { ...branch, cleanup_protected: true }, { user })
+          service.update(branch.branch_id, { cleanup_protected: true }, { user })
         ).rejects.toThrow(/not found/i);
         expect(await new BranchRepository(scoped).findById(branch.branch_id)).toBeNull();
       });
