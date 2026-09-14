@@ -173,14 +173,16 @@ export class UserProviderOAuthGrantRepository {
       retry_not_before: null,
       updated_at: new Date(),
     };
-    await insert(this.db, grants)
+    const replaced = await insert(this.db, grants)
       .values(values)
       .onConflictDoUpdate({
         target: [grants.tenant_id, grants.user_id, grants.provider],
         set: values,
         setWhere: sql`${grants.grant_generation} < ${generation}`,
       })
-      .run();
+      .returning()
+      .one();
+    if (!replaced) throw new Error('Provider OAuth grant generation is stale');
   }
 
   /** Never delete the generation fence, nor retain secret bytes in a tombstone. */

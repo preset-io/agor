@@ -174,6 +174,92 @@ describe.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
       ).rejects.toThrow();
     });
 
+    it('rejects equal or stale grant generations without changing the committed pair', async () => {
+      const subject = await seed();
+      await save(subject);
+      const row = await save(subject);
+      for (const generation of [row.grant_generation, row.grant_generation - 1]) {
+        await expect(
+          unit(dbA, subject.tenantId, (db) =>
+            new UserProviderOAuthGrantRepository(db).replace(
+              subject.tenantId,
+              subject.userId,
+              generation,
+              CLAUDE_OAUTH_BINDING,
+              {
+                accessToken: 'synthetic-stale-access',
+                refreshToken: 'synthetic-stale-refresh',
+                expiresAt: new Date(),
+                scopes: [],
+              },
+              masterSecret,
+              randomUUID()
+            )
+          )
+        ).rejects.toThrow('Provider OAuth grant generation is stale');
+        expect(
+          await unit(dbA, subject.tenantId, (db) =>
+            new UserProviderOAuthGrantRepository(db).get(subject.tenantId, subject.userId)
+          )
+        ).toEqual(row);
+      }
+    });
+
+    it.each([
+      {
+        source: 'none' as const,
+        capability: { available: false, storage: null } as ClaudeOAuthCapability,
+        removesFile: true,
+      },
+      { source: 'managed_file' as const, capability: ready, removesFile: true },
+      { source: 'none' as const, capability: ready, removesFile: false },
+    ])(
+      'disconnect chooses the actual credential route ($source, $removesFile)',
+      async ({ source, capability, removesFile }) => {
+        const subject = await seed();
+        await unit(dbA, subject.tenantId, (db) =>
+          executeRaw(
+            db,
+            sql`UPDATE users SET data = data || ${JSON.stringify({ agentic_credential_sources: { 'claude-code': source } })}::jsonb WHERE user_id = ${subject.userId}`
+          )
+        );
+        const config = {
+          execution: {
+            unix_user_mode: 'delegated' as const,
+            executor_command_template: '/launcher',
+            executor_storage: { user_home: 'persistent-per-user' as const },
+          },
+        };
+        const backend = new ClaudeBackendOAuth(dbA, () => capability, { masterSecret });
+        const store = new DurableClaudeOAuthAttemptStore(
+          new ClaudeOAuthAttemptAuthority(dbA, masterSecret)
+        );
+        const patch = vi.fn(async () => ({}));
+        const app = { get: () => config, service: () => ({ patch }) };
+        const logout = createClaudeAuthLogoutService(app as never, dbA, store, backend);
+        providerMock.remove.mockClear();
+        await expect(
+          runWithTenantContext(subject.tenantId, () =>
+            logout.create({}, {
+              authenticated: true,
+              user: { user_id: subject.userId, role: 'member' },
+            } as never)
+          )
+        ).resolves.toEqual({ status: 'removed' });
+        expect(providerMock.remove).toHaveBeenCalledTimes(removesFile ? 1 : 0);
+        if (removesFile) {
+          const user = await unit(dbA, subject.tenantId, (db) =>
+            new UsersRepository(db).findById(subject.userId)
+          );
+          expect(providerMock.remove).toHaveBeenCalledWith(
+            { delegatedHomeKey: user?.unix_username, userId: subject.userId },
+            expect.any(Number)
+          );
+        }
+        expect(patch).toHaveBeenCalledTimes(1);
+      }
+    );
+
     it('seals both fields and rejects tenant/user/generation/field ciphertext transplantation', async () => {
       const subject = await seed();
       const row = await save(subject);
@@ -780,6 +866,11 @@ describe.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
           )
         )?.agentic_credential_sources?.['claude-code']
       ).toBe('none');
+      // Opt-out must not route a second Disconnect into a now-unavailable home helper.
+      expect(
+        await runWithTenantContext(subject.tenantId, () => logout.create({}, actor as never))
+      ).toEqual({ status: 'removed' });
+      expect(providerMock.remove).not.toHaveBeenCalled();
     });
   }
 );

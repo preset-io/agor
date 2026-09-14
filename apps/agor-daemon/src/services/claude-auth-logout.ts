@@ -89,11 +89,16 @@ export function createClaudeAuthLogoutService(
         const user = backend
           ? await withTenantDatabase((db) => new UsersRepository(db).findById(userId))
           : null;
+        const source = user?.agentic_credential_sources?.['claude-code'];
         const backendSource =
-          user?.agentic_credential_sources?.['claude-code'] === 'managed_oauth' ||
+          source === 'managed_oauth' ||
           (backend &&
-            user?.agentic_credential_sources?.['claude-code'] !== 'managed_file' &&
-            app.get('config').execution?.unix_user_mode === 'delegated');
+            source !== 'managed_file' &&
+            (backend.capability().storage === 'backend' ||
+              // A tombstone keeps repeated Disconnect local to the backend even
+              // after opt-out. A backend object alone (created on every PG
+              // deployment) does not mean legacy delegated files are managed here.
+              (await backend.get(String(tenantId), userId)) !== null));
         if (backendSource && backend) {
           if (generation === undefined)
             throw new Unavailable('Durable Claude disconnect authority unavailable.');
