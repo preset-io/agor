@@ -3029,7 +3029,8 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
   // Create/edit open in-place as drill-ins instead of stacking a modal. The two
   // booleans are derived from the shared drill state; the many effects/renders
   // that read them keep working unchanged.
-  const { drill, openDrill, closeDrill } = useSettingsDrill();
+  const { drill, openDrill, closeDrill, confirmLeaveIfDirty, registerController } =
+    useSettingsDrill();
   const createModalOpen = drill?.kind === 'gateway' && drill.mode === 'create';
   const editModalOpen = drill?.kind === 'gateway' && drill.mode === 'edit';
   const [editingChannel, setEditingChannel] = useState<GatewayChannel | null>(null);
@@ -3037,6 +3038,11 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
   const [selectedAgent, setSelectedAgent] = useState<AgenticToolName | null>('claude-code');
   const [requiresSupportedToolSelection, setRequiresSupportedToolSelection] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
+  // Tracks whether the open create/edit form has unsaved edits, so the shell's
+  // "Discard unsaved changes?" guard fires for Gateway like every other panel.
+  // Gateway keeps its own multi-step footer, so it registers a controller purely
+  // to publish this flag (ownsFooter suppresses the shell's duplicate footer).
+  const [formDirty, setFormDirty] = useState(false);
 
   const [createForm] = Form.useForm();
   const [editForm] = Form.useForm();
@@ -3182,12 +3188,20 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
   // useWatch effect, so it never races the async probe that sets the result.
   const handleProbeFieldsChange = useCallback(
     (changed: Record<string, unknown>) => {
+      // A user edit marks the form dirty (programmatic setFieldsValue does not
+      // fire onValuesChange, so hydrating an edit form stays clean).
+      setFormDirty(true);
       if (Object.keys(changed).some((field) => CONNECTION_PROBE_FIELDS.has(field))) {
         invalidateConnectionTest();
       }
     },
     [invalidateConnectionTest]
   );
+
+  // Start each freshly-opened create/edit flow clean; user edits flip it dirty.
+  useEffect(() => {
+    if (createModalOpen || editModalOpen) setFormDirty(false);
+  }, [createModalOpen, editModalOpen]);
 
   // Switching channel type changes the step structure, so snap back to the
   // universal first step and clear any in-progress platform setup.
@@ -3539,13 +3553,23 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
     setCreateStep((step) => step + 1);
   };
 
+  // User-initiated cancel/back — routed through the shared discard guard when
+  // there are unsaved edits (a clean form closes immediately; the successful-
+  // create path closes via closeDrill() directly and is never dirty).
   const closeCreateModal = () => {
-    createForm.resetFields();
-    closeDrill();
-    setChannelType('slack');
-    setSelectedAgent('claude-code');
-    setRequiresSupportedToolSelection(false);
-    resetCreateFlow();
+    const doClose = () => {
+      createForm.resetFields();
+      closeDrill();
+      setChannelType('slack');
+      setSelectedAgent('claude-code');
+      setRequiresSupportedToolSelection(false);
+      resetCreateFlow();
+    };
+    if (!formDirty) {
+      doClose();
+      return;
+    }
+    void confirmLeaveIfDirty().then((ok) => ok && doClose());
   };
 
   const handleEdit = (channel: GatewayChannel) => {
@@ -3826,15 +3850,46 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
     ]);
   }, [gatewayChannelById, searchTerm, branchOptionsById]);
 
+  // User-initiated cancel/back — routed through the shared discard guard when
+  // there are unsaved edits (a clean form closes immediately; the successful-
+  // update path closes via closeDrill() directly and is never dirty).
   const closeEditFlow = () => {
-    editForm.resetFields();
-    closeDrill();
-    setEditingChannel(null);
-    setChannelType('slack');
-    setSelectedAgent('claude-code');
-    setRequiresSupportedToolSelection(false);
-    resetConnectionTest();
+    const doClose = () => {
+      editForm.resetFields();
+      closeDrill();
+      setEditingChannel(null);
+      setChannelType('slack');
+      setSelectedAgent('claude-code');
+      setRequiresSupportedToolSelection(false);
+      resetConnectionTest();
+    };
+    if (!formDirty) {
+      doClose();
+      return;
+    }
+    void confirmLeaveIfDirty().then((ok) => ok && doClose());
   };
+
+  // Publish Gateway's dirty state to the shell so nav-away and the modal ✕ (which
+  // read the registered controller) honour the discard guard. Callbacks are held
+  // in a ref and re-registration is keyed only on primitive display values, so a
+  // fresh handler identity each render can't spin the setController→re-render
+  // loop the DrillInFrame comment warns about. `ownsFooter` keeps the shell from
+  // rendering a second footer over Gateway's own multi-step one.
+  const gatewayBackRef = useRef<() => void>(() => {});
+  gatewayBackRef.current = createModalOpen ? closeCreateModal : closeEditFlow;
+  const stableGatewayBack = useCallback(() => gatewayBackRef.current(), []);
+  useEffect(() => {
+    if (!createModalOpen && !editModalOpen) return;
+    registerController({
+      title: createModalOpen ? 'Add Gateway Channel' : 'Edit Gateway Channel',
+      dirty: formDirty,
+      saving: creating,
+      ownsFooter: true,
+      onBack: stableGatewayBack,
+    });
+    return () => registerController(null);
+  }, [createModalOpen, editModalOpen, formDirty, creating, registerController, stableGatewayBack]);
 
   const drillBackHeaderStyle: React.CSSProperties = {
     display: 'flex',

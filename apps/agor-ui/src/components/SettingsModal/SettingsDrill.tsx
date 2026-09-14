@@ -46,6 +46,13 @@ export interface DrillController {
   saveDisabled?: boolean;
   /** Invoked by the header back-arrow and footer Cancel. */
   onBack: () => void;
+  /**
+   * Set when the editor renders its own in-panel footer (e.g. Gateway's
+   * multi-step create wizard) and only needs the controller to publish `dirty`
+   * for the shell's leave guard. The shell then suppresses its own footer so the
+   * two don't stack.
+   */
+  ownsFooter?: boolean;
 }
 
 interface SettingsDrillContextValue {

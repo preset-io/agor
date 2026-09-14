@@ -329,24 +329,25 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
     }
   }, [closeDrill, confirmLeaveIfDirty, drill, onClose]);
 
-  const drillFooter = controller
-    ? [
-        <Button key="cancel" onClick={controller.onBack} disabled={controller.saving}>
-          Cancel
-        </Button>,
-        controller.onSave ? (
-          <Button
-            key="save"
-            type="primary"
-            loading={controller.saving}
-            disabled={controller.saveDisabled}
-            onClick={() => void controller.onSave?.()}
-          >
-            {controller.saveLabel ?? 'Save'}
-          </Button>
-        ) : null,
-      ]
-    : null;
+  const drillFooter =
+    controller && !controller.ownsFooter
+      ? [
+          <Button key="cancel" onClick={controller.onBack} disabled={controller.saving}>
+            Cancel
+          </Button>,
+          controller.onSave ? (
+            <Button
+              key="save"
+              type="primary"
+              loading={controller.saving}
+              disabled={controller.saveDisabled}
+              onClick={() => void controller.onSave?.()}
+            >
+              {controller.saveLabel ?? 'Save'}
+            </Button>
+          ) : null,
+        ]
+      : null;
 
   // Role gate — MCP Servers and Gateway Channels are global admin-managed
   // configuration (credentials, webhook URLs, env vars). The daemon enforces
