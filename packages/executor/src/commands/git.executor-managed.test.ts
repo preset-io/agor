@@ -155,7 +155,9 @@ function createClient(records: {
           }
         );
         return {
-          get: vi.fn(async () => records.branch),
+          get: vi.fn(async () =>
+            records.branch ? { filesystem_status: 'creating', ...records.branch } : undefined
+          ),
           find,
           patch: vi.fn(async (_id: string, data: Record<string, unknown>) => {
             records.patchedBranches?.push(data);

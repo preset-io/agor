@@ -91,6 +91,10 @@ import {
 import { resolveHostIpAddress } from '@agor/core/utils/host-ip';
 import { isAllowedHealthCheckUrl } from '@agor/core/utils/url';
 import { DrizzleService, type Query } from '../adapters/drizzle';
+import {
+  EXECUTOR_COMMAND_TOKEN_PURPOSE,
+  isExecutorSessionTokenPayload,
+} from '../auth/executor-session-token.js';
 import { buildBranchCreatedAnalyticsProperties } from '../utils/analytics-payloads.js';
 import { consumeBranchArchiveDeleteAuthorization } from '../utils/branch-archive-delete-authorization.js';
 import { ensureCanControlBranchEnvironment, isSuperAdmin } from '../utils/branch-authorization.js';
@@ -1341,6 +1345,18 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     params?: BranchParams,
     operationDb?: TenantScopedDatabase
   ): Promise<BranchWithZoneAndSessions> {
+    if (params?.provider && Object.hasOwn(data, 'filesystem_status')) {
+      const token = (params as AuthenticatedParams).authentication?.payload;
+      if (
+        !isExecutorSessionTokenPayload(token) ||
+        token.purpose !== EXECUTOR_COMMAND_TOKEN_PURPOSE ||
+        token.session_id !== 'git.branch.add' ||
+        token.branch_id !== id ||
+        !['ready', 'failed'].includes(String(data.filesystem_status))
+      ) {
+        throw new BadRequest('filesystem_status is managed by branch materialization.');
+      }
+    }
     if (Object.hasOwn(data, 'sdk_home')) {
       throw new BadRequest(
         'sdk_home is server-managed and cannot be changed through the Branch API.'

@@ -67,6 +67,11 @@ export class BranchMaintenanceRepository {
       }
       if (row.deletion_status && kind !== 'delete')
         throw new RepositoryError('Branch deletion cannot be cancelled');
+      if (row.filesystem_status === 'creating') {
+        throw new RepositoryError(
+          'Branch filesystem materialization is active or unsettled; wait for verified completion before maintenance'
+        );
+      }
       const overlap = await select(tx, { branch_id: branches.branch_id })
         .from(branches)
         .where(sql`${branches.branch_id} <> ${branchId} AND (

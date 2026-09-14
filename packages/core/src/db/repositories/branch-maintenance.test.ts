@@ -200,3 +200,24 @@ test('a claim interrupted before invocation admission becomes retryable without 
   expect(retry.acquired).toBe(true);
   expect(retry.claim.generation).toBe(claim.generation + 1);
 });
+
+test('materialization and taskless writes exclude permanent deletion through the shared Branch fence', async ({
+  db,
+}) => {
+  const { branch } = await seedEnvironmentCommandBranch(db);
+  const branches = new BranchRepository(db);
+  const maintenance = new BranchMaintenanceRepository(db);
+  await branches.update(branch.branch_id, { filesystem_status: 'creating' });
+  await expect(maintenance.claim(branch.branch_id, 'delete')).rejects.toThrow('materialization');
+  await branches.update(branch.branch_id, { filesystem_status: 'ready' });
+  const { claim } = await maintenance.claim(branch.branch_id, 'workspace_write');
+  await expect(maintenance.claim(branch.branch_id, 'delete')).rejects.toThrow();
+  await expect(
+    branches.update(branch.branch_id, { filesystem_status: 'creating' })
+  ).rejects.toThrow();
+  const invocation = await maintenance.beginExecution(claim);
+  await expect(maintenance.release(claim)).rejects.toThrow();
+  await maintenance.settleExecution(claim, invocation);
+  await maintenance.release(claim);
+  expect((await maintenance.claim(branch.branch_id, 'delete')).acquired).toBe(true);
+});

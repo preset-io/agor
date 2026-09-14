@@ -125,6 +125,7 @@ export async function handleBranchDelete(
     execution_id: p.executionId,
   };
   let reportOutcomeUnknown = false;
+  let sessionToken = payload.sessionToken;
   const report = async (
     action:
       | 'claim'
@@ -145,14 +146,21 @@ export async function handleBranchDelete(
           redirect: 'error',
           signal: AbortSignal.timeout(30_000),
           headers: {
-            Authorization: `Bearer ${payload.sessionToken}`,
+            Authorization: `Bearer ${sessionToken}`,
             'Content-Type': 'application/json',
           },
           body: JSON.stringify({ ...scope, action, ...(stage ? { stage } : {}) }),
         }
       );
       if (!response.ok) throw new Error(`Deletion ${action} rejected (HTTP ${response.status})`);
-      return (await response.json()) as { remaining: boolean };
+      const result = (await response.json()) as { remaining: boolean; sessionToken?: string };
+      if (
+        action === 'heartbeat' &&
+        typeof result.sessionToken === 'string' &&
+        result.sessionToken.length > 0
+      )
+        sessionToken = result.sessionToken;
+      return result;
     } catch (error) {
       // Transport failure does not cancel a daemon storage step. Never release
       // its invocation while that request may still be deleting bytes.

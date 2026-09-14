@@ -297,6 +297,12 @@ shared base-repository Git history are retained. Missing ownership metadata or a
 unavailable storage root blocks deletion rather than being treated as successful
 erasure. Repository deletion requires its branches to finish permanent deletion first.
 
+Active branch materialization and taskless `.agor.yml` exports also block deletion.
+An export releases its shared maintenance claim only after its contained executor is
+verified stopped; an unknown outcome stays fenced. Deletion heartbeats renew the
+short-lived command credential only for the same live invocation and after checking
+current branch authority, so a healthy deletion can outlast its initial credential.
+
 The daemon's existing runtime reconciliation loop observes stale deletion heartbeats;
 it does not orchestrate the long-running workflow or automatically retry it. A daemon
 replacement can interrupt individual API requests, and a deployment that also kills

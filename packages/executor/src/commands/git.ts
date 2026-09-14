@@ -1,3 +1,4 @@
+import { resolveExecutorBranch } from './branch-filesystem.js';
 /**
  * Git Command Handlers for Executor
  *
@@ -282,7 +283,7 @@ export async function handleBranchFilesList(
     const daemonUrl = payload.daemonUrl || 'http://localhost:3030';
     client = await createExecutorClient(daemonUrl, payload.sessionToken);
 
-    const branch = await client.service('branches').get(branchId);
+    const branch = await resolveExecutorBranch(client, branchId);
     if (!branch?.path) {
       return { success: true, data: { results: [] } };
     }
@@ -828,6 +829,7 @@ export async function handleGitBranchAdd(
   }
 
   let client: AgorClient | null = null;
+  let materializationWritesSettled = false;
 
   try {
     // Connect to daemon
@@ -838,7 +840,9 @@ export async function handleGitBranchAdd(
     // Resolve filesystem-bearing repository metadata through the initiating
     // user's delegated Feathers authority in this same executor.
     const repo = await client.service('repos').get(payload.params.repoId);
-    const branchRecord = await client.service('branches').get(branchId);
+    const branchRecord = await resolveExecutorBranch(client, branchId);
+    if (branchRecord.filesystem_status !== 'creating')
+      throw new Error('Branch materialization is not admitted');
     if (branchRecord.repo_id !== payload.params.repoId) {
       throw new Error(`Branch ${branchId} does not belong to repository ${payload.params.repoId}`);
     }
@@ -979,10 +983,6 @@ export async function handleGitBranchAdd(
     // rendering belongs to the daemon's existing authorization/validation
     // boundary and is derived there from trusted repo configuration.
     if (branchId) {
-      console.log(`[git.branch.add] Marking branch ${shortId(branchId)} as ready`);
-      await client.service('branches').patch(branchId, { filesystem_status: 'ready' });
-      console.log(`[git.branch.add] Branch marked as ready`);
-
       if (repo.environment) {
         try {
           const renderer = client.service(`branches/${branchId}/render-environment`) as unknown as {
@@ -1000,6 +1000,11 @@ export async function handleGitBranchAdd(
         }
       }
     }
+
+    // No filesystem work (including fallback recovery) may follow publication
+    // of readiness: deletion may acquire the Branch fence immediately afterward.
+    materializationWritesSettled = true;
+    await client.service('branches').patch(branchId, { filesystem_status: 'ready' });
 
     return {
       success: true,
@@ -1020,7 +1025,7 @@ export async function handleGitBranchAdd(
     // when git worktree add fails. No host permission repair is attempted.
     const fallbackPath = resolvedBranchPath;
     let fallbackCreated = false;
-    if (fallbackPath) {
+    if (fallbackPath && !materializationWritesSettled) {
       // Step 1: Ensure directory exists
       if (!existsSync(fallbackPath)) {
         try {
@@ -1047,7 +1052,7 @@ export async function handleGitBranchAdd(
     }
 
     // Try to mark branch as failed with error details (if we have a branchId and client)
-    if (branchId && client) {
+    if (branchId && client && !materializationWritesSettled && resolvedBranchPath) {
       try {
         await client.service('branches').patch(branchId, {
           filesystem_status: 'failed',

@@ -14,7 +14,7 @@ export interface BranchMaintenanceClaim {
   branch_id: BranchID;
   operation_id: UUID;
   generation: number;
-  kind: 'delete' | 'cleanup';
+  kind: 'delete' | 'cleanup' | 'workspace_write';
   /** Cleared only after the executor owner proves settlement, never on lease expiry. */
   execution_id?: UUID;
   /** Dispatch intent and executor claim are separate: duplicate delivery must not execute twice. */

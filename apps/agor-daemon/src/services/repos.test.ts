@@ -1,3 +1,4 @@
+import { runWithTenantContext } from '@agor/core/db';
 import type { Application } from '@agor/core/types';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ReposService } from './repos';
@@ -31,6 +32,14 @@ vi.mock('@agor/core/db', async (importOriginal) => {
 
   return {
     ...actual,
+    BranchMaintenanceRepository: vi.fn().mockImplementation(function BranchMaintenanceRepository() {
+      return {
+        claim: vi.fn(async () => ({ acquired: true, claim: {} })),
+        beginExecution: vi.fn(async () => 'invocation'),
+        settleExecution: vi.fn(async () => {}),
+        release: vi.fn(async () => {}),
+      };
+    }),
     BranchRepository: vi.fn().mockImplementation(function BranchRepository() {
       return {
         findActiveByRepoAndName: vi.fn(async () => null),
@@ -75,6 +84,10 @@ vi.mock('../utils/tenant-db-scope.js', async (importOriginal) => ({
 vi.mock('../utils/spawn-executor.js', () => {
   return {
     requestExecutor: executorMocks.requestExecutor,
+    startContainedExecutorCommand: (...args: unknown[]) => ({
+      result: executorMocks.requestExecutor(...args),
+      verifyAbsence: async () => true,
+    }),
     getDaemonUrl: vi.fn(() => 'http://daemon'),
     spawnExecutorFireAndForget: executorMocks.spawnExecutorFireAndForget,
   };
@@ -140,17 +153,19 @@ describe('ReposService .agor.yml normalized branch access', () => {
     executorMocks.requestExecutor.mockResolvedValue({ success: true, data: {} });
     const instance = service();
 
-    await (
-      instance as unknown as {
-        runAgorYmlExecutorCommand(
-          repo: typeof repo,
-          branch: typeof branch,
-          command: typeof command,
-          params: Record<string, unknown>,
-          serviceParams: unknown
-        ): Promise<unknown>;
-      }
-    ).runAgorYmlExecutorCommand(repo, branch, command, {}, { user });
+    await runWithTenantContext('default', () =>
+      (
+        instance as unknown as {
+          runAgorYmlExecutorCommand(
+            repo: typeof repo,
+            branch: typeof branch,
+            command: typeof command,
+            params: Record<string, unknown>,
+            serviceParams: unknown
+          ): Promise<unknown>;
+        }
+      ).runAgorYmlExecutorCommand(repo, branch, command, {}, { user })
+    );
 
     expect(executorMocks.requestExecutor).toHaveBeenCalledWith(
       expect.objectContaining({

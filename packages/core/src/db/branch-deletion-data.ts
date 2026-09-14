@@ -12,6 +12,7 @@ interface DataStep {
   keys: string[];
   where: string;
   set?: string;
+  sqliteOnly?: boolean;
 }
 const del = (table: string, key: string, where: string): DataStep => ({
   table,
@@ -106,7 +107,7 @@ export const BRANCH_DELETION_DATA_STEPS: readonly DataStep[] = [
   del('sessions', 'session_id', 'branch_id IN (SELECT id FROM ob)'),
   del('schedules', 'schedule_id', 'branch_id IN (SELECT id FROM ob)'),
   clear('boards', 'board_id', 'primary_teammate_id', 'ob'),
-  clear('boards', 'board_id', 'primary_assistant_id', 'ob'),
+  { ...clear('boards', 'board_id', 'primary_assistant_id', 'ob'), sqliteOnly: true },
 ];
 
 function ownership(branchId: BranchID): SQL {
@@ -185,6 +186,7 @@ export async function deleteBranchDataBatch(
     }
   }
   for (const step of BRANCH_DELETION_DATA_STEPS) {
+    if (step.sqliteOnly && isPostgresDatabase(db)) continue;
     const keys = step.keys.map((key) => `"${key}"`).join(', ');
     const tuple = step.keys.length > 1 ? `(${keys})` : keys;
     const verb = step.set

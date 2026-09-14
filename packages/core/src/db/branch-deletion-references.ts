@@ -30,12 +30,35 @@ const REFERENCE_KEYS = new Set([
   'primary_assistant_id',
 ]);
 
-/** Only structured reference fields change. User text and historical content remain byte-identical. */
-export function scrubBranchDeletionReferences(value: unknown, owned: ReadonlySet<string>): unknown {
-  if (Array.isArray(value)) return value.map((item) => scrubBranchDeletionReferences(item, owned));
+// Traverse only schema-owned paths, never arbitrary structured user context.
+const REFERENCE_PATHS = new Set([
+  'genealogy',
+  'callback_config',
+  'metadata',
+  'position',
+  'custom_context',
+  ...['teammate', 'assistant', 'agent'].flatMap((name) => [
+    `custom_context.${name}`,
+    `custom_context.${name}.kb`,
+  ]),
+]);
+
+/** Only canonical metadata paths change; caller-defined JSON remains intact. */
+export function scrubBranchDeletionReferences(
+  value: unknown,
+  owned: ReadonlySet<string>,
+  path = ''
+): unknown {
   if (!object(value)) return value;
   const result: JsonObject = {};
   for (const [key, item] of Object.entries(value)) {
+    const childPath = path ? `${path}.${key}` : key;
+    if (path === 'custom_context' || /^custom_context\.(teammate|assistant|agent)$/.test(path)) {
+      result[key] = REFERENCE_PATHS.has(childPath)
+        ? scrubBranchDeletionReferences(item, owned, childPath)
+        : item;
+      continue;
+    }
     if (REFERENCE_KEYS.has(key) && typeof item === 'string' && owned.has(item)) continue;
     if (key === 'primary_namespace_id' && typeof item === 'string' && owned.has(item)) {
       throw new Error(
@@ -81,15 +104,40 @@ export function scrubBranchDeletionReferences(value: unknown, owned: ReadonlySet
       );
       continue;
     }
-    result[key] = scrubBranchDeletionReferences(item, owned);
+    result[key] = REFERENCE_PATHS.has(childPath)
+      ? scrubBranchDeletionReferences(item, owned, childPath)
+      : item;
   }
   return result;
 }
 
-function collectIds(value: unknown, ids: Set<string>) {
-  if (typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f-]{27}$/i.test(value)) ids.add(value);
-  else if (Array.isArray(value)) for (const item of value) collectIds(item, ids);
-  else if (object(value)) for (const item of Object.values(value)) collectIds(item, ids);
+function collectIds(value: unknown, ids: Set<string>, path = '') {
+  if (!object(value)) return;
+  for (const [key, item] of Object.entries(value)) {
+    const childPath = path ? `${path}.${key}` : key;
+    if (REFERENCE_PATHS.has(childPath)) collectIds(item, ids, childPath);
+    if (path === 'custom_context' || /^custom_context\.(teammate|assistant|agent)$/.test(path))
+      continue;
+    if (
+      (REFERENCE_KEYS.has(key) ||
+        key === 'primary_namespace_id' ||
+        key === 'callback_session_id') &&
+      typeof item === 'string'
+    )
+      ids.add(item);
+    if (key === 'children' && Array.isArray(item))
+      for (const id of item) if (typeof id === 'string') ids.add(id);
+    if (['relative', 'completion_callback'].includes(key) && object(item)) {
+      for (const field of ['parent_id', 'target_session_id', 'requested_from_session_id'])
+        if (typeof item[field] === 'string') ids.add(item[field]);
+    }
+    if (['grants', 'callback_dispatches'].includes(key) && Array.isArray(item))
+      for (const entry of item) {
+        if (object(entry))
+          for (const field of ['namespace_id', 'target_session_id', 'queued_task_id'])
+            if (typeof entry[field] === 'string') ids.add(entry[field]);
+      }
+  }
   if (ids.size > 1000)
     throw new Error('Structured deletion references exceed the bounded reconciliation limit');
 }
@@ -131,7 +179,6 @@ export async function reconcileBranchDeletionReferencesBatch(
         ? {
             genealogy: data.genealogy,
             callback_config: data.callback_config,
-            custom_context: data.custom_context,
           }
         : scan.table === 'tasks'
           ? { metadata: data.metadata }

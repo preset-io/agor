@@ -119,6 +119,40 @@ it.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
           deletion.finalize(retry.claim, retry.execution, async () => {})
         ).rejects.toThrow('not found');
       });
+      // Independent pool: both pages visit the other Branch while holding their
+      // subject lock. Tenant reference serialization must precede either lock.
+      const peerDb = createDatabase({ dialect: 'postgresql', url: url! });
+      try {
+        const peer = await runWithTenantDatabaseScope(peerDb, tenantA, async (scoped) => {
+          const source = (await new BranchRepository(scoped).findById(retry.claim.branch_id))!;
+          const branch = await new BranchRepository(scoped).create({
+            branch_id: generateId() as BranchID,
+            repo_id: source.repo_id,
+            name: 'peer',
+            ref: 'peer',
+            branch_unique_id: 2,
+            path: '/disposable/peer',
+            created_by: source.created_by,
+          });
+          const maintenance = new BranchMaintenanceRepository(scoped);
+          const { claim } = await maintenance.claim(branch.branch_id, 'delete');
+          const execution = await maintenance.beginExecution(claim);
+          await maintenance.claimExecution(claim, execution);
+          return { claim, execution };
+        });
+        for (let page = 0; page < 10; page++) {
+          await Promise.all([
+            runWithTenantDatabaseScope(db, tenantA, (scoped) =>
+              new BranchDeletionRepository(scoped).quiescePage(retry.claim, retry.execution)
+            ),
+            runWithTenantDatabaseScope(peerDb, tenantA, (scoped) =>
+              new BranchDeletionRepository(scoped).quiescePage(peer.claim, peer.execution)
+            ),
+          ]);
+        }
+      } finally {
+        await (peerDb as typeof peerDb & { $client: { end(): Promise<void> } }).$client.end();
+      }
       await runWithTenantDatabaseScope(db, tenantA, async (scoped) => {
         const deletion = new BranchDeletionRepository(scoped);
         await deletion.verifyStorage(retry.claim, retry.execution); // database-only disposable fixture

@@ -25,6 +25,7 @@ import {
   resolveMultiTenancyConfig,
 } from '@agor/core/config';
 import {
+  BranchMaintenanceRepository,
   BranchRepository,
   getCurrentTenantId,
   RepoRepository,
@@ -59,6 +60,7 @@ import {
   getDaemonUrl,
   requestExecutor,
   spawnExecutorFireAndForget,
+  startContainedExecutorCommand,
 } from '../utils/spawn-executor.js';
 import { withFreshTenantWrite } from '../utils/tenant-db-scope.js';
 import { issueExecutorCommandToken } from './session-token-service.js';
@@ -1050,29 +1052,63 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
       this.app.get('config')
     );
 
-    return requestExecutor(
-      {
-        command,
-        sessionToken,
-        daemonUrl: getDaemonUrl(),
-        params: {
-          repoId: repo.repo_id,
-          branchId: branch.branch_id,
-          ...params,
-          cwd: branch.path,
-          principalBranchAccess: branchFsAccess,
-        },
+    const payload = {
+      command,
+      sessionToken,
+      daemonUrl: getDaemonUrl(),
+      params: {
+        repoId: repo.repo_id,
+        branchId: branch.branch_id,
+        ...params,
+        cwd: branch.path,
+        principalBranchAccess: branchFsAccess,
       },
-      {
-        logPrefix: `[${command} ${repo.slug}/${branch.name}]`,
-        delegatedHomeKey: delegatedHomeKey,
-        templateVariables: {
-          branch_id: branch.branch_id,
-          user_id: userId,
-          branch_fs_access: branchFsAccess,
-        },
-      }
+    };
+    const options = {
+      logPrefix: `[${command} ${repo.slug}/${branch.name}]`,
+      delegatedHomeKey: delegatedHomeKey,
+      templateVariables: {
+        branch_id: branch.branch_id,
+        user_id: userId,
+        branch_fs_access: branchFsAccess,
+      },
+    };
+    if (command !== 'branch.agor-yml.export') return requestExecutor(payload, options);
+    const tenantId = getCurrentTenantId();
+    if (!tenantId) throw new NotAuthenticated('Trusted tenant context is required');
+    const scoped = <T>(work: (repository: BranchMaintenanceRepository) => Promise<T>) =>
+      withFreshTenantWrite(this.db, tenantId, () => work(new BranchMaintenanceRepository(this.db)));
+    const admitted = await scoped((repository) =>
+      repository.claim(branch.branch_id, 'workspace_write', userId, async (tx) => {
+        const branches = new BranchRepository(tx);
+        const current = await branches.findById(branch.branch_id);
+        if (!current) throw new BadRequest('Branch no longer exists');
+        await ensureBranchWorkspaceAccess(
+          branches,
+          current,
+          userId,
+          (serviceParams as Partial<AuthenticatedParams> | undefined)?.user?.role as
+            | UserRole
+            | undefined,
+          'session',
+          'write',
+          this.app.get('config').execution?.allow_superadmin === true
+        );
+      })
     );
+    if (!admitted.acquired) throw new Error('Branch workspace maintenance is already in progress');
+    const invocation = await scoped((repository) => repository.beginExecution(admitted.claim));
+    // The existing contained request executor owns this short taskless write.
+    // Lost ownership never permits deletion to race an unknown writer.
+    const handle = startContainedExecutorCommand(payload, options);
+    const result = await handle.result;
+    if (!(await handle.verifyAbsence()))
+      throw new Error('Workspace write outcome requires containment reconciliation');
+    await scoped(async (repository) => {
+      await repository.settleExecution(admitted.claim, invocation);
+      await repository.release(admitted.claim);
+    });
+    return result;
   }
 
   /**

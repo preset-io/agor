@@ -83,9 +83,13 @@ describe('executor-owned branch deletion', () => {
 });
 
 describe('concrete deletion command with disposable storage', () => {
-  it.each([false, true])(
-    'removes owned clone/home and preserves neighbors; unknown upload=%s',
-    async (unknownUpload) => {
+  it.each([
+    { unknownUpload: false, slow: false },
+    { unknownUpload: true, slow: false },
+    { unknownUpload: false, slow: true },
+  ])(
+    'removes owned storage; unknown upload=$unknownUpload, exceeds original token lifetime=$slow',
+    async ({ unknownUpload, slow }) => {
       const { mkdtemp, mkdir, writeFile, stat, rm } = await import('node:fs/promises');
       const { tmpdir } = await import('node:os');
       const { join } = await import('node:path');
@@ -96,23 +100,37 @@ describe('concrete deletion command with disposable storage', () => {
       const home = join(root, 'homes', id);
       const neighbor = join(root, 'branches', 'neighbor');
       const actions: string[] = [];
+      let releaseQuiesce: (() => void) | undefined;
+      let renewed = false;
       try {
         for (const dir of [workspace, home, neighbor]) {
           await mkdir(dir, { recursive: true });
           await writeFile(join(dir, 'fixture.txt'), 'fixture');
         }
+        if (slow) vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'Date'] });
         vi.stubGlobal(
           'fetch',
           vi.fn(async (_url, request) => {
             const body = JSON.parse(String(request.body));
-            actions.push(body.action);
+            if (body.action !== 'heartbeat') actions.push(body.action);
+            if (renewed) expect(request.headers.Authorization).toBe('Bearer renewed-fixture-token');
+            if (body.action === 'heartbeat') {
+              renewed = true;
+              return new Response(
+                JSON.stringify({ ok: true, sessionToken: 'renewed-fixture-token' })
+              );
+            }
+            if (slow && body.action === 'quiesce')
+              await new Promise<void>((resolve) => {
+                releaseQuiesce = resolve;
+              });
             expect(body.branch_id).toBe(id);
             if (body.action === 'upload' && unknownUpload)
               throw new Error('fixture transport loss');
             return new Response(JSON.stringify({ remaining: false }), { status: 200 });
           })
         );
-        const result = await handleBranchDelete(
+        const pending = handleBranchDelete(
           {
             command: 'branch.delete',
             daemonUrl: 'https://daemon.invalid',
@@ -132,6 +150,14 @@ describe('concrete deletion command with disposable storage', () => {
           },
           {}
         );
+        if (slow) {
+          // Keep one daemon step in flight longer than the initial 15-minute
+          // credential while the existing worker heartbeat renews authority.
+          while (!releaseQuiesce) await new Promise((resolve) => setImmediate(resolve));
+          await vi.advanceTimersByTimeAsync(20 * 60_000);
+          releaseQuiesce();
+        }
+        const result = await pending;
         expect(result.success).toBe(!unknownUpload);
         await expect(stat(workspace)).rejects.toMatchObject({ code: 'ENOENT' });
         await expect(stat(home)).rejects.toMatchObject({ code: 'ENOENT' });

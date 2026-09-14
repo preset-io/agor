@@ -115,7 +115,7 @@ test('reference reconciliation clears exact structured pointers but leaves arbit
     .where(eq(branches.branch_id, neighbor.branch_id))
     .one();
   expect(row?.data.custom_context).toMatchObject({ fixture: { text: branch.branch_id } });
-  expect(JSON.stringify(row?.data.custom_context)).not.toContain('branch_id');
+  expect(row?.data.custom_context).toMatchObject({ fixture: { branch_id: branch.branch_id } });
   expect(
     scrubBranchDeletionReferences(
       { text: branch.branch_id, metadata: { child_session_id: branch.branch_id } },

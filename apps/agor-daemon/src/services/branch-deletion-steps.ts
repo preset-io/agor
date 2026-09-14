@@ -32,6 +32,7 @@ import { captureBranchRemovalRealtimeVisibility } from '../utils/branch-removal-
 import { ensureBranchWorkspaceAccess } from '../utils/branch-workspace-path.js';
 import { emitServiceEvent } from '../utils/emit-service-event.js';
 import { getUploadStagingStore } from '../utils/upload-staging.js';
+import { issueExecutorCommandToken } from './session-token-service';
 
 const reportSchema = z
   .object({
@@ -155,8 +156,33 @@ export class BranchDeletionStepsService {
       const maintenance = new BranchMaintenanceRepository(db);
       const deletion = new BranchDeletionRepository(db);
       if (data.action === 'claim') await maintenance.claimExecution(claim, execution);
-      else if (data.action === 'heartbeat') await maintenance.heartbeatExecution(claim, execution);
-      else if (data.action === 'quiesce') return deletion.quiescePage(claim, execution);
+      else if (data.action === 'heartbeat') {
+        await maintenance.heartbeatExecution(claim, execution);
+        const expiresAt = params.authentication?.payload?.exp;
+        if (typeof expiresAt === 'number' && expiresAt * 1000 - Date.now() < 5 * 60_000) {
+          const sessionToken = await maintenance.withExecution(claim, execution, async (tx) => {
+            const repository = new BranchRepository(tx);
+            const branch = await repository.findById(claim.branch_id);
+            if (!branch) throw new BadRequest('Branch deletion no longer exists');
+            await ensureBranchWorkspaceAccess(
+              repository,
+              branch,
+              params.user!.user_id,
+              params.user!.role as UserRole,
+              'all',
+              'write',
+              this.app.get('config').execution?.allow_superadmin === true
+            );
+            return issueExecutorCommandToken(
+              this.app,
+              branchDeletionCommandId(execution),
+              params.user!.user_id,
+              claim.branch_id
+            );
+          });
+          return { ok: true, sessionToken };
+        }
+      } else if (data.action === 'quiesce') return deletion.quiescePage(claim, execution);
       else if (data.action === 'storage') await deletion.verifyStorage(claim, execution);
       else if (data.action === 'data') return deletion.deleteDataPage(claim, execution);
       else if (data.action === 'finalize') {

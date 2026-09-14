@@ -23,7 +23,9 @@ test('deletion steps require exact authenticated command, tenant and invocation,
   const { claim } = await maintenance.claim(branch.branch_id, 'delete', user.user_id);
   const invocation = await maintenance.beginExecution(claim);
   const emit = vi.fn();
+  const generateCommandToken = vi.fn().mockResolvedValue('renewed-invocation-token');
   const app = {
+    sessionTokenService: { generateCommandToken },
     get: () => ({ execution: {} }),
     service: () => ({ emit }),
   } as unknown as Application;
@@ -67,6 +69,31 @@ test('deletion steps require exact authenticated command, tenant and invocation,
     ).rejects.toThrow('tenant');
     await service.create(input, params);
     await expect(service.create(input, params)).rejects.toThrow('already claimed');
+    await service.create({ ...input, action: 'heartbeat' }, params);
+    expect(generateCommandToken).not.toHaveBeenCalled();
+    const expiring = {
+      ...params,
+      authentication: {
+        ...params.authentication!,
+        payload: {
+          ...params.authentication!.payload,
+          exp: Math.floor(Date.now() / 1000) + 120,
+        },
+      },
+    };
+    expect(await service.create({ ...input, action: 'heartbeat' }, expiring)).toEqual({
+      ok: true,
+      sessionToken: 'renewed-invocation-token',
+    });
+    expect(generateCommandToken).toHaveBeenCalledWith(
+      branchDeletionCommandId(invocation),
+      user.user_id,
+      branch.branch_id
+    );
+    await expect(
+      service.create({ ...input, action: 'heartbeat', generation: claim.generation + 1 }, expiring)
+    ).rejects.toThrow();
+    expect(generateCommandToken).toHaveBeenCalledTimes(1);
     await expect(service.create({ ...input, action: 'data' }, params)).rejects.toThrow('storage');
     await expect(
       service.create({ ...input, action: 'storage', generation: claim.generation + 1 }, params)

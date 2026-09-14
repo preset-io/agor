@@ -13,10 +13,12 @@ import {
   executeRaw,
   isPostgresDatabase,
   rawRows,
+  runDatabaseTransaction,
   select,
   update,
 } from '../database-wrapper';
 import { branches } from '../schema';
+import { requireCurrentTenantId } from '../tenant-context';
 import { RepositoryError } from './base';
 import { BranchMaintenanceRepository } from './branch-maintenance';
 
@@ -38,6 +40,28 @@ export class BranchDeletionRepository {
       if (!row?.deletion_status) throw new RepositoryError('Branch deletion is not active');
       return work(tx, row);
     });
+  }
+
+  /** Lock before the subject Branch: two pages must not lock A→B and B→A. */
+  private referenceStep<T>(
+    claim: BranchMaintenanceClaim,
+    invocation: UUID,
+    work: (tx: Database, row: typeof branches.$inferSelect) => Promise<T>
+  ): Promise<T> {
+    return runDatabaseTransaction(
+      this.db,
+      async (tx) => {
+        if (isPostgresDatabase(tx)) {
+          const key = `branch-deletion-references:${requireCurrentTenantId()}`;
+          await executeRaw(
+            tx,
+            sql`SELECT pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended(${key}, 0))`
+          );
+        }
+        return new BranchDeletionRepository(tx).step(claim, invocation, work);
+      },
+      { sqliteImmediate: true, sqliteBusyRetries: 9 }
+    );
   }
 
   private async reconcileReferencesPage(
@@ -73,7 +97,7 @@ export class BranchDeletionRepository {
     claim: BranchMaintenanceClaim,
     invocation: UUID
   ): Promise<{ remaining: boolean }> {
-    return this.step(claim, invocation, async (tx, row) => {
+    return this.referenceStep(claim, invocation, async (tx, row) => {
       // Disable durable producers in bounded pages before touching storage.
       for (const [table, key, owner] of [
         ['schedules', 'schedule_id', 'branch_id'],
@@ -128,7 +152,7 @@ export class BranchDeletionRepository {
     claim: BranchMaintenanceClaim,
     invocation: UUID
   ): Promise<{ remaining: boolean }> {
-    return this.step(claim, invocation, async (tx, row) => {
+    return this.referenceStep(claim, invocation, async (tx, row) => {
       const current = row.data.maintenance!;
       if (!current.storage_verified)
         throw new RepositoryError('Required storage removal has not been verified');

@@ -8,7 +8,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { generateId } from '../lib/ids';
 import type { BranchID, TenantID } from '../types';
 import { createDatabase, type Database } from './client';
-import { isPostgresDatabase, update } from './database-wrapper';
+import { deleteFrom, isPostgresDatabase, update } from './database-wrapper';
 import { initializeDatabase } from './migrate';
 import {
   BranchRepository,
@@ -389,7 +389,9 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       });
 
       await runWithTenantDatabaseScope(dbA, tenantA, async (scoped) => {
-        await new BranchRepository(scoped).delete(active.branch_id);
+        // This fixture simulates a row already finalized by permanent deletion.
+        // Public metadata-only deletion is intentionally prohibited.
+        await deleteFrom(scoped, branches).where(eq(branches.branch_id, active.branch_id)).run();
         expect(
           await new EnvironmentHealthRepository(scoped).claim({
             branchId: active.branch_id,
