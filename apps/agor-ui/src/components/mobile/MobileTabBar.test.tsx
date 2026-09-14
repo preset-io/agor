@@ -7,8 +7,8 @@ describe('MobileTabBar', () => {
     const onSelect = vi.fn();
     render(<MobileTabBar activeTab="board" onSelect={onSelect} />);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Sessions' }));
-    expect(onSelect).toHaveBeenCalledWith('sessions');
+    fireEvent.click(screen.getByRole('button', { name: 'Home' }));
+    expect(onSelect).toHaveBeenCalledWith('home');
 
     fireEvent.click(screen.getByRole('button', { name: 'Ask your primary assistant' }));
     expect(onSelect).toHaveBeenCalledWith('ask');

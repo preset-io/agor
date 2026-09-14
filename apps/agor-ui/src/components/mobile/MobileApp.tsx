@@ -35,6 +35,7 @@ import { PrimaryTeammatePicker } from '../SettingsModal/PrimaryTeammatePicker';
 import { resolveAskPrimaryTarget } from './askPrimary';
 import { MobileBoardPage } from './MobileBoardPage';
 import { MobileCommentsPage } from './MobileCommentsPage';
+import { MobileHomePage } from './MobileHomePage';
 import { MobileMoreSheet } from './MobileMoreSheet';
 import { MobileSearchPage } from './MobileSearchPage';
 import { MobileSessionsPage } from './MobileSessionsPage';
@@ -166,13 +167,14 @@ export const MobileApp: React.FC<MobileAppProps> = ({
   // NB: match `/m/session/` (detail) with the trailing slash so it never
   // swallows `/m/sessions` (the Sessions tab).
   const isSessionRoute = location.pathname.startsWith('/m/session/');
+  // Sessions folded into Home: /m and the sessions list both read as Home.
   const activeTab: MobileTab | null = location.pathname.startsWith('/m/board')
     ? 'board'
     : location.pathname.startsWith('/m/comments')
       ? 'comments'
       : isSessionRoute
         ? null
-        : 'sessions';
+        : 'home';
 
   const sessionsBadge = useMemo(() => {
     const userId = user?.user_id;
@@ -256,12 +258,12 @@ export const MobileApp: React.FC<MobileAppProps> = ({
   const handleTabSelect = useCallback(
     (tab: MobileTab) => {
       switch (tab) {
+        case 'home':
+          navigate('/m');
+          break;
         case 'board':
           if (effectiveBoardId) navigate(`/m/board/${effectiveBoardId}`);
           else setMoreOpen(true);
-          break;
-        case 'sessions':
-          navigate('/m/sessions');
           break;
         case 'ask':
           void askPrimaryAssistant();
@@ -304,7 +306,24 @@ export const MobileApp: React.FC<MobileAppProps> = ({
       >
         {/* Descendant routes under `/m/*`; paths are RELATIVE to /m. */}
         <Routes>
-          <Route index element={<Navigate to="/m/sessions" replace />} />
+          <Route
+            index
+            element={
+              <MobileHomePage
+                sessionById={sessionById}
+                branchById={branchById}
+                boardById={boardById}
+                currentUser={user}
+                onAsk={() => void askPrimaryAssistant()}
+                primaryTeammateName={
+                  primaryBranch ? getTeammateConfig(primaryBranch)?.displayName : undefined
+                }
+                primaryTeammateEmoji={
+                  primaryBranch ? getTeammateConfig(primaryBranch)?.emoji : undefined
+                }
+              />
+            }
+          />
           <Route
             path="sessions"
             element={

@@ -1,10 +1,9 @@
 import type { Branch, Session, User } from '@agor-live/client';
-import { Empty, List, Typography, theme } from 'antd';
+import { Empty, List, theme } from 'antd';
 import { useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { getSessionDisplayTitle } from '../../utils/sessionTitle';
-import { StatusPill } from '../Pill';
 import { MobileHeader } from './MobileHeader';
+import { MobileSessionRow } from './MobileSessionRow';
 
 interface MobileSessionsPageProps {
   sessionById: Map<string, Session>;
@@ -52,48 +51,12 @@ export const MobileSessionsPage: React.FC<MobileSessionsPageProps> = ({
           <List
             dataSource={sessions}
             style={{ paddingInline: token.padding }}
-            renderItem={(session) => {
-              const branch = session.branch_id ? branchById.get(session.branch_id) : undefined;
-              const subtitle = [branch?.name, session.model_config?.model]
-                .filter(Boolean)
-                .join(' · ');
-              const title = getSessionDisplayTitle(session, { fallbackChars: 40 });
-              return (
-                <List.Item
-                  role="button"
-                  tabIndex={0}
-                  aria-label={`Open ${title}`}
-                  onClick={() => navigate(`/m/session/${session.session_id}`)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter' || e.key === ' ') {
-                      e.preventDefault();
-                      navigate(`/m/session/${session.session_id}`);
-                    }
-                  }}
-                  style={{ cursor: 'pointer', paddingInline: 0, minHeight: 44 }}
-                >
-                  <List.Item.Meta
-                    title={
-                      <Typography.Text ellipsis style={{ maxWidth: '100%' }}>
-                        {title}
-                      </Typography.Text>
-                    }
-                    description={
-                      subtitle ? (
-                        <Typography.Text
-                          type="secondary"
-                          ellipsis
-                          style={{ fontSize: token.fontSizeSM }}
-                        >
-                          {subtitle}
-                        </Typography.Text>
-                      ) : undefined
-                    }
-                  />
-                  <StatusPill status={session.status} />
-                </List.Item>
-              );
-            }}
+            renderItem={(session) => (
+              <MobileSessionRow
+                session={session}
+                branch={session.branch_id ? branchById.get(session.branch_id) : undefined}
+              />
+            )}
           />
         )}
       </div>
