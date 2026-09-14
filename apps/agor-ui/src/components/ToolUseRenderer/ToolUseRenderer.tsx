@@ -13,8 +13,12 @@
  * (like AgentChain) are responsible for wrapping this in ThoughtChain items.
  */
 
-import type { ContentBlock as CoreContentBlock, DiffEnrichment } from '@agor-live/client';
-import { theme } from 'antd';
+import type {
+  ContentBlock as CoreContentBlock,
+  DiffEnrichment,
+  TranscriptTruncation,
+} from '@agor-live/client';
+import { Typography, theme } from 'antd';
 import type React from 'react';
 import { shouldUseAnsiRendering } from '../../utils/ansi';
 import { toolResultToDisplayText } from '../../utils/toolResultToDisplayText';
@@ -24,6 +28,7 @@ import { ThemedSyntaxHighlighter } from '../ThemedSyntaxHighlighter';
 import { getToolRenderer } from './renderers';
 
 interface ToolUseBlock {
+  transcript_truncation?: TranscriptTruncation;
   type: 'tool_use';
   id: string;
   name: string;
@@ -31,6 +36,7 @@ interface ToolUseBlock {
 }
 
 interface ToolResultBlock {
+  transcript_truncation?: TranscriptTruncation;
   type: 'tool_result';
   tool_use_id: string;
   content: string | CoreContentBlock[];
@@ -56,8 +62,27 @@ export const ToolUseRenderer: React.FC<ToolUseRendererProps> = ({ toolUse, toolR
   const { input, name } = toolUse;
   const isError = toolResult?.is_error;
 
-  // Check for custom renderer
-  const CustomRenderer = getToolRenderer(name);
+  const shortenedFields = [
+    ...Object.entries(toolUse.transcript_truncation ?? {}),
+    ...Object.entries(toolResult?.transcript_truncation ?? {}),
+  ];
+  const isProjected = shortenedFields.length > 0;
+  const truncationNotice = isProjected ? (
+    <Typography.Paragraph type="secondary" role="note">
+      Transcript shortened:{' '}
+      {shortenedFields
+        .map(
+          ([field, size]) =>
+            `${field} (originally ${size.original_bytes.toLocaleString()} serialized bytes)`
+        )
+        .join(', ')}
+      . Some tool data was omitted or shortened; execution was not changed.
+    </Typography.Paragraph>
+  ) : null;
+
+  // A partial input/result is not valid input to a specialized renderer. In
+  // particular, do not recompute an apparently complete diff from a projection.
+  const CustomRenderer = isProjected ? undefined : getToolRenderer(name);
 
   // Shared collapsible input parameters block
   const inputParamsBlock = (
@@ -125,6 +150,7 @@ export const ToolUseRenderer: React.FC<ToolUseRendererProps> = ({ toolUse, toolR
   // Default generic content renderer (no ThoughtChain wrapper - that's handled by parent)
   return toolResult ? (
     <div>
+      {truncationNotice}
       {/* Tool result */}
       <div
         style={{
@@ -172,6 +198,9 @@ export const ToolUseRenderer: React.FC<ToolUseRendererProps> = ({ toolUse, toolR
     </div>
   ) : (
     // No result yet — still show input parameters so users can see what's running
-    <div>{inputParamsBlock}</div>
+    <div>
+      {truncationNotice}
+      {inputParamsBlock}
+    </div>
   );
 };

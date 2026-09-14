@@ -90,6 +90,16 @@ _A btw question runs in an ephemeral fork; the answer is delivered back inline i
 
 The tree is rendered on the branch card on the board, and in full detail in the session view.
 
+### Large tool transcripts
+
+Agor may shorten tool inputs, results, or diff data in the displayed transcript
+so the complete message write fits its transport budget. Shortened tool entries
+show a notice and the original serialized field sizes. Inputs may be omitted
+entirely, and shortened entries use a plain display rather than a full diff
+preview. This changes only the persisted/displayed transcript, not the arguments
+executed by the tool or the provider's conversation state. Prefer pagination,
+filtered results, and files over large inline state snapshots.
+
 ### Large session lists
 
 Branch cards and the branch teammate panel keep manual and gateway genealogy
