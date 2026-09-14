@@ -57,7 +57,13 @@ interface MobileBoardPageProps {
   artifactById: Map<string, Artifact>;
   onMenuClick: () => void;
   onOpenBranch: (branchId: string, tab: 'general' | 'environment' | 'schedule') => void;
+  /** Empty-board CTA: hand the board's assistant its first task (Ask primary). */
+  onGiveFirstTask: () => void;
+  /** Display name of the assistant used in the empty-board CTA. */
+  firstTaskAssistantName?: string;
 }
+
+const GUTTER = 16;
 
 function statusColor(status: Branch['filesystem_status']): string {
   if (status === 'ready') return 'success';
@@ -98,6 +104,8 @@ export const MobileBoardPage: React.FC<MobileBoardPageProps> = ({
   artifactById,
   onMenuClick,
   onOpenBranch,
+  onGiveFirstTask,
+  firstTaskAssistantName,
 }) => {
   const { boardId = '' } = useParams<{ boardId: string }>();
   const navigate = useNavigate();
@@ -109,12 +117,12 @@ export const MobileBoardPage: React.FC<MobileBoardPageProps> = ({
 
   if (!board) {
     return (
-      <>
+      <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
         <MobileHeader title="Board" onMenuClick={onMenuClick} />
-        <Content style={{ padding: token.paddingLG }}>
+        <Content style={{ flex: 1, minHeight: 0, padding: GUTTER }}>
           <Empty description="Board not found" />
         </Content>
-      </>
+      </div>
     );
   }
 
@@ -136,13 +144,120 @@ export const MobileBoardPage: React.FC<MobileBoardPageProps> = ({
   const contentObjects = annotations.filter(([, object]) => object.type !== 'zone');
   const isEmpty = branches.length === 0 && cards.length === 0 && annotations.length === 0;
 
+  // Group branch placements by their zone so the Board tab reads as collapsible
+  // zones of branch cards. Branches outside any zone fall into `undefined`.
+  const branchesByZone = new Map<string | undefined, typeof branches>();
+  for (const item of branches) {
+    const zoneId =
+      item.placement.zone_id && board.objects?.[item.placement.zone_id]?.type === 'zone'
+        ? item.placement.zone_id
+        : undefined;
+    const list = branchesByZone.get(zoneId) ?? [];
+    list.push(item);
+    branchesByZone.set(zoneId, list);
+  }
+  const hasZones = zones.length > 0;
+  const ungroupedBranches = branchesByZone.get(undefined) ?? [];
+
+  const renderBranchCard = (
+    branch: Branch,
+    placement: BoardEntityObject,
+    { showZoneTag }: { showZoneTag: boolean }
+  ) => {
+    const sessions = [...(sessionsByBranch.get(branch.branch_id) ?? [])].sort(
+      (a, b) => new Date(b.last_updated).getTime() - new Date(a.last_updated).getTime()
+    );
+    const repo = repoById.get(branch.repo_id);
+    const zone = placement.zone_id ? board.objects?.[placement.zone_id] : undefined;
+    return (
+      <Card
+        key={branch.branch_id}
+        size="small"
+        title={
+          <Flex align="center" gap={token.marginXS} wrap>
+            <GitlabOutlined />
+            <Text strong ellipsis style={{ minWidth: 0, flex: 1 }}>
+              {branch.name}
+            </Text>
+            <Tag color={statusColor(branch.filesystem_status)} style={{ margin: 0 }}>
+              {branch.filesystem_status ?? 'unknown'}
+            </Tag>
+          </Flex>
+        }
+      >
+        <Flex vertical gap={token.marginSM}>
+          <Flex gap={token.marginXS} wrap>
+            <Button
+              icon={<SettingOutlined />}
+              onClick={() => onOpenBranch(branch.branch_id, 'general')}
+            >
+              Manage
+            </Button>
+            <Button onClick={() => onOpenBranch(branch.branch_id, 'environment')}>
+              Environment
+            </Button>
+            <Button
+              icon={<CalendarOutlined />}
+              onClick={() => onOpenBranch(branch.branch_id, 'schedule')}
+            >
+              Schedules
+            </Button>
+          </Flex>
+          <Text type="secondary" ellipsis>
+            {repo?.slug ?? 'Repository unavailable'}
+          </Text>
+          {showZoneTag && <ZoneTag zone={zone} />}
+          {branch.filesystem_status === 'failed' && branch.error_message && (
+            <Flex gap={token.marginXS} align="flex-start">
+              <WarningOutlined style={{ color: token.colorError, marginTop: 3 }} />
+              <Text type="danger">{branch.error_message}</Text>
+            </Flex>
+          )}
+          <List
+            size="small"
+            locale={{ emptyText: 'No sessions yet' }}
+            dataSource={sessions.slice(0, 4)}
+            renderItem={(session) => (
+              <List.Item
+                style={{ paddingInline: 0 }}
+                actions={[
+                  <Button
+                    key="open"
+                    type="text"
+                    aria-label={`Open ${getSessionDisplayTitle(session)}`}
+                    icon={<RightOutlined />}
+                    onClick={() => navigate(`/m/session/${session.session_id}`)}
+                  />,
+                ]}
+              >
+                <List.Item.Meta
+                  title={<Text ellipsis>{getSessionDisplayTitle(session)}</Text>}
+                  description={
+                    <Space size={token.marginXS} wrap>
+                      <Badge status={session.status === 'running' ? 'processing' : 'default'} />
+                      <Text type="secondary">{session.status}</Text>
+                      <Text type="secondary">{session.agentic_tool}</Text>
+                    </Space>
+                  }
+                />
+              </List.Item>
+            )}
+          />
+        </Flex>
+      </Card>
+    );
+  };
+
   return (
-    <>
+    <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
       <MobileHeader title={board.name} onMenuClick={onMenuClick} />
       <Content
         style={{
+          flex: 1,
+          minHeight: 0,
           overflowY: 'auto',
-          padding: token.paddingMD,
+          paddingInline: GUTTER,
+          paddingBlock: token.paddingMD,
           paddingBottom: `calc(${token.paddingXL}px + env(safe-area-inset-bottom))`,
         }}
       >
@@ -179,56 +294,15 @@ export const MobileBoardPage: React.FC<MobileBoardPageProps> = ({
 
           {isEmpty && (
             <Card>
-              <Empty description="This board is empty" />
-            </Card>
-          )}
-
-          {zones.length > 0 && (
-            <Card size="small" title="Workflow zones">
-              <List
-                dataSource={zones}
-                renderItem={([objectId, zone]) => {
-                  const pinnedCount = placements.filter((item) => item.zone_id === objectId).length;
-                  return (
-                    <List.Item style={{ paddingInline: 0 }}>
-                      <List.Item.Meta
-                        avatar={<TagsOutlined style={{ color: zone.borderColor ?? zone.color }} />}
-                        title={
-                          <Space wrap>
-                            <Text strong>{zone.label}</Text>
-                            {zone.status && <Tag>{zone.status}</Tag>}
-                            {zone.locked && <Tag>Locked</Tag>}
-                          </Space>
-                        }
-                        description={
-                          <Flex vertical gap={4}>
-                            <Text type="secondary">
-                              {pinnedCount} pinned {pinnedCount === 1 ? 'item' : 'items'}
-                            </Text>
-                            {zone.trigger?.template && (
-                              <Collapse
-                                ghost
-                                size="small"
-                                items={[
-                                  {
-                                    key: 'trigger',
-                                    label: 'Automation prompt',
-                                    children: (
-                                      <Paragraph copyable style={{ whiteSpace: 'pre-wrap' }}>
-                                        {zone.trigger.template}
-                                      </Paragraph>
-                                    ),
-                                  },
-                                ]}
-                              />
-                            )}
-                          </Flex>
-                        }
-                      />
-                    </List.Item>
-                  );
-                }}
-              />
+              <Empty
+                description={`No work here yet. Kick things off with ${
+                  firstTaskAssistantName ?? 'your assistant'
+                }.`}
+              >
+                <Button type="primary" onClick={onGiveFirstTask}>
+                  Give {firstTaskAssistantName ?? 'your assistant'} their first task
+                </Button>
+              </Empty>
             </Card>
           )}
 
@@ -389,101 +463,91 @@ export const MobileBoardPage: React.FC<MobileBoardPageProps> = ({
             </Flex>
           )}
 
-          {branches.length > 0 && (
-            <Flex vertical gap={token.marginSM}>
-              <Title level={5} style={{ margin: 0 }}>
-                Branches
-              </Title>
-              {branches.map(({ branch, placement }) => {
-                const sessions = [...(sessionsByBranch.get(branch.branch_id) ?? [])].sort(
-                  (a, b) => new Date(b.last_updated).getTime() - new Date(a.last_updated).getTime()
-                );
-                const repo = repoById.get(branch.repo_id);
-                const zone = placement.zone_id ? board.objects?.[placement.zone_id] : undefined;
-                return (
-                  <Card
-                    key={branch.branch_id}
-                    size="small"
-                    title={
-                      <Flex align="center" gap={token.marginXS} wrap>
-                        <GitlabOutlined />
-                        <Text strong ellipsis style={{ minWidth: 0, flex: 1 }}>
-                          {branch.name}
-                        </Text>
-                        <Tag color={statusColor(branch.filesystem_status)} style={{ margin: 0 }}>
-                          {branch.filesystem_status ?? 'unknown'}
-                        </Tag>
-                      </Flex>
-                    }
-                  >
-                    <Flex vertical gap={token.marginSM}>
-                      <Flex gap={token.marginXS} wrap>
-                        <Button
-                          icon={<SettingOutlined />}
-                          onClick={() => onOpenBranch(branch.branch_id, 'general')}
-                        >
-                          Manage
-                        </Button>
-                        <Button onClick={() => onOpenBranch(branch.branch_id, 'environment')}>
-                          Environment
-                        </Button>
-                        <Button
-                          icon={<CalendarOutlined />}
-                          onClick={() => onOpenBranch(branch.branch_id, 'schedule')}
-                        >
-                          Schedules
-                        </Button>
-                      </Flex>
-                      <Text type="secondary" ellipsis>
-                        {repo?.slug ?? 'Repository unavailable'}
-                      </Text>
-                      <ZoneTag zone={zone} />
-                      {branch.filesystem_status === 'failed' && branch.error_message && (
-                        <Flex gap={token.marginXS} align="flex-start">
-                          <WarningOutlined style={{ color: token.colorError, marginTop: 3 }} />
-                          <Text type="danger">{branch.error_message}</Text>
+          {branches.length > 0 &&
+            (hasZones ? (
+              <Collapse
+                ghost
+                defaultActiveKey={zones.map(([id]) => id)}
+                items={[
+                  ...zones.map(([zoneId, zone]) => {
+                    const zoneBranches = branchesByZone.get(zoneId) ?? [];
+                    return {
+                      key: zoneId,
+                      // paddingInline:0 aligns the zone label with its cards' gutter.
+                      styles: { header: { paddingInline: 0 }, body: { paddingInline: 0 } },
+                      label: (
+                        <Space>
+                          <TagsOutlined style={{ color: zone.borderColor ?? zone.color }} />
+                          <Text strong>{zone.label}</Text>
+                          <Badge
+                            count={zoneBranches.length}
+                            showZero
+                            color={token.colorFillSecondary}
+                          />
+                          {zone.locked && <Tag>Locked</Tag>}
+                        </Space>
+                      ),
+                      children: (
+                        <Flex vertical gap={token.marginSM}>
+                          {zone.trigger?.template && (
+                            <Paragraph
+                              type="secondary"
+                              copyable
+                              style={{ whiteSpace: 'pre-wrap', marginBottom: 0 }}
+                            >
+                              {zone.trigger.template}
+                            </Paragraph>
+                          )}
+                          {zoneBranches.length > 0 ? (
+                            zoneBranches.map(({ branch, placement }) =>
+                              renderBranchCard(branch, placement, { showZoneTag: false })
+                            )
+                          ) : (
+                            <Text type="secondary">No branches in this zone</Text>
+                          )}
                         </Flex>
-                      )}
-                      <List
-                        size="small"
-                        locale={{ emptyText: 'No sessions yet' }}
-                        dataSource={sessions.slice(0, 4)}
-                        renderItem={(session) => (
-                          <List.Item
-                            style={{ paddingInline: 0 }}
-                            actions={[
-                              <Button
-                                key="open"
-                                type="text"
-                                aria-label={`Open ${getSessionDisplayTitle(session)}`}
-                                icon={<RightOutlined />}
-                                onClick={() => navigate(`/m/session/${session.session_id}`)}
-                              />,
-                            ]}
-                          >
-                            <List.Item.Meta
-                              title={<Text ellipsis>{getSessionDisplayTitle(session)}</Text>}
-                              description={
-                                <Space size={token.marginXS} wrap>
-                                  <Badge
-                                    status={session.status === 'running' ? 'processing' : 'default'}
-                                  />
-                                  <Text type="secondary">{session.status}</Text>
-                                  <Text type="secondary">{session.agentic_tool}</Text>
-                                </Space>
-                              }
-                            />
-                          </List.Item>
-                        )}
-                      />
-                    </Flex>
-                  </Card>
-                );
-              })}
-            </Flex>
-          )}
+                      ),
+                    };
+                  }),
+                  ...(ungroupedBranches.length > 0
+                    ? [
+                        {
+                          key: '__ungrouped',
+                          styles: { header: { paddingInline: 0 }, body: { paddingInline: 0 } },
+                          label: (
+                            <Space>
+                              <Text strong>Other branches</Text>
+                              <Badge
+                                count={ungroupedBranches.length}
+                                showZero
+                                color={token.colorFillSecondary}
+                              />
+                            </Space>
+                          ),
+                          children: (
+                            <Flex vertical gap={token.marginSM}>
+                              {ungroupedBranches.map(({ branch, placement }) =>
+                                renderBranchCard(branch, placement, { showZoneTag: false })
+                              )}
+                            </Flex>
+                          ),
+                        },
+                      ]
+                    : []),
+                ]}
+              />
+            ) : (
+              <Flex vertical gap={token.marginSM}>
+                <Title level={5} style={{ margin: 0 }}>
+                  Branches
+                </Title>
+                {branches.map(({ branch, placement }) =>
+                  renderBranchCard(branch, placement, { showZoneTag: false })
+                )}
+              </Flex>
+            ))}
         </Flex>
       </Content>
-    </>
+    </div>
   );
 };
