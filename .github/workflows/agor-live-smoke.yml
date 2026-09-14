@@ -78,6 +78,9 @@ jobs:
           node - "$RUNNER_TEMP/inspect/package/package.json" <<'NODE'
           const fs = require('node:fs');
           const manifest = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+          if (JSON.stringify(manifest.os) !== JSON.stringify(['!win32'])) {
+            throw new Error('Release must preserve the native Windows exclusion');
+          }
           const lifecycle = ['preinstall', 'install', 'postinstall'].filter(
             (name) => manifest.scripts?.[name]
           );

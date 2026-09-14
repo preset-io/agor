@@ -18,6 +18,9 @@
     "pack:release": "node scripts/pack-release.mjs",
     "test": "node --test scripts/*.test.js"
   },
+  "os": [
+    "!win32"
+  ],
   "engines": {
     "node": ">=22.12.0"
   },

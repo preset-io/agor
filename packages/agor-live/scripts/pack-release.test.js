@@ -9,6 +9,18 @@ import { createPublishManifest, packRelease } from './pack-release.mjs';
 import { BUNDLED_INTERNAL_PACKAGES } from './package-contract.js';
 
 const execFileAsync = promisify(execFile);
+const runtimeManifest = JSON.parse(
+  await readFile(new URL('../package.json', import.meta.url), 'utf8')
+);
+
+test('only the local runtime denies native Windows', async () => {
+  assert.deepEqual(runtimeManifest.os, ['!win32']);
+  assert.deepEqual(createPublishManifest(runtimeManifest).os, runtimeManifest.os);
+  const client = JSON.parse(
+    await readFile(new URL('../../client/package.json', import.meta.url), 'utf8')
+  );
+  assert.equal(client.os, undefined);
+});
 
 test('CLI runs when pack-release is reached through a symlink', async (t) => {
   if (process.platform === 'win32') {
@@ -90,6 +102,7 @@ test('release tarball materializes internal packages without postinstall', async
       `${JSON.stringify({
         name: 'agor-live',
         version: '1.2.3',
+        os: runtimeManifest.os,
         type: 'module',
         files: ['bin', 'dist', 'LICENSE', 'README.md'],
         dependencies,
@@ -103,6 +116,7 @@ test('release tarball materializes internal packages without postinstall', async
     await mkdir(extract);
     await execFileAsync('tar', ['-xzf', tarball, '-C', extract]);
     const manifest = JSON.parse(await readFile(join(extract, 'package', 'package.json'), 'utf8'));
+    assert.deepEqual(manifest.os, ['!win32']);
     assert.equal(manifest.dependencies['@agor-live/client'], '1.2.3');
     assert.equal(manifest.peerDependencies['hot-shots'], '^17.1.0');
     assert.equal(manifest.peerDependenciesMeta['hot-shots'].optional, true);
