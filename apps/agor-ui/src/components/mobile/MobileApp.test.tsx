@@ -1,5 +1,5 @@
 import { act, fireEvent, render, screen } from '@testing-library/react';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { describe, expect, it, vi } from 'vitest';
 import { ThemeProvider } from '../../contexts/ThemeContext';
 import { MobileApp } from './MobileApp';
@@ -38,18 +38,31 @@ const sessionHandlers = {
   onDeleteSession: vi.fn(),
 };
 
-function renderMobileApp(extraProps: Record<string, unknown> = {}) {
+// Mount exactly as production does: MobileApp lives under a `/m/*` parent route,
+// so its inner routes are descendant (relative) routes. Rendering at the root
+// would hide the /m nesting bugs.
+function renderMobileApp(
+  initialPath = '/m/board/board-1',
+  extraProps: Record<string, unknown> = {}
+) {
   return render(
     <ThemeProvider>
-      <MemoryRouter initialEntries={['/board/board-1']}>
-        <MobileApp
-          client={null}
-          onSendComment={vi.fn()}
-          onOpenWorkspaceSettings={vi.fn()}
-          onOpenUserSettings={vi.fn()}
-          {...sessionHandlers}
-          {...extraProps}
-        />
+      <MemoryRouter initialEntries={[initialPath]}>
+        <Routes>
+          <Route
+            path="/m/*"
+            element={
+              <MobileApp
+                client={null}
+                onSendComment={vi.fn()}
+                onOpenWorkspaceSettings={vi.fn()}
+                onOpenUserSettings={vi.fn()}
+                {...sessionHandlers}
+                {...extraProps}
+              />
+            }
+          />
+        </Routes>
       </MemoryRouter>
     </ThemeProvider>
   );
@@ -71,7 +84,7 @@ describe('MobileApp branch actions', () => {
       onExecuteScheduleNow: vi.fn(),
     };
 
-    renderMobileApp(handlers);
+    renderMobileApp('/m/board/board-1', handlers);
 
     fireEvent.click(screen.getByRole('button', { name: 'Open schedule' }));
 
@@ -93,10 +106,27 @@ describe('MobileApp branch actions', () => {
     expect(screen.queryByTestId('branch-sheet')).not.toBeInTheDocument();
   });
 
-  it('shows the bottom tab bar with the center Ask action', () => {
-    renderMobileApp();
+  it('renders board content under the /m/* descendant route', () => {
+    renderMobileApp('/m/board/board-1');
+    // Regression: relative descendant routes must match, not blank out.
+    expect(screen.getByRole('button', { name: 'Open schedule' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Ask your primary assistant' })).toBeInTheDocument();
+  });
+
+  it('keeps the tab bar on /m/sessions (not treated as session detail)', () => {
+    renderMobileApp('/m/sessions');
+    // Regression: `/m/sessions` must not be classified as `/m/session/` detail,
+    // which would hide the whole nav shell.
     expect(screen.getByRole('button', { name: 'Ask your primary assistant' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Board' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Sessions' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'More' })).toBeInTheDocument();
+  });
+
+  it('hides the tab bar on a full-screen session detail route', () => {
+    renderMobileApp('/m/session/session-1');
+    expect(
+      screen.queryByRole('button', { name: 'Ask your primary assistant' })
+    ).not.toBeInTheDocument();
   });
 });

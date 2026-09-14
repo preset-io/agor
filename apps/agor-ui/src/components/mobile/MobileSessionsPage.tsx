@@ -42,7 +42,7 @@ export const MobileSessionsPage: React.FC<MobileSessionsPageProps> = ({
         {sessions.length === 0 ? (
           <Empty
             style={{ marginTop: token.marginXL }}
-            description="No sessions yet — ask your primary assistant to get started"
+            description="No sessions yet. Ask your primary assistant to get started."
           />
         ) : (
           <List

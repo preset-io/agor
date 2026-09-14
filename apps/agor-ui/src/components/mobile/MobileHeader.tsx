@@ -69,7 +69,7 @@ export const MobileHeader: React.FC<MobileHeaderProps> = ({
           <Button
             type="text"
             onClick={() => setSwitcherOpen(true)}
-            aria-label={`Switch board — current: ${title ?? 'board'}`}
+            aria-label={`Switch board (current: ${title ?? 'board'})`}
             style={{ paddingInline: 0, minWidth: 0, maxWidth: '100%' }}
           >
             <Space size={token.marginXXS} align="center" style={{ maxWidth: '100%' }}>

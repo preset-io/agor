@@ -1356,7 +1356,7 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
       )}
 
       <div style={{ position: 'relative', zIndex: 1 }}>
-        {/* Row 1 — Info bar (always shown on mobile as the compact chip bar) */}
+        {/* Row 1: Info bar (always shown on mobile as the compact chip bar) */}
         {(isMobile ||
           showMcpControl ||
           (footerTimerTask && pinnedChips.includes('timer')) ||
@@ -1406,7 +1406,7 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
               />
             )}
 
-            {/* Compact effort control — mobile chip bar only */}
+            {/* Compact effort control (mobile chip bar only) */}
             {isMobile && supportsLiveEffort && toolCaps?.reasoningEffortLevels && (
               <div
                 style={{

@@ -65,7 +65,7 @@ interface MobileAppProps {
   onOpenWorkspaceSettings: (section: string) => void;
   onOpenUserSettings: () => void;
   // The branch bottom sheet offers the same edit/archive controls as the
-  // desktop modal, so it needs the same handlers behind them — without these
+  // desktop modal, so it needs the same handlers behind them, without which
   // the controls render enabled and then do nothing when tapped.
   onUpdateBranch?: (branchId: string, updates: BranchUpdate) => void | Promise<void>;
   onUpdateRepo?: (repoId: string, updates: Partial<Repo>) => void;
@@ -164,14 +164,16 @@ export const MobileApp: React.FC<MobileAppProps> = ({
     return boardById.keys().next().value as string | undefined;
   }, [currentBoardId, boardById, user?.preferences?.mainBoardId]);
 
+  // NB: match `/m/session/` (detail) with the trailing slash so it never
+  // swallows `/m/sessions` (the Sessions tab).
+  const isSessionRoute = location.pathname.startsWith('/m/session/');
   const activeTab: MobileTab | null = location.pathname.startsWith('/m/board')
     ? 'board'
     : location.pathname.startsWith('/m/comments')
       ? 'comments'
-      : location.pathname.startsWith('/m/session')
+      : isSessionRoute
         ? null
         : 'sessions';
-  const isSessionRoute = location.pathname.startsWith('/m/session');
 
   const sessionsBadge = useMemo(() => {
     const userId = user?.user_id;
@@ -206,7 +208,7 @@ export const MobileApp: React.FC<MobileAppProps> = ({
       }
     }
     if (!branch) {
-      // No primary assistant yet — send the user to pick/create one.
+      // No primary assistant yet; send the user to pick or create one.
       onOpenWorkspaceSettings('teammates');
       return;
     }
@@ -283,10 +285,11 @@ export const MobileApp: React.FC<MobileAppProps> = ({
           flexDirection: 'column',
         }}
       >
+        {/* Descendant routes under `/m/*`; paths are RELATIVE to /m. */}
         <Routes>
-          <Route path="/" element={<Navigate to="/m/sessions" replace />} />
+          <Route index element={<Navigate to="/m/sessions" replace />} />
           <Route
-            path="/sessions"
+            path="sessions"
             element={
               <MobileSessionsPage
                 sessionById={sessionById}
@@ -296,7 +299,7 @@ export const MobileApp: React.FC<MobileAppProps> = ({
             }
           />
           <Route
-            path="/board/:boardId"
+            path="board/:boardId"
             element={
               <MobileBoardPage
                 boardById={boardById}
@@ -315,7 +318,7 @@ export const MobileApp: React.FC<MobileAppProps> = ({
             }
           />
           <Route
-            path="/session/:sessionId"
+            path="session/:sessionId"
             element={
               <SessionPage
                 client={client}
@@ -333,7 +336,7 @@ export const MobileApp: React.FC<MobileAppProps> = ({
             }
           />
           <Route
-            path="/comments/:boardId"
+            path="comments/:boardId"
             element={
               <MobileCommentsPage
                 client={client}

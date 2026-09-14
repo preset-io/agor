@@ -41,7 +41,7 @@ const EMPTY_MCP_IDS: string[] = [];
 /**
  * Full-screen mobile session view. Reuses the shared desktop `SessionPanel`
  * (which owns the whole composer: model / effort / permission / MCP / attach /
- * fork / spawn / btw / stop) so mobile has full feature parity — the previous
+ * fork / spawn / btw / stop) so mobile has full feature parity; the previous
  * lossy `MobilePromptInput` is gone. Back returns to the actual parent route.
  */
 export const SessionPage: React.FC<SessionPageProps> = ({
