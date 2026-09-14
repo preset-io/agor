@@ -252,6 +252,29 @@ describe('source scan: every registered path is declared', () => {
     expect(found.size).toBeGreaterThan(100);
   });
 
+  it('covers the filesystem retry route registered in register-routes.ts at startup', () => {
+    const path = 'branches/:id/retry-filesystem';
+    const registered = registeredPathsInSource();
+    expect(registered.get(path)).toMatch(/^register-routes\.ts:\d+$/);
+
+    // Feed the source-discovered path into Feathers, not a registry fixture
+    // copied from the policy (which would hide a missing declaration).
+    const app = feathers();
+    for (const registeredPath of registered.keys()) {
+      if (registeredPath === path) {
+        app.use(registeredPath, {
+          async create() {
+            return {};
+          },
+        });
+      }
+    }
+    expect(Object.keys(app.services)).toEqual([path]);
+    expect(() => assertRealtimePublishPolicyCoverage(app)).not.toThrow();
+    expect(realtimePublishPolicyFor(path)?.audience).toBe('none');
+    expect(realtimePublishPolicyFor('branches')?.audience).toBe('branch');
+  });
+
   it('declares a realtime audience for each one', () => {
     const undeclared: string[] = [];
     for (const [path, where] of registeredPathsInSource()) {

@@ -445,6 +445,10 @@ export const REALTIME_PUBLISH_POLICY = {
     why: `${NO_CONSUMER} Lands as branches.patched/removed.`,
   },
   'branches/:id/unarchive': { audience: 'none', why: `${NO_CONSUMER} Lands as branches.patched.` },
+  'branches/:id/retry-filesystem': {
+    audience: 'none',
+    why: `${NO_CONSUMER} Filesystem status changes arrive as branches.patched.`,
+  },
   'branches/:id/execute-schedule-now': { audience: 'none', why: NO_CONSUMER },
   'branches/:id/fire-zone-trigger': { audience: 'none', why: NO_CONSUMER },
   'schedules/:id/run-now': { audience: 'none', why: `${NO_CONSUMER} Lands as schedules.patched.` },

@@ -2566,6 +2566,7 @@ describe('configureRealtimePublish default-deny allowlist', () => {
     ['mcp-servers/oauth-auth-headers', { Authorization: 'Bearer leak' }],
     ['mcp-servers/discover', { tools: [] }],
     ['branches/logs', { logs: 'DATABASE_URL=postgres://user:pw@host/db' }],
+    ['branches/:id/retry-filesystem', { branch_id: 'b1', filesystem_status: 'creating' }],
     ['repos/clone', { url: 'https://token@github.com/org/repo' }],
     ['session-env-selections', { session_id: 's1', env_var_name: 'PRIVATE_TOKEN' }],
     ['sessions/:id/fork', { session_id: 's1', branch_id: 'b1' }],

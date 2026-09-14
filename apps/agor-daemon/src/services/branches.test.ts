@@ -3098,7 +3098,7 @@ describe('BranchesService.retryFilesystem', () => {
     return { ...harness, get, update, patch };
   }
   it('reuses the persisted source/destination through restore mode, without lifecycle changes', async () => {
-    const { service, update, patch, sessionsService } = setup();
+    const { service, update, patch, sessionsService, branchesService } = setup();
     mockedRequestExecutor.mockResolvedValue({ success: true, data: { exists: false } });
     await service.retryFilesystem(id, params);
     expect(update).toHaveBeenCalledWith(
@@ -3115,6 +3115,11 @@ describe('BranchesService.retryFilesystem', () => {
     );
     expect(patch).not.toHaveBeenCalled();
     expect(sessionsService.unarchiveBranchSessions).not.toHaveBeenCalled();
+    expect(branchesService.emit).toHaveBeenCalledWith(
+      'patched',
+      expect.objectContaining({ branch_id: id, filesystem_status: 'creating' }),
+      expect.objectContaining({ path: 'branches', id, params })
+    );
   });
   it('preserves partial files rather than deleting, overwriting, or pretending to recover', async () => {
     const { service, update } = setup();
