@@ -55,7 +55,6 @@ interface MobileBoardPageProps {
   boardObjectsByBoardId: Map<string, BoardEntityObject[]>;
   cardById: Map<string, CardWithType>;
   artifactById: Map<string, Artifact>;
-  onMenuClick: () => void;
   onOpenBranch: (branchId: string, tab: 'general' | 'environment' | 'schedule') => void;
   /** Empty-board CTA: hand the board's assistant its first task (Ask primary). */
   onGiveFirstTask: () => void;
@@ -102,7 +101,6 @@ export const MobileBoardPage: React.FC<MobileBoardPageProps> = ({
   boardObjectsByBoardId,
   cardById,
   artifactById,
-  onMenuClick,
   onOpenBranch,
   onGiveFirstTask,
   firstTaskAssistantName,
@@ -115,10 +113,18 @@ export const MobileBoardPage: React.FC<MobileBoardPageProps> = ({
     : resolveBoardFromUrlPure(boardId, boardById);
   const board = resolvedBoardId ? boardById.get(resolvedBoardId) : undefined;
 
+  const boardSwitcher = {
+    boards: Array.from(boardById.values())
+      .filter((b) => !b.archived)
+      .map((b) => ({ board_id: b.board_id, name: b.name, emoji: getBoardEmoji(b, branchById) })),
+    currentBoardId: resolvedBoardId ?? undefined,
+    onSelect: (id: string) => navigate(`/m/board/${id}`),
+  };
+
   if (!board) {
     return (
       <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
-        <MobileHeader title="Board" onMenuClick={onMenuClick} />
+        <MobileHeader title="Board" boardSwitcher={boardSwitcher} />
         <Content style={{ flex: 1, minHeight: 0, padding: GUTTER }}>
           <Empty description="Board not found" />
         </Content>
@@ -250,7 +256,7 @@ export const MobileBoardPage: React.FC<MobileBoardPageProps> = ({
 
   return (
     <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
-      <MobileHeader title={board.name} onMenuClick={onMenuClick} />
+      <MobileHeader title={board.name} boardSwitcher={boardSwitcher} />
       <Content
         style={{
           flex: 1,

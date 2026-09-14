@@ -10,7 +10,6 @@ interface MobileSessionsPageProps {
   sessionById: Map<string, Session>;
   branchById: Map<string, Branch>;
   currentUser?: User | null;
-  onOpenMore: () => void;
 }
 
 const GUTTER = 16;
@@ -25,7 +24,6 @@ export const MobileSessionsPage: React.FC<MobileSessionsPageProps> = ({
   sessionById,
   branchById,
   currentUser,
-  onOpenMore,
 }) => {
   const navigate = useNavigate();
   const { token } = theme.useToken();
@@ -39,7 +37,7 @@ export const MobileSessionsPage: React.FC<MobileSessionsPageProps> = ({
 
   return (
     <div style={{ height: '100%', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
-      <MobileHeader title="Sessions" user={currentUser} onMenuClick={onOpenMore} />
+      <MobileHeader title="Sessions" user={currentUser} />
       <div style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
         {sessions.length === 0 ? (
           <Empty
