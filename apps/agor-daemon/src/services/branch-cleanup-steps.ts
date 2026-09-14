@@ -1,7 +1,7 @@
 import {
-  BranchCleanupRepository,
   BranchMaintenanceRepository,
   BranchRepository,
+  BranchWorkspaceOperationRepository,
   requireCurrentTenantId,
   runWithTenantDatabaseScope,
   type TenantScopeAwareDatabase,
@@ -65,7 +65,7 @@ export class BranchCleanupStepsService {
     const execution = data.execution_id as UUID;
     return runWithTenantDatabaseScope(this.db, tenantId, async (db) => {
       const maintenance = new BranchMaintenanceRepository(db);
-      const cleanup = new BranchCleanupRepository(db);
+      const cleanup = new BranchWorkspaceOperationRepository(db);
       if (data.action === 'claim') {
         await maintenance.claimExecution(claim, execution, async (tx) => {
           const repository = new BranchRepository(tx);

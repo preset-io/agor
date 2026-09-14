@@ -1,7 +1,7 @@
 import {
-  BranchCleanupRepository,
   BranchMaintenanceRepository,
   BranchRepository,
+  BranchWorkspaceOperationRepository,
   createDatabase,
   type Database,
   generateId,
@@ -46,7 +46,7 @@ describe.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
         });
         const maintenance = new BranchMaintenanceRepository(scoped);
         const { claim } = await maintenance.claim(branch.branch_id, 'cleanup', user.user_id);
-        await new BranchCleanupRepository(scoped).prepare(
+        await new BranchWorkspaceOperationRepository(scoped).prepare(
           claim,
           {
             operation_id: claim.operation_id,

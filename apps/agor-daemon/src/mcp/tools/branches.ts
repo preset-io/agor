@@ -18,7 +18,7 @@ import type {
   ZoneBoardObject,
 } from '@agor/core/types';
 import {
-  getBranchCleanupPolicyBlockReason,
+  getBranchCleanupBlockReason,
   getTeammateConfig,
   isTeammate,
   resolveRepoCleanupPolicy,
@@ -585,10 +585,8 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
         cleanup_protected: branch.cleanup_protected ?? false,
         cleanup_policy: resolveRepoCleanupPolicy(repo?.cleanup_policy),
         cleanup_policy_block_reason:
-          getBranchCleanupPolicyBlockReason(
-            repo?.cleanup_policy,
-            branch.cleanup_protected ?? false
-          ) ?? null,
+          getBranchCleanupBlockReason(repo?.cleanup_policy, branch.cleanup_protected ?? false) ??
+          null,
         workspace_operation: branch.workspace_operation ?? null,
         cleanup_last_error: branch.cleanup_last_error ?? null,
         last_cleanup_succeeded_at: branch.last_cleanup_succeeded_at ?? null,
@@ -1618,12 +1616,7 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
           const branch = await repository.findById(branchId);
           if (!branch) return 'preserved' as const;
           const repo = await new RepoRepository(db).findById(branch.repo_id);
-          if (
-            getBranchCleanupPolicyBlockReason(
-              repo?.cleanup_policy,
-              branch.cleanup_protected ?? false
-            )
-          )
+          if (getBranchCleanupBlockReason(repo?.cleanup_policy, branch.cleanup_protected ?? false))
             return 'preserved' as const;
           try {
             await ensureBranchWorkspaceAccess(

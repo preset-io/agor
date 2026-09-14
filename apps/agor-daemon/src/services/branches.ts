@@ -26,17 +26,15 @@ import {
 import {
   BoardObjectRepository,
   BoardRepository,
-  BranchCleanupRepository,
   BranchMaintenanceRepository,
   BranchRepository,
   type BranchWithZoneAndSessions,
-  branches,
+  BranchWorkspaceOperationRepository,
   CapabilityPolicyRepository,
   EnvironmentCommandRepository,
   type EnvironmentHealthObservation,
   EnvironmentHealthRepository,
   enqueueAfterTenantDatabaseCommit,
-  eq,
   generateId,
   getCurrentTenantId,
   KnowledgeNamespaceRepository,
@@ -44,11 +42,9 @@ import {
   RepoRepository,
   runWithTenantDatabaseScope,
   runWithTenantDatabaseTransaction,
-  select,
   type TenantScopeAwareDatabase,
   type TenantScopedDatabase,
   UsersRepository,
-  update,
 } from '@agor/core/db';
 import { renderBranchSnapshot } from '@agor/core/environment/render-snapshot';
 import {
@@ -97,7 +93,7 @@ import {
   ENVIRONMENT_COMMAND_BUDGET,
   type EnvironmentCommandAction,
   environmentCommandTokenId,
-  getBranchCleanupPolicyBlockReason,
+  getBranchCleanupBlockReason,
   getTeammateConfig,
   hasMinimumRole,
   isTeammate,
@@ -1851,7 +1847,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       await authorize(repository, current);
       if (policy) {
         const currentRepo = await new RepoRepository(tx).findById(current.repo_id);
-        const reason = getBranchCleanupPolicyBlockReason(
+        const reason = getBranchCleanupBlockReason(
           currentRepo?.cleanup_policy,
           current.cleanup_protected ?? false
         );
@@ -1861,7 +1857,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       }
     };
     if (policy) {
-      const reason = getBranchCleanupPolicyBlockReason(policy, branch.cleanup_protected ?? false);
+      const reason = getBranchCleanupBlockReason(policy, branch.cleanup_protected ?? false);
       if (reason) throw new Conflict(reason);
     }
     const admission = await this.withTenantDatabase(params, () =>
@@ -1878,7 +1874,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     try {
       const now = new Date();
       await this.withTenantDatabase(params, () =>
-        new BranchCleanupRepository(this.db).prepare(
+        new BranchWorkspaceOperationRepository(this.db).prepare(
           admission.claim,
           {
             operation_id: admission.claim.operation_id,
@@ -1924,14 +1920,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       }
       if (action === 'archive') {
         await this.withTenantDatabase(params, () =>
-          new BranchMaintenanceRepository(this.db).withClaim(admission.claim, async (tx) => {
-            const row = await select(tx).from(branches).where(eq(branches.branch_id, id)).one();
-            if (!row) throw new NotFound('Branch not found');
-            await update(tx, branches)
-              .set({ archived: true, archived_at: now, archived_by: user.user_id })
-              .where(eq(branches.branch_id, id))
-              .run();
-          })
+          new BranchWorkspaceOperationRepository(this.db).archiveMetadata(admission.claim)
         );
         const sessionsService = this.app.service('sessions') as unknown as SessionsService;
         await this.withTenantDatabase(params, () =>
@@ -1940,7 +1929,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       }
       if (!needsFiles) {
         await this.withTenantDatabase(params, () =>
-          new BranchCleanupRepository(this.db).finishPreserve(admission.claim)
+          new BranchWorkspaceOperationRepository(this.db).finishPreserve(admission.claim)
         );
         this.closeBranchTerminals(id, String(tenantId));
         const current = await this.withTenantDatabase(params, () => this.get(id, params));
@@ -2007,7 +1996,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       // Once dispatch intent exists, an exception is not absence proof.
       if (!invocationStarted)
         await this.withTenantDatabase(params, () =>
-          new BranchCleanupRepository(this.db).failBeforeExecution(admission.claim)
+          new BranchWorkspaceOperationRepository(this.db).failBeforeExecution(admission.claim)
         );
       throw error;
     }

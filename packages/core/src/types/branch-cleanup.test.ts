@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   DEFAULT_REPO_CLEANUP_POLICY,
-  getBranchCleanupPolicyBlockReason,
+  getBranchCleanupBlockReason,
   resolveRepoCleanupPolicy,
   validateRepoCleanupPolicy,
 } from './branch-cleanup';
@@ -13,23 +13,23 @@ describe('repository cleanup policy', () => {
       command: 'git clean -fdX',
       allow_branch_protection: true,
     });
-    expect(getBranchCleanupPolicyBlockReason(undefined, false)).toBe(
+    expect(getBranchCleanupBlockReason(undefined, false)).toBe(
       'Cleanup is disabled for this repository.'
     );
     expect(
-      getBranchCleanupPolicyBlockReason({ ...DEFAULT_REPO_CLEANUP_POLICY, enabled: true }, false)
+      getBranchCleanupBlockReason({ ...DEFAULT_REPO_CLEANUP_POLICY, enabled: true }, false)
     ).toBeUndefined();
   });
 
   it('overrides effective protection without mutating the saved preference', () => {
     const policy = { ...DEFAULT_REPO_CLEANUP_POLICY, enabled: true };
-    expect(getBranchCleanupPolicyBlockReason(policy, true)).toContain('protected');
+    expect(getBranchCleanupBlockReason(policy, true)).toContain('protected');
     expect(
-      getBranchCleanupPolicyBlockReason({ ...policy, allow_branch_protection: false }, true)
+      getBranchCleanupBlockReason({ ...policy, allow_branch_protection: false }, true)
     ).toBeUndefined();
-    expect(getBranchCleanupPolicyBlockReason(policy, true)).toContain('protected');
+    expect(getBranchCleanupBlockReason(policy, true)).toContain('protected');
     expect(
-      getBranchCleanupPolicyBlockReason(
+      getBranchCleanupBlockReason(
         { ...policy, enabled: false, allow_branch_protection: false },
         true
       )

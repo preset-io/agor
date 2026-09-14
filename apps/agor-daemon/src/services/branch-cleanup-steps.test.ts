@@ -1,7 +1,7 @@
 import {
-  BranchCleanupRepository,
   BranchMaintenanceRepository,
   BranchRepository,
+  BranchWorkspaceOperationRepository,
   generateId,
   RepoRepository,
   runWithTenantContext,
@@ -25,7 +25,7 @@ test('cleanup callbacks require exact tenant, actor, invocation and a single dur
   const repo = await new RepoRepository(db).update(branch.repo_id, { cleanup_policy: policy });
   const maintenance = new BranchMaintenanceRepository(db);
   const { claim } = await maintenance.claim(branch.branch_id, 'cleanup', user.user_id);
-  await new BranchCleanupRepository(db).prepare(
+  await new BranchWorkspaceOperationRepository(db).prepare(
     claim,
     {
       operation_id: claim.operation_id,

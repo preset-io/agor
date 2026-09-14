@@ -47,8 +47,8 @@ export function validateRepoCleanupPolicy(value: unknown): RepoCleanupPolicy {
   };
 }
 
-/** Policy eligibility only: admission must additionally verify authority and quiescence. */
-export function getBranchCleanupPolicyBlockReason(
+/** Policy and implementation availability; admission separately checks authority and activity. */
+export function getBranchCleanupBlockReason(
   policy: RepoCleanupPolicy | null | undefined,
   protectedPreference: boolean
 ): string | undefined {

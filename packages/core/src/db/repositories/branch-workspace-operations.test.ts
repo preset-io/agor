@@ -5,8 +5,8 @@ import {
   projectBranchWorkspaceOperation,
 } from '../../types/branch-cleanup';
 import { ownedDbTest as test } from '../test-helpers';
-import { BranchCleanupRepository } from './branch-cleanup';
 import { BranchMaintenanceRepository } from './branch-maintenance';
+import { BranchWorkspaceOperationRepository } from './branch-workspace-operations';
 import { BranchRepository } from './branches';
 import { seedEnvironmentCommandBranch } from './environment-commands.test-support';
 import { RepoRepository } from './repos';
@@ -18,7 +18,7 @@ test('cleanup settles once, fences edits, preserves prior errors during retry an
   const policy = { enabled: true, command: 'git clean -fdX', allow_branch_protection: true };
   const repo = await new RepoRepository(db).update(branch.repo_id, { cleanup_policy: policy });
   const maintenance = new BranchMaintenanceRepository(db);
-  const cleanup = new BranchCleanupRepository(db);
+  const cleanup = new BranchWorkspaceOperationRepository(db);
   const branches = new BranchRepository(db);
   const prepare = async (claim: BranchMaintenanceClaim) => {
     await cleanup.prepare(
@@ -34,6 +34,7 @@ test('cleanup settles once, fences edits, preserves prior errors during retry an
       },
       { repo_id: branch.repo_id, path: branch.path, repo_path: repo.local_path!, policy }
     );
+    await expect(cleanup.archiveMetadata(claim)).rejects.toThrow('admitted archive');
     const execution = await maintenance.beginExecution(claim);
     await maintenance.claimExecution(claim, execution, (tx) => cleanup.validateLaunch(tx, claim));
     await cleanup.started(claim, execution);
@@ -78,7 +79,7 @@ test('cleanup settles once, fences edits, preserves prior errors during retry an
 test('unknown reports and expired read projections never release maintenance', async ({ db }) => {
   const { branch, user } = await seedEnvironmentCommandBranch(db);
   const maintenance = new BranchMaintenanceRepository(db);
-  const cleanup = new BranchCleanupRepository(db);
+  const cleanup = new BranchWorkspaceOperationRepository(db);
   const { claim } = await maintenance.claim(branch.branch_id, 'cleanup', user.user_id);
   await cleanup.prepare(
     claim,
@@ -93,12 +94,19 @@ test('unknown reports and expired read projections never release maintenance', a
     },
     { repo_id: branch.repo_id, path: branch.path, repo_path: '/fixture' }
   );
+  await cleanup.archiveMetadata(claim);
+  expect(await new BranchRepository(db).findById(branch.branch_id)).toMatchObject({
+    archived: true,
+    archived_by: user.user_id,
+    filesystem_status: 'ready',
+  });
   const operation = (await new BranchRepository(db).findById(branch.branch_id))!
     .workspace_operation;
   expect(projectBranchWorkspaceOperation(operation)?.status).toBe('unknown');
   const execution = await maintenance.beginExecution(claim);
   await maintenance.claimExecution(claim, execution);
   await cleanup.finish(claim, execution, 'unknown');
+  await expect(cleanup.archiveMetadata(claim)).rejects.toThrow('must settle');
   await expect(maintenance.release(claim)).rejects.toThrow('containment');
   await expect(maintenance.beginExecution(claim)).rejects.toThrow('reconciliation');
 });
@@ -111,7 +119,7 @@ test('a policy change before the invocation claim invalidates the snapshot witho
   const policy = { enabled: true, command: './old.sh', allow_branch_protection: true };
   const repo = await repos.update(branch.repo_id, { cleanup_policy: policy });
   const maintenance = new BranchMaintenanceRepository(db);
-  const cleanup = new BranchCleanupRepository(db);
+  const cleanup = new BranchWorkspaceOperationRepository(db);
   const { claim } = await maintenance.claim(branch.branch_id, 'cleanup', user.user_id);
   await cleanup.prepare(
     claim,
@@ -142,7 +150,7 @@ test('a policy change before the invocation claim invalidates the snapshot witho
 test('pre-dispatch failures settle visibly, but cannot release an invocation', async ({ db }) => {
   const { branch, user } = await seedEnvironmentCommandBranch(db);
   const maintenance = new BranchMaintenanceRepository(db);
-  const cleanup = new BranchCleanupRepository(db);
+  const cleanup = new BranchWorkspaceOperationRepository(db);
   const { claim } = await maintenance.claim(branch.branch_id, 'cleanup', user.user_id);
   await cleanup.prepare(
     claim,

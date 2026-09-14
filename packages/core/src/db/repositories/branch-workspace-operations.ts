@@ -5,10 +5,7 @@ import type {
   BranchWorkspaceSnapshot,
   UUID,
 } from '../../types';
-import {
-  getBranchCleanupPolicyBlockReason,
-  resolveRepoCleanupPolicy,
-} from '../../types/branch-cleanup';
+import { getBranchCleanupBlockReason, resolveRepoCleanupPolicy } from '../../types/branch-cleanup';
 import type { Database } from '../client';
 import { select, update } from '../database-wrapper';
 import { branches } from '../schema';
@@ -16,8 +13,8 @@ import { RepositoryError } from './base';
 import { BranchMaintenanceRepository } from './branch-maintenance';
 import { RepoRepository } from './repos';
 
-/** Cleanup-specific data only. Admission and invocation identity have exactly one owner. */
-export class BranchCleanupRepository {
+/** Cleanup/archive data only. The shared maintenance repository owns admission and invocation identity. */
+export class BranchWorkspaceOperationRepository {
   constructor(private readonly db: Database) {}
 
   async prepare(
@@ -25,12 +22,7 @@ export class BranchCleanupRepository {
     operation: BranchWorkspaceOperation,
     snapshot: BranchWorkspaceSnapshot
   ) {
-    await new BranchMaintenanceRepository(this.db).withClaim(claim, async (tx) => {
-      const row = await select(tx)
-        .from(branches)
-        .where(eq(branches.branch_id, claim.branch_id))
-        .one();
-      if (!row) throw new RepositoryError('Branch not found');
+    await new BranchMaintenanceRepository(this.db).withClaim(claim, async (tx, row) => {
       await update(tx, branches)
         .set({
           data: { ...row.data, workspace_operation: operation, workspace_snapshot: snapshot },
@@ -42,13 +34,7 @@ export class BranchCleanupRepository {
 
   /** A local admission failure is releasable only before any durable dispatch intent. */
   async failBeforeExecution(claim: BranchMaintenanceClaim) {
-    await new BranchMaintenanceRepository(this.db).withClaim(claim, async (tx) => {
-      const row = await select(tx)
-        .from(branches)
-        .where(eq(branches.branch_id, claim.branch_id))
-        .one();
-      if (!row || row.data.maintenance?.execution_id)
-        throw new RepositoryError('Workspace invocation requires reconciliation');
+    await new BranchMaintenanceRepository(this.db).withClaim(claim, async (tx, row) => {
       const operation = row.data.workspace_operation;
       if (operation?.operation_id === claim.operation_id) {
         await update(tx, branches)
@@ -99,7 +85,7 @@ export class BranchCleanupRepository {
     if (snapshot.policy) {
       const current = resolveRepoCleanupPolicy(repo.cleanup_policy);
       if (
-        getBranchCleanupPolicyBlockReason(current, row.cleanup_protected) ||
+        getBranchCleanupBlockReason(current, row.cleanup_protected) ||
         Object.entries(snapshot.policy).some(
           ([key, value]) => current[key as keyof typeof current] !== value
         )
@@ -131,15 +117,28 @@ export class BranchCleanupRepository {
     );
   }
 
+  /** Save archival metadata under the same owner, without claiming filesystem completion. */
+  async archiveMetadata(claim: BranchMaintenanceClaim) {
+    await new BranchMaintenanceRepository(this.db).withClaim(claim, async (tx, row) => {
+      const operation = row.data.workspace_operation;
+      if (operation?.operation_id !== claim.operation_id || operation.action !== 'archive')
+        throw new RepositoryError('An admitted archive operation is required');
+      await update(tx, branches)
+        .set({
+          archived: true,
+          archived_at: new Date(operation.requested_at),
+          archived_by: operation.requested_by,
+        })
+        .where(eq(branches.branch_id, claim.branch_id))
+        .run();
+    });
+  }
+
   /** Metadata-only archive has no filesystem invocation to supervise. */
   async finishPreserve(claim: BranchMaintenanceClaim) {
-    await new BranchMaintenanceRepository(this.db).withClaim(claim, async (tx) => {
-      const row = await select(tx)
-        .from(branches)
-        .where(eq(branches.branch_id, claim.branch_id))
-        .one();
-      const operation = row?.data.workspace_operation;
-      if (!row || operation?.action !== 'archive' || operation.filesystem_action !== 'preserved')
+    await new BranchMaintenanceRepository(this.db).withClaim(claim, async (tx, row) => {
+      const operation = row.data.workspace_operation;
+      if (operation?.action !== 'archive' || operation.filesystem_action !== 'preserved')
         throw new RepositoryError('Only metadata-only archival may complete without an executor');
       await update(tx, branches)
         .set({

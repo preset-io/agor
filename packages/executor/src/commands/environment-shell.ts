@@ -22,11 +22,11 @@ export class EnvironmentOutput {
 /** Kill the owned process group even when the shell exits before its descendants. */
 export async function runBoundedEnvironmentShell(options: {
   command: string;
-  action: 'start' | 'stop' | 'nuke' | 'logs' | 'cleanup';
+  action: 'start' | 'stop' | 'nuke' | 'logs';
   cwd: string;
   env?: Record<string, string>;
   deadline: number;
-  output: Pick<EnvironmentOutput, 'append'>;
+  output: EnvironmentOutput;
   cleanupMs?: number;
 }): Promise<{ outcome: 'succeeded' | 'failed' | 'unknown'; message: string }> {
   assertEnvCommandAllowed(options.command, options.action);
@@ -72,7 +72,7 @@ export async function runBoundedEnvironmentShell(options: {
     // is never hosted: terminate remaining descendants before reporting.
     signalGroup('SIGTERM');
     let finished = false;
-    const finish = async () => {
+    const finish = () => {
       if (finished) return;
       finished = true;
       signalGroup('SIGKILL');

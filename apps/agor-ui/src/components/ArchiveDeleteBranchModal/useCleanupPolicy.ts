@@ -1,5 +1,5 @@
 import type { AgorClient, Branch, EffectiveBranchAccess, Repo, User } from '@agor-live/client';
-import { getBranchCleanupPolicyBlockReason, resolveRepoCleanupPolicy } from '@agor-live/client';
+import { getBranchCleanupBlockReason, resolveRepoCleanupPolicy } from '@agor-live/client';
 import { useEffect, useState } from 'react';
 import {
   useAuthenticatedAuthorityScope,
@@ -76,7 +76,7 @@ export function useCleanupPolicy(
     ? loadError
       ? 'Cleanup policy or permissions could not be loaded.'
       : 'Loading cleanup policy and permissions…'
-    : (getBranchCleanupPolicyBlockReason(policy, current.branch.cleanup_protected ?? false) ??
+    : (getBranchCleanupBlockReason(policy, current.branch.cleanup_protected ?? false) ??
       (!(current.access.is_owner || current.access.can === 'all') ||
       current.access.fs_access !== 'write'
         ? 'Cleanup requires Branch Manager authority and writable workspace access.'
