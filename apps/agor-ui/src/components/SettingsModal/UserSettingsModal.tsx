@@ -2056,38 +2056,58 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
     </ConfigProvider>
   );
 
-  // Embedded nav is a horizontal Tabs bar, not a second Sider+Menu — otherwise
-  // drilling in from Workspace Settings stacks three nav columns on screen. The
-  // section list (and its isEditingOther tab-hiding) comes from the same
-  // navGroups the Sider uses; groups are flattened and overflow into Tabs' own
-  // "more" dropdown when there are many providers.
-  const embeddedTabItems = navGroups.flatMap((group) =>
-    group.children.map((child) => ({
-      key: child.key,
-      label: child.provider ? (
-        <AgenticToolReadinessSlot
-          tool={child.provider.tool}
-          client={client}
-          canLoadReadiness={isSelf}
-          fallback={child.provider.fallbackStatus}
-        >
-          {(status) => (
-            <Space size={6}>
-              {child.icon}
-              <Badge color={statusDotColor[status.tone]} />
-              <span>{child.title}</span>
-              <span style={SR_ONLY_STYLE}>{status.label}</span>
-            </Space>
-          )}
-        </AgenticToolReadinessSlot>
-      ) : (
-        <Space size={6}>
-          {child.icon}
-          <span>{child.title}</span>
-        </Space>
-      ),
-    }))
-  );
+  // Embedded nav is a compact, collapsible vertical Menu — NOT the flat
+  // horizontal Tabs it used to be (12+ items overflowed into antd's "..."
+  // dropdown, hiding most AI-provider tabs behind a click) and NOT a second full
+  // Sider (that would stack three heavy nav columns when drilling in from
+  // Workspace Settings). It renders the SAME navGroups the standalone Sider uses,
+  // but as an inline category tree: groups become collapsible submenus, so the
+  // rail stays narrow and every provider is one expand away instead of hidden in
+  // an overflow menu. Environment variables is a single flat item (no group).
+  const renderEmbeddedNavLabel = (child: (typeof navGroups)[number]['children'][number]) =>
+    child.provider ? (
+      <AgenticToolReadinessSlot
+        tool={child.provider.tool}
+        client={client}
+        canLoadReadiness={isSelf}
+        fallback={child.provider.fallbackStatus}
+      >
+        {(status) => (
+          <Space size={8}>
+            <Badge color={statusDotColor[status.tone]} />
+            <span>{child.title}</span>
+            <span style={SR_ONLY_STYLE}>{status.label}</span>
+          </Space>
+        )}
+      </AgenticToolReadinessSlot>
+    ) : (
+      child.title
+    );
+
+  const embeddedMenuItems: MenuProps['items'] = navGroups.map((group) => {
+    // Environment variables reads as a single destination, so it's a flat
+    // top-level item rather than a one-child expandable group.
+    if (group.key === 'grp-environment') {
+      const child = group.children[0];
+      return { key: child.key, icon: child.icon, label: renderEmbeddedNavLabel(child) };
+    }
+    return {
+      key: group.key,
+      label: group.label,
+      children: group.children.map((child) => ({
+        key: child.key,
+        icon: child.icon,
+        label: renderEmbeddedNavLabel(child),
+      })),
+    };
+  });
+
+  // Auto-expand the group holding the active section on open, so nobody lands on
+  // a collapsed rail. Uncontrolled after that — the tree is the user's to
+  // expand/collapse. (grp-environment is flat, so a match there opens nothing.)
+  const activeEmbeddedGroupKey = navGroups.find((group) =>
+    group.children.some((child) => child.key === activeKey)
+  )?.key;
 
   // Drill-in mode: no outer Modal. A Back affordance replaces the modal close,
   // and this component keeps its own footer (its inline-save caption differs
@@ -2117,17 +2137,35 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
             style={{ borderRadius: 0 }}
           />
         )}
-        <ConfigProvider theme={scopedTheme}>
-          <Tabs
-            activeKey={activeInNav ? activeKey : undefined}
-            onChange={setActiveKey}
-            items={embeddedTabItems}
-            tabBarStyle={{ padding: '0 24px', marginBottom: 0 }}
-          />
-        </ConfigProvider>
-        <div style={{ flex: 1, minHeight: 0, overflow: 'auto', padding: '20px 24px' }}>
-          {renderContent()}
-        </div>
+        <Flex style={{ flex: 1, minHeight: 0 }}>
+          {/* Compact category rail: intentionally narrower and lighter than the
+              outer Workspace Settings Sider (no elevated fill, just a hairline
+              divider) so it reads as one integrated panel within the drill-in,
+              not a redundant duplicate nav column. */}
+          <ConfigProvider theme={scopedTheme}>
+            <div
+              style={{
+                width: 200,
+                flexShrink: 0,
+                overflow: 'auto',
+                padding: '8px 0',
+                borderRight: `1px solid ${token.colorBorderSecondary}`,
+              }}
+            >
+              <Menu
+                mode="inline"
+                selectedKeys={activeInNav ? [activeKey] : []}
+                defaultOpenKeys={activeEmbeddedGroupKey ? [activeEmbeddedGroupKey] : []}
+                onClick={({ key }) => setActiveKey(key)}
+                items={embeddedMenuItems}
+                style={{ borderInlineEnd: 'none', background: 'transparent' }}
+              />
+            </div>
+          </ConfigProvider>
+          <div style={{ flex: 1, minHeight: 0, overflow: 'auto', padding: '20px 24px' }}>
+            {renderContent()}
+          </div>
+        </Flex>
         <div
           style={{
             padding: '12px 24px',
