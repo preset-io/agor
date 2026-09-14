@@ -46,6 +46,13 @@ class OpsTest(unittest.TestCase):
    handler.headers={'Authorization':token(**claims)}
    with patch.object(m.urllib.request,'urlopen') as call:
     self.assertIsNone(handler.session());call.assert_not_called()
+  with patch.dict(m.CONFIG,{'agorStaticTenant':'default'}):
+   handler.headers={'Authorization':token(tenant_id=None)}
+   with patch.object(m.urllib.request,'urlopen',return_value=io.BytesIO(json.dumps({'user_id':uid,'role':'superadmin'}).encode())):
+    self.assertIsNotNone(handler.session())
+   handler.headers={'Authorization':token(tenant_id='other')}
+   with patch.object(m.urllib.request,'urlopen') as call:
+    self.assertIsNone(handler.session());call.assert_not_called()
   handler.headers={'Authorization':token()}
   with patch.object(m.urllib.request,'urlopen',side_effect=urllib.error.URLError('revoked')):
    self.assertIsNone(handler.session())

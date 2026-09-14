@@ -14,7 +14,10 @@ its signature, expiry and credential revocation. The console requires the live
 user role to be `superadmin`; it does not authorize from decoded JWT role claims.
 Only ordinary access tokens for `operatorTenant` are accepted. Configure
 `agorOrigin` as the trusted local daemon origin (here `http://127.0.0.1:3030`) and
-`operatorTenant` as `default` in `/etc/agor-ops.json`. Do not point this at an
+`operatorTenant` as `default` in `/etc/agor-ops.json`. For a verified static-mode
+daemon, set `agorStaticTenant` to its `static_tenant_id` so ordinary browser
+tokens without a tenant claim work. Omit that fallback for dynamic tenancy;
+explicit conflicting tenant claims are always rejected. Do not point this at an
 untrusted endpoint. Other tenant administrators cannot gain fleet access.
 
 There is no separate password or ops cookie. Mutations require both exact

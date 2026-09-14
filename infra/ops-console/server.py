@@ -162,7 +162,11 @@ class Handler(BaseHTTPRequestHandler):
             claims=json.loads(base64.urlsafe_b64decode(encoded+'='*(-len(encoded)%4)))
             subject=str(uuid.UUID(claims['sub']))
             if claims.get('type')!='access': return None
-            if claims.get('tenant_id')!=CONFIG['operatorTenant']: return None
+            tenant=claims.get('tenant_id')
+            # Static-mode Agor browser tokens may omit tenant_id. This fallback
+            # must be explicitly configured to the daemon's static tenant.
+            if tenant is None: tenant=CONFIG.get('agorStaticTenant')
+            if tenant!=CONFIG['operatorTenant']: return None
             request=urllib.request.Request(CONFIG['agorOrigin']+'/users/'+subject,
                 headers={'Authorization':bearer})
             with urllib.request.urlopen(request,timeout=5) as response: user=json.load(response)
