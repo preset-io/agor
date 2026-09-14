@@ -6,8 +6,8 @@ import {
   useAuthorityOperationGuard,
 } from '@/hooks/useAuthorityOperationGuard';
 
-/** Fresh authenticated reads; neither a stale prop nor a failed load enables Clean. */
-export function useCleanupPolicy(
+/** Fresh authenticated eligibility for archive/delete actions; stale or failed reads fail closed. */
+export function useArchiveDeleteEligibility(
   client: AgorClient | null,
   user: User | null | undefined,
   branch: Branch,
@@ -84,7 +84,7 @@ export function useCleanupPolicy(
     (current?.access.fs_access !== 'write'
       ? 'Writable workspace access is required to clean or delete files.'
       : undefined);
-  const reason = !current
+  const cleanupReason = !current
     ? loadError
       ? 'Cleanup policy or permissions could not be loaded.'
       : 'Loading cleanup policy and permissions…'
@@ -92,7 +92,7 @@ export function useCleanupPolicy(
       getBranchCleanupBlockReason(policy, current.branch.cleanup_protected ?? false));
   return {
     policy,
-    reason,
+    cleanupReason,
     managementReason,
     workspaceReason,
     repo: current?.repo,

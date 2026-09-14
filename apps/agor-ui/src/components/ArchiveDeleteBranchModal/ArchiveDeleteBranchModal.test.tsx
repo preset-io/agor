@@ -346,7 +346,7 @@ it.each(['none', 'read'] as const)(
   }
 );
 
-it('revoked or failed permissions disable all submissions, not just Clean', async () => {
+it('after refreshing eligibility, revoked or failed permissions disable all submissions, not just Clean', async () => {
   const { client, branch, access, repos } = fixture(true);
   const confirm = vi.fn();
   render(
