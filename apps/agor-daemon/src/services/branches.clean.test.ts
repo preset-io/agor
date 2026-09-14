@@ -53,6 +53,12 @@ test('clean rejects policy, protection, public overrides, and busy activity befo
     service.clean({ ...input, command: 'override' } as { branchId: BranchID }, { user, tenant })
   ).rejects.toThrow('only branchId');
   await repos.update(branch.repo_id, {
+    cleanup_policy: { enabled: true, command: './custom.sh', allow_branch_protection: true },
+  });
+  await expect(service.clean(input, { user, tenant })).rejects.toThrow('descendant containment');
+  expect(requestExecutor).not.toHaveBeenCalled();
+  expect(spawnExecutor).not.toHaveBeenCalled();
+  await repos.update(branch.repo_id, {
     cleanup_policy: { enabled: true, command: 'git clean -fdX', allow_branch_protection: true },
   });
   await branches.update(branch.branch_id, { cleanup_protected: true });
@@ -166,7 +172,7 @@ test('archive removal uses the shared workspace worker and does not claim filesy
     expect.objectContaining({
       command: 'branch.archive',
       params: expect.objectContaining({
-        cleanup: undefined,
+        filesystemAction: 'deleted',
         removal: expect.objectContaining({
           branchPath: branch.path,
           repoPath: '/tmp/environment-test',
@@ -175,6 +181,9 @@ test('archive removal uses the shared workspace worker and does not claim filesy
     }),
     expect.anything()
   );
+  const sent = vi.mocked(spawnExecutor).mock.calls[0]![0] as { params: Record<string, unknown> };
+  expect(sent.params).not.toHaveProperty('cwd');
+  expect(sent.params).not.toHaveProperty('cleanup');
   expect(await new BranchRepository(db).findById(branch.branch_id)).toMatchObject({
     archived: true,
     filesystem_status: 'ready',

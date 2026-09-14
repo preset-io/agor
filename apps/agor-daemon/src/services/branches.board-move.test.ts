@@ -328,7 +328,11 @@ dbTest(
   async ({ db }) => {
     const f = await fixture(db);
     const other = await f.branches.create({
-      ...f.branch,
+      repo_id: f.branch.repo_id,
+      ref: f.branch.ref,
+      created_by: f.branch.created_by,
+      permission_binding: f.branch.permission_binding,
+      custom_context: f.branch.custom_context,
       branch_id: generateId() as BranchID,
       board_id: f.target.board_id,
       name: 'Existing primary',

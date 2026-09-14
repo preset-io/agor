@@ -91,7 +91,7 @@ import {
   BRANCH_ENVIRONMENT_CLEARABLE_FIELDS,
   BRANCH_WORKSPACE_OPERATION_BUDGET_MS,
   type BranchCleanAccepted,
-  type BranchFilesystemAction,
+  type BranchWorkspaceRequest,
   branchCleanupCommandId,
   branchDeletionCommandId,
   ENVIRONMENT_COMMAND_BUDGET,
@@ -1780,15 +1780,16 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       typeof input.branchId !== 'string'
     )
       throw new BadRequest('Cleanup accepts only branchId');
-    return this.requestWorkspaceOperation(input.branchId, 'clean', 'cleaned', params);
+    return this.requestWorkspaceOperation(input.branchId, { action: 'clean' }, params);
   }
 
   private async requestWorkspaceOperation(
     id: BranchID,
-    action: 'clean' | 'archive',
-    filesystemAction: BranchFilesystemAction,
+    request: BranchWorkspaceRequest,
     params?: BranchParams
   ): Promise<BranchCleanAccepted> {
+    const { action } = request;
+    const filesystemAction = request.action === 'clean' ? 'cleaned' : request.filesystemAction;
     const user = params?.user;
     const tenantId = params?.tenant?.tenant_id ?? getCurrentTenantId();
     if (!user || !tenantId)
@@ -1971,13 +1972,9 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
               operationId: admission.claim.operation_id,
               generation: admission.claim.generation,
               executionId,
-              cwd: branch.path,
-              principalBranchAccess: 'write',
-              ...context!.sandboxMounts,
-              deadlineAt: now.getTime() + BRANCH_WORKSPACE_OPERATION_BUDGET_MS,
-              cleanup: policy ? { command: policy.command } : undefined,
-              ...(action === 'archive' && filesystemAction === 'deleted'
+              ...(filesystemAction === 'deleted'
                 ? {
+                    filesystemAction: 'deleted' as const,
                     removal: {
                       branchPath: branch.path,
                       repoPath: repo.local_path!,
@@ -1985,7 +1982,14 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
                       storageMode: branch.storage_mode ?? 'worktree',
                     },
                   }
-                : {}),
+                : {
+                    filesystemAction: 'cleaned' as const,
+                    cwd: branch.path,
+                    principalBranchAccess: 'write' as const,
+                    ...context!.sandboxMounts,
+                    cleanup: { command: policy!.command },
+                  }),
+              deadlineAt: now.getTime() + BRANCH_WORKSPACE_OPERATION_BUDGET_MS,
             },
           },
           {
@@ -2167,7 +2171,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       return this.requestPermanentDeletion(id, params);
     }
 
-    await this.requestWorkspaceOperation(id, 'archive', filesystemAction, params);
+    await this.requestWorkspaceOperation(id, { action: 'archive', filesystemAction }, params);
     return this.withTenantDatabase(params, () => this.get(id, params));
   }
 

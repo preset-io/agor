@@ -362,7 +362,8 @@ execution:
 It requires branch Manager/owner authority and write access; disabled policy,
 effective protection, outstanding tasks/uploads, and active environments block it.
 The default command is `git clean -fdX` (ignored files only), but cleanup is disabled
-until a repository administrator enables it.
+until a repository administrator enables it. Custom command settings are retained
+but cannot execute until descendant containment is supported.
 
 The response is `{ branch_id, operation_id, status: "accepted" }`. Inspect the
 branch's `workspace_operation` for completion or a safe failure/unknown outcome;

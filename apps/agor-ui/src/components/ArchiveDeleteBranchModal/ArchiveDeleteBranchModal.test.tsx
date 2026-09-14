@@ -62,15 +62,23 @@ it('defaults to Preserve when disabled, saves settings above archive, and refres
   fireEvent.click(within(settings).getByRole('button', { name: /Branch cleanup/ }));
   fireEvent.click(within(settings).getByRole('checkbox', { name: 'Enable branch cleanup' }));
   fireEvent.change(within(settings).getByLabelText('Cleanup command'), {
-    target: { value: './cleanup.sh' },
+    target: { value: 'git clean -fdX' },
   });
   fireEvent.click(within(settings).getByRole('button', { name: /Branch cleanup/ }));
   fireEvent.click(within(settings).getByRole('button', { name: 'Save settings' }));
   await waitFor(() => expect(repos.patch).toHaveBeenCalledOnce());
   await waitFor(() =>
-    expect(screen.getByRole('radio', { name: /Clean — .\/cleanup.sh/ })).toBeChecked()
+    expect(screen.getByRole('radio', { name: /Clean — git clean -fdX/ })).toBeChecked()
   );
   expect(confirm).not.toHaveBeenCalled();
+  await act(async () => {
+    await repos.patch('unused', {
+      cleanup_policy: { ...DEFAULT_REPO_CLEANUP_POLICY, enabled: true, command: './detached.sh' },
+    });
+  });
+  await waitFor(() => expect(screen.getByRole('radio', { name: /Clean —/ })).toBeDisabled());
+  expect(screen.getByRole('radio', { name: /Leave untouched/ })).toBeChecked();
+  expect(screen.getAllByText(/Custom cleanup commands are unavailable/).length).toBeGreaterThan(0);
 });
 
 it('does not steal explicit Preserve, falls back when protection changes, and fails closed on load failure', async () => {
@@ -94,11 +102,11 @@ it('does not steal explicit Preserve, falls back when protection changes, and fa
   fireEvent.click(screen.getByRole('radio', { name: /Leave untouched/ }));
   await act(async () => {
     await repos.patch('unused', {
-      cleanup_policy: { ...DEFAULT_REPO_CLEANUP_POLICY, enabled: true, command: './new.sh' },
+      cleanup_policy: { ...DEFAULT_REPO_CLEANUP_POLICY, enabled: true, command: 'git clean -fdX' },
     });
   });
   await waitFor(() =>
-    expect(screen.getByRole('radio', { name: /Clean — .\/new.sh/ })).toBeEnabled()
+    expect(screen.getByRole('radio', { name: /Clean — git clean -fdX/ })).toBeEnabled()
   );
   expect(screen.getByRole('radio', { name: /Leave untouched/ })).toBeChecked();
   fireEvent.click(screen.getByRole('radio', { name: /Clean —/ }));

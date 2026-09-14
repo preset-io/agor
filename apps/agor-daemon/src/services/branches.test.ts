@@ -1521,7 +1521,11 @@ describe('BranchesService.archiveOrDelete', () => {
           params
         )
       ).toEqual(branch);
-      expect(request).toHaveBeenCalledWith(branchId, 'archive', filesystemAction, params);
+      expect(request).toHaveBeenCalledWith(
+        branchId,
+        { action: 'archive', filesystemAction },
+        params
+      );
       expect(mockedSpawnExecutor).not.toHaveBeenCalled();
     }
   );

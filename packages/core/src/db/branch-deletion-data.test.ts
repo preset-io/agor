@@ -161,7 +161,11 @@ test('completed reference scan fences late teammate dependencies and namespace o
   await expect(branches.update(neighbor.branch_id, { custom_context })).rejects.toThrow('deletion');
   await expect(
     branches.create({
-      ...neighbor,
+      repo_id: neighbor.repo_id,
+      ref: neighbor.ref,
+      created_by: neighbor.created_by,
+      board_id: neighbor.board_id,
+      permission_binding: neighbor.permission_binding,
       branch_id: generateId(),
       name: 'late',
       branch_unique_id: 9876,

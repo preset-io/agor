@@ -54,6 +54,8 @@ export function getBranchCleanupPolicyBlockReason(
 ): string | undefined {
   const effective = resolveRepoCleanupPolicy(policy);
   if (!effective.enabled) return 'Cleanup is disabled for this repository.';
+  if (effective.command !== DEFAULT_BRANCH_CLEANUP_COMMAND)
+    return 'Custom cleanup commands are unavailable until descendant containment is supported. Use git clean -fdX.';
   if (effective.allow_branch_protection && protectedPreference)
     return 'This branch is protected from workspace cleanup.';
   return undefined;
@@ -90,6 +92,11 @@ export interface BranchWorkspaceSnapshot {
   repo_path: string;
   policy?: RepoCleanupPolicy;
 }
+/** Standalone cleanup has exactly one filesystem action; archive chooses explicitly. */
+export type BranchWorkspaceRequest =
+  | { action: 'clean' }
+  | { action: 'archive'; filesystemAction: import('./branch').BranchFilesystemAction };
+
 export interface BranchCleanAccepted {
   branch_id: import('./id').BranchID;
   operation_id: import('./id').UUID;

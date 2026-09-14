@@ -279,9 +279,11 @@ Protection does not prevent full filesystem deletion.
 
 `git clean -fdX` preserves tracked modifications, staged files, ordinary untracked
 files, and stashes. Ignored `.env` files, datasets, local databases, and ignored
-source can still be valuable. There is no undo. Custom commands run relative to
-the workspace and do not inherit those preservation guarantees. Checkout scripts
-are mutable executable code; never put secrets in cleanup commands.
+source can still be valuable. There is no undo. Only the exact built-in command
+`git clean -fdX` is currently executable. Custom command settings are preserved,
+but execution is blocked until the executor can prove that cleanup-created detached
+descendants have stopped. This is separate from best-effort closure of existing
+terminals. Never put secrets in saved commands.
 
 ### Requesting cleanup
 
@@ -294,7 +296,7 @@ errors. `last_cleanup_succeeded_at` records command success, not bytes reclaimed
 
 Stop environments and finish/cancel outstanding tasks before requesting maintenance.
 One durable Branch-row claim excludes competing work; duplicate active requests
-are rejected, not dispatched again. Custom commands are bounded to five minutes;
+are rejected, not dispatched again. Built-in cleanup is bounded to five minutes;
 stdout/stderr are drained without retaining file listings or secrets. Unknown or
 lost results stay fenced for operator reconciliation and are never automatically
 retried. After six minutes without a final report, reads display an unknown outcome.

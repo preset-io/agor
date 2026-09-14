@@ -78,7 +78,7 @@ export function RepoCleanupPolicyFields() {
                           ),
                   }),
                 ]}
-                extra="Runs relative to the workspace without templating. Checkout scripts are mutable executable code; do not include secrets."
+                extra="Only git clean -fdX can currently execute. Custom commands are saved but blocked until descendant containment is supported. Do not include secrets."
               >
                 <CleanupCommandInput
                   onInvalid={revealError}

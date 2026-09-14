@@ -9,7 +9,6 @@ import {
 } from '@agor/core/types';
 import { cleanIgnoredWorkspace, removeBranchWorkspace } from '@agor/git';
 import type { BranchArchivePayload, BranchCleanPayload, ExecutorResult } from '../payload-types.js';
-import { runBoundedEnvironmentShell } from './environment-shell.js';
 import type { CommandOptions } from './index.js';
 
 type Outcome = 'succeeded' | 'failed' | 'unknown';
@@ -20,39 +19,31 @@ export async function runBranchWorkspaceFiles(
 ): Promise<Outcome> {
   const p = payload.params;
   if (Date.now() >= p.deadlineAt) return 'failed';
-  if (payload.command === BRANCH_CLEANUP_COMMAND && (!p.cleanup || p.removal)) return 'failed';
-  try {
-    if (!isAbsolute(p.cwd) || !(await lstat(p.cwd)).isDirectory()) return 'failed';
-  } catch {
-    return 'failed';
-  }
-  if (p.cleanup) {
-    if (p.cleanup.command === DEFAULT_BRANCH_CLEANUP_COMMAND) {
-      try {
-        await cleanIgnoredWorkspace(
-          p.cwd,
-          Math.min(BRANCH_CLEANUP_TIMEOUT_MS, p.deadlineAt - Date.now())
-        );
-      } catch {
-        // A timed-out Git invocation is not certified stopped by an exception.
-        return 'unknown';
-      }
-    } else {
-      const result = await runBoundedEnvironmentShell({
-        command: p.cleanup.command,
-        action: 'cleanup',
-        cwd: p.cwd,
-        deadline: Math.min(p.deadlineAt, Date.now() + BRANCH_CLEANUP_TIMEOUT_MS),
-        verifySettlement: true,
-        output: { append() {} },
-      });
-      if (result.outcome !== 'succeeded') return result.outcome;
-    }
-  }
-  if (p.removal) {
+  if (p.filesystemAction === 'deleted') {
+    // The fixed storage owner runs outside the victim's branch-shell mount,
+    // exactly like permanent deletion. No arbitrary command is allowed here.
+    if (payload.command === BRANCH_CLEANUP_COMMAND) return 'failed';
     try {
       await removeBranchWorkspace(p.removal);
     } catch {
+      return 'unknown';
+    }
+  } else {
+    // Process-group disappearance cannot certify detached descendants. Until
+    // the substrate provides that proof, never start custom cleanup commands.
+    if (p.cleanup.command !== DEFAULT_BRANCH_CLEANUP_COMMAND) return 'failed';
+    try {
+      if (!isAbsolute(p.cwd) || !(await lstat(p.cwd)).isDirectory()) return 'failed';
+    } catch {
+      return 'failed';
+    }
+    try {
+      await cleanIgnoredWorkspace(
+        p.cwd,
+        Math.min(BRANCH_CLEANUP_TIMEOUT_MS, p.deadlineAt - Date.now())
+      );
+    } catch {
+      // A timed-out Git invocation is not certified stopped by an exception.
       return 'unknown';
     }
   }

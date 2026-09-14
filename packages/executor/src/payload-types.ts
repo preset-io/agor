@@ -403,33 +403,43 @@ const BranchMaintenanceParamsSchema = z.object({
   generation: z.number().int().positive(),
   executionId: z.string().uuid(),
   deadlineAt: z.number().positive(),
+});
+const BranchCleanupParamsSchema = BranchMaintenanceParamsSchema.extend({
+  filesystemAction: z.literal('cleaned'),
   cwd: z.string().min(1),
   principalBranchAccess: z.literal('write'),
   sandboxHomeStore: z.string().optional(),
   sandboxWorktreesRoot: z.string().optional(),
   sandboxBaseRepoPath: z.string().optional(),
-  cleanup: BranchCleanupSpecificationSchema.optional(),
+  cleanup: BranchCleanupSpecificationSchema,
+}).strict();
+// Fixed storage-owner operation, deliberately without a branch-shell cwd/mount.
+const BranchWorkspaceRemovalParamsSchema = BranchMaintenanceParamsSchema.extend({
+  filesystemAction: z.literal('deleted'),
   removal: z
     .object({
-      branchPath: z.string(),
-      branchesRoot: z.string(),
-      repoPath: z.string(),
+      branchPath: z.string().min(1),
+      branchesRoot: z.string().min(1),
+      repoPath: z.string().min(1),
       storageMode: z.enum(['worktree', 'clone']),
     })
-    .optional(),
-});
+    .strict(),
+}).strict();
 export const BranchCleanPayloadSchema = BasePayloadSchema.extend({
   command: z.literal(BRANCH_CLEANUP_COMMAND),
   daemonUrl: z.string().url(),
   sessionToken: z.string().min(1),
-  params: BranchMaintenanceParamsSchema,
+  params: BranchCleanupParamsSchema,
 });
 export type BranchCleanPayload = z.infer<typeof BranchCleanPayloadSchema>;
 export const BranchArchivePayloadSchema = BasePayloadSchema.extend({
   command: z.literal(BRANCH_ARCHIVE_COMMAND),
   daemonUrl: z.string().url(),
   sessionToken: z.string().min(1),
-  params: BranchMaintenanceParamsSchema,
+  params: z.discriminatedUnion('filesystemAction', [
+    BranchCleanupParamsSchema,
+    BranchWorkspaceRemovalParamsSchema,
+  ]),
 });
 export type BranchArchivePayload = z.infer<typeof BranchArchivePayloadSchema>;
 

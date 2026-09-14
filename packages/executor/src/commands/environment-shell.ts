@@ -28,7 +28,6 @@ export async function runBoundedEnvironmentShell(options: {
   deadline: number;
   output: Pick<EnvironmentOutput, 'append'>;
   cleanupMs?: number;
-  verifySettlement?: boolean;
 }): Promise<{ outcome: 'succeeded' | 'failed' | 'unknown'; message: string }> {
   assertEnvCommandAllowed(options.command, options.action);
   if (Date.now() >= options.deadline)
@@ -77,25 +76,6 @@ export async function runBoundedEnvironmentShell(options: {
       if (finished) return;
       finished = true;
       signalGroup('SIGKILL');
-      if (options.verifySettlement && child.pid) {
-        const until = Date.now() + (options.cleanupMs ?? BUDGET.cleanupMs);
-        // Signal delivery is not exit proof. Retain uncertainty if the owned
-        // group cannot be observed absent within the bounded settlement window.
-        for (;;) {
-          try {
-            process.kill(-child.pid, 0);
-          } catch (error) {
-            if ((error as NodeJS.ErrnoException).code === 'ESRCH') break;
-            cleanupFailed = true;
-            break;
-          }
-          if (Date.now() >= until) {
-            cleanupFailed = true;
-            break;
-          }
-          await new Promise((resolve) => setTimeout(resolve, 25));
-        }
-      }
       child.stdout.destroy();
       child.stderr.destroy();
       complete({
