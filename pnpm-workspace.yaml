@@ -54,6 +54,8 @@ overrides:
   qs: '>=6.14.2 <7'
   rollup: 4.62.4
   shell-quote: '>=1.8.5 <2'
+  # Next 15.5.24 supports this fixed AVIF decoder release.
+  next>sharp: '>=0.35.4 <0.36'
   shiki: 3.23.0
   smol-toml: '>=1.6.1 <2'
   engine.io: '>=6.6.7 <7'
