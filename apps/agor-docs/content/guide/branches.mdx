@@ -283,13 +283,32 @@ source can still be valuable. There is no undo. Custom commands run relative to
 the workspace and do not inherit those preservation guarantees. Checkout scripts
 are mutable executable code; never put secrets in cleanup commands.
 
-> **Execution availability:** The settings and executor implementation are being
-> integrated with shared branch maintenance admission. Until that integration is
-> complete, archive Clean requests are rejected before metadata or filesystem
-> changes, even for enabled repositories. Enabling policy alone does not enable
-> execution. Preserve remains available. Closing a terminal tab or restarting a
-> daemon does not prove that a shell stopped; uncertain containment must not be
-> treated as permission to clean.
+### Requesting cleanup
+
+Agents can call **agor_branches_clean** with a branch ID. API clients can call
+`branches.clean({ branchId })` or POST an empty object to
+`/branches/:id/clean`. The response is **accepted**, not completed. Read the
+branch's `workspace_operation` or watch branch updates for its result. The card
+and General tab display pending/running/succeeded/failed/unknown state and safe
+errors. `last_cleanup_succeeded_at` records command success, not bytes reclaimed.
+
+Stop environments and finish/cancel outstanding tasks before requesting maintenance.
+One durable Branch-row claim excludes competing work; duplicate active requests
+are rejected, not dispatched again. Custom commands are bounded to five minutes;
+stdout/stderr are drained without retaining file listings or secrets. Unknown or
+lost results stay fenced for operator reconciliation and are never automatically
+retried. After six minutes without a final report, reads display an unknown outcome.
+
+Archive Clean uses the same executor cycle and policy. Archive metadata may already
+be saved when a filesystem command fails; filesystem status changes only after
+verified success. Preserve and explicit workspace deletion retain conversation data
+and SDK homes. Workspace removal retains Git refs; it is not branch-history deletion.
+Permanent deletion remains the separate full-resource workflow.
+
+V1 checks known task, upload and environment activity. Terminal closure is best-effort;
+detached/unmanaged processes are **not proven stopped**. Delegated/external execution
+is rejected until its containment is supported. Branch `updated_at` is metadata
+activity, not evidence of filesystem inactivity. There is no scheduler or age cutoff.
 
 ### Deletion and retained data
 

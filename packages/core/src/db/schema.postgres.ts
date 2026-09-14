@@ -880,6 +880,11 @@ export const branches = pgTable(
         // Daemon-private shared maintenance authority. Never accept through generic patches.
         maintenance?: import('../types/branch-deletion').BranchMaintenanceClaim;
         maintenance_generation?: number;
+        workspace_snapshot?: import('../types/branch-cleanup').BranchWorkspaceSnapshot;
+        workspace_operation?: import('../types/branch-cleanup').BranchWorkspaceOperation;
+        cleanup_last_error?: import('../types/branch-cleanup').BranchWorkspaceError;
+        last_cleanup_succeeded_at?: string;
+        last_cleanup_operation_id?: import('../types/id').UUID;
         path: string; // Absolute path to branch directory
 
         // Git state (current)

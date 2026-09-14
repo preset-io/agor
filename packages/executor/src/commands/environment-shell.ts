@@ -27,10 +27,8 @@ export async function runBoundedEnvironmentShell(options: {
   env?: Record<string, string>;
   deadline: number;
   output: Pick<EnvironmentOutput, 'append'>;
-  /** Short commands supervised by startContainedExecutorCommand stay in its group.
-   * Their result is not settled by the daemon until that entire group is absent. */
-  containment?: 'executor';
   cleanupMs?: number;
+  verifySettlement?: boolean;
 }): Promise<{ outcome: 'succeeded' | 'failed' | 'unknown'; message: string }> {
   assertEnvCommandAllowed(options.command, options.action);
   if (Date.now() >= options.deadline)
@@ -41,7 +39,7 @@ export async function runBoundedEnvironmentShell(options: {
     cwd: options.cwd,
     env: { ...process.env, ...options.env },
     shell: true,
-    detached: options.containment !== 'executor',
+    detached: true,
     stdio: 'pipe',
   });
   child.stdin.end();
@@ -49,8 +47,6 @@ export async function runBoundedEnvironmentShell(options: {
   child.stderr.on('data', (chunk) => options.output.append(chunk));
   let cleanupFailed = false;
   const signalGroup = (signal: NodeJS.Signals) => {
-    // Never signal our own executor group here; the existing daemon owner does that.
-    if (options.containment === 'executor') return;
     if (!child.pid) return;
     try {
       process.kill(-child.pid, signal);
@@ -73,27 +69,33 @@ export async function runBoundedEnvironmentShell(options: {
     if (settling) return;
     settling = true;
     if (timer) clearTimeout(timer);
-    if (options.containment === 'executor') {
-      child.stdout.destroy();
-      child.stderr.destroy();
-      complete({
-        outcome:
-          timedOut || interrupted ? 'unknown' : code === 0 && !spawnError ? 'succeeded' : 'failed',
-        message:
-          timedOut || interrupted
-            ? 'Cleanup interrupted; containment required'
-            : 'Cleanup foreground command completed; containment required',
-      });
-      return;
-    }
     // Success means only the foreground command exited zero. Background work
     // is never hosted: terminate remaining descendants before reporting.
     signalGroup('SIGTERM');
     let finished = false;
-    const finish = () => {
+    const finish = async () => {
       if (finished) return;
       finished = true;
       signalGroup('SIGKILL');
+      if (options.verifySettlement && child.pid) {
+        const until = Date.now() + (options.cleanupMs ?? BUDGET.cleanupMs);
+        // Signal delivery is not exit proof. Retain uncertainty if the owned
+        // group cannot be observed absent within the bounded settlement window.
+        for (;;) {
+          try {
+            process.kill(-child.pid, 0);
+          } catch (error) {
+            if ((error as NodeJS.ErrnoException).code === 'ESRCH') break;
+            cleanupFailed = true;
+            break;
+          }
+          if (Date.now() >= until) {
+            cleanupFailed = true;
+            break;
+          }
+          await new Promise((resolve) => setTimeout(resolve, 25));
+        }
+      }
       child.stdout.destroy();
       child.stderr.destroy();
       complete({

@@ -30,6 +30,7 @@ import { ArchiveActionButton } from '../../ArchiveButton';
 import { ArchiveDeleteBranchModal } from '../../ArchiveDeleteBranchModal';
 import { RepoCleanupSettingsModal } from '../../ArchiveDeleteBranchModal/RepoCleanupSettingsModal';
 import { boardSelectOptions } from '../../BoardTile';
+import { BranchWorkspaceStatus } from '../../BranchWorkspaceStatus';
 import { MCPServerSelect } from '../../MCPServerSelect';
 import { Tag } from '../../Tag';
 import type { GeneralFormState } from '../useBranchModalForm';
@@ -87,6 +88,7 @@ export const GeneralTab: React.FC<GeneralTabProps> = ({
   return (
     <div style={{ width: '100%', maxHeight: '70vh', overflowY: 'auto' }}>
       <Space orientation="vertical" size="large" style={{ width: '100%' }}>
+        <BranchWorkspaceStatus branch={branch} />
         {branch.deletion_status && (
           <Alert
             type={branch.deletion_status === 'deletion_failed' ? 'error' : 'info'}

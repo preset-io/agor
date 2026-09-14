@@ -1,3 +1,4 @@
+import { BranchCleanupStepsService } from './services/branch-cleanup-steps.js';
 /**
  * Service Registration
  *
@@ -123,6 +124,7 @@ import type {
 } from '@agor/core/types';
 import {
   assertPublicMCPOAuthCompatibilityMode,
+  BRANCH_CLEANUP_REPORT_SERVICE,
   BRANCH_DELETION_REPORT_SERVICE,
   ENVIRONMENT_COMMAND_REPORT_SERVICE,
   hasMinimumRole,
@@ -704,6 +706,7 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
       'remove',
       'updateEnvironment',
       'ensureTeammateKnowledgeNamespace',
+      'clean',
     ],
   });
 
@@ -1168,6 +1171,10 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
     methods: ['create'],
   });
   app.use(ENVIRONMENT_COMMAND_REPORT_SERVICE, new EnvironmentCommandReportsService(db, app), {
+    methods: ['create'],
+    events: [],
+  });
+  app.use(BRANCH_CLEANUP_REPORT_SERVICE, new BranchCleanupStepsService(db, app), {
     methods: ['create'],
     events: [],
   });

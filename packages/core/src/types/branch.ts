@@ -61,6 +61,10 @@ export const BRANCH_ENVIRONMENT_SNAPSHOT_FIELDS = [
 export interface Branch {
   /** Stored preference; effective only when the repo allows branch protection. */
   cleanup_protected?: boolean;
+  workspace_operation?: import('./branch-cleanup').BranchWorkspaceOperation;
+  cleanup_last_error?: import('./branch-cleanup').BranchWorkspaceError;
+  last_cleanup_succeeded_at?: string;
+  last_cleanup_operation_id?: UUID;
 
   // ===== Identity =====
 

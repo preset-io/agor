@@ -1,107 +1,144 @@
 import { lstat } from 'node:fs/promises';
 import { isAbsolute } from 'node:path';
-import { cleanIgnoredWorkspace } from '@agor/core/git';
-import { BRANCH_CLEANUP_TIMEOUT_MS, DEFAULT_BRANCH_CLEANUP_COMMAND } from '@agor/core/types';
+import {
+  BRANCH_CLEANUP_COMMAND,
+  BRANCH_CLEANUP_REPORT_SERVICE,
+  BRANCH_CLEANUP_TIMEOUT_MS,
+  type BranchWorkspaceReportAction,
+  DEFAULT_BRANCH_CLEANUP_COMMAND,
+} from '@agor/core/types';
+import { cleanIgnoredWorkspace, removeBranchWorkspace } from '@agor/git';
 import type { BranchArchivePayload, BranchCleanPayload, ExecutorResult } from '../payload-types.js';
 import { runBoundedEnvironmentShell } from './environment-shell.js';
 import type { CommandOptions } from './index.js';
 
-/** Executor-side filesystem cycle, shared inline by standalone cleanup and archive.
- * Results require the launch owner's process-containment proof before DB settlement.
- * Neither path calls another daemon cleanup operation or acquires another fence.
- */
-async function runCleanup(
+type Outcome = 'succeeded' | 'failed' | 'unknown';
+
+/** Shared inline filesystem cycle. No nested dispatch or second maintenance claim. */
+export async function runBranchWorkspaceFiles(
   payload: BranchCleanPayload | BranchArchivePayload
-): Promise<ExecutorResult> {
-  const { cleanup, cwd } = payload.params;
-  if (!cleanup) return { success: true };
-  const identity = { operationId: cleanup.operationId, generation: cleanup.generation };
-  if (payload.executorMode !== 'request' || !payload.executorResponse) {
-    return {
-      success: false,
-      error: {
-        code: 'CLEANUP_SUPERVISION_REQUIRED',
-        message: 'Cleanup requires an authenticated contained request',
-      },
-    };
-  }
+): Promise<Outcome> {
+  const p = payload.params;
+  if (Date.now() >= p.deadlineAt) return 'failed';
+  if (payload.command === BRANCH_CLEANUP_COMMAND && (!p.cleanup || p.removal)) return 'failed';
   try {
-    // No mkdir fallback and no symlink-root substitution for a missing mount.
-    if (!isAbsolute(cwd) || !(await lstat(cwd)).isDirectory()) throw new Error('Unavailable');
+    if (!isAbsolute(p.cwd) || !(await lstat(p.cwd)).isDirectory()) return 'failed';
   } catch {
-    return {
-      success: false,
-      data: identity,
-      error: {
-        code: 'CLEANUP_WORKSPACE_UNAVAILABLE',
-        message: 'The branch workspace is unavailable',
-      },
-    };
+    return 'failed';
   }
-  try {
-    if (cleanup.command === DEFAULT_BRANCH_CLEANUP_COMMAND) {
-      await cleanIgnoredWorkspace(cwd, BRANCH_CLEANUP_TIMEOUT_MS);
+  if (p.cleanup) {
+    if (p.cleanup.command === DEFAULT_BRANCH_CLEANUP_COMMAND) {
+      try {
+        await cleanIgnoredWorkspace(
+          p.cwd,
+          Math.min(BRANCH_CLEANUP_TIMEOUT_MS, p.deadlineAt - Date.now())
+        );
+      } catch {
+        // A timed-out Git invocation is not certified stopped by an exception.
+        return 'unknown';
+      }
     } else {
       const result = await runBoundedEnvironmentShell({
-        command: cleanup.command,
+        command: p.cleanup.command,
         action: 'cleanup',
-        cwd,
-        deadline: Date.now() + BRANCH_CLEANUP_TIMEOUT_MS,
-        containment: 'executor',
-        // Raw output is never retained, logged, or returned across the boundary.
+        cwd: p.cwd,
+        deadline: Math.min(p.deadlineAt, Date.now() + BRANCH_CLEANUP_TIMEOUT_MS),
+        verifySettlement: true,
         output: { append() {} },
       });
-      if (result.outcome !== 'succeeded') {
-        return {
-          success: false,
-          data: identity,
-          error: {
-            code: result.outcome === 'unknown' ? 'CLEANUP_INTERRUPTED' : 'CLEANUP_COMMAND_FAILED',
-            message: 'Cleanup did not complete successfully; files may already have changed',
-          },
-        };
-      }
+      if (result.outcome !== 'succeeded') return result.outcome;
     }
-    return { success: true, data: identity };
+  }
+  if (p.removal) {
+    try {
+      await removeBranchWorkspace(p.removal);
+    } catch {
+      return 'unknown';
+    }
+  }
+  return 'succeeded';
+}
+
+/** The executor owns sequencing and bounded reporting; daemon restarts do not replay commands. */
+async function run(
+  payload: BranchCleanPayload | BranchArchivePayload,
+  options: CommandOptions
+): Promise<ExecutorResult> {
+  if (options.dryRun)
+    return {
+      success: false,
+      error: {
+        code: 'CLEANUP_PREVIEW_UNSUPPORTED',
+        message: 'Cleanup has no filesystem preview operation',
+      },
+    };
+  const p = payload.params;
+  const report = async (action: BranchWorkspaceReportAction) => {
+    const response = await fetch(
+      `${payload.daemonUrl.replace(/\/$/, '')}/${BRANCH_CLEANUP_REPORT_SERVICE}`,
+      {
+        method: 'POST',
+        redirect: 'error',
+        signal: AbortSignal.timeout(30_000),
+        headers: {
+          Authorization: `Bearer ${payload.sessionToken}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          branch_id: p.branchId,
+          operation_id: p.operationId,
+          generation: p.generation,
+          execution_id: p.executionId,
+          action,
+        }),
+      }
+    );
+    if (!response.ok) throw new Error('Workspace report rejected');
+    const result = (await response.json()) as { ok?: boolean };
+    if (result.ok !== true) throw new Error('Workspace report was not acknowledged');
+  };
+  try {
+    await report('claim');
   } catch {
     return {
       success: false,
-      data: identity,
       error: {
-        code: 'CLEANUP_COMMAND_FAILED',
-        message: 'Cleanup did not complete successfully; files may already have changed',
+        code: 'CLEANUP_NOT_CLAIMED',
+        message: 'Workspace invocation was not acknowledged; no command was started',
       },
     };
   }
-}
-
-export function handleBranchClean(
-  payload: BranchCleanPayload,
-  options: CommandOptions
-): Promise<ExecutorResult> {
-  if (options.dryRun)
-    return Promise.resolve({
+  let outcome: Outcome;
+  try {
+    outcome = await runBranchWorkspaceFiles(payload);
+  } catch {
+    outcome = 'unknown';
+  }
+  try {
+    await report(outcome);
+  } catch {
+    return {
       success: false,
       error: {
-        code: 'CLEANUP_PREVIEW_UNSUPPORTED',
-        message: 'Cleanup has no filesystem preview operation',
+        code: 'CLEANUP_REPORT_UNKNOWN',
+        message: 'Workspace result could not be confirmed; reconciliation is required',
       },
-    });
-  return runCleanup(payload);
+    };
+  }
+  return outcome === 'succeeded'
+    ? { success: true }
+    : {
+        success: false,
+        error: {
+          code: outcome === 'failed' ? 'CLEANUP_COMMAND_FAILED' : 'CLEANUP_OUTCOME_UNKNOWN',
+          message:
+            outcome === 'failed'
+              ? 'Workspace command failed; files may already have changed'
+              : 'Workspace command outcome is unknown; the branch remains fenced',
+        },
+      };
 }
-
-export function handleBranchArchive(
-  payload: BranchArchivePayload,
-  options: CommandOptions
-): Promise<ExecutorResult> {
-  if (options.dryRun)
-    return Promise.resolve({
-      success: false,
-      error: {
-        code: 'CLEANUP_PREVIEW_UNSUPPORTED',
-        message: 'Cleanup has no filesystem preview operation',
-      },
-    });
-  // Metadata remains daemon-owned. No optional cleanup means no filesystem action.
-  return runCleanup(payload);
-}
+export const handleBranchClean = (payload: BranchCleanPayload, options: CommandOptions) =>
+  run(payload, options);
+export const handleBranchArchive = (payload: BranchArchivePayload, options: CommandOptions) =>
+  run(payload, options);

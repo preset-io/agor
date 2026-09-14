@@ -1,6 +1,6 @@
 import { BranchRepository, RepoRepository, UsersRepository } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
-import type { Branch } from '@agor/core/types';
+import type { Branch, TenantID } from '@agor/core/types';
 import { expect } from 'vitest';
 import { seedEnvironmentCommandBranch } from '../../../../packages/core/src/db/repositories/environment-commands.test-support';
 import { dbTest, setTestBranchUserRole } from '../../../../packages/core/src/db/test-helpers';
@@ -10,14 +10,17 @@ import { BranchesService } from './branches';
 const app = { get: () => ({}) } as unknown as Application;
 
 dbTest(
-  'archive Clean rejects disabled, protected, or unverified execution before metadata changes',
+  'archive Clean rejects disabled and protected policy before metadata changes',
   async ({ db }) => {
     const { branch, user } = await seedEnvironmentCommandBranch(db);
     const service = new BranchesService(db, app);
     const repoRepository = new RepoRepository(db);
     const branchRepository = new BranchRepository(db);
     const rejectClean = async (message: string) => {
-      const params = { user };
+      const params = {
+        user,
+        tenant: { tenant_id: 'default' as TenantID, source: 'explicit' as const },
+      };
       markBranchArchiveDeleteAuthorized(params, branch.branch_id, 'archive');
       await expect(
         service.archiveOrDelete(
@@ -34,8 +37,6 @@ dbTest(
     });
     await branchRepository.update(branch.branch_id, { cleanup_protected: true });
     await rejectClean('protected from workspace cleanup');
-    await branchRepository.update(branch.branch_id, { cleanup_protected: false });
-    await rejectClean('maintenance admission and containment');
   }
 );
 

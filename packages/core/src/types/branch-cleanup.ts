@@ -58,3 +58,67 @@ export function getBranchCleanupPolicyBlockReason(
     return 'This branch is protected from workspace cleanup.';
   return undefined;
 }
+
+export const BRANCH_CLEANUP_REPORT_SERVICE = 'branch-cleanup-steps';
+export const branchCleanupCommandId = (executionId: string) =>
+  `${BRANCH_CLEANUP_COMMAND}:${executionId}`;
+export const BRANCH_WORKSPACE_OPERATION_BUDGET_MS = BRANCH_CLEANUP_TIMEOUT_MS + 60_000;
+export const BRANCH_WORKSPACE_REPORT_ACTIONS = ['claim', 'succeeded', 'failed', 'unknown'] as const;
+export type BranchWorkspaceReportAction = (typeof BRANCH_WORKSPACE_REPORT_ACTIONS)[number];
+
+export interface BranchWorkspaceError {
+  operation_id: import('./id').UUID;
+  at: string;
+  message: string;
+}
+export interface BranchWorkspaceOperation {
+  operation_id: import('./id').UUID;
+  action: 'clean' | 'archive';
+  filesystem_action: import('./branch').BranchFilesystemAction;
+  status: 'accepted' | 'running' | 'succeeded' | 'failed' | 'unknown';
+  requested_by: import('./id').UserID;
+  requested_at: string;
+  deadline_at: string;
+  started_at?: string;
+  finished_at?: string;
+  error?: string;
+}
+/** Private immutable targets, never returned by branch reads or accepted in patches. */
+export interface BranchWorkspaceSnapshot {
+  repo_id: import('./id').UUID;
+  path: string;
+  repo_path: string;
+  policy?: RepoCleanupPolicy;
+}
+export interface BranchCleanAccepted {
+  branch_id: import('./id').BranchID;
+  operation_id: import('./id').UUID;
+  status: 'accepted';
+}
+/** A deadline diagnoses uncertainty; it NEVER releases ownership or permits replay. */
+export function projectBranchWorkspaceOperation(
+  operation: BranchWorkspaceOperation | undefined,
+  now = Date.now()
+): BranchWorkspaceOperation | undefined {
+  if (
+    operation &&
+    ['accepted', 'running'].includes(operation.status) &&
+    now >= Date.parse(operation.deadline_at)
+  ) {
+    return {
+      ...operation,
+      status: 'unknown',
+      error:
+        'Workspace operation stopped reporting. Its outcome requires reconciliation; do not retry.',
+    };
+  }
+  return operation;
+}
+
+export const BRANCH_WORKSPACE_SERVER_FIELDS = [
+  'workspace_snapshot',
+  'workspace_operation',
+  'cleanup_last_error',
+  'last_cleanup_succeeded_at',
+  'last_cleanup_operation_id',
+] as const;

@@ -390,36 +390,46 @@ export const GitBranchCleanPayloadSchema = BasePayloadSchema.extend({
 export type GitBranchCleanPayload = z.infer<typeof GitBranchCleanPayloadSchema>;
 
 /** Server-resolved operation identity and immutable-at-admission executable configuration. */
-const BranchCleanupSpecificationSchema = z
-  .object({
-    operationId: z.string().uuid(),
-    generation: z.number().int().positive(),
-    command: z
-      .string()
-      .min(1)
-      .max(BRANCH_CLEANUP_COMMAND_MAX_LENGTH)
-      .refine((value) => !value.includes('\0')),
-    policyVersion: z.string().min(1).max(128),
-  })
-  .strict();
-
+const BranchCleanupSpecificationSchema = z.object({
+  command: z
+    .string()
+    .min(1)
+    .max(BRANCH_CLEANUP_COMMAND_MAX_LENGTH)
+    .refine((value) => !value.includes('\0')),
+});
 const BranchMaintenanceParamsSchema = z.object({
   branchId: z.string().uuid(),
+  operationId: z.string().uuid(),
+  generation: z.number().int().positive(),
+  executionId: z.string().uuid(),
+  deadlineAt: z.number().positive(),
   cwd: z.string().min(1),
   principalBranchAccess: z.literal('write'),
+  sandboxHomeStore: z.string().optional(),
+  sandboxWorktreesRoot: z.string().optional(),
+  sandboxBaseRepoPath: z.string().optional(),
+  cleanup: BranchCleanupSpecificationSchema.optional(),
+  removal: z
+    .object({
+      branchPath: z.string(),
+      branchesRoot: z.string(),
+      repoPath: z.string(),
+      storageMode: z.enum(['worktree', 'clone']),
+    })
+    .optional(),
 });
-
 export const BranchCleanPayloadSchema = BasePayloadSchema.extend({
   command: z.literal(BRANCH_CLEANUP_COMMAND),
-  params: BranchMaintenanceParamsSchema.extend({ cleanup: BranchCleanupSpecificationSchema }),
+  daemonUrl: z.string().url(),
+  sessionToken: z.string().min(1),
+  params: BranchMaintenanceParamsSchema,
 });
 export type BranchCleanPayload = z.infer<typeof BranchCleanPayloadSchema>;
-
 export const BranchArchivePayloadSchema = BasePayloadSchema.extend({
   command: z.literal(BRANCH_ARCHIVE_COMMAND),
-  params: BranchMaintenanceParamsSchema.extend({
-    cleanup: BranchCleanupSpecificationSchema.optional(),
-  }),
+  daemonUrl: z.string().url(),
+  sessionToken: z.string().min(1),
+  params: BranchMaintenanceParamsSchema,
 });
 export type BranchArchivePayload = z.infer<typeof BranchArchivePayloadSchema>;
 

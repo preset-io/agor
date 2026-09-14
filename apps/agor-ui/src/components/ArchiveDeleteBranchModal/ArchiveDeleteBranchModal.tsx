@@ -131,7 +131,7 @@ export const ArchiveDeleteBranchModal: React.FC<ArchiveDeleteBranchModalProps> =
             title={
               metadataAction === 'delete'
                 ? 'Stop the environment before requesting deletion'
-                : 'Environment is running and will be stopped'
+                : 'Stop the environment before archiving'
             }
             type="warning"
             showIcon

@@ -26,14 +26,17 @@ import {
 import {
   BoardObjectRepository,
   BoardRepository,
+  BranchCleanupRepository,
   BranchMaintenanceRepository,
   BranchRepository,
   type BranchWithZoneAndSessions,
+  branches,
   CapabilityPolicyRepository,
   EnvironmentCommandRepository,
   type EnvironmentHealthObservation,
   EnvironmentHealthRepository,
   enqueueAfterTenantDatabaseCommit,
+  eq,
   generateId,
   getCurrentTenantId,
   KnowledgeNamespaceRepository,
@@ -41,9 +44,11 @@ import {
   RepoRepository,
   runWithTenantDatabaseScope,
   runWithTenantDatabaseTransaction,
+  select,
   type TenantScopeAwareDatabase,
   type TenantScopedDatabase,
   UsersRepository,
+  update,
 } from '@agor/core/db';
 import { renderBranchSnapshot } from '@agor/core/environment/render-snapshot';
 import {
@@ -80,8 +85,14 @@ import type {
   UUID,
 } from '@agor/core/types';
 import {
+  BRANCH_ARCHIVE_COMMAND,
+  BRANCH_CLEANUP_COMMAND,
   BRANCH_DELETION_COMMAND,
   BRANCH_ENVIRONMENT_CLEARABLE_FIELDS,
+  BRANCH_WORKSPACE_OPERATION_BUDGET_MS,
+  type BranchCleanAccepted,
+  type BranchFilesystemAction,
+  branchCleanupCommandId,
   branchDeletionCommandId,
   ENVIRONMENT_COMMAND_BUDGET,
   type EnvironmentCommandAction,
@@ -103,7 +114,11 @@ import {
 } from '../auth/executor-session-token.js';
 import { buildBranchCreatedAnalyticsProperties } from '../utils/analytics-payloads.js';
 import { consumeBranchArchiveDeleteAuthorization } from '../utils/branch-archive-delete-authorization.js';
-import { ensureCanControlBranchEnvironment, isSuperAdmin } from '../utils/branch-authorization.js';
+import {
+  ensureCanControlBranchEnvironment,
+  hasBranchPermission,
+  isSuperAdmin,
+} from '../utils/branch-authorization.js';
 import { ensureBranchWorkspaceAccess } from '../utils/branch-workspace-path.js';
 import { shouldUseCloneReferencePath } from '../utils/clone-reference.js';
 import { emitServiceEvent } from '../utils/emit-service-event.js';
@@ -1394,6 +1409,16 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
         throw new BadRequest('filesystem_status is managed by branch materialization.');
       }
     }
+    if (
+      [
+        'workspace_snapshot',
+        'workspace_operation',
+        'cleanup_last_error',
+        'last_cleanup_succeeded_at',
+        'last_cleanup_operation_id',
+      ].some((key) => Object.hasOwn(data, key))
+    )
+      throw new BadRequest('Workspace operation state is server-managed');
     if (Object.hasOwn(data, 'sdk_home')) {
       throw new BadRequest(
         'sdk_home is server-managed and cannot be changed through the Branch API.'
@@ -1747,6 +1772,243 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     return this.requestPermanentDeletion(id, params);
   }
 
+  /** Public command: input cannot override execution identity, target, or policy. */
+  async clean(input: { branchId: BranchID }, params?: BranchParams): Promise<BranchCleanAccepted> {
+    if (
+      !input ||
+      Object.keys(input).some((key) => key !== 'branchId') ||
+      typeof input.branchId !== 'string'
+    )
+      throw new BadRequest('Cleanup accepts only branchId');
+    return this.requestWorkspaceOperation(input.branchId, 'clean', 'cleaned', params);
+  }
+
+  private async requestWorkspaceOperation(
+    id: BranchID,
+    action: 'clean' | 'archive',
+    filesystemAction: BranchFilesystemAction,
+    params?: BranchParams
+  ): Promise<BranchCleanAccepted> {
+    const user = params?.user;
+    const tenantId = params?.tenant?.tenant_id ?? getCurrentTenantId();
+    if (!user || !tenantId)
+      throw new NotAuthenticated(
+        'Authenticated tenant and branch management authority are required'
+      );
+    const config = this.app.get('config');
+    const needsFiles = filesystemAction !== 'preserved';
+    if (
+      needsFiles &&
+      (config.execution?.unix_user_mode === 'delegated' ||
+        config.execution?.executor_command_template ||
+        (config.deployment?.mode === 'ha' &&
+          config.deployment.ha?.execution_topology === 'external'))
+    )
+      throw new Conflict(
+        'Workspace maintenance requires supported local executor containment; delegated execution is not supported'
+      );
+    const branch = await this.withTenantDatabase(params, () => this.get(id, params));
+    const authorize = async (repository: BranchRepository, current: Branch) => {
+      if (needsFiles)
+        return ensureBranchWorkspaceAccess(
+          repository,
+          current,
+          user.user_id,
+          user.role as UserRole,
+          'all',
+          'write',
+          config.execution?.allow_superadmin === true
+        );
+      const access = await repository.resolveUserAccess(current, user.user_id as UserID);
+      if (
+        !hasBranchPermission(
+          current,
+          user.user_id as UserID,
+          access.is_owner,
+          'all',
+          user.role as UserRole,
+          config.execution?.allow_superadmin === true,
+          access.can
+        )
+      )
+        throw new Forbidden('Branch Manager authority is required to archive');
+    };
+    id = branch.branch_id;
+    await this.withTenantDatabase(params, () => authorize(this.branchRepo, branch));
+    const repo = await this.withTenantDatabase(params, () =>
+      new RepoRepository(this.db).findById(branch.repo_id)
+    );
+    if (!repo || (needsFiles && !repo.local_path))
+      throw new Conflict('Authoritative base repository location is unavailable');
+    const policy =
+      filesystemAction === 'cleaned' ? resolveRepoCleanupPolicy(repo.cleanup_policy) : undefined;
+    const validate = async (tx: import('@agor/core/db').Database) => {
+      const repository = new BranchRepository(tx);
+      const current = await repository.findById(id);
+      if (!current || current.path !== branch.path || current.repo_id !== branch.repo_id)
+        throw new Conflict('Branch location changed; refresh before maintenance');
+      await authorize(repository, current);
+      if (policy) {
+        const currentRepo = await new RepoRepository(tx).findById(current.repo_id);
+        const reason = getBranchCleanupPolicyBlockReason(
+          currentRepo?.cleanup_policy,
+          current.cleanup_protected ?? false
+        );
+        if (reason) throw new Conflict(reason);
+        if (!isDeepStrictEqual(resolveRepoCleanupPolicy(currentRepo?.cleanup_policy), policy))
+          throw new Conflict('Cleanup policy changed; refresh before maintenance');
+      }
+    };
+    if (policy) {
+      const reason = getBranchCleanupPolicyBlockReason(policy, branch.cleanup_protected ?? false);
+      if (reason) throw new Conflict(reason);
+    }
+    const admission = await this.withTenantDatabase(params, () =>
+      new BranchMaintenanceRepository(this.db).claim(
+        id,
+        'cleanup',
+        user.user_id as UserID,
+        validate
+      )
+    );
+    if (!admission.acquired)
+      throw new Conflict('Branch maintenance is already active or requires reconciliation');
+    let invocationStarted = false;
+    try {
+      const now = new Date();
+      await this.withTenantDatabase(params, () =>
+        new BranchCleanupRepository(this.db).prepare(
+          admission.claim,
+          {
+            operation_id: admission.claim.operation_id,
+            action,
+            filesystem_action: filesystemAction,
+            status: 'accepted',
+            requested_by: user.user_id as UserID,
+            requested_at: now.toISOString(),
+            deadline_at: new Date(
+              now.getTime() + BRANCH_WORKSPACE_OPERATION_BUDGET_MS
+            ).toISOString(),
+          },
+          { repo_id: branch.repo_id, path: branch.path, repo_path: repo.local_path ?? '', policy }
+        )
+      );
+      const context = needsFiles
+        ? await this.resolveEnvironmentExecutorContext(branch, params)
+        : undefined;
+      if (needsFiles) {
+        // Read-only executor preflight. No daemon filesystem access or fallback mkdir.
+        const statusToken = await this.withTenantDatabase(params, () =>
+          issueExecutorCommandToken(this.app, 'branch-filesystem-status', user.user_id, id)
+        );
+        const status = await requestExecutor(
+          {
+            command: 'branch.filesystem.status',
+            sessionToken: statusToken,
+            daemonUrl: getDaemonUrl(),
+            params: { branchId: id },
+          },
+          {
+            preparedEnv: context!.env,
+            templateVariables: { branch_id: id, user_id: user.user_id, branch_fs_access: 'write' },
+          }
+        );
+        if (
+          !status.success ||
+          !status.data ||
+          typeof status.data !== 'object' ||
+          (status.data as { exists?: boolean }).exists !== true
+        )
+          throw new Conflict('Branch workspace is unavailable; nothing was cleaned');
+      }
+      if (action === 'archive') {
+        await this.withTenantDatabase(params, () =>
+          new BranchMaintenanceRepository(this.db).withClaim(admission.claim, async (tx) => {
+            const row = await select(tx).from(branches).where(eq(branches.branch_id, id)).one();
+            if (!row) throw new NotFound('Branch not found');
+            await update(tx, branches)
+              .set({ archived: true, archived_at: now, archived_by: user.user_id })
+              .where(eq(branches.branch_id, id))
+              .run();
+          })
+        );
+        const sessionsService = this.app.service('sessions') as unknown as SessionsService;
+        await this.withTenantDatabase(params, () =>
+          sessionsService.archiveBranchSessions(id, { ...params, provider: undefined })
+        );
+      }
+      if (!needsFiles) {
+        await this.withTenantDatabase(params, () =>
+          new BranchCleanupRepository(this.db).finishPreserve(admission.claim)
+        );
+        this.closeBranchTerminals(id, String(tenantId));
+        const current = await this.withTenantDatabase(params, () => this.get(id, params));
+        emitServiceEvent(this.app, {
+          path: 'branches',
+          event: 'patched',
+          data: current,
+          params,
+          id,
+        });
+        return { branch_id: id, operation_id: admission.claim.operation_id, status: 'accepted' };
+      }
+      const executionId = await this.withTenantDatabase(params, () =>
+        new BranchMaintenanceRepository(this.db).beginExecution(admission.claim)
+      );
+      invocationStarted = true;
+      const sessionToken = await this.withTenantDatabase(params, () =>
+        issueExecutorCommandToken(this.app, branchCleanupCommandId(executionId), user.user_id, id)
+      );
+      const dispatch = () => {
+        this.closeBranchTerminals(id, String(tenantId));
+        spawnExecutor(
+          {
+            command: action === 'clean' ? BRANCH_CLEANUP_COMMAND : BRANCH_ARCHIVE_COMMAND,
+            daemonUrl: getDaemonUrl(),
+            sessionToken,
+            params: {
+              branchId: id,
+              operationId: admission.claim.operation_id,
+              generation: admission.claim.generation,
+              executionId,
+              cwd: branch.path,
+              principalBranchAccess: 'write',
+              ...context!.sandboxMounts,
+              deadlineAt: now.getTime() + BRANCH_WORKSPACE_OPERATION_BUDGET_MS,
+              cleanup: policy ? { command: policy.command } : undefined,
+              ...(action === 'archive' && filesystemAction === 'deleted'
+                ? {
+                    removal: {
+                      branchPath: branch.path,
+                      repoPath: repo.local_path!,
+                      branchesRoot: getBranchesDir(tenantId),
+                      storageMode: branch.storage_mode ?? 'worktree',
+                    },
+                  }
+                : {}),
+            },
+          },
+          {
+            preparedEnv: context!.env,
+            logPrefix: '[Branch workspace maintenance]',
+            templateVariables: { branch_id: id, user_id: user.user_id, branch_fs_access: 'write' },
+          }
+        );
+      };
+      if (!enqueueAfterTenantDatabaseCommit(dispatch)) dispatch();
+      const current = await this.withTenantDatabase(params, () => this.get(id, params));
+      emitServiceEvent(this.app, { path: 'branches', event: 'patched', data: current, params, id });
+      return { branch_id: id, operation_id: admission.claim.operation_id, status: 'accepted' };
+    } catch (error) {
+      // Once dispatch intent exists, an exception is not absence proof.
+      if (!invocationStarted)
+        await this.withTenantDatabase(params, () =>
+          new BranchCleanupRepository(this.db).failBeforeExecution(admission.claim)
+        );
+      throw error;
+    }
+  }
+
   /** Best-effort attachment closure shared by archive and permanent deletion. */
   private closeBranchTerminals(branchId: BranchID, tenantId: string): void {
     const event = { tenantId, branchId };
@@ -1905,171 +2167,8 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       return this.requestPermanentDeletion(id, params);
     }
 
-    const branch = await this.withTenantDatabase(params, () => this.get(id, params));
-    if (
-      branch.environment_instance?.command_attempt &&
-      branch.environment_instance.status !== 'stopped' &&
-      branch.environment_instance.status !== 'error'
-    ) {
-      throw new Conflict(
-        'Stop the asynchronous environment and inspect its result before archiving or deleting this branch'
-      );
-    }
-    const requestUser = (params as AuthenticatedParams).user!;
-    const currentUserId = requestUser.user_id as UUID;
-    const branchFsAccess =
-      filesystemAction === 'preserved'
-        ? undefined
-        : await this.withTenantDatabase(params, () =>
-            ensureBranchWorkspaceAccess(
-              this.branchRepo,
-              branch,
-              requestUser.user_id,
-              requestUser.role as UserRole | undefined,
-              'all',
-              'write',
-              this.app.get('config').execution?.allow_superadmin === true
-            )
-          );
-
-    const removalRepo =
-      filesystemAction === 'deleted'
-        ? await this.withTenantDatabase(
-            params,
-            () => this.app.service('repos').get(branch.repo_id, params) as Promise<Repo>
-          )
-        : undefined;
-    if (filesystemAction === 'deleted' && !removalRepo?.local_path)
-      throw new Conflict('Authoritative base repository location is unavailable');
-    if (filesystemAction === 'cleaned') {
-      const repo = await this.withTenantDatabase(params, () =>
-        new RepoRepository(this.db).findById(branch.repo_id)
-      );
-      if (!repo) throw new NotFound('Repository not found');
-      const reason = getBranchCleanupPolicyBlockReason(
-        repo.cleanup_policy,
-        branch.cleanup_protected ?? false
-      );
-      if (reason) throw new Conflict(reason);
-      // Do not expose the legacy fire-and-forget cleaner while the shared
-      // maintenance admission/containment contract is being integrated.
-      throw new Conflict(
-        'Workspace cleanup execution is not available until branch maintenance admission and containment are verified'
-      );
-    }
-
-    // Stop environment if running
-    if (branch.environment_instance?.status === 'running') {
-      console.log(`⚠️  Stopping environment for branch ${branch.name} before ${metadataAction}`);
-      try {
-        await this.stopEnvironment(id, params);
-      } catch (error) {
-        console.warn(
-          `Failed to stop environment, continuing with ${metadataAction}:`,
-          error instanceof Error ? error.message : String(error)
-        );
-      }
-    }
-
-    // Prepare the one-purpose filesystem action now, but dispatch it only
-    // after metadata succeeds. In particular, an unfinished-task delete guard
-    // must fail before any branch directory can be removed.
-    const userId = (params as AuthenticatedParams | undefined)?.user?.user_id as UserID | undefined;
-    const delegatedHomeKey =
-      filesystemAction === 'preserved'
-        ? undefined
-        : await resolveDelegatedExecutionHomeKey(
-            this.db,
-            userId ?? currentUserId,
-            this.app.get('config')
-          );
-    const filesystemExecutionUserId = userId ?? currentUserId;
-    const dispatchFilesystemAction = (): void => {
-      if (filesystemAction !== 'deleted') return;
-
-      console.log(`🗑️  Spawning executor to delete branch from filesystem: ${branch.path}`);
-      const tenantId = params?.tenant?.tenant_id ?? getCurrentTenantId();
-
-      spawnExecutor(
-        {
-          command: 'git.branch.remove',
-          params: {
-            branchId: branch.branch_id,
-            branchPath: branch.path,
-            branchesRoot: getBranchesDir(tenantId),
-            repoPath: removalRepo!.local_path,
-            // Clean up the branch if it was created by Agor.
-            branch: branch.ref,
-            deleteBranch: branch.new_branch,
-            // Branch storage mode — see sibling call site comment in
-            // `BranchesService.remove` above for why this matters.
-            storageMode: branch.storage_mode ?? 'worktree',
-          },
-        },
-        {
-          logPrefix: `[BranchesService.delete ${branch.name}]`,
-          delegatedHomeKey,
-          templateVariables: {
-            branch_id: branch.branch_id,
-            user_id: filesystemExecutionUserId,
-            branch_fs_access: branchFsAccess,
-          },
-        }
-      );
-    };
-
-    // Retire branch-scoped terminals only after the metadata transition wins.
-    // The local event handles this replica; serverSideEmit carries only the
-    // trusted tenant/branch lifecycle tuple to peers.
-    const terminalTenantId = params?.tenant?.tenant_id ?? getCurrentTenantId();
-    if (!terminalTenantId) throw new Error('Missing tenant context for branch terminal cleanup');
-
-    // Metadata action: archive or delete
-    if (metadataAction === 'archive') {
-      // Archive: Soft delete branch and cascade to sessions
-      console.log(`📦 Archiving branch: ${branch.name} (filesystem: ${filesystemAction})`);
-
-      // Update branch
-      const archivedBranch = await this.withTenantDatabase(params, () =>
-        this.patch(
-          id,
-          {
-            archived: true,
-            archived_at: new Date().toISOString(),
-            archived_by: currentUserId,
-            filesystem_status: filesystemAction,
-            // Preserve board_id + board_object placement so unarchive can restore in-place
-            updated_at: new Date().toISOString(),
-          },
-          params
-        )
-      );
-
-      // archiveOrDelete is a custom service method. Its internal this.patch()
-      // call bypasses Feathers' standard-method event hook, so publish the
-      // branch transition explicitly (with the request tenant/RBAC context).
-      emitServiceEvent(this.app, {
-        path: 'branches',
-        event: 'patched',
-        data: archivedBranch,
-        params,
-        id: archivedBranch.branch_id,
-      });
-
-      // Archive every active session in one branch-local lifecycle operation.
-      // Existing independently archived reasons are intentionally preserved.
-      const sessionsService = this.app.service('sessions') as unknown as SessionsService;
-      const archivedSessions = await this.withTenantDatabase(params, () =>
-        sessionsService.archiveBranchSessions(id, { ...params, provider: undefined })
-      );
-
-      console.log(`✅ Archived branch ${branch.name} and ${archivedSessions.count} session(s)`);
-
-      this.closeBranchTerminals(branch.branch_id, String(terminalTenantId));
-      dispatchFilesystemAction();
-      return archivedBranch;
-    }
-    throw new BadRequest('Unsupported archive action');
+    await this.requestWorkspaceOperation(id, 'archive', filesystemAction, params);
+    return this.withTenantDatabase(params, () => this.get(id, params));
   }
 
   /**

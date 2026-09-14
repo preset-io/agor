@@ -4,6 +4,7 @@ import { dirname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { feathers } from '@agor/core/feathers';
 import {
+  BRANCH_CLEANUP_REPORT_SERVICE,
   BRANCH_DELETION_REPORT_SERVICE,
   ENVIRONMENT_COMMAND_REPORT_SERVICE,
 } from '@agor/core/types';
@@ -157,6 +158,7 @@ describe('source scan: every registered path is declared', () => {
         /\bBRANCH_DELETION_REPORT_SERVICE\b/g,
         JSON.stringify(BRANCH_DELETION_REPORT_SERVICE)
       )
+      .replace(/\bBRANCH_CLEANUP_REPORT_SERVICE\b/g, JSON.stringify(BRANCH_CLEANUP_REPORT_SERVICE))
       .split('\n');
     const found: Array<{ path: string; line: number }> = [];
     lines.forEach((line, index) => {
