@@ -1,4 +1,11 @@
-import type { AgorClient, BranchArchiveOrDeleteOptions, Repo, User } from '@agor-live/client';
+import type {
+  AgorClient,
+  BranchArchiveOrDeleteOptions,
+  Repo,
+  Session,
+  SpawnConfig,
+  User,
+} from '@agor-live/client';
 import { Drawer, Layout } from 'antd';
 import { useState } from 'react';
 import { Route, Routes, useNavigate } from 'react-router-dom';
@@ -30,6 +37,13 @@ interface MobileAppProps {
     sessionId: string,
     prompt: string
   ) => boolean | undefined | Promise<boolean | undefined>;
+  // Full session controls for the reused SessionPanel composer (parity with desktop).
+  onForkSession: (sessionId: string, prompt: string) => Promise<void>;
+  onBtwForkSession: (sessionId: string, prompt: string) => Promise<void>;
+  onSpawnSession: (sessionId: string, config: string | Partial<SpawnConfig>) => Promise<void>;
+  onUpdateSession: (sessionId: string, updates: Partial<Session>) => void;
+  onDeleteSession: (sessionId: string) => void;
+  onUpdateSessionMcpServers?: (sessionId: string, mcpServerIds: string[]) => void;
   onSendComment: (boardId: string, content: string) => void;
   onReplyComment?: (parentId: string, content: string) => void;
   onResolveComment?: (commentId: string) => void;
@@ -51,6 +65,12 @@ export const MobileApp: React.FC<MobileAppProps> = ({
   client,
   user,
   onSendPrompt,
+  onForkSession,
+  onBtwForkSession,
+  onSpawnSession,
+  onUpdateSession,
+  onDeleteSession,
+  onUpdateSessionMcpServers,
   onSendComment,
   onReplyComment,
   onResolveComment,
@@ -153,11 +173,14 @@ export const MobileApp: React.FC<MobileAppProps> = ({
               client={client}
               sessionById={sessionById}
               branchById={branchById}
-              repoById={repoById}
-              userById={userById}
               currentUser={user}
               onSendPrompt={onSendPrompt}
-              onMenuClick={() => setDrawerOpen(true)}
+              onForkSession={onForkSession}
+              onBtwForkSession={onBtwForkSession}
+              onSpawnSession={onSpawnSession}
+              onUpdateSession={onUpdateSession}
+              onDeleteSession={onDeleteSession}
+              onUpdateSessionMcpServers={onUpdateSessionMcpServers}
             />
           }
         />

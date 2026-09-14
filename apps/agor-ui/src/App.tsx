@@ -2418,6 +2418,12 @@ function AppContent() {
                   client={client}
                   user={user}
                   onSendPrompt={handleSendPrompt}
+                  onForkSession={handleForkSession}
+                  onBtwForkSession={handleBtwForkSession}
+                  onSpawnSession={handleSpawnSession}
+                  onUpdateSession={handleUpdateSession}
+                  onDeleteSession={handleDeleteSession}
+                  onUpdateSessionMcpServers={handleUpdateSessionMcpServers}
                   onSendComment={handleSendComment}
                   onReplyComment={handleReplyComment}
                   onResolveComment={handleResolveComment}

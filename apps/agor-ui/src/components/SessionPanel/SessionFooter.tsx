@@ -37,6 +37,7 @@ import {
   Badge,
   Button,
   Divider,
+  Drawer,
   Flex,
   Popover,
   Space,
@@ -47,6 +48,7 @@ import {
 } from 'antd';
 import React from 'react';
 import { useFooterPreferences } from '../../hooks/useFooterPreferences';
+import { useIsMobileViewport } from '../../hooks/useIsMobileViewport';
 import { useLocalStorage } from '../../hooks/useLocalStorage';
 import { resolveContextWindowPercentage } from '../../utils/contextWindow';
 import { EffortSelector } from '../EffortSelector';
@@ -163,6 +165,10 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
   const managedByPreset = Boolean(session.agentic_tool_preset_id);
   const supportsLiveEffort = Boolean(toolCaps?.reasoningEffortLevels?.length);
   const { token } = theme.useToken();
+  // Below the shell breakpoint the chip row collapses to a compact model+effort
+  // bar and "More" opens a bottom sheet instead of a popover, so the full
+  // controls stay reachable on a phone without a separate lossy composer.
+  const isMobile = useIsMobileViewport();
   const [moreOpen, setMoreOpen] = React.useState(false);
   const moreContentRef = React.useRef<HTMLFieldSetElement>(null);
   const getMorePopupContainer = React.useCallback(
@@ -289,7 +295,7 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
       ref={moreContentRef}
       aria-label="More options"
       onMouseDown={(event) => event.stopPropagation()}
-      style={{ width: 260, padding: '6px 0', margin: 0, border: 0 }}
+      style={{ width: isMobile ? '100%' : 260, padding: '6px 0', margin: 0, border: 0 }}
     >
       {/* === Section: Settings === */}
       <div style={sectionHeaderStyle}>Settings</div>
@@ -1350,8 +1356,9 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
       )}
 
       <div style={{ position: 'relative', zIndex: 1 }}>
-        {/* Row 1 — Info bar */}
-        {(showMcpControl ||
+        {/* Row 1 — Info bar (always shown on mobile as the compact chip bar) */}
+        {(isMobile ||
+          showMcpControl ||
           (footerTimerTask && pinnedChips.includes('timer')) ||
           (modelName && pinnedChips.includes('model')) ||
           (tokenDisplay !== null && pinnedChips.includes('tokens')) ||
@@ -1399,8 +1406,32 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
               />
             )}
 
+            {/* Compact effort control — mobile chip bar only */}
+            {isMobile && supportsLiveEffort && toolCaps?.reasoningEffortLevels && (
+              <div
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  height: 22,
+                  pointerEvents: managedByPreset ? 'none' : undefined,
+                  opacity: managedByPreset ? 0.65 : undefined,
+                }}
+              >
+                <EffortSelector
+                  value={effortLevel}
+                  onChange={onEffortChange}
+                  levels={toolCaps.reasoningEffortLevels}
+                  fallbackValue={toolCaps.defaultReasoningEffort}
+                  allowInherited={!toolCaps.defaultReasoningEffort}
+                  size="small"
+                  compact
+                  plain
+                />
+              </div>
+            )}
+
             {/* Model chip */}
-            {modelName && pinnedChips.includes('model') && (
+            {modelName && (pinnedChips.includes('model') || isMobile) && (
               <Popover
                 trigger={managedByPreset ? [] : 'click'}
                 placement="topLeft"
@@ -1686,23 +1717,35 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
                 />
               </Tooltip>
             )}
-            <Popover
-              open={moreOpen}
-              onOpenChange={setMoreOpen}
-              trigger="click"
-              placement="topLeft"
-              content={moreContent}
-              title={null}
-            >
+            {isMobile ? (
               <Tooltip title="More options">
                 <Button
                   size="small"
                   type="text"
                   icon={<EllipsisOutlined />}
                   aria-label="More options"
+                  onClick={() => setMoreOpen(true)}
                 />
               </Tooltip>
-            </Popover>
+            ) : (
+              <Popover
+                open={moreOpen}
+                onOpenChange={setMoreOpen}
+                trigger="click"
+                placement="topLeft"
+                content={moreContent}
+                title={null}
+              >
+                <Tooltip title="More options">
+                  <Button
+                    size="small"
+                    type="text"
+                    icon={<EllipsisOutlined />}
+                    aria-label="More options"
+                  />
+                </Tooltip>
+              </Popover>
+            )}
           </Space>
 
           {/* Spacer */}
@@ -1750,6 +1793,22 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
           </Space>
         </div>
       </div>
+
+      {/* Mobile: the "More" popover becomes a bottom sheet so the full control
+          set (model / effort / permissions / attach / fork / spawn / btw /
+          info-bar toggles / session settings) stays reachable on a phone. */}
+      {isMobile && (
+        <Drawer
+          open={moreOpen}
+          onClose={() => setMoreOpen(false)}
+          placement="bottom"
+          height="auto"
+          title="Session controls"
+          styles={{ body: { padding: 0, paddingBottom: 'env(safe-area-inset-bottom)' } }}
+        >
+          {moreContent}
+        </Drawer>
+      )}
     </div>
   );
 };
