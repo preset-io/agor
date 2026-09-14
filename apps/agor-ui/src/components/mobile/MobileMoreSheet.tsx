@@ -17,8 +17,6 @@ interface MobileMoreSheetProps {
   currentUser?: User | null;
 }
 
-const GUTTER = 16;
-
 /**
  * "More" bottom sheet: board switcher + Knowledge base + Settings (incl. MCP
  * servers) + account/sign out via the reused nav tree, with an Appearance
@@ -52,7 +50,7 @@ export const MobileMoreSheet: React.FC<MobileMoreSheetProps> = ({
         align="center"
         justify="space-between"
         gap={token.margin}
-        style={{ padding: `${token.paddingSM}px ${GUTTER}px` }}
+        style={{ padding: `${token.paddingSM}px ${token.padding}px` }}
       >
         <Typography.Text strong>Appearance</Typography.Text>
         <Segmented

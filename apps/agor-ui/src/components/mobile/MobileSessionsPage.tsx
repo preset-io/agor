@@ -12,8 +12,6 @@ interface MobileSessionsPageProps {
   currentUser?: User | null;
 }
 
-const GUTTER = 16;
-
 /**
  * Sessions tab: the caller's active/recent sessions across the workspace, each
  * tagged with the shared StatusPill vocabulary (running agents surface as a
@@ -37,34 +35,47 @@ export const MobileSessionsPage: React.FC<MobileSessionsPageProps> = ({
 
   return (
     <div style={{ height: '100%', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
-      <MobileHeader title="Sessions" user={currentUser} />
+      <MobileHeader title="Sessions" />
       <div style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
         {sessions.length === 0 ? (
-          <Empty
-            style={{ marginTop: token.marginXL }}
-            description="No sessions yet. Ask your primary assistant to get started."
-          />
+          <div
+            style={{
+              height: '100%',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+            }}
+          >
+            <Empty description="No sessions yet. Ask your primary assistant to get started." />
+          </div>
         ) : (
           <List
             dataSource={sessions}
-            style={{ paddingInline: GUTTER }}
+            style={{ paddingInline: token.padding }}
             renderItem={(session) => {
               const branch = session.branch_id ? branchById.get(session.branch_id) : undefined;
               const subtitle = [branch?.name, session.model_config?.model]
                 .filter(Boolean)
                 .join(' · ');
+              const title = getSessionDisplayTitle(session, { fallbackChars: 40 });
               return (
                 <List.Item
+                  role="button"
+                  tabIndex={0}
+                  aria-label={`Open ${title}`}
                   onClick={() => navigate(`/m/session/${session.session_id}`)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault();
+                      navigate(`/m/session/${session.session_id}`);
+                    }
+                  }}
                   style={{ cursor: 'pointer', paddingInline: 0, minHeight: 44 }}
                 >
                   <List.Item.Meta
                     title={
                       <Typography.Text ellipsis style={{ maxWidth: '100%' }}>
-                        {getSessionDisplayTitle(session, {
-                          fallbackChars: 40,
-                          includeIdFallback: true,
-                        })}
+                        {title}
                       </Typography.Text>
                     }
                     description={

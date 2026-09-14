@@ -137,7 +137,6 @@ export const MobileNavTree: React.FC<MobileNavTreeProps> = ({
     onNavigate?.();
   };
   const utilityItems: MenuProps['items'] = [
-    { key: 'home', label: 'Home', icon: <AppstoreOutlined /> },
     { key: 'knowledge', label: 'Knowledge Base', icon: <BulbOutlined /> },
     {
       key: 'workspace-settings',
@@ -331,8 +330,7 @@ export const MobileNavTree: React.FC<MobileNavTreeProps> = ({
         selectable={false}
         items={utilityItems}
         onClick={({ key }) => {
-          if (key === 'home') navigate('/m');
-          else if (key === 'knowledge') navigate('/knowledge');
+          if (key === 'knowledge') navigate('/knowledge');
           else if (key === 'user-settings') onOpenUserSettings();
           else if (key === 'documentation')
             window.open('https://agor.live/guide/getting-started', '_blank', 'noopener,noreferrer');

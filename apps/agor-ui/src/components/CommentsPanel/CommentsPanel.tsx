@@ -24,6 +24,7 @@ import {
   Button,
   Collapse,
   Popover,
+  Segmented,
   Space,
   Spin,
   Tag,
@@ -804,22 +805,15 @@ export const CommentsPanel: React.FC<CommentsPanelProps> = ({
           backgroundColor: token.colorBgContainer,
         }}
       >
-        <Space>
-          <Button
-            type={filter === 'active' ? 'primary' : 'default'}
-            size="small"
-            onClick={() => setFilter('active')}
-          >
-            Active
-          </Button>
-          <Button
-            type={filter === 'all' ? 'primary' : 'default'}
-            size="small"
-            onClick={() => setFilter('all')}
-          >
-            All
-          </Button>
-        </Space>
+        <Segmented<FilterMode>
+          size="small"
+          value={filter}
+          onChange={setFilter}
+          options={[
+            { label: 'Active', value: 'active' },
+            { label: 'All', value: 'all' },
+          ]}
+        />
       </div>
 
       {/* Thread List */}

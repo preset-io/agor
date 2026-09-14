@@ -286,8 +286,8 @@ export const MobileApp: React.FC<MobileAppProps> = ({
           showIcon
           message={
             connecting
-              ? 'Reconnecting…'
-              : 'You’re offline. Changes may not be saved until you reconnect.'
+              ? 'Reconnecting...'
+              : "You're offline. Changes may not be saved until you reconnect."
           }
           style={{ flexShrink: 0 }}
         />
@@ -311,6 +311,15 @@ export const MobileApp: React.FC<MobileAppProps> = ({
                 sessionById={sessionById}
                 branchById={branchById}
                 currentUser={user}
+              />
+            }
+          />
+          <Route
+            path="board"
+            element={
+              <Navigate
+                to={effectiveBoardId ? `/m/board/${effectiveBoardId}` : '/m/sessions'}
+                replace
               />
             }
           />

@@ -1,9 +1,7 @@
-import type { User } from '@agor-live/client';
 import { ArrowLeftOutlined, CheckOutlined, DownOutlined } from '@ant-design/icons';
 import { Button, Drawer, Flex, Layout, List, Space, Typography, theme } from 'antd';
 import { useState } from 'react';
 import { BrandMark } from '../BrandMark';
-import { UserIdentityAvatar } from '../UserIdentityAvatar';
 
 const { Header } = Layout;
 const { Title } = Typography;
@@ -16,7 +14,6 @@ export interface BoardSwitcherOption {
 
 interface MobileHeaderProps {
   title?: string;
-  user?: User | null;
   showLogo?: boolean;
   /** When set, a back arrow appears on the left. */
   onBack?: () => void;
@@ -31,9 +28,10 @@ interface MobileHeaderProps {
   };
 }
 
+// The signed-in identity/account lives in the More sheet, so the header stays a
+// title (+ optional back and board switcher) without a duplicated avatar.
 export const MobileHeader: React.FC<MobileHeaderProps> = ({
   title,
-  user,
   showLogo = false,
   onBack,
   boardSwitcher,
@@ -49,7 +47,7 @@ export const MobileHeader: React.FC<MobileHeaderProps> = ({
         alignItems: 'center',
         justifyContent: 'space-between',
         gap: token.marginSM,
-        paddingInline: 16,
+        paddingInline: token.padding,
         background: token.colorBgContainer,
         borderBottom: `${token.lineWidth}px solid ${token.colorBorderSecondary}`,
       }}
@@ -73,7 +71,11 @@ export const MobileHeader: React.FC<MobileHeaderProps> = ({
             style={{ paddingInline: 0, minWidth: 0, maxWidth: '100%' }}
           >
             <Space size={token.marginXXS} align="center" style={{ maxWidth: '100%' }}>
-              <Title level={5} ellipsis style={{ margin: 0, fontSize: 16, fontWeight: 500 }}>
+              <Title
+                level={5}
+                ellipsis
+                style={{ margin: 0, fontSize: token.fontSizeLG, fontWeight: 500 }}
+              >
                 {title || 'agor'}
               </Title>
               <DownOutlined
@@ -88,7 +90,7 @@ export const MobileHeader: React.FC<MobileHeaderProps> = ({
             style={{
               margin: 0,
               color: token.colorText,
-              fontSize: showLogo ? 18 : 16,
+              fontSize: showLogo ? token.fontSizeXL : token.fontSizeLG,
               fontWeight: showLogo ? 400 : 500,
             }}
           >
@@ -96,8 +98,6 @@ export const MobileHeader: React.FC<MobileHeaderProps> = ({
           </Title>
         )}
       </Space>
-
-      {user && <UserIdentityAvatar user={user} size={28} fontSize="20px" />}
 
       {boardSwitcher && (
         <Drawer
@@ -118,7 +118,7 @@ export const MobileHeader: React.FC<MobileHeaderProps> = ({
                     setSwitcherOpen(false);
                     boardSwitcher.onSelect(board.board_id);
                   }}
-                  style={{ cursor: 'pointer', paddingInline: 16, minHeight: 44 }}
+                  style={{ cursor: 'pointer', paddingInline: token.padding, minHeight: 44 }}
                 >
                   <Flex align="center" gap={token.marginSM} style={{ width: '100%', minWidth: 0 }}>
                     {board.emoji && <span aria-hidden>{board.emoji}</span>}

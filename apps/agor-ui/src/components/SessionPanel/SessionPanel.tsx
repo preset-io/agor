@@ -23,6 +23,7 @@ import {
 } from '@agor-live/client';
 import {
   AimOutlined,
+  ArrowLeftOutlined,
   CloseOutlined,
   CodeOutlined,
   DownOutlined,
@@ -1654,10 +1655,11 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
                 onClick={openSearch}
               />
             </Tooltip>
-            <Tooltip title="Close Panel">
+            <Tooltip title={isMobileShell ? 'Back' : 'Close Panel'}>
               <Button
                 type="text"
-                icon={<CloseOutlined />}
+                aria-label={isMobileShell ? 'Back' : 'Close panel'}
+                icon={isMobileShell ? <ArrowLeftOutlined /> : <CloseOutlined />}
                 onClick={onClose}
                 style={{ marginLeft: token.sizeUnit }}
               />
@@ -1707,7 +1709,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
                 {totalMatches > 0 ? `${currentMatch + 1} / ${totalMatches}` : ''}
               </Typography.Text>
             )}
-            {!query && (
+            {!query && !isMobileShell && (
               <Typography.Text type="secondary" style={{ fontSize: 11 }}>
                 Esc to close
               </Typography.Text>
