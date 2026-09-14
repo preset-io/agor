@@ -43,3 +43,22 @@ export function buildRestartedOnboardingPreferences(
   delete preferences.onboarding;
   return preferences;
 }
+
+/** One queue per exact activation owner. Deferral uses the same queue but an auth-only fence. */
+export function createOnboardingWriteQueue() {
+  const writes = new WeakMap<object, Promise<unknown>>();
+  return <T>(
+    owner: object,
+    isCurrent: () => boolean,
+    write: () => Promise<T>
+  ): Promise<T | undefined> => {
+    const next = (writes.get(owner) ?? Promise.resolve())
+      .catch(() => undefined)
+      .then(() => {
+        if (isCurrent()) return write();
+        return undefined;
+      });
+    writes.set(owner, next);
+    return next;
+  };
+}

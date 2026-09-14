@@ -619,6 +619,8 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
     updates: Partial<Branch>,
     options?: {
       preserveUpdatedAt?: boolean;
+      /** Failed-materialization retry admission fence, checked under the row lock. */
+      expectedFilesystemStatus?: Branch['filesystem_status'];
       /** Explicit lifecycle boundary, including starting -> starting retries. */
       invalidateEnvironmentObservation?: boolean;
     }
@@ -667,6 +669,12 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
 
       if (!currentRow) {
         throw new EntityNotFoundError('Branch', id);
+      }
+      if (
+        options?.expectedFilesystemStatus !== undefined &&
+        (currentRow.archived || currentRow.filesystem_status !== options.expectedFilesystemStatus)
+      ) {
+        throw new RepositoryError('Workspace state changed; reload before retrying.');
       }
       if (currentRow.deletion_status) {
         throw new RepositoryError(

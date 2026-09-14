@@ -15,10 +15,11 @@ function setup(overrides: Partial<React.ComponentProps<typeof TeammateHome>> = {
   const get = vi.fn(async () => repo);
   const find = vi.fn(async () => [repo]);
   const create = vi.fn(async () => ({ repo_id: repo.repo_id }));
+  const getUser = vi.fn(async () => overrides.user ?? user);
   const patch = vi.fn(async () => user);
   const client = {
     service: (name: string) =>
-      name === 'repos' ? { get, find } : name === 'users' ? { patch } : { create },
+      name === 'repos' ? { get, find } : name === 'users' ? { patch, get: getUser } : { create },
   } as unknown as AgorClient;
   const props = {
     client,
@@ -29,7 +30,7 @@ function setup(overrides: Partial<React.ComponentProps<typeof TeammateHome>> = {
     onAcknowledgedChange: vi.fn(),
     ...overrides,
   };
-  return { ...render(<TeammateHome {...props} />), props, get, find, create, patch };
+  return { ...render(<TeammateHome {...props} />), props, get, find, create, patch, getUser };
 }
 const click = (text: string) =>
   fireEvent.click(screen.getByText(text).closest('button') ?? screen.getByText(text));
@@ -67,10 +68,12 @@ describe('TeammateHome', () => {
   });
   it('saves only the current caller’s Git credential through the existing encrypted patch and clears input', async () => {
     const { patch } = setup();
-    click('GitHub repository sign-in');
+    click('GitHub token setup (if needed)');
     fireEvent.change(screen.getByLabelText('GitHub repository token'), {
       target: { value: 'test-only-token' },
     });
+    await screen.findByText('No GITHUB_TOKEN is saved.');
+    fireEvent.click(screen.getByRole('checkbox', { name: /Allow global scope/ }));
     click('Save repository credential');
     await waitFor(() =>
       expect(patch).toHaveBeenCalledWith('caller-a', {
@@ -80,6 +83,61 @@ describe('TeammateHome', () => {
     );
     expect(screen.getByLabelText('GitHub repository token')).toHaveValue('');
     expect(await screen.findByText(/push access is still unchecked/)).toBeInTheDocument();
+  });
+  it('guides create/register directly with no usable repositories', async () => {
+    const { find } = setup();
+    find.mockResolvedValue([]);
+    click('Refresh repositories');
+    expect(await screen.findByText(/No usable home yet/)).toBeVisible();
+    expect(screen.getByLabelText('Repository URL')).toBeVisible();
+    expect(screen.getByRole('link', { name: /Create a private repository/ })).toBeVisible();
+  });
+  it('shows exact destination and inspect link independently of a friendly name', async () => {
+    setup({ repoId: 'owned' });
+    expect(await screen.findByRole('link', { name: 'github.com/me/memory' })).toHaveAttribute(
+      'href',
+      repo.remote_url
+    );
+    expect(screen.getByText(/Visibility unknown/)).toBeVisible();
+  });
+  it('requires both explicit replacement and global-scope consent for a restricted token', async () => {
+    const { patch } = setup({
+      user: { ...user, env_vars: { GITHUB_TOKEN: { set: true, scope: 'session' } } },
+    });
+    click('GitHub token setup (if needed)');
+    await screen.findByText('GITHUB_TOKEN is already saved (scope: session).');
+    fireEvent.change(screen.getByLabelText('GitHub repository token'), {
+      target: { value: 'replacement-test-token' },
+    });
+    const save = screen.getByRole('button', { name: 'Save repository credential' });
+    expect(save).toBeDisabled();
+    fireEvent.click(screen.getByRole('checkbox', { name: /Replace my existing/ }));
+    expect(save).toBeDisabled();
+    fireEvent.click(screen.getByRole('checkbox', { name: /Allow global scope/ }));
+    fireEvent.click(save);
+    await waitFor(() => expect(patch).toHaveBeenCalledTimes(1));
+    expect(screen.getByLabelText('GitHub repository token')).toHaveAttribute('type', 'password');
+    expect(screen.getByLabelText('GitHub repository token')).toHaveValue('');
+    expect(screen.getByRole('link', { name: /token creation instructions/ })).toHaveAttribute(
+      'href',
+      expect.stringContaining('https://docs.github.com/')
+    );
+  });
+  it('fences a new credential installed after the consent screen was loaded', async () => {
+    const { getUser, patch } = setup();
+    click('GitHub token setup (if needed)');
+    await screen.findByText('No GITHUB_TOKEN is saved.');
+    fireEvent.change(screen.getByLabelText('GitHub repository token'), {
+      target: { value: 'test-token' },
+    });
+    fireEvent.click(screen.getByRole('checkbox', { name: /Allow global scope/ }));
+    getUser.mockResolvedValue({
+      ...user,
+      env_vars: { GITHUB_TOKEN: { set: true, scope: 'session' } },
+    });
+    click('Save repository credential');
+    expect(await screen.findByRole('alert')).toHaveTextContent(/presence\/scope changed/);
+    expect(patch).not.toHaveBeenCalled();
   });
   it('does not apply a delayed registration to a replacement caller', async () => {
     let resolve!: (value: Repo[]) => void;

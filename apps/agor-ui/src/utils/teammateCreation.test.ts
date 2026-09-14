@@ -1,6 +1,6 @@
 import type { Branch, Repo } from '@agor-live/client';
 import { describe, expect, it, vi } from 'vitest';
-import { createTeammateBranch } from './teammateCreation';
+import { assertRetainedTeammateSource, createTeammateBranch } from './teammateCreation';
 
 function makeRepo(overrides: Partial<Repo> = {}): Repo {
   return {
@@ -11,7 +11,7 @@ function makeRepo(overrides: Partial<Repo> = {}): Repo {
     created_at: '2026-05-26T00:00:00.000Z',
     updated_at: '2026-05-26T00:00:00.000Z',
     ...overrides,
-  } as Repo;
+  } as unknown as Repo;
 }
 
 function makeBranch(overrides: Partial<Branch> = {}): Branch {
@@ -25,18 +25,61 @@ function makeBranch(overrides: Partial<Branch> = {}): Branch {
     updated_at: '2026-05-26T00:00:00.000Z',
     sessions: [],
     ...overrides,
-  } as Branch;
+  } as unknown as Branch;
 }
 
 describe('createTeammateBranch', () => {
+  it('prevalidates unsupported starter URLs before allocating a board', async () => {
+    const service = vi.fn();
+    await expect(
+      createTeammateBranch(
+        { displayName: 'Ada', repoId: 'owned', sourceRemoteUrl: 'https://example.com/custom' },
+        {
+          client: { service } as never,
+          repoById: new Map(),
+          onCreateBranch: vi.fn(),
+          onUpdateBranch: vi.fn(),
+        }
+      )
+    ).rejects.toThrow('canonical Agor starter');
+    expect(service).not.toHaveBeenCalled();
+  });
+  it('rejects retained source ref and remote changes, even for the same destination', () => {
+    const branch = makeBranch({
+      base_ref: 'template/one',
+      base_remote_url: 'https://github.com/preset-io/agor-teammate.git',
+    });
+    expect(() =>
+      assertRetainedTeammateSource(branch, 'template/two', branch.base_remote_url)
+    ).toThrow('different starter');
+    expect(() => assertRetainedTeammateSource(branch, 'template/one')).toThrow('different starter');
+    expect(() =>
+      assertRetainedTeammateSource(branch, 'template/one', branch.base_remote_url)
+    ).not.toThrow();
+  });
+  it('does not let a renamed retry hide an existing bootstrap session', () => {
+    const branch = makeBranch({
+      base_ref: 'main',
+      custom_context: {
+        teammate: { kind: 'teammate', displayName: 'Ada', emoji: '🤖' },
+      },
+    });
+    expect(() =>
+      assertRetainedTeammateSource(branch, 'main', undefined, { displayName: 'Grace', emoji: '🤖' })
+    ).toThrow('original identity');
+    expect(() =>
+      assertRetainedTeammateSource(branch, 'main', undefined, { displayName: 'Ada', emoji: '🌲' })
+    ).toThrow('original identity');
+  });
+
   it('stores teammate identity, including emoji, in the initial branch create payload', async () => {
     const repo = makeRepo();
-    const branch = makeBranch({ board_id: 'board-1' });
+    const branch = makeBranch({ board_id: 'board-1' as Branch['board_id'] });
     const onCreateBranch = vi.fn().mockResolvedValue(branch);
     const onUpdateBranch = vi.fn();
     const boardsService = {
       create: vi.fn().mockResolvedValue({
-        board_id: 'board-1',
+        board_id: 'board-1' as Branch['board_id'],
         name: "Pineapple Helper's Board",
         icon: '🍍',
         objects: {},
@@ -102,7 +145,7 @@ describe('createTeammateBranch', () => {
       slug: 'preset-io/agor-teammate-private',
       remote_url: 'https://github.com/preset-io/agor-teammate-private.git',
     });
-    const branch = makeBranch({ board_id: 'board-1' });
+    const branch = makeBranch({ board_id: 'board-1' as Branch['board_id'] });
     const onCreateBranch = vi.fn().mockResolvedValue(branch);
     const boardsService = {
       ensureTeammateWelcomeNote: vi.fn().mockResolvedValue({}),
@@ -145,12 +188,13 @@ describe('createTeammateBranch', () => {
 describe('manual teammate retry identity', () => {
   it('reuses the exact board and partial branch after a lost create response', async () => {
     const branch = makeBranch({
-      board_id: 'attempt-board',
+      board_id: 'attempt-board' as Branch['board_id'],
+      base_ref: 'main',
       custom_context: { teammate: { kind: 'teammate' } },
     });
     const boards = {
       create: vi.fn().mockRejectedValue(new Error('Already exists')),
-      get: vi.fn(async () => ({ board_id: 'attempt-board' })),
+      get: vi.fn(async () => ({ board_id: 'attempt-board' as Branch['board_id'] })),
       ensureTeammateWelcomeNote: vi.fn(),
       setPrimaryTeammate: vi.fn(),
     };
@@ -164,7 +208,7 @@ describe('manual teammate retry identity', () => {
       { client: client as never, repoById: new Map(), onCreateBranch, onUpdateBranch: vi.fn() }
     );
     expect(boards.create).toHaveBeenCalledWith(
-      expect.objectContaining({ board_id: 'attempt-board' })
+      expect.objectContaining({ board_id: 'attempt-board' as Branch['board_id'] })
     );
     expect(boards.get).toHaveBeenCalledWith('attempt-board');
     expect(onCreateBranch).not.toHaveBeenCalled();
@@ -173,11 +217,11 @@ describe('manual teammate retry identity', () => {
 
   it('does not reuse a partial branch in a changed destination or rewrite its welcome note', async () => {
     const branch = makeBranch({
-      board_id: 'attempt-board',
+      board_id: 'attempt-board' as Branch['board_id'],
       custom_context: { teammate: { kind: 'teammate' } },
     });
     const boards = {
-      create: vi.fn(async () => ({ board_id: 'attempt-board' })),
+      create: vi.fn(async () => ({ board_id: 'attempt-board' as Branch['board_id'] })),
       ensureTeammateWelcomeNote: vi.fn(),
     };
     const onCreateBranch = vi.fn();

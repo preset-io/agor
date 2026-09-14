@@ -23,7 +23,7 @@
  * the accessible-name computation entirely and are used throughout instead.
  */
 
-import type { AgorClient, Board, User } from '@agor-live/client';
+import { type AgorClient, type Board, getBoardUrl, type User } from '@agor-live/client';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { ComponentProps } from 'react';
 import { EMPTY_MAPS } from '../../store/agorMaps';
@@ -452,7 +452,7 @@ describe('OnboardingWizard', () => {
       );
     });
     await findAndClickButton(/skip for now/i); // tools → done
-    expect(await screen.findByText("You're ready to build.")).toBeInTheDocument();
+    expect(await screen.findByText('Ready to create your board?')).toBeInTheDocument();
   });
 
   it('proceeds to save on an unknown auth result (transient) rather than rejecting the key', async () => {
@@ -479,7 +479,7 @@ describe('OnboardingWizard', () => {
       );
     });
     await findAndClickButton(/skip for now/i); // tools → done
-    expect(await screen.findByText("You're ready to build.")).toBeInTheDocument();
+    expect(await screen.findByText('Ready to create your board?')).toBeInTheDocument();
   });
 
   it('blocks with the provider hint on a definitive unauthenticated result', async () => {
@@ -671,12 +671,12 @@ describe('OnboardingWizard', () => {
     await waitFor(() => expect(screen.getByText(/^continue →/i).closest('button')).toBeEnabled());
     clickButton(/^continue →/i);
     expect(await screen.findByText('Choose your tools')).toBeInTheDocument();
-    expect(screen.queryByText("You're ready to build.")).not.toBeInTheDocument();
+    expect(screen.queryByText('Ready to create your board?')).not.toBeInTheDocument();
     for (const service of ['repos', 'branches', 'sessions']) {
       expect(client.service).not.toHaveBeenCalledWith(service);
     }
     await findAndClickButton(/skip for now/i);
-    expect(await screen.findByText("You're ready to build.")).toBeInTheDocument();
+    expect(await screen.findByText('Ready to create your board?')).toBeInTheDocument();
   });
 
   it('strips whitespace picked up from a wrapped terminal paste before saving a subscription token', async () => {
@@ -728,7 +728,7 @@ describe('OnboardingWizard', () => {
     clickButton(/^continue/i);
 
     await findAndClickButton(/skip for now/i); // tools → done
-    expect(await screen.findByText("You're ready to build.")).toBeInTheDocument();
+    expect(await screen.findByText('Ready to create your board?')).toBeInTheDocument();
     // Continuing with an already-verified key does not re-save it.
     expect(onUpdateUser).not.toHaveBeenCalled();
   });
@@ -1158,7 +1158,7 @@ describe('OnboardingWizard', () => {
 
     // tools — curate step skipped, then the teammate-centric done hero.
     await findAndClickButton(/skip for now/i); // tools → done
-    expect(await screen.findByText('Rusty is ready.')).toBeInTheDocument();
+    expect(await screen.findByText('Ready to create Rusty?')).toBeInTheDocument();
     clickButton(/meet rusty/i);
 
     // The wizard creates the board now (at completion) and emits the teammate
@@ -1222,11 +1222,11 @@ describe('OnboardingWizard', () => {
     // tools — curate step skipped, then the teammate-centric done hero: name heroes
     // the headline, the template is the role pill, and one warm subline — nothing else.
     await findAndClickButton(/skip for now/i); // tools → done
-    expect(await screen.findByText('Rusty is ready.')).toBeInTheDocument();
+    expect(await screen.findByText('Ready to create Rusty?')).toBeInTheDocument();
     expect(screen.getByText('Product Manager')).toBeInTheDocument(); // role pill
     expect(
       screen.getByText(
-        "Rusty is all yours. Start a chat and tell them what you need. You'll shape how they work as you go."
+        'Next, Agor will prepare Rusty’s workspace and, if you connected a model, start the first session.'
       )
     ).toBeInTheDocument();
     // The single primary action is verb-first + named into the first session.
@@ -1252,10 +1252,8 @@ describe('OnboardingWizard', () => {
 
     // No teammate to hero → the warm generic headline + board-open subcopy, and the
     // old skip-hint checklist is gone entirely.
-    expect(await screen.findByText("You're ready to build.")).toBeInTheDocument();
-    expect(
-      screen.getByText("Your board is ready. Open it and start whenever you're ready.")
-    ).toBeInTheDocument();
+    expect(await screen.findByText('Ready to create your board?')).toBeInTheDocument();
+    expect(screen.getByText('Create your board to start working.')).toBeInTheDocument();
     expect(screen.queryByText('What we set up')).not.toBeInTheDocument();
     expect(screen.queryByText(/Skipped —/)).not.toBeInTheDocument();
     expect(screen.getByText(/open my board/i)).toBeInTheDocument(); // unnamed → generic CTA
@@ -1279,7 +1277,7 @@ describe('OnboardingWizard', () => {
     expect(await screen.findByText('Choose your tools')).toBeInTheDocument();
     clickButton(/skip for now/i);
 
-    expect(await screen.findByText("You're ready to build.")).toBeInTheDocument();
+    expect(await screen.findByText('Ready to create your board?')).toBeInTheDocument();
     // Final step is not skippable.
     expect(screen.queryByText(/skip for now/i)).not.toBeInTheDocument();
 
@@ -1439,7 +1437,7 @@ describe('OnboardingWizard', () => {
     await chooseHome();
     await findAndClickButton(/skip for now/i);
     await findAndClickButton(/skip for now/i);
-    expect(await screen.findByText('Rusty is ready.')).toBeInTheDocument();
+    expect(await screen.findByText('Ready to create Rusty?')).toBeInTheDocument();
     clickButton(/meet rusty/i);
 
     await waitFor(() => expect(onComplete).toHaveBeenCalledOnce());
@@ -1472,7 +1470,7 @@ describe('OnboardingWizard', () => {
     await chooseHome();
     await findAndClickButton(/skip for now/i);
     await findAndClickButton(/skip for now/i);
-    expect(await screen.findByText('Rusty is ready.')).toBeInTheDocument();
+    expect(await screen.findByText('Ready to create Rusty?')).toBeInTheDocument();
     clickButton(/meet rusty/i);
 
     await waitFor(() => expect(onComplete).toHaveBeenCalledTimes(1));
@@ -1530,7 +1528,7 @@ describe('OnboardingWizard', () => {
     await screen.findByText('Choose your tools');
     clickButton(/skip for now/i); // tools → done
 
-    expect(await screen.findByText('Rusty is ready.')).toBeInTheDocument();
+    expect(await screen.findByText('Ready to create Rusty?')).toBeInTheDocument();
     expect(screen.queryByText(/removed-template.*no longer available/i)).not.toBeInTheDocument();
     clickButton(/meet rusty/i);
     await waitFor(() => expect(onComplete).toHaveBeenCalledTimes(1));
@@ -1807,7 +1805,7 @@ describe('Codex ChatGPT login import', () => {
 
     await waitFor(() => expect(importCreate).toHaveBeenCalledWith({ authJson: pasted }));
     await findAndClickButton(/skip for now/i); // tools → done
-    expect(await screen.findByText("You're ready to build.")).toBeInTheDocument();
+    expect(await screen.findByText('Ready to create your board?')).toBeInTheDocument();
   });
 
   it('shows the daemon rejection message and stays on the LLM step', async () => {
@@ -1967,7 +1965,7 @@ describe('Codex ChatGPT device sign-in', () => {
     const connect = screen.getByText(/^connect →/i).closest('button');
     fireEvent.click(connect as HTMLButtonElement);
     await findAndClickButton(/skip for now/i); // tools → done
-    expect(await screen.findByText("You're ready to build.")).toBeInTheDocument();
+    expect(await screen.findByText('Ready to create your board?')).toBeInTheDocument();
   });
 
   it('treats a gated account as a first-class state with working fallbacks', async () => {
@@ -2024,4 +2022,65 @@ describe('Codex ChatGPT device sign-in', () => {
     expect(await screen.findByText(/code expires in/i)).toBeInTheDocument();
     expect(create).not.toHaveBeenCalled();
   });
+});
+
+it('offers a non-destructive inline restart for a legacy public-home partial setup', async () => {
+  const { props, client, boardsService } = renderWizard({
+    user: makeUser({
+      preferences: {
+        onboarding: {
+          boardId: 'legacy-board',
+          branchId: 'legacy-public-teammate',
+          sessionId: 'legacy-session',
+          repoId: 'public-starter',
+          teammateDisplayName: 'Ada',
+          teammateHomeStep: 'home',
+        },
+      },
+    }),
+    boardById: new Map([['legacy-board', makeBoard({ board_id: 'legacy-board' })]]),
+  });
+  const restart = await screen.findByText('Keep existing board and restart setup');
+  expect(restart.closest('button')).toBeDisabled();
+  expect(screen.getByText('its existing board ↗')).toHaveAttribute(
+    'href',
+    getBoardUrl('legacy-board' as Board['board_id'], undefined, window.location.origin)
+  );
+  fireEvent.click(screen.getByText(/Keep that board, teammate, and sessions/));
+  clickButton('Keep existing board and restart setup');
+  await waitFor(() =>
+    expect(props.onUpdateUser).toHaveBeenCalledWith(
+      'user-1',
+      expect.objectContaining({
+        preferences: expect.objectContaining({
+          onboarding: expect.objectContaining({
+            boardId: '',
+            branchId: '',
+            sessionId: '',
+            repoId: '',
+            preservedBoardIds: ['legacy-board'],
+          }),
+        }),
+      })
+    )
+  );
+  expect(await screen.findByText(/Previously kept board/)).toHaveAttribute(
+    'href',
+    getBoardUrl('legacy-board' as Board['board_id'], undefined, window.location.origin)
+  );
+  expect(boardsService.create).not.toHaveBeenCalled();
+  expect(
+    client.service.mock.calls.flat().some((name) => /delete|archive|branches|sessions/.test(name))
+  ).toBe(false);
+  clickButton('Choose and confirm home');
+  await waitFor(() =>
+    expect(props.onUpdateUser).toHaveBeenLastCalledWith(
+      'user-1',
+      expect.objectContaining({
+        preferences: expect.objectContaining({
+          onboarding: expect.objectContaining({ repoId: 'owned-home' }),
+        }),
+      })
+    )
+  );
 });

@@ -25,7 +25,7 @@ export function destinationProblem(repo: Repo | undefined): string | undefined {
   if (repo.clone_status === 'failed') {
     switch (repo.clone_error?.category) {
       case 'auth_failed':
-        return 'Repository sign-in failed. Check your repository credentials and retry.';
+        return 'Repository authentication failed. Check your repository credentials and retry.';
       case 'not_found':
         return 'Repository not found or not accessible to your credentials. Check the URL and access.';
       case 'network':
@@ -78,4 +78,10 @@ export async function waitForDestinationReady(
   throw new Error(
     'This repository is still cloning. Return to its home screen and retry when ready.'
   );
+}
+
+/** Convert supported token-free Git remotes into an inspectable web destination. */
+export function repositoryInspectUrl(remote: string): string | undefined {
+  const url = remote.replace(/^(?:ssh:\/\/)?git@([^:/]+)[:/]/, 'https://$1/').replace(/\.git$/, '');
+  return /^https:\/\/[\w.-]+(?::\d+)?\/[\w./-]+$/.test(url) ? url : undefined;
 }

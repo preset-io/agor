@@ -69,4 +69,13 @@ it('requires an explicit home and keeps canonical blank source separate from its
     result = await formRef.current?.();
   });
   expect(result?.creationBoardId).toBe(boardId);
+  fireEvent.click(screen.getByText('Advanced Teammate Settings'));
+  expect(await screen.findByLabelText('Starter source')).toBeInTheDocument();
+  expect(screen.queryByLabelText('Starter source URL')).not.toBeInTheDocument();
+  fireEvent.mouseDown(screen.getByLabelText('Starter source'));
+  fireEvent.click(await screen.findByText('Destination’s own branch'));
+  await act(async () => {
+    result = await formRef.current?.();
+  });
+  expect(result?.sourceRemoteUrl).toBeUndefined();
 });

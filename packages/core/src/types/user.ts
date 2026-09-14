@@ -431,6 +431,8 @@ export interface EventStreamPreferences {
  * Per-user onboarding state (stored in user.preferences)
  */
 export interface OnboardingState {
+  /** Boards explicitly kept when restarting a partial setup; never auto-deleted. */
+  preservedBoardIds?: string[];
   /**
    * ISO timestamp recorded when the user closes onboarding to finish later.
    * Deferral is distinct from completion and never provisions resources.

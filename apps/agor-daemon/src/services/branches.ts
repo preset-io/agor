@@ -2056,6 +2056,20 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     options?: { boardId?: BoardID },
     params?: BranchParams
   ): Promise<BranchWithZoneAndSessions> {
+    return this.restoreFilesystem(id, options, params);
+  }
+
+  /** Explicit failed-materialization recovery. Never removes or replaces existing files. */
+  async retryFilesystem(id: BranchID, params?: BranchParams): Promise<BranchWithZoneAndSessions> {
+    return this.restoreFilesystem(id, undefined, params, true);
+  }
+
+  private async restoreFilesystem(
+    id: BranchID,
+    options: { boardId?: BoardID } | undefined,
+    params: BranchParams | undefined,
+    retryFailed = false
+  ): Promise<BranchWithZoneAndSessions> {
     const branch = await this.withTenantDatabase(params, () => this.get(id, params));
     if (
       (branch.storage_mode ?? 'worktree') === 'worktree' &&
@@ -2066,8 +2080,12 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       );
     }
 
-    if (!branch.archived) {
-      throw new Error(`Branch ${branch.name} is not archived`);
+    if (retryFailed ? branch.archived || branch.filesystem_status !== 'failed' : !branch.archived) {
+      throw new BadRequest(
+        retryFailed
+          ? 'Only an active failed workspace can be retried.'
+          : `Branch ${branch.name} is not archived`
+      );
     }
 
     const requestUser = params?.user;
@@ -2084,7 +2102,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       )
     );
 
-    console.log(`📦 Unarchiving branch: ${branch.name}`);
+    console.log(`📦 ${retryFailed ? 'Retrying filesystem' : 'Unarchiving branch'}: ${branch.name}`);
 
     const boardIdExplicitlyProvided = options !== undefined && 'boardId' in options;
     const targetBoardId = boardIdExplicitlyProvided ? options?.boardId : branch.board_id;
@@ -2101,16 +2119,19 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       patchData.board_id = options?.boardId;
     }
 
-    const unarchivedBranch = await this.withTenantDatabase(params, () =>
-      this.patch(id, patchData, params)
-    );
-    emitServiceEvent(this.app, {
-      path: 'branches',
-      event: 'patched',
-      data: unarchivedBranch,
-      params,
-      id: unarchivedBranch.branch_id,
-    });
+    let unarchivedBranch = branch;
+    if (!retryFailed) {
+      unarchivedBranch = await this.withTenantDatabase(params, () =>
+        this.patch(id, patchData, params)
+      );
+      emitServiceEvent(this.app, {
+        path: 'branches',
+        event: 'patched',
+        data: unarchivedBranch,
+        params,
+        id: unarchivedBranch.branch_id,
+      });
+    }
 
     // Recreate the git branch on filesystem if the directory is missing
     // (e.g., it was archived with filesystemAction: 'deleted')
@@ -2152,20 +2173,60 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       typeof statusResult.data === 'object' &&
       (statusResult.data as { exists?: unknown }).exists === true;
 
+    if (retryFailed && branchPathExists) {
+      throw new Conflict(
+        'The failed workspace still has files. Inspect it before recovery, or restart teammate setup on a new board. Existing files will not be deleted.'
+      );
+    }
+    let recoveryRepo: Repo | undefined;
+    if (retryFailed) {
+      if (
+        !statusResult.data ||
+        typeof statusResult.data !== 'object' ||
+        (statusResult.data as { exists?: unknown }).exists !== false
+      )
+        throw new Conflict('Workspace absence could not be verified. No recovery was started.');
+      // Resolve the exact tenant-owned repo before claiming the retry; a denied
+      // lookup must not leave a branch permanently marked as creating.
+      recoveryRepo = await this.withTenantDatabase(
+        params,
+        () => this.app.service('repos').get(branch.repo_id, params) as Promise<Repo>
+      );
+      if ((branch.storage_mode ?? 'worktree') === 'clone' && !recoveryRepo.remote_url)
+        throw new BadRequest('The destination repository has no remote URL.');
+      unarchivedBranch = await this.withTenantDatabase(params, () =>
+        this.branchRepo.update(
+          id,
+          { filesystem_status: 'creating' },
+          { expectedFilesystemStatus: 'failed' }
+        )
+      );
+      emitServiceEvent(this.app, {
+        path: 'branches',
+        event: 'patched',
+        data: unarchivedBranch,
+        params,
+        id: unarchivedBranch.branch_id,
+      });
+    }
+
     if (!branchPathExists) {
       console.log(`📂 Branch directory missing, spawning executor to recreate: ${branch.path}`);
 
       // Set filesystem_status to 'creating' while we rebuild
-      await this.withTenantDatabase(params, () =>
-        this.patch(id, { filesystem_status: 'creating' }, { ...params, provider: undefined })
-      );
+      if (!retryFailed)
+        await this.withTenantDatabase(params, () =>
+          this.patch(id, { filesystem_status: 'creating' }, { ...params, provider: undefined })
+        );
 
       // Look up repo to get local_path
       const reposService = this.app.service('repos');
-      const repo = await this.withTenantDatabase(
-        params,
-        () => reposService.get(branch.repo_id, params) as Promise<Repo>
-      );
+      const repo =
+        recoveryRepo ??
+        (await this.withTenantDatabase(
+          params,
+          () => reposService.get(branch.repo_id, params) as Promise<Repo>
+        ));
 
       // The executor derives the materialization mode from this persisted row.
       const storageMode = branch.storage_mode ?? 'worktree';
@@ -2240,6 +2301,8 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
         );
       }
     }
+
+    if (retryFailed) return this.withTenantDatabase(params, () => this.get(id, params));
 
     // Ensure a board object exists when unarchiving to a board.
     // Older archived branches may have had their board object removed.

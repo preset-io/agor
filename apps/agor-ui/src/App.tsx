@@ -104,6 +104,7 @@ import {
   buildDeferredOnboardingPreferences,
   buildRestartedOnboardingPreferences,
   buildResumedOnboardingPreferences,
+  createOnboardingWriteQueue,
   isOnboardingDeferred,
   type OnboardingReopenMode,
 } from './utils/onboardingLifecycle';
@@ -622,14 +623,7 @@ function AppContent() {
   const onboardingSeedResultRef = useRef(
     new Map<string, { branchId?: string; sessionId?: string }>()
   );
-  const onboardingCompletionWriteRef = useRef<{
-    owner: OnboardingOperationOwner;
-    promise: Promise<unknown>;
-  } | null>(null);
-  const onboardingWizardWriteRef = useRef<{
-    owner: OnboardingOperationOwner;
-    promise: Promise<unknown>;
-  } | null>(null);
+  const onboardingWrites = useRef(createOnboardingWriteQueue()).current;
   const onboardingSeedOwnerRef = useRef<string | undefined>(undefined);
 
   useEffect(() => {
@@ -874,12 +868,16 @@ function AppContent() {
       existingBranchId:
         retainedSeed?.branchId ||
         result.branchId ||
-        currentUser.preferences?.onboarding?.branchId ||
+        (currentUser.preferences?.onboarding?.boardId === result.boardId
+          ? currentUser.preferences.onboarding.branchId
+          : undefined) ||
         undefined,
       existingSessionId:
         retainedSeed?.sessionId ||
         result.sessionId ||
-        currentUser.preferences?.onboarding?.sessionId ||
+        (currentUser.preferences?.onboarding?.boardId === result.boardId
+          ? currentUser.preferences.onboarding.sessionId
+          : undefined) ||
         undefined,
       onCreateBranch: (repoId, data) =>
         isCurrentUser() ? handleCreateBranch(repoId, data) : Promise.resolve(null),
@@ -894,18 +892,20 @@ function AppContent() {
       onProgress: async (ids) => {
         if (!isCurrentUser()) return;
         onboardingSeedResultRef.current.set(result.boardId, ids);
-        const latest = await client.service('users').get(operationUserId);
-        if (!isCurrentUser()) return;
-        await handleUpdateUser(
-          operationUserId,
-          {
-            preferences: {
-              ...latest.preferences,
-              onboarding: { ...latest.preferences?.onboarding, ...ids, repoId: result.repoId },
+        await onboardingWrites(owner, isCurrentUser, async () => {
+          const latest = await client.service('users').get(operationUserId);
+          if (!isCurrentUser()) return;
+          await handleUpdateUser(
+            operationUserId,
+            {
+              preferences: {
+                ...latest.preferences,
+                onboarding: { ...latest.preferences?.onboarding, ...ids, repoId: result.repoId },
+              },
             },
-          },
-          { silent: true }
-        );
+            { silent: true }
+          );
+        });
       },
       onWarn: (message) => {
         if (isCurrentUser()) {
@@ -926,25 +926,24 @@ function AppContent() {
     // incomplete wizard that can resume instead of a falsely completed user.
     // Fetch immediately before the whole-preferences patch to preserve any
     // unrelated setting changed while the wizard was open.
-    const latestUser = (await client.service('users').get(currentUser.user_id)) as User;
-    if (!isCurrentUser()) return;
     const completionResult = { ...result, branchId, sessionId };
-    const completionWrite = handleUpdateUser(
-      currentUser.user_id,
-      {
-        onboarding_completed: true,
-        preferences: buildCompletedOnboardingPreferences(latestUser.preferences, completionResult),
-      },
-      { silent: true }
-    );
-    onboardingCompletionWriteRef.current = { owner, promise: completionWrite };
-    try {
-      await completionWrite;
-    } finally {
-      if (onboardingCompletionWriteRef.current?.promise === completionWrite) {
-        onboardingCompletionWriteRef.current = null;
-      }
-    }
+    const committed = await onboardingWrites(owner, isCurrentUser, async () => {
+      const latestUser = await client.service('users').get(owner.userId);
+      if (!isCurrentUser()) return;
+      await handleUpdateUser(
+        owner.userId,
+        {
+          onboarding_completed: true,
+          preferences: buildCompletedOnboardingPreferences(
+            latestUser.preferences,
+            completionResult
+          ),
+        },
+        { silent: true }
+      );
+      return latestUser;
+    });
+    if (!committed) return;
 
     // The successful preference write is the commit point. Its realtime user
     // event may have already moved this lifecycle to `completed`, retiring the
@@ -963,7 +962,7 @@ function AppContent() {
     // centralized path builders — the old `/b/<board>/<session>/` shape was
     // removed when we flattened entity URLs.
     const boardById = agorStore.getState().boardById;
-    const mainBoardId = latestUser.preferences?.mainBoardId;
+    const mainBoardId = committed.preferences?.mainBoardId;
     const targetBoardId =
       result.boardId ||
       (mainBoardId && boardById.has(mainBoardId) ? mainBoardId : undefined) ||
@@ -1007,36 +1006,23 @@ function AppContent() {
 
     void (async () => {
       try {
-        const wizardWrite = onboardingWizardWriteRef.current;
-        if (wizardWrite?.owner === owner) {
-          try {
-            await wizardWrite.promise;
-          } catch {
-            // Deferral still has to be recorded after a failed wizard write.
+        await onboardingWrites(
+          owner,
+          () => isAuthenticationOwnerCurrent(owner.userId, owner.authenticationGeneration),
+          async () => {
+            if (!isAuthenticationOwnerCurrent(owner.userId, owner.authenticationGeneration)) return;
+            const latestUser = (await client.service('users').get(owner.userId)) as User;
+            if (!isAuthenticationOwnerCurrent(owner.userId, owner.authenticationGeneration)) return;
+            if (latestUser.onboarding_completed) return;
+            await client.service('users').patch(owner.userId, {
+              preferences: buildDeferredOnboardingPreferences(
+                latestUser.preferences,
+                new Date().toISOString(),
+                progress
+              ),
+            });
           }
-        }
-        // Dismiss may race the narrow completion-commit window. Close remains
-        // immediate, but wait for that authoritative write before reading
-        // preferences so a stale deferral patch cannot erase completion data.
-        const completionWrite = onboardingCompletionWriteRef.current;
-        if (completionWrite?.owner === owner) {
-          try {
-            await completionWrite.promise;
-          } catch {
-            // A failed completion is exactly when the deferral should persist.
-          }
-        }
-        if (!isAuthenticationOwnerCurrent(owner.userId, owner.authenticationGeneration)) return;
-        const latestUser = (await client.service('users').get(owner.userId)) as User;
-        if (!isAuthenticationOwnerCurrent(owner.userId, owner.authenticationGeneration)) return;
-        if (latestUser.onboarding_completed) return;
-        await client.service('users').patch(owner.userId, {
-          preferences: buildDeferredOnboardingPreferences(
-            latestUser.preferences,
-            new Date().toISOString(),
-            progress
-          ),
-        });
+        );
       } catch (error) {
         if (!isAuthenticationOwnerCurrent(owner.userId, owner.authenticationGeneration)) return;
         showError(
@@ -2296,18 +2282,35 @@ function AppContent() {
               ) {
                 return;
               }
-              const wizardWrite = handleUpdateUser(userId, updates, { silent: true });
-              onboardingWizardWriteRef.current = {
-                owner: onboardingWizardOwner,
-                promise: wizardWrite,
-              };
-              try {
-                await wizardWrite;
-              } finally {
-                if (onboardingWizardWriteRef.current?.promise === wizardWrite) {
-                  onboardingWizardWriteRef.current = null;
+              const owner = onboardingWizardOwner;
+              await onboardingWrites(
+                owner,
+                () => isOnboardingOwnerCurrent(owner),
+                async () => {
+                  if (!client) return;
+                  const latest = await client.service('users').get(userId);
+                  if (!isOnboardingOwnerCurrent(owner)) return;
+                  await handleUpdateUser(
+                    userId,
+                    {
+                      ...updates,
+                      ...(updates.preferences
+                        ? {
+                            preferences: {
+                              ...latest.preferences,
+                              ...updates.preferences,
+                              onboarding: {
+                                ...latest.preferences?.onboarding,
+                                ...updates.preferences.onboarding,
+                              },
+                            },
+                          }
+                        : {}),
+                    },
+                    { silent: true }
+                  );
                 }
-              }
+              );
             }}
             onCheckAuth={async (tool, apiKey) => {
               if (!onboardingWizardOwner || !isOnboardingOwnerCurrent(onboardingWizardOwner)) {

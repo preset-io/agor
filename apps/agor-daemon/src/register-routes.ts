@@ -4248,6 +4248,39 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     },
   });
 
+  // Retry a failed materialization through the same tenant/manager/write boundary.
+  app.use('/branches/:id/retry-filesystem', {
+    async create(data: unknown, params: RouteParams) {
+      const id = params.route?.id;
+      if (!id) throw new Error('Branch ID required');
+      return branchesService.retryFilesystem(id as import('@agor/core/types').BranchID, params);
+    },
+  });
+
+  app.service('/branches/:id/retry-filesystem').hooks({
+    around: { all: [tenantIdentityAround, tenantWriteAdmissionAround] },
+    before: {
+      create: [
+        requireAuth,
+        requireMinimumRole(ROLES.MEMBER, 'retry branch filesystem'),
+        inTenantDatabaseScope(async (context: HookContext) => {
+          const id = context.params.route?.id;
+          if (!id) throw new Error('Branch ID required');
+
+          const branch = await branchRepository.findById(id);
+          if (!branch) {
+            throw new Forbidden(`Branch not found: ${id}`);
+          }
+
+          await cacheBranchAccess(context.params, branchRepository, branch);
+
+          return context;
+        }),
+        ensureBranchPermission('all', 'retry branch filesystem', superadminOpts),
+      ],
+    },
+  });
+
   // ============================================================================
   // Run-now (canonical): manually trigger a scheduled run for a schedule.
   // ============================================================================

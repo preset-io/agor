@@ -3074,3 +3074,95 @@ describe('BranchesService environment health requests', () => {
     expect(branchesService.emit).not.toHaveBeenCalled();
   });
 });
+
+describe('BranchesService.retryFilesystem', () => {
+  const id = 'failed-branch' as BranchID;
+  const params = { user: { user_id: 'user-1' as UUID, role: 'member' } } as never;
+  function setup() {
+    const harness = createServiceHarness();
+    const branch = {
+      branch_id: id,
+      repo_id: 'repo-1',
+      name: 'Ada',
+      path: '/retained',
+      archived: false,
+      filesystem_status: 'failed',
+      base_ref: 'template/analyst',
+      base_remote_url: 'https://github.com/preset-io/agor-teammate.git',
+    };
+    const get = vi.spyOn(harness.service, 'get').mockResolvedValue(branch as never);
+    const update = vi
+      .spyOn(harness.branchRepo, 'update')
+      .mockResolvedValue({ ...branch, filesystem_status: 'creating' } as never);
+    const patch = vi.spyOn(harness.service, 'patch');
+    return { ...harness, get, update, patch };
+  }
+  it('reuses the persisted source/destination through restore mode, without lifecycle changes', async () => {
+    const { service, update, patch, sessionsService } = setup();
+    mockedRequestExecutor.mockResolvedValue({ success: true, data: { exists: false } });
+    await service.retryFilesystem(id, params);
+    expect(update).toHaveBeenCalledWith(
+      id,
+      { filesystem_status: 'creating' },
+      { expectedFilesystemStatus: 'failed' }
+    );
+    expect(mockedSpawnExecutor).toHaveBeenCalledWith(
+      expect.objectContaining({
+        command: 'git.branch.add',
+        params: expect.objectContaining({ branchId: id, repoId: 'repo-1', restoreMode: true }),
+      }),
+      expect.anything()
+    );
+    expect(patch).not.toHaveBeenCalled();
+    expect(sessionsService.unarchiveBranchSessions).not.toHaveBeenCalled();
+  });
+  it('preserves partial files rather than deleting, overwriting, or pretending to recover', async () => {
+    const { service, update } = setup();
+    await expect(service.retryFilesystem(id, params)).rejects.toThrow('still has files');
+    expect(update).not.toHaveBeenCalled();
+    expect(mockedSpawnExecutor).not.toHaveBeenCalled();
+  });
+  it('fails closed when absence cannot be verified', async () => {
+    const { service, update } = setup();
+    mockedRequestExecutor.mockResolvedValue({ success: true, data: {} });
+    await expect(service.retryFilesystem(id, params)).rejects.toThrow(
+      'absence could not be verified'
+    );
+    expect(update).not.toHaveBeenCalled();
+    expect(mockedSpawnExecutor).not.toHaveBeenCalled();
+  });
+  it('requires manager and filesystem write access before inspecting or restarting', async () => {
+    const { service, branchRepo, update } = setup();
+    vi.mocked(branchRepo.resolveUserAccess).mockResolvedValue({
+      can: 'view',
+      fs_access: 'read',
+      is_owner: false,
+      source: 'direct',
+    } as never);
+    await expect(service.retryFilesystem(id, params)).rejects.toThrow('Forbidden');
+    expect(mockedRequestExecutor).not.toHaveBeenCalled();
+    expect(update).not.toHaveBeenCalled();
+    expect(mockedSpawnExecutor).not.toHaveBeenCalled();
+  });
+  it('never spawns after another request wins failed-state admission', async () => {
+    const { service, update } = setup();
+    mockedRequestExecutor.mockResolvedValue({ success: true, data: { exists: false } });
+    update.mockRejectedValue(new Error('Workspace state changed'));
+    await expect(service.retryFilesystem(id, params)).rejects.toThrow('state changed');
+    expect(mockedSpawnExecutor).not.toHaveBeenCalled();
+  });
+  it('rejects conflicting tenant identity before reading or inspecting a foreign branch', async () => {
+    const { service, get, update } = setup();
+    await expect(
+      runWithTenantContext('tenant-b', () =>
+        service.retryFilesystem(id, {
+          tenant: { tenant_id: 'tenant-a', source: 'auth_claim' },
+        })
+      )
+    ).rejects.toThrow(/tenant/i);
+    expect(get).not.toHaveBeenCalled();
+    expect(update).not.toHaveBeenCalled();
+    expect(mockedRequestExecutor).not.toHaveBeenCalled();
+    expect(mockedSpawnExecutor).not.toHaveBeenCalled();
+  });
+});

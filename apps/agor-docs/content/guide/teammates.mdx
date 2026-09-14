@@ -126,8 +126,8 @@ In onboarding and **Create → Teammate**, name your teammate and choose a perso
 (or **Start blank**) first. **Continue** opens the inline home screen. **Back**
 keeps your name and persona selection.
 
-Select a registered repository you control, or expand **Add a repository** and
-paste its URL. Agor registers/clones that repository and detects its default
+Select a registered repository you control, or use **Add a repository** and
+paste its URL. With no usable repository, the create/register instructions open automatically. Agor registers/clones that repository and detects its default
 branch. If you do not have a repository, the GitHub link opens GitHub’s native
 creation form with private visibility prefilled. Confirm visibility, create it
 with a README, and paste its URL into the same Agor screen. Agor does not create
@@ -137,20 +137,21 @@ The public [starter source](https://github.com/preset-io/agor-teammate) is **not
 your destination. Agor brings the selected persona from that source while your
 repository remains the destination remote. **Start blank** uses the framework’s
 `main`, not a new memory repository’s README. Advanced manual settings can use
-a custom source URL/branch, or the destination’s own source branch.
+the canonical Agor starter or the destination’s own source branch; arbitrary starter URLs are not supported.
 
 **Clone ready is not proof of push permission or private visibility.** The home
 screen labels both as unchecked/unknown and asks you to confirm permission and
 who can see the work. Prefer a private repository for memory; `private-*` names
 do not change visibility. There is no automatic backup or synchronization claim.
-GitHub repository sign-in uses your existing encrypted user-credential service;
-it is separate from GitHub MCP sign-in. Errors and clone retries stay inline.
+GitHub token setup links to GitHub’s token-creation instructions and uses the existing encrypted user-credential service. Saving requires explicit global-scope consent and, when a token already exists, replacement consent. This is separate from GitHub MCP sign-in. Errors and clone retries stay inline.
 
 Onboarding saves the chosen destination and persona before creating a board.
 Completion uses that exact repository ID and keeps setup incomplete if the
 requested teammate cannot be created. A retry retains partial resource IDs and
 never substitutes the public starter or another destination. If a teammate was
-already created, restore its original destination to resume it.
+already created, restore its original destination, starter, name, and emoji to resume it. Failed materialization retries the exact branch only when its directory is absent; existing files are never deleted automatically. A failed first task is retried through normal session prompting; pending work is not duplicated.
+
+For older partial setups using the public starter as their destination, choose **Keep existing board and restart setup** inline. This explicitly preserves the old board, teammate, and sessions, records a link to the kept board, and lets you choose your own home for a new setup.
 
 **Skip for now** on the Teammate step remains an optional no-teammate path, not
 a repository-setup workaround. Skipping only AI setup still prepares the

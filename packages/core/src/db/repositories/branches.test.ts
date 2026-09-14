@@ -1162,6 +1162,33 @@ describe('BranchRepository.update', () => {
     expect(updated.notes ?? undefined).toBeUndefined();
   });
 
+  dbTest(
+    'admits a failed-filesystem retry only once under the existing update lock',
+    async ({ db }) => {
+      const repo = await new RepoRepository(db).create(createRepoData());
+      const branches = new BranchRepository(db);
+      const branch = await branches.create(createBranchData({ repo_id: repo.repo_id }));
+      await branches.update(branch.branch_id, {
+        filesystem_status: 'failed',
+        error_message: 'old failure',
+      });
+      const retried = await branches.update(
+        branch.branch_id,
+        { filesystem_status: 'creating' },
+        { expectedFilesystemStatus: 'failed' }
+      );
+      expect(retried.error_message).toBeUndefined();
+      await expect(
+        branches.update(
+          branch.branch_id,
+          { filesystem_status: 'creating' },
+          { expectedFilesystemStatus: 'failed' }
+        )
+      ).rejects.toThrow('state changed');
+      expect((await branches.findById(branch.branch_id))?.filesystem_status).toBe('creating');
+    }
+  );
+
   dbTest('clears a stale materialization error when the filesystem recovers', async ({ db }) => {
     const repoRepo = new RepoRepository(db);
     const branchRepo = new BranchRepository(db);

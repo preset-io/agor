@@ -17,11 +17,13 @@ import type {
   AgorClient,
   AuthCheckResult,
   Board,
+  BoardID,
   OnboardingState,
   UpdateUserInput,
   User,
   UserPreferences,
 } from '@agor-live/client';
+import { getBoardUrl } from '@agor-live/client';
 import {
   CheckCircleOutlined,
   CheckOutlined,
@@ -29,7 +31,19 @@ import {
   LeftOutlined,
   LoadingOutlined,
 } from '@ant-design/icons';
-import { Alert, Button, Input, Modal, Spin, Tag, Tooltip, Typography, theme } from 'antd';
+import {
+  Alert,
+  Button,
+  Checkbox,
+  Flex,
+  Input,
+  Modal,
+  Spin,
+  Tag,
+  Tooltip,
+  Typography,
+  theme,
+} from 'antd';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { VISUALLY_HIDDEN_STYLE } from '@/utils/accessibility';
 import { sanitizeSecretValue } from '@/utils/sanitizeSecret';
@@ -112,7 +126,7 @@ const STEP_META: Record<WizardStep, { number: number; label: string; skippable: 
   workspace: { number: 2, label: 'Teammate', skippable: true },
   llm: { number: 3, label: 'AI', skippable: true },
   tools: { number: 4, label: 'Tools', skippable: true },
-  done: { number: 5, label: "You're ready", skippable: false },
+  done: { number: 5, label: 'Review', skippable: false },
 };
 
 const GOALS = ONBOARDING_GOALS;
@@ -581,6 +595,10 @@ export function OnboardingWizard({
   // Final completion owns the resumable board saga. Connecting tools creates no workspace.
   const [boardError, setBoardError] = useState<string | null>(null);
   const [createdBoardId, setCreatedBoardId] = useState<string | null>(null);
+  const [restartAcknowledged, setRestartAcknowledged] = useState(false);
+  const [preservedBoardIds, setPreservedBoardIds] = useState<string[]>(
+    savedOnboarding?.preservedBoardIds ?? []
+  );
   const boardCreationConfirmedRef = useRef(false);
 
   // ── Step 4: completion ────────────────────────────────────────────────────
@@ -612,6 +630,8 @@ export function OnboardingWizard({
     setLlmAuthChecking(null);
     setLlmAuthVerified({});
     setHomeStep(false);
+    setRestartAcknowledged(false);
+    setPreservedBoardIds([]);
     setDestinationId(undefined);
     setDestinationAcknowledged(false);
     setDestinationReady(false);
@@ -665,6 +685,7 @@ export function OnboardingWizard({
     } else {
       setSelectedAgent(null);
     }
+    setPreservedBoardIds(savedOnboarding?.preservedBoardIds ?? []);
     if (savedOnboarding) {
       setDestinationId(savedOnboarding.repoId);
       setHomeStep(savedOnboarding.teammateHomeStep === 'home');
@@ -990,6 +1011,81 @@ export function OnboardingWizard({
     [client, isCurrent, onUpdateUser, user]
   );
 
+  const restartPartialSetup = async () => {
+    if (
+      !createdBoardId ||
+      !restartAcknowledged ||
+      completionInFlightRef.current ||
+      homeInFlightRef.current ||
+      !isCurrent()
+    )
+      return;
+    homeInFlightRef.current = true;
+    setSavingHome(true);
+    const kept = [...new Set([...preservedBoardIds, createdBoardId])];
+    try {
+      if (
+        !(await saveOnboardingProgress({
+          preservedBoardIds: kept,
+          boardId: '',
+          branchId: '',
+          sessionId: '',
+          repoId: '',
+          teammateHomeStep: 'home',
+        }))
+      )
+        return;
+      if (!isCurrent()) return;
+      setPreservedBoardIds(kept);
+      createdBoardIdRef.current = null;
+      setCreatedBoardId(null);
+      boardCreationConfirmedRef.current = false;
+      setDestinationId(undefined);
+      setDestinationAcknowledged(false);
+      setDestinationReady(false);
+      setRestartAcknowledged(false);
+      setBoardError(null);
+      setHomeStep(true);
+      setCurrentStep('workspace');
+    } catch {
+      if (isCurrent())
+        setBoardError('Could not save the restart. Your existing board is unchanged.');
+    } finally {
+      homeInFlightRef.current = false;
+      if (isCurrent()) setSavingHome(false);
+    }
+  };
+
+  const partialSetupRecovery =
+    createdBoardId && !completing ? (
+      <Flex vertical gap="small">
+        <Text>
+          Your partial setup is kept on{' '}
+          <Typography.Link
+            href={getBoardUrl(createdBoardId as BoardID, undefined, window.location.origin)}
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            its existing board ↗
+          </Typography.Link>
+          .
+        </Text>
+        <Checkbox
+          checked={restartAcknowledged}
+          onChange={(event) => setRestartAcknowledged(event.target.checked)}
+        >
+          Keep that board, teammate, and sessions, and restart setup with a new home. Nothing will
+          be deleted or moved.
+        </Checkbox>
+        <Button
+          disabled={!restartAcknowledged || savingHome}
+          onClick={() => void restartPartialSetup()}
+        >
+          Keep existing board and restart setup
+        </Button>
+      </Flex>
+    ) : null;
+
   const ensureBoard = useCallback(async () => {
     const name = teammateName.trim();
     if (!client || !isCurrent()) throw new Error('Reconnect to continue setup.');
@@ -1152,7 +1248,7 @@ export function OnboardingWizard({
   ]);
 
   const handlePrimary = useCallback(async () => {
-    if (!isCurrent()) return;
+    if (!isCurrent() || homeInFlightRef.current) return;
     switch (currentStep) {
       case 'goals': {
         // Goals are persisted once, authoritatively and awaited, by the
@@ -2092,14 +2188,11 @@ export function OnboardingWizard({
       headline = name ? `${name} needs one more try.` : 'Setup needs one more try.';
       subline = 'Nothing was lost. Review the error below, then try again.';
     } else if (!name) {
-      headline = completing ? 'Almost ready…' : "You're ready to build.";
-      subline = "Your board is ready. Open it and start whenever you're ready.";
+      headline = completing ? 'Almost ready…' : 'Ready to create your board?';
+      subline = 'Create your board to start working.';
     } else {
-      // One warm line for every named variant — the headline (${name} is ready.)
-      // and the role pill already carry the specifics, so the subline just lands
-      // "the teammate is yours; shape it by talking to it." No goal-listing.
-      headline = completing ? `${name} is almost ready.` : `${name} is ready.`;
-      subline = `${name} is all yours. Start a chat and tell them what you need. You'll shape how they work as you go.`;
+      headline = completing ? `Creating ${name}…` : `Ready to create ${name}?`;
+      subline = `Next, Agor will prepare ${name}’s workspace and, if you connected a model, start the first session.`;
     }
 
     return (
@@ -2418,6 +2511,17 @@ export function OnboardingWizard({
                   <Title ref={stepHeadingRef} data-step="workspace" level={3} tabIndex={-1}>
                     Where should {teammateName}’s work live?
                   </Title>
+                  {partialSetupRecovery}
+                  {preservedBoardIds.map((id) => (
+                    <Typography.Link
+                      key={id}
+                      href={getBoardUrl(id as BoardID, undefined, window.location.origin)}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                    >
+                      Previously kept board ↗ ({id})
+                    </Typography.Link>
+                  ))}
                   <TeammateHome
                     client={client}
                     user={user}
@@ -2461,7 +2565,12 @@ export function OnboardingWizard({
               </div>
             )}
             {currentStep === 'tools' && renderTools()}
-            {currentStep === 'done' && renderDone()}
+            {currentStep === 'done' && (
+              <>
+                {renderDone()}
+                {partialSetupRecovery}
+              </>
+            )}
           </div>
 
           {/* Footer */}

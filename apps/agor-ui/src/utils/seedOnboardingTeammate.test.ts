@@ -7,10 +7,13 @@ import { createTeammateBranch } from './teammateCreation';
 
 // These are the two collaborators the completion path must actually invoke —
 // the original bug meant neither ever ran (the fallback fired instead).
-vi.mock('./waitForBranchFilesystemReady', () => ({
-  waitForBranchFilesystemReady: vi.fn(async () => undefined),
+vi.mock('./recoverTeammateFilesystem', () => ({
+  recoverTeammateFilesystem: vi.fn(async () => undefined),
 }));
-vi.mock('./teammateCreation', () => ({ createTeammateBranch: vi.fn() }));
+vi.mock('./teammateCreation', async (original) => ({
+  ...(await original<typeof import('./teammateCreation')>()),
+  createTeammateBranch: vi.fn(),
+}));
 vi.mock('./startTeammateBootstrapSession', () => ({
   startTeammateBootstrapSession: vi.fn(),
   resumeTeammateBootstrapSession: vi.fn(async () => undefined),
@@ -338,17 +341,23 @@ describe('seedOnboardingTeammate', () => {
   it('reuses a durable onboarding branch and session on completion retry', async () => {
     const existingBranch = {
       branch_id: 'branch-existing',
+      base_ref: 'main',
       board_id: 'board-1',
       repo_id: 'repo-fw',
       custom_context: {
-        teammate: { kind: 'teammate', createdViaOnboarding: true, displayName: 'Rusty' },
+        teammate: {
+          kind: 'teammate',
+          createdViaOnboarding: true,
+          displayName: 'Rusty',
+          emoji: '🤖',
+        },
       },
     } as unknown as Branch;
     const existingSession = {
       session_id: 'session-existing',
       title: '🤖 Rusty — first session',
       branch_id: 'branch-existing',
-    } as Session;
+    } as unknown as Session;
     const setPrimaryTeammate = vi.fn(async () => undefined);
     const { input: baseInput, onWarn, setPrimaryTeammateIfUnset } = setup();
     const input = {
@@ -383,17 +392,23 @@ describe('seedOnboardingTeammate', () => {
   it('discovers durable branch/session state from the API before maps hydrate after reload', async () => {
     const existingBranch = {
       branch_id: 'branch-existing',
+      base_ref: 'main',
       board_id: 'board-1',
       repo_id: 'repo-fw',
       custom_context: {
-        teammate: { kind: 'teammate', createdViaOnboarding: true, displayName: 'Rusty' },
+        teammate: {
+          kind: 'teammate',
+          createdViaOnboarding: true,
+          displayName: 'Rusty',
+          emoji: '🤖',
+        },
       },
     } as unknown as Branch;
     const existingSession = {
       session_id: 'session-existing',
       title: '🤖 Rusty — first session',
       branch_id: 'branch-existing',
-    } as Session;
+    } as unknown as Session;
     const setPrimaryTeammate = vi.fn(async () => undefined);
     const branchFind = vi.fn(async () => ({ data: [existingBranch] }));
     const sessionFind = vi.fn(async () => ({ data: [existingSession] }));
@@ -440,7 +455,7 @@ describe('seedOnboardingTeammate', () => {
       repo_id: 'old-home',
       board_id: 'board-1',
       custom_context: { teammate: { kind: 'teammate', createdViaOnboarding: true } },
-    } as Branch;
+    } as unknown as Branch;
     const { input } = setup({
       existingBranchId: 'partial',
       branchById: new Map([['partial', branch]]),
@@ -463,6 +478,26 @@ describe('seedOnboardingTeammate', () => {
     expect(onProgress).toHaveBeenCalledWith({ branchId: 'partial' });
   });
 
+  it('rejects a changed persona before re-linking or prompting the retained filesystem', async () => {
+    const branch = {
+      branch_id: 'partial',
+      board_id: 'board-1',
+      repo_id: 'repo-fw',
+      base_ref: 'template/old',
+      base_remote_url: 'https://github.com/preset-io/agor-teammate.git',
+      custom_context: { teammate: { kind: 'teammate', createdViaOnboarding: true } },
+    } as unknown as Branch;
+    const { input } = setup({
+      existingBranchId: 'partial',
+      branchById: new Map([['partial', branch]]),
+      sourceBranch: 'template/new',
+      sourceRemoteUrl: branch.base_remote_url,
+    });
+    await expect(seedOnboardingTeammate(input)).rejects.toThrow('different starter');
+    expect(startTeammateBootstrapSessionMock).not.toHaveBeenCalled();
+    expect(createTeammateBranchMock).not.toHaveBeenCalled();
+  });
+
   it('does not interpret an unauthorized discovery as absence and create resources', async () => {
     const { input } = setup({
       client: {
@@ -476,10 +511,11 @@ describe('seedOnboardingTeammate', () => {
   it('does not replace a retained session after a forbidden lookup', async () => {
     const branch = {
       branch_id: 'partial',
+      base_ref: 'main',
       board_id: 'board-1',
       repo_id: 'repo-fw',
       custom_context: { teammate: { kind: 'teammate', createdViaOnboarding: true } },
-    } as Branch;
+    } as unknown as Branch;
     const sessionFind = vi.fn(async () => ({ data: [] }));
     const { input } = setup({
       existingBranchId: 'partial',

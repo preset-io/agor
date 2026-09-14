@@ -1,8 +1,10 @@
-import { describe, expect, it } from 'vitest';
+import type { UserPreferences } from '@agor-live/client';
+import { describe, expect, it, vi } from 'vitest';
 import {
   buildDeferredOnboardingPreferences,
   buildRestartedOnboardingPreferences,
   buildResumedOnboardingPreferences,
+  createOnboardingWriteQueue,
   isOnboardingDeferred,
 } from './onboardingLifecycle';
 
@@ -66,5 +68,51 @@ describe('onboarding deferral preferences', () => {
         },
       })
     ).toEqual({ mainBoardId: 'board-main' });
+  });
+});
+
+describe('onboarding owner write queue', () => {
+  it('waits for an issued progress patch before deferral and fences later active writes', async () => {
+    const queue = createOnboardingWriteQueue();
+    const owner = {};
+    let current = true;
+    let release!: () => void;
+    let preferences: UserPreferences = { onboarding: {} };
+    const started = vi.fn();
+    const progress = queue(
+      owner,
+      () => current,
+      async () => {
+        const snapshot = preferences;
+        started();
+        await new Promise<void>((resolve) => {
+          release = resolve;
+        });
+        preferences = { ...snapshot, onboarding: { branchId: 'saved-branch' } };
+      }
+    );
+    await vi.waitFor(() => expect(started).toHaveBeenCalled());
+    current = false; // synchronous dismissal
+    const late = vi.fn(async () => undefined);
+    const skipped = queue(owner, () => current, late);
+    const deferred = queue(
+      owner,
+      () => true,
+      async () => {
+        preferences = buildDeferredOnboardingPreferences(preferences, 'later');
+      }
+    );
+    release();
+    await Promise.all([progress, skipped, deferred]);
+    expect(preferences).toMatchObject({
+      onboarding: { branchId: 'saved-branch', deferredAt: 'later' },
+    });
+    expect(late).not.toHaveBeenCalled();
+  });
+  it('does not run a queued mutation after authenticated owner replacement', async () => {
+    const queue = createOnboardingWriteQueue();
+    const write = vi.fn(async () => undefined);
+    await queue({}, () => false, write);
+    expect(write).not.toHaveBeenCalled();
   });
 });

@@ -1,5 +1,5 @@
 import type { AgorClient, Board, BoardID, Branch, Repo, TeammateConfig } from '@agor-live/client';
-import { isTeammate } from '@agor-live/client';
+import { getTeammateConfig, isTeammate, TEAMMATE_FRAMEWORK_REPO_URL } from '@agor-live/client';
 import { slugify } from '@/utils/repoSlug';
 import { ensureTeammateWelcomeNote } from '@/utils/teammateWelcomeNote';
 
@@ -50,6 +50,39 @@ export interface TeammateCreationDeps {
   shouldContinue?: () => boolean;
 }
 
+/** Reject unsupported sources before allocating resources; keep the daemon allowlist intact. */
+export function validateTeammateSource(sourceRemoteUrl?: string): void {
+  if (sourceRemoteUrl && sourceRemoteUrl !== TEAMMATE_FRAMEWORK_REPO_URL)
+    throw new Error('Choose the canonical Agor starter or the destination’s own branch.');
+}
+
+export function assertRetainedTeammateSource(
+  branch: Branch,
+  sourceBranch: string,
+  sourceRemoteUrl?: string,
+  identity?: Pick<TeammateConfig, 'displayName' | 'emoji'>
+): void {
+  if (
+    branch.base_ref !== sourceBranch ||
+    (branch.base_remote_url || undefined) !== (sourceRemoteUrl || undefined)
+  )
+    throw new Error(
+      'This workspace already uses a different starter. Restore the original persona/source, or explicitly restart setup while keeping the existing board.'
+    );
+  // Bootstrap discovery uses this identity in its title. Changing it during a
+  // retry must not hide an already-running first session and create another.
+  const existing = getTeammateConfig(branch);
+  if (
+    identity &&
+    existing?.displayName &&
+    (existing.displayName !== identity.displayName.trim() ||
+      (existing.emoji || undefined) !== (identity.emoji || undefined))
+  )
+    throw new Error(
+      'This workspace already has a different name or emoji. Restore its original identity to resume the first session, or explicitly restart setup while keeping the existing board.'
+    );
+}
+
 /**
  * Shared teammate creation logic used by CreateDialog (via App.tsx).
  *
@@ -63,6 +96,7 @@ export async function createTeammateBranch(
   const shouldContinue = deps.shouldContinue ?? (() => true);
   if (!shouldContinue()) return null;
 
+  validateTeammateSource(input.sourceRemoteUrl);
   const repo = deps.repoById.get(input.repoId);
   const branchName = input.branchName || `private-${slugify(input.displayName)}`;
   const sourceBranch = input.sourceBranch || repo?.default_branch || 'main';
@@ -110,6 +144,8 @@ export async function createTeammateBranch(
         'A teammate was already created in another destination. Restore that destination to retry.'
       );
   }
+  if (retainedBranch)
+    assertRetainedTeammateSource(retainedBranch, sourceBranch, input.sourceRemoteUrl, input);
   await ensureTeammateWelcomeNote({
     client: deps.client,
     boardId,

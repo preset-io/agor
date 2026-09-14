@@ -1,6 +1,7 @@
+import { TEAMMATE_FRAMEWORK_REPO_URL } from '@agor-live/client';
 import { DownOutlined, InfoCircleOutlined } from '@ant-design/icons';
 import type { FormInstance } from 'antd';
-import { Collapse, Form, Input, Space, Tooltip, Typography, theme } from 'antd';
+import { Collapse, Form, Input, Select, Space, Tooltip, Typography, theme } from 'antd';
 import { FormEmojiPickerInput } from '../EmojiPickerInput/EmojiPickerInput';
 
 export interface TeammateFormFieldsProps {
@@ -16,7 +17,7 @@ export interface TeammateFormFieldsProps {
  * Shared teammate form fields used by the CreateDialog Teammate tab.
  *
  * Renders persona identity and advanced source/branch settings around the
- * caller-owned home selector. Hidden fields retain custom source choices.
+ * caller-owned home selector. Hidden fields retain supported source choices.
  * Does NOT render a <Form> wrapper — the parent owns the form instance.
  */
 export const TeammateFormFields: React.FC<TeammateFormFieldsProps> = ({
@@ -99,10 +100,15 @@ export const TeammateFormFields: React.FC<TeammateFormFieldsProps> = ({
 
                   <Form.Item
                     name="sourceRemoteUrl"
-                    label="Starter source URL"
-                    extra="Leave empty to use the selected destination’s own source branch instead."
+                    label="Starter source"
+                    extra="Choose the canonical Agor starter or a branch already in your destination."
                   >
-                    <Input placeholder="Destination repository" />
+                    <Select
+                      options={[
+                        { value: TEAMMATE_FRAMEWORK_REPO_URL, label: 'Canonical Agor starter' },
+                        { value: '', label: 'Destination’s own branch' },
+                      ]}
+                    />
                   </Form.Item>
                   <Form.Item name="sourceBranch" label="Source Branch">
                     <Input placeholder="main" />

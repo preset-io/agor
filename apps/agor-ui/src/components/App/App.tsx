@@ -73,6 +73,7 @@ import type { AgenticToolOption, CreateRepoOptions } from '../../types';
 import { initializeAudioOnInteraction } from '../../utils/audio';
 import { useThemedMessage } from '../../utils/message';
 import type { OnboardingReopenMode } from '../../utils/onboardingLifecycle';
+import { recoverTeammateFilesystem } from '../../utils/recoverTeammateFilesystem';
 import { resolveQuickStartMcpServerIds } from '../../utils/resolveQuickStartMcpServerIds';
 import { getShellSurfacePath, hasExplicitEntityRouteTarget } from '../../utils/routeTargets';
 import {
@@ -86,7 +87,6 @@ import {
 import { createTeammateBranch } from '../../utils/teammateCreation';
 import { waitForDestinationReady } from '../../utils/teammateDestination';
 import { getTemplateForFrameworkSource } from '../../utils/teammateTemplates';
-import { waitForBranchFilesystemReady } from '../../utils/waitForBranchFilesystemReady';
 import { getUserDefaultConfigurationSource } from '../AgenticToolConfigurationPicker/useAgenticConfigurationSources';
 import { AppHeader } from '../AppHeader';
 import type { BoardTeammatePanelTab } from '../BoardTeammatePanel';
@@ -1123,7 +1123,7 @@ export const App: React.FC<AppProps> = ({
     };
 
     try {
-      await waitForBranchFilesystemReady(client, branch.branch_id);
+      await recoverTeammateFilesystem(client, branch.branch_id, operation.isCurrent);
       if (!operation.isCurrent()) return;
       const sessionsResult = await client
         .service('sessions')

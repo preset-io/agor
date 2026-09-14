@@ -2,6 +2,7 @@ import type { AgenticToolName, AgorClient, Branch, Repo, Session, UserID } from 
 import type { NewSessionConfig, SessionCreationResult } from '../domain/sessionCreation';
 import type { OnboardingIntegrationRecommendation } from './onboardingGoals';
 import type { OnboardingSlackGatewayIntent } from './onboardingSlack';
+import { recoverTeammateFilesystem } from './recoverTeammateFilesystem';
 import {
   resumeTeammateBootstrapSession,
   startTeammateBootstrapSession,
@@ -10,8 +11,11 @@ import {
   buildTeammateBootstrapPrompt,
   buildTeammateFirstSessionTitle,
 } from './teammateBootstrapPrompt';
-import { createTeammateBranch, type TeammateCreationDeps } from './teammateCreation';
-import { waitForBranchFilesystemReady } from './waitForBranchFilesystemReady';
+import {
+  assertRetainedTeammateSource,
+  createTeammateBranch,
+  type TeammateCreationDeps,
+} from './teammateCreation';
 
 export interface SeedOnboardingTeammateInput {
   connectedMcpServerIds?: string[];
@@ -209,6 +213,12 @@ export async function seedOnboardingTeammate(input: SeedOnboardingTeammateInput)
     if (!isCurrentUser()) return {};
 
     if (branch) {
+      assertRetainedTeammateSource(
+        branch,
+        input.sourceBranch || input.frameworkRepo?.default_branch || 'main',
+        input.sourceRemoteUrl,
+        { displayName: teammateName, emoji: input.teammateEmoji }
+      );
       // A refresh or failed final preference patch can leave the durable branch
       // behind while onboarding is still incomplete. Reassert the primary link
       // and continue from it instead of creating a duplicate git workspace.
@@ -249,7 +259,7 @@ export async function seedOnboardingTeammate(input: SeedOnboardingTeammateInput)
     if (!branch) throw new Error('Could not create your teammate workspace. Please retry.');
     await input.onProgress?.({ branchId: branch.branch_id });
     if (!isCurrentUser()) return {};
-    await waitForBranchFilesystemReady(input.client, branch.branch_id);
+    await recoverTeammateFilesystem(input.client, branch.branch_id, isCurrentUser);
     if (!isCurrentUser()) return {};
 
     // Persist the caller's default immediately. The daemon validates session

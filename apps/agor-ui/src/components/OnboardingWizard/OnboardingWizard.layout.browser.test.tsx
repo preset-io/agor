@@ -200,7 +200,7 @@ describe('OnboardingWizard layout (real browser)', () => {
     fireEvent.click(screen.getByText(/skip for now/i).closest('button')!);
     await screen.findByText('Choose your tools');
     fireEvent.click(screen.getByText(/skip for now/i).closest('button')!);
-    await screen.findByText("You're ready to build.");
+    await screen.findByText('Ready to create your board?');
     const closeRect = screen.getByRole('button', { name: 'Close' }).getBoundingClientRect();
     expect(closeRect.top).toBeGreaterThanOrEqual(0);
     expect(closeRect.right).toBeLessThanOrEqual(window.innerWidth);
@@ -250,22 +250,63 @@ describe('OnboardingWizard layout (real browser)', () => {
       await screen.findByText('Where should Ada’s work live?');
       expect(screen.queryByText('Choose a repository you can push to')).not.toBeInTheDocument();
       await page.getByRole('combobox', { name: 'Teammate home repository' }).click();
-      fireEvent.click(await screen.findByText('Private memory'));
+      fireEvent.click(await screen.findByText('Private memory — https://github.com/me/memory'));
       await screen.findByText('Clone ready · Push access unchecked · Visibility unknown');
       await page.getByRole('checkbox').click();
-      const footer = screen
-        .getByRole('button', { name: 'Continue →', exact: true })
-        .getBoundingClientRect();
+      const footer = screen.getByRole('button', { name: 'Continue →' }).getBoundingClientRect();
       expect(footer.bottom).toBeLessThanOrEqual(height);
       await page.screenshot({ path: `__screenshots__/2327-home-${width}x${height}.png` });
       await page.getByRole('button', { name: /Back$/ }).click();
       const selected = await screen.findByRole('button', {
         name: 'Competitive Analyst',
-        exact: true,
       });
       await waitFor(() => expect(selected).toHaveFocus());
       expect(selected).toHaveAttribute('aria-pressed', 'true');
       expect(screen.getByLabelText('Teammate name')).toHaveValue('Ada');
+      cleanup();
+    }
+  });
+
+  it('guides a newcomer directly from personas to create and register a home', async () => {
+    for (const [width, height] of [
+      [1366, 768],
+      [320, 568],
+    ]) {
+      await page.viewport(width, height);
+      renderWizardAt('workspace');
+      await page.getByLabelText('Teammate name').fill('Ada');
+      await page.getByRole('button', { name: 'Competitive Analyst', exact: true }).click();
+      await page.getByRole('button', { name: 'Continue →', exact: true }).click();
+      await screen.findByText(/No usable home yet/);
+      expect(
+        screen.queryByRole('combobox', { name: 'Teammate home repository' })
+      ).not.toBeInTheDocument();
+      const create = screen.getByRole('link', { name: /Create a private repository/ });
+      const url = screen.getByLabelText('Repository URL');
+      expect(create.getBoundingClientRect().top).toBeLessThan(url.getBoundingClientRect().top);
+      expect(getComputedStyle(url).visibility).toBe('visible');
+      expect(screen.getByText('Add a repository').closest('[aria-expanded]')).toHaveAttribute(
+        'aria-expanded',
+        'true'
+      );
+      await page.getByRole('heading', { name: 'Where should Ada’s work live?' }).hover();
+      await waitFor(() => expect(screen.queryByRole('tooltip')).not.toBeInTheDocument());
+      await waitFor(() =>
+        expect(create.getBoundingClientRect().bottom).toBeLessThan(
+          screen.getByText('Continue →').closest('button')!.getBoundingClientRect().top
+        )
+      );
+      await page.screenshot({ path: `__screenshots__/2327-guided-home-${width}x${height}.png` });
+      await page.getByText('GitHub token setup (if needed)', { exact: true }).click();
+      expect(screen.getByRole('link', { name: /token creation instructions/ })).toHaveAttribute(
+        'href',
+        expect.stringContaining('https://docs.github.com/')
+      );
+      await page.getByRole('button', { name: /Back$/ }).click();
+      expect(await screen.findByRole('button', { name: 'Competitive Analyst' })).toHaveAttribute(
+        'aria-pressed',
+        'true'
+      );
       cleanup();
     }
   });
@@ -557,7 +598,7 @@ describe('OnboardingWizard layout (real browser)', () => {
     fireEvent.click(screen.getByText(/^continue →/i).closest('button') as HTMLElement);
 
     // done — teammate-centric success screen.
-    await screen.findByText('Rusty is ready.');
+    await screen.findByText('Ready to create Rusty?');
 
     // (1) Recap line is gone: neither the provider nor the goal is echoed here.
     expect(screen.queryByText('Claude')).toBeNull();

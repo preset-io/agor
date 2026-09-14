@@ -332,6 +332,7 @@ export interface MessagesServiceImpl
  * Branches service with custom methods (server-side implementation)
  */
 export interface BranchesServiceImpl extends Service<Branch, Partial<Branch>, FeathersParams> {
+  retryFilesystem(id: BranchID, params?: FeathersParams): Promise<Branch>;
   updateEnvironment(
     id:
       | BranchID
