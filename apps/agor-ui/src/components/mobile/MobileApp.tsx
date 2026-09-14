@@ -257,8 +257,6 @@ export const MobileApp: React.FC<MobileAppProps> = ({
     [effectiveBoardId, navigate, askPrimaryAssistant]
   );
 
-  const openMore = useCallback(() => setMoreOpen(true), []);
-
   return (
     <Layout style={{ height: '100dvh' }}>
       <div
@@ -279,7 +277,6 @@ export const MobileApp: React.FC<MobileAppProps> = ({
                 sessionById={sessionById}
                 branchById={branchById}
                 currentUser={user}
-                onOpenMore={openMore}
               />
             }
           />
@@ -294,7 +291,6 @@ export const MobileApp: React.FC<MobileAppProps> = ({
                 boardObjectsByBoardId={boardObjectsByBoardId}
                 cardById={cardById}
                 artifactById={artifactById}
-                onMenuClick={openMore}
                 onOpenBranch={(branchId, tab) => setBranchEditor({ branchId, tab })}
                 onGiveFirstTask={() => void askPrimaryAssistant()}
                 firstTaskAssistantName={
@@ -331,7 +327,6 @@ export const MobileApp: React.FC<MobileAppProps> = ({
                 branchById={branchById}
                 userById={userById}
                 currentUser={user}
-                onMenuClick={openMore}
                 onSendComment={onSendComment}
                 onReplyComment={onReplyComment}
                 onResolveComment={onResolveComment}
