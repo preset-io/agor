@@ -1,13 +1,13 @@
 import {
   AppstoreOutlined,
   CommentOutlined,
+  HomeOutlined,
   MenuOutlined,
-  MessageOutlined,
   RobotOutlined,
 } from '@ant-design/icons';
-import { Badge, Button, Typography, theme } from 'antd';
+import { Badge, Button, Flex, Typography, theme } from 'antd';
 
-export type MobileTab = 'board' | 'sessions' | 'ask' | 'comments' | 'more';
+export type MobileTab = 'home' | 'board' | 'ask' | 'comments' | 'more';
 
 export interface MobileTabBarProps {
   activeTab: MobileTab | null;
@@ -30,10 +30,10 @@ interface TabDef {
 const TOUCH_TARGET = 44;
 
 /**
- * Persistent bottom tab bar (thumb zone): Board · Sessions · [Ask primary
- * assistant] · Comments · More. The center Ask is a real elevated primary
- * Button, not a floating FAB. Safe-area aware; the active tab is marked by
- * color AND weight (never color alone).
+ * Floating bottom tab bar (thumb zone): Home . Board . [Ask primary assistant]
+ * . Comments . More. The active destination expands into an icon+label pill;
+ * the others stay icon-only. Ask is the raised center action. Safe-area aware;
+ * active state is marked by the pill + colour + aria-current (not colour alone).
  */
 export const MobileTabBar: React.FC<MobileTabBarProps> = ({
   activeTab,
@@ -44,12 +44,11 @@ export const MobileTabBar: React.FC<MobileTabBarProps> = ({
 }) => {
   const { token } = theme.useToken();
   const askActive = activeTab === 'ask';
-  // Size + lift derived from tokens (not a literal). ~half the circle clears the bar.
   const askSize = token.controlHeightLG + token.padding;
 
   const leftTabs: TabDef[] = [
+    { key: 'home', label: 'Home', icon: <HomeOutlined />, badge: sessionsBadge },
     { key: 'board', label: 'Board', icon: <AppstoreOutlined /> },
-    { key: 'sessions', label: 'Sessions', icon: <MessageOutlined />, badge: sessionsBadge },
   ];
   const rightTabs: TabDef[] = [
     { key: 'comments', label: 'Comments', icon: <CommentOutlined />, badge: commentsBadge },
@@ -70,13 +69,13 @@ export const MobileTabBar: React.FC<MobileTabBarProps> = ({
           minWidth: 0,
           minHeight: TOUCH_TARGET,
           display: 'flex',
-          flexDirection: 'column',
           alignItems: 'center',
           justifyContent: 'center',
-          gap: token.sizeXXS,
-          padding: token.sizeXXS,
+          gap: token.marginXXS,
+          paddingInline: token.paddingXS,
           border: 'none',
-          background: 'transparent',
+          background: active ? token.colorPrimaryBg : 'transparent',
+          borderRadius: token.borderRadiusLG,
           cursor: 'pointer',
           color: active ? token.colorPrimary : token.colorTextSecondary,
         }}
@@ -86,11 +85,13 @@ export const MobileTabBar: React.FC<MobileTabBarProps> = ({
             {tab.icon}
           </span>
         </Badge>
-        <Typography.Text
-          style={{ fontSize: token.fontSizeSM, color: 'inherit', fontWeight: active ? 600 : 400 }}
-        >
-          {tab.label}
-        </Typography.Text>
+        {active && (
+          <Typography.Text
+            style={{ fontSize: token.fontSizeSM, color: 'inherit', fontWeight: 600 }}
+          >
+            {tab.label}
+          </Typography.Text>
+        )}
       </button>
     );
   };
@@ -100,66 +101,62 @@ export const MobileTabBar: React.FC<MobileTabBarProps> = ({
       aria-label="Primary"
       style={{
         flexShrink: 0,
-        display: 'flex',
-        alignItems: 'center',
-        borderTop: `${token.lineWidth}px solid ${token.colorBorderSecondary}`,
-        background: token.colorBgContainer,
-        paddingBottom: 'env(safe-area-inset-bottom)',
+        paddingInline: token.padding,
+        paddingTop: token.paddingXS,
+        paddingBottom: `calc(${token.paddingXS}px + env(safe-area-inset-bottom))`,
       }}
     >
-      {leftTabs.map(renderTab)}
-
-      <div
+      <Flex
+        align="center"
         style={{
-          flex: 1,
-          minWidth: 0,
-          minHeight: TOUCH_TARGET,
-          display: 'flex',
-          flexDirection: 'column',
-          alignItems: 'center',
-          justifyContent: 'center',
-          gap: token.sizeXXS,
+          borderRadius: token.borderRadiusLG * 2,
+          background: token.colorBgElevated,
+          border: `${token.lineWidth}px solid ${token.colorBorderSecondary}`,
+          boxShadow: token.boxShadowSecondary,
+          paddingInline: token.paddingXS,
+          minHeight: TOUCH_TARGET + token.paddingXS * 2,
         }}
       >
-        <Button
-          type="primary"
-          shape="circle"
-          aria-label="Ask your primary assistant"
-          aria-current={askActive ? 'page' : undefined}
-          onClick={() => onSelect('ask')}
-          style={{
-            width: askSize,
-            height: askSize,
-            // Lift so ~half the circle clears the bar.
-            marginTop: -askSize / 2,
-            // Ring separates the FAB from the bar (reads even in dark, where the
-            // shadow token is near-invisible), plus the elevation shadow token.
-            boxShadow: `0 0 0 ${token.lineWidthBold * 2}px ${token.colorBgContainer}, ${token.boxShadow}`,
-            fontSize: token.fontSizeHeading3,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-          }}
-        >
-          {askEmoji ? (
-            <span style={{ lineHeight: 1 }}>{askEmoji}</span>
-          ) : (
-            <RobotOutlined style={{ color: token.colorTextLightSolid }} />
-          )}
-        </Button>
-        <Typography.Text
-          style={{
-            fontSize: token.fontSizeSM,
-            lineHeight: 1,
-            color: askActive ? token.colorPrimary : token.colorTextSecondary,
-            fontWeight: askActive ? 600 : 400,
-          }}
-        >
-          Ask
-        </Typography.Text>
-      </div>
+        {leftTabs.map(renderTab)}
 
-      {rightTabs.map(renderTab)}
+        <div
+          style={{
+            flex: 1,
+            minWidth: 0,
+            display: 'flex',
+            justifyContent: 'center',
+            alignItems: 'center',
+          }}
+        >
+          <Button
+            type="primary"
+            shape="circle"
+            aria-label="Ask your primary assistant"
+            aria-current={askActive ? 'page' : undefined}
+            onClick={() => onSelect('ask')}
+            style={{
+              width: askSize,
+              height: askSize,
+              // Lift so ~half the circle clears the bar.
+              marginTop: -askSize / 2,
+              // Ring separates the FAB from the bar (reads even in dark) + shadow.
+              boxShadow: `0 0 0 ${token.lineWidthBold * 2}px ${token.colorBgElevated}, ${token.boxShadow}`,
+              fontSize: token.fontSizeHeading3,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+            }}
+          >
+            {askEmoji ? (
+              <span style={{ lineHeight: 1 }}>{askEmoji}</span>
+            ) : (
+              <RobotOutlined style={{ color: token.colorTextLightSolid }} />
+            )}
+          </Button>
+        </div>
+
+        {rightTabs.map(renderTab)}
+      </Flex>
     </nav>
   );
 };

@@ -118,9 +118,15 @@ describe('MobileApp branch actions', () => {
     // Regression: `/m/sessions` must not be classified as `/m/session/` detail,
     // which would hide the whole nav shell.
     expect(screen.getByRole('button', { name: 'Ask your primary assistant' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Home' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Board' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Sessions' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'More' })).toBeInTheDocument();
+  });
+
+  it('lands on Home with the tab bar at /m', () => {
+    renderMobileApp('/m');
+    expect(screen.getByRole('button', { name: 'Ask your primary assistant' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Home' })).toHaveAttribute('aria-current', 'page');
   });
 
   it('hides the tab bar on a full-screen session detail route', () => {
