@@ -1267,7 +1267,7 @@ function AppContent() {
           );
         });
       }
-      return { sessionId: outcome.session.session_id };
+      return { sessionId: outcome.session.session_id, initialization: outcome.initialization };
     }
 
     if (!shouldContinue()) return null;

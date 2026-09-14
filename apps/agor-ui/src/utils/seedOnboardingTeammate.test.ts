@@ -1,12 +1,20 @@
-import type { Branch, Repo, Session, UserID } from '@agor-live/client';
+import { type Task, TaskStatus } from '@agor/core/types';
+import type { AgorClient, Branch, Repo, Session, UserID } from '@agor-live/client';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { runSessionCreationStages } from '../domain/sessionCreation';
 import { ONBOARDING_INTEGRATION_RECOMMENDATIONS } from './onboardingGoals';
 import { type SeedOnboardingTeammateInput, seedOnboardingTeammate } from './seedOnboardingTeammate';
-import { startTeammateBootstrapSession } from './startTeammateBootstrapSession';
+import {
+  resumeTeammateBootstrapSession,
+  startTeammateBootstrapSession,
+} from './startTeammateBootstrapSession';
 import { createTeammateBranch } from './teammateCreation';
 
 // These are the two collaborators the completion path must actually invoke —
 // the original bug meant neither ever ran (the fallback fired instead).
+vi.mock('./waitForBranchFilesystemReady', () => ({
+  waitForBranchFilesystemReady: vi.fn(async () => undefined),
+}));
 vi.mock('./recoverTeammateFilesystem', () => ({
   recoverTeammateFilesystem: vi.fn(async () => undefined),
 }));
@@ -599,4 +607,147 @@ describe('seedOnboardingTeammate', () => {
     expect(startTeammateBootstrapSessionMock).not.toHaveBeenCalled();
     expect(onWarn).not.toHaveBeenCalled();
   });
+});
+
+describe('initial onboarding bootstrap status and recovery integration', () => {
+  it.each(Object.values(TaskStatus))(
+    'handles initial %s using the real creation/bootstrap stages',
+    async (status) => {
+      vi.clearAllMocks();
+      const actual = await vi.importActual<typeof import('./startTeammateBootstrapSession')>(
+        './startTeammateBootstrapSession'
+      );
+      startTeammateBootstrapSessionMock.mockImplementationOnce(
+        actual.startTeammateBootstrapSession
+      );
+      const branch = {
+        branch_id: 'branch-1',
+        board_id: 'board-1',
+        repo_id: 'repo-fw',
+        base_ref: 'main',
+        custom_context: {
+          teammate: {
+            kind: 'teammate',
+            createdViaOnboarding: true,
+            displayName: 'Rusty',
+            emoji: '🤖',
+          },
+        },
+      } as unknown as Branch;
+      const session = {
+        session_id: 'session-1',
+        branch_id: branch.branch_id,
+        created_by: USER_ID,
+      } as unknown as Session;
+      let currentTask: Task | undefined;
+      const initialize = vi.fn<AgorClient['sessions']['initialize']>(async (_id, options) => {
+        currentTask = {
+          task_id: 'initial-task',
+          session_id: session.session_id,
+          status,
+          full_prompt: options.prompt,
+        } as Task;
+        return { sessionId: session.session_id, task: currentTask };
+      });
+      const prompt = vi.fn<AgorClient['sessions']['prompt']>(async (_id, text) => {
+        currentTask = {
+          ...currentTask!,
+          task_id: 'retry-task',
+          status: TaskStatus.DISPATCHING,
+          full_prompt: text,
+        } as Task;
+        return currentTask;
+      });
+      const findTasks = vi.fn(async () => ({ data: currentTask ? [currentTask] : [] }));
+      const createSession = vi.fn(async () => session);
+      const { input } = setup();
+      const baseClient = input.client!;
+      input.client = {
+        sessions: { initialize, prompt },
+        service: (name: string) => {
+          if (name === 'tasks') return { find: findTasks };
+          if (name === 'sessions')
+            return { find: async () => ({ data: [] }), get: async () => session };
+          return baseClient.service(name);
+        },
+      } as unknown as AgorClient;
+      input.onCreateSession = vi.fn(async (config) => {
+        const outcome = await runSessionCreationStages({
+          createSession,
+          onSessionCreated: vi.fn(),
+          initialPrompt: config.initialPrompt ?? '',
+          initializeSession: (created, text) =>
+            initialize(created.session_id, { expectedUserId: USER_ID, prompt: text }),
+          shouldContinue: () => true,
+        });
+        if (outcome.status !== 'complete') throw new Error('Unexpected creation failure');
+        return { sessionId: outcome.session.session_id, initialization: outcome.initialization };
+      });
+      input.onProgress = vi.fn(async (ids) => {
+        input.existingBranchId = ids.branchId;
+        input.branchById.set(branch.branch_id, branch);
+        if (ids.sessionId) input.existingSessionId = ids.sessionId;
+      });
+      createTeammateBranchMock.mockResolvedValueOnce(branch);
+      const complete = vi.fn();
+      const finish = async () => {
+        complete(await seedOnboardingTeammate(input));
+      };
+      const successful = ['running', 'completed', 'awaiting_input', 'awaiting_permission'].includes(
+        status
+      );
+      if (successful) {
+        await finish();
+      } else {
+        await expect(finish()).rejects.toThrow('initialization is pending or failed');
+        expect(complete).not.toHaveBeenCalled();
+        expect(input.existingSessionId).toBe('session-1');
+        expect(currentTask?.task_id).toBe('initial-task');
+        if (['created', 'queued', 'dispatching', 'stopping'].includes(status)) {
+          vi.mocked(resumeTeammateBootstrapSession).mockImplementationOnce(
+            actual.resumeTeammateBootstrapSession
+          );
+          await expect(finish()).rejects.toThrow('pending or stopping');
+          expect(prompt).not.toHaveBeenCalled();
+          expect(currentTask?.task_id).toBe('initial-task');
+          currentTask = { ...currentTask!, status: TaskStatus.FAILED };
+        }
+        // An explicit retry of a terminal failure admits exactly one replacement task.
+        vi.mocked(resumeTeammateBootstrapSession).mockImplementationOnce(
+          actual.resumeTeammateBootstrapSession
+        );
+        await expect(finish()).rejects.toThrow('recovery is pending or failed');
+        expect(complete).not.toHaveBeenCalled();
+        expect(prompt).toHaveBeenCalledExactlyOnceWith('session-1', currentTask?.full_prompt, {
+          permissionMode: undefined,
+        });
+        expect(currentTask?.task_id).toBe('retry-task');
+        vi.mocked(resumeTeammateBootstrapSession).mockImplementationOnce(
+          actual.resumeTeammateBootstrapSession
+        );
+        await expect(finish()).rejects.toThrow('pending or stopping');
+        expect(prompt).toHaveBeenCalledTimes(1);
+        currentTask = { ...currentTask!, status: TaskStatus.RUNNING };
+        vi.mocked(resumeTeammateBootstrapSession).mockImplementationOnce(
+          actual.resumeTeammateBootstrapSession
+        );
+        await finish();
+        expect(currentTask.task_id).toBe('retry-task');
+      }
+      expect(complete).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ branchId: 'branch-1', sessionId: 'session-1' })
+      );
+      expect(createTeammateBranchMock).toHaveBeenCalledTimes(1);
+      expect(createSession).toHaveBeenCalledTimes(1);
+      expect(initialize).toHaveBeenCalledExactlyOnceWith(
+        'session-1',
+        expect.objectContaining({ expectedUserId: USER_ID, prompt: currentTask?.full_prompt })
+      );
+      if (successful) expect(prompt).not.toHaveBeenCalled();
+      else
+        expect(findTasks).toHaveBeenCalledWith({
+          query: { session_id: 'session-1', $sort: { created_at: -1 }, $limit: 1 },
+        });
+    }
+  );
 });

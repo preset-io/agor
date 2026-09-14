@@ -1,10 +1,21 @@
 import { TaskStatus } from '@agor/core/types';
 import type { AgorClient } from '@agor-live/client';
+import type { SessionCreationResult } from '../domain/sessionCreation';
 import { waitForBranchFilesystemReady } from './waitForBranchFilesystemReady';
+
+/** Launch confirmation, not durable queue/dispatch admission or full task completion. */
+function isBootstrapTaskStarted(status: TaskStatus | undefined): boolean {
+  return (
+    status === TaskStatus.RUNNING ||
+    status === TaskStatus.COMPLETED ||
+    status === TaskStatus.AWAITING_INPUT ||
+    status === TaskStatus.AWAITING_PERMISSION
+  );
+}
 
 export interface StartTeammateBootstrapSessionInput<
   TSessionConfig,
-  TInitialization extends { sessionId: string; initializationFailed?: true },
+  TInitialization extends SessionCreationResult,
 > {
   client: AgorClient | null;
   branchId: string;
@@ -27,7 +38,7 @@ export interface StartTeammateBootstrapSessionInput<
  */
 export async function startTeammateBootstrapSession<
   TSessionConfig,
-  TInitialization extends { sessionId: string; initializationFailed?: true },
+  TInitialization extends SessionCreationResult,
 >({
   client,
   branchId,
@@ -55,6 +66,15 @@ export async function startTeammateBootstrapSession<
   if (initialization.initializationFailed)
     throw new Error(
       'The first teammate session could not start. Your workspace is saved; retry setup.'
+    );
+  const started = initialization.initialization;
+  if (
+    started?.sessionId !== initialization.sessionId ||
+    started.task?.session_id !== initialization.sessionId ||
+    !isBootstrapTaskStarted(started.task?.status)
+  )
+    throw new Error(
+      'First-session initialization is pending or failed. The session is saved; retry setup.'
     );
 
   return initialization;
@@ -84,12 +104,8 @@ export async function resumeTeammateBootstrapSession(
     if (tasks.some((task) => task.session_id !== sessionId))
       throw new Error('The retained session returned unexpected task data.');
     const task = tasks[0];
+    if (isBootstrapTaskStarted(task.status)) return;
     switch (task.status) {
-      case TaskStatus.COMPLETED:
-      case TaskStatus.RUNNING:
-      case TaskStatus.AWAITING_INPUT:
-      case TaskStatus.AWAITING_PERMISSION:
-        return;
       case TaskStatus.CREATED:
       case TaskStatus.QUEUED:
       case TaskStatus.DISPATCHING:
@@ -108,7 +124,7 @@ export async function resumeTeammateBootstrapSession(
           permissionMode: options.permissionMode,
         });
         if (!shouldContinue()) throw new Error('Teammate setup was cancelled.');
-        if (retried.status !== TaskStatus.RUNNING && retried.status !== TaskStatus.COMPLETED)
+        if (retried.session_id !== sessionId || !isBootstrapTaskStarted(retried.status))
           throw new Error(
             'First-session recovery is pending or failed. Wait and retry setup; the retained session is saved.'
           );
@@ -124,13 +140,8 @@ export async function resumeTeammateBootstrapSession(
     throw new Error('Initialization returned an unexpected session.');
   if (
     options.prompt &&
-    (!initialized.task ||
-      ![
-        TaskStatus.RUNNING,
-        TaskStatus.COMPLETED,
-        TaskStatus.AWAITING_INPUT,
-        TaskStatus.AWAITING_PERMISSION,
-      ].some((status) => status === initialized.task?.status))
+    (initialized.task?.session_id !== sessionId ||
+      !isBootstrapTaskStarted(initialized.task?.status))
   )
     throw new Error(
       'First-session initialization is pending or failed. The session is saved; retry setup.'

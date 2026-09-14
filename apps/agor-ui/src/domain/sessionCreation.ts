@@ -1,3 +1,4 @@
+import type { SessionInitializationResult } from '@agor/core/api';
 import type {
   CodexApprovalPolicy,
   CodexSandboxMode,
@@ -30,12 +31,20 @@ export interface SessionCreationResult {
   sessionId: string;
   /** The durable session exists, but its first prompt was not confirmed admitted. */
   initializationFailed?: true;
+  /** Preserve task identity/status; a resolved request does not prove executor launch. */
+  initialization?: SessionInitializationResult;
 }
 
 export type SessionCreationStageResult =
   | { status: 'cancelled' }
   | { status: 'create-failed'; error: unknown }
-  | { status: 'complete'; session: Session; prompt: string }
+  | {
+      /** Request stages completed, not necessarily the executor launch or task. */
+      status: 'complete';
+      session: Session;
+      prompt: string;
+      initialization: SessionInitializationResult;
+    }
   | { status: 'initialization-failed'; session: Session; prompt: string; error: unknown };
 
 export interface SessionCreationStages {
@@ -44,7 +53,7 @@ export interface SessionCreationStages {
   onSessionCreated: (session: Session) => void;
   initialPrompt: string;
   preparePrompt?: (session: Session, prompt: string) => Promise<string>;
-  initializeSession: (session: Session, prompt: string) => Promise<unknown>;
+  initializeSession: (session: Session, prompt: string) => Promise<SessionInitializationResult>;
   /** Must synchronously validate both caller identity and auth generation. */
   shouldContinue: () => boolean;
 }
@@ -81,9 +90,9 @@ export async function runSessionCreationStages({
     }
 
     if (!shouldContinue()) return { status: 'cancelled' };
-    await initializeSession(session, prompt);
+    const initialization = await initializeSession(session, prompt);
     if (!shouldContinue()) return { status: 'cancelled' };
-    return { status: 'complete', session, prompt };
+    return { status: 'complete', session, prompt, initialization };
   } catch (error) {
     return shouldContinue()
       ? { status: 'initialization-failed', session, prompt, error }
