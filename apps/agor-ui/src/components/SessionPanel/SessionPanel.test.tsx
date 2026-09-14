@@ -467,3 +467,48 @@ describe('SessionPanel historical runtime handling and terminal actions', () => 
     ).toBeVisible();
   });
 });
+
+describe.each([390, 1280])('shared Stop path at %ipx', (width) => {
+  afterEach(() => {
+    reactive.tasks = [];
+    vi.restoreAllMocks();
+  });
+
+  it('sends the canonical task-fenced Stop once and surfaces permission denial without fallback', async () => {
+    vi.spyOn(window, 'innerWidth', 'get').mockReturnValue(width);
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const taskId = '018f0000-0000-7000-8000-000000000010';
+    reactive.tasks = [
+      { task_id: taskId, session_id: session.session_id, status: 'running' } as Task,
+    ];
+    let rejectStop!: (error: Error) => void;
+    const create = vi.fn(
+      () =>
+        new Promise<never>((_, reject) => {
+          rejectStop = reject;
+        })
+    );
+    const service = vi.fn((path: string) => ({
+      create: path === `sessions/${session.session_id}/stop` ? create : vi.fn(),
+      find: vi.fn().mockResolvedValue({ data: [] }),
+      on: vi.fn(),
+      off: vi.fn(),
+    }));
+    renderPanel({
+      client: { io: stopIo(), service } as unknown as AgorClient,
+      activeSession: { ...session, status: 'running', agentic_tool: 'codex' },
+    });
+    // Text lookup avoids jsdom's CSS-variable shorthand bug in accessible-name
+    // calculation; real-browser QA covers the visible button and touch target.
+    const stop = screen.getByText('Stop').closest('button')!;
+    fireEvent.click(stop);
+    fireEvent.click(stop);
+    expect(stop).toBeDisabled();
+    expect(create).toHaveBeenCalledExactlyOnceWith({ expected_task_id: taskId });
+    expect(service).toHaveBeenCalledWith(`sessions/${session.session_id}/stop`);
+    rejectStop(Object.assign(new Error('Not allowed to stop this session'), { code: 403 }));
+    await screen.findByText('Failed to stop execution. You can try again.');
+    expect(create).toHaveBeenCalledOnce();
+    await waitFor(() => expect(stop).toBeEnabled());
+  });
+});

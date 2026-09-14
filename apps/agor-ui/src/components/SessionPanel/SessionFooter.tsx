@@ -170,6 +170,12 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
   // bar and "More" opens a bottom sheet instead of a popover, so the full
   // controls stay reachable on a phone without a separate lossy composer.
   const isMobile = useIsMobileViewport();
+  // Leave desktop pin preferences intact; secondary actions remain in More on
+  // phones so they cannot push Stop/Queue outside the viewport.
+  const actionSize = isMobile ? 'middle' : 'small';
+  const touchActionStyle: React.CSSProperties | undefined = isMobile
+    ? { minHeight: 44, minWidth: 44 }
+    : undefined;
   const [moreOpen, setMoreOpen] = React.useState(false);
   const moreContentRef = React.useRef<HTMLFieldSetElement>(null);
   const getMorePopupContainer = React.useCallback(
@@ -288,7 +294,7 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
     alignItems: 'center',
     gap: 8,
     padding: '0 6px 0 12px',
-    height: 32,
+    height: isMobile ? 44 : 32,
   };
 
   const moreContent = (
@@ -296,7 +302,13 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
       ref={moreContentRef}
       aria-label="More options"
       onMouseDown={(event) => event.stopPropagation()}
-      style={{ width: isMobile ? '100%' : 260, padding: '6px 0', margin: 0, border: 0 }}
+      style={{
+        width: isMobile ? '100%' : 260,
+        minWidth: 0,
+        padding: '6px 0',
+        margin: 0,
+        border: 0,
+      }}
     >
       {/* === Section: Settings === */}
       <div style={sectionHeaderStyle}>Settings</div>
@@ -309,6 +321,7 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
           paddingTop: 6,
           paddingBottom: 6,
           alignItems: 'flex-start',
+          flexWrap: isMobile ? 'wrap' : undefined,
           cursor: 'default',
         }}
       >
@@ -331,7 +344,8 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
         </Typography.Text>
         <div
           style={{
-            maxWidth: 160,
+            maxWidth: isMobile ? '100%' : 160,
+            width: isMobile ? '100%' : undefined,
             flexShrink: 0,
             pointerEvents: managedByPreset ? 'none' : undefined,
             opacity: managedByPreset ? 0.65 : undefined,
@@ -348,7 +362,7 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
             client={client}
             branchId={session.branch_id}
             catalogEnabled={session.created_by === currentUserId}
-            compact
+            compact={!isMobile}
             getPopupContainer={getMorePopupContainer}
           />
         </div>
@@ -1335,7 +1349,10 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
         flexShrink: 0,
         background: token.colorBgContainer,
         borderTop: `1px solid ${token.colorBorder}`,
-        padding: `${token.sizeUnit * 2}px ${token.sizeUnit * 6}px ${token.sizeUnit * 3}px`,
+        padding: `${token.sizeUnit * 2}px ${isMobile ? token.padding : token.sizeUnit * 6}px ${token.sizeUnit * 3}px`,
+        paddingBottom: isMobile
+          ? `max(${token.sizeUnit * 3}px, env(safe-area-inset-bottom))`
+          : undefined,
         marginLeft: -token.sizeUnit * 6,
         marginRight: -token.sizeUnit * 6,
       }}
@@ -1434,7 +1451,8 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
             {/* Model chip */}
             {modelName && (pinnedChips.includes('model') || isMobile) && (
               <Popover
-                trigger={managedByPreset ? [] : 'click'}
+                trigger={managedByPreset || isMobile ? [] : 'click'}
+                open={isMobile ? false : undefined}
                 placement="topLeft"
                 title="Model"
                 overlayStyle={{ maxWidth: 'none' }}
@@ -1459,21 +1477,36 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
                   </div>
                 }
               >
-                <Tag
-                  icon={<RobotOutlined />}
-                  color="default"
-                  truncate
-                  title={modelName}
-                  style={{
-                    cursor: managedByPreset ? 'default' : 'pointer',
-                    height: 22,
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                  }}
-                  data-testid="model-chip"
-                >
-                  {modelName}
-                </Tag>
+                {isMobile ? (
+                  <Button
+                    icon={<RobotOutlined />}
+                    onClick={() => setMoreOpen(true)}
+                    aria-label={`Model and session controls: ${modelName}`}
+                    title={modelName}
+                    style={{ ...touchActionStyle, maxWidth: '100%' }}
+                    data-testid="model-chip"
+                  >
+                    <Typography.Text ellipsis style={{ minWidth: 0 }}>
+                      {modelName}
+                    </Typography.Text>
+                  </Button>
+                ) : (
+                  <Tag
+                    icon={<RobotOutlined />}
+                    color="default"
+                    truncate
+                    title={modelName}
+                    style={{
+                      cursor: managedByPreset ? 'default' : 'pointer',
+                      height: 22,
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                    }}
+                    data-testid="model-chip"
+                  >
+                    {modelName}
+                  </Tag>
+                )}
               </Popover>
             )}
 
@@ -1647,7 +1680,8 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
                 }
               >
                 <Button
-                  size="small"
+                  size={actionSize}
+                  style={touchActionStyle}
                   type="text"
                   aria-label="Attach files"
                   title="Attach files"
@@ -1658,7 +1692,7 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
                 />
               </Tooltip>
             )}
-            {pinnedItems.includes('advanced-upload') && (
+            {!isMobile && pinnedItems.includes('advanced-upload') && (
               <Tooltip
                 title={
                   composerAttachmentUploading
@@ -1669,7 +1703,8 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
                 }
               >
                 <Button
-                  size="small"
+                  size={actionSize}
+                  style={touchActionStyle}
                   type="text"
                   aria-label="Advanced upload"
                   title="Advanced upload"
@@ -1679,49 +1714,59 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
                 />
               </Tooltip>
             )}
-            {pinnedItems.includes('fork') && toolCaps?.supportsSessionFork !== false && (
-              <Tooltip title={connectionDisabled ? 'Disconnected from daemon' : 'Fork Session'}>
-                <Button
-                  size="small"
-                  type="text"
-                  aria-label="Fork session"
-                  icon={<ForkOutlined />}
-                  onClick={onFork}
-                  disabled={forkDisabled}
-                  data-testid="fork-bar-btn"
-                />
-              </Tooltip>
-            )}
+            {!isMobile &&
+              pinnedItems.includes('fork') &&
+              toolCaps?.supportsSessionFork !== false && (
+                <Tooltip title={connectionDisabled ? 'Disconnected from daemon' : 'Fork Session'}>
+                  <Button
+                    size={actionSize}
+                    style={touchActionStyle}
+                    type="text"
+                    aria-label="Fork session"
+                    icon={<ForkOutlined />}
+                    onClick={onFork}
+                    disabled={forkDisabled}
+                    data-testid="fork-bar-btn"
+                  />
+                </Tooltip>
+              )}
             {/* Dynamically pinned items */}
-            {pinnedItems.includes('btw-fork') && toolCaps?.supportsSessionFork !== false && (
-              <Tooltip title="BTW fork">
-                <Button
-                  size="small"
-                  type="text"
-                  aria-label="Ask side question via BTW fork"
-                  icon={<QuestionCircleOutlined />}
-                  onClick={onBtwSend}
-                  disabled={btwForkDisabled}
-                  data-testid="btw-fork-bar-btn"
-                />
-              </Tooltip>
-            )}
-            {pinnedItems.includes('spawn') && toolCaps?.supportsChildSpawn !== false && (
-              <Tooltip title="Spawn subsession">
-                <Button
-                  size="small"
-                  type="text"
-                  aria-label="Spawn subsession"
-                  icon={<BranchesOutlined />}
-                  onClick={onSpawnOpen}
-                  disabled={spawnDisabled}
-                />
-              </Tooltip>
-            )}
+            {!isMobile &&
+              pinnedItems.includes('btw-fork') &&
+              toolCaps?.supportsSessionFork !== false && (
+                <Tooltip title="BTW fork">
+                  <Button
+                    size={actionSize}
+                    style={touchActionStyle}
+                    type="text"
+                    aria-label="Ask side question via BTW fork"
+                    icon={<QuestionCircleOutlined />}
+                    onClick={onBtwSend}
+                    disabled={btwForkDisabled}
+                    data-testid="btw-fork-bar-btn"
+                  />
+                </Tooltip>
+              )}
+            {!isMobile &&
+              pinnedItems.includes('spawn') &&
+              toolCaps?.supportsChildSpawn !== false && (
+                <Tooltip title="Spawn subsession">
+                  <Button
+                    size={actionSize}
+                    style={touchActionStyle}
+                    type="text"
+                    aria-label="Spawn subsession"
+                    icon={<BranchesOutlined />}
+                    onClick={onSpawnOpen}
+                    disabled={spawnDisabled}
+                  />
+                </Tooltip>
+              )}
             {isMobile ? (
               <Tooltip title="More options">
                 <Button
-                  size="small"
+                  size={actionSize}
+                  style={touchActionStyle}
                   type="text"
                   icon={<EllipsisOutlined />}
                   aria-label="More options"
@@ -1758,7 +1803,10 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
               <Tooltip title={stopTooltip}>
                 <Button
                   danger
-                  size="small"
+                  aria-label="Stop"
+                  aria-busy={stopRequestInFlight || isStopping}
+                  size={actionSize}
+                  style={touchActionStyle}
                   icon={
                     stopRequestInFlight || isStopping ? <Spin size="small" /> : <StopOutlined />
                   }
@@ -1782,7 +1830,9 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
               >
                 <Button
                   type="primary"
-                  size="small"
+                  aria-label={sendLabel}
+                  size={actionSize}
+                  style={touchActionStyle}
                   icon={<SendOutlined />}
                   onClick={onSendPrompt}
                   disabled={sendDisabled}
@@ -1803,11 +1853,11 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
           open={moreOpen}
           onClose={() => setMoreOpen(false)}
           placement="bottom"
-          height="auto"
+          height="85%"
           title="Session controls"
           styles={{
             content: glassSurfaceStyle(token, 0.85),
-            body: { padding: 0, paddingBottom: 'env(safe-area-inset-bottom)' },
+            body: { padding: 0, paddingBottom: 'env(safe-area-inset-bottom)', overflowY: 'auto' },
           }}
         >
           {moreContent}

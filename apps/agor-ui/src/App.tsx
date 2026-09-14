@@ -2445,6 +2445,10 @@ function AppContent() {
                   onLogout={logout}
                   onOpenWorkspaceSettings={setSettingsTabToOpen}
                   onOpenUserSettings={() => setOpenUserSettings(true)}
+                  onOpenAgenticToolSettings={(tool) => {
+                    setUserSettingsInitialTab(tool);
+                    setOpenUserSettings(true);
+                  }}
                   onUpdateBranch={handleUpdateBranch}
                   onUpdateRepo={handleUpdateRepo}
                   onArchiveOrDeleteBranch={handleArchiveOrDeleteBranch}

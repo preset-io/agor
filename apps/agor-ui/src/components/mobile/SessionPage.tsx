@@ -10,7 +10,7 @@ import { PermissionScope } from '@agor-live/client';
 import { Alert, Spin } from 'antd';
 import { useCallback, useMemo, useState } from 'react';
 import { useLocation, useNavigate, useParams } from 'react-router-dom';
-import { AppActionsProvider } from '../../contexts/AppActionsContext';
+import { type AppActionsContextValue, AppActionsProvider } from '../../contexts/AppActionsContext';
 import { useAgorStore } from '../../store/agorStore';
 import { makeSessionMcpServerIdsSelector } from '../../store/selectors';
 import { resolveSessionFromShortIdPure } from '../../utils/urlResolution';
@@ -34,6 +34,8 @@ interface SessionPageProps {
   onUpdateSession: (sessionId: string, updates: Partial<Session>) => void;
   onDeleteSession: (sessionId: string) => void;
   onUpdateSessionMcpServers?: (sessionId: string, mcpServerIds: string[]) => void;
+  onOpenBranch?: AppActionsContextValue['onOpenBranch'];
+  onOpenAgenticToolSettings?: AppActionsContextValue['onOpenAgenticToolSettings'];
 }
 
 const EMPTY_MCP_IDS: string[] = [];
@@ -56,6 +58,8 @@ export const SessionPage: React.FC<SessionPageProps> = ({
   onUpdateSession,
   onDeleteSession,
   onUpdateSessionMcpServers,
+  onOpenBranch,
+  onOpenAgenticToolSettings,
 }) => {
   const { sessionId } = useParams<{ sessionId: string }>();
   const navigate = useNavigate();
@@ -121,6 +125,8 @@ export const SessionPage: React.FC<SessionPageProps> = ({
         goBack();
       },
       onPermissionDecision: handlePermissionDecision,
+      onOpenBranch,
+      onOpenAgenticToolSettings,
       onOpenSettings: () => setSettingsOpen(true),
       availableAgents: AVAILABLE_AGENTS,
     }),
@@ -133,6 +139,8 @@ export const SessionPage: React.FC<SessionPageProps> = ({
       onDeleteSession,
       goBack,
       handlePermissionDecision,
+      onOpenBranch,
+      onOpenAgenticToolSettings,
     ]
   );
 
