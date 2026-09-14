@@ -1,14 +1,17 @@
 import type {
   AgorClient,
+  Branch,
   BranchArchiveOrDeleteOptions,
   Repo,
   Session,
   SpawnConfig,
   User,
 } from '@agor-live/client';
-import { Drawer, Layout } from 'antd';
-import { useState } from 'react';
-import { Route, Routes, useNavigate } from 'react-router-dom';
+import { DEFAULT_AGENTIC_TOOL_NAME, getTeammateConfig } from '@agor-live/client';
+import { Layout } from 'antd';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
+import type { NewSessionConfig, SessionCreationResult } from '../../domain/sessionCreation';
 import { useAgorStore } from '../../store/agorStore';
 import {
   selectArtifactById,
@@ -22,12 +25,16 @@ import {
   selectSessionsByBranch,
   selectUserById,
 } from '../../store/selectors';
+import { getSessionStatusTone } from '../../utils/sessionStatus';
+import { AVAILABLE_AGENTS } from '../AgentSelectionGrid';
+import { resolveAvailableUserAgenticTool } from '../AgentSelectionGrid/availableAgents';
 import { BranchModal, type BranchModalTab } from '../BranchModal';
 import type { BranchUpdate } from '../BranchModal/useBranchModalForm';
 import { MobileBoardPage } from './MobileBoardPage';
 import { MobileCommentsPage } from './MobileCommentsPage';
-import { MobileHomePage } from './MobileHomePage';
-import { MobileNavTree } from './MobileNavTree';
+import { MobileMoreSheet } from './MobileMoreSheet';
+import { MobileSessionsPage } from './MobileSessionsPage';
+import { type MobileTab, MobileTabBar } from './MobileTabBar';
 import { SessionPage } from './SessionPage';
 
 interface MobileAppProps {
@@ -37,6 +44,10 @@ interface MobileAppProps {
     sessionId: string,
     prompt: string
   ) => boolean | undefined | Promise<boolean | undefined>;
+  onCreateSession: (
+    config: NewSessionConfig,
+    boardId: string
+  ) => Promise<SessionCreationResult | null>;
   // Full session controls for the reused SessionPanel composer (parity with desktop).
   onForkSession: (sessionId: string, prompt: string) => Promise<void>;
   onBtwForkSession: (sessionId: string, prompt: string) => Promise<void>;
@@ -61,10 +72,17 @@ interface MobileAppProps {
   onExecuteScheduleNow?: (branchId: string) => Promise<void>;
 }
 
+function latestSession(sessions: Session[]): Session | undefined {
+  return sessions
+    .filter((s) => !s.archived)
+    .sort((a, b) => (b.last_updated ?? '').localeCompare(a.last_updated ?? ''))[0];
+}
+
 export const MobileApp: React.FC<MobileAppProps> = ({
   client,
   user,
   onSendPrompt,
+  onCreateSession,
   onForkSession,
   onBtwForkSession,
   onSpawnSession,
@@ -85,6 +103,7 @@ export const MobileApp: React.FC<MobileAppProps> = ({
   onExecuteScheduleNow,
 }) => {
   const navigate = useNavigate();
+  const location = useLocation();
   // Self-subscribe to the entity maps this surface drills into. The subscription
   // used to live in the outer App shell; relocating it here makes MobileApp the
   // subscription boundary so the shell re-renders only on load-state.
@@ -98,7 +117,10 @@ export const MobileApp: React.FC<MobileAppProps> = ({
   const repoById = useAgorStore(selectRepoById);
   const branchById = useAgorStore(selectBranchById);
   const userById = useAgorStore(selectUserById);
-  const [drawerOpen, setDrawerOpen] = useState(false);
+  const agenticToolSettings = useAgorStore((s) => s.agenticToolSettingsByName);
+
+  const [moreOpen, setMoreOpen] = useState(false);
+  const [primaryBranch, setPrimaryBranch] = useState<Branch | null>(null);
   const [branchEditor, setBranchEditor] = useState<{
     branchId: string;
     tab: BranchModalTab;
@@ -106,106 +128,232 @@ export const MobileApp: React.FC<MobileAppProps> = ({
   const selectedBranch = branchEditor ? (branchById.get(branchEditor.branchId) ?? null) : null;
   const selectedRepo = selectedBranch ? (repoById.get(selectedBranch.repo_id) ?? null) : null;
 
+  // Resolve the caller's primary assistant so the center Ask action can show its
+  // emoji and continue/start its session. Re-resolves when the caller changes.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: caller change deliberately re-resolves the caller-scoped primary teammate
+  useEffect(() => {
+    if (!client) return;
+    let cancelled = false;
+    client
+      .service('users')
+      .getPrimaryTeammate()
+      .then((branch) => {
+        if (!cancelled) setPrimaryBranch(branch);
+      })
+      .catch(() => {
+        if (!cancelled) setPrimaryBranch(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [client, user?.user_id]);
+
+  // Track the board in view so the Board / Comments tabs have a target even from
+  // the Sessions tab. Falls back to the user's main board, then any board.
+  const routeBoardId = location.pathname.match(/^\/m\/(?:board|comments)\/([^/]+)/)?.[1];
+  const [currentBoardId, setCurrentBoardId] = useState<string | undefined>(undefined);
+  useEffect(() => {
+    if (routeBoardId) setCurrentBoardId(routeBoardId);
+  }, [routeBoardId]);
+  const effectiveBoardId = useMemo(() => {
+    if (currentBoardId && boardById.has(currentBoardId)) return currentBoardId;
+    const mainBoardId = user?.preferences?.mainBoardId;
+    if (mainBoardId && boardById.has(mainBoardId)) return mainBoardId;
+    return boardById.keys().next().value as string | undefined;
+  }, [currentBoardId, boardById, user?.preferences?.mainBoardId]);
+
+  const activeTab: MobileTab | null = location.pathname.startsWith('/m/board')
+    ? 'board'
+    : location.pathname.startsWith('/m/comments')
+      ? 'comments'
+      : location.pathname.startsWith('/m/session')
+        ? null
+        : 'sessions';
+  const isSessionRoute = location.pathname.startsWith('/m/session');
+
+  const sessionsBadge = useMemo(() => {
+    const userId = user?.user_id;
+    let count = 0;
+    for (const session of sessionById.values()) {
+      if (session.archived) continue;
+      if (userId && session.created_by !== userId) continue;
+      if (getSessionStatusTone(session.status) === 'processing') count++;
+    }
+    return count;
+  }, [sessionById, user?.user_id]);
+
+  const commentsBadge = useMemo(() => {
+    if (!effectiveBoardId) return 0;
+    let count = 0;
+    for (const comment of commentById.values()) {
+      if (comment.board_id === effectiveBoardId && !comment.resolved && !comment.parent_comment_id)
+        count++;
+    }
+    return count;
+  }, [commentById, effectiveBoardId]);
+
+  const askPrimaryAssistant = useCallback(async () => {
+    if (!client) return;
+    let branch = primaryBranch;
+    if (!branch) {
+      try {
+        branch = await client.service('users').getPrimaryTeammate();
+        setPrimaryBranch(branch);
+      } catch {
+        branch = null;
+      }
+    }
+    if (!branch) {
+      // No primary assistant yet — send the user to pick/create one.
+      onOpenWorkspaceSettings('teammates');
+      return;
+    }
+    const live = latestSession(sessionsByBranch.get(branch.branch_id) ?? []);
+    if (live) {
+      navigate(`/m/session/${live.session_id}`);
+      return;
+    }
+    // Start fresh: create a blank session on the primary branch, then drop the
+    // user into the full-screen composer to type their first prompt.
+    const agent = resolveAvailableUserAgenticTool(user, agenticToolSettings, AVAILABLE_AGENTS);
+    const result = await onCreateSession(
+      { branch_id: branch.branch_id, agent: agent ?? DEFAULT_AGENTIC_TOOL_NAME, initialPrompt: '' },
+      branch.board_id ?? ''
+    );
+    if (result?.sessionId) navigate(`/m/session/${result.sessionId}`);
+  }, [
+    client,
+    primaryBranch,
+    sessionsByBranch,
+    navigate,
+    onCreateSession,
+    onOpenWorkspaceSettings,
+    user,
+    agenticToolSettings,
+  ]);
+
+  const handleTabSelect = useCallback(
+    (tab: MobileTab) => {
+      switch (tab) {
+        case 'board':
+          if (effectiveBoardId) navigate(`/m/board/${effectiveBoardId}`);
+          else setMoreOpen(true);
+          break;
+        case 'sessions':
+          navigate('/m/sessions');
+          break;
+        case 'ask':
+          void askPrimaryAssistant();
+          break;
+        case 'comments':
+          if (effectiveBoardId) navigate(`/m/comments/${effectiveBoardId}`);
+          else setMoreOpen(true);
+          break;
+        case 'more':
+          setMoreOpen(true);
+          break;
+      }
+    },
+    [effectiveBoardId, navigate, askPrimaryAssistant]
+  );
+
+  const openMore = useCallback(() => setMoreOpen(true), []);
+
   return (
-    <Layout style={{ height: '100vh' }}>
-      {/* Navigation Drawer - shared across all routes */}
-      <Drawer
-        title="Navigation"
-        placement="left"
-        onClose={() => setDrawerOpen(false)}
-        open={drawerOpen}
-        size="85%"
-        styles={{
-          body: { padding: 0 },
-        }}
-      >
-        <MobileNavTree
-          boardById={boardById}
-          branchById={branchById}
-          sessionsByBranch={sessionsByBranch}
-          commentById={commentById}
-          onNavigate={() => setDrawerOpen(false)}
-          onOpenWorkspaceSettings={onOpenWorkspaceSettings}
-          onOpenUserSettings={onOpenUserSettings}
-          onLogout={onLogout}
-          currentUser={user}
-        />
-      </Drawer>
+    <Layout style={{ height: '100dvh' }}>
+      <div style={{ flex: 1, minHeight: 0, position: 'relative' }}>
+        <Routes>
+          <Route path="/" element={<Navigate to="/m/sessions" replace />} />
+          <Route
+            path="/sessions"
+            element={
+              <MobileSessionsPage
+                sessionById={sessionById}
+                branchById={branchById}
+                currentUser={user}
+                onOpenMore={openMore}
+              />
+            }
+          />
+          <Route
+            path="/board/:boardId"
+            element={
+              <MobileBoardPage
+                boardById={boardById}
+                branchById={branchById}
+                repoById={repoById}
+                sessionsByBranch={sessionsByBranch}
+                boardObjectsByBoardId={boardObjectsByBoardId}
+                cardById={cardById}
+                artifactById={artifactById}
+                onMenuClick={openMore}
+                onOpenBranch={(branchId, tab) => setBranchEditor({ branchId, tab })}
+              />
+            }
+          />
+          <Route
+            path="/session/:sessionId"
+            element={
+              <SessionPage
+                client={client}
+                sessionById={sessionById}
+                branchById={branchById}
+                currentUser={user}
+                onSendPrompt={onSendPrompt}
+                onForkSession={onForkSession}
+                onBtwForkSession={onBtwForkSession}
+                onSpawnSession={onSpawnSession}
+                onUpdateSession={onUpdateSession}
+                onDeleteSession={onDeleteSession}
+                onUpdateSessionMcpServers={onUpdateSessionMcpServers}
+              />
+            }
+          />
+          <Route
+            path="/comments/:boardId"
+            element={
+              <MobileCommentsPage
+                client={client}
+                boardById={boardById}
+                commentById={commentById}
+                branchById={branchById}
+                userById={userById}
+                currentUser={user}
+                onMenuClick={openMore}
+                onSendComment={onSendComment}
+                onReplyComment={onReplyComment}
+                onResolveComment={onResolveComment}
+                onToggleReaction={onToggleReaction}
+                onDeleteComment={onDeleteComment}
+              />
+            }
+          />
+        </Routes>
+      </div>
 
-      <Routes>
-        {/* Home page - just shows header, drawer opened by hamburger */}
-        <Route
-          path="/"
-          element={
-            <MobileHomePage
-              user={user}
-              boardById={boardById}
-              branchById={branchById}
-              sessionById={sessionById}
-              onMenuClick={() => setDrawerOpen(true)}
-              onOpenSettings={onOpenWorkspaceSettings}
-            />
-          }
+      {!isSessionRoute && (
+        <MobileTabBar
+          activeTab={activeTab}
+          onSelect={handleTabSelect}
+          askEmoji={primaryBranch ? getTeammateConfig(primaryBranch)?.emoji : undefined}
+          sessionsBadge={sessionsBadge}
+          commentsBadge={commentsBadge}
         />
+      )}
 
-        <Route
-          path="/board/:boardId"
-          element={
-            <MobileBoardPage
-              boardById={boardById}
-              branchById={branchById}
-              repoById={repoById}
-              sessionsByBranch={sessionsByBranch}
-              boardObjectsByBoardId={boardObjectsByBoardId}
-              cardById={cardById}
-              artifactById={artifactById}
-              onMenuClick={() => setDrawerOpen(true)}
-              onOpenBranch={(branchId, tab) => setBranchEditor({ branchId, tab })}
-            />
-          }
-        />
+      <MobileMoreSheet
+        open={moreOpen}
+        onClose={() => setMoreOpen(false)}
+        boardById={boardById}
+        branchById={branchById}
+        sessionsByBranch={sessionsByBranch}
+        commentById={commentById}
+        onOpenWorkspaceSettings={onOpenWorkspaceSettings}
+        onOpenUserSettings={onOpenUserSettings}
+        onLogout={onLogout}
+        currentUser={user}
+      />
 
-        {/* Session conversation page */}
-        <Route
-          path="/session/:sessionId"
-          element={
-            <SessionPage
-              client={client}
-              sessionById={sessionById}
-              branchById={branchById}
-              currentUser={user}
-              onSendPrompt={onSendPrompt}
-              onForkSession={onForkSession}
-              onBtwForkSession={onBtwForkSession}
-              onSpawnSession={onSpawnSession}
-              onUpdateSession={onUpdateSession}
-              onDeleteSession={onDeleteSession}
-              onUpdateSessionMcpServers={onUpdateSessionMcpServers}
-            />
-          }
-        />
-
-        {/* Comments page */}
-        <Route
-          path="/comments/:boardId"
-          element={
-            <MobileCommentsPage
-              client={client}
-              boardById={boardById}
-              commentById={commentById}
-              branchById={branchById}
-              userById={userById}
-              currentUser={user}
-              onMenuClick={() => setDrawerOpen(true)}
-              onSendComment={onSendComment}
-              onReplyComment={onReplyComment}
-              onResolveComment={onResolveComment}
-              onToggleReaction={onToggleReaction}
-              onDeleteComment={onDeleteComment}
-            />
-          }
-        />
-      </Routes>
       <BranchModal
         open={branchEditor !== null}
         onClose={() => setBranchEditor(null)}
@@ -224,8 +372,6 @@ export const MobileApp: React.FC<MobileAppProps> = ({
         onArchiveOrDelete={onArchiveOrDeleteBranch}
         onExecuteScheduleNow={onExecuteScheduleNow}
         onSessionClick={(sessionId) => {
-          // Sessions live on their own mobile route, so this stays inside /m
-          // rather than reusing the desktop board-switching navigation.
           setBranchEditor(null);
           navigate(`/m/session/${sessionId}`);
         }}

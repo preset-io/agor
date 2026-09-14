@@ -2417,6 +2417,7 @@ function AppContent() {
                   client={client}
                   user={user}
                   onSendPrompt={handleSendPrompt}
+                  onCreateSession={handleCreateSession}
                   onForkSession={handleForkSession}
                   onBtwForkSession={handleBtwForkSession}
                   onSpawnSession={handleSpawnSession}

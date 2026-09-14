@@ -1,6 +1,7 @@
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { describe, expect, it, vi } from 'vitest';
+import { ThemeProvider } from '../../contexts/ThemeContext';
 import { MobileApp } from './MobileApp';
 
 vi.mock('./MobileBoardPage', () => ({
@@ -27,18 +28,36 @@ vi.mock('../BranchModal', () => ({
 
 vi.mock('./MobileNavTree', () => ({ MobileNavTree: () => null }));
 
-describe('MobileApp branch actions', () => {
-  it('wires board branch actions to the requested bottom sheet tab', () => {
-    render(
+// Required session handlers for the reused SessionPanel composer.
+const sessionHandlers = {
+  onCreateSession: vi.fn(async () => null),
+  onForkSession: vi.fn(async () => {}),
+  onBtwForkSession: vi.fn(async () => {}),
+  onSpawnSession: vi.fn(async () => {}),
+  onUpdateSession: vi.fn(),
+  onDeleteSession: vi.fn(),
+};
+
+function renderMobileApp(extraProps: Record<string, unknown> = {}) {
+  return render(
+    <ThemeProvider>
       <MemoryRouter initialEntries={['/board/board-1']}>
         <MobileApp
           client={null}
           onSendComment={vi.fn()}
           onOpenWorkspaceSettings={vi.fn()}
           onOpenUserSettings={vi.fn()}
+          {...sessionHandlers}
+          {...extraProps}
         />
       </MemoryRouter>
-    );
+    </ThemeProvider>
+  );
+}
+
+describe('MobileApp branch actions', () => {
+  it('wires board branch actions to the requested bottom sheet tab', () => {
+    renderMobileApp();
 
     fireEvent.click(screen.getByRole('button', { name: 'Open schedule' }));
     expect(screen.getByTestId('branch-sheet')).toHaveTextContent('schedule');
@@ -52,17 +71,7 @@ describe('MobileApp branch actions', () => {
       onExecuteScheduleNow: vi.fn(),
     };
 
-    render(
-      <MemoryRouter initialEntries={['/board/board-1']}>
-        <MobileApp
-          client={null}
-          onSendComment={vi.fn()}
-          onOpenWorkspaceSettings={vi.fn()}
-          onOpenUserSettings={vi.fn()}
-          {...handlers}
-        />
-      </MemoryRouter>
-    );
+    renderMobileApp(handlers);
 
     fireEvent.click(screen.getByRole('button', { name: 'Open schedule' }));
 
@@ -74,16 +83,7 @@ describe('MobileApp branch actions', () => {
   });
 
   it('navigates session links to the mobile session route', () => {
-    render(
-      <MemoryRouter initialEntries={['/board/board-1']}>
-        <MobileApp
-          client={null}
-          onSendComment={vi.fn()}
-          onOpenWorkspaceSettings={vi.fn()}
-          onOpenUserSettings={vi.fn()}
-        />
-      </MemoryRouter>
-    );
+    renderMobileApp();
 
     fireEvent.click(screen.getByRole('button', { name: 'Open schedule' }));
     const onSessionClick = branchModalProps.onSessionClick as (id: string) => void;
@@ -91,5 +91,12 @@ describe('MobileApp branch actions', () => {
 
     // Sheet closes and the session opens on its own /m route.
     expect(screen.queryByTestId('branch-sheet')).not.toBeInTheDocument();
+  });
+
+  it('shows the bottom tab bar with the center Ask action', () => {
+    renderMobileApp();
+    expect(screen.getByRole('button', { name: 'Ask your primary assistant' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Board' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Sessions' })).toBeInTheDocument();
   });
 });
