@@ -144,6 +144,7 @@ describe('MobileBoardPage', () => {
                 }
                 onMenuClick={vi.fn()}
                 onOpenBranch={onOpenBranch}
+                onNewSession={vi.fn()}
                 onGiveFirstTask={vi.fn()}
               />
             }
@@ -184,6 +185,7 @@ describe('MobileBoardPage', () => {
                 artifactById={new Map()}
                 onMenuClick={vi.fn()}
                 onOpenBranch={vi.fn()}
+                onNewSession={vi.fn()}
                 onGiveFirstTask={onGiveFirstTask}
                 firstTaskAssistantName="Fable"
               />

@@ -43,6 +43,9 @@ export const MobileTabBar: React.FC<MobileTabBarProps> = ({
   commentsBadge,
 }) => {
   const { token } = theme.useToken();
+  const askActive = activeTab === 'ask';
+  // Size + lift derived from tokens (not a literal). ~half the circle clears the bar.
+  const askSize = token.controlHeightLG + token.padding;
 
   const leftTabs: TabDef[] = [
     { key: 'board', label: 'Board', icon: <AppstoreOutlined /> },
@@ -110,24 +113,29 @@ export const MobileTabBar: React.FC<MobileTabBarProps> = ({
         style={{
           flex: 1,
           minWidth: 0,
+          minHeight: TOUCH_TARGET,
           display: 'flex',
-          justifyContent: 'center',
+          flexDirection: 'column',
           alignItems: 'center',
+          justifyContent: 'center',
+          gap: token.sizeXXS,
         }}
       >
         <Button
           type="primary"
           shape="circle"
-          size="large"
           aria-label="Ask your primary assistant"
-          aria-current={activeTab === 'ask' ? 'page' : undefined}
+          aria-current={askActive ? 'page' : undefined}
           onClick={() => onSelect('ask')}
           style={{
-            width: 52,
-            height: 52,
-            marginTop: -token.size,
-            boxShadow: token.boxShadowSecondary,
-            fontSize: token.fontSizeHeading4,
+            width: askSize,
+            height: askSize,
+            // Lift so ~half the circle clears the bar.
+            marginTop: -askSize / 2,
+            // Ring separates the FAB from the bar (reads even in dark, where the
+            // shadow token is near-invisible), plus the elevation shadow token.
+            boxShadow: `0 0 0 ${token.lineWidthBold * 2}px ${token.colorBgContainer}, ${token.boxShadow}`,
+            fontSize: token.fontSizeHeading3,
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
@@ -139,6 +147,16 @@ export const MobileTabBar: React.FC<MobileTabBarProps> = ({
             <RobotOutlined style={{ color: token.colorTextLightSolid }} />
           )}
         </Button>
+        <Typography.Text
+          style={{
+            fontSize: token.fontSizeSM,
+            lineHeight: 1,
+            color: askActive ? token.colorPrimary : token.colorTextSecondary,
+            fontWeight: askActive ? 600 : 400,
+          }}
+        >
+          Ask
+        </Typography.Text>
       </div>
 
       {rightTabs.map(renderTab)}

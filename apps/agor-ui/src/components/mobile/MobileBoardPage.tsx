@@ -16,6 +16,7 @@ import {
   FileMarkdownOutlined,
   GitlabOutlined,
   LinkOutlined,
+  PlusOutlined,
   PushpinFilled,
   RightOutlined,
   SettingOutlined,
@@ -42,6 +43,7 @@ import { getSessionDisplayTitle } from '@/utils/sessionTitle';
 import { resolveBoardFromUrlPure } from '@/utils/urlResolution';
 import { getBoardEmoji } from '../BoardTile';
 import { MarkdownRenderer } from '../MarkdownRenderer/MarkdownRenderer';
+import { StatusPill } from '../Pill';
 import { MobileHeader } from './MobileHeader';
 
 const { Content } = Layout;
@@ -56,6 +58,8 @@ interface MobileBoardPageProps {
   cardById: Map<string, CardWithType>;
   artifactById: Map<string, Artifact>;
   onOpenBranch: (branchId: string, tab: 'general' | 'environment' | 'schedule') => void;
+  /** Start a new session on a branch (opens the agent picker). */
+  onNewSession: (branchId: string) => void;
   /** Empty-board CTA: hand the board's assistant its first task (Ask primary). */
   onGiveFirstTask: () => void;
   /** Display name of the assistant used in the empty-board CTA. */
@@ -102,6 +106,7 @@ export const MobileBoardPage: React.FC<MobileBoardPageProps> = ({
   cardById,
   artifactById,
   onOpenBranch,
+  onNewSession,
   onGiveFirstTask,
   firstTaskAssistantName,
 }) => {
@@ -164,6 +169,12 @@ export const MobileBoardPage: React.FC<MobileBoardPageProps> = ({
   }
   const hasZones = zones.length > 0;
   const ungroupedBranches = branchesByZone.get(undefined) ?? [];
+  // A board that has a teammate branch but no sessions yet (e.g. just after
+  // onboarding, or before an AI model is connected) should still lead with a
+  // first-task action instead of a bare board.
+  const boardHasSessions = branches.some(
+    ({ branch }) => (sessionsByBranch.get(branch.branch_id) ?? []).length > 0
+  );
 
   const renderBranchCard = (
     branch: Branch,
@@ -192,17 +203,22 @@ export const MobileBoardPage: React.FC<MobileBoardPageProps> = ({
         }
       >
         <Flex vertical gap={token.marginSM}>
-          <Flex gap={token.marginXS} wrap>
+          <Flex gap={token.marginXS}>
             <Button
+              style={{ flex: 1 }}
               icon={<SettingOutlined />}
               onClick={() => onOpenBranch(branch.branch_id, 'general')}
             >
               Manage
             </Button>
-            <Button onClick={() => onOpenBranch(branch.branch_id, 'environment')}>
+            <Button
+              style={{ flex: 1 }}
+              onClick={() => onOpenBranch(branch.branch_id, 'environment')}
+            >
               Environment
             </Button>
             <Button
+              style={{ flex: 1 }}
               icon={<CalendarOutlined />}
               onClick={() => onOpenBranch(branch.branch_id, 'schedule')}
             >
@@ -225,30 +241,31 @@ export const MobileBoardPage: React.FC<MobileBoardPageProps> = ({
             dataSource={sessions.slice(0, 4)}
             renderItem={(session) => (
               <List.Item
-                style={{ paddingInline: 0 }}
-                actions={[
-                  <Button
-                    key="open"
-                    type="text"
-                    aria-label={`Open ${getSessionDisplayTitle(session)}`}
-                    icon={<RightOutlined />}
-                    onClick={() => navigate(`/m/session/${session.session_id}`)}
-                  />,
-                ]}
+                role="button"
+                tabIndex={0}
+                aria-label={`Open ${getSessionDisplayTitle(session, { fallbackChars: 40 })}`}
+                onClick={() => navigate(`/m/session/${session.session_id}`)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    navigate(`/m/session/${session.session_id}`);
+                  }
+                }}
+                style={{ paddingInline: 0, cursor: 'pointer', minHeight: 44 }}
+                extra={<RightOutlined aria-hidden style={{ color: token.colorTextTertiary }} />}
               >
                 <List.Item.Meta
-                  title={<Text ellipsis>{getSessionDisplayTitle(session)}</Text>}
-                  description={
-                    <Space size={token.marginXS} wrap>
-                      <Badge status={session.status === 'running' ? 'processing' : 'default'} />
-                      <Text type="secondary">{session.status}</Text>
-                      <Text type="secondary">{session.agentic_tool}</Text>
-                    </Space>
+                  title={
+                    <Text ellipsis>{getSessionDisplayTitle(session, { fallbackChars: 40 })}</Text>
                   }
+                  description={<StatusPill status={session.status} />}
                 />
               </List.Item>
             )}
           />
+          <Button block icon={<PlusOutlined />} onClick={() => onNewSession(branch.branch_id)}>
+            New session
+          </Button>
         </Flex>
       </Card>
     );
@@ -309,6 +326,17 @@ export const MobileBoardPage: React.FC<MobileBoardPageProps> = ({
                   Give {firstTaskAssistantName ?? 'your assistant'} their first task
                 </Button>
               </Empty>
+            </Card>
+          )}
+
+          {!isEmpty && !boardHasSessions && (
+            <Card size="small">
+              <Flex vertical gap={token.marginSM} align="flex-start">
+                <Text>Ready when you are. Give your assistant its first task to get going.</Text>
+                <Button type="primary" onClick={onGiveFirstTask}>
+                  Give {firstTaskAssistantName ?? 'your assistant'} their first task
+                </Button>
+              </Flex>
             </Card>
           )}
 
