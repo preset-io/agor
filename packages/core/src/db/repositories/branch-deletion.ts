@@ -7,6 +7,7 @@ import {
 } from '../../types';
 import { deleteBranchDataBatch } from '../branch-deletion-data';
 import { reconcileBranchDeletionReferencesBatch } from '../branch-deletion-references';
+import { lockBranchReferenceMutation } from '../branch-reference-admission';
 import type { Database } from '../client';
 import {
   deleteFrom,
@@ -18,7 +19,6 @@ import {
   update,
 } from '../database-wrapper';
 import { branches } from '../schema';
-import { requireCurrentTenantId } from '../tenant-context';
 import { RepositoryError } from './base';
 import { BranchMaintenanceRepository } from './branch-maintenance';
 
@@ -51,13 +51,7 @@ export class BranchDeletionRepository {
     return runDatabaseTransaction(
       this.db,
       async (tx) => {
-        if (isPostgresDatabase(tx)) {
-          const key = `branch-deletion-references:${requireCurrentTenantId()}`;
-          await executeRaw(
-            tx,
-            sql`SELECT pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended(${key}, 0))`
-          );
-        }
+        await lockBranchReferenceMutation(tx);
         return new BranchDeletionRepository(tx).step(claim, invocation, work);
       },
       { sqliteImmediate: true, sqliteBusyRetries: 9 }

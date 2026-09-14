@@ -129,3 +129,57 @@ test('reference reconciliation clears exact structured pointers but leaves arbit
     )
   ).toThrow('surviving teammate');
 });
+
+test('completed reference scan fences late teammate dependencies and namespace ownership changes', async ({
+  db,
+}) => {
+  const { KnowledgeNamespaceRepository } = await import('./repositories/knowledge');
+  const { BranchDeletionRepository } = await import('./repositories/branch-deletion');
+  const { branch } = await seedEnvironmentCommandBranch(db);
+  const { branch: neighbor } = await seedEnvironmentCommandBranch(db);
+  const branches = new BranchRepository(db);
+  await branches.update(neighbor.branch_id, { path: '/tmp/late-reference-neighbor' });
+  const namespaces = new KnowledgeNamespaceRepository(db);
+  const namespace = await namespaces.create({
+    slug: 'deleting-owner',
+    kind: 'branch',
+    branch_id: branch.branch_id,
+  });
+  const shared = await namespaces.create({ slug: 'shared-owner', kind: 'global' });
+  const maintenance = new BranchMaintenanceRepository(db);
+  const { claim } = await maintenance.claim(branch.branch_id, 'delete');
+  const invocation = await maintenance.beginExecution(claim);
+  await maintenance.claimExecution(claim, invocation);
+  const deletion = new BranchDeletionRepository(db);
+  for (let page = 0; ; page++) {
+    expect(page).toBeLessThan(30);
+    if (!(await deletion.quiescePage(claim, invocation)).remaining) break;
+  }
+  const custom_context = {
+    teammate: { kind: 'teammate', kb: { primary_namespace_id: namespace.namespace_id } },
+  };
+  await expect(branches.update(neighbor.branch_id, { custom_context })).rejects.toThrow('deletion');
+  await expect(
+    branches.create({
+      ...neighbor,
+      branch_id: generateId(),
+      name: 'late',
+      branch_unique_id: 9876,
+      path: '/tmp/late',
+      custom_context,
+    })
+  ).rejects.toThrow('deletion');
+  await expect(
+    namespaces.update(namespace.namespace_id, { kind: 'global', branch_id: null })
+  ).rejects.toThrow('deletion');
+  await expect(
+    namespaces.update(shared.namespace_id, { kind: 'branch', branch_id: branch.branch_id })
+  ).rejects.toThrow('deletion');
+  expect((await namespaces.findById(namespace.namespace_id))?.branch_id).toBe(branch.branch_id);
+  expect((await namespaces.findById(shared.namespace_id))?.branch_id).toBeNull();
+  await branches.update(neighbor.branch_id, {
+    custom_context: {
+      teammate: { kind: 'teammate', kb: { primary_namespace_id: shared.namespace_id } },
+    },
+  });
+});

@@ -57,6 +57,7 @@ import { getBaseUrl } from '../../config/config-manager';
 import { generateId } from '../../lib/ids';
 import { getKnowledgeUrl } from '../../utils/url';
 import { lockBranchForAdmission } from '../branch-admission';
+import { lockBranchReferenceMutation } from '../branch-reference-admission';
 import type { Database } from '../client';
 import {
   deleteFrom,
@@ -425,8 +426,8 @@ export class KnowledgeNamespaceRepository
       const row = await runDatabaseTransaction(
         this.db,
         async (tx) => {
-          if (data.kind === 'branch' && data.branch_id)
-            await lockBranchForAdmission(tx, data.branch_id);
+          await lockBranchReferenceMutation(tx);
+          if (data.branch_id) await lockBranchForAdmission(tx, data.branch_id);
           return insert(tx, kbNamespaces).values(this.namespaceToInsert(data)).returning().one();
         },
         { sqliteImmediate: true }
@@ -482,23 +483,33 @@ export class KnowledgeNamespaceRepository
 
   async update(id: string, updates: Partial<KnowledgeNamespace>): Promise<KnowledgeNamespace> {
     const fullId = await this.resolveId(id);
-    const current = await this.findById(fullId);
-    if (!current) throw new EntityNotFoundError('KnowledgeNamespace', id);
-
-    const merged = deepMerge(current, {
-      ...updates,
-      namespace_id: current.namespace_id,
-      created_at: current.created_at,
-      created_by: current.created_by,
-      updated_at: new Date(),
-    });
-
-    const row = await update(this.db, kbNamespaces)
-      .set(this.namespaceToInsert(merged))
-      .where(eq(kbNamespaces.namespace_id, fullId))
-      .returning()
-      .one();
-    return this.rowToNamespace(row);
+    return runDatabaseTransaction(
+      this.db,
+      async (tx) => {
+        // Ownership cannot move into or out of a deletion inventory after its scan.
+        await lockBranchReferenceMutation(tx);
+        const current = await new KnowledgeNamespaceRepository(tx).findById(fullId);
+        if (!current) throw new EntityNotFoundError('KnowledgeNamespace', id);
+        const merged = deepMerge(current, {
+          ...updates,
+          namespace_id: current.namespace_id,
+          created_at: current.created_at,
+          created_by: current.created_by,
+          updated_at: new Date(),
+        });
+        const owners = new Set(
+          [current.branch_id, merged.branch_id].filter((id): id is NonNullable<typeof id> => !!id)
+        );
+        for (const owner of [...owners].sort()) await lockBranchForAdmission(tx, owner);
+        const row = await update(tx, kbNamespaces)
+          .set(this.namespaceToInsert(merged))
+          .where(eq(kbNamespaces.namespace_id, fullId))
+          .returning()
+          .one();
+        return this.rowToNamespace(row);
+      },
+      { sqliteImmediate: true, sqliteBusyRetries: 9 }
+    );
   }
 
   rowToAclEntry(row: KBNamespaceAclRow): KnowledgeNamespaceAclEntry {

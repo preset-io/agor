@@ -1382,6 +1382,8 @@ describe('BranchRepository.findTeammateBranches', () => {
       });
       const repo = await repos.create(createRepoData({ slug: `teammate-discovery-${Date.now()}` }));
 
+      const { KnowledgeNamespaceRepository } = await import('./knowledge');
+      const namespace = await new KnowledgeNamespaceRepository(db).create({ slug: 'team-kb' });
       const markedCloneTeammate = await branches.create(
         createBranchData({
           repo_id: repo.repo_id as UUID,
@@ -1394,7 +1396,7 @@ describe('BranchRepository.findTeammateBranches', () => {
               kind: 'teammate',
               displayName: 'Hodor-like',
               kb: {
-                primary_namespace_id: generateId(),
+                primary_namespace_id: namespace.namespace_id,
                 primary_namespace_slug: 'team-kb',
                 memory_path_template: 'memory/{{YYYY-MM-DD}}.md',
                 default_visibility: 'public',

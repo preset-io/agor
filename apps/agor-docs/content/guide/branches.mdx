@@ -297,6 +297,8 @@ shared base-repository Git history are retained. Missing ownership metadata or a
 unavailable storage root blocks deletion rather than being treated as successful
 erasure. Repository deletion requires its branches to finish permanent deletion first.
 
+New teammate Knowledge bindings cannot target a branch under deletion, and a
+namespace cannot move into or out of that branch while deletion is fenced.
 Active branch materialization and taskless `.agor.yml` exports also block deletion.
 An export releases its shared maintenance claim only after its contained executor is
 verified stopped; an unknown outcome stays fenced. Deletion heartbeats renew the

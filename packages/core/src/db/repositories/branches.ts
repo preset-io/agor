@@ -25,6 +25,7 @@ import {
 } from '../../types/branch';
 import { hasActiveEnvironmentCommand } from '../../types/environment-command';
 import { getBranchUrl } from '../../utils/url';
+import { admitTeammateKnowledgeReferences } from '../branch-reference-admission';
 import type { Database } from '../client';
 import {
   insert,
@@ -265,6 +266,7 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
       const row = await runDatabaseTransaction(
         this.db,
         async (tx) => {
+          await admitTeammateKnowledgeReferences(tx, branch.custom_context);
           const owner = await select(tx, { user_id: users.user_id })
             .from(users)
             .where(eq(users.user_id, insertData.primary_owner_user_id))
@@ -648,6 +650,7 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
 
     // Use transaction to make read-merge-write atomic
     return await this.db.transaction(async (tx) => {
+      await admitTeammateKnowledgeReferences(txAsDb(tx), updates.custom_context);
       // Acquire row-level lock on PostgreSQL to prevent lost updates
       await lockRowForUpdate(
         txAsDb(tx),

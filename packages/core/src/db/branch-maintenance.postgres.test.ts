@@ -2,12 +2,14 @@ import { sql } from 'drizzle-orm';
 import { expect, it } from 'vitest';
 import { generateId } from '../lib/ids';
 import type { BranchID, UserID } from '../types';
+import { admitTeammateKnowledgeReferences } from './branch-reference-admission';
 import { createDatabase } from './client';
 import { executeRaw, rawRows } from './database-wrapper';
 import { runMigrations } from './migrate';
 import { BranchDeletionRepository } from './repositories/branch-deletion';
 import { BranchMaintenanceRepository } from './repositories/branch-maintenance';
 import { BranchRepository } from './repositories/branches';
+import { KnowledgeNamespaceRepository } from './repositories/knowledge';
 import { RepoRepository } from './repositories/repos';
 import { UsersRepository } from './repositories/users';
 import { runWithTenantDatabaseScope } from './tenant-scope';
@@ -31,6 +33,7 @@ it.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
       await runMigrations(db, { allowOfflineCutover: true });
       const tenantA = `maintenance-a-${generateId()}`;
       const tenantB = `maintenance-b-${generateId()}`;
+      let namespaceId = '';
       const claim = await runWithTenantDatabaseScope(db, tenantA, async (scoped) => {
         const owner = generateId() as UserID;
         await new UsersRepository(scoped).create({
@@ -56,10 +59,22 @@ it.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
           path: '/disposable/not-created/fixture',
           created_by: owner,
         });
+        namespaceId = (
+          await new KnowledgeNamespaceRepository(scoped).create({
+            slug: 'owned-deletion',
+            kind: 'branch',
+            branch_id: branch.branch_id,
+          })
+        ).namespace_id;
         return (await new BranchMaintenanceRepository(scoped).claim(branch.branch_id, 'delete'))
           .claim;
       });
       await runWithTenantDatabaseScope(db, tenantB, async (scoped) => {
+        await expect(
+          admitTeammateKnowledgeReferences(scoped, {
+            teammate: { kb: { primary_namespace_id: namespaceId } },
+          })
+        ).rejects.toThrow('unavailable');
         const maintenance = new BranchMaintenanceRepository(scoped);
         expect(await new BranchRepository(scoped).findById(claim.branch_id)).toBeNull();
         await expect(maintenance.claim(claim.branch_id, 'delete')).rejects.toThrow('not found');
