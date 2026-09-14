@@ -72,6 +72,11 @@ vi.mock('@agor/core/db', () => ({
       return { fs_access: mocks.fsAccess };
     }
   },
+  lockBranchForAdmission: async (_db: unknown, branchId: string) => {
+    const branch = mocks.branchesById.get(branchId);
+    if (!branch || branch.deletion_status) throw new Error('Branch deletion is in progress');
+    return branch;
+  },
   getCurrentTenantId: () => mocks.tenantId,
   runWithTenantDatabaseScope: async (
     _db: unknown,

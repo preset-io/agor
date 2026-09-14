@@ -65,14 +65,10 @@ function migrationTenantTables(): string[] {
   const capabilityPoliciesMigration = readRepoFile(
     'packages/core/drizzle/postgres/0095_board_branch_capability_policies.sql'
   );
-  const deletionLedgerMigration = readRepoFile(
-    'packages/core/drizzle/postgres/0106_branch_deletion_ledger.sql'
-  );
   const retiredTables = retiredTenantTables();
   return [
     ...new Set(
       [
-        ...deletionLedgerMigration.matchAll(/CREATE TABLE "([^"]+)" \([\s\S]*?"tenant_id"/g),
         ...migration.matchAll(/ALTER TABLE "([^"]+)" ADD COLUMN "tenant_id"/g),
         ...presetsMigration.matchAll(/CREATE TABLE "([^"]+)" \([\s\S]*?"tenant_id"/g),
         ...uploadsMigration.matchAll(/CREATE TABLE "([^"]+)" \([\s\S]*?"tenant_id"/g),
@@ -98,7 +94,6 @@ function migrationTenantTables(): string[] {
 function rlsPolicyTables(): string[] {
   const migration = [
     readRepoFile('packages/core/drizzle/postgres/0055_app_level_multitenancy_rls.sql'),
-    readRepoFile('packages/core/drizzle/postgres/0106_branch_deletion_ledger.sql'),
     readRepoFile('packages/core/drizzle/postgres/0059_agentic_tool_presets.sql'),
     readRepoFile('packages/core/drizzle/postgres/0068_uploads.sql'),
     readRepoFile('packages/core/drizzle/postgres/0075_executor_session_token_authority.sql'),

@@ -17,12 +17,14 @@ import type {
 import { and, asc, desc, eq, isNull, like, lte, or, sql } from 'drizzle-orm';
 import { normalizeScheduleAgenticToolDefaultReference } from '../../config/schedule-agentic-tool-config';
 import { generateId } from '../../lib/ids';
+import { lockBranchForAdmission } from '../branch-admission';
 import type { Database } from '../client';
 import {
   deleteFrom,
   insert,
   isPostgresDatabase,
   lockRowForUpdate,
+  runDatabaseTransaction,
   select,
   txAsDb,
   update,
@@ -154,7 +156,14 @@ export class ScheduleRepository implements BaseRepository<Schedule, Partial<Sche
   async create(data: Partial<Schedule>): Promise<Schedule> {
     try {
       const insertData = this.scheduleToInsert(data);
-      const row = await insert(this.db, schedules).values(insertData).returning().one();
+      const row = await runDatabaseTransaction(
+        this.db,
+        async (tx) => {
+          await lockBranchForAdmission(tx, insertData.branch_id);
+          return insert(tx, schedules).values(insertData).returning().one();
+        },
+        { sqliteImmediate: true, sqliteBusyRetries: 9 }
+      );
       return this.rowToSchedule(row);
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);

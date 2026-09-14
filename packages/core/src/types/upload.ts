@@ -112,6 +112,8 @@ export interface Upload {
 }
 
 export interface UploadStageInput {
+  /** Internal durable staging reservation; never accepted from public ingress. */
+  reservedRef?: UploadRef;
   owner: UploadOwner;
   name: string;
   mimeType: string;

@@ -54,6 +54,8 @@ export async function runDatabaseTransaction<T>(
   work: (tx: Database) => Promise<T>,
   options: {
     sqliteImmediate?: boolean;
+    /** Opt in only for DB-only units; retries roll back the complete unit. */
+    sqliteBusyRetries?: number;
     postgresIsolationLevel?: 'read committed' | 'repeatable read' | 'serializable';
   } = {}
 ): Promise<T> {
@@ -71,14 +73,30 @@ export async function runDatabaseTransaction<T>(
       ): Promise<T>;
     }
   ).transaction.bind(db);
-  return transaction(
-    (tx) => work(txAsDb(tx)),
-    isSQLiteDatabase(db) && options.sqliteImmediate
-      ? { behavior: 'immediate' }
-      : options.postgresIsolationLevel
-        ? { isolationLevel: options.postgresIsolationLevel }
-        : undefined
-  );
+  const retries = options.sqliteBusyRetries ?? 0;
+  if (!Number.isInteger(retries) || retries < 0 || retries > 9)
+    throw new Error('Invalid SQLite busy retry limit');
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await transaction(
+        (tx) => work(txAsDb(tx)),
+        isSQLiteDatabase(db) && options.sqliteImmediate
+          ? { behavior: 'immediate' }
+          : options.postgresIsolationLevel
+            ? { isolationLevel: options.postgresIsolationLevel }
+            : undefined
+      );
+    } catch (error) {
+      const diagnostic = `${String(error)} ${String((error as { cause?: unknown })?.cause)}`;
+      if (
+        !isSQLiteDatabase(db) ||
+        attempt >= retries ||
+        !/SQLITE_BUSY|database is locked/i.test(diagnostic)
+      )
+        throw error;
+      await new Promise((resolve) => setTimeout(resolve, 10 * (attempt + 1)));
+    }
+  }
 }
 
 /**

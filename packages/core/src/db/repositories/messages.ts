@@ -10,6 +10,7 @@ import { and, asc, desc, eq, gt, gte, inArray, lte, type SQL, sql } from 'drizzl
 import { generateId } from '../../lib/ids';
 import { isCanonicalFullUuid } from '../../types/id';
 import { JsonSanitizationError, sanitizeJsonValue } from '../../utils/sanitize-json';
+import { lockSessionBranchForAdmission } from '../branch-admission';
 import type { Database } from '../client';
 import {
   deleteFrom,
@@ -231,7 +232,6 @@ export class MessagesRepository {
    * Locking the parent keeps validation and insertion atomic with deletion.
    */
   private async assertSessionBelongsToTenant(db: Database, sessionId: SessionID): Promise<void> {
-    await lockRowForUpdate(db, this.db, sessions, eq(sessions.session_id, sessionId));
     const parent = await select(db, { session_id: sessions.session_id })
       .from(sessions)
       .where(eq(sessions.session_id, sessionId))
@@ -242,6 +242,7 @@ export class MessagesRepository {
         'session_id must belong to the current tenant'
       );
     }
+    await lockSessionBranchForAdmission(db, sessionId);
   }
 
   /**

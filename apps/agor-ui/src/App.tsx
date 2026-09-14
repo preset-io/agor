@@ -1717,12 +1717,20 @@ function AppContent() {
       throw new Error('Not connected to daemon');
     }
     try {
-      const action = options.metadataAction === 'archive' ? 'archived' : 'deleted';
       showLoading(`${options.metadataAction === 'archive' ? 'Archiving' : 'Deleting'} branch...`, {
         key: 'archive-delete',
       });
-      await client.service(`branches/${branchId}/archive-or-delete`).create(options);
-      showSuccess(`Branch ${action} successfully!`, { key: 'archive-delete' });
+      const result = (await client
+        .service(`branches/${branchId}/archive-or-delete`)
+        .create(options)) as Branch;
+      if (result.deletion_status === 'deletion_failed')
+        throw new Error(result.deletion_error || 'Deletion requires reconciliation');
+      showSuccess(
+        options.metadataAction === 'archive'
+          ? 'Branch archived successfully!'
+          : 'Deletion requested. The branch remains visible until cleanup finishes.',
+        { key: 'archive-delete' }
+      );
     } catch (error) {
       showError(
         `Failed to ${options.metadataAction} branch: ${error instanceof Error ? error.message : String(error)}`,

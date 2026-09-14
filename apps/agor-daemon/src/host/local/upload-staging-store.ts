@@ -76,7 +76,7 @@ export class LocalUploadStagingStore implements UploadStagingStore {
       throw forbidden();
     }
     if (stored.expiresAt !== null && Date.parse(stored.expiresAt) <= Date.now()) {
-      await Promise.allSettled([rm(paths.data), rm(paths.meta)]);
+      await this.delete(input);
       throw Object.assign(new Error('Upload has expired'), { status: 410 });
     }
     return { stored, data: paths.data };
@@ -89,7 +89,7 @@ export class LocalUploadStagingStore implements UploadStagingStore {
     if (input.sizeHint !== undefined && input.sizeHint > maxBytes) {
       throw Object.assign(new Error(`Upload exceeds ${maxBytes}-byte limit`), { status: 413 });
     }
-    const ref = `upl_${randomUUID()}` as UploadRef;
+    const ref = input.reservedRef ?? (`upl_${randomUUID()}` as UploadRef);
     const paths = this.paths(input.owner, ref);
     await mkdir(paths.dir, { recursive: true, mode: 0o700 });
     const temporary = `${paths.data}.${randomUUID()}.partial`;
@@ -187,10 +187,25 @@ export class LocalUploadStagingStore implements UploadStagingStore {
         throw forbidden();
       }
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+        // Historical partial deletion may have removed the ownership sidecar
+        // but left the bytes. Do not claim success, or guess their ownership.
+        try {
+          await lstat(paths.data);
+        } catch (dataError) {
+          if ((dataError as NodeJS.ErrnoException).code === 'ENOENT') return;
+          throw dataError;
+        }
+        throw new Error(
+          'Upload bytes remain without ownership metadata; storage reconciliation is required'
+        );
+      }
       throw error;
     }
-    await Promise.all([rm(paths.data, { force: true }), rm(paths.meta, { force: true })]);
+    // The sidecar is the retry/ownership handle. Never erase it before the
+    // bytes: a failed byte removal must remain discoverable and retryable.
+    await rm(paths.data, { force: true });
+    await rm(paths.meta, { force: true });
   }
 
   async cleanupExpired(owner: Pick<UploadOwner, 'tenantId'>, now = new Date()): Promise<number> {
@@ -231,15 +246,14 @@ export class LocalUploadStagingStore implements UploadStagingStore {
             continue;
           }
           const dataPath = join(bucketPath, entry.replace(/\.json$/, '.data'));
-          await Promise.all([rm(metaPath, { force: true }), rm(dataPath, { force: true })]);
+          await rm(dataPath, { force: true });
+          await rm(metaPath, { force: true });
           removed++;
         } catch {
           const age = now.getTime() - (await stat(metaPath)).mtimeMs;
           if (age >= (this.options.ttlMs ?? DEFAULT_UPLOAD_TTL_MS)) {
-            await Promise.all([
-              rm(metaPath, { force: true }),
-              rm(join(bucketPath, entry.replace(/\.json$/, '.data')), { force: true }),
-            ]);
+            await rm(join(bucketPath, entry.replace(/\.json$/, '.data')), { force: true });
+            await rm(metaPath, { force: true });
             removed++;
           }
         }

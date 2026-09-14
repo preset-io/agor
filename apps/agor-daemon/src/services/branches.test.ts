@@ -27,7 +27,6 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { dbTest } from '../../../../packages/core/src/db/test-helpers';
 import { markBranchArchiveDeleteAuthorized } from '../utils/branch-archive-delete-authorization.js';
-import { BRANCH_REMOVAL_VISIBILITY_PARAM } from '../utils/realtime-publish.js';
 import { requestExecutor, spawnExecutor } from '../utils/spawn-executor.js';
 import { BranchesService } from './branches';
 
@@ -275,16 +274,9 @@ function createServiceHarness() {
     is_owner: true,
     source: 'owner',
   });
-  const taskRepo = (
-    service as unknown as {
-      taskRepo: { hasNonterminalForBranch: ReturnType<typeof vi.fn> };
-    }
-  ).taskRepo;
-  taskRepo.hasNonterminalForBranch = vi.fn(async () => false);
   return {
     service,
     branchRepo,
-    taskRepo,
     boardObjectsService,
     sessionsService,
     branchesService,
@@ -1573,9 +1565,6 @@ describe('BranchesService.archiveOrDelete', () => {
 
   it('delegates filesystem deletion with authoritative paths and no daemon bearer', async () => {
     const { service, sessionTokenService } = createServiceHarness();
-    const removeSdkHome = vi
-      .spyOn(service as never, 'removeBranchSdkHomeAfterDelete')
-      .mockImplementation(() => undefined);
     const branchId = 'wt-delete-files' as BranchID;
     const branch = {
       branch_id: branchId,
@@ -1622,7 +1611,6 @@ describe('BranchesService.archiveOrDelete', () => {
     expect(payload).not.toHaveProperty('sessionToken');
     expect(payload).not.toHaveProperty('daemonUrl');
     expect(sessionTokenService.generateCommandToken).not.toHaveBeenCalled();
-    expect(removeSdkHome).not.toHaveBeenCalled();
   });
 
   it('rejects filesystem cleanup when a Manager has no write grant', async () => {
@@ -1659,136 +1647,51 @@ describe('BranchesService.archiveOrDelete', () => {
     expect(mockedSpawnExecutor).not.toHaveBeenCalled();
   });
 
-  it('deletes metadata without re-entering unrelated remove hooks and emits one tombstone', async () => {
+  it('rejects metadata-only permanent deletion before dispatch or metadata mutation', async () => {
     const { service, branchRepo, branchesService } = createServiceHarness();
     const branchId = 'wt-delete-op' as BranchID;
     const params = {
-      user: { user_id: 'user-1' as UUID },
+      user: { user_id: 'user-1' },
       tenant: { tenant_id: 'tenant-a', source: 'auth_claim' },
     } as never;
-    const removedBranch = {
-      branch_id: branchId,
-      name: 'WT Delete Op',
-      path: '/tmp/wt-delete-op',
-      archived: false,
-      environment_instance: { status: 'stopped' },
-    } as never;
-    vi.spyOn(service, 'get').mockResolvedValue(removedBranch);
-    const wrappedRemove = vi.spyOn(service, 'remove');
-    vi.spyOn(branchRepo, 'findById').mockResolvedValue(removedBranch);
-    vi.spyOn(branchRepo, 'findRealtimeVisibilityBranch').mockResolvedValue({
-      branch_id: branchId,
-      others_can: 'none',
-    } as never);
-    vi.spyOn(branchRepo, 'findRealtimeViewUserIds').mockResolvedValue(['user-1' as UUID]);
-    const repositoryDelete = vi.spyOn(branchRepo, 'delete').mockResolvedValue();
-    const removeSdkHome = vi
-      .spyOn(service as never, 'removeBranchSdkHomeAfterDelete')
-      .mockImplementation(() => undefined);
-    markBranchArchiveDeleteAuthorized(params, branchId, 'delete');
-
-    await service.archiveOrDelete(
-      branchId,
-      { metadataAction: 'delete', filesystemAction: 'preserved' },
-      params
-    );
-
-    expect(branchesService.remove).not.toHaveBeenCalled();
-    expect(wrappedRemove).not.toHaveBeenCalled();
-    expect(repositoryDelete).toHaveBeenCalledOnce();
-    expect(repositoryDelete).toHaveBeenCalledWith(branchId);
-    expect(branchesService.emit).toHaveBeenCalledOnce();
-    expect(branchesService.emit).toHaveBeenCalledWith(
-      'removed',
-      removedBranch,
-      expect.objectContaining({
-        path: 'branches',
-        method: 'remove',
-        event: 'removed',
-        id: branchId,
-        params,
-      })
-    );
-    expect(removeSdkHome).toHaveBeenCalledOnce();
-    expect(removeSdkHome).toHaveBeenCalledWith(removedBranch, 'tenant-a');
-  });
-
-  it('refuses metadata deletion while a descendant task is unfinished', async () => {
-    const { service, branchRepo, taskRepo, branchesService } = createServiceHarness();
-    const branchId = 'wt-delete-running' as BranchID;
-    const params = {
-      user: { user_id: 'user-1' as UUID },
-      tenant: { tenant_id: 'tenant-a', source: 'auth_claim' },
-    } as never;
-    const branch = {
-      branch_id: branchId,
-      name: 'WT Delete Running',
-      path: '/tmp/wt-delete-running',
-      archived: false,
-      environment_instance: { status: 'stopped' },
-    } as never;
-    vi.spyOn(branchRepo, 'findById').mockResolvedValue(branch);
-    vi.spyOn(service, 'get').mockResolvedValue(branch);
-    taskRepo.hasNonterminalForBranch.mockResolvedValue(true);
     const repositoryDelete = vi.spyOn(branchRepo, 'delete');
     markBranchArchiveDeleteAuthorized(params, branchId, 'delete');
-
     await expect(
       service.archiveOrDelete(
         branchId,
-        { metadataAction: 'delete', filesystemAction: 'deleted' },
+        { metadataAction: 'delete', filesystemAction: 'preserved' },
         params
       )
-    ).rejects.toThrow(/unfinished tasks/i);
-
+    ).rejects.toThrow('Permanent deletion');
     expect(repositoryDelete).not.toHaveBeenCalled();
     expect(branchesService.emit).not.toHaveBeenCalled();
     expect(mockedSpawnExecutor).not.toHaveBeenCalled();
   });
 
-  it('captures hard-delete visibility after authorization, inside the metadata transaction', async () => {
+  it('routes permanent deletion and legacy internal removal through the same workflow without immediate tombstones', async () => {
     const { service, branchRepo, branchesService } = createServiceHarness();
-    const branchId = 'wt-delete-acl-race' as BranchID;
-    const oldViewer = '00000000-0000-7000-8000-000000000001' as UUID;
-    const newViewer = '00000000-0000-7000-8000-000000000002' as UUID;
-    const removedBranch = {
-      branch_id: branchId,
-      name: 'WT Delete ACL Race',
-      path: '/tmp/wt-delete-acl-race',
-      archived: false,
-      others_can: 'none',
-      environment_instance: { status: 'stopped' },
-    } as never;
+    const branchId = 'wt-delete-op' as BranchID;
     const params = {
-      user: { user_id: 'user-1' as UUID },
+      user: { user_id: 'user-1' },
       tenant: { tenant_id: 'tenant-a', source: 'auth_claim' },
     } as never;
-    vi.spyOn(service, 'get').mockResolvedValue(removedBranch);
-    vi.spyOn(branchRepo, 'findById').mockResolvedValue(removedBranch);
-    vi.spyOn(branchRepo, 'findRealtimeVisibilityBranch').mockResolvedValue(removedBranch);
-    let currentViewers = [oldViewer];
-    vi.spyOn(branchRepo, 'findRealtimeViewUserIds').mockImplementation(async () => currentViewers);
-    vi.spyOn(branchRepo, 'delete').mockResolvedValue();
-
+    const pending = { branch_id: branchId, deletion_status: 'deleting' };
+    const request = vi
+      .spyOn(service as never, 'requestPermanentDeletion')
+      .mockResolvedValue(pending as never);
+    const repositoryDelete = vi.spyOn(branchRepo, 'delete');
     markBranchArchiveDeleteAuthorized(params, branchId, 'delete');
-    // Simulate an ACL update after the route granted control but before the
-    // long-running archive/delete operation reaches its metadata transaction.
-    currentViewers = [newViewer];
-
-    await service.archiveOrDelete(
-      branchId,
-      { metadataAction: 'delete', filesystemAction: 'preserved' },
-      params
-    );
-
-    const eventHook = branchesService.emit.mock.calls[0][2] as {
-      params: Record<string, unknown>;
-    };
-    expect(eventHook.params[BRANCH_REMOVAL_VISIBILITY_PARAM]).toEqual({
-      branchId,
-      mode: 'explicitUsers',
-      userIds: [newViewer],
-    });
+    expect(
+      await service.archiveOrDelete(
+        branchId,
+        { metadataAction: 'delete', filesystemAction: 'deleted' },
+        params
+      )
+    ).toBe(pending);
+    expect(await service.removeMetadataWithRealtime(branchId, params)).toBe(pending);
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(repositoryDelete).not.toHaveBeenCalled();
+    expect(branchesService.emit).not.toHaveBeenCalled();
   });
 
   it('rejects direct callers before any environment, token, executor, or metadata work', async () => {

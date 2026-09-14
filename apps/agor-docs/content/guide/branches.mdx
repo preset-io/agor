@@ -253,7 +253,7 @@ When a feature ships and the PR merges, you usually want to clean up disk withou
 **Metadata options:**
 
 - **Archive (recommended)**: Hides from board, preserves all sessions and conversations for analytics and history.
-- **Delete permanently**: Irreversibly removes branch metadata and its sessions and conversations through the current metadata-first path. This is not proof of complete storage or external-resource erasure; see the limitations below.
+- **Delete permanently**: Requests irreversible removal of owned branch files and data. Filesystem preservation is not available for permanent deletion; use archive instead.
 
 **Best practice:** Archive with filesystem cleanup after PR merge. Only delete permanently for experimental branches with no valuable data.
 
@@ -265,10 +265,42 @@ exclusively owned by one branch. External provider conversations and remote Git 
 are separate resources. Backups and versioned object storage remain subject to their
 configured retention and locks.
 
-The current deletion response and disappearance of a branch card are **not proof of
-verified removal of all filesystem and descendant resources**. Do not use them as an
-erasure receipt. Internal deletion checkpoints do not by themselves provide a public
-deletion-status API or guarantee that every deletion entry point is durable.
+The CLI `agor branch rm <id>` asks for confirmation; `--force` explicitly confirms
+non-interactive deletion. The former `--from-filesystem` flag is now redundant.
+
+Deletion is asynchronous. Acceptance is **not completion**: the branch stays visible
+with `deletion_status: deleting` until required storage removal and database cleanup
+have finished. The executor removes the workspace and branch-owned SDK home, asks
+the upload storage owner to remove staged bytes, and drains database descendants in
+short bounded transactions. Authorization and the branch row are removed last.
+There is no database transaction held open while filesystem or object-store work runs.
+
+Stop or cancel unfinished tasks and stop the environment before deleting. Pending
+upload staging also blocks admission. New managed task/environment work is fenced.
+Terminal attachments are closed best effort: this does **not** prove that detached
+shells or unmanaged external processes have stopped. Stop those processes yourself.
+
+A partial failure leaves `deletion_status: deletion_failed` and a safe
+`deletion_error` on the branch. Already removed files and committed data batches are
+not restored. Retry permanent deletion after correcting a reported, settled failure.
+If the executor or a daemon storage request has an unknown outcome, the original
+invocation remains fenced: elapsed time is not permission to run another destructive
+executor. Operator reconciliation is required; do not clear private maintenance data
+to force a retry. An interrupted upload reservation likewise needs reconciliation,
+not automatic expiration while its writer could still be active.
+
+Deletion currently requires a local managed executor and available authoritative
+storage roots; delegated or external launchers are rejected. Historical SDK sessions
+using a shared execution home also block deletion until their owned storage is
+reconciled; the shared user home is never recursively removed. Remote Git refs and
+shared base-repository Git history are retained. Missing ownership metadata or an
+unavailable storage root blocks deletion rather than being treated as successful
+erasure. Repository deletion requires its branches to finish permanent deletion first.
+
+The daemon's existing runtime reconciliation loop observes stale deletion heartbeats;
+it does not orchestrate the long-running workflow or automatically retry it. A daemon
+replacement can interrupt individual API requests, and a deployment that also kills
+executor processes can leave an unknown outcome requiring reconciliation.
 
 ---
 

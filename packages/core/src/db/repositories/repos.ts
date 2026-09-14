@@ -10,8 +10,16 @@ import { resolveVariant, wrapV1AsV2 } from '../../config/variant-resolver.js';
 import { generateId } from '../../lib/ids';
 import { httpUrlHasUserinfo, stripHttpUrlUserinfo } from '../../utils/url';
 import type { Database } from '../client';
-import { deleteFrom, insert, lockRowForUpdate, select, txAsDb, update } from '../database-wrapper';
-import { type RepoInsert, type RepoRow, repos } from '../schema';
+import {
+  deleteFrom,
+  insert,
+  lockRowForUpdate,
+  runDatabaseTransaction,
+  select,
+  txAsDb,
+  update,
+} from '../database-wrapper';
+import { branches, type RepoInsert, type RepoRow, repos } from '../schema';
 import {
   AmbiguousIdError,
   attachHiddenTenant,
@@ -456,7 +464,19 @@ export class RepoRepository implements BaseRepository<Repo, Partial<Repo>> {
     try {
       const fullId = await this.resolveId(id);
 
-      const result = await deleteFrom(this.db, repos).where(eq(repos.repo_id, fullId)).run();
+      const result = await runDatabaseTransaction(
+        this.db,
+        async (tx) => {
+          await new RepoRepository(tx).lockForBranchInventory(fullId);
+          if (await select(tx).from(branches).where(eq(branches.repo_id, fullId)).limit(1).one()) {
+            throw new RepositoryError(
+              'Permanently delete repository branches before deleting the repository'
+            );
+          }
+          return deleteFrom(tx, repos).where(eq(repos.repo_id, fullId)).run();
+        },
+        { sqliteImmediate: true }
+      );
 
       if (result.rowsAffected === 0) {
         throw new EntityNotFoundError('Repo', id);
@@ -483,7 +503,9 @@ export class RepoRepository implements BaseRepository<Repo, Partial<Repo>> {
    * Use BranchRepository instead.
    */
   async removeBranch(): Promise<never> {
-    throw new Error('removeBranch is deprecated. Use BranchRepository.delete() instead.');
+    throw new Error(
+      'removeBranch is deprecated. Use the branch permanent deletion service instead.'
+    );
   }
 
   /**

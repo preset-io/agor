@@ -935,7 +935,7 @@ describe('RepoRepository deprecated methods', () => {
     const repo = new RepoRepository(db);
 
     await expect((repo as any).removeBranch()).rejects.toThrow('deprecated');
-    await expect((repo as any).removeBranch()).rejects.toThrow('BranchRepository');
+    await expect((repo as any).removeBranch()).rejects.toThrow('permanent deletion service');
   });
 });
 

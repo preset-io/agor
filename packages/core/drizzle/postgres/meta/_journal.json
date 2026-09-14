@@ -740,8 +740,15 @@
     {
       "idx": 106,
       "version": "7",
-      "when": 1789344000000,
-      "tag": "0106_branch_deletion_ledger",
+      "when": 1789344000001,
+      "tag": "0107_branch_permanent_deletion",
+      "breakpoints": true
+    },
+    {
+      "idx": 107,
+      "version": "7",
+      "when": 1789344000002,
+      "tag": "0108_branch_deletion_recovery",
       "breakpoints": true
     }
   ]

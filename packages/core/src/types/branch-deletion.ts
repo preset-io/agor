@@ -1,90 +1,43 @@
 import type { BranchID, UserID, UUID } from './id';
-import type { TenantID } from './tenant';
 
-/** Deletion is forward-only. A failed operation retains its last durable stage. */
-export const BRANCH_DELETION_STAGES = [
-  'requested',
-  'quiescing',
-  'inventorying',
-  'deleting_storage',
-  'deleting_data',
-  'verifying',
-] as const;
-export type BranchDeletionStage = (typeof BRANCH_DELETION_STAGES)[number];
-export type BranchDeletionStatus = 'pending' | 'running' | 'blocked' | 'failed' | 'completed';
-export type BranchDeletionOperationID = UUID & { readonly __entity: 'BranchDeletionOperation' };
+export const BRANCH_DELETION_COMMAND = 'branch.delete';
+export const BRANCH_DELETION_REPORT_SERVICE = 'branch-deletion-steps';
+export const branchDeletionCommandId = (executionId: string) =>
+  `${BRANCH_DELETION_COMMAND}:${executionId}`;
+export interface BranchDeletionReferenceCursor {
+  table: number;
+  after?: string;
+}
 
-/** No paths, credentials, transcripts, or executor output in the public receipt. */
-export interface BranchDeletionReceipt {
-  operation_id: BranchDeletionOperationID;
+/** Internal shared maintenance ownership, persisted only on the branch row. */
+export interface BranchMaintenanceClaim {
   branch_id: BranchID;
-  requested_by: UserID;
-  confirmed_at: string;
-  status: BranchDeletionStatus;
-  stage: BranchDeletionStage;
-  updated_at: string;
-  completed_at: string | null;
-  error_code: BranchDeletionErrorCode | null;
+  operation_id: UUID;
+  generation: number;
+  kind: 'delete' | 'cleanup';
+  /** Cleared only after the executor owner proves settlement, never on lease expiry. */
+  execution_id?: UUID;
+  /** Dispatch intent and executor claim are separate: duplicate delivery must not execute twice. */
+  execution_requested_at?: string;
+  execution_claimed_at?: string;
+  execution_heartbeat_at?: string;
+  requested_by?: UserID;
+  storage_verified?: boolean;
+  reference_cursor?: BranchDeletionReferenceCursor;
+  references_done?: boolean;
+  data_done?: boolean;
 }
 
-/** Domain-owned diagnostics, not arbitrary error strings supplied by a worker. */
-export const BRANCH_DELETION_ERRORS = {
-  containment_unverified: 'Writer containment has not been verified.',
-  ownership_unverified: 'Resource ownership has not been verified.',
-  storage_unavailable: 'Required storage is unavailable.',
-  storage_removal_failed: 'Required storage removal failed.',
-  invocation_unsettled: 'A previous storage invocation has not settled.',
-  authority_revoked: 'Deletion authority must be re-established by an authorized Manager.',
-  remaining_resources: 'Required resources remain.',
-  inventory_changed: 'The resource inventory requires reconciliation.',
-} as const;
-export type BranchDeletionErrorCode = keyof typeof BRANCH_DELETION_ERRORS;
+/** Sticky branch lifecycle; failure never reopens normal work. */
+export const BRANCH_DELETION_STATUSES = ['deleting', 'deletion_failed'] as const;
+export type BranchDeletionStatus = (typeof BRANCH_DELETION_STATUSES)[number];
 
-export type BranchDeletionResourceState = 'pending' | 'in_flight' | 'removed' | 'retained';
-export type BranchDeletionResourceKind =
-  | 'workspace'
-  | 'sdk_home'
-  | 'upload'
-  | 'environment'
-  | 'gateway'
-  | 'knowledge_namespace'
-  | 'database'
-  | 'backup'
-  | 'provider_conversation';
+/** Bounded diagnostics, never resource contents or raw provider exceptions. */
+export type BranchDeletionStage = 'claim' | 'storage' | 'data' | 'finalize';
 
-/** An approved exception is a policy, not a user-controlled "skip deletion" flag. */
-export const BRANCH_DELETION_RETENTION = {
-  shared_resource: 'Owned by a surviving board, repository, user, or namespace.',
-  external_provider: 'External provider content is outside live Agor branch erasure.',
-  backup_policy: 'Immutable backups remain subject to their configured expiry and locks.',
-  security_receipt: 'Minimal revoked authority remains until its existing security expiry.',
-} as const;
-export type BranchDeletionRetentionReason = keyof typeof BRANCH_DELETION_RETENTION;
-
-/** Private ledger identity, captured before its original lookup row is removed. */
-export interface BranchDeletionResourceIdentity {
-  resource_id: string;
-  kind: BranchDeletionResourceKind;
-  /** Storage-owner name. It is not a caller-selected executor or URL. */
-  owner: string;
-  /** Opaque storage-owner locator; never exposed in a receipt. */
-  locator: string;
-  /** Owner-provided generation/version; path absence alone is not evidence. */
-  version: string;
-}
-
-/** Internal references bind every ledger read/write to trusted operation identity. */
-export interface BranchDeletionOperationRef {
-  tenant_id: TenantID;
-  branch_id: BranchID;
-  operation_id: BranchDeletionOperationID;
-}
-
-export interface BranchDeletionResource extends BranchDeletionResourceIdentity {
-  state: BranchDeletionResourceState;
-  invocation_id: UUID | null;
-  retention_reason: BranchDeletionRetentionReason | null;
-}
+export type BranchDeletionExecutionResult =
+  | { outcome: 'deleted' }
+  | { outcome: 'failed' | 'unknown'; stage: BranchDeletionStage; message: string };
 
 /** Review contract; FK actions alone never establish exclusive ownership. */
 export interface BranchDeletionRelationPolicy {

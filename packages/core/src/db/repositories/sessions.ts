@@ -31,6 +31,7 @@ import {
 import { getBaseUrl } from '../../config/config-manager';
 import { generateId, shortId } from '../../lib/ids';
 import { getSessionUrl } from '../../utils/url';
+import { lockBranchForAdmission } from '../branch-admission';
 import type { Database } from '../client';
 import {
   deleteFrom,
@@ -304,7 +305,14 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
   async create(data: Partial<Session>): Promise<Session> {
     try {
       const insertData = this.sessionToInsert(data);
-      await insert(this.db, sessions).values(insertData).run();
+      await runDatabaseTransaction(
+        this.db,
+        async (tx) => {
+          await lockBranchForAdmission(tx, insertData.branch_id);
+          await insert(tx, sessions).values(insertData).run();
+        },
+        { sqliteImmediate: true, sqliteBusyRetries: 9 }
+      );
 
       const baseUrl = await getBaseUrl();
 

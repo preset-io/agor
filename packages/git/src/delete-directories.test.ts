@@ -55,4 +55,40 @@ describe('managed directory deletion roots', () => {
       /Safety check failed/
     );
   });
+
+  it('never follows a branch symlink into a neighboring branch in the same root', async () => {
+    const neighbor = path.join(branchesRoot, 'neighbor');
+    const victim = path.join(branchesRoot, 'victim');
+    await fs.mkdir(neighbor);
+    await fs.writeFile(path.join(neighbor, 'keep'), 'shared neighbor');
+    await fs.symlink(neighbor, victim);
+    await expect(deleteBranchDirectory(victim, branchesRoot)).rejects.toThrow('symlink');
+    expect(await fs.readFile(path.join(neighbor, 'keep'), 'utf8')).toBe('shared neighbor');
+  });
+
+  it('rejects symlinked ancestors, including an otherwise missing target', async () => {
+    const neighbor = path.join(branchesRoot, 'neighbor');
+    await fs.mkdir(neighbor);
+    const alias = path.join(branchesRoot, 'alias');
+    await fs.symlink(neighbor, alias);
+    await expect(deleteBranchDirectory(path.join(alias, 'missing'), branchesRoot)).rejects.toThrow(
+      'symlink'
+    );
+    await expect(fs.stat(neighbor)).resolves.toBeDefined();
+  });
+
+  it('allows absent descendants on retry but not an unavailable managed root', async () => {
+    await expect(
+      deleteBranchDirectory(path.join(branchesRoot, 'missing', 'feature'), branchesRoot)
+    ).resolves.toBeUndefined();
+    await expect(
+      deleteBranchDirectory(
+        path.join(tempDir, 'unavailable', 'feature'),
+        path.join(tempDir, 'unavailable')
+      )
+    ).rejects.toThrow();
+    await expect(deleteBranchDirectory(branchesRoot, branchesRoot)).rejects.toThrow(
+      'directory itself'
+    );
+  });
 });

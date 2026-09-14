@@ -242,7 +242,8 @@ const BranchCardComponent = ({
 
   // Check if branch is still being created on filesystem
   const isCreating = branch.filesystem_status === 'creating';
-  const isFailed = branch.filesystem_status === 'failed';
+  const isFailed =
+    branch.filesystem_status === 'failed' || branch.deletion_status === 'deletion_failed';
 
   // Check if this branch is a persisted agent
   const teammateConfig = useMemo(() => getTeammateConfig(branch), [branch]);
@@ -402,7 +403,7 @@ const BranchCardComponent = ({
                 flexShrink: 0,
               }}
             >
-              {isCreating || hasRunningSession ? (
+              {isCreating || branch.deletion_status === 'deleting' || hasRunningSession ? (
                 <Spin size="large" />
               ) : isAgent && teammateConfig?.emoji ? (
                 <span style={{ fontSize: 32 }}>{teammateConfig.emoji}</span>
@@ -518,7 +519,11 @@ const BranchCardComponent = ({
             )}
             {!inPopover && !panelMode && onArchiveOrDelete && (
               <ArchiveActionButton
-                tooltip="Archive or delete branch"
+                tooltip={
+                  branch.deletion_status
+                    ? 'View deletion status or retry'
+                    : 'Archive or delete branch'
+                }
                 disabled={connectionDisabled}
                 onClick={() => {
                   setArchiveDeleteModalMounted(true);
@@ -530,6 +535,15 @@ const BranchCardComponent = ({
         </Space>
       </div>
 
+      {branch.deletion_status && (
+        <div
+          role="status"
+          style={{ color: isFailed ? token.colorError : token.colorTextSecondary, marginBottom: 8 }}
+        >
+          {branch.deletion_status === 'deletion_failed' ? 'Deletion failed' : 'Deleting…'}
+          {branch.deletion_error && <div>{branch.deletion_error}</div>}
+        </div>
+      )}
       {/* Branch metadata - all pills on one row with wrapping */}
       <div className={REACT_FLOW_NO_DRAG_CLASS} style={{ marginBottom: 8 }}>
         <Space size={4} wrap>

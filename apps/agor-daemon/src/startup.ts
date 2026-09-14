@@ -33,6 +33,7 @@ import type { Application, SessionsServiceImpl, TasksServiceImpl } from './decla
 import { beginExecutorResponseDrain } from './executor-response-channel.js';
 import { clearTrackedExecutorGauge, containAllTrackedExecutors } from './executor-tracking.js';
 import { type DaemonMetrics, getDaemonMetrics, NOOP_METRICS } from './metrics/index.js';
+import { BranchDeletionReconciler } from './services/branch-deletion-reconciler.js';
 import { DiscordMessageDeliveryWorker } from './services/discord-message-delivery-worker.js';
 import { DistributedHealthMonitor } from './services/distributed-health-monitor.js';
 import type { GatewayService } from './services/gateway.js';
@@ -784,7 +785,13 @@ export async function startup(ctx: StartupContext): Promise<void> {
   // 5. Start the Task-owned runtime reconciler. In shared mode every daemon
   // may discover the same routing refs; repository fences choose the winner.
   const heartbeatConfig = resolveExecutorHeartbeatConfig(config.execution);
+  const branchDeletionReconciler = new BranchDeletionReconciler(
+    db,
+    app,
+    startupMultiTenancy.mode === 'static' ? startupMultiTenancy.static_tenant_id : undefined
+  );
   const taskRuntimeReconciler = new TaskRuntimeReconciler({
+    observeMaintenance: () => branchDeletionReconciler.checkOnce(),
     app,
     db,
     config: heartbeatConfig,

@@ -14,7 +14,11 @@ import {
   ExecutorCommandResultSchema,
   ExecutorResponseDescriptorSchema,
 } from '@agor/core/executor-protocol';
-import { AGENTIC_TOOL_NAMES, type AgenticToolName } from '@agor/core/types';
+import {
+  AGENTIC_TOOL_NAMES,
+  type AgenticToolName,
+  BRANCH_DELETION_COMMAND,
+} from '@agor/core/types';
 import { z } from 'zod';
 
 // Re-export so existing executor consumers (handlers, tool-registry, etc.)
@@ -870,7 +874,27 @@ export type ClaudeAuthFilePayload = z.infer<typeof ClaudeAuthFilePayloadSchema>;
 /**
  * All supported executor payloads
  */
+export const BranchDeletePayloadSchema = BasePayloadSchema.extend({
+  command: z.literal(BRANCH_DELETION_COMMAND),
+  daemonUrl: z.string().url(),
+  sessionToken: z.string().min(1),
+  params: z.object({
+    branchId: z.string().uuid(),
+    operationId: z.string().uuid(),
+    generation: z.number().int().positive(),
+    executionId: z.string().uuid(),
+    branchPath: z.string(),
+    branchesRoot: z.string(),
+    repoPath: z.string(),
+    branchHome: z.string(),
+    branchHomesRoot: z.string(),
+    storageMode: z.enum(['clone', 'worktree']),
+  }),
+});
+export type BranchDeletePayload = z.infer<typeof BranchDeletePayloadSchema>;
+
 const ExecutorPayloadUnionSchema = z.discriminatedUnion('command', [
+  BranchDeletePayloadSchema,
   PromptPayloadSchema,
   AgenticToolInvokePayloadSchema,
   GitClonePayloadSchema,

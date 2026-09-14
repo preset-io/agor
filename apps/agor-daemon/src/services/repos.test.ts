@@ -611,7 +611,7 @@ describe('ReposService.cloneRepository Git lifecycle execution', () => {
 });
 
 describe('ReposService.remove branch inventory', () => {
-  it('passes the authorized unbounded filesystem inventory without a service bearer', async () => {
+  it('rejects filesystem cleanup while any branch still needs permanent deletion', async () => {
     const repo = {
       repo_id: '550e8400-e29b-41d4-a716-446655440001',
       slug: 'preset-io/repo',
@@ -646,26 +646,18 @@ describe('ReposService.remove branch inventory', () => {
     const service = new ReposService(db as never, app);
     vi.spyOn(service, 'get').mockResolvedValue(repo as never);
 
-    await service.remove(repo.repo_id, {
-      query: { cleanup: true },
-      tenant: { tenant_id: 'tenant-a', source: 'explicit' },
-    } as never);
+    await expect(
+      service.remove(repo.repo_id, {
+        query: { cleanup: true },
+        tenant: { tenant_id: 'tenant-a', source: 'explicit' },
+      } as never)
+    ).rejects.toThrow('branches first');
 
-    expect(executorMocks.requestExecutor).toHaveBeenCalledWith(
-      expect.objectContaining({
-        command: 'git.repo.delete',
-        params: expect.objectContaining({
-          repoId: repo.repo_id,
-          repoPath: repo.local_path,
-          branchPaths: [branches[0].path],
-        }),
-      }),
-      expect.anything()
-    );
-    expect(executorMocks.requestExecutor.mock.calls[0]?.[0]).not.toHaveProperty('sessionToken');
+    expect(executorMocks.requestExecutor).not.toHaveBeenCalled();
+    expect(repositoryMocks.deleteRepo).not.toHaveBeenCalled();
   });
 
-  it('uses the unbounded repository inventory after locking instead of Feathers pagination', async () => {
+  it('rejects a large unbounded branch inventory without transport pagination or cascades', async () => {
     const repo = {
       repo_id: '550e8400-e29b-41d4-a716-446655440001',
       slug: 'preset-io/large-repo',
@@ -703,21 +695,18 @@ describe('ReposService.remove branch inventory', () => {
     const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
 
     try {
-      await service.remove(repo.repo_id, {
-        tenant: { tenant_id: 'tenant-a', source: 'explicit' },
-      } as never);
+      await expect(
+        service.remove(repo.repo_id, {
+          tenant: { tenant_id: 'tenant-a', source: 'explicit' },
+        } as never)
+      ).rejects.toThrow('branches first');
     } finally {
       log.mockRestore();
     }
 
     expect(branchService.find).not.toHaveBeenCalled();
     expect(repositoryMocks.findAllBranchesByRepoId).toHaveBeenNthCalledWith(1, repo.repo_id);
-    expect(repositoryMocks.findAllBranchesByRepoId).toHaveBeenNthCalledWith(2, repo.repo_id);
-    expect(repositoryMocks.lockRepoForBranchInventory).toHaveBeenCalledWith(repo.repo_id);
-    expect(repositoryMocks.lockRepoForBranchInventory.mock.invocationCallOrder[0]).toBeLessThan(
-      repositoryMocks.findAllBranchesByRepoId.mock.invocationCallOrder[1]!
-    );
-    expect(branchService.removeMetadataWithRealtime).toHaveBeenCalledTimes(10_001);
-    expect(repositoryMocks.deleteRepo).toHaveBeenCalledOnce();
+    expect(branchService.removeMetadataWithRealtime).not.toHaveBeenCalled();
+    expect(repositoryMocks.deleteRepo).not.toHaveBeenCalled();
   });
 });

@@ -13,6 +13,7 @@ import { type AgorConfig, createUserProcessEnvironment } from '@agor/core/config
 import {
   BranchRepository,
   getCurrentTenantId,
+  lockBranchForAdmission,
   RepoRepository,
   runWithTenantDatabaseTransaction,
   shortId,
@@ -369,6 +370,14 @@ export class TerminalsService {
         throw new Forbidden('Terminal access changed while the terminal was starting.');
       }
 
+      await runWithTenantDatabaseTransaction(this.db, tenantId, async (db) => {
+        await lockBranchForAdmission(db, branch.branch_id);
+      });
+      if (reservation.cancelled || this.terminals.get(terminalId) !== terminal) {
+        throw new Forbidden('Terminal start was cancelled');
+      }
+      // Attachments remain process-affine and best effort, not durable activity
+      // evidence. Preserve the terminal contract: no process spawn under a DB lock.
       spawnExecutorFireAndForget(
         {
           command: 'zellij.attach',

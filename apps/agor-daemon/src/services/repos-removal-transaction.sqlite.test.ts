@@ -13,7 +13,7 @@ import { BranchesService } from './branches';
 import { ReposService } from './repos';
 
 dbTest(
-  'rolls back real SQLite branch deletions and emits no tombstones when repository deletion fails',
+  'rejects repository deletion before touching remaining branches and emits no tombstones',
   async ({ db }) => {
     const repoRepository = new RepoRepository(db);
     const branchRepository = new BranchRepository(db);
@@ -69,7 +69,7 @@ dbTest(
           tenant: { tenant_id: 'tenant-a', source: 'explicit' },
         } as never)
       )
-    ).rejects.toThrow('forced final repository deletion failure');
+    ).rejects.toThrow('branches first');
 
     expect(await repoRepository.findById(repo.repo_id)).not.toBeNull();
     for (const branchId of branchIds) {

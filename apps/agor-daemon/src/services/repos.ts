@@ -1243,6 +1243,10 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
       return found;
     };
     const branches = await findRepoBranches(repo.repo_id as UUID);
+    if (branches.length)
+      throw new Error(
+        'Permanently delete this repository’s branches first and wait for completion before removing the repository.'
+      );
 
     console.log(
       `🗑️  Repo deletion: Found ${branches.length} branch(s) for repo ${repo.slug} (${repo.repo_id})`

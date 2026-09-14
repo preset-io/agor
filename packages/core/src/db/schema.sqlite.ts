@@ -25,7 +25,6 @@ import {
   type AnySQLiteColumn,
   blob,
   check,
-  foreignKey,
   index,
   integer,
   primaryKey,
@@ -765,6 +764,11 @@ export const branches = sqliteTable(
     archived: t.bool('archived').notNull().default(false),
     archived_at: t.timestamp('archived_at'),
     archived_by: text('archived_by', { length: 36 }),
+    // Permanent deletion retains this row and its authority through partial failure.
+    deletion_status: text('deletion_status', { enum: ['deleting', 'deletion_failed'] }),
+    deletion_error: text('deletion_error'),
+    deletion_updated_at: t.timestamp('deletion_updated_at'),
+
     filesystem_status: text('filesystem_status', {
       enum: ['creating', 'ready', 'failed', 'preserved', 'cleaned', 'deleted'],
     }),
@@ -820,6 +824,9 @@ export const branches = sqliteTable(
       .json<unknown>('data')
       .$type<{
         // File system
+        // Daemon-private shared maintenance authority. Never accept through generic patches.
+        maintenance?: import('../types/branch-deletion').BranchMaintenanceClaim;
+        maintenance_generation?: number;
         path: string; // Absolute path to branch directory
 
         // Git state (current)
@@ -852,6 +859,9 @@ export const branches = sqliteTable(
       .notNull(),
   },
   (table) => ({
+    deletionDiscoveryIdx: index('branches_deletion_discovery_idx')
+      .on(table.branch_id)
+      .where(sql`${table.deletion_status} = 'deleting'`),
     repoIdx: index('branches_repo_idx').on(table.repo_id),
     nameIdx: index('branches_name_idx').on(table.name),
     refIdx: index('branches_ref_idx').on(table.ref),
@@ -868,77 +878,6 @@ export const branches = sqliteTable(
     permissionBindingCheck: check(
       'branches_permission_binding_check',
       sql`${table.permission_binding} IN ('inherit','override')`
-    ),
-  })
-);
-
-/**
- * Durable deletion receipts and bounded resource checkpoints. Deliberately no
- * branch/user FK: removing the subject must not erase its reconciliation handle.
- * SQLite retains its single-tenant database contract. This is NOT maintenance
- * admission.
- */
-export const branchDeletionOperations = sqliteTable(
-  'branch_deletion_operations',
-  {
-    operation_id: text('operation_id').primaryKey(),
-    branch_id: text('branch_id').notNull(),
-    requested_by: text('requested_by').notNull(),
-    confirmed_at: t.timestamp('confirmed_at').notNull(),
-    updated_at: t.timestamp('updated_at').notNull(),
-    completed_at: t.timestamp('completed_at'),
-    status: text('status')
-      .$type<import('../types/branch-deletion').BranchDeletionStatus>()
-      .notNull(),
-    stage: text('stage').$type<import('../types/branch-deletion').BranchDeletionStage>().notNull(),
-    error_code:
-      text('error_code').$type<import('../types/branch-deletion').BranchDeletionErrorCode>(),
-    revision: integer('revision').notNull().default(0),
-    inventory_sealed: t.bool('inventory_sealed').notNull().default(false),
-  },
-  (table) => ({
-    branchUnique: uniqueIndex('branch_deletion_operations_branch_unique').on(table.branch_id),
-    tenantOperationUnique: uniqueIndex('branch_deletion_operations_tenant_operation_unique').on(
-      table.operation_id
-    ),
-    pendingIdx: index('branch_deletion_operations_pending_idx').on(
-      table.status,
-      table.operation_id
-    ),
-  })
-);
-
-export const branchDeletionResources = sqliteTable(
-  'branch_deletion_resources',
-  {
-    operation_id: text('operation_id').notNull(),
-    resource_id: text('resource_id').notNull(),
-    kind: text('kind')
-      .$type<import('../types/branch-deletion').BranchDeletionResourceKind>()
-      .notNull(),
-    owner: text('owner').notNull(),
-    locator: text('locator').notNull(),
-    version: text('version').notNull(),
-    state: text('state')
-      .$type<import('../types/branch-deletion').BranchDeletionResourceState>()
-      .notNull(),
-    invocation_id: text('invocation_id'),
-    retention_reason:
-      text('retention_reason').$type<
-        import('../types/branch-deletion').BranchDeletionRetentionReason
-      >(),
-  },
-  (table) => ({
-    pk: primaryKey({ columns: [table.operation_id, table.resource_id] }),
-    operationFk: foreignKey({
-      columns: [table.operation_id],
-      foreignColumns: [branchDeletionOperations.operation_id],
-      name: 'branch_deletion_resources_operation_fk',
-    }).onDelete('restrict'),
-    pendingIdx: index('branch_deletion_resources_pending_idx').on(
-      table.operation_id,
-      table.state,
-      table.resource_id
     ),
   })
 );

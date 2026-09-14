@@ -29,6 +29,7 @@ import {
   validateDiscordConfig,
 } from '../../types/gateway';
 import { prefixToLikePattern } from '../../types/id';
+import { lockBranchForAdmission } from '../branch-admission';
 import type { Database, SystemDatabase } from '../client';
 import {
   deleteFrom,
@@ -778,6 +779,7 @@ export class GatewayChannelRepository
       const row = await runDatabaseTransaction(
         this.db,
         async (txDb) => {
+          await lockBranchForAdmission(txDb, insertData.target_branch_id);
           await insert(txDb, gatewayChannels).values(insertData).run();
           return select(txDb)
             .from(gatewayChannels)
@@ -957,6 +959,14 @@ export class GatewayChannelRepository
     return runDatabaseTransaction(
       this.db,
       async (txDb) => {
+        if (updates.target_branch_id) await lockBranchForAdmission(txDb, updates.target_branch_id);
+        if (updates.enabled === true) {
+          const target = await select(txDb)
+            .from(gatewayChannels)
+            .where(eq(gatewayChannels.id, fullId))
+            .one();
+          if (target) await lockBranchForAdmission(txDb, target.target_branch_id);
+        }
         await lockRowForUpdate(txDb, this.db, gatewayChannels, eq(gatewayChannels.id, fullId));
         const currentRow = await select(txDb)
           .from(gatewayChannels)
@@ -1070,6 +1080,7 @@ export class GatewayChannelRepository
     return runDatabaseTransaction(
       this.db,
       async (txDb) => {
+        if (updates.target_branch_id) await lockBranchForAdmission(txDb, updates.target_branch_id);
         const result = await update(txDb, gatewayChannels)
           .set({
             ...(updates.name !== undefined ? { name: updates.name } : {}),

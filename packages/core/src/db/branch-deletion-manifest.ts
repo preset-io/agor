@@ -235,12 +235,6 @@ export const BRANCH_DELETION_NON_FK_RELATIONS: Readonly<
   'artifact_trust_grants.scope_value': retain(
     'Persisted scopes are artifact, author, or instance, not branch. Preserve grants for surviving published artifacts; retire process-local session trust with its runtime.'
   ),
-  'branch_deletion_operations.branch_id': retain(
-    'Independent minimal receipt; never cascade away with the branch. Receipt expiry requires a separate approved retention policy.'
-  ),
-  'branch_deletion_resources.operation_id': retain(
-    'Required unresolved locator evidence survives all partial failures; purge only after verified completion and receipt expiry.'
-  ),
   workspace: owned(
     'Verify managed root, mount, generation and executor location; deregister worktrees without deleting the base repository.'
   ),
@@ -251,9 +245,11 @@ export const BRANCH_DELETION_NON_FK_RELATIONS: Readonly<
     'Never erase a shared user home; unidentifiable historical provider state is a disclosed retention limitation.'
   ),
   environment: owned(
-    'Require actual environment teardown, not webhook acceptance or a stopped label.'
+    'Admission rejects known active environment commands and starting/running/stopping state. This initial proxy is not proof of teardown of unmanaged external resources.'
   ),
-  terminals: owned('Contain detached shells at every execution location before removing storage.'),
+  terminals: owned(
+    'Close managed terminal attachments using the existing mechanism. The approved initial activity proxy does not prove detached/unmanaged shells stopped; do not describe it as containment evidence.'
+  ),
   runtime_callbacks_and_tokens: owned(
     'Revoke normal admission while allowing fenced containment acknowledgements; invalidate process-local authorities too.'
   ),

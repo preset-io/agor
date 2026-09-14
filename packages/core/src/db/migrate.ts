@@ -133,15 +133,15 @@ export function createMigrationImpactRegistry(
 
 const MIGRATION_IMPACT_REGISTRY = createMigrationImpactRegistry([
   [
-    '0106_branch_deletion_ledger',
+    '0107_branch_permanent_deletion',
     {
-      requiresOfflineCutover: false,
+      requiresOfflineCutover: true,
       impact: defineMigrationImpact({
-        classification: 'schema',
-        userAction: 'none',
-        rollbackCompatibility: 'compatible',
+        classification: 'protocol',
+        userAction: 'required',
+        rollbackCompatibility: 'incompatible',
         summary:
-          'Adds tenant-scoped deletion checkpoint storage. Does not enable permanent deletion or change branch admission.',
+          'Adds sticky branch deletion admission. Stop old writers before enabling permanent deletion; older binaries do not honor the fence.',
       }),
     },
   ],

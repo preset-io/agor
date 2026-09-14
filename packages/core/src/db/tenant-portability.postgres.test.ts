@@ -771,8 +771,6 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('tenant portability (Postgr
 
     const manifest = await readManifest(archive);
     expect(manifest.database.identity.nonPortableTenantTables).toEqual([
-      'branch_deletion_operations',
-      'branch_deletion_resources',
       'claude_oauth_attempts',
       'codex_device_auth_attempts',
       'executor_session_token_authorities',

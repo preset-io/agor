@@ -56,6 +56,7 @@ import { and, asc, desc, eq, inArray, like, or, sql } from 'drizzle-orm';
 import { getBaseUrl } from '../../config/config-manager';
 import { generateId } from '../../lib/ids';
 import { getKnowledgeUrl } from '../../utils/url';
+import { lockBranchForAdmission } from '../branch-admission';
 import type { Database } from '../client';
 import {
   deleteFrom,
@@ -421,10 +422,15 @@ export class KnowledgeNamespaceRepository
 
   async create(data: Partial<KnowledgeNamespace>): Promise<KnowledgeNamespace> {
     try {
-      const row = await insert(this.db, kbNamespaces)
-        .values(this.namespaceToInsert(data))
-        .returning()
-        .one();
+      const row = await runDatabaseTransaction(
+        this.db,
+        async (tx) => {
+          if (data.kind === 'branch' && data.branch_id)
+            await lockBranchForAdmission(tx, data.branch_id);
+          return insert(tx, kbNamespaces).values(this.namespaceToInsert(data)).returning().one();
+        },
+        { sqliteImmediate: true }
+      );
       return this.rowToNamespace(row);
     } catch (error) {
       throw new RepositoryError(
@@ -1073,6 +1079,8 @@ export class KnowledgeDocumentRepository
 
     return await this.db.transaction(async (tx) => {
       const txDb = txAsDb(tx);
+      if (namespace.kind === 'branch' && namespace.branch_id)
+        await lockBranchForAdmission(txDb, namespace.branch_id);
       const docInsert = this.documentToInsert(
         {
           ...data,
@@ -1342,6 +1350,17 @@ export class KnowledgeDocumentRepository
 
     return await this.db.transaction(async (tx) => {
       const txDb = txAsDb(tx);
+      const membership = await select(txDb, { namespace_id: kbDocuments.namespace_id })
+        .from(kbDocuments)
+        .where(eq(kbDocuments.document_id, fullId))
+        .one();
+      if (membership) {
+        const namespace = await new KnowledgeNamespaceRepository(txDb).findById(
+          membership.namespace_id
+        );
+        if (namespace?.kind === 'branch' && namespace.branch_id)
+          await lockBranchForAdmission(txDb, namespace.branch_id);
+      }
       await lockRowForUpdate(txDb, this.db, kbDocuments, eq(kbDocuments.document_id, fullId));
 
       const currentRow = await select(txDb)

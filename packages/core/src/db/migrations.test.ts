@@ -22,6 +22,17 @@ const readJournals = () =>
   );
 
 describe('Postgres migrations', () => {
+  it('keeps branch-local deletion pending after the previously published ledger migration', async () => {
+    // Development environments may already have applied the earlier PR revision.
+    // Drizzle uses timestamps, not tags or hashes, to decide what to apply.
+    const publishedLedgerTimestamp = 1789344000000;
+    for (const journal of await readJournals()) {
+      const entry = journal.entries.find(({ tag }) => tag === '0107_branch_permanent_deletion');
+      expect(entry).toBeDefined();
+      expect(entry!.when).toBeGreaterThan(publishedLedgerTimestamp);
+    }
+  });
+
   it('starts the Discord hybrid migration with its transaction-local lock timeout', async () => {
     const migration = await readFile(
       new URL('../../drizzle/postgres/0094_discord_gateway_hybrid.sql', import.meta.url),

@@ -1625,7 +1625,7 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
     'agor_branches_delete',
     {
       description:
-        'Permanently delete a branch and all its sessions, messages, and tasks. This action cannot be undone. Stops the environment if running and optionally removes files from disk.',
+        'Request permanent deletion of owned branch files, SDK home, sessions, messages, and tasks. Stop active tasks and the environment first. Shared resources are retained. The branch remains visible until cleanup is verified; partial failures are reported on the branch.',
       annotations: { destructiveHint: true },
       inputSchema: z.object({
         branchId: mcpRequiredId('branchId', 'Branch', 'Branch ID to delete (UUIDv7 or short ID)'),
@@ -1633,23 +1633,26 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
           .enum(['preserved', 'deleted'])
           .optional()
           .describe(
-            'What to do with the branch files on disk. "preserved" leaves files untouched, "deleted" removes the entire branch directory. Default: "deleted".'
+            'Permanent deletion requires "deleted" (the default). "preserved" is rejected; use archive to keep files.'
           ),
       }),
     },
     async (args) => {
       const branchId = await resolveBranchId(ctx, coerceString(args.branchId)!);
       const filesystemAction = (args.filesystemAction as BranchFilesystemAction) || 'deleted';
-      await ctx.app
+      const branch = await ctx.app
         .service('/branches/:id/archive-or-delete')
         .create(
           { metadataAction: 'delete', filesystemAction },
           { ...ctx.baseServiceParams, route: { id: branchId } }
         );
       return textResult({
-        success: true,
+        success: branch.deletion_status !== 'deletion_failed',
+        deletion_status: branch.deletion_status,
+        deletion_error: branch.deletion_error,
         branch_id: branchId,
-        message: 'Branch permanently deleted.',
+        message:
+          'Deletion requested. Inspect branch deletion_status and deletion_error until it is removed.',
       });
     }
   );

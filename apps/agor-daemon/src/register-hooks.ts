@@ -97,6 +97,7 @@ import type {
 } from '@agor/core/types';
 import {
   assertPublicMCPOAuthCompatibilityMode,
+  BRANCH_DELETION_REPORT_SERVICE,
   ENVIRONMENT_COMMAND_REPORT_SERVICE,
   GATEWAY_CHANNEL_WRITE_FIELDS,
   GATEWAY_REDACTED_SENTINEL,
@@ -494,6 +495,7 @@ export const AUTHENTICATED_RBAC_SERVICE_PATHS = [
  * Register all FeathersJS service hooks.
  */
 export const TENANT_OWNED_SERVICE_PATHS = [
+  BRANCH_DELETION_REPORT_SERVICE,
   ENVIRONMENT_COMMAND_REPORT_SERVICE,
   'sessions',
   'sessions/:id/mcp-servers',
@@ -1413,7 +1415,14 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       const service = safeService(path);
       if (!service) continue;
       service.hooks({
-        around: { all: [path === 'gateway' ? tenantIdentityAround : tenantDatabaseScopeAround] },
+        around: {
+          all: [
+            async (context: HookContext, next: () => Promise<void>) => {
+              const external = path === 'gateway' || path === BRANCH_DELETION_REPORT_SERVICE;
+              return (external ? tenantIdentityAround : tenantDatabaseScopeAround)(context, next);
+            },
+          ],
+        },
         before: { all: [scopeTenantBefore, writeGateBefore] },
         after: { all: [assertTenantAfter] },
       });
@@ -2357,7 +2366,14 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       create: [invalidateRealtimeBranchFromResult],
       update: [invalidateRealtimeBranchFromResult, publishMarketplaceInvalidation],
       patch: [invalidateRealtimeBranchFromResult, publishMarketplaceInvalidation],
-      remove: [invalidateRealtimeBranchFromResult, publishMarketplaceInvalidation],
+      remove: [
+        invalidateRealtimeBranchFromResult,
+        publishMarketplaceInvalidation,
+        (context: HookContext) => {
+          if ((context.result as Branch | undefined)?.deletion_status) context.event = null;
+          return context;
+        },
+      ],
     },
   });
 
@@ -3118,6 +3134,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
     before: { all: [requireAuth] },
   });
   safeService(ENVIRONMENT_COMMAND_REPORT_SERVICE)?.hooks({ before: { all: [requireAuth] } });
+  safeService(BRANCH_DELETION_REPORT_SERVICE)?.hooks({ before: { all: [requireAuth] } });
 
   // ============================================================================
   // Publish service events

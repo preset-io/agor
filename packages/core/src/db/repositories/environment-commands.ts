@@ -10,10 +10,10 @@ import {
   hasActiveEnvironmentCommand,
   type UserID,
 } from '../../types';
+import { assertBranchActivityAllowed } from '../branch-admission';
 import type { Database } from '../client';
 import {
   isPostgresDatabase,
-  isSQLiteDatabase,
   lockRowForUpdate,
   runDatabaseTransaction,
   select,
@@ -36,54 +36,38 @@ export class EnvironmentCommandRepository {
       row: typeof branches.$inferSelect
     ) => { value: T; environment?: Environment }
   ): Promise<T> {
-    const transaction = () =>
-      runDatabaseTransaction(
-        this.db,
-        async (tx) => {
-          await lockRowForUpdate(tx, this.db, branches, eq(branches.branch_id, id));
-          const row = await select(tx).from(branches).where(eq(branches.branch_id, id)).one();
-          if (!row) throw new EntityNotFoundError('Branch', id);
-          const nowRow = isPostgresDatabase(this.db)
-            ? await select(tx, { now: sql<Date>`clock_timestamp()` })
-                .from(branches)
-                .where(eq(branches.branch_id, id))
-                .one()
-            : undefined;
-          const now = nowRow ? new Date(nowRow.now) : new Date();
-          const data = row.data as { environment_instance?: Environment };
-          const result = work(data.environment_instance ?? { status: 'stopped' }, now, row);
-          if (result.environment) {
-            await update(tx, branches)
-              .set({
-                data: { ...row.data, environment_instance: result.environment },
-                updated_at: now,
-                environment_generation: sql`${branches.environment_generation} + 1`,
-                environment_health_claim_token: null,
-                environment_health_claim_expires_at: null,
-                environment_health_next_observation_at: null,
-              })
+    return runDatabaseTransaction(
+      this.db,
+      async (tx) => {
+        await lockRowForUpdate(tx, this.db, branches, eq(branches.branch_id, id));
+        const row = await select(tx).from(branches).where(eq(branches.branch_id, id)).one();
+        if (!row) throw new EntityNotFoundError('Branch', id);
+        const nowRow = isPostgresDatabase(this.db)
+          ? await select(tx, { now: sql<Date>`clock_timestamp()` })
+              .from(branches)
               .where(eq(branches.branch_id, id))
-              .run();
-          }
-          return result.value;
-        },
-        { sqliteImmediate: true }
-      );
-    // Retry only rolled-back database contention, never provider commands.
-    // libsql can return SQLITE_BUSY immediately even with a busy timeout.
-    for (let retry = 0; ; retry++) {
-      try {
-        return await transaction();
-      } catch (error) {
-        if (
-          !isSQLiteDatabase(this.db) ||
-          !/SQLITE_BUSY|database is locked/i.test(String(error)) ||
-          retry >= 9
-        )
-          throw error;
-        await new Promise((resolve) => setTimeout(resolve, 10 * (retry + 1)));
-      }
-    }
+              .one()
+          : undefined;
+        const now = nowRow ? new Date(nowRow.now) : new Date();
+        const data = row.data as { environment_instance?: Environment };
+        const result = work(data.environment_instance ?? { status: 'stopped' }, now, row);
+        if (result.environment) {
+          await update(tx, branches)
+            .set({
+              data: { ...row.data, environment_instance: result.environment },
+              updated_at: now,
+              environment_generation: sql`${branches.environment_generation} + 1`,
+              environment_health_claim_token: null,
+              environment_health_claim_expires_at: null,
+              environment_health_next_observation_at: null,
+            })
+            .where(eq(branches.branch_id, id))
+            .run();
+        }
+        return result.value;
+      },
+      { sqliteImmediate: true, sqliteBusyRetries: 9 }
+    );
   }
 
   async admit(input: {
@@ -94,6 +78,7 @@ export class EnvironmentCommandRepository {
     confirmationOf?: string;
   }): Promise<Environment> {
     return this.mutate(input.branch.branch_id, (previous, now, row) => {
+      assertBranchActivityAllowed(row);
       if (row.archived || (row.filesystem_status && row.filesystem_status !== 'ready')) {
         throw new RepositoryError('Environment commands require a ready, non-archived branch');
       }

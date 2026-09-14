@@ -31,6 +31,8 @@ interface RuntimeCandidate extends TaskRuntimeDiscoveryRef {
 }
 
 export interface TaskRuntimeReconcilerOptions {
+  /** Bounded, independently owned maintenance observation; shares this scheduler only. */
+  observeMaintenance?: () => Promise<void>;
   app: Application;
   db: TenantScopeAwareDatabase;
   config: ResolvedExecutorHeartbeatConfig;
@@ -124,6 +126,15 @@ export class TaskRuntimeReconciler {
 
   private async runLoopIteration(): Promise<void> {
     const stats = await this.checkOnce();
+    try {
+      await this.options.observeMaintenance?.();
+    } catch (error) {
+      console.warn(
+        '[runtime-reconcile] maintenance observation failed',
+        error instanceof Error ? error.name : 'unknown'
+      );
+      stats.failures += 1;
+    }
     if (this.stopped) return;
     let delay: number;
     if (stats.saturated) {

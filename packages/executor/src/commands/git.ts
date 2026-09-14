@@ -1091,8 +1091,8 @@ export async function handleGitBranchAdd(
 /**
  * Handle git.branch.remove command
  *
- * Removes a branch from the filesystem and deletes the database record.
- * This is a complete transaction - filesystem + DB in one atomic operation.
+ * Removes filesystem state only. Database finalization belongs to the deletion
+ * workflow; no filesystem operation is atomic with a database transaction.
  */
 export async function handleGitBranchRemove(
   payload: GitBranchRemovePayload,
