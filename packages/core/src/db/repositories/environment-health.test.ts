@@ -1,7 +1,10 @@
 import type { BranchID } from '@agor/core/types';
+import { eq } from 'drizzle-orm';
 import { describe, expect } from 'vitest';
 import { generateId } from '../../lib/ids';
 import type { Database } from '../client';
+import { deleteFrom } from '../database-wrapper';
+import { branches } from '../schema';
 import { dbTest } from '../test-helpers';
 import { BranchRepository } from './branches';
 import { EnvironmentHealthRepository } from './environment-health';
@@ -82,7 +85,8 @@ describe('EnvironmentHealthRepository lifecycle fencing', () => {
     ).resolves.toEqual({ outcome: 'unavailable' });
 
     const deleted = await seedStartingBranch(db, 'running');
-    await new BranchRepository(db).delete(deleted.branch_id);
+    // Simulate a finalized row only in this disposable fixture.
+    await deleteFrom(db, branches).where(eq(branches.branch_id, deleted.branch_id)).run();
     await expect(
       health.claim({
         branchId: deleted.branch_id,

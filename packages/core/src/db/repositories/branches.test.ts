@@ -1198,7 +1198,7 @@ describe('BranchRepository.update', () => {
 // ============================================================================
 
 describe('BranchRepository.delete', () => {
-  dbTest('should delete by full UUID and short ID', async ({ db }) => {
+  dbTest('rejects metadata-only deletion by full UUID and short ID', async ({ db }) => {
     const repoRepo = new RepoRepository(db);
     const wtRepo = new BranchRepository(db);
 
@@ -1217,18 +1217,18 @@ describe('BranchRepository.delete', () => {
     await wtRepo.create(data2);
 
     // Delete by full UUID
-    await wtRepo.delete(data1.branch_id);
+    await expect(wtRepo.delete(data1.branch_id)).rejects.toThrow('Metadata-only');
     const found1 = await wtRepo.findById(data1.branch_id);
-    expect(found1).toBeNull();
+    expect(found1).not.toBeNull();
 
     // Delete by short ID
     const idPrefix = shortId(data2.branch_id);
-    await wtRepo.delete(idPrefix);
+    await expect(wtRepo.delete(idPrefix)).rejects.toThrow('Metadata-only');
     const found2 = await wtRepo.findById(data2.branch_id);
-    expect(found2).toBeNull();
+    expect(found2).not.toBeNull();
   });
 
-  dbTest('should isolate deletions across branches and repos', async ({ db }) => {
+  dbTest('rejects bypass deletion without affecting other branches or repos', async ({ db }) => {
     const repoRepo = new RepoRepository(db);
     const wtRepo = new BranchRepository(db);
 
@@ -1254,12 +1254,12 @@ describe('BranchRepository.delete', () => {
     await wtRepo.create(data2);
     await wtRepo.create(data3);
 
-    await wtRepo.delete(data1.branch_id);
+    await expect(wtRepo.delete(data1.branch_id)).rejects.toThrow('Metadata-only');
 
-    // Verify only data1 deleted
+    // Rejected bypass leaves every branch intact
     const remaining = await wtRepo.findAll();
-    expect(remaining).toHaveLength(2);
-    expect(remaining.map((w) => w.name).sort()).toEqual(['wt2', 'wt3']);
+    expect(remaining).toHaveLength(3);
+    expect(remaining.map((w) => w.name).sort()).toEqual(['wt1', 'wt2', 'wt3']);
 
     const repo2Branches = await wtRepo.findAll({ repo_id: repo2.repo_id });
     expect(repo2Branches).toHaveLength(1);

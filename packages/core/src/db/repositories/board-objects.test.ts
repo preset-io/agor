@@ -9,7 +9,8 @@ import { eq } from 'drizzle-orm';
 import { describe, expect } from 'vitest';
 import { generateId } from '../../lib/ids';
 import type { Database } from '../client';
-import { boardObjects, boards } from '../schema';
+import { deleteFrom } from '../database-wrapper';
+import { boardObjects, boards, branches } from '../schema';
 import { ownedDbTest as dbTest } from '../test-helpers';
 import { EntityNotFoundError, RepositoryError } from './base';
 import { BoardObjectRepository } from './board-objects';
@@ -1130,7 +1131,8 @@ describe('BoardObjectRepository FK constraints', () => {
     });
 
     // Delete the branch
-    await wtRepo.delete(branch.branch_id);
+    // Exercise the FK itself in this disposable schema fixture, not lifecycle admission.
+    await deleteFrom(db, branches).where(eq(branches.branch_id, branch.branch_id)).run();
 
     // Board object should be cascade deleted
     const found = await boRepo.findByObjectId(created.object_id);
