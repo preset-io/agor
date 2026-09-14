@@ -2,6 +2,8 @@ import { expect } from 'vitest';
 import type { BranchMaintenanceClaim, UserID } from '../../types';
 import {
   BRANCH_WORKSPACE_OPERATION_BUDGET_MS,
+  DEFAULT_BRANCH_CLEANUP_COMMAND,
+  getBranchCleanupBlockReason,
   projectBranchWorkspaceOperation,
 } from '../../types/branch-cleanup';
 import { ownedDbTest as test } from '../test-helpers';
@@ -116,7 +118,11 @@ test('a policy change before the invocation claim invalidates the snapshot witho
 }) => {
   const { branch, user } = await seedEnvironmentCommandBranch(db);
   const repos = new RepoRepository(db);
-  const policy = { enabled: true, command: './old.sh', allow_branch_protection: true };
+  const policy = {
+    enabled: true,
+    command: DEFAULT_BRANCH_CLEANUP_COMMAND,
+    allow_branch_protection: true,
+  };
   const repo = await repos.update(branch.repo_id, { cleanup_policy: policy });
   const maintenance = new BranchMaintenanceRepository(db);
   const cleanup = new BranchWorkspaceOperationRepository(db);
@@ -134,10 +140,14 @@ test('a policy change before the invocation claim invalidates the snapshot witho
     },
     { repo_id: branch.repo_id, path: branch.path, repo_path: repo.local_path!, policy }
   );
+  expect(branch.cleanup_protected).toBe(false);
+  await expect(
+    maintenance.withClaim(claim, (tx) => cleanup.validateLaunch(tx, claim))
+  ).resolves.toBeUndefined();
   const execution = await maintenance.beginExecution(claim);
-  await repos.update(branch.repo_id, {
-    cleanup_policy: { ...policy, command: './replacement.sh' },
-  });
+  const changedPolicy = { ...policy, allow_branch_protection: false };
+  expect(getBranchCleanupBlockReason(changedPolicy, false)).toBeUndefined();
+  await repos.update(branch.repo_id, { cleanup_policy: changedPolicy });
   await expect(
     maintenance.claimExecution(claim, execution, (tx) => cleanup.validateLaunch(tx, claim))
   ).rejects.toThrow('policy changed');
