@@ -261,7 +261,15 @@ export const MobileApp: React.FC<MobileAppProps> = ({
 
   return (
     <Layout style={{ height: '100dvh' }}>
-      <div style={{ flex: 1, minHeight: 0, position: 'relative' }}>
+      <div
+        style={{
+          flex: 1,
+          minHeight: 0,
+          position: 'relative',
+          display: 'flex',
+          flexDirection: 'column',
+        }}
+      >
         <Routes>
           <Route path="/" element={<Navigate to="/m/sessions" replace />} />
           <Route
@@ -288,6 +296,10 @@ export const MobileApp: React.FC<MobileAppProps> = ({
                 artifactById={artifactById}
                 onMenuClick={openMore}
                 onOpenBranch={(branchId, tab) => setBranchEditor({ branchId, tab })}
+                onGiveFirstTask={() => void askPrimaryAssistant()}
+                firstTaskAssistantName={
+                  primaryBranch ? getTeammateConfig(primaryBranch)?.displayName : undefined
+                }
               />
             }
           />
