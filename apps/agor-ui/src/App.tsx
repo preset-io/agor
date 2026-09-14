@@ -99,7 +99,7 @@ import {
   enrichAuthenticatedUser,
   hasObservedOnboardingCompletion,
 } from './utils/currentUserAuthority';
-import { isMobileDevice } from './utils/deviceDetection';
+import { isMobileViewport } from './utils/deviceDetection';
 import { completeLocalPasswordChange } from './utils/forcePasswordChange';
 import { useThemedMessage } from './utils/message';
 import { buildCompletedOnboardingPreferences } from './utils/onboardingGoals';
@@ -283,7 +283,7 @@ function DeviceRouter() {
     if (!routeUsesDeviceRouter(location.pathname)) return;
 
     const checkAndRoute = () => {
-      const isMobile = isMobileDevice();
+      const isMobile = isMobileViewport();
       const isOnMobilePath = location.pathname.startsWith('/m');
 
       const state = agorStore.getState();
