@@ -596,7 +596,9 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
         aria-label="Workspace settings"
         closable={false}
         placement="bottom"
-        size="94dvh"
+        // Full-bleed so the settings surface covers the app header instead of
+        // leaving a stale title peeking above it.
+        height="100dvh"
         open={open}
         onClose={onClose}
         styles={{ body: { padding: 0, overflow: 'hidden' } }}

@@ -24,6 +24,7 @@ import {
   Button,
   Collapse,
   Popover,
+  Segmented,
   Space,
   Spin,
   Tag,
@@ -60,6 +61,11 @@ export interface CommentsPanelProps {
   onDeleteComment?: (commentId: string) => void;
   hoveredCommentId?: string | null;
   selectedCommentId?: string | null;
+  /**
+   * Render per-comment actions inline and always-visible instead of on hover.
+   * Required on touch surfaces (mobile), where hover never fires.
+   */
+  alwaysShowActions?: boolean;
 }
 
 type FilterMode = 'all' | 'active';
@@ -278,6 +284,7 @@ const CommentThread: React.FC<{
   isHighlighted?: boolean;
   scrollRef?: React.RefObject<HTMLDivElement | null>;
   client: AgorClient | null;
+  alwaysShowActions?: boolean;
 }> = ({
   comment,
   replies,
@@ -290,11 +297,13 @@ const CommentThread: React.FC<{
   isHighlighted,
   scrollRef,
   client,
+  alwaysShowActions,
 }) => {
   const { token } = theme.useToken();
   const [showReplyInput, setShowReplyInput] = useState(false);
   const [replyValue, setReplyValue] = useState('');
   const [isHovered, setIsHovered] = useState(false);
+  const showActions = isHovered || alwaysShowActions;
   const user = userById.get(comment.created_by);
   const isCurrentUser = comment.created_by === currentUserId;
 
@@ -369,18 +378,24 @@ const CommentThread: React.FC<{
           }
         />
 
-        {/* Action buttons overlay (visible on hover) */}
-        {isHovered && (
+        {/* Action buttons. On hover surfaces they float top-right; when
+            alwaysShowActions (touch) they sit inline below so they're tappable
+            and never overlap the comment text. */}
+        {showActions && (
           <div
-            style={{
-              position: 'absolute',
-              top: 4,
-              right: 0,
-              backgroundColor: token.colorBgContainer,
-              borderRadius: 4,
-              padding: '2px',
-              boxShadow: token.boxShadowTertiary,
-            }}
+            style={
+              alwaysShowActions
+                ? { marginTop: token.marginXS }
+                : {
+                    position: 'absolute',
+                    top: 4,
+                    right: 0,
+                    backgroundColor: token.colorBgContainer,
+                    borderRadius: 4,
+                    padding: '2px',
+                    boxShadow: token.boxShadowTertiary,
+                  }
+            }
           >
             <Space size="small">
               {onToggleReaction && (
@@ -561,6 +576,7 @@ export const CommentsPanel: React.FC<CommentsPanelProps> = ({
   onDeleteComment,
   hoveredCommentId,
   selectedCommentId,
+  alwaysShowActions,
 }) => {
   const { token } = theme.useToken();
   const [filter, setFilter] = useState<FilterMode>('active');
@@ -789,22 +805,15 @@ export const CommentsPanel: React.FC<CommentsPanelProps> = ({
           backgroundColor: token.colorBgContainer,
         }}
       >
-        <Space>
-          <Button
-            type={filter === 'active' ? 'primary' : 'default'}
-            size="small"
-            onClick={() => setFilter('active')}
-          >
-            Active
-          </Button>
-          <Button
-            type={filter === 'all' ? 'primary' : 'default'}
-            size="small"
-            onClick={() => setFilter('all')}
-          >
-            All
-          </Button>
-        </Space>
+        <Segmented<FilterMode>
+          size="small"
+          value={filter}
+          onChange={setFilter}
+          options={[
+            { label: 'Active', value: 'active' },
+            { label: 'All', value: 'all' },
+          ]}
+        />
       </div>
 
       {/* Thread List */}
@@ -897,6 +906,7 @@ export const CommentsPanel: React.FC<CommentsPanelProps> = ({
                         isHighlighted={isHighlighted}
                         scrollRef={commentRefs.current[thread.comment_id]}
                         client={client}
+                        alwaysShowActions={alwaysShowActions}
                       />
                     );
                   })}

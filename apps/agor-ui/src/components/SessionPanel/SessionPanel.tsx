@@ -23,6 +23,7 @@ import {
 } from '@agor-live/client';
 import {
   AimOutlined,
+  ArrowLeftOutlined,
   CloseOutlined,
   CodeOutlined,
   DownOutlined,
@@ -54,6 +55,7 @@ import { getDaemonUrl } from '../../config/daemon';
 import { useAppActions } from '../../contexts/AppActionsContext';
 import { useRecenterMap } from '../../contexts/CanvasNavigationContext';
 import { useConnectionDisabled } from '../../contexts/ConnectionContext';
+import { useIsMobileViewport } from '../../hooks/useIsMobileViewport';
 import { useSessionActions } from '../../hooks/useSessionActions';
 import { useSessionSearch } from '../../hooks/useSessionSearch';
 import { useSharedReactiveSession } from '../../hooks/useSharedReactiveSession';
@@ -354,6 +356,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   uploadPolicy,
 }) => {
   const { token } = theme.useToken();
+  const isMobileShell = useIsMobileViewport();
   const { modal } = App.useApp();
   const { showSuccess, showInfo, showError } = useThemedMessage();
   const connectionDisabled = useConnectionDisabled();
@@ -1544,7 +1547,8 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
         display: open ? 'flex' : 'none',
         flexDirection: 'column',
         background: token.colorBgElevated,
-        borderLeft: `1px solid ${token.colorBorder}`,
+        // No adjacent canvas on the mobile full-screen shell, so drop the left seam.
+        borderLeft: isMobileShell ? undefined : `1px solid ${token.colorBorder}`,
       }}
     >
       {/* Header */}
@@ -1651,10 +1655,11 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
                 onClick={openSearch}
               />
             </Tooltip>
-            <Tooltip title="Close Panel">
+            <Tooltip title={isMobileShell ? 'Back' : 'Close Panel'}>
               <Button
                 type="text"
-                icon={<CloseOutlined />}
+                aria-label={isMobileShell ? 'Back' : 'Close panel'}
+                icon={isMobileShell ? <ArrowLeftOutlined /> : <CloseOutlined />}
                 onClick={onClose}
                 style={{ marginLeft: token.sizeUnit }}
               />
@@ -1704,7 +1709,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
                 {totalMatches > 0 ? `${currentMatch + 1} / ${totalMatches}` : ''}
               </Typography.Text>
             )}
-            {!query && (
+            {!query && !isMobileShell && (
               <Typography.Text type="secondary" style={{ fontSize: 11 }}>
                 Esc to close
               </Typography.Text>
