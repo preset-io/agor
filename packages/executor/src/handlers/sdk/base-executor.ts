@@ -444,7 +444,7 @@ export function expiredClaudeCredentialMessage(
     !/authenticat|unauthorized|\b401\b|token.{0,20}expir/i.test(error)
   )
     return undefined;
-  return 'Claude access token expired during this task. Use Continue to start a new task with a fresh token; SDK resume state is preserved. The prompt was not replayed automatically.';
+  return 'Claude access token expired during this task. Send a follow-up prompt in this session to start a new task with a fresh token; SDK resume state is preserved. The prompt was not replayed automatically.';
 }
 
 /** Exported for tests. Mutates process.env — production callers: executeToolTask only. */

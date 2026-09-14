@@ -485,11 +485,11 @@ describe('installProviderConnection', () => {
 });
 
 describe('managed Claude long-task expiry guidance', () => {
-  it('requires explicit Continue after an expired authentication failure, not a prompt replay', () => {
+  it('requires an explicit follow-up prompt after an expired authentication failure, not a prompt replay', () => {
     const expiry = new Date(1000).toISOString();
     expect(
       expiredClaudeCredentialMessage('claude-code', expiry, '401 authentication failed', 2000)
-    ).toMatch(/Continue.*new task.*not replayed automatically/);
+    ).toMatch(/follow-up prompt in this session.*new task.*not replayed automatically/);
     expect(
       expiredClaudeCredentialMessage('claude-code', expiry, '401 authentication failed', 500)
     ).toBeUndefined();

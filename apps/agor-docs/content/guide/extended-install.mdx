@@ -378,8 +378,8 @@ above. No mixed old/new writer cohort or automatic filesystem import is supporte
 Tenant re-home and restored historical rotating grants require reconnect.
 
 Refresh happens before a new task starts. A long-running task can outlive its
-access token; use **Continue** after an expiry failure to start a new task while
-preserving SDK resume state. No automatic prompt replay or billing fallback occurs.
+access token; send a follow-up prompt in the same session after an expiry failure
+to start a new task while preserving SDK resume state. No automatic prompt replay or billing fallback occurs.
 Disconnect prevents new token delivery but cannot revoke already-delivered bearers.
 
 <a id="claude-max-pro" />

@@ -84,6 +84,13 @@ external protocols fail closed. `features.claudeOAuthCapability` reports
 readiness does **not** establish provider approval. The release owner must obtain
 approval for offering third-party Claude login before enabling a real service.
 
+**Upgrade sequencing:** on an eligible deployment, upgrading the image with this
+setting omitted enables sign-in. Technical compatibility with Cloud is not
+release clearance. Before installing this image without provider approval,
+operators must explicitly set `claude_subscription_oauth: false` in their
+version-controlled deployment configuration. Enable it only in a separately
+authorized rollout; do not rely on an older image's default-off behavior.
+
 Refresh claims are database-fenced across replicas. An uncertain exchange is not
 retried with the possibly consumed refresh token; reconnect in Settings. The
 backend status poll reports saved/usable state without refreshing or spawning an
@@ -93,8 +100,9 @@ dispatch, the claim stays unresolved rather than writing through the freeze;
 after thaw it is conservatively settled as ambiguous, never replayed.
 
 Access is refreshed before SDK launch, not inside an already-running SDK. A long
-task or permission wait can outlive its token. After authentication expiry, use
-**Continue** to create a new task with a fresh token and existing SDK resume state.
+task or permission wait can outlive its token. After authentication expiry, send a
+follow-up prompt in the same session to create a new task with a fresh token and
+existing SDK resume state.
 Agor does not replay prompts automatically or switch billing sources. Disconnect
 cannot recall an access token already delivered; authorized work may continue
 until provider expiry or normal Stop. Cloud's existing internal HTTP channel
@@ -107,6 +115,14 @@ snapshot the DB, run `agor db migrate --offline-cutover --yes`, then start only
 compatible replicas sharing the existing master secret. Do not import native
 credential files into backend grants; users explicitly reconnect. Grants and
 attempts are non-portable: tenant re-home requires reauthorization.
+
+The cutover is a credential-protocol fence, not just a table-DDL requirement.
+Older replicas do not understand the durable `managed_oauth` selection or the
+version-2 backend attempt material. In particular, an older resolver can treat
+that selection as missing personal credentials and fall through to a workspace
+credential under a preferred policy, rather than preserving the chosen billing
+source. Keep old writers/readers out of the cohort; additive DDL alone does not
+make mixed versions safe.
 
 For rollback, opt out first and keep compatible binaries/schema. A binary older
 than this migration requires an offline drain and a tested backup or coordinated
