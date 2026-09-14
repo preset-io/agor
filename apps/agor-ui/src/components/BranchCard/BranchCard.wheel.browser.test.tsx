@@ -436,8 +436,8 @@ it('retains pointer anchoring and line-mode deltas when forwarding pinch', async
   const canvasViewport = flow.getViewport();
   expect(canvasViewport.zoom).toBeGreaterThan(initialViewport.zoom);
   await settle();
-  await act(async () => flow.setViewport(initialViewport));
-  await settle();
+  await act(() => flow.setViewport(initialViewport));
+  await waitFor(() => expect(flow.getViewport()).toEqual(initialViewport));
   expect(wheel(row, gesture).defaultPrevented).toBe(true);
   expect(flow.getViewport()).toEqual(canvasViewport);
   const after = flow.screenToFlowPosition(pointer);
