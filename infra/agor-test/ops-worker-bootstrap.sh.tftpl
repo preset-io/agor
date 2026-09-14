@@ -4,13 +4,13 @@ exec > >(tee -a /var/log/agor-worker-bootstrap.log) 2>&1
 dnf install -y docker
 systemctl enable --now docker
 mkdir -p /opt/agor/releases/${release} /opt/agor/workspace /srv/agor/home /var/lib/agor
-aws s3 cp s3://${bucket}/workspace-releases/ops-image-${release}.tar.gz /opt/agor/image.tar.gz --region ap-southeast-2
+aws s3 cp s3://${bucket}/workspace-releases/ops-image-${release}.tar.gz /opt/agor/image.tar.gz --region ap-southeast-2 --only-show-errors
 gzip -dc /opt/agor/image.tar.gz | docker load
 rm /opt/agor/image.tar.gz
-aws s3 cp s3://${bucket}/workspace-releases/${release}.tar.gz /opt/agor/source.tar.gz --region ap-southeast-2
+aws s3 cp s3://${bucket}/workspace-releases/${release}.tar.gz /opt/agor/source.tar.gz --region ap-southeast-2 --only-show-errors
 tar -xzf /opt/agor/source.tar.gz -C /opt/agor/releases/${release}
 rm /opt/agor/source.tar.gz
-xfs_info /var/lib/agor | grep -q 'reflink=1'
+xfs_info "$(findmnt -n -o TARGET --target /var/lib/agor)" | grep -q 'reflink=1'
 cat > /opt/agor/workspace/cache-policy.json <<'JSON'
 {"mode":"workspaces","highWatermark":0.8,"lowWatermark":0.65,"minimumFreeBytes":10737418240,"minimumFreeInodes":100000,"idleMs":300000,"heartbeatMs":10000,"affinityWaitMs":15000}
 JSON

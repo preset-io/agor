@@ -41,8 +41,18 @@ def discover():
         for reservation in result['Reservations']:
             for instance in reservation['Instances']:
                 if instance.get('PrivateIpAddress'):
-                    workers.append({'id':instance['InstanceId'],'origin':'http://'+instance['PrivateIpAddress']+':8787','name':'Elastic worker','type':instance['InstanceType'],'az':instance['Placement']['AvailabilityZone'],'elastic':True})
+                    workers.append({'id':instance['InstanceId'],'origin':'http://'+instance['PrivateIpAddress']+':8787','name':'Elastic worker','type':instance['InstanceType'],'az':instance['Placement']['AvailabilityZone'],'bornAt':instance['LaunchTime'],'elastic':True})
     return workers
+
+def branch_labels(collected):
+    import sqlite3
+    try:
+        with sqlite3.connect('file:/srv/agor/home/.agor/agor.db?mode=ro', uri=True, timeout=1) as db:
+            names=dict(db.execute('select branch_id, name from branches'))
+        for worker in collected:
+            for resident in worker.get('residents',[]):
+                if resident['tenantId']=='default': resident['label']=names.get(resident['branchId'])
+    except (sqlite3.Error, OSError): pass
 
 def collect_worker(worker):
     try: return {**worker, **rpc(worker['origin'], '/ops/status'), 'reachable':True, 'observedAt':now()}
@@ -68,6 +78,7 @@ def collector():
         try:
             workers=discover()
             with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool: collected=list(pool.map(collect_worker,workers))
+            branch_labels(collected)
             with lock: state.update(workers=collected,sampledAt=now(),collectionError=None)
         except Exception as e:
             with lock: state['collectionError']=str(e)
@@ -85,19 +96,27 @@ def update(op, detail, status=None):
         if status: op['status']=status
         save()
 
-def transfer(op, source, target, tenant, branch):
+def transfer(op, source, target, tenant, branch, fleet=None):
     payload={'operationId':op['id'],'tenantId':tenant,'branchId':branch}
+    fleet=fleet or [source,target]
     try:
-        update(op,'Holding source worker; active work must finish first.','running')
-        rpc(source['origin'],'/ops/hold',payload)
-        update(op,'Holding destination worker.')
-        rpc(target['origin'],'/ops/hold',payload)
+        update(op,'Holding registered workers; all must be idle for this first operator workflow.','running')
+        for worker in sorted(fleet,key=lambda w:w['origin']): rpc(worker['origin'],'/ops/hold',payload)
+        # Retained source replicas must not supersede a more recently used private copy.
+        candidates=[]
+        for worker in fleet:
+            status=rpc(worker['origin'],'/ops/status')
+            for resident in status.get('residents',[]):
+                if resident['tenantId']==tenant and resident['branchId']==branch and resident['resident']:
+                    candidates.append((resident.get('epoch') or 0,resident.get('lastUsed') or 0,worker['origin']))
+        if not candidates or max(candidates)[2]!=source['origin']:
+            raise RuntimeError('Choose the most recently used resident copy as the transfer source')
         update(op,'Saving private workspace to S3. Source files remain in place.')
         exported=rpc(source['origin'],'/ops/export',payload,960)
         update(op,'Checkpoint acknowledged. Restoring onto destination.')
         restored=rpc(target['origin'],'/ops/import',{**payload,'recovery':exported['hash'],'epoch':exported['epoch'],'repository':exported['repository']},960)
         update(op,'Destination verified. Releasing workers.')
-        rpc(target['origin'],'/ops/release',payload); rpc(source['origin'],'/ops/release',payload)
+        for worker in [target]+[w for w in fleet if w['origin']!=target['origin']]: rpc(worker['origin'],'/ops/release',payload)
         update(op,'Transfer complete. '+str(restored['sessions'])+' sessions restored; source copy retained.','complete')
     except Exception as e: update(op,str(e)+'. Any acquired holds remain; inspect and release them explicitly.','failed')
     finally: operation_lock.release()
@@ -195,7 +214,7 @@ class Handler(BaseHTTPRequestHandler):
                 tenant=body.get('tenant'); branch=body.get('branch')
                 if not any(r['tenantId']==tenant and r['branchId']==branch and r['resident'] for r in source.get('residents',[])): raise ValueError('Source workspace not found')
                 if not source.get('reachable') or not target.get('reachable'): raise ValueError('Both workers must be reachable')
-                args=[source,target,tenant,branch]
+                args=[source,target,tenant,branch,list(workers.values())]
             if not operation_lock.acquire(blocking=False): raise ValueError('Another fleet operation is running')
             op={'id':str(uuid.uuid4()),'kind':'transfer' if args else 'provision','status':'queued','detail':'Queued by matt','createdAt':now(),'steps':[]}
             if args: op.update(source=source['id'],target=target['id'],tenant=tenant,branch=branch)

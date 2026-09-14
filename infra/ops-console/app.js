@@ -92,18 +92,30 @@ function stats() {
 }
 function workerCard(w) {
   const healthy = w.reachable;
+  const starting =
+    !healthy && w.elastic && w.bornAt && Date.now() - new Date(w.bornAt).getTime() < 1200000;
+  const pressure =
+    healthy &&
+    w.cachePolicy &&
+    (1 - w.freeBytes / w.totalBytes >= w.cachePolicy.highWatermark ||
+      w.freeBytes < w.cachePolicy.minimumFreeBytes ||
+      w.freeInodes < w.cachePolicy.minimumFreeInodes);
   const status = !healthy
-    ? 'Unreachable'
+    ? starting
+      ? 'Starting'
+      : 'Unreachable'
     : w.hold
       ? 'Operator hold'
       : w.maintenanceRunning
         ? 'Maintenance'
-        : w.freeSlots > 0
-          ? 'Ready'
-          : 'At capacity';
+        : pressure
+          ? 'Disk pressure'
+          : w.freeSlots > 0
+            ? 'Ready'
+            : 'At capacity';
   const disk = healthy ? 100 * (1 - w.freeBytes / w.totalBytes) : 0,
     mem = healthy ? 100 * (1 - w.hostMemory.free / w.hostMemory.total) : 0;
-  return `<article class="worker"><div class="worker-top"><div><h3><span class="host-icon">▤</span>${esc(w.name)}</h3><div class="meta mono">${esc(w.id)}</div></div>${badge(status, !healthy ? 'bad' : w.hold || !w.freeSlots ? 'warn' : 'good')}</div><div class="worker-body"><div class="meta">${esc(w.type)} · ${esc(w.az)} · ${esc(w.origin.replace('http://', ''))}</div>${healthy ? `<div class="usage"><div><div class="meter-label"><span>Disk</span><span>${disk.toFixed(0)}%</span></div><progress max="100" value="${disk}"></progress></div><div><div class="meter-label"><span>Memory¹</span><span>${mem.toFixed(0)}%</span></div><progress max="100" value="${mem}"></progress></div></div><div class="inline-metrics"><span><strong>${w.residents.filter((r) => r.resident).length}</strong> workspaces</span><span><strong>${w.activeSessions}</strong> active sessions</span><span><strong>${w.freeSlots}</strong> free slots</span></div>` : `<p class="error">${esc(w.error)}</p>`}</div><div class="worker-bottom"><span>${healthy ? `◈ ${esc(w.cachePolicy?.mode || 'Legacy placement')}` : 'Status unavailable'}</span><button data-worker="${esc(w.id)}">Inspect worker ↗</button></div></article>`;
+  return `<article class="worker"><div class="worker-top"><div><h3><span class="host-icon">▤</span>${esc(w.name)}</h3><div class="meta mono">${esc(w.id)}</div></div>${badge(status, !healthy ? (starting ? 'warn' : 'bad') : w.hold || !w.freeSlots || pressure ? 'warn' : 'good')}</div><div class="worker-body"><div class="meta">${esc(w.type)} · ${esc(w.az)} · ${esc(w.origin.replace('http://', ''))}</div>${healthy ? `<div class="usage"><div><div class="meter-label"><span>Disk</span><span>${disk.toFixed(0)}%</span></div><progress max="100" value="${disk}"></progress></div><div><div class="meter-label"><span>Memory¹</span><span>${mem.toFixed(0)}%</span></div><progress max="100" value="${mem}"></progress></div></div><div class="inline-metrics"><span><strong>${w.residents.filter((r) => r.resident).length}</strong> workspaces</span><span><strong>${w.activeSessions}</strong> active sessions</span><span><strong>${w.freeSlots}</strong> free slots</span></div>` : `<p class="error">${starting ? 'Waiting for the worker API while EC2 boots the runtime.' : esc(w.error)}</p>`}</div><div class="worker-bottom"><span>${healthy ? `◈ ${esc(w.cachePolicy?.mode || 'Legacy placement')}` : 'Status unavailable'}</span><button data-worker="${esc(w.id)}">Inspect worker ↗</button></div></article>`;
 }
 function fleet() {
   return `<div class="section-head"><div><h2>Worker placement</h2><p>Real worker responses. Select a host to inspect capacity and its local state.</p></div>${badge('XFS · reflink')}</div><div class="fleet">${data.workers.length ? data.workers.map(workerCard).join('') : '<p>Discovering EC2 workers…</p>'}</div>`;
@@ -113,7 +125,7 @@ function chart(metric) {
     return '<div class="chart-empty">No CloudWatch samples yet. Request metrics are not backfilled.</div>';
   const points = metric.points,
     maximum = Math.max(1, ...points.map((p) => p[1]));
-  return `<svg class="chart" viewBox="0 0 600 96" preserveAspectRatio="none" role="img" aria-label="S3 GET requests over the last hour"><polyline points="${points.map((p, i) => `${(i * 600) / Math.max(points.length - 1, 1)},${90 - (p[1] / maximum) * 78}`).join(' ')}"/></svg>`;
+  return `<svg class="chart" viewBox="0 0 600 96" preserveAspectRatio="none" role="img" aria-label="S3 GET requests over the last hour"><polyline points="${points.map((p, i) => `${points.length === 1 ? 300 : (i * 590) / (points.length - 1) + 5},${90 - (p[1] / maximum) * 78}`).join(' ')}"/>${points.map((p, i) => `<circle cx="${points.length === 1 ? 300 : (i * 590) / (points.length - 1) + 5}" cy="${90 - (p[1] / maximum) * 78}" r="3"/>`).join('')}</svg>`;
 }
 function storagePanel() {
   const cloud = data.cloud,
@@ -121,7 +133,7 @@ function storagePanel() {
   return `<section class="panel"><div class="storage-title"><h2>Object storage</h2>${badge('S3')}</div><div class="bucket mono">${esc(data.bucket)}</div><p>Worker traffic since each controller last started</p><div class="storage-numbers"><div><strong>${num(good().length ? c.putCalls || 0 : null)}</strong><span>PUT calls</span></div><div><strong>${num(good().length ? c.getCalls || 0 : null)}</strong><span>GET calls</span></div><div><strong>${num(good().length ? (c.getCacheHits || 0) + (c.putCacheHits || 0) : null)}</strong><span>Local cache hits</span></div></div>${chart(cloud?.metrics?.find((m) => m.name === 'GetRequests'))}<div class="legend"><span>Bucket GET requests · last hour</span><span>${cloud?.error ? 'CloudWatch unavailable' : 'CloudWatch · 5-minute periods'}</span></div></section>`;
 }
 function event(op) {
-  return `<div class="event"><span class="event-icon">${op.kind === 'transfer' ? '↔' : op.kind === 'release' ? '◇' : '＋'}</span><div><strong>${esc(op.kind === 'transfer' ? 'Workspace transfer' : op.kind === 'release' ? 'Worker released' : 'Provision worker')} ${badge(op.status, op.status === 'complete' ? 'good' : ['failed', 'interrupted'].includes(op.status) ? 'bad' : 'warn')}</strong><p>${esc(op.detail)}</p><small>${esc(age(op.updatedAt || op.createdAt))} · ${esc(op.id)}</small></div></div>`;
+  return `<div class="event"><span class="event-icon">${op.kind === 'transfer' ? '↔' : op.kind === 'release' ? '◇' : '＋'}</span><div><strong>${esc(op.kind === 'transfer' ? 'Workspace transfer' : op.kind === 'release' ? 'Worker released' : 'Provision worker')} ${badge(op.status, op.status === 'complete' ? 'good' : ['failed', 'interrupted'].includes(op.status) ? 'bad' : 'warn')}</strong><p>${esc(op.detail)}</p><small>${esc(age(op.updatedAt || op.createdAt))} · ${esc(op.id)}</small><details><summary>Operation timeline</summary>${op.steps.map((step) => `<div class="timeline-step"><time>${esc(new Date(step.at).toLocaleTimeString())}</time><span>${esc(step.detail)}</span></div>`).join('')}</details></div></div>`;
 }
 function events(limit = 4) {
   return data.operations.length
@@ -130,11 +142,11 @@ function events(limit = 4) {
 }
 function workspaceTable() {
   const matches = rows().filter((r) =>
-    `${r.repository} ${r.branchId} ${r.tenantId} ${r.worker.name}`
+    `${r.label || ''} ${r.repository} ${r.branchId} ${r.tenantId} ${r.worker.name}`
       .toLowerCase()
       .includes(filter.toLowerCase())
   );
-  return `<div class="table-wrap"><table><thead><tr><th>Repository / branch</th><th>Worker</th><th>Local state</th><th>Revision</th><th>Sessions²</th><th>Last used</th><th></th></tr></thead><tbody>${matches.map((r) => `<tr><td><strong>${esc(r.repository.split('/').slice(-2).join('/'))}</strong><small class="mono">${esc(r.branchId)} · tenant ${esc(r.tenantId)}</small></td><td>${esc(r.worker.name)}</td><td>${badge(r.pinned ? 'Pinned' : r.resident ? 'Resident' : 'Evicted', r.pinned ? 'warn' : r.resident ? 'good' : '')}${r.stale ? '<small>Recorded stale copy</small>' : ''}</td><td>${num(r.revision)}</td><td>${r.sessions.length}</td><td>${esc(age(r.lastUsed))}</td><td>${r.resident ? `<button class="row-action" data-transfer="${esc(r.worker.id)}" data-tenant="${esc(r.tenantId)}" data-branch="${esc(r.branchId)}">Transfer ↗</button>` : '—'}</td></tr>`).join('') || '<tr><td colspan="7" class="empty">No recorded workspaces match this view.</td></tr>'}</tbody></table></div>`;
+  return `<div class="table-wrap"><table><thead><tr><th>Repository / branch</th><th>Worker</th><th>Local state</th><th>Revision</th><th>Sessions²</th><th>Last used</th><th></th></tr></thead><tbody>${matches.map((r) => `<tr><td><strong>${esc(r.label || (r.repository === '.' ? 'Workspace' : r.repository.split('/').slice(-2).join('/')))}</strong><small class="mono">${esc(r.branchId)} · tenant ${esc(r.tenantId)}</small></td><td>${esc(r.worker.name)}</td><td>${badge(r.pinned ? 'Pinned' : r.resident ? 'Resident' : 'Evicted', r.pinned ? 'warn' : r.resident ? 'good' : '')}${r.stale ? '<small>Recorded stale copy</small>' : ''}</td><td>${num(r.revision)}</td><td>${r.sessions.length}</td><td>${esc(age(r.lastUsed))}</td><td>${r.resident ? `<button class="row-action" data-transfer="${esc(r.worker.id)}" data-tenant="${esc(r.tenantId)}" data-branch="${esc(r.branchId)}">Transfer ↗</button>` : '—'}</td></tr>`).join('') || '<tr><td colspan="7" class="empty">No recorded workspaces match this view.</td></tr>'}</tbody></table></div>`;
 }
 function render() {
   const titles = {
@@ -249,7 +261,7 @@ function transferDialog(source, tenant, branch) {
   const w = data.workers.find((w) => w.id === source);
   const targets = good().filter((t) => t.id !== source);
   modal(
-    `<h2>Transfer workspace</h2><p>Move the private workspace through an acknowledged S3 checkpoint. Source files are retained.</p><div class="review"><strong>${esc(w.name)}</strong><div class="mono">${esc(branch)}<br>tenant ${esc(tenant)}</div></div><label for="destination">Destination worker</label><select id="destination">${targets.map((t) => `<option value="${esc(t.id)}">${esc(t.name)} · ${bytes(t.freeBytes)} free${t.activeSessions ? ' · active' : ''}</option>`).join('')}</select><div class="review"><ol><li>Hold both workers. Active tasks or maintenance cause a refusal.</li><li>Checkpoint source files and restore on the destination.</li><li>Verify, then release both workers. Affinity prefers the restored copy.</li></ol>This pauses admission on both hosts while transferring. Existing destination replicas are retained separately; no automatic cleanup.</div><p id="action-error" class="error" role="alert"></p><div class="modal-actions"><button id="cancel">Cancel</button><button id="confirm" class="primary" ${targets.length ? '' : 'disabled'}>Transfer workspace</button></div>`
+    `<h2>Transfer workspace</h2><p>Move the private workspace through an acknowledged S3 checkpoint. Source files are retained.</p><div class="review"><strong>${esc(w.name)}</strong><div class="mono">${esc(branch)}<br>tenant ${esc(tenant)}</div></div><label for="destination">Destination worker</label><select id="destination">${targets.map((t) => `<option value="${esc(t.id)}">${esc(t.name)} · ${bytes(t.freeBytes)} free${t.activeSessions ? ' · active' : ''}</option>`).join('')}</select><div class="review"><ol><li>Hold registered workers. The fleet must be idle; active tasks or maintenance cause a refusal.</li><li>Checkpoint source files and restore on the destination.</li><li>Verify, then release workers. Affinity prefers the restored copy.</li></ol>This first workflow pauses admission across the registered fleet while transferring. Choose the most recently used resident copy as the source. Existing destination replicas are retained separately; no automatic cleanup.</div><p id="action-error" class="error" role="alert"></p><div class="modal-actions"><button id="cancel">Cancel</button><button id="confirm" class="primary" ${targets.length ? '' : 'disabled'}>Transfer workspace</button></div>`
   );
   $('#cancel').onclick = () => $('#modal').close();
   $('#confirm').onclick = () =>

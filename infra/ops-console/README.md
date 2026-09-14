@@ -16,10 +16,13 @@ are subsequent production work, not claimed by this prototype.
 
 ## Operations
 
-Transfers require both whole workers to be idle. Durable holds reject new
+The first transfer workflow requires all registered workers to be idle and
+briefly holds the whole fleet. This deliberately conservative operator path
+rechecks residency on every held worker and rejects an older retained source.
+It is not a zero-downtime migration service. Durable holds reject new
 work and survive controller restarts. Checkpoints use the existing scoped
-metadata, conflict checks and packed recovery format. The destination restores
-and acquires code authority. Its newer inventory timestamp makes it preferable
+metadata, conflict checks and packed recovery format. The destination atomically claims the exact exported ownership generation
+before restoring, renewing that lease during the transfer. Its newer inventory timestamp makes it preferable
 for subsequent affinity placement; this is not a permanent scheduling pin.
 Source copies remain. Previous destination replicas are moved to `ops-retained`
 and require deliberate cleanup. No automatic deletion is performed by this UI.
