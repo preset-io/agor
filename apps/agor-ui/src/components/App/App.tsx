@@ -19,7 +19,7 @@ import type {
   UpdateUserInput,
   User,
 } from '@agor-live/client';
-import { hasMinimumRole, PermissionScope } from '@agor-live/client';
+import { hasMinimumRole, PermissionScope, TEAMMATE_FRAMEWORK_REPO_URL } from '@agor-live/client';
 import { Flex, Layout, theme, Upload } from 'antd';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
@@ -34,6 +34,10 @@ import { AppActionsProvider } from '../../contexts/AppActionsContext';
 import { useRegisterBoardSwitcher } from '../../contexts/CanvasNavigationContext';
 import type { NewSessionConfig, SessionCreationResult } from '../../domain/sessionCreation';
 import { useAppNavigation } from '../../hooks/useAppNavigation';
+import {
+  useAuthenticatedAuthorityScope,
+  useAuthorityOperationGuard,
+} from '../../hooks/useAuthorityOperationGuard';
 import { useBoardTitle } from '../../hooks/useBoardTitle';
 import { useEventStream } from '../../hooks/useEventStream';
 import { useFaviconStatus } from '../../hooks/useFaviconStatus';
@@ -71,13 +75,18 @@ import { useThemedMessage } from '../../utils/message';
 import type { OnboardingReopenMode } from '../../utils/onboardingLifecycle';
 import { resolveQuickStartMcpServerIds } from '../../utils/resolveQuickStartMcpServerIds';
 import { getShellSurfacePath, hasExplicitEntityRouteTarget } from '../../utils/routeTargets';
-import { startTeammateBootstrapSession } from '../../utils/startTeammateBootstrapSession';
+import {
+  resumeTeammateBootstrapSession,
+  startTeammateBootstrapSession,
+} from '../../utils/startTeammateBootstrapSession';
 import {
   buildTeammateBootstrapPrompt,
   buildTeammateFirstSessionTitle,
 } from '../../utils/teammateBootstrapPrompt';
 import { createTeammateBranch } from '../../utils/teammateCreation';
+import { waitForDestinationReady } from '../../utils/teammateDestination';
 import { getTemplateForFrameworkSource } from '../../utils/teammateTemplates';
+import { waitForBranchFilesystemReady } from '../../utils/waitForBranchFilesystemReady';
 import { getUserDefaultConfigurationSource } from '../AgenticToolConfigurationPicker/useAgenticConfigurationSources';
 import { AppHeader } from '../AppHeader';
 import type { BoardTeammatePanelTab } from '../BoardTeammatePanel';
@@ -397,7 +406,7 @@ export const App: React.FC<AppProps> = ({
   // `agorStore.getState()` read inside a handler, or pushed down into the
   // component that actually consumes the map (SettingsModal, UrlStateBridge).
   const { token } = theme.useToken();
-  const { showWarning, showError } = useThemedMessage();
+  const { showError } = useThemedMessage();
   const location = useLocation();
   const routeParams = useParams<{
     sessionShortId?: string;
@@ -1029,15 +1038,26 @@ export const App: React.FC<AppProps> = ({
     }
   };
 
+  const teammateAuthority = useAuthenticatedAuthorityScope(
+    client,
+    user ? `${user.user_id}:${user.role}` : null
+  );
+  const teammateGuard = useAuthorityOperationGuard(teammateAuthority.operationScope);
+
   const handleCreateTeammate = async (
     result: TeammateTabResult,
     progress?: CreateDialogProgress
   ) => {
+    const operation = teammateGuard.begin();
+    if (!operation.isCurrent() || !client || !user)
+      throw new Error('Reconnect to create your teammate.');
     const repoId = result.repoId;
     if (!repoId || !onCreateBranch || !onUpdateBranch) {
       throw new Error('Missing repository or branch creation handler for AI teammate creation.');
     }
 
+    await waitForDestinationReady(client, repoId, operation.isCurrent);
+    if (!operation.isCurrent()) return;
     progress?.onStatusChange?.('Creating AI teammate branch…');
 
     const branch = await createTeammateBranch(
@@ -1048,10 +1068,19 @@ export const App: React.FC<AppProps> = ({
         repoId,
         branchName: result.branchName,
         sourceBranch: result.sourceBranch,
+        sourceRemoteUrl: result.sourceRemoteUrl,
+        creationBoardId: result.creationBoardId,
       },
-      { client, repoById: agorStore.getState().repoById, onCreateBranch, onUpdateBranch }
+      {
+        client,
+        repoById: agorStore.getState().repoById,
+        onCreateBranch,
+        onUpdateBranch,
+        shouldContinue: operation.isCurrent,
+      }
     );
 
+    if (!operation.isCurrent()) return;
     if (!branch) {
       throw new Error(
         'AI teammate branch could not be created. Please check the branch details and try again.'
@@ -1061,7 +1090,12 @@ export const App: React.FC<AppProps> = ({
     const template = getTemplateForFrameworkSource({
       sourceBranch: result.sourceBranch,
       selectedRepoId: result.repoId,
-      frameworkRepoId: findFrameworkRepo(agorStore.getState().repoById)?.[0],
+      frameworkRepoId:
+        result.sourceRemoteUrl === TEAMMATE_FRAMEWORK_REPO_URL
+          ? result.repoId
+          : !result.sourceRemoteUrl
+            ? findFrameworkRepo(agorStore.getState().repoById)?.[0]
+            : undefined,
     });
 
     const sessionConfig: NewSessionConfig = {
@@ -1089,6 +1123,34 @@ export const App: React.FC<AppProps> = ({
     };
 
     try {
+      await waitForBranchFilesystemReady(client, branch.branch_id);
+      if (!operation.isCurrent()) return;
+      const sessionsResult = await client
+        .service('sessions')
+        .find({ query: { branch_id: branch.branch_id, archived: false, $limit: 100 } });
+      if (!operation.isCurrent()) return;
+      const sessions = Array.isArray(sessionsResult) ? sessionsResult : sessionsResult.data;
+      const retainedSession = sessions.find(
+        (session) => session.branch_id === branch.branch_id && session.title === sessionConfig.title
+      );
+      if (retainedSession) {
+        await resumeTeammateBootstrapSession(
+          client,
+          retainedSession.session_id,
+          branch.branch_id,
+          {
+            expectedUserId: user.user_id,
+            mcpServerIds: sessionConfig.mcpServerIds,
+            envVarNames: sessionConfig.envVarNames,
+            prompt: sessionConfig.initialPrompt,
+            permissionMode: sessionConfig.permissionMode,
+          },
+          operation.isCurrent
+        );
+        if (!operation.isCurrent()) return;
+        navigation.goToSession(retainedSession.session_id);
+        return;
+      }
       if (!onCreateSession) {
         throw new Error('Missing session creation handler.');
       }
@@ -1099,24 +1161,15 @@ export const App: React.FC<AppProps> = ({
         sessionConfig,
         onCreateSession,
         onStatusChange: progress?.onStatusChange,
+        shouldContinue: operation.isCurrent,
       });
+      if (!operation.isCurrent()) return;
       navigation.goToSession(initialization.sessionId);
       return;
     } catch (error) {
-      console.error('AI teammate session bootstrap failed:', error);
-      showWarning(
-        `AI teammate branch was created, but the first session could not start: ${
-          error instanceof Error ? error.message : String(error)
-        }. Opening the branch instead.`,
-        { key: 'teammate-bootstrap-session', duration: 8 }
-      );
+      if (!operation.isCurrent()) return;
+      throw error;
     }
-
-    // If the branch was created but the session failed, still take the user
-    // to the teammate branch so the created AI teammate is not lost. The
-    // top-level create-session handler surfaces the failure toast.
-    progress?.onStatusChange?.('Opening AI teammate branch…');
-    navigation.goToBranch(branch.branch_id);
   };
 
   const handleSessionClick = useCallback(

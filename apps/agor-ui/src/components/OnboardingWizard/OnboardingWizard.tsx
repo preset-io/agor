@@ -51,6 +51,7 @@ import {
 } from '../../utils/teammateTemplates';
 import { CLAUDE_OAUTH_STORAGE_DESCRIPTION, ClaudeOAuthSignIn } from '../ClaudeAuth';
 import { type CodexAuthFallback, CodexDeviceSignIn, CodexImportAuthJson } from '../CodexAuth';
+import { TeammateHome } from '../forms/TeammateHome';
 import { GlassPanelHighlights } from '../GlassSurface/GlassPanel';
 import { ToolIcon } from '../ToolIcon';
 import { OnboardingTeammateGalleryStep } from './OnboardingTeammateGalleryStep';
@@ -336,6 +337,11 @@ const ONB_ANIM_CSS = `
     .onb-workspace-helper { display: none !important; }
   }
 
+  @media (max-height: 480px) {
+    .onb-workspace-layout { overflow-y: auto; }
+    .onb-workspace-gallery { flex: 0 0 auto !important; overflow: visible !important; }
+  }
+
   @media (prefers-reduced-motion: reduce) {
     .onb-step,
     .onb-check,
@@ -373,11 +379,12 @@ export interface OnboardingCompletionResult {
   sessionId: string;
   boardId: string;
   path: 'teammate';
+  repoId?: string;
   /** Name of the first AI teammate to create on completion. */
   teammateName?: string;
   /** Avatar emoji for the first AI teammate (defaults to 🤖). */
   teammateEmoji?: string;
-  /** Framework source branch from the chosen template; undefined = repo default. */
+  /** Canonical framework source branch, including main for blank. */
   sourceBranch?: string;
   /** Remote that owns sourceBranch; the teammate's destination repo remains unchanged. */
   sourceRemoteUrl?: string;
@@ -559,6 +566,12 @@ export function OnboardingWizard({
   // ── Step 2: workspace — name the user's first AI teammate ─────────────────
   // The teammate's name/emoji also names the board the wizard creates for them,
   // which the teammate is later seeded onto (see App.handleOnboardingComplete).
+  const [homeStep, setHomeStep] = useState(false);
+  const [destinationId, setDestinationId] = useState<string>();
+  const [destinationReady, setDestinationReady] = useState(false);
+  const [destinationAcknowledged, setDestinationAcknowledged] = useState(false);
+  const [savingHome, setSavingHome] = useState(false);
+  const homeInFlightRef = useRef(false);
   const [teammateName, setTeammateName] = useState('');
   const [teammateEmoji, setTeammateEmoji] = useState('🤖');
   // Chosen gallery template id (null = nothing picked yet). Sets the default
@@ -598,6 +611,10 @@ export function OnboardingWizard({
     setLlmSaving(false);
     setLlmAuthChecking(null);
     setLlmAuthVerified({});
+    setHomeStep(false);
+    setDestinationId(undefined);
+    setDestinationAcknowledged(false);
+    setDestinationReady(false);
     setTeammateName('');
     setTeammateEmoji('🤖');
     setSelectedTemplateId(null);
@@ -648,7 +665,9 @@ export function OnboardingWizard({
     } else {
       setSelectedAgent(null);
     }
-    if (savedBoardId) {
+    if (savedOnboarding) {
+      setDestinationId(savedOnboarding.repoId);
+      setHomeStep(savedOnboarding.teammateHomeStep === 'home');
       setSelectedGoals(savedOnboarding?.goals ?? []);
       setTeammateName(savedOnboarding?.teammateDisplayName ?? '');
       setTeammateEmoji(savedOnboarding?.teammateEmoji ?? savedBoard?.icon ?? '🤖');
@@ -656,10 +675,19 @@ export function OnboardingWizard({
       const savedTemplate = getTeammateTemplate(savedTemplateId);
       setSelectedTemplateId(savedTemplate?.id ?? null);
       setInvalidSavedTemplateId(savedTemplateId && !savedTemplate ? savedTemplateId : null);
-      setCreatedBoardId(savedBoardId);
-      createdBoardIdRef.current = savedBoardId;
+      setCreatedBoardId(savedBoardId ?? null);
+      createdBoardIdRef.current = savedBoardId ?? null;
       boardCreationConfirmedRef.current = !!savedBoard;
-      if (!initialStep) setCurrentStep('done');
+      if (!initialStep) {
+        setCurrentStep(
+          savedOnboarding.teammateDisplayName ? 'workspace' : savedBoardId ? 'done' : 'workspace'
+        );
+        if (savedOnboarding.teammateDisplayName && savedBoardId) setHomeStep(true);
+        if (savedBoardId && savedOnboarding.teammateDisplayName && !savedOnboarding.repoId) {
+          setCurrentStep('workspace');
+          setHomeStep(true);
+        }
+      }
     } else {
       setTeammateName('');
     }
@@ -797,7 +825,11 @@ export function OnboardingWizard({
       }
       case 'workspace':
         // A teammate name is required — it names the new board we always create.
-        return teammateName.trim().length > 0;
+        return (
+          teammateName.trim().length > 0 &&
+          !savingHome &&
+          (!homeStep || (destinationReady && destinationAcknowledged))
+        );
       case 'tools':
         // Curating tools is optional; Continue is always available.
         return true;
@@ -815,6 +847,10 @@ export function OnboardingWizard({
     effectiveAuthMethod,
     allowClaudeOAuthSignIn,
     teammateName,
+    homeStep,
+    savingHome,
+    destinationReady,
+    destinationAcknowledged,
   ]);
 
   const disabledReason = useMemo((): string | null => {
@@ -846,7 +882,11 @@ export function OnboardingWizard({
         return err ?? null;
       }
       case 'workspace':
-        return teammateName.trim().length === 0 ? 'Name your AI teammate to continue' : null;
+        return teammateName.trim().length === 0
+          ? 'Name your AI teammate to continue'
+          : homeStep && !destinationAcknowledged
+            ? 'Choose and confirm a home to continue'
+            : null;
       default:
         return null;
     }
@@ -861,6 +901,8 @@ export function OnboardingWizard({
     effectiveAuthMethod,
     allowClaudeOAuthSignIn,
     teammateName,
+    homeStep,
+    destinationAcknowledged,
     llmSaving,
     completing,
   ]);
@@ -912,27 +954,38 @@ export function OnboardingWizard({
   ]);
 
   const canGoBack = stepIndex > 0;
-  const isSkippable = meta.skippable && currentStep !== 'done';
+  const isSkippable =
+    meta.skippable &&
+    currentStep !== 'done' &&
+    !savingHome &&
+    !(currentStep === 'workspace' && createdBoardId);
 
   // ─── Handlers ────────────────────────────────────────────────────────────
 
+  const progressWriteRef = useRef<Promise<unknown>>(Promise.resolve());
   const saveOnboardingProgress = useCallback(
-    async (updates: Record<string, unknown>) => {
-      if (!isCurrent()) return false;
-      if (!user || !client) throw new Error('Not connected - try again when Agor reconnects.');
-      // Preferences are a whole JSON object. Fetch immediately before the patch
-      // so an unrelated settings write made while the wizard was open is not
-      // replaced by the user snapshot captured at mount time.
-      const latestUser = (await client.service('users').get(user.user_id)) as User;
-      if (!isCurrent()) return false;
-      const current = (latestUser.preferences?.onboarding ?? {}) as Record<string, unknown>;
-      const prefs: UserPreferences = {
-        ...latestUser.preferences,
-        onboarding: { ...current, ...updates },
-      } as UserPreferences;
-      if (!isCurrent()) return false;
-      await onUpdateUser(user.user_id, { preferences: prefs });
-      return isCurrent();
+    (updates: Record<string, unknown>): Promise<boolean> => {
+      const write = progressWriteRef.current
+        .catch(() => undefined)
+        .then(async () => {
+          if (!isCurrent()) return false;
+          if (!user || !client) throw new Error('Not connected - try again when Agor reconnects.');
+          // Preferences are a whole JSON object. Fetch immediately before the patch
+          // so an unrelated settings write made while the wizard was open is not
+          // replaced by the user snapshot captured at mount time.
+          const latestUser = (await client.service('users').get(user.user_id)) as User;
+          if (!isCurrent()) return false;
+          const current = (latestUser.preferences?.onboarding ?? {}) as Record<string, unknown>;
+          const prefs: UserPreferences = {
+            ...latestUser.preferences,
+            onboarding: { ...current, ...updates },
+          } as UserPreferences;
+          if (!isCurrent()) return false;
+          await onUpdateUser(user.user_id, { preferences: prefs });
+          return isCurrent();
+        });
+      progressWriteRef.current = write;
+      return write;
     },
     [client, isCurrent, onUpdateUser, user]
   );
@@ -956,6 +1009,8 @@ export function OnboardingWizard({
       teammateDisplayName: name || undefined,
       teammateEmoji: name ? teammateEmoji : undefined,
       teammateTemplateId: name ? (selectedTemplateId ?? undefined) : undefined,
+      repoId: name ? destinationId : undefined,
+      teammateHomeStep: homeStep ? 'home' : 'persona',
     });
     if (!progressSaved || !isCurrent()) throw new Error('Setup was cancelled.');
     if (!boardCreationConfirmedRef.current) {
@@ -993,6 +1048,8 @@ export function OnboardingWizard({
     teammateName,
     teammateEmoji,
     selectedTemplateId,
+    destinationId,
+    homeStep,
     user,
   ]);
 
@@ -1026,11 +1083,16 @@ export function OnboardingWizard({
   }, [goToStep]);
 
   const handleBack = useCallback(() => {
+    if (currentStep === 'workspace' && homeStep) {
+      setHomeStep(false);
+      return;
+    }
+    if (currentStep === 'llm') setHomeStep(true);
     if (stepIndex > 0) goToStep(STEPS[stepIndex - 1]);
-  }, [stepIndex, goToStep]);
+  }, [stepIndex, goToStep, currentStep, homeStep]);
 
   const handleSkip = useCallback(() => {
-    if (currentStep === 'done') return;
+    if (currentStep === 'done' || (currentStep === 'workspace' && createdBoardId)) return;
     // Skip means "decide later", even if the user experimented with a card
     // first. Do not silently submit a selection they explicitly skipped.
     if (currentStep === 'goals') setSelectedGoals([]);
@@ -1043,6 +1105,9 @@ export function OnboardingWizard({
     // typed name or an experimental template into completion after the user
     // explicitly chose to continue without creating a teammate.
     if (currentStep === 'workspace') {
+      setDestinationId(undefined);
+      setDestinationAcknowledged(false);
+      setHomeStep(false);
       setTeammateName('');
       setTeammateEmoji('🤖');
       setSelectedTemplateId(null);
@@ -1058,7 +1123,7 @@ export function OnboardingWizard({
       setLlmError(null);
     }
     goToStep(STEPS[stepIndex + 1]);
-  }, [currentStep, stepIndex, goToStep, selectedAgent, agentHasKey, selectedGoals]);
+  }, [currentStep, stepIndex, goToStep, selectedAgent, agentHasKey, selectedGoals, createdBoardId]);
 
   const handleDismiss = useCallback(() => {
     if (!onDismiss) return;
@@ -1072,8 +1137,19 @@ export function OnboardingWizard({
       teammateDisplayName: name || undefined,
       teammateEmoji: name ? teammateEmoji : undefined,
       teammateTemplateId: name ? (selectedTemplateId ?? undefined) : undefined,
+      repoId: name ? destinationId : undefined,
+      teammateHomeStep: homeStep ? 'home' : 'persona',
     });
-  }, [createdBoardId, onDismiss, selectedGoals, selectedTemplateId, teammateEmoji, teammateName]);
+  }, [
+    createdBoardId,
+    onDismiss,
+    selectedGoals,
+    selectedTemplateId,
+    teammateEmoji,
+    teammateName,
+    destinationId,
+    homeStep,
+  ]);
 
   const handlePrimary = useCallback(async () => {
     if (!isCurrent()) return;
@@ -1162,9 +1238,29 @@ export function OnboardingWizard({
         break;
       }
       case 'workspace': {
-        // Naming and Catalog Connect do not provision a workspace. Final completion
-        // owns provisioning. Skip remains the no-teammate path.
-        goToStep('llm');
+        if (homeInFlightRef.current || !teammateName.trim() || invalidSavedTemplateId) return;
+        if (homeStep && (!destinationReady || !destinationAcknowledged)) return;
+        homeInFlightRef.current = true;
+        setSavingHome(true);
+        setBoardError(null);
+        try {
+          const saved = await saveOnboardingProgress({
+            goals: selectedGoals,
+            teammateDisplayName: teammateName.trim(),
+            teammateEmoji,
+            teammateTemplateId: selectedTemplateId ?? undefined,
+            repoId: destinationId,
+            teammateHomeStep: 'home',
+          });
+          if (!saved || !isCurrent()) return;
+          if (homeStep) goToStep('llm');
+          else setHomeStep(true);
+        } catch {
+          if (isCurrent()) setBoardError('Could not save your teammate draft. Please retry.');
+        } finally {
+          homeInFlightRef.current = false;
+          if (isCurrent()) setSavingHome(false);
+        }
         break;
       }
       case 'tools': {
@@ -1212,11 +1308,11 @@ export function OnboardingWizard({
                   sessionId: '',
                   boardId,
                   path: 'teammate',
+                  repoId: destinationId,
                   // Naming details for the first AI teammate, seeded on completion.
                   teammateName: name || undefined,
                   teammateEmoji,
-                  // Framework source branch from the chosen gallery template; undefined
-                  // (blank / no pick) falls back to the repo default branch.
+                  // Starter source stays separate from the explicit destination, including blank.
                   sourceBranch: resolveTemplateSourceBranch(selectedTemplateId),
                   sourceRemoteUrl: resolveTemplateSourceRemoteUrl(selectedTemplateId),
                   templateId: selectedTemplateId,
@@ -1249,6 +1345,10 @@ export function OnboardingWizard({
             completionAttemptGenerationRef.current += 1;
           }
           if (isCurrent()) {
+            if (name) {
+              setHomeStep(true);
+              goToStep('workspace');
+            }
             setCompletionSlow(false);
             setBoardError(err instanceof Error ? err.message : 'Failed to finish setup');
           }
@@ -1272,6 +1372,11 @@ export function OnboardingWizard({
     slackGatewayIntent,
     connectedMcpServerIds,
     ensureBoard,
+    destinationId,
+    homeStep,
+    destinationReady,
+    destinationAcknowledged,
+    saveOnboardingProgress,
     selectedAgent,
     agentIsVerifiedConnected,
     agentHasKey,
@@ -1296,15 +1401,24 @@ export function OnboardingWizard({
   // keyed transition mounts so keyboard and screen-reader users hear the new
   // context instead of remaining on the reused footer button.
   const stepHeadingRef = useRef<HTMLHeadingElement>(null);
+  const selectedTemplateRef = useRef(selectedTemplateId);
+  selectedTemplateRef.current = selectedTemplateId;
   useEffect(() => {
     if (!open) return;
     const frame = window.requestAnimationFrame(() => {
-      if (stepHeadingRef.current?.dataset.step === currentStep) {
-        stepHeadingRef.current.focus();
+      if (currentStep === 'workspace' && !homeStep && selectedTemplateRef.current) {
+        const selected = document.querySelector<HTMLElement>(
+          '.onb-step [aria-pressed="true"][role="button"]'
+        );
+        if (selected) {
+          selected.focus();
+          return;
+        }
       }
+      if (stepHeadingRef.current?.dataset.step === currentStep) stepHeadingRef.current.focus();
     });
     return () => window.cancelAnimationFrame(frame);
-  }, [open, currentStep]);
+  }, [open, currentStep, homeStep]);
 
   // ─── Progress stepper ────────────────────────────────────────────────────
 
@@ -2117,7 +2231,7 @@ export function OnboardingWizard({
 
   // ─── Footer ───────────────────────────────────────────────────────────────
 
-  const isPrimaryLoading = llmSaving || completing;
+  const isPrimaryLoading = llmSaving || completing || savingHome;
   const effectivePrimaryEnabled = primaryEnabled && !isPrimaryLoading;
 
   const footer = (
@@ -2141,7 +2255,7 @@ export function OnboardingWizard({
             type="text"
             icon={<LeftOutlined />}
             onClick={handleBack}
-            disabled={completing}
+            disabled={completing || savingHome}
             style={{ color: TEXT_SECONDARY, paddingLeft: 0 }}
           >
             Back
@@ -2216,6 +2330,7 @@ export function OnboardingWizard({
             WebkitBackdropFilter: 'blur(8px)',
             background: 'rgba(0,0,0,0.35)',
           },
+          container: { padding: 0 },
           body: { padding: 0 },
         }}
       >
@@ -2288,7 +2403,7 @@ export function OnboardingWizard({
               // Step 4 (done) is a flex column too, so the success hero can center
               // vertically via auto margins (and still scroll if it ever overflows).
               // Every other step scrolls as one block here.
-              ...(currentStep === 'workspace'
+              ...(currentStep === 'workspace' && !homeStep
                 ? { display: 'flex', flexDirection: 'column', overflow: 'hidden' }
                 : currentStep === 'done'
                   ? { display: 'flex', flexDirection: 'column', overflowY: 'auto' }
@@ -2297,7 +2412,54 @@ export function OnboardingWizard({
           >
             {currentStep === 'goals' && renderGoals()}
             {currentStep === 'llm' && renderLlm()}
-            {currentStep === 'workspace' && renderWorkspace()}
+            {currentStep === 'workspace' &&
+              (homeStep ? (
+                <>
+                  <Title ref={stepHeadingRef} data-step="workspace" level={3} tabIndex={-1}>
+                    Where should {teammateName}’s work live?
+                  </Title>
+                  <TeammateHome
+                    client={client}
+                    user={user}
+                    repoId={destinationId}
+                    onChange={async (id) => {
+                      setDestinationId(id);
+                      try {
+                        await saveOnboardingProgress({ repoId: id, teammateHomeStep: 'home' });
+                      } catch {
+                        if (isCurrent())
+                          setBoardError(
+                            'Could not save the destination. Retry Continue before leaving.'
+                          );
+                      }
+                    }}
+                    onReadyChange={setDestinationReady}
+                    acknowledged={destinationAcknowledged}
+                    onAcknowledgedChange={setDestinationAcknowledged}
+                    disabled={savingHome}
+                    beforeLeave={async () => {
+                      if (
+                        !(await saveOnboardingProgress({
+                          teammateDisplayName: teammateName.trim(),
+                          teammateEmoji,
+                          teammateTemplateId: selectedTemplateId ?? undefined,
+                          goals: selectedGoals,
+                          repoId: destinationId,
+                          teammateHomeStep: 'home',
+                        }))
+                      )
+                        throw new Error('Setup was cancelled.');
+                    }}
+                  />
+                </>
+              ) : (
+                renderWorkspace()
+              ))}
+            {currentStep === 'workspace' && completionError && (
+              <div role="alert">
+                <Text type="danger">{completionError}</Text>
+              </div>
+            )}
             {currentStep === 'tools' && renderTools()}
             {currentStep === 'done' && renderDone()}
           </div>

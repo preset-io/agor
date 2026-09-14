@@ -1,37 +1,24 @@
-import type { Repo } from '@agor-live/client';
 import { Form } from 'antd';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import { slugify } from '@/utils/repoSlug';
 
 /**
  * Shared teammate form logic used by CreateDialog's Teammate tab.
  *
  * Encapsulates: form instance, validation, display-name-to-branch-name
- * auto-generation, framework repo auto-select, and custom repo tracking.
+ * auto-generation and explicit destination validation.
  */
-export function useTeammateForm(frameworkRepo: Repo | undefined) {
+export function useTeammateForm() {
   const [form] = Form.useForm();
   const [isFormValid, setIsFormValid] = useState(false);
-  const [customRepoSelected, setCustomRepoSelected] = useState(false);
   const lastAutoName = useRef('');
 
   const validateForm = useCallback(() => {
     const values = form.getFieldsValue();
     const hasDisplayName = !!values.displayName?.trim();
-    const hasRepo = Boolean(values.repoId || frameworkRepo?.repo_id);
+    const hasRepo = Boolean(values.repoId);
     setIsFormValid(hasDisplayName && hasRepo);
-  }, [form, frameworkRepo]);
-
-  // Auto-select framework repo when available. setFieldValue is silent
-  // (does not fire onFieldsChange), so re-run validation here — otherwise
-  // a name typed while the framework repo was still cloning leaves the
-  // submit button stuck disabled after the repo arrives.
-  useEffect(() => {
-    if (frameworkRepo && !form.getFieldValue('repoId')) {
-      form.setFieldValue('repoId', frameworkRepo.repo_id);
-    }
-    validateForm();
-  }, [frameworkRepo, form, validateForm]);
+  }, [form]);
 
   const handleDisplayNameChange = useCallback(
     (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -50,7 +37,6 @@ export function useTeammateForm(frameworkRepo: Repo | undefined) {
   const resetForm = useCallback(() => {
     form.resetFields();
     setIsFormValid(false);
-    setCustomRepoSelected(false);
     lastAutoName.current = '';
   }, [form]);
 
@@ -58,8 +44,6 @@ export function useTeammateForm(frameworkRepo: Repo | undefined) {
     form,
     isFormValid,
     setIsFormValid,
-    customRepoSelected,
-    setCustomRepoSelected,
     validateForm,
     handleDisplayNameChange,
     resetForm,

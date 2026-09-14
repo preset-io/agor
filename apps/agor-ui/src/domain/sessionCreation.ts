@@ -28,6 +28,8 @@ export interface NewSessionConfig {
 export interface SessionCreationResult {
   /** Durable session id. It remains useful even when initialization failed. */
   sessionId: string;
+  /** The durable session exists, but its first prompt was not confirmed admitted. */
+  initializationFailed?: true;
 }
 
 export type SessionCreationStageResult =

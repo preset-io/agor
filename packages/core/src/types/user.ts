@@ -452,6 +452,8 @@ export interface OnboardingState {
   repoId?: string;
   /** The branch ID created during onboarding */
   branchId?: string;
+  /** Bootstrap session retained across a partial completion retry. */
+  sessionId?: string;
   /** The board ID created for this user */
   boardId?: string;
   /** Teammate display name captured during onboarding identity step */
@@ -462,6 +464,8 @@ export interface OnboardingState {
   teammateEmoji?: string;
   /** Starter-template id selected for the first teammate (for resumable setup). */
   teammateTemplateId?: string;
+  /** Inline teammate setup substep; drafts can exist before any board. */
+  teammateHomeStep?: 'persona' | 'home';
   /** @deprecated Use teammateEmoji. Read for pre-rename preferences compatibility only. */
   assistantEmoji?: string;
 }

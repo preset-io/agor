@@ -14,6 +14,10 @@ import {
 import { Alert, Button, Modal, Tabs } from 'antd';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { BranchStorageConfig } from '@/utils/branchStorage';
+import {
+  useAuthenticatedAuthorityScope,
+  useAuthorityOperationGuard,
+} from '../../hooks/useAuthorityOperationGuard';
 import { useAgorStore } from '../../store/agorStore';
 import { selectBoardById, selectMcpServerById, selectRepoById } from '../../store/selectors';
 import type { AgenticToolOption } from '../../types';
@@ -167,7 +171,24 @@ export const CreateDialog: React.FC<CreateDialogProps> = ({
     setSubmitStatus(null);
   };
 
+  const authority = useAuthenticatedAuthorityScope(
+    client ?? null,
+    currentUser ? `${currentUser.user_id}:${currentUser.role}` : null
+  );
+  const teammateGuard = useAuthorityOperationGuard(open ? authority.operationScope : null);
+  const submissionRef = useRef<object | null>(null);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: retire UI submission state when the caller is replaced
+  useEffect(() => {
+    submissionRef.current = null;
+    setIsSubmitting(false);
+    setSubmitError(null);
+  }, [currentUser?.user_id, open]);
   const handleSubmit = async () => {
+    if (submissionRef.current) return;
+    const attempt = {};
+    const operation = activeTab === 'teammate' ? teammateGuard.begin() : undefined;
+    if (operation && !operation.isCurrent()) return;
+    submissionRef.current = attempt;
     setIsSubmitting(true);
     setSubmitError(null);
     setSubmitStatus(null);
@@ -204,20 +225,27 @@ export const CreateDialog: React.FC<CreateDialogProps> = ({
         }
         case 'teammate': {
           const result = await teammateFormRef.current?.();
+          if (!operation?.isCurrent()) return;
           if (result) {
             setSubmitStatus('Creating AI teammate…');
-            await (onCreateTeammate ?? onCreateTeammate)?.(result, {
-              onStatusChange: setSubmitStatus,
+            await onCreateTeammate?.(result, {
+              onStatusChange: (status) => {
+                if (operation?.isCurrent()) setSubmitStatus(status);
+              },
             });
-            onClose();
+            if (operation?.isCurrent()) onClose();
           }
           break;
         }
       }
     } catch (error) {
+      if (operation && !operation.isCurrent()) return;
       setSubmitError(error instanceof Error ? error.message : String(error));
     } finally {
-      setIsSubmitting(false);
+      if (submissionRef.current === attempt) {
+        submissionRef.current = null;
+        setIsSubmitting(false);
+      }
     }
   };
 

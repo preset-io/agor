@@ -31,6 +31,31 @@ import { agorStore } from '../../store/agorStore';
 import { mergeGoalIntegrationRecs } from '../../utils/onboardingGoals';
 import { OnboardingWizard } from './OnboardingWizard';
 
+// Home behavior itself is covered by TeammateHome.test.tsx; this stub keeps wizard
+// navigation/completion tests focused without conflating registration with completion.
+vi.mock('../forms/TeammateHome', () => ({
+  TeammateHome: ({
+    onChange,
+    onReadyChange,
+    onAcknowledgedChange,
+  }: {
+    onChange: (id: string) => void;
+    onReadyChange: (ready: boolean) => void;
+    onAcknowledgedChange: (value: boolean) => void;
+  }) => (
+    <button
+      type="button"
+      onClick={() => {
+        onChange('owned-home');
+        onReadyChange(true);
+        onAcknowledgedChange(true);
+      }}
+    >
+      Choose and confirm home
+    </button>
+  ),
+}));
+
 const { TEST_BOARD_ID } = vi.hoisted(() => ({
   TEST_BOARD_ID: '01933e4a-7b89-7c35-a8f3-9d2e1c4b5a6f',
 }));
@@ -142,6 +167,13 @@ async function findAndClickButton(text: string | RegExp) {
   const button = el.closest('button');
   if (!button) throw new Error(`No ancestor <button> found for text "${text}"`);
   fireEvent.click(button);
+}
+
+async function chooseHome() {
+  await findAndClickButton('Choose and confirm home');
+  await waitFor(() => expect(screen.getByText('Continue →').closest('button')).toBeEnabled());
+  clickButton('Continue →');
+  await screen.findByText('Connect your AI');
 }
 
 describe('OnboardingWizard', () => {
@@ -770,12 +802,23 @@ describe('OnboardingWizard', () => {
     fireEvent.change(screen.getByLabelText('Teammate name'), { target: { value: 'Rusty' } });
 
     clickButton(/^continue →/i);
+    await chooseHome();
 
     // Step 2 no longer creates a board (that's deferred to completion so an
     // abandoned run never leaves an orphan board) — Continue just advances.
     expect(await screen.findByText('Connect your AI')).toBeInTheDocument();
     expect(boardsService.create).not.toHaveBeenCalled();
-    expect(onUpdateUser).not.toHaveBeenCalled();
+    expect(onUpdateUser).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        preferences: expect.objectContaining({
+          onboarding: expect.objectContaining({
+            repoId: 'owned-home',
+            teammateDisplayName: 'Rusty',
+          }),
+        }),
+      })
+    );
   });
 
   it('surfaces a board-creation failure at COMPLETION as an inline error on the final step', async () => {
@@ -797,7 +840,8 @@ describe('OnboardingWizard', () => {
     renderWizard({ initialStep: 'workspace', client: client as never });
 
     fireEvent.change(screen.getByLabelText('Teammate name'), { target: { value: 'Rusty' } });
-    clickButton(/^continue →/i); // workspace → llm (no board yet)
+    clickButton(/^continue →/i); // persona → home
+    await chooseHome(); // home → llm (no board yet)
     await findAndClickButton(/skip for now/i); // llm → tools
     await findAndClickButton(/skip for now/i); // tools → done
     // The board is created only now, at completion; its rejection surfaces as an
@@ -805,7 +849,7 @@ describe('OnboardingWizard', () => {
     clickButton(/meet rusty/i);
 
     expect(await screen.findByText('slug already exists')).toBeInTheDocument();
-    expect(screen.getByText('Rusty needs one more try.')).toBeInTheDocument();
+    expect(screen.getByText('Where should Rusty’s work live?')).toBeInTheDocument();
   });
 
   it('discovers a board committed before an ambiguous create response failed', async () => {
@@ -1012,7 +1056,8 @@ describe('OnboardingWizard', () => {
     fireEvent.click(legalCard as HTMLElement);
     expect(screen.getByLabelText('Teammate name')).toHaveValue('Rusty');
 
-    clickButton(/^continue →/i); // workspace → llm
+    clickButton(/^continue →/i); // persona → home
+    await chooseHome(); // home → llm
     await findAndClickButton(/skip for now/i); // llm → tools
     await findAndClickButton(/skip for now/i); // tools → done
     clickButton(/meet rusty/i); // named teammate → verb-first primary CTA
@@ -1048,7 +1093,7 @@ describe('OnboardingWizard', () => {
         expect.objectContaining({
           teammateName: undefined,
           teammateEmoji: '🤖',
-          sourceBranch: undefined,
+          sourceBranch: 'main',
           templateId: null,
         }),
         expect.objectContaining({ isCurrent: expect.any(Function) })
@@ -1072,7 +1117,8 @@ describe('OnboardingWizard', () => {
     expect(screen.getByText(/new board/i)).toBeInTheDocument();
 
     fireEvent.change(screen.getByLabelText('Teammate name'), { target: { value: 'Rusty' } });
-    clickButton(/^continue →/i); // workspace → llm: still NO board created
+    clickButton(/^continue →/i); // persona → home
+    await chooseHome(); // home → llm: still NO board created
     expect(await screen.findByText('Connect your AI')).toBeInTheDocument();
     expect(boardsService.create).not.toHaveBeenCalled();
 
@@ -1100,6 +1146,7 @@ describe('OnboardingWizard', () => {
     expect(await screen.findByText('Build your teammate')).toBeInTheDocument();
     fireEvent.change(screen.getByLabelText('Teammate name'), { target: { value: 'Rusty' } });
     clickButton(/^continue →/i);
+    await chooseHome();
 
     // llm
     await findAndClickButton('Claude');
@@ -1125,10 +1172,11 @@ describe('OnboardingWizard', () => {
           sessionId: '',
           boardId: TEST_BOARD_ID,
           path: 'teammate',
+          repoId: 'owned-home',
           teammateName: 'Rusty',
           teammateEmoji: '🤖',
-          sourceBranch: undefined,
-          sourceRemoteUrl: undefined,
+          sourceBranch: 'main',
+          sourceRemoteUrl: 'https://github.com/preset-io/agor-teammate.git',
           templateId: null,
           agent: 'claude-code',
           // Goals were skipped → the default MCP suggestion set flows through, and
@@ -1161,6 +1209,7 @@ describe('OnboardingWizard', () => {
     const templateCard = screen.getByText('Product Manager').closest('[role="button"]');
     fireEvent.click(templateCard as HTMLElement);
     clickButton(/^continue →/i);
+    await chooseHome();
 
     // llm — connect Claude
     await findAndClickButton('Claude');
@@ -1220,26 +1269,7 @@ describe('OnboardingWizard', () => {
     clickButton(/skip for now/i);
 
     expect(await screen.findByText('Build your teammate')).toBeInTheDocument();
-    // Even an already-registered copy needs the explicit post-onboarding path
-    // to choose/confirm the destination. Following Skip emits no teammate.
-    await waitFor(() =>
-      expect(screen.getByText('Choose a repository you can push to')).toBeVisible()
-    );
-    const guidance = screen.getByText(/To choose or confirm a writable destination/);
-    expect(guidance).toBeVisible();
-    expect(guidance).toHaveTextContent(
-      'select Skip for now on this Teammate step and finish onboarding, even if your copy is already registered'
-    );
-    expect(guidance).toHaveTextContent(
-      'Then open Create → Teammate and explicitly select your copy in Framework Repository'
-    );
-    expect(guidance).toHaveTextContent(
-      'Use Create → Repository first only if your copy is not registered'
-    );
-    expect(guidance).toHaveTextContent(
-      'Registration alone does not guarantee onboarding selects it'
-    );
-    expect(screen.getByText(/public template does not grant push access/)).toBeVisible();
+    expect(screen.queryByText('Choose a repository you can push to')).not.toBeInTheDocument();
     expect(onComplete).not.toHaveBeenCalled();
     clickButton(/skip for now/i);
 
@@ -1264,10 +1294,11 @@ describe('OnboardingWizard', () => {
           sessionId: '',
           boardId: TEST_BOARD_ID,
           path: 'teammate',
+          repoId: undefined,
           teammateName: undefined,
           teammateEmoji: '🤖',
-          sourceBranch: undefined,
-          sourceRemoteUrl: undefined,
+          sourceBranch: 'main',
+          sourceRemoteUrl: 'https://github.com/preset-io/agor-teammate.git',
           templateId: null,
           agent: null,
           suggestedIntegrations: [],
@@ -1405,6 +1436,9 @@ describe('OnboardingWizard', () => {
     });
     const { boardsService } = renderWizard({ onComplete, user });
 
+    await chooseHome();
+    await findAndClickButton(/skip for now/i);
+    await findAndClickButton(/skip for now/i);
     expect(await screen.findByText('Rusty is ready.')).toBeInTheDocument();
     clickButton(/meet rusty/i);
 
@@ -1435,6 +1469,9 @@ describe('OnboardingWizard', () => {
       boardById: new Map([[resumedBoard.board_id, resumedBoard]]),
     });
 
+    await chooseHome();
+    await findAndClickButton(/skip for now/i);
+    await findAndClickButton(/skip for now/i);
     expect(await screen.findByText('Rusty is ready.')).toBeInTheDocument();
     clickButton(/meet rusty/i);
 
@@ -1475,7 +1512,7 @@ describe('OnboardingWizard', () => {
         'Saved teammate template "removed-template" is no longer available. Go back and choose another template.'
       )
     ).toBeInTheDocument();
-    clickButton(/^try again →$/i);
+    expect(screen.getByText('Where should Rusty’s work live?')).toBeInTheDocument();
 
     expect(onComplete).not.toHaveBeenCalled();
     expect(boardsService.create).not.toHaveBeenCalled();
@@ -1483,14 +1520,11 @@ describe('OnboardingWizard', () => {
 
     // Recovery clears the derived validation error immediately rather than
     // leaving a stale copy in the independent board-creation error state.
-    clickButton('Back'); // done → tools
-    await screen.findByText('Choose your tools');
-    clickButton('Back'); // tools → llm
-    await screen.findByText('Connect your AI');
-    clickButton('Back'); // llm → workspace
+    clickButton('Back'); // home → persona
     await screen.findByText('Build your teammate');
     fireEvent.click(screen.getByText('Start blank').closest('[role="button"]') as HTMLElement);
     clickButton(/^continue →$/i);
+    await chooseHome();
     await screen.findByText('Connect your AI');
     clickButton(/skip for now/i); // llm → tools
     await screen.findByText('Choose your tools');
@@ -1504,8 +1538,8 @@ describe('OnboardingWizard', () => {
       expect.objectContaining({
         boardId: 'board-resume',
         templateId: 'blank',
-        sourceBranch: undefined,
-        sourceRemoteUrl: undefined,
+        sourceBranch: 'main',
+        sourceRemoteUrl: 'https://github.com/preset-io/agor-teammate.git',
       }),
       expect.objectContaining({ isCurrent: expect.any(Function) })
     );

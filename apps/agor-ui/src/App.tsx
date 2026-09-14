@@ -1,7 +1,6 @@
 import { AgorLocalAuthMode } from '@agor/core/config/browser';
 import type {
   AgenticToolName,
-  AgorClient,
   Artifact,
   AuthCheckResult,
   Board,
@@ -73,9 +72,7 @@ import {
   useSessionActions,
 } from './hooks';
 import { useAuthorityOperationGuard } from './hooks/useAuthorityOperationGuard';
-import { useEnsureFrameworkRepo } from './hooks/useEnsureFrameworkRepo';
 import { useEnvironmentStart } from './hooks/useEnvironmentStart';
-import { findFrameworkRepo } from './hooks/useFrameworkRepo';
 import {
   type OnboardingOperationOwner,
   useOnboardingLifecycle,
@@ -118,6 +115,7 @@ import {
   type LatestSessionUpdateRequests,
   runSessionUpdateWithLatestNotification,
 } from './utils/sessionUpdateNotifications';
+import { waitForDestinationReady } from './utils/teammateDestination';
 import { getRouterBasename, responsiveRoutePath } from './utils/uiRoutes';
 
 type RouteModuleKey = RouteSurfaceId | 'mobile';
@@ -133,45 +131,6 @@ interface PendingEnvironmentToast {
 // Stable reference — an inline object here re-processes the modal on every App
 // render (flicker). The onboarding surface is always dark.
 const ONBOARDING_DARK_THEME = { algorithm: theme.darkAlgorithm };
-
-// Stable empty-repo array so the onboarding framework-repo memo keeps a constant
-// identity while the wizard is closed (no framework repo resolved yet).
-const EMPTY_REPOS: Repo[] = [];
-
-/**
- * Resolve the framework repo once it reaches `clone_status: 'ready'`, up to a
- * hard deadline. Resolves with the ready repo, or `undefined` if the deadline
- * elapses first — it never hangs. Used at onboarding completion so a fresh user
- * whose background clone is just-barely-not-done still gets their first teammate.
- */
-function waitForFrameworkRepoReady(
-  client: AgorClient,
-  deadlineMs: number
-): Promise<Repo | undefined> {
-  const readyNow = findFrameworkRepo(agorStore.getState().repoById, { readyOnly: true })?.[1];
-  if (readyNow) return Promise.resolve(readyNow);
-
-  return new Promise<Repo | undefined>((resolve) => {
-    const reposService = client.service('repos');
-    let settled = false;
-    const finish = (repo: Repo | undefined) => {
-      if (settled) return;
-      settled = true;
-      reposService.removeListener('patched', onPatched);
-      clearTimeout(timer);
-      resolve(repo);
-    };
-    const onPatched = () => {
-      const ready = findFrameworkRepo(agorStore.getState().repoById, { readyOnly: true })?.[1];
-      if (ready) finish(ready);
-    };
-    const timer = setTimeout(() => finish(undefined), deadlineMs);
-    reposService.on('patched', onPatched);
-    // Re-check in case readiness landed between the initial read and the listener
-    // attaching above.
-    onPatched();
-  });
-}
 
 const ENV_ACTION_COPY: Record<EnvironmentAction, { present: string; gerund: string }> = {
   start: { present: 'start', gerund: 'Starting' },
@@ -682,10 +641,7 @@ function AppContent() {
     onboardingSeedResultRef.current.clear();
   }, [onboardingWizardOwner]);
 
-  // Clone a repository (framework repo, GitHub repos, etc.). Defined here —
-  // above the early returns and the onboarding auto-clone hook below — so it can
-  // be passed directly to `useEnsureFrameworkRepo` without a ref indirection
-  // that could race the hook's one-shot clone effect.
+  // Explicit repository registration outside the onboarding home selector.
   const handleCreateRepo = useCallback(
     async (data: CreateRepoRequest, options: CreateRepoOptions = {}) => {
       if (options.shouldApply && !options.shouldApply()) return;
@@ -843,31 +799,6 @@ function AppContent() {
     [client, showError, showLoading, showSuccess, showWarning]
   );
 
-  // Auto-clone the AI-teammate framework repo in the background while the user
-  // walks through onboarding, so it's ready to seed the first teammate by the
-  // time they finish. The store swaps its repo Map on every repo event broadcast
-  // to any client, so this render-time read is narrowed to the single framework
-  // row AND gated on the wizard being open — otherwise the always-mounted shell
-  // would re-render on unrelated repo writes. NOT ready-only: it must still match
-  // the `cloning` placeholder so useEnsureFrameworkRepo doesn't re-fire the clone.
-  const frameworkRepo = useAgorStore((s) =>
-    onboardingWizardOpen ? (findFrameworkRepo(s.repoById)?.[1] ?? null) : null
-  );
-  const frameworkRepoList = useMemo(
-    () => (frameworkRepo ? [frameworkRepo] : EMPTY_REPOS),
-    [frameworkRepo]
-  );
-  // Suppress loading/success toasts for the onboarding auto-clone — a fresh user
-  // mid-wizard shouldn't see "Cloning…"/"Cloned" toasts from behind the modal.
-  // Keep failures visible: a CA/Git/auth error needs to be actionable now.
-  const onboardingCreateRepo = useCallback(
-    (data: CreateRepoRequest) => handleCreateRepo(data, { silent: true, showErrors: true }),
-    [handleCreateRepo]
-  );
-  useEnsureFrameworkRepo(frameworkRepoList, onboardingCreateRepo, {
-    enabled: onboardingWizardOpen && canRunOnboarding,
-  });
-
   // Handle wizard completion
   const handleOnboardingComplete = async (
     owner: OnboardingOperationOwner,
@@ -898,31 +829,11 @@ function AppContent() {
     }
     if (!isCurrentUser()) return;
 
-    // Seed the user's first AI teammate on the board they just named. The
-    // framework repo has been cloning in the background since the wizard opened
-    // (useEnsureFrameworkRepo above). This is best-effort: any failure must NOT
-    // block completion — seedOnboardingTeammate falls back to a non-fatal
-    // warning so the user can always finish and add a teammate later. It reuses
-    // the wizard's board (createTeammateBranch's optional `boardId`) so the user
-    // never ends up with two boards for one teammate.
-    //
-    // Resolve the framework repo FRESH and READY-ONLY at completion time. The
-    // daemon pre-creates the repo row as `clone_status: 'cloning'`, so the
-    // render-time `frameworkRepo` above is truthy the instant the wizard opens —
-    // branching from it before the clone lands would fail with a bare "Failed to
-    // create branch". `readyOnly` skips the cloning/failed placeholder so the
-    // `!frameworkRepo` guard in seedOnboardingTeammate takes the graceful path.
-    let readyFrameworkRepo = findFrameworkRepo(agorStore.getState().repoById, {
-      readyOnly: true,
-    })?.[1];
-
-    // A fresh user can finish the wizard while the background clone is just a
-    // beat from done. If we have a teammate to seed but no ready repo yet, wait
-    // for readiness with a HARD deadline before falling back to the warning, so
-    // the common near-miss still yields a teammate. The wizard stays in its
-    // loading state throughout, so a short wait reads as part of setup.
-    if (!readyFrameworkRepo && result.teammateName?.trim() && client) {
-      readyFrameworkRepo = await waitForFrameworkRepoReady(client, 20_000);
+    // The caller's exact destination is authoritative; never substitute a public starter.
+    let destinationRepo: Repo | undefined;
+    if (result.teammateName?.trim()) {
+      if (!result.repoId) throw new Error('Choose a home for your teammate.');
+      destinationRepo = await waitForDestinationReady(client, result.repoId, isCurrentUser);
     }
     if (!isCurrentUser()) return;
 
@@ -936,7 +847,8 @@ function AppContent() {
     const seeded = await seedOnboardingTeammate({
       slackGatewayIntent,
       connectedMcpServerIds: result.connectedMcpServerIds,
-      frameworkRepo: readyFrameworkRepo,
+      frameworkRepo: destinationRepo,
+      destinationRepoId: result.repoId,
       boardId: result.boardId,
       teammateName: result.teammateName,
       teammateEmoji: result.teammateEmoji,
@@ -959,8 +871,16 @@ function AppContent() {
       repoById: agorStore.getState().repoById,
       branchById: agorStore.getState().branchById,
       sessionById: agorStore.getState().sessionById,
-      existingBranchId: retainedSeed?.branchId || result.branchId || undefined,
-      existingSessionId: retainedSeed?.sessionId || result.sessionId || undefined,
+      existingBranchId:
+        retainedSeed?.branchId ||
+        result.branchId ||
+        currentUser.preferences?.onboarding?.branchId ||
+        undefined,
+      existingSessionId:
+        retainedSeed?.sessionId ||
+        result.sessionId ||
+        currentUser.preferences?.onboarding?.sessionId ||
+        undefined,
       onCreateBranch: (repoId, data) =>
         isCurrentUser() ? handleCreateBranch(repoId, data) : Promise.resolve(null),
       onUpdateBranch: (branchId, updates) => {
@@ -970,6 +890,22 @@ function AppContent() {
       onCreateSession: async (config, boardId) => {
         if (!isCurrentUser()) return null;
         return handleCreateSession(config, boardId);
+      },
+      onProgress: async (ids) => {
+        if (!isCurrentUser()) return;
+        onboardingSeedResultRef.current.set(result.boardId, ids);
+        const latest = await client.service('users').get(operationUserId);
+        if (!isCurrentUser()) return;
+        await handleUpdateUser(
+          operationUserId,
+          {
+            preferences: {
+              ...latest.preferences,
+              onboarding: { ...latest.preferences?.onboarding, ...ids, repoId: result.repoId },
+            },
+          },
+          { silent: true }
+        );
       },
       onWarn: (message) => {
         if (isCurrentUser()) {
@@ -986,8 +922,7 @@ function AppContent() {
     });
 
     // Completion is the commit point of the client-side saga. Do it only after
-    // durable teammate work has either succeeded or reached its documented
-    // best-effort fallback, so closing/reloading during provisioning leaves an
+    // requested teammate work has succeeded, so closing/reloading during provisioning leaves an
     // incomplete wizard that can resume instead of a falsely completed user.
     // Fetch immediately before the whole-preferences patch to preserve any
     // unrelated setting changed while the wizard was open.
@@ -1356,7 +1291,7 @@ function AppContent() {
         outcome.error instanceof Error ? outcome.error.message : String(outcome.error)
       }. Open the session to review its setup and retry the prompt.`
     );
-    return { sessionId: outcome.session.session_id };
+    return { sessionId: outcome.session.session_id, initializationFailed: true };
   };
 
   // Handle fork session

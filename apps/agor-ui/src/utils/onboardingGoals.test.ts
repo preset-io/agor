@@ -28,7 +28,7 @@ describe('buildCompletedOnboardingPreferences', () => {
       mainBoardId: 'board-1',
       onboarding: {
         goals: [],
-        repoId: 'repo-1',
+        repoId: undefined,
         boardId: 'board-1',
         branchId: '',
         path: 'teammate',

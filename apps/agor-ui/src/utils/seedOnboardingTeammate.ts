@@ -2,28 +2,28 @@ import type { AgenticToolName, AgorClient, Branch, Repo, Session, UserID } from 
 import type { NewSessionConfig, SessionCreationResult } from '../domain/sessionCreation';
 import type { OnboardingIntegrationRecommendation } from './onboardingGoals';
 import type { OnboardingSlackGatewayIntent } from './onboardingSlack';
-import { startTeammateBootstrapSession } from './startTeammateBootstrapSession';
+import {
+  resumeTeammateBootstrapSession,
+  startTeammateBootstrapSession,
+} from './startTeammateBootstrapSession';
 import {
   buildTeammateBootstrapPrompt,
   buildTeammateFirstSessionTitle,
 } from './teammateBootstrapPrompt';
 import { createTeammateBranch, type TeammateCreationDeps } from './teammateCreation';
+import { waitForBranchFilesystemReady } from './waitForBranchFilesystemReady';
 
 export interface SeedOnboardingTeammateInput {
   connectedMcpServerIds?: string[];
   slackGatewayIntent?: OnboardingSlackGatewayIntent;
-  /** Framework repo the teammate branches from — undefined while it's still cloning. */
+  /** Exact chosen destination resolved by the authenticated completion handler. */
   frameworkRepo: Repo | undefined;
+  destinationRepoId?: string;
   /** Board the wizard already created; the teammate is seeded onto it (no second board). */
   boardId: string;
   teammateName?: string;
   teammateEmoji?: string;
-  /**
-   * Framework source branch from the chosen gallery template. Undefined falls
-   * back to the framework repo's default branch (createTeammateBranch). A
-   * missing template branch on the remote surfaces as a non-fatal warning
-   * rather than blocking completion.
-   */
+  /** Starter source branch, independent of the destination remote. */
   sourceBranch?: string;
   /** Remote that owns sourceBranch when a built-in template is not on the destination remote. */
   sourceRemoteUrl?: string;
@@ -57,30 +57,30 @@ export interface SeedOnboardingTeammateInput {
     config: NewSessionConfig,
     boardId: string
   ) => Promise<SessionCreationResult | null>;
-  /** Non-fatal warning surface — teammate creation must never block completion. */
+  /** Warnings for optional preferences/model setup, never workspace failures. */
   onWarn: (message: string) => void;
+  onProgress?: (ids: { branchId: string; sessionId?: string }) => Promise<void>;
 }
 
 /**
  * Seeds the user's first AI teammate at the end of onboarding: a branch on the
- * framework repo plus a goal-primed onboarding session, reusing the board the
+ * selected destination plus a goal-primed onboarding session, reusing the board the
  * wizard already created.
  *
- * Best-effort by contract: if the framework repo isn't ready yet, or branch /
- * session creation throws, it surfaces a non-fatal warning and resolves without
- * a session so the caller can still finish onboarding on the board. Durable
- * branch/session ids are returned so completion retries can resume exactly.
+ * Requested teammate setup must succeed before completion. Retry discovers exact
+ * board-scoped resources rather than creating replacements after an unknown outcome.
  *
  * Skipping the LLM step is a supported outcome, not a failure: the teammate's
  * workspace is still created, but no session is started, so the caller lands the
  * user on their board rather than in a conversation that cannot run.
  */
-function isOnboardingTeammateForBoard(branch: Branch, boardId: string): boolean {
+function isOnboardingTeammateForBoard(branch: Branch, boardId: string, repoId?: string): boolean {
   const teammate = branch.custom_context?.teammate as
     | { kind?: unknown; createdViaOnboarding?: unknown }
     | undefined;
   return (
     branch.board_id === boardId &&
+    (!repoId || branch.repo_id === repoId) &&
     teammate?.kind === 'teammate' &&
     teammate.createdViaOnboarding === true
   );
@@ -91,22 +91,37 @@ async function findExistingOnboardingBranch(
 ): Promise<Branch | undefined> {
   if (input.existingBranchId) {
     const fromMap = input.branchById.get(input.existingBranchId);
-    if (fromMap && isOnboardingTeammateForBoard(fromMap, input.boardId)) return fromMap;
+    if (fromMap && input.destinationRepoId && fromMap.repo_id !== input.destinationRepoId)
+      throw new Error(
+        'This setup already created a teammate in another destination. Restore that destination to retry.'
+      );
+    if (fromMap && isOnboardingTeammateForBoard(fromMap, input.boardId, input.destinationRepoId))
+      return fromMap;
     if (input.client) {
-      try {
-        const retained = (await input.client
-          .service('branches')
-          .get(input.existingBranchId)) as Branch;
-        if (isOnboardingTeammateForBoard(retained, input.boardId)) return retained;
-      } catch {
-        // The retained id may have been deleted between retries. Fall through
-        // to the board-scoped discovery and, if needed, create a replacement.
-      }
+      const retained = (await input.client
+        .service('branches')
+        .get(input.existingBranchId)) as Branch;
+      if (input.destinationRepoId && retained.repo_id !== input.destinationRepoId)
+        throw new Error(
+          'This setup already created a teammate in another destination. Restore that destination to retry.'
+        );
+      if (isOnboardingTeammateForBoard(retained, input.boardId, input.destinationRepoId))
+        return retained;
     }
   }
 
+  if (
+    [...input.branchById.values()].some(
+      (branch) =>
+        isOnboardingTeammateForBoard(branch, input.boardId) &&
+        branch.repo_id !== input.destinationRepoId
+    )
+  )
+    throw new Error(
+      'This setup already created a teammate in another destination. Restore that destination to retry.'
+    );
   const fromMap = [...input.branchById.values()].find((branch) =>
-    isOnboardingTeammateForBoard(branch, input.boardId)
+    isOnboardingTeammateForBoard(branch, input.boardId, input.destinationRepoId)
   );
   if (fromMap || !input.client) return fromMap;
 
@@ -119,7 +134,21 @@ async function findExistingOnboardingBranch(
     query: { board_id: input.boardId, archived: false, $limit: 100 },
   });
   const branches = Array.isArray(result) ? result : result.data;
-  return branches.find((branch) => isOnboardingTeammateForBoard(branch, input.boardId));
+  if (
+    input.destinationRepoId &&
+    branches.some(
+      (branch) =>
+        isOnboardingTeammateForBoard(branch, input.boardId) &&
+        branch.repo_id !== input.destinationRepoId
+    )
+  ) {
+    throw new Error(
+      'This setup already created a teammate in another destination. Restore that destination to retry.'
+    );
+  }
+  return branches.find((branch) =>
+    isOnboardingTeammateForBoard(branch, input.boardId, input.destinationRepoId)
+  );
 }
 
 async function findExistingSession(
@@ -130,15 +159,13 @@ async function findExistingSession(
     const retained = input.sessionById.get(input.existingSessionId);
     if (retained?.branch_id === branchId) return retained;
     if (input.client) {
-      try {
-        const fetched = (await input.client
-          .service('sessions')
-          .get(input.existingSessionId)) as Session;
-        if (fetched.branch_id === branchId) return fetched;
-      } catch {
-        // A retained session can be deleted while the completion screen is
-        // open. Fall through to branch-scoped discovery before replacing it.
-      }
+      // An inaccessible retained ID is not evidence of absence. Keep it for
+      // retry rather than creating a replacement after a failed lookup.
+      const fetched = (await input.client
+        .service('sessions')
+        .get(input.existingSessionId)) as Session;
+      if (fetched.branch_id === branchId) return fetched;
+      throw new Error('The retained setup session belongs to another teammate.');
     }
   }
   // Earlier onboarding revisions could leave idle Catalog tryouts here. They
@@ -175,6 +202,7 @@ export async function seedOnboardingTeammate(input: SeedOnboardingTeammateInput)
   // Nothing to seed — the user skipped naming a teammate.
   if (!teammateName || !input.boardId || !isCurrentUser()) return {};
 
+  if (!input.destinationRepoId) throw new Error('Choose a home for your teammate.');
   let branch: Branch | undefined;
   try {
     branch = await findExistingOnboardingBranch(input);
@@ -188,11 +216,13 @@ export async function seedOnboardingTeammate(input: SeedOnboardingTeammateInput)
         ?.service('boards')
         .setPrimaryTeammate({ boardId: input.boardId, branchId: branch.branch_id });
     } else {
-      if (!input.frameworkRepo) {
-        warn(
-          "Your board is ready, but your AI teammate's workspace is still finishing setup. You can add a teammate from the board in a moment."
+      if (
+        !input.frameworkRepo ||
+        (input.destinationRepoId && input.frameworkRepo.repo_id !== input.destinationRepoId)
+      ) {
+        throw new Error(
+          'The selected teammate destination is not ready. Return to its home screen and retry.'
         );
-        return {};
       }
       branch =
         (await createTeammateBranch(
@@ -216,12 +246,11 @@ export async function seedOnboardingTeammate(input: SeedOnboardingTeammateInput)
     }
 
     if (!isCurrentUser()) return {};
-    if (!branch) {
-      warn(
-        "Your board is ready, but we couldn't set up your AI teammate's workspace. You can add a teammate from the board anytime."
-      );
-      return {};
-    }
+    if (!branch) throw new Error('Could not create your teammate workspace. Please retry.');
+    await input.onProgress?.({ branchId: branch.branch_id });
+    if (!isCurrentUser()) return {};
+    await waitForBranchFilesystemReady(input.client, branch.branch_id);
+    if (!isCurrentUser()) return {};
 
     // Persist the caller's default immediately. The daemon validates session
     // eligibility and uses set-if-unset so a concurrent explicit Settings pick
@@ -247,9 +276,35 @@ export async function seedOnboardingTeammate(input: SeedOnboardingTeammateInput)
     }
     if (!isCurrentUser()) return {};
 
+    const initialPrompt = buildTeammateBootstrapPrompt({
+      displayName: teammateName,
+      emoji: input.teammateEmoji,
+      userName: input.user?.name,
+      userEmail: input.user?.email,
+      goals: input.goals,
+      templateId: input.templateId,
+      suggestedIntegrations: input.suggestedIntegrations,
+      slackGatewayIntent: input.slackGatewayIntent,
+    });
     const existingSession = await findExistingSession(input, branch.branch_id);
     if (!isCurrentUser()) return {};
     if (existingSession) {
+      await input.onProgress?.({
+        branchId: branch.branch_id,
+        sessionId: existingSession.session_id,
+      });
+      if (!isCurrentUser()) return {};
+      await resumeTeammateBootstrapSession(
+        input.client,
+        existingSession.session_id,
+        branch.branch_id,
+        {
+          expectedUserId: input.expectedUserId,
+          mcpServerIds: input.connectedMcpServerIds,
+          prompt: initialPrompt,
+        },
+        isCurrentUser
+      );
       return { branchId: branch.branch_id, sessionId: existingSession.session_id };
     }
 
@@ -264,6 +319,7 @@ export async function seedOnboardingTeammate(input: SeedOnboardingTeammateInput)
       return { branchId: branch.branch_id };
     }
 
+    const branchId = branch.branch_id;
     const initialization = await startTeammateBootstrapSession({
       client: input.client,
       branchId: branch.branch_id,
@@ -278,21 +334,17 @@ export async function seedOnboardingTeammate(input: SeedOnboardingTeammateInput)
           displayName: teammateName,
           emoji: input.teammateEmoji,
         }),
-        initialPrompt: buildTeammateBootstrapPrompt({
-          displayName: teammateName,
-          emoji: input.teammateEmoji,
-          userName: input.user?.name,
-          userEmail: input.user?.email,
-          goals: input.goals,
-          templateId: input.templateId,
-          suggestedIntegrations: input.suggestedIntegrations,
-          slackGatewayIntent: input.slackGatewayIntent,
-        }),
+        initialPrompt,
       },
       onCreateSession: input.onCreateSession,
       shouldContinue: isCurrentUser,
+      onSessionCreated: async (sessionId) => {
+        if (isCurrentUser()) await input.onProgress?.({ branchId, sessionId });
+      },
     });
 
+    if (!isCurrentUser()) return {};
+    await input.onProgress?.({ branchId: branch.branch_id, sessionId: initialization.sessionId });
     if (!isCurrentUser()) return {};
     return {
       branchId: branch.branch_id,
@@ -300,11 +352,7 @@ export async function seedOnboardingTeammate(input: SeedOnboardingTeammateInput)
       initialization,
     };
   } catch (error) {
-    warn(
-      `Your board is ready, but we couldn't start your AI teammate: ${
-        error instanceof Error ? error.message : String(error)
-      }. You can create one from the board anytime.`
-    );
-    return isCurrentUser() && branch ? { branchId: branch.branch_id } : {};
+    if (!isCurrentUser()) return {};
+    throw error;
   }
 }

@@ -141,3 +141,57 @@ describe('createTeammateBranch', () => {
     );
   });
 });
+
+describe('manual teammate retry identity', () => {
+  it('reuses the exact board and partial branch after a lost create response', async () => {
+    const branch = makeBranch({
+      board_id: 'attempt-board',
+      custom_context: { teammate: { kind: 'teammate' } },
+    });
+    const boards = {
+      create: vi.fn().mockRejectedValue(new Error('Already exists')),
+      get: vi.fn(async () => ({ board_id: 'attempt-board' })),
+      ensureTeammateWelcomeNote: vi.fn(),
+      setPrimaryTeammate: vi.fn(),
+    };
+    const onCreateBranch = vi.fn();
+    const client = {
+      service: (name: string) =>
+        name === 'boards' ? boards : { find: vi.fn(async () => [branch]) },
+    };
+    const result = await createTeammateBranch(
+      { displayName: 'Ada', repoId: 'repo-1', creationBoardId: 'attempt-board' },
+      { client: client as never, repoById: new Map(), onCreateBranch, onUpdateBranch: vi.fn() }
+    );
+    expect(boards.create).toHaveBeenCalledWith(
+      expect.objectContaining({ board_id: 'attempt-board' })
+    );
+    expect(boards.get).toHaveBeenCalledWith('attempt-board');
+    expect(onCreateBranch).not.toHaveBeenCalled();
+    expect(result?.branch_id).toBe(branch.branch_id);
+  });
+
+  it('does not reuse a partial branch in a changed destination or rewrite its welcome note', async () => {
+    const branch = makeBranch({
+      board_id: 'attempt-board',
+      custom_context: { teammate: { kind: 'teammate' } },
+    });
+    const boards = {
+      create: vi.fn(async () => ({ board_id: 'attempt-board' })),
+      ensureTeammateWelcomeNote: vi.fn(),
+    };
+    const onCreateBranch = vi.fn();
+    const client = {
+      service: (name: string) =>
+        name === 'boards' ? boards : { find: vi.fn(async () => [branch]) },
+    };
+    await expect(
+      createTeammateBranch(
+        { displayName: 'Ada', repoId: 'different', creationBoardId: 'attempt-board' },
+        { client: client as never, repoById: new Map(), onCreateBranch, onUpdateBranch: vi.fn() }
+      )
+    ).rejects.toThrow(/another destination/);
+    expect(onCreateBranch).not.toHaveBeenCalled();
+    expect(boards.ensureTeammateWelcomeNote).not.toHaveBeenCalled();
+  });
+});

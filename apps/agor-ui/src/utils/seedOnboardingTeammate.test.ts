@@ -1,6 +1,5 @@
 import type { Branch, Repo, Session, UserID } from '@agor-live/client';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { FRAMEWORK_REPO_SLUG, findFrameworkRepo } from '../hooks/useFrameworkRepo';
 import { ONBOARDING_INTEGRATION_RECOMMENDATIONS } from './onboardingGoals';
 import { type SeedOnboardingTeammateInput, seedOnboardingTeammate } from './seedOnboardingTeammate';
 import { startTeammateBootstrapSession } from './startTeammateBootstrapSession';
@@ -8,8 +7,14 @@ import { createTeammateBranch } from './teammateCreation';
 
 // These are the two collaborators the completion path must actually invoke —
 // the original bug meant neither ever ran (the fallback fired instead).
+vi.mock('./waitForBranchFilesystemReady', () => ({
+  waitForBranchFilesystemReady: vi.fn(async () => undefined),
+}));
 vi.mock('./teammateCreation', () => ({ createTeammateBranch: vi.fn() }));
-vi.mock('./startTeammateBootstrapSession', () => ({ startTeammateBootstrapSession: vi.fn() }));
+vi.mock('./startTeammateBootstrapSession', () => ({
+  startTeammateBootstrapSession: vi.fn(),
+  resumeTeammateBootstrapSession: vi.fn(async () => undefined),
+}));
 
 const createTeammateBranchMock = vi.mocked(createTeammateBranch);
 const startTeammateBootstrapSessionMock = vi.mocked(startTeammateBootstrapSession);
@@ -36,6 +41,7 @@ function setup(overrides: Partial<SeedOnboardingTeammateInput> = {}) {
     }),
   } as unknown as SeedOnboardingTeammateInput['client'];
   const input: SeedOnboardingTeammateInput = {
+    destinationRepoId: 'repo-fw',
     frameworkRepo: { repo_id: 'repo-fw', slug: 'preset-io/agor-teammate' } as Repo,
     boardId: 'board-1',
     teammateName: 'Rusty',
@@ -163,7 +169,7 @@ describe('seedOnboardingTeammate', () => {
     );
   });
 
-  it('returns the durable session when daemon-side initialization is incomplete', async () => {
+  it('returns the durable session after confirmed initialization', async () => {
     createTeammateBranchMock.mockResolvedValue({
       branch_id: 'branch-1',
       board_id: 'board-1',
@@ -182,35 +188,26 @@ describe('seedOnboardingTeammate', () => {
     });
   });
 
-  // The completion handler (App.handleOnboardingComplete) resolves the framework
-  // repo FRESH and READY-ONLY from repoById before calling this. These tests
-  // exercise that seam with the repo states real usage actually produces — the
-  // daemon pre-creates a `cloning` placeholder, so `frameworkRepo: undefined`
-  // never occurs on its own. `findFrameworkRepo(..., { readyOnly: true })` is
-  // what turns a not-ready placeholder into the graceful fallback.
+  // Exact-ID readiness is covered in teammateDestination.test.ts. An unresolved
+  // destination must not trigger a framework-name fallback in the seed helper.
   function frameworkRepoWithStatus(clone_status: Repo['clone_status']): Repo {
-    return { repo_id: 'repo-fw', slug: FRAMEWORK_REPO_SLUG, clone_status } as Repo;
+    return { repo_id: 'repo-fw', slug: 'me/memory', clone_status } as Repo;
   }
 
   for (const status of ['cloning', 'failed'] as const) {
-    it(`does NOT create a teammate and warns when the framework repo is ${status} (readyOnly fallback)`, async () => {
+    it(`blocks completion when the chosen destination is ${status}`, async () => {
       const repoById = new Map<string, Repo>([['repo-fw', frameworkRepoWithStatus(status)]]);
-      // Mirror the completion handler: resolve ready-only, feed the result in.
-      const readyFrameworkRepo = findFrameworkRepo(repoById, { readyOnly: true })?.[1];
-      expect(readyFrameworkRepo).toBeUndefined();
+      const readyFrameworkRepo = undefined;
 
       const { input, onWarn } = setup({ frameworkRepo: readyFrameworkRepo, repoById });
-      const result = await seedOnboardingTeammate(input);
-
+      await expect(seedOnboardingTeammate(input)).rejects.toThrow(/not ready/);
       expect(createTeammateBranchMock).not.toHaveBeenCalled();
       expect(startTeammateBootstrapSessionMock).not.toHaveBeenCalled();
-      expect(onWarn).toHaveBeenCalledTimes(1);
-      expect(onWarn.mock.calls[0][0]).toMatch(/still finishing setup/i);
-      expect(result).toEqual({});
+      expect(onWarn).not.toHaveBeenCalled();
     });
   }
 
-  it('creates a teammate when the framework repo is ready (readyOnly resolves it)', async () => {
+  it('creates a teammate using the exact ready destination', async () => {
     createTeammateBranchMock.mockResolvedValue({
       branch_id: 'branch-1',
       board_id: 'board-1',
@@ -218,7 +215,7 @@ describe('seedOnboardingTeammate', () => {
     startTeammateBootstrapSessionMock.mockResolvedValue(completeInitialization);
 
     const repoById = new Map<string, Repo>([['repo-fw', frameworkRepoWithStatus('ready')]]);
-    const readyFrameworkRepo = findFrameworkRepo(repoById, { readyOnly: true })?.[1];
+    const readyFrameworkRepo = repoById.get('repo-fw');
     expect(readyFrameworkRepo?.repo_id).toBe('repo-fw');
 
     const { input, onWarn } = setup({ frameworkRepo: readyFrameworkRepo, repoById });
@@ -289,16 +286,13 @@ describe('seedOnboardingTeammate', () => {
     );
   });
 
-  it('warns (non-fatal) and returns no session when teammate creation throws', async () => {
+  it('rejects completion when teammate creation throws', async () => {
     createTeammateBranchMock.mockRejectedValue(new Error('boom'));
     const { input, onWarn } = setup();
 
-    const result = await seedOnboardingTeammate(input);
-
+    await expect(seedOnboardingTeammate(input)).rejects.toThrow('boom');
     expect(startTeammateBootstrapSessionMock).not.toHaveBeenCalled();
-    expect(onWarn).toHaveBeenCalledTimes(1);
-    expect(onWarn.mock.calls[0][0]).toMatch(/couldn't start your AI teammate/i);
-    expect(result).toEqual({});
+    expect(onWarn).not.toHaveBeenCalled();
   });
 
   // The LLM step is skippable, so `agent` can legitimately be null at completion.
@@ -345,6 +339,7 @@ describe('seedOnboardingTeammate', () => {
     const existingBranch = {
       branch_id: 'branch-existing',
       board_id: 'board-1',
+      repo_id: 'repo-fw',
       custom_context: {
         teammate: { kind: 'teammate', createdViaOnboarding: true, displayName: 'Rusty' },
       },
@@ -389,6 +384,7 @@ describe('seedOnboardingTeammate', () => {
     const existingBranch = {
       branch_id: 'branch-existing',
       board_id: 'board-1',
+      repo_id: 'repo-fw',
       custom_context: {
         teammate: { kind: 'teammate', createdViaOnboarding: true, displayName: 'Rusty' },
       },
@@ -436,6 +432,73 @@ describe('seedOnboardingTeammate', () => {
       sessionId: 'session-existing',
     });
     expect(onWarn).not.toHaveBeenCalled();
+  });
+
+  it('refuses a partial teammate in another destination without creating a replacement', async () => {
+    const branch = {
+      branch_id: 'partial',
+      repo_id: 'old-home',
+      board_id: 'board-1',
+      custom_context: { teammate: { kind: 'teammate', createdViaOnboarding: true } },
+    } as Branch;
+    const { input } = setup({
+      existingBranchId: 'partial',
+      branchById: new Map([['partial', branch]]),
+    });
+    await expect(seedOnboardingTeammate(input)).rejects.toThrow(/another destination/);
+    expect(createTeammateBranchMock).not.toHaveBeenCalled();
+  });
+
+  it('retains the branch ID before a failed bootstrap and rejects completion', async () => {
+    createTeammateBranchMock.mockResolvedValue({
+      branch_id: 'partial',
+      board_id: 'board-1',
+      repo_id: 'repo-fw',
+    } as Branch);
+    startTeammateBootstrapSessionMock.mockRejectedValue(new Error('bootstrap failed'));
+    const onProgress = vi.fn(async () => undefined);
+    await expect(seedOnboardingTeammate(setup({ onProgress }).input)).rejects.toThrow(
+      'bootstrap failed'
+    );
+    expect(onProgress).toHaveBeenCalledWith({ branchId: 'partial' });
+  });
+
+  it('does not interpret an unauthorized discovery as absence and create resources', async () => {
+    const { input } = setup({
+      client: {
+        service: () => ({ find: vi.fn().mockRejectedValue(new Error('Forbidden')) }),
+      } as never,
+    });
+    await expect(seedOnboardingTeammate(input)).rejects.toThrow('Forbidden');
+    expect(createTeammateBranchMock).not.toHaveBeenCalled();
+  });
+
+  it('does not replace a retained session after a forbidden lookup', async () => {
+    const branch = {
+      branch_id: 'partial',
+      board_id: 'board-1',
+      repo_id: 'repo-fw',
+      custom_context: { teammate: { kind: 'teammate', createdViaOnboarding: true } },
+    } as Branch;
+    const sessionFind = vi.fn(async () => ({ data: [] }));
+    const { input } = setup({
+      existingBranchId: 'partial',
+      existingSessionId: 'retained-session',
+      branchById: new Map([['partial', branch]]),
+      client: {
+        service: (name: string) => {
+          if (name === 'sessions')
+            return { get: vi.fn().mockRejectedValue(new Error('Forbidden')), find: sessionFind };
+          return {
+            setPrimaryTeammate: vi.fn(async () => undefined),
+            setPrimaryTeammateIfUnset: vi.fn(async () => undefined),
+          };
+        },
+      } as never,
+    });
+    await expect(seedOnboardingTeammate(input)).rejects.toThrow('Forbidden');
+    expect(sessionFind).not.toHaveBeenCalled();
+    expect(startTeammateBootstrapSessionMock).not.toHaveBeenCalled();
   });
 
   it('does not start any onboarding side effect after the initiating user changes', async () => {

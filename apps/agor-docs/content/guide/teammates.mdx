@@ -6,8 +6,19 @@ heroImage: '/screenshots/teammates-list.png'
 
 # Teammates
 
-<div style={{ padding: '12px 16px', borderLeft: '4px solid #3b82f6', borderRadius: '8px', background: 'rgba(59, 130, 246, 0.12)', margin: '16px 0' }}>
-  <strong>Rename note:</strong> In July 2026, Agor renamed <strong>Assistants</strong> to <strong>Teammates</strong>. If you arrived from <code>/guide/assistants</code>, this is the canonical guide. Older references to <code>assistant</code> may still appear where they describe LLM message roles or provider protocol terms.
+<div
+  style={{
+    padding: '12px 16px',
+    borderLeft: '4px solid #3b82f6',
+    borderRadius: '8px',
+    background: 'rgba(59, 130, 246, 0.12)',
+    margin: '16px 0',
+  }}
+>
+  <strong>Rename note:</strong> In July 2026, Agor renamed <strong>Assistants</strong> to{' '}
+  <strong>Teammates</strong>. If you arrived from <code>/guide/assistants</code>, this is the
+  canonical guide. Older references to <code>assistant</code> may still appear where they describe
+  LLM message roles or provider protocol terms.
 </div>
 
 An **AI teammate** is a persistent AI companion that lives in your Agor workspace. While a normal branch is _where_ code gets written, an AI teammate is a _who_, a persistent entity with memory, skills, and the ability to orchestrate work across your entire workspace.
@@ -28,7 +39,7 @@ The teammate framework is heavily inspired by [OpenClaw](https://github.com/rick
 
 An AI teammate is a special branch backed by the **framework repository**, a template repo containing memory files, identity configuration, skills, and task templates. When you create a teammate, Agor:
 
-1. Creates a branch in the selected framework repository (not a fork on your Git host)
+1. Creates a branch from the selected starter, with your chosen repository as its destination (not a fork on your Git host)
 2. Tags the branch with teammate metadata (name, framework version)
 3. Creates a dedicated board for the teammate's work
 4. Launches your first session, beginning the guided experience in `ONBOARDING.md`
@@ -109,54 +120,41 @@ As your teammate works with you, it naturally improves:
 
 ## Creating a teammate
 
-### Choose a writable home before creating
+### Choose a persona, then a home
 
-The public `preset-io/agor-teammate` repository is a starting template. Cloning it
-does **not** grant permission to push your teammate's memory branches upstream.
+In onboarding and **Create → Teammate**, name your teammate and choose a persona
+(or **Start blank**) first. **Continue** opens the inline home screen. **Back**
+keeps your name and persona selection.
 
-1. Fork or copy the framework into your own account or organization. **Prefer a
-   private repository** for personal or team memory. A public fork is still public;
-   neither a repository name ending in `-private` nor a branch named `private-*`
-   changes the Git host's visibility settings.
-2. If your copy is not already registered, add it through **Create → Repository**
-   (clone its URL, or register an existing local clone where your installation
-   permits it).
-3. Open **Create → Teammate**, select your copy in **Framework Repository**, and
-   confirm that the credentials used by the teammate can push to that remote.
-   Being able to clone a repository is not proof of write access.
+Select a registered repository you control, or expand **Add a repository** and
+paste its URL. Agor registers/clones that repository and detects its default
+branch. If you do not have a repository, the GitHub link opens GitHub’s native
+creation form with private visibility prefilled. Confirm visibility, create it
+with a README, and paste its URL into the same Agor screen. Agor does not create
+an external repository or fork on your behalf.
 
-Automatic framework detection prefers registered repositories whose slug or remote
-URL contains `agor-teammate-private` (or legacy `agor-assistant-private`) over the
-public template. This is a naming convention, **not a privacy or permission check**.
-You can explicitly select a differently named copy in the teammate form. Agor does
-not create a remote repository, change its visibility, or rewrite your remotes.
+The public [starter source](https://github.com/preset-io/agor-teammate) is **not**
+your destination. Agor brings the selected persona from that source while your
+repository remains the destination remote. **Start blank** uses the framework’s
+`main`, not a new memory repository’s README. Advanced manual settings can use
+a custom source URL/branch, or the destination’s own source branch.
 
-Local/offline use remains possible without upstream write access. Changes stay in
-the local clone/branch until backed up or pushed to a writable remote. Repository
-ownership and executor push credentials are separate requirements; choosing an
-owned repository does not itself configure credentials.
+**Clone ready is not proof of push permission or private visibility.** The home
+screen labels both as unchecked/unknown and asks you to confirm permission and
+who can see the work. Prefer a private repository for memory; `private-*` names
+do not change visibility. There is no automatic backup or synchronization claim.
+GitHub repository sign-in uses your existing encrypted user-credential service;
+it is separate from GitHub MCP sign-in. Errors and clone retries stay inline.
 
-### From the onboarding wizard
+Onboarding saves the chosen destination and persona before creating a board.
+Completion uses that exact repository ID and keeps setup incomplete if the
+requested teammate cannot be created. A retry retains partial resource IDs and
+never substitutes the public starter or another destination. If a teammate was
+already created, restore its original destination to resume it.
 
-The [first-run wizard](/guide/getting-started#follow-the-onboarding-wizard) (**Goals → Teammate → AI → Tools**) ends by seeding your first teammate using a detected framework repository, cloning the public [teammate template](https://github.com/preset-io/agor-teammate) if none is registered. It creates the teammate's branch on the board you named. If you connected an AI model, it also launches the first session (which follows `ONBOARDING.md`), briefed with the goals you selected and the tools the wizard recommended. If you skipped AI setup, the board is still ready and you can connect a model later.
-
-To choose or confirm a writable destination, choose **Skip for now** on the
-**Teammate** step and finish onboarding, **even if your copy is already registered**.
-Then open **Create → Teammate** and explicitly select your copy in **Framework
-Repository**. Use **Create → Repository** first only if your copy is not registered.
-Registration alone does not guarantee onboarding selects it: the wizard uses
-automatic detection without a repository selector or destination display, and the
-public template can take precedence over an owned copy. Skipping the Teammate step
-creates no teammate; skipping only the AI step does not skip teammate creation.
-
-### From Settings
-
-Go to **Settings > Teammates > Create AI teammate**:
-
-1. Enter a display name (e.g., "PR Reviewer", "Command Center")
-2. Select a framework repository you can push to (prefer a private copy)
-3. Optionally customize the branch under Advanced Teammate Settings
-4. Click Create
+**Skip for now** on the Teammate step remains an optional no-teammate path, not
+a repository-setup workaround. Skipping only AI setup still prepares the
+teammate’s workspace without starting a model session.
 
 ### From the CLI
 
@@ -166,14 +164,15 @@ During `agor init`, you'll be prompted to set up a teammate. This queues the set
 
 These terms mean different things in Agor:
 
-| Term | Meaning | Example |
-|------|---------|---------|
-| **Teammate** | A persistent entity with memory, skills, and orchestration | "My PR Reviewer teammate" |
-| **Agent** | The execution engine that powers a session | Claude Code, Codex, Gemini |
+| Term         | Meaning                                                    | Example                    |
+| ------------ | ---------------------------------------------------------- | -------------------------- |
+| **Teammate** | A persistent entity with memory, skills, and orchestration | "My PR Reviewer teammate"  |
+| **Agent**    | The execution engine that powers a session                 | Claude Code, Codex, Gemini |
 
 A teammate _uses_ an agent to do its work. When you create a session for your teammate, you choose which agent runs it (Claude Code is the default).
 
 Think of it this way:
+
 - "Start my teammate" = open a session on your persistent AI companion's branch
 - "Choose an agent" = pick which AI model/tool runs that session
 

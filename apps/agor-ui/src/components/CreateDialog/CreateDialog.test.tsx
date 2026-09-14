@@ -18,7 +18,7 @@
  * own slot, and the footer reads `validByTab[activeTab]`.
  */
 
-import type { Repo, UUID } from '@agor-live/client';
+import type { AgorClient, Repo, User, UUID } from '@agor-live/client';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { EMPTY_MAPS } from '../../store/agorMaps';
@@ -66,6 +66,15 @@ function renderDialog(props: Partial<React.ComponentProps<typeof CreateDialog>> 
     <CreateDialog
       open
       onClose={vi.fn()}
+      currentUser={{ user_id: 'caller', role: 'member' } as User}
+      client={
+        {
+          service: () => ({
+            find: async () => [frameworkRepo, userRepo],
+            get: async (id: string) => repoById.get(id),
+          }),
+        } as unknown as AgorClient
+      }
       availableAgents={[
         { id: 'claude-code', name: 'Claude Code', icon: '🤖', description: 'Claude' },
       ]}
@@ -88,6 +97,16 @@ function renderDialog(props: Partial<React.ComponentProps<typeof CreateDialog>> 
 // whole-test timeout.
 const ASYNC = { timeout: 10_000 };
 
+async function confirmHome() {
+  fireEvent.click(screen.getByText('Continue to home →'));
+  const select = await screen.findByRole('combobox', { name: 'Teammate home repository' }, ASYNC);
+  await waitFor(() => expect(select).toBeVisible(), ASYNC);
+  fireEvent.mouseDown(select);
+  fireEvent.click(await screen.findByTitle(userRepo.name, undefined, ASYNC));
+  await screen.findByText('Clone ready · Push access unchecked · Visibility unknown');
+  fireEvent.click(screen.getByRole('checkbox'));
+}
+
 describe('CreateDialog — per-tab validity scoping', { timeout: 60_000 }, () => {
   it('defaults to Teammate as the primary create path', async () => {
     renderDialog();
@@ -96,17 +115,15 @@ describe('CreateDialog — per-tab validity scoping', { timeout: 60_000 }, () =>
       'aria-selected',
       'true'
     );
-    expect(screen.getByRole('button', { name: /Create AI teammate/i })).toBeDisabled();
-    await waitFor(
-      () => expect(screen.getByText('Choose a repository you can push to')).toBeVisible(),
-      ASYNC
-    );
-    expect(screen.getByText(/A public fork or a branch named private-\*/)).toBeVisible();
-    expect(screen.getByRole('combobox', { name: 'Framework Repository' })).toBeVisible();
+    expect(
+      screen.getByText('Create AI teammate', { selector: 'button, button *' }).closest('button')
+    ).toBeDisabled();
+    expect(screen.getByText('Competitive Analyst')).toBeInTheDocument();
+    expect(screen.queryByText('Choose a repository you can push to')).not.toBeInTheDocument();
     expect(screen.queryByPlaceholderText('private-my-teammate')).not.toBeInTheDocument();
   });
 
-  it('enables Create AI teammate once Name is typed', async () => {
+  it('enables Create AI teammate only after naming and explicitly confirming a home', async () => {
     renderDialog({ defaultTab: 'teammate' });
 
     const displayName = (await screen.findByPlaceholderText(
@@ -115,8 +132,14 @@ describe('CreateDialog — per-tab validity scoping', { timeout: 60_000 }, () =>
       ASYNC
     )) as HTMLInputElement;
     fireEvent.change(displayName, { target: { value: 'My Teammate' } });
+    expect(
+      screen.getByText('Create AI teammate', { selector: 'button, button *' }).closest('button')
+    ).toBeDisabled();
+    await confirmHome();
 
-    const button = screen.getByRole('button', { name: /Create AI teammate/i });
+    const button = screen
+      .getByText('Create AI teammate', { selector: 'button, button *' })
+      .closest('button');
     await waitFor(() => {
       expect(button).not.toBeDisabled();
     }, ASYNC);
@@ -131,6 +154,10 @@ describe('CreateDialog — per-tab validity scoping', { timeout: 60_000 }, () =>
       ASYNC
     )) as HTMLInputElement;
     fireEvent.change(displayName, { target: { value: 'My Teammate' } });
+    expect(
+      screen.getByText('Create AI teammate', { selector: 'button, button *' }).closest('button')
+    ).toBeDisabled();
+    await confirmHome();
 
     // Switch away and back without asserting on the interim state — that
     // assertion isn't load-bearing for this regression and each waitFor pass
@@ -143,7 +170,9 @@ describe('CreateDialog — per-tab validity scoping', { timeout: 60_000 }, () =>
     // isValid to false and TeammateTab's useEffect didn't re-fire (its
     // isFormValid hadn't changed), so the button stayed stuck disabled.
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: /Create AI teammate/i })).not.toBeDisabled();
+      expect(
+        screen.getByText('Create AI teammate', { selector: 'button, button *' }).closest('button')
+      ).not.toBeDisabled();
     }, ASYNC);
   });
 
@@ -157,8 +186,11 @@ describe('CreateDialog — per-tab validity scoping', { timeout: 60_000 }, () =>
       ASYNC
     )) as HTMLInputElement;
     fireEvent.change(displayName, { target: { value: 'Bootstrap Bot' } });
+    await confirmHome();
 
-    const button = screen.getByRole('button', { name: /Create AI teammate/i });
+    const button = screen
+      .getByText('Create AI teammate', { selector: 'button, button *' })
+      .closest('button');
     await waitFor(() => {
       expect(button).not.toBeDisabled();
     }, ASYNC);
@@ -185,18 +217,10 @@ describe('CreateDialog — per-tab validity scoping', { timeout: 60_000 }, () =>
     fireEvent.change(await screen.findByPlaceholderText(/PR Reviewer/i, undefined, ASYNC), {
       target: { value: 'Owned Home' },
     });
-    const repositorySelect = screen.getByRole('combobox', { name: 'Framework Repository' });
-    await waitFor(() => expect(repositorySelect).toBeVisible(), ASYNC);
-    expect(
-      screen.getByText(/If your copy is not registered, add it via Create → Repository/)
-    ).toHaveTextContent('Then explicitly select your copy below');
-    fireEvent.mouseDown(repositorySelect);
-    fireEvent.keyDown(repositorySelect, { key: 'ArrowDown', code: 'ArrowDown', keyCode: 40 });
-    fireEvent.click(await screen.findByTitle(userRepo.name, undefined, ASYNC));
-    expect(screen.getByText(/credentials used by your teammate can push/)).toBeVisible();
-    expect(screen.getByText(/Local\/offline\s+use can continue without push access/)).toBeVisible();
-
-    const button = screen.getByRole('button', { name: /Create AI teammate/i });
+    await confirmHome();
+    const button = screen
+      .getByText('Create AI teammate', { selector: 'button, button *' })
+      .closest('button');
     await waitFor(() => expect(button).not.toBeDisabled(), ASYNC);
     fireEvent.click(button);
     await waitFor(() => {
@@ -216,8 +240,14 @@ describe('CreateDialog — per-tab validity scoping', { timeout: 60_000 }, () =>
       ASYNC
     )) as HTMLInputElement;
     fireEvent.change(displayName, { target: { value: 'My Teammate' } });
+    expect(
+      screen.getByText('Create AI teammate', { selector: 'button, button *' }).closest('button')
+    ).toBeDisabled();
+    await confirmHome();
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: /Create AI teammate/i })).not.toBeDisabled();
+      expect(
+        screen.getByText('Create AI teammate', { selector: 'button, button *' }).closest('button')
+      ).not.toBeDisabled();
     }, ASYNC);
 
     // Switch to Board (its form is empty). The footer's submit must reflect

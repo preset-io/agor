@@ -3,7 +3,6 @@ import { Flex, Input, Typography, theme } from 'antd';
 import { type Ref, useState } from 'react';
 import type { GalleryFilter, TeammateGalleryCardId } from '../../utils/teammateTemplates';
 import { EmojiPickerInput } from '../EmojiPickerInput/EmojiPickerInput';
-import { TeammateRepositoryGuidance } from '../forms/TeammateRepositoryGuidance';
 import { TeammateGalleryCards, TeammateGalleryFilters } from '../TeammateGallery/TeammateGallery';
 
 const { Paragraph, Text, Title } = Typography;
@@ -39,7 +38,7 @@ export const OnboardingTeammateGalleryStep: React.FC<OnboardingTeammateGallerySt
   const [scrolled, setScrolled] = useState(false);
 
   return (
-    <Flex vertical style={{ flex: '1 1 auto', minHeight: 0 }}>
+    <Flex className="onb-workspace-layout" vertical style={{ flex: '1 1 auto', minHeight: 0 }}>
       <div style={{ flex: '0 0 auto', paddingBottom: token.paddingSM }}>
         <div
           className="onb-workspace-collapsible"
@@ -127,13 +126,13 @@ export const OnboardingTeammateGalleryStep: React.FC<OnboardingTeammateGallerySt
       </div>
 
       <div
+        className="onb-workspace-gallery"
         onScroll={(event) => {
           const next = event.currentTarget.scrollTop > 8;
           setScrolled((previous) => (previous === next ? previous : next));
         }}
         style={{ flex: '1 1 auto', minHeight: 0, overflowY: 'auto' }}
       >
-        <TeammateRepositoryGuidance onboarding />
         <TeammateGalleryCards
           goals={goals}
           value={selectedTemplateId}

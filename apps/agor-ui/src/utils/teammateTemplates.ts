@@ -178,7 +178,7 @@ export type TeammateTemplateId = (typeof TEAMMATE_TEMPLATES)[number]['id'];
 /**
  * The blank starter card. Kept separate from TEAMMATE_TEMPLATES so callers can
  * render "Start blank" last and never accidentally recommend it. Its
- * `sourceBranch` is the framework repo default; the wiring resolves it to the
+ * `sourceBranch` is canonical main; the wiring resolves it to the
  * repo's own default branch rather than forcing a literal.
  */
 export const BLANK_TEMPLATE = {
@@ -204,12 +204,11 @@ export function getTeammateTemplate(id?: string | null): TeammateGalleryCard | u
 /**
  * Source branch a teammate should be cut from for the given template.
  *
- * Real templates force their contract branch; the blank starter (or no
- * selection) returns undefined so branch creation falls back to the framework
- * repo's own default branch.
+ * Real personas use their contract branch. Blank/no selection uses canonical
+ * main, never the destination's possibly README-only default branch.
  */
 export function resolveTemplateSourceBranch(id?: string | null): string | undefined {
-  if (!id || id === BLANK_TEMPLATE_ID) return undefined;
+  if (!id || id === BLANK_TEMPLATE_ID) return 'main';
   const template = getTeammateTemplate(id);
   if (!template) {
     throw new Error(`Unknown teammate template id: ${id}`);
@@ -217,9 +216,9 @@ export function resolveTemplateSourceBranch(id?: string | null): string | undefi
   return template.sourceBranch;
 }
 
-/** Remote that owns the selected template ref; blank/no selection uses the destination repo. */
+/** Canonical starter source, including main for blank/no selection. */
 export function resolveTemplateSourceRemoteUrl(id?: string | null): string | undefined {
-  if (!id || id === BLANK_TEMPLATE_ID) return undefined;
+  if (!id || id === BLANK_TEMPLATE_ID) return TEAMMATE_FRAMEWORK_REPO_URL;
   const template = getTeammateTemplate(id);
   if (!template) {
     throw new Error(`Unknown teammate template id: ${id}`);

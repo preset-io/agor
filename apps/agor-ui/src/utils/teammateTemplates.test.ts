@@ -32,12 +32,14 @@ describe('TEAMMATE_TEMPLATES', () => {
     }
   });
 
-  it('qualifies real template refs with their source remote but leaves blank on the destination', () => {
+  it('qualifies real template refs with their source remote including blank from canonical main', () => {
     expect(resolveTemplateSourceRemoteUrl('deal-desk')).toBe(
       'https://github.com/preset-io/agor-teammate.git'
     );
-    expect(resolveTemplateSourceRemoteUrl(BLANK_TEMPLATE_ID)).toBeUndefined();
-    expect(resolveTemplateSourceRemoteUrl()).toBeUndefined();
+    expect(resolveTemplateSourceRemoteUrl(BLANK_TEMPLATE_ID)).toBe(
+      'https://github.com/preset-io/agor-teammate.git'
+    );
+    expect(resolveTemplateSourceRemoteUrl()).toBe('https://github.com/preset-io/agor-teammate.git');
   });
 
   it('pins the exact source-branch contract names', () => {
@@ -140,10 +142,10 @@ describe('getTeammateTemplate', () => {
 });
 
 describe('resolveTemplateSourceBranch', () => {
-  it('forces a real template branch, defers blank/none, and rejects stale ids', () => {
+  it('forces a real template branch, uses main for blank/none, and rejects stale ids', () => {
     expect(resolveTemplateSourceBranch('deal-desk')).toBe('template/deal-desk-revops-analyst');
-    expect(resolveTemplateSourceBranch(BLANK_TEMPLATE_ID)).toBeUndefined();
-    expect(resolveTemplateSourceBranch(null)).toBeUndefined();
+    expect(resolveTemplateSourceBranch(BLANK_TEMPLATE_ID)).toBe('main');
+    expect(resolveTemplateSourceBranch(null)).toBe('main');
     expect(() => resolveTemplateSourceBranch('nope')).toThrow('Unknown teammate template id: nope');
   });
 });

@@ -12,12 +12,13 @@
  *
  * Run: pnpm vitest run --config vitest.browser.config.ts
  */
-import { type BoardID, boardPath, type User } from '@agor-live/client';
+import { type BoardID, boardPath, type Repo, type User } from '@agor-live/client';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { theme as antdTheme, ConfigProvider } from 'antd';
 import { type ComponentProps, useEffect, useState } from 'react';
 import { MemoryRouter, useLocation, useNavigate } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { page } from 'vitest/browser';
 import { useOnboardingLifecycle } from '../../hooks/useOnboardingLifecycle';
 import { EMPTY_MAPS } from '../../store/agorMaps';
 import { agorStore } from '../../store/agorStore';
@@ -50,7 +51,7 @@ function makeUser(): User {
 
 function renderWizardAt(
   initialStep: WizardStep,
-  options: { allowClaudeOAuthSignIn?: boolean } = {}
+  options: { allowClaudeOAuthSignIn?: boolean; repo?: Repo } = {}
 ) {
   agorStore.setState({ ...EMPTY_MAPS });
   const boardsService = {
@@ -65,6 +66,11 @@ function renderWizardAt(
     service: vi.fn((name: string) => {
       if (name === 'boards') return boardsService;
       if (name === 'users') return { get: vi.fn(async () => user) };
+      if (name === 'repos')
+        return {
+          find: vi.fn(async () => (options.repo ? [options.repo] : [])),
+          get: vi.fn(async () => options.repo),
+        };
       return { on: vi.fn(), off: vi.fn(), get: vi.fn(async () => ({ state: 'no_auth' })) };
     }),
   };
@@ -221,6 +227,96 @@ describe('OnboardingWizard layout (real browser)', () => {
     expect(usersService.get).toHaveBeenCalledTimes(1);
     expect(onUpdateUser).toHaveBeenCalledTimes(1);
     expect(completionWrites).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps persona choice and focus through the inline home flow', async () => {
+    for (const [width, height] of [
+      [1366, 768],
+      [320, 568],
+    ]) {
+      await page.viewport(width, height);
+      renderWizardAt('workspace', {
+        repo: {
+          repo_id: 'owned-home',
+          name: 'Private memory',
+          slug: 'me/memory',
+          remote_url: 'https://github.com/me/memory',
+          clone_status: 'ready',
+        } as Repo,
+      });
+      await page.getByLabelText('Teammate name').fill('Ada');
+      await page.getByRole('button', { name: 'Competitive Analyst', exact: true }).click();
+      await page.getByRole('button', { name: 'Continue →', exact: true }).click();
+      await screen.findByText('Where should Ada’s work live?');
+      expect(screen.queryByText('Choose a repository you can push to')).not.toBeInTheDocument();
+      await page.getByRole('combobox', { name: 'Teammate home repository' }).click();
+      fireEvent.click(await screen.findByText('Private memory'));
+      await screen.findByText('Clone ready · Push access unchecked · Visibility unknown');
+      await page.getByRole('checkbox').click();
+      const footer = screen
+        .getByRole('button', { name: 'Continue →', exact: true })
+        .getBoundingClientRect();
+      expect(footer.bottom).toBeLessThanOrEqual(height);
+      await page.screenshot({ path: `__screenshots__/2327-home-${width}x${height}.png` });
+      await page.getByRole('button', { name: /Back$/ }).click();
+      const selected = await screen.findByRole('button', {
+        name: 'Competitive Analyst',
+        exact: true,
+      });
+      await waitFor(() => expect(selected).toHaveFocus());
+      expect(selected).toHaveAttribute('aria-pressed', 'true');
+      expect(screen.getByLabelText('Teammate name')).toHaveValue('Ada');
+      cleanup();
+    }
+  });
+
+  it('shows full persona cards immediately and keeps the footer reachable', async () => {
+    for (const [width, height] of [
+      [1366, 768],
+      [320, 568],
+      [844, 390],
+    ]) {
+      await page.viewport(width, height);
+      renderWizardAt('workspace');
+      await screen.findByText('Competitive Analyst');
+      await nextFrame();
+      const grid = document.querySelector(
+        'fieldset[aria-label="Teammate template"]'
+      ) as HTMLElement;
+      const scroller =
+        height < 480
+          ? document.querySelector<HTMLElement>('.onb-workspace-layout')!
+          : grid.parentElement!;
+      const clip = scroller.getBoundingClientRect();
+      const cards = Array.from(grid.children).map((card) => card.getBoundingClientRect());
+      const row = cards.filter((rect) => Math.abs(rect.top - cards[0].top) < 1);
+      const footer = screen.getByText('Continue →').closest('button')!.getBoundingClientRect();
+      expect(footer.bottom).toBeLessThanOrEqual(height);
+      if (height >= 568) {
+        expect(row).toHaveLength(width === 320 ? 1 : 3);
+        for (const rect of row) {
+          expect(rect.top).toBeGreaterThanOrEqual(clip.top);
+          expect(rect.bottom).toBeLessThanOrEqual(Math.min(clip.bottom, footer.top));
+        }
+      } else {
+        expect(clip.height).toBeGreaterThan(40);
+        scroller.scrollTop = scroller.scrollHeight;
+        await nextFrame();
+        expect(footer.bottom).toBeLessThanOrEqual(height);
+      }
+      console.log(
+        'persona rectangles',
+        JSON.stringify({
+          width,
+          height,
+          clip: clip.toJSON(),
+          row: row.map((rect) => rect.toJSON()),
+          footer: footer.toJSON(),
+        })
+      );
+      await page.screenshot({ path: `__screenshots__/2327-personas-${width}x${height}.png` });
+      cleanup();
+    }
   });
 
   it('lays the step-2 teammate gallery out in exactly three columns at the widened modal', async () => {

@@ -1,4 +1,5 @@
 import type { AgorClient, Board, BoardID, Branch, Repo, TeammateConfig } from '@agor-live/client';
+import { isTeammate } from '@agor-live/client';
 import { slugify } from '@/utils/repoSlug';
 import { ensureTeammateWelcomeNote } from '@/utils/teammateWelcomeNote';
 
@@ -18,6 +19,8 @@ export interface TeammateCreationInput {
    * When omitted (e.g. the CreateDialog flow), a fresh board is created.
    */
   boardId?: string;
+  /** Stable client-generated board ID retained by the manual creation attempt. */
+  creationBoardId?: string;
   /** Tags the teammate as onboarding-seeded so its card shows the right copy. */
   createdViaOnboarding?: boolean;
 }
@@ -75,15 +78,38 @@ export async function createTeammateBranch(
     boardId = input.boardId;
   } else {
     if (!shouldContinue()) return null;
-    const newBoard = (await deps.client.service('boards').create({
-      name: `${displayName}'s Board`,
-      icon: input.emoji || '\u{1F916}',
-    })) as Board;
+    let newBoard: Board;
+    try {
+      newBoard = await deps.client.service('boards').create({
+        ...(input.creationBoardId ? { board_id: input.creationBoardId } : {}),
+        name: `${displayName}'s Board`,
+        icon: input.emoji || '🤖',
+      });
+    } catch (error) {
+      if (!input.creationBoardId || !shouldContinue()) throw error;
+      // Lost create response or retry: only the exact preallocated ID can be reused.
+      newBoard = await deps.client.service('boards').get(input.creationBoardId);
+    }
+    if (input.creationBoardId && newBoard.board_id !== input.creationBoardId)
+      throw new Error('Unexpected teammate board ID.');
     if (!shouldContinue()) return null;
     boardId = newBoard.board_id;
   }
 
   if (!shouldContinue()) return null;
+  let retainedBranch: Branch | undefined;
+  if (input.creationBoardId) {
+    const result = await deps.client
+      .service('branches')
+      .find({ query: { board_id: boardId, $limit: 100 } });
+    if (!shouldContinue()) return null;
+    const branches = Array.isArray(result) ? result : result.data;
+    retainedBranch = branches.find((branch) => branch.board_id === boardId && isTeammate(branch));
+    if (retainedBranch && retainedBranch.repo_id !== input.repoId)
+      throw new Error(
+        'A teammate was already created in another destination. Restore that destination to retry.'
+      );
+  }
   await ensureTeammateWelcomeNote({
     client: deps.client,
     boardId,
@@ -103,17 +129,19 @@ export async function createTeammateBranch(
   // Create the branch with teammate metadata on the initial row. That keeps
   // the board card consistent immediately and avoids a race where a later
   // executor readiness patch can arrive before the UI sees the metadata patch.
-  const branch = await deps.onCreateBranch(input.repoId, {
-    name: branchName,
-    ref: branchName,
-    createBranch: true,
-    sourceBranch,
-    ...(input.sourceRemoteUrl ? { sourceRemoteUrl: input.sourceRemoteUrl } : {}),
-    pullLatest: true,
-    boardId,
-    custom_context: { teammate: teammateConfig },
-    ...(input.description?.trim() ? { notes: input.description.trim() } : {}),
-  });
+  const branch =
+    retainedBranch ??
+    (await deps.onCreateBranch(input.repoId, {
+      name: branchName,
+      ref: branchName,
+      createBranch: true,
+      sourceBranch,
+      ...(input.sourceRemoteUrl ? { sourceRemoteUrl: input.sourceRemoteUrl } : {}),
+      pullLatest: true,
+      boardId,
+      custom_context: { teammate: teammateConfig },
+      ...(input.description?.trim() ? { notes: input.description.trim() } : {}),
+    }));
   if (!shouldContinue()) return null;
 
   if (branch) {

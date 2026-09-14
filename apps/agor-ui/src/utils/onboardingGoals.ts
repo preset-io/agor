@@ -294,6 +294,7 @@ export type OnboardingGoal = (typeof ONBOARDING_GOALS)[number];
 export const MAX_ONBOARDING_GOALS = 2;
 
 export interface CompletedOnboardingPreferencesInput {
+  repoId?: string;
   boardId: string;
   branchId: string;
   path: 'teammate' | 'own-repo';
@@ -323,6 +324,7 @@ export function buildCompletedOnboardingPreferences(
     onboarding: {
       ...retainedOnboarding,
       path: result.path,
+      repoId: result.teammateName ? result.repoId : undefined,
       branchId: result.branchId,
       boardId: result.boardId,
       goals: result.goals ?? [],
