@@ -17,6 +17,9 @@ import {
 import {
   AGENTIC_TOOL_NAMES,
   type AgenticToolName,
+  BRANCH_ARCHIVE_COMMAND,
+  BRANCH_CLEANUP_COMMAND,
+  BRANCH_CLEANUP_COMMAND_MAX_LENGTH,
   BRANCH_DELETION_COMMAND,
 } from '@agor/core/types';
 import { z } from 'zod';
@@ -385,6 +388,40 @@ export const GitBranchCleanPayloadSchema = BasePayloadSchema.extend({
 });
 
 export type GitBranchCleanPayload = z.infer<typeof GitBranchCleanPayloadSchema>;
+
+/** Server-resolved operation identity and immutable-at-admission executable configuration. */
+const BranchCleanupSpecificationSchema = z
+  .object({
+    operationId: z.string().uuid(),
+    generation: z.number().int().positive(),
+    command: z
+      .string()
+      .min(1)
+      .max(BRANCH_CLEANUP_COMMAND_MAX_LENGTH)
+      .refine((value) => !value.includes('\0')),
+    policyVersion: z.string().min(1).max(128),
+  })
+  .strict();
+
+const BranchMaintenanceParamsSchema = z.object({
+  branchId: z.string().uuid(),
+  cwd: z.string().min(1),
+  principalBranchAccess: z.literal('write'),
+});
+
+export const BranchCleanPayloadSchema = BasePayloadSchema.extend({
+  command: z.literal(BRANCH_CLEANUP_COMMAND),
+  params: BranchMaintenanceParamsSchema.extend({ cleanup: BranchCleanupSpecificationSchema }),
+});
+export type BranchCleanPayload = z.infer<typeof BranchCleanPayloadSchema>;
+
+export const BranchArchivePayloadSchema = BasePayloadSchema.extend({
+  command: z.literal(BRANCH_ARCHIVE_COMMAND),
+  params: BranchMaintenanceParamsSchema.extend({
+    cleanup: BranchCleanupSpecificationSchema.optional(),
+  }),
+});
+export type BranchArchivePayload = z.infer<typeof BranchArchivePayloadSchema>;
 
 // ═══════════════════════════════════════════════════════════
 // Branch Files List Payload
@@ -905,6 +942,8 @@ const ExecutorPayloadUnionSchema = z.discriminatedUnion('command', [
   GitBranchAddPayloadSchema,
   GitBranchRemovePayloadSchema,
   GitBranchCleanPayloadSchema,
+  BranchCleanPayloadSchema,
+  BranchArchivePayloadSchema,
   BranchFilesListPayloadSchema,
   BranchFilesBrowsePayloadSchema,
   BranchFilesReadPayloadSchema,
@@ -983,6 +1022,8 @@ export function getSupportedCommands(): string[] {
     'git.branch.add',
     'git.branch.remove',
     'git.branch.clean',
+    BRANCH_CLEANUP_COMMAND,
+    BRANCH_ARCHIVE_COMMAND,
     'git.repo.inspect',
     'git.managed-credentials.reconcile',
     'branch.files.list',

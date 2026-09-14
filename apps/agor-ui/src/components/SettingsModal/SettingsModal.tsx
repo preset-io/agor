@@ -472,6 +472,7 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
       case 'branches':
         return (
           <BranchesTable
+            currentUser={currentUser}
             client={client}
             branchById={branchById}
             repoById={repoById}
@@ -490,6 +491,8 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
       case 'teammates':
         return (
           <TeammatesTable
+            client={client}
+            currentUser={currentUser}
             branchById={branchById}
             repoById={repoById}
             boardById={boardById}

@@ -86,6 +86,7 @@ import {
   ENVIRONMENT_COMMAND_BUDGET,
   type EnvironmentCommandAction,
   environmentCommandTokenId,
+  getBranchCleanupPolicyBlockReason,
   getTeammateConfig,
   hasMinimumRole,
   isTeammate,
@@ -1940,6 +1941,22 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
         : undefined;
     if (filesystemAction === 'deleted' && !removalRepo?.local_path)
       throw new Conflict('Authoritative base repository location is unavailable');
+    if (filesystemAction === 'cleaned') {
+      const repo = await this.withTenantDatabase(params, () =>
+        new RepoRepository(this.db).findById(branch.repo_id)
+      );
+      if (!repo) throw new NotFound('Repository not found');
+      const reason = getBranchCleanupPolicyBlockReason(
+        repo.cleanup_policy,
+        branch.cleanup_protected ?? false
+      );
+      if (reason) throw new Conflict(reason);
+      // Do not expose the legacy fire-and-forget cleaner while the shared
+      // maintenance admission/containment contract is being integrated.
+      throw new Conflict(
+        'Workspace cleanup execution is not available until branch maintenance admission and containment are verified'
+      );
+    }
 
     // Stop environment if running
     if (branch.environment_instance?.status === 'running') {
@@ -1968,29 +1985,6 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
           );
     const filesystemExecutionUserId = userId ?? currentUserId;
     const dispatchFilesystemAction = (): void => {
-      if (filesystemAction === 'cleaned') {
-        console.log(`🧹 Spawning executor to clean branch filesystem: ${branch.path}`);
-        spawnExecutor(
-          {
-            command: 'git.branch.clean',
-            params: {
-              branchPath: branch.path,
-              cwd: branch.path,
-              principalBranchAccess: branchFsAccess,
-            },
-          },
-          {
-            logPrefix: `[BranchesService.clean ${branch.name}]`,
-            delegatedHomeKey,
-            templateVariables: {
-              branch_id: branch.branch_id,
-              user_id: filesystemExecutionUserId,
-              branch_fs_access: branchFsAccess,
-            },
-          }
-        );
-        return;
-      }
       if (filesystemAction !== 'deleted') return;
 
       console.log(`🗑️  Spawning executor to delete branch from filesystem: ${branch.path}`);

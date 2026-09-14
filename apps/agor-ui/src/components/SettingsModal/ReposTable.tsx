@@ -1,4 +1,5 @@
 import type { CreateLocalRepoRequest, CreateRepoRequest, Repo } from '@agor-live/client';
+import { resolveRepoCleanupPolicy } from '@agor-live/client';
 import { DeleteOutlined, EditOutlined, FolderOutlined, PlusOutlined } from '@ant-design/icons';
 import type { RadioChangeEvent } from 'antd';
 import { Button, Card, Empty, Form, Input, Space, Typography } from 'antd';
@@ -110,6 +111,7 @@ export const ReposTable: React.FC<ReposTableProps> = ({
     repoForm.setFieldsValue({
       slug: repo.slug,
       default_branch: repo.default_branch || 'main',
+      cleanup_policy: resolveRepoCleanupPolicy(repo.cleanup_policy),
     });
     setRepoModalOpen(true);
   };
@@ -123,6 +125,7 @@ export const ReposTable: React.FC<ReposTableProps> = ({
       if (isEditing && editingRepo) {
         const updates: Partial<Repo> = {
           slug: values.slug,
+          cleanup_policy: values.cleanup_policy,
         };
         if (values.default_branch) {
           updates.default_branch = values.default_branch;

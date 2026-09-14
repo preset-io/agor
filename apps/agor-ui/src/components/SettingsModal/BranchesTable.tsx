@@ -5,6 +5,7 @@ import type {
   BranchArchiveOrDeleteOptions,
   Repo,
   Session,
+  User,
 } from '@agor-live/client';
 import { isTeammate } from '@agor-live/client';
 import {
@@ -32,6 +33,7 @@ import { ResponsiveSettingsHeader } from './ResponsiveSettingsHeader';
 import { SettingsActionGroup } from './SettingsActionGroup';
 
 interface BranchesTableProps {
+  currentUser?: User | null;
   client: AgorClient | null;
   branchById: Map<string, Branch>;
   repoById: Map<string, Repo>;
@@ -65,6 +67,7 @@ interface BranchesTableProps {
 }
 
 export const BranchesTable: React.FC<BranchesTableProps> = ({
+  currentUser,
   client,
   branchById,
   repoById,
@@ -681,6 +684,8 @@ export const BranchesTable: React.FC<BranchesTableProps> = ({
 
       {selectedBranch && (
         <ArchiveDeleteBranchModal
+          client={client}
+          currentUser={currentUser}
           open={archiveDeleteModalOpen}
           branch={selectedBranch}
           sessionCount={(sessionsByBranch.get(selectedBranch.branch_id) || []).length}

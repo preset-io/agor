@@ -22,11 +22,14 @@ export class EnvironmentOutput {
 /** Kill the owned process group even when the shell exits before its descendants. */
 export async function runBoundedEnvironmentShell(options: {
   command: string;
-  action: 'start' | 'stop' | 'nuke' | 'logs';
+  action: 'start' | 'stop' | 'nuke' | 'logs' | 'cleanup';
   cwd: string;
   env?: Record<string, string>;
   deadline: number;
-  output: EnvironmentOutput;
+  output: Pick<EnvironmentOutput, 'append'>;
+  /** Short commands supervised by startContainedExecutorCommand stay in its group.
+   * Their result is not settled by the daemon until that entire group is absent. */
+  containment?: 'executor';
   cleanupMs?: number;
 }): Promise<{ outcome: 'succeeded' | 'failed' | 'unknown'; message: string }> {
   assertEnvCommandAllowed(options.command, options.action);
@@ -38,7 +41,7 @@ export async function runBoundedEnvironmentShell(options: {
     cwd: options.cwd,
     env: { ...process.env, ...options.env },
     shell: true,
-    detached: true,
+    detached: options.containment !== 'executor',
     stdio: 'pipe',
   });
   child.stdin.end();
@@ -46,6 +49,8 @@ export async function runBoundedEnvironmentShell(options: {
   child.stderr.on('data', (chunk) => options.output.append(chunk));
   let cleanupFailed = false;
   const signalGroup = (signal: NodeJS.Signals) => {
+    // Never signal our own executor group here; the existing daemon owner does that.
+    if (options.containment === 'executor') return;
     if (!child.pid) return;
     try {
       process.kill(-child.pid, signal);
@@ -68,6 +73,19 @@ export async function runBoundedEnvironmentShell(options: {
     if (settling) return;
     settling = true;
     if (timer) clearTimeout(timer);
+    if (options.containment === 'executor') {
+      child.stdout.destroy();
+      child.stderr.destroy();
+      complete({
+        outcome:
+          timedOut || interrupted ? 'unknown' : code === 0 && !spawnError ? 'succeeded' : 'failed',
+        message:
+          timedOut || interrupted
+            ? 'Cleanup interrupted; containment required'
+            : 'Cleanup foreground command completed; containment required',
+      });
+      return;
+    }
     // Success means only the foreground command exited zero. Background work
     // is never hosted: terminate remaining descendants before reporting.
     signalGroup('SIGTERM');

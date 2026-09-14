@@ -2,6 +2,7 @@ import { extractSlugFromUrl } from '@agor-live/client';
 import type { FormInstance, RadioChangeEvent } from 'antd';
 import { Form, Input, Radio, Typography } from 'antd';
 import { extractSlugFromPath } from '@/utils/repoSlug';
+import { RepoCleanupPolicyFields } from './RepoCleanupPolicyFields';
 
 export interface RepoFormFieldsProps {
   form: FormInstance;
@@ -121,6 +122,8 @@ export const RepoFormFields: React.FC<RepoFormFieldsProps> = ({
           <Input placeholder="main" />
         </Form.Item>
       )}
+
+      {isEditing && <RepoCleanupPolicyFields />}
 
       {!isEditing && (
         <Typography.Text type="secondary" style={{ fontSize: 12 }}>

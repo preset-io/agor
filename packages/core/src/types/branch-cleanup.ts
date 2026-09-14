@@ -7,6 +7,9 @@ export interface RepoCleanupPolicy {
 
 export const DEFAULT_BRANCH_CLEANUP_COMMAND = 'git clean -fdX';
 export const BRANCH_CLEANUP_COMMAND_MAX_LENGTH = 4096;
+export const BRANCH_CLEANUP_COMMAND = 'branch.clean';
+export const BRANCH_ARCHIVE_COMMAND = 'branch.archive';
+export const BRANCH_CLEANUP_TIMEOUT_MS = 5 * 60_000;
 export const DEFAULT_REPO_CLEANUP_POLICY: Readonly<RepoCleanupPolicy> = Object.freeze({
   enabled: false,
   command: DEFAULT_BRANCH_CLEANUP_COMMAND,

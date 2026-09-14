@@ -635,6 +635,8 @@ const BranchCardComponent = ({
       {/* Branch cards are repeated across the canvas, so mount this only on demand. */}
       {archiveDeleteModalMounted && (
         <ArchiveDeleteBranchModal
+          client={client}
+          currentUser={currentUserId ? userById.get(currentUserId) : null}
           open={archiveDeleteModalOpen}
           branch={branch}
           sessionCount={sessions.length}

@@ -4,9 +4,40 @@ import type { Branch } from '@agor/core/types';
 import { expect } from 'vitest';
 import { seedEnvironmentCommandBranch } from '../../../../packages/core/src/db/repositories/environment-commands.test-support';
 import { dbTest, setTestBranchUserRole } from '../../../../packages/core/src/db/test-helpers';
+import { markBranchArchiveDeleteAuthorized } from '../utils/branch-archive-delete-authorization';
 import { BranchesService } from './branches';
 
 const app = { get: () => ({}) } as unknown as Application;
+
+dbTest(
+  'archive Clean rejects disabled, protected, or unverified execution before metadata changes',
+  async ({ db }) => {
+    const { branch, user } = await seedEnvironmentCommandBranch(db);
+    const service = new BranchesService(db, app);
+    const repoRepository = new RepoRepository(db);
+    const branchRepository = new BranchRepository(db);
+    const rejectClean = async (message: string) => {
+      const params = { user };
+      markBranchArchiveDeleteAuthorized(params, branch.branch_id, 'archive');
+      await expect(
+        service.archiveOrDelete(
+          branch.branch_id,
+          { metadataAction: 'archive', filesystemAction: 'cleaned' },
+          params
+        )
+      ).rejects.toThrow(message);
+      expect((await branchRepository.findById(branch.branch_id))?.archived).not.toBe(true);
+    };
+    await rejectClean('Cleanup is disabled');
+    await repoRepository.update(branch.repo_id, {
+      cleanup_policy: { enabled: true, command: 'git clean -fdX', allow_branch_protection: true },
+    });
+    await branchRepository.update(branch.branch_id, { cleanup_protected: true });
+    await rejectClean('protected from workspace cleanup');
+    await branchRepository.update(branch.branch_id, { cleanup_protected: false });
+    await rejectClean('maintenance admission and containment');
+  }
+);
 
 dbTest(
   'owner and Manager can preprotect while policy is disabled; Collaborator cannot',
@@ -44,7 +75,7 @@ dbTest(
       service.patch(branch.branch_id, { cleanup_protected: true }, { user: member })
     ).rejects.toThrow('Branch Manager access');
     await expect(
-      service.update(branch.branch_id, { ...branch, cleanup_protected: true }, { user: member })
+      service.update(branch.branch_id, { cleanup_protected: true }, { user: member })
     ).rejects.toThrow('Branch Manager access');
     expect((await new BranchRepository(db).findById(branch.branch_id))?.cleanup_protected).toBe(
       false
