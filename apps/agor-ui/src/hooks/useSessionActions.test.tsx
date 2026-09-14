@@ -3,6 +3,28 @@ import { act, renderHook } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { useSessionActions } from './useSessionActions';
 
+describe('useSessionActions MCP selection', () => {
+  it.each([[['selected-server']], [[]], [undefined]])(
+    'preserves the explicit or omitted selection %j in the create request',
+    async (mcpServerIds) => {
+      const create = vi.fn(
+        async (_input: { mcpServerIds?: string[] }) => ({ session_id: 'session-1' }) as Session
+      );
+      const { result } = renderHook(() => useSessionActions(makeClient({ sessions: { create } })));
+
+      await act(async () => {
+        await result.current.createSession({
+          branch_id: 'branch-1',
+          agent: 'claude-code',
+          mcpServerIds,
+        });
+      });
+
+      expect(create.mock.calls[0][0].mcpServerIds).toEqual(mcpServerIds);
+    }
+  );
+});
+
 function makeClient(services: Record<string, unknown>): AgorClient {
   return {
     service: vi.fn((name: string) => {

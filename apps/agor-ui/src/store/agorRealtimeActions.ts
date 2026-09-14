@@ -384,7 +384,7 @@ export function artifactRemoved(artifact: Artifact) {
 
 // Re-export transport-neutral relationship actions so existing websocket
 // subscription wiring can keep using the realtime action namespace.
-export { sessionMcpCreated, sessionMcpRemoved } from './sessionMcpActions';
+export { sessionMcpCreated, sessionMcpPatched, sessionMcpRemoved } from './sessionMcpActions';
 
 // ── Board comments ────────────────────────────────────────────────────────--
 export function commentCreated(comment: BoardComment) {

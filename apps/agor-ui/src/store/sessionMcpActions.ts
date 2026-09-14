@@ -35,3 +35,20 @@ export function sessionMcpRemoved(relationship: { session_id: string; mcp_server
     return next;
   });
 }
+
+/** Initialization publishes the complete selection, not an incremental relationship. */
+export function sessionMcpPatched(selection: { session_id: string; mcp_server_ids: string[] }) {
+  bumpRevision('sessionMcp');
+  setMap('sessionMcpServerIds', (prev) => {
+    const current = prev.get(selection.session_id) || [];
+    const selected = selection.mcp_server_ids;
+    if (current.length === selected.length && current.every((id, i) => id === selected[i])) {
+      return prev;
+    }
+
+    const next = new Map(prev);
+    if (selected.length > 0) next.set(selection.session_id, [...selected]);
+    else next.delete(selection.session_id);
+    return next;
+  });
+}

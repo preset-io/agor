@@ -1512,6 +1512,7 @@ export function useAgorData(
     // Subscribe to session-MCP server relationship events
     const sessionMcpService = client.service('session-mcp-servers');
     sessionMcpService.on('created', scopedRealtime.sessionMcpCreated);
+    sessionMcpService.on('patched', scopedRealtime.sessionMcpPatched);
     sessionMcpService.on('removed', scopedRealtime.sessionMcpRemoved);
 
     // Subscribe to board comment events
@@ -1660,6 +1661,7 @@ export function useAgorData(
       mcpServersService.removeListener('removed', scopedRealtime.mcpServerRemoved);
 
       sessionMcpService.removeListener('created', scopedRealtime.sessionMcpCreated);
+      sessionMcpService.removeListener('patched', scopedRealtime.sessionMcpPatched);
       sessionMcpService.removeListener('removed', scopedRealtime.sessionMcpRemoved);
 
       commentsService.removeListener('created', scopedRealtime.commentCreated);

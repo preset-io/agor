@@ -89,6 +89,7 @@ export function useSessionActions(client: AgorClient | null): UseSessionActionsR
         title: config.title || undefined,
         description: config.initialPrompt || undefined,
         branch_id: config.branch_id,
+        mcpServerIds: config.mcpServerIds,
         model_config: config.modelConfig
           ? {
               ...config.modelConfig,

@@ -135,6 +135,7 @@ function makeMockClient(seed: Record<string, unknown[]> = {}) {
     emit: (svc: string, event: string, payload: unknown) => {
       for (const fn of serviceListeners.get(svc)?.get(event) ?? []) fn(payload);
     },
+    listeners: (svc: string, event: string) => [...(serviceListeners.get(svc)?.get(event) ?? [])],
     // Fire an `io` event (e.g. `connect`) so tests can drive the reconnect
     // refetch path.
     emitIo: (event: string, payload?: unknown) => {
@@ -1251,4 +1252,103 @@ describe('useAgorData — lean boards list + objects hydration', () => {
       window.history.pushState({}, '', '/');
     }
   });
+});
+
+describe('session MCP initialization events', () => {
+  it('replaces attachments immediately, preserves unrelated sessions, and clears explicit empty selection', async () => {
+    const { client, emit, listeners } = makeMockClient({
+      'session-mcp-servers': [
+        { session_id: 's-1', mcp_server_id: 'old-server' },
+        { session_id: 's-2', mcp_server_id: 'other-server' },
+      ],
+    });
+    const { result, unmount } = renderHook(() => useAgorData(client));
+    await waitForInitialLoad(result);
+    await waitFor(() =>
+      expect(agorStore.getState().sessionMcpServerIds.get('s-1')).toEqual(['old-server'])
+    );
+
+    const patch = { session_id: 's-1', mcp_server_ids: ['selected-server'] };
+    act(() => emit('session-mcp-servers', 'patched', patch));
+    expect(agorStore.getState().sessionMcpServerIds.get('s-1')).toEqual(['selected-server']);
+    expect(agorStore.getState().sessionMcpServerIds.get('s-2')).toEqual(['other-server']);
+
+    const before = agorStore.getState().sessionMcpServerIds;
+    act(() => emit('session-mcp-servers', 'patched', patch));
+    expect(agorStore.getState().sessionMcpServerIds).toBe(before);
+
+    act(() => emit('session-mcp-servers', 'patched', { ...patch, mcp_server_ids: [] }));
+    expect(agorStore.getState().sessionMcpServerIds.get('s-1') ?? []).toEqual([]);
+    expect(agorStore.getState().sessionMcpServerIds.get('s-2')).toEqual(['other-server']);
+    unmount();
+    expect(listeners('session-mcp-servers', 'patched')).toHaveLength(0);
+  });
+
+  it.each([[['selected-server']], [[]]])(
+    'discards a stale snapshot racing replacement %j',
+    async (serverIds) => {
+      const seed = { 'session-mcp-servers': [{ session_id: 's-1', mcp_server_id: 'old-server' }] };
+      const { client, emit, onFetch, fetchCount } = makeMockClient(seed);
+      let release!: () => void;
+      const pending = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      onFetch('session-mcp-servers', 'findAll', (call) => (call === 1 ? pending : undefined));
+      const { result } = renderHook(() => useAgorData(client));
+      await waitForInitialLoad(result);
+      await waitFor(() => expect(fetchCount('session-mcp-servers', 'findAll')).toBe(1));
+
+      act(() =>
+        emit('session-mcp-servers', 'patched', { session_id: 's-1', mcp_server_ids: serverIds })
+      );
+      seed['session-mcp-servers'] = serverIds.map((mcp_server_id) => ({
+        session_id: 's-1',
+        mcp_server_id,
+      }));
+      await act(async () => {
+        release();
+        await pending;
+      });
+      await waitFor(() => expect(fetchCount('session-mcp-servers', 'findAll')).toBe(2));
+      expect(agorStore.getState().sessionMcpServerIds.get('s-1') ?? []).toEqual(serverIds);
+    }
+  );
+
+  it.each(['tenant-a-user', 'tenant-b-user'])(
+    'rejects previous-auth events and snapshots after reauthentication as %s',
+    async (userId) => {
+      const seed = {
+        'session-mcp-servers': [{ session_id: 'session-a', mcp_server_id: 'server-a' }],
+      };
+      const { client, listeners, onFetch } = makeMockClient(seed);
+      let release!: () => void;
+      const pending = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      onFetch('session-mcp-servers', 'findAll', (call) => (call === 1 ? pending : undefined));
+      const { result, rerender } = renderHook(
+        ({ userId, generation, ready }) =>
+          useAgorData(client, {
+            authenticatedUserId: userId,
+            authenticatedUserRole: 'member',
+            authGeneration: generation,
+            connectionReady: ready,
+          }),
+        { initialProps: { userId: 'tenant-a-user', generation: 1, ready: true } }
+      );
+      await waitForInitialLoad(result);
+      const oldListeners = listeners('session-mcp-servers', 'patched');
+      expect(oldListeners).toHaveLength(1);
+      seed['session-mcp-servers'] = [];
+      rerender({ userId, generation: 2, ready: true });
+      await act(async () => {
+        for (const listener of oldListeners) {
+          listener({ session_id: 'session-a', mcp_server_ids: ['server-a'] });
+        }
+        release();
+        await pending;
+      });
+      expect(agorStore.getState().sessionMcpServerIds.size).toBe(0);
+    }
+  );
 });
