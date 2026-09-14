@@ -65,7 +65,7 @@ export const MobileCommentsPage: React.FC<MobileCommentsPageProps> = ({
 
   return (
     <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
-      <MobileHeader title={board.name} user={currentUser} boardSwitcher={boardSwitcher} />
+      <MobileHeader title={board.name} boardSwitcher={boardSwitcher} />
       <div style={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
         <CommentsPanel
           alwaysShowActions

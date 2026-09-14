@@ -66,7 +66,9 @@ interface MobileBoardPageProps {
   firstTaskAssistantName?: string;
 }
 
-const GUTTER = 16;
+function plural(count: number, singular: string, pluralForm = `${singular}s`): string {
+  return `${count} ${count === 1 ? singular : pluralForm}`;
+}
 
 function statusColor(status: Branch['filesystem_status']): string {
   if (status === 'ready') return 'success';
@@ -130,7 +132,7 @@ export const MobileBoardPage: React.FC<MobileBoardPageProps> = ({
     return (
       <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
         <MobileHeader title="Board" boardSwitcher={boardSwitcher} />
-        <Content style={{ flex: 1, minHeight: 0, padding: GUTTER }}>
+        <Content style={{ flex: 1, minHeight: 0, padding: token.padding }}>
           <Empty description="Board not found" />
         </Content>
       </div>
@@ -279,7 +281,7 @@ export const MobileBoardPage: React.FC<MobileBoardPageProps> = ({
           flex: 1,
           minHeight: 0,
           overflowY: 'auto',
-          paddingInline: GUTTER,
+          paddingInline: token.padding,
           paddingBlock: token.paddingMD,
           paddingBottom: `calc(${token.paddingXL}px + env(safe-area-inset-bottom))`,
         }}
@@ -296,8 +298,8 @@ export const MobileBoardPage: React.FC<MobileBoardPageProps> = ({
                     {board.name}
                   </Title>
                   <Text type="secondary">
-                    {branches.length} branches · {cards.length} cards · {annotations.length} canvas
-                    objects
+                    {plural(branches.length, 'branch', 'branches')} · {plural(cards.length, 'card')}{' '}
+                    · {plural(annotations.length, 'canvas object')}
                   </Text>
                 </div>
               </Space>
@@ -332,7 +334,7 @@ export const MobileBoardPage: React.FC<MobileBoardPageProps> = ({
           {!isEmpty && !boardHasSessions && (
             <Card size="small">
               <Flex vertical gap={token.marginSM} align="flex-start">
-                <Text>Ready when you are. Give your assistant its first task to get going.</Text>
+                <Text>Ready when you are. Kick things off with a first task.</Text>
                 <Button type="primary" onClick={onGiveFirstTask}>
                   Give {firstTaskAssistantName ?? 'your assistant'} their first task
                 </Button>

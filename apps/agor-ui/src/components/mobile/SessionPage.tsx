@@ -9,7 +9,7 @@ import type {
 import { PermissionScope } from '@agor-live/client';
 import { Alert, Spin } from 'antd';
 import { useCallback, useMemo, useState } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import { AppActionsProvider } from '../../contexts/AppActionsContext';
 import { useAgorStore } from '../../store/agorStore';
 import { makeSessionMcpServerIdsSelector } from '../../store/selectors';
@@ -59,6 +59,7 @@ export const SessionPage: React.FC<SessionPageProps> = ({
 }) => {
   const { sessionId } = useParams<{ sessionId: string }>();
   const navigate = useNavigate();
+  const location = useLocation();
   const [settingsOpen, setSettingsOpen] = useState(false);
 
   const resolvedSessionId = sessionId
@@ -75,13 +76,13 @@ export const SessionPage: React.FC<SessionPageProps> = ({
       useMemo(() => makeSessionMcpServerIdsSelector(canonicalSessionId), [canonicalSessionId])
     ) ?? EMPTY_MCP_IDS;
 
-  // Back to the actual parent (the branch/board/sessions route the user came
-  // from). `navigate(-1)` unwinds the real history entry; falling back to the
-  // mobile home keeps a cold deep-link from dead-ending.
+  // Back to the actual parent the user came from. A cold deep-link has the
+  // router's initial entry (`location.key === 'default'`) and no in-app history,
+  // so send it to Sessions instead of `navigate(-1)`, which could exit the app.
   const goBack = useCallback(() => {
-    if (window.history.length > 1) navigate(-1);
-    else navigate('/m');
-  }, [navigate]);
+    if (location.key !== 'default') navigate(-1);
+    else navigate('/m/sessions');
+  }, [navigate, location.key]);
 
   const handlePermissionDecision = useCallback(
     async (
