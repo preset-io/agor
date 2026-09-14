@@ -2353,6 +2353,7 @@ function AppContent() {
             user={currentUser}
             client={client}
             allowClaudeOAuthSignIn={featuresConfig?.claudeSubscriptionOAuth === true}
+            claudeOAuthCapability={featuresConfig?.claudeOAuthCapability}
             onUpdateUser={async (userId, updates) => {
               if (
                 !onboardingWizardOwner ||

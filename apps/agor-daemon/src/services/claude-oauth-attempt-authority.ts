@@ -26,6 +26,7 @@ export interface DurableClaudeOAuthCreate {
   delegatedHomeKey: string | null;
   claudeConfigDir?: string;
   validateRoute?: () => Promise<boolean>;
+  target?: import('@agor/core/types').ClaudeBackendOAuthTarget;
 }
 
 export interface OpenedClaudeOAuthAttempt {
@@ -41,14 +42,20 @@ function validMaterial(value: unknown): value is ClaudeOAuthSealedMaterial {
   if (!value || typeof value !== 'object') return false;
   const material = value as Partial<ClaudeOAuthSealedMaterial>;
   return (
-    material.version === 1 &&
+    (material.version === 1 || material.version === 2) &&
     typeof material.attemptId === 'string' &&
     typeof material.tenantId === 'string' &&
     typeof material.userId === 'string' &&
     Number.isSafeInteger(material.attemptGeneration) &&
     typeof material.codeVerifier === 'string' &&
-    (material.delegatedHomeKey === null || typeof material.delegatedHomeKey === 'string') &&
-    (material.claudeConfigDir === undefined || typeof material.claudeConfigDir === 'string')
+    (material.version === 1
+      ? (material.delegatedHomeKey === null || typeof material.delegatedHomeKey === 'string') &&
+        (material.claudeConfigDir === undefined || typeof material.claudeConfigDir === 'string')
+      : material.target?.kind === 'backend_grant' &&
+        material.target.bindingVersion === 1 &&
+        /^[a-f0-9]{64}$/.test(material.target.bindingFingerprint) &&
+        material.delegatedHomeKey === undefined &&
+        material.claudeConfigDir === undefined)
   );
 }
 
@@ -94,14 +101,18 @@ export class ClaudeOAuthAttemptAuthority {
         throw new Error('Credential route changed before sign-in reservation');
       }
       const material: ClaudeOAuthSealedMaterial = {
-        version: 1,
         attemptId,
         tenantId: input.tenantId,
         userId: input.userId,
         attemptGeneration,
         codeVerifier: input.codeVerifier,
-        delegatedHomeKey: input.delegatedHomeKey,
-        ...(input.claudeConfigDir ? { claudeConfigDir: input.claudeConfigDir } : {}),
+        ...(input.target
+          ? { version: 2 as const, target: input.target }
+          : {
+              version: 1 as const,
+              delegatedHomeKey: input.delegatedHomeKey,
+              ...(input.claudeConfigDir ? { claudeConfigDir: input.claudeConfigDir } : {}),
+            }),
       };
       await repository.create({
         tenantId: input.tenantId,
@@ -273,12 +284,14 @@ export class ClaudeOAuthAttemptAuthority {
     tenantId: string,
     userId: UserID,
     reason: 'signed_out' | 'credentials_changed',
-    work: (generation: number) => Promise<T>
+    work: (generation: number) => Promise<T>,
+    options?: { atomic?: boolean }
   ): Promise<T> {
     const outcome = await runWithTenantDatabaseScope(this.db, tenantId, async (scoped) => {
       const repository = new ClaudeOAuthAttemptRepository(scoped);
       const generation = await repository.allocateAttemptGeneration(tenantId, userId);
       await repository.invalidateForUser(tenantId, userId, reason);
+      if (options?.atomic) return { ok: true as const, value: await work(generation) };
       try {
         return { ok: true as const, value: await work(generation) };
       } catch (error) {

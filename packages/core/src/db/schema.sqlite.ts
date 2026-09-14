@@ -2024,10 +2024,46 @@ export const mcpOauthPendingFlows = sqliteTable(
  * Standalone SQLite deliberately keeps its existing process-local sign-in state;
  * this table is unused at runtime and exists for cross-dialect compatibility.
  */
+/** Deployment-bound personal provider grants; SQLite is an inert schema mirror. */
+export const userProviderOauthGrants = sqliteTable(
+  'user_provider_oauth_grants',
+  {
+    user_id: text('user_id', { length: 36 })
+      .notNull()
+      .references(() => users.user_id, { onDelete: 'cascade' }),
+    provider: text('provider', { enum: ['claude-code'] }).notNull(),
+    grant_generation: integer('grant_generation').notNull(),
+    binding_version: integer('binding_version').notNull(),
+    binding_fingerprint: text('binding_fingerprint').notNull(),
+    established_attempt_id: text('established_attempt_id').notNull(),
+    sealed_access_token: text('sealed_access_token'),
+    sealed_refresh_token: text('sealed_refresh_token'),
+    expires_at: t.timestamp('expires_at'),
+    scopes: text('scopes').notNull().default(''),
+    subscription_type: text('subscription_type'),
+    refresh_generation: integer('refresh_generation').notNull().default(0),
+    refresh_success_generation: integer('refresh_success_generation').notNull().default(0),
+    refresh_claim_id: text('refresh_claim_id'),
+    refresh_claimed_at: t.timestamp('refresh_claimed_at'),
+    state: text('state', {
+      enum: ['idle', 'refreshing', 'ambiguous', 'reauth_required', 'disconnected'],
+    })
+      .notNull()
+      .default('idle'),
+    failure_code: text('failure_code'),
+    retry_not_before: t.timestamp('retry_not_before'),
+    updated_at: t.timestamp('updated_at').notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({ columns: [table.user_id, table.provider] }),
+  })
+);
+
 export const claudeOauthAttempts = sqliteTable(
   'claude_oauth_attempts',
   {
     attempt_id: text('attempt_id', { length: 36 }).primaryKey(),
+    submission_count: integer('submission_count').notNull().default(0),
     state_hash: text('state_hash', { length: 64 }).notNull(),
     user_id: text('user_id', { length: 36 })
       .notNull()

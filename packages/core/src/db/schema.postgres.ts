@@ -2341,11 +2341,53 @@ export const mcpOauthClientRegistrations = pgTable(
  * callback: the user pastes the authorization code back into an already
  * authenticated session, so no state-hash capability policy exists.
  */
+/** Deployment-bound personal provider grants; SQLite is an inert schema mirror. */
+export const userProviderOauthGrants = pgTable(
+  'user_provider_oauth_grants',
+  {
+    tenant_id: text('tenant_id').notNull().default('default'),
+    user_id: varchar('user_id', { length: 36 }).notNull(),
+    provider: text('provider', { enum: ['claude-code'] }).notNull(),
+    grant_generation: bigint('grant_generation', { mode: 'number' }).notNull(),
+    binding_version: integer('binding_version').notNull(),
+    binding_fingerprint: text('binding_fingerprint').notNull(),
+    established_attempt_id: text('established_attempt_id').notNull(),
+    sealed_access_token: text('sealed_access_token'),
+    sealed_refresh_token: text('sealed_refresh_token'),
+    expires_at: t.timestamp('expires_at'),
+    scopes: text('scopes').notNull().default(''),
+    subscription_type: text('subscription_type'),
+    refresh_generation: bigint('refresh_generation', { mode: 'number' }).notNull().default(0),
+    refresh_success_generation: bigint('refresh_success_generation', { mode: 'number' })
+      .notNull()
+      .default(0),
+    refresh_claim_id: text('refresh_claim_id'),
+    refresh_claimed_at: t.timestamp('refresh_claimed_at'),
+    state: text('state', {
+      enum: ['idle', 'refreshing', 'ambiguous', 'reauth_required', 'disconnected'],
+    })
+      .notNull()
+      .default('idle'),
+    failure_code: text('failure_code'),
+    retry_not_before: t.timestamp('retry_not_before'),
+    updated_at: t.timestamp('updated_at').notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({ columns: [table.tenant_id, table.user_id, table.provider] }),
+    tenantUserFk: foreignKey({
+      name: 'user_provider_oauth_grants_tenant_user_fk',
+      columns: [table.tenant_id, table.user_id],
+      foreignColumns: [users.tenant_id, users.user_id],
+    }).onDelete('cascade'),
+  })
+);
+
 export const claudeOauthAttempts = pgTable(
   'claude_oauth_attempts',
   {
     tenant_id: text('tenant_id').notNull().default('default'),
     attempt_id: varchar('attempt_id', { length: 36 }).primaryKey(),
+    submission_count: integer('submission_count').notNull().default(0),
     state_hash: varchar('state_hash', { length: 64 }).notNull(),
     user_id: varchar('user_id', { length: 36 }).notNull(),
     attempt_generation: bigint('attempt_generation', { mode: 'number' }).notNull(),

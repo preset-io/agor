@@ -667,7 +667,7 @@ export const CONSTRAINED_HA_PROCESS_AFFINE_SERVICE_GATES = [
   // Claude is admitted only when the resolved HA capability proves its durable
   // attempt authority plus exact-user generation-fenced writer route.
   ['claude-auth/oauth', 'claudeOAuth'],
-  ['claude-auth/logout', 'claudeAuth'],
+  // Claude logout enforces mode-aware cleanup internally, including unavailable backend grants.
   ['opencode-auth', 'openCodeAuth'],
   ['opencode-models', 'openCodeAuth'],
 ] as const satisfies ReadonlyArray<readonly [string, Parameters<typeof rejectInConstrainedHa>[1]]>;

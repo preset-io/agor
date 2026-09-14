@@ -1,3 +1,4 @@
+import type { AuthCheckResult } from '@agor/core/types';
 import type { AgorClient, ClaudeOAuthStatus } from '@agor-live/client';
 import { CheckCircleOutlined, ExportOutlined, LoadingOutlined } from '@ant-design/icons';
 import { Alert, Button, Flex, Input, Space, Typography, theme } from 'antd';
@@ -10,7 +11,11 @@ const { useToken } = theme;
 export const CLAUDE_OAUTH_STORAGE_DESCRIPTION =
   'Sign in with your Claude subscription. Agor stores the resulting refreshable login in your private per-user execution home on this server. It is not shared with other Agor users, and signing in replaces only your existing Claude subscription login in that home.';
 
+export const CLAUDE_BACKEND_OAUTH_STORAGE_DESCRIPTION =
+  'Agor encrypts your personal Claude login in the backend. Refresh credentials never reach agent runtimes. Each new task receives only an access token. Long tasks can outlive that token; use Continue in a new task after an expiry failure. Disconnect prevents new token delivery but cannot recall tokens already delivered.';
+
 export interface ClaudeOAuthSignInProps {
+  storage?: 'backend' | 'local_file';
   client: AgorClient | null;
   /** Whether the parent currently resolves this user to a subscription login. */
   connected?: boolean;
@@ -41,11 +46,13 @@ export const ClaudeOAuthSignIn = memo(function ClaudeOAuthSignIn({
   connected = false,
   onVerified,
   autoStart = true,
+  storage = 'local_file',
   operationScope,
 }: ClaudeOAuthSignInProps) {
   const { token } = useToken();
   const [status, setStatus] = useState<ClaudeOAuthStatus>({ phase: 'idle' });
   const [starting, setStarting] = useState(false);
+  const [backendConfirmed, setBackendConfirmed] = useState(false);
   const [code, setCode] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
@@ -83,6 +90,7 @@ export const ClaudeOAuthSignIn = memo(function ClaudeOAuthSignIn({
     [service, ...(effectiveOperationScope ?? [null])],
     () => {
       setStarting(false);
+      setBackendConfirmed(false);
       setSubmitting(false);
       setStatus({ phase: 'idle' });
       setCode('');
@@ -209,8 +217,27 @@ export const ClaudeOAuthSignIn = memo(function ClaudeOAuthSignIn({
   }, [service, operationAvailable, code, status.attemptId, run]);
 
   useEffect(() => {
-    if (status.phase === 'success' && isCurrent()) onVerified();
-  }, [status.phase, onVerified, isCurrent]);
+    if (status.phase !== 'success' || !isCurrent()) return;
+    if (storage !== 'backend') {
+      onVerified();
+      return;
+    }
+    let cancelled = false;
+    void run(
+      async () =>
+        (await client!.service('check-auth').create({ tool: 'claude-code' })) as AuthCheckResult
+    )
+      .then((result) => {
+        if (!cancelled && isCurrent() && result.managedOAuth?.saved && result.managedOAuth.usable) {
+          setBackendConfirmed(true);
+          onVerified();
+        }
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [status.phase, onVerified, isCurrent, storage, client, run]);
 
   if (starting || (status.phase === 'idle' && autoStart)) {
     return (
@@ -283,6 +310,14 @@ export const ClaudeOAuthSignIn = memo(function ClaudeOAuthSignIn({
   }
 
   if (status.phase === 'success') {
+    if (storage === 'backend' && !backendConfirmed)
+      return (
+        <Alert
+          type="info"
+          showIcon
+          message="Sign-in was saved. Confirming the current personal grant; if it is unavailable, recheck Settings or reconnect."
+        />
+      );
     return (
       <Flex align="center" gap={8} style={{ padding: '12px 0' }}>
         <CheckCircleOutlined style={{ color: token.colorSuccess, fontSize: token.fontSizeSM }} />

@@ -54,6 +54,7 @@ describe('buildTenantInsertOrder', () => {
       'mcp_oauth_client_registrations',
       'mcp_oauth_pending_flows',
       'user_mcp_oauth_tokens',
+      'user_provider_oauth_grants',
     ]);
     for (const tableName of nonPortable) {
       expect(buildTenantDeletionManifest().map((entry) => entry.name)).toContain(tableName);

@@ -1,3 +1,6 @@
+import { resolveClaudeOAuthCapability } from '@agor/core/config';
+import { isPostgresDatabaseHandle } from '@agor/core/db';
+import { sandboxManagedCredentialIsolationAvailable } from './utils/sandbox-wrap.js';
 /**
  * Authentication & Custom REST Routes Registration
  *
@@ -152,7 +155,6 @@ import type {
   TasksServiceImpl,
 } from './declarations.js';
 import { registerExecutorResponseRoutes } from './executor-response-channel.js';
-import { hasClaudeSubscriptionOAuthCapability } from './ha-support.js';
 import { probeDatabase, probePendingMigrations } from './health/db-probe.js';
 import {
   authenticatedHealthDb,
@@ -6439,7 +6441,16 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           cursorSdk: true,
           // Provider-policy release boundary. Absence is false; the daemon
           // independently rejects the OAuth service when disabled.
-          claudeSubscriptionOAuth: hasClaudeSubscriptionOAuthCapability(config, deployment),
+          claudeSubscriptionOAuth: resolveClaudeOAuthCapability(config, deployment, {
+            postgres: isPostgresDatabaseHandle(db),
+            encryption: !!process.env.AGOR_MASTER_SECRET,
+            localIsolation: sandboxManagedCredentialIsolationAvailable(),
+          }).available,
+          claudeOAuthCapability: resolveClaudeOAuthCapability(config, deployment, {
+            postgres: isPostgresDatabaseHandle(db),
+            encryption: !!process.env.AGOR_MASTER_SECRET,
+            localIsolation: sandboxManagedCredentialIsolationAvailable(),
+          }),
           // Resolved branch storage policy. The daemon still enforces this at
           // create time; the UI uses it to pick the right default and disable
           // unavailable storage modes before submit.

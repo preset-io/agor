@@ -207,6 +207,17 @@ export class ClaudeOAuthAttemptRepository {
       // this lock makes simultaneous starts deterministic instead of surfacing
       // a uniqueness race.
       await this.lockUser(input.tenantId, input.userId);
+      const recent = rowsOf(
+        await executeRaw(
+          this.db,
+          sql`
+        SELECT count(*) AS count FROM ${claudeOauthAttempts}
+        WHERE tenant_id = ${input.tenantId} AND user_id = ${input.userId}
+          AND created_at > CURRENT_TIMESTAMP - INTERVAL '10 minutes'`
+        )
+      );
+      if (Number(recent[0]?.count) >= 10)
+        throw new RepositoryError('Claude sign-in rate limit reached');
       // Latest attempt wins. An older exchange may already have POSTed the
       // one-time code to Anthropic, so it becomes ambiguous rather than
       // replayable. No terminal row retains sealed material.
@@ -273,6 +284,17 @@ export class ClaudeOAuthAttemptRepository {
     assertStateHash(input.stateHash);
     if (!input.claimId) throw new RepositoryError('Claude OAuth exchange claim is missing');
     try {
+      const admitted = rowsOf(
+        await executeRaw(
+          this.db,
+          sql`
+        UPDATE ${claudeOauthAttempts} SET submission_count = submission_count + 1
+        WHERE tenant_id = ${input.tenantId} AND user_id = ${input.userId}
+          AND attempt_id = ${input.attemptId} AND submission_count < 20
+        RETURNING attempt_id`
+        )
+      );
+      if (!admitted.length) return { outcome: 'not_claimed', attempt: null };
       // Record an explicit expiry rather than letting a timed-out attempt look
       // indistinguishable from an unknown one.
       await executeRaw(

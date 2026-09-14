@@ -1,5 +1,6 @@
 import { assertSafeOAuthUrl } from '../utils/safe-outbound-fetch';
 import { isPublicHttpUrl } from '../utils/url';
+import { hasBackendClaudeOAuthTopology } from './claude-subscription-oauth';
 import { assertAsyncEnvironmentCommandConfig } from './environment-commands';
 import {
   hasContainedClaudeRuntimeCredentials,
@@ -570,7 +571,10 @@ export function resolveDeploymentConfig(
       // routing and a shared lock protect daemon writers, while the bubblewrap
       // mask proves the provider runtime cannot mutate the canonical grant.
       claudeOAuth:
-        exactUserCredentialHome && crossReplicaCredentialLock && containedClaudeRuntimeCredentials,
+        (exactUserCredentialHome &&
+          crossReplicaCredentialLock &&
+          containedClaudeRuntimeCredentials) ||
+        (executionTopology === 'external' && hasBackendClaudeOAuthTopology(config)),
       // Cleanup must remain available after a containment-policy downgrade so
       // an operator can remove credentials written by the formerly-admitted
       // configuration. It still requires local exact routing + writer lock.

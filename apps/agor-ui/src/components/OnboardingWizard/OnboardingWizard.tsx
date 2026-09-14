@@ -49,7 +49,11 @@ import {
   resolveTemplateSourceRemoteUrl,
   type TeammateGalleryCardId,
 } from '../../utils/teammateTemplates';
-import { CLAUDE_OAUTH_STORAGE_DESCRIPTION, ClaudeOAuthSignIn } from '../ClaudeAuth';
+import {
+  CLAUDE_BACKEND_OAUTH_STORAGE_DESCRIPTION,
+  CLAUDE_OAUTH_STORAGE_DESCRIPTION,
+  ClaudeOAuthSignIn,
+} from '../ClaudeAuth';
 import { type CodexAuthFallback, CodexDeviceSignIn, CodexImportAuthJson } from '../CodexAuth';
 import { GlassPanelHighlights } from '../GlassSurface/GlassPanel';
 import { ToolIcon } from '../ToolIcon';
@@ -210,7 +214,10 @@ function validateLlmKeyPattern(agent: AgenticToolName, key: string): string | nu
 }
 
 function hasManagedClaudeLogin(user: User | null | undefined): boolean {
-  return user?.agentic_credential_sources?.['claude-code'] === 'managed_file';
+  return (
+    user?.agentic_credential_sources?.['claude-code'] === 'managed_file' ||
+    user?.agentic_credential_sources?.['claude-code'] === 'managed_oauth'
+  );
 }
 
 function hasUsableClaudeCredential(
@@ -422,6 +429,7 @@ export interface OnboardingWizardProps {
 
   /** Deployment capability for daemon-driven Claude OAuth. Fail-closed by default. */
   allowClaudeOAuthSignIn?: boolean;
+  claudeOAuthCapability?: import('@agor/core/types').ClaudeOAuthCapability;
 
   /** Re-open wizard starting at a specific step (used by tests / future callers). */
   initialStep?: WizardStep;
@@ -481,6 +489,7 @@ export function OnboardingWizard({
   onUpdateUser,
   onCheckAuth,
   allowClaudeOAuthSignIn = false,
+  claudeOAuthCapability,
   initialStep,
   completionSlowThresholdMs = ONBOARDING_COMPLETION_SLOW_THRESHOLD_MS,
 }: OnboardingWizardProps) {
@@ -741,7 +750,10 @@ export function OnboardingWizard({
           if (result.status === 'unknown') {
             const hasVerifiedSubscription =
               (agent === 'codex' && user?.agentic_auth_methods?.codex === 'subscription') ||
-              (agent === 'claude-code' && managedClaudeLoginAvailable);
+              (agent === 'claude-code' &&
+                managedClaudeLoginAvailable &&
+                (user?.agentic_credential_sources?.['claude-code'] !== 'managed_oauth' ||
+                  (result.managedOAuth?.saved === true && result.managedOAuth.usable)));
             if (hasVerifiedSubscription) {
               setLlmAuthVerified((prev) =>
                 prev[agent] === true ? prev : { ...prev, [agent]: true }
@@ -765,6 +777,7 @@ export function OnboardingWizard({
     agentHasKey,
     user?.agentic_auth_methods?.codex,
     managedClaudeLoginAvailable,
+    user?.agentic_credential_sources?.['claude-code'],
   ]);
 
   const primaryEnabled = useMemo(() => {
@@ -773,6 +786,12 @@ export function OnboardingWizard({
         return selectedGoals.length > 0;
       case 'llm': {
         if (!selectedAgent) return false;
+        if (
+          selectedAgent === 'claude-code' &&
+          user?.agentic_credential_sources?.['claude-code'] === 'managed_oauth' &&
+          llmAuthVerified['claude-code'] !== true
+        )
+          return false;
         if (agentIsVerifiedConnected(selectedAgent)) return true;
         // Device sign-in and login-file import both complete inside their own
         // pane — no typed input to validate. They enable once the daemon
@@ -815,6 +834,7 @@ export function OnboardingWizard({
     effectiveAuthMethod,
     allowClaudeOAuthSignIn,
     teammateName,
+    user?.agentic_credential_sources?.['claude-code'],
   ]);
 
   const disabledReason = useMemo((): string | null => {
@@ -1809,9 +1829,12 @@ export function OnboardingWizard({
                     {authPane === 'claude-oauth' && (
                       <div>
                         <Text style={{ color: TEXT_SECONDARY, display: 'block', marginBottom: 10 }}>
-                          {CLAUDE_OAUTH_STORAGE_DESCRIPTION}
+                          {claudeOAuthCapability?.storage === 'backend'
+                            ? CLAUDE_BACKEND_OAUTH_STORAGE_DESCRIPTION
+                            : CLAUDE_OAUTH_STORAGE_DESCRIPTION}
                         </Text>
                         <ClaudeOAuthSignIn
+                          storage={claudeOAuthCapability?.storage ?? 'local_file'}
                           client={client}
                           operationScope={onboardingAuthority.operationScope}
                           connected={managedClaudeLoginAvailable}

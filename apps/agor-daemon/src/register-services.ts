@@ -20,6 +20,7 @@ import {
   MESSAGE_PAGINATION,
   PublicBaseUrlNotConfiguredError,
   type ResolvedDeploymentConfig,
+  resolveClaudeOAuthCapability,
   resolveDeploymentAgenticToolPolicy,
   resolveExecutionSecurityMode,
   resolveMultiTenancyConfig,
@@ -191,6 +192,7 @@ import { createCardTypesService } from './services/card-types.js';
 import { createCardsService } from './services/cards.js';
 import { createCheckAuthService } from './services/check-auth.js';
 import { createClaudeAuthLogoutService } from './services/claude-auth-logout.js';
+import { ClaudeBackendOAuth } from './services/claude-backend-oauth.js';
 import {
   canManageClaudeCredentialRoute,
   createClaudeUserCredentialPatchCoordinator,
@@ -352,6 +354,7 @@ import {
   verifyMCPSlackRecoveryToken,
 } from './utils/mcp-slack-recovery-token.js';
 import { resolveOwnerHomeStore, resolveSandboxStoragePaths } from './utils/sandbox-context.js';
+import { sandboxManagedCredentialIsolationAvailable } from './utils/sandbox-wrap.js';
 import {
   AGOR_SOCKET_AUTHORITY_DISCONNECTED_EVENT,
   readSocketAuthorityId,
@@ -869,17 +872,32 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   // and task-time refresh. Provider refresh I/O happens outside this boundary;
   // only the final source/route re-read and generation CAS run inside it. HA
   // uses the same durable tenant/user authority as paste-back finalization.
-  const claudeOAuthAuthority =
-    ctx.deployment.mode === 'ha' ? new ClaudeOAuthAttemptAuthority(db) : undefined;
+  const claudeOAuthAuthority = isPostgresDatabaseHandle(db)
+    ? new ClaudeOAuthAttemptAuthority(db)
+    : undefined;
   const claudeOAuthStore = claudeOAuthAuthority
     ? new DurableClaudeOAuthAttemptStore(claudeOAuthAuthority)
     : new InMemoryClaudeOAuthAttemptStore();
+  const claudeCapability = () =>
+    resolveClaudeOAuthCapability(config, ctx.deployment, {
+      postgres: isPostgresDatabaseHandle(db),
+      encryption: !!process.env.AGOR_MASTER_SECRET,
+      localIsolation: sandboxManagedCredentialIsolationAvailable(),
+    });
+  const claudeBackendOAuth = isPostgresDatabaseHandle(db)
+    ? new ClaudeBackendOAuth(db, claudeCapability)
+    : undefined;
   const claudeRuntimeCredentials = new ClaudeRuntimeCredentialResolver(
     db,
     config,
     claudeOAuthStore
   );
-  const configService = createConfigService(db, config, claudeRuntimeCredentials);
+  const configService = createConfigService(
+    db,
+    config,
+    claudeRuntimeCredentials,
+    claudeBackendOAuth
+  );
   configService.app = app;
   app.use(
     '/agentic-tool-settings',
@@ -901,7 +919,7 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
     },
   });
 
-  app.use('/check-auth', createCheckAuthService(db, config));
+  app.use('/check-auth', createCheckAuthService(db, config, claudeBackendOAuth));
   app.service('/check-auth').hooks({ before: { create: [ctx.requireAuth] } });
 
   registerOpenCodeServices(ctx);
@@ -980,7 +998,16 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
     }, 60_000);
     maintenance.unref?.();
   }
-  app.use('/claude-auth/oauth', createClaudeOAuthService(app, db, claudeOAuthStore));
+  app.use(
+    '/claude-auth/oauth',
+    createClaudeOAuthService(
+      app,
+      db,
+      claudeOAuthStore,
+      sandboxManagedCredentialIsolationAvailable,
+      claudeBackendOAuth
+    )
+  );
   app
     .service('/claude-auth/oauth')
     .hooks({ before: { create: [ctx.requireAuth], find: [ctx.requireAuth] } });
@@ -989,7 +1016,12 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   // ~/.claude/.credentials.json as the right Unix identity and clears the stored
   // token + claude auth method (emitting `patched` so the UI re-probes to
   // disconnected). Deployment credential-home only; does not revoke the OAuth grant.
-  app.use('/claude-auth/logout', createClaudeAuthLogoutService(app, db, claudeOAuthStore));
+  app.use(
+    '/claude-auth/logout',
+    createClaudeAuthLogoutService(app, db, claudeOAuthStore, claudeBackendOAuth, () =>
+      canManageClaudeCredentialRoute(ctx.deployment, config)
+    )
+  );
   app.service('/claude-auth/logout').hooks({ before: { create: [ctx.requireAuth] } });
 
   // Claude dynamic model discovery via @anthropic-ai/sdk's models.list().
@@ -1143,17 +1175,19 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   // provider admits a credential-file writer. A delegated Codex-only profile
   // still needs unix_username lifecycle coordination, but must not gain Claude
   // path deletion when exact-home Claude auth is capability-gated.
-  const userCredentialRouteCoordinator = needsUserCredentialRouteCoordinator(ctx.deployment)
-    ? createClaudeUserCredentialPatchCoordinator(
-        app,
-        db,
-        claudeOAuthStore,
-        codexDeviceAttempts ?? standaloneCodexDeviceService,
-        {
-          manageClaudeRoute: canManageClaudeCredentialRoute(ctx.deployment, config),
-        }
-      )
-    : undefined;
+  const userCredentialRouteCoordinator =
+    claudeBackendOAuth || needsUserCredentialRouteCoordinator(ctx.deployment)
+      ? createClaudeUserCredentialPatchCoordinator(
+          app,
+          db,
+          claudeOAuthStore,
+          codexDeviceAttempts ?? standaloneCodexDeviceService,
+          {
+            manageClaudeRoute: canManageClaudeCredentialRoute(ctx.deployment, config),
+            backend: claudeBackendOAuth,
+          }
+        )
+      : undefined;
   const usersService = createUsersService(db, app, config, userCredentialRouteCoordinator);
   // UsersService implements find/get/create/patch/remove (no `update`), plus
   // avatar sync helpers. Listing `update` here makes Feathers' hook

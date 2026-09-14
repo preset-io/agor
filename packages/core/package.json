@@ -483,6 +483,12 @@
       "types": "./dist/agentic-integrations.d.ts",
       "import": "./dist/agentic-integrations.js",
       "require": "./dist/agentic-integrations.cjs"
+    },
+    "./oauth/rotating-grant-refresh": {
+      "source": "./src/oauth/rotating-grant-refresh.ts",
+      "types": "./dist/oauth/rotating-grant-refresh.d.ts",
+      "import": "./dist/oauth/rotating-grant-refresh.js",
+      "require": "./dist/oauth/rotating-grant-refresh.cjs"
     }
   },
   "scripts": {
