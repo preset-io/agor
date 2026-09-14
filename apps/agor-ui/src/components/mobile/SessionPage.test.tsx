@@ -1,7 +1,8 @@
 import type { Branch, Session } from '@agor-live/client';
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { describe, expect, it, vi } from 'vitest';
+import { type AppActionsContextValue, useAppActions } from '../../contexts/AppActionsContext';
 import { SessionPage } from './SessionPage';
 
 // SessionPanel is the shared desktop composer; here we only assert that the
@@ -11,7 +12,18 @@ const sessionPanelProps = vi.fn();
 vi.mock('../SessionPanel', () => ({
   SessionPanel: (props: { session: Session; open: boolean }) => {
     sessionPanelProps(props);
-    return <div data-testid="session-panel">{props.session.session_id}</div>;
+    const actions = useAppActions();
+    return (
+      <div data-testid="session-panel">
+        {props.session.session_id}
+        <button type="button" onClick={() => actions.onOpenBranch?.('branch-1', 'environment')}>
+          Open environment
+        </button>
+        <button type="button" onClick={() => actions.onOpenAgenticToolSettings?.('codex')}>
+          Connect provider
+        </button>
+      </div>
+    );
   },
 }));
 
@@ -22,7 +34,11 @@ vi.mock('../SessionSettingsModal', () => ({
 const noopAsync = vi.fn(async () => {});
 const noop = vi.fn();
 
-function renderAt(path: string, sessionById: Map<string, Session>) {
+function renderAt(
+  path: string,
+  sessionById: Map<string, Session>,
+  actions: Pick<AppActionsContextValue, 'onOpenBranch' | 'onOpenAgenticToolSettings'> = {}
+) {
   return render(
     <MemoryRouter initialEntries={[path]}>
       <Routes>
@@ -39,6 +55,7 @@ function renderAt(path: string, sessionById: Map<string, Session>) {
               onSpawnSession={noopAsync}
               onUpdateSession={noop}
               onDeleteSession={noop}
+              {...actions}
             />
           }
         />
@@ -65,6 +82,20 @@ describe('SessionPage', () => {
         open: true,
       })
     );
+  });
+
+  it('preserves branch navigation and provider recovery callbacks in the mobile action context', () => {
+    const onOpenBranch = vi.fn();
+    const onOpenAgenticToolSettings = vi.fn();
+    renderAt(
+      '/m/session/session-1',
+      new Map([['session-1', { session_id: 'session-1' } as Session]]),
+      { onOpenBranch, onOpenAgenticToolSettings }
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Open environment' }));
+    expect(onOpenBranch).toHaveBeenCalledWith('branch-1', 'environment');
+    fireEvent.click(screen.getByRole('button', { name: 'Connect provider' }));
+    expect(onOpenAgenticToolSettings).toHaveBeenCalledWith('codex');
   });
 
   it('shows a loading state until the session is in the store', () => {

@@ -11,6 +11,7 @@ import { DEFAULT_AGENTIC_TOOL_NAME, getTeammateConfig } from '@agor-live/client'
 import { Alert, Button, Drawer, Layout, Typography } from 'antd';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
+import type { AppActionsContextValue } from '../../contexts/AppActionsContext';
 import { useConnectionState } from '../../contexts/ConnectionContext';
 import type { NewSessionConfig, SessionCreationResult } from '../../domain/sessionCreation';
 import { useAgorStore } from '../../store/agorStore';
@@ -68,6 +69,7 @@ interface MobileAppProps {
   onLogout?: () => void;
   onOpenWorkspaceSettings: (section: string) => void;
   onOpenUserSettings: () => void;
+  onOpenAgenticToolSettings?: AppActionsContextValue['onOpenAgenticToolSettings'];
   // The branch bottom sheet offers the same edit/archive controls as the
   // desktop modal, so it needs the same handlers behind them, without which
   // the controls render enabled and then do nothing when tapped.
@@ -96,6 +98,7 @@ export const MobileApp: React.FC<MobileAppProps> = ({
   onLogout,
   onOpenWorkspaceSettings,
   onOpenUserSettings,
+  onOpenAgenticToolSettings,
   onUpdateBranch,
   onUpdateRepo,
   onArchiveOrDeleteBranch,
@@ -340,6 +343,7 @@ export const MobileApp: React.FC<MobileAppProps> = ({
               <MobileSearchPage
                 currentUser={user}
                 onOpenWorkspaceSettings={onOpenWorkspaceSettings}
+                onOpenBranch={(branchId) => setBranchEditor({ branchId, tab: 'general' })}
               />
             }
           />
@@ -387,6 +391,8 @@ export const MobileApp: React.FC<MobileAppProps> = ({
                 onUpdateSession={onUpdateSession}
                 onDeleteSession={onDeleteSession}
                 onUpdateSessionMcpServers={onUpdateSessionMcpServers}
+                onOpenBranch={(branchId, tab = 'general') => setBranchEditor({ branchId, tab })}
+                onOpenAgenticToolSettings={onOpenAgenticToolSettings}
               />
             }
           />

@@ -174,6 +174,7 @@ const PromptInput = React.forwardRef<PromptInputHandle, PromptInputProps>(
     },
     ref
   ) => {
+    const isMobile = useIsMobileViewport();
     const [value, setValue] = React.useState(() => getDraft(sessionId));
     const valueRef = React.useRef(value);
     const textareaElementRef = React.useRef<HTMLTextAreaElement | null>(null);
@@ -318,6 +319,9 @@ const PromptInput = React.forwardRef<PromptInputHandle, PromptInputProps>(
         enableKnowledgeMentions
         kbLinkTarget="absolute-route"
         highlightWhenEmpty
+        // Preserve the mobile composer's iOS no-autozoom threshold. The shared
+        // textarea also applies these metrics to its mention highlight overlay.
+        textareaStyle={isMobile ? { fontSize: 16 } : undefined}
       />
     );
   }
@@ -941,7 +945,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
               ? 'Queue here… @ for mentions, : for emoji'
               : 'Prompt here… @ for mentions, : for emoji'
           }
-          autoSize={{ minRows: 1, maxRows: 10 }}
+          autoSize={{ minRows: 1, maxRows: isMobileShell ? 4 : 10 }}
           client={client}
           userById={userById}
           onFilesDrop={addComposerAttachments}
@@ -980,6 +984,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     composerDropActive,
     composerIdentityKey,
     hasComposerAttachments,
+    isMobileShell,
     isRunning,
     client,
     userById,
@@ -1644,7 +1649,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
             <SessionAttachmentsDropdown items={attachmentItems} />
             <Dropdown menu={{ items: moreMenuItems }} trigger={['click']} placement="bottomRight">
               <Tooltip title="More actions">
-                <Button type="text" icon={<EllipsisOutlined />} />
+                <Button type="text" aria-label="More actions" icon={<EllipsisOutlined />} />
               </Tooltip>
             </Dropdown>
             <Tooltip title="Search session">

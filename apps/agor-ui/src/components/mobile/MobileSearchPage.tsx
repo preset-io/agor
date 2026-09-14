@@ -1,5 +1,6 @@
 import type { BoardComment, User } from '@agor-live/client';
 import {
+  artifactFullscreenPath,
   getTeammateConfig,
   matchSearchTokens,
   SEARCHABLE_FIELDS,
@@ -25,6 +26,7 @@ import { useGlobalSearch } from '../GlobalSearch/useGlobalSearch';
 interface MobileSearchPageProps {
   currentUser?: User | null;
   onOpenWorkspaceSettings: (section: string) => void;
+  onOpenBranch: (branchId: string) => void;
 }
 
 const COMMENT_LIMIT = 8;
@@ -47,6 +49,7 @@ interface Row {
 export const MobileSearchPage: React.FC<MobileSearchPageProps> = ({
   currentUser,
   onOpenWorkspaceSettings,
+  onOpenBranch,
 }) => {
   const navigate = useNavigate();
   const { token } = theme.useToken();
@@ -104,7 +107,7 @@ export const MobileSearchPage: React.FC<MobileSearchPageProps> = ({
         rows: results.teammate.map((r) => ({
           key: r.item.branch_id,
           title: getTeammateConfig(r.item)?.displayName ?? r.item.name,
-          onClick: () => (r.item.board_id ? navigate(`/m/board/${r.item.board_id}`) : undefined),
+          onClick: () => onOpenBranch(r.item.branch_id),
         })),
       });
     }
@@ -115,7 +118,7 @@ export const MobileSearchPage: React.FC<MobileSearchPageProps> = ({
           key: r.item.branch_id,
           title: r.item.name,
           subtitle: r.item.board_id ? boardById.get(r.item.board_id)?.name : undefined,
-          onClick: () => (r.item.board_id ? navigate(`/m/board/${r.item.board_id}`) : undefined),
+          onClick: () => onOpenBranch(r.item.branch_id),
         })),
       });
     }
@@ -136,10 +139,7 @@ export const MobileSearchPage: React.FC<MobileSearchPageProps> = ({
           key: r.item.artifact_id,
           title: r.item.name,
           subtitle: r.parentBranch?.name,
-          onClick: () =>
-            r.parentBranch?.board_id
-              ? navigate(`/m/board/${r.parentBranch.board_id}`)
-              : navigate(`/a/${r.item.artifact_id}/fullscreen`),
+          onClick: () => navigate(artifactFullscreenPath(r.item.artifact_id)),
         })),
       });
     }
@@ -165,7 +165,7 @@ export const MobileSearchPage: React.FC<MobileSearchPageProps> = ({
       });
     }
     return s;
-  }, [results, commentResults, boardById, navigate, onOpenWorkspaceSettings]);
+  }, [results, commentResults, boardById, navigate, onOpenWorkspaceSettings, onOpenBranch]);
 
   const showEmpty =
     query.trim().length >= MIN_QUERY_LENGTH && !hasAnyResults && !commentResults.length;
