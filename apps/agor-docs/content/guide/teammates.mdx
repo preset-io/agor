@@ -118,8 +118,9 @@ does **not** grant permission to push your teammate's memory branches upstream.
    private repository** for personal or team memory. A public fork is still public;
    neither a repository name ending in `-private` nor a branch named `private-*`
    changes the Git host's visibility settings.
-2. Add that repository through **Create → Repository** (clone its URL, or register
-   an existing local clone where your installation permits it).
+2. If your copy is not already registered, add it through **Create → Repository**
+   (clone its URL, or register an existing local clone where your installation
+   permits it).
 3. Open **Create → Teammate**, select your copy in **Framework Repository**, and
    confirm that the credentials used by the teammate can push to that remote.
    Being able to clone a repository is not proof of write access.
@@ -139,10 +140,14 @@ owned repository does not itself configure credentials.
 
 The [first-run wizard](/guide/getting-started#follow-the-onboarding-wizard) (**Goals → Teammate → AI → Tools**) ends by seeding your first teammate using a detected framework repository, cloning the public [teammate template](https://github.com/preset-io/agor-teammate) if none is registered. It creates the teammate's branch on the board you named. If you connected an AI model, it also launches the first session (which follows `ONBOARDING.md`), briefed with the goals you selected and the tools the wizard recommended. If you skipped AI setup, the board is still ready and you can connect a model later.
 
-If your writable framework copy is not already registered, choose **Skip for now**
-on the **Teammate** step. After finishing the wizard, add your repository and create
-the teammate as described above. Skipping this step creates no teammate; skipping
-only the AI step does not skip teammate creation.
+To choose or confirm a writable destination, choose **Skip for now** on the
+**Teammate** step and finish onboarding, **even if your copy is already registered**.
+Then open **Create → Teammate** and explicitly select your copy in **Framework
+Repository**. Use **Create → Repository** first only if your copy is not registered.
+Registration alone does not guarantee onboarding selects it: the wizard uses
+automatic detection without a repository selector or destination display, and the
+public template can take precedence over an owned copy. Skipping the Teammate step
+creates no teammate; skipping only the AI step does not skip teammate creation.
 
 ### From Settings
 

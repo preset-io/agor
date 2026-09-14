@@ -47,8 +47,10 @@ const frameworkRepo = makeRepo({
 
 const userRepo = makeRepo({
   repo_id: 'user-repo' as UUID,
-  slug: 'org/user-repo',
+  slug: 'my-org/agor-teammate',
   name: 'user-repo',
+  remote_url: 'https://github.com/my-org/agor-teammate.git',
+  clone_status: 'ready',
 });
 
 function renderDialog(props: Partial<React.ComponentProps<typeof CreateDialog>> = {}) {
@@ -176,7 +178,7 @@ describe('CreateDialog — per-tab validity scoping', { timeout: 60_000 }, () =>
     }, ASYNC);
   });
 
-  it('keeps an explicit repository selection instead of submitting the public default', async () => {
+  it('explicitly selects an already-registered owned copy instead of the public default', async () => {
     const onCreateTeammate = vi.fn();
     renderDialog({ defaultTab: 'teammate', onCreateTeammate });
 
@@ -185,6 +187,9 @@ describe('CreateDialog — per-tab validity scoping', { timeout: 60_000 }, () =>
     });
     const repositorySelect = screen.getByRole('combobox', { name: 'Framework Repository' });
     await waitFor(() => expect(repositorySelect).toBeVisible(), ASYNC);
+    expect(
+      screen.getByText(/If your copy is not registered, add it via Create → Repository/)
+    ).toHaveTextContent('Then explicitly select your copy below');
     fireEvent.mouseDown(repositorySelect);
     fireEvent.keyDown(repositorySelect, { key: 'ArrowDown', code: 'ArrowDown', keyCode: 40 });
     fireEvent.click(await screen.findByTitle(userRepo.name, undefined, ASYNC));

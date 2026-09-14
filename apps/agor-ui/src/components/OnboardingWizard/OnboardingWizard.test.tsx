@@ -130,14 +130,15 @@ function renderWizard(
 // queries here — see the file-level note above for why role queries are
 // avoided entirely in this file.
 function clickButton(text: string | RegExp) {
-  const el = screen.getByText(text);
+  // Guidance can also name an action (e.g. "Skip for now"). Match button text only.
+  const el = screen.getByText(text, { selector: 'button, button *' });
   const button = el.closest('button');
   if (!button) throw new Error(`No ancestor <button> found for text "${text}"`);
   fireEvent.click(button);
 }
 
 async function findAndClickButton(text: string | RegExp) {
-  const el = await screen.findByText(text);
+  const el = await screen.findByText(text, { selector: 'button, button *' });
   const button = el.closest('button');
   if (!button) throw new Error(`No ancestor <button> found for text "${text}"`);
   fireEvent.click(button);
@@ -1219,11 +1220,25 @@ describe('OnboardingWizard', () => {
     clickButton(/skip for now/i);
 
     expect(await screen.findByText('Build your teammate')).toBeInTheDocument();
-    // Guidance is visible before creation, and its skip path emits no teammate.
+    // Even an already-registered copy needs the explicit post-onboarding path
+    // to choose/confirm the destination. Following Skip emits no teammate.
     await waitFor(() =>
       expect(screen.getByText('Choose a repository you can push to')).toBeVisible()
     );
-    expect(screen.getByText(/Skip this Teammate step/)).toBeVisible();
+    const guidance = screen.getByText(/To choose or confirm a writable destination/);
+    expect(guidance).toBeVisible();
+    expect(guidance).toHaveTextContent(
+      'select Skip for now on this Teammate step and finish onboarding, even if your copy is already registered'
+    );
+    expect(guidance).toHaveTextContent(
+      'Then open Create → Teammate and explicitly select your copy in Framework Repository'
+    );
+    expect(guidance).toHaveTextContent(
+      'Use Create → Repository first only if your copy is not registered'
+    );
+    expect(guidance).toHaveTextContent(
+      'Registration alone does not guarantee onboarding selects it'
+    );
     expect(screen.getByText(/public template does not grant push access/)).toBeVisible();
     expect(onComplete).not.toHaveBeenCalled();
     clickButton(/skip for now/i);

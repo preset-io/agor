@@ -27,8 +27,8 @@ export function TeammateRepositoryGuidance({ onboarding = false }: { onboarding?
           </div>
           <div style={{ marginTop: token.marginXS }}>
             {onboarding
-              ? 'Need your own copy? Skip this Teammate step, then use Create → Repository and Create → Teammate.'
-              : 'Add your copy via Create → Repository, then select it below. Confirm that the credentials used by your teammate can push to it.'}
+              ? 'To choose or confirm a writable destination, select Skip for now on this Teammate step and finish onboarding, even if your copy is already registered. Then open Create → Teammate and explicitly select your copy in Framework Repository. Use Create → Repository first only if your copy is not registered. Registration alone does not guarantee onboarding selects it.'
+              : 'If your copy is not registered, add it via Create → Repository. Then explicitly select your copy below. Confirm that the credentials used by your teammate can push to it.'}
           </div>
           {!onboarding && (
             <div style={{ marginTop: token.marginXS }}>
