@@ -86,11 +86,37 @@ function renderWizardAt(
 
 const nextFrame = () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
 
+// getBoundingClientRect includes clipped content. In landscape the chips have
+// their own scrolling pane beside the gallery; their raw width extends into it.
+function visibleBounds(element: HTMLElement) {
+  const rect = element.getBoundingClientRect();
+  let left = Math.max(0, rect.left);
+  let top = Math.max(0, rect.top);
+  let right = Math.min(innerWidth, rect.right);
+  let bottom = Math.min(innerHeight, rect.bottom);
+  for (let parent = element.parentElement; parent; parent = parent.parentElement) {
+    const style = getComputedStyle(parent);
+    const clip = parent.getBoundingClientRect();
+    if (/(auto|scroll|hidden|clip)/.test(style.overflowX)) {
+      left = Math.max(left, clip.left + parent.clientLeft);
+      right = Math.min(right, clip.left + parent.clientLeft + parent.clientWidth);
+    }
+    if (/(auto|scroll|hidden|clip)/.test(style.overflowY)) {
+      top = Math.max(top, clip.top + parent.clientTop);
+      bottom = Math.min(bottom, clip.top + parent.clientTop + parent.clientHeight);
+    }
+  }
+  return { left, top, width: Math.max(0, right - left), height: Math.max(0, bottom - top) };
+}
+
 afterEach(() => {
   cleanup();
   agorStore.setState({ ...EMPTY_MAPS });
 });
 
+// Each test runs once per configured browser viewport. Do not resize here: that
+// multiplies expensive flows and leaks the last size into later layout tests.
+// Vitest captures failure screenshots; successful screenshots aren't assertions.
 describe('OnboardingWizard layout (real browser)', () => {
   it('closes once and opens the created board when realtime completion wins the PATCH race', async () => {
     const user = makeUser();
@@ -220,131 +246,105 @@ describe('OnboardingWizard layout (real browser)', () => {
   });
 
   it('keeps persona choice and focus through the inline home flow', async () => {
-    for (const [width, height] of [
-      [1366, 768],
-      [320, 568],
-      [844, 390],
-    ]) {
-      await page.viewport(width, height);
-      renderWizardAt('workspace', {
-        repo: {
-          repo_id: 'owned-home',
-          name: 'Private memory',
-          slug: 'me/memory',
-          remote_url: 'https://github.com/me/memory',
-          clone_status: 'ready',
-        } as Repo,
-      });
-      await page.getByLabelText('Teammate name').fill('Ada');
-      await page.getByRole('button', { name: 'Competitive Analyst', exact: true }).click();
-      await page.getByRole('button', { name: 'Continue →', exact: true }).click();
-      await screen.findByText('Where should Ada’s work live?');
-      expect(screen.queryByText('Choose a repository you can push to')).not.toBeInTheDocument();
-      await page.getByRole('combobox', { name: 'Teammate home repository' }).click();
-      fireEvent.click(await screen.findByText('Private memory — https://github.com/me/memory'));
-      await screen.findByText('Clone ready · Push access unchecked · Visibility unknown');
-      await page.getByRole('checkbox').click();
-      const footer = screen.getByRole('button', { name: 'Continue →' }).getBoundingClientRect();
-      expect(footer.bottom).toBeLessThanOrEqual(height);
-      await page.screenshot({ path: `__screenshots__/2327-home-${width}x${height}.png` });
-      await page.getByRole('button', { name: /Back$/ }).click();
-      const selected = await screen.findByRole('button', {
-        name: 'Competitive Analyst',
-      });
-      await waitFor(() => expect(selected).toHaveFocus());
-      expect(selected).toHaveAttribute('aria-pressed', 'true');
-      expect(screen.getByLabelText('Teammate name')).toHaveValue('Ada');
-      cleanup();
-    }
+    const { innerHeight: height } = window;
+    renderWizardAt('workspace', {
+      repo: {
+        repo_id: 'owned-home',
+        name: 'Private memory',
+        slug: 'me/memory',
+        remote_url: 'https://github.com/me/memory',
+        clone_status: 'ready',
+      } as Repo,
+    });
+    await page.getByLabelText('Teammate name').fill('Ada');
+    await page.getByRole('button', { name: 'Competitive Analyst', exact: true }).click();
+    await page.getByRole('button', { name: 'Continue →', exact: true }).click();
+    await screen.findByText('Where should Ada’s work live?');
+    expect(screen.queryByText('Choose a repository you can push to')).not.toBeInTheDocument();
+    await page.getByRole('combobox', { name: 'Teammate home repository' }).click();
+    fireEvent.click(await screen.findByText('Private memory — https://github.com/me/memory'));
+    await screen.findByText('Clone ready · Push access unchecked · Visibility unknown');
+    await page.getByRole('checkbox').click();
+    const footer = screen.getByRole('button', { name: 'Continue →' }).getBoundingClientRect();
+    expect(footer.bottom).toBeLessThanOrEqual(height);
+    await page.getByRole('button', { name: /Back$/ }).click();
+    const selected = await screen.findByRole('button', {
+      name: 'Competitive Analyst',
+    });
+    await waitFor(() => expect(selected).toHaveFocus());
+    expect(selected).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByLabelText('Teammate name')).toHaveValue('Ada');
   });
 
   it('guides a newcomer directly from personas to create and register a home', async () => {
-    for (const [width, height] of [
-      [1366, 768],
-      [320, 568],
-    ]) {
-      await page.viewport(width, height);
-      renderWizardAt('workspace');
-      await page.getByLabelText('Teammate name').fill('Ada');
-      await page.getByRole('button', { name: 'Competitive Analyst', exact: true }).click();
-      await page.getByRole('button', { name: 'Continue →', exact: true }).click();
-      await screen.findByText(/No usable home yet/);
-      expect(
-        screen.queryByRole('combobox', { name: 'Teammate home repository' })
-      ).not.toBeInTheDocument();
-      const create = screen.getByRole('link', { name: /Create a private repository/ });
-      const url = screen.getByLabelText('Repository URL');
-      expect(create.getBoundingClientRect().top).toBeLessThan(url.getBoundingClientRect().top);
-      expect(getComputedStyle(url).visibility).toBe('visible');
-      expect(screen.getByText('Add a repository').closest('[aria-expanded]')).toHaveAttribute(
-        'aria-expanded',
-        'true'
-      );
-      await page.getByRole('heading', { name: 'Where should Ada’s work live?' }).hover();
-      await waitFor(() => expect(screen.queryByRole('tooltip')).not.toBeInTheDocument());
-      await waitFor(() =>
-        expect(create.getBoundingClientRect().bottom).toBeLessThan(
-          screen.getByText('Continue →').closest('button')!.getBoundingClientRect().top
-        )
-      );
-      await page.screenshot({ path: `__screenshots__/2327-guided-home-${width}x${height}.png` });
-      await page.getByText('GitHub token setup (if needed)', { exact: true }).click();
-      expect(screen.getByRole('link', { name: /token creation instructions/ })).toHaveAttribute(
-        'href',
-        expect.stringContaining('https://docs.github.com/')
-      );
-      await page.getByRole('button', { name: /Back$/ }).click();
-      expect(await screen.findByRole('button', { name: 'Competitive Analyst' })).toHaveAttribute(
-        'aria-pressed',
-        'true'
-      );
-      cleanup();
-    }
+    renderWizardAt('workspace');
+    await page.getByLabelText('Teammate name').fill('Ada');
+    await page.getByRole('button', { name: 'Competitive Analyst', exact: true }).click();
+    await page.getByRole('button', { name: 'Continue →', exact: true }).click();
+    await screen.findByText(/No usable home yet/);
+    expect(
+      screen.queryByRole('combobox', { name: 'Teammate home repository' })
+    ).not.toBeInTheDocument();
+    const create = screen.getByRole('link', { name: /Create a private repository/ });
+    const url = screen.getByLabelText('Repository URL');
+    expect(create.getBoundingClientRect().top).toBeLessThan(url.getBoundingClientRect().top);
+    expect(getComputedStyle(url).visibility).toBe('visible');
+    expect(screen.getByText('Add a repository').closest('[aria-expanded]')).toHaveAttribute(
+      'aria-expanded',
+      'true'
+    );
+    await page.getByRole('heading', { name: 'Where should Ada’s work live?' }).hover();
+    await waitFor(() => expect(screen.queryByRole('tooltip')).not.toBeInTheDocument());
+    await waitFor(() =>
+      expect(create.getBoundingClientRect().bottom).toBeLessThan(
+        screen.getByText('Continue →').closest('button')!.getBoundingClientRect().top
+      )
+    );
+    await page.getByText('GitHub token setup (if needed)', { exact: true }).click();
+    expect(screen.getByRole('link', { name: /token creation instructions/ })).toHaveAttribute(
+      'href',
+      expect.stringContaining('https://docs.github.com/')
+    );
+    await page.getByRole('button', { name: /Back$/ }).click();
+    expect(await screen.findByRole('button', { name: 'Competitive Analyst' })).toHaveAttribute(
+      'aria-pressed',
+      'true'
+    );
   });
 
   it('shows full persona cards immediately and keeps the footer reachable', async () => {
-    for (const [width, height] of [
-      [1366, 768],
-      [320, 568],
-      [844, 390],
-    ]) {
-      await page.viewport(width, height);
-      renderWizardAt('workspace');
-      await screen.findByText('Competitive Analyst');
-      await nextFrame();
-      const grid = document.querySelector(
-        'fieldset[aria-label="Teammate template"]'
-      ) as HTMLElement;
-      const scroller = grid.parentElement!;
-      const clip = scroller.getBoundingClientRect();
-      const cards = Array.from(grid.children).map((card) => card.getBoundingClientRect());
-      const row = cards.filter((rect) => Math.abs(rect.top - cards[0].top) < 1);
-      const footer = screen.getByText('Continue →').closest('button')!.getBoundingClientRect();
-      expect(footer.bottom).toBeLessThanOrEqual(height);
-      const name = screen.getByLabelText('Teammate name').getBoundingClientRect();
-      expect(name.top).toBeGreaterThanOrEqual(0);
-      expect(name.bottom).toBeLessThanOrEqual(footer.top);
-      expect(scroller.scrollTop).toBe(0);
-      expect(row).toHaveLength(width === 320 ? 1 : height < 480 ? 2 : 3);
-      for (const rect of row) {
-        expect(rect.top).toBeGreaterThanOrEqual(Math.max(clip.top, 0));
-        expect(rect.bottom).toBeLessThanOrEqual(Math.min(clip.bottom, footer.top));
-        expect(rect.left).toBeGreaterThanOrEqual(Math.max(clip.left, 0));
-        expect(rect.right).toBeLessThanOrEqual(Math.min(clip.right, width));
-      }
-      console.log(
-        'persona rectangles',
-        JSON.stringify({
-          width,
-          height,
-          clip: clip.toJSON(),
-          row: row.map((rect) => rect.toJSON()),
-          footer: footer.toJSON(),
-        })
-      );
-      await page.screenshot({ path: `__screenshots__/2327-personas-${width}x${height}.png` });
-      cleanup();
+    const { innerWidth: width, innerHeight: height } = window;
+    renderWizardAt('workspace');
+    await screen.findByText('Competitive Analyst');
+    await nextFrame();
+    const grid = document.querySelector('fieldset[aria-label="Teammate template"]') as HTMLElement;
+    const scroller = grid.parentElement!;
+    const clip = scroller.getBoundingClientRect();
+    const cards = Array.from(grid.children).map((card) => card.getBoundingClientRect());
+    const row = cards.filter((rect) => Math.abs(rect.top - cards[0].top) < 1);
+    const footer = screen.getByText('Continue →').closest('button')!.getBoundingClientRect();
+    expect(footer.bottom).toBeLessThanOrEqual(height);
+    const name = screen.getByLabelText('Teammate name').getBoundingClientRect();
+    expect(name.top).toBeGreaterThanOrEqual(0);
+    expect(name.bottom).toBeLessThanOrEqual(footer.top);
+    expect(scroller.scrollTop).toBe(0);
+    expect(row).toHaveLength(width === 320 ? 1 : height < 480 ? 2 : 3);
+    for (const rect of row) {
+      expect(rect.top).toBeGreaterThanOrEqual(Math.max(clip.top, 0));
+      expect(rect.bottom).toBeLessThanOrEqual(Math.min(clip.bottom, footer.top));
+      expect(rect.left).toBeGreaterThanOrEqual(Math.max(clip.left, 0));
+      expect(rect.right).toBeLessThanOrEqual(Math.min(clip.right, width));
     }
+    console.log(
+      'persona rectangles',
+      JSON.stringify({
+        width,
+        height,
+        clip: clip.toJSON(),
+        row: row.map((rect) => rect.toJSON()),
+        footer: footer.toJSON(),
+      })
+    );
   });
 
   it('uses three gallery columns at the widened modal and two beside landscape controls', async () => {
@@ -526,6 +526,11 @@ describe('OnboardingWizard layout (real browser)', () => {
       (v, i, a) => a.indexOf(v) === i && v <= maxScroll
     );
 
+    const controls = nameField.closest('.onb-workspace-controls') as HTMLElement;
+    const sampled = new Map([
+      [nameField, 0],
+      [chipGroup, 0],
+    ]);
     const overlaps: string[] = [];
     for (const top of offsets) {
       await act(async () => {
@@ -534,22 +539,39 @@ describe('OnboardingWizard layout (real browser)', () => {
         await nextFrame();
       });
 
-      for (const region of [nameField, chipGroup]) {
-        const rect = region.getBoundingClientRect();
-        for (let fy = 0.2; fy <= 0.8; fy += 0.3) {
-          for (let fx = 0.1; fx <= 0.9; fx += 0.2) {
-            const x = Math.round(rect.left + rect.width * fx);
-            const y = Math.round(rect.top + rect.height * fy);
-            const card = (document.elementFromPoint(x, y) as HTMLElement | null)?.closest(
-              '.ant-card'
-            );
-            if (card) {
-              overlaps.push(
-                `scrollTop=${top} point=(${x},${y}) hit card "${card.getAttribute('aria-label')}"`
-              );
+      // On short landscape screens the controls scroll independently. Exercise
+      // both ends so clipped chips aren't falsely tested in the adjacent gallery,
+      // and aren't silently omitted either.
+      const controlOffsets = [0, controls.scrollHeight - controls.clientHeight];
+      for (const controlTop of new Set(controlOffsets)) {
+        controls.scrollTop = controlTop;
+        await nextFrame();
+        for (const region of [nameField, chipGroup]) {
+          const rect = visibleBounds(region);
+          if (rect.width <= 0 || rect.height <= 0) continue;
+          for (let fy = 0.2; fy <= 0.8; fy += 0.3) {
+            for (let fx = 0.1; fx <= 0.9; fx += 0.2) {
+              const x = rect.left + rect.width * fx;
+              const y = rect.top + rect.height * fy;
+              const hit = document.elementFromPoint(x, y);
+              expect(hit, `visible control at (${x},${y}) must be hit-testable`).not.toBeNull();
+              sampled.set(region, sampled.get(region)! + 1);
+              const card = hit?.closest('.ant-card');
+              if (card) {
+                overlaps.push(
+                  `scrollTop=${top} controls=${controlTop} point=(${x},${y}) hit card "${card.getAttribute('aria-label')}"`
+                );
+              }
             }
           }
         }
+      }
+      for (const region of [nameField, chipGroup]) {
+        expect(
+          sampled.get(region),
+          `${region.getAttribute('aria-label')} must be sampled at gallery scrollTop=${top}`
+        ).toBeGreaterThan(0);
+        sampled.set(region, 0);
       }
     }
 
@@ -561,7 +583,15 @@ describe('OnboardingWizard layout (real browser)', () => {
 
   it('renders the success screen vertically centered, with no recap line and a celebratory hero', async () => {
     if (window.innerWidth < 700 || window.innerHeight < 800) return;
-    renderWizardAt('goals');
+    renderWizardAt('goals', {
+      repo: {
+        repo_id: 'owned-home',
+        name: 'Private memory',
+        slug: 'me/memory',
+        remote_url: 'https://github.com/me/memory',
+        clone_status: 'ready',
+      } as Repo,
+    });
     await screen.findByText('Get a personal teammate');
 
     // goals → pick one → continue
@@ -573,6 +603,13 @@ describe('OnboardingWizard layout (real browser)', () => {
     fireEvent.change(screen.getByLabelText('Teammate name'), { target: { value: 'Rusty' } });
     fireEvent.click(screen.getByText('Product Manager').closest('[role="button"]') as HTMLElement);
     fireEvent.click(screen.getByText(/^continue →/i).closest('button') as HTMLElement);
+
+    // Home is an explicit step even when a ready repository is registered.
+    await page.getByRole('combobox', { name: 'Teammate home repository' }).click();
+    fireEvent.click(await screen.findByText('Private memory — https://github.com/me/memory'));
+    await screen.findByText('Clone ready · Push access unchecked · Visibility unknown');
+    await page.getByRole('checkbox').click();
+    await page.getByRole('button', { name: 'Continue →', exact: true }).click();
 
     // llm → connect Claude with a valid key
     const claude = await screen.findByText('Claude');
