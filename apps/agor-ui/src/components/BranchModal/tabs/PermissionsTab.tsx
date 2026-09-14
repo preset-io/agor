@@ -125,8 +125,6 @@ export const PermissionsTab: React.FC<PermissionsTabProps> = ({
       <Form layout="vertical" colon={false}>
         <Form.Item
           label="Permission Mode"
-          labelCol={{ span: 8 }}
-          wrapperCol={{ span: 16 }}
           help={
             permissionSource === 'board'
               ? 'Uses board-level defaults for non-owner access.'
@@ -146,7 +144,7 @@ export const PermissionsTab: React.FC<PermissionsTabProps> = ({
 
         {permissionSource === 'board' && (
           <>
-            <Form.Item wrapperCol={{ offset: 8, span: 16 }}>
+            <Form.Item>
               <Alert
                 type="info"
                 showIcon
@@ -154,7 +152,7 @@ export const PermissionsTab: React.FC<PermissionsTabProps> = ({
                 description="This branch inherits board-level visibility, board owners, board groups, and board fallback permissions. Switch to Override to edit branch-level private/shared permissions directly."
               />
             </Form.Item>
-            <Form.Item label="Board defaults" labelCol={{ span: 8 }} wrapperCol={{ span: 16 }}>
+            <Form.Item label="Board defaults">
               {board ? (
                 <Descriptions size="small" column={1} bordered style={{ width: '100%' }}>
                   <Descriptions.Item label="Visibility">

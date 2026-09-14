@@ -179,7 +179,7 @@ export const BoardFormFields: React.FC<BoardFormFieldsProps> = ({
         othersFsAccessLabel="Default filesystem access"
       />
       {!rbacEnabled && (
-        <Form.Item wrapperCol={{ offset: 8, span: 16 }}>
+        <Form.Item>
           <Typography.Text type="secondary">
             Enable execution.branch_rbac to manage board owners and group grants.
           </Typography.Text>
