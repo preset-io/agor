@@ -89,7 +89,7 @@ export const MCPMemberPolicySetting: React.FC<MCPMemberPolicySettingProps> = ({
       ) : (
         known && (
           <Typography.Text type="secondary">
-            In force: <Typography.Text strong>{inForce.label}</Typography.Text> — {inForce.meaning}{' '}
+            In force: <Typography.Text strong>{inForce.label}</Typography.Text>. {inForce.meaning}{' '}
             Only an admin can change it.
           </Typography.Text>
         )

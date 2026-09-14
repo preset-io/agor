@@ -167,7 +167,7 @@ const CONNECT_STATUSES = {
     readiness: 'sign-in',
     label: 'Sign in after connecting',
     detail:
-      'This server uses your own account. Connecting sets it up, then you sign in from the session — nobody signs in on your behalf.',
+      'This server uses your own account. Connecting sets it up, then you sign in from the session; nobody signs in on your behalf.',
   },
   needsKey: {
     readiness: 'blocked',
@@ -178,7 +178,7 @@ const CONNECT_STATUSES = {
     readiness: 'unchecked',
     label: 'Not checked yet',
     detail:
-      'Agor has not checked this endpoint, so it may ask for an account. Connecting checks it — and stops there if it does.',
+      'Agor has not checked this endpoint, so it may ask for an account. Connecting checks it, and stops there if it does.',
   },
   ready: {
     readiness: 'ready',

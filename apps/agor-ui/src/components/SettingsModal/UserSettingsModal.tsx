@@ -1799,7 +1799,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
       <Alert
         type="info"
         showIcon
-        title="Authentication is managed by this workspace — your personal configuration is never used while this policy is active."
+        title="Authentication is managed by this workspace. Your personal configuration is never used while this policy is active."
         style={{ marginBottom: 16 }}
       />
     ) : effectiveSource === 'Unavailable' ? (
@@ -1875,7 +1875,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
             {tool === 'claude-code' && (
               <FieldRow
                 label="Sign-in method"
-                tooltip="Choose one — Agor uses whichever is selected, the other is ignored."
+                tooltip="Choose one: Agor uses whichever is selected, the other is ignored."
               >
                 <Radio.Group
                   buttonStyle="solid"

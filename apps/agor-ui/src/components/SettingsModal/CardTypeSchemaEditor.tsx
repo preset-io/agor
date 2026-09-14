@@ -149,7 +149,7 @@ export const CardTypeSchemaEditor: React.FC<CardTypeSchemaEditorProps> = ({ valu
       ) : fields.length === 0 ? (
         <Empty
           image={Empty.PRESENTED_IMAGE_SIMPLE}
-          description="No fields — cards of this type accept any data"
+          description="No fields: cards of this type accept any data"
           style={{ margin: '12px 0' }}
         >
           <Button icon={<PlusOutlined />} onClick={addField}>

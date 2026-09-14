@@ -116,7 +116,7 @@ const CatalogToolbarInner: React.FC<CatalogToolbarProps> = ({
                   sign-in happens afterwards. What is left to remove is the
                   servers wanting an API key, which the marketplace cannot
                   set up at all. */}
-              <Tooltip title="Hides servers Agor knows need an API key, which cannot be set up here. Servers you sign into stay, and so do endpoints nobody has checked — connecting is what checks them.">
+              <Tooltip title="Hides servers Agor knows need an API key, which cannot be set up here. Servers you sign into stay, and so do endpoints nobody has checked; connecting is what checks them.">
                 <Text type="secondary" style={{ cursor: 'help' }}>
                   Hide key-only
                 </Text>
