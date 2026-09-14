@@ -30,6 +30,7 @@ import type {
 } from '@agor-live/client';
 import {
   GATEWAY_REDACTED_SENTINEL,
+  GATEWAY_SENSITIVE_CONFIG_FIELDS,
   isAgenticToolName,
   resolveSlackAgentTools,
   SLACK_AGENT_TOOL_DEFAULTS,
@@ -3245,12 +3246,17 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
           .create(payload)) as GatewayConnectionTestResult;
         setConnectionTestResult(result);
       } catch (error) {
+        // Unexpected throw (network/exception) rather than a structured probe
+        // result — show a generic reason instead of surfacing the raw error
+        // string, which can carry internal detail. The real error is logged.
+        console.error('Gateway connection test failed:', error);
         setConnectionTestResult({
           ok: false,
           failures: [
             {
               capability: 'connection',
-              reason: error instanceof Error ? error.message : String(error),
+              reason:
+                'Could not complete the connection test. Check the configuration and try again.',
             },
           ],
           notVerifiable: [],
@@ -3322,16 +3328,11 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
     // back to the server. The API redacts tokens to '••••••••' — if we spread
     // that into the config object, the backend would save the sentinel as the
     // actual token (wiping the real credentials).
-    const SENSITIVE_FIELDS = [
-      'bot_token',
-      'app_token',
-      'signing_secret',
-      'private_key',
-      'app_password',
-      'api_token',
-    ];
+    // Use the canonical server-side list (imported from core) rather than a
+    // hand-maintained copy, so the client-side redaction-sentinel stripping can
+    // never silently drift out of sync with what the backend treats as secret.
     const sanitizedExisting = { ...(existingConfig || {}) };
-    for (const field of SENSITIVE_FIELDS) {
+    for (const field of GATEWAY_SENSITIVE_CONFIG_FIELDS) {
       delete sanitizedExisting[field];
     }
     const config: Record<string, unknown> = { ...sanitizedExisting };
