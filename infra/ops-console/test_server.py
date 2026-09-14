@@ -38,4 +38,24 @@ class OpsTest(unittest.TestCase):
   with patch.object(m,'rpc',side_effect=rpc) as call:
    m.transfer(op,{'origin':'a'},{'origin':'b'},'tenant-a','branch-a')
    self.assertEqual(op['status'],'failed');self.assertFalse(any(c.args[1]=='/ops/release' for c in call.call_args_list));self.assertFalse(m.operation_lock.locked())
+ def test_newer_copy_is_not_overwritten_by_retained_source(self):
+  m=self.module;op={'id':'newer-copy','status':'queued','steps':[]};m.operation_lock.acquire()
+  def rpc(origin,route,payload=None,timeout=12):
+   if route=='/ops/status':return {'residents':[{'tenantId':'tenant-a','branchId':'branch-a','resident':True,'epoch':2,'lastUsed':10 if origin=='b' else 5}]}
+   return {}
+  with patch.object(m,'rpc',side_effect=rpc) as call:
+   m.transfer(op,{'origin':'a'},{'origin':'b'},'tenant-a','branch-a')
+   self.assertEqual(op['status'],'failed');self.assertIn('most recently used',op['detail'])
+   self.assertFalse(any(c.args[1]=='/ops/export' for c in call.call_args_list))
+ def test_all_registered_workers_held_before_export(self):
+  m=self.module;op={'id':'all-held','status':'queued','steps':[]};m.operation_lock.acquire();held=set()
+  def rpc(origin,route,payload=None,timeout=12):
+   if route=='/ops/hold':held.add(origin);return {}
+   if route=='/ops/status':return {'residents':[{'tenantId':'tenant-a','branchId':'branch-a','resident':True,'epoch':2,'lastUsed':10}]} if origin=='a' else {'residents':[]}
+   if route=='/ops/export':self.assertEqual(held,{'a','b','c'});return {'hash':'snapshot','epoch':3,'repository':'repo'}
+   if route=='/ops/import':return {'sessions':1}
+   if route=='/ops/release':held.remove(origin);return {}
+  with patch.object(m,'rpc',side_effect=rpc):m.transfer(op,{'origin':'a'},{'origin':'b'},'tenant-a','branch-a',[{'origin':x} for x in ['a','b','c']])
+  self.assertEqual(op['status'],'complete');self.assertEqual(held,set())
 if __name__=='__main__':unittest.main()
+
