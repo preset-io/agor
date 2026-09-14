@@ -2,6 +2,7 @@ import type { Board, BoardComment, Branch, Session, User } from '@agor-live/clie
 import { BulbOutlined, MoonOutlined } from '@ant-design/icons';
 import { Drawer, Flex, Segmented, Typography, theme } from 'antd';
 import { useTheme } from '../../contexts/ThemeContext';
+import { glassSurfaceStyle } from '../GlassSurface/glassStyles';
 import { MobileNavTree } from './MobileNavTree';
 
 interface MobileMoreSheetProps {
@@ -44,7 +45,10 @@ export const MobileMoreSheet: React.FC<MobileMoreSheetProps> = ({
       placement="bottom"
       height="80%"
       title="More"
-      styles={{ body: { padding: 0, paddingBottom: 'env(safe-area-inset-bottom)' } }}
+      styles={{
+        content: glassSurfaceStyle(token, 0.85),
+        body: { padding: 0, paddingBottom: 'env(safe-area-inset-bottom)' },
+      }}
     >
       <Flex
         align="center"

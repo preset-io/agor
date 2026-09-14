@@ -6,6 +6,7 @@ import {
   RobotOutlined,
 } from '@ant-design/icons';
 import { Badge, Button, Flex, Typography, theme } from 'antd';
+import { glassSurfaceStyle } from '../GlassSurface/glassStyles';
 
 export type MobileTab = 'home' | 'board' | 'ask' | 'comments' | 'more';
 
@@ -109,8 +110,8 @@ export const MobileTabBar: React.FC<MobileTabBarProps> = ({
       <Flex
         align="center"
         style={{
+          ...glassSurfaceStyle(token, 0.8),
           borderRadius: token.borderRadiusLG * 2,
-          background: token.colorBgElevated,
           border: `${token.lineWidth}px solid ${token.colorBorderSecondary}`,
           boxShadow: token.boxShadowSecondary,
           paddingInline: token.paddingXS,

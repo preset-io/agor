@@ -1,10 +1,11 @@
 import type { Board, Branch, Session, User } from '@agor-live/client';
 import { RightOutlined, RobotOutlined } from '@ant-design/icons';
-import { Button, Card, Empty, Flex, List, Typography, theme } from 'antd';
+import { Button, Empty, Flex, List, Typography, theme } from 'antd';
 import { useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { getSessionStatusTone } from '../../utils/sessionStatus';
 import { getBoardEmoji } from '../BoardTile';
+import { GlassPanel } from '../GlassSurface/GlassPanel';
+import { JumpBackInSection } from '../HomePage/JumpBackInSection';
 import { MobileHeader } from './MobileHeader';
 import { MobileSessionRow } from './MobileSessionRow';
 
@@ -18,13 +19,12 @@ interface MobileHomePageProps {
   primaryTeammateEmoji?: string;
 }
 
-const JUMP_BACK_LIMIT = 5;
-const NEEDS_YOU_LIMIT = 3;
+const RECENT_LIMIT = 5;
 
 /**
  * Home landing: a thin composition of existing pieces. It owns no session/board
- * data logic; it reads the same store maps the rest of the shell uses and
- * renders the shared MobileSessionRow, the Ask-primary flow, and board rows.
+ * data logic; it reuses the desktop JumpBackInSection (self-subscribing), the
+ * shared MobileSessionRow, board selectors, and the glass surface components.
  */
 export const MobileHomePage: React.FC<MobileHomePageProps> = ({
   sessionById,
@@ -38,26 +38,13 @@ export const MobileHomePage: React.FC<MobileHomePageProps> = ({
   const navigate = useNavigate();
   const { token } = theme.useToken();
 
-  const mySessions = useMemo(() => {
+  const recent = useMemo(() => {
     const userId = currentUser?.user_id;
     return Array.from(sessionById.values())
       .filter((s) => !s.archived && (!userId || s.created_by === userId))
-      .sort((a, b) => (b.last_updated ?? '').localeCompare(a.last_updated ?? ''));
+      .sort((a, b) => (b.last_updated ?? '').localeCompare(a.last_updated ?? ''))
+      .slice(0, RECENT_LIMIT);
   }, [sessionById, currentUser?.user_id]);
-
-  // "Needs you": a running/awaiting agent (processing) or one that failed.
-  const needsYou = useMemo(
-    () =>
-      mySessions
-        .filter((s) => {
-          const tone = getSessionStatusTone(s.status);
-          return tone === 'processing' || tone === 'warning' || tone === 'error';
-        })
-        .slice(0, NEEDS_YOU_LIMIT),
-    [mySessions]
-  );
-
-  const recent = mySessions.slice(0, JUMP_BACK_LIMIT);
 
   const boards = useMemo(
     () => Array.from(boardById.values()).filter((b) => !b.archived),
@@ -66,21 +53,6 @@ export const MobileHomePage: React.FC<MobileHomePageProps> = ({
 
   const greetingName = currentUser?.name?.split(' ')[0];
   const askName = primaryTeammateName ?? 'your primary assistant';
-
-  const sectionHeader = (title: string, action?: { label: string; onClick: () => void }) => (
-    <Flex
-      justify="space-between"
-      align="center"
-      style={{ paddingInline: token.padding, marginBottom: token.marginXS }}
-    >
-      <Typography.Text strong>{title}</Typography.Text>
-      {action && (
-        <Button type="link" size="small" style={{ paddingInline: 0 }} onClick={action.onClick}>
-          {action.label}
-        </Button>
-      )}
-    </Flex>
-  );
 
   return (
     <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
@@ -97,53 +69,49 @@ export const MobileHomePage: React.FC<MobileHomePageProps> = ({
           paddingBottom: `calc(${token.paddingXL}px + env(safe-area-inset-bottom))`,
         }}
       >
-        <Flex vertical gap={token.marginLG}>
-          {/* Ask primary assistant */}
-          <div style={{ paddingInline: token.padding }}>
-            <Card size="small" styles={{ body: { padding: token.padding } }}>
-              <Flex align="center" gap={token.margin}>
-                <span style={{ fontSize: token.fontSizeHeading2, lineHeight: 1 }}>
-                  {primaryTeammateEmoji ?? <RobotOutlined />}
-                </span>
-                <Flex vertical style={{ flex: 1, minWidth: 0 }}>
-                  <Typography.Text strong>Ask {askName}</Typography.Text>
-                  <Typography.Text type="secondary" style={{ fontSize: token.fontSizeSM }}>
-                    Kick off a task, ask a question, or get help.
-                  </Typography.Text>
-                </Flex>
-                <Button type="primary" onClick={onAsk}>
-                  Ask
-                </Button>
+        <Flex vertical gap={token.marginLG} style={{ paddingInline: token.padding }}>
+          {/* Ask primary assistant hero */}
+          <GlassPanel
+            size="small"
+            highlights={{ intensity: 'subtle' }}
+            styles={{ body: { padding: token.padding } }}
+          >
+            <Flex align="center" gap={token.margin}>
+              <span style={{ fontSize: token.fontSizeHeading2, lineHeight: 1 }}>
+                {primaryTeammateEmoji ?? <RobotOutlined />}
+              </span>
+              <Flex vertical style={{ flex: 1, minWidth: 0 }}>
+                <Typography.Text strong>Ask {askName}</Typography.Text>
+                <Typography.Text type="secondary" style={{ fontSize: token.fontSizeSM }}>
+                  Kick off a task, ask a question, or get help.
+                </Typography.Text>
               </Flex>
-            </Card>
-          </div>
+              <Button type="primary" onClick={onAsk}>
+                Ask
+              </Button>
+            </Flex>
+          </GlassPanel>
 
-          {needsYou.length > 0 && (
-            <div>
-              {sectionHeader('Needs you')}
-              <List
-                style={{ paddingInline: token.padding }}
-                dataSource={needsYou}
-                renderItem={(session) => (
-                  <MobileSessionRow
-                    session={session}
-                    branch={session.branch_id ? branchById.get(session.branch_id) : undefined}
-                  />
-                )}
-              />
-            </div>
-          )}
+          {/* Awaiting sessions (reused desktop section; renders nothing when none) */}
+          <JumpBackInSection
+            currentUserId={currentUser?.user_id}
+            onSessionClick={(id) => navigate(`/m/session/${id}`)}
+          />
 
-          <div>
-            {sectionHeader(
-              'Jump back in',
-              recent.length > 0
-                ? { label: 'All sessions', onClick: () => navigate('/m/sessions') }
-                : undefined
-            )}
+          <GlassPanel
+            size="small"
+            title="Recent sessions"
+            extra={
+              recent.length > 0 ? (
+                <Button type="link" size="small" onClick={() => navigate('/m/sessions')}>
+                  All sessions
+                </Button>
+              ) : undefined
+            }
+            styles={{ body: { padding: recent.length > 0 ? 0 : token.padding } }}
+          >
             {recent.length > 0 ? (
               <List
-                style={{ paddingInline: token.padding }}
                 dataSource={recent}
                 renderItem={(session) => (
                   <MobileSessionRow
@@ -153,20 +121,16 @@ export const MobileHomePage: React.FC<MobileHomePageProps> = ({
                 )}
               />
             ) : (
-              <div style={{ paddingInline: token.padding }}>
-                <Empty
-                  image={Empty.PRESENTED_IMAGE_SIMPLE}
-                  description={`No sessions yet. Ask ${askName} to get started.`}
-                />
-              </div>
+              <Empty
+                image={Empty.PRESENTED_IMAGE_SIMPLE}
+                description={`No sessions yet. Ask ${askName} to get started.`}
+              />
             )}
-          </div>
+          </GlassPanel>
 
           {boards.length > 0 && (
-            <div>
-              {sectionHeader('Your boards')}
+            <GlassPanel size="small" title="Your boards" styles={{ body: { padding: 0 } }}>
               <List
-                style={{ paddingInline: token.padding }}
                 dataSource={boards}
                 renderItem={(board) => (
                   <List.Item
@@ -180,7 +144,7 @@ export const MobileHomePage: React.FC<MobileHomePageProps> = ({
                         navigate(`/m/board/${board.board_id}`);
                       }
                     }}
-                    style={{ cursor: 'pointer', paddingInline: 0, minHeight: 44 }}
+                    style={{ cursor: 'pointer', paddingInline: token.padding, minHeight: 44 }}
                   >
                     <List.Item.Meta
                       avatar={
@@ -198,7 +162,7 @@ export const MobileHomePage: React.FC<MobileHomePageProps> = ({
                   </List.Item>
                 )}
               />
-            </div>
+            </GlassPanel>
           )}
         </Flex>
       </div>

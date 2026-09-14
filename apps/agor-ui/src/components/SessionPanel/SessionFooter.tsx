@@ -52,6 +52,7 @@ import { useIsMobileViewport } from '../../hooks/useIsMobileViewport';
 import { useLocalStorage } from '../../hooks/useLocalStorage';
 import { resolveContextWindowPercentage } from '../../utils/contextWindow';
 import { EffortSelector } from '../EffortSelector';
+import { glassSurfaceStyle } from '../GlassSurface/glassStyles';
 import type { ModelConfig } from '../ModelSelector';
 import { ModelSelector } from '../ModelSelector';
 import { PermissionModeSelector } from '../PermissionModeSelector';
@@ -1804,7 +1805,10 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
           placement="bottom"
           height="auto"
           title="Session controls"
-          styles={{ body: { padding: 0, paddingBottom: 'env(safe-area-inset-bottom)' } }}
+          styles={{
+            content: glassSurfaceStyle(token, 0.85),
+            body: { padding: 0, paddingBottom: 'env(safe-area-inset-bottom)' },
+          }}
         >
           {moreContent}
         </Drawer>
