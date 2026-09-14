@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { UserGitEnvironment } from '@agor/git/pure';
@@ -715,30 +715,50 @@ describe('managed executor git/fs commands', () => {
     expect(mocks.scrubGitConfigRemoteCredentials).toHaveBeenCalledWith(archivedPath);
     expect(branchFindQueries).toEqual([{ repo_id: repoId, $limit: 1000, $skip: 0 }]);
   });
-  it('uses the daemon-provided tenant root when removing a branch directory', async () => {
-    const branchesRoot = await mkdtemp(join(tmpdir(), 'agor-tenant-worktrees-'));
+  it('verifies workspace removal within the daemon-provided tenant root', async () => {
+    const tenantRoot = await mkdtemp(join(tmpdir(), 'agor-tenant-removal-'));
+    const branchesRoot = join(tenantRoot, 'worktrees');
     const branchPath = join(branchesRoot, 'repo', 'feature');
+    const repoPath = join(tenantRoot, 'repos', 'repo');
     await mkdir(branchPath, { recursive: true });
+    await mkdir(repoPath, { recursive: true });
     try {
-      const result = await handleGitBranchRemove(
-        {
-          command: 'git.branch.remove',
-          params: {
-            branchId,
-            branchPath,
-            branchesRoot,
-            storageMode: 'clone',
-            deleteBranch: false,
-          },
+      const payload = {
+        command: 'git.branch.remove' as const,
+        params: {
+          branchId,
+          branchPath,
+          branchesRoot,
+          repoPath,
+          storageMode: 'clone' as const,
+          deleteBranch: false,
         },
-        {}
-      );
-
-      expect(result.success).toBe(true);
-      expect(mocks.deleteBranchDirectory).toHaveBeenCalledWith(branchPath, branchesRoot);
+      };
+      expect((await handleGitBranchRemove(payload, {})).success).toBe(true);
+      await expect(stat(branchPath)).rejects.toMatchObject({ code: 'ENOENT' });
+      expect((await stat(repoPath)).isDirectory()).toBe(true);
       expect(mocks.createExecutorClient).not.toHaveBeenCalled();
+
+      // The actual shared helper must reject a mismatched tenant root, not
+      // merely receive the expected argument at a mocked lower-level boundary.
+      await mkdir(branchPath, { recursive: true });
+      expect(
+        (
+          await handleGitBranchRemove(
+            {
+              ...payload,
+              params: {
+                ...payload.params,
+                branchesRoot: join(tenantRoot, 'other-tenant'),
+              },
+            },
+            {}
+          )
+        ).success
+      ).toBe(false);
+      expect((await stat(branchPath)).isDirectory()).toBe(true);
     } finally {
-      await rm(branchesRoot, { recursive: true, force: true });
+      await rm(tenantRoot, { recursive: true, force: true });
     }
   });
 
