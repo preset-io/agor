@@ -1,10 +1,12 @@
 import type { AgorClient, Session } from '@agor-live/client';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { App } from 'antd';
+import { StrictMode } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { AppActionsProvider } from '../../contexts/AppActionsContext';
 import { ConnectionProvider } from '../../contexts/ConnectionContext';
 import { agorStore } from '../../store/agorStore';
+import { getPromptDraft, savePromptDraft, stagePromptDraftSeed } from '../../utils/promptDrafts';
 import type { UploadFilesToSessionResult } from '../FileUpload/upload';
 import SessionPanel from './SessionPanel';
 
@@ -64,6 +66,8 @@ function renderSessionPanel({
   onFork = vi.fn(),
   onBtwFork = vi.fn(),
   session = makeSession(),
+  currentUserId = 'user-a',
+  strictMode = false,
 }: {
   onSendPrompt?: (
     sessionId: string,
@@ -72,8 +76,12 @@ function renderSessionPanel({
   onFork?: (sessionId: string, prompt: string) => Promise<void>;
   onBtwFork?: (sessionId: string, prompt: string) => Promise<void>;
   session?: Session;
+  currentUserId?: string;
+  strictMode?: boolean;
 } = {}) {
-  const renderTree = (nextSession: Session) => (
+  let activeSession = session;
+  let activeUserId: string | undefined = currentUserId;
+  const renderTree = () => (
     <App>
       <ConnectionProvider
         value={{
@@ -85,17 +93,30 @@ function renderSessionPanel({
         }}
       >
         <AppActionsProvider value={{ onSendPrompt, onFork, onBtwFork }}>
-          <SessionPanel client={makeClient()} session={nextSession} open onClose={vi.fn()} />
+          <SessionPanel
+            client={makeClient()}
+            session={activeSession}
+            currentUserId={activeUserId}
+            open
+            onClose={vi.fn()}
+          />
         </AppActionsProvider>
       </ConnectionProvider>
     </App>
   );
-  const renderResult = render(renderTree(session));
+  const renderResult = render(renderTree(), { wrapper: strictMode ? StrictMode : undefined });
   return {
     onSendPrompt,
     onFork,
     onBtwFork,
-    rerenderSession: (nextSession: Session) => renderResult.rerender(renderTree(nextSession)),
+    rerenderSession: (nextSession: Session) => {
+      activeSession = nextSession;
+      renderResult.rerender(renderTree());
+    },
+    rerenderUser: (nextUserId?: string) => {
+      activeUserId = nextUserId;
+      renderResult.rerender(renderTree());
+    },
     ...renderResult,
   };
 }
@@ -105,6 +126,7 @@ describe('SessionPanel composer send', () => {
     agorStore.getState().reset();
     uploadMockState.uploadFilesToSession.mockReset();
     localStorage.clear();
+    sessionStorage.clear();
     Object.defineProperty(URL, 'createObjectURL', {
       value: vi.fn(() => 'blob:preview'),
       configurable: true,
@@ -113,6 +135,91 @@ describe('SessionPanel composer send', () => {
       value: vi.fn(),
       configurable: true,
     });
+  });
+
+  it('hydrates a Catalog starter prompt as a one-shot editable unsent draft', async () => {
+    const onSendPrompt = vi.fn();
+    stagePromptDraftSeed('user-a', 'session-1', 'Editable Catalog starter');
+
+    const { container } = renderSessionPanel({ onSendPrompt });
+    const textarea = screen.getByPlaceholderText(/Prompt here/i);
+    expect(textarea).toHaveValue('Editable Catalog starter');
+    expect(onSendPrompt).not.toHaveBeenCalled();
+    expect(screen.queryByText('Starter prompt suggestion')).not.toBeInTheDocument();
+
+    fireEvent.change(textarea, { target: { value: 'Edited before sending' } });
+    fireEvent.click(container.querySelector('button.ant-btn-primary') as HTMLButtonElement);
+
+    await waitFor(() =>
+      expect(onSendPrompt).toHaveBeenCalledWith(
+        'session-1',
+        'Edited before sending',
+        expect.any(String)
+      )
+    );
+    expect(sessionStorage.getItem('agor:prompt-draft-seed')).toBeNull();
+  });
+
+  it('preserves an existing user draft instead of replacing it with a starter', () => {
+    savePromptDraft('user-a', 'session-1', 'Already typed');
+    stagePromptDraftSeed('user-a', 'session-1', 'Catalog starter');
+    renderSessionPanel();
+    expect(screen.getByPlaceholderText(/Prompt here/i)).toHaveValue('Already typed');
+    expect(sessionStorage.getItem('agor:prompt-draft-seed')).toBeNull();
+  });
+
+  it('retains the seed until authenticated composer bootstrap completes', () => {
+    stagePromptDraftSeed('user-a', 'session-1', 'Catalog starter');
+    const view = renderSessionPanel({ currentUserId: '' });
+    expect(screen.getByPlaceholderText(/Prompt here/i)).toHaveValue('');
+    view.rerenderUser('user-a');
+    expect(screen.getByPlaceholderText(/Prompt here/i)).toHaveValue('Catalog starter');
+    expect(view.onSendPrompt).not.toHaveBeenCalled();
+  });
+
+  it('keeps an untouched starter tab-local through debounce, unmount, and remount', async () => {
+    savePromptDraft('user-a', 'session-other-tab', 'Important typed text');
+    stagePromptDraftSeed('user-a', 'session-1', 'Catalog starter');
+    const view = renderSessionPanel({ strictMode: true });
+    expect(screen.getByPlaceholderText(/Prompt here/i)).toHaveValue('Catalog starter');
+    await new Promise((resolve) => setTimeout(resolve, 350));
+    expect(getPromptDraft('user-a', 'session-other-tab')).toBe('Important typed text');
+    view.unmount();
+    expect(getPromptDraft('user-a', 'session-other-tab')).toBe('Important typed text');
+    const next = renderSessionPanel();
+    expect(screen.getByPlaceholderText(/Prompt here/i)).toHaveValue('Catalog starter');
+    expect(next.onSendPrompt).not.toHaveBeenCalled();
+  });
+
+  it('hydrates exactly once under StrictMode even when localStorage writes are denied', () => {
+    stagePromptDraftSeed('user-a', 'session-1', 'Catalog starter');
+    const write = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new Error('Storage denied');
+    });
+    try {
+      const view = renderSessionPanel({ strictMode: true });
+      expect(screen.getByPlaceholderText(/Prompt here/i)).toHaveValue('Catalog starter');
+      expect(view.onSendPrompt).not.toHaveBeenCalled();
+      view.unmount();
+    } finally {
+      write.mockRestore();
+    }
+  });
+
+  it('does not rehydrate an already-sent starter when admission completes after navigation', async () => {
+    const admitted = deferred<boolean>();
+    const onSendPrompt = vi.fn(() => admitted.promise);
+    stagePromptDraftSeed('user-a', 'session-1', 'Catalog starter');
+    const view = renderSessionPanel({ onSendPrompt });
+    fireEvent.click(view.container.querySelector('button.ant-btn-primary') as HTMLButtonElement);
+    await waitFor(() => expect(onSendPrompt).toHaveBeenCalledOnce());
+    view.rerenderSession(makeSession({ session_id: 'session-other' as Session['session_id'] }));
+    await act(async () => {
+      admitted.resolve(true);
+    });
+    view.rerenderSession(makeSession());
+    expect(screen.getByPlaceholderText(/Prompt here/i)).toHaveValue('');
+    expect(sessionStorage.getItem('agor:prompt-draft-seed')).toBeNull();
   });
 
   it('sends prompt edits typed while attachment upload is in flight with the upload-start attachments', async () => {
@@ -197,8 +304,9 @@ describe('SessionPanel composer send', () => {
     );
 
     rerenderSession(makeSession({ session_id: 'session-2' }));
-    await waitFor(() => expect(textarea).toHaveValue(''));
-    fireEvent.change(textarea, { target: { value: 'New session prompt must stay local' } });
+    const nextTextarea = screen.getByPlaceholderText(/Prompt here/i);
+    await waitFor(() => expect(nextTextarea).toHaveValue(''));
+    fireEvent.change(nextTextarea, { target: { value: 'New session prompt must stay local' } });
 
     upload.resolve({
       success: true,
@@ -223,7 +331,69 @@ describe('SessionPanel composer send', () => {
       expect.stringContaining('New session prompt must stay local'),
       expect.any(String)
     );
-    expect(textarea).toHaveValue('New session prompt must stay local');
+    expect(nextTextarea).toHaveValue('New session prompt must stay local');
+  });
+
+  it('isolates the visible composer when the authenticated user changes on the same session', async () => {
+    const { rerenderUser } = renderSessionPanel();
+    const textarea = screen.getByPlaceholderText(/Prompt here/i);
+    fireEvent.change(textarea, { target: { value: 'User A private draft' } });
+
+    await new Promise((resolve) => setTimeout(resolve, 350));
+    rerenderUser('user-b');
+
+    await waitFor(() => expect(screen.getByPlaceholderText(/Prompt here/i)).toHaveValue(''));
+    await new Promise((resolve) => setTimeout(resolve, 350));
+    expect(localStorage.getItem('agor:prompt-draft')).toContain('"ownerId":"user-a"');
+    expect(localStorage.getItem('agor:prompt-draft')).not.toContain('user-b');
+  });
+
+  it('does not clear a replacement composer after an old identity send completes', async () => {
+    const send = deferred<boolean>();
+    const onSendPrompt = vi.fn().mockReturnValue(send.promise);
+    const { container, rerenderUser } = renderSessionPanel({ onSendPrompt });
+
+    fireEvent.change(screen.getByPlaceholderText(/Prompt here/i), {
+      target: { value: 'User A prompt' },
+    });
+    fireEvent.click(container.querySelector('button.ant-btn-primary') as HTMLButtonElement);
+    await waitFor(() => expect(onSendPrompt).toHaveBeenCalledTimes(1));
+
+    rerenderUser(undefined);
+    rerenderUser('user-a');
+    const replacement = screen.getByPlaceholderText(/Prompt here/i);
+    fireEvent.change(replacement, { target: { value: 'Same user, new login draft' } });
+    send.resolve(true);
+
+    await waitFor(() => expect(replacement).toHaveValue('Same user, new login draft'));
+  });
+
+  it("does not clear a later caller's identical text or attachments after admission", async () => {
+    const send = deferred<boolean>();
+    const onSendPrompt = vi.fn().mockReturnValue(send.promise);
+    const { container, rerenderUser } = renderSessionPanel({ onSendPrompt });
+
+    fireEvent.change(screen.getByPlaceholderText(/Prompt here/i), {
+      target: { value: 'Identical prompt' },
+    });
+    fireEvent.click(container.querySelector('button.ant-btn-primary') as HTMLButtonElement);
+    await waitFor(() => expect(onSendPrompt).toHaveBeenCalledTimes(1));
+
+    rerenderUser('user-b');
+    const replacement = screen.getByPlaceholderText(/Prompt here/i);
+    fireEvent.change(replacement, { target: { value: 'Identical prompt' } });
+    fireEvent.drop(screen.getByLabelText('Composer attachments and input drop zone'), {
+      dataTransfer: {
+        types: ['Files'],
+        files: [new File(['later caller'], 'user-b.txt', { type: 'text/plain' })],
+      },
+    });
+    await waitFor(() => expect(screen.getByLabelText('Preview user-b.txt')).toBeInTheDocument());
+
+    send.resolve(true);
+
+    await waitFor(() => expect(replacement).toHaveValue('Identical prompt'));
+    expect(screen.getByLabelText('Preview user-b.txt')).toBeInTheDocument();
   });
 
   it('ignores a rapid second send while the first attachment upload is still in flight', async () => {
@@ -333,6 +503,33 @@ describe('SessionPanel composer send', () => {
     });
 
     await waitFor(() => expect(onSendPrompt).toHaveBeenCalledTimes(1));
+  });
+
+  it('keeps an upload failure visible and preserves its reason on repeated send', async () => {
+    const reason = 'A file exceeds the upload size limit (reference: request-123)';
+    uploadMockState.uploadFilesToSession.mockRejectedValue(new Error(reason));
+    const onSendPrompt = vi.fn();
+    const { container } = renderSessionPanel({ onSendPrompt });
+    fireEvent.drop(screen.getByLabelText('Composer attachments and input drop zone'), {
+      dataTransfer: {
+        types: ['Files'],
+        files: [new File(['image'], 'chart.png', { type: 'image/png' })],
+      },
+    });
+    const textarea = screen.getByPlaceholderText(/Prompt here/i);
+    fireEvent.change(textarea, { target: { value: 'Describe this chart' } });
+    const sendButton = container.querySelector('button.ant-btn-primary');
+    expect(sendButton).toBeInstanceOf(HTMLButtonElement);
+    fireEvent.click(sendButton as HTMLButtonElement);
+
+    expect(await screen.findByText(`chart.png: ${reason}`)).toBeVisible();
+    fireEvent.click(sendButton as HTMLButtonElement);
+    expect(
+      await screen.findByText(`chart.png: ${reason}. Remove failed files before sending.`)
+    ).toBeVisible();
+    expect(uploadMockState.uploadFilesToSession).toHaveBeenCalledTimes(1);
+    expect(onSendPrompt).not.toHaveBeenCalled();
+    expect(textarea).toHaveValue('Describe this chart');
   });
 
   it('preserves prompt and uploaded attachments when prompt submission fails after upload', async () => {

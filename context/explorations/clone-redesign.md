@@ -4,6 +4,10 @@
 > Historical design record. Host Unix impersonation, `strict`/`insulated`, POSIX
 > projection, and `unix.sync-*` were removed in 0.25. Do not use the implementation
 > sketches below as current guidance; see `context/guides/rbac-and-unix-isolation.md`.
+> The `users.getGitEnvironment` full-map RPC described below is also obsolete:
+> current managed Git uses an executor-only exact-command capability returning a
+> bounded token/proxy/TLS DTO, clean authenticated transport, and a separate
+> credential-free checkout/worktree phase.
 
 **Status:** Implemented (PR #1088)
 **Branch:** `feat/per-user-impersonated-clone`

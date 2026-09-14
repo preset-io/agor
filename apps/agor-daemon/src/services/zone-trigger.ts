@@ -135,12 +135,14 @@ export async function fireAlwaysNewZoneTrigger(
     }
   }
 
-  const task: Task = await app
-    .service('/sessions/:id/prompt')
-    .create(
-      { prompt: renderedPrompt, messageSource: 'agor' },
-      { ...params, route: { id: newSession.session_id } }
-    );
+  const task: Task = await app.service('/sessions/:id/prompt').create(
+    {
+      prompt: renderedPrompt,
+      messageSource: 'agor',
+      metadata: { system_authored: true },
+    },
+    { ...params, provider: undefined, route: { id: newSession.session_id } }
+  );
 
   return { session: newSession, task };
 }

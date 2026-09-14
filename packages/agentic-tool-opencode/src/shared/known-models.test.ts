@@ -86,6 +86,7 @@ describe('OpenCode known model catalog', () => {
       availableForSelection: true,
       suggestedModel: 'claude-sonnet-5',
       models: expect.arrayContaining([
+        expect.objectContaining({ id: 'claude-fable-5-1' }),
         expect.objectContaining({ id: 'claude-opus-5' }),
         expect.objectContaining({ id: 'claude-sonnet-5' }),
         expect.objectContaining({ id: 'claude-haiku-4-5' }),

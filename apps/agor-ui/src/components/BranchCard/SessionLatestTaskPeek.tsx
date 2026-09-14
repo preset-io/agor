@@ -6,6 +6,7 @@ import { useAppActions } from '../../contexts/AppActionsContext';
 import { useConnectionDisabled } from '../../contexts/ConnectionContext';
 import { useSharedReactiveSession } from '../../hooks/useSharedReactiveSession';
 import { useStreamingMessagesByTask } from '../../hooks/useStreamingMessagesByTask';
+import { REACT_FLOW_NO_WHEEL_CLASS } from '../../utils/reactFlowDragClasses';
 import { TaskBlock } from '../TaskBlock';
 import { chooseLatestSessionTask } from './latestSessionTask';
 
@@ -207,6 +208,7 @@ export const SessionLatestTaskPeek = React.memo<SessionLatestTaskPeekProps>(
       <div className="nodrag">
         <div
           ref={containerRef}
+          className={REACT_FLOW_NO_WHEEL_CLASS}
           style={{
             height: 360,
             overflowY: 'auto',

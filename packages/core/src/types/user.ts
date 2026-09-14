@@ -1,10 +1,6 @@
-import type {
-  AgenticToolName,
-  CodexApprovalPolicy,
-  CodexNetworkAccess,
-  CodexSandboxMode,
-} from './agentic-tool';
-import type { UserID } from './id';
+import type { CodexApprovalPolicy, CodexNetworkAccess, CodexSandboxMode } from './agentic-tool';
+import { type AgenticToolName, DEFAULT_AGENTIC_TOOL_NAME, isAgenticToolName } from './agentic-tool';
+import type { BranchID, UserID } from './id';
 import type { EffortLevel, PermissionMode } from './session';
 
 /** Canonical syntax for the transitional delegated execution-home key. */
@@ -68,13 +64,18 @@ export const ROLE_OPTIONS: readonly RoleOption[] = [
  * Role rank used for minimum-role comparisons.
  * Higher rank = more privileges. 'owner' is a deprecated alias for superadmin.
  */
-const ROLE_RANK: Record<string, number> = {
+const ROLE_AUTHORITY_RANK: Readonly<Record<UserRole | 'owner', number>> = {
   [ROLES.VIEWER]: 0,
   [ROLES.MEMBER]: 1,
   [ROLES.ADMIN]: 2,
   [ROLES.SUPERADMIN]: 3,
   owner: 3,
 };
+
+/** Return true only for canonical roles accepted on new writes. */
+export function isUserRole(role: unknown): role is UserRole {
+  return typeof role === 'string' && Object.values(ROLES).includes(role as UserRole);
+}
 
 /**
  * Normalize legacy role values.
@@ -90,8 +91,55 @@ export function normalizeRole(role: string | undefined): UserRole {
  * Shared by backend hooks and frontend permission checks.
  */
 export function hasMinimumRole(userRole: string | undefined, minimumRole: UserRole): boolean {
+  if (!userRole) return false;
   const normalized = normalizeRole(userRole);
-  return (ROLE_RANK[normalized] ?? 0) >= ROLE_RANK[minimumRole];
+  return (ROLE_AUTHORITY_RANK[normalized] ?? -1) >= (ROLE_AUTHORITY_RANK[minimumRole] ?? -1);
+}
+
+/**
+ * Compare two roles by authority.
+ *
+ * Positive means `left` has more authority, zero means equal authority, and
+ * negative means less authority. Unknown/missing roles are always below every
+ * canonical role. The deprecated `owner` value retains superadmin authority
+ * for reads of historical data, but is canonicalized before new writes.
+ */
+export function compareRoleAuthority(left: string | undefined, right: string | undefined): number {
+  return roleAuthorityRank(left) - roleAuthorityRank(right);
+}
+
+function roleAuthorityRank(role: string | undefined): number {
+  if (!role) return -1;
+  const normalized = normalizeRole(role);
+  return ROLE_AUTHORITY_RANK[normalized] ?? -1;
+}
+
+function isKnownRoleAuthority(role: string | undefined): boolean {
+  return !!role && (isUserRole(role) || role === 'owner');
+}
+
+/** Whether an actor's role is authoritative over a target's current role. */
+export function hasRoleAuthorityOver(
+  actorRole: string | undefined,
+  targetRole: string | undefined
+): boolean {
+  return (
+    isKnownRoleAuthority(actorRole) &&
+    isKnownRoleAuthority(targetRole) &&
+    compareRoleAuthority(actorRole, targetRole) >= 0
+  );
+}
+
+/** Whether an actor may assign the requested role without exceeding their ceiling. */
+export function canAssignUserRole(
+  actorRole: string | undefined,
+  requestedRole: string | undefined
+): boolean {
+  return (
+    isKnownRoleAuthority(actorRole) &&
+    isKnownRoleAuthority(requestedRole) &&
+    compareRoleAuthority(actorRole, requestedRole) >= 0
+  );
 }
 
 /**
@@ -163,6 +211,17 @@ export interface CodexConfig {
 
 export type AgenticAuthMethod = 'api_key' | 'subscription';
 export type AgenticAuthMethods = Partial<Record<'claude-code' | 'codex', AgenticAuthMethod>>;
+
+/**
+ * Authoritative source for a user's Claude credential.
+ *
+ * `agentic_auth_methods` intentionally remains the coarse UI/provider choice,
+ * while this value distinguishes the two subscription implementations. In
+ * particular, `none` is a durable opt-out: an old `.credentials.json` must not
+ * become active merely because a pasted token was cleared.
+ */
+export type ClaudeCredentialSource = 'api_key' | 'subscription_token' | 'managed_file' | 'none';
+export type AgenticCredentialSources = Partial<Record<'claude-code', ClaudeCredentialSource>>;
 
 export interface GeminiConfig {
   GEMINI_API_KEY?: string;
@@ -304,10 +363,10 @@ export type AgenticToolsPublicValues = {
  * The caller is responsible for the self-only authorization check — this
  * helper assumes the requester is already authorized to see the values.
  */
-export function extractAgenticToolsPublicValues(
+export async function extractAgenticToolsPublicValuesAsync(
   stored: StoredAgenticTools | undefined,
-  decrypt: (ciphertext: string) => string
-): AgenticToolsPublicValues | undefined {
+  decrypt: (ciphertext: string) => Promise<string>
+): Promise<AgenticToolsPublicValues | undefined> {
   if (!stored) return undefined;
   const out: Record<string, Record<string, string>> = {};
   for (const [tool, fields] of Object.entries(stored) as Array<
@@ -321,7 +380,7 @@ export function extractAgenticToolsPublicValues(
       const ciphertext = fields[field as string];
       if (!ciphertext) continue;
       try {
-        plaintext[field as string] = decrypt(ciphertext);
+        plaintext[field as string] = await decrypt(ciphertext);
       } catch {
         // Silently skip undecryptable values; the boolean status flag will
         // still indicate presence so the user can clear and re-set.
@@ -373,6 +432,11 @@ export interface EventStreamPreferences {
  */
 export interface OnboardingState {
   /**
+   * ISO timestamp recorded when the user closes onboarding to finish later.
+   * Deferral is distinct from completion and never provisions resources.
+   */
+  deferredAt?: string;
+  /**
    * Onboarding goal ids the user selected, order-preserving (primary first),
    * max 2. See ONBOARDING_GOALS in agor-ui. Written once at completion.
    */
@@ -396,6 +460,8 @@ export interface OnboardingState {
   assistantDisplayName?: string;
   /** Teammate emoji captured during onboarding identity step */
   teammateEmoji?: string;
+  /** Starter-template id selected for the first teammate (for resumable setup). */
+  teammateTemplateId?: string;
   /** @deprecated Use teammateEmoji. Read for pre-rename preferences compatibility only. */
   assistantEmoji?: string;
 }
@@ -485,6 +551,8 @@ export interface User extends BaseUserFields {
   agentic_tools?: AgenticToolsStatus;
   /** Explicit authentication method; inactive credentials remain stored but are never resolved. */
   agentic_auth_methods?: AgenticAuthMethods;
+  /** Explicit credential source; `none` prevents fallback to dormant native files or secrets. */
+  agentic_credential_sources?: AgenticCredentialSources;
   /**
    * Plaintext values for fields listed in `AGENTIC_TOOLS_PUBLIC_FIELDS` —
    * only populated when the requester is the field's owner. Lets the UI
@@ -498,6 +566,10 @@ export interface User extends BaseUserFields {
   // tolerated on read but not yet exposed by the UI.
   env_vars?: Record<string, EnvVarMetadata>;
   // Default agentic tool configuration (prepopulates session creation forms)
+  /** Agentic coding tool preselected for new sessions. */
+  primary_agentic_tool?: AgenticToolName;
+  /** Teammate branch preselected by quick compose and user preferences. */
+  primary_teammate_id?: BranchID;
   default_agentic_config?: DefaultAgenticConfig;
   default_agentic_selection?: UserAgenticDefaultSelections;
   // Default MCP selection, independent of the selected agentic tool.
@@ -513,11 +585,39 @@ export interface User extends BaseUserFields {
 export type UserAuthMetadata = object & {
   /** Tokens issued at or before this timestamp are no longer valid. */
   tokens_valid_after?: Date;
+  /**
+   * Monotonic local-credential generation captured in interactive JWTs.
+   * Password changes increment this atomically so a token minted by a racing
+   * login or refresh against an older credential snapshot is fail-closed.
+   */
+  credential_generation?: number;
   /** Backend-only tenant id used while issuing/validating runtime tokens. */
   tenant_id?: string;
 };
 
-export type InternalUser = User & UserAuthMetadata;
+/** Required backend metadata for any user used to validate or mint interactive credentials. */
+export type AuthenticationUserAuthMetadata = Omit<UserAuthMetadata, 'credential_generation'> & {
+  credential_generation: number;
+};
+
+export type AuthenticationUser = User & AuthenticationUserAuthMetadata;
+
+/** Database-backed internal users always carry the non-null generation column. */
+export type InternalUser = AuthenticationUser;
+
+/**
+ * Read an explicitly stored primary coding agent, tolerating malformed JSON.
+ */
+export function getUserPrimaryAgenticTool(
+  user: User | null | undefined
+): AgenticToolName | undefined {
+  return isAgenticToolName(user?.primary_agentic_tool) ? user.primary_agentic_tool : undefined;
+}
+
+/** Resolve the primary coding agent, falling back only while it is unset. */
+export function resolveUserPrimaryAgenticTool(user: User | null | undefined): AgenticToolName {
+  return getUserPrimaryAgenticTool(user) ?? DEFAULT_AGENTIC_TOOL_NAME;
+}
 
 /**
  * Env var scope values.
@@ -631,6 +731,7 @@ export interface UpdateUserInput extends Partial<BaseUserFields> {
    */
   agentic_tools?: AgenticToolsUpdate;
   agentic_auth_methods?: AgenticAuthMethods;
+  agentic_credential_sources?: AgenticCredentialSources;
   // Environment variables for update (accepts plaintext, encrypted before storage).
   // `null` clears the variable. A plain `string` creates/updates the value and leaves
   // the existing scope in place (defaults to 'global' for new vars).
@@ -642,6 +743,8 @@ export interface UpdateUserInput extends Partial<BaseUserFields> {
    */
   env_var_scopes?: Record<string, EnvVarScope>;
   // Default agentic tool configuration
+  /** Agentic coding tool preselected for new sessions. */
+  primary_agentic_tool?: AgenticToolName;
   default_agentic_config?: DefaultAgenticConfig;
   default_agentic_selection?: UserAgenticDefaultSelections;
   // Default MCP selection, independent of the selected agentic tool.

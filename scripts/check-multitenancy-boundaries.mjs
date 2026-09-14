@@ -44,35 +44,62 @@ const checks = [
       // HA fork/spawn now use the tenant-aware Feathers event helper instead
       // of raw global Socket.IO broadcasts.
       'apps/agor-daemon/src/register-routes.ts': 4,
+      // Minimal real-transport contract harness: one local authenticated
+      // channel proves executor control events are registered by Feathers and
+      // cross Socket.IO rather than only exercising the publisher directly.
+      'apps/agor-daemon/src/register-services.tasks-events.test.ts': 4,
       'apps/agor-daemon/src/startup.ts': 1,
       'apps/agor-daemon/src/services/artifacts.test.ts': 1,
       'apps/agor-daemon/src/services/artifacts.ts': 1,
       'apps/agor-daemon/src/services/boards.ts': 2,
       'apps/agor-daemon/src/services/repos.ts': 1,
+      // Real REST + Socket.IO contract harness: the one authenticated test
+      // connection is joined to a local-only channel so transport-level
+      // response and realtime secret redaction can be asserted end to end.
+      'apps/agor-daemon/src/services/mcp-servers.write-transport.integration.test.ts': 2,
       // Socket/browser integration harness explicitly joins one authenticated
       // connection to its verified tenant before asserting hard-delete
       // publication containment.
       'apps/agor-daemon/src/utils/branch-removal-realtime.integration.test.ts': 2,
-      // The tenant-aware realtime facade: tenant/session channel join, the
-      // publish handler, session-stream and tenant+task executor-control joins,
-      // the existence-gated room lookup (existingChannel — used by publish +
-      // leave paths so they never materialize a room), and both leave-all
-      // helpers live here on purpose. Executor control rooms are explicitly
-      // tenant-namespaced and can only be joined from a verified scoped JWT.
-      // Includes the centralized tenant-channel eviction helper used on
-      // logout/live authentication replacement.
-      'apps/agor-daemon/src/utils/realtime-publish.ts': 10,
+      // Two authenticated principals share one local test channel so the
+      // production publisher can prove per-recipient MCP topology projection.
+      'apps/agor-daemon/src/utils/mcp-recovery-realtime.integration.test.ts': 1,
+      // The tenant-aware realtime facade: session/task channel joins, the
+      // publish handler, and existence-gated lookups live here on purpose.
+      // Executor control rooms are tenant-namespaced and joined only from an
+      // immutable, verified scoped-JWT connection authority.
+      'apps/agor-daemon/src/utils/realtime-publish.ts': 8,
       // Raw Socket.IO presence/user/terminal rooms are deliberately centralized
       // here. Every join/leave/broadcast is tenant-namespaced, including logout
       // cleanup, and cross-tenant negative tests cover same user/board IDs. The
       // terminal service additionally receives a server-only connection
       // capability that joins its authenticated requesting socket to a room
       // derived from trusted tenant/user/terminal identity before executor
-      // startup, then removes that room if authentication changes while the
-      // join is pending. Same-room operations are serialized so stale/failed
-      // cleanup cannot evict another valid subscription; clients cannot supply
-      // that room or capability.
-      'apps/agor-daemon/src/setup/socketio.ts': 17,
+      // startup. Same-room operations are serialized and re-check immutable
+      // authority so retirement cannot leave stale membership; clients cannot
+      // supply that room or capability. The navbar board-association protocol
+      // adds one join and one leave at this same audited boundary; each room is
+      // constructed from immutable tenant authority plus a boards.find-
+      // authorized canonical board ID.
+      'apps/agor-daemon/src/setup/socketio.ts': 13,
+      // Adversarial integration harnesses intentionally exercise the raw
+      // Socket.IO boundary: the PostgreSQL test probes a guessed foreign room
+      // and inspects passive delivery, including authorized/private/forged
+      // board-association heartbeats for member/admin/superadmin roles, while
+      // the Redis test emits one cursor packet across two real adapter-backed
+      // replicas. Production room names and authorization still come from the
+      // centralized routing/config code.
+      'apps/agor-daemon/src/setup/socketio-tenant-isolation.postgres.test.ts': 6,
+      // The cursor packets are deliberately sent before and after revoke/
+      // reconnect denial, and the board heartbeat independently verifies the
+      // authorized association relay. These three test-only raw client emits
+      // exercise the real Redis adapter boundary through shared event names.
+      'apps/agor-daemon/src/setup/socketio-ha-tenant-isolation.integration.test.ts': 3,
+      // Real immutable-handshake coverage deliberately inspects the private
+      // Feathers task channel through one test helper and injects both executor
+      // control event names into its current connections. Pre-disconnect
+      // delivery and post-reconnect absence prove room retirement.
+      'apps/agor-daemon/src/setup/socketio-executor-auth.integration.test.ts': 1,
     },
   },
 
@@ -112,11 +139,7 @@ const checks = [
     ],
     // Custom HTTP middleware must pass a mutable params object so verified
     // tenant context is available to authentication hooks and user loading.
-    baseline: {
-      // These executor-facing routes authenticate narrow service tokens and
-      // consume claims directly; they do not perform an authenticated user lookup.
-      'apps/agor-daemon/src/register-routes.ts': 2,
-    },
+    baseline: {},
   },
   {
     name: 'raw tenant database scope imports',
@@ -140,10 +163,15 @@ const checks = [
     baseline: {
       // Test-only async flush helpers / event loop flushes.
       'apps/agor-daemon/src/services/branches.test.ts': 1,
-      'apps/agor-daemon/src/utils/tenant-db-scope.test.ts': 1,
-      // The two tenant-aware deferral helpers deliberately leave the current
-      // ALS store before scheduling and then re-enter identity or DB scope.
-      'apps/agor-daemon/src/utils/tenant-db-scope.ts': 2,
+      // Executor-token revocation clears authority synchronously, then uses a
+      // transport-only deferral helper to drain the terminal RPC ack before
+      // teardown. Its callbacks perform no database or tenant-owned work.
+      'apps/agor-daemon/src/setup/socketio.ts': 1,
+      // Event-loop flushes for the exact-token disconnect assertions above.
+      'apps/agor-daemon/src/setup/socketio.test.ts': 2,
+      // The tenant-aware deferral helper deliberately leaves the current ALS
+      // database store before scheduling and then re-enters tenant identity.
+      'apps/agor-daemon/src/utils/tenant-db-scope.ts': 1,
     },
   },
   {
@@ -181,6 +209,15 @@ const checks = [
       // capabilities use a second transaction path so their RLS GUC is local
       // to one pooled connection checkout and cannot leak after discovery.
       'packages/core/src/db/tenant-scope.ts': 2,
+      // Pure in-memory transaction doubles exercise tracing timing/failure
+      // semantics. They never access a database; the real PostgreSQL tracing
+      // test goes through runWithTenantDatabaseScope instead.
+      'packages/core/src/db/postgres-transaction-tracing.test.ts': 3,
+      // Test-only security harness deliberately invokes every direct libsql
+      // and Drizzle transaction surface to prove the literal-memory client
+      // coordinator cannot be bypassed. No application database access lives
+      // in this file.
+      'packages/core/src/db/in-memory-sqlite-coordinator.test.ts': 10,
       'packages/core/src/db/repositories/branches.ts': 1,
       'packages/core/src/db/repositories/knowledge.ts': 7,
       'packages/core/src/db/repositories/repos.ts': 3,

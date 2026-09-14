@@ -81,6 +81,8 @@ interface AgentChainProps {
   isTaskRunning?: boolean;
   /** Whether this is the latest (most recent) agent chain block — used for pending/stale status detection */
   isLatest?: boolean;
+  /** Remove desktop transcript indentation at phone widths. */
+  compact?: boolean;
 }
 
 interface ChainItem {
@@ -135,7 +137,7 @@ function getToolIcon(toolName: string): React.ReactElement {
 }
 
 export const AgentChain = React.memo<AgentChainProps>(
-  ({ messages, isTaskRunning = false, isLatest }) => {
+  ({ messages, isTaskRunning = false, isLatest, compact = false }) => {
     const { token } = theme.useToken();
     const [expanded, setExpanded] = useState(true);
 
@@ -635,7 +637,7 @@ export const AgentChain = React.memo<AgentChainProps>(
         {expanded && (
           <div
             style={{
-              paddingLeft: token.sizeUnit * 8,
+              paddingLeft: compact ? 0 : token.sizeUnit * 8,
               marginTop: token.sizeUnit,
               display: 'flex',
               flexDirection: 'column',

@@ -9,6 +9,8 @@ export interface TeammateCreationInput {
   repoId: string;
   branchName?: string;
   sourceBranch?: string;
+  /** Remote that owns sourceBranch when it differs from the destination repo. */
+  sourceRemoteUrl?: string;
   /**
    * Reuse an existing board for the teammate instead of creating a new one.
    * The onboarding wizard already creates a board in its workspace step, so it
@@ -30,6 +32,7 @@ export interface TeammateCreationDeps {
       ref: string;
       createBranch: boolean;
       sourceBranch: string;
+      sourceRemoteUrl?: string;
       pullLatest: boolean;
       boardId?: string;
       custom_context?: Record<string, unknown>;
@@ -40,6 +43,8 @@ export interface TeammateCreationDeps {
     branchId: string,
     updates: { board_id?: BoardID; custom_context?: Record<string, unknown>; notes?: string | null }
   ) => void | Promise<void>;
+  /** Abort caller-owned follow-up mutations when its authenticated identity changes. */
+  shouldContinue?: () => boolean;
 }
 
 /**
@@ -52,6 +57,9 @@ export async function createTeammateBranch(
   input: TeammateCreationInput,
   deps: TeammateCreationDeps
 ): Promise<Branch | null> {
+  const shouldContinue = deps.shouldContinue ?? (() => true);
+  if (!shouldContinue()) return null;
+
   const repo = deps.repoById.get(input.repoId);
   const branchName = input.branchName || `private-${slugify(input.displayName)}`;
   const sourceBranch = input.sourceBranch || repo?.default_branch || 'main';
@@ -66,19 +74,23 @@ export async function createTeammateBranch(
   if (input.boardId) {
     boardId = input.boardId;
   } else {
+    if (!shouldContinue()) return null;
     const newBoard = (await deps.client.service('boards').create({
       name: `${displayName}'s Board`,
       icon: input.emoji || '\u{1F916}',
     })) as Board;
+    if (!shouldContinue()) return null;
     boardId = newBoard.board_id;
   }
 
+  if (!shouldContinue()) return null;
   await ensureTeammateWelcomeNote({
     client: deps.client,
     boardId,
     teammateName: displayName,
     teammateEmoji: input.emoji,
   });
+  if (!shouldContinue()) return null;
 
   const teammateConfig: TeammateConfig = {
     kind: 'teammate',
@@ -96,11 +108,13 @@ export async function createTeammateBranch(
     ref: branchName,
     createBranch: true,
     sourceBranch,
+    ...(input.sourceRemoteUrl ? { sourceRemoteUrl: input.sourceRemoteUrl } : {}),
     pullLatest: true,
     boardId,
     custom_context: { teammate: teammateConfig },
     ...(input.description?.trim() ? { notes: input.description.trim() } : {}),
   });
+  if (!shouldContinue()) return null;
 
   if (branch) {
     // Assign to board (if not already passed via boardId above)
@@ -108,11 +122,14 @@ export async function createTeammateBranch(
       await deps.onUpdateBranch(branch.branch_id, {
         board_id: boardId as BoardID,
       });
+      if (!shouldContinue()) return null;
     }
     if (boardId) {
+      if (!shouldContinue()) return null;
       await deps.client
         ?.service('boards')
         .setPrimaryTeammate({ boardId, branchId: branch.branch_id });
+      if (!shouldContinue()) return null;
     }
   }
 

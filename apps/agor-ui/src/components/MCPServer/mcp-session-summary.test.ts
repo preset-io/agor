@@ -23,7 +23,7 @@ describe('summarizeSessionMcpServers', () => {
     });
   });
 
-  it('uses error tone when attached OAuth servers need user auth', () => {
+  it('uses warning tone when attached OAuth servers need user auth', () => {
     const servers = new Map([['s1', server('s1', { type: 'oauth', oauth_mode: 'per_user' })]]);
 
     expect(summarizeSessionMcpServers(['s1'], servers, new Set())).toMatchObject({
@@ -31,16 +31,16 @@ describe('summarizeSessionMcpServers', () => {
       needsAuthCount: 1,
       missingCount: 0,
       healthyCount: 0,
-      tone: 'error',
+      tone: 'warning',
     });
   });
 
-  it('uses error tone when an attached server record is missing', () => {
+  it('uses warning tone when an attached server record is missing', () => {
     expect(summarizeSessionMcpServers(['missing'], new Map(), new Set())).toMatchObject({
       attachedCount: 1,
       needsAuthCount: 0,
       missingCount: 1,
-      tone: 'error',
+      tone: 'warning',
     });
   });
 });

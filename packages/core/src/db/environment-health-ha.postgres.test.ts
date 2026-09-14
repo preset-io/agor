@@ -8,7 +8,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { generateId } from '../lib/ids';
 import type { BranchID, TenantID } from '../types';
 import { createDatabase, type Database } from './client';
-import { isPostgresDatabase, update } from './database-wrapper';
+import { deleteFrom, isPostgresDatabase, update } from './database-wrapper';
 import { initializeDatabase } from './migrate';
 import {
   BranchRepository,
@@ -229,6 +229,36 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       const branch = await seedBranch(dbA, tenantId, 'starting');
       await runWithTenantDatabaseScope(dbA, tenantId, async (scoped) => {
         const health = new EnvironmentHealthRepository(scoped);
+        const unrecorded = await health.claim({
+          branchId: branch.branch_id,
+          claimToken: 'starting-network-failure',
+          leaseDurationMs: 30_000,
+          identity: { instanceId: 'daemon-a', bootId: 'boot-a' },
+        });
+        if (unrecorded.outcome !== 'claimed') throw new Error('Expected startup failure claim');
+        expect(
+          await health.commit({
+            branchId: branch.branch_id,
+            claimToken: unrecorded.claim.claim_token,
+            environmentGeneration: unrecorded.claim.environment_generation,
+            observation: {
+              status: 'unhealthy',
+              message: 'Health endpoint unreachable',
+              recordWhileStarting: false,
+            },
+          })
+        ).toEqual({
+          outcome: 'committed',
+          mutated: false,
+          stateChanged: false,
+          environmentStatus: 'starting',
+        });
+        expect(
+          (await new BranchRepository(scoped).findById(branch.branch_id))?.environment_instance
+            ?.last_health_check
+        ).toBeUndefined();
+        expect(await health.release(branch.branch_id, unrecorded.claim.claim_token)).toBe(true);
+
         const first = await health.claim({
           branchId: branch.branch_id,
           claimToken: 'starting-owner',
@@ -359,7 +389,9 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       });
 
       await runWithTenantDatabaseScope(dbA, tenantA, async (scoped) => {
-        await new BranchRepository(scoped).delete(active.branch_id);
+        // This fixture simulates a row already finalized by permanent deletion.
+        // Public metadata-only deletion is intentionally prohibited.
+        await deleteFrom(scoped, branches).where(eq(branches.branch_id, active.branch_id)).run();
         expect(
           await new EnvironmentHealthRepository(scoped).claim({
             branchId: active.branch_id,

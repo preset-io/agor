@@ -66,9 +66,8 @@ export function useSharedReactiveSession(
   // - When a tab regains focus after a long background, useAuth's
   //   visibilitychange handler may have refreshed tokens silently.
   //
-  // Without these listeners, a transient 401 surfaced during a previous
-  // `resync()` (e.g. socket reconnected before access-token replacement
-  // landed) leaves the panel stuck on a "jwt expired" banner indefinitely.
+  // Without these listeners, a transient error surfaced during a previous
+  // `resync()` can leave the panel stuck on a stale banner indefinitely.
   //
   // We retry while `state.error` is set but skip `state.terminal` errors —
   // session-removed and similar non-recoverable conditions. Otherwise a tab

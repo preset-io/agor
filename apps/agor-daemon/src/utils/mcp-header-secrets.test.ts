@@ -1,6 +1,5 @@
 import { MCP_HEADER_REDACTED_SENTINEL } from '@agor/core/tools/mcp/http-headers';
 import type { MCPServer } from '@agor/core/types';
-import jwt from 'jsonwebtoken';
 import { describe, expect, it } from 'vitest';
 import {
   redactMCPServerSecrets,
@@ -59,27 +58,17 @@ describe('MCP server secret redaction', () => {
     ).toBe(false);
   });
 
-  it('only exposes session-token secrets when explicitly scoped to the same session', () => {
-    const sessionParams = {
+  it('does not accept the removed legacy session-token strategy as authority', () => {
+    const legacyParams = {
       provider: 'socketio',
       authentication: { strategy: 'session-token' },
       session_id: 'session-a',
     } as never;
 
     expect(
-      shouldExposeMCPServerSecrets(sessionParams, {
+      shouldExposeMCPServerSecrets(legacyParams, {
         allowSessionToken: true,
         sessionId: 'session-a',
-      })
-    ).toBe(true);
-    expect(
-      shouldExposeMCPServerSecretsForSessionToken(sessionParams, { sessionId: 'session-a' })
-    ).toBe(true);
-
-    expect(
-      shouldExposeMCPServerSecrets(sessionParams, {
-        allowSessionToken: true,
-        sessionId: 'session-b',
       })
     ).toBe(false);
   });
@@ -91,7 +80,9 @@ describe('MCP server secret redaction', () => {
         strategy: 'jwt',
         payload: {
           type: 'executor-session',
+          purpose: 'executor-task',
           session_id: 'session-a',
+          task_id: 'task-a',
         },
       },
       session_id: 'session-a',
@@ -113,39 +104,48 @@ describe('MCP server secret redaction', () => {
         sessionId: 'session-b',
       })
     ).toBe(false);
+
+    expect(
+      shouldExposeMCPServerSecrets(
+        { ...executorParams, session_id: 'caller-supplied-other-session' } as never,
+        { allowSessionToken: true, sessionId: 'session-a' }
+      )
+    ).toBe(false);
   });
 
-  it('falls back to decoding executor-session JWT claims when Feathers params lost payload metadata', () => {
-    const accessToken = jwt.sign(
-      {
-        type: 'executor-session',
-        purpose: 'executor-task',
-        session_id: 'session-a',
-      },
-      'test-secret'
-    );
-    const executorParams = {
+  it('does not expose secrets to taskless executor command credentials', () => {
+    expect(
+      shouldExposeMCPServerSecretsForSessionToken(
+        {
+          provider: 'socketio',
+          authentication: {
+            strategy: 'jwt',
+            payload: {
+              type: 'executor-session',
+              purpose: 'executor-command',
+              session_id: 'branch-clean',
+              branch_id: 'branch-a',
+            },
+          },
+        } as never,
+        { sessionId: 'branch-clean' }
+      )
+    ).toBe(false);
+  });
+
+  it('rejects a raw bearer when verified payload metadata is absent', () => {
+    const params = {
       provider: 'socketio',
       authentication: {
         strategy: 'jwt',
-        accessToken,
+        accessToken: 'caller-bearer',
       },
     } as never;
 
     expect(
-      shouldExposeMCPServerSecrets(executorParams, {
+      shouldExposeMCPServerSecrets(params, {
         allowSessionToken: true,
         sessionId: 'session-a',
-      })
-    ).toBe(true);
-    expect(
-      shouldExposeMCPServerSecretsForSessionToken(executorParams, { sessionId: 'session-a' })
-    ).toBe(true);
-
-    expect(
-      shouldExposeMCPServerSecrets(executorParams, {
-        allowSessionToken: true,
-        sessionId: 'session-b',
       })
     ).toBe(false);
   });
@@ -158,6 +158,7 @@ describe('MCP server secret redaction', () => {
           strategy: 'jwt',
           payload: {
             type: 'executor-session',
+            purpose: 'executor-task',
             session_id: 'session-a',
           },
         },

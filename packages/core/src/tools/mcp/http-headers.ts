@@ -37,10 +37,44 @@ export function isReservedMCPCustomHeaderName(name: string): boolean {
   return RESERVED_MCP_CUSTOM_HEADER_NAMES.has(name.toLowerCase());
 }
 
+export interface DuplicateMCPCustomHeaderName {
+  first: string;
+  duplicate: string;
+}
+
+/**
+ * Find a pair of names which Fetch would collapse into one case-insensitive
+ * header. Keeping both would make JSON insertion order security-relevant: the
+ * wire value becomes a comma-joined sequence whose order can change while a
+ * naively sorted fingerprint stays the same.
+ */
+export function findDuplicateMCPCustomHeaderName(
+  headers?: Record<string, unknown>
+): DuplicateMCPCustomHeaderName | undefined {
+  if (!headers) return undefined;
+  const names = new Map<string, string>();
+  for (const rawName of Object.keys(headers)) {
+    const name = rawName.trim();
+    if (!name) continue;
+    const canonicalName = name.toLowerCase();
+    const first = names.get(canonicalName);
+    if (first !== undefined) return { first, duplicate: rawName };
+    names.set(canonicalName, rawName);
+  }
+  return undefined;
+}
+
 export function normalizeMCPCustomHeaders(
   headers?: Record<string, string>
 ): Record<string, string> | undefined {
   if (!headers) return undefined;
+
+  const duplicate = findDuplicateMCPCustomHeaderName(headers);
+  if (duplicate) {
+    throw new Error(
+      `Duplicate custom HTTP header names are not allowed: ${duplicate.first} and ${duplicate.duplicate}`
+    );
+  }
 
   const normalized: Record<string, string> = {};
   for (const [rawName, rawValue] of Object.entries(headers)) {
@@ -52,6 +86,20 @@ export function normalizeMCPCustomHeaders(
   }
 
   return Object.keys(normalized).length > 0 ? normalized : undefined;
+}
+
+/**
+ * Canonical representation shared by outbound normalization, configuration
+ * mutation detection, and OAuth grant fingerprints.
+ */
+export function canonicalMCPCustomHeaderEntries(
+  headers?: Record<string, string>
+): ReadonlyArray<readonly [string, string]> {
+  return Object.entries(normalizeMCPCustomHeaders(headers) ?? {})
+    .map(([name, value]) => [name.toLowerCase(), value] as const)
+    .sort(([aName, aValue], [bName, bValue]) =>
+      aName === bName ? aValue.localeCompare(bValue) : aName.localeCompare(bName)
+    );
 }
 
 export function redactMCPCustomHeaders(

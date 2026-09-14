@@ -6,6 +6,7 @@ export default defineConfig({
     index: 'src/index.ts',
     'analytics/index': 'src/analytics/index.ts', // Backend analytics logger and plugin resolution
     'telemetry/index': 'src/telemetry/index.ts', // Community install telemetry helpers
+    'tracing/datadog': 'src/tracing/datadog.ts', // Shared Datadog tracer type + optional-peer resolver
     'types/index': 'src/types/index.ts',
     'realtime/index': 'src/realtime/index.ts',
     'executor-protocol': 'src/executor-protocol.ts',
@@ -17,6 +18,7 @@ export default defineConfig({
     'git/exec': 'src/git/exec.ts',
     'api/index': 'src/api/index.ts',
     'codex/auth-file': 'src/codex/auth-file.ts', // Pure Codex auth.json schema inspection
+    'codex/credential-file': 'src/codex/credential-file.ts', // Node-only race-safe Codex credential I/O
     'config/index': 'src/config/index.ts',
     'config/agor-yml': 'src/config/agor-yml.ts', // Node-only .agor.yml file I/O
     'config/browser': 'src/config/browser.ts', // Browser-safe config utilities
@@ -24,6 +26,8 @@ export default defineConfig({
     'feathers/index': 'src/feathers/index.ts', // FeathersJS runtime re-exports
     'lib/feathers-validation': 'src/lib/feathers-validation.ts', // FeathersJS query validation schemas
     'lib/validation': 'src/lib/validation.ts', // Node-only filesystem validation for executors
+    'ids/index': 'src/lib/ids.ts', // Canonical Node UUIDv7 generation and ID utilities
+    'ids/browser': 'src/lib/ids.browser.ts', // Browser-safe UUIDv7 generation via Web Crypto
     'templates/handlebars-helpers': 'src/templates/handlebars-helpers.ts', // Handlebars helpers
     'templates/session-context': 'src/templates/session-context.ts', // Agor system prompt rendering
     'templates/spawn-subsession-template': 'src/templates/spawn-subsession-template.ts', // Spawn-subsession meta-prompt
@@ -31,6 +35,7 @@ export default defineConfig({
     'templates/zone-trigger-context': 'src/templates/zone-trigger-context.ts', // Canonical zone-trigger context builder
     'environment/variable-resolver': 'src/environment/variable-resolver.ts', // Environment variable resolution
     'environment/render-snapshot': 'src/environment/render-snapshot.ts', // v2 branch env snapshot rendering
+    'environment/access-urls': 'src/environment/access-urls.ts', // Browser-safe command result contract
     'environment/webhook': 'src/environment/webhook.ts', // Managed environment webhook execution policy
     'utils/errors': 'src/utils/errors.ts', // Error handling and formatting utilities
     'utils/url': 'src/utils/url.ts', // Shared URL validation helpers
@@ -69,6 +74,7 @@ export default defineConfig({
     'mcp/member-policy': 'src/mcp/member-policy.ts', // Browser-safe mcp_member_policy predicates (no scoping deps)
     'gateway/index': 'src/gateway/index.ts', // Gateway platform connectors (Slack, etc.)
     'gateway/connectors/slack-manifest': 'src/gateway/connectors/slack-manifest.ts', // Browser-safe Slack manifest/scope derivation (no connector deps)
+    'gateway/discord-setup': 'src/gateway/connectors/discord-setup.ts', // Browser-safe Discord setup artifact
     'yaml/index': 'src/yaml/index.ts', // Browser-safe js-yaml re-export
     'knowledge/index': 'src/knowledge/index.ts', // Knowledge editing helpers
     'mcp-catalog/index': 'src/mcp-catalog/index.ts', // MCP marketplace catalog: the checked-in file, and the connect probe
@@ -111,5 +117,11 @@ export default defineConfig({
     // The curated catalog overlay is data, not code — tsup would not emit it.
     cpSync('src/mcp-catalog/curated.yaml', 'dist/mcp-catalog/curated.yaml');
     console.log('✅ Copied curated.yaml to dist/');
+
+    // Keep the versioned password corpus as one runtime asset instead of
+    // duplicating ten thousand literals into every bundled Node entry point.
+    cpSync('src/config/password-blocklist-v1.txt', 'dist/config/password-blocklist-v1.txt');
+    cpSync('src/config/password-blocklist-v1.LICENSE', 'dist/config/password-blocklist-v1.LICENSE');
+    console.log('✅ Copied offline password blocklist and license to dist/');
   },
 });

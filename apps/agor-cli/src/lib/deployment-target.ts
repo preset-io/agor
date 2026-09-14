@@ -1,4 +1,10 @@
-import { loadConfig, requireDeploymentId, resolveDaemonUrl } from '@agor/core/config';
+import { access } from 'node:fs/promises';
+import {
+  getConfigPath,
+  loadConfig,
+  requireDeploymentId,
+  resolveDaemonUrl,
+} from '@agor/core/config';
 import { normalizeHttpBaseUrl } from '@agor/core/utils/url';
 import { getApiKeyFromEnv } from '@agor-live/client';
 import { loadToken } from './auth.js';
@@ -31,6 +37,16 @@ export async function resolveConnectedDeploymentTarget(): Promise<DeploymentTarg
 
 /** Resolve the daemon owned by this host's effective local configuration. */
 export async function resolveLocalDeploymentTarget(): Promise<DeploymentTarget> {
+  const configPath = getConfigPath();
+  try {
+    await access(configPath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      throw new Error(`No local config found at ${configPath}. Run agor init.`);
+    }
+    throw error;
+  }
+
   const config = await loadConfig();
   return {
     url: resolveDaemonUrl(config),

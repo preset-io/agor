@@ -19,7 +19,8 @@ workspace and open a fresh launch link. The UI appends a `return_to` query
 parameter containing the current Agor path, so launch providers can preserve
 deep links such as `/ui/s/<session>/` when issuing a fresh launch code. If the
 field is omitted, the normal local username/password login screen remains
-unchanged.
+unchanged. When external identity authority disables local authentication, no
+local-login fallback is offered.
 
 ## Configuration
 
@@ -63,6 +64,44 @@ external_launch:
   # an opaque return context for direct-host entry. Default: return_host.
   return_host_param: return_host
 ```
+
+### External user and role authority
+
+`external_launch` is only an authentication/provisioning mechanism by default.
+Deployments whose issuer also owns users and roles opt into the separate,
+fail-closed authority contract:
+
+```yaml
+identity:
+  user_lifecycle: external
+  role_authority: claims
+  local_auth: disabled
+  external:
+    provider: external_launch
+    provisioning: jit
+```
+
+Verified launches remain able to JIT-create a missing local projection and
+synchronize JWT-owned email, name, avatar, execution-home key, and role. The
+sync happens at successful launch, not on every request. Ordinary REST,
+Socket.IO, CLI, MCP, admin, and local-password paths cannot create/delete users
+or edit those fields. Preferences, onboarding, agentic-tool credentials and
+defaults, environment variables, API keys, and MCP selection/OAuth remain
+Agor-owned.
+
+The daemon stores the trusted `(tenant, provider, issuer, subject)` binding in
+a tenant-owned relation with database uniqueness enforcement. PostgreSQL JIT
+projection runs in one tenant-scoped transaction and serializes a subject
+across replicas; the JSON copy on `users.data.external_identities` remains a
+compatibility and audit cache. Execution-home keys are also unique per tenant,
+so a claim cannot route two users into the same delegated credential context.
+
+Claims roles are required and exact in this mode. `allow_admin_roles` and
+`execution.allow_superadmin` remain explicit acceptance gates; disallowed roles
+fail the launch rather than being downgraded. Omitting `identity` preserves
+local behavior. External deactivation/revocation is not part of this first
+contract: the provider can prevent a new launch, but existing Agor credentials
+are not synchronized or revoked yet.
 
 For local development only, a symmetric assertion secret can be used:
 
@@ -169,9 +208,10 @@ workspace host:
 Production verification is asymmetric and fails closed:
 
 - The `none` algorithm is always rejected.
-- When verifying with `jwks_url` or `public_key`, the algorithm allow-list
-  defaults to `RS256` (override with `algorithms`), preventing algorithm
-  confusion (e.g. a public key coerced into an HS256 secret). The dev
+- `jwks_url` verification defaults to an `RS256` allow-list. Static
+  `public_key` verification derives `RS256` for RSA or the matching ES
+  algorithm for a supported EC curve; an explicit `algorithms` list must match
+  that key. Both asymmetric paths refuse HS\* algorithms, and the dev
   `dev_shared_secret` path stays HS256-only.
 - JWKS assertions must carry a `kid` that matches a signing key. A key that
   omits `use`/`alg` metadata is accepted; when either is present it must be
@@ -184,13 +224,21 @@ Production verification is asymmetric and fails closed:
 
 ## Compatibility and upgrade notes
 
-- **Non-RS256 asymmetric signing must be declared before upgrading.** Asymmetric
-  verification (`jwks_url` / `public_key`) now defaults to an `RS256`-only
-  allow-list and refuses HS\* algorithms outright. A deployment that signs
-  assertions with a different asymmetric algorithm (e.g. `RS384`, `ES256`,
-  `PS256`) and previously relied on library defaults must set `algorithms`
-  explicitly to the intended asymmetric algorithm **before** upgrading, or its
-  assertions will stop verifying.
+- **Migrate before enabling external authority.** The external-identity
+  migration creates the binding relation and makes execution-home keys unique
+  per tenant. It fails closed if legacy rows already contain conflicting
+  bindings or duplicate non-null execution-home keys; resolve that data before
+  retrying. Apply the migration before starting the new daemon binary, and
+  enable the `identity` profile only after every daemon replica runs a version
+  that maintains the binding. New daemons can discover legacy JSON links and
+  bind them transactionally on the next successful launch, but old daemons do
+  not write the new relation.
+- **Non-RS256 JWKS signing must be declared before upgrading.** `jwks_url`
+  verification defaults to an `RS256`-only allow-list and refuses HS\*
+  algorithms outright. Static `public_key` verification derives a compatible
+  RSA/EC default. A JWKS deployment that signs assertions with a different
+  asymmetric algorithm (e.g. `RS384`, `ES256`, `PS256`) must set `algorithms`
+  explicitly before upgrading.
 - **`login_redirect_url` deployments begin receiving a return-host query
   parameter.** When `login_redirect_url` is enabled, direct-host entry appends
   the configured `return_host_param` (default `return_host`) to that URL. This is

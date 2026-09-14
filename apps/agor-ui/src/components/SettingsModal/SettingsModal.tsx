@@ -11,7 +11,6 @@ import type {
   GatewayChannelCreateData,
   GatewayChannelPatchData,
   Repo,
-  TenantAgenticToolName,
   UpdateUserInput,
   User,
 } from '@agor-live/client';
@@ -22,6 +21,7 @@ import {
   BranchesOutlined,
   CloseOutlined,
   ClusterOutlined,
+  ControlOutlined,
   CreditCardOutlined,
   ExperimentOutlined,
   ExportOutlined,
@@ -30,11 +30,13 @@ import {
   MessageOutlined,
   RobotOutlined,
   TeamOutlined,
+  ThunderboltOutlined,
 } from '@ant-design/icons';
 import type { MenuProps } from 'antd';
 import { Button, Layout, Menu, Modal, Tag, theme } from 'antd';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useMCPCatalogModal } from '@/contexts/MCPCatalogModalContext';
+import { useAuthenticatedAuthorityScope } from '@/hooks/useAuthorityOperationGuard';
 import type { BranchStorageConfig } from '@/utils/branchStorage';
 import { mapToArray } from '@/utils/mapHelpers';
 import { SETTINGS_SECTIONS, type SettingsSection } from '../../hooks/useSettingsRoute';
@@ -56,9 +58,8 @@ import type { AgenticToolOption } from '../../types';
 import { BranchModal } from '../BranchModal';
 import type { BranchUpdate } from '../BranchModal/tabs/GeneralTab';
 import type { TeammateTabResult } from '../CreateDialog/tabs/TeammateTab';
-import { ToolIcon } from '../ToolIcon';
 import { AboutTab } from './AboutTab';
-import { AgenticToolsSection, TOOL_LABELS } from './AgenticToolsSection';
+import { AgenticToolsSection } from './AgenticToolsSection';
 import { AllCardsPanel } from './AllCardsPanel';
 import { ArtifactsTable } from './ArtifactsTable';
 import { BoardsTable } from './BoardsTable';
@@ -75,29 +76,9 @@ import {
 } from './SettingsDrill';
 import { type TeammateCreateProgress, TeammatesTable } from './TeammatesTable';
 import { UsersTable } from './UsersTable';
+import { WorkspacePreferencesTab } from './WorkspacePreferencesTab';
 
 const { Sider, Content } = Layout;
-
-// Each agentic tool is its own left-nav entry (mirrors User Settings' AI
-// Providers group). The nav keys are prefixed so they can be told apart from
-// section keys while sharing the same Menu.
-const AGENTIC_NAV_PREFIX = 'agentic:';
-const AGENTIC_TOOLS = Object.keys(TOOL_LABELS) as TenantAgenticToolName[];
-
-// Visually-hidden text carrying a tool's enabled/disabled state for assistive
-// tech: the sighted cue is a trailing "Enabled" tag shown only when enabled, so
-// the disabled state has no visual marker and this is its only announcement.
-const SR_ONLY_STYLE: React.CSSProperties = {
-  position: 'absolute',
-  width: 1,
-  height: 1,
-  padding: 0,
-  margin: -1,
-  overflow: 'hidden',
-  clip: 'rect(0, 0, 0, 0)',
-  whiteSpace: 'nowrap',
-  border: 0,
-};
 
 export interface SettingsModalProps {
   open: boolean;
@@ -111,10 +92,13 @@ export interface SettingsModalProps {
   onDeleteBoard?: (boardId: string) => void;
   onArchiveBoard?: (boardId: string) => void;
   onUnarchiveBoard?: (boardId: string) => void;
-  onCreateRepo?: (data: CreateRepoRequest) => unknown;
-  onCreateLocalRepo?: (data: CreateLocalRepoRequest) => void | Promise<void>;
-  onUpdateRepo?: (repoId: string, updates: Partial<Repo>) => void;
-  onDeleteRepo?: (repoId: string, cleanup: boolean) => void;
+  onCreateRepo?: (data: CreateRepoRequest, shouldApply?: () => boolean) => unknown;
+  onCreateLocalRepo?: (
+    data: CreateLocalRepoRequest,
+    shouldApply?: () => boolean
+  ) => void | Promise<void>;
+  onUpdateRepo?: (repoId: string, updates: Partial<Repo>, shouldApply?: () => boolean) => void;
+  onDeleteRepo?: (repoId: string, cleanup: boolean, shouldApply?: () => boolean) => void;
   onArchiveOrDeleteBranch?: (branchId: string, options: BranchArchiveOrDeleteOptions) => void;
   onUnarchiveBranch?: (branchId: string, options?: { boardId?: string }) => void;
   onUpdateBranch?: (branchId: string, updates: BranchUpdate) => void;
@@ -134,14 +118,25 @@ export interface SettingsModalProps {
   ) => Promise<Branch | null>;
   onStartEnvironment?: (branchId: string) => void;
   onStopEnvironment?: (branchId: string) => void;
-  onCreateUser?: (data: CreateUserInput) => void;
-  onUpdateUser?: (userId: string, updates: UpdateUserInput) => void;
-  onDeleteUser?: (userId: string) => void;
-  onCreateMCPServer?: (data: CreateMCPServerInput) => void;
-  onDeleteMCPServer?: (serverId: string) => void;
+  onCreateUser?: (data: CreateUserInput, shouldApply?: () => boolean) => void | Promise<void>;
+  onUpdateUser?: (
+    userId: string,
+    updates: UpdateUserInput,
+    shouldApply?: () => boolean
+  ) => void | Promise<void>;
+  onDeleteUser?: (userId: string, shouldApply?: () => boolean) => void | Promise<void>;
+  onCreateMCPServer?: (
+    data: CreateMCPServerInput,
+    shouldApply?: () => boolean
+  ) => void | Promise<void>;
+  onDeleteMCPServer?: (serverId: string, shouldApply?: () => boolean) => void | Promise<void>;
   onCreateGatewayChannel?: (data: GatewayChannelCreateData) => void;
-  onUpdateGatewayChannel?: (channelId: string, updates: GatewayChannelPatchData) => void;
-  onDeleteGatewayChannel?: (channelId: string) => void;
+  onUpdateGatewayChannel?: (
+    channelId: string,
+    updates: GatewayChannelPatchData,
+    shouldApply?: () => boolean
+  ) => void;
+  onDeleteGatewayChannel?: (channelId: string, shouldApply?: () => boolean) => void;
   onUpdateArtifact?: (artifactId: string, updates: Partial<Artifact>) => void;
   onDeleteArtifact?: (artifactId: string) => void;
   onCreateTeammate?: (
@@ -201,11 +196,16 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
   const cardTypeById = useAgorStore(selectCardTypeById);
   const gatewayChannelById = useAgorStore(selectGatewayChannelById);
   const artifactById = useAgorStore(selectArtifactById);
-  const agenticToolSettingsByName = useAgorStore((state) => state.agenticToolSettingsByName);
   const boardObjects = useMemo(() => mapToArray(boardObjectById), [boardObjectById]);
+  const settingsAuthority = useAuthenticatedAuthorityScope(
+    client,
+    currentUser ? `${currentUser.user_id}:${currentUser.role}` : null
+  );
 
   const { token } = theme.useToken();
-  const navigate = useNavigate();
+  // MCP config lives in the MCP Marketplace, which is now a modal (opened via
+  // this context) rather than the old /marketplace route.
+  const catalog = useMCPCatalogModal();
   const settingsSectionKeys = useMemo(() => new Set<string>(SETTINGS_SECTIONS), []);
 
   // Drill-in navigation: the Content pane swaps between a section's list view
@@ -214,15 +214,6 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
   // publishes a controller so the shared footer can drive Save/Cancel.
   const [drill, setDrill] = useState<DrillTarget | null>(null);
   const [controller, setControllerState] = useState<DrillController | null>(null);
-  // Which tool the "Agentic Tools" nav group is focused on. Defaults to the
-  // first enabled tool so the panel opens on something actionable.
-  const [selectedAgenticTool, setSelectedAgenticTool] = useState<TenantAgenticToolName | null>(
-    null
-  );
-  const activeAgenticTool =
-    selectedAgenticTool ??
-    AGENTIC_TOOLS.find((t) => agenticToolSettingsByName.get(t)?.enabled !== false) ??
-    'claude-code';
   // Mirror the controller into a ref so the leave-guard can read the latest
   // dirty flag without depending on it (keeps the guard identity stable).
   const controllerRef = useRef<DrillController | null>(null);
@@ -249,13 +240,7 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
       : null;
 
   const handleArchiveOrDeleteBranchFromDrill = useCallback(
-    async (
-      branchId: string,
-      options: {
-        metadataAction: 'archive' | 'delete';
-        filesystemAction: 'preserved' | 'cleaned' | 'deleted';
-      }
-    ) => {
+    async (branchId: string, options: BranchArchiveOrDeleteOptions) => {
       await onArchiveOrDeleteBranch?.(branchId, options);
       closeDrill();
     },
@@ -272,30 +257,25 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
 
   const handleNavClick = useCallback(
     (key: string) => {
-      // MCP server configuration lives in the MCP Marketplace (its own top-level
-      // route), not in Settings. This entry is a pointer out to it.
+      // MCP server configuration lives in the MCP Marketplace, opened as a modal
+      // (its own context) rather than a Settings section. This entry points to it.
       if (key === 'mcp-marketplace') {
-        navigate('/marketplace');
-        onClose();
+        const openIt = () => {
+          catalog?.openCatalog();
+          onClose();
+        };
+        if (drill) {
+          void confirmLeaveIfDirty().then((ok) => ok && openIt());
+        } else {
+          openIt();
+        }
         return;
       }
-      // Per-tool Agentic Tools entries route to the shared 'agentic-tools'
-      // section and set which tool's panel shows.
-      const isAgenticTool = key.startsWith(AGENTIC_NAV_PREFIX);
-      const targetSection: SettingsSection = isAgenticTool
-        ? 'agentic-tools'
-        : (key as SettingsSection);
-      if (!isAgenticTool && !settingsSectionKeys.has(key)) return;
-      const alreadyThere =
-        targetSection === activeTab &&
-        (!isAgenticTool || activeAgenticTool === key.slice(AGENTIC_NAV_PREFIX.length));
-      if (alreadyThere) return;
+      if (!settingsSectionKeys.has(key)) return;
+      if (key === activeTab) return;
       const go = () => {
         closeDrill();
-        if (isAgenticTool) {
-          setSelectedAgenticTool(key.slice(AGENTIC_NAV_PREFIX.length) as TenantAgenticToolName);
-        }
-        if (targetSection !== activeTab) onTabChange?.(targetSection);
+        onTabChange?.(key as SettingsSection);
       };
       if (drill) {
         void confirmLeaveIfDirty().then((ok) => ok && go());
@@ -304,12 +284,11 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
       }
     },
     [
-      activeAgenticTool,
       activeTab,
+      catalog,
       closeDrill,
       confirmLeaveIfDirty,
       drill,
-      navigate,
       onClose,
       onTabChange,
       settingsSectionKeys,
@@ -361,70 +340,69 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
   // policy and the servers they can already use.
   const isAdmin = hasMinimumRole(currentUser?.role, ROLES.ADMIN);
 
-  // Menu items for left sidebar navigation.
-  //
-  // People leads: access — who can see and do what — is the first thing an admin
-  // checks. Groups stays admin-only within People. Integrations is admin-only as
-  // a whole and carries the sole "Admin" cue (on the group label) so the visual
-  // marker lives in exactly one place, not repeated on panel or drill-in headers.
+  // The daemon serves the user roster to members
+  // (`ensureMinimumRole(params, ROLES.MEMBER, 'list users')`), so Users stays
+  // visible to them; UsersTable exposes only the mutations their role can
+  // perform. Viewers rank below MEMBER and get no Users entry at all.
+  const canListUsers = hasMinimumRole(currentUser?.role, ROLES.MEMBER);
+
+  // One answer for "may this role open this section", read by both the menu and
+  // renderContent, so a URL-routable section can't be reached with nothing
+  // selected in the sidebar.
+  const canSeeSection = useCallback(
+    (section: string): boolean => {
+      switch (section) {
+        case 'agentic-tools':
+        case 'gateway':
+        case 'groups':
+        case 'workspace-preferences':
+          return isAdmin;
+        case 'users':
+          return canListUsers;
+        default:
+          return true;
+      }
+    },
+    [isAdmin, canListUsers]
+  );
+
+  // Menu items for left sidebar navigation. People leads (access first), then
+  // Resources, then Integrations, then Admin.
+
   const menuItems: MenuProps['items'] = useMemo(
     () => [
-      {
-        key: 'people',
-        label: 'People',
-        type: 'group' as const,
-        children: [
-          {
-            key: 'users',
-            label: 'Users',
-            icon: <TeamOutlined />,
-          },
-          ...(isAdmin
-            ? [
-                {
-                  key: 'groups',
-                  label: 'Groups',
-                  icon: <ClusterOutlined />,
-                },
-              ]
-            : []),
-        ],
-      },
+      // People leads: who has access is the first thing an admin checks. Users
+      // is visible to any member (the daemon serves the roster to them); Groups
+      // is admin-only.
+      ...(canListUsers || isAdmin
+        ? [
+            {
+              key: 'people',
+              label: 'People',
+              type: 'group' as const,
+              children: [
+                ...(canListUsers ? [{ key: 'users', label: 'Users', icon: <TeamOutlined /> }] : []),
+                ...(isAdmin ? [{ key: 'groups', label: 'Groups', icon: <ClusterOutlined /> }] : []),
+              ],
+            },
+          ]
+        : []),
       {
         key: 'resources',
         label: 'Resources',
         type: 'group' as const,
         children: [
-          {
-            key: 'boards',
-            label: 'Boards',
-            icon: <AppstoreOutlined />,
-          },
-          {
-            key: 'repos',
-            label: 'Repositories',
-            icon: <FolderOutlined />,
-          },
-          {
-            key: 'branches',
-            label: 'Branches',
-            icon: <BranchesOutlined />,
-          },
-          {
-            key: 'teammates',
-            label: 'Teammates',
-            icon: <RobotOutlined />,
-          },
-          {
-            key: 'artifacts',
-            label: 'Artifacts',
-            icon: <ExperimentOutlined />,
-          },
+          { key: 'boards', label: 'Boards', icon: <AppstoreOutlined /> },
+          { key: 'repos', label: 'Repositories', icon: <FolderOutlined /> },
+          { key: 'branches', label: 'Branches', icon: <BranchesOutlined /> },
+          { key: 'teammates', label: 'Teammates', icon: <RobotOutlined /> },
+          { key: 'artifacts', label: 'Artifacts', icon: <ExperimentOutlined /> },
+          ...(isAdmin
+            ? [{ key: 'workspace-preferences', label: 'Preferences', icon: <ControlOutlined /> }]
+            : []),
         ],
       },
       {
-        // A non-clickable group label with two sibling entries: the type
-        // definitions and the global card list they classify.
         key: 'cards-group',
         label: (
           <span>
@@ -439,74 +417,16 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
         ),
         type: 'group' as const,
         children: [
-          {
-            key: 'card-types',
-            label: 'Card Types',
-            icon: <CreditCardOutlined />,
-          },
-          {
-            key: 'cards',
-            label: 'All Cards',
-            icon: <AppstoreOutlined />,
-          },
+          { key: 'card-types', label: 'Card Types', icon: <CreditCardOutlined /> },
+          { key: 'cards', label: 'All Cards', icon: <AppstoreOutlined /> },
         ],
       },
-      // Agentic Tools is its own group: one nav entry per tool with an
-      // enabled/disabled status dot, mirroring User Settings' AI Providers. This
-      // replaces the old nested tool-Tabs-inside-a-Tabs anti-pattern.
+      // Integrations (admin-only): Agentic Tools, the MCP Marketplace pointer,
+      // and Gateway Channels. MCP servers are configured in the Marketplace modal
+      // now, so this points out to it rather than leaving a dead end where the
+      // MCP Servers table used to be.
       ...(isAdmin
         ? [
-            {
-              key: 'agentic-tools-group',
-              label: (
-                <span>
-                  Agentic Tools{' '}
-                  <Tag style={{ marginInlineStart: token.marginXXS, fontSize: token.fontSizeSM }}>
-                    Admin
-                  </Tag>
-                </span>
-              ),
-              type: 'group' as const,
-              children: AGENTIC_TOOLS.map((tool) => {
-                const enabled = agenticToolSettingsByName.get(tool)?.enabled !== false;
-                return {
-                  key: `${AGENTIC_NAV_PREFIX}${tool}`,
-                  icon: <ToolIcon tool={tool} size={16} />,
-                  label: (
-                    <span style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%' }}>
-                      {/* flex:1 + minWidth:0 keeps the name pinned to the same
-                          left position whether or not the trailing tag renders,
-                          so the list never looks ragged. minWidth:0 is required
-                          for text-overflow to engage in a flex row; the name
-                          ellipsizes (with a title tooltip for the full name)
-                          rather than shrinking the tag or wrapping. */}
-                      <span
-                        title={TOOL_LABELS[tool]}
-                        style={{
-                          flex: 1,
-                          minWidth: 0,
-                          overflow: 'hidden',
-                          textOverflow: 'ellipsis',
-                          whiteSpace: 'nowrap',
-                        }}
-                      >
-                        {TOOL_LABELS[tool]}
-                      </span>
-                      {/* Shown only when enabled — an always-green dot read as
-                          "ready" when it only meant "not disabled" (Kasia).
-                          flexShrink:0 keeps the tag fully legible; the name gives
-                          way (ellipsis) when the row is tight, not the tag. */}
-                      {enabled && (
-                        <Tag color="success" style={{ flexShrink: 0, margin: 0 }}>
-                          Enabled
-                        </Tag>
-                      )}
-                      <span style={SR_ONLY_STYLE}>{enabled ? 'Enabled' : 'Disabled'}</span>
-                    </span>
-                  ),
-                };
-              }),
-            },
             {
               key: 'integrations',
               label: (
@@ -519,10 +439,16 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
               ),
               type: 'group' as const,
               children: [
+                ...(canSeeSection('agentic-tools')
+                  ? [
+                      {
+                        key: 'agentic-tools',
+                        label: 'Agentic Tools',
+                        icon: <ThunderboltOutlined />,
+                      },
+                    ]
+                  : []),
                 {
-                  // MCP servers are configured in the MCP Marketplace now, not
-                  // here. This entry navigates out to it rather than leaving a
-                  // dead end where the MCP Servers table used to be.
                   key: 'mcp-marketplace',
                   label: (
                     <span>
@@ -534,11 +460,9 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
                   ),
                   icon: <ApiOutlined />,
                 },
-                {
-                  key: 'gateway',
-                  label: 'Gateway Channels',
-                  icon: <MessageOutlined />,
-                },
+                ...(canSeeSection('gateway')
+                  ? [{ key: 'gateway', label: 'Gateway Channels', icon: <MessageOutlined /> }]
+                  : []),
               ],
             },
           ]
@@ -547,16 +471,10 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
         key: 'system',
         label: 'System',
         type: 'group' as const,
-        children: [
-          {
-            key: 'about',
-            label: 'About',
-            icon: <InfoCircleOutlined />,
-          },
-        ],
+        children: [{ key: 'about', label: 'About', icon: <InfoCircleOutlined /> }],
       },
     ],
-    [isAdmin, token, agenticToolSettingsByName]
+    [canSeeSection, canListUsers, isAdmin, token]
   );
 
   // The shared BranchModal, rendered in-place as the drill-in for both the
@@ -584,6 +502,10 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
 
   // Render content based on active section
   const renderContent = () => {
+    // A gated section is routable, so this is reachable by URL even with no
+    // menu entry to click. Same answer in both places.
+    if (!canSeeSection(activeTab)) return null;
+
     switch (activeTab) {
       case 'boards':
         return (
@@ -592,6 +514,7 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
             boardById={boardById}
             sessionsByBranch={sessionsByBranch}
             branchById={branchById}
+            currentUser={currentUser}
             onCreate={onCreateBoard}
             onUpdate={onUpdateBoard}
             onDelete={onDeleteBoard}
@@ -678,8 +601,16 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
             onClose={onClose}
           />
         );
+      case 'workspace-preferences':
+        return <WorkspacePreferencesTab client={client} currentUser={currentUser} />;
       case 'agentic-tools':
-        return <AgenticToolsSection client={client} tool={activeAgenticTool} />;
+        return (
+          <AgenticToolsSection
+            client={client}
+            identityKey={settingsAuthority.identityKey}
+            operationScope={settingsAuthority.operationScope}
+          />
+        );
       case 'gateway':
         return (
           <GatewayChannelsTable
@@ -740,7 +671,7 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
         },
         container: {
           padding: 0,
-          borderRadius: 8,
+          borderRadius: token.borderRadiusLG,
           overflow: 'hidden',
         },
         header: {
@@ -791,11 +722,7 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
             </div>
             <Menu
               mode="inline"
-              selectedKeys={[
-                activeTab === 'agentic-tools'
-                  ? `${AGENTIC_NAV_PREFIX}${activeAgenticTool}`
-                  : activeTab,
-              ]}
+              selectedKeys={[activeTab]}
               onClick={({ key }) => handleNavClick(key)}
               items={menuItems}
               style={{
@@ -815,5 +742,14 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
 
 export const SettingsModal: React.FC<SettingsModalProps> = (props) => {
   if (!props.open) return null;
-  return <SettingsModalContent {...props} />;
+  // Settings contains other caller-private editors (gateway credentials,
+  // environment values, selected records) besides MCP. Destroy the whole
+  // modal state tree on an in-place identity replacement. Connection and
+  // token churn for the same user deliberately retain the tree.
+  return (
+    <SettingsModalContent
+      key={props.currentUser?.user_id ?? '__no-authenticated-user__'}
+      {...props}
+    />
+  );
 };

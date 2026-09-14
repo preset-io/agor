@@ -5,6 +5,7 @@
 import type { AgorClient, Board, BoardEntityObject, BoardObject } from '@agor-live/client';
 import { useCallback, useRef } from 'react';
 import type { Node } from 'reactflow';
+import { useMutationGate } from '../../../contexts/ConnectionContext';
 import { useThemedMessage } from '../../../utils/message';
 import {
   computeLayerChanges,
@@ -25,6 +26,15 @@ interface UseBoardObjectsProps {
    *  "selected" outline. */
   activeUrlTargetArtifactId?: string | null;
   onEditMarkdown?: (objectId: string, content: string, width: number) => void;
+  /** Effective board.edit permission, resolved by the canvas. */
+  canEdit?: boolean;
+}
+
+function zonesOverlap(
+  a: Extract<BoardObject, { type: 'zone' }>,
+  b: Extract<BoardObject, { type: 'zone' }>
+): boolean {
+  return a.x < b.x + b.width && a.x + a.width > b.x && a.y < b.y + b.height && a.y + a.height > b.y;
 }
 
 export const useBoardObjects = ({
@@ -36,10 +46,16 @@ export const useBoardObjects = ({
   eraserMode = false,
   activeUrlTargetArtifactId,
   onEditMarkdown,
+  canEdit = true,
 }: UseBoardObjectsProps) => {
   // Use ref to avoid recreating callbacks when board changes
   const boardRef = useRef(board);
   boardRef.current = board;
+  const canEditRef = useRef(canEdit);
+  canEditRef.current = canEdit;
+  const mutationGate = useMutationGate();
+  const canMutateRef = useRef(mutationGate.canMutate);
+  canMutateRef.current = mutationGate.canMutate;
 
   const { showError } = useThemedMessage();
 
@@ -54,7 +70,7 @@ export const useBoardObjects = ({
   const handleUpdateObject = useCallback(
     async (objectId: string, objectData: BoardObject) => {
       const currentBoard = boardRef.current;
-      if (!currentBoard || !client) return;
+      if (!canEditRef.current || !currentBoard || !client) return false;
 
       try {
         await client.service('boards').patch(currentBoard.board_id, {
@@ -62,11 +78,14 @@ export const useBoardObjects = ({
           objectId,
           objectData,
         } as unknown as Partial<Board>);
+        return true;
       } catch (error) {
         console.error('Failed to update object:', error);
+        showError('Failed to save board object');
+        return false;
       }
     },
-    [client] // Only depend on client, not board
+    [client, showError] // Only depend on stable services, not board
   );
 
   /**
@@ -94,7 +113,7 @@ export const useBoardObjects = ({
   const reorderObject = useCallback(
     async (objectId: string, op: LayerOp) => {
       const currentBoard = boardRef.current;
-      if (!currentBoard || !client) return;
+      if (!canEditRef.current || !currentBoard || !client) return;
 
       const objects = currentBoard.objects ?? {};
       const target = objects[objectId];
@@ -135,7 +154,7 @@ export const useBoardObjects = ({
    */
   const deleteZone = useCallback(
     async (objectId: string, _deleteAssociatedSessions: boolean) => {
-      if (!board || !client) return;
+      if (!canEditRef.current || !board || !client) return;
 
       // Mark as deleted to prevent re-appearance during WebSocket updates
       deletedObjectsRef.current.add(objectId);
@@ -171,7 +190,7 @@ export const useBoardObjects = ({
   const deleteObject = useCallback(
     async (objectId: string) => {
       const currentBoard = boardRef.current;
-      if (!currentBoard || !client) return;
+      if (!canEditRef.current || !currentBoard || !client) return;
 
       // Mark as deleted to prevent re-appearance during WebSocket updates
       deletedObjectsRef.current.add(objectId);
@@ -205,7 +224,10 @@ export const useBoardObjects = ({
    */
   const deleteArtifact = useCallback(
     async (objectId: string, artifactId: string) => {
-      if (!client) return;
+      // Artifact lifecycle authorization is creator/admin based rather than
+      // board.edit based, but it still obeys the global connection/version
+      // mutation gate. The ref protects callbacks captured before reconnect.
+      if (!canMutateRef.current || !client) return;
 
       // Mark as deleted to prevent re-appearance during WebSocket updates
       deletedObjectsRef.current.add(objectId);
@@ -234,6 +256,14 @@ export const useBoardObjects = ({
   const getBoardObjectNodes = useCallback((): Node[] => {
     if (!boardObjects) return [];
 
+    const zoneEntries = Object.entries(boardObjects).filter(
+      (entry): entry is [string, Extract<BoardObject, { type: 'zone' }>] => entry[1].type === 'zone'
+    );
+    const zonePeers = zoneEntries.map(([id, zone]) => ({
+      id,
+      zIndex: sanitizeZIndex(zone.zIndex, DEFAULT_BOARD_OBJECT_Z_INDEX.zone),
+    }));
+
     return Object.entries(boardObjects)
       .filter(([, objectData]) => {
         // Filter out objects with invalid positions (prevents NaN errors in React Flow)
@@ -256,7 +286,7 @@ export const useBoardObjects = ({
             id: objectId,
             type: 'appNode',
             position: { x: objectData.x, y: objectData.y },
-            // draggable inherits from canvas-level nodesDraggable (mutationGate.canMutate)
+            draggable: canEdit,
             selectable: true,
             // Above markdown (300), below branches (500) by default.
             zIndex: sanitizeZIndex(objectData.zIndex, DEFAULT_BOARD_OBJECT_Z_INDEX.app),
@@ -273,6 +303,7 @@ export const useBoardObjects = ({
               showConsole: objectData.showConsole,
               width: objectData.width,
               height: objectData.height,
+              canEdit,
               onUpdate: handleUpdateObject,
               onDelete: deleteObject,
             },
@@ -286,9 +317,7 @@ export const useBoardObjects = ({
             id: objectId,
             type: 'artifactNode',
             position: { x: objectData.x, y: objectData.y },
-            // Locked artifacts are never draggable. Unlocked artifacts inherit
-            // from canvas-level nodesDraggable (mutationGate.canMutate).
-            ...(isLocked ? { draggable: false } : {}),
+            draggable: canEdit && !isLocked,
             selectable: true,
             zIndex: sanitizeZIndex(objectData.zIndex, DEFAULT_BOARD_OBJECT_Z_INDEX.artifact),
             className: eraserMode ? 'eraser-mode' : undefined,
@@ -300,6 +329,7 @@ export const useBoardObjects = ({
               locked: isLocked,
               x: objectData.x,
               y: objectData.y,
+              canEdit,
               isActiveUrlTarget: objectData.artifact_id === activeUrlTargetArtifactId,
               onUpdate: handleUpdateObject,
               onDeleteArtifact: deleteArtifact,
@@ -313,7 +343,7 @@ export const useBoardObjects = ({
             id: objectId,
             type: 'markdown',
             position: { x: objectData.x, y: objectData.y },
-            // draggable inherits from canvas-level nodesDraggable (mutationGate.canMutate)
+            draggable: canEdit,
             selectable: true,
             // Above zones (100), below branches (500) by default.
             zIndex: sanitizeZIndex(objectData.zIndex, DEFAULT_BOARD_OBJECT_Z_INDEX.markdown),
@@ -322,6 +352,7 @@ export const useBoardObjects = ({
               objectId,
               content: objectData.content,
               width: objectData.width,
+              canEdit,
               onUpdate: handleUpdateObject,
               onEdit: onEditMarkdown,
               onDelete: deleteObject,
@@ -349,9 +380,7 @@ export const useBoardObjects = ({
           id: objectId,
           type: 'zone',
           position: { x: objectData.x, y: objectData.y },
-          // Locked zones are never draggable. Unlocked zones inherit from
-          // canvas-level nodesDraggable (mutationGate.canMutate).
-          ...(isLocked ? { draggable: false } : {}),
+          draggable: canEdit && !isLocked,
           // Zones behind branches and comments by default; honor explicit order.
           zIndex: sanitizeZIndex(objectData.zIndex, DEFAULT_BOARD_OBJECT_Z_INDEX.zone),
           className: eraserMode ? 'eraser-mode' : undefined,
@@ -381,6 +410,23 @@ export const useBoardObjects = ({
             y: objectData.y,
             trigger: objectData.type === 'zone' ? objectData.trigger : undefined,
             pinnedItemCount,
+            canEdit,
+            overlappingZoneCount:
+              objectData.type === 'zone'
+                ? zoneEntries.filter(
+                    ([peerId, peer]) => peerId !== objectId && zonesOverlap(objectData, peer)
+                  ).length
+                : 0,
+            layerAvailability:
+              objectData.type === 'zone'
+                ? (['front', 'forward', 'backward', 'back'] as const).reduce(
+                    (availability, op) => {
+                      availability[op] = computeLayerChanges(op, objectId, zonePeers).length > 0;
+                      return availability;
+                    },
+                    {} as Record<LayerOp, boolean>
+                  )
+                : undefined,
             onUpdate: handleUpdateObject,
             onDelete: deleteZone,
             onReorder: reorderObject,
@@ -398,6 +444,7 @@ export const useBoardObjects = ({
     eraserMode,
     activeUrlTargetArtifactId,
     onEditMarkdown,
+    canEdit,
   ]);
 
   /**
@@ -406,7 +453,7 @@ export const useBoardObjects = ({
   const addZoneNode = useCallback(
     async (x: number, y: number) => {
       const currentBoard = boardRef.current;
-      if (!currentBoard || !client) return;
+      if (!canEditRef.current || !currentBoard || !client) return;
 
       const objectId = `zone-${Date.now()}`;
       const width = 400;
@@ -419,7 +466,7 @@ export const useBoardObjects = ({
           id: objectId,
           type: 'zone',
           position: { x, y },
-          // draggable inherits from canvas-level nodesDraggable (mutationGate.canMutate)
+          draggable: canEdit,
           zIndex: DEFAULT_BOARD_OBJECT_Z_INDEX.zone, // Zones behind branches and comments
           style: {
             width,
@@ -431,6 +478,7 @@ export const useBoardObjects = ({
             width,
             height,
             color: undefined, // Will use theme default (colorBorder)
+            canEdit,
             onUpdate: handleUpdateObject,
           },
         },
@@ -457,7 +505,7 @@ export const useBoardObjects = ({
         setNodes((nodes) => nodes.filter((n) => n.id !== objectId));
       }
     },
-    [client, setNodes, handleUpdateObject] // Removed board dependency
+    [canEdit, client, setNodes, handleUpdateObject] // Removed board dependency
   );
 
   /**
@@ -466,7 +514,8 @@ export const useBoardObjects = ({
   const batchUpdateObjectPositions = useCallback(
     async (updates: Record<string, { x: number; y: number }>) => {
       const currentBoard = boardRef.current;
-      if (!currentBoard || !client || Object.keys(updates).length === 0) return;
+      if (!canEditRef.current || !currentBoard || !client || Object.keys(updates).length === 0)
+        return;
 
       try {
         // Build objects payload with full object data + new positions

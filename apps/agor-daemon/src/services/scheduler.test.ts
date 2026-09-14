@@ -1,6 +1,7 @@
 import {
   AgenticToolPresetRepository,
   BranchRepository,
+  CapabilityPolicyRepository,
   createTenantScopedDatabaseProxy,
   generateId,
   MCPServerRepository,
@@ -16,6 +17,7 @@ import {
 import { resolveSessionDefaults } from '@agor/core/sessions';
 import type { Branch, Schedule, Session, Task, UserID } from '@agor/core/types';
 import {
+  capabilityPolicyPresetCapabilities,
   SessionStatus,
   TaskStatus,
   USER_DEFAULT_AGENTIC_CONFIGURATION,
@@ -114,7 +116,7 @@ async function seedRunnableSchedule(
     allow_concurrent_runs: false,
     agentic_tool_config: agenticToolConfig,
   });
-  return { creator, schedule };
+  return { branch, creator, schedule };
 }
 
 function createSchedulerApp(db: SchedulerDb) {
@@ -539,6 +541,144 @@ describe('scheduler HA occurrence recovery', () => {
   });
 
   dbTest(
+    'diagnoses an unusable snapshotted MCP server and does not poison future runs',
+    async ({ db }) => {
+      const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(NOW);
+      try {
+        const { creator, schedule } = await seedRunnableSchedule(
+          db,
+          { email: `scheduler-owner-${generateId()}@example.test`, name: 'Schedule creator' },
+          { agentic_tool: 'claude-code' }
+        );
+        const other = await new UsersRepository(db).create({
+          email: `scheduler-other-${generateId()}@example.test`,
+          name: 'Other owner',
+        });
+        const privateServer = await new MCPServerRepository(db).create({
+          name: `scheduler-private-${generateId()}`,
+          transport: 'stdio',
+          command: 'node',
+          args: [],
+          scope: 'session',
+          source: 'user',
+          enabled: true,
+          owner_user_id: other.user_id,
+        });
+        await new ScheduleRepository(db).update(schedule.schedule_id, {
+          mcp_server_ids: [privateServer.mcp_server_id],
+        });
+        const { app, prompt } = createSchedulerApp(db);
+        const scheduler = new SchedulerService(db, app);
+
+        await expect(
+          scheduler.executeScheduleNow({
+            scheduleId: schedule.schedule_id,
+            triggeredBy: creator.user_id,
+          })
+        ).rejects.toThrow('Scheduled occurrence initialization failed');
+
+        const [poison] = await new SessionRepository(db).findByScheduleId(schedule.schedule_id);
+        expect(poison).toMatchObject({
+          status: SessionStatus.FAILED,
+          scheduler_init_failure_code: 'mcp_server_not_usable',
+          scheduler_init_failure_stage: 'mcp_attachment',
+          scheduler_init_attempt_count: 1,
+        });
+        expect(poison.scheduler_init_retry_at).toBeUndefined();
+        expect(
+          await new SessionRepository(db).isScheduledInitializationComplete(poison.session_id)
+        ).toBe(false);
+        expect(prompt).not.toHaveBeenCalled();
+
+        await new ScheduleRepository(db).update(schedule.schedule_id, { mcp_server_ids: [] });
+        nowSpy.mockReturnValue(NOW + 60_000);
+        await expect(
+          scheduler.executeScheduleNow({
+            scheduleId: schedule.schedule_id,
+            triggeredBy: creator.user_id,
+          })
+        ).resolves.toBeDefined();
+        expect(await new SessionRepository(db).findByScheduleId(schedule.schedule_id)).toHaveLength(
+          2
+        );
+        expect(prompt).toHaveBeenCalledOnce();
+      } finally {
+        nowSpy.mockRestore();
+      }
+    }
+  );
+
+  dbTest(
+    'persists bounded retry backoff for transient prompt admission failure',
+    async ({ db }) => {
+      const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(NOW);
+      try {
+        const { creator, schedule } = await seedRunnableSchedule(
+          db,
+          { email: `scheduler-retry-${generateId()}@example.test`, name: 'Schedule creator' },
+          { agentic_tool: 'claude-code' }
+        );
+        const { app, prompt } = createSchedulerApp(db);
+        prompt.mockRejectedValueOnce(new Error('temporary prompt boundary outage'));
+        const scheduler = new SchedulerService(db, app, { tenantId: 'default' });
+
+        await expect(
+          scheduler.executeScheduleNow({
+            scheduleId: schedule.schedule_id,
+            triggeredBy: creator.user_id,
+          })
+        ).rejects.toThrow('Scheduled occurrence initialization failed');
+
+        const [session] = await new SessionRepository(db).findByScheduleId(schedule.schedule_id);
+        expect(session).toMatchObject({
+          status: SessionStatus.IDLE,
+          scheduler_init_failure_code: 'initialization_transient',
+          scheduler_init_failure_stage: 'prompt_admission',
+          scheduler_init_attempt_count: 1,
+        });
+        const retryAt = Date.parse(session.scheduler_init_retry_at!);
+        expect(retryAt).toBeGreaterThan(0);
+
+        await expect(
+          scheduler.executeScheduleNow({
+            scheduleId: schedule.schedule_id,
+            triggeredBy: creator.user_id,
+          })
+        ).rejects.toMatchObject({ code: 'schedule_initialization_retry_pending' });
+        expect(prompt).toHaveBeenCalledOnce();
+
+        await (scheduler as unknown as { tick(): Promise<unknown> }).tick();
+        expect(prompt).toHaveBeenCalledOnce();
+
+        nowSpy.mockReturnValue(retryAt);
+        const eligible = await new SessionRepository(db).findIncompleteScheduledRefs(
+          10,
+          undefined,
+          {
+            eligibleAt: retryAt,
+          }
+        );
+        expect(eligible.map((ref) => ref.session_id)).toContain(session.session_id);
+        await (
+          scheduler as unknown as {
+            recoverIncompleteSession(
+              sessionId: Session['session_id'],
+              scheduledRunAt: number,
+              now: number
+            ): Promise<void>;
+          }
+        ).recoverIncompleteSession(session.session_id, session.scheduled_run_at!, retryAt);
+        expect(prompt).toHaveBeenCalledTimes(2);
+        expect(
+          await new SessionRepository(db).isScheduledInitializationComplete(session.session_id)
+        ).toBe(true);
+      } finally {
+        nowSpy.mockRestore();
+      }
+    }
+  );
+
+  dbTest(
     'allow_concurrent_runs=false does not treat a completed no-task history row as busy',
     async ({ db }) => {
       const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(NOW);
@@ -577,6 +717,74 @@ describe('scheduler HA occurrence recovery', () => {
       }
     }
   );
+
+  dbTest('fails closed when a schedule creator loses Collaborator access', async ({ db }) => {
+    const { branch, creator: owner } = await seedRunnableSchedule(
+      db,
+      {
+        email: `scheduler-owner-${Math.random()}@example.com`,
+        name: 'Branch owner',
+      },
+      { agentic_tool: 'claude-code' }
+    );
+    const collaborator = await new UsersRepository(db).create({
+      email: `scheduler-revoked-${Math.random()}@example.com`,
+      name: 'Revoked schedule creator',
+    });
+    const policies = new CapabilityPolicyRepository(db);
+    const current = await policies.getBranchPolicy(branch.branch_id);
+    const collaboratorConfig = structuredClone(current.override_config!);
+    collaboratorConfig.access.sharing_mode = 'shared';
+    collaboratorConfig.access.entries = [
+      {
+        entry_id: generateId(),
+        principal: { principal_type: 'user', user_id: collaborator.user_id },
+        preset: 'collaborator',
+        capabilities:
+          capabilityPolicyPresetCapabilities('branch_access', 'collaborator', 'read') ?? [],
+        fs_access: 'read',
+      },
+    ];
+    const granted = await policies.replaceBranchPolicy(
+      branch.branch_id,
+      { ...current, override_config: collaboratorConfig },
+      owner.user_id
+    );
+    const schedule = await new ScheduleRepository(db).create({
+      branch_id: branch.branch_id,
+      created_by: collaborator.user_id,
+      name: 'Revoked creator schedule',
+      cron_expression: '0 * * * *',
+      timezone_mode: 'utc',
+      prompt: 'Must not run',
+      enabled: true,
+      retention: 0,
+      allow_concurrent_runs: false,
+      agentic_tool_config: { agentic_tool: 'claude-code' },
+    });
+
+    const viewerConfig = structuredClone(granted.override_config!);
+    viewerConfig.access.entries[0] = {
+      ...viewerConfig.access.entries[0],
+      preset: 'viewer',
+      capabilities: capabilityPolicyPresetCapabilities('branch_access', 'viewer') ?? [],
+      fs_access: 'none',
+    };
+    await policies.replaceBranchPolicy(
+      branch.branch_id,
+      { ...granted, override_config: viewerConfig },
+      owner.user_id
+    );
+
+    const { app, prompt } = createSchedulerApp(db);
+    await expect(
+      new SchedulerService(db, app, {}).executeScheduleNow({
+        scheduleId: schedule.schedule_id,
+        triggeredBy: collaborator.user_id,
+      })
+    ).rejects.toMatchObject<ScheduleNotReadyError>({ code: 'schedule_permission_revoked' });
+    expect(prompt).not.toHaveBeenCalled();
+  });
 
   dbTest('retention defers active overflow occurrences until they are terminal', async ({ db }) => {
     const { creator, schedule: createdSchedule } = await seedRunnableSchedule(
@@ -866,6 +1074,30 @@ describe('materializeScheduleAgenticToolConfig', () => {
       model_config: { mode: 'exact', model: 'gpt-5.4' },
     });
     expect(prompt).toHaveBeenCalledOnce();
+  });
+
+  dbTest('stamps and adopts branch SDK state for a fresh scheduled session', async ({ db }) => {
+    const { branch, creator, schedule } = await seedRunnableSchedule(
+      db,
+      {
+        email: `scheduler-sdk-home-${Date.now()}-${Math.random()}@example.com`,
+        name: 'Schedule creator',
+      },
+      { agentic_tool: 'claude-code' }
+    );
+    const { app } = createSchedulerApp(db);
+    const scheduler = new SchedulerService(db, app, { sdkHomeMode: 'per_branch' });
+
+    await scheduler.executeScheduleNow({
+      scheduleId: schedule.schedule_id,
+      triggeredBy: creator.user_id,
+    });
+
+    const [created] = await new SessionRepository(db).findByScheduleId(schedule.schedule_id);
+    expect(created.sdk_home_scope).toBe('branch');
+    await expect(new BranchRepository(db).findById(branch.branch_id)).resolves.toMatchObject({
+      sdk_home: 'per_branch',
+    });
   });
 
   dbTest(

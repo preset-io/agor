@@ -5,6 +5,13 @@ creates it once with mode `0600`. After initialization Agor does not silently re
 comments, formatting, key order, YAML anchors, read-only ConfigMaps, and infrastructure-as-code
 ownership.
 
+On POSIX systems, when Agor itself creates a missing `~/.agor` directory it gives the directory
+mode `0700`. This is a private-by-default mode-bit policy, not a claim to manage filesystem ACLs
+or Windows access controls. Agor preserves an existing directory's mode, ownership, group, ACLs,
+mount policy, and symlink layout; it does not recursively chmod or “repair” an operator-provisioned
+home. Deployments that share the home between identities must provision their intended access
+policy before starting Agor.
+
 Initialization atomically publishes `config.yaml` without replacing an existing file. The
 filesystem containing `~/.agor` must support same-directory hard links (as normal local
 filesystems do). On an unsupported filesystem, Agor fails with migration guidance rather than
@@ -38,6 +45,59 @@ agentic_tools:
     - codex
 ```
 
+Daemon-driven **Sign in with Claude** is a separate, fail-closed release
+capability. It is disabled when the key is absent or `false`; API-key setup,
+manually pasted `claude setup-token` credentials, ordinary Claude sessions, and
+disconnect/cleanup remain available.
+
+```yaml
+agentic_tools:
+  claude_subscription_oauth: true
+
+execution:
+  unix_user_mode: sandbox
+  executor_storage:
+    user_home: persistent-per-user
+  sandbox:
+    enabled: true
+    home_mode: per_user
+```
+
+Set this to `true` only after the deployment operator has confirmed an
+authorized provider/client contract for this flow, then restart every daemon
+replica with the same immutable config. Agor does not make that policy decision:
+the flag records the operator's clearance. When disabled, `/claude-auth/oauth`
+fails with `CLAUDE_SUBSCRIPTION_OAUTH_DISABLED` and the UI omits the OAuth tab.
+Topology gates still apply after authorization. This release requires the exact
+local per-user sandbox profile shown above and does not expose Claude OAuth in
+delegated, templated, simple, shared-home, disabled-sandbox, or
+`sandbox.extra_allow_write` execution. HA additionally requires the
+`shared-local` topology, durable attempts, and cross-replica home locking; only
+the contained exact-user sandbox topology satisfies all predicates. Any
+`extra_allow_write` entry disables the capability rather than attempting to
+infer whether a final writable re-bind can re-expose a hidden physical owner
+store. Independently, the sandbox resolves configured symlink aliases and
+re-applies the immutable Claude parent and
+authority-leaf masks at a physical owner-store alias exposed by such a bind, so
+other providers, API-key tasks, and terminals cannot reach a pre-existing
+managed grant. The daemon keeps the refreshable grant in the canonical per-user
+`~/.claude/.credentials.json`, refreshes it before task launch, and sends the
+runtime only the current access token. The sandbox required-binds the real
+`~/.claude` directory as a writable, immutable mountpoint at every reachable
+home alias, then masks the canonical credential plus its generation and lock
+sidecars. Daemon mutations keep those pre-created authority inodes stable so a
+live mask cannot be detached by host-side replacement; logout leaves an empty
+tombstone. Settings, plugins, projects, new files, and fork/resume state remain
+writable; Codex native auth is not masked by this change and requires separate
+parity work.
+
+For rollout, deploy/restart this version and confirm the per-user sandbox
+settings on every instance before enabling the default-off flag. For rollback,
+disable the flag and restart first; existing API keys and pasted subscription
+tokens remain available, and disabling the flag does not delete managed files.
+Rolling back to a runtime that reads the canonical file directly reintroduces
+the runtime-writer race, so drain managed-file Claude tasks before doing so.
+
 After editing this list, run `agor install --sync`. It installs the exact matching package version, removes
 unconfigured tools and packages from older Agor versions, and leaves `config.yaml` untouched. The
 packaged daemon fails before listening if any configured integration is missing or misaligned.
@@ -58,11 +118,151 @@ YAML list, including `[]` when a tool-free deployment is intentional.
 
 Supported environment overrides still win over YAML. Important examples are `PORT`,
 `DAEMON_HOST`, `DAEMON_URL`, `AGOR_JWT_SECRET`, `AGOR_MASTER_SECRET`, `AGOR_TELEMETRY`,
-`AGOR_RBAC_ENABLED`, `AGOR_UNIX_USER_MODE`, and the sandbox overrides. They are
+`AGOR_UNIX_USER_MODE`, `AGOR_SANDBOX_HOME_MODE`, and
+`AGOR_SANDBOX_SDK_HOME_MODE`. They are
 resolved in memory and never written back.
+
+Board and Branch authorization is always enabled. Omit the retired
+`execution.branch_rbac` and `AGOR_RBAC_ENABLED` switches. During the compatibility
+window, the exact value `true` remains an accepted no-op for older configuration
+management; `false` and malformed values fail startup rather than reopening the
+legacy tenant-wide access mode.
+
+`AGOR_EXECUTOR_RESPONSE_ORIGIN_URL` overrides
+`execution.executor_response.origin_url`. In Kubernetes/HA it must be the
+exact initiating replica's executor-reachable origin, not the load-balanced
+daemon Service URL.
+
+`AGOR_UNKNOWN_CONFIG_KEYS` controls what happens when `config.yaml` contains a
+key the daemon does not recognize. The default, `error`, fails closed — the safe
+choice wherever a human edits config or in CI, because a typo like
+`unix_user_mdoe` is caught instead of silently ignored. Set it to `warn` to log
+and ignore unknown keys instead. That exists for forward compatibility during
+rolling deploys and rollbacks: a config written for a newer daemon can be read
+by an older one that predates a purely **additive** key it can safely ignore
+(for example `execution.executor_response`). It is **not** safe for a key that
+changes a default or security posture the older binary must honor — those still
+require deploying the config no earlier than the daemon that understands them.
+It is env-only (there is no `config.yaml` equivalent) so a strictness switch can
+never itself be the unrecognized key, and so it persists across image rollbacks.
 
 JWT and master secrets must be stable. Prefer a deployment secret manager. If neither env nor YAML
 provides one, the daemon fails closed rather than silently rotating it.
+
+## Local password policy
+
+The effective daemon config owns local password policy. New installations materialize the
+fail-safe named profile explicitly:
+
+```yaml
+identity:
+  password_policy: secure
+```
+
+`secure` is currently the only accepted value and the default when the key is absent. It requires
+at least 15 Unicode characters, rejects values above bcrypt's 72-byte UTF-8 boundary, and rejects
+account-specific values, repeated patterns, and a versioned offline copy of SecLists' 10,000 most
+common passwords (including predictable numeric suffixes). It deliberately has no
+uppercase/digit/symbol composition rules, periodic rotation rule, or paste restriction, so
+password managers and pasted passphrases work normally. Candidate passwords are never sent to an
+external breach-checking service.
+
+There is no general `development` profile and no `AGOR_PASSWORD_POLICY` override. Development
+fixtures still get the exact `admin@agor.live` / `admin` bootstrap only when all of these are true:
+
+- `AGOR_ADMIN_PASSWORD=admin`;
+- `AGOR_ALLOW_DEVELOPMENT_DEFAULT_ADMIN=true`; and
+- `NODE_ENV` is exactly `development` (or `test` in an automated test).
+
+That exception can create only the controlled first-run admin. It does not weaken user creation,
+password reset, or password change for any account, including that admin after bootstrap. The
+daemon emits a security warning when the exception is used. Do not expose such an environment to
+an untrusted network.
+
+Policy applies when a password is newly assigned through REST, Socket.IO, CLI, MCP, direct daemon
+service calls, `agor init`, bootstrap, and loginable demo fixture creation. Existing hashes are
+grandfathered: an upgrade neither rejects startup nor prevents login with an existing weak
+password, but the next assignment must pass `secure`. An accepted password change atomically
+increments a per-user credential generation and invalidates existing browser access and refresh
+tokens without relying on replica clocks; it does not revoke separately managed API keys.
+
+Validation failures are HTTP 400 responses with a stable `data.code`:
+`PASSWORD_REQUIRED`, `PASSWORD_TOO_SHORT`, `PASSWORD_TOO_LONG`, `PASSWORD_COMMON`, or
+`PASSWORD_CONTEXT_SPECIFIC`. Responses include safe profile/minimum/maximum metadata and never the
+candidate or the deny-list. Attempts to smuggle a hash or credential-generation field have their
+own stable rejection codes. `/health.auth.passwordPolicy` exposes the same safe requirements and
+offline blocklist version for form help; server validation remains authoritative.
+
+When external identity owns the user lifecycle and local authentication is disabled, local
+password assignment is disabled instead of applying this policy. The health response omits
+password requirements and mutation attempts continue to return `IDENTITY_EXTERNALLY_MANAGED` or
+`LOCAL_AUTH_DISABLED` as appropriate. Linking an existing local user into that authority clears a
+stale local-only forced-password-change flag, so an externally authenticated user cannot be
+trapped behind a password operation the authority forbids.
+
+For rollout, add or retain `identity.password_policy: secure`. For an existing PostgreSQL
+deployment, stop every daemon and run `agor db migrate --offline-cutover --yes` before starting
+only the new cohort; SQLite applies its additive users-table credential-generation migration
+normally. Then verify the effective snapshot with `agor config --yaml`. Existing rows start at
+generation zero and no user is forced to reset. An old daemon does not understand generation
+claims and cannot provide the new race-safe revocation guarantee.
+
+For rollback to a version that predates this key, stop the new cohort before starting only old
+daemons, then remove the additive key from YAML. The older binary ignores the additive database
+column, so it may be retained for a later forward rollout, but rollback restores timestamp-only
+token invalidation and the older binary's weaker assignment behavior. Keep the window short and
+restrict password-write access during it.
+
+## Bounded executor request responses
+
+Agor's normal executor lifecycle remains autonomous and fire-and-forget. A
+smaller class of operations—file browsing and other calls whose HTTP/MCP caller
+needs a result—uses one authenticated executor-to-daemon response stream.
+Stdout and stderr are process logs only and are never parsed as result data.
+
+```yaml
+execution:
+  executor_response:
+    # Total uncompressed NDJSON response-body bytes. Default: 8 MiB.
+    max_response_bytes: 8388608
+    # In-flight waiters owned by one daemon replica. Default: 16.
+    max_active_requests: 16
+    # Request-mode timeouts in milliseconds. Default: 5 minutes.
+    timeout_ms:
+      default: 300000
+      # Optional overrides keyed by the exact executor payload command.
+      by_command:
+        branch.files.read: 60000
+
+    # Both are required before executor_command_template may launch a
+    # request-mode operation. The origin must route to this exact replica.
+    external_protocol: executor-response-v1
+    origin_url: http://daemon-0.internal:3030
+```
+
+Local subprocesses are co-located with the replica that spawned them, so they
+always call back over that replica's loopback listener — `origin_url` never
+applies to them, even when it is set. A standalone local installation therefore
+omits `origin_url` and `external_protocol` entirely. `origin_url` is the
+reachable callback address for **off-host** (templated/delegated) executors
+only, so it must route to this exact replica and never to a load-balanced
+daemon Service URL. Templated/delegated execution must declare the protocol and
+an exact reachable origin; absence fails daemon startup rather than leaving
+every request-mode operation to fail only when invoked. The protocol
+declaration is an operator assertion, so daemon and executor images must still
+come from an aligned Agor release.
+
+The response body is held only by the initiating process's bounded waiter. It
+is not relayed through Redis or recovered by another HA replica. A disconnect,
+timeout, daemon restart, or oversized result fails the request without an
+automatic retry; a user action may start a new invocation.
+
+`max_active_requests` is fail-fast admission control, not a queue. Each daemon
+replica counts its own in-memory waiters. Once the limit is reached, the daemon
+returns `EXECUTOR_RESPONSE_BUSY` before launching another executor. The user
+may retry after an existing request settles. For timeouts, a `by_command` value
+overrides that command's built-in call-specific default; otherwise the
+call-specific default wins over `timeout_ms.default`.
 
 ## Inspecting and materializing effective configuration
 
@@ -84,6 +284,133 @@ by `AgorConfig` in `packages/core/src/config/types.ts`; unknown/removed keys fai
 stamps the stable operational defaults needed for a working deployment, but deliberately does not
 materialize every optional long-tail field. Leaving those absent preserves their documented
 default-following semantics across upgrades.
+
+## Operator-configured analytics
+
+Analytics is disabled by default. It sends curated analytics events to the configured
+`stdout` (JSON) and/or `http_batch` plugins. It does **not** tag all application logs,
+enable opt-in open-source telemetry, or configure DogStatsD/APM metrics.
+
+```yaml
+analytics:
+  enabled: true
+  client: { app: agor-cloud-daemon, version: '1.0', debug: false }
+  extras:
+    environment: cloud
+    deployment: agor-cloud-production-aws-us1a
+  filters:
+    exclude_events: ['private.*']
+  plugins:
+    - type: http_batch
+      enabled: true
+      options:
+        url: https://api.segment.io/v1/batch
+        headers_from_env: { Authorization: AGOR_ANALYTICS_AUTHORIZATION }
+        flush_interval_ms: 1000
+        max_batch_size: 50
+        timeout_ms: 3000
+```
+
+Both built-in transports emit `context.app.name` from `client.app`,
+`context.app.version` from `client.version` (finite numbers become strings), and
+`context.extras` from the configured extras, or `{}` when absent. Client defaults
+remain `app: agor-daemon`, `version: dev`, `debug: false`. App/version strings must
+be nonblank and at most 256 UTF-8 bytes. Metadata is snapshotted at initialization;
+restart the daemon to apply a change.
+
+App and extras are operator-owned deployment metadata, not tenant identity.
+Callers cannot override either reserved context field. `context.tenant_id` comes
+only from the trusted ambient runtime tenant scope; it is absent outside that
+scope, even if a caller supplies one. Other caller context, event properties,
+`userId`, and `anonymousId` are preserved. Exact-name and simple `*`-glob exclusions
+run before delivery. Prototype-poison context keys are discarded before passing
+options to the analytics client.
+
+`extras` is a flat mapping with at most **32 keys**. Keys match
+`[A-Za-z0-9_][A-Za-z0-9_.-]{0,63}` (1–64 ASCII characters); `__proto__`,
+`prototype`, and `constructor` are rejected. Values are strings of at most
+**1024 UTF-8 bytes**, finite numbers, or booleans—not null, arrays, or objects.
+Only use non-secret, non-PII deployment labels. Bounds are structural validation,
+not a PII detector; operators own field selection and destination access/retention.
+
+### Segment event naming and rollout
+
+Both built-in analytics transports now emit `type: 'track'`, `event: 'agor_event'`,
+and `properties.event_type` containing the original semantic name (for example,
+`task.completed`). Community telemetry uses the same wire convention but retains
+its separate opt-in and privacy rules. The canonical original name wins over a
+caller-supplied `properties.event_type`; other properties, including nested values,
+keep their current shape. Internal event names and app analytics remain unchanged;
+`exclude_events` still matches original names, not `agor_event`.
+
+This is a **breaking outbound rename**, including stdout and non-Segment HTTP
+consumers. Segment's [Track spec](https://www.twilio.com/docs/segment/connections/spec/track)
+distinguishes the protocol `type` from the `event` name. `event_type` is not a
+listed common reserved Track property or warehouse column; validate destination-specific
+rules before rollout. Do not substitute `agor_event` for the protocol `track` type.
+
+Segment's [warehouse schema](https://www.twilio.com/docs/segment/connections/storage/warehouses/schema)
+creates event-specific tables within each source schema. New Track events therefore
+target `<source>.agor_event` in the standard warehouse mapping (alongside `tracks`).
+This does not combine sources/schemas or Identify, Page, Group, or other method tables.
+The connector flattens nested objects but generally stringifies arrays; a constant
+name does not guarantee arbitrary JSON becomes flat columns. Reserved column collisions
+(such as `id`, `event`, or `user_id`), normalized-name collisions, inferred types,
+column limits, and destination mappings still require review. Agor adds no flattening.
+
+Rollout checklist (operator work, not performed automatically):
+
+- Update destination action mappings, filters, transformations, and tracking plans
+  to accept `agor_event` and branch on `properties.event_type` for semantic actions.
+- Review downstream queries/dashboards and property types across previously separate
+  events; retain original-name Agor exclusion filters.
+- Record the cutover for every replica/source. Buffered events from an older process
+  retain the older payload; newly converted events use the new name. There is no dual-write.
+- Keep historical tables. A rename does not consolidate them; if needed, separately
+  authorize a historical UNION/view with aligned columns/types and deduplication.
+  See Segment's [historical data FAQ](https://www.twilio.com/docs/segment/connections/storage/warehouses/faq).
+- Validate destination delivery and schema after the separately authorized rollout.
+  No warehouse migration, backfill, live destination configuration, or dashboard edit
+  is included in this change.
+
+These transports use best-effort in-memory batches, not a persisted event outbox;
+failed HTTP batches are not retried. This rename does not change those guarantees
+or introduce event IDs/message IDs that the existing adapters did not send.
+
+### HTTP authentication from daemon environment
+
+`options.headers_from_env` maps HTTP header names to **environment variable names**.
+Provision the complete header value (for example, the required authorization scheme
+and token) separately in the daemon's secret environment. Do not put credentials
+in YAML, `extras`, static `headers`, URLs, or event data. No generic interpolation
+or startup config rewrite occurs. Values resolve only inside the transport at
+analytics initialization; they never enter exported/resolved config or the analytics
+SDK's plugin configuration. Rotate a credential by replacing the daemon secret and
+restarting every replica. HTTP redirects are refused.
+
+Each of `headers` and `headers_from_env` permits at most 32 entries. Header names
+are HTTP token names, at most 128 ASCII characters, excluding prototype-poison
+names (case-insensitive). Duplicate names within or across the maps are rejected
+case-insensitively. Env names match `[A-Z_][A-Z0-9_]*`, at most 128 characters.
+Names inherited by child processes (the runtime env allowlist, `LC_*`, and the
+reserved launcher namespace `AGOR_CLOUD_*`) cannot be used for analytics secrets;
+use a dedicated name such as `AGOR_ANALYTICS_AUTHORIZATION`. The daemon's minimal
+child-env allowlist withholds these dedicated names from executors and tools, and
+the executor resolved-config projection excludes analytics entirely. Do not separately
+map daemon credentials into user/tool environments. `simple` execution remains
+trusted-local execution, not filesystem or host-account isolation.
+
+Header values allow only horizontal tab and printable ASCII, at most **8192
+characters/bytes**. Env-backed values must also be present and nonblank. Invalid,
+missing, empty, or conflicting auth fails closed: analytics initialization fails,
+the daemon logs a bounded warning without credential values and continues with
+analytics disabled. Delivery failures never log raw fetch exceptions. Config shape
+validation still applies to disabled plugins, but disabled analytics/plugins never
+read or require env values. Static non-secret headers remain supported.
+
+Older runtimes reject the new config keys. Roll out an Agor runtime containing this
+contract to every replica **before** enabling these fields in deployment config;
+do not assume an older published release supports them.
 
 ## DogStatsD daemon metrics
 
@@ -148,3 +475,115 @@ signals.
 Older Agor versions reject the unknown top-level `metrics` key. During a
 mixed-version rollout, upgrade every daemon first, then add the block and
 restart the fleet.
+
+## Datadog APM (dd-trace) tracing
+
+When the daemon runs under a Datadog APM tracer — typically loaded process-wide
+by [single-step instrumentation](https://docs.datadoghq.com/tracing/trace_collection/automatic_instrumentation/single-step-apm/)
+via `NODE_OPTIONS` — HTTP, Express, Postgres, and Redis are auto-instrumented.
+FeathersJS and postgres.js are not: dd-trace ships no native plugins for
+Feathers service methods or the postgres.js driver used by Drizzle. This setting
+controls the custom Feathers, PostgreSQL and MCP layers. It adds an app-level hook that wraps each service
+method in a `feathers.request` span whose **resource** name is
+`<service>.<method>` (for example `sessions.find`), and enables the Drizzle
+`postgres.query` shim. Service spans nest under the active HTTP span, with
+their child Postgres queries beneath the method that issued them:
+
+```yaml
+metrics:
+  apm:
+    trace_services: off # off | entrypoint | full; controls Feathers + PostgreSQL + MCP tracing
+```
+
+- **`off`** (default) — all custom tracing layers are disabled; zero custom
+  tracing overhead, including no PostgreSQL shim patch or tracer resolution.
+- **`entrypoint`** — one Feathers span per top-level service request; nested service-to-service
+  fan-out is suppressed. PostgreSQL query spans are also enabled. Cheap and
+  bounded — safe to leave on in production.
+- **`full`** — a span per service-method invocation including nested calls, so
+  the full fan-out and its child queries are visible. Highest span volume (and
+  ingestion cost); PostgreSQL query spans are also enabled. Intended for active
+  investigation, not steady state.
+
+Both enabled depths add an `mcp.request` span covering MCP admission and
+protocol handling, plus one measured `mcp.tool` server-operation span per logical
+tool invocation. The service remains `agor-daemon`; the resource is the registered
+tool name. Select **All server operations** (or `mcp.tool`) on the Datadog service
+page to inspect per-tool latency distributions, throughput, errors, and time.
+The existing HTTP primary operation, `POST /mcp` resource, and Feathers spans
+are unchanged; tool spans remain nested in the same trace.
+
+Calls through `agor_execute_tool` use the registered target's resource, without
+an additional facade span. Unknown targets retain `agor_execute_tool` as a bounded
+fallback. Search and detail tools remain separate resources. `mcp.outcome` is
+`success`, `tool_error` (returned `isError: true`), or `exception`; both failure
+outcomes set the span error flag without copying error messages or stacks.
+Results and exceptions delivered to callers are unchanged.
+
+Filter transport spans by `mcp.method` to separate initialization, discovery,
+tool listing/calling, and resource methods. Method labels are bounded (`other`
+for unknown/malformed methods, `batch` for arrays); resource URIs are never tags.
+Arguments, results, credentials and user/session/tenant IDs are not added to
+these spans. Tool spans include facade argument validation but not pre-handler
+SDK validation, and end at handler completion, not SSE flush or completion of
+background work initiated by the tool. HTTP status alone does not establish
+tool success.
+
+Tracing inherits the operator's sampling settings; it does not force retention
+or add per-call logs. Aggregate logical invocations using `mcp.tool` only, not
+HTTP, transport, and nested Feathers spans together. Existing lower-layer
+instrumentation has its own error/tag policies; this does not redact all spans
+in a trace.
+
+Both enabled depths also expose capacity-related waits without per-request logs:
+
+- `postgres.transaction` covers a root transaction from acquisition through
+  commit/rollback. `db.transaction.acquire_ms` measures the interval until its
+  callback starts, including pool queueing, connection establishment, BEGIN and
+  transaction setup—not pure database lock wait. `db.pool.max` records the
+  configured connection limit. Its child `postgres.transaction.work` covers the
+  callback body. Nested savepoints are not counted as new pool acquisitions.
+- `crypto.scrypt` covers async secret-key derivation from submission through
+  completion, including native worker queueing and execution—not pure queue
+  wait. `crypto.pending_at_submit` counts other outstanding Agor derivations,
+  not all work in Node's shared pool. `crypto.in_tenant_transaction` identifies
+  derivations started inside a tenant database transaction, which can keep a
+  connection occupied while waiting. `crypto.envelope` is `legacy` or `bound`.
+  `crypto.configured_pool_size` records the startup `UV_THREADPOOL_SIZE` setting
+  (Node defaults to 4); it is not a measurement of active worker threads.
+
+These added tags contain no credentials, ciphertext, salts, bindings, or
+user/session/tenant IDs. Counts are process-wide capacity observations. The
+spans share the existing APM sampling and delivery path; a parent transaction
+and its nested work/crypto/query spans must not be summed as independent time.
+Acquisition failures have no `acquire_ms` value because the callback never ran.
+
+For long service spans with short SQL spans, inspect transaction acquisition
+first. For long transaction bodies, inspect nested crypto and other work before
+increasing either pool. PostgreSQL connections default to 10 per client unless
+`database.postgresql.pool.max` is configured. The separate libuv pool is shared
+by async crypto, filesystem and some DNS operations. A larger
+`UV_THREADPOOL_SIZE` must be set before starting Node; more workers can improve
+throughput with spare CPU/memory, but do not remove the work or its resource cost.
+
+`AGOR_APM_TRACE_SERVICES` (`off`, `entrypoint`, or `full`) overrides the YAML
+value so depth can be changed without editing config. Like all metrics
+settings, this is resolved into the daemon's immutable startup snapshot and
+takes effect on restart.
+
+The tracer is an **optional runtime dependency** that Agor never declares or
+bundles: the hook resolves `dd-trace-api` (Datadog's supported bridge for
+custom instrumentation under single-step) or `dd-trace` at runtime and no-ops
+if neither is installed. Note that single-step instrumentation does not
+necessarily make these packages resolvable from Agor's own module tree, so on
+deployments that enable `entrypoint`/`full` you may need to install one
+alongside `agor-live`:
+
+```bash
+npm install -g --ignore-scripts dd-trace-api
+```
+
+If `trace_services` is enabled but no tracer resolves, the daemon logs a
+one-time warning at startup and continues with Feathers tracing disabled — it
+never fails closed or blocks requests. This setting carries no credentials; span
+delivery is handled entirely by the ambient Datadog tracer/Agent.

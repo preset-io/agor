@@ -4,6 +4,7 @@
 
 import { PAGINATION } from '@agor/core/config';
 import {
+  KnowledgeAttributionRepository,
   KnowledgeDocumentRepository,
   KnowledgeDocumentVersionRepository,
   KnowledgeNamespaceRepository,
@@ -38,6 +39,7 @@ export class KnowledgeVersionsService extends DrizzleService<
   Partial<KnowledgeDocumentVersion>,
   KnowledgeVersionParams
 > {
+  private attribution: KnowledgeAttributionRepository;
   private versions: KnowledgeDocumentVersionRepository;
   private documents: KnowledgeDocumentRepository;
   private namespaces: KnowledgeNamespaceRepository;
@@ -52,6 +54,7 @@ export class KnowledgeVersionsService extends DrizzleService<
         max: PAGINATION.MAX_LIMIT,
       },
     });
+    this.attribution = new KnowledgeAttributionRepository(db);
     this.versions = versions;
     this.documents = new KnowledgeDocumentRepository(db);
     this.namespaces = new KnowledgeNamespaceRepository(db);
@@ -90,8 +93,9 @@ export class KnowledgeVersionsService extends DrizzleService<
     const rawLimit = (query as { $limit?: unknown }).$limit ?? query.limit;
     const limit = typeof rawLimit === 'number' && Number.isFinite(rawLimit) ? rawLimit : undefined;
     const capped = limit ? versions.slice(0, Math.min(Math.max(limit, 1), 100)) : versions;
-    if (query.include_content === true) return capped;
-    return capped.map((version) => ({ ...version, content_text: null, content_blob: null }));
+    const attributed = await this.attribution.attachToVersions(capped);
+    if (query.include_content === true) return attributed;
+    return attributed.map((version) => ({ ...version, content_text: null, content_blob: null }));
   }
 
   async get(): Promise<never> {

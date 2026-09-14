@@ -1,7 +1,8 @@
 import { ENV_VAR_SCOPES_V05, type EnvVarMetadata, type EnvVarScope } from '@agor-live/client';
 import { DeleteOutlined, PlusOutlined } from '@ant-design/icons';
 import { Alert, Button, Input, Select, Space, Table, Tooltip, Typography } from 'antd';
-import { useMemo, useState } from 'react';
+import { useLayoutEffect, useMemo, useState } from 'react';
+import { useAuthorityOperationGuard } from '@/hooks/useAuthorityOperationGuard';
 import { Tag } from './Tag';
 
 const { Text } = Typography;
@@ -26,6 +27,8 @@ export interface EnvVarEditorProps {
   loading?: Record<string, boolean>;
   /** Disable all fields */
   disabled?: boolean;
+  identityKey: string | null;
+  operationScope: readonly unknown[] | null;
 }
 
 function entryToMetadata(entry: EnvVarEntry): { set: boolean; scope: EnvVarScope } {
@@ -65,6 +68,8 @@ export const EnvVarEditor: React.FC<EnvVarEditorProps> = ({
   onDelete,
   loading = {},
   disabled = false,
+  identityKey,
+  operationScope,
 }) => {
   const [newKey, setNewKey] = useState('');
   const [newValue, setNewValue] = useState('');
@@ -72,52 +77,76 @@ export const EnvVarEditor: React.FC<EnvVarEditorProps> = ({
   const [editingKey, setEditingKey] = useState<string | null>(null);
   const [editingValue, setEditingValue] = useState('');
   const [error, setError] = useState<string | null>(null);
+  const operationGuard = useAuthorityOperationGuard(operationScope);
+
+  // biome-ignore lint/correctness/useExhaustiveDependencies: identityKey is the caller-private draft lifecycle key
+  useLayoutEffect(() => {
+    setNewKey('');
+    setNewValue('');
+    setNewScope('global');
+    setEditingKey(null);
+    setEditingValue('');
+    setError(null);
+  }, [identityKey]);
 
   const handleAdd = async () => {
-    if (!newKey.trim() || !newValue.trim()) return;
+    const operation = operationGuard.begin();
+    if (!newKey.trim() || !newValue.trim() || !operation.isCurrent()) return;
 
     try {
       setError(null);
       await onSave(newKey.trim(), newValue.trim(), newScope);
+      if (!operation.isCurrent()) return;
       setNewKey('');
       setNewValue('');
       setNewScope('global');
     } catch (err) {
+      if (!operation.isCurrent()) return;
       const message = err instanceof Error ? err.message : 'Failed to save environment variable';
       setError(message);
     }
   };
 
   const handleUpdate = async (key: string, scope: EnvVarScope) => {
-    if (!editingValue.trim()) return;
+    const operation = operationGuard.begin();
+    if (!editingValue.trim() || !operation.isCurrent()) return;
 
     try {
       setError(null);
       await onSave(key, editingValue.trim(), scope);
+      if (!operation.isCurrent()) return;
       setEditingKey(null);
       setEditingValue('');
     } catch (err) {
+      if (!operation.isCurrent()) return;
       const message = err instanceof Error ? err.message : 'Failed to update environment variable';
       setError(message);
     }
   };
 
   const handleScopeChange = async (key: string, scope: EnvVarScope) => {
-    if (!onScopeChange) return;
+    const operation = operationGuard.begin();
+    if (!onScopeChange || !operation.isCurrent()) return;
     try {
       setError(null);
       await onScopeChange(key, scope);
+      if (!operation.isCurrent()) return;
     } catch (err) {
+      if (!operation.isCurrent()) return;
       const message = err instanceof Error ? err.message : 'Failed to update scope';
       setError(message);
     }
   };
 
   const handleDeleteClick = async (key: string) => {
+    const operation = operationGuard.begin();
+    if (!operation.isCurrent()) return;
     try {
       setError(null);
       await onDelete(key);
+      if (!operation.isCurrent()) return;
     } catch (err) {
+      if (!operation.isCurrent()) return;
       const message = err instanceof Error ? err.message : 'Failed to delete environment variable';
       setError(message);
     }

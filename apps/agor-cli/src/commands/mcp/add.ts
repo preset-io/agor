@@ -3,6 +3,7 @@
  */
 
 import { normalizeMCPCustomHeaders } from '@agor/core/tools/mcp/http-headers';
+import type { CreateMCPServerInput, MCPScope, MCPTransport } from '@agor/core/types';
 import { shortId } from '@agor-live/client';
 import { Args, Flags } from '@oclif/core';
 import chalk from 'chalk';
@@ -97,14 +98,13 @@ export default class McpAdd extends BaseCommand {
       this.log(chalk.bold(`Adding MCP server ${chalk.cyan(args.name)}...`));
 
       // Build request data
-      const data: Record<string, unknown> = {
+      const data: CreateMCPServerInput & { session_id?: string } = {
         name: args.name,
         display_name: flags['display-name'],
         description: flags.description,
-        transport: flags.transport,
-        scope: flags.scope,
+        transport: flags.transport as MCPTransport,
+        scope: flags.scope as MCPScope,
         enabled: flags.enabled,
-        source: 'user',
       };
 
       // Add transport-specific config

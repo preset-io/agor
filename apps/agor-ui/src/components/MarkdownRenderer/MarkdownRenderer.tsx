@@ -61,6 +61,14 @@ interface MarkdownRendererProps {
    */
   compact?: boolean;
   /**
+   * If false, skips compact's own max-height/scroll cap (font size, line
+   * height, and heading/margin sizing still apply). Use when the caller
+   * clips or scrolls the content itself — e.g. a collapsible preview —
+   * so the two scroll containers don't nest and show a stray scrollbar
+   * inside a clipped box. Defaults to true (compact's usual behavior).
+   */
+  boundHeight?: boolean;
+  /**
    * If false, hides Streamdown controls (copy/download buttons)
    * Useful for compact contexts where controls add clutter
    */
@@ -96,6 +104,7 @@ const MarkdownRendererInner: React.FC<MarkdownRendererProps> = ({
   style,
   isStreaming = false,
   compact = false,
+  boundHeight = true,
   showControls = true,
   headingAnchors = false,
   enableVegaLite = false,
@@ -127,8 +136,7 @@ const MarkdownRendererInner: React.FC<MarkdownRendererProps> = ({
   // Compact mode: reduce spacing and size for card contexts
   const compactStyles: React.CSSProperties = compact
     ? {
-        maxHeight: '200px',
-        overflowY: 'auto',
+        ...(boundHeight ? { maxHeight: '200px', overflowY: 'auto' } : {}),
         fontSize: '12px',
         lineHeight: '1.5',
       }

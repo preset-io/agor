@@ -1,10 +1,6 @@
 import type { Application } from '@agor/core/feathers';
 import type { AuthenticatedParams, HookContext, Repo, RepoID } from '@agor/core/types';
-import {
-  generateScopedServiceToken,
-  getDaemonUrl,
-  spawnExecutorFireAndForget,
-} from './spawn-executor.js';
+import { spawnExecutorFireAndForget } from './spawn-executor.js';
 
 /**
  * Daemon-side wrappers around the executor's `git.repo.realign-origin` command —
@@ -39,17 +35,14 @@ export async function ensureRepoOriginAlignedForRepo(
   if (!repo.remote_url) return;
   if (!repo.local_path) return;
 
-  const sessionToken = generateScopedServiceToken(
-    app as unknown as { settings: { authentication?: { secret?: string } } }
-  );
-
   spawnExecutorFireAndForget(
     {
       command: 'git.repo.realign-origin',
-      sessionToken,
-      daemonUrl: getDaemonUrl(),
       params: {
         repoId: repo.repo_id,
+        repoPath: repo.local_path,
+        remoteUrl: repo.remote_url,
+        repoSlug: repo.slug,
       },
     },
     {

@@ -28,10 +28,21 @@ vi.mock('../SessionCanvas', () => ({
 // resolved. The stand-in exposes the tile as a button wired to `onChoose` so
 // tests can drive the create flow.
 vi.mock('../SessionPanel/PendingToolChoicePanel', () => ({
-  PendingToolChoicePanel: ({ onChoose }: { onChoose: (tool: string) => void }) => (
-    <button type="button" data-testid="tool-picker" onClick={() => onChoose('opencode')}>
-      tool picker
-    </button>
+  PendingToolChoicePanel: ({
+    onChoose,
+    onAdvancedSetup,
+  }: {
+    onChoose: (tool: string) => void;
+    onAdvancedSetup: () => void;
+  }) => (
+    <>
+      <button type="button" data-testid="tool-picker" onClick={() => onChoose('opencode')}>
+        tool picker
+      </button>
+      <button type="button" data-testid="advanced-setup" onClick={onAdvancedSetup}>
+        advanced setup
+      </button>
+    </>
   ),
 }));
 
@@ -75,7 +86,13 @@ vi.mock('../NewSessionButton', () => ({ NewSessionButton: () => null }));
 vi.mock('../SettingsModal', () => ({ SettingsModal: () => null, UserSettingsModal: () => null }));
 vi.mock('../BranchModal', () => ({ BranchModal: () => null }));
 vi.mock('../CreateDialog', () => ({ CreateDialog: () => null }));
-vi.mock('../NewSessionModal', () => ({ NewSessionModal: () => null }));
+vi.mock('../NewSessionModal', () => ({
+  NewSessionModal: ({ onCreate }: { onCreate: (config: unknown) => Promise<unknown> }) => (
+    <button type="button" data-testid="modal-create" onClick={() => void onCreate({})}>
+      create from modal
+    </button>
+  ),
+}));
 vi.mock('../SessionSettingsModal', () => ({ SessionSettingsModal: () => null }));
 vi.mock('../TerminalModal', () => ({ TerminalModal: () => null, WEB_TERMINAL_MIN_ROLE: 'member' }));
 vi.mock('../ThemeEditorModal', () => ({ ThemeEditorModal: () => null }));
@@ -166,7 +183,9 @@ function optimisticCreate(...ids: string[]) {
     const id = ids[Math.min(call, ids.length - 1)];
     call += 1;
     insertSession(id);
-    return id;
+    return {
+      sessionId: id,
+    };
   });
 }
 
@@ -190,7 +209,9 @@ function NavProbe() {
 
 function renderShell(
   user: User,
-  onCreateSession = vi.fn(async () => 'new-session-id'),
+  onCreateSession = vi.fn(async () => ({
+    sessionId: 'new-session-id',
+  })),
   client: unknown = null
 ) {
   // Mirror the real router: the same App element is mounted at the board,

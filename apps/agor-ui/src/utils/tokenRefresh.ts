@@ -5,7 +5,7 @@
  * Used by both useAuth and useAgorClient hooks to avoid duplication.
  */
 
-import type { AgorClient, User } from '@agor-live/client';
+import type { AuthenticatedAgorClient, User } from '@agor-live/client';
 
 export const ACCESS_TOKEN_KEY = 'agor-access-token';
 export const REFRESH_TOKEN_KEY = 'agor-refresh-token';
@@ -30,7 +30,7 @@ export interface RefreshResult {
  * @returns New access token, optional new refresh token, and user info
  */
 export async function refreshAccessToken(
-  client: AgorClient,
+  client: AuthenticatedAgorClient,
   refreshToken: string
 ): Promise<RefreshResult> {
   const result = await client.service('authentication/refresh').create({
@@ -89,7 +89,7 @@ export function clearTokens(): void {
  * @returns Refresh result with new tokens and user info
  */
 export async function refreshAndStoreTokens(
-  client: AgorClient,
+  client: AuthenticatedAgorClient,
   refreshToken: string
 ): Promise<RefreshResult> {
   const result = await refreshAccessToken(client, refreshToken);

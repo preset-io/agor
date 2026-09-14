@@ -2,6 +2,7 @@ import type { BranchRepository } from '@agor/core/db';
 import { NotFound } from '@agor/core/feathers';
 import type { BranchID, HookContext } from '@agor/core/types';
 import {
+  type RealtimeAccessBranchRepository,
   type RealtimeAccessCache,
   resolveBranchRealtimeVisibility,
 } from './realtime-access-cache.js';
@@ -25,7 +26,10 @@ export async function captureBranchRemovalRealtimeVisibility(options: {
   realtimeAccessCache?.invalidateBranch(branchId);
   const visibility = realtimeAccessCache
     ? await realtimeAccessCache.getBranchVisibility(branchId)
-    : await resolveBranchRealtimeVisibility(branchRepository, branchId);
+    : await resolveBranchRealtimeVisibility(
+        branchRepository as unknown as RealtimeAccessBranchRepository,
+        branchId
+      );
   if (!visibility) throw new NotFound(`Branch not found: ${branchId}`);
   setBranchRemovalRealtimeVisibility(params, branchId, visibility);
 }

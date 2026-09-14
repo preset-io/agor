@@ -105,6 +105,7 @@ interface MessageBlockProps {
     scope: PermissionScope
   ) => void;
   onOpenAgenticToolSettings?: (tool: AgenticToolName) => void;
+  compact?: boolean;
 }
 
 /** Get short description for a tool call (file path, pattern, command, etc.) */
@@ -337,6 +338,7 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
   teammateEmoji,
   client = null,
   onOpenAgenticToolSettings,
+  compact = false,
 }) => {
   const { token } = theme.useToken();
 
@@ -687,7 +689,7 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
       {hasTextBefore &&
         (() => {
           const avatar = isUser ? (
-            <UserIdentityAvatar user={currentUser} />
+            <UserIdentityAvatar user={currentUser} size={compact ? 32 : 40} />
           ) : (
             getAgentAvatar({ teammateEmoji, agentic_tool, isCallback, token })
           );
@@ -755,9 +757,13 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
                   // conversation viewport and push its left edge off-screen.
                   // Bound the whole row (including avatar) and allow the body
                   // to shrink; the code body then owns horizontal scrolling.
-                  root: { maxWidth: '100%' },
-                  body: { minWidth: 0 },
+                  root: { maxWidth: '100%', gap: compact ? 8 : undefined },
+                  body: { minWidth: 0, alignSelf: compact && isUser ? 'center' : undefined },
                   content: {
+                    padding: compact && isUser ? '4px 10px' : undefined,
+                    minHeight: compact && isUser ? 32 : undefined,
+                    display: compact && isUser ? 'flex' : undefined,
+                    alignItems: compact && isUser ? 'center' : undefined,
                     backgroundColor: isCallback
                       ? token.colorWarningBg
                       : isUser

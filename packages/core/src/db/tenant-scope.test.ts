@@ -108,7 +108,12 @@ describe('tenant-scoped database proxy', () => {
       transaction: vi.fn(async (callback: (tx: unknown) => Promise<unknown>) => callback(tx)),
       marker: vi.fn(() => 'base'),
     };
-    const db = createTenantScopedDatabaseProxy(base as unknown as Database);
+    // Opt out of the guard: this test asserts the proxy's routing target
+    // (base vs. active transaction) by reading it OUTSIDE a scope, which is
+    // exactly what the armed guard forbids. The guard itself is covered below.
+    const db = createTenantScopedDatabaseProxy(base as unknown as Database, {
+      requireScope: false,
+    });
 
     expect((db as unknown as { marker(): string }).marker()).toBe('base');
 
@@ -264,7 +269,13 @@ describe('tenant-scoped database proxy', () => {
       transaction: vi.fn(),
       marker: vi.fn(() => 'base'),
     };
-    const db = createTenantScopedDatabaseProxy(base as unknown as Database);
+    // Opt out of the guard: a tenant scope with an undefined tenantId is
+    // deliberately NOT sufficient for the armed guard (fail-closed: in HA that
+    // would mean no RLS tenant filter). This test only asserts the routing
+    // target for the undefined-tenant case, so it isolates from the guard.
+    const db = createTenantScopedDatabaseProxy(base as unknown as Database, {
+      requireScope: false,
+    });
 
     await runWithTenantDatabaseScope(db, undefined, async () => {
       expect((db as unknown as { marker(): string }).marker()).toBe('base');
@@ -343,6 +354,35 @@ describe('tenant-scoped database proxy', () => {
       'Missing tenant database scope for test db access'
     );
   });
+
+  it('arms the guard by default (opt-out only)', () => {
+    const base = { marker: vi.fn(() => 'base') };
+    const db = createTenantScopedDatabaseProxy(base as unknown as Database);
+    expect(() => (db as unknown as { marker(): string }).marker()).toThrow(
+      MissingTenantDatabaseScopeError
+    );
+  });
+
+  it('keeps guard options per-proxy: an opt-out wrapper cannot disarm a guarded proxy over the same base', () => {
+    const base = { marker: vi.fn(() => 'base') };
+    // Guarded proxy created first...
+    const guarded = createTenantScopedDatabaseProxy(base as unknown as Database, {
+      requireScope: true,
+      label: 'guarded db',
+    });
+    // ...then a second proxy over the SAME base handle with the guard disabled.
+    // Options must be proxy-local, so this must not retroactively disarm the
+    // first proxy (regression: options were once keyed by the base handle).
+    const unguarded = createTenantScopedDatabaseProxy(base as unknown as Database, {
+      requireScope: false,
+    });
+
+    expect(() => (unguarded as unknown as { marker(): string }).marker()).not.toThrow();
+    expect(() => (guarded as unknown as { marker(): string }).marker()).toThrow(
+      MissingTenantDatabaseScopeError
+    );
+  });
+
   it('guarded proxies allow tenant-scoped and explicit system-scoped DB access', async () => {
     const base = {
       run: vi.fn(),

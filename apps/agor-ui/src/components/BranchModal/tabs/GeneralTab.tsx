@@ -8,7 +8,7 @@ import type {
 } from '@agor-live/client';
 import { isTeammate } from '@agor-live/client';
 import { FolderOutlined, LinkOutlined } from '@ant-design/icons';
-import { Descriptions, Form, Input, Select, Space, Tooltip, Typography } from 'antd';
+import { Alert, Descriptions, Form, Input, Select, Space, Tooltip, Typography } from 'antd';
 import { useState } from 'react';
 import { useAgorStore } from '../../../store/agorStore';
 import { selectBranchById } from '../../../store/selectors';
@@ -36,6 +36,10 @@ interface GeneralTabProps {
   state: GeneralFormState;
   setField: <K extends keyof GeneralFormState>(key: K, value: GeneralFormState[K]) => void;
   onArchiveOrDelete?: (branchId: string, options: BranchArchiveOrDeleteOptions) => void;
+  /** Verifying `board.attach_branch` on a newly-picked target board. */
+  boardAttachChecking?: boolean;
+  /** Set once verification finds the caller can't move a branch onto the picked board. */
+  boardAttachError?: string | null;
 }
 
 export const GeneralTab: React.FC<GeneralTabProps> = ({
@@ -48,6 +52,8 @@ export const GeneralTab: React.FC<GeneralTabProps> = ({
   state,
   setField,
   onArchiveOrDelete,
+  boardAttachChecking = false,
+  boardAttachError = null,
 }) => {
   const [archiveDeleteModalOpen, setArchiveDeleteModalOpen] = useState(false);
   const branchById = useAgorStore(selectBranchById);
@@ -61,6 +67,20 @@ export const GeneralTab: React.FC<GeneralTabProps> = ({
   return (
     <div style={{ width: '100%', maxHeight: '70vh', overflowY: 'auto' }}>
       <Space orientation="vertical" size="large" style={{ width: '100%' }}>
+        {branch.deletion_status && (
+          <Alert
+            type={branch.deletion_status === 'deletion_failed' ? 'error' : 'info'}
+            title={
+              branch.deletion_status === 'deletion_failed'
+                ? 'Deletion failed'
+                : 'Deletion in progress'
+            }
+            description={
+              branch.deletion_error || 'The branch is unavailable until cleanup is verified.'
+            }
+          />
+        )}
+
         {/* Basic Information */}
         <Descriptions column={1} bordered size="small">
           <Descriptions.Item label="Name">
@@ -118,13 +138,22 @@ export const GeneralTab: React.FC<GeneralTabProps> = ({
             Work Context
           </Typography.Text>
           <Form layout="vertical" colon={false}>
-            <Form.Item label="Board" style={FIELD_WIDTHS.short}>
+            <Form.Item
+              label="Board"
+              style={FIELD_WIDTHS.short}
+              validateStatus={boardAttachError ? 'error' : undefined}
+              help={
+                boardAttachError ||
+                (boardAttachChecking ? 'Checking access to that board…' : undefined)
+              }
+            >
               <Select
                 value={state.boardId}
                 onChange={(value) => setField('boardId', value)}
                 placeholder="Select board (optional)..."
                 allowClear
-                disabled={!canEdit}
+                disabled={!canEdit || !!branch.deletion_status}
+                loading={boardAttachChecking}
                 options={boardSelectOptions(boards, branchById)}
               />
             </Form.Item>
@@ -135,7 +164,7 @@ export const GeneralTab: React.FC<GeneralTabProps> = ({
                 onChange={(e) => setField('issueUrl', e.target.value)}
                 placeholder="https://github.com/user/repo/issues/42"
                 prefix={<LinkOutlined />}
-                disabled={!canEdit}
+                disabled={!canEdit || !!branch.deletion_status}
               />
             </Form.Item>
 
@@ -145,7 +174,7 @@ export const GeneralTab: React.FC<GeneralTabProps> = ({
                 onChange={(e) => setField('prUrl', e.target.value)}
                 placeholder="https://github.com/user/repo/pull/43"
                 prefix={<LinkOutlined />}
-                disabled={!canEdit}
+                disabled={!canEdit || !!branch.deletion_status}
               />
             </Form.Item>
 
@@ -176,7 +205,7 @@ export const GeneralTab: React.FC<GeneralTabProps> = ({
                   onChange={(e) => setField('notes', e.target.value)}
                   placeholder="Freeform notes about this branch..."
                   rows={4}
-                  disabled={!canEdit}
+                  disabled={!canEdit || !!branch.deletion_status}
                 />
               </Form.Item>
             )}
@@ -191,7 +220,7 @@ export const GeneralTab: React.FC<GeneralTabProps> = ({
                 value={state.mcpServerIds}
                 onChange={(value) => setField('mcpServerIds', value)}
                 placeholder="Select default MCP servers..."
-                disabled={!canEdit}
+                disabled={!canEdit || !!branch.deletion_status}
               />
             </Form.Item>
           </Form>

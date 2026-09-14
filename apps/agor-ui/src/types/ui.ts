@@ -22,4 +22,6 @@ export interface CreateRepoOptions {
   silent?: boolean;
   /** Still surface failures while suppressing loading/success toasts. */
   showErrors?: boolean;
+  /** Suppress continuations once the initiating authenticated authority changes. */
+  shouldApply?: () => boolean;
 }

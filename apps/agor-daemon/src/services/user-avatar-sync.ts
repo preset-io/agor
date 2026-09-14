@@ -17,6 +17,7 @@ import type {
   UserID,
 } from '@agor/core/types';
 import { hasMinimumRole, ROLES } from '@agor/core/types';
+import { markTrustedUserMutation } from './user-mutation-trust.js';
 
 const NAMESPACE = 'user_avatars';
 const SETTINGS_KEY = 'settings';
@@ -151,8 +152,18 @@ export class UserAvatarSyncManager {
     const allUsers = await this.users.findAll();
     const slackUsers = allUsers.filter((user) => user.avatar_source === 'slack');
     await Promise.all(
-      slackUsers.map((user) =>
-        this.app.service('users').patch(
+      slackUsers.map((user) => {
+        const mutationParams = {
+          skipAvatarRefresh: true,
+          user: {
+            user_id: 'user-avatars-service',
+            email: 'user-avatars@agor.internal',
+            role: ROLES.ADMIN,
+            _isServiceAccount: true,
+          },
+        } as Params;
+        markTrustedUserMutation(mutationParams, 'avatar-sync');
+        return this.app.service('users').patch(
           user.user_id,
           {
             avatar_url: null,
@@ -161,17 +172,9 @@ export class UserAvatarSyncManager {
             avatar_source_id: null,
             avatar_synced_at: null,
           } as unknown as Partial<User>,
-          {
-            skipAvatarRefresh: true,
-            user: {
-              user_id: 'user-avatars-service',
-              email: 'user-avatars@agor.internal',
-              role: ROLES.ADMIN,
-              _isServiceAccount: true,
-            },
-          } as Params
-        )
-      )
+          mutationParams
+        );
+      })
     );
   }
 
@@ -274,6 +277,16 @@ export class UserAvatarSyncManager {
         return { matched: 1, updated: 0, skipped: 1, failed: 0, failures: [] };
       }
 
+      const mutationParams = {
+        skipAvatarRefresh: true,
+        user: {
+          user_id: 'user-avatars-service',
+          email: 'user-avatars@agor.internal',
+          role: ROLES.ADMIN,
+          _isServiceAccount: true,
+        },
+      } as Params;
+      markTrustedUserMutation(mutationParams, 'avatar-sync');
       await this.app.service('users').patch(
         user.user_id,
         {
@@ -282,19 +295,7 @@ export class UserAvatarSyncManager {
           avatar_source_id: profile.slackUserId,
           avatar_synced_at: new Date().toISOString(),
         } as Partial<User>,
-        {
-          skipAvatarRefresh: true,
-          // users.patch has field-level/profile ownership hooks even for
-          // internal calls. Avatar sync is an admin-only service action, so
-          // carry an internal service user through the hook chain rather than
-          // bypassing the users service and losing Feathers events.
-          user: {
-            user_id: 'user-avatars-service',
-            email: 'user-avatars@agor.internal',
-            role: ROLES.ADMIN,
-            _isServiceAccount: true,
-          },
-        } as Params
+        mutationParams
       );
 
       return { matched: 1, updated: 1, skipped: 0, failed: 0, failures: [] };

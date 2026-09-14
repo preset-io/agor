@@ -1,6 +1,6 @@
 import http from 'node:http';
-import { afterEach, describe, expect, it } from 'vitest';
-import { UnsafeOutboundUrlError } from '../../utils/safe-outbound-fetch';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { MCPExternalError } from './external-error';
 import { clearAllJWTTokens, fetchJWTToken, resolveMCPAuthHeaders } from './jwt-auth';
 import { __seedAuthCodeTokenCacheForTests, clearAuthCodeTokenCache } from './oauth-mcp-transport';
 
@@ -18,7 +18,22 @@ async function listen(handler: http.RequestListener): Promise<string> {
   return `http://127.0.0.1:${address.port}`;
 }
 
+async function expectJWTConfigurationRequired(operation: Promise<unknown>): Promise<void> {
+  const error = await operation.catch((caught: unknown) => caught);
+  expect(error).toBeInstanceOf(MCPExternalError);
+  expect(error).toMatchObject({
+    category: 'configuration_required',
+    action: 'review_configuration',
+    diagnostic: {
+      stage: 'jwt',
+      type: 'ConfigurationError',
+      code: 'unsafe_outbound_url',
+    },
+  });
+}
+
 afterEach(async () => {
+  vi.restoreAllMocks();
   clearAuthCodeTokenCache();
   clearAllJWTTokens();
   await Promise.all(
@@ -32,6 +47,21 @@ afterEach(async () => {
 });
 
 describe('resolveMCPAuthHeaders OAuth authority', () => {
+  it('does not probe client credentials after a tenant/user-scoped authoritative miss', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch');
+    const auth = {
+      type: 'oauth' as const,
+      oauth_client_id: 'client',
+      oauth_client_secret: 'secret',
+      oauth_token_url: 'https://provider.example/token',
+    };
+    await expect(
+      resolveMCPAuthHeaders(auth, 'https://provider.example/mcp', {
+        oauthCredentialAuthority: 'executor_repository',
+      })
+    ).resolves.toBeUndefined();
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
   it('never reads an origin-only browser OAuth cache entry', async () => {
     __seedAuthCodeTokenCacheForTests(
       'https://mcp.example.test/.well-known/oauth-protected-resource',
@@ -55,6 +85,73 @@ describe('resolveMCPAuthHeaders OAuth authority', () => {
       )
     ).resolves.toEqual({ Authorization: 'Bearer bound-token' });
   });
+
+  it('never logs an inferred or failed secret-bearing OAuth endpoint', async () => {
+    const sentinel = 'sentinel-oauth-endpoint-09e75';
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      await expect(
+        resolveMCPAuthHeaders(
+          {
+            type: 'oauth',
+            oauth_client_id: 'client',
+            oauth_client_secret: 'secret',
+          },
+          `https://${sentinel}.invalid/mcp`,
+          { disableProcessTokenCache: true }
+        )
+      ).resolves.toBeUndefined();
+
+      const logged = JSON.stringify([...log.mock.calls, ...warn.mock.calls]);
+      expect(logged).not.toContain(sentinel);
+      expect(log).toHaveBeenCalledWith('[OAuth] Token URL inferred from MCP endpoint');
+      expect(warn).toHaveBeenCalledWith('[OAuth] Token fetch failed');
+    } finally {
+      log.mockRestore();
+      warn.mockRestore();
+    }
+  });
+
+  it('propagates authority loss during client-credential fetch instead of falling back', async () => {
+    let signalRequest!: () => void;
+    const requestStarted = new Promise<void>((resolve) => {
+      signalRequest = resolve;
+    });
+    let releaseResponse!: () => void;
+    const responseReleased = new Promise<void>((resolve) => {
+      releaseResponse = resolve;
+    });
+    const tokenUrl = await listen(async (_request, response) => {
+      signalRequest();
+      await responseReleased;
+      response.writeHead(200, { 'content-type': 'application/json' });
+      response.end('{"access_token":"must-not-return","token_type":"bearer"}');
+    });
+    let current = true;
+    const resolving = resolveMCPAuthHeaders(
+      {
+        type: 'oauth',
+        oauth_token_url: tokenUrl,
+        oauth_client_id: 'client',
+        oauth_client_secret: 'secret',
+      },
+      'http://127.0.0.1/mcp',
+      {
+        allowLocalhostHttp: true,
+        disableProcessTokenCache: true,
+        assertCurrent: () => {
+          if (!current) throw new Error('request authority replaced');
+        },
+      }
+    );
+
+    await requestStarted;
+    current = false;
+    releaseResponse();
+
+    await expect(resolving).rejects.toThrow('request authority replaced');
+  });
 });
 
 describe('JWT discovery authentication outbound policy', () => {
@@ -66,9 +163,9 @@ describe('JWT discovery authentication outbound policy', () => {
     'https://169.254.169.254/latest/meta-data',
     'http://example.com/token',
   ])('rejects loopback, private, metadata, and non-HTTPS destination %s', async (api_url) => {
-    await expect(
+    await expectJWTConfigurationRequired(
       fetchJWTToken({ api_url, ...credentials }, { allowLocalhostHttp: false, cache: false })
-    ).rejects.toBeInstanceOf(UnsafeOutboundUrlError);
+    );
   });
 
   it('allows the narrow loopback development exception only when explicit', async () => {
@@ -77,9 +174,9 @@ describe('JWT discovery authentication outbound policy', () => {
       response.end('{"access_token":"development-token"}');
     });
 
-    await expect(
+    await expectJWTConfigurationRequired(
       fetchJWTToken({ api_url, ...credentials }, { allowLocalhostHttp: false, cache: false })
-    ).rejects.toBeInstanceOf(UnsafeOutboundUrlError);
+    );
     await expect(
       fetchJWTToken({ api_url, ...credentials }, { allowLocalhostHttp: true, cache: false })
     ).resolves.toBe('development-token');
@@ -91,9 +188,9 @@ describe('JWT discovery authentication outbound policy', () => {
       response.end();
     });
 
-    await expect(
+    await expectJWTConfigurationRequired(
       fetchJWTToken({ api_url, ...credentials }, { allowLocalhostHttp: true, cache: false })
-    ).rejects.toThrow('redirect is not allowed');
+    );
   });
 
   it('bounds provider responses before parsing', async () => {
@@ -102,9 +199,9 @@ describe('JWT discovery authentication outbound policy', () => {
       response.end('x'.repeat(300 * 1024));
     });
 
-    await expect(
+    await expectJWTConfigurationRequired(
       fetchJWTToken({ api_url, ...credentials }, { allowLocalhostHttp: true, cache: false })
-    ).rejects.toThrow('response is too large');
+    );
   });
 
   it('does not expose a provider response body in errors', async () => {
@@ -118,7 +215,7 @@ describe('JWT discovery authentication outbound policy', () => {
       { allowLocalhostHttp: true, cache: false }
     ).catch((cause: unknown) => cause);
     expect(error).toBeInstanceOf(Error);
-    expect((error as Error).message).toBe('JWT token fetch failed (provider_rejected, status=401)');
+    expect((error as Error).message).toContain('provider rejected');
     expect((error as Error).message).not.toContain('internal-response-secret');
     expect((error as Error).message).not.toContain('error_description');
   });

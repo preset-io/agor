@@ -1,0 +1,172 @@
+[
+  {
+    "name": "react-default",
+    "template": "react"
+  },
+  {
+    "name": "static-min",
+    "template": "static",
+    "files": {
+      "/index.html": "<!doctype html><html><body><h1>STATIC_OK</h1></body></html>"
+    }
+  },
+  {
+    "name": "react-ts-default",
+    "template": "react-ts"
+  },
+  {
+    "name": "vanilla-default",
+    "template": "vanilla"
+  },
+  {
+    "name": "vanilla-ts-default",
+    "template": "vanilla-ts"
+  },
+  {
+    "name": "vue-default",
+    "template": "vue"
+  },
+  {
+    "name": "vue3-default",
+    "template": "vue3"
+  },
+  {
+    "name": "svelte-default",
+    "template": "svelte"
+  },
+  {
+    "name": "solid-default",
+    "template": "solid"
+  },
+  {
+    "name": "angular-default",
+    "template": "angular"
+  },
+  {
+    "name": "cra18-src-explicit",
+    "template": "react",
+    "files": {
+      "/package.json": "{\"dependencies\":{\"react\":\"^18.2.0\",\"react-dom\":\"^18.2.0\"},\"main\":\"/src/index.js\"}",
+      "/public/index.html": "<!doctype html><div id=\"root\"></div>",
+      "/src/index.js": "import React from 'react';import {createRoot} from 'react-dom/client';import App from './App';createRoot(document.getElementById('root')).render(<App/>);",
+      "/src/App.js": "import React from 'react';export default function App(){return <h1>CRA18_OK</h1>}"
+    },
+    "customSetup": {
+      "entry": "/src/index.js"
+    }
+  },
+  {
+    "name": "cra18-src-implicit",
+    "template": "react",
+    "files": {
+      "/package.json": "{\"dependencies\":{\"react\":\"^18.2.0\",\"react-dom\":\"^18.2.0\"}}",
+      "/public/index.html": "<!doctype html><div id=\"root\"></div>",
+      "/src/index.js": "import React from 'react';import {createRoot} from 'react-dom/client';import App from './App';createRoot(document.getElementById('root')).render(<App/>);",
+      "/src/App.js": "import React from 'react';export default function App(){return <h1>CRA18_OK</h1>}"
+    }
+  },
+  {
+    "name": "react-env",
+    "template": "react",
+    "files": {
+      "/App.js": "export default function App(){return <h1>{process.env.REACT_APP_PROBE==='NON_SECRET_SENTINEL'?'ENV_OK':'ENV_MISSING'}</h1>}",
+      "/.env": "REACT_APP_PROBE=NON_SECRET_SENTINEL\n"
+    }
+  },
+  {
+    "name": "react-ts-env",
+    "template": "react-ts",
+    "files": {
+      "/App.tsx": "export default function App(){return <h1>{process.env.REACT_APP_PROBE==='NON_SECRET_SENTINEL'?'ENV_OK':'ENV_MISSING'}</h1>}",
+      "/.env": "REACT_APP_PROBE=NON_SECRET_SENTINEL\n"
+    }
+  },
+  {
+    "name": "react-agor-runtime",
+    "template": "react",
+    "files": {
+      "/App.js": "export default function App(){return <h1>{process.env.REACT_APP_PROBE==='NON_SECRET_SENTINEL'?'AGOR_ENV_OK':'ENV_MISSING'}</h1>}",
+      "/.env": "REACT_APP_PROBE=NON_SECRET_SENTINEL\n",
+      "/styles.css": "body{margin:0}"
+    },
+    "options": {
+      "externalResources": [
+        "data:text/javascript;base64,Ly8gYWdvci1ydW50aW1lLmpzIOKAlCBpbmplY3RlZCBieSBBZ29yIGF0IHJlbmRlciB0aW1lLiBEbyBub3QgZWRpdC4KLy8gU291cmNlOiBhcHBzL2Fnb3ItZGFlbW9uL3NyYy91dGlscy9hZ29yLXJ1bnRpbWUtc291cmNlLnRzCihmdW5jdGlvbiAoKSB7CiAgaWYgKHR5cGVvZiB3aW5kb3cgPT09ICd1bmRlZmluZWQnKSByZXR1cm47CiAgaWYgKHdpbmRvdy5fX2Fnb3JfcnVudGltZV9pbnN0YWxsZWRfXykgcmV0dXJuOwogIHdpbmRvdy5fX2Fnb3JfcnVudGltZV9pbnN0YWxsZWRfXyA9IHRydWU7CgogIHZhciBNQVhfTk9ERVMgPSA1MDsKICB2YXIgTUFYX0hUTUxfUEVSX05PREUgPSA1MDAwMDsKICB2YXIgTUFYX1RFWFRfUEVSX05PREUgPSA1MDAwOwogIHZhciBNQVhfRE9DX0hUTUwgPSAyMDAwMDA7CgogIGZ1bmN0aW9uIHNlcmlhbGl6ZUVsKGVsKSB7CiAgICB2YXIgYXR0cnMgPSB7fTsKICAgIGZvciAodmFyIGkgPSAwOyBpIDwgZWwuYXR0cmlidXRlcy5sZW5ndGg7IGkrKykgewogICAgICB2YXIgYSA9IGVsLmF0dHJpYnV0ZXNbaV07CiAgICAgIGF0dHJzW2EubmFtZV0gPSBhLnZhbHVlOwogICAgfQogICAgdmFyIGh0bWwgPSBlbC5vdXRlckhUTUwgfHwgJyc7CiAgICBpZiAoaHRtbC5sZW5ndGggPiBNQVhfSFRNTF9QRVJfTk9ERSkgewogICAgICBodG1sID0gaHRtbC5zbGljZSgwLCBNQVhfSFRNTF9QRVJfTk9ERSkgKyAnLi4uIFt0cnVuY2F0ZWRdJzsKICAgIH0KICAgIHZhciB0ZXh0ID0gKGVsLnRleHRDb250ZW50IHx8ICcnKTsKICAgIGlmICh0ZXh0Lmxlbmd0aCA+IE1BWF9URVhUX1BFUl9OT0RFKSB7CiAgICAgIHRleHQgPSB0ZXh0LnNsaWNlKDAsIE1BWF9URVhUX1BFUl9OT0RFKSArICcuLi4gW3RydW5jYXRlZF0nOwogICAgfQogICAgcmV0dXJuIHsKICAgICAgdGFnOiBlbC50YWdOYW1lID8gZWwudGFnTmFtZS50b0xvd2VyQ2FzZSgpIDogJycsCiAgICAgIGF0dHJpYnV0ZXM6IGF0dHJzLAogICAgICB0ZXh0Q29udGVudDogdGV4dCwKICAgICAgb3V0ZXJIVE1MOiBodG1sLAogICAgfTsKICB9CgogIHdpbmRvdy5hZGRFdmVudExpc3RlbmVyKCdtZXNzYWdlJywgZnVuY3Rpb24gKGV2ZW50KSB7CiAgICB2YXIgZGF0YSA9IGV2ZW50LmRhdGE7CiAgICBpZiAoIWRhdGEgfHwgdHlwZW9mIGRhdGEgIT09ICdvYmplY3QnIHx8IGRhdGEudHlwZSAhPT0gJ2Fnb3I6cXVlcnknKSByZXR1cm47CiAgICB2YXIgcmVxdWVzdElkID0gZGF0YS5yZXF1ZXN0SWQ7CiAgICB2YXIga2luZCA9IGRhdGEua2luZDsKICAgIHZhciBhcmdzID0gZGF0YS5hcmdzIHx8IHt9OwoKICAgIGZ1bmN0aW9uIHJlcGx5KHBheWxvYWQpIHsKICAgICAgdHJ5IHsKICAgICAgICB2YXIgbXNnID0geyB0eXBlOiAnYWdvcjpyZXN1bHQnLCByZXF1ZXN0SWQ6IHJlcXVlc3RJZCB9OwogICAgICAgIGZvciAodmFyIGsgaW4gcGF5bG9hZCkgewogICAgICAgICAgaWYgKE9iamVjdC5wcm90b3R5cGUuaGFzT3duUHJvcGVydHkuY2FsbChwYXlsb2FkLCBrKSkgbXNnW2tdID0gcGF5bG9hZFtrXTsKICAgICAgICB9CiAgICAgICAgbXNnLm9rID0gIXBheWxvYWQuZXJyb3I7CiAgICAgICAgLy8gZXZlbnQuc291cmNlIGlzIHRoZSBwYXJlbnQgd2luZG93LiAnKicgdGFyZ2V0T3JpZ2luIGJlY2F1c2UgdGhlCiAgICAgICAgLy8gaWZyYW1lIHJ1bnMgY3Jvc3Mtb3JpZ2luIGZyb20gYSBTYW5kcGFjayBidW5kbGVyIFVSTCB3ZSBkb24ndAogICAgICAgIC8vIGNvbnRyb2wuIFJlcGxpZXMgY2Fycnkgbm8gc2VjcmV0cyDigJQgb25seSB3aGF0ZXZlciB0aGUgaWZyYW1lJ3MKICAgICAgICAvLyBET00gYWxyZWFkeSBjb250YWlucywgd2hpY2ggdGhlIHBhcmVudCByZW5kZXJlZCBpdHNlbGYuCiAgICAgICAgaWYgKGV2ZW50LnNvdXJjZSAmJiB0eXBlb2YgZXZlbnQuc291cmNlLnBvc3RNZXNzYWdlID09PSAnZnVuY3Rpb24nKSB7CiAgICAgICAgICBldmVudC5zb3VyY2UucG9zdE1lc3NhZ2UobXNnLCAnKicpOwogICAgICAgIH0KICAgICAgfSBjYXRjaCAoZSkgewogICAgICAgIC8vIFNvdXJjZSBjbG9zZWQgb3IgdGhyb3dlZDsgbm90aGluZyB0byBkby4KICAgICAgfQogICAgfQoKICAgIHRyeSB7CiAgICAgIGlmIChraW5kID09PSAncXVlcnlfZG9tJykgewogICAgICAgIHZhciBzZWxlY3RvciA9IGFyZ3Muc2VsZWN0b3I7CiAgICAgICAgaWYgKHR5cGVvZiBzZWxlY3RvciAhPT0gJ3N0cmluZycgfHwgc2VsZWN0b3IubGVuZ3RoID09PSAwKSB7CiAgICAgICAgICByZXR1cm4gcmVwbHkoeyBlcnJvcjogJ3NlbGVjdG9yIHJlcXVpcmVkIChDU1Mgc2VsZWN0b3Igc3RyaW5nKScgfSk7CiAgICAgICAgfQogICAgICAgIHZhciBtdWx0aXBsZSA9IGFyZ3MubXVsdGlwbGUgPT09IHRydWU7CiAgICAgICAgdmFyIHJlcXVlc3RlZE1heCA9IHR5cGVvZiBhcmdzLm1heE5vZGVzID09PSAnbnVtYmVyJyA/IGFyZ3MubWF4Tm9kZXMgOiBNQVhfTk9ERVM7CiAgICAgICAgdmFyIG1heE5vZGVzID0gTWF0aC5tYXgoMSwgTWF0aC5taW4ocmVxdWVzdGVkTWF4LCBNQVhfTk9ERVMpKTsKCiAgICAgICAgdmFyIG5vZGVzOwogICAgICAgIGlmIChtdWx0aXBsZSkgewogICAgICAgICAgbm9kZXMgPSBBcnJheS5wcm90b3R5cGUuc2xpY2UuY2FsbChkb2N1bWVudC5xdWVyeVNlbGVjdG9yQWxsKHNlbGVjdG9yKSwgMCwgbWF4Tm9kZXMpOwogICAgICAgIH0gZWxzZSB7CiAgICAgICAgICB2YXIgc2luZ2xlID0gZG9jdW1lbnQucXVlcnlTZWxlY3RvcihzZWxlY3Rvcik7CiAgICAgICAgICBub2RlcyA9IHNpbmdsZSA/IFtzaW5nbGVdIDogW107CiAgICAgICAgfQogICAgICAgIHZhciBzZXJpYWxpemVkID0gW107CiAgICAgICAgZm9yICh2YXIgaSA9IDA7IGkgPCBub2Rlcy5sZW5ndGg7IGkrKykgc2VyaWFsaXplZC5wdXNoKHNlcmlhbGl6ZUVsKG5vZGVzW2ldKSk7CiAgICAgICAgcmV0dXJuIHJlcGx5KHsgcmVzdWx0OiB7IG1hdGNoZWQ6IHNlcmlhbGl6ZWQubGVuZ3RoLCBub2Rlczogc2VyaWFsaXplZCB9IH0pOwogICAgICB9CgogICAgICBpZiAoa2luZCA9PT0gJ2RvY3VtZW50X2h0bWwnKSB7CiAgICAgICAgdmFyIGh0bWwgPSAoZG9jdW1lbnQuZG9jdW1lbnRFbGVtZW50ICYmIGRvY3VtZW50LmRvY3VtZW50RWxlbWVudC5vdXRlckhUTUwpIHx8ICcnOwogICAgICAgIGlmIChodG1sLmxlbmd0aCA+IE1BWF9ET0NfSFRNTCkgewogICAgICAgICAgaHRtbCA9IGh0bWwuc2xpY2UoMCwgTUFYX0RPQ19IVE1MKSArICcuLi4gW3RydW5jYXRlZF0nOwogICAgICAgIH0KICAgICAgICByZXR1cm4gcmVwbHkoeyByZXN1bHQ6IHsgaHRtbDogaHRtbCwgbGVuZ3RoOiBodG1sLmxlbmd0aCB9IH0pOwogICAgICB9CgogICAgICByZXR1cm4gcmVwbHkoeyBlcnJvcjogJ3Vua25vd24gcXVlcnkga2luZDogJyArIFN0cmluZyhraW5kKSB9KTsKICAgIH0gY2F0Y2ggKGVycikgewogICAgICByZXR1cm4gcmVwbHkoeyBlcnJvcjogKGVyciAmJiBlcnIubWVzc2FnZSkgPyBlcnIubWVzc2FnZSA6IFN0cmluZyhlcnIpIH0pOwogICAgfQogIH0pOwoKICAvLyBBbm5vdW5jZSByZWFkaW5lc3MgdG8gdGhlIHBhcmVudCBzbyBpdCBrbm93cyB0aGUgaWZyYW1lIGlzIHdpcmVkIHVwCiAgLy8gYmVmb3JlIHNlbmRpbmcgYW55IHF1ZXJpZXMgKGF2b2lkcyBhIHJhY2Ugb24gZmlyc3QtcGFpbnQpLgogIHRyeSB7CiAgICBpZiAod2luZG93LnBhcmVudCAmJiB3aW5kb3cucGFyZW50ICE9PSB3aW5kb3cpIHsKICAgICAgd2luZG93LnBhcmVudC5wb3N0TWVzc2FnZSh7IHR5cGU6ICdhZ29yOnJlYWR5JyB9LCAnKicpOwogICAgfQogIH0gY2F0Y2ggKGUpIHsKICAgIC8qIHBhcmVudCBjbG9zZWQgKi8KICB9Cn0pKCk7Cg=="
+      ]
+    }
+  },
+  {
+    "name": "react-json-fault",
+    "template": "react",
+    "faultUrl": "https://data.jsdelivr.com/v1/package/npm/react"
+  },
+  {
+    "name": "react-csp-block",
+    "template": "react",
+    "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; frame-src 'self'; worker-src 'self' blob:"
+  },
+  {
+    "name": "react-csp-default",
+    "template": "react",
+    "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; frame-src 'self' https://*.codesandbox.io; worker-src 'self' blob:"
+  },
+  {
+    "name": "vite-react-nodebox",
+    "template": "vite-react",
+    "waitMs": 45000
+  },
+  {
+    "name": "react-json-all-metadata-fault",
+    "template": "react",
+    "faultUrls": [
+      "https://data.jsdelivr.com/v1/package/npm/react",
+      "https://unpkg.com/react@*/package.json"
+    ]
+  },
+  {
+    "name": "solid-aligned",
+    "template": "solid",
+    "customSetup": {
+      "dependencies": {
+        "solid-js": "1.9.15"
+      }
+    }
+  },
+  {
+    "name": "vue-env",
+    "template": "vue",
+    "files": {
+      "/.env": "PROBE=NON_SECRET_SENTINEL\n",
+      "/src/App.vue": "<template><h1>{{result}}</h1></template><script>export default { data(){return {result: process.env.PROBE==='NON_SECRET_SENTINEL'?'ENV_OK':'ENV_MISSING'}} }</script>"
+    }
+  },
+  {
+    "name": "svelte-env",
+    "template": "svelte",
+    "files": {
+      "/.env": "VITE_PROBE=NON_SECRET_SENTINEL\n",
+      "/App.svelte": "<script>let result;try {result=import.meta.env.VITE_PROBE==='NON_SECRET_SENTINEL'?'ENV_OK':'ENV_MISSING'}catch(e){result='ENV_ACCESS_ERROR'}</script><h1>{result}</h1>"
+    }
+  },
+  {
+    "name": "solid-env-aligned",
+    "template": "solid",
+    "customSetup": {
+      "dependencies": {
+        "solid-js": "1.9.15"
+      }
+    },
+    "files": {
+      "/.env": "VITE_PROBE=NON_SECRET_SENTINEL\n",
+      "/App.tsx": "export default function App(){let result;try {result=import.meta.env.VITE_PROBE==='NON_SECRET_SENTINEL'?'ENV_OK':'ENV_MISSING'}catch(e){result='ENV_ACCESS_ERROR'}return <h1>{result}</h1>}"
+    }
+  },
+  {
+    "name": "angular-env",
+    "template": "angular",
+    "files": {
+      "/.env": "PROBE=NON_SECRET_SENTINEL\n",
+      "/src/app/app.component.ts": "import { Component } from '@angular/core';@Component({selector:'app-root',template:'<h1>{{result}}</h1>'})export class AppComponent {result = process.env.PROBE==='NON_SECRET_SENTINEL'?'ENV_OK':'ENV_MISSING';}"
+    }
+  }
+]

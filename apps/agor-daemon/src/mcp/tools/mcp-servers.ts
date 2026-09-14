@@ -1,17 +1,25 @@
 import { NotFound } from '@agor/core/feathers';
+import { MCP_AUTH_SECRET_FIELDS, redactMCPAuthSecrets } from '@agor/core/tools/mcp/auth-secrets';
+import { redactMCPEnvSecrets } from '@agor/core/tools/mcp/env-secrets';
 import {
+  findDuplicateMCPCustomHeaderName,
   isReservedMCPCustomHeaderName,
   isValidMCPHeaderName,
+  MCP_HEADER_REDACTED_SENTINEL,
+  redactMCPCustomHeaders,
 } from '@agor/core/tools/mcp/http-headers';
 import type {
   CreateMCPServerInput,
   MCPAuth,
+  MCPAuthPatch,
+  MCPAuthRecovery,
   MCPServer,
   UpdateMCPServerInput,
 } from '@agor/core/types';
 import { hasMinimumRole, ROLES } from '@agor/core/types';
 import type { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
+import { isMCPOAuthGrantAuthorizedForServer } from '../../services/mcp-oauth-grant-authority.js';
 import { isMcpServerUsableByCaller } from '../../utils/mcp-server-authorization.js';
 import { resolveMcpServerId, resolveSessionId } from '../resolve-ids.js';
 import {
@@ -43,6 +51,7 @@ export interface McpServerSummary {
   oauth_authenticated: boolean;
   has_custom_headers: boolean;
   enabled: boolean;
+  recovery?: MCPAuthRecovery;
 }
 
 /** Resolve OAuth authentication status for an MCP server. */
@@ -51,21 +60,45 @@ async function getOAuthStatus(
   mcpServer: MCPServer
 ): Promise<{ authenticated: boolean; tokenExpiresAt?: number }> {
   const authType = mcpServer.auth?.type || 'none';
-  const oauthMode = mcpServer.auth?.oauth_mode || 'per_user';
 
   if (authType !== 'oauth') {
+    if (authType === 'bearer') return { authenticated: !!mcpServer.auth?.token?.trim() };
+    if (authType === 'jwt') {
+      return {
+        authenticated: !!(
+          mcpServer.auth?.api_url?.trim() &&
+          mcpServer.auth.api_token?.trim() &&
+          mcpServer.auth.api_secret?.trim()
+        ),
+      };
+    }
     return { authenticated: true };
   }
 
   // Both shared and per_user live in `user_mcp_oauth_tokens` — shared rows use
-  // `user_id = NULL`. See migration 0038 (sqlite) / 0027 (postgres).
-  const { UserMCPOAuthTokenRepository } = await import('@agor/core/db');
-  const lookupUserId = oauthMode === 'shared' ? null : ctx.userId;
-  const tokenData = await runWithMcpTenantDatabaseScope(ctx, (db) =>
-    new UserMCPOAuthTokenRepository(db).getToken(lookupUserId, mcpServer.mcp_server_id)
-  );
+  // `user_id = NULL`. See migration 0038 (sqlite) / 0027 (postgres). MCP
+  // service responses have already passed through token injection + secret
+  // redaction hooks, so binding authority must come from the raw stored row.
+  const { MCPServerRepository, UserMCPOAuthTokenRepository } = await import('@agor/core/db');
+  const tokenData = await runWithMcpTenantDatabaseScope(ctx, async (db) => {
+    const authoritativeServer = await new MCPServerRepository(db).findById(mcpServer.mcp_server_id);
+    if (!authoritativeServer?.enabled || authoritativeServer.auth?.type !== 'oauth') return null;
+    const lookupUserId =
+      (authoritativeServer.auth.oauth_mode ?? 'per_user') === 'shared' ? null : ctx.userId;
+    const grant = await new UserMCPOAuthTokenRepository(db).getToken(
+      lookupUserId,
+      mcpServer.mcp_server_id
+    );
+    if (!grant) return null;
+    return (await isMCPOAuthGrantAuthorizedForServer(db, authoritativeServer, grant))
+      ? grant
+      : null;
+  });
   if (tokenData) {
-    if (!tokenData.oauth_token_expires_at || tokenData.oauth_token_expires_at > new Date()) {
+    if (
+      tokenData.refresh_status === 'idle' &&
+      (!tokenData.oauth_token_expires_at || tokenData.oauth_token_expires_at > new Date())
+    ) {
       return {
         authenticated: true,
         tokenExpiresAt: tokenData.oauth_token_expires_at?.getTime(),
@@ -93,6 +126,21 @@ export async function summarizeMcpServer(
     oauth_authenticated: authenticated,
     has_custom_headers: !!mcpServer.headers && Object.keys(mcpServer.headers).length > 0,
     enabled: mcpServer.enabled,
+    ...(!authenticated
+      ? {
+          recovery: {
+            category: 'authentication_required' as const,
+            action: (authType === 'oauth' ? 'reauthenticate' : 'save_and_retry') as
+              | 'reauthenticate'
+              | 'save_and_retry',
+            message:
+              authType === 'oauth'
+                ? 'Sign in to this MCP server from an available authentication surface, then retry the task.'
+                : 'Save the required authentication settings for this MCP server, then retry the task.',
+            mcp_server_id: mcpServer.mcp_server_id,
+          },
+        }
+      : {}),
   };
 }
 
@@ -106,7 +154,7 @@ export async function listAttachedMcpServers(
   sessionId: string,
   opts: { includeDisabled?: boolean } = {}
 ): Promise<McpServerSummary[]> {
-  const session = await ctx.app.service('sessions').get(sessionId, ctx.baseServiceParams);
+  await ctx.app.service('sessions').get(sessionId, ctx.baseServiceParams);
   const sessionMCPServers = await ctx.app.service('session-mcp-servers').find({
     ...ctx.baseServiceParams,
     query: {
@@ -122,7 +170,10 @@ export async function listAttachedMcpServers(
       const mcpServer = await ctx.app
         .service('mcp-servers')
         .get(sms.mcp_server_id, ctx.baseServiceParams);
-      if (mcpServer.owner_user_id && mcpServer.owner_user_id !== session.created_by) {
+      // The attached row belongs to the Session, but private credentials must
+      // belong to the current prompt actor. Personal sharing never lends the
+      // Session owner's private MCP credential to a collaborator.
+      if (mcpServer.owner_user_id && mcpServer.owner_user_id !== ctx.userId) {
         continue;
       }
       summaries.push(await summarizeMcpServer(ctx, mcpServer));
@@ -283,7 +334,7 @@ const mcpAuthInputSchema = z
       ),
     token: mcpOptionalString(
       'auth.token',
-      'Bearer token. Prefer {{ user.env.MCP_TOKEN }} templates; raw secrets will be stored redacted but are still visible in this MCP call transcript.'
+      'Bearer token. Prefer {{ user.env.MCP_TOKEN }} templates; raw secrets are stored in MCP server JSON, redacted on read, and remain visible in this MCP call transcript.'
     ),
     api_url: mcpOptionalString('auth.api_url', 'JWT auth API URL.'),
     api_token: mcpOptionalString(
@@ -386,6 +437,32 @@ const mcpAuthInputSchema = z
     "Auth config. Common OAuth path: { type: 'oauth' } plus url; leave OAuth URLs/client fields blank first so metadata discovery/DCR can do the work."
   );
 
+const nullableString = (description: string) =>
+  z.string().nullable().optional().describe(`${description} Pass null to clear.`);
+
+/** Same fields as create auth, but PATCH never requires resending the type or secrets. */
+const mcpAuthPatchSchema = z
+  .strictObject({
+    type: z.enum(['none', 'bearer', 'jwt', 'oauth']).optional(),
+    token: nullableString('Bearer token.'),
+    api_url: nullableString('JWT auth API URL.'),
+    api_token: nullableString('JWT API token.'),
+    api_secret: nullableString('JWT API secret.'),
+    oauth_authorization_url: nullableString('OAuth authorization endpoint override.'),
+    oauth_token_url: nullableString('OAuth token endpoint override.'),
+    oauth_client_id: nullableString('OAuth client ID.'),
+    oauth_client_secret: nullableString('OAuth client secret.'),
+    oauth_scope: nullableString('OAuth scopes, space-separated.'),
+    oauth_grant_type: z.enum(['client_credentials', 'authorization_code']).nullable().optional(),
+    oauth_mode: z.enum(['per_user', 'shared']).nullable().optional(),
+    oauth_compatibility_mode: z.enum(['strict', 'legacy']).nullable().optional(),
+    oauth_dcr_mode: z.enum(['disabled', 'advertised', 'fallback']).nullable().optional(),
+    insecure: z.boolean().nullable().optional(),
+  })
+  .describe(
+    'Partial auth patch. Omitted fields and redaction sentinels preserve stored values; null clears one field; changing type replaces the auth object.'
+  );
+
 const toolPermissionsSchema = z
   .record(z.string(), z.enum(['ask', 'allow', 'deny']))
   .describe("Optional per-tool permissions, e.g. { 'list_files': 'allow', 'write_file': 'ask' }.");
@@ -469,19 +546,51 @@ const mcpServerUpdateSchema = z
         'Replace custom HTTP headers. Redacted existing header values may be passed back unchanged by the UI; this tool should normally pass real template values or omit headers.'
       ),
     env: stringMapSchema.optional().describe('Replace environment variables.'),
-    auth: mcpAuthInputSchema
+    auth: mcpAuthPatchSchema
+      .nullable()
       .optional()
       .describe(
-        "Replace auth config. Existing redacted secrets are preserved if their redacted placeholders are passed back; prefer omitting auth unless changing it. Use { type: 'none' } to clear auth."
+        'Patch auth config. Omitted fields are preserved, null clears one field, auth:null clears all auth, and a type change replaces the old mode. Redacted secret placeholders mean unchanged.'
+      ),
+    expectedConfigVersion: z
+      .number()
+      .int()
+      .positive()
+      .optional()
+      .describe(
+        'Compare-and-swap version from agor_mcp_servers_get. Stale edits return a conflict.'
+      ),
+    replaceAuth: z
+      .boolean()
+      .optional()
+      .describe(
+        'Explicitly replace the whole auth object, including for the same auth type. Omitted defaults to safe nested patch semantics.'
       ),
     scope: z.enum(['global', 'session']).optional().describe('Scope to set.'),
     enabled: z.boolean().optional().describe('Enabled flag.'),
     toolPermissions: toolPermissionsSchema.optional(),
   })
-  .superRefine((value, issue) => validateMcpServerConfig(value, issue, true));
+  .superRefine((value, issue) => {
+    validateMcpServerConfig(value, issue, true);
+    if (value.replaceAuth && value.auth === undefined) {
+      issue.addIssue({
+        code: 'custom',
+        path: ['replaceAuth'],
+        message: 'replaceAuth requires auth to be provided.',
+      });
+    }
+  });
 
 function validateHeaders(headers: Record<string, string> | undefined, issue: z.RefinementCtx) {
   if (!headers) return;
+  const duplicate = findDuplicateMCPCustomHeaderName(headers);
+  if (duplicate) {
+    issue.addIssue({
+      code: 'custom',
+      path: ['headers', duplicate.duplicate],
+      message: `Duplicate case-insensitive HTTP header names are not allowed: ${duplicate.first} and ${duplicate.duplicate}`,
+    });
+  }
   for (const [key, value] of Object.entries(headers)) {
     const name = key.trim();
     if (!name) {
@@ -520,7 +629,7 @@ function validateMcpServerConfig(
     command?: string;
     args?: string[];
     headers?: Record<string, string>;
-    auth?: z.infer<typeof mcpAuthInputSchema>;
+    auth?: z.infer<typeof mcpAuthInputSchema> | z.infer<typeof mcpAuthPatchSchema> | null;
   },
   issue: z.RefinementCtx,
   partial: boolean
@@ -556,7 +665,7 @@ function validateMcpServerConfig(
           message: 'headers only apply to http/sse transports, not stdio.',
         });
       }
-      if (value.auth && value.auth.type !== 'none') {
+      if (value.auth && value.auth.type !== undefined && value.auth.type !== 'none') {
         issue.addIssue({
           code: 'custom',
           path: ['auth', 'type'],
@@ -595,6 +704,7 @@ function assertUpdateCompatibleWithCurrent(
   const transport = args.transport ?? current.transport;
   const url = args.url ?? current.url;
   const command = args.command ?? current.command;
+  const effectiveAuthType = args.auth === null ? 'none' : (args.auth?.type ?? current.auth?.type);
   const errors: string[] = [];
 
   if (transport === 'stdio') {
@@ -603,7 +713,7 @@ function assertUpdateCompatibleWithCurrent(
     if (args.headers && Object.keys(args.headers).length > 0) {
       errors.push('headers only apply to http/sse transports, not stdio.');
     }
-    if (args.auth && args.auth.type !== 'none') {
+    if (effectiveAuthType && effectiveAuthType !== 'none') {
       errors.push('auth only applies to http/sse transports, not stdio.');
     }
   } else {
@@ -627,7 +737,7 @@ function createOrUpdateNextSteps(
   const steps: string[] = [];
   if (authType === 'oauth') {
     steps.push(
-      `OAuth configured. If oauth_authenticated is false, authenticate in Settings > MCP Servers > ${server.display_name || server.name} > Test Authentication > Start OAuth Flow.`
+      `OAuth configured. If oauth_authenticated is false, sign in to ${server.display_name || server.name} from an available MCP authentication surface, then retry.`
     );
   }
   if (attach?.ok) {
@@ -646,6 +756,42 @@ function createOrUpdateNextSteps(
     );
   }
   return steps;
+}
+
+export function safeMcpServerConfigReadback(server: MCPServer) {
+  // Do this explicitly rather than depending on the Feathers dispatch hook:
+  // the built-in MCP transport may use trusted internal service params, while
+  // its tool result is still an external agent-visible response.
+  const auth = redactMCPAuthSecrets(server.auth);
+  const configuredSecretFields = auth
+    ? MCP_AUTH_SECRET_FIELDS.filter((field) => auth[field] === MCP_HEADER_REDACTED_SENTINEL)
+    : [];
+  return {
+    mcp_server_id: server.mcp_server_id,
+    name: server.name,
+    display_name: server.display_name,
+    description: server.description,
+    transport: server.transport,
+    command: server.command,
+    args: server.args,
+    url: server.url,
+    headers: redactMCPCustomHeaders(server.headers),
+    env: redactMCPEnvSecrets(server.env),
+    auth,
+    auth_secret_fields_configured: configuredSecretFields,
+    scope: server.scope,
+    owner_user_id: server.owner_user_id,
+    source: server.source,
+    catalog_entry_name: server.catalog_entry_name,
+    enabled: server.enabled,
+    tool_permissions: server.tool_permissions,
+    config_version: server.config_version,
+    capability_counts: {
+      tools: server.tools?.length ?? 0,
+      resources: server.resources?.length ?? 0,
+      prompts: server.prompts?.length ?? 0,
+    },
+  };
 }
 
 async function attachMcpServerToSession(ctx: McpContext, sessionId: string, mcpServerId: string) {
@@ -719,8 +865,7 @@ export function registerMcpServerTools(server: McpServer, ctx: McpContext): void
           total: servers.length,
           oauth_servers: servers.filter((s) => s.auth_type === 'oauth').length,
           authenticated: servers.filter((s) => s.oauth_authenticated).length,
-          needs_auth: servers.filter((s) => s.auth_type === 'oauth' && !s.oauth_authenticated)
-            .length,
+          needs_auth: servers.filter((s) => !s.oauth_authenticated).length,
         },
       });
     }
@@ -731,7 +876,7 @@ export function registerMcpServerTools(server: McpServer, ctx: McpContext): void
     'agor_mcp_servers_auth_status',
     {
       description:
-        'Check the OAuth authentication status for an MCP server. Returns whether the current user is authenticated. If NOT authenticated, returns instructions for the user to complete OAuth via Settings → MCP Servers. Use agor_mcp_servers_list to get server IDs.',
+        'Check the OAuth authentication status for an MCP server. Returns whether the current user is authenticated and a structured, surface-neutral recovery action when sign-in is required. Use agor_mcp_servers_list to get server IDs.',
       annotations: { readOnlyHint: true },
       inputSchema: z.strictObject({
         mcpServerId: mcpRequiredId(
@@ -761,9 +906,39 @@ export function registerMcpServerTools(server: McpServer, ctx: McpContext): void
         token_expires_at: tokenExpiresAt ? new Date(tokenExpiresAt).toISOString() : undefined,
         instructions:
           !authenticated && authType === 'oauth'
-            ? `To authenticate with "${mcpServer.display_name || mcpServer.name}", go to Settings > MCP Servers > ${mcpServer.display_name || mcpServer.name} > Click "Test Authentication" then "Start OAuth Flow". After completing the OAuth flow in your browser, the MCP tools will become available.`
+            ? 'Sign in to this MCP server from an available authentication surface, then retry the task.'
+            : undefined,
+        recovery:
+          !authenticated && authType === 'oauth'
+            ? {
+                category: 'authentication_required',
+                action: 'reauthenticate',
+                message:
+                  'Sign in to this MCP server from an available authentication surface, then retry the task.',
+                mcp_server_id: mcpServer.mcp_server_id,
+              }
             : undefined,
       });
+    }
+  );
+
+  server.registerTool(
+    'agor_mcp_servers_get',
+    {
+      description:
+        'Read one MCP server configuration before patching it. Secrets are never returned: configured secret fields contain a redaction sentinel and are also named in auth_secret_fields_configured. Pass config_version back as expectedConfigVersion to prevent a stale editor from overwriting a concurrent change.',
+      annotations: { readOnlyHint: true },
+      inputSchema: z.strictObject({
+        mcpServerId: mcpRequiredId('mcpServerId', 'MCP server', 'MCP server ID to read'),
+      }),
+    },
+    async (args) => {
+      const mcpServerId = await resolveMcpServerId(ctx, args.mcpServerId);
+      const mcpServer = (await ctx.app
+        .service('mcp-servers')
+        .get(mcpServerId, ctx.baseServiceParams)) as MCPServer;
+      assertMcpServerUsableByCaller(ctx, mcpServer);
+      return textResult({ mcp_server: safeMcpServerConfigReadback(mcpServer) });
     }
   );
 
@@ -803,7 +978,6 @@ export function registerMcpServerTools(server: McpServer, ctx: McpContext): void
             ? undefined
             : (args.auth as MCPAuth),
         scope: args.scope ?? 'global',
-        source: 'user',
         enabled: args.enabled ?? true,
       };
 
@@ -842,7 +1016,7 @@ export function registerMcpServerTools(server: McpServer, ctx: McpContext): void
     'agor_mcp_servers_update',
     {
       description:
-        'Update an existing MCP server definition. Permissions are service-enforced: admins always may, members only under the workspace `mcp_member_policy`, and nobody but an admin or the owner may touch a private server. Updating config does not create a session-specific link: enabled `global` servers are already effective for all sessions, while `session` scoped servers need `agor_sessions_add_mcp_server`. Provide only fields to change. Validation rejects incompatible combinations (e.g. stdio+url/auth/headers, remote+command/args, wrong auth fields). OAuth tip: keep only `auth:{type:"oauth"}` unless discovery fails or a provider requires endpoint/client overrides. Use `auth:{type:"none"}` to clear auth.',
+        'Safely patch an existing MCP server definition. Call agor_mcp_servers_get first and pass expectedConfigVersion for concurrent-edit protection. Auth is a nested patch: omitted fields preserve stored values, null clears one field, auth:null clears all auth, and changing auth.type replaces the old mode. Permissions remain service-enforced; new tasks resolve the saved configuration.',
       annotations: { destructiveHint: false, idempotentHint: false },
       inputSchema: mcpServerUpdateSchema,
     },
@@ -863,9 +1037,12 @@ export function registerMcpServerTools(server: McpServer, ctx: McpContext): void
       if (args.headers !== undefined) updates.headers = args.headers;
       if (args.env !== undefined) updates.env = args.env;
       if (args.auth !== undefined) {
-        updates.auth =
-          args.auth.type === 'none' ? ({ type: 'none' } as MCPAuth) : (args.auth as MCPAuth);
+        updates.auth = args.auth as MCPAuthPatch | null;
       }
+      if (args.expectedConfigVersion !== undefined) {
+        updates.expected_config_version = args.expectedConfigVersion;
+      }
+      if (args.replaceAuth !== undefined) updates.replace_auth = args.replaceAuth;
       if (args.scope !== undefined) updates.scope = args.scope;
       if (args.enabled !== undefined) updates.enabled = args.enabled;
       if (args.toolPermissions !== undefined) updates.tool_permissions = args.toolPermissions;
@@ -876,7 +1053,7 @@ export function registerMcpServerTools(server: McpServer, ctx: McpContext): void
       if (args.transport === 'stdio') {
         updates.url = undefined;
         updates.headers = undefined;
-        updates.auth = undefined;
+        updates.auth = null;
       } else if (args.transport === 'http' || args.transport === 'sse') {
         updates.command = undefined;
         updates.args = undefined;

@@ -36,6 +36,7 @@ export function useRecents({
     if (!currentUserId) return EMPTY_RESULTS;
 
     const sessions = Array.from(sessionById.values())
+      .filter((s) => !s.archived)
       .filter((s) => s.created_by === currentUserId)
       .sort(byTimestamp((s) => s.last_updated))
       .slice(0, RECENTS_SECTION_LIMIT);

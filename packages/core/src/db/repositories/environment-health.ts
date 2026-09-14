@@ -1,6 +1,7 @@
 import { and, asc, eq, gt, or, sql } from 'drizzle-orm';
 import type { DistributedWorkIdentity } from '../../coordination';
 import type { BranchEnvironmentInstance, BranchID, TenantID } from '../../types';
+import { hasActiveEnvironmentCommand } from '../../types/environment-command';
 import type { Database, SystemDatabase } from '../client';
 import {
   isPostgresDatabase,
@@ -94,7 +95,11 @@ export class EnvironmentHealthDiscoveryRepository {
     })
       .from(branches)
       .where(
-        and(eq(branches.archived, false), or(eq(status, 'starting'), eq(status, 'running')), after)
+        and(
+          eq(branches.archived, false),
+          or(eq(status, 'starting'), eq(status, 'running'), eq(status, 'stopping')),
+          after
+        )
       )
       .orderBy(asc(tenantColumn), asc(branches.branch_id))
       .limit(options.limit)
@@ -151,6 +156,8 @@ export class EnvironmentHealthRepository {
     claimToken: string;
     leaseDurationMs: number;
     identity: DistributedWorkIdentity;
+    /** Explicit user probes may bypass cadence cooldown, never a live owner. */
+    ignoreCooldown?: boolean;
   }): Promise<EnvironmentHealthClaimResult> {
     this.validateClaimInput(input);
     return runDatabaseTransaction(
@@ -182,6 +189,7 @@ export class EnvironmentHealthRepository {
         // fleet-wide cooldown. An expired token means its owner died, so
         // takeover is admitted after lease expiry regardless of the cooldown.
         if (
+          !input.ignoreCooldown &&
           !row.environment_health_claim_token &&
           row.environment_health_next_observation_at &&
           new Date(row.environment_health_next_observation_at).getTime() > now.getTime()
@@ -357,7 +365,11 @@ export class EnvironmentHealthRepository {
           input.observation.status === 'healthy' ||
           input.observation.recordWhileStarting;
         const nextStatus =
-          status === 'starting' && input.observation.status === 'healthy' ? 'running' : status;
+          status === 'starting' &&
+          input.observation.status === 'healthy' &&
+          !hasActiveEnvironmentCommand(activeEnvironment)
+            ? 'running'
+            : status;
         const previousHealth = activeEnvironment.last_health_check;
         const stateChanged =
           shouldRecord &&
@@ -375,18 +387,27 @@ export class EnvironmentHealthRepository {
               },
             }
           : activeEnvironment;
-        await update(txDb, branches)
-          .set({
-            ...(shouldRecord ? { data: { ...data, environment_instance: nextEnvironment } } : {}),
-            ...(stateChanged ? { updated_at: now } : {}),
-          })
-          .where(
-            and(
-              eq(branches.branch_id, input.branchId),
-              eq(branches.environment_health_claim_token, input.claimToken)
+        // A network failure while an environment is still starting is a
+        // legitimate, deliberately unrecorded observation: startup grace
+        // keeps the prior durable state until a recordable result arrives.
+        // The row lock and fences above still authorize it as a completed
+        // observation, but there are no branch columns to mutate. Do not hand
+        // an empty update to Drizzle, whose dialect-independent set mapper
+        // rejects it with "No values to set".
+        if (shouldRecord) {
+          await update(txDb, branches)
+            .set({
+              data: { ...data, environment_instance: nextEnvironment },
+              ...(stateChanged ? { updated_at: now } : {}),
+            })
+            .where(
+              and(
+                eq(branches.branch_id, input.branchId),
+                eq(branches.environment_health_claim_token, input.claimToken)
+              )
             )
-          )
-          .run();
+            .run();
+        }
         return {
           outcome: 'committed',
           mutated: shouldRecord,

@@ -1,6 +1,6 @@
 import type { Branch } from '@agor-live/client';
-import { Alert, Checkbox, Popconfirm, Typography } from 'antd';
-import { type ReactNode, useState } from 'react';
+import { Alert, Popconfirm, Typography } from 'antd';
+import type { ReactNode } from 'react';
 
 interface DeleteBranchPopconfirmProps {
   branch: Branch;
@@ -15,11 +15,9 @@ export const DeleteBranchPopconfirm: React.FC<DeleteBranchPopconfirmProps> = ({
   onConfirm,
   children,
 }) => {
-  const [deleteFromFilesystem, setDeleteFromFilesystem] = useState(true);
-
   const handleConfirm = (e?: React.MouseEvent<HTMLElement>) => {
     e?.stopPropagation();
-    onConfirm(deleteFromFilesystem);
+    onConfirm(true);
   };
 
   const handleCancel = (e?: React.MouseEvent<HTMLElement>) => {
@@ -42,13 +40,11 @@ export const DeleteBranchPopconfirm: React.FC<DeleteBranchPopconfirmProps> = ({
               style={{ marginBottom: 12 }}
             />
           )}
-          <Checkbox
-            checked={deleteFromFilesystem}
-            onChange={(e) => setDeleteFromFilesystem(e.target.checked)}
-            style={{ marginTop: 8 }}
-          >
-            Also delete branch from filesystem
-          </Checkbox>
+          <p>
+            Irreversibly removes the workspace, branch SDK home, and owned conversations and data.
+            Shared resources and remote Git history are retained. Partial failures remain visible on
+            the branch.
+          </p>
           <div style={{ marginTop: 4, marginBottom: 0 }}>
             <Typography.Text type="secondary">Path: </Typography.Text>
             <Typography.Text code copyable style={{ fontSize: 11 }}>

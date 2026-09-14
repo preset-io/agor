@@ -9,13 +9,17 @@
  * - Groups 3+ sequential tool-only messages into ToolBlock
  */
 
+import { AUTHORIZATION_REVOKED_TERMINATION_MESSAGE } from '@agor/core/types';
 import type { AgenticToolName, AgorClient, StreamingMessageState } from '@agor-live/client';
 import {
+  hasMinimumRole,
+  type MCPRuntimeRecovery,
   type Message,
   MessageRole,
   type PermissionRequestContent,
   type PermissionScope,
   PermissionStatus,
+  ROLES,
   type SessionID,
   type Task,
   TaskStatus,
@@ -31,7 +35,7 @@ import {
 } from '@ant-design/icons';
 import { Bubble } from '@ant-design/x';
 import { Alert, Button, Collapse, Flex, Spin, Typography, theme } from 'antd';
-import React, { useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { getContextWindowGradient } from '../../utils/contextWindow';
 import { AgentChain } from '../AgentChain';
 import { AgorAvatar } from '../AgorAvatar';
@@ -102,6 +106,8 @@ interface TaskBlockProps {
   client?: AgorClient | null;
   /** Whether this is the most recent task in the session */
   isLatestTask?: boolean;
+  /** Phone-sized transcript presentation without desktop-only indents or gradients. */
+  compact?: boolean;
 }
 
 /**
@@ -121,7 +127,15 @@ export function isVerifiedRuntimeInterruption(task: Task, isLatestTask = false):
     isLatestTask &&
     task.status === TaskStatus.FAILED &&
     task.sdk_failure?.termination === 'verified' &&
-    task.termination_request?.cause !== 'user_stop'
+    task.termination_request?.cause !== 'user_stop' &&
+    task.termination_request?.cause !== 'authorization_revoked'
+  );
+}
+
+/** Authorization withdrawal is already durable on the Task; no transcript row is needed. */
+export function isAuthorizationRevokedFailure(task: Task): boolean {
+  return (
+    task.status === TaskStatus.FAILED && task.termination_request?.cause === 'authorization_revoked'
   );
 }
 
@@ -174,6 +188,167 @@ function RuntimeInterruptionNotice({
         client && sessionId && !resumed ? (
           <Button size="small" type="primary" loading={submitting} onClick={handleResume}>
             Resume in new task
+          </Button>
+        ) : undefined
+      }
+    />
+  );
+}
+
+function AuthorizationRevokedNotice({ task }: { task: Task }) {
+  return (
+    <Alert
+      type="warning"
+      showIcon
+      style={{ marginBottom: 12 }}
+      title="Task access revoked"
+      description={task.error_message || AUTHORIZATION_REVOKED_TERMINATION_MESSAGE}
+    />
+  );
+}
+
+export function MCPRecoveryNotice({
+  task,
+  recovery,
+  client,
+  canRequestReconnect = false,
+}: {
+  task: Task;
+  recovery: MCPRuntimeRecovery;
+  client?: AgorClient | null;
+  canRequestReconnect?: boolean;
+}) {
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string>();
+  const [now, setNow] = useState(() => Date.now());
+  const { token } = theme.useToken();
+  const isLiveTask =
+    task.status === TaskStatus.RUNNING ||
+    task.status === TaskStatus.AWAITING_PERMISSION ||
+    task.status === TaskStatus.AWAITING_INPUT;
+  const refreshExpired =
+    recovery.status === 'refresh_requested' &&
+    (!recovery.refresh_deadline_at || new Date(recovery.refresh_deadline_at).getTime() <= now);
+  useEffect(() => {
+    if (recovery.status !== 'refresh_requested' || !recovery.refresh_deadline_at) return;
+    const delay = Math.max(0, new Date(recovery.refresh_deadline_at).getTime() - Date.now());
+    const timer = window.setTimeout(() => setNow(Date.now()), delay + 10);
+    return () => window.clearTimeout(timer);
+  }, [recovery.refresh_deadline_at, recovery.status]);
+  const canReconnect =
+    isLiveTask &&
+    recovery.action === 'reconnect_mcp' &&
+    recovery.provider.transport_reload &&
+    canRequestReconnect &&
+    !!client;
+  const reconnectForbidden =
+    isLiveTask &&
+    recovery.action === 'reconnect_mcp' &&
+    recovery.provider.transport_reload &&
+    !canRequestReconnect;
+  const recoveryIdentity = [
+    recovery.generation,
+    recovery.status,
+    recovery.code,
+    recovery.action,
+    recovery.request_id ?? '',
+    recovery.observed_at,
+    recovery.message,
+    recovery.mcp_server_id ?? '',
+  ].join(':');
+  // biome-ignore lint/correctness/useExhaustiveDependencies: a new durable identity clears a prior request's transient UI error
+  useEffect(() => {
+    setError(undefined);
+  }, [recoveryIdentity]);
+
+  const handleReconnect = async () => {
+    if (!client || !canReconnect) return;
+    setSubmitting(true);
+    setError(undefined);
+    try {
+      await client.service(`/tasks/${task.task_id}/mcp-reconnect`).create({
+        generation: recovery.generation,
+      });
+    } catch {
+      console.error('[TaskBlock] MCP reconnect request failed');
+      setError('MCP recovery changed or could not be requested. Reload and try again.');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  if (!isLiveTask) return null;
+
+  const title =
+    recovery.status === 'refresh_requested'
+      ? refreshExpired
+        ? 'MCP reconnect needs confirmation'
+        : 'Reconnecting MCP…'
+      : recovery.action === 'reauthenticate'
+        ? 'MCP sign-in required'
+        : recovery.action === 'retry_next_turn'
+          ? 'MCP updates apply next turn'
+          : recovery.status === 'failed'
+            ? 'MCP reconnect failed'
+            : 'MCP configuration requires attention';
+  const descriptionText =
+    error ??
+    (refreshExpired
+      ? 'The automatic refresh hint expired or may have been missed. Reconnect MCP to retry transport setup without restarting the conversation.'
+      : `${recovery.message}${
+          reconnectForbidden
+            ? ' Only the task creator or an administrator can request MCP reconnection.'
+            : ''
+        }`);
+  const description = recovery.server_states?.length ? (
+    <Flex vertical gap={4}>
+      <span>{descriptionText}</span>
+      <ul style={{ margin: 0, paddingInlineStart: 20 }}>
+        {recovery.server_states.map((state) => (
+          <li key={state.mcp_server_id}>
+            <strong>{state.name}</strong>: {state.message}
+          </li>
+        ))}
+      </ul>
+    </Flex>
+  ) : (
+    descriptionText
+  );
+
+  return (
+    <Alert
+      role={recovery.status === 'failed' ? 'alert' : 'status'}
+      aria-live={recovery.status === 'failed' ? 'assertive' : 'polite'}
+      type={recovery.status === 'failed' ? 'error' : 'warning'}
+      showIcon
+      style={{ marginBottom: token.marginMD }}
+      message={title}
+      description={description}
+      action={
+        recovery.action === 'reauthenticate' && recovery.mcp_server_id ? (
+          <Button
+            size="small"
+            type="primary"
+            href={`/settings/mcp/${encodeURIComponent(recovery.mcp_server_id)}/`}
+            aria-label={`Sign in to ${recovery.mcp_server_name ?? 'the affected MCP server'}`}
+          >
+            Sign in to {recovery.mcp_server_name ?? 'MCP server'}
+          </Button>
+        ) : canReconnect || reconnectForbidden ? (
+          <Button
+            size="small"
+            type="primary"
+            loading={submitting}
+            onClick={handleReconnect}
+            disabled={reconnectForbidden}
+            title={
+              reconnectForbidden
+                ? 'Only the task creator or an administrator can reconnect MCP.'
+                : undefined
+            }
+            aria-label="Reconnect MCP for this active task"
+          >
+            Reconnect MCP
           </Button>
         ) : undefined
       }
@@ -485,9 +660,13 @@ export const TaskBlock = React.memo<TaskBlockProps>(
     onOpenAgenticToolSettings,
     isLatestTask = false,
     client = null,
+    compact = false,
   }) => {
     const { token } = theme.useToken();
     const runtimeLive = shouldRenderLiveTaskProgress(task);
+    const currentUser = currentUserId ? userById.get(currentUserId) : undefined;
+    const canRequestMcpReconnect =
+      currentUserId === task.created_by || hasMinimumRole(currentUser?.role, ROLES.ADMIN);
 
     const [reactiveMessagesLoading, setReactiveMessagesLoading] = React.useState(false);
 
@@ -708,21 +887,28 @@ export const TaskBlock = React.memo<TaskBlockProps>(
           activeKey={isExpanded ? ['task-content'] : []}
           onChange={(keys) => onExpandChange(task.task_id, keys.length > 0)}
           expandIcon={() => null}
-          style={{ background: 'transparent', margin: `${token.sizeUnit * 3}px 0` }}
+          style={{
+            background: 'transparent',
+            margin: compact ? '8px 0' : `${token.sizeUnit * 3}px 0`,
+            borderRadius: compact ? token.borderRadiusLG : undefined,
+            overflow: 'hidden',
+          }}
           items={[
             {
               key: 'task-content',
               label: taskHeader,
               styles: {
                 header: {
-                  padding: token.sizeUnit * 2,
+                  padding: compact ? '10px 8px' : token.sizeUnit * 2,
                   alignItems: 'flex-start',
-                  background: taskHeaderGradient || 'transparent',
+                  background: compact
+                    ? token.colorBgContainer
+                    : taskHeaderGradient || 'transparent',
                   borderRadius: isExpanded ? '8px 8px 0 0' : 8,
                 },
                 body: {
                   background: 'transparent',
-                  padding: `${token.sizeUnit * 2}px ${token.sizeUnit * 2}px`,
+                  padding: compact ? '8px' : `${token.sizeUnit * 2}px ${token.sizeUnit * 2}px`,
                 },
               },
               children: (
@@ -730,6 +916,21 @@ export const TaskBlock = React.memo<TaskBlockProps>(
                   {isVerifiedRuntimeInterruption(task, isLatestTask) && (
                     <RuntimeInterruptionNotice task={task} sessionId={sessionId} client={client} />
                   )}
+                  {isAuthorizationRevokedFailure(task) && (
+                    <AuthorizationRevokedNotice task={task} />
+                  )}
+                  {isLatestTask &&
+                    (task.status === TaskStatus.RUNNING ||
+                      task.status === TaskStatus.AWAITING_PERMISSION ||
+                      task.status === TaskStatus.AWAITING_INPUT) &&
+                    task.metadata?.mcp_recovery && (
+                      <MCPRecoveryNotice
+                        task={task}
+                        recovery={task.metadata.mcp_recovery}
+                        client={client}
+                        canRequestReconnect={canRequestMcpReconnect}
+                      />
+                    )}
                   {/* Show loading spinner while fetching messages */}
                   {messagesLoading && (
                     <div
@@ -806,6 +1007,7 @@ export const TaskBlock = React.memo<TaskBlockProps>(
                               teammateEmoji={teammateEmoji}
                               client={client}
                               onOpenAgenticToolSettings={onOpenAgenticToolSettings}
+                              compact={compact}
                             />
                           </div>
                         );
@@ -819,6 +1021,7 @@ export const TaskBlock = React.memo<TaskBlockProps>(
                               messages={block.messages}
                               isTaskRunning={runtimeLive}
                               isLatest={isLatestTask && blockIndex === lastAgentChainIndex}
+                              compact={compact}
                             />
                           </div>
                         );

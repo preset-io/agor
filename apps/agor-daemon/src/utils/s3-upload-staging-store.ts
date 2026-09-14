@@ -208,7 +208,7 @@ export class S3UploadStagingStore implements UploadStagingStore {
     }
     const ttlMs = input.ttlMs ?? this.ttlMs;
     if (!Number.isSafeInteger(ttlMs) || ttlMs < 0) throw new Error('Invalid upload ttlMs');
-    const ref = `upl_${randomUUID()}` as UploadRef;
+    const ref = input.reservedRef ?? (`upl_${randomUUID()}` as UploadRef);
     const Key = this.key(input.owner.tenantId, ref);
     const now = new Date();
     const expiresAt = ttlMs === 0 ? null : new Date(now.getTime() + ttlMs).toISOString();

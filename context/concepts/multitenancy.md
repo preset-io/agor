@@ -6,6 +6,8 @@ broad; the required handling depends on the resource classification.
 Do not use the current SQLite/static-tenant development topology as proof that a
 change is tenant-neutral. `required_from_auth` resolves tenant identity from
 trusted authentication context and uses PostgreSQL row-level security (RLS).
+Board and branch RBAC is always enabled: tenant isolation keeps workspaces
+apart, while Board and Branch policies authorize members within one workspace.
 
 ## Trigger the check
 
@@ -87,6 +89,17 @@ rooms, processes, or external side effects. Scope those at their own owner.
 Long-lived work should carry tenant identity without holding an HTTP-long
 transaction; open short tenant database units at the actual database call.
 Globally unique UUIDs identify resources but do not authorize tenant access.
+
+Authenticated custom Feathers routes must use
+`createTenantScopedAuthenticatedRouteRegistrar`; the unscoped
+`registerAuthenticatedRoute` base installs authentication and role hooks only.
+Direct uses of that base should remain limited to the tenant-scoped registrar
+and the explicitly reviewed long-route adapter in `register-routes.ts`, which
+carries tenant identity and opens short database units instead of holding an
+HTTP-long transaction. Registered services that read tenant repositories
+belong in `TENANT_OWNED_SERVICE_PATHS` unless they intentionally cross a
+long-running external boundary and open short scoped units at each database
+call.
 
 ## Proportional validation
 

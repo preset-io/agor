@@ -357,15 +357,22 @@ echo "  → Copying UI..."
 mkdir -p "$DIST_STAGE/ui"
 cp -r "$REPO_ROOT/apps/agor-ui/dist/"* "$DIST_STAGE/ui/"
 
-# Build outputs are copied wholesale above, but declaration source maps, compiled
+# Build outputs are copied wholesale above, but declarations for the executable
+# application trees, migration snapshots, declaration source maps, compiled
 # tests, incremental compiler state, and editor backups are not runtime assets.
-# Keep them out of both the application dist tree and the materialized internal
-# packages so switching from postinstall-created links to npm's standard bundled
-# dependencies does not add unnecessary files to the global install.
+# Keep them out of the published application without stripping declarations from
+# the materialized internal packages, whose manifests expose TypeScript types.
 echo "  → Removing non-runtime build artifacts..."
 find "$DIST_STAGE" "$INTERNAL_STAGE" -type f \
   \( -name '*.map' -o -name '*.test.js' -o -name '*.test.cjs' -o -name '*.test.d.ts' \
      -o -name '*.tsbuildinfo' -o -name '*.backup' \) -delete
+# agor-live exposes binaries, not a TypeScript API. The daemon, executor, and CLI
+# declarations are build byproducts and have no runtime consumers.
+find "$DIST_STAGE/daemon" "$DIST_STAGE/executor" "$DIST_STAGE/cli" \
+  -type f -name '*.d.ts' -delete
+# Drizzle's migrators consume migration SQL plus meta/_journal.json. Snapshot
+# files are schema-generation history and are not read by the runtime migrator.
+find "$INTERNAL_STAGE/core/drizzle" -type f -name '*_snapshot.json' -delete
 find "$DIST_STAGE" "$INTERNAL_STAGE" -type d -name test -prune -exec rm -rf {} +
 
 if [[ "$WITH_SANDPACK" == true ]]; then

@@ -12,20 +12,24 @@ import type {
   Artifact,
   ArtifactBuildStatus,
   ArtifactID,
+  ArtifactListFieldWithoutFiles,
+  ArtifactMetadataListField,
   BoardID,
   BranchID,
   SandpackTemplate,
   SessionID,
   UUID,
 } from '@agor/core/types';
-import { and, eq, inArray, like, or } from 'drizzle-orm';
+import { and, eq, inArray, like, or, sql } from 'drizzle-orm';
 import { getBaseUrl } from '../../config/config-manager';
-import { generateId } from '../../lib/ids';
+import { generateId, isValidUUID } from '../../lib/ids';
 import { canonicalizeAgorGrants } from '../../types/artifact-grants';
+import { prefixToLikePattern } from '../../types/id';
 import { getArtifactFullscreenUrl, getArtifactUrl } from '../../utils/url';
 import type { Database } from '../client';
-import { deleteFrom, insert, select, update } from '../database-wrapper';
+import { deleteFrom, insert, isSQLiteDatabase, rawRows, select, update } from '../database-wrapper';
 import { type ArtifactInsert, type ArtifactRow, artifacts } from '../schema';
+import { MissingTenantDatabaseScopeError } from '../tenant-scope';
 import {
   AmbiguousIdError,
   type BaseRepository,
@@ -45,8 +49,161 @@ function canonicalGrantsOrNull(input: unknown): AgorGrants | null {
   return canonicalGrantsOrUndefined(input) ?? null;
 }
 
+export type ArtifactListProjection = 'full' | 'without-files' | 'metadata';
+
+type ArtifactComputedListField = 'fullscreen_url' | 'url';
+type ArtifactMetadataDatabaseField = Exclude<ArtifactMetadataListField, ArtifactComputedListField>;
+type ArtifactWithoutFilesDatabaseField = Exclude<
+  ArtifactListFieldWithoutFiles,
+  ArtifactComputedListField
+>;
+
+const artifactMetadataColumns = {
+  artifact_id: artifacts.artifact_id,
+  branch_id: artifacts.branch_id,
+  source_session_id: artifacts.source_session_id,
+  board_id: artifacts.board_id,
+  name: artifacts.name,
+  description: artifacts.description,
+  path: artifacts.path,
+  template: artifacts.template,
+  build_status: artifacts.build_status,
+  build_errors: artifacts.build_errors,
+  content_hash: artifacts.content_hash,
+  public: artifacts.public,
+  created_by: artifacts.created_by,
+  created_at: artifacts.created_at,
+  updated_at: artifacts.updated_at,
+  archived: artifacts.archived,
+  archived_at: artifacts.archived_at,
+} satisfies Record<ArtifactMetadataDatabaseField, unknown>;
+
+type ArtifactMetadataRow = Partial<ArtifactRow> &
+  Pick<ArtifactRow, keyof typeof artifactMetadataColumns>;
+
+const artifactWithoutFilesColumns = {
+  ...artifactMetadataColumns,
+  dependencies: artifacts.dependencies,
+  entry: artifacts.entry,
+  sandpack_config: artifacts.sandpack_config,
+  required_env_vars: artifacts.required_env_vars,
+  agor_grants: artifacts.agor_grants,
+  agor_runtime: artifacts.agor_runtime,
+} satisfies Record<ArtifactWithoutFilesDatabaseField, unknown>;
+
 export class ArtifactRepository implements BaseRepository<Artifact, Partial<Artifact>> {
   constructor(private db: Database) {}
+
+  /**
+   * Board-reference visibility only, after board authorization and inside the
+   * caller's trusted tenant scope. Not a general artifact authorization API:
+   * preserves the board hook's legacy comparison for userless internal calls.
+   * External board calls must pass their authenticated user ID.
+   * Never load source/runtime JSON or resolve share URLs. Resolve ambiguity
+   * BEFORE visibility: a hidden second match must not authorize a prefix.
+   * Exact IDs use bounded IN queries; prefixes use bounded UNION ALL probes,
+   * each returning at most two candidates. No request-independent cache.
+   * Read failures deny the failed chunk, not previously verified references.
+   * This changes failure availability from one reference to at most 200 exact
+   * IDs or 100 prefix probes, never authorization. No retry/per-ID fallback.
+   * An unusable transaction/connection can make subsequent chunks fail too;
+   * this read path does not recover or replace the caller's transaction.
+   */
+  async findBoardReferenceVisibleIds(
+    ids: readonly string[],
+    userId?: string
+  ): Promise<Set<string>> {
+    const references = [...new Set(ids)];
+    const exact = references.filter(isValidUUID);
+    const prefixes = new Map<string, string[]>();
+    for (const id of references) {
+      if (isValidUUID(id)) continue;
+      // Board JSON is not an ID validation boundary. Never interpret SQL LIKE
+      // wildcards (or an empty prefix) from a malformed stored reference.
+      const clean = id.replace(/-/g, '');
+      if (!/^[a-f0-9]{1,32}$/i.test(clean)) continue;
+      const pattern = prefixToLikePattern(id);
+      const aliases = prefixes.get(pattern);
+      if (aliases) aliases.push(id);
+      else prefixes.set(pattern, [id]);
+    }
+    const visible = new Set<string>();
+    const columns = {
+      artifact_id: artifacts.artifact_id,
+      public: artifacts.public,
+      created_by: artifacts.created_by,
+    };
+    type VisibilityRow = Pick<ArtifactRow, 'artifact_id' | 'public' | 'created_by'>;
+    // Match rowToArtifact's null-to-undefined creator projection, including
+    // legacy internal calls without a user. This is not a new auth boundary.
+    const canSee = (row: VisibilityRow) =>
+      Boolean(row.public) || (row.created_by ?? undefined) === userId;
+    const readChunk = async <T>(work: () => Promise<T>): Promise<T | undefined> => {
+      try {
+        return await work();
+      } catch (error) {
+        // Missing trusted scope is a boundary failure, not partial availability.
+        if (error instanceof MissingTenantDatabaseScopeError) throw error;
+        return undefined;
+      }
+    };
+
+    const exactBatchSize = 200;
+    for (let offset = 0; offset < exact.length; offset += exactBatchSize) {
+      const rows = await readChunk<VisibilityRow[]>(() =>
+        select(this.db, columns)
+          .from(artifacts)
+          .where(inArray(artifacts.artifact_id, exact.slice(offset, offset + exactBatchSize)))
+          .all()
+      );
+      if (!rows) continue;
+      for (const row of rows) if (canSee(row)) visible.add(row.artifact_id);
+    }
+
+    const probes = [...prefixes];
+    const prefixBatchSize = 100; // <=200 returned rows and <=200 bind parameters
+    for (let offset = 0; offset < probes.length; offset += prefixBatchSize) {
+      const batch = probes.slice(offset, offset + prefixBatchSize);
+      const query = sql.join(
+        batch.map(
+          ([pattern], index) => sql`
+        SELECT ${index} AS reference_index, artifact_id, public, created_by
+        FROM (
+          SELECT ${artifacts.artifact_id}, ${artifacts.public}, ${artifacts.created_by}
+          FROM ${artifacts} WHERE ${artifacts.artifact_id} LIKE ${pattern} LIMIT 2
+        ) AS candidates`
+        ),
+        sql` UNION ALL `
+      );
+      // SQLite run() discards SELECT rows. As with other raw read projections,
+      // use all() there and execute() on PostgreSQL, retaining the scoped handle.
+      const rows = await readChunk(async () => {
+        const result = isSQLiteDatabase(this.db)
+          ? await (this.db as unknown as { all(query: unknown): Promise<unknown> }).all(query)
+          : await (this.db as unknown as { execute(query: unknown): Promise<unknown> }).execute(
+              query
+            );
+        return rawRows<VisibilityRow & { reference_index: number }>(result);
+      });
+      if (!rows) continue;
+      for (const [index, [, aliases]] of batch.entries()) {
+        const matches = rows.filter((row) => Number(row.reference_index) === index);
+        try {
+          // Keep the canonical resolver's zero/one/many contract. Its callback
+          // consumes already-batched candidates instead of issuing another SQL.
+          await resolveByShortIdPrefix(aliases[0], 'Artifact', async () =>
+            matches.map((row) => row.artifact_id)
+          );
+          if (canSee(matches[0])) for (const alias of aliases) visible.add(alias);
+        } catch (error) {
+          if (!(error instanceof EntityNotFoundError || error instanceof AmbiguousIdError)) {
+            throw error;
+          }
+        }
+      }
+    }
+    return visible;
+  }
 
   /**
    * Convert database row to Artifact type.
@@ -56,7 +213,7 @@ export class ArtifactRepository implements BaseRepository<Artifact, Partial<Arti
    * board (the `/a/<short>/` URL would resolve the artifact but have
    * nowhere to switch the canvas to).
    */
-  private rowToArtifact(row: ArtifactRow, baseUrl?: string): Artifact {
+  private rowToArtifact(row: ArtifactMetadataRow, baseUrl?: string): Artifact {
     const artifactId = row.artifact_id as ArtifactID;
     const url = baseUrl && row.board_id ? getArtifactUrl(artifactId, baseUrl) : null;
     const fullscreenUrl = baseUrl ? getArtifactFullscreenUrl(artifactId, baseUrl) : null;
@@ -194,12 +351,15 @@ export class ArtifactRepository implements BaseRepository<Artifact, Partial<Arti
    *   visible to this user under branch RBAC, pushed down as a correlated SQL
    *   EXISTS instead of a preloaded `branch_id IN (...)` list. Null-branch
    *   artifacts are excluded, matching the existing RBAC find-hook behavior.
+   * @param filter.projection - Exclude source/runtime JSON columns from the SQL
+   *   select when a list caller explicitly requested a lean response.
    */
   async findAll(filter?: {
     board_id?: BoardID;
     archived?: boolean;
     branchIds?: BranchID[];
     visibleToUserId?: UUID;
+    projection?: ArtifactListProjection;
   }): Promise<Artifact[]> {
     try {
       // An explicit empty id set can never match a row; short-circuit so we skip
@@ -224,11 +384,21 @@ export class ArtifactRepository implements BaseRepository<Artifact, Partial<Arti
         );
       }
 
-      const query = select(this.db).from(artifacts);
-      const rows =
-        conditions.length > 0 ? await query.where(and(...conditions)).all() : await query.all();
+      const predicate = conditions.length > 0 ? and(...conditions) : undefined;
+      const projection = filter?.projection ?? 'full';
+      let rows: ArtifactMetadataRow[];
+      if (projection === 'metadata') {
+        const query = select(this.db, artifactMetadataColumns).from(artifacts);
+        rows = predicate ? await query.where(predicate).all() : await query.all();
+      } else if (projection === 'without-files') {
+        const query = select(this.db, artifactWithoutFilesColumns).from(artifacts);
+        rows = predicate ? await query.where(predicate).all() : await query.all();
+      } else {
+        const query = select(this.db).from(artifacts);
+        rows = predicate ? await query.where(predicate).all() : await query.all();
+      }
       const baseUrl = await getBaseUrl();
-      return rows.map((row: ArtifactRow) => this.rowToArtifact(row, baseUrl));
+      return rows.map((row) => this.rowToArtifact(row, baseUrl));
     } catch (error) {
       throw new RepositoryError(
         `Failed to find all artifacts: ${error instanceof Error ? error.message : String(error)}`,

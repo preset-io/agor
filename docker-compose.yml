@@ -108,6 +108,10 @@ services:
 
       # Daemon configuration
       - NODE_ENV=development
+      # Exact triple gate for the deliberately fixed development-only admin.
+      # Production Compose files do not carry these defaults.
+      - AGOR_ADMIN_PASSWORD=admin
+      - AGOR_ALLOW_DEVELOPMENT_DEFAULT_ADMIN=true
       - DAEMON_PORT=${DAEMON_PORT:-3030}
       - DAEMON_HOST=${DAEMON_HOST:-0.0.0.0}
       - CORS_ORIGIN=${CORS_ORIGIN:-*}
@@ -133,6 +137,14 @@ services:
       - AGOR_DB_DIALECT=${AGOR_DB_DIALECT:-sqlite}
       - DATABASE_URL=${DATABASE_URL:-}
 
+      # Explicit operator acknowledgement for protocol-breaking migrations.
+      # New Agor-managed isolated dev variants set the dedicated variable in
+      # .agor.yml. SEED is the compatibility signal for already-rendered
+      # managed commands: it is development-only and those Compose projects
+      # own isolated database volumes. Unseeded/ad-hoc/shared invocations stay
+      # fail-closed unless the operator sets the dedicated variable.
+      - AGOR_MIGRATION_OFFLINE_CUTOVER=${AGOR_MIGRATION_OFFLINE_CUTOVER:-${SEED:-false}}
+
       # Seed development fixtures (optional, set SEED=true to populate test data)
       # Creates: Agor repo (https://github.com/preset-io/agor.git) + test-branch
       - SEED=${SEED:-false}
@@ -148,12 +160,15 @@ services:
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - GEMINI_API_KEY=${GEMINI_API_KEY:-}
 
-      # Branch RBAC + execution mode (resolved in memory; config.yaml is
-      # never rewritten). Both are optional.
-      #   AGOR_RBAC_ENABLED=true         → execution.branch_rbac: true
+      # Board and branch RBAC is always enabled; this variable is retired.
+      # Forwarded only during the compatibility window so an existing
+      # deployment still setting it gets the migration error instead of a
+      # silently ignored value: `true` is an accepted no-op, `false`/malformed
+      # fail startup. Remove it from your env once migrated.
+      - AGOR_RBAC_ENABLED=${AGOR_RBAC_ENABLED:-}
+      # Execution mode (resolved in memory; config.yaml is never rewritten).
       #   AGOR_UNIX_USER_MODE=sandbox    → execution.unix_user_mode: sandbox
       #                                    (simple | sandbox | delegated)
-      - AGOR_RBAC_ENABLED=${AGOR_RBAC_ENABLED:-}
       - AGOR_UNIX_USER_MODE=${AGOR_UNIX_USER_MODE:-}
       # OS-level executor filesystem sandbox (bubblewrap). AGOR_SANDBOX_ENABLED=true
       # → execution.sandbox.enabled: true (resolved in memory). Used by the
@@ -163,6 +178,10 @@ services:
       # persistent private home inside the sandbox. Default (unset/shared) uses
       # the daemon user's home.
       - AGOR_SANDBOX_HOME_MODE=${AGOR_SANDBOX_HOME_MODE:-}
+      # Optional branch-owned SDK state. Empty preserves the deployment-safe
+      # `inherit` default; the rich/full PostgreSQL overlay opts into
+      # `per_branch` so its RBAC fixtures exercise the complete sharing model.
+      - AGOR_SANDBOX_SDK_HOME_MODE=${AGOR_SANDBOX_SDK_HOME_MODE:-}
       # Optional PostgreSQL/RBAC development fixtures. This must be forwarded
       # explicitly: --env-file supplies Compose interpolation values but does
       # not inject arbitrary variables into the container by itself.

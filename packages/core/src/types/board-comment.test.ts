@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { BoardComment } from './board-comment';
 import {
+  boardCommentZoneParentObjectKey,
   CommentAttachmentType,
   getCommentAttachmentType,
   groupReactions,
@@ -8,6 +9,12 @@ import {
   isResolvable,
   isThreadRoot,
 } from './board-comment';
+
+describe('boardCommentZoneParentObjectKey', () => {
+  it('converts the persisted parent suffix to the canonical board-object key', () => {
+    expect(boardCommentZoneParentObjectKey('review')).toBe('zone-review');
+  });
+});
 
 // ============================================================================
 // Test Helpers

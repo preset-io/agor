@@ -61,6 +61,7 @@ export function codexUsedPercentage(usedTokens: number, contextWindow: number): 
  * {
  *   input_tokens,
  *   cached_input_tokens,
+ *   cache_write_input_tokens,
  *   output_tokens,
  *   reasoning_output_tokens   // subset of output_tokens (Responses API convention)
  * }
@@ -68,6 +69,9 @@ export function codexUsedPercentage(usedTokens: number, contextWindow: number): 
  * Notes:
  * - We map cached_input_tokens → cache_read_tokens so downstream utilities
  *   (cost + context window) can treat Codex like Claude/Gemini.
+ * - We map cache_write_input_tokens → cache_creation_tokens. This field was
+ *   added in Codex SDK 0.153 and is a breakdown already included in
+ *   input_tokens, so it must not be added to total token arithmetic.
  * - reasoning_output_tokens is intentionally NOT added to totals because
  *   per the OpenAI Responses API it is already included in output_tokens.
  *   It is preserved on the raw SDK response for debugging/UI surfacing.
@@ -84,6 +88,11 @@ export function extractCodexTokenUsage(raw: unknown): TokenUsage | undefined {
   const cacheReadTokens = normalizeNumber(
     payload.cached_input_tokens ?? payload.cachedInputTokens ?? payload.cache_read_tokens
   );
+  const cacheCreationTokens = normalizeNumber(
+    payload.cache_write_input_tokens ??
+      payload.cacheWriteInputTokens ??
+      payload.cache_creation_tokens
+  );
   const totalTokens = normalizeNumber(
     payload.total_tokens ??
       payload.totalTokens ??
@@ -96,6 +105,7 @@ export function extractCodexTokenUsage(raw: unknown): TokenUsage | undefined {
     input_tokens: inputTokens,
     output_tokens: outputTokens,
     cache_read_tokens: cacheReadTokens,
+    cache_creation_tokens: cacheCreationTokens,
     total_tokens: totalTokens,
   };
 
@@ -103,6 +113,7 @@ export function extractCodexTokenUsage(raw: unknown): TokenUsage | undefined {
     usage.input_tokens === undefined &&
     usage.output_tokens === undefined &&
     usage.cache_read_tokens === undefined &&
+    usage.cache_creation_tokens === undefined &&
     usage.total_tokens === undefined
   ) {
     return undefined;

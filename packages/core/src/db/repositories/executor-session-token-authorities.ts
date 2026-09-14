@@ -42,6 +42,16 @@ export interface ExecutorSessionTokenAuthorityClaim {
   userId: string;
 }
 
+/** Exact already-authenticated Task credential checked by the heartbeat hot path. */
+export interface CurrentTaskExecutorSessionTokenAuthority {
+  tenantId: string;
+  tokenFingerprint: string;
+  sessionId: string;
+  taskId: string;
+  branchId: string;
+  userId: string;
+}
+
 export interface ConsumedExecutorSessionTokenAuthority {
   sessionId: string;
   taskId: string | null;
@@ -197,6 +207,41 @@ export class ExecutorSessionTokenAuthorityRepository {
     }
   }
 
+  /**
+   * Revalidate one task-scoped credential without consuming another token use.
+   *
+   * The fingerprint primary key is the first and only candidate lookup. The
+   * remaining predicates prove that the authenticated socket's durable row is
+   * still current for the exact tenant/principal/resource tuple.
+   */
+  async isCurrent(input: CurrentTaskExecutorSessionTokenAuthority): Promise<boolean> {
+    assertFingerprint(input.tokenFingerprint);
+    if (!input.tenantId || !input.sessionId || !input.taskId || !input.branchId || !input.userId) {
+      throw new RepositoryError('Executor task token authority scope is incomplete');
+    }
+    try {
+      const result = await executeRaw(
+        this.db,
+        sql`
+          SELECT 1 AS current
+          FROM ${executorSessionTokenAuthorities}
+          WHERE tenant_id = ${input.tenantId}
+            AND token_fingerprint = ${input.tokenFingerprint}
+            AND session_id = ${input.sessionId}
+            AND task_id = ${input.taskId}
+            AND branch_id = ${input.branchId}
+            AND user_id = ${input.userId}
+            AND revoked_at IS NULL
+            AND expires_at > CURRENT_TIMESTAMP
+          LIMIT 1
+        `
+      );
+      return rowsOf(result).length === 1;
+    } catch (error) {
+      throw databaseFailure('current-authority check', error);
+    }
+  }
+
   async revoke(tokenFingerprint: string, tenantId: string): Promise<boolean> {
     assertFingerprint(tokenFingerprint);
     try {
@@ -220,25 +265,33 @@ export class ExecutorSessionTokenAuthorityRepository {
     }
   }
 
-  async revokeSession(sessionId: string, tenantId: string): Promise<number> {
+  /** Revoke every credential issued for one exact Task and return only fingerprints. */
+  async revokeByTask(taskId: string, tenantId: string): Promise<string[]> {
+    if (!taskId || !tenantId) {
+      throw new RepositoryError('Executor task token revocation scope is incomplete');
+    }
     try {
       const result = await executeRaw(
         this.db,
         sql`
-          WITH revoked AS (
-            UPDATE ${executorSessionTokenAuthorities}
-            SET revoked_at = CURRENT_TIMESTAMP
-            WHERE tenant_id = ${tenantId}
-              AND session_id = ${sessionId}
-              AND revoked_at IS NULL
-            RETURNING 1
-          )
-          SELECT count(*) AS count FROM revoked
+          UPDATE ${executorSessionTokenAuthorities}
+          SET revoked_at = CURRENT_TIMESTAMP
+          WHERE tenant_id = ${tenantId}
+            AND task_id = ${taskId}
+            AND revoked_at IS NULL
+          RETURNING token_fingerprint
         `
       );
-      return Number(rowsOf(result)[0]?.count ?? 0);
+      return rowsOf(result).map((row) => {
+        if (typeof row.token_fingerprint !== 'string') {
+          throw new RepositoryError('Executor task token revocation returned invalid authority');
+        }
+        assertFingerprint(row.token_fingerprint);
+        return row.token_fingerprint;
+      });
     } catch (error) {
-      throw databaseFailure('session revocation', error);
+      if (error instanceof RepositoryError) throw error;
+      throw databaseFailure('task revocation', error);
     }
   }
 

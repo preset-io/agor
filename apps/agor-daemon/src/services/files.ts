@@ -12,16 +12,21 @@ import {
   runWithTenantDatabaseScope,
   SessionRepository,
   type TenantScopeAwareDatabase,
-  UsersRepository,
 } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
-import type { AuthenticatedParams, RBACParams, SessionID, UserID } from '@agor/core/types';
+import { NotAuthenticated } from '@agor/core/feathers';
+import type {
+  AuthenticatedParams,
+  RBACParams,
+  SessionID,
+  UserID,
+  UserRole,
+} from '@agor/core/types';
+import { resolveBranchExecutorSandboxMounts } from '../utils/branch-executor-sandbox.js';
+import { ensureBranchWorkspaceAccess } from '../utils/branch-workspace-path.js';
 import { resolveDelegatedExecutionHomeKey } from '../utils/executor-delegated-home.js';
-import {
-  generateScopedServiceToken,
-  getDaemonUrl,
-  runExecutorCommand,
-} from '../utils/spawn-executor.js';
+import { getDaemonUrl, requestExecutor } from '../utils/spawn-executor.js';
+import { issueExecutorCommandToken } from './session-token-service.js';
 
 // Constants for file search
 const MAX_FILE_RESULTS = 10;
@@ -62,7 +67,6 @@ function extractResults(data: unknown): FileResult[] {
 export class FilesService {
   private sessionRepo: SessionRepository;
   private branchRepo: BranchRepository;
-  private usersRepo: UsersRepository;
 
   constructor(
     private db: TenantScopeAwareDatabase,
@@ -70,7 +74,6 @@ export class FilesService {
   ) {
     this.sessionRepo = new SessionRepository(db);
     this.branchRepo = new BranchRepository(db);
-    this.usersRepo = new UsersRepository(db);
   }
 
   /**
@@ -114,22 +117,50 @@ export class FilesService {
       if (!branch?.path) return null;
 
       const currentUserId = params.user?.user_id as UserID | undefined;
-      const currentUser = currentUserId ? await this.usersRepo.findById(currentUserId) : null;
+      if (!currentUserId) throw new NotAuthenticated('Authentication required');
+      const fsAccess = await ensureBranchWorkspaceAccess(
+        this.branchRepo,
+        branch,
+        currentUserId,
+        params.user?.role as UserRole | undefined,
+        'view',
+        'read',
+        this.app.get('config').execution?.allow_superadmin === true
+      );
       const delegatedHomeKey = await resolveDelegatedExecutionHomeKey(
         this.db,
-        currentUser ?? currentUserId,
+        currentUserId,
         this.app.get('config')
       );
-      return { branchId: branch.branch_id, delegatedHomeKey };
+      // Autocomplete is a caller-initiated, stateless read. Use the caller's
+      // sandbox home rather than the Session/branch owner's credential home.
+      const sandboxMounts = await resolveBranchExecutorSandboxMounts({
+        config: this.app.get('config'),
+        tenantId,
+        executionUserId: currentUserId,
+        branch,
+        db: this.db,
+      });
+      return {
+        branchId: branch.branch_id,
+        branchPath: branch.path,
+        delegatedHomeKey,
+        fsAccess,
+        userId: currentUserId,
+        sandboxMounts,
+      };
     });
     if (!resolved) return [];
 
     try {
-      const sessionToken = generateScopedServiceToken(
-        this.app as unknown as { settings: { authentication?: { secret?: string } } }
+      const sessionToken = await issueExecutorCommandToken(
+        this.app,
+        'branch-files-list',
+        resolved.userId,
+        resolved.branchId
       );
 
-      const result = await runExecutorCommand(
+      const result = await requestExecutor(
         {
           command: 'branch.files.list',
           sessionToken,
@@ -138,6 +169,9 @@ export class FilesService {
             branchId: resolved.branchId,
             search,
             limit: MAX_FILE_RESULTS,
+            cwd: resolved.branchPath,
+            principalBranchAccess: resolved.fsAccess,
+            ...resolved.sandboxMounts,
           },
         },
         {
@@ -145,6 +179,11 @@ export class FilesService {
           // Delegated mode passes the caller's stable execution-home key to
           // the external launcher. Local modes do not select a host identity.
           delegatedHomeKey: resolved.delegatedHomeKey,
+          templateVariables: {
+            branch_id: resolved.branchId,
+            user_id: resolved.userId,
+            branch_fs_access: resolved.fsAccess,
+          },
         }
       );
 

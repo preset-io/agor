@@ -7,8 +7,13 @@
 
 import { constants } from 'node:fs';
 import { access, mkdir } from 'node:fs/promises';
+import { createRequire } from 'node:module';
+import { dirname, resolve } from 'node:path';
+import type { ApmTraceServiceDepth } from '@agor/core/config';
+import { ensureAgorHome, getAgorHome } from '@agor/core/config';
 import {
   checkMigrationStatus,
+  configureSecretKeyDerivationTracing,
   createDatabaseAsync,
   createTenantScopedDatabaseProxy,
   detectDialectFromUrl,
@@ -19,6 +24,7 @@ import {
   seedInitialData,
   type TenantScopeAwareDatabase,
 } from '@agor/core/db';
+import { resolveDatadogTracer } from '@agor/core/tracing/datadog';
 import type { TenantID } from '@agor/core/types';
 import { extractDbFilePath } from '@agor/core/utils/path';
 import { logFirstRunAdminBootstrap, runFirstRunAdminBootstrap } from './first-run-admin.js';
@@ -43,14 +49,21 @@ async function ensureDatabaseDirectory(dbPath: string): Promise<void> {
 
   // Extract file path from DB_PATH (remove 'file:' prefix and expand ~)
   const dbFilePath = extractDbFilePath(dbPath);
-  const dbDir = dbFilePath.substring(0, dbFilePath.lastIndexOf('/'));
+  const dbDir = dirname(dbFilePath);
 
   // Ensure database directory exists
   try {
     await access(dbDir, constants.F_OK);
   } catch {
     console.log('[database] creating sqlite directory');
-    await mkdir(dbDir, { recursive: true });
+    if (resolve(dbDir) === resolve(getAgorHome())) {
+      await ensureAgorHome(dbDir);
+    } else {
+      // A custom SQLite parent is operator-managed and may intentionally use
+      // group ownership or default ACLs; only the canonical Agor home receives
+      // Agor's private-state policy.
+      await mkdir(dbDir, { recursive: true });
+    }
   }
 
   // Check if database file exists (create message if needed)
@@ -73,6 +86,12 @@ async function checkAndReportMigrations(
 ): Promise<void> {
   console.log('🔍 Checking database migration status...');
   const migrationStatus = await checkMigrationStatus(db);
+
+  if (migrationStatus.dbAheadOfBinary) {
+    throw new Error(
+      'Database schema is newer than this Agor binary. Refusing to start because an older daemon cannot safely interpret newer authorization state. Upgrade this binary to match the database.'
+    );
+  }
 
   if (migrationStatus.hasPending) {
     // Use the shared formatter from @agor/core/db so this message stays
@@ -108,10 +127,11 @@ export async function initializeDatabase(
   dbPath: string,
   options: {
     tenantId?: TenantID | string;
-    requireTenantScope?: boolean;
     skipFirstRunAdminBootstrap?: boolean;
     /** PostgreSQL per-replica connection limit. PostgreSQL only. */
     pool?: { max: number };
+    /** Shared custom APM tracing gate; `off` also disables PostgreSQL tracing. */
+    traceServices?: ApmTraceServiceDepth;
   } = {}
 ): Promise<DatabaseInitResult> {
   const dialect = detectDialectFromUrl(dbPath) ?? getDatabaseDialect();
@@ -120,13 +140,27 @@ export async function initializeDatabase(
   // Ensure directory exists for SQLite
   await ensureDatabaseDirectory(dbPath);
 
+  // `trace_services` is the single gate for both custom APM layers. Avoid even
+  // resolving the optional tracer when tracing is off: this keeps the disabled
+  // path free of per-query and startup module-resolution overhead.
+  const tracingEnabled = (options.traceServices ?? 'off') !== 'off';
+  const tracer = tracingEnabled ? resolveDatadogTracer(createRequire(import.meta.url)) : null;
+  configureSecretKeyDerivationTracing(tracer);
+
   // Create database with foreign keys enabled
-  const db = await createDatabaseAsync({
+  const databaseConfig = {
     url: dbPath,
     ...(options.pool ? { pool: options.pool } : {}),
-  });
+  };
+  const db = tracer
+    ? await createDatabaseAsync(databaseConfig, { tracer })
+    : await createDatabaseAsync(databaseConfig);
+  // The scope guard is armed in every mode (SQLite/static included), not only
+  // HA `required_from_auth`. A missing tenant/system scope is a bug in any
+  // deployment; catching it here (and in tests) is what makes the invariant
+  // structural instead of HA-only. On non-Postgres this is free — a scope is a
+  // cheap AsyncLocalStorage store with no transaction.
   const scopedDb = createTenantScopedDatabaseProxy(db, {
-    requireScope: options.requireTenantScope === true,
     label: 'daemon database',
   });
 
@@ -134,12 +168,6 @@ export async function initializeDatabase(
   await checkAndReportMigrations(db, dbPath);
 
   const runInitialDataSetup = async () => {
-    // Seed initial data (idempotent - only creates if missing). In static
-    // Postgres deployments, scope this to the configured tenant so changing
-    // multi_tenancy.static_tenant_id starts from a clean tenant-local slate.
-    console.log('🌱 Seeding initial data...');
-    await seedInitialData(scopedDb);
-
     // First-run admin bootstrap: create a default admin if no users exist in
     // the current tenant, and re-attribute any legacy `created_by='anonymous'`
     // rows to a real user. External-launch managed deployments skip the local
@@ -147,11 +175,16 @@ export async function initializeDatabase(
     // target instead.
     if (options.skipFirstRunAdminBootstrap) {
       console.log(
-        '🔐 Skipping local first-run admin bootstrap; external launch owns user identity.'
+        '🔐 Skipping local first-run admin/bootstrap data; external launch owns the first User and default Board.'
       );
     } else {
       const bootstrapResult = await runFirstRunAdminBootstrap(scopedDb);
       logFirstRunAdminBootstrap(bootstrapResult);
+      if (!bootstrapResult.admin) {
+        throw new Error('First-run setup could not resolve a primary owner for the default Board');
+      }
+      console.log('🌱 Seeding initial data...');
+      await seedInitialData(scopedDb, bootstrapResult.admin.user_id);
     }
   };
 

@@ -22,6 +22,7 @@ import type {
   CardTypeID,
   CardWithType,
   QueryParams,
+  UUID,
   ZoneBoardObject,
 } from '@agor/core/types';
 import { DrizzleService, type Query } from '../adapters/drizzle';
@@ -33,7 +34,10 @@ export type CardParams = QueryParams<{
   search?: string;
   zone_id?: string;
 }> &
-  AuthenticatedParams;
+  AuthenticatedParams & {
+    /** Internal RBAC SQL pushdown marker set by register-hooks. */
+    _agorSqlBoardAccessUserId?: UUID;
+  };
 
 export class CardsService extends DrizzleService<Card, Partial<Card>, CardParams> {
   private cardRepo: CardRepository;
@@ -68,9 +72,26 @@ export class CardsService extends DrizzleService<Card, Partial<Card>, CardParams
    * preserving current behavior exactly.
    */
   protected async fetchData(query: Query, _params?: CardParams): Promise<Card[]> {
-    const filter: { board_id?: BoardID; archived?: boolean } = {};
+    const filter: {
+      board_id?: BoardID;
+      boardIds?: BoardID[];
+      archived?: boolean;
+      visibleToUserId?: UUID;
+    } = {};
+
+    if (_params?._agorSqlBoardAccessUserId) {
+      filter.visibleToUserId = _params._agorSqlBoardAccessUserId;
+    }
 
     if (typeof query.board_id === 'string') filter.board_id = query.board_id as BoardID;
+    else if (
+      query.board_id &&
+      typeof query.board_id === 'object' &&
+      Array.isArray(query.board_id.$in) &&
+      query.board_id.$in.every((value: unknown) => typeof value === 'string')
+    ) {
+      filter.boardIds = query.board_id.$in as BoardID[];
+    }
     if (typeof query.archived === 'boolean') filter.archived = query.archived;
 
     const search = typeof query.search === 'string' ? query.search.toLowerCase() : undefined;
@@ -80,7 +101,10 @@ export class CardsService extends DrizzleService<Card, Partial<Card>, CardParams
     delete query.zone_id;
 
     if (zoneId && filter.board_id) {
-      return this.cardRepo.findByZoneId(filter.board_id, zoneId);
+      return this.cardRepo.findByZoneId(filter.board_id, zoneId, {
+        archived: filter.archived,
+        visibleToUserId: filter.visibleToUserId,
+      });
     }
 
     const rows = await this.cardRepo.findAll(filter);

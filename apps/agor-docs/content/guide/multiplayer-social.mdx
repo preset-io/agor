@@ -21,11 +21,29 @@ Just as Figma turned design from a solo activity into real-time collaboration, A
 
 Cursors update every ~100ms, making collaboration feel fluid. Notice someone hovering over a session? Jump in. See them dragging a branch to the same zone? Coordinate live instead of stepping on each other.
 
+Cursor positions are delivered only to people who can currently view that
+board and who are actively rendering it. Leaving the board, losing access, or
+disconnecting removes that cursor; an interrupted connection also expires from
+the canvas after a short timeout.
+
 ---
 
 ## 👥 Facepile
 
-**Know who's online at a glance.** The facepile shows all active users on the current board with their avatars and presence status. Same pattern Figma uses. You always know who's in the room. No "are you looking at this?" pings on Slack.
+**Know who's online at a glance.** The navbar facepile shows active people in
+your workspace. When a person is focused on a board that you can also view,
+their tooltip names that board and you can click through to it. If they are on
+a private board you cannot view, the facepile may show only that they are
+online—it never reveals the board ID, name, or membership.
+
+Board association is deliberately lower-frequency than the live cursor stream.
+It is authorized by the daemon for both the publisher and every subscriber,
+and cursor traffic never substitutes for that separate authorization. Each
+route/list/focus/reconnect synchronization first retracts the previous board;
+periodic heartbeats stay boardless until that latest authorization succeeds.
+Hidden or unfocused tabs publish only workspace-level online status. Each
+tab/device has its own presence instance, so closing one tab does not make a
+user disappear while another remains active.
 
 ---
 
@@ -135,7 +153,7 @@ The settings panel is split into two surfaces:
 **Profile**
 
 - **General**: display name, avatar, email, role.
-- **Env Vars**: encrypted environment variables, scoped `Global` (auto-injected into every session you own) or `Session` (only injected when you opt in per session under Session → Settings → Env Vars). Useful for `GITHUB_TOKEN`, `HUBSPOT_API_KEY`, vendor credentials, or anything you'd otherwise paste into a `.env`.
+- **Env Vars**: encrypted environment variables, scoped `Global` (eligible for tasks executing as you) or `Session` (eligible only when selected under Session → Settings → Env Vars and the session is owned by the same execution user). Useful for `GITHUB_TOKEN`, `HUBSPOT_API_KEY`, vendor credentials, or anything you'd otherwise paste into a `.env`.
 - **Audio**: chime / notification preferences for attention pulse and session events.
 - **Agor API Tokens**: issue tokens for scripting Agor itself (CLI / external tools).
 
@@ -147,9 +165,12 @@ The settings panel is split into two surfaces:
 
 When teammates share a board, sessions still execute under a specific user's identity:
 
-- The session's Anthropic / OpenAI key is the **session creator's** key (billing follows usage).
-- Env vars merge: `gateway/channel → user globals → session-scoped`, so a Slack-driven session run as you carries _your_ `GITHUB_TOKEN`, not a shared bot token.
+- A task uses its durable prompter's execution home, generic env vars, and task credentials. A foreign prompt is allowed only for an explicitly shareable branch-home Session; the conversation and branch SDK state remain attached while caller identity stays consistent.
+- Resolution precedence is: allowlisted host runtime → gateway fallback values → the task user's globals and eligible session selections → gateway force-overrides → narrow trusted executor fields. Provider credentials are resolved separately for the selected agentic tool.
+- Session selection rows contain names only. A selected name resolves only for a session owned by the same execution user, so a foreign session cannot select a same-named secret from the prompter's profile.
 - In `unix_user_mode: sandbox`, the executor runs as the daemon user inside an RBAC-derived filesystem boundary.
+
+Fork/spawn creation copies selected variable **names**, not values. The child resolves those names against its own attributed owner at its next task; for a shared branch-home Session that is the caller. A scope/selection change affects future launches, not an already-running process. Gateway and scheduled sessions use their configured execution owner; gateway-specific values are channel configuration, not implicit access to another user's profile.
 
 This is what makes co-locating teams on one Agor instance work without secret-sharing: everyone keeps their own credentials, but the boards, branches, and conversations are shared.
 
@@ -170,6 +191,10 @@ Agor speaks the full MCP transport matrix:
 ### Per-user, not per-instance
 
 Each user authenticates **their own** OAuth grant per MCP server. When a session attaches an OAuth-secured MCP server, Agor injects the _acting user's_ token, never another user's. PostgreSQL coordinates rotating-token refresh across daemons. The UI refetches durable state after realtime hints, so a callback handled by another daemon still converges correctly.
+
+Catalog Connect first prefers the user's canonical install of that catalog entry. It may reuse an existing or freshly refreshed credential peer only when endpoint, transport, scope, client-registration settings, and effective compatibility policy exactly match the current catalog. The connect response identifies `catalog_install`, `credential_peer`, or `refreshed_credential_peer` reuse and exposes the secret-free effective policy. A credential peer remains the original Settings row: disabling or deleting it also disables or removes the session dependency; deleting the session does not delete that pre-existing row. Catalog drift or removal makes an unstated peer policy strict and prevents reuse when the current entry differs.
+
+New SQLite and PostgreSQL grants carry a versioned configuration fingerprint. Historical SQLite grants may be unbound; they are accepted only when their recorded protected-resource URI still matches. Standalone SQLite assumes the daemon account and database file are trusted—direct database write access can forge configuration and grant metadata and is therefore equivalent to deployment compromise. Hosted PostgreSQL additionally enforces tenant scoping/RLS and durable binding at the database boundary.
 
 Per-user grants are self-service. A server configured with a **shared** grant uses one workspace credential; only a current admin can start, complete, refresh/replace, or disconnect it. Disconnect removes the grant from Agor but **does not revoke it at the OAuth provider**. Use the provider's security settings when provider-side revocation is required.
 

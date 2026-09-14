@@ -62,7 +62,35 @@ function renderBranchModal({
 }
 
 describe('BranchModal — permissions tab visibility', () => {
-  it('supplies other schedule owners from the global store when RBAC is disabled', async () => {
+  it('mounts the target editor without a development-preview banner', async () => {
+    const owner = makeUser({ user_id: 'user-1', role: 'admin', name: 'Alice' });
+    const { client, calls } = makeStubClient({ owners: [owner], users: [owner] });
+
+    renderWithApp(
+      <BranchModal
+        open
+        onClose={() => {}}
+        branch={makeBranch({ created_by: owner.user_id })}
+        repo={makeRepo()}
+        sessions={[]}
+        client={client}
+        currentUser={owner}
+        defaultTab="permissions"
+      />
+    );
+
+    expect(await screen.findByText('Branch permissions')).toBeInTheDocument();
+    expect(screen.queryByText('New permissions · development preview')).not.toBeInTheDocument();
+    expect(
+      screen.queryByText('Current persisted permissions · legacy model')
+    ).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Apply permissions preview' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Reset permissions preview' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Save changes' })).toBeDisabled();
+    expect(calls.some((call) => ['create', 'patch', 'remove'].includes(call.method))).toBe(false);
+  });
+
+  it('supplies other schedule owners from the global store if permission loading fails', async () => {
     const caller = makeUser({ user_id: 'caller', role: 'member' });
     const owner = makeUser({ user_id: 'owner', role: 'member' });
     const userById = new Map([

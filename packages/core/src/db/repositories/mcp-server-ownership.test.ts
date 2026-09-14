@@ -20,11 +20,15 @@ import { MCPServerRepository } from './mcp-servers';
 import { RepoRepository } from './repos';
 import { SessionMCPServerRepository } from './session-mcp-servers';
 import { SessionRepository } from './sessions';
+import { UsersRepository } from './users';
 
 const ALICE = '00000000-0000-7000-8000-00000000a11c' as UserID;
 const BOB = '00000000-0000-7000-8000-00000000b0b0' as UserID;
 
 async function setupTenant(db: Database) {
+  const users = new UsersRepository(db);
+  await users.create({ user_id: ALICE, email: 'alice-mcp-owner@example.invalid', role: 'member' });
+  await users.create({ user_id: BOB, email: 'bob-mcp-owner@example.invalid', role: 'member' });
   const repo = await new RepoRepository(db).create({
     repo_id: generateId() as UUID,
     slug: `ownership-repo-${Math.floor(Math.random() * 1_000_000)}`,
@@ -123,6 +127,36 @@ describe('private MCP server ownership', () => {
     ]);
   });
 
+  dbTest(
+    'creator failure cannot delete a catalog row after a conflict loser adopts it',
+    async ({ db }) => {
+      const { sessionMcpRepo, alicesSession, mcpServerRepo } = await setupTenant(db);
+      const winnerCreated = await mcpServerRepo.create({
+        name: 'catalog-race',
+        transport: 'http',
+        url: 'https://catalog.example/mcp',
+        scope: 'session',
+        source: 'catalog',
+        catalog_entry_name: 'com.example/race',
+        owner_user_id: ALICE,
+      });
+
+      // The concurrent insert lost the unique race, recovered winnerCreated,
+      // and completed its attachment before the creator's later step failed.
+      await sessionMcpRepo.addServer(alicesSession.session_id, winnerCreated.mcp_server_id);
+
+      await expect(mcpServerRepo.deleteIfUnattached(winnerCreated.mcp_server_id)).resolves.toBe(
+        false
+      );
+      await expect(mcpServerRepo.findById(winnerCreated.mcp_server_id)).resolves.toMatchObject({
+        mcp_server_id: winnerCreated.mcp_server_id,
+      });
+      await expect(
+        sessionMcpRepo.getRelationship(alicesSession.session_id, winnerCreated.mcp_server_id)
+      ).resolves.not.toBeNull();
+    }
+  );
+
   dbTest('a shared server stays attachable by anyone', async ({ db }) => {
     const { sessionMcpRepo, bobsSession, sharedServer } = await setupTenant(db);
 
@@ -189,7 +223,7 @@ describe('private MCP server ownership', () => {
       transport: 'http',
       url: 'https://mcp.linear.app/mcp',
       scope: 'session',
-      source: 'user',
+      source: 'catalog',
       owner_user_id: BOB,
       catalog_entry_name: 'com.linear/linear',
     });

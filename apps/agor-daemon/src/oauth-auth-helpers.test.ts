@@ -141,7 +141,6 @@ describe('resolveForUserIdWithGate', () => {
     const result = resolveForUserIdWithGate({
       queryForUserId: 'victim-user-id',
       isServiceAccount: false,
-      authPayloadType: 'local-jwt',
       callerUserId: 'caller-user-id',
     });
 
@@ -153,7 +152,6 @@ describe('resolveForUserIdWithGate', () => {
     const result = resolveForUserIdWithGate({
       queryForUserId: 'victim-user-id',
       isServiceAccount: undefined,
-      authPayloadType: undefined,
       callerUserId: 'caller-user-id',
     });
 
@@ -166,39 +164,10 @@ describe('resolveForUserIdWithGate', () => {
     const result = resolveForUserIdWithGate({
       queryForUserId: 'task-owner-id',
       isServiceAccount: true,
-      authPayloadType: 'internal',
       callerUserId: 'executor-account-id',
     });
 
     expect(result).toBe('task-owner-id');
-  });
-
-  it('preserves forUserId for executor-session token holders when it matches the caller', () => {
-    // Executors authenticating with session tokens (authPayloadType === 'executor-session')
-    // must be able to request the authenticated task-creator's per-user OAuth tokens.
-    const result = resolveForUserIdWithGate({
-      queryForUserId: 'task-creator-id',
-      isServiceAccount: false,
-      authPayloadType: 'executor-session',
-      callerUserId: 'task-creator-id',
-    });
-
-    expect(result).toBe('task-creator-id');
-  });
-
-  it('falls back to callerUserId for executor-session token holders when forUserId differs', () => {
-    // Executor-session JWTs authenticate as the token subject. A compromised
-    // executor must not be able to choose a different user's OAuth token by
-    // passing ?forUserId=<victim>.
-    const result = resolveForUserIdWithGate({
-      queryForUserId: 'victim-user-id',
-      isServiceAccount: false,
-      authPayloadType: 'executor-session',
-      callerUserId: 'task-creator-id',
-    });
-
-    expect(result).toBe('task-creator-id');
-    expect(result).not.toBe('victim-user-id');
   });
 
   it('falls back to callerUserId when forUserId is not set, even for service accounts', () => {
@@ -207,7 +176,6 @@ describe('resolveForUserIdWithGate', () => {
     const result = resolveForUserIdWithGate({
       queryForUserId: undefined,
       isServiceAccount: true,
-      authPayloadType: 'executor-session',
       callerUserId: 'caller-user-id',
     });
 
@@ -218,7 +186,6 @@ describe('resolveForUserIdWithGate', () => {
     const result = resolveForUserIdWithGate({
       queryForUserId: undefined,
       isServiceAccount: false,
-      authPayloadType: undefined,
       callerUserId: undefined,
     });
 

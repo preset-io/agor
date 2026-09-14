@@ -65,13 +65,14 @@ export interface GitHubChannelConfig {
 interface RepoPollState {
   repo: string; // "owner/repo"
   lastPollAt: string; // ISO timestamp — used as `since` param
-  lastEtag: string | null; // ETag for conditional requests (304 Not Modified)
   processedCommentIds: Set<number>; // Ring buffer for dedup
 }
 
 /** Default poll interval */
 const DEFAULT_POLL_INTERVAL_MS = 15_000;
 const DEFAULT_STARTUP_LOOKBACK_MS = 5 * 60_000;
+const DEFAULT_POLL_OVERLAP_MS = 60_000;
+const GITHUB_COMMENTS_PAGE_SIZE = 100;
 
 /** Default mention keyword */
 const DEFAULT_MENTION_NAME = 'agor';
@@ -250,7 +251,6 @@ export class GitHubConnector implements GatewayConnector {
         // Distributed mode overlaps before its first durable checkpoint;
         // standalone mode preserves the historical start-at-now behavior.
         lastPollAt: new Date(Date.now() - this.startupLookbackMs).toISOString(),
-        lastEtag: null,
         processedCommentIds: new Set(),
       };
       this.pollStates.set(repo, state);
@@ -266,7 +266,6 @@ export class GitHubConnector implements GatewayConnector {
           repo,
           {
             lastPollAt: state.lastPollAt,
-            lastEtag: state.lastEtag,
             processedCommentIds: [...state.processedCommentIds],
           },
         ])
@@ -284,7 +283,6 @@ export class GitHubConnector implements GatewayConnector {
       this.pollStates.set(repo, {
         repo,
         lastPollAt: value.lastPollAt,
-        lastEtag: typeof value.lastEtag === 'string' ? value.lastEtag : null,
         processedCommentIds: new Set(
           Array.isArray(value.processedCommentIds)
             ? value.processedCommentIds.filter((id): id is number => Number.isSafeInteger(id))
@@ -297,7 +295,7 @@ export class GitHubConnector implements GatewayConnector {
   /**
    * Poll a single repo for new comments with @mentions.
    *
-   * Uses `since` parameter + ETag caching for efficiency.
+   * Uses the `since` parameter plus a bounded overlap for safe retries.
    * Returns new InboundMessages for the callback.
    */
   private async pollRepo(repo: string): Promise<InboundMessage[]> {
@@ -306,147 +304,145 @@ export class GitHubConnector implements GatewayConnector {
     const [owner, repoName] = repo.split('/');
     const mentionName = this.config.mention_name ?? DEFAULT_MENTION_NAME;
     const requireMention = this.config.require_mention ?? true;
+    // Capture the boundary before any provider request. Advancing to a point
+    // slightly before this instant guarantees that comments created while a
+    // multi-page poll is in flight are observed on the next tick. Stable
+    // provider event IDs and the bounded local ring make the overlap harmless.
+    const pollStartedAt = Date.now();
 
     const messages: InboundMessage[] = [];
 
     try {
-      // Fetch issue/PR comments since last poll
-      const headers: Record<string, string> = {};
-      if (state.lastEtag) {
-        headers['if-none-match'] = state.lastEtag;
-      }
-
-      const response = await octokit.issues.listCommentsForRepo({
+      // Fetch every issue/PR comment page before advancing the watermark. The
+      // endpoint caps per_page at 100; stopping after the first page can silently
+      // lose mentions when a busy repository crosses that boundary.
+      const pages = octokit.paginate.iterator(octokit.issues.listCommentsForRepo, {
         owner,
         repo: repoName,
         since: state.lastPollAt,
         sort: 'created',
         direction: 'asc',
-        per_page: 100,
-        headers,
+        per_page: GITHUB_COMMENTS_PAGE_SIZE,
       });
-
-      // Update ETag for next request
-      const etag = response.headers.etag;
-      if (etag) {
-        state.lastEtag = etag;
-      }
-
-      for (const comment of response.data) {
-        // Skip if already processed (dedup)
-        if (state.processedCommentIds.has(comment.id)) {
-          continue;
-        }
-
-        // Skip bot's own comments (avoid loops)
-        if (comment.user?.type === 'Bot') {
-          addToRingBuffer(state.processedCommentIds, comment.id);
-          continue;
-        }
-
-        const body = comment.body ?? '';
-
-        // Check for @mention if required
-        if (requireMention && !hasActiveMention(body, mentionName)) {
-          addToRingBuffer(state.processedCommentIds, comment.id);
-          continue;
-        }
-
-        // Extract issue/PR number from the comment's issue_url
-        // issue_url looks like: https://api.github.com/repos/owner/repo/issues/42
-        const issueUrlMatch = comment.issue_url?.match(/\/issues\/(\d+)$/);
-        if (!issueUrlMatch) {
-          console.warn(`[github] Could not extract issue number from comment ${comment.id}`);
-          addToRingBuffer(state.processedCommentIds, comment.id);
-          continue;
-        }
-        const issueNumber = parseInt(issueUrlMatch[1], 10);
-
-        // Build thread ID
-        const threadId = `${owner}/${repoName}#${issueNumber}`;
-
-        // Strip mention from body
-        const text = requireMention ? stripMention(body, mentionName) : body;
-
-        // Resolve user identity for alignment
-        // NOTE: user_map lookup is done in the gateway (not here) because the gateway
-        // reads fresh channel config from DB on every message. The connector's this.config
-        // is set at construction time and would go stale if user_map is updated in the UI.
-        const githubLogin = comment.user?.login;
-        let githubUserEmail: string | undefined;
-
-        if (this.config.align_github_users && githubLogin) {
-          // Fetch GitHub user's public email (used by gateway tier-2 alignment)
-          try {
-            const { data: ghUser } = await octokit.users.getByUsername({
-              username: githubLogin,
-            });
-            if (ghUser.email) {
-              githubUserEmail = ghUser.email;
-            }
-          } catch (err) {
-            console.warn(`[github] Failed to fetch user profile for ${githubLogin}:`, err);
+      for await (const response of pages) {
+        for (const comment of response.data) {
+          // Skip if already processed (dedup)
+          if (state.processedCommentIds.has(comment.id)) {
+            continue;
           }
+
+          // Skip bot's own comments (avoid loops)
+          if (comment.user?.type === 'Bot') {
+            addToRingBuffer(state.processedCommentIds, comment.id);
+            continue;
+          }
+
+          const body = comment.body ?? '';
+
+          // Check for @mention if required
+          if (requireMention && !hasActiveMention(body, mentionName)) {
+            addToRingBuffer(state.processedCommentIds, comment.id);
+            continue;
+          }
+
+          // Extract issue/PR number from the comment's issue_url
+          // issue_url looks like: https://api.github.com/repos/owner/repo/issues/42
+          const issueUrlMatch = comment.issue_url?.match(/\/issues\/(\d+)$/);
+          if (!issueUrlMatch) {
+            console.warn('[github] event="comment_shape_invalid" provider=github');
+            addToRingBuffer(state.processedCommentIds, comment.id);
+            continue;
+          }
+          const issueNumber = parseInt(issueUrlMatch[1], 10);
+
+          // Build thread ID
+          const threadId = `${owner}/${repoName}#${issueNumber}`;
+
+          // Strip mention from body
+          const text = requireMention ? stripMention(body, mentionName) : body;
+
+          // Resolve user identity for alignment
+          // NOTE: user_map lookup is done in the gateway (not here) because the gateway
+          // reads fresh channel config from DB on every message. The connector's this.config
+          // is set at construction time and would go stale if user_map is updated in the UI.
+          const githubLogin = comment.user?.login;
+          let githubUserEmail: string | undefined;
+
+          if (this.config.align_github_users && githubLogin) {
+            // Fetch GitHub user's public email (used by gateway tier-2 alignment)
+            try {
+              const { data: ghUser } = await octokit.users.getByUsername({
+                username: githubLogin,
+              });
+              if (ghUser.email) {
+                githubUserEmail = ghUser.email;
+              }
+            } catch {
+              console.warn('[github] event="user_lookup_failed" provider=github');
+            }
+          }
+
+          messages.push({
+            providerEventId: githubIssueCommentProviderEventId(comment),
+            threadId,
+            text,
+            userId: githubLogin ?? 'unknown',
+            timestamp: comment.created_at,
+            metadata: {
+              comment_id: comment.id,
+              github_user: githubLogin,
+              github_user_url: comment.user?.html_url,
+              issue_number: issueNumber,
+              repo_full_name: repo,
+              comment_url: comment.html_url,
+              ...(this.config.align_github_users ? { align_github_users: true } : {}),
+              ...(githubUserEmail ? { github_user_email: githubUserEmail } : {}),
+            },
+            // Side effects run only after the gateway has won the durable event
+            // identity. GitHub has no idempotency key for createComment, so a
+            // crash after the API accepts the comment but before Agor records
+            // completion remains an explicitly documented at-least-once window.
+            prepareDelivery: async () => {
+              try {
+                await octokit.reactions.createForIssueComment({
+                  owner,
+                  repo: repoName,
+                  comment_id: comment.id,
+                  content: 'eyes',
+                });
+              } catch {
+                console.warn('[github] event="reaction_failed" provider=github');
+              }
+              try {
+                const { data: processingComment } = await octokit.issues.createComment({
+                  owner,
+                  repo: repoName,
+                  issue_number: issueNumber,
+                  body: '⏳ Processing...',
+                });
+                addToRingBuffer(state.processedCommentIds, processingComment.id);
+                return { processing_comment_id: processingComment.id };
+              } catch {
+                console.warn('[github] event="acknowledgement_failed" provider=github');
+              }
+            },
+          });
+
+          addToRingBuffer(state.processedCommentIds, comment.id);
         }
-
-        messages.push({
-          providerEventId: githubIssueCommentProviderEventId(comment),
-          threadId,
-          text,
-          userId: githubLogin ?? 'unknown',
-          timestamp: comment.created_at,
-          metadata: {
-            comment_id: comment.id,
-            github_user: githubLogin,
-            github_user_url: comment.user?.html_url,
-            issue_number: issueNumber,
-            repo_full_name: repo,
-            comment_url: comment.html_url,
-            ...(this.config.align_github_users ? { align_github_users: true } : {}),
-            ...(githubUserEmail ? { github_user_email: githubUserEmail } : {}),
-          },
-          // Side effects run only after the gateway has won the durable event
-          // identity. GitHub has no idempotency key for createComment, so a
-          // crash after the API accepts the comment but before Agor records
-          // completion remains an explicitly documented at-least-once window.
-          prepareDelivery: async () => {
-            try {
-              await octokit.reactions.createForIssueComment({
-                owner,
-                repo: repoName,
-                comment_id: comment.id,
-                content: 'eyes',
-              });
-            } catch (err) {
-              console.warn(`[github] Failed to add 👀 reaction to comment ${comment.id}:`, err);
-            }
-            try {
-              const { data: processingComment } = await octokit.issues.createComment({
-                owner,
-                repo: repoName,
-                issue_number: issueNumber,
-                body: '⏳ Processing...',
-              });
-              addToRingBuffer(state.processedCommentIds, processingComment.id);
-              return { processing_comment_id: processingComment.id };
-            } catch (err) {
-              console.warn(`[github] Failed to post processing comment on ${threadId}:`, err);
-            }
-          },
-        });
-
-        addToRingBuffer(state.processedCommentIds, comment.id);
       }
 
-      // Update last poll timestamp
-      state.lastPollAt = new Date().toISOString();
-    } catch (error: unknown) {
-      // 304 Not Modified — nothing new, this is expected and cheap
-      if (isHttpError(error, 304)) {
-        return messages;
-      }
-
-      console.error(`[github] Poll error for ${repo}:`, error);
+      // Only advance after every page succeeds. Never move a standalone
+      // listener behind its start-at-now cursor while introducing overlap.
+      const previousPollAt = Date.parse(state.lastPollAt);
+      state.lastPollAt = new Date(
+        Math.max(
+          Number.isFinite(previousPollAt) ? previousPollAt : 0,
+          pollStartedAt - DEFAULT_POLL_OVERLAP_MS
+        )
+      ).toISOString();
+    } catch {
+      console.error('[github] event="poll_failed" provider=github');
       // Don't update lastPollAt on error — retry from same point next cycle
     }
 
@@ -462,24 +458,24 @@ export class GitHubConnector implements GatewayConnector {
     callback: GatewayInboundCallback,
     options: GatewayListenerOptions = {}
   ): Promise<void> {
-    console.log('[github] startListening called');
+    console.log('[github] event="listener_starting" provider=github');
 
     // Validate we can authenticate
     const octokit = await this.getOctokit();
     try {
-      const { data: installation } = await octokit.apps.getInstallation({
+      await octokit.apps.getInstallation({
         installation_id: this.config.installation_id,
       });
-      console.log(
-        `[github] Authenticated as installation ${this.config.installation_id} on ${(installation.account && 'login' in installation.account ? installation.account.login : undefined) ?? 'unknown'}`
-      );
+      console.log('[github] event="listener_authenticated" provider=github');
     } catch (error) {
       throw classifyGitHubInstallationError(error);
     }
 
     // Resolve repos to watch
     const repos = this.resolveRepos();
-    console.log(`[github] Watching ${repos.length} repos:`, repos);
+    console.log(
+      `[github] event="listener_scope_ready" provider=github repository_count=${repos.length}`
+    );
 
     this.startupLookbackMs = options.durableEventIdempotency ? DEFAULT_STARTUP_LOOKBACK_MS : 0;
     this.restoreCheckpoint(options.checkpoint);
@@ -528,13 +524,13 @@ export class GitHubConnector implements GatewayConnector {
         console.warn('[github] Listener ownership lost while checkpointing; stopping poll loop');
         await this.stopListening();
       }
-    } catch (error) {
+    } catch {
       // Do not advance an in-memory cursor past an event the gateway did not
       // durably accept. The same owner retries, or a replacement starts from
       // the last fenced checkpoint.
       this.pollStates.clear();
       this.restoreCheckpoint(before);
-      console.error('[github] Poll tick error:', error);
+      console.error('[github] event="poll_tick_failed" provider=github');
     } finally {
       this.polling = false;
     }
@@ -597,20 +593,4 @@ export class GitHubConnector implements GatewayConnector {
   formatMessage(markdown: string): string {
     return markdown;
   }
-}
-
-// ============================================================================
-// Utilities
-// ============================================================================
-
-/**
- * Type guard for HTTP errors with a status code (Octokit throws RequestError).
- */
-function isHttpError(error: unknown, status: number): boolean {
-  return (
-    typeof error === 'object' &&
-    error !== null &&
-    'status' in error &&
-    (error as { status: number }).status === status
-  );
 }

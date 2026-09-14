@@ -4,7 +4,7 @@ import { surfaceTitle } from '../branding/brand';
 export type RouteSurfaceId =
   | 'workspace'
   | 'knowledge'
-  | 'marketplace'
+  | 'mcp-recovery'
   | 'artifact-fullscreen'
   | 'demo';
 
@@ -70,22 +70,19 @@ export const KNOWLEDGE_SURFACE = defineSurface({
   branding: surfaceTitle('Knowledge'),
 });
 
-export const MARKETPLACE_ROUTE_PATHS = ['/marketplace'] as const;
+export const ARTIFACT_FULLSCREEN_ROUTE_PATHS = ['/a/:artifactShortId/fullscreen'] as const;
 
-export const MARKETPLACE_SURFACE = defineSurface({
-  id: 'marketplace',
-  label: 'Marketplace',
-  routePaths: MARKETPLACE_ROUTE_PATHS,
-  // Browsing the catalog reads a paginated global table, not the tenant's
-  // boards and sessions, so the workspace store stays cold until connect
-  // navigates into a session.
+export const MCP_RECOVERY_ROUTE_PATHS = ['/recover/mcp'] as const;
+
+export const MCP_RECOVERY_SURFACE = defineSurface({
+  id: 'mcp-recovery',
+  label: 'MCP recovery',
+  routePaths: MCP_RECOVERY_ROUTE_PATHS,
   startsWorkspaceRuntime: false,
   usesDeviceRouter: false,
   usesSharedUserSettings: true,
-  branding: surfaceTitle('Marketplace'),
+  branding: surfaceTitle('MCP recovery'),
 });
-
-export const ARTIFACT_FULLSCREEN_ROUTE_PATHS = ['/a/:artifactShortId/fullscreen'] as const;
 
 export const ARTIFACT_FULLSCREEN_SURFACE = defineSurface({
   id: 'artifact-fullscreen',
@@ -97,10 +94,26 @@ export const ARTIFACT_FULLSCREEN_SURFACE = defineSurface({
   branding: surfaceTitle('Artifact'),
 });
 
+export const RBAC_POLICY_PROTOTYPE_ROUTE_PATH = '/demo/rbac-policy' as const;
+
+/**
+ * Development prototypes must never become production surfaces by accident.
+ * Keeping route construction pure also lets tests prove the production path
+ * list excludes the prototype even though Vitest itself runs in DEV mode.
+ */
+export function getDemoRoutePaths(includeDevelopmentPrototypes = import.meta.env.DEV): string[] {
+  return [
+    '/demo/streamdown',
+    '/demo/marketing-screenshots',
+    '/demo/marketing-video',
+    ...(includeDevelopmentPrototypes ? [RBAC_POLICY_PROTOTYPE_ROUTE_PATH] : []),
+  ];
+}
+
 export const DEMO_SURFACE = defineSurface({
   id: 'demo',
   label: 'Demo',
-  routePaths: ['/demo/streamdown', '/demo/marketing-screenshots', '/demo/marketing-video'],
+  routePaths: getDemoRoutePaths(),
   startsWorkspaceRuntime: false,
   usesDeviceRouter: false,
   usesSharedUserSettings: false,
@@ -121,7 +134,7 @@ export const WORKSPACE_SURFACE = defineSurface({
 
 export const SURFACE_REGISTRY = [
   KNOWLEDGE_SURFACE,
-  MARKETPLACE_SURFACE,
+  MCP_RECOVERY_SURFACE,
   ARTIFACT_FULLSCREEN_SURFACE,
   DEMO_SURFACE,
   WORKSPACE_SURFACE,

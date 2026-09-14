@@ -12,7 +12,7 @@ import { getCurrentTenantId } from '../tenant-context';
 /**
  * Base repository interface with generic CRUD operations
  */
-export interface BaseRepository<T, TInsert = T> {
+export interface BaseRepository<T, TInsert = T, TUpdate = Partial<TInsert>> {
   /**
    * Create a new entity
    */
@@ -31,7 +31,7 @@ export interface BaseRepository<T, TInsert = T> {
   /**
    * Update entity by ID
    */
-  update(id: string, updates: Partial<TInsert>): Promise<T>;
+  update(id: string, updates: TUpdate): Promise<T>;
 
   /**
    * Delete entity by ID

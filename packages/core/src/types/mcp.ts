@@ -22,6 +22,11 @@ export type MCPServerID = UUID & { readonly __brand: 'MCPServerID' };
  */
 export type MCPOAuthAttemptID = UUID & { readonly __brand: 'MCPOAuthAttemptID' };
 
+/** Durable identity for one provider-side Dynamic Client Registration generation. */
+export type MCPOAuthClientRegistrationID = UUID & {
+  readonly __brand: 'MCPOAuthClientRegistrationID';
+};
+
 /** Durable lifecycle of a browser-based MCP OAuth authorization attempt. */
 export type MCPOAuthPendingFlowStatus =
   | 'pending'
@@ -29,6 +34,15 @@ export type MCPOAuthPendingFlowStatus =
   | 'succeeded'
   | 'failed'
   | 'ambiguous'
+  | 'expired';
+
+/** Durable lifecycle of one exact-bound Dynamic Client Registration generation. */
+export type MCPOAuthClientRegistrationStatus =
+  | 'registering'
+  | 'registered'
+  | 'failed'
+  | 'ambiguous'
+  | 'superseded'
   | 'expired';
 
 /** Authenticated durable-attempt read DTO; `not_found` avoids leaking rows. */
@@ -39,6 +53,7 @@ export interface MCPOAuthAttemptResult {
   mcp_server_id?: MCPServerID;
   oauth_mode?: MCPOAuthMode;
   failure_code?: string;
+  recovery?: MCPAuthRecovery;
 }
 
 export interface MCPOAuthStatusResult {
@@ -66,10 +81,62 @@ export const MCP_OAUTH_DCR_MODES = ['disabled', 'advertised', 'fallback'] as con
 
 export type MCPOAuthDCRMode = (typeof MCP_OAUTH_DCR_MODES)[number];
 
+export const MCP_OAUTH_DEFAULT_DCR_MODE = 'advertised' satisfies MCPOAuthDCRMode;
+
 /** Strictness of OAuth authorization-metadata discovery. See {@link MCP_OAUTH_DCR_MODES}. */
 export const MCP_OAUTH_COMPATIBILITY_MODES = ['strict', 'legacy'] as const;
 
 export type MCPOAuthCompatibilityMode = (typeof MCP_OAUTH_COMPATIBILITY_MODES)[number];
+
+/** Runtime guard for every public/persisted OAuth compatibility input. */
+export function isMCPOAuthCompatibilityMode(value: unknown): value is MCPOAuthCompatibilityMode {
+  return (
+    typeof value === 'string' &&
+    MCP_OAUTH_COMPATIBILITY_MODES.includes(value as MCPOAuthCompatibilityMode)
+  );
+}
+
+/**
+ * Reject internal or unknown compatibility policies at public/storage
+ * boundaries. `marketplace` is deliberately absent: it is a runtime decision,
+ * never data a caller or archive may provide.
+ */
+export function assertPublicMCPOAuthCompatibilityMode(auth: unknown): void {
+  if (!auth || typeof auth !== 'object' || Array.isArray(auth)) return;
+  const value = (auth as Record<string, unknown>).oauth_compatibility_mode;
+  if (value === undefined || isMCPOAuthCompatibilityMode(value)) return;
+  throw new Error('oauth_compatibility_mode must be either strict or legacy');
+}
+
+/**
+ * Effective OAuth discovery policy while a flow is running.
+ *
+ * `marketplace` is deliberately not an {@link MCPOAuthCompatibilityMode} and
+ * therefore cannot be submitted in an MCP server payload. The daemon derives
+ * it only for reviewed catalog installs whose row did not explicitly opt into
+ * `strict` or `legacy`. This keeps the default for every user/admin configured
+ * server strict while giving the marketplace a bounded interoperability
+ * profile that still enforces issuer/resource binding and PKCE S256.
+ */
+export type MCPOAuthRuntimeCompatibilityMode = MCPOAuthCompatibilityMode | 'marketplace';
+
+/** Read-only policy evidence; never accepted as saved OAuth configuration. */
+export interface MCPOAuthEffectivePolicy {
+  effective_mode: MCPOAuthRuntimeCompatibilityMode;
+  effective_dcr_mode: MCPOAuthDCRMode;
+  dcr_mode_source: 'explicit' | 'default';
+}
+
+export const MCP_OAUTH_FAILURE_REASONS = [
+  'dcr_disabled',
+  'registration_endpoint_missing',
+  'protected_resource_mismatch',
+  'issuer_mismatch',
+  'pkce_required',
+  'profile_rejected',
+  'endpoint_override_mismatch',
+] as const;
+export type MCPOAuthFailureReason = (typeof MCP_OAUTH_FAILURE_REASONS)[number];
 
 /**
  * Safe diagnostics for a failed OAuth Dynamic Client Registration attempt.
@@ -85,12 +152,58 @@ export interface MCPOAuthDCRDiagnostic {
 
 export interface MCPOAuthStartFailure {
   success: false;
+  /** Stable, secret-free message retained for older clients. */
   error: string;
-  diagnostic?: MCPOAuthDCRDiagnostic;
+  /** Structured recovery contract for UI, agents, and future gateway actions. */
+  recovery?: MCPAuthRecovery;
   redirect_uri?: string;
 }
 
-export const MCP_OAUTH_GRANT_BINDING_VERSIONS = [1, 2] as const;
+export const MCP_AUTH_RECOVERY_CATEGORIES = [
+  'authentication_required',
+  'client_registration_required',
+  'client_registration_failed',
+  'metadata_incompatible',
+  'metadata_unavailable',
+  'redirect_configuration_required',
+  'authorization_denied',
+  'configuration_changed',
+  'permission_changed',
+  'provider_unavailable',
+  'provider_rejected',
+  'invalid_response',
+  'storage_policy_rejected',
+  'configuration_required',
+  'unknown',
+] as const;
+export type MCPAuthRecoveryCategory = (typeof MCP_AUTH_RECOVERY_CATEGORIES)[number];
+
+export const MCP_AUTH_RECOVERY_ACTIONS = [
+  'reauthenticate',
+  'configure_client',
+  'review_compatibility',
+  'configure_redirect',
+  'save_and_retry',
+  'retry',
+  'review_configuration',
+  'contact_admin',
+] as const;
+export type MCPAuthRecoveryAction = (typeof MCP_AUTH_RECOVERY_ACTIONS)[number];
+
+/** Secret-free, provider-agnostic recovery state. */
+export interface MCPAuthRecovery {
+  category: MCPAuthRecoveryCategory;
+  action: MCPAuthRecoveryAction;
+  message: string;
+  mcp_server_id?: MCPServerID;
+  redirect_uri?: string;
+  /** Locally known reason only; absent when the runtime cannot establish one. */
+  failure_reason?: MCPOAuthFailureReason;
+  /** Policy used by the failed operation, not a prediction from a form draft. */
+  oauth_policy?: MCPOAuthEffectivePolicy;
+}
+
+export const MCP_OAUTH_GRANT_BINDING_VERSIONS = [1, 2, 3, 4] as const;
 export type MCPOAuthGrantBindingVersion = (typeof MCP_OAUTH_GRANT_BINDING_VERSIONS)[number];
 
 export function isMCPOAuthGrantBindingVersion(
@@ -128,8 +241,57 @@ export interface MCPOAuthPendingFlowSealedMaterial {
   pkceVerifier: string;
   clientId: string;
   clientSecret?: string;
-  compatibilityMode: 'strict' | 'legacy';
+  /** Exact durable DCR UUID epoch used by this attempt. */
+  clientRegistrationId?: MCPOAuthClientRegistrationID;
+  compatibilityMode: MCPOAuthRuntimeCompatibilityMode;
+  /** Whether RFC 9207 says this AS will return `iss` on the callback. */
+  authorizationResponseIssuerParameterSupported?: boolean;
   allowLocalhostHttp: boolean;
+  /** Non-secret durable routing back to an exact Slack recovery notice. */
+  slackRecovery?: MCPSlackOAuthRecoveryContext;
+}
+
+/**
+ * Exact policy/binding duplicated inside an encrypted durable DCR envelope.
+ *
+ * DCR credentials intentionally outlive one browser attempt, so the authority
+ * is scoped to the tenant and saved MCP-server configuration rather than to a
+ * grant subject. The server config version plus every provider/redirect/policy
+ * input prevents reuse after a relevant edit or against another issuer.
+ */
+export interface MCPOAuthClientRegistrationSealedMaterial {
+  version: 1;
+  tenantId: string;
+  registrationId: MCPOAuthClientRegistrationID;
+  mcpServerId: MCPServerID;
+  bindingVersion: 1;
+  bindingFingerprint: string;
+  serverConfigVersion: number;
+  registrationEndpoint: string;
+  registrationEndpointSource: 'metadata' | 'legacy_fallback';
+  metadataUrl: string;
+  resourceUri: string;
+  issuer: string;
+  authorizationEndpoint: string;
+  tokenEndpoint: string;
+  redirectUri: string;
+  applicationType: 'native' | 'web';
+  scope?: string;
+  compatibilityMode: MCPOAuthRuntimeCompatibilityMode;
+  dcrMode: MCPOAuthDCRMode;
+  clientId: string;
+  clientSecret?: string;
+  /** Provider epoch seconds. Zero/absent means no advertised expiry. */
+  clientSecretExpiresAt?: number;
+}
+
+/** Admin-only reset of the current durable DCR authority for one saved server. */
+export interface MCPOAuthClientRegistrationResetRequest {
+  mcp_server_id: MCPServerID;
+}
+
+export interface MCPOAuthClientRegistrationResetResult {
+  success: true;
 }
 
 /**
@@ -166,7 +328,48 @@ export const MCP_MEMBER_POLICIES = [
 
 export type MCPMemberPolicy = (typeof MCP_MEMBER_POLICIES)[number];
 
+export const MCP_OAUTH_BROWSER_OPERATIONS = ['discover', 'test-oauth'] as const;
+export type MCPOAuthBrowserOperation = (typeof MCP_OAUTH_BROWSER_OPERATIONS)[number];
+
+/**
+ * Request/response contract for a short-lived browser-event reservation.
+ *
+ * The request names only what the caller intends to do. The opaque token in
+ * the response is minted by the daemon and bound there to the authenticated
+ * tenant, caller, socket, operation and saved server (when present).
+ */
+export interface MCPOAuthBrowserReservationRequest {
+  operation: MCPOAuthBrowserOperation;
+  mcp_server_id?: MCPServerID;
+}
+
+export interface MCPOAuthBrowserReservation {
+  reservation_token: string;
+  expires_at: number;
+}
+
+/** One-shot reservation presented to blocking discovery/test. */
+export interface MCPOAuthBrowserEventRequest {
+  reservation_token: string;
+}
+
+export interface MCPOAuthOpenBrowserEvent extends MCPOAuthBrowserEventRequest {
+  authUrl: string;
+  attempt_id: MCPOAuthAttemptID;
+  caller_user_id: UserID;
+}
+
 export const DEFAULT_MCP_MEMBER_POLICY: MCPMemberPolicy = 'use_existing_only';
+
+/**
+ * Realtime invalidation emitted on the tenant-scoped `mcp-servers` service
+ * after an administrator changes the member policy.
+ *
+ * The event deliberately carries no policy value: `can_configure` is derived
+ * for the authenticated caller, so every browser must refetch its own answer
+ * from `mcp-member-policy` rather than accepting another caller's payload.
+ */
+export const MCP_MEMBER_POLICY_CHANGED_EVENT = 'member-policy:changed' as const;
 
 /**
  * The payload of the `mcp-member-policy` endpoint, read and written.
@@ -214,7 +417,10 @@ export type MCPScope = (typeof MCP_SCOPES)[number];
  * - `catalog`: installed from the marketplace; `catalog_entry_name` records
  *   which entry, the way `import_path` records which file
  *
- * This is provenance, not authorization — nothing reads it to decide access.
+ * This is not an access-control decision. Catalog provenance is one required
+ * input to the daemon's current-entry OAuth policy, but never grants access or
+ * relaxation by itself: the protected stamp and complete current catalog
+ * endpoint/transport/auth prescription must also match.
  */
 export type MCPSource = 'user' | 'imported' | 'agor' | 'catalog';
 
@@ -255,6 +461,17 @@ export interface MCPAuth {
 }
 
 /**
+ * Public PATCH contract for auth configuration.
+ *
+ * Omitted/undefined fields are preserved, null clears one field, and a type
+ * change replaces the object. Secret fields may carry the public redaction
+ * sentinel to explicitly preserve the stored value without exposing it.
+ */
+export type MCPAuthPatch = {
+  [Field in keyof MCPAuth]?: MCPAuth[Field] | null;
+};
+
+/**
  * JSON Schema type for tool input schemas
  */
 export type JSONSchema = Record<string, unknown>;
@@ -265,7 +482,7 @@ export type JSONSchema = Record<string, unknown>;
  */
 export interface MCPTool {
   name: string; // e.g., "mcp__filesystem__list_files"
-  description: string;
+  description?: string;
   input_schema?: JSONSchema; // Optional - not all MCP servers provide schemas
 }
 
@@ -276,6 +493,7 @@ export interface MCPTool {
 export interface MCPResource {
   uri: string; // e.g., "file:///path/to/file"
   name: string;
+  description?: string;
   mimeType?: string;
 }
 
@@ -285,15 +503,43 @@ export interface MCPResource {
  */
 export interface MCPPrompt {
   name: string; // Becomes slash command
-  description: string;
+  description?: string;
   arguments?: PromptArgument[];
 }
 
 export interface PromptArgument {
   name: string;
-  description: string;
+  description?: string;
   required?: boolean;
 }
+
+/** Request for an authenticated, tenant-scoped capability probe. Saved IDs use the durable row. */
+export interface MCPDiscoveryRequest {
+  mcp_server_id?: string;
+  url?: string;
+  transport?: 'http' | 'sse';
+  auth?: MCPAuth;
+  headers?: Record<string, string>;
+  oauth_browser_event?: MCPOAuthBrowserEventRequest;
+}
+
+/** Bounded discovery response shared by the daemon and both MCP server forms. */
+export type MCPDiscoveryResult =
+  | {
+      success: true;
+      capabilities: { tools: number; resources: number; prompts: number };
+      metadata?: { descriptions_truncated: number };
+      tools: Pick<MCPTool, 'name' | 'description'>[];
+      resources: Pick<MCPResource, 'name' | 'uri' | 'mimeType'>[];
+      prompts: Pick<MCPPrompt, 'name' | 'description'>[];
+    }
+  | {
+      success: false;
+      error: string;
+      recovery?: MCPAuthRecovery;
+      category?: string;
+      action?: MCPAuthRecoveryAction;
+    };
 
 /**
  * MCP Server Capabilities
@@ -344,6 +590,23 @@ export interface MCPServer {
   // Authentication (for HTTP/SSE transports)
   auth?: MCPAuth;
 
+  /** Daemon-owned monotonic revision of editor-controlled configuration. */
+  config_version?: number;
+
+  /**
+   * Read-only effective policy resolved by the daemon for Settings and other
+   * operator surfaces. This is never accepted as persisted MCP server input:
+   * `marketplace` remains an internal runtime policy derived only from the
+   * current curated catalog entry.
+   */
+  oauth_compatibility_policy?: {
+    effective_mode: MCPOAuthRuntimeCompatibilityMode;
+    managed_by_catalog: boolean;
+    /** Absent only on older daemon projections. */
+    effective_dcr_mode?: MCPOAuthDCRMode;
+    dcr_mode_source?: 'explicit' | 'default';
+  };
+
   // Scope
   scope: MCPScope;
   /**
@@ -373,6 +636,8 @@ export interface MCPServer {
   tools?: MCPTool[];
   resources?: MCPResource[];
   prompts?: MCPPrompt[];
+  /** Daemon-owned timestamp of the last successful capability discovery. */
+  capabilities_discovered_at?: Date;
 
   // Tool permissions (per-tool permission settings)
   tool_permissions?: Record<string, ToolPermission>; // e.g., { "list_files": "allow", "write_file": "ask" }
@@ -398,7 +663,6 @@ export interface SessionMCPServer {
  */
 export interface MCPServerFilters {
   scope?: MCPScope;
-  scopeId?: string; // user_id, team_id, repo_id, or session_id
   transport?: MCPTransport;
   enabled?: boolean;
   source?: MCPSource;
@@ -406,7 +670,25 @@ export interface MCPServerFilters {
   usableByUserId?: string;
   /** Restrict to system-owned rows, used for the official catalog. */
   ownerless?: boolean;
+  /** Exact materialized catalog identity; never a substring search. */
+  catalogEntryName?: string;
+  /** Bounded diagnostic/list reads; callers should request one extra row for truncation. */
+  limit?: number;
+  offset?: number;
+  /** Validated Feathers sort pushed into the repository query. */
+  sort?: Partial<Record<MCPServerSortField, 1 | -1>>;
 }
+
+/** Persisted columns that repository-backed MCP server lists can sort by. */
+export type MCPServerSortField =
+  | 'mcp_server_id'
+  | 'name'
+  | 'transport'
+  | 'scope'
+  | 'enabled'
+  | 'source'
+  | 'created_at'
+  | 'updated_at';
 
 /**
  * Create MCP Server input
@@ -421,7 +703,8 @@ export interface CreateMCPServerInput {
   url?: string;
   headers?: Record<string, string>;
   env?: Record<string, string>;
-  auth?: MCPAuth;
+  /** null explicitly creates a server with no authentication configuration. */
+  auth?: MCPAuth | null;
   scope: MCPScope;
   owner_user_id?: UserID; // Private to this user; omit for a shared server
   source?: MCPSource;
@@ -441,7 +724,12 @@ export interface UpdateMCPServerInput {
   url?: string;
   headers?: Record<string, string>;
   env?: Record<string, string>;
-  auth?: MCPAuth;
+  /** null clears all authentication; otherwise applies MCPAuthPatch semantics. */
+  auth?: MCPAuthPatch | null;
+  /** Explicitly replace same-mode auth instead of merging it. PUT sets this by default. */
+  replace_auth?: boolean;
+  /** Optional compare-and-swap guard for concurrent editors. */
+  expected_config_version?: number;
   scope?: MCPScope;
   enabled?: boolean;
   transport?: 'stdio' | 'http' | 'sse';
@@ -490,8 +778,252 @@ export type MCPServersConfig = Record<
     url?: string;
     headers?: Record<string, string>;
     env?: Record<string, string>;
+    alwaysLoad?: boolean;
   }
 >;
+
+// ============================================================================
+// Authoritative MCP egress gateway
+// ============================================================================
+
+/** Tenant rollout for the daemon-owned, HTTP-only MCP proxy. */
+export const MCP_EGRESS_GATEWAY_MODES = ['off', 'observe', 'compatibility', 'enforced'] as const;
+export type MCPEgressGatewayMode = (typeof MCP_EGRESS_GATEWAY_MODES)[number];
+
+export interface MCPEgressGatewayStatus {
+  mode: MCPEgressGatewayMode;
+  supported_transports: Array<'streamable-http-buffered'>;
+  unsupported_transports: string[];
+  /** Total local work consuming gateway capacity, including credential/admission reservations. */
+  in_flight_requests: number;
+  /** Requests whose provider transport has started. */
+  provider_in_flight_requests: number;
+  /** Requests still resolving credentials or awaiting final provider admission. */
+  reserved_requests: number;
+  oldest_request_ms: number;
+  excluded_servers: Array<{
+    mcp_server_id: MCPServerID;
+    name: string;
+    reason:
+      | 'transport_not_mediated'
+      | 'approval_not_mediated'
+      | 'template_configuration'
+      | 'oauth_reauth_required';
+    recovery: string;
+  }>;
+  excluded_servers_truncated: boolean;
+  admission_available: boolean | null;
+  operator: boolean;
+  guarantee: string;
+}
+
+// ============================================================================
+// Live MCP runtime reprojection
+// ============================================================================
+
+export const MCP_RUNTIME_REFRESH_MODES = ['in_place', 'next_turn'] as const;
+export type MCPRuntimeRefreshMode = (typeof MCP_RUNTIME_REFRESH_MODES)[number];
+
+/**
+ * What Agor can truthfully do with the currently shipped provider adapter.
+ * `retries_unstarted_call` is deliberately independent from transport reload:
+ * an SDK may rebuild MCP clients without exposing the failed call boundary.
+ */
+export interface MCPRuntimeProviderCapability {
+  mode: MCPRuntimeRefreshMode;
+  transport_reload: boolean;
+  retries_unstarted_call: boolean;
+  reason?: string;
+}
+
+export type MCPRuntimeServerStateCode =
+  | 'ready'
+  | 'transport_not_mediated'
+  | 'template_configuration'
+  | 'oauth_reauth_required'
+  | 'approval_not_mediated';
+
+export interface MCPRuntimeServerState {
+  mcp_server_id: MCPServerID;
+  name: string;
+  code: MCPRuntimeServerStateCode;
+  action: 'none' | 'reauthenticate' | 'review_configuration' | 'reconnect_next_turn';
+  message: string;
+}
+
+/** Executor-only response. `servers` are gateway projections with opaque capabilities. */
+export interface MCPRuntimeReprojection {
+  task_id: string;
+  session_id: SessionID;
+  request_id: string;
+  recovery_generation: number;
+  provider: MCPRuntimeProviderCapability;
+  servers: MCPServer[];
+  states: MCPRuntimeServerState[];
+}
+
+export interface MCPRuntimeRefreshRequest {
+  request_id: string;
+  reason: 'authority_changed' | 'user_reconnect';
+  expected_generation: number;
+}
+
+export interface MCPRuntimeRefreshResultRequest {
+  request_id: string;
+  expected_generation: number;
+  ok: boolean;
+  /** Present only for a failed refresh whose SDK transport outcome is ambiguous. */
+  failure?: 'transport_outcome_uncertain';
+}
+
+export type MCPRuntimeRecoveryCode =
+  | 'stale_capability'
+  | 'grant_changed'
+  | 'credential_material_changed'
+  | 'server_detached'
+  | 'principal_revoked'
+  | 'branch_revoked'
+  | 'rollout_changed'
+  | 'oauth_reauth_required'
+  | 'transport_not_mediated'
+  | 'approval_not_mediated'
+  | 'template_configuration'
+  | 'tool_permission_changed'
+  | 'provider_refresh_failed'
+  | 'transport_refresh_uncertain';
+
+/** Secret-free durable state shown to every authorized tab for this Session. */
+export interface MCPRuntimeRecovery {
+  generation: number;
+  code: MCPRuntimeRecoveryCode;
+  status: 'action_required' | 'refresh_requested' | 'failed';
+  task_id: string;
+  session_id: SessionID;
+  mcp_server_id?: MCPServerID;
+  mcp_server_name?: string;
+  /** Bounded, secret-free non-ready states retained after a partial transport refresh. */
+  server_states?: MCPRuntimeServerState[];
+  provider: MCPRuntimeProviderCapability;
+  action:
+    | 'reconnect_mcp'
+    | 'reauthenticate'
+    | 'retry_next_turn'
+    | 'contact_admin'
+    | 'review_configuration';
+  message: string;
+  observed_at: string;
+  request_id?: string;
+  /** Bounds automatic refresh; expiry falls back to explicit user reconnect. */
+  refresh_deadline_at?: string;
+  /** Whether the rejected provider hop is proven unstarted or may have started. */
+  provider_dispatch: 'not_started' | 'ambiguous';
+}
+
+/**
+ * Durable Slack presentation for one exact structured MCP runtime recovery.
+ *
+ * This is deliberately not a second recovery authority: `mcp_recovery` and
+ * its reprojection tombstones remain authoritative.  The notice only fences a
+ * one-use browser entry and an idempotent Slack message that projects that
+ * state. It is internal task metadata and is stripped from API/realtime DTOs.
+ */
+export interface MCPSlackRecoveryNotice {
+  notice_id: string;
+  token_jti: string;
+  token_consumed_at?: string;
+  issued_at: string;
+  expires_at: string;
+  principal_user_id: UserID;
+  credential_user_id: UserID;
+  slack_user_id: string;
+  slack_team_id: string;
+  gateway_channel_id: string;
+  gateway_config_generation: number;
+  slack_channel_id: string;
+  slack_thread_id: string;
+  session_id: SessionID;
+  task_id: string;
+  mcp_server_id: MCPServerID;
+  mcp_server_config_version: number;
+  recovery_generation: number;
+  recovery_request_id?: string;
+  provider_dispatch: 'not_started' | 'ambiguous';
+  oauth_attempt_id?: MCPOAuthAttemptID;
+  /** Short lease between one-use consumption and canonical flow creation. */
+  oauth_start_claimed_at?: string;
+  oauth_start_claim_expires_at?: string;
+  oauth_started_at?: string;
+  oauth_succeeded_at?: string;
+  /** OAuth completed, but the exact Task/config authority was no longer current. */
+  oauth_superseded_at?: string;
+  oauth_failed_at?: string;
+  /** Rollout disabled after issuance; keeps the stale action fail-closed. */
+  recovery_disabled_at?: string;
+  /** A bound channel/principal/server authority changed after issuance. */
+  binding_invalidated_at?: string;
+  /** Stable metadata identity used to reconcile an ambiguous Slack post when history permits. */
+  delivery_id: string;
+  slack_message_ts?: string;
+  delivery_claim?: {
+    claim_id: string;
+    claimed_at: string;
+    expires_at: string;
+  };
+  /** Last provider-neutral rendering successfully acknowledged by Slack. */
+  rendered_state?: MCPSlackRecoveryRenderedState;
+  rendered_at?: string;
+  /** Bounded at-least-once delivery retry state, independent of browser-token expiry. */
+  delivery_attempt_count?: number;
+  delivery_last_failed_at?: string;
+  delivery_next_retry_at?: string;
+  delivery_retry_until?: string;
+  /** Indexed durable backstop used by startup and periodic bounded repair. */
+  next_repair_at?: string;
+}
+
+export type MCPSlackRecoveryRenderedState =
+  | 'reconnect_required'
+  | 'sign_in_pending'
+  | 'recovered'
+  | 'expired_or_superseded'
+  | 'failed'
+  | 'manual_next_turn';
+
+/** Authenticated, encrypted browser-entry claims; every field is compared durably. */
+export interface MCPSlackRecoveryTokenClaims {
+  type: 'mcp-slack-recovery';
+  tid: string;
+  sub: UserID;
+  credential_user_id: UserID;
+  slack_user_id: string;
+  slack_team_id: string;
+  gateway_channel_id: string;
+  gateway_config_generation: number;
+  slack_channel_id: string;
+  slack_thread_id: string;
+  task_id: string;
+  session_id: SessionID;
+  mcp_server_id: MCPServerID;
+  mcp_server_config_version: number;
+  recovery_generation: number;
+  recovery_request_id?: string;
+  notice_id: string;
+  jti: string;
+  iat: number;
+  exp: number;
+  aud: 'agor:mcp-slack-recovery';
+  iss: 'agor';
+}
+
+/** Optional context sealed into the canonical OAuth pending flow. */
+export interface MCPSlackOAuthRecoveryContext {
+  notice_id: string;
+  task_id: string;
+  session_id: SessionID;
+  mcp_server_id: MCPServerID;
+  recovery_generation: number;
+  recovery_request_id?: string;
+}
 
 // ============================================================================
 // MCP Session Tokens (daemon ↔ MCP server channel)

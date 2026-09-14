@@ -1,18 +1,18 @@
 import {
-  type Branch,
   type BranchID,
   type BranchRealtimeVisibility,
   BranchRealtimeVisibilityMode,
   type UserID,
   type UUID,
 } from '@agor/core/types';
-import { PERMISSION_RANK } from './branch-authorization.js';
+import {
+  LOCAL_AUTHORIZATION_CACHE_INVALIDATION_EVENT,
+  LOCAL_AUTHORIZATION_INVALIDATION_EVENT,
+} from '../realtime/routing.js';
 
 export type RealtimeAccessBranchRepository = {
-  findRealtimeVisibilityBranch(
-    branchId: string
-  ): Promise<Pick<Branch, 'branch_id' | 'others_can'> | null>;
-  findExplicitViewUserIds(branchId: BranchID): Promise<UUID[]>;
+  findRealtimeVisibilityBranch(branchId: string): Promise<{ branch_id: BranchID } | null>;
+  findRealtimeViewUserIds(branchId: BranchID): Promise<UUID[]>;
 };
 
 export type RealtimeAccessSessionRepository = {
@@ -46,11 +46,6 @@ export interface RealtimeAccessCacheOptions {
 const DEFAULT_BRANCH_VISIBILITY_TTL_MS = 5 * 60_000;
 const DEFAULT_SESSION_BRANCH_TTL_MS = 60 * 60_000;
 
-function branchAllowsAllAuthenticated(branch: Pick<Branch, 'others_can'>): boolean {
-  const othersCan = branch.others_can ?? 'session';
-  return PERMISSION_RANK[othersCan] >= PERMISSION_RANK.view;
-}
-
 /** Resolve current branch visibility without consulting daemon-local cache state. */
 export async function resolveBranchRealtimeVisibility(
   repository: RealtimeAccessBranchRepository,
@@ -59,16 +54,12 @@ export async function resolveBranchRealtimeVisibility(
   const branch = await repository.findRealtimeVisibilityBranch(branchId);
   if (!branch) return null;
 
-  return branchAllowsAllAuthenticated(branch)
-    ? { mode: BranchRealtimeVisibilityMode.ALL_AUTHENTICATED }
-    : {
-        mode: BranchRealtimeVisibilityMode.EXPLICIT_USERS,
-        userIds: new Set(
-          (await repository.findExplicitViewUserIds(branch.branch_id)).map(
-            (userId) => userId as UserID
-          )
-        ),
-      };
+  return {
+    mode: BranchRealtimeVisibilityMode.EXPLICIT_USERS,
+    userIds: new Set(
+      (await repository.findRealtimeViewUserIds(branch.branch_id)).map((userId) => userId as UserID)
+    ),
+  };
 }
 
 /**
@@ -83,6 +74,15 @@ export class RealtimeAccessCache {
   private readonly branchVisibilityTtlMs: number;
   private readonly sessionBranchTtlMs: number;
   private readonly now: () => number;
+  /**
+   * Monotonic fence for asynchronous cache fills.
+   *
+   * Invalidating a Map is insufficient when an older repository read is still
+   * in flight: that read could otherwise repopulate the cache with a revoked
+   * grant after the invalidation has completed. Every loader retries against
+   * current authority when this generation changes across an await.
+   */
+  private generation = 0;
 
   constructor(private readonly options: RealtimeAccessCacheOptions) {
     this.branchVisibilityTtlMs =
@@ -99,10 +99,12 @@ export class RealtimeAccessCache {
       return cached.branchId;
     }
 
+    const generation = this.generation;
     const branchId = await this.options.sessionsRepository.findBranchIdBySessionId(sessionId);
+    if (generation !== this.generation) return this.getBranchIdForSession(sessionId);
     this.sessionBranches.set(sessionId, {
       branchId,
-      expiresAt: now + this.sessionBranchTtlMs,
+      expiresAt: this.now() + this.sessionBranchTtlMs,
     });
     return branchId;
   }
@@ -120,13 +122,15 @@ export class RealtimeAccessCache {
       return cached.ownerId;
     }
 
+    const generation = this.generation;
     const ownerId =
       ((await this.options.sessionsRepository.findCreatedByBySessionId(
         sessionId
       )) as UserID | null) ?? null;
+    if (generation !== this.generation) return this.getSessionOwnerId(sessionId);
     this.sessionOwners.set(sessionId, {
       ownerId,
-      expiresAt: now + this.sessionBranchTtlMs,
+      expiresAt: this.now() + this.sessionBranchTtlMs,
     });
     return ownerId;
   }
@@ -138,10 +142,12 @@ export class RealtimeAccessCache {
       return this.visibilityFromEntry(cached);
     }
 
+    const generation = this.generation;
     const visibility = await resolveBranchRealtimeVisibility(
       this.options.branchRepository,
       branchId
     );
+    if (generation !== this.generation) return this.getBranchVisibility(branchId);
     if (!visibility) {
       this.branchVisibility.delete(branchId);
       return null;
@@ -149,12 +155,13 @@ export class RealtimeAccessCache {
 
     this.branchVisibility.set(branchId, {
       ...visibility,
-      expiresAt: now + this.branchVisibilityTtlMs,
+      expiresAt: this.now() + this.branchVisibilityTtlMs,
     });
     return visibility;
   }
 
   invalidateBranch(branchId: string): void {
+    this.generation += 1;
     this.branchVisibility.delete(branchId as BranchID);
     for (const [sessionId, entry] of this.sessionBranches.entries()) {
       if (entry.branchId === branchId) {
@@ -164,15 +171,18 @@ export class RealtimeAccessCache {
   }
 
   invalidateSession(sessionId: string): void {
+    this.generation += 1;
     this.sessionBranches.delete(sessionId);
     this.sessionOwners.delete(sessionId);
   }
 
   clearVisibility(): void {
+    this.generation += 1;
     this.branchVisibility.clear();
   }
 
   clearAll(): void {
+    this.generation += 1;
     this.branchVisibility.clear();
     this.sessionBranches.clear();
     this.sessionOwners.clear();
@@ -183,4 +193,17 @@ export class RealtimeAccessCache {
       ? { mode: BranchRealtimeVisibilityMode.ALL_AUTHENTICATED }
       : { mode: BranchRealtimeVisibilityMode.EXPLICIT_USERS, userIds: entry.userIds };
   }
+}
+
+/**
+ * Bind the distributed-eviction receiver to the cache it protects. Kept beside
+ * the cache so future cached authorization state cannot be added without being
+ * covered by the same `clearAll()` fence.
+ */
+export function bindRealtimeAccessCacheInvalidation(
+  eventSource: { on?: (event: string, listener: () => void) => unknown },
+  cache: RealtimeAccessCache
+): void {
+  eventSource.on?.(LOCAL_AUTHORIZATION_INVALIDATION_EVENT, () => cache.clearAll());
+  eventSource.on?.(LOCAL_AUTHORIZATION_CACHE_INVALIDATION_EVENT, () => cache.clearAll());
 }

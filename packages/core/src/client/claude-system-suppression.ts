@@ -55,6 +55,7 @@ export type ClaudeSystemStatus = Extract<
  * have a diagnostic surface.
  */
 export const SUPPRESSED_CLAUDE_SYSTEM_SUBTYPES: ReadonlySet<ClaudeSystemSubtype> = new Set([
+  'background_tasks_changed',
   'files_persisted',
   'hook_started',
   'hook_progress',

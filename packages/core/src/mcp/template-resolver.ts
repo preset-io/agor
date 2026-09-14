@@ -49,12 +49,18 @@
  * It will automatically filter to only user-defined variables.
  */
 
+import Handlebars from 'handlebars';
 import { AGOR_USER_ENV_KEYS_VAR } from '../config/env-resolver';
 import { renderTemplate } from '../templates/handlebars-helpers';
 import type { MCPAuth, MCPServer } from '../types';
-import { containsTemplate, isUserEnvPlaceholder } from './template-patterns';
+import {
+  containsTemplate,
+  hasTemplateMarker,
+  isUserEnvPlaceholder,
+  isValidMCPHttpUrlTemplate,
+} from './template-patterns';
 
-export { containsTemplate, isUserEnvPlaceholder };
+export { containsTemplate, hasTemplateMarker, isUserEnvPlaceholder };
 
 /**
  * Template context available for MCP configuration resolution.
@@ -78,6 +84,121 @@ export interface MCPTemplateResolutionResult {
   isValid: boolean;
   /** Human-readable error message if not valid */
   errorMessage?: string;
+}
+
+export interface MCPTemplateDependencies {
+  keys: Set<string>;
+  valid: boolean;
+  mightReferenceUserEnv: boolean;
+}
+
+const MCP_TEMPLATE_HELPERS = new Set([
+  'add',
+  'sub',
+  'mul',
+  'div',
+  'mod',
+  'uppercase',
+  'lowercase',
+  'replace',
+  'eq',
+  'neq',
+  'gt',
+  'lt',
+  'gte',
+  'lte',
+  'default',
+  'json',
+  'isDefined',
+]);
+
+/** Parse with the same Handlebars grammar as rendering and conservatively bind user.env paths. */
+export function extractMCPTemplateDependencies(server: MCPServer): MCPTemplateDependencies {
+  const keys = new Set<string>();
+  let valid = true;
+  let mightReferenceUserEnv = false;
+  const seen = new WeakSet<object>();
+  const values = [
+    server.url,
+    ...Object.values(server.env ?? {}),
+    ...Object.values(server.headers ?? {}),
+    ...Object.values(server.auth ?? {}),
+  ];
+  const walk = (node: unknown, parent?: Record<string, unknown>, parentKey?: string): void => {
+    if (!node || typeof node !== 'object') return;
+    if (seen.has(node)) return;
+    seen.add(node);
+    const record = node as Record<string, unknown>;
+    if (
+      record.type === 'BlockStatement' ||
+      record.type === 'PartialStatement' ||
+      record.type === 'PartialBlockStatement' ||
+      record.type === 'Decorator' ||
+      record.type === 'DecoratorBlock'
+    ) {
+      // Relative scope changes (`with`, `each`, custom blocks) make paths
+      // context-dependent. Gateway mediation intentionally refuses them.
+      valid = false;
+    }
+    if (record.type === 'PathExpression' && typeof record.original === 'string') {
+      const original = record.original;
+      const exact = /^user\.env\.([A-Za-z_][A-Za-z0-9_]*)$/.exec(original);
+      const isCallee =
+        parentKey === 'path' &&
+        (parent?.type === 'MustacheStatement' || parent?.type === 'SubExpression') &&
+        ((Array.isArray(parent.params) && parent.params.length > 0) ||
+          (parent.hash &&
+            typeof parent.hash === 'object' &&
+            Array.isArray((parent.hash as Record<string, unknown>).pairs) &&
+            ((parent.hash as Record<string, unknown>).pairs as unknown[]).length > 0));
+      if (exact && record.data !== true && record.depth === 0 && !isCallee) {
+        keys.add(exact[1]!);
+        mightReferenceUserEnv = true;
+      } else if (isCallee && MCP_TEMPLATE_HELPERS.has(original)) {
+        // Static helper names are safe: their arguments are walked below and
+        // therefore bind every user.env dependency used by nested/fallback
+        // expressions.
+      } else if (
+        original === 'lookup' ||
+        original.includes('user.env') ||
+        original.includes('user/env') ||
+        original.startsWith('@root') ||
+        original.startsWith('this.') ||
+        original.startsWith('./') ||
+        (typeof record.depth === 'number' && record.depth > 0)
+      ) {
+        valid = false;
+        mightReferenceUserEnv = true;
+      } else {
+        // The gateway grammar contains only literals, the registered static
+        // helpers above, and absolute user.env.KEY values. Unknown/dynamic
+        // paths may render today but are deliberately not mediable.
+        valid = false;
+      }
+    }
+    for (const [key, value] of Object.entries(record)) {
+      if (Array.isArray(value))
+        value.forEach((item) => {
+          walk(item, record, key);
+        });
+      else walk(value, record, key);
+    }
+  };
+  for (const value of values) {
+    if (typeof value !== 'string' || !hasTemplateMarker(value)) continue;
+    if (/user[./]env|@root|\blookup\b|{{[#/]?(?:with|each)\b/.test(value)) {
+      mightReferenceUserEnv = true;
+    }
+    if (/{{[^}]*?(?:@root|\bthis\.|\.\/|\blookup\b)|{{[#/]?(?:with|each)\b/.test(value)) {
+      valid = false;
+    }
+    try {
+      walk(Handlebars.parse(value));
+    } catch {
+      valid = false;
+    }
+  }
+  return { keys, valid, mightReferenceUserEnv };
 }
 
 /**
@@ -127,33 +248,80 @@ export function buildMCPTemplateContextFromEnv(
 function resolveStringValue(
   fieldName: string,
   templateValue: string,
-  context: MCPTemplateContext
+  context: MCPTemplateContext,
+  malformedFields: string[]
 ): string | undefined {
-  if (!containsTemplate(templateValue)) {
+  if (!hasTemplateMarker(templateValue)) {
     // Not a template, pass through as-is
     return templateValue;
   }
 
+  if (!containsTemplate(templateValue)) {
+    addUnresolvedField(malformedFields, fieldName);
+    console.warn(
+      `[mcp-template] resolution_failed field_family=${templateFieldFamily(fieldName)} error_type=UnbalancedMarker`
+    );
+    return undefined;
+  }
+
   try {
     // Cast to satisfy renderTemplate's signature - MCPTemplateContext is compatible at runtime
-    const resolved = renderTemplate(templateValue, context as unknown as Record<string, unknown>);
+    let renderFailed = false;
+    const resolved = renderTemplate(templateValue, context as unknown as Record<string, unknown>, {
+      onFailure: () => {
+        renderFailed = true;
+      },
+    });
+
+    if (renderFailed) {
+      addUnresolvedField(malformedFields, fieldName);
+      return undefined;
+    }
 
     if (!resolved || resolved.trim() === '') {
       // Template resolved to empty - user probably hasn't set the var
-      // Log at debug level since this is expected during setup
-      console.log(`   ℹ️  MCP "${fieldName}" resolved to empty (user may need to set env var)`);
+      // Field names for env/header maps are caller-controlled and may
+      // themselves contain sensitive material. Report only the closed family.
+      console.log(`[mcp-template] resolution_empty field_family=${templateFieldFamily(fieldName)}`);
+      return undefined;
+    }
+
+    if (hasTemplateMarker(resolved)) {
+      addUnresolvedField(malformedFields, fieldName);
+      console.warn(
+        `[mcp-template] resolution_failed field_family=${templateFieldFamily(fieldName)} error_type=ResidualMarker`
+      );
       return undefined;
     }
 
     return resolved;
   } catch (error) {
-    // Template syntax error or other failure
+    // `renderTemplate` currently converts failures to an empty result, but
+    // keep this fail-closed boundary value-free if that contract ever changes.
+    const errorType = error instanceof Error ? 'Error' : 'UnknownError';
     console.warn(
-      `   ⚠️  Failed to resolve MCP template "${fieldName}":`,
-      error instanceof Error ? error.message : String(error)
+      `[mcp-template] resolution_failed field_family=${templateFieldFamily(fieldName)} error_type=${errorType}`
     );
+    addUnresolvedField(malformedFields, fieldName);
     return undefined;
   }
+}
+
+function templateFieldFamily(fieldName: string): 'url' | 'env' | 'headers' | 'auth' | 'unknown' {
+  if (fieldName === 'url') return 'url';
+  if (fieldName.startsWith('env.')) return 'env';
+  if (fieldName.startsWith('headers.')) return 'headers';
+  if (fieldName.startsWith('auth.')) return 'auth';
+  return 'unknown';
+}
+
+function addUnresolvedField(fields: string[], field: string): void {
+  const safeField = field.startsWith('env.')
+    ? 'env.*'
+    : field.startsWith('headers.')
+      ? 'headers.*'
+      : field;
+  if (!fields.includes(safeField)) fields.push(safeField);
 }
 
 /**
@@ -175,9 +343,10 @@ export function resolveMcpServerEnv(
   }
 
   const result: Record<string, string> = {};
+  const malformedFields: string[] = [];
 
   for (const [key, templateValue] of Object.entries(envTemplate)) {
-    const resolved = resolveStringValue(`env.${key}`, templateValue, context);
+    const resolved = resolveStringValue(`env.${key}`, templateValue, context, malformedFields);
     if (resolved !== undefined) {
       result[key] = resolved;
     }
@@ -226,21 +395,36 @@ export const TEMPLATE_RESOLVABLE_MCP_AUTH_SECRET_FIELDS = [
   'oauth_client_secret',
 ] as const;
 
+function isSafeResolvedHttpUrl(value: string | undefined): boolean {
+  if (!value || hasTemplateMarker(value)) return false;
+  try {
+    const parsed = new URL(value);
+    return (
+      (parsed.protocol === 'http:' || parsed.protocol === 'https:') &&
+      !parsed.username &&
+      !parsed.password
+    );
+  } catch {
+    return false;
+  }
+}
+
 export function resolveMcpServerTemplates(
   server: MCPServer,
   context: MCPTemplateContext
 ): MCPTemplateResolutionResult {
   const resolved: MCPServer = { ...server };
   const unresolvedFields: string[] = [];
+  const malformedFields: string[] = [];
 
   // Track original templated fields to detect unresolved templates
-  const hadUrlTemplate = server.url && containsTemplate(server.url);
+  const hadUrlTemplate = hasTemplateMarker(server.url);
 
   // Resolve URL (for HTTP/SSE transport)
   if (server.url) {
-    resolved.url = resolveStringValue('url', server.url, context);
+    resolved.url = resolveStringValue('url', server.url, context, malformedFields);
     if (hadUrlTemplate && !resolved.url) {
-      unresolvedFields.push('url');
+      addUnresolvedField(unresolvedFields, 'url');
     }
   }
 
@@ -248,12 +432,17 @@ export function resolveMcpServerTemplates(
   if (server.env) {
     const resolvedEnv: Record<string, string> = {};
     for (const [key, templateValue] of Object.entries(server.env)) {
-      const hadTemplate = containsTemplate(templateValue);
-      const resolvedValue = resolveStringValue(`env.${key}`, templateValue, context);
+      const hadTemplate = hasTemplateMarker(templateValue);
+      const resolvedValue = resolveStringValue(
+        `env.${key}`,
+        templateValue,
+        context,
+        malformedFields
+      );
       if (resolvedValue !== undefined) {
         resolvedEnv[key] = resolvedValue;
       } else if (hadTemplate) {
-        unresolvedFields.push(`env.${key}`);
+        addUnresolvedField(unresolvedFields, `env.${key}`);
       }
     }
     resolved.env = Object.keys(resolvedEnv).length > 0 ? resolvedEnv : undefined;
@@ -263,12 +452,17 @@ export function resolveMcpServerTemplates(
   if (server.headers) {
     const resolvedHeaders: Record<string, string> = {};
     for (const [key, templateValue] of Object.entries(server.headers)) {
-      const hadTemplate = containsTemplate(templateValue);
-      const resolvedValue = resolveStringValue(`headers.${key}`, templateValue, context);
+      const hadTemplate = hasTemplateMarker(templateValue);
+      const resolvedValue = resolveStringValue(
+        `headers.${key}`,
+        templateValue,
+        context,
+        malformedFields
+      );
       if (resolvedValue !== undefined) {
         resolvedHeaders[key] = resolvedValue;
       } else if (hadTemplate) {
-        unresolvedFields.push(`headers.${key}`);
+        addUnresolvedField(unresolvedFields, `headers.${key}`);
       }
     }
     resolved.headers = Object.keys(resolvedHeaders).length > 0 ? resolvedHeaders : undefined;
@@ -279,80 +473,104 @@ export function resolveMcpServerTemplates(
     const resolvedAuth: MCPAuth = { ...server.auth };
 
     if (server.auth.token) {
-      const hadTemplate = containsTemplate(server.auth.token);
-      resolvedAuth.token = resolveStringValue('auth.token', server.auth.token, context);
+      const hadTemplate = hasTemplateMarker(server.auth.token);
+      resolvedAuth.token = resolveStringValue(
+        'auth.token',
+        server.auth.token,
+        context,
+        malformedFields
+      );
       if (hadTemplate && !resolvedAuth.token) {
-        unresolvedFields.push('auth.token');
+        addUnresolvedField(unresolvedFields, 'auth.token');
       }
     }
     if (server.auth.api_url) {
-      const hadTemplate = containsTemplate(server.auth.api_url);
-      resolvedAuth.api_url = resolveStringValue('auth.api_url', server.auth.api_url, context);
+      const hadTemplate = hasTemplateMarker(server.auth.api_url);
+      resolvedAuth.api_url = resolveStringValue(
+        'auth.api_url',
+        server.auth.api_url,
+        context,
+        malformedFields
+      );
       if (hadTemplate && !resolvedAuth.api_url) {
-        unresolvedFields.push('auth.api_url');
+        addUnresolvedField(unresolvedFields, 'auth.api_url');
       }
     }
     if (server.auth.api_token) {
-      const hadTemplate = containsTemplate(server.auth.api_token);
-      resolvedAuth.api_token = resolveStringValue('auth.api_token', server.auth.api_token, context);
+      const hadTemplate = hasTemplateMarker(server.auth.api_token);
+      resolvedAuth.api_token = resolveStringValue(
+        'auth.api_token',
+        server.auth.api_token,
+        context,
+        malformedFields
+      );
       if (hadTemplate && !resolvedAuth.api_token) {
-        unresolvedFields.push('auth.api_token');
+        addUnresolvedField(unresolvedFields, 'auth.api_token');
       }
     }
     if (server.auth.api_secret) {
-      const hadTemplate = containsTemplate(server.auth.api_secret);
+      const hadTemplate = hasTemplateMarker(server.auth.api_secret);
       resolvedAuth.api_secret = resolveStringValue(
         'auth.api_secret',
         server.auth.api_secret,
-        context
+        context,
+        malformedFields
       );
       if (hadTemplate && !resolvedAuth.api_secret) {
-        unresolvedFields.push('auth.api_secret');
+        addUnresolvedField(unresolvedFields, 'auth.api_secret');
       }
     }
 
     // OAuth 2.0 fields (all optional - don't default to env vars, don't track as unresolved)
     if (server.auth.type === 'oauth') {
+      if (server.auth.oauth_authorization_url) {
+        resolvedAuth.oauth_authorization_url = resolveStringValue(
+          'auth.oauth_authorization_url',
+          server.auth.oauth_authorization_url,
+          context,
+          malformedFields
+        );
+      }
       // OAuth token URL (optional - can be auto-detected)
       if (server.auth.oauth_token_url) {
-        const _hadTemplate = containsTemplate(server.auth.oauth_token_url);
         resolvedAuth.oauth_token_url = resolveStringValue(
           'auth.oauth_token_url',
           server.auth.oauth_token_url,
-          context
+          context,
+          malformedFields
         );
         // Don't track as unresolved - it's optional
       }
 
       // OAuth client ID (optional - only resolve if provided)
       if (server.auth.oauth_client_id) {
-        const _hadTemplate = containsTemplate(server.auth.oauth_client_id);
         resolvedAuth.oauth_client_id = resolveStringValue(
           'auth.oauth_client_id',
           server.auth.oauth_client_id,
-          context
+          context,
+          malformedFields
         );
         // Don't track as unresolved - it's optional
       }
 
       // OAuth client secret (optional - only resolve if provided)
       if (server.auth.oauth_client_secret) {
-        const _hadTemplate = containsTemplate(server.auth.oauth_client_secret);
         resolvedAuth.oauth_client_secret = resolveStringValue(
           'auth.oauth_client_secret',
           server.auth.oauth_client_secret,
-          context
+          context,
+          malformedFields
         );
         // Don't track as unresolved - it's optional
       }
 
       // OAuth scope (optional)
       if (server.auth.oauth_scope) {
-        const _hadTemplate = containsTemplate(server.auth.oauth_scope);
         resolvedAuth.oauth_scope = resolveStringValue(
           'auth.oauth_scope',
           server.auth.oauth_scope,
-          context
+          context,
+          malformedFields
         );
         // Don't track as unresolved - it's optional
       }
@@ -364,39 +582,56 @@ export function resolveMcpServerTemplates(
     resolved.auth = resolvedAuth;
   }
 
-  // Determine validity - URL is critical for HTTP/SSE transports
+  // Validate after substitution at the common executor/probe boundary. A
+  // stored template is only a prescription; the resolved value can still be
+  // malformed, retain template syntax, switch protocol, or inject URL
+  // userinfo. Never include a resolved URL in the error or logs because it may
+  // contain user-provided path/query material.
   const isHttpTransport = server.transport === 'http' || server.transport === 'sse';
-  const urlRequired = isHttpTransport && hadUrlTemplate;
-  const urlMissing = urlRequired && !resolved.url;
+  const invalidFields = [...malformedFields];
+  if (
+    isHttpTransport &&
+    ((server.url && hasTemplateMarker(server.url) && !isValidMCPHttpUrlTemplate(server.url)) ||
+      !isSafeResolvedHttpUrl(resolved.url))
+  ) {
+    addUnresolvedField(invalidFields, 'url');
+  }
+  if (server.transport === 'stdio') {
+    if (!resolved.command?.trim()) addUnresolvedField(invalidFields, 'command');
+    if (resolved.url || resolved.headers || (resolved.auth && resolved.auth.type !== 'none')) {
+      addUnresolvedField(invalidFields, 'transport configuration');
+    }
+  }
+  for (const [field, value] of [
+    ['auth.api_url', resolved.auth?.api_url],
+    ['auth.oauth_authorization_url', resolved.auth?.oauth_authorization_url],
+    ['auth.oauth_token_url', resolved.auth?.oauth_token_url],
+  ] as const) {
+    const original =
+      field === 'auth.api_url'
+        ? server.auth?.api_url
+        : field === 'auth.oauth_authorization_url'
+          ? server.auth?.oauth_authorization_url
+          : server.auth?.oauth_token_url;
+    if (
+      value !== undefined &&
+      ((original && hasTemplateMarker(original) && !isValidMCPHttpUrlTemplate(original)) ||
+        !isSafeResolvedHttpUrl(value))
+    ) {
+      addUnresolvedField(invalidFields, field);
+    }
+  }
 
-  const isValid = !urlMissing;
+  const isValid = invalidFields.length === 0;
   let errorMessage: string | undefined;
 
   if (!isValid) {
-    const missingVars = unresolvedFields
-      .map((f) => {
-        // Extract the template variable name for better error messages
-        let originalValue: string | undefined;
-        if (f === 'url') {
-          originalValue = server.url;
-        } else if (f.startsWith('env.')) {
-          originalValue = server.env?.[f.slice(4)];
-        } else if (f.startsWith('headers.')) {
-          originalValue = server.headers?.[f.slice(8)];
-        } else if (f.startsWith('auth.') && server.auth) {
-          const authKey = f.slice(5) as keyof MCPAuth;
-          const authValue = server.auth[authKey];
-          originalValue = typeof authValue === 'string' ? authValue : undefined;
-        }
-        return originalValue || f;
-      })
-      .join(', ');
-    errorMessage = `MCP server "${server.name}" has unresolved required templates: ${missingVars}. Set the corresponding environment variables in your user settings.`;
+    errorMessage = `MCP server configuration has invalid or unresolved ${invalidFields.join(', ')}. Use renderable templates and HTTP(S) URLs without embedded credentials, then set any required user environment variables.`;
   }
 
   return {
     server: resolved,
-    unresolvedFields,
+    unresolvedFields: [...new Set([...unresolvedFields, ...malformedFields])],
     isValid,
     errorMessage,
   };

@@ -4,13 +4,18 @@
  * Shared logic for creating and managing users without requiring daemon.
  */
 
-import bcrypt from 'bcryptjs';
 import { and, eq } from 'drizzle-orm';
+import {
+  assertSecurePassword,
+  PasswordPolicyError,
+  PasswordValidationCode,
+} from '../config/password-policy';
 import { generateId } from '../lib/ids';
 import type { InternalUser, User, UserID } from '../types';
 import { normalizeRole } from '../types/user';
 import type { Database } from './client';
 import { insert, isPostgresDatabase, select } from './database-wrapper';
+import { hashLocalPassword } from './password-credentials';
 import { type UserRow, users } from './schema';
 import { getCurrentTenantId } from './tenant-scope';
 
@@ -79,6 +84,7 @@ export function userRowToUser(row: UserRow): InternalUser {
     preferences: userData.preferences,
     onboarding_completed: !!row.onboarding_completed,
     must_change_password: !!row.must_change_password,
+    credential_generation: row.credential_generation,
     tokens_valid_after: row.tokens_valid_after ? new Date(row.tokens_valid_after) : undefined,
     created_at: row.created_at,
     updated_at: row.updated_at ?? undefined,
@@ -95,7 +101,7 @@ export function userRowToUser(row: UserRow): InternalUser {
  * @param data - User data
  * @returns Created user
  */
-export async function createUser(db: Database, data: CreateUserData): Promise<User> {
+async function persistUser(db: Database, data: CreateUserData): Promise<User> {
   // Check if email already exists
   const existing = await select(db).from(users).where(userEmailPredicate(db, data.email)).one();
 
@@ -103,8 +109,7 @@ export async function createUser(db: Database, data: CreateUserData): Promise<Us
     throw new Error(`User with email ${data.email} already exists`);
   }
 
-  // Hash password (12 rounds for security)
-  const hashedPassword = await bcrypt.hash(data.password, 12);
+  const hashedPassword = await hashLocalPassword(data.password);
 
   // Create user
   const now = new Date();
@@ -139,6 +144,18 @@ export async function createUser(db: Database, data: CreateUserData): Promise<Us
     .one();
 
   return userRowToUser(row);
+}
+
+/**
+ * Create a user with an assigned local password.
+ *
+ * This direct database seam is used by `agor init` and bootstrap tooling, so
+ * it enforces the same canonical policy as the daemon UsersService. The only
+ * weak credential exception is private to the bootstrap-specific helper below.
+ */
+export async function createUser(db: Database, data: CreateUserData): Promise<User> {
+  assertSecurePassword(data.password, { email: data.email });
+  return persistUser(db, data);
 }
 
 /**
@@ -180,17 +197,26 @@ export const DEVELOPMENT_DEFAULT_ADMIN_USER = {
   unix_username: 'admin',
 };
 
-export const MIN_BOOTSTRAP_ADMIN_PASSWORD_LENGTH = 8;
-
 export function assertUsableBootstrapAdminPassword(
   password: string,
   label: string = 'Bootstrap admin password'
 ): void {
   if (password === DEVELOPMENT_DEFAULT_ADMIN_USER.password) {
-    throw new Error(`${label} must not be the legacy fixed default password.`);
+    throw new PasswordPolicyError(
+      PasswordValidationCode.CONTEXT_SPECIFIC,
+      `${label} must not be the legacy fixed default password.`
+    );
   }
-  if (password.length < MIN_BOOTSTRAP_ADMIN_PASSWORD_LENGTH) {
-    throw new Error(`${label} must be at least ${MIN_BOOTSTRAP_ADMIN_PASSWORD_LENGTH} characters.`);
+  try {
+    assertSecurePassword(password, { email: DEVELOPMENT_DEFAULT_ADMIN_USER.email });
+  } catch (error) {
+    if (error instanceof PasswordPolicyError && error.message.startsWith('Password ')) {
+      throw new PasswordPolicyError(
+        error.code,
+        `${label}${error.message.slice('Password'.length)}`
+      );
+    }
+    throw error;
   }
 }
 
@@ -199,19 +225,42 @@ export interface CreateDefaultAdminUserOptions {
   password?: string;
   name?: string;
   unix_username?: string;
-  /**
-   * Explicitly opt into the legacy admin@agor.live/admin credential for
-   * development/test ergonomics. Refused when NODE_ENV=production.
-   */
-  allowDevelopmentDefault?: boolean;
+}
+
+export const ALLOW_DEVELOPMENT_DEFAULT_ADMIN_ENV = 'AGOR_ALLOW_DEVELOPMENT_DEFAULT_ADMIN';
+
+export function isDevelopmentDefaultAdminEnvironment(
+  env: NodeJS.ProcessEnv = process.env
+): boolean {
+  return (
+    (env.NODE_ENV === 'development' || env.NODE_ENV === 'test') &&
+    env[ALLOW_DEVELOPMENT_DEFAULT_ADMIN_ENV] === 'true' &&
+    env.AGOR_ADMIN_PASSWORD === DEVELOPMENT_DEFAULT_ADMIN_USER.password
+  );
+}
+
+export function assertDevelopmentDefaultAdminEnvironment(
+  env: NodeJS.ProcessEnv = process.env
+): void {
+  if (env.NODE_ENV !== 'development' && env.NODE_ENV !== 'test') {
+    throw new Error('Development default admin requires NODE_ENV=development or NODE_ENV=test.');
+  }
+  if (env[ALLOW_DEVELOPMENT_DEFAULT_ADMIN_ENV] !== 'true') {
+    throw new Error(`${ALLOW_DEVELOPMENT_DEFAULT_ADMIN_ENV}=true is required.`);
+  }
+  if (env.AGOR_ADMIN_PASSWORD !== DEVELOPMENT_DEFAULT_ADMIN_USER.password) {
+    throw new Error(
+      `AGOR_ADMIN_PASSWORD=${DEVELOPMENT_DEFAULT_ADMIN_USER.password} is required for the development default admin.`
+    );
+  }
 }
 
 /**
  * Create bootstrap admin user.
  *
- * Production callers must pass an explicit password. The fixed
- * admin@agor.live/admin credential is available only behind an explicit
- * development/test gate.
+ * Callers must pass an explicit secure password. The fixed development
+ * credential is deliberately unavailable through this general helper; the
+ * bootstrap-only `createDevelopmentDefaultAdminUser` owns that exception.
  *
  * @param db - Database instance
  * @param options - Admin identity/password options
@@ -222,23 +271,17 @@ export async function createDefaultAdminUser(
   db: Database,
   options: CreateDefaultAdminUserOptions = {}
 ): Promise<User> {
-  const useDevelopmentDefault = options.allowDevelopmentDefault === true;
-  if (!options.password && !useDevelopmentDefault) {
+  if (!options.password) {
     throw new Error(
-      'Refusing to create admin with fixed default credentials. Pass an explicit password, or set allowDevelopmentDefault only in development/test.'
+      'Refusing to create admin with fixed default credentials. Pass an explicit secure password.'
     );
   }
-  if (options.password && !useDevelopmentDefault) {
-    assertUsableBootstrapAdminPassword(options.password);
-  }
-  if (useDevelopmentDefault && process.env.NODE_ENV === 'production') {
-    throw new Error('Refusing development default admin credentials when NODE_ENV=production');
-  }
+  assertUsableBootstrapAdminPassword(options.password);
 
   const adminData = {
     ...DEVELOPMENT_DEFAULT_ADMIN_USER,
     ...options,
-    password: options.password ?? DEVELOPMENT_DEFAULT_ADMIN_USER.password,
+    password: options.password,
     role: 'superadmin' as const,
   };
 
@@ -249,12 +292,33 @@ export async function createDefaultAdminUser(
     throw new Error(`Admin user already exists (email: ${adminData.email})`);
   }
 
-  return createUser(db, {
+  const data: CreateUserData = {
     email: adminData.email,
     password: adminData.password,
     name: adminData.name,
     role: adminData.role,
     unix_username: adminData.unix_username,
-    must_change_password: !useDevelopmentDefault,
+    must_change_password: true,
+  };
+
+  return createUser(db, data);
+}
+
+/**
+ * Create the exact development bootstrap identity behind all three explicit
+ * environment gates. No caller-controlled boolean can weaken this boundary.
+ */
+export async function createDevelopmentDefaultAdminUser(db: Database): Promise<User> {
+  assertDevelopmentDefaultAdminEnvironment();
+
+  const existing = await getUserByEmail(db, DEVELOPMENT_DEFAULT_ADMIN_USER.email);
+  if (existing) {
+    throw new Error(`Admin user already exists (email: ${DEVELOPMENT_DEFAULT_ADMIN_USER.email})`);
+  }
+
+  return persistUser(db, {
+    ...DEVELOPMENT_DEFAULT_ADMIN_USER,
+    role: 'superadmin',
+    must_change_password: false,
   });
 }

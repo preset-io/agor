@@ -7,9 +7,14 @@
 
 import { Forbidden, NotAuthenticated } from '@agor/core/feathers';
 import type { AuthenticatedParams, HookContext } from '@agor/core/types';
-import { ROLES } from '@agor/core/types';
+import { BRANCH_ENVIRONMENT_SNAPSHOT_FIELDS, ROLES } from '@agor/core/types';
 import { describe, expect, it } from 'vitest';
-import { ensureMinimumRole, registerAuthenticatedRoute, requireMinimumRole } from './authorization';
+import {
+  ensureMinimumRole,
+  registerAuthenticatedRoute,
+  requireAdminForEnvConfig,
+  requireMinimumRole,
+} from './authorization';
 
 /** Helper to create authenticated params for a given role and provider */
 function makeParams(role: string, provider: string | undefined = 'rest'): AuthenticatedParams {
@@ -23,6 +28,34 @@ function makeParams(role: string, provider: string | undefined = 'rest'): Authen
     provider,
   } as AuthenticatedParams;
 }
+
+describe('environment configuration clears', () => {
+  it.each([null, undefined])(
+    'requires admin for explicit %s clears, including bulk patches',
+    (value) => {
+      const hook = requireAdminForEnvConfig();
+      for (const field of [
+        ...BRANCH_ENVIRONMENT_SNAPSHOT_FIELDS,
+        'environment',
+        'environment_config',
+        'environment_variant',
+      ]) {
+        for (const data of [{ [field]: value }, [{ notes: 'unchanged' }, { [field]: value }]]) {
+          const context = { data, params: makeParams(ROLES.MEMBER) } as HookContext;
+          expect(() => hook(context)).toThrow(Forbidden);
+          context.params = makeParams(ROLES.ADMIN);
+          expect(() => hook(context)).not.toThrow();
+        }
+      }
+      expect(() =>
+        hook({
+          data: { notes: 'not environment config' },
+          params: makeParams(ROLES.MEMBER),
+        } as HookContext)
+      ).not.toThrow();
+    }
+  );
+});
 
 describe('ensureMinimumRole', () => {
   describe('role hierarchy', () => {
@@ -161,7 +194,7 @@ describe('requireMinimumRole (hook factory)', () => {
 });
 
 describe('registerAuthenticatedRoute', () => {
-  it('installs executor runtime scope validation on custom routes', async () => {
+  it('authorizes an executor credential as its delegated user on custom routes', async () => {
     const installed: { before?: Record<string, Array<(context: HookContext) => unknown>> } = {};
     const app = {
       use: () => undefined,
@@ -189,6 +222,7 @@ describe('registerAuthenticatedRoute', () => {
         provider: 'rest',
         user: { user_id: 'u1', email: 'a@b.c', role: ROLES.MEMBER },
         authentication: {
+          strategy: 'jwt',
           payload: {
             type: 'executor-session',
             purpose: 'executor-task',
@@ -200,7 +234,9 @@ describe('registerAuthenticatedRoute', () => {
     } as HookContext;
 
     const hooks = installed.before?.create ?? [];
-    expect(hooks).toHaveLength(3);
-    await expect(hooks[1](context)).rejects.toThrow(/task scope/);
+    expect(hooks).toHaveLength(2);
+    for (const hook of hooks) {
+      await expect(Promise.resolve(hook(context))).resolves.toBe(context);
+    }
   });
 });

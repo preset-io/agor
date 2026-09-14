@@ -4,11 +4,11 @@
  * Handles JWT token storage and retrieval for daemon authentication
  */
 
-import { chmod, mkdir, readFile, unlink, writeFile } from 'node:fs/promises';
-import { homedir } from 'node:os';
+import { chmod, readFile, unlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { ensureAgorHome, getAgorHome } from '@agor/core/config';
 
-const AGOR_DIR = join(homedir(), '.agor');
+const AGOR_DIR = getAgorHome();
 const TOKEN_FILE = join(AGOR_DIR, 'cli-token');
 
 export interface StoredAuth {
@@ -32,8 +32,9 @@ export interface StoredAuth {
  * Save authentication token to disk
  */
 export async function saveToken(auth: StoredAuth): Promise<void> {
-  // Ensure .agor directory exists
-  await mkdir(AGOR_DIR, { recursive: true });
+  // Remote login can be the first local Agor command. Create a missing state
+  // home privately without changing an existing operator-managed directory.
+  await ensureAgorHome(AGOR_DIR);
 
   // Write token file with restrictive permissions
   await writeFile(TOKEN_FILE, JSON.stringify(auth, null, 2), {

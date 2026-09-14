@@ -5,6 +5,7 @@ const runtime = vi.hoisted(() => ({
   initialize: vi.fn().mockResolvedValue(undefined),
   recordPulse: vi.fn(),
   stopHeartbeat: vi.fn(),
+  refreshMcp: vi.fn().mockResolvedValue({}),
 }));
 vi.mock('./executor-heartbeat.js', () => ({
   startExecutorHeartbeat: () => ({
@@ -16,7 +17,11 @@ vi.mock('./handlers/sdk/tool-registry.js', () => ({
   initializeToolRegistry: runtime.initialize,
   ToolRegistry: { execute: runtime.execute },
 }));
+vi.mock('./mcp-runtime-refresh.js', () => ({
+  requestMCPRuntimeRefresh: runtime.refreshMcp,
+}));
 
+import { AUTHORIZATION_REVOKED_TERMINATION_MESSAGE } from '@agor/core/types';
 import { AgorExecutor } from './index.js';
 import { globalPermissionManager } from './permissions/permission-manager.js';
 
@@ -61,6 +66,7 @@ describe('AgorExecutor watchdog handoff', () => {
     vi.restoreAllMocks();
     vi.clearAllMocks();
     runtime.execute.mockResolvedValue(undefined);
+    runtime.refreshMcp.mockResolvedValue({});
   });
 
   it('starts SDK observation before invoking the tool', async () => {
@@ -111,9 +117,10 @@ describe('AgorExecutor watchdog handoff', () => {
     expect(exit).toHaveBeenCalledWith(70);
   });
 
-  it('aborts immediately but retains liveness until it can report quiescence', async () => {
+  it('exits authorization revocation cooperatively with a sanitized message and quiescence ack', async () => {
     const reportTerminationComplete = vi.fn().mockResolvedValue({});
     const heartbeatStop = vi.fn();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     const executor = new AgorExecutor({
       sessionToken: 'token',
       sessionId: 'session-1',
@@ -128,7 +135,7 @@ describe('AgorExecutor watchdog handoff', () => {
       heartbeat: { stop: typeof heartbeatStop } | null;
       abortController: AbortController;
       handleTaskLifecycleUpdate(task: unknown): void;
-      reportTerminationComplete(): Promise<void>;
+      recoverTerminationAfterExecutionError(): Promise<boolean>;
     };
     executor.client = { service: () => ({ reportTerminationComplete }) };
     executor.heartbeat = { stop: heartbeatStop };
@@ -137,14 +144,17 @@ describe('AgorExecutor watchdog handoff', () => {
       task_id: 'task-1',
       status: 'stopping',
       termination_request: {
-        cause: 'user_stop',
+        cause: 'authorization_revoked',
         requested_at: '2026-07-23T12:00:00.000Z',
+        error_message: AUTHORIZATION_REVOKED_TERMINATION_MESSAGE,
       },
     });
 
     expect(executor.abortController.signal.aborted).toBe(true);
+    expect(warn).toHaveBeenCalledWith(AUTHORIZATION_REVOKED_TERMINATION_MESSAGE);
     expect(heartbeatStop).not.toHaveBeenCalled();
-    await executor.reportTerminationComplete();
+    // `run()` maps this recovered result to its normal code-0 exit path.
+    await expect(executor.recoverTerminationAfterExecutionError()).resolves.toBe(true);
     expect(reportTerminationComplete).toHaveBeenCalledWith({
       task_id: 'task-1',
       requested_at: '2026-07-23T12:00:00.000Z',
@@ -280,6 +290,86 @@ describe('AgorExecutor watchdog handoff', () => {
 
     expect(executor.abortController.signal.aborted).toBe(true);
     expect(heartbeatStop).not.toHaveBeenCalled();
+  });
+
+  it('deduplicates patched-event storms for one durable MCP recovery identity', async () => {
+    const executor = new AgorExecutor({
+      sessionToken: 'token',
+      sessionId: 'session-1',
+      taskId: 'task-1',
+      prompt: 'prompt',
+      tool: 'claude-code',
+      daemonUrl: 'http://daemon',
+    }) as unknown as { requestDurableMcpRecovery(task: unknown): void };
+    runtime.refreshMcp.mockRejectedValue(new Error('daemon unavailable'));
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const task = {
+      task_id: 'task-1',
+      session_id: 'session-1',
+      metadata: {
+        mcp_recovery: {
+          generation: 9,
+          status: 'refresh_requested',
+          request_id: 'request-9',
+          refresh_deadline_at: new Date(Date.now() + 30_000).toISOString(),
+          provider: { mode: 'in_place', transport_reload: true, retries_unstarted_call: false },
+        },
+      },
+    };
+
+    for (let index = 0; index < 20; index += 1) executor.requestDurableMcpRecovery(task);
+    await Promise.resolve();
+    expect(runtime.refreshMcp).toHaveBeenCalledTimes(1);
+    expect(runtime.refreshMcp).toHaveBeenCalledWith('task-1', {
+      requestId: 'request-9',
+      reason: 'authority_changed',
+      expectedGeneration: 9,
+    });
+  });
+
+  it('receives user_reconnect over the task event listener and retries a poisoned identity', async () => {
+    const listeners = new Map<string, (data: unknown) => void>();
+    const executor = new AgorExecutor({
+      sessionToken: 'token',
+      sessionId: 'session-1',
+      taskId: 'task-1',
+      prompt: 'prompt',
+      tool: 'claude-code',
+      daemonUrl: 'http://daemon',
+    }) as unknown as {
+      client: {
+        service(path: string): {
+          on(event: string, listener: (data: unknown) => void): void;
+        };
+      };
+      setupEventListeners(): void;
+    };
+    executor.client = {
+      service(path) {
+        return {
+          on(event, listener) {
+            listeners.set(`${path}:${event}`, listener);
+          },
+        };
+      },
+    };
+    executor.setupEventListeners();
+    runtime.refreshMcp.mockRejectedValue(new Error('transient daemon failure'));
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    const event = {
+      task_id: 'task-1',
+      session_id: 'session-1',
+      request_id: 'request-1',
+      generation: 1,
+      reason: 'authority_changed',
+    };
+    listeners.get('tasks:mcp_refresh_requested')?.(event);
+    await vi.waitFor(() => expect(runtime.refreshMcp).toHaveBeenCalledTimes(1));
+    await Promise.resolve();
+    await Promise.resolve();
+    listeners.get('tasks:mcp_refresh_requested')?.({ ...event, reason: 'user_reconnect' });
+    await vi.waitFor(() => expect(runtime.refreshMcp).toHaveBeenCalledTimes(2));
   });
 
   it('forwards only this Task permission decision to the live permission waiter', () => {

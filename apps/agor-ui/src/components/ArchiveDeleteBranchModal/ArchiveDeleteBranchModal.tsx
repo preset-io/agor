@@ -35,12 +35,16 @@ export const ArchiveDeleteBranchModal: React.FC<ArchiveDeleteBranchModalProps> =
 
   useEffect(() => {
     if (open) {
-      setMetadataAction(initialMetadataAction);
+      setMetadataAction(branch.deletion_status ? 'delete' : initialMetadataAction);
     }
-  }, [initialMetadataAction, open]);
+  }, [initialMetadataAction, open, branch.deletion_status]);
 
   const handleOk = () => {
-    onConfirm({ metadataAction, filesystemAction });
+    onConfirm(
+      metadataAction === 'delete'
+        ? { metadataAction: 'delete', filesystemAction: 'deleted' }
+        : { metadataAction: 'archive', filesystemAction }
+    );
   };
 
   // Determine button text and style based on metadata action
@@ -69,10 +73,27 @@ export const ArchiveDeleteBranchModal: React.FC<ArchiveDeleteBranchModalProps> =
           <Text>{branch.ref}</Text>
         </div>
 
+        {branch.deletion_status && (
+          <Alert
+            type={branch.deletion_status === 'deletion_failed' ? 'error' : 'info'}
+            title={
+              branch.deletion_status === 'deletion_failed'
+                ? 'Deletion failed'
+                : 'Deletion in progress'
+            }
+            description={
+              branch.deletion_error || 'The branch remains unavailable until deletion finishes.'
+            }
+          />
+        )}
         {/* Environment Warning */}
         {environmentRunning && (
           <Alert
-            title="Environment is running and will be stopped"
+            title={
+              metadataAction === 'delete'
+                ? 'Stop the environment before requesting deletion'
+                : 'Environment is running and will be stopped'
+            }
             type="warning"
             showIcon
             style={{ marginBottom: 0 }}
@@ -85,7 +106,8 @@ export const ArchiveDeleteBranchModal: React.FC<ArchiveDeleteBranchModalProps> =
             Filesystem
           </Text>
           <Radio.Group
-            value={filesystemAction}
+            value={metadataAction === 'delete' ? 'deleted' : filesystemAction}
+            disabled={metadataAction === 'delete'}
             onChange={(e) => setFilesystemAction(e.target.value)}
           >
             <Space orientation="vertical">
@@ -124,7 +146,7 @@ export const ArchiveDeleteBranchModal: React.FC<ArchiveDeleteBranchModalProps> =
           </Text>
           <Radio.Group value={metadataAction} onChange={(e) => setMetadataAction(e.target.value)}>
             <Space orientation="vertical">
-              <Radio value="archive">
+              <Radio value="archive" disabled={!!branch.deletion_status}>
                 <div>
                   <div>Archive (recommended)</div>
                   <Text type="secondary" style={{ fontSize: 12 }}>
@@ -136,7 +158,7 @@ export const ArchiveDeleteBranchModal: React.FC<ArchiveDeleteBranchModalProps> =
                 <div>
                   <div>Delete permanently</div>
                   <Text type="secondary" style={{ fontSize: 12 }}>
-                    All data deleted - no undo
+                    Owned branch data and files deleted — no undo
                   </Text>
                 </div>
               </Radio>
@@ -154,8 +176,11 @@ export const ArchiveDeleteBranchModal: React.FC<ArchiveDeleteBranchModalProps> =
                   • All {sessionCount} session(s), messages, and history will be permanently deleted
                 </Text>
                 <Text>• Token usage data will be lost - prevents analytics and cost tracking</Text>
-                <Text>• Links to issues/PRs will be removed forever</Text>
-                <Text>• This action cannot be undone</Text>
+                <Text>• Workspace, branch SDK home, and owned uploads will be removed</Text>
+                <Text>• Shared resources and remote Git history are retained</Text>
+                <Text>
+                  • This action cannot be undone; partial failures remain visible for recovery
+                </Text>
                 <Text strong style={{ marginTop: 8, display: 'block' }}>
                   💡 Consider archiving instead - keeps data for history but hides from board
                 </Text>

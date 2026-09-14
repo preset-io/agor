@@ -127,9 +127,9 @@ Parent receives notification, can fetch details via MCP
    - Also provide MCP tool instructions for deeper inspection
 
 4. **Task Description for Spawn Prompt**
-   - ✅ Confirmed: `task.description` contains the spawn prompt (truncated to 120 chars)
-   - Consistent with TaskHeader display in UI
-   - Use `task.description` in callback template
+   - ✅ Confirmed: `task.full_prompt` contains the spawn prompt (not truncated)
+   - Only included in the callback context when `callback_config.include_original_prompt` is set
+   - Use `task.full_prompt` in callback template
 
 5. **Database Schema**
    - `callback_config` stored as JSON TEXT column
@@ -311,6 +311,7 @@ All open questions have been resolved and moved to "Design Decisions" section:
                      │ Render Callback     │
                      │ Template with:      │
                      │ - childSessionId    │
+                     │ - childSessionTitle │
                      │ - spawnPrompt       │
                      │ - completedAt       │
                      │ - messageCount      │
@@ -462,7 +463,7 @@ Parent Agent    MCP Server    Sessions Svc    Child Session    TasksService    M
 ```json
 {
   "task_id": "task-uuid",
-  "status": "COMPLETED",
+  "status": "completed",
   "completed_at": "2025-01-14T15:32:18Z",
   "message_range": {
     "start_index": 0,
@@ -482,11 +483,12 @@ Parent Agent    MCP Server    Sessions Svc    Child Session    TasksService    M
 {
   "childSessionId": "4a7b3c2d",
   "childSessionFullId": "4a7b3c2d-e5f6-7890-abcd-ef1234567890",
+  "childSessionTitle": "Analyze git history",
   "childTaskId": "8f3e9a1c",
   "childTaskFullId": "8f3e9a1c-1234-5678-90ab-cdef12345678",
   "parentSessionId": "03b62447",
   "spawnPrompt": "Analyze the git history for the past week",
-  "status": "COMPLETED",
+  "status": "completed",
   "completedAt": "2025-01-14T15:32:18Z",
   "messageCount": 12,
   "toolUseCount": 8
@@ -499,7 +501,7 @@ Parent Agent    MCP Server    Sessions Svc    Child Session    TasksService    M
 [Agor] Child session 4a7b3c2d has completed.
 
 **Task:** Analyze the git history for the past week
-**Status:** COMPLETED
+**Status:** completed
 **Stats:** 12 messages, 8 tool uses
 
 **Result:**
@@ -520,7 +522,7 @@ Use `agor_tasks_get` (taskId: "8f3e9a1c-1234-5678-90ab-cdef12345678") or `agor_s
 [Agor] Child session 4a7b3c2d has failed.
 
 **Task:** Analyze the git history for the past week
-**Status:** FAILED
+**Status:** failed
 **Stats:** 8 messages, 5 tool uses
 
 **Result:**
@@ -588,16 +590,17 @@ import Handlebars from 'handlebars';
  * Variables available:
  * - childSessionId: Short ID of completed child session
  * - childSessionFullId: Full UUIDv7 of child session
+ * - childSessionTitle: Title of the completed child session
  * - childTaskId: Short ID of completed task
  * - childTaskFullId: Full UUIDv7 of task
  * - parentSessionId: Short ID of parent session
  * - spawnPrompt: Original prompt given to child
- * - status: Task status (COMPLETED, FAILED, etc.)
+ * - status: Task status (completed, failed, etc.)
  * - completedAt: ISO timestamp of completion
  * - messageCount: Number of messages in completed task
  * - toolUseCount: Number of tools used
  */
-const DEFAULT_TEMPLATE = `[Agor] Child session {{childSessionId}} has {{#if (eq status "COMPLETED")}}completed{{else}}failed{{/if}}.
+const DEFAULT_TEMPLATE = `[Agor] Child session {{childSessionId}} has {{#if (eq status "completed")}}completed{{else}}failed{{/if}}.
 
 **Task:** {{spawnPrompt}}
 **Status:** {{status}}
@@ -606,18 +609,19 @@ const DEFAULT_TEMPLATE = `[Agor] Child session {{childSessionId}} has {{#if (eq 
 {{#if lastAssistantMessage}}**Result:**
 {{lastAssistantMessage}}
 
-{{/if}}{{#if (eq status "COMPLETED")}}Use \`agor_tasks_get\` (taskId: "{{childTaskFullId}}") or \`agor_sessions_get\` (sessionId: "{{childSessionFullId}}") for more details.{{else}}Investigate the failure using \`agor_tasks_get\` (taskId: "{{childTaskFullId}}") or \`agor_sessions_get\` (sessionId: "{{childSessionFullId}}").
+{{/if}}{{#if (eq status "completed")}}Use \`agor_tasks_get\` (taskId: "{{childTaskFullId}}") or \`agor_sessions_get\` (sessionId: "{{childSessionFullId}}") for more details.{{else}}Investigate the failure using \`agor_tasks_get\` (taskId: "{{childTaskFullId}}") or \`agor_sessions_get\` (sessionId: "{{childSessionFullId}}").
 
 Review what went wrong and decide whether to retry or take a different approach.{{/if}}`;
 
 export interface ChildCompletionContext {
-  childSessionId: string; // Short ID (first 8 chars)
+  childSessionId: string; // Canonical short ID (24 chars, via shortId())
   childSessionFullId: string; // Full UUIDv7
+  childSessionTitle: string; // Title of the completed child session (empty string if unset)
   childTaskId: string; // Short ID of completed task
   childTaskFullId: string; // Full UUIDv7 of task
   parentSessionId: string; // Short ID of parent
-  spawnPrompt: string; // Original prompt from spawn (truncated to 120 chars)
-  status: string; // Task status (COMPLETED, FAILED, etc.)
+  spawnPrompt?: string; // Original prompt from spawn (only when include_original_prompt is set; not truncated)
+  status: string; // Task status (completed, failed, etc.)
   completedAt: string; // ISO timestamp
   messageCount: number;
   toolUseCount: number;

@@ -5,6 +5,7 @@ import {
   extractOAuthConfigForTesting,
   isTemplateValue,
   parseEnvJSON,
+  validateEnvJSON,
   validateHeadersJSON,
 } from './mcp-oauth-utils';
 
@@ -169,9 +170,40 @@ describe('extractOAuthConfigForTesting', () => {
     expect(result).not.toBeNull();
     expect(result!.token_url).toBe('{{ env.TOKEN_URL }}');
   });
+
+  it('binds a managed Marketplace test to the saved row without submitting the internal mode', () => {
+    expect(
+      extractOAuthConfigForTesting({
+        url: 'https://mcp.example.com',
+        mcp_server_id: 'saved-server',
+        oauth_compatibility_mode: 'marketplace',
+      })
+    ).toMatchObject({
+      mcp_url: 'https://mcp.example.com',
+      mcp_server_id: 'saved-server',
+    });
+    expect(
+      extractOAuthConfigForTesting({
+        url: 'https://mcp.example.com',
+        mcp_server_id: 'saved-server',
+        oauth_compatibility_mode: 'marketplace',
+      })
+    ).not.toHaveProperty('compatibility_mode');
+  });
 });
 
 describe('buildAuthFromValues', () => {
+  it('does not submit hidden remote auth for a stdio server', () => {
+    const values = {
+      transport: 'stdio',
+      auth_type: 'bearer',
+      auth_token: 'stale-token',
+    };
+
+    expect(buildAuthFromValues(values)).toBeUndefined();
+    expect(buildAuthFromValues(values, { forPatch: true })).toBeNull();
+  });
+
   it('preserves a legacy absent DCR field across an unrelated edit', () => {
     expect(
       buildAuthFromValues(
@@ -192,6 +224,50 @@ describe('buildAuthFromValues', () => {
         { preserveAbsentDcrMode: true }
       )
     ).toMatchObject({ oauth_dcr_mode: 'fallback' });
+  });
+
+  it('preserves a derived compatibility mode across an unrelated edit', () => {
+    expect(
+      buildAuthFromValues(
+        {
+          auth_type: 'oauth',
+          oauth_compatibility_mode: 'strict',
+          oauth_scope: 'unchanged',
+        },
+        { preserveAbsentCompatibilityMode: true }
+      )
+    ).not.toHaveProperty('oauth_compatibility_mode');
+  });
+
+  it('never persists the read-only managed Marketplace display value', () => {
+    expect(
+      buildAuthFromValues(
+        {
+          auth_type: 'oauth',
+          oauth_compatibility_mode: 'marketplace',
+          oauth_scope: 'unchanged',
+        },
+        { preserveAbsentCompatibilityMode: true }
+      )
+    ).not.toHaveProperty('oauth_compatibility_mode');
+  });
+
+  it('materializes compatibility after the operator changes the policy', () => {
+    expect(
+      buildAuthFromValues(
+        { auth_type: 'oauth', oauth_compatibility_mode: 'legacy' },
+        { preserveAbsentCompatibilityMode: true }
+      )
+    ).toMatchObject({ oauth_compatibility_mode: 'legacy' });
+  });
+
+  it('preserves an absent OAuth grant type across an unrelated edit', () => {
+    expect(
+      buildAuthFromValues(
+        { auth_type: 'oauth', oauth_grant_type: 'client_credentials' },
+        { preserveAbsentGrantType: true }
+      )
+    ).not.toHaveProperty('oauth_grant_type');
   });
 
   it('returns undefined when auth_type is none / missing / unrecognized', () => {
@@ -297,5 +373,81 @@ describe('validateHeadersJSON', () => {
     expect(validateHeadersJSON('{"X-Count": 42}')).toBe(
       'Custom HTTP header values must be strings'
     );
+    expect(validateHeadersJSON('{"X-Route": "a", "x-route": "b"}')).toMatch(
+      /Duplicate case-insensitive custom HTTP header names/
+    );
   });
+});
+
+describe('buildAuthFromValues PATCH semantics', () => {
+  it('uses null to clear auth explicitly', () => {
+    expect(buildAuthFromValues({ auth_type: 'none' }, { forPatch: true })).toBeNull();
+  });
+
+  it('preserves redacted secrets and treats a blank secret as non-destructive', () => {
+    const auth = buildAuthFromValues(
+      {
+        auth_type: 'oauth',
+        oauth_client_id: '••••••••',
+        oauth_client_secret: '',
+        oauth_scope: 'calendar.events',
+      },
+      { forPatch: true }
+    );
+    expect(auth).toMatchObject({
+      type: 'oauth',
+      oauth_client_id: '••••••••',
+      oauth_scope: 'calendar.events',
+    });
+    expect(auth).not.toHaveProperty('oauth_client_secret');
+  });
+
+  it('clears a saved secret only through the explicit clear affordance', () => {
+    expect(
+      buildAuthFromValues(
+        {
+          auth_type: 'oauth',
+          oauth_client_secret: '',
+          oauth_client_secret_clear: true,
+        },
+        { forPatch: true }
+      )
+    ).toMatchObject({ type: 'oauth', oauth_client_secret: null });
+  });
+
+  it('supports explicit clear for bearer and JWT secrets', () => {
+    expect(
+      buildAuthFromValues(
+        { auth_type: 'bearer', auth_token: '', auth_token_clear: true },
+        { forPatch: true }
+      )
+    ).toEqual({ type: 'bearer', token: null });
+    expect(
+      buildAuthFromValues(
+        {
+          auth_type: 'jwt',
+          jwt_api_token: '',
+          jwt_api_token_clear: true,
+          jwt_api_secret: '',
+          jwt_api_secret_clear: true,
+        },
+        { forPatch: true }
+      )
+    ).toMatchObject({ type: 'jwt', api_token: null, api_secret: null });
+  });
+});
+
+describe('environment form validation', () => {
+  it.each(['', '{}', '{"API_KEY":"••••••••"}', '{"API_KEY":"{{ user.env.API_KEY }}"}'])(
+    'accepts %s',
+    (value) => {
+      expect(validateEnvJSON(value)).toBeUndefined();
+    }
+  );
+  it.each(['{invalid', 'null', '[]', '{"API_KEY":123}', '{"bad name":"value"}'])(
+    'rejects %s rather than dropping the edit',
+    (value) => {
+      expect(validateEnvJSON(value)).toMatch(/Environment/);
+    }
+  );
 });

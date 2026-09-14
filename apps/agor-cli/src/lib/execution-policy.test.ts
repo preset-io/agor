@@ -12,9 +12,11 @@ describe('executionPolicyFor', () => {
     ['db:migrate', 'local'],
     ['local:add-repo', 'local'],
     ['local:create-admin', 'local'],
+    ['open', 'connection'],
     ['repo:list', 'connection'],
     ['session:list', 'connection'],
     ['user:list', 'connection'],
+    ['version', 'connection'],
   ] as const)('classifies %s as %s', (command, policy) => {
     expect(executionPolicyFor(command)).toBe(policy);
   });
@@ -88,6 +90,14 @@ describe('executionPolicyFor', () => {
     const connectedNames = new Set<string>(connected);
     expect(local.filter((name) => connectedNames.has(name))).toEqual([]);
     expect([...new Set([...local, ...connected])].sort()).toEqual([...discoveredRoots].sort());
+  });
+
+  it('presents local-first target selectors with local deployment commands', () => {
+    const local = LOCAL_DEPLOYMENT_COMMANDS.map(({ name }) => name);
+    const connected = CONNECTED_DEPLOYMENT_COMMANDS.map(({ name }) => name);
+
+    expect(local).toEqual(expect.arrayContaining(['open', 'version']));
+    expect(connected).not.toEqual(expect.arrayContaining(['open', 'version']));
   });
 
   it('does not mix local deployment state with daemon-client access', () => {

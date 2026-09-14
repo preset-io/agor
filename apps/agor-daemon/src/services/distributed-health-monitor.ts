@@ -6,6 +6,7 @@ import {
 } from '@agor/core/coordination';
 import {
   BranchRepository,
+  EnvironmentCommandRepository,
   type EnvironmentHealthClaim,
   EnvironmentHealthDiscoveryRepository,
   type EnvironmentHealthObservation,
@@ -348,11 +349,29 @@ export class DistributedHealthMonitor {
       return { claimed: 0, committed: 0, failed: 0 };
     }
     return runWithTenantContext(tenantId, async () => {
-      const branch = await runWithTenantDatabaseScope(this.db, tenantId, (scopedDb) =>
+      let branch = await runWithTenantDatabaseScope(this.db, tenantId, (scopedDb) =>
         new BranchRepository(scopedDb).findById(branchId)
       );
       if (!branch) {
         return { claimed: 0, committed: 0, failed: 0 };
+      }
+      if (
+        branch.environment_instance?.command_attempt &&
+        (await runWithTenantDatabaseScope(this.db, tenantId, (scopedDb) =>
+          new EnvironmentCommandRepository(scopedDb).expire(branchId)
+        ))
+      ) {
+        branch = await runWithTenantDatabaseScope(this.db, tenantId, (scopedDb) =>
+          new BranchRepository(scopedDb).findById(branchId)
+        );
+        if (!branch) return { claimed: 0, committed: 0, failed: 0 };
+        emitServiceEvent(this.app, {
+          path: 'branches',
+          event: 'patched',
+          data: branch,
+          params: tenantParams(tenantId),
+          id: branchId,
+        });
       }
       const rowTenantId = getHiddenTenantId(branch);
       if (rowTenantId && rowTenantId !== tenantId) {
@@ -483,6 +502,9 @@ export class DistributedHealthMonitor {
       const response = await this.fetchHealth(healthUrl, {
         method: 'GET',
         signal: controller.signal,
+        // Do not follow redirects (see branches.ts): the distributed/managed
+        // path is where a 302 to a link-local metadata endpoint matters most.
+        redirect: 'manual',
       });
       return {
         status: response.ok ? 'healthy' : 'unhealthy',

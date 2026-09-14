@@ -15,6 +15,7 @@ import type {
   UUID,
 } from '@agor/core/types';
 import { and, asc, eq, gt, inArray, isNull, like, lte, or, sql } from 'drizzle-orm';
+import { redactGatewayChannelSecrets } from '../../gateway/redaction';
 import { generateId } from '../../lib/ids';
 import { isAgenticToolDefaultConfigurationReference } from '../../types/agentic-tool-preset';
 import {
@@ -22,8 +23,13 @@ import {
   GATEWAY_REDACTED_SENTINEL,
   GATEWAY_SENSITIVE_CONFIG_FIELDS,
   getRequiredSecretFields,
+  isDiscordSnowflake,
+  isGatewayProviderAuthorityPatch,
+  mergeGatewayChannelConfigPatch,
+  validateDiscordConfig,
 } from '../../types/gateway';
 import { prefixToLikePattern } from '../../types/id';
+import { lockBranchForAdmission } from '../branch-admission';
 import type { Database, SystemDatabase } from '../client';
 import {
   deleteFrom,
@@ -34,7 +40,7 @@ import {
   select,
   update,
 } from '../database-wrapper';
-import { decryptApiKey, encryptApiKey } from '../encryption';
+import { decryptApiKeyAsync, encryptApiKey } from '../encryption';
 import { type GatewayChannelInsert, type GatewayChannelRow, gatewayChannels } from '../schema';
 import {
   AmbiguousIdError,
@@ -108,40 +114,58 @@ export class GatewayListenerDiscoveryRepository {
       isNull(gatewayChannels.listener_lease_expires_at),
       lte(gatewayChannels.listener_lease_expires_at, sql`CURRENT_TIMESTAMP`)
     );
-    const afterCondition = after
-      ? or(
-          gt(tenantColumn, after.tenant_id),
-          and(eq(tenantColumn, after.tenant_id), gt(gatewayChannels.id, after.channel_id))
+    // The raw page cursor is tenant/channel ordered so discovery can resume
+    // without decrypting provider configuration or crossing tenant scope.
+    const refs: EnabledGatewayChannelRef[] = [];
+    let rawAfter = after;
+    while (refs.length < limit) {
+      const afterCondition = rawAfter
+        ? or(
+            gt(tenantColumn, rawAfter.tenant_id),
+            and(eq(tenantColumn, rawAfter.tenant_id), gt(gatewayChannels.id, rawAfter.channel_id))
+          )
+        : undefined;
+      const rows = (await select(this.db, {
+        channel_id: gatewayChannels.id,
+        tenant_id: tenantColumn,
+      })
+        .from(gatewayChannels)
+        .where(
+          and(
+            eq(gatewayChannels.enabled, true),
+            inArray(gatewayChannels.channel_type, [...DURABLE_GATEWAY_LISTENER_CHANNEL_TYPES]),
+            claimable,
+            afterCondition
+          )
         )
-      : undefined;
-    const rows = await select(this.db, {
-      channel_id: gatewayChannels.id,
-      tenant_id: tenantColumn,
-    })
-      .from(gatewayChannels)
-      .where(
-        and(
-          eq(gatewayChannels.enabled, true),
-          inArray(gatewayChannels.channel_type, [...DURABLE_GATEWAY_LISTENER_CHANNEL_TYPES]),
-          claimable,
-          afterCondition
-        )
-      )
-      .orderBy(asc(tenantColumn), asc(gatewayChannels.id))
-      .limit(limit)
-      .all();
+        .orderBy(asc(tenantColumn), asc(gatewayChannels.id))
+        .limit(limit)
+        .all()) as Array<{ channel_id: string; tenant_id?: unknown }>;
 
-    return (rows as Array<{ channel_id: string; tenant_id?: unknown }>).map((row) => {
-      if (typeof row.tenant_id !== 'string' || row.tenant_id.length === 0) {
-        throw new RepositoryError(
-          `Gateway listener discovery returned channel ${row.channel_id} without a tenant identity`
-        );
+      for (const row of rows) {
+        if (typeof row.tenant_id !== 'string' || row.tenant_id.length === 0) {
+          throw new RepositoryError(
+            `Gateway listener discovery returned channel ${row.channel_id} without a tenant identity`
+          );
+        }
+        refs.push({
+          channel_id: row.channel_id as GatewayChannelID,
+          tenant_id: row.tenant_id as TenantID,
+        });
+        if (refs.length === limit) break;
       }
-      return {
-        channel_id: row.channel_id as GatewayChannelID,
-        tenant_id: row.tenant_id as TenantID,
+
+      if (rows.length < limit || refs.length === limit) break;
+      const last = rows.at(-1);
+      if (!last || typeof last.tenant_id !== 'string') {
+        throw new RepositoryError('Gateway listener discovery returned an invalid raw cursor');
+      }
+      rawAfter = {
+        tenant_id: last.tenant_id as TenantID,
+        channel_id: last.channel_id as GatewayChannelID,
       };
-    });
+    }
+    return refs;
   }
 }
 
@@ -161,14 +185,13 @@ function encryptConfig(config: Record<string, unknown>): Record<string, unknown>
 /**
  * Decrypt sensitive fields within a config object
  */
-function decryptConfig(config: Record<string, unknown>): Record<string, unknown> {
+async function decryptConfig(config: Record<string, unknown>): Promise<Record<string, unknown>> {
   const decrypted = { ...config };
   for (const field of GATEWAY_SENSITIVE_CONFIG_FIELDS) {
     if (typeof decrypted[field] === 'string' && decrypted[field]) {
       try {
-        decrypted[field] = decryptApiKey(decrypted[field] as string);
+        decrypted[field] = await decryptApiKeyAsync(decrypted[field] as string);
       } catch (error) {
-        // If decryption fails (e.g., key changed), leave as-is
         console.error(
           `[gateway-channels] Failed to decrypt ${field}:`,
           error instanceof Error ? error.message : String(error)
@@ -176,6 +199,10 @@ function decryptConfig(config: Record<string, unknown>): Record<string, unknown>
         console.error(
           '[gateway-channels] Channel credentials may be corrupted or master secret changed'
         );
+        // Ciphertext and malformed legacy plaintext are never runtime
+        // credentials. Fail this one field closed rather than returning the
+        // stored representation to connectors or executor payload assembly.
+        delete decrypted[field];
       }
     }
   }
@@ -208,37 +235,42 @@ function encryptAgenticConfig(
   return encrypted;
 }
 
-function decryptAgenticConfig(
+async function decryptAgenticConfig(
   agenticConfig: Record<string, unknown> | null
-): Record<string, unknown> | null {
+): Promise<Record<string, unknown> | null> {
   if (!agenticConfig) return null;
 
   const decrypted = { ...agenticConfig };
   const rawEnvVars = decrypted.envVars;
 
   if (Array.isArray(rawEnvVars)) {
-    decrypted.envVars = (rawEnvVars as GatewayEnvVar[]).map((envVar) => {
+    const envVars: GatewayEnvVar[] = [];
+    for (const envVar of rawEnvVars as GatewayEnvVar[]) {
       try {
-        return {
+        envVars.push({
           ...envVar,
-          value: envVar.value ? decryptApiKey(envVar.value) : envVar.value,
-        };
+          value: envVar.value ? await decryptApiKeyAsync(envVar.value) : envVar.value,
+        });
       } catch {
-        return envVar;
+        // Preserve the existing fail-closed omission of unreadable variables.
       }
-    });
+    }
+    decrypted.envVars = envVars;
   } else if (rawEnvVars && typeof rawEnvVars === 'object') {
     // Legacy shape support: Record<string, string>
-    decrypted.envVars = Object.fromEntries(
-      Object.entries(rawEnvVars as Record<string, unknown>).map(([key, value]) => {
-        if (typeof value !== 'string' || !value) return [key, value];
-        try {
-          return [key, decryptApiKey(value)];
-        } catch {
-          return [key, value];
-        }
-      })
-    );
+    const entries: [string, unknown][] = [];
+    for (const [key, value] of Object.entries(rawEnvVars)) {
+      if (typeof value !== 'string' || !value) {
+        entries.push([key, value]);
+        continue;
+      }
+      try {
+        entries.push([key, await decryptApiKeyAsync(value)]);
+      } catch {
+        // Preserve the existing fail-closed omission of unreadable variables.
+      }
+    }
+    decrypted.envVars = Object.fromEntries(entries);
   }
 
   return decrypted;
@@ -463,11 +495,14 @@ export class GatewayChannelRepository
     return result.rowsAffected > 0;
   }
 
-  /** Bounded tenant-local candidates for static PostgreSQL deployments. */
-  async findEnabledListenerCandidates(
+  /**
+   * Bounded tenant-local discovery, without loading credentials. The listener
+   * worker reloads each candidate under tenant scope before claiming/starting it.
+   */
+  async findEnabledListenerCandidateIds(
     limit = 25,
     afterId?: GatewayChannelID
-  ): Promise<GatewayChannel[]> {
+  ): Promise<GatewayChannelID[]> {
     if (!Number.isInteger(limit) || limit <= 0 || limit > 1_000) {
       throw new RepositoryError('Gateway listener candidate limit must be between 1 and 1000');
     }
@@ -481,7 +516,7 @@ export class GatewayChannelRepository
     const auditedProvider = isPostgresDatabase(this.db)
       ? inArray(gatewayChannels.channel_type, [...DURABLE_GATEWAY_LISTENER_CHANNEL_TYPES])
       : undefined;
-    const rows = await select(this.db)
+    const rows = await select(this.db, { id: gatewayChannels.id })
       .from(gatewayChannels)
       .where(
         and(
@@ -494,45 +529,65 @@ export class GatewayChannelRepository
       .orderBy(asc(gatewayChannels.id))
       .limit(limit)
       .all();
-    return rows.map((row: GatewayChannelRow) => this.rowToChannel(row));
+    return (rows as Pick<GatewayChannelRow, 'id'>[]).map((row) => row.id as GatewayChannelID);
   }
 
   /**
    * Convert database row to GatewayChannel type
    */
-  private rowToChannel(row: GatewayChannelRow): GatewayChannel {
+  private async rowToChannel(row: GatewayChannelRow, displayOnly = false): Promise<GatewayChannel> {
     const config = row.config as Record<string, unknown>;
-    const agenticConfig = decryptAgenticConfig(
-      (row.agentic_config as Record<string, unknown> | null) ?? null
-    );
+    const storedAgenticConfig = (row.agentic_config as Record<string, unknown> | null) ?? null;
+    // Normalize legacy env maps before using the shared transport redactor.
+    // Never open a credential merely to replace it with a display sentinel.
+    const displayAgenticConfig: Record<string, unknown> | null = storedAgenticConfig && {
+      ...storedAgenticConfig,
+      ...(storedAgenticConfig.envVars && !Array.isArray(storedAgenticConfig.envVars)
+        ? {
+            envVars: Object.entries(storedAgenticConfig.envVars as Record<string, unknown>).map(
+              ([key, value]) => ({ key, value })
+            ),
+          }
+        : {}),
+    };
+    const agenticConfig = displayOnly
+      ? displayAgenticConfig
+      : await decryptAgenticConfig(storedAgenticConfig);
 
-    return attachHiddenTenant(
-      {
-        id: row.id as GatewayChannelID,
-        created_by: row.created_by,
-        name: row.name,
-        channel_type: row.channel_type as ChannelType,
-        target_branch_id: row.target_branch_id as UUID,
-        agor_user_id: row.agor_user_id as UUID,
-        channel_key: row.channel_key,
-        config: decryptConfig(config),
-        agentic_config: agenticConfig
-          ? ({
-              ...(agenticConfig as unknown as PersistedGatewayAgenticConfig),
-              presetId:
-                (row.agentic_tool_preset_id as PersistedGatewayAgenticConfig['presetId']) ??
-                (agenticConfig.presetId as PersistedGatewayAgenticConfig['presetId']) ??
-                undefined,
-            } as PersistedGatewayAgenticConfig)
-          : null,
-        mcp_server_ids: row.mcp_server_ids ?? undefined,
-        enabled: Boolean(row.enabled),
-        created_at: new Date(row.created_at).toISOString(),
-        updated_at: new Date(row.updated_at).toISOString(),
-        last_message_at: row.last_message_at ? new Date(row.last_message_at).toISOString() : null,
-      },
-      row
-    );
+    const channel: GatewayChannel = {
+      id: row.id as GatewayChannelID,
+      created_by: row.created_by,
+      name: row.name,
+      channel_type: row.channel_type as ChannelType,
+      target_branch_id: row.target_branch_id as UUID,
+      agor_user_id: (row.agor_user_id as UUID | null) ?? null,
+      provider_installation_id: row.provider_installation_id ?? null,
+      provider_config_generation: row.provider_config_generation ?? 1,
+      channel_key: row.channel_key,
+      config: displayOnly ? config : await decryptConfig(config),
+      agentic_config: agenticConfig
+        ? ({
+            ...(agenticConfig as unknown as PersistedGatewayAgenticConfig),
+            presetId:
+              (row.agentic_tool_preset_id as PersistedGatewayAgenticConfig['presetId']) ??
+              (agenticConfig.presetId as PersistedGatewayAgenticConfig['presetId']) ??
+              undefined,
+          } as PersistedGatewayAgenticConfig)
+        : null,
+      mcp_server_ids: row.mcp_server_ids ?? undefined,
+      enabled: Boolean(row.enabled),
+      created_at: new Date(row.created_at).toISOString(),
+      updated_at: new Date(row.updated_at).toISOString(),
+      last_message_at: row.last_message_at ? new Date(row.last_message_at).toISOString() : null,
+    };
+    return attachHiddenTenant(displayOnly ? redactGatewayChannelSecrets(channel) : channel, row);
+  }
+
+  private async rowsToChannels(rows: GatewayChannelRow[]): Promise<GatewayChannel[]> {
+    // One KDF at a time per inventory, not a worker-pool stampede proportional to its size.
+    const channels: GatewayChannel[] = [];
+    for (const row of rows) channels.push(await this.rowToChannel(row));
+    return channels;
   }
 
   /**
@@ -545,19 +600,7 @@ export class GatewayChannelRepository
       throw new RepositoryError('GatewayChannel must have a created_by');
     }
 
-    const presetId = data.agentic_config?.presetId;
-    const storesDefaultReference = Boolean(
-      presetId && isAgenticToolDefaultConfigurationReference(presetId)
-    );
-    const { presetId: _presetId, ...agenticConfigWithoutPreset } = data.agentic_config ?? {};
-    const storedAgenticConfig = storesDefaultReference
-      ? (data.agentic_config ?? {})
-      : agenticConfigWithoutPreset;
-    const encryptedAgenticConfig = encryptAgenticConfig(
-      Object.keys(storedAgenticConfig).length > 0
-        ? (storedAgenticConfig as unknown as Record<string, unknown>)
-        : null
-    );
+    const agenticStorage = this.agenticConfigStorage(data.agentic_config);
 
     return {
       id,
@@ -567,14 +610,36 @@ export class GatewayChannelRepository
       name: data.name ?? 'Untitled Channel',
       channel_type: data.channel_type ?? 'slack',
       target_branch_id: data.target_branch_id ?? '',
-      agor_user_id: data.agor_user_id ?? '',
+      agor_user_id: data.agor_user_id ?? null,
+      provider_installation_id: data.provider_installation_id ?? null,
+      provider_config_generation: data.provider_config_generation ?? 1,
       channel_key: data.channel_key ?? generateId(),
       enabled: data.enabled ?? true,
       last_message_at: data.last_message_at ? new Date(data.last_message_at) : null,
       config: data.config ? encryptConfig(data.config) : {},
-      agentic_config: encryptedAgenticConfig,
-      agentic_tool_preset_id: storesDefaultReference ? null : (presetId ?? null),
+      ...agenticStorage,
       mcp_server_ids: data.mcp_server_ids ?? null,
+    };
+  }
+
+  private agenticConfigStorage(
+    agenticConfig: GatewayChannel['agentic_config'] | undefined
+  ): Pick<GatewayChannelInsert, 'agentic_config' | 'agentic_tool_preset_id'> {
+    const presetId = agenticConfig?.presetId;
+    const storesDefaultReference = Boolean(
+      presetId && isAgenticToolDefaultConfigurationReference(presetId)
+    );
+    const { presetId: _presetId, ...agenticConfigWithoutPreset } = agenticConfig ?? {};
+    const storedAgenticConfig = storesDefaultReference
+      ? (agenticConfig ?? {})
+      : agenticConfigWithoutPreset;
+    return {
+      agentic_config: encryptAgenticConfig(
+        Object.keys(storedAgenticConfig).length > 0
+          ? (storedAgenticConfig as unknown as Record<string, unknown>)
+          : null
+      ),
+      agentic_tool_preset_id: storesDefaultReference ? null : (presetId ?? null),
     };
   }
 
@@ -604,6 +669,61 @@ export class GatewayChannelRepository
         `Cannot enable ${channelType} gateway channel: missing required secret(s) ${missing.join(', ')}`
       );
     }
+
+    if (channelType === 'discord') {
+      const validation = validateDiscordConfig(config, { requireBotToken: false });
+      if (!validation.ok) {
+        throw new RepositoryError(
+          `Cannot enable Discord gateway channel: invalid configuration ${validation.errors.join('; ')}`
+        );
+      }
+      const applicationId = config.application_id;
+      if (
+        typeof channel.provider_installation_id !== 'string' ||
+        !isDiscordSnowflake(channel.provider_installation_id) ||
+        channel.provider_installation_id !== applicationId
+      ) {
+        throw new RepositoryError(
+          'Cannot enable Discord gateway channel: a verified Discord application binding is required'
+        );
+      }
+      if (config.align_discord_users === true) {
+        if (channel.agor_user_id !== null && channel.agor_user_id !== undefined) {
+          throw new RepositoryError(
+            'Cannot enable Discord gateway channel: aligned identity cannot use a fixed agor_user_id'
+          );
+        }
+      } else if (typeof channel.agor_user_id !== 'string' || channel.agor_user_id.trim() === '') {
+        throw new RepositoryError(
+          'Cannot enable Discord gateway channel: fixed identity requires agor_user_id'
+        );
+      }
+    }
+  }
+
+  private isDiscordInstallationConflict(error: unknown): boolean {
+    const messages: string[] = [];
+    let current: unknown = error;
+    for (let depth = 0; depth < 4 && current; depth += 1) {
+      messages.push(current instanceof Error ? current.message : String(current));
+      current =
+        typeof current === 'object' && current !== null && 'cause' in current
+          ? (current as { cause?: unknown }).cause
+          : undefined;
+    }
+    const message = messages.join('\n');
+    return (
+      message.includes('gateway_channels_discord_installation_unique') ||
+      (message.toLowerCase().includes('unique') &&
+        message.includes('provider_installation_id') &&
+        message.includes('channel_type'))
+    );
+  }
+
+  private duplicateDiscordInstallationError(): RepositoryError {
+    return new RepositoryError(
+      'Cannot enable Discord gateway channel: this Discord application is already enabled'
+    );
   }
 
   /**
@@ -641,27 +761,43 @@ export class GatewayChannelRepository
    */
   async create(data: Partial<GatewayChannel>): Promise<GatewayChannel> {
     try {
-      const insertData = this.channelToInsert({
+      const channelType = data.channel_type ?? 'slack';
+      const prepared = {
         ...data,
+        config: mergeGatewayChannelConfigPatch({}, data.config, channelType, data.enabled ?? true),
         id: data.id ?? generateId(),
         channel_key: data.channel_key ?? generateId(),
+      };
+      const insertData = this.channelToInsert({
+        ...prepared,
       });
 
-      this.assertRequiredSecretsWhenEnabled(data);
-
-      await insert(this.db, gatewayChannels).values(insertData).run();
-
-      const row = await select(this.db)
-        .from(gatewayChannels)
-        .where(eq(gatewayChannels.id, insertData.id))
-        .one();
+      this.assertRequiredSecretsWhenEnabled({
+        ...prepared,
+        provider_installation_id: insertData.provider_installation_id,
+      });
+      const row = await runDatabaseTransaction(
+        this.db,
+        async (txDb) => {
+          await lockBranchForAdmission(txDb, insertData.target_branch_id);
+          await insert(txDb, gatewayChannels).values(insertData).run();
+          return select(txDb)
+            .from(gatewayChannels)
+            .where(eq(gatewayChannels.id, insertData.id))
+            .one();
+        },
+        { sqliteImmediate: true }
+      );
 
       if (!row) {
         throw new RepositoryError('Failed to retrieve created gateway channel');
       }
 
-      return this.rowToChannel(row);
+      return await this.rowToChannel(row);
     } catch (error) {
+      if (this.isDiscordInstallationConflict(error)) {
+        throw this.duplicateDiscordInstallationError();
+      }
       if (error instanceof RepositoryError) throw error;
       throw new RepositoryError(
         `Failed to create gateway channel: ${error instanceof Error ? error.message : String(error)}`,
@@ -674,6 +810,15 @@ export class GatewayChannelRepository
    * Find gateway channel by ID (supports short ID)
    */
   async findById(id: string): Promise<GatewayChannel | null> {
+    return this.readById(id, false);
+  }
+
+  /** Transport-safe detail: presence is not proof of credential validity. */
+  async findDisplayById(id: string): Promise<GatewayChannel | null> {
+    return this.readById(id, true);
+  }
+
+  private async readById(id: string, displayOnly: boolean): Promise<GatewayChannel | null> {
     try {
       const fullId = await this.resolveId(id);
       const row = await select(this.db)
@@ -681,7 +826,7 @@ export class GatewayChannelRepository
         .where(eq(gatewayChannels.id, fullId))
         .one();
 
-      return row ? this.rowToChannel(row) : null;
+      return row ? await this.rowToChannel(row, displayOnly) : null;
     } catch (error) {
       if (error instanceof EntityNotFoundError) return null;
       if (error instanceof AmbiguousIdError) throw error;
@@ -695,10 +840,17 @@ export class GatewayChannelRepository
   /**
    * Find all gateway channels
    */
+  async findDisplayAll(): Promise<GatewayChannel[]> {
+    const rows = await select(this.db).from(gatewayChannels).all();
+    const channels: GatewayChannel[] = [];
+    for (const row of rows) channels.push(await this.rowToChannel(row, true));
+    return channels;
+  }
+
   async findAll(): Promise<GatewayChannel[]> {
     try {
       const rows = await select(this.db).from(gatewayChannels).all();
-      return rows.map((row: GatewayChannelRow) => this.rowToChannel(row));
+      return await this.rowsToChannels(rows);
     } catch (error) {
       throw new RepositoryError(
         `Failed to find all gateway channels: ${error instanceof Error ? error.message : String(error)}`,
@@ -711,82 +863,248 @@ export class GatewayChannelRepository
    * Update gateway channel by ID
    */
   async update(id: string, updates: Partial<GatewayChannel>): Promise<GatewayChannel> {
+    return this.updateInternal(id, updates);
+  }
+
+  /**
+   * Materialize a provider identity only after a connector has verified the
+   * token-owned application. This method is intentionally not part of the
+   * public gateway write DTO or MCP transport surface.
+   */
+  async updateWithVerifiedDiscordInstallation(
+    id: string,
+    updates: Partial<GatewayChannel>,
+    providerInstallationId: string,
+    expectedProviderConfigGeneration: number
+  ): Promise<GatewayChannel> {
+    if (!isDiscordSnowflake(providerInstallationId)) {
+      throw new RepositoryError('Verified Discord application identity is invalid');
+    }
+    if (
+      !Number.isSafeInteger(expectedProviderConfigGeneration) ||
+      expectedProviderConfigGeneration < 1
+    ) {
+      throw new RepositoryError('Verified Discord installation requires a valid config generation');
+    }
+    return this.updateInternal(
+      id,
+      updates,
+      providerInstallationId,
+      expectedProviderConfigGeneration
+    );
+  }
+
+  private async updateInternal(
+    id: string,
+    updates: Partial<GatewayChannel>,
+    verifiedProviderInstallationId?: string,
+    expectedProviderConfigGeneration?: number
+  ): Promise<GatewayChannel> {
     try {
       const fullId = await this.resolveId(id);
 
-      const current = await this.findById(fullId);
-      if (!current) {
-        throw new EntityNotFoundError('GatewayChannel', id);
-      }
+      const updated = isGatewayProviderAuthorityPatch(updates)
+        ? await this.updateAuthority(
+            id,
+            fullId,
+            updates,
+            verifiedProviderInstallationId,
+            expectedProviderConfigGeneration
+          )
+        : await this.updateNonAuthority(id, fullId, updates);
 
-      // Merge updates, but preserve existing encrypted credentials if update has empty values
-      const merged = { ...current, ...updates };
-
-      // Preserve existing credentials if updates contain empty, falsy, or redacted values.
-      // The API redacts sensitive fields to '••••••••' in responses, so if the client
-      // sends that sentinel back it means "no change" — not "set token to bullets".
-      if (updates.config) {
-        const mergedConfig = { ...current.config, ...updates.config };
-        for (const field of GATEWAY_SENSITIVE_CONFIG_FIELDS) {
-          const updateValue = updates.config[field];
-          if (
-            (!updateValue || updateValue === GATEWAY_REDACTED_SENTINEL) &&
-            current.config[field]
-          ) {
-            mergedConfig[field] = current.config[field];
-          }
-        }
-        merged.config = mergedConfig;
-      }
-
-      this.assertRequiredSecretsWhenEnabled(merged);
-
-      const insertData = this.channelToInsert(merged);
-
-      await update(this.db, gatewayChannels)
-        .set({
-          name: insertData.name,
-          channel_type: insertData.channel_type,
-          target_branch_id: insertData.target_branch_id,
-          agor_user_id: insertData.agor_user_id,
-          enabled: insertData.enabled,
-          config: insertData.config,
-          agentic_config: insertData.agentic_config,
-          agentic_tool_preset_id: insertData.agentic_tool_preset_id,
-          mcp_server_ids: insertData.mcp_server_ids,
-          updated_at: new Date(),
-          // Any configuration mutation immediately revokes the old listener.
-          // Provider callbacks must match the new opaque claim token before a
-          // durable effect can be admitted.
-          listener_claim_token: null,
-          listener_claimed_at: null,
-          listener_lease_expires_at: null,
-          listener_instance_id: null,
-          listener_boot_id: null,
-          listener_generation: sql`${gatewayChannels.listener_generation} + 1`,
-          // A cursor authenticated against old credentials/search scope is not
-          // safe to reuse after mutation. Replacement pollers restart from the
-          // provider-specific bounded overlap.
-          listener_checkpoint: null,
-          listener_checkpoint_updated_at: null,
-        })
-        .where(eq(gatewayChannels.id, fullId))
-        .run();
-
-      const updated = await this.findById(fullId);
       if (!updated) {
         throw new RepositoryError('Failed to retrieve updated gateway channel');
       }
 
-      return updated;
+      return await this.rowToChannel(updated);
     } catch (error) {
-      if (error instanceof RepositoryError) throw error;
       if (error instanceof EntityNotFoundError) throw error;
+      if (this.isDiscordInstallationConflict(error)) {
+        throw this.duplicateDiscordInstallationError();
+      }
+      if (error instanceof RepositoryError) throw error;
       throw new RepositoryError(
         `Failed to update gateway channel: ${error instanceof Error ? error.message : String(error)}`,
         error
       );
     }
+  }
+
+  private listenerRevocationSet() {
+    return {
+      listener_claim_token: null,
+      listener_claimed_at: null,
+      listener_lease_expires_at: null,
+      listener_instance_id: null,
+      listener_boot_id: null,
+      listener_generation: sql`${gatewayChannels.listener_generation} + 1`,
+      listener_checkpoint: null,
+      listener_checkpoint_updated_at: null,
+    };
+  }
+
+  /**
+   * Serialize every provider-authority mutation. The provider probe is never
+   * part of this transaction; verified callers carry the predecessor
+   * generation into the short locked compare-and-swap below.
+   */
+  private async updateAuthority(
+    id: string,
+    fullId: string,
+    updates: Partial<GatewayChannel>,
+    verifiedProviderInstallationId?: string,
+    expectedProviderConfigGeneration?: number
+  ): Promise<GatewayChannelRow | null> {
+    return runDatabaseTransaction(
+      this.db,
+      async (txDb) => {
+        if (updates.target_branch_id) await lockBranchForAdmission(txDb, updates.target_branch_id);
+        if (updates.enabled === true) {
+          const target = await select(txDb)
+            .from(gatewayChannels)
+            .where(eq(gatewayChannels.id, fullId))
+            .one();
+          if (target) await lockBranchForAdmission(txDb, target.target_branch_id);
+        }
+        await lockRowForUpdate(txDb, this.db, gatewayChannels, eq(gatewayChannels.id, fullId));
+        const currentRow = await select(txDb)
+          .from(gatewayChannels)
+          .where(eq(gatewayChannels.id, fullId))
+          .one();
+        if (!currentRow) throw new EntityNotFoundError('GatewayChannel', id);
+
+        const current = await this.rowToChannel(currentRow);
+        if (
+          expectedProviderConfigGeneration !== undefined &&
+          current.provider_config_generation !== expectedProviderConfigGeneration
+        ) {
+          throw new RepositoryError(
+            'Discord verification became stale while the gateway configuration changed'
+          );
+        }
+
+        const merged = { ...current, ...updates };
+        merged.config = mergeGatewayChannelConfigPatch(
+          current.config,
+          updates.config,
+          merged.channel_type,
+          merged.enabled !== false
+        );
+
+        if (verifiedProviderInstallationId !== undefined) {
+          if (merged.channel_type !== 'discord' || merged.enabled === false) {
+            throw new RepositoryError(
+              'Verified Discord application identity requires an enabled Discord gateway channel'
+            );
+          }
+          if (merged.config.application_id !== verifiedProviderInstallationId) {
+            throw new RepositoryError(
+              'Verified Discord application identity does not match the configured application'
+            );
+          }
+          merged.provider_installation_id = verifiedProviderInstallationId;
+        } else if (merged.channel_type === 'discord' && merged.enabled !== false) {
+          throw new RepositoryError(
+            'verified Discord application binding is required for enabled authority changes'
+          );
+        } else {
+          merged.provider_installation_id = null;
+        }
+
+        merged.provider_config_generation = current.provider_config_generation + 1;
+        this.assertRequiredSecretsWhenEnabled(merged);
+        const insertData = this.channelToInsert(merged);
+        const result = await update(txDb, gatewayChannels)
+          .set({
+            ...(updates.name !== undefined ? { name: insertData.name } : {}),
+            ...(updates.target_branch_id !== undefined
+              ? { target_branch_id: insertData.target_branch_id }
+              : {}),
+            ...(updates.agentic_config !== undefined
+              ? {
+                  agentic_config: insertData.agentic_config,
+                  agentic_tool_preset_id: insertData.agentic_tool_preset_id,
+                }
+              : {}),
+            ...(updates.mcp_server_ids !== undefined
+              ? { mcp_server_ids: insertData.mcp_server_ids }
+              : {}),
+            ...(updates.channel_type !== undefined
+              ? { channel_type: insertData.channel_type }
+              : {}),
+            ...(updates.agor_user_id !== undefined
+              ? { agor_user_id: insertData.agor_user_id }
+              : {}),
+            ...(updates.config !== undefined ? { config: insertData.config } : {}),
+            ...(updates.enabled !== undefined ? { enabled: insertData.enabled } : {}),
+            provider_installation_id: insertData.provider_installation_id,
+            provider_config_generation: insertData.provider_config_generation,
+            updated_at: new Date(),
+            ...this.listenerRevocationSet(),
+          })
+          .where(
+            expectedProviderConfigGeneration === undefined
+              ? eq(gatewayChannels.id, fullId)
+              : and(
+                  eq(gatewayChannels.id, fullId),
+                  eq(gatewayChannels.provider_config_generation, expectedProviderConfigGeneration)
+                )
+          )
+          .run();
+
+        if (expectedProviderConfigGeneration !== undefined && result.rowsAffected !== 1) {
+          throw new RepositoryError(
+            'Discord verification became stale while the gateway configuration changed'
+          );
+        }
+        if (result.rowsAffected !== 1) {
+          throw new EntityNotFoundError('GatewayChannel', id);
+        }
+        return select(txDb).from(gatewayChannels).where(eq(gatewayChannels.id, fullId)).one();
+      },
+      { sqliteImmediate: true }
+    );
+  }
+
+  /**
+   * Keep non-authority patches sparse so a writer that started from an older
+   * channel cannot restore provider configuration, binding, enabled state, or
+   * provider generation after an authority commit.
+   */
+  private async updateNonAuthority(
+    id: string,
+    fullId: string,
+    updates: Partial<GatewayChannel>
+  ): Promise<GatewayChannelRow | null> {
+    return runDatabaseTransaction(
+      this.db,
+      async (txDb) => {
+        if (updates.target_branch_id) await lockBranchForAdmission(txDb, updates.target_branch_id);
+        const result = await update(txDb, gatewayChannels)
+          .set({
+            ...(updates.name !== undefined ? { name: updates.name } : {}),
+            ...(updates.target_branch_id !== undefined
+              ? { target_branch_id: updates.target_branch_id }
+              : {}),
+            ...(updates.agentic_config !== undefined
+              ? {
+                  ...this.agenticConfigStorage(updates.agentic_config),
+                }
+              : {}),
+            ...(updates.mcp_server_ids !== undefined
+              ? { mcp_server_ids: updates.mcp_server_ids }
+              : {}),
+            updated_at: new Date(),
+            ...this.listenerRevocationSet(),
+          })
+          .where(eq(gatewayChannels.id, fullId))
+          .run();
+        if (result.rowsAffected !== 1) throw new EntityNotFoundError('GatewayChannel', id);
+        return select(txDb).from(gatewayChannels).where(eq(gatewayChannels.id, fullId)).one();
+      },
+      { sqliteImmediate: true }
+    );
   }
 
   /**
@@ -822,7 +1140,7 @@ export class GatewayChannelRepository
         .where(eq(gatewayChannels.channel_key, channelKey))
         .one();
 
-      return row ? this.rowToChannel(row) : null;
+      return row ? await this.rowToChannel(row) : null;
     } catch (error) {
       throw new RepositoryError(
         `Failed to find gateway channel by key: ${error instanceof Error ? error.message : String(error)}`,
@@ -841,7 +1159,7 @@ export class GatewayChannelRepository
         .where(eq(gatewayChannels.agor_user_id, userId))
         .all();
 
-      return rows.map((row: GatewayChannelRow) => this.rowToChannel(row));
+      return await this.rowsToChannels(rows);
     } catch (error) {
       throw new RepositoryError(
         `Failed to find gateway channels by user: ${error instanceof Error ? error.message : String(error)}`,

@@ -41,6 +41,20 @@ export class NotFoundError extends AgorError {
 }
 
 /**
+ * Test whether an unknown thrown value represents a missing resource.
+ *
+ * Agor still has domain repositories that throw {@link NotFoundError}, while
+ * Feathers services use `@feathersjs/errors.NotFound` and expose numeric HTTP
+ * code 404. Keep that compatibility decision in one place so callers do not
+ * silently miss one error family when a repository boundary is migrated.
+ */
+export function isNotFoundError(error: unknown): boolean {
+  if (error instanceof NotFoundError) return true;
+  if (typeof error !== 'object' || error === null || !('code' in error)) return false;
+  return error.code === 404;
+}
+
+/**
  * Thrown when a resource already exists
  */
 export class AlreadyExistsError extends AgorError {

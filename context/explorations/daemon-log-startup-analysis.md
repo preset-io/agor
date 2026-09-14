@@ -52,19 +52,19 @@ Sources:
 - `packages/executor/src/handlers/sdk/base-executor.ts` calls `/config/resolve-api-key`.
 - `packages/core/src/mcp/scoping.ts` resolves MCP servers.
 - `packages/executor/src/handlers/sdk/git-safe-directory.ts` tries to read the repo for `safe.directory` setup.
-- `apps/agor-daemon/src/auth/executor-runtime-scope.ts` currently rejects endpoints outside its allowlist; `config/resolve-api-key` is explicitly covered by a test asserting rejection.
+- `apps/agor-daemon/src/auth/executor-runtime-scope.ts` now projects only the
+  verified executor task context used by executor-only capability boundaries.
 
-Interpretation: this is more than log noise. Executors are attempting daemon calls that the runtime-scope guard forbids, then falling back or continuing with degraded behavior. That means repeated unnecessary round trips and lost functionality (per-user API key resolution and user/session MCP server resolution appear to fall back to none in these logs).
+Interpretation at the time: this was more than log noise. Executors were
+attempting daemon calls that the runtime-scope guard forbade, then falling back
+or continuing with degraded behavior.
 
-Fix applied only for logging: API-key and MCP failures now log concise messages instead of full stack traces. I did not change the authorization model because allowing these endpoints needs a security review and targeted tests.
-
-Recommended follow-up: decide whether executor runtime tokens should be allowed to call:
-
-- `config/resolve-api-key.create` scoped to their own `taskId`
-- the specific MCP-server read paths needed by `getMcpServersForSession`
-- `repos.get` for the repo attached to the executor-scoped branch
-
-If yes, update `executor-runtime-scope.ts` and the existing rejection tests to enforce task/session/branch scoping instead of blanket rejection.
+Follow-up completed: task executors now authenticate as the initiating user for
+ordinary services, so `repos.get` and the session/MCP reads use the same RBAC as
+that user's other clients. Plaintext credential and MCP/OAuth secret paths are
+not ordinary reads: they retain exact verified task/session/branch checks and
+targeted negative tests. The duplicate per-endpoint executor allowlist was
+removed rather than expanded.
 
 ### 4. API-key resolution fallback logs too many negative checks
 

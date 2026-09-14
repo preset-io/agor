@@ -592,7 +592,7 @@ export const DemoSessionStage = ({ scene, t, variant = 'coding' }: DemoSessionSt
           queuedTasks={queuedTasks}
           client={null}
           modelConfig={modelConfig}
-          onModelConfigChange={NOOP}
+          onModelConfigCommit={NOOP}
           onSendPrompt={NOOP}
           onStop={NOOP}
           onFork={NOOP}

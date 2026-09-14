@@ -1,12 +1,10 @@
 /**
  * Token refresh helpers shared across auth paths in the UI.
  *
- * Two operations live here:
- *
- * 1. {@link refreshTokensSingleFlight} — single-flight wrapper around
+ * {@link refreshTokensSingleFlight} is a single-flight wrapper around
  *    `refreshAndStoreTokens`. Multiple code paths can trigger a refresh
- *    concurrently (the proactive timer in useAuth, the 401 retry hook on the
- *    socket client, the socket-reconnect fallback in useAgorClient). Without
+ *    concurrently (the proactive timer in useAuth, visibility recovery, and
+ *    rejected-handshake recovery in useAgorClient). Without
  *    deduping, a burst of 401s — say, five parallel service calls on a stale
  *    token — produces five POSTs to /authentication/refresh, each of which
  *    rotates the refresh token. Since the server issues a fresh refresh token
@@ -21,24 +19,18 @@
  *    server so that a dead refresh token cannot produce a reconnect/refresh
  *    loop as components retry failing service calls. The latch clears on
  *    the next successful refresh (e.g. after the user logs back in).
- *
- * 2. {@link refreshAndReauthenticate} — the common "token expired → refresh
- *    → reauthenticate the socket client" sequence used by both the socket
- *    reconnect fallback in useAgorClient and the 401-retry hook on the
- *    same client. Extracted here so the two paths stay in lockstep.
- *
  * Successful token replacement emits `TOKENS_REFRESHED_EVENT` on `window` so
  * React state (useAuth), socket clients, and data hooks can sync even when the
- * token replacement was initiated by a non-React code path (e.g. the Feathers
- * hook). Refresh failures that make the session unrecoverable emit
+ * token replacement was initiated by a different recovery path (for example,
+ * a rejected Socket.IO handshake). Refresh failures that make the session unrecoverable emit
  * `TOKENS_REFRESH_UNRECOVERABLE_EVENT` so useAuth can clear tokens and bounce
  * the user to login exactly once, instead of every call site duplicating that
  * cleanup.
  */
 
-import type { AgorClient } from '@agor-live/client';
+import type { AuthenticatedAgorClient } from '@agor-live/client';
 import { isDefiniteAuthFailure } from './authErrors';
-import { getStoredRefreshToken, type RefreshResult, refreshAndStoreTokens } from './tokenRefresh';
+import { type RefreshResult, refreshAndStoreTokens } from './tokenRefresh';
 
 /** Custom DOM event fired after tokens have been successfully refreshed. */
 export const TOKENS_REFRESHED_EVENT = 'agor:tokens-refreshed';
@@ -102,18 +94,34 @@ export function isRefreshUnrecoverable(): boolean {
 }
 
 /**
+ * Mark browser authentication unrecoverable even when token refresh itself
+ * succeeded. This covers a refreshed credential that the namespace still
+ * rejects (for example tenant-claim drift) and shares the same one-shot logout
+ * signal as a dead refresh token.
+ */
+export function markAuthenticationUnrecoverable(cause?: unknown): RefreshUnrecoverableError {
+  const shouldBroadcast = !unrecoverable;
+  unrecoverable = true;
+  if (shouldBroadcast && typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent(TOKENS_REFRESH_UNRECOVERABLE_EVENT));
+  }
+  return new RefreshUnrecoverableError('Authentication could not be restored', { cause });
+}
+
+/**
  * Request a token refresh, deduplicating concurrent callers.
  *
- * @param client - REST or socket Feathers client capable of hitting
- *                 `authentication/refresh`.
+ * @param client - REST Feathers client capable of hitting
+ *                 `authentication/refresh`. Credential recovery must never
+ *                 traverse the socket transport it may be repairing.
  * @param refreshToken - Current refresh token.
  */
 export function refreshTokensSingleFlight(
-  client: AgorClient,
+  client: AuthenticatedAgorClient,
   refreshToken: string
 ): Promise<RefreshResult> {
   // Fast-fail if we already know the refresh token is dead. Without this,
-  // every 401 surfaced by the around-hook would trigger a brand-new POST
+  // every recovery caller would trigger a brand-new POST
   // to /authentication/refresh that also 401s, producing a tight loop as
   // components retry failing service calls. One latched failure is enough;
   // useAuth handles the cleanup (clearTokens + redirect to login).
@@ -146,11 +154,7 @@ export function refreshTokensSingleFlight(
       // `cause` preserves diagnostics. Subsequent callers fast-fail with the
       // same type via the `unrecoverable` guard above.
       if (isDefiniteAuthFailure(err)) {
-        unrecoverable = true;
-        if (typeof window !== 'undefined') {
-          window.dispatchEvent(new CustomEvent(TOKENS_REFRESH_UNRECOVERABLE_EVENT));
-        }
-        throw new RefreshUnrecoverableError(undefined, { cause: err });
+        throw markAuthenticationUnrecoverable(err);
       }
       throw err;
     })
@@ -159,25 +163,4 @@ export function refreshTokensSingleFlight(
     });
 
   return inflight;
-}
-
-/**
- * Refresh the access token (single-flight) and re-authenticate the given
- * Feathers client with the freshly-issued access token via the JWT strategy.
- *
- * Used by both the socket-reconnect fallback and the 401-retry around hook
- * on the long-lived socket client. Returns null if no refresh token is
- * stored; throws if the refresh call or the subsequent `authenticate()` call
- * fails so callers can decide how to surface the failure.
- */
-export async function refreshAndReauthenticate(client: AgorClient): Promise<RefreshResult | null> {
-  const refreshToken = getStoredRefreshToken();
-  if (!refreshToken) return null;
-
-  const refreshed = await refreshTokensSingleFlight(client, refreshToken);
-  await client.authenticate({
-    strategy: 'jwt',
-    accessToken: refreshed.accessToken,
-  });
-  return refreshed;
 }

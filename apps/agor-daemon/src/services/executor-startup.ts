@@ -25,9 +25,10 @@ type ExecutorStartupSessionsService = Pick<
 export type ActiveExecutorSession = Session & { agentic_tool: AgenticToolName };
 
 /**
- * Supplied only in `delegated` mode, where `session.unix_username` is the
- * opaque execution-home key forwarded to the external substrate. Omitted in
- * local modes, so they pay no lookup.
+ * Supplied only in `delegated` mode, where an execution-home Session's
+ * `unix_username` is the opaque home key forwarded to the external substrate.
+ * Branch-home Sessions skip the creator check and resolve the current actor's
+ * key later. Local modes omit the guard and pay no lookup.
  *
  * `loadCreator` receives the tenant-scoped handle this startup opened, so the
  * creator read cannot escape the session's tenant.
@@ -62,7 +63,11 @@ export async function prepareSessionForExecutorStart(
   return runWithTenantDatabaseScope(db, tenantId, async (tenantDb) => {
     const session = await sessionsService.get(sessionId, params);
     if (!session) throw new Error(`Session ${sessionId} not found`);
-    if (unixIdentityGuard) {
+    // Only historical execution-home sessions resume through the creator's
+    // immutable home stamp. Branch-scoped sessions use the current prompt
+    // actor's delegated key and branch-owned SDK state, so creator drift is
+    // irrelevant and must not prevent legitimate branch sharing.
+    if (unixIdentityGuard && (session.sdk_home_scope ?? 'execution_home') === 'execution_home') {
       await assertSessionUnixIdentityUnchanged(session, unixIdentityGuard.loadCreator(tenantDb));
     }
     const agenticTool = requireActiveAgenticTool(session.agentic_tool);

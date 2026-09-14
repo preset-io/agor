@@ -1,10 +1,12 @@
+import { loadCatalog } from '@agor/core/mcp-catalog';
 import { describe, expect, it } from 'vitest';
 import {
   buildCompletedOnboardingPreferences,
   buildGoalBootstrapGuidance,
   findOnboardingGoal,
-  mergeGoalMcpRecs,
+  mergeGoalIntegrationRecs,
   ONBOARDING_GOALS,
+  ONBOARDING_INTEGRATION_RECOMMENDATIONS,
 } from './onboardingGoals';
 
 describe('buildCompletedOnboardingPreferences', () => {
@@ -13,7 +15,11 @@ describe('buildCompletedOnboardingPreferences', () => {
       buildCompletedOnboardingPreferences(
         {
           use_slack_avatar: false,
-          onboarding: { goals: ['stale-goal'], repoId: 'repo-1' },
+          onboarding: {
+            goals: ['stale-goal'],
+            repoId: 'repo-1',
+            deferredAt: '2026-08-28T22:00:00.000Z',
+          },
         },
         { boardId: 'board-1', branchId: '', path: 'teammate', goals: [] }
       )
@@ -28,10 +34,43 @@ describe('buildCompletedOnboardingPreferences', () => {
         path: 'teammate',
       },
     });
+    expect(
+      buildCompletedOnboardingPreferences(
+        { onboarding: { deferredAt: '2026-08-28T22:00:00.000Z' } },
+        { boardId: 'board-1', branchId: '', path: 'teammate', goals: [] }
+      ).onboarding
+    ).not.toHaveProperty('deferredAt');
+  });
+
+  it('persists resumable teammate identity and clears it on an authoritative skip', () => {
+    const withTeammate = buildCompletedOnboardingPreferences(undefined, {
+      boardId: 'board-1',
+      branchId: 'branch-1',
+      path: 'teammate',
+      goals: ['ship-without-busywork'],
+      teammateName: 'Rusty',
+      teammateEmoji: '⚖️',
+      templateId: 'legal-analyst',
+    });
+    expect(withTeammate.onboarding).toMatchObject({
+      teammateDisplayName: 'Rusty',
+      teammateEmoji: '⚖️',
+      teammateTemplateId: 'legal-analyst',
+    });
+
+    const skipped = buildCompletedOnboardingPreferences(withTeammate, {
+      boardId: 'board-2',
+      branchId: '',
+      path: 'teammate',
+      goals: [],
+    });
+    expect(skipped.onboarding).not.toHaveProperty('teammateDisplayName');
+    expect(skipped.onboarding).not.toHaveProperty('teammateEmoji');
+    expect(skipped.onboarding).not.toHaveProperty('teammateTemplateId');
   });
 });
 
-const names = (goalIds: string[]) => mergeGoalMcpRecs(goalIds).map((rec) => rec.name);
+const names = (goalIds: string[]) => mergeGoalIntegrationRecs(goalIds).map((rec) => rec.name);
 
 describe('ONBOARDING_GOALS', () => {
   it('defines exactly the six goal cards with unique ids and non-empty recs + bootstrap lines', () => {
@@ -40,7 +79,7 @@ describe('ONBOARDING_GOALS', () => {
     expect(new Set(ids).size).toBe(6);
     for (const goal of ONBOARDING_GOALS) {
       expect(goal.title.length).toBeGreaterThan(0);
-      expect(goal.mcpRecs.length).toBeGreaterThan(0);
+      expect(goal.integrationRecs.length).toBeGreaterThan(0);
       expect(goal.bootstrapLine.length).toBeGreaterThan(0);
     }
   });
@@ -52,64 +91,130 @@ describe('ONBOARDING_GOALS', () => {
   });
 });
 
-describe('mergeGoalMcpRecs', () => {
-  it('falls back to the default set when no goal is picked', () => {
-    expect(names([])).toEqual(['Slack', 'GitHub', 'Linear', 'Notion']);
-  });
+// Connect items (non-`ask`) are the ones counted against the cap of four.
+const connectNames = (goalIds: string[]) =>
+  mergeGoalIntegrationRecs(goalIds)
+    .filter((rec) => rec.connectMode !== 'ask')
+    .map((rec) => rec.name);
+const askNames = (goalIds: string[]) =>
+  mergeGoalIntegrationRecs(goalIds)
+    .filter((rec) => rec.connectMode === 'ask')
+    .map((rec) => rec.name);
 
-  it('ignores unknown goal ids', () => {
-    expect(names(['not-a-goal'])).toEqual(['Slack', 'GitHub', 'Linear', 'Notion']);
-  });
-
-  it('shows a single goal rec list verbatim (no merge, no padding to four)', () => {
-    // hand-off-build has only two recs — the list stays two long.
-    expect(names(['hand-off-build'])).toEqual(['GitHub', 'Figma']);
-    // status-updates already has four.
-    expect(names(['status-updates'])).toEqual(['Linear', 'Shortcut / Jira', 'Slack', 'Calendar']);
-  });
-
-  it('merges two goals: first two of primary, first two of secondary', () => {
-    // primary ship-without-busywork [GitHub, Sentry, Datadog], secondary dig-into-anything [Amplitude, HubSpot]
-    expect(names(['ship-without-busywork', 'dig-into-anything'])).toEqual([
+describe('mergeGoalIntegrationRecs', () => {
+  it('falls back to the default set when no goal is picked (Connect items first, then Ask extras)', () => {
+    expect(names([])).toEqual([
+      'Linear',
+      'Notion',
+      'Firecrawl',
       'GitHub',
-      'Sentry',
-      'Amplitude',
-      'HubSpot',
+      'Slack gateway messaging',
     ]);
   });
 
-  it('dedups across goals then refills from primary remaining before secondary remaining', () => {
-    // primary team-teammate [Slack, HubSpot, Linear, Datadog], secondary personal-teammate [Slack]
-    // step1+2: Slack, HubSpot, (Slack deduped) → [Slack, HubSpot]
-    // refill from primary remaining: Linear, Datadog → [Slack, HubSpot, Linear, Datadog]
-    expect(names(['team-teammate', 'personal-teammate'])).toEqual([
-      'Slack',
-      'HubSpot',
+  it('ignores unknown goal ids', () => {
+    expect(names(['not-a-goal'])).toEqual([
       'Linear',
-      'Datadog',
+      'Notion',
+      'Firecrawl',
+      'GitHub',
+      'Slack gateway messaging',
+    ]);
+  });
+
+  it('shows a single goal Connect kit, then its Ask extra', () => {
+    // hand-off-build prioritizes the reviewed GitHub PAT entry.
+    expect(names(['hand-off-build'])).toEqual(['GitHub', 'Supabase', 'Figma', 'Context7']);
+    // status-updates: Connect [Linear, Notion, Atlassian, Asana] + Ask [Slack].
+    expect(names(['status-updates'])).toEqual([
+      'Linear',
+      'Notion',
+      'Atlassian',
+      'Asana',
+      'Slack gateway messaging',
+    ]);
+  });
+
+  it('merges two goals: first two Connect items of primary, then first two of secondary', () => {
+    // primary ship starts with GitHub and Sentry;
+    // secondary dig [Exa, Firecrawl, Tavily, Amplitude], no Ask.
+    expect(names(['ship-without-busywork', 'dig-into-anything'])).toEqual([
+      'GitHub',
+      'Sentry',
+      'Exa',
+      'Firecrawl',
+    ]);
+  });
+
+  it('dedups Connect items across goals then refills from primary remaining before secondary', () => {
+    // primary team [Notion, Linear, Atlassian, Miro] + Ask Slack;
+    // secondary personal [Notion, Linear, Firecrawl] + Ask Slack.
+    // 2+2: Notion, Linear, (both dupes) → refill primary remaining: Atlassian, Miro.
+    // Ask extras deduped to a single Slack.
+    expect(names(['team-teammate', 'personal-teammate'])).toEqual([
+      'Notion',
+      'Linear',
+      'Atlassian',
+      'Miro',
+      'Slack gateway messaging',
     ]);
   });
 
   it('respects selection order (primary vs secondary is swap-sensitive)', () => {
     expect(names(['dig-into-anything', 'ship-without-busywork'])).toEqual([
-      'Amplitude',
-      'HubSpot',
+      'Exa',
+      'Firecrawl',
       'GitHub',
       'Sentry',
     ]);
   });
 
-  it('caps the merged list at four even when both goals are rec-rich', () => {
-    const merged = names(['status-updates', 'team-teammate']);
-    expect(merged).toHaveLength(4);
-    // first two of each: Linear, Shortcut/Jira, Slack, HubSpot
-    expect(merged).toEqual(['Linear', 'Shortcut / Jira', 'Slack', 'HubSpot']);
+  it('caps Connect items at four; Ask extras are separate and never counted in the four', () => {
+    // Both goals are Connect-rich, so the Connect kit fills exactly four.
+    expect(connectNames(['status-updates', 'team-teammate'])).toEqual([
+      'Linear',
+      'Notion',
+      'Atlassian',
+      'Asana',
+    ]);
+    // Slack (Ask) still flows through as an extra beyond the four.
+    expect(askNames(['status-updates', 'team-teammate'])).toEqual(['Slack gateway messaging']);
+  });
+
+  it('discriminates connectMode: oauth / none / ask', () => {
+    expect(ONBOARDING_INTEGRATION_RECOMMENDATIONS.linear.connectMode).toBe('oauth');
+    expect(ONBOARDING_INTEGRATION_RECOMMENDATIONS.firecrawl.connectMode).toBe('none');
+    expect(ONBOARDING_INTEGRATION_RECOMMENDATIONS.context7.connectMode).toBe('none');
+    expect(ONBOARDING_INTEGRATION_RECOMMENDATIONS.exa.connectMode).toBe('none');
+    expect(ONBOARDING_INTEGRATION_RECOMMENDATIONS.slack.connectMode).toBe('ask');
+    expect(ONBOARDING_INTEGRATION_RECOMMENDATIONS.github.connectMode).toBe('credentials');
   });
 
   it('flags only the first rec as featured', () => {
-    const recs = mergeGoalMcpRecs(['ship-without-busywork']);
+    const recs = mergeGoalIntegrationRecs(['ship-without-busywork']);
     expect(recs[0].featured).toBe(true);
     expect(recs.slice(1).every((rec) => !rec.featured)).toBe(true);
+  });
+
+  it('routes recommendations only to their real current Agor surface', () => {
+    expect(ONBOARDING_INTEGRATION_RECOMMENDATIONS.slack.setup).toEqual({
+      surface: 'slack',
+    });
+    expect(ONBOARDING_INTEGRATION_RECOMMENDATIONS.github.setup).toEqual({
+      surface: 'marketplace',
+      catalogEntryName: 'io.github.github/github-mcp-server',
+    });
+    expect(ONBOARDING_INTEGRATION_RECOMMENDATIONS.linear.setup).toEqual({
+      surface: 'marketplace',
+      catalogEntryName: 'app.linear/linear',
+    });
+    expect(Object.values(ONBOARDING_INTEGRATION_RECOMMENDATIONS)).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ name: 'HubSpot' }),
+        expect.objectContaining({ name: 'Shortcut / Jira' }),
+        expect.objectContaining({ name: 'Calendar' }),
+      ])
+    );
   });
 });
 
@@ -131,9 +236,22 @@ describe('buildGoalBootstrapGuidance', () => {
     const lines = buildGoalBootstrapGuidance(['hand-off-build', 'dig-into-anything']);
     expect(lines[0]).toBe(findOnboardingGoal('hand-off-build')?.bootstrapLine);
     expect(lines[1]).toBe(findOnboardingGoal('dig-into-anything')?.bootstrapLine);
-    // Bridging line names the primary as the concrete opener and the secondary as the follow-up.
-    expect(lines[2]).toContain('"Hand off the build"');
+    // Bridging line names primary and secondary without adding another opening command.
+    expect(lines[2]).toContain('"Build me an app"');
     expect(lines[2]).toContain('"Dig into anything"');
     expect(lines[2]).toMatch(/do not ask which matters more/i);
+  });
+});
+
+describe('onboarding catalog contract', () => {
+  it('uses only reviewed identities and truthful auth modes from the current catalog', async () => {
+    const catalog = await loadCatalog();
+    for (const rec of Object.values(ONBOARDING_INTEGRATION_RECOMMENDATIONS)) {
+      if (rec.setup.surface !== 'marketplace') continue;
+      const entryName = rec.setup.catalogEntryName;
+      const entry = catalog.find((item) => item.name === entryName);
+      expect(entry, entryName).toBeDefined();
+      expect(rec.connectMode, entryName).toBe(entry?.auth_type);
+    }
   });
 });

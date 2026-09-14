@@ -9,7 +9,7 @@ import {
   isUserEnvPlaceholder,
   TEMPLATE_RESOLVABLE_MCP_AUTH_SECRET_FIELDS,
 } from '../../mcp/template-resolver';
-import type { MCPAuth } from '../../types/mcp';
+import { assertPublicMCPOAuthCompatibilityMode, type MCPAuth } from '../../types/mcp';
 import { MCP_HEADER_REDACTED_SENTINEL } from './http-headers';
 
 export const MCP_AUTH_SECRET_FIELDS = [
@@ -67,6 +67,7 @@ export function restoreRedactedMCPAuthSecrets(options: {
   next?: MCPAuth;
 }): MCPAuth | undefined {
   if (!options.next) return undefined;
+  assertPublicMCPOAuthCompatibilityMode(options.next);
 
   const restored: MCPAuth = { ...options.next };
   const record = restored as unknown as Record<string, unknown>;

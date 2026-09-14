@@ -31,7 +31,7 @@ import {
 } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
 import type { Session, SessionID, TenantContext, UserID } from '@agor/core/types';
-import { NotFoundError } from '@agor/core/utils/errors';
+import { isNotFoundError } from '@agor/core/utils/errors';
 import { toNodeHandler } from '@modelcontextprotocol/node';
 import { createMcpHandler, type ListToolsResult, McpServer } from '@modelcontextprotocol/server';
 import type { Request, Response } from 'express';
@@ -59,6 +59,7 @@ import { registerSessionTools } from './tools/sessions.js';
 import { registerTaskTools } from './tools/tasks.js';
 import { registerUserTools } from './tools/users.js';
 import { registerWidgetTools } from './tools/widgets.js';
+import { createMcpTracing } from './tracing.js';
 
 const DEBUG_MCP_REQUESTS =
   process.env.AGOR_DEBUG_MCP_REQUESTS === '1' || process.env.DEBUG?.includes('mcp-requests');
@@ -154,8 +155,9 @@ Common workflows:
 Create a branch and start a session:
 1. agor_repos_list → get repoId
 2. agor_boards_list → get boardId
-3. agor_branches_create(repoId, boardId, branchName) → get branchId
-4. agor_sessions_create(branchId, agenticTool, initialPrompt)
+3. agor_branches_create(repoId, boardId, branchName, waitForReady:true) → continue only when _readiness.outcome is "ready"
+4. After a timeout, agor_branches_wait_for_ready(branchId) → safely call again as needed
+5. agor_sessions_create(branchId, agenticTool, initialPrompt)
 
 Delegate a subtask to a child agent:
 1. agor_sessions_spawn(prompt) — inherits current branch, tracks parent-child genealogy
@@ -335,7 +337,8 @@ function getRegistry(): {
 function createMcpServer(
   ctx: McpContext,
   toolSearchEnabled: boolean,
-  serverVersion: string
+  serverVersion: string,
+  tracing: ReturnType<typeof createMcpTracing>
 ): McpServer {
   const server = new McpServer(
     {
@@ -367,10 +370,13 @@ function createMcpServer(
     // though progressive discovery intentionally omits it from tools/list.
     // Both paths retain the same authenticated tenant wrapper and SDK input /
     // output validation.
-    registerDomainTools(tenantScopedToolProxy(toolDispatcherProxy(server, dispatcher), ctx), ctx);
+    registerDomainTools(
+      tenantScopedToolProxy(tracing.toolProxy(toolDispatcherProxy(server, dispatcher)), ctx),
+      ctx
+    );
 
     // Register search/detail/execute as the complete visible MCP catalog.
-    registerSearchTools(server, registry, dispatcher);
+    registerSearchTools(tracing.toolProxy(server, dispatcher), registry, dispatcher);
 
     // Keep the advertised catalog to the three progressive-discovery facade
     // tools without removing direct tools/call compatibility. This uses the
@@ -384,7 +390,7 @@ function createMcpServer(
       throw new Error(`Expected 3 progressive-discovery MCP tools, got ${toolsList.tools.length}`);
     }
   } else {
-    registerDomainTools(tenantScopedToolProxy(server, ctx), ctx);
+    registerDomainTools(tenantScopedToolProxy(tracing.toolProxy(server), ctx), ctx);
   }
 
   // McpServer.registerTool() conservatively advertises listChanged=true.
@@ -408,10 +414,11 @@ export function setupMCPRoutes(
   app: Application,
   db: TenantScopeAwareDatabase,
   toolSearchEnabled = true,
-  config: Pick<AgorConfig, 'multi_tenancy'> = { multi_tenancy: undefined },
+  config: Pick<AgorConfig, 'multi_tenancy' | 'metrics'> = { multi_tenancy: undefined },
   options: { serverVersion?: string } = {}
 ): void {
   const serverVersion = options.serverVersion ?? '0.0.0';
+  const tracing = createMcpTracing(config.metrics?.apm?.trace_services ?? 'off');
   // Eagerly build the registry at startup so first request isn't slower
   if (toolSearchEnabled) {
     getRegistry();
@@ -429,7 +436,7 @@ export function setupMCPRoutes(
         throw new Error('Authenticated MCP request context is unavailable');
       }
       mcpRequestDebug(`🔌 Serving MCP ${era} protocol request`);
-      return createMcpServer(ctx, toolSearchEnabled, serverVersion);
+      return createMcpServer(ctx, toolSearchEnabled, serverVersion, tracing);
     },
     {
       // One endpoint serves the 2026-07-28 per-request protocol and every
@@ -538,7 +545,7 @@ export function setupMCPRoutes(
     return fromHeader ?? fromQuery;
   };
 
-  const handler = async (req: Request, res: Response) => {
+  const handleRequest = async (req: Request, res: Response) => {
     try {
       mcpRequestDebug(`🔌 Incoming MCP request: ${req.method} /mcp`);
 
@@ -641,7 +648,7 @@ export function setupMCPRoutes(
             app.service('users').get(userId, { tenant } as AuthenticatedParams)
           );
         } catch (error) {
-          if (error instanceof NotFoundError) {
+          if (isNotFoundError(error)) {
             return res.status(401).json({
               ...jsonRpcError(req, -32001, 'Invalid personal API key'),
             });
@@ -691,7 +698,7 @@ export function setupMCPRoutes(
             app.service('users').get(userId, { tenant } as AuthenticatedParams)
           );
         } catch (error) {
-          if (error instanceof NotFoundError) {
+          if (isNotFoundError(error)) {
             return res.status(401).json({
               ...jsonRpcError(req, -32001, 'Invalid or expired session token'),
             });
@@ -793,6 +800,9 @@ export function setupMCPRoutes(
       }
     }
   };
+
+  const handler = (req: Request, res: Response) =>
+    tracing.request(req.body, () => handleRequest(req, res));
 
   // GET and DELETE remain registered only to return an explicit, authenticated
   // 405 response to Streamable HTTP clients that optimistically probe them.

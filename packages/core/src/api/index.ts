@@ -5,19 +5,25 @@
  */
 
 import type {
+  AgenticToolName,
   AgenticToolPreset,
   Artifact,
-  AuthenticationResult,
   Board,
+  BoardCapabilityPolicies,
+  BoardComment,
+  BoardCommentCreate,
+  BoardCommentPatch,
+  BoardCommentReposition,
   BoardExportBlob,
-  BoardGroupGrantWithGroup,
   Branch,
+  BranchCapabilityPolicy,
   BranchEnvironmentUpdate,
-  BranchGroupGrantWithGroup,
+  CapabilityPolicyWorkspacePreferences,
   CardType,
   CardWithType,
   CloneRepositoryResult,
   CreateAgenticToolPreset,
+  CreateMCPServerInput,
   CreateSessionInput,
   GatewayChannel,
   GatewayChannelCreateData,
@@ -36,6 +42,14 @@ import type {
   MCPCatalogConnectData,
   MCPCatalogConnectResult,
   MCPCatalogEntry,
+  MCPCatalogReadiness,
+  MCPCatalogStartSessionData,
+  MCPCatalogStartSessionResult,
+  MCPMarketplaceOverview,
+  MCPMarketplaceRemoveServerData,
+  MCPMarketplaceRemoveServerResult,
+  MCPMarketplaceToolPermissionData,
+  MCPMarketplaceToolPermissionResult,
   MCPMemberPolicySetting,
   MCPServer,
   Message,
@@ -55,6 +69,7 @@ import type {
   SchedulePatchData,
   SdkHealthFailureInput,
   Session,
+  SessionID,
   SessionUpdate,
   Task,
   TeammateWelcomeNoteRequest,
@@ -62,13 +77,15 @@ import type {
   TemplateRenderResponse,
   TenantAgenticToolSettings,
   TenantAgenticToolSettingsPatch,
+  UpdateMCPServerInput,
   User,
   UserAvatarSettings,
   UserAvatarSyncRequest,
   UserAvatarSyncResult,
+  UserID,
   UUID,
 } from '@agor/core/types';
-import authentication from '@feathersjs/authentication-client';
+import authentication, { type AuthenticationClient } from '@feathersjs/authentication-client';
 import type { Application, Paginated, Params } from '@feathersjs/feathers';
 import { feathers } from '@feathersjs/feathers';
 import socketio from '@feathersjs/socketio-client';
@@ -122,33 +139,36 @@ export interface SessionPromptRequest {
   stream?: boolean;
 }
 
-export interface QueuedSessionPromptResult {
-  success: true;
-  queued: true;
-  message: Message;
-  queue_position: number;
-}
-
-export interface RunningSessionPromptResult {
-  success: true;
-  taskId: string;
-  status: string;
-  streaming: boolean;
-  queued?: false;
-}
-
-export type SessionPromptResult = QueuedSessionPromptResult | RunningSessionPromptResult;
-
 export interface SessionPromptOptions extends Omit<SessionPromptRequest, 'prompt'> {
   params?: Params;
 }
 
+/** Required setup for an already-created session, applied before its first prompt. */
+export interface SessionInitializationRequest {
+  /** Fence delayed calls to the identity that created the session. */
+  expectedUserId: UserID;
+  /** Validated and branded after crossing the daemon trust boundary. */
+  mcpServerIds?: string[];
+  envVarNames?: string[];
+  prompt?: string;
+  permissionMode?: PermissionMode;
+}
+
+export interface SessionInitializationOptions extends SessionInitializationRequest {
+  params?: Params;
+}
+
+export interface SessionInitializationResult {
+  sessionId: SessionID;
+  task?: Task;
+}
+
 export interface SessionsClientHelpers {
-  prompt(
+  prompt(sessionId: string, prompt: string, options?: SessionPromptOptions): Promise<Task>;
+  initialize(
     sessionId: string,
-    prompt: string,
-    options?: SessionPromptOptions
-  ): Promise<SessionPromptResult>;
+    options: SessionInitializationOptions
+  ): Promise<SessionInitializationResult>;
 }
 
 /**
@@ -192,12 +212,58 @@ export interface TemplatesService {
   create(data: TemplateRenderRequest, params?: Params): Promise<TemplateRenderResponse>;
 }
 
+export interface MCPMarketplaceService {
+  find(params?: Params): Promise<MCPMarketplaceOverview>;
+}
+
+export interface MCPMarketplaceRemoveServerService {
+  create(
+    data: MCPMarketplaceRemoveServerData,
+    params?: Params
+  ): Promise<MCPMarketplaceRemoveServerResult>;
+}
+
+export interface MCPMarketplaceToolPermissionService {
+  create(
+    data: MCPMarketplaceToolPermissionData,
+    params?: Params
+  ): Promise<MCPMarketplaceToolPermissionResult>;
+}
+
+export interface BoardPermissionsService {
+  find(params?: Params): Promise<BoardCapabilityPolicies>;
+  patch(
+    id: null,
+    data: ClientInput<BoardCapabilityPolicies>,
+    params?: Params
+  ): Promise<BoardCapabilityPolicies>;
+}
+
+export interface BranchPermissionsService {
+  find(params?: Params): Promise<BranchCapabilityPolicy>;
+  patch(
+    id: null,
+    data: ClientInput<BranchCapabilityPolicy>,
+    params?: Params
+  ): Promise<BranchCapabilityPolicy>;
+}
+
+export interface WorkspacePreferencesService {
+  find(params?: Params): Promise<CapabilityPolicyWorkspacePreferences>;
+  patch(
+    id: null,
+    data: CapabilityPolicyWorkspacePreferences,
+    params?: Params
+  ): Promise<CapabilityPolicyWorkspacePreferences>;
+}
+
 /**
  * Service interfaces for type safety
  */
 export interface ServiceTypes {
   sessions: Session;
   tasks: Task;
+  'board-comments': BoardComment;
   boards: Board;
   repos: Repo;
   'repos/clone': Repo;
@@ -208,15 +274,20 @@ export interface ServiceTypes {
   users: User;
   groups: Group;
   'group-memberships': GroupMembership;
-  'boards/:id/owners': User;
-  'boards/:id/group-grants': BoardGroupGrantWithGroup;
-  'branches/:id/group-grants': BranchGroupGrantWithGroup;
+  'boards/:id/permissions': BoardCapabilityPolicies;
+  'branches/:id/permissions': BranchCapabilityPolicy;
+  'workspace-preferences': CapabilityPolicyWorkspacePreferences;
   cards: CardWithType;
   'card-types': CardType; // CardType CRUD
   artifacts: Artifact;
   'mcp-servers': MCPServer;
   'mcp-catalog': MCPCatalogEntry;
+  'mcp-catalog/readiness': MCPCatalogReadiness;
   'mcp-catalog/connect': MCPCatalogConnectResult;
+  'mcp-catalog/start-session': MCPCatalogStartSessionResult;
+  'mcp-marketplace': MCPMarketplaceOverview;
+  'mcp-marketplace/remove-unattached': MCPMarketplaceRemoveServerResult;
+  'mcp-marketplace/tool-permission': MCPMarketplaceToolPermissionResult;
   'mcp-member-policy': MCPMemberPolicySetting;
   'kb/namespaces': KnowledgeNamespace;
   'kb/documents': KnowledgeDocument;
@@ -231,6 +302,26 @@ export interface ServiceTypes {
   'agentic-tool-presets': AgenticToolPreset;
   'opencode-auth': OpenCodeProviderSettings;
   'opencode-models': OpenCodeModelCatalog;
+  'executor-git-environment': ExecutorGitEnvironment;
+}
+
+/**
+ * Bounded plaintext capability returned only to authenticated Git executors.
+ *
+ * Keep this public client DTO structural: `@agor/git` is a private workspace
+ * package and must not appear in the packed `@agor-live/client` declaration
+ * graph. A daemon-side type-equivalence test keeps it aligned with the
+ * authoritative Git transport allowlist.
+ */
+export interface ExecutorGitEnvironment {
+  GITHUB_TOKEN?: string;
+  GH_TOKEN?: string;
+  HTTP_PROXY?: string;
+  HTTPS_PROXY?: string;
+  NO_PROXY?: string;
+  ALL_PROXY?: string;
+  SSL_CERT_FILE?: string;
+  SSL_CERT_DIR?: string;
 }
 
 /**
@@ -288,6 +379,14 @@ export interface GatewayChannelsService
     never,
     ClientInput<GatewayChannelPatchData> | null
   > {}
+
+/** MCP servers expose redacted entities but accept purpose-built auth patch DTOs. */
+export type MCPServersService = AgorService<
+  MCPServer,
+  ClientInput<CreateMCPServerInput>,
+  ClientInput<UpdateMCPServerInput>,
+  ClientInput<UpdateMCPServerInput> | null
+>;
 
 export type AgenticToolSettingsService = AgorService<
   TenantAgenticToolSettings,
@@ -354,11 +453,16 @@ export interface OpenCodeModelsService {
 /**
  * Marketplace connect command endpoint.
  *
- * Create-only: it installs one catalog entry and returns the session that can
- * use it. There is nothing to read back, so it exposes no find/get.
+ * Create-only: it installs one catalog entry for the caller. There is nothing
+ * to read back, so it exposes no find/get.
  */
 export interface MCPCatalogConnectService {
   create(data: MCPCatalogConnectData, params?: Params): Promise<MCPCatalogConnectResult>;
+}
+
+/** Create-only next step that starts a session with an added Catalog server. */
+export interface MCPCatalogStartSessionService {
+  create(data: MCPCatalogStartSessionData, params?: Params): Promise<MCPCatalogStartSessionResult>;
 }
 
 /**
@@ -444,6 +548,17 @@ export type MessagesService = Omit<
   patch(id: string, data: ClientInput<MessagePatch>, params?: Params): Promise<Message>;
 };
 
+/** Public comment CRUD surface; spatial movement and reactions use custom routes. */
+export type BoardCommentsService = Omit<
+  AgorService<BoardComment, ClientInput<BoardCommentCreate>, never, ClientInput<BoardCommentPatch>>,
+  'update'
+>;
+
+/** Dedicated comment-position command; the URL supplies the comment identity. */
+export interface BoardCommentRepositionService {
+  create(data: ClientInput<BoardCommentReposition>, params?: Params): Promise<BoardComment>;
+}
+
 /**
  * Repos service with branch management
  */
@@ -465,6 +580,8 @@ export interface ReposService extends AgorService<Repo> {
       createBranch?: boolean;
       pullLatest?: boolean;
       sourceBranch?: string;
+      /** Remote that owns sourceBranch when it differs from this destination repo. */
+      sourceRemoteUrl?: string;
       issue_url?: string;
       pull_request_url?: string;
       boardId: string;
@@ -565,22 +682,39 @@ export interface BoardsService extends AgorService<Board> {
   ensureTeammateWelcomeNote(data: TeammateWelcomeNoteRequest, params?: Params): Promise<Board>;
 }
 
-/**
- * Users service with git environment support
- */
+/** Users service custom methods. */
 export interface UsersService extends AgorService<User> {
-  /**
-   * Get the full resolved git environment for a user.
-   * Auth: service-account JWTs may fetch any user's env;
-   * regular users may only fetch their own.
-   */
-  getGitEnvironment(data: { userId: string }, params?: Params): Promise<Record<string, string>>;
   getAvatarSettings(data?: unknown, params?: Params): Promise<UserAvatarSettings>;
   updateAvatarSettings(
     data: Partial<UserAvatarSettings>,
     params?: Params
   ): Promise<UserAvatarSettings>;
   syncAvatars(data?: UserAvatarSyncRequest, params?: Params): Promise<UserAvatarSyncResult>;
+  /**
+   * Resolve the calling user's primary teammate branch, or null when unset or
+   * no longer accessible.
+   */
+  getPrimaryTeammate(data?: unknown, params?: Params): Promise<Branch | null>;
+  /** List active teammate branches the caller can start sessions on. */
+  getPrimaryTeammateCandidates(data?: unknown, params?: Params): Promise<Branch[]>;
+  /**
+   * Set the calling user's primary teammate to an accessible branch,
+   * recorded as an explicit user pick.
+   */
+  setPrimaryTeammate(
+    data: { branchId: string; expectedUserId: UserID },
+    params?: Params
+  ): Promise<Branch | null>;
+  /** Set an onboarding/default teammate only when the caller is still unset. */
+  setPrimaryTeammateIfUnset(
+    data: { branchId: string; expectedUserId: UserID },
+    params?: Params
+  ): Promise<Branch | null>;
+  /** Seed the caller's primary coding agent without overwriting an existing preference. */
+  setPrimaryAgenticToolIfUnset(
+    data: { tool: AgenticToolName; expectedUserId: UserID },
+    params?: Params
+  ): Promise<User>;
 }
 
 /**
@@ -677,7 +811,23 @@ export interface BranchesService extends AgorService<Branch> {
 /**
  * Agor client with socket.io connection exposed for lifecycle management
  */
-export interface AgorClient extends Omit<Application<ServiceTypes>, 'service'> {
+type AuthenticationClientSurface = {
+  authentication: AuthenticationClient;
+  authenticate: AuthenticationClient['authenticate'];
+  reAuthenticate: AuthenticationClient['reAuthenticate'];
+  logout: AuthenticationClient['logout'];
+};
+
+/**
+ * Common Agor service client surface. Socket clients intentionally exclude
+ * Feathers' live authentication methods; REST clients add them through
+ * {@link AuthenticatedAgorClient}.
+ */
+export interface AgorClient
+  extends Omit<
+    Application<ServiceTypes>,
+    'service' | 'authentication' | 'authenticate' | 'reAuthenticate' | 'logout'
+  > {
   io: Socket;
   sessions: SessionsClientHelpers;
   tasks: TasksClientHelpers;
@@ -686,11 +836,15 @@ export interface AgorClient extends Omit<Application<ServiceTypes>, 'service'> {
   service(path: 'sessions'): SessionsService;
   service(path: 'tasks'): TasksService;
   service(path: 'messages'): MessagesService;
+  service(path: 'board-comments'): BoardCommentsService;
   service(path: 'repos'): ReposService;
   service(path: 'repos/clone'): ReposCloneService;
   service(path: 'repos/local'): ReposLocalService;
   service(path: 'branches'): BranchesService;
   service(path: 'boards'): BoardsService;
+  service(path: 'boards/:id/permissions'): BoardPermissionsService;
+  service(path: 'branches/:id/permissions'): BranchPermissionsService;
+  service(path: 'workspace-preferences'): WorkspacePreferencesService;
   service(path: 'schedules'): SchedulesService;
   service(path: 'gateway-channels'): GatewayChannelsService;
   service(path: 'kb/settings'): KnowledgeSettingsService;
@@ -700,31 +854,30 @@ export interface AgorClient extends Omit<Application<ServiceTypes>, 'service'> {
   service(path: 'agentic-tool-presets'): AgenticToolPresetsService;
   service(path: 'opencode-auth'): OpenCodeAuthService;
   service(path: 'opencode-models'): OpenCodeModelsService;
+  service(path: `board-comments/${string}/reposition`): BoardCommentRepositionService;
 
   // Standard services (CRUD only)
   service(path: 'cards'): AgorService<CardWithType>;
   service(path: 'card-types'): AgorService<CardType>;
   service(path: 'users'): UsersService;
-  service(path: 'mcp-servers'): AgorService<MCPServer>;
+  service(path: 'mcp-servers'): MCPServersService;
   service(path: 'mcp-catalog'): AgorService<MCPCatalogEntry>;
+  service(path: 'mcp-catalog/readiness'): AgorService<MCPCatalogReadiness>;
   service(path: 'mcp-catalog/connect'): MCPCatalogConnectService;
+  service(path: 'mcp-catalog/start-session'): MCPCatalogStartSessionService;
+  service(path: 'mcp-marketplace'): MCPMarketplaceService;
+  service(path: 'mcp-marketplace/remove-unattached'): MCPMarketplaceRemoveServerService;
+  service(path: 'mcp-marketplace/tool-permission'): MCPMarketplaceToolPermissionService;
   service(path: 'mcp-member-policy'): MCPMemberPolicyService;
   service(path: 'templates'): TemplatesService;
 
   // Generic fallback for custom routes and dynamic paths
   service<K extends keyof ServiceTypes>(path: K): AgorService<ServiceTypes[K]>;
   service(path: string): AgorService<unknown>;
-
-  // Authentication methods (from @feathersjs/authentication-client)
-  authenticate(credentials?: {
-    strategy?: string;
-    email?: string;
-    password?: string;
-    accessToken?: string;
-  }): Promise<AuthenticationResult>;
-  logout(): Promise<AuthenticationResult | null>;
-  reAuthenticate(force?: boolean): Promise<AuthenticationResult>;
 }
+
+/** REST-capable client with the normal Feathers authentication API. */
+export type AuthenticatedAgorClient = AgorClient & AuthenticationClientSurface;
 
 type BoardsServiceInternal = AgorService<Board> &
   Partial<BoardsService> & {
@@ -1160,10 +1313,14 @@ function extendUsersService(client: AgorClient): void {
   if (usersService[USERS_SERVICE_EXTENDED]) return;
   if (typeof usersService.methods === 'function') {
     usersService.methods(
-      'getGitEnvironment',
       'getAvatarSettings',
       'updateAvatarSettings',
-      'syncAvatars'
+      'syncAvatars',
+      'getPrimaryTeammate',
+      'getPrimaryTeammateCandidates',
+      'setPrimaryTeammate',
+      'setPrimaryTeammateIfUnset',
+      'setPrimaryAgenticToolIfUnset'
     );
   }
   usersService[USERS_SERVICE_EXTENDED] = true;
@@ -1242,7 +1399,14 @@ function extendSessionsHelpers(client: AgorClient): void {
       const response = await client
         .service(`sessions/${sessionId}/prompt`)
         .create({ prompt, ...requestOptions } as SessionPromptRequest, params);
-      return response as SessionPromptResult;
+      return response as Task;
+    },
+    initialize: async (sessionId: string, options: SessionInitializationOptions) => {
+      const { params, ...request } = options;
+      const response = await client
+        .service(`sessions/${sessionId}/initialize`)
+        .create(request, params);
+      return response as SessionInitializationResult;
     },
   };
 
@@ -1272,14 +1436,6 @@ function extendTasksHelpers(client: AgorClient): void {
 }
 
 /**
- * Create Feathers client connected to agor-daemon
- *
- * @param url - Daemon URL
- * @param autoConnect - Auto-connect socket (default: true for CLI, false for React)
- * @param options - Additional options
- * @returns Feathers client instance with socket exposed
- */
-/**
  * Check if an AGOR_API_KEY environment variable is set.
  * Returns the key if valid format, null otherwise.
  */
@@ -1303,8 +1459,8 @@ export function getApiKeyFromEnv(): string | null {
 export async function createRestClient(
   url: string = DEFAULT_DAEMON_URL,
   apiKey?: string
-): Promise<AgorClient> {
-  const client = feathers<ServiceTypes>() as AgorClient;
+): Promise<AuthenticatedAgorClient> {
+  const client = feathers<ServiceTypes>() as AuthenticatedAgorClient;
   const fetchImpl = globalThis.fetch.bind(globalThis);
 
   // Lazy-load REST client (only imported when needed, not in browser bundles)
@@ -1385,6 +1541,30 @@ export async function createRestClient(
   return client;
 }
 
+export interface SocketConnectionAuthentication {
+  /**
+   * Access token presented in every Socket.IO namespace handshake. A getter
+   * lets long-lived browser clients rotate the credential without recreating
+   * the Feathers client; the next automatic or controlled reconnect reads the
+   * latest value.
+   */
+  accessToken: string | (() => string | null | undefined);
+}
+
+/**
+ * Create a Socket.IO-backed Feathers client connected to agor-daemon.
+ *
+ * The daemon authenticates every namespace handshake before accepting the
+ * connection, so callers must either provide `socketAuthentication` here or
+ * set an equivalent Socket.IO auth object before connecting. Calling the
+ * Feathers `authenticate()` method after connection is not a supported socket
+ * identity transition.
+ *
+ * @param url - Daemon URL
+ * @param autoConnect - Whether Socket.IO connects immediately (default: true)
+ * @param options - Transport and handshake options
+ * @returns Feathers client instance with its Socket.IO socket exposed
+ */
 export function createClient(
   url: string = DEFAULT_DAEMON_URL,
   autoConnect: boolean = true,
@@ -1395,12 +1575,8 @@ export function createClient(
     reconnectionAttempts?: number;
     /** Reject acknowledged service calls when Socket.IO does not receive an acknowledgement. */
     ackTimeout?: number;
-    /** Explicit authentication storage for non-browser clients. */
-    authStorage?: {
-      getItem(key: string): string | null | Promise<string | null>;
-      setItem(key: string, value: string): void | Promise<void>;
-      removeItem(key: string): void | Promise<void>;
-    };
+    /** Authenticate each Socket.IO connection before the server accepts it. */
+    socketAuthentication?: SocketConnectionAuthentication;
   }
 ): AgorClient {
   // Detect if running in browser vs Node.js (CLI)
@@ -1408,6 +1584,7 @@ export function createClient(
   const isBrowser = typeof globalThis !== 'undefined' && 'window' in globalThis;
 
   // Configure socket.io with better defaults for React StrictMode and reconnection
+  const socketAuthentication = options?.socketAuthentication;
   const socket = io(url, {
     // Auto-connect by default for CLI, manual control for React hooks
     autoConnect,
@@ -1425,6 +1602,15 @@ export function createClient(
     transports: ['websocket', 'polling'],
     // Connection lifecycle settings
     closeOnBeforeunload: true, // Close socket when page unloads
+    ...(socketAuthentication
+      ? {
+          auth: (authorize: (data: Record<string, string>) => void) => {
+            const configured = socketAuthentication.accessToken;
+            const accessToken = typeof configured === 'function' ? configured() : configured;
+            authorize(accessToken ? { token: accessToken } : {});
+          },
+        }
+      : {}),
   });
 
   // Add connection monitoring if verbose mode enabled
@@ -1432,7 +1618,7 @@ export function createClient(
     let attemptCount = 0;
     const maxAttempts = options?.reconnectionAttempts ?? (isBrowser ? Infinity : 2);
 
-    socket.on('connect_error', (error: Error) => {
+    socket.on('connect_error', () => {
       attemptCount++;
       if (attemptCount === 1) {
         console.error(`✗ Daemon not running at ${url}`);
@@ -1449,23 +1635,18 @@ export function createClient(
     });
   }
 
-  const client = feathers<ServiceTypes>() as AgorClient;
+  // The typed helper surfaces (`sessions` and `tasks`) are installed below as
+  // part of client construction. Cross through `unknown` deliberately rather
+  // than claiming that a bare Feathers application already satisfies the
+  // completed AgorClient contract.
+  const client = feathers<ServiceTypes>() as unknown as AgorClient;
 
   client.configure(socketio(socket));
-
-  // Configure authentication with localStorage if available (browser only).
-  // Node 25 exposes a `localStorage` global that is NOT a working Storage —
-  // it has no `setItem` method, so the Feathers auth client throws
-  // `_a.setItem is not a function` on first authenticate(). Guard against
-  // that by also requiring a callable setItem before treating it as Storage.
-  const _ls = (globalThis as { localStorage?: unknown }).localStorage as
-    | (Storage & { setItem?: unknown })
-    | undefined;
-  const storage =
-    options?.authStorage ??
-    (_ls && typeof _ls.setItem === 'function' ? (_ls as Storage) : undefined);
-
-  client.configure(authentication({ storage }));
+  // Socket identity is established exclusively by the namespace handshake.
+  // Deliberately do not configure Feathers' authentication client here: once
+  // its `authenticate()` method has run it automatically reauthenticates after
+  // reconnect, which would introduce a second, post-connect identity
+  // transition. REST clients retain the normal Feathers authentication API.
   client.io = socket;
 
   extendServiceFactory(client);
@@ -1494,10 +1675,3 @@ export async function isDaemonRunning(url: string = DEFAULT_DAEMON_URL): Promise
     return false;
   }
 }
-
-/**
- * Re-export Feathers authentication client for use in executor
- * This allows the executor to import authentication client through @agor/core
- * instead of having it as a direct dependency
- */
-export { default as authenticationClient } from '@feathersjs/authentication-client';

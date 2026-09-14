@@ -1,6 +1,6 @@
 // src/types/agentic-tool.ts
 
-import type { AgenticToolID } from './id';
+import type { AgenticToolID, UUID } from './id';
 import type { EffortLevel } from './session';
 
 /**
@@ -45,6 +45,9 @@ export const AGENTIC_TOOL_NAMES = [
 ] as const;
 
 export type AgenticToolName = (typeof AGENTIC_TOOL_NAMES)[number];
+
+/** Default used only while a user has not chosen a primary agentic tool. */
+export const DEFAULT_AGENTIC_TOOL_NAME: AgenticToolName = 'claude-code';
 
 /**
  * Removed tool identifiers that may still exist on persisted historical rows.
@@ -218,6 +221,16 @@ export interface AgenticToolCapabilities {
   /** Can spawn child sessions for subsessions */
   supportsChildSpawn: boolean;
   /**
+   * Whether the tool's SDK/config home can be reliably relocated to an
+   * Agor-chosen directory via environment variable(s), so its persisted state
+   * (transcripts, history, config, skills, plugins) lands wherever Agor points
+   * it. Derived from the presence of a per-tool env-var mapping — see
+   * {@link AgenticToolIntegration.configHomeOverride}; `false` when no reliable
+   * relocation mechanism exists (e.g. cursor, whose relocation is confirmed
+   * broken upstream). Non-sensitive: this type is browser-bundled.
+   */
+  supportsConfigHomeOverride: boolean;
+  /**
    * Supported reasoning-effort overrides. Absent when the runtime has no
    * effort control.
    */
@@ -282,6 +295,56 @@ export interface CodexAuthLogoutResult {
   status: 'removed';
 }
 
+/** Durable identity for one Codex device-sign-in attempt. */
+export type CodexDeviceAuthAttemptID = UUID & { readonly __entity: 'CodexDeviceAuthAttempt' };
+
+/**
+ * Internal PostgreSQL lifecycle for a Codex device-sign-in attempt. Public
+ * callers see the smaller {@link CodexDeviceAuthPhase} projection below.
+ */
+export type CodexDeviceAuthAttemptStatus =
+  | 'starting'
+  | 'pending'
+  | 'exchanging'
+  | 'persisting'
+  | 'succeeded'
+  | 'unavailable'
+  | 'denied'
+  | 'failed'
+  | 'ambiguous'
+  | 'expired'
+  | 'superseded'
+  | 'cancelled';
+
+/**
+ * Secret material sealed at rest for a durable Codex device-sign-in attempt.
+ * The database row binds this envelope to its exact tenant, user, attempt, and
+ * monotonic generation. It must never be logged, returned wholesale, or sent
+ * through realtime/Redis.
+ */
+export interface CodexDeviceAuthSealedMaterial {
+  version: 1;
+  attemptId: CodexDeviceAuthAttemptID;
+  tenantId: string;
+  userId: string;
+  attemptGeneration: number;
+  delegatedHomeKey: string | null;
+  codexHome?: string;
+  deviceAuthId?: string;
+  userCode?: string;
+}
+
+/**
+ * Result of removing a Claude subscription login via the daemon's
+ * `/claude-auth/logout` endpoint. Delete-only and Agor-scoped: it removes the
+ * managed `~/.claude/.credentials.json` from THIS server and clears the stored
+ * token + auth method; it does NOT revoke the OAuth tokens, so the account stays
+ * signed in elsewhere.
+ */
+export interface ClaudeAuthLogoutResult {
+  status: 'removed';
+}
+
 /**
  * Lifecycle of a ChatGPT device-code sign-in attempt driven by the daemon's
  * `/codex-auth/device` endpoints.
@@ -308,6 +371,8 @@ export type CodexDeviceAuthPhase =
  */
 export interface CodexDeviceAuthStatus {
   phase: CodexDeviceAuthPhase;
+  /** Opaque attempt identity used to keep reconnect/status behavior deterministic. */
+  attemptId?: CodexDeviceAuthAttemptID;
   /** One-time code the user enters on the verification page (pending only). */
   userCode?: string;
   /** Page where the user approves the code (pending only). */
@@ -317,4 +382,97 @@ export interface CodexDeviceAuthStatus {
   /** ChatGPT plan type parsed from the id_token after success, when present. */
   planType?: string;
   hint?: string;
+}
+
+/**
+ * Lifecycle of a Claude subscription OAuth sign-in driven by the daemon's
+ * `/claude-auth/oauth` endpoint.
+ *
+ * Unlike Codex, Anthropic exposes no device-authorization endpoint, so the
+ * daemon cannot poll for approval: the user approves in the browser and copies
+ * a `CODE#STATE` string back to Agor. The code travels user→Agor (the reverse
+ * of Codex), which is why there is an `awaiting_code` phase and no poll loop.
+ * See `context/explorations/claude-code-oauth-signin.md`.
+ *
+ * - `idle`: no attempt exists for this user.
+ * - `awaiting_code`: an authorize URL was issued; the daemon is waiting for the
+ *   user to approve and paste the `CODE#STATE` back.
+ * - `exchanging`: a pasted code was accepted and reserved the attempt; the
+ *   daemon is exchanging it and writing credentials. Blocks a concurrent submit.
+ * - `success`: the code was exchanged and `~/.claude/.credentials.json` written.
+ * - `expired`: the daemon-side PKCE/state freshness window elapsed unused.
+ * - `error`: the attempt failed for another reason; start a fresh one.
+ */
+export type ClaudeOAuthPhase =
+  | 'idle'
+  | 'awaiting_code'
+  | 'exchanging'
+  | 'success'
+  | 'expired'
+  | 'error';
+
+/**
+ * Non-secret status of a Claude OAuth sign-in attempt. The authorize URL is
+ * meant to be displayed; tokens and the PKCE verifier never appear here.
+ */
+export interface ClaudeOAuthStatus {
+  phase: ClaudeOAuthPhase;
+  /** Authorize page the user opens to approve (awaiting_code only). */
+  verificationUrl?: string;
+  /** ISO timestamp when the daemon-side attempt stops accepting a code. */
+  expiresAt?: string;
+  /** Subscription type parsed from the token response after success, when present. */
+  subscriptionType?: string;
+  hint?: string;
+  /**
+   * Identifies the attempt to the client that started it, so a reconnect landing
+   * on another replica can submit against the same attempt. Safe to expose: it
+   * is not the OAuth `state` capability, of which only a SHA-256 fingerprint is
+   * stored.
+   */
+  attemptId?: string;
+}
+
+/**
+ * Identifier of one durable Claude OAuth sign-in attempt.
+ *
+ * Echoed to the initiating client for status reads and resumption. Like the MCP
+ * attempt id it is deliberately NOT the OAuth `state`: the durable row keeps
+ * only a fingerprint of that high-entropy one-time value.
+ */
+export type ClaudeOAuthAttemptID = UUID & { readonly __brand: 'ClaudeOAuthAttemptID' };
+
+/** Durable lifecycle of a Claude subscription OAuth attempt. */
+export type ClaudeOAuthAttemptStatus =
+  | 'pending'
+  | 'exchanging'
+  | 'persisting'
+  | 'succeeded'
+  | 'failed'
+  | 'ambiguous'
+  | 'expired';
+
+/**
+ * Sealed exchange material for a Claude OAuth attempt.
+ *
+ * Only ever produced/consumed inside the daemon's OAuth authority, sealed with
+ * the deployment master secret and AAD-bound to the row it belongs to. The PKCE
+ * verifier lives here; raw OAuth `state` is never persisted, even encrypted.
+ */
+export interface ClaudeOAuthSealedMaterial {
+  version: 1;
+  attemptId: ClaudeOAuthAttemptID;
+  tenantId: string;
+  userId: string;
+  attemptGeneration: number;
+  /** PKCE verifier used only for the one-shot provider exchange. */
+  codeVerifier: string;
+  /**
+   * Execution home the credential must land in, fixed when the attempt started.
+   * Re-resolved and compared before the write so a mid-flow identity change
+   * cannot redirect the credential to a different home.
+   */
+  delegatedHomeKey: string | null;
+  /** Canonical exact tenant/user `.claude` directory used by the contained HA writer. */
+  claudeConfigDir?: string;
 }

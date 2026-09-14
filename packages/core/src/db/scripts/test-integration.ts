@@ -25,6 +25,7 @@ import {
   TaskRepository,
 } from '../repositories';
 import { sanitizeDbError } from '../sanitize-error';
+import { createUser } from '../user-utils';
 
 // Test database path
 const TEST_DB_PATH = 'file:/tmp/agor-test.db';
@@ -342,7 +343,12 @@ async function main() {
     console.log('🏗️  Initializing database...');
     const db = createDatabase({ url: TEST_DB_PATH });
     await initializeDatabase(db);
-    await seedInitialData(db);
+    const seedOwner = await createUser(db, {
+      email: 'integration-owner@agor.test',
+      password: 'integration-owner-password',
+      role: 'admin',
+    });
+    await seedInitialData(db, seedOwner.user_id);
     console.log('  ✅ Database initialized');
 
     // Run tests

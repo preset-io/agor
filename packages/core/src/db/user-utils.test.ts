@@ -5,18 +5,21 @@
  */
 
 import bcrypt from 'bcryptjs';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import { generateId } from '../lib/ids';
 import { dbTest } from './test-helpers';
 import {
   assertUsableBootstrapAdminPassword,
   type CreateUserData,
   createDefaultAdminUser,
+  createDevelopmentDefaultAdminUser,
   createUser,
   DEVELOPMENT_DEFAULT_ADMIN_USER,
   getUserByEmail,
   userExists,
 } from './user-utils';
+
+const TEST_PASSWORD = 'valid-test-password-123';
 
 /**
  * Create test user data
@@ -24,7 +27,7 @@ import {
 function createUserData(overrides?: Partial<CreateUserData>): CreateUserData {
   return {
     email: overrides?.email ?? `test-${generateId().slice(0, 8)}@example.com`,
-    password: overrides?.password ?? 'password123',
+    password: overrides?.password ?? TEST_PASSWORD,
     name: overrides?.name,
     role: overrides?.role,
   };
@@ -38,7 +41,7 @@ describe('createUser', () => {
   dbTest('should create user with all required fields', async ({ db }) => {
     const data = createUserData({
       email: 'test@example.com',
-      password: 'securepass123',
+      password: TEST_PASSWORD,
       name: 'Test User',
       role: 'member',
     });
@@ -62,7 +65,7 @@ describe('createUser', () => {
   dbTest('should create user with minimal required fields', async ({ db }) => {
     const data = createUserData({
       email: 'minimal@example.com',
-      password: 'pass123',
+      password: TEST_PASSWORD,
     });
 
     const user = await createUser(db, data);
@@ -78,7 +81,7 @@ describe('createUser', () => {
   dbTest('should hash password using bcrypt', async ({ db }) => {
     const data = createUserData({
       email: 'hash@example.com',
-      password: 'plaintext',
+      password: 'plaintext-but-long-enough',
     });
 
     await createUser(db, data);
@@ -89,18 +92,18 @@ describe('createUser', () => {
     });
 
     expect(result?.password).toBeDefined();
-    expect(result?.password).not.toBe('plaintext');
+    expect(result?.password).not.toBe('plaintext-but-long-enough');
     expect(result?.password).toMatch(/^\$2[aby]\$\d{2}\$/); // bcrypt hash pattern
 
     // Verify password can be verified
-    const isValid = await bcrypt.compare('plaintext', result!.password);
+    const isValid = await bcrypt.compare('plaintext-but-long-enough', result!.password);
     expect(isValid).toBe(true);
   });
 
   dbTest('should set admin emoji for admin role', async ({ db }) => {
     const data = createUserData({
       email: 'admin@example.com',
-      password: 'adminpass',
+      password: TEST_PASSWORD,
       role: 'admin',
     });
 
@@ -116,7 +119,7 @@ describe('createUser', () => {
     for (const role of roles) {
       const data = createUserData({
         email: `${role}@example.com`,
-        password: 'pass123',
+        password: TEST_PASSWORD,
         role,
       });
 
@@ -130,7 +133,7 @@ describe('createUser', () => {
   dbTest('should set star emoji for superadmin role', async ({ db }) => {
     const user = await createUser(
       db,
-      createUserData({ email: 'sa@example.com', password: 'pass', role: 'superadmin' })
+      createUserData({ email: 'sa@example.com', password: TEST_PASSWORD, role: 'superadmin' })
     );
     expect(user.emoji).toBe('⭐');
   });
@@ -138,7 +141,7 @@ describe('createUser', () => {
   dbTest('should default to member role if not specified', async ({ db }) => {
     const data = createUserData({
       email: 'default@example.com',
-      password: 'pass123',
+      password: TEST_PASSWORD,
     });
 
     const user = await createUser(db, data);
@@ -150,7 +153,7 @@ describe('createUser', () => {
   dbTest('should throw error if email already exists', async ({ db }) => {
     const data = createUserData({
       email: 'duplicate@example.com',
-      password: 'pass123',
+      password: TEST_PASSWORD,
     });
 
     await createUser(db, data);
@@ -163,12 +166,12 @@ describe('createUser', () => {
   dbTest('should allow different case emails (SQLite is case-sensitive)', async ({ db }) => {
     const data1 = createUserData({
       email: 'case@example.com',
-      password: 'pass123',
+      password: TEST_PASSWORD,
     });
 
     const data2 = createUserData({
       email: 'CASE@example.com',
-      password: 'pass456',
+      password: 'different-test-password-456',
     });
 
     const user1 = await createUser(db, data1);
@@ -195,7 +198,7 @@ describe('createUser', () => {
   dbTest('should initialize preferences as empty object', async ({ db }) => {
     const data = createUserData({
       email: 'prefs@example.com',
-      password: 'pass123',
+      password: TEST_PASSWORD,
     });
 
     const user = await createUser(db, data);
@@ -217,7 +220,7 @@ describe('createUser', () => {
   dbTest('should handle special characters in email', async ({ db }) => {
     const data = createUserData({
       email: 'test+tag@example.co.uk',
-      password: 'pass123',
+      password: TEST_PASSWORD,
     });
 
     const user = await createUser(db, data);
@@ -228,7 +231,7 @@ describe('createUser', () => {
   dbTest('should handle special characters in name', async ({ db }) => {
     const data = createUserData({
       email: 'special@example.com',
-      password: 'pass123',
+      password: TEST_PASSWORD,
       name: "O'Brien-Smith (née Jones)",
     });
 
@@ -237,8 +240,8 @@ describe('createUser', () => {
     expect(user.name).toBe("O'Brien-Smith (née Jones)");
   });
 
-  dbTest('should handle long passwords', async ({ db }) => {
-    const longPassword = 'a'.repeat(200);
+  dbTest("should handle a password at bcrypt's byte limit", async ({ db }) => {
+    const longPassword = `${'limit-'.repeat(11)}123456`;
     const data = createUserData({
       email: 'long@example.com',
       password: longPassword,
@@ -255,6 +258,12 @@ describe('createUser', () => {
 
     const isValid = await bcrypt.compare(longPassword, result!.password);
     expect(isValid).toBe(true);
+  });
+
+  dbTest("should reject passwords above bcrypt's byte limit", async ({ db }) => {
+    await expect(
+      createUser(db, createUserData({ email: 'too-long@example.com', password: 'x'.repeat(73) }))
+    ).rejects.toThrow(/at most 72 UTF-8 bytes/);
   });
 });
 
@@ -386,7 +395,7 @@ describe('getUserByEmail', () => {
   dbTest('should handle user with undefined optional fields', async ({ db }) => {
     const data = createUserData({
       email: 'minimal@example.com',
-      password: 'pass123',
+      password: TEST_PASSWORD,
     });
     await createUser(db, data);
 
@@ -410,7 +419,7 @@ describe('getUserByEmail', () => {
   });
 
   dbTest('should not expose password in returned user object', async ({ db }) => {
-    await createUser(db, createUserData({ email: 'secure@example.com', password: 'secret123' }));
+    await createUser(db, createUserData({ email: 'secure@example.com', password: TEST_PASSWORD }));
 
     const user = await getUserByEmail(db, 'secure@example.com');
 
@@ -450,7 +459,7 @@ describe('assertUsableBootstrapAdminPassword', () => {
   });
 
   it('rejects too-short passwords', () => {
-    expect(() => assertUsableBootstrapAdminPassword('short')).toThrow(/at least 8 characters/);
+    expect(() => assertUsableBootstrapAdminPassword('short')).toThrow(/at least 15 characters/);
   });
 
   it('accepts a usable password', () => {
@@ -515,7 +524,7 @@ describe('createDefaultAdminUser', () => {
     // Create a user with the admin email manually
     await createUser(db, {
       email: 'admin@agor.live',
-      password: 'different',
+      password: 'different-valid-password',
       name: 'Different User',
       role: 'member',
     });
@@ -543,6 +552,62 @@ describe('createDefaultAdminUser', () => {
     // Verify original admin still exists unchanged
     const found = await getUserByEmail(db, 'admin@agor.live');
     expect(found?.user_id).toBe(admin1.user_id);
+  });
+});
+
+describe('createDevelopmentDefaultAdminUser', () => {
+  const savedEnvironment = {
+    NODE_ENV: process.env.NODE_ENV,
+    AGOR_ADMIN_PASSWORD: process.env.AGOR_ADMIN_PASSWORD,
+    AGOR_ALLOW_DEVELOPMENT_DEFAULT_ADMIN: process.env.AGOR_ALLOW_DEVELOPMENT_DEFAULT_ADMIN,
+  };
+
+  function setEnvironment(values: Record<string, string | undefined>) {
+    for (const [name, value] of Object.entries(values)) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+  }
+
+  afterEach(() => setEnvironment(savedEnvironment));
+
+  dbTest('requires every part of the development gate', async ({ db }) => {
+    for (const env of [
+      {
+        NODE_ENV: 'production',
+        AGOR_ADMIN_PASSWORD: 'admin',
+        AGOR_ALLOW_DEVELOPMENT_DEFAULT_ADMIN: 'true',
+      },
+      {
+        NODE_ENV: 'test',
+        AGOR_ADMIN_PASSWORD: 'admin',
+        AGOR_ALLOW_DEVELOPMENT_DEFAULT_ADMIN: undefined,
+      },
+      {
+        NODE_ENV: 'test',
+        AGOR_ADMIN_PASSWORD: undefined,
+        AGOR_ALLOW_DEVELOPMENT_DEFAULT_ADMIN: 'true',
+      },
+    ]) {
+      setEnvironment(env);
+      await expect(createDevelopmentDefaultAdminUser(db)).rejects.toThrow();
+    }
+  });
+
+  dbTest('creates only the exact development identity with the complete gate', async ({ db }) => {
+    setEnvironment({
+      NODE_ENV: 'test',
+      AGOR_ADMIN_PASSWORD: 'admin',
+      AGOR_ALLOW_DEVELOPMENT_DEFAULT_ADMIN: 'true',
+    });
+    const admin = await createDevelopmentDefaultAdminUser(db);
+    expect(admin).toMatchObject({
+      email: 'admin@agor.live',
+      name: 'Admin',
+      role: 'superadmin',
+      unix_username: 'admin',
+      must_change_password: false,
+    });
   });
 });
 
@@ -606,7 +671,7 @@ describe('User utilities integration', () => {
 
   dbTest('should work alongside default admin user', async ({ db }) => {
     // Create default admin
-    const admin = await createDefaultAdminUser(db, { allowDevelopmentDefault: true });
+    const admin = await createDefaultAdminUser(db, { password: 'explicit-secret' });
 
     // Create regular users
     const user1 = await createUser(db, createUserData({ email: 'user1@example.com' }));

@@ -161,7 +161,7 @@ describe('MCP capability follows current role, not ownership alone', () => {
 
   it('takes effect on the next request, without waiting for a re-login', async () => {
     // The floor reads `params.user.role`, which is not a JWT claim: the token
-    // carries only the subject, and `ServiceJWTStrategy.getEntity` loads the
+    // carries only the subject, and `RuntimeJWTStrategy.getEntity` loads the
     // user row from the database on every authenticated request. So a demotion
     // lands on the next call rather than whenever the session's token expires,
     // and there is no stale-credential window to close separately.
@@ -212,7 +212,7 @@ describe('MCP capability follows current role, not ownership alone', () => {
     await expect(call(MCP_CAPABILITY_ISSUING_SERVICE_PATHS[0])).resolves.toBeDefined();
   });
 
-  it('leaves internal daemon calls and executor service accounts alone', async () => {
+  it('leaves internal daemon calls and explicit daemon service accounts alone', async () => {
     const { demoteTo } = await buildDaemon('member');
     await demoteTo('viewer');
 
@@ -227,7 +227,7 @@ describe('MCP capability follows current role, not ownership alone', () => {
     // No provider: a daemon-to-daemon call, which carries no role to floor.
     await expect(app.service(path).create({} as never)).resolves.toEqual({ success: true });
 
-    // The executor's service account, likewise.
+    // An explicit daemon service account, likewise.
     await expect(
       app.service(path).create(
         {} as never,
@@ -328,6 +328,83 @@ describe('a grant cannot become durable for a subject who lost standing', () => 
       serverId as never
     );
     expect(row, 'no grant may survive a refused write').toBeFalsy();
+  });
+
+  it('attributes shared consent only to flow authority, never token/request fields or server owner', async () => {
+    const { user: owner, rawDb, serverId } = await buildDaemon('admin');
+    const consenter = await new UsersRepository(rawDb).create({
+      email: 'actual-consenter@example.test',
+      role: 'admin',
+    });
+    await persistOAuthToken(
+      rawDb,
+      {
+        ...token,
+        granted_by_user_id: owner.user_id,
+      } as typeof token,
+      {
+        ...flowFor(serverId, consenter.user_id, 'shared'),
+        granted_by_user_id: owner.user_id,
+      } as ReturnType<typeof flowFor>,
+      'Test'
+    );
+    const grants = new UserMCPOAuthTokenRepository(rawDb);
+    expect(await grants.getToken(null, serverId as never)).toMatchObject({
+      granted_by_user_id: consenter.user_id,
+    });
+    await new UsersRepository(rawDb).delete(owner.user_id);
+    expect(await grants.getToken(null, serverId as never)).toMatchObject({
+      granted_by_user_id: consenter.user_id,
+    });
+    await expect(
+      persistOAuthToken(
+        rawDb,
+        token,
+        {
+          mcpServerId: serverId,
+          oauthMode: 'shared',
+        },
+        'Test'
+      )
+    ).rejects.toThrow(/consenting user binding/);
+  });
+
+  it('fences deletion after the entitlement read but before callback token persistence', async () => {
+    const { user, rawDb, serverId } = await buildDaemon('admin');
+    let reached!: () => void;
+    let release!: () => void;
+    const atWrite = new Promise<void>((resolve) => {
+      reached = resolve;
+    });
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const originalSave = UserMCPOAuthTokenRepository.prototype.saveToken;
+    const spy = vi
+      .spyOn(UserMCPOAuthTokenRepository.prototype, 'saveToken')
+      .mockImplementation(async function (this: UserMCPOAuthTokenRepository, ...args) {
+        reached();
+        await gate;
+        return originalSave.apply(this, args);
+      });
+    const completion = persistOAuthToken(
+      rawDb,
+      token,
+      flowFor(serverId, user.user_id, 'shared'),
+      'Test'
+    );
+    const rejected = expect(completion).rejects.toThrow();
+    try {
+      await atWrite;
+      await new UsersRepository(rawDb).delete(user.user_id);
+    } finally {
+      release();
+      spy.mockRestore();
+    }
+    await rejected;
+    expect(
+      await new UserMCPOAuthTokenRepository(rawDb).getToken(null, serverId as never)
+    ).toBeNull();
   });
 
   it('holds a shared grant to admin at the write, as flow start already does', async () => {

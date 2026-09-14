@@ -15,14 +15,16 @@ describe('extractCodexTokenUsage', () => {
   });
 
   it('maps the realistic @openai/codex-sdk Usage shape and derives total_tokens', () => {
-    // Matches the actual TurnCompletedEvent.usage shape in @openai/codex-sdk >= 0.133:
-    // input_tokens, cached_input_tokens, output_tokens, reasoning_output_tokens.
+    // Matches the actual TurnCompletedEvent.usage shape in @openai/codex-sdk 0.153:
+    // input_tokens, cached_input_tokens, cache_write_input_tokens, output_tokens,
+    // reasoning_output_tokens.
     // The SDK does NOT emit total_tokens — we derive it from input + output.
     // reasoning_output_tokens is a SUBSET of output_tokens (Responses API), so it
     // must NOT be added to the total.
     const result = extractCodexTokenUsage({
       input_tokens: 1200,
       cached_input_tokens: 300,
+      cache_write_input_tokens: 125,
       output_tokens: 800,
       reasoning_output_tokens: 200,
     });
@@ -31,6 +33,7 @@ describe('extractCodexTokenUsage', () => {
       input_tokens: 1200,
       output_tokens: 800,
       cache_read_tokens: 300,
+      cache_creation_tokens: 125,
       total_tokens: 2000, // input + output; reasoning_output_tokens is NOT added
     });
   });

@@ -16,7 +16,6 @@
  */
 
 import { randomBytes } from 'node:crypto';
-import { v7 as uuidv7 } from 'uuid';
 import {
   findByShortIdPrefix,
   SHORT_ID_LENGTH,
@@ -24,6 +23,7 @@ import {
   toShortId,
   URL_SHORT_ID_LENGTH,
 } from '../types/id';
+import { uuidV7FromRandomBytes } from './uuid-v7';
 
 export { findByShortIdPrefix, SHORT_ID_LENGTH, shortId, toShortId, URL_SHORT_ID_LENGTH };
 
@@ -91,7 +91,7 @@ export type IDPrefix = string;
  * // => "01933e4a-7b89-7c35-a8f3-9d2e1c4b5a6f"
  */
 export function generateId(): UUID {
-  return uuidv7({ random: randomBytes(16) }) as UUID;
+  return uuidV7FromRandomBytes(randomBytes(16)) as UUID;
 }
 
 // ============================================================================

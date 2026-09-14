@@ -12,10 +12,10 @@ import jwt from 'jsonwebtoken';
 import { describe, expect, it, vi } from 'vitest';
 import { RUNTIME_JWT_AUDIENCE, RUNTIME_JWT_ISSUER } from '../auth/runtime-tokens.js';
 import {
-  createFreshTenantWriteDatabaseRunner,
   createTenantDatabaseScopeAroundHook,
+  createTenantWriteAdmissionAroundHook,
   deferWithTenantContext,
-  deferWithTenantDatabaseScope,
+  withFreshTenantWrite,
 } from './tenant-db-scope.js';
 
 function makePgDb() {
@@ -38,7 +38,7 @@ function signRuntimeJwt(secret: string, payload: Record<string, unknown>) {
   });
 }
 
-describe('createFreshTenantWriteDatabaseRunner', () => {
+describe('withFreshTenantWrite', () => {
   it('remains a no-op write gate on the single-tenant SQLite path', async () => {
     const db = createDatabase({ url: ':memory:' });
     const work = vi.fn(async () => {
@@ -46,9 +46,7 @@ describe('createFreshTenantWriteDatabaseRunner', () => {
       return 'written';
     });
 
-    await expect(createFreshTenantWriteDatabaseRunner(db, 'default')(work)).resolves.toBe(
-      'written'
-    );
+    await expect(withFreshTenantWrite(db, 'default', work)).resolves.toBe('written');
     expect(work).toHaveBeenCalledOnce();
   });
 
@@ -63,11 +61,9 @@ describe('createFreshTenantWriteDatabaseRunner', () => {
         });
       }),
     };
-    const runMutation = createFreshTenantWriteDatabaseRunner(db as never, 'tenant-a');
-
     await runWithTenantDatabaseScope(db as never, 'tenant-a', async () => {
       expect(getCurrentTenantDatabaseScope()?.db).toMatchObject({ marker: 'tx-1' });
-      await runMutation(async () => {
+      await withFreshTenantWrite(db as never, 'tenant-a', async () => {
         expect(getCurrentTenantId()).toBe('tenant-a');
         expect(getCurrentTenantDatabaseScope()?.db).toMatchObject({ marker: 'tx-2' });
       });
@@ -95,16 +91,123 @@ describe('createFreshTenantWriteDatabaseRunner', () => {
     const db = {
       transaction: vi.fn(async (callback: (scoped: unknown) => Promise<unknown>) => callback(tx)),
     };
-    const runMutation = createFreshTenantWriteDatabaseRunner(db as never, 'tenant-frozen');
-
-    await expect(runMutation(work)).rejects.toBeInstanceOf(TenantWriteGateActiveError);
+    await expect(withFreshTenantWrite(db as never, 'tenant-frozen', work)).rejects.toBeInstanceOf(
+      TenantWriteGateActiveError
+    );
     expect(work).not.toHaveBeenCalled();
   });
 
   it('fails closed when no trusted tenant identity is available', () => {
-    expect(() => createFreshTenantWriteDatabaseRunner({} as never, undefined)).toThrow(
+    expect(() => withFreshTenantWrite({} as never, undefined, async () => undefined)).toThrow(
       'Missing tenant context'
     );
+  });
+});
+
+describe('createTenantWriteAdmissionAroundHook', () => {
+  it('fails closed before a recognized write when tenant identity is missing', async () => {
+    const { db } = makePgDb();
+    const hook = createTenantWriteAdmissionAroundHook(db as never);
+    const next = vi.fn(async () => undefined);
+
+    await expect(hook({ method: 'create', params: {} } as never, next)).rejects.toBeInstanceOf(
+      NotAuthenticated
+    );
+
+    expect(next).not.toHaveBeenCalled();
+    expect(db.transaction).not.toHaveBeenCalled();
+  });
+
+  it('composes with the installed identity-only scope without retaining its admission transaction', async () => {
+    const { db, tx } = makePgDb();
+    const identity = createTenantDatabaseScopeAroundHook({
+      db: db as never,
+      jwtSecret: 'secret',
+      config: { multi_tenancy: { mode: 'static', static_tenant_id: 'tenant-long' } },
+      transaction: false,
+    });
+    const admission = createTenantWriteAdmissionAroundHook(db as never);
+    const context = { method: 'create', params: {} } as never;
+    const next = vi.fn(async () => {
+      expect(getCurrentTenantId()).toBe('tenant-long');
+      expect(getCurrentTenantDatabaseScope()).toBeUndefined();
+    });
+
+    await identity(context, () => admission(context, next));
+
+    expect(next).toHaveBeenCalledOnce();
+    expect(db.transaction).toHaveBeenCalledOnce();
+    expect(tx.execute).toHaveBeenCalledTimes(2);
+  });
+
+  it('checks a mutation in one short unit without holding it across long work', async () => {
+    const { db, tx } = makePgDb();
+    const hook = createTenantWriteAdmissionAroundHook(db as never);
+    const next = vi.fn(async () => {
+      expect(getCurrentTenantId()).toBeUndefined();
+      expect(getCurrentTenantDatabaseScope()).toBeUndefined();
+    });
+
+    await hook(
+      {
+        method: 'create',
+        params: { tenant: { tenant_id: 'tenant-long', source: 'explicit' } },
+      } as never,
+      next
+    );
+
+    expect(next).toHaveBeenCalledOnce();
+    expect(db.transaction).toHaveBeenCalledOnce();
+    expect(tx.execute).toHaveBeenCalledTimes(2);
+  });
+
+  it('rejects a long mutation before its handler when the tenant is frozen', async () => {
+    const tx = {
+      execute: vi
+        .fn()
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([
+          {
+            value_text: JSON.stringify({
+              generation: 'gate-generation',
+              acquiredAt: '2026-08-24T00:00:00.000Z',
+            }),
+          },
+        ]),
+    };
+    const db = {
+      transaction: vi.fn(async (work: (transaction: unknown) => Promise<unknown>) => work(tx)),
+    };
+    const hook = createTenantWriteAdmissionAroundHook(db as never);
+    const next = vi.fn(async () => undefined);
+
+    await expect(
+      hook(
+        {
+          method: 'create',
+          params: { tenant: { tenant_id: 'tenant-frozen', source: 'explicit' } },
+        } as never,
+        next
+      )
+    ).rejects.toMatchObject({ code: 503 });
+    expect(next).not.toHaveBeenCalled();
+  });
+
+  it('does not query the write gate for a recognized custom read', async () => {
+    const { db } = makePgDb();
+    const hook = createTenantWriteAdmissionAroundHook(db as never);
+    const next = vi.fn(async () => undefined);
+
+    await hook(
+      {
+        method: 'getPrimaryTeammate',
+        params: { tenant: { tenant_id: 'tenant-read', source: 'explicit' } },
+      } as never,
+      next
+    );
+
+    expect(next).toHaveBeenCalledOnce();
+    expect(db.transaction).not.toHaveBeenCalled();
   });
 });
 
@@ -309,100 +412,6 @@ describe('createTenantDatabaseScopeAroundHook', () => {
       tenant_id: 'tenant-a',
       source: 'explicit',
     });
-  });
-
-  it('re-enters a fresh tenant scope for deferred executor session startup', async () => {
-    const { db } = makePgDb();
-    const hook = createTenantDatabaseScopeAroundHook({
-      db: db as never,
-      jwtSecret: 'secret',
-      config: {
-        database: { dialect: 'postgresql' },
-        multi_tenancy: { mode: 'required_from_auth', auth_claim: 'tenant_id' },
-      },
-    });
-    const context = {
-      params: { provider: 'rest', authentication: { payload: { tenant_id: 'tenant-a' } } },
-    } as never;
-    const sessionRepo = {
-      async findById(sessionId: string) {
-        return getCurrentTenantId() === 'tenant-a'
-          ? { session_id: sessionId, tenant_id: 'tenant-a' }
-          : null;
-      },
-    };
-
-    await new Promise<void>((resolve, reject) => {
-      hook(context, async () => {
-        deferWithTenantDatabaseScope(
-          db as never,
-          (context as { params: { tenant?: { tenant_id?: string } } }).params,
-          async () => {
-            const session = await sessionRepo.findById('session-1');
-            expect(session).toEqual({ session_id: 'session-1', tenant_id: 'tenant-a' });
-            resolve();
-          },
-          reject
-        );
-      }).catch(reject);
-    });
-  });
-
-  it('waits until the active tenant transaction commits before running deferred work', async () => {
-    const events: string[] = [];
-    const tx = { execute: vi.fn(async () => []) };
-    const db = {
-      transaction: vi.fn(async (callback: (tx: unknown) => Promise<unknown>) => {
-        events.push('tx:start');
-        const result = await callback(tx);
-        events.push('tx:committed');
-        return result;
-      }),
-    };
-
-    const done = new Promise<void>((resolve, reject) => {
-      runWithTenantDatabaseScope(db as never, 'tenant-a', async () => {
-        deferWithTenantDatabaseScope(
-          db as never,
-          {},
-          async () => {
-            events.push(`work:${getCurrentTenantId()}`);
-            resolve();
-          },
-          reject
-        );
-        events.push('scheduled');
-      }).catch(reject);
-    });
-
-    await done;
-    await new Promise((resolve) => setImmediate(resolve));
-
-    expect(events).toEqual([
-      'tx:start',
-      'scheduled',
-      'tx:committed',
-      'tx:start',
-      'tx:committed',
-      'tx:start',
-      'work:tenant-a',
-      'tx:committed',
-    ]);
-  });
-
-  it('fails deferred tenant-scoped work loudly when no tenant can be resolved', async () => {
-    const { db } = makePgDb();
-    const onError = vi.fn();
-    const work = vi.fn(async () => undefined);
-
-    deferWithTenantDatabaseScope(db as never, {}, work, onError);
-
-    expect(work).not.toHaveBeenCalled();
-    expect(onError).toHaveBeenCalledWith(
-      expect.objectContaining({
-        message: 'Missing tenant context for deferred tenant-scoped work',
-      })
-    );
   });
 
   it('documents the failed startup mode when deferred work only exits ALS', async () => {

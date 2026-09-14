@@ -16,13 +16,13 @@ interface TeammateTabProps {
   canEdit: boolean;
   state: TeammateFormState;
   setField: <K extends keyof TeammateFormState>(key: K, value: TeammateFormState[K]) => void;
-  // Board + default MCP servers are folded in here from the General tab, which
-  // teammates no longer show. Git-mechanics fields (Issue / PR URL) are dropped
-  // for teammates — they don't apply to a persistent AI companion.
-  boards: Board[];
-  mcpServers: MCPServer[];
-  general: GeneralFormState;
-  setGeneral: <K extends keyof GeneralFormState>(key: K, value: GeneralFormState[K]) => void;
+  // Board + default MCP servers can be folded in here from the General tab.
+  // Optional: when omitted (the current BranchModal layout keeps a separate
+  // General tab), the folded Board/MCP section simply isn't rendered.
+  boards?: Board[];
+  mcpServers?: MCPServer[];
+  general?: GeneralFormState;
+  setGeneral?: <K extends keyof GeneralFormState>(key: K, value: GeneralFormState[K]) => void;
 }
 
 export const TeammateTab: React.FC<TeammateTabProps> = ({
@@ -84,29 +84,33 @@ export const TeammateTab: React.FC<TeammateTabProps> = ({
             />
           </Form.Item>
 
-          <Form.Item label="Board" style={FIELD_WIDTHS.short}>
-            <Select
-              value={general.boardId}
-              onChange={(value) => setGeneral('boardId', value)}
-              placeholder="Select board (optional)..."
-              allowClear
-              disabled={!canEdit}
-              options={boardSelectOptions(boards, branchById)}
-            />
-          </Form.Item>
-          <Form.Item
-            label="MCP Servers"
-            tooltip="Default MCP servers for new sessions with this teammate"
-            style={FIELD_WIDTHS.medium}
-          >
-            <MCPServerSelect
-              mcpServers={mcpServers}
-              value={general.mcpServerIds}
-              onChange={(value) => setGeneral('mcpServerIds', value)}
-              placeholder="Select default MCP servers..."
-              disabled={!canEdit}
-            />
-          </Form.Item>
+          {general && setGeneral && (
+            <>
+              <Form.Item label="Board" style={FIELD_WIDTHS.short}>
+                <Select
+                  value={general.boardId}
+                  onChange={(value) => setGeneral('boardId', value)}
+                  placeholder="Select board (optional)..."
+                  allowClear
+                  disabled={!canEdit}
+                  options={boardSelectOptions(boards ?? [], branchById)}
+                />
+              </Form.Item>
+              <Form.Item
+                label="MCP Servers"
+                tooltip="Default MCP servers for new sessions with this teammate"
+                style={FIELD_WIDTHS.medium}
+              >
+                <MCPServerSelect
+                  mcpServers={mcpServers ?? []}
+                  value={general.mcpServerIds}
+                  onChange={(value) => setGeneral('mcpServerIds', value)}
+                  placeholder="Select default MCP servers..."
+                  disabled={!canEdit}
+                />
+              </Form.Item>
+            </>
+          )}
         </Form>
 
         {/* Read-only metadata */}

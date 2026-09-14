@@ -5,14 +5,7 @@
  * Not to be confused with AI agents (internal personas)
  */
 
-import type {
-  AgenticToolName,
-  ExecutorPulseKind,
-  Message,
-  MessageID,
-  SessionID,
-  TaskID,
-} from '@agor/core/types';
+import type { AgenticToolName, ExecutorPulseKind, Message, MessageID } from '@agor/core/types';
 
 /**
  * Supported tool types
@@ -27,7 +20,7 @@ export type ToolType = AgenticToolName;
  *
  * Example usage:
  * ```typescript
- * streamingCallbacks.onStreamStart(messageId, { session_id, task_id, role, timestamp });
+ * streamingCallbacks.onStreamStart(messageId, { role, timestamp });
  * // ... stream chunks ...
  * streamingCallbacks.onStreamChunk(messageId, "Hello world");
  * streamingCallbacks.onStreamEnd(messageId);
@@ -47,8 +40,6 @@ export interface StreamingCallbacks {
   onStreamStart(
     messageId: MessageID,
     metadata: {
-      session_id: SessionID;
-      task_id?: TaskID;
       role: string;
       timestamp: string;
     }

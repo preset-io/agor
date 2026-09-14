@@ -1,3 +1,4 @@
+import { classifyBranchFilesystemReadiness } from '@agor/core/types';
 import type { AgorClient, Branch } from '@agor-live/client';
 
 export interface WaitForBranchFilesystemReadyOptions {
@@ -16,7 +17,7 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 export async function waitForBranchFilesystemReady(
   client: AgorClient | null | undefined,
   branchId: string,
-  { timeoutMs = 30_000, intervalMs = 500 }: WaitForBranchFilesystemReadyOptions = {}
+  { timeoutMs = 30_000, intervalMs = 1_000 }: WaitForBranchFilesystemReadyOptions = {}
 ): Promise<void> {
   if (!client) return;
 
@@ -26,16 +27,20 @@ export async function waitForBranchFilesystemReady(
   while (Date.now() < deadline) {
     const branch = (await client.service('branches').get(branchId)) as Branch;
     lastStatus = branch.filesystem_status;
+    const readiness = classifyBranchFilesystemReadiness(branch);
 
-    // Legacy rows may not have a filesystem_status; treat missing as ready.
-    if (!lastStatus || lastStatus === 'ready') return;
+    if (readiness === 'ready') return;
 
-    if (lastStatus === 'failed') {
+    if (readiness === 'failed') {
       throw new Error(branch.error_message || 'Branch filesystem creation failed');
     }
 
-    if (lastStatus === 'deleted' || lastStatus === 'cleaned' || lastStatus === 'preserved') {
-      throw new Error(`Branch filesystem is ${lastStatus}`);
+    if (readiness === 'unavailable') {
+      throw new Error(
+        branch.archived
+          ? 'Branch is archived'
+          : `Branch filesystem is ${lastStatus ?? 'unavailable'}`
+      );
     }
 
     await sleep(intervalMs);

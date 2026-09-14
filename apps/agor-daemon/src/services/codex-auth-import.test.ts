@@ -1,8 +1,9 @@
 import { isTenantAgenticToolEnabled, loadConfigSync } from '@agor/core/config';
 import { runWithTenantContext } from '@agor/core/db';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { writeCodexAuthViaExecutor } from '../utils/executor-codex-auth.js';
+import { writeCodexAuthCredential } from '../utils/executor-codex-auth.js';
 import { createCodexAuthImportService } from './codex-auth-import';
+import { CODEX_AUTH_DEFER_USER_REALTIME } from './codex-auth-shared.js';
 
 vi.mock('@agor/core/config', async () => {
   const actual = await vi.importActual<typeof import('@agor/core/config')>('@agor/core/config');
@@ -26,13 +27,13 @@ vi.mock('../utils/executor-codex-auth.js', async () => {
   );
   return {
     ...actual,
-    writeCodexAuthViaExecutor: vi.fn(),
+    writeCodexAuthCredential: vi.fn(),
   };
 });
 
 const isTenantAgenticToolEnabledMock = vi.mocked(isTenantAgenticToolEnabled);
 const loadConfigSyncMock = vi.mocked(loadConfigSync);
-const writeCodexAuthViaExecutorMock = vi.mocked(writeCodexAuthViaExecutor);
+const writeCodexAuthCredentialMock = vi.mocked(writeCodexAuthCredential);
 
 const TEST_DB = { run: vi.fn() } as never;
 
@@ -59,8 +60,13 @@ const AUTH_PARAMS = {
   user: { user_id: 'user-1', email: 'u@example.com', role: 'member' },
 } as never;
 
-function service(app: { service: () => unknown }) {
-  const delegate = createCodexAuthImportService(app as never, TEST_DB);
+function service(app: { service: () => unknown }, invalidateCredentialBinds = vi.fn()) {
+  const delegate = createCodexAuthImportService(
+    app as never,
+    TEST_DB,
+    undefined,
+    invalidateCredentialBinds
+  );
   return {
     create: (...args: Parameters<typeof delegate.create>) =>
       runWithTenantContext('tenant-test', () => delegate.create(...args)),
@@ -71,14 +77,14 @@ beforeEach(() => {
   vi.clearAllMocks();
   isTenantAgenticToolEnabledMock.mockResolvedValue(true);
   loadConfigSyncMock.mockReturnValue({ execution: { unix_user_mode: 'simple' } } as never);
-  writeCodexAuthViaExecutorMock.mockResolvedValue({ authMode: 'chatgpt' });
+  writeCodexAuthCredentialMock.mockResolvedValue({ authMode: 'chatgpt' });
 });
 
 describe('codex-auth-import', () => {
   it('rejects unauthenticated callers before touching anything', async () => {
     const { app } = makeApp();
     await expect(service(app).create({ authJson: VALID_AUTH_JSON })).rejects.toThrow(/Sign in/);
-    expect(writeCodexAuthViaExecutorMock).not.toHaveBeenCalled();
+    expect(writeCodexAuthCredentialMock).not.toHaveBeenCalled();
   });
 
   it('rejects hosted multi-tenant mode', async () => {
@@ -89,7 +95,7 @@ describe('codex-auth-import', () => {
     await expect(service(app).create({ authJson: VALID_AUTH_JSON }, AUTH_PARAMS)).rejects.toThrow(
       /hosted multi-tenant/
     );
-    expect(writeCodexAuthViaExecutorMock).not.toHaveBeenCalled();
+    expect(writeCodexAuthCredentialMock).not.toHaveBeenCalled();
   });
 
   it('admits hosted auth-file import with persistent per-user executor homes', async () => {
@@ -123,7 +129,7 @@ describe('codex-auth-import', () => {
     await expect(service(app).create({ authJson: 'not json' }, AUTH_PARAMS)).rejects.toThrow(
       /valid JSON/
     );
-    expect(writeCodexAuthViaExecutorMock).not.toHaveBeenCalled();
+    expect(writeCodexAuthCredentialMock).not.toHaveBeenCalled();
   });
 
   it('rejects a credential-free file', async () => {
@@ -131,31 +137,98 @@ describe('codex-auth-import', () => {
     await expect(
       service(app).create({ authJson: JSON.stringify({ tokens: {} }) }, AUTH_PARAMS)
     ).rejects.toThrow(/codex login/);
-    expect(writeCodexAuthViaExecutorMock).not.toHaveBeenCalled();
+    expect(writeCodexAuthCredentialMock).not.toHaveBeenCalled();
   });
 
   it('writes, verifies, flips the auth method, and returns non-secret metadata only', async () => {
     const { app, usersService } = makeApp();
-    const result = await service(app).create({ authJson: VALID_AUTH_JSON }, AUTH_PARAMS);
+    const invalidateCredentialBinds = vi.fn(async () => undefined);
+    const result = await service(app, invalidateCredentialBinds).create(
+      { authJson: VALID_AUTH_JSON },
+      AUTH_PARAMS
+    );
 
-    expect(writeCodexAuthViaExecutorMock).toHaveBeenCalledTimes(1);
-    const [writtenContent, routing] = writeCodexAuthViaExecutorMock.mock.calls[0];
+    expect(writeCodexAuthCredentialMock).toHaveBeenCalledTimes(1);
+    const [writtenContent, routing] = writeCodexAuthCredentialMock.mock.calls[0];
     expect(JSON.parse(writtenContent)).toEqual(JSON.parse(VALID_AUTH_JSON));
     expect(routing).toEqual({ delegatedHomeKey: null, userId: 'user-1', codexHome: undefined });
 
     expect(usersService.patch).toHaveBeenCalledWith(
       'user-1',
-      { agentic_auth_methods: { 'claude-code': 'api_key', codex: 'subscription' } },
+      { agentic_auth_methods: { codex: 'subscription' } },
       expect.objectContaining({ authenticated: true })
     );
 
     expect(result).toMatchObject({ status: 'authenticated', authMode: 'chatgpt' });
+    expect(invalidateCredentialBinds).toHaveBeenCalledWith({
+      tenantId: 'tenant-test',
+      userId: 'user-1',
+      reason: 'credentials_imported',
+    });
     expect(JSON.stringify(result)).not.toContain('refresh-xyz');
     expect(JSON.stringify(result)).not.toContain('access-abc');
   });
 
+  it('generation-fences HA import and defers its users event until commit', async () => {
+    const { app, usersService } = makeApp();
+    const coordinator = {
+      runCredentialMutation: vi.fn(
+        async (
+          _tenantId: string,
+          _userId: string,
+          _reason: string,
+          work: (generation: number) => Promise<unknown>
+        ) => work(41)
+      ),
+    };
+    const delegate = createCodexAuthImportService(app as never, TEST_DB, coordinator as never);
+
+    await runWithTenantContext('tenant-test', () =>
+      delegate.create({ authJson: VALID_AUTH_JSON }, AUTH_PARAMS)
+    );
+
+    expect(writeCodexAuthCredentialMock).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ userId: 'user-1' }),
+      41
+    );
+    expect(usersService.patch.mock.calls[0]?.[2]).toMatchObject({
+      authenticated: true,
+      [CODEX_AUTH_DEFER_USER_REALTIME]: true,
+    });
+  });
+
+  it('revalidates the route after mutation authority wins and never writes a retired home', async () => {
+    const { app } = makeApp();
+    const coordinator = {
+      runCredentialMutation: vi.fn(
+        async (
+          _tenantId: string,
+          _userId: string,
+          _reason: string,
+          work: (generation?: number) => Promise<unknown>,
+          preflight?: () => Promise<void>
+        ) => {
+          loadConfigSyncMock.mockReturnValue({
+            multi_tenancy: { mode: 'required_from_auth' },
+          } as never);
+          await preflight?.();
+          return work(undefined);
+        }
+      ),
+    };
+    const delegate = createCodexAuthImportService(app as never, TEST_DB, coordinator);
+
+    await expect(
+      runWithTenantContext('tenant-test', () =>
+        delegate.create({ authJson: VALID_AUTH_JSON }, AUTH_PARAMS)
+      )
+    ).rejects.toThrow(/execution home changed/i);
+    expect(writeCodexAuthCredentialMock).not.toHaveBeenCalled();
+  });
+
   it('maps write failures to a friendly error and logs only the error class', async () => {
-    writeCodexAuthViaExecutorMock.mockImplementationOnce(async () => {
+    writeCodexAuthCredentialMock.mockImplementationOnce(async () => {
       throw new Error('sudo: a password is required; stderr: refresh-xyz');
     });
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});

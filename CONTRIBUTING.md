@@ -175,6 +175,16 @@ Closes #123
 
 ---
 
+## Filing Issues
+
+This repo is public — anyone can read it. Keep issue reports self-contained:
+
+- File bugs and generic feature requests here. Internal roadmap/planning items live elsewhere and aren't relevant to public issue content.
+- Don't include links or references that require internal/private access (internal trackers, internal docs, internal chat channels, etc.). If internal context motivated the report, describe it in plain language instead of linking to it.
+- Search existing issues (open and recently closed) before filing to avoid duplicates.
+
+---
+
 ## Code Review Process
 
 **What to expect:**

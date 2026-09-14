@@ -41,14 +41,14 @@ interface TestUser {
 const TEST_USERS: TestUser[] = [
   {
     email: 'alice@agor.live',
-    password: 'admin',
+    password: 'alice-development-only',
     name: 'Alice',
     username: 'alice',
     role: 'admin', // Alice is admin for testing purposes
   },
   {
     email: 'bob@agor.live',
-    password: 'admin',
+    password: 'bob-development-only',
     name: 'Bob',
     username: 'bob',
     role: 'member',
@@ -323,9 +323,13 @@ async function main() {
   console.log(chalk.bold.green('✅ RBAC test environment ready!\n'));
 
   console.log(chalk.bold('Test Users:'));
-  console.log(chalk.gray(`  alice@agor.live (password: admin, execution home key: alice)`));
+  console.log(
+    chalk.gray(`  alice@agor.live (password: alice-development-only, execution home key: alice)`)
+  );
   console.log(chalk.gray(`    - Owns: alice-private, team-shared (full access)`));
-  console.log(chalk.gray(`  bob@agor.live   (password: admin, execution home key: bob)`));
+  console.log(
+    chalk.gray(`  bob@agor.live   (password: bob-development-only, execution home key: bob)`)
+  );
   console.log(chalk.gray(`    - Owns: bob-private`));
   console.log(
     chalk.yellow(`    - Note: bob's "prompt" permission on team-shared not yet fully implemented`)
@@ -334,8 +338,8 @@ async function main() {
 
   console.log(chalk.bold('Web Login:'));
   console.log(chalk.gray('  http://localhost:6091'));
-  console.log(chalk.gray('  alice@agor.live / admin'));
-  console.log(chalk.gray('  bob@agor.live / admin'));
+  console.log(chalk.gray('  alice@agor.live / alice-development-only'));
+  console.log(chalk.gray('  bob@agor.live / bob-development-only'));
   console.log('');
 }
 

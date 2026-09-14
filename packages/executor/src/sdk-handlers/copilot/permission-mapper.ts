@@ -17,7 +17,7 @@
  */
 
 import { generateId, shortId } from '@agor/core';
-import type { Message, MessageID, SessionID, TaskID } from '@agor/core/types';
+import type { Message, MessageID, SessionID, TaskID, ToolPermission } from '@agor/core/types';
 import { MessageRole, PermissionStatus, SessionStatus, TaskStatus } from '@agor/core/types';
 import type {
   PermissionHandler,
@@ -33,6 +33,8 @@ import type {
 import type { PermissionService } from '../../permissions/permission-service.js';
 import type { PermissionMode } from '../../types.js';
 import type { MessagesService, SessionsPatchClient, TasksService } from '../base/index.js';
+import type { McpToolPermissionIndex } from '../base/mcp-tool-permissions.js';
+import { resolveMcpToolPermissionByParts } from '../base/mcp-tool-permissions.js';
 
 /**
  * Re-export SDK types for convenience
@@ -54,6 +56,26 @@ export interface PermissionDeps {
   permissionLocks: Map<SessionID, Promise<void>>;
   mcpServerRepo?: MCPServerRepository;
   sessionMCPRepo?: SessionMCPServerRepository;
+  /** Per-tool `tool_permissions` from the session's resolved MCP servers. */
+  mcpToolPermissions?: McpToolPermissionIndex;
+}
+
+/**
+ * The configured permission for an MCP request, or `undefined` if unconfigured.
+ *
+ * Copilot delivers `serverName` and `toolName` as separate fields, so nothing
+ * has to be split apart or guessed. That is the whole reason this handler can
+ * enforce per tool despite having no way to filter the list it offers a model.
+ */
+function resolveRequestPermission(
+  request: PermissionRequest,
+  index: McpToolPermissionIndex | undefined
+): ToolPermission | undefined {
+  if (!index || request.kind !== 'mcp') return undefined;
+  const serverName = request.serverName as string | undefined;
+  const toolName = request.toolName as string | undefined;
+  if (!serverName || !toolName) return undefined;
+  return resolveMcpToolPermissionByParts(index, serverName, toolName);
 }
 
 /**
@@ -172,10 +194,40 @@ export function createPermissionHandler(
   deps?: PermissionDeps
 ): CopilotPermissionHandler {
   const approved: CopilotPermissionDecision = { kind: 'approved' };
+  const index = deps?.mcpToolPermissions;
 
-  // bypassPermissions / allow-all → always auto-approve, no deps needed
+  /**
+   * The `tool_permissions` gate, which outranks every shortcut below it.
+   *
+   * Placed ahead of the mode checks on purpose: `bypassPermissions` returns
+   * before any of the interactive machinery exists, so a gate further down
+   * would be skipped in exactly the mode that most needs it. `canPrompt` says
+   * whether a human can still be asked; where nobody can be, `ask` collapses
+   * onto `deny` rather than degrading into `allow`.
+   */
+  const blockedByToolPermissions = (
+    request: PermissionRequest,
+    canPrompt: boolean
+  ): CopilotPermissionDecision | undefined => {
+    const permission = resolveRequestPermission(request, index);
+    if (permission === 'deny' || (permission === 'ask' && !canPrompt)) {
+      console.warn(
+        `🛑 [Copilot Permission] MCP tool "${request.serverName}.${request.toolName}" ` +
+          `blocked by tool_permissions (${permission})`
+      );
+      return {
+        kind: 'denied-by-permission-request-hook',
+        message: `Tool "${request.toolName}" is denied by its MCP server's tool permissions.`,
+      };
+    }
+    return undefined;
+  };
+
+  // bypassPermissions / allow-all → auto-approve, EXCEPT where a tool was
+  // switched off: there is no prompt channel here, so deny and ask both bind.
   if (permissionMode === 'bypassPermissions' || permissionMode === 'allow-all') {
-    return async () => approved;
+    return async (request: PermissionRequest) =>
+      blockedByToolPermissions(request, false) ?? approved;
   }
 
   // No deps → headless fallback (auto-approve everything)
@@ -188,8 +240,15 @@ export function createPermissionHandler(
 
   // Interactive permission handler
   return async (request: PermissionRequest): Promise<CopilotPermissionDecision> => {
+    const blocked = blockedByToolPermissions(request, true);
+    if (blocked) return blocked;
+
+    // An `ask` tool must reach the prompt below, so it skips both fast paths —
+    // otherwise "this server is attached" would silently answer for the user.
+    const configured = resolveRequestPermission(request, index);
+
     // Auto-approve based on mode + kind
-    if (shouldAutoApprove(permissionMode, request.kind)) {
+    if (configured !== 'ask' && shouldAutoApprove(permissionMode, request.kind)) {
       console.log(
         `✅ [Copilot Permission] Auto-approved ${request.kind} (mode: ${permissionMode})`
       );
@@ -197,7 +256,7 @@ export function createPermissionHandler(
     }
 
     // Auto-approve MCP tools from attached servers
-    if (await isAttachedMcpServer(request, sessionId, deps)) {
+    if (configured !== 'ask' && (await isAttachedMcpServer(request, sessionId, deps))) {
       console.log(
         `✅ [Copilot Permission] Auto-approved MCP tool from attached server: ${request.serverName}`
       );

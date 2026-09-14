@@ -14,6 +14,6 @@ export default defineConfig({
     testTimeout: 10000,
     include: ['src/**/*.test.{ts,tsx}'],
     exclude: [...configDefaults.exclude, 'test/**'],
-    setupFiles: ['./test/isolate-host-env.ts'],
+    setupFiles: ['../../test/isolate-host-env.ts'],
   },
 });

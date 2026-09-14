@@ -1,4 +1,5 @@
 // src/types/branch.ts
+import type { BranchDeletionStatus } from './branch-deletion';
 import type { BoardID, BranchID, UUID } from './id';
 import type { KnowledgeNamespaceID, KnowledgeVisibility } from './knowledge';
 import type { BranchName } from './repo';
@@ -10,10 +11,9 @@ export const BRANCH_FILESYSTEM_ACTIONS = ['preserved', 'cleaned', 'deleted'] as 
 export type BranchFilesystemAction = (typeof BRANCH_FILESYSTEM_ACTIONS)[number];
 
 /** Canonical request contract for the hooked branch archive/delete boundary. */
-export interface BranchArchiveOrDeleteOptions {
-  metadataAction: BranchMetadataAction;
-  filesystemAction: BranchFilesystemAction;
-}
+export type BranchArchiveOrDeleteOptions =
+  | { metadataAction: 'archive'; filesystemAction: BranchFilesystemAction }
+  | { metadataAction: 'delete'; filesystemAction: 'deleted' };
 
 export function isBranchArchiveOrDeleteOptions(
   value: unknown
@@ -22,11 +22,26 @@ export function isBranchArchiveOrDeleteOptions(
   const options = value as Record<string, unknown>;
   return (
     BRANCH_METADATA_ACTIONS.some((candidate) => candidate === options.metadataAction) &&
-    BRANCH_FILESYSTEM_ACTIONS.some((candidate) => candidate === options.filesystemAction)
+    BRANCH_FILESYSTEM_ACTIONS.some((candidate) => candidate === options.filesystemAction) &&
+    (options.metadataAction !== 'delete' || options.filesystemAction === 'deleted')
   );
 }
 
 export type BranchArchiveOrDeleteResult = Branch | { deleted: true; branch_id: BranchID };
+
+/**
+ * Rendered environment snapshot fields. In branch updates, an own null/undefined
+ * value clears these fields; omitting a key preserves it. Rendering supplies all
+ * six keys so an absent template value cannot retain another variant's command.
+ */
+export const BRANCH_ENVIRONMENT_SNAPSHOT_FIELDS = [
+  'start_command',
+  'stop_command',
+  'nuke_command',
+  'logs_command',
+  'health_check_url',
+  'app_url',
+] as const satisfies readonly (keyof Branch)[];
 
 /**
  * Git branch - First-class entity for isolated development contexts
@@ -161,6 +176,17 @@ export interface Branch {
    * Example: "main" (if this is a feature branch)
    */
   base_ref?: string;
+
+  /**
+   * Remote that owns {@link base_ref} when the branch was seeded from a
+   * different repository than {@link repo_id}.
+   *
+   * The branch's configured `origin` still comes from `repo_id`; this field
+   * only qualifies the creation base so cross-repository templates can be
+   * materialized and later restored without pretending the ref exists on the
+   * destination remote.
+   */
+  base_remote_url?: string;
 
   /**
    * SHA at branch creation (base commit)
@@ -331,6 +357,12 @@ export interface Branch {
    */
   filesystem_status?: 'creating' | 'ready' | 'failed' | 'preserved' | 'cleaned' | 'deleted';
 
+  /** Set only by permanent deletion; remains fenced after partial failure. */
+  deletion_status?: BranchDeletionStatus;
+  /** Bounded, sanitized latest error; never used to decide recovery. */
+  deletion_error?: string;
+  deletion_updated_at?: string;
+
   /**
    * Error message when filesystem_status is 'failed'
    *
@@ -340,6 +372,12 @@ export interface Branch {
   error_message?: string;
 
   // ===== RBAC: App-layer permissions (rbac.md) =====
+
+  /** Immutable primary owner. This is intentionally independent of attribution. */
+  primary_owner_user_id?: UUID;
+
+  /** Whether the complete branch permission package is inherited or overridden. */
+  permission_binding?: 'inherit' | 'override';
 
   /**
    * Whether this branch uses its own permission fields or aligns to board defaults.
@@ -402,29 +440,55 @@ export interface Branch {
    */
   clone_depth?: number;
 
-  // ===== Session Sharing (legacy identity-borrow opt-in) =====
-
   /**
-   * DANGEROUS: Allow legacy "identity borrowing" on session spawn/fork.
+   * Per-branch SDK home intent (design §9.2).
    *
-   * Default (false / undefined): When user A calls `agor_sessions_spawn` or
-   * `agor_sessions_prompt(mode:"fork"|"subsession")` against user B's session,
-   * the new child session is attributed to A — `child.created_by = A.id` —
-   * and uses A's execution-home, credentials, and env vars.
+   * `undefined`/`null` = inherit today's behavior — no relocated SDK home; the
+   * agentic tool's state lives in whatever home the sandbox `home_mode`
+   * presents. `'per_branch'` = this branch has its own SDK home under
+   * `branch-homes/<branchId>` (path derived from `branch_id` by
+   * `getBranchHomePath`; only the intent is stored, never a path).
+   * This is a server-managed read model; generic Branch create/patch callers
+   * cannot set or clear it.
    *
-   * When true: legacy behavior is preserved — the child inherits
-   * `parent.created_by`, so it executes under the *parent owner's* identity
-   * even when spawned by a different caller. This effectively lets a
-   * collaborator run code as the session creator (similar to what
-   * `others_can: 'prompt'` already permits for direct prompts), and is
-   * preserved only for parity with pre-existing automation that relies on it.
-   *
-   * Admins (role >= admin) are *always* attributed to themselves regardless
-   * of this flag.
-   *
-   * Cross-user spawns under this flag are logged loudly by the daemon.
+   * STICKY: once set, this value — not the live
+   * `execution.sandbox.sdk_home_mode` deployment flag — is the default for
+   * future independent Sessions and owns the directory lifecycle. Each
+   * Session's immutable `sdk_home_scope` governs its actual mount, so older
+   * Sessions deliberately continue using their historical execution home.
+   * Flipping the flag back to `inherit` only stops unadopted branches from
+   * transitioning; it never strands accumulated Claude/Codex/… history.
    */
-  dangerously_allow_session_sharing?: boolean;
+  sdk_home?: 'per_branch' | null;
+}
+
+export type BranchFilesystemReadinessState = 'pending' | 'ready' | 'failed' | 'unavailable';
+
+/**
+ * Classify whether a branch can safely host filesystem-backed work.
+ *
+ * Keep this interpretation shared between UI and automation callers. Legacy
+ * rows without a filesystem status are ready; archived or cleaned-up branches
+ * are terminal and unavailable.
+ */
+export function classifyBranchFilesystemReadiness(
+  branch: Pick<Branch, 'archived' | 'filesystem_status' | 'deletion_status'>
+): BranchFilesystemReadinessState {
+  if (branch.archived || branch.deletion_status) return 'unavailable';
+
+  switch (branch.filesystem_status) {
+    case undefined:
+    case 'ready':
+      return 'ready';
+    case 'creating':
+      return 'pending';
+    case 'failed':
+      return 'failed';
+    case 'preserved':
+    case 'cleaned':
+    case 'deleted':
+      return 'unavailable';
+  }
 }
 
 /**
@@ -459,6 +523,12 @@ export type BranchPermissionSource = 'board' | 'override';
  * - Custom: branch.custom_context (JSON object)
  */
 export interface BranchEnvironmentInstance {
+  /** Daemon-owned bounded command tracking; lifecycle status below remains authoritative. */
+  command_attempt?: import('./environment-command').EnvironmentCommandAttempt;
+  command_history?: Array<{
+    attempt: import('./environment-command').EnvironmentCommandAttempt;
+    result?: BranchEnvironmentInstance['last_command'];
+  }>;
   /**
    * Current environment status
    */
@@ -522,7 +592,9 @@ export interface BranchEnvironmentInstance {
    */
   last_command?: {
     action: 'start' | 'stop' | 'restart' | 'nuke';
-    status: 'succeeded' | 'failed';
+    status: 'succeeded' | 'failed' | 'unknown';
+    attempt_id?: string;
+    output_truncated?: boolean;
     timestamp: string;
     message?: string;
     output?: string;
@@ -544,8 +616,9 @@ export type BranchEnvironmentClearableField = (typeof BRANCH_ENVIRONMENT_CLEARAB
  *
  * `null` is accepted for clearable optional runtime fields because executor
  * callbacks cross a JSON boundary, where `undefined` values are dropped.
- * The daemon normalizes both explicit `null` and in-process `undefined` by
- * deleting these fields before persisting the merged environment instance.
+ * The daemon normalizes explicit `null` to an own `undefined` clear marker.
+ * The repository deletes marked fields after its atomic merge, before storage.
+ * Omitted fields preserve existing values.
  */
 export type BranchEnvironmentUpdate = Omit<
   Partial<BranchEnvironmentInstance>,
@@ -750,6 +823,10 @@ export interface RepoEnvironment {
 export type RepoEnvironmentConfig = RepoEnvironmentConfigV1;
 
 // ===== Teammates =====
+
+/** Public framework repository that owns Agor's built-in teammate templates. */
+export const TEAMMATE_FRAMEWORK_REPO_SLUG = 'preset-io/agor-teammate';
+export const TEAMMATE_FRAMEWORK_REPO_URL = 'https://github.com/preset-io/agor-teammate.git';
 
 export type TeammateKnowledgeGrantAccess = 'none' | 'read' | 'write';
 export interface TeammateKnowledgeGrant {

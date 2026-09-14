@@ -281,8 +281,6 @@ export class CopilotTool implements ITool {
             try {
               if (!currentMessageId) {
                 await streamingCallbacks.onStreamStart(assistantMessageId, {
-                  session_id: sessionId,
-                  task_id: taskId,
                   role: MessageRole.ASSISTANT,
                   timestamp: new Date().toISOString(),
                 });

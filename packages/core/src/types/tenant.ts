@@ -7,6 +7,9 @@
  */
 export type TenantID = string & { readonly __brand: 'TenantID' };
 
+/** Shared upper bound for trusted tenant authority and every transport carrying it. */
+export const MAX_TENANT_ID_LENGTH = 128;
+
 export interface TenantContext {
   tenant_id: TenantID;
   source: 'static' | 'auth_claim' | 'trusted_header' | 'explicit';

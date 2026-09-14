@@ -7,6 +7,7 @@ import {
   RepoRepository,
   runWithTenantDatabaseScope,
   runWithTenantDatabaseTransaction,
+  UsersRepository,
 } from '@agor/core/db';
 import type { BranchID, TenantID, UUID } from '@agor/core/types';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -36,8 +37,12 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
 
     it('blocks a branch FK insert after the parent inventory lock and rejects it after delete', async () => {
       const tenantId = `repo-delete-lock-${generateId()}` as TenantID;
-      const repo = await runWithTenantDatabaseScope(dbA, tenantId, (scoped) =>
-        new RepoRepository(scoped).create({
+      const { ownerId, repo } = await runWithTenantDatabaseScope(dbA, tenantId, async (scoped) => {
+        const owner = await new UsersRepository(scoped).create({
+          email: `${generateId()}@repo-delete-lock.test`,
+          role: 'member',
+        });
+        const repo = await new RepoRepository(scoped).create({
           repo_id: generateId() as UUID,
           slug: `repo-delete-lock-${generateId()}`,
           name: 'Repository delete lock',
@@ -45,8 +50,9 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
           remote_url: 'https://example.invalid/repo-delete-lock.git',
           local_path: `/tmp/${generateId()}`,
           default_branch: 'main',
-        })
-      );
+        });
+        return { ownerId: owner.user_id, repo };
+      });
 
       let reportLocked!: () => void;
       const locked = new Promise<void>((resolve) => {
@@ -78,7 +84,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
         return new BranchRepository(scoped).create({
           branch_id: branchId,
           repo_id: repo.repo_id,
-          created_by: generateId() as UUID,
+          created_by: ownerId,
           name: 'concurrent-branch',
           ref: 'main',
           branch_unique_id: 9_100_001,

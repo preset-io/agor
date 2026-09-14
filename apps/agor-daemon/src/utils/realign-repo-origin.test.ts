@@ -8,9 +8,6 @@ import {
 import { spawnExecutorFireAndForget } from './spawn-executor.js';
 
 vi.mock('./spawn-executor.js', () => ({
-  generateSessionToken: vi.fn(() => 'service-token'),
-  generateScopedServiceToken: vi.fn(() => 'service-token'),
-  getDaemonUrl: vi.fn(() => 'http://localhost:3030'),
   spawnExecutorFireAndForget: vi.fn(),
 }));
 
@@ -89,9 +86,12 @@ describe('ensureRepoOriginAligned', () => {
     expect(spawnMock).toHaveBeenCalledOnce();
     expect(spawnMock.mock.calls[0]?.[0]).toMatchObject({
       command: 'git.repo.realign-origin',
-      sessionToken: 'service-token',
-      daemonUrl: 'http://localhost:3030',
-      params: { repoId: '550e8400-e29b-41d4-a716-446655440000' },
+      params: {
+        repoId: '550e8400-e29b-41d4-a716-446655440000',
+        repoPath: '/tmp/repo',
+        remoteUrl: 'https://github.com/owner/repo.git',
+        repoSlug: 'owner/repo',
+      },
     });
   });
 

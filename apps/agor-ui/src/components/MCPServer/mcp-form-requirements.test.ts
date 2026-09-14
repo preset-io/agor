@@ -27,12 +27,21 @@ describe('requiredMCPFields', () => {
     ]);
   });
 
-  it('adds the fields each remote auth type cannot work without', () => {
+  it('requires credentials on CREATE but leaves an explicitly cleared saved row editable', () => {
     expect(requiredMCPFields({ mode: 'edit', transport: 'http', authType: 'bearer' })).toEqual([
+      'url',
+    ]);
+    expect(requiredMCPFields({ mode: 'edit', transport: 'http', authType: 'jwt' })).toEqual([
+      'url',
+      'jwt_api_url',
+    ]);
+    expect(requiredMCPFields({ mode: 'create', transport: 'http', authType: 'bearer' })).toEqual([
+      'name',
       'url',
       'auth_token',
     ]);
-    expect(requiredMCPFields({ mode: 'edit', transport: 'http', authType: 'jwt' })).toEqual([
+    expect(requiredMCPFields({ mode: 'create', transport: 'http', authType: 'jwt' })).toEqual([
+      'name',
       'url',
       'jwt_api_url',
       'jwt_api_token',

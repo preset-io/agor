@@ -1,9 +1,16 @@
+import {
+  isSafeAnalyticsKey,
+  isValidAnalyticsHeaderValue,
+  validateAnalyticsHeaders,
+  validateAnalyticsMetadata,
+} from '../config/analytics-validation.js';
 import type {
   AgorAnalyticsHttpBatchPluginSettings,
   AgorAnalyticsSettings,
   AgorAnalyticsStdoutPluginSettings,
 } from '../config/types.js';
-import type { ResolvedAnalyticsPlugin } from './types.js';
+import { segmentTrackFields } from './segment.js';
+import { OPERATOR_OWNED_ANALYTICS_CONTEXT_KEYS, type ResolvedAnalyticsPlugin } from './types.js';
 
 interface AnalyticsTrackPayload {
   type?: string;
@@ -36,7 +43,10 @@ function toTrackPayload(input: unknown): AnalyticsTrackPayload {
   return payload as AnalyticsTrackPayload;
 }
 
-export function toSegmentLikeTrack(payloadInput: unknown): Record<string, unknown> {
+export function toSegmentLikeTrack(
+  payloadInput: unknown,
+  metadata?: Pick<AgorAnalyticsSettings, 'client' | 'extras'>
+): Record<string, unknown> {
   const payload = toTrackPayload(payloadInput);
   const timestamp = payload.meta?.ts
     ? new Date(payload.meta.ts).toISOString()
@@ -46,9 +56,27 @@ export function toSegmentLikeTrack(payloadInput: unknown): Record<string, unknow
 
   const event: Record<string, unknown> = {
     type: 'track',
-    event: payload.event,
-    properties: payload.properties ?? {},
-    context: payload.options?.context ?? {},
+    ...segmentTrackFields(payload.event, payload.properties),
+    context: {
+      ...Object.fromEntries(
+        Object.entries(payload.options?.context ?? {}).filter(
+          ([key]) =>
+            isSafeAnalyticsKey(key) &&
+            (!metadata || !OPERATOR_OWNED_ANALYTICS_CONTEXT_KEYS.includes(key))
+        )
+      ),
+      ...(metadata
+        ? {
+            app: {
+              name: metadata.client?.app,
+              ...(metadata.client?.version !== undefined
+                ? { version: String(metadata.client.version) }
+                : {}),
+            },
+            extras: { ...metadata.extras },
+          }
+        : {}),
+    },
     timestamp,
   };
 
@@ -58,7 +86,8 @@ export function toSegmentLikeTrack(payloadInput: unknown): Record<string, unknow
 }
 
 export function createStdoutAnalyticsPlugin(
-  settings: AgorAnalyticsStdoutPluginSettings
+  settings: AgorAnalyticsStdoutPluginSettings,
+  metadata?: Pick<AgorAnalyticsSettings, 'client' | 'extras'>
 ): ResolvedAnalyticsPlugin {
   const pretty = settings.options?.pretty === true;
   return {
@@ -66,7 +95,7 @@ export function createStdoutAnalyticsPlugin(
     loaded: () => true,
     track: (input: unknown) => {
       try {
-        const event = toSegmentLikeTrack(input);
+        const event = toSegmentLikeTrack(input, metadata);
         console.log(pretty ? JSON.stringify(event, null, 2) : JSON.stringify(event));
       } catch (error) {
         warnAnalytics('stdout plugin failed', error);
@@ -76,7 +105,8 @@ export function createStdoutAnalyticsPlugin(
 }
 
 export function createHttpBatchAnalyticsPlugin(
-  settings: AgorAnalyticsHttpBatchPluginSettings
+  settings: AgorAnalyticsHttpBatchPluginSettings,
+  metadata?: Pick<AgorAnalyticsSettings, 'client' | 'extras'>
 ): ResolvedAnalyticsPlugin | null {
   const options = settings.options ?? {};
   const url = options.url;
@@ -88,7 +118,18 @@ export function createHttpBatchAnalyticsPlugin(
   const flushIntervalMs = Math.max(1, options.flush_interval_ms ?? 1000);
   const maxBatchSize = Math.max(1, options.max_batch_size ?? 50);
   const timeoutMs = Math.max(1, options.timeout_ms ?? 3000);
-  const headers = options.headers ?? {};
+  validateAnalyticsHeaders(options);
+  // Credentials exist only in this transport closure, never plugin config / SDK state.
+  const headers: Record<string, string> = { ...options.headers };
+  for (const [name, envName] of Object.entries(options.headers_from_env ?? {})) {
+    const value = process.env[envName];
+    if (!isValidAnalyticsHeaderValue(value, true)) {
+      throw new Error(
+        'Analytics http_batch header environment value is missing, empty, or invalid'
+      );
+    }
+    headers[name] = value;
+  }
   let batch: Record<string, unknown>[] = [];
   let timer: NodeJS.Timeout | undefined;
   let flushing: Promise<void> | undefined;
@@ -123,12 +164,14 @@ export function createHttpBatchAnalyticsPlugin(
             batch: events,
           }),
           signal: controller.signal,
+          redirect: 'error',
         });
         if (!response.ok) {
           warnAnalytics(`http_batch delivery returned HTTP ${response.status}`);
         }
-      } catch (error) {
-        warnAnalytics('http_batch delivery failed', error);
+      } catch {
+        // Fetch errors can include request headers or URLs. Never log their details.
+        warnAnalytics('http_batch delivery failed');
       } finally {
         clearTimeout(timeout);
         flushing = undefined;
@@ -154,7 +197,7 @@ export function createHttpBatchAnalyticsPlugin(
     loaded: () => true,
     track: (input: unknown) => {
       try {
-        batch.push(toSegmentLikeTrack(input));
+        batch.push(toSegmentLikeTrack(input, metadata));
         if (batch.length >= maxBatchSize) {
           void flush();
         } else {
@@ -198,16 +241,19 @@ export function wrapAnalyticsPlugin(plugin: ResolvedAnalyticsPlugin): ResolvedAn
 export async function resolveAnalyticsPlugins(
   config: AgorAnalyticsSettings
 ): Promise<ResolvedAnalyticsPlugin[]> {
+  validateAnalyticsMetadata(config);
+  // Snapshot operator metadata so later caller mutation cannot change event identity.
+  const metadata = { client: { ...config.client }, extras: { ...config.extras } };
   const resolved: ResolvedAnalyticsPlugin[] = [];
   for (const pluginConfig of config.plugins ?? []) {
     if (pluginConfig.enabled !== true) continue;
 
     switch (pluginConfig.type) {
       case 'stdout':
-        resolved.push(createStdoutAnalyticsPlugin(pluginConfig));
+        resolved.push(createStdoutAnalyticsPlugin(pluginConfig, metadata));
         break;
       case 'http_batch': {
-        const plugin = createHttpBatchAnalyticsPlugin(pluginConfig);
+        const plugin = createHttpBatchAnalyticsPlugin(pluginConfig, metadata);
         if (plugin) resolved.push(plugin);
         break;
       }

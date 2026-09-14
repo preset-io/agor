@@ -26,6 +26,7 @@ import {
   MCPServerRepository,
   resolveMcpMemberPolicy,
   type TenantScopeAwareDatabase,
+  type TenantScopedDatabase,
   UsersRepository,
 } from '@agor/core/db';
 import { Forbidden, NotAuthenticated, NotFound } from '@agor/core/feathers';
@@ -47,10 +48,46 @@ import type {
   MCPTransport,
   UserID,
 } from '@agor/core/types';
-import { hasMinimumRole, ROLES } from '@agor/core/types';
+import { hasMinimumRole, isCanonicalFullUuid, ROLES } from '@agor/core/types';
 import { runInOAuthTenantScope } from '../oauth-auth-helpers.js';
 
 export type McpServerWriteMethod = 'create' | 'update' | 'patch' | 'remove';
+
+/**
+ * Who is calling an MCP authorization boundary.
+ *
+ * `anonymous` is authenticated-but-userless. Every site must treat it as
+ * fail-closed; it is deliberately a separate case from `service-account` so
+ * neither can be reached by accident when only one was intended.
+ */
+export type McpCaller =
+  | { kind: 'internal' }
+  | { kind: 'service-account' }
+  | { kind: 'user'; user: NonNullable<AuthenticatedParams['user']> }
+  | { kind: 'anonymous' };
+
+/**
+ * Resolve the caller behind an MCP request.
+ *
+ * Feathers leaves `params.provider` undefined for internal, server-side calls
+ * and populates it for external transports, so its absence is what marks a
+ * daemon-internal caller — the same test each MCP site applied before this was
+ * consolidated. Service accounts are authenticated but carry no membership.
+ *
+ * Reading `params.user` before the service-account flag is what keeps
+ * "no user" and "service account" apart. Sites that folded them into one
+ * `||` branch could not tell them apart, and so let an authenticated caller
+ * with no user through on the service-account exemption.
+ */
+export function resolveMcpCaller(params: AuthenticatedParams | undefined): McpCaller {
+  if (!params?.provider) return { kind: 'internal' };
+  const user = params.user;
+  if (!user) return { kind: 'anonymous' };
+  if ((user as { _isServiceAccount?: boolean })._isServiceAccount === true) {
+    return { kind: 'service-account' };
+  }
+  return { kind: 'user', user };
+}
 
 export interface McpServerWriteRequest {
   method: McpServerWriteMethod;
@@ -73,6 +110,8 @@ export interface McpServerWriteDecision {
   /** The catalog provenance to persist, which only the install path may name. */
   catalog_entry_name?: string;
 }
+
+type McpServerWriteAuthorizationDatabase = TenantScopeAwareDatabase | TenantScopedDatabase;
 
 /**
  * The extra params the marketplace connect service sets on its own
@@ -123,8 +162,11 @@ export interface McpCatalogInstallParams {
  * — it is what `POST /mcp-servers` is for.
  *
  * The owner is read from the authenticated caller, not from the install params:
- * connect only ever installs for its own caller, and taking it from `params.user`
- * means no daemon-side caller can name someone else's identity by mistake.
+ * every authentication strategy hydrates `params.user` from the users table,
+ * so its full canonical ID is trusted here. A member's request-supplied owner
+ * remains untrusted and is policy-stamped or rejected below. Connect only ever
+ * installs for its own caller, so no daemon-side caller can name someone else's
+ * identity by mistake.
  */
 function resolveCatalogInstall(
   params: AuthenticatedParams | undefined,
@@ -237,6 +279,9 @@ export { canConfigureMCPServers as canConfigureMcpServers } from '@agor/core/mcp
  * - `oauth-status`, `oauth-attempt-status` — reads of the caller's own state.
  */
 export const MCP_CAPABILITY_ISSUING_SERVICE_PATHS = [
+  // Reserves the one-shot socket/caller binding required before a blocking
+  // flow may create provider/DCR side effects.
+  'mcp-servers/oauth-browser-reservations',
   // Mints an authorization URL and a pending flow against a saved server.
   'mcp-servers/oauth-start',
   // Exchanges the authorization code and persists the resulting token.
@@ -268,9 +313,9 @@ export const MCP_CAPABILITY_ISSUING_SERVICE_PATHS = [
  *   and nothing re-asked at the finish.
  * - `oauth-auth-headers` refreshes and persists new access tokens
  *   (`refreshAndPersistToken`), which is minting by the same definition, but is
- *   called by an executor under a session token or service account. Flooring
- *   that caller would floor a robot; the standing that matters is the grant
- *   owner's.
+ *   called by a delegated task executor or explicit daemon service account.
+ *   The task executor carries its user, but the grant owner's standing is
+ *   still read fresh; a daemon service identity has no user standing at all.
  *
  * So both ask this about the *subject* rather than the requester. `shared`
  * grants keep their admin floor — they were always admin-only to start
@@ -318,7 +363,7 @@ export async function isMcpGrantOwnerEntitled(
  * on the same question is how the first one was lost.
  *
  * The bypasses match `ensureMinimumRole`: an internal daemon call carries no
- * provider, and an executor service account carries no role to floor.
+ * provider, and an explicit daemon service account carries no role to floor.
  */
 export function assertMcpCapabilityRole(
   params: AuthenticatedParams | undefined,
@@ -391,11 +436,19 @@ function assertScopeUnchangedOrAllowed(
  * Refuse a write the tenant's policy does not permit.
  *
  * The marketplace gets its own sentence. Installing a curated entry is a much
- * narrower thing than configuring a server — the entry is chosen from a list,
- * remote, and unauthenticated — so somebody who clicked Connect and is told
- * their organization "does not allow members to configure MCP servers" is being
- * answered about a capability they did not ask for, and reasonably reads it as
- * the marketplace being broken.
+ * narrower thing than configuring an arbitrary server: the entry, endpoint,
+ * transport, and auth recipe come from the checked-in catalog and live probe.
+ * A pasted bearer token can go only to that pinned catalog endpoint and is
+ * stored on the caller-owned row; OAuth is fixed to `per_user`, and credential
+ * reuse can select only a live caller grant bound to the same resource and
+ * catalog policy. The internal `marketplace` compatibility policy is derived,
+ * never stored or accepted from this request, and survives only while the row
+ * still matches the current catalog prescription; explicit saved-row modes and
+ * configuration drift take the strict/general path instead. So somebody who
+ * clicked Connect and is told their
+ * organization "does not allow members to configure MCP servers" is being
+ * answered about a broader capability than they asked for, and reasonably
+ * reads it as the marketplace being broken.
  *
  * Neither sentence promises the grant is coming. `use_existing_only` refusing
  * the marketplace is the deliberate current state, not a gap waiting on a fix:
@@ -421,7 +474,7 @@ function assertPolicyAllowsWrite(policy: MCPMemberPolicy, isCatalogInstall: bool
  * learns that rather than which fields are service-controlled.
  */
 export async function authorizeMcpServerWrite(
-  db: TenantScopeAwareDatabase,
+  db: McpServerWriteAuthorizationDatabase,
   params: AuthenticatedParams | undefined,
   request: McpServerWriteRequest
 ): Promise<McpServerWriteDecision> {
@@ -437,17 +490,25 @@ export async function authorizeMcpServerWrite(
 }
 
 async function decidePolicyAndOwnership(
-  db: TenantScopeAwareDatabase,
+  db: McpServerWriteAuthorizationDatabase,
   params: AuthenticatedParams | undefined,
   request: McpServerWriteRequest
 ): Promise<McpServerWriteDecision> {
-  // Internal daemon calls and executor service accounts are not members;
+  // Internal daemon calls and explicit daemon service accounts are not members;
   // they carry no policy and no ownership, matching `ensureMinimumRole`.
-  if (!params?.provider) return {};
-  const user = params.user;
-  if (!user) throw new NotAuthenticated('Authentication required');
-  if ((user as { _isServiceAccount?: boolean })._isServiceAccount === true) return {};
+  const caller = resolveMcpCaller(params);
+  if (caller.kind === 'internal' || caller.kind === 'service-account') return {};
+  if (caller.kind === 'anonymous') throw new NotAuthenticated('Authentication required');
+  const user = caller.user;
 
+  // Keep the role floor ahead of identity validation and all policy/database
+  // work. Authentication supplies the users-table key; short IDs are public
+  // addressing conveniences and are never resolved at this ownership boundary.
+  const isAdmin = hasMinimumRole(user.role, ROLES.ADMIN);
+  if (!isAdmin) assertAtLeastMember(user.role);
+  if (!isCanonicalFullUuid(user.user_id)) {
+    throw new NotAuthenticated('Authenticated user identity must be a canonical full UUID');
+  }
   const userId = user.user_id as UserID;
 
   // Ownership binds a configured credential to one execution identity, so
@@ -467,15 +528,14 @@ async function decidePolicyAndOwnership(
 
   // Admins administer every server, including private ones. They still cannot
   // use one they do not own — that is the session-side rule, not this one.
-  if (hasMinimumRole(user.role, ROLES.ADMIN)) return {};
+  if (isAdmin) return {};
 
-  assertAtLeastMember(user.role);
-
-  const policy = await resolveMcpMemberPolicy(db, userId, params.tenant?.tenant_id);
+  const policy = await resolveMcpMemberPolicy(db, userId, params?.tenant?.tenant_id);
   // Only the marketplace connect service sets this, and it cannot arrive on a
   // request — see `McpCatalogInstallParams`. So it is a safe way to tell the
   // caller which of the two things they were refused.
-  const isCatalogInstall = (params as McpCatalogInstallParams).mcpCatalogInstall !== undefined;
+  const isCatalogInstall =
+    (params as McpCatalogInstallParams | undefined)?.mcpCatalogInstall !== undefined;
   assertPolicyAllowsWrite(policy, isCatalogInstall);
 
   if (request.method === 'create') {
@@ -613,10 +673,10 @@ export function isSessionMcpServerLinkVisibleToCaller(
   row: SessionMcpServerVisibilityRow,
   params: AuthenticatedParams | undefined
 ): boolean {
-  if (!params?.provider) return true;
-  const user = params.user;
-  if (!user) return false;
-  if ((user as { _isServiceAccount?: boolean })._isServiceAccount) return true;
+  const caller = resolveMcpCaller(params);
+  if (caller.kind === 'internal' || caller.kind === 'service-account') return true;
+  if (caller.kind === 'anonymous') return false;
+  const user = caller.user;
   if (hasMinimumRole(user.role, ROLES.ADMIN)) return true;
   return isMCPServerUsableBy(row, row.session_created_by) && isMCPServerUsableBy(row, user.user_id);
 }
@@ -625,10 +685,10 @@ export function isMcpServerUsableByCaller(
   server: MCPServer,
   params: AuthenticatedParams | undefined
 ): boolean {
-  if (!params?.provider) return true;
-  const user = params.user;
-  if (!user) return false;
-  if ((user as { _isServiceAccount?: boolean })._isServiceAccount) return true;
+  const caller = resolveMcpCaller(params);
+  if (caller.kind === 'internal' || caller.kind === 'service-account') return true;
+  if (caller.kind === 'anonymous') return false;
+  const user = caller.user;
   return hasMinimumRole(user.role, ROLES.ADMIN) || isMCPServerUsableBy(server, user.user_id);
 }
 
@@ -645,8 +705,9 @@ export async function loadMcpServerForCaller(
   const server = await new MCPServerRepository(db).findById(serverId);
   if (!server) throw new NotFound(`MCP server not found: ${serverId}`);
 
-  if (!params?.provider) return server;
-  if (!params.user) throw new NotAuthenticated('Authentication required');
+  const caller = resolveMcpCaller(params);
+  if (caller.kind === 'internal') return server;
+  if (caller.kind === 'anonymous') throw new NotAuthenticated('Authentication required');
   if (isMcpServerUsableByCaller(server, params)) return server;
 
   // Avoid an existence oracle for private server definitions.

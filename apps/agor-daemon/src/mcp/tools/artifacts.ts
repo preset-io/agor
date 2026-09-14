@@ -21,11 +21,12 @@ import type {
   UserRole,
   UUID,
 } from '@agor/core/types';
-import { NotFoundError } from '@agor/core/utils/errors';
+import { ARTIFACT_LIST_FIELDS_WITHOUT_FILES } from '@agor/core/types';
+import { isNotFoundError } from '@agor/core/utils/errors';
 import type { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import type { ArtifactParams, ArtifactsService } from '../../services/artifacts.js';
-import { hasBranchPermission } from '../../utils/branch-authorization.js';
+import { hasBranchPermission, isSuperAdmin } from '../../utils/branch-authorization.js';
 import { emitServiceEvent } from '../../utils/emit-service-event.js';
 import { resolveArtifactId, resolveBoardId, resolveBranchId } from '../resolve-ids.js';
 import {
@@ -252,10 +253,10 @@ IMPORTANT:
       const validationInstructions = publishValidation
         ? publishValidation.ok
           ? ' Browser runtime validation observed a successful Sandpack boot.'
-          : publishValidation.observed
-            ? ' Browser runtime validation observed a failure; inspect publish_validation.build_errors, sandpack_error, and console_logs, then fix and republish.'
-            : publishValidation.timed_out
-              ? ' Browser runtime validation was inconclusive because no current browser render reported status before the timeout. Open the artifact as this user and call agor_artifacts_status, or republish with waitForStatus once the board/fullscreen view is open.'
+          : publishValidation.timed_out
+            ? ' Browser runtime validation was inconclusive: compilation completion and settling were not confirmed before the timeout. Inspect publish_validation.note and the preview as this user, then call agor_artifacts_status. This is not evidence that the app is broken.'
+            : publishValidation.observed
+              ? ' Browser runtime validation observed a failure; inspect publish_validation.build_errors, sandpack_error, and console_logs, then fix and republish.'
               : ' Publish validation failed before browser boot; inspect publish_validation.build_errors, then fix and republish.'
         : '';
       return textResult({
@@ -373,7 +374,8 @@ Fields:
 - build_errors: array of error messages (includes Sandpack errors prefixed with [Sandpack])
 - diagnostic: compact deterministic diagnosis + suggested_fix when an error/no-observation pattern is recognized
 - sandpack_error: the raw Sandpack bundler/runtime error object (null if no error)
-- sandpack_status: Sandpack bundler status ('idle', 'running', 'timeout', etc.)
+- sandpack_status: Sandpack provider lifecycle ('idle', 'running', 'timeout', etc.), NOT compilation readiness
+- compilation_status: 'pending' | 'compiling' | 'success' | 'error'; explicit browser compilation progress (absent for older tabs). Compilation success is a boot smoke check, not proof of DOM correctness.
 - runtime_observed_at: when your browser last reported current-content status/logs
 - console_logs: console.log/warn/error output from the running app
 
@@ -450,7 +452,7 @@ NOTE: sandpack_error and console_logs require a browser to be viewing the artifa
       try {
         artifact = await service.get(artifactId, ctx.baseServiceParams);
       } catch (err) {
-        if (err instanceof NotFoundError) {
+        if (isNotFoundError(err)) {
           return textResult({ error: `Artifact ${artifactId} not found` });
         }
         throw err;
@@ -629,7 +631,7 @@ Visibility: public artifacts are readable by anyone; private artifacts are only 
       try {
         artifact = await service.get(artifactId, ctx.baseServiceParams);
       } catch (err) {
-        if (err instanceof NotFoundError) {
+        if (isNotFoundError(err)) {
           return textResult({ error: `Artifact ${artifactId} not found` });
         }
         throw err;
@@ -641,35 +643,40 @@ Visibility: public artifacts are readable by anyone; private artifacts are only 
       const branch = (await ctx.app.service('branches').get(branchId, ctx.baseServiceParams)) as {
         branch_id: string;
         path: string;
-        others_can?: 'none' | 'view' | 'session' | 'prompt' | 'all';
       };
 
       const branchIdBranded = branch.branch_id as BranchID;
       const userIdBranded = ctx.userId as UUID;
       const permission = await runWithMcpTenantDatabaseScope(ctx, async (db) => {
         const branchRepo = new BranchRepository(db);
-        const isOwner = await branchRepo.isOwner(branchIdBranded, userIdBranded);
         const fullBranch = await branchRepo.findById(branchIdBranded);
         if (!fullBranch) return null;
-        const effective = await branchRepo.resolveUserPermission(fullBranch, userIdBranded);
-        return { effective, fullBranch, isOwner };
+        const access = await branchRepo.resolveUserAccess(fullBranch, userIdBranded);
+        return { access, fullBranch };
       });
       if (!permission) {
         return textResult({ error: `Branch ${branchId} not found` });
       }
-      const { effective, fullBranch, isOwner } = permission;
+      const { access, fullBranch } = permission;
       const canWrite = hasBranchPermission(
         fullBranch,
         userIdBranded,
-        isOwner,
+        access.is_owner,
         'session',
         ctx.authenticatedUser.role,
-        true,
-        effective
+        ctx.app.get('config').execution?.allow_superadmin === true,
+        access.can
       );
-      if (!canWrite) {
+      const hasFilesystemWrite =
+        access.is_owner ||
+        isSuperAdmin(
+          ctx.authenticatedUser.role,
+          ctx.app.get('config').execution?.allow_superadmin === true
+        ) ||
+        access.fs_access === 'write';
+      if (!canWrite || !hasFilesystemWrite) {
         return textResult({
-          error: `Forbidden: 'session' permission or higher is required to land artifacts into branch ${branchId}`,
+          error: `Forbidden: Collaborator and filesystem write access are required to land artifacts into branch ${branchId}`,
         });
       }
 
@@ -720,6 +727,7 @@ Visibility: public artifacts are readable by anyone; private artifacts are only 
           $limit: limit,
           $skip: offset,
           $sort: { created_at: -1, artifact_id: 1 },
+          $select: [...ARTIFACT_LIST_FIELDS_WITHOUT_FILES],
         },
         ...ctx.baseServiceParams,
       });

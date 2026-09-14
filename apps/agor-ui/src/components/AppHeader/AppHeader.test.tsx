@@ -1,6 +1,7 @@
 import { fireEvent, render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { MCPCatalogModalProvider, useMCPCatalogModal } from '../../contexts/MCPCatalogModalContext';
 import { AppHeader } from './AppHeader';
 
 const mockNavigate = vi.hoisted(() => vi.fn());
@@ -44,10 +45,18 @@ vi.mock('./GlobalPresenceFacepile', () => ({
   GlobalPresenceFacepile: () => <div data-testid="presence-facepile" />,
 }));
 
+function CatalogState() {
+  const catalog = useMCPCatalogModal();
+  return <output data-testid="catalog-open">{String(catalog?.open)}</output>;
+}
+
 function renderHeader(props?: Partial<React.ComponentProps<typeof AppHeader>>) {
   return render(
     <MemoryRouter basename="/ui" initialEntries={['/ui/']}>
-      <AppHeader {...props} />
+      <MCPCatalogModalProvider>
+        <AppHeader {...props} />
+        <CatalogState />
+      </MCPCatalogModalProvider>
     </MemoryRouter>
   );
 }
@@ -91,30 +100,64 @@ describe('AppHeader navigation entries', () => {
     mockNavigate.mockClear();
   });
 
-  it('advertises exactly these surfaces', () => {
+  it('advertises exactly these surfaces, in order', () => {
     renderHeader();
 
     // The whole set, so adding or removing an entry has to be a deliberate
-    // edit here rather than something that slips in. Marketplace is absent on
-    // purpose: the surface answers at /marketplace but is not advertised while
-    // the feature is incomplete, so re-adding the link should fail this and
-    // make whoever does it confirm that decision has been reversed.
+    // edit here rather than something that slips in. Order matters: Catalog
+    // is last of the two because it sits immediately left of the gear.
     const linkNames = screen
       .getAllByRole('link')
       .map((link) => link.getAttribute('aria-label') ?? link.textContent?.trim());
 
     expect(linkNames).toEqual(['Knowledge Base']);
+    expect(screen.getByRole('button', { name: 'Open MCP Catalog' })).toBeVisible();
   });
 
-  it('does not link to the marketplace from anywhere in the header', () => {
+  it('opens Catalog without navigation', () => {
+    renderHeader();
+    fireEvent.click(screen.getByRole('button', { name: 'Open MCP Catalog' }));
+    expect(screen.getByTestId('catalog-open')).toHaveTextContent('true');
+    expect(mockNavigate).not.toHaveBeenCalled();
+  });
+
+  it('omits Catalog safely in provider-free marketing headers', () => {
+    render(
+      <MemoryRouter>
+        <AppHeader />
+      </MemoryRouter>
+    );
+    expect(screen.queryByRole('button', { name: 'Open MCP Catalog' })).not.toBeInTheDocument();
+  });
+
+  it('promotes Catalog to the header rather than the gear dropdown', async () => {
     renderHeader();
 
-    const marketplaceLinks = screen
-      .getAllByRole('link')
-      .filter((link) => (link.getAttribute('href') ?? '').includes('marketplace'));
+    // Option A from the spec: a marketplace is a surface people revisit, so
+    // burying it in the settings menu is the failure this guards against.
+    fireEvent.click(screen.getByRole('button', { name: 'Settings menu' }));
+    await screen.findByText('Settings');
 
-    expect(marketplaceLinks).toEqual([]);
-    expect(screen.queryByText('Marketplace')).not.toBeInTheDocument();
+    // The header entry is an icon button carrying its name on aria-label, so a
+    // rendered "Catalog" text node could only be a dropdown menu item.
+    expect(screen.queryByText('Catalog')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Open MCP Catalog' })).toBeInTheDocument();
+  });
+
+  it('shows the Catalog entry to a viewer', () => {
+    // Browsing the catalog is authenticated-only on the daemon, so no role is
+    // filtered out of the entry. Connect is gated separately, in the surface.
+    renderHeader({ user: { user_id: 'u1', email: 'v@agor.live', role: 'viewer' } as never });
+
+    expect(screen.getByRole('button', { name: 'Open MCP Catalog' })).toBeInTheDocument();
+  });
+
+  it('bounds the always-visible board switcher slot', () => {
+    renderHeader();
+
+    const slot = screen.getByTestId('board-switcher').parentElement;
+    expect(slot).toHaveStyle({ width: '200px' });
+    expect(slot?.style.minWidth).toBe('');
   });
 });
 

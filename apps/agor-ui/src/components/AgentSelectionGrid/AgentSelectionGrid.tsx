@@ -15,7 +15,7 @@
  * - ScheduleModal (select)
  */
 
-import type { TenantAgenticToolName } from '@agor-live/client';
+import type { AgenticToolName, TenantAgenticToolName } from '@agor-live/client';
 import { Alert, Select, Space, Spin, Typography, theme } from 'antd';
 import { useEffect, useMemo } from 'react';
 import { useAgorStore } from '../../store/agorStore';
@@ -23,6 +23,7 @@ import type { AgenticToolOption } from '../../types';
 import { AgentSelectionCard } from '../AgentSelectionCard';
 import { Tag } from '../Tag';
 import { ToolIcon } from '../ToolIcon';
+import { resolveAvailableAgenticTool } from './availableAgents';
 
 const { Text } = Typography;
 
@@ -82,15 +83,22 @@ export const AgentSelectionGrid: React.FC<AgentSelectionGridProps> = ({
     [agents, settings, settingsHydrated]
   );
   useEffect(() => {
-    if (
-      fallbackToFirstVisibleAgent &&
-      selectedAgentId &&
-      !visibleAgents.some((agent) => agent.id === selectedAgentId) &&
-      visibleAgents[0]
-    ) {
-      onSelect(visibleAgents[0].id);
+    if (fallbackToFirstVisibleAgent && selectedAgentId && visibleAgents.length > 0) {
+      const resolved = resolveAvailableAgenticTool(
+        selectedAgentId as AgenticToolName,
+        settings,
+        agents
+      );
+      if (resolved !== selectedAgentId) onSelect(resolved);
     }
-  }, [fallbackToFirstVisibleAgent, onSelect, selectedAgentId, visibleAgents]);
+  }, [
+    agents,
+    fallbackToFirstVisibleAgent,
+    onSelect,
+    selectedAgentId,
+    settings,
+    visibleAgents.length,
+  ]);
   if (!settingsHydrated) {
     return (
       <div
@@ -121,8 +129,19 @@ export const AgentSelectionGrid: React.FC<AgentSelectionGridProps> = ({
           options={visibleAgents.map((agent) => ({
             value: agent.id,
             label: (
-              <Space size={8}>
-                <ToolIcon tool={agent.id} size={16} />
+              <Space size={8} align="center">
+                {/* height:0 stops the badge inflating the single-line control; the small
+                    translate re-centers it (the badge is baseline-, not center-aligned). */}
+                <span
+                  style={{
+                    display: 'inline-flex',
+                    height: 0,
+                    alignItems: 'center',
+                    transform: 'translateY(3px)',
+                  }}
+                >
+                  <ToolIcon tool={agent.id} size={16} />
+                </span>
                 <span>{agent.name}</span>
                 {agent.beta && <Tag color="warning">BETA</Tag>}
               </Space>

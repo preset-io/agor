@@ -7,23 +7,36 @@
 
 import { PAGINATION } from '@agor/core/config';
 import {
+  BoardCommentsRepository,
   BoardObjectRepository,
   BoardRepository,
+  BranchRepository,
+  CapabilityPolicyRepository,
+  getCurrentTenantId,
+  mapBoardExportBlobToCreateData,
+  runWithTenantDatabaseTransaction,
   type TenantScopeAwareDatabase,
 } from '@agor/core/db';
+import { BadRequest, Conflict, Forbidden } from '@agor/core/feathers';
+import { isValidUUID } from '@agor/core/ids';
 import {
   buildTeammateWelcomeNoteObject,
   TEAMMATE_WELCOME_NOTE_OBJECT_ID,
 } from '@agor/core/templates/teammate-welcome-note';
-import type {
-  AuthenticatedParams,
-  Board,
-  BoardExportBlob,
-  BoardID,
-  BoardObject,
-  QueryParams,
-  TeammateWelcomeNoteRequest,
-  UUID,
+import {
+  type AuthenticatedParams,
+  type Board,
+  type BoardComment,
+  type BoardExportBlob,
+  type BoardID,
+  type BoardObject,
+  type BranchID,
+  boardCommentZoneParentObjectKey,
+  hasMinimumRole,
+  type QueryParams,
+  ROLES,
+  type TeammateWelcomeNoteRequest,
+  type UUID,
 } from '@agor/core/types';
 import { NotFoundError } from '@agor/core/utils/errors';
 import { DrizzleService, type Query } from '../adapters/drizzle';
@@ -32,6 +45,10 @@ import {
   type BoardObjectPatchedEventPayload,
   toBoardObjectPatchedEventPayload,
 } from './board-objects.js';
+import {
+  lockTenantAuthorizationFence,
+  resolveCurrentTenantAuthorityActor,
+} from './tenant-authorization-fence.js';
 
 /**
  * Board service params
@@ -42,32 +59,71 @@ export interface BoardParams
     name?: string;
   }> {
   user?: AuthenticatedParams['user'];
+  tenant?: AuthenticatedParams['tenant'];
   /** Internal hook signal; set only when ensureTeammateWelcomeNote writes. */
   teammateWelcomeNoteMutated?: boolean;
   /** Internal RBAC SQL pushdown marker set by register-hooks for external regular users. */
   _agorSqlBoardAccessUserId?: UUID;
 }
 
+function shouldSqlPageBoardQuery(query?: Record<string, unknown>): boolean {
+  if (!query) return true;
+  const allowed = new Set(['archived', 'board_id', 'lean', '$limit', '$skip', '$sort']);
+  if (Object.keys(query).some((key) => !allowed.has(key) || key === '$select')) return false;
+  if (query.archived !== undefined && typeof query.archived !== 'boolean') return false;
+  if (query.lean !== undefined && typeof query.lean !== 'boolean') return false;
+  if (query.board_id !== undefined) {
+    const value = query.board_id;
+    if (typeof value !== 'string') {
+      if (
+        !value ||
+        typeof value !== 'object' ||
+        !Array.isArray((value as { $in?: unknown }).$in) ||
+        !(value as { $in: unknown[] }).$in.every((id) => typeof id === 'string')
+      ) {
+        return false;
+      }
+    }
+  }
+  const sort = query.$sort as Record<string, unknown> | undefined;
+  if (sort) {
+    const columns = new Set(['board_id', 'name', 'slug', 'created_at', 'updated_at']);
+    if (
+      Object.keys(sort).some(
+        (field) => !columns.has(field) || (sort[field] !== 1 && sort[field] !== -1)
+      )
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
+export interface BoardsServiceDependencies {
+  moveBranch?: (branchId: BranchID, boardId: BoardID, params?: BoardParams) => Promise<void>;
+  emitBoardObjectPatched?: (
+    boardObject: BoardObjectPatchedEventPayload,
+    params?: BoardParams
+  ) => void;
+  emitBoardEvent?: (event: Omit<ManualServiceEvent, 'path'>) => void;
+  emitBoardCommentPatched?: (comment: BoardComment, params?: BoardParams) => void;
+}
+
 /**
  * Extended boards service with custom methods
  */
 export class BoardsService extends DrizzleService<Board, Partial<Board>, BoardParams> {
+  private moveBranch?: BoardsServiceDependencies['moveBranch'];
+  private db: TenantScopeAwareDatabase;
   private boardRepo: BoardRepository;
-  private boardObjectRepo: BoardObjectRepository;
   private emitBoardObjectPatched?: (
     boardObject: BoardObjectPatchedEventPayload,
     params?: BoardParams
   ) => void;
   private emitBoardEvent?: (event: Omit<ManualServiceEvent, 'path'>) => void;
+  private emitBoardCommentPatched?: (comment: BoardComment, params?: BoardParams) => void;
 
-  constructor(
-    db: TenantScopeAwareDatabase,
-    emitBoardObjectPatched?: (
-      boardObject: BoardObjectPatchedEventPayload,
-      params?: BoardParams
-    ) => void,
-    emitBoardEvent?: (event: Omit<ManualServiceEvent, 'path'>) => void
-  ) {
+  constructor(db: TenantScopeAwareDatabase, dependencies: BoardsServiceDependencies = {}) {
     const boardRepo = new BoardRepository(db);
     super(boardRepo, {
       id: 'board_id',
@@ -78,10 +134,12 @@ export class BoardsService extends DrizzleService<Board, Partial<Board>, BoardPa
       },
     });
 
+    this.db = db;
+    this.moveBranch = dependencies.moveBranch;
     this.boardRepo = boardRepo;
-    this.boardObjectRepo = new BoardObjectRepository(db);
-    this.emitBoardObjectPatched = emitBoardObjectPatched;
-    this.emitBoardEvent = emitBoardEvent;
+    this.emitBoardObjectPatched = dependencies.emitBoardObjectPatched;
+    this.emitBoardEvent = dependencies.emitBoardEvent;
+    this.emitBoardCommentPatched = dependencies.emitBoardCommentPatched;
   }
 
   /**
@@ -145,6 +203,41 @@ export class BoardsService extends DrizzleService<Board, Partial<Board>, BoardPa
     return this.boardRepo.findAll(filter);
   }
 
+  override async find(params?: BoardParams) {
+    const query = params?.query as Record<string, unknown> | undefined;
+    if (shouldSqlPageBoardQuery(query)) {
+      const boardFilter = query?.board_id;
+      const boardIds =
+        typeof boardFilter === 'string'
+          ? [boardFilter as BoardID]
+          : boardFilter &&
+              typeof boardFilter === 'object' &&
+              Array.isArray((boardFilter as { $in?: unknown }).$in)
+            ? (boardFilter as { $in: BoardID[] }).$in
+            : undefined;
+      const requestedLimit =
+        typeof query?.$limit === 'number' ? query.$limit : PAGINATION.DEFAULT_LIMIT;
+      const limit = Math.min(requestedLimit, PAGINATION.MAX_LIMIT);
+      const skip = typeof query?.$skip === 'number' ? query.$skip : 0;
+      const page = await this.boardRepo.findPage({
+        archived: typeof query?.archived === 'boolean' ? query.archived : undefined,
+        boardIds,
+        visibleToUserId: params?._agorSqlBoardAccessUserId,
+        lean: query?.lean === true,
+        limit,
+        offset: skip,
+        sort: query?.$sort as Record<string, 1 | -1> | undefined,
+      });
+      return {
+        total: page.total,
+        limit,
+        skip,
+        data: page.data,
+      };
+    }
+    return super.find(params);
+  }
+
   /**
    * Custom method: Find board by slug
    */
@@ -156,14 +249,15 @@ export class BoardsService extends DrizzleService<Board, Partial<Board>, BoardPa
     data: Partial<Board> | Partial<Board>[],
     params?: BoardParams
   ): Promise<Board | Board[]> {
+    for (const candidate of Array.isArray(data) ? data : [data]) {
+      if (
+        candidate.board_id !== undefined &&
+        (typeof candidate.board_id !== 'string' || !isValidUUID(candidate.board_id))
+      ) {
+        throw new BadRequest('board_id must be a canonical UUIDv7');
+      }
+    }
     const result = (await super.create(data, params)) as Board | Board[];
-    const creatorId = params?.user?.user_id;
-    if (!creatorId) return result;
-
-    const boards = Array.isArray(result) ? result : [result];
-    await Promise.all(
-      boards.map((board) => this.boardRepo.addOwner(board.board_id, creatorId as UUID))
-    );
     return result;
   }
 
@@ -210,28 +304,61 @@ export class BoardsService extends DrizzleService<Board, Partial<Board>, BoardPa
     objectId: string,
     _params?: BoardParams
   ): Promise<Board> {
-    const board = await this.boardRepo.findBySlugOrId(boardId);
-    const object = board?.objects?.[objectId];
+    const tenantId = _params?.tenant?.tenant_id ?? getCurrentTenantId();
+    return runWithTenantDatabaseTransaction(this.db, tenantId, async (operationDb) => {
+      const boardRepo = new BoardRepository(operationDb);
+      const boardObjectRepo = new BoardObjectRepository(operationDb);
+      const boardCommentsRepo = new BoardCommentsRepository(operationDb);
+      const board = await boardRepo.findBySlugOrId(boardId);
+      const object = board?.objects?.[objectId];
 
-    // A generic removeObject path can remove zones too (e.g. MCP
-    // agor_boards_update.removeObjects). Clear entity zone references first so
-    // future board renders do not construct React Flow children with a missing
-    // parent. Convert zone-relative positions to absolute while the zone origin
-    // is still available.
-    if (board && object?.type === 'zone') {
-      const cleared = await this.boardObjectRepo.clearZoneReferences(board.board_id, objectId, {
-        x: object.x,
-        y: object.y,
-      });
+      // A generic removeObject path can remove zones too (e.g. MCP
+      // agor_boards_update.removeObjects). Clear entity zone references first so
+      // future board renders do not construct React Flow children with a missing
+      // parent. Convert zone-relative positions to absolute while the zone origin
+      // is still available.
+      if (board && object?.type === 'zone') {
+        const cleared = await boardObjectRepo.clearZoneReferences(board.board_id, objectId, {
+          x: object.x,
+          y: object.y,
+        });
 
-      for (const boardObject of cleared) {
-        const payload = toBoardObjectPatchedEventPayload(boardObject);
-        if (_params) this.emitBoardObjectPatched?.(payload, _params);
-        else this.emitBoardObjectPatched?.(payload);
+        for (const boardObject of cleared) {
+          const payload = toBoardObjectPatchedEventPayload(boardObject);
+          if (_params) this.emitBoardObjectPatched?.(payload, _params);
+          else this.emitBoardObjectPatched?.(payload);
+        }
+
+        // Spatial comments can also be pinned to a zone. Keep them visible by
+        // converting their relative offsets to absolute board coordinates before
+        // the parent zone disappears. Replies have no position and are unaffected.
+        const comments = await boardCommentsRepo.findByBoard(board.board_id);
+        for (const comment of comments) {
+          const relative = comment.position?.relative;
+          if (
+            relative?.parent_type !== 'zone' ||
+            boardCommentZoneParentObjectKey(relative.parent_id) !== objectId
+          ) {
+            continue;
+          }
+
+          const updated = await boardCommentsRepo.update(comment.comment_id, {
+            position: {
+              absolute: {
+                x: object.x + relative.offset_x,
+                y: object.y + relative.offset_y,
+              },
+            },
+          });
+          if (_params) this.emitBoardCommentPatched?.(updated, _params);
+          else this.emitBoardCommentPatched?.(updated);
+        }
       }
-    }
 
-    return this.boardRepo.removeBoardObject(boardId, objectId);
+      // The registered emitters delegate to emitServiceEvent, whose
+      // transaction-aware queue publishes these patches only after commit.
+      return boardRepo.removeBoardObject(boardId, objectId);
+    });
   }
 
   /**
@@ -285,7 +412,35 @@ export class BoardsService extends DrizzleService<Board, Partial<Board>, BoardPa
     const branchId = typeof data === 'string' ? branchIdOrParams : data.branchId;
     if (!boardId) throw new Error('Board ID required');
     if (!branchId || typeof branchId !== 'string') throw new Error('Branch ID required');
-    return this.boardRepo.setPrimaryTeammate(boardId, branchId);
+    const params =
+      typeof data === 'string' ? _maybeParams : (branchIdOrParams as BoardParams | undefined);
+    return runWithTenantDatabaseTransaction(this.db, params?.tenant?.tenant_id, async (db) => {
+      await lockTenantAuthorizationFence(db, params);
+      const current = await resolveCurrentTenantAuthorityActor(db, params, {
+        allowActorlessTrusted: true,
+      });
+      const boards = new BoardRepository(db);
+      const board = await boards.findById(boardId);
+      const branch = await new BranchRepository(db).findById(branchId);
+      if (!board || !branch) throw new BadRequest('Board or teammate not found');
+      if (current && !current.service && !hasMinimumRole(current.role, ROLES.ADMIN)) {
+        const access = await new CapabilityPolicyRepository(db).resolveBoardAccess(
+          board.board_id,
+          current.user_id
+        );
+        if (!access.capabilities.includes('board.edit'))
+          throw new Forbidden('Board Editor or Manager access is required to assign a teammate');
+      }
+      if (branch.board_id !== board.board_id && this.moveBranch) {
+        // An empty-board Assign must not overwrite a primary installed since
+        // the picker loaded. The shared branch move maintains both pointers.
+        if (board.primary_teammate_id && board.primary_teammate_id !== branch.branch_id) {
+          throw new Conflict('This board already has a primary teammate. Reload before assigning.');
+        }
+        await this.moveBranch(branch.branch_id, board.board_id, params);
+      }
+      return boards.setPrimaryTeammate(board.board_id, branch.branch_id);
+    });
   }
 
   /**
@@ -325,9 +480,9 @@ export class BoardsService extends DrizzleService<Board, Partial<Board>, BoardPa
     boardId: string,
     objectId: string,
     _deleteAssociatedSessions: boolean,
-    _params?: BoardParams
+    params?: BoardParams
   ): Promise<{ board: Board; affectedSessions: string[] }> {
-    const board = await this.removeBoardObject(boardId, objectId);
+    const board = await this.removeBoardObject(boardId, objectId, params);
     return {
       board,
       affectedSessions: [],
@@ -352,11 +507,10 @@ export class BoardsService extends DrizzleService<Board, Partial<Board>, BoardPa
     // Hook chain enforces auth before we get here.
     const userId = params!.user!.user_id;
     this.boardRepo.validateBoardBlob(blob);
-    const data = this.buildBoardDataFromBlob(blob, userId);
+    const data = mapBoardExportBlobToCreateData(blob, userId);
 
     // Create board through repository (not super.create to avoid double-emit issues)
     const board = await this.boardRepo.create(data);
-    await this.boardRepo.addOwner(board.board_id, userId as UUID);
 
     // Note: Events must be emitted by the caller using app.service('boards').emit()
     // this.emit() doesn't work reliably in custom methods due to execution context
@@ -420,10 +574,9 @@ export class BoardsService extends DrizzleService<Board, Partial<Board>, BoardPa
     const userId = params!.user!.user_id;
     const resolvedBoardId = await this.resolveBoardId(boardIdentifier);
     const blob = await this.boardRepo.toBlob(resolvedBoardId);
-    const boardData = this.buildBoardDataFromBlob(blob, userId, name);
+    const boardData = mapBoardExportBlobToCreateData(blob, userId, name);
     // Create board through repository (not super.create to avoid double-emit issues)
     const clonedBoard = await this.boardRepo.create(boardData);
-    await this.boardRepo.addOwner(clonedBoard.board_id, userId as UUID);
 
     // Note: Events must be emitted by the caller using app.service('boards').emit()
     // this.emit() doesn't work reliably in custom methods due to execution context
@@ -516,28 +669,6 @@ export class BoardsService extends DrizzleService<Board, Partial<Board>, BoardPa
 
     return board.board_id;
   }
-
-  private buildBoardDataFromBlob(
-    blob: BoardExportBlob,
-    userId: string,
-    nameOverride?: string
-  ): Partial<Board> {
-    const name = nameOverride ?? blob.name;
-    const slug = nameOverride ? nameOverride : (blob.slug ?? blob.name);
-
-    return {
-      name,
-      slug,
-      description: blob.description,
-      icon: blob.icon,
-      color: blob.color,
-      background_color: blob.background_color,
-      custom_css: blob.custom_css,
-      objects: blob.objects,
-      custom_context: blob.custom_context,
-      created_by: userId,
-    };
-  }
 }
 
 /**
@@ -545,11 +676,7 @@ export class BoardsService extends DrizzleService<Board, Partial<Board>, BoardPa
  */
 export function createBoardsService(
   db: TenantScopeAwareDatabase,
-  emitBoardObjectPatched?: (
-    boardObject: BoardObjectPatchedEventPayload,
-    params?: BoardParams
-  ) => void,
-  emitBoardEvent?: (event: Omit<ManualServiceEvent, 'path'>) => void
+  dependencies: BoardsServiceDependencies = {}
 ): BoardsService {
-  return new BoardsService(db, emitBoardObjectPatched, emitBoardEvent);
+  return new BoardsService(db, dependencies);
 }

@@ -17,23 +17,19 @@ import type {
 import { and, asc, desc, eq, isNull, like, lte, or, sql } from 'drizzle-orm';
 import { normalizeScheduleAgenticToolDefaultReference } from '../../config/schedule-agentic-tool-config';
 import { generateId } from '../../lib/ids';
+import { lockBranchForAdmission } from '../branch-admission';
 import type { Database } from '../client';
 import {
   deleteFrom,
   insert,
   isPostgresDatabase,
   lockRowForUpdate,
+  runDatabaseTransaction,
   select,
   txAsDb,
   update,
 } from '../database-wrapper';
-import {
-  branches,
-  branchOwners,
-  type ScheduleInsert,
-  type ScheduleRow,
-  schedules,
-} from '../schema';
+import { branches, type ScheduleInsert, type ScheduleRow, schedules } from '../schema';
 import {
   attachHiddenTenant,
   type BaseRepository,
@@ -160,7 +156,14 @@ export class ScheduleRepository implements BaseRepository<Schedule, Partial<Sche
   async create(data: Partial<Schedule>): Promise<Schedule> {
     try {
       const insertData = this.scheduleToInsert(data);
-      const row = await insert(this.db, schedules).values(insertData).returning().one();
+      const row = await runDatabaseTransaction(
+        this.db,
+        async (tx) => {
+          await lockBranchForAdmission(tx, insertData.branch_id);
+          return insert(tx, schedules).values(insertData).returning().one();
+        },
+        { sqliteImmediate: true, sqliteBusyRetries: 9 }
+      );
       return this.rowToSchedule(row);
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
@@ -297,11 +300,9 @@ export class ScheduleRepository implements BaseRepository<Schedule, Partial<Sche
    * Find schedules visible to a user via branch RBAC.
    *
    * Mirrors `SessionRepository.findAccessibleSessions`: returns schedules
-   * whose parent branch the user can `view` — either as a branch owner
-   * or because `branches.others_can != 'none'`.
+   * whose parent branch the normalized effective policy grants `branch.view`.
    *
-   * Only call when RBAC is enabled. When disabled, the `scopeScheduleQuery`
-   * hook is not registered and `findAll` is used instead.
+   * Backs the always-registered `scopeScheduleQuery` find hook.
    */
   async findAccessibleSchedules(
     userId: UUID,
@@ -315,10 +316,6 @@ export class ScheduleRepository implements BaseRepository<Schedule, Partial<Sche
     const results = await select(this.db)
       .from(schedules)
       .innerJoin(branches, eq(schedules.branch_id, branches.branch_id))
-      .leftJoin(
-        branchOwners,
-        and(eq(branchOwners.branch_id, branches.branch_id), eq(branchOwners.user_id, userId))
-      )
       .where(and(...conditions))
       .all();
 

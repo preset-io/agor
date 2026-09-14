@@ -6,14 +6,16 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import { access, constants, mkdir, readdir, rename, rm } from 'node:fs/promises';
+import { access, chmod, constants, mkdir, readdir, rename, rm } from 'node:fs/promises';
 import { homedir, platform } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { resolveAgenticToolSelectionPolicy } from '@agor/core/agentic-integrations';
 import {
   type AgorConfig,
+  assertSecurePassword,
   createInitialConfig,
+  ensureAgorHome,
   getConfigPath,
   getDaemonUrl,
   getDefaultConfig,
@@ -22,8 +24,10 @@ import {
 } from '@agor/core/config';
 import {
   createDatabaseAsync,
+  createDevelopmentDefaultAdminUser,
   createUser,
   DEVELOPMENT_DEFAULT_ADMIN_USER,
+  isDevelopmentDefaultAdminEnvironment,
   runMigrations,
   seedInitialData,
 } from '@agor/core/db';
@@ -72,12 +76,58 @@ export function createInstallTelemetryConfig(config: AgorConfig, instanceId: str
   };
 }
 
-export function shouldDeferAdminSetup(nonInteractive: boolean, nodeEnv = process.env.NODE_ENV) {
-  return nonInteractive || (nodeEnv !== 'development' && nodeEnv !== 'test');
+export function shouldDeferAdminSetup(
+  nonInteractive: boolean,
+  env: NodeJS.ProcessEnv = process.env
+) {
+  return nonInteractive || !isDevelopmentDefaultAdminEnvironment(env);
+}
+
+/** Inquirer-compatible validation using the canonical server password policy. */
+export function validateInitAdminPassword(input: unknown, email?: string): true | string {
+  try {
+    assertSecurePassword(input, { email });
+    return true;
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error);
+  }
 }
 
 export function formatInitBackupTimestamp(date = new Date()): string {
   return date.toISOString().replace(/[-:]/g, '').replace('T', '-').slice(0, 15);
+}
+
+export async function moveInstallToPrivateBackup(
+  baseDir: string,
+  options: {
+    date?: Date;
+    pathExists?: (path: string) => Promise<boolean>;
+  } = {}
+): Promise<string> {
+  const pathExists =
+    options.pathExists ??
+    (async (path: string) => {
+      try {
+        await access(path, constants.F_OK);
+        return true;
+      } catch {
+        return false;
+      }
+    });
+  const prefix = `${baseDir}.bkp.${formatInitBackupTimestamp(options.date)}`;
+  let backupDir = prefix;
+  for (let suffix = 2; await pathExists(backupDir); suffix += 1) {
+    backupDir = `${prefix}.${suffix}`;
+  }
+
+  // Re-init backups co-locate the encrypted database with config.yaml's
+  // deployment key and may also contain native agent credentials. Preserve
+  // neither a legacy permissive mode nor the caller's umask accident. Tighten
+  // before the atomic rename so there is no permissive backup-name window.
+  await chmod(baseDir, 0o700);
+  await rename(baseDir, backupDir);
+  await chmod(backupDir, 0o700);
+  return backupDir;
 }
 
 /** Parse only the fixed integration allowlist; `all` and `none` are explicit headless shorthands. */
@@ -511,15 +561,11 @@ export default class Init extends Command {
   }
 
   private async backupExistingInstall(baseDir: string): Promise<void> {
-    const prefix = `${baseDir}.bkp.${formatInitBackupTimestamp()}`;
-    let backupDir = prefix;
-    for (let suffix = 2; await this.pathExists(backupDir); suffix += 1) {
-      backupDir = `${prefix}.${suffix}`;
-    }
-
     this.log('');
     this.log('📦 Backing up existing installation...');
-    await rename(baseDir, backupDir);
+    const backupDir = await moveInstallToPrivateBackup(baseDir, {
+      pathExists: (path) => this.pathExists(path),
+    });
     this.log(`${chalk.green('   ✓')} Moved ${baseDir} to ${backupDir}`);
   }
 
@@ -539,8 +585,10 @@ export default class Init extends Command {
     // Create directory structure
     this.log('');
     this.log('📁 Creating directory structure...');
+    await ensureAgorHome(baseDir);
+    this.log(`${chalk.green('   ✓')} ${baseDir}`);
+
     const dirs = [
-      baseDir,
       join(baseDir, 'repos'),
       join(baseDir, 'worktrees'),
       join(baseDir, 'concepts'),
@@ -560,24 +608,19 @@ export default class Init extends Command {
     try {
       await runMigrations(db);
       this.log(`${chalk.green('   ✓')} Created ${dbPath}`);
-
-      // Seed initial data
-      this.log('');
-      this.log('🌱 Seeding initial data...');
-      await seedInitialData(db);
-      this.log(`${chalk.green('   ✓')} Created Main Board`);
     } finally {
       this.closeSQLiteDatabase(db);
     }
 
     // Create the admin user (auth is always required — anonymous mode was removed).
+    let initialOwnerId: string | null = null;
     if (!skipPrompts) {
-      await this.promptAdminSetup(dbPath);
+      initialOwnerId = await this.promptAdminSetup(dbPath);
     } else {
       // --force: preserve local/dev ergonomics, but defer production admin
       // creation to the daemon-owned first-run bootstrap. This avoids
-      // partially failing after destructive re-initialization has already
-      // recreated the database and seeded initial data.
+      // partially failing after destructive re-initialization has recreated
+      // the database. The daemon will create both the User and default Board.
       if (shouldDeferAdminSetup(this.nonInteractive)) {
         this.log(`${chalk.green('   ✓')} Admin setup deferred to daemon first-run bootstrap`);
         this.log(
@@ -589,12 +632,8 @@ export default class Init extends Command {
         try {
           const db = await createDatabaseAsync({ url: `file:${dbPath}`, dialect: 'sqlite' });
           try {
-            await createUser(db, {
-              email: DEVELOPMENT_DEFAULT_ADMIN_USER.email,
-              password: DEVELOPMENT_DEFAULT_ADMIN_USER.password,
-              name: DEVELOPMENT_DEFAULT_ADMIN_USER.name,
-              role: 'admin',
-            });
+            const owner = await createDevelopmentDefaultAdminUser(db);
+            initialOwnerId = owner.user_id;
           } finally {
             this.closeSQLiteDatabase(db);
           }
@@ -609,6 +648,18 @@ export default class Init extends Command {
             throw error;
           }
         }
+      }
+    }
+
+    if (initialOwnerId) {
+      const db = await createDatabaseAsync({ url: `file:${dbPath}`, dialect: 'sqlite' });
+      try {
+        this.log('');
+        this.log('🌱 Seeding initial data...');
+        await seedInitialData(db, initialOwnerId);
+        this.log(`${chalk.green('   ✓')} Created Main Board`);
+      } finally {
+        this.closeSQLiteDatabase(db);
       }
     }
 
@@ -947,7 +998,7 @@ export default class Init extends Command {
    * first start (`runFirstRunAdminBootstrap`) and write credentials to
    * `~/.agor/admin-credentials`.
    */
-  private async promptAdminSetup(dbPath: string): Promise<void> {
+  private async promptAdminSetup(dbPath: string): Promise<string | null> {
     this.log('');
     this.log(chalk.bold('👤 Create your admin account:'));
     this.log(chalk.gray('   (Skip this and the daemon will auto-create one on first start)'));
@@ -968,7 +1019,7 @@ export default class Init extends Command {
           '   Skipped. The daemon will create admin@agor.live on first start; the generated password lands in ~/.agor/admin-credentials.'
         )
       );
-      return;
+      return null;
     }
 
     // Prompt for user details
@@ -1000,28 +1051,25 @@ export default class Init extends Command {
         name: 'password',
         message: 'Password:',
         mask: '*',
-        validate: (input: string) => {
-          if (!input || input.length < 4) {
-            return 'Password must be at least 4 characters';
-          }
-          return true;
-        },
+        validate: (input: string) => validateInitAdminPassword(input),
       },
     ]);
 
     // Create admin user directly in database (no daemon required)
     const db = await createDatabaseAsync({ url: `file:${dbPath}`, dialect: 'sqlite' });
+    let userId: string;
     try {
-      await createUser(db, {
+      const user = await createUser(db, {
         email,
         password,
         name: username,
         role: 'admin',
       });
+      userId = user.user_id;
     } finally {
       this.closeSQLiteDatabase(db);
     }
-
     this.log(`${chalk.green('   ✓')} Admin user created (${chalk.gray(email)})`);
+    return userId;
   }
 }

@@ -43,7 +43,34 @@ export const MCP_MEMBER_POLICY_DESCRIPTIONS: Record<MCPMemberPolicy, MCPMemberPo
   },
 };
 
+/**
+ * What to say while the policy is not known.
+ *
+ * Until the read lands, a connect surface offers nothing and says only this.
+ * The restrictive value it falls back to is a safe assumption to act on, not a
+ * fact about this workspace to quote back as the reason.
+ *
+ * Shared so the Settings table and the Marketplace drawer — the two places a
+ * server can be attached — refuse in the same words.
+ */
+export const POLICY_LOADING_HINT = "Checking what this workspace's MCP policy allows…";
+export const POLICY_UNREADABLE_HINT =
+  "This workspace's MCP policy could not be read, so nothing is offered here.";
+
+/** Whether the policy is still unknown, and the hint that says which way. */
+export function policyPendingState(state: { loading: boolean; error: string | null }): {
+  pending: boolean;
+  hint: string;
+} {
+  return {
+    pending: state.loading || state.error !== null,
+    hint: state.error ? POLICY_UNREADABLE_HINT : POLICY_LOADING_HINT,
+  };
+}
+
 export interface MCPServerCapabilityContext {
+  /** Connected, authenticated, and outside reconnect/token-reauth transition. */
+  connectionReady: boolean;
   /**
    * The role as the daemon reads it — raw, because the roles beneath member are
    * the ones this has to tell apart, and a boolean cannot.
@@ -66,17 +93,19 @@ export interface MCPServerCapabilityContext {
 /**
  * Whether this user may add an MCP server at all.
  *
- * The daemon's answer, with the admin clause of that same answer as a floor
- * under it: {@link canConfigureMCPServers} returns true for every admin under
- * every policy, so the two cannot disagree — but an answer that arrives
- * without the field would otherwise leave an admin looking at a disabled
- * button and a reason that does not apply to them.
- *
- * This is about a capability that arrived. An answer that did not arrive at all
- * is a separate state its caller handles, and there the control is withheld
- * from everyone, admins included, rather than guessed at.
+ * Connection and role are checked again here rather than treated as facts that
+ * were true when `canConfigure` arrived. This closes the render in which an old
+ * permissive answer could otherwise survive a disconnect or demotion. Once the
+ * caller is still at least a member, admins retain their policy-independent
+ * authority and everyone else uses the caller-shaped daemon answer.
  */
-export function canAddMcpServer({ isAdmin, canConfigure }: MCPServerCapabilityContext): boolean {
+export function canAddMcpServer({
+  connectionReady,
+  role,
+  isAdmin,
+  canConfigure,
+}: MCPServerCapabilityContext): boolean {
+  if (!connectionReady || !isAtLeastMemberRole(role)) return false;
   return isAdmin || canConfigure;
 }
 
@@ -107,11 +136,13 @@ export function canEditMcpServer(
   server: Pick<MCPServer, 'owner_user_id' | 'transport'>,
   context: MCPServerCapabilityContext
 ): boolean {
+  if (!context.connectionReady) return false;
   if (context.isAdmin) return true;
   // The endpoint answers "may I configure at all"; which server, and whether
   // its transport is one a member may hold, it cannot — so the floor is asked
   // here too rather than assumed from the policy.
   if (!isAtLeastMemberRole(context.role)) return false;
+  if (!context.canConfigure) return false;
   return (
     mayMemberManageMCPServer(server, context.policy, context.userId) &&
     mayMemberUseMCPTransport(server.transport)
@@ -123,9 +154,25 @@ export function canDeleteMcpServer(
   server: Pick<MCPServer, 'owner_user_id'>,
   context: MCPServerCapabilityContext
 ): boolean {
+  if (!context.connectionReady) return false;
   if (context.isAdmin) return true;
   if (!isAtLeastMemberRole(context.role)) return false;
+  if (!context.canConfigure) return false;
   return mayMemberManageMCPServer(server, context.policy, context.userId);
+}
+
+/**
+ * Discovery exercises an existing credential but does not configure it.
+ * Consequently an owner may refresh a remote server under
+ * `use_existing_only`; stdio has no daemon-side discovery transport.
+ */
+export function canRefreshMcpServer(
+  server: Pick<MCPServer, 'owner_user_id' | 'transport'>,
+  context: MCPServerCapabilityContext
+): boolean {
+  if (!context.connectionReady || !isAtLeastMemberRole(context.role)) return false;
+  if (!mayMemberUseMCPTransport(server.transport)) return false;
+  return context.isAdmin || (!!context.userId && server.owner_user_id === context.userId);
 }
 
 const READ_ONLY_RESTRICTION =

@@ -57,6 +57,8 @@ export const TENANT_PROVIDER_CONNECTION_FIELDS = {
 } as const satisfies Record<ProviderConnectionTool, readonly AgenticToolConfigField[]>;
 
 export interface StoredTenantAgenticToolSettings {
+  /** Durable generation incremented on every workspace settings patch. */
+  revision?: number;
   /** Omitted values inherit Agor's built-in default (enabled). */
   enabled?: boolean;
   /** Omitted values inherit Agor's built-in user-preferred policy. */
@@ -72,6 +74,8 @@ export interface TenantAgenticToolFieldStatus {
 
 export interface TenantAgenticToolSettings {
   tool: TenantAgenticToolName;
+  /** Non-secret durable generation used to invalidate client-side status probes. */
+  revision?: number;
   /** Whether the deployment operator selected and installed this tool package. */
   deployment_available: boolean;
   /** Effective workspace availability: deployment_available and not tenant-disabled. */

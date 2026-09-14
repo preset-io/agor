@@ -6,7 +6,7 @@ The daemon/service layer must not acquire ambient host-filesystem authority by a
 
 Every observed direct I/O operation has an exact registry tuple (file, import, imported symbol, local binding, and call/use identity):
 
-- **A — valid daemon host/operator local responsibility.** Deployment config, SQLite/bootstrap state, runtime assets, shutdown state, and explicit local host/executor operations. Exact A capabilities may set `reviewTarget` and `reviewDate` to `null` and remain indefinitely.
+- **A — valid daemon-owned local responsibility.** Deployment config, SQLite/bootstrap state, runtime assets, shutdown state, explicit local host/executor operations, and narrowly modeled security authorities whose storage is selected only from trusted server state. Exact A capabilities may set `reviewTarget` and `reviewDate` to `null` and remain indefinitely.
 - **B — intentional staging boundary with lifecycle abstraction.** Temporary upload/attachment staging must have an owner, lifecycle rationale, review/removal target, and future review date.
 - **C — tenant/user/session/branch violation that must move.** Workspace and user-home access is transitional and requires the same review metadata.
 - **D — ambiguous product decision.** The owning team must decide the durable boundary by the review date.
@@ -37,13 +37,19 @@ CODEOWNERS review for the checker, registry, and daemon-host adapters is a usefu
 - Call identity uses the nearest named function/method plus an occurrence number. Refactors can require registry updates even when authority is unchanged.
 - The checker verifies declared syntactic capabilities, not path provenance, tenant scoping, authorization, cleanup correctness, TOCTOU safety, or command argument safety. Those require runtime design and negative tests at the owning boundary.
 
-## Closure status (2026-08-17)
+## Closure status (2026-08-22)
 
-The registry contains **101** exact capabilities (**74 A, 27 B, 0 C, 0 D**).
+The registry contains **125** exact capabilities (**98 A, 27 B, 0 C, 0 D**).
 The only B entries remain the local upload staging adapter. Obsolete declarations
 for Unix account/group management, sudo wrappers, env-file ownership, and local
 OpenCode command execution were removed with those code paths. Sandbox path
 canonicalization remains an explicit daemon-host capability.
+
+The Agor state-home bootstrap is one system/global class-A boundary shared by
+CLI initialization, CLI-managed daemon files, initial config publication, and
+the daemon's canonical SQLite parent. It creates Agor-owned state privately but
+does not apply that policy to custom database parents or silently rewrite an
+existing operator-managed directory's group/ACL policy.
 
 Runtime Git lifecycle work uses typed executor payloads. Application RBAC is
 projected into sandbox mounts at launch rather than POSIX groups or ACL repair;
@@ -51,4 +57,4 @@ there are no `unix.sync-*` handlers or daemon host-identity operations.
 
 The checker still cannot see semantic path authority. In particular, daemon services resolve tenant layout strings and carry branch/repo cwd values from tenant-owned database records into typed executor payloads. That is intentional routing data, not daemon I/O: local executor processes launch from the executor package directory, and only executor commands consume workspace cwd. Review payload schemas and executor command handlers when changing this contract, because a string passed into an unmanifested dependency or remote launcher can become filesystem authority without a syntactic daemon capability.
 
-Executor-owned SDK session persistence and per-user home persistence are a separate architecture concern. This boundary does not claim that executor runtimes are filesystem-free; it claims the daemon runtime is free of tenant repo/branch/user/session filesystem readers, writers, cwd use, and permission-command arguments.
+Executor-owned SDK session persistence and general per-user home persistence are a separate architecture concern. The one narrow exception is the HA Codex credential authority: it mutates only the server-resolved canonical tenant/user credential route, inside the database authority transaction, through an opened no-follow directory capability. Outside that explicit authority, the daemon runtime remains free of tenant repo/branch/user/session filesystem readers, writers, cwd use, and permission-command arguments.

@@ -1,11 +1,9 @@
 /**
  * Schedule hook tests
  *
- * Covers the two RBAC-independent paths that Codex's round-3 review
- * flagged as missing test coverage:
+ * Covers two partial-update paths:
  *
- * 1. Patching `cron_expression` with RBAC disabled (i.e. without the
- *    `loadScheduleAndBranch` chain caching `params.schedule`) — the
+ * 1. Patching `cron_expression` without a preloaded `params.schedule` — the
  *    `ensureCurrentScheduleLoaded` lazy-load fetches the row, then
  *    `recomputeNextRunAt` updates `data.next_run_at`.
  *
@@ -88,7 +86,7 @@ describe('ensureCurrentScheduleLoaded', () => {
     expect(ctx.params.schedule).toBeUndefined();
   });
 
-  it('no-ops on patch when RBAC already cached the schedule', async () => {
+  it('no-ops on patch when authorization already cached the schedule', async () => {
     const cached = makeSchedule({ name: 'cached' });
     const repo = makeStubRepo();
     const ctx = makeContext({
@@ -102,7 +100,7 @@ describe('ensureCurrentScheduleLoaded', () => {
     expect(ctx.params.schedule).toBe(cached);
   });
 
-  it('loads on patch when RBAC is off and no cached schedule exists', async () => {
+  it('loads on patch when no cached schedule exists', async () => {
     const row = makeSchedule({ name: 'from-db' });
     const repo = makeStubRepo(row);
     const ctx = makeContext({
@@ -355,7 +353,7 @@ describe('recomputeNextRunAt', () => {
     expect((ctx.data as Partial<Schedule>).next_run_at).toBe(explicit);
   });
 
-  it('H1: recomputes on patch with RBAC off (current schedule loaded by ensureCurrentScheduleLoaded)', async () => {
+  it('H1: recomputes on patch with the current schedule preloaded', async () => {
     const current = makeSchedule({ cron_expression: '0 0 * * 0', next_run_at: 1_000_000_000_000 });
     const ctx = makeContext({
       method: 'patch',

@@ -502,6 +502,204 @@ describe('KnowledgeDocumentsService permissions', () => {
   );
 
   dbTest(
+    'projects human and assistant authors on document and history service responses',
+    async ({ db }) => {
+      const owner = await seedUser(db, 'Attribution Owner');
+      const teammate = await seedUser(db, 'Attribution Teammate');
+      const namespace = await seedNamespace(db, 'attribution-contract');
+      const documents = new KnowledgeDocumentsService(db);
+      const history = new KnowledgeVersionsService(db);
+
+      const created = await documents.putDocument(
+        {
+          namespace_slug: namespace.slug,
+          path: 'authors.md',
+          content_text: '# Authors\n\nHuman edit',
+          edit_policy: 'public',
+        },
+        params(owner)
+      );
+      expect(created.updated_by_user).toEqual({
+        status: 'resolved',
+        display_name: 'Attribution Owner',
+      });
+
+      const assistantSessionId = generateId();
+      await documents.putDocument(
+        {
+          document_id: created.document_id,
+          content_text: '# Authors\n\nAssistant edit',
+          expected_version: 1,
+        },
+        {
+          user: teammate,
+          knowledgeWriteAttribution: {
+            sessionId: assistantSessionId,
+            agenticTool: 'codex',
+            teammateName: 'Scout',
+          },
+        }
+      );
+
+      // Exercise the same hydrated service result consumed by the document
+      // subtitle and MCP get path, not the attribution repository in isolation.
+      const hydrated = await documents.getDocument(
+        { document_id: created.document_id, include_content: true },
+        params(owner)
+      );
+      expect(hydrated).toMatchObject({
+        updated_by: teammate.user_id,
+        updated_by_user: {
+          status: 'resolved',
+          display_name: 'Attribution Teammate',
+        },
+        updated_by_session_id: assistantSessionId,
+        updated_by_agentic_tool: 'codex',
+        updated_by_teammate_name: 'Scout',
+        current_version: {
+          created_by: teammate.user_id,
+          created_by_user: {
+            status: 'resolved',
+            display_name: 'Attribution Teammate',
+          },
+          created_by_session_id: assistantSessionId,
+          created_by_agentic_tool: 'codex',
+          created_by_teammate_name: 'Scout',
+        },
+      });
+
+      // Exercise the immutable history service response consumed by the left
+      // rail. Both the human-only and teammate-authored versions are covered.
+      const versions = await history.find(
+        params(owner, { document_id: created.document_id, include_content: true })
+      );
+      expect(versions).toHaveLength(2);
+      expect(versions[0]).toMatchObject({
+        created_by: teammate.user_id,
+        created_by_user: {
+          status: 'resolved',
+          display_name: 'Attribution Teammate',
+        },
+        created_by_session_id: assistantSessionId,
+        created_by_agentic_tool: 'codex',
+        created_by_teammate_name: 'Scout',
+      });
+      expect(versions[1]).toMatchObject({
+        created_by: owner.user_id,
+        created_by_user: {
+          status: 'resolved',
+          display_name: 'Attribution Owner',
+        },
+        created_by_session_id: null,
+      });
+
+      // Text search is also a document-authorized response surface and feeds
+      // the active Knowledge snapshot directly on cold search navigation.
+      const searchResults = await new KnowledgeSearchService(db).find(
+        params(owner, { q: 'Assistant edit' })
+      );
+      expect(searchResults).toHaveLength(1);
+      expect(searchResults[0]).toMatchObject({
+        document: {
+          updated_by_user: {
+            status: 'resolved',
+            display_name: 'Attribution Teammate',
+          },
+          updated_by_session_id: assistantSessionId,
+          updated_by_agentic_tool: 'codex',
+          updated_by_teammate_name: 'Scout',
+        },
+        current_version: {
+          created_by_user: {
+            status: 'resolved',
+            display_name: 'Attribution Teammate',
+          },
+          created_by_session_id: assistantSessionId,
+          created_by_agentic_tool: 'codex',
+          created_by_teammate_name: 'Scout',
+        },
+      });
+
+      const hydratedList = await documents.find(
+        params(owner, { namespace_id: namespace.namespace_id, include_content: true })
+      );
+      expect(hydratedList).toHaveLength(1);
+      expect(hydratedList[0]).toMatchObject({
+        updated_by_user: {
+          status: 'resolved',
+          display_name: 'Attribution Teammate',
+        },
+        current_version: {
+          created_by_user: {
+            status: 'resolved',
+            display_name: 'Attribution Teammate',
+          },
+        },
+      });
+    }
+  );
+
+  dbTest(
+    'labels system, legacy, and hard-deleted authors without exposing profiles',
+    async ({ db }) => {
+      const viewer = await seedUser(db, 'Attribution Viewer');
+      const formerAuthor = await seedUser(db, 'Former Author');
+      const namespace = await seedNamespace(db, 'attribution-former');
+      const repository = new KnowledgeDocumentRepository(db);
+      const documents = new KnowledgeDocumentsService(db);
+      const history = new KnowledgeVersionsService(db);
+
+      const systemDocument = await repository.create({
+        namespace_id: namespace.namespace_id,
+        path: 'system.md',
+        title: 'System',
+        visibility: 'public',
+        content_text: 'system content',
+        created_by: null,
+      });
+      const formerDocument = await repository.create({
+        namespace_id: namespace.namespace_id,
+        path: 'former.md',
+        title: 'Former',
+        visibility: 'public',
+        content_text: 'former content',
+        created_by: formerAuthor.user_id as UserID,
+      });
+      await new UsersRepository(db).delete(formerAuthor.user_id);
+
+      for (const document of [systemDocument, formerDocument]) {
+        const projected = await documents.getDocument(
+          { document_id: document.document_id, include_content: true },
+          params(viewer)
+        );
+        expect(projected.updated_by).toBeNull();
+        expect(projected.updated_by_user).toEqual({
+          status: 'unattributed',
+          display_name: 'System or former user',
+        });
+        expect(projected.current_version).toMatchObject({
+          created_by: null,
+          created_by_user: {
+            status: 'unattributed',
+            display_name: 'System or former user',
+          },
+        });
+        await expect(
+          history.find(params(viewer, { document_id: document.document_id }))
+        ).resolves.toEqual([
+          expect.objectContaining({
+            created_by: null,
+            created_by_user: {
+              status: 'unattributed',
+              display_name: 'System or former user',
+            },
+          }),
+        ]);
+      }
+    }
+  );
+
+  dbTest(
     'hides archived documents from direct get and recreates same path through upsert',
     async ({ db }) => {
       const owner = await seedUser(db, 'owner');

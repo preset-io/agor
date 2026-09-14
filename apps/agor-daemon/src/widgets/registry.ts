@@ -41,7 +41,7 @@ export interface WidgetSubmitCtx {
    * `params.user.role` to decide admin bypass — so applySubmit MUST pass these
    * along when patching protected services, or it gets 403'd. */
   submitterRole: string | undefined;
-  /** Session creator — credentials get written to this identity. */
+  /** Session creator, used to keep session-scoped selections owner-bound. */
   sessionCreatorUserId: UserID;
 }
 

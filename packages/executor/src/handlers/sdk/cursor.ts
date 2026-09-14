@@ -10,10 +10,10 @@
 
 import { loadManagedAgenticToolSdk } from '@agor/core/agentic-integrations';
 import { generateId, shortId } from '@agor/core/db';
-import { getMcpServersForSession } from '@agor/core/mcp';
+import { getMcpServersForSession, resolveScopedMCPAuthHeaders } from '@agor/core/mcp';
 import { DEFAULT_CURSOR_MODEL } from '@agor/core/models';
+import { renderAgorSessionIdentity } from '@agor/core/templates/session-context';
 import { mergeMCPRemoteHeaders } from '@agor/core/tools/mcp/http-headers';
-import { resolveMCPAuthHeaders } from '@agor/core/tools/mcp/jwt-auth';
 import type {
   ContentBlock,
   Message,
@@ -199,7 +199,6 @@ async function buildCursorMcpServers(args: {
   mcpToken?: string;
   repos: ReturnType<typeof createFeathersBackedRepositories>;
   forUserId?: string;
-  sessionOwnerId?: string;
 }): Promise<Record<string, McpServerConfig> | undefined> {
   const claimed = new Set<string>();
   const mcpServers: Record<string, McpServerConfig> = {};
@@ -224,7 +223,6 @@ async function buildCursorMcpServers(args: {
       mcpServerRepo: args.repos.mcpServers,
       mcpOAuthAuthHeadersRepo: args.repos.mcpOAuthAuthHeaders,
       forUserId: args.forUserId,
-      sessionOwnerId: args.sessionOwnerId,
       onServerWithheld: reporter.onServerWithheld,
     },
     // Cursor's MCP config carries no per-tool filter, so a server with gated
@@ -237,7 +235,8 @@ async function buildCursorMcpServers(args: {
     withheld: reporter.withheld,
   });
 
-  for (const { server } of serversWithSource) {
+  for (const scoped of serversWithSource) {
+    const { server } = scoped;
     const name = claimMcpName(server.name, claimed);
     if (server.transport === 'stdio') {
       if (!server.command) {
@@ -254,7 +253,7 @@ async function buildCursorMcpServers(args: {
     }
 
     if ((server.transport === 'http' || server.transport === 'sse') && server.url) {
-      const authHeaders = await resolveMCPAuthHeaders(server.auth, server.url);
+      const authHeaders = await resolveScopedMCPAuthHeaders(scoped);
       const headers = mergeMCPRemoteHeaders({ custom: server.headers, auth: authHeaders });
       mcpServers[name] = {
         type: server.transport,
@@ -467,7 +466,7 @@ export async function executeCursorTask(params: {
     const apiKey = await resolveCursorApiKey(client, taskId);
     const session = await client.service('sessions').get(sessionId);
     const repos = createFeathersBackedRepositories(client);
-    const callbacks = createStreamingCallbacks(client, 'cursor', sessionId);
+    const callbacks = createStreamingCallbacks(client, 'cursor', sessionId, taskId);
 
     if (!session.branch_id) {
       throw new Error('Cursor sessions require a branch_id so the local runtime has a cwd.');
@@ -491,7 +490,6 @@ export async function executeCursorTask(params: {
       mcpToken: session.mcp_token,
       repos,
       forUserId: contextUserId,
-      sessionOwnerId: session.created_by,
     });
 
     const agent = session.sdk_session_id
@@ -543,7 +541,7 @@ export async function executeCursorTask(params: {
       const toolCallMessageIdsByCallId = new Map<string, MessageID>();
       const rawMessages: SDKMessage[] = [];
 
-      currentRun = await agent.send(prompt, {
+      currentRun = await agent.send(`${prompt}\n\n${renderAgorSessionIdentity(sessionId)}`, {
         model,
         mcpServers,
         idempotencyKey: taskId,
@@ -618,7 +616,7 @@ export async function executeCursorTask(params: {
 
       const failed = runResult.status === 'error';
       const stopped = runResult.status === 'cancelled' || params.abortController.signal.aborted;
-      const gitStateAtEnd = await captureGitStateAtTaskEnd(client, sessionId);
+      const gitStateAtEnd = await captureGitStateAtTaskEnd(client, sessionId, taskId);
       const taskPatch: Partial<Task> = {
         status: stopped ? 'stopped' : failed ? 'failed' : 'completed',
         completed_at: new Date().toISOString(),
@@ -644,7 +642,7 @@ export async function executeCursorTask(params: {
   } catch (error) {
     const err = error instanceof Error ? error : new Error(String(error));
     console.error('[cursor] execution failed category=task_execution');
-    const gitStateAtEnd = await captureGitStateAtTaskEnd(client, sessionId);
+    const gitStateAtEnd = await captureGitStateAtTaskEnd(client, sessionId, taskId);
     const taskPatch: Partial<Task> = {
       status: 'failed',
       completed_at: new Date().toISOString(),
@@ -704,8 +702,6 @@ async function handleCursorEvent(args: {
       if (!args.isAssistantStreamStarted()) {
         args.ensureAssistantMessageIndex();
         await args.callbacks.onStreamStart(args.assistantMessageId, {
-          session_id: args.sessionId,
-          task_id: args.taskId,
           role: MessageRole.ASSISTANT,
           timestamp: new Date().toISOString(),
         });

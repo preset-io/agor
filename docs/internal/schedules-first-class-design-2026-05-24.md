@@ -5,6 +5,9 @@
 **Date:** 2026-05-24
 **Related PRs:** #1246 (global search), #1251 (reconnection), #1252 (daemon HA)
 
+> Historical implementation note: references below to conditional `branch_rbac` registration
+> describe the original rollout. Board and Branch authorization is now always enabled.
+
 ---
 
 ## 1. TL;DR
@@ -16,7 +19,7 @@ Promote schedules from a one-per-branch blob of columns on `branches` into a fir
 - **Scheduler** keeps the 30s ticker + 2min grace window — but the hot-path query becomes a real indexed `WHERE enabled = true AND next_run_at <= ?` over `schedules`, replacing today's "load every branch, filter in memory" scan ([`scheduler.ts:214`](../../apps/agor-daemon/src/services/scheduler.ts#L214)).
 - **Migration** is a single PR: add `schedules`, backfill existing enabled schedules with `timezone_mode='utc'`, ship UI, and drop the four `schedule_*` columns + `data.schedule` JSON blob from `branches` in the same migration. (Per Max — no PR stacking.)
 - **Modal** rewrite — **prompt textarea up top**, compact agent picker, advanced settings collapsed. Add IANA tz dropdown only when `mode=local`.
-- **RBAC:** the schedules service reuses the branch-tier helpers that sessions already uses (`ensureBranchPermission`, `loadBranch`, `injectCreatedBy`, etc. — see §4.4). Tier requirements mirror sessions: `view` to list/get, `session` to create, `session`-for-own / `all`-for-others to patch, `all` to delete, `prompt`-or-own-`session` to `run_now`. Same `config.execution.branch_rbac` feature flag. One new helper: `scopeScheduleQuery` (SQL-JOIN find filter).
+- **RBAC:** the schedules service reuses the branch-tier helpers that sessions already uses (`ensureBranchPermission`, `loadBranch`, `injectCreatedBy`, etc. — see §4.4). Tier requirements mirror sessions: `view` to list/get, `session` to create, `session`-for-own / `all`-for-others to patch, `all` to delete, `prompt`-or-own-`session` to `run_now`. Authorization is always enforced. One new helper: `scopeScheduleQuery` (SQL-JOIN find filter).
 - **Cross-cutting (updated 2026-08-05):** the original HA draft proposed
   PostgreSQL advisory locks, but no scheduler callsite ever acquired one. The
   implemented first HA slice uses a short schedule-row `FOR UPDATE` admission
@@ -347,7 +350,7 @@ Reasoning: An agent session "failing" is a fuzzy concept (did it error out? fini
 
 ### 4.4 RBAC — reuse the branch-tier helpers
 
-The schedules service inherits its access control from the parent branch's RBAC tier (same model as sessions). No new permission system — we wire the **existing** helpers, gated by the same `config.execution.branch_rbac` flag ([`index.ts:567`](../../apps/agor-daemon/src/index.ts#L567), passed through as `branchRbacEnabled`) that gates sessions / tasks.
+The schedules service inherits its access control from the parent Branch's RBAC tier (same model as Sessions). No new permission system: it uses the existing helpers. The conditional examples below are historical; current registration is unconditional.
 
 #### Helpers to reuse
 
@@ -906,7 +909,7 @@ Max wrote it. Concepts that translate:
 - Backfill from `branches.schedule_*` and `data.schedule`
 - **Drop** the four `branches.schedule_*` columns + `data.schedule` blob in the same migration (§5.3)
 - Schedules CRUD service (Feathers + REST + WebSocket events)
-- Branch-tier RBAC wired via existing helpers, gated by `execution.branch_rbac` (§4.4)
+- Branch-tier RBAC wired unconditionally via existing helpers (§4.4)
 - Scheduler reads from `schedules`, honors `timezone_mode`, and uses the
   schedule-row/session/task coordination model documented in §7d
 - New modal with prompt-on-top, local-mode default, IANA tz dropdown

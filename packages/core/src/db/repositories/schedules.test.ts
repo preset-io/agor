@@ -417,14 +417,13 @@ describe('ScheduleRepository.findAccessibleSchedules', () => {
     // row on it, so its schedule must not appear.
     expect(aliceVisible.every((s) => s.branch_id === aliceBranch.branch_id)).toBe(true);
 
-    // Bob is the creator of locked-branch but `created_by` does NOT grant
-    // ownership — the RBAC owner check goes through `branch_owners`. So
-    // bob only sees alice-branch's schedule (others_can=view) and NOT
-    // locked-branch's. This matches `SessionRepository.findAccessibleSessions`.
+    // Branch creation establishes the immutable primary owner. Bob therefore
+    // sees both the shared Alice branch and his own private branch.
     const bobVisible = await scheduleRepo.findAccessibleSchedules(bob.user_id as UUID);
     const bobIds = new Set(bobVisible.map((s) => s.schedule_id));
     expect(bobIds.has(aliceSchedule.schedule_id)).toBe(true);
-    expect(bobVisible.every((s) => s.branch_id === aliceBranch.branch_id)).toBe(true);
+    expect(bobIds.size).toBe(2);
+    expect(bobVisible.some((s) => s.branch_id === lockedBranch.branch_id)).toBe(true);
   });
 });
 

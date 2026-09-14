@@ -1,16 +1,29 @@
 import { describe, expect, it } from 'vitest';
 import type { ArtifactID, BoardID, BranchID, SessionID } from '../types/id';
 import {
+  deriveLoopbackReachableOrigin,
   getArtifactFullscreenUrl,
   getArtifactUrl,
   getBoardUrl,
   getBranchUrl,
   getKnowledgeUrl,
+  getMcpSlackRecoveryUrl,
   getSessionUrl,
   isAllowedHealthCheckUrl,
   normalizeHttpBaseUrl,
   normalizeOptionalHttpUrl,
 } from './url';
+
+describe('getMcpSlackRecoveryUrl', () => {
+  it('preserves a configured base path and avoids a duplicate UI mount', () => {
+    expect(getMcpSlackRecoveryUrl('https://example.test/agor')).toBe(
+      'https://example.test/agor/ui/recover/mcp'
+    );
+    expect(getMcpSlackRecoveryUrl('https://example.test/agor/ui/')).toBe(
+      'https://example.test/agor/ui/recover/mcp'
+    );
+  });
+});
 
 // Minimal UUIDv7-shaped IDs for URL builder tests.
 const SESSION_ID = '01927f9d-0000-7000-8000-000000000001' as SessionID;
@@ -196,5 +209,33 @@ describe('isAllowedHealthCheckUrl', () => {
   it('returns false for invalid URLs', () => {
     expect(isAllowedHealthCheckUrl('not-a-url')).toBe(false);
     expect(isAllowedHealthCheckUrl('')).toBe(false);
+  });
+});
+
+describe('deriveLoopbackReachableOrigin', () => {
+  it('maps wildcard bind addresses to the matching loopback', () => {
+    expect(deriveLoopbackReachableOrigin('0.0.0.0', 3030)).toBe('http://127.0.0.1:3030');
+    expect(deriveLoopbackReachableOrigin('::', 3030)).toBe('http://[::1]:3030');
+    expect(deriveLoopbackReachableOrigin('0:0:0:0:0:0:0:0', 3030)).toBe('http://[::1]:3030');
+    expect(deriveLoopbackReachableOrigin('[::]', 3030)).toBe('http://[::1]:3030');
+  });
+
+  it('maps an empty host to IPv4 loopback rather than producing an invalid URL', () => {
+    expect(deriveLoopbackReachableOrigin('', 3030)).toBe('http://127.0.0.1:3030');
+    expect(() => new URL(deriveLoopbackReachableOrigin('', 3030))).not.toThrow();
+  });
+
+  it('preserves concrete hosts and literals, bracketing IPv6', () => {
+    expect(deriveLoopbackReachableOrigin('localhost', 3030)).toBe('http://localhost:3030');
+    expect(deriveLoopbackReachableOrigin('daemon-0.internal', 8080)).toBe(
+      'http://daemon-0.internal:8080'
+    );
+    expect(deriveLoopbackReachableOrigin('127.0.0.1', 3030)).toBe('http://127.0.0.1:3030');
+    expect(deriveLoopbackReachableOrigin('fd00::1', 3030)).toBe('http://[fd00::1]:3030');
+    expect(deriveLoopbackReachableOrigin('[fd00::1]', 3030)).toBe('http://[fd00::1]:3030');
+  });
+
+  it('accepts a string port', () => {
+    expect(deriveLoopbackReachableOrigin('0.0.0.0', '3030')).toBe('http://127.0.0.1:3030');
   });
 });

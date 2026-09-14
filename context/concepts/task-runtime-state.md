@@ -113,6 +113,13 @@ the explicit create-then-run API and scheduled compatibility/reconciliation.
 | `sdk_failure`                | What runtime-health diagnosis was observed or enforced?                | Proof that execution stopped             |
 | `termination_request`        | Which termination cause owns containment, and for which request epoch? | Final containment outcome by itself      |
 
+The Task JSON also carries one daemon-private
+`executor_launch_fs_access_floor`. The launch path writes it exactly once from
+the locked Task principal and normalized Branch policy before issuing the
+task-scoped credential. Repository mapping removes it from public Task DTOs,
+and generic Task patches preserve rather than accept it. This is launch
+authority, not a request field or a dynamic mount description.
+
 An executor pulse contains a monotonically increasing executor-local sequence,
 a bounded kind/detail, and a daemon-authored observation time. The repository
 keeps only the greatest accepted sequence. Pulses intentionally coalesce to the
@@ -154,6 +161,18 @@ an explicit mapping-review point.
 - Connected active tasks heartbeat every 10 seconds by default. A scoped
   executor continues heartbeat and pulse telemetry while `stopping` until its
   provider cleanup returns and it reports quiescence.
+- That same heartbeat is the runtime-authority check; there is no second poll.
+  Before the atomic heartbeat write, the repository revalidates the durable
+  task-token fingerprint and the exact Task creator → Session → Branch binding,
+  current user existence, current prompt capability, shared-session gates and
+  branch-home scope when applicable, and effective filesystem access. Access
+  below the immutable launch floor denies the write. Higher access does not
+  change existing mounts.
+- An explicit denial claims the normal fenced `stopping` path with cause
+  `authorization_revoked`. Authority-store/query errors throw and do not stamp
+  liveness. The existing stale-heartbeat threshold supplies the bounded
+  fail-closed backstop; there is no authority cache, Redis dependency, second
+  watchdog, or uncertainty-specific timer.
 - The default stale threshold is at least 30 seconds and at least three
   heartbeat intervals.
 - A stale heartbeat requests containment using the expected status and
@@ -205,7 +224,8 @@ The termination coordinator is the single owner for executor-backed:
 - user Stop;
 - dispatch startup timeout;
 - lost heartbeat;
-- enforced SDK health failure.
+- enforced SDK health failure;
+- authorization revocation observed by the existing heartbeat.
 
 It first atomically claims `stopping` with a durable `termination_request`.
 The request timestamp fences late or duplicate executor quiescence reports.

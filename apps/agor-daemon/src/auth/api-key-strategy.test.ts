@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { isAuthenticationUserLookup } from '../services/users.js';
 import { ApiKeyStrategy } from './api-key-strategy.js';
 
 describe('ApiKeyStrategy tenant propagation', () => {
@@ -18,5 +19,22 @@ describe('ApiKeyStrategy tenant propagation', () => {
 
     expect(apiKeysRepo.verifyKey).toHaveBeenCalledWith('agor_sk_test');
     expect(usersService.get).toHaveBeenCalledWith('user-1', params);
+    expect(isAuthenticationUserLookup(params)).toBe(true);
+    expect(params.tenant).toEqual({ tenant_id: 'tenant-a', source: 'auth_claim' });
+  });
+
+  it('leaves Socket.IO header authentication to the namespace boundary', async () => {
+    const strategy = new ApiKeyStrategy();
+    const handshake = {
+      auth: {},
+      issued: Date.now(),
+      query: {},
+      headers: { authorization: 'Bearer agor_sk_test' },
+    };
+
+    await expect(strategy.parse(handshake)).resolves.toBeNull();
+    await expect(
+      strategy.parse({ headers: { authorization: 'Bearer agor_sk_test' } })
+    ).resolves.toEqual({ strategy: 'api-key', apiKey: 'agor_sk_test' });
   });
 });

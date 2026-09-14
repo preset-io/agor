@@ -16,6 +16,11 @@ This file is intentionally high-level. There are three places to look:
 
 **Rule of thumb:** If a topic has a guide page, read the guide. `context/` is for orientation, not exposition.
 
+**Do not accumulate task reports in the repo.** Routine bug investigations, audit snapshots,
+before/after evidence, and validation receipts belong in the issue or PR, not new dated
+`docs/internal/` files. Update an existing guide or code comment for durable behavior changes;
+retain separate docs only for lasting design/security contracts or operational runbooks.
+
 ---
 
 ## Quick Start
@@ -87,7 +92,7 @@ Terms you'll see across the codebase, UI, and docs:
 | **Daemon**         | The FeathersJS server (`apps/agor-daemon`) that owns the database, services, WebSocket events, and MCP HTTP endpoint. Default port 3030.                                                        |
 | **Executor**       | Process-isolated agent runtime in `packages/executor/`. Spawns Claude / Codex / Gemini / OpenCode via their SDKs locally, sandboxed, or through a delegated external substrate.                 |
 | **MCP**            | Model Context Protocol. Agor exposes itself as an MCP server (`POST /mcp`) so agents can introspect sessions, branches, boards, etc.                                                            |
-| **RBAC**           | Branch-scoped permission tiers (`none`/`view`/`session`/`prompt`/`all`). Feature-flagged via `execution.branch_rbac`. See "Feature Flags" below.                                                |
+| **RBAC**           | Always-on normalized board/branch capability policies with immutable primary owners, named users/groups, unmatched-member fallback, and branch file access.                                     |
 | **Execution mode** | `simple` / `sandbox` / `delegated` — trusted local, fail-closed local filesystem sandbox, or explicitly delegated external execution. The config key remains `unix_user_mode` temporarily.      |
 | **Genealogy**      | Parent/child + fork ancestry of a session. Surfaced as a tree inside a branch card.                                                                                                             |
 | **Short ID**       | First 8 chars of a UUIDv7, used in UI and CLI. Resolved at API boundary via a `resolveShortId` hook. See [`context/concepts/id-management.md`](context/concepts/id-management.md).              |
@@ -113,6 +118,7 @@ Terms you'll see across the codebase, UI, and docs:
 | Frontend UI / design system      | [`context/guidelines/frontend.md`](context/guidelines/frontend.md)                                                                                                                                                                                      |
 | Operational logging              | [`context/guidelines/logging.md`](context/guidelines/logging.md)                                                                                                                                                                                        |
 | Testing                          | [`context/guidelines/testing.md`](context/guidelines/testing.md)                                                                                                                                                                                        |
+| Shared runtime identifiers       | [`context/guidelines/constants.md`](context/guidelines/constants.md)                                                                                                                                                                                    |
 | IDs / short IDs / branded types  | [`context/concepts/id-management.md`](context/concepts/id-management.md)                                                                                                                                                                                |
 | Web-layer security (CSP/CORS)    | [`context/concepts/security.md`](context/concepts/security.md)                                                                                                                                                                                          |
 | Executor isolation               | [`context/explorations/executor-isolation.md`](context/explorations/executor-isolation.md)                                                                                                                                                              |
@@ -127,10 +133,11 @@ Terms you'll see across the codebase, UI, and docs:
 
 1. **Type-driven** - Use branded types for IDs, strict TypeScript
 2. **Centralize types** - ALWAYS import from `packages/core/src/types/` (never redefine)
-3. **Read before edit** - Always read files before modifying
-4. **Prefer Edit over Write** - Modify existing files when possible
-5. **Git operations** - ALWAYS use `simple-git` (NEVER subprocess `execSync`, `spawn`, etc.)
-6. **Error handling** - Clean user-facing errors, no stacktraces in CLI
+3. **Centralize shared runtime identifiers** - Import the domain-owned value or family instead of retyping protocol strings; see [`context/guidelines/constants.md`](context/guidelines/constants.md)
+4. **Read before edit** - Always read files before modifying
+5. **Prefer Edit over Write** - Modify existing files when possible
+6. **Git operations** - ALWAYS use `simple-git` (NEVER subprocess `execSync`, `spawn`, etc.)
+7. **Error handling** - Clean user-facing errors, no stacktraces in CLI
 
 ### Important Rules
 
@@ -213,7 +220,6 @@ Application RBAC and process isolation are separate controls:
 
 ```yaml
 execution:
-  branch_rbac: true # enforce branch permissions in the application
   unix_user_mode: sandbox # simple | sandbox | delegated
 ```
 
@@ -238,7 +244,6 @@ Relevant options include:
 
 ```yaml
 execution:
-  branch_rbac: boolean
   unix_user_mode: simple | sandbox | delegated
   allow_web_terminal: boolean
   session_token_expiration_ms: number
@@ -252,42 +257,47 @@ mode a terminal is a shell as the daemon account and can expose daemon state;
 use `sandbox` for fail-closed local filesystem isolation, or a reviewed
 `delegated` substrate for external execution.
 
-### Permission Tiers (`others_can`)
+### Capability policies
 
-The `others_can` field on branches controls what non-owners can do:
+Every board and branch has one immutable primary owner. A board stores a
+`board_access` policy and one complete default `BranchPermissionConfig`.
+Branches bind to that package with `inherit | override`; an override begins as
+a copy of the current board template.
 
-| Tier      | Rank | Description                                                                                                                                    |
-| --------- | ---- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
-| `none`    | -1   | No access (branch is completely private to owners)                                                                                             |
-| `view`    | 0    | Can read branches, sessions, tasks, messages                                                                                                   |
-| `session` | 1    | **Default.** Can create new sessions (running as own identity) and prompt own sessions only                                                    |
-| `prompt`  | 2    | Can prompt ANY session, including other users' sessions. **Warning: sessions retain the original creator's execution and credential context.** |
-| `all`     | 3    | Full control (create/update/delete sessions)                                                                                                   |
+- Board roles: Viewer, Editor, Manager.
+- Branch roles: Viewer, Collaborator, Manager.
+- Branch file access: `none | read | write`.
+- Terminal is derived from Collaborator/Manager plus non-`none` file access.
+- Manager is cumulative but never implies foreign-session prompt authority.
+- Each entry references exactly one user or group. Direct-user entries shadow
+  groups; otherwise active group grants combine and filesystem access takes the
+  maximum.
+- `Others` matches only active same-tenant members with no direct/group match.
 
-The `session` tier is the safe default — it lets collaborators work independently without being able to borrow other users' execution contexts.
-
----
-
-### Branch-Level Flags
-
-Beyond `others_can`/`others_fs_access`, individual branches expose opt-in
-security toggles stored alongside permissions:
-
-| Flag                                | Default | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| ----------------------------------- | ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `dangerously_allow_session_sharing` | `false` | When OFF (safe default), `agor_sessions_spawn` and `agor_sessions_prompt(mode:"fork"\|"subsession")` attribute the new child session to the **calling** user — it runs under the caller's execution-home and credential route. When ON, legacy behavior is restored: the child inherits `parent.created_by`, so a collaborator can effectively spawn agents that execute as the original session owner's execution context. Admins are always attributed to themselves regardless of this flag. Cross-user spawns under the legacy path emit `[SECURITY]` warning logs. See [`context/explorations/session-sharing.md`](context/explorations/session-sharing.md). |
+Shared session prompting is tenant-gated and explicitly enabled in the complete
+board-default or branch-override configuration. It applies only to branch-home
+Sessions: the conversation and branch SDK state are shared, while task
+attribution, execution home, managed env/connector credentials, private MCP
+visibility, and branch mounts use the actual caller. Historical execution-home
+Sessions are never shareable. See
+[`context/explorations/session-sharing.md`](context/explorations/session-sharing.md).
 
 ---
 
 ### Implementation Notes
 
-- Branch owners, grants, and `others_can` exist independently of execution mode.
+- Normalized board/branch capability policies exist independently of execution
+  mode. Historical owner/grant tables and `others_can` fields are inert,
+  fail-closed compatibility shells.
+- Policy tables persist fixed roles (plus branch filesystem access), not
+  capability JSON. API capability arrays are derived and validated read
+  models; SQL inventory predicates compare normalized role/principal columns.
 - `sandbox` uses application RBAC to derive filesystem mounts; it creates no
   POSIX users or groups.
-- `delegated` passes trusted tenant/user identifiers and the transitional home
-  key to an external launcher; the launcher owns enforcement.
+- `delegated` passes trusted tenant/user identifiers, `{branch_fs_access}`, and
+  the transitional home key to an external launcher; the launcher owns enforcement.
 - Historical `unix_group` columns remain nullable and ignored at runtime.
-- The Owners & Permissions UI is controlled by `branch_rbac`.
+- The Permissions UI is always available and fails closed when policy data cannot load.
 
 Related files:
 
@@ -372,13 +382,13 @@ Tunable from `~/.agor/config.yaml` under `security.*` — see
 
 ### MCP Catalog
 
-The MCP marketplace catalog is `packages/core/src/mcp-catalog/curated.yaml`,
+The MCP Catalog is `packages/core/src/mcp-catalog/curated.yaml`,
 checked into this repository and loaded into the daemon process on first read.
-There is no catalog table and no ingestion job: the marketplace offers exactly
+There is no catalog table and no ingestion job: Catalog offers exactly
 what that file names, so adding a server is a pull request and removing one
 takes it off the shelf on the next deploy.
 
-The file lists ~50 entries across two keys. `entries:` are servers the public
+The file lists reviewed entries across two keys. `entries:` are servers the public
 [MCP registry](https://registry.modelcontextprotocol.io) publishes under exactly
 that `name`; `unpublished:` are vendor-run endpoints whose reverse-DNS name Agor
 inferred. The split is a curation record only — both lists are offered on one
@@ -388,8 +398,8 @@ written down, since parsing flattens the two.
 `name` is the identity. It is what an installed server records in
 `catalog_entry_name`, so renaming an entry orphans every install of it.
 
-The read path is one endpoint. `find` takes no query and returns all ~50 entries
-at once; the Marketplace holds them and does its own searching, filtering,
+The read path is one endpoint. `find` takes no query and returns every entry
+at once; the Catalog UI holds them and does its own searching, filtering,
 sorting and paging. So there is no server-side filter to add a case to —
 narrowing lives in `packages/core/src/mcp-catalog/query.ts`, which the browser
 imports directly as `@agor/core/mcp-catalog/query`. It is kept apart from
@@ -399,19 +409,88 @@ applying on only one side. `get(name)` still resolves a single entry — that is
 how connect turns a `catalog_key` into a URL and transport.
 
 Each entry states an `auth_type` (`none` / `oauth` / `credentials`), or omits it
-where nobody has established the answer. It decides what the marketplace tells a
+where nobody has established the answer. It decides what Catalog tells a
 user before they press Connect, and nothing else: `mcp-catalog-connect.ts`
-probes the endpoint on every connect, whatever the entry says, and installs only
-on a valid JSON-RPC `initialize` result. Servers the probe finds behind an
-account are refused — there is no credential model for them yet. When the probe
-contradicts the entry, the daemon logs it at `warn` with the stated and probed
-values; that log is the only thing that can catch a stale `auth_type`, because
-nothing else compares the file against the servers it describes.
+probes the endpoint on every connect, whatever the entry says. A valid JSON-RPC
+`initialize` result installs the server open. An OAuth challenge installs a
+`per_user` OAuth row; a non-OAuth challenge installs only when the entry carries
+a reviewed bearer-credential recipe and the caller supplies a key that passes a
+second `initialize`. When the probe contradicts the entry, the daemon logs it at
+`warn` with the stated and probed values. The catalog health workflow repeats
+that comparison on curation pull requests and on a schedule, annotates
+transient reachability separately, and fails on actionable auth/OAuth drift.
 
-That probe goes through `createPinnedFetch`
+OAuth entries that omit `oauth.compatibility_mode` use an internal,
+non-persistable `marketplace` profile. This is not a general relaxed default: it
+is derived only while the saved row remains a canonical install of the current
+OAuth catalog entry (provenance, endpoint, transport, auth prescription, and
+empty custom headers all match). It admits only the reviewed interoperability
+differences implemented in `oauth-mcp-transport.ts`, while retaining
+same-origin bounds on those fallbacks, resource/issuer binding, the exact MCP
+URL as the RFC 8707 resource, PKCE S256, and callback issuer validation. An
+explicit saved-row `strict` or `legacy` mode always wins. The catalog explicitly
+keeps Monday, Cloudflare, ClickUp, and Preset on `strict`. Preset is pinned
+defensively pending production OAuth validation, not asserted to have passed it;
+an edited/imported install, a removed entry, or any catalog configuration drift
+falls back to `strict`.
+Prisma, MongoDB, Box, HubSpot, Slack, PagerDuty, and Kagi remain off the shelf
+because the review could not establish a safely bound client-registration or
+issuer path; do not re-add one merely because its endpoint challenges for
+OAuth. GitHub instead uses its documented PAT bearer route: the catalog marks
+the OAuth challenge as a reviewed exception, Connect verifies each supplied PAT
+against the pinned endpoint, and the health audit reports separately if the
+OAuth metadata later becomes usable so the exception can be retired.
+
+An endpoint the probe finds behind a non-OAuth challenge is installed with a key
+the user pastes into the Catalog drawer. The key never goes in
+`curated.yaml` — that file is checked in, public, and byte-identical for every
+tenant. It arrives as `bearer_token` on the connect request, the only field on that
+request that is the caller's rather than the catalog's: URL, transport, and the
+kind of credential still derive server-side from the entry, so a client holding
+a key cannot name where it is sent. It is stored as `auth.token` on the
+installed `mcp_servers` row, which is where every bearer credential in Agor
+lives and therefore what `redactMCPAuthSecrets` already covers on read. Before
+the authenticated probe, Connect durably claims the caller's generation for
+that catalog install so an older concurrent request cannot later overwrite a
+newer key. It then tries the key against the endpoint (`probeRemoteBearerToken`)
+and writes the server only after acceptance, rather than installing a
+server whose every tool would fail. Reuse of a row that
+keeps a secret in its own columns is restricted to the row's owner, so two users
+connecting the same entry get two rows and two keys; re-connecting with a new
+key rotates the one row rather than leaving the old key live beside it.
+
+OAuth Connect also looks for a credential the caller already holds. It may reuse
+or refresh a live `per_user` grant only when the row is a credential peer for the
+same catalog endpoint, requested scope, compatibility/DCR/client policy, and
+recorded protected resource. Shared grants, another user's grants, routing
+overrides, custom headers, stale bindings, and mismatched resources are not
+eligible. This can reuse a user-configured peer without converting its
+provenance or lifecycle into a catalog install.
+
+Every successful Connect adds or reuses the server without creating a session.
+The Catalog keeps the drawer open with **Keep browsing** and **Start new
+session** next steps. Starting a session explicitly asks for an eligible
+teammate and agent tool, creates a caller-owned idle session through the normal
+session service, attaches the selected server, and seeds the entry's starter
+prompt into the composer as editable, unsent text. For a new OAuth grant,
+Connect pre-opens the provider window while user activation is available and
+the drawer remains in **Sign-in pending** until a durable attempt and the
+caller-scoped credential projection confirm success. Popup navigation alone is
+never success; **My Servers** remains the recovery path.
+
+The drawer's **What this can access** disclosure is expanded by default. Its
+checkbox stays inside that disclosure, before the destination fields and
+Connect action, and Connect sends the exact text shown as
+`acknowledged_disclosure`; collapsing the section never counts as consent.
+Technical details may remain collapsed because they are not the connect-time
+consent contract.
+
+Both probes go through `createPinnedFetch`
 (`packages/core/src/utils/pinned-fetch.ts`), which resolves the hostname,
-refuses it unless every resolved address is public, and connects to the address
-it checked. It is one request, to the entry's URL and nowhere else.
+refuses it unless every resolved address is public, connects to the address it
+checked, and does not follow redirects. Each is one request, to the entry's URL
+and nowhere else — which is what keeps the authenticated probe from handing the
+key to whatever a redirect names.
 
 The `mcp_catalog:` config section is retired. It stays loadable — an
 unrecognized top-level key throws, so removing it would stop the daemon of
@@ -513,15 +592,3 @@ cd apps/agor-daemon && pnpm dev
 
 _For product vision: [`README.md`](README.md)_
 _For architecture: [`context/concepts/architecture.md`](context/concepts/architecture.md) and [`apps/agor-docs/pages/guide/architecture.mdx`](apps/agor-docs/pages/guide/architecture.mdx)_
-
----
-
-## Agor Session Context
-
-You are currently running within **Agor** (https://agor.live), a multiplayer canvas for orchestrating AI coding agents.
-
-**Your current Agor session ID is: `03b62447-f2c6-4259-997b-d38ed1ddafed`** (short: `03b62447`)
-
-When you see this ID referenced in prompts or tool calls, it refers to THIS session you're currently in.
-
-For more information about Agor, visit https://agor.live

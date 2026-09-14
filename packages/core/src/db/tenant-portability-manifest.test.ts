@@ -47,8 +47,11 @@ describe('buildTenantInsertOrder', () => {
   it('deletes but never exports transient authorities or deployment-bound grants', () => {
     const nonPortable = nonPortableTenantTableNames();
     expect(nonPortable).toEqual([
+      'claude_oauth_attempts',
+      'codex_device_auth_attempts',
       'executor_session_token_authorities',
       'github_install_states',
+      'mcp_oauth_client_registrations',
       'mcp_oauth_pending_flows',
       'user_mcp_oauth_tokens',
     ]);
@@ -62,7 +65,7 @@ describe('buildTenantInsertOrder', () => {
 describe('tenantPortabilityForeignKeys', () => {
   it('freezes the exact schema-derived movable FK set', () => {
     const foreignKeys = tenantPortabilityForeignKeys();
-    expect(foreignKeys).toHaveLength(92);
+    expect(foreignKeys).toHaveLength(109);
     expect(Object.isFrozen(foreignKeys)).toBe(true);
     const structuralKeys = foreignKeys.map((foreignKey) =>
       [
@@ -80,9 +83,44 @@ describe('tenantPortabilityForeignKeys', () => {
     }
   });
 
+  it('moves normalized board and branch policies with their resources and principals', () => {
+    expect(tenantPortabilityForeignKeys()).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          childTable: 'board_access_entries',
+          childColumns: ['tenant_id', 'board_id'],
+          parentTable: 'board_access_policies',
+          parentColumns: ['tenant_id', 'board_id'],
+          onDelete: 'cascade',
+        }),
+        expect.objectContaining({
+          childTable: 'branch_permission_entries',
+          childColumns: ['tenant_id', 'config_id'],
+          parentTable: 'branch_permission_configs',
+          parentColumns: ['tenant_id', 'config_id'],
+          onDelete: 'cascade',
+        }),
+      ])
+    );
+  });
+
   it('does not classify deployment-bound MCP OAuth grant relations as movable', () => {
     expect(tenantPortabilityForeignKeys()).not.toEqual(
       expect.arrayContaining([expect.objectContaining({ childTable: 'user_mcp_oauth_tokens' })])
+    );
+  });
+
+  it('moves external identity bindings with their projected users', () => {
+    expect(tenantPortabilityForeignKeys()).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          childTable: 'user_external_identities',
+          childColumns: ['tenant_id', 'user_id'],
+          parentTable: 'users',
+          parentColumns: ['tenant_id', 'user_id'],
+          onDelete: 'cascade',
+        }),
+      ])
     );
   });
 

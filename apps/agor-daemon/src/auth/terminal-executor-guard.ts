@@ -1,15 +1,14 @@
 /**
  * Terminal-executor identity guard.
  *
- * A terminal-scoped executor token (see terminals.ts / ServiceJWTStrategy)
+ * A terminal-scoped executor token (see terminals.ts / RuntimeJWTStrategy)
  * authenticates ONLY the Socket.IO terminal channel — those events are handled
  * in socketio.ts, outside Feathers, and are gated on `terminal_user_id`.
  *
- * As a REST/Feathers identity it must be REJECTED, not merely under-privileged:
- * its `role: 'terminal-executor'` is not a key in the RBAC rank table, so
- * `hasMinimumRole()` falls through to rank 0 (== viewer) and it would otherwise
- * pass `requireAuth` and any viewer-gated check. "Low" is not "none"; we make it
- * "none" here by rejecting the request outright at the shared auth chokepoint.
+ * As a REST/Feathers identity it must be REJECTED, not merely under-privileged.
+ * The canonical RBAC helpers fail closed for this non-user role, and this guard
+ * independently rejects it at the shared auth chokepoint so a future change to
+ * role comparison cannot accidentally turn a terminal token into an API user.
  */
 
 import { Forbidden } from '@agor/core/feathers';
@@ -23,8 +22,8 @@ export function isTerminalExecutorIdentity(user: unknown): boolean {
 /**
  * Reject any REST/Feathers service call made by a terminal-executor identity.
  * Composed into `requireAuth` so it runs for every authenticated endpoint. The
- * authentication service itself is NOT gated by `requireAuth`, so the executor
- * can still (re)authenticate its socket.
+ * authentication service itself is NOT gated by `requireAuth` because the
+ * Socket.IO handshake invokes the JWT strategy before accepting a connection.
  */
 export async function rejectTerminalExecutorIdentity(context: HookContext): Promise<HookContext> {
   const user = (context.params as { user?: unknown } | undefined)?.user;

@@ -23,6 +23,9 @@ export const DAEMON = {
  * Environment Management Constants
  */
 export const ENVIRONMENT = {
+  /** Maximum operator guidance length, also enforced before Markdown rendering. */
+  DISCLAIMER_MAX_LENGTH: 4000,
+
   /**
    * Health check interval in milliseconds
    * How often to poll environment health when status is 'running'
@@ -89,6 +92,15 @@ export const WEBSOCKET = {
 /** Shared Socket.IO packet ceiling used by the daemon transport. */
 export const SOCKET_IO_MAX_BUFFER_SIZE_BYTES = 1_000_000;
 
+/** Executor Feathers RPC acknowledgement deadline. */
+export const EXECUTOR_FEATHERS_ACK_TIMEOUT_MS = 60_000;
+
+/** Extra time for bounded transport cleanup after the executor RPC deadline. */
+export const EXECUTOR_REVOCATION_TRANSPORT_CLEANUP_MARGIN_MS = 5_000;
+
+export const EXECUTOR_REVOCATION_TRANSPORT_CLEANUP_TIMEOUT_MS =
+  EXECUTOR_FEATHERS_ACK_TIMEOUT_MS + EXECUTOR_REVOCATION_TRANSPORT_CLEANUP_MARGIN_MS;
+
 /**
  * Pagination Constants
  *
@@ -105,6 +117,9 @@ export const PAGINATION = {
    * Maximum allowed limit - prevents accidental DoS from unbounded queries
    */
   MAX_LIMIT: 10_000,
+
+  /** Offset ceiling for services using the common Feathers query schema. */
+  MAX_SKIP: 10_000,
 
   /**
    * Default limit for CLI list commands - reasonable for terminal display

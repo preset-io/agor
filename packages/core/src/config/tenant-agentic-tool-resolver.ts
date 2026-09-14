@@ -1,7 +1,7 @@
 import { eq } from 'drizzle-orm';
 import type { Database } from '../db/client';
 import { select } from '../db/database-wrapper';
-import { decryptApiKey } from '../db/encryption';
+import { decryptApiKeyAsync } from '../db/encryption';
 import { TenantAgenticToolSettingsRepository } from '../db/repositories/tenant-agentic-tools';
 import { users } from '../db/schema';
 import type {
@@ -88,15 +88,40 @@ async function resolveUserConnection(
   const data = row.data as {
     agentic_tools?: StoredAgenticTools;
     agentic_auth_methods?: Partial<Record<'claude-code' | 'codex', AgenticAuthMethod>>;
+    agentic_credential_sources?: import('../types').AgenticCredentialSources;
   };
   const stored = data.agentic_tools?.[tool];
   const configuredMethod =
     tool === 'claude-code' || tool === 'codex' ? data.agentic_auth_methods?.[tool] : undefined;
+  const claudeSource =
+    tool === 'claude-code' ? data.agentic_credential_sources?.['claude-code'] : undefined;
   const method =
     configuredMethod ??
     (tool === 'claude-code' && stored?.CLAUDE_CODE_OAUTH_TOKEN ? 'subscription' : 'api_key');
   if (tool === 'codex' && method === 'subscription') {
     return { connection: {}, useNativeAuth: true };
+  }
+  if (tool === 'claude-code') {
+    // The explicit source is authoritative over dormant secrets and files.
+    // `none` is deliberately durable: clearing a pasted token must not make an
+    // older ~/.claude/.credentials.json active again. A managed-file source is
+    // written only by the OAuth service after the file write succeeds.
+    if (claudeSource === 'none') return null;
+    if (claudeSource === 'managed_file') {
+      return { connection: {}, useNativeAuth: true };
+    }
+
+    // Pre-source rows remain compatible with pasted tokens and API keys, but
+    // an empty legacy `subscription` marker is no longer authority to borrow a
+    // native file. PR #2317 had not shipped managed-file persistence before the
+    // source field was introduced, so there is no released native row to infer.
+    if (
+      claudeSource === undefined &&
+      method === 'subscription' &&
+      !stored?.CLAUDE_CODE_OAUTH_TOKEN
+    ) {
+      return null;
+    }
   }
   if (!stored || Object.keys(stored).length === 0) return null;
 
@@ -104,12 +129,16 @@ async function resolveUserConnection(
   try {
     for (const field of PROVIDER_CONNECTION_FIELDS[tool]) {
       if (tool === 'claude-code') {
-        if (method === 'subscription' && field !== 'CLAUDE_CODE_OAUTH_TOKEN') continue;
-        if (method === 'api_key' && field === 'CLAUDE_CODE_OAUTH_TOKEN') continue;
+        const effectiveSource =
+          claudeSource ?? (method === 'subscription' ? 'subscription_token' : 'api_key');
+        if (effectiveSource === 'subscription_token' && field !== 'CLAUDE_CODE_OAUTH_TOKEN') {
+          continue;
+        }
+        if (effectiveSource === 'api_key' && field === 'CLAUDE_CODE_OAUTH_TOKEN') continue;
       }
       const encrypted = stored[field];
       if (!encrypted) continue;
-      const value = decryptApiKey(encrypted).trim();
+      const value = (await decryptApiKeyAsync(encrypted)).trim();
       if (value) connection[field] = value;
     }
   } catch {
@@ -129,14 +158,25 @@ export async function resolveProviderConnection(
   }
 
   const repository = context.db ? new TenantAgenticToolSettingsRepository(context.db) : null;
-  const policy = repository
-    ? await repository.resolutionPolicy(canonical)
-    : DEFAULT_PROVIDER_RESOLUTION_POLICY;
+  // Resolve policy and its credential from one request-local snapshot, not two
+  // reads/decryptions of the same settings document separated by user hydration.
+  const settings = repository ? await repository.find(canonical) : null;
+  const policy = settings?.resolution_policy ?? DEFAULT_PROVIDER_RESOLUTION_POLICY;
+  const tenantConnection = settings?.connection ?? null;
+  // Do not read/decrypt a user's credentials when policy cannot select them.
+  // A preferred workspace connection only short-circuits when it has a usable
+  // credential; incomplete workspace configuration must retain the user fallback.
+  const needsUser =
+    policy !== 'tenant_required' &&
+    !(
+      policy === 'tenant_preferred' &&
+      tenantConnection &&
+      hasCredential(canonical, tenantConnection)
+    );
   const user =
-    context.userId && context.db
+    needsUser && context.userId && context.db
       ? await resolveUserConnection(canonical, context.userId, context.db)
       : null;
-  const tenantConnection = repository ? await repository.connection(canonical) : null;
   const userCandidate = user
     ? {
         source: 'user' as const,

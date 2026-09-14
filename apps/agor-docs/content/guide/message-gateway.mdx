@@ -1,10 +1,16 @@
 ---
 title: Message Gateway
-description: Route messages from Slack, GitHub, and other platforms directly into Agor sessions, turning any chat thread or PR comment into a portal to an autonomous coding agent.
+description: Route messages from Slack, Discord, GitHub, and other platforms directly into Agor sessions.
 heroImage: '/screenshots/marketing/agor-marketing-slack-thread.png'
 ---
 
 # Message Gateway
+
+Gateway channel lists and detail reads return saved metadata with secret-presence
+placeholders; they do not decrypt credentials or environment-variable values. A
+placeholder means a value is stored, not that it is valid. Connector execution
+and explicit connection tests load credentials separately and validate them when
+used.
 
 <div style={{ marginTop: '16px', marginBottom: '24px', padding: '16px 20px', border: '1px solid #4a90c0', borderRadius: '8px', backgroundColor: 'rgba(74, 144, 192, 0.08)' }}>
 
@@ -16,7 +22,7 @@ Things working in your favor:
 
 - **Email-based user matching.** Inbound Slack messages are aligned to Agor users via the `users:read.email` scope; GitHub and Shortcut mentions are aligned via an explicit `user_map` or the sender's platform email. When a match exists, the spawned session is attributed to that real Agor user, so prompts run under their identity and audit trail, not as a generic bot. Unmatched senders are rejected (or surfaced to admins).
 - **Encrypted credentials at rest.** Bot tokens, app tokens, and private keys are stored encrypted in the daemon database.
-- **Outbound-only transport.** Slack uses Socket Mode; GitHub and Shortcut use API polling. None of them require a public webhook URL.
+- **Outbound-only transport.** Slack uses Socket Mode; Discord uses its Gateway connection; GitHub and Shortcut use API polling. None of these connectors require a public webhook URL.
 - **Per-channel agent config.** Permission modes, model, and MCP server attachments are scoped to the channel, not global.
 
 Things that still warrant caution:
@@ -32,9 +38,9 @@ Things that still warrant caution:
 
 </div>
 
-The Message Gateway connects external messaging platforms to Agor's agent sessions. Mention your Slack bot in a channel thread, mention `@agor` on a GitHub PR, or mention the configured assistant in a Shortcut story comment, and Agor spins up a coding session on the right branch with the right agent, then routes responses back to the platform. In Slack channels, every prompt requires an explicit bot mention; Agor catches the bot up on intervening thread replies when it is mentioned again.
+The Message Gateway connects external messaging platforms to Agor's agent sessions. Mention your Slack or Discord bot in a supported channel, mention `@agor` on a GitHub PR, or mention the configured assistant in a Shortcut story comment, and Agor spins up a coding session on the right branch with the right agent, then routes responses back to the platform. In Slack and Discord channel-like surfaces, every prompt requires an explicit bot mention.
 
-> Currently supports **Slack**, **GitHub**, **Shortcut**, and **Microsoft Teams**. Discord, WhatsApp, and Telegram connectors are planned.
+> Currently supports **Slack**, **Discord**, **GitHub**, **Shortcut**, and **Microsoft Teams**. WhatsApp and Telegram connectors are planned.
 
 <img
   src="/screenshots/marketing/agor-marketing-slack-thread.png"
@@ -107,7 +113,7 @@ The outbound routing is a lightweight after-hook on message creation. For sessio
 Standalone SQLite installations require no new configuration and keep the
 historical process-local listener lifecycle.
 
-> **Provider limit in PostgreSQL mode:** Slack, GitHub, and Shortcut listeners
+> **Provider limit in PostgreSQL mode:** Slack, GitHub, Shortcut, and Discord listeners
 > support distributed ownership. Microsoft Teams currently depends on a local
 > Bot Framework port and in-memory conversation references, so Agor fails its
 > listener closed on PostgreSQL. Teams remains available only in standalone
@@ -138,14 +144,18 @@ inside the Message's tenant. A channel refresh in a tenant with no enabled
 channels cannot stop or suppress another tenant. Missing, stale, or inconsistent
 discovery metadata is skipped rather than falling back to the static tenant.
 
-Stable provider event IDs suppress duplicate Slack, GitHub, and Shortcut
+Stable provider event IDs suppress duplicate Slack, GitHub, Shortcut, and Discord
 deliveries. Slack keys the logical message by workspace, conversation, and
 message timestamp so alternate Slack envelopes for the same message converge.
-GitHub and Shortcut polling watermarks are persisted behind the same owner
-fence, with a short overlap during takeover. Their create-comment APIs do not
-accept an idempotency key, so a crash after the provider accepts an
-acknowledgement but before Agor records it can still produce a duplicate
-acknowledgement; the Agor Session and Task remain deduplicated.
+GitHub and Shortcut polling watermarks are persisted behind the same owner fence.
+Discord Gateway transport sequence and session state are process-local: a
+reconnect or ownership change creates a fresh transport session. Discord
+conversation recovery uses bounded REST catch-up after the last Discord message
+cursor whose mention Task was admitted. That cursor is durable routing state,
+not a transport checkpoint. Their create-comment APIs do not accept an
+idempotency key, so a crash after the provider accepts an acknowledgement but
+before Agor records it can still produce a duplicate acknowledgement; the Agor
+Session and Task remain deduplicated.
 
 The legacy generic channel-key inbound endpoint has no provider-event identity,
 so it is available only on standalone SQLite and fails closed on PostgreSQL.
@@ -159,6 +169,11 @@ and no superuser daemon connection is required.
 ### Outbound branch binding
 
 Proactive outbound emits (`agor_gateway_emit_message`) and Slack thread history reads made from a session are bound to that session's own branch: the gateway channel's target branch must match the calling session's branch, and there is no admin-role bypass. `agor_gateway_outbound_targets_list` only returns channels a session can actually use. Calls made without session context (personal API keys) follow the regular user-permission model instead.
+
+Discord outbound emits use a `channel:<snowflake>` target. A Discord outbound
+seed is recorded durably; the first eligible human reply to any seed chunk
+consumes that seed and starts the mapped session. Replies to later response
+chunks continue the same session.
 
 ## Slack thread behavior
 
@@ -216,6 +231,20 @@ The one step neither path can cover is the **app-level token**: `connections:wri
 
 DM the bot from the **Apps** section of Slack, or `@mention` it in any channel or group the bot has been added to. You'll see session creation confirmed, followed by the agent's response in the same thread. In channels and group DMs the bot responds **only** to explicit `@`-mentions; direct messages don't need one.
 
+Gateway conversations appear under **Gateway Sessions** on the target branch. Sessions they spawn are nested beneath the gateway parent, including remote-created sessions that live on another branch; selecting a remote child opens its canonical session. Gateway roots are ordered by most recent activity. Section and parent collapse choices persist on board cards.
+
+### Optional session cleanup
+
+Gateway Sessions are retained until someone archives them. Agor does not currently run an automatic gateway-retention worker or expose a per-channel retention setting.
+
+For branch-wide cleanup today, use a [scheduled prompt](/guide/scheduler) for an explicit, workspace-specific policy. Have the scheduled teammate call `agor_sessions_bulk_archive` with `sessionType: "gateway"`, its `branchId`, and the desired `olderThanDays`; test the filter with `dryRun: true` before changing the schedule to `dryRun: false`.
+
+Filters select root Sessions. The dry run reports additional active same-branch forked or spawned descendants and how many of them are still executing. If descendants exist, execution requires an explicit choice: `includeChildren: true` archives the complete local trees, while `includeChildren: false` intentionally archives only the matching roots. Archiving hides Sessions but does not stop their execution.
+
+Remote-created Sessions live on another branch and retain an independent lifecycle. Bulk archive never follows those cross-branch provenance links.
+
+Archiving is reversible and preserves the Session transcript for search and audit. The tool applies the schedule owner's normal RBAC permissions and reports Sessions it cannot modify.
+
 ### Scope reference
 
 The wizard and manifest bake these in automatically. This table is for understanding what each capability grants, not a checklist to apply by hand. Scopes are bot scopes (requested in the manifest); `connections:write` is the one app-level scope, generated separately on the app-level (`xapp-`) token.
@@ -234,15 +263,103 @@ Notes:
 - `app_mentions:read` and the `app_mention` event are added whenever **any** channel-like surface (public channel, private channel, or group DM) is enabled. Those surfaces all trigger on `@`-mention, so no `message.channels` / `message.groups` / `message.mpim` events are requested.
 - `connections:write` never appears in the manifest. It lives on the app-level token you generate under **Basic Information → App-Level Tokens**.
 
+## Discord behavior
+
+Discord is intentionally narrow and explicit:
+
+- Each enabled row names one bot application, one guild, and one or more
+  allowlisted public parent channels. A privileged **Message Content** intent
+  must be enabled in Discord and acknowledged in the Agor configuration. A
+  structured mention outside inline or fenced code is the wake-up trigger;
+  mention text is not a substitute for the intent.
+- Top-level summons use `public_thread_per_summon`: Agor creates or reuses one
+  public thread for the summon, and the response is delivered in that thread.
+  Existing public-thread mappings remain readable for compatibility, but old
+  implicit configurations are disabled and inert until explicitly translated.
+  The configured auto-archive setting applies to threads Agor creates.
+- The channel and author boundaries are separate. Public parent channels,
+  Discord user IDs, and Discord role IDs are all explicit allowlists; at least
+  one author allowlist entry is required. DMs, private threads, wrong guild or
+  channel, bot/self messages, webhooks, attachments, embeds, components,
+  stickers, polls, and messages without a structured mention are ignored.
+- Identity is either (a) aligned through a tenant-owned Discord user ID → Agor
+  email map, where an unmapped author is rejected, or (b) one explicitly chosen
+  fixed Agor user. These modes are mutually exclusive. There is no fallback
+  from an absent map entry to a fixed user.
+
+### Catch-up and durability
+
+The live mention is the only wake-up trigger. After the mapping's last admitted
+Discord message cursor, Agor uses Discord REST history to fetch the bounded
+interval through the live mention, oldest first. The defaults are 5 pages, 200
+messages, 32 KiB of prompt context, a 30-second request timeout, 2 rate-limit
+retries, and 10 seconds of total rate-limit delay. Operators may lower or raise
+each value only within its documented ceiling: 10 pages, 500 messages, 128 KiB,
+60 seconds, 5 retries, and 30 seconds.
+
+Fetched history is untrusted, in-memory context; it is not a durable transcript
+and does not create a delayed Task. Agor admits the Task before advancing the
+cursor. If history or Task admission fails, the cursor remains unchanged. A
+human reply that arrives without a live mention is not a Task; a later mention
+re-reads the bounded interval. This means missed mentions are not replayed by an
+autonomous history worker, and a successful live mention is the only event that
+wakes the agent.
+
+Discord transport state is stateless from Agor's durable perspective. Gateway
+sequence/session checkpoints, repair/redrive controls, provider history, and
+provider actions are not operator configuration or MCP resources. Only routing
+facts, admitted cursors, mappings/aliases, and the narrow final-response
+delivery path are durable. Responses are text-only (`files:false`) and expose
+no agent tools (`agent_tools:[]`). Text is split into Discord-sized chunks;
+reply aliases resolve to the same Agor session. This is not a promise of live
+Discord delivery or end-to-end provider guarantees: the connection test is an
+advisory probe, and provider outages or permissions can still prevent delivery.
+
+Proactive sends are the one deliberate seed exception. An authorized agent may
+target only `channel:<allowlisted-parent-snowflake>`. The send is recorded as a
+durable seed; the first eligible human reply consumes that seed and starts the
+mapped session without creating a summon thread. Replies to later response
+chunks continue through the compatibility aliases.
+
+### Setting up Discord
+
+Use the **Discord setup** section in Settings → Gateway Channels, or the
+`agor_gateway_discord_setup` MCP tool, for a secret-free checklist. Neither
+creates a Discord application or calls Discord. Before enabling a row:
+
+1. Create one Discord application and bot, enable the privileged Message Content
+   intent, and copy the Application ID and target Guild ID.
+2. Invite the bot to each allowlisted public parent channel with only the View
+   Channel, Read Message History, Send Messages, Create Public Threads, and
+   Send Messages in Threads permissions needed by the contract.
+3. Configure the explicit channel and user/role allowlists, thread mode,
+   auto-archive setting, bounded catch-up values, identity mode, `files:false`,
+   `agent_tools:[]`, and optional proactive target. Enter the bot token through
+   the secure credential form; do not paste it into chat or MCP arguments.
+4. Keep the row disabled while translating an old implicit configuration. Run
+   the connection test if useful, then enable only after the explicit contract
+   validates. A passing probe does not verify future event delivery,
+   role-matchability, Task admission, or final response delivery. If the REST
+   application resource exposes flags, Agor fails closed when it reports that
+   the Message Content capability is absent; an unavailable flags field remains
+   an explicit unknown rather than proof of portal approval.
+
+For a staged rollout, create the row disabled, verify the app/guild and
+allowlists, test with a permitted author in one public channel, then expand the
+allowlist deliberately. Rollback is disabling the row or removing its listener;
+existing mappings, aliases, and proactive seeds are retained for compatibility.
+Do not use old durable Discord resume/checkpoint settings or live-message-only
+assumptions as configuration: they are not part of this contract.
+
 ## Setting Up GitHub Integration
 
 ### How It Works
 
-When someone mentions `@agor` (or your app's name) in a PR or issue comment, Agor picks it up via API polling and creates a session. The session runs on the target branch, and the agent's final response is posted back as a PR/issue comment under the app's bot identity (e.g., `agor[bot]`).
+When someone mentions `@agor` (or your app's name) in an issue comment or a PR conversation comment, Agor picks it up via API polling and creates a session. The session runs on the target branch, and the agent's final response is posted back as a PR/issue comment under the app's bot identity (e.g., `agor[bot]`). Opening an issue or PR, submitting a review, and adding an inline review comment do not trigger the gateway.
 
 Key differences from Slack:
 
-- **Polling, not WebSocket.** Agor polls the GitHub API every 15 seconds (configurable). No public endpoint needed.
+- **Polling, not WebSocket.** Agor polls the GitHub API at the channel's configured interval. No public endpoint or GitHub event subscription is needed.
 - **Per-PR/issue sessions.** Each PR or issue gets its own session. All `@agor` mentions within the same PR route to the same session.
 - **Last-message-only responses.** Unlike Slack (which streams every message), only the agent's final response is posted to GitHub. Intermediate progress is visible in the Agor UI.
 - **Bot identity.** Responses are posted as the GitHub App's bot user, not as any human user.
@@ -263,9 +380,8 @@ You can create the app through Agor's setup wizard or manually:
 
 1. Go to your GitHub org's **Settings** → **Developer settings** → **GitHub Apps** → **New GitHub App**.
 2. Set permissions: `Contents: Read`, `Issues: Read & Write`, `Pull requests: Read & Write`, `Metadata: Read`.
-3. Subscribe to events: `issue_comment`, `issues`, `pull_request`, `pull_request_review`, `pull_request_review_comment`.
-4. Disable webhooks (set `Active` to false). Agor uses polling.
-5. After creating, generate a private key and note the App ID.
+3. Disable webhooks (set `Active` to false). Agor uses API polling and does not consume GitHub App event subscriptions.
+4. After creating, generate a private key and note the App ID.
 
 ### 2. Install the App
 
@@ -283,15 +399,15 @@ You can create the app through Agor's setup wizard or manually:
    - **App ID.** Your GitHub App's ID.
    - **Private Key.** The PEM private key (encrypted at rest).
    - **Installation ID.** Found via the setup wizard or GitHub's API.
-3. Optionally configure:
-   - **Watch Repos.** Specific repos to monitor (empty = all repos in the installation).
-   - **Poll Interval.** How often to check for new mentions (default: 15 seconds).
-   - **Mention Name.** The keyword to trigger on (default: `agor`, matches `@agor`).
+3. Configure the repository scope and optional behavior:
+   - **Watch Repos.** One or more specific repositories to monitor. At least one repository is required.
+   - **Poll Interval (optional).** How often to check for new mentions.
+   - **Mention Name (optional).** The keyword to trigger on (default: `agor`, matches `@agor`).
 4. Save. Polling starts immediately.
 
 ### 4. Mention @agor on a PR
 
-Comment `@agor review this PR` on any PR in a watched repo. Within 15 seconds:
+Comment `@agor review this PR` on any PR in a watched repo. After the next successful poll:
 
 1. The comment gets a 👀 reaction (instant feedback).
 2. A "Processing..." comment appears with a link to the Agor session.
@@ -447,7 +563,7 @@ The gateway is built as a set of loosely coupled components:
 - **Gateway Service** (`/gateway`). Orchestrates inbound routing (platform to session) and outbound routing (session to platform). Custom FeathersJS service.
 - **Gateway Channels** (`/gateway-channels`). CRUD for channel configurations with encrypted credential storage.
 - **Thread-Session Map** (`/thread-session-map`). Persists the mapping between platform thread IDs and Agor session IDs.
-- **Connector Layer.** Platform-agnostic `GatewayConnector` interface with a registry pattern. Currently: `SlackConnector` (Socket Mode), `GitHubConnector` and `ShortcutConnector` (API polling), and `TeamsConnector` (Bot Framework webhook). Adding a new platform means implementing `sendMessage()` and optionally `startListening()`.
+- **Connector Layer.** Platform-agnostic `GatewayConnector` interface with a registry pattern. Currently: `SlackConnector` (Socket Mode), `DiscordConnector` (Discord Gateway), `GitHubConnector` and `ShortcutConnector` (API polling), and `TeamsConnector` (Bot Framework webhook). Adding a new platform means implementing `sendMessage()` and optionally `sendDirectMessage()` and `startListening()`.
 - **Outbound Hook.** FeathersJS `after.create` hook on the messages service. Fire-and-forget; never blocks message creation.
 
 ### Adding a New Platform
@@ -462,7 +578,17 @@ interface OutboundPayload {
 
 interface GatewayConnector {
   readonly channelType: ChannelType;
-  sendMessage(req: { threadId: string; text: string; blocks?: unknown[] }): Promise<string>;
+  sendMessage(req: {
+    threadId: string;
+    text: string;
+    blocks?: unknown[];
+  }): Promise<string | GatewaySendReceipt>;
+  sendDirectMessage?(req: {
+    target: string;
+    text: string;
+    threadId?: string;
+    blocks?: unknown[];
+  }): Promise<string | GatewaySendReceipt>;
   startListening?(
     callback: (msg: InboundMessage) => void | Promise<void>,
     options?: GatewayListenerOptions
@@ -475,6 +601,41 @@ interface GatewayConnector {
 Implement this interface, register it in the connector registry, and the gateway service handles the rest. Authentication, thread mapping, session lifecycle, and outbound routing all work automatically.
 
 The `blocks` field is opaque platform-specific data. Currently only the Slack connector uses it (to emit Block Kit `table` blocks for markdown tables). Other connectors can ignore it and rely on `text`.
+
+### Recovering MCP sign-in from Slack
+
+When a Slack-originated Task reaches an actionable MCP OAuth recovery, Agor posts a
+**Reconnect MCP** action in the originating thread and updates that message as recovery
+progresses. The link opens an authenticated Agor page, starts the normal MCP OAuth flow, and
+reconnects MCP capabilities to the same Task without replacing its conversation history. The
+Slack post is visible to everyone who can read the thread, but the action works only for the
+bound Agor user. Slack requires an `action_id` on URL buttons; Agor does not accept that value as
+an interactive authentication callback.
+
+The action is short-lived, single-use, and bound to the Agor user, Slack identity, tenant,
+Task, Session, MCP server configuration, and original channel/thread. A changed role, detached
+server, replaced configuration, completed Task, newer recovery request, or different signed-in
+user invalidates it. The page never asks for a Slack bot, app, or broad user token: Slack gateway
+credentials and MCP OAuth grants are separate.
+
+Agor does not automatically replay the interrupted MCP invocation. After recovery, the thread
+states whether you may explicitly request a retry or whether the provider might already have
+observed the call and you should instead tell the assistant what to do next. If the active agent
+cannot accept live MCP reprojection, the thread truthfully asks for a new turn while retaining the
+existing conversation.
+
+Slack delivery is deliberately at least once. Agor attaches secret-free Slack message metadata
+and performs one bounded thread-history reconciliation after an ambiguous/crashed send when the
+workspace permits that read. Slack does not deduplicate posts by `client_msg_id`, so Agor makes no
+such claim. A provider outage or a crash at the send/commit boundary can briefly leave a duplicate;
+every copy carries the same expiring, single-use, user-bound action, and later recovery generations
+supersede it safely. Terminal thread updates have their own bounded retry window and do not depend
+on whether the browser action is still valid.
+
+Process-local timers are only a best-effort latency optimization. An indexed, tenant-scoped repair
+query runs at listener startup and in a periodic sweep. Each pass has a hard task and tenant budget
+and a 24-hour due-work horizon; it never scans a tenant's historical Tasks or calls Slack inside an
+authoritative mutation transaction.
 
 ## Best Practices
 
@@ -498,13 +659,23 @@ The `blocks` field is opaque platform-specific data. Currently only the Slack co
 - **Multiple workspaces / Enterprise Grid.** Each workspace needs its own Slack app and its own bot + app token pair, configured as a separate Agor channel. One token pair maps to one workspace.
 - **Infinite message loop.** The connector filters out bot messages (`bot_id` or `subtype: bot_message`). If you see loops, check that your Slack app's bot user is properly configured.
 
+### Discord
+
+- **Bot does not respond.** Confirm the row is enabled, has a valid bot token, and passes the shared configuration checks. The bot must be in the configured guild and public text channel with permission to view, read history, and send messages.
+- **Mentions are ignored.** Confirm the privileged Message Content intent is enabled and acknowledged. The structured bot mention is required on every prompt. The author must also match an allowed user ID or hold an allowed role ID, and the message must be in the configured public parent channel.
+- **Content is ignored.** DMs, private threads, attachments, embeds, components, stickers, polls, webhooks, and bot/self messages are outside the explicit contract by design.
+- **Catch-up did not run.** REST catch-up is bounded and only runs after a live structured mention. A human reply without a mention does not create a Task; a failed history read or Task admission leaves the admitted cursor unchanged.
+- **Reconnects.** Discord Gateway sequence/session state is process-local. Agor does not expose durable Discord resume/checkpoint configuration; the next live mention uses bounded REST catch-up after the last admitted cursor.
+- **Proactive replies.** Use `channel:<snowflake>` for the configured parent channel. Replies to any response chunk use its durable alias and continue the same session; the first human reply to a proactive seed consumes that seed without creating a summon thread.
+- **Token safety.** Enter bot tokens through the secure credential UI or token widget. Do not put them in chat or MCP arguments.
+
 ### GitHub
 
-- **Bot doesn't respond to `@agor` mentions.** Check daemon logs for `[github] Watching N repos` and `[github] Starting poll loop`. Verify the App ID, private key, and installation ID are correct. Ensure the app is installed on the org with the right repos selected.
+- **Bot doesn't respond to `@agor` mentions.** Check daemon logs for `event="listener_scope_ready"` and `[github] Starting poll loop`. Verify the App ID, private key, and installation ID are correct. Ensure the app is installed on the org with the right repos selected.
 - **"GitHub App authentication failed."** The private key or app ID may be wrong. Re-check credentials. If you regenerated the private key on GitHub, update it in the channel config.
 - **Mentions detected but no session created.** Check that `mention_name` matches your app's slug (default: `agor`). Mentions inside code blocks are ignored by design.
 - **Response posted as wrong user.** GitHub comments should appear as the app's bot identity (e.g., `agor[bot]`). If comments appear as a human user, something is bypassing the connector and using a personal `GITHUB_TOKEN` instead.
-- **Rate limit errors.** At 15s polling with 5 repos, you use ~1,200 req/hour out of 5,000. If you're monitoring many repos, increase `poll_interval_ms` or use `watch_repos` to narrow scope.
+- **Rate limit errors.** At the default 15-second interval, five quiet repositories use about 1,200 polling requests per hour; paginated results and user-alignment lookups add requests. If you're monitoring many or busy repositories, increase `poll_interval_ms` or narrow `watch_repos`.
 
 ### Shortcut
 

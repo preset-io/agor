@@ -10,7 +10,7 @@ import { SessionStatus } from '@agor/core/types';
 import { describe, expect } from 'vitest';
 import { generateId } from '../../lib/ids';
 import { MCPServerNotUsableError } from '../../mcp/ownership';
-import { dbTest } from '../test-helpers';
+import { ownedDbTest as dbTest } from '../test-helpers';
 import { EntityNotFoundError } from './base';
 import { BranchRepository } from './branches';
 import { MCPServerRepository } from './mcp-servers';
@@ -195,8 +195,9 @@ describe('SessionMCPServerRepository.addServer', () => {
   dbTest('should reject a private server owned by another session creator', async ({ db }) => {
     const { session } = await setupTestData(db);
     const mcpServerRepo = new MCPServerRepository(db);
+    const anotherUserId = generateId() as UUID;
     const privateServer = await mcpServerRepo.create(
-      createMCPServerData({ owner_user_id: 'another-user' as UUID, scope: 'session' })
+      createMCPServerData({ owner_user_id: anotherUserId, scope: 'session' })
     );
     const repo = new SessionMCPServerRepository(db);
 
@@ -211,8 +212,9 @@ describe('SessionMCPServerRepository.addServer', () => {
     async ({ db }) => {
       const { session, server1 } = await setupTestData(db);
       const mcpServerRepo = new MCPServerRepository(db);
+      const anotherUserId = generateId() as UUID;
       const privateServer = await mcpServerRepo.create(
-        createMCPServerData({ owner_user_id: 'another-user' as UUID, scope: 'session' })
+        createMCPServerData({ owner_user_id: anotherUserId, scope: 'session' })
       );
       const repo = new SessionMCPServerRepository(db);
       await repo.addServer(session.session_id, server1.mcp_server_id);

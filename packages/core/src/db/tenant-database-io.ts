@@ -84,8 +84,29 @@ function joinJsonlLines(lines: string[]): string {
  * by restore (populate + insert) and re-home derivation (populate + re-emit) so
  * the transformed bytes each produces cannot drift.
  */
-function rewrittenRowJsonb(elem: SQL, destinationTenantId: string): SQL {
-  return sql`pg_catalog.jsonb_set(${elem}, ${TENANT_ID_JSONB_PATH}::pg_catalog.text[], pg_catalog.to_jsonb(${destinationTenantId}::pg_catalog.text))`;
+function rewrittenRowJsonb(elem: SQL, destinationTenantId: string, tableName: string): SQL {
+  const tenantRewritten = sql`pg_catalog.jsonb_set(${elem}, ${TENANT_ID_JSONB_PATH}::pg_catalog.text[], pg_catalog.to_jsonb(${destinationTenantId}::pg_catalog.text))`;
+  if (tableName !== 'mcp_servers') return tenantRewritten;
+
+  // A catalog stamp proves that this deployment's marketplace install path
+  // created a row. It cannot survive an archive crossing the import boundary:
+  // the destination must treat the restored definition like any other imported
+  // server and re-establish catalog trust only through Connect.
+  const imported = sql`pg_catalog.jsonb_set(
+    ((${tenantRewritten} #- '{data,catalog_entry_name}'::pg_catalog.text[])
+      #- '{catalog_entry_name}'::pg_catalog.text[]),
+    '{source}'::pg_catalog.text[],
+    '"imported"'::pg_catalog.jsonb
+  )`;
+  // Archive revisions are evidence about the source daemon, not authority in
+  // the destination. Validation rejects malformed/exhausted values before any
+  // write; every accepted row starts a fresh bounded editor-CAS sequence.
+  return sql`pg_catalog.jsonb_set(
+    ${imported},
+    '{data,config_version}'::pg_catalog.text[],
+    '1'::pg_catalog.jsonb,
+    true
+  )`;
 }
 
 /**
@@ -290,7 +311,7 @@ async function rewriteRowsToCanonicalText(
       SELECT pg_catalog.to_jsonb(
         pg_catalog.jsonb_populate_record(
           NULL::${qualifiedTable(tableName)},
-          ${rewrittenRowJsonb(sql`element.value`, destinationTenantId)}
+          ${rewrittenRowJsonb(sql`element.value`, destinationTenantId, tableName)}
         )
       )::pg_catalog.text AS row
       FROM pg_catalog.jsonb_array_elements(${arrayText}::pg_catalog.jsonb)
@@ -326,7 +347,7 @@ export async function insertTenantTableRows(
           NULL::${qualifiedTable(tableName)},
           (
             SELECT pg_catalog.jsonb_agg(
-              ${rewrittenRowJsonb(sql`element.value`, destinationTenantId)}
+              ${rewrittenRowJsonb(sql`element.value`, destinationTenantId, tableName)}
             )
             FROM pg_catalog.jsonb_array_elements(${arrayText}::pg_catalog.jsonb) AS element(value)
           )

@@ -62,14 +62,14 @@ Each branch is fully isolated. Changes in one don't affect another. AI agents ca
 
 A branch is a filesystem directory plus a database record. The record tracks:
 
-| Field                           | Purpose                                             |
-| ------------------------------- | --------------------------------------------------- |
-| `name`                          | Human-readable label shown on the card              |
-| `branch`                        | Git branch checked out in the working directory     |
-| `issue_url`, `pull_request_url` | GitHub linkage, auto-injected into zone prompts    |
-| `owners` / `others_can`         | RBAC permissions (when branch RBAC is enabled)      |
-| `board_id` + `(x, y)`           | Where the card lives on the canvas                  |
-| `environment`                   | Per-branch dev environment (start/stop, ports, URL) |
+| Field                              | Purpose                                             |
+| ---------------------------------- | --------------------------------------------------- |
+| `name`                             | Human-readable label shown on the card              |
+| `branch`                           | Git branch checked out in the working directory     |
+| `issue_url`, `pull_request_url`    | GitHub linkage, auto-injected into zone prompts     |
+| primary owner + permission package | RBAC roles, file access, and session sharing        |
+| `board_id` + `(x, y)`              | Where the card lives on the canvas                  |
+| `environment`                      | Per-branch dev environment (start/stop, ports, URL) |
 
 <img
   src="/screenshots/branch-modal.png"
@@ -80,6 +80,29 @@ A branch is a filesystem directory plus a database record. The record tracks:
 _Behind every card: the branch details modal (General / Sessions / Environment / Files / Schedule tabs). The same fields the table above describes, rendered as actual inputs._
 
 Sessions, tasks, comments, and artifacts all reference a branch. **The branch is the spine.**
+
+---
+
+## Asynchronous filesystem readiness
+
+Branch creation records the branch and dispatches worktree or clone materialization asynchronously.
+The create response can therefore contain `filesystem_status: "creating"`; REST and UI creation are
+not blocked while Git work completes.
+
+MCP callers can set `waitForReady: true` on `agor_branches_create` to wait in the creation call, or
+use the retry-safe `agor_branches_wait_for_ready` tool before creating the first session. Waiting is
+opt-in, so existing MCP callers—and all REST and UI callers—remain asynchronous. Both paths check
+immediately, then perform a fresh tenant- and RBAC-scoped branch read once per second. They wait for
+45 seconds by default and accept a bounded `waitTimeoutMs` from 1 second to 5 minutes. Values longer
+than the MCP client's request deadline require that client or host deadline to be raised as well.
+
+The standalone wait tool is the safer choice when request replay is possible: branch creation is not
+idempotent, and losing a waited create response does not cancel the branch that was already created.
+Long clones can safely repeat the read-only wait call. A timeout preserves the branch and does not
+cancel or retry materialization; terminal failures return the refreshed branch and its persisted safe
+error. Client cancellation only stops further polling. No database transaction or connection is
+retained between reads; each individual read remains subject to the daemon's normal database query
+timeout.
 
 ---
 
@@ -100,6 +123,9 @@ execution:
       - clone
     # Optional: reject clone_depth and require complete history.
     allow_shallow_clones: false
+    # Optional: stop clone-mode branches from borrowing objects from the
+    # daemon's base clone. Usually inferred — see "Borrowed objects" below.
+    borrow_base_objects: false
 ```
 
 If `branch_storage` is omitted, Agor keeps the backwards-compatible default: `worktree` is selected by default and both `worktree` and `clone` are available. When an operator restricts `allowed_modes`, the create-branch UI disables unavailable options and the daemon rejects disallowed API/MCP requests.
@@ -108,6 +134,74 @@ If `branch_storage` is omitted, Agor keeps the backwards-compatible default: `wo
 `clone_depth`; callers must omit the field to create a full clone. This is independent of mount
 topology: both full and shallow clones are self-standing, while a native worktree always requires
 the registered base repository's Git metadata.
+
+### Borrowed objects (`borrow_base_objects`)
+
+By default, clone-mode branches are created with `git clone --reference` against the daemon-managed
+base clone at `<data_home>/repos/<slug>/`. Instead of copying the whole object store, the new branch
+gets an `alternates` pointer into it — per-branch `.git/` drops from "full pack copy" to a few MB.
+Only immutable objects are shared; `.git/config`, remotes, and credentials stay branch-local, so the
+isolation clone mode buys is preserved.
+
+That pointer is baked in at create time and re-read by **every** later git command in the branch.
+It therefore requires the base clone to be readable from wherever **sessions** run — not merely from
+wherever the branch was materialized. If sessions execute in a different mount (a containerized or
+templated executor that only binds the branch workspace and never `repos/`), git in that branch
+breaks as soon as a session touches it:
+
+```
+error: unable to normalize alternate object path: /…/.agor/repos/<org>/<repo>/.git/objects
+error: Could not read <sha>
+fatal: Failed to traverse parents of commit <sha>
+```
+
+On a freshly created branch that is total: `git status`, `git log`, `git show` and `git commit` all
+exit non-zero on `fatal: bad object HEAD` before the agent can do anything. A later `git fetch` or
+`git pull` against a reachable remote can quietly backfill the missing objects and make the branch
+look healthy again — but the pointer is still there, still unresolvable, and still erroring on every
+command, and anything git could not re-download from the remote stays lost.
+
+Set `borrow_base_objects: false` on those deployments. Every clone-mode branch then carries its own
+complete object store: more disk, no cross-mount dependency.
+
+Agor turns the borrow off by itself in two cases, so most operators never touch the setting:
+
+- **`execution.sandbox` is enabled with `home_mode: per_user`** — which the named
+  `unix_user_mode: sandbox` mode forces. The owner-home overlay deliberately hides the entire daemon
+  `.agor` tree — `repos/` included — and re-exposes only the branch and the managed agentic-tools
+  directory. Branch creation itself is never sandboxed, so without this the daemon would happily
+  write a pointer its own sessions cannot follow.
+- **[`execution.executor_storage.base_repository`](/guide/containerized-execution) is
+  `unavailable`** — already an operator assertion that executors cannot see the base checkout.
+
+Setting `borrow_base_objects: true` explicitly overrides the sandbox inference, for operators who
+have made the base clone reachable another way (for example
+`execution.sandbox.extra_allow_write: ['<data_home>/repos']` — note that is a read-**write** bind,
+so a session could rewrite the object store every other borrowed branch depends on).
+`base_repository: unavailable` is not overridable.
+
+#### Repairing a branch that already has an unresolvable borrow
+
+The setting only affects branches created after the change. An existing branch keeps its pointer.
+
+Do **not** just delete `.git/objects/info/alternates`. The borrowed objects were never copied into
+the branch, so dropping the pointer strands everything that lived behind it. On a branch with no
+in-session commits that is every object (`fatal: bad object HEAD`). On one that has been worked in,
+the session's own commits survive as local objects but their history does not, so git can no longer
+walk them out — `git push` and `git format-patch` both die on `Could not read <sha>` /
+`fatal: Failed to traverse parents of commit <sha>`, and the unpushed work is unrecoverable.
+Materialize the objects first, from a context where the base clone **is** readable (the daemon host,
+not a sandboxed session):
+
+```bash
+cd <data_home>/worktrees/<repo>/<branch>
+git repack -a -d          # copies borrowed objects into a local pack — no -l/--local
+rm -f .git/objects/info/alternates
+git fsck --connectivity-only   # verify before trusting it
+```
+
+Recreating the branch also works, but it allocates a new `branch_id` and orphans anything bound to
+the old one (schedules, gateway channels).
 
 ---
 
@@ -159,9 +253,72 @@ When a feature ships and the PR merges, you usually want to clean up disk withou
 **Metadata options:**
 
 - **Archive (recommended)**: Hides from board, preserves all sessions and conversations for analytics and history.
-- **Delete permanently**: Removes all data including sessions and conversations. No undo.
+- **Delete permanently**: Requests irreversible removal of owned branch files and data. Filesystem preservation is not available for permanent deletion; use archive instead.
 
 **Best practice:** Archive with filesystem cleanup after PR merge. Only delete permanently for experimental branches with no valuable data.
+
+### Deletion and retained data
+
+Permanent deletion is not account-wide or provider-wide erasure. Shared repositories,
+user homes, account credentials, boards, and published board-owned artifacts are not
+exclusively owned by one branch. External provider conversations and remote Git refs
+are separate resources. Backups and versioned object storage remain subject to their
+configured retention and locks.
+
+Archive with workspace removal and permanent deletion share the same verified
+workspace-removal implementation. The executor uses the daemon's authoritative
+repository location and exact workspace path, not a repository inferred from the
+workspace's `.git` file. Workspace removal alone does not erase SDK homes or history.
+Selecting metadata deletion always requires complete owned-storage removal; preserve
+and clean are archive-only choices.
+
+The CLI `agor branch rm <id>` asks for confirmation; `--force` explicitly confirms
+non-interactive deletion. The former `--from-filesystem` flag is now redundant.
+
+Deletion is asynchronous. Acceptance is **not completion**: the branch stays visible
+with `deletion_status: deleting` until required storage removal and database cleanup
+have finished. The executor removes the workspace and branch-owned SDK home, asks
+the upload storage owner to remove staged bytes, and drains database descendants in
+short bounded transactions. Authorization and the branch row are removed last.
+There is no database transaction held open while filesystem or object-store work runs.
+
+Stop or cancel unfinished tasks and stop the environment before deleting. Pending
+upload staging also blocks admission. New managed task/environment work is fenced.
+Terminal attachments are closed best effort: this does **not** prove that detached
+shells or unmanaged external processes have stopped. Stop those processes yourself.
+
+A partial failure leaves `deletion_status: deletion_failed` and a safe
+`deletion_error` on the branch. Already removed files and committed data batches are
+not restored. Retry permanent deletion after correcting a reported, settled failure.
+If the executor or a daemon storage request has an unknown outcome, the original
+invocation remains fenced: elapsed time is not permission to run another destructive
+executor. Operator reconciliation is required; do not clear private maintenance data
+to force a retry. An interrupted upload reservation likewise needs reconciliation,
+not automatic expiration while its writer could still be active.
+
+Deletion currently requires a local managed executor and available authoritative
+storage roots; delegated or external launchers are rejected. Historical SDK sessions
+using a shared execution home also block deletion until their owned storage is
+reconciled; the shared user home is never recursively removed. Remote Git refs and
+shared base-repository Git history are retained. Missing ownership metadata or an
+unavailable storage root blocks deletion rather than being treated as successful
+erasure. The lazy `branch-homes` directory may be absent before the first SDK
+launch; its tenant data root must still be available. Storage failures log a safe
+substep and error category, not raw filesystem paths or credentials.
+Repository deletion requires its branches to finish permanent deletion first.
+
+New teammate Knowledge bindings cannot target a branch under deletion, and a
+namespace cannot move into or out of that branch while deletion is fenced.
+Active branch materialization and taskless `.agor.yml` exports also block deletion.
+An export releases its shared maintenance claim only after its contained executor is
+verified stopped; an unknown outcome stays fenced. Deletion heartbeats renew the
+short-lived command credential only for the same live invocation and after checking
+current branch authority, so a healthy deletion can outlast its initial credential.
+
+The daemon's existing runtime reconciliation loop observes stale deletion heartbeats;
+it does not orchestrate the long-running workflow or automatically retry it. A daemon
+replacement can interrupt individual API requests, and a deployment that also kills
+executor processes can leave an unknown outcome requiring reconciliation.
 
 ---
 
@@ -178,15 +335,27 @@ The branch is also where several other features attach:
 
 ## Permissions (RBAC)
 
-When `execution.branch_rbac: true` is set, branches enforce ownership and a per-tier `others_can` permission:
+Every branch has one primary owner and a complete permission package. Board and branch RBAC is always enabled, and primary ownership cannot be reassigned.
 
-| Tier      | What others can do                                                                           |
-| --------- | -------------------------------------------------------------------------------------------- |
-| `none`    | No access, completely private to owners                                                     |
-| `view`    | Read branches, sessions, tasks, messages                                                     |
-| `session` | **Default.** Create their own sessions on this branch                                        |
-| `prompt`  | Prompt any session, including others' (but the session still runs as its creator's identity) |
-| `all`     | Full control                                                                                 |
+A branch can inherit its board's defaults or override the whole package. Choosing an override starts with a copy of the current defaults, so you only need to change the exceptions. To move a branch, choose its destination board and Save. You need branch Manager authority and Editor or Manager access on both boards (workspace administrative bypasses still apply). Inherited branches adopt the destination’s defaults, which can change who can access conversations and files; explicit overrides and primary ownership remain unchanged. Choose an override before moving only if you intend to preserve the current permission package.
+
+| Role         | What it allows                                                                      |
+| ------------ | ----------------------------------------------------------------------------------- |
+| Viewer       | View the branch and its conversations                                               |
+| Collaborator | Viewer access plus creating and prompting branch-home Sessions                      |
+| Manager      | Collaborator access plus branch, environment, session-lifecycle, and access control |
+
+File access is selected separately as `none`, `read`, or `read/write`. A Collaborator or Manager can open a terminal only with `read` or `read/write` file access.
+
+Each access row names one person or group. A direct person entry wins over group memberships. Otherwise group entries combine and the highest file access wins. **Others** applies only to active members of the workspace who have no direct or group match.
+
+Collaborators and Managers may prompt another person's branch-home Session only
+when a workspace admin enables session sharing and the effective branch
+permission package enables **Allow shared session prompting**. The prompt is
+attributed to and executes as the actual caller; only the conversation and
+branch SDK state are shared. Sessions that use their creator's execution
+home—including Sessions created before a branch adopts branch SDK homes—are
+never shareable. Start a new independent branch-home Session instead.
 
 See **[Security](/security)** for deployment modes and the trust boundary discussion.
 

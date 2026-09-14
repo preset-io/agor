@@ -51,6 +51,18 @@ export function useIdentityGuardedAsync(
   const lastRunIdentityRef = useRef(0);
   const onIdentityChangeRef = useRef(onIdentityChange);
   onIdentityChangeRef.current = onIdentityChange;
+  const renderedIdentityRef = useRef<DependencyList | null>(null);
+  const renderedIdentity = renderedIdentityRef.current;
+  if (
+    !renderedIdentity ||
+    renderedIdentity.length !== identity.length ||
+    renderedIdentity.some((value, index) => !Object.is(value, identity[index]))
+  ) {
+    // Render-time invalidation closes the commit-to-layout microtask window.
+    // The layout effect below still owns state reset and unmount invalidation.
+    identityGenRef.current += 1;
+    renderedIdentityRef.current = [...identity];
+  }
 
   useLayoutEffect(
     () => {

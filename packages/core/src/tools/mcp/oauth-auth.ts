@@ -24,6 +24,8 @@ export interface OAuthConfig {
   cacheNamespace?: string;
   /** Durable daemon paths disable this process-local bearer cache. */
   cache?: boolean;
+  /** Optional live request authority for secret-bearing provider work. */
+  assertCurrent?: () => void;
 }
 
 export interface OAuthTokenResponse {
@@ -65,6 +67,7 @@ export interface OAuthDebugInfo {
 
 import { createHash } from 'node:crypto';
 import { safeOutboundFetch } from '../../utils/safe-outbound-fetch';
+import { asMCPExternalError, sanitizeMCPExternalError } from './external-error';
 import { resolveTokenExpiry } from './oauth-token-expiry';
 
 // Cache tokens per unique credential set to avoid cross-tenant leakage
@@ -102,24 +105,15 @@ function getCacheKey(config: OAuthConfig): string {
 }
 
 /**
- * Mask sensitive credential for logging
- */
-function maskCredential(credential?: string): string {
-  if (!credential) return '<not-provided>';
-  if (credential.length <= 8) return '***';
-  return `${credential.substring(0, 4)}...${credential.substring(credential.length - 4)}`;
-}
-
-/**
  * Sanitize OAuth config for logging (mask secrets)
  */
 function sanitizeConfigForLogging(config: OAuthConfig): Record<string, unknown> {
   return {
-    token_url: config.token_url,
-    client_id: maskCredential(config.client_id),
-    client_secret: maskCredential(config.client_secret),
-    scope: config.scope || '<none>',
-    grant_type: config.grant_type || 'client_credentials',
+    has_token_url: Boolean(config.token_url),
+    has_client_id: Boolean(config.client_id),
+    has_client_secret: Boolean(config.client_secret),
+    has_scope: Boolean(config.scope),
+    grant_type: config.grant_type === 'client_credentials' ? 'client_credentials' : 'configured',
     insecure: config.insecure || false,
   };
 }
@@ -139,6 +133,7 @@ export async function fetchOAuthToken(
   config: OAuthConfig,
   debug: boolean = false
 ): Promise<{ token: string; debugInfo?: OAuthDebugInfo }> {
+  config.assertCurrent?.();
   const debugSteps: OAuthDebugStep[] = [];
   const startTime = Date.now();
 
@@ -191,6 +186,7 @@ export async function fetchOAuthToken(
   const cached = cacheEnabled ? oauthTokenCache.get(cacheKey) : undefined;
 
   if (cached && cached.expiresAt > Date.now()) {
+    config.assertCurrent?.();
     const ttlRemaining = Math.floor((cached.expiresAt - Date.now()) / 1000);
     addDebugStep('check_cache', 'success', `Cache hit! Token still valid for ${ttlRemaining}s`, {
       fetchedAt: new Date(cached.fetchedAt).toISOString(),
@@ -202,13 +198,13 @@ export async function fetchOAuthToken(
         token: cached.token,
         debugInfo: {
           steps: debugSteps,
-          tokenUrl: config.token_url,
+          tokenUrl: '<configured>',
           tokenUrlSource: 'provided',
           credentialsSource: 'explicit',
-          clientIdMasked: maskCredential(config.client_id),
-          scope: config.scope,
+          clientIdMasked: '<configured>',
+          scope: config.scope ? '<configured>' : undefined,
           grantType: config.grant_type || 'client_credentials',
-          cacheKey: maskCredential(cacheKey),
+          cacheKey: '<opaque>',
           cacheHit: true,
           tokenFetchedAt: new Date(cached.fetchedAt),
           tokenExpiresAt: new Date(cached.expiresAt),
@@ -239,16 +235,16 @@ export async function fetchOAuthToken(
     body.append('scope', config.scope);
   }
 
-  addDebugStep('prepare_request', 'info', `Preparing OAuth request to ${config.token_url}`, {
+  addDebugStep('prepare_request', 'info', 'Preparing OAuth token request', {
     grant_type: grantType,
-    scope: config.scope || '<none>',
+    has_scope: Boolean(config.scope),
     content_type: 'application/x-www-form-urlencoded',
   });
 
   // Step 4: Fetch token
   let response: Response;
   try {
-    addDebugStep('fetch_token', 'info', `Sending POST request to ${config.token_url}`);
+    addDebugStep('fetch_token', 'info', 'Sending OAuth token request');
 
     response = await safeOutboundFetch(config.token_url, {
       method: 'POST',
@@ -260,67 +256,56 @@ export async function fetchOAuthToken(
       redirect: 'error',
       timeoutMs: 15_000,
       allowLocalhostHttp: config.allowLocalhostHttp,
+      assertCurrent: config.assertCurrent,
     });
 
     addDebugStep('fetch_token', 'info', `Received response with status ${response.status}`, {
       status: response.status,
-      statusText: response.statusText,
-      headers: {
-        'content-type': response.headers.get('content-type'),
-      },
     });
   } catch (error: unknown) {
-    const errorMessage = error instanceof Error ? error.message : String(error);
-    addDebugStep('fetch_token', 'error', `Network error: ${errorMessage}`, {
-      error: errorMessage,
-      tokenUrl: config.token_url,
-    });
-    throw new Error(`OAuth token fetch failed - Network error: ${errorMessage}`);
+    // Preserve caller authority errors rather than wrapping them as a generic
+    // provider failure that an outer compatibility layer may swallow.
+    config.assertCurrent?.();
+    const safe = sanitizeMCPExternalError(error, { stage: 'oauth' });
+    addDebugStep('fetch_token', 'error', safe.message, safe.diagnostic);
+    throw asMCPExternalError(error, { stage: 'oauth' });
   }
 
   // Step 5: Handle response
   if (!response.ok) {
     addDebugStep('handle_response', 'error', `Token fetch failed with status ${response.status}`, {
       status: response.status,
-      statusText: response.statusText,
     });
 
     // Provide helpful error messages
-    let errorMessage = `OAuth token fetch failed (${response.status} ${response.statusText})`;
-
-    if (response.status === 401) {
-      errorMessage +=
-        ' - Invalid client credentials. Check OAUTH_CLIENT_ID and OAUTH_CLIENT_SECRET.';
-    } else if (response.status === 400) {
-      errorMessage += ' - Bad request. Check grant_type, scope, or other parameters.';
-    } else if (response.status === 403) {
-      errorMessage += ' - Access forbidden. Client may not have permission for requested scope.';
-    }
-
-    throw new Error(errorMessage);
+    throw asMCPExternalError(undefined, {
+      stage: 'oauth',
+      category: 'provider_rejected',
+    });
   }
 
   // Step 6: Parse response
   let data: OAuthTokenResponse;
   try {
     data = (await response.json()) as OAuthTokenResponse;
+    config.assertCurrent?.();
     addDebugStep('parse_response', 'success', 'Successfully parsed OAuth response', {
-      token_type: data.token_type,
       expires_in: data.expires_in,
       has_refresh_token: !!data.refresh_token,
-      scope: data.scope,
     });
   } catch (error: unknown) {
-    const errorMessage = error instanceof Error ? error.message : String(error);
-    addDebugStep('parse_response', 'error', `Failed to parse JSON response: ${errorMessage}`);
-    throw new Error(`OAuth response is not valid JSON: ${errorMessage}`);
+    config.assertCurrent?.();
+    const safe = sanitizeMCPExternalError(error, {
+      stage: 'oauth',
+      category: 'invalid_response',
+    });
+    addDebugStep('parse_response', 'error', safe.message, safe.diagnostic);
+    throw asMCPExternalError(error, { stage: 'oauth', category: 'invalid_response' });
   }
 
   if (!data.access_token) {
-    addDebugStep('parse_response', 'error', 'Response missing access_token field', {
-      response: data,
-    });
-    throw new Error('OAuth response missing access_token field');
+    addDebugStep('parse_response', 'error', 'OAuth response did not contain a usable token');
+    throw asMCPExternalError(undefined, { stage: 'oauth', category: 'invalid_response' });
   }
 
   // Step 7: Cache token. Walk the shared cascade so this client-credentials
@@ -362,14 +347,14 @@ export async function fetchOAuthToken(
       token: data.access_token,
       debugInfo: {
         steps: debugSteps,
-        tokenUrl: config.token_url,
+        tokenUrl: '<configured>',
         tokenUrlSource: 'provided',
         credentialsSource: config.client_id?.includes('{{') ? 'env_vars' : 'explicit',
-        clientIdMasked: maskCredential(config.client_id),
-        scope: config.scope,
+        clientIdMasked: '<configured>',
+        scope: config.scope ? '<configured>' : undefined,
         grantType: grantType,
         tokenExpiresIn: expiresInSeconds,
-        cacheKey: maskCredential(cacheKey),
+        cacheKey: '<opaque>',
         cacheHit: false,
         tokenFetchedAt: new Date(fetchedAt),
         tokenExpiresAt: new Date(expiresAt),

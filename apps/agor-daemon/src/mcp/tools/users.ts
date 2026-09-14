@@ -249,7 +249,10 @@ export function registerUserTools(server: McpServer, ctx: McpContext): void {
         userId: mcpRequiredId('userId', 'User', 'User ID to update (UUIDv7 or short ID)'),
         email: mcpOptionalString('email', 'New email address (optional)'),
         name: mcpOptionalString('name', 'New display name (optional)'),
-        password: mcpOptionalString('password', 'New password (optional, will be hashed)'),
+        password: mcpOptionalString(
+          'password',
+          'New password (optional; secure daemon policy is enforced before hashing)'
+        ),
         role: z
           .enum([ROLES.SUPERADMIN, ROLES.ADMIN, ROLES.MEMBER, ROLES.VIEWER])
           .optional()
@@ -307,7 +310,10 @@ export function registerUserTools(server: McpServer, ctx: McpContext): void {
         'Create a new user account. Requires email and password. Optionally set name, emoji, avatar, unix_username, must_change_password, and role.',
       inputSchema: z.strictObject({
         email: mcpRequiredString('email', 'User email address (must be unique)'),
-        password: mcpRequiredString('password', 'User password (will be hashed)'),
+        password: mcpRequiredString(
+          'password',
+          'User password (secure daemon policy is enforced before hashing)'
+        ),
         name: mcpOptionalString('name', 'Display name (optional)'),
         emoji: mcpOptionalString(
           'emoji',

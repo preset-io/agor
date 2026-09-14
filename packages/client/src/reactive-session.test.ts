@@ -5,6 +5,8 @@ import {
   __streamSubscriptionCountForTest,
   attachReactiveSessionApi,
   ReactiveSessionHandle,
+  releaseReactiveSession,
+  retainReactiveSession,
   type TaskHydrationMode,
 } from './reactive-session';
 
@@ -177,6 +179,56 @@ async function bootstrapHandle(opts: MockClientOptions, taskHydration: TaskHydra
   return { handle, messageFindAll };
 }
 
+describe('shared ReactiveSessionHandle call counts', () => {
+  it('uses one lazy bootstrap and one reconnect resync for two open-session consumers', async () => {
+    const mock = createMockClient({ tasks: [], messagesByTask: {} });
+    const sessionGet = mock.client.service('sessions').get as ReturnType<typeof vi.fn>;
+
+    // SessionPanel and ConversationView now retain this exact same tuple.
+    const panel = retainReactiveSession(mock.client, SESSION_ID, { taskHydration: 'lazy' });
+    const conversation = retainReactiveSession(mock.client, SESSION_ID, {
+      taskHydration: 'lazy',
+    });
+    expect(conversation).toBe(panel);
+    await panel.ready();
+
+    expect(sessionGet).toHaveBeenCalledTimes(1);
+    expect(mock.sessionStreams.create).toHaveBeenCalledTimes(1);
+
+    mock.fireIo('disconnect');
+    mock.fireIo('connect');
+    await vi.waitFor(() => expect(sessionGet).toHaveBeenCalledTimes(2));
+    expect(mock.sessionStreams.create).toHaveBeenCalledTimes(2);
+
+    releaseReactiveSession(mock.client, SESSION_ID, { taskHydration: 'lazy' });
+    expect(mock.sessionStreams.remove).not.toHaveBeenCalled();
+    releaseReactiveSession(mock.client, SESSION_ID, { taskHydration: 'lazy' });
+    await vi.waitFor(() => expect(mock.sessionStreams.remove).toHaveBeenCalledTimes(1));
+  });
+});
+
+describe('ReactiveSessionHandle prompt contract', () => {
+  it('returns the admitted Task from the shared sessions helper', async () => {
+    const mock = createMockClient({ tasks: [], messagesByTask: {} });
+    const admittedTask = makeTask('task-admitted', TaskStatus.DISPATCHING);
+    const prompt = vi.fn().mockResolvedValue(admittedTask);
+    Object.assign(mock.client, { sessions: { prompt } });
+    const handle = new ReactiveSessionHandle(mock.client, SESSION_ID, {
+      taskHydration: 'none',
+    });
+    await handle.ready();
+
+    const result = await handle.prompt('Fix failing tests', {
+      permissionMode: 'auto',
+    });
+
+    expect(prompt).toHaveBeenCalledWith(SESSION_ID, 'Fix failing tests', {
+      permissionMode: 'auto',
+    });
+    expect(result).toBe(admittedTask);
+  });
+});
+
 describe('ReactiveSessionHandle bootstrap hydration', () => {
   const tasks = [
     makeTask('task-1', TaskStatus.COMPLETED),
@@ -278,6 +330,28 @@ describe('ReactiveSessionHandle bootstrap hydration', () => {
 });
 
 describe('ReactiveSessionHandle message snapshot reconciliation', () => {
+  it('delivers structured Claude task results unchanged over the message realtime path', async () => {
+    const task = makeTask('task-tools', TaskStatus.RUNNING);
+    const mock = createMockClient({ tasks: [task], messagesByTask: { [task.task_id]: [] } });
+    const handle = new ReactiveSessionHandle(mock.client, SESSION_ID, { taskHydration: 'lazy' });
+    await handle.ready();
+
+    const result = {
+      ...makeMessage(task.task_id, 0),
+      content: [
+        {
+          type: 'tool_result',
+          tool_use_id: 'create-1',
+          content: 'Task created',
+          tool_use_result: { task: { id: 'task-7', subject: 'Verify the fix' } },
+        },
+      ],
+    } as Message;
+    mock.emitServiceEvent('messages', 'created', result);
+
+    expect(handle.getTaskMessages(task.task_id)).toEqual([result]);
+  });
+
   it.each([
     ['immediate', false],
     ['drained queue', true],

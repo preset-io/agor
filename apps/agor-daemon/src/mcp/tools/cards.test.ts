@@ -213,6 +213,7 @@ describe('card MCP realtime events', () => {
     await captureHandler('agor_cards_move', ctx)({ cardId: 'card-1', zoneId: null });
     await captureHandler('agor_cards_archive', ctx)({ cardId: 'card-1' });
 
+    expect(boardsGet).toHaveBeenCalledOnce();
     expect(createWithPlacement).toHaveBeenCalledWith(expect.any(Object), params);
     expect(moveToZone).toHaveBeenCalledWith('card-1', null, undefined);
     expect(archive).toHaveBeenCalledWith('card-1');

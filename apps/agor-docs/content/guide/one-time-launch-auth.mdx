@@ -40,6 +40,13 @@ external_launch:
   # Optional: allow role claims above member. Defaults to false.
   allow_admin_roles: false
 
+  # Optional backchannel timeout, 1-120000 ms. Defaults to 10000.
+  request_timeout_ms: 10000
+
+  # Optional non-empty allow-list. HS* is symmetric-only; RS*/PS*/ES* is
+  # asymmetric-only. Defaults to HS256 for a dev secret and RS256 otherwise.
+  algorithms: [RS256]
+
   # Optional: primary action shown when launch sign-in cannot continue.
   # Must be http:// or https://.
   login_redirect_url: https://workspace.example.com/open
@@ -56,6 +63,53 @@ external_launch:
   # opaque return context for direct-host entry. Default: return_host.
   return_host_param: return_host
 ```
+
+### External user and role authority
+
+External launch authentication does not disable Agor user administration by
+itself. A deployment whose launch provider is also authoritative for user
+lifecycle, profile fields, and roles must opt into the identity contract:
+
+```yaml
+identity:
+  user_lifecycle: external
+  role_authority: claims
+  local_auth: disabled
+  external:
+    provider: external_launch
+    provisioning: jit
+```
+
+With this profile, verified launches may still create a missing local user and
+synchronize JWT-owned email, name, avatar, execution-home key, and role. Those
+fields update when the next external launch succeeds; the daemon does not call
+the provider on every request. User and administrator calls through REST,
+Socket.IO, CLI, and MCP cannot create or delete users or edit those fields.
+Agor-owned preferences, onboarding state, AI-provider credentials and defaults,
+environment variables, personal API keys, and MCP selections/OAuth grants stay
+editable.
+
+The trusted `(tenant, provider, issuer, subject)` binding is stored in a
+tenant-owned relation with database uniqueness enforcement. PostgreSQL JIT
+projection is one tenant-scoped transaction and serializes the same subject
+across replicas. Execution-home keys are also unique per tenant, preventing two
+users from sharing one delegated credential context.
+
+The role claim is required and exact in this mode. Administrative claims still
+require `external_launch.allow_admin_roles`; a `superadmin` claim also requires
+`execution.allow_superadmin`. A disabled role fails authentication rather than
+being silently downgraded.
+
+Omitting `identity` preserves normal local user, role, and password authority.
+The current contract does not synchronize external deactivation or revoke
+already-issued Agor credentials: the external provider can prevent a new
+launch, while cleanup and revocation remain a separate lifecycle concern.
+
+Before enabling this profile, apply the external-identity migration and upgrade
+every daemon replica. The migration fails closed if legacy external bindings or
+non-null execution-home keys conflict. New daemons can bind a legacy JSON link
+on the next successful launch, but old daemons do not maintain the new binding
+relation.
 
 For local development only, a symmetric assertion secret can be used:
 
@@ -80,7 +134,7 @@ fresh launch link from the external workspace. The button appends a `return_to`
 query parameter containing the current Agor path, allowing the launcher to
 preserve deep links such as `/ui/s/<session>/` when it issues a fresh
 `launch_code`. Local username/password login is still available as a secondary
-fallback.
+fallback unless external identity authority disables it.
 
 If `login_redirect_url` is omitted, the normal local login screen is unchanged.
 
@@ -122,9 +176,10 @@ credential is never returned to the browser, exposed in the public `/health`
 settings, or written to logs.
 
 Production verification fails closed: the `none` algorithm is always rejected;
-`jwks_url` / `public_key` verification defaults to an `RS256` allow-list to
-prevent algorithm confusion; and a missing issuer, audience, `exp`, `sub`, or
-required tenant claim creates no session.
+`jwks_url` verification defaults to an `RS256` allow-list, while a static
+`public_key` derives a compatible default from its key type and EC curve. An
+explicit allow-list must match that key. A missing issuer, audience, `exp`,
+`sub`, or required tenant claim creates no session.
 
 The exchange endpoint should consume the launch code exactly once and return:
 
@@ -156,12 +211,13 @@ Required when `external_launch.instance_id` is configured:
 
 ## Compatibility and upgrade notes
 
-- **Non-RS256 asymmetric signing must be declared before upgrading.** Asymmetric
-  verification (`jwks_url` / `public_key`) defaults to an `RS256`-only allow-list
-  and refuses HS\* algorithms. If your issuer signs assertions with another
-  asymmetric algorithm (`RS384`, `ES256`, `PS256`, …) and previously relied on
-  library defaults, set `algorithms` explicitly to the intended asymmetric
-  algorithm **before** upgrading, or assertions will stop verifying.
+- **Non-RS256 JWKS signing must be declared before upgrading.** `jwks_url`
+  verification defaults to an `RS256`-only allow-list and refuses HS\*
+  algorithms. Static `public_key` verification instead derives `RS256` for RSA
+  or the matching ES algorithm for a supported EC curve; an explicit
+  `algorithms` list must be compatible with the key. If a JWKS issuer signs with
+  another asymmetric algorithm (`RS384`, `ES256`, `PS256`, …), set
+  `algorithms` explicitly **before** upgrading.
 - **`login_redirect_url` deployments begin receiving a return-host parameter.**
   When `login_redirect_url` is enabled, direct-host entry appends the configured
   `return_host_param` (default `return_host`) to that URL. Existing deployments

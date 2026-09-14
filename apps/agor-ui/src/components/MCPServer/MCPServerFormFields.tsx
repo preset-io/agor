@@ -1,3 +1,4 @@
+import type { MCPDiscoveryResult } from '@agor/core/types';
 import type { AgorClient, MCPScope, MCPTransport } from '@agor-live/client';
 import { MCP_SCOPES, MCP_TRANSPORTS } from '@agor-live/client';
 import { ApiOutlined, DownOutlined } from '@ant-design/icons';
@@ -11,6 +12,7 @@ import {
   Form,
   Input,
   Modal,
+  Popconfirm,
   Row,
   Select,
   Space,
@@ -19,12 +21,17 @@ import {
   Tooltip,
   Typography,
 } from 'antd';
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
+import { useAuthorityOperationGuard } from '@/hooks/useAuthorityOperationGuard';
 import { useThemedMessage } from '@/utils/message';
-import { FIELD_WIDTHS } from '../SettingsModal/panelPrimitives';
+import { sanitizeSecretValue } from '@/utils/sanitizeSecret';
 import { MCPOAuthRecoveryAlert } from './MCPOAuthRecoveryAlert';
 import { describeMissingForOAuth, missingMCPFieldLabels } from './mcp-form-requirements';
-import { extractOAuthConfigForTesting, validateHeadersJSON } from './mcp-oauth-utils';
+import {
+  extractOAuthConfigForTesting,
+  validateEnvJSON,
+  validateHeadersJSON,
+} from './mcp-oauth-utils';
 import { useMCPServerOAuthStart } from './useMCPServerOAuthStart';
 
 const { TextArea } = Input;
@@ -64,27 +71,25 @@ export interface MCPServerFormFieldsProps {
   onAuthTypeChange?: (authType: 'none' | 'bearer' | 'jwt' | 'oauth') => void;
   form: FormInstance;
   client: AgorClient | null;
+  /** Current identity/role/auth generation, null while authority is unavailable. */
+  authorityKey: string | null;
   serverId?: string;
   onTestConnection?: () => Promise<void>;
   testing?: boolean;
-  testResult?: {
-    success: boolean;
-    toolCount: number;
-    resourceCount: number;
-    promptCount: number;
-    error?: string;
-    tools?: Array<{ name: string; description: string }>;
-    resources?: Array<{ name: string; uri: string; mimeType?: string }>;
-    prompts?: Array<{ name: string; description: string }>;
-  } | null;
+  testResult?: MCPDiscoveryResult | null;
   /** Persist current settings and return the authoritative server ID before every OAuth start. */
   onPrepareOAuthStart: () => Promise<string | null>;
+  /** Whether persistent mutations/OAuth preparation remain authorized. */
+  mutationAllowed?: boolean;
+  mutationBlockedReason?: string;
   /**
    * Changes whenever the owner's form values do. The connection actions read
    * the form store directly, so they need a reason to re-render — see
    * `useFormRevision`.
    */
   formRevision?: number;
+  /** Effective catalog-managed policy shown read-only in Settings. */
+  managedOAuthCompatibilityMode?: 'strict' | 'marketplace';
 }
 
 /**
@@ -109,13 +114,17 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
   onAuthTypeChange,
   form,
   client,
+  authorityKey,
   serverId,
   onTestConnection,
   testing = false,
   testResult,
   onPrepareOAuthStart,
+  mutationAllowed = true,
+  mutationBlockedReason = 'You can no longer change this MCP server.',
   // Consumed by re-rendering, not by reading — see `formRevision` above.
   formRevision: _formRevision,
+  managedOAuthCompatibilityMode,
 }) => {
   const { showSuccess, showError, showWarning, showInfo } = useThemedMessage();
   const [testingAuth, setTestingAuth] = useState(false);
@@ -123,6 +132,10 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
   const [oauthAdvancedOpen, setOauthAdvancedOpen] = useState(false);
 
   const [disconnectingOAuth, setDisconnectingOAuth] = useState(false);
+  const oauthStartAllowed = mutationAllowed && authorityKey !== null;
+  const operationGuard = useAuthorityOperationGuard(
+    oauthStartAllowed ? [authorityKey, client, mutationAllowed] : null
+  );
 
   // `Start OAuth Flow` writes the server row before it redirects, so it needs
   // everything a save needs — not just the URL it puts in the request. Read
@@ -142,27 +155,15 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
     startingOAuthFlow,
   } = useMCPServerOAuthStart({
     client,
+    authorityKey,
     onPrepareOAuthStart,
     onOAuthSucceeded: () => setOauthBrowserFlowAvailable(false),
     showError,
     showInfo,
     showSuccess,
+    startAllowed: oauthStartAllowed,
+    startBlockedReason: mutationBlockedReason,
   });
-
-  useEffect(() => {
-    if (!client) return;
-    // Blocking discover/test endpoints cannot return the authorization URL
-    // before their callback. The daemon sends this compatibility hint only to
-    // this exact initiating socket; durable attempt/status refetch remains the
-    // completion authority.
-    const openBrowserForBlockingFlow = ({ authUrl }: { authUrl?: string }) => {
-      if (authUrl) window.open(authUrl, '_blank', 'noopener,noreferrer');
-    };
-    client.io.on('oauth:open_browser', openBrowserForBlockingFlow);
-    return () => {
-      client.io.off('oauth:open_browser', openBrowserForBlockingFlow);
-    };
-  }, [client]);
 
   // Watch advanced OAuth field values so we can show a "customized" dot on
   // the Advanced collapse header when any of them has a non-default value.
@@ -194,6 +195,12 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
     (typeof watchedDcrMode === 'string' && watchedDcrMode !== 'advertised');
 
   const handleDisconnectOAuth = async () => {
+    const operation = operationGuard.begin();
+    if (!operation.isCurrent()) return;
+    if (!mutationAllowed) {
+      showError(mutationBlockedReason);
+      return;
+    }
     if (!client) {
       showError('Client not available');
       return;
@@ -208,6 +215,7 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
       const data = (await client.service('mcp-servers/oauth-disconnect').create({
         mcp_server_id: serverId,
       })) as { success: boolean; message?: string; error?: string };
+      if (!operation.isCurrent()) return;
 
       if (data.success) {
         showSuccess(data.message || 'OAuth connection removed');
@@ -215,14 +223,17 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
       } else {
         showError(data.error || 'Failed to disconnect OAuth');
       }
-    } catch (error) {
-      showError(`Disconnect error: ${error instanceof Error ? error.message : String(error)}`);
+    } catch {
+      if (!operation.isCurrent()) return;
+      showError('OAuth disconnect failed. Check the connection and try again.');
     } finally {
-      setDisconnectingOAuth(false);
+      if (operation.isCurrent()) setDisconnectingOAuth(false);
     }
   };
 
   const handleTestAuth = async () => {
+    const operation = operationGuard.begin();
+    if (!operation.isCurrent()) return;
     if (!client) {
       showError('Client not available');
       return;
@@ -236,8 +247,14 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
     try {
       if (currentAuthType === 'jwt') {
         const apiUrl = values.jwt_api_url;
-        const apiToken = values.jwt_api_token;
-        const apiSecret = values.jwt_api_secret;
+        const apiToken =
+          typeof values.jwt_api_token === 'string'
+            ? sanitizeSecretValue(values.jwt_api_token)
+            : values.jwt_api_token;
+        const apiSecret =
+          typeof values.jwt_api_secret === 'string'
+            ? sanitizeSecretValue(values.jwt_api_secret)
+            : values.jwt_api_secret;
 
         if (!apiUrl || !apiToken || !apiSecret) {
           showError('Please fill in all JWT authentication fields');
@@ -249,6 +266,7 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
           api_token: apiToken,
           api_secret: apiSecret,
         })) as { success: boolean; error?: string };
+        if (!operation.isCurrent()) return;
 
         if (data.success) {
           showSuccess('JWT authentication successful - token received');
@@ -256,7 +274,10 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
           showError(data.error || 'JWT authentication failed');
         }
       } else if (currentAuthType === 'oauth') {
-        const requestData = extractOAuthConfigForTesting(values);
+        const requestData = extractOAuthConfigForTesting({
+          ...values,
+          ...(serverId && managedOAuthCompatibilityMode ? { mcp_server_id: serverId } : {}),
+        });
         if (!requestData) {
           showWarning('Please enter MCP URL first to test OAuth authentication');
           return;
@@ -279,6 +300,7 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
           hint?: string;
           debugInfo?: unknown;
         };
+        if (!operation.isCurrent()) return;
 
         if (data.success) {
           if (data.requiresBrowserFlow) {
@@ -317,17 +339,17 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
       } else {
         showInfo('No authentication required - ready to use');
       }
-    } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-      showError(`Connection test failed: ${errorMessage}`);
+    } catch {
+      if (!operation.isCurrent()) return;
+      showError('Connection test failed. Check the saved configuration and try again.');
     } finally {
-      setTestingAuth(false);
+      if (operation.isCurrent()) setTestingAuth(false);
     }
   };
 
   // One label for both the live and the blocked button, so a retry still reads
   // as a retry while it waits on a field.
-  const oauthStartLabel = oauthFailure?.diagnostic
+  const oauthStartLabel = oauthFailure?.recovery
     ? 'Save OAuth settings & retry'
     : oauthFailure
       ? 'Retry OAuth Flow'
@@ -335,6 +357,24 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
 
   const isRemoteTransport = isRemoteTransportValue(transport);
   const showAdvancedSection = isRemoteTransport && authType === 'oauth';
+  const savedSecretExtra = (formField: string) =>
+    mode === 'edit' ? (
+      <Space size={8} wrap>
+        <Typography.Text type="secondary">
+          Leaving this blank preserves the saved secret.
+        </Typography.Text>
+        <Button
+          size="small"
+          danger
+          onClick={() => {
+            form.setFieldValue(formField, '');
+            form.setFieldValue(`${formField}_clear`, true);
+          }}
+        >
+          Clear saved secret
+        </Button>
+      </Space>
+    ) : undefined;
 
   // ── Basic Information section ──────────────────────────────────────
   const isCreate = mode === 'create';
@@ -396,7 +436,17 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
           </Form.Item>
         </Col>
         <Col span={12}>
-          <Form.Item label="Enabled" name="enabled" valuePropName="checked" initialValue={true}>
+          <Form.Item
+            label="Enabled"
+            name="enabled"
+            valuePropName="checked"
+            initialValue={true}
+            extra={
+              mode === 'edit' && authType === 'oauth'
+                ? 'Disabling removes the saved OAuth connection from Agor. Re-enabling requires a new sign-in.'
+                : undefined
+            }
+          >
             <Switch />
           </Form.Item>
         </Col>
@@ -425,7 +475,6 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
       <Form.Item
         label="Transport"
         name="transport"
-        style={FIELD_WIDTHS.short}
         rules={mode === 'create' ? [{ required: true }] : []}
         initialValue={mode === 'create' ? offeredTransports[0] : undefined}
         tooltip={
@@ -445,7 +494,6 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
           <Form.Item
             label="Command"
             name="command"
-            style={FIELD_WIDTHS.medium}
             // Required in both modes: a stdio server with no command is as
             // unusable after an edit as it would be on creation.
             rules={[{ required: true, message: 'Please enter a command' }]}
@@ -456,7 +504,6 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
           <Form.Item
             label="Arguments"
             name="args"
-            style={FIELD_WIDTHS.medium}
             tooltip="Comma-separated arguments. Each argument will be passed separately to the command. Example: -y, @modelcontextprotocol/server-filesystem, /allowed/path"
           >
             <Input placeholder="-y, @modelcontextprotocol/server-filesystem, /allowed/path" />
@@ -467,7 +514,6 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
           <Form.Item
             label="URL"
             name="url"
-            style={FIELD_WIDTHS.medium}
             rules={[{ required: true, message: 'Please enter a URL' }]}
             tooltip="Server URL. Supports templates like {{ user.env.MCP_URL }}"
           >
@@ -478,7 +524,6 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
             label="Auth Type"
             name="auth_type"
             initialValue="none"
-            style={FIELD_WIDTHS.short}
             tooltip="Authentication method for the MCP server"
           >
             <Select
@@ -518,11 +563,18 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
             <Form.Item
               label="Token"
               name="auth_token"
-              style={FIELD_WIDTHS.short}
-              rules={[{ required: true, message: 'Please enter a bearer token' }]}
+              rules={
+                mode === 'create'
+                  ? [{ required: true, message: 'Please enter a bearer token' }]
+                  : []
+              }
               tooltip="Bearer token. Supports templates like {{ user.env.API_TOKEN }}"
+              extra={savedSecretExtra('auth_token')}
             >
-              <Input.Password placeholder="{{ user.env.API_TOKEN }} or raw token" />
+              <Input.Password
+                placeholder="{{ user.env.API_TOKEN }} or raw token"
+                onChange={() => form.setFieldValue('auth_token_clear', false)}
+              />
             </Form.Item>
           )}
 
@@ -531,7 +583,6 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
               <Form.Item
                 label="API URL"
                 name="jwt_api_url"
-                style={FIELD_WIDTHS.medium}
                 rules={[{ required: true, message: 'Please enter the API URL' }]}
                 tooltip="JWT auth API URL. Supports templates."
               >
@@ -540,20 +591,34 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
               <Form.Item
                 label="API Token"
                 name="jwt_api_token"
-                style={FIELD_WIDTHS.short}
-                rules={[{ required: true, message: 'Please enter the API token' }]}
+                rules={
+                  mode === 'create'
+                    ? [{ required: true, message: 'Please enter the API token' }]
+                    : []
+                }
                 tooltip="JWT API token. Supports templates like {{ user.env.JWT_TOKEN }}"
+                extra={savedSecretExtra('jwt_api_token')}
               >
-                <Input.Password placeholder="{{ user.env.JWT_TOKEN }} or raw token" />
+                <Input.Password
+                  placeholder="{{ user.env.JWT_TOKEN }} or raw token"
+                  onChange={() => form.setFieldValue('jwt_api_token_clear', false)}
+                />
               </Form.Item>
               <Form.Item
                 label="API Secret"
                 name="jwt_api_secret"
-                style={FIELD_WIDTHS.short}
-                rules={[{ required: true, message: 'Please enter the API secret' }]}
+                rules={
+                  mode === 'create'
+                    ? [{ required: true, message: 'Please enter the API secret' }]
+                    : []
+                }
                 tooltip="JWT API secret. Supports templates like {{ user.env.JWT_SECRET }}"
+                extra={savedSecretExtra('jwt_api_secret')}
               >
-                <Input.Password placeholder="{{ user.env.JWT_SECRET }} or raw secret" />
+                <Input.Password
+                  placeholder="{{ user.env.JWT_SECRET }} or raw secret"
+                  onChange={() => form.setFieldValue('jwt_api_secret_clear', false)}
+                />
               </Form.Item>
             </>
           )}
@@ -562,21 +627,32 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
 
       {/* Connection action buttons — surfaced before secondary fields so they
           aren't buried under env vars or the OAuth advanced section. */}
-      {(authType !== 'none' || isRemoteTransport) && (
+      {isRemoteTransport && (
         <Form.Item label="Actions" style={{ marginBottom: 16 }}>
           <Space wrap>
-            {authType !== 'none' && (
-              <Button type="default" loading={testingAuth} onClick={handleTestAuth}>
+            {authType !== 'none' && !serverId && (
+              <Button
+                type="default"
+                loading={testingAuth}
+                disabled={!oauthStartAllowed || testing}
+                onClick={handleTestAuth}
+              >
                 Test Authentication
               </Button>
             )}
             {authType === 'oauth' &&
-              oauthBrowserFlowAvailable &&
-              (missingRequiredFields.length > 0 ? (
+              (oauthBrowserFlowAvailable || !!serverId) &&
+              (!oauthStartAllowed || missingRequiredFields.length > 0 ? (
                 // Disabled rather than hidden: the user has already earned this
                 // button with a successful auth test, so it has to say what is
                 // still holding it back.
-                <Tooltip title={describeMissingForOAuth(missingRequiredFields)}>
+                <Tooltip
+                  title={
+                    !oauthStartAllowed
+                      ? mutationBlockedReason
+                      : describeMissingForOAuth(missingRequiredFields)
+                  }
+                >
                   <span>
                     <Button type="primary" disabled>
                       {oauthStartLabel}
@@ -589,14 +665,23 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
                 </Button>
               ))}
             {authType === 'oauth' && serverId && !oauthBrowserFlowAvailable && (
-              <Button
-                type="default"
-                danger
-                loading={disconnectingOAuth}
-                onClick={handleDisconnectOAuth}
+              <Popconfirm
+                title="Disconnect this OAuth connection?"
+                description="This removes the saved connection from Agor. Provider-side access may remain until you revoke it with the provider."
+                okText="Disconnect"
+                okButtonProps={{ danger: true }}
+                disabled={!mutationAllowed}
+                onConfirm={handleDisconnectOAuth}
               >
-                Disconnect OAuth
-              </Button>
+                <Button
+                  type="default"
+                  danger
+                  loading={disconnectingOAuth}
+                  disabled={!mutationAllowed}
+                >
+                  Disconnect OAuth
+                </Button>
+              </Popconfirm>
             )}
             {isRemoteTransport && (
               <Button
@@ -604,8 +689,17 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
                 icon={<ApiOutlined />}
                 onClick={onTestConnection}
                 loading={testing}
+                disabled={
+                  !oauthStartAllowed ||
+                  !onTestConnection ||
+                  ((!!serverId || authType === 'oauth') && missingRequiredFields.length > 0)
+                }
               >
-                {testing ? 'Testing...' : 'Test Connection'}
+                {testing
+                  ? 'Testing...'
+                  : serverId || authType === 'oauth'
+                    ? 'Save & Test Connection'
+                    : 'Test Connection'}
               </Button>
             )}
           </Space>
@@ -617,10 +711,18 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
         <div style={{ marginBottom: 16 }}>
           <Alert
             type="success"
-            title={`Connected: ${testResult.toolCount} tools, ${testResult.resourceCount} resources, ${testResult.promptCount} prompts`}
+            title={`Connected: ${testResult.capabilities.tools} tools, ${testResult.capabilities.resources} resources, ${testResult.capabilities.prompts} prompts`}
             showIcon
             style={{ marginBottom: 8 }}
           />
+          {!!testResult.metadata?.descriptions_truncated && (
+            <Alert
+              type="info"
+              showIcon
+              title={`${testResult.metadata.descriptions_truncated} provider description(s) shortened to Agor's safe metadata budget`}
+              style={{ marginBottom: 8 }}
+            />
+          )}
           {testResult.tools && testResult.tools.length > 0 && (
             <div style={{ marginTop: 8 }}>
               <Typography.Text
@@ -757,8 +859,10 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
                     description={
                       <ul style={{ margin: 0, paddingLeft: 20, fontSize: 12 }}>
                         <li>
-                          Strict MCP OAuth discovery, protected-resource binding, PKCE S256, and
-                          issuer checks are enabled by default.
+                          {managedOAuthCompatibilityMode
+                            ? `The current Catalog entry manages this server's ${managedOAuthCompatibilityMode === 'marketplace' ? 'interoperability' : 'strict'} discovery policy.`
+                            : 'Strict MCP OAuth discovery is enabled by default.'}{' '}
+                          Protected-resource binding, PKCE S256, and issuer checks remain enabled.
                         </li>
                         <li>
                           Set Client ID / Client Secret only for servers that require a
@@ -777,7 +881,6 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
                   <Form.Item
                     label="Client ID"
                     name="oauth_client_id"
-                    style={FIELD_WIDTHS.short}
                     tooltip="Register an OAuth app with the provider and paste its client ID. Otherwise Agor can use a registration endpoint advertised by the provider."
                   >
                     <Input
@@ -789,7 +892,6 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
                     label="Dynamic Client Registration"
                     name="oauth_dcr_mode"
                     initialValue="advertised"
-                    style={FIELD_WIDTHS.short}
                     tooltip="Advertised registration uses only validated provider metadata. Legacy fallback additionally guesses an issuer-relative /register endpoint."
                   >
                     <Select>
@@ -806,56 +908,41 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
                     label="OAuth Compatibility"
                     name="oauth_compatibility_mode"
                     initialValue="strict"
-                    style={FIELD_WIDTHS.short}
-                    tooltip="Legacy mode narrowly permits older discovery and metadata deviations. It never relaxes outbound network protections."
-                  >
-                    <Select>
-                      <Select.Option value="strict">Strict current MCP OAuth</Select.Option>
-                      <Select.Option value="legacy">Legacy provider compatibility</Select.Option>
-                    </Select>
-                  </Form.Item>
-                  {/* The two modes above default to strict on purpose; relaxing
-                      either weakens RFC 9207 issuer/discovery protections, so the
-                      tradeoff is surfaced rather than presented as neutral. */}
-                  <Form.Item
-                    noStyle
-                    shouldUpdate={(prev, cur) =>
-                      prev.oauth_dcr_mode !== cur.oauth_dcr_mode ||
-                      prev.oauth_compatibility_mode !== cur.oauth_compatibility_mode
+                    tooltip={
+                      managedOAuthCompatibilityMode
+                        ? 'This effective policy is managed by the current curated Catalog entry. Editing the endpoint or authentication configuration makes that catalog policy stop applying.'
+                        : 'Legacy mode narrowly permits older discovery and metadata deviations. It never relaxes outbound network protections.'
                     }
                   >
-                    {({ getFieldValue }) => {
-                      const weakened =
-                        getFieldValue('oauth_dcr_mode') === 'fallback' ||
-                        getFieldValue('oauth_compatibility_mode') === 'legacy';
-                      if (!weakened) return null;
-                      return (
-                        <Alert
-                          title="Reduces OAuth security guarantees"
-                          description="Legacy /register fallback and legacy compatibility mode relax the strict issuer and discovery checks (RFC 9207 / PKCE) enabled by default. Only use them for a provider that doesn't support the modern MCP OAuth flow."
-                          type="warning"
-                          showIcon
-                          style={{ marginBottom: 16 }}
-                        />
-                      );
-                    }}
+                    <Select disabled={!!managedOAuthCompatibilityMode}>
+                      {managedOAuthCompatibilityMode === 'marketplace' && (
+                        <Select.Option value="marketplace">
+                          Catalog compatibility (managed)
+                        </Select.Option>
+                      )}
+                      <Select.Option value="strict">
+                        Strict current MCP OAuth
+                        {managedOAuthCompatibilityMode === 'strict' ? ' (catalog managed)' : ''}
+                      </Select.Option>
+                      <Select.Option value="legacy">Legacy provider compatibility</Select.Option>
+                    </Select>
                   </Form.Item>
                   <Form.Item
                     label="Client Secret"
                     name="oauth_client_secret"
-                    style={FIELD_WIDTHS.short}
                     tooltip="Required for servers that use confidential clients. The secret is sent via HTTP Basic Auth during token exchange."
+                    extra={savedSecretExtra('oauth_client_secret')}
                   >
                     <Input.Password
                       placeholder="Enter client secret or {{ user.env.OAUTH_CLIENT_SECRET }}"
                       allowClear
+                      onChange={() => form.setFieldValue('oauth_client_secret_clear', false)}
                     />
                   </Form.Item>
                   <Form.Item
                     label="OAuth Mode"
                     name="oauth_mode"
                     initialValue="per_user"
-                    style={FIELD_WIDTHS.short}
                     tooltip="Per User: Each user authenticates separately (recommended). Shared: One token for all users."
                   >
                     <Select>
@@ -870,7 +957,6 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
                   <Form.Item
                     label="Authorization URL"
                     name="oauth_authorization_url"
-                    style={FIELD_WIDTHS.medium}
                     tooltip="OAuth authorization endpoint for browser-based login. Leave empty for auto-discovery (RFC 8414)."
                   >
                     <Input placeholder="https://auth.example.com/oauth/authorize" allowClear />
@@ -878,7 +964,6 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
                   <Form.Item
                     label="Token URL"
                     name="oauth_token_url"
-                    style={FIELD_WIDTHS.medium}
                     tooltip="OAuth token endpoint. Leave empty for auto-discovery (OAuth 2.1 RFC 9728)"
                   >
                     <Input placeholder="Auto-detect or {{ user.env.OAUTH_TOKEN_URL }}" allowClear />
@@ -886,7 +971,6 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
                   <Form.Item
                     label="Scope"
                     name="oauth_scope"
-                    style={FIELD_WIDTHS.short}
                     tooltip="Optional: OAuth scopes (space-separated, e.g., 'read write')"
                   >
                     <Input placeholder="Leave empty or specify scopes" allowClear />
@@ -895,7 +979,6 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
                     label="Grant Type"
                     name="oauth_grant_type"
                     initialValue="client_credentials"
-                    style={FIELD_WIDTHS.short}
                     tooltip="OAuth grant type for Client Credentials flow. OAuth 2.1 auto-discovery uses Authorization Code with PKCE instead."
                   >
                     <Select disabled>
@@ -924,6 +1007,7 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
     },
     {
       key: 'advanced-config',
+      forceRender: true,
       label: (
         <Space size={8}>
           <Typography.Text strong>Advanced Configuration</Typography.Text>
@@ -963,6 +1047,14 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
           <Form.Item
             label="Environment Variables"
             name="env"
+            rules={[
+              {
+                validator: async (_, value) => {
+                  const error = validateEnvJSON(value);
+                  if (error) throw new Error(error);
+                },
+              },
+            ]}
             tooltip="JSON object of environment variables. Values support templates like {{ user.env.VAR_NAME }}"
           >
             <TextArea

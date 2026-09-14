@@ -9,6 +9,7 @@ import type {
   PermissionMode,
   Session,
   SessionID,
+  SessionStopResult,
   SpawnConfig,
   Task,
   User,
@@ -65,7 +66,14 @@ import {
 import { getContextWindowGradient } from '../../utils/contextWindow';
 import { mcpServerNeedsAuth } from '../../utils/mcpAuth';
 import { useThemedMessage } from '../../utils/message';
-import { deletePromptDraft, getPromptDraft, savePromptDraft } from '../../utils/promptDrafts';
+import {
+  consumePromptDraftSeed,
+  deletePromptDraft,
+  discardPromptDraftSeed,
+  getPromptDraft,
+  readPromptDraftSeed,
+  savePromptDraft,
+} from '../../utils/promptDrafts';
 import { getSessionDisplayTitle, getSessionTitleStyles } from '../../utils/sessionTitle';
 import { AgentSelectionGrid } from '../AgentSelectionGrid/AgentSelectionGrid';
 import { AutocompleteTextarea } from '../AutocompleteTextarea';
@@ -77,16 +85,23 @@ import { getUrlDisplayLabel } from '../Pill/url-helpers';
 import { ToolIcon } from '../ToolIcon';
 import {
   buildPromptWithAttachments,
+  getComposerAttachmentFailureMessage,
   getComposerUploadAccept,
   getLatestComposerPromptText,
   isBlockingComposerAttachment,
 } from './composerAttachments';
+import { appendComposerText } from './composerText';
 import type { SessionAttachmentItem } from './SessionAttachmentsDropdown';
 import { SessionAttachmentsDropdown } from './SessionAttachmentsDropdown';
 import { SessionAttachmentTray } from './SessionAttachmentTray';
 import { SessionComposerDropZone } from './SessionComposerDropZone';
 import { SessionFooter } from './SessionFooter';
 import { SessionPanelContent } from './SessionPanelContent';
+import {
+  isStopTransportAmbiguous,
+  reconcileStopTransportFailure,
+  requestSessionStop,
+} from './stopReconciliation';
 import { useComposerAttachments } from './useComposerAttachments';
 
 // Re-export PermissionMode from SDK for convenience
@@ -107,8 +122,10 @@ export interface PromptInputHandle {
 interface PromptInputProps {
   sessionId: SessionID;
   getDraft: (id: string) => string;
+  getDraftSeed: (id: string) => string;
+  discardDraftSeed: (id: string) => void;
   saveDraft: (id: string, value: string) => void;
-  deleteDraft: (id: string) => void;
+  deleteDraft: (id: string, expectedText?: string) => void;
   /** Fires only on empty↔non-empty transitions, not every keystroke */
   onHasInputChange: (hasInput: boolean) => void;
   /** Kept in sync so memoized children can read the latest value */
@@ -134,6 +151,8 @@ const PromptInput = React.forwardRef<PromptInputHandle, PromptInputProps>(
     {
       sessionId,
       getDraft,
+      getDraftSeed,
+      discardDraftSeed,
       saveDraft,
       deleteDraft,
       onHasInputChange,
@@ -156,6 +175,32 @@ const PromptInput = React.forwardRef<PromptInputHandle, PromptInputProps>(
     const [value, setValue] = React.useState(() => getDraft(sessionId));
     const valueRef = React.useRef(value);
     const textareaElementRef = React.useRef<HTMLTextAreaElement | null>(null);
+    const untouchedSeedRef = React.useRef(false);
+    const bootstrappedSessionRef = React.useRef<string | null>(null);
+
+    // Claim bootstrap only after commit, not in a render initializer (which
+    // React may replay/discard). Untouched starters stay tab-local, so opening
+    // a tryout cannot overwrite another tab's sole persisted user draft.
+    React.useLayoutEffect(() => {
+      if (bootstrappedSessionRef.current === sessionId) return;
+      bootstrappedSessionRef.current = sessionId;
+      const seed = getDraftSeed(sessionId);
+      if (valueRef.current) {
+        discardDraftSeed(sessionId);
+      } else if (seed) {
+        untouchedSeedRef.current = true;
+        valueRef.current = seed;
+        inputValueRef.current = seed;
+        setValue(seed);
+      }
+    }, [sessionId, getDraftSeed, discardDraftSeed, inputValueRef]);
+
+    const persistDraft = React.useCallback(
+      (id: string, text: string) => {
+        if (!untouchedSeedRef.current) saveDraft(id, text);
+      },
+      [saveDraft]
+    );
 
     // Keep refs in sync (zero-cost, no re-render)
     valueRef.current = value;
@@ -163,15 +208,17 @@ const PromptInput = React.forwardRef<PromptInputHandle, PromptInputProps>(
 
     const handlePromptChange = React.useCallback(
       (nextValue: string) => {
+        untouchedSeedRef.current = false;
+        discardDraftSeed(sessionId);
         valueRef.current = nextValue;
         inputValueRef.current = nextValue;
         setValue(nextValue);
       },
-      [inputValueRef]
+      [inputValueRef, discardDraftSeed, sessionId]
     );
 
     // Track empty↔non-empty transitions → notify parent (minimal re-renders)
-    const prevHasInput = React.useRef(!!value.trim());
+    const prevHasInput = React.useRef<boolean | null>(null);
     React.useEffect(() => {
       const has = !!value.trim();
       if (has !== prevHasInput.current) {
@@ -186,6 +233,8 @@ const PromptInput = React.forwardRef<PromptInputHandle, PromptInputProps>(
       () => ({
         getValue: () => textareaElementRef.current?.value ?? valueRef.current,
         clear: () => {
+          untouchedSeedRef.current = false;
+          discardDraftSeed(sessionId);
           valueRef.current = '';
           inputValueRef.current = '';
           if (textareaElementRef.current) {
@@ -195,40 +244,40 @@ const PromptInput = React.forwardRef<PromptInputHandle, PromptInputProps>(
           deleteDraft(sessionId);
         },
         insertText: (text: string) => {
+          untouchedSeedRef.current = false;
+          discardDraftSeed(sessionId);
           setValue((prev) => {
-            const trimmed = prev.trim();
-            const separator = trimmed ? ' ' : '';
-            const nextValue = `${trimmed}${separator}${text}`;
+            const nextValue = appendComposerText(prev, text);
             valueRef.current = nextValue;
             inputValueRef.current = nextValue;
             return nextValue;
           });
         },
       }),
-      [sessionId, deleteDraft, inputValueRef]
+      [sessionId, deleteDraft, discardDraftSeed, inputValueRef]
     );
 
     // Session switch: save old draft, load new one
     const prevSessionId = React.useRef(sessionId);
     React.useEffect(() => {
       if (prevSessionId.current !== sessionId) {
-        saveDraft(prevSessionId.current, valueRef.current);
+        persistDraft(prevSessionId.current, valueRef.current);
         setValue(getDraft(sessionId));
         prevSessionId.current = sessionId;
       }
-    }, [sessionId, saveDraft, getDraft]);
+    }, [sessionId, persistDraft, getDraft]);
 
     // Debounced draft persistence (300ms)
     React.useEffect(() => {
-      const timer = setTimeout(() => saveDraft(sessionId, value), 300);
+      const timer = setTimeout(() => persistDraft(sessionId, value), 300);
       return () => clearTimeout(timer);
-    }, [value, sessionId, saveDraft]);
+    }, [value, sessionId, persistDraft]);
 
     // Flush draft on unmount so in-flight debounced writes aren't lost.
     // Uses refs to capture the latest values without adding deps that would
     // cause the effect to re-run (we only want the cleanup to fire on unmount).
-    const saveDraftRef = React.useRef(saveDraft);
-    saveDraftRef.current = saveDraft;
+    const saveDraftRef = React.useRef(persistDraft);
+    saveDraftRef.current = persistDraft;
     const sessionIdRef = React.useRef(sessionId);
     sessionIdRef.current = sessionId;
     React.useEffect(() => {
@@ -402,12 +451,36 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
       .map((server) => server!);
   }, [sessionMcpServerIds, mcpServerById, userAuthenticatedMcpServerIds]);
 
-  // Per-session draft storage (localStorage-backed to survive unmounts).
+  // Shared single-draft storage (localStorage-backed to survive refreshes).
   // Aliased as stable callbacks because they're threaded through props and
   // effect deps below.
-  const getDraft = React.useCallback(getPromptDraft, []);
-  const saveDraft = React.useCallback(savePromptDraft, []);
-  const deleteDraft = React.useCallback(deletePromptDraft, []);
+  const getDraft = React.useCallback(
+    (sessionId: string) => getPromptDraft(currentUserId, sessionId),
+    [currentUserId]
+  );
+  const getDraftSeed = React.useCallback(
+    (sessionId: string) => readPromptDraftSeed(currentUserId, sessionId),
+    [currentUserId]
+  );
+  const discardDraftSeed = React.useCallback(
+    (sessionId: string) => {
+      consumePromptDraftSeed(currentUserId, sessionId);
+    },
+    [currentUserId]
+  );
+  const saveDraft = React.useCallback(
+    (sessionId: string, value: string) => savePromptDraft(currentUserId, sessionId, value),
+    [currentUserId]
+  );
+  const deleteDraft = React.useCallback(
+    (sessionId: string, expectedText?: string) => {
+      deletePromptDraft(currentUserId, sessionId, expectedText);
+      // Admission may complete after navigation. Retire the original seed
+      // without clearing a different caller/session or replacement starter.
+      discardPromptDraftSeed(currentUserId, sessionId, expectedText);
+    },
+    [currentUserId]
+  );
 
   // Input value lives entirely inside PromptInput (local state).
   // The parent reads it imperatively via promptRef / inputValueRef — no
@@ -416,7 +489,6 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   const inputValueRef = React.useRef(session ? getDraft(session.session_id) : '');
   const [hasInput, setHasInput] = React.useState(() => !!inputValueRef.current.trim());
   const handleHasInputChange = React.useCallback((v: boolean) => setHasInput(v), []);
-
   // getDefaultPermissionMode imported from @agor-live/client — canonical
   // per-tool defaults live in core's `getDefaultPermissionMode`. The local
   // shadow that used to live here was stale (missing gemini/opencode/copilot)
@@ -447,6 +519,8 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   const [advancedUploadInitialFiles, setAdvancedUploadInitialFiles] = React.useState<File[]>([]);
   const [composerDropActive, setComposerDropActive] = React.useState(false);
   const [stopRequestInFlight, setStopRequestInFlight] = React.useState(false);
+  const currentClientRef = React.useRef(client);
+  currentClientRef.current = client;
   const [forceFailTarget, setForceFailTarget] = React.useState<{
     taskId: string;
     terminationRequestedAt: string;
@@ -456,7 +530,10 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   const reactiveSessionId = session?.session_id ?? null;
   const { state: reactiveSessionState } = useSharedReactiveSession(client, reactiveSessionId, {
     enabled: open,
-    reactiveOptions: { taskHydration: 'none' },
+    // ConversationView retains the same lazy handle. Keeping the cache key
+    // identical collapses duplicate Session bootstrap/reconnect reads while
+    // preserving the transcript's latest-task hydration contract.
+    reactiveOptions: { taskHydration: 'lazy' },
   });
 
   const tasks = reactiveSessionState?.tasks || EMPTY_TASKS;
@@ -495,19 +572,33 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     goPrev,
   } = useSessionSearch(conversationRef);
   const composerSessionIdentityRef = React.useRef<{
+    ownerId: string | null;
     sessionId: SessionID | null;
     generation: number;
+    ownerGeneration: number;
   }>({
+    ownerId: currentUserId ?? null,
     sessionId: session?.session_id ?? null,
     generation: 0,
+    ownerGeneration: 0,
   });
+  const currentComposerOwnerId = currentUserId ?? null;
   const currentComposerSessionId = session?.session_id ?? null;
-  if (composerSessionIdentityRef.current.sessionId !== currentComposerSessionId) {
+  if (
+    composerSessionIdentityRef.current.ownerId !== currentComposerOwnerId ||
+    composerSessionIdentityRef.current.sessionId !== currentComposerSessionId
+  ) {
     composerSessionIdentityRef.current = {
+      ownerId: currentComposerOwnerId,
       sessionId: currentComposerSessionId,
       generation: composerSessionIdentityRef.current.generation + 1,
+      ownerGeneration:
+        composerSessionIdentityRef.current.ownerId === currentComposerOwnerId
+          ? composerSessionIdentityRef.current.ownerGeneration
+          : composerSessionIdentityRef.current.ownerGeneration + 1,
     };
   }
+  const composerIdentityKey = `${currentComposerOwnerId ?? 'anonymous'}:${composerSessionIdentityRef.current.generation}:${currentComposerSessionId ?? 'none'}`;
   const {
     attachments: composerAttachments,
     attachmentsRef: composerAttachmentsRef,
@@ -522,10 +613,13 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     setValidationError: setComposerAttachmentValidationError,
   } = useComposerAttachments({
     sessionId: session?.session_id ?? null,
+    scopeKey: composerIdentityKey,
     showError,
     uploadPolicy,
   });
-  const composerSendInFlightRef = React.useRef(false);
+  const composerSendInFlightRef = React.useRef<typeof composerSessionIdentityRef.current | null>(
+    null
+  );
 
   // Fetch queued tasks (post never-lose-prompt: queueing lives on tasks, not messages).
   React.useEffect(() => {
@@ -745,7 +839,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   // lifetime-stable wrappers that delegate to the latest implementations via
   // a ref (re-pointed each render, right where the impls are defined).
   const footerHandlersRef = React.useRef<{
-    onModelConfigChange: (config: ModelConfig) => void;
+    onModelConfigCommit: (config: ModelConfig) => void;
     onSendPrompt: () => void;
     onStop: () => void;
     onFork: () => void;
@@ -759,8 +853,8 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   } | null>(null);
   const stableFooterHandlers = React.useMemo(
     () => ({
-      onModelConfigChange: (config: ModelConfig) =>
-        footerHandlersRef.current?.onModelConfigChange(config),
+      onModelConfigCommit: (config: ModelConfig) =>
+        footerHandlersRef.current?.onModelConfigCommit(config),
       onSendPrompt: () => footerHandlersRef.current?.onSendPrompt(),
       onStop: () => footerHandlersRef.current?.onStop(),
       onFork: () => footerHandlersRef.current?.onFork(),
@@ -827,9 +921,12 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
           onRemove={removeComposerAttachment}
         />
         <PromptInput
+          key={composerIdentityKey}
           ref={promptRef}
           sessionId={session.session_id}
           getDraft={getDraft}
+          getDraftSeed={getDraftSeed}
+          discardDraftSeed={discardDraftSeed}
           saveDraft={saveDraft}
           deleteDraft={deleteDraft}
           onHasInputChange={handleHasInputChange}
@@ -878,6 +975,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     composerAttachmentValidationError,
     composerAttachments,
     composerDropActive,
+    composerIdentityKey,
     hasComposerAttachments,
     isRunning,
     client,
@@ -885,6 +983,8 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     addComposerAttachments,
     removeComposerAttachment,
     getDraft,
+    getDraftSeed,
+    discardDraftSeed,
     saveDraft,
     deleteDraft,
     handleHasInputChange,
@@ -909,14 +1009,15 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     }
 
     modal.confirm({
-      title: 'Archive session and child sessions?',
-      content: 'Are you sure you want to archive this session and its child sessions?',
+      title: 'Archive session and same-branch children?',
+      content:
+        'This archives the session and its same-branch forked or spawned descendants. Remote-created sessions remain active.',
       okText: 'Archive',
       cancelText: 'Cancel',
       onOk: async () => {
         const archived = await archiveSession(session.session_id);
         if (archived) {
-          showSuccess('Session and child sessions archived');
+          showSuccess('Session and same-branch children archived');
           onClose();
         } else {
           showError('Failed to archive session');
@@ -996,18 +1097,18 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   };
 
   const handleSendPrompt = async () => {
+    const sendStartComposerIdentity = composerSessionIdentityRef.current;
     if (
-      composerSendInFlightRef.current ||
+      composerSendInFlightRef.current === sendStartComposerIdentity ||
       composerAttachmentUploadingRef.current ||
       connectionDisabled
     ) {
       return;
     }
 
-    composerSendInFlightRef.current = true;
+    composerSendInFlightRef.current = sendStartComposerIdentity;
     try {
       const sendStartSessionId = session.session_id;
-      const sendStartComposerIdentity = composerSessionIdentityRef.current;
       const value = promptRef.current?.getValue() ?? '';
       const attachmentsAtSendStart = composerAttachmentsRef.current;
       const hasAttachments = attachmentsAtSendStart.length > 0;
@@ -1016,7 +1117,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
       const blockingAttachment = attachmentsAtSendStart.find(isBlockingComposerAttachment);
       if (blockingAttachment) {
         showError(
-          `${blockingAttachment.file.name} failed or cannot be uploaded. Remove failed files before sending.`
+          `${getComposerAttachmentFailureMessage(blockingAttachment)}. Remove failed files before sending.`
         );
         return;
       }
@@ -1030,10 +1131,16 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
         attachmentsAtSendStart,
         sendStartSessionId
       );
+      const currentComposerIdentity = composerSessionIdentityRef.current;
+      if (
+        currentComposerIdentity.ownerId !== sendStartComposerIdentity.ownerId ||
+        currentComposerIdentity.ownerGeneration !== sendStartComposerIdentity.ownerGeneration
+      ) {
+        return;
+      }
       const promptAttachments = uploadedFiles;
       const composerStillOwnsSend =
-        composerSessionIdentityRef.current.sessionId === sendStartSessionId &&
-        composerSessionIdentityRef.current.generation === sendStartComposerIdentity.generation;
+        composerSessionIdentityRef.current === sendStartComposerIdentity;
       // Re-read from the imperative textarea handle after upload only if the
       // same composer instance still owns this send. When the user switches
       // sessions during a delayed upload, promptRef points at the newly active
@@ -1056,32 +1163,41 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
       const sendResult = await onSendPrompt?.(sendStartSessionId, promptToSend, permissionMode);
       if (sendResult === false) return;
 
-      if (composerStillOwnsSend) {
+      // Admission can outlive this composer. Re-check ownership after the
+      // await rather than reusing the pre-admission snapshot: a later caller
+      // may have typed identical text and selected different attachments.
+      const composerOwnsAdmissionCompletion =
+        composerSessionIdentityRef.current === sendStartComposerIdentity;
+      const composerStillOwnsSentText =
+        composerOwnsAdmissionCompletion && promptRef.current?.getValue() === latestValue;
+      if (composerStillOwnsSentText) {
         promptRef.current?.clear();
         clearComposerAttachments();
         setComposerAttachmentValidationError(null);
       } else {
-        // The old composer is no longer live; clear only its saved draft so the
-        // successfully sent snapshot does not reappear when the user returns.
-        // Never call promptRef.current?.clear() here because it now belongs to
-        // a different active session.
-        deleteDraft(sendStartSessionId);
+        // The composer moved or its text changed while admission was pending.
+        // Clear only an exactly matching persisted snapshot; never erase the
+        // replacement text now visible to the user.
+        deleteDraft(sendStartSessionId, latestValue);
       }
 
       // Re-engage the bottom lock so a scrolled-up user follows their just-sent
       // message and the streaming reply (behavior 3). `scrollToBottom` is the
       // function ConversationView exposed via onScrollRef.
-      if (composerStillOwnsSend) scrollToBottom?.();
+      if (composerOwnsAdmissionCompletion) scrollToBottom?.();
     } catch (error) {
+      if (composerSessionIdentityRef.current !== sendStartComposerIdentity) return;
       console.error('Composer send failed — keeping prompt and files in composer:', error);
       showError(error instanceof Error ? error.message : 'Failed to send prompt');
     } finally {
-      composerSendInFlightRef.current = false;
+      if (composerSendInFlightRef.current === sendStartComposerIdentity) {
+        composerSendInFlightRef.current = null;
+      }
     }
   };
 
   const handleStop = async () => {
-    if (!session || !client || stopRequestInFlight) return;
+    if (!session || !client || connectionDisabled || stopRequestInFlight) return;
 
     const unverifiedTask = [...tasks]
       .reverse()
@@ -1103,18 +1219,46 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
       showInfo('Retrying stop request...');
     }
 
+    const stopSessionId = session.session_id;
+    const stopTarget = [...tasks]
+      .reverse()
+      .find(
+        (task) =>
+          task.status === TaskStatus.DISPATCHING ||
+          task.status === TaskStatus.RUNNING ||
+          task.status === TaskStatus.STOPPING ||
+          task.status === TaskStatus.AWAITING_PERMISSION ||
+          task.status === TaskStatus.AWAITING_INPUT
+      );
+    if (!stopTarget) {
+      showError('Execution state is still syncing. Try again.');
+      return;
+    }
+
     setStopRequestInFlight(true);
     try {
-      const result = (await client.service(`sessions/${session.session_id}/stop`).create({})) as {
-        success?: boolean;
-        reason?: string;
-      };
+      const result: SessionStopResult = await requestSessionStop(
+        client,
+        stopSessionId,
+        stopTarget.task_id
+      );
       if (result.success === false) {
         showInfo(result.reason ?? 'Stop requested; waiting for executor termination.');
       }
     } catch (error) {
       console.error('Failed to stop execution:', error);
-      showError('Failed to stop execution. You can try again.');
+      const reconciliation = isStopTransportAmbiguous(error)
+        ? await reconcileStopTransportFailure(
+            () => currentClientRef.current,
+            stopSessionId,
+            stopTarget.task_id
+          )
+        : { outcome: 'unresolved' as const };
+      if (reconciliation.outcome === 'accepted' || reconciliation.outcome === 'ended') {
+        showInfo(reconciliation.reason);
+      } else {
+        showError('Failed to stop execution. You can try again.');
+      }
     } finally {
       setStopRequestInFlight(false);
     }
@@ -1294,7 +1438,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     }
   };
 
-  const handleModelConfigChange = (newConfig: ModelConfig) => {
+  const handleModelConfigCommit = (newConfig: ModelConfig) => {
     if (session && onUpdateSession) {
       const nextConfig: NonNullable<Session['model_config']> = {
         ...session.model_config,
@@ -1335,7 +1479,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   // Render-phase ref write (instead of the usual useLayoutEffect) because the
   // impls above only exist when `session` is non-null, past the early return.
   footerHandlersRef.current = {
-    onModelConfigChange: handleModelConfigChange,
+    onModelConfigCommit: handleModelConfigCommit,
     onSendPrompt: handleSendPrompt,
     onStop: handleStop,
     onFork: handleFork,
@@ -1376,7 +1520,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
       client={client}
       modelLabel={modelLabel}
       modelConfig={modelConfig}
-      onModelConfigChange={stableFooterHandlers.onModelConfigChange}
+      onModelConfigCommit={stableFooterHandlers.onModelConfigCommit}
       onOpenSessionSettings={onOpenSettings}
       onSendPrompt={stableFooterHandlers.onSendPrompt}
       onStop={stableFooterHandlers.onStop}

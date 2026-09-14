@@ -210,9 +210,8 @@ describe('filterCatalog A–Z over the shipped catalog', () => {
   });
 
   it('puts Airtable before Exa, whose identifiers order the other way', async () => {
-    // `ai.exa/exa` sorts first of all 50 by identifier and 17th by display name;
-    // `com.airtable/mcp` is 4th by identifier and 1st by display name. This is
-    // the case reported from the marketplace.
+    // The identifiers sort Exa before Airtable, while the display names sort
+    // Airtable before Exa. This is the case reported from the marketplace.
     const sorted = filterCatalog(await loadCatalog(), { sort: 'name' });
     const position = (name: string) => sorted.findIndex((entry) => entry.name === name);
 

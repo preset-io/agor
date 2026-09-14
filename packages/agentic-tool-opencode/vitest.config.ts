@@ -23,7 +23,7 @@ export default defineConfig({
   test: {
     globals: true,
     environment: 'node',
-    setupFiles: './src/test/setup.ts',
+    setupFiles: ['../../test/isolate-host-env.ts', './src/test/setup.ts'],
     testTimeout: 15_000,
   },
 });

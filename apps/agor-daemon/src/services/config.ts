@@ -9,7 +9,12 @@
  */
 
 import { TOOL_API_KEY_NAMES } from '@agor/agentic-tools';
-import { type AgorConfig, type ApiKeyName, resolveApiKey } from '@agor/core/config';
+import {
+  type AgorConfig,
+  type ApiKeyName,
+  hasExactUserExecutorCredentialHome,
+  resolveApiKey,
+} from '@agor/core/config';
 import { runWithTenantDatabaseScope, type TenantScopeAwareDatabase } from '@agor/core/db';
 import { type Application, BadRequest, Forbidden, NotAuthenticated } from '@agor/core/feathers';
 import type {
@@ -20,8 +25,21 @@ import type {
   TaskID,
   UserID,
 } from '@agor/core/types';
-import jwt from 'jsonwebtoken';
-import type { SessionTokenService } from './session-token-service.js';
+import {
+  authenticatedTaskExecutorRuntimeScope,
+  matchesTaskExecutorRuntimeScope,
+} from '../auth/executor-runtime-scope.js';
+import {
+  resolveExecutionCredentialHome,
+  sameExecutionCredentialHome,
+} from './credential-home-identity.js';
+
+interface ClaudeRuntimeCredentialResolverLike {
+  resolve(
+    tenantId: string,
+    userId: UserID
+  ): Promise<{ connection: { CLAUDE_CODE_OAUTH_TOKEN: string }; useNativeAuth: false }>;
+}
 
 const RESOLVABLE_API_KEY_NAMES: Record<ApiKeyName, true> = {
   ANTHROPIC_API_KEY: true,
@@ -37,58 +55,6 @@ function isResolvableApiKeyName(value: string): value is ApiKeyName {
   return Object.hasOwn(RESOLVABLE_API_KEY_NAMES, value);
 }
 
-type ExecutorTokenPayload = {
-  type?: string;
-  purpose?: string;
-  session_id?: string;
-  sessionId?: string;
-  task_id?: string;
-  branch_id?: string;
-};
-
-function getExecutorTokenPayload(params?: Params): ExecutorTokenPayload | undefined {
-  const authParams = params as
-    | (AuthenticatedParams & { task_id?: string; authentication?: { strategy?: string } })
-    | undefined;
-  const payload = authParams?.authentication?.payload as ExecutorTokenPayload | undefined;
-  if (payload?.type === 'executor-session' && payload.purpose === 'executor-task') {
-    return payload;
-  }
-
-  // Feathers transports do not consistently preserve the decoded JWT payload
-  // on params.authentication. The token was already verified by requireAuth
-  // before this service method runs, so decoding here is only to recover
-  // trusted scope claims for executor-session JWTs.
-  const accessToken = (params as AuthenticatedParams | undefined)?.authentication?.accessToken;
-  if (typeof accessToken === 'string') {
-    const decoded = jwt.decode(accessToken) as ExecutorTokenPayload | null;
-    if (decoded?.type === 'executor-session' && decoded.purpose === 'executor-task') {
-      return decoded;
-    }
-  }
-
-  // Socket.io executor logins may preserve auth-result scope fields on the
-  // connection even when the decoded JWT payload is not carried forward into
-  // later service params. Keep the secret resolver restricted to task-scoped
-  // executor JWTs by only accepting this fallback for JWT-authenticated
-  // connections that have a task claim minted by ServiceJWTStrategy.
-  if (authParams?.authentication?.strategy === 'jwt' && authParams.task_id) {
-    const scopedParams = params as
-      | (Params & { session_id?: string; sessionId?: string; task_id?: string; branch_id?: string })
-      | undefined;
-    return {
-      type: 'executor-session',
-      purpose: 'executor-task',
-      task_id: authParams.task_id,
-      session_id: scopedParams?.session_id,
-      sessionId: scopedParams?.sessionId,
-      branch_id: scopedParams?.branch_id,
-    };
-  }
-
-  return undefined;
-}
-
 /**
  * Config service class
  */
@@ -99,7 +65,8 @@ export class ConfigService {
 
   constructor(
     db: TenantScopeAwareDatabase,
-    private readonly config: DeepReadonly<AgorConfig>
+    private readonly config: DeepReadonly<AgorConfig> = {},
+    private readonly claudeRuntimeCredentials?: ClaudeRuntimeCredentialResolverLike
   ) {
     this.db = db;
   }
@@ -122,14 +89,6 @@ export class ConfigService {
        * sweep (legacy behavior preserved for non-SDK callers).
        */
       tool?: AgenticToolName;
-      /**
-       * Explicit task-scoped executor JWT proof. The Socket.io connection can
-       * authenticate as the session creator user while dropping custom JWT
-       * claims from later service params, so executors include the minted token
-       * on this secret-resolution call and the daemon validates its signature,
-       * scope, and active token authority.
-       */
-      executorSessionToken?: string;
     },
     params?: Params
   ): Promise<{
@@ -149,34 +108,18 @@ export class ConfigService {
     // service account or with a task-scoped executor runtime JWT. Normal
     // user/API-key auth must not resolve raw configured keys. The former
     // general-purpose /config read endpoint no longer exists.
-    let executorPayload = getExecutorTokenPayload(params);
-    if (!executorPayload && params?.provider && data.executorSessionToken) {
-      const sessionTokenService = (
-        this.app as unknown as {
-          sessionTokenService?: SessionTokenService;
-        }
-      )?.sessionTokenService;
-      const sessionInfo = await sessionTokenService?.validateToken(data.executorSessionToken, {
-        taskId,
-      });
-      if (sessionInfo?.task_id === taskId) {
-        executorPayload = {
-          type: 'executor-session',
-          purpose: 'executor-task',
-          task_id: sessionInfo.task_id,
-        };
-      }
-    }
+    const executorScope = authenticatedTaskExecutorRuntimeScope(params);
+    const executorPrincipalUserId = (params as AuthenticatedParams | undefined)?.user?.user_id;
     if (params?.provider) {
       const caller = (params as AuthenticatedParams | undefined)?.user;
       const isServiceAccount = caller?._isServiceAccount === true;
-      if (!isServiceAccount && !executorPayload) {
+      if (!isServiceAccount && !executorScope) {
         if (!caller) {
           throw new NotAuthenticated('Authentication required');
         }
         throw new Forbidden('Only executor runtime credentials may resolve API keys');
       }
-      if (executorPayload?.task_id && executorPayload.task_id !== taskId) {
+      if (executorScope && executorScope.taskId !== taskId) {
         throw new Forbidden('Executor token task scope does not match this request');
       }
     }
@@ -198,19 +141,28 @@ export class ConfigService {
       }
     } catch (err) {
       console.warn(`[Config.resolveApiKey] Failed to fetch task ${taskId}:`, err);
-      if (executorPayload) {
+      if (executorScope) {
         throw new Forbidden('Executor token task scope could not be verified');
       }
     }
 
-    if (executorPayload && (!userId || !sessionId)) {
+    if (
+      executorScope &&
+      (!userId ||
+        !sessionId ||
+        executorPrincipalUserId !== userId ||
+        !matchesTaskExecutorRuntimeScope(executorScope, {
+          task_id: taskId,
+          session_id: sessionId,
+        }))
+    ) {
       throw new Forbidden('Executor token task scope could not be verified');
     }
 
     // Executor runtime calls are narrowly scoped to the SDK for this session.
     // Do not let a compromised executor token ask for another tool's bucket or
     // an unrelated credential name.
-    if (executorPayload) {
+    if (executorScope) {
       const verifiedSessionId = sessionId;
       if (!verifiedSessionId) {
         throw new Forbidden('Executor token task scope could not be verified');
@@ -227,22 +179,49 @@ export class ConfigService {
         throw new Forbidden('Executor token tool scope could not be verified');
       }
       const session = await sessionsService.get(verifiedSessionId, internalParams);
-      if (session?.agentic_tool !== tool) {
+      if (
+        session?.agentic_tool !== tool ||
+        (executorScope.branchId && executorScope.branchId !== session.branch_id)
+      ) {
         throw new Forbidden('Executor token tool scope does not match this session');
       }
     }
 
-    const result = await runWithTenantDatabaseScope(
+    let result = await runWithTenantDatabaseScope(
       this.db,
       internalParams.tenant?.tenant_id,
       (tenantDb) => resolveApiKey(keyName, { userId, db: tenantDb, tool })
     );
+    if (result.useNativeAuth && tool === 'claude-code') {
+      const tenantId = internalParams.tenant?.tenant_id;
+      if (!tenantId || !userId || !this.claudeRuntimeCredentials) {
+        throw new BadRequest(
+          'Managed Claude subscription login is unavailable for this task. Use an API key or pasted subscription token.'
+        );
+      }
+      // The token is short-lived, but it is still the prompter's credential.
+      // Do not inject it into a session executing in another user's home; the
+      // same identity agreement that protected native-file auth remains the
+      // task-runtime credential boundary after canonical-file masking.
+      await this.assertNativeAuthHomeMatchesSession(tool, userId, sessionId, internalParams);
+      const managed = await this.claudeRuntimeCredentials.resolve(tenantId, userId);
+      result = {
+        ...result,
+        apiKey: undefined,
+        connection: managed.connection,
+        useNativeAuth: false,
+      };
+    }
     if (result.useNativeAuth) {
-      if (this.config.multi_tenancy?.mode === 'required_from_auth') {
+      if (
+        this.config.multi_tenancy?.mode === 'required_from_auth' &&
+        !(hasExactUserExecutorCredentialHome(this.config) && tool === 'codex')
+      ) {
         throw new BadRequest(
           'Shared machine subscription authentication is unavailable in hosted multitenant mode'
         );
       }
+      await this.assertNativeAuthHomeMatchesSession(tool, userId, sessionId, internalParams);
     }
 
     // Map KeyResolutionResult to service response type
@@ -254,6 +233,84 @@ export class ConfigService {
       ...(result.decryptionFailed && { decryptionFailed: true }),
     };
   }
+
+  /**
+   * Native auth resolves from the task creator, while the filesystem sandbox
+   * mounts the session owner's home. Refuse a mismatch rather than borrowing
+   * the owner's credential or silently missing the prompter's login.
+   */
+  private async assertNativeAuthHomeMatchesSession(
+    tool: AgenticToolName | undefined,
+    promptingUserId: UserID | undefined,
+    sessionId: string | undefined,
+    internalParams: AuthenticatedParams
+  ): Promise<void> {
+    if (!promptingUserId) return;
+
+    const tenantId = internalParams.tenant?.tenant_id;
+    const homeOf = (userId: UserID) =>
+      resolveExecutionCredentialHome({
+        userId,
+        tenantId,
+        config: this.config,
+        withTenantDatabase: (work) => runWithTenantDatabaseScope(this.db, tenantId, work),
+      });
+    const requireCanonicalProviderHome =
+      (tool === 'codex' || tool === 'claude-code') && this.config.deployment?.mode === 'ha';
+    let prompterHome = requireCanonicalProviderHome ? await homeOf(promptingUserId) : undefined;
+    if (prompterHome?.homeStoreSource === 'override') {
+      throw new BadRequest(
+        'HA subscription auth requires Agor’s canonical tenant/user home. ' +
+          'Remove the filesystem_home override for this account or use an API key.'
+      );
+    }
+
+    if (!sessionId) return;
+    const sessionsService = this.app?.service('sessions');
+    if (!sessionsService) return;
+    const session = (await sessionsService.get(sessionId, internalParams)) as
+      | {
+          created_by?: string;
+          unix_username?: string | null;
+          sdk_home_scope?: 'execution_home' | 'branch';
+        }
+      | undefined;
+    // A branch-scoped Session deliberately selects the immutable prompt actor's
+    // per-user home and overlays that actor's pinned Codex auth inode. The
+    // executor principal was already proven equal to Task.created_by above, so
+    // comparing it with the Session owner would reject the intended
+    // collaborator path. Execution-home Sessions retain the historical owner
+    // home and therefore still require the comparison below.
+    if (tool === 'codex' && session?.sdk_home_scope === 'branch') return;
+    const ownerUserId = session?.created_by;
+    if (!ownerUserId) return;
+
+    prompterHome ??= await homeOf(promptingUserId);
+    let ownerHome =
+      ownerUserId === promptingUserId ? prompterHome : await homeOf(ownerUserId as UserID);
+    // Delegated sessions execute under the immutable home key stamped when the
+    // session was created. Comparing only current user rows lets a same-owner
+    // session silently read an old or reassigned home after that key changes.
+    if ((this.config.execution?.unix_user_mode ?? 'simple') === 'delegated') {
+      ownerHome = {
+        ...ownerHome,
+        delegatedHomeKey: session?.unix_username ?? null,
+      };
+    }
+    if (requireCanonicalProviderHome && ownerHome.homeStoreSource === 'override') {
+      throw new BadRequest(
+        'HA subscription auth requires the session owner’s canonical tenant/user home. ' +
+          'Remove the filesystem_home override or use an API key.'
+      );
+    }
+    if (sameExecutionCredentialHome(prompterHome, ownerHome)) return;
+
+    throw new Forbidden(
+      'Subscription sign-in belongs to a different execution home than this session runs in. ' +
+        "The session executes in its owner's home, so the prompting user's on-disk login is not " +
+        'visible to it. Prompt a session you own, or configure an API key.'
+    );
+  }
 }
 
 /**
@@ -261,7 +318,8 @@ export class ConfigService {
  */
 export function createConfigService(
   db: TenantScopeAwareDatabase,
-  config: DeepReadonly<AgorConfig>
+  config: DeepReadonly<AgorConfig>,
+  claudeRuntimeCredentials?: ClaudeRuntimeCredentialResolverLike
 ): ConfigService {
-  return new ConfigService(db, config);
+  return new ConfigService(db, config, claudeRuntimeCredentials);
 }

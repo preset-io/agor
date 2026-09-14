@@ -16,9 +16,11 @@ vi.mock('../../utils/executor-delegated-home.js', () => ({
   resolveDelegatedExecutionHomeKey: vi.fn(async () => undefined),
 }));
 vi.mock('../../utils/spawn-executor.js', () => ({
-  generateScopedServiceToken: vi.fn(() => 'service-token'),
   getDaemonUrl: vi.fn(() => 'http://daemon.test'),
-  runExecutorCommand: vi.fn(),
+  requestExecutor: vi.fn(),
+}));
+vi.mock('../../services/session-token-service.js', () => ({
+  issueExecutorCommandToken: vi.fn(async () => 'delegated-user-token'),
 }));
 
 vi.mock('../resolve-ids.js', () => ({

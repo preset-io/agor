@@ -9,6 +9,8 @@ const preparedServerId = vi.fn();
 
 type FormFieldsMockProps = {
   onPrepareOAuthStart: () => Promise<string | null>;
+  onTestConnection: () => Promise<void>;
+  testResult?: { error?: string } | null;
 };
 
 vi.mock('@/utils/message', () => ({
@@ -21,9 +23,13 @@ vi.mock('@/utils/message', () => ({
 }));
 
 vi.mock('./MCPServerFormFields', async () => {
-  const { Button, Form, Input } = await import('antd');
+  const { Button, Form, Input, Switch } = await import('antd');
   return {
-    MCPServerFormFields: ({ onPrepareOAuthStart }: FormFieldsMockProps) => (
+    MCPServerFormFields: ({
+      onPrepareOAuthStart,
+      onTestConnection,
+      testResult,
+    }: FormFieldsMockProps) => (
       <>
         <Form.Item label="Description" name="description">
           <Input />
@@ -43,9 +49,14 @@ vi.mock('./MCPServerFormFields', async () => {
         <Form.Item label="Dynamic Client Registration" name="oauth_dcr_mode">
           <Input />
         </Form.Item>
+        <Form.Item label="Enabled" name="enabled" valuePropName="checked">
+          <Switch />
+        </Form.Item>
         <Button onClick={() => void onPrepareOAuthStart().then(preparedServerId)}>
           Start OAuth Flow
         </Button>
+        <Button onClick={() => void onTestConnection()}>Test Connection</Button>
+        {testResult?.error && <div>{testResult.error}</div>}
       </>
     ),
   };
@@ -55,6 +66,167 @@ import { MCPServerEditModal } from './MCPServerEditModal';
 
 describe('MCPServerEditModal legacy DCR compatibility', () => {
   beforeEach(() => vi.clearAllMocks());
+
+  it('keeps a committed save successful when policy reload fails and retries only the read', async () => {
+    const server = {
+      mcp_server_id: '01900000-0000-7000-8000-000000000098',
+      name: 'policy-read-failure',
+      transport: 'http',
+      url: 'https://mcp.example.com/mcp',
+      scope: 'global',
+      enabled: true,
+      config_version: 1,
+      auth: { type: 'oauth' },
+      oauth_compatibility_policy: {
+        effective_mode: 'strict',
+        managed_by_catalog: false,
+        effective_dcr_mode: 'advertised',
+        dcr_mode_source: 'default',
+      },
+    } as MCPServer;
+    const updated = { ...server, config_version: 2, oauth_compatibility_policy: undefined };
+    const patch = vi.fn().mockResolvedValue(updated);
+    const get = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('private provider detail'))
+      .mockResolvedValueOnce({
+        ...updated,
+        config_version: 3,
+        oauth_compatibility_policy: server.oauth_compatibility_policy,
+      });
+    const client = {
+      service: vi.fn(() => ({ patch, get })),
+      io: { on: vi.fn(), off: vi.fn() },
+    } as unknown as AgorClient;
+    render(
+      <MCPServerEditModal
+        server={server}
+        open
+        client={client}
+        identityKey="user-a"
+        authorityKey="user-a:admin:1"
+        authGeneration={1}
+        mutationAllowed
+        onClose={vi.fn()}
+      />
+    );
+    fireEvent.click(await screen.findByRole('button', { name: 'Start OAuth Flow' }));
+    await screen.findByText('Saved OAuth policy is unavailable');
+    expect(screen.queryByText(/Saved OAuth policy:/)).not.toBeInTheDocument();
+    expect(screen.queryByText('private provider detail')).not.toBeInTheDocument();
+    expect(preparedServerId).toHaveBeenCalledWith(server.mcp_server_id);
+    expect(showError).not.toHaveBeenCalled();
+    fireEvent.change(screen.getByLabelText('URL'), {
+      target: { value: 'https://unsaved.example/mcp' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Retry policy read' }));
+    await screen.findByText(/Saved OAuth policy:/);
+    expect(screen.getByLabelText('URL')).toHaveValue('https://unsaved.example/mcp');
+    expect(patch).toHaveBeenCalledOnce();
+    expect(preparedServerId).toHaveBeenCalledOnce();
+    expect(get).toHaveBeenCalledTimes(2);
+    // GET observed another writer, but a diagnostic read must not silently
+    // rebase this draft onto their CAS revision and overwrite their changes.
+    patch.mockRejectedValueOnce(Object.assign(new Error('conflict'), { code: 409 }));
+    fireEvent.click(screen.getByRole('button', { name: 'Start OAuth Flow' }));
+    await screen.findByText('Newer MCP settings are available');
+    expect(patch.mock.calls[1]?.[1]?.expected_config_version).toBe(2);
+  });
+
+  it('shows the daemon storage-policy rejection without replacing it with retry advice', async () => {
+    const error =
+      "The MCP server's capabilities did not meet Agor's storage safety limits, so Agor did not save them. Ask an administrator to review the secure operational event.";
+    const discover = vi.fn().mockResolvedValue({
+      success: false,
+      category: 'storage_policy_rejected',
+      action: 'contact_admin',
+      error,
+    });
+    const reserve = vi.fn().mockResolvedValue({
+      reservation_token: 'storage-policy-reservation-00000001',
+      expires_at: Date.now() + 60_000,
+    });
+    const patch = vi.fn().mockResolvedValue({ config_version: 2 });
+    const client = {
+      service: vi.fn((path: string) => {
+        if (path === 'mcp-servers') return { patch };
+        if (path === 'mcp-servers/discover') return { create: discover };
+        if (path === 'mcp-servers/oauth-browser-reservations') return { create: reserve };
+        return {};
+      }),
+      io: { on: vi.fn(), off: vi.fn() },
+    } as unknown as AgorClient;
+    const server = {
+      mcp_server_id: '01900000-0000-7000-8000-000000000099',
+      name: 'storage-policy-test',
+      transport: 'http',
+      url: 'https://mcp.example.com/mcp',
+      scope: 'global',
+      enabled: true,
+      auth: { type: 'none' },
+    } as MCPServer;
+
+    render(
+      <MCPServerEditModal
+        server={server}
+        open
+        client={client}
+        identityKey="user-a"
+        authorityKey="user-a:admin:1"
+        authGeneration={1}
+        mutationAllowed
+        onClose={vi.fn()}
+      />
+    );
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Test Connection' }));
+
+    // The result can arrive while the modal is still opening. Wait for the
+    // visible message, not just its presence in the animated dialog's DOM.
+    await waitFor(() => expect(screen.getByText(error)).toBeVisible());
+    expect(patch).toHaveBeenCalledOnce();
+    expect(discover).toHaveBeenCalledOnce();
+    expect(patch.mock.invocationCallOrder[0]).toBeLessThan(discover.mock.invocationCallOrder[0]!);
+  });
+
+  it('requires destructive confirmation before disabling an OAuth server', async () => {
+    const patch = vi.fn().mockResolvedValue({});
+    const client = {
+      service: vi.fn().mockReturnValue({ patch }),
+      io: { on: vi.fn(), off: vi.fn() },
+    } as unknown as AgorClient;
+    const server = {
+      mcp_server_id: '01900000-0000-7000-8000-000000000099',
+      name: 'oauth-disable',
+      transport: 'http',
+      url: 'https://mcp.example.com/mcp',
+      scope: 'global',
+      enabled: true,
+      auth: { type: 'oauth' },
+    } as MCPServer;
+
+    render(
+      <MCPServerEditModal
+        server={server}
+        open
+        client={client}
+        identityKey="user-a"
+        authorityKey="user-a:admin:1"
+        authGeneration={1}
+        mutationAllowed
+        onClose={vi.fn()}
+      />
+    );
+
+    fireEvent.click(await screen.findByRole('switch', { name: 'Enabled' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    expect((await screen.findAllByText('Disable this OAuth server?')).length).toBeGreaterThan(0);
+    expect(patch).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Disable server' }));
+    await waitFor(() => expect(patch).toHaveBeenCalledTimes(1));
+    expect(patch.mock.calls[0]?.[1]).toMatchObject({ enabled: false });
+  });
 
   it('keeps oauth_dcr_mode absent when an unrelated field is saved', async () => {
     const patch = vi.fn().mockResolvedValue({});
@@ -74,7 +246,18 @@ describe('MCPServerEditModal legacy DCR compatibility', () => {
       auth: { type: 'oauth' },
     } as MCPServer;
 
-    render(<MCPServerEditModal server={server} open client={client} onClose={vi.fn()} />);
+    render(
+      <MCPServerEditModal
+        server={server}
+        open
+        client={client}
+        identityKey="user-a"
+        authorityKey="user-a:admin:1"
+        authGeneration={1}
+        mutationAllowed
+        onClose={vi.fn()}
+      />
+    );
 
     fireEvent.change(await screen.findByLabelText('Description'), {
       target: { value: 'after' },
@@ -84,9 +267,57 @@ describe('MCPServerEditModal legacy DCR compatibility', () => {
     await waitFor(() => expect(patch).toHaveBeenCalledTimes(1));
     const updates = patch.mock.calls[0]?.[1] as { auth?: Record<string, unknown> };
     expect(updates.auth).not.toHaveProperty('oauth_dcr_mode');
+    expect(updates.auth).not.toHaveProperty('oauth_compatibility_mode');
+    expect(updates.auth).not.toHaveProperty('oauth_grant_type');
     expect(showSuccess).toHaveBeenCalled();
     expect(showError).not.toHaveBeenCalled();
   });
+
+  it.each(['Save', 'Start OAuth Flow'])(
+    'hydrates and preserves a catalog-managed Marketplace policy during %s',
+    async (action) => {
+      const patch = vi.fn().mockResolvedValue({});
+      const client = {
+        service: vi.fn().mockReturnValue({ patch }),
+        io: { on: vi.fn(), off: vi.fn() },
+      } as unknown as AgorClient;
+      const server = {
+        mcp_server_id: '01900000-0000-7000-8000-000000000010',
+        name: 'catalog-oauth',
+        transport: 'http',
+        url: 'https://mcp.example.com/mcp',
+        scope: 'global',
+        source: 'catalog',
+        catalog_entry_name: 'com.example/mcp',
+        enabled: true,
+        auth: { type: 'oauth' },
+        oauth_compatibility_policy: {
+          effective_mode: 'marketplace',
+          managed_by_catalog: true,
+        },
+      } as MCPServer;
+
+      render(
+        <MCPServerEditModal
+          server={server}
+          open
+          client={client}
+          identityKey="user-a"
+          authorityKey="user-a:admin:1"
+          authGeneration={1}
+          mutationAllowed
+          onClose={vi.fn()}
+        />
+      );
+
+      expect(await screen.findByLabelText('OAuth Compatibility')).toHaveValue('marketplace');
+      fireEvent.click(screen.getByRole('button', { name: action }));
+
+      await waitFor(() => expect(patch).toHaveBeenCalledTimes(1));
+      const updates = patch.mock.calls[0]?.[1] as { auth?: Record<string, unknown> };
+      expect(updates.auth).not.toHaveProperty('oauth_compatibility_mode');
+    }
+  );
 
   it('persists edited OAuth client credentials before the first OAuth start', async () => {
     const patch = vi.fn().mockResolvedValue({});
@@ -111,7 +342,18 @@ describe('MCPServerEditModal legacy DCR compatibility', () => {
       },
     } as MCPServer;
 
-    render(<MCPServerEditModal server={server} open client={client} onClose={onClose} />);
+    render(
+      <MCPServerEditModal
+        server={server}
+        open
+        client={client}
+        identityKey="user-a"
+        authorityKey="user-a:admin:1"
+        authGeneration={1}
+        mutationAllowed
+        onClose={onClose}
+      />
+    );
 
     fireEvent.change(await screen.findByLabelText('Client ID'), {
       target: { value: 'fresh-client-id' },
@@ -128,6 +370,8 @@ describe('MCPServerEditModal legacy DCR compatibility', () => {
       oauth_client_id: 'fresh-client-id',
       oauth_client_secret: 'fresh-client-secret',
     });
+    expect(updates.auth).not.toHaveProperty('oauth_compatibility_mode');
+    expect(updates.auth).not.toHaveProperty('oauth_grant_type');
     expect(onClose).not.toHaveBeenCalled();
     expect(showError).not.toHaveBeenCalled();
   });
@@ -154,7 +398,18 @@ describe('MCPServerEditModal legacy DCR compatibility', () => {
       },
     } as MCPServer;
 
-    render(<MCPServerEditModal server={server} open client={client} onClose={vi.fn()} />);
+    render(
+      <MCPServerEditModal
+        server={server}
+        open
+        client={client}
+        identityKey="user-a"
+        authorityKey="user-a:admin:1"
+        authGeneration={1}
+        mutationAllowed
+        onClose={vi.fn()}
+      />
+    );
 
     fireEvent.change(await screen.findByLabelText('Client ID'), {
       target: { value: 'fresh-client-id' },
@@ -194,7 +449,18 @@ describe('MCPServerEditModal legacy DCR compatibility', () => {
       },
     } as MCPServer;
 
-    render(<MCPServerEditModal server={server} open client={client} onClose={vi.fn()} />);
+    render(
+      <MCPServerEditModal
+        server={server}
+        open
+        client={client}
+        identityKey="user-a"
+        authorityKey="user-a:admin:1"
+        authGeneration={1}
+        mutationAllowed
+        onClose={vi.fn()}
+      />
+    );
 
     fireEvent.change(await screen.findByLabelText('URL'), {
       target: { value: 'https://current.example/mcp' },
@@ -222,4 +488,273 @@ describe('MCPServerEditModal legacy DCR compatibility', () => {
     await waitFor(() => expect(preparedServerId).toHaveBeenCalledWith(server.mcp_server_id));
     expect(showError).not.toHaveBeenCalled();
   });
+
+  it('remounts same-server OAuth form state across admin A -> admin B', async () => {
+    const patch = vi.fn().mockResolvedValue({});
+    const client = {
+      service: vi.fn().mockReturnValue({ patch }),
+      io: { on: vi.fn(), off: vi.fn() },
+    } as unknown as AgorClient;
+    const serverA = {
+      mcp_server_id: '01900000-0000-7000-8000-000000000050',
+      name: 'same-server-id',
+      transport: 'http',
+      url: 'https://same.example/mcp',
+      scope: 'global',
+      enabled: true,
+      auth: {
+        type: 'oauth',
+        oauth_client_id: 'admin-a-client',
+        oauth_client_secret: 'admin-a-saved-secret',
+      },
+    } as MCPServer;
+    const serverB = {
+      ...serverA,
+      auth: {
+        type: 'oauth',
+        oauth_client_id: 'admin-b-client',
+        oauth_client_secret: 'admin-b-saved-secret',
+      },
+    } as MCPServer;
+    const view = (identityKey: string, server: MCPServer) => (
+      <MCPServerEditModal
+        server={server}
+        open
+        client={client}
+        identityKey={identityKey}
+        authorityKey={`${identityKey}:admin:2`}
+        authGeneration={2}
+        mutationAllowed
+        onClose={vi.fn()}
+      />
+    );
+    const rendered = render(view('admin-a', serverA));
+    const secret = await screen.findByLabelText('Client Secret');
+    fireEvent.change(secret, { target: { value: 'admin-a-unsaved-secret' } });
+    const staleSave = screen.getByRole('button', { name: 'Save' });
+
+    rendered.rerender(view('admin-b', serverB));
+
+    await waitFor(() =>
+      expect(screen.getByLabelText('Client Secret')).toHaveValue('admin-b-saved-secret')
+    );
+    expect(screen.queryByDisplayValue('admin-a-unsaved-secret')).not.toBeInTheDocument();
+    fireEvent.click(staleSave);
+    expect(patch).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(patch).toHaveBeenCalledTimes(1));
+    expect(patch).toHaveBeenCalledWith(
+      serverB.mcp_server_id,
+      expect.objectContaining({
+        auth: expect.objectContaining({
+          oauth_client_id: 'admin-b-client',
+          oauth_client_secret: 'admin-b-saved-secret',
+        }),
+      })
+    );
+  });
+
+  it('drops a delayed saved-server discovery browser event across admin A -> admin B', async () => {
+    let resolveDiscover: ((value: { success: boolean }) => void) | undefined;
+    const discover = vi.fn(
+      (_request: { oauth_browser_event: { reservation_token: string } }) =>
+        new Promise<{ success: boolean }>((resolve) => {
+          resolveDiscover = resolve;
+        })
+    );
+    const listeners = new Set<(event: Record<string, unknown>) => void>();
+    const reserve = vi.fn().mockResolvedValue({
+      reservation_token: 'server-reservation-admin-a-00000001',
+      expires_at: Date.now() + 60_000,
+    });
+    const client = {
+      service: vi.fn((path: string) => {
+        if (path === 'mcp-servers/discover') return { create: discover };
+        if (path === 'mcp-servers/oauth-browser-reservations') return { create: reserve };
+        return { patch: vi.fn().mockResolvedValue({ config_version: 2 }) };
+      }),
+      io: {
+        on: vi.fn((_event: string, listener: (event: Record<string, unknown>) => void) =>
+          listeners.add(listener)
+        ),
+        off: vi.fn((_event: string, listener: (event: Record<string, unknown>) => void) =>
+          listeners.delete(listener)
+        ),
+      },
+    } as unknown as AgorClient;
+    const server = {
+      mcp_server_id: '01900000-0000-7000-8000-000000000060',
+      name: 'delayed-oauth',
+      transport: 'http',
+      url: 'https://delayed.example/mcp',
+      scope: 'global',
+      enabled: true,
+      auth: { type: 'oauth' },
+    } as MCPServer;
+    const open = vi.spyOn(window, 'open').mockImplementation(() => null);
+    const view = (identityKey: string, authGeneration: number) => (
+      <MCPServerEditModal
+        server={server}
+        open
+        client={client}
+        identityKey={identityKey}
+        authorityKey={`${identityKey}:admin:${authGeneration}`}
+        authGeneration={authGeneration}
+        mutationAllowed
+        onClose={vi.fn()}
+      />
+    );
+    const rendered = render(view('admin-a', 31));
+    await screen.findByLabelText('URL');
+    fireEvent.click(screen.getByRole('button', { name: 'Test Connection' }));
+    await waitFor(() => expect(discover).toHaveBeenCalledOnce());
+    const request = discover.mock.calls[0]?.[0] as {
+      oauth_browser_event: { reservation_token: string };
+    };
+    expect(reserve).toHaveBeenCalledWith({
+      operation: 'discover',
+      mcp_server_id: server.mcp_server_id,
+    });
+    expect(listeners.size).toBe(1);
+    // Socket.IO may already have snapshotted a callback for dispatch when the
+    // identity commit removes it. Exercise that queued callback directly.
+    const queuedListeners = [...listeners];
+
+    rendered.rerender(view('admin-b', 32));
+    expect(listeners.size).toBe(0);
+    for (const listener of queuedListeners) {
+      listener({
+        authUrl: 'https://provider.example/admin-a',
+        attempt_id: 'attempt-admin-a',
+        reservation_token: request.oauth_browser_event.reservation_token,
+        caller_user_id: 'admin-a',
+      });
+    }
+    resolveDiscover?.({ success: true });
+    await Promise.resolve();
+
+    expect(open).not.toHaveBeenCalled();
+    expect(discover).toHaveBeenCalledOnce();
+    open.mockRestore();
+  });
+
+  it('reloads fresh catalog policy after a CAS conflict without overwriting it on retry', async () => {
+    const conflict = Object.assign(new Error('conflict'), {
+      code: 409,
+      data: { current_config_version: 9 },
+    });
+    const patch = vi
+      .fn()
+      .mockRejectedValueOnce(conflict)
+      .mockResolvedValueOnce({ config_version: 10 });
+    const latest = {
+      mcp_server_id: '01900000-0000-7000-8000-000000000088',
+      name: 'managed-after-conflict',
+      description: 'edited elsewhere',
+      transport: 'http',
+      url: 'https://managed.example/mcp',
+      scope: 'global',
+      source: 'catalog',
+      catalog_entry_name: 'com.example/managed',
+      enabled: true,
+      config_version: 9,
+      auth: { type: 'oauth' },
+      oauth_compatibility_policy: {
+        effective_mode: 'marketplace',
+        managed_by_catalog: true,
+        effective_dcr_mode: 'advertised',
+        dcr_mode_source: 'default',
+      },
+    } as MCPServer;
+    const get = vi.fn().mockResolvedValue(latest);
+    const client = {
+      service: vi.fn(() => ({ patch, get })),
+      io: { on: vi.fn(), off: vi.fn() },
+    } as unknown as AgorClient;
+    const stale = {
+      ...latest,
+      description: 'stale local copy',
+      config_version: 8,
+      source: 'user',
+      catalog_entry_name: undefined,
+      oauth_compatibility_policy: undefined,
+      auth: { type: 'oauth', oauth_compatibility_mode: 'strict' },
+    } as MCPServer;
+
+    render(
+      <MCPServerEditModal
+        server={stale}
+        open
+        client={client}
+        identityKey="user-a"
+        authorityKey="user-a:admin:1"
+        authGeneration={1}
+        mutationAllowed
+        onClose={vi.fn()}
+      />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await screen.findByText('Newer MCP settings are available');
+    fireEvent.click(screen.getByRole('button', { name: 'Reload latest' }));
+    await waitFor(() =>
+      expect(screen.getByLabelText('Description')).toHaveValue('edited elsewhere')
+    );
+    expect(screen.getByLabelText('OAuth Compatibility')).toHaveValue('marketplace');
+    expect(screen.getByText(/Saved OAuth policy:/)).toHaveTextContent(
+      'compatibility marketplace; DCR advertised (default).'
+    );
+
+    fireEvent.change(screen.getByLabelText('Description'), { target: { value: 'retry edit' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(patch).toHaveBeenCalledTimes(2));
+    const retry = patch.mock.calls[1]?.[1] as { expected_config_version: number; auth: object };
+    expect(retry.expected_config_version).toBe(9);
+    expect(retry.auth).not.toHaveProperty('oauth_compatibility_mode');
+  });
+
+  it.each(['Save', 'Start OAuth Flow'])(
+    'blocks %s after authority is lost while the edit dialog remains open',
+    async (action) => {
+      const patch = vi.fn().mockResolvedValue({});
+      const client = {
+        service: vi.fn().mockReturnValue({ patch }),
+        io: { on: vi.fn(), off: vi.fn() },
+      } as unknown as AgorClient;
+      const server = {
+        mcp_server_id: '01900000-0000-7000-8000-000000000099',
+        name: 'transition-oauth',
+        transport: 'http',
+        url: 'https://transition.example/mcp',
+        scope: 'global',
+        enabled: true,
+        auth: { type: 'oauth' },
+      } as MCPServer;
+      const view = (mutationAllowed: boolean) => (
+        <MCPServerEditModal
+          server={server}
+          open
+          client={client}
+          identityKey="user-a"
+          authorityKey={mutationAllowed ? 'user-a:admin:1' : null}
+          authGeneration={1}
+          mutationAllowed={mutationAllowed}
+          mutationBlockedReason="Connection authority changed"
+          onClose={vi.fn()}
+        />
+      );
+      const rendered = render(view(true));
+      await screen.findByLabelText('URL');
+
+      rendered.rerender(view(false));
+      fireEvent.click(screen.getByRole('button', { name: action }));
+
+      expect(patch).not.toHaveBeenCalled();
+      expect(preparedServerId).not.toHaveBeenCalled();
+      if (action === 'Save') {
+        expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled();
+      }
+    }
+  );
 });

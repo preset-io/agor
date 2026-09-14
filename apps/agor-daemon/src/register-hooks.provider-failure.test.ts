@@ -59,7 +59,6 @@ function captureMessageHooks(existing: Message) {
       multi_tenancy: { mode: 'static', static_tenant_id: 'provider-failure-test' },
     } as RegisterHooksContext['config'],
     jwtSecret: 'provider-failure-test-secret',
-    branchRbacEnabled: false,
     requireAuth: async (context) => context,
     superadminOpts: { allowSuperadmin: true },
     messagesService: {
@@ -67,9 +66,29 @@ function captureMessageHooks(existing: Message) {
     } as unknown as RegisterHooksContext['messagesService'],
     sessionsService: {} as RegisterHooksContext['sessionsService'],
     boardsService: undefined,
-    branchRepository: {} as RegisterHooksContext['branchRepository'],
+    branchRepository: {
+      findById: vi.fn(async () => ({
+        branch_id: 'branch-1',
+        created_by: 'user-1',
+        primary_owner_user_id: 'user-1',
+      })),
+      isOwner: vi.fn(async () => true),
+      resolveUserPermission: vi.fn(async () => 'all'),
+      resolveSessionPromptAuthority: vi.fn(async () => ({
+        allowed: true,
+        source: 'owner',
+        execution_user_id: 'user-1',
+      })),
+    } as unknown as RegisterHooksContext['branchRepository'],
     usersRepository: {} as RegisterHooksContext['usersRepository'],
-    sessionsRepository: {} as RegisterHooksContext['sessionsRepository'],
+    sessionsRepository: {
+      findById: vi.fn(async () => ({
+        session_id: 'session-1',
+        branch_id: 'branch-1',
+        created_by: 'user-1',
+        sdk_home_scope: 'branch',
+      })),
+    } as unknown as RegisterHooksContext['sessionsRepository'],
     deployment: { mode: 'standalone' },
   });
 
@@ -90,6 +109,9 @@ async function runRegisteredMessageHooks(
       provider: 'rest',
       query: {},
       user: { user_id: 'user-1', role: 'member' },
+    },
+    service: {
+      get: vi.fn(async () => ({ message_id: 'message-1', session_id: 'session-1' })),
     },
   } as unknown as HookContext;
 

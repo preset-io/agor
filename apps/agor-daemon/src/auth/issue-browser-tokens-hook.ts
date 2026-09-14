@@ -1,6 +1,6 @@
 import type { SignOptions } from 'jsonwebtoken';
 import { issueRuntimeTokenPair, runtimeTenantClaims } from './runtime-tokens.js';
-import { authTokenIssuedAtClaim } from './token-invalidation.js';
+import { authCredentialGenerationClaim, authTokenIssuedAtClaim } from './token-invalidation.js';
 import { redactUserAuthMetadata } from './user-redaction.js';
 
 /**
@@ -14,6 +14,7 @@ export interface IssueBrowserTokensHookOptions {
   accessTokenTtl: SignOptions['expiresIn'];
   refreshTokenTtl: SignOptions['expiresIn'];
   tenantClaim: string;
+  now?: () => number;
   debug?: (...args: unknown[]) => void;
 }
 
@@ -22,17 +23,24 @@ export interface IssueBrowserTokensHookOptions {
  * access token with a browser access token and attach a refresh token.
  *
  * Machine-token logins (executor-session / service JWTs) are exempt from the
- * swap. Feathers stores the login result's accessToken on the socket
- * connection and re-verifies it on every subsequent service call, so swapping
- * a machine credential for a short-TTL browser token would kill any
- * long-running executor connection the moment the browser TTL elapses — even
- * though the machine token itself is still valid. Machine logins also must
- * not receive long-lived refresh tokens meant for interactive clients.
+ * swap. Replacing a machine credential with a browser token would erase its
+ * task/terminal scope and shorten the authority represented by the result.
+ * Machine logins also must not receive long-lived refresh tokens meant for
+ * interactive clients. The Socket.IO namespace normally invokes the strategy
+ * directly. The provider guard below is defense in depth: an alternate socket
+ * login path must never mint and discard a browser token pair.
  *
  * User redaction applies on every path that returns a user.
  */
 export function createIssueBrowserTokensHook(options: IssueBrowserTokensHookOptions) {
-  const { jwtSecret, accessTokenTtl, refreshTokenTtl, tenantClaim, debug } = options;
+  const {
+    jwtSecret,
+    accessTokenTtl,
+    refreshTokenTtl,
+    tenantClaim,
+    now = Date.now,
+    debug,
+  } = options;
 
   // biome-ignore lint/suspicious/noExplicitAny: FeathersJS context type not fully typed
   return async (context: any) => {
@@ -44,6 +52,11 @@ export function createIssueBrowserTokensHook(options: IssueBrowserTokensHookOpti
     });
 
     if (!context.result?.user) {
+      return context;
+    }
+
+    if (context.params?.provider === 'socketio') {
+      context.result.user = redactUserAuthMetadata(context.result.user);
       return context;
     }
 
@@ -62,7 +75,8 @@ export function createIssueBrowserTokensHook(options: IssueBrowserTokensHookOpti
       accessTokenTtl,
       refreshTokenTtl,
       {
-        ...authTokenIssuedAtClaim(Date.now(), context.result.user),
+        ...authCredentialGenerationClaim(context.result.user),
+        ...authTokenIssuedAtClaim(now(), context.result.user),
         ...runtimeTenantClaims(tenantId, tenantClaim),
       }
     );

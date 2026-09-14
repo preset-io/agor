@@ -20,7 +20,7 @@ import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import type { BranchID, SessionUpdate } from '@agor/core/types';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type {
   BranchRepository,
   MessagesRepository,
@@ -62,6 +62,7 @@ let mockStartThreadId: string | undefined = 'mock-thread-id';
 let mockStreamFailure: Error | undefined;
 let mockStartThreadOptions: unknown[] = [];
 let mockResumeThreadOptions: unknown[] = [];
+let mockRunStreamedInputs: string[] = [];
 
 async function* streamMockEvents() {
   for (const event of mockStreamEvents) {
@@ -74,10 +75,19 @@ async function* streamMockEvents() {
 vi.mock('./app-server-client.js', () => appServerMocks);
 vi.mock('@agor/core/mcp', async () => {
   const actual = await vi.importActual<typeof import('@agor/core/mcp')>('@agor/core/mcp');
-  return { ...actual, ...mcpScopingMocks };
+  return {
+    ...actual,
+    ...mcpScopingMocks,
+    resolveScopedMCPAuthHeaders: vi.fn(({ server }) =>
+      mcpAuthMocks.resolveMCPAuthHeaders(server.auth, server.url)
+    ),
+  };
 });
 vi.mock('@agor/core/tools/mcp/jwt-auth', () => mcpAuthMocks);
 vi.mock('../../config.js', () => configMocks);
+vi.mock('@agor/core/agentic-integrations', () => ({
+  loadManagedAgenticToolSdk: vi.fn(() => import('@openai/codex-sdk')),
+}));
 
 vi.mock('@openai/codex-sdk', () => {
   class MockCodexClient {
@@ -102,7 +112,10 @@ vi.mock('@openai/codex-sdk', () => {
       return {
         id: mockStartThreadId,
         run: vi.fn(),
-        runStreamed: vi.fn().mockResolvedValue({ events: streamMockEvents() }),
+        runStreamed: vi.fn(async (input: string) => {
+          mockRunStreamedInputs.push(input);
+          return { events: streamMockEvents() };
+        }),
       };
     }
 
@@ -111,7 +124,10 @@ vi.mock('@openai/codex-sdk', () => {
       return {
         id: threadId,
         run: vi.fn(),
-        runStreamed: vi.fn().mockResolvedValue({ events: streamMockEvents() }),
+        runStreamed: vi.fn(async (input: string) => {
+          mockRunStreamedInputs.push(input);
+          return { events: streamMockEvents() };
+        }),
       };
     }
   }
@@ -144,6 +160,7 @@ describe('CodexPromptService - SDK Instance Caching (issue #133)', () => {
     mockStartThreadId = 'mock-thread-id';
     mockStartThreadOptions = [];
     mockResumeThreadOptions = [];
+    mockRunStreamedInputs = [];
     delete process.env.OPENAI_BASE_URL;
     vi.clearAllMocks();
     appServerMocks.forkCodexThreadViaAppServer.mockReset();
@@ -328,6 +345,8 @@ describe('CodexPromptService - OPENAI_BASE_URL handling', () => {
 });
 
 describe('CodexPromptService - prompt flow client initialization', () => {
+  const originalOuterSandbox = process.env.AGOR_OUTER_SANDBOX;
+
   beforeEach(() => {
     mockInstanceCount = 0;
     mockInstanceBaseUrls = [];
@@ -336,9 +355,19 @@ describe('CodexPromptService - prompt flow client initialization', () => {
     mockStreamEvents = [];
     mockStartThreadOptions = [];
     mockResumeThreadOptions = [];
+    mockRunStreamedInputs = [];
     delete process.env.OPENAI_BASE_URL;
     delete process.env.AGOR_CODEX_SANDBOX_MODE;
+    // These cases exercise Codex's own sandbox policy. The Agor test runner
+    // itself may be inside an outer sandbox, which must not rewrite the policy
+    // under test into danger-full-access.
+    delete process.env.AGOR_OUTER_SANDBOX;
     vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    if (originalOuterSandbox === undefined) delete process.env.AGOR_OUTER_SANDBOX;
+    else process.env.AGOR_OUTER_SANDBOX = originalOuterSandbox;
   });
 
   it.each([
@@ -459,7 +488,7 @@ describe('CodexPromptService - prompt flow client initialization', () => {
       expectedApps: undefined,
     },
   ])(
-    'builds session config for $name permissions and uses the configured accessor',
+    'builds policy-enforced session config for $name permissions and uses the configured accessor',
     async ({
       persistedPermissionMode,
       promptPermissionMode,
@@ -504,7 +533,7 @@ describe('CodexPromptService - prompt flow client initialization', () => {
           ...(persistedPermissionMode ? { mode: persistedPermissionMode } : {}),
           codex: codexPermissions,
         },
-        model_config: { effort: 'medium' },
+        model_config: { model: 'gpt-5.4', effort: 'medium' },
         mcp_token: 'test-token',
       });
       mockSessionsRepo.update.mockResolvedValue(undefined);
@@ -533,7 +562,9 @@ describe('CodexPromptService - prompt flow client initialization', () => {
       expect(mockInstanceCount).toBe(1);
       expect(mockInstanceConfigs).toEqual([
         {
-          features: { goals: false },
+          features: { goals: false, multi_agent: false },
+          // Agor always opts Codex into its sticky-task-list planning tool.
+          tools: { update_plan: { enabled: true } },
           model_instructions_file: '/tmp/agor-codex-instructions-flow.md',
           mcp_servers: {
             agor: {
@@ -547,7 +578,9 @@ describe('CodexPromptService - prompt flow client initialization', () => {
       expect(emitted.find((event) => event.type === 'complete')).toMatchObject({
         threadId: 'mock-thread-id',
       });
+      expect(mockRunStreamedInputs.at(-1)).toContain('Current Agor session ID: session-flow');
       expect(mockStartThreadOptions.at(-1)).toMatchObject({
+        model: 'gpt-5.4',
         modelReasoningEffort: 'medium',
       });
     }
@@ -710,7 +743,7 @@ describe('CodexPromptService - prompt flow client initialization', () => {
           mockStreamFailure = new Error('event iterator failed after thread capture');
 
           await expect(tool.executePromptWithStreaming(sessionId, 'continue')).rejects.toThrow(
-            'event iterator failed after thread capture'
+            'The Codex turn was interrupted before completion. Retry the prompt.'
           );
         }
       );
@@ -745,93 +778,130 @@ describe('CodexPromptService - forked sessions', () => {
     mockStreamEvents = [];
     mockStartThreadOptions = [];
     mockResumeThreadOptions = [];
+    mockRunStreamedInputs = [];
     delete process.env.OPENAI_BASE_URL;
     vi.clearAllMocks();
     appServerMocks.forkCodexThreadViaAppServer.mockReset();
   });
 
-  it('forks the parent Codex thread via app-server before resuming the child thread', async () => {
-    const service = new CodexPromptService(
-      mockMessagesRepo,
-      mockSessionsRepo,
-      mockSessionMCPServerRepo,
-      mockBranchesRepo,
-      undefined,
-      'test-api-key',
-      mockDb
-    );
+  it.each(['direct', 'nested'])(
+    'forks %s parent history with fresh model-visible and MCP identity on both turns',
+    async (kind) => {
+      const service = new CodexPromptService(
+        mockMessagesRepo,
+        mockSessionsRepo,
+        mockSessionMCPServerRepo,
+        mockBranchesRepo,
+        undefined,
+        'test-api-key',
+        mockDb
+      );
 
-    const serviceWithPrivates = service as any;
-    serviceWithPrivates.ensureCodexInstructionsFile = vi
-      .fn()
-      .mockResolvedValue('/tmp/agor-codex-instructions-child.md');
-    serviceWithPrivates.buildMcpServersConfig = vi
-      .fn()
-      .mockResolvedValue({ servers: {}, total: 0 });
-    await serviceWithPrivates.ensureCodexClient({
-      model_instructions_file: '/tmp/agor-codex-instructions-mock.md',
-    });
-    serviceWithPrivates.ensureCodexClient = vi.fn();
-    serviceWithPrivates.refreshClient = vi.fn();
+      // Exercise actual instruction-file and MCP config construction, not a
+      // preconfigured client that hides whether a fork retained its parent's
+      // bearer. The SDK/app-server remain mocked: this cannot prove which
+      // callbackSessionId a model chooses from inherited conversation history.
+      configMocks.getDaemonUrl.mockResolvedValue('http://localhost:3030');
+      mcpScopingMocks.getMcpServersForSession.mockResolvedValue([]);
 
-    const childSession = {
-      session_id: 'child-session',
-      branch_id: 'branch-1',
-      created_at: new Date().toISOString(),
-      sdk_session_id: null,
-      genealogy: { forked_from_session_id: 'parent-session' },
-      permission_config: { codex: {} },
-      model_config: { effort: 'max' },
-      mcp_token: 'test-token',
-    };
-    const parentSession = {
-      session_id: 'parent-session',
-      branch_id: 'branch-1',
-      created_at: new Date().toISOString(),
-      sdk_session_id: 'parent-thread-id',
-      permission_config: { codex: {} },
-      model_config: {},
-      mcp_token: 'test-token',
-    };
+      const childSession = {
+        session_id: 'child-session',
+        branch_id: 'branch-1',
+        created_at: new Date().toISOString(),
+        sdk_session_id: null,
+        genealogy: { forked_from_session_id: 'parent-session' },
+        permission_config: { codex: {} },
+        model_config: { effort: 'max' },
+        mcp_token: 'child-test-token',
+      };
+      const parentSession = {
+        session_id: 'parent-session',
+        branch_id: 'branch-1',
+        created_at: new Date().toISOString(),
+        sdk_session_id: 'parent-thread-id',
+        genealogy: kind === 'nested' ? { forked_from_session_id: 'root-session' } : undefined,
+        permission_config: { codex: {} },
+        model_config: {},
+        mcp_token: 'parent-test-token',
+      };
 
-    mockSessionsRepo.findById.mockImplementation(async (id: string) => {
-      if (id === 'child-session') return childSession;
-      if (id === 'parent-session') return parentSession;
-      return null;
-    });
-    mockSessionsRepo.update.mockResolvedValue(undefined);
-    mockBranchesRepo.findById.mockResolvedValue({
-      branch_id: 'branch-1',
-      path: process.cwd(),
-    });
-    appServerMocks.forkCodexThreadViaAppServer.mockResolvedValue('forked-thread-id');
+      mockSessionsRepo.findById.mockImplementation(async (id: string) => {
+        if (id === 'child-session') return childSession;
+        if (id === 'parent-session') return parentSession;
+        return null;
+      });
+      mockSessionsRepo.update.mockResolvedValue(undefined);
+      mockBranchesRepo.findById.mockResolvedValue({
+        branch_id: 'branch-1',
+        path: process.cwd(),
+      });
+      appServerMocks.forkCodexThreadViaAppServer.mockResolvedValue('forked-thread-id');
 
-    mockStreamEvents = [
-      {
-        type: 'turn.completed',
-        usage: { input_tokens: 1, cached_input_tokens: 0, output_tokens: 1 },
-      },
-    ];
+      mockStreamEvents = [
+        {
+          type: 'turn.completed',
+          usage: { input_tokens: 1, cached_input_tokens: 0, output_tokens: 1 },
+        },
+      ];
 
-    const emitted: Array<Record<string, unknown>> = [];
-    for await (const event of service.promptSessionStreaming('child-session' as any, 'continue')) {
-      emitted.push(event as Record<string, unknown>);
+      try {
+        for (const prompt of [
+          'Inherited example: callbackSessionId=parent-session. First fork turn.',
+          'Resume fork; inherited context still identifies parent-session.',
+        ]) {
+          const emitted: Array<Record<string, unknown>> = [];
+          for await (const event of service.promptSessionStreaming(
+            'child-session' as SessionID,
+            prompt
+          )) {
+            emitted.push(event as Record<string, unknown>);
+          }
+
+          const config = mockInstanceConfigs.at(-1) as {
+            model_instructions_file: string;
+            mcp_servers: { agor: { url: string; bearer_token_env_var: string } };
+          };
+          expect(path.basename(config.model_instructions_file)).toBe(
+            'agor-codex-instructions-child-session.md'
+          );
+          expect(await fs.readFile(config.model_instructions_file, 'utf8')).toContain(
+            'agor_sessions_get_current_context'
+          );
+          expect(config.mcp_servers.agor.url).toBe('http://localhost:3030/mcp');
+          expect(process.env[config.mcp_servers.agor.bearer_token_env_var]).toBe(
+            'child-test-token'
+          );
+          expect(emitted.find((event) => event.type === 'complete')).toMatchObject({
+            threadId: 'forked-thread-id',
+          });
+        }
+
+        expect(appServerMocks.forkCodexThreadViaAppServer).toHaveBeenCalledTimes(1);
+        expect(appServerMocks.forkCodexThreadViaAppServer).toHaveBeenCalledWith(
+          'parent-thread-id',
+          expect.objectContaining({ env: expect.any(Object) })
+        );
+        expect(mockSessionsRepo.update).toHaveBeenCalledWith('child-session', {
+          sdk_session_id: 'forked-thread-id',
+        });
+        expect(mockRunStreamedInputs).toHaveLength(2);
+        for (const input of mockRunStreamedInputs) {
+          expect(input).toContain('parent-session');
+          expect(input).toContain('Current Agor session ID: child-session');
+          expect(input).toContain('omit callbackSessionId');
+          expect(input).not.toContain('Current Agor session ID: parent-session');
+          expect(input).not.toContain('forked-thread-id');
+          expect(input).not.toContain('child-test-token');
+        }
+        expect(mockInstanceCount).toBe(1);
+        expect(mockSessionsRepo.findById).not.toHaveBeenCalledWith('root-session');
+        expect(mockResumeThreadOptions).toHaveLength(2);
+        expect(mockResumeThreadOptions.at(-1)).toMatchObject({ modelReasoningEffort: 'max' });
+      } finally {
+        await service.closeSession('child-session' as SessionID);
+      }
     }
-
-    expect(appServerMocks.forkCodexThreadViaAppServer).toHaveBeenCalledWith(
-      'parent-thread-id',
-      expect.objectContaining({ env: expect.any(Object) })
-    );
-    expect(mockSessionsRepo.update).toHaveBeenCalledWith('child-session', {
-      sdk_session_id: 'forked-thread-id',
-    });
-    expect(emitted.find((event) => event.type === 'complete')).toMatchObject({
-      threadId: 'forked-thread-id',
-    });
-    expect(mockResumeThreadOptions.at(-1)).toMatchObject({
-      modelReasoningEffort: 'max',
-    });
-  });
+  );
 });
 
 describe('CodexPromptService - Todo normalization', () => {
@@ -1296,7 +1366,35 @@ describe('CodexPromptService - tool payload mapping', () => {
     });
   });
 
-  it('preserves MCP error message on failure', () => {
+  it('does not hide an explicit MCP error behind result content or a success status', () => {
+    const service = new CodexPromptService(
+      mockMessagesRepo,
+      mockSessionsRepo,
+      mockSessionMCPServerRepo,
+      mockBranchesRepo,
+      undefined,
+      'test-api-key',
+      mockDb
+    );
+    const toolUse = (service as any).itemToToolUse(
+      {
+        id: 'mcp-conflicting',
+        type: 'mcp_tool_call',
+        server: 'agor',
+        tool: 'write',
+        arguments: {},
+        status: 'completed',
+        result: { content: [{ type: 'text', text: 'partial result' }] },
+        error: { message: 'SENTINEL_PROVIDER_BODY' },
+      },
+      'completed'
+    );
+    expect(toolUse.status).toBe('failed');
+    expect(toolUse.output).toContain('check the resulting state before retrying');
+    expect(JSON.stringify(toolUse)).not.toContain('SENTINEL_PROVIDER_BODY');
+  });
+
+  it('sanitizes MCP provider error messages on failure', () => {
     const service = new CodexPromptService(
       mockMessagesRepo,
       mockSessionsRepo,
@@ -1326,9 +1424,52 @@ describe('CodexPromptService - tool payload mapping', () => {
       id: 'mcp-2',
       name: 'agor.agor_execute_tool',
       input: {},
-      output: 'permission denied',
+      output:
+        'The MCP tool call failed. A write may already have taken effect; check the resulting state before retrying. If it continues, ask an administrator to review the operational diagnostics.',
       status: 'failed',
     });
+  });
+
+  it('does not invoke or retain hostile MCP error metadata getters', () => {
+    const service = new CodexPromptService(
+      mockMessagesRepo,
+      mockSessionsRepo,
+      mockSessionMCPServerRepo,
+      mockBranchesRepo,
+      undefined,
+      'test-api-key',
+      mockDb
+    );
+    const sentinel = 'SENTINEL_CODEX_METADATA_GETTER';
+    const providerError = new Error(sentinel);
+    Object.defineProperties(providerError, {
+      code: {
+        get() {
+          throw new Error(sentinel);
+        },
+      },
+      name: {
+        get() {
+          throw new Error(sentinel);
+        },
+      },
+    });
+
+    const toolUse = (service as any).itemToToolUse(
+      {
+        id: 'mcp-hostile',
+        type: 'mcp_tool_call',
+        server: 'agor',
+        tool: 'agor_execute_tool',
+        arguments: {},
+        error: providerError,
+        status: 'failed',
+      },
+      'completed'
+    );
+
+    expect(JSON.stringify(toolUse)).not.toContain(sentinel);
+    expect(toolUse.output).toContain('The MCP tool call failed');
   });
 
   it('falls back to structured_content when MCP content blocks are empty', () => {
@@ -1395,7 +1536,7 @@ describe('CodexPromptService - tool payload mapping', () => {
     });
   });
 
-  it('clears resume state on a fatal stream error even when the session started fresh', async () => {
+  it('clears resume state when an observed stream error is followed by EOF on a fresh thread', async () => {
     const service = new CodexPromptService(
       mockMessagesRepo,
       mockSessionsRepo,
@@ -1441,7 +1582,7 @@ describe('CodexPromptService - tool payload mapping', () => {
           // no-op
         }
       })()
-    ).rejects.toThrow('Codex stream error: stream exploded');
+    ).rejects.toThrow('Codex ended the turn without a completion event');
 
     expect(mockSessionsRepo.update).toHaveBeenCalledWith('session-1', {
       sdk_session_id: null,
@@ -1540,6 +1681,38 @@ describe('CodexPromptService - event_msg terminal handling (issue #1749)', () =>
     delete process.env.OPENAI_BASE_URL;
     vi.clearAllMocks();
     appServerMocks.forkCodexThreadViaAppServer.mockReset();
+  });
+
+  it('projects turn completion accounting without raw SDK extension metadata', async () => {
+    const { service } = await makeInitializedStreamingService('existing-thread-id');
+    const sentinel = 'SENTINEL_CODEX_COMPLETION_METADATA';
+    mockStreamEvents = [
+      {
+        type: 'turn.completed',
+        usage: {
+          input_tokens: 8,
+          cached_input_tokens: 2,
+          cache_write_input_tokens: 1,
+          output_tokens: 3,
+          reasoning_output_tokens: 1,
+        },
+        metadata: { exception: new Error(sentinel) },
+      },
+    ];
+
+    const completed = (await drain(service)).find((event) => event.type === 'complete');
+
+    expect(completed?.rawSdkEvent).toEqual({
+      type: 'turn.completed',
+      usage: {
+        input_tokens: 8,
+        cached_input_tokens: 2,
+        cache_write_input_tokens: 1,
+        output_tokens: 3,
+        reasoning_output_tokens: 1,
+      },
+    });
+    expect(JSON.stringify(completed)).not.toContain(sentinel);
   });
 
   it('surfaces event_msg agent_message via the actual "message" field (real rollout shape)', async () => {
@@ -1835,64 +2008,281 @@ describe('CodexPromptService - event_msg terminal handling (issue #1749)', () =>
     });
   });
 
-  it('ignores reconnect progress until turn.completed and preserves the existing thread', async () => {
-    const { service } = await makeInitializedStreamingService('existing-thread-id');
-
-    const reconnectMessage =
-      'Reconnecting... 2/5 (stream disconnected before completion: websocket closed by server before response.completed)';
+  it('persists a failed MCP result as is_error even when the Codex turn subsequently completes', async () => {
+    const { service } = await makeInitializedStreamingService(null);
+    const initialRuns = mockRunStreamedInputs.length;
+    const messagesRepo = {
+      findInitialUserMessagesByTaskId: vi.fn(async () => []),
+      getNextIndexBySessionId: vi.fn(async () => 0),
+    };
+    const messagesService = {
+      create: vi.fn(async (message: Partial<Message>) => message as Message),
+      patch: vi.fn(async (_id: string, message: Partial<Message>) => message as Message),
+    } satisfies MessagesService;
+    const tool = new CodexTool(
+      messagesRepo as unknown as MessagesRepository,
+      mockSessionsRepo,
+      mockSessionMCPServerRepo,
+      mockBranchesRepo,
+      undefined,
+      'test-api-key',
+      messagesService
+    );
+    (tool as unknown as { promptService: CodexPromptService }).promptService = service;
+    mockBranchesRepo.findById.mockResolvedValue({ branch_id: 'branch-1' });
+    // The CLI maps MCP isError:true to failed status while retaining result content.
     mockStreamEvents = [
-      { type: 'error', message: reconnectMessage },
+      {
+        type: 'item.completed',
+        item: {
+          id: 'failed-call',
+          type: 'mcp_tool_call',
+          server: 'agor',
+          tool: 'agor_execute_tool',
+          arguments: {},
+          status: 'failed',
+          result: { content: [{ type: 'text', text: '{"code":"invalid_tool_arguments"}' }] },
+        },
+      },
+      {
+        type: 'item.completed',
+        item: { id: 'answer', type: 'agent_message', text: 'Please correct the input.' },
+      },
       {
         type: 'turn.completed',
-        usage: { input_tokens: 5, cached_input_tokens: 0, output_tokens: 2 },
+        usage: { input_tokens: 1, output_tokens: 1, cached_input_tokens: 0 },
       },
     ];
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-
-    const emitted: Array<Record<string, unknown>> = [];
-    for await (const event of service.promptSessionStreaming('session-1' as any, 'go')) {
-      emitted.push(event as Record<string, unknown>);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      const result = await tool.executePromptWithStreaming(testSessionId, 'go');
+      expect(result.rawSdkResponse).toMatchObject({ type: 'turn.completed' });
+      const saved = messagesService.create.mock.calls.flatMap(([message]) => message.content ?? []);
+      expect(saved).toContainEqual(
+        expect.objectContaining({ type: 'tool_result', is_error: true })
+      );
+      expect(JSON.stringify(saved)).toContain('invalid_tool_arguments');
+      const reference = JSON.stringify(saved).match(/reference=([a-f0-9-]+:\d+)/)?.[1];
+      expect(reference).toBeDefined();
+      expect(JSON.stringify(warn.mock.calls)).toContain(`reference=${reference}`);
+      expect(JSON.stringify(warn.mock.calls)).toContain('failure_kind=failed_result');
+      expect(mockRunStreamedInputs).toHaveLength(initialRuns + 1);
+    } finally {
+      warn.mockRestore();
     }
+  });
 
-    expect(emitted.some((event) => event.type === 'complete')).toBe(true);
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining(reconnectMessage));
-    expect(mockSessionsRepo.update).not.toHaveBeenCalled();
-    warn.mockRestore();
+  it('does not let a nonfatal notice mask a later failed turn', async () => {
+    const { service } = await makeInitializedStreamingService(null);
+    mockStreamEvents = [
+      { type: 'item.completed', item: { id: 'notice', type: 'error', message: 'SENTINEL_NOTICE' } },
+      { type: 'turn.failed', error: { message: 'SENTINEL_FAILURE' } },
+    ];
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    try {
+      await expect(drain(service)).rejects.toThrow('Codex failed the turn');
+      expect(JSON.stringify([...warn.mock.calls, ...error.mock.calls])).not.toContain('SENTINEL_');
+    } finally {
+      warn.mockRestore();
+      error.mockRestore();
+    }
+  });
+
+  it('surfaces opaque Codex notices without inventing an MCP failure or losing correlation', async () => {
+    const { service } = await makeInitializedStreamingService(null);
+    const initialRuns = mockRunStreamedInputs.length;
+    mockStreamEvents = [
+      {
+        type: 'item.completed',
+        item: { type: 'error', id: 'SENTINEL_ITEM_ID', message: 'SENTINEL_CONFIG_WARNING' },
+      },
+      { type: 'item.completed', item: { type: 'agent_message', id: 'answer', text: 'Done.' } },
+      {
+        type: 'turn.completed',
+        usage: { input_tokens: 1, output_tokens: 1, cached_input_tokens: 0 },
+      },
+    ];
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      const emitted = await drain(service);
+      const serialized = JSON.stringify(emitted);
+      expect(serialized).toContain('[Codex runtime notice]');
+      expect(serialized).not.toContain('MCP operation failed');
+      expect(serialized).not.toContain('SENTINEL_');
+      expect(serialized).toContain('Done.');
+      const reference = serialized.match(/reference=([a-f0-9-]+:\d+)/)?.[1];
+      expect(reference).toBeDefined();
+      expect(JSON.stringify(warn.mock.calls)).toContain(`reference=${reference}`);
+      expect(JSON.stringify(warn.mock.calls)).not.toContain('SENTINEL_');
+      expect(mockRunStreamedInputs).toHaveLength(initialRuns + 1);
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it.each([
     ['fresh', null],
     ['established', 'existing-thread-id'],
   ])(
-    'lets turn.failed remain authoritative after reconnect progress for a %s thread',
+    'allows Codex to recover after a stream error for a %s thread without parsing reconnect prose',
+    async (_threadKind, sdkSessionId) => {
+      const { service } = await makeInitializedStreamingService(sdkSessionId);
+
+      const reconnectMessage =
+        'Reconnecting... 2/5 (stream disconnected before completion: websocket closed by server before response.completed)';
+      mockStreamEvents = [
+        { type: 'error', message: reconnectMessage },
+        {
+          type: 'item.completed',
+          item: { id: 'answer-1', type: 'agent_message', text: 'Recovered answer.' },
+        },
+        {
+          type: 'turn.completed',
+          usage: { input_tokens: 5, cached_input_tokens: 0, output_tokens: 2 },
+        },
+      ];
+      const log = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+      try {
+        const emitted = await drain(service);
+        expect(JSON.stringify(emitted)).toContain('Recovered answer.');
+        expect(log).toHaveBeenCalledWith(
+          expect.stringContaining('[codex.runtime] event=stream_error_observed')
+        );
+        expect(log).toHaveBeenCalledWith(
+          expect.stringContaining('outcome=awaiting_terminal_event')
+        );
+        expect(JSON.stringify(log.mock.calls)).not.toContain(reconnectMessage);
+        expect(mockSessionsRepo.update).not.toHaveBeenCalled();
+      } finally {
+        log.mockRestore();
+      }
+    }
+  );
+
+  it.each([
+    ['fresh', null],
+    ['established', 'existing-thread-id'],
+  ])(
+    'fails only after Codex completes without an assistant response following a stream error for a %s thread',
+    async (_threadKind, sdkSessionId) => {
+      const { service } = await makeInitializedStreamingService(sdkSessionId);
+      const runtimeMessage = 'SENTINEL_RUNTIME_STREAM_BODY';
+      mockStreamEvents = [
+        { type: 'error', message: runtimeMessage },
+        {
+          type: 'item.completed',
+          item: { id: 'empty-answer', type: 'agent_message', text: '' },
+        },
+        {
+          type: 'turn.completed',
+          usage: { input_tokens: 5, cached_input_tokens: 0, output_tokens: 0 },
+        },
+      ];
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+      const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+      try {
+        await expect(drain(service)).rejects.toThrow(
+          'Codex completed after a stream error but returned no assistant response'
+        );
+        expect(warn).toHaveBeenCalledWith(expect.stringContaining('event=stream_error_observed'));
+        expect(error).toHaveBeenCalledWith(
+          expect.stringContaining('event=turn_completed_without_response')
+        );
+        expect(JSON.stringify([...warn.mock.calls, ...error.mock.calls])).not.toContain(
+          runtimeMessage
+        );
+        expect(mockSessionsRepo.update).not.toHaveBeenCalled();
+      } finally {
+        warn.mockRestore();
+        error.mockRestore();
+      }
+    }
+  );
+
+  it.each([
+    ['fresh', null],
+    ['established', 'existing-thread-id'],
+  ])(
+    'reports a real SDK-shaped turn.failed as a Codex runtime failure for a %s thread',
     async (_threadKind, sdkSessionId) => {
       const { service } = await makeInitializedStreamingService(sdkSessionId);
 
       mockStreamEvents = [
-        { type: 'error', message: 'Reconnecting... 2/5' },
         { type: 'turn.failed', error: { message: 'provider rejected the turn' } },
       ];
-      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
 
-      await expect(drain(service)).rejects.toThrow('provider rejected the turn');
+      await expect(drain(service)).rejects.toThrow('Codex failed the turn');
 
-      expect(warn).toHaveBeenCalledWith(expect.stringContaining('Reconnecting... 2/5'));
       expect(mockSessionsRepo.update).not.toHaveBeenCalled();
-      warn.mockRestore();
     }
   );
+
+  it('never logs or returns a secret-bearing runtime provider exception', async () => {
+    const { service } = await makeInitializedStreamingService('existing-thread-id');
+    const sentinel = 'SENTINEL_CODEX_RUNTIME_PROVIDER_4e2b';
+    mockStreamEvents = [
+      {
+        type: 'turn.failed',
+        error: { message: `TLS failure for https://${sentinel}.example.test` },
+      },
+    ];
+    const spies = [
+      vi.spyOn(console, 'log').mockImplementation(() => undefined),
+      vi.spyOn(console, 'warn').mockImplementation(() => undefined),
+      vi.spyOn(console, 'error').mockImplementation(() => undefined),
+      vi.spyOn(console, 'debug').mockImplementation(() => undefined),
+    ];
+    try {
+      const failure = await drain(service).catch((error: unknown) => error);
+      expect(String(failure)).not.toContain(sentinel);
+      expect(JSON.stringify(spies.flatMap((spy) => spy.mock.calls))).not.toContain(sentinel);
+      expect(JSON.stringify(spies.flatMap((spy) => spy.mock.calls))).toContain('event=turn_failed');
+      expect(JSON.stringify(mockSessionsRepo.update.mock.calls)).not.toContain(sentinel);
+    } finally {
+      for (const spy of spies) spy.mockRestore();
+    }
+  });
+
+  it('does not claim reauthentication authority from arbitrary ThreadError prose', async () => {
+    const { service } = await makeInitializedStreamingService('existing-thread-id');
+    mockStreamEvents = [
+      {
+        type: 'turn.failed',
+        error: { message: 'provider_rejected SENTINEL_REJECTED_BODY' },
+      },
+    ];
+
+    const failure = await drain(service).catch((error: unknown) => error);
+    expect(String(failure)).toContain('Codex failed the turn');
+    expect(String(failure)).not.toContain('SENTINEL_REJECTED_BODY');
+    expect(String(failure)).not.toContain('sign in again');
+  });
+
+  it('reports missing local Codex authentication as configuration required', async () => {
+    const { service } = await makeInitializedStreamingService('existing-thread-id');
+    (service as any).apiKey = '';
+    (service as any).useNativeAuth = false;
+    mockStreamEvents = [
+      { type: 'turn.failed', error: { message: 'SENTINEL_MISSING_AUTH_PROVIDER_BODY' } },
+    ];
+
+    await expect(drain(service)).rejects.toThrow(
+      'Codex authentication is not configured. Review Codex authentication settings and retry the prompt.'
+    );
+  });
 
   it.each([
     ['reconnecting... 2/5', 'lowercase'],
     ['Reconnecting...', 'missing N/M'],
     [' Reconnecting... 2/5', 'leading whitespace'],
     ['Error: Reconnecting... 2/5', 'prefixed text'],
-  ])('treats %s as a fatal stream error (%s)', async (message) => {
+  ])('awaits a terminal event after %s without trusting prose shape (%s)', async (message) => {
     const { service } = await makeInitializedStreamingService('existing-thread-id');
 
     mockStreamEvents = [{ type: 'error', message }];
 
-    await expect(drain(service)).rejects.toThrow(`Codex stream error: ${message}`);
+    await expect(drain(service)).rejects.toThrow('Codex ended the turn without a completion event');
 
     expect(mockSessionsRepo.update).not.toHaveBeenCalled();
   });
@@ -1913,7 +2303,7 @@ describe('CodexPromptService - event_msg terminal handling (issue #1749)', () =>
       ];
 
       await expect(drain(service)).rejects.toThrow(
-        'Codex stream ended without a terminal completion event'
+        'Codex ended the turn without a completion event'
       );
 
       if (sdkSessionId === null) {
@@ -1957,8 +2347,8 @@ describe('CodexPromptService - event_msg terminal handling (issue #1749)', () =>
 
       await expect(drain(service)).rejects.toThrow(
         failurePoint === 'before event iteration'
-          ? 'runStreamed aborted unexpectedly'
-          : 'event iterator failed'
+          ? 'Codex could not start the turn. Retry the prompt.'
+          : 'The Codex turn was interrupted before completion. Retry the prompt.'
       );
 
       if (sdkSessionId === null) {
@@ -2128,7 +2518,6 @@ describe('CodexPromptService - buildMcpServersConfig', () => {
       '019e3700-aaaa-bbbb-cccc-dddddddddddd',
       expect.objectContaining({
         forUserId: '019e3700-user-user-user-user00000001',
-        sessionOwnerId,
       }),
       // Codex can drop individual tools but has no way to prompt.
       { toolFiltering: 'exclude' }
@@ -2185,6 +2574,69 @@ describe('CodexPromptService - buildMcpServersConfig', () => {
       url: 'https://example.com/mcp',
       default_tools_approval_mode: 'approve',
     });
+  });
+
+  it('never logs a resolved remote URL even when Codex MCP debugging is enabled', async () => {
+    const secretUrl = 'https://example.test/mcp?credential=do-not-log';
+    mcpScopingMocks.getMcpServersForSession.mockResolvedValue([
+      {
+        server: {
+          name: 'remote-secret-url',
+          transport: 'http',
+          url: secretUrl,
+        },
+      },
+    ]);
+    const previous = process.env.AGOR_DEBUG_CODEX;
+    process.env.AGOR_DEBUG_CODEX = '1';
+    const debug = vi.spyOn(console, 'debug').mockImplementation(() => undefined);
+    try {
+      await (makeService() as any).buildMcpServersConfig(
+        '019e3700-aaaa-bbbb-cccc-dddddddddddd',
+        undefined,
+        { sessionOwnerId }
+      );
+      expect(JSON.stringify(debug.mock.calls)).not.toContain(secretUrl);
+      expect(JSON.stringify(debug.mock.calls)).not.toContain('do-not-log');
+    } finally {
+      debug.mockRestore();
+      if (previous === undefined) delete process.env.AGOR_DEBUG_CODEX;
+      else process.env.AGOR_DEBUG_CODEX = previous;
+    }
+  });
+
+  it('never logs secret-bearing auth resolution exceptions', async () => {
+    const sentinel = 'SENTINEL_AUTH_EXCEPTION_3c90';
+    mcpScopingMocks.getMcpServersForSession.mockResolvedValue([
+      {
+        server: {
+          mcp_server_id: '01900000-0000-7000-8000-000000000091',
+          name: 'remote-auth-error',
+          transport: 'http',
+          url: 'https://example.test/mcp',
+          auth: { type: 'bearer', token: 'configured' },
+        },
+      },
+    ]);
+    mcpAuthMocks.resolveMCPAuthHeaders.mockRejectedValueOnce(
+      new Error(`provider endpoint included ${sentinel}`)
+    );
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      await (makeService() as any).buildMcpServersConfig(
+        '019e3700-aaaa-bbbb-cccc-dddddddddddd',
+        undefined,
+        { sessionOwnerId }
+      );
+      expect(JSON.stringify(warn.mock.calls)).not.toContain(sentinel);
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining(
+          'executor=codex servers=1 credential_unavailable=0 resolution_failed=1'
+        )
+      );
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it('passes custom HTTP headers through Codex env_http_headers without inlining secrets', async () => {
@@ -2382,5 +2834,116 @@ describe('CodexPromptService - buildMcpServersConfig', () => {
       expect(servers[name].required).toBeUndefined();
       expect(servers[name].startup_timeout_ms).toBeUndefined();
     }
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MCP `tool_permissions` enforcement
+//
+// `disabled_tools` is the ONLY thing standing between the model and a switched-
+// off tool on Codex. Every block above asserts Agor also emits
+// `default_tools_approval_mode: "approve"`, which auto-approves every MCP tool
+// call — so there is no prompt to fall back on, and no `canUseTool` equivalent:
+// Codex resolves the config in native code and Agor never sees the call.
+//
+// That makes an omission here silent and total. It is also easy to introduce:
+// the config is assembled in two separate transport branches, and the HTTP one
+// carries essentially every marketplace server (the catalog is remote
+// endpoints), so a `disabled_tools` line dropped from that branch alone would
+// leave stdio coverage intact and look fine.
+//
+// These cases therefore drive the real `buildMcpServersConfig` per transport.
+// The rest of the suite stubs that method out, which is exactly why this was
+// uncovered. Each case pairs the denied tool with an allowed one, so a passing
+// assertion means the filter is selective rather than empty or total.
+// ─────────────────────────────────────────────────────────────────────────────
+describe('CodexPromptService - MCP tool_permissions', () => {
+  const sessionOwnerId = '019e3700-owner-owner-owner-owner000001';
+  const sessionId = '019e3700-aaaa-bbbb-cccc-dddddddddddd';
+  const mockMcpServerRepo = { findById: vi.fn() } as any;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mcpScopingMocks.getMcpServersForSession.mockResolvedValue([]);
+    mcpAuthMocks.resolveMCPAuthHeaders.mockResolvedValue(null);
+    configMocks.getDaemonUrl.mockResolvedValue('http://localhost:3030');
+  });
+
+  const makeService = () =>
+    new CodexPromptService(
+      mockMessagesRepo,
+      mockSessionsRepo,
+      mockSessionMCPServerRepo,
+      mockBranchesRepo,
+      undefined,
+      'test-api-key',
+      mockMcpServerRepo
+    );
+
+  const build = async () =>
+    (await (makeService() as any).buildMcpServersConfig(sessionId, undefined, {
+      sessionOwnerId,
+    })) as { servers: Record<string, any>; total: number };
+
+  /** Same server, same permissions, addressed over each transport Codex accepts. */
+  const gatedServer = (transport: 'stdio' | 'http' | 'sse') => ({
+    server: {
+      name: 'sentry',
+      transport,
+      ...(transport === 'stdio'
+        ? { command: 'npx', args: ['-y', 'sentry-mcp'] }
+        : { url: 'https://mcp.sentry.dev/mcp' }),
+      tool_permissions: { delete_project: 'deny', list_issues: 'allow' },
+    },
+  });
+
+  for (const transport of ['stdio', 'http', 'sse'] as const) {
+    it(`disables a denied tool on a ${transport} server, leaving allowed tools reachable`, async () => {
+      mcpScopingMocks.getMcpServersForSession.mockResolvedValue([gatedServer(transport)]);
+
+      const { servers } = await build();
+
+      expect(servers.sentry.disabled_tools).toEqual(['delete_project']);
+      expect(servers.sentry.disabled_tools).not.toContain('list_issues');
+      // The gate has to coexist with the auto-approval that makes it load-bearing.
+      expect(servers.sentry.default_tools_approval_mode).toBe('approve');
+    });
+  }
+
+  it('fails closed on "ask", because Codex runs headless with no approval channel', async () => {
+    mcpScopingMocks.getMcpServersForSession.mockResolvedValue([
+      {
+        server: {
+          name: 'sentry',
+          transport: 'http',
+          url: 'https://mcp.sentry.dev/mcp',
+          tool_permissions: { update_issue: 'ask', list_issues: 'allow' },
+        },
+      },
+    ]);
+
+    const { servers } = await build();
+
+    // An unanswerable "ask" must collapse onto deny, never onto allow.
+    expect(servers.sentry.disabled_tools).toEqual(['update_issue']);
+  });
+
+  it('leaves disabled_tools unset when a server gates nothing', async () => {
+    mcpScopingMocks.getMcpServersForSession.mockResolvedValue([
+      {
+        server: {
+          name: 'sentry',
+          transport: 'http',
+          url: 'https://mcp.sentry.dev/mcp',
+          tool_permissions: { list_issues: 'allow' },
+        },
+      },
+    ]);
+
+    const { servers } = await build();
+
+    // Guards the other direction: an empty list must not be emitted as a filter
+    // Codex could read as "disable everything", and must not appear as noise.
+    expect(servers.sentry.disabled_tools).toBeUndefined();
   });
 });

@@ -9,7 +9,7 @@ import type { BoardComment, CommentID, UUID } from '@agor/core/types';
 import { MessageRole, SessionStatus, TaskStatus } from '@agor/core/types';
 import { describe, expect } from 'vitest';
 import { generateId, shortId, toShortId } from '../../lib/ids';
-import { dbTest } from '../test-helpers';
+import { ownedDbTest as dbTest } from '../test-helpers';
 import { AmbiguousIdError, EntityNotFoundError, RepositoryError } from './base';
 import { BoardCommentsRepository } from './board-comments';
 import { BoardRepository } from './boards';
@@ -18,6 +18,7 @@ import { MessagesRepository } from './messages';
 import { RepoRepository } from './repos';
 import { SessionRepository } from './sessions';
 import { TaskRepository } from './tasks';
+import { UsersRepository } from './users';
 
 /**
  * Create test comment data with required fields
@@ -70,7 +71,7 @@ async function createAttachedCommentTarget(
     base_ref: 'main',
     new_branch: false,
     board_id: boardId,
-    created_by: generateId() as UUID,
+    created_by: 'test-user' as UUID,
     permission_source: 'override',
     others_can: othersCan,
   });
@@ -107,12 +108,16 @@ async function createAttachedCommentTarget(
   return { branch, session, task, message };
 }
 
-async function createTestBoard(db: any, overrides?: { board_id?: UUID }) {
+async function createTestBoard(
+  db: any,
+  overrides?: { board_id?: UUID; access_mode?: 'private' | 'shared' }
+) {
   const boardRepo = new BoardRepository(db);
   return boardRepo.create({
     board_id: overrides?.board_id ?? generateId(),
     name: `Test Board ${Date.now()}`,
     created_by: 'test-user',
+    access_mode: overrides?.access_mode,
   });
 }
 
@@ -411,8 +416,15 @@ describe('BoardCommentsRepository.findAll', () => {
     async ({ db }) => {
       const repo = new BoardCommentsRepository(db);
       const userId = generateId() as UUID;
-      const privateBoard = await createTestBoard(db, { board_id: generateId() as UUID });
-      await new BoardRepository(db).update(privateBoard.board_id, { access_mode: 'private' });
+      await new UsersRepository(db).create({
+        user_id: userId,
+        email: `board-comment-viewer-${userId}@example.invalid`,
+        role: 'member',
+      });
+      const privateBoard = await createTestBoard(db, {
+        board_id: generateId() as UUID,
+        access_mode: 'private',
+      });
 
       const visibleTarget = await createAttachedCommentTarget(
         db,
@@ -435,6 +447,7 @@ describe('BoardCommentsRepository.findAll', () => {
       );
       const visibleTaskComment = await repo.create(
         createCommentData({
+          comment_id: '01933e4b-1111-7c35-a8f3-000000000001' as CommentID,
           board_id: privateBoard.board_id,
           task_id: visibleTarget.task.task_id,
           content: 'visible task comment',
@@ -447,15 +460,17 @@ describe('BoardCommentsRepository.findAll', () => {
           content: 'visible message comment',
         })
       );
-      await repo.create(
+      const hiddenTaskComment = await repo.create(
         createCommentData({
+          comment_id: '01933e4b-2222-7c35-a8f3-000000000002' as CommentID,
           board_id: privateBoard.board_id,
           task_id: hiddenTarget.task.task_id,
           content: 'hidden task comment',
         })
       );
-      await repo.create(
+      const hiddenMessageComment = await repo.create(
         createCommentData({
+          comment_id: '01933e4c-2222-7c35-a8f3-000000000003' as CommentID,
           board_id: privateBoard.board_id,
           message_id: hiddenTarget.message.message_id,
           content: 'hidden message comment',
@@ -468,18 +483,43 @@ describe('BoardCommentsRepository.findAll', () => {
       });
 
       expect(comments.map((comment) => comment.comment_id).sort()).toEqual(
-        [
-          boardOnlyComment.comment_id,
-          visibleTaskComment.comment_id,
-          visibleMessageComment.comment_id,
-        ].sort()
+        [visibleTaskComment.comment_id, visibleMessageComment.comment_id].sort()
       );
       await expect(
         repo.count({ board_id: privateBoard.board_id, visibleToUserId: userId })
-      ).resolves.toBe(3);
+      ).resolves.toBe(2);
+      await expect(repo.findVisibleById(userId, boardOnlyComment.comment_id)).resolves.toBeNull();
+      await expect(
+        repo.findVisibleById(userId, visibleTaskComment.comment_id)
+      ).resolves.toMatchObject({ comment_id: visibleTaskComment.comment_id });
+      // Visibility of one attachment must not widen access to another
+      // attachment or to the private board itself.
+      await expect(repo.findVisibleById(userId, hiddenTaskComment.comment_id)).resolves.toBeNull();
+      // Hidden rows never participate in prefix resolution: a visible+hidden
+      // collision resolves to the one visible row, while a hidden-only prefix
+      // is indistinguishable from a missing id.
+      await expect(repo.findVisibleById(userId, '01933e4b')).resolves.toMatchObject({
+        comment_id: visibleTaskComment.comment_id,
+      });
+      await expect(repo.findVisibleById(userId, '01933e4c')).resolves.toBeNull();
+      await expect(
+        repo.findVisibleById(userId, hiddenMessageComment.comment_id)
+      ).resolves.toBeNull();
+      await expect(
+        repo.canViewReferences(userId, {
+          board_id: privateBoard.board_id,
+          task_id: visibleTarget.task.task_id,
+        })
+      ).resolves.toBe(true);
+      await expect(
+        repo.canViewReferences(userId, {
+          board_id: privateBoard.board_id,
+          task_id: hiddenTarget.task.task_id,
+        })
+      ).resolves.toBe(false);
 
-      const isolatedPrivateBoard = await createTestBoard(db, { board_id: generateId() as UUID });
-      await new BoardRepository(db).update(isolatedPrivateBoard.board_id, {
+      const isolatedPrivateBoard = await createTestBoard(db, {
+        board_id: generateId() as UUID,
         access_mode: 'private',
       });
       await repo.create(
@@ -501,16 +541,11 @@ describe('BoardCommentsRepository.findAll', () => {
         visibleToUserId: userId,
       });
       expect(withReply.map((comment) => comment.comment_id).sort()).toEqual(
-        [
-          boardOnlyComment.comment_id,
-          visibleTaskComment.comment_id,
-          visibleMessageComment.comment_id,
-          reply.comment_id,
-        ].sort()
+        [visibleTaskComment.comment_id, visibleMessageComment.comment_id, reply.comment_id].sort()
       );
       await expect(
         repo.count({ board_id: privateBoard.board_id, visibleToUserId: userId })
-      ).resolves.toBe(4);
+      ).resolves.toBe(3);
     }
   );
 

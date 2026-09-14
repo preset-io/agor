@@ -33,6 +33,7 @@ import {
   normalizeKnowledgeFolderPath,
   parseKnowledgeUri,
 } from '@agor/core/types';
+import { isNotFoundError } from '@agor/core/utils/errors';
 import type { McpServer } from '@modelcontextprotocol/server';
 import { createTwoFilesPatch } from 'diff';
 import { z } from 'zod';
@@ -46,17 +47,14 @@ import {
   hasKnowledgeNamespacePermission,
   resolveKnowledgeNamespacePermission,
 } from '../../services/knowledge-access.js';
+import { issueExecutorCommandToken } from '../../services/session-token-service.js';
 import {
   TEAMMATE_MEMORY_PATH_TEMPLATE,
   TEAMMATE_NAMESPACE_MISSING_MESSAGE,
 } from '../../services/teammate-knowledge.js';
 import { ensureBranchWorkspaceAccess } from '../../utils/branch-workspace-path.js';
 import { resolveDelegatedExecutionHomeKey } from '../../utils/executor-delegated-home.js';
-import {
-  generateScopedServiceToken,
-  getDaemonUrl,
-  runExecutorCommand,
-} from '../../utils/spawn-executor.js';
+import { getDaemonUrl, requestExecutor } from '../../utils/spawn-executor.js';
 import { resolveBranchId } from '../resolve-ids.js';
 import {
   mcpLimit,
@@ -645,16 +643,6 @@ function versionToken(version: KnowledgeDocumentVersion | null | undefined) {
   };
 }
 
-function isNotFoundError(error: unknown): boolean {
-  return (
-    error instanceof NotFound ||
-    (typeof error === 'object' &&
-      error !== null &&
-      ((error as { code?: unknown }).code === 404 ||
-        (error as { name?: unknown }).name === 'NotFound'))
-  );
-}
-
 function namespaceSlugForDocument(result: HydratedKnowledgeDocumentResult): string | undefined {
   const doc = result.document ?? result;
   const uri = typeof doc.uri === 'string' ? doc.uri : undefined;
@@ -732,32 +720,42 @@ async function runBranchKnowledgeCommand(
 ): Promise<Record<string, unknown>> {
   const branchId = typeof params.branchId === 'string' ? params.branchId : undefined;
   if (!branchId) throw new Error('branchId is required');
-  await runWithMcpTenantDatabaseScope(ctx, async (db) => {
+  const workspace = await runWithMcpTenantDatabaseScope(ctx, async (db) => {
     const branchRepo = new BranchRepository(db);
     const branch = await branchRepo.findById(branchId);
     if (!branch) throw new Error(`Branch not found: ${branchId}`);
-    await ensureBranchWorkspaceAccess(
+    const fsAccess = await ensureBranchWorkspaceAccess(
       branchRepo,
       branch,
       ctx.userId,
       ctx.authenticatedUser.role as UserRole,
-      'session'
+      'session',
+      command === 'branch.knowledge.write' ? 'write' : 'read',
+      ctx.app.get('config').execution?.allow_superadmin === true
     );
+    return { branch, fsAccess };
   });
-  const result = await runExecutorCommand(
+  const result = await requestExecutor(
     {
       command,
-      sessionToken: generateScopedServiceToken(
-        ctx.app as unknown as { settings: { authentication?: { secret?: string } } }
-      ),
+      sessionToken: await issueExecutorCommandToken(ctx.app, command, ctx.userId, branchId),
       daemonUrl: getDaemonUrl(),
-      params,
+      params: {
+        ...params,
+        cwd: workspace.branch.path,
+        principalBranchAccess: workspace.fsAccess,
+      },
     },
     {
       logPrefix: `[Knowledge ${command}]`,
       delegatedHomeKey: await runWithMcpTenantDatabaseScope(ctx, (db) =>
         resolveDelegatedExecutionHomeKey(db, ctx.authenticatedUser.user_id, ctx.app.get('config'))
       ),
+      templateVariables: {
+        branch_id: workspace.branch.branch_id,
+        user_id: ctx.userId,
+        branch_fs_access: workspace.fsAccess,
+      },
     }
   );
   if (!result.success) {
@@ -1038,6 +1036,7 @@ export function registerKnowledgeTools(server: McpServer, ctx: McpContext): void
 
     let existingContent = `# ${date}\n`;
     let expectedVersion: string | number | undefined;
+    let documentExists = false;
     try {
       const existing = (await callCustomMethod(
         docsService,
@@ -1050,6 +1049,7 @@ export function registerKnowledgeTools(server: McpServer, ctx: McpContext): void
         mcpParams(ctx)
       )) as HydratedKnowledgeDocumentResult | undefined;
       if (existing) {
+        documentExists = true;
         existingContent = typeof existing.content === 'string' ? existing.content : existingContent;
         expectedVersion = existing.current_version?.version_id;
       }
@@ -1094,11 +1094,20 @@ export function registerKnowledgeTools(server: McpServer, ctx: McpContext): void
         {
           namespace_slug: namespace.slug,
           path: docPath,
-          title: date,
-          kind: 'memory',
-          visibility: teammate?.kb?.default_visibility ?? namespace.visibility_default,
-          edit_policy: 'public',
-          status: 'published',
+          // Appending is a content operation, so it must not restate document
+          // governance. Creation defaults apply only on first write: replaying
+          // them on every append silently republished a memory document its
+          // owner had set to private/owner, and undid retitles and drafting.
+          // Omitted fields are preserved by the repository's merge on update.
+          ...(documentExists
+            ? {}
+            : {
+                title: date,
+                kind: 'memory',
+                visibility: teammate?.kb?.default_visibility ?? namespace.visibility_default,
+                edit_policy: 'public',
+                status: 'published',
+              }),
           content_text: nextContent,
           expected_version: expectedVersion,
           metadata: {

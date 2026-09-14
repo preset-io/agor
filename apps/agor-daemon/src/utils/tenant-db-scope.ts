@@ -7,14 +7,16 @@ import {
 import {
   assertTenantWritable,
   enqueueAfterTenantDatabaseCommit,
-  enqueueTenantDatabasePostCommitCallback,
+  getCurrentTenantDatabaseScope,
   getCurrentTenantId,
+  isTenantWriteMethodName,
   runWithoutTenantDatabaseScope,
   runWithTenantContext,
   runWithTenantDatabaseScope,
   type TenantScopeAwareDatabase,
+  TenantWriteGateActiveError,
 } from '@agor/core/db';
-import { NotAuthenticated } from '@agor/core/feathers';
+import { NotAuthenticated, Unavailable } from '@agor/core/feathers';
 import type { HookContext, TenantContext, TenantID } from '@agor/core/types';
 import jwt from 'jsonwebtoken';
 import { RUNTIME_JWT_AUDIENCE, RUNTIME_JWT_ISSUER } from '../auth/runtime-tokens.js';
@@ -43,7 +45,67 @@ function readHeaderValue(
 
 type TenantScopedParams = { tenant?: Pick<TenantContext, 'tenant_id'> } | undefined;
 
-export type TenantDatabaseRunner = <T>(work: () => Promise<T>) => Promise<T>;
+/**
+ * Enforce the tenant freeze gate inside an already-open tenant transaction.
+ * Shared by ordinary Feathers services and custom authenticated routes so a
+ * route registered after `registerHooks()` cannot silently miss the gate.
+ */
+export async function enforceTenantWriteGateForHook(
+  db: TenantScopeAwareDatabase,
+  context: HookContext
+): Promise<HookContext> {
+  if (!isTenantWriteMethodName(context.method)) return context;
+  const tenantId = context.params.tenant?.tenant_id;
+  if (!tenantId || !getCurrentTenantDatabaseScope()) return context;
+  try {
+    await assertTenantWritable(db, tenantId);
+  } catch (error) {
+    if (error instanceof TenantWriteGateActiveError) {
+      throw new Unavailable(error.message);
+    }
+    throw error;
+  }
+  return context;
+}
+
+/** Around-hook adapter for custom routes whose inner handler performs writes. */
+export function createTenantWriteGateAroundHook(db: TenantScopeAwareDatabase) {
+  return async (context: HookContext, next: () => Promise<void>): Promise<void> => {
+    await enforceTenantWriteGateForHook(db, context);
+    await next();
+  };
+}
+
+/**
+ * Admission-only write-gate check for authenticated routes that perform long
+ * process/network orchestration.
+ *
+ * Unlike {@link createTenantWriteGateAroundHook}, this helper does not expect
+ * the route to retain a database transaction while `next()` runs. It opens one
+ * short tenant write unit, checks the gate, commits it, and only then enters
+ * the long handler. Repository/service writes inside the handler retain their
+ * own gate checks; this admission check prevents external side effects from
+ * starting while a tenant freeze is already active.
+ */
+export function createTenantWriteAdmissionAroundHook(db: TenantScopeAwareDatabase) {
+  return async (context: HookContext, next: () => Promise<void>): Promise<void> => {
+    if (isTenantWriteMethodName(context.method)) {
+      const tenantId = context.params.tenant?.tenant_id ?? getCurrentTenantId();
+      if (!tenantId) {
+        throw new NotAuthenticated('Missing tenant context for tenant write admission');
+      }
+      try {
+        await assertTenantWriteAdmission(db, tenantId);
+      } catch (error) {
+        if (error instanceof TenantWriteGateActiveError) {
+          throw new Unavailable(error.message);
+        }
+        throw error;
+      }
+    }
+    await next();
+  };
+}
 
 export function resolveTenantIdForDeferredScope(params?: unknown): string | undefined {
   const scopedParams = params as TenantScopedParams;
@@ -51,7 +113,7 @@ export function resolveTenantIdForDeferredScope(params?: unknown): string | unde
 }
 
 /**
- * Build the mutation boundary used by long-lived tenant orchestration.
+ * Run one mutation boundary used by long-lived tenant orchestration.
  *
  * Executor callbacks and termination coordinators can outlive the request
  * transaction that created them. AsyncLocalStorage propagates that transaction
@@ -59,74 +121,28 @@ export function resolveTenantIdForDeferredScope(params?: unknown): string | unde
  * rejoin a possibly committed scope. Always leave any inherited DB scope, open
  * one new short tenant transaction, and enforce the write gate inside it.
  */
-export function createFreshTenantWriteDatabaseRunner(
+export function withFreshTenantWrite<T>(
   db: TenantScopeAwareDatabase,
-  tenantId: string | undefined
-): TenantDatabaseRunner {
+  tenantId: string | undefined,
+  work: () => Promise<T>
+): Promise<T> {
   if (!tenantId) {
     throw new Error('Missing tenant context for tenant-scoped mutation');
   }
-  return <T>(work: () => Promise<T>): Promise<T> =>
-    runWithoutTenantDatabaseScope(() =>
-      runWithTenantDatabaseScope(db, tenantId, async (scoped) => {
-        await assertTenantWritable(scoped, tenantId);
-        return work();
-      })
-    );
+  return runWithoutTenantDatabaseScope(() =>
+    runWithTenantDatabaseScope(db, tenantId, async (scoped) => {
+      await assertTenantWritable(scoped, tenantId);
+      return work();
+    })
+  );
 }
 
-/**
- * Schedule asynchronous work outside the current ALS store, then re-enter a
- * fresh tenant database scope for the captured tenant. Use this for delayed
- * executor/queue/gateway work: bare setImmediate inherits possibly-committed
- * transaction objects, but a bare runWithoutTenantDatabaseScope loses Postgres
- * RLS context entirely.
- */
-export function deferWithTenantDatabaseScope(
+/** Assert write admission in one fresh, short tenant database unit. */
+export function assertTenantWriteAdmission(
   db: TenantScopeAwareDatabase,
-  params: unknown,
-  work: () => Promise<void>,
-  onError?: (error: unknown) => void
-): void {
-  const tenantId = resolveTenantIdForDeferredScope(params);
-  if (!tenantId) {
-    const error = new Error('Missing tenant context for deferred tenant-scoped work');
-    if (onError) {
-      onError(error);
-    } else {
-      console.error('[tenant-db-scope] Deferred tenant-scoped work skipped:', error);
-    }
-    return;
-  }
-
-  const schedule = () => {
-    runWithoutTenantDatabaseScope(() => {
-      setImmediate(() => {
-        // Deferred tenant writer: fail closed at the write gate (see
-        // assertTenantWritable) inside the fresh transaction before the work.
-        void runWithTenantDatabaseScope(db, tenantId, async (scoped) => {
-          await assertTenantWritable(scoped, tenantId);
-          await work();
-        }).catch((error) => {
-          if (onError) {
-            onError(error);
-            return;
-          }
-          console.error('[tenant-db-scope] Deferred tenant-scoped work failed:', error);
-        });
-      });
-    });
-  };
-
-  // If the caller is inside a tenant DB transaction, wait until the
-  // transaction commits before opening the fresh scope. Otherwise executor
-  // startup can race ahead and read rows (sessions/tasks/messages) that are
-  // still invisible on its new connection.
-  if (enqueueTenantDatabasePostCommitCallback(async () => schedule())) {
-    return;
-  }
-
-  schedule();
+  tenantId: string | undefined
+): Promise<void> {
+  return withFreshTenantWrite(db, tenantId, async () => undefined);
 }
 
 /** Defer long orchestration work after commit with tenant identity only. */

@@ -4,6 +4,8 @@
 > Historical design record. Host Unix impersonation, `strict`/`insulated`, POSIX
 > projection, and `unix.sync-*` were removed in 0.25. Do not use the implementation
 > sketches below as current guidance; see `context/guides/rbac-and-unix-isolation.md`.
+> Its stdout result-transport sketches are historical too: request-mode executor
+> results use `executor-response-v1`; stdout and stderr are logs only.
 
 **Status:** 🔬 Exploration → Design
 **Created:** 2025-12-17
@@ -1146,8 +1148,7 @@ execution:
   # string = template with variables
   executor_command_template: null
 
-  # Enable branch RBAC (Unix group isolation)
-  branch_rbac: false
+  # Board/Branch authorization is always enabled; there is no RBAC switch.
 
 # Daemon configuration
 daemon:

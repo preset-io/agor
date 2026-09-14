@@ -43,3 +43,19 @@ export const CLAUDE_CODE_DISALLOWED_TOOLS = [
   'ExitWorktree',
   'ScheduleWakeup',
 ] as const satisfies readonly string[];
+
+/**
+ * Claude Code's current task-list tools.
+ *
+ * Claude Agent SDK 0.3.233 stopped exposing both the legacy TodoWrite tool and
+ * these replacement tools by default on newer model families. Naming a task
+ * tool in `Options.allowedTools` is the SDK's documented opt-in. Agor consumes
+ * these calls to render the sticky task list, so keep the complete family
+ * enabled rather than relying on model-specific defaults.
+ */
+export const CLAUDE_CODE_TODO_TOOLS = [
+  'TaskCreate',
+  'TaskUpdate',
+  'TaskGet',
+  'TaskList',
+] as const satisfies readonly string[];

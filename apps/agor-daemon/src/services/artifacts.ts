@@ -16,26 +16,38 @@ import { createHash } from 'node:crypto';
 import * as path from 'node:path';
 import { getDaemonBaseUrl, PAGINATION, resolveUserEnvironment } from '@agor/core/config';
 import {
+  type ArtifactListProjection,
   ArtifactRepository,
   ArtifactTrustGrantRepository,
   BoardRepository,
   BranchRepository,
   bindRepositoryToTenantUnitOfWork,
   generateId,
+  getCurrentTenantId,
+  RepoRepository,
   type TenantScopeAwareDatabase,
+  UsersRepository,
 } from '@agor/core/db';
-import { type Application, Forbidden, NotAuthenticated, Unavailable } from '@agor/core/feathers';
+import {
+  type Application,
+  BadRequest,
+  Forbidden,
+  NotAuthenticated,
+  Unavailable,
+} from '@agor/core/feathers';
 import type {
   AgorGrants,
   AgorRuntimeConfig,
   Artifact,
   ArtifactBuildStatus,
+  ArtifactCompilationStatus,
   ArtifactConsoleEntry,
   ArtifactPayload,
   ArtifactStatus,
   ArtifactTrustScopeType,
   AuthenticatedParams,
   BoardID,
+  Branch,
   BranchID,
   QueryParams,
   SandpackConfig,
@@ -47,6 +59,9 @@ import type {
   UUID,
 } from '@agor/core/types';
 import {
+  ARTIFACT_COMPILATION_STATUSES,
+  ARTIFACT_LIST_FIELDS_WITHOUT_FILES,
+  ARTIFACT_METADATA_LIST_FIELDS,
   canonicalizeAgorGrants,
   GRANT_ENV_VAR_NAMES,
   hasMinimumRole,
@@ -54,21 +69,20 @@ import {
   ROLES,
 } from '@agor/core/types';
 import { DrizzleService, type Query } from '../adapters/drizzle.js';
+import { matchesExecutorCommandRuntimeScope } from '../auth/executor-runtime-scope.js';
 import { AGOR_RUNTIME_SOURCE } from '../utils/agor-runtime-source.js';
 import { ensureBranchWorkspaceAccess } from '../utils/branch-workspace-path.js';
 import { emitServiceEvent } from '../utils/emit-service-event.js';
 import { resolveDelegatedExecutionHomeKey } from '../utils/executor-delegated-home.js';
+import { resolveOwnerHomeStore, resolveSandboxStoragePaths } from '../utils/sandbox-context.js';
 import {
   detectLegacyFormat,
   envVarPrefixForTemplate,
   normalizeSandpackConfigForRender,
   sanitizeSandpackConfig,
 } from '../utils/sandpack-config.js';
-import {
-  generateScopedServiceToken,
-  getDaemonUrl,
-  runExecutorCommand,
-} from '../utils/spawn-executor.js';
+import { getDaemonUrl, requestExecutor } from '../utils/spawn-executor.js';
+import { issueExecutorCommandToken } from './session-token-service.js';
 import type { UsersService } from './users.js';
 
 /**
@@ -170,6 +184,37 @@ export type ArtifactParams = QueryParams<{
 
 const MAX_CONSOLE_ENTRIES = 100;
 
+const ARTIFACT_METADATA_LIST_FIELD_SET = new Set<string>(ARTIFACT_METADATA_LIST_FIELDS);
+const ARTIFACT_LIST_FIELD_WITHOUT_FILES_SET = new Set<string>(ARTIFACT_LIST_FIELDS_WITHOUT_FILES);
+
+/**
+ * Choose the smallest SQL row shape that still preserves the generic adapter's
+ * late filter, sort, and select semantics.
+ *
+ * A nonempty `$select` is the only opt-in: no selection (including `$select:
+ * []`) retains the full-row response contract. Fields needed by residual
+ * filters and `$sort` must also be materialized even when the caller will not
+ * receive them. Unknown/future fields conservatively fall back to a full row so
+ * a type/schema addition cannot silently change query behavior.
+ */
+function resolveArtifactListProjection(query: Query): ArtifactListProjection {
+  const selectedFields = Array.isArray(query.$select) ? query.$select : undefined;
+  if (!selectedFields || selectedFields.length === 0) return 'full';
+
+  const materializedFields = new Set<string>(selectedFields);
+  for (const field of Object.keys(query)) {
+    if (!field.startsWith('$')) materializedFields.add(field);
+  }
+  for (const field of Object.keys(query.$sort ?? {})) materializedFields.add(field);
+
+  let projection: ArtifactListProjection = 'metadata';
+  for (const field of materializedFields) {
+    if (!ARTIFACT_LIST_FIELD_WITHOUT_FILES_SET.has(field)) return 'full';
+    if (!ARTIFACT_METADATA_LIST_FIELD_SET.has(field)) projection = 'without-files';
+  }
+  return projection;
+}
+
 /** Path the synthesized .env file lands at in the file map. */
 const SYNTHESIZED_ENV_PATH = '/.env';
 
@@ -178,6 +223,8 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
   private trustRepo: ArtifactTrustGrantRepository;
   private branchRepo: BranchRepository;
   private boardRepo: BoardRepository;
+  private repoRepo: RepoRepository;
+  private usersRepo: UsersRepository;
   private app: Application;
   /** Held for `resolveUserEnvironment` (scope-aware env-var resolution). */
   private dbRef: TenantScopeAwareDatabase;
@@ -200,6 +247,8 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
 
   /** In-memory Sandpack status, keyed by `${artifactId}:${userId}`. */
   private sandpackStatuses: Map<string, string> = new Map();
+
+  private compilationStatuses: Map<string, ArtifactCompilationStatus> = new Map();
 
   /** Latest browser runtime report time, keyed by `${artifactId}:${userId}`. */
   private runtimeObservedAt: Map<string, string> = new Map();
@@ -257,9 +306,70 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
     this.trustRepo = bindRepositoryToTenantUnitOfWork(db, new ArtifactTrustGrantRepository(db));
     this.branchRepo = bindRepositoryToTenantUnitOfWork(db, new BranchRepository(db));
     this.boardRepo = bindRepositoryToTenantUnitOfWork(db, new BoardRepository(db));
+    this.repoRepo = bindRepositoryToTenantUnitOfWork(db, new RepoRepository(db));
+    this.usersRepo = bindRepositoryToTenantUnitOfWork(db, new UsersRepository(db));
     this.app = app;
     this.dbRef = db;
     this.runtimeIntrospectionEnabled = options.runtimeIntrospectionEnabled !== false;
+  }
+
+  /**
+   * Resolve the authoritative, caller-scoped mount inputs required by local
+   * artifact executor commands. Artifact publish/validate/land all run in the
+   * authenticated actor's filesystem sandbox, not the branch owner's home.
+   *
+   * Request and ambient tenant identities are both trusted boundaries, but
+   * they must agree when both are present. Unsafe filesystem_home overrides,
+   * missing tenant ownership, and credential-authority preflight failures all
+   * throw before launch; there is deliberately no shared-home fallback.
+   *
+   * Architecture follow-up: register-services and BranchesService compose the
+   * same mount family. Keep this caller-specific resolver local until a shared
+   * helper can preserve each path's DB/tenant contract with integration tests.
+   */
+  private async resolveExecutorSandboxMounts(
+    branch: Branch,
+    userId: UserID,
+    params: ArtifactParams
+  ): Promise<{
+    sandboxHomeStore?: string;
+    sandboxWorktreesRoot?: string;
+    sandboxBaseRepoPath?: string;
+  }> {
+    const config = this.app.get('config');
+    const sandbox = config.execution?.sandbox;
+    if (sandbox?.enabled !== true || sandbox.home_mode !== 'per_user') return {};
+
+    const requestTenantId = params.tenant?.tenant_id ? String(params.tenant.tenant_id) : undefined;
+    const ambientTenantId = getCurrentTenantId();
+    const ambientTenant = ambientTenantId ? String(ambientTenantId) : undefined;
+    if (requestTenantId && ambientTenant && requestTenantId !== ambientTenant) {
+      throw new Forbidden('Artifact executor tenant identity mismatch');
+    }
+    const tenantId = ambientTenant ?? requestTenantId;
+    const filesystemHome =
+      (await this.usersRepo.findById(userId))?.filesystem_home?.trim() || undefined;
+    const mounts: {
+      sandboxHomeStore?: string;
+      sandboxWorktreesRoot?: string;
+      sandboxBaseRepoPath?: string;
+    } = {
+      sandboxHomeStore: resolveOwnerHomeStore({
+        config,
+        tenantId,
+        ownerUserId: userId,
+        filesystemHome,
+      }),
+      sandboxWorktreesRoot: resolveSandboxStoragePaths(config, tenantId).worktreesRoot,
+    };
+
+    // Linked worktrees need their shared git directory available. Clone-mode
+    // branches carry .git inside the branch and need no base-repo mount.
+    if (branch.storage_mode !== 'clone' && branch.repo_id) {
+      const repo = await this.repoRepo.findById(branch.repo_id);
+      mounts.sandboxBaseRepoPath = repo?.local_path ?? undefined;
+    }
+    return mounts;
   }
 
   private assertRuntimeIntrospectionEnabled(): void {
@@ -301,6 +411,7 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
       archived?: boolean;
       branchIds?: BranchID[];
       visibleToUserId?: UUID;
+      projection?: ArtifactListProjection;
     } = {};
 
     if (typeof query.board_id === 'string') filter.board_id = query.board_id as BoardID;
@@ -308,6 +419,14 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
     if (params?._agorSqlBranchAccessUserId) {
       filter.visibleToUserId = params._agorSqlBranchAccessUserId;
     }
+
+    // `$select` used to run only after `SELECT *` and JSON decoding, so even a
+    // metadata-only initial hydration pulled every source file over the DB
+    // connection. Keep full-row reads as the default. A nonempty selection can
+    // use a leaner SQL shape only when that shape also contains every field the
+    // generic adapter still needs for its residual filtering and sorting.
+    const projection = resolveArtifactListProjection(query);
+    if (projection !== 'full') filter.projection = projection;
 
     const branchId = query.branch_id;
     if (typeof branchId === 'string') {
@@ -474,23 +593,26 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
   ): Promise<Artifact> {
     const branch = await this.branchRepo.findById(data.branch_id);
     if (!branch) throw new Error(`Branch not found: ${data.branch_id}`);
-    await ensureBranchWorkspaceAccess(
+    const branchFsAccess = await ensureBranchWorkspaceAccess(
       this.branchRepo,
       branch,
       params.user?.user_id,
       params.user?.role as UserRole | undefined,
-      'session'
+      'session',
+      'read',
+      this.app.get('config').execution?.allow_superadmin === true
     );
 
-    const sessionToken = generateScopedServiceToken(
-      this.app as unknown as { settings: { authentication?: { secret?: string } } },
-      {
-        executor_action: 'artifact.publish',
-        executor_user_id: params.user?.user_id,
-        executor_branch_id: branch.branch_id,
-      }
+    const userId = params.user?.user_id;
+    if (!userId) throw new NotAuthenticated('Authentication required');
+    const sandboxMounts = await this.resolveExecutorSandboxMounts(branch, userId as UserID, params);
+    const sessionToken = await issueExecutorCommandToken(
+      this.app,
+      'artifact.publish',
+      userId,
+      branch.branch_id
     );
-    const result = await runExecutorCommand(
+    const result = await requestExecutor(
       {
         command: 'branch.artifact.publish',
         sessionToken,
@@ -499,15 +621,23 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
           branchId: branch.branch_id,
           subpath: data.subpath,
           publishData: data,
+          cwd: branch.path,
+          principalBranchAccess: branchFsAccess,
+          ...sandboxMounts,
         },
       },
       {
         logPrefix: `[ArtifactsService.publish ${branch.branch_id}]`,
         delegatedHomeKey: await resolveDelegatedExecutionHomeKey(
           this.dbRef,
-          params.user?.user_id,
+          userId,
           this.app.get('config')
         ),
+        templateVariables: {
+          branch_id: branch.branch_id,
+          user_id: userId,
+          branch_fs_access: branchFsAccess,
+        },
       }
     );
     if (!result.success) {
@@ -550,8 +680,7 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
     },
     params?: ArtifactParams
   ): Promise<Artifact> {
-    const claims = this.requireExecutorCallback(params, 'artifact.publish', data.branch_id);
-    const userId = claims.executor_user_id as UserID;
+    const userId = this.requireExecutorCallback(params, 'artifact.publish', data.branch_id);
     const matchedBranchId = data.branch_id as BranchID;
     const provenanceSubpath = data.subpath ?? '';
     const files = data.files;
@@ -952,17 +1081,25 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
   ): Promise<{ subpath: string; fileCount: number; bytesWritten: number }> {
     const branch = await this.branchRepo.findById(branchId);
     if (!branch) throw new Error(`Branch not found: ${branchId}`);
-    await ensureBranchWorkspaceAccess(
+    const branchFsAccess = await ensureBranchWorkspaceAccess(
       this.branchRepo,
       branch,
       params.user?.user_id,
       params.user?.role as UserRole | undefined,
-      'session'
+      'session',
+      'write',
+      this.app.get('config').execution?.allow_superadmin === true
     );
-    const sessionToken = generateScopedServiceToken(
-      this.app as unknown as { settings: { authentication?: { secret?: string } } }
+    const userId = params.user?.user_id;
+    if (!userId) throw new NotAuthenticated('Authentication required');
+    const sandboxMounts = await this.resolveExecutorSandboxMounts(branch, userId as UserID, params);
+    const sessionToken = await issueExecutorCommandToken(
+      this.app,
+      'branch-artifact-land',
+      userId,
+      branchId
     );
-    const result = await runExecutorCommand(
+    const result = await requestExecutor(
       {
         command: 'branch.artifact.land',
         sessionToken,
@@ -972,15 +1109,23 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
           artifactId,
           subpath: options.subpath,
           overwrite: options.overwrite,
+          cwd: branch.path,
+          principalBranchAccess: branchFsAccess,
+          ...sandboxMounts,
         },
       },
       {
         logPrefix: `[ArtifactsService.land ${branchId}]`,
         delegatedHomeKey: await resolveDelegatedExecutionHomeKey(
           this.dbRef,
-          params.user?.user_id,
+          userId,
           this.app.get('config')
         ),
+        templateVariables: {
+          branch_id: branch.branch_id,
+          user_id: userId,
+          branch_fs_access: branchFsAccess,
+        },
       }
     );
     if (!result.success) {
@@ -1584,11 +1729,9 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
    * - the artifact has `agor_runtime.enabled === false`,
    * - or no browser tab fulfilled the query within `timeoutMs`.
    *
-   * Scope: the response endpoint requires the responding user to match
-   * `requesterId`. So even though the dispatch event is broadcast, only
-   * the requester's own browser can complete the round-trip with their
-   * own (potentially secret-bearing) DOM. Cross-user introspection of
-   * a third party's render is structurally prevented.
+   * Scope: publication filters `agor-query` to `requesterId`, and the response
+   * endpoint independently requires the responder to match it. Other artifact
+   * viewers therefore receive neither the selector/args nor the response.
    */
   async queryArtifactRuntime(input: {
     artifactId: string;
@@ -1630,8 +1773,7 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
       });
     });
 
-    // Broadcast on the artifacts service. The client filters: only respond
-    // if currently viewing this artifact AND logged in as the requester.
+    // The global realtime publisher treats this custom event as requester-only.
     this.app.service('artifacts').emit('agor-query', {
       request_id: requestId,
       artifact_id: input.artifactId,
@@ -1680,34 +1822,48 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
   ): Promise<ArtifactValidationResult> {
     const branch = await this.branchRepo.findById(input.branch_id);
     if (!branch) throw new Error(`Branch not found: ${input.branch_id}`);
-    await ensureBranchWorkspaceAccess(
+    const branchFsAccess = await ensureBranchWorkspaceAccess(
       this.branchRepo,
       branch,
       params.user?.user_id,
       params.user?.role as UserRole | undefined,
-      'session'
+      'session',
+      'read',
+      this.app.get('config').execution?.allow_superadmin === true
     );
-    const result = await runExecutorCommand(
+    const userId = params.user?.user_id;
+    if (!userId) throw new NotAuthenticated('Authentication required');
+    const sandboxMounts = await this.resolveExecutorSandboxMounts(branch, userId as UserID, params);
+    const result = await requestExecutor(
       {
         command: 'branch.artifact.validate',
-        sessionToken: generateScopedServiceToken(
-          this.app as unknown as { settings: { authentication?: { secret?: string } } },
-          {
-            executor_action: 'artifact.validate',
-            executor_user_id: params.user?.user_id,
-            executor_branch_id: branch.branch_id,
-          }
+        sessionToken: await issueExecutorCommandToken(
+          this.app,
+          'artifact.validate',
+          userId,
+          branch.branch_id
         ),
         daemonUrl: getDaemonUrl(),
-        params: { branchId: branch.branch_id, subpath: input.subpath },
+        params: {
+          branchId: branch.branch_id,
+          subpath: input.subpath,
+          cwd: branch.path,
+          principalBranchAccess: branchFsAccess,
+          ...sandboxMounts,
+        },
       },
       {
         logPrefix: `[ArtifactsService.validate ${branch.branch_id}]`,
         delegatedHomeKey: await resolveDelegatedExecutionHomeKey(
           this.dbRef,
-          params.user?.user_id,
+          userId,
           this.app.get('config')
         ),
+        templateVariables: {
+          branch_id: branch.branch_id,
+          user_id: userId,
+          branch_fs_access: branchFsAccess,
+        },
       }
     );
     if (!result.success) {
@@ -1739,22 +1895,16 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
     params: ArtifactParams | undefined,
     action: 'artifact.publish' | 'artifact.validate',
     branchId: string | undefined
-  ): Record<string, unknown> {
+  ): UserID {
     const caller = params?.user;
     if (!caller) throw new NotAuthenticated('Authentication required');
-    if (!caller._isServiceAccount) {
-      throw new Forbidden('Only an executor service account may invoke this method');
-    }
-    const claims = params.authentication?.payload as Record<string, unknown> | undefined;
     if (
-      claims?.executor_action !== action ||
-      typeof claims.executor_user_id !== 'string' ||
       typeof branchId !== 'string' ||
-      claims.executor_branch_id !== branchId
+      !matchesExecutorCommandRuntimeScope(params, action, branchId)
     ) {
       throw new Forbidden('Executor token is not scoped to this artifact operation');
     }
-    return claims;
+    return caller.user_id as UserID;
   }
 
   async checkBuild(artifactId: string): Promise<{
@@ -1792,6 +1942,9 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
     for (const key of this.sandpackStatuses.keys()) {
       if (key.startsWith(prefix)) this.sandpackStatuses.delete(key);
     }
+    for (const key of this.compilationStatuses.keys()) {
+      if (key.startsWith(prefix)) this.compilationStatuses.delete(key);
+    }
     for (const key of this.runtimeObservedAt.keys()) {
       if (key.startsWith(prefix)) this.runtimeObservedAt.delete(key);
     }
@@ -1824,14 +1977,24 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
     userId: string,
     error: SandpackError | null,
     status?: string,
-    contentHash?: string
+    contentHash?: string,
+    compilationStatus?: ArtifactCompilationStatus
   ): Promise<void> {
+    if (
+      compilationStatus !== undefined &&
+      !ARTIFACT_COMPILATION_STATUSES.includes(compilationStatus)
+    ) {
+      throw new BadRequest('Invalid artifact compilation status');
+    }
     if (!(await this.isCurrentRuntimeReportHash(artifactId, contentHash))) return;
     const key = this.viewerKey(artifactId, userId);
     this.sandpackErrors.set(key, error);
     if (status !== undefined) {
       this.sandpackStatuses.set(key, status);
     }
+    // A legacy report must not inherit readiness from a newer client's render.
+    if (compilationStatus === undefined) this.compilationStatuses.delete(key);
+    else this.compilationStatuses.set(key, compilationStatus);
     this.runtimeObservedAt.set(key, new Date().toISOString());
     this.notifyRuntimeStatusWaiters(key);
   }
@@ -1905,6 +2068,7 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
     const key = userId ? this.viewerKey(artifactId, userId) : null;
     const sandpackError = key ? (this.sandpackErrors.get(key) ?? null) : null;
     const sandpackStatus = key ? this.sandpackStatuses.get(key) : undefined;
+    const compilationStatus = key ? this.compilationStatuses.get(key) : undefined;
     const runtimeObservedAt = key ? this.runtimeObservedAt.get(key) : undefined;
     const consoleLogs = key ? (this.consoleLogs.get(key) ?? []) : [];
 
@@ -1915,6 +2079,9 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
       buildStatus = 'error';
       const sandpackMsg = `[Sandpack] ${sandpackError.message}`;
       buildErrors = [...(buildErrors ?? []), sandpackMsg];
+    } else if (compilationStatus === 'error') {
+      buildStatus = 'error';
+      buildErrors = [...(buildErrors ?? []), '[Sandpack] Compilation failed'];
     }
 
     return {
@@ -1923,6 +2090,7 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
       build_errors: buildErrors ?? [],
       sandpack_error: sandpackError,
       sandpack_status: sandpackStatus,
+      compilation_status: compilationStatus,
       runtime_observed_at: runtimeObservedAt,
       console_logs: consoleLogs,
       content_hash: artifact.content_hash,
@@ -1961,6 +2129,14 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
           'If the missing specifier starts with ./ or ../, create that file or fix the import path. Otherwise add the package to package.json dependencies or sandpackConfig.customSetup.dependencies.',
       };
     }
+    if (/JSON/i.test(primary) && /<!doctype|<html|unexpected token\s+['"]?</i.test(primary)) {
+      return {
+        diagnosis: 'html_instead_of_json',
+        primary_error: primary,
+        suggested_fix:
+          "A JSON parser appears to have received HTML or other '<'-prefixed input. Inspect the first failing request in your browser Network panel (URL without credentials, status, content type, redirects, and CSP/CORS messages). This may be an app/API, ingress, proxy, or Sandpack/CDN response; the error alone does not identify the endpoint. Do not share tokens, cookies, env values, or an unredacted HAR.",
+      };
+    }
     if (/package\.json|JSON|Unexpected token/i.test(primary)) {
       return {
         diagnosis: 'malformed_package_json_or_syntax',
@@ -1991,10 +2167,10 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
    * contain secret-derived values.
    *
    * Resolution states:
-   * - observed + ok=true: Sandpack reached a non-running status and no quick
+   * - observed + ok=true: Sandpack explicitly completed compilation and no quick
    *   console.error arrived during the settle window.
-   * - observed + ok=false: Sandpack reported an error/timeout, or the app
-   *   emitted console.error.
+   * - observed + ok=false: Sandpack reported an error/timeout, the app emitted
+   *   console.error, or completion/settling was not confirmed before the deadline.
    * - observed=false: no browser for this user reported status before timeout.
    */
   async waitForRuntimeStatus(
@@ -2029,7 +2205,12 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
     > => {
       const status = await this.getStatus(artifactId, userId);
       const errorLogs = status.console_logs.filter((entry) => entry.level === 'error');
-      if (status.sandpack_error || status.sandpack_status === 'timeout' || errorLogs.length > 0) {
+      if (
+        status.sandpack_error ||
+        status.sandpack_status === 'timeout' ||
+        status.compilation_status === 'error' ||
+        errorLogs.length > 0
+      ) {
         return {
           ...status,
           build_status: 'error',
@@ -2042,7 +2223,11 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
           timed_out: false,
           note: status.sandpack_error
             ? 'Sandpack reported a bundler/runtime error in your browser render.'
-            : 'The artifact emitted console.error during boot/render.',
+            : status.sandpack_status === 'timeout'
+              ? 'Sandpack timed out in your browser render.'
+              : status.compilation_status === 'error'
+                ? 'Sandpack reported a compilation failure in your browser render.'
+                : 'The artifact emitted console.error during boot/render.',
         };
       }
       if (status.build_status === 'error' && (status.build_errors?.length ?? 0) > 0) {
@@ -2054,7 +2239,7 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
           note: 'Server-side file validation failed before browser runtime validation.',
         };
       }
-      if (status.sandpack_status && status.sandpack_status !== 'running') {
+      if (status.compilation_status === 'success') {
         return { ...status, ok: true, observed: true, timed_out: false };
       }
       return null;
@@ -2087,7 +2272,7 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
         resolve(result);
       };
 
-      const scheduleSuccess = (status: ArtifactStatus) => {
+      const scheduleSuccess = () => {
         if (settleTimer) return;
         settleTimer = setTimeout(async () => {
           settleTimer = null;
@@ -2099,7 +2284,11 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
       const onUpdate = () => {
         void (async () => {
           const latest = await classify();
-          if (!latest) return;
+          if (!latest) {
+            if (settleTimer) clearTimeout(settleTimer);
+            settleTimer = null;
+            return;
+          }
           if (!latest.ok) {
             finish(latest);
             return;
@@ -2107,7 +2296,7 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
           if (settleMs === 0) {
             finish(latest);
           } else {
-            scheduleSuccess(latest);
+            scheduleSuccess();
           }
         })();
       };
@@ -2118,7 +2307,7 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
 
       timeoutTimer = setTimeout(async () => {
         const latest = await classify();
-        if (latest) {
+        if (latest && (!latest.ok || settleMs === 0)) {
           finish(latest);
           return;
         }
@@ -2126,9 +2315,11 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
         finish({
           ...status,
           ok: false,
-          observed: false,
+          observed: !!status.runtime_observed_at,
           timed_out: true,
-          note: `No Sandpack status was reported by your browser within ${timeoutMs}ms. Open the artifact on the board/fullscreen as this user and retry, or use agor_artifacts_status after viewing it. Server-side publish can only validate the file map; Sandpack boot happens in the browser.`,
+          note: status.runtime_observed_at
+            ? `Your browser reported activity, but compilation completion and its settle window were not confirmed within ${timeoutMs}ms. Inspect the preview and browser Network/Console panels; reload an older Agor tab to enable completion reporting. This timeout does not prove the app is broken.`
+            : `No Sandpack status was reported by your browser within ${timeoutMs}ms. Open the artifact on the board/fullscreen as this user and retry, or use agor_artifacts_status after viewing it. Server-side publish can only validate the file map; Sandpack boot happens in the browser.`,
         });
       }, timeoutMs);
 
@@ -2136,7 +2327,7 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
       // registration: a browser POST may have updated the in-memory status
       // just before we subscribed. Re-read once now that the waiter exists.
       onUpdate();
-      if (initial?.ok) scheduleSuccess(initial);
+      if (initial?.ok) scheduleSuccess();
     });
   }
 
@@ -2473,10 +2664,16 @@ function grantsAreSubset(needs: AgorGrants, has: AgorGrants): boolean {
 }
 
 /** Escape a `.env` value: quote, escape backslashes/quotes/newlines. */
-function escapeEnvValue(value: string): string {
+export function escapeEnvValue(value: string): string {
   if (!value) return '';
-  // Always quote — covers spaces, `#`, `=` in the value, etc.
-  return `"${value.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n')}"`;
+  // Always quote — covers spaces, `#`, `=` in the value, etc. Escape CR as
+  // well as LF: some dotenv readers treat a bare CR as a record boundary,
+  // which would let one managed value synthesize an attacker-selected key.
+  return `"${value
+    .replace(/\\/g, '\\\\')
+    .replace(/"/g, '\\"')
+    .replace(/\r/g, '\\r')
+    .replace(/\n/g, '\\n')}"`;
 }
 
 export function createArtifactsService(

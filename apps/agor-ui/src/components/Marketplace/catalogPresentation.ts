@@ -9,6 +9,7 @@
 import type {
   MCPCatalogAuthType,
   MCPCatalogCategory,
+  MCPCatalogCredentialRequirement,
   MCPCatalogEntry,
   MCPCatalogSort,
 } from '@agor/core/types';
@@ -99,7 +100,7 @@ export function capabilityLabel(capability: string): string {
  * the default and is labelled for what it actually is.
  */
 export const SORT_OPTIONS: Array<{ label: string; value: MCPCatalogSort }> = [
-  { label: 'Sort: Recommended', value: 'popularity' },
+  { label: 'Sort: Curated', value: 'popularity' },
   { label: 'Sort: A–Z', value: 'name' },
 ];
 
@@ -115,6 +116,38 @@ export const DEFAULT_SORT: MCPCatalogSort = 'popularity';
 export const entryTitle = catalogDisplayName;
 
 /**
+ * Technical authentication copy follows the live endpoint verdict whenever
+ * Connect has one. Catalog metadata is explicitly labelled as an unchecked
+ * fallback so stale curation cannot contradict the primary status panel.
+ */
+export function catalogAuthenticationDetail(
+  catalogAuthType: MCPCatalogAuthType,
+  liveRequirement?: MCPCatalogCredentialRequirement | null
+): string {
+  switch (liveRequirement) {
+    case 'required':
+      return 'Bearer credential · Live endpoint check';
+    case 'oauth':
+      return 'OAuth · Live endpoint check';
+    case 'not_accepted':
+      return 'No credential accepted · Live endpoint check';
+    case 'unsupported':
+      return 'Unsupported credential scheme · Live endpoint check';
+    default:
+      switch (catalogAuthType) {
+        case 'none':
+          return 'Catalog metadata: no account stated · Live endpoint not checked yet';
+        case 'oauth':
+          return 'Catalog metadata: OAuth · Live endpoint not checked yet';
+        case 'credentials':
+          return 'Catalog metadata: bearer credential · Live endpoint not checked yet';
+        default:
+          return 'Unknown · Checked live when you connect';
+      }
+  }
+}
+
+/**
  * What a user would find out by pressing Connect, said before they press it.
  *
  * `unknown` is its own case rather than being folded into either side:
@@ -124,12 +157,22 @@ export const entryTitle = catalogDisplayName;
  * wherever nobody has established one.
  *
  * `sign-in` is separate from `ready` for the same reason: both connect, but one
- * of them lands the user on a server they still have to sign into, and a card
+ * of them opens the provider's sign-in popup, and a card
  * promising "no account needed" for a server that needs their Notion account is
  * the promise this vocabulary exists to keep. It is not `blocked` — the sign-in
  * happens, it just happens after connecting rather than instead of it.
+ *
+ * `api-key` is the third of those, and the one that asks something of the user
+ * *before* connecting rather than after. It stopped being `blocked` when the
+ * drawer gained somewhere to paste a key: `blocked` means the marketplace
+ * cannot install this at all and the drawer removes the form entirely, which is
+ * the opposite of what an entry needing a key now wants. Keeping it in the same
+ * enum rather than adding a parallel flag is what makes the card, the drawer
+ * and the "connectable now" filter agree — they all read this one value, and
+ * the last time two of them disagreed a card advertised a connect that the
+ * drawer then refused.
  */
-export type ConnectReadiness = 'ready' | 'sign-in' | 'unchecked' | 'blocked';
+export type ConnectReadiness = 'ready' | 'sign-in' | 'api-key' | 'unchecked' | 'blocked';
 
 export interface ConnectStatus {
   readiness: ConnectReadiness;
@@ -165,14 +208,15 @@ const CONNECT_STATUSES = {
   },
   signIn: {
     readiness: 'sign-in',
-    label: 'Sign in after connecting',
+    label: 'Connect with your account',
     detail:
-      'This server uses your own account. Connecting sets it up, then you sign in from the session; nobody signs in on your behalf.',
+      'This server uses your own account. Connecting opens the provider sign-in in a secure popup and creates the new session; the starter prompt appears only after sign-in succeeds.',
   },
   needsKey: {
-    readiness: 'blocked',
-    label: 'Needs an API key',
-    detail: 'This server needs an API key. Adding one from the marketplace is not available yet.',
+    readiness: 'api-key',
+    label: 'Needs a bearer access token',
+    detail:
+      'This server needs a bearer access token from your own account. Paste one when you connect — Agor stores it for you alone, and never shows it again.',
   },
   unchecked: {
     readiness: 'unchecked',
@@ -180,10 +224,11 @@ const CONNECT_STATUSES = {
     detail:
       'Agor has not checked this endpoint, so it may ask for an account. Connecting checks it, and stops there if it does.',
   },
-  ready: {
-    readiness: 'ready',
-    label: 'No account needed',
-    detail: 'This server needs no account, so connecting it takes one step.',
+  declaredOpen: {
+    readiness: 'unchecked',
+    label: 'Catalog says no account',
+    detail:
+      'Catalog metadata says this server needs no account. Agor checks the live endpoint before connecting.',
   },
 } as const satisfies Record<string, ConnectStatus>;
 
@@ -191,18 +236,27 @@ const CONNECT_STATUSES = {
  * Auth types that are not a refusal.
  *
  * The same rule the cards state: `none` is stated open, `oauth` signs the user
- * in with their own account after connecting, and `unknown` is simply unstated
- * — connecting checks the endpoint and stops cleanly if it turns out to want an
- * API key. An entry that says nothing is worth offering, so a filter demanding
- * `none` would hide entries the card beside it called connectable.
+ * in with their own account in the automatic popup, `credentials` takes a reviewed bearer token the
+ * user pastes into the drawer, and `unknown` is simply unstated — connecting
+ * checks the endpoint. An entry that says nothing is worth offering, so a
+ * filter demanding `none` would hide entries the card beside it called
+ * connectable.
  *
- * `credentials` is the one that stays out: nothing can obtain an API key on the
- * user's behalf, and there is nowhere to put one they typed.
+ * Every value is now on this list, which is the point: after the API-key field
+ * there is no stated auth type the marketplace refuses outright. The list stays
+ * rather than collapsing into `true` because the enum can gain a member, and a
+ * new one should have to be added here deliberately rather than inheriting
+ * "connectable" from a constant that stopped distinguishing anything.
  *
  * Exported so the toolbar's filter and `connectStatus` cannot drift into
  * disagreeing about what "connectable" means.
  */
-export const CONNECTABLE_AUTH_TYPES: MCPCatalogAuthType[] = ['none', 'oauth', 'unknown'];
+export const CONNECTABLE_AUTH_TYPES: MCPCatalogAuthType[] = [
+  'none',
+  'oauth',
+  'credentials',
+  'unknown',
+];
 
 export function connectStatus(entry: MCPCatalogEntry): ConnectStatus {
   // `has_remote` is derived from `remote_url`, so testing the URL tests both.
@@ -211,7 +265,7 @@ export function connectStatus(entry: MCPCatalogEntry): ConnectStatus {
   if (entry.auth_type === 'credentials') return CONNECT_STATUSES.needsKey;
   if (entry.auth_type === 'oauth') return CONNECT_STATUSES.signIn;
   if (entry.auth_type !== 'none') return CONNECT_STATUSES.unchecked;
-  return CONNECT_STATUSES.ready;
+  return CONNECT_STATUSES.declaredOpen;
 }
 
 /** Whether the "connectable now" filter would keep this entry. */

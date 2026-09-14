@@ -1,9 +1,9 @@
 /**
  * The catalog itself: the parsed contents of `curated.yaml`.
  *
- * The whole catalog is a few dozen entries of authored text, identical for
- * every caller and unchanged for the life of the process. So it is parsed once
- * and held, and every read is served from there.
+ * The whole catalog is a bounded set of authored text, identical for every
+ * caller and unchanged for the life of the process. So it is parsed once on
+ * first use and held, and every later read is served from there.
  *
  * Narrowing lives in `query.ts`, which has no filesystem in it and so can be
  * imported from the browser bundle that now does the narrowing.
@@ -32,6 +32,8 @@ let loaded: Promise<readonly MCPCatalogEntry[]> | null = null;
  */
 function freezeEntry(entry: MCPCatalogEntry): MCPCatalogEntry {
   Object.freeze(entry.capabilities);
+  if (entry.oauth) Object.freeze(entry.oauth);
+  if (entry.credentials) Object.freeze(entry.credentials);
   return Object.freeze(entry);
 }
 

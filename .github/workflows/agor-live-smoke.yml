@@ -398,7 +398,9 @@ jobs:
         run: |
           set -euo pipefail
           ROOT="$RUNNER_TEMP/project-smoke"
-          mkdir -p "$ROOT/project" "$ROOT/home/.agor"
+          mkdir -p "$ROOT/project"
+          mkdir -p -m 0700 "$ROOT/home/.agor"
+          test "$(stat -c '%a' "$ROOT/home/.agor")" = "700"
           cd "$ROOT/project"
           npm init -y >/dev/null
           npm install --ignore-scripts --no-fund --no-audit "$CLIENT" "$LIVE"

@@ -17,9 +17,13 @@ import {
 } from '@agor/core/config';
 import {
   assertTenantWritable,
+  type CurrentTaskExecutorSessionTokenAuthority,
+  type ExecutorLaunchAuthority,
   enqueueTenantDatabasePostCommitCallback,
   getCurrentTenantId,
+  isPostgresDatabaseHandle,
   runWithTenantDatabaseScope,
+  SessionRepository,
   shortId,
   type TaskDispatchClaimResult,
   TaskRepository,
@@ -31,10 +35,11 @@ import {
   type TerminationSettlementInput,
   type TerminationSettlementResult,
 } from '@agor/core/db';
-import { type Application, BadRequest, Conflict } from '@agor/core/feathers';
+import { type Application, BadRequest, Conflict, Forbidden } from '@agor/core/feathers';
 import { deriveTitleFromPrompt } from '@agor/core/sessions';
 import type {
   AuthenticatedParams,
+  BranchID,
   ContentBlock,
   ExecutorTerminationCompleteInput,
   MessageID,
@@ -51,6 +56,7 @@ import type {
   UUID,
 } from '@agor/core/types';
 import {
+  AUTHORIZATION_REVOKED_TERMINATION_MESSAGE,
   ExecutorPulseKind,
   isTerminalTaskStatus,
   SDK_WATCHDOG_FAILURE_REASONS,
@@ -59,6 +65,7 @@ import {
   TaskStatus,
 } from '@agor/core/types';
 import { DrizzleService, type Query } from '../adapters/drizzle';
+import { authenticatedTaskExecutorRuntimeAuthority } from '../auth/executor-runtime-scope.js';
 import { getDaemonMetrics } from '../metrics/index.js';
 import {
   recordDispatchClaim,
@@ -77,11 +84,13 @@ import {
   ExecutorHeartbeatCallbackRunner,
 } from '../utils/executor-heartbeat-callback.js';
 import { ensureRepoOriginAlignedById } from '../utils/realign-repo-origin';
-import {
-  createFreshTenantWriteDatabaseRunner,
-  deferWithTenantContext,
-} from '../utils/tenant-db-scope.js';
-import type { SessionsService } from './sessions';
+import { deferWithTenantContext, withFreshTenantWrite } from '../utils/tenant-db-scope.js';
+import type { SessionParams, SessionsService } from './sessions';
+
+export interface TaskExecutorCredentialRevoker {
+  revokeTaskTokens(taskId: string): Promise<number>;
+  isTaskTokenAuthorityCurrent?(input: CurrentTaskExecutorSessionTokenAuthority): Promise<boolean>;
+}
 
 /**
  * Task service params
@@ -161,7 +170,11 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
     Promise<CompletionCallbackDispatchResult>
   >();
 
-  constructor(db: TenantScopeAwareDatabase, app: Application) {
+  constructor(
+    db: TenantScopeAwareDatabase,
+    app: Application,
+    private readonly executorCredentialRevoker?: TaskExecutorCredentialRevoker
+  ) {
     const taskRepo = new TaskRepository(db);
     super(taskRepo, {
       id: 'task_id',
@@ -193,7 +206,7 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
       updates
     );
     recordDispatchClaim(getDaemonMetrics(this.app), result);
-    if (result.outcome === 'claimed') {
+    if (result.outcome === 'claimed' || result.outcome === 'actor_missing') {
       emitServiceEvent(this.app, {
         path: 'tasks',
         event: 'patched',
@@ -505,6 +518,10 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
     params?: TaskParams
   ): Promise<TerminationSettlementResult> {
     const result = await this.taskRepo.settleTermination(input);
+    // Repository settlement is used by cooperative stop, watchdog, startup
+    // reconciliation, and force-fail paths. It must retire the same exact Task
+    // lease as a normal executor terminal patch.
+    await this.retireTaskExecutorCredentials(result.task);
     if (result.outcome !== 'transitioned' && result.outcome !== 'unverified') return result;
 
     await this.runAfterTenantDatabaseCommit('publish termination settlement', async () => {
@@ -564,10 +581,8 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
     };
 
     try {
-      const session = await this.app.service('sessions').get(task.session_id);
-      if (session?.branch_id) {
-        payload.branch_id = session.branch_id;
-      }
+      const branchId = await this.findHeartbeatBranchId(task.session_id);
+      if (branchId) payload.branch_id = branchId;
     } catch (error) {
       console.warn(
         `⚠️  [TasksService] Could not resolve branch_id for heartbeat task ${shortId(task.task_id)}:`,
@@ -576,6 +591,19 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
     }
 
     this.heartbeatCallbackRunner.run(payload);
+  }
+
+  /**
+   * The opt-in heartbeat callback needs only the Session's branch pointer.
+   * Re-enter a fresh tenant DB unit after the heartbeat request commits and
+   * avoid a fully enriched Feathers sessions.get on every ten-second tick.
+   */
+  private async findHeartbeatBranchId(sessionId: string): Promise<BranchID | null> {
+    const tenantId = getCurrentTenantId();
+    if (!tenantId) throw new Error('Missing tenant context for executor heartbeat callback');
+    return runWithTenantDatabaseScope(this.db, tenantId, (tenantDb) =>
+      new SessionRepository(tenantDb).findBranchIdBySessionId(sessionId)
+    );
   }
 
   private async runAfterTenantDatabaseCommit(
@@ -598,6 +626,11 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
     }
 
     await run();
+  }
+
+  private async retireTaskExecutorCredentials(task: Task): Promise<void> {
+    if (!isTerminalTaskStatus(task.status)) return;
+    await this.executorCredentialRevoker?.revokeTaskTokens(task.task_id);
   }
 
   private async triggerQueueProcessingAfterCommit(
@@ -711,9 +744,17 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
       if (session.fork_origin === 'btw') {
         if (!suppressBtwCleanup) {
           try {
-            await this.app.service('sessions').patch(session.session_id, {
-              archived: true,
-              archived_reason: 'btw_completed',
+            const tenantId = getCurrentTenantId() ?? params?.tenant?.tenant_id;
+            if (!tenantId) throw new Error('Missing tenant context for BTW archive cleanup');
+            await runWithTenantDatabaseScope(this.db, tenantId, async (tenantDb) => {
+              await assertTenantWritable(tenantDb, tenantId);
+              const sessionsService = this.app.service('sessions') as unknown as SessionsService;
+              const archiveParams: SessionParams = {
+                ...params,
+                query: undefined,
+                provider: undefined,
+              };
+              await sessionsService.archiveBtwSession(session.session_id, archiveParams);
             });
             console.log(
               `📦 [TasksService] Auto-archived btw fork session ${shortId(session.session_id)}`
@@ -765,6 +806,10 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
       return currentTask;
     }
     if (currentTask && isTerminalTaskStatus(currentTask.status) && nextStatus !== undefined) {
+      // A prior terminal patch may have committed before durable credential
+      // revocation failed. Treat any idempotent terminal retry as a repair
+      // opportunity instead of returning a still-live executor lease.
+      await this.retireTaskExecutorCredentials(currentTask);
       console.warn(
         `⏭️ [TasksService] Ignoring status rewrite for terminal task ${shortId(currentTask.task_id)} ` +
           `(${currentTask.status} → ${nextStatus})`
@@ -783,6 +828,13 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
     const result = params?.provider
       ? await this.taskRepo.updateFromExecutor(id, data)
       : await super.patch(id, data, params);
+
+    // Task terminality is the one lifecycle boundary shared by local and
+    // off-host executors. Retire every bearer for this exact task before any
+    // completion orchestration can advertise it as finished.
+    if (isAnalyticsTerminalTransition && !Array.isArray(result)) {
+      await this.retireTaskExecutorCredentials(result);
+    }
 
     if (isRunningTransition && !Array.isArray(result)) {
       this.trackTaskStarted(result as Task);
@@ -1230,6 +1282,7 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
       const context: ChildCompletionContext = {
         childSessionId: shortId(childSession.session_id),
         childSessionFullId: childSession.session_id,
+        childSessionTitle: childSession.title || '',
         childTaskId: shortId(task.task_id),
         childTaskFullId: task.task_id,
         parentSessionId: shortId(targetSessionId), // backward compat
@@ -1376,10 +1429,8 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
     params?: TaskParams
   ): Promise<Task> {
     const terminationTenantId = getCurrentTenantId() ?? params?.tenant?.tenant_id;
-    const runInFreshTerminationTenantWriteDatabase = createFreshTenantWriteDatabaseRunner(
-      this.db,
-      terminationTenantId
-    );
+    const runInFreshTerminationTenantWriteDatabase = <T>(work: () => Promise<T>) =>
+      withFreshTenantWrite(this.db, terminationTenantId, work);
     const task = await runInFreshTerminationTenantWriteDatabase(() =>
       this.taskRepo.recordExecutorQuiescence(data)
     );
@@ -1448,6 +1499,11 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
     return task;
   }
 
+  /** Internal launch boundary; not exposed through the Feathers transport. */
+  bindExecutorLaunchAuthority(taskId: string): Promise<ExecutorLaunchAuthority> {
+    return this.taskRepo.bindExecutorLaunchAuthority(taskId);
+  }
+
   async reportRuntimeTelemetry(data: RuntimeTelemetryInput, params?: TaskParams): Promise<Task> {
     if (data.pulse) {
       const { sequence, kind, detail } = data.pulse;
@@ -1465,15 +1521,83 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
       }
     }
 
-    const task = await this.taskRepo.reportRuntimeTelemetry(data.task_id, data.pulse);
-    if (!task) {
+    const authority = authenticatedTaskExecutorRuntimeAuthority(params);
+    if (!authority || authority.taskId !== data.task_id) {
+      throw new Forbidden('A token scoped to this executor task is required');
+    }
+
+    // PostgreSQL validates the durable credential row in the same transaction
+    // as the Task heartbeat write. Standalone SQLite has no durable authority
+    // table, so its existing process-local fingerprint map supplies the exact
+    // O(1) decision. Store errors propagate and no heartbeat is refreshed.
+    let standaloneTokenCurrent: boolean | undefined;
+    if (!isPostgresDatabaseHandle(this.db)) {
+      const check = this.executorCredentialRevoker?.isTaskTokenAuthorityCurrent;
+      if (!check) throw new Error('Executor task token authority is unavailable');
+      standaloneTokenCurrent = await check.call(this.executorCredentialRevoker, {
+        tenantId: authority.tenantId,
+        tokenFingerprint: authority.tokenFingerprint,
+        sessionId: authority.sessionId,
+        taskId: authority.taskId,
+        branchId: authority.branchId,
+        userId: authority.userId,
+      });
+    }
+
+    const persistTelemetry = () =>
+      this.taskRepo.reportRuntimeTelemetry(
+        data.task_id,
+        {
+          token_fingerprint: authority.tokenFingerprint,
+          principal_user_id: authority.userId,
+          session_id: authority.sessionId,
+          branch_id: authority.branchId,
+          ...(standaloneTokenCurrent === undefined
+            ? {}
+            : { standalone_token_current: standaloneTokenCurrent }),
+        },
+        data.pulse
+      );
+
+    // PostgreSQL tenant-owned services run inside a request transaction. The
+    // repository takes the Task row lock while deciding whether this heartbeat
+    // may refresh liveness. Commit that short unit before a denial enters the
+    // termination coordinator, whose fresh claim must lock the same Task row.
+    // SQLite services carry tenant identity only, so their repository mutation
+    // already commits before this method continues.
+    const report = isPostgresDatabaseHandle(this.db)
+      ? await withFreshTenantWrite(this.db, authority.tenantId, persistTelemetry)
+      : await persistTelemetry();
+
+    if (report.outcome === 'scope_mismatch') {
+      // Do not let a wrong-scope credential stop somebody else's runtime.
+      throw new Forbidden('Executor task authority does not match this runtime');
+    }
+    if (report.outcome === 'authorization_revoked') {
+      console.warn(
+        `[task.authorization] event=runtime_revoked task_id=${shortId(data.task_id)} ` +
+          `reason=${report.reason}`
+      );
+      return beginExecutorTermination({
+        app: this.app,
+        taskId: report.task.task_id,
+        cause: 'authorization_revoked',
+        errorMessage: AUTHORIZATION_REVOKED_TERMINATION_MESSAGE,
+        params,
+        runInFreshTenantWriteDatabase: (work) =>
+          withFreshTenantWrite(this.db, authority.tenantId, work),
+      });
+    }
+    if (report.outcome === 'control') {
       // Heartbeat responses are also the executor's durable control-plane
-      // read. This lets a reconnected executor observe STOPPING through any
-      // daemon even before cross-replica realtime fanout is enabled.
-      const current = await this.taskRepo.findById(data.task_id);
-      if (current?.status === TaskStatus.STOPPING && current.termination_request) return current;
+      // read. A reconnected executor observes STOPPING through any daemon even
+      // if a realtime notification was missed.
+      if (report.task.status === TaskStatus.STOPPING && report.task.termination_request) {
+        return report.task;
+      }
       throw new Conflict(`Task ${shortId(data.task_id)} is not connected and active`);
     }
+    const task = report.task;
     analyticsLogger.track(
       'executor.heartbeat',
       {
@@ -1484,9 +1608,17 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
       },
       { userId: task.created_by }
     );
-    void this.handleExecutorHeartbeat(task, task.last_executor_heartbeat_at!).catch((error) =>
-      console.warn('Executor heartbeat callback failed:', error)
-    );
+    if (this.heartbeatCallbackRunner.isConfigured()) {
+      // Heartbeats arrive inside the request's tenant DB transaction. The
+      // optional callback performs a later branch-pointer projection, so
+      // retain only the trusted tenant identity and re-enter after commit
+      // instead of inheriting a committed DB scope into detached work.
+      deferWithTenantContext(
+        params,
+        () => this.handleExecutorHeartbeat(task, task.last_executor_heartbeat_at!),
+        (error) => console.warn('Executor heartbeat callback failed:', error)
+      );
+    }
     emitServiceEvent(this.app, {
       path: 'tasks',
       event: 'patched',
@@ -1515,10 +1647,9 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
       throw new BadRequest('sdk_version must be a bounded identifier');
     }
 
-    const runInFreshTerminationTenantWriteDatabase = createFreshTenantWriteDatabaseRunner(
-      this.db,
-      getCurrentTenantId() ?? params?.tenant?.tenant_id
-    );
+    const terminationTenantId = getCurrentTenantId() ?? params?.tenant?.tenant_id;
+    const runInFreshTerminationTenantWriteDatabase = <T>(work: () => Promise<T>) =>
+      withFreshTenantWrite(this.db, terminationTenantId, work);
 
     const current = await this.get(data.task_id, params);
     const mode = current.sdk_watchdog_mode ?? 'observe';
@@ -1643,6 +1774,10 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
 /**
  * Service factory function
  */
-export function createTasksService(db: TenantScopeAwareDatabase, app: Application): TasksService {
-  return new TasksService(db, app);
+export function createTasksService(
+  db: TenantScopeAwareDatabase,
+  app: Application,
+  executorCredentialRevoker?: TaskExecutorCredentialRevoker
+): TasksService {
+  return new TasksService(db, app, executorCredentialRevoker);
 }

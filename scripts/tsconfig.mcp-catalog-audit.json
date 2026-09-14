@@ -1,0 +1,15 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "customConditions": ["source"],
+    "allowImportingTsExtensions": true,
+    "strict": true,
+    "skipLibCheck": true,
+    "typeRoots": ["../packages/core/node_modules/@types"],
+    "types": ["node"],
+    "noEmit": true
+  },
+  "include": ["audit-mcp-catalog.mts"]
+}

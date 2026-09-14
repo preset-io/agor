@@ -73,9 +73,9 @@ export const CallbackConfigForm: React.FC<CallbackConfigFormProps> = ({ showHelp
       {showHelpText && (
         <Paragraph type="secondary" style={{ fontSize: 12, marginTop: -16 }}>
           Advanced: Customize the callback message template using Handlebars syntax. Available
-          variables: <Text code>childSessionId</Text>, <Text code>spawnPrompt</Text>,{' '}
-          <Text code>status</Text>, <Text code>messageCount</Text>, <Text code>toolUseCount</Text>,{' '}
-          <Text code>lastAssistantMessage</Text>
+          variables: <Text code>childSessionId</Text>, <Text code>childSessionTitle</Text>,{' '}
+          <Text code>spawnPrompt</Text>, <Text code>status</Text>, <Text code>messageCount</Text>,{' '}
+          <Text code>toolUseCount</Text>, <Text code>lastAssistantMessage</Text>
         </Paragraph>
       )}
     </>

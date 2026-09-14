@@ -20,6 +20,7 @@ import { initializeDatabase } from './migrate';
 import { BranchRepository } from './repositories/branches';
 import { RepoRepository } from './repositories/repos';
 import { SessionRepository } from './repositories/sessions';
+import { UsersRepository } from './repositories/users';
 import * as pg from './schema.postgres';
 import { deleteTenantData, TenantDeletionCatalogError } from './tenant-deletion';
 import { runWithTenantDatabaseScope } from './tenant-scope';
@@ -33,6 +34,12 @@ let branchUniqueSeq = Date.now() % 1_000_000;
 
 async function seedTenant(db: Database, tenantId: string): Promise<void> {
   await runWithTenantDatabaseScope(db, tenantId, async (scoped) => {
+    const ownerId = generateId() as UUID;
+    await new UsersRepository(scoped).create({
+      user_id: ownerId,
+      email: `tenant-deletion-${tenantId}-${generateId()}@example.invalid`,
+      role: 'member',
+    });
     const repoId = generateId();
     await new RepoRepository(scoped).create({
       repo_id: repoId,
@@ -51,13 +58,13 @@ async function seedTenant(db: Database, tenantId: string): Promise<void> {
       ref: 'main',
       branch_unique_id: branchUniqueSeq++,
       path: `/tmp/${branchId}`,
-      created_by: 'tenant-deletion-test-user' as UUID,
+      created_by: ownerId,
     });
     await new SessionRepository(scoped).create({
       session_id: generateId(),
       branch_id: branchId,
       agentic_tool: 'claude-code',
-      created_by: 'tenant-deletion-test-user',
+      created_by: ownerId,
     });
   });
 }

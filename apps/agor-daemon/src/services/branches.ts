@@ -9,23 +9,41 @@ import type { ChildProcess } from 'node:child_process';
 import { isDeepStrictEqual } from 'node:util';
 import { analyticsLogger } from '@agor/core/analytics';
 import {
+  assertAsyncEnvironmentCommandConfig,
   createUserProcessEnvironment,
   ENVIRONMENT,
   ensureBranchCloneDepthAllowed,
   ensureBranchStorageModeAllowed,
+  environmentCommandCapabilities,
   getBranchesDir,
+  getBranchHomePath,
+  getTenantDataRoot,
   PAGINATION,
   resolveBranchStorageConfig,
   resolveMultiTenancyConfig,
+  usesAsyncEnvironmentCommands,
 } from '@agor/core/config';
 import {
+  BoardObjectRepository,
   BoardRepository,
+  BranchMaintenanceRepository,
   BranchRepository,
   type BranchWithZoneAndSessions,
+  CapabilityPolicyRepository,
+  EnvironmentCommandRepository,
+  type EnvironmentHealthObservation,
+  EnvironmentHealthRepository,
+  enqueueAfterTenantDatabaseCommit,
+  generateId,
   getCurrentTenantId,
   KnowledgeNamespaceRepository,
+  lockBranchReferenceMutation,
+  RepoRepository,
   runWithTenantDatabaseScope,
+  runWithTenantDatabaseTransaction,
   type TenantScopeAwareDatabase,
+  type TenantScopedDatabase,
+  UsersRepository,
 } from '@agor/core/db';
 import { renderBranchSnapshot } from '@agor/core/environment/render-snapshot';
 import {
@@ -37,48 +55,70 @@ import {
   validateManagedEnvLifecyclePolicy,
   validateRenderedManagedEnvUrlFields,
 } from '@agor/core/environment/webhook';
-import { type Application, BadRequest, Forbidden, NotAuthenticated } from '@agor/core/feathers';
+import {
+  type Application,
+  BadRequest,
+  Conflict,
+  Forbidden,
+  NotAuthenticated,
+  NotFound,
+} from '@agor/core/feathers';
 import type {
   AuthenticatedParams,
-  Board,
   BoardID,
   Branch,
   BranchArchiveOrDeleteOptions,
   BranchArchiveOrDeleteResult,
   BranchEnvironmentUpdate,
+  BranchFsAccessLevel,
   BranchID,
   KnowledgeNamespace,
   QueryParams,
   Repo,
   UserID,
+  UserRole,
   UUID,
 } from '@agor/core/types';
 import {
+  BRANCH_DELETION_COMMAND,
   BRANCH_ENVIRONMENT_CLEARABLE_FIELDS,
+  branchDeletionCommandId,
+  ENVIRONMENT_COMMAND_BUDGET,
+  type EnvironmentCommandAction,
+  environmentCommandTokenId,
   getTeammateConfig,
+  hasMinimumRole,
   isTeammate,
+  ROLES,
+  TEAMMATE_FRAMEWORK_REPO_URL,
 } from '@agor/core/types';
 import { resolveHostIpAddress } from '@agor/core/utils/host-ip';
 import { isAllowedHealthCheckUrl } from '@agor/core/utils/url';
 import { DrizzleService, type Query } from '../adapters/drizzle';
+import {
+  EXECUTOR_COMMAND_TOKEN_PURPOSE,
+  isExecutorSessionTokenPayload,
+} from '../auth/executor-session-token.js';
 import { buildBranchCreatedAnalyticsProperties } from '../utils/analytics-payloads.js';
 import { consumeBranchArchiveDeleteAuthorization } from '../utils/branch-archive-delete-authorization.js';
-import { ensureCanControlBranchEnvironment } from '../utils/branch-authorization.js';
-import { captureBranchRemovalRealtimeVisibility } from '../utils/branch-removal-realtime.js';
+import { ensureCanControlBranchEnvironment, isSuperAdmin } from '../utils/branch-authorization.js';
+import { ensureBranchWorkspaceAccess } from '../utils/branch-workspace-path.js';
 import { shouldUseCloneReferencePath } from '../utils/clone-reference.js';
 import { emitServiceEvent } from '../utils/emit-service-event.js';
+import { dispatchEnvironmentCommand } from '../utils/environment-command-dispatch.js';
 import { resolveDelegatedExecutionHomeKey } from '../utils/executor-delegated-home.js';
 import { parseLastMessageTruncationLength } from '../utils/query-params.js';
-import {
-  generateScopedServiceToken,
-  getDaemonUrl,
-  runExecutorCommand,
-  spawnExecutor,
-} from '../utils/spawn-executor.js';
+import { resolveOwnerHomeStore, resolveSandboxStoragePaths } from '../utils/sandbox-context.js';
+import { getDaemonUrl, requestExecutor, spawnExecutor } from '../utils/spawn-executor.js';
 import { deferWithTenantContext } from '../utils/tenant-db-scope.js';
 import { isKnowledgeAdmin } from './knowledge-access.js';
-import type { InternalEnrichmentParams } from './sessions';
+import { issueExecutorCommandToken } from './session-token-service.js';
+import type { InternalEnrichmentParams, SessionsService } from './sessions';
 import { ensureTeammateKnowledgeNamespace as ensureTeammateKnowledgeNamespaceForBranch } from './teammate-knowledge.js';
+import {
+  lockTenantAuthorizationFence,
+  resolveCurrentTenantAuthorityActor,
+} from './tenant-authorization-fence.js';
 
 /**
  * Branch service params
@@ -101,6 +141,51 @@ export type BranchParams = QueryParams<{
     _agorSqlBranchAccessUserId?: UUID;
   };
 
+function shouldSqlPageBranchQuery(query?: Record<string, unknown>): boolean {
+  if (!query) return true;
+  const allowed = new Set([
+    'archived',
+    'board_id',
+    'repo_id',
+    'branch_id',
+    'zone_id',
+    '$limit',
+    '$skip',
+    '$sort',
+  ]);
+  if (Object.keys(query).some((key) => !allowed.has(key))) return false;
+  // An empty virtual filter historically goes through the generic adapter;
+  // do not turn it into an unrestricted SQL page.
+  if (query.zone_id === '') return false;
+  for (const key of ['archived', 'board_id', 'repo_id', 'zone_id']) {
+    if (query[key] !== undefined && typeof query[key] !== 'boolean' && key === 'archived') {
+      return false;
+    }
+    if (query[key] !== undefined && key !== 'archived' && typeof query[key] !== 'string') {
+      return false;
+    }
+  }
+  if (query.branch_id !== undefined) {
+    const value = query.branch_id;
+    if (typeof value !== 'string') {
+      const ids = value && typeof value === 'object' ? (value as { $in?: unknown }).$in : undefined;
+      if (!Array.isArray(ids) || !ids.every((id) => typeof id === 'string')) return false;
+    }
+  }
+  const sort = query.$sort as Record<string, unknown> | undefined;
+  if (sort) {
+    const columns = new Set(['branch_id', 'name', 'ref', 'created_at', 'updated_at']);
+    if (
+      Object.keys(sort).some(
+        (field) => !columns.has(field) || (sort[field] !== 1 && sort[field] !== -1)
+      )
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
 type EnvironmentLifecycleAction = 'start' | 'stop' | 'restart' | 'nuke';
 
 interface EnvironmentLifecycleExecutorPayload extends Record<string, unknown> {
@@ -111,6 +196,8 @@ interface EnvironmentLifecycleExecutorPayload extends Record<string, unknown> {
   params: {
     branchId: BranchID;
     branchPath: string;
+    cwd: string;
+    principalBranchAccess: Exclude<BranchFsAccessLevel, 'none'>;
     action: EnvironmentLifecycleAction;
     startCommand?: string;
     stopCommand?: string;
@@ -131,6 +218,18 @@ interface ManagedProcess {
   startedAt: Date;
   logPath: string;
 }
+
+/**
+ * Identifies whether a health observation was requested by a user-facing
+ * status action or by the background lifecycle monitor.
+ *
+ * Explicit requests may bypass the periodic cooldown and may return an
+ * ephemeral diagnostic for an errored environment. Automatic observations
+ * are restricted to active lifecycle states.
+ */
+export type EnvironmentHealthCheckOptions =
+  | { intent: 'automatic'; signal?: AbortSignal }
+  | { intent: 'explicit'; signal?: AbortSignal };
 
 /**
  * Extended branches service with custom methods
@@ -214,6 +313,144 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       await this.getManagedEnvExecutionMode(),
       commandType
     );
+  }
+
+  private async runAsyncEnvironmentAction(
+    branch: Branch,
+    action: EnvironmentCommandAction,
+    params?: BranchParams,
+    confirmationOf?: string
+  ): Promise<BranchWithZoneAndSessions> {
+    const config = this.app.get('config');
+    assertAsyncEnvironmentCommandConfig(config);
+    const command =
+      action === 'start'
+        ? branch.start_command
+        : action === 'stop'
+          ? branch.stop_command
+          : branch.nuke_command;
+    if (!command) throw new BadRequest(`No ${action} command configured`);
+    const execution = await this.resolveEnvironmentCommand(command, action);
+    const context =
+      execution.kind === 'command'
+        ? await this.resolveEnvironmentExecutorContext(branch, params)
+        : undefined;
+    const userId = ((params as AuthenticatedParams | undefined)?.user?.user_id ??
+      branch.created_by) as UserID;
+    const attemptId = generateId();
+    // Preparation precedes admission; the row lock rechecks the current snapshot.
+    const sessionToken = context
+      ? await this.withTenantDatabase(params, () =>
+          issueExecutorCommandToken(
+            this.app,
+            environmentCommandTokenId(action, attemptId),
+            userId,
+            branch.branch_id
+          )
+        )
+      : undefined;
+    const environment = await this.withTenantDatabase(params, () =>
+      new EnvironmentCommandRepository(this.db).admit({
+        branch,
+        action,
+        attemptId,
+        userId,
+        confirmationOf,
+      })
+    );
+    const publish = async () => {
+      const current = await this.withTenantDatabase(params, () =>
+        this.get(branch.branch_id, params)
+      );
+      emitServiceEvent(this.app, {
+        path: 'branches',
+        event: 'patched',
+        data: current,
+        params,
+        id: branch.branch_id,
+      });
+      return current;
+    };
+    await publish();
+    try {
+      if (execution.kind === 'webhook') {
+        const scope = { branch_id: branch.branch_id, attempt_id: attemptId, action };
+        await this.withTenantDatabase(params, () =>
+          new EnvironmentCommandRepository(this.db).report({ ...scope, kind: 'claim' })
+        );
+        try {
+          const result = await this.executeEnvironmentWebhook({
+            url: execution.url,
+            branch,
+            commandType: action,
+            triggeredBy: this.extractTriggeredBy(params),
+            maxBytes: ENVIRONMENT_COMMAND_BUDGET.outputBytes,
+          });
+          await this.withTenantDatabase(params, () =>
+            new EnvironmentCommandRepository(this.db).report({
+              ...scope,
+              kind: 'result',
+              outcome: 'succeeded',
+              message: `${action} webhook succeeded; remote resource cleanup/readiness is not certified`,
+              output: result.body,
+              truncated: result.truncated,
+            })
+          );
+        } catch {
+          await this.withTenantDatabase(params, () =>
+            new EnvironmentCommandRepository(this.db).report({
+              ...scope,
+              kind: 'result',
+              outcome: 'unknown',
+              message: `${action} webhook failed or timed out; remote outcome is unknown`,
+            })
+          );
+        }
+      } else {
+        await dispatchEnvironmentCommand(
+          {
+            command: 'environment.lifecycle',
+            sessionToken,
+            daemonUrl: getDaemonUrl(),
+            env: context!.env,
+            params: {
+              branchId: branch.branch_id,
+              branchPath: branch.path,
+              cwd: branch.path,
+              principalBranchAccess: context!.branchFsAccess,
+              ...context!.sandboxMounts,
+              action,
+              startCommand: action === 'start' ? command : undefined,
+              stopCommand: action === 'stop' ? command : undefined,
+              nukeCommand: action === 'nuke' ? command : undefined,
+              appUrl: branch.app_url,
+              attempt: {
+                id: attemptId,
+                claimDeadline: environment.command_attempt!.claim_deadline,
+                commandDeadline: environment.command_attempt!.command_deadline,
+                resultDeadline: environment.command_attempt!.result_deadline,
+                externalJobDeadlineMs: config.execution!.environment_command_job_deadline_ms,
+              },
+            },
+          },
+          {
+            delegatedHomeKey: context!.delegatedHomeKey,
+            preparedEnv: context!.env,
+            logPrefix: `[Environment.${action} ${branch.branch_id}]`,
+            templateVariables: {
+              branch_id: branch.branch_id,
+              user_id: userId,
+              branch_fs_access: context!.branchFsAccess,
+            },
+          }
+        );
+      }
+    } catch {
+      await this.withTenantDatabase(params, () =>
+        new EnvironmentCommandRepository(this.db).dispatchFailed(branch.branch_id, attemptId)
+      );
+    }
+    return publish();
   }
 
   private async validateRenderedEnvironmentActions(snapshot: {
@@ -342,21 +579,87 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
 
   private async resolveEnvironmentExecutorContext(
     branch: Branch,
-    params?: BranchParams
+    params?: BranchParams,
+    requiredFsAccess: Exclude<BranchFsAccessLevel, 'none'> = 'write'
   ): Promise<{
     delegatedHomeKey?: string;
     env: Record<string, string>;
+    executionUserId: UserID;
+    branchFsAccess: Exclude<BranchFsAccessLevel, 'none'>;
+    // Authoritative sandbox mount inputs for the environment executor, mirroring
+    // the session path (register-services). Empty when the fail-closed
+    // filesystem sandbox or its per_user home overlay is off. Without these,
+    // buildSandboxWrap resolves no owner home store and refuses to spawn under
+    // `home_mode: per_user` — which is what broke env logs/start/stop/nuke.
+    sandboxMounts: {
+      sandboxHomeStore?: string;
+      sandboxWorktreesRoot?: string;
+      sandboxBaseRepoPath?: string;
+    };
   }> {
     const config = this.app.get('config');
     return this.withTenantDatabase(params, async () => {
+      const requestUser = (params as AuthenticatedParams | undefined)?.user;
+      const executionUserId = (requestUser?.user_id ??
+        branch.primary_owner_user_id ??
+        branch.created_by) as UserID;
+      // Environment control historically permits tenant admins even when they
+      // do not have an explicit branch entry. Preserve that hierarchy, while
+      // ordinary Managers remain constrained by the separate filesystem
+      // dimension selected in the policy form.
+      const branchFsAccess = hasMinimumRole(requestUser?.role, ROLES.ADMIN)
+        ? 'write'
+        : await ensureBranchWorkspaceAccess(
+            this.branchRepo,
+            branch,
+            executionUserId,
+            requestUser?.role as UserRole | undefined,
+            'all',
+            requiredFsAccess,
+            config.execution?.allow_superadmin === true
+          );
       const delegatedHomeKey = await resolveDelegatedExecutionHomeKey(
         this.db,
-        branch.created_by,
+        executionUserId,
         config
       );
 
-      const env = await createUserProcessEnvironment(branch.created_by, this.db);
-      return { delegatedHomeKey, env };
+      // Resolve the per-owner home store (and worktree / base-repo mounts) the
+      // sandbox needs, keyed to the environment's execution user — the same
+      // resolution the session executor path performs. Only the fail-closed
+      // sandbox with a per_user home requires it; otherwise leave it empty.
+      const sandboxCfg = config.execution?.sandbox;
+      const sandboxMounts: {
+        sandboxHomeStore?: string;
+        sandboxWorktreesRoot?: string;
+        sandboxBaseRepoPath?: string;
+      } = {};
+      if (sandboxCfg?.enabled === true && sandboxCfg?.home_mode === 'per_user') {
+        const tenantId = params?.tenant?.tenant_id ?? getCurrentTenantId();
+        const filesystemHome =
+          (
+            await new UsersRepository(this.db).findById(executionUserId as string)
+          )?.filesystem_home?.trim() || undefined;
+        sandboxMounts.sandboxHomeStore = resolveOwnerHomeStore({
+          config,
+          tenantId,
+          ownerUserId: executionUserId,
+          filesystemHome,
+        });
+        sandboxMounts.sandboxWorktreesRoot = resolveSandboxStoragePaths(
+          config,
+          tenantId
+        ).worktreesRoot;
+        // Only linked worktrees need the shared git dir mounted; a clone-mode
+        // branch carries its own `.git` (mirrors the session executor path).
+        if (branch.storage_mode !== 'clone' && branch.repo_id) {
+          const repo = await new RepoRepository(this.db).findById(branch.repo_id);
+          sandboxMounts.sandboxBaseRepoPath = repo?.local_path ?? undefined;
+        }
+      }
+
+      const env = await createUserProcessEnvironment(executionUserId, this.db);
+      return { delegatedHomeKey, env, executionUserId, branchFsAccess, sandboxMounts };
     });
   }
 
@@ -368,29 +671,19 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     payload: EnvironmentLifecycleExecutorPayload;
     delegatedHomeKey?: string;
     env: Record<string, string>;
+    executionUserId: UserID;
+    branchFsAccess: Exclude<BranchFsAccessLevel, 'none'>;
   }> {
     const { branch, action, params } = options;
-    const userId =
-      ((params as AuthenticatedParams | undefined)?.user?.user_id as UserID | undefined) ??
-      branch.created_by;
-    const appWithToken = this.app as unknown as {
-      sessionTokenService?: import('../services/session-token-service').SessionTokenService;
-    };
-    const sessionToken = await this.withTenantDatabase(
-      params,
-      () =>
-        appWithToken.sessionTokenService?.generateToken(`environment-${action}`, userId, {
-          branchId: branch.branch_id,
-          maxUses: -1,
-        }) ?? Promise.resolve(undefined)
-    );
-    if (!sessionToken) {
-      throw new Error(`Session token service unavailable; cannot dispatch environment ${action}`);
-    }
-
-    const { delegatedHomeKey, env } = await this.resolveEnvironmentExecutorContext(
-      branch,
-      options.params
+    const { delegatedHomeKey, env, executionUserId, branchFsAccess, sandboxMounts } =
+      await this.resolveEnvironmentExecutorContext(branch, options.params);
+    const sessionToken = await this.withTenantDatabase(params, () =>
+      issueExecutorCommandToken(
+        this.app,
+        `environment-${action}`,
+        executionUserId,
+        branch.branch_id
+      )
     );
 
     return {
@@ -404,6 +697,10 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
         params: {
           branchId: branch.branch_id,
           branchPath: branch.path,
+          cwd: branch.path,
+          principalBranchAccess: branchFsAccess,
+          // Sandbox mount inputs consumed by spawn-executor → buildSandboxWrap.
+          ...sandboxMounts,
           action,
           startCommand: branch.start_command,
           stopCommand: branch.stop_command,
@@ -411,6 +708,8 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
           appUrl: branch.app_url,
         },
       },
+      executionUserId,
+      branchFsAccess,
     };
   }
 
@@ -420,7 +719,8 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     params?: BranchParams;
   }): Promise<void> {
     const { branch, action, params } = options;
-    const { payload, delegatedHomeKey, env } = await this.createEnvironmentExecutorPayload(options);
+    const { payload, delegatedHomeKey, env, executionUserId, branchFsAccess } =
+      await this.createEnvironmentExecutorPayload(options);
     const logPrefix = `[Environment.${action} ${branch.name}]`;
 
     const spawnLifecycleExecutor = async () => {
@@ -431,6 +731,8 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
           preparedEnv: env,
           templateVariables: {
             branch_id: branch.branch_id,
+            user_id: executionUserId,
+            branch_fs_access: branchFsAccess,
           },
         });
       } catch (error) {
@@ -464,9 +766,10 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     params?: BranchParams;
   }): Promise<void> {
     const { branch, action } = options;
-    const { payload, delegatedHomeKey, env } = await this.createEnvironmentExecutorPayload(options);
+    const { payload, delegatedHomeKey, env, executionUserId, branchFsAccess } =
+      await this.createEnvironmentExecutorPayload(options);
 
-    const result = await runExecutorCommand(payload, {
+    const result = await requestExecutor(payload, {
       logPrefix: `[Environment.${action} ${branch.name}]`,
       delegatedHomeKey,
       preparedEnv: env,
@@ -476,6 +779,8 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       timeoutMs: 10 * 60_000,
       templateVariables: {
         branch_id: branch.branch_id,
+        user_id: executionUserId,
+        branch_fs_access: branchFsAccess,
       },
     });
 
@@ -496,26 +801,14 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     logsCommand: string,
     params?: BranchParams
   ): Promise<{ stdout: string; stderr: string; truncated: boolean }> {
-    const userId =
-      ((params as AuthenticatedParams | undefined)?.user?.user_id as UserID | undefined) ??
-      branch.created_by;
-    const appWithToken = this.app as unknown as {
-      sessionTokenService?: import('../services/session-token-service').SessionTokenService;
-    };
-    const sessionToken = await this.withTenantDatabase(
-      params,
-      () =>
-        appWithToken.sessionTokenService?.generateToken('environment-logs', userId, {
-          branchId: branch.branch_id,
-          maxUses: -1,
-        }) ?? Promise.resolve(undefined)
+    const capability = environmentCommandCapabilities(this.app.get('config'));
+    if (!capability.shellLogs) throw new BadRequest(capability.shellLogsReason);
+    const { delegatedHomeKey, env, executionUserId, branchFsAccess, sandboxMounts } =
+      await this.resolveEnvironmentExecutorContext(branch, params, 'read');
+    const sessionToken = await this.withTenantDatabase(params, () =>
+      issueExecutorCommandToken(this.app, 'environment-logs', executionUserId, branch.branch_id)
     );
-    if (!sessionToken) {
-      throw new Error('Session token service unavailable; cannot fetch environment logs');
-    }
-
-    const { delegatedHomeKey, env } = await this.resolveEnvironmentExecutorContext(branch, params);
-    const result = await runExecutorCommand(
+    const result = await requestExecutor(
       {
         command: 'environment.logs',
         sessionToken,
@@ -524,6 +817,10 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
         params: {
           branchId: branch.branch_id,
           branchPath: branch.path,
+          cwd: branch.path,
+          principalBranchAccess: branchFsAccess,
+          // Sandbox mount inputs consumed by spawn-executor → buildSandboxWrap.
+          ...sandboxMounts,
           logsCommand,
         },
       },
@@ -534,6 +831,8 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
         timeoutMs: ENVIRONMENT.LOGS_TIMEOUT_MS,
         templateVariables: {
           branch_id: branch.branch_id,
+          user_id: executionUserId,
+          branch_fs_access: branchFsAccess,
         },
       }
     );
@@ -637,19 +936,27 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
    * New branches always start aligned with their board. Branch-specific
    * overrides are an explicit post-create action in the Branch modal.
    *
-   * Store the board defaults on the branch row as a snapshot for legacy readers
-   * and for a sensible starting point if the user later switches to override
-   * mode. Effective access for board-aligned branches still resolves through the
-   * board at read/enforcement time.
+   * The normalized board template remains the only stored authority while the
+   * branch is aligned. The permissions service copies that complete package
+   * when the user later switches to override mode.
    */
   private async applyBranchCreateDefaults(data: Partial<Branch>): Promise<Partial<Branch>> {
     const withDefaults: Partial<Branch> = { ...data };
-    const { defaultMode } = resolveBranchStorageConfig();
+    if (
+      withDefaults.base_remote_url !== undefined &&
+      withDefaults.base_remote_url !== TEAMMATE_FRAMEWORK_REPO_URL
+    ) {
+      throw new BadRequest(
+        'base_remote_url is restricted to the canonical Agor teammate template repository.'
+      );
+    }
+    const config = this.app.get('config');
+    const { defaultMode } = resolveBranchStorageConfig(config);
     const storageMode = withDefaults.storage_mode ?? defaultMode;
-    ensureBranchStorageModeAllowed(storageMode);
+    ensureBranchStorageModeAllowed(storageMode, config);
     if (
       storageMode === 'worktree' &&
-      resolveMultiTenancyConfig(this.app.get('config')).mode === 'required_from_auth'
+      resolveMultiTenancyConfig(config).mode === 'required_from_auth'
     ) {
       throw new BadRequest(
         "storage_mode='worktree' is unavailable in hosted multi-tenant mode; use clone storage."
@@ -663,7 +970,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
         throw new BadRequest('clone_depth must be a positive integer when set.');
       }
       try {
-        ensureBranchCloneDepthAllowed(withDefaults.clone_depth);
+        ensureBranchCloneDepthAllowed(withDefaults.clone_depth, config);
       } catch (error) {
         throw new BadRequest(error instanceof Error ? error.message : String(error));
       }
@@ -675,17 +982,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     // New branches always start aligned with their board. Branch-specific
     // overrides are an explicit post-create action in the Branch modal.
     withDefaults.permission_source = 'board';
-
-    if (withDefaults.permission_source === 'board' && withDefaults.board_id) {
-      const board = (await this.boardRepo.findById(withDefaults.board_id)) as Board | null;
-      if (board) {
-        withDefaults.others_can = board.default_others_can ?? 'session';
-        withDefaults.others_fs_access = board.default_others_fs_access ?? 'read';
-        withDefaults.dangerously_allow_session_sharing =
-          board.default_dangerously_allow_session_sharing ?? false;
-      }
-      return withDefaults;
-    }
+    withDefaults.permission_binding = 'inherit';
 
     return withDefaults;
   }
@@ -700,6 +997,11 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     const assertHasBoard = (item: Partial<Branch>) => {
       if (!item.board_id) {
         throw new BadRequest('board_id is required when creating a branch');
+      }
+      if (Object.hasOwn(item, 'sdk_home')) {
+        throw new BadRequest(
+          'sdk_home is server-managed and cannot be set through the Branch API.'
+        );
       }
     };
 
@@ -765,7 +1067,10 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     params?: BranchParams
   ): Promise<Branch> {
     if (!isTeammate(branch)) return branch;
-    const userId = (params?.user?.user_id as UserID | undefined) ?? (branch.created_by as UserID);
+    const userId =
+      (params?.user?.user_id as UserID | undefined) ??
+      (branch.primary_owner_user_id as UserID | undefined) ??
+      (branch.created_by as UserID);
     const result = await ensureTeammateKnowledgeNamespaceForBranch(
       this.db,
       branch.branch_id,
@@ -779,7 +1084,6 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     const userId = user?.user_id as UserID | undefined;
     if (isKnowledgeAdmin(user as never)) return;
     if (!userId) throw new NotAuthenticated('Authentication required');
-    if (branch.created_by === userId) return;
     if (await this.branchRepo.isOwner(branch.branch_id, userId)) {
       return;
     }
@@ -880,7 +1184,9 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     return ensureTeammateKnowledgeNamespaceForBranch(
       this.db,
       branch.branch_id,
-      (params?.user?.user_id as UserID | undefined) ?? (branch.created_by as UserID)
+      (params?.user?.user_id as UserID | undefined) ??
+        (branch.primary_owner_user_id as UserID | undefined) ??
+        (branch.created_by as UserID)
     );
   }
 
@@ -942,7 +1248,8 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
   private async maintainPrimaryTeammateAfterPatch(
     previousBranch: Branch,
     updatedBranch: Branch,
-    params?: BranchParams
+    params?: BranchParams,
+    strict = false
   ): Promise<void> {
     const oldBoardId = previousBranch.board_id;
     const newBoardId = updatedBranch.board_id;
@@ -997,6 +1304,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
         }
       }
     } catch (error) {
+      if (strict) throw error;
       console.warn(
         `⚠️ Failed to maintain primary teammate pointer for branch ${updatedBranch.branch_id}:`,
         error instanceof Error ? error.message : String(error)
@@ -1016,6 +1324,54 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     data: Partial<Branch>,
     params?: BranchParams
   ): Promise<BranchWithZoneAndSessions> {
+    return this.patchWithBoardMovement(id, data, params);
+  }
+
+  private async patchWithBoardMovement(
+    id: BranchID,
+    data: Partial<Branch>,
+    params?: BranchParams
+  ): Promise<BranchWithZoneAndSessions> {
+    if (Object.hasOwn(data, 'board_id')) {
+      return runWithTenantDatabaseTransaction(this.db, params?.tenant?.tenant_id, async (db) => {
+        // Moving changes effective authority. Serialize with policy writers and
+        // re-check the actor and both boards before any metadata/placement writes.
+        await lockTenantAuthorizationFence(db, params);
+        // Reference reconciliation locks User rows too. Take its lock before
+        // resolving/locking the actor, even when custom_context accompanies a move.
+        await lockBranchReferenceMutation(db);
+        return this.patchBranch(id, data, params, db);
+      });
+    }
+    return this.patchBranch(id, data, params);
+  }
+
+  private async patchBranch(
+    id: BranchID,
+    data: Partial<Branch>,
+    params?: BranchParams,
+    operationDb?: TenantScopedDatabase
+  ): Promise<BranchWithZoneAndSessions> {
+    if (params?.provider && Object.hasOwn(data, 'filesystem_status')) {
+      const token = (params as AuthenticatedParams).authentication?.payload;
+      if (
+        !isExecutorSessionTokenPayload(token) ||
+        token.purpose !== EXECUTOR_COMMAND_TOKEN_PURPOSE ||
+        token.session_id !== 'git.branch.add' ||
+        token.branch_id !== id ||
+        !['ready', 'failed'].includes(String(data.filesystem_status))
+      ) {
+        throw new BadRequest('filesystem_status is managed by branch materialization.');
+      }
+    }
+    if (Object.hasOwn(data, 'sdk_home')) {
+      throw new BadRequest(
+        'sdk_home is server-managed and cannot be changed through the Branch API.'
+      );
+    }
+    if (Object.hasOwn(data, 'base_remote_url')) {
+      throw new BadRequest('base_remote_url is immutable after branch creation.');
+    }
     // Get current branch to check type/board changes
     const currentBranch = await super.get(id, params);
     await this.assertCanMutateTeammateKnowledgeConfig(currentBranch, data, params);
@@ -1026,19 +1382,54 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     const newBoardId = data.board_id;
     const boardChanged = boardIdProvided && oldBoardId !== newBoardId;
 
-    if (
-      boardChanged &&
-      currentBranch.permission_source === 'board' &&
-      data.permission_source !== 'override'
-    ) {
-      throw new BadRequest(
-        'This branch is aligned with board permissions. Switch to "Override board-level permissions" before moving it to another board.'
-      );
+    if (boardChanged) {
+      if (!newBoardId && currentBranch.permission_binding === 'inherit') {
+        throw new BadRequest(
+          'An inherited branch must belong to a board. Choose a destination board.'
+        );
+      }
+      const targetBoard = newBoardId ? await this.boardRepo.findById(newBoardId) : null;
+      if (newBoardId && !targetBoard) throw new NotFound('Destination board not found');
+      const current = await resolveCurrentTenantAuthorityActor(operationDb!, params, {
+        allowActorlessTrusted: true,
+      });
+      if (current && !current.service) {
+        const policies = new CapabilityPolicyRepository(operationDb!);
+        const branchAccess = await policies.resolveBranchAccess(
+          currentBranch.branch_id,
+          current.user_id
+        );
+        // Only a branch Manager (or its immutable owner) can transfer its data.
+        // Board Editor on both sides is additionally required; visibility alone
+        // must never permit attaching a private branch to a more public board.
+        if (
+          !branchAccess.capabilities.includes('branch.manage') &&
+          !isSuperAdmin(current.role, this.app.get('config').execution?.allow_superadmin === true)
+        ) {
+          throw new Forbidden('Branch Manager access is required to move this branch');
+        }
+        if (!hasMinimumRole(current.role, ROLES.ADMIN)) {
+          for (const boardId of [oldBoardId, newBoardId]) {
+            if (!boardId) continue;
+            const access = await policies.resolveBoardAccess(boardId, current.user_id);
+            if (!access.capabilities.includes('board.attach_branch')) {
+              throw new Forbidden(
+                'Board Editor or Manager access is required on both boards to move a branch'
+              );
+            }
+          }
+        }
+      }
     }
 
     // Call parent patch
     const updatedBranch = (await super.patch(id, data, params)) as Branch;
-    await this.maintainPrimaryTeammateAfterPatch(currentBranch, updatedBranch, params);
+    await this.maintainPrimaryTeammateAfterPatch(
+      currentBranch,
+      updatedBranch,
+      params,
+      boardChanged
+    );
 
     // Handle board_objects changes if board_id changed
     if (!boardIdProvided) {
@@ -1056,26 +1447,38 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     }
 
     if (boardChanged) {
-      const boardObjectsService = this.getBoardObjectsService();
+      const boardObjects = new BoardObjectRepository(operationDb!);
 
       try {
         // First, check if a board_object already exists
-        const existingObject = (await boardObjectsService.findByBranchId(id)) as {
-          object_id: string;
-        } | null;
+        const existingObject = await boardObjects.findByBranchId(currentBranch.branch_id);
 
         if (existingObject) {
           // Board object exists - delete it first
-          await boardObjectsService.remove(existingObject.object_id);
+          await boardObjects.remove(existingObject.object_id);
+          emitServiceEvent(this.app, {
+            path: 'board-objects',
+            event: 'removed',
+            data: existingObject,
+            params,
+            id: existingObject.object_id,
+          });
         }
 
         // Now create new board_object if board_id is set
         if (newBoardId) {
           const position = await this.computeDefaultBoardPositionForBranch(newBoardId, id, params);
-          await boardObjectsService.create({
+          const createdObject = await boardObjects.create({
             board_id: newBoardId,
-            branch_id: id,
+            branch_id: currentBranch.branch_id,
             position,
+          });
+          emitServiceEvent(this.app, {
+            path: 'board-objects',
+            event: 'created',
+            data: createdObject,
+            params,
+            id: createdObject.object_id,
           });
         }
       } catch (error) {
@@ -1083,7 +1486,8 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
           `❌ Failed to manage board_objects for branch ${id}:`,
           error instanceof Error ? error.message : String(error)
         );
-        // Don't throw - allow branch patch to succeed even if board_object management fails
+        // The enclosing move transaction rolls back branch, pointers and placement.
+        throw error;
       }
     }
 
@@ -1101,27 +1505,21 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
   }
 
   async update(id: BranchID, data: Partial<Branch>, params?: BranchParams): Promise<Branch> {
-    const currentBranch = await super.get(id, params);
-    await this.assertCanMutateTeammateKnowledgeConfig(currentBranch, data, params);
-    this.assertTeammateKindIsStable(currentBranch, data);
-    if (
-      currentBranch.board_id !== data.board_id &&
-      currentBranch.permission_source === 'board' &&
-      data.permission_source !== 'override'
-    ) {
-      throw new BadRequest(
-        'This branch is aligned with board permissions. Switch to "Override board-level permissions" before moving it to another board.'
-      );
-    }
-    return super.update(id, data, params) as Promise<Branch>;
+    // The adapter's update is a merge too. Use the same authorization and
+    // relocation path instead of bypassing canvas and teammate maintenance.
+    return this.patchWithBoardMovement(id, data, params);
   }
 
   /**
-   * Override get to enrich with zone information
-   *
-   * Session activity enrichment is opt-in via include_sessions query parameter
+   * Load the canonical branch shape without entering the Feathers method
+   * wrapper. Internal-only operations use this deliberately when their caller
+   * already owns the authority context and must not manufacture nested
+   * `branches.get` requests.
    */
-  async get(id: BranchID, params?: BranchParams): Promise<BranchWithZoneAndSessions> {
+  private async getCanonicalBranch(
+    id: BranchID,
+    params?: BranchParams
+  ): Promise<BranchWithZoneAndSessions> {
     // Check both query params and root-level params (root-level bypasses Feathers query filtering)
     const includeSessionsQuery = params?.query?.include_sessions;
     const includeSessionsRoot = params?._include_sessions;
@@ -1142,6 +1540,15 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     }
 
     return withZone as BranchWithZoneAndSessions;
+  }
+
+  /**
+   * Override get to enrich with zone information.
+   *
+   * Session activity enrichment is opt-in via include_sessions query parameter
+   */
+  async get(id: BranchID, params?: BranchParams): Promise<BranchWithZoneAndSessions> {
+    return this.getCanonicalBranch(id, params);
   }
 
   /**
@@ -1209,7 +1616,9 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     const zoneId = params?.query?.zone_id;
     let findParams = params;
 
-    if (zoneId) {
+    // Simple inventory pages can correlate zone membership in SQL rather than
+    // materializing every matching ID. Preserve the generic adapter fallback.
+    if (zoneId && !shouldSqlPageBranchQuery(params?.query)) {
       const branchIdsInZone = await this.branchRepo.findBranchIdsByZone(zoneId);
       const existingBranchFilter = params?.query?.branch_id;
       let filteredBranchIds = branchIdsInZone;
@@ -1237,6 +1646,41 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       } as BranchParams;
     }
 
+    const query = findParams?.query as Record<string, unknown> | undefined;
+    if (shouldSqlPageBranchQuery(query)) {
+      const branchFilter = query?.branch_id;
+      const branchIds =
+        typeof branchFilter === 'string'
+          ? [branchFilter as BranchID]
+          : branchFilter &&
+              typeof branchFilter === 'object' &&
+              Array.isArray((branchFilter as { $in?: unknown }).$in)
+            ? (branchFilter as { $in: BranchID[] }).$in
+            : undefined;
+      const requestedLimit =
+        typeof query?.$limit === 'number' ? query.$limit : PAGINATION.DEFAULT_LIMIT;
+      const limit = Math.min(requestedLimit, PAGINATION.MAX_LIMIT);
+      const skip = typeof query?.$skip === 'number' ? query.$skip : 0;
+      const page = await this.branchRepo.findPage({
+        repo_id: typeof query?.repo_id === 'string' ? (query.repo_id as UUID) : undefined,
+        board_id: typeof query?.board_id === 'string' ? (query.board_id as BoardID) : undefined,
+        zone_id: typeof query?.zone_id === 'string' ? query.zone_id : undefined,
+        archived: typeof query?.archived === 'boolean' ? query.archived : undefined,
+        branchIds,
+        visibleToUserId: findParams?._agorSqlBranchAccessUserId,
+        limit,
+        offset: skip,
+        sort: query?.$sort as Record<string, 1 | -1> | undefined,
+      });
+      const enriched = await this.branchRepo.enrichManyWithZoneInfo(page.data);
+      return {
+        total: page.total,
+        limit,
+        skip,
+        data: enriched,
+      };
+    }
+
     // Use default find to ensure all hooks and scoping are applied (including repo_id filter)
     const result = await super.find(findParams);
 
@@ -1258,106 +1702,143 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
    * Delegates filesystem removal to executor for Unix isolation.
    */
   async remove(id: BranchID, params?: BranchParams): Promise<Branch> {
-    const { deleteFromFilesystem } = params?.query || {};
-    const tenantId = params?.tenant?.tenant_id ?? getCurrentTenantId();
-
-    // Get branch details before deletion
-    const branch = await this.withTenantDatabase(params, () => this.get(id, params));
-    // Remove from database FIRST for instant UI feedback
-    // CASCADE will clean up related comments automatically
-    const result = await super.remove(id, params);
-
-    // Then remove from filesystem via executor (fire-and-forget)
-    // Executor handles its own logging and error reporting via Feathers
-    if (deleteFromFilesystem) {
-      console.log(`🗑️  Spawning executor to remove branch from filesystem: ${branch.path}`);
-
-      // Resolve the optional delegated execution-home key. Local execution
-      // never selects or impersonates a host account.
-      const delegatedHomeKey = await resolveDelegatedExecutionHomeKey(
-        this.db,
-        branch.created_by,
-        this.app.get('config')
+    const retained: unknown = params?.query?.deleteFromFilesystem;
+    if (retained === false || retained === 'false') {
+      throw new BadRequest(
+        'Permanent deletion always removes owned files. Archive to retain data; metadata-only deletion is no longer supported.'
       );
-
-      // Generate session token for executor authentication. Hook chain
-      // enforces auth before we get here, so non-null assertion is safe.
-      const userId = (params as AuthenticatedParams).user!.user_id as UserID;
-      const appWithToken = this.app as unknown as {
-        sessionTokenService?: import('../services/session-token-service').SessionTokenService;
-      };
-
-      // Generate token and spawn executor (fire-and-forget)
-      appWithToken.sessionTokenService
-        ?.generateToken('branch-remove', userId, { branchId: branch.branch_id, maxUses: -1 })
-        .then((sessionToken) => {
-          spawnExecutor(
-            {
-              command: 'git.branch.remove',
-              sessionToken,
-              daemonUrl: getDaemonUrl(),
-              params: {
-                branchId: branch.branch_id,
-                branchPath: branch.path,
-                branchesRoot: getBranchesDir(tenantId),
-                deleteDbRecord: false, // Already deleted above
-                // Clean up the branch if it was created by Agor
-                branch: branch.ref,
-                deleteBranch: branch.new_branch,
-                // Branch storage mode — executor needs this to pick the right
-                // teardown path (clone-mode just rm -rf; worktree-mode also
-                // runs `git worktree remove --force` against the base repo).
-                storageMode: branch.storage_mode ?? 'worktree',
-              },
-            },
-            {
-              logPrefix: `[BranchesService.remove ${branch.name}]`,
-              delegatedHomeKey: delegatedHomeKey,
-            }
-          );
-        })
-        .catch((error) => {
-          console.error(
-            `⚠️  Failed to generate session token for branch removal:`,
-            error instanceof Error ? error.message : String(error)
-          );
-        });
     }
-
-    return result as Branch;
+    return this.requestPermanentDeletion(id, params);
   }
 
-  /**
-   * Internal metadata-only hard-delete primitive.
-   *
-   * The visibility snapshot, row deletion, and post-commit tombstone enqueue
-   * share one tenant transaction. This method deliberately bypasses the
-   * registered `remove` wrapper and its filesystem/Unix hooks; it is not listed
-   * in the service's transport methods.
-   */
+  /** Internal callers converge on the same durable operation; no metadata bypass. */
   async removeMetadataWithRealtime(id: BranchID, params?: BranchParams): Promise<Branch> {
-    const removalParams = params ?? ({} as BranchParams);
-    return this.withTenantDatabase(removalParams, async () => {
-      const branch = (await super.get(id, removalParams)) as Branch;
-      await captureBranchRemovalRealtimeVisibility({
-        params: removalParams,
-        branchRepository: this.branchRepo,
-        branchId: branch.branch_id,
-      });
+    return this.requestPermanentDeletion(id, params);
+  }
 
-      // Feathers replaces registered standard methods with event-producing
-      // wrappers. The adapter call performs only the metadata deletion; the
-      // explicit event below is the single authoritative tombstone.
-      const removedBranch = (await super.remove(branch.branch_id, removalParams)) as Branch;
-      emitServiceEvent(this.app, {
-        path: 'branches',
-        event: 'removed',
-        data: removedBranch,
-        params: removalParams,
-        id: removedBranch.branch_id,
-      });
-      return removedBranch;
+  /** Best-effort attachment closure shared by archive and permanent deletion. */
+  private closeBranchTerminals(branchId: BranchID, tenantId: string): void {
+    const event = { tenantId, branchId };
+    this.app.emit?.('terminal:close-branch', event);
+    this.app.io?.serverSideEmit?.('terminal:close-branch', event);
+  }
+
+  private async requestPermanentDeletion(id: BranchID, params?: BranchParams): Promise<Branch> {
+    const user = (params as AuthenticatedParams | undefined)?.user;
+    if (!user) throw new NotAuthenticated('Authenticated branch management authority is required');
+    const config = this.app.get('config');
+    if (
+      config.execution?.unix_user_mode === 'delegated' ||
+      config.execution?.executor_command_template ||
+      (config.deployment?.mode === 'ha' && config.deployment.ha?.execution_topology === 'external')
+    ) {
+      throw new Conflict(
+        'Permanent deletion requires a supported local storage executor. Delegated/external deletion containment is not available.'
+      );
+    }
+    const branch = await this.withTenantDatabase(params, () => this.get(id, params));
+    const tenantId = params?.tenant?.tenant_id ?? getCurrentTenantId();
+    if (!tenantId) throw new Forbidden('Deletion tenant context is required');
+    await this.withTenantDatabase(params, () =>
+      ensureBranchWorkspaceAccess(
+        this.branchRepo,
+        branch,
+        user.user_id,
+        user.role as UserRole,
+        'all',
+        'write',
+        config.execution?.allow_superadmin === true
+      )
+    );
+    const context = await this.resolveEnvironmentExecutorContext(branch, params);
+    const repo = await this.withTenantDatabase(params, () =>
+      new RepoRepository(this.db).findById(branch.repo_id)
+    );
+    if (!repo?.local_path)
+      throw new Conflict('Authoritative base repository location is unavailable');
+    const admission = await this.withTenantDatabase(params, () =>
+      new BranchMaintenanceRepository(this.db).claim(
+        branch.branch_id,
+        'delete',
+        user.user_id as UserID,
+        async (tx) => {
+          const repository = new BranchRepository(tx);
+          const current = await repository.findById(branch.branch_id);
+          if (
+            !current ||
+            current.path !== branch.path ||
+            current.ref !== branch.ref ||
+            current.repo_id !== branch.repo_id
+          )
+            throw new Conflict('Branch location changed; refresh before deleting');
+          await ensureBranchWorkspaceAccess(
+            repository,
+            current,
+            user.user_id,
+            user.role as UserRole,
+            'all',
+            'write',
+            config.execution?.allow_superadmin === true
+          );
+        }
+      )
+    );
+    if (admission.acquired) {
+      const executionId = await this.withTenantDatabase(params, () =>
+        new BranchMaintenanceRepository(this.db).beginExecution(admission.claim)
+      );
+      const sessionToken = await this.withTenantDatabase(params, () =>
+        issueExecutorCommandToken(
+          this.app,
+          branchDeletionCommandId(executionId),
+          user.user_id,
+          branch.branch_id
+        )
+      );
+      const dispatch = () => {
+        this.closeBranchTerminals(branch.branch_id, String(tenantId));
+        // No daemon waits for completion; the executor drives scoped DB steps.
+        // Unacknowledged dispatch is diagnosed by runtime reconciliation.
+        spawnExecutor(
+          {
+            command: BRANCH_DELETION_COMMAND,
+            daemonUrl: getDaemonUrl(),
+            sessionToken,
+            params: {
+              branchId: branch.branch_id,
+              operationId: admission.claim.operation_id,
+              generation: admission.claim.generation,
+              executionId,
+              branchPath: branch.path,
+              branchesRoot: getBranchesDir(tenantId),
+              repoPath: repo.local_path,
+              branchHome: getBranchHomePath(branch.branch_id, tenantId),
+              tenantDataRoot: getTenantDataRoot(tenantId),
+              storageMode: branch.storage_mode ?? 'worktree',
+            },
+          },
+          {
+            preparedEnv: context.env,
+            logPrefix: `[Branch.delete ${branch.branch_id}]`,
+            templateVariables: {
+              branch_id: branch.branch_id,
+              user_id: user.user_id,
+              branch_fs_access: context.branchFsAccess,
+            },
+          }
+        );
+      };
+      if (!enqueueAfterTenantDatabaseCommit(dispatch)) dispatch();
+    }
+    const current = await this.withTenantDatabase(params, () => this.get(branch.branch_id, params));
+    emitServiceEvent(this.app, {
+      path: 'branches',
+      event: 'patched',
+      data: current,
+      params,
+      id: branch.branch_id,
     });
+    return current;
   }
 
   /**
@@ -1385,8 +1866,50 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     consumeBranchArchiveDeleteAuthorization(params, id, options.metadataAction);
 
     const { metadataAction, filesystemAction } = options;
+    if (metadataAction === 'delete') {
+      if (filesystemAction !== 'deleted')
+        throw new BadRequest(
+          'Permanent deletion removes all owned files; select Delete completely or archive instead.'
+        );
+      return this.requestPermanentDeletion(id, params);
+    }
+
     const branch = await this.withTenantDatabase(params, () => this.get(id, params));
-    const currentUserId = (params as AuthenticatedParams).user!.user_id as UUID;
+    if (
+      branch.environment_instance?.command_attempt &&
+      branch.environment_instance.status !== 'stopped' &&
+      branch.environment_instance.status !== 'error'
+    ) {
+      throw new Conflict(
+        'Stop the asynchronous environment and inspect its result before archiving or deleting this branch'
+      );
+    }
+    const requestUser = (params as AuthenticatedParams).user!;
+    const currentUserId = requestUser.user_id as UUID;
+    const branchFsAccess =
+      filesystemAction === 'preserved'
+        ? undefined
+        : await this.withTenantDatabase(params, () =>
+            ensureBranchWorkspaceAccess(
+              this.branchRepo,
+              branch,
+              requestUser.user_id,
+              requestUser.role as UserRole | undefined,
+              'all',
+              'write',
+              this.app.get('config').execution?.allow_superadmin === true
+            )
+          );
+
+    const removalRepo =
+      filesystemAction === 'deleted'
+        ? await this.withTenantDatabase(
+            params,
+            () => this.app.service('repos').get(branch.repo_id, params) as Promise<Repo>
+          )
+        : undefined;
+    if (filesystemAction === 'deleted' && !removalRepo?.local_path)
+      throw new Conflict('Authoritative base repository location is unavailable');
 
     // Stop environment if running
     if (branch.environment_instance?.status === 'running') {
@@ -1401,112 +1924,81 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       }
     }
 
-    // Perform filesystem action via executor (fire-and-forget)
-    // Executor handles its own logging and error reporting via Feathers
-    // Use the executor so filesystem operations follow the selected substrate.
+    // Prepare the one-purpose filesystem action now, but dispatch it only
+    // after metadata succeeds. In particular, an unfinished-task delete guard
+    // must fail before any branch directory can be removed.
     const userId = (params as AuthenticatedParams | undefined)?.user?.user_id as UserID | undefined;
-    const appWithToken = this.app as unknown as {
-      sessionTokenService?: import('../services/session-token-service').SessionTokenService;
-    };
-
-    if (filesystemAction === 'cleaned') {
-      console.log(`🧹 Spawning executor to clean branch filesystem: ${branch.path}`);
-
-      // Infrastructure cleanup uses the canonical branch path supplied by the
-      // daemon rather than reconstructing it from an execution home.
-
-      void this.withTenantDatabase(
-        params,
-        () =>
-          appWithToken.sessionTokenService?.generateToken('branch-clean', userId ?? currentUserId, {
-            branchId: branch.branch_id,
-            maxUses: -1,
-          }) ?? Promise.reject(new Error('Session token service unavailable'))
-      )
-        .then((sessionToken) => {
-          spawnExecutor(
-            {
-              command: 'git.branch.clean',
-              sessionToken,
-              daemonUrl: getDaemonUrl(),
-              params: {
-                branchPath: branch.path,
-              },
+    const delegatedHomeKey =
+      filesystemAction === 'preserved'
+        ? undefined
+        : await resolveDelegatedExecutionHomeKey(
+            this.db,
+            userId ?? currentUserId,
+            this.app.get('config')
+          );
+    const filesystemExecutionUserId = userId ?? currentUserId;
+    const dispatchFilesystemAction = (): void => {
+      if (filesystemAction === 'cleaned') {
+        console.log(`🧹 Spawning executor to clean branch filesystem: ${branch.path}`);
+        spawnExecutor(
+          {
+            command: 'git.branch.clean',
+            params: {
+              branchPath: branch.path,
+              cwd: branch.path,
+              principalBranchAccess: branchFsAccess,
             },
-            {
-              logPrefix: `[BranchesService.clean ${branch.name}]`,
-            }
-          );
-        })
-        .catch((error) => {
-          console.error(
-            `⚠️  Failed to generate session token for branch cleaning:`,
-            error instanceof Error ? error.message : String(error)
-          );
-        });
-    } else if (filesystemAction === 'deleted') {
+          },
+          {
+            logPrefix: `[BranchesService.clean ${branch.name}]`,
+            delegatedHomeKey,
+            templateVariables: {
+              branch_id: branch.branch_id,
+              user_id: filesystemExecutionUserId,
+              branch_fs_access: branchFsAccess,
+            },
+          }
+        );
+        return;
+      }
+      if (filesystemAction !== 'deleted') return;
+
       console.log(`🗑️  Spawning executor to delete branch from filesystem: ${branch.path}`);
       const tenantId = params?.tenant?.tenant_id ?? getCurrentTenantId();
 
-      // Infrastructure cleanup uses the canonical branch path supplied by the
-      // daemon rather than reconstructing it from an execution home.
+      spawnExecutor(
+        {
+          command: 'git.branch.remove',
+          params: {
+            branchId: branch.branch_id,
+            branchPath: branch.path,
+            branchesRoot: getBranchesDir(tenantId),
+            repoPath: removalRepo!.local_path,
+            // Clean up the branch if it was created by Agor.
+            branch: branch.ref,
+            deleteBranch: branch.new_branch,
+            // Branch storage mode — see sibling call site comment in
+            // `BranchesService.remove` above for why this matters.
+            storageMode: branch.storage_mode ?? 'worktree',
+          },
+        },
+        {
+          logPrefix: `[BranchesService.delete ${branch.name}]`,
+          delegatedHomeKey,
+          templateVariables: {
+            branch_id: branch.branch_id,
+            user_id: filesystemExecutionUserId,
+            branch_fs_access: branchFsAccess,
+          },
+        }
+      );
+    };
 
-      void this.withTenantDatabase(
-        params,
-        () =>
-          appWithToken.sessionTokenService?.generateToken(
-            'branch-delete',
-            userId ?? currentUserId,
-            {
-              branchId: branch.branch_id,
-              maxUses: -1,
-            }
-          ) ?? Promise.reject(new Error('Session token service unavailable'))
-      )
-        .then((sessionToken) => {
-          spawnExecutor(
-            {
-              command: 'git.branch.remove',
-              sessionToken,
-              daemonUrl: getDaemonUrl(),
-              params: {
-                branchId: branch.branch_id,
-                branchPath: branch.path,
-                branchesRoot: getBranchesDir(tenantId),
-                deleteDbRecord: false, // Daemon handles DB deletion separately
-                // Clean up the branch if it was created by Agor
-                branch: branch.ref,
-                deleteBranch: branch.new_branch,
-                // Branch storage mode — see sibling call site comment in
-                // `BranchesService.remove` above for why this matters.
-                storageMode: branch.storage_mode ?? 'worktree',
-              },
-            },
-            {
-              logPrefix: `[BranchesService.delete ${branch.name}]`,
-            }
-          );
-        })
-        .catch((error) => {
-          console.error(
-            `⚠️  Failed to generate session token for branch deletion:`,
-            error instanceof Error ? error.message : String(error)
-          );
-        });
-    }
-
-    // Retire branch-scoped terminal attachments before archive/delete. The
-    // local event handles this replica; serverSideEmit carries only trusted
-    // tenant/branch lifecycle metadata (never terminal contents) to peer
-    // replicas when the HA adapter is available.
+    // Retire branch-scoped terminals only after the metadata transition wins.
+    // The local event handles this replica; serverSideEmit carries only the
+    // trusted tenant/branch lifecycle tuple to peers.
     const terminalTenantId = params?.tenant?.tenant_id ?? getCurrentTenantId();
     if (!terminalTenantId) throw new Error('Missing tenant context for branch terminal cleanup');
-    const terminalClose = {
-      tenantId: String(terminalTenantId),
-      branchId: branch.branch_id,
-    };
-    this.app.emit?.('terminal:close-branch', terminalClose);
-    this.app.io?.serverSideEmit?.('terminal:close-branch', terminalClose);
 
     // Metadata action: archive or delete
     if (metadataAction === 'archive') {
@@ -1540,38 +2032,20 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
         id: archivedBranch.branch_id,
       });
 
-      // Archive all sessions in this branch
-      // Use internal call (no provider) to bypass RBAC hooks that would ignore branch_id filter
-      const sessionsService = this.app.service('sessions');
-      const sessionsResult = await sessionsService.find({
-        query: { branch_id: id, $limit: 1000 },
-        paginate: false,
-      });
-      const sessions = Array.isArray(sessionsResult) ? sessionsResult : sessionsResult.data;
+      // Archive every active session in one branch-local lifecycle operation.
+      // Existing independently archived reasons are intentionally preserved.
+      const sessionsService = this.app.service('sessions') as unknown as SessionsService;
+      const archivedSessions = await this.withTenantDatabase(params, () =>
+        sessionsService.archiveBranchSessions(id, { ...params, provider: undefined })
+      );
 
-      for (const session of sessions) {
-        await sessionsService.patch(
-          session.session_id,
-          {
-            archived: true,
-            archived_reason: 'branch_archived',
-          },
-          { provider: undefined } // Bypass RBAC - this is an internal cascade operation
-        );
-      }
+      console.log(`✅ Archived branch ${branch.name} and ${archivedSessions.count} session(s)`);
 
-      console.log(`✅ Archived branch ${branch.name} and ${sessions.length} session(s)`);
-
+      this.closeBranchTerminals(branch.branch_id, String(terminalTenantId));
+      dispatchFilesystemAction();
       return archivedBranch;
-    } else {
-      // Delete: Hard delete (CASCADE will remove sessions, messages, tasks)
-      console.log(`🗑️  Permanently deleting branch: ${branch.name}`);
-
-      await this.removeMetadataWithRealtime(id, params);
-
-      console.log(`✅ Permanently deleted branch ${branch.name}`);
-      return { deleted: true, branch_id: id };
     }
+    throw new BadRequest('Unsupported archive action');
   }
 
   /**
@@ -1595,6 +2069,20 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     if (!branch.archived) {
       throw new Error(`Branch ${branch.name} is not archived`);
     }
+
+    const requestUser = params?.user;
+    if (!requestUser) throw new NotAuthenticated('Authentication required');
+    const branchFsAccess = await this.withTenantDatabase(params, () =>
+      ensureBranchWorkspaceAccess(
+        this.branchRepo,
+        branch,
+        requestUser.user_id,
+        requestUser.role as UserRole | undefined,
+        'all',
+        'write',
+        this.app.get('config').execution?.allow_superadmin === true
+      )
+    );
 
     console.log(`📦 Unarchiving branch: ${branch.name}`);
 
@@ -1626,10 +2114,14 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
 
     // Recreate the git branch on filesystem if the directory is missing
     // (e.g., it was archived with filesystemAction: 'deleted')
-    const statusToken = generateScopedServiceToken(
-      this.app as unknown as { settings: { authentication?: { secret?: string } } }
+    const userId = requestUser.user_id;
+    const statusToken = await issueExecutorCommandToken(
+      this.app,
+      'branch-filesystem-status',
+      userId,
+      branch.branch_id
     );
-    const statusResult = await runExecutorCommand(
+    const statusResult = await requestExecutor(
       {
         command: 'branch.filesystem.status',
         sessionToken: statusToken,
@@ -1643,6 +2135,11 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
           params?.user?.user_id,
           this.app.get('config')
         ),
+        templateVariables: {
+          branch_id: branch.branch_id,
+          user_id: userId,
+          branch_fs_access: branchFsAccess,
+        },
       }
     );
     if (!statusResult.success) {
@@ -1688,12 +2185,11 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       }
 
       try {
-        // Use a service JWT so the executor can patch rendered env command
-        // templates without tripping requireAdminForEnvConfig when unarchive
-        // is performed by a non-admin user.
-        const sessionToken = generateScopedServiceToken(
-          this.app as unknown as { settings: { authentication?: { secret?: string } } },
-          { command: 'git.branch.add', branch_id: branch.branch_id, repo_id: repo.repo_id }
+        const sessionToken = await issueExecutorCommandToken(
+          this.app,
+          'git.branch.add',
+          userId,
+          branch.branch_id
         );
         spawnExecutor(
           {
@@ -1716,6 +2212,16 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
           },
           {
             logPrefix: `[BranchesService.unarchive ${branch.name}]`,
+            delegatedHomeKey: await resolveDelegatedExecutionHomeKey(
+              this.db,
+              userId,
+              this.app.get('config')
+            ),
+            templateVariables: {
+              branch_id: branch.branch_id,
+              user_id: userId,
+              branch_fs_access: branchFsAccess,
+            },
           }
         );
       } catch (error) {
@@ -1761,32 +2267,13 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       }
     }
 
-    // Unarchive all sessions that were archived due to branch archival
-    // Use internal call (no provider) to bypass RBAC hooks that would ignore branch_id filter
-    const sessionsService = this.app.service('sessions');
-    const sessionsResult = await sessionsService.find({
-      query: {
-        branch_id: id,
-        archived: true,
-        archived_reason: 'branch_archived',
-        $limit: 1000,
-      },
-      paginate: false,
-    });
-    const sessions = Array.isArray(sessionsResult) ? sessionsResult : sessionsResult.data;
+    // Restore only sessions whose independent cause was branch archival.
+    const sessionsService = this.app.service('sessions') as unknown as SessionsService;
+    const unarchivedSessions = await this.withTenantDatabase(params, () =>
+      sessionsService.unarchiveBranchSessions(id, { ...params, provider: undefined })
+    );
 
-    for (const session of sessions) {
-      await sessionsService.patch(
-        session.session_id,
-        {
-          archived: false,
-          archived_reason: undefined,
-        },
-        { provider: undefined } // Bypass RBAC - this is an internal cascade operation
-      );
-    }
-
-    console.log(`✅ Unarchived branch ${branch.name} and ${sessions.length} session(s)`);
+    console.log(`✅ Unarchived branch ${branch.name} and ${unarchivedSessions.count} session(s)`);
     return unarchivedBranch;
   }
 
@@ -1892,6 +2379,11 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     if (!environmentUpdate) {
       throw new Error('Environment update is required');
     }
+    if (resolvedParams?.provider && usesAsyncEnvironmentCommands(this.app.get('config'))) {
+      throw new Forbidden(
+        'Use attempt-scoped environment command reports, not arbitrary environment patches'
+      );
+    }
 
     const existing = await this.withTenantDatabase(resolvedParams, () =>
       this.get(id, resolvedParams)
@@ -1902,12 +2394,17 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       ...environmentUpdate,
     } as EnvironmentInstance;
 
+    // Keep explicit clears in the repository patch. Omitting a field means
+    // preserve during its atomic deep merge, not delete. The normalized copy
+    // remains tombstone-free for state-change comparison.
+    const environmentPatch = { ...updatedEnvironment };
     for (const key of BRANCH_ENVIRONMENT_CLEARABLE_FIELDS) {
       if (
         Object.hasOwn(environmentUpdate, key) &&
         (environmentUpdate[key] === undefined || environmentUpdate[key] === null)
       ) {
         delete updatedEnvironment[key];
+        environmentPatch[key] = undefined;
       }
     }
 
@@ -1952,7 +2449,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       return this.withTenantDatabase(resolvedParams, () =>
         this.branchRepo.update(
           id,
-          { environment_instance: updatedEnvironment },
+          { environment_instance: environmentPatch },
           { preserveUpdatedAt: true }
         )
       );
@@ -1963,7 +2460,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
           await this.branchRepo.update(
             id,
             {
-              environment_instance: updatedEnvironment,
+              environment_instance: environmentPatch,
               updated_at: new Date().toISOString(),
             },
             { invalidateEnvironmentObservation: true }
@@ -1974,7 +2471,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
           this.patch(
             id,
             {
-              environment_instance: updatedEnvironment,
+              environment_instance: environmentPatch,
               updated_at: new Date().toISOString(),
             },
             resolvedParams
@@ -2004,8 +2501,14 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
   /**
    * Custom method: Start environment
    */
-  async startEnvironment(id: BranchID, params?: BranchParams): Promise<BranchWithZoneAndSessions> {
+  async startEnvironment(
+    id: BranchID,
+    params?: BranchParams,
+    confirmationOf?: string
+  ): Promise<BranchWithZoneAndSessions> {
     const branch = await this.loadEnvironmentForAction(id, params, 'start branch environments');
+    if (usesAsyncEnvironmentCommands(this.app.get('config')))
+      return this.runAsyncEnvironmentAction(branch, 'start', params, confirmationOf);
 
     if (!branch.start_command) {
       throw new Error('No start command configured for this branch');
@@ -2089,6 +2592,8 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
    */
   async stopEnvironment(id: BranchID, params?: BranchParams): Promise<BranchWithZoneAndSessions> {
     const branch = await this.loadEnvironmentForAction(id, params, 'stop branch environments');
+    if (usesAsyncEnvironmentCommands(this.app.get('config')))
+      return this.runAsyncEnvironmentAction(branch, 'stop', params);
 
     await this.updateEnvironment(id, { status: 'stopping' }, params);
 
@@ -2173,6 +2678,10 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     params?: BranchParams
   ): Promise<BranchWithZoneAndSessions> {
     const branch = await this.loadEnvironmentForAction(id, params, 'restart branch environments');
+    if (usesAsyncEnvironmentCommands(this.app.get('config')))
+      throw new BadRequest(
+        'Restart is unavailable for asynchronous environments. Request Stop, inspect its outcome, then explicitly Start.'
+      );
 
     if (!branch.start_command) {
       throw new Error('No start command configured for this branch');
@@ -2226,6 +2735,8 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
    */
   async nukeEnvironment(id: BranchID, params?: BranchParams): Promise<BranchWithZoneAndSessions> {
     const branch = await this.loadEnvironmentForAction(id, params, 'nuke branch environments');
+    if (usesAsyncEnvironmentCommands(this.app.get('config')))
+      return this.runAsyncEnvironmentAction(branch, 'nuke', params);
 
     if (!branch.nuke_command) {
       throw new Error('No nuke_command configured for this branch');
@@ -2297,148 +2808,183 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
   /**
    * Custom method: Check health
    */
-  async checkHealth(id: BranchID, params?: BranchParams): Promise<BranchWithZoneAndSessions> {
-    const branch = await this.withTenantDatabase(params, () => this.get(id, params));
-    const _repo = await this.withTenantDatabase(
-      params,
-      () => this.app.service('repos').get(branch.repo_id, params) as Promise<Repo>
-    );
+  async checkHealth(
+    id: BranchID,
+    params?: BranchParams,
+    internalOptions?: EnvironmentHealthCheckOptions
+  ): Promise<BranchWithZoneAndSessions> {
+    // `checkHealth` is intentionally not a transport method. Automatic calls
+    // originate only from the tenant-aware health monitor, so use the raw
+    // canonical loader for that path. Calling `this.get` from a registered
+    // Feathers service enters the standard get wrapper even though this custom
+    // method itself is invoked directly; a normal successful observation used
+    // to create two nested `branches.get` service requests in addition to the
+    // monitor's own preflight get. Explicit user/MCP status requests retain the
+    // wrapped get and its fail-closed authorization hooks.
+    const loadCurrent = () =>
+      internalOptions?.intent === 'automatic'
+        ? this.getCanonicalBranch(id, params)
+        : this.get(id, params);
+    let branch = await this.withTenantDatabase(params, loadCurrent);
+    if (
+      branch.environment_instance?.command_attempt &&
+      (await this.withTenantDatabase(params, () =>
+        new EnvironmentCommandRepository(this.db).expire(id)
+      ))
+    ) {
+      branch = await this.withTenantDatabase(params, loadCurrent);
+      emitServiceEvent(this.app, { path: 'branches', event: 'patched', data: branch, params, id });
+    }
 
-    // Only check active environments, plus errored environments that may have been
-    // started successfully out-of-band. Allowing explicit health checks to recover
-    // from `error` prevents stale start failures from keeping a live environment red.
     const currentStatus = branch.environment_instance?.status;
-    const canProbeHealth =
-      currentStatus === 'running' || currentStatus === 'starting' || currentStatus === 'error';
-    if (!canProbeHealth) {
+    if (
+      branch.archived ||
+      (currentStatus !== 'running' && currentStatus !== 'starting' && currentStatus !== 'error')
+    ) {
       return branch;
     }
 
-    // Check if we have a health check URL (static field, not template)
-    if (!branch.health_check_url) {
-      // No health check configured - stay in 'starting' forever (manual intervention required)
-      // Don't auto-transition to 'running' without health check confirmation
-      const managedProcess = this.processes.get(id);
-      const isProcessAlive = managedProcess?.process && !managedProcess.process.killed;
-
-      return await this.updateEnvironment(
-        id,
-        {
+    // An explicit status request may still diagnose an errored environment,
+    // but an inactive lifecycle must not acquire monitoring ownership or be
+    // revived by that observation. Return the observation ephemerally.
+    if (currentStatus === 'error') {
+      if (internalOptions?.intent === 'automatic') return branch;
+      const observation = await this.fetchEnvironmentHealthObservation(
+        branch,
+        internalOptions?.signal
+      );
+      if (!observation) return branch;
+      return {
+        ...branch,
+        environment_instance: {
+          ...branch.environment_instance,
+          status: currentStatus,
           last_health_check: {
             timestamp: new Date().toISOString(),
-            status: isProcessAlive ? 'healthy' : 'unknown',
-            message: isProcessAlive ? 'Process running' : 'No health check configured',
+            status: observation.status,
+            message: observation.message,
           },
         },
-        params
-      );
+      };
     }
 
-    // Use static health_check_url (initialized from template at branch creation)
-    const healthUrl = branch.health_check_url;
-
-    // Validate URL to prevent SSRF against cloud metadata or internal services
-    if (!isAllowedHealthCheckUrl(healthUrl)) {
-      console.warn(`⚠️ Blocked health check to disallowed URL: ${healthUrl}`);
-      return await this.updateEnvironment(
-        id,
-        {
-          last_health_check: {
-            timestamp: new Date().toISOString(),
-            status: 'unhealthy',
-            message: 'Health check URL blocked by security policy',
-          },
-        },
-        params
-      );
+    // Active observations leave the database while doing HTTP. A durable
+    // one-observation claim plus lifecycle generation fences the result from a
+    // concurrent stop, archive, delete, URL change, daemon, or replica.
+    const claimToken = generateId();
+    const identity = this.app.get('distributedWorkIdentity') ?? {
+      instanceId: `branches-service-${process.pid}`,
+      bootId: `branches-service-${process.pid}`,
+    };
+    const claimResult = await this.withTenantDatabase(params, () =>
+      new EnvironmentHealthRepository(this.db).claim({
+        branchId: id,
+        claimToken,
+        leaseDurationMs: ENVIRONMENT.HEALTH_CHECK_TIMEOUT_MS + 5_000,
+        identity,
+        ignoreCooldown: internalOptions?.intent !== 'automatic',
+      })
+    );
+    if (claimResult.outcome !== 'claimed') {
+      return this.withTenantDatabase(params, loadCurrent);
     }
-
-    // Track previous health status to detect changes
-    const previousHealthStatus = branch.environment_instance?.last_health_check?.status;
 
     try {
-      // Perform HTTP health check with timeout
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), ENVIRONMENT.HEALTH_CHECK_TIMEOUT_MS);
+      const observation = await this.fetchEnvironmentHealthObservation(
+        branch,
+        internalOptions?.signal
+      );
+      if (!observation) {
+        return this.withTenantDatabase(params, loadCurrent);
+      }
+      const commitResult = await this.withTenantDatabase(params, () =>
+        new EnvironmentHealthRepository(this.db).commit({
+          branchId: id,
+          claimToken,
+          environmentGeneration: claimResult.claim.environment_generation,
+          observation,
+        })
+      );
+      const current = await this.withTenantDatabase(params, loadCurrent);
+      if (commitResult.outcome === 'committed' && commitResult.stateChanged) {
+        emitServiceEvent(this.app, {
+          path: 'branches',
+          event: 'patched',
+          data: current,
+          params,
+          id,
+        });
+      }
+      return current;
+    } finally {
+      await this.withTenantDatabase(params, () =>
+        new EnvironmentHealthRepository(this.db).release(id, claimToken)
+      ).catch(() => undefined);
+    }
+  }
 
+  private async fetchEnvironmentHealthObservation(
+    branch: Branch,
+    cancellationSignal?: AbortSignal
+  ): Promise<EnvironmentHealthObservation | null> {
+    const healthUrl = branch.health_check_url;
+    if (!healthUrl) {
+      const managedProcess = this.processes.get(branch.branch_id);
+      const isProcessAlive = Boolean(managedProcess?.process && !managedProcess.process.killed);
+      return {
+        status: 'unknown',
+        message: isProcessAlive
+          ? 'Process running; no health check configured'
+          : 'No health check configured',
+        recordWhileStarting: true,
+      };
+    }
+    if (!isAllowedHealthCheckUrl(healthUrl)) {
+      return {
+        status: 'unhealthy',
+        message: 'Health check URL blocked by security policy',
+        recordWhileStarting: true,
+      };
+    }
+
+    const controller = new AbortController();
+    let timedOut = false;
+    const cancel = () =>
+      controller.abort(cancellationSignal?.reason ?? new Error('Health check cancelled'));
+    if (cancellationSignal?.aborted) return null;
+    cancellationSignal?.addEventListener('abort', cancel, { once: true });
+    const timeout = setTimeout(() => {
+      timedOut = true;
+      controller.abort(new Error('Health check timeout'));
+    }, ENVIRONMENT.HEALTH_CHECK_TIMEOUT_MS);
+    timeout.unref?.();
+    try {
       const response = await fetch(healthUrl, {
         signal: controller.signal,
         method: 'GET',
+        // Do not follow redirects: an otherwise-allowed health URL could 302 to
+        // a link-local metadata endpoint (169.254.169.254), bypassing
+        // isAllowedHealthCheckUrl. A 3xx returns not-ok and is reported
+        // unhealthy. Mirrors the managed-env webhook fetch.
+        redirect: 'manual',
       });
-
-      clearTimeout(timeout);
-
-      const isHealthy = response.ok;
-      const newHealthStatus = isHealthy ? 'healthy' : 'unhealthy';
-
-      // Only log if health status changed
-      if (previousHealthStatus !== newHealthStatus) {
-        console.log(
-          `🏥 Health status changed for ${branch.name}: ${previousHealthStatus || 'unknown'} → ${newHealthStatus} (HTTP ${response.status})`
-        );
-      }
-
-      // If health check succeeds and we're in 'starting' or 'error' state,
-      // transition/recover to 'running'. The explicit 'error' recovery path matters
-      // when a lifecycle command failed or raced but the configured app is now live.
-      const shouldTransitionToRunning =
-        isHealthy && (currentStatus === 'starting' || currentStatus === 'error');
-
-      if (shouldTransitionToRunning) {
-        console.log(`✅ Successful health check for ${branch.name} - transitioning to 'running'`);
-      }
-
-      return await this.updateEnvironment(
-        id,
-        {
-          status: shouldTransitionToRunning ? 'running' : currentStatus,
-          last_health_check: {
-            timestamp: new Date().toISOString(),
-            status: newHealthStatus,
-            message: isHealthy
-              ? `HTTP ${response.status}`
-              : `HTTP ${response.status} ${response.statusText}`,
-          },
-        },
-        params
-      );
+      return {
+        status: response.ok ? 'healthy' : 'unhealthy',
+        message: response.ok
+          ? `HTTP ${response.status}`
+          : `HTTP ${response.status} ${response.statusText}`,
+        recordWhileStarting: true,
+      };
     } catch (error) {
-      // Health check failed
-      const message =
-        error instanceof Error
-          ? error.name === 'AbortError'
-            ? 'Timeout'
-            : error.message
-          : 'Unknown error';
-
-      // During 'starting' state, don't mark as unhealthy - keep retrying
-      // Only mark as unhealthy when transitioning from healthy->unhealthy in 'running' state
-      if (currentStatus === 'starting') {
-        // Don't update health check during startup - wait for first success
-        // This prevents the UI from showing unhealthy state while environment is still starting
-        return branch;
-      }
-
-      const newHealthStatus = 'unhealthy';
-
-      // Only log if health status changed or if this is an error
-      if (previousHealthStatus !== newHealthStatus) {
-        console.log(
-          `🏥 Health status changed for ${branch.name}: ${previousHealthStatus || 'unknown'} → ${newHealthStatus} (${message})`
-        );
-      }
-
-      return await this.updateEnvironment(
-        id,
-        {
-          last_health_check: {
-            timestamp: new Date().toISOString(),
-            status: 'unhealthy',
-            message,
-          },
-        },
-        params
-      );
+      if (cancellationSignal?.aborted) return null;
+      return {
+        status: 'unhealthy',
+        message: timedOut ? 'Timeout' : error instanceof Error ? error.message : 'Unknown error',
+        recordWhileStarting: false,
+      };
+    } finally {
+      clearTimeout(timeout);
+      cancellationSignal?.removeEventListener('abort', cancel);
     }
   }
 
@@ -2596,7 +3142,6 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
 
     await this.validateRenderedEnvironmentActions(snapshot);
     validateRenderedManagedEnvUrlFields({
-      health: snapshot.health,
       app: snapshot.app,
     });
 

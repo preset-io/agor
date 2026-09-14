@@ -1,16 +1,17 @@
 import type { AgorClient } from '@agor-live/client';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { Form } from 'antd';
+import { Form, type FormInstance } from 'antd';
 import { useEffect } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { MCPServerFormFields } from './MCPServerFormFields';
 import { useFormRevision } from './mcp-form-requirements';
 
 const showError = vi.fn();
+const showSuccess = vi.fn();
 
 vi.mock('@/utils/message', () => ({
   useThemedMessage: () => ({
-    showSuccess: vi.fn(),
+    showSuccess,
     showError,
     showInfo: vi.fn(),
     showWarning: vi.fn(),
@@ -32,6 +33,67 @@ const oauthButton = (name = 'Start OAuth Flow') => buttonLabeled(name);
 
 describe('MCPServerFormFields OAuth start', () => {
   beforeEach(() => vi.clearAllMocks());
+
+  it('shows truncation metadata in the discovery result, not the OAuth setup response', () => {
+    const Harness = () => {
+      const [form] = Form.useForm();
+      return (
+        <Form form={form}>
+          <MCPServerFormFields
+            mode="create"
+            transport="http"
+            form={form}
+            client={null}
+            authorityKey="user-a:admin:1"
+            onPrepareOAuthStart={vi.fn()}
+            testResult={{
+              success: true,
+              capabilities: { tools: 1, resources: 0, prompts: 0 },
+              metadata: { descriptions_truncated: 2 },
+              tools: [{ name: 'search' }],
+              resources: [],
+              prompts: [],
+            }}
+          />
+        </Form>
+      );
+    };
+    render(<Harness />);
+    expect(
+      screen.getByText("2 provider description(s) shortened to Agor's safe metadata budget")
+    ).toBeInTheDocument();
+    expect(showSuccess).not.toHaveBeenCalled();
+  });
+
+  it('uses an explicit visible control to clear a saved bearer secret', async () => {
+    let capturedForm: FormInstance | undefined;
+    const Harness = () => {
+      const [form] = Form.useForm();
+      capturedForm = form;
+      useEffect(() => {
+        form.setFieldsValue({ auth_type: 'bearer', auth_token: '••••••••' });
+      }, [form]);
+      return (
+        <Form form={form}>
+          <MCPServerFormFields
+            mode="edit"
+            transport="http"
+            authType="bearer"
+            form={form}
+            client={null}
+            authorityKey="user-a:admin:1"
+            onPrepareOAuthStart={vi.fn().mockResolvedValue('saved-server')}
+          />
+        </Form>
+      );
+    };
+
+    render(<Harness />);
+    expect(await screen.findByText('Leaving this blank preserves the saved secret.')).toBeVisible();
+    fireEvent.click(buttonLabeled('Clear saved secret'));
+    expect(capturedForm?.getFieldValue('auth_token')).toBe('');
+    expect(capturedForm?.getFieldValue('auth_token_clear')).toBe(true);
+  });
 
   // #2332: every attempt — including the manual retry offered after a failed
   // start — must persist the current form and authorize against the ID that
@@ -83,6 +145,7 @@ describe('MCPServerFormFields OAuth start', () => {
             authType="oauth"
             form={form}
             client={client}
+            authorityKey="user-a:admin:1"
             onPrepareOAuthStart={onPrepareOAuthStart}
             formRevision={formRevision}
           />
@@ -162,6 +225,7 @@ describe('MCPServerFormFields OAuth start', () => {
             authType="oauth"
             form={form}
             client={client}
+            authorityKey="user-a:admin:1"
             onPrepareOAuthStart={onPrepareOAuthStart}
             formRevision={formRevision}
           />
@@ -200,5 +264,49 @@ describe('MCPServerFormFields OAuth start', () => {
     fireEvent.click(oauthButton());
     await waitFor(() => expect(onPrepareOAuthStart).toHaveBeenCalledTimes(1));
     expect(startOAuth).not.toHaveBeenCalled();
+  });
+
+  it('shows a catalog-managed Marketplace policy read-only', async () => {
+    const client = {
+      io: { on: vi.fn(), off: vi.fn() },
+      service: vi.fn().mockReturnValue({ create: vi.fn() }),
+    } as unknown as AgorClient;
+
+    const Harness = () => {
+      const [form] = Form.useForm();
+      useEffect(() => {
+        form.setFieldsValue({
+          name: 'catalog-server',
+          url: 'https://mcp.example/mcp',
+          auth_type: 'oauth',
+          oauth_compatibility_mode: 'marketplace',
+        });
+      }, [form]);
+      return (
+        <Form form={form}>
+          <MCPServerFormFields
+            mode="edit"
+            transport="http"
+            authType="oauth"
+            form={form}
+            client={client}
+            authorityKey="user-a:admin:1"
+            serverId="saved-server"
+            onPrepareOAuthStart={vi.fn().mockResolvedValue('saved-server')}
+            managedOAuthCompatibilityMode="marketplace"
+          />
+        </Form>
+      );
+    };
+
+    render(<Harness />);
+
+    fireEvent.click(screen.getByText('Advanced — OAuth settings'));
+    expect(await screen.findByText('Catalog compatibility (managed)')).toBeVisible();
+    const compatibility = screen.getByLabelText('OAuth Compatibility');
+    expect(compatibility).toBeDisabled();
+    expect(
+      screen.getByText(/current Catalog entry manages this server's interoperability/i)
+    ).toBeVisible();
   });
 });

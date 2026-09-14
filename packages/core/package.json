@@ -82,6 +82,12 @@
       "import": "./dist/telemetry/index.js",
       "require": "./dist/telemetry/index.cjs"
     },
+    "./tracing/datadog": {
+      "source": "./src/tracing/datadog.ts",
+      "types": "./dist/tracing/datadog.d.ts",
+      "import": "./dist/tracing/datadog.js",
+      "require": "./dist/tracing/datadog.cjs"
+    },
     "./config": {
       "source": "./src/config/index.ts",
       "types": "./dist/config/index.d.ts",
@@ -123,6 +129,18 @@
       "types": "./dist/lib/validation.d.ts",
       "import": "./dist/lib/validation.js",
       "require": "./dist/lib/validation.cjs"
+    },
+    "./ids": {
+      "source": "./src/lib/ids.ts",
+      "types": "./dist/lib/ids.d.ts",
+      "import": "./dist/ids/index.js",
+      "require": "./dist/ids/index.cjs"
+    },
+    "./ids/browser": {
+      "source": "./src/lib/ids.browser.ts",
+      "types": "./dist/lib/ids.browser.d.ts",
+      "import": "./dist/ids/browser.js",
+      "require": "./dist/ids/browser.cjs"
     },
     "./templates/handlebars-helpers": {
       "source": "./src/templates/handlebars-helpers.ts",
@@ -406,6 +424,12 @@
       "import": "./dist/gateway/connectors/slack-manifest.js",
       "require": "./dist/gateway/connectors/slack-manifest.cjs"
     },
+    "./gateway/discord-setup": {
+      "source": "./src/gateway/connectors/discord-setup.ts",
+      "types": "./dist/gateway/connectors/discord-setup.d.ts",
+      "import": "./dist/gateway/connectors/discord-setup.js",
+      "require": "./dist/gateway/connectors/discord-setup.cjs"
+    },
     "./git/pure": {
       "source": "./src/git/pure.ts",
       "types": "./dist/git/pure.d.ts",
@@ -417,6 +441,12 @@
       "types": "./dist/git/exec.d.ts",
       "import": "./dist/git/exec.js",
       "require": "./dist/git/exec.cjs"
+    },
+    "./environment/access-urls": {
+      "source": "./src/environment/access-urls.ts",
+      "types": "./dist/environment/access-urls.d.ts",
+      "import": "./dist/environment/access-urls.js",
+      "require": "./dist/environment/access-urls.cjs"
     },
     "./environment/webhook": {
       "source": "./src/environment/webhook.ts",
@@ -441,6 +471,12 @@
       "types": "./dist/codex/auth-file.d.ts",
       "import": "./dist/codex/auth-file.js",
       "require": "./dist/codex/auth-file.cjs"
+    },
+    "./codex/credential-file": {
+      "source": "./src/codex/credential-file.ts",
+      "types": "./dist/codex/credential-file.d.ts",
+      "import": "./dist/codex/credential-file.js",
+      "require": "./dist/codex/credential-file.cjs"
     },
     "./agentic-integrations": {
       "source": "./src/agentic-integrations.ts",
@@ -470,6 +506,8 @@
   "dependencies": {
     "@agor/git": "workspace:*",
     "@anthropic-ai/sdk": "^0.109.0",
+    "@discordjs/rest": "^2.6.3",
+    "@discordjs/ws": "^2.0.4",
     "@feathersjs/authentication": "^5.0.46",
     "@feathersjs/authentication-client": "^5.0.46",
     "@feathersjs/authentication-local": "^5.0.46",
@@ -488,6 +526,7 @@
     "bcryptjs": "^2.4.3",
     "cron-parser": "^5.7.0",
     "cronstrue": "^3.24.0",
+    "discord-api-types": "^0.38.53",
     "drizzle-orm": "^0.45.2",
     "emojibase-data": "^17.0.0",
     "js-yaml": "^5.2.3",
@@ -499,12 +538,12 @@
     "zod": "^4.4.3"
   },
   "devDependencies": {
-    "@anthropic-ai/claude-agent-sdk": "^0.3.197",
+    "@anthropic-ai/claude-agent-sdk": "0.3.259",
     "@google/gemini-cli-core": "^0.40.0",
     "@google/genai": "^1.43.0",
     "@octokit/auth-app": "^8.3.0",
     "@octokit/rest": "^22.0.1",
-    "@openai/codex-sdk": "^0.144.0",
+    "@openai/codex-sdk": "0.153.0",
     "@types/bcryptjs": "^2.4.6",
     "@types/js-yaml": "^4.0.9",
     "@types/node": "^24.6.0",

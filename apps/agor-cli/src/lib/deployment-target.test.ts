@@ -1,13 +1,21 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+vi.mock('node:fs/promises', () => ({ access: vi.fn() }));
 vi.mock('./auth.js', () => ({ loadToken: vi.fn() }));
 vi.mock('@agor/core/config', () => ({
+  getConfigPath: vi.fn(() => '/home/test/.agor/config.yaml'),
   loadConfig: vi.fn(),
   requireDeploymentId: vi.fn(),
   resolveDaemonUrl: vi.fn(),
 }));
 
-import { loadConfig, requireDeploymentId, resolveDaemonUrl } from '@agor/core/config';
+import { access } from 'node:fs/promises';
+import {
+  getConfigPath,
+  loadConfig,
+  requireDeploymentId,
+  resolveDaemonUrl,
+} from '@agor/core/config';
 import { loadToken } from './auth.js';
 import {
   resolveConnectedDeploymentTarget,
@@ -22,6 +30,7 @@ describe('deployment target resolution', () => {
     vi.stubEnv('AGOR_API_KEY', '');
     vi.stubEnv('AGOR_DEPLOYMENT_ID', '');
     vi.stubEnv('DAEMON_URL', '');
+    vi.mocked(access).mockResolvedValue(undefined);
   });
 
   afterEach(() => vi.unstubAllEnvs());
@@ -79,5 +88,30 @@ describe('deployment target resolution', () => {
     });
     expect(resolveDaemonUrl).toHaveBeenCalledWith(config);
     expect(requireDeploymentId).toHaveBeenCalledWith(config);
+  });
+
+  it('reports a missing local config without loading defaults', async () => {
+    vi.mocked(access).mockRejectedValue(Object.assign(new Error('missing'), { code: 'ENOENT' }));
+
+    await expect(resolveLocalDeploymentTarget()).rejects.toThrow(
+      'No local config found at /home/test/.agor/config.yaml. Run agor init.'
+    );
+    expect(getConfigPath).toHaveBeenCalled();
+    expect(loadConfig).not.toHaveBeenCalled();
+  });
+
+  it('preserves invalid local config errors', async () => {
+    vi.mocked(loadConfig).mockRejectedValue(new Error('Config error: invalid YAML'));
+
+    await expect(resolveLocalDeploymentTarget()).rejects.toThrow('Config error: invalid YAML');
+  });
+
+  it('preserves non-missing config access errors', async () => {
+    vi.mocked(access).mockRejectedValue(
+      Object.assign(new Error('permission denied'), { code: 'EACCES' })
+    );
+
+    await expect(resolveLocalDeploymentTarget()).rejects.toThrow('permission denied');
+    expect(loadConfig).not.toHaveBeenCalled();
   });
 });

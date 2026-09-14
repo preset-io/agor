@@ -13,7 +13,7 @@ import os from 'node:os';
 import path from 'node:path';
 import type { BranchID, UUID } from '@agor/core/types';
 import { getBranchesDir, loadConfigSync } from '../config/config-manager';
-import { resolveMultiTenancyConfig } from '../config/multitenancy';
+import { resolveBootstrapTenantId } from '../config/multitenancy';
 import {
   BoardObjectRepository,
   BoardRepository,
@@ -78,8 +78,9 @@ export async function seedDevFixtures(options: SeedOptions): Promise<SeedResult>
   );
   const db = createTenantScopedDatabaseProxy(createDatabase({ url: databaseUrl }));
   const config = loadConfigSync();
-  const multiTenancy = resolveMultiTenancyConfig(config);
-  const tenantId = multiTenancy.mode === 'static' ? multiTenancy.static_tenant_id : undefined;
+  // Dev fixtures seed exactly one tenant: the static tenant (or a clear failure
+  // in required_from_auth, rather than an undefined-tenant scope).
+  const tenantId = resolveBootstrapTenantId(config);
 
   return runWithTenantDatabaseScope(db, tenantId, async () => {
     const repoRepo = new RepoRepository(db);
@@ -146,7 +147,7 @@ export async function seedDevFixtures(options: SeedOptions): Promise<SeedResult>
 
     // STEP 2: Get default board
     console.log('2️⃣  Getting default board...');
-    const defaultBoard = await boardRepo.getDefault();
+    const defaultBoard = await boardRepo.getDefault(userId);
     console.log(`   ✓ Using default board: ${defaultBoard.name} (${defaultBoard.board_id})`);
 
     // STEP 3: Create test-branch
@@ -187,9 +188,6 @@ export async function seedDevFixtures(options: SeedOptions): Promise<SeedResult>
       undefined, // env
       'branch' // refType
     );
-
-    // Add user as owner of the branch
-    await branchRepo.addOwner(branch.branch_id, userId);
 
     console.log(`   ✓ Created branch: ${branch.name} (${branch.branch_id})`);
 

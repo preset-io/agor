@@ -56,6 +56,8 @@ import { and, asc, desc, eq, inArray, like, or, sql } from 'drizzle-orm';
 import { getBaseUrl } from '../../config/config-manager';
 import { generateId } from '../../lib/ids';
 import { getKnowledgeUrl } from '../../utils/url';
+import { lockBranchForAdmission } from '../branch-admission';
+import { lockBranchReferenceMutation } from '../branch-reference-admission';
 import type { Database } from '../client';
 import {
   deleteFrom,
@@ -421,10 +423,15 @@ export class KnowledgeNamespaceRepository
 
   async create(data: Partial<KnowledgeNamespace>): Promise<KnowledgeNamespace> {
     try {
-      const row = await insert(this.db, kbNamespaces)
-        .values(this.namespaceToInsert(data))
-        .returning()
-        .one();
+      const row = await runDatabaseTransaction(
+        this.db,
+        async (tx) => {
+          await lockBranchReferenceMutation(tx);
+          if (data.branch_id) await lockBranchForAdmission(tx, data.branch_id);
+          return insert(tx, kbNamespaces).values(this.namespaceToInsert(data)).returning().one();
+        },
+        { sqliteImmediate: true }
+      );
       return this.rowToNamespace(row);
     } catch (error) {
       throw new RepositoryError(
@@ -476,23 +483,33 @@ export class KnowledgeNamespaceRepository
 
   async update(id: string, updates: Partial<KnowledgeNamespace>): Promise<KnowledgeNamespace> {
     const fullId = await this.resolveId(id);
-    const current = await this.findById(fullId);
-    if (!current) throw new EntityNotFoundError('KnowledgeNamespace', id);
-
-    const merged = deepMerge(current, {
-      ...updates,
-      namespace_id: current.namespace_id,
-      created_at: current.created_at,
-      created_by: current.created_by,
-      updated_at: new Date(),
-    });
-
-    const row = await update(this.db, kbNamespaces)
-      .set(this.namespaceToInsert(merged))
-      .where(eq(kbNamespaces.namespace_id, fullId))
-      .returning()
-      .one();
-    return this.rowToNamespace(row);
+    return runDatabaseTransaction(
+      this.db,
+      async (tx) => {
+        // Ownership cannot move into or out of a deletion inventory after its scan.
+        await lockBranchReferenceMutation(tx);
+        const current = await new KnowledgeNamespaceRepository(tx).findById(fullId);
+        if (!current) throw new EntityNotFoundError('KnowledgeNamespace', id);
+        const merged = deepMerge(current, {
+          ...updates,
+          namespace_id: current.namespace_id,
+          created_at: current.created_at,
+          created_by: current.created_by,
+          updated_at: new Date(),
+        });
+        const owners = new Set(
+          [current.branch_id, merged.branch_id].filter((id): id is NonNullable<typeof id> => !!id)
+        );
+        for (const owner of [...owners].sort()) await lockBranchForAdmission(tx, owner);
+        const row = await update(tx, kbNamespaces)
+          .set(this.namespaceToInsert(merged))
+          .where(eq(kbNamespaces.namespace_id, fullId))
+          .returning()
+          .one();
+        return this.rowToNamespace(row);
+      },
+      { sqliteImmediate: true, sqliteBusyRetries: 9 }
+    );
   }
 
   rowToAclEntry(row: KBNamespaceAclRow): KnowledgeNamespaceAclEntry {
@@ -868,6 +885,16 @@ export class KnowledgeDocumentVersionRepository
     }
   }
 
+  async findByIds(ids: readonly KnowledgeDocumentVersionID[]): Promise<KnowledgeDocumentVersion[]> {
+    const uniqueIds = [...new Set(ids)];
+    if (uniqueIds.length === 0) return [];
+    const rows = await select(this.db)
+      .from(kbDocumentVersions)
+      .where(inArray(kbDocumentVersions.version_id, uniqueIds))
+      .all();
+    return rows.map((row: KBDocumentVersionRow) => this.rowToVersion(row));
+  }
+
   async findAll(filter?: {
     document_id?: KnowledgeDocumentID;
   }): Promise<KnowledgeDocumentVersion[]> {
@@ -1063,6 +1090,8 @@ export class KnowledgeDocumentRepository
 
     return await this.db.transaction(async (tx) => {
       const txDb = txAsDb(tx);
+      if (namespace.kind === 'branch' && namespace.branch_id)
+        await lockBranchForAdmission(txDb, namespace.branch_id);
       const docInsert = this.documentToInsert(
         {
           ...data,
@@ -1332,6 +1361,17 @@ export class KnowledgeDocumentRepository
 
     return await this.db.transaction(async (tx) => {
       const txDb = txAsDb(tx);
+      const membership = await select(txDb, { namespace_id: kbDocuments.namespace_id })
+        .from(kbDocuments)
+        .where(eq(kbDocuments.document_id, fullId))
+        .one();
+      if (membership) {
+        const namespace = await new KnowledgeNamespaceRepository(txDb).findById(
+          membership.namespace_id
+        );
+        if (namespace?.kind === 'branch' && namespace.branch_id)
+          await lockBranchForAdmission(txDb, namespace.branch_id);
+      }
       await lockRowForUpdate(txDb, this.db, kbDocuments, eq(kbDocuments.document_id, fullId));
 
       const currentRow = await select(txDb)

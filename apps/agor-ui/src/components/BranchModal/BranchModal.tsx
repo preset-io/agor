@@ -8,7 +8,7 @@ import type {
   User,
 } from '@agor-live/client';
 import { getTeammateConfig, isTeammate } from '@agor-live/client';
-import { Badge, Button, Modal, Space, Tabs, theme } from 'antd';
+import { Alert, Badge, Button, Drawer, Grid, Modal, Space, Tabs, theme } from 'antd';
 import { useEffect, useMemo, useState } from 'react';
 import { mapToArray } from '@/utils/mapHelpers';
 import { useAgorStore } from '../../store/agorStore';
@@ -61,6 +61,7 @@ export interface BranchModalProps {
    * else is unchanged.
    */
   embedded?: boolean;
+  presentation?: 'modal' | 'bottom-sheet';
 }
 
 export const BranchModal: React.FC<BranchModalProps> = ({
@@ -80,6 +81,7 @@ export const BranchModal: React.FC<BranchModalProps> = ({
   onExecuteScheduleNow,
   defaultTab,
   embedded = false,
+  presentation = 'modal',
 }) => {
   // Entity maps are read from the store rather than drilled through props so
   // the App shell doesn't have to forward them into every modal.
@@ -87,6 +89,8 @@ export const BranchModal: React.FC<BranchModalProps> = ({
   const mcpServerById = useAgorStore(selectMcpServerById);
   const userById = useAgorStore(selectUserById);
   const { token } = theme.useToken();
+  const screens = Grid.useBreakpoint();
+  const compact = !screens.md;
   const { showSuccess, showError } = useThemedMessage();
   // Teammate records render a 'teammate' tab FIRST (see tabItems below), so the
   // default tab must follow the record kind — otherwise a teammate opens on its
@@ -101,7 +105,11 @@ export const BranchModal: React.FC<BranchModalProps> = ({
     currentUser,
     open,
   });
-  const branchBoard = boardById.get(form.general.boardId || branch?.board_id || '');
+  const permissionUsers = useMemo(() => {
+    const knownUsers = new Map(userById);
+    for (const user of form.allUsers) knownUsers.set(user.user_id, user);
+    return [...knownUsers.values()];
+  }, [userById, form.allUsers]);
 
   // Sync active tab when the modal opens — use defaultTab if specified, else the
   // record's own first tab ('teammate' for teammates, 'general' otherwise).
@@ -111,24 +119,68 @@ export const BranchModal: React.FC<BranchModalProps> = ({
   // biome-ignore lint/correctness/useExhaustiveDependencies: branch read at open-time only (see comment)
   useEffect(() => {
     if (open) {
-      setActiveTab(defaultTab ?? (branch && isTeammate(branch) ? 'teammate' : 'general'));
+      setActiveTab(
+        defaultTab === 'permissions' && !form.canViewPermissions
+          ? 'general'
+          : (defaultTab ?? (branch && isTeammate(branch) ? 'teammate' : 'general'))
+      );
     }
-  }, [open, defaultTab]);
+  }, [open, defaultTab, form.canViewPermissions]);
 
-  // Surface owners-load failures to the user. Without this, a non-admin owner
-  // hitting a network/server error would see canEdit silently flip false with
-  // no visible reason. Toasted once per error transition.
+  // A feature-flag change can remove the active tab while the modal remains
+  // open. Do not leave Ant Tabs pointing at a now-unmounted permissions pane.
   useEffect(() => {
-    if (form.ownersLoadError) {
-      showError(`Failed to load branch permissions: ${form.ownersLoadError.message}`);
+    if (activeTab === 'permissions' && !form.canViewPermissions) {
+      setActiveTab('general');
     }
-  }, [form.ownersLoadError, showError]);
+  }, [activeTab, form.canViewPermissions]);
+
+  // Surface permission-package load failures once per error transition.
+  useEffect(() => {
+    if (form.permissionsLoadError) {
+      showError(`Failed to load branch permissions: ${form.permissionsLoadError.message}`);
+    }
+  }, [form.permissionsLoadError, showError]);
 
   const isATeammate = branch ? isTeammate(branch) : false;
   const teammateConfig = useMemo(() => (branch ? getTeammateConfig(branch) : null), [branch]);
 
-  if (!branch || !repo) {
+  if (!branch) {
     return null;
+  }
+
+  if (!repo) {
+    const unavailable = (
+      <Alert
+        type="warning"
+        showIcon
+        title="Repository details are unavailable"
+        description="This branch cannot be edited until its repository has loaded. Open workspace repositories to check its configuration."
+        action={
+          onOpenSettings ? (
+            <Button size="small" onClick={onOpenSettings}>
+              Repositories
+            </Button>
+          ) : undefined
+        }
+      />
+    );
+    return presentation === 'bottom-sheet' || compact ? (
+      <Drawer
+        title={`Branch: ${branch.name}`}
+        placement="bottom"
+        size="min(52dvh, 440px)"
+        open={open}
+        onClose={onClose}
+        footer={<Button onClick={onClose}>Close</Button>}
+      >
+        {unavailable}
+      </Drawer>
+    ) : (
+      <Modal title={`Branch: ${branch.name}`} open={open} onCancel={onClose} footer={null}>
+        {unavailable}
+      </Modal>
+    );
   }
 
   const title = isATeammate
@@ -145,158 +197,151 @@ export const BranchModal: React.FC<BranchModalProps> = ({
     }
   };
 
-  // Tabs shared by both branch and teammate records, in their common order.
-  const sessionsTab = {
-    key: 'sessions',
-    label: (
-      <span>
-        Sessions{' '}
-        <Badge
-          count={sessions.length}
-          showZero
-          size="small"
-          style={{ backgroundColor: token.colorPrimaryBgHover }}
+  const tabItems = [
+    // Teammate tab — only for teammates, shown first
+    ...(isATeammate
+      ? [
+          {
+            key: 'teammate',
+            label: 'Teammate',
+            children: (
+              <TeammateTab
+                branch={branch}
+                canEdit={form.canEditGeneral}
+                state={form.teammate}
+                setField={form.setTeammate}
+              />
+            ),
+          },
+        ]
+      : []),
+    {
+      key: 'general',
+      label: 'General',
+      children: (
+        <GeneralTab
+          branch={branch}
+          repo={repo}
+          sessions={sessions}
+          boards={mapToArray(boardById)}
+          mcpServers={mapToArray(mcpServerById)}
+          canEdit={form.canEditGeneral}
+          state={form.general}
+          setField={form.setGeneral}
+          onArchiveOrDelete={onArchiveOrDelete}
+          boardAttachChecking={form.boardAttachChecking}
+          boardAttachError={form.boardAttachError}
         />
-      </span>
-    ),
-    children: (
-      <SessionsTab
-        branch={branch}
-        sessions={sessions}
-        client={client}
-        onSessionClick={(sessionId) => {
-          onSessionClick?.(sessionId);
-          onClose();
-        }}
-      />
-    ),
-  };
-  const environmentTab = {
-    key: 'environment',
-    label: 'Environment',
-    children: (
-      <EnvironmentTab
-        branch={branch}
-        repo={repo}
-        client={client}
-        onUpdateRepo={onUpdateRepo}
-        onUpdateBranch={onUpdateBranch}
-        canControlEnvironment={form.canControlEnvironment}
-      />
-    ),
-  };
-  const filesTab = {
-    key: 'files',
-    label: 'Files',
-    children: <FilesTab branch={branch} client={client} />,
-  };
-  // Permissions tab — shown for RBAC-capable admins/owners. Keep it visible
-  // while owner data is loading so confirmed owners do not see the tab
-  // disappear just because async permissions metadata has not arrived yet.
-  const permissionsTabs = form.canViewPermissions
-    ? [
-        {
-          key: 'permissions',
-          label: 'Permissions',
-          children: (
-            <PermissionsTab
-              loadingOwners={form.loadingOwners}
-              canEdit={form.canEditPermissions}
-              allUsers={form.allUsers}
-              allGroups={form.allGroups}
-              groupGrantsStatus={form.groupGrantsStatus}
-              groupGrantsError={form.groupGrantsError}
-              currentUser={currentUser}
-              client={client}
-              board={branchBoard}
-              state={form.permissions}
-              setField={form.setPermissions}
-              ownersLoadError={form.ownersLoadError}
-            />
-          ),
-        },
-      ]
-    : [];
-  const scheduleTab = {
-    key: 'schedule',
-    label: 'Schedules',
-    children: (
-      <ScheduleTab
-        branch={branch}
-        client={client}
-        mcpServerById={mcpServerById}
-        currentUser={currentUser}
-        userById={userById}
-        onOpenSession={(sessionId) => {
-          onSessionClick?.(sessionId);
-          onClose();
-        }}
-      />
-    ),
-  };
-
-  // Teammates lead with the Teammate tab (Board + default MCP servers are folded
-  // into it) followed by Knowledge, and drop the branch-only General tab; regular
-  // branches keep General first. The rest of the order is shared.
-  const tabItems = isATeammate
-    ? [
-        {
-          key: 'teammate',
-          label: 'Teammate',
-          children: (
-            <TeammateTab
-              branch={branch}
-              canEdit={form.canEditGeneral}
-              state={form.teammate}
-              setField={form.setTeammate}
-              boards={mapToArray(boardById)}
-              mcpServers={mapToArray(mcpServerById)}
-              general={form.general}
-              setGeneral={form.setGeneral}
-            />
-          ),
-        },
-        {
-          key: 'knowledge',
-          label: 'Knowledge',
-          children: <KnowledgeTab branch={branch} client={client} canEdit={form.canEditGeneral} />,
-        },
-        sessionsTab,
-        environmentTab,
-        filesTab,
-        ...permissionsTabs,
-        scheduleTab,
-      ]
-    : [
-        {
-          key: 'general',
-          label: 'General',
-          children: (
-            <GeneralTab
-              branch={branch}
-              repo={repo}
-              sessions={sessions}
-              boards={mapToArray(boardById)}
-              mcpServers={mapToArray(mcpServerById)}
-              canEdit={form.canEditGeneral}
-              state={form.general}
-              setField={form.setGeneral}
-              onArchiveOrDelete={onArchiveOrDelete}
-            />
-          ),
-        },
-        sessionsTab,
-        environmentTab,
-        filesTab,
-        ...permissionsTabs,
-        scheduleTab,
-      ];
+      ),
+    },
+    {
+      key: 'sessions',
+      label: (
+        <span>
+          Sessions{' '}
+          <Badge
+            count={sessions.length}
+            showZero
+            size="small"
+            style={{ backgroundColor: token.colorPrimaryBgHover }}
+          />
+        </span>
+      ),
+      children: (
+        <SessionsTab
+          branch={branch}
+          sessions={sessions}
+          client={client}
+          onSessionClick={(sessionId) => {
+            onSessionClick?.(sessionId);
+            onClose();
+          }}
+        />
+      ),
+    },
+    {
+      key: 'environment',
+      label: 'Environment',
+      children: (
+        <EnvironmentTab
+          branch={branch}
+          repo={repo}
+          client={client}
+          onUpdateRepo={onUpdateRepo}
+          onUpdateBranch={onUpdateBranch}
+          canControlEnvironment={form.canControlEnvironment}
+        />
+      ),
+    },
+    {
+      key: 'files',
+      label: 'Files',
+      children: <FilesTab branch={branch} client={client} />,
+    },
+    ...(form.canViewPermissions
+      ? [
+          {
+            key: 'permissions',
+            label: 'Permissions',
+            children: (
+              <PermissionsTab
+                loading={form.permissionsLoading}
+                canManageAccess={form.canManagePolicy}
+                allGroups={form.allGroups}
+                currentUser={currentUser}
+                client={client}
+                error={form.permissionsLoadError}
+                sessions={sessions}
+                permissionUsers={permissionUsers}
+                capabilityPolicy={form.capabilityPolicy}
+                onCapabilityPolicyChange={form.setCapabilityPolicy}
+                workspacePreferences={form.workspacePreferences}
+              />
+            ),
+          },
+        ]
+      : []),
+    {
+      key: 'schedule',
+      label: 'Schedules',
+      children: (
+        <ScheduleTab
+          branch={branch}
+          client={client}
+          mcpServerById={mcpServerById}
+          currentUser={currentUser}
+          userById={userById}
+          onOpenSession={(sessionId) => {
+            onSessionClick?.(sessionId);
+            onClose();
+          }}
+        />
+      ),
+    },
+    // Knowledge is teammate-only and intentionally last for now: it is
+    // configuration-adjacent but less central than the primary branch/session tabs.
+    ...(isATeammate
+      ? [
+          {
+            key: 'knowledge',
+            label: 'Teammate Knowledge',
+            children: (
+              <KnowledgeTab branch={branch} client={client} canEdit={form.canEditGeneral} />
+            ),
+          },
+        ]
+      : []),
+  ];
 
   // Modal-level footer: one Save action for all form-contributing tabs
   // (General, Teammate, Permissions). Tabs like Environment / Sessions /
   // Files / Schedules have their own actions outside the form.
   const canSave =
-    (form.canEditGeneral || form.canEditPermissions) && form.hasChanges && !form.saving;
+    (form.canEditGeneral || form.canEditPermissions) &&
+    form.hasChanges &&
+    !form.saving &&
+    !form.boardAttachError &&
+    !form.boardAttachChecking;
 
   const footer = (
     <Space>
@@ -320,8 +365,9 @@ export const BranchModal: React.FC<BranchModalProps> = ({
     </Space>
   );
 
-  const tabs = (
+  const contents = (
     <Tabs
+      tabPosition="top"
       activeKey={activeTab}
       onChange={(key) => setActiveTab(key as BranchModalTab)}
       items={tabItems}
@@ -347,8 +393,26 @@ export const BranchModal: React.FC<BranchModalProps> = ({
           ) : null
         }
       >
-        {tabs}
+        {contents}
       </DrillInFrame>
+    );
+  }
+
+  // Mobile / explicit bottom-sheet: a Drawer instead of the centered Modal.
+  if (presentation === 'bottom-sheet' || compact) {
+    return (
+      <Drawer
+        title={title}
+        placement="bottom"
+        size="94dvh"
+        open={open}
+        onClose={onClose}
+        mask={{ closable: false }}
+        footer={footer}
+        styles={{ body: { padding: '12px 16px', overflowY: 'auto' } }}
+      >
+        {contents}
+      </Drawer>
     );
   }
 
@@ -358,13 +422,19 @@ export const BranchModal: React.FC<BranchModalProps> = ({
       open={open}
       onCancel={onClose}
       footer={footer}
-      width={900}
+      width={compact ? 'calc(100vw - 16px)' : 900}
+      style={{ top: compact ? 8 : undefined }}
       mask={{ closable: false }}
       styles={{
-        body: { padding: 0, maxHeight: '80vh', overflowY: 'auto' },
+        body: {
+          padding: 0,
+          height: compact ? 'calc(100dvh - 150px)' : undefined,
+          maxHeight: compact ? 'none' : '80vh',
+          overflowY: 'auto',
+        },
       }}
     >
-      {tabs}
+      {contents}
     </Modal>
   );
 };

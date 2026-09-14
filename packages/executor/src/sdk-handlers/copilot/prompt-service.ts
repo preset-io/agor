@@ -13,10 +13,12 @@
 
 import { loadManagedAgenticToolSdk } from '@agor/core/agentic-integrations';
 import { shortId } from '@agor/core/db';
-import { getMcpServersForSession } from '@agor/core/mcp';
-import { renderAgorSystemPrompt } from '@agor/core/templates/session-context';
+import { getMcpServersForSession, resolveScopedMCPAuthHeaders } from '@agor/core/mcp';
+import {
+  renderAgorSessionIdentity,
+  renderAgorSystemPrompt,
+} from '@agor/core/templates/session-context';
 import { mergeMCPRemoteHeaders } from '@agor/core/tools/mcp/http-headers';
-import { resolveMCPAuthHeaders } from '@agor/core/tools/mcp/jwt-auth';
 import type * as CopilotSdk from '@github/copilot-sdk';
 import type { CopilotSession } from '@github/copilot-sdk';
 import { getDaemonUrl } from '../../config.js';
@@ -36,6 +38,11 @@ import type { TokenUsage } from '../../types/token-usage.js';
 import type { PermissionMode, SessionID, TaskID } from '../../types.js';
 import { resolveContextUserId } from '../base/context-user.js';
 import type { MessagesService, SessionsPatchClient, TasksService } from '../base/index.js';
+import type { McpToolPermissionIndex } from '../base/mcp-tool-permissions.js';
+import {
+  buildMcpToolPermissionIndex,
+  EMPTY_MCP_TOOL_PERMISSION_INDEX,
+} from '../base/mcp-tool-permissions.js';
 import {
   collectWithheldMcpServers,
   reportWithheldMcpServers,
@@ -157,14 +164,14 @@ export class CopilotPromptService {
     sessionId: SessionID,
     taskId: TaskID,
     mcpToken?: string
-  ): Promise<Record<string, unknown>> {
+  ): Promise<{ servers: Record<string, unknown>; toolPermissions: McpToolPermissionIndex }> {
     const copilotMcpServers: Record<string, unknown> = {};
 
     // Fetch MCP servers for this session
     const session = await this.sessionsRepo.findById(sessionId);
     if (!session) {
       console.warn(`⚠️  [Copilot MCP] Session ${sessionId} not found; skipping MCP servers`);
-      return copilotMcpServers;
+      return { servers: copilotMcpServers, toolPermissions: EMPTY_MCP_TOOL_PERMISSION_INDEX };
     }
     const contextUserId = await resolveContextUserId({
       session,
@@ -179,19 +186,21 @@ export class CopilotPromptService {
         mcpServerRepo: this.mcpServerRepo,
         mcpOAuthAuthHeadersRepo: this.mcpOAuthAuthHeadersRepo,
         forUserId: contextUserId,
-        sessionOwnerId: session.created_by,
         onServerWithheld: reporter.onServerWithheld,
       },
-      // The per-server `tools` field below is an include-list, which cannot
-      // express "all but these" without enumerating a tool set that changes
-      // under us. `SessionConfig.excludedTools` is a true exclude-list, but the
-      // SDK forwards it verbatim to the Copilot CLI, which resolves it in
-      // native code against a name it mints itself (`namespacedName`) — a name
-      // Agor cannot construct, and a miss here reads as "allow". The CLI does
-      // document a `<mcp-server-name>(tool-name?)` permission pattern built
-      // from names Agor holds verbatim, but only for its `--deny-tool` flag,
-      // which `SessionConfig` does not expose.
-      { toolFiltering: 'none' }
+      // Still no way to filter the tool list handed to the model: the
+      // per-server `tools` field is an include-list, which cannot say "all but
+      // these" without enumerating a set that changes under us, and
+      // `SessionConfig.excludedTools` is resolved in the CLI's native code
+      // against a name it mints itself (`namespacedName`) that Agor cannot
+      // construct — a miss there reads as "allow".
+      //
+      // Enforcement happens at call time instead. `onPermissionRequest`
+      // delivers every MCP tool call as `kind: 'mcp'` carrying `serverName`
+      // and `toolName` as separate fields, which is an exact match against
+      // `tool_permissions` with nothing to guess. So a gated server no longer
+      // has to be withheld whole.
+      { toolFiltering: 'intercept' }
     );
     await reportWithheldMcpServers(this.messagesRepo, {
       sessionId,
@@ -202,7 +211,8 @@ export class CopilotPromptService {
     const mcpServers = serversWithSource.map((s) => s.server);
     console.log(`📊 [Copilot MCP] Found ${mcpServers.length} MCP server(s) for session`);
 
-    for (const server of mcpServers) {
+    for (const scoped of serversWithSource) {
+      const { server } = scoped;
       const serverName = server.name.toLowerCase().replace(/[^a-z0-9_-]/g, '_');
 
       if (server.transport === 'stdio') {
@@ -221,7 +231,7 @@ export class CopilotPromptService {
           tools: ['*'],
         };
 
-        const authHeaders = await resolveMCPAuthHeaders(server.auth, server.url);
+        const authHeaders = await resolveScopedMCPAuthHeaders(scoped);
         const headers = mergeMCPRemoteHeaders({ custom: server.headers, auth: authHeaders });
         if (headers) serverConfig.headers = headers;
 
@@ -244,7 +254,10 @@ export class CopilotPromptService {
       console.log(`   📝 [Copilot MCP] Configured Agor MCP server (HTTP)`);
     }
 
-    return copilotMcpServers;
+    return {
+      servers: copilotMcpServers,
+      toolPermissions: buildMcpToolPermissionIndex(mcpServers),
+    };
   }
 
   /**
@@ -295,19 +308,38 @@ export class CopilotPromptService {
 
     console.log(`   Working directory: ${branch.path}`);
 
-    // Create CopilotClient (spawns CLI process)
+    // Create CopilotClient (spawns CLI process).
+    //
+    // `CopilotClientOptions.env` REPLACES the spawned CLI's environment wholesale
+    // (it is not merged). On the pinned @github/copilot-sdk 0.2.2 there is no
+    // `baseDirectory` option, so this is the reachable route for a per-branch SDK
+    // home (design §8A.8): forward COPILOT_HOME / COPILOT_CACHE_HOME from the
+    // daemon-injected process env so the bundled CLI relocates its config/state
+    // and cache into the branch home. Absent (feature off) ⇒ CLI default home,
+    // i.e. today's behavior. Neither var is on the env blocklist (only HOME is).
     const Copilot = await loadManagedAgenticToolSdk<typeof CopilotSdk>('copilot');
+    const copilotEnv: Record<string, string> = { HOME: process.env.HOME || '' };
+    if (process.env.COPILOT_HOME) copilotEnv.COPILOT_HOME = process.env.COPILOT_HOME;
+    if (process.env.COPILOT_CACHE_HOME)
+      copilotEnv.COPILOT_CACHE_HOME = process.env.COPILOT_CACHE_HOME;
     this.client = new Copilot.CopilotClient({
       useStdio: true,
       githubToken: this.apiKey || undefined,
-      env: {
-        HOME: process.env.HOME || '',
-      },
+      env: copilotEnv,
     });
 
     try {
       await this.client.start();
       console.log(`✅ [Copilot] Client started`);
+
+      // MCP resolution runs first: it produces the `tool_permissions` index the
+      // permission handler enforces from, and that handler is the only place a
+      // denied tool can be stopped on this runtime.
+      const { servers: mcpServers, toolPermissions } = await this.buildMcpServers(
+        sessionId,
+        taskId || ('' as TaskID),
+        session.mcp_token
+      );
 
       // Build session configuration with interactive permission support
       const permissionDeps: PermissionDeps | undefined =
@@ -322,6 +354,7 @@ export class CopilotPromptService {
               permissionLocks: this.permissionLocks,
               mcpServerRepo: this.mcpServerRepo,
               sessionMCPRepo: this.sessionMCPServerRepo,
+              mcpToolPermissions: toolPermissions,
             }
           : undefined;
 
@@ -330,11 +363,6 @@ export class CopilotPromptService {
         taskId || ('' as TaskID),
         permissionMode,
         permissionDeps
-      );
-      const mcpServers = await this.buildMcpServers(
-        sessionId,
-        taskId || ('' as TaskID),
-        session.mcp_token
       );
       const systemMessage = await this.buildSystemMessage(sessionId);
 
@@ -489,7 +517,10 @@ export class CopilotPromptService {
       // Use sendAndWait for blocking execution with timeout
       const timeoutMs = 10 * 60 * 1000; // 10 minutes
       try {
-        await copilotSession.sendAndWait({ prompt }, timeoutMs);
+        await copilotSession.sendAndWait(
+          { prompt: `${prompt}\n\n${renderAgorSessionIdentity(sessionId)}` },
+          timeoutMs
+        );
       } catch (error) {
         // Check for abort
         if (

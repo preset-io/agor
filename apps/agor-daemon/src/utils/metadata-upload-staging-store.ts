@@ -1,8 +1,10 @@
+import { randomUUID } from 'node:crypto';
 import { runWithTenantDatabaseScope, UploadRepository } from '@agor/core/db';
 import type {
   UploadMetadata,
   UploadOwner,
   UploadReadInput,
+  UploadRef,
   UploadStageInput,
   UploadStagingStore,
 } from '@agor/core/types';
@@ -22,14 +24,35 @@ export class MetadataUploadStagingStore implements UploadStagingStore {
   }
 
   async stage(input: UploadStageInput): Promise<UploadMetadata> {
-    const metadata = await this.bytes.stage(input);
+    const ref = `upl_${randomUUID()}` as UploadRef;
+    await runWithTenantDatabaseScope(this.db, input.owner.tenantId, () =>
+      this.repository.reserve(input.owner, {
+        ref,
+        name: input.name,
+        mimeType: input.mimeType,
+        size: 0,
+        createdAt: new Date().toISOString(),
+        expiresAt: null,
+        provenance: input.provenance,
+      })
+    );
     try {
+      const metadata = await this.bytes.stage({ ...input, reservedRef: ref });
+      if (metadata.ref !== ref) throw new Error('Upload adapter changed reserved identity');
       await runWithTenantDatabaseScope(this.db, input.owner.tenantId, () =>
-        this.repository.create(input.owner, metadata)
+        this.repository.complete(input.owner, metadata)
       );
       return metadata;
     } catch (error) {
-      await this.bytes.delete({ ...input.owner, ref: metadata.ref }).catch(() => undefined);
+      // Retain the reservation when byte settlement cannot be verified.
+      await this.bytes
+        .delete({ ...input.owner, ref })
+        .then(() =>
+          runWithTenantDatabaseScope(this.db, input.owner.tenantId, () =>
+            this.repository.remove(input.owner.tenantId, ref)
+          )
+        )
+        .catch(() => undefined);
       throw error;
     }
   }

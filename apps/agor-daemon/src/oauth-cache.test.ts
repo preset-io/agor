@@ -86,7 +86,8 @@ describe('persistOAuthToken', () => {
           generation: 7,
           fingerprint: 'a'.repeat(64),
         }),
-      })
+      }),
+      'user-1'
     );
     expect(mockUpdate).not.toHaveBeenCalled();
   });

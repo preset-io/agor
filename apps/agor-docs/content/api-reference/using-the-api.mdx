@@ -193,11 +193,8 @@ Structured content example:
 ```ts
 import { createClient } from '@agor/core/api';
 
-const client = createClient('http://localhost:3030', true);
-
-await client.authenticate({
-  strategy: 'jwt',
-  accessToken: '<your-token>',
+const client = createClient('http://localhost:3030', true, {
+  socketAuthentication: { accessToken: '<your-token>' },
 });
 
 const sessions = await client.service('sessions').findAll({
@@ -221,6 +218,14 @@ const task = await client.service('tasks').create({
 const runningTask = await client.tasks.run(task.task_id, { stream: true });
 console.log(runningTask);
 ```
+
+The WebSocket bearer is verified during every Socket.IO handshake. A socket
+never starts anonymous and cannot change user or tenant through a later
+`client.authenticate()` call. To rotate a browser access token while retaining
+the client object and its listeners, supply an `accessToken` getter and update
+its value. A healthy connection keeps its immutable authenticated authority;
+the next automatic or explicit transport reconnect invokes the getter and
+verifies the fresh token.
 
 ## WebSocket Events
 

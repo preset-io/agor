@@ -9,15 +9,15 @@
 
 import { createHash, randomUUID } from 'node:crypto';
 import {
+  BOUND_SECRET_ENVELOPE_VERSION,
   generateId,
-  MCP_OAUTH_SECRET_ENVELOPE_VERSION,
   type MCPOAuthPendingFlowClaimResult,
   type MCPOAuthPendingFlowRecord,
   MCPOAuthPendingFlowRepository,
-  openMCPOAuthSecret,
+  openBoundSecret,
   runWithSystemDatabaseScope,
   runWithTenantDatabaseScope,
-  sealMCPOAuthSecret,
+  sealBoundSecret,
   type TenantScopeAwareDatabase,
 } from '@agor/core/db';
 import type { OAuthFlowContext } from '@agor/core/tools/mcp/oauth-mcp-transport';
@@ -26,27 +26,31 @@ import type {
   MCPOAuthMode,
   MCPOAuthPendingFlowSealedMaterial,
   MCPServerID,
+  MCPSlackOAuthRecoveryContext,
   UserID,
 } from '@agor/core/types';
 import { isMCPOAuthGrantBindingVersion } from '@agor/core/types';
-import { MCP_OAUTH_GRANT_BINDING_VERSION } from './mcp-oauth-grant-binding.js';
+import { grantBindingVersionForCompatibilityMode } from './mcp-oauth-grant-binding.js';
 
 const FLOW_TTL_MS = 10 * 60 * 1000;
 
 export type DurableMCPOAuthFlowContext = OAuthFlowContext;
 
 export interface DurableMCPOAuthFlowCreate {
+  attemptId?: MCPOAuthAttemptID;
   context: DurableMCPOAuthFlowContext;
   tenantId: string;
   userId: UserID;
   mcpServerId: MCPServerID;
   oauthMode: MCPOAuthMode;
   configFingerprint: string;
+  slackRecovery?: MCPSlackOAuthRecoveryContext;
 }
 
 export interface ClaimedDurableMCPOAuthFlow {
   record: MCPOAuthPendingFlowRecord;
   context: DurableMCPOAuthFlowContext;
+  slackRecovery?: MCPSlackOAuthRecoveryContext;
 }
 
 export function fingerprintMCPOAuthState(state: string): string {
@@ -75,8 +79,23 @@ function hasOnlyExpectedMaterialShape(value: unknown): value is MCPOAuthPendingF
     typeof material.pkceVerifier === 'string' &&
     typeof material.clientId === 'string' &&
     (material.clientSecret === undefined || typeof material.clientSecret === 'string') &&
-    (material.compatibilityMode === 'strict' || material.compatibilityMode === 'legacy') &&
-    typeof material.allowLocalhostHttp === 'boolean'
+    (material.clientRegistrationId === undefined ||
+      typeof material.clientRegistrationId === 'string') &&
+    (material.compatibilityMode === 'strict' ||
+      material.compatibilityMode === 'legacy' ||
+      material.compatibilityMode === 'marketplace') &&
+    (material.authorizationResponseIssuerParameterSupported === undefined ||
+      typeof material.authorizationResponseIssuerParameterSupported === 'boolean') &&
+    typeof material.allowLocalhostHttp === 'boolean' &&
+    (material.slackRecovery === undefined ||
+      (!!material.slackRecovery &&
+        typeof material.slackRecovery.notice_id === 'string' &&
+        typeof material.slackRecovery.task_id === 'string' &&
+        typeof material.slackRecovery.session_id === 'string' &&
+        typeof material.slackRecovery.mcp_server_id === 'string' &&
+        Number.isSafeInteger(material.slackRecovery.recovery_generation) &&
+        (material.slackRecovery.recovery_request_id === undefined ||
+          typeof material.slackRecovery.recovery_request_id === 'string')))
   );
 }
 
@@ -111,7 +130,7 @@ export class MCPOAuthPendingFlowAuthority {
   }
 
   async create(input: DurableMCPOAuthFlowCreate): Promise<MCPOAuthAttemptID> {
-    const attemptId = generateId() as MCPOAuthAttemptID;
+    const attemptId = input.attemptId ?? (generateId() as MCPOAuthAttemptID);
     await runWithTenantDatabaseScope(this.db, input.tenantId, async (scoped) => {
       const repository = new MCPOAuthPendingFlowRepository(scoped);
       const subjectUserId = input.oauthMode === 'per_user' ? input.userId : null;
@@ -132,7 +151,9 @@ export class MCPOAuthPendingFlowAuthority {
         mcpServerId: input.mcpServerId,
         oauthMode: input.oauthMode,
         grantGeneration,
-        configFingerprintVersion: MCP_OAUTH_GRANT_BINDING_VERSION,
+        configFingerprintVersion: grantBindingVersionForCompatibilityMode(
+          input.context.compatibilityMode
+        ),
         configFingerprint: input.configFingerprint,
         resourceUri: input.context.resourceUri,
         issuer: input.context.issuer,
@@ -143,10 +164,16 @@ export class MCPOAuthPendingFlowAuthority {
         pkceVerifier: input.context.pkceVerifier,
         clientId: input.context.clientId,
         ...(input.context.clientSecret ? { clientSecret: input.context.clientSecret } : {}),
+        ...(input.context.clientRegistrationId
+          ? { clientRegistrationId: input.context.clientRegistrationId }
+          : {}),
         compatibilityMode: input.context.compatibilityMode,
+        authorizationResponseIssuerParameterSupported:
+          input.context.authorizationResponseIssuerParameterSupported,
         allowLocalhostHttp: input.context.allowLocalhostHttp,
+        ...(input.slackRecovery ? { slackRecovery: input.slackRecovery } : {}),
       };
-      const sealedMaterial = sealMCPOAuthSecret(
+      const sealedMaterial = sealBoundSecret(
         JSON.stringify(material),
         this.masterSecret!,
         'pending-exchange',
@@ -168,9 +195,9 @@ export class MCPOAuthPendingFlowAuthority {
         oauthMode: input.oauthMode,
         subjectUserId,
         grantGeneration,
-        configFingerprintVersion: MCP_OAUTH_GRANT_BINDING_VERSION,
+        configFingerprintVersion: material.configFingerprintVersion,
         configFingerprint: input.configFingerprint,
-        envelopeVersion: MCP_OAUTH_SECRET_ENVELOPE_VERSION,
+        envelopeVersion: BOUND_SECRET_ENVELOPE_VERSION,
         sealedMaterial,
         ttlMs: FLOW_TTL_MS,
       });
@@ -228,7 +255,7 @@ export class MCPOAuthPendingFlowAuthority {
     let parsed: unknown;
     try {
       parsed = JSON.parse(
-        openMCPOAuthSecret(
+        openBoundSecret(
           record.sealedMaterial,
           this.masterSecret!,
           'pending-exchange',
@@ -258,7 +285,7 @@ export class MCPOAuthPendingFlowAuthority {
       material.grantGeneration !== record.grantGeneration ||
       material.configFingerprintVersion !== record.configFingerprintVersion ||
       material.configFingerprint !== record.configFingerprint ||
-      record.envelopeVersion !== MCP_OAUTH_SECRET_ENVELOPE_VERSION ||
+      record.envelopeVersion !== BOUND_SECRET_ENVELOPE_VERSION ||
       !record.isCurrent
     ) {
       throw new Error('MCP OAuth pending-flow material binding is invalid');
@@ -266,6 +293,7 @@ export class MCPOAuthPendingFlowAuthority {
 
     return {
       record,
+      ...(material.slackRecovery ? { slackRecovery: material.slackRecovery } : {}),
       context: {
         metadataUrl: material.metadataUrl,
         resourceUri: material.resourceUri,
@@ -276,11 +304,18 @@ export class MCPOAuthPendingFlowAuthority {
         pkceVerifier: material.pkceVerifier,
         clientId: material.clientId,
         clientSecret: material.clientSecret,
+        clientRegistrationId: material.clientRegistrationId,
         state: rawState,
         // Completion never reads this field. Do not persist or reconstruct the
         // secret-bearing authorization URL after the browser has opened it.
         authorizationUrl: '',
         compatibilityMode: material.compatibilityMode,
+        // Older version-2 envelopes predate this explicit bit. Strict starts
+        // could only succeed when the AS advertised RFC 9207, while legacy
+        // never required it, so the mode reconstructs the old contract.
+        authorizationResponseIssuerParameterSupported:
+          material.authorizationResponseIssuerParameterSupported ??
+          material.compatibilityMode === 'strict',
         allowLocalhostHttp: material.allowLocalhostHttp,
       },
     };

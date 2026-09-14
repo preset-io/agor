@@ -14,7 +14,7 @@
  * This wrapper returns augmented query builders with unified execution methods.
  */
 
-import { type SQL, sql } from 'drizzle-orm';
+import { type SQL, type SQLWrapper, sql } from 'drizzle-orm';
 import type { LibSQLDatabase } from 'drizzle-orm/libsql';
 import type { PgTable } from 'drizzle-orm/pg-core';
 import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
@@ -24,6 +24,17 @@ import type * as postgresSchema from './schema.postgres';
 import type * as sqliteSchema from './schema.sqlite';
 import type { DatabaseDialect } from './schema-factory';
 import { getCurrentTenantId } from './tenant-context';
+
+/** Execute one query without allowing it to cross a literal-memory tx boundary. */
+async function coordinateDatabaseOperation<T>(
+  _db: Database,
+  operation: () => Promise<T>
+): Promise<T> {
+  // Literal-memory operation ownership is enforced below Drizzle by the
+  // decorated libsql Client, so direct builders and wrapper helpers share the
+  // same boundary. Keep this helper as the unified execution seam.
+  return operation();
+}
 
 /**
  * Cast a Drizzle transaction handle to the unified Database type.
@@ -41,20 +52,51 @@ export function txAsDb(tx: unknown): Database {
 export async function runDatabaseTransaction<T>(
   db: Database,
   work: (tx: Database) => Promise<T>,
-  options: { sqliteImmediate?: boolean } = {}
+  options: {
+    sqliteImmediate?: boolean;
+    /** Opt in only for DB-only units; retries roll back the complete unit. */
+    sqliteBusyRetries?: number;
+    postgresIsolationLevel?: 'read committed' | 'repeatable read' | 'serializable';
+  } = {}
 ): Promise<T> {
+  // Literal-memory SQLite decorates both the libsql client and Drizzle's
+  // transaction callback at database creation, so this helper and direct
+  // callers share exactly the same connection/savepoint ownership. File
+  // SQLite and PostgreSQL retain their native transaction paths.
   const transaction = (
     db as unknown as {
       transaction(
         callback: (tx: unknown) => Promise<T>,
-        config?: { behavior: 'immediate' }
+        config?:
+          | { behavior: 'immediate' }
+          | { isolationLevel: 'read committed' | 'repeatable read' | 'serializable' }
       ): Promise<T>;
     }
   ).transaction.bind(db);
-  return transaction(
-    (tx) => work(txAsDb(tx)),
-    isSQLiteDatabase(db) && options.sqliteImmediate ? { behavior: 'immediate' } : undefined
-  );
+  const retries = options.sqliteBusyRetries ?? 0;
+  if (!Number.isInteger(retries) || retries < 0 || retries > 9)
+    throw new Error('Invalid SQLite busy retry limit');
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await transaction(
+        (tx) => work(txAsDb(tx)),
+        isSQLiteDatabase(db) && options.sqliteImmediate
+          ? { behavior: 'immediate' }
+          : options.postgresIsolationLevel
+            ? { isolationLevel: options.postgresIsolationLevel }
+            : undefined
+      );
+    } catch (error) {
+      const diagnostic = `${String(error)} ${String((error as { cause?: unknown })?.cause)}`;
+      if (
+        !isSQLiteDatabase(db) ||
+        attempt >= retries ||
+        !/SQLITE_BUSY|database is locked/i.test(diagnostic)
+      )
+        throw error;
+      await new Promise((resolve) => setTimeout(resolve, 10 * (attempt + 1)));
+    }
+  }
 }
 
 /**
@@ -146,6 +188,39 @@ export function jsonExtract(db: Database, column: SQL.Aliased | SQL | any, path:
 }
 
 /**
+ * Set a top-level JSON property without replacing unrelated properties.
+ *
+ * User preferences and credential metadata share `users.data`; callers must
+ * never implement a read/spread/write cycle that can lose a concurrent update
+ * to a sibling property.
+ */
+export function jsonSetString(db: Database, column: SQLWrapper, key: string, value: string): SQL {
+  if (key.includes('.') || !/^[A-Za-z0-9_]+$/.test(key)) {
+    throw new Error(`jsonSetString only supports safe top-level keys: ${key}`);
+  }
+  if (isSQLiteDatabase(db)) {
+    return sql`json_set(${column}, ${`$.${key}`}, ${value})`;
+  }
+  return sql`pg_catalog.jsonb_set(
+    ${column},
+    ${`{${key}}`}::pg_catalog.text[],
+    pg_catalog.to_jsonb(${value}::pg_catalog.text),
+    true
+  )`;
+}
+
+/** Remove a top-level JSON property without replacing unrelated properties. */
+export function jsonRemoveProperty(db: Database, column: SQLWrapper, key: string): SQL {
+  if (key.includes('.') || !/^[A-Za-z0-9_]+$/.test(key)) {
+    throw new Error(`jsonRemoveProperty only supports safe top-level keys: ${key}`);
+  }
+  if (isSQLiteDatabase(db)) {
+    return sql`json_remove(${column}, ${`$.${key}`})`;
+  }
+  return sql`${column} - ${key}`;
+}
+
+/**
  * Supported bucket granularities for {@link dateTruncUtc}.
  */
 export type DateBucket = 'hour' | 'day' | 'week' | 'month';
@@ -233,9 +308,27 @@ export async function lockRowForUpdate(
   // SQLite: no-op — implicit locking via transaction
 }
 
-/**
- * Raw SQL query result type
- */
+/** Normalize driver-specific raw-query rows without leaking array/result shapes. */
+export function rawRows<T extends Record<string, unknown> = Record<string, unknown>>(
+  result: unknown
+): T[] {
+  if (Array.isArray(result)) return result as T[];
+  const rows = (result as { rows?: unknown[] } | undefined)?.rows;
+  return Array.isArray(rows) ? (rows as T[]) : [];
+}
+
+/** Normalize mutation counts returned by postgres.js, Drizzle, and LibSQL. */
+export function rawRowsAffected(result: unknown): number {
+  const candidate =
+    (result as { rowCount?: unknown } | undefined)?.rowCount ??
+    (result as { rowsAffected?: unknown } | undefined)?.rowsAffected ??
+    (result as { count?: unknown } | undefined)?.count;
+  const count = Number(candidate);
+  if (Number.isSafeInteger(count) && count >= 0) return count;
+  return Array.isArray(result) ? result.length : 0;
+}
+
+/** Driver-neutral shape used by callers that inspect raw query metadata. */
 export type RawQueryResult = {
   rows?: unknown[];
   rowCount?: number;
@@ -245,12 +338,13 @@ export type RawQueryResult = {
  * Execute a raw SQL query on any database
  */
 export async function executeRaw(db: Database, query: SQL): Promise<RawQueryResult> {
-  if (isSQLiteDatabase(db)) {
-    return (await db.run(query)) as RawQueryResult;
-  } else {
+  return coordinateDatabaseOperation(db, async () => {
+    if (isSQLiteDatabase(db)) {
+      return (await db.run(query)) as RawQueryResult;
+    }
     // PostgreSQL uses execute for raw SQL
     return (await db.execute(query)) as RawQueryResult;
-  }
+  });
 }
 
 /**
@@ -262,25 +356,27 @@ export async function getOne<T extends SQLiteTable | PgTable, TResult = unknown>
   table: T,
   where?: SQL
 ): Promise<TResult | null> {
-  if (isSQLiteDatabase(db)) {
-    // biome-ignore lint/suspicious/noExplicitAny: Drizzle query builder types are complex and require type assertion
-    const query = db.select().from(table as any);
-    if (where) {
-      return (await (query as { where: (where: SQL) => { get: () => Promise<unknown> } })
-        .where(where)
-        .get()) as TResult;
-    }
-    return (await (query as { get: () => Promise<unknown> }).get()) as TResult;
-  } else {
-    // biome-ignore lint/suspicious/noExplicitAny: Drizzle query builder types are complex and require type assertion
-    const query = (db as any).select().from(table);
-    if (where) {
-      const results = await query.where(where).limit(1);
+  return coordinateDatabaseOperation(db, async () => {
+    if (isSQLiteDatabase(db)) {
+      // biome-ignore lint/suspicious/noExplicitAny: Drizzle query builder types are complex and require type assertion
+      const query = db.select().from(table as any);
+      if (where) {
+        return (await (query as { where: (where: SQL) => { get: () => Promise<unknown> } })
+          .where(where)
+          .get()) as TResult;
+      }
+      return (await (query as { get: () => Promise<unknown> }).get()) as TResult;
+    } else {
+      // biome-ignore lint/suspicious/noExplicitAny: Drizzle query builder types are complex and require type assertion
+      const query = (db as any).select().from(table);
+      if (where) {
+        const results = await query.where(where).limit(1);
+        return (results[0] as TResult) || null;
+      }
+      const results = await query.limit(1);
       return (results[0] as TResult) || null;
     }
-    const results = await query.limit(1);
-    return (results[0] as TResult) || null;
-  }
+  });
 }
 
 /**
@@ -297,21 +393,23 @@ export async function insertOne<T extends SQLiteTable | PgTable, TResult = unkno
   table: T,
   values: InsertValues<T>
 ): Promise<TResult> {
-  if (isSQLiteDatabase(db)) {
-    const result = await db
+  return coordinateDatabaseOperation(db, async () => {
+    if (isSQLiteDatabase(db)) {
+      const result = await db
+        // biome-ignore lint/suspicious/noExplicitAny: Drizzle query builder types are complex and require type assertion
+        .insert(table as any)
+        .values(withTenantInsertValues(values, table) as never)
+        .returning();
+      return result as TResult;
+    } else {
       // biome-ignore lint/suspicious/noExplicitAny: Drizzle query builder types are complex and require type assertion
-      .insert(table as any)
-      .values(withTenantInsertValues(values, table) as never)
-      .returning();
-    return result as TResult;
-  } else {
-    // biome-ignore lint/suspicious/noExplicitAny: Drizzle query builder types are complex and require type assertion
-    const result = await (db as any)
-      .insert(table)
-      .values(withTenantInsertValues(values, table) as never)
-      .returning();
-    return result[0] as TResult;
-  }
+      const result = await (db as any)
+        .insert(table)
+        .values(withTenantInsertValues(values, table) as never)
+        .returning();
+      return result[0] as TResult;
+    }
+  });
 }
 
 /**
@@ -348,43 +446,46 @@ function wrapQuery(
 ): UnsafeDrizzleAny {
   return {
     ...query,
-    one: async () => {
-      if (isSQLiteDatabase(db)) {
-        return await (query as { get: () => Promise<unknown> }).get();
-      } else {
-        // For PostgreSQL, add .limit(1) and execute the query
-        const results = (await (query as { limit: (count: number) => Promise<unknown[]> }).limit(
-          1
-        )) as unknown[];
-        return results[0] || null;
-      }
-    },
-    all: async () => {
-      if (isSQLiteDatabase(db)) {
-        return await (query as { all: () => Promise<unknown[]> }).all();
-      } else {
-        // For PostgreSQL, just await the query (it's a promise)
-        return await query;
-      }
-    },
-    run: async () => {
-      if (isSQLiteDatabase(db)) {
-        return await (query as { run: () => Promise<unknown> }).run();
-      } else {
-        // For PostgreSQL, execute and return result metadata
-        // PostgreSQL returns an array for SELECT, but has a 'count' property for INSERT/UPDATE/DELETE
-        const result = (await query) as unknown;
-
-        // For DELETE/UPDATE/INSERT, postgres-js returns an array-like object with a 'count' property
-        // For SELECT, it returns a plain array
-        if (Array.isArray(result) && 'count' in result) {
-          return { rowsAffected: (result as { count: number }).count };
+    one: async () =>
+      coordinateDatabaseOperation(db, async () => {
+        if (isSQLiteDatabase(db)) {
+          return await (query as { get: () => Promise<unknown> }).get();
+        } else {
+          // For PostgreSQL, add .limit(1) and execute the query
+          const results = (await (query as { limit: (count: number) => Promise<unknown[]> }).limit(
+            1
+          )) as unknown[];
+          return results[0] || null;
         }
+      }),
+    all: async () =>
+      coordinateDatabaseOperation(db, async () => {
+        if (isSQLiteDatabase(db)) {
+          return await (query as { all: () => Promise<unknown[]> }).all();
+        } else {
+          // For PostgreSQL, just await the query (it's a promise)
+          return await query;
+        }
+      }),
+    run: async () =>
+      coordinateDatabaseOperation(db, async () => {
+        if (isSQLiteDatabase(db)) {
+          return await (query as { run: () => Promise<unknown> }).run();
+        } else {
+          // For PostgreSQL, execute and return result metadata
+          // PostgreSQL returns an array for SELECT, but has a 'count' property for INSERT/UPDATE/DELETE
+          const result = (await query) as unknown;
 
-        // Fallback: treat as array (for queries that return rows)
-        return { rowsAffected: (result as unknown[]).length || 0 };
-      }
-    },
+          // For DELETE/UPDATE/INSERT, postgres-js returns an array-like object with a 'count' property
+          // For SELECT, it returns a plain array
+          if (Array.isArray(result) && 'count' in result) {
+            return { rowsAffected: (result as { count: number }).count };
+          }
+
+          // Fallback: treat as array (for queries that return rows)
+          return { rowsAffected: (result as unknown[]).length || 0 };
+        }
+      }),
     returning: () => wrapReturning((query as { returning: () => DrizzleQuery }).returning(), db),
     // Preserve chainable methods
     where: (...args: unknown[]) =>
@@ -447,6 +548,14 @@ function wrapQuery(
         db,
         table
       ),
+    onConflictDoUpdate: (...args: unknown[]) =>
+      wrapQuery(
+        (query as { onConflictDoUpdate: (...args: unknown[]) => DrizzleQuery }).onConflictDoUpdate(
+          ...args
+        ),
+        db,
+        table
+      ),
   };
 }
 
@@ -455,22 +564,24 @@ function wrapQuery(
  */
 function wrapReturning(query: DrizzleQuery, db: Database): UnifiedReturning {
   return {
-    one: async () => {
-      if (isSQLiteDatabase(db)) {
-        return await (query as { get: () => Promise<unknown> }).get();
-      } else {
-        const results = (await query) as unknown;
-        return (results as unknown[])[0];
-      }
-    },
-    all: async () => {
-      if (isSQLiteDatabase(db)) {
-        return await (query as { all: () => Promise<unknown[]> }).all();
-      } else {
-        const result = (await query) as unknown;
-        return result as unknown[];
-      }
-    },
+    one: async () =>
+      coordinateDatabaseOperation(db, async () => {
+        if (isSQLiteDatabase(db)) {
+          return await (query as { get: () => Promise<unknown> }).get();
+        } else {
+          const results = (await query) as unknown;
+          return (results as unknown[])[0];
+        }
+      }),
+    all: async () =>
+      coordinateDatabaseOperation(db, async () => {
+        if (isSQLiteDatabase(db)) {
+          return await (query as { all: () => Promise<unknown[]> }).all();
+        } else {
+          const result = (await query) as unknown;
+          return result as unknown[];
+        }
+      }),
   };
 }
 
@@ -530,12 +641,13 @@ export async function executeGet<T = unknown>(
   query: DrizzleQuery,
   db: Database
 ): Promise<T | null> {
-  if (isSQLiteDatabase(db)) {
-    return (await (query as { get: () => Promise<unknown> }).get()) as T;
-  } else {
+  return coordinateDatabaseOperation(db, async () => {
+    if (isSQLiteDatabase(db)) {
+      return (await (query as { get: () => Promise<unknown> }).get()) as T;
+    }
     const results = await (query as { limit: (count: number) => Promise<unknown[]> }).limit(1);
     return (results[0] as T) || null;
-  }
+  });
 }
 
 /**
@@ -543,12 +655,13 @@ export async function executeGet<T = unknown>(
  * Dialect-aware wrapper for .all()
  */
 export async function executeAll<T = unknown>(query: DrizzleQuery, db: Database): Promise<T[]> {
-  if (isSQLiteDatabase(db)) {
-    return (await (query as { all: () => Promise<unknown[]> }).all()) as T[];
-  } else {
+  return coordinateDatabaseOperation(db, async () => {
+    if (isSQLiteDatabase(db)) {
+      return (await (query as { all: () => Promise<unknown[]> }).all()) as T[];
+    }
     const result = (await query) as unknown;
     return result as T[];
-  }
+  });
 }
 
 /**
@@ -559,11 +672,13 @@ export async function executeRun(
   query: DrizzleQuery,
   db: Database
 ): Promise<MutationResult | unknown[]> {
-  if (isSQLiteDatabase(db)) {
-    return await (query as { run: () => Promise<MutationResult> }).run();
-  } else {
-    // PostgreSQL: Just execute the query
-    const result = (await query) as unknown;
-    return result as unknown[];
-  }
+  return coordinateDatabaseOperation(db, async () => {
+    if (isSQLiteDatabase(db)) {
+      return await (query as { run: () => Promise<MutationResult> }).run();
+    } else {
+      // PostgreSQL: Just execute the query
+      const result = (await query) as unknown;
+      return result as unknown[];
+    }
+  });
 }

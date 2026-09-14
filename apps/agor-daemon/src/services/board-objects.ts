@@ -45,6 +45,7 @@ export type BoardObjectParams = QueryParams<{
   card_id?: CardID;
   zone_id?: string;
   entity_type?: BoardEntityType;
+  exclude_archived_branches?: boolean;
 }> & {
   /** Internal RBAC SQL pushdown marker set by register-hooks for external regular users. */
   _agorSqlBoardAccessUserId?: UUID;
@@ -60,13 +61,18 @@ export interface NormalizedBoardObjectFindQuery {
 export function normalizeBoardObjectFindQuery(
   query: BoardObjectParams['query'] = {}
 ): NormalizedBoardObjectFindQuery {
-  const { board_id, branch_id, card_id, zone_id, entity_type } = query;
+  const { board_id, branch_id, card_id, zone_id, entity_type, exclude_archived_branches } = query;
   const requestedSkip = Number(query.$skip ?? 0);
   const requestedLimit = typeof query.$limit === 'number' ? query.$limit : undefined;
   const filters = Object.fromEntries(
-    Object.entries({ board_id, branch_id, card_id, zone_id, entity_type }).filter(
-      ([, value]) => value !== undefined
-    )
+    Object.entries({
+      board_id,
+      branch_id,
+      card_id,
+      zone_id,
+      entity_type,
+      exclude_archived_branches,
+    }).filter(([, value]) => value !== undefined)
   ) as BoardObjectFindFilters;
 
   return {
@@ -160,8 +166,11 @@ export class BoardObjectsService {
   /**
    * Get single board object
    */
-  async get(id: string, _params?: BoardObjectParams): Promise<BoardEntityObject> {
-    const object = await this.boardObjectRepo.findByObjectId(id);
+  async get(id: string, params?: BoardObjectParams): Promise<BoardEntityObject> {
+    const visibleToUserId = params?._agorSqlBoardAccessUserId;
+    const object = visibleToUserId
+      ? await this.boardObjectRepo.findVisibleByObjectId(visibleToUserId, id)
+      : await this.boardObjectRepo.findByObjectId(id);
     if (!object) {
       throw new Error(`Board object ${id} not found`);
     }

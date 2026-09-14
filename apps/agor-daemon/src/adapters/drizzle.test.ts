@@ -215,7 +215,21 @@ describe('DrizzleService tenant isolation', () => {
     const repo = makeRepo([{ id: 'b', name: 'B', tenant_id: 'tenant-b' }]);
     const { service } = makeService(repo);
 
-    await expect(service.get('b', tenantParams)).rejects.toThrow(/Widget.*b/);
+    await expect(service.get('b', tenantParams)).rejects.toMatchObject({
+      code: 404,
+      className: 'not-found',
+      message: expect.stringMatching(/Widget.*b/),
+    });
+  });
+
+  it('maps a missing repository row to a Feathers 404', async () => {
+    const { service } = makeService(makeRepo());
+
+    await expect(service.get('missing', tenantParams)).rejects.toMatchObject({
+      code: 404,
+      className: 'not-found',
+      message: expect.stringMatching(/Widget.*missing/),
+    });
   });
 
   it('does not allow patch() to move a row to another tenant', async () => {

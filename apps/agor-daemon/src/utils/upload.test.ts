@@ -102,11 +102,21 @@ describe('enforceTotalUploadSize (pre-multer Content-Length)', () => {
     const mw = enforceTotalUploadSize();
     const req = {
       headers: { 'content-length': String(MAX_UPLOAD_TOTAL_SIZE + 1) },
+      _uploadRequestId: 'request-oversize',
     } as unknown as Request;
     const res = mockRes();
     const next = vi.fn() as NextFunction;
     mw(req, res, next);
     expect(res._status).toBe(413);
+    expect(res._body).toMatchObject({
+      error: 'Upload too large',
+      code: 'PAYLOAD_TOO_LARGE',
+      requestId: 'request-oversize',
+    });
+    expect(res.locals).toMatchObject({
+      uploadFailureCode: 'PAYLOAD_TOO_LARGE',
+      uploadFailureType: 'upload_policy',
+    });
     expect(next).not.toHaveBeenCalled();
   });
 

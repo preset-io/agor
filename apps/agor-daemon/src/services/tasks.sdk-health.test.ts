@@ -2,16 +2,13 @@ import { type SdkFailure, TaskStatus } from '@agor/core/types';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const beginExecutorTermination = vi.hoisted(() => vi.fn());
-const withFreshTenantWriteDatabase = vi.hoisted(() =>
-  vi.fn(async (work: () => Promise<unknown>) => work())
-);
-const createFreshTenantWriteDatabaseRunner = vi.hoisted(() =>
-  vi.fn(() => withFreshTenantWriteDatabase)
+const withFreshTenantWrite = vi.hoisted(() =>
+  vi.fn(async (_db: unknown, _tenantId: string, work: () => Promise<unknown>) => work())
 );
 vi.mock('../termination-coordinator.js', () => ({ beginExecutorTermination }));
 vi.mock('../utils/tenant-db-scope.js', () => ({
-  createFreshTenantWriteDatabaseRunner,
   deferWithTenantContext: vi.fn(),
+  withFreshTenantWrite,
 }));
 
 import { TasksService } from './tasks.js';
@@ -53,8 +50,7 @@ function serviceFor(current = task, observationAccepted = true) {
 describe('TasksService SDK health reports', () => {
   beforeEach(() => {
     beginExecutorTermination.mockReset();
-    withFreshTenantWriteDatabase.mockClear();
-    createFreshTenantWriteDatabaseRunner.mockClear();
+    withFreshTenantWrite.mockClear();
   });
 
   it('persists observe-only evidence without lifecycle side effects', async () => {
@@ -113,16 +109,20 @@ describe('TasksService SDK health reports', () => {
       { tenant: { tenant_id: 'tenant-a' } } as never
     );
 
-    expect(createFreshTenantWriteDatabaseRunner).toHaveBeenCalledWith({}, 'tenant-a');
     expect(beginExecutorTermination).toHaveBeenCalledWith(
       expect.objectContaining({
         taskId: task.task_id,
         cause: 'sdk_health_failure',
         signalDelayMs: 25,
         sdkFailure: expect.objectContaining({ termination: 'requested' }),
-        runInFreshTenantWriteDatabase: withFreshTenantWriteDatabase,
+        runInFreshTenantWriteDatabase: expect.any(Function),
       })
     );
+    const runFreshWrite = beginExecutorTermination.mock.calls[0][0]
+      .runInFreshTenantWriteDatabase as (work: () => Promise<unknown>) => Promise<unknown>;
+    const work = vi.fn(async () => 'written');
+    await expect(runFreshWrite(work)).resolves.toBe('written');
+    expect(withFreshTenantWrite).toHaveBeenCalledWith({}, 'tenant-a', work);
   });
 
   it('rejects terminal, disconnected, disabled, and authority-escalating reports', async () => {

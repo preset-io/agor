@@ -9,10 +9,20 @@
  * rather than through a close/reopen that only approximates it.
  */
 
-import type { Branch, MCPCatalogEntry } from '@agor/core/types';
-import { fireEvent, render, screen } from '@testing-library/react';
+import type { Branch, MCPCatalogCredentialRequirement, MCPCatalogEntry } from '@agor/core/types';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
+import { type MCPServerCapabilityContext, POLICY_LOADING_HINT } from '../MCPServer/memberPolicy';
 import { CatalogDetailDrawer } from './CatalogDetailDrawer';
+
+const ALLOWED: MCPServerCapabilityContext = {
+  connectionReady: true,
+  role: 'admin',
+  isAdmin: true,
+  policy: 'allow_crud',
+  userId: 'user-admin',
+  canConfigure: true,
+};
 
 const DEEPWIKI = {
   name: 'com.deepwiki/mcp',
@@ -34,42 +44,162 @@ const LINEAR = {
   permission_disclosure: 'Reads and writes issues in the Linear workspaces you authorise.',
 } as unknown as MCPCatalogEntry;
 
+const OAUTH_LINEAR = { ...LINEAR, auth_type: 'oauth' } as MCPCatalogEntry;
+
 const BRANCHES = [{ branch_id: 'branch-1', name: 'mkt-slice' }] as unknown as Branch[];
 
-function renderDrawer(entry: MCPCatalogEntry) {
+function renderDrawer(
+  entry: MCPCatalogEntry,
+  options: { capability?: MCPServerCapabilityContext; policyPending?: boolean } = {}
+) {
+  const { capability = ALLOWED, policyPending = false } = options;
   const view = render(
     <CatalogDetailDrawer
+      identityKey={capability.userId ?? null}
       entry={entry}
       open
       onClose={vi.fn()}
-      branches={BRANCHES}
-      branchesLoading={false}
-      branchesError={null}
-      defaultBranchId="branch-1"
+      teammates={BRANCHES}
+      teammatesLoading={false}
+      teammatesError={null}
+      defaultTeammateId="branch-1"
+      startingSession={false}
+      startSessionError={null}
       connecting={false}
       connectError={null}
+      connectCapability={capability}
+      policyPending={policyPending}
+      policyPendingHint={POLICY_LOADING_HINT}
       onConnect={vi.fn()}
     />
   );
   const show = (next: MCPCatalogEntry) =>
     view.rerender(
       <CatalogDetailDrawer
+        identityKey={capability.userId ?? null}
         entry={next}
         open
         onClose={vi.fn()}
-        branches={BRANCHES}
-        branchesLoading={false}
-        branchesError={null}
-        defaultBranchId="branch-1"
+        teammates={BRANCHES}
+        teammatesLoading={false}
+        teammatesError={null}
+        defaultTeammateId="branch-1"
+        startingSession={false}
+        startSessionError={null}
         connecting={false}
         connectError={null}
+        connectCapability={capability}
+        policyPending={policyPending}
+        policyPendingHint={POLICY_LOADING_HINT}
         onConnect={vi.fn()}
       />
     );
   return { show };
 }
 
-const connectButton = () => screen.getByRole('button', { name: /Connect/ });
+const connectButton = () => {
+  const match = screen
+    .getAllByText(/^(Connect with .+|Connect|Connect|Connect)$/i)
+    .find((node) => node.closest('button'));
+  if (!match) throw new Error('Connect button not found');
+  return match.closest('button')!;
+};
+
+it('keeps the catalog ID copyable inside collapsed technical details', async () => {
+  renderDrawer(DEEPWIKI);
+  fireEvent.click(screen.getByText('Technical details'));
+  expect(await screen.findByRole('button', { name: 'Copy' })).toBeInTheDocument();
+});
+
+describe('CatalogDetailDrawer connected state', () => {
+  it('keeps one persistent live region and mutates its truthful OAuth state', () => {
+    const base = {
+      identityKey: 'user-admin',
+      entry: OAUTH_LINEAR,
+      open: true,
+      onClose: vi.fn(),
+      teammates: BRANCHES,
+      teammatesLoading: false,
+      teammatesError: null,
+      defaultTeammateId: 'branch-1',
+      startingSession: false,
+      startSessionError: null,
+      connecting: false,
+      connectError: null,
+      connectCapability: ALLOWED,
+      policyPending: false,
+      policyPendingHint: POLICY_LOADING_HINT,
+      onConnect: vi.fn(),
+    };
+    const view = render(
+      <CatalogDetailDrawer
+        {...base}
+        success={{
+          catalogKey: DEEPWIKI.name,
+          serverId: 'server-1',
+          authentication: 'pending',
+          reusedExistingServer: false,
+        }}
+      />
+    );
+    const liveRegion = screen.getByRole('status');
+    expect(liveRegion).toHaveTextContent('Connection status: Sign-in pending.');
+
+    view.rerender(
+      <CatalogDetailDrawer
+        {...base}
+        success={{
+          catalogKey: DEEPWIKI.name,
+          serverId: 'server-1',
+          authentication: 'ready',
+          reusedExistingServer: false,
+        }}
+      />
+    );
+    expect(screen.getByRole('status')).toBe(liveRegion);
+    expect(liveRegion).toHaveTextContent('Connection status: Connected and ready.');
+  });
+
+  it('retains server context and focuses the truthful next step', async () => {
+    const openSession = vi.fn();
+    render(
+      <CatalogDetailDrawer
+        identityKey="user-admin"
+        entry={DEEPWIKI}
+        open
+        onClose={vi.fn()}
+        teammates={BRANCHES}
+        teammatesLoading={false}
+        teammatesError={null}
+        defaultTeammateId="branch-1"
+        startingSession={false}
+        startSessionError={null}
+        connecting={false}
+        connectError={null}
+        connectCapability={ALLOWED}
+        policyPending={false}
+        policyPendingHint={POLICY_LOADING_HINT}
+        success={{
+          catalogKey: DEEPWIKI.name,
+          serverId: 'server-1',
+          authentication: 'ready',
+          reusedExistingServer: false,
+        }}
+        onBeginSessionSetup={openSession}
+        onConnect={vi.fn()}
+      />
+    );
+
+    expect(screen.getByText('Added to My Servers')).toBeInTheDocument();
+    expect(screen.getByText(DEEPWIKI.benefit)).toBeInTheDocument();
+    expect(screen.queryByRole('checkbox')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Connect/ })).not.toBeInTheDocument();
+    const open = screen.getByRole('button', { name: 'Start new session' });
+    await waitFor(() => expect(open).toHaveFocus());
+    fireEvent.click(open);
+    expect(openSession).toHaveBeenCalledOnce();
+  });
+});
 
 describe('CatalogDetailDrawer consent', () => {
   it('gates connect on the disclosure being acknowledged', () => {
@@ -111,5 +241,518 @@ describe('CatalogDetailDrawer consent', () => {
     expect(screen.getByText('Now also writes to your repositories.')).toBeVisible();
     expect(screen.getByRole('checkbox')).not.toBeChecked();
     expect(connectButton()).toBeDisabled();
+  });
+});
+
+describe('CatalogDetailDrawer OAuth activation', () => {
+  const renderOAuth = (
+    onConnect = vi.fn(),
+    options: { entry?: MCPCatalogEntry; readinessLoading?: boolean } = {}
+  ) =>
+    render(
+      <CatalogDetailDrawer
+        identityKey="user-admin"
+        entry={options.entry ?? OAUTH_LINEAR}
+        open
+        onClose={vi.fn()}
+        teammates={BRANCHES}
+        teammatesLoading={false}
+        teammatesError={null}
+        defaultTeammateId="branch-1"
+        startingSession={false}
+        startSessionError={null}
+        connecting={false}
+        connectError={null}
+        readiness={
+          options.readinessLoading
+            ? null
+            : { catalog_key: OAUTH_LINEAR.name, state: 'oauth_required' }
+        }
+        readinessLoading={options.readinessLoading}
+        connectCapability={ALLOWED}
+        policyPending={false}
+        policyPendingHint={POLICY_LOADING_HINT}
+        onConnect={onConnect}
+      />
+    );
+
+  it('pre-opens a blank window in the click before handing control to Connect', () => {
+    const popup = {
+      opener: window,
+      closed: false,
+      close: vi.fn(),
+      location: { replace: vi.fn() },
+      document: { title: '', body: { textContent: '' } },
+    } as unknown as Window;
+    const open = vi.spyOn(window, 'open').mockReturnValue(popup);
+    const onConnect = vi.fn();
+    renderOAuth(onConnect);
+    fireEvent.click(screen.getByRole('checkbox'));
+    fireEvent.click(connectButton());
+    expect(open).toHaveBeenCalledWith(
+      'about:blank',
+      expect.stringMatching(/^agor-mcp-oauth-/),
+      'popup=yes,width=720,height=760'
+    );
+    expect(onConnect).toHaveBeenCalledWith(
+      expect.objectContaining({
+        oauthPopup: expect.objectContaining({ close: expect.any(Function) }),
+      })
+    );
+    open.mockRestore();
+  });
+
+  it('conservatively pre-opens on a fast click while readiness is still unknown', () => {
+    const popup = {
+      opener: window,
+      closed: false,
+      close: vi.fn(),
+      location: { replace: vi.fn() },
+      document: { title: '', body: { textContent: '' } },
+    } as unknown as Window;
+    const open = vi.spyOn(window, 'open').mockReturnValue(popup);
+    const onConnect = vi.fn();
+    renderOAuth(onConnect, { entry: DEEPWIKI, readinessLoading: true });
+
+    fireEvent.click(screen.getByRole('checkbox'));
+    expect(connectButton()).toBeEnabled();
+    fireEvent.click(connectButton());
+
+    expect(open).toHaveBeenCalledOnce();
+    expect(onConnect).toHaveBeenCalledWith(
+      expect.objectContaining({
+        oauthPopup: expect.objectContaining({ operationId: expect.any(String) }),
+      })
+    );
+    open.mockRestore();
+  });
+
+  it('does not call Connect when the browser blocks the popup', () => {
+    const open = vi.spyOn(window, 'open').mockReturnValue(null);
+    const onConnect = vi.fn();
+    renderOAuth(onConnect);
+    fireEvent.click(screen.getByRole('checkbox'));
+    fireEvent.click(connectButton());
+    expect(onConnect).not.toHaveBeenCalled();
+    expect(
+      screen.getByText('Nothing was connected because the sign-in window could not be opened.')
+    ).toBeVisible();
+    open.mockRestore();
+  });
+});
+
+describe('CatalogDetailDrawer connect capability', () => {
+  const VIEWER: MCPServerCapabilityContext = {
+    connectionReady: true,
+    role: 'viewer',
+    isAdmin: false,
+    policy: 'allow_crud',
+    userId: 'user-viewer',
+    canConfigure: false,
+  };
+  const RESTRICTED_MEMBER: MCPServerCapabilityContext = {
+    connectionReady: true,
+    role: 'member',
+    isAdmin: false,
+    policy: 'use_existing_only',
+    userId: 'user-member',
+    canConfigure: false,
+  };
+
+  it('refuses a viewer at the action and explains the role restriction', () => {
+    renderDrawer(DEEPWIKI, { capability: VIEWER });
+    fireEvent.click(screen.getByRole('checkbox'));
+
+    expect(connectButton()).toBeDisabled();
+    expect(screen.getByText(/read-only access/i)).toBeInTheDocument();
+  });
+
+  it('refuses a member when the workspace policy forbids new servers', () => {
+    renderDrawer(DEEPWIKI, { capability: RESTRICTED_MEMBER });
+    fireEvent.click(screen.getByRole('checkbox'));
+
+    expect(connectButton()).toBeDisabled();
+    expect(screen.getByText(/Use existing servers only/)).toBeInTheDocument();
+  });
+
+  it('enables the action for a member with server-provided capability', () => {
+    renderDrawer(DEEPWIKI, {
+      capability: { ...RESTRICTED_MEMBER, policy: 'allow_crud', canConfigure: true },
+    });
+    fireEvent.click(screen.getByRole('checkbox'));
+
+    expect(connectButton()).toBeEnabled();
+  });
+
+  it('fails closed during disconnect grace even with a previously granted capability', () => {
+    renderDrawer(DEEPWIKI, {
+      capability: {
+        ...RESTRICTED_MEMBER,
+        connectionReady: false,
+        policy: 'allow_crud',
+        canConfigure: true,
+      },
+    });
+    fireEvent.click(screen.getByRole('checkbox'));
+
+    expect(connectButton()).toBeDisabled();
+  });
+
+  it('fails closed without inventing a workspace policy while the read is pending', () => {
+    renderDrawer(DEEPWIKI, { policyPending: true });
+    fireEvent.click(screen.getByRole('checkbox'));
+
+    expect(connectButton()).toBeDisabled();
+    expect(screen.getByText(POLICY_LOADING_HINT)).toBeInTheDocument();
+    expect(screen.queryByText(/does not let you add/i)).not.toBeInTheDocument();
+  });
+});
+
+/**
+ * The API-key field.
+ *
+ * The drawer is the only place a key is ever typed, so two of its rules are
+ * load-bearing rather than cosmetic: the field appears exactly for entries that
+ * ask for one, and what is typed belongs to the entry it was typed for. The
+ * second is the sharper one — a key left in the field across a change of entry
+ * would be one vendor's credential sent to another vendor's endpoint, and the
+ * drawer stays open across that change.
+ *
+ * The keys here are obvious fakes.
+ */
+const GITHUB = {
+  ...DEEPWIKI,
+  name: 'io.github.github/github-mcp-server',
+  title: 'GitHub',
+  permission_disclosure: 'Reads repositories and issues you authorise.',
+  website_url: 'https://docs.github.com/authentication/keeping-your-account-and-data-secure/',
+  auth_type: 'credentials',
+  credentials: {
+    scheme: 'bearer',
+    label: 'Fine-grained personal access token',
+    acquisition_url:
+      'https://docs.github.com/authentication/keeping-your-account-and-data-secure/managing-your-personal-access-tokens',
+    oauth_challenge_compatible: true,
+  },
+} as unknown as MCPCatalogEntry;
+
+const SENTRY = {
+  ...GITHUB,
+  name: 'io.sentry/mcp',
+  title: 'Sentry',
+  permission_disclosure: 'Reads issues and events from the Sentry organisations you authorise.',
+  credentials: {
+    scheme: 'bearer',
+    label: 'Personal access token',
+    acquisition_url: 'https://docs.sentry.io/account/auth-tokens/',
+  },
+} as unknown as MCPCatalogEntry;
+
+function renderWithConnect(entry: MCPCatalogEntry) {
+  const onConnect = vi.fn();
+  const props = (
+    shown: MCPCatalogEntry,
+    open = true,
+    credentialRequirement: MCPCatalogCredentialRequirement | null = null,
+    identityKey = ALLOWED.userId ?? null
+  ) => ({
+    identityKey,
+    entry: shown,
+    open,
+    onClose: vi.fn(),
+    teammates: BRANCHES,
+    teammatesLoading: false,
+    teammatesError: null,
+    defaultTeammateId: 'branch-1',
+    connecting: false,
+    connectError: null,
+    credentialRequirement,
+    connectCapability: { ...ALLOWED, userId: identityKey ?? undefined },
+    policyPending: false,
+    policyPendingHint: POLICY_LOADING_HINT,
+    readiness: {
+      catalog_key: shown.name,
+      state:
+        shown.auth_type === 'credentials' ? ('bearer_required' as const) : ('no_auth' as const),
+    },
+    onConnect,
+  });
+  const view = render(<CatalogDetailDrawer {...props(entry)} />);
+  return {
+    onConnect,
+    show: (next: MCPCatalogEntry) => view.rerender(<CatalogDetailDrawer {...props(next)} />),
+    // The Marketplace keeps this component mounted and toggles `open`, so
+    // closing it is a prop change rather than an unmount — which is exactly why
+    // state on it outlives the interaction unless something clears it.
+    setOpen: (open: boolean) => view.rerender(<CatalogDetailDrawer {...props(entry, open)} />),
+    /** What `CatalogTab` does after a refusal that named a requirement. */
+    answerFromEndpoint: (requirement: MCPCatalogCredentialRequirement) =>
+      view.rerender(<CatalogDetailDrawer {...props(entry, true, requirement)} />),
+    succeed: () =>
+      view.rerender(
+        <CatalogDetailDrawer
+          {...props(entry)}
+          success={{
+            catalogKey: DEEPWIKI.name,
+            serverId: 'server-1',
+            authentication: 'ready',
+            reusedExistingServer: false,
+          }}
+        />
+      ),
+    replaceIdentity: (identityKey: string) =>
+      view.rerender(<CatalogDetailDrawer {...props(entry, true, null, identityKey)} />),
+  };
+}
+
+const keyField = () => screen.queryByPlaceholderText(/Paste your .* bearer access token/);
+
+describe('CatalogDetailDrawer API key', () => {
+  it('uses the catalog PAT terminology instead of calling GitHub credentials API keys', () => {
+    renderWithConnect(GITHUB);
+
+    expect(screen.getByText('Use your fine-grained personal access token')).toBeVisible();
+    expect(screen.queryByText('Use your API key')).not.toBeInTheDocument();
+  });
+
+  it('presents advisory no-account readiness without claiming a live check', () => {
+    renderWithConnect(DEEPWIKI);
+
+    expect(
+      screen.getByText(
+        'Catalog and saved connection data indicate no account is needed. Agor checks the endpoint when you connect.'
+      )
+    ).toBeVisible();
+    expect(screen.getByRole('alert')).toHaveClass('ant-alert-info');
+    expect(connectButton()).toHaveTextContent('Connect');
+  });
+
+  it('erases same-entry consent and the pasted key on same-role identity replacement', () => {
+    const { onConnect, replaceIdentity } = renderWithConnect(GITHUB);
+    fireEvent.click(screen.getByRole('checkbox'));
+    fireEvent.change(keyField() as HTMLElement, { target: { value: 'admin-a-private-key' } });
+    expect(connectButton()).toBeEnabled();
+
+    replaceIdentity('user-admin-b');
+
+    expect(screen.getByRole('checkbox')).not.toBeChecked();
+    expect(keyField()).toHaveValue('');
+    expect(connectButton()).toBeDisabled();
+    fireEvent.click(connectButton());
+    expect(onConnect).not.toHaveBeenCalled();
+  });
+
+  it('offers a key field for an entry that needs one, and gates connect on it', () => {
+    renderWithConnect(GITHUB);
+    fireEvent.click(screen.getByRole('checkbox'));
+
+    // Acknowledged, branch chosen — and still not connectable, because the
+    // endpoint will refuse an install without a key anyway. Finding that out
+    // at the button beats finding it out from the daemon.
+    expect(keyField()).toBeVisible();
+    expect(screen.getByText('Use your fine-grained personal access token')).toBeVisible();
+    expect(screen.queryByText('Use your API key')).not.toBeInTheDocument();
+    expect(connectButton()).toBeDisabled();
+
+    fireEvent.change(keyField() as HTMLElement, { target: { value: 'fake-key-1111' } });
+
+    expect(connectButton()).toBeEnabled();
+  });
+
+  it('hands the pasted key to the connect callback', () => {
+    const { onConnect } = renderWithConnect(GITHUB);
+    fireEvent.click(screen.getByRole('checkbox'));
+    fireEvent.change(keyField() as HTMLElement, { target: { value: '  fake-key-1111  ' } });
+
+    fireEvent.click(connectButton());
+
+    // Trimmed here as well as on the daemon: a key pasted from a terminal
+    // routinely arrives with surrounding whitespace, and the button should not
+    // enable for a field holding only spaces.
+    expect(onConnect).toHaveBeenCalledWith(
+      expect.objectContaining({ bearerToken: 'fake-key-1111' })
+    );
+  });
+
+  it('does not enable connect for a field holding only whitespace', () => {
+    renderWithConnect(GITHUB);
+    fireEvent.click(screen.getByRole('checkbox'));
+
+    fireEvent.change(keyField() as HTMLElement, { target: { value: '   ' } });
+
+    expect(connectButton()).toBeDisabled();
+  });
+
+  it('does not carry a key typed for one server to the next one shown', () => {
+    // The hazard the field is keyed by entry to prevent: the drawer stays open
+    // across a change of entry, so a bare string would leave GitHub's key in
+    // the box for a connect to Sentry.
+    const { show } = renderWithConnect(GITHUB);
+    fireEvent.click(screen.getByRole('checkbox'));
+    fireEvent.change(keyField() as HTMLElement, { target: { value: 'fake-github-key' } });
+
+    show(SENTRY);
+
+    expect(keyField()).toHaveValue('');
+    expect(connectButton()).toBeDisabled();
+  });
+
+  it('does not repopulate the field with a key discarded by closing the drawer', () => {
+    // `destroyOnHidden` unmounts the drawer's *contents* — the input and its
+    // reveal toggle — but this component stays mounted for as long as the
+    // Marketplace is open. Without an explicit discard the pasted key sat in
+    // React state indefinitely and came back, revealable, on reopening.
+    const { setOpen } = renderWithConnect(GITHUB);
+    fireEvent.click(screen.getByRole('checkbox'));
+    fireEvent.change(keyField() as HTMLElement, { target: { value: 'fake-github-key' } });
+
+    setOpen(false);
+    setOpen(true);
+
+    expect(keyField()).toHaveValue('');
+    expect(connectButton()).toBeDisabled();
+  });
+
+  it('keeps the key while a failed connect is still on screen', () => {
+    // The other half of the rule. A connect that failed leaves the drawer open,
+    // and a user who mistyped one character should not have to find the key
+    // again to fix it.
+    renderWithConnect(GITHUB);
+    fireEvent.click(screen.getByRole('checkbox'));
+    fireEvent.change(keyField() as HTMLElement, { target: { value: 'fake-github-key' } });
+
+    expect(keyField()).toHaveValue('fake-github-key');
+    expect(connectButton()).toBeEnabled();
+  });
+
+  it('discards the pasted key while the successful next step remains on screen', () => {
+    const { succeed, answerFromEndpoint } = renderWithConnect(GITHUB);
+    fireEvent.click(screen.getByRole('checkbox'));
+    fireEvent.change(keyField() as HTMLElement, { target: { value: 'fake-github-key' } });
+
+    succeed();
+    expect(screen.getByText('Added to My Servers')).toBeInTheDocument();
+    expect(keyField()).toBeNull();
+
+    // If the view returns to a credential form, the discarded value must not
+    // come back from React state.
+    answerFromEndpoint('required');
+    expect(keyField()).toHaveValue('');
+  });
+
+  it('points at the vendor’s own page for where to get a key', () => {
+    // "API key" is ambiguous on a page that also mentions Agor, and without a
+    // pointer the answer is a search engine.
+    renderWithConnect(GITHUB);
+
+    const link = screen.getByRole('link', { name: /Where to find it/ });
+    expect(link).toHaveAttribute('href', GITHUB.credentials?.acquisition_url);
+  });
+
+  it('keeps the prescribed bearer field when the endpoint confirms credentials', () => {
+    const { answerFromEndpoint } = renderWithConnect(GITHUB);
+    fireEvent.click(screen.getByRole('checkbox'));
+    answerFromEndpoint('required');
+
+    expect(keyField()).toBeVisible();
+    expect(connectButton()).toBeDisabled();
+    fireEvent.change(keyField() as HTMLElement, { target: { value: 'fake-key-1111' } });
+    expect(connectButton()).toBeEnabled();
+  });
+
+  it('sends the key on the retry the endpoint asked for', () => {
+    // The whole point of one extra round trip: the second attempt carries what
+    // the first was refused for lacking.
+    const { answerFromEndpoint, onConnect } = renderWithConnect(GITHUB);
+    fireEvent.click(screen.getByRole('checkbox'));
+    answerFromEndpoint('required');
+    fireEvent.change(keyField() as HTMLElement, { target: { value: 'fake-key-1111' } });
+
+    fireEvent.click(connectButton());
+
+    expect(onConnect).toHaveBeenCalledWith(
+      expect.objectContaining({ bearerToken: 'fake-key-1111' })
+    );
+  });
+
+  it('drops the requirement when the endpoint says it wants no key', () => {
+    // The other direction: the entry says `credentials`, the vendor has opened
+    // the endpoint up, and the daemon refuses every keyed request. The button
+    // was unreachable because it demanded a key that guaranteed refusal.
+    const { answerFromEndpoint } = renderWithConnect(GITHUB);
+    fireEvent.click(screen.getByRole('checkbox'));
+    fireEvent.change(keyField() as HTMLElement, { target: { value: 'fake-github-key' } });
+
+    answerFromEndpoint('not_accepted');
+
+    expect(keyField()).toBeNull();
+    expect(connectButton()).toBeEnabled();
+  });
+
+  it('updates technical authentication from the live endpoint instead of stale metadata', async () => {
+    const { answerFromEndpoint } = renderWithConnect(GITHUB);
+    answerFromEndpoint('not_accepted');
+
+    fireEvent.click(screen.getByText('Technical details'));
+    expect(await screen.findByText('No credential accepted · Live endpoint check')).toBeVisible();
+    expect(screen.queryByText('Bearer credential')).not.toBeInTheDocument();
+  });
+
+  it('does not open a stale catalog OAuth popup after the endpoint confirms no account', () => {
+    const open = vi.spyOn(window, 'open');
+    const { answerFromEndpoint, onConnect } = renderWithConnect(OAUTH_LINEAR);
+    answerFromEndpoint('not_accepted');
+    fireEvent.click(screen.getByRole('checkbox'));
+    fireEvent.click(connectButton());
+
+    expect(open).not.toHaveBeenCalled();
+    expect(onConnect).toHaveBeenCalledWith(
+      expect.not.objectContaining({ oauthPopup: expect.anything() })
+    );
+    open.mockRestore();
+  });
+
+  it('does not send — or keep — a key the endpoint refused to take', () => {
+    // Hiding the field while still holding what was typed in it would be the
+    // retention bug one state further along, and submitting it would repeat the
+    // refusal the retry exists to escape.
+    const { answerFromEndpoint, onConnect } = renderWithConnect(GITHUB);
+    fireEvent.click(screen.getByRole('checkbox'));
+    fireEvent.change(keyField() as HTMLElement, { target: { value: 'fake-github-key' } });
+    answerFromEndpoint('not_accepted');
+
+    fireEvent.click(connectButton());
+
+    expect(onConnect).toHaveBeenCalledWith(
+      expect.not.objectContaining({ bearerToken: expect.anything() })
+    );
+    // And the discarded key is not waiting in the field if the requirement
+    // flips back.
+    answerFromEndpoint('required');
+    expect(keyField()).toHaveValue('');
+  });
+
+  it('offers no key field for an entry that does not need one', () => {
+    const { onConnect } = renderWithConnect(DEEPWIKI);
+    fireEvent.click(screen.getByRole('checkbox'));
+
+    expect(keyField()).toBeNull();
+
+    fireEvent.click(connectButton());
+
+    // No `bearerToken` at all rather than an empty one: the daemon refuses a key
+    // sent to an endpoint that never asked for one.
+    expect(onConnect).toHaveBeenCalledWith(
+      expect.not.objectContaining({ bearerToken: expect.anything() })
+    );
+  });
+
+  it('still removes the whole form for an entry the marketplace cannot install', () => {
+    // `blocked` and `api-key` are different answers. The key field must not
+    // resurrect a form for an entry with no endpoint to send anything to.
+    renderWithConnect({ ...GITHUB, remote_url: undefined, has_remote: false } as MCPCatalogEntry);
+
+    expect(keyField()).toBeNull();
+    expect(screen.queryByRole('button', { name: /Connect/ })).toBeNull();
   });
 });

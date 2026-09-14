@@ -1,4 +1,4 @@
-import { generateId } from '@agor/core';
+import { generateId, SAFE_ZERO_TURN_PROVIDER_RESULT_MESSAGE } from '@agor/core';
 import type { Message, MessageID, SessionID, TaskID } from '@agor/core/types';
 import { MessageRole } from '@agor/core/types';
 import { describe, expect, it, vi } from 'vitest';
@@ -213,6 +213,12 @@ describe('createSystemMessage', () => {
       is_provider_failure_result: true,
       model: 'claude-sonnet-4-6',
     });
+    expect(result.content).toEqual([
+      { type: 'text', text: SAFE_ZERO_TURN_PROVIDER_RESULT_MESSAGE },
+    ]);
+    expect(JSON.stringify(vi.mocked(messagesService.create).mock.calls)).not.toContain(
+      'Credit balance is too low'
+    );
   });
 
   it('returns the daemon-confirmed system message after message hooks transform it', async () => {
@@ -556,6 +562,31 @@ describe('createUserMessageFromContent', () => {
     );
 
     expect(result.content_preview).toBe('Tool result: Tool execution result');
+  });
+
+  it('persists structured task-tool output without folding it into the preview', async () => {
+    const messagesService = createMockMessagesService();
+    const content = [
+      {
+        type: 'tool_result',
+        tool_use_id: 'create-1',
+        content: 'Task created',
+        tool_use_result: { task: { id: 'task-7', subject: 'Verify the fix' } },
+      },
+    ];
+
+    const result = await createUserMessageFromContent(
+      generateId() as SessionID,
+      generateId() as MessageID,
+      content,
+      undefined,
+      1,
+      messagesService
+    );
+
+    expect(result.content).toEqual(content);
+    expect(result.content_preview).toBe('Tool result: Task created');
+    expect(messagesService.create).toHaveBeenCalledWith(result);
   });
 
   it('should create preview from tool_result with object content', async () => {

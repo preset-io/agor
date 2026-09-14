@@ -7,11 +7,17 @@ import { BranchRepository } from '../../../../packages/core/src/db/repositories/
 import { RepoRepository } from '../../../../packages/core/src/db/repositories/repos';
 import { SessionRepository } from '../../../../packages/core/src/db/repositories/sessions';
 import { TaskRepository } from '../../../../packages/core/src/db/repositories/tasks';
+import { UsersRepository } from '../../../../packages/core/src/db/repositories/users';
 import { dbTest } from '../../../../packages/core/src/db/test-helpers';
 import { generateId } from '../../../../packages/core/src/lib/ids';
 import { createTasksService } from './tasks';
 
 async function createTestSession(db: Parameters<typeof dbTest>[0]['db']): Promise<SessionID> {
+  const createdBy = generateId() as UUID;
+  await new UsersRepository(db).create({
+    user_id: createdBy,
+    email: `${createdBy}@tasks.test`,
+  });
   const repo = await new RepoRepository(db).create({
     slug: `tasks-page-${generateId()}`,
     name: 'Tasks pagination test',
@@ -26,12 +32,12 @@ async function createTestSession(db: Parameters<typeof dbTest>[0]['db']): Promis
     path: `/tmp/tasks-page-branch-${generateId()}`,
     ref: 'main',
     branch_unique_id: Math.floor(Math.random() * 1_000_000),
-    created_by: generateId() as UUID,
+    created_by: createdBy,
   });
   const session = await new SessionRepository(db).create({
     branch_id: branch.branch_id,
     title: 'Tasks pagination test',
-    created_by: generateId() as UUID,
+    created_by: createdBy,
   });
   return session.session_id;
 }

@@ -10,6 +10,7 @@
 export type {
   AgorClient,
   AgorService,
+  AuthenticatedAgorClient,
   BoardsService,
   BranchesService,
   ClientInput,
@@ -22,7 +23,6 @@ export type {
   SchedulesService,
   ServiceTypes,
   SessionPromptOptions,
-  SessionPromptResult,
   SessionsService,
   TaskRunOptions,
   TaskRunRequest,

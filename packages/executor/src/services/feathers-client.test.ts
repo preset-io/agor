@@ -3,7 +3,8 @@ import { SOCKET_IO_MAX_BUFFER_SIZE_BYTES } from '@agor/core/config';
 import { describe, expect, it } from 'vitest';
 import {
   EXECUTOR_REQUEST_DATA_BUDGET_BYTES,
-  registerExecutorClientHooks,
+  registerExecutorRequestSizeGuard,
+  registerTerminalTaskAcknowledgementHook,
 } from './feathers-client.js';
 
 describe('executor transport budget', () => {
@@ -13,19 +14,26 @@ describe('executor transport budget', () => {
   });
 });
 
-describe('registerExecutorClientHooks – size guard', () => {
+describe('executor client hooks', () => {
   type HookFn = (ctx: Record<string, unknown>) => Promise<Record<string, unknown>>;
 
-  function captureHook(): { hook: HookFn; client: AgorClient } {
+  function captureHook(onTerminalTaskAcknowledged?: () => void): {
+    hook: HookFn;
+    afterHook: HookFn;
+    client: AgorClient;
+  } {
     let hook: HookFn | undefined;
+    let afterHook: HookFn | undefined;
     const client = {
-      hooks(config: { before: { all: HookFn[] } }) {
-        hook = config.before.all[0];
+      hooks(config: { before?: { all: HookFn[] }; after?: { all: HookFn[] } }) {
+        hook ??= config.before?.all[0];
+        afterHook ??= config.after?.all[0];
       },
     } as unknown as AgorClient;
-    registerExecutorClientHooks(client);
-    if (!hook) throw new Error('hook was not registered');
-    return { hook, client };
+    registerExecutorRequestSizeGuard(client);
+    registerTerminalTaskAcknowledgementHook(client, onTerminalTaskAcknowledged ?? (() => {}));
+    if (!hook || !afterHook) throw new Error('hook was not registered');
+    return { hook, afterHook, client };
   }
 
   function makeContext(path: string, method: string, data: unknown) {
@@ -74,4 +82,24 @@ describe('registerExecutorClientHooks – size guard', () => {
     const ctx = makeContext('messages', 'create', { content: oversizedPayload() });
     await expect(hook(ctx)).rejects.toThrow('messages.create');
   });
+
+  it.each(['completed', 'failed'])(
+    'suppresses revoked-credential reconnect only after an acknowledged %s Task patch',
+    async (status) => {
+      let acknowledgements = 0;
+      const { afterHook } = captureHook(() => {
+        acknowledgements += 1;
+      });
+
+      await afterHook({ ...makeContext('tasks', 'patch', { status }), result: { status } });
+      expect(acknowledgements).toBe(1);
+
+      await afterHook({ ...makeContext('tasks', 'get', { status }), result: { status } });
+      await afterHook({
+        ...makeContext('tasks', 'patch', { status: 'running' }),
+        result: { status: 'running' },
+      });
+      expect(acknowledgements).toBe(1);
+    }
+  );
 });

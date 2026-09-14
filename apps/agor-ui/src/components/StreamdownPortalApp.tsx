@@ -9,6 +9,20 @@ interface StreamdownPortalStyle extends React.CSSProperties {
   '--streamdown-fullscreen-z-index': number;
 }
 
+// Keep every undismissed message independently reachable without AntD's
+// mouse-hover-only collapsed stack or maxCount eviction. The semantic list
+// style gives large error sets a bounded, keyboard-scrollable viewport.
+const MESSAGE_CONFIG = {
+  stack: false,
+  styles: {
+    list: {
+      maxHeight: 'calc(100vh - 16px)',
+      overflowY: 'auto',
+      scrollbarWidth: 'thin',
+    },
+  },
+} as const;
+
 /**
  * Keeps Streamdown portals aligned with Ant Design's theme.
  *
@@ -68,7 +82,7 @@ export const StreamdownPortalApp: React.FC<React.PropsWithChildren> = ({ childre
   }, [bodyPortalTokens]);
 
   return (
-    <AntApp className={STREAMDOWN_PORTAL_ROOT_CLASS_NAME} style={style}>
+    <AntApp className={STREAMDOWN_PORTAL_ROOT_CLASS_NAME} style={style} message={MESSAGE_CONFIG}>
       {children}
     </AntApp>
   );

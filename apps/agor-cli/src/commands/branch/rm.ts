@@ -1,16 +1,17 @@
 /**
  * `agor branch rm <branch-id>` - Remove a branch
  *
- * Removes a branch from the database and optionally from the filesystem.
+ * Requests permanent removal of owned branch data and files.
  */
 
 import { shortId } from '@agor-live/client';
 import { Args, Flags } from '@oclif/core';
 import chalk from 'chalk';
+import inquirer from 'inquirer';
 import { BaseCommand } from '../../base-command';
 
 export default class BranchRemove extends BaseCommand {
-  static description = 'Remove a branch';
+  static description = 'Permanently delete a branch and its owned files and data';
 
   static examples = [
     '<%= config.bin %> <%= command.id %> abc123',
@@ -26,9 +27,14 @@ export default class BranchRemove extends BaseCommand {
   };
 
   static flags = {
-    'from-filesystem': Flags.boolean({
-      description: 'Also remove branch from filesystem using git worktree remove',
+    force: Flags.boolean({
+      char: 'f',
+      description: 'Confirm irreversible deletion without an interactive prompt',
       default: false,
+    }),
+    'from-filesystem': Flags.boolean({
+      description: 'Compatibility flag: permanent deletion always removes owned files',
+      default: true,
     }),
   };
 
@@ -66,29 +72,36 @@ export default class BranchRemove extends BaseCommand {
         // Ignore errors querying sessions
       }
 
-      if (flags['from-filesystem']) {
-        this.log('');
-        this.log(chalk.red('  ⚠  This will also remove files from the filesystem!'));
+      this.log(
+        chalk.red(
+          '  This permanently deletes owned files and conversations. Shared resources are retained.'
+        )
+      );
+      if (!flags.force) {
+        const { confirmed } = await inquirer.prompt([
+          {
+            type: 'confirm',
+            name: 'confirmed',
+            message: 'Permanently delete this branch, its owned files and conversations?',
+            default: false,
+          },
+        ]);
+        if (!confirmed) {
+          this.log(chalk.dim('Cancelled.'));
+          await this.cleanupClient(client);
+          return;
+        }
       }
-
-      this.log('');
-
-      // Remove branch
-      await branchesService.remove(branch.branch_id, {
-        query: { deleteFromFilesystem: flags['from-filesystem'] },
+      const result = await branchesService.remove(branch.branch_id, {
+        query: { deleteFromFilesystem: true },
       });
-
-      this.log(`${chalk.green('✓')} Branch removed from database`);
-
-      if (flags['from-filesystem']) {
-        this.log(`${chalk.green('✓')} Branch removed from filesystem`);
-      } else {
-        this.log('');
-        this.log(chalk.dim(`Files remain at: ${branch.path}`));
-        this.log(chalk.dim(`To remove files, run with: ${chalk.cyan('--from-filesystem')}`));
+      if (result.deletion_status === 'deletion_failed') {
+        throw new Error(result.deletion_error || 'Deletion failed; the branch remains fenced');
       }
-
-      this.log('');
+      this.log(
+        `${chalk.green('✓')} Deletion requested. The branch remains visible until cleanup finishes.`
+      );
+      this.log(chalk.dim('Inspect the branch for progress or a deletion error.'));
 
       // Cleanup
       await this.cleanupClient(client);

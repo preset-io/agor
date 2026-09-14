@@ -8,6 +8,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('@google/gemini-cli-core', () => ({
   ApprovalMode: { DEFAULT: 'default', AUTO_EDIT: 'autoEdit', YOLO: 'yolo' },
+  GeminiEventType: { Error: 'error' },
+}));
+vi.mock('@agor/core/agentic-integrations', () => ({
+  loadManagedAgenticToolSdk: vi.fn(() => import('@google/gemini-cli-core')),
 }));
 
 import { GeminiPromptService } from './prompt-service.js';
@@ -58,6 +62,35 @@ describe('GeminiPromptService', () => {
   afterEach(() => {
     process.env = originalEnv;
     vi.clearAllMocks();
+  });
+
+  it('sends fresh execution identity after inherited text on every turn', async () => {
+    vi.mocked(mockSessionsRepo.findById).mockResolvedValue({
+      created_by: 'session-owner',
+      sdk_session_id: 'provider-thread-A',
+    } as never);
+    const sendMessageStream = vi.fn(async function* () {});
+    (
+      service as unknown as {
+        getOrCreateClient: () => Promise<{ sendMessageStream: typeof sendMessageStream }>;
+      }
+    ).getOrCreateClient = vi.fn().mockResolvedValue({ sendMessageStream });
+    for (const id of ['fork-B', 'fork-B', 'nested-C']) {
+      for await (const _event of service.promptSessionStreaming(
+        id as SessionID,
+        'Inherited ID: A'
+      )) {
+        // Consume the provider turn.
+      }
+      expect(sendMessageStream).toHaveBeenLastCalledWith(
+        [
+          { text: 'Inherited ID: A' },
+          { text: expect.stringContaining(`Current Agor session ID: ${id}`) },
+        ],
+        expect.any(AbortSignal),
+        expect.any(String)
+      );
+    }
   });
 
   describe('Constructor', () => {
@@ -216,6 +249,43 @@ describe('GeminiPromptService', () => {
 
       await expect(gen1.next()).rejects.toThrow('not found');
       await expect(gen2.next()).rejects.toThrow('not found');
+    });
+
+    it('never logs or returns a secret-bearing provider error event', async () => {
+      const sessionId = 'provider-error-session' as SessionID;
+      const sentinel = 'SENTINEL_GEMINI_PROVIDER_d4c2';
+      vi.mocked(mockSessionsRepo.findById).mockResolvedValue({
+        created_by: 'user-1',
+        model_config: null,
+      } as never);
+      const sendMessageStream = vi.fn(async function* () {
+        yield {
+          type: 'error',
+          value: new Error(`TLS failure for https://${sentinel}.example.test`),
+        };
+      });
+      (
+        service as unknown as {
+          getOrCreateClient: () => Promise<{ sendMessageStream: typeof sendMessageStream }>;
+        }
+      ).getOrCreateClient = vi.fn().mockResolvedValue({ sendMessageStream });
+      const spies = [
+        vi.spyOn(console, 'log').mockImplementation(() => undefined),
+        vi.spyOn(console, 'warn').mockImplementation(() => undefined),
+        vi.spyOn(console, 'error').mockImplementation(() => undefined),
+        vi.spyOn(console, 'debug').mockImplementation(() => undefined),
+      ];
+
+      try {
+        const failure = await service
+          .promptSessionStreaming(sessionId, 'test prompt')
+          .next()
+          .catch((error: unknown) => error);
+        expect(String(failure)).not.toContain(sentinel);
+        expect(JSON.stringify(spies.flatMap((spy) => spy.mock.calls))).not.toContain(sentinel);
+      } finally {
+        for (const spy of spies) spy.mockRestore();
+      }
     });
   });
 

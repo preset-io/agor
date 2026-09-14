@@ -145,20 +145,27 @@ export const gatewayRouteHook = async (context: HookContext) => {
       // User message from Agor UI - route to Slack with username prefix
       shouldRoute = true;
 
-      // Fetch session and user info to prefix with username
+      // Attribute the message to the immutable Task actor. A shared prompt
+      // keeps the Session owner's conversation/home, but it must never be
+      // published externally as though that owner authored another user's
+      // prompt.
+      let actorName = 'Agor user';
       try {
-        const sessionsService = context.app.service('sessions');
+        if (!message.task_id) {
+          throw new Error('Message has no Task attribution');
+        }
+        const tasksService = context.app.service('tasks');
         const usersService = context.app.service('users');
-
-        const session = await sessionsService.get(message.session_id);
-        const user = await usersService.get(session.created_by);
-
-        // Format as "[username]: message"
-        messageText = `[${user.name}]: ${messageText}`;
+        const task = await tasksService.get(message.task_id);
+        if (task?.session_id !== message.session_id) {
+          throw new Error('Message Task does not belong to its Session');
+        }
+        const user = await usersService.get(task.created_by);
+        if (user?.name) actorName = user.name;
       } catch (error) {
-        console.warn('[gateway-route] Failed to fetch user info for message prefix:', error);
-        // Continue without prefix if lookup fails
+        console.warn('[gateway-route] Failed to resolve prompt actor for message prefix:', error);
       }
+      messageText = `[${actorName}]: ${messageText}`;
     } else if (source === 'gateway') {
       // User message from gateway (Slack) - don't route (prevents echo)
       shouldRoute = false;

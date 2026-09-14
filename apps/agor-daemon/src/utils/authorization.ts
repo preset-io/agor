@@ -4,8 +4,7 @@
 
 import { Forbidden, NotAuthenticated } from '@agor/core/feathers';
 import type { AuthenticatedParams, HookContext, UserRole } from '@agor/core/types';
-import { hasMinimumRole, ROLES } from '@agor/core/types';
-import { executorRuntimeScopeGuard } from '../auth/executor-runtime-scope.js';
+import { BRANCH_ENVIRONMENT_SNAPSHOT_FIELDS, hasMinimumRole, ROLES } from '@agor/core/types';
 
 export type Role = UserRole;
 
@@ -13,7 +12,7 @@ export type Role = UserRole;
  * Ensure the request is authenticated and has the minimum required role.
  *
  * Internal calls (params.provider is falsy) bypass authorization checks.
- * Service accounts (_isServiceAccount) also bypass authorization checks.
+ * Explicit daemon service accounts (_isServiceAccount) also bypass checks.
  */
 export function ensureMinimumRole(
   params: AuthenticatedParams | undefined,
@@ -29,7 +28,8 @@ export function ensureMinimumRole(
     throw new NotAuthenticated('Authentication required');
   }
 
-  // Skip authorization for service accounts (executor, etc.)
+  // Skip authorization for explicit daemon service accounts. Task executors
+  // authenticate as the initiating user and deliberately do not use this path.
   // biome-ignore lint/suspicious/noExplicitAny: Service account flag is added dynamically by auth strategy
   if ((params.user as any)._isServiceAccount === true) {
     return;
@@ -63,12 +63,7 @@ const ENV_COMMAND_FIELDS = [
   'environment', // Repo-level: v2 named variants (source of truth)
   'environment_config', // Repo-level: legacy v1 view (still guarded)
   'environment_variant', // Branch-level: selected variant name
-  'start_command', // Branch-level: resolved commands
-  'stop_command',
-  'nuke_command',
-  'logs_command',
-  'health_check_url',
-  'app_url',
+  ...BRANCH_ENVIRONMENT_SNAPSHOT_FIELDS,
 ];
 
 /**
@@ -85,14 +80,23 @@ export function requireAdminForEnvConfig() {
 
     // Check both single objects and array payloads (bulk create)
     const items = Array.isArray(data) ? data : [data];
+    if (
+      context.params?.provider &&
+      items.some(
+        (item) =>
+          item?.environment_instance?.command_attempt || item?.environment_instance?.command_history
+      )
+    ) {
+      throw new Forbidden('Environment command tracking is daemon-owned');
+    }
     const hasEnvConfig = items.some((item: Record<string, unknown>) =>
-      ENV_COMMAND_FIELDS.some((field) => item?.[field] != null)
+      ENV_COMMAND_FIELDS.some((field) => item != null && Object.hasOwn(item, field))
     );
     if (!hasEnvConfig) {
       return context;
     }
 
-    // Internal calls and service accounts bypass (handled by ensureMinimumRole)
+    // Internal calls and explicit daemon service accounts bypass (handled by ensureMinimumRole)
     ensureMinimumRole(
       context.params,
       ROLES.ADMIN,
@@ -153,11 +157,7 @@ export function registerAuthenticatedRoute(
   > = {};
 
   for (const [method, config] of Object.entries(authConfig)) {
-    hooks[method] = [
-      requireAuth,
-      executorRuntimeScopeGuard(),
-      requireMinimumRole(config.role, config.action),
-    ];
+    hooks[method] = [requireAuth, requireMinimumRole(config.role, config.action)];
   }
 
   // Apply hooks

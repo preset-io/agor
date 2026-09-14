@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
+  canonicalMCPCustomHeaderEntries,
+  findDuplicateMCPCustomHeaderName,
   isReservedMCPCustomHeaderName,
   isValidMCPHeaderName,
   MCP_HEADER_REDACTED_SENTINEL,
@@ -28,6 +30,24 @@ describe('MCP HTTP header helpers', () => {
         '': 'empty',
       })
     ).toEqual({ 'DD-API-KEY': 'dummy-api-key' });
+  });
+
+  it('rejects case-insensitive duplicate names before persistence or Fetch merging', () => {
+    const headers = { ' X-Route ': 'first', 'x-route': 'second' };
+    expect(findDuplicateMCPCustomHeaderName(headers)).toEqual({
+      first: ' X-Route ',
+      duplicate: 'x-route',
+    });
+    expect(() => normalizeMCPCustomHeaders(headers)).toThrow(/Duplicate custom HTTP header names/);
+    expect(() => mergeMCPRemoteHeaders({ custom: headers })).toThrow(
+      /Duplicate custom HTTP header names/
+    );
+  });
+
+  it('canonicalizes non-duplicate ordering and name case identically', () => {
+    expect(canonicalMCPCustomHeaderEntries({ 'X-B': '2', 'X-A': '1' })).toEqual(
+      canonicalMCPCustomHeaderEntries({ 'x-a': '1', 'x-b': '2' })
+    );
   });
 
   it('merges base, custom, and auth headers with auth taking precedence', () => {

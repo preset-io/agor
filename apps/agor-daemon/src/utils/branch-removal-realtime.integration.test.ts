@@ -5,6 +5,7 @@ import { feathers, feathersExpress, rest, socketio } from '@agor/core/feathers';
 import type { Branch, HookContext, User } from '@agor/core/types';
 import { ROLES } from '@agor/core/types';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { tenantChannelName } from '../realtime/routing.js';
 import { configureRealtimePublish, setBranchRemovalRealtimeVisibility } from './realtime-publish';
 
 const BRANCH_ID = '018f0000-0000-7000-8000-000000000001';
@@ -45,16 +46,15 @@ describe('branch hard-delete realtime integration', () => {
     app.on('connection', (connection: Record<string, unknown>) => {
       connection.user = browserUser;
       app.channel('authenticated').join(connection as never);
-      app.channel('tenant:tenant-a').join(connection as never);
+      app.channel(tenantChannelName('tenant-a')).join(connection as never);
     });
 
     const branchRepository = {
       findRealtimeVisibilityBranch: vi.fn(async () => storedBranch),
-      findExplicitViewUserIds: vi.fn(async () => ['allowed']),
+      findRealtimeViewUserIds: vi.fn(async () => ['allowed']),
     } as unknown as BranchRepository;
     configureRealtimePublish({
       app: app as never,
-      branchRbacEnabled: true,
       branchRepository,
       sessionsRepository: {
         findBranchIdBySessionId: vi.fn(async () => null),

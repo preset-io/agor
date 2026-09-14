@@ -7,6 +7,7 @@
  * 3. Returning an ExecutorResult
  */
 
+import { BRANCH_DELETION_COMMAND } from '@agor/core/types';
 import { ToolRegistry } from '../handlers/sdk/tool-registry.js';
 import type {
   AgenticToolInvokePayload,
@@ -19,6 +20,8 @@ import {
   handleBranchArtifactPublish,
   handleBranchArtifactValidate,
 } from './artifacts.js';
+import { handleBranchDelete } from './branch-deletion.js';
+import { handleClaudeAuthFile } from './claude-auth-file.js';
 import { handleCodexAuthFile } from './codex-auth-file.js';
 import { handleEnvironmentLifecycle, handleEnvironmentLogs } from './environment.js';
 import {
@@ -242,6 +245,7 @@ registerInteractiveCommand('agentic-tool.invoke', handleInteractiveAgenticToolIn
 registerCommand('git.clone', handleGitClone);
 registerCommand('git.branch.add', handleGitBranchAdd);
 registerCommand('git.branch.remove', handleGitBranchRemove);
+registerCommand(BRANCH_DELETION_COMMAND, handleBranchDelete);
 registerCommand('git.branch.clean', handleGitBranchClean);
 registerCommand('branch.files.list', handleBranchFilesList);
 registerCommand('branch.files.browse', handleBranchFilesBrowse);
@@ -265,3 +269,4 @@ registerCommand('git.managed-credentials.reconcile', handleGitManagedCredentials
 registerCommand('zellij.attach', handleZellijAttach);
 registerCommand('zellij.tab', handleZellijTab);
 registerCommand('codex.auth-file', handleCodexAuthFile);
+registerCommand('claude.auth-file', handleClaudeAuthFile);

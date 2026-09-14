@@ -9,8 +9,11 @@ import {
   EnvironmentLogsPayloadSchema,
   ExecutorPayloadSchema,
   GitBranchAddPayloadSchema,
+  GitBranchCleanPayloadSchema,
   GitBranchRemovePayloadSchema,
   GitClonePayloadSchema,
+  GitRepoDeletePayloadSchema,
+  GitRepoRealignOriginPayloadSchema,
   getSupportedCommands,
   isGitBranchAddPayload,
   isGitBranchRemovePayload,
@@ -56,6 +59,7 @@ describe('PromptPayloadSchema', () => {
         prompt: 'Hello!',
         tool: 'gemini',
         permissionMode: 'auto',
+        promptOrigin: { kind: 'channel', server: 'slack' },
         cwd: '/home/user/project',
       },
     };
@@ -65,6 +69,24 @@ describe('PromptPayloadSchema', () => {
     expect(result.env?.ANTHROPIC_API_KEY).toBe('key');
     expect(result.agenticToolContext).toEqual({ nativeHome: '/data/agor' });
     expect(result.params.permissionMode).toBe('auto');
+    expect(result.params.promptOrigin).toEqual({ kind: 'channel', server: 'slack' });
+  });
+
+  it('rejects malformed prompt provenance at the private executor boundary', () => {
+    expect(() =>
+      PromptPayloadSchema.parse({
+        command: 'prompt',
+        sessionToken: 'jwt-token-here',
+        params: {
+          sessionId: '550e8400-e29b-41d4-a716-446655440000',
+          taskId: '550e8400-e29b-41d4-a716-446655440001',
+          prompt: 'Hello!',
+          tool: 'claude-code',
+          cwd: '/home/user/project',
+          promptOrigin: { kind: 'channel', server: '' },
+        },
+      })
+    ).toThrow();
   });
 
   it('should reject invalid tool type', () => {
@@ -215,6 +237,20 @@ describe('GitClonePayloadSchema', () => {
     const result = GitClonePayloadSchema.parse(payload);
     expect(result.params.branch).toBe('main');
     expect(result.params.bare).toBe(true);
+    expect(result.params.importEnvironmentConfig).toBe(false);
+  });
+
+  it('accepts an explicit daemon-derived clone environment-import capability', () => {
+    const result = GitClonePayloadSchema.parse({
+      command: 'git.clone',
+      sessionToken: 'jwt-token-here',
+      params: {
+        url: 'https://github.com/user/repo.git',
+        importEnvironmentConfig: true,
+      },
+    });
+
+    expect(result.params.importEnvironmentConfig).toBe(true);
   });
 
   it('should reject invalid URL format', () => {
@@ -356,11 +392,11 @@ describe('GitBranchRemovePayloadSchema', () => {
   it('should parse valid git.branch.remove payload', () => {
     const payload = {
       command: 'git.branch.remove',
-      sessionToken: 'jwt-token-here',
       params: {
         branchId: '550e8400-e29b-41d4-a716-446655440002',
         branchPath: '/data/agor/worktrees/user/repo/feature-x',
         branchesRoot: '/data/agor/worktrees',
+        repoPath: '/data/agor/repos/repo',
       },
     };
 
@@ -368,22 +404,35 @@ describe('GitBranchRemovePayloadSchema', () => {
     expect(result.command).toBe('git.branch.remove');
     expect(result.params.branchPath).toBe('/data/agor/worktrees/user/repo/feature-x');
     expect(result.params.branchId).toBe('550e8400-e29b-41d4-a716-446655440002');
+    expect(result).not.toHaveProperty('sessionToken');
   });
 
   it('should parse with force option', () => {
     const payload = {
       command: 'git.branch.remove',
-      sessionToken: 'jwt-token-here',
       params: {
         branchId: '550e8400-e29b-41d4-a716-446655440002',
         branchPath: '/data/agor/worktrees/user/repo/feature-x',
         branchesRoot: '/data/agor/worktrees',
+        repoPath: '/data/agor/repos/repo',
         force: true,
       },
     };
 
     const result = GitBranchRemovePayloadSchema.parse(payload);
     expect(result.params.force).toBe(true);
+  });
+});
+
+describe('GitBranchCleanPayloadSchema', () => {
+  it('accepts only the daemon-authoritative path and needs no Feathers bearer', () => {
+    const result = GitBranchCleanPayloadSchema.parse({
+      command: 'git.branch.clean',
+      params: { branchPath: '/data/agor/worktrees/user/repo/feature-x' },
+    });
+
+    expect(result).not.toHaveProperty('sessionToken');
+    expect(result.params.branchPath).toContain('feature-x');
   });
 });
 
@@ -472,6 +521,51 @@ describe('ExecutorPayloadSchema (discriminated union)', () => {
     };
 
     expect(() => ExecutorPayloadSchema.parse(payload)).toThrow();
+  });
+
+  it('requires a versioned response capability in request mode', () => {
+    const payload = {
+      command: 'branch.files.browse',
+      executorMode: 'request',
+      sessionToken: 'jwt',
+      params: { branchId: '550e8400-e29b-41d4-a716-446655440000' },
+    };
+
+    expect(() => ExecutorPayloadSchema.parse(payload)).toThrow(/executor response descriptor/i);
+    expect(() =>
+      ExecutorPayloadSchema.parse({
+        ...payload,
+        executorResponse: {
+          protocol: 'executor-response-v1',
+          profile: 'terminal',
+          requestId: '550e8400-e29b-41d4-a716-446655440001',
+          url: 'http://daemon.internal:3030/executor/responses/request',
+          token: 'a'.repeat(43),
+          deadlineAt: new Date(Date.now() + 60_000).toISOString(),
+          maxResponseBytes: 1024,
+        },
+      })
+    ).not.toThrow();
+  });
+
+  it('rejects response capabilities on autonomous invocations', () => {
+    expect(() =>
+      ExecutorPayloadSchema.parse({
+        command: 'branch.files.browse',
+        executorMode: 'autonomous',
+        executorResponse: {
+          protocol: 'executor-response-v1',
+          profile: 'terminal',
+          requestId: '550e8400-e29b-41d4-a716-446655440001',
+          url: 'http://daemon.internal:3030/executor/responses/request',
+          token: 'a'.repeat(43),
+          deadlineAt: new Date(Date.now() + 60_000).toISOString(),
+          maxResponseBytes: 1024,
+        },
+        sessionToken: 'jwt',
+        params: { branchId: '550e8400-e29b-41d4-a716-446655440000' },
+      })
+    ).toThrow(/request mode/i);
   });
 });
 
@@ -581,6 +675,41 @@ describe('Type guards', () => {
   });
 });
 
+describe('GitRepoDeletePayloadSchema', () => {
+  it('requires a daemon-authoritative inventory and no Feathers bearer', () => {
+    const result = GitRepoDeletePayloadSchema.parse({
+      command: 'git.repo.delete',
+      params: {
+        repoId: '550e8400-e29b-41d4-a716-446655440000',
+        repoPath: '/managed/repos/repo',
+        branchPaths: ['/managed/worktrees/repo/feature'],
+        reposRoot: '/managed/repos',
+        branchesRoot: '/managed/worktrees',
+      },
+    });
+
+    expect(result).not.toHaveProperty('sessionToken');
+    expect(result.params.branchPaths).toEqual(['/managed/worktrees/repo/feature']);
+  });
+});
+
+describe('GitRepoRealignOriginPayloadSchema', () => {
+  it('requires daemon-authoritative filesystem inputs and no Feathers bearer', () => {
+    const result = GitRepoRealignOriginPayloadSchema.parse({
+      command: 'git.repo.realign-origin',
+      params: {
+        repoId: '550e8400-e29b-41d4-a716-446655440000',
+        repoPath: '/managed/repos/repo',
+        remoteUrl: 'https://example.com/org/repo.git',
+        repoSlug: 'org/repo',
+      },
+    });
+
+    expect(result).not.toHaveProperty('sessionToken');
+    expect(result.params.repoPath).toBe('/managed/repos/repo');
+  });
+});
+
 describe('getSupportedCommands', () => {
   it('should return all supported commands', () => {
     const commands = getSupportedCommands();
@@ -612,6 +741,7 @@ describe('getSupportedCommands', () => {
     expect(commands).toContain('zellij.tab');
     expect(commands).toContain('agentic-tool.invoke');
     expect(commands).toContain('codex.auth-file');
-    expect(commands.length).toBe(28);
+    expect(commands).toContain('claude.auth-file');
+    expect(commands.length).toBe(29);
   });
 });

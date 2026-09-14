@@ -1,12 +1,11 @@
 import { type AgorConfig, resolveMultiTenancyConfig } from '@agor/core/config';
-import {
-  assertTenantWritable,
-  runWithTenantContext,
-  runWithTenantDatabaseScope,
-  type TenantScopeAwareDatabase,
-} from '@agor/core/db';
+import { runWithTenantContext, type TenantScopeAwareDatabase } from '@agor/core/db';
 import type { Params, SessionID, TenantContext, TenantID } from '@agor/core/types';
-import { deferWithTenantContext, resolveTenantIdForDeferredScope } from './tenant-db-scope.js';
+import {
+  assertTenantWriteAdmission,
+  deferWithTenantContext,
+  resolveTenantIdForDeferredScope,
+} from './tenant-db-scope.js';
 
 type QueueTenantParams = Params & {
   tenant?: Pick<TenantContext, 'tenant_id' | 'source'>;
@@ -107,12 +106,10 @@ export function deferWithSessionQueueTenantScope(
     console.error(`❌ [Queue] ${options.label} failed:`, error);
   };
 
-  // A queue drain is a deferred tenant writer: fail closed at the write gate
-  // (see assertTenantWritable) before running; a held gate defers via handleError.
+  // A queue drain is a deferred tenant writer: fail closed through short
+  // tenant write admission before running; a held gate defers via handleError.
   const guarded = (tenantId: string, scopedParams: QueueTenantParams): Promise<void> =>
-    runWithTenantDatabaseScope(options.db, tenantId, (scoped) =>
-      assertTenantWritable(scoped, tenantId)
-    ).then(() => work(scopedParams));
+    assertTenantWriteAdmission(options.db, tenantId).then(() => work(scopedParams));
 
   const capturedTenantId = resolveTenantIdForDeferredScope(options.params);
   if (capturedTenantId) {

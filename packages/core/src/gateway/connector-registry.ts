@@ -8,6 +8,7 @@
 
 import type { ChannelType } from '../types/gateway';
 import type { GatewayConnector } from './connector';
+import { DiscordConnector } from './connectors/discord';
 import { GitHubConnector } from './connectors/github';
 import { ShortcutConnector } from './connectors/shortcut';
 import { SlackConnector } from './connectors/slack';
@@ -19,6 +20,7 @@ const connectors = new Map<ChannelType, ConnectorFactory>();
 
 // Register built-in connectors
 connectors.set('slack', (config) => new SlackConnector(config));
+connectors.set('discord', (config) => new DiscordConnector(config));
 connectors.set('github', (config) => new GitHubConnector(config));
 connectors.set('teams', (config) => new TeamsConnector(config));
 connectors.set('shortcut', (config) => new ShortcutConnector(config));

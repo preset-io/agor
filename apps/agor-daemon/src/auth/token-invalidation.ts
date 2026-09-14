@@ -1,13 +1,19 @@
 import { NotAuthenticated } from '@agor/core/feathers';
-import type { UserAuthMetadata } from '@agor/core/types';
+import type { AuthenticationUserAuthMetadata, UserAuthMetadata } from '@agor/core/types';
 import type { JwtPayload } from 'jsonwebtoken';
 
 export const AUTH_TOKEN_ISSUED_AT_MS_CLAIM = 'auth_time_ms';
+export const AUTH_CREDENTIAL_GENERATION_CLAIM = 'auth_credential_generation';
 
 export type UserAuthTokenPayload = JwtPayload & {
   type?: string;
   [AUTH_TOKEN_ISSUED_AT_MS_CLAIM]?: unknown;
+  [AUTH_CREDENTIAL_GENERATION_CLAIM]?: unknown;
 };
+
+function credentialGeneration(value: unknown): number | null {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : null;
+}
 
 function dateToMillis(value: Date | string | number | undefined): number | null {
   if (value === undefined) return null;
@@ -33,7 +39,18 @@ export function getAuthTokenIssuedAtMs(payload: UserAuthTokenPayload | undefined
 export function assertUserTokenNotInvalidated(
   user: UserAuthMetadata,
   payload: UserAuthTokenPayload | undefined
-): void {
+): asserts user is AuthenticationUserAuthMetadata {
+  assertAuthenticationUserAuthMetadata(user);
+  const currentGeneration = user.credential_generation;
+  const tokenGeneration = credentialGeneration(payload?.[AUTH_CREDENTIAL_GENERATION_CLAIM]);
+
+  // Tokens issued before credential generations were introduced are generation
+  // zero. They remain valid across the upgrade, but the first password change
+  // increments the row and invalidates them without relying on replica clocks.
+  if ((tokenGeneration ?? 0) !== currentGeneration) {
+    throw new NotAuthenticated('Session expired, please login again');
+  }
+
   const validAfterMs = dateToMillis(user.tokens_valid_after);
   if (validAfterMs === null) return;
 
@@ -41,6 +58,25 @@ export function assertUserTokenNotInvalidated(
   if (issuedAtMs === null || issuedAtMs <= validAfterMs) {
     throw new NotAuthenticated('Session expired, please login again');
   }
+}
+
+export function assertAuthenticationUserAuthMetadata(
+  user: UserAuthMetadata
+): asserts user is AuthenticationUserAuthMetadata {
+  if (credentialGeneration(user.credential_generation) === null) {
+    throw new NotAuthenticated('Authentication credential metadata unavailable');
+  }
+}
+
+export function authCredentialGenerationClaim(
+  user: AuthenticationUserAuthMetadata
+): Record<typeof AUTH_CREDENTIAL_GENERATION_CLAIM, number> {
+  // Retain runtime validation at the credential boundary even though callers
+  // must now supply the structurally required authentication-user type.
+  assertAuthenticationUserAuthMetadata(user);
+  return {
+    [AUTH_CREDENTIAL_GENERATION_CLAIM]: user.credential_generation,
+  };
 }
 
 export function authTokenIssuedAtClaim(

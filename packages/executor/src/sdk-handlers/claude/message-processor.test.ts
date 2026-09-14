@@ -1,4 +1,4 @@
-import { generateId } from '@agor/core';
+import { generateId, SAFE_ZERO_TURN_PROVIDER_RESULT_MESSAGE } from '@agor/core';
 import type { Message, MessageID, SessionID } from '@agor/core/types';
 import { describe, expect, it, vi } from 'vitest';
 import type { MessagesService } from '../base/index.js';
@@ -20,7 +20,7 @@ function systemMsg(payload: Record<string, unknown>) {
 }
 
 describe('SDKMessageProcessor result logging', () => {
-  it('is silent by default while preserving synthesized and raw result events', async () => {
+  it('is silent and replaces synthesized provider text before emitting a message', async () => {
     const resultMessage = {
       type: 'result',
       subtype: 'success',
@@ -56,7 +56,7 @@ describe('SDKMessageProcessor result logging', () => {
         {
           type: 'complete',
           role: 'assistant',
-          content: [{ type: 'text', text: 'final response' }],
+          content: [{ type: 'text', text: SAFE_ZERO_TURN_PROVIDER_RESULT_MESSAGE }],
           toolUses: undefined,
           parent_tool_use_id: null,
           agentSessionId: undefined,
@@ -75,7 +75,7 @@ describe('SDKMessageProcessor result logging', () => {
     }
   });
 
-  it('carries the exact #2288 zero-turn result into executor-owned message metadata', async () => {
+  it('withholds the #2288 zero-turn provider body from persistence metadata', async () => {
     const processor = createProcessor();
     const events = await processor.process({
       type: 'result',
@@ -115,7 +115,10 @@ describe('SDKMessageProcessor result logging', () => {
       complete?.isSynthesizedResult
     );
 
-    expect(message.content).toEqual([{ type: 'text', text: 'Credit balance is too low' }]);
+    expect(message.content).toEqual([
+      { type: 'text', text: SAFE_ZERO_TURN_PROVIDER_RESULT_MESSAGE },
+    ]);
+    expect(JSON.stringify(message)).not.toContain('Credit balance is too low');
     expect(message.metadata?.is_zero_turn_result).toBe(true);
   });
 });
@@ -195,6 +198,19 @@ describe('SDKMessageProcessor system event suppression', () => {
       })
     );
     expect(events.filter((e) => e.type === 'sdk_event')).toHaveLength(0);
+  });
+
+  it('suppresses background task membership snapshots', async () => {
+    const processor = createProcessor();
+    const events = await processor.process(
+      systemMsg({
+        subtype: 'background_tasks_changed',
+        tasks: [{ task_id: 't1', description: 'implementation detail' }],
+        session_id: 's',
+        uuid: 'u',
+      })
+    );
+    expect(events.filter((event) => event.type === 'sdk_event')).toHaveLength(0);
   });
 
   it('suppresses hook lifecycle telemetry', async () => {
@@ -403,5 +419,89 @@ describe('SDKMessageProcessor tool lifecycle', () => {
       expect.objectContaining({ toolUseId: 'tool-2' }),
     ]);
     expect(replayed).toEqual([]);
+  });
+
+  it('preserves the structured TaskCreate result used to correlate its assigned ID', async () => {
+    const processor = createProcessor();
+    await processor.process({
+      type: 'assistant',
+      message: {
+        content: [
+          {
+            type: 'tool_use',
+            id: 'create-1',
+            name: 'TaskCreate',
+            input: { subject: 'Verify the fix' },
+          },
+        ],
+      },
+    } as never);
+    const events = await processor.process({
+      type: 'user',
+      message: {
+        content: [{ type: 'tool_result', tool_use_id: 'create-1', content: 'Task created' }],
+      },
+      tool_use_result: {
+        task: { id: 'task-7', subject: 'Verify the fix' },
+      },
+    } as never);
+
+    const complete = events.find(
+      (event): event is Extract<ProcessedEvent, { type: 'complete' }> => event.type === 'complete'
+    );
+    expect(complete?.content).toEqual([
+      {
+        type: 'tool_result',
+        tool_use_id: 'create-1',
+        content: 'Task created',
+        tool_use_result: { task: { id: 'task-7', subject: 'Verify the fix' } },
+      },
+    ]);
+  });
+
+  it('does not misattribute an uncorrelated top-level result to parallel tool results', async () => {
+    const processor = createProcessor();
+    const events = await processor.process({
+      type: 'user',
+      message: {
+        content: [
+          { type: 'tool_result', tool_use_id: 'tool-1', content: 'one' },
+          { type: 'tool_result', tool_use_id: 'tool-2', content: 'two' },
+        ],
+      },
+      tool_use_result: { task: { id: 'ambiguous' } },
+    } as never);
+
+    const complete = events.find(
+      (event): event is Extract<ProcessedEvent, { type: 'complete' }> => event.type === 'complete'
+    );
+    expect(complete?.content).toEqual([
+      { type: 'tool_result', tool_use_id: 'tool-1', content: 'one' },
+      { type: 'tool_result', tool_use_id: 'tool-2', content: 'two' },
+    ]);
+  });
+
+  it('does not persist unrelated structured tool output', async () => {
+    const processor = createProcessor();
+    await processor.process({
+      type: 'assistant',
+      message: {
+        content: [{ type: 'tool_use', id: 'read-1', name: 'Read', input: { file_path: '/tmp/x' } }],
+      },
+    } as never);
+    const events = await processor.process({
+      type: 'user',
+      message: {
+        content: [{ type: 'tool_result', tool_use_id: 'read-1', content: 'bounded text' }],
+      },
+      tool_use_result: { unboundedProviderObject: 'must not be persisted' },
+    } as never);
+
+    const complete = events.find(
+      (event): event is Extract<ProcessedEvent, { type: 'complete' }> => event.type === 'complete'
+    );
+    expect(complete?.content).toEqual([
+      { type: 'tool_result', tool_use_id: 'read-1', content: 'bounded text' },
+    ]);
   });
 });

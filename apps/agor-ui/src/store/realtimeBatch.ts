@@ -14,7 +14,7 @@
  * and goes through the quiet first-paint gate.
  *
  * Design — a KEYED latest-payload-per-session queue with tombstones, NOT a FIFO
- * thunk queue. Two properties fall out of the shape:
+ * thunk queue. Four properties fall out of the shape:
  *
  *  1. Ordering safety. `session:created`/`removed` apply SYNCHRONOUSLY (see the
  *     wiring in `useAgorData`), while `patched`/`updated` defer to the next
@@ -26,13 +26,18 @@
  *     genuine remove-then-recreate within one frame still applies. Tombstones
  *     live only until the flush that clears them — a later-frame patch can't be
  *     stale against a same-frame remove, and cross-fetch staleness is handled by
- *     (3). Memory is bounded to one entry per session, so a burst collapses.
+ *     (4). Memory is bounded to one entry per session, so a burst collapses.
  *
  *  2. Bounded flush work. At most one (the latest) payload per id is applied,
  *     composed into a SINGLE `applyMaps` pass — O(1) store notifies per frame
  *     regardless of how many patches arrived.
  *
- *  3. Hydration ordering. Each queued entry is stamped with the sessions
+ *  3. Authority ordering. Each queued entry is stamped with the authenticated
+ *     identity/role/auth generation that received it. Moving to another
+ *     authority discards the old queue before map reset, and an old listener
+ *     or passive cleanup cannot enqueue/flush after that move.
+ *
+ *  4. Hydration ordering. Each queued entry is stamped with the sessions
  *     revision at enqueue time. A background hydration records the revision its
  *     last quiet-window apply was proven against (`getLastAppliedRevision`); the
  *     flush DROPS any queued entry stamped at-or-below it, because the applied
@@ -54,6 +59,11 @@ import { agorStore } from './agorStore';
 
 interface PendingPatch {
   session: Session;
+  // The authenticated UI authority that received this socket event. The
+  // socket client is intentionally long-lived across launch-auth replacement,
+  // role changes, and reconnects, so a sessions revision alone cannot prove
+  // that a deferred patch still belongs to the current caller.
+  authorityScope: string;
   // Sessions revision captured right after the synchronous bump at enqueue —
   // used by the flush to discard entries a fresher hydration already subsumed.
   revision: number;
@@ -63,9 +73,13 @@ interface PendingPatch {
 // flush (tombstones). Both are module-global singletons: `useAgorData` mounts
 // once, and tests reset via `discardRealtimeNow`.
 let pending = new Map<string, PendingPatch>();
-let tombstones = new Set<string>();
+let tombstones = new Map<string, string>();
 let handle: number | ReturnType<typeof setTimeout> | null = null;
 let handleIsRaf = false;
+// Set from useAgorData's layout phase before any authority-transition map
+// reset. Old passive subscription cleanups therefore cannot flush caller A's
+// queue after caller B has become current.
+let activeAuthorityScope: string | null = null;
 
 // Cadence for the hidden-tab / no-rAF fallback. Browsers throttle background
 // timers to ~1s regardless; a short nominal interval keeps a foreground no-rAF
@@ -110,14 +124,16 @@ function flush(): void {
   // stale patch can outlive them (a later-frame patch is not stale against a
   // same-frame remove; cross-fetch staleness is caught by the revision guard).
   pending = new Map();
-  tombstones = new Set();
+  tombstones = new Map();
 
-  if (batch.size === 0) return;
+  const flushAuthorityScope = activeAuthorityScope;
+  if (!flushAuthorityScope || batch.size === 0) return;
 
   const lastApplied = getLastAppliedRevision('sessions');
   const sessions: Session[] = [];
   for (const [id, entry] of batch) {
-    if (graves.has(id)) continue; // removed synchronously this frame
+    if (entry.authorityScope !== flushAuthorityScope) continue;
+    if (graves.get(id) === flushAuthorityScope) continue; // removed synchronously this frame
     if (entry.revision <= lastApplied) continue; // subsumed by a fresher hydration apply
     sessions.push(entry.session);
   }
@@ -150,8 +166,16 @@ if (typeof document !== 'undefined' && typeof document.addEventListener === 'fun
  * bumps synchronously first, so the stamp reflects this event). Applied on the
  * next coalesced flush.
  */
-export function enqueueSessionPatch(session: Session): void {
-  pending.set(session.session_id, { session, revision: getRevision('sessions') });
+export function enqueueSessionPatch(authorityScope: string, session: Session): void {
+  // A listener from the previous subscription can remain attached until its
+  // passive cleanup runs. Reject it synchronously once the layout phase has
+  // moved the queue to a replacement authority.
+  if (authorityScope !== activeAuthorityScope) return;
+  pending.set(session.session_id, {
+    session,
+    authorityScope,
+    revision: getRevision('sessions'),
+  });
   scheduleFlush();
 }
 
@@ -160,9 +184,10 @@ export function enqueueSessionPatch(session: Session): void {
  * for it and mark it so a same-frame queued patch can't resurrect it at flush.
  * Schedules a flush so the tombstone is cleared even if no patch is queued.
  */
-export function tombstoneSession(sessionId: string): void {
+export function tombstoneSession(authorityScope: string, sessionId: string): void {
+  if (authorityScope !== activeAuthorityScope) return;
   pending.delete(sessionId);
-  tombstones.add(sessionId);
+  tombstones.set(sessionId, authorityScope);
   scheduleFlush();
 }
 
@@ -170,15 +195,36 @@ export function tombstoneSession(sessionId: string): void {
  * Clear a session id's tombstone on synchronous `session:created` so a genuine
  * remove-then-recreate within one frame lets subsequent patches apply.
  */
-export function untombstoneSession(sessionId: string): void {
-  tombstones.delete(sessionId);
+export function untombstoneSession(authorityScope: string, sessionId: string): void {
+  if (authorityScope !== activeAuthorityScope) return;
+  if (tombstones.get(sessionId) === authorityScope) tombstones.delete(sessionId);
 }
 
 /**
- * Apply any queued patches immediately. Call on teardown so the last streamed
- * update isn't dropped when the subscription effect re-runs or unmounts.
+ * Move the singleton queue to the currently authenticated authority.
+ *
+ * Changing authority always discards queued work. It is not safe to preserve a
+ * deferred entity payload across identity, role, token-auth generation, or
+ * connection transitions: caller-shaped rows and redactions may differ even
+ * when the entity ID is the same. This runs in useAgorData's layout phase,
+ * before its map reset and before the previous subscription's passive cleanup.
  */
-export function flushRealtimeNow(): void {
+export function setRealtimeAuthorityScope(authorityScope: string | null): void {
+  if (activeAuthorityScope === authorityScope) return;
+  activeAuthorityScope = authorityScope;
+  discardRealtimeNow();
+}
+
+/**
+ * Apply any queued patches immediately for a same-authority subscription
+ * teardown. A true owner unmount first activates a null scope in layout cleanup,
+ * making its later passive cleanup a no-op instead of retaining private rows.
+ */
+export function flushRealtimeNow(authorityScope: string): void {
+  // A previous effect's cleanup must not cancel or flush the replacement
+  // authority's queue. Same-authority resubscriptions still preserve the last
+  // streamed update, which is why this is scoped rather than always discarded.
+  if (authorityScope !== activeAuthorityScope) return;
   cancelHandle();
   flush();
 }
@@ -190,5 +236,5 @@ export function flushRealtimeNow(): void {
 export function discardRealtimeNow(): void {
   cancelHandle();
   pending = new Map();
-  tombstones = new Set();
+  tombstones = new Map();
 }

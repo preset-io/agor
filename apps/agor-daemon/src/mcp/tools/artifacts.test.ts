@@ -1,5 +1,6 @@
 import type { McpServer } from '@modelcontextprotocol/server';
 import { describe, expect, it, vi } from 'vitest';
+import { DrizzleService, type Repository } from '../../adapters/drizzle.js';
 
 let insideTenantDatabaseScope = false;
 
@@ -7,12 +8,9 @@ vi.mock('@agor/core/db', () => ({
   BranchRepository: class BranchRepository {},
 }));
 
-vi.mock('@agor/core/utils/errors', () => ({
-  NotFoundError: class NotFoundError extends Error {},
-}));
-
 vi.mock('../../utils/branch-authorization.js', () => ({
   hasBranchPermission: () => true,
+  isSuperAdmin: () => false,
 }));
 
 vi.mock('../server.js', () => ({
@@ -156,6 +154,118 @@ describe('artifact MCP tool input schemas', () => {
     });
 
     expect(parsed?.success).toBe(true);
+  });
+});
+
+describe('artifact publish runtime instructions', () => {
+  it.each([true, false])(
+    'keeps a timed-out wait inconclusive when observed=%s',
+    async (observed) => {
+      const artifactService = {
+        publishArtifact: vi.fn(async () => ({ artifact_id: 'artifact-1', files: {} })),
+        waitForRuntimeStatus: vi.fn(async () => ({ ok: false, observed, timed_out: true })),
+        buildStatusDiagnostic: vi.fn(() => null),
+      };
+      const ctx = {
+        app: {
+          service: (name: string) =>
+            name === 'branches'
+              ? { get: async () => ({ branch_id: 'branch-1' }) }
+              : artifactService,
+        },
+        userId: 'viewer-1',
+        baseServiceParams: { tenant: { tenant_id: 'tenant-a', source: 'auth_claim' } },
+      } as unknown as Parameters<typeof registerArtifactTools>[1];
+      const result = (await captureHandler(
+        'agor_artifacts_publish',
+        ctx
+      )({
+        branchId: 'branch-1',
+        subpath: 'synthetic-app',
+        waitForStatus: true,
+      })) as { content: Array<{ text: string }> };
+      const payload = JSON.parse(result.content[0].text);
+      expect(payload.instructions).toContain('inconclusive');
+      expect(payload.instructions).not.toContain('observed a failure');
+      expect(payload.instructions).not.toContain('fix and republish');
+      expect(payload.publish_validation).toMatchObject({ observed, timed_out: true, ok: false });
+    }
+  );
+});
+
+describe('artifact MCP list projection', () => {
+  it('requests the legacy list shape without source files', async () => {
+    const find = vi.fn(async () => ({
+      total: 1,
+      limit: 25,
+      skip: 0,
+      data: [
+        {
+          artifact_id: 'artifact-1',
+          name: 'Artifact',
+          dependencies: { react: '18.3.1' },
+        },
+      ],
+    }));
+    const ctx = {
+      app: {
+        service: vi.fn(() => ({ find })),
+      },
+      baseServiceParams: {
+        tenant: { tenant_id: 'tenant-a', source: 'auth_claim' },
+      },
+    } as unknown as Parameters<typeof registerArtifactTools>[1];
+
+    await captureHandler('agor_artifacts_list', ctx)({});
+
+    expect(find).toHaveBeenCalledWith({
+      query: expect.objectContaining({
+        $limit: 25,
+        $skip: 0,
+        $select: expect.arrayContaining(['artifact_id', 'dependencies', 'url']),
+      }),
+      ...ctx.baseServiceParams,
+    });
+    expect(find.mock.calls[0]?.[0]?.query.$select).not.toContain('files');
+  });
+});
+
+describe('artifact MCP not-found results', () => {
+  it('projects a real DrizzleService miss as the documented tool result', async () => {
+    type ArtifactRow = { artifact_id: string; name: string };
+    const repository: Repository<ArtifactRow> = {
+      create: vi.fn(),
+      findById: vi.fn(async () => null),
+      findAll: vi.fn(async () => []),
+      update: vi.fn(),
+      delete: vi.fn(),
+    };
+    const service = Object.assign(
+      new DrizzleService<ArtifactRow>(repository, {
+        id: 'artifact_id',
+        resourceType: 'Artifact',
+      }),
+      { isVisibleTo: vi.fn() }
+    );
+    const ctx = {
+      app: { service: vi.fn(() => service) },
+      userId: 'user-1',
+      baseServiceParams: {
+        tenant: { tenant_id: 'tenant-a', source: 'auth_claim' },
+      },
+    } as unknown as Parameters<typeof registerArtifactTools>[1];
+
+    const result = await captureHandler('agor_artifacts_get', ctx)({ artifactId: 'artifact-1' });
+
+    expect(result).toEqual({
+      content: [
+        {
+          type: 'text',
+          text: JSON.stringify({ error: 'Artifact artifact-1 not found' }, null, 2),
+        },
+      ],
+    });
+    expect(service.isVisibleTo).not.toHaveBeenCalled();
   });
 });
 

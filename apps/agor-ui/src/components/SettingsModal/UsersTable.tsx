@@ -1,3 +1,4 @@
+import { AgorUserLifecycleAuthority } from '@agor/core/config/browser';
 import { EXECUTION_HOME_KEY_PATTERN } from '@agor/core/types';
 import type {
   AgorClient,
@@ -8,12 +9,17 @@ import type {
   UpdateUserInput,
   User,
 } from '@agor-live/client';
-import { hasMinimumRole, ROLE_OPTIONS, ROLES } from '@agor-live/client';
+import {
+  canAssignUserRole,
+  hasMinimumRole,
+  hasRoleAuthorityOver,
+  ROLE_OPTIONS,
+  ROLES,
+} from '@agor-live/client';
 import { DeleteOutlined, EditOutlined, PlusOutlined } from '@ant-design/icons';
 import {
   Button,
   Checkbox,
-  Flex,
   Form,
   Input,
   Popconfirm,
@@ -22,19 +28,27 @@ import {
   Table,
   Tabs,
   Tag,
-  Tooltip,
   Typography,
 } from 'antd';
-import { type Key, useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useState } from 'react';
 import { mapToSortedArray } from '@/utils/mapHelpers';
+import {
+  passwordPolicyHelp,
+  passwordPolicyRequirements,
+  passwordRules,
+} from '@/utils/passwordPolicy';
 import { filterBySettingsSearch } from '@/utils/settingsSearch';
+import { isIdentityCapabilityAvailable, useAuthConfig } from '../../hooks/useAuthConfig';
+import {
+  useAuthenticatedAuthorityScope,
+  useAuthorityOperationGuard,
+} from '../../hooks/useAuthorityOperationGuard';
 import { useThemedMessage } from '../../utils/message';
-import { FormEmojiPickerInput } from '../EmojiPickerInput';
 import { HighlightMatch } from '../HighlightMatch';
 import { UserIdentityAvatar } from '../UserIdentityAvatar';
-import { ListPanelHeader } from './panelPrimitives';
+import { AdaptiveSettingsModal } from './AdaptiveSettingsModal';
+import { ResponsiveSettingsHeader } from './ResponsiveSettingsHeader';
 import { SettingsActionGroup } from './SettingsActionGroup';
-import { DrillInFrame, useSettingsDrill } from './SettingsDrill';
 import { UserAvatarsTab } from './UserAvatarsTab';
 import { UserSettingsModal } from './UserSettingsModal';
 
@@ -43,9 +57,13 @@ interface UsersTableProps {
   gatewayChannelById?: Map<string, GatewayChannel>;
   client: AgorClient | null;
   currentUser?: User | null;
-  onCreate?: (data: CreateUserInput) => void;
-  onUpdate?: (userId: string, updates: UpdateUserInput) => void;
-  onDelete?: (userId: string) => void;
+  onCreate?: (data: CreateUserInput, shouldApply?: () => boolean) => void | Promise<void>;
+  onUpdate?: (
+    userId: string,
+    updates: UpdateUserInput,
+    shouldApply?: () => boolean
+  ) => void | Promise<void>;
+  onDelete?: (userId: string, shouldApply?: () => boolean) => void | Promise<void>;
 }
 
 export const UsersTable: React.FC<UsersTableProps> = ({
@@ -58,64 +76,76 @@ export const UsersTable: React.FC<UsersTableProps> = ({
   onDelete,
 }) => {
   const { showError } = useThemedMessage();
-  const { drill, openDrill, closeDrill } = useSettingsDrill();
+  const { config: authConfig, identityContractState } = useAuthConfig();
+  const [createModalOpen, setCreateModalOpen] = useState(false);
+  const [editingUser, setEditingUser] = useState<User | null>(null);
   const [groups, setGroups] = useState<Group[]>([]);
   const [memberships, setMemberships] = useState<GroupMembership[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
-  const [createDirty, setCreateDirty] = useState(false);
   const [form] = Form.useForm();
   const isAdmin = hasMinimumRole(currentUser?.role, ROLES.ADMIN);
-  // Only a superadmin may grant the superadmin role (the backend enforces this
-  // and rejects it otherwise), so a plain admin should never see the option.
-  const isSuperadmin = hasMinimumRole(currentUser?.role, ROLES.SUPERADMIN);
-  const assignableRoleOptions = ROLE_OPTIONS.filter(
-    (opt) => isSuperadmin || opt.value !== ROLES.SUPERADMIN
+  const callerAuthority = useAuthenticatedAuthorityScope(
+    client,
+    currentUser ? `${currentUser.user_id}:${currentUser.role}` : null
+  );
+  const operationGuard = useAuthorityOperationGuard(callerAuthority.operationScope);
+
+  // biome-ignore lint/correctness/useExhaustiveDependencies: authenticated identity and role intentionally erase password-bearing forms
+  useLayoutEffect(() => {
+    form.resetFields();
+    setCreateModalOpen(false);
+    setEditingUser(null);
+  }, [currentUser?.role, currentUser?.user_id, form]);
+  const externallyManaged =
+    authConfig?.identity?.userLifecycle === AgorUserLifecycleAuthority.EXTERNAL;
+  const canCreateUsers =
+    isAdmin && isIdentityCapabilityAvailable(authConfig, identityContractState, 'create');
+  const canDeleteUsers = isIdentityCapabilityAvailable(authConfig, identityContractState, 'delete');
+  const passwordRequirements = passwordPolicyRequirements(authConfig?.passwordPolicy);
+  const canManageAvatarSettings =
+    isAdmin &&
+    isIdentityCapabilityAvailable(authConfig, identityContractState, 'avatarSettingsWrite');
+  const assignableRoleOptions = ROLE_OPTIONS.filter((option) =>
+    canAssignUserRole(currentUser?.role, option.value)
   );
 
-  // Editing / creating swaps this section's Content pane for a drill-in instead
-  // of stacking a second modal (Edit previously popped the whole UserSettingsModal
-  // on top of Workspace Settings).
-  const editingUser =
-    drill?.kind === 'users' && drill.mode === 'edit' && drill.recordId
-      ? (userById.get(drill.recordId) ?? null)
-      : null;
-  const isCreating = drill?.kind === 'users' && drill.mode === 'create';
+  const canEditUser = (target: User): boolean =>
+    currentUser?.user_id === target.user_id ||
+    (isAdmin && hasRoleAuthorityOver(currentUser?.role, target.role));
 
-  const openEdit = useCallback(
-    (user: User) => openDrill({ kind: 'users', mode: 'edit', recordId: user.user_id }),
-    [openDrill]
-  );
-  const openCreate = useCallback(() => openDrill({ kind: 'users', mode: 'create' }), [openDrill]);
-
-  // Reset the create form each time the create drill-in opens.
-  useEffect(() => {
-    if (isCreating) {
-      form.resetFields();
-      setCreateDirty(false);
-    }
-  }, [isCreating, form]);
+  const canDeleteUser = (target: User): boolean =>
+    !!currentUser &&
+    currentUser.user_id !== target.user_id &&
+    isAdmin &&
+    canDeleteUsers &&
+    hasRoleAuthorityOver(currentUser.role, target.role);
 
   const loadGroups = useCallback(async () => {
+    const operation = operationGuard.begin();
     if (!client || !isAdmin) {
       setGroups([]);
       setMemberships([]);
       return;
     }
-    const [nextGroups, nextMemberships] = await Promise.all([
-      client.service('groups').findAll({ query: { archived: false } }),
-      client.service('group-memberships').findAll({}),
-    ]);
-    setGroups(nextGroups as Group[]);
-    setMemberships(nextMemberships as GroupMembership[]);
-  }, [client, isAdmin]);
-
-  useEffect(() => {
-    loadGroups().catch((error) =>
+    try {
+      const [nextGroups, nextMemberships] = await Promise.all([
+        client.service('groups').findAll({ query: { archived: false } }),
+        client.service('group-memberships').findAll({}),
+      ]);
+      if (!operation.isCurrent()) return;
+      setGroups(nextGroups as Group[]);
+      setMemberships(nextMemberships as GroupMembership[]);
+    } catch (error) {
+      if (!operation.isCurrent()) return;
       showError(
         `Failed to load user groups: ${error instanceof Error ? error.message : String(error)}`
-      )
-    );
-  }, [loadGroups, showError]);
+      );
+    }
+  }, [client, isAdmin, operationGuard, showError]);
+
+  useEffect(() => {
+    void loadGroups();
+  }, [loadGroups]);
 
   const groupsByUser = useMemo(() => {
     const map = new Map<string, Group['group_id'][]>();
@@ -150,29 +180,45 @@ export const UsersTable: React.FC<UsersTableProps> = ({
   }, [userById, searchTerm, groupsByUser, groupById]);
 
   const handleDelete = (userId: string) => {
-    onDelete?.(userId);
+    const operation = operationGuard.begin();
+    if (!operation.isCurrent()) return;
+    onDelete?.(userId, operation.isCurrent);
   };
 
-  const handleCreate = () => {
-    form
-      .validateFields()
-      .then((values) => {
-        onCreate?.({
+  const handleCreate = async () => {
+    const operation = operationGuard.begin();
+    if (!operation.isCurrent()) return;
+    try {
+      const values = await form.validateFields();
+      if (!operation.isCurrent()) return;
+      await onCreate?.(
+        {
           email: values.email,
           password: values.password,
           name: values.name,
-          emoji: values.emoji || '👤',
           role: values.role || ROLES.MEMBER,
           unix_username: values.unix_username,
           must_change_password: values.must_change_password || false,
-        });
-        form.resetFields();
-        setCreateDirty(false);
-        closeDrill();
-      })
-      .catch(() => {
-        // Form validation failed - Ant Design will show field errors automatically
-      });
+        },
+        operation.isCurrent
+      );
+      if (!operation.isCurrent()) return;
+      form.resetFields();
+      setCreateModalOpen(false);
+    } catch (error) {
+      if (!operation.isCurrent()) return;
+      const code = (error as { data?: { code?: unknown } } | undefined)?.data?.code;
+      if (typeof code === 'string' && code.startsWith('PASSWORD_')) {
+        form.setFields([
+          {
+            name: 'password',
+            errors: [error instanceof Error ? error.message : 'Password was rejected'],
+          },
+        ]);
+      }
+      // Client-side validation already renders field errors. Server failures
+      // are toasted by the owning handler; keep the modal and values intact.
+    }
   };
 
   const getRoleColor = (role: User['role']) => {
@@ -198,9 +244,9 @@ export const UsersTable: React.FC<UsersTableProps> = ({
       render: (email: string, user: User) => (
         <Space>
           <UserIdentityAvatar user={user} size={28} fontSize="20px" />
-          <Typography.Link ellipsis title={email} onClick={() => openEdit(user)}>
+          <span>
             <HighlightMatch text={email} query={searchTerm} />
-          </Typography.Link>
+          </span>
         </Space>
       ),
     },
@@ -219,22 +265,12 @@ export const UsersTable: React.FC<UsersTableProps> = ({
       dataIndex: 'role',
       key: 'role',
       width: 120,
-      // Native funnel filter for the fixed role set, alongside the free-text search.
-      filters: ROLE_OPTIONS.map((opt) => ({ text: opt.label, value: opt.value })),
-      onFilter: (value: Key | boolean, user: User) => user.role === value,
       render: (role: User['role']) => <Tag color={getRoleColor(role)}>{role.toUpperCase()}</Tag>,
     },
     {
       title: 'Groups',
       key: 'groups',
       width: 280,
-      // One entry per group in the workspace; a user matches if they belong to it.
-      filters: groups
-        .slice()
-        .sort((a, b) => a.name.localeCompare(b.name))
-        .map((group) => ({ text: group.name, value: group.group_id })),
-      onFilter: (value: Key | boolean, user: User) =>
-        (groupsByUser.get(user.user_id) || []).includes(value as Group['group_id']),
       render: (_: unknown, user: User) => {
         const userGroupIds = groupsByUser.get(user.user_id) || [];
         if (userGroupIds.length === 0) {
@@ -256,63 +292,77 @@ export const UsersTable: React.FC<UsersTableProps> = ({
         );
       },
     },
-    // Edit/Delete are admin-only mutations (the backend rejects them for
-    // members), so the whole Actions column is dropped for non-admins. Members
-    // keep the read-only list, matching the backend's MEMBER list floor.
-    ...(isAdmin
-      ? [
-          {
-            title: 'Actions',
-            key: 'actions',
-            width: 88,
-            render: (_: unknown, user: User) => (
-              <SettingsActionGroup>
-                <Tooltip title="Edit user">
-                  <Button
-                    type="text"
-                    size="small"
-                    icon={<EditOutlined />}
-                    onClick={() => openEdit(user)}
-                  />
-                </Tooltip>
-                <Popconfirm
-                  title="Delete user?"
-                  description={`Are you sure you want to delete user "${user.email}"?`}
-                  onConfirm={() => handleDelete(user.user_id)}
-                  okText="Delete"
-                  cancelText="Cancel"
-                  okButtonProps={{ danger: true }}
-                >
-                  <Button type="text" size="small" icon={<DeleteOutlined />} danger />
-                </Popconfirm>
-              </SettingsActionGroup>
-            ),
-          },
-        ]
-      : []),
+    {
+      title: 'Actions',
+      key: 'actions',
+      width: 88,
+      render: (_: unknown, user: User) => {
+        const showEdit = canEditUser(user);
+        const showDelete = canDeleteUser(user);
+        if (!showEdit && !showDelete) return null;
+        return (
+          <SettingsActionGroup>
+            {showEdit && (
+              <Button
+                type="text"
+                size="small"
+                icon={<EditOutlined />}
+                aria-label={`Edit ${user.email}`}
+                onClick={() => setEditingUser(user)}
+              />
+            )}
+            {showDelete && (
+              <Popconfirm
+                title="Delete user?"
+                description={`Are you sure you want to delete user "${user.email}"?`}
+                onConfirm={() => handleDelete(user.user_id)}
+                okText="Delete"
+                cancelText="Cancel"
+                okButtonProps={{ danger: true }}
+              >
+                <Button
+                  type="text"
+                  size="small"
+                  icon={<DeleteOutlined />}
+                  aria-label={`Delete ${user.email}`}
+                  danger
+                />
+              </Popconfirm>
+            )}
+          </SettingsActionGroup>
+        );
+      },
+    },
   ];
 
   const usersTable = (
     <div>
-      <ListPanelHeader
-        title="Users"
-        description="Manage user accounts and permissions."
-        search={
-          <Input
-            allowClear
-            placeholder="Search name, email, username, role, or groups"
-            value={searchTerm}
-            onChange={(event) => setSearchTerm(event.target.value)}
-            style={{ width: 320 }}
-          />
+      <ResponsiveSettingsHeader
+        description={
+          externallyManaged
+            ? 'User accounts and roles are managed by your identity provider.'
+            : 'Manage user accounts and permissions.'
         }
-        actions={
-          isAdmin ? (
-            <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
-              New User
-            </Button>
-          ) : undefined
-        }
+        actions={(compact) => (
+          <Space wrap style={{ width: compact ? '100%' : undefined }}>
+            <Input
+              allowClear
+              placeholder="Search name, email, username, role, or groups"
+              value={searchTerm}
+              onChange={(event) => setSearchTerm(event.target.value)}
+              style={{ width: compact ? '100%' : 320, flex: compact ? '1 1 100%' : undefined }}
+            />
+            {canCreateUsers && (
+              <Button
+                type="primary"
+                icon={<PlusOutlined />}
+                onClick={() => setCreateModalOpen(true)}
+              >
+                New User
+              </Button>
+            )}
+          </Space>
+        )}
       />
 
       <Table
@@ -321,98 +371,90 @@ export const UsersTable: React.FC<UsersTableProps> = ({
         rowKey="user_id"
         pagination={false}
         size="small"
+        scroll={{ x: 900 }}
       />
-    </div>
-  );
 
-  const createFields = (
-    <Form
-      form={form}
-      layout="vertical"
-      style={{ maxWidth: 520 }}
-      onValuesChange={() => setCreateDirty(true)}
-    >
-      <Form.Item label="Name" style={{ marginBottom: 24 }}>
-        <Flex gap={8}>
-          <Form.Item name="emoji" initialValue="👤" noStyle>
-            <FormEmojiPickerInput fieldName="emoji" defaultEmoji="👤" />
-          </Form.Item>
-          <Form.Item name="name" noStyle style={{ flex: 1 }}>
-            <Input placeholder="John Doe" style={{ flex: 1 }} />
-          </Form.Item>
-        </Flex>
-      </Form.Item>
+      {/* Create User Modal */}
+      {canCreateUsers && (
+        <AdaptiveSettingsModal
+          title="Create User"
+          open={createModalOpen}
+          onOk={handleCreate}
+          onCancel={() => {
+            form.resetFields();
+            setCreateModalOpen(false);
+          }}
+          okText="Create"
+          width={800}
+        >
+          <Form form={form} layout="vertical" style={{ marginTop: 16 }}>
+            <Form.Item label="Name" name="name" style={{ marginBottom: 24 }}>
+              <Input placeholder="John Doe" />
+            </Form.Item>
 
-      <Form.Item
-        label="Email"
-        name="email"
-        rules={[
-          { required: true, message: 'Please enter an email' },
-          { type: 'email', message: 'Please enter a valid email' },
-        ]}
-      >
-        <Input placeholder="user@example.com" />
-      </Form.Item>
+            <Form.Item
+              label="Email"
+              name="email"
+              rules={[
+                { required: true, message: 'Please enter an email' },
+                { type: 'email', message: 'Please enter a valid email' },
+              ]}
+            >
+              <Input placeholder="user@example.com" />
+            </Form.Item>
 
-      <Form.Item
-        label="Execution Home Key"
-        name="unix_username"
-        help="Optional transitional home key for delegated execution"
-        rules={[
-          {
-            pattern: EXECUTION_HOME_KEY_PATTERN,
-            message:
-              'Start with a lowercase letter or underscore; then use lowercase letters, numbers, hyphens, or underscores',
-          },
-          { max: 32, message: 'Execution home key must be 32 characters or less' },
-        ]}
-      >
-        <Input placeholder="johnsmith" maxLength={32} />
-      </Form.Item>
+            <Form.Item
+              label="Execution Home Key"
+              name="unix_username"
+              help="Optional transitional home key for delegated execution"
+              rules={[
+                {
+                  pattern: EXECUTION_HOME_KEY_PATTERN,
+                  message:
+                    'Start with a lowercase letter or underscore; then use lowercase letters, numbers, hyphens, or underscores',
+                },
+                { max: 32, message: 'Execution home key must be 32 characters or less' },
+              ]}
+            >
+              <Input placeholder="johnsmith" maxLength={32} />
+            </Form.Item>
 
-      <Form.Item
-        label="Password"
-        name="password"
-        rules={[
-          { required: true, message: 'Please enter a password' },
-          { min: 8, message: 'Password must be at least 8 characters' },
-        ]}
-      >
-        <Input.Password placeholder="••••••••" />
-      </Form.Item>
+            <Form.Item
+              label="Password"
+              name="password"
+              extra={passwordPolicyHelp(passwordRequirements)}
+              rules={passwordRules(passwordRequirements, { required: true })}
+            >
+              <Input.Password placeholder="••••••••" autoComplete="new-password" />
+            </Form.Item>
 
-      <Form.Item
-        label="Role"
-        name="role"
-        initialValue={ROLES.MEMBER}
-        rules={[{ required: true, message: 'Please select a role' }]}
-      >
-        <Select
-          options={assignableRoleOptions.map((opt) => ({
-            value: opt.value,
-            label: opt.label,
-            title: opt.description,
-          }))}
-        />
-      </Form.Item>
+            <Form.Item
+              label="Role"
+              name="role"
+              initialValue={ROLES.MEMBER}
+              rules={[{ required: true, message: 'Please select a role' }]}
+            >
+              <Select
+                options={assignableRoleOptions.map((opt) => ({
+                  value: opt.value,
+                  label: opt.label,
+                  title: opt.description,
+                }))}
+              />
+            </Form.Item>
 
-      <Form.Item name="must_change_password" valuePropName="checked" initialValue={false}>
-        <Checkbox>Force password change on first login</Checkbox>
-      </Form.Item>
-    </Form>
-  );
+            <Form.Item name="must_change_password" valuePropName="checked" initialValue={false}>
+              <Checkbox>Force password change on first login</Checkbox>
+            </Form.Item>
+          </Form>
+        </AdaptiveSettingsModal>
+      )}
 
-  // Edit reuses the full UserSettingsModal (embedded) so self-vs-other gating —
-  // Force-password-change only when an admin edits someone else; own API
-  // Tokens/Uploads only when editing yourself — is preserved exactly.
-  if (editingUser) {
-    return (
+      {/* Edit User Modal - reuses UserSettingsModal */}
       <UserSettingsModal
-        embedded
-        backLabel="Back to Users"
-        open
+        open={!!editingUser}
         onClose={() => {
-          closeDrill();
+          setEditingUser(null);
           void loadGroups();
         }}
         user={editingUser}
@@ -420,29 +462,26 @@ export const UsersTable: React.FC<UsersTableProps> = ({
         currentUser={currentUser}
         onUpdate={onUpdate}
       />
-    );
-  }
-
-  if (isCreating) {
-    return (
-      <DrillInFrame title="New User" dirty={createDirty} saveLabel="Create" onSave={handleCreate}>
-        {createFields}
-      </DrillInFrame>
-    );
-  }
+    </div>
+  );
 
   return (
     <Tabs
       defaultActiveKey="users"
       items={[
         { key: 'users', label: 'Users', children: usersTable },
-        ...(isAdmin
+        ...(canManageAvatarSettings
           ? [
               {
                 key: 'avatars',
-                label: 'Avatar sync',
+                label: 'Avatars',
                 children: (
-                  <UserAvatarsTab client={client} gatewayChannelById={gatewayChannelById} />
+                  <UserAvatarsTab
+                    client={client}
+                    gatewayChannelById={gatewayChannelById}
+                    identityKey={callerAuthority.identityKey}
+                    operationScope={callerAuthority.operationScope}
+                  />
                 ),
               },
             ]

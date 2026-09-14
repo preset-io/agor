@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { MCP_CAPABILITY_ISSUING_SERVICE_PATHS } from './utils/mcp-server-authorization.js';
 
 /**
  * Regression tests for the daemon-side MCP OAuth callback URL.
@@ -15,9 +16,8 @@ import { describe, expect, it } from 'vitest';
  * localhost" failures for any user not running on the daemon host.
  *
  * The fix funnels every daemon OAuth path through `startTwoPhaseMCPOAuthFlow`,
- * which builds the `redirect_uri` from `requirePublicBaseUrl()` —
- * `<daemon base_url>/mcp-servers/oauth-callback` — never from `localhost` or
- * `127.0.0.1`.
+ * which receives the callback URL resolved once from the daemon's frozen
+ * effective startup configuration — never from a runtime config reload.
  *
  * These structural assertions are intentionally coarse: they prevent the
  * specific regression of any new daemon code re-introducing
@@ -54,12 +54,10 @@ describe('register-services OAuth callback URL regression', () => {
     }
   });
 
-  it('builds the OAuth redirect URI from the public base URL', () => {
-    // startTwoPhaseMCPOAuthFlow is the single entry point and must use
-    // requirePublicBaseUrl() (not getBaseUrl(), which silently falls back
-    // to localhost in dev).
-    expect(codeOnly).toMatch(/requirePublicBaseUrl\s*\(/);
-    expect(codeOnly).toMatch(/['"]\/mcp-servers\/oauth-callback['"]/);
+  it('uses only the startup-injected OAuth callback URL', () => {
+    expect(codeOnly).toMatch(/return\s+ctx\.mcpOAuthCallbackUrl/);
+    expect(codeOnly).not.toMatch(/\brequirePublicBaseUrl\s*\(/);
+    expect(codeOnly).not.toMatch(/\bloadConfig(?:FromFile)?\s*\(/);
   });
 
   it('preserves tenant scope across unauthenticated OAuth callbacks', () => {
@@ -93,13 +91,125 @@ describe('register-services OAuth callback URL regression', () => {
     expect(codeOnly).toMatch(/reuseDynamicClientRegistration:\s*false/);
   });
 
+  it('binds durable pending flows to the authoritative compatibility policy', () => {
+    const flowHelper = codeOnly.slice(
+      codeOnly.indexOf('async function startTwoPhaseMCPOAuthFlowInternal'),
+      codeOnly.indexOf('const tenantIdFromParams')
+    );
+    expect(flowHelper).toMatch(/resolveMCPOAuthCompatibilityPolicy\s*\(\s*server\s*\)/);
+    expect(flowHelper).toMatch(/effectiveClientId\s*=\s*server\.auth\.oauth_client_id/);
+    expect(flowHelper).toMatch(/effectiveCompatibilityMode\s*=\s*compatibilityPolicy\.mode/);
+    expect(flowHelper).toMatch(/compatibilityMode:\s*context\.compatibilityMode/);
+
+    const callbackAuthority = codeOnly.slice(
+      codeOnly.indexOf('const assertPendingFlowStillAuthorized'),
+      codeOnly.indexOf('const persistOAuthTokenForPendingFlow')
+    );
+    expect(callbackAuthority).toMatch(
+      /compatibilityPolicy\?\.mode\s*!==\s*pendingFlow\.context\.compatibilityMode/
+    );
+    expect(callbackAuthority).toMatch(
+      /compatibilityMode:\s*pendingFlow\.context\.compatibilityMode/
+    );
+  });
+
+  it('validates test-oauth transient policy before outbound work and reloads saved authority', () => {
+    const testOauth = codeOnly.slice(
+      codeOnly.indexOf("app.use('/mcp-servers/test-oauth'"),
+      codeOnly.indexOf("app.service('mcp-servers/test-oauth').hooks")
+    );
+    expect(testOauth.indexOf('assertPublicMCPOAuthCompatibilityMode')).toBeLessThan(
+      testOauth.indexOf('oauthFetch(')
+    );
+    expect(testOauth).toMatch(/effectiveMcpUrl\s*=\s*authoritativeServer\?\.url/);
+    expect(testOauth).toMatch(/compatibilityPolicy\?\.mode\s*\?\?/);
+    expect(testOauth).toMatch(/effectiveClientId\s*=\s*authoritativeServer/);
+  });
+
+  it('enumerates an authority owner for every public MCP capability-issuing socket service', () => {
+    type CapabilityServicePath = (typeof MCP_CAPABILITY_ISSUING_SERVICE_PATHS)[number];
+    const requiredAuthorityContracts = {
+      // Reservation creation synchronously compares request and live socket
+      // authority before minting the one-shot server nonce.
+      'mcp-servers/oauth-browser-reservations': [/liveSocketAuthority\s*\(/],
+      // Standalone OAuth start and JWT test requests carry a live, immutable
+      // socket caller assertion through provider and database continuations.
+      'mcp-servers/oauth-start': [
+        /requestAuthorityAssertion\s*\(\s*params\s*\)/,
+        /requestAuthority:\s*assertRequestAuthority/,
+      ],
+      'mcp-servers/test-jwt': [
+        /requestAuthorityAssertion\s*\(\s*params\s*\)/,
+        /assertCurrent:\s*assertRequestAuthority/,
+      ],
+      // Callback completion is owned by the claimed, tenant/user-bound
+      // pending attempt rather than by a browser reservation.
+      'mcp-servers/oauth-complete': [/assertPendingFlowStillAuthorized\s*\(\s*pendingFlow\s*\)/],
+      // Refresh issuance is fenced by the exact durable grant generation and
+      // rechecks the grant subject at its persistence choke point.
+      'mcp-servers/oauth-refresh': [/observedRefreshVersion/, /refreshAndPersistToken\s*\(/],
+      'mcp-servers/test-oauth': [/assertInitialRequestAuthority/, /runWithinOAuthAuthority\s*\(/],
+      'mcp-servers/discover': [
+        /assertCurrentRequestAuthority/,
+        /createAuthorityGuardedMCPFetch\s*\(/,
+      ],
+    } satisfies Record<CapabilityServicePath, RegExp[]>;
+
+    for (const path of MCP_CAPABILITY_ISSUING_SERVICE_PATHS) {
+      const start = codeOnly.indexOf(`app.use('/${path}'`);
+      const end = codeOnly.indexOf(`app.service('${path}').hooks`, start);
+      expect(start, `${path} registration`).toBeGreaterThanOrEqual(0);
+      expect(end, `${path} hook registration`).toBeGreaterThan(start);
+      const serviceBody = codeOnly.slice(start, end);
+      for (const contract of requiredAuthorityContracts[path]) {
+        expect(serviceBody, `${path} authority contract ${contract}`).toMatch(contract);
+      }
+    }
+
+    // The only bearer-returning service is not public: it independently
+    // requires a trusted internal/service or session-executor capability.
+    const authHeadersBody = codeOnly.slice(
+      codeOnly.indexOf("app.use('/mcp-servers/oauth-auth-headers'"),
+      codeOnly.indexOf("app.service('mcp-servers/oauth-auth-headers').hooks")
+    );
+    expect(authHeadersBody).toMatch(/shouldExposeMCPServerSecrets\s*\(\s*params\s*\)/);
+    expect(authHeadersBody).toMatch(/shouldExposeMCPServerSecretsForSessionToken\s*\(/);
+
+    // Keep the audit closed over the registered surface, not just today's
+    // issuing list. Any newly registered OAuth/test/discovery service must be
+    // classified here (and, when it issues capability, in the canonical role
+    // floor list above) before this contract can pass.
+    const nonIssuingOrInternal = [
+      'mcp-servers/oauth-disconnect',
+      'mcp-servers/oauth-status',
+      'mcp-servers/oauth-attempt-status',
+      'mcp-servers/oauth-auth-headers',
+      'mcp-servers/oauth-client-registration-reset',
+    ] as const;
+    const registeredAuthServices = new Set(
+      Array.from(
+        codeOnly.matchAll(
+          /app\.use\('\/(mcp-servers\/(?:oauth-[^']+|test-(?:jwt|oauth)|discover))'/g
+        ),
+        (match) => match[1]
+      )
+    );
+    expect(registeredAuthServices).toEqual(
+      new Set([...MCP_CAPABILITY_ISSUING_SERVICE_PATHS, ...nonIssuingOrInternal])
+    );
+  });
+
   it('uses durable hashed state claims on PostgreSQL and never broadcasts raw flow state', () => {
     expect(codeOnly).toMatch(/durableOAuthFlows\.claimForCallback\s*\(\s*state\s*\)/);
     expect(codeOnly).toMatch(/cacheToken:\s*false/);
     expect(codeOnly).toMatch(/attempt_id:\s*pendingFlow\.attemptId/);
+    expect(codeOnly).toMatch(/reservation_token:\s*opts\.browserReservation\.reservationToken/);
+    expect(codeOnly).toMatch(/caller_user_id:\s*opts\.browserReservation\.userId/);
+    expect(codeOnly).toMatch(/awaitToken\s*&&\s*opts\.browserReservation\s*&&\s*app\.io/);
     expect(codeOnly).toMatch(
-      /app\.io\.local\.to\s*\(\s*opts\.socketId\s*\)\.emit\s*\(\s*['"]oauth:open_browser['"]/
+      /app\.io\.local\.to\s*\(\s*opts\.browserReservation\.socketId\s*\)\.emit\s*\(\s*['"]oauth:open_browser['"]/
     );
+    expect(codeOnly).toMatch(/assertOAuthBrowserReservationStillCurrent/);
     expect(codeOnly).not.toMatch(/app\.io\.emit\s*\(\s*['"]oauth:open_browser['"]/);
     expect(codeOnly).not.toMatch(/emit\s*\(\s*['"]oauth:completed['"][\s\S]{0,300}\bstate\b/);
   });
@@ -113,6 +223,69 @@ describe('register-services OAuth callback URL regression', () => {
       .map((match) => match[1])
       .join('\n');
     expect(loggedExpressions).not.toMatch(/\b(?:code|state|tokenResponse|pendingFlow\.context)\b/);
+  });
+
+  it('persists the grant and notifies the initiating UI before serving the closing page', () => {
+    const callbackBody = rawSource.slice(
+      rawSource.indexOf('const oauthCallbackHandler'),
+      rawSource.indexOf("app.use('/mcp-servers',")
+    );
+    const successBody = callbackBody.slice(
+      callbackBody.indexOf(
+        "persistOAuthTokenForPendingFlow(tokenResponse, pendingFlow, 'OAuth Callback')"
+      ),
+      callbackBody.indexOf('} catch (innerErr)')
+    );
+
+    const persistIndex = successBody.indexOf('persistOAuthTokenForPendingFlow');
+    const hintIndex = successBody.indexOf("code: 'runtime_authority_hint'");
+    const notifyIndex = successBody.indexOf('emitOAuthCompletion(pendingFlow, true)');
+    const resolveIndex = successBody.indexOf('pendingFlow.tokenResolve?.(tokenResponse)');
+    const renderIndex = successBody.indexOf('sendOAuthResultPage(');
+
+    expect(persistIndex).toBeGreaterThanOrEqual(0);
+    expect(hintIndex).toBeGreaterThan(persistIndex);
+    expect(successBody).toContain("'oauth_browser_authority_changed'");
+    expect(notifyIndex).toBeGreaterThan(persistIndex);
+    expect(resolveIndex).toBeGreaterThan(notifyIndex);
+    expect(renderIndex).toBeGreaterThan(resolveIndex);
+  });
+
+  it('marks callback responses no-store and renders denied/error states without success mode', () => {
+    const callbackBody = codeOnly.slice(
+      codeOnly.indexOf('const oauthCallbackHandler'),
+      codeOnly.indexOf("app.use('/mcp-servers',")
+    );
+
+    expect(callbackBody).toMatch(
+      /setHeader\s*\(\s*['"]Cache-Control['"]\s*,\s*['"]no-store['"]\s*\)/
+    );
+    expect(callbackBody).toMatch(
+      /if\s*\(\s*error\s*\)[\s\S]*sendOAuthResultPage\s*\(\s*res\s*,\s*false/
+    );
+    expect(callbackBody).toMatch(
+      /if\s*\(\s*!code\s*\|\|\s*!state\s*\)[\s\S]*sendOAuthResultPage\s*\(\s*res\s*,\s*false/
+    );
+  });
+
+  it('never treats a browser error parameter as DCR invalidation evidence', () => {
+    const callbackBody = codeOnly.slice(
+      codeOnly.indexOf('const oauthCallbackHandler'),
+      codeOnly.indexOf("app.use('/mcp-servers',")
+    );
+    const frontChannelErrorBranch = callbackBody.slice(
+      callbackBody.indexOf('if (error)'),
+      callbackBody.indexOf('if (!code || !state)')
+    );
+
+    expect(frontChannelErrorBranch).toMatch(
+      /durableOAuthFlows\.claimForCallback\s*\(\s*state\s*\)/
+    );
+    expect(frontChannelErrorBranch).toMatch(
+      /durableOAuthFlows\.finish\s*\(\s*claimed\.flow\s*,\s*['"]failed['"]\s*,\s*['"]authorization_denied['"]/
+    );
+    expect(frontChannelErrorBranch).not.toMatch(/invalidateTokenEndpointRejectedClient/);
+    expect(frontChannelErrorBranch).not.toMatch(/client_registration_invalidated/);
   });
 
   it('uses one phase-aware failure classifier for callback and manual completion', () => {

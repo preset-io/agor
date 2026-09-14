@@ -17,6 +17,7 @@ import { createDatabase, DEFAULT_DB_PATH } from '../client';
 import { isSQLiteDatabase } from '../database-wrapper';
 import { initializeDatabase, seedInitialData } from '../migrate';
 import { sanitizeDbError } from '../sanitize-error';
+import { createDevelopmentDefaultAdminUser } from '../user-utils';
 
 interface SetupOptions {
   path?: string;
@@ -95,7 +96,8 @@ async function main() {
     console.log('');
 
     // Seed initial data
-    await seedInitialData(db);
+    const owner = await createDevelopmentDefaultAdminUser(db);
+    await seedInitialData(db, owner.user_id);
     console.log('');
 
     console.log('✅ Database setup complete!');

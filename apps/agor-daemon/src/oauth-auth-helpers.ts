@@ -6,8 +6,13 @@
  * without spinning up the full daemon.
  */
 
-import type { TenantScopeAwareDatabase } from '@agor/core/db';
-import { assertTenantWritable, runWithTenantDatabaseScope } from '@agor/core/db';
+import type { TenantScopeAwareDatabase, TenantScopedDatabase } from '@agor/core/db';
+import {
+  assertTenantWritable,
+  getCurrentTenantId,
+  runWithTenantDatabaseScope,
+  runWithTenantDatabaseTransaction,
+} from '@agor/core/db';
 
 /**
  * Runs `work` inside a tenant database scope when `tenantId` is provided.
@@ -46,24 +51,39 @@ export async function runInOAuthTenantWriteScope<T>(
 }
 
 /**
+ * Native all-dialect OAuth metadata transaction.
+ *
+ * Unlike the identity-only SQLite branch of `runInOAuthTenantWriteScope`, this
+ * uses BEGIN IMMEDIATE on SQLite and a tenant/RLS transaction on PostgreSQL.
+ * Keep provider I/O out of this boundary; it is for the small set of database
+ * changes that must either all commit or all roll back.
+ */
+export async function runInOAuthTenantWriteTransaction<T>(
+  db: TenantScopeAwareDatabase,
+  tenantId: string | undefined,
+  work: (scoped: TenantScopedDatabase) => Promise<T>
+): Promise<T> {
+  const effectiveTenantId = tenantId ?? getCurrentTenantId();
+  return runWithTenantDatabaseTransaction(db, effectiveTenantId, async (scoped) => {
+    if (effectiveTenantId) await assertTenantWritable(scoped, effectiveTenantId);
+    return work(scoped);
+  });
+}
+
+/**
  * Resolves the effective user ID for per-user OAuth token injection.
  *
  * Service-account callers (`_isServiceAccount === true`) may request another
- * user's token. Executor-session token holders
- * (`authPayloadType === 'executor-session'`) may only preserve an explicit
- * `forUserId` that matches their authenticated token subject. Arbitrary
- * cross-user lookup stays reserved for service-account callers.
- * All other callers — including regular authenticated members — are silently
- * redirected to their own user ID to prevent privilege escalation.
+ * user's token. Every normal user principal is pinned to its own user ID.
+ * Task executors authenticate as the initiating user, so they deliberately
+ * follow that same rule rather than introducing a second authorization mode.
  */
 export function resolveForUserIdWithGate(opts: {
   queryForUserId: string | undefined;
   isServiceAccount: boolean | undefined;
-  authPayloadType: unknown;
   callerUserId: string | undefined;
 }): string | undefined {
-  const canUseExplicitUser =
-    opts.isServiceAccount === true ||
-    (opts.authPayloadType === 'executor-session' && opts.queryForUserId === opts.callerUserId);
-  return opts.queryForUserId && canUseExplicitUser ? opts.queryForUserId : opts.callerUserId;
+  return opts.queryForUserId && opts.isServiceAccount === true
+    ? opts.queryForUserId
+    : opts.callerUserId;
 }

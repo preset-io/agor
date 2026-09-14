@@ -26,6 +26,16 @@ export enum MessageRole {
 export type MessageSource = 'gateway' | 'agor';
 
 /**
+ * Trusted prompt provenance sent over the daemon-to-executor boundary.
+ *
+ * This is deliberately narrower than persisted message source metadata. The
+ * daemon derives it from the admitted Task and Session; public prompt callers
+ * cannot select it. Omission means the prompt is synthesized or otherwise
+ * unattributed and must fail closed at provider human-trust gates.
+ */
+export type PromptOrigin = { kind: 'human' } | { kind: 'channel'; server: string };
+
+/**
  * Read-only provenance left on messages written by removed integrations.
  * Runtime request types intentionally exclude these values.
  */

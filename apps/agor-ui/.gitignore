@@ -25,3 +25,7 @@ dist-ssr
 
 *storybook.log
 storybook-static
+
+# Vitest browser-mode artifacts
+.vitest-attachments/
+__screenshots__/

@@ -90,6 +90,22 @@ function makeManualSession(
   } as unknown as Session;
 }
 
+function makeGatewaySession(
+  overrides: { session_id: string; title: string } & Record<string, unknown>
+): Session {
+  return makeManualSession({
+    custom_context: {
+      gateway_source: {
+        channel_id: 'gateway-channel-1',
+        channel_type: 'slack',
+        channel_name: 'Team Slack',
+        thread_id: 'thread-1',
+      },
+    },
+    ...overrides,
+  });
+}
+
 function getSessionTreeToggle(sessionTitle: string): HTMLElement {
   const mockedToggle = screen.queryByLabelText(
     new RegExp(`(collapse|expand) ${sessionTitle}`, 'i')
@@ -168,6 +184,9 @@ describe('BranchSessionSections', () => {
 
     expect(screen.getByText('Investigate crash')).toBeInTheDocument();
     expect(screen.getByLabelText('Latest task failed')).toBeInTheDocument();
+    expect(
+      screen.getByLabelText('Open session Investigate crash; latest task failed')
+    ).toBeInTheDocument();
   });
 
   it('does not mark idle sessions as failures', () => {
@@ -200,6 +219,98 @@ describe('BranchSessionSections', () => {
     expect(screen.queryByText('Archived parent')).not.toBeInTheDocument();
     expect(screen.getByText('Visible child')).toBeInTheDocument();
     expect(screen.getByText('1')).toBeInTheDocument();
+  });
+
+  it('nests local and remote children under MRU-sorted gateway parents', async () => {
+    const olderGateway = makeGatewaySession({
+      session_id: 'gateway-older',
+      title: 'Older gateway',
+      last_updated: '2026-06-01T00:00:00.000Z',
+      genealogy: { children: ['gateway-child', 'gateway-remote-child'] },
+    });
+    const child = makeManualSession({
+      session_id: 'gateway-child',
+      title: 'Spawned child',
+      genealogy: { parent_session_id: olderGateway.session_id, children: [] },
+    });
+    const remoteChild = makeManualSession({
+      session_id: 'gateway-remote-child',
+      title: 'Remote child',
+      genealogy: { parent_session_id: olderGateway.session_id, children: [] },
+      remote_surrogate: {
+        source_session_id: olderGateway.session_id,
+        source_branch_id: 'branch-1',
+        target_branch_id: 'branch-2',
+        relationship: { relationship_type: 'remote_create' },
+      },
+    });
+    const newerGateway = makeGatewaySession({
+      session_id: 'gateway-newer',
+      title: 'Newer gateway',
+      last_updated: '2026-06-04T00:00:00.000Z',
+    });
+    const onSessionClick = vi.fn();
+
+    const { container, unmount } = renderSections({
+      sessions: [olderGateway, child, remoteChild, newerGateway],
+      onSessionClick,
+    });
+
+    expect(screen.getByText('Spawned child')).toBeInTheDocument();
+    expect(screen.getByText('Remote child')).toBeInTheDocument();
+    expect(screen.getAllByText('Team Slack')).toHaveLength(2);
+    for (const channelPill of screen.getAllByTitle('Team Slack')) {
+      expect(channelPill.getAttribute('style')).toContain('align-self: flex-start');
+      expect(channelPill.getAttribute('style')).toContain('max-width: 100%');
+    }
+    expect(
+      Array.from(container.querySelectorAll('[data-session-id]')).map((row) =>
+        row.getAttribute('data-session-id')
+      )
+    ).toEqual(['gateway-newer', 'gateway-older', 'gateway-child', 'gateway-remote-child']);
+
+    fireEvent.click(getSessionTreeToggle('Older gateway'));
+    await waitFor(() => expect(screen.queryByText('Spawned child')).not.toBeInTheDocument());
+    expect(screen.queryByText('Remote child')).not.toBeInTheDocument();
+
+    unmount();
+    renderSections({
+      sessions: [olderGateway, child, remoteChild, newerGateway],
+      onSessionClick,
+    });
+    expect(screen.queryByText('Spawned child')).not.toBeInTheDocument();
+    expect(screen.queryByText('Remote child')).not.toBeInTheDocument();
+
+    fireEvent.click(getSessionTreeToggle('Older gateway'));
+    const remoteChildButton = await screen.findByLabelText(
+      'Open session Remote child; remote session; opens in its own branch'
+    );
+    expect(remoteChildButton.tagName).toBe('BUTTON');
+    remoteChildButton.focus();
+    expect(remoteChildButton).toHaveFocus();
+    // Keyboard activation of a native button is delivered as a click with no
+    // pointer detail; exercise that navigation path without reimplementing the
+    // browser's Enter/Space semantics in the component.
+    fireEvent.click(remoteChildButton, { detail: 0 });
+    expect(onSessionClick).toHaveBeenCalledWith('gateway-remote-child');
+  });
+
+  it('persists a collapsed Gateway Sessions section across card remounts', async () => {
+    const gateway = makeGatewaySession({
+      session_id: 'gateway-session',
+      title: 'Gateway conversation',
+    });
+    const { unmount } = renderSections({ sessions: [gateway] });
+
+    fireEvent.click(screen.getByText('Gateway Sessions'));
+    await waitFor(() => {
+      expect(readStoredCollapsedNodes()?.['branch-1']?.sections).toContain('gateway-sessions');
+    });
+
+    unmount();
+    renderSections({ sessions: [gateway] });
+    expect(screen.queryByText('Gateway conversation')).not.toBeInTheDocument();
+    expect(screen.getByText('Gateway Sessions')).toBeInTheDocument();
   });
 
   it('keeps a manually collapsed parent collapsed after selecting another session', async () => {

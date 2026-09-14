@@ -6,7 +6,13 @@ import {
   UsersRepository,
 } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
-import type { HookContext, KnowledgeDocument, KnowledgeGraphNode, User } from '@agor/core/types';
+import type {
+  HookContext,
+  InternalUser,
+  KnowledgeDocument,
+  KnowledgeGraphNode,
+  User,
+} from '@agor/core/types';
 import { ROLES } from '@agor/core/types';
 import {
   canReadKnowledgeDocument,
@@ -144,7 +150,7 @@ export async function resolveKnowledgeRealtimeUserIds(options: {
   const userRepository = new UsersRepository(options.db);
   const users = (
     await Promise.all(options.userIds.map((userId) => userRepository.findById(userId)))
-  ).filter((user): user is User => user !== null);
+  ).filter((user): user is InternalUser => user !== null);
 
   if (SUPPRESSED_CREATE_PATHS.has(path)) {
     return new Set(users.map((user) => user.user_id));

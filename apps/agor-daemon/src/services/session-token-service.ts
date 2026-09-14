@@ -1,7 +1,8 @@
 /**
- * SessionTokenService - executor-session JWT issuance and authority policy.
+ * SessionTokenService - delegated executor JWT issuance and authority policy.
  *
- * Standalone SQLite preserves the historical process-local raw-token Map.
+ * Standalone SQLite preserves the historical process-local authority Map,
+ * keyed by a SHA-256 fingerprint so the daemon need not retain raw bearers.
  * PostgreSQL stores only a SHA-256 fingerprint plus tenant/user/resource,
  * expiry, revocation, and use-policy facts. A valid JWT signature is necessary
  * but never sufficient: every authentication must also claim the authority row.
@@ -9,6 +10,7 @@
 
 import { createHash, randomUUID } from 'node:crypto';
 import {
+  type CurrentTaskExecutorSessionTokenAuthority,
   type ExecutorSessionTokenAuthorityClaim,
   type ExecutorSessionTokenAuthorityIssue,
   ExecutorSessionTokenAuthorityRepository,
@@ -23,8 +25,11 @@ import {
 } from '@agor/core/db';
 import jwt from 'jsonwebtoken';
 import {
+  EXECUTOR_COMMAND_TOKEN_PURPOSE,
   EXECUTOR_SESSION_TOKEN_PURPOSE,
   EXECUTOR_SESSION_TOKEN_TYPE,
+  type ExecutorSessionTokenRevocation,
+  type ExecutorTokenPurpose,
   getExecutorSessionTokenSessionId,
   isExecutorSessionTokenPayload,
 } from '../auth/executor-session-token.js';
@@ -37,6 +42,16 @@ const CLEANUP_INTERVAL_MS = 60 * 60 * 1000;
 const CLEANUP_TENANT_LIMIT = 1_000;
 export const EXECUTOR_SESSION_TOKEN_AUTHORITY_RETENTION_MS = 24 * 60 * 60 * 1000;
 
+/**
+ * Maximum lifetime for taskless, fire-and-forget executor commands.
+ *
+ * These credentials delegate the initiating user's normal tenant authority,
+ * but have no task lifecycle that can reliably revoke them when a remote
+ * launcher exits. Keep that bearer window bounded independently of the longer
+ * task-executor session configured by the operator.
+ */
+const EXECUTOR_COMMAND_TOKEN_EXPIRATION_MS = 15 * 60 * 1000;
+
 function sessionTokenDebug(result: string): void {
   if (DEBUG_SESSION_TOKENS) {
     // Only a bounded result category is permitted here. Bearers, fingerprints,
@@ -47,6 +62,7 @@ function sessionTokenDebug(result: string): void {
 
 interface SessionTokenData {
   tenant_id?: string;
+  purpose: ExecutorTokenPurpose;
   session_id: string;
   task_id?: string;
   branch_id?: string;
@@ -63,6 +79,7 @@ interface VerifiedExecutorToken {
   taskId: string | null;
   branchId: string | null;
   userId: string;
+  purpose: ExecutorTokenPurpose;
 }
 
 export interface SessionInfo {
@@ -84,8 +101,9 @@ export interface SessionTokenValidationScope {
 export interface SessionTokenAuthorityStore {
   issue(input: ExecutorSessionTokenAuthorityIssue): Promise<void>;
   validateAndConsume(input: ExecutorSessionTokenAuthorityClaim): Promise<SessionInfo | null>;
+  isCurrent(input: CurrentTaskExecutorSessionTokenAuthority): Promise<boolean>;
   revoke(tokenFingerprint: string, tenantId: string): Promise<boolean>;
-  revokeSession(sessionId: string, tenantId: string): Promise<number>;
+  revokeByTask(taskId: string, tenantId: string): Promise<string[]>;
   purgeRetained(cutoff: Date): Promise<number>;
 }
 
@@ -111,15 +129,21 @@ class PostgreSQLSessionTokenAuthorityStore implements SessionTokenAuthorityStore
     };
   }
 
+  async isCurrent(input: CurrentTaskExecutorSessionTokenAuthority): Promise<boolean> {
+    return this.withIndependentTenantTransaction(input.tenantId, (scoped) =>
+      new ExecutorSessionTokenAuthorityRepository(scoped).isCurrent(input)
+    );
+  }
+
   async revoke(tokenFingerprint: string, tenantId: string): Promise<boolean> {
     return this.withIndependentTenantTransaction(tenantId, (scoped) =>
       new ExecutorSessionTokenAuthorityRepository(scoped).revoke(tokenFingerprint, tenantId)
     );
   }
 
-  async revokeSession(sessionId: string, tenantId: string): Promise<number> {
+  async revokeByTask(taskId: string, tenantId: string): Promise<string[]> {
     return this.withIndependentTenantTransaction(tenantId, (scoped) =>
-      new ExecutorSessionTokenAuthorityRepository(scoped).revokeSession(sessionId, tenantId)
+      new ExecutorSessionTokenAuthorityRepository(scoped).revokeByTask(taskId, tenantId)
     );
   }
 
@@ -170,9 +194,11 @@ export interface SessionTokenServiceDependencies {
   authorityStore?: SessionTokenAuthorityStore;
   now?: () => Date;
   startCleanupTimer?: boolean;
+  /** Fence already-authenticated executor sockets after authority commits. */
+  onRevoked?: (revocation: ExecutorSessionTokenRevocation) => void | Promise<void>;
 }
 
-function fingerprintToken(token: string): string {
+export function fingerprintExecutorSessionToken(token: string): string {
   return createHash('sha256').update(token, 'utf8').digest('hex');
 }
 
@@ -180,6 +206,7 @@ export class SessionTokenService {
   private readonly tokens = new Map<string, SessionTokenData>();
   private readonly authorityStore: SessionTokenAuthorityStore | null;
   private readonly now: () => Date;
+  private readonly onRevoked?: SessionTokenServiceDependencies['onRevoked'];
   private cleanupTimer?: ReturnType<typeof setInterval>;
   private jwtSecret: string | null = null;
 
@@ -198,6 +225,7 @@ export class SessionTokenService {
     }
 
     this.now = dependencies.now ?? (() => new Date());
+    this.onRevoked = dependencies.onRevoked;
     if (dependencies.authorityStore) {
       this.authorityStore = dependencies.authorityStore;
     } else if (dependencies.db && isPostgresDatabaseHandle(dependencies.db)) {
@@ -220,11 +248,53 @@ export class SessionTokenService {
     this.jwtSecret = secret;
   }
 
+  /**
+   * Issue a bounded delegated-user credential for a taskless executor command.
+   * Centralizing this policy prevents individual command dispatchers from
+   * silently falling back to the longer task-runtime lifetime.
+   *
+   * The durable authority schema predates taskless commands, so its historical
+   * `session_id` slot carries this opaque command ID. It is never resolved as
+   * a Session: only exact command-capability guards interpret it.
+   */
+  generateCommandToken(commandId: string, userId: string, branchId?: string): Promise<string> {
+    return this.generateTokenWithPurpose(
+      commandId,
+      userId,
+      {
+        branchId,
+        maxUses: -1,
+        expirationMs: EXECUTOR_COMMAND_TOKEN_EXPIRATION_MS,
+      },
+      EXECUTOR_COMMAND_TOKEN_PURPOSE
+    );
+  }
+
   /** Generate and durably authorize a new executor-session JWT. */
   async generateToken(
     sessionId: string,
     userId: string,
-    scope: { taskId?: string; branchId?: string; maxUses?: number } = {}
+    scope: {
+      taskId?: string;
+      branchId?: string;
+      maxUses?: number;
+      /** Optional shorter lifetime; never extends the configured maximum. */
+      expirationMs?: number;
+    } = {}
+  ): Promise<string> {
+    return this.generateTokenWithPurpose(sessionId, userId, scope, EXECUTOR_SESSION_TOKEN_PURPOSE);
+  }
+
+  private async generateTokenWithPurpose(
+    sessionId: string,
+    userId: string,
+    scope: {
+      taskId?: string;
+      branchId?: string;
+      maxUses?: number;
+      expirationMs?: number;
+    },
+    purpose: ExecutorTokenPurpose
   ): Promise<string> {
     if (!this.jwtSecret) {
       throw new Error('SessionTokenService: JWT secret not set. Call setJwtSecret() first.');
@@ -234,9 +304,19 @@ export class SessionTokenService {
     if (!Number.isInteger(maxUses)) {
       throw new Error('SessionTokenService max uses must be an integer');
     }
+    if (
+      scope.expirationMs !== undefined &&
+      (!Number.isFinite(scope.expirationMs) || scope.expirationMs <= 0)
+    ) {
+      throw new Error('SessionTokenService token expiration must be positive');
+    }
 
     const now = this.now();
-    const expiresAt = new Date(now.getTime() + this.config.expiration_ms);
+    const expirationMs = Math.min(
+      scope.expirationMs ?? this.config.expiration_ms,
+      this.config.expiration_ms
+    );
+    const expiresAt = new Date(now.getTime() + expirationMs);
     const tenantId = getCurrentTenantId();
     if (this.authorityStore && !tenantId) {
       throw new Error('Missing trusted tenant context for executor token issuance');
@@ -245,7 +325,7 @@ export class SessionTokenService {
     const payload = {
       sub: userId,
       type: EXECUTOR_SESSION_TOKEN_TYPE,
-      purpose: EXECUTOR_SESSION_TOKEN_PURPOSE,
+      purpose,
       session_id: sessionId,
       task_id: scope.taskId,
       branch_id: scope.branchId,
@@ -266,9 +346,9 @@ export class SessionTokenService {
       // unavailable. There is deliberately no local fallback.
       await this.authorityStore.issue({
         tenantId: tenantId as string,
-        tokenFingerprint: fingerprintToken(token),
+        tokenFingerprint: fingerprintExecutorSessionToken(token),
         tokenType: EXECUTOR_SESSION_TOKEN_TYPE,
-        purpose: EXECUTOR_SESSION_TOKEN_PURPOSE,
+        purpose,
         sessionId,
         taskId: scope.taskId ?? null,
         branchId: scope.branchId ?? null,
@@ -278,10 +358,11 @@ export class SessionTokenService {
         maxUses,
       });
     } else {
-      // Compatibility boundary: standalone SQLite keeps the original raw-token
-      // Map, including its process-local revocation and use-count semantics.
-      this.tokens.set(token, {
+      // Compatibility boundary: standalone SQLite keeps process-local
+      // revocation/use-count semantics, but retains only the fingerprint.
+      this.tokens.set(fingerprintExecutorSessionToken(token), {
         ...(tenantId ? { tenant_id: tenantId } : {}),
+        purpose,
         session_id: sessionId,
         task_id: scope.taskId,
         branch_id: scope.branchId,
@@ -339,9 +420,9 @@ export class SessionTokenService {
       // back to the local Map in PostgreSQL mode.
       const sessionInfo = await this.authorityStore.validateAndConsume({
         tenantId: trustedTenantId,
-        tokenFingerprint: fingerprintToken(token),
+        tokenFingerprint: fingerprintExecutorSessionToken(token),
         tokenType: EXECUTOR_SESSION_TOKEN_TYPE,
-        purpose: EXECUTOR_SESSION_TOKEN_PURPOSE,
+        purpose: claims.purpose,
         sessionId: claims.sessionId,
         taskId: claims.taskId,
         branchId: claims.branchId,
@@ -351,18 +432,20 @@ export class SessionTokenService {
       return sessionInfo;
     }
 
-    const data = this.tokens.get(token);
+    const tokenFingerprint = fingerprintExecutorSessionToken(token);
+    const data = this.tokens.get(tokenFingerprint);
     if (!data) {
       sessionTokenDebug('rejected_by_local_authority');
       return null;
     }
     if (this.now() >= data.expires_at) {
-      this.tokens.delete(token);
+      this.tokens.delete(tokenFingerprint);
       sessionTokenDebug('rejected_expired');
       return null;
     }
     if (
       data.tenant_id !== claims.tenantId ||
+      data.purpose !== claims.purpose ||
       data.session_id !== claims.sessionId ||
       (data.task_id ?? null) !== claims.taskId ||
       (data.branch_id ?? null) !== claims.branchId ||
@@ -372,7 +455,7 @@ export class SessionTokenService {
       return null;
     }
     if (data.max_uses > 0 && data.use_count >= data.max_uses) {
-      this.tokens.delete(token);
+      this.tokens.delete(tokenFingerprint);
       sessionTokenDebug('rejected_max_uses');
       return null;
     }
@@ -387,33 +470,95 @@ export class SessionTokenService {
     };
   }
 
+  /**
+   * Check the current authority behind an already-authenticated Task bearer.
+   * Callers supply only the server-derived fingerprint and verified claims.
+   */
+  async isTaskTokenAuthorityCurrent(
+    input: CurrentTaskExecutorSessionTokenAuthority
+  ): Promise<boolean> {
+    if (this.authorityStore) return this.authorityStore.isCurrent(input);
+
+    const data = this.tokens.get(input.tokenFingerprint);
+    if (!data) return false;
+    if (this.now() >= data.expires_at) {
+      this.tokens.delete(input.tokenFingerprint);
+      return false;
+    }
+    return (
+      data.tenant_id === input.tenantId &&
+      data.purpose === EXECUTOR_SESSION_TOKEN_PURPOSE &&
+      data.session_id === input.sessionId &&
+      data.task_id === input.taskId &&
+      data.branch_id === input.branchId &&
+      data.user_id === input.userId
+    );
+  }
+
   /** Revoke one exact bearer. PostgreSQL failures are surfaced to the caller. */
   async revokeToken(token: string): Promise<boolean> {
-    if (!this.authorityStore) return this.tokens.delete(token);
+    if (!this.authorityStore) {
+      const tokenFingerprint = fingerprintExecutorSessionToken(token);
+      const existing = this.tokens.get(tokenFingerprint);
+      const revoked = this.tokens.delete(tokenFingerprint);
+      if (revoked) {
+        await this.onRevoked?.({
+          ...(existing?.tenant_id ? { tenantId: existing.tenant_id } : {}),
+          tokenFingerprint,
+        });
+      }
+      return revoked;
+    }
 
     const claims = this.verifyToken(token, true);
     if (!claims?.tenantId) return false;
     const ambientTenantId = getCurrentTenantId();
     if (ambientTenantId && ambientTenantId !== claims.tenantId) return false;
-    return this.authorityStore.revoke(fingerprintToken(token), claims.tenantId);
+    const tokenFingerprint = fingerprintExecutorSessionToken(token);
+    const revoked = await this.authorityStore.revoke(tokenFingerprint, claims.tenantId);
+    if (revoked) {
+      await this.onRevoked?.({
+        tenantId: claims.tenantId,
+        tokenFingerprint,
+      });
+    }
+    return revoked;
   }
 
-  /** Revoke all token authorities for a logical/synthetic session in one tenant. */
-  async revokeSessionTokens(sessionId: string): Promise<number> {
-    if (this.authorityStore) {
-      const tenantId = getCurrentTenantId();
-      if (!tenantId) throw new Error('Missing trusted tenant context for session token revocation');
-      return this.authorityStore.revokeSession(sessionId, tenantId);
+  /**
+   * Revoke all delegated-user credentials for one completed Task.
+   *
+   * Remote launcher processes do not share the daemon child's `onExit`
+   * lifecycle. Task terminality is the durable boundary common to local and
+   * remote execution, so credential retirement belongs here rather than in a
+   * process-exit callback.
+   */
+  async revokeTaskTokens(taskId: string): Promise<number> {
+    if (!taskId) throw new Error('Executor task token revocation requires a task ID');
+
+    if (!this.authorityStore) {
+      const revoked: Array<{ tokenFingerprint: string; data: SessionTokenData }> = [];
+      for (const [tokenFingerprint, data] of this.tokens.entries()) {
+        if (data.task_id !== taskId) continue;
+        this.tokens.delete(tokenFingerprint);
+        revoked.push({ tokenFingerprint, data });
+      }
+      for (const { tokenFingerprint, data } of revoked) {
+        await this.onRevoked?.({
+          ...(data.tenant_id ? { tenantId: data.tenant_id } : {}),
+          tokenFingerprint,
+        });
+      }
+      return revoked.length;
     }
 
-    let count = 0;
-    for (const [token, data] of this.tokens.entries()) {
-      if (data.session_id === sessionId) {
-        this.tokens.delete(token);
-        count += 1;
-      }
+    const tenantId = getCurrentTenantId();
+    if (!tenantId) throw new Error('Missing trusted tenant context for executor task revocation');
+    const fingerprints = await this.authorityStore.revokeByTask(taskId, tenantId);
+    for (const tokenFingerprint of fingerprints) {
+      await this.onRevoked?.({ tenantId, tokenFingerprint });
     }
-    return count;
+    return fingerprints.length;
   }
 
   /** Process-local diagnostic retained for compatibility; PostgreSQL returns 0. */
@@ -429,9 +574,9 @@ export class SessionTokenService {
     }
 
     let count = 0;
-    for (const [token, data] of this.tokens.entries()) {
+    for (const [tokenFingerprint, data] of this.tokens.entries()) {
       if (now >= data.expires_at) {
-        this.tokens.delete(token);
+        this.tokens.delete(tokenFingerprint);
         count += 1;
       }
     }
@@ -478,6 +623,7 @@ export class SessionTokenService {
         taskId: taskId ?? null,
         branchId: branchId ?? null,
         userId,
+        purpose: payload.purpose,
       };
     } catch {
       return null;
@@ -494,4 +640,23 @@ export class SessionTokenService {
     }, CLEANUP_INTERVAL_MS);
     this.cleanupTimer.unref?.();
   }
+}
+
+/**
+ * Resolve the daemon-owned issuer at the composition boundary and mint a
+ * bounded initiating-user credential for a taskless executor command.
+ *
+ * The Feathers application type is shared with clients and intentionally does
+ * not expose daemon-private singletons. Keep that one runtime projection here
+ * rather than duplicating casts and fallback token issuers across services.
+ */
+export async function issueExecutorCommandToken(
+  app: object,
+  commandId: string,
+  userId: string,
+  branchId?: string
+): Promise<string> {
+  const service = (app as { sessionTokenService?: SessionTokenService }).sessionTokenService;
+  if (!service) throw new Error('Session token service unavailable');
+  return service.generateCommandToken(commandId, userId, branchId);
 }

@@ -1,60 +1,73 @@
-import type {
-  AgorClient,
-  Board,
-  BoardGroupGrantWithGroup,
-  GroupMembership,
-  User,
-} from '@agor-live/client';
+import type { AgorClient, Board, EffectiveCapabilityPolicyAccess, User } from '@agor-live/client';
 import { hasMinimumRole, ROLES } from '@agor-live/client';
 import { useEffect, useState } from 'react';
+import { useConnectionState } from '../contexts/ConnectionContext';
 
 /**
- * Resolve the UI equivalent of BoardRepository.canMutate from canonical
- * owner, group-grant, membership, creator, and role inputs.
+ * Resolve board-management capability from the same normalized policy used by
+ * the daemon. Board access is intentionally independent of child branches.
  */
 export function useCanManageBoard(
   client: AgorClient | null,
   board: Board | undefined,
   user: User | null | undefined
 ) {
-  const [canManage, setCanManage] = useState(false);
+  const [permission, setPermission] = useState<{
+    client: AgorClient | null;
+    scopeKey: string | null;
+    canManage: boolean;
+  }>({ client: null, scopeKey: null, canManage: false });
+  const { authGeneration } = useConnectionState();
+  const boardId = board?.board_id;
+  const boardArchived = Boolean(board?.archived);
+  const primaryOwnerUserId = board?.primary_owner_user_id;
+  const userId = user?.user_id;
+  const userRole = user?.role;
+  const scopeKey = [
+    boardId ?? '',
+    boardArchived ? 'archived' : 'active',
+    primaryOwnerUserId ?? '',
+    userId ?? '',
+    userRole ?? '',
+    authGeneration,
+  ].join(':');
 
   useEffect(() => {
     let cancelled = false;
-    setCanManage(false);
-    if (!board || !user || !client || board.archived) return;
-    if (hasMinimumRole(user.role, ROLES.ADMIN) || board.created_by === user.user_id) {
-      setCanManage(true);
+    const publish = (canManage: boolean) => {
+      setPermission({ client, scopeKey, canManage });
+    };
+    publish(false);
+    if (!boardId || !userId || !userRole || !client || boardArchived) return;
+    if (!hasMinimumRole(userRole, ROLES.MEMBER)) return;
+
+    if (hasMinimumRole(userRole, ROLES.ADMIN) || primaryOwnerUserId === userId) {
+      publish(true);
       return;
     }
-    if (!hasMinimumRole(user.role, ROLES.MEMBER)) return;
 
-    void Promise.all([
-      client.service('boards/:id/owners').find({ route: { id: board.board_id } }),
-      client.service('boards/:id/group-grants').find({ route: { id: board.board_id } }),
-      client.service('group-memberships').findAll({ query: { user_id: user.user_id } }),
-    ])
-      .then(([owners, grants, memberships]) => {
+    // The daemon owns policy, group-membership, and principal precedence. Use
+    // its effective-access projection instead of reimplementing that resolver
+    // in the browser.
+    void client
+      .service('boards/:id/effective-access')
+      .find({ route: { id: boardId } })
+      .then((access: unknown) => {
         if (cancelled) return;
-        const groupIds = new Set((memberships as GroupMembership[]).map((item) => item.group_id));
-        setCanManage(
-          (owners as User[]).some((owner) => owner.user_id === user.user_id) ||
-            (board.access_mode !== 'private' &&
-              (grants as BoardGroupGrantWithGroup[]).some(
-                (grant) => grant.can === 'all' && groupIds.has(grant.group_id)
-              ))
-        );
+        publish((access as EffectiveCapabilityPolicyAccess).capabilities.includes('board.edit'));
       })
-      .catch((error: unknown) => {
-        // A 404 is the daemon's documented signal that board RBAC services are
-        // disabled. Fail closed for disconnects and authorization/server errors.
-        if (!cancelled) setCanManage((error as { code?: number })?.code === 404);
+      .catch(() => {
+        if (!cancelled) publish(false);
       });
 
     return () => {
       cancelled = true;
     };
-  }, [board, client, user]);
+  }, [boardArchived, boardId, client, primaryOwnerUserId, scopeKey, userId, userRole]);
 
-  return canManage;
+  // Never expose an answer from a previous authenticated generation, identity,
+  // board, or client during the render before the refetch effect runs.
+  return permission.client === client && permission.scopeKey === scopeKey
+    ? permission.canManage
+    : false;
 }

@@ -4,8 +4,9 @@
  * Concrete widget type: agent renders an inline form asking the user for one
  * or more env vars (e.g. `HUBSPOT_API_KEY`). The values flow browser → daemon
  * via `POST /widgets/:widget_id/submit` (NOT through the agent context) and
- * land in the session creator's `users.data.env_vars` via the existing users
- * service — encryption + blocklist + validation all reused.
+ * land in the submitting prompt actor's `users.data.env_vars` via the existing
+ * users service — encryption and structural validation are reused. A shared
+ * Session never lends or mutates its owner's credential environment.
  *
  * See §4 + §7 Part 2 of `docs/internal/in-conversation-widgets-design-2026-05-19.md`.
  */
@@ -18,8 +19,9 @@ import {
 } from '@agor/core/config';
 import { type Database, SessionEnvSelectionRepository } from '@agor/core/db';
 import { BadRequest } from '@agor/core/feathers';
-import type { User, UserID } from '@agor/core/types';
+import type { Params, User, UserID } from '@agor/core/types';
 import { z } from 'zod';
+import { markTrustedUserMutation } from '../../services/user-mutation-trust.js';
 import { registerWidget, type WidgetRegistryEntry, type WidgetSubmitCtx } from '../registry.js';
 
 /** Mirror of the regex used by the users service. */
@@ -174,7 +176,7 @@ function validationMessage(errors: ValidationError[]): string {
 
 /**
  * Side-effect: persist the submitted values via the users service. Encryption,
- * blocklist, regex, and value-length checks all live inside that service —
+ * name, NUL, and value-length checks all live inside that service —
  * we deliberately do NOT reimplement them here.
  */
 async function applyEnvVarsSubmit(
@@ -182,10 +184,19 @@ async function applyEnvVarsSubmit(
   submit: EnvVarsSubmit,
   params: EnvVarsParams
 ): Promise<void> {
+  if (submit.scope === 'session' && ctx.submitterUserId !== ctx.sessionCreatorUserId) {
+    throw fieldBadRequest(
+      'Session-scoped environment variables can only be configured by the session owner',
+      Object.fromEntries(
+        params.names.map((name) => [name, 'Choose global scope for a shared session'])
+      )
+    );
+  }
+
   // Enforce that the browser submitted exactly the names the agent requested
   // (no more, no fewer). Without this, a tampered client could use the
   // `trustedEnvVarWrite` escape hatch to write arbitrary env vars onto the
-  // session creator's profile — widening the attack surface far beyond what
+  // submitter's profile — widening the attack surface far beyond what
   // the agent (and the user reviewing the widget) intended.
   const requestedNames = new Set(params.names);
   const submittedNames = orderedEnvVarNames(Object.keys(submit.values));
@@ -208,14 +219,14 @@ async function applyEnvVarsSubmit(
     );
   }
 
-  // Belt-and-braces: re-validate names against the same regex+blocklist
+  // Belt-and-braces: re-validate names against the same structural rules
   // the users service uses, surfacing a single combined error if anything
   // fails. The users service would reject the same way, but doing it here
   // up-front gives us a clearer error per name without partial writes.
   for (const name of submittedNames) {
     if (!isEnvVarAllowed(name)) {
-      throw fieldBadRequest(`Cannot set environment variable "${name}": blocked by allow-list`, {
-        [name]: 'Blocked by allow-list',
+      throw fieldBadRequest(`Invalid environment variable name "${name}"`, {
+        [name]: 'Invalid environment variable name',
       });
     }
     const errors = validateEnvVar(name, submit.values[name]);
@@ -233,22 +244,18 @@ async function applyEnvVarsSubmit(
         env_vars?: Record<string, string>;
         env_var_scopes?: Record<string, 'global' | 'session'>;
       },
-      params?: {
-        user: { user_id: UserID; role: string | undefined };
-        authenticated: true;
-        trustedEnvVarWrite?: boolean;
-      }
+      params?: Params
     ): Promise<unknown>;
   };
 
   if (useExistingNames.length > 0) {
-    const creator = await usersService.get(ctx.sessionCreatorUserId, {
+    const submitter = await usersService.get(ctx.submitterUserId, {
       user: { user_id: ctx.submitterUserId, role: ctx.submitterRole },
       authenticated: true,
     });
     const fieldErrors: Record<string, string> = {};
     for (const name of useExistingNames) {
-      const meta = creator.env_vars?.[name];
+      const meta = submitter.env_vars?.[name];
       if (!meta?.set) {
         fieldErrors[name] = 'No saved value is set for this env var';
       } else if (meta.scope !== 'global') {
@@ -267,27 +274,24 @@ async function applyEnvVarsSubmit(
     env_var_scopes[name] = submit.scope;
   }
 
-  // The widget submit endpoint already authorized the caller via
-  // `canResolveWidget` (session-creator OR prompt-tier branch RBAC), so
-  // we set `trustedEnvVarWrite` on the users.patch hook to bypass its
-  // self-only check (`register-hooks.ts`). Field-level admin gates for
-  // unix_username/role/must_change_password run first and are NOT bypassed.
-  // The hook also enforces that only env_vars/env_var_scopes fields are
-  // written — this escape hatch cannot be used to patch other user fields.
+  // The widget submit endpoint authorized this caller through canonical
+  // prompt authority. Persist only to that same user's environment; personal
+  // Session sharing must never mutate the Session owner's credentials.
   //
-  // submitter identity is still threaded through for audit; the widget
-  // submit handler records it separately as `metadata.widget.submitted_by`.
-  //
-  // Grep for: trustedEnvVarWrite — to audit every site that sets it.
+  // Grep for: markTrustedUserMutation — to audit every trusted mutation site.
   if (submittedNames.length > 0) {
+    const mutationParams = {
+      user: {
+        user_id: ctx.submitterUserId,
+        role: ctx.submitterRole,
+      },
+      authenticated: true,
+    } as unknown as Params;
+    markTrustedUserMutation(mutationParams, 'env-vars-widget');
     await usersService.patch(
-      ctx.sessionCreatorUserId,
+      ctx.submitterUserId,
       { env_vars: orderedValues, env_var_scopes },
-      {
-        user: { user_id: ctx.submitterUserId, role: ctx.submitterRole },
-        authenticated: true,
-        trustedEnvVarWrite: true,
-      }
+      mutationParams
     );
   }
 

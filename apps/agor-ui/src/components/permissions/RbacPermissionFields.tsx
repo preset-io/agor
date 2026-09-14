@@ -1,6 +1,6 @@
 import type { BranchPermissionLevel, Group, User } from '@agor-live/client';
-import { UserOutlined, WarningOutlined } from '@ant-design/icons';
-import { Alert, Form, Radio, Select, Space, Switch, Typography } from 'antd';
+import { UserOutlined } from '@ant-design/icons';
+import { Alert, Form, Radio, Select, Space, Typography } from 'antd';
 import { useState } from 'react';
 import { useThemedMessage } from '@/utils/message';
 import {
@@ -9,7 +9,6 @@ import {
   toGroupSelectOption,
   toUserSelectOption,
 } from '@/utils/selectSearch';
-import { SectionDivider } from '../SettingsModal/panelPrimitives';
 import { Tag } from '../Tag';
 
 export type FsAccessLevel = 'none' | 'read' | 'write';
@@ -27,7 +26,6 @@ export interface RbacPermissionValue {
   groupGrants: RbacGroupGrantValue[];
   othersCan: BranchPermissionLevel;
   othersFsAccess: FsAccessLevel;
-  allowSessionSharing: boolean;
 }
 
 interface RbacPermissionFieldsProps {
@@ -49,7 +47,6 @@ interface RbacPermissionFieldsProps {
   visibilityLabel?: string;
   othersCanLabel?: string;
   othersFsAccessLabel?: string;
-  showLegacySessionSharing?: boolean;
   /** Boards expose private/shared visibility; branch overrides expose grants and fallback directly. */
   showVisibility?: boolean;
 }
@@ -67,10 +64,6 @@ const fsAccessDescriptions: Record<FsAccessLevel, string> = {
   read: 'Read-only',
   write: 'Read/write',
 };
-
-export const rbacVisibilityFromOthersCan = (
-  othersCan: BranchPermissionLevel | undefined
-): RbacVisibility => (othersCan === 'none' ? 'private' : 'shared');
 
 export const othersCanFromRbacVisibility = (
   visibility: RbacVisibility,
@@ -97,7 +90,6 @@ export const RbacPermissionFields: React.FC<RbacPermissionFieldsProps> = ({
   visibilityLabel = 'Visibility',
   othersCanLabel = 'Others Can',
   othersFsAccessLabel = 'Filesystem Access',
-  showLegacySessionSharing = true,
   showVisibility = true,
 }) => {
   const { showError } = useThemedMessage();
@@ -134,7 +126,6 @@ export const RbacPermissionFields: React.FC<RbacPermissionFieldsProps> = ({
       if (ownerId) onChange('ownerIds', [ownerId]);
       onChange('groupGrants', []);
       onChange('othersFsAccess', 'none');
-      onChange('allowSessionSharing', false);
     }
   };
 
@@ -153,7 +144,9 @@ export const RbacPermissionFields: React.FC<RbacPermissionFieldsProps> = ({
       {showVisibility && (
         <Form.Item
           label={visibilityLabel}
-          tooltip={isShared ? 'Group and fallback access.' : 'Owner-only access.'}
+          labelCol={{ span: 8 }}
+          wrapperCol={{ span: 16 }}
+          help={isShared ? 'Group and fallback access.' : 'Owner-only access.'}
         >
           <Radio.Group
             value={value.visibility}
@@ -167,10 +160,8 @@ export const RbacPermissionFields: React.FC<RbacPermissionFieldsProps> = ({
         </Form.Item>
       )}
 
-      {isShared && <SectionDivider label="Owners & groups" />}
-
       {isShared && (
-        <Form.Item label="Owners" tooltip={ownerHelp}>
+        <Form.Item label="Owners" labelCol={{ span: 8 }} wrapperCol={{ span: 16 }} help={ownerHelp}>
           <Select
             key={selectKey}
             mode="multiple"
@@ -213,7 +204,12 @@ export const RbacPermissionFields: React.FC<RbacPermissionFieldsProps> = ({
 
       {isShared && (
         <>
-          <Form.Item label="Groups" tooltip={groupsHelp}>
+          <Form.Item
+            label="Groups"
+            labelCol={{ span: 8 }}
+            wrapperCol={{ span: 16 }}
+            help={groupsHelp}
+          >
             <Space direction="vertical" style={{ width: '100%' }}>
               {groupGrantsUnavailable && (
                 <Alert
@@ -305,23 +301,11 @@ export const RbacPermissionFields: React.FC<RbacPermissionFieldsProps> = ({
             </Space>
           </Form.Item>
 
-          {value.othersCan === 'prompt' && (
-            <Form.Item>
-              <Alert
-                type="warning"
-                showIcon
-                icon={<WarningOutlined />}
-                message="Cross-user execution risk"
-                description="Allows prompting sessions in another creator's immutable execution and credential context; use only with trusted collaborators."
-              />
-            </Form.Item>
-          )}
-
-          <SectionDivider label="Filesystem & session sharing" />
-
           <Form.Item
             label={othersFsAccessLabel}
-            tooltip={fsAccessDescriptions[value.othersFsAccess]}
+            labelCol={{ span: 8 }}
+            wrapperCol={{ span: 16 }}
+            help={fsAccessDescriptions[value.othersFsAccess]}
           >
             <Select
               value={value.othersFsAccess}
@@ -334,37 +318,15 @@ export const RbacPermissionFields: React.FC<RbacPermissionFieldsProps> = ({
               ]}
             />
           </Form.Item>
-
-          {showLegacySessionSharing && (
-            <Form.Item
-              label="Allow legacy session sharing"
-              tooltip="When on, spawned/forked sessions keep the original creator's identity."
-            >
-              <Switch
-                checked={value.allowSessionSharing}
-                onChange={(allowSessionSharing) =>
-                  onChange('allowSessionSharing', allowSessionSharing)
-                }
-                disabled={!canEdit}
-              />
-            </Form.Item>
-          )}
-
-          {showLegacySessionSharing && value.allowSessionSharing && (
-            <Form.Item>
-              <Alert
-                type="error"
-                showIcon
-                icon={<WarningOutlined />}
-                message="Dangerous: identity borrowing"
-                description="Use only for trusted collaborators or legacy automation."
-              />
-            </Form.Item>
-          )}
         </>
       )}
 
-      <Form.Item label={othersCanLabel} tooltip={permissionLevelDescriptions[value.othersCan]}>
+      <Form.Item
+        label={othersCanLabel}
+        labelCol={{ span: 8 }}
+        wrapperCol={{ span: 16 }}
+        help={permissionLevelDescriptions[value.othersCan]}
+      >
         <Select
           aria-label={othersCanLabel}
           virtual={false}

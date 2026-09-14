@@ -25,6 +25,8 @@ import { agorStore } from '../store/agorStore';
 import { flushRealtimeNow } from '../store/realtimeBatch';
 import { useAgorData } from './useAgorData';
 
+const STANDALONE_AUTHORITY_SCOPE = '__standalone__:__standalone__:0';
+
 /**
  * Minimal AgorClient stand-in. Implements just enough of the service /
  * socket surface the hook touches:
@@ -32,7 +34,7 @@ import { useAgorData } from './useAgorData';
  *     pre-seeded list for that service (default empty).
  *   - `service(name).on/removeListener` — wires up event handlers we
  *     dispatch from tests via `emit(name, event, payload)`.
- *   - `service(name).get(id)` — only used by the OAuth refetch path,
+ *   - `service(name).get(id)` — targeted deep-link / displayed-board reads,
  *     resolves with whatever the test stubbed.
  *   - `io.on/off` — captures connect / oauth listeners; tests don't
  *     trigger reconnect refetches.
@@ -61,6 +63,7 @@ function makeMockClient(seed: Record<string, unknown[]> = {}) {
   // a different set than an earlier deferred one.
   const fetchHooks = new Map<string, (call: number) => unknown>();
   const fetchCounts = new Map<string, number>();
+  const fetchArguments = new Map<string, unknown[]>();
 
   const respond = async (name: string, method: 'findAll' | 'find') => {
     const key = `${name}:${method}`;
@@ -74,10 +77,22 @@ function makeMockClient(seed: Record<string, unknown[]> = {}) {
     return data;
   };
 
+  const recordAndRespond = (name: string, method: 'findAll' | 'find', args: unknown) => {
+    const key = `${name}:${method}`;
+    fetchArguments.set(key, [...(fetchArguments.get(key) ?? []), args]);
+    return respond(name, method);
+  };
+
   const service = (name: string) => ({
-    findAll: vi.fn(() => respond(name, 'findAll')),
-    find: vi.fn(() => respond(name, 'find')),
-    get: vi.fn().mockResolvedValue(seed[`${name}:get`] ?? null),
+    findAll: vi.fn((args) => recordAndRespond(name, 'findAll', args)),
+    find: vi.fn((args) => recordAndRespond(name, 'find', args)),
+    get: vi.fn((id: unknown) => {
+      const key = `${name}:get`;
+      fetchCounts.set(key, (fetchCounts.get(key) ?? 0) + 1);
+      fetchArguments.set(key, [...(fetchArguments.get(key) ?? []), id]);
+      const gate = fetchHooks.get(key)?.(fetchCounts.get(key)!);
+      return Promise.resolve(gate).then(() => seed[key] ?? null);
+    }),
     on: (event: string, fn: Listener) => {
       let svc = serviceListeners.get(name);
       if (!svc) {
@@ -122,17 +137,19 @@ function makeMockClient(seed: Record<string, unknown[]> = {}) {
     },
     // Fire an `io` event (e.g. `connect`) so tests can drive the reconnect
     // refetch path.
-    emitIo: (event: string) => {
-      for (const fn of ioListeners.get(event) ?? []) fn(undefined);
+    emitIo: (event: string, payload?: unknown) => {
+      for (const fn of ioListeners.get(event) ?? []) fn(payload);
     },
     // Register a synchronous side effect that runs every time `service(name)`'s
     // `method` is invoked (receives the 1-based call count). The hook fires
     // BEFORE the returned promise resolves, so emitting a live event here lands
     // a write DURING the fetch window — exactly the race the hydration guards.
-    onFetch: (name: string, method: 'findAll' | 'find', fn: (call: number) => unknown) =>
+    onFetch: (name: string, method: 'findAll' | 'find' | 'get', fn: (call: number) => unknown) =>
       fetchHooks.set(`${name}:${method}`, fn),
-    fetchCount: (name: string, method: 'findAll' | 'find') =>
+    fetchCount: (name: string, method: 'findAll' | 'find' | 'get') =>
       fetchCounts.get(`${name}:${method}`) ?? 0,
+    fetchArguments: (name: string, method: 'findAll' | 'find' | 'get') =>
+      fetchArguments.get(`${name}:${method}`) ?? [],
   };
 }
 
@@ -208,7 +225,97 @@ function deferred() {
   return { promise, resolve };
 }
 
+it('does not rescan OAuth grants on an idle 60-second timer', async () => {
+  const { client, fetchCount } = makeMockClient();
+  const { result, unmount } = renderHook(() => useAgorData(client));
+  try {
+    await waitForInitialLoad(result);
+    await waitFor(() => expect(fetchCount('mcp-servers/oauth-status', 'find')).toBeGreaterThan(0));
+    const initial = fetchCount('mcp-servers/oauth-status', 'find');
+    vi.useFakeTimers();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(180_000);
+    });
+    expect(fetchCount('mcp-servers/oauth-status', 'find')).toBe(initial);
+  } finally {
+    unmount();
+    vi.useRealTimers();
+  }
+});
+
 describe('useAgorData — socket-event bailouts', () => {
+  it('scopes the real cold mobile board load before fetching board entities', async () => {
+    const boardId = '01a012d8-1b9b-7909-b6f4-2024dfc7c51e';
+    const { client, fetchArguments } = makeMockClient({
+      boards: [{ board_id: boardId, slug: 'delivery' }],
+      'board-objects': [makeBoardObject({ board_id: boardId })],
+    });
+    window.history.pushState({}, '', `/m/board/${boardId}`);
+
+    const { result } = renderHook(() => useAgorData(client));
+    try {
+      await waitForInitialLoad(result);
+
+      for (const service of ['branches', 'sessions', 'board-objects', 'board-comments', 'cards']) {
+        expect(fetchArguments(service, 'findAll')).toContainEqual({
+          query: expect.objectContaining({ board_id: boardId }),
+        });
+      }
+    } finally {
+      window.history.pushState({}, '', '/');
+    }
+  });
+
+  it('opens a cold mobile session without waiting for a stalled branch get', async () => {
+    const boardId = '01a012d8-1b9b-7909-b6f4-2024dfc7c51e';
+    const sessionId = '01a012d8-4f50-7c32-9daa-6e3f70819b2c';
+    const branchId = '01a012d8-3e4f-7b21-8c99-5d2e6f708a1b';
+    const directSession = makeSession({
+      session_id: sessionId,
+      branch_id: branchId,
+      branch_board_id: boardId,
+    });
+    const directBranch = makeBranch({ branch_id: branchId, board_id: boardId });
+    const boardObject = makeBoardObject({ board_id: boardId, branch_id: branchId });
+    const { client, fetchArguments, fetchCount, onFetch } = makeMockClient({
+      sessions: [],
+      boards: [{ board_id: boardId, slug: 'delivery' }],
+      branches: [directBranch],
+      'sessions:get': directSession,
+      'branches:get': directBranch,
+      'board-objects': [boardObject],
+    });
+    onFetch('branches', 'get', () => new Promise(() => {}));
+    window.history.pushState({}, '', `/m/session/${sessionId}`);
+
+    const { result } = renderHook(() => useAgorData(client, { directSessionId: sessionId }));
+    await waitForInitialLoad(result);
+
+    expect(agorStore.getState().sessionById.get(sessionId)).toMatchObject({ branch_id: branchId });
+    expect(fetchCount('branches', 'get')).toBe(0);
+    expect(agorStore.getState().branchById.get(branchId)).toMatchObject({ board_id: boardId });
+    expect(agorStore.getState().boardObjectById.get('bo-1')).toMatchObject({ board_id: boardId });
+    expect(fetchArguments('board-objects', 'findAll')).toContainEqual({
+      query: expect.objectContaining({ board_id: boardId }),
+    });
+    window.history.pushState({}, '', '/');
+  });
+
+  it('opens a legacy session without board metadata or granting access to its missing branch', async () => {
+    const session = makeSession({ session_id: 'legacy-session', branch_id: 'hidden-branch' });
+    const { client, onFetch, fetchCount } = makeMockClient({
+      sessions: [],
+      branches: [],
+      'sessions:get': session,
+    });
+    onFetch('branches', 'get', () => new Promise(() => {}));
+    const { result } = renderHook(() => useAgorData(client, { directSessionId: 'legacy-session' }));
+    await waitForInitialLoad(result);
+    expect(agorStore.getState().sessionById.has('legacy-session')).toBe(true);
+    expect(agorStore.getState().branchById.has('hidden-branch')).toBe(false);
+    expect(fetchCount('branches', 'get')).toBe(0);
+  });
+
   it('hydrates a direct archived session by id without broadening active board lists', async () => {
     const archivedSession = makeSession({
       session_id: 's-archived-full',
@@ -267,7 +374,7 @@ describe('useAgorData — socket-event bailouts', () => {
 
     act(() => {
       emit('sessions', 'patched', { ...session, status: 'running' });
-      flushRealtimeNow();
+      flushRealtimeNow(STANDALONE_AUTHORITY_SCOPE);
     });
 
     expect(agorStore.getState().sessionById).not.toBe(beforeSessions);
@@ -286,7 +393,7 @@ describe('useAgorData — socket-event bailouts', () => {
         status: 'idle',
         ready_for_prompt: true,
       });
-      flushRealtimeNow();
+      flushRealtimeNow(STANDALONE_AUTHORITY_SCOPE);
     });
 
     expect(agorStore.getState().sessionById.get('s-1')).toMatchObject({
@@ -414,7 +521,7 @@ describe('useAgorData — socket-event bailouts', () => {
 
     act(() => {
       emit('sessions', 'patched', { ...session, branch_id: 'b-2' });
-      flushRealtimeNow();
+      flushRealtimeNow(STANDALONE_AUTHORITY_SCOPE);
     });
 
     // Old branch bucket is cleaned up; new branch bucket holds the session.
@@ -1017,7 +1124,7 @@ describe('useAgorData — lean boards list + objects hydration', () => {
     };
     const seed: Record<string, unknown[]> = {};
     const gate = deferred();
-    const { client, onFetch } = makeMockClient(seed);
+    const { client, fetchCount, onFetch } = makeMockClient(seed);
     // Gated list (call 1) returns the lean board; hold the boards hydration
     // (call 2) open so the assertion sees the first-paint state — objects can
     // only have come from the targeted `boards.get`, never the hydration.
@@ -1036,6 +1143,8 @@ describe('useAgorData — lean boards list + objects hydration', () => {
       expect(board?.objects).toBeDefined();
       expect(Object.keys(board?.objects ?? {})).toContain('zone-1');
       expect(board?.custom_css).toBe('.x{}');
+      expect(fetchCount('boards', 'get')).toBe(1);
+      expect(fetchCount('branches', 'get')).toBe(0);
     } finally {
       gate.resolve();
       window.history.pushState({}, '', '/');
@@ -1058,7 +1167,7 @@ describe('useAgorData — lean boards list + objects hydration', () => {
     };
     const seed: Record<string, unknown[]> = {};
     const gate = deferred();
-    const { client, onFetch } = makeMockClient(seed);
+    const { client, fetchCount, onFetch } = makeMockClient(seed);
     // Hold the boards hydration (call 2) open so the assertion sees first-paint
     // state — objects can only have come from the targeted `boards.get`.
     seed['boards:get'] = fullBoard as never;
@@ -1075,6 +1184,8 @@ describe('useAgorData — lean boards list + objects hydration', () => {
       const board = agorStore.getState().boardById.get(boardId);
       expect(board?.objects).toBeDefined();
       expect(Object.keys(board?.objects ?? {})).toContain('zone-1');
+      expect(fetchCount('boards', 'get')).toBe(1);
+      expect(fetchCount('branches', 'get')).toBe(0);
       expect(board?.custom_css).toBe('.x{}');
     } finally {
       gate.resolve();
@@ -1094,7 +1205,7 @@ describe('useAgorData — lean boards list + objects hydration', () => {
       objects: { 'z-b': { type: 'zone', x: 0, y: 0, width: 1, height: 1 } },
     };
     const seed: Record<string, unknown[]> = {};
-    const { client, onFetch } = makeMockClient(seed);
+    const { client, fetchCount, onFetch } = makeMockClient(seed);
     // Home path (jsdom `/`): no board scope, no targeted get. The lean gated
     // fetch (call 1) carries no objects; the hydration (call 2) carries them.
     onFetch('boards', 'findAll', (call) => {
@@ -1105,5 +1216,39 @@ describe('useAgorData — lean boards list + objects hydration', () => {
     await flush();
     expect(agorStore.getState().boardById.get('board-A')?.objects).toBeDefined();
     expect(agorStore.getState().boardById.get('board-B')?.objects).toBeDefined();
+    expect(fetchCount('boards', 'get')).toBe(0);
+    expect(fetchCount('branches', 'get')).toBe(0);
+  });
+
+  it('does not repeat the displayed-board point read during reconnect resync', async () => {
+    window.history.pushState({}, '', '/b/displayed/');
+    const board = {
+      board_id: 'board-D',
+      slug: 'displayed',
+      name: 'Displayed',
+      objects: { 'zone-1': { type: 'zone', x: 0, y: 0, width: 1, height: 1 } },
+    };
+    const seed: Record<string, unknown[]> = {
+      boards: [board],
+      'boards:get': board as never,
+    };
+    const { client, emitIo, fetchCount } = makeMockClient(seed);
+    const { result } = renderHook(() => useAgorData(client));
+    try {
+      await waitForInitialLoad(result);
+      await flush();
+      expect(fetchCount('boards', 'get')).toBe(1);
+
+      act(() => emitIo('connect'));
+      await waitFor(() => expect(fetchCount('boards', 'findAll')).toBeGreaterThanOrEqual(3));
+      await flush();
+
+      // Silent reconnect uses the full boards.findAll snapshot. It deliberately
+      // skips the cold-load targeted get, so resync and idle do not poll boards.
+      expect(fetchCount('boards', 'get')).toBe(1);
+      expect(fetchCount('branches', 'get')).toBe(0);
+    } finally {
+      window.history.pushState({}, '', '/');
+    }
   });
 });

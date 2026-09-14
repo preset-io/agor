@@ -15,31 +15,41 @@ interface HealthBuildInfo {
 }
 
 export default class Version extends Command {
-  static description = 'Show the connected daemon version';
+  static description = 'Show the local daemon version';
 
   static examples = [
     '<%= config.bin %> <%= command.id %>',
-    '<%= config.bin %> <%= command.id %> --local',
+    '<%= config.bin %> <%= command.id %> --remote',
   ];
 
   static flags = {
-    local: Flags.boolean({ description: 'Inspect the locally configured daemon', default: false }),
+    local: Flags.boolean({
+      description: 'Inspect the locally configured daemon (default)',
+      default: false,
+      exclusive: ['remote'],
+    }),
+    remote: Flags.boolean({
+      description: 'Inspect the connected remote daemon',
+      default: false,
+      exclusive: ['local'],
+    }),
   };
 
   async run(): Promise<void> {
     const { flags } = await this.parse(Version);
-    const target = flags.local
-      ? await resolveLocalDeploymentTarget()
-      : await resolveConnectedDeploymentTarget();
+    const target = flags.remote
+      ? await resolveConnectedDeploymentTarget()
+      : await resolveLocalDeploymentTarget();
     if (!target) {
       this.error('Not connected. Run agor login --url <daemon-url>.');
     }
+    const isLocalTarget = target.source === 'local';
 
     const info = await fetchHealth(target.url);
     if (!info) this.error(`The daemon at ${target.url} is not reachable.`);
     if (info.deploymentId !== target.deploymentId) {
       this.error(
-        flags.local
+        isLocalTarget
           ? `The local daemon identity at ${target.url} does not match config.yaml.`
           : `The daemon identity at ${target.url} changed. Run agor login --url ${target.url} again.`
       );

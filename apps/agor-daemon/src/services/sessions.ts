@@ -16,10 +16,13 @@ import {
   resolveExecutionSecurityMode,
 } from '@agor/core/config';
 import {
+  assertTenantWritable,
   BranchRepository,
   bindRepositoryToTenantUnitOfWork,
+  EntityNotFoundError,
   getCurrentTenantId,
   runWithTenantDatabaseScope,
+  runWithTenantDatabaseTransaction,
   SessionEnvSelectionRepository,
   SessionMCPServerRepository,
   SessionRelationshipRepository,
@@ -27,6 +30,7 @@ import {
   type SessionWithLastMessage,
   TaskRepository,
   type TenantScopeAwareDatabase,
+  TenantWriteGateActiveError,
   UsersRepository,
 } from '@agor/core/db';
 import {
@@ -35,7 +39,10 @@ import {
   Conflict,
   Forbidden,
   NotAuthenticated,
+  NotFound,
+  Unavailable,
 } from '@agor/core/feathers';
+import { MCPServerNotUsableError } from '@agor/core/mcp';
 import {
   formatModelToolMismatchWarning,
   getCodexModelSelectionError,
@@ -47,6 +54,7 @@ import type {
   AgenticToolName,
   AuthenticatedParams,
   Branch,
+  BranchID,
   BranchPermissionLevel,
   CreateSessionInput,
   MCPServerID,
@@ -54,43 +62,52 @@ import type {
   QueryParams,
   Session,
   SessionID,
+  SessionSdkHomeScope,
   SessionUpdate,
   TaskID,
+  UserID,
   UUID,
 } from '@agor/core/types';
 import {
   isAgenticToolDefaultConfigurationReference,
-  ROLES,
+  isSessionExecuting,
   SessionStatus,
   USER_DEFAULT_AGENTIC_CONFIGURATION,
 } from '@agor/core/types';
 import { assertExecutionHomeKeySatisfiesMode } from '@agor/core/unix';
 import { DrizzleService, type Query } from '../adapters/drizzle';
+import {
+  branchSdkHomeUnsupportedReason,
+  hasSecureLocalCredentialOverlay,
+  resolveBranchSdkHomeIncompatibility,
+  resolveNewSessionSdkHomeScope,
+  resolveSdkHomeConfig,
+} from '../branch-sdk-home.js';
 import { requireActiveAgenticTool } from '../utils/agentic-tool-runtime.js';
 import {
   determineSpawnIdentity,
   isSuperAdmin,
   loadUnixUsernameForUser,
   PERMISSION_RANK,
-  resolveChildUnixUsername,
+  sessionPromptDeniedMessage,
 } from '../utils/branch-authorization.js';
 import { emitServiceEvent } from '../utils/emit-service-event.js';
 import { parseLastMessageTruncationLength } from '../utils/query-params.js';
 import { deploymentAgenticToolUnavailableMessage } from './agentic-tool-deployment.js';
+import {
+  BTW_ARCHIVED_REASON,
+  MANUAL_ARCHIVED_REASON,
+  planBranchArchiveTransition,
+  planBranchLocalArchiveRoots,
+  planBranchUnarchiveTransition,
+  planSessionTreeArchiveTransition,
+  type SessionArchiveReason,
+  type SessionArchiveTarget,
+} from './session-archive.js';
 
 type MaterializedAgenticToolConfiguration = Awaited<
   ReturnType<typeof materializeAgenticToolConfiguration>
 >;
-
-type SessionArchiveReason = NonNullable<Session['archived_reason']>;
-type SessionArchiveTarget = {
-  session: Session;
-  archived: boolean;
-  archivedReason: SessionArchiveReason | null;
-};
-
-const MANUAL_ARCHIVED_REASON = 'manual' satisfies SessionArchiveReason;
-const PARENT_ARCHIVED_REASON = 'parent_archived' satisfies SessionArchiveReason;
 
 function sessionConfigurationSource(
   data: Pick<CreateSessionInput, 'model_config' | 'permission_config'>
@@ -123,6 +140,25 @@ function resolvedSessionModelConfig(
     throw new BadRequest('model_config must be resolved before session creation');
   }
   return modelConfig;
+}
+
+export function assertSessionArchiveStateUsesDedicatedOperation(data: SessionUpdate): void {
+  if (Object.hasOwn(data, 'archived') || Object.hasOwn(data, 'archived_reason')) {
+    throw new BadRequest(
+      'Session archive state cannot be changed with patch or update. Use the dedicated archive or unarchive operation.'
+    );
+  }
+}
+
+function normalizeCreateMcpServerIds(value: unknown): MCPServerID[] | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value)) {
+    throw new BadRequest('mcpServerIds must be an array');
+  }
+  if (!value.every((serverId) => typeof serverId === 'string' && serverId.trim().length > 0)) {
+    throw new BadRequest('mcpServerIds must contain non-empty strings');
+  }
+  return [...new Set(value)] as MCPServerID[];
 }
 
 /**
@@ -159,14 +195,19 @@ export type SessionParams = QueryParams<{
      * Root-level service params are server-controlled; transport query/data cannot set this marker.
      */
     _agenticConfigResolved?: boolean;
+    /**
+     * Trusted session-admission override. Genealogical children inherit their
+     * parent's SDK lineage; independent creates resolve branch intent + config.
+     */
+    _sdkHomeScope?: SessionSdkHomeScope;
   };
 
 /**
  * Whether a sessions `find` query should be served by `SessionRepository.findPage`
  * (SQL board filter + recency sort + limit/offset) rather than the generic
  * in-memory path. We only divert the loader's bounded list queries — those that
- * sort by `updated_at` and/or scope to a `board_id` — and only when the rest of
- * the query is a shape findPage fully models (archived + pagination). Anything
+ * sort by `updated_at` and/or scope to a `board_id`/`branch_id` — and only when the rest of
+ * the query is a shape findPage fully models (archived/status + pagination). Anything
  * with extra filters, operators, or `$select` falls through to the existing path
  * so we never silently drop semantics findPage doesn't implement.
  */
@@ -175,19 +216,45 @@ function shouldSqlPageSessionQuery(query?: Record<string, unknown>, forcePage = 
 
   const sort = query.$sort as Record<string, unknown> | undefined;
   const wantsRecency = !!sort && sort.updated_at !== undefined;
+  const wantsCreatedAt = !!sort && sort.created_at !== undefined;
   const wantsBoard = query.board_id !== undefined;
-  if (!wantsRecency && !wantsBoard && !forcePage) return false;
+  const wantsBranch = query.branch_id !== undefined;
+  if (!wantsRecency && !wantsCreatedAt && !wantsBoard && !wantsBranch && !forcePage) return false;
 
-  const allowedKeys = new Set(['archived', 'board_id', '$sort', '$limit', '$skip']);
+  const allowedKeys = new Set([
+    'archived',
+    'status',
+    'board_id',
+    'branch_id',
+    '$sort',
+    '$limit',
+    '$skip',
+  ]);
   for (const key of Object.keys(query)) {
     if (!allowedKeys.has(key)) return false;
   }
   if (query.archived !== undefined && typeof query.archived !== 'boolean') return false;
+  if (
+    query.status !== undefined &&
+    !Object.values(SessionStatus).includes(query.status as SessionStatus)
+  )
+    return false;
   if (wantsBoard && typeof query.board_id !== 'string') return false;
+  if (wantsBranch) {
+    const branchFilter = query.branch_id;
+    const validExact = typeof branchFilter === 'string';
+    const validSet =
+      branchFilter !== null &&
+      typeof branchFilter === 'object' &&
+      Array.isArray((branchFilter as { $in?: unknown }).$in) &&
+      (branchFilter as { $in: unknown[] }).$in.every((id) => typeof id === 'string');
+    if (!validExact && !validSet) return false;
+  }
   if (sort) {
     const sortKeys = Object.keys(sort);
-    if (sortKeys.length !== 1 || sortKeys[0] !== 'updated_at') return false;
-    if (sort.updated_at !== 1 && sort.updated_at !== -1) return false;
+    if (sortKeys.length !== 1 || !['updated_at', 'created_at'].includes(sortKeys[0])) return false;
+    const direction = sort[sortKeys[0]];
+    if (direction !== 1 && direction !== -1) return false;
   }
   return true;
 }
@@ -215,6 +282,7 @@ export type ExecuteTaskData = {
   permissionMode?: import('@agor/core/types').PermissionMode;
   stream?: boolean;
   messageSource?: import('@agor/core/types').MessageSource;
+  promptOrigin?: import('@agor/core/types').PromptOrigin;
 };
 
 export type SessionArchiveOptions = {
@@ -225,6 +293,27 @@ export type SessionArchiveResult = {
   session: Session;
   affectedSessions: Session[];
   count: number;
+};
+
+export type SessionArchiveBatchResult = {
+  affectedSessions: Session[];
+  count: number;
+};
+
+export type SessionBulkArchiveOptions = {
+  includeChildren?: boolean;
+  dryRun?: boolean;
+};
+
+export type SessionBulkArchiveResult = SessionArchiveBatchResult & {
+  authorizedSessionCount: number;
+  matchedRootCount: number;
+  additionalDescendantCount: number;
+  executingDescendantCount: number;
+  rootOnlyTotal: number;
+  withChildrenTotal: number;
+  additionalDescendants: Session[];
+  skipped: Array<{ session_id: SessionID; error: string }>;
 };
 
 /**
@@ -333,6 +422,19 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
     if (!existing || existing.agentic_tool === nextTool) return;
     requireActiveAgenticTool(existing.agentic_tool);
 
+    // A branch-scoped session cannot be switched to a tool whose native state
+    // cannot honor the branch-state/caller-credential split. Enforce this at
+    // the mutation boundary rather than waiting for a confusing launch-time
+    // refusal.
+    if (existing.sdk_home_scope === 'branch') {
+      const unsupportedReason = branchSdkHomeUnsupportedReason(nextTool);
+      if (unsupportedReason) {
+        throw new BadRequest(
+          `${nextTool} cannot use this session's branch SDK home because ${unsupportedReason}.`
+        );
+      }
+    }
+
     const taskCount = await this.taskRepo.countBySession(sessionId);
     if (taskCount > 0) {
       // Conflict (409), not Forbidden (403): nothing about the caller's identity
@@ -357,6 +459,15 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
     if (Array.isArray(data)) {
       return Promise.all(data.map((session) => this.create(session, params) as Promise<Session>));
     }
+    if (!data || typeof data !== 'object') {
+      throw new BadRequest('Session data must be an object');
+    }
+    if (Object.hasOwn(data, 'sdk_home_scope')) {
+      throw new BadRequest('sdk_home_scope is server-managed and cannot be set by clients');
+    }
+    const explicitMcpServerIds = normalizeCreateMcpServerIds(
+      (data as { mcpServerIds?: unknown }).mcpServerIds
+    );
     const agenticTool = requireActiveAgenticTool(data.agentic_tool ?? 'claude-code');
     this.assertDeploymentToolConfigured(agenticTool);
     if (!(await isTenantAgenticToolEnabled(agenticTool, this.db))) {
@@ -365,8 +476,9 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
     const {
       agentic_tool_preset_id: configurationReference,
       model_config: originalModelConfig,
+      mcpServerIds: _requestedMcpServerIds,
       ...sessionData
-    } = data;
+    } = data as CreateSessionInput;
     let createData: Partial<Session> = { ...sessionData };
     if (params?._agenticConfigResolved) {
       createData = {
@@ -425,9 +537,100 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
       throw new BadRequest('model_config must be resolved before session creation');
     }
     this.assertSupportedModelConfig(agenticTool, createData.model_config);
-    const created = await super.create(createData, params);
+    if (!createData.branch_id) {
+      throw new BadRequest('Session must have a branch_id');
+    }
+
+    // Session scope, branch adoption, and the row itself form one metadata
+    // decision. This prevents a crash from leaving an adopted branch without
+    // the session that caused adoption (or the inverse). The live deployment
+    // flag is consulted only here; executor startup reads the immutable stamp.
+    const tenantId = params?.tenant?.tenant_id ?? getCurrentTenantId();
+    const created = await runWithTenantDatabaseTransaction(this.db, tenantId, async (scoped) => {
+      const branchRepo = new BranchRepository(scoped);
+      const branch = await branchRepo.findById(createData.branch_id as BranchID);
+      if (!branch) throw new NotFound(`Branch ${createData.branch_id} not found`);
+
+      // Minimal service harnesses predate application configuration. Treat an
+      // absent getter as the product default (`inherit`); production always
+      // supplies the resolved application config.
+      const config =
+        typeof (this.app as { get?: unknown }).get === 'function'
+          ? this.app.get('config')
+          : ({} as import('@agor/core/config').AgorConfig);
+      const sdkHomeConfig = resolveSdkHomeConfig(config);
+      const admission = resolveNewSessionSdkHomeScope({
+        branchSdkHomeIntent: branch.sdk_home ?? null,
+        enabledForNewSessions: sdkHomeConfig.enabledForNewSessions,
+        inheritedScope: params?._sdkHomeScope,
+      });
+      if (admission.scope === 'branch') {
+        // Admission must reject credential/state combinations before it
+        // performs the sticky branch transition. Otherwise a failed first
+        // Codex-native Session would permanently adopt the branch even though
+        // no usable branch-scoped conversation was created. Launch repeats
+        // this actor-sensitive check because a later shared prompt may have a
+        // different caller and therefore a different credential mode.
+        const delegated = config.execution?.unix_user_mode === 'delegated';
+        const unsupportedReason = await resolveBranchSdkHomeIncompatibility({
+          tool: agenticTool,
+          delegated,
+          secureLocalCredentialOverlay: hasSecureLocalCredentialOverlay(config),
+          userId: createData.created_by as UserID | undefined,
+          db: scoped,
+        });
+        if (unsupportedReason) {
+          throw new BadRequest(
+            `${agenticTool} cannot use a branch SDK home because ${unsupportedReason}. ` +
+              'Choose a supported tool or authentication mode.'
+          );
+        }
+      }
+      if (admission.adoptBranch) await branchRepo.adoptSdkHome(branch.branch_id);
+
+      const createdSession = await new SessionRepository(scoped).create({
+        ...createData,
+        sdk_home_scope: admission.scope,
+      });
+
+      // Attach in-transaction: a bad server rolls the create back, not a silent drop (#2629).
+      if (explicitMcpServerIds && explicitMcpServerIds.length > 0) {
+        const mcpRepo = new SessionMCPServerRepository(scoped);
+        try {
+          for (const serverId of explicitMcpServerIds) {
+            await mcpRepo.addServer(createdSession.session_id, serverId);
+          }
+        } catch (error) {
+          if (error instanceof MCPServerNotUsableError) {
+            throw new Forbidden('That MCP server is private to another user');
+          }
+          if (error instanceof EntityNotFoundError) {
+            throw new NotFound('That MCP server was not found');
+          }
+          throw error;
+        }
+      }
+
+      return createdSession;
+    });
     if (Array.isArray(created)) {
       throw new Error('Single-session creation returned multiple sessions');
+    }
+    if (explicitMcpServerIds && explicitMcpServerIds.length > 0) {
+      for (const serverId of explicitMcpServerIds) {
+        emitServiceEvent(this.app, {
+          path: 'session-mcp-servers',
+          event: 'created',
+          data: {
+            session_id: created.session_id,
+            mcp_server_id: serverId,
+            enabled: true,
+            added_at: new Date(),
+          },
+          params,
+          id: created.session_id,
+        });
+      }
     }
     return created;
   }
@@ -471,13 +674,28 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
   }
 
   protected async fetchData(_query: Query, params?: SessionParams): Promise<Session[]> {
+    const branchId =
+      typeof _query.branch_id === 'string' ? (_query.branch_id as BranchID) : undefined;
+    const branchIds =
+      _query.branch_id &&
+      typeof _query.branch_id === 'object' &&
+      Array.isArray(_query.branch_id.$in) &&
+      _query.branch_id.$in.every((value: unknown) => typeof value === 'string')
+        ? (_query.branch_id.$in as BranchID[])
+        : undefined;
+    const archived = typeof _query.archived === 'boolean' ? _query.archived : undefined;
     return this.sessionRepo.findAll({
       visibleToUserId: params?._agorSqlSessionAccessUserId,
+      branchId,
+      branchIds,
+      archived,
     });
   }
 
   async enrichRemoteRelationships(sessionList: Session[]): Promise<Session[]> {
-    const sessionIds = sessionList.map((session) => session.session_id);
+    // A generic $select can intentionally omit the ID. Do not send undefined
+    // SQL parameters or reintroduce fields the caller did not select.
+    const sessionIds = sessionList.map((session) => session.session_id).filter(Boolean);
     if (sessionIds.length === 0) return sessionList;
 
     const relationships = await this.sessionRelationshipRepo.findForSessions(sessionIds);
@@ -578,10 +796,8 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
    * being created via spawn / fork / btw. See {@link determineSpawnIdentity}
    * for the rules.
    *
-   * Defaults the child to the MCP-authenticated caller; only inherits the
-   * parent's identity when the branch explicitly opts in via the
-   * `dangerously_allow_session_sharing` flag (and the caller is not an admin
-   * acting on someone else's session).
+   * Same-owner children stay with their owner. Cross-user children are allowed
+   * only for shareable branch-home Sessions and are attributed to the caller.
    *
    * Internal calls (`params.provider == null`) preserve parent attribution —
    * they're service-to-service or scheduler-driven and have no human caller
@@ -598,8 +814,7 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
    * - Internal call (no provider) → inherit parent.unix_username. The scheduler /
    *   service-to-service callers have no human caller to attribute to, and the
    *   parent's stamped value is the closest thing to ground truth.
-   * - Legacy sharing (`dangerously_allow_session_sharing` triggers) → inherit
-   *   parent's unix_username by design — this is the point of identity borrowing.
+   * - Branch-scoped sharing → load the prompt caller's current key.
    * - Otherwise (including the common same-user path) → load the attributed
    *   caller's CURRENT unix_username via {@link loadUnixUsernameForUser}. We
    *   do NOT inherit parent.unix_username on same-user forks, because the user's
@@ -616,11 +831,13 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
     // parent must fail here, not later at prompt time.
     if (!params?.provider) {
       const inheritedUnixUsername = parent.unix_username ?? null;
-      assertExecutionHomeKeySatisfiesMode(
-        inheritedUnixUsername,
-        resolveExecutionSecurityMode().unixUserMode,
-        `the parent session's owner (${parent.created_by})`
-      );
+      if ((parent.sdk_home_scope ?? 'execution_home') === 'execution_home') {
+        assertExecutionHomeKeySatisfiesMode(
+          inheritedUnixUsername,
+          resolveExecutionSecurityMode().unixUserMode,
+          `the parent session's owner (${parent.created_by})`
+        );
+      }
       return { created_by: parent.created_by, unix_username: inheritedUnixUsername };
     }
 
@@ -631,58 +848,46 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
       throw new Forbidden('Cannot spawn/fork session without an authenticated caller identity.');
     }
 
-    // Look up the parent's branch to read the opt-in flag.
-    let branch: { branch_id: string; dangerously_allow_session_sharing?: boolean } | undefined;
+    let sharing: { allow_caller_identity: boolean } | undefined;
     try {
       const wt = await this.app.service('branches').get(parent.branch_id, { provider: undefined });
-      branch = wt as typeof branch;
       if (caller.user_id) {
-        const effective = await this.branchRepo.resolveUserAccess(
-          wt as Branch,
-          caller.user_id as UUID
+        const authority = await this.branchRepo.resolveSessionPromptAuthority(
+          (wt as Branch).branch_id,
+          caller.user_id as UUID,
+          parent.created_by as UUID,
+          parent.sdk_home_scope
         );
-        if (branch) {
-          branch.dangerously_allow_session_sharing = effective.dangerously_allow_session_sharing;
+        sharing = {
+          allow_caller_identity: authority.source === 'branch_session',
+        };
+        if (!authority.allowed) {
+          throw new Forbidden(sessionPromptDeniedMessage(authority));
         }
       }
-    } catch {
-      // If we can't load the branch, default to the safe (caller-as-owner) path.
-      branch = undefined;
+    } catch (error) {
+      if (error instanceof Forbidden) throw error;
+      throw new Forbidden('Cannot resolve session-sharing authority for this branch.');
     }
 
-    const result = determineSpawnIdentity(parent, caller, branch);
+    const result = determineSpawnIdentity(parent, caller, sharing);
     const createdBy = result.created_by as Session['created_by'];
 
-    // Legacy sharing → inherit parent's unix_username (identity borrowing by design).
-    // Otherwise (including same-user) → resolve the attributed user's CURRENT
-    // unix_username. Same-user forks must NOT inherit stale parent.unix_username,
-    // because validateSessionUnixUsername would later reject prompts when the
-    // user's unix_username drifts. The decision is delegated to the pure helper
-    // `resolveChildUnixUsername` so it can be unit tested without DB mocks.
-    let callerUnixUsername: string | null = null;
-    if (!result.usedLegacySharing) {
-      try {
-        callerUnixUsername = await loadUnixUsernameForUser(this.usersRepo, createdBy as string);
-      } catch (err) {
-        // If we can't load the caller user, fail closed rather than silently
-        // creating a session with no unix_username (which would hang forever
-        // in delegated mode).
-        throw new Forbidden(
-          `Cannot resolve unix_username for caller ${createdBy}: ${err instanceof Error ? err.message : String(err)}`
-        );
-      }
+    // Always resolve the attributed user's CURRENT execution-home key. A
+    // branch-home child never borrows the parent owner's home, and same-user
+    // forks must not inherit a stale key after an administrator changes it.
+    let unixUsername: string | null;
+    try {
+      unixUsername = await loadUnixUsernameForUser(this.usersRepo, createdBy as string);
+    } catch (err) {
+      throw new Forbidden(
+        `Cannot resolve unix_username for caller ${createdBy}: ${err instanceof Error ? err.message : String(err)}`
+      );
     }
-
-    const unixUsername = resolveChildUnixUsername(
-      parent.unix_username,
-      callerUnixUsername,
-      result.usedLegacySharing
-    ) as Session['unix_username'];
 
     // In delegated mode, a child stamped null would fail at prompt time (or
     // silently share an identity in hosted deployments) — reject at fork/spawn
-    // time with an actionable error instead. Also covers legacy sharing
-    // inheriting a null stamp from a pre-migration parent.
+    // time with an actionable error instead.
     assertExecutionHomeKeySatisfiesMode(
       unixUsername,
       resolveExecutionSecurityMode().unixUserMode,
@@ -705,9 +910,8 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
     const parent = await this.get(id, params);
     const parentTool = requireActiveAgenticTool(parent.agentic_tool);
 
-    // Default: attribute the child to the MCP-authenticated caller, not the
-    // parent owner. Legacy parent-inheriting "identity borrowing" is preserved
-    // only when the branch opts in via dangerously_allow_session_sharing.
+    // Cross-user genealogy is allowed only for an explicitly shareable branch
+    // Session and is attributed to the caller.
     const { created_by, unix_username } = await this.resolveChildIdentity(parent, params);
     const inherited = await materializeAgenticToolConfiguration(this.db, {
       tool: parentTool,
@@ -742,7 +946,7 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
         tasks: [],
         // Don't copy sdk_session_id - fork will get its own via forkSession:true
       },
-      { ...params, _agenticConfigResolved: true }
+      { ...params, _agenticConfigResolved: true, _sdkHomeScope: parent.sdk_home_scope }
     );
 
     // Cast forkedSession to Session to handle return type
@@ -921,7 +1125,7 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
         callback_config: callbackConfig,
         // Don't copy sdk_session_id - spawn will get its own via forkSession:true
       },
-      { ...params, _agenticConfigResolved: true }
+      { ...params, _agenticConfigResolved: true, _sdkHomeScope: parent.sdk_home_scope }
     );
 
     // Cast spawnedSession to Session to handle return type (create returns Session | Session[])
@@ -939,17 +1143,11 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
       );
     }
 
-    // Session env var selections: explicit envVarNames > copy from parent.
-    // Only the parent's creator (now the spawned session's creator) or a
-    // global admin may override selections — otherwise silently fall back to
-    // copying the parent's selections (the caller cannot see the creator's
-    // env var names anyway).
+    // An explicit caller selection wins; otherwise continue the parent's
+    // selected names. Values resolve for each Task's creator in the executor.
     const callerUserId = params?.user?.user_id as string | undefined;
-    const callerRole = params?.user?.role as string | undefined;
-    const callerIsCreatorOrAdmin =
-      callerUserId === parent.created_by || callerRole === ROLES.ADMIN || isSuperAdmin(callerRole);
 
-    if (data.envVarNames !== undefined && callerIsCreatorOrAdmin) {
+    if (data.envVarNames !== undefined && callerUserId) {
       await this.sessionEnvSelectionRepo.setAll(session.session_id as SessionID, data.envVarNames);
     } else {
       const parentNames = await this.sessionEnvSelectionRepo.listNames(
@@ -1085,7 +1283,6 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
   private getRuntimeExecutionConfig():
     | {
         execution?: {
-          branch_rbac?: boolean;
           allow_superadmin?: boolean;
         };
       }
@@ -1098,7 +1295,6 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
       ).get?.('config') as
         | {
             execution?: {
-              branch_rbac?: boolean;
               allow_superadmin?: boolean;
             };
           }
@@ -1106,10 +1302,6 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
     } catch {
       return undefined;
     }
-  }
-
-  private shouldEnforceBranchRbac(): boolean {
-    return this.getRuntimeExecutionConfig()?.execution?.branch_rbac === true;
   }
 
   private shouldAllowSuperadminBypass(): boolean {
@@ -1121,7 +1313,7 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
     archived: boolean,
     params?: SessionParams
   ): Promise<void> {
-    if (!params?.provider || !this.shouldEnforceBranchRbac()) return;
+    if (!params?.provider) return;
 
     const user = params.user;
     if (!user) {
@@ -1176,45 +1368,54 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
     id: string,
     archived: boolean,
     options: SessionArchiveOptions | undefined,
-    params?: SessionParams
+    params?: SessionParams,
+    rootReason: SessionArchiveReason = MANUAL_ARCHIVED_REASON
   ): Promise<SessionArchiveResult> {
     const root = await this.get(id, params);
     const includeChildren = options?.includeChildren !== false;
     const descendants = includeChildren ? await this.collectBranchLocalDescendants(root) : [];
-    const targets: SessionArchiveTarget[] = [
-      {
-        session: root,
-        archived,
-        archivedReason: archived ? MANUAL_ARCHIVED_REASON : null,
-      },
-    ];
-
-    for (const session of descendants) {
-      if (archived) {
-        if (!session.archived) {
-          targets.push({
-            session,
-            archived: true,
-            archivedReason: PARENT_ARCHIVED_REASON,
-          });
-        }
-        continue;
-      }
-
-      if (session.archived_reason === PARENT_ARCHIVED_REASON) {
-        targets.push({
-          session,
-          archived: false,
-          archivedReason: null,
-        });
-      }
-    }
+    const targets = planSessionTreeArchiveTransition({
+      root,
+      descendants,
+      archived,
+      rootReason,
+    });
 
     await this.assertCanArchiveSessions(
       targets.map((target) => target.session),
       archived,
       params
     );
+
+    const affectedSessions = await this.applyArchiveTargets(targets, params);
+
+    const session =
+      affectedSessions.find((affected) => affected.session_id === root.session_id) ?? root;
+
+    return {
+      session,
+      affectedSessions,
+      count: affectedSessions.length,
+    };
+  }
+
+  private async applyArchiveTargets(
+    targets: SessionArchiveTarget[],
+    params?: SessionParams
+  ): Promise<Session[]> {
+    if (targets.length === 0) return [];
+
+    const tenantId = params?.tenant?.tenant_id ?? getCurrentTenantId();
+    if (tenantId) {
+      try {
+        await assertTenantWritable(this.db, tenantId);
+      } catch (error) {
+        if (error instanceof TenantWriteGateActiveError) {
+          throw new Unavailable(error.message);
+        }
+        throw error;
+      }
+    }
 
     const affectedSessions = await this.sessionRepo.updateArchiveStateForTargets(
       targets.map((target) => ({
@@ -1234,24 +1435,11 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
       });
     }
 
-    const [session] = affectedSessions;
-    if (!session) {
-      throw new Error(`Session ${id} not found`);
-    }
-
-    return {
-      session,
-      affectedSessions,
-      count: affectedSessions.length,
-    };
+    return affectedSessions;
   }
 
   /**
    * Archive a session and, by default, its branch-local descendants.
-   *
-   * Generic `patch({ archived })` intentionally remains single-row so bulk
-   * archive, branch archive, and auto-cleanup paths keep their existing
-   * semantics.
    */
   async archive(
     id: string,
@@ -1272,6 +1460,106 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
     return this.setArchiveStateForTree(id, false, options, params);
   }
 
+  /** Archive a completed BTW root and its active branch-local descendants. */
+  async archiveBtwSession(id: string, params?: SessionParams): Promise<SessionArchiveResult> {
+    return this.setArchiveStateForTree(id, true, undefined, params, BTW_ARCHIVED_REASON);
+  }
+
+  /** Archive every active session in a branch without rewriting prior causes. */
+  async archiveBranchSessions(
+    branchId: BranchID,
+    params?: SessionParams
+  ): Promise<SessionArchiveBatchResult> {
+    const sessions = await this.sessionRepo.findAll({ branchId });
+    const affectedSessions = await this.applyArchiveTargets(
+      planBranchArchiveTransition(sessions),
+      params
+    );
+    return { affectedSessions, count: affectedSessions.length };
+  }
+
+  /** Restore only sessions whose independent cause is branch archival. */
+  async unarchiveBranchSessions(
+    branchId: BranchID,
+    params?: SessionParams
+  ): Promise<SessionArchiveBatchResult> {
+    const sessions = await this.sessionRepo.findAll({ branchId, archived: true });
+    const affectedSessions = await this.applyArchiveTargets(
+      planBranchUnarchiveTransition(sessions),
+      params
+    );
+    return { affectedSessions, count: affectedSessions.length };
+  }
+
+  /** Plan and optionally apply a set of local archive trees in one branch. */
+  async archiveRootsInBranch(
+    branchId: BranchID,
+    rootIds: SessionID[],
+    options: SessionBulkArchiveOptions,
+    params?: SessionParams
+  ): Promise<SessionBulkArchiveResult> {
+    const branchSessions = await this.sessionRepo.findAll({ branchId });
+    const sessionsById = new Map(
+      branchSessions.map((session) => [session.session_id, session] as const)
+    );
+    const roots = rootIds.map((rootId) => {
+      const root = sessionsById.get(rootId);
+      if (!root) throw new NotFound(`Session not found in branch: ${rootId}`);
+      return root;
+    });
+    const descendantsByRoot = await this.sessionRepo.findBranchLocalDescendantsForRoots(
+      rootIds,
+      branchId
+    );
+    const plan = planBranchLocalArchiveRoots({
+      roots,
+      descendantsByRoot,
+      includeChildren: options.includeChildren === true,
+    });
+    const skipped: SessionBulkArchiveResult['skipped'] = [];
+    const authorizedTargets: SessionArchiveTarget[] = [];
+
+    for (const unit of plan.units) {
+      try {
+        await this.assertCanArchiveSessions(unit.sessions, true, params);
+        authorizedTargets.push(...unit.targets);
+      } catch (error) {
+        if (!(error instanceof Forbidden)) throw error;
+        skipped.push({
+          session_id: unit.root.session_id,
+          error: error.message,
+        });
+      }
+    }
+
+    if (
+      !options.dryRun &&
+      options.includeChildren === undefined &&
+      plan.additionalDescendants.length > 0
+    ) {
+      throw new BadRequest(
+        `Bulk archive matched ${plan.roots.length} root session(s) with ${plan.additionalDescendants.length} additional active same-branch descendant(s). Set includeChildren explicitly before executing.`
+      );
+    }
+
+    const affectedSessions = options.dryRun
+      ? []
+      : await this.applyArchiveTargets(authorizedTargets, params);
+
+    return {
+      affectedSessions,
+      count: affectedSessions.length,
+      authorizedSessionCount: authorizedTargets.length,
+      matchedRootCount: plan.roots.length,
+      additionalDescendantCount: plan.additionalDescendants.length,
+      executingDescendantCount: plan.additionalDescendants.filter(isSessionExecuting).length,
+      rootOnlyTotal: plan.roots.length,
+      withChildrenTotal: plan.withChildrenSessions.length,
+      additionalDescendants: plan.additionalDescendants,
+      skipped,
+    };
+  }
+
   /**
    * Override remove to cascade delete children (forks and subsessions)
    */
@@ -1279,57 +1567,61 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
     id: import('@agor/core/types').NullableId,
     params?: SessionParams
   ): Promise<Session | Session[]> {
-    if (id === null) {
-      const sessions = (await super.find(params)) as Session[];
-      const results: Session[] = [];
-
-      for (const session of sessions) {
-        const deleted = await this.removeOne(session.session_id, params, false);
-        results.push(deleted);
+    const tenantId = params?.tenant?.tenant_id ?? getCurrentTenantId();
+    const selected = id === null ? ((await super.find(params)) as Session[]) : null;
+    return runWithTenantDatabaseTransaction(this.db, tenantId, async (scoped) => {
+      const sessionRepo = new SessionRepository(scoped);
+      const taskRepo = new TaskRepository(scoped);
+      if (selected) {
+        const results: Session[] = [];
+        for (const session of selected) {
+          results.push(
+            await this.removeOne(session.session_id, params, false, sessionRepo, taskRepo)
+          );
+        }
+        return results;
       }
 
-      return results;
-    }
-
-    // "Switch tool" (`chooseAgenticTool` in the UI) removes the session it's
-    // replacing as an implementation detail of swapping — never a user-visible
-    // delete. It's only offered on a session with zero tasks at the moment the
-    // swap is *initiated*, but on a multiplayer canvas a task can land on that
-    // same session (another tab, a collaborator, an MCP `agor_sessions_prompt`
-    // call) before the swap *completes*. Callers performing that specific swap
-    // mark the request via `query._swapReplace`; a normal user-intentional
-    // delete of a session with history is unaffected and still allowed.
-    //
-    // The guard lives here at the top level (not in `removeOne`) so it only
-    // gates the replaced session itself. The cascade into children runs through
-    // `removeOne`, which never re-evaluates the marker — a child that has gained
-    // a task can't abort a legitimate cascade partway through.
-    if ((params?.query as { _swapReplace?: boolean } | undefined)?._swapReplace) {
-      const taskCount = await this.taskRepo.countBySession(String(id));
-      if (taskCount > 0) {
-        throw new Conflict(
-          `Cannot complete tool switch: session ${id} has gained ${taskCount} task(s) since the switch ` +
-            'was initiated. Refresh and try again — the in-flight work has not been touched.'
-        );
+      // "Switch tool" (`chooseAgenticTool` in the UI) removes the session it's
+      // replacing as an implementation detail of swapping. Keep its stronger
+      // zero-history invariant distinct from the general unfinished-task guard
+      // in removeOne: terminal history may be deliberately deleted, but live
+      // executor leases may never be orphaned by a metadata cascade.
+      if ((params?.query as { _swapReplace?: boolean } | undefined)?._swapReplace) {
+        const taskCount = await taskRepo.countBySession(String(id));
+        if (taskCount > 0) {
+          throw new Conflict(
+            `Cannot complete tool switch: session ${id} has gained ${taskCount} task(s) since the switch ` +
+              'was initiated. Refresh and try again — the in-flight work has not been touched.'
+          );
+        }
       }
-    }
 
-    return this.removeOne(String(id), params, false);
+      return this.removeOne(String(id), params, false, sessionRepo, taskRepo);
+    });
   }
 
   private async removeOne(
     id: string,
     params: SessionParams | undefined,
-    emitRemoved: boolean
+    emitRemoved: boolean,
+    sessionRepo: SessionRepository,
+    taskRepo: TaskRepository
   ): Promise<Session> {
-    const session = await this.get(id, params);
-    const children = await this.sessionRepo.findChildren(id);
+    const session = await sessionRepo.findById(id);
+    if (!session) throw new NotFound(`Session not found: ${id}`);
+    if (await taskRepo.hasNonterminalForSession(session.session_id)) {
+      throw new Conflict(
+        `Cannot delete session ${session.session_id} while it has unfinished tasks. Stop them first.`
+      );
+    }
+    const children = await sessionRepo.findChildren(id);
 
     for (const child of children) {
-      await this.removeOne(child.session_id, params, true);
+      await this.removeOne(child.session_id, params, true, sessionRepo, taskRepo);
     }
 
-    await this.sessionRepo.delete(id);
+    await sessionRepo.delete(id);
 
     if (emitRemoved) {
       emitServiceEvent(this.app, {
@@ -1353,6 +1645,10 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
     data: SessionUpdate,
     params?: SessionParams
   ): Promise<Session | Session[]> {
+    assertSessionArchiveStateUsesDedicatedOperation(data);
+    if (Object.hasOwn(data, 'sdk_home_scope')) {
+      throw new BadRequest('sdk_home_scope is immutable and server-managed');
+    }
     let replaceAgenticConfig = false;
     if (
       (id === null || Array.isArray(id)) &&
@@ -1514,9 +1810,8 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
    */
   async find(params?: SessionParams): Promise<Paginated<Session> | Session[]> {
     // SQL-pushdown path for the recency-sorted / board-scoped list queries the
-    // first-paint loader issues. In RBAC mode the before-hook stamps a marker
-    // here so the same SQL path can compose branch visibility into the query;
-    // in open-access mode this path still handles board_id + `$sort:{updated_at}`.
+    // first-paint loader issues. The before-hook stamps a marker here so the
+    // same SQL path can compose branch visibility into the query.
     //
     // We can't lean on DrizzleService's generic path: (1) its filter matches
     // `item.board_id`, but sessions expose the board as `branch_board_id`, so a
@@ -1526,13 +1821,27 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
     // filter + recency sort + limit/offset in SQL instead.
     const query = params?.query as Record<string, unknown> | undefined;
     if (shouldSqlPageSessionQuery(query, !!params?._agorSqlSessionAccessUserId)) {
-      const sortSpec = query?.$sort as { updated_at?: 1 | -1 } | undefined;
-      const limit = (query?.$limit as number | undefined) ?? PAGINATION.DEFAULT_LIMIT;
+      const sortSpec = query?.$sort as { updated_at?: 1 | -1; created_at?: 1 | -1 } | undefined;
+      const branchFilter = query?.branch_id;
+      const branchIds =
+        branchFilter &&
+        typeof branchFilter === 'object' &&
+        Array.isArray((branchFilter as { $in?: unknown }).$in)
+          ? ((branchFilter as { $in: BranchID[] }).$in ?? [])
+          : undefined;
+      const limit = Math.min(
+        (query?.$limit as number | undefined) ?? this.paginate?.default ?? PAGINATION.DEFAULT_LIMIT,
+        this.paginate?.max ?? 1000 // Same fallback as DrizzleService.paginateData.
+      );
       const skip = (query?.$skip as number | undefined) ?? 0;
       const { data, total } = await this.sessionRepo.findPage({
+        status: query?.status as SessionStatus | undefined,
         boardId: query?.board_id as string | undefined,
+        branchId: typeof branchFilter === 'string' ? (branchFilter as BranchID) : undefined,
+        branchIds,
         archived: query?.archived as boolean | undefined,
         sortUpdatedAt: sortSpec?.updated_at,
+        sortCreatedAt: sortSpec?.created_at,
         limit,
         skip,
         visibleToUserId: params?._agorSqlSessionAccessUserId,
@@ -1563,6 +1872,43 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
       const selected = this.selectFields(sorted, residual.$select);
       const paged = this.paginateData(selected as Session[], residual, total);
 
+      if (Array.isArray(paged)) {
+        const enriched = await this.enrichRemoteRelationships(paged);
+        return markRemoteRelationshipsEnrichedResult(enriched);
+      }
+      const enrichedData = await this.enrichRemoteRelationships(paged.data);
+      return markRemoteRelationshipsEnrichedResult({ ...paged, data: enrichedData });
+    }
+
+    // Branch-modal session lists commonly sort by created_at rather than the
+    // recency column used by findPage. Keep the generic Feathers semantics for
+    // those shapes, but scope the candidate rows to the branch in SQL.
+    const branchId = params?.query?.branch_id;
+    const exactBranchId = typeof branchId === 'string' ? (branchId as BranchID) : undefined;
+    const branchIds =
+      branchId &&
+      typeof branchId === 'object' &&
+      Array.isArray(branchId.$in) &&
+      branchId.$in.every((value: unknown) => typeof value === 'string')
+        ? (branchId.$in as BranchID[])
+        : undefined;
+    if (exactBranchId || branchIds) {
+      const { branch_id: _scopedBranchId, ...residualQuery } = (params?.query ?? {}) as Record<
+        string,
+        unknown
+      >;
+      const rows = await this.sessionRepo.findAll({
+        branchId: exactBranchId,
+        branchIds,
+        archived: typeof residualQuery.archived === 'boolean' ? residualQuery.archived : undefined,
+        visibleToUserId: params?._agorSqlSessionAccessUserId,
+      });
+      const residual = residualQuery as Query;
+      const filtered = this.filterData(rows, residual);
+      const total = filtered.length;
+      const sorted = this.sortData(filtered, residual.$sort);
+      const selected = this.selectFields(sorted, residual.$select);
+      const paged = this.paginateData(selected as Session[], residual, total);
       if (Array.isArray(paged)) {
         const enriched = await this.enrichRemoteRelationships(paged);
         return markRemoteRelationshipsEnrichedResult(enriched);

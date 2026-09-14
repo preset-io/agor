@@ -25,13 +25,18 @@ export type TenantDatabaseScope = TenantOwnedDatabaseScope | SystemDatabaseScope
 export type SystemDatabaseCapability =
   | 'environment_health_discovery'
   | 'gateway_listener_discovery'
+  | 'discord_message_delivery_discovery'
   | 'knowledge_embedding_discovery'
   | 'scheduler_discovery'
   | 'task_queue_discovery'
   | 'task_runtime_discovery'
+  | 'branch_maintenance_discovery'
   | 'executor_token_maintenance'
   | 'mcp_oauth_callback'
   | 'mcp_oauth_maintenance'
+  | 'mcp_oauth_client_registration_maintenance'
+  | 'codex_device_auth_maintenance'
+  | 'claude_oauth_maintenance'
   | 'github_install_state_callback'
   | 'github_install_state_maintenance'
   | 'upload_maintenance';

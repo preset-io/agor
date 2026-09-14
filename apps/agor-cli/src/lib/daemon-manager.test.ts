@@ -27,6 +27,7 @@ describe('daemon-manager logs', () => {
 
   it('returns "No logs found" when daemon log is missing', () => {
     expect(readLogs(50)).toBe('No logs found');
+    expect(fs.statSync(path.join(tempHome, '.agor')).mode & 0o777).toBe(0o700);
   });
 
   it('reads the CLI-managed daemon identity record', () => {

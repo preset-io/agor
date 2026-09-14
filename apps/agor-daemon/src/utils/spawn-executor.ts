@@ -6,9 +6,10 @@
  * operations to the executor for proper Unix isolation.
  *
  * DESIGN PHILOSOPHY:
- * - All spawns are fire-and-forget (daemon doesn't wait for results)
- * - Executor handles its own logging, status updates, and notifications via Feathers
- * - Executor connects back to daemon via WebSocket for real-time communication
+ * - Lifecycle work remains fire-and-forget and reports through the Agor client.
+ * - Short request-mode commands return one bounded result through the
+ *   authenticated executor response channel; stdout/stderr are logs only.
+ * - Executor process isolation and delegated launch behavior remain shared.
  *
  * EXECUTION MODES:
  * 1. Local subprocess (default): Spawns executor as a child process
@@ -23,16 +24,33 @@ import { type ChildProcess, spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { AgorExecutionSettings } from '@agor/core/config';
+import {
+  ensureCredentialAuthorityLayoutSync,
+  openOrCreatePrivateDirectoryForBindSync,
+  type SyncDirectoryBindSource,
+} from '@agor/core/codex/credential-file';
+import {
+  type AgorExecutionSettings,
+  buildAllowlistedEnv,
+  type ResolvedExecutorResponseConfig,
+  resolveExecutorResponseConfig,
+  resolveExecutorResponseTimeoutMs,
+} from '@agor/core/config';
 import { getCurrentTenantId } from '@agor/core/db';
 import {
-  EXECUTOR_RESULT_PREFIX,
-  INTERACTIVE_EXECUTOR_EVENT_PREFIX,
+  EXECUTOR_RESPONSE_PROTOCOL,
+  type ExecutorCommandResult,
 } from '@agor/core/executor-protocol';
 import { isValidExecutionHomeKey } from '@agor/core/unix';
 import { getCurrentLogLevel } from '@agor/core/utils/logger';
 import type { SignOptions } from 'jsonwebtoken';
 import { issueRuntimeToken } from '../auth/runtime-tokens.js';
+import {
+  configureExecutorResponseChannel,
+  ExecutorResponseAdmissionError,
+  type ExecutorResponseReservation,
+  reserveExecutorResponse,
+} from '../executor-response-channel.js';
 import {
   containExecutorProcess,
   markExecutorProcessExited,
@@ -42,6 +60,7 @@ import {
 } from '../executor-tracking.js';
 import { withResolvedConfig } from './build-resolved-config-slice.js';
 import { buildSandboxWrap, type SandboxRuntimePaths } from './sandbox-wrap.js';
+import { buildTrustedLauncherEnvironment } from './trusted-launcher-environment.js';
 
 let configuredDaemonUrl: string | null = null;
 
@@ -64,26 +83,61 @@ function withDaemonExecutorEnv(
   };
 }
 
+/**
+ * Environment for the local launcher process in templated/delegated mode.
+ *
+ * The executor's authenticated payload is sent over stdin; the intermediate
+ * `sh -c <launcher>` must not inherit the daemon's database URL, JWT/master
+ * secrets, provider credentials, or other ambient deployment configuration.
+ * The one exception is the launcher's own `AGOR_CLOUD_*` runtime-service
+ * credentials (https://github.com/preset-io/agor-cloud/issues/198);
+ * daemon-internal secrets stay withheld.
+ */
+function resolveTemplateLauncherEnvironment(logLevel: string): Record<string, string> {
+  return buildTrustedLauncherEnvironment(logLevel);
+}
+
 /** Set the daemon URL for executor payloads. Call once at daemon startup. */
 export function configureDaemonUrl(url: string): void {
   configuredDaemonUrl = url;
   console.log(`[Executor] Daemon URL configured: ${url}`);
 }
 
-let configuredExecutorDefaults: ExecutorSpawnDefaults = {};
+let configuredExecutorDefaults: ExecutorSpawnDefaults = {
+  executorResponse: resolveExecutorResponseConfig(),
+};
 let requireExecutorTenantContext = false;
 
 /** Set default executor template and sandbox policy from config. */
 export function configureExecutor(
-  config?: ExecutorConfig | null,
-  options: { requireTenantContext?: boolean; sandboxRuntimePaths?: SandboxRuntimePaths } = {}
+  config: ExecutorConfig | null | undefined,
+  options: {
+    /** Replica-local daemon listener origin used by locally spawned request executors. */
+    localResponseOriginUrl: string;
+    requireTenantContext?: boolean;
+    sandboxRuntimePaths?: SandboxRuntimePaths;
+  }
 ): void {
   configuredExecutorDefaults = {
     executorCommandTemplate: config?.executor_command_template || undefined,
+    executorResponse: resolveExecutorResponseConfig(config?.executor_response),
     sandbox: config?.sandbox?.enabled ? config.sandbox : undefined,
     sandboxRuntimePaths: options.sandboxRuntimePaths,
   };
   requireExecutorTenantContext = options.requireTenantContext === true;
+  const response = configuredExecutorDefaults.executorResponse;
+  // Local subprocess executors are co-located with this replica, so they always
+  // call back over loopback — guaranteed to reach the replica that holds the
+  // reservation. The configured `origin_url` is the reachable address for
+  // OFF-HOST (templated/delegated) executors only, and is applied per
+  // reservation on that path. Using it for local callbacks would risk
+  // misrouting through a load balancer to a replica whose `pending` map has no
+  // matching request.
+  configureExecutorResponseChannel({
+    originUrl: options.localResponseOriginUrl,
+    maxResponseBytes: response.maxResponseBytes,
+    maxActiveRequests: response.maxActiveRequests,
+  });
 
   if (configuredExecutorDefaults.executorCommandTemplate) {
     const preview =
@@ -105,8 +159,20 @@ export interface ExecutorTemplateVariables {
   branch_id?: string;
   /** Trusted Agor user UUID used by external launchers for identity-scoped storage. */
   user_id?: string;
+  /** RBAC-resolved branch filesystem projection for the current actor. */
+  branch_fs_access?: 'none' | 'read' | 'write';
   log_level?: string;
   executor_type?: string;
+  /**
+   * Absolute path of the per-branch SDK home for a branch-scoped Session, or
+   * empty for an execution-home Session (design §7.4). In `delegated` mode
+   * Agor mounts nothing, so the external launcher owns enforcement: it must
+   * relocate the tool's SDK home and provide any safe caller-scoped credential
+   * overlay. Shell-escaped during substitution like {tenant_id}; always
+   * rendered (empty string when unused) so the placeholder never survives into
+   * the command.
+   */
+  branch_sdk_home?: string;
   /**
    * Trusted runtime tenant identity. This is populated from the ambient tenant
    * context, shell-escaped during substitution, and is not caller-overridable
@@ -122,6 +188,8 @@ export interface ExecutorSpawnContext {
 }
 
 export interface SpawnExecutorOptions {
+  /** Bounded environment handoff owns/kills its entire local launcher process group. */
+  launcherProcessGroup?: boolean;
   cwd?: string;
   env?: Record<string, string>;
   logPrefix?: string;
@@ -139,17 +207,16 @@ export interface SpawnExecutorOptions {
   onSpawn?: (child: ChildProcess, context: ExecutorSpawnContext) => void | Promise<void>;
   /** Caller-assembled env; bypasses internal curation. Ignored by templated path. */
   preparedEnv?: Record<string, string>;
+  /**
+   * Parent-process descriptors for race-safe local sandbox file mounts. The
+   * caller keeps each descriptor open through this synchronous spawn call and
+   * closes its copy afterwards. Never forwarded to delegated launchers or the
+   * executor payload.
+   */
+  localSandboxFileBinds?: Array<{ sourceFd: number; destination: string }>;
 }
 
-export interface ExecutorCommandResult {
-  success: boolean;
-  data?: unknown;
-  error?: {
-    code: string;
-    message: string;
-    details?: unknown;
-  };
-}
+export type { ExecutorCommandResult } from '@agor/core/executor-protocol';
 
 /**
  * Invoke a fire-and-forget lifecycle callback while observing both synchronous
@@ -175,10 +242,10 @@ function observeExitCallback(
 }
 
 export interface RunExecutorCommandOptions
-  extends Omit<SpawnExecutorOptions, 'onExit' | 'onSpawn'> {
-  /** Optional timeout for short-lived command execution. */
+  extends Omit<SpawnExecutorOptions, 'localSandboxFileBinds' | 'onExit' | 'onSpawn'> {
+  /** Built-in call-specific timeout; config `timeout_ms.by_command` may override it. */
   timeoutMs?: number;
-  /** Suppress child stdout/stderr logging because the JSON result may contain credentials. */
+  /** Suppress child stdout/stderr logs for credential-sensitive operations. */
   sensitiveOutput?: boolean;
 }
 
@@ -264,19 +331,26 @@ export function substituteTemplateVariables(
     session_id: variables.session_id,
     branch_id: variables.branch_id,
     user_id: variables.user_id,
+    branch_fs_access: variables.branch_fs_access,
     log_level: variables.log_level,
     executor_type: variables.executor_type,
+    // Always render (empty string when unused) so `{branch_sdk_home}` never
+    // survives literally into the command line (design §7.4).
+    branch_sdk_home: variables.branch_sdk_home ?? '',
     tenant_id: variables.tenant_id,
   };
 
+  // Security-sensitive values rendered as one opaque shell argument. tenant_id
+  // may originate in external auth claims; branch_sdk_home is a filesystem path
+  // that must not word-split or glob. Templates should use them unquoted, e.g.
+  // `launcher --tenant-id {tenant_id} --sdk-home {branch_sdk_home}`.
+  const shellEscapedKeys = new Set(['tenant_id', 'branch_sdk_home']);
   for (const [key, value] of Object.entries(substitutions)) {
     if (value !== undefined) {
       const placeholder = new RegExp(`\\{${key}\\}`, 'g');
-      // executor_command_template is executed via `sh -c`. Tenant IDs may
-      // originate in external auth claims, so render this security-sensitive
-      // value as one opaque shell argument. Templates should use
-      // `{tenant_id}` unquoted, e.g. `launcher --tenant-id {tenant_id}`.
-      const renderedValue = key === 'tenant_id' ? escapeShellArg(String(value)) : String(value);
+      const renderedValue = shellEscapedKeys.has(key)
+        ? escapeShellArg(String(value))
+        : String(value);
       result = result.replace(placeholder, renderedValue);
     }
   }
@@ -342,7 +416,7 @@ export function findExecutorPath(): string {
 /**
  * Spawn executor process with JSON payload via stdin (fire-and-forget)
  *
- * This is the SINGLE entry point for all executor spawning. It:
+ * This is the canonical entry point for autonomous executor spawning. It:
  * - Returns immediately after spawning (does NOT wait for completion)
  * - Supports both local subprocess and templated (k8s/docker) execution
  * - Logs stdout/stderr to daemon logs
@@ -367,14 +441,20 @@ export function spawnExecutor(
     options.executorCommandTemplate !== undefined
       ? options.executorCommandTemplate || undefined
       : configuredExecutorDefaults.executorCommandTemplate;
-  const payloadWithConfig = withResolvedConfig(payload);
+  const payloadWithConfig = {
+    ...withResolvedConfig(payload),
+    executorMode: 'autonomous' as const,
+  };
 
   if (executorCommandTemplate) {
+    if (options.localSandboxFileBinds?.length) {
+      throw new Error('Local sandbox file binds cannot be forwarded to a delegated launcher');
+    }
     spawnExecutorWithTemplate(payloadWithConfig, {
       ...options,
       executorCommandTemplate,
       templateVariables: {
-        command: payloadWithConfig.command as string,
+        command: payload.command as string,
         task_id: generateTaskId(),
         unix_user: options.delegatedHomeKey || undefined,
         log_level: resolveExecutorLogLevel(options.env ?? (process.env as Record<string, string>)),
@@ -418,7 +498,149 @@ function sendExecutorPayload(
  * Spawn executor as a local subprocess.
  * stdout/stderr are inherited so logs appear in daemon output.
  */
+function sandboxLocalExecutorCommand(
+  payload: Record<string, unknown>,
+  command: { cmd: string; args: string[]; env: Record<string, string | undefined> },
+  logPrefix: string,
+  localSandboxFileBinds: SpawnExecutorOptions['localSandboxFileBinds']
+): {
+  cmd: string;
+  args: string[];
+  env: Record<string, string | undefined>;
+  inheritedFds?: number[];
+  /** Preflight-owned descriptors closed by the launch chokepoint after spawn. */
+  ownedBindSources?: SyncDirectoryBindSource[];
+} {
+  // Sandbox around the WORK directory, never the executor package cwd. The
+  // daemon supplies this path and the caller's normalized filesystem access;
+  // the executor must not rediscover either from client-controlled data.
+  const params = payload.params as
+    | {
+        cwd?: unknown;
+        sandboxBaseRepoPath?: unknown;
+        sandboxHomeStore?: unknown;
+        sandboxWorktreesRoot?: unknown;
+        principalBranchAccess?: unknown;
+        sandboxBranchSdkHome?: unknown;
+      }
+    | undefined;
+  const workdir =
+    typeof payload.cwd === 'string' && payload.cwd.length > 0
+      ? payload.cwd
+      : typeof params?.cwd === 'string' && params.cwd.length > 0
+        ? params.cwd
+        : undefined;
+  if (!workdir) {
+    if (localSandboxFileBinds?.length) {
+      throw new Error('Sandbox file binds require an authoritative branch working directory');
+    }
+    return command;
+  }
+
+  const ownerTmpBindSource = prepareLocalSandboxSources(params);
+  const ownedBindSources = ownerTmpBindSource ? [ownerTmpBindSource] : [];
+
+  const inheritedFds = localSandboxFileBinds?.map((bind) => bind.sourceFd) ?? [];
+  const childCredentialBinds = localSandboxFileBinds?.map((bind, index) => ({
+    // Node maps extra stdio entries to child descriptors starting at 3.
+    fd: 3 + index,
+    destination: bind.destination,
+  }));
+  const ownerTmpBindFd = ownerTmpBindSource ? 3 + inheritedFds.length : undefined;
+  if (ownerTmpBindSource) inheritedFds.push(ownerTmpBindSource.fd);
+
+  const branchAccess =
+    params?.principalBranchAccess === 'read' || params?.principalBranchAccess === 'none'
+      ? params.principalBranchAccess
+      : 'write';
+  let wrap: ReturnType<typeof buildSandboxWrap>;
+  try {
+    wrap = buildSandboxWrap({
+      sandbox: configuredExecutorDefaults.sandbox,
+      branchPath: workdir,
+      cmd: command.cmd,
+      args: command.args,
+      baseRepoPath:
+        typeof params?.sandboxBaseRepoPath === 'string' ? params.sandboxBaseRepoPath : undefined,
+      ownerHomeStore:
+        typeof params?.sandboxHomeStore === 'string' ? params.sandboxHomeStore : undefined,
+      ownerTmpBindFd,
+      worktreesRoot:
+        typeof params?.sandboxWorktreesRoot === 'string' ? params.sandboxWorktreesRoot : undefined,
+      branchAccess,
+      branchSdkHomeDir:
+        typeof params?.sandboxBranchSdkHome === 'string' ? params.sandboxBranchSdkHome : undefined,
+      branchSdkCredentialBinds: childCredentialBinds,
+      runtimePaths: configuredExecutorDefaults.sandboxRuntimePaths as SandboxRuntimePaths,
+    });
+  } catch (error) {
+    for (const source of ownedBindSources) source.close();
+    throw error;
+  }
+  if (!wrap) {
+    for (const source of ownedBindSources) source.close();
+    if (localSandboxFileBinds?.length) {
+      throw new Error('Credential file binds require the fail-closed filesystem sandbox');
+    }
+    return command;
+  }
+  console.log(`${logPrefix} Sandbox: wrapping executor via bwrap (filesystem-only)`);
+  return {
+    cmd: wrap.cmd,
+    args: wrap.args,
+    env: { ...command.env, ...wrap.extraEnv },
+    ...(inheritedFds.length > 0 ? { inheritedFds } : {}),
+    ...(ownedBindSources.length > 0 ? { ownedBindSources } : {}),
+  };
+}
+
+/**
+ * Materialize and pin actor-writable mount sources used by a local per-user
+ * sandbox. Both autonomous and request-mode launches pass through this common
+ * synchronous preflight immediately before bubblewrap argument construction.
+ * The caller keeps returned descriptors open through spawn, then closes them.
+ */
+function prepareLocalSandboxSources(
+  params: { sandboxHomeStore?: unknown } | undefined
+): SyncDirectoryBindSource | undefined {
+  const sandbox = configuredExecutorDefaults.sandbox;
+  if (sandbox?.enabled !== true || sandbox.home_mode !== 'per_user') return undefined;
+
+  const sandboxHomeStore =
+    typeof params?.sandboxHomeStore === 'string' && params.sandboxHomeStore.length > 0
+      ? params.sandboxHomeStore
+      : undefined;
+  if (!sandboxHomeStore) {
+    // Defense in depth before the pure sandbox-policy resolver performs the
+    // same fail-closed check. A per-user launch must never reach a shared-home
+    // or empty-source fallback.
+    throw new Error(
+      'sandbox home_mode=per_user requires an owner home store before credential authority preparation'
+    );
+  }
+
+  if (process.platform !== 'linux') return undefined;
+  // Materialize the immutable-parent mount source and all authority leaves.
+  // The shared credential-file primitive walks directories without following
+  // symlinks and preserves existing bytes/inodes, so a malformed owner store
+  // fails before bwrap can follow an actor-controlled `.claude` symlink.
+  ensureCredentialAuthorityLayoutSync(path.join(sandboxHomeStore, '.claude', '.credentials.json'));
+
+  // Persistent tmp is actor-writable across launches. Walk every component
+  // without following symlinks and retain the opened terminal inode for
+  // bubblewrap's descriptor bind, closing the validation-to-mount race.
+  if (sandbox.include?.tmp === false) return undefined;
+  return openOrCreatePrivateDirectoryForBindSync(path.join(sandboxHomeStore, 'tmp'));
+}
+
 function spawnExecutorLocal(payload: Record<string, unknown>, options: SpawnExecutorOptions): void {
+  spawnExecutorLocalPrepared(payload, options);
+}
+
+function spawnExecutorLocalPrepared(
+  payload: Record<string, unknown>,
+  options: SpawnExecutorOptions
+): void {
   const location = resolveLocalExecutorLocation(options);
   const cwdFailure = resolveLocalExecutorCwdFailure(location);
   const logPrefix = options.logPrefix ?? '[Executor]';
@@ -438,76 +660,22 @@ function spawnExecutorLocal(payload: Record<string, unknown>, options: SpawnExec
     location
   );
 
-  // OS-level sandbox wrap (SRT) — covers ALL tools at this one chokepoint.
-  let spawnCmd = cmd;
-  let spawnArgs = args;
-  let spawnEnv = envWithDaemonUrl;
-  // Sandbox around the WORK directory (the branch the agent operates in): it is
-  // `payload.params.cwd` for prompt/terminal tasks, or top-level `payload.cwd`
-  // for some commands — NOT the executor process cwd (the executor package dir
-  // for prompt tasks). No work dir (e.g. repo-level ops) ⇒ no wrap.
-  const paramsCwd = (payload.params as { cwd?: unknown } | undefined)?.cwd;
-  const candidateCwd =
-    typeof payload.cwd === 'string' && payload.cwd.length > 0
-      ? payload.cwd
-      : typeof paramsCwd === 'string' && paramsCwd.length > 0
-        ? paramsCwd
-        : undefined;
-  const sandboxWorkdir = candidateCwd;
-  // Authoritative mount inputs the daemon resolved from its own DB state and
-  // threaded through `payload.params` (see register-services) — the sandbox
-  // never derives these from disk.
-  const sandboxParams = payload.params as
-    | {
-        sandboxBaseRepoPath?: unknown;
-        sandboxHomeStore?: unknown;
-        sandboxWorktreesRoot?: unknown;
-        principalBranchAccess?: unknown;
-      }
-    | undefined;
-  const sandboxBaseRepoPath =
-    typeof sandboxParams?.sandboxBaseRepoPath === 'string'
-      ? sandboxParams.sandboxBaseRepoPath
-      : undefined;
-  const sandboxHomeStore =
-    typeof sandboxParams?.sandboxHomeStore === 'string'
-      ? sandboxParams.sandboxHomeStore
-      : undefined;
-  const sandboxWorktreesRoot =
-    typeof sandboxParams?.sandboxWorktreesRoot === 'string'
-      ? sandboxParams.sandboxWorktreesRoot
-      : undefined;
-  const principalBranchAccess =
-    sandboxParams?.principalBranchAccess === 'read' ||
-    sandboxParams?.principalBranchAccess === 'none'
-      ? sandboxParams.principalBranchAccess
-      : 'write';
-  if (sandboxWorkdir) {
-    try {
-      const wrap = buildSandboxWrap({
-        sandbox: configuredExecutorDefaults.sandbox,
-        branchPath: sandboxWorkdir,
-        cmd,
-        args,
-        baseRepoPath: sandboxBaseRepoPath,
-        ownerHomeStore: sandboxHomeStore,
-        worktreesRoot: sandboxWorktreesRoot,
-        branchAccess: principalBranchAccess,
-        runtimePaths: configuredExecutorDefaults.sandboxRuntimePaths as SandboxRuntimePaths,
-      });
-      if (wrap) {
-        spawnCmd = wrap.cmd;
-        spawnArgs = wrap.args;
-        spawnEnv = { ...envWithDaemonUrl, ...wrap.extraEnv };
-        console.log(`${logPrefix} Sandbox: wrapping executor via bwrap (filesystem-only)`);
-      }
-    } catch (err) {
-      console.error(
-        `${logPrefix} Sandbox wrap failed: ${err instanceof Error ? err.message : String(err)}`
-      );
-      observeExitCallback(options.onExit, 126, { mode: 'local' }, logPrefix);
-      return;
-    }
+  // OS-level sandbox wrap (SRT) — covers fire-and-forget prompt processes and
+  // the request/response branch-file commands through one helper.
+  let spawnCommand: ReturnType<typeof sandboxLocalExecutorCommand>;
+  try {
+    spawnCommand = sandboxLocalExecutorCommand(
+      payload,
+      { cmd, args, env: envWithDaemonUrl },
+      logPrefix,
+      options.localSandboxFileBinds
+    );
+  } catch (err) {
+    console.error(
+      `${logPrefix} Sandbox wrap failed: ${err instanceof Error ? err.message : String(err)}`
+    );
+    observeExitCallback(options.onExit, 126, { mode: 'local' }, logPrefix);
+    return;
   }
   console.log(`${logPrefix} Spawning executor at: ${executorPath}`);
   console.log(`${logPrefix} Command: ${payload.command}`);
@@ -519,12 +687,17 @@ function spawnExecutorLocal(payload: Record<string, unknown>, options: SpawnExec
     observeExitCallback(options.onExit, code, { mode: 'local' }, logPrefix);
   };
 
-  const executorProcess = spawn(spawnCmd, spawnArgs, {
-    cwd,
-    env: { ...spawnEnv },
-    stdio: ['pipe', 'inherit', 'inherit'], // stdin: pipe, stdout/stderr: inherit (show in daemon logs)
-    detached: process.platform !== 'win32',
-  });
+  let executorProcess: ChildProcess;
+  try {
+    executorProcess = spawn(spawnCommand.cmd, spawnCommand.args, {
+      cwd,
+      env: { ...spawnCommand.env },
+      stdio: ['pipe', 'inherit', 'inherit', ...(spawnCommand.inheritedFds ?? [])], // stdin: pipe, stdout/stderr: inherit; extra entries are pinned sandbox bind fds
+      detached: process.platform !== 'win32',
+    });
+  } finally {
+    for (const source of spawnCommand.ownedBindSources ?? []) source.close();
+  }
 
   const spawnReady = options.onSpawn?.(executorProcess, { mode: 'local' });
 
@@ -573,19 +746,15 @@ function spawnExecutorWithTemplate(
   };
 
   const executorProcess = spawn('sh', ['-c', command], {
-    env: { ...process.env, LOG_LEVEL: logLevel },
-    stdio: ['pipe', 'pipe', 'pipe'],
+    detached: options.launcherProcessGroup === true,
+    env: resolveTemplateLauncherEnvironment(logLevel),
+    // Trusted launchers receive the reserved AGOR_CLOUD_* credential namespace.
+    // Their output is therefore not a daemon logging channel: discard it at the
+    // process boundary and retain only the closed spawn/exit metadata below.
+    stdio: ['pipe', 'ignore', 'ignore'],
   });
 
   const spawnReady = options.onSpawn?.(executorProcess, { mode: 'templated' });
-
-  executorProcess.stdout?.on('data', (data) => {
-    console.log(`${logPrefix} ${data.toString().trim()}`);
-  });
-
-  executorProcess.stderr?.on('data', (data) => {
-    console.error(`${logPrefix} ${data.toString().trim()}`);
-  });
 
   executorProcess.on('error', (error) => {
     console.error(`${logPrefix} Spawn error:`, error.message);
@@ -608,85 +777,12 @@ function spawnExecutorWithTemplate(
   sendExecutorPayload(executorProcess, payload, spawnReady, logPrefix, reportExit);
 }
 
-function parseExecutorResultFromStdout(stdout: string): ExecutorCommandResult | null {
-  const lines = stdout
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean);
-
-  for (let i = lines.length - 1; i >= 0; i--) {
-    const line = lines[i];
-    const resultJson = line.startsWith(EXECUTOR_RESULT_PREFIX)
-      ? line.slice(EXECUTOR_RESULT_PREFIX.length)
-      : line.startsWith('{') && line.endsWith('}')
-        ? line
-        : null;
-    if (!resultJson) continue;
-    try {
-      const parsed = JSON.parse(resultJson) as unknown;
-      if (parsed && typeof parsed === 'object' && 'success' in parsed) {
-        return parsed as ExecutorCommandResult;
-      }
-    } catch {
-      // Not the executor result line; keep scanning.
-    }
-  }
-
-  return null;
-}
-
-/**
- * Settle once the executor's result is complete, not merely once it has exited.
- *
- * `exit` fires as soon as the process is reaped, while bytes it wrote can still
- * be sitting unread in the pipe — parsing there loses up to a full pipe buffer
- * of output, which is the daemon-side half of #2222. `close` fires only after
- * every stdio stream has ended, so it is the final missing-result fence.
- *
- * Exiting with an already-parseable result is the common case and settles
- * immediately, so a descendant that inherited stdio and outlives the executor
- * cannot add latency. Only an incomplete result waits for `close`, backstopped
- * by the caller's command timeout — better a late accurate answer than a prompt
- * EXECUTOR_RESULT_MISSING for output that was still in flight.
- */
-function settleOnExecutorResultComplete(
-  child: ChildProcess,
-  readStdout: () => string,
-  settle: (result: ExecutorCommandResult | null, code: number | null) => void
-): void {
-  let done = false;
-  let parsed: ExecutorCommandResult | null = null;
-
-  const finish = (code: number | null) => {
-    if (done) return;
-    done = true;
-    settle(parsed, code);
-  };
-
-  child.on('exit', (code) => {
-    // Already settled (spawn error, or a close that preceded exit) — skip the
-    // parse, which walks the whole accumulated stdout.
-    if (done) return;
-    parsed = parseExecutorResultFromStdout(readStdout());
-    if (parsed) finish(code);
-  });
-
-  child.on('close', (code) => {
-    if (done) return;
-    parsed ??= parseExecutorResultFromStdout(readStdout());
-    finish(code);
-  });
-}
-
 function logChunkedOutput(prefix: string, stream: 'stdout' | 'stderr', chunk: Buffer): void {
   const text = chunk.toString();
   for (const line of text.split(/\r?\n/)) {
     if (!line.trim()) continue;
-    if (line.trim().startsWith(EXECUTOR_RESULT_PREFIX)) continue;
     if (stream === 'stdout') {
-      if (process.env.AGOR_EXECUTOR_DEBUG_STDOUT === '1') {
-        console.log(`${prefix} ${line}`);
-      }
+      console.log(`${prefix} ${line}`);
     } else {
       console.error(`${prefix} ${line}`);
     }
@@ -720,7 +816,10 @@ function resolveLocalExecutorCwdFailure(
 function resolveLocalExecutorEnvironment(
   options: Pick<SpawnExecutorOptions, 'env' | 'preparedEnv'>
 ): Record<string, string> {
-  const env = options.env ?? (process.env as Record<string, string>);
+  // Safe default for every fixed executor command. Task/lifecycle callers pass
+  // an already resolved `preparedEnv`; other commands need only the curated
+  // host runtime, never the daemon's entire credential-bearing process.env.
+  const env = options.env ?? buildAllowlistedEnv();
   const source = options.preparedEnv ?? env;
   return withDaemonExecutorEnv(source, getDaemonUrl());
 }
@@ -739,16 +838,6 @@ function prepareLocalExecutorSpawn(
     cwd,
     envWithDaemonUrl,
   };
-}
-
-function parseInteractiveExecutorEvent(line: string): unknown | undefined {
-  if (!line.startsWith(INTERACTIVE_EXECUTOR_EVENT_PREFIX)) return undefined;
-  try {
-    return JSON.parse(line.slice(INTERACTIVE_EXECUTOR_EVENT_PREFIX.length)) as unknown;
-  } catch {
-    // Invalid protocol output is ignored and becomes a missing-result failure.
-  }
-  return undefined;
 }
 
 function failedInteractiveExecutorHandle(
@@ -870,7 +959,13 @@ export function startInteractiveExecutor(
     return failedInteractiveExecutorHandle(failures.localProcessRequired);
   }
 
-  const { timeoutMs = 10 * 60_000 } = options;
+  const tenantId = resolveExecutorTenantId();
+  const command = String(payload.command ?? '?');
+  const timeoutMs = resolveExecutorResponseTimeoutMs(
+    configuredExecutorDefaults.executorResponse,
+    command,
+    options.timeoutMs
+  );
   const attemptId = crypto.randomUUID();
   const taskId = generateTaskId();
   const location = resolveLocalExecutorLocation(options);
@@ -878,20 +973,52 @@ export function startInteractiveExecutor(
   if (cwdFailure) return failedInteractiveExecutorHandle(cwdFailure);
   const prepared = prepareLocalExecutorSpawn(options, '--interactive-command', location);
   const { cmd, args, cwd, envWithDaemonUrl } = prepared;
-  const child = spawn(cmd, args, {
-    cwd,
-    env: { ...envWithDaemonUrl },
-    stdio: ['pipe', 'pipe', 'pipe'],
-    detached: true,
-  });
+  let deliverEvent: (event: unknown) => void = () => undefined;
+  let response: ExecutorResponseReservation;
+  try {
+    const params = payload.params as { branchId?: unknown; sessionId?: unknown } | undefined;
+    response = reserveExecutorResponse({
+      tenantId,
+      ...(typeof options.templateVariables?.user_id === 'string'
+        ? { userId: options.templateVariables.user_id }
+        : {}),
+      command,
+      ...(typeof params?.branchId === 'string' ? { branchId: params.branchId } : {}),
+      ...(typeof params?.sessionId === 'string' ? { sessionId: params.sessionId } : {}),
+      timeoutMs,
+      timeoutResult: failures.timeout,
+      profile: 'events',
+      onEvent: (event) => deliverEvent(event),
+    });
+  } catch (error) {
+    if (error instanceof ExecutorResponseAdmissionError) {
+      return failedInteractiveExecutorHandle(error.result);
+    }
+    throw error;
+  }
+  const requestPayload = {
+    ...withResolvedConfig(payload),
+    executorMode: 'request' as const,
+    executorResponse: response.descriptor,
+  };
+  let child: ChildProcess;
+  try {
+    child = spawn(cmd, args, {
+      cwd,
+      env: { ...envWithDaemonUrl },
+      stdio: ['pipe', 'pipe', 'pipe'],
+      detached: true,
+    });
+  } catch {
+    response.fail(failures.spawn);
+    return failedInteractiveExecutorHandle(failures.spawn);
+  }
   let resolveResult!: (result: ExecutorCommandResult) => void;
   const result = new Promise<ExecutorCommandResult>((resolve) => {
     resolveResult = resolve;
   });
-  let stdout = '';
-  let lineBuffer = '';
   let stderrSeen = false;
-  let timer: ReturnType<typeof setTimeout> | undefined;
+  let terminalResult: ExecutorCommandResult | undefined;
   let finalization: Promise<ExecutorCommandResult> | undefined;
   let resolveClose!: () => void;
   const closed = new Promise<void>((resolve) => {
@@ -905,7 +1032,6 @@ export function startInteractiveExecutor(
   ): Promise<ExecutorCommandResult> => {
     finalization ??= (async () => {
       input.failPending(false);
-      if (timer) clearTimeout(timer);
       if (leaderExited) markExecutorProcessExited(attemptId, child.pid);
       const containment = await containExecutorProcess(attemptId, taskId);
       if (containment.status !== 'verified_absent') {
@@ -913,9 +1039,7 @@ export function startInteractiveExecutor(
       }
       await closed;
       untrackExecutorProcess(attemptId, taskId);
-      return (
-        fallback ?? parseExecutorResultFromStdout(stdout) ?? failures.missingResult(stderrSeen)
-      );
+      return fallback ?? terminalResult ?? failures.missingResult(stderrSeen);
     })();
     void finalization.then(resolveResult);
     return finalization;
@@ -925,11 +1049,14 @@ export function startInteractiveExecutor(
   input = createJsonLineInput(
     child,
     () => Boolean(finalization),
-    () => void finalize(stdinFailure)
+    () => {
+      response.fail(stdinFailure);
+    }
   );
 
   if (!child.pid) {
     const spawnFailure = failures.spawn;
+    response.fail(spawnFailure);
     resolveResult(spawnFailure);
     return failedInteractiveExecutorHandle(spawnFailure);
   }
@@ -939,16 +1066,11 @@ export function startInteractiveExecutor(
     deliver: input.deliver,
     endInput: input.end,
   };
+  deliverEvent = (event) => onEvent?.(event, controls);
 
   child.stdout?.on('data', (chunk: Buffer) => {
-    const text = chunk.toString();
-    stdout += text;
-    lineBuffer += text;
-    const lines = lineBuffer.split(/\r?\n/);
-    lineBuffer = lines.pop() ?? '';
-    for (const rawLine of lines) {
-      const event = parseInteractiveExecutorEvent(rawLine.trim());
-      if (event !== undefined) onEvent?.(event, controls);
+    if (!options.sensitiveOutput) {
+      logChunkedOutput(options.logPrefix ?? '[Executor]', 'stdout', chunk);
     }
   });
   child.stderr?.on('data', () => {
@@ -956,14 +1078,16 @@ export function startInteractiveExecutor(
   });
   child.stdin?.on('error', () => {
     input.failPending(true);
-    void finalize(stdinFailure);
+    response.fail(stdinFailure);
   });
   child.on('error', () => {
-    void finalize(failures.spawn);
+    response.fail(failures.spawn);
   });
   child.on('exit', () => {
     input.failPending(false);
-    void finalize(undefined, true);
+    markExecutorProcessExited(attemptId, child.pid);
+    response.fail(failures.missingResult(stderrSeen));
+    void finalize(terminalResult, true);
   });
   child.on('close', () => {
     input.failPending(false);
@@ -972,14 +1096,22 @@ export function startInteractiveExecutor(
     void finalize(undefined, true);
   });
 
-  timer = setTimeout(() => {
-    void finalize(failures.timeout);
-  }, timeoutMs);
-  void input.deliver(withResolvedConfig(payload), options.closeInputAfterPayload);
+  response.setFailureCleanup((terminal) => {
+    terminalResult = terminal;
+    void finalize(terminal);
+  });
+  void response.result.then((terminal) => {
+    terminalResult = terminal;
+    return finalize(terminal);
+  });
+  void input.deliver(requestPayload, options.closeInputAfterPayload);
 
   return {
     result,
-    cancel: () => finalize(failures.cancelled),
+    cancel: () => {
+      response.fail(failures.cancelled);
+      return finalize(failures.cancelled);
+    },
     deliver: input.deliver,
     endInput: input.end,
     verifyAbsence: async () => {
@@ -1001,8 +1133,12 @@ export function startContainedExecutorCommand(
   payload: Record<string, unknown>,
   options: RunExecutorCommandOptions = {}
 ): ContainedExecutorCommandHandle {
-  const timeoutMs = options.timeoutMs ?? 60_000;
   const command = String(payload.command ?? '?');
+  const timeoutMs = resolveExecutorResponseTimeoutMs(
+    configuredExecutorDefaults.executorResponse,
+    command,
+    options.timeoutMs
+  );
   const transport = startInteractiveExecutor(payload, {
     ...options,
     timeoutMs,
@@ -1046,7 +1182,7 @@ export function startContainedExecutorCommand(
         success: false,
         error: {
           code: 'EXECUTOR_RESULT_MISSING',
-          message: 'Executor exited without a JSON result',
+          message: 'Executor exited without a final response',
           details: {
             command,
             stderr: stderrSeen ? '[redacted; enable executor debug logs]' : '',
@@ -1063,235 +1199,262 @@ export function startContainedExecutorCommand(
 }
 
 /**
- * Run a short-lived executor command and wait for its JSON result.
+ * Run a short-lived executor command and wait for its authenticated response.
  *
  * Use this for daemon call sites that need an immediate answer (for example
- * autocomplete and git-state probes). Long-running commands and lifecycle
+ * autocomplete, branch inspection, and other bounded lifecycle probes).
+ * Prompt Git-state snapshots are captured inside the prompt executor; they do
+ * not use this request/response path. Long-running commands and lifecycle
  * tasks should keep using spawnExecutorFireAndForget().
  */
-export async function runExecutorCommand(
+export async function requestExecutor(
   payload: Record<string, unknown>,
   options: RunExecutorCommandOptions = {}
 ): Promise<ExecutorCommandResult> {
-  const { templateVariables, logPrefix = '[Executor]', timeoutMs = 60_000 } = options;
+  const { templateVariables, logPrefix = '[Executor]' } = options;
   const tenantId = resolveExecutorTenantId();
+  const commandName = String(payload.command ?? '?');
+  const timeoutMs = resolveExecutorResponseTimeoutMs(
+    configuredExecutorDefaults.executorResponse,
+    commandName,
+    options.timeoutMs
+  );
 
   const executorCommandTemplate =
     options.executorCommandTemplate !== undefined
       ? options.executorCommandTemplate || undefined
       : configuredExecutorDefaults.executorCommandTemplate;
-  const payloadWithConfig = withResolvedConfig(payload);
-
-  if (executorCommandTemplate) {
-    return runExecutorCommandWithTemplate(payloadWithConfig, {
-      ...options,
-      timeoutMs,
-      executorCommandTemplate,
-      templateVariables: {
-        command: payloadWithConfig.command as string,
-        task_id: generateTaskId(),
-        unix_user: options.delegatedHomeKey || undefined,
-        log_level: resolveExecutorLogLevel(options.env ?? (process.env as Record<string, string>)),
-        executor_type: 'executor',
-        ...templateVariables,
-        tenant_id: tenantId,
+  const responseConfig = configuredExecutorDefaults.executorResponse;
+  if (
+    executorCommandTemplate &&
+    (responseConfig.externalProtocol !== EXECUTOR_RESPONSE_PROTOCOL || !responseConfig.originUrl)
+  ) {
+    return {
+      success: false,
+      error: {
+        code: 'EXECUTOR_RESPONSE_UNSUPPORTED',
+        message:
+          'Templated request execution requires ' +
+          `execution.executor_response.external_protocol=${EXECUTOR_RESPONSE_PROTOCOL} ` +
+          'and an exact origin_url',
       },
-      logPrefix,
-    });
+    };
   }
 
-  return runExecutorCommandLocal(payloadWithConfig, { ...options, timeoutMs, logPrefix });
+  const timeoutResult: ExecutorCommandResult = {
+    success: false,
+    error: {
+      code: 'EXECUTOR_TIMEOUT',
+      message: `Executor command timed out after ${timeoutMs}ms`,
+      details: { command: commandName },
+    },
+  };
+  let response: ExecutorResponseReservation;
+  try {
+    const params = payload.params as { branchId?: unknown; sessionId?: unknown } | undefined;
+    response = reserveExecutorResponse({
+      tenantId,
+      ...(typeof templateVariables?.user_id === 'string'
+        ? { userId: templateVariables.user_id }
+        : {}),
+      command: commandName,
+      ...(typeof params?.branchId === 'string' ? { branchId: params.branchId } : {}),
+      ...(typeof params?.sessionId === 'string' ? { sessionId: params.sessionId } : {}),
+      timeoutMs,
+      timeoutResult,
+      // Off-host executors call back over the configured reachable origin; local
+      // subprocesses inherit the loopback origin from the channel config.
+      ...(executorCommandTemplate && responseConfig.originUrl
+        ? { originUrl: responseConfig.originUrl }
+        : {}),
+    });
+  } catch (error) {
+    if (error instanceof ExecutorResponseAdmissionError) return error.result;
+    throw error;
+  }
+  const payloadWithConfig = {
+    ...withResolvedConfig(payload),
+    executorMode: 'request' as const,
+    executorResponse: response.descriptor,
+  };
+
+  try {
+    if (executorCommandTemplate) {
+      requestExecutorWithTemplate(payloadWithConfig, response, {
+        ...options,
+        timeoutMs,
+        executorCommandTemplate,
+        templateVariables: {
+          command: payload.command as string,
+          task_id: generateTaskId(),
+          unix_user: options.delegatedHomeKey || undefined,
+          log_level: resolveExecutorLogLevel(
+            options.env ?? (process.env as Record<string, string>)
+          ),
+          executor_type: 'executor',
+          ...templateVariables,
+          tenant_id: tenantId,
+        },
+        logPrefix,
+      });
+    } else {
+      requestExecutorLocal(payloadWithConfig, response, { ...options, timeoutMs, logPrefix });
+    }
+  } catch {
+    response.fail({
+      success: false,
+      error: {
+        code: 'EXECUTOR_SPAWN_ERROR',
+        message: 'Executor process did not start',
+        details: { command: commandName },
+      },
+    });
+  }
+  return response.result;
 }
 
-function runExecutorCommandLocal(
+function requestExecutorLocal(
   payload: Record<string, unknown>,
+  response: ExecutorResponseReservation,
   options: RunExecutorCommandOptions
-): Promise<ExecutorCommandResult> {
-  const { logPrefix = '[Executor]', timeoutMs = 60_000 } = options;
+): void {
+  const { logPrefix = '[Executor]' } = options;
   const location = resolveLocalExecutorLocation(options);
   const cwdFailure = resolveLocalExecutorCwdFailure(location);
-  if (cwdFailure) return Promise.resolve(cwdFailure);
+  if (cwdFailure) {
+    response.fail(cwdFailure);
+    return;
+  }
   const prepared = prepareLocalExecutorSpawn(options, '--stdin', location);
   const { cmd, args, cwd, envWithDaemonUrl } = prepared;
 
+  let spawnCommand: ReturnType<typeof sandboxLocalExecutorCommand>;
+  try {
+    spawnCommand = sandboxLocalExecutorCommand(
+      payload,
+      { cmd, args, env: envWithDaemonUrl },
+      logPrefix,
+      undefined
+    );
+  } catch (error) {
+    response.fail({
+      success: false,
+      error: {
+        code: 'EXECUTOR_SPAWN_ERROR',
+        message: `Executor sandbox setup failed: ${error instanceof Error ? error.message : 'unknown error'}`,
+        details: { command: payload.command },
+      },
+    });
+    return;
+  }
+
   console.log(`${logPrefix} Running executor command: ${payload.command ?? '?'}`);
 
-  return new Promise((resolve) => {
-    let stdout = '';
-    let stderr = '';
-    let settled = false;
-
-    const child = spawn(cmd, args, {
+  let child: ChildProcess;
+  try {
+    child = spawn(spawnCommand.cmd, spawnCommand.args, {
       cwd,
-      env: { ...envWithDaemonUrl },
-      stdio: ['pipe', 'pipe', 'pipe'],
+      env: { ...spawnCommand.env },
+      stdio: ['pipe', 'pipe', 'pipe', ...(spawnCommand.inheritedFds ?? [])],
       detached: false,
     });
+  } finally {
+    for (const source of spawnCommand.ownedBindSources ?? []) source.close();
+  }
 
-    const timer = setTimeout(() => {
-      if (settled) return;
-      settled = true;
-      child.kill('SIGTERM');
-      resolve({
-        success: false,
-        error: {
-          code: 'EXECUTOR_TIMEOUT',
-          message: `Executor command timed out after ${timeoutMs}ms`,
-          details: { command: payload.command },
-        },
-      });
-    }, timeoutMs);
-
-    child.stdout?.on('data', (chunk: Buffer) => {
-      stdout += chunk.toString();
-      if (!options.sensitiveOutput) logChunkedOutput(logPrefix, 'stdout', chunk);
-    });
-
-    child.stderr?.on('data', (chunk: Buffer) => {
-      stderr += chunk.toString();
-      if (!options.sensitiveOutput) logChunkedOutput(logPrefix, 'stderr', chunk);
-    });
-
-    child.on('error', (error) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      resolve({
-        success: false,
-        error: {
-          code: 'EXECUTOR_SPAWN_ERROR',
-          message: error.message,
-          details: { command: payload.command },
-        },
-      });
-    });
-
-    const finish = (result: ExecutorCommandResult | null, code: number | null) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-
-      if (result) {
-        resolve(result);
-        return;
-      }
-
-      resolve({
-        success: false,
-        error: {
-          code: 'EXECUTOR_RESULT_MISSING',
-          message: `Executor exited with code ${code} but did not emit a JSON result`,
-          details: {
-            command: payload.command,
-            exitCode: code,
-            stderr: stderr ? '[redacted; enable executor debug logs]' : '',
-          },
-        },
-      });
-    };
-
-    settleOnExecutorResultComplete(child, () => stdout, finish);
-
-    child.stdin?.write(JSON.stringify(payload));
-    child.stdin?.end();
+  let stderrSeen = false;
+  response.setFailureCleanup(() => child.kill('SIGTERM'));
+  child.stdout?.on('data', (chunk: Buffer) => {
+    if (!options.sensitiveOutput) logChunkedOutput(logPrefix, 'stdout', chunk);
   });
+  child.stderr?.on('data', (chunk: Buffer) => {
+    stderrSeen = true;
+    if (!options.sensitiveOutput) logChunkedOutput(logPrefix, 'stderr', chunk);
+  });
+  child.stdin?.on('error', () => {
+    response.fail({
+      success: false,
+      error: { code: 'EXECUTOR_STDIN_ERROR', message: 'Executor command input failed' },
+    });
+  });
+  child.on('error', (error) => {
+    response.fail({
+      success: false,
+      error: {
+        code: 'EXECUTOR_SPAWN_ERROR',
+        message: error.message,
+        details: { command: payload.command },
+      },
+    });
+  });
+  child.on('exit', (code) => {
+    response.fail({
+      success: false,
+      error: {
+        code: 'EXECUTOR_RESULT_MISSING',
+        message: `Executor exited with code ${code} before delivering a final response`,
+        details: {
+          command: payload.command,
+          exitCode: code,
+          stderr: stderrSeen ? '[redacted; enable executor debug logs]' : '',
+        },
+      },
+    });
+  });
+
+  child.stdin?.write(JSON.stringify(payload));
+  child.stdin?.end();
 }
 
-function runExecutorCommandWithTemplate(
+function requestExecutorWithTemplate(
   payload: Record<string, unknown>,
+  response: ExecutorResponseReservation,
   options: RunExecutorCommandOptions & {
     executorCommandTemplate: string;
     templateVariables: ExecutorTemplateVariables;
   }
-): Promise<ExecutorCommandResult> {
-  const {
-    executorCommandTemplate,
-    templateVariables,
-    logPrefix = '[Executor]',
-    timeoutMs = 60_000,
-  } = options;
+): void {
+  const { executorCommandTemplate, templateVariables, logPrefix = '[Executor]' } = options;
   const logLevel = templateVariables.log_level ?? getCurrentLogLevel();
   const command = substituteTemplateVariables(executorCommandTemplate, templateVariables);
 
   console.log(`${logPrefix} Running templated executor command: ${payload.command ?? '?'}`);
 
-  return new Promise((resolve) => {
-    let stdout = '';
-    let stderr = '';
-    let settled = false;
-
-    const child = spawn('sh', ['-c', command], {
-      env: { ...process.env, LOG_LEVEL: logLevel },
-      stdio: ['pipe', 'pipe', 'pipe'],
-    });
-
-    const timer = setTimeout(() => {
-      if (settled) return;
-      settled = true;
-      child.kill('SIGTERM');
-      resolve({
-        success: false,
-        error: {
-          code: 'EXECUTOR_TIMEOUT',
-          message: `Executor command timed out after ${timeoutMs}ms`,
-          details: { command: payload.command, taskId: templateVariables.task_id },
-        },
-      });
-    }, timeoutMs);
-
-    child.stdout?.on('data', (chunk: Buffer) => {
-      stdout += chunk.toString();
-      if (!options.sensitiveOutput) logChunkedOutput(logPrefix, 'stdout', chunk);
-    });
-
-    child.stderr?.on('data', (chunk: Buffer) => {
-      stderr += chunk.toString();
-      if (!options.sensitiveOutput) logChunkedOutput(logPrefix, 'stderr', chunk);
-    });
-
-    child.on('error', (error) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      resolve({
-        success: false,
-        error: {
-          code: 'EXECUTOR_SPAWN_ERROR',
-          message: error.message,
-          details: { command: payload.command, taskId: templateVariables.task_id },
-        },
-      });
-    });
-
-    const finish = (result: ExecutorCommandResult | null, code: number | null) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-
-      if (result) {
-        resolve(result);
-        return;
-      }
-
-      resolve({
-        success: false,
-        error: {
-          code: 'EXECUTOR_RESULT_MISSING',
-          message: `Executor exited with code ${code} but did not emit a JSON result`,
-          details: {
-            command: payload.command,
-            exitCode: code,
-            stderr: stderr ? '[redacted; enable executor debug logs]' : '',
-          },
-        },
-      });
-    };
-
-    settleOnExecutorResultComplete(child, () => stdout, finish);
-
-    child.stdin?.write(JSON.stringify(payload));
-    child.stdin?.end();
+  const child = spawn('sh', ['-c', command], {
+    env: resolveTemplateLauncherEnvironment(logLevel),
+    // The authenticated response channel is the result protocol. Launcher
+    // stdout/stderr are untrusted diagnostics from a secret-bearing process
+    // and must never be relayed into daemon logs.
+    stdio: ['pipe', 'ignore', 'ignore'],
   });
+
+  response.setFailureCleanup(() => child.kill('SIGTERM'));
+  child.stdin?.on('error', () => {
+    response.fail({
+      success: false,
+      error: { code: 'EXECUTOR_STDIN_ERROR', message: 'Executor launcher input failed' },
+    });
+  });
+  child.on('error', (error) => {
+    response.fail({
+      success: false,
+      error: {
+        code: 'EXECUTOR_SPAWN_ERROR',
+        message: error.message,
+        details: { command: payload.command, taskId: templateVariables.task_id },
+      },
+    });
+  });
+  child.on('exit', (code) => {
+    // A templated launcher may exit after submitting remote work. Its exit is
+    // observed for process hygiene but is not the executor's terminal result.
+    if (code && code !== 0) {
+      console.error(`${logPrefix} Executor launcher exited with code ${code}`);
+    }
+  });
+
+  child.stdin?.write(JSON.stringify(payload));
+  child.stdin?.end();
 }
 
 export function getDaemonUrl(): string {
@@ -1300,17 +1463,17 @@ export function getDaemonUrl(): string {
 }
 
 /**
- * Create a short-lived service token for executor authentication
+ * Create a short-lived reserved service-identity token.
  *
- * This token is used by the executor to authenticate with the daemon
- * when making Feathers API calls. It's a special "service" token that
- * allows the executor to perform privileged operations.
+ * Production callers reach this low-level signer only through the explicit
+ * daemon-system and restricted-terminal wrappers below. User-triggered
+ * executors authenticate with delegated-user credentials instead.
  *
  * @param jwtSecret - The daemon's JWT secret
  * @param expiresIn - Token expiration (default: 5 minutes)
  * @returns JWT access token
  */
-export function createServiceToken(
+function createServiceToken(
   jwtSecret: string,
   expiresIn?: SignOptions['expiresIn'],
   scope: Record<string, unknown> = {}
@@ -1347,7 +1510,7 @@ export function serviceTokenScopeForCurrentTenant(): Record<string, unknown> {
 }
 
 /**
- * Generate a session token from the Feathers app
+ * Issue one reserved service-family token from the Feathers app.
  *
  * Convenience function that extracts the JWT secret from the app
  * and creates a service token.
@@ -1355,7 +1518,7 @@ export function serviceTokenScopeForCurrentTenant(): Record<string, unknown> {
  * @param app - FeathersJS application with sessionTokenService
  * @returns JWT access token
  */
-export function generateSessionToken(
+function issueReservedServiceTokenFromApp(
   app: {
     settings: { authentication?: { secret?: string } };
   },
@@ -1370,22 +1533,39 @@ export function generateSessionToken(
 }
 
 /**
- * Generate an executor service token from the same ambient tenant context used
- * to render the command template.
+ * Generate a full daemon service token for an explicit system job.
  *
- * Tenant claims are applied after extra claims so callers cannot spoof or
- * override the trusted runtime tenant.
+ * User-triggered executors must use delegated-user credentials instead. This
+ * intentionally accepts no caller-provided scope: extra JWT claims do not
+ * restrict a service account's ordinary Feathers authority.
  */
-export function generateScopedServiceToken(
+export function generateDaemonServiceToken(
   app: {
     settings: { authentication?: { secret?: string } };
   },
-  extraScope: Record<string, unknown> = {},
   expiresIn?: SignOptions['expiresIn']
 ): string {
-  return generateSessionToken(
+  return issueReservedServiceTokenFromApp(app, serviceTokenScopeForCurrentTenant(), expiresIn);
+}
+
+export interface TerminalExecutorTokenScope {
+  terminal_user_id: string;
+  terminal_id: string;
+  terminal_branch_id: string;
+  terminal_owner_boot_id: string;
+}
+
+/** Generate the separately restricted identity for one live PTY attachment. */
+export function generateTerminalExecutorToken(
+  app: {
+    settings: { authentication?: { secret?: string } };
+  },
+  scope: TerminalExecutorTokenScope,
+  expiresIn: SignOptions['expiresIn']
+): string {
+  return issueReservedServiceTokenFromApp(
     app,
-    { ...extraScope, ...serviceTokenScopeForCurrentTenant() },
+    { ...scope, ...serviceTokenScopeForCurrentTenant() },
     expiresIn
   );
 }
@@ -1398,11 +1578,16 @@ export function generateScopedServiceToken(
  * Configuration for executor spawning.
  * Loaded from ~/.agor/config.yaml execution section.
  */
-export type ExecutorConfig = Pick<AgorExecutionSettings, 'executor_command_template' | 'sandbox'>;
+export type ExecutorConfig = Pick<
+  AgorExecutionSettings,
+  'executor_command_template' | 'executor_response' | 'sandbox'
+>;
 
 interface ExecutorSpawnDefaults {
   /** Executor command template for containerized execution */
   executorCommandTemplate?: string;
+  /** Resolved bounded response transport policy. */
+  executorResponse: ResolvedExecutorResponseConfig;
   /** OS-level sandbox policy (SRT) wrapped around every local executor spawn. */
   sandbox?: AgorExecutionSettings['sandbox'];
   /** Deployment paths captured from the immutable startup configuration. */

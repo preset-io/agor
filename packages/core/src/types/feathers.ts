@@ -7,15 +7,7 @@
  * Re-exports FeathersJS types so daemon doesn't need direct dependencies.
  */
 
-import type {
-  HookContext as FeathersHookContext,
-  Id,
-  NullableId,
-  Paginated,
-  Params,
-  Service,
-  ServiceMethods,
-} from '@feathersjs/feathers';
+import type { HookContext as FeathersHookContext, Paginated, Params } from '@feathersjs/feathers';
 
 // ============================================================================
 // Re-exported FeathersJS Types (for daemon usage without direct import)
@@ -30,7 +22,14 @@ import type {
  * - Version control (core manages Feathers version)
  * - Easier mocking/testing
  */
-export type { Id, NullableId, Paginated, Params, Service, ServiceMethods };
+export type {
+  Id,
+  NullableId,
+  Paginated,
+  Params,
+  Service,
+  ServiceMethods,
+} from '@feathersjs/feathers';
 
 // ============================================================================
 // Authentication Types
@@ -51,7 +50,7 @@ export interface AuthenticatedUser {
   email: string;
   /** User role (for authorization) - always defined, defaults to 'member' */
   role: string;
-  /** True for service accounts (executor) — bypasses RBAC checks */
+  /** True only for explicit daemon service accounts — bypasses normal user RBAC checks. */
   _isServiceAccount?: boolean;
   /**
    * True for terminal-executor tokens: a RESTRICTED identity that authenticates
@@ -333,7 +332,7 @@ export interface AuthenticationResult {
   accessToken: string;
   /** Authentication metadata */
   authentication: {
-    /** Strategy used (e.g., 'local', 'jwt', 'api-key', 'session-token') */
+    /** Strategy used (e.g., 'local', 'jwt', or 'api-key') */
     strategy: string;
     /** Token (may be undefined depending on strategy) */
     accessToken?: string;

@@ -3,6 +3,7 @@ import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { BRAND, surfaceTitle } from '../branding/brand';
 import {
+  getDemoRoutePaths,
   getRouteSurface,
   isKnowledgeRoutePath,
   isWorkspaceRoutePath,
@@ -43,21 +44,22 @@ describe('surface route registry', () => {
     }
   );
 
-  it.each(['/marketplace'])('classifies %s as Marketplace', (path) => {
-    expect(getRouteSurface(path).id).toBe('marketplace');
-    expect(isWorkspaceRoutePath(path)).toBe(false);
-    // Browsing the catalog must not spin up the board/session store.
-    expect(routeStartsWorkspaceRuntime(path)).toBe(false);
-    expect(routeUsesDeviceRouter(path)).toBe(false);
-    expect(routeUsesSharedUserSettings(path)).toBe(true);
+  it.each([
+    '/catalog',
+    '/catalog/servers',
+    '/catalog/sessions',
+    '/catalog/credentials',
+    '/marketplace',
+    '/marketplace/catalog',
+    '/marketplace/servers',
+    '/marketplace/sessions',
+    '/marketplace/credentials',
+    '/catalog/extra',
+  ])('uses normal Workspace fallback for removed path %s', (path) => {
+    expect(getRouteSurface(path)).toEqual(getRouteSurface('/unknown-path'));
+    expect(routeStartsWorkspaceRuntime(path)).toBe(true);
+    expect(routeUsesDeviceRouter(path)).toBe(true);
   });
-
-  it.each(['/marketplaces', '/marketplace/extra'])(
-    'does not treat similarly prefixed path %s as Marketplace',
-    (path) => {
-      expect(getRouteSurface(path).id).toBe('workspace');
-    }
-  );
 
   it.each(['/a/artifact/fullscreen'])('classifies %s as Artifact fullscreen', (path) => {
     expect(getRouteSurface(path).id).toBe('artifact-fullscreen');
@@ -73,6 +75,11 @@ describe('surface route registry', () => {
     expect(routeStartsWorkspaceRuntime('/demo/streamdown')).toBe(false);
     expect(routeUsesDeviceRouter('/demo/streamdown')).toBe(false);
     expect(routeUsesSharedUserSettings('/demo/streamdown')).toBe(false);
+  });
+
+  it('excludes the RBAC prototype from production demo route registration', () => {
+    expect(getDemoRoutePaths(false)).not.toContain('/demo/rbac-policy');
+    expect(getDemoRoutePaths(true)).toContain('/demo/rbac-policy');
   });
 
   it.each(['/demo', '/demo/', '/demo/anything-else'])(

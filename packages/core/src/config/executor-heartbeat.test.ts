@@ -41,7 +41,7 @@ describe('resolveExecutorHeartbeatConfig', () => {
     'rejects invalid dispatch timeout %s instead of changing policy',
     (dispatch_connect_timeout_ms) => {
       expect(() => resolveDispatchConnectTimeoutMs({ dispatch_connect_timeout_ms })).toThrow(
-        'positive safe integer'
+        'safe integer between 1'
       );
     }
   );
@@ -68,7 +68,7 @@ describe('resolveSdkWatchdogConfig', () => {
     'rejects invalid %s rather than silently changing policy',
     (key) => {
       expect(() => resolveSdkWatchdogConfig({ sdk_watchdog: { [key]: 0 } })).toThrow(
-        'positive safe integer'
+        'safe integer between 1'
       );
     }
   );

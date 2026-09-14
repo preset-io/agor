@@ -109,12 +109,12 @@ describe('normalizeModelOption', () => {
 
 describe('getModelDisplayName', () => {
   it('resolves Claude ids to their friendly display name', () => {
-    expect(getModelDisplayName('claude-code', 'claude-sonnet-5')).toBe('Claude Sonnet 5 — 1M');
+    expect(getModelDisplayName('claude-code', 'claude-sonnet-5')).toBe('Claude Sonnet 5 · 1M');
   });
 
   it('annotates the 1M context variant', () => {
     expect(getModelDisplayName('claude-code', 'claude-sonnet-4-6[1m]')).toBe(
-      'Claude Sonnet 4.6 — 1M'
+      'Claude Sonnet 4.6 · 1M'
     );
   });
 

@@ -165,3 +165,13 @@
   border-radius: 0;
   padding: 0;
 }
+
+/* Collapse's motion wrapper has no semantic style prop. Carry the bounded
+   teammate flex slot through it; never affect auto-sized canvas cards or
+   override the hidden-panel display rule during collapse. */
+.agor-panel-session-tree-section > .ant-collapse-item > .ant-collapse-panel-active {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}

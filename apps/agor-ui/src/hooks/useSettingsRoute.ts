@@ -13,6 +13,7 @@ export const SETTINGS_SECTIONS = [
   'card-types',
   'cards',
   'artifacts',
+  'workspace-preferences',
   'agentic-tools',
   'gateway',
   'groups',

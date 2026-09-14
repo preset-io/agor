@@ -3,7 +3,8 @@
  *
  * Renders inline in the transcript when an agent calls
  * `agor_widgets_request_gateway_token`. Captures a gateway channel's platform
- * credentials (Slack bot/app tokens, GitHub private key, Teams app password)
+ * credentials (Slack bot/app tokens, Discord bot token, GitHub private key,
+ * Teams app password)
  * via masked inputs and submits them DIRECTLY to the daemon via the Feathers
  * client (`widgets/:widget_id/submit`) — values never flow through the agent's
  * MCP context. The daemon probes the credentials and enables the channel only
@@ -20,8 +21,8 @@
  * See `docs/internal/in-conversation-widgets-design-2026-05-19.md`.
  */
 
-import type { AgorClient, WidgetMessageMetadata } from '@agor-live/client';
-import { hasMinimumRole, ROLES } from '@agor-live/client';
+import type { AgorClient, ChannelType, WidgetMessageMetadata } from '@agor-live/client';
+import { getGatewayCredentialPresentation, hasMinimumRole, ROLES } from '@agor-live/client';
 import {
   CheckCircleOutlined,
   ExclamationCircleOutlined,
@@ -34,6 +35,7 @@ import { useMemo, useRef, useState } from 'react';
 import { useAuth } from '@/hooks';
 import { useAgorStore } from '@/store/agorStore';
 import { useThemedMessage } from '@/utils/message';
+import { sanitizeSecretValue } from '@/utils/sanitizeSecret';
 import { registerWidgetComponent, type WidgetComponentProps } from '../MessageBlock/WidgetBlock';
 
 const { Text } = Typography;
@@ -65,49 +67,22 @@ interface FieldPresentation {
   prefix?: string;
   textarea?: boolean;
 }
+function presentationFor(channelType: string, field: string): FieldPresentation {
+  return {
+    ...getGatewayCredentialPresentation(channelType as ChannelType, field),
+    textarea: field === 'private_key',
+  };
+}
 
 /**
- * Per-field display metadata. Keyed by sensitive config field name; the value
- * shapes the input's label, placeholder, and prefix hint. Slack tokens carry
- * `xoxb-`/`xapp-` prefixes we can validate client-side; PEM keys and app
- * passwords have no stable prefix to check.
+ * Normalize a field's raw input before validating/submitting. Single-line
+ * opaque secrets (bot tokens, app passwords, signing secrets) can pick up
+ * a stray space or newline from a wrapped terminal/clipboard paste, so
+ * strip whitespace everywhere. PEM keys (`textarea: true`) have structurally
+ * meaningful newlines, so those only get outer whitespace trimmed.
  */
-const FIELD_PRESENTATION: Record<string, FieldPresentation> = {
-  bot_token: {
-    label: 'Bot token',
-    placeholder: 'xoxb-…',
-    hint: 'Slack bot token, starts with xoxb-',
-    prefix: 'xoxb-',
-  },
-  app_token: {
-    label: 'App-level token',
-    placeholder: 'xapp-…',
-    hint: 'Slack app-level token for Socket Mode, starts with xapp-',
-    prefix: 'xapp-',
-  },
-  private_key: {
-    label: 'Private key',
-    placeholder: '-----BEGIN PRIVATE KEY-----',
-    hint: 'GitHub App private key (PEM)',
-    textarea: true,
-  },
-  app_password: {
-    label: 'App password',
-    placeholder: 'Teams app password',
-    hint: 'Microsoft Teams app password',
-  },
-  signing_secret: {
-    label: 'Signing secret',
-    placeholder: 'Signing secret',
-  },
-  webhook_secret: {
-    label: 'Webhook secret',
-    placeholder: 'Webhook secret',
-  },
-};
-
-function presentationFor(field: string): FieldPresentation {
-  return FIELD_PRESENTATION[field] ?? { label: field, placeholder: `Enter ${field}` };
+function normalizeFieldValue(channelType: string, field: string, value: string): string {
+  return presentationFor(channelType, field).textarea ? value.trim() : sanitizeSecretValue(value);
 }
 
 function readParams(widget: WidgetMessageMetadata): GatewayTokenParams {
@@ -143,6 +118,7 @@ const TerminalLine: React.FC<{
 };
 
 interface FieldRowProps {
+  channelType: string;
   field: string;
   value: string;
   onChange: (next: string) => void;
@@ -150,9 +126,16 @@ interface FieldRowProps {
   disabled: boolean;
 }
 
-const FieldRow: React.FC<FieldRowProps> = ({ field, value, onChange, error, disabled }) => {
+const FieldRow: React.FC<FieldRowProps> = ({
+  channelType,
+  field,
+  value,
+  onChange,
+  error,
+  disabled,
+}) => {
   const { token } = theme.useToken();
-  const presentation = presentationFor(field);
+  const presentation = presentationFor(channelType, field);
   // Secure multi-line fields (GitHub PEM) start revealed for entry, then
   // collapse once a value is committed so the raw key is never persistently
   // displayed like the masked single-line secrets.
@@ -288,12 +271,14 @@ const PendingForm: React.FC<PendingFormProps> = ({ widgetId, params, client }) =
   const validate = (): Record<string, string> => {
     const errors: Record<string, string> = {};
     for (const field of fields) {
-      const value = values[field]?.trim() ?? '';
+      const value = values[field]
+        ? normalizeFieldValue(params.channelType, field, values[field])
+        : '';
       if (!value) {
         errors[field] = 'Enter a value.';
         continue;
       }
-      const prefix = presentationFor(field).prefix;
+      const prefix = presentationFor(params.channelType, field).prefix;
       if (prefix && !value.startsWith(prefix)) {
         errors[field] = `Expected a value starting with ${prefix}.`;
       }
@@ -321,7 +306,11 @@ const PendingForm: React.FC<PendingFormProps> = ({ widgetId, params, client }) =
     setValidationMessage(null);
     setFieldErrors({});
     const tokens: Record<string, string> = {};
-    for (const field of fields) tokens[field] = values[field]?.trim() ?? '';
+    for (const field of fields) {
+      tokens[field] = values[field]
+        ? normalizeFieldValue(params.channelType, field, values[field])
+        : '';
+    }
     try {
       await post('submit', { tokens });
       setLocalResolution('submitted');
@@ -416,6 +405,7 @@ const PendingForm: React.FC<PendingFormProps> = ({ widgetId, params, client }) =
         {fields.map((field) => (
           <FieldRow
             key={field}
+            channelType={params.channelType}
             field={field}
             value={values[field] ?? ''}
             error={fieldErrors[field]}

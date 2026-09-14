@@ -149,8 +149,10 @@ is created by Agor's first-run setup; the `demo.*` users are created by
 | `demo.carol@agor.live` | `demo-password-carol` | member     | `LOAD_FIXTURES`     |
 | `demo.dave@agor.live`  | `demo-password-dave`  | viewer     | `LOAD_FIXTURES`     |
 
-> The `admin@agor.live` / `admin` default is development-only and refused when
-> `NODE_ENV=production`. Demo users exist only when `LOAD_FIXTURES` is enabled.
+> The `admin@agor.live` / `admin` default is development-only and requires
+> `NODE_ENV=development` (or `test`). It is the sole weak bootstrap exception; ordinary
+> password writes still enforce the secure daemon policy. Demo users exist only
+> when `LOAD_FIXTURES` is enabled and are validated before hashing.
 
 ### Files
 

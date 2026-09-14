@@ -2,6 +2,7 @@
  * `agor user create` - Create a new user
  */
 
+import { assertSecurePassword } from '@agor/core/config';
 import type { CreateUserInput, UserRole } from '@agor-live/client';
 import { shortId } from '@agor-live/client';
 import { Flags } from '@oclif/core';
@@ -84,8 +85,11 @@ export default class UserCreate extends BaseCommand {
           message: 'Password:',
           when: !flags.password,
           validate: (input: string) => {
-            if (!input) return 'Password is required';
-            if (input.length < 8) return 'Password must be at least 8 characters';
+            try {
+              assertSecurePassword(input);
+            } catch (error) {
+              return error instanceof Error ? error.message : String(error);
+            }
             enteredPassword = input; // Store for confirmation validation
             return true;
           },
@@ -109,6 +113,7 @@ export default class UserCreate extends BaseCommand {
       const email = flags.email || answers.email;
       const name = flags.name || answers.name;
       const password = flags.password || answers.password;
+      assertSecurePassword(password, { email });
 
       // Create user
       this.log('');

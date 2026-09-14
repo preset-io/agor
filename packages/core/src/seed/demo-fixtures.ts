@@ -40,17 +40,25 @@ import type {
   Message,
   Task,
   User,
+  UserID,
   UUID,
 } from '@agor/core/types';
-import { MessageRole, SessionStatus, TaskStatus } from '@agor/core/types';
-import bcrypt from 'bcryptjs';
+import {
+  capabilityPolicyPresetCapabilities,
+  MessageRole,
+  SessionStatus,
+  TaskStatus,
+} from '@agor/core/types';
+import { assertSecurePassword } from '../config/password-policy';
 import type { Database } from '../db/client';
-import { txAsDb } from '../db/database-wrapper';
+import { insert, txAsDb } from '../db/database-wrapper';
+import { hashLocalPassword } from '../db/password-credentials';
 import {
   ArtifactRepository,
   BoardObjectRepository,
   BoardRepository,
   BranchRepository,
+  CapabilityPolicyRepository,
   CardRepository,
   CardTypeRepository,
   MessagesRepository,
@@ -59,6 +67,8 @@ import {
   TaskRepository,
   UsersRepository,
 } from '../db/repositories';
+import { users as usersTable } from '../db/schema';
+import { userRowToUser } from '../db/user-utils';
 import { generateId } from '../lib/ids';
 
 /**
@@ -149,9 +159,6 @@ export const DEMO_USER_CREDENTIALS: ReadonlyArray<{
 /** Demo admin email — used as the terminal idempotency sentinel (see file docstring). */
 const SENTINEL_EMAIL = DEMO_USER_CREDENTIALS[0].email;
 
-/** bcrypt cost factor — matches `createUser` in db/user-utils.ts. */
-const BCRYPT_ROUNDS = 12;
-
 /**
  * Resolve the database the same way {@link seedDevFixtures} does, honoring
  * `DATABASE_URL` and `AGOR_DB_DIALECT`. Tests inject `options.db` to bypass this.
@@ -206,8 +213,11 @@ export async function loadDemoFixtures(
 
   // Pre-hash demo passwords OUTSIDE the transaction (bcrypt is CPU-bound; no
   // reason to hold the DB transaction open while hashing).
+  for (const credential of DEMO_USER_CREDENTIALS) {
+    assertSecurePassword(credential.password, { email: credential.email });
+  }
   const hashedPasswords = await Promise.all(
-    DEMO_USER_CREDENTIALS.map((c) => bcrypt.hash(c.password, BCRYPT_ROUNDS))
+    DEMO_USER_CREDENTIALS.map((credential) => hashLocalPassword(credential.password))
   );
 
   // Everything below runs in ONE transaction → all-or-nothing. Repos are bound
@@ -216,11 +226,11 @@ export async function loadDemoFixtures(
   // transaction inside this one.
   const counts = await db.transaction(async (tx) => {
     const t = txAsDb(tx);
-    const usersRepo = new UsersRepository(t);
     const cardTypeRepo = new CardTypeRepository(t);
     const repoRepo = new RepoRepository(t);
     const boardRepo = new BoardRepository(t);
     const branchRepo = new BranchRepository(t);
+    const capabilityPolicyRepo = new CapabilityPolicyRepository(t);
     const boardObjectRepo = new BoardObjectRepository(t);
     const sessionRepo = new SessionRepository(t);
     const taskRepo = new TaskRepository(t);
@@ -230,20 +240,31 @@ export async function loadDemoFixtures(
 
     // ── STEP 1: Users (bcrypt-hashed → loginable) ───────────────────────────
     console.log('1️⃣  Creating demo users...');
+    // This fixture-only raw insert is intentionally adjacent to the canonical
+    // plaintext validation above. The general UsersRepository rejects both
+    // plaintext and pre-hashed credential fields, so production/background
+    // callers cannot turn it into an alternate password-assignment seam.
     const users = await Promise.all(
-      DEMO_USER_CREDENTIALS.map((cred, i) =>
-        usersRepo.create({
-          email: cred.email,
-          name: cred.name,
-          emoji: cred.emoji,
-          role: cred.role,
-          onboarding_completed: true,
-          // usersRepo.create stores `password` verbatim; we pass a bcrypt hash so
-          // the auth layer's bcrypt.compare succeeds. Cast to surface `password`,
-          // which is intentionally absent from the public User type.
-          password: hashedPasswords[i],
-        } as Partial<User>)
-      )
+      DEMO_USER_CREDENTIALS.map(async (cred, i) => {
+        const now = new Date();
+        const row = await insert(t, usersTable)
+          .values({
+            user_id: generateId(),
+            created_at: now,
+            updated_at: now,
+            email: cred.email,
+            password: hashedPasswords[i],
+            name: cred.name,
+            emoji: cred.emoji,
+            role: cred.role,
+            onboarding_completed: true,
+            must_change_password: false,
+            data: { preferences: {} },
+          })
+          .returning()
+          .one();
+        return userRowToUser(row);
+      })
     );
     const [alice, bob, carol] = users;
 
@@ -324,9 +345,31 @@ export async function loadDemoFixtures(
       objects: initialObjects,
     });
     const boardId = board.board_id as BoardID;
-    await boardRepo.addOwner(boardId, alice.user_id);
-    if (options.userId) {
-      await boardRepo.addOwner(boardId, options.userId);
+    if (options.userId && options.userId !== alice.user_id) {
+      const current = await capabilityPolicyRepo.getBoardPolicies(boardId);
+      await capabilityPolicyRepo.replaceBoardPolicies(
+        boardId,
+        {
+          ...current,
+          board_access: {
+            ...current.board_access,
+            sharing_mode: 'shared',
+            entries: [
+              {
+                entry_id: generateId(),
+                principal: {
+                  principal_type: 'user',
+                  user_id: options.userId as UserID,
+                },
+                preset: 'manager',
+                capabilities: capabilityPolicyPresetCapabilities('board_access', 'manager')!,
+                fs_access: 'none',
+              },
+            ],
+          },
+        },
+        alice.user_id as UserID
+      );
     }
 
     // ── STEP 5: Branches (no git ops) ───────────────────────────────────────
@@ -396,9 +439,40 @@ export async function loadDemoFixtures(
         board_id: boardId,
         needs_attention: false,
       });
-      await branchRepo.addOwner(branch.branch_id, spec.creator);
-      if (options.userId) {
-        await branchRepo.addOwner(branch.branch_id, options.userId);
+      if (options.userId && options.userId !== spec.creator) {
+        const current = await capabilityPolicyRepo.getBranchPolicy(branch.branch_id);
+        const config = current.override_config;
+        if (!config) throw new Error(`Demo branch ${branch.branch_id} has no override policy`);
+        await capabilityPolicyRepo.replaceBranchPolicy(
+          branch.branch_id,
+          {
+            ...current,
+            override_config: {
+              ...config,
+              access: {
+                ...config.access,
+                sharing_mode: 'shared',
+                entries: [
+                  {
+                    entry_id: generateId(),
+                    principal: {
+                      principal_type: 'user',
+                      user_id: options.userId as UserID,
+                    },
+                    preset: 'manager',
+                    capabilities: capabilityPolicyPresetCapabilities(
+                      'branch_access',
+                      'manager',
+                      'write'
+                    )!,
+                    fs_access: 'write',
+                  },
+                ],
+              },
+            },
+          },
+          spec.creator as UserID
+        );
       }
 
       // ── STEP 6: Branch placement (board_objects row, pinned to a zone) ────

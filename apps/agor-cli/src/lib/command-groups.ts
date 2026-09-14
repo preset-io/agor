@@ -67,14 +67,14 @@ export const ROOT_COMMANDS = [
   },
   {
     name: 'open',
-    description: 'Open the connected deployment',
-    group: 'connected',
+    description: 'Open the local deployment',
+    group: 'local',
     policy: 'connection',
   },
   {
     name: 'version',
-    description: 'Show the connected daemon version',
-    group: 'connected',
+    description: 'Show the local daemon version',
+    group: 'local',
     policy: 'connection',
   },
   { name: 'board', description: 'Manage boards', group: 'connected', policy: 'connection' },

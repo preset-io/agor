@@ -1,9 +1,8 @@
-import type { SessionID } from '@agor/core/types';
-import type { AgorClient } from '@agor-live/client';
-import { sessionPath } from '@agor-live/client';
+import type { AgorClient, User } from '@agor-live/client';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { agorStore } from '../../store/agorStore';
 import { CatalogTab } from './CatalogTab';
 
 const mockNavigate = vi.hoisted(() => vi.fn());
@@ -14,6 +13,17 @@ vi.mock('react-router-dom', async () => {
 });
 
 const SESSION_ID = '019fd25a-7065-75f8-b6e6-f1963f9817d6';
+const CURRENT_USER_ID = '019fd25a-7065-75f8-b6e6-f1963f9817d7';
+const DEFAULT_ADMIN = {
+  user_id: CURRENT_USER_ID,
+  email: 'admin@agor.live',
+  role: 'admin',
+} as User;
+const REPLACEMENT_ADMIN = {
+  user_id: 'user-admin-b',
+  email: 'admin-b@agor.live',
+  role: 'admin',
+} as User;
 
 const DEEPWIKI = {
   name: 'com.deepwiki/mcp',
@@ -34,6 +44,7 @@ const LINEAR = {
   name: 'app.linear/linear',
   title: 'Linear',
   permission_disclosure: 'Reads and writes issues in the Linear workspaces you authorise.',
+  auth_type: 'oauth',
 };
 
 /**
@@ -47,7 +58,33 @@ let catalogReads: Array<Record<string, unknown> | undefined>;
 let catalogRows: (typeof DEEPWIKI)[];
 let connectCalls: Array<Record<string, unknown>>;
 let connectImpl: (data: Record<string, unknown>) => Promise<unknown>;
+let oauthStartCalls: Array<Record<string, unknown>>;
+let oauthStartImpl: (data: Record<string, unknown>) => Promise<unknown>;
 let catalogFindError: Error | null;
+let marketplaceCredentials: Array<Record<string, unknown>>;
+let oauthAttemptStatus: { status: string; mcp_server_id?: string };
+const oauthAttemptStatusRead = vi.fn<(attemptId: string) => Promise<typeof oauthAttemptStatus>>();
+
+function deferOAuthAttemptStatus() {
+  let complete!: (status: typeof oauthAttemptStatus) => void;
+  oauthAttemptStatusRead.mockReturnValue(
+    new Promise<typeof oauthAttemptStatus>((resolve) => {
+      complete = resolve;
+    })
+  );
+  return complete;
+}
+
+type OAuthCompletedListener = (event: {
+  attempt_id: string;
+  mcp_server_id: string;
+  success: boolean;
+}) => void;
+let oauthCompletedListeners: Set<OAuthCompletedListener>;
+let memberPolicyAnswer: {
+  policy: 'use_existing_only' | 'allow_private_only' | 'allow_crud';
+  can_configure: boolean;
+};
 
 function makeClient(): AgorClient {
   const service = (path: string) => {
@@ -81,15 +118,85 @@ function makeClient(): AgorClient {
         },
       };
     }
+    if (path === 'mcp-catalog/readiness') {
+      return {
+        get: async (catalogKey: string) => ({
+          catalog_key: catalogKey,
+          state:
+            catalogRows.find((entry) => entry.name === catalogKey)?.auth_type === 'oauth'
+              ? 'oauth_required'
+              : 'no_auth',
+        }),
+      };
+    }
+    if (path === 'mcp-member-policy') {
+      return { find: async () => memberPolicyAnswer };
+    }
+    if (path === 'mcp-servers/oauth-start') {
+      return {
+        create: async (data: Record<string, unknown>) => {
+          oauthStartCalls.push(data);
+          return oauthStartImpl(data);
+        },
+      };
+    }
+    if (path === 'mcp-servers/oauth-attempt-status') {
+      return { get: oauthAttemptStatusRead };
+    }
+    if (path === 'mcp-marketplace') {
+      return {
+        find: async () => ({
+          servers: marketplaceCredentials.map((credential) => ({
+            mcp_server_id: credential.mcp_server_id,
+            enabled: true,
+          })),
+          attachments: [],
+          credentials: marketplaceCredentials,
+          generated_at: new Date().toISOString(),
+        }),
+      };
+    }
+    if (path === 'mcp-servers') {
+      return { on: vi.fn(), off: vi.fn(), removeListener: vi.fn() };
+    }
     throw new Error(`unexpected service: ${path}`);
   };
-  return { service } as unknown as AgorClient;
+  return {
+    service,
+    io: {
+      on: vi.fn((event: string, listener: OAuthCompletedListener) => {
+        if (event === 'oauth:completed') oauthCompletedListeners.add(listener);
+      }),
+      off: vi.fn((event: string, listener: OAuthCompletedListener) => {
+        if (event === 'oauth:completed') oauthCompletedListeners.delete(listener);
+      }),
+    },
+  } as unknown as AgorClient;
 }
 
-function renderTab({ connected = true }: { connected?: boolean } = {}) {
+function renderTab({
+  active = true,
+  connected = true,
+  connecting = false,
+  authGeneration = 1,
+  currentUser = DEFAULT_ADMIN,
+}: {
+  active?: boolean;
+  connected?: boolean;
+  connecting?: boolean;
+  authGeneration?: number;
+  currentUser?: User | null;
+} = {}) {
   return render(
     <MemoryRouter>
-      <CatalogTab client={makeClient()} connected={connected} />
+      <CatalogTab
+        active={active}
+        client={makeClient()}
+        connected={connected}
+        connecting={connecting}
+        authGeneration={authGeneration}
+        currentUser={currentUser}
+      />
     </MemoryRouter>
   );
 }
@@ -113,28 +220,72 @@ const queryCard = (title: string) => screen.queryByLabelText(`Open ${title}`);
 
 /**
  * The open drawer. The disclosure is the one block it always renders, so it is
- * the cheap thing to wait on; the `dialog` role is then resolved once rather
- * than on every poll.
+ * the cheap thing to wait on and a stable anchor for the containing drawer.
+ * Drawer semantics have their own assertion; helpers avoid repeatedly walking
+ * the full portal and injected antd styles just to rediscover the same node.
  */
 async function findDrawer() {
-  await screen.findByText('What this can access');
-  return within(screen.getByRole('dialog'));
+  const disclosure = await screen.findByText('What this can access');
+  const drawer = disclosure.closest('[role="dialog"]');
+  if (!(drawer instanceof HTMLElement)) throw new Error('Catalog drawer not found');
+  return within(drawer);
+}
+
+async function findNoAuthConnect(drawer: Awaited<ReturnType<typeof findDrawer>>) {
+  await drawer.findByText('No account expected', undefined, { timeout: 5_000 });
+  const connect = drawer.getByText('Connect').closest('button');
+  if (!(connect instanceof HTMLButtonElement)) throw new Error('Catalog connect button not found');
+  return connect;
+}
+
+function chooseSelectOption(inputLabel: string, optionLabel: string): void {
+  const input = document.querySelector(`input[aria-label="${inputLabel}"]`);
+  if (!(input instanceof HTMLElement)) throw new Error(`${inputLabel} select not found`);
+  fireEvent.mouseDown(input);
+  fireEvent.change(input, { target: { value: optionLabel } });
+  const option = Array.from(document.querySelectorAll('.ant-select-item-option-content')).find(
+    (node) => node.textContent === optionLabel
+  );
+  if (!(option instanceof HTMLElement)) throw new Error(`${optionLabel} option not found`);
+  fireEvent.click(option);
 }
 
 beforeEach(() => {
+  agorStore.getState().reset();
   catalogReads = [];
   catalogRows = [DEEPWIKI, LINEAR];
   catalogFindError = null;
   connectCalls = [];
+  oauthStartCalls = [];
+  marketplaceCredentials = [];
+  oauthAttemptStatus = { status: 'pending', mcp_server_id: 'server-1' };
+  oauthAttemptStatusRead.mockReset().mockImplementation(async () => oauthAttemptStatus);
+  oauthCompletedListeners = new Set();
+  memberPolicyAnswer = { policy: 'allow_crud', can_configure: true };
   connectImpl = async () => ({
     mcp_server: { mcp_server_id: 'server-1' },
-    session: { session_id: SESSION_ID },
+
     starter_prompt: DEEPWIKI.starter_prompt,
     reused_existing_server: false,
   });
+  oauthStartImpl = async () => ({
+    success: true,
+    authorizationUrl: 'https://accounts.example.test/authorize',
+    attempt_id: 'attempt-1',
+  });
   mockNavigate.mockClear();
   localStorage.clear();
+  sessionStorage.clear();
+  vi.spyOn(window, 'open').mockReturnValue({
+    opener: null,
+    closed: false,
+    close: vi.fn(),
+    location: { replace: vi.fn() },
+    document: { title: '', body: { textContent: '' } },
+  } as unknown as Window);
 });
+
+afterEach(() => vi.restoreAllMocks());
 
 describe('catalog browsing', () => {
   it('renders a card per entry', async () => {
@@ -147,8 +298,18 @@ describe('catalog browsing', () => {
     expect(screen.getByRole('button', { name: 'Open Linear' })).toBeInTheDocument();
   });
 
+  it('keeps the catalog grid responsive from one to four columns', async () => {
+    renderTab();
+    const column = (await findCard('DeepWiki')).closest('.ant-col');
+
+    expect(column).toHaveClass('ant-col-xs-24');
+    expect(column).toHaveClass('ant-col-sm-12');
+    expect(column).toHaveClass('ant-col-lg-8');
+    expect(column).toHaveClass('ant-col-xxl-6');
+  });
+
   it('reads nothing until the socket can answer, and never calls that an empty catalog', async () => {
-    // The cold path: `/marketplace` as the entry URL. `client` exists from the
+    // The cold path: `/catalog` as the entry URL. `client` exists from the
     // moment the socket is being built, so a surface that fetches on its
     // presence asks an unauthenticated socket and is refused.
     const { container } = renderTab({ connected: false });
@@ -183,14 +344,14 @@ describe('catalog browsing', () => {
     const client = makeClient();
     const { rerender } = render(
       <MemoryRouter>
-        <CatalogTab client={client} connected={false} />
+        <CatalogTab client={client} connected={false} connecting={false} authGeneration={0} />
       </MemoryRouter>
     );
     expect(catalogReads).toHaveLength(0);
 
     rerender(
       <MemoryRouter>
-        <CatalogTab client={client} connected={true} />
+        <CatalogTab client={client} connected={true} connecting={false} authGeneration={1} />
       </MemoryRouter>
     );
 
@@ -265,7 +426,6 @@ describe('catalog browsing', () => {
     fireEvent.change(screen.getByRole('textbox', { name: 'Search MCP servers' }), {
       target: { value: 'deep' },
     });
-    fireEvent.click(screen.getByRole('switch', { name: /known to need an API key/i }));
 
     await waitFor(() => expect(queryCard('Linear')).not.toBeInTheDocument());
     expect(queryCard('DeepWiki')).toBeInTheDocument();
@@ -278,40 +438,26 @@ describe('catalog browsing', () => {
     await findCard('DeepWiki');
     expect(screen.queryByText(/servers match/)).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('switch', { name: /known to need an API key/i }));
-    expect(await screen.findByText('2 of 2 servers match')).toBeInTheDocument();
+    fireEvent.change(screen.getByRole('textbox', { name: 'Search MCP servers' }), {
+      target: { value: 'deep' },
+    });
+    expect(await screen.findByText('1 of 2 servers match')).toBeInTheDocument();
   });
 
-  it('keeps servers with no stated auth when hiding account-only ones', async () => {
-    // An entry the file says nothing about is still worth offering: connecting
-    // checks the endpoint. A filter that demanded `none` would hide it while
-    // the card beside it called it connectable.
+  it('offers every entry whatever auth it states, and no longer filters on it', async () => {
+    // The "Hide key-only" switch is gone with the thing it hid: an entry
+    // needing an API key is installed from the drawer like any other, so there
+    // is no unusable subset left for a filter to remove. A switch that cannot
+    // change the result set reads as a broken filter.
     catalogRows = [
-      { ...DEEPWIKI, auth_type: 'unknown' },
+      { ...DEEPWIKI, auth_type: 'credentials' },
       { ...LINEAR, auth_type: 'unknown' },
     ];
     renderTab();
-    await findCard('DeepWiki');
 
-    fireEvent.click(screen.getByRole('switch', { name: /known to need an API key/i }));
-
-    expect(await screen.findByText('2 of 2 servers match')).toBeInTheDocument();
-    expect(queryCard('DeepWiki')).toBeInTheDocument();
-    expect(screen.queryByText('No servers match')).not.toBeInTheDocument();
-  });
-
-  it('drops servers known to need an API key', async () => {
-    catalogRows = [
-      { ...DEEPWIKI, auth_type: 'unknown' },
-      { ...LINEAR, auth_type: 'credentials' },
-    ];
-    renderTab();
-    await findCard('Linear');
-
-    fireEvent.click(screen.getByRole('switch', { name: /known to need an API key/i }));
-
-    await waitFor(() => expect(queryCard('Linear')).not.toBeInTheDocument());
-    expect(queryCard('DeepWiki')).toBeInTheDocument();
+    expect(await findCard('DeepWiki')).toBeInTheDocument();
+    expect(queryCard('Linear')).toBeInTheDocument();
+    expect(screen.queryByRole('switch', { name: /API key/i })).not.toBeInTheDocument();
   });
 
   it('narrows on the keystroke, with no debounce and no round trip', async () => {
@@ -355,6 +501,47 @@ describe('catalog browsing', () => {
     expect(queryCard('DeepWiki')).toBeInTheDocument();
   });
 
+  it('combines category and capability filters over the catalog already loaded', async () => {
+    catalogRows = [
+      { ...DEEPWIKI, capabilities: ['docs', 'code-search'] },
+      {
+        ...LINEAR,
+        category: 'productivity',
+        capabilities: ['projects', 'issues'],
+      },
+      {
+        ...DEEPWIKI,
+        name: 'com.logs/mcp',
+        title: 'Logs',
+        category: 'observability',
+        capabilities: ['logs', 'alerts'],
+      },
+      {
+        ...DEEPWIKI,
+        name: 'com.metrics/mcp',
+        title: 'Metrics',
+        category: 'observability',
+        capabilities: ['metrics', 'alerts'],
+      },
+    ] as typeof catalogRows;
+    renderTab();
+    await findCard('DeepWiki');
+    const before = catalogReads.length;
+
+    fireEvent.click(screen.getByText('Observability').closest('label')!);
+    await waitFor(() => expect(queryCard('DeepWiki')).not.toBeInTheDocument());
+    expect(queryCard('Logs')).toBeInTheDocument();
+    expect(queryCard('Metrics')).toBeInTheDocument();
+    expect(screen.getByText('2 of 4 servers match')).toBeVisible();
+
+    chooseSelectOption('Filter by capability', 'Logs');
+
+    await waitFor(() => expect(queryCard('Metrics')).not.toBeInTheDocument());
+    expect(queryCard('Logs')).toBeInTheDocument();
+    expect(screen.getByText('1 of 4 servers match')).toBeVisible();
+    expect(catalogReads).toHaveLength(before);
+  });
+
   it('pages the entries it holds without reading again', async () => {
     // 30 entries is more than one 24-entry page.
     catalogRows = Array.from({ length: 30 }, (_, index) => ({
@@ -382,17 +569,135 @@ describe('connect', () => {
     return findDrawer();
   }
 
+  it('restores focus to the keyboard trigger after the drawer finishes closing', async () => {
+    renderTab();
+    const trigger = await findCard('DeepWiki');
+    trigger.focus();
+    fireEvent.keyDown(trigger, { key: 'Enter' });
+    await findDrawer();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+
+    await waitFor(() => expect(trigger).toHaveFocus());
+  });
+
+  it('closes the catalog drawer when its route tab becomes inactive', async () => {
+    const view = renderTab();
+    fireEvent.click(await findCard('DeepWiki'));
+    await findDrawer();
+
+    view.rerender(
+      <MemoryRouter>
+        <CatalogTab
+          active={false}
+          client={makeClient()}
+          connected
+          connecting={false}
+          authGeneration={1}
+          currentUser={DEFAULT_ADMIN}
+        />
+      </MemoryRouter>
+    );
+
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+  });
+
   it('shows the access disclosure expanded and blocks connect until it is acknowledged', async () => {
     const drawer = await openDrawer();
 
     expect(drawer.getByText('What this can access')).toBeVisible();
     expect(drawer.getByText(DEEPWIKI.permission_disclosure)).toBeVisible();
 
-    const connect = drawer.getByRole('button', { name: /Connect/ });
+    const connect = await findNoAuthConnect(drawer);
     expect(connect).toBeDisabled();
 
     fireEvent.click(drawer.getByRole('checkbox'));
     await waitFor(() => expect(connect).toBeEnabled());
+  });
+
+  it('erases the active entry, refusal, consent, and key across admin A -> admin B', async () => {
+    const client = makeClient();
+    const view = (currentUser: User, authGeneration: number) => (
+      <MemoryRouter>
+        <CatalogTab
+          client={client}
+          connected
+          connecting={false}
+          authGeneration={authGeneration}
+          currentUser={currentUser}
+        />
+      </MemoryRouter>
+    );
+    const rendered = render(view(DEFAULT_ADMIN, 1));
+    fireEvent.click(await findCard('DeepWiki'));
+    let drawer = await findDrawer();
+    fireEvent.click(drawer.getByRole('checkbox'));
+    const connect = await findNoAuthConnect(drawer);
+    await waitFor(() => expect(connect).toBeEnabled());
+    connectImpl = async () => {
+      throw Object.assign(new Error('Endpoint now requires a bearer token'), {
+        data: { credential_requirement: 'required' },
+      });
+    };
+    fireEvent.click(connect);
+    const keyInput = await drawer.findByPlaceholderText(/bearer access token/i);
+    fireEvent.change(keyInput, { target: { value: 'admin-a-private-key' } });
+    expect(drawer.getByText(/Endpoint now requires/)).toBeVisible();
+
+    rendered.rerender(view(REPLACEMENT_ADMIN, 2));
+
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    fireEvent.click(await findCard('DeepWiki'));
+    drawer = await findDrawer();
+    expect(drawer.getByRole('checkbox')).not.toBeChecked();
+    expect(drawer.queryByPlaceholderText(/bearer access token/i)).not.toBeInTheDocument();
+    expect(drawer.queryByText(/Endpoint now requires/)).not.toBeInTheDocument();
+    expect(await findNoAuthConnect(drawer)).toBeDisabled();
+    expect(connectCalls).toHaveLength(1);
+  });
+
+  it('does not apply an admin-A connect response after admin B replaces it', async () => {
+    let releaseConnect!: () => void;
+    const pending = new Promise<unknown>((resolve) => {
+      releaseConnect = () =>
+        resolve({
+          mcp_server: { mcp_server_id: 'server-a' },
+
+          starter_prompt: DEEPWIKI.starter_prompt,
+          reused_existing_server: false,
+        });
+    });
+    connectImpl = async () => pending;
+    const client = makeClient();
+    const view = (currentUser: User, authGeneration: number) => (
+      <MemoryRouter>
+        <CatalogTab
+          client={client}
+          connected
+          connecting={false}
+          authGeneration={authGeneration}
+          currentUser={currentUser}
+        />
+      </MemoryRouter>
+    );
+    const rendered = render(view(DEFAULT_ADMIN, 1));
+    fireEvent.click(await findCard('DeepWiki'));
+    const drawer = await findDrawer();
+    fireEvent.click(drawer.getByRole('checkbox'));
+    const connect = await findNoAuthConnect(drawer);
+    await waitFor(() => expect(connect).toBeEnabled());
+    fireEvent.click(connect);
+    await waitFor(() => expect(connectCalls).toHaveLength(1));
+
+    rendered.rerender(view(REPLACEMENT_ADMIN, 2));
+    await act(async () => {
+      releaseConnect();
+      await pending;
+    });
+
+    expect(mockNavigate).not.toHaveBeenCalled();
+    expect(localStorage.getItem(`agor-draft-${SESSION_ID}`)).toBeNull();
+    expect(localStorage.getItem(`agor-marketplace-branch:${REPLACEMENT_ADMIN.user_id}`)).toBeNull();
   });
 
   // Consent's two withdrawal rules — a different entry, and the same entry
@@ -401,42 +706,169 @@ describe('connect', () => {
   // the AntD Form and its Selects twice; the drawer takes the entry as a prop
   // and states the same invariant in one mount.
 
-  it('connects by catalog key alone and lands in the new session with the prompt loaded', async () => {
-    const drawer = await openDrawer();
-    const connect = drawer.getByRole('button', { name: /Connect/ });
+  async function connectOAuth() {
+    connectImpl = async () => ({
+      mcp_server: { mcp_server_id: 'server-1', auth: { type: 'oauth' } },
+
+      starter_prompt: LINEAR.starter_prompt,
+      reused_existing_server: false,
+    });
+    renderTab();
+    fireEvent.click(await findCard('Linear'));
+    const drawer = await findDrawer();
     fireEvent.click(drawer.getByRole('checkbox'));
+    const connect = drawer.getByRole('button', { name: 'Connect' });
     await waitFor(() => expect(connect).toBeEnabled());
+    fireEvent.click(connect);
+    expect(await drawer.findByText('Connection status: Sign-in pending.')).toBeInTheDocument();
+    return drawer;
+  }
+
+  it('keeps OAuth pending when popup navigation is the only observed signal', async () => {
+    const drawer = await connectOAuth();
+
+    expect(oauthStartCalls).toEqual([{ mcp_server_id: 'server-1' }]);
+    const popup = vi.mocked(window.open).mock.results[0]?.value as {
+      location?: { replace?: ReturnType<typeof vi.fn> };
+    };
+    expect(popup.location?.replace).toHaveBeenCalledWith('https://accounts.example.test/authorize');
+    expect(
+      screen.queryByText(
+        'Sign-in could not start automatically. Continue from MCP settings in the new session.'
+      )
+    ).not.toBeInTheDocument();
+    expect(drawer.queryByText('Connection status: Connected and ready.')).not.toBeInTheDocument();
+  });
+
+  it('requires a fresh user gesture when the live probe surprises no-auth readiness with OAuth', async () => {
+    connectImpl = async () => ({
+      mcp_server: { mcp_server_id: 'server-1', auth: { type: 'oauth' } },
+
+      starter_prompt: DEEPWIKI.starter_prompt,
+      reused_existing_server: false,
+    });
+    const drawer = await openDrawer();
+    await drawer.findByText('No account expected');
+    const connect = drawer.getByText('Connect').closest('button');
+    const checkbox = drawer
+      .getByText('I understand what this server can access')
+      .closest('label')
+      ?.querySelector('input');
+    if (!connect || !checkbox) throw new Error('Connect consent controls not found');
+    fireEvent.click(checkbox);
+    await waitFor(() => expect(connect).not.toBeDisabled());
+    vi.mocked(window.open).mockClear();
 
     fireEvent.click(connect);
+    expect(
+      await drawer.findByText('Connection status: Continue to the provider to sign in.')
+    ).toBeInTheDocument();
+    expect(drawer.getByText(/Continue sign-in now/i)).toBeInTheDocument();
+    expect(drawer.queryByText('Sign-in pending')).not.toBeInTheDocument();
+    expect(oauthStartCalls).toHaveLength(0);
+    expect(window.open).not.toHaveBeenCalled();
 
-    await waitFor(() => expect(connectCalls).toHaveLength(1));
-    expect(connectCalls[0]).toEqual({
-      catalog_key: 'com.deepwiki/mcp',
-      branch_id: 'branch-1',
-      agentic_tool: 'claude-code',
-      // The exact text the drawer rendered, so the daemon can refuse a connect
-      // that skipped the disclosure or is holding a stale one.
-      acknowledged_disclosure: DEEPWIKI.permission_disclosure,
+    const continueButton = drawer.getByText('Continue sign-in').closest('button');
+    if (!continueButton) throw new Error('Continue to provider button not found');
+    fireEvent.click(continueButton);
+    expect(await drawer.findByText('Connection status: Sign-in pending.')).toBeInTheDocument();
+    expect(window.open).toHaveBeenCalledTimes(1);
+    expect(oauthStartCalls).toEqual([{ mcp_server_id: 'server-1' }]);
+  });
+
+  it('keeps OAuth pending after a success hint until the durable grant is visible', async () => {
+    const drawer = await connectOAuth();
+
+    await act(async () => {
+      oauthCompletedListeners.forEach((listener) => {
+        listener({
+          attempt_id: 'attempt-1',
+          mcp_server_id: 'server-1',
+          success: true,
+        });
+      });
+      await Promise.resolve();
+    });
+    expect(drawer.getByText('Connection status: Sign-in pending.')).toBeInTheDocument();
+  });
+
+  it('shows OAuth success only after completion and a durable credential read agree', async () => {
+    const drawer = await connectOAuth();
+    marketplaceCredentials = [
+      {
+        mcp_server_id: 'server-1',
+        server_name: 'linear',
+        method: 'oauth',
+        status: 'active',
+      },
+    ];
+
+    await act(async () => {
+      oauthCompletedListeners.forEach((listener) => {
+        listener({
+          attempt_id: 'attempt-1',
+          mcp_server_id: 'server-1',
+          success: true,
+        });
+      });
+    });
+    expect(await drawer.findByText('Connection status: Connected and ready.')).toBeInTheDocument();
+  });
+
+  it('shows an authoritative OAuth failure without claiming the session was removed', async () => {
+    const completeAttemptRead = deferOAuthAttemptStatus();
+    const drawer = await connectOAuth();
+    await waitFor(() => expect(oauthAttemptStatusRead).toHaveBeenCalledWith('attempt-1'));
+
+    act(() =>
+      oauthCompletedListeners.forEach((listener) => {
+        listener({
+          attempt_id: 'attempt-1',
+          mcp_server_id: 'server-1',
+          success: false,
+        });
+      })
+    );
+    expect(drawer.getByText('Connection status: Sign-in pending.')).toBeInTheDocument();
+    expect(drawer.queryByText('Sign-in not completed')).not.toBeInTheDocument();
+    await act(async () => {
+      completeAttemptRead({ status: 'failed', mcp_server_id: 'server-1' });
+    });
+    expect(
+      await drawer.findByText('Connection status: Sign-in not completed.')
+    ).toBeInTheDocument();
+    expect(drawer.getByRole('button', { name: 'Start new session' })).toBeEnabled();
+  });
+
+  it('renders an ambiguous durable OAuth result as needing verification', async () => {
+    // Exercise the durable response, not a race between the next 1s poll and
+    // Testing Library's 1s wait. Realtime/popup hints remain non-authoritative.
+    const completeAttemptRead = deferOAuthAttemptStatus();
+    const drawer = await connectOAuth();
+    await waitFor(() => expect(oauthAttemptStatusRead).toHaveBeenCalledWith('attempt-1'));
+    await act(async () => {
+      completeAttemptRead({ status: 'ambiguous', mcp_server_id: 'server-1' });
     });
 
-    await waitFor(() =>
-      expect(mockNavigate).toHaveBeenCalledWith(sessionPath(SESSION_ID as SessionID))
-    );
-    expect(localStorage.getItem(`agor-draft-${SESSION_ID}`)).toBe(DEEPWIKI.starter_prompt);
+    expect(
+      await drawer.findByText('Connection status: Sign-in needs verification.')
+    ).toBeInTheDocument();
+    expect(drawer.queryByText('Sign-in not completed')).not.toBeInTheDocument();
+    expect(drawer.getByRole('button', { name: 'Start new session' })).toBeEnabled();
   });
 
   it('keeps the drawer open and reports why when connect fails', async () => {
     connectImpl = async () => {
-      throw new Error('DeepWiki requires authentication, which is not supported yet');
+      throw new Error('DeepWiki is temporarily unavailable');
     };
     const drawer = await openDrawer();
-    const connect = drawer.getByRole('button', { name: /Connect/ });
+    const connect = await findNoAuthConnect(drawer);
     fireEvent.click(drawer.getByRole('checkbox'));
     await waitFor(() => expect(connect).toBeEnabled());
 
     fireEvent.click(connect);
 
-    expect(await drawer.findByText(/requires authentication/)).toBeVisible();
+    expect(await drawer.findByText(/temporarily unavailable/)).toBeVisible();
     expect(mockNavigate).not.toHaveBeenCalled();
   });
 
@@ -453,5 +885,57 @@ describe('connect', () => {
     expect(drawer.getByText(/cannot be installed/)).toBeVisible();
     expect(drawer.queryByRole('button', { name: /Connect/ })).not.toBeInTheDocument();
     expect(drawer.queryByRole('checkbox')).not.toBeInTheDocument();
+  });
+});
+
+describe('connect capability reaches the drawer', () => {
+  const VIEWER = {
+    user_id: 'user-viewer',
+    email: 'viewer@agor.live',
+    role: 'viewer',
+  } as User;
+  const MEMBER = {
+    user_id: 'user-member',
+    email: 'member@agor.live',
+    role: 'member',
+  } as User;
+
+  async function openAndAcknowledge(currentUser: User) {
+    renderTab({ currentUser });
+    fireEvent.click(await findCard('DeepWiki'));
+    const drawer = await findDrawer();
+    fireEvent.click(drawer.getByRole('checkbox'));
+    return drawer;
+  }
+
+  it('refuses a viewer before any connect request reaches the daemon', async () => {
+    memberPolicyAnswer = { policy: 'allow_crud', can_configure: false };
+
+    const drawer = await openAndAcknowledge(VIEWER);
+    const connect = await findNoAuthConnect(drawer);
+
+    expect(connect).toBeDisabled();
+    expect(drawer.getByText(/read-only access/i)).toBeInTheDocument();
+    expect(connectCalls).toHaveLength(0);
+  });
+
+  it('refuses a member when the server says the policy is use-existing-only', async () => {
+    memberPolicyAnswer = { policy: 'use_existing_only', can_configure: false };
+
+    const drawer = await openAndAcknowledge(MEMBER);
+    const connect = await findNoAuthConnect(drawer);
+
+    expect(connect).toBeDisabled();
+    expect(drawer.getByText(/Use existing servers only/)).toBeInTheDocument();
+    expect(connectCalls).toHaveLength(0);
+  });
+
+  it('enables Connect when the server grants the member capability', async () => {
+    memberPolicyAnswer = { policy: 'allow_private_only', can_configure: true };
+
+    const drawer = await openAndAcknowledge(MEMBER);
+    const connect = await findNoAuthConnect(drawer);
+
+    expect(connect).toBeEnabled();
   });
 });

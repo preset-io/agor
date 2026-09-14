@@ -11,12 +11,14 @@
 import type { MCPCatalogEntry } from '@agor/core/types';
 import {
   CheckCircleOutlined,
+  KeyOutlined,
   LockOutlined,
   LoginOutlined,
   QuestionCircleOutlined,
 } from '@ant-design/icons';
-import { Avatar, Card, Flex, Space, Tag, Tooltip, Typography, theme } from 'antd';
+import { Card, Flex, Space, Tag, Tooltip, Typography, theme } from 'antd';
 import { memo } from 'react';
+import { CatalogEntryAvatar } from './CatalogEntryAvatar';
 import { capabilityLabel, connectStatus, entryTitle } from './catalogPresentation';
 
 const { Text, Paragraph } = Typography;
@@ -57,9 +59,7 @@ const CatalogCardInner: React.FC<CatalogCardProps> = ({ entry, onOpen }) => {
     >
       <Flex vertical gap={token.marginXS} style={{ height: '100%' }}>
         <Flex gap={token.marginSM} align="flex-start">
-          <Avatar shape="square" size={40} src={entry.icon_url} style={{ flexShrink: 0 }}>
-            {title.charAt(0).toUpperCase()}
-          </Avatar>
+          <CatalogEntryAvatar iconUrl={entry.icon_url} title={title} style={{ flexShrink: 0 }} />
           <Flex vertical style={{ minWidth: 0, flex: 1 }}>
             <Text strong ellipsis>
               {title}
@@ -95,6 +95,11 @@ const CatalogCardInner: React.FC<CatalogCardProps> = ({ entry, onOpen }) => {
               // (`MCPServerPill`), so the card and the thing it installs are
               // recognisably about the same step.
               <LoginOutlined style={{ color: token.colorTextTertiary }} />
+            ) : connect.readiness === 'api-key' ? (
+              // A key, not the padlock: the padlock is what `blocked` wears,
+              // and this entry is connectable — it just wants something from
+              // the user first.
+              <KeyOutlined style={{ color: token.colorTextTertiary }} />
             ) : connect.readiness === 'unchecked' ? (
               <QuestionCircleOutlined style={{ color: token.colorTextTertiary }} />
             ) : (

@@ -6,6 +6,8 @@ import type { AgorClient } from '../services/feathers-client.js';
 export async function resolveExecutorBranch(client: AgorClient, branchId: string): Promise<Branch> {
   const branch = await client.service('branches').get(branchId);
   if (!branch?.path) throw new Error(`Branch not found: ${branchId}`);
+  if (branch.deletion_status)
+    throw new Error('Branch permanent deletion is in progress or requires recovery');
   return branch;
 }
 

@@ -1,5 +1,5 @@
 import type { AgorClient, Group, GroupMembership, User } from '@agor-live/client';
-import { hasMinimumRole, ROLES } from '@agor-live/client';
+import { hasMinimumRole, hasRoleAuthorityOver, ROLES } from '@agor-live/client';
 import { EditOutlined, InboxOutlined, PlusOutlined, TeamOutlined } from '@ant-design/icons';
 import {
   Avatar,
@@ -186,8 +186,13 @@ export const GroupsTable: React.FC<GroupsTableProps> = ({ client, currentUser, u
     return <Typography.Text type="secondary">Only admins can manage groups.</Typography.Text>;
   }
 
+  // Superadmin authority hierarchy (#2496): you can only add/manage members you
+  // outrank, so a user you lack authority over is offered but disabled.
   const userOptions = mapToSortedArray(userById, (a, b) => a.email.localeCompare(b.email)).map(
-    toUserSelectOption
+    (user) => ({
+      ...toUserSelectOption(user),
+      disabled: !hasRoleAuthorityOver(currentUser?.role, user.role),
+    })
   );
 
   const activeGroups = [...groups].sort((a, b) => a.name.localeCompare(b.name));

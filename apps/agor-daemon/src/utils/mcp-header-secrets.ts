@@ -2,18 +2,12 @@ import { redactMCPAuthSecrets } from '@agor/core/tools/mcp/auth-secrets';
 import { redactMCPEnvSecrets } from '@agor/core/tools/mcp/env-secrets';
 import { redactMCPCustomHeaders } from '@agor/core/tools/mcp/http-headers';
 import type { MCPServer, Params } from '@agor/core/types';
-import jwt from 'jsonwebtoken';
-import {
-  type ExecutorSessionTokenPayload,
-  getExecutorSessionTokenSessionId,
-  isExecutorSessionTokenPayload,
-} from '../auth/executor-session-token.js';
+import { authenticatedTaskExecutorRuntimeScope } from '../auth/executor-runtime-scope.js';
 
 export type MCPSecretParams = Params & {
   authentication?: {
     strategy?: string;
-    accessToken?: string;
-    payload?: ExecutorSessionTokenPayload;
+    payload?: Record<string, unknown>;
   };
   user?: { role?: string; _isServiceAccount?: boolean };
   session_id?: string;
@@ -21,9 +15,9 @@ export type MCPSecretParams = Params & {
 
 export interface MCPSecretExposureOptions {
   /**
-   * Session-token auth is used by executors. Only allow it on routes that have
-   * already narrowed results to the authenticated session's attached MCP
-   * servers; never on global `/mcp-servers` reads.
+   * Executor-session auth is used by task executors. Only allow it on routes
+   * already narrowed to the verified session's attached MCP servers; never on
+   * global `/mcp-servers` reads.
    */
   allowSessionToken?: boolean;
   sessionId?: string;
@@ -33,35 +27,13 @@ export function shouldExposeMCPServerSecretsForSessionToken(
   params?: MCPSecretParams,
   options: { sessionId?: string } = {}
 ): boolean {
-  const payload = params?.authentication?.payload ?? decodeExecutorSessionPayload(params);
-  const sessionId = params?.session_id ?? getPayloadSessionId(payload);
+  const sessionId = authenticatedTaskExecutorRuntimeScope(params)?.sessionId;
   return (
     !!params?.provider &&
-    (params.authentication?.strategy === 'session-token' || payload?.type === 'executor-session') &&
     !!sessionId &&
+    (!params.session_id || params.session_id === sessionId) &&
     (!options.sessionId || sessionId === options.sessionId)
   );
-}
-
-function decodeExecutorSessionPayload(
-  params?: MCPSecretParams
-): ExecutorSessionTokenPayload | undefined {
-  if (params?.authentication?.strategy !== 'jwt' || !params.authentication.accessToken) {
-    return undefined;
-  }
-
-  const decoded = jwt.decode(params.authentication.accessToken);
-  if (!decoded || typeof decoded !== 'object' || Array.isArray(decoded)) {
-    return undefined;
-  }
-
-  if (!isExecutorSessionTokenPayload(decoded)) return undefined;
-
-  return decoded;
-}
-
-function getPayloadSessionId(payload: ExecutorSessionTokenPayload | undefined): string | undefined {
-  return payload ? getExecutorSessionTokenSessionId(payload) : undefined;
 }
 
 export function shouldExposeMCPServerSecrets(

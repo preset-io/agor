@@ -8,9 +8,30 @@ import styles from './LandingPage.module.css';
  * (infra-forward vs. relatable/outcome language) intentionally varies by
  * audience per the messaging thread; everything below the hero is shared
  * and unchanged so the test isolates the hero thesis, not the page.
+ *
+ * Exp 2 (Aug 2026) — problem-sell vs. solution-sell framing test. Each of
+ * the two Phase-1 conversion winners gained a counterpart page, so the
+ * theme is held constant while only the framing varies. Pairing:
+ * /not-alone <-> /not-alone-problem hold the collaboration theme;
+ * /costs-under-control <-> /costs-under-control-solution hold the
+ * cost / no-lock-in theme. Page column below is the /<slug> route.
+ *
+ * | Page | Variant key | Framing | Changed |
+ * | --- | --- | --- | --- |
+ * | not-alone | technical-collaboration | solution | sub-only¹ |
+ * | not-alone-problem | technical-collaboration-problem | problem | new |
+ * | costs-under-control | cost-control | problem | reframed² |
+ * | costs-under-control-solution | cost-control-solution | solution | new |
+ *
+ * ¹ headline unchanged (proven high-converting); only subheadline changed.
+ * ² reframed to vendor lock-in + spend; dropped the old "governance,
+ *   observability, model agnosticism" line.
  */
 export type HeroVariantKey =
   | 'technical-collaboration'
+  // Exp 2 framing variant — problem-sell counterpart to
+  // technical-collaboration (solution-sell), for the messaging A/B test.
+  | 'technical-collaboration-problem'
   | 'governance'
   | 'business-builders'
   | 'outcomes'
@@ -21,6 +42,9 @@ export type HeroVariantKey =
   | 'selfware'
   | 'dev-team'
   | 'cost-control'
+  // Exp 2 framing variant — solution-sell counterpart to cost-control
+  // (problem-sell), for the messaging A/B test.
+  | 'cost-control-solution'
   // Shelved (not a hit in review) — copy kept here rather than deleted so
   // it can be reinstated cheaply if wanted later. Has no routed page; add
   // back a content/agentify-everyone.mdx stub (see git history for the
@@ -43,7 +67,14 @@ export interface HeroVariant {
 export const HERO_VARIANTS: Record<HeroVariantKey, HeroVariant> = {
   'technical-collaboration': {
     headline: 'Raise a team\nof [AI teammates]',
-    subheadline: '{Build} together, {learn} together. No lonely {terminals}.',
+    subheadline: '{Build} together on a [multiplayer canvas]. No lonely {terminals}.',
+    ctaLabel: 'Start building together',
+  },
+  // Exp 2 framing variant — problem-sell counterpart to
+  // technical-collaboration (solution-sell) above.
+  'technical-collaboration-problem': {
+    headline: 'Your AI coding agents\nare working [alone]',
+    subheadline: 'Bring every session onto one [board] your whole team can see.',
     ctaLabel: 'Start building together',
   },
   governance: {
@@ -77,8 +108,15 @@ export const HERO_VARIANTS: Record<HeroVariantKey, HeroVariant> = {
     ctaLabel: 'Enable your dev team',
   },
   'cost-control': {
-    headline: 'Keep your [AI costs] under control',
-    subheadline: '{Governance}, {observability}, and {model agnosticism}.',
+    headline: 'Locked into one vendor.\n[Locked into their price.]',
+    subheadline: 'Run [any model] across multiple agents, while keeping {spend} in check.',
+    ctaLabel: 'Control your AI costs',
+  },
+  // Exp 2 framing variant — solution-sell counterpart to cost-control
+  // (problem-sell) above.
+  'cost-control-solution': {
+    headline: 'AI costs under control.\nNo [frontier lock-in].',
+    subheadline: 'Run {Claude}, {Codex}, {Gemini} & {Copilot}. Switch models anytime.',
     ctaLabel: 'Control your AI costs',
   },
   // Shelved — see HeroVariantKey comment above. Not routed to a live page.

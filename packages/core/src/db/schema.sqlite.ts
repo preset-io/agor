@@ -8,6 +8,7 @@
 import type {
   AgorGrants,
   AgorRuntimeConfig,
+  BranchEnvironmentInstance,
   CodexApprovalPolicy,
   CodexSandboxMode,
   EffortLevel,
@@ -23,6 +24,7 @@ import { relations, sql } from 'drizzle-orm';
 import {
   type AnySQLiteColumn,
   blob,
+  check,
   index,
   integer,
   primaryKey,
@@ -61,6 +63,15 @@ export const sessions = sqliteTable(
     // NEVER changes, even if user's unix_username changes later
     // This ensures SDK session data remains accessible in the original home directory
     unix_username: text('unix_username'),
+
+    // Immutable SDK-state boundary. Existing sessions keep using their
+    // historical execution home; only newly admitted sessions may use the
+    // branch-owned SDK home.
+    sdk_home_scope: text('sdk_home_scope', {
+      enum: ['execution_home', 'branch'],
+    })
+      .notNull()
+      .default('execution_home'),
 
     // Materialized for filtering/joins (cross-DB compatible)
     status: text('status', {
@@ -111,6 +122,14 @@ export const sessions = sqliteTable(
     // migration; new occurrences remain NULL until initialization, retention,
     // and schedule metadata are durable.
     scheduler_init_completed_at: t.timestamp('scheduler_init_completed_at'),
+    // Durable diagnosis/retry state for an admitted occurrence that could not
+    // finish initialization. A failure code with no retry timestamp is a
+    // deliberate permanent terminal diagnosis; retryable failures carry the
+    // next database-visible attempt time.
+    scheduler_init_failure_code: text('scheduler_init_failure_code'),
+    scheduler_init_failure_stage: text('scheduler_init_failure_stage'),
+    scheduler_init_attempt_count: integer('scheduler_init_attempt_count').notNull().default(0),
+    scheduler_init_retry_at: t.timestamp('scheduler_init_retry_at'),
 
     // UI state (materialized for efficient highlighting queries)
     ready_for_prompt: t.bool('ready_for_prompt').notNull().default(false),
@@ -205,6 +224,7 @@ export const sessions = sqliteTable(
     boardIdx: index('sessions_board_idx').on(table.board_id),
     branchIdx: index('sessions_branch_idx').on(table.branch_id),
     createdIdx: index('sessions_created_idx').on(table.created_at),
+    archivedUpdatedIdx: index('sessions_archived_updated_idx').on(table.archived, table.updated_at),
     parentIdx: index('sessions_parent_idx').on(table.parent_session_id),
     forkedIdx: index('sessions_forked_idx').on(table.forked_from_session_id),
     // Scheduler indexes — including the partial unique index below.
@@ -224,7 +244,7 @@ export const sessions = sqliteTable(
     schedulerInitPendingIdx: index('sessions_scheduler_init_pending_idx')
       .on(table.created_at, table.session_id)
       .where(
-        sql`${table.scheduled_from_branch} = true AND ${table.scheduled_run_at} IS NOT NULL AND ${table.scheduler_init_completed_at} IS NULL`
+        sql`${table.scheduled_from_branch} = true AND ${table.scheduled_run_at} IS NOT NULL AND ${table.scheduler_init_completed_at} IS NULL AND (${table.scheduler_init_failure_code} IS NULL OR ${table.scheduler_init_retry_at} IS NOT NULL)`
       ),
   })
 );
@@ -318,6 +338,9 @@ export const tasks = sqliteTable(
     // User attribution
     created_by: text('created_by', { length: 36 }).notNull(),
 
+    // Indexed due-work projection for bounded Slack MCP recovery repair.
+    mcp_slack_recovery_due_at: t.timestamp('mcp_slack_recovery_due_at'),
+
     data: t
       .json<unknown>('data')
       .$type<{
@@ -357,6 +380,12 @@ export const tasks = sqliteTable(
         sdk_failure?: Task['sdk_failure'];
         termination_request?: Task['termination_request'];
         sdk_watchdog_mode?: Task['sdk_watchdog_mode'];
+        /**
+         * Immutable filesystem authority projected when this executor was
+         * launched. Internal repository fact; deliberately omitted from the
+         * public Task DTO and never accepted from executor writes.
+         */
+        executor_launch_fs_access_floor?: import('@agor/core/types').CapabilityPolicyFsAccess;
       }>()
       .notNull(),
   },
@@ -365,6 +394,9 @@ export const tasks = sqliteTable(
     sessionTaskIdIdx: index('tasks_session_task_id_idx').on(table.session_id, table.task_id),
     statusIdx: index('tasks_status_idx').on(table.status),
     createdIdx: index('tasks_created_idx').on(table.created_at),
+    mcpSlackRecoveryDueIdx: index('tasks_mcp_slack_recovery_due_idx')
+      .on(table.mcp_slack_recovery_due_at, table.task_id)
+      .where(sql`${table.mcp_slack_recovery_due_at} IS NOT NULL`),
     queueIdx: index('tasks_queue_idx').on(table.session_id, table.status, table.queue_position),
     runtimeDispatchIdx: index('tasks_runtime_dispatch_idx')
       .on(table.started_at, table.task_id)
@@ -536,6 +568,9 @@ export const boards = sqliteTable(
 
     // User attribution
     created_by: text('created_by', { length: 36 }).notNull(),
+    // User deletion guards are a separate lifecycle flow; this immutable
+    // logical owner pointer intentionally does not cascade or transfer.
+    primary_owner_user_id: text('primary_owner_user_id', { length: 36 }).notNull(),
 
     // Materialized for lookups
     name: text('name').notNull(),
@@ -564,7 +599,6 @@ export const boards = sqliteTable(
         access_mode?: 'private' | 'shared';
         default_others_can?: import('@agor/core/types').BranchPermissionLevel;
         default_others_fs_access?: 'none' | 'read' | 'write';
-        default_dangerously_allow_session_sharing?: boolean;
         color?: string;
         icon?: string;
         background_color?: string; // Background color for the board canvas
@@ -686,6 +720,7 @@ export const branches = sqliteTable(
 
     // User attribution
     created_by: text('created_by', { length: 36 }).notNull(),
+    primary_owner_user_id: text('primary_owner_user_id', { length: 36 }).notNull(),
 
     // Materialized for queries
     name: text('name').notNull(), // "feat-auth", "main"
@@ -729,11 +764,20 @@ export const branches = sqliteTable(
     archived: t.bool('archived').notNull().default(false),
     archived_at: t.timestamp('archived_at'),
     archived_by: text('archived_by', { length: 36 }),
+    // Permanent deletion retains this row and its authority through partial failure.
+    deletion_status: text('deletion_status', { enum: ['deleting', 'deletion_failed'] }),
+    deletion_error: text('deletion_error'),
+    deletion_updated_at: t.timestamp('deletion_updated_at'),
+
     filesystem_status: text('filesystem_status', {
       enum: ['creating', 'ready', 'failed', 'preserved', 'cleaned', 'deleted'],
     }),
 
     // RBAC: App-layer permissions (rbac.md)
+    permission_binding: text('permission_binding', { enum: ['inherit', 'override'] })
+      .$type<'inherit' | 'override'>()
+      .notNull()
+      .default('override'),
     permission_source: text('permission_source', { enum: ['board', 'override'] })
       .$type<'board' | 'override'>()
       .notNull()
@@ -765,15 +809,29 @@ export const branches = sqliteTable(
     // a non-null clone_depth on worktree-mode rows.
     clone_depth: integer('clone_depth'),
 
+    // Per-branch SDK home intent (design §9.2). NULL = inherit today's behavior
+    // (no branch SDK home). 'per_branch' = this branch has its own relocated SDK
+    // home under `branch-homes/<branchId>`. Stored as an intent enum, NOT a path
+    // — the path is derived from branch_id by a single resolver (getBranchHomePath)
+    // so it cannot drift or be injected. Sticky once set: the value here — not
+    // the live `execution.sandbox.sdk_home_mode` flag — governs whether an
+    // existing branch keeps its home (design §8B.3). No CHECK constraint (SQLite
+    // enum extension would force a table rebuild); validated at the app layer.
+    sdk_home: text('sdk_home', { enum: ['per_branch'] }).$type<'per_branch'>(),
+
     // JSON blob for everything else
     data: t
       .json<unknown>('data')
       .$type<{
         // File system
+        // Daemon-private shared maintenance authority. Never accept through generic patches.
+        maintenance?: import('../types/branch-deletion').BranchMaintenanceClaim;
+        maintenance_generation?: number;
         path: string; // Absolute path to branch directory
 
         // Git state (current)
         base_ref?: string; // Branch this diverged from (e.g., "main")
+        base_remote_url?: string; // Optional remote that owns base_ref
         base_sha?: string; // SHA at branch creation
         last_commit_sha?: string; // Latest commit
         tracking_branch?: string; // Remote tracking branch
@@ -786,24 +844,7 @@ export const branches = sqliteTable(
         error_message?: string; // Error details when filesystem_status is 'failed'
 
         // Environment instance (runtime state only, no variables)
-        environment_instance?: {
-          status: 'stopped' | 'starting' | 'running' | 'stopping' | 'error';
-          process?: {
-            pid?: number;
-            started_at?: string;
-            uptime?: string;
-          };
-          last_health_check?: {
-            timestamp: string;
-            status: 'healthy' | 'unhealthy' | 'unknown';
-            message?: string;
-          };
-          access_urls?: Array<{
-            name: string;
-            url: string;
-          }>;
-          logs?: string[];
-        };
+        environment_instance?: BranchEnvironmentInstance;
 
         last_used: string; // ISO timestamp
 
@@ -814,14 +855,13 @@ export const branches = sqliteTable(
         mcp_server_ids?: string[];
 
         // DANGEROUS: opt-in to legacy session-spawn identity borrowing.
-        // When true, agor_sessions_spawn / agor_sessions_prompt(mode:"fork"|"subsession")
-        // attribute the new child session to the parent owner instead of the
-        // MCP-authenticated caller. See packages/core/src/types/branch.ts.
-        dangerously_allow_session_sharing?: boolean;
       }>()
       .notNull(),
   },
   (table) => ({
+    deletionDiscoveryIdx: index('branches_deletion_discovery_idx')
+      .on(table.branch_id)
+      .where(sql`${table.deletion_status} = 'deleting'`),
     repoIdx: index('branches_repo_idx').on(table.repo_id),
     nameIdx: index('branches_name_idx').on(table.name),
     refIdx: index('branches_ref_idx').on(table.ref),
@@ -835,6 +875,10 @@ export const branches = sqliteTable(
     ),
     // Composite unique constraint (repo + name)
     uniqueRepoName: index('branches_repo_name_unique').on(table.repo_id, table.name),
+    permissionBindingCheck: check(
+      'branches_permission_binding_check',
+      sql`${table.permission_binding} IN ('inherit','override')`
+    ),
   })
 );
 
@@ -976,7 +1020,7 @@ export const users = sqliteTable(
       .notNull()
       .default('member'),
 
-    // Opaque execution-home key (optional, app-enforced tenant uniqueness)
+    // Opaque execution-home key (optional, database-enforced uniqueness)
     unix_username: text('unix_username'),
 
     // Absolute host home dir used as the per-user sandbox overlay SOURCE under
@@ -989,6 +1033,9 @@ export const users = sqliteTable(
 
     // Force password change flag (admin-settable, auto-cleared on password change)
     must_change_password: t.bool('must_change_password').notNull().default(false),
+
+    // Monotonic local-credential generation copied into interactive JWTs.
+    credential_generation: integer('credential_generation').notNull().default(0),
 
     // Auth invalidation marker. Password changes set this timestamp so any
     // previously issued browser access or refresh token is rejected.
@@ -1039,6 +1086,7 @@ export const users = sqliteTable(
           opencode?: Record<string, never>;
         };
         agentic_auth_methods?: import('../types/user').AgenticAuthMethods;
+        agentic_credential_sources?: import('../types/user').AgenticCredentialSources;
         // Encrypted environment variables with scope metadata.
         //
         // Two stored value shapes are tolerated on read:
@@ -1107,6 +1155,8 @@ export const users = sqliteTable(
             permissionMode?: string;
           };
         };
+        primary_agentic_tool?: import('../types/agentic-tool').AgenticToolName;
+        primary_teammate_id?: import('../types/id').BranchID;
         default_mcp_server_ids?: string[];
         default_agentic_selection?: import('../types/user').UserAgenticDefaultSelections;
       }>()
@@ -1114,6 +1164,37 @@ export const users = sqliteTable(
   },
   (table) => ({
     emailIdx: index('users_email_idx').on(table.email),
+    executionHomeUnique: uniqueIndex('users_unix_username_unique').on(table.unix_username),
+  })
+);
+
+/**
+ * Database-enforced binding between one trusted external subject and its local
+ * user projection. SQLite is single-tenant, so identity_key is globally unique.
+ */
+export const userExternalIdentities = sqliteTable(
+  'user_external_identities',
+  {
+    identity_key: text('identity_key', { length: 64 }).primaryKey(),
+    user_id: text('user_id', { length: 36 })
+      .notNull()
+      .references(() => users.user_id, { onDelete: 'cascade' }),
+    provider: text('provider').notNull(),
+    issuer: text('issuer').notNull(),
+    subject: text('subject').notNull(),
+    email: text('email'),
+    name: text('name'),
+    last_login_at: t.timestamp('last_login_at').notNull(),
+    created_at: t.timestamp('created_at').notNull(),
+    updated_at: t.timestamp('updated_at').notNull(),
+  },
+  (table) => ({
+    providerSubjectUnique: uniqueIndex('user_external_identities_provider_subject_unique').on(
+      table.provider,
+      table.issuer,
+      table.subject
+    ),
+    userIdx: index('user_external_identities_user_idx').on(table.user_id),
   })
 );
 
@@ -1160,6 +1241,179 @@ export const groupMemberships = sqliteTable(
   (table) => ({
     pk: primaryKey({ columns: [table.group_id, table.user_id] }),
     userIdx: index('group_memberships_user_idx').on(table.user_id),
+  })
+);
+
+/** Board visibility/management policy. Branch defaults are stored separately. */
+export const boardAccessPolicies = sqliteTable(
+  'board_access_policies',
+  {
+    board_id: text('board_id', { length: 36 })
+      .primaryKey()
+      .references(() => boards.board_id, { onDelete: 'cascade' }),
+    schema_version: integer('schema_version').notNull().default(1),
+    sharing_mode: text('sharing_mode', { enum: ['private', 'shared'] }).notNull(),
+    others_role: text('others_role', { enum: ['none', 'viewer', 'editor', 'manager'] })
+      .notNull()
+      .default('none'),
+    revision: integer('revision').notNull().default(1),
+    updated_by: text('updated_by', { length: 36 }).references(() => users.user_id, {
+      onDelete: 'set null',
+    }),
+    created_at: t.timestamp('created_at').notNull(),
+    updated_at: t.timestamp('updated_at').notNull(),
+  },
+  (table) => ({
+    updatedIdx: index('board_access_policies_updated_idx').on(table.updated_at),
+    sharingModeCheck: check(
+      'board_access_policies_sharing_mode_check',
+      sql`${table.sharing_mode} IN ('private','shared')`
+    ),
+    othersRoleCheck: check(
+      'board_access_policies_others_role_check',
+      sql`${table.others_role} IN ('none','viewer','editor','manager')`
+    ),
+  })
+);
+
+/** One normalized user or group entry in a board policy. */
+export const boardAccessEntries = sqliteTable(
+  'board_access_entries',
+  {
+    entry_id: text('entry_id', { length: 36 }).primaryKey(),
+    board_id: text('board_id', { length: 36 })
+      .notNull()
+      .references(() => boardAccessPolicies.board_id, { onDelete: 'cascade' }),
+    user_id: text('user_id', { length: 36 }).references(() => users.user_id, {
+      onDelete: 'cascade',
+    }),
+    group_id: text('group_id', { length: 36 }).references(() => groups.group_id, {
+      onDelete: 'cascade',
+    }),
+    role: text('role', { enum: ['none', 'viewer', 'editor', 'manager'] }).notNull(),
+    created_at: t.timestamp('created_at').notNull(),
+    updated_at: t.timestamp('updated_at').notNull(),
+  },
+  (table) => ({
+    boardIdx: index('board_access_entries_board_idx').on(table.board_id),
+    userIdx: index('board_access_entries_user_idx').on(table.user_id, table.board_id),
+    groupIdx: index('board_access_entries_group_idx').on(table.group_id, table.board_id),
+    boardUserUnique: uniqueIndex('board_access_entries_board_user_unique').on(
+      table.board_id,
+      table.user_id
+    ),
+    boardGroupUnique: uniqueIndex('board_access_entries_board_group_unique').on(
+      table.board_id,
+      table.group_id
+    ),
+    roleCheck: check(
+      'board_access_entries_role_check',
+      sql`${table.role} IN ('none','viewer','editor','manager')`
+    ),
+    principalCheck: check(
+      'board_access_entries_principal_check',
+      sql`(${table.user_id} IS NOT NULL) <> (${table.group_id} IS NOT NULL)`
+    ),
+  })
+);
+
+/** Complete board branch-template or branch-override permission package. */
+export const branchPermissionConfigs = sqliteTable(
+  'branch_permission_configs',
+  {
+    config_id: text('config_id', { length: 36 }).primaryKey(),
+    board_id: text('board_id', { length: 36 }).references(() => boards.board_id, {
+      onDelete: 'cascade',
+    }),
+    branch_id: text('branch_id', { length: 36 }).references(() => branches.branch_id, {
+      onDelete: 'cascade',
+    }),
+    schema_version: integer('schema_version').notNull().default(1),
+    sharing_mode: text('sharing_mode', { enum: ['private', 'shared'] }).notNull(),
+    others_role: text('others_role', {
+      enum: ['none', 'viewer', 'collaborator', 'manager'],
+    })
+      .notNull()
+      .default('none'),
+    others_fs_access: text('others_fs_access', { enum: ['none', 'read', 'write'] })
+      .notNull()
+      .default('none'),
+    allow_shared_session_prompts: t.bool('allow_shared_session_prompts').notNull().default(false),
+    revision: integer('revision').notNull().default(1),
+    updated_by: text('updated_by', { length: 36 }).references(() => users.user_id, {
+      onDelete: 'set null',
+    }),
+    created_at: t.timestamp('created_at').notNull(),
+    updated_at: t.timestamp('updated_at').notNull(),
+  },
+  (table) => ({
+    boardUnique: uniqueIndex('branch_permission_configs_board_unique').on(table.board_id),
+    branchUnique: uniqueIndex('branch_permission_configs_branch_unique').on(table.branch_id),
+    updatedIdx: index('branch_permission_configs_updated_idx').on(table.updated_at),
+    sharingModeCheck: check(
+      'branch_permission_configs_sharing_mode_check',
+      sql`${table.sharing_mode} IN ('private','shared')`
+    ),
+    othersFsAccessCheck: check(
+      'branch_permission_configs_others_fs_access_check',
+      sql`${table.others_fs_access} IN ('none','read','write')`
+    ),
+    othersRoleCheck: check(
+      'branch_permission_configs_others_role_check',
+      sql`${table.others_role} IN ('none','viewer','collaborator','manager')`
+    ),
+    targetCheck: check(
+      'branch_permission_configs_target_check',
+      sql`(${table.board_id} IS NOT NULL) <> (${table.branch_id} IS NOT NULL)`
+    ),
+  })
+);
+
+/** One normalized user or group entry in a branch permission package. */
+export const branchPermissionEntries = sqliteTable(
+  'branch_permission_entries',
+  {
+    entry_id: text('entry_id', { length: 36 }).primaryKey(),
+    config_id: text('config_id', { length: 36 })
+      .notNull()
+      .references(() => branchPermissionConfigs.config_id, { onDelete: 'cascade' }),
+    user_id: text('user_id', { length: 36 }).references(() => users.user_id, {
+      onDelete: 'cascade',
+    }),
+    group_id: text('group_id', { length: 36 }).references(() => groups.group_id, {
+      onDelete: 'cascade',
+    }),
+    role: text('role', { enum: ['none', 'viewer', 'collaborator', 'manager'] }).notNull(),
+    fs_access: text('fs_access', { enum: ['none', 'read', 'write'] })
+      .notNull()
+      .default('none'),
+    created_at: t.timestamp('created_at').notNull(),
+    updated_at: t.timestamp('updated_at').notNull(),
+  },
+  (table) => ({
+    configIdx: index('branch_permission_entries_config_idx').on(table.config_id),
+    userIdx: index('branch_permission_entries_user_idx').on(table.user_id, table.config_id),
+    groupIdx: index('branch_permission_entries_group_idx').on(table.group_id, table.config_id),
+    configUserUnique: uniqueIndex('branch_permission_entries_config_user_unique').on(
+      table.config_id,
+      table.user_id
+    ),
+    configGroupUnique: uniqueIndex('branch_permission_entries_config_group_unique').on(
+      table.config_id,
+      table.group_id
+    ),
+    fsAccessCheck: check(
+      'branch_permission_entries_fs_access_check',
+      sql`${table.fs_access} IN ('none','read','write')`
+    ),
+    roleCheck: check(
+      'branch_permission_entries_role_check',
+      sql`${table.role} IN ('none','viewer','collaborator','manager')`
+    ),
+    principalCheck: check(
+      'branch_permission_entries_principal_check',
+      sql`(${table.user_id} IS NOT NULL) <> (${table.group_id} IS NOT NULL)`
+    ),
   })
 );
 
@@ -1339,6 +1593,7 @@ export const mcpServers = sqliteTable(
     source: text('source', {
       enum: ['user', 'imported', 'agor', 'catalog'],
     }).notNull(),
+    catalog_entry_name: text('catalog_entry_name'),
 
     // JSON blob for configuration and capabilities
     data: t
@@ -1350,6 +1605,9 @@ export const mcpServers = sqliteTable(
         // Catalog entry this server was installed from, by the registry name
         // that outlives the entry row.
         catalog_entry_name?: string;
+
+        // Daemon-owned optimistic-concurrency revision for public edits.
+        config_version?: number;
 
         // Transport config
         command?: string;
@@ -1386,23 +1644,25 @@ export const mcpServers = sqliteTable(
         // Discovered capabilities
         tools?: Array<{
           name: string;
-          description: string;
+          description?: string;
           input_schema?: Record<string, unknown>; // Optional - not all MCP servers provide schemas
         }>;
         resources?: Array<{
           uri: string;
           name: string;
+          description?: string;
           mimeType?: string;
         }>;
         prompts?: Array<{
           name: string;
-          description: string;
+          description?: string;
           arguments?: Array<{
             name: string;
-            description: string;
+            description?: string;
             required?: boolean;
           }>;
         }>;
+        capabilities_discovered_at?: string;
 
         // Tool permissions configuration
         tool_permissions?: Record<string, 'ask' | 'allow' | 'deny'>;
@@ -1414,6 +1674,9 @@ export const mcpServers = sqliteTable(
     scopeIdx: index('mcp_servers_scope_idx').on(table.scope),
     ownerIdx: index('mcp_servers_owner_idx').on(table.owner_user_id),
     enabledIdx: index('mcp_servers_enabled_idx').on(table.enabled),
+    catalogOwnerUq: uniqueIndex('mcp_servers_catalog_owner_uq')
+      .on(sql`coalesce(${table.owner_user_id}, '')`, table.catalog_entry_name)
+      .where(sql`${table.source} = 'catalog' AND ${table.catalog_entry_name} IS NOT NULL`),
   })
 );
 
@@ -1655,6 +1918,11 @@ export const userMcpOauthTokens = sqliteTable(
     mcp_server_id: text('mcp_server_id', { length: 36 })
       .notNull()
       .references(() => mcpServers.mcp_server_id, { onDelete: 'cascade' }),
+    // Trusted flow/caller attribution, independent of the shared NULL subject
+    // and server ownership. Hard deletion retires the local grant via CASCADE.
+    granted_by_user_id: text('granted_by_user_id', { length: 36 })
+      .notNull()
+      .references(() => users.user_id, { onDelete: 'cascade' }),
     oauth_access_token: text('oauth_access_token').notNull(),
     oauth_token_expires_at: t.timestamp('oauth_token_expires_at'), // Unix timestamp in milliseconds
     oauth_refresh_token: text('oauth_refresh_token'),
@@ -1680,6 +1948,11 @@ export const userMcpOauthTokens = sqliteTable(
     updated_at: t.timestamp('updated_at'),
   },
   (table) => ({
+    consenterSubjectCheck: check(
+      'user_mcp_oauth_tokens_consenter_subject_check',
+      sql`${table.user_id} IS NULL OR ${table.user_id} = ${table.granted_by_user_id}`
+    ),
+    grantedByIdx: index('user_mcp_oauth_tokens_granted_by_idx').on(table.granted_by_user_id),
     // Composite lookup indexes. Uniqueness enforced via partial unique indexes
     // created in the migration (one for per-user rows, one for the shared row).
     pk: index('user_mcp_oauth_tokens_pk').on(table.user_id, table.mcp_server_id),
@@ -1737,6 +2010,119 @@ export const mcpOauthPendingFlows = sqliteTable(
       table.grant_generation
     ),
     maintenanceIdx: index('mcp_oauth_pending_flows_maintenance_idx').on(
+      table.status,
+      table.expires_at,
+      table.exchange_started_at,
+      table.finished_at
+    ),
+  })
+);
+
+/**
+ * Schema mirror for PostgreSQL Claude subscription OAuth attempt authority.
+ *
+ * Standalone SQLite deliberately keeps its existing process-local sign-in state;
+ * this table is unused at runtime and exists for cross-dialect compatibility.
+ */
+export const claudeOauthAttempts = sqliteTable(
+  'claude_oauth_attempts',
+  {
+    attempt_id: text('attempt_id', { length: 36 }).primaryKey(),
+    state_hash: text('state_hash', { length: 64 }).notNull(),
+    user_id: text('user_id', { length: 36 })
+      .notNull()
+      .references(() => users.user_id, { onDelete: 'cascade' }),
+    attempt_generation: integer('attempt_generation').notNull(),
+    envelope_version: integer('envelope_version').notNull(),
+    is_current: integer('is_current', { mode: 'boolean' }).notNull().default(true),
+    status: text('status', {
+      enum: ['pending', 'exchanging', 'persisting', 'succeeded', 'failed', 'ambiguous', 'expired'],
+    })
+      .notNull()
+      .default('pending'),
+    sealed_material: text('sealed_material'),
+    exchange_claim_id: text('exchange_claim_id', { length: 36 }),
+    failure_code: text('failure_code'),
+    subscription_type: text('subscription_type'),
+    created_at: t.timestamp('created_at').notNull(),
+    updated_at: t.timestamp('updated_at').notNull(),
+    expires_at: t.timestamp('expires_at').notNull(),
+    exchange_started_at: t.timestamp('exchange_started_at'),
+    finished_at: t.timestamp('finished_at'),
+  },
+  (table) => ({
+    stateHashUnique: uniqueIndex('claude_oauth_attempts_state_hash_unique').on(table.state_hash),
+    userIdx: index('claude_oauth_attempts_user_idx').on(table.user_id, table.created_at),
+    currentUserUnique: uniqueIndex('claude_oauth_attempts_current_user_uq')
+      .on(table.user_id)
+      .where(sql`${table.is_current} = 1`),
+    maintenanceIdx: index('claude_oauth_attempts_maintenance_idx').on(
+      table.status,
+      table.expires_at,
+      table.exchange_started_at,
+      table.finished_at
+    ),
+  })
+);
+
+/**
+ * Cross-dialect schema mirror. Standalone SQLite continues to use the simple
+ * process-local Codex device flow; durable polling authority is HA/PostgreSQL-only.
+ */
+export const codexDeviceAuthAttempts = sqliteTable(
+  'codex_device_auth_attempts',
+  {
+    attempt_id: text('attempt_id', { length: 36 }).primaryKey(),
+    user_id: text('user_id', { length: 36 })
+      .notNull()
+      .references(() => users.user_id, { onDelete: 'cascade' }),
+    attempt_generation: integer('attempt_generation').notNull(),
+    envelope_version: integer('envelope_version').notNull(),
+    is_current: integer('is_current', { mode: 'boolean' }).notNull().default(true),
+    status: text('status', {
+      enum: [
+        'starting',
+        'pending',
+        'exchanging',
+        'persisting',
+        'succeeded',
+        'unavailable',
+        'denied',
+        'failed',
+        'ambiguous',
+        'expired',
+        'superseded',
+        'cancelled',
+      ],
+    })
+      .notNull()
+      .default('starting'),
+    sealed_material: text('sealed_material'),
+    poll_interval_ms: integer('poll_interval_ms'),
+    poll_next_at: t.timestamp('poll_next_at'),
+    poll_claim_id: text('poll_claim_id', { length: 36 }),
+    poll_claim_generation: integer('poll_claim_generation').notNull().default(0),
+    poll_lease_expires_at: t.timestamp('poll_lease_expires_at'),
+    exchange_claim_id: text('exchange_claim_id', { length: 36 }),
+    failure_code: text('failure_code'),
+    plan_type: text('plan_type'),
+    created_at: t.timestamp('created_at').notNull(),
+    updated_at: t.timestamp('updated_at').notNull(),
+    expires_at: t.timestamp('expires_at').notNull(),
+    exchange_started_at: t.timestamp('exchange_started_at'),
+    finished_at: t.timestamp('finished_at'),
+  },
+  (table) => ({
+    currentUserUnique: uniqueIndex('codex_device_auth_attempts_current_user_uq')
+      .on(table.user_id)
+      .where(sql`${table.is_current} = 1`),
+    userIdx: index('codex_device_auth_attempts_user_idx').on(table.user_id, table.created_at),
+    pollIdx: index('codex_device_auth_attempts_poll_idx').on(
+      table.status,
+      table.poll_next_at,
+      table.poll_lease_expires_at
+    ),
+    maintenanceIdx: index('codex_device_auth_attempts_maintenance_idx').on(
       table.status,
       table.expires_at,
       table.exchange_started_at,
@@ -1900,7 +2286,9 @@ export const gatewayChannels = sqliteTable(
     target_branch_id: text('target_branch_id', { length: 36 })
       .notNull()
       .references(() => branches.branch_id, { onDelete: 'cascade' }),
-    agor_user_id: text('agor_user_id', { length: 36 }).notNull(),
+    agor_user_id: text('agor_user_id', { length: 36 }),
+    provider_installation_id: text('provider_installation_id'),
+    provider_config_generation: integer('provider_config_generation').notNull().default(1),
     channel_key: text('channel_key').notNull().unique(),
     enabled: t.bool('enabled').notNull().default(true),
     last_message_at: t.timestamp('last_message_at'),
@@ -1933,6 +2321,11 @@ export const gatewayChannels = sqliteTable(
       table.agentic_tool_preset_id
     ),
     enabledTypeIdx: index('idx_gateway_enabled_type').on(table.enabled, table.channel_type),
+    discordInstallationUnique: uniqueIndex('gateway_channels_discord_installation_unique')
+      .on(table.channel_type, table.provider_installation_id)
+      .where(
+        sql`${table.channel_type} = 'discord' AND ${table.enabled} = 1 AND ${table.provider_installation_id} IS NOT NULL`
+      ),
     listenerLeaseIdx: index('gateway_channels_listener_lease_idx').on(
       table.enabled,
       table.listener_lease_expires_at,
@@ -2012,6 +2405,9 @@ export const threadSessionMap = sqliteTable(
 
     // JSON blob for extra metadata
     metadata: t.json<Record<string, unknown>>('metadata'),
+
+    // Durable Discord catch-up cursor. Provider history itself is never stored.
+    discord_last_admitted_message_id: text('discord_last_admitted_message_id'),
   },
   (table) => ({
     uniqueChannelThread: uniqueIndex('uniq_thread_map_channel_thread').on(
@@ -2021,6 +2417,61 @@ export const threadSessionMap = sqliteTable(
     sessionIdx: index('idx_thread_map_session_id').on(table.session_id),
     threadIdx: index('idx_thread_map_thread_id').on(table.thread_id),
     channelStatusIdx: index('idx_thread_map_channel_status').on(table.channel_id, table.status),
+  })
+);
+
+/** Standalone SQLite mirror of the narrow Discord final-delivery intent. */
+export const discordMessageDeliveries = sqliteTable(
+  'discord_message_deliveries',
+  {
+    delivery_id: text('delivery_id', { length: 36 }).primaryKey(),
+    created_at: t.timestamp('created_at').notNull(),
+    updated_at: t.timestamp('updated_at').notNull(),
+    message_id: text('message_id', { length: 36 })
+      .notNull()
+      .references(() => messages.message_id, { onDelete: 'cascade' }),
+    gateway_channel_id: text('gateway_channel_id', { length: 36 })
+      .notNull()
+      .references(() => gatewayChannels.id, { onDelete: 'cascade' }),
+    thread_session_map_id: text('thread_session_map_id', { length: 36 })
+      .notNull()
+      .references(() => threadSessionMap.id, { onDelete: 'cascade' }),
+    provider_installation_id: text('provider_installation_id').notNull(),
+    provider_config_generation: integer('provider_config_generation').notNull(),
+    status: text('status', {
+      enum: ['pending', 'processing', 'completed', 'canceled', 'dead_letter'],
+    })
+      .notNull()
+      .default('pending'),
+    attempt_count: integer('attempt_count').notNull().default(0),
+    next_attempt_at: t.timestamp('next_attempt_at').notNull(),
+    claim_token: text('claim_token'),
+    claim_expires_at: t.timestamp('claim_expires_at'),
+    claim_generation: integer('claim_generation').notNull().default(0),
+    ambiguous_chunk_index: integer('ambiguous_chunk_index'),
+    effect_started_at: t.timestamp('effect_started_at'),
+    effect_recovery_grace_until: t.timestamp('effect_recovery_grace_until'),
+    chunk_receipts: t
+      .json<import('../types/gateway').DiscordMessageDeliveryChunkReceipt[]>('chunk_receipts')
+      .notNull(),
+    reply_aliases: t.json<string[]>('reply_aliases').notNull(),
+    last_error_code: text('last_error_code'),
+    completed_at: t.timestamp('completed_at'),
+    canceled_at: t.timestamp('canceled_at'),
+    dead_lettered_at: t.timestamp('dead_lettered_at'),
+  },
+  (table) => ({
+    messageUnique: uniqueIndex('discord_message_deliveries_message_unique').on(table.message_id),
+    dueIdx: index('discord_message_deliveries_due_idx').on(
+      table.status,
+      table.next_attempt_at,
+      table.delivery_id
+    ),
+    claimIdx: index('discord_message_deliveries_claim_idx').on(
+      table.status,
+      table.claim_expires_at,
+      table.delivery_id
+    ),
   })
 );
 
@@ -2572,6 +3023,8 @@ export type ScheduleRow = typeof schedules.$inferSelect;
 export type ScheduleInsert = typeof schedules.$inferInsert;
 export type UserRow = typeof users.$inferSelect;
 export type UserInsert = typeof users.$inferInsert;
+export type UserExternalIdentityRow = typeof userExternalIdentities.$inferSelect;
+export type UserExternalIdentityInsert = typeof userExternalIdentities.$inferInsert;
 export type AppVariableRow = typeof appVariables.$inferSelect;
 export type AppVariableInsert = typeof appVariables.$inferInsert;
 export type AgenticToolPresetRow = typeof agenticToolPresets.$inferSelect;
@@ -2580,6 +3033,10 @@ export type GroupRow = typeof groups.$inferSelect;
 export type GroupInsert = typeof groups.$inferInsert;
 export type GroupMembershipRow = typeof groupMemberships.$inferSelect;
 export type GroupMembershipInsert = typeof groupMemberships.$inferInsert;
+export type BoardAccessPolicyRow = typeof boardAccessPolicies.$inferSelect;
+export type BoardAccessEntryRow = typeof boardAccessEntries.$inferSelect;
+export type BranchPermissionConfigRow = typeof branchPermissionConfigs.$inferSelect;
+export type BranchPermissionEntryRow = typeof branchPermissionEntries.$inferSelect;
 export type BranchGroupGrantRow = typeof branchGroupGrants.$inferSelect;
 export type BoardGroupGrantRow = typeof boardGroupGrants.$inferSelect;
 export type BoardOwnerRow = typeof boardOwners.$inferSelect;
@@ -2594,6 +3051,10 @@ export type UserMCPOAuthTokenRow = typeof userMcpOauthTokens.$inferSelect;
 export type UserMCPOAuthTokenInsert = typeof userMcpOauthTokens.$inferInsert;
 export type MCPOAuthPendingFlowRow = typeof mcpOauthPendingFlows.$inferSelect;
 export type MCPOAuthPendingFlowInsert = typeof mcpOauthPendingFlows.$inferInsert;
+export type ClaudeOAuthAttemptRow = typeof claudeOauthAttempts.$inferSelect;
+export type ClaudeOAuthAttemptInsert = typeof claudeOauthAttempts.$inferInsert;
+export type CodexDeviceAuthAttemptRow = typeof codexDeviceAuthAttempts.$inferSelect;
+export type CodexDeviceAuthAttemptInsert = typeof codexDeviceAuthAttempts.$inferInsert;
 export type CardTypeRow = typeof cardTypes.$inferSelect;
 export type CardTypeInsert = typeof cardTypes.$inferInsert;
 export type CardRow = typeof cards.$inferSelect;
@@ -2606,6 +3067,8 @@ export type GatewayChannelRow = typeof gatewayChannels.$inferSelect;
 export type GatewayChannelInsert = typeof gatewayChannels.$inferInsert;
 export type ThreadSessionMapRow = typeof threadSessionMap.$inferSelect;
 export type ThreadSessionMapInsert = typeof threadSessionMap.$inferInsert;
+export type DiscordMessageDeliveryRow = typeof discordMessageDeliveries.$inferSelect;
+export type DiscordMessageDeliveryInsert = typeof discordMessageDeliveries.$inferInsert;
 export type GatewayOutboundMessageRow = typeof gatewayOutboundMessages.$inferSelect;
 export type GatewayOutboundMessageInsert = typeof gatewayOutboundMessages.$inferInsert;
 export type GatewayInboundEventRow = typeof gatewayInboundEvents.$inferSelect;

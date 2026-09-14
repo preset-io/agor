@@ -5,8 +5,10 @@ import {
   DeleteOutlined,
   InfoCircleOutlined,
 } from '@ant-design/icons';
-import { Button, Input, Space, Tooltip, Typography, theme } from 'antd';
-import { useState } from 'react';
+import { Alert, Button, Input, Space, Tooltip, Typography, theme } from 'antd';
+import { useLayoutEffect, useState } from 'react';
+import { useAuthorityOperationGuard } from '@/hooks/useAuthorityOperationGuard';
+import { sanitizeSecretValue } from '@/utils/sanitizeSecret';
 import { ClaudeSubscriptionTokenInstructions } from './ClaudeSubscriptionTokenInstructions';
 import { FIELD_WIDTHS } from './SettingsModal/panelPrimitives';
 import { Tag } from './Tag';
@@ -170,6 +172,10 @@ export interface ApiKeyFieldsProps {
    * where the exact path matters.
    */
   publicValues?: Partial<Record<AgenticToolConfigField, string>>;
+  /** Erases raw drafts only when the caller identity/role changes. */
+  identityKey: string | null;
+  /** Cancels async continuations on reconnect/token/authority changes. */
+  operationScope: readonly unknown[] | null;
 }
 
 export const ApiKeyFields: React.FC<ApiKeyFieldsProps> = ({
@@ -181,20 +187,67 @@ export const ApiKeyFields: React.FC<ApiKeyFieldsProps> = ({
   disabled = false,
   fields,
   publicValues,
+  identityKey,
+  operationScope,
 }) => {
   const { token } = theme.useToken();
   const [inputValues, setInputValues] = useState<Partial<Record<AgenticToolConfigField, string>>>(
     {}
   );
+  const operationGuard = useAuthorityOperationGuard(operationScope);
+  const [fieldErrors, setFieldErrors] = useState<Partial<Record<AgenticToolConfigField, string>>>(
+    {}
+  );
+
+  // biome-ignore lint/correctness/useExhaustiveDependencies: identityKey is the caller-private draft lifecycle key
+  useLayoutEffect(() => {
+    setInputValues({});
+    setFieldErrors({});
+  }, [identityKey]);
 
   const configs = fields ?? TOOL_FIELD_CONFIGS[tool] ?? [];
 
   const handleSave = async (field: AgenticToolConfigField) => {
-    const value = inputValues[field]?.trim();
-    if (!value) return;
+    const operation = operationGuard.begin();
+    const raw = inputValues[field];
+    // Non-secret fields (base URLs) only need outer whitespace trimmed.
+    // Secret fields (API keys, OAuth tokens) can pick up an embedded space
+    // or newline when pasted from a terminal that soft-wrapped the value
+    // (e.g. `claude setup-token` output), so strip whitespace everywhere.
+    const config = configs.find((c) => c.field === field);
+    const value = raw ? (config?.type === 'text' ? raw.trim() : sanitizeSecretValue(raw)) : '';
+    if (!value || !operation.isCurrent()) return;
 
-    await onSave(field, value);
-    setInputValues((prev) => ({ ...prev, [field]: '' }));
+    setFieldErrors((previous) => ({ ...previous, [field]: undefined }));
+    try {
+      await onSave(field, value);
+      if (!operation.isCurrent()) return;
+      setInputValues((previous) =>
+        previous[field] === raw ? { ...previous, [field]: '' } : previous
+      );
+    } catch {
+      if (!operation.isCurrent()) return;
+      // Never echo provider/server errors here: they can contain credential values.
+      setFieldErrors((previous) => ({
+        ...previous,
+        [field]: 'Could not save this field. Please try again.',
+      }));
+    }
+  };
+
+  const handleClear = async (field: AgenticToolConfigField) => {
+    const operation = operationGuard.begin();
+    if (!operation.isCurrent()) return;
+    setFieldErrors((previous) => ({ ...previous, [field]: undefined }));
+    try {
+      await onClear(field);
+    } catch {
+      if (!operation.isCurrent()) return;
+      setFieldErrors((previous) => ({
+        ...previous,
+        [field]: 'Could not clear this field. Please try again.',
+      }));
+    }
   };
 
   const renderField = (config: AgenticToolFieldConfig) => {
@@ -252,9 +305,9 @@ export const ApiKeyFields: React.FC<ApiKeyFieldsProps> = ({
               <Button
                 danger
                 icon={<DeleteOutlined />}
-                onClick={() => onClear(field)}
+                onClick={() => void handleClear(field)}
                 loading={saving[field]}
-                disabled={disabled}
+                disabled={disabled || saving[field]}
               >
                 Clear
               </Button>
@@ -267,19 +320,20 @@ export const ApiKeyFields: React.FC<ApiKeyFieldsProps> = ({
                 onChange={(e) => setInputValues((prev) => ({ ...prev, [field]: e.target.value }))}
                 onPressEnter={() => handleSave(field)}
                 style={{ flex: 1 }}
-                disabled={disabled}
+                disabled={disabled || saving[field]}
               />
               <Button
                 type="primary"
                 onClick={() => handleSave(field)}
                 loading={saving[field]}
-                disabled={disabled || !inputValues[field]?.trim()}
+                disabled={disabled || saving[field] || !inputValues[field]?.trim()}
               >
                 Save
               </Button>
             </Space.Compact>
           )}
 
+          {fieldErrors[field] && <Alert type="error" showIcon title={fieldErrors[field]} />}
           {docUrl && (
             <Text type="secondary" style={{ fontSize: token.fontSizeSM }}>
               Get your key at:{' '}

@@ -5,13 +5,11 @@ import type {
   BranchArchiveOrDeleteOptions,
   Repo,
   SpawnConfig,
-  User,
 } from '@agor-live/client';
 import { getTeammateConfig, isTeammate } from '@agor-live/client';
 import { LeftOutlined, RobotOutlined } from '@ant-design/icons';
 import {
   Alert,
-  App as AntApp,
   Badge,
   Button,
   Empty,
@@ -35,6 +33,7 @@ import {
   selectUserById,
 } from '../../store/selectors';
 import { mapToArray } from '../../utils/mapHelpers';
+import { useThemedMessage } from '../../utils/message';
 import { BranchSessionSections } from '../BranchCard';
 import { BranchHeaderPill } from '../BranchHeaderPill';
 import { BoardBranchList, BoardSessionList } from '../BranchListDrawer';
@@ -44,33 +43,6 @@ import { CommentsPanel } from '../CommentsPanel';
 import { MarkdownRenderer } from '../MarkdownRenderer';
 
 export type BoardTeammatePanelTab = 'teammate' | 'all-sessions' | 'all-branches' | 'comments';
-
-/**
- * Outcome of the branch-owners lookup. A successful empty list is deliberately
- * distinct from a failed one: the former means "no explicit owners, so the
- * creator owns it", the latter means ownership is simply unknown.
- */
-type OwnersState =
-  | { status: 'unresolved' }
-  | { status: 'resolved'; owners: User[] }
-  | { status: 'creator-fallback' }
-  | { status: 'failed' };
-
-// Frozen singletons so setting the same outcome twice is a state no-op and the
-// derived owner list keeps a stable identity for the panel's memo bailout.
-const OWNERS_UNRESOLVED: OwnersState = { status: 'unresolved' };
-const OWNERS_CREATOR_FALLBACK: OwnersState = { status: 'creator-fallback' };
-const OWNERS_FAILED: OwnersState = { status: 'failed' };
-const NO_OWNERS: User[] = [];
-
-/**
- * The owners route is only registered when branch RBAC is enabled, so a 404 is
- * a configuration answer rather than a failure. Mirrors the Settings modal.
- */
-function isOwnersRouteUnavailable(error: unknown): boolean {
-  const { code, message } = (error ?? {}) as { code?: unknown; message?: unknown };
-  return code === 404 || (typeof message === 'string' && message.includes('not found'));
-}
 
 interface BoardTeammatePanelProps {
   board: Board | null;
@@ -139,7 +111,7 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
   client,
 }) => {
   const { token } = theme.useToken();
-  const { message } = AntApp.useApp();
+  const { showError, showSuccess } = useThemedMessage();
   // Subscribe to entity maps by slice from the store: each selector only wakes
   // this panel when its own slice changes.
   const sessionsByBranch = useAgorStore(selectSessionsByBranch);
@@ -210,76 +182,13 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
     }
   }, [defaultTab, board?.board_id, isControlled, onTabChange]);
 
-  // Depend on the branch's identifying primitives rather than the branch object:
-  // the store hands out a fresh Branch on every row patch, which would re-fire
-  // the request on churn unrelated to ownership.
-  const teammateBranchId = primaryTeammateBranch?.branch_id;
-  const teammateCreatedBy = primaryTeammateBranch?.created_by;
-
-  const [ownersState, setOwnersState] = useState<OwnersState>(OWNERS_UNRESOLVED);
-  useEffect(() => {
-    if (!client || !teammateBranchId) {
-      setOwnersState(OWNERS_UNRESOLVED);
-      return;
-    }
-
-    // Drop the previous branch's owners immediately: keeping them on screen
-    // until the new request lands attributes one branch to another's owner.
-    setOwnersState(OWNERS_UNRESOLVED);
-
-    let cancelled = false;
-    const service = client.service('branches/:id/owners');
-
-    const load = () => {
-      service
-        .find({ route: { id: teammateBranchId } })
-        .then((response) => {
-          if (cancelled) return;
-          const owners = response as User[];
-          // A branch predating RBAC has no branch_owners rows at all. Settings
-          // seeds the creator as the owner in exactly that case, so mirror it
-          // instead of rendering an ownerless branch on one surface only.
-          setOwnersState(
-            owners.length > 0 ? { status: 'resolved', owners } : OWNERS_CREATOR_FALLBACK
-          );
-        })
-        .catch((error: unknown) => {
-          if (cancelled) return;
-          if (isOwnersRouteUnavailable(error)) {
-            // RBAC is off, so the route is unregistered and created_by is the
-            // only ownership signal the deployment has.
-            setOwnersState(OWNERS_CREATOR_FALLBACK);
-            return;
-          }
-          // Ownership is unknown after a real failure. Naming the creator here
-          // would render confidently wrong attribution off a transport error.
-          console.warn('Failed to load branch owners:', error);
-          setOwnersState(OWNERS_FAILED);
-        });
-    };
-
-    load();
-
-    // Owner edits never patch the branch row, so this branch-scoped route is
-    // the only signal the panel gets. The payload is a bare User carrying no
-    // branch id, so any owner change the socket can see triggers a refetch.
-    service.on('created', load);
-    service.on('removed', load);
-    return () => {
-      cancelled = true;
-      service.off('created', load);
-      service.off('removed', load);
-    };
-  }, [client, teammateBranchId]);
-
-  // Resolve owners for render rather than inside the effect, so a user map that
-  // hydrates after the response still names the creator without a refetch.
   const branchOwners = useMemo(() => {
-    if (ownersState.status === 'resolved') return ownersState.owners;
-    if (ownersState.status !== 'creator-fallback' || !teammateCreatedBy) return NO_OWNERS;
-    const creator = userById.get(teammateCreatedBy);
-    return creator ? [creator] : NO_OWNERS;
-  }, [ownersState, teammateCreatedBy, userById]);
+    const ownerId =
+      primaryTeammateBranch?.primary_owner_user_id ?? primaryTeammateBranch?.created_by;
+    if (!ownerId) return [];
+    const owner = userById.get(ownerId);
+    return owner ? [owner] : [];
+  }, [primaryTeammateBranch?.primary_owner_user_id, primaryTeammateBranch?.created_by, userById]);
 
   const teammateOptions = useMemo(() => {
     if (primaryTeammateBranch || primaryTeammateInaccessible) return [];
@@ -325,18 +234,15 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
 
     setAssigningTeammate(true);
     try {
-      if (teammate.board_id !== board.board_id) {
-        await client.service('branches').patch(selectedTeammateId, {
-          board_id: board.board_id,
-        });
-      }
+      // The server performs any board move and assignment atomically through
+      // the same branch relocation path used by BranchModal Save.
       await client.service('boards').setPrimaryTeammate({
         boardId: board.board_id,
         branchId: selectedTeammateId,
       });
-      message.success('Teammate assigned');
+      showSuccess('Teammate assigned');
     } catch (error) {
-      message.error(
+      showError(
         `Failed to assign teammate: ${error instanceof Error ? error.message : String(error)}`
       );
     } finally {
@@ -357,12 +263,21 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
       const isCreating = primaryTeammateBranch.filesystem_status === 'creating';
 
       return (
-        <div style={{ padding: 16 }}>
+        <div
+          style={{
+            padding: 16,
+            height: '100%',
+            boxSizing: 'border-box',
+            display: 'flex',
+            flexDirection: 'column',
+          }}
+        >
           <div
             style={{
               display: 'flex',
               flexDirection: 'column',
               gap: 10,
+              flexShrink: 0,
               paddingBottom: 12,
               marginBottom: 4,
               borderBottom: `1px solid ${token.colorBorderSecondary}`,
@@ -440,6 +355,7 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
               onSpawnSession={onSpawnSession}
               onOpenSessionSettings={onOpenSessionSettings}
               mode="panel"
+              fillAvailableHeight
               client={client}
             />
           ) : (
@@ -534,11 +450,7 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
           {
             key: 'teammate',
             label: 'Teammate',
-            children: (
-              <div style={{ height: 'calc(100vh - 112px)', overflow: 'auto' }}>
-                {teammateContent}
-              </div>
-            ),
+            children: <div style={{ height: '100%', overflow: 'auto' }}>{teammateContent}</div>,
           },
           {
             key: 'all-sessions',
@@ -620,6 +532,7 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
           },
         ]}
         style={{ height: '100%' }}
+        styles={{ body: { height: '100%' }, content: { height: '100%' } }}
         tabBarStyle={{ margin: 0, padding: '0 12px' }}
         tabBarExtraContent={{
           right: onCollapse ? (

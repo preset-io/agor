@@ -19,7 +19,7 @@ import { TaskStatus } from '@agor/core/types';
 import type { Application, TasksServiceImpl } from '../declarations.js';
 import { getTrackedExecutor } from '../executor-tracking.js';
 import { requestExecutorTermination } from '../termination-coordinator.js';
-import { createFreshTenantWriteDatabaseRunner } from '../utils/tenant-db-scope.js';
+import { withFreshTenantWrite } from '../utils/tenant-db-scope.js';
 
 export const EXECUTOR_HEARTBEAT_LOST_MESSAGE =
   'Executor heartbeat lost; the executor may have crashed or disconnected.';
@@ -31,6 +31,8 @@ interface RuntimeCandidate extends TaskRuntimeDiscoveryRef {
 }
 
 export interface TaskRuntimeReconcilerOptions {
+  /** Bounded, independently owned maintenance observation; shares this scheduler only. */
+  observeMaintenance?: () => Promise<void>;
   app: Application;
   db: TenantScopeAwareDatabase;
   config: ResolvedExecutorHeartbeatConfig;
@@ -124,6 +126,15 @@ export class TaskRuntimeReconciler {
 
   private async runLoopIteration(): Promise<void> {
     const stats = await this.checkOnce();
+    try {
+      await this.options.observeMaintenance?.();
+    } catch (error) {
+      console.warn(
+        '[runtime-reconcile] maintenance observation failed',
+        error instanceof Error ? error.name : 'unknown'
+      );
+      stats.failures += 1;
+    }
     if (this.stopped) return;
     let delay: number;
     if (stats.saturated) {
@@ -231,7 +242,7 @@ export class TaskRuntimeReconciler {
     tenantId: TenantID | string,
     work: () => Promise<T>
   ): Promise<T> {
-    return createFreshTenantWriteDatabaseRunner(this.options.db, tenantId)(work);
+    return withFreshTenantWrite(this.options.db, tenantId, work);
   }
 
   private async reconcileDispatchTimeout(

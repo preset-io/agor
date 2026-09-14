@@ -125,6 +125,12 @@ describe('standalone pending flows expire when taken, not only when swept', () =
 describe('MCP caller floor wiring', () => {
   const source = codeOf(join(__dirname, 'register-services.ts'));
 
+  it('never publishes caller-private OAuth browser reservation tokens', () => {
+    expect(source).toContain(
+      "app.service('mcp-servers/oauth-browser-reservations').publish?.(() => []);"
+    );
+  });
+
   it('applies the floor from the shipped registration helper', () => {
     expect(source).toContain('registerMcpCapabilityRoleFloor(app)');
   });
@@ -149,15 +155,17 @@ describe('MCP caller floor wiring', () => {
     }
   });
 
-  it('re-checks the flow initiator ahead of the durable-only branch', () => {
+  it('re-checks the flow initiator ahead of SQLite and durable server authority', () => {
     // The callback gap was not the check being absent but unreachable: it sat
     // behind `if (!record) return`, which is every SQLite deployment.
     const guardAt = source.indexOf('const assertPendingFlowStillAuthorized');
-    const body = source.slice(guardAt, guardAt + 1200);
+    const body = source.slice(guardAt, guardAt + 5000);
     const initiatorAt = body.indexOf('assertFlowInitiatorStillEntitled(');
-    const durableReturnAt = body.indexOf('if (!record) return;');
+    const localAuthorityAt = body.indexOf('if (!record) {');
     expect(initiatorAt).toBeGreaterThan(-1);
-    expect(durableReturnAt).toBeGreaterThan(-1);
-    expect(initiatorAt).toBeLessThan(durableReturnAt);
+    expect(localAuthorityAt).toBeGreaterThan(-1);
+    expect(initiatorAt).toBeLessThan(localAuthorityAt);
+    expect(body).toContain('savedServerAuthority');
+    expect(body).toContain('localGrantBinding');
   });
 });

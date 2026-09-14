@@ -7,7 +7,8 @@
 
 import { createHash } from 'node:crypto';
 import type { MCPAuth } from '../../types/mcp';
-import { safeOutboundFetch } from '../../utils/safe-outbound-fetch';
+import { type OutboundDnsLookup, safeOutboundFetch } from '../../utils/safe-outbound-fetch';
+import { asMCPExternalError } from './external-error';
 import { fetchOAuthToken, inferOAuthTokenUrl } from './oauth-auth';
 
 interface JWTConfig {
@@ -30,11 +31,16 @@ export interface JWTTokenFetchOptions {
   cacheNamespace?: string;
   /** PostgreSQL/hosted callers disable process-local bearer caching. */
   cache?: boolean;
+  /** Optional live request authority for secret-bearing provider work. */
+  assertCurrent?: () => void | Promise<void>;
+  /** Optional narrower fence invoked by safeOutboundFetch only at physical dispatch. */
+  assertBeforeDispatch?: () => void | Promise<void>;
+  /** Injectable DNS boundary for deterministic authority-race tests. */
+  resolveDns?: OutboundDnsLookup;
 }
 
 // Cache tokens per unique credential set to avoid cross-tenant leakage
 const tokenCache = new Map<string, CachedToken>();
-
 // Token validity duration: 15 minutes (in milliseconds)
 const TOKEN_TTL_MS = 15 * 60 * 1000;
 
@@ -63,6 +69,7 @@ export async function fetchJWTToken(
   config: JWTConfig,
   options: JWTTokenFetchOptions = {}
 ): Promise<string> {
+  await options.assertCurrent?.();
   const { api_url, api_token, api_secret } = config;
   const shouldCache = options.cache !== false;
   const cacheKey = getCacheKey(config, options.cacheNamespace ?? '<standalone>');
@@ -70,42 +77,55 @@ export async function fetchJWTToken(
   // Check cache first
   const cached = shouldCache ? tokenCache.get(cacheKey) : undefined;
   if (cached && cached.expiresAt > Date.now()) {
+    await options.assertCurrent?.();
     return cached.token;
   }
 
   // Fetch new token
-  const response = await safeOutboundFetch(api_url, {
-    method: 'POST',
-    redirect: 'error',
-    timeoutMs: 15_000,
-    maxResponseBytes: 256 * 1024,
-    allowLocalhostHttp: options.allowLocalhostHttp ?? true,
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      name: api_token,
-      secret: api_secret,
-    }),
-  });
+  let response: Response;
+  try {
+    response = await safeOutboundFetch(api_url, {
+      method: 'POST',
+      redirect: 'error',
+      timeoutMs: 15_000,
+      maxResponseBytes: 256 * 1024,
+      allowLocalhostHttp: options.allowLocalhostHttp ?? true,
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        name: api_token,
+        secret: api_secret,
+      }),
+      assertCurrent: options.assertBeforeDispatch ?? options.assertCurrent,
+      resolveDns: options.resolveDns,
+    });
+  } catch (error) {
+    // Network/TLS libraries may reflect the endpoint or request values. Keep
+    // their exception entirely behind the closed MCP error boundary.
+    await options.assertCurrent?.();
+    throw asMCPExternalError(error, { stage: 'jwt' });
+  }
 
   if (!response.ok) {
     // Provider bodies frequently contain secrets or reflected internal data.
     // Emit only a stable category and status.
-    throw new Error(`JWT token fetch failed (provider_rejected, status=${response.status})`);
+    throw asMCPExternalError(undefined, { stage: 'jwt', category: 'provider_rejected' });
   }
 
   let data: { access_token?: string; payload?: { access_token?: string } };
   try {
     data = (await response.json()) as typeof data;
   } catch {
-    throw new Error('JWT token fetch failed (invalid_response)');
+    await options.assertCurrent?.();
+    throw asMCPExternalError(undefined, { stage: 'jwt', category: 'invalid_response' });
   }
+  await options.assertCurrent?.();
 
   // Handle different response formats
   const token = data.access_token || data.payload?.access_token;
   if (!token) {
-    throw new Error('JWT response missing access_token field');
+    throw asMCPExternalError(undefined, { stage: 'jwt', category: 'invalid_response' });
   }
 
   // Cache the token
@@ -182,8 +202,17 @@ export async function resolveMCPAuthHeaders(
     allowLocalhostHttp?: boolean;
     cacheNamespace?: string;
     disableProcessTokenCache?: boolean;
+    /** Optional live request authority for provider/token use. */
+    assertCurrent?: () => void /**
+     * Identifies the authority that supplied OAuth credentials for this
+     * handoff. The executor repository is tenant/user/generation scoped and
+     * authoritative: an empty result must not fall through to a second
+     * client-credentials exchange from persisted configuration.
+     */;
+    oauthCredentialAuthority?: 'configuration' | 'executor_repository';
   } = {}
 ): Promise<Record<string, string> | undefined> {
+  options.assertCurrent?.();
   if (!auth || auth.type === 'none') {
     return undefined;
   }
@@ -216,6 +245,7 @@ export async function resolveMCPAuthHeaders(
         allowLocalhostHttp: options.allowLocalhostHttp ?? true,
         cacheNamespace: options.cacheNamespace,
         cache: options.disableProcessTokenCache !== true,
+        assertCurrent: options.assertCurrent,
       }
     );
 
@@ -236,6 +266,11 @@ export async function resolveMCPAuthHeaders(
       }
     }
 
+    // The executor repository is authoritative for per-user OAuth grants. If
+    // it returned no token, do not fan out into a second client-credentials
+    // probe with persisted configuration from the same server row.
+    if (options.oauthCredentialAuthority === 'executor_repository') return undefined;
+
     // Browser authorization-code tokens must arrive through the caller's
     // trusted, server/user-scoped durable record. The legacy origin-only
     // process cache is deliberately not consulted here: two tenants or users
@@ -248,7 +283,9 @@ export async function resolveMCPAuthHeaders(
     let tokenUrl = auth.oauth_token_url;
     if (!tokenUrl && mcpUrl) {
       tokenUrl = inferOAuthTokenUrl(mcpUrl);
-      console.log(`[OAuth] Auto-detected token URL: ${tokenUrl}`);
+      // The inferred endpoint can retain user-derived origin/path material.
+      // Its presence is operationally useful; its value is not safe to log.
+      console.log('[OAuth] Token URL inferred from MCP endpoint');
     }
 
     if (!tokenUrl) {
@@ -269,13 +306,19 @@ export async function resolveMCPAuthHeaders(
         allowLocalhostHttp: options.allowLocalhostHttp ?? true,
         cacheNamespace: options.cacheNamespace,
         cache: options.disableProcessTokenCache !== true,
+        assertCurrent: options.assertCurrent,
       });
 
       return {
         Authorization: `Bearer ${token}`,
       };
-    } catch (error) {
-      console.warn('[OAuth] Token fetch failed:', error instanceof Error ? error.message : error);
+    } catch {
+      // Never downgrade identity/authority loss into an unauthenticated MCP
+      // fallback after client credentials crossed the provider boundary.
+      options.assertCurrent?.();
+      // Provider/network exceptions may include the endpoint, redirected URL,
+      // response body, or reflected credentials. Keep this diagnostic fixed.
+      console.warn('[OAuth] Token fetch failed');
       return undefined;
     }
   }

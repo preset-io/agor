@@ -9,8 +9,14 @@
 import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import {
+  projectClaudeResultResponse,
+  projectContextUsageSnapshot,
+  SAFE_ZERO_TURN_PROVIDER_RESULT_MESSAGE,
+} from '@agor/core';
 import { generateId, shortId } from '@agor/core/db';
 import type { PermissionMode as ClaudeSDKPermissionMode } from '@agor/core/sdk';
+import type { ContextUsageSnapshot } from '@agor/core/types';
 import { mapPermissionMode } from '@agor/core/utils/permission-mode-mapper';
 import type {
   BranchRepository,
@@ -32,6 +38,7 @@ import {
   MessageRole,
   type MessageSource,
   type PermissionMode,
+  type PromptOrigin,
   type SessionID,
   type TaskID,
 } from '../../types.js';
@@ -116,31 +123,14 @@ function getClassifiedProviderFailureKind(
   return kind === 'missing_credential' || kind === 'provider_credit_exhausted' ? kind : undefined;
 }
 
-function buildProviderFailureContent(
-  subtype: string,
-  errors: string[]
-): Array<{ type: string; text?: string }> {
-  return [
-    { type: 'text', text: `Agent SDK error (${subtype}): ` },
-    ...errors.flatMap((error, index) => [
-      { type: 'text', text: error },
-      ...(index < errors.length - 1 ? [{ type: 'text', text: '\n' }] : []),
-    ]),
-  ];
+function buildProviderFailureContent(message: string): Array<{ type: string; text?: string }> {
+  return [{ type: 'text', text: message }];
 }
 
-function sanitizeClassifiedClaudeResponse(
-  response: import('@agor/core/sdk').SDKResultMessage | undefined,
-  kind: ClassifiedProviderFailureKind | undefined
+function sanitizeClaudeResponse(
+  response: import('@agor/core/sdk').SDKResultMessage | undefined
 ): unknown {
-  if (!response || !kind) return response;
-
-  // Provider result/error bodies can contain secrets. Accounting fields remain
-  // useful after removing only the body-bearing result fields.
-  const sanitized = { ...response } as Record<string, unknown>;
-  delete sanitized.result;
-  delete sanitized.errors;
-  return sanitized;
+  return projectClaudeResultResponse(response);
 }
 
 /**
@@ -219,8 +209,12 @@ export class ClaudeTool implements ITool {
 
   async checkInstalled(): Promise<boolean> {
     try {
-      // Check if ~/.claude directory exists
-      const claudeDir = path.join(os.homedir(), '.claude');
+      // Check the SAME dir the Claude SDK uses. CLAUDE_CONFIG_DIR IS the config
+      // dir (config-dir semantics), so honor it when a per-branch SDK home
+      // relocates it (design §8 item 3); else fall back to `~/.claude`. Without
+      // this, Agor would probe the old location while the SDK wrote to the
+      // relocated branch home (silent split-brain).
+      const claudeDir = process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude');
       const stats = await fs.stat(claudeDir);
       return stats.isDirectory();
     } catch {
@@ -263,7 +257,8 @@ export class ClaudeTool implements ITool {
     permissionMode?: PermissionMode,
     streamingCallbacks?: import('../base').StreamingCallbacks,
     abortController?: AbortController,
-    messageSource?: MessageSource
+    messageSource?: MessageSource,
+    promptOrigin?: PromptOrigin
   ): Promise<{
     userMessageId: MessageID;
     assistantMessageIds: MessageID[];
@@ -273,13 +268,12 @@ export class ClaudeTool implements ITool {
     contextWindow?: number;
     contextWindowLimit?: number;
     model?: string;
-    modelUsage?: unknown;
     rawSdkResponse?: unknown;
-    /** Raw SDK context usage snapshot from getContextUsage() — authoritative source */
-    rawContextUsage?: import('@agor/core/sdk').SDKControlGetContextUsageResponse;
+    /** Closed canonical snapshot projected from SDK getContextUsage(). */
+    rawContextUsage?: ContextUsageSnapshot;
     wasStopped?: boolean;
     hadError?: boolean;
-    /** Error details from SDK when hadError is true (e.g., errors array from error_during_execution) */
+    /** Fixed, value-free error detail when the SDK reports an error result. */
     errorDetails?: string[];
   }> {
     if (!this.promptService || !this.messagesRepo) {
@@ -350,9 +344,8 @@ export class ClaudeTool implements ITool {
     let durationMs: number | undefined;
     let contextWindow: number | undefined;
     let contextWindowLimit: number | undefined;
-    let modelUsage: unknown | undefined;
     let rawSdkResponse: import('@agor/core/sdk').SDKResultMessage | undefined;
-    let rawContextUsage: import('@agor/core/sdk').SDKControlGetContextUsageResponse | undefined;
+    let rawContextUsage: ContextUsageSnapshot | undefined;
     let wasStopped = false;
     let hadError = false;
     let errorDetails: string[] | undefined;
@@ -371,7 +364,8 @@ export class ClaudeTool implements ITool {
       mappedPermissionMode,
       undefined, // chunkCallback (unused)
       abortController,
-      streamingCallbacks?.onPulse
+      streamingCallbacks?.onPulse,
+      promptOrigin
     )) {
       // Detect if execution was stopped early
       if (event.type === 'stopped') {
@@ -402,8 +396,8 @@ export class ClaudeTool implements ITool {
                 skills: event.skills,
               },
             });
-          } catch (error) {
-            console.warn('Failed to persist slash commands to session:', error);
+          } catch {
+            console.warn('Failed to persist slash commands to session');
           }
         }
       }
@@ -458,8 +452,6 @@ export class ClaudeTool implements ITool {
 
           if (streamingCallbacks) {
             await streamingCallbacks.onStreamStart(waitMessageId, {
-              session_id: sessionId,
-              task_id: taskId,
               role: MessageRole.SYSTEM,
               timestamp: new Date().toISOString(),
             });
@@ -551,8 +543,6 @@ export class ClaudeTool implements ITool {
             // Start streaming event for this system message
             if (streamingCallbacks) {
               await streamingCallbacks.onStreamStart(completeMessageId, {
-                session_id: sessionId,
-                task_id: taskId,
                 role: MessageRole.ASSISTANT,
                 timestamp: new Date().toISOString(),
               });
@@ -597,8 +587,6 @@ export class ClaudeTool implements ITool {
 
           if (streamingCallbacks) {
             await streamingCallbacks.onStreamStart(rateLimitMessageId, {
-              session_id: sessionId,
-              task_id: taskId,
               role: MessageRole.SYSTEM,
               timestamp: new Date().toISOString(),
             });
@@ -646,8 +634,6 @@ export class ClaudeTool implements ITool {
 
           if (streamingCallbacks) {
             await streamingCallbacks.onStreamStart(sdkEventMessageId, {
-              session_id: sessionId,
-              task_id: taskId,
               role: MessageRole.SYSTEM,
               timestamp: new Date().toISOString(),
             });
@@ -672,45 +658,41 @@ export class ClaudeTool implements ITool {
       // Capture raw SDK response for token accounting
       if (event.type === 'result') {
         rawSdkResponse = event.raw_sdk_message;
-        // Detect error results from SDK (e.g., error_during_execution)
-        if (rawSdkResponse && 'subtype' in rawSdkResponse) {
-          const sdkResult = rawSdkResponse as {
-            subtype?: string;
-            errors?: string[];
-            is_error?: boolean;
-          };
-          if (sdkResult.subtype && sdkResult.subtype !== 'success') {
-            hadError = true;
-            errorSubtype = sdkResult.subtype;
-            errorDetails = sdkResult.errors;
+        const sdkResult = projectClaudeResultResponse(rawSdkResponse);
+        // Use only the closed result projection for control flow. In particular,
+        // do not inspect the provider-owned errors array even to decide whether
+        // to persist a message.
+        if (sdkResult && sdkResult.subtype !== 'success') {
+          hadError = true;
+          errorSubtype = sdkResult.subtype;
+          errorDetails = [SAFE_ZERO_TURN_PROVIDER_RESULT_MESSAGE];
 
-            // Create a system message with the error details so it's visible in the conversation UI
-            if (this.messagesService && sdkResult.errors?.length) {
-              const errorMessageId = generateId() as MessageID;
-              const persisted = await withFeathersSessionGuard(
-                sessionId,
-                this.sessionsRepo,
-                async () =>
-                  createSystemMessage(
-                    sessionId,
-                    errorMessageId,
-                    buildProviderFailureContent(sdkResult.subtype!, sdkResult.errors!),
-                    taskId,
-                    nextIndex++,
-                    resolvedModel,
-                    this.messagesService!,
-                    { is_provider_failure_result: true }
-                  )
-              );
-              classifiedProviderFailureKind ??= getClassifiedProviderFailureKind(persisted);
-            }
+          // Create a system message with the error details so it's visible in the conversation UI
+          if (this.messagesService) {
+            const errorMessageId = generateId() as MessageID;
+            const persisted = await withFeathersSessionGuard(
+              sessionId,
+              this.sessionsRepo,
+              async () =>
+                createSystemMessage(
+                  sessionId,
+                  errorMessageId,
+                  buildProviderFailureContent(SAFE_ZERO_TURN_PROVIDER_RESULT_MESSAGE),
+                  taskId,
+                  nextIndex++,
+                  resolvedModel,
+                  this.messagesService!,
+                  { is_provider_failure_result: true }
+                )
+            );
+            classifiedProviderFailureKind ??= getClassifiedProviderFailureKind(persisted);
           }
         }
       }
 
       // Capture SDK context usage snapshot (authoritative context window data)
       if (event.type === 'context_usage') {
-        rawContextUsage = event.contextUsage;
+        rawContextUsage = projectContextUsageSnapshot(event.contextUsage);
       }
 
       // Capture metadata from result events (SDK may not type this properly)
@@ -719,11 +701,6 @@ export class ClaudeTool implements ITool {
       }
       if ('duration_ms' in event && typeof event.duration_ms === 'number') {
         durationMs = event.duration_ms;
-      }
-      if ('model_usage' in event && event.model_usage) {
-        // Save full model usage for later (per-model breakdown)
-        // Token accounting now handled by ClaudeCodeNormalizer.normalizeMultiModel()
-        modelUsage = event.model_usage;
       }
 
       // Handle partial streaming events (token-level chunks)
@@ -737,8 +714,6 @@ export class ClaudeTool implements ITool {
 
           if (streamingCallbacks) {
             await streamingCallbacks.onStreamStart(currentTextMessageId, {
-              session_id: sessionId,
-              task_id: taskId,
               role: MessageRole.ASSISTANT,
               timestamp: new Date().toISOString(),
             });
@@ -793,7 +768,9 @@ export class ClaudeTool implements ITool {
 
           // Truncate oversized content before persisting
           const { blocks: safeAssistantContent } = truncateContentIfNeeded(
-            completeEvent.content,
+            completeEvent.isSynthesizedResult
+              ? buildProviderFailureContent(SAFE_ZERO_TURN_PROVIDER_RESULT_MESSAGE)
+              : completeEvent.content,
             completeEvent.toolUses
           );
 
@@ -891,7 +868,7 @@ export class ClaudeTool implements ITool {
         );
       } else {
         console.error(
-          `[claude-code] SDK result indicates error: subtype=${errorSubtype ?? 'unknown'}, errors=${JSON.stringify(errorDetails)}`
+          `[claude-code] SDK result indicates error: subtype=${errorSubtype ?? 'unknown'}`
         );
       }
     }
@@ -905,15 +882,11 @@ export class ClaudeTool implements ITool {
       contextWindow,
       contextWindowLimit,
       model: resolvedModel,
-      modelUsage,
-      rawSdkResponse: sanitizeClassifiedClaudeResponse(
-        rawSdkResponse,
-        classifiedProviderFailureKind
-      ),
+      rawSdkResponse: sanitizeClaudeResponse(rawSdkResponse),
       rawContextUsage,
       wasStopped,
       hadError,
-      errorDetails: classifiedProviderFailureKind ? undefined : errorDetails,
+      errorDetails,
     };
   }
 
@@ -975,7 +948,8 @@ export class ClaudeTool implements ITool {
     prompt: string,
     taskId?: TaskID,
     permissionMode?: PermissionMode,
-    messageSource?: MessageSource
+    messageSource?: MessageSource,
+    promptOrigin?: PromptOrigin
   ): Promise<{
     userMessageId: MessageID;
     assistantMessageIds: MessageID[];
@@ -985,13 +959,12 @@ export class ClaudeTool implements ITool {
     contextWindow?: number;
     contextWindowLimit?: number;
     model?: string;
-    modelUsage?: unknown;
     rawSdkResponse?: unknown;
-    /** Raw SDK context usage snapshot from getContextUsage() — authoritative source */
-    rawContextUsage?: import('@agor/core/sdk').SDKControlGetContextUsageResponse;
+    /** Closed canonical snapshot projected from SDK getContextUsage(). */
+    rawContextUsage?: ContextUsageSnapshot;
     wasStopped?: boolean;
     hadError?: boolean;
-    /** Error details from SDK when hadError is true (e.g., errors array from error_during_execution) */
+    /** Fixed, value-free error detail when the SDK reports an error result. */
     errorDetails?: string[];
   }> {
     if (!this.promptService || !this.messagesRepo) {
@@ -1029,9 +1002,8 @@ export class ClaudeTool implements ITool {
     let durationMs: number | undefined;
     let contextWindow: number | undefined;
     let contextWindowLimit: number | undefined;
-    let modelUsage: unknown | undefined;
     let rawSdkResponse: import('@agor/core/sdk').SDKResultMessage | undefined;
-    let rawContextUsage: import('@agor/core/sdk').SDKControlGetContextUsageResponse | undefined;
+    let rawContextUsage: ContextUsageSnapshot | undefined;
     let wasStopped = false;
     let hadError = false;
     let errorDetails: string[] | undefined;
@@ -1047,7 +1019,11 @@ export class ClaudeTool implements ITool {
       sessionId,
       prompt,
       taskId,
-      mappedPermissionMode
+      mappedPermissionMode,
+      undefined,
+      undefined,
+      undefined,
+      promptOrigin
     )) {
       // Detect if execution was stopped early
       if (event.type === 'stopped') {
@@ -1117,45 +1093,41 @@ export class ClaudeTool implements ITool {
       // Capture raw SDK response for token accounting
       if (event.type === 'result') {
         rawSdkResponse = event.raw_sdk_message;
-        // Detect error results from SDK (e.g., error_during_execution)
-        if (rawSdkResponse && 'subtype' in rawSdkResponse) {
-          const sdkResult = rawSdkResponse as {
-            subtype?: string;
-            errors?: string[];
-            is_error?: boolean;
-          };
-          if (sdkResult.subtype && sdkResult.subtype !== 'success') {
-            hadError = true;
-            errorSubtype = sdkResult.subtype;
-            errorDetails = sdkResult.errors;
+        const sdkResult = projectClaudeResultResponse(rawSdkResponse);
+        // Use only the closed result projection for control flow. In particular,
+        // do not inspect the provider-owned errors array even to decide whether
+        // to persist a message.
+        if (sdkResult && sdkResult.subtype !== 'success') {
+          hadError = true;
+          errorSubtype = sdkResult.subtype;
+          errorDetails = [SAFE_ZERO_TURN_PROVIDER_RESULT_MESSAGE];
 
-            // Create a system message with the error details so it's visible in the conversation UI
-            if (this.messagesService && sdkResult.errors?.length) {
-              const errorMessageId = generateId() as MessageID;
-              const persisted = await withFeathersSessionGuard(
-                sessionId,
-                this.sessionsRepo,
-                async () =>
-                  createSystemMessage(
-                    sessionId,
-                    errorMessageId,
-                    buildProviderFailureContent(sdkResult.subtype!, sdkResult.errors!),
-                    taskId,
-                    nextIndex++,
-                    resolvedModel,
-                    this.messagesService!,
-                    { is_provider_failure_result: true }
-                  )
-              );
-              classifiedProviderFailureKind ??= getClassifiedProviderFailureKind(persisted);
-            }
+          // Create a system message with the error details so it's visible in the conversation UI
+          if (this.messagesService) {
+            const errorMessageId = generateId() as MessageID;
+            const persisted = await withFeathersSessionGuard(
+              sessionId,
+              this.sessionsRepo,
+              async () =>
+                createSystemMessage(
+                  sessionId,
+                  errorMessageId,
+                  buildProviderFailureContent(SAFE_ZERO_TURN_PROVIDER_RESULT_MESSAGE),
+                  taskId,
+                  nextIndex++,
+                  resolvedModel,
+                  this.messagesService!,
+                  { is_provider_failure_result: true }
+                )
+            );
+            classifiedProviderFailureKind ??= getClassifiedProviderFailureKind(persisted);
           }
         }
       }
 
       // Capture SDK context usage snapshot (authoritative context window data)
       if (event.type === 'context_usage') {
-        rawContextUsage = event.contextUsage;
+        rawContextUsage = projectContextUsageSnapshot(event.contextUsage);
       }
 
       // Capture metadata from result events (SDK may not type this properly)
@@ -1164,11 +1136,6 @@ export class ClaudeTool implements ITool {
       }
       if ('duration_ms' in event && typeof event.duration_ms === 'number') {
         durationMs = event.duration_ms;
-      }
-      if ('model_usage' in event && event.model_usage) {
-        // Save full model usage for later (per-model breakdown)
-        // Token accounting now handled by ClaudeCodeNormalizer.normalizeMultiModel()
-        modelUsage = event.model_usage;
       }
 
       // Skip partial events in non-streaming mode
@@ -1185,10 +1152,13 @@ export class ClaudeTool implements ITool {
         // Create message with session guard (handles deleted sessions gracefully)
         const created = await withFeathersSessionGuard(sessionId, this.sessionsRepo, async () => {
           if (completeEvent.role === MessageRole.ASSISTANT) {
+            const safeContent = completeEvent.isSynthesizedResult
+              ? buildProviderFailureContent(SAFE_ZERO_TURN_PROVIDER_RESULT_MESSAGE)
+              : completeEvent.content;
             const persisted = await createAssistantMessage(
               sessionId,
               messageId,
-              completeEvent.content,
+              safeContent,
               completeEvent.toolUses,
               taskId,
               nextIndex++,
@@ -1240,7 +1210,7 @@ export class ClaudeTool implements ITool {
         );
       } else {
         console.error(
-          `[claude-code] SDK result indicates error: subtype=${errorSubtype ?? 'unknown'}, errors=${JSON.stringify(errorDetails)}`
+          `[claude-code] SDK result indicates error: subtype=${errorSubtype ?? 'unknown'}`
         );
       }
     }
@@ -1254,15 +1224,11 @@ export class ClaudeTool implements ITool {
       contextWindow,
       contextWindowLimit,
       model: resolvedModel,
-      modelUsage,
-      rawSdkResponse: sanitizeClassifiedClaudeResponse(
-        rawSdkResponse,
-        classifiedProviderFailureKind
-      ),
+      rawSdkResponse: sanitizeClaudeResponse(rawSdkResponse),
       rawContextUsage,
       wasStopped,
       hadError,
-      errorDetails: classifiedProviderFailureKind ? undefined : errorDetails,
+      errorDetails,
     };
   }
 

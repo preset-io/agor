@@ -1,48 +1,84 @@
 import type { AgorClient, SessionID, User } from '@agor-live/client';
 import { SendOutlined } from '@ant-design/icons';
 import { Button, theme } from 'antd';
+import { useEffect, useRef, useState } from 'react';
+import { deletePromptDraft, getPromptDraft, savePromptDraft } from '../../utils/promptDrafts';
 import { AutocompleteTextarea } from '../AutocompleteTextarea';
 
 interface MobilePromptInputProps {
-  onSend: (prompt: string) => void;
+  onSend: (prompt: string) => boolean | undefined | Promise<boolean | undefined>;
   disabled?: boolean;
   placeholder?: string;
-  promptDraft?: string; // Draft prompt text for this session
-  onUpdateDraft?: (draft: string) => void; // Update draft callback
+  currentUserId?: string;
   client: AgorClient | null;
   sessionId: SessionID | null;
   userById: Map<string, User>;
 }
 
+// iOS Safari (and Chrome on iOS) zooms the visual viewport in when a form
+// control smaller than 16px takes focus, and never zooms back out on blur —
+// the page is left wider than the screen until the user pinches out. antd's
+// default token.fontSize is 14px, so the composer has to opt out explicitly.
+const IOS_NO_AUTOZOOM_FONT_SIZE = 16;
+
 export const MobilePromptInput: React.FC<MobilePromptInputProps> = ({
   onSend,
   disabled = false,
   placeholder = 'Send a prompt...',
-  promptDraft = '',
-  onUpdateDraft,
+  currentUserId,
   client,
   sessionId,
   userById,
 }) => {
   const { token } = theme.useToken();
 
-  // Use prop-driven draft state instead of local state
-  const prompt = promptDraft;
-  const setPrompt = (value: string) => {
-    onUpdateDraft?.(value);
-  };
+  const [prompt, setPrompt] = useState(() =>
+    sessionId ? getPromptDraft(currentUserId, sessionId) : ''
+  );
+  const promptRef = useRef(prompt);
+  promptRef.current = prompt;
+  const composerIdentityRef = useRef({
+    ownerId: currentUserId ?? null,
+    sessionId,
+    generation: 0,
+  });
+  if (
+    composerIdentityRef.current.ownerId !== (currentUserId ?? null) ||
+    composerIdentityRef.current.sessionId !== sessionId
+  ) {
+    composerIdentityRef.current = {
+      ownerId: currentUserId ?? null,
+      sessionId,
+      generation: composerIdentityRef.current.generation + 1,
+    };
+  }
 
-  const handleSend = () => {
-    if (prompt.trim() && !disabled) {
-      onSend(prompt.trim());
-      // Draft clearing is now handled by parent (App.tsx)
-    }
+  useEffect(() => {
+    setPrompt(sessionId ? getPromptDraft(currentUserId, sessionId) : '');
+  }, [currentUserId, sessionId]);
+
+  useEffect(() => {
+    if (!sessionId) return;
+    const timer = setTimeout(() => savePromptDraft(currentUserId, sessionId, prompt), 300);
+    return () => clearTimeout(timer);
+  }, [currentUserId, prompt, sessionId]);
+
+  const handleSend = async () => {
+    const sendIdentity = composerIdentityRef.current;
+    const draftText = prompt;
+    const sentText = draftText.trim();
+    if (!sentText || disabled || !sessionId) return;
+    const result = await onSend(sentText);
+    if (result === false) return;
+    if (composerIdentityRef.current !== sendIdentity) return;
+    if (promptRef.current === draftText) setPrompt('');
+    deletePromptDraft(currentUserId, sessionId, draftText);
   };
 
   const handleKeyPress = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
-      handleSend();
+      void handleSend();
     }
   };
 
@@ -59,7 +95,7 @@ export const MobilePromptInput: React.FC<MobilePromptInputProps> = ({
         zIndex: 1000,
         display: 'flex',
         gap: '8px',
-        alignItems: 'flex-end',
+        alignItems: 'center',
       }}
     >
       <div style={{ flex: 1 }}>
@@ -72,16 +108,23 @@ export const MobilePromptInput: React.FC<MobilePromptInputProps> = ({
           sessionId={sessionId}
           userById={userById}
           autoSize={{ minRows: 1, maxRows: 4 }}
+          textareaStyle={{
+            minHeight: 40,
+            paddingBlock: 8,
+            fontSize: IOS_NO_AUTOZOOM_FONT_SIZE,
+          }}
           enableKnowledgeMentions
           kbLinkTarget="absolute-route"
         />
       </div>
       <Button
         type="primary"
+        aria-label="Send prompt"
         icon={<SendOutlined />}
-        onClick={handleSend}
+        onClick={() => void handleSend()}
         disabled={disabled || !prompt.trim()}
         size="large"
+        style={{ width: 40, height: 40, flex: '0 0 40px', padding: 0 }}
       />
     </div>
   );
