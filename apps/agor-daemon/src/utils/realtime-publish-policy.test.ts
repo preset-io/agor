@@ -3,7 +3,10 @@ import { readFileSync } from 'node:fs';
 import { dirname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { feathers } from '@agor/core/feathers';
-import { ENVIRONMENT_COMMAND_REPORT_SERVICE } from '@agor/core/types';
+import {
+  BRANCH_DELETION_REPORT_SERVICE,
+  ENVIRONMENT_COMMAND_REPORT_SERVICE,
+} from '@agor/core/types';
 import { describe, expect, it } from 'vitest';
 import {
   assertRealtimePublishPolicyCoverage,
@@ -56,20 +59,23 @@ describe('realtimePublishPolicyFor', () => {
 });
 
 describe('assertRealtimePublishPolicyCoverage', () => {
-  it('covers the constant-named environment report RPC even with no custom events', () => {
-    const app = feathers();
-    app.use(
-      ENVIRONMENT_COMMAND_REPORT_SERVICE,
-      {
-        async create() {
-          return {};
+  it.each([ENVIRONMENT_COMMAND_REPORT_SERVICE, BRANCH_DELETION_REPORT_SERVICE])(
+    'covers private report RPC %s even with no custom events',
+    (servicePath) => {
+      const app = feathers();
+      app.use(
+        servicePath,
+        {
+          async create() {
+            return {};
+          },
         },
-      },
-      { methods: ['create'], events: [] }
-    );
-    expect(() => assertRealtimePublishPolicyCoverage(app)).not.toThrow();
-    expect(realtimePublishPolicyFor(ENVIRONMENT_COMMAND_REPORT_SERVICE)?.audience).toBe('none');
-  });
+        { methods: ['create'], events: [] }
+      );
+      expect(() => assertRealtimePublishPolicyCoverage(app)).not.toThrow();
+      expect(realtimePublishPolicyFor(servicePath)?.audience).toBe('none');
+    }
+  );
 
   it('accepts an app whose services are all declared', () => {
     const app = { services: { sessions: {}, 'mcp-catalog/connect': {}, '/branches': {} } };
@@ -147,6 +153,10 @@ describe('source scan: every registered path is declared', () => {
         /\bENVIRONMENT_COMMAND_REPORT_SERVICE\b/g,
         JSON.stringify(ENVIRONMENT_COMMAND_REPORT_SERVICE)
       )
+      .replace(
+        /\bBRANCH_DELETION_REPORT_SERVICE\b/g,
+        JSON.stringify(BRANCH_DELETION_REPORT_SERVICE)
+      )
       .split('\n');
     const found: Array<{ path: string; line: number }> = [];
     lines.forEach((line, index) => {
@@ -206,6 +216,12 @@ describe('source scan: every registered path is declared', () => {
       'nested-receiver',
       'multiline-receiver',
       'long-route',
+    ]);
+  });
+
+  it('recognizes the shared deletion report service identifier', () => {
+    expect(extractRegisteredPaths('app.use(BRANCH_DELETION_REPORT_SERVICE, service);')).toEqual([
+      { path: BRANCH_DELETION_REPORT_SERVICE, line: 1 },
     ]);
   });
 

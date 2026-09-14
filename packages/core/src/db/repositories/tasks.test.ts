@@ -16,6 +16,7 @@ import { MessageRole, SessionStatus, TaskStatus } from '@agor/core/types';
 import { describe, expect, vi } from 'vitest';
 import { generateId, toShortId } from '../../lib/ids';
 import type { Database } from '../client';
+import { runDatabaseTransaction } from '../database-wrapper';
 import { ownedDbTest as dbTest, setTestBranchUserRole } from '../test-helpers';
 import { AmbiguousIdError, EntityNotFoundError, RepositoryError } from './base';
 import { BranchRepository } from './branches';
@@ -974,11 +975,20 @@ describe('TaskRepository MCP runtime fanout', () => {
       const affected = await taskRepo.create(
         createTaskData({ session_id: affectedSessionId, status: TaskStatus.RUNNING })
       );
-      for (let index = 0; index < 501; index += 1) {
-        await taskRepo.create(
-          createTaskData({ session_id: unrelatedSessionId, status: TaskStatus.RUNNING })
-        );
-      }
+      // This tests fanout pagination, not 501 independent durable commits.
+      // Keep the same repository admissions, but seed the fixture in one unit.
+      await runDatabaseTransaction(
+        db,
+        async (tx) => {
+          const fixtureTasks = new TaskRepository(tx);
+          for (let index = 0; index < 501; index += 1) {
+            await fixtureTasks.create(
+              createTaskData({ session_id: unrelatedSessionId, status: TaskStatus.RUNNING })
+            );
+          }
+        },
+        { sqliteImmediate: true }
+      );
 
       const page = await taskRepo.findActiveMCPRefreshPage({
         attachedServerId: server.mcp_server_id,

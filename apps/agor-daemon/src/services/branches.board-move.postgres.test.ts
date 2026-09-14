@@ -14,6 +14,7 @@ import {
   lockBranchReferenceMutation,
   RepoRepository,
   rawRows,
+  runWithoutTenantDatabaseScope,
   runWithTenantDatabaseScope,
   sql,
   UsersRepository,
@@ -170,20 +171,30 @@ describe.skipIf(!postgresUrl || process.env.AGOR_DB_DIALECT !== 'postgresql')(
         let pid: number | undefined;
         try {
           await runWithTenantDatabaseScope(db, a, async (scoped) => {
+            const deletionPid = Number(
+              rawRows(await executeRaw(scoped, sql`SELECT pg_backend_pid() AS pid`))[0]!.pid
+            );
             await lockBranchReferenceMutation(scoped);
-            moving = runWithTenantDatabaseScope(peer, a, async (movingDb) => {
-              pid = Number(
-                rawRows(await executeRaw(movingDb, sql`SELECT pg_backend_pid() AS pid`))[0]!.pid
-              );
-              return movingService.patch(
-                fixture.teammate.branch_id,
-                {
-                  board_id: fa.target.board_id,
-                  custom_context: { teammate: { kind: 'teammate', displayName: 'Moved fixture' } },
-                },
-                params
-              );
-            });
+            // AsyncLocalStorage otherwise reuses the deletion transaction even
+            // when a second pool is supplied; force a genuinely independent unit.
+            moving = runWithoutTenantDatabaseScope(() =>
+              runWithTenantDatabaseScope(peer, a, async (movingDb) => {
+                pid = Number(
+                  rawRows(await executeRaw(movingDb, sql`SELECT pg_backend_pid() AS pid`))[0]!.pid
+                );
+                expect(pid).not.toBe(deletionPid);
+                return movingService.patch(
+                  fixture.teammate.branch_id,
+                  {
+                    board_id: fa.target.board_id,
+                    custom_context: {
+                      teammate: { kind: 'teammate', displayName: 'Moved fixture' },
+                    },
+                  },
+                  params
+                );
+              })
+            );
             // Attach a rejection handler immediately; await the original below.
             void moving.catch(() => {});
             const deadline = Date.now() + 5000;
