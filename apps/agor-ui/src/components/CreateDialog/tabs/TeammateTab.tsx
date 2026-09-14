@@ -22,6 +22,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { slugify } from '@/utils/repoSlug';
 import { useTeammateForm } from '../../../hooks/useTeammateForm';
 import type { AgenticToolOption } from '../../../types';
+import type { GalleryFilter } from '../../../utils/teammateTemplates';
 import {
   resolveTemplateSourceBranch,
   resolveTemplateSourceRemoteUrl,
@@ -36,7 +37,10 @@ import { AgentSelectionGrid } from '../../AgentSelectionGrid';
 import { TeammateFormFields } from '../../forms/TeammateFormFields';
 import { TeammateHome } from '../../forms/TeammateHome';
 import type { ModelConfig } from '../../ModelSelector';
-import { TeammateGallery } from '../../TeammateGallery/TeammateGallery';
+import {
+  TeammateGalleryCards,
+  TeammateGalleryFilters,
+} from '../../TeammateGallery/TeammateGallery';
 
 export interface TeammateTabResult {
   displayName: string;
@@ -79,6 +83,7 @@ export const TeammateTab: React.FC<TeammateTabProps> = ({
 }) => {
   const surfaceRef = useRef<HTMLDivElement>(null);
   const [homeStep, setHomeStep] = useState(false);
+  const [filter, setFilter] = useState<GalleryFilter>('all');
   const [destinationReady, setDestinationReady] = useState(false);
   const [acknowledged, setAcknowledged] = useState(false);
   const [templateId, setTemplateId] = useState<TeammateGalleryCardId | null>(null);
@@ -93,6 +98,7 @@ export const TeammateTab: React.FC<TeammateTabProps> = ({
   useLayoutEffect(() => {
     form.resetFields();
     setHomeStep(false);
+    setFilter('all');
     setAcknowledged(false);
     setDestinationReady(false);
     setTemplateId(null);
@@ -102,9 +108,8 @@ export const TeammateTab: React.FC<TeammateTabProps> = ({
     const frame = requestAnimationFrame(() => {
       const target = homeStep
         ? surfaceRef.current?.querySelector<HTMLElement>('[data-home-heading]')
-        : surfaceRef.current?.querySelector<HTMLElement>(
-            '[role="button"][aria-pressed="true"], input[id$="displayName"]'
-          );
+        : (surfaceRef.current?.querySelector<HTMLElement>('[role="button"][aria-pressed="true"]') ??
+          surfaceRef.current?.querySelector<HTMLElement>('input[id$="displayName"]'));
       target?.focus();
     });
     return () => cancelAnimationFrame(frame);
@@ -206,6 +211,7 @@ export const TeammateTab: React.FC<TeammateTabProps> = ({
       <Form
         form={form}
         layout="vertical"
+        className={!homeStep ? 'create-teammate-persona' : undefined}
         onFieldsChange={validateForm}
         initialValues={{ sourceBranch: 'main', sourceRemoteUrl: TEAMMATE_FRAMEWORK_REPO_URL }}
       >
@@ -215,22 +221,30 @@ export const TeammateTab: React.FC<TeammateTabProps> = ({
           onDisplayNameChange={handleDisplayNameChange}
           extraBeforeAdvanced={
             !homeStep ? (
-              <Flex vertical gap="small">
-                <TeammateGallery
-                  value={templateId}
-                  onChange={(id) => {
-                    setTemplateId(id);
-                    form.setFieldsValue({
-                      sourceBranch: resolveTemplateSourceBranch(id),
-                      sourceRemoteUrl: resolveTemplateSourceRemoteUrl(id),
-                    });
-                  }}
-                />
+              <Flex vertical gap="small" className="create-teammate-picker">
+                <div style={{ minWidth: 0, overflowX: 'auto', flexShrink: 0 }}>
+                  <TeammateGalleryFilters value={filter} onChange={setFilter} />
+                </div>
+                <div className="create-teammate-gallery">
+                  <TeammateGalleryCards
+                    filter={filter}
+                    value={templateId}
+                    onChange={(id) => {
+                      setTemplateId(id);
+                      form.setFieldsValue({
+                        sourceBranch: resolveTemplateSourceBranch(id),
+                        sourceRemoteUrl: resolveTemplateSourceRemoteUrl(id),
+                      });
+                    }}
+                  />
+                </div>
                 <Button
+                  style={{ flexShrink: 0 }}
                   onClick={async () => {
                     try {
                       await form.validateFields(['displayName']);
                       setHomeStep(true);
+                      setFilter('all');
                     } catch {}
                   }}
                 >

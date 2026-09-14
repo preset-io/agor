@@ -1,0 +1,42 @@
+/* biome-ignore-all lint/plugin/noFirstPartyCss: manual teammate media-query layout and modal-open background containment require selectors */
+
+/* The inert application header can be wider than a phone. Contain it only
+   while this tab is open; do not change other Create tabs or onboarding. */
+body:has(.create-teammate-dialog) #root {
+  overflow-x: clip;
+}
+
+.create-teammate-persona {
+  display: grid;
+  grid-template-areas: "name" "gallery" "description";
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.create-teammate-name {
+  grid-area: name;
+}
+
+.create-teammate-description {
+  grid-area: description;
+}
+
+.create-teammate-picker {
+  grid-area: gallery;
+  min-width: 0;
+}
+
+.create-teammate-gallery {
+  min-height: 0;
+  max-height: clamp(160px, calc(100dvh - 340px), 360px);
+  overflow-y: auto;
+}
+
+/* Landscape has space beside the gallery, not above it. */
+@media (max-height: 480px) and (min-width: 700px) {
+  .create-teammate-persona {
+    grid-template-areas: "name gallery" "description gallery";
+    grid-template-columns: minmax(0, 1fr) minmax(0, 2fr);
+    column-gap: 12px;
+    align-items: start;
+  }
+}

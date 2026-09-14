@@ -11,7 +11,7 @@ import {
   FolderOutlined,
   RobotOutlined,
 } from '@ant-design/icons';
-import { Alert, Button, Modal, Tabs } from 'antd';
+import { Alert, Button, Modal, Tabs, theme } from 'antd';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { BranchStorageConfig } from '@/utils/branchStorage';
 import {
@@ -28,6 +28,7 @@ import type { RepoTabResult } from './tabs/RepoTab';
 import { RepoTab } from './tabs/RepoTab';
 import type { TeammateTabResult } from './tabs/TeammateTab';
 import { TeammateTab } from './tabs/TeammateTab';
+import './CreateDialog.css';
 
 type ActiveTab = 'branch' | 'teammate' | 'board' | 'repository';
 type CreateDialogTab = ActiveTab;
@@ -117,6 +118,7 @@ export const CreateDialog: React.FC<CreateDialogProps> = ({
   onCreateTeammate,
   branchStorageConfig,
 }) => {
+  const { token } = theme.useToken();
   // Entity maps are read from the store rather than drilled through props so
   // the App shell doesn't have to forward them into every modal.
   const repoById = useAgorStore(selectRepoById);
@@ -265,12 +267,6 @@ export const CreateDialog: React.FC<CreateDialogProps> = ({
       ),
       children: (
         <div>
-          <Alert
-            type="info"
-            showIcon
-            description={PURPOSE_TEXT.teammate}
-            style={{ marginBottom: 16 }}
-          />
           <TeammateTab
             repoById={repoById}
             onValidityChange={handleTeammateValid}
@@ -280,6 +276,12 @@ export const CreateDialog: React.FC<CreateDialogProps> = ({
             mcpServerById={mcpServerById}
             currentUser={currentUser}
             client={client}
+          />
+          <Alert
+            type="info"
+            showIcon
+            description={PURPOSE_TEXT.teammate}
+            style={{ marginTop: 16 }}
           />
         </div>
       ),
@@ -361,6 +363,8 @@ export const CreateDialog: React.FC<CreateDialogProps> = ({
       onCancel={handleCancel}
       destroyOnHidden
       width={720}
+      className={activeTab === 'teammate' ? 'create-teammate-dialog' : undefined}
+      style={activeTab === 'teammate' ? { top: 16, paddingBottom: 0 } : undefined}
       closable={!isSubmitting}
       maskClosable={false}
       keyboard={!isSubmitting}
@@ -379,14 +383,28 @@ export const CreateDialog: React.FC<CreateDialogProps> = ({
         </Button>,
       ]}
       styles={{
-        body: { padding: '8px 0 0' },
+        body: {
+          padding: '8px 0 0',
+          ...(activeTab === 'teammate' && { minHeight: 0, overflowY: 'auto' }),
+        },
+        ...(activeTab === 'teammate' && {
+          container: {
+            padding: token.paddingSM,
+            maxHeight: 'calc(100dvh - 32px)',
+            display: 'flex',
+            flexDirection: 'column',
+          },
+          header: { flexShrink: 0 },
+          footer: { flexShrink: 0 },
+        }),
       }}
     >
       <Tabs
         activeKey={activeTab}
         onChange={handleTabChange}
         items={tabItems}
-        style={{ minHeight: 360 }}
+        styles={activeTab === 'teammate' ? { header: { marginBottom: token.marginXS } } : undefined}
+        style={{ minHeight: activeTab === 'teammate' ? 0 : 360 }}
       />
       {submitError && (
         <Alert

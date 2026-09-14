@@ -30,7 +30,7 @@ export const TeammateFormFields: React.FC<TeammateFormFieldsProps> = ({
   const { token } = theme.useToken();
   return (
     <>
-      <div hidden={homeStep}>
+      <div hidden={homeStep} className="create-teammate-name">
         <Form.Item
           label="Name"
           required
@@ -52,7 +52,9 @@ export const TeammateFormFields: React.FC<TeammateFormFieldsProps> = ({
             </Form.Item>
           </Space.Compact>
         </Form.Item>
-
+      </div>
+      {extraBeforeAdvanced}
+      <div hidden={homeStep} className="create-teammate-description">
         <Form.Item
           name="description"
           label="Description"
@@ -64,7 +66,6 @@ export const TeammateFormFields: React.FC<TeammateFormFieldsProps> = ({
           />
         </Form.Item>
       </div>
-      {extraBeforeAdvanced}
       <div hidden={!homeStep}>
         <Collapse
           ghost

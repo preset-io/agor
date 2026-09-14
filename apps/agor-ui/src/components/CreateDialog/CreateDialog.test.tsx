@@ -102,7 +102,13 @@ async function confirmHome() {
   const select = await screen.findByRole('combobox', { name: 'Teammate home repository' }, ASYNC);
   await waitFor(() => expect(select).toBeVisible(), ASYNC);
   fireEvent.mouseDown(select);
-  fireEvent.click(await screen.findByTitle(userRepo.name, undefined, ASYNC));
+  fireEvent.click(
+    await screen.findByText(
+      `${userRepo.name} — https://github.com/my-org/agor-teammate`,
+      undefined,
+      ASYNC
+    )
+  );
   await screen.findByText('Clone ready · Push access unchecked · Visibility unknown');
   fireEvent.click(screen.getByRole('checkbox'));
 }
@@ -137,9 +143,7 @@ describe('CreateDialog — per-tab validity scoping', { timeout: 60_000 }, () =>
     ).toBeDisabled();
     await confirmHome();
 
-    const button = screen
-      .getByText('Create AI teammate', { selector: 'button, button *' })
-      .closest('button');
+    const button = screen.getByRole('button', { name: 'Create AI teammate' });
     await waitFor(() => {
       expect(button).not.toBeDisabled();
     }, ASYNC);
@@ -188,9 +192,7 @@ describe('CreateDialog — per-tab validity scoping', { timeout: 60_000 }, () =>
     fireEvent.change(displayName, { target: { value: 'Bootstrap Bot' } });
     await confirmHome();
 
-    const button = screen
-      .getByText('Create AI teammate', { selector: 'button, button *' })
-      .closest('button');
+    const button = screen.getByRole('button', { name: 'Create AI teammate' });
     await waitFor(() => {
       expect(button).not.toBeDisabled();
     }, ASYNC);
@@ -218,9 +220,7 @@ describe('CreateDialog — per-tab validity scoping', { timeout: 60_000 }, () =>
       target: { value: 'Owned Home' },
     });
     await confirmHome();
-    const button = screen
-      .getByText('Create AI teammate', { selector: 'button, button *' })
-      .closest('button');
+    const button = screen.getByRole('button', { name: 'Create AI teammate' });
     await waitFor(() => expect(button).not.toBeDisabled(), ASYNC);
     fireEvent.click(button);
     await waitFor(() => {
