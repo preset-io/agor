@@ -2,6 +2,7 @@ import { CloseOutlined, SearchOutlined } from '@ant-design/icons';
 import { Button, Input, type InputRef, Tooltip, theme } from 'antd';
 import type React from 'react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useAppNavigation } from '../../hooks/useAppNavigation';
 import { GLOBAL_SEARCH_LISTBOX_ID, GlobalSearchDropdown, rowDomId } from './GlobalSearchDropdown';
 import { SearchChipRow } from './SearchChipRow';
@@ -17,12 +18,6 @@ import { flattenResults, hasAnyEntries } from './utils';
 
 interface GlobalSearchProps extends GlobalSearchEntityMaps {
   currentUserId?: string;
-  /**
-   * Open the Settings modal — used as a coarse landing for entity types
-   * that don't live on the canvas (MCP servers today). Stays as a callback
-   * because Settings is modal state, not URL-driven.
-   */
-  onSettingsClick?: () => void;
 }
 
 /**
@@ -39,9 +34,9 @@ export const GlobalSearch: React.FC<GlobalSearchProps> = ({
   artifactById,
   boardById,
   mcpServerById,
-  onSettingsClick,
 }) => {
   const { token } = theme.useToken();
+  const navigate = useNavigate();
   const inputRef = useRef<InputRef | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
 
@@ -157,15 +152,15 @@ export const GlobalSearch: React.FC<GlobalSearchProps> = ({
           navigation.goToArtifact(result.item.artifact_id);
           break;
         case 'mcp':
-          // MCP servers don't live on the canvas — fall back to opening
-          // Settings. V2 will deep-link to the MCP tab + scroll-into-view.
-          onSettingsClick?.();
+          // MCP servers are managed in the MCP Marketplace (its own route), not
+          // on the canvas or in Settings.
+          navigate('/marketplace');
           break;
       }
       setOpen(false);
       setQuery('');
     },
-    [navigation, onSettingsClick]
+    [navigation, navigate]
   );
 
   const handleClose = useCallback(() => {

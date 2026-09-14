@@ -1,19 +1,41 @@
-import type { Branch } from '@agor-live/client';
+import type { Board, Branch, MCPServer } from '@agor-live/client';
 import { getTeammateConfig } from '@agor-live/client';
 import { RobotOutlined } from '@ant-design/icons';
-import { Descriptions, Form, Input, Space, Typography } from 'antd';
+import { Descriptions, Form, Input, Select, Space, Typography } from 'antd';
+import { useAgorStore } from '../../../store/agorStore';
+import { selectBranchById } from '../../../store/selectors';
+import { boardSelectOptions } from '../../BoardTile';
 import { EmojiPickerInput } from '../../EmojiPickerInput/EmojiPickerInput';
+import { MCPServerSelect } from '../../MCPServerSelect';
+import { FIELD_WIDTHS } from '../../SettingsModal/panelPrimitives';
 import { Tag } from '../../Tag';
-import type { TeammateFormState } from '../useBranchModalForm';
+import type { GeneralFormState, TeammateFormState } from '../useBranchModalForm';
 
 interface TeammateTabProps {
   branch: Branch;
   canEdit: boolean;
   state: TeammateFormState;
   setField: <K extends keyof TeammateFormState>(key: K, value: TeammateFormState[K]) => void;
+  // Board + default MCP servers can be folded in here from the General tab.
+  // Optional: when omitted (the current BranchModal layout keeps a separate
+  // General tab), the folded Board/MCP section simply isn't rendered.
+  boards?: Board[];
+  mcpServers?: MCPServer[];
+  general?: GeneralFormState;
+  setGeneral?: <K extends keyof GeneralFormState>(key: K, value: GeneralFormState[K]) => void;
 }
 
-export const TeammateTab: React.FC<TeammateTabProps> = ({ branch, canEdit, state, setField }) => {
+export const TeammateTab: React.FC<TeammateTabProps> = ({
+  branch,
+  canEdit,
+  state,
+  setField,
+  boards,
+  mcpServers,
+  general,
+  setGeneral,
+}) => {
+  const branchById = useAgorStore(selectBranchById);
   const config = getTeammateConfig(branch);
   if (!config) return null;
 
@@ -32,8 +54,8 @@ export const TeammateTab: React.FC<TeammateTabProps> = ({ branch, canEdit, state
         </Space>
 
         {/* Editable fields */}
-        <Form layout="horizontal" colon={false}>
-          <Form.Item label="Display Name" labelCol={{ span: 6 }} wrapperCol={{ span: 18 }}>
+        <Form layout="vertical" colon={false}>
+          <Form.Item label="Display Name" style={FIELD_WIDTHS.short}>
             <Input
               value={state.displayName}
               onChange={(e) => setField('displayName', e.target.value)}
@@ -41,7 +63,7 @@ export const TeammateTab: React.FC<TeammateTabProps> = ({ branch, canEdit, state
               disabled={!canEdit}
             />
           </Form.Item>
-          <Form.Item label="Icon" labelCol={{ span: 6 }} wrapperCol={{ span: 18 }}>
+          <Form.Item label="Icon">
             <EmojiPickerInput
               value={state.emoji}
               onChange={(val) => setField('emoji', val)}
@@ -51,8 +73,6 @@ export const TeammateTab: React.FC<TeammateTabProps> = ({ branch, canEdit, state
           </Form.Item>
           <Form.Item
             label="Description"
-            labelCol={{ span: 6 }}
-            wrapperCol={{ span: 18 }}
             tooltip="What does this AI teammate do? Visible to other agents via MCP."
           >
             <Input.TextArea
@@ -63,6 +83,34 @@ export const TeammateTab: React.FC<TeammateTabProps> = ({ branch, canEdit, state
               disabled={!canEdit}
             />
           </Form.Item>
+
+          {general && setGeneral && (
+            <>
+              <Form.Item label="Board" style={FIELD_WIDTHS.short}>
+                <Select
+                  value={general.boardId}
+                  onChange={(value) => setGeneral('boardId', value)}
+                  placeholder="Select board (optional)..."
+                  allowClear
+                  disabled={!canEdit}
+                  options={boardSelectOptions(boards ?? [], branchById)}
+                />
+              </Form.Item>
+              <Form.Item
+                label="MCP Servers"
+                tooltip="Default MCP servers for new sessions with this teammate"
+                style={FIELD_WIDTHS.medium}
+              >
+                <MCPServerSelect
+                  mcpServers={mcpServers ?? []}
+                  value={general.mcpServerIds}
+                  onChange={(value) => setGeneral('mcpServerIds', value)}
+                  placeholder="Select default MCP servers..."
+                  disabled={!canEdit}
+                />
+              </Form.Item>
+            </>
+          )}
         </Form>
 
         {/* Read-only metadata */}
@@ -83,6 +131,10 @@ export const TeammateTab: React.FC<TeammateTabProps> = ({ branch, canEdit, state
             ) : (
               <Tag>Manual</Tag>
             )}
+          </Descriptions.Item>
+          {/* Preserved here since teammates no longer show the General tab. */}
+          <Descriptions.Item label="Created">
+            {new Date(branch.created_at).toLocaleString()}
           </Descriptions.Item>
         </Descriptions>
       </Space>

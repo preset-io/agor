@@ -27,6 +27,7 @@ import {
   CODEX_SANDBOX_MODES,
   PermissionModeSelector,
 } from '../PermissionModeSelector';
+import { FIELD_WIDTHS } from '../SettingsModal/panelPrimitives';
 
 export interface AgenticToolConfigFormProps {
   /** The agentic tool being configured */
@@ -85,6 +86,9 @@ export const AgenticToolConfigForm: React.FC<AgenticToolConfigFormProps> = ({
       <Form.Item
         name="modelConfig"
         label={modelLabel}
+        // Model / Permission were full-bleed; cap to `short`. Effort keeps its
+        // intrinsic 160 — a 5-option enum shouldn't be stretched to match.
+        style={FIELD_WIDTHS.short}
         rules={[
           {
             validator: (_, value) => {
@@ -110,6 +114,7 @@ export const AgenticToolConfigForm: React.FC<AgenticToolConfigFormProps> = ({
       <Form.Item
         name="permissionMode"
         label="Permission Mode"
+        style={FIELD_WIDTHS.short}
         help={showHelpText ? 'Control how the agent handles tool execution approvals' : undefined}
       >
         <PermissionModeSelector agentic_tool={agenticTool} compact={compact} fullWidth />
@@ -139,6 +144,7 @@ export const AgenticToolConfigForm: React.FC<AgenticToolConfigFormProps> = ({
         <Form.Item
           name="codexSandboxMode"
           label="Sandbox Mode"
+          style={FIELD_WIDTHS.medium}
           help={
             showHelpText
               ? 'Controls where Codex can write files (workspace vs. full access)'
@@ -159,6 +165,7 @@ export const AgenticToolConfigForm: React.FC<AgenticToolConfigFormProps> = ({
         <Form.Item
           name="codexApprovalPolicy"
           label="Approval Policy"
+          style={FIELD_WIDTHS.medium}
           help={
             showHelpText ? 'Controls whether Codex must ask before executing commands' : undefined
           }

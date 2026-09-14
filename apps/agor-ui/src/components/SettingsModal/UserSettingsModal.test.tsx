@@ -765,10 +765,13 @@ describe('UserSettingsModal', { timeout: 60_000 }, () => {
     expect(screen.getByText('Editing Bob')).toBeInTheDocument();
     // Personal API tokens are caller-scoped, so the entry is hidden here.
     expect(screen.queryByRole('menuitem', { name: /api tokens/i })).not.toBeInTheDocument();
-    // Groups & Access is admin-only nav; the force-password control lives there.
+    // Groups & Access is admin-only nav.
+    expect(screen.getByRole('menuitem', { name: /groups & access/i })).toBeInTheDocument();
+    // The force-password control lives in the Access panel's Danger zone (main's
+    // #2538 placement; our Phase-4 relocation to Security was superseded when the
+    // settings-redesign branch merged main's UserSettingsModal).
     fireEvent.click(screen.getByRole('menuitem', { name: /groups & access/i }));
-    await screen.findByRole('heading', { name: 'Groups & access' });
-    expect(screen.getByText(/force password change/i)).toBeInTheDocument();
+    expect(await screen.findByText(/force password change/i)).toBeInTheDocument();
   });
 
   it('hides caller-scoped Codex ChatGPT controls when an admin edits another user', async () => {

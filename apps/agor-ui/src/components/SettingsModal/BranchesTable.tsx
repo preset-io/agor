@@ -17,7 +17,7 @@ import {
   RobotOutlined,
 } from '@ant-design/icons';
 import { Button, Empty, Form, Input, Select, Space, Table, Tooltip, Typography, theme } from 'antd';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { type Key, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { BranchStorageConfig } from '@/utils/branchStorage';
 import { normalizeBranchStorageMode } from '@/utils/branchStorage';
 import { mapToArray } from '@/utils/mapHelpers';
@@ -26,10 +26,10 @@ import { ArchiveToggleButton } from '../ArchiveButton';
 import { ArchiveDeleteBranchModal } from '../ArchiveDeleteBranchModal';
 import { BranchFormFields } from '../BranchFormFields';
 import { HighlightMatch } from '../HighlightMatch';
-import { AdaptiveSettingsModal } from './AdaptiveSettingsModal';
 import { renderEnvCell } from './BranchEnvColumn';
-import { ResponsiveSettingsHeader } from './ResponsiveSettingsHeader';
+import { ListPanelHeader } from './panelPrimitives';
 import { SettingsActionGroup } from './SettingsActionGroup';
+import { DrillInFrame, useSettingsDrill } from './SettingsDrill';
 
 interface BranchesTableProps {
   client: AgorClient | null;
@@ -97,7 +97,10 @@ export const BranchesTable: React.FC<BranchesTableProps> = ({
     },
     [onClose, navigation]
   );
-  const [createModalOpen, setCreateModalOpen] = useState(false);
+  // "Create Branch" opens in place as the section's drill-in (like branch edit
+  // and teammate create) rather than stacking a Modal on top of Settings.
+  const { drill, openDrill, closeDrill } = useSettingsDrill();
+  const createModalOpen = drill?.kind === 'branches' && drill.mode === 'create';
   const [form] = Form.useForm();
   const [useSameBranchName, setUseSameBranchName] = useState(true);
   const [selectedRepoId, setSelectedRepoId] = useState<string | null>(null);
@@ -315,7 +318,7 @@ export const BranchesTable: React.FC<BranchesTableProps> = ({
         storage_mode: storageMode,
         ...(cloneDepth !== undefined ? { clone_depth: cloneDepth } : {}),
       });
-      setCreateModalOpen(false);
+      closeDrill();
       form.resetFields();
       setUseSameBranchName(true);
       setSelectedRepoId(null);
@@ -325,7 +328,7 @@ export const BranchesTable: React.FC<BranchesTableProps> = ({
   };
 
   const handleCancel = () => {
-    setCreateModalOpen(false);
+    closeDrill();
     form.resetFields();
     setUseSameBranchName(true);
     setSelectedRepoId(null);
@@ -347,20 +350,21 @@ export const BranchesTable: React.FC<BranchesTableProps> = ({
               <BranchesOutlined />
             )}
             <Space orientation="vertical" size={0} style={{ minWidth: 0, flex: 1 }}>
-              <Typography.Text
-                strong
-                ellipsis={{ tooltip: name }}
+              <Typography.Link
+                ellipsis
+                title={name}
+                onClick={() => onRowClick?.(record)}
                 style={{ display: 'block', maxWidth: '100%' }}
               >
                 <HighlightMatch text={name} query={searchTerm} />
-              </Typography.Text>
+              </Typography.Link>
               {record.deletion_status && (
                 <Typography.Text
                   type={record.deletion_status === 'deletion_failed' ? 'danger' : 'secondary'}
                   title={record.deletion_error}
                 >
                   {record.deletion_status === 'deletion_failed'
-                    ? 'Deletion failed — open deletion to retry'
+                    ? 'Deletion failed. Open deletion to retry.'
                     : 'Deleting…'}
                 </Typography.Text>
               )}
@@ -384,6 +388,18 @@ export const BranchesTable: React.FC<BranchesTableProps> = ({
       key: 'env',
       width: 120,
       align: 'center' as const,
+      // Native funnel filter over the environment lifecycle states, plus a
+      // "Not started" bucket for branches that have never had an environment.
+      filters: [
+        { text: 'Running', value: 'running' },
+        { text: 'Starting', value: 'starting' },
+        { text: 'Stopping', value: 'stopping' },
+        { text: 'Stopped', value: 'stopped' },
+        { text: 'Error', value: 'error' },
+        { text: 'Not started', value: 'none' },
+      ],
+      onFilter: (value: Key | boolean, record: Branch) =>
+        (record.environment_instance?.status ?? 'none') === value,
       render: (_: unknown, record: Branch) => {
         const repo = repos.find((r: Repo) => r.repo_id === record.repo_id);
         if (record.deletion_status)
@@ -395,6 +411,12 @@ export const BranchesTable: React.FC<BranchesTableProps> = ({
       title: 'Repo',
       dataIndex: 'repo_id',
       key: 'repo_id',
+      // One entry per repository present; complements the free-text search.
+      filters: repos
+        .slice()
+        .sort((a, b) => getRepoName(a.repo_id).localeCompare(getRepoName(b.repo_id)))
+        .map((r) => ({ text: getRepoName(r.repo_id), value: r.repo_id })),
+      onFilter: (value: Key | boolean, record: Branch) => record.repo_id === value,
       render: (repoId: string) => (
         <Space>
           <FolderOutlined />
@@ -484,27 +506,31 @@ export const BranchesTable: React.FC<BranchesTableProps> = ({
               setArchiveDeleteModalOpen(true);
             }}
           />
-          <Button
-            type="text"
-            size="small"
-            icon={<EditOutlined />}
-            onClick={(e) => {
-              e.stopPropagation();
-              onRowClick?.(record);
-            }}
-          />
-          <Button
-            type="text"
-            size="small"
-            icon={<DeleteOutlined />}
-            danger
-            onClick={(e) => {
-              e.stopPropagation();
-              setSelectedBranch(record);
-              setInitialArchiveDeleteAction('delete');
-              setArchiveDeleteModalOpen(true);
-            }}
-          />
+          <Tooltip title="Edit branch">
+            <Button
+              type="text"
+              size="small"
+              icon={<EditOutlined />}
+              onClick={(e) => {
+                e.stopPropagation();
+                onRowClick?.(record);
+              }}
+            />
+          </Tooltip>
+          <Tooltip title="Delete branch">
+            <Button
+              type="text"
+              size="small"
+              icon={<DeleteOutlined />}
+              danger
+              onClick={(e) => {
+                e.stopPropagation();
+                setSelectedBranch(record);
+                setInitialArchiveDeleteAction('delete');
+                setArchiveDeleteModalOpen(true);
+              }}
+            />
+          </Tooltip>
         </SettingsActionGroup>
       ),
     },
@@ -563,21 +589,51 @@ export const BranchesTable: React.FC<BranchesTableProps> = ({
   }, [archiveFilter, archivedBranches, repoById, searchTerm, branchById]);
   const hasAnyBranches = branchById.size > 0 || archivedBranches.length > 0;
 
+  // "Create Branch" renders in place (drill-in) instead of a stacked Modal,
+  // matching branch edit (embedded BranchModal) and teammate create.
+  if (createModalOpen) {
+    return (
+      <DrillInFrame
+        title="Create Branch"
+        saveLabel="Create"
+        saveDisabled={!isFormValid}
+        onSave={handleCreate}
+        onBack={handleCancel}
+      >
+        <div style={{ maxWidth: 640 }}>
+          <Form form={form} layout="vertical" onFieldsChange={validateForm}>
+            <BranchFormFields
+              repoById={repoById}
+              boardById={boardById}
+              selectedRepoId={selectedRepoId}
+              onRepoChange={handleRepoChange}
+              defaultBranch={getDefaultBranch()}
+              showBoardSelector={true}
+              requireBoard
+              onFormChange={validateForm}
+              useSameBranchName={useSameBranchName}
+              onUseSameBranchNameChange={setUseSameBranchName}
+              branchStorageConfig={branchStorageConfig}
+            />
+          </Form>
+        </div>
+      </DrillInFrame>
+    );
+  }
+
   return (
     <div>
-      <ResponsiveSettingsHeader
+      <ListPanelHeader
+        title="Branches"
         description="Manage git branches for isolated development contexts across sessions."
-        actions={(compact) => (
-          <Space wrap style={{ width: compact ? '100%' : undefined }}>
+        search={
+          <Space>
             <Input
               allowClear
               placeholder="Search by name, repo, slug, path, or ID"
               value={searchTerm}
               onChange={(event) => setSearchTerm(event.target.value)}
-              style={{
-                width: compact ? '100%' : token.sizeUnit * 40,
-                flex: compact ? '1 1 100%' : undefined,
-              }}
+              style={{ width: token.sizeUnit * 40 }}
             />
             <Select
               value={archiveFilter}
@@ -591,16 +647,18 @@ export const BranchesTable: React.FC<BranchesTableProps> = ({
                 { value: 'archived', label: 'Archived' },
               ]}
             />
-            <Button
-              type="primary"
-              icon={<PlusOutlined />}
-              onClick={() => setCreateModalOpen(true)}
-              disabled={repos.length === 0}
-            >
-              Create Branch
-            </Button>
           </Space>
-        )}
+        }
+        actions={
+          <Button
+            type="primary"
+            icon={<PlusOutlined />}
+            onClick={() => openDrill({ kind: 'branches', mode: 'create' })}
+            disabled={repos.length === 0}
+          >
+            Create Branch
+          </Button>
+        }
       />
 
       {repos.length === 0 && (
@@ -644,40 +702,8 @@ export const BranchesTable: React.FC<BranchesTableProps> = ({
           rowKey="branch_id"
           pagination={{ defaultPageSize: 10 }}
           size="small"
-          scroll={{ x: 1000 }}
-          onRow={(record) => ({
-            onClick: () => onRowClick?.(record),
-            style: { cursor: onRowClick ? 'pointer' : 'default' },
-          })}
         />
       )}
-
-      <AdaptiveSettingsModal
-        title="Create Branch"
-        open={createModalOpen}
-        onOk={handleCreate}
-        onCancel={handleCancel}
-        okText="Create"
-        okButtonProps={{
-          disabled: !isFormValid,
-        }}
-      >
-        <Form form={form} layout="vertical" onFieldsChange={validateForm}>
-          <BranchFormFields
-            repoById={repoById}
-            boardById={boardById}
-            selectedRepoId={selectedRepoId}
-            onRepoChange={handleRepoChange}
-            defaultBranch={getDefaultBranch()}
-            showBoardSelector={true}
-            requireBoard
-            onFormChange={validateForm}
-            useSameBranchName={useSameBranchName}
-            onUseSameBranchNameChange={setUseSameBranchName}
-            branchStorageConfig={branchStorageConfig}
-          />
-        </Form>
-      </AdaptiveSettingsModal>
 
       {selectedBranch && (
         <ArchiveDeleteBranchModal

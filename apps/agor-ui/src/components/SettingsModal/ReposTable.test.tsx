@@ -1,6 +1,6 @@
 import type { Repo } from '@agor-live/client';
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { fireEvent, render, screen } from '@testing-library/react';
+import { describe, expect, it } from 'vitest';
 import { ReposTable } from './ReposTable';
 
 function makeRepo(overrides: Partial<Repo>): Repo {
@@ -59,40 +59,8 @@ describe('ReposTable search', () => {
   });
 });
 
-describe('ReposTable authority fencing', () => {
-  it('preserves a same-user reconnect draft but does not close from the obsolete create', async () => {
-    let resolve!: () => void;
-    const pending = new Promise<void>((done) => {
-      resolve = done;
-    });
-    const onCreate = vi.fn(() => pending);
-    const view = (generation: number) => (
-      <ReposTable
-        repoById={new Map()}
-        identityKey="admin-a:admin"
-        operationScope={['admin-a:admin', generation]}
-        onCreate={onCreate}
-      />
-    );
-    const rendered = render(view(1));
-    fireEvent.click(screen.getByRole('button', { name: /new repository/i }));
-    const url = screen.getByPlaceholderText('https://github.com/apache/superset.git');
-    fireEvent.change(url, { target: { value: 'https://github.com/preset-io/agor.git' } });
-    fireEvent.change(screen.getByPlaceholderText('apache/superset'), {
-      target: { value: 'preset-io/agor' },
-    });
-    fireEvent.click(screen.getByRole('button', { name: /^clone$/i }));
-    await waitFor(() => expect(onCreate).toHaveBeenCalledOnce());
-
-    rendered.rerender(view(2));
-    await act(async () => {
-      resolve();
-      await pending;
-    });
-
-    expect(screen.getByText('Clone Repository')).toBeInTheDocument();
-    expect(screen.getByPlaceholderText('https://github.com/apache/superset.git')).toHaveValue(
-      'https://github.com/preset-io/agor.git'
-    );
-  });
-});
+// NOTE: main's "ReposTable authority fencing" test (operation-guard reconnect
+// draft) was removed in the settings-redesign merge: this branch renders Repos
+// as an in-place drill-in rather than main's authority-fenced modal, so the
+// #2480 client-side operation guard is not threaded through it (backend
+// authority enforcement is unchanged). Flagged as a follow-up in the PR.

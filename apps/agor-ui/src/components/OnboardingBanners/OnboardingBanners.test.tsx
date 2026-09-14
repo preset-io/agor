@@ -8,6 +8,13 @@ import {
 } from './credentialWarningDismissal';
 import { OnboardingBanners, type OnboardingBannersProps } from './OnboardingBanners';
 
+// The MCP banner's "Connect tools" button navigates to the Marketplace route;
+// stub useNavigate so the bare (router-less) render doesn't throw.
+vi.mock('react-router-dom', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('react-router-dom')>()),
+  useNavigate: () => vi.fn(),
+}));
+
 const onboardedUser = (userId: string, overrides: Partial<User> = {}): User =>
   ({ user_id: userId, onboarding_completed: true, ...overrides }) as User;
 

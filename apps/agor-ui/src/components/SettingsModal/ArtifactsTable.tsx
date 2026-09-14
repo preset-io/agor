@@ -17,16 +17,17 @@ import {
   theme,
 } from 'antd';
 import type { CSSProperties } from 'react';
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { mapToArray, mapToSortedArray } from '@/utils/mapHelpers';
 import { filterBySettingsSearch } from '@/utils/settingsSearch';
 import { uiRouteHref } from '@/utils/uiRoutes';
 import { useAppNavigation } from '../../hooks/useAppNavigation';
-import { boardSelectFilter, boardSelectOptions, getBoardEmoji } from '../BoardTile';
+import { ArchiveToggleButton } from '../ArchiveButton';
+import { boardSelectOptions, getBoardEmoji } from '../BoardTile';
 import { HighlightMatch } from '../HighlightMatch';
-import { AdaptiveSettingsModal } from './AdaptiveSettingsModal';
-import { ResponsiveSettingsHeader } from './ResponsiveSettingsHeader';
+import { ListPanelHeader } from './panelPrimitives';
 import { SettingsActionGroup } from './SettingsActionGroup';
+import { DrillInFrame, useSettingsDrill } from './SettingsDrill';
 
 interface ArtifactsTableProps {
   artifactById: Map<string, Artifact>;
@@ -60,11 +61,25 @@ export const ArtifactsTable: React.FC<ArtifactsTableProps> = ({
   onDelete,
   onClose,
 }) => {
-  const [editModalOpen, setEditModalOpen] = useState(false);
-  const [editingArtifact, setEditingArtifact] = useState<Artifact | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
+  const [archivedFilter, setArchivedFilter] = useState<'active' | 'archived' | 'all'>('active');
+  const [dirty, setDirty] = useState(false);
   const [form] = Form.useForm();
   const { token } = theme.useToken();
+  const { drill, openDrill, closeDrill } = useSettingsDrill();
+
+  // Editing swaps this section's Content pane for the drill-in editor below,
+  // instead of stacking a second Modal on top of Settings.
+  const editingArtifact =
+    drill?.kind === 'artifacts' && drill.recordId
+      ? (artifactById.get(drill.recordId) ?? null)
+      : null;
+
+  const openEdit = useCallback(
+    (artifact: Artifact) =>
+      openDrill({ kind: 'artifacts', mode: 'edit', recordId: artifact.artifact_id }),
+    [openDrill]
+  );
 
   // Reuses the `artifactById` prop so we don't read the same data via
   // both props and context. Only goToArtifact is used from this table.
@@ -81,37 +96,38 @@ export const ArtifactsTable: React.FC<ArtifactsTableProps> = ({
     [onClose, navigation]
   );
 
-  const handleEdit = (artifact: Artifact) => {
-    setEditingArtifact(artifact);
-    form.setFieldsValue({
-      name: artifact.name,
-      description: artifact.description || '',
-      board_id: artifact.board_id,
-    });
-    setEditModalOpen(true);
-  };
+  // Seed the form whenever the drill-in targets a new artifact.
+  useEffect(() => {
+    if (editingArtifact) {
+      form.setFieldsValue({
+        name: editingArtifact.name,
+        description: editingArtifact.description || '',
+        board_id: editingArtifact.board_id,
+      });
+      setDirty(false);
+    }
+  }, [editingArtifact, form]);
 
-  const handleUpdate = () => {
+  const handleUpdate = useCallback(async () => {
     if (!editingArtifact) return;
-    form.validateFields().then((values) => {
-      // Build a patch of only fields that actually changed. If nothing
-      // changed, skip the network round-trip entirely — avoids firing a
-      // spurious `patched` broadcast for a no-op submit.
-      const updates: Partial<Artifact> = {};
-      const nextName = values.name;
-      const nextDescription = values.description || undefined;
-      const currentDescription = editingArtifact.description || undefined;
-      if (nextName !== editingArtifact.name) updates.name = nextName;
-      if (nextDescription !== currentDescription) updates.description = nextDescription;
-      if (values.board_id && values.board_id !== editingArtifact.board_id) {
-        updates.board_id = values.board_id;
-      }
-      if (Object.keys(updates).length > 0) {
-        onUpdate?.(editingArtifact.artifact_id, updates);
-      }
-      setEditModalOpen(false);
-    });
-  };
+    const values = await form.validateFields();
+    // Build a patch of only fields that actually changed. If nothing changed,
+    // skip the network round-trip — avoids a spurious `patched` broadcast.
+    const updates: Partial<Artifact> = {};
+    const nextName = values.name;
+    const nextDescription = values.description || undefined;
+    const currentDescription = editingArtifact.description || undefined;
+    if (nextName !== editingArtifact.name) updates.name = nextName;
+    if (nextDescription !== currentDescription) updates.description = nextDescription;
+    if (values.board_id && values.board_id !== editingArtifact.board_id) {
+      updates.board_id = values.board_id;
+    }
+    if (Object.keys(updates).length > 0) {
+      onUpdate?.(editingArtifact.artifact_id, updates);
+    }
+    setDirty(false);
+    closeDrill();
+  }, [closeDrill, editingArtifact, form, onUpdate]);
 
   const boardOptions = boardSelectOptions(mapToArray(boardById), branchById);
 
@@ -125,9 +141,14 @@ export const ArtifactsTable: React.FC<ArtifactsTableProps> = ({
         const displayName = name || shortId(artifact.artifact_id);
         return (
           <Space orientation="vertical" size={0} style={{ width: '100%' }}>
-            <Typography.Text strong ellipsis={{ tooltip: displayName }} style={artifactTextStyle}>
+            <Typography.Link
+              ellipsis
+              title={displayName}
+              style={artifactTextStyle}
+              onClick={() => openEdit(artifact)}
+            >
               <HighlightMatch text={displayName} query={searchTerm} />
-            </Typography.Text>
+            </Typography.Link>
             {artifact.description && (
               <Typography.Text
                 type="secondary"
@@ -239,9 +260,16 @@ export const ArtifactsTable: React.FC<ArtifactsTableProps> = ({
               type="text"
               size="small"
               icon={<EditOutlined />}
-              onClick={() => handleEdit(artifact)}
+              onClick={() => openEdit(artifact)}
             />
           </Tooltip>
+          <ArchiveToggleButton
+            archived={Boolean(artifact.archived)}
+            tooltip={artifact.archived ? 'Archived • Click to unarchive' : 'Archive artifact'}
+            onToggle={(nextArchived) =>
+              onUpdate?.(artifact.artifact_id, { archived: nextArchived })
+            }
+          />
           <Popconfirm
             title="Delete artifact?"
             description={`This will remove "${artifact.name}" and its files.`}
@@ -259,40 +287,121 @@ export const ArtifactsTable: React.FC<ArtifactsTableProps> = ({
     },
   ];
 
-  const dataSource = useMemo(() => {
-    const activeArtifacts = mapToSortedArray(artifactById, (a, b) =>
+  const visibleArtifacts = useMemo(() => {
+    const sorted = mapToSortedArray(artifactById, (a, b) =>
       a.name.localeCompare(b.name, undefined, { sensitivity: 'base' })
-    ).filter((artifact) => !artifact.archived);
-    return filterBySettingsSearch(activeArtifacts, searchTerm, [
-      (artifact) => artifact.name,
-      (artifact) => artifact.description,
-      (artifact) => artifact.template,
-      (artifact) => artifact.build_status,
-      (artifact) => artifact.artifact_id,
-      (artifact) => {
-        const branch = artifact.branch_id ? branchById.get(artifact.branch_id) : undefined;
-        return [branch?.name, branch?.ref, artifact.branch_id];
-      },
-      (artifact) => {
-        const board = boardById.get(artifact.board_id);
-        return [board?.name, board?.slug, artifact.board_id];
-      },
-    ]);
-  }, [artifactById, searchTerm, branchById, boardById]);
+    );
+    if (archivedFilter === 'active') return sorted.filter((artifact) => !artifact.archived);
+    if (archivedFilter === 'archived') return sorted.filter((artifact) => artifact.archived);
+    return sorted;
+  }, [artifactById, archivedFilter]);
+
+  const dataSource = useMemo(
+    () =>
+      filterBySettingsSearch(visibleArtifacts, searchTerm, [
+        (artifact) => artifact.name,
+        (artifact) => artifact.description,
+        (artifact) => artifact.template,
+        (artifact) => artifact.build_status,
+        (artifact) => artifact.artifact_id,
+        (artifact) => {
+          const branch = artifact.branch_id ? branchById.get(artifact.branch_id) : undefined;
+          return [branch?.name, branch?.ref, artifact.branch_id];
+        },
+        (artifact) => {
+          const board = boardById.get(artifact.board_id);
+          return [board?.name, board?.slug, artifact.board_id];
+        },
+      ]),
+    [visibleArtifacts, searchTerm, branchById, boardById]
+  );
+
+  if (editingArtifact) {
+    return (
+      <DrillInFrame
+        title={`Edit ${editingArtifact.name || shortId(editingArtifact.artifact_id)}`}
+        dirty={dirty}
+        onSave={handleUpdate}
+      >
+        <Form
+          form={form}
+          layout="vertical"
+          style={{ maxWidth: 520 }}
+          onValuesChange={() => setDirty(true)}
+        >
+          {/* Read-only orientation: which template this artifact runs and which
+              branch produced it — neither is editable here. */}
+          <Typography.Paragraph type="secondary" style={{ marginBottom: 16 }}>
+            Template{' '}
+            <Tag color={templateColors[editingArtifact.template] ?? 'default'}>
+              {editingArtifact.template}
+            </Tag>
+            {editingArtifact.branch_id && (
+              <>
+                {' · '}Branch{' '}
+                <Typography.Text code>
+                  {branchById.get(editingArtifact.branch_id)?.name ??
+                    shortId(editingArtifact.branch_id)}
+                </Typography.Text>
+              </>
+            )}
+          </Typography.Paragraph>
+          <Form.Item
+            label="Name"
+            name="name"
+            rules={[{ required: true, message: 'Please enter a name' }]}
+          >
+            <Input placeholder="My Artifact" />
+          </Form.Item>
+          <Form.Item label="Description" name="description">
+            <Input.TextArea rows={3} placeholder="Optional description" />
+          </Form.Item>
+          <Form.Item
+            label="Board"
+            name="board_id"
+            tooltip="Move this artifact to a different board. Its position on the board is preserved."
+            rules={[{ required: true, message: 'Please select a board' }]}
+          >
+            <Select
+              showSearch
+              placeholder="Select board..."
+              options={boardOptions}
+              filterOption={(input, option) =>
+                (option?.label?.toString() ?? '').toLowerCase().includes(input.toLowerCase())
+              }
+            />
+          </Form.Item>
+        </Form>
+      </DrillInFrame>
+    );
+  }
 
   return (
     <div>
-      <ResponsiveSettingsHeader
+      <ListPanelHeader
+        title="Artifacts"
         description="Live web application artifacts created by agents via MCP tools."
-        actions={(compact) => (
-          <Input
-            allowClear
-            placeholder="Search name, description, template, branch, or board"
-            value={searchTerm}
-            onChange={(event) => setSearchTerm(event.target.value)}
-            style={{ width: compact ? '100%' : 360 }}
-          />
-        )}
+        search={
+          <Space>
+            <Input
+              allowClear
+              placeholder="Search name, description, template, branch, or board"
+              value={searchTerm}
+              onChange={(event) => setSearchTerm(event.target.value)}
+              style={{ width: 360 }}
+            />
+            <Select
+              value={archivedFilter}
+              onChange={setArchivedFilter}
+              style={{ width: 130 }}
+              options={[
+                { value: 'active', label: 'Active' },
+                { value: 'archived', label: 'Archived' },
+                { value: 'all', label: 'All' },
+              ]}
+            />
+          </Space>
+        }
       />
 
       {dataSource.length === 0 ? (
@@ -304,12 +413,22 @@ export const ArtifactsTable: React.FC<ArtifactsTableProps> = ({
             minHeight: 400,
           }}
         >
-          <Empty description="No artifacts yet">
-            <Typography.Text type="secondary">
-              Artifacts are created by agents using the <code>agor_artifacts_publish</code> MCP
-              tool.
-            </Typography.Text>
-          </Empty>
+          {visibleArtifacts.length === 0 ? (
+            <Empty
+              description={
+                archivedFilter === 'archived' ? 'No archived artifacts' : 'No artifacts yet'
+              }
+            >
+              {archivedFilter !== 'archived' && (
+                <Typography.Text type="secondary">
+                  Artifacts are created by agents using the <code>agor_artifacts_publish</code> MCP
+                  tool.
+                </Typography.Text>
+              )}
+            </Empty>
+          ) : (
+            <Empty description={`No artifacts match “${searchTerm}”`} />
+          )}
         </div>
       ) : (
         <Table
@@ -321,48 +440,6 @@ export const ArtifactsTable: React.FC<ArtifactsTableProps> = ({
           tableLayout="fixed"
           scroll={{ x: 760 }}
         />
-      )}
-
-      {editingArtifact && (
-        <AdaptiveSettingsModal
-          title="Edit Artifact"
-          open={editModalOpen}
-          onOk={handleUpdate}
-          onCancel={() => {
-            setEditModalOpen(false);
-          }}
-          afterClose={() => {
-            form.resetFields();
-            setEditingArtifact(null);
-          }}
-          okText="Save"
-        >
-          <Form form={form} layout="vertical" style={{ marginTop: 16 }}>
-            <Form.Item
-              label="Name"
-              name="name"
-              rules={[{ required: true, message: 'Please enter a name' }]}
-            >
-              <Input placeholder="My Artifact" />
-            </Form.Item>
-            <Form.Item label="Description" name="description">
-              <Input.TextArea rows={3} placeholder="Optional description" />
-            </Form.Item>
-            <Form.Item
-              label="Board"
-              name="board_id"
-              tooltip="Move this artifact to a different board. Its position on the board is preserved."
-              rules={[{ required: true, message: 'Please select a board' }]}
-            >
-              <Select
-                showSearch
-                placeholder="Select board..."
-                options={boardOptions}
-                filterOption={boardSelectFilter}
-              />
-            </Form.Item>
-          </Form>
-        </AdaptiveSettingsModal>
       )}
     </div>
   );

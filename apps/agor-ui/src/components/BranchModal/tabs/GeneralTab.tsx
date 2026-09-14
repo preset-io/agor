@@ -16,6 +16,7 @@ import { ArchiveActionButton } from '../../ArchiveButton';
 import { ArchiveDeleteBranchModal } from '../../ArchiveDeleteBranchModal';
 import { boardSelectOptions } from '../../BoardTile';
 import { MCPServerSelect } from '../../MCPServerSelect';
+import { FIELD_WIDTHS } from '../../SettingsModal/panelPrimitives';
 import { Tag } from '../../Tag';
 import type { GeneralFormState } from '../useBranchModalForm';
 
@@ -136,11 +137,10 @@ export const GeneralTab: React.FC<GeneralTabProps> = ({
           <Typography.Text strong style={{ fontSize: 14, display: 'block', marginBottom: 16 }}>
             Work Context
           </Typography.Text>
-          <Form layout="horizontal" colon={false}>
+          <Form layout="vertical" colon={false}>
             <Form.Item
               label="Board"
-              labelCol={{ span: 6 }}
-              wrapperCol={{ span: 18 }}
+              style={FIELD_WIDTHS.short}
               validateStatus={boardAttachError ? 'error' : undefined}
               help={
                 boardAttachError ||
@@ -158,7 +158,7 @@ export const GeneralTab: React.FC<GeneralTabProps> = ({
               />
             </Form.Item>
 
-            <Form.Item label="Issue" labelCol={{ span: 6 }} wrapperCol={{ span: 18 }}>
+            <Form.Item label="Issue" style={FIELD_WIDTHS.medium}>
               <Input
                 value={state.issueUrl}
                 onChange={(e) => setField('issueUrl', e.target.value)}
@@ -168,7 +168,7 @@ export const GeneralTab: React.FC<GeneralTabProps> = ({
               />
             </Form.Item>
 
-            <Form.Item label="Pull Request" labelCol={{ span: 6 }} wrapperCol={{ span: 18 }}>
+            <Form.Item label="Pull Request" style={FIELD_WIDTHS.medium}>
               <Input
                 value={state.prUrl}
                 onChange={(e) => setField('prUrl', e.target.value)}
@@ -199,8 +199,6 @@ export const GeneralTab: React.FC<GeneralTabProps> = ({
                     </Tooltip>
                   </Space>
                 }
-                labelCol={{ span: 6 }}
-                wrapperCol={{ span: 18 }}
               >
                 <TextArea
                   value={state.notes}
@@ -214,9 +212,8 @@ export const GeneralTab: React.FC<GeneralTabProps> = ({
 
             <Form.Item
               label="MCP Servers"
-              labelCol={{ span: 6 }}
-              wrapperCol={{ span: 18 }}
-              extra="Default MCP servers for new sessions in this branch"
+              tooltip="Default MCP servers for new sessions in this branch"
+              style={FIELD_WIDTHS.medium}
             >
               <MCPServerSelect
                 mcpServers={mcpServers}
