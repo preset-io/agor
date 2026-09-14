@@ -26,16 +26,6 @@ import { hasObservedOnboardingCompletion } from '../../utils/currentUserAuthorit
 import type { WizardStep } from './OnboardingWizard';
 import { OnboardingWizard } from './OnboardingWizard';
 
-// The real emoji picker pulls a heavy dataset; stub it to a plain button so the
-// wizard mounts fast. Its footprint is irrelevant to these layout checks.
-vi.mock('../EmojiPickerInput/EmojiPickerInput', () => ({
-  EmojiPickerInput: ({ value, onChange }: { value: string; onChange: (value: string) => void }) => (
-    <button type="button" onClick={() => onChange(value)} aria-label="emoji picker">
-      {value}
-    </button>
-  ),
-}));
-
 function makeUser(): User {
   return {
     user_id: 'user-1',
@@ -233,6 +223,7 @@ describe('OnboardingWizard layout (real browser)', () => {
     for (const [width, height] of [
       [1366, 768],
       [320, 568],
+      [844, 390],
     ]) {
       await page.viewport(width, height);
       renderWizardAt('workspace', {
@@ -324,26 +315,22 @@ describe('OnboardingWizard layout (real browser)', () => {
       const grid = document.querySelector(
         'fieldset[aria-label="Teammate template"]'
       ) as HTMLElement;
-      const scroller =
-        height < 480
-          ? document.querySelector<HTMLElement>('.onb-workspace-layout')!
-          : grid.parentElement!;
+      const scroller = grid.parentElement!;
       const clip = scroller.getBoundingClientRect();
       const cards = Array.from(grid.children).map((card) => card.getBoundingClientRect());
       const row = cards.filter((rect) => Math.abs(rect.top - cards[0].top) < 1);
       const footer = screen.getByText('Continue →').closest('button')!.getBoundingClientRect();
       expect(footer.bottom).toBeLessThanOrEqual(height);
-      if (height >= 568) {
-        expect(row).toHaveLength(width === 320 ? 1 : 3);
-        for (const rect of row) {
-          expect(rect.top).toBeGreaterThanOrEqual(clip.top);
-          expect(rect.bottom).toBeLessThanOrEqual(Math.min(clip.bottom, footer.top));
-        }
-      } else {
-        expect(clip.height).toBeGreaterThan(40);
-        scroller.scrollTop = scroller.scrollHeight;
-        await nextFrame();
-        expect(footer.bottom).toBeLessThanOrEqual(height);
+      const name = screen.getByLabelText('Teammate name').getBoundingClientRect();
+      expect(name.top).toBeGreaterThanOrEqual(0);
+      expect(name.bottom).toBeLessThanOrEqual(footer.top);
+      expect(scroller.scrollTop).toBe(0);
+      expect(row).toHaveLength(width === 320 ? 1 : height < 480 ? 2 : 3);
+      for (const rect of row) {
+        expect(rect.top).toBeGreaterThanOrEqual(Math.max(clip.top, 0));
+        expect(rect.bottom).toBeLessThanOrEqual(Math.min(clip.bottom, footer.top));
+        expect(rect.left).toBeGreaterThanOrEqual(Math.max(clip.left, 0));
+        expect(rect.right).toBeLessThanOrEqual(Math.min(clip.right, width));
       }
       console.log(
         'persona rectangles',
@@ -360,7 +347,7 @@ describe('OnboardingWizard layout (real browser)', () => {
     }
   });
 
-  it('lays the step-2 teammate gallery out in exactly three columns at the widened modal', async () => {
+  it('uses three gallery columns at the widened modal and two beside landscape controls', async () => {
     renderWizardAt('workspace');
     const grid = await waitFor(() => {
       const element = document.querySelector(
@@ -376,7 +363,7 @@ describe('OnboardingWizard layout (real browser)', () => {
     const cardRects = Array.from(grid.children, (card) => card.getBoundingClientRect());
     const firstTop = cardRects[0]?.top;
     const renderedColumns = cardRects.filter((rect) => Math.abs(rect.top - firstTop) < 1).length;
-    const expectedColumns = window.innerWidth <= 480 ? 1 : 3;
+    const expectedColumns = window.innerWidth <= 480 ? 1 : window.innerHeight <= 480 ? 2 : 3;
     expect(
       renderedColumns,
       `expected ${expectedColumns} gallery columns at ${window.innerWidth}px, got ${renderedColumns}: "${getComputedStyle(grid).gridTemplateColumns}"`

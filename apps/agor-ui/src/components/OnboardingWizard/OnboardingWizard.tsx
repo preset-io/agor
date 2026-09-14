@@ -356,6 +356,14 @@ const ONB_ANIM_CSS = `
     .onb-workspace-gallery { flex: 0 0 auto !important; overflow: visible !important; }
   }
 
+  /* Short, wide screens have room beside the cards, not above them. Keep
+     both panes scrollable without making discovery depend on scrolling first. */
+  @media (max-height: 480px) and (min-width: 700px) {
+    .onb-workspace-layout { flex-direction: row !important; gap: 12px; overflow: hidden; }
+    .onb-workspace-controls { width: 220px; min-height: 0; overflow-y: auto; }
+    .onb-workspace-gallery { flex: 1 1 auto !important; min-width: 0; overflow-y: auto !important; }
+  }
+
   @media (prefers-reduced-motion: reduce) {
     .onb-step,
     .onb-check,
