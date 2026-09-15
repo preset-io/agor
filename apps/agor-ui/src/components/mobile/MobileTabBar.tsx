@@ -65,8 +65,10 @@ export const MobileTabBar: React.FC<MobileTabBarProps> = ({
         aria-current={active ? 'page' : undefined}
         onClick={() => onSelect(tab.key)}
         style={{
-          flex: 1,
-          minWidth: 0,
+          // Active pill sizes to its icon+label content; inactive tabs stay at
+          // their icon width so the long 'Comments' label never wraps or clips.
+          flex: active ? '1 1 auto' : '0 0 auto',
+          minWidth: TOUCH_TARGET,
           minHeight: TOUCH_TARGET,
           display: 'flex',
           alignItems: 'center',
@@ -80,14 +82,20 @@ export const MobileTabBar: React.FC<MobileTabBarProps> = ({
           color: active ? token.colorPrimary : token.colorTextSecondary,
         }}
       >
-        <Badge count={tab.badge ?? 0} size="small" offset={[6, -2]}>
+        {/* Badge rides the icon corner (not the label) so it never overlaps text. */}
+        <Badge count={tab.badge ?? 0} size="small" offset={[2, -2]}>
           <span style={{ fontSize: token.fontSizeHeading5, color: 'inherit', lineHeight: 1 }}>
             {tab.icon}
           </span>
         </Badge>
         {active && (
           <Typography.Text
-            style={{ fontSize: token.fontSizeSM, color: 'inherit', fontWeight: 600 }}
+            style={{
+              fontSize: token.fontSizeSM,
+              color: 'inherit',
+              fontWeight: 600,
+              whiteSpace: 'nowrap',
+            }}
           >
             {tab.label}
           </Typography.Text>
