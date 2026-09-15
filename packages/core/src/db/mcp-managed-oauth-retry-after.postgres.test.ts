@@ -9,7 +9,10 @@ import type { McpOAuthOperationResponse } from '../types/mcp-managed-oauth-contr
 import { createDatabase, type Database } from './client';
 import { executeRaw, rawRows } from './database-wrapper';
 import { MCPOAuthPendingFlowRepository } from './repositories/mcp-oauth-pending-flows';
-import { UserMCPOAuthTokenRepository } from './repositories/user-mcp-oauth-tokens';
+import {
+  getManagedOAuthDeferredClaim,
+  UserMCPOAuthTokenRepository,
+} from './repositories/user-mcp-oauth-tokens';
 import { runWithTenantDatabaseScope } from './tenant-scope';
 import { managedCommit, seedManagedRefreshGrant } from './test-support/managed-oauth-fixture';
 import { createOwnedPostgres, type OwnedPostgres } from './test-support/owned-postgres';
@@ -114,6 +117,13 @@ describe.skipIf(process.env.AGOR_DB_DIALECT !== 'postgresql')(
           )
         );
         expect(results.map((r) => r.outcome)).toEqual(['observed', 'observed']);
+        for (const result of results) {
+          expect(getManagedOAuthDeferredClaim(result)).toEqual(version);
+          expect(Object.isFrozen(getManagedOAuthDeferredClaim(result))).toBe(true);
+          expect(getManagedOAuthDeferredClaim({ ...result })).toBeUndefined();
+        }
+        const stale = await f.work(owned.peer, (r) => r.claimRefresh(f.user, f.server, f.expected));
+        expect(getManagedOAuthDeferredClaim(stale)).toBeUndefined();
       } finally {
         clock.mockRestore();
       }
@@ -128,6 +138,7 @@ describe.skipIf(process.env.AGOR_DB_DIALECT !== 'postgresql')(
       );
       const next = await f.work(owned.peer, (r) => r.claimRefresh(f.user, f.server, version));
       if (next.outcome !== 'claimed') throw new Error('elapsed floor did not admit');
+      expect(getManagedOAuthDeferredClaim(next)).toBeUndefined();
       expect(next.token.managed_metadata?.next_sequence).toBe('2');
       const start = next.token.refresh_claimed_at!.getTime();
       const commit = managedCommit(
@@ -335,6 +346,10 @@ describe.skipIf(process.env.AGOR_DB_DIALECT !== 'postgresql')(
           })
         );
         expect(observed.outcome).toBe('observed');
+        expect(getManagedOAuthDeferredClaim(observed)).toEqual({
+          ...f.expected,
+          refreshGeneration: f.claim.refreshGeneration,
+        });
         expect((await f.read()).managed_refresh_not_before).toEqual(
           before.managed_refresh_not_before
         );
