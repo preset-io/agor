@@ -66,6 +66,27 @@ export interface MCPOAuthRefreshResult {
   error?: string;
 }
 
+/** Managed start never returns provider state, code, verifier or credentials. */
+export interface MCPManagedOAuthStartResult {
+  success: true;
+  oauth_client_mode: 'cloud_managed_v1';
+  authorizationUrl: string;
+  attempt_id: MCPOAuthAttemptID;
+  transaction_id: string;
+}
+
+export interface MCPManagedOAuthReturnRequest {
+  transaction_id: string;
+  ticket: string;
+  client_nonce: string;
+}
+
+/** Acceptance is only navigation correlation. Durable local CAS determines success. */
+export interface MCPManagedOAuthReturnResult {
+  accepted: true;
+  attempt_id: MCPOAuthAttemptID;
+}
+
 /** Credential subject selected for the resulting MCP OAuth grant. */
 export type MCPOAuthMode = 'per_user' | 'shared';
 
