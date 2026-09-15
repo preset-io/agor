@@ -1286,6 +1286,29 @@ export class UserMCPOAuthTokenRepository {
     return rowsOf(result).length === 1;
   }
 
+  /** Exact committed receipt only. A delayed ACK cannot mark a replacement or later rotation. */
+  async markManagedReceiptAcknowledged(input: MCPManagedOAuthGrantMetadata): Promise<boolean> {
+    if (!this.postgres) throw new RepositoryError('Managed receipts require PostgreSQL');
+    const metadata = MCPManagedOAuthGrantMetadataSchema.parse(input);
+    if (metadata.owner.workspace_id !== this.tenantId())
+      throw new RepositoryError('Managed ACK scope mismatch');
+    const result = await executeRaw(
+      this.db,
+      sql`
+      UPDATE public.user_mcp_oauth_tokens
+      SET managed_metadata=jsonb_set(managed_metadata,'{receipt_acknowledged}','true'::jsonb)
+      WHERE tenant_id=${this.tenantId()} AND user_id=${metadata.owner.cell_local_user_id}
+        AND mcp_server_id=${metadata.owner.server_id} AND credential_origin='cloud_managed_v1'
+        AND managed_metadata->'owner'=${JSON.stringify(metadata.owner)}::jsonb
+        AND managed_metadata->>'operation_id'=${metadata.operation_id}
+        AND managed_metadata->>'receipt_id'=${metadata.receipt_id}
+        AND managed_metadata->>'signed_receipt'=${metadata.signed_receipt}
+        AND managed_metadata->'claim'=${JSON.stringify(metadata.claim)}::jsonb
+      RETURNING mcp_server_id`
+    );
+    return rowsOf(result).length === 1;
+  }
+
   /** Daemon-internal projection; does not decrypt or export credentials. */
   async listManagedReceiptsForAcknowledgement(
     tenantId: string,
@@ -1308,6 +1331,7 @@ export class UserMCPOAuthTokenRepository {
         sql`
       SELECT managed_metadata FROM public.user_mcp_oauth_tokens
       WHERE tenant_id=${tenantId} AND credential_origin='cloud_managed_v1'
+        AND managed_metadata->>'receipt_acknowledged' IS DISTINCT FROM 'true'
         AND (${afterOperationId ?? null}::text IS NULL OR managed_metadata->>'operation_id'>${afterOperationId ?? null})
       ORDER BY managed_metadata->>'operation_id' LIMIT ${limit}
     `

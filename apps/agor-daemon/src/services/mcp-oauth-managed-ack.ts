@@ -1,4 +1,9 @@
 import { randomUUID } from 'node:crypto';
+import {
+  runWithTenantDatabaseScope,
+  type TenantScopeAwareDatabase,
+  UserMCPOAuthTokenRepository,
+} from '@agor/core/db';
 import type { ManagedMCPOAuthClient } from '@agor/core/tools/mcp/managed-oauth-client';
 import {
   type MCPManagedOAuthGrantMetadata,
@@ -25,6 +30,7 @@ export function managedOAuthReceiptCommitFence(metadata: MCPManagedOAuthGrantMet
 
 /** Caller must obtain metadata from a completed local commit or committed-only repository read. */
 export function createManagedOAuthAcknowledger(input: {
+  db: TenantScopeAwareDatabase;
   sender: Pick<ManagedMCPOAuthClient, 'request'>;
   assertOwner(
     owner: McpOAuthOwner,
@@ -65,5 +71,10 @@ export function createManagedOAuthAcknowledger(input: {
         await execution?.assertCurrent?.();
       },
     });
+    // The worker's authenticated ACK is delivery evidence, not grant authority.
+    // A failed local write is retried; a late ACK can mark only this exact receipt.
+    await runWithTenantDatabaseScope(input.db, metadata.owner.workspace_id, (db) =>
+      new UserMCPOAuthTokenRepository(db).markManagedReceiptAcknowledged(metadata)
+    );
   };
 }
