@@ -111,11 +111,6 @@ function titlePatchCall(sessionsPatch: ReturnType<typeof vi.fn>) {
   );
 }
 
-/** The terminal status/ready patch — always the first sessions patch. */
-function statusPatchCall(sessionsPatch: ReturnType<typeof vi.fn>) {
-  return sessionsPatch.mock.calls[0];
-}
-
 describe('TasksService auto-title', () => {
   it.each([TaskStatus.QUEUED, TaskStatus.RUNNING])(
     'auto-titles an untitled session when a %s task is created',
@@ -130,7 +125,7 @@ describe('TasksService auto-title', () => {
     }
   );
 
-  it('writes the terminal status/ready patch prompt-flow-only, with the original params', async () => {
+  it('does not rewrite the repository-owned terminal Session projection', async () => {
     const { service, sessionsPatch } = makeService({ session: { title: undefined } });
 
     await service.patch(taskId, {
@@ -138,12 +133,16 @@ describe('TasksService auto-title', () => {
       completed_at: '2026-01-01T00:00:05.000Z',
     });
 
-    // The status patch must not carry `title` — folding metadata in would make
-    // the sessions RBAC hook demand `all` and fail a non-owner's completion.
-    const [, statusUpdates, statusParams] = statusPatchCall(sessionsPatch);
-    expect(statusUpdates).toMatchObject({ status: 'idle', ready_for_prompt: true });
-    expect(statusUpdates).not.toHaveProperty('title');
-    expect(statusParams).toBeUndefined();
+    // The Task repository already committed the minimal status projection in
+    // the Task transaction. A second Session write here could race and clobber
+    // a newer Task's RUNNING/ready=false claim.
+    expect(
+      sessionsPatch.mock.calls.some(
+        ([, updates]) =>
+          Object.hasOwn(updates as object, 'status') ||
+          Object.hasOwn(updates as object, 'ready_for_prompt')
+      )
+    ).toBe(false);
   });
 
   it('auto-titles an untitled session via a separate trusted (provider-less) patch', async () => {
