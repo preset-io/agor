@@ -626,6 +626,30 @@ export class MCPOAuthPendingFlowRepository {
     }
   }
 
+  /** Worker page in an exact tenant transaction; never a system payload lookup. */
+  async listManagedForReconciliation(
+    tenantId: string,
+    afterAttemptId?: string,
+    limit = 25
+  ): Promise<MCPOAuthPendingFlowRecord[]> {
+    await lockTenantAuthoritySubject(this.db, tenantId, `mcp-managed-pending-scan:${tenantId}`);
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100)
+      throw new RepositoryError('Invalid managed reconciliation page');
+    if (afterAttemptId !== undefined) McpOAuthIdSchema.parse(afterAttemptId);
+    return rawRows(
+      await executeRaw(
+        this.db,
+        sql`
+      SELECT * FROM public.mcp_oauth_pending_flows
+      WHERE tenant_id=${tenantId} AND credential_origin='cloud_managed_v1'
+        AND is_current AND status IN ('pending','exchanging')
+        AND (${afterAttemptId ?? null}::text IS NULL OR attempt_id>${afterAttemptId ?? null})
+      ORDER BY attempt_id LIMIT ${limit}
+    `
+      )
+    ).map(mapRow);
+  }
+
   async finish(
     tenantId: string,
     attemptId: MCPOAuthAttemptID,

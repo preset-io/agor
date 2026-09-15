@@ -8,7 +8,7 @@ import {
   type McpOAuthOperationResponse,
   McpOAuthOperationResponseSchema,
 } from '../../types/mcp-managed-oauth-contract';
-import { lockMCPManagedSubject } from './authority-primitives';
+import { lockMCPManagedSubject, lockTenantAuthoritySubject } from './authority-primitives';
 import { assertManagedOAuthTokenCommit } from './mcp-managed-oauth-receipt';
 import { MCPOAuthPendingFlowRepository } from './mcp-oauth-pending-flows';
 /**
@@ -1233,6 +1233,35 @@ export class UserMCPOAuthTokenRepository {
         AND refresh_claimed_at>clock_timestamp()-interval '2 minutes' RETURNING mcp_server_id`
     );
     return rowsOf(result).length === 1;
+  }
+
+  /** Daemon-internal projection; does not decrypt or export credentials. */
+  async listManagedReceiptsForAcknowledgement(
+    tenantId: string,
+    afterOperationId?: string,
+    limit = 25
+  ): Promise<MCPManagedOAuthGrantMetadata[]> {
+    if (!this.postgres) throw new RepositoryError('Managed receipts require PostgreSQL');
+    await lockTenantAuthoritySubject(this.db, tenantId, `mcp-managed-ack-scan:${tenantId}`);
+    if (
+      !Number.isSafeInteger(limit) ||
+      limit < 1 ||
+      limit > 100 ||
+      (afterOperationId !== undefined &&
+        (afterOperationId.length < 1 || afterOperationId.length > 256))
+    )
+      throw new RepositoryError('Invalid managed acknowledgement page');
+    return rowsOf(
+      await executeRaw(
+        this.db,
+        sql`
+      SELECT managed_metadata FROM public.user_mcp_oauth_tokens
+      WHERE tenant_id=${tenantId} AND credential_origin='cloud_managed_v1'
+        AND (${afterOperationId ?? null}::text IS NULL OR managed_metadata->>'operation_id'>${afterOperationId ?? null})
+      ORDER BY managed_metadata->>'operation_id' LIMIT ${limit}
+    `
+      )
+    ).map((row) => MCPManagedOAuthGrantMetadataSchema.parse(row.managed_metadata));
   }
 
   /** Daemon-internal projection; does not decrypt or export credentials. */

@@ -3,6 +3,8 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { executeRaw, rawRows } from './database-wrapper';
 import { listManagedOAuthMaintenanceTenants } from './repositories/mcp-managed-oauth-maintenance';
 import { MCPManagedOAuthOutboxRepository } from './repositories/mcp-managed-oauth-outbox';
+import { MCPOAuthPendingFlowRepository } from './repositories/mcp-oauth-pending-flows';
+import { UserMCPOAuthTokenRepository } from './repositories/user-mcp-oauth-tokens';
 import { runWithSystemDatabaseScope, runWithTenantDatabaseScope } from './tenant-scope';
 import { seedManagedRefreshGrant } from './test-support/managed-oauth-fixture';
 import { createOwnedPostgres, type OwnedPostgres } from './test-support/owned-postgres';
@@ -29,12 +31,40 @@ describe.skipIf(process.env.AGOR_DB_DIALECT !== 'postgresql')(
       });
       const live = await seedManagedRefreshGrant(owned.db, 'synthetic-maintenance-master');
       const orphan = await seedManagedRefreshGrant(owned.db, 'synthetic-maintenance-master');
+      await runWithTenantDatabaseScope(owned.db, live.tenant, async (db) => {
+        const receipts = await new UserMCPOAuthTokenRepository(
+          db
+        ).listManagedReceiptsForAcknowledgement(live.tenant);
+        expect(receipts).toHaveLength(1);
+        expect(receipts[0].owner.workspace_id).toBe(live.tenant);
+        expect(JSON.stringify(receipts)).not.toContain('access_token');
+        expect(
+          await new UserMCPOAuthTokenRepository(db).listManagedReceiptsForAcknowledgement(
+            live.tenant,
+            receipts[0].operation_id
+          )
+        ).toEqual([]);
+        await expect(
+          new UserMCPOAuthTokenRepository(db).listManagedReceiptsForAcknowledgement(orphan.tenant)
+        ).rejects.toThrow('tenant transaction');
+        await expect(
+          new MCPOAuthPendingFlowRepository(db).listManagedForReconciliation(orphan.tenant)
+        ).rejects.toThrow('tenant transaction');
+      });
       await seedManagedRefreshGrant(owned.db, 'synthetic-maintenance-master', 'default');
       await runWithTenantDatabaseScope(owned.db, orphan.tenant, async (db) => {
         await executeRaw(db, sql`DELETE FROM public.users WHERE user_id=${orphan.user}`);
         expect(
           (await new MCPManagedOAuthOutboxRepository(db).listPending(orphan.tenant))[0].kind
         ).toBe('close');
+        const [job] = await new MCPManagedOAuthOutboxRepository(db).listPending(orphan.tenant);
+        expect(
+          await new MCPManagedOAuthOutboxRepository(db).listPending(
+            orphan.tenant,
+            25,
+            job.outbox_id
+          )
+        ).toEqual([]);
       });
       await expect(
         owned.sql`SELECT * FROM public.agor_mcp_managed_oauth_maintenance_tenants(NULL,100)`

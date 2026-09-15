@@ -33,8 +33,13 @@ export class MCPManagedOAuthOutboxRepository {
   private async lock(tenantId: string): Promise<void> {
     await lockTenantAuthoritySubject(this.db, tenantId, `mcp-managed-cleanup:${tenantId}`);
   }
-  async listPending(tenantId: string, limit = 100): Promise<MCPManagedOAuthCleanupEntry[]> {
+  async listPending(
+    tenantId: string,
+    limit = 100,
+    afterOutboxId?: string
+  ): Promise<MCPManagedOAuthCleanupEntry[]> {
     await this.lock(tenantId);
+    if (afterOutboxId !== undefined) McpOAuthIdSchema.parse(afterOutboxId);
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100)
       throw new RepositoryError('Invalid cleanup batch size');
     // Ciphertext never leaves this repository. Expiry erases revocation material, not the durable close obligation.
@@ -46,7 +51,9 @@ export class MCPManagedOAuthOutboxRepository {
       await executeRaw(
         this.db,
         sql`SELECT outbox_id,operation_id,kind,attempt_id,user_id,mcp_server_id,grant_generation,transaction_id,managed_metadata,expires_at
-      FROM public.mcp_managed_oauth_outbox WHERE tenant_id=${tenantId} AND completed_at IS NULL ORDER BY created_at,outbox_id LIMIT ${limit}`
+      FROM public.mcp_managed_oauth_outbox WHERE tenant_id=${tenantId} AND completed_at IS NULL
+        AND (${afterOutboxId ?? null}::text IS NULL OR outbox_id>${afterOutboxId ?? null})
+      ORDER BY outbox_id LIMIT ${limit}`
       )
     ).map((row) => {
       if (!['cancel', 'recover_prepare_cancel', 'close'].includes(String(row.kind)))
