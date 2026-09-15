@@ -36,6 +36,7 @@ export * from './knowledge-semantic-settings';
 export * from './mcp-catalog-candidates';
 export * from './mcp-egress-settings';
 export * from './mcp-managed-oauth-invalidations';
+export * from './mcp-managed-oauth-maintenance';
 export * from './mcp-managed-oauth-outbox';
 export * from './mcp-marketplace';
 export * from './mcp-member-policy';

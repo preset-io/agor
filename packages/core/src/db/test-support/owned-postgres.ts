@@ -137,6 +137,26 @@ export async function createOwnedPostgres(): Promise<OwnedPostgres> {
     // Runtime deletion checks only read the migration receipt, never mutate it.
     await bootstrap.unsafe(`GRANT USAGE ON SCHEMA drizzle TO ${role}`);
     await bootstrap.unsafe(`GRANT SELECT ON ALL TABLES IN SCHEMA drizzle TO ${role}`);
+    // The routing definer also runs as NOSUPERUSER/NOBYPASSRLS with only
+    // routing-column SELECT grants. It cannot read credentials even as definer.
+    const routingRole = `routing_${run}`;
+    await bootstrap.unsafe(`CREATE ROLE ${routingRole} NOLOGIN NOSUPERUSER NOBYPASSRLS NOINHERIT`);
+    await bootstrap.unsafe(`GRANT ${routingRole} TO bootstrap`);
+    await bootstrap.unsafe(`GRANT USAGE, CREATE ON SCHEMA public TO ${routingRole}`);
+    await bootstrap.unsafe(
+      `GRANT SELECT(tenant_id,credential_origin,status) ON public.mcp_oauth_pending_flows TO ${routingRole}`
+    );
+    await bootstrap.unsafe(
+      `GRANT SELECT(tenant_id,credential_origin) ON public.user_mcp_oauth_tokens TO ${routingRole}`
+    );
+    await bootstrap.unsafe(
+      `GRANT SELECT(tenant_id,completed_at) ON public.mcp_managed_oauth_outbox TO ${routingRole}`
+    );
+    await bootstrap.unsafe(
+      `ALTER FUNCTION public.agor_mcp_managed_oauth_maintenance_tenants(text,integer) OWNER TO ${routingRole}`
+    );
+    await bootstrap.unsafe(`REVOKE CREATE ON SCHEMA public FROM ${routingRole}`);
+    await bootstrap.unsafe(`REVOKE ${routingRole} FROM bootstrap`);
     const url = `postgresql://${role}:${password}@${base}`;
     const db: Database = createDatabase({ dialect: 'postgresql', url });
     const peer: Database = createDatabase({ dialect: 'postgresql', url });
