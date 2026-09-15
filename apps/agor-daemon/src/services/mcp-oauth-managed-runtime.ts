@@ -77,7 +77,10 @@ export interface ManagedOAuthRuntimeDependencies {
     commit: MCPManagedOAuthTokenCommit;
   }) => Promise<void>;
   /** ACK is best-effort only AFTER the local transaction committed. */
-  acknowledge: (commit: MCPManagedOAuthTokenCommit) => Promise<void>;
+  acknowledge: (
+    commit: MCPManagedOAuthTokenCommit,
+    execution?: { timeoutMs?: number; assertCurrent?: () => void | Promise<void> }
+  ) => Promise<void>;
 }
 
 function equalOwner(left: McpOAuthOwner, right: McpOAuthOwner): boolean {
@@ -390,7 +393,28 @@ export class ManagedMCPOAuthRuntime {
   }
 
   /** Status evidence may trigger completion; a browser ticket or postMessage never does. */
-  async reconcile(record: MCPOAuthPendingFlowRecord): Promise<void> {
+  async reconcile(
+    record: MCPOAuthPendingFlowRecord,
+    execution: {
+      timeoutMs?: number;
+      assertCurrent?: () => void | Promise<void>;
+    } = {}
+  ): Promise<void> {
+    if (
+      execution.timeoutMs !== undefined &&
+      (!Number.isFinite(execution.timeoutMs) || execution.timeoutMs <= 0)
+    )
+      throw new ManagedOAuthUnavailableError();
+    const deadline =
+      execution.timeoutMs === undefined ? undefined : performance.now() + execution.timeoutMs;
+    const remaining = () =>
+      deadline === undefined ? undefined : Math.max(0, Math.floor(deadline - performance.now()));
+    const assertBudget = async () => {
+      await execution.assertCurrent?.();
+      if (deadline !== undefined && performance.now() >= deadline)
+        throw new ManagedOAuthUnavailableError();
+    };
+    await assertBudget();
     if (
       record.credentialOrigin !== 'cloud_managed_v1' ||
       !record.isCurrent ||
@@ -404,6 +428,7 @@ export class ManagedMCPOAuthRuntime {
     const profile = await this.current(owner, 'exchange');
     let activeClaim = record.status === 'exchanging' ? record : undefined;
     const assertCurrent = async () => {
+      await assertBudget();
       await this.current(owner, 'exchange');
       const fresh = await d.flows.getForUser(record.tenantId, record.userId, record.attemptId);
       if (
@@ -433,6 +458,7 @@ export class ManagedMCPOAuthRuntime {
           transaction_id: record.managedTransactionId,
         },
         schema: McpOAuthTransactionStatusSchema,
+        timeoutMs: remaining(),
         assertCurrent,
       });
       if (['expired', 'failed', 'canceled'].includes(status.status)) {
@@ -474,6 +500,7 @@ export class ManagedMCPOAuthRuntime {
             keys: d.keys,
             now: d.now,
             assertCurrent,
+            timeoutMs: remaining(),
           })
         : await executeManagedOAuthOperation({
             client: d.client,
@@ -483,6 +510,7 @@ export class ManagedMCPOAuthRuntime {
             keys: d.keys,
             now: d.now,
             assertCurrent,
+            timeoutMs: remaining(),
           });
       await assertCurrent();
       const r = verified.result;
@@ -507,7 +535,9 @@ export class ManagedMCPOAuthRuntime {
       };
       await d.persist({ record: claimed, profile, commit });
       // Lost ACK is never permission to revoke a committed grant or replay exchange.
-      await d.acknowledge(commit).catch(() => undefined);
+      await assertBudget()
+        .then(() => d.acknowledge(commit, { timeoutMs: remaining(), assertCurrent: assertBudget }))
+        .catch(() => undefined);
     } catch (error) {
       if (error instanceof ManagedMCPOAuthOperationError) {
         const ambiguous = ['ambiguous', 'expired', 'acknowledged'].includes(error.outcome.status);
