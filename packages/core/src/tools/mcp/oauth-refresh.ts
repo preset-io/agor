@@ -1,5 +1,5 @@
 /** PostgreSQL-coordinated MCP OAuth refresh with rotating-token fencing. */
-
+import type { KeyObject } from 'node:crypto';
 // Keep the daemon's guarded handle, scope registry, and repositories in the
 // same runtime module. The independently bundled tools entry point must not
 // manufacture a second tenant proxy WeakMap/AsyncLocalStorage owner.
@@ -20,12 +20,28 @@ import {
   type MCPServerID,
   type UserID,
 } from '../../types';
+import type {
+  MCPManagedOAuthRefreshAdapter,
+  MCPManagedOAuthTokenCommit,
+} from '../../types/mcp-managed-oauth';
+import { managedOAuthWireGeneration } from '../../types/mcp-managed-oauth';
+import {
+  McpOAuthOperationResponseSchema,
+  type McpOAuthOwner,
+  type McpOAuthRefreshRequest,
+} from '../../types/mcp-managed-oauth-contract';
 import {
   type OutboundDnsLookup,
   OutboundPreDispatchAuthorityError,
   safeOutboundFetch,
 } from '../../utils/safe-outbound-fetch';
 import { assertMcpGrantSubjectEntitled } from './grant-entitlement';
+import {
+  executeManagedOAuthOperation,
+  type ManagedMCPOAuthClient,
+  ManagedMCPOAuthOperationError,
+  recoverManagedOAuthOperation,
+} from './managed-oauth-client';
 import { inferOAuthTokenUrl } from './oauth-auth';
 import {
   applyClientAuthentication,
@@ -268,6 +284,8 @@ function mutexKey(deps: RefreshAndPersistDeps): MutexKey {
 }
 
 export interface RefreshAndPersistDeps {
+  /** Absent unless the managed coordinator explicitly enabled this cell. */
+  managed?: MCPManagedOAuthRefreshAdapter;
   db: Database | TenantScopeAwareDatabase;
   tenantId?: string;
   userId: UserID | null;
@@ -410,6 +428,214 @@ async function settleObservedRefresh(
   return token.oauth_access_token;
 }
 
+/** Shared verified broker adapter. It neither claims nor persists a grant. */
+export function createManagedOAuthRefreshAdapter(options: {
+  client: ManagedMCPOAuthClient;
+  issuer: string;
+  keys: ReadonlyMap<string, KeyObject>;
+  now: () => number;
+  assertCurrent: (owner: McpOAuthOwner) => void | Promise<void>;
+  acknowledge: (commit: MCPManagedOAuthTokenCommit) => Promise<void>;
+}): MCPManagedOAuthRefreshAdapter {
+  return {
+    acknowledge: options.acknowledge,
+    async execute({ request, metadata, recoveryOnly, assertCurrent }) {
+      const current = async () => {
+        await assertCurrent();
+        await options.assertCurrent(request.owner);
+      };
+      const policy = {
+        client: options.client,
+        issuer: options.issuer,
+        keys: options.keys,
+        now: options.now,
+        assertCurrent: current,
+      };
+      const verified = recoveryOnly
+        ? await recoverManagedOAuthOperation({
+            ...policy,
+            expected: {
+              owner: request.owner,
+              claim: request.claim,
+              operationId: request.operation_id,
+              sequence: request.sequence,
+              handle: request.handle,
+              handleEpoch: request.handle_epoch,
+            },
+          })
+        : await executeManagedOAuthOperation({ ...policy, request, sequence: request.sequence });
+      const { result, receipt, use } = verified;
+      return {
+        tokens: result.tokens,
+        operation_id: request.operation_id,
+        expected_sequence: request.sequence,
+        metadata: {
+          owner: request.owner,
+          transaction_id: metadata.transaction_id,
+          handle: result.handle,
+          handle_epoch: result.handle_epoch,
+          next_sequence: result.next_sequence,
+          operation_id: result.operation_id,
+          receipt_id: result.receipt_id,
+          claim: request.claim,
+          signed_receipt: result.signed_receipt,
+          receipt_claims: receipt,
+          use_authorization: result.use_authorization,
+          use_claims: use,
+        },
+      };
+    },
+  };
+}
+
+/** The existing database claim is the only owner, including receipt-only failover. */
+async function refreshManagedPostgres(
+  deps: RefreshAndPersistDeps,
+  row: UserMCPOAuthToken,
+  recoveryOnly: boolean
+): Promise<string> {
+  if (
+    !deps.managed ||
+    !deps.userId ||
+    !row.managed_metadata ||
+    !row.managed_operation_id ||
+    !row.refresh_claim_id ||
+    !row.refresh_claimed_at ||
+    !row.oauth_refresh_token
+  ) {
+    throw new GrantConfigurationChangedError(
+      'Managed OAuth refresh is not available for this authority'
+    );
+  }
+  const adapter = deps.managed;
+  const fence = {
+    claimId: row.refresh_claim_id,
+    refreshGeneration: row.refresh_generation,
+    grantGeneration: row.grant_generation,
+    grantBindingFingerprint: row.grant_binding_fingerprint,
+  };
+  const metadata = row.managed_metadata;
+  const request: McpOAuthRefreshRequest = {
+    protocol_version: 1,
+    operation_id: row.managed_operation_id,
+    owner: metadata.owner,
+    handle: metadata.handle,
+    handle_epoch: metadata.handle_epoch,
+    sequence: metadata.next_sequence,
+    refresh_token: row.oauth_refresh_token,
+    claim: {
+      kind: 'refresh',
+      claim_id: fence.claimId,
+      claimed_at: row.refresh_claimed_at.getTime(),
+      deadline_at: row.refresh_claimed_at.getTime() + 120000,
+      refresh_generation: managedOAuthWireGeneration(row.refresh_generation),
+      refresh_success_generation: managedOAuthWireGeneration(row.refresh_success_generation),
+    },
+  };
+  const assertCurrent = async () => {
+    await deps.assertCurrent?.();
+    await tenantWork(deps, async (db) => {
+      await assertGrantSubjectForRefresh(deps, db);
+      await assertGrantStillAuthorized(deps, row, db);
+    });
+  };
+  try {
+    await assertCurrent();
+  } catch (error) {
+    // Only this process's new claim is known not to have dispatched. Recovery
+    // cannot make that assertion about the original owner's network activity.
+    if (!recoveryOnly)
+      await tenantWork(deps, (db) =>
+        new UserMCPOAuthTokenRepository(db).releaseUnstartedManagedRefreshClaim(
+          deps.userId!,
+          deps.mcpServerId,
+          fence,
+          request.operation_id,
+          request.sequence
+        )
+      );
+    throw error;
+  }
+  let commit: MCPManagedOAuthTokenCommit;
+  try {
+    commit = await adapter.execute({ request, metadata, recoveryOnly, assertCurrent });
+  } catch (error) {
+    // Independently bundled entry points can carry distinct class constructors.
+    // Admit only this internal protocol error tag plus a valid exact wire outcome.
+    const outcome =
+      error instanceof ManagedMCPOAuthOperationError
+        ? error.outcome
+        : error instanceof Error &&
+            error.name === 'ManagedMCPOAuthOperationError' &&
+            'outcome' in error
+          ? McpOAuthOperationResponseSchema.parse(error.outcome)
+          : undefined;
+    if (outcome && outcome.status !== 'succeeded') {
+      const changed = await tenantWork(deps, (db) =>
+        new UserMCPOAuthTokenRepository(db).finishManagedRefreshRejection(
+          deps.userId!,
+          deps.mcpServerId,
+          fence,
+          outcome
+        )
+      );
+      if (!changed) return observeCommittedRefresh(deps, fence);
+      if (outcome.status === 'grant_invalid') {
+        notifyInvalidGrant(deps);
+        throw new InvalidGrantError();
+      }
+      // App-client pause/rejection remains distinct from user grant invalidation.
+      throw error;
+    }
+    await tenantWork(deps, (db) =>
+      new UserMCPOAuthTokenRepository(db).finishRefreshClaim(
+        deps.userId,
+        deps.mcpServerId,
+        fence,
+        'ambiguous'
+      )
+    );
+    throw new AmbiguousRefreshError();
+  }
+  let committed: boolean;
+  try {
+    committed = await tenantWork(deps, async (db) => {
+      await assertGrantSubjectForRefresh(deps, db);
+      await assertGrantStillAuthorized(deps, row, db);
+      return new UserMCPOAuthTokenRepository(db).completeClaimedRefresh(
+        deps.userId,
+        deps.mcpServerId,
+        fence,
+        {
+          accessToken: commit.tokens.access_token,
+          refreshToken: commit.tokens.refresh_token,
+          expiresAt: new Date(commit.tokens.expires_at),
+          managed: commit,
+        }
+      );
+    });
+  } catch (error) {
+    await tenantWork(deps, (db) =>
+      new UserMCPOAuthTokenRepository(db).finishRefreshClaim(
+        deps.userId,
+        deps.mcpServerId,
+        fence,
+        'ambiguous'
+      )
+    );
+    throw error;
+  }
+  if (!committed) return observeCommittedRefresh(deps, fence);
+  try {
+    await adapter.acknowledge(commit);
+  } catch {
+    // Metadata retains the exact receipt for an idempotent later ACK. Never
+    // poison a successfully committed rotating grant because ACK transport failed.
+    console.warn('[MCP OAuth Refresh] managed_ack_deferred');
+  }
+  return (await loadExactAuthorizedGrant(deps, fence)).oauth_access_token;
+}
+
 async function refreshPostgres(deps: RefreshAndPersistDeps): Promise<string> {
   const expected = deps.observedRefreshVersion;
   if (!expected) {
@@ -420,14 +646,28 @@ async function refreshPostgres(deps: RefreshAndPersistDeps): Promise<string> {
       'PostgreSQL MCP OAuth refresh requires the observed grant fingerprint'
     );
   }
-  const claim = await tenantWork(deps, (db) =>
-    new UserMCPOAuthTokenRepository(db).claimRefresh(deps.userId, deps.mcpServerId, expected)
-  );
+  const claim = await tenantWork(deps, async (db) => {
+    const repo = new UserMCPOAuthTokenRepository(db);
+    const observed = await repo.getToken(deps.userId, deps.mcpServerId);
+    if (observed?.credential_origin === 'cloud_managed_v1') {
+      if (!deps.managed)
+        throw new GrantConfigurationChangedError('Managed OAuth refresh adapter is disabled');
+      await assertGrantStillAuthorized(deps, observed, db);
+    }
+    return repo.claimRefresh(deps.userId, deps.mcpServerId, expected);
+  });
   if (claim.outcome === 'observed') {
+    if (
+      claim.token?.credential_origin === 'cloud_managed_v1' &&
+      claim.token.refresh_status === 'refreshing' &&
+      exactGrantMatches(claim.token, expected)
+    )
+      return refreshManagedPostgres(deps, claim.token, true);
     return settleObservedRefresh(deps, claim.token, expected);
   }
 
   const row = claim.token;
+  if (row.credential_origin === 'cloud_managed_v1') return refreshManagedPostgres(deps, row, false);
   const fence = {
     claimId: claim.claimId,
     refreshGeneration: claim.refreshGeneration,
@@ -467,6 +707,7 @@ async function refreshPostgres(deps: RefreshAndPersistDeps): Promise<string> {
       clientSecret: row.oauth_client_secret,
       resourceUri: row.oauth_resource_uri,
       redirectUri: row.oauth_redirect_uri,
+      tokenEndpointAuthMethod: row.oauth_token_endpoint_auth_method,
       allowLocalhostHttp: deps.allowLocalhostHttpDevelopment,
       assertCurrent: deps.assertCurrent,
       resolveDns: deps.resolveDns,
@@ -564,6 +805,8 @@ async function loadObservedStandaloneGrant(
   const userTokenRepo = new UserMCPOAuthTokenRepository(deps.db as Database);
   const row = await userTokenRepo.getToken(deps.userId, deps.mcpServerId);
   if (!row) throw new MissingRefreshTokenError();
+  if (row.credential_origin === 'cloud_managed_v1' || row.grant_binding_version === 5)
+    throw new GrantConfigurationChangedError('Managed OAuth requires PostgreSQL');
   if (!exactGrantMatches(row, expected)) throw new GrantConfigurationChangedError();
   await assertGrantStillAuthorized(deps, row, deps.db);
   return row;
@@ -624,6 +867,7 @@ async function refreshStandalone(
       clientSecret: row.oauth_client_secret ?? server?.auth?.oauth_client_secret,
       resourceUri: row.oauth_resource_uri,
       redirectUri: row.oauth_redirect_uri,
+      tokenEndpointAuthMethod: row.oauth_token_endpoint_auth_method,
       allowLocalhostHttp: true,
       assertCurrent: deps.assertCurrent,
       resolveDns: deps.resolveDns,
