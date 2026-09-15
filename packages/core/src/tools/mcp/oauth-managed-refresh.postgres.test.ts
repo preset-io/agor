@@ -1,8 +1,10 @@
 import {
+  executeRaw,
   MCPManagedOAuthOutboxRepository,
   runWithTenantDatabaseScope,
   UserMCPOAuthTokenRepository,
 } from '@agor/core/db';
+import { sql } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import {
   managedCommit,
@@ -13,10 +15,15 @@ import type {
   MCPManagedOAuthRefreshAdapter,
   MCPManagedOAuthTokenCommit,
 } from '../../types/mcp-managed-oauth';
-import { type ManagedMCPOAuthClient, ManagedMCPOAuthOperationError } from './managed-oauth-client';
+import {
+  type ManagedMCPOAuthClient,
+  ManagedMCPOAuthOperationError,
+  ManagedMCPOAuthProtocolError,
+} from './managed-oauth-client';
 import {
   createManagedOAuthRefreshAdapter,
   getManagedOAuthDeferredRefresh,
+  ManagedRefreshInProgressError,
   type RefreshAndPersistDeps,
   refreshAndPersistToken,
 } from './oauth-refresh';
@@ -104,6 +111,155 @@ describe.skipIf(process.env.AGOR_DB_DIALECT !== 'postgresql')(
       expect(args.request.claim.claimed_at).toBe(claimed.token.refresh_claimed_at!.getTime());
       expect(args.request.claim.refresh_generation).toBe('1');
     });
+    it.each(['receipt not found', 'network failure', 'in_progress timeout', 'invalid response'])(
+      'does not let a peer %s retire the paused dispatch owner',
+      async (failure) => {
+        const f = await seedManagedRefreshGrant(owned.db, master);
+        let releaseOwner!: () => void;
+        let ownerStarted!: () => void;
+        const paused = new Promise<void>((resolve) => {
+          releaseOwner = resolve;
+        });
+        const started = new Promise<void>((resolve) => {
+          ownerStarted = resolve;
+        });
+        const ownerExecute = vi.fn<MCPManagedOAuthRefreshAdapter['execute']>(async (args) => {
+          expect(args.recoveryOnly).toBe(false);
+          // A owns the persisted claim but has not yet reached the broker journal.
+          ownerStarted();
+          await paused;
+          return commitFor(args);
+        });
+        const owner = refreshAndPersistToken(
+          deps(f, {
+            execute: ownerExecute,
+            acknowledge: async () => {},
+          })
+        );
+        await started;
+        const before = await runWithTenantDatabaseScope(owned.peer, f.tenant, (db) =>
+          new UserMCPOAuthTokenRepository(db).getToken(f.user, f.server)
+        );
+        const request = vi.fn(async (args) => {
+          expect(args.operation).toBe('receipt');
+          expect(args.id).toBe(before!.managed_operation_id);
+          expect(args.body.claim.claim_id).toBe(before!.refresh_claim_id);
+          expect(args.body).not.toHaveProperty('refresh_token');
+          if (failure === 'receipt not found')
+            throw new ManagedMCPOAuthProtocolError('remote_rejection');
+          if (failure === 'network failure') throw new Error('synthetic network loss');
+          if (failure === 'invalid response')
+            throw new ManagedMCPOAuthProtocolError('invalid_response');
+          return {
+            protocol_version: 1,
+            operation_id: args.id,
+            owner: args.body.owner,
+            claim: args.body.claim,
+            status: 'in_progress',
+            failure_code: 'operation_in_progress',
+            sequence: before!.managed_metadata!.next_sequence,
+          };
+        });
+        const peerAdapter = createManagedOAuthRefreshAdapter({
+          client: { request } as unknown as ManagedMCPOAuthClient,
+          issuer: 'https://broker.example.test/',
+          keys: new Map(),
+          now: () => Date.now(),
+          assertCurrent: () => {},
+          acknowledge: async () => {},
+        });
+        try {
+          const error = await refreshAndPersistToken({
+            ...deps(f, peerAdapter),
+            db: owned.peer,
+          }).catch((error) => error);
+          expect(error).toBeInstanceOf(ManagedRefreshInProgressError);
+          expect(getManagedOAuthDeferredRefresh(error)).toBeUndefined();
+          expect(request).toHaveBeenCalled();
+          await runWithTenantDatabaseScope(owned.peer, f.tenant, async (db) => {
+            expect(await new UserMCPOAuthTokenRepository(db).getToken(f.user, f.server)).toEqual(
+              before
+            );
+            expect(await new MCPManagedOAuthOutboxRepository(db).listPending(f.tenant)).toEqual([]);
+          });
+        } finally {
+          releaseOwner();
+        }
+        const access = await owner;
+        expect(ownerExecute).toHaveBeenCalledTimes(1);
+        await runWithTenantDatabaseScope(owned.peer, f.tenant, async (db) => {
+          const token = (await new UserMCPOAuthTokenRepository(db).getToken(f.user, f.server))!;
+          expect(token.refresh_status).toBe('idle');
+          expect(token.refresh_success_generation).toBe(1);
+          expect(token.oauth_access_token).toBe(access);
+          expect(token.managed_metadata!.operation_id).toBe(before!.managed_operation_id);
+          expect(await new MCPManagedOAuthOutboxRepository(db).listPending(f.tenant)).toEqual([]);
+        });
+      },
+      25000
+    );
+    it('returns the exact committed winner when a peer receipt read fails after owner commit', async () => {
+      const f = await seedManagedRefreshGrant(owned.db, master);
+      let releaseOwner!: () => void;
+      let ownerStarted!: () => void;
+      const paused = new Promise<void>((resolve) => {
+        releaseOwner = resolve;
+      });
+      const started = new Promise<void>((resolve) => {
+        ownerStarted = resolve;
+      });
+      const owner = refreshAndPersistToken(
+        deps(f, {
+          execute: async (args) => {
+            ownerStarted();
+            await paused;
+            return commitFor(args);
+          },
+          acknowledge: async () => {},
+        })
+      );
+      await started;
+      const peer = await refreshAndPersistToken({
+        ...deps(f, {
+          execute: async (args) => {
+            expect(args.recoveryOnly).toBe(true);
+            releaseOwner();
+            await owner;
+            throw new ManagedMCPOAuthProtocolError('unavailable');
+          },
+          acknowledge: async () => {},
+        }),
+        db: owned.peer,
+      });
+      expect(peer).toBe(await owner);
+      await runWithTenantDatabaseScope(owned.peer, f.tenant, async (db) => {
+        expect(await new MCPManagedOAuthOutboxRepository(db).listPending(f.tenant)).toEqual([]);
+      });
+    });
+    it('keeps a lost owner response recoverable by its original receipt rather than closing the grant', async () => {
+      const f = await seedManagedRefreshGrant(owned.db, master);
+      const execute = vi.fn<MCPManagedOAuthRefreshAdapter['execute']>(async (args) => {
+        if (!args.recoveryOnly) throw new ManagedMCPOAuthProtocolError('unavailable');
+        return commitFor(args);
+      });
+      const adapter = { execute, acknowledge: async () => {} };
+      const error = await refreshAndPersistToken(deps(f, adapter)).catch((error) => error);
+      expect(error).toBeInstanceOf(ManagedRefreshInProgressError);
+      expect(getManagedOAuthDeferredRefresh(error)).toBeUndefined();
+      const original = execute.mock.calls[0][0];
+      const access = await refreshAndPersistToken({ ...deps(f, adapter), db: owned.peer });
+      expect(execute).toHaveBeenCalledTimes(2);
+      const recovered = execute.mock.calls[1][0];
+      expect(recovered.recoveryOnly).toBe(true);
+      expect(recovered.request).toEqual(original.request);
+      await runWithTenantDatabaseScope(owned.peer, f.tenant, async (db) => {
+        const token = (await new UserMCPOAuthTokenRepository(db).getToken(f.user, f.server))!;
+        expect(token.refresh_status).toBe('idle');
+        expect(token.oauth_access_token).toBe(access);
+        expect(token.managed_metadata!.next_sequence).toBe('2');
+        expect(await new MCPManagedOAuthOutboxRepository(db).listPending(f.tenant)).toEqual([]);
+      });
+    });
     it('keeps certified app-client failure distinct from invalid_grant and advances sequence exactly once', async () => {
       const f = await seedManagedRefreshGrant(owned.db, master);
       const onInvalidGrant = vi.fn();
@@ -169,20 +325,35 @@ describe.skipIf(process.env.AGOR_DB_DIALECT !== 'postgresql')(
         );
       });
     });
-    it('closes unknown rotating outcomes and will not dispatch a second refresh', async () => {
+    it('expires an unrecovered original claim at the database deadline without replay or a new claim', async () => {
       const f = await seedManagedRefreshGrant(owned.db, master);
-      const execute = vi.fn(async () => {
-        throw new Error('synthetic unknown outcome');
+      const execute = vi.fn<MCPManagedOAuthRefreshAdapter['execute']>(async () => {
+        throw new ManagedMCPOAuthProtocolError('unavailable');
       });
       const d = deps(f, { execute, acknowledge: async () => {} });
-      await expect(refreshAndPersistToken(d)).rejects.toThrow('ambiguous');
-      await expect(refreshAndPersistToken(d)).rejects.toThrow('ambiguous');
-      expect(execute).toHaveBeenCalledTimes(1);
-      await runWithTenantDatabaseScope(owned.db, f.tenant, async (db) =>
-        expect((await new MCPManagedOAuthOutboxRepository(db).listPending(f.tenant))[0].kind).toBe(
-          'close'
+      await expect(refreshAndPersistToken(d)).rejects.toBeInstanceOf(ManagedRefreshInProgressError);
+      await expect(refreshAndPersistToken({ ...d, db: owned.peer })).rejects.toBeInstanceOf(
+        ManagedRefreshInProgressError
+      );
+      expect(execute.mock.calls.map(([args]) => args.recoveryOnly)).toEqual([false, true]);
+      expect(execute.mock.calls[1][0].request).toEqual(execute.mock.calls[0][0].request);
+      await runWithTenantDatabaseScope(owned.db, f.tenant, (db) =>
+        executeRaw(
+          db,
+          sql`UPDATE user_mcp_oauth_tokens SET refresh_claimed_at=clock_timestamp()-interval '2 minutes'
+          WHERE user_id=${f.user} AND mcp_server_id=${f.server}`
         )
       );
+      await expect(refreshAndPersistToken({ ...d, db: owned.peer })).rejects.toThrow('ambiguous');
+      expect(execute).toHaveBeenCalledTimes(2);
+      await runWithTenantDatabaseScope(owned.db, f.tenant, async (db) => {
+        const token = (await new UserMCPOAuthTokenRepository(db).getToken(f.user, f.server))!;
+        expect(token.refresh_generation).toBe(1);
+        expect(token.refresh_status).toBe('ambiguous');
+        expect((await new MCPManagedOAuthOutboxRepository(db).listPending(f.tenant))[0].kind).toBe(
+          'close'
+        );
+      });
     });
     it('releases only a new owner known locally not to have dispatched when caller authority changes', async () => {
       const f = await seedManagedRefreshGrant(owned.db, master);
@@ -243,15 +414,15 @@ describe.skipIf(process.env.AGOR_DB_DIALECT !== 'postgresql')(
         },
         acknowledge: async () => {},
       });
-      await expect(refreshAndPersistToken(deps(f, adapter))).rejects.toThrow('ambiguous');
+      await expect(refreshAndPersistToken(deps(f, adapter))).rejects.toBeInstanceOf(
+        ManagedRefreshInProgressError
+      );
       expect(request).not.toHaveBeenCalled();
       await runWithTenantDatabaseScope(owned.db, f.tenant, async (db) => {
         expect(
           (await new UserMCPOAuthTokenRepository(db).getToken(f.user, f.server))?.refresh_status
-        ).toBe('ambiguous');
-        expect((await new MCPManagedOAuthOutboxRepository(db).listPending(f.tenant))[0].kind).toBe(
-          'close'
-        );
+        ).toBe('refreshing');
+        expect(await new MCPManagedOAuthOutboxRepository(db).listPending(f.tenant)).toEqual([]);
       });
     });
     it('a pause after invoking the sender never becomes a local no-dispatch certificate', async () => {
@@ -271,15 +442,15 @@ describe.skipIf(process.env.AGOR_DB_DIALECT !== 'postgresql')(
         },
         acknowledge: async () => {},
       });
-      await expect(refreshAndPersistToken(deps(f, adapter))).rejects.toThrow('ambiguous');
+      await expect(refreshAndPersistToken(deps(f, adapter))).rejects.toBeInstanceOf(
+        ManagedRefreshInProgressError
+      );
       expect(request).toHaveBeenCalledTimes(1);
       await runWithTenantDatabaseScope(owned.db, f.tenant, async (db) => {
         expect(
           (await new UserMCPOAuthTokenRepository(db).getToken(f.user, f.server))?.refresh_status
-        ).toBe('ambiguous');
-        expect((await new MCPManagedOAuthOutboxRepository(db).listPending(f.tenant))[0].kind).toBe(
-          'close'
-        );
+        ).toBe('refreshing');
+        expect(await new MCPManagedOAuthOutboxRepository(db).listPending(f.tenant)).toEqual([]);
       });
     });
   }
