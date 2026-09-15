@@ -34,7 +34,9 @@ overrides:
   handlebars: '>=4.7.9 <5'
   hono: '>=4.12.34 <5'
   jws: '>=4.0.1 <5'
-  js-yaml: '>=4.3.1 <5'
+  # Keep the v4 schema/options used by config and browser consumers; v5 changes
+  # empty-input and merge-key behavior. Include transitive YAML parsers in the fix.
+  js-yaml: '>=4.3.2 <5'
   lodash: '>=4.18.1 <5'
   lodash-es: '>=4.18.1 <5'
   mdast-util-to-hast: '>=13.2.1 <14'
