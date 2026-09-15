@@ -18,9 +18,10 @@ import {
 } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
 import { NotFound } from '@agor/core/feathers';
+import { resolveEffectiveSessionMcpServers } from '@agor/core/mcp';
 import type { TenantID } from '@agor/core/types';
 import { SessionStatus } from '@agor/core/types';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { SessionsService } from './sessions.js';
 
 const postgresUrl = process.env.AGOR_TEST_POSTGRES_URL;
@@ -183,6 +184,35 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
         owner.server.mcp_server_id,
       ]);
       expect(events).toHaveLength(1);
+
+      // The persisted opt-out must work with the real non-superuser/RLS path,
+      // not only with raw SQLite fixtures or an executor-side empty mock.
+      await runWithTenantDatabaseScope(db, tenantA, async (scoped) => {
+        const links = new SessionMCPServerRepository(scoped);
+        await links.setServers(session.session_id, []);
+        const stored = await new SessionRepository(scoped).findById(session.session_id);
+        expect(stored?.mcp_selection_explicit).toBe(true);
+        const global = vi.fn(async () => [owner.server]);
+        expect(
+          await resolveEffectiveSessionMcpServers(
+            stored!,
+            await links.listServers(session.session_id),
+            global,
+            owner.user.user_id
+          )
+        ).toEqual([]);
+        expect(global).not.toHaveBeenCalled();
+      });
+      await expect(
+        runWithTenantDatabaseScope(db, tenantB, (scoped) =>
+          new SessionMCPServerRepository(scoped).setServers(session.session_id, [])
+        )
+      ).rejects.toThrow();
+      await runWithTenantDatabaseScope(db, tenantA, async (scoped) => {
+        expect(
+          (await new SessionRepository(scoped).findById(session.session_id))?.mcp_selection_explicit
+        ).toBe(true);
+      });
     }, 30_000);
   }
 );

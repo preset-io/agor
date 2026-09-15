@@ -8,12 +8,12 @@
 
 import type { SpawnOptions } from 'node:child_process';
 import type { randomBytes as nodeRandomBytes } from 'node:crypto';
+import { type MCPServerWithSource, resolveScopedMCPAuthHeaders } from '@agor/core/mcp';
 import {
   renderAgorSessionIdentity,
   renderAgorSystemPrompt,
 } from '@agor/core/templates/session-context';
 import { mergeMCPRemoteHeaders } from '@agor/core/tools/mcp/http-headers';
-import { resolveMCPAuthHeaders } from '@agor/core/tools/mcp/jwt-auth';
 import {
   type ContentBlock,
   type EffortLevel,
@@ -162,9 +162,7 @@ export type OpenCodeToolDependencies = {
   spawn?: (executable: string, args: readonly string[], options: SpawnOptions) => ManagedChild;
   createClient?: typeof createOpencodeClient;
   resolveInvocationConfig?: (input: RunOpenCodeTurnInput) => Promise<OpenCodeInvocationConfig>;
-  resolveMcpServers?: (
-    sessionId: SessionID
-  ) => Promise<Array<{ server: MCPServer; source: 'session-assigned' | 'global' }>>;
+  resolveMcpServers?: (sessionId: SessionID) => Promise<MCPServerWithSource[]>;
   getDaemonUrl?: () => Promise<string>;
   createPermissionCallback?: (
     sessionId: SessionID,
@@ -935,7 +933,8 @@ export class OpenCodeTool {
 
     const servers = await this.dependencies.resolveMcpServers(sessionId as SessionID);
 
-    for (const { server } of servers) {
+    for (const scoped of servers) {
+      const { server } = scoped;
       const name = openCodeMcpServerKey(sessionId, server);
       if (server.transport === 'stdio') {
         if (!server.command) {
@@ -953,7 +952,7 @@ export class OpenCodeTool {
         }
         let authHeaders: Record<string, string> | undefined;
         try {
-          authHeaders = await resolveMCPAuthHeaders(server.auth, server.url);
+          authHeaders = await resolveScopedMCPAuthHeaders(scoped, { surfaceAuthorityError: true });
         } catch {
           throw new Error(`Attached MCP server ${server.name} authentication failed`);
         }
