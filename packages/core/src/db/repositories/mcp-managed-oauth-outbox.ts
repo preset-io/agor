@@ -12,6 +12,7 @@ import { McpOAuthEpochSchema, McpOAuthIdSchema } from '../../types/mcp-managed-o
 import type { Database } from '../client';
 import { executeRaw, rawRows } from '../database-wrapper';
 import { openBoundSecretAsync } from '../oauth-secret-envelope';
+import { assertTenantWriteGateGeneration } from '../tenant-write-gate';
 import { lockTenantAuthoritySubject } from './authority-primitives';
 import { RepositoryError } from './base';
 import { grantSecretBinding } from './user-mcp-oauth-tokens';
@@ -200,6 +201,35 @@ export class MCPManagedOAuthOutboxRepository {
       WHERE tenant_id=${tenantId} AND outbox_id=${outboxId} AND operation_id=${operationId} AND kind IN ('cancel','close') AND completed_at IS NULL RETURNING outbox_id`
         )
       ).length === 1
+    );
+  }
+  /** Trusted lifecycle adapter only; caller holds a tenant transaction, never a network call. */
+  async retireTenantUnderWriteGate(tenantId: string, gateGeneration: string): Promise<void> {
+    // Gate row first: identical ordering to the existing destructive deletion fence.
+    await assertTenantWriteGateGeneration(this.db, tenantId, gateGeneration);
+    await this.retireTenant(tenantId);
+  }
+
+  /** Fresh readiness, not a portable certificate; valid only while this exact gate remains held. */
+  async isTenantRetirementReady(tenantId: string, gateGeneration: string): Promise<boolean> {
+    await assertTenantWriteGateGeneration(this.db, tenantId, gateGeneration);
+    await this.lock(tenantId);
+    return (
+      rawRows(
+        await executeRaw(
+          this.db,
+          sql`
+      SELECT 1 AS pending
+      WHERE EXISTS (SELECT 1 FROM public.mcp_managed_oauth_outbox
+        WHERE tenant_id=${tenantId} AND completed_at IS NULL)
+      OR EXISTS (SELECT 1 FROM public.user_mcp_oauth_tokens
+        WHERE tenant_id=${tenantId} AND credential_origin='cloud_managed_v1')
+      OR EXISTS (SELECT 1 FROM public.mcp_oauth_pending_flows
+        WHERE tenant_id=${tenantId} AND credential_origin='cloud_managed_v1'
+          AND status IN ('pending','exchanging'))
+    `
+        )
+      ).length === 0
     );
   }
   /** Lifecycle close, before tenant erasure. Existing attempt/token owners produce exact-old cleanup entries. */
