@@ -52,7 +52,7 @@ overrides:
   protobufjs@<7.6.5: '>=7.6.5 <8'
   protobufjs@>=8.0.0 <8.0.1: '>=8.0.1 <9'
   qs: '>=6.14.2 <7'
-  rollup: 4.62.4
+  rollup: 4.63.3
   shell-quote: '>=1.8.5 <2'
   # Next 15.5.24 supports this fixed AVIF decoder release.
   next>sharp: '>=0.35.4 <0.36'
@@ -62,10 +62,10 @@ overrides:
   socket.io-parser: '>=4.2.7 <5'
   systeminformation: '>=5.31.7 <6'
   tar@<7.5.21: '>=7.5.21 <8'
-  # Keep Vite's optional tsx peer on the reviewed release until 4.23.5 clears minimumReleaseAge.
-  tsx: 4.23.1
+  # Keep Vite's optional tsx peer aligned with the workspace's reviewed runner.
+  tsx: 4.23.13
   undici: '>=7.28.0 <8'
-  vite: '>=8.2.0 <9'
+  vite: '>=8.3.0 <9'
   ws: '>=8.21.0 <9'
   yaml: '>=2.8.3 <3'
   zod: ^4.3.6
@@ -112,3 +112,6 @@ minimumReleaseAgeExclude:
   - '@anthropic-ai/claude-agent-sdk@0.3.259'
   - '@openai/codex-sdk@0.153.0'
   - '@openai/codex@0.153.0-darwin-arm64 || 0.153.0-darwin-x64 || 0.153.0-linux-arm64 || 0.153.0-linux-x64 || 0.153.0-win32-arm64 || 0.153.0-win32-x64 || 0.153.0'
+  - '@aws-sdk/client-s3@3.1132.0'
+  - '@aws-sdk/lib-storage@3.1132.0'
+  - open@11.0.4
