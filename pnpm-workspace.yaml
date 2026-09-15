@@ -5,14 +5,16 @@ overrides:
   '@codemirror/state': 6.7.0
   '@codemirror/view': 6.43.0
   '@esbuild-kit/core-utils>esbuild': 0.25.4
-  '@google/genai': ^1.43.0
+  '@google/genai': ^1.52.0
   # Gemini core still uses Zod 3 APIs; keep it out of the workspace-wide Zod 4 override.
   '@google/gemini-cli-core>zod': ^3.25.76
+  # Gemini 0.59 pins vulnerable 3.28.0; mirror the managed npm install override.
+  '@google/gemini-cli-core>simple-git': 3.36.0
   '@github/copilot': '>=1.0.43 <2'
   '@grpc/grpc-js': '>=1.14.4 <2'
   '@hono/node-server': '>=1.19.14 <2'
   '@isaacs/brace-expansion': '>=5.0.1 <6'
-  '@modelcontextprotocol/sdk': '>=1.29.0 <2'
+  '@modelcontextprotocol/sdk': '>=1.30.0 <2'
   '@xmldom/xmldom': '>=0.9.10 <1'
   ajv: '>=8.18.0 <9'
   axios: '>=1.18.0 <2'
@@ -88,8 +90,11 @@ allowBuilds:
   'esbuild@0.25.4 || 0.25.12': true
   'keytar@7.9.0': true
   'node-pty@1.0.0': true
-  'opencode-ai@1.14.33': true
-  'protobufjs@7.5.8 || 7.6.5': false
+  'opencode-ai@1.18.31': true
+  # Prebuilt JS ships in the tarball; postinstall only warns about version schemes.
+  'protobufjs@7.5.8 || 7.6.5 || 7.6.6': false
+  # Registry tarball is already built; preinstall is an echo-only no-op.
+  '@google/genai@1.52.0': false
   'sharp@0.34.5': true
   'sqlite3@5.1.7': true
   'tree-sitter-bash@0.25.0': true
@@ -103,17 +108,31 @@ patchedDependencies:
 # These reviewed versions must remain installable when CI or an operator's
 # global pnpm config enforces minimumReleaseAge; this repo sets no age itself.
 minimumReleaseAgeExclude:
-  - '@anthropic-ai/claude-agent-sdk-darwin-arm64@0.3.259'
-  - '@anthropic-ai/claude-agent-sdk-darwin-x64@0.3.259'
-  - '@anthropic-ai/claude-agent-sdk-linux-arm64-musl@0.3.259'
-  - '@anthropic-ai/claude-agent-sdk-linux-arm64@0.3.259'
-  - '@anthropic-ai/claude-agent-sdk-linux-x64-musl@0.3.259'
-  - '@anthropic-ai/claude-agent-sdk-linux-x64@0.3.259'
-  - '@anthropic-ai/claude-agent-sdk-win32-arm64@0.3.259'
-  - '@anthropic-ai/claude-agent-sdk-win32-x64@0.3.259'
-  - '@anthropic-ai/claude-agent-sdk@0.3.259'
-  - '@openai/codex-sdk@0.153.0'
-  - '@openai/codex@0.153.0-darwin-arm64 || 0.153.0-darwin-x64 || 0.153.0-linux-arm64 || 0.153.0-linux-x64 || 0.153.0-win32-arm64 || 0.153.0-win32-x64 || 0.153.0'
+  - '@anthropic-ai/claude-agent-sdk-darwin-arm64@0.3.272'
+  - '@anthropic-ai/claude-agent-sdk-darwin-x64@0.3.272'
+  - '@anthropic-ai/claude-agent-sdk-linux-arm64-musl@0.3.272'
+  - '@anthropic-ai/claude-agent-sdk-linux-arm64@0.3.272'
+  - '@anthropic-ai/claude-agent-sdk-linux-x64-musl@0.3.272'
+  - '@anthropic-ai/claude-agent-sdk-linux-x64@0.3.272'
+  - '@anthropic-ai/claude-agent-sdk-win32-arm64@0.3.272'
+  - '@anthropic-ai/claude-agent-sdk-win32-x64@0.3.272'
+  - '@anthropic-ai/claude-agent-sdk@0.3.272'
+  - '@openai/codex-sdk@0.154.0'
+  - '@openai/codex@0.154.0-darwin-arm64 || 0.154.0-darwin-x64 || 0.154.0-linux-arm64 || 0.154.0-linux-x64 || 0.154.0-win32-arm64 || 0.154.0-win32-x64 || 0.154.0'
+  - '@opencode-ai/sdk@1.18.31'
+  - opencode-ai@1.18.31
+  - opencode-darwin-arm64@1.18.31
+  - opencode-darwin-x64-baseline@1.18.31
+  - opencode-darwin-x64@1.18.31
+  - opencode-linux-arm64-musl@1.18.31
+  - opencode-linux-arm64@1.18.31
+  - opencode-linux-x64-baseline-musl@1.18.31
+  - opencode-linux-x64-baseline@1.18.31
+  - opencode-linux-x64-musl@1.18.31
+  - opencode-linux-x64@1.18.31
+  - opencode-windows-arm64@1.18.31
+  - opencode-windows-x64-baseline@1.18.31
+  - opencode-windows-x64@1.18.31
   - '@vitest/browser-playwright@5.0.1'
   - '@vitest/browser@5.0.1'
   - '@vitest/coverage-v8@5.0.1'

@@ -75,21 +75,45 @@ export async function assertOpenCodeCommandCompatibility(
   return version;
 }
 
+/** Use the shipped native package without running opencode-ai's postinstall. */
+export function getOpenCodeNativePackageName(
+  platform: NodeJS.Platform,
+  arch: string,
+  musl: boolean
+): string {
+  if (!['linux', 'darwin', 'win32'].includes(platform) || !['x64', 'arm64'].includes(arch)) {
+    throw new Error(`OpenCode does not support ${platform}/${arch}`);
+  }
+  // The baseline build also works on AVX2 machines, without probing host CPU
+  // features or executing platform helpers during a managed runtime lookup.
+  return `opencode-${platform === 'win32' ? 'windows' : platform}-${arch}${arch === 'x64' ? '-baseline' : ''}${platform === 'linux' && musl ? '-musl' : ''}`;
+}
+
 /** Resolve the user-installed OpenCode CLI without assuming how it was installed. */
 export async function resolvePackagedOpenCodeBinary(): Promise<OpenCodeCommand> {
   if (process.env.AGOR_MANAGED_AGENTIC_TOOLS === '1') {
     const agorVersion = process.env.AGOR_VERSION;
     if (!agorVersion) throw new Error('AGOR_VERSION is missing from the packaged Agor runtime');
     try {
+      const report = process.report.getReport() as { header?: { glibcVersionRuntime?: string } };
+      const nativePackage = getOpenCodeNativePackageName(
+        process.platform,
+        process.arch,
+        process.platform === 'linux' && !report.header?.glibcVersionRuntime
+      );
       const packageDirectory = await resolveManagedAgenticToolPackageDirectory(
         'opencode',
         agorVersion,
-        'opencode-ai'
+        nativePackage
       );
-      const wrapper = join(packageDirectory, 'bin', 'opencode');
-      if (!(await isExecutable(wrapper)))
-        throw new Error(`managed OpenCode wrapper is not accessible: ${wrapper}`);
-      const command = { executable: process.execPath, argsPrefix: [wrapper] };
+      const binary = join(
+        packageDirectory,
+        'bin',
+        process.platform === 'win32' ? 'opencode.exe' : 'opencode'
+      );
+      if (!(await isExecutable(binary)))
+        throw new Error(`managed OpenCode binary is not accessible: ${binary}`);
+      const command = { executable: binary, argsPrefix: [] };
       await assertOpenCodeCommandCompatibility(command);
       return command;
     } catch (error) {

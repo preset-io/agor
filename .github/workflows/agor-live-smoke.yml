@@ -359,14 +359,14 @@ jobs:
           NODE
           VERSION=$(node -p "require('$ROOT/prefix/lib/node_modules/agor-live/package.json').version")
           TOOLS="$HOME/.agor/agentic-tools/$VERSION"
-          test ! -e "$TOOLS/opencode/node_modules/opencode-ai/bin/.opencode"
-          test -x "$TOOLS/opencode/node_modules/opencode-linux-x64/bin/opencode"
+          test ! -e "$TOOLS/opencode/node_modules/opencode-ai/bin/opencode.exe"
+          test -x "$TOOLS/opencode/node_modules/opencode-linux-x64-baseline/bin/opencode"
 
-          # OpenCode's standard launcher discovers its platform optional package
-          # at runtime when postinstall has not created bin/.opencode.
+          # OpenCode 1.18's postinstall creates bin/opencode.exe. Agor instead
+          # resolves the shipped native optional package with scripts disabled.
           EXPECTED_OPENCODE=$(node -p \
             "require('$TOOLS/opencode/node_modules/opencode-ai/package.json').version")
-          test "$(node "$TOOLS/opencode/node_modules/opencode-ai/bin/opencode" --version)" \
+          test "$("$TOOLS/opencode/node_modules/opencode-linux-x64-baseline/bin/opencode" --version)" \
             = "$EXPECTED_OPENCODE"
 
           # Exercise the public Gemini SDK paths that consume its scriptless

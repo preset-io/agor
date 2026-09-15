@@ -11,9 +11,10 @@
  * "unconfigured" — which is `allow`.
  *
  * What is NOT proven here is that OpenCode reports exactly that string. That
- * comes from the shipped 1.14.33 binary, where the MCP tool registry composes
- * `CP(server) + "_" + CP(tool)` and the execute path calls
- * `ask({permission: <that key>})`, with `CP = s => s.replace(/[^a-zA-Z0-9_-]/g, "_")`.
+ * was checked against the shipped 1.14.33 binary and the v1.18.31 upstream
+ * sources: src/mcp/catalog.ts composes `sanitize(server) + "_" + sanitize(tool)`;
+ * src/session/tools.ts calls `ask({permission: <that key>})`, with
+ * `sanitize = s => s.replace(/[^a-zA-Z0-9_-]/g, "_")`.
  */
 
 import { EventEmitter } from 'node:events';
