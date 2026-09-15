@@ -3187,6 +3187,8 @@ export const mcpManagedOauthOutbox = sqliteTable(
     managed_metadata: t
       .json<MCPManagedOAuthGrantMetadata | MCPManagedOAuthPendingMetadata>('managed_metadata')
       .notNull(),
+    cleanup_authorization_id: text('cleanup_authorization_id'),
+    cleanup_operation_id: text('cleanup_operation_id'),
     transaction_id: text('transaction_id'),
     sealed_material: text('sealed_material'),
     created_at: t.timestamp('created_at').notNull(),

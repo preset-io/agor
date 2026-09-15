@@ -237,6 +237,51 @@ describe.skipIf(process.env.AGOR_DB_DIALECT !== 'postgresql')(
         expect(await repo.complete(f.tenant, job.outbox_id, job.operation_id)).toBe(false);
       });
     });
+    it('settles only the exact saved prepare after authenticated reservation cancellation', async () => {
+      const f = await seed(false);
+      await runWithTenantDatabaseScope(owned.db, f.tenant, async (db) => {
+        await executeRaw(db, sql`DELETE FROM public.mcp_servers WHERE mcp_server_id=${f.server}`);
+        const repo = new MCPManagedOAuthOutboxRepository(db);
+        const [job] = await repo.listPending(f.tenant);
+        const prepare = f.record.managedMetadata!.prepare_request.operation_id;
+        expect(
+          await repo.completeReservationCancellation(
+            f.tenant,
+            job.outbox_id,
+            job.operation_id,
+            randomUUID()
+          )
+        ).toBe(false);
+        expect(
+          await repo.completeReservationCancellation(f.tenant, job.outbox_id, randomUUID(), prepare)
+        ).toBe(false);
+        expect(
+          await repo.completeReservationCancellation(
+            f.tenant,
+            job.outbox_id,
+            job.operation_id,
+            prepare
+          )
+        ).toBe(true);
+        expect(
+          await repo.completeReservationCancellation(
+            f.tenant,
+            job.outbox_id,
+            job.operation_id,
+            prepare
+          )
+        ).toBe(false);
+        const [row] = rawRows(
+          await executeRaw(
+            db,
+            sql`SELECT kind,transaction_id,completed_at FROM public.mcp_managed_oauth_outbox WHERE outbox_id=${job.outbox_id}`
+          )
+        );
+        expect(row.kind).toBe('recover_prepare_cancel');
+        expect(row.transaction_id).toBeNull();
+        expect(row.completed_at).not.toBeNull();
+      });
+    });
     it('refuses an expired original exchange without a sweeper', async () => {
       const f = await seed();
       const e = await exchange(f);

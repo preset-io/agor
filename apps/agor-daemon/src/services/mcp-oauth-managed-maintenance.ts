@@ -18,12 +18,18 @@ import {
   type MCPManagedOAuthInvalidationScope,
   MCPManagedOAuthPendingMetadataSchema,
   McpOAuthCancelRequestSchema,
+  McpOAuthCancelReservationRequestSchema,
+  McpOAuthCancelReservationResponseSchema,
   McpOAuthCancelResponseSchema,
   McpOAuthCapabilitiesSchema,
+  McpOAuthCleanupRequestSchema,
+  McpOAuthCleanupResponseSchema,
   McpOAuthCloseRequestSchema,
   McpOAuthCloseResponseSchema,
   McpOAuthInvalidationResponseSchema,
   type McpOAuthOwner,
+  mcpOAuthLengthPrefix,
+  mcpOAuthSha256,
 } from '@agor/core/types';
 import type { ManagedAuthorityClock } from '../mcp-egress/managed-clock.js';
 import { synchronizeManagedInvalidations } from '../mcp-egress/managed-invalidations.js';
@@ -89,9 +95,33 @@ async function drainManagedOAuthCleanup(
   };
   await assertCurrent();
   if (job.kind === 'recover_prepare_cancel') {
-    // A prepare replay would vend authority on a cleanup-only deployment. Only
-    // the canonical non-vending reservation-cancel route may settle this job.
-    throw new Error('Managed reservation cancellation unavailable');
+    const metadata = MCPManagedOAuthPendingMetadataSchema.parse(job.metadata);
+    const body = McpOAuthCancelReservationRequestSchema.parse({
+      protocol_version: 1,
+      operation_id: job.operation_id,
+      owner,
+      prepare_operation_id: metadata.prepare_request.operation_id,
+    });
+    const result = await d.sender.request({
+      operation: 'cancel_reservation',
+      id: body.prepare_operation_id,
+      body,
+      schema: McpOAuthCancelReservationResponseSchema,
+      assertCurrent,
+      timeoutMs: budget().timeoutMs,
+    });
+    if (result.prepare_operation_id !== body.prepare_operation_id)
+      throw new Error('Managed reservation cancellation mismatch');
+    await current();
+    await runWithTenantDatabaseScope(d.db, tenant, (tx) =>
+      new MCPManagedOAuthOutboxRepository(tx).completeReservationCancellation(
+        tenant,
+        job.outbox_id,
+        job.operation_id,
+        body.prepare_operation_id
+      )
+    );
+    return;
   }
   if (job.kind === 'cancel') {
     const metadata = MCPManagedOAuthPendingMetadataSchema.parse(job.metadata);
@@ -120,7 +150,7 @@ async function drainManagedOAuthCleanup(
       expected_epoch: metadata.handle_epoch,
       reason: 'user_disconnect',
     });
-    await d.sender.request({
+    const closed = await d.sender.request({
       operation: 'close',
       id: metadata.handle,
       body,
@@ -128,14 +158,54 @@ async function drainManagedOAuthCleanup(
       assertCurrent,
       timeoutMs: budget().timeoutMs,
     });
+    const cleanupOperationId = mcpOAuthSha256(
+      mcpOAuthLengthPrefix(['agor:mcp-oauth:cleanup-operation:v1', job.outbox_id, job.operation_id])
+    );
+    const bound = await runWithTenantDatabaseScope(d.db, tenant, (tx) =>
+      new MCPManagedOAuthOutboxRepository(tx).bindCleanupAuthorization(
+        tenant,
+        job.outbox_id,
+        job.operation_id,
+        closed.cleanup_authorization_id,
+        cleanupOperationId
+      )
+    );
+    if (!bound) throw new Error('Managed cleanup delivery changed');
     if (job.expires_at.getTime() > d.clock.latestUtcMs()) {
-      // Preserve revoke-only material until an authenticated cleanup authorization
-      // is available. Close alone is not evidence of provider revocation.
-      throw new Error(
-        revocation
-          ? 'Managed provider cleanup authorization unavailable'
-          : 'Managed provider cleanup disabled'
+      if (!revocation) throw new Error('Managed provider cleanup disabled');
+      // Exact old ciphertext/AAD and original TTL only; leave this transaction before I/O.
+      const token = await runWithTenantDatabaseScope(d.db, tenant, (tx) =>
+        new MCPManagedOAuthOutboxRepository(tx).openRevocationToken(
+          tenant,
+          job.outbox_id,
+          job.operation_id,
+          d.masterSecret
+        )
       );
+      if (token !== null) {
+        const cleanup = McpOAuthCleanupRequestSchema.parse({
+          protocol_version: 1,
+          operation_id: cleanupOperationId,
+          owner,
+          handle: metadata.handle,
+          expected_epoch: metadata.handle_epoch,
+          cleanup_authorization_id: closed.cleanup_authorization_id,
+          token,
+          token_type_hint: 'refresh_token',
+        });
+        const response = await d.sender.request({
+          operation: 'cleanup',
+          id: metadata.handle,
+          body: cleanup,
+          schema: McpOAuthCleanupResponseSchema,
+          assertCurrent,
+          timeoutMs: budget().timeoutMs,
+        });
+        if (response.provider_revocation === 'in_progress')
+          throw new Error('Managed provider cleanup pending');
+        // uncertain is terminal no-retry evidence, NEVER a claim of revocation.
+        // TTL expiry likewise finishes confirmed close without such a claim.
+      }
     }
   }
   await current();

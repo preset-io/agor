@@ -133,6 +133,19 @@ export function createMigrationImpactRegistry(
 
 const MIGRATION_IMPACT_REGISTRY = createMigrationImpactRegistry([
   [
+    '0112_mcp_managed_oauth_cleanup_delivery',
+    {
+      requiresOfflineCutover: true,
+      impact: defineMigrationImpact({
+        classification: 'protocol',
+        userAction: 'required',
+        rollbackCompatibility: 'incompatible',
+        summary:
+          'Pins nonportable managed close authorization and immutable cleanup delivery before provider cleanup.',
+      }),
+    },
+  ],
+  [
     '0111_mcp_managed_oauth_maintenance_routing',
     {
       requiresOfflineCutover: true,
