@@ -108,6 +108,7 @@ interface HarnessOptions {
   capabilityServerTransform?: (server: MCPServer) => MCPServer;
   initialMcpRecovery?: boolean;
   separateOAuthConsenter?: boolean;
+  assertManagedUse?: ConstructorParameters<typeof MCPEgressGateway>[0]['assertManagedUse'];
 }
 
 async function harness(options: HarnessOptions) {
@@ -290,6 +291,7 @@ async function harness(options: HarnessOptions) {
     allowLocalhostHttp: true,
     resolveDns: options.resolveDns,
     authoritySnapshotCheckpoint: options.authoritySnapshotCheckpoint,
+    assertManagedUse: options.assertManagedUse,
   });
   const materialHash = mcpEgressMaterialHash(
     options.capabilityServerTransform?.(server) ?? server,
@@ -393,6 +395,59 @@ async function harness(options: HarnessOptions) {
 const initialize = JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize' });
 
 describe('authoritative MCP gateway real transport', () => {
+  it('requires a managed verifier and binds each physical send to the exact outbound bearer', async () => {
+    let sends = 0;
+    const url = await listen((_request, response) => {
+      sends++;
+      response.setHeader('Content-Type', 'application/json');
+      response.end('{"jsonrpc":"2.0","id":1,"result":{}}');
+    });
+    const server = {
+      transport: 'http' as const,
+      url,
+      auth: {
+        type: 'oauth' as const,
+        oauth_mode: 'per_user' as const,
+        oauth_client_mode: 'cloud_managed_v1' as const,
+        oauth_managed_profile: {
+          profile_id: 'fake_alpha',
+          semantic_version: '1',
+          environment: 'staging' as const,
+          region: 'us-west-2' as const,
+          registry_digest: '0'.repeat(64),
+        },
+      },
+    };
+    const unsupported = await harness({ server });
+    await expect(unsupported.request('POST', initialize)).rejects.toMatchObject({
+      code: 'managed_authority_unavailable',
+    });
+    expect(sends).toBe(0);
+    let allowed = true;
+    const assertManagedUse = vi.fn<NonNullable<HarnessOptions['assertManagedUse']>>(
+      async (input) => {
+        expect(input.authorization).toBe('Bearer oauth-access-token-initial');
+        expect(input.tenantId).toBe('default');
+        expect(input.userId).toBe(input.server.owner_user_id);
+        if (!allowed)
+          throw Object.assign(new Error('expired'), { code: 'managed_authority_expired' });
+      }
+    );
+    const h = await harness({ server, assertManagedUse });
+    await h.request('POST', initialize);
+    expect(sends).toBe(1);
+    allowed = false;
+    await expect(h.request('POST', initialize)).rejects.toMatchObject({
+      code: 'managed_authority_expired',
+      dispatch: 'not_started',
+    });
+    expect(sends).toBe(1);
+    expect(assertManagedUse).toHaveBeenCalledTimes(2);
+    await setMCPEgressGatewayMode(h.rawDb, 'observe', h.user.user_id);
+    await expect(h.request('POST', initialize)).rejects.toMatchObject({ code: 'rollout_changed' });
+    expect(sends).toBe(1);
+  });
+
   it('rejects an old global-server capability after explicit empty selection, before outbound access', async () => {
     const h = await harness({
       server: {

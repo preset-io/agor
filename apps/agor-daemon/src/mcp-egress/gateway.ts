@@ -41,7 +41,7 @@ import type {
   SessionID,
   UserID,
 } from '@agor/core/types';
-import { hasMinimumRole, ROLES, TaskStatus } from '@agor/core/types';
+import { hasMinimumRole, ROLES, resolveMCPOAuthClientMode, TaskStatus } from '@agor/core/types';
 import {
   type OutboundDnsLookup,
   OutboundPreDispatchAuthorityError,
@@ -213,6 +213,15 @@ interface GatewayOptions {
   resolveDns?: OutboundDnsLookup;
   /** Test seam proving all constituent reads share one native snapshot. */
   authoritySnapshotCheckpoint?: () => Promise<void>;
+  /** Installed by the managed runtime; called inside the final local snapshot. */
+  assertManagedUse?: (input: {
+    tenantDb: TenantScopedDatabase;
+    tenantId: string;
+    server: MCPServer;
+    userId: UserID;
+    /** Exact outbound header, not a freshly loaded replacement access token. */
+    authorization: string;
+  }) => Promise<void>;
 }
 
 interface CurrentAuthority {
@@ -253,7 +262,7 @@ function protocolRequestHeaders(input: Headers): Headers {
   return output;
 }
 
-function publicResponseHeaders(input: Headers, secrets: string[]): Headers {
+export function publicResponseHeaders(input: Headers, secrets: string[]): Headers {
   const output = new Headers();
   for (const name of [
     'content-type',
@@ -348,7 +357,7 @@ function assertNoDecodedSecret(value: unknown, secrets: string[]): void {
   }
 }
 
-function validateBufferedMCPResponse(
+export function validateBufferedMCPResponse(
   response: Response,
   body: Uint8Array,
   secrets: string[],
@@ -929,10 +938,11 @@ export class MCPEgressGateway {
 
   private async assertCurrentOrAbort(
     claims: MCPEgressCapabilityClaims,
-    signal: AbortSignal
+    signal: AbortSignal,
+    authorization?: string
   ): Promise<void> {
     // Revalidate first so a committed mutation wins over its local hint.
-    await this.currentAuthority(claims);
+    await this.currentAuthority(claims, authorization);
     if (signal.aborted) throw closedAbortReason(signal.reason, claims.authority_fingerprint);
   }
 
@@ -953,7 +963,10 @@ export class MCPEgressGateway {
     }
   }
 
-  private async currentAuthority(claims: MCPEgressCapabilityClaims): Promise<CurrentAuthority> {
+  private async currentAuthority(
+    claims: MCPEgressCapabilityClaims,
+    authorization?: string
+  ): Promise<CurrentAuthority> {
     return runWithTenantDatabaseTransaction(
       this.options.db,
       claims.tid,
@@ -975,6 +988,23 @@ export class MCPEgressGateway {
         ]);
         if (!server) {
           throw new MCPEgressGatewayError(403, 'server_detached', 'MCP server was removed');
+        }
+        let managed: boolean;
+        try {
+          managed = resolveMCPOAuthClientMode(server.auth) === 'cloud_managed_v1';
+        } catch {
+          throw new MCPEgressGatewayError(
+            403,
+            'managed_authority_invalid',
+            'Unsupported MCP OAuth authority'
+          );
+        }
+        if (managed && (mode !== 'enforced' || !this.options.assertManagedUse)) {
+          throw new MCPEgressGatewayError(
+            503,
+            'managed_authority_unavailable',
+            'Agor-managed sign-in requires current enforced gateway support'
+          );
         }
         if (
           !task ||
@@ -1108,6 +1138,33 @@ export class MCPEgressGateway {
             'template_resolution_failed',
             'MCP template resolution failed'
           );
+        }
+        if (managed && authorization !== undefined) {
+          try {
+            await this.options.assertManagedUse!({
+              tenantDb,
+              tenantId: claims.tid,
+              server,
+              userId: claims.credential_user_id as UserID,
+              authorization,
+            });
+          } catch (error) {
+            const code =
+              error && typeof error === 'object' && 'code' in error ? error.code : undefined;
+            throw new MCPEgressGatewayError(
+              403,
+              typeof code === 'string' &&
+                [
+                  'managed_authority_expired',
+                  'managed_authority_invalid',
+                  'managed_authority_unavailable',
+                  'managed_clock_unsafe',
+                ].includes(code)
+                ? code
+                : 'managed_authority_unavailable',
+              'Agor-managed sign-in authority is unavailable; no MCP request was sent.'
+            );
+          }
         }
         return { unresolvedServer: server, server: resolved.server, env };
       },
@@ -1309,7 +1366,11 @@ export class MCPEgressGateway {
       // after this durable current-version/identity check completes. A mutation
       // committed later may allow this already-admitted request to complete.
       const assertCurrent = async () => {
-        await this.assertCurrentOrAbort(claims, controller.signal);
+        await this.assertCurrentOrAbort(
+          claims,
+          controller.signal,
+          headers.get('authorization') ?? ''
+        );
       };
       const response = await safeOutboundFetch(admitted.server.url!, {
         method: input.method,

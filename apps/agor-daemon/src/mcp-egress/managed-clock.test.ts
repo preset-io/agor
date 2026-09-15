@@ -1,0 +1,63 @@
+import { describe, expect, it } from 'vitest';
+import { ManagedAuthorityClock, type ManagedClockSample } from './managed-clock.js';
+
+describe('managed authority clock', () => {
+  it('ages a cached sample with the independent monotonic clock and refuses stale evidence', () => {
+    let now = 0;
+    const clock = new ManagedAuthorityClock(
+      () => ({ utcMs: 1_000_000, monotonicMs: 0, combinedUncertaintyMs: 1, safe: true }),
+      () => now
+    );
+    expect(clock.latestUtcMs()).toBe(1_000_001);
+    now = 1_000;
+    expect(clock.latestUtcMs()).toBe(1_001_001);
+    now = 5_001;
+    expect(() => clock.latestUtcMs()).toThrow('clock safety');
+  });
+  it('requires fresh clock evidence after restart instead of trusting a saved authorization', () => {
+    const clock = new ManagedAuthorityClock(() => null);
+    expect(() => clock.latestUtcMs()).toThrow('clock safety');
+  });
+
+  it('uses the combined worker/cell uncertainty conservatively', () => {
+    let sample: ManagedClockSample = {
+      utcMs: 1_000_000,
+      monotonicMs: 0,
+      combinedUncertaintyMs: 5_000,
+      safe: true,
+    };
+    const clock = new ManagedAuthorityClock(
+      () => sample,
+      () => sample.monotonicMs
+    );
+    expect(clock.latestUtcMs()).toBe(1_005_000);
+    sample = { ...sample, utcMs: 1_060_000, monotonicMs: 60_000 };
+    expect(clock.latestUtcMs()).toBe(1_065_000);
+  });
+
+  it.each([
+    { utcMs: 999_999, monotonicMs: 1 },
+    { utcMs: 1_000_001, monotonicMs: -1 },
+    { utcMs: 1_006_000, monotonicMs: 1 },
+    { combinedUncertaintyMs: 5_001 },
+    { combinedUncertaintyMs: Number.NaN },
+    { safe: false },
+  ])('latches closed on an unsafe clock, including backward/forward steps: %j', (change) => {
+    const initial = {
+      utcMs: 1_000_000,
+      monotonicMs: 0,
+      combinedUncertaintyMs: 1,
+      safe: true,
+    };
+    let sample = initial;
+    const clock = new ManagedAuthorityClock(
+      () => sample,
+      () => sample.monotonicMs
+    );
+    clock.latestUtcMs();
+    sample = { ...initial, ...change };
+    expect(() => clock.latestUtcMs()).toThrow('clock safety');
+    sample = initial;
+    expect(() => clock.latestUtcMs()).toThrow('clock safety');
+  });
+});

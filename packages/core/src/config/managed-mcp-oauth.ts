@@ -41,20 +41,27 @@ export function validateManagedMCPOAuthConfig(
     throw new Error('Managed MCP OAuth region is unsupported');
   }
   if (value.broker_origin !== undefined) {
-    const origin = new URL(value.broker_origin);
-    if (
-      origin.protocol !== 'https:' ||
-      origin.origin !== value.broker_origin ||
-      origin.username ||
-      origin.password ||
-      origin.port
-    ) {
+    let valid = false;
+    try {
+      const origin = new URL(value.broker_origin);
+      valid = !(
+        origin.protocol !== 'https:' ||
+        origin.origin !== value.broker_origin ||
+        origin.username ||
+        origin.password ||
+        origin.port ||
+        origin.hostname.endsWith('.')
+      );
+    } catch {
+      // URL parser diagnostics may echo the supplied value; never propagate them.
+    }
+    if (!valid) {
       throw new Error('Managed MCP OAuth requires an exact HTTPS broker origin on port 443');
     }
   }
   for (const key of ['cell_id', 'credential_id', 'sender_key_id'] as const) {
     const id = value[key];
-    if (id !== undefined && !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(id)) {
+    if (id !== undefined && !/^[A-Za-z0-9_-]{1,128}$/.test(id)) {
       throw new Error(`Invalid managed MCP OAuth ${key}`);
     }
   }
@@ -80,5 +87,8 @@ export function managedMCPOAuthOperationEnabled(
   config: AgorConfig,
   operation: Exclude<(typeof MANAGED_MCP_OAUTH_FLAGS)[number], 'enabled'>
 ): boolean {
+  // Closing/revoking an already admitted exact owner must remain available
+  // during a vending shutdown. This does not bypass its authority/recovery fences.
+  if (operation === 'revocation') return config.managed_mcp_oauth?.revocation === true;
   return config.managed_mcp_oauth?.enabled === true && config.managed_mcp_oauth[operation] === true;
 }
