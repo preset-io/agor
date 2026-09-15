@@ -26,6 +26,30 @@ const configured: AgorManagedMCPOAuthSettings = {
 };
 
 describe('managed OAuth deployment configuration', () => {
+  it('requires full wiring for cleanup independently of vending', () => {
+    expect(() => validateManagedMCPOAuthConfig({ enabled: false, revocation: true })).toThrow();
+    expect(() =>
+      validateManagedMCPOAuthConfig({ ...configured, enabled: false, revocation: true })
+    ).not.toThrow();
+  });
+  it('sanitizes malformed issuer parser errors', () => {
+    expect(() =>
+      validateManagedMCPOAuthConfig({
+        ...configured,
+        worker_issuer: 'invalid sensitive diagnostic marker',
+      })
+    ).toThrow('Managed MCP OAuth requires an exact worker issuer on the broker origin');
+    try {
+      validateManagedMCPOAuthConfig({
+        ...configured,
+        worker_issuer: 'invalid sensitive diagnostic marker',
+      });
+    } catch (error) {
+      expect(JSON.stringify(error, Object.getOwnPropertyNames(error))).not.toContain(
+        'sensitive diagnostic marker'
+      );
+    }
+  });
   it('pins deployment admission to the exact mirrored Cloud source bytes', () => {
     const bytes = readFileSync(new URL('../types/mcp-managed-oauth-contract.ts', import.meta.url));
     expect(createHash('sha256').update(bytes).digest('hex')).toBe(
