@@ -839,6 +839,17 @@ export const CommentsPanel: React.FC<CommentsPanelProps> = ({
               textAlign: 'center',
               padding: 32,
               color: token.colorTextSecondary,
+              // On mobile the panel fills the screen, so centre the empty state
+              // instead of clustering it at the top.
+              ...(hideHeader
+                ? {
+                    height: '100%',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                  }
+                : {}),
             }}
           >
             <CommentOutlined style={{ fontSize: 48, marginBottom: 16, opacity: 0.3 }} />

@@ -69,7 +69,11 @@ export function ResponsiveTable<RecordType extends object>(props: TableProps<Rec
 
   const rows = (dataSource ?? []) as unknown as Row[];
   if (rows.length === 0) {
-    return <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} style={{ marginBlock: token.marginLG }} />;
+    return (
+      <Flex align="center" justify="center" style={{ minHeight: 200 }}>
+        <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} />
+      </Flex>
+    );
   }
 
   const cols = ((columns ?? []) as unknown as MinimalColumn[]).filter(Boolean);
@@ -110,7 +114,8 @@ export function ResponsiveTable<RecordType extends object>(props: TableProps<Rec
             }
             style={{
               border: `${token.lineWidth}px solid ${token.colorBorderSecondary}`,
-              borderRadius: token.borderRadius,
+              // Match the Home/settings card radius (GlassPanel / AntD Card use LG).
+              borderRadius: token.borderRadiusLG,
               padding: token.paddingSM,
               background: token.colorBgContainer,
               cursor: activate ? 'pointer' : undefined,
