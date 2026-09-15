@@ -520,6 +520,7 @@
     "@feathersjs/socketio-client": "^5.0.46",
     "@feathersjs/typebox": "^5.0.46",
     "@libsql/client": "^0.17.4",
+    "@noble/hashes": "2.4.0",
     "@slack/socket-mode": "^2.0.7",
     "@slack/types": "^2.22.0",
     "@slack/web-api": "^7.19.0",

@@ -381,6 +381,10 @@ export interface MCPCatalogFilters {
  * client cannot name the destination its own credential is sent to.
  */
 export interface MCPCatalogConnectData {
+  /** Explicit opt-in only; omitted remains the existing direct/BYO path. */
+  oauth_client_mode?: 'direct' | 'cloud_managed_v1';
+  /** Exact additional managed disclosure; never inferred from the ordinary disclosure. */
+  acknowledged_managed_disclosure?: string;
   /** The entry's reverse-DNS catalog name. */
   catalog_key: string;
   /**
@@ -471,6 +475,10 @@ export interface MCPCatalogReadiness {
   /** Echo of the catalog identity that was evaluated. */
   catalog_key: string;
   state: MCPCatalogReadinessState;
+  /** Presentation only. Connect independently rechecks live whole-cell admission. */
+  managed_oauth?:
+    | { available: true; whole_cell_eligible: true; disclosure: string }
+    | { available: false };
 }
 
 /**
