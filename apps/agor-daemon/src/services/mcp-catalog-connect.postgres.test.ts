@@ -467,6 +467,50 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       expect(result.mcp_server.mcp_server_id).not.toBe(foreignPeer.mcp_server_id);
     });
 
+    it('preserves a configured app on reconnect and isolates its row secret across tenants', async () => {
+      const actor = await buildTenant('configured-owner');
+      const foreign = await buildTenant('configured-foreign');
+      const configuredEntry: MCPCatalogEntry = {
+        ...ENTRY,
+        oauth: { configured_client: true, dcr_mode: 'disabled' },
+      };
+      const server = await runWithTenantDatabaseScope(db, actor.tenantId, (scoped) =>
+        new MCPServerRepository(scoped).create({
+          name: `configured-${generateId()}`,
+          transport: 'http',
+          url: RESOURCE,
+          scope: 'session',
+          source: 'catalog',
+          catalog_entry_name: configuredEntry.name,
+          owner_user_id: actor.user.user_id,
+          enabled: true,
+          auth: {
+            type: 'oauth',
+            oauth_mode: 'per_user',
+            oauth_dcr_mode: 'disabled',
+            oauth_client_id: 'fixture-client',
+            oauth_client_secret: 'fixture-app-secret',
+          },
+        })
+      );
+      const own = await connect(actor.user, actor.tenantId, configuredEntry);
+      expect(own.mcp_server.mcp_server_id).toBe(server.mcp_server_id);
+      expect(JSON.stringify(own)).not.toContain('fixture-app-secret');
+      const deniedRow = await runWithTenantDatabaseScope(db, foreign.tenantId, (scoped) =>
+        new MCPServerRepository(scoped).findById(server.mcp_server_id)
+      );
+      expect(deniedRow).toBeNull();
+      const other = await connect(foreign.user, foreign.tenantId, configuredEntry);
+      expect(other.mcp_server.mcp_server_id).not.toBe(server.mcp_server_id);
+      expect(JSON.stringify(other)).not.toContain('fixture-app-secret');
+      const after = await runWithTenantDatabaseScope(db, actor.tenantId, (scoped) =>
+        new MCPServerRepository(scoped).findById(server.mcp_server_id)
+      );
+      // Read raw authority, not the API sentinel: reconnect must not replace
+      // the actual app secret, revision or existing consent configuration.
+      expect(after).toEqual(server);
+    });
+
     it('rejects a grant whose durable binding drifted through the full connect path', async () => {
       const actor = await buildTenant('binding-drift');
       const peer = await seedPeer(actor.tenantId, actor.user, { fingerprintDrift: true });
