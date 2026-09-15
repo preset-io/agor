@@ -405,3 +405,18 @@ attention; it must not be “fixed” by lengthening permits, skipping invalidat
 checks or discarding durable cleanup obligations. `closed` counts a completed
 local cleanup job, not an independent assertion of successful provider
 revocation.
+
+### Restore and rehome
+
+Managed grants, pending claims, receipts, permits, invalidation checkpoints and
+cleanup outboxes are not portable. Imported managed server definitions are
+disabled, lose Catalog provenance and retain their managed-mode marker so they
+cannot silently become direct OAuth connections. This applies to same-tenant
+archive restore as well as cross-tenant rehome. Reconnect through the destination
+Catalog; do not rewrite encrypted grants or rebind old handles to the new cell.
+
+Source deletion remains blocked while managed grants, active attempts or
+unfinished cleanup obligations exist. A backup/PITR copy is not an ordinary
+replica failover: its external recovery incarnation must remain quarantined
+until the separately approved recovery process admits a new cohort. Restoring
+database rows or copying attestation files does not establish that authority.
