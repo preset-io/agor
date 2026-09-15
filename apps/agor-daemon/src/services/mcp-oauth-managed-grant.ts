@@ -49,7 +49,7 @@ function matchesProfile(
   return (
     !grant.oauth_client_secret &&
     grant.oauth_client_id === profile.clientId &&
-    grant.oauth_metadata_uri === profile.metadataUri &&
+    (grant.oauth_metadata_uri ?? '') === profile.metadataUri &&
     grant.oauth_resource_uri === profile.resourceUri &&
     grant.oauth_issuer === profile.issuer &&
     grant.oauth_authorization_endpoint === profile.authorizationEndpoint &&
@@ -165,7 +165,9 @@ export function createManagedOAuthGrantAccess({
       reject();
     // Rechecks actual catalog provenance, normalized local identity and v5
     // configuration fingerprint. Ambient native transaction is joined, not replaced.
-    const profile = await runtime.current(owner, operation);
+    // Eligibility is independent of the refresh issuance flag. The actual
+    // refresh adapter separately asserts current(owner, 'refresh') at dispatch.
+    const profile = await runtime.current(owner, 'use');
     const reference = profile.reference;
     if (
       !matchesProfile(grant, profile) ||
