@@ -1,3 +1,4 @@
+import { ResponsiveTable } from './ResponsiveTable';
 // Import the manifest helpers from the connector-free subpath so the browser
 // bundle never pulls in @slack/web-api / @slack/socket-mode (node-only) via the
 // gateway barrel.
@@ -85,7 +86,6 @@ import {
   Spin,
   Steps,
   Switch,
-  Table,
   Tag,
   Tooltip,
   Typography,
@@ -4703,7 +4703,7 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
           </Typography.Text>
         </div>
       ) : (
-        <Table
+        <ResponsiveTable
           dataSource={channels}
           columns={columns}
           scroll={{ x: 1050 }}

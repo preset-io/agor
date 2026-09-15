@@ -7,18 +7,7 @@ import {
   PlusOutlined,
   UploadOutlined,
 } from '@ant-design/icons';
-import {
-  App,
-  Button,
-  Form,
-  Input,
-  Popconfirm,
-  Select,
-  Space,
-  Table,
-  Tooltip,
-  Typography,
-} from 'antd';
+import { App, Button, Form, Input, Popconfirm, Select, Space, Tooltip, Typography } from 'antd';
 import { useMemo, useState } from 'react';
 import { mapToSortedArray } from '@/utils/mapHelpers';
 import { useThemedMessage } from '@/utils/message';
@@ -31,6 +20,7 @@ import { HighlightMatch } from '../HighlightMatch';
 import { JSONEditor, validateJSON } from '../JSONEditor';
 import { AdaptiveSettingsModal } from './AdaptiveSettingsModal';
 import { ResponsiveSettingsHeader } from './ResponsiveSettingsHeader';
+import { ResponsiveTable } from './ResponsiveTable';
 import { SettingsActionGroup } from './SettingsActionGroup';
 
 interface BoardsTableProps {
@@ -364,7 +354,7 @@ export const BoardsTable: React.FC<BoardsTableProps> = ({
         )}
       />
 
-      <Table
+      <ResponsiveTable
         dataSource={boards}
         columns={columns}
         rowKey="board_id"
