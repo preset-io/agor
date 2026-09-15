@@ -131,7 +131,7 @@ export async function createManagedOAuthMaintenanceServices(input: {
     getCapabilities,
     getCurrentIncarnation,
     assertCleanupAdmission: assertOwner,
-    acknowledge: createManagedOAuthAcknowledger({ sender, assertOwner }),
+    acknowledge: createManagedOAuthAcknowledger({ db: input.db, sender, assertOwner }),
     onResult: (result) => {
       // No tenant, subject, handle, URL, exception or credential becomes a metric tag.
       for (const operation of ['reconciled', 'acknowledged', 'closed', 'failures'] as const) {

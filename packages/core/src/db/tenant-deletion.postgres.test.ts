@@ -675,9 +675,14 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('deleteTenantData (PostgreS
         throw new Error('Expected an applied migration watermark');
       }
 
+      // Use the actual isolated test login, not a dev/CI-specific role name.
+      const applicationRole = rowsOf(await executeRaw(db, sql`SELECT current_user AS role`))[0]
+        ?.role;
+      if (typeof applicationRole !== 'string' || !applicationRole)
+        throw new Error('Missing test role');
       await executeRaw(
         adminDb,
-        sql`CREATE DATABASE ${sql.identifier(databaseName)} OWNER agor_app`
+        sql`CREATE DATABASE ${sql.identifier(databaseName)} OWNER ${sql.identifier(applicationRole)}`
       );
       emptyDb = createDatabase({ dialect: 'postgresql', url: databaseUrl.toString() });
       await executeRaw(emptyDb, sql`CREATE SCHEMA drizzle`);
