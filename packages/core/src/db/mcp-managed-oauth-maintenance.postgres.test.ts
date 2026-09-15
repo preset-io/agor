@@ -22,7 +22,7 @@ describe.skipIf(process.env.AGOR_DB_DIALECT !== 'postgresql')(
     it('pages live grants and orphan jobs without granting handle, ciphertext or token SELECT', async () => {
       const [definer] =
         await owned.sql`SELECT p.prosecdef,r.rolsuper,r.rolbypassrls,has_column_privilege(p.proowner,'public.user_mcp_oauth_tokens','oauth_access_token','SELECT') AS can_read_token FROM pg_proc p JOIN pg_roles r ON r.oid=p.proowner
-        WHERE p.oid='public.agor_mcp_managed_oauth_maintenance_tenants(text,integer)'::regprocedure`;
+        WHERE p.oid='public.agor_mcp_managed_oauth_maintenance_tenants(text,integer,text)'::regprocedure`;
       expect(definer).toEqual({
         prosecdef: true,
         rolsuper: false,
