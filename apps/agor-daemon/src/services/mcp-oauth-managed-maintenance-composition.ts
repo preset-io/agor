@@ -9,6 +9,7 @@ import {
   type McpOAuthOwner,
 } from '@agor/core/types';
 import { loadManagedOAuthCleanupDeployment } from '../mcp-egress/managed-deployment.js';
+import type { DaemonMetrics } from '../metrics/types.js';
 import { createManagedOAuthAcknowledger } from './mcp-oauth-managed-ack.js';
 import type { ManagedOAuthServices } from './mcp-oauth-managed-composition.js';
 import { createManagedOAuthMaintenance } from './mcp-oauth-managed-maintenance.js';
@@ -19,6 +20,7 @@ export async function createManagedOAuthMaintenanceServices(input: {
   config: AgorConfig;
   externalLaunchProvider: ResolvedExternalLaunchProvider;
   active?: ManagedOAuthServices;
+  metrics?: Pick<DaemonMetrics, 'increment' | 'gauge'>;
 }) {
   if (!input.active && input.config.managed_mcp_oauth?.revocation !== true) return null;
   const cleanup = await loadManagedOAuthCleanupDeployment(input.config, {
@@ -120,5 +122,17 @@ export async function createManagedOAuthMaintenanceServices(input: {
     getCurrentIncarnation,
     assertCleanupAdmission: assertOwner,
     acknowledge: createManagedOAuthAcknowledger({ sender, assertOwner }),
+    onResult: (result) => {
+      // No tenant, subject, handle, URL, exception or credential becomes a metric tag.
+      for (const operation of ['reconciled', 'acknowledged', 'closed', 'failures'] as const) {
+        input.metrics?.increment('mcp.managed_maintenance', result[operation], { operation });
+      }
+      input.metrics?.gauge(
+        'mcp.managed_maintenance_capacity_limited',
+        Number(result.capacityLimited)
+      );
+      input.metrics?.gauge('mcp.managed_maintenance_unavailable', 0);
+    },
+    onUnavailable: () => input.metrics?.gauge('mcp.managed_maintenance_unavailable', 1),
   });
 }

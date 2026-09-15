@@ -64,6 +64,30 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllEnvs());
 
 describe('production maintenance composition', () => {
+  it('emits bounded aggregate-only backlog and availability metrics', async () => {
+    const metrics = { increment: vi.fn(), gauge: vi.fn() };
+    await createManagedOAuthMaintenanceServices({ ...options(), metrics });
+    state.deps!.onResult!({
+      tenants: 1,
+      reconciled: 2,
+      acknowledged: 3,
+      closed: 4,
+      failures: 5,
+      capacityLimited: true,
+    });
+    state.deps!.onUnavailable!();
+    expect(metrics.increment.mock.calls).toEqual([
+      ['mcp.managed_maintenance', 2, { operation: 'reconciled' }],
+      ['mcp.managed_maintenance', 3, { operation: 'acknowledged' }],
+      ['mcp.managed_maintenance', 4, { operation: 'closed' }],
+      ['mcp.managed_maintenance', 5, { operation: 'failures' }],
+    ]);
+    expect(metrics.gauge.mock.calls).toEqual([
+      ['mcp.managed_maintenance_capacity_limited', 1],
+      ['mcp.managed_maintenance_unavailable', 0],
+      ['mcp.managed_maintenance_unavailable', 1],
+    ]);
+  });
   it('is entirely inert with both flags off', async () => {
     vi.mocked(loadManagedOAuthCleanupDeployment).mockClear();
     const input = options();
