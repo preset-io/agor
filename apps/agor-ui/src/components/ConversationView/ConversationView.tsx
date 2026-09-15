@@ -28,6 +28,7 @@ import { useStreamingMessagesByTask } from '../../hooks/useStreamingMessagesByTa
 import { useCopyToClipboard } from '../../utils/clipboard';
 import { BrandMark } from '../BrandMark';
 import { TaskBlock } from '../TaskBlock';
+import { useConversationHistory } from './useConversationHistory';
 
 const { Text } = Typography;
 const EMPTY_STREAMING_MESSAGES = new Map();
@@ -189,25 +190,6 @@ export const ConversationView = React.memo<ConversationViewProps>(
       scrollToBottom();
     }, [state, scrollToBottom]);
 
-    // Scroll to top. While content is still streaming/growing, the library's
-    // persistent observer can re-pin to the bottom before our scrollTop write
-    // takes effect, snapping the user right back down. `stopScroll()`
-    // synchronously releases the bottom lock (and cancels any in-flight scroll
-    // animation) so the scrollTop = 0 sticks.
-    const scrollToTop = useCallback(() => {
-      stopScroll();
-      if (scrollRef.current) {
-        scrollRef.current.scrollTop = 0;
-      }
-    }, [scrollRef, stopScroll]);
-
-    // Expose scroll functions to parent
-    useEffect(() => {
-      if (onScrollRef) {
-        onScrollRef(handleScrollToBottom, scrollToTop);
-      }
-    }, [onScrollRef, handleScrollToBottom, scrollToTop]);
-
     const { handle: reactiveSession, state: reactiveState } = useSharedReactiveSession(
       client,
       sessionId,
@@ -227,10 +209,23 @@ export const ConversationView = React.memo<ConversationViewProps>(
     // when the underlying reactive `tasks` list hasn't changed. Without this,
     // every streaming chunk produced a fresh array → every downstream useMemo
     // depending on `tasks` would invalidate and rebuild.
-    const tasks = useMemo(
+    const allTasks = useMemo(
       () => (currentReactiveState?.tasks || []).filter((t) => t.status !== TaskStatus.QUEUED),
       [currentReactiveState?.tasks]
     );
+
+    const {
+      visibleTasks: tasks,
+      olderCount,
+      revealOlder,
+      revealAllAtTop,
+    } = useConversationHistory(sessionId, allTasks, forceExpandAll, scrollRef, stopScroll);
+
+    // Explicit top navigation and in-session search still reach the complete
+    // conversation. Normal opens mount only a bounded tail of task headers.
+    useEffect(() => {
+      onScrollRef?.(handleScrollToBottom, revealAllAtTop);
+    }, [onScrollRef, handleScrollToBottom, revealAllAtTop]);
 
     // Land at the bottom on panel open / session switch — but only once real
     // content is mounted. On a cold open ConversationView early-returns <Spin/>
@@ -238,7 +233,7 @@ export const ConversationView = React.memo<ConversationViewProps>(
     // that never re-runs; gating on tasks.length>0 fires it when the container
     // mounts. handleScrollToBottom also clears the escape so the library's
     // persistent observer reliably follows lazy/streamed growth from there.
-    const hasContent = tasks.length > 0;
+    const hasContent = allTasks.length > 0;
     useEffect(() => {
       if (isActive && sessionId && hasContent) {
         handleScrollToBottom();
@@ -375,7 +370,7 @@ export const ConversationView = React.memo<ConversationViewProps>(
       );
     }
 
-    if (loading && tasks.length === 0) {
+    if (loading && allTasks.length === 0) {
       return (
         <div
           style={{
@@ -391,7 +386,7 @@ export const ConversationView = React.memo<ConversationViewProps>(
       );
     }
 
-    if (tasks.length === 0) {
+    if (allTasks.length === 0) {
       return (
         <div
           style={{
@@ -483,6 +478,12 @@ export const ConversationView = React.memo<ConversationViewProps>(
         <div ref={contentRef}>
           {/* Genealogy Banner */}
           <GenealogyBanner />
+
+          {olderCount > 0 && (
+            <Button onClick={revealOlder} block>
+              Show older tasks ({olderCount} remaining)
+            </Button>
+          )}
 
           {/* Task-organized conversation */}
           {tasks.map((task, taskIndex) => (
