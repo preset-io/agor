@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import {
   McpOAuthClaimSchema,
+  McpOAuthExchangeRequestSchema,
   McpOAuthOwnerSchema,
   McpOAuthUseClaimsSchema,
   mcpOAuthSha256,
@@ -10,6 +11,7 @@ import {
 import signatures from './__fixtures__/managed-v1/signature-vectors.json';
 import valid from './__fixtures__/managed-v1/valid.json';
 import {
+  executeManagedOAuthOperation,
   ManagedMCPOAuthClient,
   validateManagedOAuthSuccess,
   verifyManagedOAuthArtifact,
@@ -105,6 +107,77 @@ describe('managed OAuth signed token receipt acceptance', () => {
         policy.keys
       )
     ).toThrow();
+  });
+});
+
+describe('single dispatch and original-claim receipt recovery', () => {
+  const pair = generateKeyPairSync('rsa', { modulusLength: 2048 });
+  const makeOptions = (now = () => policy.now) => ({
+    client: new ManagedMCPOAuthClient({
+      origin: 'https://oauth.staging.example.test',
+      environment: 'staging',
+      region: 'us-west-2',
+      cellId: 'cell_alpha',
+      credentialId: 'credential_alpha',
+      keyId: 'key_alpha',
+      privateKey: pair.privateKey,
+      now,
+    }),
+    request: McpOAuthExchangeRequestSchema.parse(valid.exchange),
+    sequence: '0',
+    ...policy,
+    now,
+    assertCurrent: () => {},
+  });
+  const success = () =>
+    new Response(JSON.stringify(valid.succeeded), {
+      headers: { 'content-type': 'application/json' },
+    });
+  it('recovers a lost exchange response using only receipt reads, never a second exchange', async () => {
+    fetchMock.mockRejectedValueOnce(new Error('lost response')).mockImplementationOnce(success);
+    const result = await executeManagedOAuthOperation(makeOptions());
+    expect(result.use).toEqual(valid.use_claims);
+    expect(fetchMock.mock.calls.map(([url]) => new URL(url).pathname)).toEqual([
+      '/api/internal/mcp-oauth/v1/transactions/transaction_alpha/exchange',
+      '/api/internal/mcp-oauth/v1/operations/operation_alpha/receipt',
+    ]);
+    expect(JSON.parse(fetchMock.mock.calls[1][1].body).claim).toEqual(valid.claim);
+  });
+  it('an expired original claim cannot dispatch or adopt a late receipt', async () => {
+    await expect(
+      executeManagedOAuthOperation(makeOptions(() => valid.claim.deadline_at))
+    ).rejects.toThrow('claim_expired');
+    expect(fetchMock).not.toHaveBeenCalled();
+    let now = policy.now;
+    fetchMock.mockImplementationOnce(() => {
+      now = valid.claim.deadline_at;
+      return success();
+    });
+    await expect(executeManagedOAuthOperation(makeOptions(() => now))).rejects.toThrow(
+      'claim_expired'
+    );
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+  it('preserves client-configuration failure as a journal disposition, not invalid grant', async () => {
+    fetchMock.mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          protocol_version: 1,
+          operation_id: expected.operationId,
+          owner: expected.owner,
+          claim: expected.claim,
+          status: 'client_configuration_failed',
+          failure_code: 'client_configuration_failed',
+          sequence: '0',
+          next_sequence: '1',
+        }),
+        { headers: { 'content-type': 'application/json' } }
+      )
+    );
+    await expect(executeManagedOAuthOperation(makeOptions())).rejects.toMatchObject({
+      outcome: { status: 'client_configuration_failed', next_sequence: '1' },
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });
 
