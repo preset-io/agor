@@ -25,7 +25,14 @@ import {
   sql,
   UsersRepository,
 } from '@agor/core/db';
-import { feathers, feathersExpress, NotAuthenticated, rest, socketio } from '@agor/core/feathers';
+import {
+  errorHandler,
+  feathers,
+  feathersExpress,
+  NotAuthenticated,
+  rest,
+  socketio,
+} from '@agor/core/feathers';
 import type {
   AuthenticatedParams,
   HookContext,
@@ -418,6 +425,7 @@ export async function startManagedPairedRuntime(
         },
       });
     }
+    app.use(errorHandler({ logger: false }));
     listener = (await app.listen(0, '127.0.0.1')) as Server;
     if (!listener.listening)
       await new Promise<void>((done, reject) => {
@@ -446,10 +454,29 @@ export async function startManagedPairedRuntime(
       origin: `http://127.0.0.1:${address.port}`,
       read: (path: string, id: string) =>
         runWithTenantContext(tenantId, () => app.service(path as never).get(id, fixtureParams())),
-      call: (path: string, data: Record<string, unknown>) =>
-        runWithTenantContext(tenantId, () =>
-          app.service(path as never).create(data, fixtureParams())
-        ),
+      call: async (
+        path: string,
+        data: Record<string, unknown>
+      ): Promise<Record<string, unknown>> => {
+        if (!/^mcp-servers\/[a-z-]+$/.test(path)) throw new Error('Fixture route denied');
+        const response = await fetch(`http://127.0.0.1:${address.port}/${path}`, {
+          method: 'POST',
+          headers: {
+            authorization: `Bearer ${accessToken}`,
+            origin: PAIRED_RUNTIME_ORIGIN,
+            'content-type': 'application/json',
+          },
+          body: JSON.stringify(data),
+        });
+        const value = await response.json();
+        if (!response.ok)
+          throw Object.assign(new Error('Registered fixture request rejected'), {
+            code: response.status,
+          });
+        if (!value || typeof value !== 'object' || Array.isArray(value))
+          throw new Error('Fixture response shape invalid');
+        return value as Record<string, unknown>;
+      },
       stop,
     };
   } catch (error) {

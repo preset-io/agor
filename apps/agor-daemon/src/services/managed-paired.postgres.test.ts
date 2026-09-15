@@ -1,8 +1,19 @@
-/** Actual registered runtime + real Cloud/provider TLS, using an explicit test transport seam. */
+/**
+ * Opt-in actual runtime/Cloud/provider browser acceptance. Requires disposable Docker PG,
+ * installed Chromium, and AGOR_PAIRED_CLOUD_SOURCE pointing at the reviewed Cloud checkout.
+ * From apps/agor-daemon (with AGOR_DB_DIALECT=postgresql and PLAYWRIGHT_BROWSERS_PATH):
+ * pnpm exec vitest run src/services/managed-paired.postgres.test.ts
+ * The test registers its worker-local source loader for native dynamic imports; it changes no runtime admission behavior.
+ * Transport seam: exact fixture HTTPS origins route through Cloud's generated-CA TLS RPC.
+ * Sender raw bytes/JWT, worker validation, provider consent/token HTTP, runtime DB commit,
+ * registered Socket.IO/REST services and actual UI are real. Clock/cohort are synthetic
+ * operator evidence; the test Console shell is not production Console visual coverage.
+ */
 import { createHash } from 'node:crypto';
 import { MCPServerRepository, runWithTenantDatabaseScope } from '@agor/core/db';
 import type { MCPCatalogEntry } from '@agor/core/types';
 import { safeOutboundFetch } from '@agor/core/utils/safe-outbound-fetch';
+import { register } from 'tsx/esm/api';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import {
   type Browser,
@@ -31,6 +42,32 @@ vi.mock('node:fs', async (original) => {
   };
 });
 vi.mock('@agor/core/utils/safe-outbound-fetch', () => ({ safeOutboundFetch: vi.fn() }));
+vi.mock('@agor/core/mcp', async (original) => {
+  const actual = await original<typeof import('@agor/core/mcp')>();
+  return {
+    ...actual,
+    sanitizeMCPExternalError: (...args: Parameters<typeof actual.sanitizeMCPExternalError>) => {
+      if (args[0] instanceof Error)
+        failureFrames =
+          args[0].stack
+            ?.split('\n')
+            .filter((line) => /^\s+at /.test(line))
+            .slice(0, 5) ?? [];
+      if (
+        args[0] instanceof Error &&
+        'code' in args[0] &&
+        [
+          'ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX',
+          'ERR_UNSUPPORTED_NODE_MODULES_TYPE_STRIPPING',
+        ].includes(String(args[0].code))
+      )
+        failureFrames.unshift(args[0].message);
+      return actual.sanitizeMCPExternalError(...args);
+    },
+  };
+});
+let failureFrames: string[] = [];
+
 vi.mock('@agor/core/mcp-catalog', async (original) => ({
   ...(await original<typeof import('@agor/core/mcp-catalog')>()),
   loadCatalog: async () => catalog,
@@ -45,7 +82,9 @@ describe.skipIf(process.env.AGOR_DB_DIALECT !== 'postgresql' || !source)(
     let runtime: Awaited<ReturnType<typeof startManagedPairedRuntime>>;
     let ui: Awaited<ReturnType<typeof serveBundledManagedAcceptanceUI>>;
     let browser: Browser;
+    let unregisterSourceLoader: (() => void) | undefined;
     beforeAll(async () => {
+      unregisterSourceLoader = register();
       vi.stubEnv('AGOR_MASTER_SECRET', 'synthetic-paired-master-only');
       cloud = await startPairedCloudProcess(source!);
       runtime = await startManagedPairedRuntime(cloud, (manifest) => {
@@ -141,6 +180,7 @@ describe.skipIf(process.env.AGOR_DB_DIALECT !== 'postgresql' || !source)(
       await ui?.close();
       await runtime?.stop();
       await cloud?.stop();
+      unregisterSourceLoader?.();
       vi.unstubAllEnvs();
     }, 60000);
     it('uses real Catalog UI and durable runtime authority for both fake providers', async () => {
@@ -243,10 +283,16 @@ describe.skipIf(process.env.AGOR_DB_DIALECT !== 'postgresql' || !source)(
           // Populate the durable invalidation checkpoint through the actual authenticated worker.
           await runtime.maintenance!.runOnce();
           const discovery = await runtime.call('mcp-servers/discover', request);
-          expect(discovery.success, `Discovery denied: ${String(discovery.error)}`).toBe(true);
-          expect(discovery.tools).toEqual(
-            expect.arrayContaining([expect.objectContaining({ name: 'fake_read' })])
-          );
+          expect
+            .soft(
+              discovery.success,
+              `Discovery denied: ${String(discovery.error)} ${failureFrames.join(' ')}`
+            )
+            .toBe(true);
+          if (discovery.success)
+            expect(discovery.tools).toEqual(
+              expect.arrayContaining([expect.objectContaining({ name: 'fake_read' })])
+            );
           await expect(
             runtime.call('mcp-servers/oauth-auth-headers', {
               mcp_server_ids: [server.mcp_server_id],
@@ -265,7 +311,7 @@ describe.skipIf(process.env.AGOR_DB_DIALECT !== 'postgresql' || !source)(
           >;
           const provider = entry.name.includes('alpha') ? 'alpha' : 'beta';
           expect(afterRefresh[provider].token).toBe(beforeRefresh[provider].token + 1);
-          expect((await runtime.call('mcp-servers/discover', request)).success).toBe(true);
+          expect.soft((await runtime.call('mcp-servers/discover', request)).success).toBe(true);
           expect(((await cloud.call('counters')) as typeof afterRefresh)[provider].token).toBe(
             afterRefresh[provider].token
           );
