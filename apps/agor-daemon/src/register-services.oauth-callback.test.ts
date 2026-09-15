@@ -144,6 +144,10 @@ describe('register-services OAuth callback URL regression', () => {
       ],
       // Callback completion is owned by the claimed, tenant/user-bound
       // pending attempt rather than by a browser reservation.
+      'mcp-servers/oauth-managed-return': [
+        /requestAuthorityAssertion\s*\(\s*params\s*\)/,
+        /acceptReturn\s*\(/,
+      ],
       'mcp-servers/oauth-complete': [/assertPendingFlowStillAuthorized\s*\(\s*pendingFlow\s*\)/],
       // Refresh issuance is fenced by the exact durable grant generation and
       // rechecks the grant subject at its persistence choke point.
