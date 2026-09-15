@@ -61,3 +61,12 @@ describe('managed authority clock', () => {
     expect(() => clock.latestUtcMs()).toThrow('clock safety');
   });
 });
+
+it('uses an integer conservative upper bound for fractional monotonic time', () => {
+  const clock = new ManagedAuthorityClock(
+    () => ({ utcMs: 1_000_000, monotonicMs: 12.125, combinedUncertaintyMs: 1.25, safe: true }),
+    () => 13.5
+  );
+  expect(clock.latestUtcMs()).toBe(1_000_003);
+  expect(Number.isSafeInteger(clock.latestUtcMs())).toBe(true);
+});

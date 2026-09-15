@@ -290,6 +290,21 @@ describe('cell sender has no executor-token or retry fallback', () => {
     });
     expect(init).toMatchObject({ redirect: 'error', maxRedirects: 0, timeoutMs: 45_000 });
   });
+  it.each([401, 403, 409, 429, 503])(
+    'distinguishes HTTP rejection %s without asserting no provider dispatch',
+    async (status) => {
+      fetchMock.mockResolvedValue(new Response('PRIVATE_BODY', { status }));
+      await expect(
+        client().request({
+          operation: 'capabilities',
+          body: { operation_id: 'op' },
+          schema: z.unknown(),
+          assertCurrent: () => {},
+        })
+      ).rejects.toMatchObject({ category: 'remote_rejection' });
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    }
+  );
   it('never retries a timeout or exposes its secret-bearing cause', async () => {
     fetchMock.mockRejectedValue(new Error('SENTINEL_ACCESS_SENTINEL_REFRESH'));
     await expect(
