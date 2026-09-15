@@ -610,7 +610,12 @@ export class UserMCPOAuthTokenRepository {
           refreshToken: input.refreshToken,
           expiresAt: input.expiresAt,
         });
-        if (input.managed.metadata.claim.kind !== 'exchange')
+        if (
+          input.managed.metadata.claim.kind !== 'exchange' ||
+          input.managed.metadata.claim.refresh_generation !== '0' ||
+          input.managed.metadata.claim.refresh_success_generation !== '0' ||
+          input.managed.expected_sequence !== '0'
+        )
           throw new RepositoryError('New managed grant requires its exchange claim');
       } else if (input.grantBinding?.version === 5)
         throw new RepositoryError('Managed binding requires its receipt');

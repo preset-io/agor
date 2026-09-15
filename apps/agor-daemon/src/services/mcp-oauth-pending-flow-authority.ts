@@ -307,6 +307,15 @@ export class MCPOAuthPendingFlowAuthority {
     });
   }
 
+  async retireManagedAttempt(
+    record: MCPOAuthPendingFlowRecord,
+    failureCode = 'attempt_canceled'
+  ): Promise<boolean> {
+    return runWithTenantDatabaseScope(this.db, record.tenantId, (db) =>
+      new MCPOAuthPendingFlowRepository(db).retireManagedAttempt(record, failureCode)
+    );
+  }
+
   private managedEnvelopeBinding(owner: McpOAuthOwner, transactionId: string | null): string {
     return `cloud_managed_v1\0${Buffer.from(mcpOAuthOwnerBytes(owner)).toString('base64url')}\0${transactionId ?? '<reservation>'}`;
   }

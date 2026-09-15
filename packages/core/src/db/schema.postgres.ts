@@ -2160,6 +2160,15 @@ export const userMcpOauthTokens = pgTable(
     updated_at: t.timestamp('updated_at'),
   },
   (table) => ({
+    managedOriginCheck: check(
+      'mcp_grant_managed_origin',
+      sql`(
+ (credential_origin='direct' AND managed_metadata IS NULL AND managed_operation_id IS NULL AND grant_binding_version IS DISTINCT FROM 5)
+ OR (credential_origin='cloud_managed_v1' AND user_id IS NOT NULL AND grant_binding_version=5 AND managed_metadata IS NOT NULL AND oauth_client_secret IS NULL
+ AND managed_metadata->'owner'->>'workspace_id'=tenant_id AND managed_metadata->'owner'->>'cell_local_user_id'=user_id
+ AND managed_metadata->'owner'->>'server_id'=mcp_server_id AND managed_metadata->'owner'->>'grant_generation'=grant_generation::text
+ AND managed_metadata->'owner'->>'config_fingerprint'=grant_binding_fingerprint)) IS TRUE`
+    ),
     tenantUserFk: foreignKey({
       name: 'user_mcp_oauth_tokens_tenant_user_fk',
       columns: [table.tenant_id, table.user_id],
@@ -2233,6 +2242,16 @@ export const mcpOauthPendingFlows = pgTable(
     finished_at: t.timestamp('finished_at'),
   },
   (table) => ({
+    managedOriginCheck: check(
+      'mcp_pending_managed_origin',
+      sql`(
+ (credential_origin='direct' AND managed_metadata IS NULL AND managed_transaction_id IS NULL AND managed_operation_id IS NULL AND config_fingerprint_version<>5)
+ OR (credential_origin='cloud_managed_v1' AND oauth_mode='per_user' AND subject_user_id=user_id AND config_fingerprint_version=5 AND managed_metadata IS NOT NULL
+ AND managed_metadata->'owner'->>'workspace_id'=tenant_id AND managed_metadata->'owner'->>'cell_local_user_id'=user_id
+ AND managed_metadata->'owner'->>'server_id'=mcp_server_id AND managed_metadata->'owner'->>'attempt_id'=attempt_id
+ AND managed_metadata->'owner'->>'grant_generation'=grant_generation::text AND managed_metadata->'owner'->>'config_fingerprint'=config_fingerprint
+ AND managed_metadata->'owner'=managed_metadata->'prepare_request'->'owner')) IS TRUE`
+    ),
     tenantUserFk: foreignKey({
       name: 'mcp_oauth_pending_flows_tenant_user_fk',
       columns: [table.tenant_id, table.user_id],

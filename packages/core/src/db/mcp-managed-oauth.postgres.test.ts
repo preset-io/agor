@@ -9,6 +9,7 @@ import { MCPOAuthPendingFlowRepository } from './repositories/mcp-oauth-pending-
 import { MCPServerRepository } from './repositories/mcp-servers';
 import { UserMCPOAuthTokenRepository } from './repositories/user-mcp-oauth-tokens';
 import { UsersRepository } from './repositories/users';
+import { deleteTenantData } from './tenant-deletion';
 import { runWithSystemDatabaseScope, runWithTenantDatabaseScope } from './tenant-scope';
 import { managedCommit, managedOwner } from './test-support/managed-oauth-fixture';
 import { createOwnedPostgres, type OwnedPostgres } from './test-support/owned-postgres';
@@ -484,6 +485,193 @@ describe.skipIf(process.env.AGOR_DB_DIALECT !== 'postgresql')(
             },
           })
         ).rejects.toThrow();
+      });
+    });
+    it('refresh completion atomically rotates the permit and rejects a duplicated response', async () => {
+      const f = await seed();
+      const e = await exchange(f);
+      await e.save();
+      await runWithTenantDatabaseScope(owned.db, f.tenant, async (db) => {
+        const repo = new UserMCPOAuthTokenRepository(db, MASTER);
+        const t = (await repo.getToken(f.user, f.server))!;
+        const c = await repo.claimRefresh(f.user, f.server, {
+          grantGeneration: t.grant_generation,
+          refreshGeneration: t.refresh_generation,
+          grantBindingFingerprint: t.grant_binding_fingerprint,
+        });
+        if (c.outcome !== 'claimed') throw new Error('fixture claim');
+        const start = c.token.refresh_claimed_at!.getTime();
+        const commit = managedCommit(
+          f.owner,
+          {
+            kind: 'refresh',
+            claim_id: c.claimId,
+            claimed_at: start,
+            deadline_at: start + 120000,
+            refresh_generation: String(c.refreshGeneration),
+            refresh_success_generation: '0',
+          },
+          '1'
+        );
+        commit.metadata.transaction_id = e.commit.metadata.transaction_id;
+        const input = {
+          accessToken: commit.tokens.access_token,
+          refreshToken: commit.tokens.refresh_token,
+          expiresAt: new Date(commit.tokens.expires_at),
+          managed: commit,
+        };
+        expect(await repo.completeClaimedRefresh(f.user, f.server, c, input)).toBe(true);
+        expect(await repo.completeClaimedRefresh(f.user, f.server, c, input)).toBe(false);
+        expect((await repo.getToken(f.user, f.server))?.managed_metadata).toEqual(commit.metadata);
+      });
+    });
+    it('the maintenance capability can cancel expired managed attempts without reading cleanup authorities', async () => {
+      const f = await seed(false);
+      await runWithTenantDatabaseScope(owned.db, f.tenant, (db) =>
+        executeRaw(
+          db,
+          sql`UPDATE public.mcp_oauth_pending_flows SET expires_at=clock_timestamp()-interval '1 second' WHERE attempt_id=${f.record.attemptId}`
+        )
+      );
+      await runWithSystemDatabaseScope(
+        owned.peer,
+        'fixture maintenance',
+        async (db) => {
+          expect(
+            (await new MCPOAuthPendingFlowRepository(db).maintain()).expired
+          ).toBeGreaterThanOrEqual(1);
+          expect(
+            rawRows(
+              await executeRaw(db, sql`SELECT outbox_id FROM public.mcp_managed_oauth_outbox`)
+            )
+          ).toEqual([]);
+        },
+        { capability: 'mcp_oauth_maintenance' }
+      );
+      await runWithTenantDatabaseScope(owned.db, f.tenant, async (db) =>
+        expect((await new MCPManagedOAuthOutboxRepository(db).listPending(f.tenant))[0].kind).toBe(
+          'recover_prepare_cancel'
+        )
+      );
+    });
+    it('gates tenant erasure until close confirmation and then erases cleanup rows without touching another tenant', async () => {
+      const f = await seed(false);
+      const other = await seed(false);
+      await expect(deleteTenantData(owned.db, f.tenant)).rejects.toThrow('Managed OAuth authority');
+      await runWithTenantDatabaseScope(owned.db, f.tenant, async (db) => {
+        const repo = new MCPManagedOAuthOutboxRepository(db);
+        await repo.retireTenant(f.tenant);
+        const [job] = await repo.listPending(f.tenant);
+        await repo.resolvePreparedCancellation(
+          f.tenant,
+          job.outbox_id,
+          job.operation_id,
+          'recovered',
+          '1'
+        );
+        await repo.complete(f.tenant, job.outbox_id, job.operation_id);
+      });
+      expect(await deleteTenantData(owned.db, f.tenant)).toMatchObject({ tenantDataDeleted: true });
+      await runWithTenantDatabaseScope(owned.db, other.tenant, async (db) =>
+        expect(
+          await new MCPOAuthPendingFlowRepository(db).getForUser(
+            other.tenant,
+            other.user,
+            other.record.attemptId
+          )
+        ).not.toBeNull()
+      );
+    });
+    it('refuses an expired original managed refresh without replacing the prior token', async () => {
+      const f = await seed();
+      const e = await exchange(f);
+      await e.save();
+      await runWithTenantDatabaseScope(owned.db, f.tenant, async (db) => {
+        const repo = new UserMCPOAuthTokenRepository(db, MASTER);
+        const t = (await repo.getToken(f.user, f.server))!;
+        const c = await repo.claimRefresh(f.user, f.server, {
+          grantGeneration: t.grant_generation,
+          refreshGeneration: t.refresh_generation,
+          grantBindingFingerprint: t.grant_binding_fingerprint,
+        });
+        if (c.outcome !== 'claimed') throw new Error('fixture claim');
+        const start = Date.now() - 121000;
+        await executeRaw(
+          db,
+          sql`UPDATE public.user_mcp_oauth_tokens SET refresh_claimed_at=to_timestamp(${start}/1000.0) WHERE user_id=${f.user} AND mcp_server_id=${f.server}`
+        );
+        const commit = managedCommit(
+          f.owner,
+          {
+            kind: 'refresh',
+            claim_id: c.claimId,
+            claimed_at: start,
+            deadline_at: start + 120000,
+            refresh_generation: String(c.refreshGeneration),
+            refresh_success_generation: '0',
+          },
+          '1'
+        );
+        commit.metadata.transaction_id = e.commit.metadata.transaction_id;
+        expect(
+          await repo.completeClaimedRefresh(f.user, f.server, c, {
+            accessToken: commit.tokens.access_token,
+            refreshToken: commit.tokens.refresh_token,
+            expiresAt: new Date(commit.tokens.expires_at),
+            managed: commit,
+          })
+        ).toBe(false);
+        expect((await repo.getToken(f.user, f.server))?.oauth_access_token).toBe(
+          e.commit.tokens.access_token
+        );
+      });
+    });
+    it('serializes a concurrent demotion behind the managed writer user-row lock, then retires its grant', async () => {
+      const f = await seed();
+      const e = await exchange(f);
+      let release!: () => void;
+      const gate = new Promise<void>((r) => {
+        release = r;
+      });
+      let signal!: () => void;
+      const saved = new Promise<void>((r) => {
+        signal = r;
+      });
+      const writer = runWithTenantDatabaseScope(owned.db, f.tenant, async () => {
+        await e.save();
+        signal();
+        await gate;
+      });
+      await saved;
+      const demote = runWithTenantDatabaseScope(owned.peer, f.tenant, (db) =>
+        executeRaw(db, sql`UPDATE public.users SET role='viewer' WHERE user_id=${f.user}`)
+      );
+      try {
+        let blocked = false;
+        for (let i = 0; i < 100; i++) {
+          if (
+            (
+              await owned.sql`SELECT 1 FROM pg_stat_activity WHERE usename=current_user AND cardinality(pg_blocking_pids(pid))>0`
+            ).length
+          ) {
+            blocked = true;
+            break;
+          }
+          await new Promise((r) => setTimeout(r, 10));
+        }
+        expect(blocked).toBe(true);
+      } finally {
+        release();
+        await writer;
+        await demote;
+      }
+      await runWithTenantDatabaseScope(owned.db, f.tenant, async (db) => {
+        expect(
+          await new UserMCPOAuthTokenRepository(db, MASTER).getToken(f.user, f.server)
+        ).toBeNull();
+        expect((await new MCPManagedOAuthOutboxRepository(db).listPending(f.tenant))[0].kind).toBe(
+          'close'
+        );
       });
     });
   }
