@@ -1,15 +1,12 @@
-import { constants, type KeyObject, verify } from 'node:crypto';
+import type { KeyObject } from 'node:crypto';
+import { verifyManagedOAuthArtifact } from '@agor/core/tools/mcp/managed-oauth-client';
 import {
-  MCP_OAUTH_JWS_TYPES,
   McpOAuthCapabilitiesSchema,
-  McpOAuthJwsHeaderSchema,
   type McpOAuthOwner,
-  McpOAuthSignedArtifactSchema,
   type McpOAuthUseClaims,
   McpOAuthUseClaimsSchema,
   mcpOAuthEgressAudience,
   mcpOAuthOwnerBytes,
-  mcpOAuthParseJson,
   mcpOAuthSha256,
 } from '@agor/core/types';
 import type { ManagedAuthorityClock } from './managed-clock.js';
@@ -24,13 +21,6 @@ export class ManagedUseAuthorizationError extends Error {
     super('Agor-managed sign-in authority is unavailable.');
     this.name = 'ManagedUseAuthorizationError';
   }
-}
-
-function decode(part: string): Buffer {
-  const bytes = Buffer.from(part, 'base64url');
-  if (bytes.toString('base64url') !== part)
-    throw new ManagedUseAuthorizationError('managed_authority_invalid');
-  return bytes;
 }
 
 /**
@@ -68,31 +58,11 @@ export async function verifyManagedUseAuthorization(input: {
     ) {
       throw new ManagedUseAuthorizationError('managed_authority_unavailable');
     }
-    McpOAuthSignedArtifactSchema.parse(input.signedAuthorization);
-    const [encodedHeader, encodedClaims, encodedSignature] = input.signedAuthorization.split(
-      '.'
-    ) as [string, string, string];
-    const header = McpOAuthJwsHeaderSchema.parse(
-      mcpOAuthParseJson(decode(encodedHeader).toString('utf8'), 1024)
-    );
-    const key = input.keys.get(header.kid);
-    if (
-      header.typ !== MCP_OAUTH_JWS_TYPES.use ||
-      !key ||
-      key.type !== 'public' ||
-      key.asymmetricKeyType !== 'rsa' ||
-      (key.asymmetricKeyDetails?.modulusLength ?? 0) < 2048 ||
-      !verify(
-        'RSA-SHA256',
-        Buffer.from(`${encodedHeader}.${encodedClaims}`),
-        { key, padding: constants.RSA_PKCS1_PADDING },
-        decode(encodedSignature)
-      )
-    ) {
-      throw new ManagedUseAuthorizationError('managed_authority_invalid');
-    }
-    claims = McpOAuthUseClaimsSchema.parse(
-      mcpOAuthParseJson(decode(encodedClaims).toString('utf8'), 24_576)
+    claims = verifyManagedOAuthArtifact(
+      input.signedAuthorization,
+      'use',
+      McpOAuthUseClaimsSchema,
+      input.keys
     );
     const expected = McpOAuthUseClaimsSchema.parse(input.expected);
     const bearer = /^Bearer ([^\s]+)$/.exec(input.authorization)?.[1];
