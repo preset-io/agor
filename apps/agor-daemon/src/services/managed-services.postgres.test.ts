@@ -606,7 +606,7 @@ describe.skipIf(process.env.AGOR_DB_DIALECT !== 'postgresql')(
         committed.push({ server, authorization });
       }
     );
-    it('keeps existing use at one/three-minute worker outages, denies explicit policy and original hour expiry', async () => {
+    it('keeps acquisition through outage and proactive refresh, denies explicit policy and original hour expiry', async () => {
       expect(committed).toHaveLength(2);
       const realDate = Date.now.bind(Date);
       const realMonotonic = process.hrtime.bigint.bind(process.hrtime);
@@ -632,11 +632,25 @@ describe.skipIf(process.env.AGOR_DB_DIALECT !== 'postgresql')(
       ).length;
       try {
         workerUnavailable = true;
-        for (const offset of [60000, 180000]) {
+        for (const offset of [60000, 180000, 59 * 60000]) {
           elapsed = offset;
           publish();
           await expect(services.registry.refresh()).rejects.toThrow();
-          for (const grant of committed) await assertUse(grant);
+          for (const grant of committed) {
+            await assertUse(grant);
+            // Actual gateway acquisition, including the proactive refresh
+            // threshold. Only a CAS-certified local no-dispatch may retain the
+            // unchanged token and original signed authorization.
+            const authorization = await invoke(() =>
+              services.grantAccess.acquireAuthorization({
+                tenantId: tenant,
+                userId,
+                server: grant.server,
+                assertCurrent: () => {},
+              })
+            );
+            expect(authorization).toBe(grant.authorization);
+          }
           expect(() => services.registry.resolve(committed[0]!.server, 'refresh')).toThrow();
           expect(() => services.registry.resolveEntry(catalog[0])).toThrow();
         }

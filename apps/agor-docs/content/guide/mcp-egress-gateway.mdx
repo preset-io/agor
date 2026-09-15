@@ -461,7 +461,7 @@ use it for workspace rehome, backup, sleep or a temporary drain. It is
 deployment-local control state, not a tenant record or portable archive item.
 
 Target pages return `{version:1,tenant_ids,next_after}` and include orphaned
-managed history, not just currently provisioned workspaces. Pass `--after` from
+managed history for the exact cell, not just currently provisioned workspaces. Pass `--after` from
 the previous `next_after`; the maximum page size is 100. The three cell-fence
 flags are all-or-none. Without them the command is only a DB-local diagnostic
 inventory, not a decommission fence. Automation must union these IDs with its
@@ -469,3 +469,13 @@ ordinary source inventory, retire and poll every tenant under its individual
 gate, and re-enumerate before destroying source infrastructure. Unsupported CLI
 or failed readiness is a blocking error for a managed-history deployment, never
 permission to fall through to ordinary erasure.
+
+Logical databases can serve multiple cells. For cell decommission, pass the
+same cell barrier to both per-tenant commands, using these additional flags:
+`--cell-id CELL --cell-operation-id OPERATION --assert-cell-gate-generation CELL_GENERATION`.
+They then retire/count only that cell's grants, attempts and cleanup jobs;
+foreign-cell rows remain untouched. Their JSON report shape is unchanged.
+Omitting the triple deliberately retains full-tenant retirement semantics for
+workspace lifecycle operations. Historical cleanup targets belonging to another
+current cell are cleanup-only: do not erase their tenant or shared database,
+and release their temporary tenant gate once the exact old-cell cleanup drains.
