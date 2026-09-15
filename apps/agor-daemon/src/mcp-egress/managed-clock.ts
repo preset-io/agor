@@ -63,6 +63,13 @@ export class ManagedAuthorityClock {
     }
     this.previous = { ...current };
     this.anchor ??= { ...current };
-    return current.utcMs + age + current.combinedUncertaintyMs;
+    // Wire deadlines use integer milliseconds; hrtime/performance samples do not.
+    // Round the upper bound UP: truncation would accidentally grant expiry grace.
+    const latest = Math.ceil(current.utcMs + age + current.combinedUncertaintyMs);
+    if (!Number.isSafeInteger(latest)) {
+      this.unsafe = true;
+      throw new ManagedAuthorityClockError();
+    }
+    return latest;
   }
 }

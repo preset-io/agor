@@ -1,3 +1,4 @@
+import { ManagedMCPOAuthProtocolError } from '@agor/core/tools/mcp/managed-oauth-client';
 import type { MCPCatalogEntry, MCPServer } from '@agor/core/types';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import fixtures from '../../../../packages/core/src/tools/mcp/__fixtures__/managed-v1/projection-results.json';
@@ -96,6 +97,16 @@ describe('authenticated provider-neutral registry admission', () => {
     now += 1;
     expect(() => registry.resolveEntry(entry)).toThrow();
   });
+  it.each(['remote_rejection', 'invalid_response'] as const)(
+    'invalidates cached admission for %s',
+    async (category) => {
+      const registry = setup();
+      await registry.refresh();
+      request.mockRejectedValue(new ManagedMCPOAuthProtocolError(category));
+      await expect(registry.refresh()).rejects.toThrow();
+      expect(() => registry.resolveEntry(entry)).toThrow();
+    }
+  );
   it('retains authenticated negative evidence immediately', async () => {
     const registry = setup();
     await registry.refresh();

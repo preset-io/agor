@@ -150,8 +150,36 @@ export async function createManagedOAuthServices(input: {
     deployment,
     capabilities: () => registry.capabilities(),
   });
-  const managedValidator: ManagedGrantAuthorityValidator = async (db, server, grant) =>
-    grant.user_id !== null && grantAccess.isServerGrantAuthorized(db, server, grant.user_id);
+  const managedValidator: ManagedGrantAuthorityValidator = async (db, server, grant) => {
+    if (
+      !grant.user_id ||
+      grant.mcp_server_id !== server.mcp_server_id ||
+      grant.grant_binding_version !== 5
+    )
+      return false;
+    const current = await new UserMCPOAuthTokenRepository(db).getCatalogGrantAuthority(
+      grant.user_id,
+      server.mcp_server_id
+    );
+    if (!current) return false;
+    for (const field of [
+      'user_id',
+      'mcp_server_id',
+      'grant_binding_version',
+      'grant_binding_fingerprint',
+      'oauth_client_id',
+      'oauth_client_secret',
+      'oauth_metadata_uri',
+      'oauth_resource_uri',
+      'oauth_issuer',
+      'oauth_authorization_endpoint',
+      'oauth_token_endpoint',
+      'oauth_redirect_uri',
+      'oauth_token_endpoint_auth_method',
+    ] as const)
+      if (grant[field] !== current[field]) return false;
+    return grantAccess.isServerGrantAuthorized(db, server, grant.user_id);
+  };
   const refreshExplicit = async (
     tenantId: string,
     userId: UserID,

@@ -35,7 +35,9 @@ import {
 import { safeOutboundFetch } from '../../utils/safe-outbound-fetch';
 
 export class ManagedMCPOAuthProtocolError extends Error {
-  constructor(readonly category: 'unavailable' | 'invalid_response' | 'claim_expired') {
+  constructor(
+    readonly category: 'unavailable' | 'invalid_response' | 'claim_expired' | 'remote_rejection'
+  ) {
     // Never include the underlying network/schema error: it can contain credentials.
     super(`Managed MCP OAuth ${category}`);
     this.name = 'ManagedMCPOAuthProtocolError';
@@ -301,7 +303,8 @@ export class ManagedMCPOAuthClient {
         ),
         assertCurrent: options.assertCurrent,
       });
-      if (!response.ok) throw new ManagedMCPOAuthProtocolError('unavailable');
+      // HTTP rejection is not a certified provider no-send outcome. It only invalidates cached admission.
+      if (!response.ok) throw new ManagedMCPOAuthProtocolError('remote_rejection');
       try {
         if (response.headers.get('content-type')?.split(';')[0].trim() !== 'application/json')
           throw new Error();
