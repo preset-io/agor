@@ -6,6 +6,7 @@ import {
   MCPManagedOAuthGrantMetadataSchema,
   type MCPManagedOAuthPendingMetadata,
   MCPManagedOAuthPendingMetadataSchema,
+  type MCPManagedOAuthRetirementStatus,
   managedOAuthLocalGeneration,
 } from '../../types/mcp-managed-oauth';
 import { McpOAuthEpochSchema, McpOAuthIdSchema } from '../../types/mcp-managed-oauth-contract';
@@ -212,26 +213,49 @@ export class MCPManagedOAuthOutboxRepository {
 
   /** Fresh readiness, not a portable certificate; valid only while this exact gate remains held. */
   async isTenantRetirementReady(tenantId: string, gateGeneration: string): Promise<boolean> {
+    return (await this.getTenantRetirementStatus(tenantId, gateGeneration)).ready;
+  }
+
+  async getTenantRetirementStatus(
+    tenantId: string,
+    gateGeneration: string
+  ): Promise<MCPManagedOAuthRetirementStatus> {
     await assertTenantWriteGateGeneration(this.db, tenantId, gateGeneration);
     await this.lock(tenantId);
-    return (
-      rawRows(
-        await executeRaw(
-          this.db,
-          sql`
-      SELECT 1 AS pending
-      WHERE EXISTS (SELECT 1 FROM public.mcp_managed_oauth_outbox
-        WHERE tenant_id=${tenantId} AND completed_at IS NULL)
-      OR EXISTS (SELECT 1 FROM public.user_mcp_oauth_tokens
-        WHERE tenant_id=${tenantId} AND credential_origin='cloud_managed_v1')
-      OR EXISTS (SELECT 1 FROM public.mcp_oauth_pending_flows
-        WHERE tenant_id=${tenantId} AND credential_origin='cloud_managed_v1'
-          AND status IN ('pending','exchanging'))
+    const [row] = rawRows(
+      await executeRaw(
+        this.db,
+        sql`
+      SELECT
+        (SELECT count(*)::text FROM public.mcp_managed_oauth_outbox
+          WHERE tenant_id=${tenantId} AND completed_at IS NULL) AS pending_cleanup,
+        (SELECT count(*)::text FROM public.user_mcp_oauth_tokens
+          WHERE tenant_id=${tenantId} AND credential_origin='cloud_managed_v1') AS active_grants,
+        (SELECT count(*)::text FROM public.mcp_oauth_pending_flows
+          WHERE tenant_id=${tenantId} AND credential_origin='cloud_managed_v1'
+            AND status IN ('pending','exchanging')) AS pending_attempts
     `
-        )
-      ).length === 0
+      )
     );
+    const count = (value: unknown): number => {
+      if (typeof value !== 'string' || !/^(0|[1-9][0-9]*)$/.test(value))
+        throw new RepositoryError('Invalid managed retirement count');
+      const n = Number(value);
+      if (!Number.isSafeInteger(n) || n < 0)
+        throw new RepositoryError('Unsafe managed retirement count');
+      return n;
+    };
+    const pending_attempts = count(row?.pending_attempts);
+    const active_grants = count(row?.active_grants);
+    const pending_cleanup = count(row?.pending_cleanup);
+    return {
+      ready: pending_attempts === 0 && active_grants === 0 && pending_cleanup === 0,
+      pending_attempts,
+      active_grants,
+      pending_cleanup,
+    };
   }
+
   /** Lifecycle close, before tenant erasure. Existing attempt/token owners produce exact-old cleanup entries. */
   async retireTenant(tenantId: string): Promise<void> {
     await this.lock(tenantId);

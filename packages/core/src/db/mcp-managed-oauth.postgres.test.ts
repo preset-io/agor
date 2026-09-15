@@ -664,7 +664,19 @@ describe.skipIf(process.env.AGOR_DB_DIALECT !== 'postgresql')(
         within((r) => r.retireTenantUnderWriteGate(f.tenant, randomUUID()))
       ).rejects.toThrow();
       expect(await within((r) => r.isTenantRetirementReady(f.tenant, gate.generation))).toBe(false);
+      expect(await within((r) => r.getTenantRetirementStatus(f.tenant, gate.generation))).toEqual({
+        ready: false,
+        pending_attempts: 1,
+        active_grants: 0,
+        pending_cleanup: 0,
+      });
       await within((r) => r.retireTenantUnderWriteGate(f.tenant, gate.generation));
+      expect(await within((r) => r.getTenantRetirementStatus(f.tenant, gate.generation))).toEqual({
+        ready: false,
+        pending_attempts: 0,
+        active_grants: 0,
+        pending_cleanup: 1,
+      });
       expect(await within((r) => r.isTenantRetirementReady(f.tenant, gate.generation))).toBe(false);
       await within(async (r) => {
         const [job] = await r.listPending(f.tenant);
