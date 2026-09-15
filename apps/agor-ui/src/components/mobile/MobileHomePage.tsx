@@ -6,7 +6,7 @@ import { useNavigate } from 'react-router-dom';
 import { getBoardEmoji } from '../BoardTile';
 import { GlassPanel } from '../GlassSurface/GlassPanel';
 import { JumpBackInSection } from '../HomePage/JumpBackInSection';
-import { MOBILE_TOUCH_TARGET } from './constants';
+import { MOBILE_TOUCH_TARGET, mobileScrollAreaStyle } from './constants';
 import { MobileHeader } from './MobileHeader';
 import { MobileSessionRow } from './MobileSessionRow';
 
@@ -63,9 +63,7 @@ export const MobileHomePage: React.FC<MobileHomePageProps> = ({
       />
       <div
         style={{
-          flex: 1,
-          minHeight: 0,
-          overflowY: 'auto',
+          ...mobileScrollAreaStyle,
           paddingBlock: token.paddingMD,
           paddingBottom: `calc(${token.paddingXL}px + env(safe-area-inset-bottom))`,
         }}

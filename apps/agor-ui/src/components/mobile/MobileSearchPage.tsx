@@ -22,7 +22,7 @@ import {
 import { getSessionDisplayTitle } from '../../utils/sessionTitle';
 import { MIN_QUERY_LENGTH } from '../GlobalSearch/types';
 import { useGlobalSearch } from '../GlobalSearch/useGlobalSearch';
-import { MOBILE_TOUCH_TARGET } from './constants';
+import { MOBILE_TOUCH_TARGET, mobileScrollAreaStyle } from './constants';
 
 interface MobileSearchPageProps {
   currentUser?: User | null;
@@ -213,7 +213,7 @@ export const MobileSearchPage: React.FC<MobileSearchPageProps> = ({
         />
       </div>
 
-      <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', paddingBottom: token.paddingLG }}>
+      <div style={{ ...mobileScrollAreaStyle, paddingBottom: token.paddingLG }}>
         {query.trim().length < MIN_QUERY_LENGTH ? (
           <div style={{ padding: token.paddingXL, textAlign: 'center' }}>
             <Typography.Text type="secondary">

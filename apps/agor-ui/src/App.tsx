@@ -2159,6 +2159,27 @@ function AppContent() {
 
   const mcpRecoveryElement = <MCPSlackRecoveryPage client={client} />;
 
+  // The post-onboarding connect-AI / integrations banners. Shared verbatim by
+  // both shells so the mobile Home surfaces "AI not connected" proactively
+  // (desktop already shows it above its app content).
+  const onboardingBanners = (
+    <OnboardingBanners
+      user={currentUser}
+      mcpServerCount={mcpServerCount}
+      gatewayChannelCount={gatewayChannelCount}
+      integrationsHydrated={integrationsHydrated}
+      canManageMcp={canManageMcp}
+      onOpenUserSettings={(tab) => {
+        setUserSettingsInitialTab(tab);
+        setOpenUserSettings(true);
+      }}
+      onOpenWorkspaceSettings={(tab) => setSettingsTabToOpen(tab)}
+      onCheckAuth={handleCheckAuth}
+      credentialVersion={credentialVersion}
+      connectionReady={connected && !connecting}
+    />
+  );
+
   // All desktop entity URLs (/b/, /s/, /w/, /a/) render the same
   // AgorApp — the multiple routes exist so react-router's useParams
   // (read inside useUrlState) populates the right named params for
@@ -2181,23 +2202,7 @@ function AppContent() {
       openNewBranchModal={openNewBranch}
       onNewBranchModalClose={handleNewBranchModalClose}
       suppressLeftPanel={onboardingWizardOpen}
-      topBanner={
-        <OnboardingBanners
-          user={currentUser}
-          mcpServerCount={mcpServerCount}
-          gatewayChannelCount={gatewayChannelCount}
-          integrationsHydrated={integrationsHydrated}
-          canManageMcp={canManageMcp}
-          onOpenUserSettings={(tab) => {
-            setUserSettingsInitialTab(tab);
-            setOpenUserSettings(true);
-          }}
-          onOpenWorkspaceSettings={(tab) => setSettingsTabToOpen(tab)}
-          onCheckAuth={handleCheckAuth}
-          credentialVersion={credentialVersion}
-          connectionReady={connected && !connecting}
-        />
-      }
+      topBanner={onboardingBanners}
       onCreateSession={handleCreateSession}
       onForkSession={handleForkSession}
       onBtwForkSession={handleBtwForkSession}
@@ -2425,6 +2430,7 @@ function AppContent() {
                 <MobileApp
                   client={client}
                   user={user}
+                  topBanner={onboardingBanners}
                   onSendPrompt={handleSendPrompt}
                   onCreateSession={handleCreateSession}
                   onForkSession={handleForkSession}

@@ -135,4 +135,14 @@ describe('MobileApp branch actions', () => {
       screen.queryByRole('button', { name: 'Ask your primary assistant' })
     ).not.toBeInTheDocument();
   });
+
+  it('surfaces the shared connect-AI banner on Home', () => {
+    renderMobileApp('/m', { topBanner: <div>AI not connected</div> });
+    expect(screen.getByText('AI not connected')).toBeInTheDocument();
+  });
+
+  it('hides the banner on the full-screen session view (its composer owns credentials)', () => {
+    renderMobileApp('/m/session/session-1', { topBanner: <div>AI not connected</div> });
+    expect(screen.queryByText('AI not connected')).not.toBeInTheDocument();
+  });
 });
