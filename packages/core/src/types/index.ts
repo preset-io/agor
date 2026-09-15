@@ -22,6 +22,7 @@ export * from './id';
 export * from './knowledge';
 export * from './mcp';
 export * from './mcp-catalog';
+export * from './mcp-managed-oauth';
 export * from './mcp-managed-oauth-contract';
 export * from './mcp-marketplace';
 export * from './message';
