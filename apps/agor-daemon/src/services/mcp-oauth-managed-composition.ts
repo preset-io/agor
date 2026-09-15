@@ -123,7 +123,7 @@ export async function createManagedOAuthServices(input: {
   const grantAccess = createManagedOAuthGrantAccess({
     runtime,
     deployment,
-    capabilities: () => registry.capabilities(),
+    capabilities: () => registry.existingUseCapabilities(),
   });
   const managedValidator: ManagedGrantAuthorityValidator = async (db, server, grant) => {
     if (

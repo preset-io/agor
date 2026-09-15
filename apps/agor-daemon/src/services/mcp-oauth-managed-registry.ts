@@ -51,6 +51,9 @@ function project(value: Projection): MCPManagedOAuthResolvedProfile {
 
 export class ManagedOAuthRegistry {
   private snapshot?: { value: Capabilities; observedAt: number };
+  // Public semantic policy only, not a token cache or permission to mint/refresh.
+  // Ordinary MCP hops must not acquire a new short broker-health dependency.
+  private existingUseSnapshot?: { value: Capabilities; observedAt: number };
   private refreshInFlight?: Promise<void>;
   private readonly settings: Readonly<AgorManagedMCPOAuthSettings>;
   constructor(
@@ -80,6 +83,7 @@ export class ManagedOAuthRegistry {
       });
       // A failed refresh never replaces known state with an empty/allowing projection.
       this.snapshot = { value, observedAt };
+      this.existingUseSnapshot = this.snapshot;
       // Authenticated negative evidence takes effect immediately, even if refresh reports unavailable.
       this.assertSnapshot(value);
     };
@@ -123,8 +127,20 @@ export class ManagedOAuthRegistry {
     return structuredClone(snapshot.value);
   }
 
+  /** Last authenticated use policy; the original signed token/permit supplies the hard expiry. */
+  existingUseCapabilities(): Capabilities {
+    const snapshot = this.existingUseSnapshot;
+    if (!snapshot || this.deployment.clock.latestUtcMs() < snapshot.observedAt)
+      throw new ManagedOAuthUnavailableError();
+    // A real negative DTO replaces this state immediately. HTTP/transport failure
+    // is not an authenticated policy revocation. Local/cohort/clock/invalidation
+    // and original permit checks remain mandatory at every physical hop.
+    this.assertSnapshot(snapshot.value);
+    return structuredClone(snapshot.value);
+  }
+
   private candidates(entry: MCPCatalogEntry, operation: Operation): Projection[] {
-    const value = this.capabilities();
+    const value = operation === 'use' ? this.existingUseCapabilities() : this.capabilities();
     if (
       this.settings.enabled !== true ||
       (operation !== 'use' &&

@@ -108,6 +108,9 @@ describe.skipIf(process.env.AGOR_DB_DIALECT !== 'postgresql')(
     let otherId: UserID;
     let config: AgorConfig;
     let callbackReady = false;
+    let workerUnavailable = false;
+    let publish: () => void;
+    const committed: Array<{ server: MCPServer; authorization: string }> = [];
     const capabilities = { ...projection.valid.capabilities, profile_versions: profiles };
     const transactions = new Map<string, McpOAuthOwner>();
     const calls: string[] = [];
@@ -128,7 +131,7 @@ describe.skipIf(process.env.AGOR_DB_DIALECT !== 'postgresql')(
         renameSync(resolve(directory, `${name}.next`), resolve(directory, name));
       };
       const boot = readFileSync('/proc/sys/kernel/random/boot_id', 'utf8').trim();
-      const publish = () => {
+      publish = () => {
         const now = Date.now(); // TEST monitor only: not a production clock assurance.
         write(
           'clock.json',
@@ -240,6 +243,11 @@ describe.skipIf(process.env.AGOR_DB_DIALECT !== 'postgresql')(
         const body = JSON.parse(String(options?.body));
         calls.push(path);
         let result: unknown;
+        if (path === MCP_OAUTH_ROUTES.capabilities && workerUnavailable)
+          return new Response('{}', {
+            status: 503,
+            headers: { 'content-type': 'application/json' },
+          });
         if (path === MCP_OAUTH_ROUTES.capabilities) result = capabilities;
         else if (path === MCP_OAUTH_ROUTES.authority) {
           const { protocol_version: _, operation_id: __, ...selectors } = body;
@@ -595,7 +603,68 @@ describe.skipIf(process.env.AGOR_DB_DIALECT !== 'postgresql')(
           )
         ).rejects.toThrow();
         expect(calls).toContain(MCP_OAUTH_ROUTES.authority);
+        committed.push({ server, authorization });
       }
     );
+    it('keeps existing use at one/three-minute worker outages, denies explicit policy and original hour expiry', async () => {
+      expect(committed).toHaveLength(2);
+      const realDate = Date.now.bind(Date);
+      const realMonotonic = process.hrtime.bigint.bind(process.hrtime);
+      let elapsed = 0;
+      // Advance both independent test-monitor domains equally. The real clock
+      // reader, safety checks, cohort reader and signed permit validator remain in use.
+      const date = vi.spyOn(Date, 'now').mockImplementation(() => realDate() + elapsed);
+      const monotonic = vi
+        .spyOn(process.hrtime, 'bigint')
+        .mockImplementation(() => realMonotonic() + BigInt(elapsed) * 1000000n);
+      const assertUse = ({ server, authorization }: (typeof committed)[number]) =>
+        invoke(() =>
+          services.grantAccess.assertManagedUse({
+            tenantDb: createTenantScopedDatabaseProxy(owned.db),
+            tenantId: tenant,
+            server,
+            userId,
+            authorization,
+          })
+        );
+      const dispatches = calls.filter(
+        (path) => path.endsWith('/exchange') || path.endsWith('/refresh')
+      ).length;
+      try {
+        workerUnavailable = true;
+        for (const offset of [60000, 180000]) {
+          elapsed = offset;
+          publish();
+          await expect(services.registry.refresh()).rejects.toThrow();
+          for (const grant of committed) await assertUse(grant);
+          expect(() => services.registry.resolve(committed[0]!.server, 'refresh')).toThrow();
+          expect(() => services.registry.resolveEntry(catalog[0])).toThrow();
+        }
+        workerUnavailable = false;
+        capabilities.available = false;
+        capabilities.profile_versions = [];
+        await expect(services.registry.refresh()).rejects.toThrow();
+        await expect(assertUse(committed[0]!)).rejects.toThrow();
+        capabilities.available = true;
+        capabilities.profile_versions = profiles;
+        await services.registry.refresh();
+        await assertUse(committed[0]!);
+        workerUnavailable = true;
+        elapsed = 61 * 60000;
+        publish();
+        await expect(services.registry.refresh()).rejects.toThrow();
+        for (const grant of committed)
+          await expect(assertUse(grant)).rejects.toMatchObject({
+            code: 'managed_authority_expired',
+          });
+        expect(
+          calls.filter((path) => path.endsWith('/exchange') || path.endsWith('/refresh')).length
+        ).toBe(dispatches);
+      } finally {
+        date.mockRestore();
+        monotonic.mockRestore();
+        workerUnavailable = false;
+      }
+    });
   }
 );
