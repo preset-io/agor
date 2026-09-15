@@ -67,7 +67,7 @@ overrides:
   vite: '>=8.3.0 <9'
   ws: '>=8.21.0 <9'
   yaml: '>=2.8.3 <3'
-  zod: ^4.3.6
+  zod: ^4.6.5
 
 patchedDependencies:
   streamdown@2.5.0: 19300059403a0f3973e236d4d8049c92a6d5a3422d55cdf1653207fda4ddb8a4
@@ -202,7 +202,7 @@ importers:
         version: 2.0.0(@modelcontextprotocol/server@2.0.0)(hono@4.13.1)
       '@modelcontextprotocol/sdk':
         specifier: '>=1.29.0 <2'
-        version: 1.29.0(supports-color@8.1.1)(zod@4.4.3)
+        version: 1.29.0(supports-color@8.1.1)(zod@4.6.5)
       '@modelcontextprotocol/server':
         specifier: 2.0.0
         version: 2.0.0
@@ -251,10 +251,10 @@ importers:
     devDependencies:
       '@anthropic-ai/claude-agent-sdk':
         specifier: 0.3.259
-        version: 0.3.259(@anthropic-ai/sdk@0.109.0(zod@4.4.3))(@modelcontextprotocol/sdk@1.29.0(supports-color@8.1.1)(zod@4.4.3))(zod@4.4.3)
+        version: 0.3.259(@anthropic-ai/sdk@0.109.0(zod@4.6.5))(@modelcontextprotocol/sdk@1.29.0(supports-color@8.1.1)(zod@4.6.5))(zod@4.6.5)
       '@anthropic-ai/sdk':
         specifier: ^0.109.0
-        version: 0.109.0(zod@4.4.3)
+        version: 0.109.0(zod@4.6.5)
       '@aws-sdk/client-s3':
         specifier: ^3.1132.0
         version: 3.1132.0
@@ -334,14 +334,14 @@ importers:
         specifier: ^5.0.1
         version: 5.0.1(@opentelemetry/api@1.9.0)(@types/node@24.13.3)(@vitest/browser-playwright@5.0.1)(@vitest/coverage-v8@5.0.1)(@vitest/ui@5.0.1)(jsdom@27.1.0(supports-color@8.1.1))(vite@8.3.0(@types/node@24.13.3)(esbuild@0.25.12)(jiti@2.7.0)(tsx@4.23.13)(yaml@2.9.0))
       zod:
-        specifier: ^4.3.6
-        version: 4.4.3
+        specifier: ^4.6.5
+        version: 4.6.5
 
   apps/agor-docs:
     dependencies:
       '@scalar/api-reference-react':
         specifier: 0.9.60
-        version: 0.9.60(axios@1.18.1(debug@4.4.3(supports-color@8.1.1))(supports-color@8.1.1))(react@19.2.8)(supports-color@8.1.1)(tailwindcss@4.3.3)(typescript@6.0.3)(zod@4.4.3)
+        version: 0.9.60(axios@1.18.1(debug@4.4.3(supports-color@8.1.1))(supports-color@8.1.1))(react@19.2.8)(supports-color@8.1.1)(tailwindcss@4.3.3)(typescript@6.0.3)(zod@4.6.5)
       '@theguild/remark-mermaid':
         specifier: ^0.3.0
         version: 0.3.0(react@19.2.8)
@@ -370,8 +370,8 @@ importers:
         specifier: ^19.2.8
         version: 19.2.8(react@19.2.8)
       zod:
-        specifier: ^4.3.6
-        version: 4.4.3
+        specifier: ^4.6.5
+        version: 4.6.5
     devDependencies:
       '@types/node':
         specifier: ^24.6.0
@@ -591,8 +591,8 @@ importers:
         specifier: workspace:*
         version: link:../core
       zod:
-        specifier: ^4.3.6
-        version: 4.4.3
+        specifier: ^4.6.5
+        version: 4.6.5
     devDependencies:
       '@ant-design/icons':
         specifier: ^6.3.2
@@ -681,7 +681,7 @@ importers:
     dependencies:
       '@anthropic-ai/claude-agent-sdk':
         specifier: 0.3.259
-        version: 0.3.259(@anthropic-ai/sdk@0.109.0(zod@4.4.3))(@modelcontextprotocol/sdk@1.29.0(supports-color@8.1.1)(zod@4.4.3))(zod@4.4.3)
+        version: 0.3.259(@anthropic-ai/sdk@0.109.0(zod@4.6.5))(@modelcontextprotocol/sdk@1.29.0(supports-color@8.1.1)(zod@4.6.5))(zod@4.6.5)
     devDependencies:
       '@types/node':
         specifier: ^24.6.0
@@ -776,7 +776,7 @@ importers:
         version: link:../git
       '@anthropic-ai/sdk':
         specifier: ^0.109.0
-        version: 0.109.0(zod@4.4.3)
+        version: 0.109.0(zod@4.6.5)
       '@discordjs/rest':
         specifier: ^2.6.3
         version: 2.6.3
@@ -784,38 +784,38 @@ importers:
         specifier: ^2.0.4
         version: 2.0.4
       '@feathersjs/authentication':
-        specifier: ^5.0.46
-        version: 5.0.46(typescript@6.0.3)
+        specifier: ^5.0.50
+        version: 5.0.50(typescript@6.0.3)
       '@feathersjs/authentication-client':
-        specifier: ^5.0.46
-        version: 5.0.46(typescript@6.0.3)
+        specifier: ^5.0.50
+        version: 5.0.50(typescript@6.0.3)
       '@feathersjs/authentication-local':
-        specifier: ^5.0.46
-        version: 5.0.46(typescript@6.0.3)
+        specifier: ^5.0.50
+        version: 5.0.50(typescript@6.0.3)
       '@feathersjs/errors':
-        specifier: ^5.0.46
-        version: 5.0.46
+        specifier: ^5.0.50
+        version: 5.0.50
       '@feathersjs/express':
-        specifier: ^5.0.46
-        version: 5.0.46(supports-color@8.1.1)(typescript@6.0.3)
+        specifier: ^5.0.50
+        version: 5.0.50(supports-color@8.1.1)(typescript@6.0.3)
       '@feathersjs/feathers':
-        specifier: ^5.0.46
-        version: 5.0.46
+        specifier: ^5.0.50
+        version: 5.0.50
       '@feathersjs/rest-client':
-        specifier: ^5.0.46
-        version: 5.0.46
+        specifier: ^5.0.50
+        version: 5.0.50
       '@feathersjs/schema':
-        specifier: ^5.0.46
-        version: 5.0.46(typescript@6.0.3)
+        specifier: ^5.0.50
+        version: 5.0.50(typescript@6.0.3)
       '@feathersjs/socketio':
-        specifier: ^5.0.46
-        version: 5.0.46(supports-color@8.1.1)
+        specifier: ^5.0.50
+        version: 5.0.50(supports-color@8.1.1)
       '@feathersjs/socketio-client':
-        specifier: ^5.0.46
-        version: 5.0.46
+        specifier: ^5.0.50
+        version: 5.0.50
       '@feathersjs/typebox':
-        specifier: ^5.0.46
-        version: 5.0.46(typescript@6.0.3)
+        specifier: ^5.0.50
+        version: 5.0.50(typescript@6.0.3)
       '@libsql/client':
         specifier: ^0.17.4
         version: 0.17.4
@@ -827,7 +827,7 @@ importers:
         version: 2.0.0(@modelcontextprotocol/server@2.0.0)(hono@4.13.1)
       '@modelcontextprotocol/sdk':
         specifier: '>=1.29.0 <2'
-        version: 1.29.0(supports-color@8.1.1)(zod@4.4.3)
+        version: 1.29.0(supports-color@8.1.1)(zod@4.6.5)
       '@modelcontextprotocol/server':
         specifier: 2.0.0
         version: 2.0.0
@@ -940,8 +940,8 @@ importers:
         specifier: ^14.0.1
         version: 14.0.1
       zod:
-        specifier: ^4.3.6
-        version: 4.4.3
+        specifier: ^4.6.5
+        version: 4.6.5
     optionalDependencies:
       '@lydell/node-pty':
         specifier: 1.2.0-beta.15
@@ -969,17 +969,17 @@ importers:
   packages/client:
     dependencies:
       '@feathersjs/authentication-client':
-        specifier: ^5.0.46
-        version: 5.0.46(typescript@6.0.3)
+        specifier: ^5.0.50
+        version: 5.0.50(typescript@6.0.3)
       '@feathersjs/feathers':
-        specifier: ^5.0.46
-        version: 5.0.46
+        specifier: ^5.0.50
+        version: 5.0.50
       '@feathersjs/rest-client':
-        specifier: ^5.0.46
-        version: 5.0.46
+        specifier: ^5.0.50
+        version: 5.0.50
       '@feathersjs/socketio-client':
-        specifier: ^5.0.46
-        version: 5.0.46
+        specifier: ^5.0.50
+        version: 5.0.50
       js-yaml:
         specifier: '>=4.3.2 <5'
         version: 4.3.2
@@ -1016,7 +1016,7 @@ importers:
         version: link:../git
       '@anthropic-ai/sdk':
         specifier: ^0.109.0
-        version: 0.109.0(zod@4.4.3)
+        version: 0.109.0(zod@4.6.5)
       '@discordjs/rest':
         specifier: ^2.6.3
         version: 2.6.3
@@ -1024,38 +1024,38 @@ importers:
         specifier: ^2.0.4
         version: 2.0.4
       '@feathersjs/authentication':
-        specifier: ^5.0.46
-        version: 5.0.46(typescript@6.0.3)
+        specifier: ^5.0.50
+        version: 5.0.50(typescript@6.0.3)
       '@feathersjs/authentication-client':
-        specifier: ^5.0.46
-        version: 5.0.46(typescript@6.0.3)
+        specifier: ^5.0.50
+        version: 5.0.50(typescript@6.0.3)
       '@feathersjs/authentication-local':
-        specifier: ^5.0.46
-        version: 5.0.46(typescript@6.0.3)
+        specifier: ^5.0.50
+        version: 5.0.50(typescript@6.0.3)
       '@feathersjs/errors':
-        specifier: ^5.0.46
-        version: 5.0.46
+        specifier: ^5.0.50
+        version: 5.0.50
       '@feathersjs/express':
-        specifier: ^5.0.46
-        version: 5.0.46(supports-color@8.1.1)(typescript@6.0.3)
+        specifier: ^5.0.50
+        version: 5.0.50(supports-color@8.1.1)(typescript@6.0.3)
       '@feathersjs/feathers':
-        specifier: ^5.0.46
-        version: 5.0.46
+        specifier: ^5.0.50
+        version: 5.0.50
       '@feathersjs/rest-client':
-        specifier: ^5.0.46
-        version: 5.0.46
+        specifier: ^5.0.50
+        version: 5.0.50
       '@feathersjs/schema':
-        specifier: ^5.0.46
-        version: 5.0.46(typescript@6.0.3)
+        specifier: ^5.0.50
+        version: 5.0.50(typescript@6.0.3)
       '@feathersjs/socketio':
-        specifier: ^5.0.46
-        version: 5.0.46(supports-color@8.1.1)
+        specifier: ^5.0.50
+        version: 5.0.50(supports-color@8.1.1)
       '@feathersjs/socketio-client':
-        specifier: ^5.0.46
-        version: 5.0.46
+        specifier: ^5.0.50
+        version: 5.0.50
       '@feathersjs/typebox':
-        specifier: ^5.0.46
-        version: 5.0.46(typescript@6.0.3)
+        specifier: ^5.0.50
+        version: 5.0.50(typescript@6.0.3)
       '@libsql/client':
         specifier: ^0.17.4
         version: 0.17.4
@@ -1105,18 +1105,18 @@ importers:
         specifier: ^14.0.1
         version: 14.0.1
       zod:
-        specifier: ^4.3.6
-        version: 4.4.3
+        specifier: ^4.6.5
+        version: 4.6.5
     devDependencies:
       '@anthropic-ai/claude-agent-sdk':
         specifier: 0.3.259
-        version: 0.3.259(@anthropic-ai/sdk@0.109.0(zod@4.4.3))(@modelcontextprotocol/sdk@1.29.0(supports-color@8.1.1)(zod@4.4.3))(zod@4.4.3)
+        version: 0.3.259(@anthropic-ai/sdk@0.109.0(zod@4.6.5))(@modelcontextprotocol/sdk@1.29.0(supports-color@8.1.1)(zod@4.6.5))(zod@4.6.5)
       '@google/gemini-cli-core':
         specifier: ^0.40.0
         version: 0.40.1(encoding@0.1.13)(express@5.2.1(supports-color@8.1.1))(supports-color@8.1.1)
       '@google/genai':
         specifier: ^1.43.0
-        version: 1.43.0(@modelcontextprotocol/sdk@1.29.0(supports-color@8.1.1)(zod@4.4.3))(supports-color@8.1.1)
+        version: 1.43.0(@modelcontextprotocol/sdk@1.29.0(supports-color@8.1.1)(zod@4.6.5))(supports-color@8.1.1)
       '@octokit/auth-app':
         specifier: ^8.3.1
         version: 8.3.1
@@ -1187,12 +1187,12 @@ importers:
         specifier: '>=8.0.3 <9'
         version: 8.0.3
       zod:
-        specifier: ^4.3.6
-        version: 4.4.3
+        specifier: ^4.6.5
+        version: 4.6.5
     devDependencies:
       '@anthropic-ai/claude-agent-sdk':
         specifier: 0.3.259
-        version: 0.3.259(@anthropic-ai/sdk@0.109.0(zod@4.4.3))(@modelcontextprotocol/sdk@1.29.0(supports-color@8.1.1)(zod@4.4.3))(zod@4.4.3)
+        version: 0.3.259(@anthropic-ai/sdk@0.109.0(zod@4.6.5))(@modelcontextprotocol/sdk@1.29.0(supports-color@8.1.1)(zod@4.6.5))(zod@4.6.5)
       '@cursor/sdk':
         specifier: ^1.0.26
         version: 1.0.26
@@ -1204,10 +1204,10 @@ importers:
         version: 0.40.1(encoding@0.1.13)(express@5.2.1(supports-color@8.1.1))(supports-color@8.1.1)
       '@google/genai':
         specifier: ^1.43.0
-        version: 1.43.0(@modelcontextprotocol/sdk@1.29.0(supports-color@8.1.1)(zod@4.4.3))(supports-color@8.1.1)
+        version: 1.43.0(@modelcontextprotocol/sdk@1.29.0(supports-color@8.1.1)(zod@4.6.5))(supports-color@8.1.1)
       '@modelcontextprotocol/sdk':
         specifier: '>=1.29.0 <2'
-        version: 1.29.0(supports-color@8.1.1)(zod@4.4.3)
+        version: 1.29.0(supports-color@8.1.1)(zod@4.6.5)
       '@openai/codex-sdk':
         specifier: 0.153.0
         version: 0.153.0
@@ -1277,13 +1277,13 @@ packages:
     resolution: {integrity: sha512-g7nE4PFtngOZNZSy1lOPpkC+FAiHxqBJXqyRMEG7NUrEVZlz5goBdtHg1YgWRJIX776JTXAmbOI5JreAKVAsVA==}
     engines: {node: '>=18'}
     peerDependencies:
-      zod: ^4.3.6
+      zod: ^4.6.5
 
   '@ai-sdk/provider-utils@4.0.5':
     resolution: {integrity: sha512-Ow/X/SEkeExTTc1x+nYLB9ZHK2WUId8+9TlkamAx7Tl9vxU+cKzWx2dwjgMHeCN6twrgwkLrrtqckQeO4mxgVA==}
     engines: {node: '>=18'}
     peerDependencies:
-      zod: ^4.3.6
+      zod: ^4.6.5
 
   '@ai-sdk/provider@3.0.2':
     resolution: {integrity: sha512-HrEmNt/BH/hkQ7zpi2o6N3k1ZR1QTb7z85WYhYygiTxOQuaml4CMtHCWRbric5WPU+RNsYI7r1EpyVQMKO1pYw==}
@@ -1411,13 +1411,13 @@ packages:
     peerDependencies:
       '@anthropic-ai/sdk': '>=0.93.0'
       '@modelcontextprotocol/sdk': '>=1.29.0 <2'
-      zod: ^4.3.6
+      zod: ^4.6.5
 
   '@anthropic-ai/sdk@0.109.0':
     resolution: {integrity: sha512-y7P4eLyW5uNut4fXpOUEHqhJwx7dnxrWAfCQE4Lcgm0hSFQuIeHa7CWEKE5dFolEjQJE/RFKkppjri05r2OK/Q==}
     hasBin: true
     peerDependencies:
-      zod: ^4.3.6
+      zod: ^4.6.5
     peerDependenciesMeta:
       zod:
         optional: true
@@ -2251,66 +2251,66 @@ packages:
     cpu: [x64]
     os: [win32]
 
-  '@feathersjs/adapter-commons@5.0.46':
-    resolution: {integrity: sha512-c85Hi8xOyV2jaHZz/V5GRvK6fmyUiV9DoJyYvbDWwYiQ7wBW0bjy3WESN4nIXFH9neogbyirgk1aA1Fap/W6hw==}
+  '@feathersjs/adapter-commons@5.0.50':
+    resolution: {integrity: sha512-m3+TzrPtBdJiPI34e+bEOdBMmU/ApoF5Si5irRTlu3UsrFTfAHYg0bBUh80dpuhZZi8W+XHaJ7OQqtaXV4wNMg==}
     engines: {node: '>= 12'}
 
-  '@feathersjs/authentication-client@5.0.46':
-    resolution: {integrity: sha512-iSXLzLZ/c3UJ177/vepcPfYqC45OwLpYNV9BrpgMu/xLPe7YUBqjDSiSZrhLub0fohXNP16TRFFNNMaPxcleZg==}
+  '@feathersjs/authentication-client@5.0.50':
+    resolution: {integrity: sha512-J2zLwhekNwgDDOZeMvtcImpIv5Ov2JgEygTEo+ZlkfD4T0gtrOrjTYwk83T1mWrU4YAZxwsIGdwvZqSoRlAfiQ==}
     engines: {node: '>= 12'}
 
-  '@feathersjs/authentication-local@5.0.46':
-    resolution: {integrity: sha512-gBQmhU170niJNmUaJYJy3PbOYGlu04oMU3sSqWNnf9IjANOqdVoQ0GZS4xPAaL2a0ZYiUSYygLroHknoPfJJFw==}
+  '@feathersjs/authentication-local@5.0.50':
+    resolution: {integrity: sha512-nXgplxMeYz/eD+oJm/fwcSWYU/4iWxusDLDF1hcSCQNx7wHDhPdShALGIIdkYrVGRwY4+JbVZKnGxHVxPXPxIQ==}
     engines: {node: '>= 12'}
 
-  '@feathersjs/authentication@5.0.46':
-    resolution: {integrity: sha512-CupnZenY9DpgtGvZkODASwYCRla/MJMivW+W1QyAmayAq2o50A2Xt7a76y4BYjbQntYrKu3L4JsW2LVDZ1MdoQ==}
+  '@feathersjs/authentication@5.0.50':
+    resolution: {integrity: sha512-finvUR5Sz0CCa5iy8PDCbg8rcYEPqmiehb3bzDNmYqKUZn9t14npRgKv8ZbVUb/7lz2tGNd7jHCrUvmfbTubeg==}
     engines: {node: '>= 12'}
 
-  '@feathersjs/commons@5.0.46':
-    resolution: {integrity: sha512-jcoPt00VATX25L8eSLLHw75oN0p8ibx0v5KniC/uHlpq5i8CMYgcgjmZJ/bKdkZAHcGQ/ELGvYLkj5QocWpvxg==}
+  '@feathersjs/commons@5.0.50':
+    resolution: {integrity: sha512-vzdX1G3d2X1WK/cnH3a1PA2ry3z8y8XBvLjl+RHg9wvOAy1g6dOXwD+ULjOK7Z4LrPmbyUG4b4lvsQChdPcbPw==}
     engines: {node: '>= 12'}
 
-  '@feathersjs/errors@5.0.46':
-    resolution: {integrity: sha512-hdO59+xM7xPKMpARlWxpOHxKOpBAxQ/6XuPpsW0cvO/NkI6+6SB5KHIGBa9vEs/OZG5z+lJzn611PeMaGp0rXw==}
+  '@feathersjs/errors@5.0.50':
+    resolution: {integrity: sha512-sMzZbaRfFio3CgbUDmmxjZqlv+6CgrWpR9eS/t1NYUkx2T29qhnMwvIuBefy9Eu4a/B/UrarIAYJaV09GcvDSg==}
     engines: {node: '>= 12'}
 
-  '@feathersjs/express@5.0.46':
-    resolution: {integrity: sha512-yJaTmpzFTZI0XZ359HfZuhJuweyGqa4kOb+FrU+vTc9lYHr9BcTPkOw2yu7F5E0dJDYLh0IvzawW3NmNR882dA==}
+  '@feathersjs/express@5.0.50':
+    resolution: {integrity: sha512-nhFctY1qHxspufPzVpx/VcOX7vYRD+fVm4NqL5WlML/pjxQSr2dpy45MLJ9RkcCF2wWnwsq+wEtrtA4yYD4Y7w==}
     engines: {node: '>= 12'}
 
-  '@feathersjs/feathers@5.0.46':
-    resolution: {integrity: sha512-RDgyeTiOgEmymHn7P0gA+rclXaLPdgPa8KcBrUTbQuJylWgRi6Vd7RFHgQvjCaSlrXVThRfPdvgH9Twbc/yfAA==}
+  '@feathersjs/feathers@5.0.50':
+    resolution: {integrity: sha512-rd3swoLKXZ70bcRQovmu1CdIe6NRLnvYmokM/nIyWUo0pHs5sJKZX/slhcNg/Mopcna1tRNZ8+1zzQ7bSKbs3Q==}
     engines: {node: '>= 12'}
 
   '@feathersjs/hooks@0.9.0':
     resolution: {integrity: sha512-kLfWnuhbC25CPkR1/TDcVs0rSiv0JLNxrpUivLwc7FUnkyeciRi5VOmC1SOzL2SOagcozu3+m4VQiONyzgfY7w==}
     engines: {node: '>= 14'}
 
-  '@feathersjs/rest-client@5.0.46':
-    resolution: {integrity: sha512-qjsI4dUdtYgd7y57X0r7vTVw3jEdi+fnE4+fPn7lYDAkg92VyQO37zzYpdHZq32mzBK9FqpFBCs7WuAREXVQEA==}
+  '@feathersjs/rest-client@5.0.50':
+    resolution: {integrity: sha512-d3JU6XWVno8Nr0g43gNJt/KGq115gCooesOh4qexYh4qhmrME+vzpEhw18PWRGbSACh03nnpKo3BvxCt+n3KLA==}
     engines: {node: '>= 12'}
 
-  '@feathersjs/schema@5.0.46':
-    resolution: {integrity: sha512-oZK1I+P0sGzdbc45XqVvLGJVSvAE30t7S0eglmLisNEbBPv8ut+cX8QB6WcpBbdD24fYgQ9Z4j3p57bl9ivnWg==}
+  '@feathersjs/schema@5.0.50':
+    resolution: {integrity: sha512-fnUI0F5V7VPzSl6ezBV5PPnfPkwNfIKscbV0wvmxpil6ktFHj1HjHiXkYvRtmfJ3kYdTDyAZ9DMbow+iYJ/SNw==}
     engines: {node: '>= 12'}
     peerDependencies:
       typescript: '>=5.0'
 
-  '@feathersjs/socketio-client@5.0.46':
-    resolution: {integrity: sha512-x5yxja40d+py+thcQLBhgiAPjelGww793A0vsZQsEAk23x2s1LQIyswWHQtTKLc7mZB150bpUliXUzYGwuDlrA==}
+  '@feathersjs/socketio-client@5.0.50':
+    resolution: {integrity: sha512-s4zMJOmPjKulj2vcnUFcim5LAEp5u0++B1WfFXv4Rw7QYuDAz9ROEcezXqSCokznTiTX9Avf1vFVWCXST/GmbA==}
     engines: {node: '>= 12'}
 
-  '@feathersjs/socketio@5.0.46':
-    resolution: {integrity: sha512-AfVmxJ+FuukekF47dTGHPVdjpZtQeT0M5rxna/IJOAI1MgoApqyfeoKzmfgPweUqcnHmFPQEj40tChdslwZe/w==}
+  '@feathersjs/socketio@5.0.50':
+    resolution: {integrity: sha512-+IHpmrGj/ClG3DY59Le/xl5ETQY8rNRNBgsaCJc8rMRruPZQ8LVSpL03Df4KbvzF96PuCfx9Y6JfuURN36EKHw==}
     engines: {node: '>= 12'}
 
-  '@feathersjs/transport-commons@5.0.46':
-    resolution: {integrity: sha512-Ezdz4yuK+A+kTQ7OWFVyoAFShrdlJ1iuelbXfYkK8zIdiw+huxwAHcOXUmtBdP1MYxsWnadJoyyvA4ZehzuJjQ==}
+  '@feathersjs/transport-commons@5.0.50':
+    resolution: {integrity: sha512-GCQneevIzzk6u3EDSfk4VXSm2/kNBQv9MU2aqmsNDeOV1VsPxn9/Qd4myHLQiXafHM8ZkASNNC19fM6d7tyiVQ==}
     engines: {node: '>= 12'}
 
-  '@feathersjs/typebox@5.0.46':
-    resolution: {integrity: sha512-x/zZYW1huwvQY23xYAiR6bbudnhF/LOq5XzVOnQCyU6mwBa6ZgSjEoaboq2XZe/sRGV/aAIhM1GhRPeuwym7hQ==}
+  '@feathersjs/typebox@5.0.50':
+    resolution: {integrity: sha512-cfuu7i05yGr8cFe1qnWcPqiVmHNVLKCLxyCUjRhUdgWHBU68+rKZ/yyBlSTiZU3fBhuw7/o+jeSLoNRXw4bznQ==}
     engines: {node: '>= 12'}
 
   '@floating-ui/core@1.7.5':
@@ -3082,7 +3082,7 @@ packages:
     engines: {node: '>=18'}
     peerDependencies:
       '@cfworker/json-schema': ^4.1.1
-      zod: ^4.3.6
+      zod: ^4.6.5
     peerDependenciesMeta:
       '@cfworker/json-schema':
         optional: true
@@ -5575,7 +5575,7 @@ packages:
     resolution: {integrity: sha512-bVokbmy2E2QF6Efl+5hOJx5MRWoacZ/CZY/y1E+VcewknvGlgaiCzMu8Xgddz6ArFJjiMFNUPHKxAhIePE4rmg==}
     engines: {node: '>=18'}
     peerDependencies:
-      zod: ^4.3.6
+      zod: ^4.6.5
 
   ajv-formats@3.0.1:
     resolution: {integrity: sha512-8iUql50EUR+uUcdRQ3HDqa6EVyo3docL8g5WJ3FNcWmu62IbkGUue/pEyLBW8VGKKucTPgqeks4fIU1DA4yowQ==}
@@ -6081,6 +6081,10 @@ packages:
 
   compression@1.8.1:
     resolution: {integrity: sha512-9mAqGPHLakhCLeNyxPkK4xVo746zQ/czLH1Ky+vkitMnWfWZps8r0qXuwhwizagCRttsL4lfG4pIOvaWLpAP0w==}
+    engines: {node: '>= 0.8.0'}
+
+  compression@1.8.2:
+    resolution: {integrity: sha512-o8vI5RE5A6EVVOd9o41jKp41aJom+QTEO/Bx8MYNjexMo/Bv2WOjUfZr+aL0WnYSgymUy6zeguqLTsIhV0gMvQ==}
     engines: {node: '>= 0.8.0'}
 
   compute-scroll-into-view@3.1.1:
@@ -10760,7 +10764,7 @@ packages:
   zod-to-json-schema@3.25.2:
     resolution: {integrity: sha512-O/PgfnpT1xKSDeQYSCfRI5Gy3hPf91mKVDuYLUHZJMiDFptvP41MSnWofm8dnCm0256ZNfZIM7DSzuSMAFnjHA==}
     peerDependencies:
-      zod: ^4.3.6
+      zod: ^4.6.5
 
   zod@3.25.76:
     resolution: {integrity: sha512-gzUt/qt81nXsFGKIFcC3YnfEAx5NkunCfnDlvuBSSFS02bcXu4Lmea0AFIUwbLWxWPx3d9p8S5QoaujKcNQxcQ==}
@@ -10768,8 +10772,8 @@ packages:
   zod@4.1.12:
     resolution: {integrity: sha512-JInaHOamG8pt5+Ey8kGmdcAcg3OL9reK8ltczgHTAwNhMys/6ThXHityHxVV2p3fkw/c+MAvBHFVYHFZDmjMCQ==}
 
-  zod@4.4.3:
-    resolution: {integrity: sha512-ytENFjIJFl2UwYglde2jchW2Hwm4GJFLDiSXWdTrJQBIN9Fcyp7n4DhxJEiWNAJMV1/BqWfW/kkg71UDcHJyTQ==}
+  zod@4.6.5:
+    resolution: {integrity: sha512-v5l/aFXZQeai4awLbOpSoHecE9UiMrnfx75tEXLjNonXVARxQ5mOeipTjROUchszUNCqnE+hqAMujRsRHsut2Q==}
 
   zustand@4.5.7:
     resolution: {integrity: sha512-CHOUy7mu3lbD6o6LJLfllpjkzhHXSBlX8B9+qPddUsIfeF5S/UZ5q0kmCsnRqT1UHFQZchNFDDzMbQsuesHWlw==}
@@ -10821,28 +10825,28 @@ snapshots:
 
   '@adobe/css-tools@4.4.4': {}
 
-  '@ai-sdk/gateway@3.0.13(zod@4.4.3)':
+  '@ai-sdk/gateway@3.0.13(zod@4.6.5)':
     dependencies:
       '@ai-sdk/provider': 3.0.2
-      '@ai-sdk/provider-utils': 4.0.5(zod@4.4.3)
+      '@ai-sdk/provider-utils': 4.0.5(zod@4.6.5)
       '@vercel/oidc': 3.1.0
-      zod: 4.4.3
+      zod: 4.6.5
 
-  '@ai-sdk/provider-utils@4.0.5(zod@4.4.3)':
+  '@ai-sdk/provider-utils@4.0.5(zod@4.6.5)':
     dependencies:
       '@ai-sdk/provider': 3.0.2
       '@standard-schema/spec': 1.1.0
       eventsource-parser: 3.1.0
-      zod: 4.4.3
+      zod: 4.6.5
 
   '@ai-sdk/provider@3.0.2':
     dependencies:
       json-schema: 0.4.0
 
-  '@ai-sdk/vue@3.0.33(vue@3.5.41(typescript@6.0.3))(zod@4.4.3)':
+  '@ai-sdk/vue@3.0.33(vue@3.5.41(typescript@6.0.3))(zod@4.6.5)':
     dependencies:
-      '@ai-sdk/provider-utils': 4.0.5(zod@4.4.3)
-      ai: 6.0.33(zod@4.4.3)
+      '@ai-sdk/provider-utils': 4.0.5(zod@4.6.5)
+      ai: 6.0.33(zod@4.6.5)
       swrv: 1.2.0(vue@3.5.41(typescript@6.0.3))
       vue: 3.5.41(typescript@6.0.3)
     transitivePeerDependencies:
@@ -10976,11 +10980,11 @@ snapshots:
   '@anthropic-ai/claude-agent-sdk-win32-x64@0.3.259':
     optional: true
 
-  '@anthropic-ai/claude-agent-sdk@0.3.259(@anthropic-ai/sdk@0.109.0(zod@4.4.3))(@modelcontextprotocol/sdk@1.29.0(supports-color@8.1.1)(zod@4.4.3))(zod@4.4.3)':
+  '@anthropic-ai/claude-agent-sdk@0.3.259(@anthropic-ai/sdk@0.109.0(zod@4.6.5))(@modelcontextprotocol/sdk@1.29.0(supports-color@8.1.1)(zod@4.6.5))(zod@4.6.5)':
     dependencies:
-      '@anthropic-ai/sdk': 0.109.0(zod@4.4.3)
-      '@modelcontextprotocol/sdk': 1.29.0(supports-color@8.1.1)(zod@4.4.3)
-      zod: 4.4.3
+      '@anthropic-ai/sdk': 0.109.0(zod@4.6.5)
+      '@modelcontextprotocol/sdk': 1.29.0(supports-color@8.1.1)(zod@4.6.5)
+      zod: 4.6.5
     optionalDependencies:
       '@anthropic-ai/claude-agent-sdk-darwin-arm64': 0.3.259
       '@anthropic-ai/claude-agent-sdk-darwin-x64': 0.3.259
@@ -10991,12 +10995,12 @@ snapshots:
       '@anthropic-ai/claude-agent-sdk-win32-arm64': 0.3.259
       '@anthropic-ai/claude-agent-sdk-win32-x64': 0.3.259
 
-  '@anthropic-ai/sdk@0.109.0(zod@4.4.3)':
+  '@anthropic-ai/sdk@0.109.0(zod@4.6.5)':
     dependencies:
       json-schema-to-ts: 3.1.1
       standardwebhooks: 1.0.0
     optionalDependencies:
-      zod: 4.4.3
+      zod: 4.6.5
 
   '@asamuzakjp/css-color@4.0.5':
     dependencies:
@@ -11759,7 +11763,7 @@ snapshots:
       '@connectrpc/connect-node': 1.7.0(@bufbuild/protobuf@1.10.0)(@connectrpc/connect@1.7.0(@bufbuild/protobuf@1.10.0))
       '@connectrpc/connect-web': 1.7.0(@bufbuild/protobuf@1.10.0)(@connectrpc/connect@1.7.0(@bufbuild/protobuf@1.10.0))
       '@statsig/js-client': 3.31.0
-      zod: 4.4.3
+      zod: 4.6.5
     optionalDependencies:
       '@cursor/sdk-darwin-arm64': 1.0.26
       '@cursor/sdk-darwin-x64': 1.0.26
@@ -11990,40 +11994,40 @@ snapshots:
   '@esbuild/win32-x64@0.25.4':
     optional: true
 
-  '@feathersjs/adapter-commons@5.0.46':
+  '@feathersjs/adapter-commons@5.0.50':
     dependencies:
-      '@feathersjs/commons': 5.0.46
-      '@feathersjs/errors': 5.0.46
-      '@feathersjs/feathers': 5.0.46
+      '@feathersjs/commons': 5.0.50
+      '@feathersjs/errors': 5.0.50
+      '@feathersjs/feathers': 5.0.50
 
-  '@feathersjs/authentication-client@5.0.46(typescript@6.0.3)':
+  '@feathersjs/authentication-client@5.0.50(typescript@6.0.3)':
     dependencies:
-      '@feathersjs/authentication': 5.0.46(typescript@6.0.3)
-      '@feathersjs/commons': 5.0.46
-      '@feathersjs/errors': 5.0.46
-      '@feathersjs/feathers': 5.0.46
+      '@feathersjs/authentication': 5.0.50(typescript@6.0.3)
+      '@feathersjs/commons': 5.0.50
+      '@feathersjs/errors': 5.0.50
+      '@feathersjs/feathers': 5.0.50
     transitivePeerDependencies:
       - typescript
 
-  '@feathersjs/authentication-local@5.0.46(typescript@6.0.3)':
+  '@feathersjs/authentication-local@5.0.50(typescript@6.0.3)':
     dependencies:
-      '@feathersjs/authentication': 5.0.46(typescript@6.0.3)
-      '@feathersjs/commons': 5.0.46
-      '@feathersjs/errors': 5.0.46
-      '@feathersjs/feathers': 5.0.46
+      '@feathersjs/authentication': 5.0.50(typescript@6.0.3)
+      '@feathersjs/commons': 5.0.50
+      '@feathersjs/errors': 5.0.50
+      '@feathersjs/feathers': 5.0.50
       bcryptjs: 3.0.3
       lodash: 4.18.1
     transitivePeerDependencies:
       - typescript
 
-  '@feathersjs/authentication@5.0.46(typescript@6.0.3)':
+  '@feathersjs/authentication@5.0.50(typescript@6.0.3)':
     dependencies:
-      '@feathersjs/commons': 5.0.46
-      '@feathersjs/errors': 5.0.46
-      '@feathersjs/feathers': 5.0.46
+      '@feathersjs/commons': 5.0.50
+      '@feathersjs/errors': 5.0.50
+      '@feathersjs/feathers': 5.0.50
       '@feathersjs/hooks': 0.9.0
-      '@feathersjs/schema': 5.0.46(typescript@6.0.3)
-      '@feathersjs/transport-commons': 5.0.46
+      '@feathersjs/schema': 5.0.50(typescript@6.0.3)
+      '@feathersjs/transport-commons': 5.0.50
       '@types/jsonwebtoken': 9.0.10
       jsonwebtoken: 9.0.3
       lodash: 4.18.1
@@ -12032,50 +12036,50 @@ snapshots:
     transitivePeerDependencies:
       - typescript
 
-  '@feathersjs/commons@5.0.46': {}
+  '@feathersjs/commons@5.0.50': {}
 
-  '@feathersjs/errors@5.0.46': {}
+  '@feathersjs/errors@5.0.50': {}
 
-  '@feathersjs/express@5.0.46(supports-color@8.1.1)(typescript@6.0.3)':
+  '@feathersjs/express@5.0.50(supports-color@8.1.1)(typescript@6.0.3)':
     dependencies:
-      '@feathersjs/authentication': 5.0.46(typescript@6.0.3)
-      '@feathersjs/commons': 5.0.46
-      '@feathersjs/errors': 5.0.46
-      '@feathersjs/feathers': 5.0.46
-      '@feathersjs/transport-commons': 5.0.46
+      '@feathersjs/authentication': 5.0.50(typescript@6.0.3)
+      '@feathersjs/commons': 5.0.50
+      '@feathersjs/errors': 5.0.50
+      '@feathersjs/feathers': 5.0.50
+      '@feathersjs/transport-commons': 5.0.50
       '@types/compression': 1.8.1
       '@types/cors': 2.8.19
       '@types/express': 4.17.25
       '@types/express-serve-static-core': 4.19.9
-      compression: 1.8.1(supports-color@8.1.1)
+      compression: 1.8.2(supports-color@8.1.1)
       cors: 2.8.6
       express: 4.22.2(supports-color@8.1.1)
     transitivePeerDependencies:
       - supports-color
       - typescript
 
-  '@feathersjs/feathers@5.0.46':
+  '@feathersjs/feathers@5.0.50':
     dependencies:
-      '@feathersjs/commons': 5.0.46
+      '@feathersjs/commons': 5.0.50
       '@feathersjs/hooks': 0.9.0
       events: 3.3.0
 
   '@feathersjs/hooks@0.9.0': {}
 
-  '@feathersjs/rest-client@5.0.46':
+  '@feathersjs/rest-client@5.0.50':
     dependencies:
-      '@feathersjs/commons': 5.0.46
-      '@feathersjs/errors': 5.0.46
-      '@feathersjs/feathers': 5.0.46
+      '@feathersjs/commons': 5.0.50
+      '@feathersjs/errors': 5.0.50
+      '@feathersjs/feathers': 5.0.50
       '@types/superagent': 8.1.11
       qs: 6.15.3
 
-  '@feathersjs/schema@5.0.46(typescript@6.0.3)':
+  '@feathersjs/schema@5.0.50(typescript@6.0.3)':
     dependencies:
-      '@feathersjs/adapter-commons': 5.0.46
-      '@feathersjs/commons': 5.0.46
-      '@feathersjs/errors': 5.0.46
-      '@feathersjs/feathers': 5.0.46
+      '@feathersjs/adapter-commons': 5.0.50
+      '@feathersjs/commons': 5.0.50
+      '@feathersjs/errors': 5.0.50
+      '@feathersjs/feathers': 5.0.50
       '@feathersjs/hooks': 0.9.0
       '@types/json-schema': 7.0.15
       ajv: 8.20.0
@@ -12083,33 +12087,33 @@ snapshots:
       json-schema-to-ts: 3.1.1
       typescript: 6.0.3
 
-  '@feathersjs/socketio-client@5.0.46':
+  '@feathersjs/socketio-client@5.0.50':
     dependencies:
-      '@feathersjs/feathers': 5.0.46
-      '@feathersjs/transport-commons': 5.0.46
+      '@feathersjs/feathers': 5.0.50
+      '@feathersjs/transport-commons': 5.0.50
 
-  '@feathersjs/socketio@5.0.46(supports-color@8.1.1)':
+  '@feathersjs/socketio@5.0.50(supports-color@8.1.1)':
     dependencies:
-      '@feathersjs/commons': 5.0.46
-      '@feathersjs/feathers': 5.0.46
-      '@feathersjs/transport-commons': 5.0.46
+      '@feathersjs/commons': 5.0.50
+      '@feathersjs/feathers': 5.0.50
+      '@feathersjs/transport-commons': 5.0.50
       socket.io: 4.8.3(supports-color@8.1.1)
     transitivePeerDependencies:
       - bufferutil
       - supports-color
       - utf-8-validate
 
-  '@feathersjs/transport-commons@5.0.46':
+  '@feathersjs/transport-commons@5.0.50':
     dependencies:
-      '@feathersjs/commons': 5.0.46
-      '@feathersjs/errors': 5.0.46
-      '@feathersjs/feathers': 5.0.46
+      '@feathersjs/commons': 5.0.50
+      '@feathersjs/errors': 5.0.50
+      '@feathersjs/feathers': 5.0.50
       encodeurl: 2.0.0
       lodash: 4.18.1
 
-  '@feathersjs/typebox@5.0.46(typescript@6.0.3)':
+  '@feathersjs/typebox@5.0.50(typescript@6.0.3)':
     dependencies:
-      '@feathersjs/schema': 5.0.46(typescript@6.0.3)
+      '@feathersjs/schema': 5.0.50(typescript@6.0.3)
       '@sinclair/typebox': 0.25.25
     transitivePeerDependencies:
       - typescript
@@ -12188,7 +12192,7 @@ snapshots:
     dependencies:
       '@github/copilot': 1.0.77
       vscode-jsonrpc: 8.2.1
-      zod: 4.4.3
+      zod: 4.6.5
 
   '@github/copilot-win32-arm64@1.0.77':
     optional: true
@@ -12413,14 +12417,14 @@ snapshots:
       - supports-color
       - utf-8-validate
 
-  '@google/genai@1.43.0(@modelcontextprotocol/sdk@1.29.0(supports-color@8.1.1)(zod@4.4.3))(supports-color@8.1.1)':
+  '@google/genai@1.43.0(@modelcontextprotocol/sdk@1.29.0(supports-color@8.1.1)(zod@4.6.5))(supports-color@8.1.1)':
     dependencies:
       google-auth-library: 10.9.0(supports-color@8.1.1)
       p-retry: 4.6.2
       protobufjs: 7.6.5
       ws: 8.21.0
     optionalDependencies:
-      '@modelcontextprotocol/sdk': 1.29.0(supports-color@8.1.1)(zod@4.4.3)
+      '@modelcontextprotocol/sdk': 1.29.0(supports-color@8.1.1)(zod@4.6.5)
     transitivePeerDependencies:
       - bufferutil
       - supports-color
@@ -13139,11 +13143,11 @@ snapshots:
       eventsource-parser: 3.1.0
       jose: 6.2.3
       pkce-challenge: 5.0.1
-      zod: 4.4.3
+      zod: 4.6.5
 
   '@modelcontextprotocol/core@2.0.0':
     dependencies:
-      zod: 4.4.3
+      zod: 4.6.5
 
   '@modelcontextprotocol/node@2.0.0(@modelcontextprotocol/server@2.0.0)(hono@4.13.1)':
     dependencies:
@@ -13174,7 +13178,7 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  '@modelcontextprotocol/sdk@1.29.0(supports-color@8.1.1)(zod@4.4.3)':
+  '@modelcontextprotocol/sdk@1.29.0(supports-color@8.1.1)(zod@4.6.5)':
     dependencies:
       '@hono/node-server': 1.19.14(hono@4.13.1)
       ajv: 8.20.0
@@ -13191,15 +13195,15 @@ snapshots:
       json-schema-typed: 8.0.2
       pkce-challenge: 5.0.1
       raw-body: 3.0.2
-      zod: 4.4.3
-      zod-to-json-schema: 3.25.2(zod@4.4.3)
+      zod: 4.6.5
+      zod-to-json-schema: 3.25.2(zod@4.6.5)
     transitivePeerDependencies:
       - supports-color
 
   '@modelcontextprotocol/server@2.0.0':
     dependencies:
       '@modelcontextprotocol/core': 2.0.0
-      zod: 4.4.3
+      zod: 4.6.5
 
   '@napi-rs/lzma-linux-x64-gnu@1.5.1':
     optional: true
@@ -14607,9 +14611,9 @@ snapshots:
 
   '@sapphire/snowflake@3.5.5': {}
 
-  '@scalar/agent-chat@0.12.23(axios@1.18.1(debug@4.4.3(supports-color@8.1.1))(supports-color@8.1.1))(supports-color@8.1.1)(tailwindcss@4.3.3)(typescript@6.0.3)(zod@4.4.3)':
+  '@scalar/agent-chat@0.12.23(axios@1.18.1(debug@4.4.3(supports-color@8.1.1))(supports-color@8.1.1))(supports-color@8.1.1)(tailwindcss@4.3.3)(typescript@6.0.3)(zod@4.6.5)':
     dependencies:
-      '@ai-sdk/vue': 3.0.33(vue@3.5.41(typescript@6.0.3))(zod@4.4.3)
+      '@ai-sdk/vue': 3.0.33(vue@3.5.41(typescript@6.0.3))(zod@4.6.5)
       '@scalar/api-client': 3.14.0(axios@1.18.1(debug@4.4.3(supports-color@8.1.1))(supports-color@8.1.1))(supports-color@8.1.1)(tailwindcss@4.3.3)(typescript@6.0.3)
       '@scalar/components': 0.27.10(supports-color@8.1.1)(tailwindcss@4.3.3)(typescript@6.0.3)
       '@scalar/helpers': 0.9.2
@@ -14623,7 +14627,7 @@ snapshots:
       '@scalar/validation': 0.6.2
       '@scalar/workspace-store': 0.56.0(typescript@6.0.3)
       '@vueuse/core': 13.9.0(vue@3.5.41(typescript@6.0.3))
-      ai: 6.0.33(zod@4.4.3)
+      ai: 6.0.33(zod@4.6.5)
       js-base64: 3.7.8
       neverpanic: 0.0.8
       truncate-json: 3.0.1
@@ -14676,7 +14680,7 @@ snapshots:
       set-cookie-parser: 3.1.0
       vue: 3.5.41(typescript@6.0.3)
       yaml: 2.9.0
-      zod: 4.4.3
+      zod: 4.6.5
     transitivePeerDependencies:
       - '@vue/composition-api'
       - async-validator
@@ -14693,9 +14697,9 @@ snapshots:
       - typescript
       - universal-cookie
 
-  '@scalar/api-reference-react@0.9.60(axios@1.18.1(debug@4.4.3(supports-color@8.1.1))(supports-color@8.1.1))(react@19.2.8)(supports-color@8.1.1)(tailwindcss@4.3.3)(typescript@6.0.3)(zod@4.4.3)':
+  '@scalar/api-reference-react@0.9.60(axios@1.18.1(debug@4.4.3(supports-color@8.1.1))(supports-color@8.1.1))(react@19.2.8)(supports-color@8.1.1)(tailwindcss@4.3.3)(typescript@6.0.3)(zod@4.6.5)':
     dependencies:
-      '@scalar/api-reference': 1.64.0(axios@1.18.1(debug@4.4.3(supports-color@8.1.1))(supports-color@8.1.1))(supports-color@8.1.1)(tailwindcss@4.3.3)(typescript@6.0.3)(zod@4.4.3)
+      '@scalar/api-reference': 1.64.0(axios@1.18.1(debug@4.4.3(supports-color@8.1.1))(supports-color@8.1.1))(supports-color@8.1.1)(tailwindcss@4.3.3)(typescript@6.0.3)(zod@4.6.5)
       '@scalar/types': 0.17.0
       react: 19.2.8
     transitivePeerDependencies:
@@ -14715,10 +14719,10 @@ snapshots:
       - universal-cookie
       - zod
 
-  '@scalar/api-reference@1.64.0(axios@1.18.1(debug@4.4.3(supports-color@8.1.1))(supports-color@8.1.1))(supports-color@8.1.1)(tailwindcss@4.3.3)(typescript@6.0.3)(zod@4.4.3)':
+  '@scalar/api-reference@1.64.0(axios@1.18.1(debug@4.4.3(supports-color@8.1.1))(supports-color@8.1.1))(supports-color@8.1.1)(tailwindcss@4.3.3)(typescript@6.0.3)(zod@4.6.5)':
     dependencies:
       '@headlessui/vue': 1.7.23(vue@3.5.41(typescript@6.0.3))
-      '@scalar/agent-chat': 0.12.23(axios@1.18.1(debug@4.4.3(supports-color@8.1.1))(supports-color@8.1.1))(supports-color@8.1.1)(tailwindcss@4.3.3)(typescript@6.0.3)(zod@4.4.3)
+      '@scalar/agent-chat': 0.12.23(axios@1.18.1(debug@4.4.3(supports-color@8.1.1))(supports-color@8.1.1))(supports-color@8.1.1)(tailwindcss@4.3.3)(typescript@6.0.3)(zod@4.6.5)
       '@scalar/api-client': 3.14.0(axios@1.18.1(debug@4.4.3(supports-color@8.1.1))(supports-color@8.1.1))(supports-color@8.1.1)(tailwindcss@4.3.3)(typescript@6.0.3)
       '@scalar/blocks': 0.1.9(supports-color@8.1.1)(tailwindcss@4.3.3)(typescript@6.0.3)
       '@scalar/code-highlight': 0.4.3(supports-color@8.1.1)
@@ -14896,7 +14900,7 @@ snapshots:
       '@scalar/helpers': 0.9.2
       nanoid: 3.3.18
       type-fest: 5.8.0
-      zod: 4.4.3
+      zod: 4.6.5
 
   '@scalar/use-codemirror@0.14.14(typescript@6.0.3)':
     dependencies:
@@ -16033,13 +16037,13 @@ snapshots:
       indent-string: 4.0.0
     optional: true
 
-  ai@6.0.33(zod@4.4.3):
+  ai@6.0.33(zod@4.6.5):
     dependencies:
-      '@ai-sdk/gateway': 3.0.13(zod@4.4.3)
+      '@ai-sdk/gateway': 3.0.13(zod@4.6.5)
       '@ai-sdk/provider': 3.0.2
-      '@ai-sdk/provider-utils': 4.0.5(zod@4.4.3)
+      '@ai-sdk/provider-utils': 4.0.5(zod@4.6.5)
       '@opentelemetry/api': 1.9.0
-      zod: 4.4.3
+      zod: 4.6.5
 
   ajv-formats@3.0.1(ajv@8.20.0):
     optionalDependencies:
@@ -16326,7 +16330,7 @@ snapshots:
       botframework-connector: 4.23.3(debug@4.4.3(supports-color@8.1.1))(encoding@0.1.13)(supports-color@8.1.1)
       botframework-schema: 4.23.3
       uuid: 10.0.0
-      zod: 4.4.3
+      zod: 4.6.5
     transitivePeerDependencies:
       - debug
       - encoding
@@ -16387,7 +16391,7 @@ snapshots:
       node-fetch: 2.7.0(encoding@0.1.13)
       openssl-wrapper: 0.3.4
       rsa-pem-from-mod-exp: 0.8.6
-      zod: 4.4.3
+      zod: 4.6.5
     transitivePeerDependencies:
       - debug
       - encoding
@@ -16397,7 +16401,7 @@ snapshots:
     dependencies:
       adaptivecards: 1.2.3
       uuid: 10.0.0
-      zod: 4.4.3
+      zod: 4.6.5
 
   botframework-streaming@4.23.3:
     dependencies:
@@ -16583,7 +16587,7 @@ snapshots:
     dependencies:
       devtools-protocol: 0.0.1367902
       mitt: 3.0.1
-      zod: 4.4.3
+      zod: 4.6.5
 
   cjs-module-lexer@2.2.0: {}
 
@@ -16680,6 +16684,19 @@ snapshots:
       bytes: 3.1.2
       compressible: 2.0.18
       debug: 2.6.9(supports-color@8.1.1)
+      negotiator: 0.6.4
+      on-headers: 1.1.0
+      safe-buffer: 5.2.1
+      vary: 1.1.2
+    transitivePeerDependencies:
+      - supports-color
+
+  compression@1.8.2(supports-color@8.1.1):
+    dependencies:
+      bytes: 3.1.2
+      compressible: 2.0.18
+      debug: 2.6.9(supports-color@8.1.1)
+      destroy: 1.2.0
       negotiator: 0.6.4
       on-headers: 1.1.0
       safe-buffer: 5.2.1
@@ -18752,7 +18769,7 @@ snapshots:
       smol-toml: 1.6.1
       strip-json-comments: 5.0.3
       typescript: 6.0.3
-      zod: 4.4.3
+      zod: 4.6.5
     transitivePeerDependencies:
       - '@emnapi/core'
       - '@emnapi/runtime'
@@ -22540,15 +22557,15 @@ snapshots:
     dependencies:
       zod: 3.25.76
 
-  zod-to-json-schema@3.25.2(zod@4.4.3):
+  zod-to-json-schema@3.25.2(zod@4.6.5):
     dependencies:
-      zod: 4.4.3
+      zod: 4.6.5
 
   zod@3.25.76: {}
 
   zod@4.1.12: {}
 
-  zod@4.4.3: {}
+  zod@4.6.5: {}
 
   zustand@4.5.7(@types/react@19.2.18)(immer@11.1.16)(react@19.2.8):
     dependencies:

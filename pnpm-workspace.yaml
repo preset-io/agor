@@ -70,7 +70,7 @@ overrides:
   vite: '>=8.3.0 <9'
   ws: '>=8.21.0 <9'
   yaml: '>=2.8.3 <3'
-  zod: ^4.3.6
+  zod: ^4.6.5
 peerDependencyRules:
   ignoreMissing:
     - '@opentelemetry/core'
