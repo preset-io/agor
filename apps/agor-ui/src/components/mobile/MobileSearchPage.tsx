@@ -8,7 +8,7 @@ import {
 } from '@agor-live/client';
 import { ArrowLeftOutlined, SearchOutlined } from '@ant-design/icons';
 import { Button, Empty, Input, List, Typography, theme } from 'antd';
-import { useMemo, useState } from 'react';
+import { useDeferredValue, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAgorStore } from '../../store/agorStore';
 import {
@@ -22,6 +22,7 @@ import {
 import { getSessionDisplayTitle } from '../../utils/sessionTitle';
 import { MIN_QUERY_LENGTH } from '../GlobalSearch/types';
 import { useGlobalSearch } from '../GlobalSearch/useGlobalSearch';
+import { MOBILE_TOUCH_TARGET } from './constants';
 
 interface MobileSearchPageProps {
   currentUser?: User | null;
@@ -54,6 +55,8 @@ export const MobileSearchPage: React.FC<MobileSearchPageProps> = ({
   const navigate = useNavigate();
   const { token } = theme.useToken();
   const [query, setQuery] = useState('');
+  // Defer the heavy cross-entity scan so typing stays responsive.
+  const deferredQuery = useDeferredValue(query);
 
   const sessionById = useAgorStore(selectSessionById);
   const branchById = useAgorStore(selectBranchById);
@@ -63,7 +66,7 @@ export const MobileSearchPage: React.FC<MobileSearchPageProps> = ({
   const commentById = useAgorStore(selectCommentById);
 
   const { results, hasAnyResults } = useGlobalSearch({
-    query,
+    query: deferredQuery,
     ownedByMe: false, // global scope
     activeTypeChip: 'all',
     currentUserId: currentUser?.user_id,
@@ -77,16 +80,17 @@ export const MobileSearchPage: React.FC<MobileSearchPageProps> = ({
   // Comments aren't in the entity hook's buckets; match them with the same
   // shared tokenizer + registry so this stays one search backend, not a fork.
   const commentResults = useMemo<BoardComment[]>(() => {
-    const trimmed = query.trim();
+    const trimmed = deferredQuery.trim();
     if (trimmed.length < MIN_QUERY_LENGTH) return [];
     const tokens = tokenizeSearchQuery(trimmed);
     if (tokens.length === 0) return [];
     const time = (c: BoardComment) => (c.updated_at ? new Date(c.updated_at).getTime() : 0);
     return Array.from(commentById.values())
+      .filter((c) => boardById.has(c.board_id)) // never out-render the board views' gate
       .filter((c) => matchSearchTokens(tokens, SEARCHABLE_FIELDS.comment(c)))
       .sort((a, b) => time(b) - time(a))
       .slice(0, COMMENT_LIMIT);
-  }, [query, commentById]);
+  }, [deferredQuery, commentById, boardById]);
 
   const sections: { title: string; rows: Row[] }[] = useMemo(() => {
     const s: { title: string; rows: Row[] }[] = [];
@@ -189,13 +193,18 @@ export const MobileSearchPage: React.FC<MobileSearchPageProps> = ({
           aria-label="Back"
           icon={<ArrowLeftOutlined />}
           onClick={() => navigate(-1)}
-          style={{ marginInlineStart: -token.marginXS }}
+          style={{
+            marginInlineStart: -token.marginXS,
+            minWidth: MOBILE_TOUCH_TARGET,
+            minHeight: MOBILE_TOUCH_TARGET,
+          }}
         />
         <Input
           autoFocus
           allowClear
           size="large"
           inputMode="search"
+          aria-label="Search"
           prefix={<SearchOutlined style={{ color: token.colorTextTertiary }} />}
           placeholder="Search sessions, branches, boards, comments"
           value={query}

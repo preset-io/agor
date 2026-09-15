@@ -14,6 +14,7 @@ import { Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-
 import type { AppActionsContextValue } from '../../contexts/AppActionsContext';
 import { useConnectionState } from '../../contexts/ConnectionContext';
 import type { NewSessionConfig, SessionCreationResult } from '../../domain/sessionCreation';
+import { reducedMotionSurface, usePrefersReducedMotion } from '../../hooks/usePrefersReducedMotion';
 import { useAgorStore } from '../../store/agorStore';
 import {
   selectArtifactById,
@@ -107,6 +108,7 @@ export const MobileApp: React.FC<MobileAppProps> = ({
   const navigate = useNavigate();
   const location = useLocation();
   const { connected, connecting } = useConnectionState();
+  const reducedMotion = usePrefersReducedMotion();
   // Self-subscribe to the entity maps this surface drills into. The subscription
   // used to live in the outer App shell; relocating it here makes MobileApp the
   // subscription boundary so the shell re-renders only on load-state.
@@ -433,6 +435,7 @@ export const MobileApp: React.FC<MobileAppProps> = ({
         placement="bottom"
         height="auto"
         title="Choose your primary assistant"
+        {...reducedMotionSurface(reducedMotion)}
         styles={{ body: { paddingBottom: 'env(safe-area-inset-bottom)' } }}
       >
         <Typography.Paragraph type="secondary">
@@ -466,6 +469,7 @@ export const MobileApp: React.FC<MobileAppProps> = ({
         placement="bottom"
         height="auto"
         title="Choose a coding agent"
+        {...reducedMotionSurface(reducedMotion)}
         styles={{ body: { paddingBottom: 'env(safe-area-inset-bottom)' } }}
       >
         <AgentSelectionGrid

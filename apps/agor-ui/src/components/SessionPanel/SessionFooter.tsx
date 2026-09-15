@@ -50,6 +50,7 @@ import React from 'react';
 import { useFooterPreferences } from '../../hooks/useFooterPreferences';
 import { useIsMobileViewport } from '../../hooks/useIsMobileViewport';
 import { useLocalStorage } from '../../hooks/useLocalStorage';
+import { reducedMotionSurface, usePrefersReducedMotion } from '../../hooks/usePrefersReducedMotion';
 import { resolveContextWindowPercentage } from '../../utils/contextWindow';
 import { EffortSelector } from '../EffortSelector';
 import { glassSurfaceStyle } from '../GlassSurface/glassStyles';
@@ -170,6 +171,7 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
   // bar and "More" opens a bottom sheet instead of a popover, so the full
   // controls stay reachable on a phone without a separate lossy composer.
   const isMobile = useIsMobileViewport();
+  const reducedMotion = usePrefersReducedMotion();
   // Leave desktop pin preferences intact; secondary actions remain in More on
   // phones so they cannot push Stop/Queue outside the viewport.
   const actionSize = isMobile ? 'middle' : 'small';
@@ -1448,67 +1450,68 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
               </div>
             )}
 
-            {/* Model chip */}
-            {modelName && (pinnedChips.includes('model') || isMobile) && (
-              <Popover
-                trigger={managedByPreset || isMobile ? [] : 'click'}
-                open={isMobile ? false : undefined}
-                placement="topLeft"
-                title="Model"
-                overlayStyle={{ maxWidth: 'none' }}
-                overlayInnerStyle={{ padding: 8 }}
-                content={
-                  <div style={{ width: 420 }}>
-                    {managedByPreset ? (
-                      <Typography.Text>
-                        Managed by preset. Switch presets in Session Settings.
-                      </Typography.Text>
-                    ) : (
-                      <ModelSelector
-                        key={session.session_id}
-                        value={modelConfig}
-                        onCommit={onModelConfigCommit}
-                        agentic_tool={session.agentic_tool}
-                        client={client}
-                        branchId={session.branch_id}
-                        catalogEnabled={session.created_by === currentUserId}
-                      />
-                    )}
-                  </div>
-                }
-              >
-                {isMobile ? (
-                  <Button
-                    icon={<RobotOutlined />}
-                    onClick={() => setMoreOpen(true)}
-                    aria-label={`Model and session controls: ${modelName}`}
-                    title={modelName}
-                    style={{ ...touchActionStyle, maxWidth: '100%' }}
-                    data-testid="model-chip"
-                  >
-                    <Typography.Text ellipsis style={{ minWidth: 0 }}>
-                      {modelName}
-                    </Typography.Text>
-                  </Button>
-                ) : (
-                  <Tag
-                    icon={<RobotOutlined />}
-                    color="default"
-                    truncate
-                    title={modelName}
-                    style={{
-                      cursor: managedByPreset ? 'default' : 'pointer',
-                      height: 22,
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                    }}
-                    data-testid="model-chip"
-                  >
+            {/* Model chip. On mobile it just opens the controls sheet, so there
+                is no popover to render; desktop keeps the click-to-change popover. */}
+            {modelName &&
+              (isMobile ? (
+                <Button
+                  icon={<RobotOutlined />}
+                  onClick={() => setMoreOpen(true)}
+                  aria-label={`Model and session controls: ${modelName}`}
+                  title={modelName}
+                  style={{ ...touchActionStyle, maxWidth: '100%' }}
+                  data-testid="model-chip"
+                >
+                  <Typography.Text ellipsis style={{ minWidth: 0 }}>
                     {modelName}
-                  </Tag>
-                )}
-              </Popover>
-            )}
+                  </Typography.Text>
+                </Button>
+              ) : (
+                pinnedChips.includes('model') && (
+                  <Popover
+                    trigger={managedByPreset ? [] : 'click'}
+                    placement="topLeft"
+                    title="Model"
+                    overlayStyle={{ maxWidth: 'none' }}
+                    overlayInnerStyle={{ padding: 8 }}
+                    content={
+                      <div style={{ width: 420 }}>
+                        {managedByPreset ? (
+                          <Typography.Text>
+                            Managed by preset. Switch presets in Session Settings.
+                          </Typography.Text>
+                        ) : (
+                          <ModelSelector
+                            key={session.session_id}
+                            value={modelConfig}
+                            onCommit={onModelConfigCommit}
+                            agentic_tool={session.agentic_tool}
+                            client={client}
+                            branchId={session.branch_id}
+                            catalogEnabled={session.created_by === currentUserId}
+                          />
+                        )}
+                      </div>
+                    }
+                  >
+                    <Tag
+                      icon={<RobotOutlined />}
+                      color="default"
+                      truncate
+                      title={modelName}
+                      style={{
+                        cursor: managedByPreset ? 'default' : 'pointer',
+                        height: 22,
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                      }}
+                      data-testid="model-chip"
+                    >
+                      {modelName}
+                    </Tag>
+                  </Popover>
+                )
+              ))}
 
             {/* Tokens chip */}
             {tokenDisplay !== null && pinnedChips.includes('tokens') && (
@@ -1855,6 +1858,7 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
           placement="bottom"
           height="85%"
           title="Session controls"
+          {...reducedMotionSurface(reducedMotion)}
           styles={{
             content: glassSurfaceStyle(token, 0.85),
             body: { padding: 0, paddingBottom: 'env(safe-area-inset-bottom)', overflowY: 'auto' },

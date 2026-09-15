@@ -6,6 +6,7 @@ import { useNavigate } from 'react-router-dom';
 import { getBoardEmoji } from '../BoardTile';
 import { GlassPanel } from '../GlassSurface/GlassPanel';
 import { JumpBackInSection } from '../HomePage/JumpBackInSection';
+import { MOBILE_TOUCH_TARGET } from './constants';
 import { MobileHeader } from './MobileHeader';
 import { MobileSessionRow } from './MobileSessionRow';
 
@@ -73,6 +74,7 @@ export const MobileHomePage: React.FC<MobileHomePageProps> = ({
           {/* Ask primary assistant hero */}
           <GlassPanel
             size="small"
+            blur={false}
             highlights={{ intensity: 'subtle' }}
             styles={{ body: { padding: token.padding } }}
           >
@@ -86,7 +88,7 @@ export const MobileHomePage: React.FC<MobileHomePageProps> = ({
                   Kick off a task, ask a question, or get help.
                 </Typography.Text>
               </Flex>
-              <Button type="primary" onClick={onAsk}>
+              <Button type="primary" onClick={onAsk} style={{ minHeight: MOBILE_TOUCH_TARGET }}>
                 Ask
               </Button>
             </Flex>
@@ -100,10 +102,16 @@ export const MobileHomePage: React.FC<MobileHomePageProps> = ({
 
           <GlassPanel
             size="small"
+            blur={false}
             title="Recent sessions"
             extra={
               recent.length > 0 ? (
-                <Button type="link" size="small" onClick={() => navigate('/m/sessions')}>
+                <Button
+                  type="link"
+                  size="small"
+                  onClick={() => navigate('/m/sessions')}
+                  style={{ minHeight: MOBILE_TOUCH_TARGET }}
+                >
                   All sessions
                 </Button>
               ) : undefined
@@ -129,7 +137,12 @@ export const MobileHomePage: React.FC<MobileHomePageProps> = ({
           </GlassPanel>
 
           {boards.length > 0 && (
-            <GlassPanel size="small" title="Your boards" styles={{ body: { padding: 0 } }}>
+            <GlassPanel
+              size="small"
+              blur={false}
+              title="Your boards"
+              styles={{ body: { padding: 0 } }}
+            >
               <List
                 dataSource={boards}
                 renderItem={(board) => (
