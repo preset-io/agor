@@ -1,4 +1,5 @@
 import { createManagedOAuthServices } from './services/mcp-oauth-managed-composition.js';
+import { createManagedOAuthMaintenanceServices } from './services/mcp-oauth-managed-maintenance-composition.js';
 /**
  * Agor Daemon
  *
@@ -930,11 +931,27 @@ async function startDaemonWithOwnedMetrics(
   // --------------------------------------------------------------------------
   assertRealtimePublishPolicyCoverage(app);
 
+  const mcpManagedOAuthMaintenance = await createManagedOAuthMaintenanceServices({
+    db,
+    config: effectiveConfig,
+    externalLaunchProvider,
+    active: mcpManagedOAuthServices,
+  });
+
   // --------------------------------------------------------------------------
   // Phase 4: Startup (orphan cleanup, health, scheduler, listen, shutdown)
   // --------------------------------------------------------------------------
   await startup({
-    mcpManagedOAuthServices,
+    mcpManagedOAuthServices: {
+      start() {
+        mcpManagedOAuthServices?.start();
+        mcpManagedOAuthMaintenance?.start();
+      },
+      async stop() {
+        mcpManagedOAuthServices?.stop();
+        await mcpManagedOAuthMaintenance?.stop();
+      },
+    },
     app,
     db,
     config: effectiveConfig,

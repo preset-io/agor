@@ -144,6 +144,33 @@ describe('single dispatch and original-claim receipt recovery', () => {
     ]);
     expect(JSON.parse(fetchMock.mock.calls[1][1].body).claim).toEqual(valid.claim);
   });
+  it('shares the enclosing monotonic budget with lost-response recovery', async () => {
+    let elapsed = 0;
+    const clock = vi.spyOn(performance, 'now').mockImplementation(() => elapsed);
+    try {
+      fetchMock
+        .mockImplementationOnce(() => {
+          elapsed = 4500;
+          throw new Error('lost');
+        })
+        .mockImplementationOnce(success);
+      await executeManagedOAuthOperation({ ...makeOptions(), timeoutMs: 5000 });
+      expect(fetchMock.mock.calls[0][1].timeoutMs).toBe(5000);
+      expect(fetchMock.mock.calls[1][1].timeoutMs).toBeLessThanOrEqual(500);
+      fetchMock.mockClear();
+      elapsed = 0;
+      fetchMock.mockImplementationOnce(() => {
+        elapsed = 5001;
+        throw new Error('lost');
+      });
+      await expect(
+        executeManagedOAuthOperation({ ...makeOptions(), timeoutMs: 5000 })
+      ).rejects.toThrow('unavailable');
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    } finally {
+      clock.mockRestore();
+    }
+  });
   it('an expired original claim cannot dispatch or adopt a late receipt', async () => {
     await expect(
       executeManagedOAuthOperation(makeOptions(() => valid.claim.deadline_at))
