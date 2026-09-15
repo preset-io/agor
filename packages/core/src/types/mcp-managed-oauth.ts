@@ -113,3 +113,11 @@ export interface MCPManagedOAuthResolvedProfile {
   clientKind: 'public' | 'confidential';
   registrationProvenanceDigest: string;
 }
+
+/** Local retirement readiness, never evidence of provider revocation. */
+export interface MCPManagedOAuthRetirementStatus {
+  ready: boolean;
+  pending_attempts: number;
+  active_grants: number;
+  pending_cleanup: number;
+}

@@ -1,6 +1,7 @@
 /** Production worker with disposable owned PG and the actual non-owner/column-limited definer. */
 import { createHash, randomUUID } from 'node:crypto';
 import {
+  acquireTenantWriteGate,
   createTenantScopedDatabaseProxy,
   executeRaw,
   MCPManagedOAuthInvalidationRepository,
@@ -91,7 +92,9 @@ describe.skipIf(process.env.AGOR_DB_DIALECT !== 'postgresql')(
         clock: { latestUtcMs: () => Date.now() },
         getCurrentIncarnation,
         getCapabilities: async () => capability,
-        assertCleanupAdmission: async () => {},
+        assertCleanupAdmission: async (value) => {
+          if (value.workspace_id !== f.tenant) throw new Error('synthetic tenant admission denied');
+        },
         acknowledge,
       };
       const pending = () =>
@@ -141,6 +144,27 @@ describe.skipIf(process.env.AGOR_DB_DIALECT !== 'postgresql')(
           ['prepare', 'exchange', 'refresh', 'receipt'].includes(r.operation)
         )
       ).toBe(false);
+      await worker.stop();
+    });
+    it('drains daemon cleanup under the continuously held gate without enabling vending', async () => {
+      const f = await fixture();
+      const gate = await acquireTenantWriteGate(owned.db, f.tenant);
+      const ready = () =>
+        runWithTenantDatabaseScope(db, f.tenant, (tx) =>
+          new MCPManagedOAuthOutboxRepository(tx).isTenantRetirementReady(f.tenant, gate.generation)
+        );
+      await runWithTenantDatabaseScope(db, f.tenant, (tx) =>
+        new MCPManagedOAuthOutboxRepository(tx).retireTenantUnderWriteGate(
+          f.tenant,
+          gate.generation
+        )
+      );
+      expect(await ready()).toBe(false);
+      const worker = createManagedOAuthMaintenance(f.dependencies);
+      await worker.runOnce();
+      expect(await ready()).toBe(true);
+      expect(f.capability.flags.managed_mcp_oauth_v1).toBe(false);
+      expect(f.request.mock.calls.map(([r]) => r.operation)).toEqual(['close', 'cleanup']);
       await worker.stop();
     });
     it('retains failed cleanup, retries the immutable old operation, and cannot mark a foreign-incarnation job done', async () => {
