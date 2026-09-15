@@ -3,6 +3,7 @@ import { sql } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { MCPOAuthAttemptID } from '../types';
 import { executeRaw, rawRows } from './database-wrapper';
+import { lockMCPManagedSubject } from './repositories/authority-primitives';
 import { MCPManagedOAuthInvalidationRepository } from './repositories/mcp-managed-oauth-invalidations';
 import { MCPManagedOAuthOutboxRepository } from './repositories/mcp-managed-oauth-outbox';
 import { MCPOAuthPendingFlowRepository } from './repositories/mcp-oauth-pending-flows';
@@ -11,6 +12,12 @@ import { UserMCPOAuthTokenRepository } from './repositories/user-mcp-oauth-token
 import { UsersRepository } from './repositories/users';
 import { deleteTenantData } from './tenant-deletion';
 import { runWithSystemDatabaseScope, runWithTenantDatabaseScope } from './tenant-scope';
+import {
+  acquireTenantWriteGate,
+  releaseTenantWriteGate,
+  TENANT_WRITE_GATE_KEY,
+  TENANT_WRITE_GATE_NAMESPACE,
+} from './tenant-write-gate';
 import { managedCommit, managedOwner } from './test-support/managed-oauth-fixture';
 import { createOwnedPostgres, type OwnedPostgres } from './test-support/owned-postgres';
 
@@ -235,6 +242,51 @@ describe.skipIf(process.env.AGOR_DB_DIALECT !== 'postgresql')(
         ).toBe(true);
         expect(await repo.complete(f.tenant, job.outbox_id, job.operation_id)).toBe(true);
         expect(await repo.complete(f.tenant, job.outbox_id, job.operation_id)).toBe(false);
+      });
+    });
+    it('settles only the exact saved prepare after authenticated reservation cancellation', async () => {
+      const f = await seed(false);
+      await runWithTenantDatabaseScope(owned.db, f.tenant, async (db) => {
+        await executeRaw(db, sql`DELETE FROM public.mcp_servers WHERE mcp_server_id=${f.server}`);
+        const repo = new MCPManagedOAuthOutboxRepository(db);
+        const [job] = await repo.listPending(f.tenant);
+        const prepare = f.record.managedMetadata!.prepare_request.operation_id;
+        expect(
+          await repo.completeReservationCancellation(
+            f.tenant,
+            job.outbox_id,
+            job.operation_id,
+            randomUUID()
+          )
+        ).toBe(false);
+        expect(
+          await repo.completeReservationCancellation(f.tenant, job.outbox_id, randomUUID(), prepare)
+        ).toBe(false);
+        expect(
+          await repo.completeReservationCancellation(
+            f.tenant,
+            job.outbox_id,
+            job.operation_id,
+            prepare
+          )
+        ).toBe(true);
+        expect(
+          await repo.completeReservationCancellation(
+            f.tenant,
+            job.outbox_id,
+            job.operation_id,
+            prepare
+          )
+        ).toBe(false);
+        const [row] = rawRows(
+          await executeRaw(
+            db,
+            sql`SELECT kind,transaction_id,completed_at FROM public.mcp_managed_oauth_outbox WHERE outbox_id=${job.outbox_id}`
+          )
+        );
+        expect(row.kind).toBe('recover_prepare_cancel');
+        expect(row.transaction_id).toBeNull();
+        expect(row.completed_at).not.toBeNull();
       });
     });
     it('refuses an expired original exchange without a sweeper', async () => {
@@ -553,6 +605,119 @@ describe.skipIf(process.env.AGOR_DB_DIALECT !== 'postgresql')(
           'recover_prepare_cancel'
         )
       );
+    });
+    it('makes first write-gate acquisition wait for an already admitted managed transaction', async () => {
+      const f = await seed(false);
+      let release!: () => void;
+      let admitted!: () => void;
+      const started = new Promise<void>((r) => {
+        admitted = r;
+      });
+      const barrier = new Promise<void>((r) => {
+        release = r;
+      });
+      const writer = runWithTenantDatabaseScope(owned.db, f.tenant, async (db) => {
+        await lockMCPManagedSubject(
+          db,
+          f.tenant,
+          f.user,
+          f.owner.cloud_user_subject,
+          f.owner.cell_id
+        );
+        admitted();
+        await barrier;
+      });
+      await started;
+      const gate = acquireTenantWriteGate(owned.db, f.tenant);
+      try {
+        let blocked = false;
+        for (let i = 0; i < 100; i++) {
+          const rows =
+            await owned.sql`SELECT 1 FROM pg_stat_activity WHERE usename=current_user AND cardinality(pg_blocking_pids(pid))>0`;
+          if (rows.length) {
+            blocked = true;
+            break;
+          }
+          await new Promise((r) => setTimeout(r, 10));
+        }
+        expect(blocked).toBe(true);
+      } finally {
+        release();
+      }
+      await writer;
+      const acquired = await gate;
+      expect(acquired.generation).toBeTruthy();
+      await expect(
+        runWithTenantDatabaseScope(owned.db, f.tenant, (db) =>
+          lockMCPManagedSubject(db, f.tenant, f.user, f.owner.cloud_user_subject, f.owner.cell_id)
+        )
+      ).rejects.toThrow();
+    });
+    it('fences production retirement/readiness to the continuously held tenant write gate', async () => {
+      const f = await seed(false);
+      const foreign = await seed(false);
+      const gate = await acquireTenantWriteGate(owned.db, f.tenant);
+      await expect(
+        runWithTenantDatabaseScope(owned.db, f.tenant, (db) =>
+          lockMCPManagedSubject(db, f.tenant, f.user, f.owner.cloud_user_subject, f.owner.cell_id)
+        )
+      ).rejects.toThrow('write');
+      const within = <T>(fn: (repo: MCPManagedOAuthOutboxRepository) => Promise<T>) =>
+        runWithTenantDatabaseScope(owned.db, f.tenant, (db) =>
+          fn(new MCPManagedOAuthOutboxRepository(db))
+        );
+      await expect(
+        within((r) => r.retireTenantUnderWriteGate(f.tenant, randomUUID()))
+      ).rejects.toThrow();
+      expect(await within((r) => r.isTenantRetirementReady(f.tenant, gate.generation))).toBe(false);
+      expect(await within((r) => r.getTenantRetirementStatus(f.tenant, gate.generation))).toEqual({
+        ready: false,
+        pending_attempts: 1,
+        active_grants: 0,
+        pending_cleanup: 0,
+      });
+      await within((r) => r.retireTenantUnderWriteGate(f.tenant, gate.generation));
+      expect(await within((r) => r.getTenantRetirementStatus(f.tenant, gate.generation))).toEqual({
+        ready: false,
+        pending_attempts: 0,
+        active_grants: 0,
+        pending_cleanup: 1,
+      });
+      expect(await within((r) => r.isTenantRetirementReady(f.tenant, gate.generation))).toBe(false);
+      await within(async (r) => {
+        const [job] = await r.listPending(f.tenant);
+        const metadata = job.metadata;
+        if (!('prepare_request' in metadata)) throw new Error('fixture not pending');
+        expect(
+          await r.completeReservationCancellation(
+            f.tenant,
+            job.outbox_id,
+            job.operation_id,
+            metadata.prepare_request.operation_id
+          )
+        ).toBe(true);
+      });
+      expect(await within((r) => r.isTenantRetirementReady(f.tenant, gate.generation))).toBe(true);
+      await expect(
+        runWithTenantDatabaseScope(owned.db, foreign.tenant, (db) =>
+          new MCPManagedOAuthOutboxRepository(db).isTenantRetirementReady(f.tenant, gate.generation)
+        )
+      ).rejects.toThrow();
+      await releaseTenantWriteGate(owned.db, f.tenant, { generation: gate.generation });
+      await acquireTenantWriteGate(owned.db, f.tenant);
+      await expect(
+        within((r) => r.isTenantRetirementReady(f.tenant, gate.generation))
+      ).rejects.toThrow();
+      await runWithTenantDatabaseScope(owned.db, f.tenant, async (db) => {
+        await executeRaw(
+          db,
+          sql`UPDATE public.app_variables SET value_text='malformed'
+          WHERE tenant_id=${f.tenant} AND namespace=${TENANT_WRITE_GATE_NAMESPACE} AND key=${TENANT_WRITE_GATE_KEY}`
+        );
+        await expect(
+          lockMCPManagedSubject(db, f.tenant, f.user, f.owner.cloud_user_subject, f.owner.cell_id)
+        ).rejects.toThrow('write');
+      });
     });
     it('gates tenant erasure until close confirmation and then erases cleanup rows without touching another tenant', async () => {
       const f = await seed(false);

@@ -3614,6 +3614,8 @@ export const mcpManagedOauthOutbox = pgTable(
     managed_metadata: t
       .json<MCPManagedOAuthGrantMetadata | MCPManagedOAuthPendingMetadata>('managed_metadata')
       .notNull(),
+    cleanup_authorization_id: text('cleanup_authorization_id'),
+    cleanup_operation_id: text('cleanup_operation_id'),
     transaction_id: text('transaction_id'),
     sealed_material: text('sealed_material'),
     created_at: t.timestamp('created_at').notNull(),
@@ -3622,6 +3624,16 @@ export const mcpManagedOauthOutbox = pgTable(
   },
   (table) => ({
     keyUnique: uniqueIndex('mcp_managed_oauth_outbox_key_uq').on(table.tenant_id, table.outbox_key),
+    cleanupDeliveryPair: check(
+      'mcp_managed_cleanup_delivery_pair',
+      sql`
+      (${table.cleanup_authorization_id} IS NULL AND ${table.cleanup_operation_id} IS NULL) OR
+      (${table.kind}='close' AND ${table.cleanup_authorization_id} IS NOT NULL
+       AND ${table.cleanup_operation_id} IS NOT NULL
+       AND ${table.cleanup_authorization_id} ~ '^[A-Za-z0-9_-]{1,128}$'
+       AND ${table.cleanup_operation_id} ~ '^[A-Za-z0-9_-]{1,128}$'
+       AND ${table.cleanup_operation_id}<>${table.operation_id})`
+    ),
   })
 );
 
@@ -3639,4 +3651,12 @@ export const mcpManagedOauthInvalidations = pgTable('mcp_managed_oauth_invalidat
   items: t.json<MCPManagedOAuthInvalidation[]>('items').notNull(),
   staged_items: t.json<MCPManagedOAuthInvalidation[]>('staged_items').notNull(),
   updated_at: t.timestamp('updated_at').notNull(),
+});
+
+/** Deployment stop authority only. No tenant-derived columns, FK, portability or release. */
+export const mcpManagedOauthCellRetirements = pgTable('mcp_managed_oauth_cell_retirements', {
+  cell_id: text('cell_id').primaryKey(),
+  operation_id: text('operation_id').notNull(),
+  generation: text('generation').notNull(),
+  created_at: t.timestamp('created_at').notNull(),
 });

@@ -39,6 +39,16 @@ const setup = (overrides = {}) =>
   new ManagedOAuthRegistry({ ...settings, ...overrides }, deployment, [entry]);
 
 describe('authenticated provider-neutral registry admission', () => {
+  it('does not invent cached use policy after restart during an outage', async () => {
+    const prior = setup();
+    await prior.refresh();
+    request.mockRejectedValue(new ManagedMCPOAuthProtocolError('remote_rejection'));
+    const restarted = setup();
+    await expect(restarted.refresh()).rejects.toThrow();
+    expect(() => restarted.existingUseCapabilities()).toThrow();
+    expect(() => restarted.resolveEntry(entry)).toThrow();
+    expect(() => prior.existingUseCapabilities()).not.toThrow();
+  });
   it('does no network from resolve and requires successful bootstrap', async () => {
     const registry = setup();
     expect(() => registry.resolveEntry(entry)).toThrow();
@@ -114,7 +124,29 @@ describe('authenticated provider-neutral registry admission', () => {
     capabilities.profile_versions = [];
     await expect(registry.refresh()).rejects.toThrow();
     expect(() => registry.resolveEntry(entry)).toThrow();
+    expect(() => registry.existingUseCapabilities()).toThrow();
   });
+  it.each(['remote_rejection', 'invalid_response', 'unavailable'] as const)(
+    'keeps existing use semantics through %s without extending fresh admission',
+    async (category) => {
+      const registry = setup();
+      expect(() => registry.existingUseCapabilities()).toThrow();
+      await registry.refresh();
+      const profile = registry.resolveEntry(entry);
+      const server = {
+        catalog_entry_name: entry.name,
+        auth: managedCatalogOAuthConfig(profile.reference),
+      } as MCPServer;
+      request.mockRejectedValue(new ManagedMCPOAuthProtocolError(category));
+      await expect(registry.refresh()).rejects.toThrow();
+      now += 180000;
+      expect(() => registry.resolve(server, 'refresh')).toThrow();
+      expect(() => registry.resolveEntry(entry)).toThrow();
+      expect(registry.resolve(server, 'use')).toEqual(profile);
+      registry.existingUseCapabilities().profile_versions.length = 0;
+      expect(registry.resolve(server, 'use')).toEqual(profile);
+    }
+  );
   it('pausing refresh does not disable existing-use profile validation', async () => {
     const registry = setup({ refresh: false });
     await registry.refresh();

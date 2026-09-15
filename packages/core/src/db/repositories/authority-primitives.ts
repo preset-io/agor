@@ -4,6 +4,7 @@ import { sql } from 'drizzle-orm';
 import type { Database } from '../client';
 import { executeRaw, rawRows } from '../database-wrapper';
 import { getCurrentTenantDatabaseScope } from '../tenant-context';
+import { assertTenantWritableUnderLock } from '../tenant-write-gate';
 import { RepositoryError } from './base';
 
 const SAFE_AUTHORITY_FAILURE_CODE = /^[a-z0-9_]{1,64}$/;
@@ -47,7 +48,8 @@ export async function lockMCPManagedSubject(
   db: Database,
   tenantId: string,
   userId: string,
-  cloudSubject: string
+  cloudSubject: string,
+  cellId: string
 ): Promise<void> {
   const scope = getCurrentTenantDatabaseScope();
   if (
@@ -58,6 +60,14 @@ export async function lockMCPManagedSubject(
   ) {
     throw new RepositoryError('Managed subject requires its active tenant transaction');
   }
+  const [cell] = rawRows(
+    await executeRaw(
+      db,
+      sql`SELECT public.agor_mcp_managed_oauth_cell_vending_allowed(${cellId}) AS allowed`
+    )
+  );
+  if (cell?.allowed !== true) throw new RepositoryError('Managed OAuth cell is retired');
+  await assertTenantWritableUnderLock(db, tenantId);
   const rows = rawRows(
     await executeRaw(
       db,

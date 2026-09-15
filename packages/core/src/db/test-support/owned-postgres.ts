@@ -155,6 +155,12 @@ export async function createOwnedPostgres(): Promise<OwnedPostgres> {
     await bootstrap.unsafe(
       `ALTER FUNCTION public.agor_mcp_managed_oauth_maintenance_tenants(text,integer) OWNER TO ${routingRole}`
     );
+    await bootstrap.unsafe(
+      `GRANT SELECT(cell_id) ON public.mcp_managed_oauth_cell_retirements TO ${routingRole}`
+    );
+    await bootstrap.unsafe(
+      `ALTER FUNCTION public.agor_mcp_managed_oauth_cell_vending_allowed(text) OWNER TO ${routingRole}`
+    );
     await bootstrap.unsafe(`REVOKE CREATE ON SCHEMA public FROM ${routingRole}`);
     await bootstrap.unsafe(`REVOKE ${routingRole} FROM bootstrap`);
     const url = `postgresql://${role}:${password}@${base}`;

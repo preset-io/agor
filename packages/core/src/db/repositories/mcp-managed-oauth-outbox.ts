@@ -6,12 +6,14 @@ import {
   MCPManagedOAuthGrantMetadataSchema,
   type MCPManagedOAuthPendingMetadata,
   MCPManagedOAuthPendingMetadataSchema,
+  type MCPManagedOAuthRetirementStatus,
   managedOAuthLocalGeneration,
 } from '../../types/mcp-managed-oauth';
 import { McpOAuthEpochSchema, McpOAuthIdSchema } from '../../types/mcp-managed-oauth-contract';
 import type { Database } from '../client';
 import { executeRaw, rawRows } from '../database-wrapper';
 import { openBoundSecretAsync } from '../oauth-secret-envelope';
+import { assertTenantWriteGateGeneration } from '../tenant-write-gate';
 import { lockTenantAuthoritySubject } from './authority-primitives';
 import { RepositoryError } from './base';
 import { grantSecretBinding } from './user-mcp-oauth-tokens';
@@ -25,6 +27,8 @@ export interface MCPManagedOAuthCleanupEntry {
   mcp_server_id: string;
   grant_generation: string;
   transaction_id: string | null;
+  cleanup_authorization_id: string | null;
+  cleanup_operation_id: string | null;
   metadata: MCPManagedOAuthPendingMetadata | MCPManagedOAuthGrantMetadata;
   expires_at: Date;
 }
@@ -50,7 +54,7 @@ export class MCPManagedOAuthOutboxRepository {
     return rawRows(
       await executeRaw(
         this.db,
-        sql`SELECT outbox_id,operation_id,kind,attempt_id,user_id,mcp_server_id,grant_generation,transaction_id,managed_metadata,expires_at
+        sql`SELECT outbox_id,operation_id,kind,attempt_id,user_id,mcp_server_id,grant_generation,transaction_id,cleanup_authorization_id,cleanup_operation_id,managed_metadata,expires_at
       FROM public.mcp_managed_oauth_outbox WHERE tenant_id=${tenantId} AND completed_at IS NULL
         AND (${afterOutboxId ?? null}::text IS NULL OR outbox_id>${afterOutboxId ?? null})
       ORDER BY outbox_id LIMIT ${limit}`
@@ -67,6 +71,8 @@ export class MCPManagedOAuthOutboxRepository {
         mcp_server_id: String(row.mcp_server_id) as MCPServerID,
         grant_generation: String(row.grant_generation),
         transaction_id: row.transaction_id as string | null,
+        cleanup_authorization_id: row.cleanup_authorization_id as string | null,
+        cleanup_operation_id: row.cleanup_operation_id as string | null,
         metadata:
           row.kind === 'close'
             ? MCPManagedOAuthGrantMetadataSchema.parse(row.managed_metadata)
@@ -74,6 +80,35 @@ export class MCPManagedOAuthOutboxRepository {
         expires_at: new Date(row.expires_at as string),
       };
     });
+  }
+  /** Pin authenticated close delivery before opening material or attempting cleanup. */
+  async bindCleanupAuthorization(
+    tenantId: string,
+    outboxId: string,
+    operationId: string,
+    authorizationId: string,
+    cleanupOperationId: string
+  ): Promise<boolean> {
+    await this.lock(tenantId);
+    McpOAuthIdSchema.parse(authorizationId);
+    McpOAuthIdSchema.parse(cleanupOperationId);
+    if (cleanupOperationId === operationId) throw new RepositoryError('Invalid cleanup operation');
+    return (
+      rawRows(
+        await executeRaw(
+          this.db,
+          sql`
+      UPDATE public.mcp_managed_oauth_outbox
+      SET cleanup_authorization_id=${authorizationId},cleanup_operation_id=${cleanupOperationId}
+      WHERE tenant_id=${tenantId} AND outbox_id=${outboxId} AND operation_id=${operationId}
+        AND kind='close' AND completed_at IS NULL
+        AND ((cleanup_authorization_id IS NULL AND cleanup_operation_id IS NULL)
+          OR (cleanup_authorization_id=${authorizationId} AND cleanup_operation_id=${cleanupOperationId}))
+      RETURNING outbox_id
+    `
+        )
+      ).length === 1
+    );
   }
   /** Internal revoke worker only. Obtain before complete(), leave the transaction before network I/O. */
   async openRevocationToken(
@@ -130,6 +165,33 @@ export class MCPManagedOAuthOutboxRepository {
     );
   }
   /** Adapter calls only after the exact broker cancel/close was confirmed, not merely dispatched. */
+  async completeReservationCancellation(
+    tenantId: string,
+    outboxId: string,
+    operationId: string,
+    prepareOperationId: string
+  ): Promise<boolean> {
+    await this.lock(tenantId);
+    McpOAuthIdSchema.parse(prepareOperationId);
+    // Only authenticated non-vending reservation cancellation confirms this
+    // barrier. It is not a fabricated transaction or a no-dispatch certificate.
+    return (
+      rawRows(
+        await executeRaw(
+          this.db,
+          sql`
+      UPDATE public.mcp_managed_oauth_outbox SET completed_at=clock_timestamp(),sealed_material=NULL
+      WHERE tenant_id=${tenantId} AND outbox_id=${outboxId} AND operation_id=${operationId}
+        AND kind='recover_prepare_cancel' AND transaction_id IS NULL AND completed_at IS NULL
+        AND managed_metadata->'prepare_request'->>'operation_id'=${prepareOperationId}
+      RETURNING outbox_id
+    `
+        )
+      ).length === 1
+    );
+  }
+
+  /** Adapter calls only after the exact broker cancel/close was confirmed, not merely dispatched. */
   async complete(tenantId: string, outboxId: string, operationId: string): Promise<boolean> {
     await this.lock(tenantId);
     return (
@@ -142,6 +204,58 @@ export class MCPManagedOAuthOutboxRepository {
       ).length === 1
     );
   }
+  /** Trusted lifecycle adapter only; caller holds a tenant transaction, never a network call. */
+  async retireTenantUnderWriteGate(tenantId: string, gateGeneration: string): Promise<void> {
+    // Gate row first: identical ordering to the existing destructive deletion fence.
+    await assertTenantWriteGateGeneration(this.db, tenantId, gateGeneration);
+    await this.retireTenant(tenantId);
+  }
+
+  /** Fresh readiness, not a portable certificate; valid only while this exact gate remains held. */
+  async isTenantRetirementReady(tenantId: string, gateGeneration: string): Promise<boolean> {
+    return (await this.getTenantRetirementStatus(tenantId, gateGeneration)).ready;
+  }
+
+  async getTenantRetirementStatus(
+    tenantId: string,
+    gateGeneration: string
+  ): Promise<MCPManagedOAuthRetirementStatus> {
+    await assertTenantWriteGateGeneration(this.db, tenantId, gateGeneration);
+    await this.lock(tenantId);
+    const [row] = rawRows(
+      await executeRaw(
+        this.db,
+        sql`
+      SELECT
+        (SELECT count(*)::text FROM public.mcp_managed_oauth_outbox
+          WHERE tenant_id=${tenantId} AND completed_at IS NULL) AS pending_cleanup,
+        (SELECT count(*)::text FROM public.user_mcp_oauth_tokens
+          WHERE tenant_id=${tenantId} AND credential_origin='cloud_managed_v1') AS active_grants,
+        (SELECT count(*)::text FROM public.mcp_oauth_pending_flows
+          WHERE tenant_id=${tenantId} AND credential_origin='cloud_managed_v1'
+            AND status IN ('pending','exchanging')) AS pending_attempts
+    `
+      )
+    );
+    const count = (value: unknown): number => {
+      if (typeof value !== 'string' || !/^(0|[1-9][0-9]*)$/.test(value))
+        throw new RepositoryError('Invalid managed retirement count');
+      const n = Number(value);
+      if (!Number.isSafeInteger(n) || n < 0)
+        throw new RepositoryError('Unsafe managed retirement count');
+      return n;
+    };
+    const pending_attempts = count(row?.pending_attempts);
+    const active_grants = count(row?.active_grants);
+    const pending_cleanup = count(row?.pending_cleanup);
+    return {
+      ready: pending_attempts === 0 && active_grants === 0 && pending_cleanup === 0,
+      pending_attempts,
+      active_grants,
+      pending_cleanup,
+    };
+  }
+
   /** Lifecycle close, before tenant erasure. Existing attempt/token owners produce exact-old cleanup entries. */
   async retireTenant(tenantId: string): Promise<void> {
     await this.lock(tenantId);

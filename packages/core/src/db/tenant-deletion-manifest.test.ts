@@ -43,12 +43,12 @@ describe('tenant deletion manifest classification', () => {
     expect(covered).toEqual(allPostgresTableNames());
   });
 
-  it('treats every application table as directly tenant-scoped', () => {
+  it('exempts only the declared deployment stop barrier from tenant scope', () => {
     const { direct, transitive, global } = classifyPostgresTables();
-    // Nothing is exempt today: every table carries a tenant_id.
+    // Deployment stop barriers must survive erasure and cannot hold tenant fields.
     expect(transitive).toEqual([]);
-    expect(global).toEqual([]);
-    expect(direct).toEqual(allPostgresTableNames());
+    expect(global).toEqual(['mcp_managed_oauth_cell_retirements']);
+    expect(direct).toEqual(allPostgresTableNames().filter((name) => !GLOBAL_TABLES.has(name)));
     // Spot-check a few tables spanning the FK hierarchy.
     expect(direct).toContain('sessions');
     expect(direct).toContain('users');
@@ -62,9 +62,11 @@ describe('tenant deletion manifest classification', () => {
     }
   });
 
-  it('leaves every table in the deletion plan while nothing is declared global', () => {
+  it('leaves deployment barriers out of the tenant deletion plan', () => {
     const planned = new Set(buildTenantDeletionManifest().map((entry) => entry.name));
-    expect([...planned].sort()).toEqual(allPostgresTableNames());
+    expect([...planned].sort()).toEqual(
+      allPostgresTableNames().filter((name) => !GLOBAL_TABLES.has(name))
+    );
   });
 
   it('keeps GLOBAL_TABLES and the column-source map describing the same tables', () => {

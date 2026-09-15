@@ -420,3 +420,52 @@ unfinished cleanup obligations exist. A backup/PITR copy is not an ordinary
 replica failover: its external recovery incarnation must remain quarantined
 until the separately approved recovery process admits a new cohort. Restoring
 database rows or copying attestation files does not establish that authority.
+
+### Source lifecycle commands
+
+Cloud lifecycle automation invokes these **local runtime** commands under its
+existing trusted execution boundary. They neither read provider credentials nor
+make provider requests. PostgreSQL schema admission checks the actual non-owner,
+`NOBYPASSRLS` role, migration ledger and live catalog before doing any work.
+
+After acquiring the existing tenant write gate, retain its exact generation:
+
+```sh
+agor tenant retire --tenant-id TENANT --assert-gate-generation GENERATION --operation-id OPERATION
+agor tenant retirement-status --tenant-id TENANT --assert-gate-generation GENERATION --operation-id OPERATION
+```
+
+Both return one JSON object containing `version: 1`, `tenant_id`,
+`gate_generation`, `operation_id`, `ready`, `pending_attempts`, `active_grants`
+and `pending_cleanup`. Exit zero means the query succeeded, **not** that
+`ready` is true. The operation ID is correlation, not an authority certificate.
+Retirement durably cancels attempts and closes local grants; a healthy source
+daemon with cleanup enabled must drain the exact-old obligations. Status is
+read-only. Neither command acquires or releases the gate. Missing or replaced
+gate proof fails closed; keep the same gate continuously held through the final
+source deletion. Do not retire grants for an ordinary backup export.
+
+Whole-cell decommission additionally needs a permanent admission barrier before
+enumerating tenants, preventing new tenants or delayed receipts from appearing
+after an empty inventory:
+
+```sh
+agor tenant retirement-cell-begin --cell-id CELL --operation-id OPERATION
+agor tenant retirement-targets --cell-id CELL --operation-id OPERATION --assert-cell-gate-generation CELL_GENERATION --limit 100
+```
+
+`CELL` must equal the local configured `managed_mcp_oauth.cell_id`. The first
+command returns `{version:1,cell_id,operation_id,gate_generation}`. Its barrier
+has **no expiry or release path**; retry only with the same operation ID. Never
+use it for workspace rehome, backup, sleep or a temporary drain. It is
+deployment-local control state, not a tenant record or portable archive item.
+
+Target pages return `{version:1,tenant_ids,next_after}` and include orphaned
+managed history, not just currently provisioned workspaces. Pass `--after` from
+the previous `next_after`; the maximum page size is 100. The three cell-fence
+flags are all-or-none. Without them the command is only a DB-local diagnostic
+inventory, not a decommission fence. Automation must union these IDs with its
+ordinary source inventory, retire and poll every tenant under its individual
+gate, and re-enumerate before destroying source infrastructure. Unsupported CLI
+or failed readiness is a blocking error for a managed-history deployment, never
+permission to fall through to ordinary erasure.

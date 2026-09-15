@@ -113,3 +113,18 @@ export interface MCPManagedOAuthResolvedProfile {
   clientKind: 'public' | 'confidential';
   registrationProvenanceDigest: string;
 }
+
+/** Local retirement readiness, never evidence of provider revocation. */
+export interface MCPManagedOAuthRetirementStatus {
+  ready: boolean;
+  pending_attempts: number;
+  active_grants: number;
+  pending_cleanup: number;
+}
+
+/** Nonportable deployment stop barrier; not a broker epoch or provider revocation proof. */
+export interface MCPManagedOAuthCellRetirement {
+  cell_id: string;
+  operation_id: string;
+  generation: string;
+}
