@@ -724,6 +724,9 @@ async function refreshManagedPostgres(
         notifyInvalidGrant(deps);
         throw new InvalidGrantError();
       }
+      // The exact result CAS also durably throttles admission/client failures
+      // lacking a D0 retry_after_ms. This proof retains only the original permit;
+      // a subsequent request must pass current grant/use authorization again.
       if (
         outcome.status === 'not_dispatched' ||
         outcome.status === 'client_configuration_failed' ||

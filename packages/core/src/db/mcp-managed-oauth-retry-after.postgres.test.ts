@@ -173,7 +173,7 @@ describe.skipIf(process.env.AGOR_DB_DIALECT !== 'postgresql')(
       ).toBe(false);
       expect((await f.read()).managed_refresh_not_before).toBeNull();
     });
-    it('preserves the floor across non-consuming claim completion and admits a zero delay without process waiting', async () => {
+    it('admits zero delay without waiting and extends the floor on certified client failure', async () => {
       const f = await fixture();
       if (f.rejection.status !== 'rejected_non_consuming') throw new Error('fixture rejection');
       expect(
@@ -215,7 +215,10 @@ describe.skipIf(process.env.AGOR_DB_DIALECT !== 'postgresql')(
           })
         )
       ).toBe(true);
-      expect((await f.read()).managed_refresh_not_before).toEqual(floor);
+      expect(
+        new Date(String((await f.read()).managed_refresh_not_before)).getTime()
+      ).toBeGreaterThan(new Date(String(floor)).getTime());
+      expect(Number((await f.read()).remaining)).toBeGreaterThan(29000);
       expect((await f.read()).managed_metadata).toMatchObject({
         next_sequence: '3',
         use_authorization: f.commit.metadata.use_authorization,
