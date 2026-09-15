@@ -3,6 +3,7 @@ import {
   UPLOAD_POLICY_ERROR_CONTRACT,
   type UploadPolicyErrorCode,
 } from '@agor/core/types';
+import multer from 'multer';
 
 export type UploadFailureStage =
   | 'authentication'
@@ -86,6 +87,20 @@ export function toUploadErrorResponse(error: unknown, requestId: string): Upload
       status: policy.status,
       body: { error: expected.error, code: policy.code, requestId },
       type: expected.type,
+    };
+  }
+
+  // Multer 2.3+ rejects malformed/indexed field names rather than allowing
+  // append-field to crash or exhaust the process. Keep parser details private.
+  if (
+    error instanceof multer.MulterError &&
+    ['INVALID_FIELD_NAME', 'LIMIT_FIELD_ARRAY_INDEX'].includes(error.code) &&
+    status === undefined
+  ) {
+    return {
+      status: 400,
+      body: { error: 'Upload request rejected', code: 'UPLOAD_REJECTED', requestId },
+      type: 'multipart',
     };
   }
 

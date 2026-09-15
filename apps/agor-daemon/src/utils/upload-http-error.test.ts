@@ -1,7 +1,30 @@
+import multer from 'multer';
 import { describe, expect, it } from 'vitest';
 import { toUploadErrorResponse } from './upload-http-error.js';
 
 describe('toUploadErrorResponse', () => {
+  it.each(['INVALID_FIELD_NAME', 'LIMIT_FIELD_ARRAY_INDEX'])(
+    'rejects Multer %s without exposing field names or raw messages',
+    (code) => {
+      // @types/multer has not yet added these 2.3+ codes to its constructor union.
+      const error = Object.assign(new multer.MulterError('LIMIT_FIELD_KEY'), {
+        code,
+        field: 'private-field-name',
+        message: 'private-parser-detail',
+      });
+      expect(toUploadErrorResponse(error, 'request-field')).toEqual({
+        status: 400,
+        body: {
+          error: 'Upload request rejected',
+          code: 'UPLOAD_REJECTED',
+          requestId: 'request-field',
+        },
+        type: 'multipart',
+      });
+      expect(toUploadErrorResponse({ code }, 'request-field').status).toBe(500);
+    }
+  );
+
   it('returns specific copy for reviewed upload policy errors', () => {
     expect(
       toUploadErrorResponse(

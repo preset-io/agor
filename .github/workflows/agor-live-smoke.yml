@@ -78,6 +78,9 @@ jobs:
           node - "$RUNNER_TEMP/inspect/package/package.json" <<'NODE'
           const fs = require('node:fs');
           const manifest = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+          if (JSON.stringify(manifest.os) !== JSON.stringify(['!win32'])) {
+            throw new Error('Release must preserve the native Windows exclusion');
+          }
           const lifecycle = ['preinstall', 'install', 'postinstall'].filter(
             (name) => manifest.scripts?.[name]
           );
@@ -97,10 +100,13 @@ jobs:
             test ! -L "$RUNNER_TEMP/inspect/package/node_modules/@agor/$package"
           done
 
-      - uses: actions/upload-artifact@v6
+      - uses: actions/upload-artifact@v7.0.1
         with:
           name: agor-live-release
           path: packages/agor-live/release/*.tgz
+          # Keep all eight tarballs in one named ZIP for download-artifact consumers.
+          # Direct uploads accept only one file and ignore the artifact name.
+          archive: true
           if-no-files-found: error
           retention-days: 7
 
@@ -121,7 +127,7 @@ jobs:
           node-version: ${{ matrix.node }}
           package-manager-cache: false
 
-      - uses: actions/download-artifact@v7
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: agor-live-release
           path: ${{ runner.temp }}/release
@@ -477,7 +483,7 @@ jobs:
           node-version: '24.19.0'
           package-manager-cache: false
 
-      - uses: actions/download-artifact@v7
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: agor-live-release
           path: ${{ runner.temp }}/release

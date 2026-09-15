@@ -47,7 +47,7 @@ export default defineConfig({
   resolve: {
     conditions: ['source'],
     alias: {
-      '@': path.resolve(__dirname, './src'),
+      '@': path.resolve(import.meta.dirname, './src'),
     },
     // Guard against @codemirror/state being duplicated across async chunks.
     // manualChunks forces CM6 packages into the 'editor' chunk, but a nested
