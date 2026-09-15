@@ -133,6 +133,19 @@ export function createMigrationImpactRegistry(
 
 const MIGRATION_IMPACT_REGISTRY = createMigrationImpactRegistry([
   [
+    '0111_mcp_managed_oauth_maintenance_routing',
+    {
+      requiresOfflineCutover: true,
+      impact: defineMigrationImpact({
+        classification: 'protocol',
+        userAction: 'required',
+        rollbackCompatibility: 'incompatible',
+        summary:
+          'Adds capability-gated tenant-ID-only managed maintenance discovery; direct credentials remain outside that capability.',
+      }),
+    },
+  ],
+  [
     '0110_mcp_managed_oauth_authority',
     {
       requiresOfflineCutover: true,
@@ -771,7 +784,9 @@ async function readManagedOAuthSchemaDigestSnapshot(db: Database): Promise<strin
         db,
         sql`SELECT r.rolsuper,r.rolbypassrls,
       EXISTS(SELECT 1 FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace
-        WHERE n.nspname IN ('public','drizzle') AND c.relkind IN ('r','p','S') AND pg_catalog.pg_has_role(current_user,c.relowner,'MEMBER')) AS owns_or_inherits
+        WHERE n.nspname IN ('public','drizzle') AND c.relkind IN ('r','p','S') AND pg_catalog.pg_has_role(current_user,c.relowner,'MEMBER'))
+      OR EXISTS(SELECT 1 FROM pg_catalog.pg_proc p JOIN pg_catalog.pg_namespace n ON n.oid=p.pronamespace
+        WHERE n.nspname='public' AND pg_catalog.pg_has_role(current_user,p.proowner,'MEMBER')) AS owns_or_inherits
       FROM pg_catalog.pg_roles r WHERE r.rolname=current_user`
       )
     );
