@@ -1368,6 +1368,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
         : {
             userPrompt: config.prompt || '',
             agenticTool: config.agent,
+            presetId: config.presetId,
             permissionMode: config.permissionMode,
             modelConfig: config.modelConfig,
             codexSandboxMode: config.codexSandboxMode,

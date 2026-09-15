@@ -114,6 +114,8 @@ export const ForkSpawnModal: React.FC<ForkSpawnModalProps> = ({
   // Reset form and preset when modal opens
   useEffect(() => {
     if (open && session) {
+      // Child sessions always inherit parent. Standalone new sessions use
+      // NewSessionModal, which loads user defaults.
       setConfigPreset('parent');
       setEnvVarNames([]);
       const agentTool = isAgenticToolName(session.agentic_tool)
@@ -129,8 +131,8 @@ export const ForkSpawnModal: React.FC<ForkSpawnModalProps> = ({
     }
   }, [open, session, form, initialPrompt]);
 
-  // When switching to "Custom config", load the values that will be
-  // effective if the user submits without touching individual fields.
+  // Load custom values only after explicit opt-in; child sessions always inherit
+  // parent configuration unless custom configuration is selected.
   useEffect(() => {
     if (!open || !session || configPreset !== 'custom') return;
     if (!isAgenticToolName(session.agentic_tool)) return;
@@ -204,6 +206,28 @@ export const ForkSpawnModal: React.FC<ForkSpawnModalProps> = ({
           // clear; `undefined` = "copy parent", which is only the
           // `parent` preset's intent).
           spawnConfig.envVarNames = envVarNames;
+        } else {
+          // Make parent inheritance explicit in the MCP spawn instruction.
+          // This keeps UI-created children aligned with parent even when
+          // parent context is reconstructed by the agent.
+          spawnConfig.agent = session.agentic_tool as AgenticToolName;
+          if (session.agentic_tool_preset_id) {
+            spawnConfig.presetId = session.agentic_tool_preset_id;
+          } else {
+            spawnConfig.permissionMode = session.permission_config?.mode;
+            spawnConfig.modelConfig = session.model_config
+              ? {
+                  mode: session.model_config.mode,
+                  model: session.model_config.model,
+                  effort: session.model_config.effort,
+                  advisorModel: session.model_config.advisorModel,
+                  provider: session.model_config.provider,
+                }
+              : undefined;
+            spawnConfig.codexSandboxMode = session.permission_config?.codex?.sandboxMode;
+            spawnConfig.codexApprovalPolicy = session.permission_config?.codex?.approvalPolicy;
+            spawnConfig.codexNetworkAccess = session.permission_config?.codex?.networkAccess;
+          }
         }
 
         // Callback fields are always included when explicitly set
