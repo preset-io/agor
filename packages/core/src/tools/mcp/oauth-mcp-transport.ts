@@ -11,13 +11,15 @@ import http from 'node:http';
 import { z } from 'zod';
 import { hasTemplateMarker } from '../../mcp/template-patterns.js';
 import type {
+  MCPOAuthClientMode,
   MCPOAuthClientRegistrationID,
   MCPOAuthDCRDiagnostic,
   MCPOAuthDCRMode,
   MCPOAuthFailureReason,
   MCPOAuthRuntimeCompatibilityMode,
+  MCPOAuthTokenEndpointAuthMethod,
 } from '../../types/mcp.js';
-import { MCP_OAUTH_DEFAULT_DCR_MODE } from '../../types/mcp.js';
+import { assertDirectMCPOAuthClient, MCP_OAUTH_DEFAULT_DCR_MODE } from '../../types/mcp.js';
 import { assertSafeOAuthUrl, safeOutboundFetch } from '../../utils/safe-outbound-fetch';
 import { asMCPExternalError } from './external-error.js';
 import type { OAuthTokenResponse } from './oauth-auth.js';
@@ -191,7 +193,6 @@ export interface AuthorizationServerMetadata {
   code_challenge_methods_supported?: string[];
   token_endpoint_auth_methods_supported?: string[]; // RFC 8414
   authorization_response_iss_parameter_supported?: boolean;
-  token_endpoint_auth_methods_supported?: string[];
 }
 
 /**
@@ -200,7 +201,7 @@ export interface AuthorizationServerMetadata {
  * providers (e.g. Slack) expect; `client_secret_post` puts the credentials in
  * the request body, which some providers (e.g. HubSpot) require exclusively.
  */
-export type MCPOAuthTokenEndpointAuthMethod = 'client_secret_basic' | 'client_secret_post';
+export type { MCPOAuthTokenEndpointAuthMethod } from '../../types/mcp.js';
 
 /**
  * Choose the token-endpoint client-authentication method for a confidential
@@ -512,12 +513,14 @@ export async function resolveMCPOAuthDiscovery(
   wwwAuthenticateHeader: string | null,
   mcpUrl: string,
   options: {
+    oauthClientMode?: MCPOAuthClientMode;
     compatibilityMode?: MCPOAuthRuntimeCompatibilityMode;
     allowLocalhostHttp?: boolean;
     /** Daemon-owned authority/deadline assertion between discovery requests. */
     assertCurrent?: () => void;
   } = {}
 ): Promise<MCPOAuthDiscoveryResult | null> {
+  assertDirectMCPOAuthClient({ oauth_client_mode: options.oauthClientMode });
   options.assertCurrent?.();
   // Strategies 1 + 2: RFC 9728 (header hint, then well-known fallback)
   const rfc9728 = await resolveResourceMetadataUrl(wwwAuthenticateHeader, mcpUrl, options);
@@ -1550,6 +1553,7 @@ export function getAuthCodeTokenCacheStats(): {
  * This is returned by startMCPOAuthFlow and consumed by completeMCPOAuthFlow
  */
 export interface OAuthFlowContext {
+  oauthClientMode?: MCPOAuthClientMode;
   metadataUrl: string;
   resourceUri: string;
   issuer: string;
@@ -1975,11 +1979,13 @@ export async function validateMCPOAuthMetadata(
   discovery: MCPOAuthDiscoveryResult,
   resourceUri: string,
   options: {
+    oauthClientMode?: MCPOAuthClientMode;
     compatibilityMode?: MCPOAuthRuntimeCompatibilityMode;
     allowLocalhostHttp?: boolean;
     assertCurrent?: () => void;
   } = {}
 ): Promise<ValidatedMCPOAuthMetadata> {
+  assertDirectMCPOAuthClient({ oauth_client_mode: options.oauthClientMode });
   const compatibilityMode = options.compatibilityMode ?? 'strict';
   const allowLocalhostHttp = options.allowLocalhostHttp === true;
   let authServerMetadata: AuthorizationServerMetadata;
@@ -2207,6 +2213,7 @@ export async function startMCPOAuthFlow(
   clientId?: string,
   redirectUri?: string,
   options?: {
+    oauthClientMode?: MCPOAuthClientMode;
     authorizationUrlOverride?: string;
     tokenUrlOverride?: string;
     clientSecret?: string;
@@ -2249,6 +2256,7 @@ export async function startMCPOAuthFlow(
     assertCurrent?: () => void;
   }
 ): Promise<OAuthFlowContext> {
+  assertDirectMCPOAuthClient({ oauth_client_mode: options?.oauthClientMode });
   console.log('[MCP OAuth] Starting two-phase OAuth 2.1 flow');
   const compatibilityMode = options?.compatibilityMode ?? 'strict';
   const dcrMode = options?.dcrMode ?? MCP_OAUTH_DEFAULT_DCR_MODE;
@@ -2434,6 +2442,7 @@ export async function completeMCPOAuthFlow(
   state: string,
   options: { cacheToken?: boolean; issuer?: string } = {}
 ): Promise<OAuthTokenResponse> {
+  assertDirectMCPOAuthClient({ oauth_client_mode: context.oauthClientMode });
   console.log('[MCP OAuth] Completing OAuth flow with authorization code');
 
   // Verify state to prevent CSRF

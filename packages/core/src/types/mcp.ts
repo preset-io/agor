@@ -69,6 +69,69 @@ export interface MCPOAuthRefreshResult {
 /** Credential subject selected for the resulting MCP OAuth grant. */
 export type MCPOAuthMode = 'per_user' | 'shared';
 
+/** Absent on historical/direct rows. Unknown modes are never direct. */
+export const MCP_OAUTH_CLIENT_MODES = ['direct', 'cloud_managed_v1'] as const;
+export type MCPOAuthClientMode = (typeof MCP_OAUTH_CLIENT_MODES)[number];
+
+export function resolveMCPOAuthClientMode(auth: unknown): MCPOAuthClientMode {
+  if (auth === undefined || auth === null) return 'direct';
+  if (typeof auth !== 'object' || Array.isArray(auth)) {
+    throw new Error('Invalid MCP authentication configuration');
+  }
+  const row = auth as Record<string, unknown>;
+  const mode = row.oauth_client_mode;
+  if (mode === 'cloud_managed_v1') return mode;
+  if (mode === undefined || mode === 'direct') {
+    if (row.oauth_managed_profile !== undefined) {
+      throw new Error('Managed OAuth profile requires managed client mode');
+    }
+    return 'direct';
+  }
+  throw new Error('Unsupported MCP OAuth client mode');
+}
+
+/** Direct helpers call this before discovery, DCR, or secret validation. */
+export function assertDirectMCPOAuthClient(auth: unknown): void {
+  if (resolveMCPOAuthClientMode(auth) !== 'direct') {
+    throw new Error('Cloud-managed OAuth requires the managed authority adapter');
+  }
+}
+
+/** Nonsecret immutable registry identity, not caller-provided OAuth endpoints. */
+export interface MCPManagedOAuthProfileReference {
+  profile_id: string;
+  semantic_version: string;
+  environment: 'staging' | 'production';
+  region: 'us-west-2';
+  registry_digest: string;
+}
+
+export function assertMCPManagedOAuthProfileReference(
+  value: unknown
+): asserts value is MCPManagedOAuthProfileReference {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('Managed OAuth requires a registry profile reference');
+  }
+  const row = value as Record<string, unknown>;
+  const fields = ['profile_id', 'semantic_version', 'environment', 'region', 'registry_digest'];
+  if (
+    Object.keys(row).length !== fields.length ||
+    Object.keys(row).some((key) => !fields.includes(key)) ||
+    !['profile_id', 'semantic_version'].every(
+      (key) => typeof row[key] === 'string' && /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(row[key])
+    ) ||
+    !['staging', 'production'].includes(String(row.environment)) ||
+    row.region !== 'us-west-2' ||
+    typeof row.registry_digest !== 'string' ||
+    !/^[a-f0-9]{64}$/.test(row.registry_digest)
+  ) {
+    throw new Error('Invalid managed OAuth registry profile reference');
+  }
+}
+
+/** Canonical negotiated direct-client presentation (not a retry policy). */
+export type MCPOAuthTokenEndpointAuthMethod = 'client_secret_basic' | 'client_secret_post';
+
 /**
  * Dynamic Client Registration policy.
  *
@@ -446,6 +509,8 @@ export interface MCPAuth {
   oauth_token_url?: string;
   oauth_client_id?: string;
   oauth_client_secret?: string;
+  oauth_client_mode?: MCPOAuthClientMode;
+  oauth_managed_profile?: MCPManagedOAuthProfileReference;
   oauth_scope?: string;
   oauth_grant_type?: string;
   /** Strict current MCP Authorization behavior is the default. */
