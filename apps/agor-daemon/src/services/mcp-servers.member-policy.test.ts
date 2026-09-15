@@ -32,6 +32,7 @@ import type {
   UserRole,
 } from '@agor/core/types';
 import { describe, expect, it } from 'vitest';
+import { createRegisteredMCPMemberPolicyService } from '../register-routes.js';
 import { createMcpServerWriteAuthorizationHook } from '../utils/mcp-server-authorization.js';
 import { createMCPServersService } from './mcp-servers.js';
 
@@ -75,6 +76,7 @@ async function buildDaemon(policy: MCPMemberPolicy, role: UserRole = 'member') {
 
   return {
     user,
+    readPolicy: () => createRegisteredMCPMemberPolicyService(app, db).find(params as never),
     setPolicy: (next: MCPMemberPolicy) => setMcpMemberPolicy(db, next, undefined, null),
     create: (data: Record<string, unknown>) =>
       app
@@ -89,6 +91,15 @@ async function buildDaemon(policy: MCPMemberPolicy, role: UserRole = 'member') {
 }
 
 describe('member policy, as it lands in mcp_servers', () => {
+  it.each([
+    ['viewer', 'allow_crud', false],
+    ['member', 'use_existing_only', false],
+    ['member', 'allow_private_only', true],
+    ['admin', 'use_existing_only', true],
+  ] as const)('projects actual %s capability under %s', async (role, policy, expected) => {
+    const daemon = await buildDaemon(policy, role);
+    expect(await daemon.readPolicy()).toEqual({ policy, can_configure: expected });
+  });
   it('holds a member’s server to the session it is attached to under allow_private_only', async () => {
     const { user, create, storedServers } = await buildDaemon('allow_private_only');
 
@@ -231,8 +242,7 @@ describe('member policy, as it lands in mcp_servers', () => {
  * The gate on the endpoint that answers the policy, asserted against the
  * registration itself.
  *
- * The handler is defined inside `registerRoutes` and cannot be stood up
- * without the rest of the daemon, so this reads the registration the way
+ * The handler is exercised above; this also reads the registration the way
  * `register-routes.prompt-scope.test.ts` does. What it pins is the reason the
  * gate is where it is: half of what this endpoint answers is about the caller,
  * so the caller a policy refuses has to be able to read it. Raising it back to
@@ -245,6 +255,14 @@ describe('the MCP member policy endpoint, as it is registered', () => {
     source.indexOf("'/mcp-member-policy'"),
     source.indexOf('MCP marketplace connect')
   );
+  const handler = source.slice(
+    source.indexOf('export function createRegisteredMCPMemberPolicyService('),
+    source.indexOf('export function createRegisteredMCPCatalogConnectService(')
+  );
+
+  it('registers the same tested policy owner', () => {
+    expect(registration).toContain('createRegisteredMCPMemberPolicyService(app, db)');
+  });
 
   it('lets any authenticated caller read it', () => {
     expect(registration).toContain(
@@ -259,16 +277,16 @@ describe('the MCP member policy endpoint, as it is registered', () => {
   });
 
   it('answers the caller their own capability, not only the tenant value', () => {
-    expect(registration).toContain('can_configure: canConfigureMcpServers(params.user?.role');
+    expect(handler).toContain('can_configure: canConfigureMcpServers(params.user?.role');
   });
 
   it('emits an empty tenant-scoped invalidation after a policy write', () => {
-    expect(registration).toContain("path: 'mcp-servers'");
-    expect(registration).toContain('event: MCP_MEMBER_POLICY_CHANGED_EVENT');
-    expect(registration).toContain('data: {}');
+    expect(handler).toContain("path: 'mcp-servers'");
+    expect(handler).toContain('event: MCP_MEMBER_POLICY_CHANGED_EVENT');
+    expect(handler).toContain('data: {}');
     // Request params carry the trusted tenant context into emitServiceEvent;
     // without them a post-commit publish could cross or miss tenant channels.
-    expect(registration).toContain('params,');
+    expect(handler).toContain('params,');
   });
 
   it('registers the invalidation at the mcp-servers transport boundary', () => {
