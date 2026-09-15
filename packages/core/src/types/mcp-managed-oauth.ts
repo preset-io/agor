@@ -91,3 +91,22 @@ export function managedOAuthWireGeneration(value: number): string {
   if (!Number.isSafeInteger(value) || value < 0) throw new Error('Invalid OAuth local generation');
   return String(value);
 }
+
+/** Nonsecret immutable registry projection; never a caller client override. */
+export interface MCPManagedOAuthResolvedProfile {
+  reference: import('./mcp').MCPManagedOAuthProfileReference;
+  catalogEntryName: string;
+  mcpUrl: string;
+  transport: 'http';
+  metadataUri: string;
+  resourceUri: string;
+  issuer: string;
+  authorizationEndpoint: string;
+  tokenEndpoint: string;
+  redirectUri: string;
+  clientId: string;
+  scope: string;
+  tokenEndpointAuthMethod: 'none' | 'client_secret_basic' | 'client_secret_post';
+  clientKind: 'public' | 'confidential';
+  registrationProvenanceDigest: string;
+}

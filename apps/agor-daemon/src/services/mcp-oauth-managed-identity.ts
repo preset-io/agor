@@ -5,6 +5,7 @@ import {
   runWithTenantDatabaseScope,
   sql,
   type TenantScopeAwareDatabase,
+  type TenantScopedDatabase,
 } from '@agor/core/db';
 import {
   hasMinimumRole,
@@ -26,7 +27,7 @@ export interface ManagedOAuthLocalIdentityPolicy {
  * exact role/identity through the enclosing local write transaction.
  */
 export async function resolveManagedOAuthLocalSubject(
-  db: TenantScopeAwareDatabase,
+  db: TenantScopeAwareDatabase | TenantScopedDatabase,
   tenantId: string,
   userId: UserID,
   policy: ManagedOAuthLocalIdentityPolicy
@@ -58,7 +59,7 @@ export async function resolveManagedOAuthLocalSubject(
 }
 
 export async function assertManagedOAuthLocalOwner(
-  db: TenantScopeAwareDatabase,
+  db: TenantScopeAwareDatabase | TenantScopedDatabase,
   tenantId: string,
   userId: UserID,
   policy: ManagedOAuthLocalIdentityPolicy,

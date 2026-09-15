@@ -393,6 +393,7 @@ export const MCP_OAUTH_INTERNAL_BASE = '/api/internal/mcp-oauth/v1';
 export const MCP_OAUTH_CONSOLE_BASE = '/api/mcp-oauth/v1';
 export const MCP_OAUTH_ROUTES = Object.freeze({
   capabilities: `${MCP_OAUTH_INTERNAL_BASE}/capabilities`,
+  authority: `${MCP_OAUTH_INTERNAL_BASE}/authority`,
   prepare: `${MCP_OAUTH_INTERNAL_BASE}/transactions`,
   activate: `${MCP_OAUTH_INTERNAL_BASE}/transactions/:id/activate-intent`,
   status: `${MCP_OAUTH_INTERNAL_BASE}/transactions/:id/status`,
@@ -413,6 +414,7 @@ export const MCP_OAUTH_ROUTES = Object.freeze({
   browser_revoke: `${MCP_OAUTH_CONSOLE_BASE}/grants/:id/revoke`,
 });
 export const McpOAuthScopeSchema = z.enum([
+  'mcp_oauth:authority',
   'mcp_oauth:prepare',
   'mcp_oauth:activate',
   'mcp_oauth:status',
@@ -703,3 +705,101 @@ export function mcpOAuthParseJson(
   if (offset !== raw.length) throw new Error('managed_oauth_invalid_json');
   return parsed;
 }
+
+/** Nonsecret authority snapshot bootstraps Cloud epochs; none of these selectors grants intent. */
+export const McpOAuthAuthorityRequestSchema = z.strictObject({
+  protocol_version: z.literal(1),
+  operation_id: McpOAuthIdSchema,
+  workspace_id: McpOAuthIdSchema,
+  cloud_user_subject: McpOAuthIdSchema,
+  cell_local_user_id: McpOAuthIdSchema,
+  server_id: McpOAuthIdSchema,
+  attempt_id: McpOAuthIdSchema,
+  profile_id: McpOAuthIdSchema,
+  profile_version: McpOAuthPositiveEpochSchema,
+  catalog_digest: McpOAuthDigestSchema,
+  config_fingerprint: McpOAuthDigestSchema,
+  grant_generation: McpOAuthEpochSchema,
+});
+export const McpOAuthAuthorityResponseSchema = z.strictObject({
+  protocol_version: z.literal(1),
+  owner: McpOAuthOwnerSchema,
+});
+export type McpOAuthAuthorityRequest = z.infer<typeof McpOAuthAuthorityRequestSchema>;
+
+/** Nonsecret, externally attested cohort evidence. Cell flags/version strings are insufficient. */
+export const McpOAuthCellEvidenceSchema = z
+  .strictObject({
+    cell_id: McpOAuthIdSchema,
+    cell_authority_epoch: McpOAuthPositiveEpochSchema,
+    recovery_incarnation: McpOAuthOpaqueSchema,
+    release_sha: z.string().regex(/^[a-f0-9]{40}$/),
+    protocol_version: z.literal(1),
+    binding_version: z.literal(1),
+    enforcement_version: z.literal(1),
+    schema_digest: McpOAuthDigestSchema,
+    replicas: z
+      .array(
+        z.strictObject({
+          replica_id: McpOAuthIdSchema,
+          release_sha: z.string().regex(/^[a-f0-9]{40}$/),
+          protocol_version: z.literal(1),
+          binding_version: z.literal(1),
+          enforcement_version: z.literal(1),
+          schema_digest: McpOAuthDigestSchema,
+          gateway_mode: z.literal('enforced'),
+        })
+      )
+      .min(1)
+      .max(100),
+    expected_replica_count: z.number().int().min(1).max(100),
+    pre_gateway_executors_terminated: z.literal(true),
+    attestation_digest: McpOAuthDigestSchema,
+    approval_reference: McpOAuthIdSchema,
+    observed_at: McpOAuthTimeSchema,
+    valid_until: McpOAuthTimeSchema,
+  })
+  .refine(
+    (value) =>
+      value.replicas.length === value.expected_replica_count &&
+      new Set(value.replicas.map((replica) => replica.replica_id)).size === value.replicas.length &&
+      value.replicas.every(
+        (replica) =>
+          replica.release_sha === value.release_sha && replica.schema_digest === value.schema_digest
+      ) &&
+      value.valid_until > value.observed_at &&
+      value.valid_until - value.observed_at <= 120000,
+    'Incomplete or mixed managed cohort'
+  );
+
+/** Fixed runtime landing route; fragments are cleared before local completion POST. */
+export const MCP_OAUTH_RUNTIME_RETURN_PATH = '/mcp-oauth/complete' as const;
+export const McpOAuthBrowserFinalizedSchema = z
+  .strictObject({
+    protocol_version: z.literal(1),
+    status: z.literal('waiting_for_cell'),
+    transaction_id: McpOAuthIdSchema,
+    return_origin: McpOAuthOriginSchema.nullable(),
+    return_url: z.string().max(2048).nullable(),
+  })
+  .superRefine((value, ctx) => {
+    if (value.return_origin === null && value.return_url === null) return;
+    try {
+      const url = new URL(value.return_url!);
+      const fields = new URLSearchParams(url.hash.slice(1));
+      if (
+        url.origin !== value.return_origin ||
+        url.username ||
+        url.password ||
+        url.search ||
+        url.pathname !== MCP_OAUTH_RUNTIME_RETURN_PATH ||
+        [...fields.keys()].join(',') !== 'ticket,transaction_id' ||
+        !McpOAuthOpaqueSchema.safeParse(fields.get('ticket')).success ||
+        fields.get('transaction_id') !== value.transaction_id ||
+        url.href !== value.return_url
+      )
+        throw new Error('invalid');
+    } catch {
+      ctx.addIssue({ code: 'custom', message: 'invalid fixed runtime return URL' });
+    }
+  });
