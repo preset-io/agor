@@ -7,6 +7,7 @@ import {
   MCPOAuthPendingFlowRepository,
   MCPServerRepository,
   runWithTenantDatabaseScope,
+  setMCPEgressGatewayMode,
   sql,
   type TenantScopeAwareDatabase,
   UserMCPOAuthTokenRepository,
@@ -31,13 +32,9 @@ import {
   createOwnedPostgres,
   type OwnedPostgres,
 } from '../../../../packages/core/src/db/test-support/owned-postgres';
-import { persistOAuthToken } from '../oauth-cache';
 import { managedCatalogOAuthConfig } from './mcp-catalog-install-policy';
-import { lockMCPOAuthGrantConfiguration } from './mcp-oauth-grant-binding';
-import {
-  ManagedMCPOAuthRuntime,
-  type ManagedOAuthRuntimeDependencies,
-} from './mcp-oauth-managed-runtime';
+import { createManagedOAuthPersistence } from './mcp-oauth-managed-persistence';
+import { ManagedMCPOAuthRuntime } from './mcp-oauth-managed-runtime';
 import { MCPOAuthPendingFlowAuthority } from './mcp-oauth-pending-flow-authority';
 
 vi.mock('@agor/core/mcp-catalog', () => ({
@@ -63,6 +60,7 @@ const profile: MCPManagedOAuthResolvedProfile = {
   mcpUrl: 'https://provider.example.test/mcp',
   transport: 'http',
   metadataUri: 'https://provider.example.test/metadata',
+  metadataEndpoints: [],
   resourceUri: 'https://provider.example.test/mcp',
   issuer: 'https://provider.example.test/',
   authorizationEndpoint: 'https://provider.example.test/authorize',
@@ -135,6 +133,7 @@ describe.skipIf(process.env.AGOR_DB_DIALECT !== 'postgresql')(
           email: `${randomUUID()}@example.test`,
           role: 'member',
         });
+        await setMCPEgressGatewayMode(tx, 'enforced', user.user_id);
         await executeRaw(
           tx,
           sql`INSERT INTO public.user_external_identities(tenant_id,identity_key,user_id,provider,issuer,subject,last_login_at,created_at,updated_at) VALUES (${tenant},${randomUUID()},${user.user_id},'cloud','https://cloud.example.test/','cloud-subject',clock_timestamp(),clock_timestamp(),clock_timestamp())`
@@ -188,6 +187,8 @@ describe.skipIf(process.env.AGOR_DB_DIALECT !== 'postgresql')(
             expires_at: Date.now() + 120000,
             intent_url: `https://broker.example.test/mcp-oauth/continue#ticket=${'T'.repeat(43)}`,
           };
+        else if (options.operation === 'return_ticket')
+          response = { protocol_version: 1, transaction_id: transaction, owner };
         else if (options.operation === 'status')
           response = {
             protocol_version: 1,
@@ -202,38 +203,13 @@ describe.skipIf(process.env.AGOR_DB_DIALECT !== 'postgresql')(
         else throw new Error('Unexpected synthetic broker operation');
         return options.schema.parse(response);
       });
-      const persist: ManagedOAuthRuntimeDependencies['persist'] = async ({
-        record,
-        profile,
-        commit,
-      }) =>
-        runWithTenantDatabaseScope(db, tenant, async (tx) => {
-          await lockMCPOAuthGrantConfiguration(tx, tenant, local.server);
-          await persistOAuthToken(
-            tx,
-            commit.tokens,
-            {
-              mcpServerId: local.server,
-              userId: local.user,
-              oauthMode: 'per_user',
-              clientId: profile.clientId,
-              managed: commit,
-              tokenEndpointAuthMethod: 'client_secret_basic',
-              grantBinding: {
-                version: 5,
-                generation: record.grantGeneration,
-                fingerprint: record.configFingerprint,
-                metadataUri: profile.metadataUri,
-                resourceUri: profile.resourceUri,
-                issuer: profile.issuer,
-                authorizationEndpoint: profile.authorizationEndpoint,
-                tokenEndpoint: profile.tokenEndpoint,
-                redirectUri: profile.redirectUri,
-              },
-            },
-            'Synthetic managed test'
-          );
-        });
+      const assertAdmission = vi.fn(() => {});
+      const persist = createManagedOAuthPersistence({
+        db,
+        masterSecret: master,
+        identity: { provider: 'cloud', issuer: 'https://cloud.example.test/' },
+        assertAdmission,
+      });
       const acknowledge = vi.fn(async () => {});
       const runtime = new ManagedMCPOAuthRuntime({
         db,
@@ -267,6 +243,7 @@ describe.skipIf(process.env.AGOR_DB_DIALECT !== 'postgresql')(
         nonce,
         start,
         acknowledge,
+        assertAdmission,
         intercept: (fn: typeof interceptor) => {
           interceptor = fn;
         },
@@ -394,6 +371,88 @@ describe.skipIf(process.env.AGOR_DB_DIALECT !== 'postgresql')(
       expect(f.request.mock.calls.some(([r]) => r.operation === 'exchange')).toBe(false);
       const recovery = f.request.mock.calls.find(([r]) => r.operation === 'receipt')![0].body;
       expect(JSON.stringify(recovery)).not.toContain('pkce_verifier');
+    });
+    it('binds return consumption to nonce and user without completing or redeeming a code', async () => {
+      const f = await fixture();
+      const start = await f.start();
+      const input = {
+        tenantId: f.tenant,
+        userId: f.user,
+        transactionId: start.transaction_id,
+        ticket: 'T'.repeat(43),
+        clientNonce: f.nonce,
+        requestOrigin: 'https://cell.example.test',
+        assertCurrent: () => {},
+      };
+      await expect(
+        f.runtime.acceptReturn({ ...input, clientNonce: randomUUID() })
+      ).rejects.toThrow();
+      expect(f.request.mock.calls.some(([r]) => r.operation === 'return_ticket')).toBe(false);
+      await expect(f.runtime.acceptReturn(input)).resolves.toMatchObject({ accepted: true });
+      expect(f.request.mock.calls.some(([r]) => r.operation === 'exchange')).toBe(false);
+      expect(
+        (await f.flows.getManagedForTransaction(f.tenant, f.user, start.transaction_id))?.status
+      ).toBe('pending');
+      expect(f.acknowledge).not.toHaveBeenCalled();
+    });
+    it('rolls back actual persistence when admission changes after locks; never ACKs uncommitted material', async () => {
+      const f = await fixture();
+      const start = await f.start();
+      f.assertAdmission
+        .mockImplementationOnce(() => {})
+        .mockImplementationOnce(() => {
+          throw new Error('synthetic cohort changed');
+        });
+      const flow = (await f.flows.getManagedForTransaction(
+        f.tenant,
+        f.user,
+        start.transaction_id
+      ))!;
+      await expect(f.runtime.reconcile(flow)).rejects.toThrow('synthetic cohort changed');
+      expect(f.acknowledge).not.toHaveBeenCalled();
+      await runWithTenantDatabaseScope(db, f.tenant, async (tx) => {
+        expect(
+          await new UserMCPOAuthTokenRepository(tx).getManagedMetadata(f.user, f.server)
+        ).toBeUndefined();
+        expect(
+          (await new MCPOAuthPendingFlowRepository(tx).getForUser(f.tenant, f.user, flow.attemptId))
+            ?.status
+        ).toBe('exchanging');
+      });
+    });
+    it('a demotion after broker success prevents token commit and creates cancellation in the demotion transaction', async () => {
+      const f = await fixture();
+      const start = await f.start();
+      const flow = (await f.flows.getManagedForTransaction(
+        f.tenant,
+        f.user,
+        start.transaction_id
+      ))!;
+      f.intercept(async (options) => {
+        if (options.operation === 'exchange') {
+          const body = options.body as { owner: McpOAuthOwner; claim: McpOAuthClaim };
+          const response = signedSuccess(body.owner, body.claim);
+          await runWithTenantDatabaseScope(db, f.tenant, (tx) =>
+            executeRaw(tx, sql`UPDATE public.users SET role='viewer' WHERE user_id=${f.user}`)
+          );
+          return response;
+        }
+        return undefined;
+      });
+      await expect(f.runtime.reconcile(flow)).rejects.toThrow();
+      expect(f.acknowledge).not.toHaveBeenCalled();
+      await runWithTenantDatabaseScope(db, f.tenant, async (tx) => {
+        expect(
+          await new UserMCPOAuthTokenRepository(tx).getManagedMetadata(f.user, f.server)
+        ).toBeUndefined();
+        expect(
+          (await new MCPManagedOAuthOutboxRepository(tx).listPending(f.tenant))[0]
+        ).toMatchObject({
+          attempt_id: flow.attemptId,
+          kind: 'cancel',
+          transaction_id: start.transaction_id,
+        });
+      });
     });
   }
 );

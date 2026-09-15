@@ -428,6 +428,34 @@ async function settleObservedRefresh(
   return token.oauth_access_token;
 }
 
+// Shared symbol survives independently bundled entry points but cannot arrive in
+// JSON/HTTP errors. Only this adapter mints it before invoking ANY client request.
+const managedUndispatched = Symbol.for('agor.internal.managed-oauth.local-undispatched.v1');
+class ManagedOAuthLocalAdmissionError extends Error {
+  readonly [managedUndispatched] = true;
+  constructor(
+    readonly operationId: string,
+    readonly claimId: string,
+    readonly sequence: string
+  ) {
+    super('Managed OAuth refresh admission is unavailable');
+    this.name = 'ManagedOAuthLocalAdmissionError';
+  }
+}
+function isLocalUndispatched(error: unknown, request: McpOAuthRefreshRequest): boolean {
+  return (
+    error instanceof Error &&
+    managedUndispatched in error &&
+    error[managedUndispatched] === true &&
+    'operationId' in error &&
+    error.operationId === request.operation_id &&
+    'claimId' in error &&
+    error.claimId === request.claim.claim_id &&
+    'sequence' in error &&
+    error.sequence === request.sequence
+  );
+}
+
 /** Shared verified broker adapter. It neither claims nor persists a grant. */
 export function createManagedOAuthRefreshAdapter(options: {
   client: ManagedMCPOAuthClient;
@@ -440,12 +468,35 @@ export function createManagedOAuthRefreshAdapter(options: {
   return {
     acknowledge: options.acknowledge,
     async execute({ request, metadata, recoveryOnly, assertCurrent }) {
+      // Recovery never knows whether a prior process dispatched. Once even the
+      // first client call is invoked, transport uncertainty cannot regain this proof.
+      let requestInvoked = recoveryOnly;
+      const client = new Proxy(options.client, {
+        get(target, property, receiver) {
+          if (property === 'request')
+            return (...args: Parameters<ManagedMCPOAuthClient['request']>) => {
+              requestInvoked = true;
+              return target.request(...args);
+            };
+          return Reflect.get(target, property, receiver);
+        },
+      });
       const current = async () => {
-        await assertCurrent();
-        await options.assertCurrent(request.owner);
+        try {
+          await assertCurrent();
+          await options.assertCurrent(request.owner);
+        } catch (error) {
+          if (!requestInvoked)
+            throw new ManagedOAuthLocalAdmissionError(
+              request.operation_id,
+              request.claim.claim_id,
+              request.sequence
+            );
+          throw error;
+        }
       };
       const policy = {
-        client: options.client,
+        client,
         issuer: options.issuer,
         keys: options.keys,
         now: options.now,
@@ -560,6 +611,18 @@ async function refreshManagedPostgres(
   try {
     commit = await adapter.execute({ request, metadata, recoveryOnly, assertCurrent });
   } catch (error) {
+    if (!recoveryOnly && isLocalUndispatched(error, request)) {
+      await tenantWork(deps, (db) =>
+        new UserMCPOAuthTokenRepository(db).releaseUnstartedManagedRefreshClaim(
+          deps.userId!,
+          deps.mcpServerId,
+          fence,
+          request.operation_id,
+          request.sequence
+        )
+      );
+      throw error;
+    }
     // Independently bundled entry points can carry distinct class constructors.
     // Admit only this internal protocol error tag plus a valid exact wire outcome.
     const outcome =

@@ -346,7 +346,15 @@ export async function executeManagedOAuthOperation(options: {
   keys: ReadonlyMap<string, KeyObject>;
   now: () => number;
   assertCurrent: () => void | Promise<void>;
+  /** Optional total enclosing budget; can only shorten dispatch/recovery waits. */
+  timeoutMs?: number;
 }) {
+  const budget =
+    options.timeoutMs ?? MCP_OAUTH_LIMITS.cell_timeout_ms + MCP_OAUTH_LIMITS.recovery_timeout_ms;
+  if (!Number.isFinite(budget) || budget <= 0)
+    throw new ManagedMCPOAuthProtocolError('unavailable');
+  const deadline = performance.now() + budget;
+  const remaining = () => Math.max(0, Math.floor(deadline - performance.now()));
   const refresh = 'refresh_token' in options.request;
   const request = refresh
     ? McpOAuthRefreshRequestSchema.parse(options.request)
@@ -363,6 +371,7 @@ export async function executeManagedOAuthOperation(options: {
   };
   const assertLive = async (forDispatch: boolean) => {
     await options.assertCurrent();
+    if (remaining() <= 0) throw new ManagedMCPOAuthProtocolError('unavailable');
     if (!mcpOAuthClaimIsLive(request.claim, options.now(), forDispatch)) {
       throw new ManagedMCPOAuthProtocolError('claim_expired');
     }
@@ -375,6 +384,7 @@ export async function executeManagedOAuthOperation(options: {
       id: 'handle' in request ? request.handle : request.transaction_id,
       body: request,
       schema: McpOAuthOperationResponseSchema,
+      timeoutMs: remaining(),
       assertCurrent: () => assertLive(true),
     });
   } catch {
@@ -382,7 +392,7 @@ export async function executeManagedOAuthOperation(options: {
   }
   if (!response || response.status === 'in_progress') {
     if (response) validateManagedOAuthOutcome(response, expected, options.now());
-    return recoverManagedOAuthOperation({ ...options, expected });
+    return recoverManagedOAuthOperation({ ...options, expected, timeoutMs: remaining() });
   }
   if (!response) throw new ManagedMCPOAuthProtocolError('unavailable');
   await assertLive(false);
@@ -403,12 +413,16 @@ export async function recoverManagedOAuthOperation(options: {
   keys: ReadonlyMap<string, KeyObject>;
   now: () => number;
   assertCurrent: () => void | Promise<void>;
+  timeoutMs?: number;
 }) {
   const { expected } = options;
-  const recoveryDeadline = Math.min(
-    expected.claim.deadline_at,
-    options.now() + MCP_OAUTH_LIMITS.recovery_timeout_ms
+  const budget = Math.min(
+    options.timeoutMs ?? MCP_OAUTH_LIMITS.recovery_timeout_ms,
+    MCP_OAUTH_LIMITS.recovery_timeout_ms
   );
+  if (!Number.isFinite(budget) || budget <= 0)
+    throw new ManagedMCPOAuthProtocolError('unavailable');
+  const recoveryDeadline = Math.min(expected.claim.deadline_at, options.now() + budget);
   const monotonicDeadline = performance.now() + Math.max(0, recoveryDeadline - options.now());
   const assertLive = async () => {
     await options.assertCurrent();

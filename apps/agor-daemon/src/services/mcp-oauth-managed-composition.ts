@@ -1,5 +1,4 @@
 /** One deployment composition. Private bearer acquisition never becomes a Feathers method. */
-import { randomUUID } from 'node:crypto';
 import type { AgorConfig, ResolvedExternalLaunchProvider } from '@agor/core/config';
 import {
   getMCPEgressGatewayMode,
@@ -14,22 +13,17 @@ import {
   createManagedOAuthRefreshAdapter,
   refreshAndPersistToken,
 } from '@agor/core/tools/mcp/oauth-refresh';
-import {
-  type AuthenticatedParams,
-  type MCPCatalogEntry,
-  type MCPManagedOAuthGrantMetadata,
-  type MCPManagedOAuthTokenCommit,
-  type MCPServer,
-  McpOAuthAckRequestSchema,
-  McpOAuthAckResponseSchema,
-  mcpOAuthLengthPrefix,
-  mcpOAuthOwnerBytes,
-  mcpOAuthSha256,
-  type UserID,
+import type {
+  AuthenticatedParams,
+  MCPCatalogEntry,
+  MCPManagedOAuthTokenCommit,
+  MCPServer,
+  UserID,
 } from '@agor/core/types';
 import { loadManagedOAuthDeployment } from '../mcp-egress/managed-deployment.js';
 import { ManagedInvalidationPoller } from '../mcp-egress/managed-invalidation-poller.js';
 import type { ManagedGrantAuthorityValidator } from './mcp-oauth-grant-authority.js';
+import { createManagedOAuthAcknowledger } from './mcp-oauth-managed-ack.js';
 import { createManagedOAuthGrantAccess } from './mcp-oauth-managed-grant.js';
 import { resolveManagedOAuthLocalSubject } from './mcp-oauth-managed-identity.js';
 import { createManagedOAuthPersistence } from './mcp-oauth-managed-persistence.js';
@@ -78,37 +72,18 @@ export async function createManagedOAuthServices(input: {
   // Unavailable broker disables managed paths, not unrelated direct/BYO/PAT service startup.
   await registry.refresh().catch(() => undefined);
   const flows = new MCPOAuthPendingFlowAuthority(input.db, masterSecret);
-  const acknowledgeMetadata = async (metadata: MCPManagedOAuthGrantMetadata) => {
-    await deployment.sender.request({
-      operation: 'ack',
-      id: metadata.operation_id,
-      body: McpOAuthAckRequestSchema.parse({
-        protocol_version: 1,
-        operation_id: randomUUID(),
-        owner: metadata.owner,
-        target_operation_id: metadata.operation_id,
-        receipt_id: metadata.receipt_id,
-        claim: metadata.claim,
-        cell_commit_fence: mcpOAuthSha256(
-          mcpOAuthLengthPrefix([
-            'agor:mcp-oauth:committed-receipt:v1',
-            mcpOAuthSha256(mcpOAuthOwnerBytes(metadata.owner)),
-            metadata.receipt_id,
-            metadata.operation_id,
-            metadata.next_sequence,
-          ])
-        ),
-      }),
-      schema: McpOAuthAckResponseSchema,
-      recovery: true,
-      assertCurrent: () => {
-        const capability = registry.capabilities();
-        if (capability.recovery_incarnation !== metadata.owner.recovery_incarnation)
-          throw new ManagedOAuthUnavailableError();
-      },
-    });
-  };
-  const acknowledge = (commit: MCPManagedOAuthTokenCommit) => acknowledgeMetadata(commit.metadata);
+  const acknowledgeMetadata = createManagedOAuthAcknowledger({
+    sender: deployment.sender,
+    assertOwner: (owner) => {
+      const capability = registry.capabilities();
+      if (capability.recovery_incarnation !== owner.recovery_incarnation)
+        throw new ManagedOAuthUnavailableError();
+    },
+  });
+  const acknowledge = (
+    commit: MCPManagedOAuthTokenCommit,
+    execution?: Parameters<typeof acknowledgeMetadata>[1]
+  ) => acknowledgeMetadata(commit.metadata, execution);
   const runtime = new ManagedMCPOAuthRuntime({
     db: input.db,
     flows,

@@ -1,6 +1,7 @@
 import { createManagedMCPFetch } from './mcp-egress/managed-fetch.js';
 import { BranchCleanupStepsService } from './services/branch-cleanup-steps.js';
 import type { ManagedOAuthServices } from './services/mcp-oauth-managed-composition.js';
+import { managedOAuthFailureCode } from './services/mcp-oauth-managed-errors.js';
 /**
  * Service Registration
  *
@@ -6205,7 +6206,11 @@ export async function registerMCPServices(
               server,
               requestAuthorityAssertion(params) ?? (() => {})
             )
-            .catch(() => ({ success: false, error: 'managed_authority_unavailable' }));
+            .catch((error: unknown) => {
+              const code = managedOAuthFailureCode(error);
+              getDaemonMetrics(app).increment('mcp.managed_refresh_failures', 1, { reason: code });
+              return { success: false, error: code };
+            });
         }
         assertDirectMCPOAuthClient(server.auth);
 

@@ -29,7 +29,15 @@ it('upgrades real SQLite 0104, preserves personal grants and requires fresh shar
     ).toHaveLength(2);
     await runMigrations(db, { allowOfflineCutover: true });
     const rows = rawRows(await executeRaw(db, sql`SELECT * FROM user_mcp_oauth_tokens`));
-    expect(rows).toEqual([{ ...fixture.personal, granted_by_user_id: fixture.userId }]);
+    // Later migrations add dormant managed columns; every historical column must remain unchanged.
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      ...fixture.personal,
+      granted_by_user_id: fixture.userId,
+      credential_origin: 'direct',
+      managed_metadata: null,
+      managed_operation_id: null,
+    });
     expect(rawRows(await executeRaw(db, sql`PRAGMA foreign_key_check`))).toEqual([]);
     await expect(
       executeRaw(

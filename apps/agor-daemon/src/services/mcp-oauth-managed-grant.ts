@@ -229,7 +229,9 @@ export function createManagedOAuthGrantAccess({
     try {
       const tenantId = getCurrentTenantId();
       if (!tenantId || !userId) return false;
-      await authority(db, tenantId, userId, server, 'refresh');
+      await runWithTenantDatabaseScope(db, tenantId, (scoped) =>
+        authority(scoped, tenantId, userId, server, 'refresh')
+      );
       return true;
     } catch {
       return false;
@@ -249,19 +251,21 @@ export function createManagedOAuthGrantAccess({
     userId: UserID;
     authorization: string;
   }): Promise<void> {
-    const current = await authority(tenantDb, tenantId, userId, server, 'use');
-    await verifyManagedUseAuthorization({
-      signedAuthorization: current.metadata.use_authorization,
-      authorization,
-      expected: current.metadata.use_claims,
-      currentOwner: current.metadata.owner,
-      issuer: deployment.issuer,
-      keys: deployment.keys,
-      clock: deployment.clock,
-      capabilities: capabilities(),
-      wholeCellEligible: true,
-      enforced: true,
-      assertNotInvalidated: () => assertNotInvalidated(tenantDb, tenantId, current.metadata),
+    await runWithTenantDatabaseScope(tenantDb, tenantId, async (scoped) => {
+      const current = await authority(scoped, tenantId, userId, server, 'use');
+      await verifyManagedUseAuthorization({
+        signedAuthorization: current.metadata.use_authorization,
+        authorization,
+        expected: current.metadata.use_claims,
+        currentOwner: current.metadata.owner,
+        issuer: deployment.issuer,
+        keys: deployment.keys,
+        clock: deployment.clock,
+        capabilities: capabilities(),
+        wholeCellEligible: true,
+        enforced: true,
+        assertNotInvalidated: () => assertNotInvalidated(scoped, tenantId, current.metadata),
+      });
     });
   }
 
