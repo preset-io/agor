@@ -9,12 +9,14 @@ import {
   getCurrentTenantId,
   runWithTenantContext,
   runWithTenantDatabaseScope,
+  SessionRepository,
   shortId,
 } from '@agor/core/db';
 import { GatewayListenerError, getConnector } from '@agor/core/gateway';
 import type {
   GatewayChannel,
   GatewayOutboundMessage,
+  Session,
   SessionID,
   SessionPromptAuthority,
   SessionSdkHomeScope,
@@ -2660,6 +2662,13 @@ describe('GatewayService MCP resolution', () => {
 
   it('attaches gateway MCP defaults through the real guarded SessionsService boundary', async () => {
     const { db, observations, touch } = makeGuardedPostgresDatabase();
+    const markSelection = vi
+      .spyOn(SessionRepository.prototype, 'update')
+      .mockImplementation(async (id, updates) => {
+        touch('session-mcp-selection');
+        expect(updates).toEqual({ mcp_selection_explicit: true });
+        return { session_id: id, ...updates } as Session;
+      });
     const emitted = vi.fn(() => {
       expect(getCurrentTenantId()).toBe('tenant-channel');
       expect(getCurrentTenantDatabaseScope()).toBeUndefined();
@@ -2718,6 +2727,12 @@ describe('GatewayService MCP resolution', () => {
 
     expect(setMCPServers).toHaveBeenCalledWith('sess-new', [userDefaultMcpId], 'gateway');
     expect(addServer).toHaveBeenCalledWith('sess-new', userDefaultMcpId);
+    expect(markSelection).toHaveBeenCalledWith('sess-new', { mcp_selection_explicit: true });
+    expect(observations).toContainEqual({
+      label: 'session-mcp-selection',
+      kind: 'tenant',
+      tenantId: 'tenant-channel',
+    });
     expect(observations).toContainEqual({
       label: 'session-mcp-add',
       kind: 'tenant',

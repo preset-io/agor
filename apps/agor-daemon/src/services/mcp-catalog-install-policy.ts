@@ -37,10 +37,28 @@ function significantAuth(value: MCPAuth | undefined): Record<string, unknown> {
 function isPrescribedCatalogAuth(
   auth: MCPAuth | undefined,
   prescribed: MCPAuth,
-  reconcileMissingCompatibilityMode: boolean
+  reconcileMissingCompatibilityMode: boolean,
+  configuredClient: boolean
 ): boolean {
   const actual = significantAuth(auth);
   const expected = significantAuth(prescribed);
+  // A reviewed configured-client recipe delegates only these two fields to
+  // the saved row. They remain covered by grant fingerprints and redaction;
+  // this is not permission to reuse another owner's row secret.
+  if (configuredClient) {
+    delete actual.oauth_client_id;
+    delete actual.oauth_client_secret;
+    // Public compatibility overrides are independently authoritative at flow
+    // start. Reconnect must preserve them, not mistake Strict for recipe drift
+    // and not replace the configured client with a catalog auth object.
+    if (
+      actual.oauth_compatibility_mode === 'strict' ||
+      actual.oauth_compatibility_mode === 'legacy'
+    ) {
+      delete actual.oauth_compatibility_mode;
+      delete expected.oauth_compatibility_mode;
+    }
+  }
   // Compatibility policy is evaluated from the current catalog. This one
   // reconciliation lets installs created before an entry acquired an explicit
   // strict policy remain the same install without mutating their row.
@@ -82,11 +100,14 @@ export function isCurrentCatalogInstall(
     server.source === 'catalog' &&
     server.catalog_entry_name === entry.name &&
     server.transport === catalogServerTransport(entry) &&
-    sameCatalogEndpoint(server.url, entry.remote_url) &&
+    (entry.oauth?.configured_client
+      ? server.url === entry.remote_url
+      : sameCatalogEndpoint(server.url, entry.remote_url)) &&
     isPrescribedCatalogAuth(
       server.auth,
       prescribed,
-      options.reconcileMissingCompatibilityMode === true
+      options.reconcileMissingCompatibilityMode === true,
+      entry.oauth?.configured_client === true
     ) &&
     Object.keys(server.headers ?? {}).length === 0
   );

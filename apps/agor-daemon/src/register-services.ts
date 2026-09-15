@@ -5898,14 +5898,16 @@ export async function registerMCPServices(
                 executorSessionId as SessionID,
                 true
               ),
-              globalServers: await new MCPServerRepository(db).findAll({
-                scope: 'global',
-                enabled: true,
-                // The task token is issued to the actual prompter. Connector
-                // credentials and private server visibility stay with that
-                // caller rather than silently borrowing the Session owner.
-                usableByUserId: userId,
-              }),
+              globalServers: executorSession.mcp_selection_explicit
+                ? []
+                : await new MCPServerRepository(db).findAll({
+                    scope: 'global',
+                    enabled: true,
+                    // The task token is issued to the actual prompter. Connector
+                    // credentials and private server visibility stay with that
+                    // caller rather than silently borrowing the Session owner.
+                    usableByUserId: userId,
+                  }),
             };
           }
         );
@@ -5956,7 +5958,7 @@ export async function registerMCPServices(
                 assertCurrent: mcpEgressAssertCurrent,
                 resolveDns: ctx.mcpOutboundDnsLookup,
               });
-              if (!grant) throw missingMCPOAuthGrantError(server.auth);
+              if (!grant) throw await missingMCPOAuthGrantError(server);
               headers[serverId] = { authorization: `Bearer ${grant.oauth_access_token}` };
             } catch (error) {
               if (error instanceof OAuthRefreshAuthorityCancelledError) throw error;
@@ -6580,8 +6582,12 @@ export async function registerMCPServices(
                 resolveDns: ctx.mcpOutboundDnsLookup,
               })
             );
-            if (!selectedGrant && !browserReservation)
-              throw missingMCPOAuthGrantError(serverConfig.auth);
+            if (!selectedGrant && !browserReservation) {
+              if (!authoritativeServer) {
+                throw new Conflict('Saved MCP server authority changed. Retry.');
+              }
+              throw await missingMCPOAuthGrantError(authoritativeServer);
+            }
             oauthToken = selectedGrant?.oauth_access_token;
             if (selectedGrant && discoveryAuthority) {
               discoveryAuthority = bindMCPDiscoveryOAuthGrant(

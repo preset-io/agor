@@ -35,9 +35,14 @@
  * PR discussion on #2301. Do not describe this as a closed race.
  */
 
-import { runWithTenantDatabaseScope } from '../../db';
-import type { Database, TenantScopeAwareDatabase } from '../../db/client';
-import { UsersRepository } from '../../db/repositories';
+// The refresh commit calls this inside the daemon's existing tenant unit.
+// Reuse its authority rather than bundling a second scope registry.
+import {
+  type Database,
+  runWithTenantDatabaseScope,
+  type TenantScopeAwareDatabase,
+  UsersRepository,
+} from '@agor/core/db';
 import { isMcpGrantSubjectEntitled } from '../../mcp/member-policy';
 
 /** Refusal to persist a grant for a subject who no longer stands where they did. */
