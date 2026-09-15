@@ -255,3 +255,115 @@ binary without gateway support also restores raw-secret projection even if the
 tenant row says `enforced`; treat that software rollback as the same audited
 security downgrade. Conversation handles and unrelated tasks are not invalidated
 by an MCP server mutation.
+
+## Managed OAuth deployment evidence
+
+Cloud-managed MCP OAuth is a separate, default-off capability. It never inherits
+this guide's direct-mode rollback behavior: a managed connection becomes
+unavailable when enforced mediation, local authority, clock safety or cohort
+eligibility cannot be verified. It must not project reusable credentials to an
+executor or fall back to direct OAuth.
+
+The runtime deployment loader requires Linux, PostgreSQL, the exact reviewed
+Cloud contract **source** SHA-256, the deployed full 40-character release SHA,
+the actual validated database schema digest, and this replica's deployment ID.
+The startup coordinator supplies the latter values and the already resolved,
+frozen external-launch provider/issuer; none comes from an HTTP request. The
+runtime continues to recheck each tenant's enforced gateway mode and local grant
+authority at each physical MCP hop. A deployment-wide attestation is not a
+substitute for those checks.
+
+Example wiring (leave disabled until the independent deployment gates pass):
+
+```yaml
+managed_mcp_oauth:
+  enabled: false
+  new_starts: false
+  exchange: false
+  refresh: false
+  use_authorization_issuance: false
+  revocation: false
+  broker_origin: https://oauth.example.invalid
+  worker_issuer: https://oauth.example.invalid/
+  environment: staging
+  region: us-west-2
+  cell_id: your-cell-id
+  credential_id: your-workload-credential-id
+  sender_key_id: your-workload-key-id
+  sender_private_key_path: /run/agor-managed/sender.pem
+  worker_public_keyring_path: /run/agor-managed/worker-public.json
+  cell_evidence_path: /run/agor-evidence/cell.json
+  clock_health_path: /run/agor-clock/health.json
+  # contract_sha256: exact source_sha256 from the reviewed source-pin.json
+```
+
+The sender key is a workload RS256 key, **not a provider credential**. Its
+regular file must be readable only by its owner (for example `0400` or `0600`).
+All files and ancestor directories must be root- or daemon-owned, with no group
+or other write permission; symlinks, hard-linked files, nonregular files,
+concurrent in-place rewrites, relative paths and oversized input are refused.
+Public evidence can be world-readable, but cannot be world-writable. The
+keyring file contains only `{issuer, keys: [{kid, public_key_pem}]}` with distinct
+key IDs and SPKI RSA public keys of at least 2048 bits. Private-key PEM in this
+public inventory is rejected. The configured worker issuer must match exactly
+and share the configured broker origin. The keyring is fixed for the daemon's
+lifetime; keyring rotation requires a coordinated restart.
+
+The cohort file must match canonical `McpOAuthCellEvidenceSchema`, including
+all expected replicas, the local release/schema/replica identity, enforced
+mediation, independent pre-gateway-executor termination evidence, approval
+reference and attestation digest. A reviewed deployment attestor must refresh
+it before its at-most-120-second validity expires. The getter reads fresh
+attestation, but does not silently accept a different cell authority epoch,
+recovery incarnation or replica cohort after startup. Reinitialization requires
+a new coordinated admission. An expired/missing/mixed cohort fails closed.
+
+### Independent clock-monitor input
+
+`clock_health_path` is a live output of a **separate trusted deployment health
+monitor**, not a file that operators should populate with a current wall time
+or a hardcoded `synchronized: true`. Its closed JSON format is:
+
+- `version`: `1`;
+- `boot_id`: Linux boot UUID for the runtime's host;
+- `monotonic_ms`: sample time from the same Linux `CLOCK_MONOTONIC` domain as
+  the daemon (`process.hrtime`), including the same time namespace;
+- `utc_ms`: independently established UTC at that sample time;
+- `local_uncertainty_ms`: a conservative local error bound, including oscillator
+  holdover error throughout the next five seconds;
+- `worker_uncertainty_ms`: the independently established worker signing-clock
+  error budget;
+- `synchronized`: `true` only while the monitor can establish those bounds.
+
+The monitor must atomically publish a new regular file frequently enough to
+keep sample age at most five seconds. It must report unsynchronized or stop
+publishing on source loss, uncertain suspend/resume, backward steps, namespace
+mismatch, or unbounded holdover. The runtime rejects old, future, wrong-boot,
+malformed and unsynchronized samples; the combined error must not exceed five
+seconds. Unsafe clock evidence latches the runtime clock closed until
+reinitialization. `Date.now()`, file modification time and a process heartbeat
+are not independent UTC evidence. This runtime implements the bounded input
+consumer; approving and operating the independent monitor and its time sources
+remains a deployment prerequisite, not an assurance manufactured by Agor.
+
+### Kubernetes / Helm integration
+
+Keep the chart's managed feature disabled by default. This repository does not
+ship the Cloud deployment chart. Its operator must wire:
+
+1. A read-only workload-key mount and immutable public keyring mount, separated
+   from provider credentials and from executor mounts.
+2. Read-only mounts of the trusted cohort-attestor and clock-monitor output
+   directories. Producers publish with atomic rename, not in-place writes;
+   neither runtime requests nor executors can modify them.
+3. Full `AGOR_BUILD_SHA`, actual replica identity and validated database schema
+   evidence in the startup coordinator. Mixed/old replicas must not be attested.
+
+Kubernetes projected Secret/ConfigMap files normally use symlinks, which this
+loader deliberately refuses. Use a trusted init-container to copy the selected
+workload key/public inventory to regular files in a dedicated volume, set the
+required ownership/modes, and mount that volume read-only in the daemon. Do not
+relax the reader or expose the source volume to executors to make a projected
+symlink work. A monitor publishing from a different host or time namespace must
+not be connected as if its monotonic clock were the daemon's. The file paths
+and public evidence alone do not authorize activation or certify a provider.
