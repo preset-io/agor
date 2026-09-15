@@ -17,6 +17,7 @@ import {
 } from '@agor/core/tools/mcp/managed-oauth-client';
 import {
   type MCPManagedOAuthResolvedProfile,
+  type MCPManagedOAuthReturnResult,
   type MCPManagedOAuthStartResult,
   type MCPManagedOAuthTokenCommit,
   type MCPOAuthAttemptID,
@@ -27,6 +28,7 @@ import {
   McpOAuthAuthorityResponseSchema,
   type McpOAuthOwner,
   McpOAuthPrepareResponseSchema,
+  McpOAuthReturnTicketRequestSchema,
   McpOAuthTransactionRequestSchema,
   McpOAuthTransactionStatusSchema,
   mcpOAuthOwnerBytes,
@@ -312,6 +314,73 @@ export class ManagedMCPOAuthRuntime {
       await d.flows.retireManagedAttempt(record, 'managed_start_failed').catch(() => undefined);
       throw error;
     }
+  }
+
+  /** Browser navigation correlation only. The authenticated worker remains the ticket authority. */
+  async acceptReturn(input: {
+    tenantId: string;
+    userId: UserID;
+    transactionId: string;
+    ticket: string;
+    clientNonce: string;
+    requestOrigin: string;
+    assertCurrent: () => void | Promise<void>;
+  }): Promise<MCPManagedOAuthReturnResult> {
+    const d = this.dependencies;
+    await input.assertCurrent();
+    if (!/^[a-f0-9-]{36}$/i.test(input.clientNonce)) throw new ManagedOAuthUnavailableError();
+    const record = await d.flows.getManagedForTransaction(
+      input.tenantId,
+      input.userId,
+      input.transactionId
+    );
+    if (
+      !record?.managedMetadata ||
+      !record.isCurrent ||
+      !sameDigest(
+        record.managedMetadata.prepare_request.client_nonce_hash,
+        mcpOAuthSha256(input.clientNonce)
+      )
+    )
+      throw new ManagedOAuthUnavailableError();
+    const owner = record.managedMetadata.owner;
+    const assertCurrent = async () => {
+      await input.assertCurrent();
+      await this.current(owner, 'exchange');
+      const current = await d.flows.getManagedForTransaction(
+        input.tenantId,
+        input.userId,
+        input.transactionId
+      );
+      if (
+        !current?.managedMetadata ||
+        !equalOwner(current.managedMetadata.owner, owner) ||
+        current.expiresAt.getTime() <= d.now()
+      )
+        throw new ManagedOAuthUnavailableError();
+    };
+    const request = McpOAuthReturnTicketRequestSchema.parse({
+      protocol_version: 1,
+      operation_id: randomUUID(),
+      owner,
+      ticket: input.ticket,
+      client_nonce_hash: mcpOAuthSha256(input.clientNonce),
+      request_origin: input.requestOrigin,
+    });
+    const evidence = await d.client.request({
+      operation: 'return_ticket',
+      body: request,
+      schema: McpOAuthTransactionStatusSchema.pick({
+        protocol_version: true,
+        transaction_id: true,
+        owner: true,
+      }),
+      assertCurrent,
+    });
+    if (!equalOwner(evidence.owner, owner) || evidence.transaction_id !== input.transactionId)
+      throw new ManagedOAuthUnavailableError();
+    await assertCurrent();
+    return { accepted: true, attempt_id: record.attemptId };
   }
 
   /** Status evidence may trigger completion; a browser ticket or postMessage never does. */

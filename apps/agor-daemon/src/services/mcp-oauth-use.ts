@@ -87,9 +87,21 @@ export async function acquireMCPOAuthGrant(
   const grant = await read();
   if (!grant) return null;
   if (grant.refresh_status === 'ambiguous') throw new AmbiguousRefreshError();
+  // A token may outlive its fixed co-issued permit; refresh before the earlier deadline.
+  const managed = grant.credential_origin === 'cloud_managed_v1';
+  if (managed && (!deps.managed || !grant.managed_metadata))
+    throw new GrantConfigurationChangedError();
+  const effectiveExpiry = managed
+    ? new Date(
+        Math.min(
+          grant.oauth_token_expires_at?.getTime() ?? 0,
+          grant.managed_metadata!.use_claims.expires_at
+        )
+      )
+    : grant.oauth_token_expires_at;
   if (
     grant.refresh_status === 'refreshing' ||
-    (needsRefresh(grant.oauth_token_expires_at) && grant.oauth_refresh_token)
+    (needsRefresh(effectiveExpiry) && grant.oauth_refresh_token)
   ) {
     await runWithTenantDatabaseScope(deps.db, deps.tenantId, (db) =>
       assertMcpGrantSubjectEntitled({
@@ -131,12 +143,15 @@ export async function acquireMCPOAuthGrant(
     ) {
       throw new MCPOAuthRefreshBusyError();
     }
+    if (
+      managed &&
+      (!committed.managed_metadata ||
+        committed.managed_metadata.use_claims.expires_at <= Date.now())
+    )
+      throw new MCPOAuthRefreshBusyError();
     return committed;
   }
-  if (
-    !grant.oauth_access_token ||
-    (grant.oauth_token_expires_at && grant.oauth_token_expires_at.getTime() <= Date.now())
-  ) {
+  if (!grant.oauth_access_token || (effectiveExpiry && effectiveExpiry.getTime() <= Date.now())) {
     throw new MissingRefreshTokenError();
   }
   return grant;

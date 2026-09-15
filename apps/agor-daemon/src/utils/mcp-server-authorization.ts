@@ -276,7 +276,8 @@ export { canConfigureMCPServers as canConfigureMcpServers } from '@agor/core/mcp
  * - `oauth-disconnect` — revocation. Refusing a demoted user the ability to
  *   drop their own grant would strand the credential this change exists to
  *   contain, so it stays open at every role.
- * - `oauth-status`, `oauth-attempt-status` — reads of the caller's own state.
+ * - `oauth-status`, `oauth-attempt-status` — caller state. Managed attempt
+ *   reconciliation checks the actual stored subject's role at claim and commit.
  */
 export const MCP_CAPABILITY_ISSUING_SERVICE_PATHS = [
   // Reserves the one-shot socket/caller binding required before a blocking
@@ -284,6 +285,8 @@ export const MCP_CAPABILITY_ISSUING_SERVICE_PATHS = [
   'mcp-servers/oauth-browser-reservations',
   // Mints an authorization URL and a pending flow against a saved server.
   'mcp-servers/oauth-start',
+  // Consumes a caller/nonce-bound navigation ticket, never direct provider state.
+  'mcp-servers/oauth-managed-return',
   // Exchanges the authorization code and persists the resulting token.
   'mcp-servers/oauth-complete',
   // Forces a refresh, extending a grant's lifetime on demand.

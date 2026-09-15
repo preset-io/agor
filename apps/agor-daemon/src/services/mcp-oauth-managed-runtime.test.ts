@@ -102,6 +102,14 @@ function setup() {
       return record;
     }),
     getForUser: vi.fn(async () => record),
+    getManagedForTransaction: vi.fn(async (tenant: string, user: string, transaction: string) =>
+      record?.isCurrent &&
+      record.tenantId === tenant &&
+      record.userId === user &&
+      record.managedTransactionId === transaction
+        ? record
+        : null
+    ),
     bindManagedTransaction: vi.fn(async (_record, id) => {
       order.push('bind-transaction');
       record.managedTransactionId = id;
@@ -132,6 +140,12 @@ function setup() {
         },
       };
     }
+    if (options.operation === 'return_ticket')
+      return {
+        protocol_version: 1,
+        transaction_id: record.managedTransactionId,
+        owner: record.managedMetadata!.owner,
+      };
     if (options.operation === 'prepare')
       return {
         protocol_version: 1,
@@ -245,5 +259,63 @@ describe('managed start cell choreography', () => {
     });
     await expect(f.runtime.start(f.input)).rejects.toThrow('socket revoked');
     expect(f.flows.retireManagedAttempt).toHaveBeenCalledOnce();
+  });
+});
+
+describe('managed browser return is correlation, never credential authority', () => {
+  async function flow() {
+    const f = setup();
+    await f.runtime.start(f.input);
+    f.request.mockClear();
+    const input = {
+      tenantId: f.input.tenantId,
+      userId: f.input.userId,
+      transactionId: 'transaction_alpha',
+      ticket: 'T'.repeat(43),
+      clientNonce: f.input.clientNonce,
+      requestOrigin: 'https://cell.example.test',
+      assertCurrent: vi.fn(),
+    };
+    return { ...f, returnInput: input };
+  }
+  it('accepts only the original local nonce and exact worker owner, without minting success', async () => {
+    const f = await flow();
+    await expect(f.runtime.acceptReturn(f.returnInput)).resolves.toEqual({
+      accepted: true,
+      attempt_id: 'attempt_alpha',
+    });
+    expect(f.request.mock.calls.map((call) => call[0].operation)).toEqual(['return_ticket']);
+    expect(f.readRecord().status).toBe('pending');
+    expect(f.runtime.dependencies.persist).not.toHaveBeenCalled();
+  });
+  for (const field of ['tenantId', 'userId', 'transactionId', 'clientNonce'] as const)
+    it(`refuses changed ${field} before broker I/O`, async () => {
+      const f = await flow();
+      await expect(
+        f.runtime.acceptReturn({
+          ...f.returnInput,
+          [field]: field === 'clientNonce' ? '00000000-0000-4000-8000-000000000002' : 'other',
+        })
+      ).rejects.toThrow();
+      expect(f.request).not.toHaveBeenCalled();
+    });
+  it('does not accept a worker response for a different transaction', async () => {
+    const f = await flow();
+    f.request.mockResolvedValue({
+      protocol_version: 1,
+      transaction_id: 'another',
+      owner: f.readRecord().managedMetadata!.owner,
+    });
+    await expect(f.runtime.acceptReturn(f.returnInput)).rejects.toThrow();
+  });
+  it('rechecks current local authority after ticket consumption', async () => {
+    const f = await flow();
+    const original = f.request.getMockImplementation()!;
+    f.request.mockImplementation(async (options) => {
+      const result = await original(options);
+      f.readRecord().isCurrent = false;
+      return result;
+    });
+    await expect(f.runtime.acceptReturn(f.returnInput)).rejects.toThrow();
   });
 });
