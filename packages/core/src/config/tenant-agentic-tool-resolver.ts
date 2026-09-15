@@ -65,6 +65,7 @@ export interface ResolvedProviderConnection {
   source: ProviderConnectionSource;
   policy: ProviderResolutionPolicy;
   useNativeAuth: boolean;
+  managedOAuth?: import('../types').ManagedOAuthSelector;
   decryptionFailed?: boolean;
 }
 
@@ -81,6 +82,7 @@ async function resolveUserConnection(
 ): Promise<{
   connection: ProviderConnection;
   useNativeAuth: boolean;
+  managedOAuth?: import('../types').ManagedOAuthSelector;
   decryptionFailed?: boolean;
 } | null> {
   const row = await select(db).from(users).where(eq(users.user_id, userId)).one();
@@ -107,6 +109,9 @@ async function resolveUserConnection(
     // older ~/.claude/.credentials.json active again. A managed-file source is
     // written only by the OAuth service after the file write succeeds.
     if (claudeSource === 'none') return null;
+    if (claudeSource === 'managed_oauth') {
+      return { connection: {}, useNativeAuth: false, managedOAuth: { provider: 'claude-code' } };
+    }
     if (claudeSource === 'managed_file') {
       return { connection: {}, useNativeAuth: true };
     }
@@ -182,6 +187,7 @@ export async function resolveProviderConnection(
         source: 'user' as const,
         connection: user.connection,
         useNativeAuth: user.useNativeAuth,
+        managedOAuth: user.managedOAuth,
         decryptionFailed: user.decryptionFailed,
       }
     : null;
@@ -211,13 +217,15 @@ export async function resolveProviderConnection(
         decryptionFailed: true,
       };
     }
-    if ((connection && hasCredential(canonical, connection)) || useNativeAuth) {
+    const managedOAuth = 'managedOAuth' in candidate ? candidate.managedOAuth : undefined;
+    if ((connection && hasCredential(canonical, connection)) || useNativeAuth || managedOAuth) {
       return {
         tool: canonical,
         connection,
         source,
         policy,
         useNativeAuth,
+        ...(managedOAuth ? { managedOAuth } : {}),
         ...('decryptionFailed' in candidate && candidate.decryptionFailed
           ? { decryptionFailed: true }
           : {}),

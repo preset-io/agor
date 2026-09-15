@@ -41,6 +41,24 @@ const connectionOf = (result: { connection: unknown }) =>
   result.connection as Record<string, string | undefined>;
 
 describe('resolveProviderConnection — claude-code native vs env', () => {
+  dbTest(
+    'backend OAuth selects a non-secret configured connection, never native files or a stale token',
+    async ({ db }) => {
+      const userId = await seedUser(db, {
+        source: 'managed_oauth',
+        tools: {
+          'claude-code': { CLAUDE_CODE_OAUTH_TOKEN: encryptApiKey('stale-token') },
+        },
+      });
+      expect(await resolveProviderConnection('claude-code', { userId, db })).toMatchObject({
+        source: 'user',
+        connection: {},
+        useNativeAuth: false,
+        managedOAuth: { provider: 'claude-code' },
+      });
+    }
+  );
+
   dbTest('explicit managed-file source → native auth, no env injection', async ({ db }) => {
     const userId = await seedUser(db, { method: 'subscription', source: 'managed_file' });
     const result = await resolveProviderConnection('claude-code', { userId, db });

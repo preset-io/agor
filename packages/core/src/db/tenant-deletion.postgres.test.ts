@@ -40,6 +40,17 @@ async function seedTenant(db: Database, tenantId: string): Promise<void> {
       email: `tenant-deletion-${tenantId}-${generateId()}@example.invalid`,
       role: 'member',
     });
+    await executeRaw(
+      scoped,
+      sql`INSERT INTO user_provider_oauth_grants (
+        tenant_id, user_id, provider, grant_generation, binding_version,
+        binding_fingerprint, established_attempt_id, sealed_access_token,
+        sealed_refresh_token, updated_at
+      ) VALUES (
+        ${tenantId}, ${ownerId}, 'claude-code', 1, 1, 'test-binding',
+        'test-attempt', 'synthetic-sealed-access', 'synthetic-sealed-refresh', CURRENT_TIMESTAMP
+      )`
+    );
     const repoId = generateId();
     await new RepoRepository(scoped).create({
       repo_id: repoId,
@@ -317,6 +328,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('deleteTenantData (PostgreS
     expect(result.tenantDataDeleted).toBe(true);
     expect(typeof result.schemaVersion).toBe('string');
     expect(result.schemaVersion.length).toBeGreaterThan(0);
+    expect(result.rowCounts.user_provider_oauth_grants).toBe(1);
     expect(result.rowCounts.sessions).toBeGreaterThanOrEqual(1);
     expect(result.rowCounts.repos).toBeGreaterThanOrEqual(1);
     expect(result.rowCounts.branches).toBeGreaterThanOrEqual(1);
@@ -327,6 +339,13 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('deleteTenantData (PostgreS
     // Tenant A erased, tenant B untouched.
     expect(await countTenantSessions(db, tenantA)).toBe(0);
     expect(await countTenantSessions(db, tenantB)).toBe(1);
+
+    await runWithTenantDatabaseScope(db, tenantB, async (scoped) => {
+      const rows = rowsOf(
+        await executeRaw(scoped, sql`SELECT tenant_id FROM user_provider_oauth_grants`)
+      );
+      expect(rows).toEqual([{ tenant_id: tenantB }]);
+    });
 
     // Second run deletes nothing yet still reports success.
     const second = await deleteTenantData(db, tenantA);
@@ -408,6 +427,32 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('deleteTenantData (PostgreS
       if ((await countTenantSessions(db, tenantId)) > 0) {
         await deleteTenantData(db, tenantId);
       }
+    }
+  });
+
+  it.each([
+    "tenant_id = NULLIF(current_setting('agor.tenant_id', true), '')",
+    "COALESCE(current_setting('agor.system_scope', true), '') = '' AND tenant_id = COALESCE(NULLIF(current_setting('agor.tenant_id', true), ''), 'default')",
+  ])('rejects a weakened provider grant policy: %s', async (predicate) => {
+    const policy = sql`tenant_isolation_user_provider_oauth_grants`;
+    const table = sql`public.user_provider_oauth_grants`;
+    const install = async (expression: string) => {
+      await executeRaw(db, sql`DROP POLICY ${policy} ON ${table}`);
+      await executeRaw(
+        db,
+        sql`CREATE POLICY ${policy} ON ${table}
+        USING (${sql.raw(expression)}) WITH CHECK (${sql.raw(expression)})`
+      );
+    };
+    try {
+      await install(predicate);
+      await expect(
+        deleteTenantData(db, `td-grant-${generateId()}`, { dryRun: true })
+      ).rejects.toThrow(/user_provider_oauth_grants.*canonical tenant_id equality/);
+    } finally {
+      await install(
+        "COALESCE(current_setting('agor.system_scope', true), '') = '' AND tenant_id = NULLIF(current_setting('agor.tenant_id', true), '')"
+      );
     }
   });
 

@@ -220,7 +220,12 @@ export type AgenticAuthMethods = Partial<Record<'claude-code' | 'codex', Agentic
  * particular, `none` is a durable opt-out: an old `.credentials.json` must not
  * become active merely because a pasted token was cleared.
  */
-export type ClaudeCredentialSource = 'api_key' | 'subscription_token' | 'managed_file' | 'none';
+export type ClaudeCredentialSource =
+  | 'api_key'
+  | 'subscription_token'
+  | 'managed_file'
+  | 'managed_oauth'
+  | 'none';
 export type AgenticCredentialSources = Partial<Record<'claude-code', ClaudeCredentialSource>>;
 
 export interface GeminiConfig {

@@ -15,6 +15,11 @@ import {
   UserMCPOAuthTokenRepository,
 } from '@agor/core/db';
 import {
+  ROTATING_GRANT_OBSERVE_INTERVAL_MS,
+  ROTATING_GRANT_OBSERVE_TIMEOUT_MS,
+  refreshRotatingGrant,
+} from '../../oauth/rotating-grant-refresh';
+import {
   assertDirectMCPOAuthClient,
   type MCPOAuthClientMode,
   type MCPServerID,
@@ -50,8 +55,8 @@ import {
 import { resolveTokenExpiry } from './oauth-token-expiry';
 
 export const REFRESH_BUFFER_MS = 60_000;
-const REFRESH_OBSERVE_TIMEOUT_MS = 20_000;
-const REFRESH_OBSERVE_INTERVAL_MS = 100;
+const REFRESH_OBSERVE_TIMEOUT_MS = ROTATING_GRANT_OBSERVE_TIMEOUT_MS;
+const REFRESH_OBSERVE_INTERVAL_MS = ROTATING_GRANT_OBSERVE_INTERVAL_MS;
 
 export class InvalidGrantError extends Error {
   readonly code = 'invalid_grant';
@@ -731,114 +736,101 @@ async function refreshPostgres(deps: RefreshAndPersistDeps): Promise<string> {
 
   const row = claim.token;
   if (row.credential_origin === 'cloud_managed_v1') return refreshManagedPostgres(deps, row, false);
-  const fence = {
-    claimId: claim.claimId,
-    refreshGeneration: claim.refreshGeneration,
-    grantGeneration: claim.grantGeneration,
-    grantBindingFingerprint: row.grant_binding_fingerprint,
-  };
-  const releaseUnstartedClaim = async (error: Error): Promise<never> => {
-    await tenantWork(deps, (db) =>
-      new UserMCPOAuthTokenRepository(db).finishRefreshClaim(
-        deps.userId,
-        deps.mcpServerId,
-        fence,
-        'idle'
-      )
-    );
-    throw error;
-  };
-  if (!row.oauth_refresh_token) {
-    return releaseUnstartedClaim(new MissingRefreshTokenError());
-  }
-  if (!row.oauth_client_id) return releaseUnstartedClaim(new MissingClientIdError());
-  if (!row.oauth_token_endpoint) {
-    return releaseUnstartedClaim(new MissingTokenEndpointError());
-  }
-  try {
-    await tenantWork(deps, (db) => assertGrantStillAuthorized(deps, row, db));
-  } catch (error) {
-    return releaseUnstartedClaim(
-      error instanceof Error ? error : new GrantConfigurationChangedError()
-    );
-  }
-  try {
-    const result = await refreshMCPToken({
-      tokenEndpoint: row.oauth_token_endpoint,
-      refreshToken: row.oauth_refresh_token,
-      clientId: row.oauth_client_id,
-      clientSecret: row.oauth_client_secret,
-      resourceUri: row.oauth_resource_uri,
-      redirectUri: row.oauth_redirect_uri,
-      tokenEndpointAuthMethod: row.oauth_token_endpoint_auth_method,
-      allowLocalhostHttp: deps.allowLocalhostHttpDevelopment,
-      assertCurrent: deps.assertCurrent,
-      resolveDns: deps.resolveDns,
-    });
-    const expiry = resolveTokenExpiry(result, result.access_token);
-    const committed = await tenantWork(deps, async (db) => {
-      // Inside this unit of work rather than before it: the entitlement is a
-      // precondition of the write, and on PostgreSQL this callback is the
-      // transaction the write commits in. See `assertMcpGrantSubjectEntitled`
-      // for the residual window this still leaves open.
-      await assertGrantSubjectForRefresh(deps, db);
-      await assertGrantStillAuthorized(deps, row, db);
-      return new UserMCPOAuthTokenRepository(db).completeClaimedRefresh(
-        deps.userId,
-        deps.mcpServerId,
-        fence,
-        {
-          accessToken: result.access_token,
-          refreshToken: result.refresh_token,
-          expiresAt: expiry.expiresAt,
-        }
-      );
-    });
-    if (!committed) return observeCommittedRefresh(deps, fence);
-    console.log('[MCP OAuth Refresh] refresh_succeeded category=committed');
-    return (await loadExactAuthorizedGrant(deps, fence)).oauth_access_token;
-  } catch (error) {
-    if (error instanceof InvalidGrantError) {
-      const deleted = await tenantWork(deps, (db) =>
-        new UserMCPOAuthTokenRepository(db).deleteClaimedInvalidGrant(
+  type Claim = { row: UserMCPOAuthToken; fence: MCPOAuthRefreshVersion & { claimId: string } };
+  return refreshRotatingGrant<Claim, RefreshMCPTokenResult, string>({
+    async claim() {
+      // The sole repository claim above routes managed authority before the direct adapter.
+      return {
+        owned: true,
+        claim: {
+          row,
+          fence: {
+            claimId: claim.claimId,
+            refreshGeneration: claim.refreshGeneration,
+            grantGeneration: claim.grantGeneration,
+            grantBindingFingerprint: row.grant_binding_fingerprint,
+          },
+        },
+      };
+    },
+    async prepare({ row }) {
+      if (!row.oauth_refresh_token) throw new MissingRefreshTokenError();
+      if (!row.oauth_client_id) throw new MissingClientIdError();
+      if (!row.oauth_token_endpoint) throw new MissingTokenEndpointError();
+      await tenantWork(deps, (db) => assertGrantStillAuthorized(deps, row, db));
+    },
+    exchange: ({ row }) =>
+      refreshMCPToken({
+        tokenEndpoint: row.oauth_token_endpoint!,
+        refreshToken: row.oauth_refresh_token!,
+        clientId: row.oauth_client_id!,
+        clientSecret: row.oauth_client_secret,
+        resourceUri: row.oauth_resource_uri,
+        redirectUri: row.oauth_redirect_uri,
+        tokenEndpointAuthMethod: row.oauth_token_endpoint_auth_method,
+        allowLocalhostHttp: deps.allowLocalhostHttpDevelopment,
+        assertCurrent: deps.assertCurrent,
+        resolveDns: deps.resolveDns,
+      }),
+    commit: ({ row, fence }, result) =>
+      tenantWork(deps, async (db) => {
+        await assertGrantSubjectForRefresh(deps, db);
+        await assertGrantStillAuthorized(deps, row, db);
+        return new UserMCPOAuthTokenRepository(db).completeClaimedRefresh(
           deps.userId,
           deps.mcpServerId,
-          fence
-        )
+          fence,
+          {
+            accessToken: result.access_token,
+            refreshToken: result.refresh_token,
+            expiresAt: resolveTokenExpiry(result, result.access_token).expiresAt,
+          }
+        );
+      }),
+    deliver: async ({ fence }) => (await loadExactAuthorizedGrant(deps, fence)).oauth_access_token,
+    observe: ({ fence }) => observeCommittedRefresh(deps, fence),
+    async recoverCommitted({ fence }) {
+      const row = await tenantWork(deps, (db) =>
+        new UserMCPOAuthTokenRepository(db).getToken(deps.userId, deps.mcpServerId)
       );
-      if (!deleted) return observeCommittedRefresh(deps, fence);
-      console.warn('[MCP OAuth Refresh] refresh_failed category=invalid_grant');
-      notifyInvalidGrant(deps);
-      throw error;
-    }
-    if (error instanceof OAuthRefreshAuthorityCancelledError) {
+      if (
+        !row ||
+        !exactGrantMatches(row, fence) ||
+        row.refresh_status !== 'idle' ||
+        row.refresh_success_generation < fence.refreshGeneration
+      )
+        return null;
+      return { value: (await loadExactAuthorizedGrant(deps, fence)).oauth_access_token };
+    },
+    classify(error) {
+      if (error instanceof InvalidGrantError) return 'invalid';
+      if (error instanceof OAuthRefreshAuthorityCancelledError) return 'cancelled';
+      if (error instanceof OAuthRefreshExchangeError && !error.ambiguous) return 'rejected';
+      return 'ambiguous';
+    },
+    async settle({ fence }, outcome) {
+      if (outcome === 'invalid') {
+        const deleted = await tenantWork(deps, (db) =>
+          new UserMCPOAuthTokenRepository(db).deleteClaimedInvalidGrant(
+            deps.userId,
+            deps.mcpServerId,
+            fence
+          )
+        );
+        if (deleted) notifyInvalidGrant(deps);
+        else await observeCommittedRefresh(deps, fence);
+        return;
+      }
       await tenantWork(deps, (db) =>
         new UserMCPOAuthTokenRepository(db).finishRefreshClaim(
           deps.userId,
           deps.mcpServerId,
           fence,
-          'idle'
+          outcome === 'ambiguous' ? 'ambiguous' : 'idle'
         )
       );
-      console.warn('[MCP OAuth Refresh] refresh_cancelled category=authority_pre_dispatch');
-      throw error;
-    }
-    const ambiguous = !(error instanceof OAuthRefreshExchangeError) || error.ambiguous;
-    await tenantWork(deps, (db) =>
-      new UserMCPOAuthTokenRepository(db).finishRefreshClaim(
-        deps.userId,
-        deps.mcpServerId,
-        fence,
-        ambiguous ? 'ambiguous' : 'idle'
-      )
-    );
-    console.warn(
-      `[MCP OAuth Refresh] refresh_failed category=${
-        error instanceof OAuthRefreshExchangeError ? error.category : 'local_ambiguous'
-      }`
-    );
-    throw error;
-  }
+    },
+  });
 }
 
 /**

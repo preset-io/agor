@@ -361,20 +361,26 @@ Agor uses these credentials only to authenticate the agent runtime with the prov
 
 Mixing is fine: one user can run on a Claude subscription token while teammates use a workspace API key.
 
-The in-app **Sign in with Claude** OAuth flow is intentionally not a default
-authentication option. Operators must explicitly enable
-`agentic_tools.claude_subscription_oauth: true` after obtaining the appropriate
-provider authorization/client contract; see [Operator configuration](./config-yaml).
-Absent that clearance flag, Agor continues to support Anthropic API keys and
-manually pasted `claude setup-token` credentials without exposing the OAuth
-endpoint or tab. Managed sign-in additionally requires local sandbox execution
-with persistent per-user homes and `sandbox.home_mode: per_user`; other
-topologies fail closed. In that profile the daemon, not Claude Code, owns token
-refresh. Before each sandbox spawn Agor safely prepares the real `.claude`
-store; bubblewrap binds that writable directory as an immutable mountpoint and
-masks the credential, generation, and mutation-lock leaves. Claude settings,
-plugins, projects, and fork/resume state remain writable at their canonical
-paths.
+The in-app **Sign in with Claude** flow is enabled by default only when a supported
+storage mode is operational. Operators may opt out with
+`agentic_tools.claude_subscription_oauth: false`; provider approval remains a
+separate release prerequisite. See [Operator configuration](./config-yaml).
+
+Contained local sandbox deployments retain daemon-owned credential files and
+unchanged isolation gates. Supported delegated PostgreSQL deployments instead
+keep encrypted personal grants in the backend. Refresh credentials never reach
+agent/helper runtimes: only a task actor's access token is delivered through the
+existing authenticated task RPC. API keys and pasted tokens remain available.
+
+The additive `0110_user_provider_oauth_grants` schema introduces an incompatible
+source/attempt protocol and requires the offline stop → migrate → start procedure
+above. No mixed old/new writer cohort or automatic filesystem import is supported.
+Tenant re-home and restored historical rotating grants require reconnect.
+
+Refresh happens before a new task starts. A long-running task can outlive its
+access token; send a follow-up prompt in the same session after an expiry failure
+to start a new task while preserving SDK resume state. No automatic prompt replay or billing fallback occurs.
+Disconnect prevents new token delivery but cannot revoke already-delivered bearers.
 
 <a id="claude-max-pro" />
 

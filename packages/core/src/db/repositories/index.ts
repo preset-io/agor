@@ -58,4 +58,5 @@ export * from './user-api-keys';
 export * from './user-external-identities';
 export * from './user-mcp-oauth-tokens';
 export * from './user-primary-teammate';
+export * from './user-provider-oauth-grants';
 export * from './users';

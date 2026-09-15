@@ -38,6 +38,7 @@ import type * as ClaudeSdk from '@anthropic-ai/claude-agent-sdk';
 import { inspectClaudeAuthViaExecutor } from '../utils/executor-claude-auth.js';
 import { inspectCodexAuthViaExecutor } from '../utils/executor-codex-auth.js';
 import { isRealAuthSource } from './check-auth-helpers.js';
+import type { ClaudeBackendOAuth } from './claude-backend-oauth.js';
 import { resolveCodexCredentialRoute } from './codex-auth-shared.js';
 
 const FETCH_TIMEOUT_MS = 8_000;
@@ -379,7 +380,8 @@ async function probeClaudeAuthFile(
 
 export function createCheckAuthService(
   db: TenantScopeAwareDatabase,
-  config: DeepReadonly<AgorConfig>
+  config: DeepReadonly<AgorConfig>,
+  backend?: ClaudeBackendOAuth
 ) {
   return {
     async create(
@@ -434,15 +436,33 @@ export function createCheckAuthService(
       }
 
       // Otherwise resolve from the tenant's explicit user/workspace policy.
-      const { apiKey, decryptionFailed, connection, useNativeAuth } = await withTenantDatabase(
-        (tenantDb) =>
+      const { apiKey, decryptionFailed, connection, useNativeAuth, managedOAuth } =
+        await withTenantDatabase((tenantDb) =>
           resolveApiKey(keyName, {
             userId,
             db: tenantDb,
             tool,
           })
-      );
+        );
 
+      if (managedOAuth) {
+        if (!backend || !userId)
+          return unauthenticated('none', 'Saved Claude login is unavailable.');
+        try {
+          await backend.authorize(String(getCurrentTenantId()), userId, true);
+          const status = await backend.status(String(getCurrentTenantId()), userId);
+          // No polling-triggered refresh, bearer response, SDK/helper process,
+          // or false claim of a successful provider validation.
+          return {
+            ...(status.usable ? unknown(status.hint) : unauthenticated('none', status.hint)),
+            managedOAuth: { saved: status.saved, usable: status.usable },
+          };
+        } catch {
+          return unknown(
+            'Saved Claude login is unavailable under current deployment or workspace policy.'
+          );
+        }
+      }
       if (decryptionFailed) {
         return unauthenticated(
           'none',

@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { ExecutionCredentialHome } from './credential-home-identity.js';
 
 const configMocks = vi.hoisted(() => ({
   hasCrossReplicaExecutorCredentialLock: vi.fn(() => false),
@@ -8,13 +9,15 @@ const configMocks = vi.hoisted(() => ({
 }));
 
 const homeMocks = vi.hoisted(() => ({
-  resolveExecutionCredentialHome: vi.fn(async ({ userId }: { userId: string }) => ({
-    delegatedHomeKey: null,
-    homeStore: `/homes/${userId}`,
-    homeStoreSource: 'canonical',
-  })),
+  resolveExecutionCredentialHome: vi.fn(
+    async ({ userId }: { userId: string }): Promise<ExecutionCredentialHome> => ({
+      delegatedHomeKey: null,
+      homeStore: `/homes/${userId}`,
+      homeStoreSource: 'canonical',
+    })
+  ),
   sameExecutionCredentialHome: vi.fn(
-    (a: { homeStore: string }, b: { homeStore: string }) => a.homeStore === b.homeStore
+    (a: ExecutionCredentialHome, b: ExecutionCredentialHome) => a.homeStore === b.homeStore
   ),
 }));
 
@@ -23,6 +26,12 @@ const dbMocks = vi.hoisted(() => ({
     async (db: unknown, _tenantId: unknown, work: (db: unknown) => unknown) => work(db)
   ),
   UsersRepository: vi.fn(),
+  assertRuntimeCredentialAuthority: vi.fn(async () => {}),
+  TaskRepository: vi.fn(
+    class {
+      async assertRuntimeCredentialAuthority() {}
+    }
+  ),
 }));
 
 vi.mock('@agor/core/config', () => configMocks);
@@ -36,6 +45,11 @@ import { ConfigService } from './config.js';
 describe('ConfigService.resolveApiKey', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    dbMocks.TaskRepository.mockImplementation(
+      class {
+        assertRuntimeCredentialAuthority = dbMocks.assertRuntimeCredentialAuthority;
+      }
+    );
     configMocks.hasCrossReplicaExecutorCredentialLock.mockReturnValue(false);
     configMocks.hasExactUserExecutorCredentialHome.mockReturnValue(false);
     homeMocks.resolveExecutionCredentialHome.mockImplementation(async ({ userId }) => ({
@@ -420,6 +434,110 @@ describe('ConfigService.resolveApiKey', () => {
     ).rejects.toBeInstanceOf(Forbidden);
 
     expect(configMocks.resolveApiKey).not.toHaveBeenCalled();
+  });
+
+  describe('backend Claude task-only delivery', () => {
+    const request = {
+      taskId: 'task-1' as TaskID,
+      keyName: 'ANTHROPIC_API_KEY',
+      tool: 'claude-code' as const,
+    };
+    const params = () => ({
+      provider: 'rest',
+      tenant: { tenant_id: 'tenant-1' },
+      user: { user_id: 'actor' },
+      authentication: {
+        strategy: 'jwt',
+        accessToken: 'synthetic-task-bearer',
+        payload: {
+          type: 'executor-session',
+          purpose: 'executor-task',
+          sub: 'actor',
+          tenant_id: 'tenant-1',
+          task_id: 'task-1',
+          session_id: 'session-1',
+          branch_id: 'branch-1',
+        },
+      },
+    });
+    const setup = (sdkHomeScope = 'branch') => {
+      configMocks.resolveApiKey.mockResolvedValue({
+        source: 'user',
+        useNativeAuth: false,
+        connection: {},
+        managedOAuth: { provider: 'claude-code' },
+      });
+      const backend = {
+        resolve: vi.fn(async (_tenant, _user, assertTask) => {
+          await assertTask();
+          return {
+            connection: { CLAUDE_CODE_OAUTH_TOKEN: 'synthetic-access-only' },
+            useNativeAuth: false,
+          };
+        }),
+      };
+      const service = new ConfigService({} as never, {}, undefined, backend as never);
+      service.app = {
+        service: (name: string) => ({
+          get: async () =>
+            name === 'tasks'
+              ? { created_by: 'actor', session_id: 'session-1' }
+              : {
+                  created_by: 'session-owner',
+                  agentic_tool: 'claude-code',
+                  branch_id: 'branch-1',
+                  sdk_home_scope: sdkHomeScope,
+                },
+        }),
+      } as never;
+      return { service, backend };
+    };
+    it('uses the actual shared-session task actor and rechecks durable task authority without native-home borrowing', async () => {
+      const { service, backend } = setup();
+      expect(await service.resolveApiKey(request, params() as never)).toMatchObject({
+        connection: { CLAUDE_CODE_OAUTH_TOKEN: 'synthetic-access-only' },
+        useNativeAuth: false,
+      });
+      expect(backend.resolve).toHaveBeenCalledWith('tenant-1', 'actor', expect.any(Function));
+      expect(dbMocks.assertRuntimeCredentialAuthority).toHaveBeenCalledWith(
+        'task-1',
+        expect.objectContaining({ principal_user_id: 'actor', branch_id: 'branch-1' })
+      );
+      expect(homeMocks.resolveExecutionCredentialHome).not.toHaveBeenCalled();
+    });
+    it.each([
+      'browser',
+      'service',
+      'command',
+      'wrong-tenant',
+      'missing-bearer',
+      'wrong-user',
+    ] as const)('rejects %s without delivering a backend credential', async (kind) => {
+      const { service, backend } = setup();
+      const caller = params();
+      if (kind === 'browser') caller.authentication.payload.type = 'ordinary-user';
+      if (kind === 'service') {
+        caller.authentication.payload.type = 'ordinary-user';
+        Object.assign(caller.user, { _isServiceAccount: true });
+      }
+      if (kind === 'command') caller.authentication.payload.purpose = 'executor-command';
+      if (kind === 'wrong-tenant') caller.authentication.payload.tenant_id = 'foreign';
+      if (kind === 'missing-bearer') caller.authentication.accessToken = '';
+      if (kind === 'wrong-user') caller.authentication.payload.sub = 'session-owner';
+      await expect(service.resolveApiKey(request, caller as never)).rejects.toThrow();
+      expect(backend.resolve).not.toHaveBeenCalled();
+    });
+    it('retains historical execution-home mismatch rejection', async () => {
+      const { service } = setup('execution_home');
+      await expect(service.resolveApiKey(request, params() as never)).rejects.toThrow(
+        /different execution home/
+      );
+    });
+    it('refuses stopped/revoked task authority before delivering', async () => {
+      const { service } = setup();
+      dbMocks.assertRuntimeCredentialAuthority.mockRejectedValueOnce(new Error('revoked'));
+      await expect(service.resolveApiKey(request, params() as never)).rejects.toThrow('revoked');
+    });
   });
 
   describe('managed Claude runtime credential-home agreement', () => {
@@ -827,7 +945,7 @@ describe('ConfigService.resolveApiKey', () => {
       {
         resolve: vi.fn(async () => ({
           connection: { CLAUDE_CODE_OAUTH_TOKEN: 'sk-ant-oat01-ha-managed' },
-          useNativeAuth: false,
+          useNativeAuth: false as const,
         })),
       }
     );

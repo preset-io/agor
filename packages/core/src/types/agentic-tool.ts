@@ -265,6 +265,8 @@ export type AuthCheckStatus = 'authenticated' | 'unauthenticated' | 'unknown';
  * "couldn't verify" from "no auth" read `status`.
  */
 export interface AuthCheckResult {
+  /** Caller-private saved-state proof, distinct from provider validation. */
+  managedOAuth?: { saved: boolean; usable: boolean };
   status: AuthCheckStatus;
   authenticated: boolean;
   method: 'api-key' | 'oauth' | 'native' | 'none';
@@ -459,20 +461,22 @@ export type ClaudeOAuthAttemptStatus =
  * the deployment master secret and AAD-bound to the row it belongs to. The PKCE
  * verifier lives here; raw OAuth `state` is never persisted, even encrypted.
  */
-export interface ClaudeOAuthSealedMaterial {
-  version: 1;
+interface ClaudeOAuthSealedMaterialBase {
   attemptId: ClaudeOAuthAttemptID;
   tenantId: string;
   userId: string;
   attemptGeneration: number;
   /** PKCE verifier used only for the one-shot provider exchange. */
   codeVerifier: string;
-  /**
-   * Execution home the credential must land in, fixed when the attempt started.
-   * Re-resolved and compared before the write so a mid-flow identity change
-   * cannot redirect the credential to a different home.
-   */
-  delegatedHomeKey: string | null;
-  /** Canonical exact tenant/user `.claude` directory used by the contained HA writer. */
-  claudeConfigDir?: string;
 }
+
+export type ClaudeOAuthSealedMaterial = ClaudeOAuthSealedMaterialBase &
+  (
+    | { version: 1; delegatedHomeKey: string | null; claudeConfigDir?: string; target?: never }
+    | {
+        version: 2;
+        target: import('./provider-oauth').ClaudeBackendOAuthTarget;
+        delegatedHomeKey?: never;
+        claudeConfigDir?: never;
+      }
+  );

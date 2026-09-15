@@ -144,6 +144,42 @@ async function findAndClickButton(text: string | RegExp) {
 }
 
 describe('OnboardingWizard', () => {
+  it.each(['API key', 'Subscription token'] as const)(
+    'replaces an unavailable backend grant through explicit %s input',
+    async (method) => {
+      const onUpdateUser = vi.fn(async () => undefined);
+      renderWizard({
+        initialStep: 'llm',
+        user: makeUser({
+          agentic_auth_methods: { 'claude-code': 'subscription' },
+          agentic_credential_sources: { 'claude-code': 'managed_oauth' },
+        }),
+        allowClaudeOAuthSignIn: false,
+        claudeOAuthCapability: { available: false, storage: null, reason: 'operator_disabled' },
+        onUpdateUser,
+      });
+      await findAndClickButton('Claude');
+      clickButton(method);
+      const key =
+        method === 'API key' ? `sk-ant-api03-${'x'.repeat(40)}` : 'synthetic-pasted-subscription';
+      const input = screen.getByLabelText(
+        method === 'API key' ? 'Anthropic API key' : 'Claude subscription token'
+      );
+      expect(screen.getByText(/^connect →/i).closest('button')).toBeDisabled();
+      fireEvent.change(input, { target: { value: key } });
+      clickButton(/^connect →/i);
+      await waitFor(() =>
+        expect(onUpdateUser).toHaveBeenCalledWith('user-1', {
+          agentic_tools: {
+            'claude-code': {
+              [method === 'API key' ? 'ANTHROPIC_API_KEY' : 'CLAUDE_CODE_OAUTH_TOKEN']: key,
+            },
+          },
+        })
+      );
+    }
+  );
+
   it('uses the shared animated glass highlights behind its content', () => {
     const { baseElement } = renderWizard();
 

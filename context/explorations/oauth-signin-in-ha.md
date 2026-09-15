@@ -1,7 +1,10 @@
 # Provider subscription sign-in in HA
 
-Status: **normative remaining Claude design with a dated implementation
-snapshot**. Code facts below were re-verified on 2026-08-25 against `main` and
+Status: **historical local-file design and implementation snapshot**. The current
+backend-grant path, effective capabilities, explicit opt-out and offline rollout
+contract are in [the operator guide](../../apps/agor-docs/content/guide/config-yaml.mdx).
+The delegated-writer restrictions below apply to exporting a canonical credential
+file, not to backend grants that deliver only access through the task RPC. Code facts below were re-verified on 2026-08-25 against `main` and
 the live heads of PRs #2317, #2462, and #2521. The named revisions are historical
 evidence, not moving implementation requirements.
 

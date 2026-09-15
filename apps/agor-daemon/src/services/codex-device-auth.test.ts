@@ -1,5 +1,6 @@
 import { isTenantAgenticToolEnabled, loadConfigSync } from '@agor/core/config';
 import { runWithTenantContext } from '@agor/core/db';
+import type { UserID } from '@agor/core/types';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { writeCodexAuthCredential } from '../utils/executor-codex-auth.js';
 import { createCodexDeviceAuthService } from './codex-device-auth';
@@ -181,7 +182,7 @@ describe('codex-device-auth', () => {
   });
 
   it('cancels a pending attempt under the shared route authority before home reuse', async () => {
-    const routeAuthority = { lockExternalUserMutation: vi.fn(async () => undefined) };
+    const routeAuthority = { runCredentialResolution: vi.fn(async (_ctx, work) => work()) };
     const { app } = makeApp();
     const service = createCodexDeviceAuthService(app as never, TEST_DB, routeAuthority);
     mockUserCodeIssued();
@@ -190,7 +191,7 @@ describe('codex-device-auth', () => {
     const cleanup = vi.fn(async () => undefined);
     await service.completeExternalUserRouteMutation(
       'tenant-test',
-      'user-1',
+      'user-1' as UserID,
       cleanup,
       'execution_home_changed',
       41
@@ -205,7 +206,7 @@ describe('codex-device-auth', () => {
 
   it('runs stale import/logout preflight before cancelling the current standalone attempt', async () => {
     const routeAuthority = {
-      lockExternalUserMutation: vi.fn(async () => async () => undefined),
+      runCredentialResolution: vi.fn(async (_ctx, work) => work()),
     };
     const { app } = makeApp();
     const service = createCodexDeviceAuthService(app as never, TEST_DB, routeAuthority);
@@ -228,21 +229,22 @@ describe('codex-device-auth', () => {
   });
 
   it('resolves and reserves only after a winning standalone route mutation releases authority', async () => {
-    let unblock!: (release: () => Promise<void>) => void;
+    let unblock!: () => void;
     const routeAuthority = {
-      lockExternalUserMutation: vi.fn(
-        () => new Promise<() => Promise<void>>((resolve) => (unblock = resolve))
-      ),
+      runCredentialResolution: vi.fn(async (_ctx, work) => {
+        await new Promise<void>((resolve) => (unblock = resolve));
+        return work();
+      }),
     };
     const { app } = makeApp();
     const service = createCodexDeviceAuthService(app as never, TEST_DB, routeAuthority);
 
     const starting = withTenant(() => service.create({}, AUTH_PARAMS));
-    await vi.waitFor(() => expect(routeAuthority.lockExternalUserMutation).toHaveBeenCalled());
+    await vi.waitFor(() => expect(routeAuthority.runCredentialResolution).toHaveBeenCalled());
     loadConfigSyncMock.mockReturnValue({
       multi_tenancy: { mode: 'required_from_auth' },
     } as never);
-    unblock(async () => undefined);
+    unblock();
 
     await expect(starting).rejects.toThrow(/Cannot determine which execution home/);
     expect(fetchMock).not.toHaveBeenCalled();
@@ -250,7 +252,7 @@ describe('codex-device-auth', () => {
 
   it('revalidates the standalone route under authority before a post-approval write', async () => {
     const routeAuthority = {
-      lockExternalUserMutation: vi.fn(async () => async () => undefined),
+      runCredentialResolution: vi.fn(async (_ctx, work) => work()),
     };
     const { app } = makeApp();
     const service = createCodexDeviceAuthService(app as never, TEST_DB, routeAuthority);
