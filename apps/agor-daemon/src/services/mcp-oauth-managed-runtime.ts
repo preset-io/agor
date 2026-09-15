@@ -267,45 +267,51 @@ export class ManagedMCPOAuthRuntime {
       )
         throw new ManagedOAuthUnavailableError();
     };
-    // If prepare response is lost the saved operation remains recoverable by the cancellation outbox; never invent a new prepare identity.
-    const prepared = await d.client.request({
-      operation: 'prepare',
-      body: prepare,
-      schema: McpOAuthPrepareResponseSchema,
-      assertCurrent: assertPending,
-    });
-    if (
-      prepared.expires_at <= d.now() ||
-      !(await d.flows.bindManagedTransaction(
-        record,
-        prepared.transaction_id,
-        prepared.cancel_epoch
-      ))
-    )
-      throw new ManagedOAuthUnavailableError();
-    const activate = McpOAuthTransactionRequestSchema.parse({
-      protocol_version: 1,
-      operation_id: randomUUID(),
-      owner,
-      transaction_id: prepared.transaction_id,
-    });
-    const active = await d.client.request({
-      operation: 'activate',
-      id: prepared.transaction_id,
-      body: activate,
-      schema: McpOAuthActivateResponseSchema,
-      assertCurrent: assertPending,
-    });
-    if (active.transaction_id !== prepared.transaction_id || active.expires_at <= d.now())
-      throw new ManagedOAuthUnavailableError();
-    await assertPending();
-    return {
-      success: true,
-      oauth_client_mode: 'cloud_managed_v1',
-      authorizationUrl: active.intent_url,
-      attempt_id: attemptId,
-      transaction_id: prepared.transaction_id,
-    };
+    try {
+      // If prepare response is lost the saved operation remains recoverable by the cancellation outbox; never invent a new prepare identity.
+      const prepared = await d.client.request({
+        operation: 'prepare',
+        body: prepare,
+        schema: McpOAuthPrepareResponseSchema,
+        assertCurrent: assertPending,
+      });
+      if (
+        prepared.expires_at <= d.now() ||
+        !(await d.flows.bindManagedTransaction(
+          record,
+          prepared.transaction_id,
+          prepared.cancel_epoch
+        ))
+      )
+        throw new ManagedOAuthUnavailableError();
+      const activate = McpOAuthTransactionRequestSchema.parse({
+        protocol_version: 1,
+        operation_id: randomUUID(),
+        owner,
+        transaction_id: prepared.transaction_id,
+      });
+      const active = await d.client.request({
+        operation: 'activate',
+        id: prepared.transaction_id,
+        body: activate,
+        schema: McpOAuthActivateResponseSchema,
+        assertCurrent: assertPending,
+      });
+      if (active.transaction_id !== prepared.transaction_id || active.expires_at <= d.now())
+        throw new ManagedOAuthUnavailableError();
+      await assertPending();
+      return {
+        success: true,
+        oauth_client_mode: 'cloud_managed_v1',
+        authorizationUrl: active.intent_url,
+        attempt_id: attemptId,
+        transaction_id: prepared.transaction_id,
+      };
+    } catch (error) {
+      // Exact old attempt only: a failed start must not cancel a concurrent newer reconnect.
+      await d.flows.retireManagedAttempt(record, 'managed_start_failed').catch(() => undefined);
+      throw error;
+    }
   }
 
   /** Status evidence may trigger completion; a browser ticket or postMessage never does. */
@@ -321,6 +327,7 @@ export class ManagedMCPOAuthRuntime {
     const d = this.dependencies;
     const owner = record.managedMetadata.owner;
     const profile = await this.current(owner, 'exchange');
+    let activeClaim = record.status === 'exchanging' ? record : undefined;
     const assertCurrent = async () => {
       await this.current(owner, 'exchange');
       const fresh = await d.flows.getForUser(record.tenantId, record.userId, record.attemptId);
@@ -330,7 +337,11 @@ export class ManagedMCPOAuthRuntime {
         !equalOwner(owner, fresh.managedMetadata.owner) ||
         fresh.managedTransactionId !== record.managedTransactionId ||
         fresh.expiresAt.getTime() <= d.now() ||
-        !['pending', 'exchanging'].includes(fresh.status)
+        !['pending', 'exchanging'].includes(fresh.status) ||
+        (activeClaim !== undefined &&
+          (fresh.status !== 'exchanging' ||
+            fresh.exchangeClaimId !== activeClaim.exchangeClaimId ||
+            fresh.managedOperationId !== activeClaim.managedOperationId))
       )
         throw new ManagedOAuthUnavailableError();
     };
@@ -349,10 +360,20 @@ export class ManagedMCPOAuthRuntime {
         schema: McpOAuthTransactionStatusSchema,
         assertCurrent,
       });
+      if (['expired', 'failed', 'canceled'].includes(status.status)) {
+        if (
+          !equalOwner(status.owner, owner) ||
+          status.transaction_id !== record.managedTransactionId
+        )
+          throw new ManagedOAuthUnavailableError();
+        await d.flows.retireManagedAttempt(record, 'managed_broker_terminal');
+        return;
+      }
       if (status.status !== 'callback_ready') return;
       const result = await d.flows.claimManagedForTenant(record, status);
       if (result.outcome !== 'claimed') return;
       claimed = result.flow;
+      activeClaim = claimed;
     }
     const material = d.flows.openManagedClaim(claimed);
     const request = {

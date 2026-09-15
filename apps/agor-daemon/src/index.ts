@@ -66,6 +66,7 @@ import {
 import { buildGitConfigParameters } from '@agor/core/git/pure';
 import { registerHandlebarsHelpers } from '@agor/core/templates/handlebars-helpers';
 import type { HookContext, User } from '@agor/core/types';
+import { MCP_OAUTH_RUNTIME_RETURN_PATH } from '@agor/core/types';
 import cors from 'cors';
 import express from 'express';
 import expressStaticGzip from 'express-static-gzip';
@@ -79,6 +80,7 @@ import { LOCAL_AUTHORIZATION_INVALIDATION_EVENT } from './realtime/routing.js';
 import { registerHooks } from './register-hooks.js';
 import { registerRoutes } from './register-routes.js';
 import { registerServices } from './register-services.js';
+import { managedOAuthLanding } from './services/mcp-oauth-managed-landing.js';
 import { loadBuildInfo } from './setup/build-info.js';
 import { createDynamicCompressionMiddleware } from './setup/compression.js';
 import { buildCorsConfig, isSandpackOrigin } from './setup/cors.js';
@@ -667,6 +669,9 @@ async function startDaemonWithOwnedMetrics(
       app.use('/static', express.static(staticPath) as never);
     }
   }
+
+  // Managed return tickets remain fragment-only and land on the fixed same-origin UI route.
+  app.use(MCP_OAUTH_RUNTIME_RETURN_PATH, managedOAuthLanding as never);
 
   // OAuth callback middleware stub — handler is wired by registerServices()
   const appRecord = app as unknown as Record<string, unknown>;
