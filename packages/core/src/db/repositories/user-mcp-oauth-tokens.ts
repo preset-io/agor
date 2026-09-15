@@ -654,7 +654,8 @@ export class UserMCPOAuthTokenRepository {
             this.db,
             tenantId!,
             consenterId!,
-            input.managed.metadata.owner.cloud_user_subject
+            input.managed.metadata.owner.cloud_user_subject,
+            input.managed.metadata.owner.cell_id
           );
         const principal = await executeRaw(
           this.db,
@@ -990,7 +991,8 @@ export class UserMCPOAuthTokenRepository {
         this.db,
         this.tenantId()!,
         userId,
-        observed.managed_metadata!.owner.cloud_user_subject
+        observed.managed_metadata!.owner.cloud_user_subject,
+        observed.managed_metadata!.owner.cell_id
       );
       await lockRowForUpdate(this.db, this.db, userMcpOauthTokens, matchKey(userId, serverId)!);
     }
@@ -1083,7 +1085,8 @@ export class UserMCPOAuthTokenRepository {
         this.db,
         tenantId,
         userId!,
-        input.managed.metadata.owner.cloud_user_subject
+        input.managed.metadata.owner.cloud_user_subject,
+        input.managed.metadata.owner.cell_id
       );
     }
     await lockRowForUpdate(this.db, this.db, userMcpOauthTokens, matchKey(userId, serverId)!);
@@ -1192,7 +1195,13 @@ export class UserMCPOAuthTokenRepository {
       response.claim.refresh_generation !== String(claim.refreshGeneration)
     )
       return false;
-    await lockMCPManagedSubject(this.db, tenantId, userId, response.owner.cloud_user_subject);
+    await lockMCPManagedSubject(
+      this.db,
+      tenantId,
+      userId,
+      response.owner.cloud_user_subject,
+      response.owner.cell_id
+    );
     await lockRowForUpdate(this.db, this.db, userMcpOauthTokens, matchKey(userId, serverId)!);
     const live = rowsOf(
       await executeRaw(

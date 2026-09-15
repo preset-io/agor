@@ -133,6 +133,19 @@ export function createMigrationImpactRegistry(
 
 const MIGRATION_IMPACT_REGISTRY = createMigrationImpactRegistry([
   [
+    '0113_mcp_managed_oauth_cell_retirement',
+    {
+      requiresOfflineCutover: true,
+      impact: defineMigrationImpact({
+        classification: 'protocol',
+        userAction: 'required',
+        rollbackCompatibility: 'incompatible',
+        summary:
+          'Adds immutable deployment cell stop barriers shared by every managed vending transaction before retirement enumeration.',
+      }),
+    },
+  ],
+  [
     '0112_mcp_managed_oauth_cleanup_delivery',
     {
       requiresOfflineCutover: true,
@@ -852,11 +865,11 @@ async function readManagedOAuthSchemaDigestSnapshot(db: Database): Promise<strin
         db,
         sql`SELECT c.relname,c.relrowsecurity,c.relforcerowsecurity
       FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace
-      WHERE n.nspname='public' AND c.relname IN ('mcp_oauth_pending_flows','user_mcp_oauth_tokens','mcp_managed_oauth_outbox','mcp_managed_oauth_invalidations')`
+      WHERE n.nspname='public' AND c.relname IN ('mcp_oauth_pending_flows','user_mcp_oauth_tokens','mcp_managed_oauth_outbox','mcp_managed_oauth_invalidations','mcp_managed_oauth_cell_retirements')`
       )
     );
     if (
-      guards.length !== 4 ||
+      guards.length !== 5 ||
       guards.some((row) => row.relrowsecurity !== true || row.relforcerowsecurity !== true)
     )
       throw new Error();

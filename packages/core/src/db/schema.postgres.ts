@@ -3652,3 +3652,11 @@ export const mcpManagedOauthInvalidations = pgTable('mcp_managed_oauth_invalidat
   staged_items: t.json<MCPManagedOAuthInvalidation[]>('staged_items').notNull(),
   updated_at: t.timestamp('updated_at').notNull(),
 });
+
+/** Deployment stop authority only. No tenant-derived columns, FK, portability or release. */
+export const mcpManagedOauthCellRetirements = pgTable('mcp_managed_oauth_cell_retirements', {
+  cell_id: text('cell_id').primaryKey(),
+  operation_id: text('operation_id').notNull(),
+  generation: text('generation').notNull(),
+  created_at: t.timestamp('created_at').notNull(),
+});
