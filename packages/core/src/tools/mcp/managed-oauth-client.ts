@@ -202,6 +202,7 @@ export interface ManagedOAuthSenderConfiguration {
 type Operation = keyof Pick<
   typeof MCP_OAUTH_ROUTES,
   | 'capabilities'
+  | 'authority'
   | 'prepare'
   | 'activate'
   | 'status'
