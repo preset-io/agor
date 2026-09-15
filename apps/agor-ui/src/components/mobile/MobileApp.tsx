@@ -289,7 +289,20 @@ export const MobileApp: React.FC<MobileAppProps> = ({
   );
 
   return (
-    <Layout style={{ height: '100dvh' }}>
+    // The shell root is pinned to exactly the viewport and clips horizontally,
+    // so no descendant on any tab can widen the document and clip the content
+    // AND the in-flow bottom nav at the same right edge. Content is laid out
+    // fluid (width:100%), so this never cuts anything legitimate.
+    <Layout
+      style={{
+        height: '100dvh',
+        width: '100%',
+        maxWidth: '100%',
+        margin: 0,
+        overflowX: 'hidden',
+        boxSizing: 'border-box',
+      }}
+    >
       {!connected && (
         <Alert
           banner
