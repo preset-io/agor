@@ -268,7 +268,7 @@ export interface MCPAuthRecovery {
   oauth_policy?: MCPOAuthEffectivePolicy;
 }
 
-export const MCP_OAUTH_GRANT_BINDING_VERSIONS = [1, 2, 3, 4] as const;
+export const MCP_OAUTH_GRANT_BINDING_VERSIONS = [1, 2, 3, 4, 5] as const;
 export type MCPOAuthGrantBindingVersion = (typeof MCP_OAUTH_GRANT_BINDING_VERSIONS)[number];
 
 export function isMCPOAuthGrantBindingVersion(
