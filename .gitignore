@@ -6,6 +6,7 @@ node_modules/
 
 # Testing
 coverage/
+.vitest/
 
 # Production
 build/

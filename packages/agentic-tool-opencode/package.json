@@ -67,7 +67,7 @@
     "tsup": "^8.5.1",
     "tsx": "^4.23.11",
     "typescript": "^6.0.3",
-    "vitest": "^4.1.10"
+    "vitest": "^5.0.1"
   },
   "peerDependencies": {
     "@ant-design/icons": "^6.3.2",
