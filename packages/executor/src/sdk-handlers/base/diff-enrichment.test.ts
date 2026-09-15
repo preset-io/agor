@@ -2,6 +2,7 @@ import { execSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import type { ContentBlock, DiffEnrichment } from '@agor/core/types';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   clearEditFilesTurnBaseline,
@@ -14,35 +15,7 @@ import {
   registerToolUses,
 } from './diff-enrichment.js';
 
-interface TestContentBlock {
-  type: string;
-  id?: string;
-  name?: string;
-  input?: Record<string, unknown>;
-  tool_use_id?: string;
-  content?: unknown;
-  is_error?: boolean;
-  diff?: {
-    structuredPatch: Array<{
-      oldStart: number;
-      oldLines: number;
-      newStart: number;
-      newLines: number;
-      lines: string[];
-    }>;
-    files?: Array<{
-      path: string;
-      kind: 'add' | 'update' | 'delete';
-      structuredPatch: Array<{
-        oldStart: number;
-        oldLines: number;
-        newStart: number;
-        newLines: number;
-        lines: string[];
-      }>;
-    }>;
-  };
-}
+type TestContentBlock = ContentBlock & { diff?: DiffEnrichment };
 
 const tempDirs: string[] = [];
 
@@ -743,7 +716,7 @@ describe('diff enrichment', () => {
     expect(contentBlocks[1].diff).toBeUndefined();
   });
 
-  it('truncates large edit_files add diffs before storing them', () => {
+  it('keeps a complete multiline diff when its serialized bytes fit', () => {
     const repoDir = createTempGitRepo();
     const srcDir = path.join(repoDir, 'src');
     fs.mkdirSync(srcDir, { recursive: true });
@@ -777,10 +750,10 @@ describe('diff enrichment', () => {
     enrichContentBlocks(contentBlocks, { workingDirectory: repoDir });
 
     const lines = contentBlocks[1].diff?.files?.[0]?.structuredPatch?.[0]?.lines ?? [];
-    expect(lines).toHaveLength(201);
+    expect(lines).toHaveLength(250);
     expect(lines[0]).toBe('+export const value0 = 0;');
     expect(lines[199]).toBe('+export const value199 = 199;');
-    expect(lines[200]).toBe(' [diff output was truncated: showing first 200 of 250 lines]');
+    expect(lines[249]).toBe('+export const value249 = 249;');
   });
 
   it('uses invocation snapshots so add then remove across calls both render correctly', () => {

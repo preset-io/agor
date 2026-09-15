@@ -60,10 +60,15 @@ export const MESSAGE_TYPE_VALUES = [
 
 export type MessageType = (typeof MESSAGE_TYPE_VALUES)[number];
 
+/** Serialized field sizes before a lossy, display-only transcript projection. */
+export type TranscriptTruncation = Record<string, { original_bytes: number }>;
+
 /**
  * Content block (for multi-modal messages)
  */
 export interface ContentBlock {
+  /** Omitted/truncated tool fields; never use this projection as executable input. */
+  transcript_truncation?: TranscriptTruncation;
   type:
     | 'text'
     | 'image'
@@ -116,6 +121,7 @@ export interface DiffEnrichment {
  * Tool use in a message
  */
 export interface ToolUse {
+  transcript_truncation?: TranscriptTruncation;
   id: string;
   name: string;
   input: Record<string, unknown>;
