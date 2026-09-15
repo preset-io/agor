@@ -742,6 +742,7 @@ export class UserMCPOAuthTokenRepository {
             credential_origin: input.managed ? 'cloud_managed_v1' : 'direct',
             managed_metadata: input.managed?.metadata ?? null,
             managed_operation_id: null,
+            managed_refresh_not_before: null,
             oauth_token_endpoint_auth_method: input.tokenEndpointAuthMethod ?? null,
             refresh_status: 'idle' as const,
             refresh_generation: 0,
@@ -1030,6 +1031,8 @@ export class UserMCPOAuthTokenRepository {
             AND refresh_generation = ${expected.refreshGeneration}
             AND credential_origin = ${observed?.credential_origin ?? 'direct'}
             AND refresh_status = 'idle'
+            AND (credential_origin<>'cloud_managed_v1' OR managed_refresh_not_before IS NULL
+              OR managed_refresh_not_before<=clock_timestamp())
             AND oauth_refresh_token IS NOT NULL
           RETURNING *
         `
@@ -1103,7 +1106,7 @@ export class UserMCPOAuthTokenRepository {
       AND refresh_claimed_at>clock_timestamp()-interval '2 minutes'`
       : sql`AND credential_origin='direct'`;
     const metadataAssignment = input.managed
-      ? sql`, managed_metadata=${JSON.stringify(input.managed.metadata)}::jsonb, managed_operation_id=NULL`
+      ? sql`, managed_metadata=${JSON.stringify(input.managed.metadata)}::jsonb, managed_operation_id=NULL, managed_refresh_not_before=NULL`
       : sql``;
     const sealedAccess = sealBoundSecret(
       input.accessToken,
@@ -1236,6 +1239,9 @@ export class UserMCPOAuthTokenRepository {
       this.db,
       sql`UPDATE public.user_mcp_oauth_tokens
       SET managed_metadata=jsonb_set(managed_metadata,'{next_sequence}',to_jsonb(${next}::text)),
+        managed_refresh_not_before=CASE WHEN ${response.status === 'rejected_non_consuming'}
+          THEN GREATEST(managed_refresh_not_before,clock_timestamp()+(${response.status === 'rejected_non_consuming' ? response.retry_after_ms : 0} * interval '1 millisecond'))
+          ELSE managed_refresh_not_before END,
         refresh_status='idle',refresh_claim_id=NULL,refresh_claimed_at=NULL,managed_operation_id=NULL,updated_at=clock_timestamp()
       WHERE tenant_id=${tenantId} AND user_id=${userId} AND mcp_server_id=${serverId} AND refresh_claim_id=${claim.claimId}
         AND managed_operation_id=${response.operation_id} AND managed_metadata->>'next_sequence'=${response.sequence}

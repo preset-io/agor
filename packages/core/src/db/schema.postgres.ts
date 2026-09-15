@@ -2137,6 +2137,8 @@ export const userMcpOauthTokens = pgTable(
     credential_origin: text('credential_origin').notNull().default('direct'),
     managed_metadata: t.json<MCPManagedOAuthGrantMetadata>('managed_metadata'),
     managed_operation_id: text('managed_operation_id'),
+    // Broker-certified retry floor, checked using DB time after the token row lock.
+    managed_refresh_not_before: t.timestamp('managed_refresh_not_before'),
     oauth_token_endpoint_auth_method: text('oauth_token_endpoint_auth_method'),
     grant_generation: bigint('grant_generation', { mode: 'number' }).notNull().default(0),
     grant_binding_version: integer('grant_binding_version'),
@@ -2163,7 +2165,7 @@ export const userMcpOauthTokens = pgTable(
     managedOriginCheck: check(
       'mcp_grant_managed_origin',
       sql`(
- (credential_origin='direct' AND managed_metadata IS NULL AND managed_operation_id IS NULL AND grant_binding_version IS DISTINCT FROM 5)
+ (credential_origin='direct' AND managed_metadata IS NULL AND managed_operation_id IS NULL AND managed_refresh_not_before IS NULL AND grant_binding_version IS DISTINCT FROM 5)
  OR (credential_origin='cloud_managed_v1' AND user_id IS NOT NULL AND grant_binding_version=5 AND managed_metadata IS NOT NULL AND oauth_client_secret IS NULL
  AND managed_metadata->'owner'->>'workspace_id'=tenant_id AND managed_metadata->'owner'->>'cell_local_user_id'=user_id
  AND managed_metadata->'owner'->>'server_id'=mcp_server_id AND managed_metadata->'owner'->>'grant_generation'=grant_generation::text
