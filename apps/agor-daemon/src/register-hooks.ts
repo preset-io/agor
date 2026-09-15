@@ -671,7 +671,7 @@ export const CONSTRAINED_HA_PROCESS_AFFINE_SERVICE_GATES = [
   // Claude is admitted only when the resolved HA capability proves its durable
   // attempt authority plus exact-user generation-fenced writer route.
   ['claude-auth/oauth', 'claudeOAuth'],
-  ['claude-auth/logout', 'claudeAuth'],
+  // Claude logout enforces mode-aware cleanup internally, including unavailable backend grants.
   ['opencode-auth', 'openCodeAuth'],
   ['opencode-models', 'openCodeAuth'],
 ] as const satisfies ReadonlyArray<readonly [string, Parameters<typeof rejectInConstrainedHa>[1]]>;
@@ -3098,8 +3098,8 @@ export function registerHooks(ctx: RegisterHooksContext): void {
           };
           if (!params[CODEX_AUTH_DEFER_USER_REALTIME]) return context;
 
-          // Codex HA completion/import/logout runs the users patch inside the
-          // same generation-fenced transaction as its credential mutation.
+          // Codex PostgreSQL completion/import/logout runs the users patch
+          // inside the same route-authority transaction as its credential mutation.
           // Suppress Feathers' pre-commit automatic event and enqueue one
           // redacted event that can be observed only after commit.
           context.event = null;

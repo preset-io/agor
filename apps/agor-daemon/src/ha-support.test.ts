@@ -1,14 +1,29 @@
+import {
+  type AgorConfig,
+  type ResolvedDeploymentConfig,
+  resolveClaudeOAuthCapability,
+} from '@agor/core/config';
 import type { HookContext } from '@agor/core/types';
 import { describe, expect, it } from 'vitest';
 import {
   assertHaTaskPermissionSupported,
   HA_UNSUPPORTED_FEATURES,
-  hasClaudeSubscriptionOAuthCapability,
   haUnavailable,
   isHaFeatureUnavailable,
   isHaNonInteractivePermission,
   rejectInConstrainedHa,
 } from './ha-support.js';
+
+// Concrete isolation is supplied by the daemon probe; these fixtures model its result.
+const hasClaudeSubscriptionOAuthCapability = (
+  config: AgorConfig,
+  deployment: ResolvedDeploymentConfig
+) =>
+  resolveClaudeOAuthCapability(config, deployment, {
+    postgres: false,
+    encryption: false,
+    localIsolation: true,
+  }).available;
 
 describe('constrained HA support profile', () => {
   const ha = {

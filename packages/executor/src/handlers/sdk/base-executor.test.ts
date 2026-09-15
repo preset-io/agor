@@ -3,6 +3,7 @@ import { isTaskFailurePersisted } from '../../terminal-task.js';
 import {
   createStreamingCallbacks,
   executeToolTask,
+  expiredClaudeCredentialMessage,
   installProviderConnection,
   resolveApiKeyForTask,
   settleTaskFailure,
@@ -480,5 +481,23 @@ describe('installProviderConnection', () => {
     const advertised = (process.env.AGOR_USER_ENV_KEYS ?? '').split(',');
     expect(advertised).not.toContain('GITHUB_TOKEN');
     expect(advertised).toContain('MY_CUSTOM_VAR');
+  });
+});
+
+describe('managed Claude long-task expiry guidance', () => {
+  it('requires an explicit follow-up prompt after an expired authentication failure, not a prompt replay', () => {
+    const expiry = new Date(1000).toISOString();
+    expect(
+      expiredClaudeCredentialMessage('claude-code', expiry, '401 authentication failed', 2000)
+    ).toMatch(/follow-up prompt in this session.*new task.*not replayed automatically/);
+    expect(
+      expiredClaudeCredentialMessage('claude-code', expiry, '401 authentication failed', 500)
+    ).toBeUndefined();
+    expect(
+      expiredClaudeCredentialMessage('claude-code', expiry, 'tool failed', 2000)
+    ).toBeUndefined();
+    expect(
+      expiredClaudeCredentialMessage('codex', expiry, '401 authentication failed', 2000)
+    ).toBeUndefined();
   });
 });

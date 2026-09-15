@@ -2,6 +2,55 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { ClaudeOAuthSignIn } from './ClaudeOAuthSignIn';
 
 describe('ClaudeOAuthSignIn', () => {
+  it('requires a committed attempt AND caller-private usable backend status before confirmation', async () => {
+    let resolveStatus!: (result: unknown) => void;
+    const status = new Promise((resolve) => {
+      resolveStatus = resolve;
+    });
+    const onVerified = vi.fn();
+    const client = {
+      service: (name: string) =>
+        name === 'claude-auth/oauth'
+          ? {
+              find: async () => ({ phase: 'success', attemptId: 'backend-attempt' }),
+              create: vi.fn(),
+            }
+          : { create: () => status },
+    } as never;
+    render(<ClaudeOAuthSignIn client={client} storage="backend" onVerified={onVerified} />);
+    await screen.findByText(/Confirming the current personal grant/);
+    expect(onVerified).not.toHaveBeenCalled();
+    resolveStatus({
+      status: 'unknown',
+      authenticated: false,
+      managedOAuth: { saved: true, usable: true },
+    });
+    await waitFor(() => expect(onVerified).toHaveBeenCalledTimes(1));
+  });
+
+  it('does not confirm a missing backend grant from a historical success or source marker', async () => {
+    const onVerified = vi.fn();
+    const check = vi.fn(async () => ({
+      status: 'unauthenticated',
+      managedOAuth: { saved: false, usable: false },
+    }));
+    const client = {
+      service: (name: string) =>
+        name === 'claude-auth/oauth'
+          ? { find: async () => ({ phase: 'success', attemptId: 'old-attempt' }), create: vi.fn() }
+          : { create: check },
+    } as never;
+    render(
+      <ClaudeOAuthSignIn client={client} storage="backend" connected onVerified={onVerified} />
+    );
+    await waitFor(() => expect(check).toHaveBeenCalled());
+    expect(onVerified).not.toHaveBeenCalled();
+    expect(await screen.findByRole('button', { name: 'Start over' })).toBeInTheDocument();
+    check.mockResolvedValueOnce({ status: 'unknown', managedOAuth: { saved: true, usable: true } });
+    fireEvent.click(screen.getByRole('button', { name: 'Retry confirmation' }));
+    await waitFor(() => expect(onVerified).toHaveBeenCalledTimes(1));
+  });
+
   it('echoes the adopted attempt id when submitting the pasted code', async () => {
     const create = vi.fn(async () => ({ phase: 'success', attemptId: 'attempt-1' }));
     const find = vi.fn(async () => ({

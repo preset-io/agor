@@ -57,8 +57,11 @@ import type {
   TenantID,
   UserID,
 } from '@agor/core/types';
+import { safeOutboundFetch } from '@agor/core/utils/safe-outbound-fetch';
+import { EXECUTOR_SESSION_TOKEN_TYPE } from '../auth/executor-session-token.js';
 import { writeClaudeAuthViaExecutor } from '../utils/executor-claude-auth.js';
 import { sandboxManagedCredentialIsolationAvailable } from '../utils/sandbox-wrap.js';
+import type { ClaudeBackendOAuth } from './claude-backend-oauth.js';
 import { CLAUDE_AUTH_TRUSTED_USER_MUTATION } from './claude-credential-mutation-trust.js';
 import {
   type ClaudeOAuthAttemptContext,
@@ -67,43 +70,19 @@ import {
   InMemoryClaudeOAuthAttemptStore,
 } from './claude-oauth-attempt-store.js';
 import {
+  CLAUDE_AUTHORIZE_URL,
+  CLAUDE_CLIENT_ID,
+  CLAUDE_OAUTH_BINDING,
+  CLAUDE_REDIRECT_URI,
+  CLAUDE_SCOPES,
+  CLAUDE_TOKEN_URL,
+} from './claude-oauth-policy.js';
+import {
   type AppLike,
   CODEX_AUTH_DEFER_USER_REALTIME,
   resolveCodexCredentialRoute,
 } from './codex-auth-shared.js';
 import { markTrustedUserMutation } from './user-mutation-trust.js';
-
-// Constants are the PROD OAuth config read out of the native `claude` binary
-// bundled by the pinned SDK: package.json pins
-// @anthropic-ai/claude-agent-sdk@0.3.259, whose manifest.json bundles claude
-// CLI v2.1.259 (commit 9b549c8d). The URLs, client id, redirect, scope set, and
-// JSON authorization-code exchange were re-checked in that native binary for
-// this upgrade. The `-local-oauth` config (client id 22422756-…,
-// localhost:8205) is dev-only and deliberately not used here.
-/** PROD OAuth client id (`yol.CLIENT_ID`). Fixed and public across installs. */
-const CLAUDE_CLIENT_ID = '9d1c250a-e61b-44d9-88ed-5944d1962f5e';
-// Subscription (Claude Pro/Max) authorize endpoint = `yol.CLAUDE_AI_AUTHORIZE_URL`.
-// Console/API-billing login uses `yol.CONSOLE_AUTHORIZE_URL`
-// (https://platform.claude.com/oauth/authorize); the subscription path is ours.
-const CLAUDE_AUTHORIZE_URL = 'https://claude.com/cai/oauth/authorize';
-// `yol.TOKEN_URL`. The old console.anthropic.com host belonged to pre-rename
-// SDKs; prod issues and exchanges against platform.claude.com.
-const CLAUDE_TOKEN_URL = 'https://platform.claude.com/v1/oauth/token';
-// `yol.MANUAL_REDIRECT_URL` — the paste-back redirect. The CLI's own browser
-// flow can instead use a loopback http://localhost:{port}/callback; the daemon
-// runs no loopback server, so it uses the manual redirect, and the token is
-// issued for exactly this redirect + client id, so both must match byte-for-byte.
-const CLAUDE_REDIRECT_URI = 'https://platform.claude.com/oauth/code/callback';
-// Scope string the CLI's claude.ai login sends. `user:file_upload` was added by
-// the CLI bundled with Agent SDK 0.3.259; omitting it would leave a successful
-// Agor sign-in less capable than `/login` in the same CLI.
-const CLAUDE_SCOPES = [
-  'user:profile',
-  'user:inference',
-  'user:sessions:claude_code',
-  'user:mcp_servers',
-  'user:file_upload',
-];
 
 const FETCH_TIMEOUT_MS = 15_000;
 const MAX_PASTED_CODE_LENGTH = 16 * 1024;
@@ -232,12 +211,13 @@ function retryAfterMs(response: Response): number | undefined {
 export async function exchangeCodeForTokens(
   code: string,
   verifier: string,
-  state: string
+  state: string,
+  request = fetchWithTimeout
 ): Promise<ExchangedTokens> {
   // The CLI posts the exchange as JSON (no oauth beta header on this call).
   let res: Response;
   try {
-    res = await fetchWithTimeout(CLAUDE_TOKEN_URL, {
+    res = await request(CLAUDE_TOKEN_URL, {
       method: 'POST',
       redirect: 'error',
       headers: { 'Content-Type': 'application/json' },
@@ -280,6 +260,16 @@ export async function exchangeCodeForTokens(
       'Claude sign-in returned an unreadable response. Start over to get a fresh code.'
     );
   }
+  if (
+    !body ||
+    typeof body !== 'object' ||
+    Array.isArray(body) ||
+    body.error !== undefined ||
+    (body.token_type !== undefined &&
+      (typeof body.token_type !== 'string' || body.token_type.toLowerCase() !== 'bearer'))
+  ) {
+    throw new TokenExchangeError('ambiguous', 'Claude returned an invalid response. Reconnect.');
+  }
   const { access_token, refresh_token, expires_in, scope } = body;
   // A 2xx with a malformed body is a provider-contract break: Anthropic accepted
   // (and thus consumed) the code but we cannot use the response. Surface a
@@ -298,7 +288,7 @@ export async function exchangeCodeForTokens(
   }
   if (
     typeof expires_in !== 'number' ||
-    !Number.isFinite(expires_in) ||
+    !Number.isSafeInteger(expires_in) ||
     expires_in <= 0 ||
     expires_in > MAX_EXPIRES_IN_SEC
   ) {
@@ -313,7 +303,10 @@ export async function exchangeCodeForTokens(
     expiresInSec: expires_in,
     scopes: typeof scope === 'string' && scope ? scope.split(' ') : CLAUDE_SCOPES,
     subscriptionType:
-      typeof body.subscription_type === 'string' ? body.subscription_type : undefined,
+      typeof body.subscription_type === 'string' &&
+      /^[a-zA-Z0-9 _-]{1,64}$/.test(body.subscription_type)
+        ? body.subscription_type
+        : undefined,
   };
 }
 
@@ -332,11 +325,12 @@ export async function exchangeCodeForTokens(
  */
 export async function refreshClaudeTokens(
   refreshToken: string,
-  current: Pick<ExchangedTokens, 'scopes' | 'subscriptionType'>
+  current: Pick<ExchangedTokens, 'scopes' | 'subscriptionType'>,
+  request = fetchWithTimeout
 ): Promise<ExchangedTokens> {
   let res: Response;
   try {
-    res = await fetchWithTimeout(CLAUDE_TOKEN_URL, {
+    res = await request(CLAUDE_TOKEN_URL, {
       method: 'POST',
       redirect: 'error',
       headers: { 'Content-Type': 'application/json' },
@@ -373,6 +367,16 @@ export async function refreshClaudeTokens(
       'Claude returned an unreadable login refresh response. Try again later.'
     );
   }
+  if (
+    !body ||
+    typeof body !== 'object' ||
+    Array.isArray(body) ||
+    body.error !== undefined ||
+    (body.token_type !== undefined &&
+      (typeof body.token_type !== 'string' || body.token_type.toLowerCase() !== 'bearer'))
+  ) {
+    throw new TokenExchangeError('ambiguous', 'Claude returned an invalid response. Reconnect.');
+  }
   const { access_token, refresh_token, expires_in, scope } = body;
   if (typeof access_token !== 'string' || !access_token.trim()) {
     throw new TokenExchangeError(
@@ -382,7 +386,7 @@ export async function refreshClaudeTokens(
   }
   if (
     typeof expires_in !== 'number' ||
-    !Number.isFinite(expires_in) ||
+    !Number.isSafeInteger(expires_in) ||
     expires_in <= 0 ||
     expires_in > MAX_EXPIRES_IN_SEC
   ) {
@@ -465,7 +469,8 @@ export function createClaudeOAuthService(
   db: TenantScopeAwareDatabase,
   /** Omitted for a standalone daemon, which keeps attempts in process memory. */
   store: ClaudeOAuthAttemptStore = new InMemoryClaudeOAuthAttemptStore(),
-  runtimeIsolationAvailable: () => boolean = sandboxManagedCredentialIsolationAvailable
+  runtimeIsolationAvailable: () => boolean = sandboxManagedCredentialIsolationAvailable,
+  backend?: ClaudeBackendOAuth
 ) {
   async function requireContext(params?: AuthenticatedParams): Promise<{
     authUser: NonNullable<AuthenticatedParams['user']>;
@@ -474,6 +479,12 @@ export function createClaudeOAuthService(
     ctx: ClaudeOAuthAttemptContext;
   }> {
     const authUser = params?.user;
+    if (
+      authUser?._isServiceAccount ||
+      params?.authentication?.payload?.type === EXECUTOR_SESSION_TOKEN_TYPE
+    ) {
+      throw new NotAuthenticated('Claude sign-in requires the participating user in Settings.');
+    }
     if (!authUser?.user_id) {
       throw new NotAuthenticated('Sign in before starting a Claude sign-in.');
     }
@@ -493,8 +504,13 @@ export function createClaudeOAuthService(
 
   async function claimRouteIsCurrent(
     ctx: ClaudeOAuthAttemptContext,
-    claim: Pick<ClaudeOAuthExchangeClaim, 'delegatedHomeKey' | 'claudeConfigDir'>
+    claim: Pick<ClaudeOAuthExchangeClaim, 'delegatedHomeKey' | 'claudeConfigDir' | 'target'>
   ): Promise<boolean> {
+    if (claim.target) {
+      if (!backend || claim.target.bindingFingerprint !== CLAUDE_OAUTH_BINDING) return false;
+      await backend.authorize(ctx.tenantId, ctx.userId);
+      return true;
+    }
     const identity = await routeFor(ctx.userId, ctx.tenantId);
     return (
       identity.ok &&
@@ -522,28 +538,45 @@ export function createClaudeOAuthService(
         );
       }
 
-      try {
-        await writeClaudeAuthViaExecutor(
-          buildClaudeCredentialsJson(tokens),
+      if (claim.target) {
+        if (!backend || generation === undefined)
+          throw new BadRequest('Durable Claude authority is unavailable.');
+        await backend.save(
+          ctx.tenantId,
+          ctx.userId,
+          generation,
           {
-            delegatedHomeKey: claim.delegatedHomeKey,
-            userId: ctx.userId,
-            ...(claim.claudeConfigDir ? { claudeConfigDir: claim.claudeConfigDir } : {}),
+            accessToken: tokens.accessToken,
+            refreshToken: tokens.refreshToken,
+            expiresAt: new Date(Date.now() + tokens.expiresInSec * 1000),
+            scopes: tokens.scopes,
+            subscriptionType: tokens.subscriptionType,
           },
-          generation
+          claim.attemptId
         );
-      } catch (err) {
-        // The error may carry launcher stderr; log a class-level summary only
-        // so token material never reaches daemon logs.
-        console.error(
-          `[ClaudeOAuth] Failed to write .credentials.json${
-            claim.delegatedHomeKey ? ` as ${claim.delegatedHomeKey}` : ''
-          }: ${err instanceof Error ? err.constructor.name : 'unknown error'}`
-        );
-        throw new BadRequest(
-          'Could not write the Claude credentials file on the server. Check daemon logs and sudo configuration, or use an API key instead.'
-        );
-      }
+      } else
+        try {
+          await writeClaudeAuthViaExecutor(
+            buildClaudeCredentialsJson(tokens),
+            {
+              delegatedHomeKey: claim.delegatedHomeKey,
+              userId: ctx.userId,
+              ...(claim.claudeConfigDir ? { claudeConfigDir: claim.claudeConfigDir } : {}),
+            },
+            generation
+          );
+        } catch (err) {
+          // The error may carry launcher stderr; log a class-level summary only
+          // so token material never reaches daemon logs.
+          console.error(
+            `[ClaudeOAuth] Failed to write .credentials.json${
+              claim.delegatedHomeKey ? ` as ${claim.delegatedHomeKey}` : ''
+            }: ${err instanceof Error ? err.constructor.name : 'unknown error'}`
+          );
+          throw new BadRequest(
+            'Could not write the Claude credentials file on the server. Check daemon logs and sudo configuration, or use an API key instead.'
+          );
+        }
 
       // Flip to managed `subscription` AND drop any previously pasted token.
       // Task resolution will now read/refresh the canonical file daemon-side
@@ -570,7 +603,9 @@ export function createClaudeOAuthService(
             // fresh row, so a concurrent Codex auth change is not overwritten
             // by a stale read/whole-map write.
             agentic_auth_methods: { 'claude-code': 'subscription' },
-            agentic_credential_sources: { 'claude-code': 'managed_file' },
+            agentic_credential_sources: {
+              'claude-code': claim.target ? 'managed_oauth' : 'managed_file',
+            },
             agentic_tools: { 'claude-code': { CLAUDE_CODE_OAUTH_TOKEN: null } },
           },
           patchParams
@@ -631,7 +666,30 @@ export function createClaudeOAuthService(
 
     let tokens: ExchangedTokens;
     try {
-      tokens = await exchangeCodeForTokens(code, claim.verifier, claim.state);
+      tokens = await exchangeCodeForTokens(
+        code,
+        claim.verifier,
+        claim.state,
+        claim.target
+          ? (url, init) =>
+              safeOutboundFetch(url, {
+                method: init.method,
+                headers: init.headers,
+                body: typeof init.body === 'string' ? init.body : undefined,
+                timeoutMs: FETCH_TIMEOUT_MS,
+                maxResponseBytes: 64 * 1024,
+                redirect: 'error',
+                assertCurrent: async () => {
+                  await backend!.assertWritable(ctx.tenantId);
+                  if (!(await claimRouteIsCurrent(ctx, claim)))
+                    throw new BadRequest('Claude sign-in authority changed.');
+                  const status = await store.status(ctx, claim.attemptId);
+                  if (status.phase !== 'exchanging' || status.attemptId !== claim.attemptId)
+                    throw new BadRequest('Claude sign-in was replaced.');
+                },
+              })
+          : undefined
+      );
     } catch (err) {
       // The code has now been POSTed to Anthropic, so this exact `code#state`
       // must never be exchanged again — a definitive 4xx killed it, and a
@@ -652,6 +710,17 @@ export function createClaudeOAuthService(
     try {
       persisted = await persist(ctx, claim, authUser, tokens);
     } catch (err) {
+      if (claim.target && backend) {
+        const status = await store.status(ctx, claim.attemptId);
+        const grant = await backend.get(ctx.tenantId, ctx.userId);
+        if (
+          status.phase === 'success' &&
+          grant?.binding_fingerprint === claim.target.bindingFingerprint &&
+          grant.state === 'idle' &&
+          grant.established_attempt_id === claim.attemptId
+        )
+          return status;
+      }
       await store.finish(ctx, claim, {
         status: 'ambiguous',
         failureCode: 'credential_persistence_ambiguous',
@@ -682,12 +751,13 @@ export function createClaudeOAuthService(
         throw new BadRequest('Claude is disabled for this workspace.');
       }
       const config = app.get('config');
-      if (!hasContainedClaudeRuntimeCredentials(config)) {
+      const backendMode = backend?.capability().storage === 'backend';
+      if (!backendMode && !hasContainedClaudeRuntimeCredentials(config)) {
         throw new BadRequest(
           'Claude subscription sign-in requires a contained per-user sandbox. Use an API key or pasted subscription token in this execution mode.'
         );
       }
-      if (!runtimeIsolationAvailable()) {
+      if (!backendMode && !runtimeIsolationAvailable()) {
         throw new BadRequest(
           'Claude subscription sign-in requires verified bubblewrap isolation with a private PID namespace on this host. Use an API key or pasted subscription token.'
         );
@@ -711,6 +781,31 @@ export function createClaudeOAuthService(
       // ── Start step: issue a fresh authorize URL, replacing any prior attempt. ──
       // Resolve the destination identity up front so a user with no resolvable
       // execution home fails fast instead of after approving in the browser.
+      if (backendMode && backend) {
+        await backend.authorize(ctx.tenantId, userId);
+        const pkce = generatePkce();
+        const started = await store.start(ctx, {
+          verifier: pkce.verifier,
+          state: base64url(randomBytes(32)),
+          delegatedHomeKey: null,
+          target: {
+            kind: 'backend_grant',
+            bindingVersion: 1,
+            bindingFingerprint: CLAUDE_OAUTH_BINDING,
+          },
+          validateRoute: async () => {
+            await backend.authorize(ctx.tenantId, userId);
+            return true;
+          },
+          buildVerificationUrl: claudeVerificationUrlFrom,
+        });
+        return {
+          phase: 'awaiting_code',
+          attemptId: started.attemptId,
+          verificationUrl: started.verificationUrl,
+          expiresAt: new Date(started.expiresAtMs).toISOString(),
+        };
+      }
       const identity = await routeFor(userId, tenantId);
       if (!identity.ok) {
         throw new BadRequest(

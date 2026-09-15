@@ -1347,6 +1347,92 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
     });
   }
 
+  /** Read-only authorization shared by telemetry and sensitive credential delivery. */
+  private async inspectRuntimeAuthority(
+    txDb: Database,
+    row: TaskRow,
+    fullId: string,
+    authority: TaskRuntimeAuthorityScope
+  ) {
+    const current = this.rowToTask(row);
+    const access = await resolveSessionRuntimeBranchAccess(txDb, {
+      sessionId: row.session_id,
+      principalUserId: row.created_by,
+    });
+    if (
+      authority.principal_user_id !== row.created_by ||
+      authority.session_id !== row.session_id ||
+      !access ||
+      authority.branch_id !== access.branch_id
+    ) {
+      return { outcome: 'scope_mismatch' as const, task: current };
+    }
+
+    const floor = row.data.executor_launch_fs_access_floor;
+    if (!floor) {
+      return {
+        outcome: 'authorization_revoked' as const,
+        task: current,
+        reason: 'launch_authority_missing' as const,
+      };
+    }
+    if (!access.principal_available) {
+      return {
+        outcome: 'authorization_revoked' as const,
+        task: current,
+        reason: 'principal_unavailable' as const,
+      };
+    }
+    if (!access.can_prompt_session) {
+      return {
+        outcome: 'authorization_revoked' as const,
+        task: current,
+        reason: 'branch_capability_revoked' as const,
+      };
+    }
+    if (fsAccessRank(access.fs_access) < fsAccessRank(floor)) {
+      return {
+        outcome: 'authorization_revoked' as const,
+        task: current,
+        reason: 'filesystem_access_revoked' as const,
+      };
+    }
+
+    const tokenCurrent = isPostgresDatabase(txDb)
+      ? await new ExecutorSessionTokenAuthorityRepository(txDb).isCurrent({
+          tenantId: requireRuntimeTenantId(),
+          tokenFingerprint: authority.token_fingerprint,
+          sessionId: authority.session_id,
+          taskId: fullId,
+          branchId: authority.branch_id,
+          userId: authority.principal_user_id,
+        })
+      : authority.standalone_token_current === true;
+    if (!tokenCurrent) {
+      return {
+        outcome: 'authorization_revoked' as const,
+        task: current,
+        reason: 'token_revoked' as const,
+      };
+    }
+
+    return { outcome: 'authorized' as const, observedAt: access.observed_at };
+  }
+
+  /** No heartbeat/lease write can be used to authorize retrieval of a provider bearer. */
+  async assertRuntimeCredentialAuthority(
+    id: TaskID,
+    authority: TaskRuntimeAuthorityScope
+  ): Promise<void> {
+    const row = await select(this.db).from(tasks).where(eq(tasks.task_id, id)).one();
+    if (!row || !executorOwnsTask(row) || row.data.termination_request) {
+      throw new RepositoryError('Task credential authority unavailable');
+    }
+    const result = await this.inspectRuntimeAuthority(this.db, row, id, authority);
+    if (result.outcome !== 'authorized')
+      throw new RepositoryError('Task credential authority unavailable');
+  }
+
   /**
    * Revalidate exact runtime authority, then atomically stamp heartbeat/pulse.
    * Explicit denial returns the unchanged Task so the service can claim the
@@ -1367,68 +1453,10 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
       // eventually recover the request with a late task/request-fenced ack.
       if (!executorMayReportTelemetry(row)) return { outcome: 'control', task: current };
 
-      const access = await resolveSessionRuntimeBranchAccess(txDb, {
-        sessionId: row.session_id,
-        principalUserId: row.created_by,
-      });
-      if (
-        authority.principal_user_id !== row.created_by ||
-        authority.session_id !== row.session_id ||
-        !access ||
-        authority.branch_id !== access.branch_id
-      ) {
-        return { outcome: 'scope_mismatch', task: current };
-      }
+      const authorityResult = await this.inspectRuntimeAuthority(txDb, row, fullId, authority);
+      if (authorityResult.outcome !== 'authorized') return authorityResult;
 
-      const floor = row.data.executor_launch_fs_access_floor;
-      if (!floor) {
-        return {
-          outcome: 'authorization_revoked',
-          task: current,
-          reason: 'launch_authority_missing',
-        };
-      }
-      if (!access.principal_available) {
-        return {
-          outcome: 'authorization_revoked',
-          task: current,
-          reason: 'principal_unavailable',
-        };
-      }
-      if (!access.can_prompt_session) {
-        return {
-          outcome: 'authorization_revoked',
-          task: current,
-          reason: 'branch_capability_revoked',
-        };
-      }
-      if (fsAccessRank(access.fs_access) < fsAccessRank(floor)) {
-        return {
-          outcome: 'authorization_revoked',
-          task: current,
-          reason: 'filesystem_access_revoked',
-        };
-      }
-
-      const tokenCurrent = isPostgresDatabase(this.db)
-        ? await new ExecutorSessionTokenAuthorityRepository(txDb).isCurrent({
-            tenantId: requireRuntimeTenantId(),
-            tokenFingerprint: authority.token_fingerprint,
-            sessionId: authority.session_id,
-            taskId: fullId,
-            branchId: authority.branch_id,
-            userId: authority.principal_user_id,
-          })
-        : authority.standalone_token_current === true;
-      if (!tokenCurrent) {
-        return {
-          outcome: 'authorization_revoked',
-          task: current,
-          reason: 'token_revoked',
-        };
-      }
-
-      const heartbeatAt = observedAt ?? access.observed_at;
+      const heartbeatAt = observedAt ?? authorityResult.observedAt;
       if (!Number.isFinite(heartbeatAt.getTime())) {
         throw new RepositoryError('Runtime authority observation time is invalid');
       }

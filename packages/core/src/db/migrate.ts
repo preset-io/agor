@@ -133,7 +133,7 @@ export function createMigrationImpactRegistry(
 
 const MIGRATION_IMPACT_REGISTRY = createMigrationImpactRegistry([
   [
-    '0113_mcp_managed_oauth_cell_retirement',
+    '0114_mcp_managed_oauth_cell_retirement',
     {
       requiresOfflineCutover: true,
       impact: defineMigrationImpact({
@@ -146,7 +146,7 @@ const MIGRATION_IMPACT_REGISTRY = createMigrationImpactRegistry([
     },
   ],
   [
-    '0112_mcp_managed_oauth_cleanup_delivery',
+    '0113_mcp_managed_oauth_cleanup_delivery',
     {
       requiresOfflineCutover: true,
       impact: defineMigrationImpact({
@@ -159,7 +159,7 @@ const MIGRATION_IMPACT_REGISTRY = createMigrationImpactRegistry([
     },
   ],
   [
-    '0111_mcp_managed_oauth_maintenance_routing',
+    '0112_mcp_managed_oauth_maintenance_routing',
     {
       requiresOfflineCutover: true,
       impact: defineMigrationImpact({
@@ -172,7 +172,7 @@ const MIGRATION_IMPACT_REGISTRY = createMigrationImpactRegistry([
     },
   ],
   [
-    '0110_mcp_managed_oauth_authority',
+    '0111_mcp_managed_oauth_authority',
     {
       requiresOfflineCutover: true,
       impact: defineMigrationImpact({
@@ -234,6 +234,7 @@ const MIGRATION_IMPACT_REGISTRY = createMigrationImpactRegistry([
     '0098_board_branch_capability_policies',
     '0099_shared_session_prompting',
     '0100_claude_oauth_attempts',
+    '0110_user_provider_oauth_grants',
     '0102_mcp_oauth_client_registrations',
     '0103_oauth_authority_watermark_reconciliation',
     '0102_shared_session_prompting',

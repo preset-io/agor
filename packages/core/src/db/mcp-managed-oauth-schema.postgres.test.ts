@@ -34,7 +34,7 @@ describe.skipIf(process.env.AGOR_DB_DIALECT !== 'postgresql')(
       const [row] =
         await owned.sql`SELECT MAX(created_at) AS latest FROM drizzle.__drizzle_migrations`;
       const latest = Number(row.latest);
-      expect(latest).toBe(1789344000007);
+      expect(latest).toBe(1789344000008);
       expect(
         classifyMigrationWatermark(
           [{ tag: '0109_branch_cleanup_policy', when: 1789344000003 }],

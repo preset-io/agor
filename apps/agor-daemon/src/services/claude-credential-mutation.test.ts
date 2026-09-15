@@ -27,6 +27,22 @@ const deleteCodexAuthCredentialMock = vi.mocked(deleteCodexAuthCredential);
 const resolveCodexCredentialRouteMock = vi.mocked(resolveCodexCredentialRoute);
 
 describe('Claude user credential mutation boundary', () => {
+  it('coordinates role writes but only retires backend grants when membership eligibility is lost', () => {
+    const coordinator = createClaudeUserCredentialPatchCoordinator(
+      { get: () => ({ execution: { unix_user_mode: 'delegated' } }) } as never,
+      {} as never,
+      {} as never,
+      undefined,
+      { backend: {} as never, manageClaudeRoute: false }
+    );
+    for (const role of ['member', 'admin', 'superadmin']) {
+      expect(coordinator.applies({ role })).toBe(true);
+      expect(coordinator.changesSource({ role })).toBe(false);
+    }
+    expect(coordinator.applies({ role: 'viewer' })).toBe(true);
+    expect(coordinator.changesSource({ role: 'viewer' })).toBe(true);
+  });
+
   it('retains safe local cleanup authority when runtime containment admission is disabled', () => {
     const config = {
       execution: {

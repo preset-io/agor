@@ -194,6 +194,10 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('Task runtime HA (PostgreSQ
         daemonB.reportRuntimeTelemetry(active.task_id, authority)
       ).resolves.toMatchObject({ outcome: 'continued' });
       refreshedAt = (await daemonB.findById(active.task_id))?.last_executor_heartbeat_at;
+      await daemonB.assertRuntimeCredentialAuthority(active.task_id, authority);
+      expect((await daemonB.findById(active.task_id))?.last_executor_heartbeat_at).toBe(
+        refreshedAt
+      );
       expect(await daemonB.findById(active.task_id)).toMatchObject({ status: TaskStatus.RUNNING });
       expect(await daemonB.findById(queued.task_id)).toMatchObject({
         status: TaskStatus.QUEUED,
@@ -208,8 +212,11 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('Task runtime HA (PostgreSQ
     );
     await runWithTenantDatabaseScope(peerDb, seed.tenantId, async (scoped) => {
       // Daemon A committed revocation while Redis/realtime fanout was missed.
-      // Daemon B's next normal heartbeat still denies from PostgreSQL.
+      // Daemon B's next credential request and heartbeat both deny from PostgreSQL.
       const daemonB = new TaskRepository(scoped);
+      await expect(
+        daemonB.assertRuntimeCredentialAuthority(active.task_id, authority)
+      ).rejects.toThrow();
       await expect(
         daemonB.reportRuntimeTelemetry(active.task_id, authority)
       ).resolves.toMatchObject({ outcome: 'authorization_revoked', reason: 'token_revoked' });

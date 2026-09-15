@@ -17,6 +17,8 @@ export interface KeyResolutionResult {
   useNativeAuth: boolean;
   connection?: ProviderConnection;
   decryptionFailed?: boolean;
+  managedOAuth?: import('../types').ManagedOAuthSelector;
+  credentialExpiresAt?: string;
 }
 
 /** Resolve a key through the atomic user → ambient tenant connection policy. */
@@ -35,6 +37,7 @@ export async function resolveApiKey(
     connection: resolved.connection,
     source: resolved.source,
     useNativeAuth: resolved.useNativeAuth,
+    ...(resolved.managedOAuth ? { managedOAuth: resolved.managedOAuth } : {}),
     ...(resolved.decryptionFailed ? { decryptionFailed: true } : {}),
   };
 }

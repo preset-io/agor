@@ -15,7 +15,11 @@ import {
   hasExactUserExecutorCredentialHome,
   resolveApiKey,
 } from '@agor/core/config';
-import { runWithTenantDatabaseScope, type TenantScopeAwareDatabase } from '@agor/core/db';
+import {
+  runWithTenantDatabaseScope,
+  TaskRepository,
+  type TenantScopeAwareDatabase,
+} from '@agor/core/db';
 import { type Application, BadRequest, Forbidden, NotAuthenticated } from '@agor/core/feathers';
 import type {
   AgenticToolName,
@@ -26,9 +30,11 @@ import type {
   UserID,
 } from '@agor/core/types';
 import {
+  authenticatedTaskExecutorRuntimeAuthority,
   authenticatedTaskExecutorRuntimeScope,
   matchesTaskExecutorRuntimeScope,
 } from '../auth/executor-runtime-scope.js';
+import type { ClaudeBackendOAuth } from './claude-backend-oauth.js';
 import {
   resolveExecutionCredentialHome,
   sameExecutionCredentialHome,
@@ -66,7 +72,8 @@ export class ConfigService {
   constructor(
     db: TenantScopeAwareDatabase,
     private readonly config: DeepReadonly<AgorConfig> = {},
-    private readonly claudeRuntimeCredentials?: ClaudeRuntimeCredentialResolverLike
+    private readonly claudeRuntimeCredentials?: ClaudeRuntimeCredentialResolverLike,
+    private readonly claudeBackendOAuth?: ClaudeBackendOAuth
   ) {
     this.db = db;
   }
@@ -97,6 +104,7 @@ export class ConfigService {
     source: 'user' | 'tenant' | 'none';
     useNativeAuth: boolean;
     decryptionFailed?: boolean;
+    credentialExpiresAt?: string;
   }> {
     const { taskId, keyName, tool } = data;
     if (!isResolvableApiKeyName(keyName)) {
@@ -192,6 +200,41 @@ export class ConfigService {
       internalParams.tenant?.tenant_id,
       (tenantDb) => resolveApiKey(keyName, { userId, db: tenantDb, tool })
     );
+    if (result.managedOAuth) {
+      const authority = authenticatedTaskExecutorRuntimeAuthority(params);
+      if (
+        !authority ||
+        !this.claudeBackendOAuth ||
+        tool !== 'claude-code' ||
+        !userId ||
+        authority.taskId !== taskId ||
+        authority.userId !== userId ||
+        authority.sessionId !== sessionId
+      ) {
+        throw new Forbidden('A live task executor is required for managed Claude credentials.');
+      }
+      const assertTask = async () => {
+        await runWithTenantDatabaseScope(this.db, authority.tenantId, (db) =>
+          new TaskRepository(db).assertRuntimeCredentialAuthority(taskId, {
+            token_fingerprint: authority.tokenFingerprint,
+            principal_user_id: authority.userId,
+            session_id: authority.sessionId,
+            branch_id: authority.branchId,
+          })
+        );
+        const session = await this.app
+          ?.service('sessions')
+          .get(authority.sessionId, internalParams);
+        if (!session || session.agentic_tool !== tool || session.branch_id !== authority.branchId) {
+          throw new Forbidden('Task credential scope changed.');
+        }
+        if (session.sdk_home_scope !== 'branch') {
+          await this.assertNativeAuthHomeMatchesSession(tool, userId, sessionId, internalParams);
+        }
+      };
+      const managed = await this.claudeBackendOAuth.resolve(authority.tenantId, userId, assertTask);
+      result = { ...result, ...managed, apiKey: undefined, managedOAuth: undefined };
+    }
     if (result.useNativeAuth && tool === 'claude-code') {
       const tenantId = internalParams.tenant?.tenant_id;
       if (!tenantId || !userId || !this.claudeRuntimeCredentials) {
@@ -230,6 +273,7 @@ export class ConfigService {
       connection: result.connection as Record<string, string> | undefined,
       source: result.source,
       useNativeAuth: result.useNativeAuth,
+      ...(result.credentialExpiresAt ? { credentialExpiresAt: result.credentialExpiresAt } : {}),
       ...(result.decryptionFailed && { decryptionFailed: true }),
     };
   }
@@ -319,7 +363,8 @@ export class ConfigService {
 export function createConfigService(
   db: TenantScopeAwareDatabase,
   config: DeepReadonly<AgorConfig>,
-  claudeRuntimeCredentials?: ClaudeRuntimeCredentialResolverLike
+  claudeRuntimeCredentials?: ClaudeRuntimeCredentialResolverLike,
+  claudeBackendOAuth?: ClaudeBackendOAuth
 ): ConfigService {
-  return new ConfigService(db, config, claudeRuntimeCredentials);
+  return new ConfigService(db, config, claudeRuntimeCredentials, claudeBackendOAuth);
 }
