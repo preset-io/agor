@@ -81,6 +81,9 @@ function hasOnlyExpectedMaterialShape(value: unknown): value is MCPOAuthPendingF
     (material.clientSecret === undefined || typeof material.clientSecret === 'string') &&
     (material.clientRegistrationId === undefined ||
       typeof material.clientRegistrationId === 'string') &&
+    (material.tokenEndpointAuthMethod === undefined ||
+      material.tokenEndpointAuthMethod === 'client_secret_basic' ||
+      material.tokenEndpointAuthMethod === 'client_secret_post') &&
     (material.compatibilityMode === 'strict' ||
       material.compatibilityMode === 'legacy' ||
       material.compatibilityMode === 'marketplace') &&
@@ -166,6 +169,9 @@ export class MCPOAuthPendingFlowAuthority {
         ...(input.context.clientSecret ? { clientSecret: input.context.clientSecret } : {}),
         ...(input.context.clientRegistrationId
           ? { clientRegistrationId: input.context.clientRegistrationId }
+          : {}),
+        ...(input.context.tokenEndpointAuthMethod
+          ? { tokenEndpointAuthMethod: input.context.tokenEndpointAuthMethod }
           : {}),
         compatibilityMode: input.context.compatibilityMode,
         authorizationResponseIssuerParameterSupported:
@@ -305,6 +311,7 @@ export class MCPOAuthPendingFlowAuthority {
         clientId: material.clientId,
         clientSecret: material.clientSecret,
         clientRegistrationId: material.clientRegistrationId,
+        tokenEndpointAuthMethod: material.tokenEndpointAuthMethod,
         state: rawState,
         // Completion never reads this field. Do not persist or reconstruct the
         // secret-bearing authorization URL after the browser has opened it.

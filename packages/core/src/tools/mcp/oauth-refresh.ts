@@ -8,7 +8,7 @@ import {
   type UserMCPOAuthToken,
   UserMCPOAuthTokenRepository,
 } from '../../db/repositories';
-import type { MCPServerID, UserID } from '../../types';
+import type { MCPOAuthTokenEndpointAuthMethod, MCPServerID, UserID } from '../../types';
 import {
   type OutboundDnsLookup,
   OutboundPreDispatchAuthorityError,
@@ -16,6 +16,7 @@ import {
 } from '../../utils/safe-outbound-fetch';
 import { assertMcpGrantSubjectEntitled } from './grant-entitlement';
 import { inferOAuthTokenUrl } from './oauth-auth';
+import { applyClientAuthentication } from './oauth-mcp-transport';
 import { resolveTokenExpiry } from './oauth-token-expiry';
 
 export const REFRESH_BUFFER_MS = 60_000;
@@ -104,6 +105,8 @@ export interface RefreshMCPTokenOptions {
   clientId: string;
   clientSecret?: string;
   resourceUri?: string;
+  /** Exact negotiated method; client errors never authorize an alternate-method replay. */
+  tokenEndpointAuthMethod?: MCPOAuthTokenEndpointAuthMethod;
   /** Exact redirect used to issue this grant (required by GitLab on refresh). */
   redirectUri?: string;
   /** Exact loopback HTTP exception for standalone development/tests only. */
@@ -144,11 +147,13 @@ export async function refreshMCPToken(
     'Content-Type': 'application/x-www-form-urlencoded',
     Accept: 'application/json',
   };
-  if (opts.clientSecret) {
-    headers.Authorization = `Basic ${Buffer.from(`${opts.clientId}:${opts.clientSecret}`).toString('base64')}`;
-  } else {
-    body.client_id = opts.clientId;
-  }
+  applyClientAuthentication(
+    body,
+    headers,
+    opts.clientId,
+    opts.clientSecret,
+    opts.tokenEndpointAuthMethod ?? 'client_secret_basic'
+  );
 
   let response: Response;
   try {

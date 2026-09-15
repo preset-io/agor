@@ -235,6 +235,26 @@ describe('refreshMCPToken', () => {
     expect(form.has('scope')).toBe(false);
   });
 
+  it('uses client_secret_post (credentials in body) when negotiated', async () => {
+    mockFetchOnce({ access_token: 'new-a', expires_in: 3600 });
+
+    const result = await refreshMCPToken({
+      tokenEndpoint: 'https://auth.example.com/token',
+      refreshToken: 'rt-abc',
+      clientId: 'client-123',
+      clientSecret: 'secret-xyz',
+      tokenEndpointAuthMethod: 'client_secret_post',
+    });
+
+    expect(result.access_token).toBe('new-a');
+    expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+    const [, init] = (globalThis.fetch as unknown as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(init.headers.Authorization).toBeUndefined();
+    const body = new URLSearchParams(init.body as string);
+    expect(body.get('client_id')).toBe('client-123');
+    expect(body.get('client_secret')).toBe('secret-xyz');
+  });
+
   it('surfaces invalid_grant as InvalidGrantError', async () => {
     mockFetchOnce(
       {
