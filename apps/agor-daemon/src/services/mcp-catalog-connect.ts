@@ -44,6 +44,7 @@ import type {
   MCPCatalogEntry,
   MCPCatalogProbedAuthType,
   MCPCatalogServerCandidate,
+  MCPManagedOAuthProfileReference,
   MCPServer,
   MCPServerID,
   UserID,
@@ -54,6 +55,8 @@ import {
   catalogOAuthConfig,
   catalogServerTransport,
   isCurrentCatalogInstall,
+  isCurrentManagedCatalogInstall,
+  managedCatalogOAuthConfig,
 } from './mcp-catalog-install-policy.js';
 import type { MCPServersService } from './mcp-servers.js';
 
@@ -538,6 +541,11 @@ export interface MCPCatalogConnectService {
  * to catch that than a bug report about consenting twice.
  */
 export interface MCPCatalogConnectDeps {
+  /** Fresh whole-cell + registry admission, resolved by the daemon, never from request profile fields. */
+  resolveManagedInstall?(
+    entry: MCPCatalogEntry & { remote_url: string },
+    params: AuthenticatedParams
+  ): Promise<{ profile: MCPManagedOAuthProfileReference; disclosure: string } | null>;
   /**
    * Opens one short tenant database unit for direct, internal service methods.
    * Connect is a long route and must not retain this scope across its remote
@@ -960,6 +968,83 @@ export function createMCPCatalogConnectService(
         throw new NotAuthenticated('Authenticated user identity must be a canonical full UUID');
       }
       const userId = authenticatedUserId as UserID;
+      if (
+        data.oauth_client_mode !== undefined &&
+        data.oauth_client_mode !== 'direct' &&
+        data.oauth_client_mode !== 'cloud_managed_v1'
+      ) {
+        throw new BadRequest('Unsupported MCP OAuth client mode');
+      }
+      if (data.oauth_client_mode === 'cloud_managed_v1') {
+        if (data.bearer_token !== undefined)
+          throw new BadRequest('Managed OAuth does not accept a caller credential');
+        const admission = await deps.resolveManagedInstall?.(entry, params);
+        if (!admission || data.acknowledged_managed_disclosure !== admission.disclosure) {
+          throw new BadRequest(
+            'Managed OAuth is unavailable or its disclosure was not acknowledged'
+          );
+        }
+        // A separate exact owned row, never a direct peer or a shared install.
+        const candidates = await deps.listCandidates(userId, params);
+        const existing = candidates.find(
+          (candidate) =>
+            candidate.server.enabled &&
+            isCurrentManagedCatalogInstall(candidate.server, entry, admission.profile, userId)
+        );
+        if (existing)
+          return {
+            mcp_server: await presentConnectServer(existing, params, deps),
+            starter_prompt: entry.starter_prompt,
+            reused_existing_server: true,
+            reuse_kind: 'catalog_install' as const,
+          };
+        const input: CreateMCPServerInput = {
+          name: `${catalogServerSlug(entry.name)}-managed`,
+          display_name: catalogDisplayName(entry),
+          description: entry.benefit ?? entry.description,
+          transport: 'http',
+          url: entry.remote_url,
+          auth: managedCatalogOAuthConfig(admission.profile),
+          scope: 'session',
+          source: 'catalog',
+        };
+        let installed: MCPServer;
+        try {
+          installed = await service('mcp-servers').create(input, {
+            ...params,
+            mcpCatalogInstall: { entry_name: entry.name },
+          });
+        } catch (error) {
+          if (!isDatabaseUniqueConstraintError(error)) throw error;
+          const winner = (await deps.listCandidates(userId, params)).find(
+            (candidate) =>
+              candidate.server.enabled &&
+              isCurrentManagedCatalogInstall(candidate.server, entry, admission.profile, userId)
+          );
+          if (!winner)
+            throw new BadRequest(
+              'The existing managed install changed; disconnect it before reconnecting'
+            );
+          return {
+            mcp_server: await presentConnectServer(winner, params, deps),
+            starter_prompt: entry.starter_prompt,
+            reused_existing_server: true,
+            reuse_kind: 'catalog_install' as const,
+          };
+        }
+        return {
+          mcp_server: await presentConnectServer(
+            candidateFromExternalServer(installed),
+            params,
+            deps
+          ),
+          starter_prompt: entry.starter_prompt,
+          reused_existing_server: false,
+          reuse_kind: 'new_catalog_install' as const,
+        };
+      }
+      if (data.acknowledged_managed_disclosure !== undefined)
+        throw new BadRequest('Managed disclosure requires explicit managed mode');
       const bearerToken = readBearerToken(data.bearer_token, entry);
       // Every connect claims an operation generation, not only bearer
       // rotation. Compensation must not delete a just-created row after a

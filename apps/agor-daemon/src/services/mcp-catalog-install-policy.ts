@@ -1,5 +1,14 @@
 import { redactMCPAuthSecrets } from '@agor/core/tools/mcp/auth-secrets';
-import type { MCPAuth, MCPCatalogEntry, MCPServer, MCPTransport } from '@agor/core/types';
+import {
+  assertMCPManagedOAuthProfileReference,
+  type MCPAuth,
+  type MCPCatalogEntry,
+  type MCPManagedOAuthProfileReference,
+  type MCPServer,
+  type MCPTransport,
+  resolveMCPOAuthClientMode,
+  type UserID,
+} from '@agor/core/types';
 
 /** Catalog transports, as `mcp_servers` names them. */
 export function catalogServerTransport(entry: MCPCatalogEntry): MCPTransport {
@@ -79,6 +88,59 @@ export function catalogOAuthConfig(entry: MCPCatalogEntry): MCPAuth {
     ...(stated?.dcr_mode ? { oauth_dcr_mode: stated.dcr_mode } : {}),
     ...(stated?.compatibility_mode ? { oauth_compatibility_mode: stated.compatibility_mode } : {}),
   };
+}
+
+/** Only a server-side admitted registry selection may call this prescription. */
+export function managedCatalogOAuthConfig(profile: MCPManagedOAuthProfileReference): MCPAuth {
+  assertMCPManagedOAuthProfileReference(profile);
+  return {
+    type: 'oauth',
+    oauth_mode: 'per_user',
+    oauth_client_mode: 'cloud_managed_v1',
+    oauth_managed_profile: { ...profile },
+  };
+}
+
+/**
+ * Separate from direct catalog peers: never convert or reuse a direct/BYO row.
+ * Admission and current immutable registry evidence are supplied by the caller;
+ * a provenance stamp alone is not proof of eligibility.
+ */
+export function isCurrentManagedCatalogInstall(
+  server: Pick<
+    MCPServer,
+    'source' | 'catalog_entry_name' | 'transport' | 'url' | 'auth' | 'headers' | 'owner_user_id'
+  >,
+  entry: MCPCatalogEntry & { remote_url: string },
+  profile: MCPManagedOAuthProfileReference,
+  userId: UserID
+): boolean {
+  try {
+    const prescribed = managedCatalogOAuthConfig(profile);
+    const actualProfile = server.auth?.oauth_managed_profile;
+    assertMCPManagedOAuthProfileReference(actualProfile);
+    const fields = ['type', 'oauth_mode', 'oauth_client_mode', 'oauth_managed_profile'];
+    return (
+      server.owner_user_id === userId &&
+      server.source === 'catalog' &&
+      server.catalog_entry_name === entry.name &&
+      entry.auth_type === 'oauth' &&
+      server.transport === 'http' &&
+      catalogServerTransport(entry) === 'http' &&
+      server.url === entry.remote_url &&
+      Object.keys(server.headers ?? {}).length === 0 &&
+      resolveMCPOAuthClientMode(server.auth) === 'cloud_managed_v1' &&
+      Object.keys(server.auth ?? {}).length === fields.length &&
+      Object.keys(server.auth ?? {}).every((key) => fields.includes(key)) &&
+      server.auth?.type === prescribed.type &&
+      server.auth?.oauth_mode === prescribed.oauth_mode &&
+      (Object.keys(profile) as (keyof MCPManagedOAuthProfileReference)[]).every(
+        (key) => profile[key] === actualProfile[key]
+      )
+    );
+  } catch {
+    return false;
+  }
 }
 
 /**

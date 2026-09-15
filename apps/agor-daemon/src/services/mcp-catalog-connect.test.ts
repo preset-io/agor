@@ -2438,3 +2438,79 @@ describe('mcp-catalog/connect — what a failed connect leaves behind', () => {
     expect(created.attachments).toEqual([]);
   });
 });
+
+describe('explicit managed catalog mode', () => {
+  const profile = {
+    profile_id: 'fake_alpha',
+    semantic_version: '1',
+    environment: 'staging' as const,
+    region: 'us-west-2' as const,
+    registry_digest: 'a'.repeat(64),
+  };
+  const managedAuth: MCPAuth = {
+    type: 'oauth',
+    oauth_mode: 'per_user',
+    oauth_client_mode: 'cloud_managed_v1',
+    oauth_managed_profile: profile,
+  };
+  const entry = { ...CURATED, auth_type: 'oauth' as const };
+  const managedRequest = {
+    ...request,
+    oauth_client_mode: 'cloud_managed_v1' as const,
+    acknowledged_managed_disclosure: 'Exact managed disclosure',
+  };
+  beforeEach(() => vi.clearAllMocks());
+  it('creates a separate owned row without touching direct credentials or attachments', async () => {
+    const direct = installOf({ auth: { type: 'oauth', oauth_mode: 'per_user' } });
+    const { app, deps, created, patched } = buildApp(entry, [direct]);
+    deps.resolveManagedInstall = async () => ({ profile, disclosure: 'Exact managed disclosure' });
+    const result = await createMCPCatalogConnectService(app, deps).create(managedRequest, params);
+    expect(result.reused_existing_server).toBe(false);
+    expect(created.mcpServers).toHaveLength(1);
+    expect(created.mcpServers[0]).toMatchObject({
+      auth: managedAuth,
+      owner_user_id: ALICE,
+      scope: 'session',
+    });
+    expect(patched).toEqual([]);
+    expect(created.attachments).toEqual([]);
+    expect(created.sessions).toEqual([]);
+    expect(probeRemoteAuthType).not.toHaveBeenCalled();
+    expect(probeRemoteBearerToken).not.toHaveBeenCalled();
+  });
+  it('reuses only the exact current managed row owned by this caller', async () => {
+    const existing = installOf({ auth: managedAuth });
+    const { app, deps, created } = buildApp(entry, [existing]);
+    deps.resolveManagedInstall = async () => ({ profile, disclosure: 'Exact managed disclosure' });
+    const result = await createMCPCatalogConnectService(app, deps).create(managedRequest, params);
+    expect(result.reused_existing_server).toBe(true);
+    expect(created.mcpServers).toHaveLength(0);
+  });
+  it('requires fresh admission and the exact second disclosure without silent direct fallback', async () => {
+    const { app, deps, created } = buildApp(entry);
+    const service = createMCPCatalogConnectService(app, deps);
+    await expect(service.create(managedRequest, params)).rejects.toThrow(/unavailable/);
+    deps.resolveManagedInstall = async () => ({ profile, disclosure: 'Changed disclosure' });
+    await expect(service.create(managedRequest, params)).rejects.toThrow(/acknowledged/);
+    expect(created.mcpServers).toHaveLength(0);
+    expect(probeRemoteAuthType).not.toHaveBeenCalled();
+  });
+  it('rejects user credentials in managed mode before any network activity', async () => {
+    const { app, deps } = buildApp(entry);
+    deps.resolveManagedInstall = async () => ({ profile, disclosure: 'Exact managed disclosure' });
+    await expect(
+      createMCPCatalogConnectService(app, deps).create(
+        { ...managedRequest, bearer_token: 'SYNTHETIC_USER_CREDENTIAL' },
+        params
+      )
+    ).rejects.toThrow(/caller credential/);
+    expect(probeRemoteBearerToken).not.toHaveBeenCalled();
+  });
+  it('direct Connect never reconciles an existing managed row', async () => {
+    probeRemoteAuthType.mockResolvedValue('none');
+    const { app, deps, created, patched } = buildApp(CURATED, [installOf({ auth: managedAuth })]);
+    await createMCPCatalogConnectService(app, deps).create(request, params);
+    expect(created.mcpServers).toHaveLength(1);
+    expect(patched).toEqual([]);
+  });
+});
