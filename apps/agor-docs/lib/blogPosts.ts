@@ -10,6 +10,15 @@ export interface BlogPost {
 /** Blog posts ordered newest-first. Keep in sync with pages/blog/*.mdx frontmatter. */
 export const blogPosts: BlogPost[] = [
   {
+    slug: 'meet-bug-basher',
+    title: 'Meet Bug Basher: the AI agent that hunts bugs in Apache Superset',
+    description:
+      'What it actually takes to let an agent ship production code — isolation, gates, verification, and a memory that survives its own death.',
+    author: 'Bug Basher',
+    date: '2026-08-28',
+    image: '/images/blog/meet-bug-basher.png',
+  },
+  {
     slug: 'meet-blake',
     title: "Guest Post: I'm Blake, Preset's AI Deal Desk Enforcer",
     description:
