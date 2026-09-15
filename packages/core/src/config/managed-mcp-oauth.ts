@@ -67,18 +67,25 @@ export function validateManagedMCPOAuthConfig(
     }
   }
   if (value.worker_issuer !== undefined) {
-    const issuer = new URL(value.worker_issuer);
-    if (
-      issuer.protocol !== 'https:' ||
-      issuer.href !== value.worker_issuer ||
-      issuer.username ||
-      issuer.password ||
-      issuer.search ||
-      issuer.hash ||
-      (value.broker_origin && issuer.origin !== value.broker_origin)
-    )
+    let valid = false;
+    try {
+      const issuer = new URL(value.worker_issuer);
+      valid = !(
+        issuer.protocol !== 'https:' ||
+        issuer.href !== value.worker_issuer ||
+        issuer.username ||
+        issuer.password ||
+        issuer.search ||
+        issuer.hash ||
+        (value.broker_origin && issuer.origin !== value.broker_origin)
+      );
+    } catch {
+      // URL parser diagnostics may echo the supplied value; never propagate them.
+    }
+    if (!valid)
       throw new Error('Managed MCP OAuth requires an exact worker issuer on the broker origin');
   }
+
   for (const key of ['cell_id', 'credential_id', 'sender_key_id'] as const) {
     const id = value[key];
     if (id !== undefined && !/^[A-Za-z0-9_-]{1,128}$/.test(id)) {
@@ -104,11 +111,11 @@ export function validateManagedMCPOAuthConfig(
   if (value.contract_sha256 !== undefined && !/^[a-f0-9]{64}$/.test(value.contract_sha256)) {
     throw new Error('Managed MCP OAuth requires an exact SHA-256 contract manifest');
   }
-  if (value.enabled) {
+  if (value.enabled || value.revocation) {
     for (const key of MANAGED_MCP_OAUTH_CONFIG_KEYS.filter(
       (key) => !(MANAGED_MCP_OAUTH_FLAGS as readonly string[]).includes(key)
     )) {
-      if (!value[key]) throw new Error(`Enabled managed MCP OAuth requires ${key}`);
+      if (!value[key]) throw new Error(`Managed MCP OAuth vending or cleanup requires ${key}`);
     }
   }
 }
