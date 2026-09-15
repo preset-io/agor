@@ -29,6 +29,7 @@ import {
   assertValidRawExternalLaunchConfig,
   resolveEffectiveExternalLaunchConfig,
 } from './external-launch';
+import { MANAGED_MCP_OAUTH_CONFIG_KEYS, validateManagedMCPOAuthConfig } from './managed-mcp-oauth';
 import { assertValidMultiTenancyConfig } from './multitenancy';
 import { AgorPasswordPolicyProfile } from './password-policy';
 import { isPlainConfigRecord } from './plain-record';
@@ -530,6 +531,7 @@ function validateConfig(config: AgorConfig): void {
   const knownTopLevelKeys = new Set([
     'environment_disclaimer_markdown',
     'agentic_tools',
+    'managed_mcp_oauth',
     'defaults',
     'display',
     'daemon',
@@ -578,6 +580,8 @@ function validateConfig(config: AgorConfig): void {
     }
   };
   const legacyConfig = config as LegacyConfig;
+  only(config.managed_mcp_oauth, 'managed_mcp_oauth', [...MANAGED_MCP_OAUTH_CONFIG_KEYS]);
+  validateManagedMCPOAuthConfig(config.managed_mcp_oauth);
   only(config.agentic_tools, 'agentic_tools', ['installed', 'claude_subscription_oauth']);
   if (
     config.agentic_tools?.claude_subscription_oauth !== undefined &&
