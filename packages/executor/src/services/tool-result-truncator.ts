@@ -1,4 +1,5 @@
 import type { MessagePatch, TranscriptTruncation } from '@agor/core/types';
+import { isGeneratedDiff } from './generated-diff.js';
 
 type TruncatorFn = (content: unknown, targetBytes: number) => unknown;
 
@@ -111,6 +112,14 @@ const TOOL_TRUNCATORS: Record<string, TruncatorFn> = {
  * closed. No files, caches or tenant lookups are involved here.
  */
 export function projectMessageData<T extends MessagePatch>(data: T, budgetBytes: number): T {
+  return projectMessage(data, budgetBytes, false);
+}
+
+function projectMessage<T extends MessagePatch>(
+  data: T,
+  budgetBytes: number,
+  generatedOnly: boolean
+): T {
   if (byteSize(data) <= budgetBytes) return data;
 
   const projected = { ...data };
@@ -121,7 +130,13 @@ export function projectMessageData<T extends MessagePatch>(data: T, budgetBytes:
   if (toolUses) projected.tool_uses = toolUses;
 
   type Owner = { transcript_truncation?: TranscriptTruncation; [key: string]: unknown };
-  const candidates: { owners: Owner[]; field: string; size: number; toolName?: string }[] = [];
+  const candidates: {
+    owners: Owner[];
+    field: string;
+    size: number;
+    toolName?: string;
+    generated?: boolean;
+  }[] = [];
   const inputs = new Map<string, Owner[]>();
   const blocks = Array.isArray(projected.content) ? projected.content : [];
   const uses = [...blocks.filter((block) => block.type === 'tool_use'), ...(toolUses ?? [])];
@@ -160,14 +175,19 @@ export function projectMessageData<T extends MessagePatch>(data: T, budgetBytes:
       candidates.push({
         owners: [block],
         field,
+        generated: field === 'diff' && isGeneratedDiff(value),
         size: byteSize(value),
         toolName: typeof use?.name === 'string' ? use.name : undefined,
       });
     }
   }
-  candidates.sort((a, b) => b.size - a.size);
+  // Presentation is always disposable before original data, even when smaller.
+  // Arbitrary provider fields (including unmarked "diff") stay in the original
+  // fallback tier. Size only orders candidates within each retention tier.
+  candidates.sort((a, b) => Number(!!b.generated) - Number(!!a.generated) || b.size - a.size);
 
-  for (const { owners, field, size, toolName } of candidates) {
+  for (const { owners, field, size, toolName, generated } of candidates) {
+    if (generatedOnly && !generated) continue;
     const total = byteSize(projected);
     if (total <= budgetBytes) break;
     const previous = owners.map((owner) => ({
@@ -227,15 +247,20 @@ export function projectTranscriptData(
   const projected = [...data];
   const entries = data.map((message, index) => ({ index, size: byteSize(message) }));
   entries.sort((a, b) => b.size - a.size);
-  for (const { index } of entries) {
-    const total = byteSize(projected);
-    if (total <= budgetBytes) break;
-    const message = projected[index];
-    if (!message || typeof message !== 'object' || Array.isArray(message)) continue;
-    projected[index] = projectMessageData(
-      message,
-      Math.max(0, budgetBytes - total + byteSize(message))
-    );
+  // Bulk writes also exhaust generated enrichment across ALL messages before
+  // touching originals in any message. The array wrapper counts in both passes.
+  for (const generatedOnly of [true, false]) {
+    for (const { index } of entries) {
+      const total = byteSize(projected);
+      if (total <= budgetBytes) break;
+      const message = projected[index];
+      if (!message || typeof message !== 'object' || Array.isArray(message)) continue;
+      projected[index] = projectMessage(
+        message,
+        Math.max(0, budgetBytes - total + byteSize(message)),
+        generatedOnly
+      );
+    }
   }
   return projected;
 }

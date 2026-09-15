@@ -22,7 +22,9 @@ export function TranscriptTruncationNotice({
             `${field} (originally ${size.original_bytes.toLocaleString()} serialized bytes)`
         )
         .join(', ')}
-      . Some tool data was omitted or shortened; execution was not changed.
+      . {fields.some(([field]) => field === 'diff') && 'Diff too large to preview. '}
+      Full data for these fields is unavailable in the saved transcript. Shortened results are
+      incomplete and may not be valid JSON; execution was not changed.
     </Typography.Paragraph>
   );
 }

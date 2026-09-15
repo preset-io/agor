@@ -54,6 +54,16 @@ describe('Codex full-message transcript budget', () => {
       };
       const originalInput = structuredClone(hugeInput);
       const editInput = { changes: [{ path: 'state.json', kind: 'add' }] };
+      // Two original input copies + original result fit; adding a smaller,
+      // source-bounded Write diff does not. Exercise provenance all the way
+      // through real handler wrappers and the Feathers projection hook.
+      const retainedInput = {
+        file_path: 'synthetic.txt',
+        content: 'w'.repeat(240_000),
+        opaque: 'i'.repeat(50_000),
+      };
+      const retainedOutput = JSON.stringify({ exact: 'r'.repeat(200_000) });
+      const retainedInputBefore = structuredClone(retainedInput);
       const writes: { method: string; data: MessageCreate | MessagePatch }[] = [];
       const stored = new Map<MessageID, Message>();
       const client = createClient('http://localhost:1', false);
@@ -147,6 +157,17 @@ describe('Codex full-message transcript budget', () => {
             },
           };
           yield {
+            type: 'tool_complete',
+            toolUse: {
+              id: 'retention',
+              name: 'Write',
+              input: retainedInput,
+              output: retainedOutput,
+              status: 'completed',
+            },
+          };
+          expect(retainedInput).toEqual(retainedInputBefore);
+          yield {
             type: 'complete',
             threadId: '',
             content: [{ type: 'text', text: 'final response' }],
@@ -167,13 +188,26 @@ describe('Codex full-message transcript budget', () => {
           (block) => block.type === 'tool_result' && block.tool_use_id === 'edit'
         );
         // Real edit_files enrichment duplicates the first file's long JSON line
-        // in both structuredPatch and files. Its 200-line cap does not bound bytes.
+        // in both structuredPatch and files. The source byte cap omits it as a unit.
         expect(edit?.transcript_truncation?.diff.original_bytes).toBeGreaterThan(960_000);
         expect(edit).not.toHaveProperty('diff');
         expect(edit).toMatchObject({ content: '[completed]', is_error: false });
         expect(
           blocks.find((block) => block.type === 'tool_result' && block.tool_use_id === 'next')
         ).toMatchObject({ content: 'not found', is_error: true });
+        const retainedMessage = messages.find((message) =>
+          message.tool_uses?.some((use) => use.id === 'retention')
+        );
+        expect(retainedMessage?.tool_uses?.[0].input).toEqual(retainedInputBefore);
+        expect(
+          blocks.find((block) => block.type === 'tool_use' && block.id === 'retention')?.input
+        ).toEqual(retainedInputBefore);
+        const retainedResult = blocks.find((block) => block.tool_use_id === 'retention');
+        expect(retainedResult?.content).toBe(retainedOutput);
+        expect(JSON.parse(retainedResult?.content as string)).toEqual(JSON.parse(retainedOutput));
+        expect(retainedResult?.diff).toBeUndefined();
+        expect(Object.keys(retainedResult?.transcript_truncation ?? {})).toEqual(['diff']);
+        expect(retainedResult?.transcript_truncation?.diff.original_bytes).toBeLessThan(256_000);
         expect(messages.at(-1)?.content).toEqual([{ type: 'text', text: 'final response' }]);
         expect(writes.filter((write) => write.method === 'patch')).toHaveLength(withStarts ? 2 : 0);
         expect(await readFile(file, 'utf8')).toBe(snapshot);

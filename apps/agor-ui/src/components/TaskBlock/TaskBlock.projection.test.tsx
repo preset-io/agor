@@ -9,6 +9,7 @@ import {
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import { useState } from 'react';
 import { describe, expect, it } from 'vitest';
+import { enrichContentBlocks } from '../../../../../packages/executor/src/sdk-handlers/base/diff-enrichment';
 import { projectMessageData } from '../../../../../packages/executor/src/services/tool-result-truncator';
 import { groupMessagesIntoBlocks, TaskBlock } from './TaskBlock';
 
@@ -79,6 +80,49 @@ function Harness({
 }
 
 describe('TaskBlock persisted result projections (production grouping and renderers)', () => {
+  it('carries source diff omission metadata through TaskBlock to the actual tool consumer', () => {
+    const { task, call } = fixture('ok');
+    const input = { file_path: 'synthetic.json', content: 'x'.repeat(300_000) };
+    const blocks: ContentBlock[] = [
+      { type: 'tool_use', id: 'write', name: 'Write', input },
+      { type: 'tool_result', tool_use_id: 'write', content: 'Exact write result' },
+    ];
+    enrichContentBlocks(blocks);
+    const saved = persist({
+      ...call,
+      content: blocks,
+      tool_uses: [{ id: 'write', name: 'Write', input }],
+    });
+    expect(saved.tool_uses?.[0].input).toEqual(input);
+    expect((saved.content as ContentBlock[])[1].content).toBe('Exact write result');
+    render(<Harness task={task} messages={[saved]} />);
+    // Write opens by default; the omission must be visible without another toggle.
+    expect(screen.getByRole('note')).toHaveTextContent('Transcript shortened: diff');
+    expect(screen.getByRole('note')).toHaveTextContent('Diff too large to preview');
+    expect(screen.getByRole('note')).not.toHaveTextContent('input (originally');
+    expect(screen.getByText('Exact write result')).toBeVisible();
+    expect(screen.getByText('Input parameters')).toBeVisible();
+    fireEvent.click(screen.getByText('Write', { exact: true }));
+    expect(screen.queryByRole('note')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByText('Write', { exact: true }));
+    expect(screen.getByRole('note')).toHaveTextContent('Diff too large to preview');
+  });
+
+  it('discloses unavailable original Task input through the actual TaskBlock route', () => {
+    const { task, call } = fixture('ok');
+    const input = { description: 'Synthetic task', prompt: 'x'.repeat(500_000) };
+    call.content = [{ type: 'tool_use', id: 'task-call', name: 'Task', input }];
+    call.tool_uses = [{ id: 'task-call', name: 'Task', input }];
+    const saved = persist(call);
+    render(<Harness task={task} messages={[saved]} />);
+    expect(screen.getByRole('note')).toHaveTextContent('Transcript shortened: input');
+    expect(screen.getByRole('note')).toHaveTextContent(
+      'Full data for these fields is unavailable in the saved transcript'
+    );
+    expect(screen.getByRole('note')).toHaveTextContent('execution was not changed');
+    expect(call.tool_uses[0].input).toBe(input);
+  });
+
   it.each(['array', 'string'] as const)(
     'discloses a projected Task %s result with the thought collapsed and expanded',
     (kind) => {
@@ -123,6 +167,10 @@ describe('TaskBlock persisted result projections (production grouping and render
           `content (originally ${originalBytes.toLocaleString()} serialized bytes)`
         );
         expect(screen.getByRole('note')).toHaveTextContent('execution was not changed');
+        expect(screen.getByRole('note')).toHaveTextContent(
+          'Full data for these fields is unavailable in the saved transcript'
+        );
+        expect(screen.getByRole('note')).toHaveTextContent('may not be valid JSON');
       };
       assertNotice();
       fireEvent.click(within(chain).getByText('Thinking', { exact: true }));
@@ -152,6 +200,7 @@ describe('TaskBlock persisted result projections (production grouping and render
       `diff (originally ${Buffer.byteLength(JSON.stringify(diff)).toLocaleString()} serialized bytes)`
     );
     expect(screen.getByRole('note')).not.toHaveTextContent('content (originally');
+    expect(screen.getByRole('note')).toHaveTextContent('Diff too large to preview');
   });
 
   it('does not disclose shortening for an intact Task result', () => {
