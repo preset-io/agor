@@ -117,9 +117,11 @@ export function assertMCPManagedOAuthProfileReference(
   if (
     Object.keys(row).length !== fields.length ||
     Object.keys(row).some((key) => !fields.includes(key)) ||
-    !['profile_id', 'semantic_version'].every(
-      (key) => typeof row[key] === 'string' && /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(row[key])
-    ) ||
+    typeof row.profile_id !== 'string' ||
+    !/^[A-Za-z0-9_-]{1,128}$/.test(row.profile_id) ||
+    typeof row.semantic_version !== 'string' ||
+    !/^[1-9][0-9]{0,18}$/.test(row.semantic_version) ||
+    BigInt(row.semantic_version) > 9_223_372_036_854_775_807n ||
     !['staging', 'production'].includes(String(row.environment)) ||
     row.region !== 'us-west-2' ||
     typeof row.registry_digest !== 'string' ||
