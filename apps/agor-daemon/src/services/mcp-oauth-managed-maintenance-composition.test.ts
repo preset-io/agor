@@ -64,6 +64,31 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllEnvs());
 
 describe('production maintenance composition', () => {
+  it('does not restart the send budget after a capabilities round trip', async () => {
+    let elapsed = 0;
+    const monotonic = vi.spyOn(performance, 'now').mockImplementation(() => elapsed);
+    try {
+      await createManagedOAuthMaintenanceServices(options());
+      request.mockImplementation(async (input) => {
+        if (input.operation === 'capabilities') {
+          elapsed += 3000;
+          return capabilities;
+        }
+        return {};
+      });
+      await state.deps!.sender.request({ operation: 'close', timeoutMs: 5000 } as never);
+      expect(request.mock.calls.at(-1)![0].timeoutMs).toBe(2000);
+      now += 1000;
+      elapsed = 0;
+      request.mockClear();
+      await expect(
+        state.deps!.sender.request({ operation: 'close', timeoutMs: 2000 } as never)
+      ).rejects.toThrow();
+      expect(request.mock.calls.map(([input]) => input.operation)).toEqual(['capabilities']);
+    } finally {
+      monotonic.mockRestore();
+    }
+  });
   it('emits bounded aggregate-only backlog and availability metrics', async () => {
     const metrics = { increment: vi.fn(), gauge: vi.fn() };
     await createManagedOAuthMaintenanceServices({ ...options(), metrics });

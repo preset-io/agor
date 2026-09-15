@@ -7,9 +7,12 @@ import {
   MCP_OAUTH_OWNER_FIELDS,
   MCP_OAUTH_ROUTES,
   McpOAuthAckResponseSchema,
+  McpOAuthCancelReservationRequestSchema,
+  McpOAuthCancelReservationResponseSchema,
   McpOAuthCancelResponseSchema,
   McpOAuthCapabilitiesSchema,
   McpOAuthClaimSchema,
+  McpOAuthCleanupAuthoritySchema,
   McpOAuthCleanupResponseSchema,
   McpOAuthCloseResponseSchema,
   McpOAuthEpochSchema,
@@ -32,6 +35,8 @@ import {
   mcpOAuthSha256,
   mcpOAuthTokensDigest,
 } from '../../types/mcp-managed-oauth-contract';
+import cleanupFixtures from './__fixtures__/managed-v1/cleanup-reservations.json';
+import cleanupManifest from './__fixtures__/managed-v1/cleanup-reservations.manifest.json';
 import vectors from './__fixtures__/managed-v1/hash-vectors.json';
 import invalid from './__fixtures__/managed-v1/invalid.json';
 import manifest from './__fixtures__/managed-v1/manifest.json';
@@ -52,6 +57,32 @@ const schemas: Record<string, ZodType> = {
   receipt_claims: McpOAuthReceiptClaimsSchema,
   succeeded: McpOAuthOperationResponseSchema,
 };
+describe('managed OAuth nonvending reservation contract', () => {
+  const parsers: Record<string, ZodType> = {
+    cancel_reservation: McpOAuthCancelReservationRequestSchema,
+    cancel_reservation_response: McpOAuthCancelReservationResponseSchema,
+    cleanup_authority: McpOAuthCleanupAuthoritySchema,
+  };
+  it('pins every additive producer byte', () => {
+    expect(
+      mcpOAuthSha256(
+        readFileSync(
+          new URL('./__fixtures__/managed-v1/cleanup-reservations.manifest.json', import.meta.url)
+        )
+      )
+    ).toBe(sourcePin.cleanup_manifest_sha256);
+    for (const [name, hash] of Object.entries(cleanupManifest.files))
+      expect(
+        mcpOAuthSha256(readFileSync(new URL(`./__fixtures__/managed-v1/${name}`, import.meta.url)))
+      ).toBe(hash);
+  });
+  for (const [name, fixture] of Object.entries(cleanupFixtures.valid)) {
+    it(`accepts ${name} and refuses extra authority`, () => {
+      expect(parsers[name].safeParse(fixture).success).toBe(true);
+      expect(parsers[name].safeParse({ ...fixture, extra_authority: true }).success).toBe(false);
+    });
+  }
+});
 describe('managed OAuth D0 canonical fixture contract', () => {
   it('pins the exact producer source bytes and manifest, not just self-consistent fixtures', () => {
     expect(

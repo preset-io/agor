@@ -100,15 +100,25 @@ export async function createManagedOAuthMaintenanceServices(input: {
   };
   const sender: Pick<ManagedMCPOAuthClient, 'request'> = {
     request: (async (request) => {
-      if (!['cancel', 'close', 'cleanup', 'ack', 'capabilities'].includes(request.operation))
-        throw new ManagedOAuthUnavailableError();
+      const deadline = performance.now() + Math.min(10000, request.timeoutMs ?? 10000);
+      const remaining = () => {
+        const value = Math.floor(deadline - performance.now());
+        if (value <= 0) throw new ManagedOAuthUnavailableError();
+        return value;
+      };
       if (
-        ['cancel', 'close', 'cleanup'].includes(request.operation) &&
-        (settings.revocation !== true ||
-          !(await getCapabilities({ timeoutMs: request.timeoutMs })).flags.revocation)
+        !['cancel', 'cancel_reservation', 'close', 'cleanup', 'ack', 'capabilities'].includes(
+          request.operation
+        )
       )
         throw new ManagedOAuthUnavailableError();
-      return rawSender.request(request);
+      if (
+        ['cancel', 'cancel_reservation', 'close', 'cleanup'].includes(request.operation) &&
+        (settings.revocation !== true ||
+          !(await getCapabilities({ timeoutMs: remaining() })).flags.revocation)
+      )
+        throw new ManagedOAuthUnavailableError();
+      return rawSender.request({ ...request, timeoutMs: remaining() });
     }) as ManagedMCPOAuthClient['request'],
   };
   return createManagedOAuthMaintenance({

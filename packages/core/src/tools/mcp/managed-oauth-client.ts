@@ -216,6 +216,7 @@ type Operation = keyof Pick<
   | 'status'
   | 'exchange'
   | 'cancel'
+  | 'cancel_reservation'
   | 'refresh'
   | 'close'
   | 'cleanup'

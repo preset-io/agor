@@ -6,6 +6,6 @@
   "source_commit": "Recorded in the consuming repository pin; cannot self-embed producing commit SHA.",
   "files": {
     "manifest.json": "adfdb192f988a4e0c86ecde3fdbcacce16b255681cdef8da66a70ebf02c2b46d",
-    "projection-results.json": "4faec35441ec4339835fd69727e49ef42eaf4a19a610d51fbb8c6bf008bc8961"
+    "projection-results.json": "8aafba4adc550bfd616b5745901f47cf7aa16df685c2426172d895d3f24eef05"
   }
 }
