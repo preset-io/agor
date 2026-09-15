@@ -23,6 +23,7 @@ import {
 } from '@agor-live/client';
 import {
   AimOutlined,
+  ArrowLeftOutlined,
   CloseOutlined,
   CodeOutlined,
   DownOutlined,
@@ -54,6 +55,7 @@ import { getDaemonUrl } from '../../config/daemon';
 import { useAppActions } from '../../contexts/AppActionsContext';
 import { useRecenterMap } from '../../contexts/CanvasNavigationContext';
 import { useConnectionDisabled } from '../../contexts/ConnectionContext';
+import { useIsMobileViewport } from '../../hooks/useIsMobileViewport';
 import { useSessionActions } from '../../hooks/useSessionActions';
 import { useSessionSearch } from '../../hooks/useSessionSearch';
 import { useSharedReactiveSession } from '../../hooks/useSharedReactiveSession';
@@ -81,6 +83,7 @@ import { FileUpload } from '../FileUpload';
 import { ForkSpawnModal } from '../ForkSpawnModal/ForkSpawnModal';
 import type { ModelConfig } from '../ModelSelector';
 import { CreatedByTag } from '../metadata';
+import { MOBILE_TOUCH_TARGET } from '../mobile/constants';
 import { getUrlDisplayLabel } from '../Pill/url-helpers';
 import { ToolIcon } from '../ToolIcon';
 import {
@@ -172,6 +175,7 @@ const PromptInput = React.forwardRef<PromptInputHandle, PromptInputProps>(
     },
     ref
   ) => {
+    const isMobile = useIsMobileViewport();
     const [value, setValue] = React.useState(() => getDraft(sessionId));
     const valueRef = React.useRef(value);
     const textareaElementRef = React.useRef<HTMLTextAreaElement | null>(null);
@@ -316,6 +320,9 @@ const PromptInput = React.forwardRef<PromptInputHandle, PromptInputProps>(
         enableKnowledgeMentions
         kbLinkTarget="absolute-route"
         highlightWhenEmpty
+        // Preserve the mobile composer's iOS no-autozoom threshold. The shared
+        // textarea also applies these metrics to its mention highlight overlay.
+        textareaStyle={isMobile ? { fontSize: 16 } : undefined}
       />
     );
   }
@@ -354,6 +361,11 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   uploadPolicy,
 }) => {
   const { token } = theme.useToken();
+  const isMobileShell = useIsMobileViewport();
+  // 44px touch targets for the header controls on the mobile full-screen shell.
+  const mobileHeaderButtonStyle: React.CSSProperties | undefined = isMobileShell
+    ? { minWidth: MOBILE_TOUCH_TARGET, minHeight: MOBILE_TOUCH_TARGET }
+    : undefined;
   const { modal } = App.useApp();
   const { showSuccess, showInfo, showError } = useThemedMessage();
   const connectionDisabled = useConnectionDisabled();
@@ -938,7 +950,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
               ? 'Queue here… @ for mentions, : for emoji'
               : 'Prompt here… @ for mentions, : for emoji'
           }
-          autoSize={{ minRows: 1, maxRows: 10 }}
+          autoSize={{ minRows: 1, maxRows: isMobileShell ? 4 : 10 }}
           client={client}
           userById={userById}
           onFilesDrop={addComposerAttachments}
@@ -977,6 +989,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     composerDropActive,
     composerIdentityKey,
     hasComposerAttachments,
+    isMobileShell,
     isRunning,
     client,
     userById,
@@ -1544,7 +1557,8 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
         display: open ? 'flex' : 'none',
         flexDirection: 'column',
         background: token.colorBgElevated,
-        borderLeft: `1px solid ${token.colorBorder}`,
+        // No adjacent canvas on the mobile full-screen shell, so drop the left seam.
+        borderLeft: isMobileShell ? undefined : `1px solid ${token.colorBorder}`,
       }}
     >
       {/* Header */}
@@ -1640,7 +1654,12 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
             <SessionAttachmentsDropdown items={attachmentItems} />
             <Dropdown menu={{ items: moreMenuItems }} trigger={['click']} placement="bottomRight">
               <Tooltip title="More actions">
-                <Button type="text" icon={<EllipsisOutlined />} />
+                <Button
+                  type="text"
+                  aria-label="More actions"
+                  icon={<EllipsisOutlined />}
+                  style={mobileHeaderButtonStyle}
+                />
               </Tooltip>
             </Dropdown>
             <Tooltip title="Search session">
@@ -1649,14 +1668,16 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
                 aria-label="Search session"
                 icon={<SearchOutlined />}
                 onClick={openSearch}
+                style={mobileHeaderButtonStyle}
               />
             </Tooltip>
-            <Tooltip title="Close Panel">
+            <Tooltip title={isMobileShell ? 'Back' : 'Close Panel'}>
               <Button
                 type="text"
-                icon={<CloseOutlined />}
+                aria-label={isMobileShell ? 'Back' : 'Close panel'}
+                icon={isMobileShell ? <ArrowLeftOutlined /> : <CloseOutlined />}
                 onClick={onClose}
-                style={{ marginLeft: token.sizeUnit }}
+                style={{ ...mobileHeaderButtonStyle, marginLeft: token.sizeUnit }}
               />
             </Tooltip>
           </Space>
@@ -1704,7 +1725,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
                 {totalMatches > 0 ? `${currentMatch + 1} / ${totalMatches}` : ''}
               </Typography.Text>
             )}
-            {!query && (
+            {!query && !isMobileShell && (
               <Typography.Text type="secondary" style={{ fontSize: 11 }}>
                 Esc to close
               </Typography.Text>

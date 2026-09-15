@@ -1,22 +1,13 @@
 import type { Board, BoardComment, Branch, Session, User } from '@agor-live/client';
-import { hasMinimumRole, ROLES } from '@agor-live/client';
 import {
-  ApiOutlined,
   AppstoreOutlined,
-  BranchesOutlined,
   BulbOutlined,
   CommentOutlined,
-  CreditCardOutlined,
   DownOutlined,
-  ExperimentOutlined,
-  FolderOutlined,
   InfoCircleOutlined,
   LogoutOutlined,
-  MessageOutlined,
-  RobotOutlined,
+  SearchOutlined,
   SettingOutlined,
-  TeamOutlined,
-  ThunderboltOutlined,
   UserOutlined,
 } from '@ant-design/icons';
 import type { MenuProps } from 'antd';
@@ -116,10 +107,7 @@ export const MobileNavTree: React.FC<MobileNavTreeProps> = ({
 
   // Get session title with mobile-friendly 50-char limit
   const getSessionTitle = (session: Session): string => {
-    return getSessionDisplayTitle(session, {
-      fallbackChars: 50,
-      includeIdFallback: true,
-    });
+    return getSessionDisplayTitle(session, { fallbackChars: 50 });
   };
 
   // Get session status icon
@@ -131,48 +119,16 @@ export const MobileNavTree: React.FC<MobileNavTreeProps> = ({
   };
 
   const boards = useMemo(() => mapToArray(boardById), [boardById]);
-  const isAdmin = hasMinimumRole(currentUser?.role, ROLES.ADMIN);
   const openSettings = (section: string) => {
     onOpenWorkspaceSettings(section);
     onNavigate?.();
   };
+  // Retired the 12-item settings accordion: a single entry opens the shared
+  // SettingsModal, which renders full-screen on mobile with its own section list.
   const utilityItems: MenuProps['items'] = [
-    { key: 'home', label: 'Home', icon: <AppstoreOutlined /> },
+    { key: 'search', label: 'Search', icon: <SearchOutlined /> },
     { key: 'knowledge', label: 'Knowledge Base', icon: <BulbOutlined /> },
-    {
-      key: 'workspace-settings',
-      label: 'Workspace settings',
-      icon: <SettingOutlined />,
-      children: [
-        { key: 'settings:boards', label: 'Boards', icon: <AppstoreOutlined /> },
-        { key: 'settings:repos', label: 'Repositories', icon: <FolderOutlined /> },
-        { key: 'settings:branches', label: 'Branches', icon: <BranchesOutlined /> },
-        { key: 'settings:teammates', label: 'Teammates', icon: <RobotOutlined /> },
-        { key: 'settings:cards', label: 'Cards (Beta)', icon: <CreditCardOutlined /> },
-        { key: 'settings:artifacts', label: 'Artifacts', icon: <ExperimentOutlined /> },
-        ...(isAdmin
-          ? [
-              {
-                key: 'settings:agentic-tools',
-                label: 'Agentic Tools',
-                icon: <ThunderboltOutlined />,
-              },
-            ]
-          : []),
-        // Offered to everyone, matching desktop: what a member may do there is
-        // the tenant's `mcp_member_policy`, which members may read precisely so
-        // a refusal is legible to the person it refuses.
-        { key: 'settings:mcp', label: 'MCP Servers', icon: <ApiOutlined /> },
-        ...(isAdmin
-          ? [
-              { key: 'settings:gateway', label: 'Gateway Channels', icon: <MessageOutlined /> },
-              { key: 'settings:groups', label: 'Groups', icon: <TeamOutlined /> },
-            ]
-          : []),
-        { key: 'settings:users', label: 'Users', icon: <TeamOutlined /> },
-        { key: 'settings:about', label: 'About', icon: <InfoCircleOutlined /> },
-      ],
-    },
+    { key: 'workspace-settings', label: 'Workspace settings', icon: <SettingOutlined /> },
     { key: 'user-settings', label: 'User settings', icon: <UserOutlined /> },
     { key: 'documentation', label: 'Documentation', icon: <InfoCircleOutlined /> },
     { type: 'divider' },
@@ -331,13 +287,13 @@ export const MobileNavTree: React.FC<MobileNavTreeProps> = ({
         selectable={false}
         items={utilityItems}
         onClick={({ key }) => {
-          if (key === 'home') navigate('/m');
+          if (key === 'search') navigate('/m/search');
+          else if (key === 'workspace-settings') openSettings('boards');
           else if (key === 'knowledge') navigate('/knowledge');
           else if (key === 'user-settings') onOpenUserSettings();
           else if (key === 'documentation')
             window.open('https://agor.live/guide/getting-started', '_blank', 'noopener,noreferrer');
           else if (key === 'logout') onLogout?.();
-          else if (key.startsWith('settings:')) openSettings(key.slice('settings:'.length));
           // Close the navigation drawer for every destination. Workspace settings
           // render in their own bottom sheet; leaving this drawer open keeps its
           // mask above that sheet and makes the settings tap appear to do nothing.

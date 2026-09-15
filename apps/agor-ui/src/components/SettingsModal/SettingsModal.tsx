@@ -37,6 +37,7 @@ import { useCallback, useMemo, useState } from 'react';
 import { useAuthenticatedAuthorityScope } from '@/hooks/useAuthorityOperationGuard';
 import type { BranchStorageConfig } from '@/utils/branchStorage';
 import { mapToArray } from '@/utils/mapHelpers';
+import { reducedMotionSurface, usePrefersReducedMotion } from '../../hooks/usePrefersReducedMotion';
 import { SETTINGS_SECTIONS, type SettingsSection } from '../../hooks/useSettingsRoute';
 import { useAgorStore } from '../../store/agorStore';
 import {
@@ -222,6 +223,7 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
   const { token } = theme.useToken();
   const screens = Grid.useBreakpoint();
   const compact = !screens.md;
+  const reducedMotion = usePrefersReducedMotion();
   const settingsSectionKeys = useMemo(() => new Set<string>(SETTINGS_SECTIONS), []);
 
   // Role gate — Agentic Tools and Gateway Channels are global admin-managed
@@ -596,7 +598,10 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
         aria-label="Workspace settings"
         closable={false}
         placement="bottom"
-        size="94dvh"
+        // Full-bleed so the settings surface covers the app header instead of
+        // leaving a stale title peeking above it.
+        height="100dvh"
+        {...reducedMotionSurface(reducedMotion)}
         open={open}
         onClose={onClose}
         styles={{ body: { padding: 0, overflow: 'hidden' } }}
