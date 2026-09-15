@@ -65,6 +65,7 @@ function startupDebug(...args: unknown[]): void {
 // ---------------------------------------------------------------------------
 
 export interface StartupContext {
+  mcpManagedOAuthServices?: { start(): void; stop(): void | Promise<void> };
   app: Application;
   db: TenantScopeAwareDatabase;
   config: AgorConfig;
@@ -876,6 +877,8 @@ export async function startup(ctx: StartupContext): Promise<void> {
   discordMessageDeliveryWorker.start();
   console.log('📨 Discord message delivery worker started');
 
+  ctx.mcpManagedOAuthServices?.start();
+
   // 11. Graceful shutdown handler
   let shutdownStarted = false;
   const shutdown = async (signal: string) => {
@@ -888,6 +891,7 @@ export async function startup(ctx: StartupContext): Promise<void> {
       // assigning new HTTP/Engine.IO sessions immediately.
       ctx.realtimeRuntime?.beginDrain();
       beginExecutorResponseDrain();
+      await ctx.mcpManagedOAuthServices?.stop();
 
       // Refuse new cost-bearing claims before any other shutdown work can wait.
       // stop() also aborts the local provider wait and drains its active DB step.

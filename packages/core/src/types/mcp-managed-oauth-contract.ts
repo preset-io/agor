@@ -30,6 +30,23 @@ export const MCP_OAUTH_LIMITS = Object.freeze({
   jitter_ms: 5_000,
 });
 export const McpOAuthIdSchema = z.string().regex(/^[A-Za-z0-9_-]{1,128}$/);
+/** Legacy fixture IDs or reverse-DNS namespace / slug; no URL, escaping or path traversal.
+ * Syntax is not admission: prepare must still match the exact reviewed Catalog name.
+ */
+export const McpOAuthCatalogEntryNameSchema = z
+  .string()
+  .max(253)
+  .refine((value) => {
+    if (/^[A-Za-z0-9_-]{1,128}$/.test(value)) return true;
+    const parts = value.split('/');
+    if (parts.length !== 2) return false;
+    const labels = parts[0].split('.');
+    return (
+      labels.length >= 2 &&
+      labels.every((label) => /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(label)) &&
+      /^[a-z0-9](?:[a-z0-9_-]{0,126}[a-z0-9])?$/.test(parts[1])
+    );
+  }, 'Expected exact reviewed Catalog name');
 export const McpOAuthDigestSchema = z.string().regex(/^[a-f0-9]{64}$/);
 export const McpOAuthOpaqueSchema = z.string().regex(/^[A-Za-z0-9_-]{43}$/);
 export const McpOAuthEpochSchema = z
@@ -126,7 +143,7 @@ const baseRequest = {
 };
 export const McpOAuthPrepareRequestSchema = z.strictObject({
   ...baseRequest,
-  catalog_entry_name: McpOAuthIdSchema,
+  catalog_entry_name: McpOAuthCatalogEntryNameSchema,
   pkce_challenge: McpOAuthOpaqueSchema,
   method: z.literal('S256'),
   client_nonce_hash: McpOAuthDigestSchema,
@@ -538,25 +555,85 @@ export const McpOAuthCapabilityRequestSchema = z.strictObject({
   protocol_version: z.literal(1),
   operation_id: McpOAuthIdSchema,
 });
-export const McpOAuthCapabilitiesSchema = z.strictObject({
-  protocol_version: z.literal(1),
-  binding_version: z.literal(1),
-  enforcement_version: z.literal(1),
-  available: z.boolean(),
-  environment: McpOAuthEnvironmentSchema,
-  residency_region: McpOAuthRegionSchema,
-  recovery_incarnation: McpOAuthOpaqueSchema.nullable(),
-  profile_versions: z
-    .array(
-      z.strictObject({
-        profile_id: McpOAuthIdSchema,
-        profile_version: McpOAuthPositiveEpochSchema,
-        catalog_digest: McpOAuthDigestSchema,
-      })
-    )
-    .max(100),
-  flags: McpOAuthFlagsSchema,
-});
+/** OAuth issuer identifiers may be an exact HTTPS origin without its trailing slash.
+ * Preserve bytes (including pathful issuers); never normalize the profile's identity.
+ */
+export const McpOAuthIssuerSchema = z
+  .string()
+  .max(2048)
+  .refine((value) => {
+    try {
+      return (
+        !new URL(value).search &&
+        (McpOAuthHttpsUrlSchema.safeParse(value).success ||
+          McpOAuthOriginSchema.safeParse(value).success)
+      );
+    } catch {
+      return false;
+    }
+  }, 'Expected exact HTTPS issuer');
+export const McpOAuthScopeTokenSchema = z
+  .string()
+  .max(256)
+  .regex(/^[\x21\x23-\x5B\x5D-\x7E]+$/);
+/** Nonsecret immutable projection, ONLY from the authenticated worker capabilities route.
+ * profile_version is semantic_version; catalog_digest is the reviewed registry/Catalog digest.
+ * exact_resource_uri binds BOTH the canonical MCP URL and OAuth resource; streamable_http
+ * maps to runtime transport http. Scope order is preserved; [] prescribes omission (runtime '').
+ * metadata_endpoints is an ordered immutable array bound in full by the runtime fingerprint,
+ * not runtime discovery or caller override authority. The legacy metadataUri persistence slot
+ * is the sole URL for a singleton, otherwise ''; it cannot select OAuth metadata/authority.
+ * No secret-set reference, operational secret version, credentials or registration token.
+ */
+export const McpOAuthProfileProjectionSchema = z
+  .strictObject({
+    profile_id: McpOAuthIdSchema,
+    profile_version: McpOAuthPositiveEpochSchema,
+    catalog_digest: McpOAuthDigestSchema,
+    catalog_entry_name: McpOAuthCatalogEntryNameSchema,
+    environment: McpOAuthEnvironmentSchema,
+    region: McpOAuthRegionSchema,
+    exact_resource_uri: McpOAuthHttpsUrlSchema,
+    transport: z.literal('streamable_http'),
+    metadata_endpoints: z.array(McpOAuthHttpsUrlSchema).max(4),
+    issuer: McpOAuthIssuerSchema,
+    authorization_endpoint: McpOAuthHttpsUrlSchema,
+    token_endpoint: McpOAuthHttpsUrlSchema,
+    exact_redirect_uri: McpOAuthHttpsUrlSchema,
+    client_id: z.string().min(1).max(2048),
+    scope: z.array(McpOAuthScopeTokenSchema).max(32),
+    token_endpoint_auth_method: z.enum(['none', 'client_secret_basic', 'client_secret_post']),
+    client_kind: z.enum(['public', 'confidential']),
+    registration_evidence_digest: McpOAuthDigestSchema,
+  })
+  .refine(
+    (value) => (value.client_kind === 'public') === (value.token_endpoint_auth_method === 'none'),
+    'Client kind and authentication method disagree'
+  );
+export type McpOAuthProfileProjection = z.infer<typeof McpOAuthProfileProjectionSchema>;
+export const McpOAuthCapabilitiesSchema = z
+  .strictObject({
+    protocol_version: z.literal(1),
+    binding_version: z.literal(1),
+    enforcement_version: z.literal(1),
+    available: z.boolean(),
+    environment: McpOAuthEnvironmentSchema,
+    residency_region: McpOAuthRegionSchema,
+    recovery_incarnation: McpOAuthOpaqueSchema.nullable(),
+    profile_versions: z.array(McpOAuthProfileProjectionSchema).max(100),
+    flags: McpOAuthFlagsSchema,
+  })
+  .refine(
+    (value) =>
+      value.available === value.profile_versions.length > 0 &&
+      (!value.available || value.recovery_incarnation !== null) &&
+      value.profile_versions.every(
+        (p) => p.environment === value.environment && p.region === value.residency_region
+      ) &&
+      new Set(value.profile_versions.map((p) => `${p.profile_id}:${p.profile_version}`)).size ===
+        value.profile_versions.length,
+    'Inconsistent profile availability, region or identity'
+  );
 export const McpOAuthInvalidationRequestSchema = z.strictObject({
   protocol_version: z.literal(1),
   operation_id: McpOAuthIdSchema,
@@ -587,6 +664,31 @@ export const McpOAuthPrepareResponseSchema = z.strictObject({
   transaction_id: McpOAuthIdSchema,
   expires_at: McpOAuthTimeSchema,
   cancel_epoch: McpOAuthEpochSchema,
+});
+/** Closed non-vending results; never infer grant commit or provider revocation from ACK/close. */
+export const McpOAuthAckResponseSchema = z.strictObject({
+  protocol_version: z.literal(1),
+  acknowledged: z.literal(true),
+});
+export const McpOAuthCancelResponseSchema = z.strictObject({
+  protocol_version: z.literal(1),
+  canceled: z.literal(true),
+});
+export const McpOAuthCloseResponseSchema = z.strictObject({
+  protocol_version: z.literal(1),
+  closed: z.literal(true),
+  provider_revocation: z.literal('pending'),
+});
+export const McpOAuthCleanupResponseSchema = z.strictObject({
+  protocol_version: z.literal(1),
+  closed: z.literal(true),
+  provider_revocation: z.enum(['revoked', 'uncertain', 'in_progress']),
+});
+/** One-use navigation correlation only; full owner is checked, not success authority. */
+export const McpOAuthReturnTicketResponseSchema = z.strictObject({
+  protocol_version: z.literal(1),
+  transaction_id: McpOAuthIdSchema,
+  owner: McpOAuthOwnerSchema,
 });
 export const McpOAuthIntentUrlSchema = z
   .string()

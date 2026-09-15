@@ -1,4 +1,6 @@
+import { createManagedMCPFetch } from './mcp-egress/managed-fetch.js';
 import { BranchCleanupStepsService } from './services/branch-cleanup-steps.js';
+import type { ManagedOAuthServices } from './services/mcp-oauth-managed-composition.js';
 /**
  * Service Registration
  *
@@ -384,6 +386,7 @@ export interface RegisterServicesContext {
   mcpOAuthCallbackUrl?: string;
   /** Managed adapter is deployment-admitted; absence always denies managed rows. */
   mcpManagedOAuthRuntime?: ManagedMCPOAuthRuntime;
+  mcpManagedOAuthServices?: ManagedOAuthServices;
   /** Injectable durable authority for boundary tests; production derives it from PostgreSQL. */
   mcpOAuthPendingFlowAuthority?: MCPOAuthPendingFlowAuthority;
   /** Injectable fleet-wide DCR authority paired with PostgreSQL pending flows. */
@@ -2020,6 +2023,7 @@ export async function registerMCPServices(
         // PostgreSQL Settings mutations use the same advisory lock. SQLite
         // relies on exact-generation/fingerprint CAS plus its serialized writer.
         lockConfiguration: true,
+        managedValidator: ctx.mcpManagedOAuthServices?.managedValidator,
       });
 
   type PendingOAuthFlow = {
@@ -4019,6 +4023,7 @@ export async function registerMCPServices(
   app.use(
     '/mcp-catalog/readiness',
     new MCPCatalogReadinessService(app, {
+      managedReadiness: ctx.mcpManagedOAuthServices?.managedReadiness,
       listCandidates: (userId) => new MCPCatalogCandidateRepository(db).listForUser(userId),
       // Readiness is advisory and may not open credential material merely to
       // draw a button. Normal configuration writes revoke bound grants; this
@@ -4043,6 +4048,7 @@ export async function registerMCPServices(
           serverIds,
           serverRepository: marketplaceServerRepository,
           tokenRepository: marketplaceTokenRepository,
+          managedValidator: ctx.mcpManagedOAuthServices?.managedValidator,
         });
       })
     ),
@@ -4303,6 +4309,19 @@ export async function registerMCPServices(
 
         const effectiveMcpUrl = authoritativeServer?.url ?? data.mcp_url;
         const effectiveAuth = authoritativeServer?.auth;
+        if (effectiveAuth?.oauth_client_mode === 'cloud_managed_v1') {
+          if (
+            !authoritativeServer ||
+            data.start_browser_flow ||
+            data.client_id ||
+            data.client_secret ||
+            data.token_url
+          )
+            throw new BadRequest('Use the managed sign-in action for this saved server');
+          return await app
+            .service('mcp-servers/discover')
+            .create({ mcp_server_id: authoritativeServer.mcp_server_id }, params);
+        }
         assertDirectMCPOAuthClient(effectiveAuth);
         const compatibilityPolicy = authoritativeServer
           ? await runWithinOAuthAuthority(assertInitialRequestAuthority, () =>
@@ -5671,7 +5690,8 @@ export async function registerMCPServices(
         if (!currentServer) {
           throw new Forbidden('MCP server authority changed before OAuth reset');
         }
-        assertDirectMCPOAuthClient(currentServer.auth);
+        const managed = currentServer.auth?.oauth_client_mode === 'cloud_managed_v1';
+        if (!managed) assertDirectMCPOAuthClient(currentServer.auth);
         // config_version is the reset epoch shared by DCR resolution and
         // pending-attempt publication. Advancing it under the grant lock means
         // an older start can neither publish its resolved client nor make it
@@ -5683,10 +5703,11 @@ export async function registerMCPServices(
         });
         await new UserMCPOAuthTokenRepository(db).deleteAllForServer(authorized.mcp_server_id);
         await durableOAuthFlows.invalidateForServer(tenantId, authorized.mcp_server_id);
-        await durableOAuthClientRegistrations.invalidateForServer(
-          tenantId,
-          authorized.mcp_server_id
-        );
+        if (!managed)
+          await durableOAuthClientRegistrations.invalidateForServer(
+            tenantId,
+            authorized.mcp_server_id
+          );
       });
       return { success: true };
     },
@@ -5698,8 +5719,34 @@ export async function registerMCPServices(
   // OAuth disconnect
   app.use('/mcp-servers/oauth-disconnect', {
     async create(data: { mcp_server_id: string }, params?: AuthenticatedParams) {
-      await loadMcpServerForCaller(db, data.mcp_server_id, params);
+      const selectedServer = await loadMcpServerForCaller(db, data.mcp_server_id, params);
       const tenantId = tenantIdFromParams(params);
+      if (selectedServer.auth?.oauth_client_mode === 'cloud_managed_v1') {
+        const userId = params?.user?.user_id as UserID | undefined;
+        if (!tenantId || !userId || selectedServer.owner_user_id !== userId || !durableOAuthFlows)
+          throw new Forbidden('Managed disconnect requires the saved grant owner');
+        await runWithTenantDatabaseScope(db, tenantId, async (scoped) => {
+          await lockOAuthGrantConfiguration(scoped, tenantId, selectedServer.mcp_server_id);
+          const fresh = await new MCPServerRepository(scoped).findById(
+            selectedServer.mcp_server_id
+          );
+          if (
+            !fresh ||
+            fresh.owner_user_id !== userId ||
+            fresh.auth?.oauth_client_mode !== 'cloud_managed_v1'
+          )
+            throw new Forbidden('Managed grant authority changed');
+          // Pending-only attempts must be fenced even when no token row exists.
+          await durableOAuthFlows.invalidateForServer(tenantId, fresh.mcp_server_id);
+          await new UserMCPOAuthTokenRepository(scoped).deleteToken(userId, fresh.mcp_server_id);
+        });
+        return {
+          success: true,
+          oauthMode: 'per_user' as const,
+          provider_revocation: 'pending' as const,
+          message: 'Workspace access disconnected. Provider revocation is pending.',
+        };
+      }
       const currentUser =
         tenantId && params?.user?.user_id
           ? await runInOAuthTenantScope(db, tenantId, () =>
@@ -5819,7 +5866,12 @@ export async function registerMCPServices(
           findServers: (serverIds) => serverRepo.findByIds(serverIds),
           requireGrantBinding: true,
           isGrantBoundToServer: (server, grant) =>
-            isMCPOAuthGrantAuthorizedForServer(db, server, grant),
+            isMCPOAuthGrantAuthorizedForServer(
+              db,
+              server,
+              grant,
+              ctx.mcpManagedOAuthServices?.managedValidator
+            ),
         });
         return { authenticated_server_ids: authenticatedServerIds };
       } catch (error) {
@@ -6134,6 +6186,18 @@ export async function registerMCPServices(
           loadMcpServerForCaller(db, serverId, params)
         );
         if (server.auth?.type !== 'oauth') return { success: false, error: 'not_oauth_server' };
+        if (server.auth.oauth_client_mode === 'cloud_managed_v1') {
+          if (!ctx.mcpManagedOAuthServices)
+            return { success: false, error: 'managed_authority_unavailable' };
+          return await ctx.mcpManagedOAuthServices
+            .refreshExplicit(
+              tenantId,
+              userId as UserID,
+              server,
+              requestAuthorityAssertion(params) ?? (() => {})
+            )
+            .catch(() => ({ success: false, error: 'managed_authority_unavailable' }));
+        }
         assertDirectMCPOAuthClient(server.auth);
 
         const mode = server.auth.oauth_mode ?? 'per_user';
@@ -6151,7 +6215,14 @@ export async function registerMCPServices(
           new UserMCPOAuthTokenRepository(db).getToken(tokenUserId, serverId as MCPServerID)
         );
         if (!currentGrant) return { success: false, error: 'needs_reauth' };
-        if (!(await isMCPOAuthGrantAuthorizedForServer(db, server, currentGrant))) {
+        if (
+          !(await isMCPOAuthGrantAuthorizedForServer(
+            db,
+            server,
+            currentGrant,
+            ctx.mcpManagedOAuthServices?.managedValidator
+          ))
+        ) {
           await runInOAuthTenantWriteScope(db, tenantId, () =>
             new UserMCPOAuthTokenRepository(db).deleteGrantVersion(
               tokenUserId,
@@ -6414,7 +6485,10 @@ export async function registerMCPServices(
             error: `Connection test not supported for stdio servers (requires active session)`,
           };
         }
-        assertDirectMCPOAuthClient(serverConfig.auth);
+        const managedDiscovery = serverConfig.auth?.oauth_client_mode === 'cloud_managed_v1';
+        if (managedDiscovery && (!authoritativeServer || !serverId || !ctx.mcpManagedOAuthServices))
+          throw new BadRequest('Managed discovery requires an admitted saved server');
+        if (!managedDiscovery) assertDirectMCPOAuthClient(serverConfig.auth);
 
         // Resolve {{ user.env.X }} templates in url/auth using the caller's
         // user env vars. The executor does this at session runtime via
@@ -6660,6 +6734,34 @@ export async function registerMCPServices(
           }
         };
 
+        if (managedDiscovery) {
+          if (!tenantId) throw new NotAuthenticated('Managed discovery requires tenant identity');
+          const selected = authoritativeServer!;
+          const managed = ctx.mcpManagedOAuthServices!;
+          const authorization = await managed.grantAccess.acquireAuthorization({
+            tenantId,
+            userId,
+            server: selected,
+            assertCurrent: assertCurrentRequestAuthority,
+          });
+          const grant = await runWithTenantDatabaseScope(db, tenantId, (scoped) =>
+            new UserMCPOAuthTokenRepository(scoped).getToken(userId, selected.mcp_server_id)
+          );
+          if (
+            !grant ||
+            authorization !== `Bearer ${grant.oauth_access_token}` ||
+            !discoveryAuthority
+          )
+            throw new Conflict('Managed discovery grant changed. Retry.');
+          discoveryAuthority = bindMCPDiscoveryOAuthGrant(
+            discoveryAuthority,
+            userId,
+            grant,
+            process.env.AGOR_MASTER_SECRET ?? ''
+          );
+          authHeaders = { Authorization: authorization };
+        }
+
         if (!authHeaders && serverConfig.auth?.type === 'oauth' && serverConfig.url) {
           // Durable token rows are the only daemon authority. The old cache
           // keyed solely by MCP origin could cross tenant/server/user grants.
@@ -6712,10 +6814,32 @@ export async function registerMCPServices(
         }) ?? { Accept: 'application/json, text/event-stream' };
 
         const createMCPConnection = (connHeaders: Record<string, string>) => {
-          const connSessionAwareFetch = createAuthorityGuardedMCPFetch(
-            oauthFetch,
-            assertCurrentRequestAuthority
-          );
+          const connSessionAwareFetch = managedDiscovery
+            ? createManagedMCPFetch({
+                url: serverConfig.url!,
+                authorization: connHeaders.Authorization!,
+                assertCurrent: async (authorization) => {
+                  if (!tenantId)
+                    throw new NotAuthenticated('Managed discovery requires tenant identity');
+                  assertCurrentRequestAuthority();
+                  await runWithTenantDatabaseTransaction(
+                    db,
+                    tenantId,
+                    (scoped) =>
+                      ctx.mcpManagedOAuthServices!.grantAccess.assertManagedUse({
+                        tenantDb: scoped,
+                        tenantId,
+                        userId,
+                        server: authoritativeServer!,
+                        authorization,
+                      }),
+                    { postgresIsolationLevel: 'repeatable read' }
+                  );
+                  assertCurrentRequestAuthority();
+                },
+                resolveDns: ctx.mcpOutboundDnsLookup,
+              })
+            : createAuthorityGuardedMCPFetch(oauthFetch, assertCurrentRequestAuthority);
           const transport = new StreamableHTTPClientTransport(new URL(serverConfig.url!), {
             fetch: connSessionAwareFetch,
             requestInit: { headers: connHeaders },
@@ -6759,7 +6883,12 @@ export async function registerMCPServices(
             if (classifyMCPAuthRecovery(connectError).category === 'permission_changed') {
               throw connectError;
             }
-            if (hadCachedOAuthToken && serverConfig.url && serverConfig.auth?.type === 'oauth') {
+            if (
+              !managedDiscovery &&
+              hadCachedOAuthToken &&
+              serverConfig.url &&
+              serverConfig.auth?.type === 'oauth'
+            ) {
               const freshToken = await probeAndAcquireOAuthToken(serverConfig.url);
               if (freshToken) {
                 assertCurrentRequestAuthority();

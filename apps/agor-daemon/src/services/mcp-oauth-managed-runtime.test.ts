@@ -17,6 +17,7 @@ import {
 const state = vi.hoisted(() => ({ server: null as unknown }));
 vi.mock('@agor/core/db', () => ({
   generateId: () => 'attempt_alpha',
+  getMCPEgressGatewayMode: async () => 'enforced',
   runWithTenantDatabaseScope: async (
     _db: unknown,
     _tenant: unknown,

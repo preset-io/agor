@@ -2,6 +2,7 @@
 import { createHash, type KeyObject, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import {
   generateId,
+  getMCPEgressGatewayMode,
   type MCPOAuthPendingFlowRecord,
   MCPServerRepository,
   runWithTenantDatabaseScope,
@@ -99,6 +100,7 @@ export class ManagedMCPOAuthRuntime {
     return runWithTenantDatabaseScope(this.dependencies.db, tenantId, async (db) => {
       const server = await new MCPServerRepository(db).findById(serverId);
       if (
+        (await getMCPEgressGatewayMode(db)) !== 'enforced' ||
         !server ||
         server.owner_user_id !== userId ||
         !server.enabled ||
@@ -134,7 +136,11 @@ export class ManagedMCPOAuthRuntime {
     await runWithTenantDatabaseScope(d.db, owner.workspace_id, async (db) => {
       await lockMCPOAuthGrantConfiguration(db, owner.workspace_id, server.mcp_server_id);
       const fresh = await new MCPServerRepository(db).findById(server.mcp_server_id);
-      if (!fresh || fresh.owner_user_id !== owner.cell_local_user_id)
+      if (
+        (await getMCPEgressGatewayMode(db)) !== 'enforced' ||
+        !fresh ||
+        fresh.owner_user_id !== owner.cell_local_user_id
+      )
         throw new ManagedOAuthUnavailableError();
       await assertManagedOAuthLocalOwner(
         db,

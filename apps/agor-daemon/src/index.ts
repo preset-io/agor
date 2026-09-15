@@ -1,3 +1,4 @@
+import { createManagedOAuthServices } from './services/mcp-oauth-managed-composition.js';
 /**
  * Agor Daemon
  *
@@ -842,7 +843,18 @@ async function startDaemonWithOwnedMetrics(
   // --------------------------------------------------------------------------
   // Phase 1: Register services
   // --------------------------------------------------------------------------
+  const mcpManagedOAuthServices =
+    (await createManagedOAuthServices({
+      db,
+      config: effectiveConfig,
+      releaseSha: DAEMON_BUILD_INFO.sha,
+      replicaId: distributedWorkIdentity.instanceId,
+      externalLaunchProvider,
+    })) ?? undefined;
   const services = await registerServices({
+    mcpManagedOAuthServices,
+    mcpManagedOAuthRuntime: mcpManagedOAuthServices?.runtime,
+    mcpOAuthPendingFlowAuthority: mcpManagedOAuthServices?.flows,
     db,
     app,
     config: effectiveConfig,
@@ -881,6 +893,7 @@ async function startDaemonWithOwnedMetrics(
   // Phase 3: Register routes (auth, REST, tier hooks, error handler)
   // --------------------------------------------------------------------------
   await registerRoutes({
+    mcpManagedOAuthServices,
     db,
     app,
     config: effectiveConfig,
@@ -921,6 +934,7 @@ async function startDaemonWithOwnedMetrics(
   // Phase 4: Startup (orphan cleanup, health, scheduler, listen, shutdown)
   // --------------------------------------------------------------------------
   await startup({
+    mcpManagedOAuthServices,
     app,
     db,
     config: effectiveConfig,
