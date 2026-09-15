@@ -13,8 +13,12 @@ import type {
   MCPManagedOAuthRefreshAdapter,
   MCPManagedOAuthTokenCommit,
 } from '../../types/mcp-managed-oauth';
-import { ManagedMCPOAuthOperationError } from './managed-oauth-client';
-import { type RefreshAndPersistDeps, refreshAndPersistToken } from './oauth-refresh';
+import { type ManagedMCPOAuthClient, ManagedMCPOAuthOperationError } from './managed-oauth-client';
+import {
+  createManagedOAuthRefreshAdapter,
+  type RefreshAndPersistDeps,
+  refreshAndPersistToken,
+} from './oauth-refresh';
 
 const master = 'synthetic-managed-refresh-test-master';
 describe.skipIf(process.env.AGOR_DB_DIALECT !== 'postgresql')(
@@ -160,6 +164,86 @@ describe.skipIf(process.env.AGOR_DB_DIALECT !== 'postgresql')(
         const token = (await new UserMCPOAuthTokenRepository(db).getToken(f.user, f.server))!;
         expect(token.refresh_status).toBe('idle');
         expect(token.managed_metadata?.next_sequence).toBe('1');
+      });
+    });
+    it('a paused refresh adapter retains the live grant when its fresh claim never invoked the sender', async () => {
+      const f = await seedManagedRefreshGrant(owned.db, master);
+      const request = vi.fn();
+      const adapter = createManagedOAuthRefreshAdapter({
+        client: { request } as unknown as ManagedMCPOAuthClient,
+        issuer: 'https://broker.example.test/',
+        keys: new Map(),
+        now: () => Date.now(),
+        assertCurrent: () => {
+          throw new Error('synthetic refresh paused');
+        },
+        acknowledge: async () => {},
+      });
+      await expect(refreshAndPersistToken(deps(f, adapter))).rejects.toThrow('refresh admission');
+      expect(request).not.toHaveBeenCalled();
+      await runWithTenantDatabaseScope(owned.db, f.tenant, async (db) => {
+        const repo = new UserMCPOAuthTokenRepository(db);
+        const token = (await repo.getToken(f.user, f.server))!;
+        expect(token.refresh_status).toBe('idle');
+        expect(token.managed_operation_id).toBeUndefined();
+        expect(token.managed_metadata).toEqual(f.commit.metadata);
+        expect(token.oauth_access_token).toBe(f.commit.tokens.access_token);
+        expect(await new MCPManagedOAuthOutboxRepository(db).listPending(f.tenant)).toEqual([]);
+      });
+    });
+    it('paused receipt recovery cannot claim a previous owner did not dispatch', async () => {
+      const f = await seedManagedRefreshGrant(owned.db, master);
+      await runWithTenantDatabaseScope(owned.db, f.tenant, (db) =>
+        new UserMCPOAuthTokenRepository(db).claimRefresh(f.user, f.server, f.expected)
+      );
+      const request = vi.fn();
+      const adapter = createManagedOAuthRefreshAdapter({
+        client: { request } as unknown as ManagedMCPOAuthClient,
+        issuer: 'https://broker.example.test/',
+        keys: new Map(),
+        now: () => Date.now(),
+        assertCurrent: () => {
+          throw new Error('synthetic refresh paused');
+        },
+        acknowledge: async () => {},
+      });
+      await expect(refreshAndPersistToken(deps(f, adapter))).rejects.toThrow('ambiguous');
+      expect(request).not.toHaveBeenCalled();
+      await runWithTenantDatabaseScope(owned.db, f.tenant, async (db) => {
+        expect(
+          (await new UserMCPOAuthTokenRepository(db).getToken(f.user, f.server))?.refresh_status
+        ).toBe('ambiguous');
+        expect((await new MCPManagedOAuthOutboxRepository(db).listPending(f.tenant))[0].kind).toBe(
+          'close'
+        );
+      });
+    });
+    it('a pause after invoking the sender never becomes a local no-dispatch certificate', async () => {
+      const f = await seedManagedRefreshGrant(owned.db, master);
+      let paused = false;
+      const request = vi.fn(async () => {
+        paused = true;
+        throw new Error('synthetic uncertain HTTP');
+      });
+      const adapter = createManagedOAuthRefreshAdapter({
+        client: { request } as unknown as ManagedMCPOAuthClient,
+        issuer: 'https://broker.example.test/',
+        keys: new Map(),
+        now: () => Date.now(),
+        assertCurrent: () => {
+          if (paused) throw new Error('synthetic refresh paused');
+        },
+        acknowledge: async () => {},
+      });
+      await expect(refreshAndPersistToken(deps(f, adapter))).rejects.toThrow('ambiguous');
+      expect(request).toHaveBeenCalledTimes(1);
+      await runWithTenantDatabaseScope(owned.db, f.tenant, async (db) => {
+        expect(
+          (await new UserMCPOAuthTokenRepository(db).getToken(f.user, f.server))?.refresh_status
+        ).toBe('ambiguous');
+        expect((await new MCPManagedOAuthOutboxRepository(db).listPending(f.tenant))[0].kind).toBe(
+          'close'
+        );
       });
     });
   }
