@@ -48,6 +48,7 @@ const profile: MCPManagedOAuthResolvedProfile = {
   catalogEntryName: 'test.example/fake-alpha',
   mcpUrl: 'https://alpha.example.test/mcp',
   transport: 'http',
+  metadataEndpoints: [],
   metadataUri: 'https://alpha.example.test/metadata',
   resourceUri: 'https://alpha.example.test/mcp',
   issuer: 'https://alpha.example.test/',

@@ -305,6 +305,7 @@ export function fingerprintManagedMCPOAuthGrantConfiguration(
     server.catalog_entry_name!,
     server.url!,
     server.transport,
+    JSON.stringify(profile.metadataEndpoints),
     profile.metadataUri,
     profile.resourceUri,
     profile.issuer,
