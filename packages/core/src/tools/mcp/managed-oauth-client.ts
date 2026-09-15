@@ -6,6 +6,8 @@ import {
   MCP_OAUTH_LIMITS,
   MCP_OAUTH_ROUTES,
   type McpOAuthClaim,
+  type McpOAuthExchangeRequest,
+  McpOAuthExchangeRequestSchema,
   McpOAuthIdSchema,
   McpOAuthJwsHeaderSchema,
   type McpOAuthOperationResponse,
@@ -13,6 +15,9 @@ import {
   McpOAuthOriginSchema,
   type McpOAuthOwner,
   McpOAuthReceiptClaimsSchema,
+  McpOAuthReceiptRequestSchema,
+  type McpOAuthRefreshRequest,
+  McpOAuthRefreshRequestSchema,
   McpOAuthSenderClaimsSchema,
   McpOAuthSignedArtifactSchema,
   McpOAuthSucceededSchema,
@@ -232,6 +237,8 @@ export class ManagedMCPOAuthClient {
     schema: ZodType<T>;
     assertCurrent: () => void | Promise<void>;
     recovery?: boolean;
+    /** Remaining enclosing deadline; can only shorten the protocol budget. */
+    timeoutMs?: number;
   }): Promise<T> {
     try {
       let path: string = MCP_OAUTH_ROUTES[options.operation];
@@ -275,9 +282,12 @@ export class ManagedMCPOAuthClient {
         redirect: 'error',
         maxRedirects: 0,
         maxResponseBytes: MCP_OAUTH_LIMITS.response_bytes,
-        timeoutMs: options.recovery
-          ? MCP_OAUTH_LIMITS.recovery_timeout_ms
-          : MCP_OAUTH_LIMITS.cell_timeout_ms,
+        timeoutMs: Math.min(
+          options.recovery
+            ? MCP_OAUTH_LIMITS.recovery_timeout_ms
+            : MCP_OAUTH_LIMITS.cell_timeout_ms,
+          options.timeoutMs ?? MCP_OAUTH_LIMITS.cell_timeout_ms
+        ),
         assertCurrent: options.assertCurrent,
       });
       if (
@@ -294,4 +304,104 @@ export class ManagedMCPOAuthClient {
       throw new ManagedMCPOAuthProtocolError('unavailable');
     }
   }
+}
+
+/**
+ * A broker journal outcome, not a direct OAuth error. In particular app-client
+ * configuration failure must never be translated into InvalidGrantError.
+ */
+export class ManagedMCPOAuthOperationError extends Error {
+  constructor(readonly outcome: Exclude<McpOAuthOperationResponse, { status: 'succeeded' }>) {
+    super(`Managed MCP OAuth ${outcome.status}`);
+    this.name = 'ManagedMCPOAuthOperationError';
+  }
+}
+
+/**
+ * Operation dependency used beneath the existing cell claim/CAS owner. The
+ * caller durably binds operation_id before invoking this function. Recovery
+ * reads only that operation's journal; it never sends the code/token again.
+ */
+export async function executeManagedOAuthOperation(options: {
+  client: ManagedMCPOAuthClient;
+  request: McpOAuthExchangeRequest | McpOAuthRefreshRequest;
+  sequence: string;
+  issuer: string;
+  keys: ReadonlyMap<string, KeyObject>;
+  now: () => number;
+  assertCurrent: () => void | Promise<void>;
+}) {
+  const refresh = 'refresh_token' in options.request;
+  const request = refresh
+    ? McpOAuthRefreshRequestSchema.parse(options.request)
+    : McpOAuthExchangeRequestSchema.parse(options.request);
+  const expected: ManagedOAuthExpectedOperation = {
+    owner: request.owner,
+    claim: request.claim,
+    operationId: request.operation_id,
+    sequence: options.sequence,
+    ...('handle' in request ? { handle: request.handle, handleEpoch: request.handle_epoch } : {}),
+  };
+  const assertLive = async (forDispatch: boolean) => {
+    await options.assertCurrent();
+    if (!mcpOAuthClaimIsLive(request.claim, options.now(), forDispatch)) {
+      throw new ManagedMCPOAuthProtocolError('claim_expired');
+    }
+  };
+  await assertLive(true);
+  let response: McpOAuthOperationResponse | undefined;
+  try {
+    response = await options.client.request({
+      operation: refresh ? 'refresh' : 'exchange',
+      id: 'handle' in request ? request.handle : request.transaction_id,
+      body: request,
+      schema: McpOAuthOperationResponseSchema,
+      assertCurrent: () => assertLive(true),
+    });
+  } catch {
+    // Network and HTTP failures do not establish whether provider dispatch occurred.
+  }
+  if (!response || response.status === 'in_progress') {
+    // At most 10 seconds total recovery, still inside the ORIGINAL local claim.
+    const recoveryDeadline = Math.min(
+      request.claim.deadline_at,
+      options.now() + MCP_OAUTH_LIMITS.recovery_timeout_ms
+    );
+    const monotonicDeadline = performance.now() + Math.max(0, recoveryDeadline - options.now());
+    do {
+      await assertLive(false);
+      const remaining = Math.floor(
+        Math.min(recoveryDeadline - options.now(), monotonicDeadline - performance.now())
+      );
+      if (remaining <= 0) throw new ManagedMCPOAuthProtocolError('unavailable');
+      response = await options.client.request({
+        operation: 'receipt',
+        id: request.operation_id,
+        recovery: true,
+        timeoutMs: remaining,
+        body: McpOAuthReceiptRequestSchema.parse({
+          protocol_version: 1,
+          operation_id: randomUUID(),
+          owner: request.owner,
+          target_operation_id: request.operation_id,
+          claim: request.claim,
+        }),
+        schema: McpOAuthOperationResponseSchema,
+        assertCurrent: () => assertLive(false),
+      });
+      if (response.status !== 'in_progress') break;
+      if (options.now() >= recoveryDeadline || performance.now() >= monotonicDeadline)
+        throw new ManagedMCPOAuthProtocolError('unavailable');
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    } while (options.now() < recoveryDeadline && performance.now() < monotonicDeadline);
+  }
+  if (!response) throw new ManagedMCPOAuthProtocolError('unavailable');
+  await assertLive(false);
+  const outcome = validateManagedOAuthOutcome(response, expected, options.now());
+  if (outcome.status !== 'succeeded') throw new ManagedMCPOAuthOperationError(outcome);
+  return validateManagedOAuthSuccess(outcome, expected, {
+    issuer: options.issuer,
+    keys: options.keys,
+    now: options.now(),
+  });
 }

@@ -123,6 +123,7 @@ import type {
   UUID,
 } from '@agor/core/types';
 import {
+  assertDirectMCPOAuthClient,
   assertPublicMCPOAuthCompatibilityMode,
   BRANCH_CLEANUP_REPORT_SERVICE,
   BRANCH_DELETION_REPORT_SERVICE,
@@ -2405,6 +2406,7 @@ export async function registerMCPServices(
       const compatibilityPolicy = await runWithinOAuthAuthority(assertFlowAuthority, () =>
         resolveMCPOAuthCompatibilityPolicy(server)
       );
+      assertDirectMCPOAuthClient(server.auth);
       logMCPOAuthCompatibilityPolicy('flow-start', server.mcp_server_id, compatibilityPolicy);
       // The row reloaded in the tenant scope is the only durable authority.
       // Callers may have discovered metadata from a transient form snapshot,
@@ -4297,6 +4299,7 @@ export async function registerMCPServices(
 
         const effectiveMcpUrl = authoritativeServer?.url ?? data.mcp_url;
         const effectiveAuth = authoritativeServer?.auth;
+        assertDirectMCPOAuthClient(effectiveAuth);
         const compatibilityPolicy = authoritativeServer
           ? await runWithinOAuthAuthority(assertInitialRequestAuthority, () =>
               resolveMCPOAuthCompatibilityPolicy(authoritativeServer)
@@ -5095,6 +5098,7 @@ export async function registerMCPServices(
         }
 
         if (savedServer?.auth?.type === 'oauth') {
+          assertDirectMCPOAuthClient(savedServer.auth);
           oauthMode = savedServer.auth.oauth_mode || 'per_user';
           authorizationUrlOverride = savedServer.auth.oauth_authorization_url;
           tokenUrlOverride = savedServer.auth.oauth_token_url;
@@ -5640,6 +5644,7 @@ export async function registerMCPServices(
         if (!currentServer) {
           throw new Forbidden('MCP server authority changed before OAuth reset');
         }
+        assertDirectMCPOAuthClient(currentServer.auth);
         // config_version is the reset epoch shared by DCR resolution and
         // pending-attempt publication. Advancing it under the grant lock means
         // an older start can neither publish its resolved client nor make it
@@ -5940,6 +5945,9 @@ export async function registerMCPServices(
               headers[serverId] = { error: 'not_oauth_server' };
               return;
             }
+            // This legacy endpoint projects raw headers into executors. Managed
+            // grants are exclusively usable through the enforcing gateway.
+            assertDirectMCPOAuthClient(server.auth);
 
             const mode = server.auth.oauth_mode ?? 'per_user';
             if (mode === 'per_user' && !userId) {
@@ -6040,6 +6048,7 @@ export async function registerMCPServices(
           loadMcpServerForCaller(db, serverId, params)
         );
         if (server.auth?.type !== 'oauth') return { success: false, error: 'not_oauth_server' };
+        assertDirectMCPOAuthClient(server.auth);
 
         const mode = server.auth.oauth_mode ?? 'per_user';
         if (mode === 'shared') {
@@ -6319,6 +6328,7 @@ export async function registerMCPServices(
             error: `Connection test not supported for stdio servers (requires active session)`,
           };
         }
+        assertDirectMCPOAuthClient(serverConfig.auth);
 
         // Resolve {{ user.env.X }} templates in url/auth using the caller's
         // user env vars. The executor does this at session runtime via

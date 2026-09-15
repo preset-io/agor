@@ -84,6 +84,25 @@ function tokenFor(
 }
 
 describe('MCP OAuth grant configuration binding', () => {
+  it('never verifies managed or unknown saved origin using a direct fingerprint', () => {
+    const fingerprint = fingerprintMCPOAuthGrantConfiguration(masterSecret, server, resolved);
+    const managed = {
+      ...server,
+      auth: { ...server.auth!, oauth_client_mode: 'cloud_managed_v1' as const },
+    };
+    expect(hasMCPOAuthRelevantServerConfigurationChanged(server, managed)).toBe(true);
+    expect(() => fingerprintMCPOAuthGrantConfiguration(masterSecret, managed, resolved)).toThrow();
+    expect(
+      isMCPOAuthGrantBoundToServer(masterSecret, managed, tokenFor(fingerprint), 'strict')
+    ).toBe(false);
+    const unknown = {
+      ...server,
+      auth: { ...server.auth!, oauth_client_mode: 'future-mode' },
+    } as unknown as ServerBinding;
+    expect(
+      isMCPOAuthGrantBoundToServer(masterSecret, unknown, tokenFor(fingerprint), 'strict')
+    ).toBe(false);
+  });
   it('grandfathers only historical standalone unbound grants', () => {
     expect(shouldVerifyMCPOAuthGrantBinding(false, undefined)).toBe(false);
     expect(shouldVerifyMCPOAuthGrantBinding(false, null)).toBe(false);

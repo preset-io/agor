@@ -14,7 +14,11 @@ import type {
   MCPServer,
   MCPServerID,
 } from '@agor/core/types';
-import { isMCPOAuthGrantBindingVersion } from '@agor/core/types';
+import {
+  assertDirectMCPOAuthClient,
+  isMCPOAuthGrantBindingVersion,
+  resolveMCPOAuthClientMode,
+} from '@agor/core/types';
 
 /** Latest format; v4 binds the complete saved remote-server authority. */
 export const MCP_OAUTH_GRANT_BINDING_VERSION = 4 as const;
@@ -126,6 +130,8 @@ export function fingerprintMCPOAuthGrantConfiguration(
     resolved.compatibilityMode
   )
 ): string {
+  assertDirectMCPOAuthClient(server.auth);
+  if (version > 4) throw new Error('Managed binding cannot be verified by the direct adapter');
   if (!masterSecret) throw new Error('MCP OAuth grant binding requires AGOR_MASTER_SECRET');
   const { compatibilityMode, ...historicalResolved } = resolved;
   const canonical = JSON.stringify({
@@ -164,6 +170,8 @@ function relevantServerConfiguration(server: Partial<MCPServer> | null | undefin
     // is independently re-resolved at start, callback, and grant-use time.
     auth: authBinding(server, 4, server.auth?.oauth_compatibility_mode ?? 'strict'),
     configuredCompatibility: server.auth?.oauth_compatibility_mode ?? null,
+    clientMode: server.auth?.oauth_client_mode ?? 'direct',
+    managedProfile: server.auth?.oauth_managed_profile ?? null,
   });
 }
 
@@ -195,6 +203,15 @@ export function isMCPOAuthGrantBoundToServer(
   grant: MCPOAuthGrantAuthorityRecord,
   effectiveMode: MCPOAuthRuntimeCompatibilityMode
 ): boolean {
+  try {
+    if (
+      resolveMCPOAuthClientMode(server.auth) !== 'direct' ||
+      (grant.grant_binding_version ?? 0) > 4
+    )
+      return false;
+  } catch {
+    return false;
+  }
   if (
     !isMCPOAuthGrantBindingVersion(grant.grant_binding_version) ||
     !grant.grant_binding_fingerprint ||
