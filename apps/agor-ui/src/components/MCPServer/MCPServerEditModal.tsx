@@ -1,3 +1,4 @@
+import { resolveMCPOAuthClientMode } from '@agor/core/types';
 import type {
   AgorClient,
   MCPScope,
@@ -12,6 +13,7 @@ import {
   useAuthorityOperationGuard,
 } from '@/hooks/useAuthorityOperationGuard';
 import { useThemedMessage } from '@/utils/message';
+import { ManagedOAuthServerModal } from './ManagedOAuthServerModal';
 import { MCPOAuthPolicySummary } from './MCPOAuthPolicySummary';
 import { MCPServerFormFields } from './MCPServerFormFields';
 import {
@@ -545,9 +547,23 @@ const MCPServerEditModalForIdentity: React.FC<MCPServerEditModalProps> = ({
  * `authorityKey` remains a finer mutation gate; it intentionally does not key
  * this owner, preserving same-user reconnect and token-refresh edits.
  */
-export const MCPServerEditModal: React.FC<MCPServerEditModalProps> = (props) => (
-  <MCPServerEditModalForIdentity
-    key={`${props.identityKey ?? '__no-authenticated-user__'}:${props.server?.mcp_server_id ?? ''}`}
-    {...props}
-  />
-);
+function isDirectEditor(server: MCPServer | null): boolean {
+  try {
+    return resolveMCPOAuthClientMode(server?.auth) === 'direct';
+  } catch {
+    return false;
+  }
+}
+
+export const MCPServerEditModal: React.FC<MCPServerEditModalProps> = (props) =>
+  !isDirectEditor(props.server) ? (
+    <ManagedOAuthServerModal
+      key={`${props.identityKey ?? '__no-authenticated-user__'}:${props.server?.mcp_server_id ?? ''}`}
+      {...props}
+    />
+  ) : (
+    <MCPServerEditModalForIdentity
+      key={`${props.identityKey ?? '__no-authenticated-user__'}:${props.server?.mcp_server_id ?? ''}`}
+      {...props}
+    />
+  );
