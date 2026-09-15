@@ -702,6 +702,13 @@ export class MCPServerRepository
           }
           const nextConfigVersion = nextMCPConfigVersion(current, expectedConfigVersion);
           const merged = mergeServerConfiguration(current, updates, nextConfigVersion, options);
+          if (
+            current.source === 'catalog' &&
+            (current.auth?.oauth_client_mode ?? 'direct') !==
+              (merged.auth?.oauth_client_mode ?? 'direct')
+          ) {
+            throw new RepositoryError('Catalog OAuth client modes require separate installs');
+          }
           const insertData = this.mcpServerToInsert(merged, {
             preserveDaemonRevisions: true,
           });
@@ -807,6 +814,13 @@ export class MCPServerRepository
         }
         const nextConfigVersion = nextMCPConfigVersion(current, expectedConfigVersion);
         const merged = mergeServerConfiguration(current, updates, nextConfigVersion, {});
+        if (
+          current.source === 'catalog' &&
+          (current.auth?.oauth_client_mode ?? 'direct') !==
+            (merged.auth?.oauth_client_mode ?? 'direct')
+        ) {
+          throw new RepositoryError('Catalog OAuth client modes require separate installs');
+        }
         const insertData = this.mcpServerToInsert(merged, {
           preserveDaemonRevisions: true,
         });

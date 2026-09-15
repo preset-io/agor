@@ -51,6 +51,8 @@ describe('buildTenantInsertOrder', () => {
       'codex_device_auth_attempts',
       'executor_session_token_authorities',
       'github_install_states',
+      'mcp_managed_oauth_invalidations',
+      'mcp_managed_oauth_outbox',
       'mcp_oauth_client_registrations',
       'mcp_oauth_pending_flows',
       'user_mcp_oauth_tokens',

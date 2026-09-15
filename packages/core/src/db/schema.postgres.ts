@@ -1,3 +1,8 @@
+import type {
+  MCPManagedOAuthGrantMetadata,
+  MCPManagedOAuthInvalidation,
+  MCPManagedOAuthPendingMetadata,
+} from '../types/mcp-managed-oauth';
 /**
  * PostgreSQL Schema Definition
  *
@@ -1858,7 +1863,12 @@ export const mcpServers = pgTable(
     ownerIdx: index('mcp_servers_owner_idx').on(table.owner_user_id),
     enabledIdx: index('mcp_servers_enabled_idx').on(table.enabled),
     catalogOwnerUq: uniqueIndex('mcp_servers_catalog_owner_uq')
-      .on(table.tenant_id, sql`coalesce(${table.owner_user_id}, '')`, table.catalog_entry_name)
+      .on(
+        table.tenant_id,
+        sql`coalesce(${table.owner_user_id}, '')`,
+        table.catalog_entry_name,
+        sql`coalesce(${table.data}->'auth'->>'oauth_client_mode', 'direct')`
+      )
       .where(sql`${table.source} = 'catalog' AND ${table.catalog_entry_name} IS NOT NULL`),
   })
 );
@@ -2124,6 +2134,10 @@ export const userMcpOauthTokens = pgTable(
     oauth_client_id: text('oauth_client_id'),
     oauth_client_secret: text('oauth_client_secret'),
     // Durable grant/config identity and database-coordinated refresh fencing.
+    credential_origin: text('credential_origin').notNull().default('direct'),
+    managed_metadata: t.json<MCPManagedOAuthGrantMetadata>('managed_metadata'),
+    managed_operation_id: text('managed_operation_id'),
+    oauth_token_endpoint_auth_method: text('oauth_token_endpoint_auth_method'),
     grant_generation: bigint('grant_generation', { mode: 'number' }).notNull().default(0),
     grant_binding_version: integer('grant_binding_version'),
     grant_binding_fingerprint: varchar('grant_binding_fingerprint', { length: 64 }),
@@ -2194,6 +2208,10 @@ export const mcpOauthPendingFlows = pgTable(
     oauth_mode: text('oauth_mode', { enum: ['per_user', 'shared'] }).notNull(),
     // NULL for a shared grant; equal to user_id for a per-user grant.
     subject_user_id: varchar('subject_user_id', { length: 36 }),
+    credential_origin: text('credential_origin').notNull().default('direct'),
+    managed_metadata: t.json<MCPManagedOAuthPendingMetadata>('managed_metadata'),
+    managed_operation_id: text('managed_operation_id'),
+    managed_transaction_id: text('managed_transaction_id'),
     grant_generation: bigint('grant_generation', { mode: 'number' }).notNull(),
     config_fingerprint_version: integer('config_fingerprint_version').notNull(),
     config_fingerprint: varchar('config_fingerprint', { length: 64 }).notNull(),
@@ -3560,3 +3578,46 @@ export const schedulesRelations = relations(schedules, ({ one, many }) => ({
   }),
   sessions: many(sessions),
 }));
+
+/** Deployment-bound non-vending cleanup; survives user/server cascades. */
+export const mcpManagedOauthOutbox = pgTable(
+  'mcp_managed_oauth_outbox',
+  {
+    tenant_id: text('tenant_id').notNull().default('default'),
+    outbox_id: text('outbox_id').primaryKey(),
+    outbox_key: text('outbox_key').notNull(),
+    operation_id: text('operation_id').notNull(),
+    kind: text('kind').notNull(),
+    attempt_id: text('attempt_id').notNull(),
+    user_id: text('user_id').notNull(),
+    mcp_server_id: text('mcp_server_id').notNull(),
+    grant_generation: text('grant_generation').notNull(),
+    managed_metadata: t
+      .json<MCPManagedOAuthGrantMetadata | MCPManagedOAuthPendingMetadata>('managed_metadata')
+      .notNull(),
+    transaction_id: text('transaction_id'),
+    sealed_material: text('sealed_material'),
+    created_at: t.timestamp('created_at').notNull(),
+    expires_at: t.timestamp('expires_at').notNull(),
+    completed_at: t.timestamp('completed_at'),
+  },
+  (table) => ({
+    keyUnique: uniqueIndex('mcp_managed_oauth_outbox_key_uq').on(table.tenant_id, table.outbox_key),
+  })
+);
+
+/** Each tenant projects every authenticated page of its cell's source stream. */
+export const mcpManagedOauthInvalidations = pgTable('mcp_managed_oauth_invalidations', {
+  tenant_id: text('tenant_id').notNull().default('default'),
+  scope_key: text('scope_key').primaryKey(),
+  cell_id: text('cell_id').notNull(),
+  environment: text('environment').notNull(),
+  residency_region: text('residency_region').notNull(),
+  recovery_incarnation: text('recovery_incarnation').notNull(),
+  status: text('status').notNull(),
+  cursor: text('cursor'),
+  page_digest: text('page_digest'),
+  items: t.json<MCPManagedOAuthInvalidation[]>('items').notNull(),
+  staged_items: t.json<MCPManagedOAuthInvalidation[]>('staged_items').notNull(),
+  updated_at: t.timestamp('updated_at').notNull(),
+});

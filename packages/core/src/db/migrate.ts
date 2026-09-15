@@ -133,6 +133,19 @@ export function createMigrationImpactRegistry(
 
 const MIGRATION_IMPACT_REGISTRY = createMigrationImpactRegistry([
   [
+    '0110_mcp_managed_oauth_authority',
+    {
+      requiresOfflineCutover: true,
+      impact: defineMigrationImpact({
+        classification: 'protocol',
+        userAction: 'required',
+        rollbackCompatibility: 'incompatible',
+        summary:
+          'Adds deployment-bound managed OAuth authority, hard claim fences and cleanup triggers. Stop all old writers; managed flags remain off and no grant is converted.',
+      }),
+    },
+  ],
+  [
     '0107_branch_permanent_deletion',
     {
       requiresOfflineCutover: true,
