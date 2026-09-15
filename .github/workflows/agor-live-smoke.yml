@@ -97,10 +97,13 @@ jobs:
             test ! -L "$RUNNER_TEMP/inspect/package/node_modules/@agor/$package"
           done
 
-      - uses: actions/upload-artifact@v6
+      - uses: actions/upload-artifact@v7.0.1
         with:
           name: agor-live-release
           path: packages/agor-live/release/*.tgz
+          # Keep all eight tarballs in one named ZIP for download-artifact consumers.
+          # Direct uploads accept only one file and ignore the artifact name.
+          archive: true
           if-no-files-found: error
           retention-days: 7
 
