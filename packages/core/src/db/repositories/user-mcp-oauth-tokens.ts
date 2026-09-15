@@ -195,6 +195,15 @@ export interface MCPOAuthRefreshVersion {
   refreshGeneration: number;
 }
 
+// Only a locked, exact-version DB backoff observation can mint this proof. A
+// structural copy, serialized result, or caller-created `observed` is not proof.
+const managedDeferredClaims = new WeakMap<object, Readonly<MCPOAuthRefreshVersion>>();
+export function getManagedOAuthDeferredClaim(
+  result: MCPOAuthRefreshClaimResult
+): Readonly<MCPOAuthRefreshVersion> | undefined {
+  return managedDeferredClaims.get(result);
+}
+
 function rowsOf(result: unknown): Array<Record<string, unknown>> {
   if (Array.isArray(result)) return result as Array<Record<string, unknown>>;
   const rows = (result as { rows?: unknown[] } | undefined)?.rows;
@@ -996,6 +1005,33 @@ export class UserMCPOAuthTokenRepository {
         observed.managed_metadata!.owner.cell_id
       );
       await lockRowForUpdate(this.db, this.db, userMcpOauthTokens, matchKey(userId, serverId)!);
+      const deferred = rowsOf(
+        await executeRaw(
+          this.db,
+          sql`SELECT * FROM public.user_mcp_oauth_tokens
+          WHERE tenant_id=${this.tenantId()!} AND user_id=${userId} AND mcp_server_id=${serverId}
+            AND credential_origin='cloud_managed_v1' AND refresh_status='idle'
+            AND grant_generation=${expected.grantGeneration}
+            AND refresh_generation=${expected.refreshGeneration}
+            AND grant_binding_fingerprint IS NOT DISTINCT FROM ${expected.grantBindingFingerprint ?? null}
+            AND refresh_claim_id IS NULL AND managed_operation_id IS NULL
+            AND oauth_refresh_token IS NOT NULL
+            AND managed_refresh_not_before>clock_timestamp()`
+        )
+      )[0];
+      if (deferred) {
+        const token = await this.mapRow(deferred as unknown as UserMCPOAuthTokenRow);
+        const result: MCPOAuthRefreshClaimResult = { outcome: 'observed', token };
+        managedDeferredClaims.set(
+          result,
+          Object.freeze({
+            grantGeneration: token.grant_generation,
+            refreshGeneration: token.refresh_generation,
+            grantBindingFingerprint: token.grant_binding_fingerprint,
+          })
+        );
+        return result;
+      }
     }
     const claimId = randomUUID();
     const userPredicate = userId === null ? sql`user_id IS NULL` : sql`user_id = ${userId}`;
