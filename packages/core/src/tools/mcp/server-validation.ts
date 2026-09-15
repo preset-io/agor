@@ -555,6 +555,16 @@ function validateMCPServerWrite(value: unknown, options: MCPServerWriteValidatio
     }
   }
   if ('auth' in record && record.auth !== undefined) {
+    if (!options.trusted && record.auth && typeof record.auth === 'object') {
+      const auth = record.auth as Record<string, unknown>;
+      if (
+        auth.oauth_client_mode === 'cloud_managed_v1' ||
+        auth.oauth_managed_profile !== undefined
+      ) {
+        throw new Error('Managed OAuth can only be selected through eligible Catalog Connect');
+      }
+    }
+
     assertValidMCPAuthPatch(record.auth, {
       create: complete,
       requireConfiguredCredentials: options.requireConfiguredCredentials,

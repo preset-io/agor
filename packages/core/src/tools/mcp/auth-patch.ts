@@ -15,9 +15,11 @@ import {
   isValidMCPHttpUrlTemplate,
 } from '../../mcp/template-patterns';
 import {
+  assertMCPManagedOAuthProfileReference,
   assertPublicMCPOAuthCompatibilityMode,
   type MCPAuth,
   type MCPAuthPatch,
+  resolveMCPOAuthClientMode,
 } from '../../types/mcp';
 import { MCP_AUTH_SECRET_FIELDS } from './auth-secrets';
 import { MCP_HEADER_REDACTED_SENTINEL } from './http-headers';
@@ -42,6 +44,8 @@ const AUTH_FIELDS = new Set<keyof MCPAuth>([
   'oauth_token_expires_at',
   'oauth_refresh_token',
   'oauth_mode',
+  'oauth_client_mode',
+  'oauth_managed_profile',
   'insecure',
 ]);
 
@@ -100,6 +104,8 @@ const AUTH_FIELDS_BY_TYPE = {
     'oauth_token_expires_at',
     'oauth_refresh_token',
     'oauth_mode',
+    'oauth_client_mode',
+    'oauth_managed_profile',
     'insecure',
   ]),
 } satisfies Record<MCPAuth['type'], ReadonlySet<keyof MCPAuth>>;
@@ -121,6 +127,8 @@ const AUTH_FIELD_FAMILY = new Map<keyof MCPAuth, MCPAuth['type']>([
   ['oauth_token_expires_at', 'oauth'],
   ['oauth_refresh_token', 'oauth'],
   ['oauth_mode', 'oauth'],
+  ['oauth_client_mode', 'oauth'],
+  ['oauth_managed_profile', 'oauth'],
 ]);
 
 function assertAuthFieldFamilies(auth: Record<string, unknown>): void {
@@ -180,6 +188,30 @@ function validateMCPAuthPatch(value: unknown, options: MCPAuthValidationOptions 
     throw new Error('auth.type must be one of none, bearer, jwt, or oauth');
   }
   assertAuthFieldFamilies(auth);
+  if (
+    auth.oauth_client_mode !== undefined &&
+    auth.oauth_client_mode !== null &&
+    !['direct', 'cloud_managed_v1'].includes(String(auth.oauth_client_mode))
+  ) {
+    throw new Error('Unsupported MCP OAuth client mode');
+  }
+  if (auth.oauth_managed_profile !== undefined && auth.oauth_managed_profile !== null) {
+    assertMCPManagedOAuthProfileReference(auth.oauth_managed_profile);
+  }
+  if (options.create && resolveMCPOAuthClientMode(auth) === 'cloud_managed_v1') {
+    assertMCPManagedOAuthProfileReference(auth.oauth_managed_profile);
+    const allowed = new Set(['type', 'oauth_mode', 'oauth_client_mode', 'oauth_managed_profile']);
+    if (
+      auth.type !== 'oauth' ||
+      auth.oauth_mode !== 'per_user' ||
+      Object.entries(auth).some(([key, value]) => value !== undefined && !allowed.has(key))
+    ) {
+      throw new Error(
+        'Managed OAuth forbids direct client, routing, policy and credential overrides'
+      );
+    }
+  }
+
   for (const [key, raw] of Object.entries(auth)) {
     if (raw === undefined) continue;
     if (raw === null) {

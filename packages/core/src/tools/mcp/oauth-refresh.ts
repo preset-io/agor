@@ -14,7 +14,12 @@ import {
   type UserMCPOAuthToken,
   UserMCPOAuthTokenRepository,
 } from '@agor/core/db';
-import type { MCPServerID, UserID } from '../../types';
+import {
+  assertDirectMCPOAuthClient,
+  type MCPOAuthClientMode,
+  type MCPServerID,
+  type UserID,
+} from '../../types';
 import {
   type OutboundDnsLookup,
   OutboundPreDispatchAuthorityError,
@@ -109,6 +114,7 @@ export class OAuthRefreshAuthorityCancelledError extends Error {
 }
 
 export interface RefreshMCPTokenOptions {
+  oauthClientMode?: MCPOAuthClientMode;
   tokenEndpoint: string;
   refreshToken: string;
   clientId: string;
@@ -146,6 +152,7 @@ interface OAuthRefreshRawResponse {
 export async function refreshMCPToken(
   opts: RefreshMCPTokenOptions
 ): Promise<RefreshMCPTokenResult> {
+  assertDirectMCPOAuthClient({ oauth_client_mode: opts.oauthClientMode });
   const body: Record<string, string> = {
     grant_type: 'refresh_token',
     refresh_token: opts.refreshToken,
