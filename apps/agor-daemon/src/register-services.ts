@@ -3382,6 +3382,7 @@ export async function registerMCPServices(
           ...pendingFlow,
           clientId: pendingFlow.context.clientId,
           clientSecret: pendingFlow.context.clientSecret,
+          tokenEndpointAuthMethod: pendingFlow.context.tokenEndpointAuthMethod,
           tokenEndpoint: pendingFlow.context.tokenEndpoint,
           resourceUri: pendingFlow.context.resourceUri,
           ...(grantBinding ? { grantBinding } : {}),
@@ -5760,6 +5761,48 @@ export async function registerMCPServices(
     },
   });
   app.service('mcp-servers/oauth-disconnect').hooks({ before: { create: [ctx.requireAuth] } });
+
+  // Managed return tickets are single-use navigation evidence, never token/Connected authority.
+  app.use('/mcp-servers/oauth-managed-return', {
+    async create(
+      data: import('@agor/core/types').MCPManagedOAuthReturnRequest,
+      params?: AuthenticatedParams
+    ) {
+      const tenantId = tenantIdFromParams(params);
+      const userId = params?.user?.user_id as UserID | undefined;
+      const origin = params?.headers?.origin;
+      if (
+        !ctx.mcpManagedOAuthRuntime ||
+        !tenantId ||
+        !userId ||
+        typeof origin !== 'string' ||
+        !data ||
+        Object.keys(data).sort().join(',') !== 'client_nonce,ticket,transaction_id' ||
+        typeof data.transaction_id !== 'string' ||
+        typeof data.ticket !== 'string' ||
+        typeof data.client_nonce !== 'string'
+      ) {
+        throw new Forbidden('Managed sign-in return is unavailable.');
+      }
+      const assertCurrent = requestAuthorityAssertion(params);
+      try {
+        return await ctx.mcpManagedOAuthRuntime.acceptReturn({
+          tenantId,
+          userId,
+          transactionId: data.transaction_id,
+          ticket: data.ticket,
+          clientNonce: data.client_nonce,
+          requestOrigin: origin,
+          assertCurrent: async () => {
+            assertCurrent?.();
+          },
+        });
+      } catch {
+        throw new Forbidden('Managed sign-in return could not be verified.');
+      }
+    },
+  });
+  app.service('mcp-servers/oauth-managed-return').hooks({ before: { create: [ctx.requireAuth] } });
 
   // OAuth status
   app.use('/mcp-servers/oauth-status', {

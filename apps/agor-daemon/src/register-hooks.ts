@@ -520,7 +520,6 @@ export const TENANT_OWNED_SERVICE_PATHS = [
   'agentic-tool-settings',
   'agentic-tool-presets',
   'mcp-servers',
-  'mcp-servers/oauth-attempt-status',
   'mcp-servers/oauth-disconnect',
   'mcp-servers/oauth-client-registration-reset',
   'mcp-servers/oauth-status',
@@ -591,6 +590,9 @@ export const TENANT_IDENTITY_ONLY_SERVICE_PATHS = [
   'mcp-servers/discover',
   'mcp-servers/oauth-complete',
   'mcp-servers/oauth-start',
+  'mcp-servers/oauth-managed-return',
+  // Managed status reconciliation may exchange; claims must commit before network I/O.
+  'mcp-servers/oauth-attempt-status',
   'mcp-servers/oauth-auth-headers',
   'mcp-servers/oauth-refresh',
   'mcp-servers/test-oauth',

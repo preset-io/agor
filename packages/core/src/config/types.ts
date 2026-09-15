@@ -18,6 +18,8 @@ export interface AgorManagedMCPOAuthSettings {
   use_authorization_issuance?: boolean;
   revocation?: boolean;
   broker_origin?: string;
+  /** Exact configured worker artifact issuer (distinct from external identity issuer). */
+  worker_issuer?: string;
   environment?: 'staging' | 'production';
   region?: 'us-west-2';
   cell_id?: string;
@@ -25,6 +27,12 @@ export interface AgorManagedMCPOAuthSettings {
   sender_key_id?: string;
   /** Deployment-mounted cell RS256 key; never a provider credential. */
   sender_private_key_path?: string;
+  /** Immutable operator-installed public worker keyring JSON. */
+  worker_public_keyring_path?: string;
+  /** Immutable externally attested whole-cell cohort evidence JSON. */
+  cell_evidence_path?: string;
+  /** Live independent clock-monitor evidence; never inferred from local wall time. */
+  clock_health_path?: string;
   /** Exact reviewed companion contract artifact, not main/latest. */
   contract_sha256?: string;
 }

@@ -17,6 +17,7 @@ import {
 } from '@agor/core/tools/mcp/managed-oauth-client';
 import {
   type MCPManagedOAuthResolvedProfile,
+  type MCPManagedOAuthReturnResult,
   type MCPManagedOAuthStartResult,
   type MCPManagedOAuthTokenCommit,
   type MCPOAuthAttemptID,
@@ -27,6 +28,7 @@ import {
   McpOAuthAuthorityResponseSchema,
   type McpOAuthOwner,
   McpOAuthPrepareResponseSchema,
+  McpOAuthReturnTicketRequestSchema,
   McpOAuthTransactionRequestSchema,
   McpOAuthTransactionStatusSchema,
   mcpOAuthOwnerBytes,
@@ -267,45 +269,118 @@ export class ManagedMCPOAuthRuntime {
       )
         throw new ManagedOAuthUnavailableError();
     };
-    // If prepare response is lost the saved operation remains recoverable by the cancellation outbox; never invent a new prepare identity.
-    const prepared = await d.client.request({
-      operation: 'prepare',
-      body: prepare,
-      schema: McpOAuthPrepareResponseSchema,
-      assertCurrent: assertPending,
-    });
+    try {
+      // If prepare response is lost the saved operation remains recoverable by the cancellation outbox; never invent a new prepare identity.
+      const prepared = await d.client.request({
+        operation: 'prepare',
+        body: prepare,
+        schema: McpOAuthPrepareResponseSchema,
+        assertCurrent: assertPending,
+      });
+      if (
+        prepared.expires_at <= d.now() ||
+        !(await d.flows.bindManagedTransaction(
+          record,
+          prepared.transaction_id,
+          prepared.cancel_epoch
+        ))
+      )
+        throw new ManagedOAuthUnavailableError();
+      const activate = McpOAuthTransactionRequestSchema.parse({
+        protocol_version: 1,
+        operation_id: randomUUID(),
+        owner,
+        transaction_id: prepared.transaction_id,
+      });
+      const active = await d.client.request({
+        operation: 'activate',
+        id: prepared.transaction_id,
+        body: activate,
+        schema: McpOAuthActivateResponseSchema,
+        assertCurrent: assertPending,
+      });
+      if (active.transaction_id !== prepared.transaction_id || active.expires_at <= d.now())
+        throw new ManagedOAuthUnavailableError();
+      await assertPending();
+      return {
+        success: true,
+        oauth_client_mode: 'cloud_managed_v1',
+        authorizationUrl: active.intent_url,
+        attempt_id: attemptId,
+        transaction_id: prepared.transaction_id,
+      };
+    } catch (error) {
+      // Exact old attempt only: a failed start must not cancel a concurrent newer reconnect.
+      await d.flows.retireManagedAttempt(record, 'managed_start_failed').catch(() => undefined);
+      throw error;
+    }
+  }
+
+  /** Browser navigation correlation only. The authenticated worker remains the ticket authority. */
+  async acceptReturn(input: {
+    tenantId: string;
+    userId: UserID;
+    transactionId: string;
+    ticket: string;
+    clientNonce: string;
+    requestOrigin: string;
+    assertCurrent: () => void | Promise<void>;
+  }): Promise<MCPManagedOAuthReturnResult> {
+    const d = this.dependencies;
+    await input.assertCurrent();
+    if (!/^[a-f0-9-]{36}$/i.test(input.clientNonce)) throw new ManagedOAuthUnavailableError();
+    const record = await d.flows.getManagedForTransaction(
+      input.tenantId,
+      input.userId,
+      input.transactionId
+    );
     if (
-      prepared.expires_at <= d.now() ||
-      !(await d.flows.bindManagedTransaction(
-        record,
-        prepared.transaction_id,
-        prepared.cancel_epoch
-      ))
+      !record?.managedMetadata ||
+      !record.isCurrent ||
+      !sameDigest(
+        record.managedMetadata.prepare_request.client_nonce_hash,
+        mcpOAuthSha256(input.clientNonce)
+      )
     )
       throw new ManagedOAuthUnavailableError();
-    const activate = McpOAuthTransactionRequestSchema.parse({
+    const owner = record.managedMetadata.owner;
+    const assertCurrent = async () => {
+      await input.assertCurrent();
+      await this.current(owner, 'exchange');
+      const current = await d.flows.getManagedForTransaction(
+        input.tenantId,
+        input.userId,
+        input.transactionId
+      );
+      if (
+        !current?.managedMetadata ||
+        !equalOwner(current.managedMetadata.owner, owner) ||
+        current.expiresAt.getTime() <= d.now()
+      )
+        throw new ManagedOAuthUnavailableError();
+    };
+    const request = McpOAuthReturnTicketRequestSchema.parse({
       protocol_version: 1,
       operation_id: randomUUID(),
       owner,
-      transaction_id: prepared.transaction_id,
+      ticket: input.ticket,
+      client_nonce_hash: mcpOAuthSha256(input.clientNonce),
+      request_origin: input.requestOrigin,
     });
-    const active = await d.client.request({
-      operation: 'activate',
-      id: prepared.transaction_id,
-      body: activate,
-      schema: McpOAuthActivateResponseSchema,
-      assertCurrent: assertPending,
+    const evidence = await d.client.request({
+      operation: 'return_ticket',
+      body: request,
+      schema: McpOAuthTransactionStatusSchema.pick({
+        protocol_version: true,
+        transaction_id: true,
+        owner: true,
+      }),
+      assertCurrent,
     });
-    if (active.transaction_id !== prepared.transaction_id || active.expires_at <= d.now())
+    if (!equalOwner(evidence.owner, owner) || evidence.transaction_id !== input.transactionId)
       throw new ManagedOAuthUnavailableError();
-    await assertPending();
-    return {
-      success: true,
-      oauth_client_mode: 'cloud_managed_v1',
-      authorizationUrl: active.intent_url,
-      attempt_id: attemptId,
-      transaction_id: prepared.transaction_id,
-    };
+    await assertCurrent();
+    return { accepted: true, attempt_id: record.attemptId };
   }
 
   /** Status evidence may trigger completion; a browser ticket or postMessage never does. */
@@ -321,6 +396,7 @@ export class ManagedMCPOAuthRuntime {
     const d = this.dependencies;
     const owner = record.managedMetadata.owner;
     const profile = await this.current(owner, 'exchange');
+    let activeClaim = record.status === 'exchanging' ? record : undefined;
     const assertCurrent = async () => {
       await this.current(owner, 'exchange');
       const fresh = await d.flows.getForUser(record.tenantId, record.userId, record.attemptId);
@@ -330,7 +406,11 @@ export class ManagedMCPOAuthRuntime {
         !equalOwner(owner, fresh.managedMetadata.owner) ||
         fresh.managedTransactionId !== record.managedTransactionId ||
         fresh.expiresAt.getTime() <= d.now() ||
-        !['pending', 'exchanging'].includes(fresh.status)
+        !['pending', 'exchanging'].includes(fresh.status) ||
+        (activeClaim !== undefined &&
+          (fresh.status !== 'exchanging' ||
+            fresh.exchangeClaimId !== activeClaim.exchangeClaimId ||
+            fresh.managedOperationId !== activeClaim.managedOperationId))
       )
         throw new ManagedOAuthUnavailableError();
     };
@@ -349,10 +429,20 @@ export class ManagedMCPOAuthRuntime {
         schema: McpOAuthTransactionStatusSchema,
         assertCurrent,
       });
+      if (['expired', 'failed', 'canceled'].includes(status.status)) {
+        if (
+          !equalOwner(status.owner, owner) ||
+          status.transaction_id !== record.managedTransactionId
+        )
+          throw new ManagedOAuthUnavailableError();
+        await d.flows.retireManagedAttempt(record, 'managed_broker_terminal');
+        return;
+      }
       if (status.status !== 'callback_ready') return;
       const result = await d.flows.claimManagedForTenant(record, status);
       if (result.outcome !== 'claimed') return;
       claimed = result.flow;
+      activeClaim = claimed;
     }
     const material = d.flows.openManagedClaim(claimed);
     const request = {

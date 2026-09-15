@@ -1,5 +1,8 @@
+import { createHash } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import {
+  MANAGED_MCP_OAUTH_CONTRACT_SOURCE_SHA256,
   MANAGED_MCP_OAUTH_FLAGS,
   managedMCPOAuthOperationEnabled,
   validateManagedMCPOAuthConfig,
@@ -9,16 +12,26 @@ import type { AgorManagedMCPOAuthSettings } from './types';
 const configured: AgorManagedMCPOAuthSettings = {
   enabled: true,
   broker_origin: 'https://oauth.staging.example.test',
+  worker_issuer: 'https://oauth.staging.example.test/',
   environment: 'staging',
   region: 'us-west-2',
   cell_id: 'fake-cell',
   credential_id: 'fake-credential',
   sender_key_id: 'fake-key',
   sender_private_key_path: '/run/secrets/synthetic-cell-sender-key',
+  worker_public_keyring_path: '/run/agor-managed/worker-public.json',
+  cell_evidence_path: '/run/agor-managed/cell.json',
+  clock_health_path: '/run/agor-clock/health.json',
   contract_sha256: 'a'.repeat(64),
 };
 
 describe('managed OAuth deployment configuration', () => {
+  it('pins deployment admission to the exact mirrored Cloud source bytes', () => {
+    const bytes = readFileSync(new URL('../types/mcp-managed-oauth-contract.ts', import.meta.url));
+    expect(createHash('sha256').update(bytes).digest('hex')).toBe(
+      MANAGED_MCP_OAUTH_CONTRACT_SOURCE_SHA256
+    );
+  });
   it('defaults every operation off, independently of wiring and other operation flags', () => {
     expect(() => validateManagedMCPOAuthConfig(undefined)).not.toThrow();
     expect(() => validateManagedMCPOAuthConfig(configured)).not.toThrow();

@@ -213,6 +213,13 @@ interface GatewayOptions {
   resolveDns?: OutboundDnsLookup;
   /** Test seam proving all constituent reads share one native snapshot. */
   authoritySnapshotCheckpoint?: () => Promise<void>;
+  /** Internal daemon-only acquisition; managed bearers never use the public raw-header service. */
+  resolveManagedAuthorization?: (input: {
+    tenantId: string;
+    userId: UserID;
+    server: MCPServer;
+    assertCurrent: () => Promise<void>;
+  }) => Promise<string>;
   /** Installed by the managed runtime; called inside the final local snapshot. */
   assertManagedUse?: (input: {
     tenantDb: TenantScopedDatabase;
@@ -1178,7 +1185,27 @@ export class MCPEgressGateway {
     assertCurrent: () => Promise<void>
   ): Promise<Headers> {
     let authHeaders: Record<string, string> | undefined;
-    if (server.auth?.type === 'oauth') {
+    if (resolveMCPOAuthClientMode(server.auth) === 'cloud_managed_v1') {
+      if (!this.options.resolveManagedAuthorization)
+        throw new MCPEgressGatewayError(
+          503,
+          'managed_authority_unavailable',
+          'Agor-managed sign-in is unavailable'
+        );
+      const authorization = await this.options.resolveManagedAuthorization({
+        tenantId: claims.tid,
+        userId: claims.credential_user_id as UserID,
+        server,
+        assertCurrent,
+      });
+      if (!/^Bearer [^\s]+$/.test(authorization))
+        throw new MCPEgressGatewayError(
+          503,
+          'managed_authority_invalid',
+          'Agor-managed sign-in is unavailable'
+        );
+      authHeaders = { Authorization: authorization };
+    } else if (server.auth?.type === 'oauth') {
       let result: { headers: Record<string, { authorization?: string; error?: string }> };
       try {
         result = (await this.options.app

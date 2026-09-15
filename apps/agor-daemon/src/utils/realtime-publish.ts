@@ -309,6 +309,7 @@ export const REDIS_FEATHERS_DENIED_PATHS = new Set([
   'config/resolve-api-key',
   'executor-git-environment',
   'mcp-servers/oauth-start',
+  'mcp-servers/oauth-managed-return',
   'mcp-servers/oauth-callback',
   'mcp-servers/oauth-complete',
   'mcp-servers/oauth-disconnect',
