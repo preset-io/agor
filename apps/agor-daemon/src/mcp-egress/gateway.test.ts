@@ -109,6 +109,9 @@ interface HarnessOptions {
   initialMcpRecovery?: boolean;
   separateOAuthConsenter?: boolean;
   assertManagedUse?: ConstructorParameters<typeof MCPEgressGateway>[0]['assertManagedUse'];
+  resolveManagedAuthorization?: ConstructorParameters<
+    typeof MCPEgressGateway
+  >[0]['resolveManagedAuthorization'];
 }
 
 async function harness(options: HarnessOptions) {
@@ -292,6 +295,7 @@ async function harness(options: HarnessOptions) {
     resolveDns: options.resolveDns,
     authoritySnapshotCheckpoint: options.authoritySnapshotCheckpoint,
     assertManagedUse: options.assertManagedUse,
+    resolveManagedAuthorization: options.resolveManagedAuthorization,
   });
   const materialHash = mcpEgressMaterialHash(
     options.capabilityServerTransform?.(server) ?? server,
@@ -433,7 +437,14 @@ describe('authoritative MCP gateway real transport', () => {
           throw Object.assign(new Error('expired'), { code: 'managed_authority_expired' });
       }
     );
-    const h = await harness({ server, assertManagedUse });
+    const h = await harness({
+      server,
+      assertManagedUse,
+      resolveManagedAuthorization: async () => 'Bearer oauth-access-token-initial',
+      oauthAuthHeadersCreate: async () => {
+        throw new Error('Managed must never project raw headers');
+      },
+    });
     await h.request('POST', initialize);
     expect(sends).toBe(1);
     allowed = false;

@@ -4315,7 +4315,11 @@ export async function registerMCPServices(
             data.start_browser_flow ||
             data.client_id ||
             data.client_secret ||
-            data.token_url
+            data.token_url ||
+            data.scope ||
+            data.grant_type ||
+            data.compatibility_mode ||
+            data.dcr_mode
           )
             throw new BadRequest('Use the managed sign-in action for this saved server');
           return await app
@@ -5721,6 +5725,9 @@ export async function registerMCPServices(
     async create(data: { mcp_server_id: string }, params?: AuthenticatedParams) {
       const selectedServer = await loadMcpServerForCaller(db, data.mcp_server_id, params);
       const tenantId = tenantIdFromParams(params);
+      let managedResult:
+        | (Awaited<ReturnType<typeof performOAuthDisconnect>> & { provider_revocation: 'pending' })
+        | undefined;
       if (selectedServer.auth?.oauth_client_mode === 'cloud_managed_v1') {
         const userId = params?.user?.user_id as UserID | undefined;
         if (!tenantId || !userId || selectedServer.owner_user_id !== userId || !durableOAuthFlows)
@@ -5740,7 +5747,7 @@ export async function registerMCPServices(
           await durableOAuthFlows.invalidateForServer(tenantId, fresh.mcp_server_id);
           await new UserMCPOAuthTokenRepository(scoped).deleteToken(userId, fresh.mcp_server_id);
         });
-        return {
+        managedResult = {
           success: true,
           oauthMode: 'per_user' as const,
           provider_revocation: 'pending' as const,
@@ -5753,13 +5760,15 @@ export async function registerMCPServices(
               new UsersRepository(db).findById(params.user!.user_id)
             )
           : params?.user;
-      const result = await performOAuthDisconnect({
-        userId: params?.user?.user_id,
-        isAdmin: hasMinimumRole(currentUser?.role, ROLES.ADMIN),
-        mcpServerId: data.mcp_server_id,
-        userTokenRepo: new UserMCPOAuthTokenRepository(db),
-        mcpServerRepo: new MCPServerRepository(db),
-      });
+      const result =
+        managedResult ??
+        (await performOAuthDisconnect({
+          userId: params?.user?.user_id,
+          isAdmin: hasMinimumRole(currentUser?.role, ROLES.ADMIN),
+          mcpServerId: data.mcp_server_id,
+          userTokenRepo: new UserMCPOAuthTokenRepository(db),
+          mcpServerRepo: new MCPServerRepository(db),
+        }));
 
       // Tenant-qualified hint only; every receiving tab refetches durable
       // status before changing its auth UI.
