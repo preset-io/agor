@@ -27,6 +27,7 @@
  */
 
 import {
+  getCurrentTenantDatabaseScope,
   getCurrentTenantId,
   runWithTenantDatabaseScope,
   type TenantScopeAwareDatabase,
@@ -133,6 +134,7 @@ export function createCodexAuthLogoutService(
         // in-process service call: the explicitly-undefined key survives to the
         // merge and is dropped when the JSON column serializes; a client-
         // transported patch would lose the key in JSON and silently no-op.
+        const scope = getCurrentTenantDatabaseScope();
         const usersService = app.service('users') as UsersServiceLike;
         await usersService.patch(
           userId,
@@ -140,9 +142,10 @@ export function createCodexAuthLogoutService(
           {
             user: authUser,
             authenticated: true,
-            ...(authorityGeneration === undefined
-              ? {}
-              : { [CODEX_AUTH_DEFER_USER_REALTIME]: true }),
+            ...(authorityGeneration !== undefined ||
+            (scope?.kind === 'tenant' && scope.transactionActive)
+              ? { [CODEX_AUTH_DEFER_USER_REALTIME]: true }
+              : {}),
           }
         );
       };

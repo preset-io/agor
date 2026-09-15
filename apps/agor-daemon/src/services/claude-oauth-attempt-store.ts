@@ -40,6 +40,7 @@ export interface ClaudeOAuthStartInput {
   delegatedHomeKey: string | null;
   /** Canonical exact-user `.claude` directory fixed at attempt start. */
   claudeConfigDir?: string;
+  target?: import('@agor/core/types').ClaudeBackendOAuthTarget;
   /** Rebuilt from the verifier + state whenever a status read needs it. */
   buildVerificationUrl: (verifier: string, state: string) => string;
   /** Recheck the captured route after acquiring the credential authority. */
@@ -63,6 +64,7 @@ export interface ClaudeOAuthExchangeClaim {
   state: string;
   delegatedHomeKey: string | null;
   claudeConfigDir?: string;
+  target?: import('@agor/core/types').ClaudeBackendOAuthTarget;
 }
 
 export type ClaudeOAuthClaimResult =
@@ -109,7 +111,8 @@ export interface ClaudeOAuthAttemptStore {
   runCredentialMutation<T>(
     ctx: ClaudeOAuthAttemptContext,
     reason: 'signed_out' | 'credentials_changed',
-    work: (generation?: number) => Promise<T>
+    work: (generation?: number) => Promise<T>,
+    options?: { atomic?: boolean }
   ): Promise<T>;
   /** Serialize a daemon-owned runtime refresh without invalidating a newer login attempt. */
   runCredentialRefresh<T>(
@@ -221,6 +224,7 @@ interface MemoryAttempt {
   claimId: string | null;
   delegatedHomeKey: string | null;
   claudeConfigDir?: string;
+  target?: import('@agor/core/types').ClaudeBackendOAuthTarget;
   subscriptionType?: string;
   hint?: string;
   finishedAtMs?: number;
@@ -321,6 +325,7 @@ export class InMemoryClaudeOAuthAttemptStore implements ClaudeOAuthAttemptStore 
         claimId: null,
         delegatedHomeKey: input.delegatedHomeKey,
         ...(input.claudeConfigDir ? { claudeConfigDir: input.claudeConfigDir } : {}),
+        ...(input.target ? { target: input.target } : {}),
         cancelled: false,
       });
       return { attemptId, verificationUrl, expiresAtMs };
@@ -499,6 +504,7 @@ export class DurableClaudeOAuthAttemptStore implements ClaudeOAuthAttemptStore {
       state: input.state,
       delegatedHomeKey: input.delegatedHomeKey,
       ...(input.claudeConfigDir ? { claudeConfigDir: input.claudeConfigDir } : {}),
+      ...(input.target ? { target: input.target } : {}),
       ...(input.validateRoute ? { validateRoute: input.validateRoute } : {}),
     });
     const record = await this.authority.getForUser(ctx.tenantId, ctx.userId, attemptId);
@@ -561,7 +567,8 @@ export class DurableClaudeOAuthAttemptStore implements ClaudeOAuthAttemptStore {
           // the row. Carry the request value forward; raw state is not durable
           // material and never needs to be unsealed.
           state,
-          delegatedHomeKey: material.delegatedHomeKey,
+          delegatedHomeKey: material.delegatedHomeKey ?? null,
+          ...(material.version === 2 ? { target: material.target } : {}),
           ...(material.claudeConfigDir ? { claudeConfigDir: material.claudeConfigDir } : {}),
         },
       };
@@ -618,9 +625,10 @@ export class DurableClaudeOAuthAttemptStore implements ClaudeOAuthAttemptStore {
   runCredentialMutation<T>(
     ctx: ClaudeOAuthAttemptContext,
     reason: 'signed_out' | 'credentials_changed',
-    work: (generation: number) => Promise<T>
+    work: (generation: number) => Promise<T>,
+    options?: { atomic?: boolean }
   ): Promise<T> {
-    return this.authority.runCredentialMutation(ctx.tenantId, ctx.userId, reason, work);
+    return this.authority.runCredentialMutation(ctx.tenantId, ctx.userId, reason, work, options);
   }
 
   runCredentialRefresh<T>(

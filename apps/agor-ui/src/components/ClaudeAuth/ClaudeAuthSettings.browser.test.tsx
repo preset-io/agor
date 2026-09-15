@@ -1,61 +1,64 @@
-import type { AgorClient } from '@agor-live/client';
-import { cleanup, render, screen } from '@testing-library/react';
-import { theme as antdTheme, ConfigProvider } from 'antd';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+/** Real Chromium component proof; not a managed-app/provider end-to-end test. */
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { ConfigProvider, theme } from 'antd';
+import { afterEach, expect, it, vi } from 'vitest';
 import { TOOL_FIELD_CONFIGS } from '../ApiKeyFields';
 import { ClaudeAuthSettings } from './ClaudeAuthSettings';
-
-function renderSettings(options: { allowOAuthSignIn: boolean; subscription?: boolean }) {
-  const client = {
-    service: vi.fn((name: string) => {
-      if (name === 'check-auth') {
-        return {
-          create: vi.fn(async () => ({
-            status: 'unknown',
-            authenticated: false,
-            method: 'none',
-          })),
-        };
-      }
-      if (name === 'claude-auth/logout') {
-        return { create: vi.fn(async () => ({ status: 'removed' })) };
-      }
-      return { create: vi.fn(), find: vi.fn() };
-    }),
-  } as unknown as AgorClient;
-
-  return render(
-    <ConfigProvider theme={{ algorithm: antdTheme.darkAlgorithm, token: { motion: false } }}>
-      <ClaudeAuthSettings
-        client={client}
-        authMethod={options.subscription ? 'subscription' : 'api_key'}
-        apiKeyFields={TOOL_FIELD_CONFIGS['claude-code']}
-        fieldStatus={{}}
-        onSaveField={vi.fn(async () => undefined)}
-        onClearField={vi.fn(async () => undefined)}
-        savingFields={{}}
-        allowSubscriptionLogin
-        allowOAuthSignIn={options.allowOAuthSignIn}
-      />
-    </ConfigProvider>
-  );
-}
+import { ClaudeOAuthSignIn } from './ClaudeOAuthSignIn';
 
 afterEach(cleanup);
 
-describe('Claude OAuth release gate (real browser)', () => {
-  it('omits OAuth by default while keeping API-key, pasted-token, and cleanup controls', () => {
-    renderSettings({ allowOAuthSignIn: false, subscription: true });
-    expect(screen.queryByText('Sign in with Claude')).not.toBeInTheDocument();
-    expect(screen.getByText('API key')).toBeVisible();
-    expect(screen.getByText('Subscription token')).toBeVisible();
-    expect(screen.getByText('Disconnect')).toBeVisible();
-  });
+it('keeps dormant backend disconnect available while operator sign-in is disabled', async () => {
+  const disconnect = vi.fn(async () => ({ status: 'removed' }));
+  const client = {
+    service: (name: string) => ({
+      create:
+        name === 'claude-auth/logout' ? disconnect : vi.fn(async () => ({ status: 'unknown' })),
+      find: vi.fn(async () => ({ phase: 'idle' })),
+    }),
+  } as never;
+  render(
+    <ConfigProvider theme={{ algorithm: theme.darkAlgorithm, token: { motion: false } }}>
+      <ClaudeAuthSettings
+        client={client}
+        authMethod="subscription"
+        credentialSource="managed_oauth"
+        apiKeyFields={TOOL_FIELD_CONFIGS['claude-code']}
+        fieldStatus={{}}
+        savingFields={{}}
+        onSaveField={vi.fn(async () => {})}
+        onClearField={vi.fn(async () => {})}
+        allowOAuthSignIn={false}
+        oauthCapability={{ available: false, storage: null, reason: 'operator_disabled' }}
+      />
+    </ConfigProvider>
+  );
+  expect(await screen.findByText(/disabled by the operator/i)).toBeInTheDocument();
+  const button = await screen.findByRole('button', { name: /Disconnect/ });
+  expect(button.getBoundingClientRect().width).toBeGreaterThan(0);
+  fireEvent.click(button);
+  await screen.findByText('Disconnect Claude login?');
+  const confirm = screen
+    .getAllByRole('button', { name: 'Disconnect' })
+    .find((item) => item !== button)!;
+  fireEvent.click(confirm);
+  await waitFor(() => expect(disconnect).toHaveBeenCalledTimes(1));
+});
 
-  it('shows OAuth only after the advertised deployment capability is enabled', () => {
-    renderSettings({ allowOAuthSignIn: true, subscription: true });
-    // The authorized view exposes both the method selector and the launch
-    // button; neither exists in the default-off case above.
-    expect(screen.getAllByText('Sign in with Claude')).toHaveLength(2);
-  });
+it('requires current backend proof and offers recovery from a historical success', async () => {
+  const verified = vi.fn();
+  const client = {
+    service: (name: string) =>
+      name === 'claude-auth/oauth'
+        ? { find: async () => ({ phase: 'success', attemptId: 'old' }), create: vi.fn() }
+        : {
+            create: async () => ({
+              status: 'unauthenticated',
+              managedOAuth: { saved: false, usable: false },
+            }),
+          },
+  } as never;
+  render(<ClaudeOAuthSignIn client={client} storage="backend" onVerified={verified} />);
+  expect(await screen.findByRole('button', { name: 'Start over' })).toBeInTheDocument();
+  expect(verified).not.toHaveBeenCalled();
 });

@@ -430,6 +430,23 @@ export async function resolveApiKeyForTask(
   return result;
 }
 
+/** Expiry guidance only; never restarts an SDK or replays a prompt/tool call. */
+export function expiredClaudeCredentialMessage(
+  tool: AgenticToolName,
+  expiresAt: string | undefined,
+  error: string,
+  now = Date.now()
+): string | undefined {
+  if (
+    tool !== 'claude-code' ||
+    !expiresAt ||
+    now < Date.parse(expiresAt) ||
+    !/authenticat|unauthorized|\b401\b|token.{0,20}expir/i.test(error)
+  )
+    return undefined;
+  return 'Claude access token expired during this task. Send a follow-up prompt in this session to start a new task with a fresh token; SDK resume state is preserved. The prompt was not replayed automatically.';
+}
+
 /** Exported for tests. Mutates process.env — production callers: executeToolTask only. */
 export function installProviderConnection(
   tool: AgenticToolName,
@@ -497,6 +514,7 @@ export async function executeToolTask(params: {
 
   let abortHandler: (() => Promise<void>) | undefined;
   let abortCompletion: Promise<void> | undefined;
+  let credentialExpiresAt: string | undefined;
 
   try {
     // Ensure plain git commands launched by the agent SDK inherit safe.directory
@@ -513,6 +531,7 @@ export async function executeToolTask(params: {
 
     // Resolve one complete user-or-tenant provider connection.
     const resolution = await resolveApiKeyForTask(apiKeyEnvVar, client, taskId, toolName);
+    credentialExpiresAt = resolution.credentialExpiresAt;
     const connection = {
       ...(resolution.connection ?? {}),
       ...(resolution.apiKey ? { [apiKeyEnvVar]: resolution.apiKey } : {}),
@@ -619,6 +638,15 @@ export async function executeToolTask(params: {
     const patchData: Partial<Task> = {
       status: taskStatus,
       completed_at: new Date().toISOString(),
+      ...(result.hadError
+        ? {
+            error_message: expiredClaudeCredentialMessage(
+              toolName,
+              credentialExpiresAt,
+              result.errorDetails?.join('; ') ?? ''
+            ),
+          }
+        : {}),
     };
 
     // Add git_state if we captured a SHA
@@ -724,7 +752,9 @@ export async function executeToolTask(params: {
       completed_at: new Date().toISOString(),
       // Surface the actual failure reason so the UI / DB show what went wrong,
       // instead of the task silently flipping to FAILED with no context.
-      error_message: formatExecutorFailure(err),
+      error_message:
+        expiredClaudeCredentialMessage(toolName, credentialExpiresAt, err.message) ??
+        formatExecutorFailure(err),
     };
 
     // Add git_state if we captured a SHA

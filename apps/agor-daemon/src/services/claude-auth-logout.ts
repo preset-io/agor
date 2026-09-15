@@ -29,6 +29,7 @@ import {
   runWithTenantDatabaseScope,
   type TenantScopeAwareDatabase,
   type TenantScopedDatabase,
+  UsersRepository,
 } from '@agor/core/db';
 import { BadRequest, NotAuthenticated, Unavailable } from '@agor/core/feathers';
 import type {
@@ -39,6 +40,7 @@ import type {
   UserID,
 } from '@agor/core/types';
 import { deleteClaudeAuthViaExecutor } from '../utils/executor-claude-auth.js';
+import type { ClaudeBackendOAuth } from './claude-backend-oauth.js';
 import { CLAUDE_AUTH_TRUSTED_USER_MUTATION } from './claude-credential-mutation-trust.js';
 import type { ClaudeOAuthAttemptStore } from './claude-oauth-attempt-store.js';
 import {
@@ -65,7 +67,9 @@ export function createClaudeAuthLogoutService(
   app: AppLike,
   db: TenantScopeAwareDatabase,
   /** Shared with the OAuth service so logout fences its in-flight attempts. */
-  attemptStore?: ClaudeOAuthAttemptStore
+  attemptStore?: ClaudeOAuthAttemptStore,
+  backend?: ClaudeBackendOAuth,
+  canCleanLocal: () => boolean = () => true
 ) {
   return {
     async create(_data: unknown, params?: AuthenticatedParams): Promise<ClaudeAuthLogoutResult> {
@@ -82,38 +86,61 @@ export function createClaudeAuthLogoutService(
       const attemptContext = { tenantId: String(tenantId), userId };
 
       const remove = async (generation?: number): Promise<ClaudeAuthLogoutResult> => {
-        const identity = await resolveCodexCredentialRoute(
-          userId,
-          withTenantDatabase,
-          app.get('config')
-        );
-        if (!identity.ok) {
-          throw new BadRequest(
-            `Cannot determine which Unix account holds this Claude login: ${identity.message}`
+        const user = backend
+          ? await withTenantDatabase((db) => new UsersRepository(db).findById(userId))
+          : null;
+        const source = user?.agentic_credential_sources?.['claude-code'];
+        const backendSource =
+          source === 'managed_oauth' ||
+          (backend &&
+            source !== 'managed_file' &&
+            (backend.capability().storage === 'backend' ||
+              // A tombstone keeps repeated Disconnect local to the backend even
+              // after opt-out. A backend object alone (created on every PG
+              // deployment) does not mean legacy delegated files are managed here.
+              (await backend.get(String(tenantId), userId)) !== null));
+        if (backendSource && backend) {
+          if (generation === undefined)
+            throw new Unavailable('Durable Claude disconnect authority unavailable.');
+          await backend.retire(String(tenantId), userId, generation);
+        } else {
+          if (!canCleanLocal())
+            throw new Unavailable(
+              'Local Claude credential cleanup is unavailable in this execution mode.'
+            );
+          const identity = await resolveCodexCredentialRoute(
+            userId,
+            withTenantDatabase,
+            app.get('config')
           );
-        }
+          if (!identity.ok) {
+            throw new BadRequest(
+              `Cannot determine which Unix account holds this Claude login: ${identity.message}`
+            );
+          }
 
-        // Delete the local login (idempotent — a missing file is success). A
-        // genuine delete failure is a real server problem worth surfacing, and we
-        // do NOT clear the method/token in that case so a login we couldn't remove
-        // keeps working. Log the error class only — never token bytes.
-        try {
-          const route = {
-            delegatedHomeKey: identity.delegatedHomeKey,
-            userId: identity.userId,
-            ...(identity.claudeConfigDir ? { claudeConfigDir: identity.claudeConfigDir } : {}),
-          };
-          if (generation === undefined) await deleteClaudeAuthViaExecutor(route);
-          else await deleteClaudeAuthViaExecutor(route, generation);
-        } catch (err) {
-          console.error(
-            `[ClaudeAuth] Failed to delete .credentials.json${
-              identity.delegatedHomeKey ? ` as ${identity.delegatedHomeKey}` : ''
-            }: ${err instanceof Error ? err.constructor.name : 'unknown error'}`
-          );
-          throw new BadRequest(
-            'Could not remove the Claude credentials file on the server. Check daemon logs and sudo configuration.'
-          );
+          // Delete the local login (idempotent — a missing file is success). A
+          // genuine delete failure is a real server problem worth surfacing, and we
+          // do NOT clear the method/token in that case so a login we couldn't remove
+          // keeps working. Log the error class only — never token bytes.
+          try {
+            const route = {
+              delegatedHomeKey: identity.delegatedHomeKey,
+              userId: identity.userId,
+              ...(identity.claudeConfigDir ? { claudeConfigDir: identity.claudeConfigDir } : {}),
+            };
+            if (generation === undefined) await deleteClaudeAuthViaExecutor(route);
+            else await deleteClaudeAuthViaExecutor(route, generation);
+          } catch (err) {
+            console.error(
+              `[ClaudeAuth] Failed to delete .credentials.json${
+                identity.delegatedHomeKey ? ` as ${identity.delegatedHomeKey}` : ''
+              }: ${err instanceof Error ? err.constructor.name : 'unknown error'}`
+            );
+            throw new BadRequest(
+              'Could not remove the Claude credentials file on the server. Check daemon logs and sudo configuration.'
+            );
+          }
         }
 
         // Clear the stored method AND any pasted token via the users SERVICE (not a
@@ -153,7 +180,9 @@ export function createClaudeAuthLogoutService(
       };
 
       return attemptStore
-        ? attemptStore.runCredentialMutation(attemptContext, 'signed_out', remove)
+        ? attemptStore.runCredentialMutation(attemptContext, 'signed_out', remove, {
+            atomic: !!backend,
+          })
         : remove();
     },
   };

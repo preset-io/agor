@@ -78,6 +78,7 @@ export interface FeaturesConfig {
   cursorSdk?: boolean;
   /** Daemon-driven Claude subscription OAuth is explicitly operator-authorized. */
   claudeSubscriptionOAuth?: boolean;
+  claudeOAuthCapability?: import('@agor/core/types').ClaudeOAuthCapability;
   /**
    * Resolved branch storage policy from execution.branch_storage.
    * Defaults server-side to { defaultMode: 'worktree',
