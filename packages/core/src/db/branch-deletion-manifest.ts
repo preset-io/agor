@@ -24,6 +24,24 @@ export const BRANCH_DELETION_RELATIONS: Readonly<Record<string, BranchDeletionRe
     'Preserve foreign-branch sessions; clear deleted schedule provenance.'
   ),
   'tasks.session_id': owned('Settle runtime containment before deleting tasks in bounded chunks.'),
+  'completion_subscriptions.callback_session_id': clear(
+    'Retain the cross-branch subscription; a missing callback target fails delivery rather than rerouting it.'
+  ),
+  'completion_subscriptions.root_session_id': clear(
+    'Root provenance does not own the surviving chain.'
+  ),
+  'completion_subscriptions.root_task_id': clear(
+    'Root provenance does not own the surviving chain.'
+  ),
+  'completion_subscriptions.active_session_id': clear(
+    'Preserve the outbox; deleted active work is reconciled as missing.'
+  ),
+  'completion_subscriptions.active_task_id': clear(
+    'Preserve the outbox; deleted active work is reconciled as missing.'
+  ),
+  'completion_subscriptions.delivery_task_id': clear(
+    'Clear deleted delivery provenance without deleting a foreign subscription.'
+  ),
   'messages.session_id': owned('Batch by session, including messages without a task.'),
   'messages.task_id': classify(
     'Delete branch-owned messages; a foreign-session reference is not ownership.'
@@ -190,6 +208,18 @@ export const BRANCH_DELETION_NON_FK_RELATIONS: Readonly<
   ),
   'executor_session_token_authorities.task_id': classify(
     'Include task-bound authorities before deleting their lookup rows.'
+  ),
+  'completion_subscriptions.origin_session_id': retain(
+    'Immutable audit identity, not branch ownership or live delivery authority.'
+  ),
+  'completion_subscriptions.origin_task_id': retain(
+    'Immutable audit identity, not branch ownership or live delivery authority.'
+  ),
+  'completion_subscriptions.path': retain(
+    'Cross-branch chain audit history; never cascade deletion through its plain IDs.'
+  ),
+  'completion_subscriptions.terminal_snapshot': retain(
+    'Retain the cross-branch terminal outcome under the subscription owner; not a live resource grant.'
   ),
   'sessions.parent_session_id': clear(
     'Detach surviving sessions; ancestry never grants deletion ownership.'

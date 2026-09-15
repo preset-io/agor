@@ -26,6 +26,20 @@ const readJournals = () =>
   );
 
 describe('Postgres migrations', () => {
+  it('keeps completion subscriptions pending after the current upstream watermark', async () => {
+    for (const journal of await readJournals()) {
+      const entries = journal.entries;
+      expect(entries.at(-1)).toMatchObject({
+        idx: 110,
+        when: 1789344000005,
+        tag: '0111_transitive_completion_subscriptions',
+      });
+      expect(classifyMigrationWatermark(entries, 1789344000004).pending).toEqual([
+        '0111_transitive_completion_subscriptions',
+      ]);
+    }
+  });
+
   it('keeps provider grants pending and offline after the shipped branch-cleanup watermark', async () => {
     const journals = await readJournals();
     for (const [index, dialect] of (['postgresql', 'sqlite'] as const).entries()) {

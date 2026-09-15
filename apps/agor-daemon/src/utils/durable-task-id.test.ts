@@ -4,6 +4,7 @@ import {
   completionCallbackTaskId,
   gatewayInboundSessionId,
   gatewayInboundTaskId,
+  propagatedCompletionCallbackTaskId,
   widgetAutoResumeTaskId,
 } from './durable-task-id.js';
 
@@ -16,6 +17,18 @@ describe('durable internal Task identities', () => {
     expect(widgetAutoResumeTaskId(widgetId)).toBe(taskId);
     expect(taskId).not.toBe(widgetId);
     expect(taskId).toMatch(uuidV7);
+  });
+
+  it('derives a stable root completion callback per subscription and target', () => {
+    const source = '019f0000-0000-7000-8000-000000000001' as TaskID;
+    const target = '019f0000-0000-7000-8000-000000000002' as SessionID;
+    const subscription = source as import('@agor/core/types').CompletionSubscriptionID;
+    expect(propagatedCompletionCallbackTaskId(subscription, target)).toBe(
+      propagatedCompletionCallbackTaskId(subscription, target)
+    );
+    expect(propagatedCompletionCallbackTaskId(subscription, target)).not.toBe(
+      completionCallbackTaskId(source, target)
+    );
   });
 
   it('derives a target-specific callback identity from the source Task', () => {
