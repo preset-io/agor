@@ -61,7 +61,14 @@ describe('initial load debug timer', () => {
 
     expect(timings.status).toBe('success');
     expect(timings.fetches).toMatchObject([
-      { key: 'sessions', label: 'Sessions', count: 2, status: 'success' },
+      {
+        key: 'sessions',
+        label: 'Sessions',
+        count: 2,
+        status: 'success',
+        jsonBytes: 7,
+        startedAtMs: expect.any(Number),
+      },
     ]);
     expect(timings.stageTransitions.map((transition) => transition.stage)).toEqual([
       'fetching',

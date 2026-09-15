@@ -82,6 +82,10 @@ import {
 // (see `fetchData`) and intentionally absent here so the gate never waits on
 // them. Their realtime subscriptions are still attached immediately in the
 // subscribe effect, so live updates land even before their fetch resolves.
+// Canvas placements can outnumber active branches by orders of magnitude.
+// Keep each transport response bounded even when hydrating the global index.
+const BOARD_OBJECT_PAGE_LIMIT = 100;
+
 const INITIAL_LOAD_ITEMS = [
   { key: 'sessions', label: 'Sessions' },
   { key: 'boards', label: 'Boards' },
@@ -508,88 +512,6 @@ export function useAgorData(
           });
         };
 
-        // ── Background (non-gated) fetches ──────────────────────────────
-        // These collections are NOT needed to paint the canvas, so they must
-        // never block the first-paint gate. Fire-and-forget: each populates its
-        // own map slice on resolve. Their realtime subscriptions are attached in
-        // the subscribe effect BEFORE this fetch runs, so live events land even
-        // while these fetches are in flight — and `runHydration` only applies a
-        // snapshot when no live write to that collection raced (else it refetches
-        // a fresh one). We deliberately do NOT `track()` them — they're absent
-        // from INITIAL_LOAD_ITEMS, so the loading checklist / `initialLoadComplete`
-        // gate ignores them. We apply through the store's `applyMaps` (not the
-        // per-entity setters), keeping fetchData's deps stable so the subscribe
-        // effect doesn't re-fire.
-        // Route the full snapshot through the shared skip-apply-on-race / generation
-        // lifecycle (like mcp-servers / gateway-channels) so an older snapshot can't
-        // clobber a newer realtime upsert, and a fetch resolving after logout is
-        // dropped instead of repopulating the previous tenant. The apply sets the
-        // hydration gate, so it only flips once a quiet, current snapshot lands.
-        void runAuthorityHydration(
-          'agentic-tool-settings',
-          ['agenticToolSettings'],
-          () => client.service('agentic-tool-settings').findAll(),
-          (settings) => agorStore.getState().setAgenticToolSettings(settings)
-        );
-
-        void runAuthorityHydration(
-          'mcp-servers',
-          ['mcpServers'],
-          () =>
-            client.service('mcp-servers').findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } }),
-          (list) => {
-            agorStore.getState().applyMaps((prev) => ({
-              ...prev,
-              mcpServerById: buildById(list, 'mcp_server_id', prev.mcpServerById),
-            }));
-            agorStore.getState().markHydrated('mcpServersHydrated');
-          }
-        );
-        void runAuthorityHydration(
-          'session-mcp-servers',
-          ['sessionMcp'],
-          () =>
-            client
-              .service('session-mcp-servers')
-              .findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } }),
-          (list) =>
-            agorStore
-              .getState()
-              .applyMaps((prev) => ({ ...prev, sessionMcpServerIds: buildSessionMcpMap(list) }))
-        );
-        void runAuthorityHydration(
-          'gateway-channels',
-          ['gatewayChannels'],
-          () =>
-            client
-              .service('gateway-channels')
-              .findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } }),
-          (list) => {
-            agorStore.getState().applyMaps((prev) => ({
-              ...prev,
-              gatewayChannelById: buildById(list, 'id', prev.gatewayChannelById),
-            }));
-            agorStore.getState().markHydrated('gatewayChannelsHydrated');
-          }
-        );
-        void runAuthorityHydration(
-          'artifacts',
-          ['artifacts'],
-          () =>
-            client.service('artifacts').findAll({
-              query: {
-                $limit: PAGINATION.DEFAULT_LIMIT,
-                $select: [...ARTIFACT_METADATA_LIST_FIELDS],
-              },
-            }),
-          (list) =>
-            agorStore.getState().applyMaps((prev) => ({
-              ...prev,
-              artifactById: buildById(list, 'artifact_id', prev.artifactById),
-            }))
-        );
-        void refetchOAuthDurableState(fetchAuthorityScope);
-
         // ── Essential gated fetches — LIGHT batch ───────────────────────
         // Tiny global collections (boards / users / repos / card-types stay
         // global — bounded and small) plus a BOUNDED recent slice of sessions.
@@ -803,7 +725,8 @@ export function useAgorData(
             canUseMemberWorkspaceServices
               ? client.service('board-objects').findAll({
                   query: {
-                    $limit: PAGINATION.DEFAULT_LIMIT,
+                    exclude_archived_branches: true,
+                    $limit: BOARD_OBJECT_PAGE_LIMIT,
                     ...(boardScope ? { board_id: boardScope } : {}),
                   },
                 })
@@ -950,6 +873,88 @@ export function useAgorData(
         debugTimer?.endIndexing();
         debugFinishStatus = 'success';
 
+        // ── Secondary fetches — after the canvas snapshot lands ────────
+        // These collections are NOT needed to paint the canvas, so they must
+        // never compete with essential reads over a slow connection. Each populates its
+        // own map slice on resolve. Their realtime subscriptions are attached in
+        // the subscribe effect BEFORE this fetch runs, so live events land even
+        // while these fetches are in flight — and `runHydration` only applies a
+        // snapshot when no live write to that collection raced (else it refetches
+        // a fresh one). We deliberately do NOT `track()` them — they're absent
+        // from INITIAL_LOAD_ITEMS, so the loading checklist / `initialLoadComplete`
+        // gate ignores them. We apply through the store's `applyMaps` (not the
+        // per-entity setters), keeping fetchData's deps stable so the subscribe
+        // effect doesn't re-fire.
+        // Route the full snapshot through the shared skip-apply-on-race / generation
+        // lifecycle (like mcp-servers / gateway-channels) so an older snapshot can't
+        // clobber a newer realtime upsert, and a fetch resolving after logout is
+        // dropped instead of repopulating the previous tenant. The apply sets the
+        // hydration gate, so it only flips once a quiet, current snapshot lands.
+        void runAuthorityHydration(
+          'agentic-tool-settings',
+          ['agenticToolSettings'],
+          () => client.service('agentic-tool-settings').findAll(),
+          (settings) => agorStore.getState().setAgenticToolSettings(settings)
+        );
+
+        void runAuthorityHydration(
+          'mcp-servers',
+          ['mcpServers'],
+          () =>
+            client.service('mcp-servers').findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } }),
+          (list) => {
+            agorStore.getState().applyMaps((prev) => ({
+              ...prev,
+              mcpServerById: buildById(list, 'mcp_server_id', prev.mcpServerById),
+            }));
+            agorStore.getState().markHydrated('mcpServersHydrated');
+          }
+        );
+        void runAuthorityHydration(
+          'session-mcp-servers',
+          ['sessionMcp'],
+          () =>
+            client
+              .service('session-mcp-servers')
+              .findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } }),
+          (list) =>
+            agorStore
+              .getState()
+              .applyMaps((prev) => ({ ...prev, sessionMcpServerIds: buildSessionMcpMap(list) }))
+        );
+        void runAuthorityHydration(
+          'gateway-channels',
+          ['gatewayChannels'],
+          () =>
+            client
+              .service('gateway-channels')
+              .findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } }),
+          (list) => {
+            agorStore.getState().applyMaps((prev) => ({
+              ...prev,
+              gatewayChannelById: buildById(list, 'id', prev.gatewayChannelById),
+            }));
+            agorStore.getState().markHydrated('gatewayChannelsHydrated');
+          }
+        );
+        void runAuthorityHydration(
+          'artifacts',
+          ['artifacts'],
+          () =>
+            client.service('artifacts').findAll({
+              query: {
+                $limit: PAGINATION.DEFAULT_LIMIT,
+                $select: [...ARTIFACT_METADATA_LIST_FIELDS],
+              },
+            }),
+          (list) =>
+            agorStore.getState().applyMaps((prev) => ({
+              ...prev,
+              artifactById: buildById(list, 'artifact_id', prev.artifactById),
+            }))
+        );
+        void refetchOAuthDurableState(fetchAuthorityScope);
+
         // ── Background full hydration (skip-apply-on-race) ──────────────
         // First paint is now open with ONLY the recent sessions + the displayed
         // board's branches/sessions/objects/cards/comments. Pull the FULL sets so
@@ -1049,9 +1054,9 @@ export function useAgorData(
               'board-objects',
               ['boardObjects'],
               () =>
-                client
-                  .service('board-objects')
-                  .findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } }),
+                client.service('board-objects').findAll({
+                  query: { exclude_archived_branches: true, $limit: BOARD_OBJECT_PAGE_LIMIT },
+                }),
               (allBoardObjects) =>
                 agorStore.getState().applyMaps((prev) => {
                   const base = buildBoardObjectMaps(allBoardObjects);
@@ -1392,6 +1397,15 @@ export function useAgorData(
     boardsService.on('updated', scopedRealtime.boardPatched);
     boardsService.on('removed', scopedRealtime.boardRemoved);
 
+    // A removed/moved placement that races a targeted unarchive read must win.
+    const placementReads = new Map<string, { changed: boolean }>();
+    const boardObjectRemoved = (object) => {
+      if (!subscriptionIsCurrent()) return;
+      const pending = placementReads.get(object.branch_id);
+      if (pending) pending.changed = true;
+      scopedRealtime.boardObjectRemoved(object);
+    };
+
     // Subscribe to board object events
     const boardObjectsService = canUseMemberWorkspaceServices
       ? client.service('board-objects')
@@ -1399,7 +1413,7 @@ export function useAgorData(
     boardObjectsService?.on('created', scopedRealtime.boardObjectCreated);
     boardObjectsService?.on('patched', scopedRealtime.boardObjectPatched);
     boardObjectsService?.on('updated', scopedRealtime.boardObjectPatched);
-    boardObjectsService?.on('removed', scopedRealtime.boardObjectRemoved);
+    boardObjectsService?.on('removed', boardObjectRemoved);
 
     // Subscribe to repo events
     const reposService = client.service('repos');
@@ -1430,9 +1444,48 @@ export function useAgorData(
           }))
       );
     };
+    // Archived placements are intentionally absent from initial reads. Unarchive
+    // preserves its stored position without emitting a board-object event, so
+    // recover only that branch's placement. Deduplicate paired patched/updated
+    // events; never overwrite a newer live placement or cross an auth boundary.
+    const branchPatched = (branch: Branch) => {
+      if (!subscriptionIsCurrent()) return;
+      scopedRealtime.branchPatched(branch);
+      if (
+        branch.archived ||
+        !boardObjectsService ||
+        agorStore.getState().boardObjectByBranchId.has(branch.branch_id) ||
+        placementReads.has(branch.branch_id)
+      )
+        return;
+      const pending = { changed: false };
+      placementReads.set(branch.branch_id, pending);
+      void boardObjectsService
+        .findAll({
+          query: {
+            branch_id: branch.branch_id,
+            exclude_archived_branches: true,
+            $limit: BOARD_OBJECT_PAGE_LIMIT,
+          },
+        })
+        .then((objects) => {
+          if (!subscriptionIsCurrent() || pending.changed) return;
+          const state = agorStore.getState();
+          const currentBranch = state.branchById.get(branch.branch_id);
+          if (!currentBranch || state.boardObjectByBranchId.has(branch.branch_id)) return;
+          for (const object of objects) {
+            if (object.board_id === currentBranch.board_id)
+              scopedRealtime.boardObjectCreated(object);
+          }
+        })
+        .catch((error) => {
+          console.warn('[useAgorData] placement recovery failed:', error);
+        })
+        .finally(() => placementReads.delete(branch.branch_id));
+    };
     branchesService.on('created', scopedRealtime.branchCreated);
-    branchesService.on('patched', scopedRealtime.branchPatched);
-    branchesService.on('updated', scopedRealtime.branchPatched);
+    branchesService.on('patched', branchPatched);
+    branchesService.on('updated', branchPatched);
     branchesService.on('removed', branchRemovedSync);
 
     // Subscribe to user events
@@ -1635,7 +1688,7 @@ export function useAgorData(
       boardObjectsService?.removeListener('created', scopedRealtime.boardObjectCreated);
       boardObjectsService?.removeListener('patched', scopedRealtime.boardObjectPatched);
       boardObjectsService?.removeListener('updated', scopedRealtime.boardObjectPatched);
-      boardObjectsService?.removeListener('removed', scopedRealtime.boardObjectRemoved);
+      boardObjectsService?.removeListener('removed', boardObjectRemoved);
 
       reposService.removeListener('created', scopedRealtime.repoCreated);
       reposService.removeListener('patched', scopedRealtime.repoPatched);
@@ -1643,8 +1696,8 @@ export function useAgorData(
       reposService.removeListener('removed', scopedRealtime.repoRemoved);
 
       branchesService.removeListener('created', scopedRealtime.branchCreated);
-      branchesService.removeListener('patched', scopedRealtime.branchPatched);
-      branchesService.removeListener('updated', scopedRealtime.branchPatched);
+      branchesService.removeListener('patched', branchPatched);
+      branchesService.removeListener('updated', branchPatched);
       branchesService.removeListener('removed', branchRemovedSync);
 
       usersService?.removeListener('created', scopedRealtime.userCreated);
