@@ -208,7 +208,7 @@ const workspaceTests = workspaces.map((workspace) => {
   const misnamedGatedTests = tests.filter(
     (file) =>
       !file.endsWith('.postgres.test.ts') &&
-      readFileSync(file, 'utf8').includes('AGOR_TEST_POSTGRES_URL')
+      /AGOR_TEST_POSTGRES_URL|\bcreateOwnedPostgres\s*\(/.test(readFileSync(file, 'utf8'))
   );
   return { workspace, workspaceRoot, postgresTests, misnamedGatedTests };
 });
