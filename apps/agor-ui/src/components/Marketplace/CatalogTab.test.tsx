@@ -794,6 +794,7 @@ describe('connect', () => {
 
   it('shows OAuth success only after completion and a durable credential read agree', async () => {
     const drawer = await connectOAuth();
+    oauthAttemptStatus = { status: 'succeeded', mcp_server_id: 'server-1' };
     marketplaceCredentials = [
       {
         mcp_server_id: 'server-1',

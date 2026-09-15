@@ -49,6 +49,9 @@ export async function launchMarketplaceOAuth(
   }
   const started = (await client.service('mcp-servers/oauth-start').create({
     mcp_server_id: result.mcp_server.mcp_server_id,
+    ...(result.mcp_server.auth?.oauth_client_mode === 'cloud_managed_v1'
+      ? { client_nonce: popup.operationId }
+      : {}),
   })) as { success: true; authorizationUrl: string; attempt_id: string } | MCPOAuthStartFailure;
   if (!options.isCurrent()) {
     popup.close();

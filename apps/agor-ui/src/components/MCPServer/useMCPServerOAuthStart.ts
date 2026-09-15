@@ -33,6 +33,8 @@ interface UseMCPServerOAuthStartOptions {
   /** Current authority to persist/start this OAuth configuration. */
   startAllowed?: boolean;
   startBlockedReason?: string;
+  /** Saved canonical managed row; never inferred from a form toggle. */
+  managed?: boolean;
 }
 
 export function useMCPServerOAuthStart({
@@ -46,6 +48,7 @@ export function useMCPServerOAuthStart({
   showSuccess,
   startAllowed = true,
   startBlockedReason = 'You can no longer change this MCP server.',
+  managed = false,
 }: UseMCPServerOAuthStartOptions) {
   const [startingOAuthFlow, setStartingOAuthFlow] = useState(false);
   const [oauthFailure, setOauthFailure] = useState<MCPServerOAuthFailure | null>(null);
@@ -135,6 +138,7 @@ export function useMCPServerOAuthStart({
       if (!isCurrentStart()) return;
       const data = (await client.service('mcp-servers/oauth-start').create({
         mcp_server_id: targetServerId,
+        ...(managed ? { client_nonce: crypto.randomUUID() } : {}),
       })) as OAuthStartSuccess | MCPOAuthStartFailure;
       if (!isCurrentStart()) return;
 
@@ -163,9 +167,21 @@ export function useMCPServerOAuthStart({
             if (!isCurrentStart()) return;
             if (attempt.status === 'succeeded') {
               try {
-                await refetchMCPOAuthDurableState(client, targetServerId, isCurrentStart);
+                const usable = await refetchMCPOAuthDurableState(
+                  client,
+                  targetServerId,
+                  isCurrentStart
+                );
+                if (managed && !usable) throw new Error('Managed grant not confirmed');
                 if (!isCurrentStart()) return;
               } catch {
+                if (managed) {
+                  if (isCurrentStart())
+                    showError(
+                      'Sign-in completed, but the current connection could not be verified. Check its saved status.'
+                    );
+                  return;
+                }
                 if (isCurrentStart()) console.warn('[OAuth] Durable completion refetch failed');
               }
               if (!isCurrentStart()) return;
@@ -228,6 +244,7 @@ export function useMCPServerOAuthStart({
     showInfo,
     showSuccess,
     startBlockedReason,
+    managed,
   ]);
 
   return {
