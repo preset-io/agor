@@ -23,96 +23,17 @@ Upstream EOL releases such as Node 25 are not supported production runtimes.
 
 ### Platform support
 
-**Native Windows is unsupported for the `agor-live` local runtime.** Installation
-and a successful `--help` or module import do not establish daemon/executor support.
-The npm names are `agor-live` and `@agor-live/client` (not `agor-client`).
+| Platform                | Running Agor locally                                                          |
+| ----------------------- | ----------------------------------------------------------------------------- |
+| Linux                   | Supported; sandbox mode requires bubblewrap and user namespaces.              |
+| macOS                   | Supported in trusted `simple` mode; no local sandbox mode.                    |
+| Native Windows          | Unsupported. The `agor-live` npm package blocks installation.                 |
+| WSL2 / Linux containers | Not independently validated. Use Linux Node and meet the Linux prerequisites. |
 
-| Surface                                                                      | Native Windows installation / startup                                        | Remote-only functionality                                      | Local execution                                                                                            |
-| ---------------------------------------------------------------------------- | ---------------------------------------------------------------------------- | -------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
-| `agor-live` (`agor`, `agor-daemon`)                                          | Excluded by npm `os: ["!win32"]` in new releases; older releases may install | Not a supported Windows remote CLI                             | Unsupported                                                                                                |
-| `@agor-live/client`                                                          | Not OS-restricted; ESM/CJS graph inspected, but Windows unvalidated          | REST/WebSocket client; candidate for native Windows validation | No daemon/executor                                                                                         |
-| `@agor-live/claude`, `/codex`, `/copilot`, `/gemini`, `/opencode`, `/cursor` | Separate vendor SDK/runtime requirements; not blanket-restricted             | Vendor-specific APIs, not an Agor management client            | Installing a wrapper does not make Agor's executor Windows-compatible                                      |
-| Browser UI on Windows                                                        | No local npm package needed                                                  | Access an existing reachable Agor server                       | Runs on the server, not the browser machine                                                                |
-| Linux                                                                        | Packaged release target                                                      | Client and CLI                                                 | `simple`; `sandbox` requires working bubblewrap/user namespaces; `delegated` requires a reviewed substrate |
-| macOS                                                                        | Packaged release target                                                      | Client and CLI                                                 | Trusted `simple` mode; no Linux bubblewrap sandbox; delegated isolation is operator-owned                  |
-| WSL2 / Linux containers on Windows                                           | Linux Node reports `linux`, so the Windows exclusion does not apply          | Subject to networking/configuration                            | Linux prerequisites still apply; not independently certified by the release matrix                         |
-
-Use a Linux filesystem for WSL workspaces rather than assuming Windows-mounted
-volumes preserve Unix permissions, symlinks, locking, or case behavior. Containers
-also need appropriate kernel capabilities for sandbox execution. Neither WSL nor
-a container automatically supplies Agor's sandbox isolation. Windows Node launched
-from a WSL shell still reports `win32` and remains unsupported.
-
-The package restriction deliberately denies only `win32`. An allowlist
-`os: ["linux", "darwin"]` would also reject every other OS; leaving those unblocked
-is **not** a promise that all Unix systems, architectures, or libc variants work.
-See [npm's OS metadata documentation](https://docs.npmjs.com/cli/v11/configuring-npm/package-json/#os).
-An npm force override can bypass installation checks; it cannot add runtime support.
-No installation script is needed to duplicate npm's platform check.
-
-#### Why a Windows port is more than package metadata
-
-The published 0.26.3 artifacts contain the CLI, daemon, executor and four materialized
-private `@agor/*` packages inside `agor-live`; those private packages are not separate
-public installation targets. The client bundles its shared code instead of retaining
-a runtime dependency on private core. Its external graph is Feathers, Socket.IO and
-YAML; `/config` uses Node filesystem/home/path APIs. Feathers authentication also
-pulls schema/authentication dependencies and a TypeScript peer: a fresh install can
-select platform-specific TypeScript binaries, including Windows variants. Bundled
-cron parsing has lazy
-filesystem calls, not an eager Unix-native import. No daemon, PTY, database or
-`unix-dgram` requirement was identified in that client graph. This is static evidence,
-not an official Windows support claim.
-
-The key implementation boundaries are:
-
-- **Hard blockers:** `packages/agor-live/bin/agor-daemon.js` dynamically imports a
-  raw absolute filesystem path; Windows drive-letter paths need file-URL conversion
-  for Node ESM. `packages/executor/src/commands/environment-shell.ts` explicitly
-  rejects Windows because bounded cleanup owns POSIX process groups.
-  `commands/zellij.ts` uses Zellij and private Unix socket/cache directories;
-  a Windows-capable PTY binary alone does not supply that terminal stack.
-  `apps/agor-daemon/src/utils/sandbox-wrap.ts` and `packages/core/src/unix/bwrap.ts`
-  fail closed outside Linux.
-- **Security/lifecycle gaps:** `packages/core/src/codex/credential-file.ts` and the
-  executor credential-file wrapper rely on private file modes, no-follow and atomic
-  filesystem semantics. HA credential locking additionally requires Linux `flock`.
-  A port needs Windows ACL/reparse-point and process-tree containment contracts,
-  not replacement of permission checks with no-ops. Application tenant/RBAC policy
-  must remain independent of the host implementation. Delegated execution uses an
-  opaque home key, not a requirement to create POSIX accounts.
-- **Bounded fixes plus native tests:** Git executable discovery already considers
-  `git.exe`/`.cmd`/`.bat` (`packages/git/src/git-binary.ts`), but worktree path handling
-  still includes slash splitting (`packages/git/src/index.ts`). Drive letters, UNC
-  paths, spaces, shell quoting, executable shims, symlinks and case collisions need
-  coverage. Environment commands use `shell: true`, and executor home-shell discovery
-  falls back to `/bin/sh` (`packages/executor/src/user-runtime-paths.ts`). Shell
-  dialect/quoting cannot be assumed portable. `apps/agor-cli/src/lib/daemon-manager.ts` uses PID files and
-  SIGTERM/SIGKILL; Windows service lifecycle and descendant cleanup need validation.
-- **Dependency limits:** libSQL has platform-selected native bindings; the optional
-  `@lydell/node-pty` has platform binaries. Neither proves the containing application
-  portable. Optional metrics can introduce `hot-shots`/`unix-dgram`; the default
-  release intentionally excludes that graph. Integration wrappers re-export vendor
-  SDKs. Claude and Cursor select platform SDK binaries (Cursor currently lists
-  Windows x64, not arm64); Codex and Copilot pull vendor CLIs. Gemini has optional
-  PTY/keytar native modules. OpenCode installs a CLI through a Bun-or-Node postinstall
-  and offers Windows binaries. These are reasons not to deny all six wrappers.
-  Vendor native binaries/install scripts
-  require their own OS/architecture audit before any broader support promise.
-
-A staged path is: **(1)** validate the published client on real Windows with clean
-npm install, all ESM/CJS exports, config/home paths, authenticated REST and WebSocket
-reconnect/streaming; **(2)** decide whether a remote-only CLI is worth separating from
-local runtime dependencies; **(3)** implement and test trusted local daemon/executor
-process, shell, Git, filesystem and terminal adapters; **(4)** separately design and
-security-review native isolation, or keep sandbox execution on Linux. The first stage
-is plausibly bounded; the last stages are architectural work, not a small port.
-
-The release workflow builds once on Ubuntu and publishes the exact tarballs tested
-by `.github/workflows/agor-live-smoke.yml`: Ubuntu Node 22/24/26 and macOS Node 24
-(the PR lane is narrower). There is no Windows or WSL runner in that matrix.
-Linux tests and platform mocks cannot establish native Windows support; each stage
-needs real target-platform tests before changing the support statement.
+**Windows users can access an existing Agor server in a browser** without installing
+anything locally. The separate `@agor-live/client` package provides remote API access,
+but native Windows use has not been validated. Other operating systems are untested.
+See [execution modes](/guide/multiplayer-unix-isolation) for isolation requirements.
 
 ### Diagnosing repository clone failures
 
@@ -312,10 +233,8 @@ Agor's CLI, daemon, sessions, boards, and agentic tools do not require a pseudo-
 The npm package declares the prebuilt `@lydell/node-pty` runtime as optional so an unsupported
 platform artifact cannot block first run. `agor doctor` reports whether the capability is ready.
 
-The upstream PTY runtime provides macOS, Linux, and Windows binaries on x64 and arm64;
-this does not imply native Windows support for Agor or its Zellij terminal. If it is unavailable,
-opening the web terminal shows this documentation link rather than failing Agor startup. First retry
-the normal install without omitting optional dependencies:
+If the PTY runtime is unavailable, the web terminal links here instead of failing Agor startup.
+Retry the install without omitting optional dependencies:
 
 ```bash
 npm install -g agor-live@latest

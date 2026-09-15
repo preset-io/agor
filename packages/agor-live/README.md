@@ -6,7 +6,7 @@ Agor is a real-time collaborative platform for managing Claude Code, Codex, and 
 
 ## Installation
 
-Local runtime: **Linux or macOS; native Windows is unsupported**. Windows users can open an existing Agor server in a browser. WSL2 or a Linux container must use Linux Node and meet Linux prerequisites; these are not native Windows support or a blanket WSL certification. For remote API calls, use `@agor-live/client` (Windows not yet validated), not the full CLI package. See the [platform table](https://agor.live/guide/extended-install#platform-support).
+**Linux or macOS required; native Windows is unsupported.** Windows users can access an existing server in a browser. See [platform support](https://agor.live/guide/extended-install#platform-support) for WSL and remote-client guidance.
 
 Requires Node.js ≥ 22.12 and Git on `PATH`. HTTPS remotes also require a working system CA trust store; SSH remotes require an SSH client and configured keys or agent access.
 
