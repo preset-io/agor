@@ -1,3 +1,8 @@
+import { createHash } from 'node:crypto';
+import {
+  type MCPManagedOAuthPendingMetadata,
+  MCPManagedOAuthPendingMetadataSchema,
+} from '../../types/mcp-managed-oauth';
 /**
  * PostgreSQL authority for browser-based MCP OAuth attempts.
  *
@@ -30,7 +35,11 @@ import { sanitizeDbError } from '../sanitize-error';
 // This repository is intentionally PostgreSQL-only. Import the concrete table
 // rather than the dialect union so tenant_id remains part of the static type.
 import { mcpOauthPendingFlows } from '../schema.postgres';
-import { assertAuthorityFailureCode, lockTenantAuthoritySubject } from './authority-primitives';
+import {
+  assertAuthorityFailureCode,
+  lockMCPManagedSubject,
+  lockTenantAuthoritySubject,
+} from './authority-primitives';
 import { RepositoryError } from './base';
 
 const SHA256_HEX = /^[a-f0-9]{64}$/;
@@ -50,6 +59,8 @@ export interface MCPOAuthPendingFlowCreate {
   sealedMaterial: string;
   /** Relative lifetime applied against the PostgreSQL clock at insert time. */
   ttlMs: number;
+  managedMetadata?: MCPManagedOAuthPendingMetadata;
+  managedTransactionId?: string;
 }
 
 export type MCPOAuthGrantSubject = Pick<
@@ -73,6 +84,10 @@ export interface MCPOAuthPendingFlowRecord {
   status: MCPOAuthPendingFlowStatus;
   sealedMaterial: string | null;
   exchangeClaimId: string | null;
+  credentialOrigin?: 'direct' | 'cloud_managed_v1';
+  managedMetadata?: MCPManagedOAuthPendingMetadata;
+  managedTransactionId?: string | null;
+  managedOperationId?: string | null;
   failureCode: string | null;
   createdAt: Date;
   updatedAt: Date;
@@ -100,6 +115,7 @@ function asNullableDate(value: unknown, field: string): Date | null {
 function mapRow(row: Record<string, unknown>): MCPOAuthPendingFlowRecord {
   const status = row.status;
   if (
+    !['direct', 'cloud_managed_v1'].includes(String(row.credential_origin)) ||
     typeof row.tenant_id !== 'string' ||
     typeof row.attempt_id !== 'string' ||
     typeof row.state_hash !== 'string' ||
@@ -123,6 +139,13 @@ function mapRow(row: Record<string, unknown>): MCPOAuthPendingFlowRecord {
     throw new RepositoryError('MCP OAuth pending flow row is invalid');
   }
   return {
+    credentialOrigin: row.credential_origin as 'direct' | 'cloud_managed_v1',
+    managedMetadata:
+      row.managed_metadata == null
+        ? undefined
+        : MCPManagedOAuthPendingMetadataSchema.parse(row.managed_metadata),
+    managedTransactionId: row.managed_transaction_id as string | null,
+    managedOperationId: row.managed_operation_id as string | null,
     tenantId: row.tenant_id,
     attemptId: row.attempt_id as MCPOAuthAttemptID,
     stateHash: row.state_hash,
@@ -203,6 +226,24 @@ export class MCPOAuthPendingFlowRepository {
 
   async create(input: MCPOAuthPendingFlowCreate): Promise<void> {
     assertStateHash(input.stateHash);
+    if (input.managedMetadata) {
+      const m = MCPManagedOAuthPendingMetadataSchema.parse(input.managedMetadata);
+      if (
+        input.oauthMode !== 'per_user' ||
+        input.configFingerprintVersion !== 5 ||
+        m.owner.workspace_id !== input.tenantId ||
+        m.owner.cell_local_user_id !== input.userId ||
+        m.owner.server_id !== input.mcpServerId ||
+        m.owner.attempt_id !== input.attemptId ||
+        m.owner.grant_generation !== String(input.grantGeneration) ||
+        m.owner.config_fingerprint !== input.configFingerprint ||
+        JSON.stringify(m.owner) !== JSON.stringify(m.prepare_request.owner)
+      ) {
+        throw new RepositoryError('Managed pending authority does not match its owner');
+      }
+    } else if (input.configFingerprintVersion === 5) {
+      throw new RepositoryError('Managed binding requires managed pending authority');
+    }
     if (
       !input.tenantId ||
       !input.attemptId ||
@@ -227,6 +268,25 @@ export class MCPOAuthPendingFlowRepository {
       // indexes remain the final invariant; this lock makes simultaneous
       // starts deterministic rather than returning a uniqueness race.
       await this.lockGrantSubject(input);
+      if (input.managedMetadata)
+        await lockMCPManagedSubject(
+          this.db,
+          input.tenantId,
+          input.userId,
+          input.managedMetadata.owner.cloud_user_subject
+        );
+      const newer = rawRows(
+        await executeRaw(
+          this.db,
+          sql`
+        SELECT attempt_id FROM ${mcpOauthPendingFlows} WHERE tenant_id=${input.tenantId}
+          AND mcp_server_id=${input.mcpServerId} AND oauth_mode=${input.oauthMode}
+          AND subject_user_id IS NOT DISTINCT FROM ${input.subjectUserId}
+          AND grant_generation >= ${input.grantGeneration} LIMIT 1`
+        )
+      );
+      if (newer.length)
+        throw new RepositoryError('A newer OAuth reservation superseded this attempt');
       // Latest attempt wins for a grant subject. An older exchange may already
       // have consumed a provider code, so it becomes ambiguous rather than
       // replayable. No terminal row retains sealed material.
@@ -262,6 +322,9 @@ export class MCPOAuthPendingFlowRepository {
           tenant_id: input.tenantId,
           attempt_id: input.attemptId,
           state_hash: input.stateHash,
+          credential_origin: input.managedMetadata ? 'cloud_managed_v1' : 'direct',
+          managed_metadata: input.managedMetadata,
+          managed_transaction_id: input.managedTransactionId,
           user_id: input.userId,
           mcp_server_id: input.mcpServerId,
           oauth_mode: input.oauthMode,
@@ -284,6 +347,77 @@ export class MCPOAuthPendingFlowRepository {
     } catch (error) {
       throw databaseFailure('creation', error);
     }
+  }
+
+  /** Internal broker evidence only; the exact full persisted owner is an equality assertion. */
+  async claimManagedForTenant(
+    expected: MCPOAuthPendingFlowRecord,
+    operationId: string
+  ): Promise<MCPOAuthPendingFlowClaimResult> {
+    if (!expected.managedMetadata || !expected.managedTransactionId || !operationId) {
+      throw new RepositoryError('Managed claim requires its complete bound transaction');
+    }
+    await this.lockGrantSubject(expected);
+    await lockMCPManagedSubject(
+      this.db,
+      expected.tenantId,
+      expected.userId,
+      expected.managedMetadata!.owner.cloud_user_subject
+    );
+    const hash = createHash('sha256')
+      .update(`agor-mcp-managed-v1\0${expected.managedTransactionId}`)
+      .digest('hex');
+    const result = await executeRaw(
+      this.db,
+      sql`
+      UPDATE ${mcpOauthPendingFlows} SET status='exchanging', exchange_claim_id=${operationId},
+        managed_operation_id=${operationId}, exchange_started_at=date_trunc('milliseconds', clock_timestamp()), updated_at=clock_timestamp()
+      WHERE tenant_id=${expected.tenantId} AND attempt_id=${expected.attemptId}
+        AND managed_transaction_id=${expected.managedTransactionId} AND state_hash=${hash}
+        AND user_id=${expected.userId} AND mcp_server_id=${expected.mcpServerId}
+        AND credential_origin='cloud_managed_v1' AND grant_generation=${expected.grantGeneration}
+        AND config_fingerprint=${expected.configFingerprint} AND config_fingerprint_version=5
+        AND managed_metadata=${JSON.stringify(expected.managedMetadata)}::jsonb
+        AND status='pending' AND expires_at>clock_timestamp() AND is_current=true RETURNING *`
+    );
+    const row = rawRows(result)[0];
+    return row ? { outcome: 'claimed', flow: mapRow(row) } : { outcome: 'not_claimed', flow: null };
+  }
+
+  /** Bind prepare's recovered ID while the original local reservation is still current. */
+  async bindManagedTransaction(
+    expected: MCPOAuthPendingFlowRecord,
+    transactionId: string,
+    cancelEpoch: string,
+    sealedMaterial: string
+  ): Promise<boolean> {
+    if (!expected.managedMetadata || !transactionId || !sealedMaterial)
+      throw new RepositoryError('Incomplete managed transaction');
+    await this.lockGrantSubject(expected);
+    await lockMCPManagedSubject(
+      this.db,
+      expected.tenantId,
+      expected.userId,
+      expected.managedMetadata!.owner.cloud_user_subject
+    );
+    const hash = createHash('sha256').update(`agor-mcp-managed-v1\0${transactionId}`).digest('hex');
+    const metadata = MCPManagedOAuthPendingMetadataSchema.parse({
+      ...expected.managedMetadata,
+      cancel_epoch: cancelEpoch,
+    });
+    const result = await executeRaw(
+      this.db,
+      sql`UPDATE ${mcpOauthPendingFlows}
+      SET managed_transaction_id=${transactionId},state_hash=${hash},managed_metadata=${JSON.stringify(metadata)}::jsonb,
+        sealed_material=${sealedMaterial},updated_at=clock_timestamp()
+      WHERE tenant_id=${expected.tenantId} AND attempt_id=${expected.attemptId}
+        AND user_id=${expected.userId} AND mcp_server_id=${expected.mcpServerId}
+        AND grant_generation=${expected.grantGeneration} AND config_fingerprint=${expected.configFingerprint}
+        AND managed_metadata=${JSON.stringify(expected.managedMetadata)}::jsonb
+        AND credential_origin='cloud_managed_v1' AND managed_transaction_id IS NULL
+        AND status='pending' AND is_current=true AND expires_at>clock_timestamp() RETURNING attempt_id`
+    );
+    return rawRows(result).length === 1;
   }
 
   /** Claim from an unauthenticated callback running under mcp_oauth_callback. */
@@ -326,7 +460,7 @@ export class MCPOAuthPendingFlowRepository {
               sealed_material = NULL,
               updated_at = CURRENT_TIMESTAMP,
               finished_at = CURRENT_TIMESTAMP
-          WHERE state_hash = ${stateHash}
+          WHERE credential_origin = 'direct' AND state_hash = ${stateHash}
             ${tenantPredicate}
             ${userPredicate}
             AND status = 'pending'
@@ -342,7 +476,7 @@ export class MCPOAuthPendingFlowRepository {
               exchange_claim_id = ${claimId},
               exchange_started_at = CURRENT_TIMESTAMP,
               updated_at = CURRENT_TIMESTAMP
-          WHERE state_hash = ${stateHash}
+          WHERE credential_origin = 'direct' AND state_hash = ${stateHash}
             ${tenantPredicate}
             ${userPredicate}
             AND status = 'pending'
@@ -359,11 +493,15 @@ export class MCPOAuthPendingFlowRepository {
         .where(
           expected
             ? and(
+                eq(mcpOauthPendingFlows.credential_origin, 'direct'),
                 eq(mcpOauthPendingFlows.state_hash, stateHash),
                 eq(mcpOauthPendingFlows.tenant_id, expected.tenantId),
                 eq(mcpOauthPendingFlows.user_id, expected.userId)
               )
-            : eq(mcpOauthPendingFlows.state_hash, stateHash)
+            : and(
+                eq(mcpOauthPendingFlows.credential_origin, 'direct'),
+                eq(mcpOauthPendingFlows.state_hash, stateHash)
+              )
         )
         .one();
       return {
@@ -394,7 +532,7 @@ export class MCPOAuthPendingFlowRepository {
               sealed_material = NULL,
               updated_at = CURRENT_TIMESTAMP,
               finished_at = CURRENT_TIMESTAMP
-          WHERE state_hash = ${stateHash}
+          WHERE credential_origin = 'direct' AND state_hash = ${stateHash}
             AND status = 'pending'
           RETURNING attempt_id
         `
@@ -456,6 +594,11 @@ export class MCPOAuthPendingFlowRepository {
     }
     if (failureCode) assertAuthorityFailureCode(failureCode, 'MCP OAuth');
     try {
+      await executeRaw(
+        this.db,
+        sql`SELECT attempt_id FROM ${mcpOauthPendingFlows}
+        WHERE tenant_id=${tenantId} AND attempt_id=${attemptId} FOR UPDATE`
+      );
       const result = await executeRaw(
         this.db,
         sql`
@@ -470,6 +613,14 @@ export class MCPOAuthPendingFlowRepository {
             AND status = 'exchanging'
             AND exchange_claim_id = ${claimId}
             AND is_current = true
+            AND (credential_origin = 'direct' OR ${status} <> 'succeeded' OR (
+              exchange_started_at > clock_timestamp() - INTERVAL '2 minutes'
+              AND EXISTS (SELECT 1 FROM public.user_mcp_oauth_tokens t
+                WHERE t.tenant_id=${tenantId} AND t.user_id=mcp_oauth_pending_flows.user_id
+                  AND t.mcp_server_id=mcp_oauth_pending_flows.mcp_server_id
+                  AND t.grant_generation=mcp_oauth_pending_flows.grant_generation
+                  AND t.credential_origin='cloud_managed_v1'
+                  AND t.managed_metadata->>'operation_id'=mcp_oauth_pending_flows.managed_operation_id)))
           RETURNING attempt_id
         `
       );
