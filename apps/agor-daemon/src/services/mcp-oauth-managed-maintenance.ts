@@ -12,6 +12,7 @@ import {
 } from '@agor/core/db';
 import type { ManagedMCPOAuthClient } from '@agor/core/tools/mcp/managed-oauth-client';
 import {
+  MCP_OAUTH_LIMITS,
   type MCPManagedOAuthGrantMetadata,
   MCPManagedOAuthGrantMetadataSchema,
   type MCPManagedOAuthInvalidationScope,
@@ -37,12 +38,23 @@ export interface ManagedOAuthMaintenanceDependencies {
   clock: Pick<ManagedAuthorityClock, 'latestUtcMs'>;
   cellId: string;
   /** Fresh external recovery authority. Cleanup never calls the vending cohort loader. */
-  getCurrentIncarnation: () => Promise<string>;
-  getCapabilities: () => Promise<unknown>;
+  getCurrentIncarnation: (budget?: ManagedOAuthMaintenanceBudget) => Promise<string>;
+  getCapabilities: (budget?: ManagedOAuthMaintenanceBudget) => Promise<unknown>;
   /** Historical owner allowed ONLY for non-vending cleanup; not runtime.current(). */
   assertCleanupAdmission: (owner: McpOAuthOwner) => void | Promise<void>;
   /** Exact committed metadata only. Idempotent non-vending ACK, no token decrypt. */
-  acknowledge: (metadata: MCPManagedOAuthGrantMetadata) => Promise<void>;
+  acknowledge: (
+    metadata: MCPManagedOAuthGrantMetadata,
+    budget?: ManagedOAuthMaintenanceBudget
+  ) => Promise<void>;
+  /** Aggregate-only observers. Errors/rejections cannot affect durable work. */
+  onResult?: (result: Readonly<ManagedOAuthMaintenanceResult>) => void;
+  onUnavailable?: () => void;
+}
+
+export interface ManagedOAuthMaintenanceBudget {
+  timeoutMs: number;
+  signal: AbortSignal;
 }
 
 export interface ManagedOAuthMaintenanceResult {
@@ -51,6 +63,7 @@ export interface ManagedOAuthMaintenanceResult {
   acknowledged: number;
   closed: number;
   failures: number;
+  capacityLimited: boolean;
 }
 
 async function drainManagedOAuthCleanup(
@@ -58,7 +71,7 @@ async function drainManagedOAuthCleanup(
   tenant: string,
   job: MCPManagedOAuthCleanupEntry,
   current: () => Promise<void>,
-  deadline: number,
+  budget: () => ManagedOAuthMaintenanceBudget,
   revocation: boolean
 ): Promise<void> {
   const owner = job.metadata.owner;
@@ -67,7 +80,7 @@ async function drainManagedOAuthCleanup(
     if (
       owner.workspace_id !== tenant ||
       owner.cell_id !== d.cellId ||
-      owner.recovery_incarnation !== (await d.getCurrentIncarnation())
+      owner.recovery_incarnation !== (await d.getCurrentIncarnation(budget()))
     )
       throw new Error('Managed cleanup owner unavailable');
     // Deliberately does not require the deleted user, current grant, or current placement epoch.
@@ -95,7 +108,7 @@ async function drainManagedOAuthCleanup(
       body,
       schema: McpOAuthCancelResponseSchema,
       assertCurrent,
-      timeoutMs: Math.max(1, deadline - performance.now()),
+      timeoutMs: budget().timeoutMs,
     });
   } else {
     const metadata = MCPManagedOAuthGrantMetadataSchema.parse(job.metadata);
@@ -113,7 +126,7 @@ async function drainManagedOAuthCleanup(
       body,
       schema: McpOAuthCloseResponseSchema,
       assertCurrent,
-      timeoutMs: Math.max(1, deadline - performance.now()),
+      timeoutMs: budget().timeoutMs,
     });
     if (job.expires_at.getTime() > d.clock.latestUtcMs()) {
       // Preserve revoke-only material until an authenticated cleanup authorization
@@ -131,31 +144,56 @@ async function drainManagedOAuthCleanup(
   );
 }
 
-/** Construction is inert. Bootstrap must explicitly start only an admitted deployment. */
+/**
+ * Construction is inert. Bootstrap explicitly starts only an admitted deployment.
+ * The 30–35s cadence is a pass target, not a per-tenant delivery SLA: 25-tenant
+ * pages, bounded job pages and a 25s admission budget can require later passes.
+ * capacityLimited reports saturation; durable checkpoints retain every denial.
+ * Dependencies must honor the supplied remaining I/O budget. If one overruns,
+ * single-flight wins over cadence; never abandon an owner or accumulate retries.
+ */
 export function createManagedOAuthMaintenance(d: ManagedOAuthMaintenanceDependencies) {
   const pages = new Map<string, { pending?: string; outbox?: string; ack?: string }>();
   let tenantCursor: string | undefined;
   let running: Promise<ManagedOAuthMaintenanceResult> | undefined;
   let controller: AbortController | undefined;
   let timer: ReturnType<typeof setTimeout> | undefined;
+  let nextStart = 0;
   let enabled = false;
   const pageSize = 25;
 
   async function run(signal: AbortSignal): Promise<ManagedOAuthMaintenanceResult> {
-    const result = { tenants: 0, reconciled: 0, acknowledged: 0, closed: 0, failures: 0 };
-    const deadline = performance.now() + 55000;
+    const result = {
+      tenants: 0,
+      reconciled: 0,
+      acknowledged: 0,
+      closed: 0,
+      failures: 0,
+      capacityLimited: false,
+    };
+    const deadline = performance.now() + 25000;
     const alive = () => {
       if (signal.aborted || performance.now() >= deadline)
         throw new Error('Managed maintenance stopped');
     };
-    const capability = McpOAuthCapabilitiesSchema.parse(await d.getCapabilities());
-    const incarnation = await d.getCurrentIncarnation();
+    const budget = (): ManagedOAuthMaintenanceBudget => {
+      alive();
+      return {
+        signal,
+        timeoutMs: Math.max(
+          1,
+          Math.min(MCP_OAUTH_LIMITS.recovery_timeout_ms, Math.floor(deadline - performance.now()))
+        ),
+      };
+    };
+    const capability = McpOAuthCapabilitiesSchema.parse(await d.getCapabilities(budget()));
+    const incarnation = await d.getCurrentIncarnation(budget());
     if (capability.recovery_incarnation !== incarnation)
       throw new Error('Managed recovery unavailable');
     const current = async () => {
       alive();
       d.clock.latestUtcMs();
-      if ((await d.getCurrentIncarnation()) !== incarnation)
+      if ((await d.getCurrentIncarnation(budget())) !== incarnation)
         throw new Error('Managed recovery changed');
       alive();
     };
@@ -166,7 +204,10 @@ export function createManagedOAuthMaintenance(d: ManagedOAuthMaintenanceDependen
       { capability: 'mcp_oauth_maintenance' }
     );
     for (const tenant of routing.tenantIds) {
-      if (signal.aborted || performance.now() >= deadline) break;
+      if (signal.aborted || performance.now() >= deadline) {
+        result.capacityLimited = true;
+        break;
+      }
       await current();
       const cursor = pages.get(tenant) ?? {};
       const tenantWork = async <T>(fn: Parameters<typeof runWithTenantDatabaseScope<T>>[2]) =>
@@ -179,48 +220,7 @@ export function createManagedOAuthMaintenance(d: ManagedOAuthMaintenanceDependen
           result.failures++;
         }
       };
-      // Cleanup and ACK remain independent of vending availability and invalidation outages.
-      await attempt(async () => {
-        const jobs = await tenantWork((tx) =>
-          new MCPManagedOAuthOutboxRepository(tx).listPending(tenant, pageSize, cursor.outbox)
-        );
-        for (const job of jobs) {
-          await attempt(async () => {
-            await drainManagedOAuthCleanup(
-              d,
-              tenant,
-              job,
-              current,
-              deadline,
-              capability.flags.revocation
-            );
-            result.closed++;
-          });
-          cursor.outbox = job.outbox_id;
-        }
-        if (jobs.length < pageSize) cursor.outbox = undefined;
-      });
-      await attempt(async () => {
-        const receipts = await tenantWork((tx) =>
-          new UserMCPOAuthTokenRepository(tx).listManagedReceiptsForAcknowledgement(
-            tenant,
-            cursor.ack,
-            pageSize
-          )
-        );
-        for (const metadata of receipts) {
-          await attempt(async () => {
-            if (metadata.owner.recovery_incarnation !== incarnation)
-              throw new Error('Retired recovery');
-            await d.assertCleanupAdmission(metadata.owner);
-            await current();
-            await d.acknowledge(metadata);
-            result.acknowledged++;
-          });
-          cursor.ack = metadata.operation_id;
-        }
-        if (receipts.length < pageSize) cursor.ack = undefined;
-      });
+      // Apply known invalidations before potentially slow provider cleanup.
       if (d.runtime) {
         await attempt(async () => {
           const scope: MCPManagedOAuthInvalidationScope = {
@@ -239,7 +239,7 @@ export function createManagedOAuthMaintenance(d: ManagedOAuthMaintenanceDependen
                 body,
                 schema: McpOAuthInvalidationResponseSchema,
                 assertCurrent: current,
-                timeoutMs: Math.max(1, deadline - performance.now()),
+                timeoutMs: budget().timeoutMs,
               }),
             readCheckpoint: () =>
               tenantWork((tx) => new MCPManagedOAuthInvalidationRepository(tx).read(scope)),
@@ -261,6 +261,64 @@ export function createManagedOAuthMaintenance(d: ManagedOAuthMaintenanceDependen
               ),
           });
         });
+      }
+      // Cleanup and ACK remain independent of vending availability and invalidation outages.
+      await attempt(async () => {
+        const jobs = await tenantWork((tx) =>
+          new MCPManagedOAuthOutboxRepository(tx).listPending(tenant, pageSize, cursor.outbox)
+        );
+        let scanned = 0;
+        for (const job of jobs) {
+          if (signal.aborted || performance.now() >= deadline) {
+            result.capacityLimited = true;
+            break;
+          }
+          await attempt(async () => {
+            await drainManagedOAuthCleanup(
+              d,
+              tenant,
+              job,
+              current,
+              budget,
+              capability.flags.revocation
+            );
+            result.closed++;
+          });
+          cursor.outbox = job.outbox_id;
+          scanned++;
+        }
+        if (jobs.length < pageSize && scanned === jobs.length) cursor.outbox = undefined;
+        if (jobs.length === pageSize) result.capacityLimited = true;
+      });
+      await attempt(async () => {
+        const receipts = await tenantWork((tx) =>
+          new UserMCPOAuthTokenRepository(tx).listManagedReceiptsForAcknowledgement(
+            tenant,
+            cursor.ack,
+            pageSize
+          )
+        );
+        let scanned = 0;
+        for (const metadata of receipts) {
+          if (signal.aborted || performance.now() >= deadline) {
+            result.capacityLimited = true;
+            break;
+          }
+          await attempt(async () => {
+            if (metadata.owner.recovery_incarnation !== incarnation)
+              throw new Error('Retired recovery');
+            await d.assertCleanupAdmission(metadata.owner);
+            await current();
+            await d.acknowledge(metadata, budget());
+            result.acknowledged++;
+          });
+          cursor.ack = metadata.operation_id;
+          scanned++;
+        }
+        if (receipts.length < pageSize && scanned === receipts.length) cursor.ack = undefined;
+        if (receipts.length === pageSize) result.capacityLimited = true;
+      });
+      if (d.runtime) {
         if (capability.flags.managed_mcp_oauth_v1 && capability.flags.exchange)
           await attempt(async () => {
             const pending = await tenantWork((tx) =>
@@ -270,14 +328,24 @@ export function createManagedOAuthMaintenance(d: ManagedOAuthMaintenanceDependen
                 pageSize
               )
             );
+            let scanned = 0;
             for (const record of pending) {
+              if (signal.aborted || performance.now() >= deadline) {
+                result.capacityLimited = true;
+                break;
+              }
               await attempt(async () => {
-                await d.runtime!.reconcile(record);
+                await d.runtime!.reconcile(record, {
+                  assertCurrent: current,
+                  timeoutMs: budget().timeoutMs,
+                });
                 result.reconciled++;
               });
               cursor.pending = record.attemptId;
+              scanned++;
             }
-            if (pending.length < pageSize) cursor.pending = undefined;
+            if (pending.length < pageSize && scanned === pending.length) cursor.pending = undefined;
+            if (pending.length === pageSize) result.capacityLimited = true;
           });
       }
       // Bounded restartable fairness hints only; all authority and cleanup obligations are durable.
@@ -288,27 +356,57 @@ export function createManagedOAuthMaintenance(d: ManagedOAuthMaintenanceDependen
     }
     if (result.tenants === routing.tenantIds.length && !routing.nextCursor)
       tenantCursor = undefined;
+    if (routing.nextCursor !== null) result.capacityLimited = true;
+    if (signal.aborted || performance.now() >= deadline) result.capacityLimited = true;
     return result;
   }
   const runOnce = (): Promise<ManagedOAuthMaintenanceResult> => {
     if (running) return running;
     controller = new AbortController();
-    running = run(controller.signal).finally(() => {
-      running = undefined;
-      controller = undefined;
-    });
+    running = run(controller.signal)
+      .then(
+        (result) => {
+          try {
+            void Promise.resolve(d.onResult?.(Object.freeze({ ...result }))).catch(() => undefined);
+          } catch {
+            /* Observer only. */
+          }
+          return result;
+        },
+        (error) => {
+          try {
+            void Promise.resolve(d.onUnavailable?.()).catch(() => undefined);
+          } catch {
+            /* Observer only. */
+          }
+          throw error;
+        }
+      )
+      .finally(() => {
+        running = undefined;
+        controller = undefined;
+      });
     return running;
+  };
+  const launch = () => {
+    // Anchor to dispatch START, never completion. A slow admitted pass is
+    // single-flight, with no catch-up fanout or accumulating timer queue.
+    nextStart =
+      performance.now() +
+      MCP_OAUTH_LIMITS.poll_ms +
+      Math.floor(Math.random() * (MCP_OAUTH_LIMITS.jitter_ms + 1));
+    void runOnce()
+      .catch(() => undefined)
+      .finally(schedule);
   };
   const schedule = () => {
     if (!enabled || timer !== undefined) return;
     timer = setTimeout(
       () => {
         timer = undefined;
-        void runOnce()
-          .catch(() => undefined)
-          .finally(schedule);
+        launch();
       },
-      25000 + Math.floor(Math.random() * 10001)
+      Math.max(0, nextStart - performance.now())
     );
     timer.unref();
   };
@@ -317,7 +415,7 @@ export function createManagedOAuthMaintenance(d: ManagedOAuthMaintenanceDependen
     start() {
       if (!enabled) {
         enabled = true;
-        schedule();
+        launch();
       }
     },
     async stop() {
