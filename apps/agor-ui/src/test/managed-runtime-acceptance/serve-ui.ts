@@ -4,7 +4,39 @@ import { fileURLToPath } from 'node:url';
 import react from '@vitejs/plugin-react';
 import { createServer } from 'vite';
 
-export async function serveManagedAcceptanceUI(runtimeOrigin?: string) {
+export interface ManagedAcceptanceUIOptions {
+  /** Disposable loopback daemon only. Never point this fixture at a deployed runtime. */
+  runtimeOrigin?: string;
+  /** Exact browser origin forwarded by the paired fixture's generated-CA TLS listener. */
+  publicOrigin?: string;
+}
+
+export async function serveManagedAcceptanceUI({
+  runtimeOrigin,
+  publicOrigin,
+}: ManagedAcceptanceUIOptions = {}) {
+  if (runtimeOrigin) {
+    const target = new URL(runtimeOrigin);
+    if (
+      target.protocol !== 'http:' ||
+      target.hostname !== '127.0.0.1' ||
+      !target.port ||
+      target.origin !== runtimeOrigin
+    )
+      throw new Error('Acceptance upstream must be a disposable loopback listener');
+  }
+  let publicHost: string | undefined;
+  if (publicOrigin) {
+    const target = new URL(publicOrigin);
+    if (
+      target.protocol !== 'https:' ||
+      target.port !== '' ||
+      target.origin !== publicOrigin ||
+      !(target.hostname.endsWith('.example') || target.hostname.endsWith('.paired.test'))
+    )
+      throw new Error('Acceptance browser origin must be a canonical synthetic HTTPS origin');
+    publicHost = target.hostname;
+  }
   const root = fileURLToPath(new URL('../../..', import.meta.url));
   const html = await readFile(new URL('./index.html', import.meta.url), 'utf8');
   const server = await createServer({
@@ -16,6 +48,7 @@ export async function serveManagedAcceptanceUI(runtimeOrigin?: string) {
     server: {
       host: '127.0.0.1',
       port: 0,
+      ...(publicHost ? { allowedHosts: [publicHost] } : {}),
       ...(runtimeOrigin
         ? {
             proxy: {

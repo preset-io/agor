@@ -32,3 +32,22 @@ it.skipIf(process.env.AGOR_MANAGED_BROWSER_ACCEPTANCE !== '1')(
   },
   90000
 );
+
+// These guards run without Chromium and before a listener is allocated.
+it.each([
+  'https://runtime.example',
+  'http://127.0.0.1',
+  'http://localhost:3030',
+  'http://user:password@127.0.0.1:3030',
+  'http://127.0.0.1:3030/path',
+])('rejects non-disposable upstream %s', async (runtimeOrigin) => {
+  await expect(serveManagedAcceptanceUI({ runtimeOrigin })).rejects.toThrow();
+});
+it.each([
+  'http://runtime.example',
+  'https://runtime.example:8443',
+  'https://runtime.example/path',
+  'https://deployed.invalid',
+])('rejects noncanonical synthetic browser origin %s', async (publicOrigin) => {
+  await expect(serveManagedAcceptanceUI({ publicOrigin })).rejects.toThrow();
+});
