@@ -386,6 +386,30 @@ export class MCPOAuthPendingFlowRepository {
     return row ? { outcome: 'claimed', flow: mapRow(row) } : { outcome: 'not_claimed', flow: null };
   }
 
+  /** Authenticated return-ticket routing; never a callback/system discovery capability. */
+  async getManagedForTransaction(
+    tenantId: string,
+    userId: UserID,
+    transactionId: string
+  ): Promise<MCPOAuthPendingFlowRecord | null> {
+    McpOAuthIdSchema.parse(transactionId);
+    await lockTenantAuthoritySubject(
+      this.db,
+      tenantId,
+      `mcp-managed-return-ticket:${userId}:${transactionId}`
+    );
+    const rows = rawRows(
+      await executeRaw(
+        this.db,
+        sql`SELECT * FROM public.mcp_oauth_pending_flows
+      WHERE tenant_id=${tenantId} AND user_id=${userId} AND managed_transaction_id=${transactionId}
+        AND credential_origin='cloud_managed_v1' AND is_current=true AND status IN ('pending','exchanging')
+        AND expires_at>clock_timestamp() LIMIT 2`
+      )
+    );
+    return rows.length === 1 ? mapRow(rows[0]) : null;
+  }
+
   /** Exact attempt retirement; existing lifecycle trigger atomically records cancellation. */
   async retireManagedAttempt(
     expected: MCPOAuthPendingFlowRecord,

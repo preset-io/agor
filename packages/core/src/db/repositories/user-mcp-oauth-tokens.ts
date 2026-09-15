@@ -75,7 +75,7 @@ export interface UserMCPOAuthToken {
   credential_origin?: 'direct' | 'cloud_managed_v1';
   managed_metadata?: MCPManagedOAuthGrantMetadata;
   managed_operation_id?: string;
-  oauth_token_endpoint_auth_method?: 'client_secret_basic' | 'client_secret_post' | 'none';
+  oauth_token_endpoint_auth_method?: 'client_secret_basic' | 'client_secret_post';
   created_at: Date;
   updated_at?: Date;
 }
@@ -175,7 +175,7 @@ export interface SaveTokenInput {
     redirectUri: string;
   };
   managed?: MCPManagedOAuthTokenCommit;
-  tokenEndpointAuthMethod?: 'client_secret_basic' | 'client_secret_post' | 'none';
+  tokenEndpointAuthMethod?: 'client_secret_basic' | 'client_secret_post';
 }
 
 export type MCPOAuthRefreshClaimResult =
@@ -1093,6 +1093,7 @@ export class UserMCPOAuthTokenRepository {
       AND managed_metadata->>'next_sequence'=${input.managed.expected_sequence}
       AND managed_metadata->>'handle'=${input.managed.metadata.handle}
       AND managed_metadata->>'handle_epoch'=${input.managed.metadata.handle_epoch}
+      AND managed_metadata->>'transaction_id'=${input.managed.metadata.transaction_id}
       AND managed_metadata->'owner'=${JSON.stringify(input.managed.metadata.owner)}::jsonb
       AND refresh_claimed_at=to_timestamp(${input.managed.metadata.claim.claimed_at}/1000.0)
       AND refresh_success_generation=${managedOAuthLocalGeneration(input.managed.metadata.claim.refresh_success_generation)}
@@ -1138,6 +1139,29 @@ export class UserMCPOAuthTokenRepository {
           ${managedPredicate}
         RETURNING mcp_server_id
       `
+    );
+    return rowsOf(result).length === 1;
+  }
+
+  /** Only the newly elected owner may certify its own pre-dispatch local cancellation. */
+  async releaseUnstartedManagedRefreshClaim(
+    userId: UserID,
+    serverId: MCPServerID,
+    claim: { claimId: string; refreshGeneration: number; grantGeneration: number },
+    operationId: string,
+    sequence: string
+  ): Promise<boolean> {
+    if (!this.postgres) throw new RepositoryError('Managed refresh requires PostgreSQL');
+    await lockRowForUpdate(this.db, this.db, userMcpOauthTokens, matchKey(userId, serverId)!);
+    const result = await executeRaw(
+      this.db,
+      sql`UPDATE public.user_mcp_oauth_tokens
+      SET refresh_status='idle',refresh_claim_id=NULL,refresh_claimed_at=NULL,managed_operation_id=NULL,updated_at=clock_timestamp()
+      WHERE tenant_id=${this.tenantId()} AND user_id=${userId} AND mcp_server_id=${serverId} AND credential_origin='cloud_managed_v1'
+        AND refresh_status='refreshing' AND refresh_claim_id=${claim.claimId} AND managed_operation_id=${operationId}
+        AND grant_generation=${claim.grantGeneration} AND refresh_generation=${claim.refreshGeneration}
+        AND managed_metadata->>'next_sequence'=${sequence} AND refresh_claimed_at>clock_timestamp()-interval '2 minutes'
+      RETURNING mcp_server_id`
     );
     return rowsOf(result).length === 1;
   }
