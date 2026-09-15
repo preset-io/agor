@@ -29,6 +29,7 @@ import vectors from './__fixtures__/managed-v1/hash-vectors.json';
 import invalid from './__fixtures__/managed-v1/invalid.json';
 import manifest from './__fixtures__/managed-v1/manifest.json';
 import signatures from './__fixtures__/managed-v1/signature-vectors.json';
+import sourcePin from './__fixtures__/managed-v1/source-pin.json';
 import valid from './__fixtures__/managed-v1/valid.json';
 
 const schemas: Record<string, ZodType> = {
@@ -43,6 +44,19 @@ const schemas: Record<string, ZodType> = {
   succeeded: McpOAuthOperationResponseSchema,
 };
 describe('managed OAuth D0 canonical fixture contract', () => {
+  it('pins the exact producer source bytes and manifest, not just self-consistent fixtures', () => {
+    expect(
+      mcpOAuthSha256(
+        readFileSync(new URL('../../types/mcp-managed-oauth-contract.ts', import.meta.url))
+      )
+    ).toBe(sourcePin.source_sha256);
+    expect(
+      mcpOAuthSha256(
+        readFileSync(new URL('./__fixtures__/managed-v1/manifest.json', import.meta.url))
+      )
+    ).toBe(sourcePin.manifest_sha256);
+    expect(sourcePin.commit).toMatch(/^[a-f0-9]{40}$/);
+  });
   for (const [name, fixture] of Object.entries(valid))
     it(`accepts ${name}`, () => expect(schemas[name].safeParse(fixture).success).toBe(true));
   for (const [index, fixture] of invalid.entries())
