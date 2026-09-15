@@ -9,7 +9,10 @@ import {
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import { useState } from 'react';
 import { describe, expect, it } from 'vitest';
-import { enrichContentBlocks } from '../../../../../packages/executor/src/sdk-handlers/base/diff-enrichment';
+import {
+  attachGeneratedDiff,
+  GENERATED_DIFF_BUDGET_BYTES,
+} from '../../../../../packages/executor/src/services/generated-diff';
 import { projectMessageData } from '../../../../../packages/executor/src/services/tool-result-truncator';
 import { groupMessagesIntoBlocks, TaskBlock } from './TaskBlock';
 
@@ -87,14 +90,33 @@ describe('TaskBlock persisted result projections (production grouping and render
       { type: 'tool_use', id: 'write', name: 'Write', input },
       { type: 'tool_result', tool_use_id: 'write', content: 'Exact write result' },
     ];
-    enrichContentBlocks(blocks);
+    // Exercise the real source-cap/provenance helper without importing Node-heavy
+    // filesystem/git enrichment into UI's filtered install. Executor tests cover
+    // Write -> enrichment; this suite covers attachment -> projection -> consumer.
+    const diff = {
+      structuredPatch: [
+        { oldStart: 1, oldLines: 0, newStart: 1, newLines: 1, lines: [`+${input.content}`] },
+      ],
+    };
+    const originalBytes = Buffer.byteLength(JSON.stringify(diff));
+    expect(Buffer.byteLength(JSON.stringify({ diff }))).toBeGreaterThan(
+      GENERATED_DIFF_BUDGET_BYTES
+    );
+    attachGeneratedDiff(blocks[1], diff);
+    expect(blocks[1].diff).toBeUndefined();
+    expect(blocks[1].transcript_truncation).toEqual({ diff: { original_bytes: originalBytes } });
     const saved = persist({
       ...call,
       content: blocks,
       tool_uses: [{ id: 'write', name: 'Write', input }],
     });
     expect(saved.tool_uses?.[0].input).toEqual(input);
+    expect((saved.content as ContentBlock[])[0].input).toEqual(input);
     expect((saved.content as ContentBlock[])[1].content).toBe('Exact write result');
+    expect((saved.content as ContentBlock[])[1].transcript_truncation).toEqual({
+      diff: { original_bytes: originalBytes },
+    });
+    expect(Buffer.byteLength(JSON.stringify(saved))).toBeLessThanOrEqual(800_000);
     render(<Harness task={task} messages={[saved]} />);
     // Write opens by default; the omission must be visible without another toggle.
     expect(screen.getByRole('note')).toHaveTextContent('Transcript shortened: diff');
