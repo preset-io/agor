@@ -1,0 +1,15 @@
+{
+  "protocol_version": 1,
+  "binding_version": 1,
+  "enforcement_version": 1,
+  "source_base_sha": "96540d16afb7b80b15dca4901ca613e24a274ba0",
+  "source_commit": "Recorded in the consuming repository pin; cannot self-embed producing commit SHA.",
+  "architecture_sha256": "a96ac4baf8c1f180f8ea75216da965fe4d46df4a42b410e4972cbd58602156d3",
+  "plan_sha256": "fdcc43e4c4804d329027660d7490d93eb646406d720b1ad42b19416a695c9eda",
+  "files": {
+    "hash-vectors.json": "6a51c38ee8798606b1a5fca26a2cdebbbfc411378e58ca599ee52366a64a823f",
+    "invalid.json": "322f0f4f71c606a931be0b7e0c18451c902987937de2e108d6b2b349e22e7c3a",
+    "signature-vectors.json": "291db35d01deace59793dbfd1211aa6a40a3cb78ef1d8a610dcdff557f0acee9",
+    "valid.json": "764602ffae9e2c8025bdd24dd3cd69d40b991b738b88af2140e412e24e9f78d4"
+  }
+}
