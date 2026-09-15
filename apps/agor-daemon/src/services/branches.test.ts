@@ -2990,3 +2990,154 @@ describe('BranchesService environment health requests', () => {
     expect(branchesService.emit).not.toHaveBeenCalled();
   });
 });
+
+describe('server-selected local teammate homes', () => {
+  function harness(remote_url?: string, config = {}) {
+    const get = vi.fn(async () => ({ remote_url }));
+    const app = { get: () => config, service: () => ({ get }) } as unknown as Application;
+    const service = new BranchesService(createTenantScopeTestDb() as never, app);
+    const internal = service as unknown as {
+      applyBranchCreateDefaults: (
+        data: Partial<import('@agor/core/types').Branch>,
+        params?: unknown
+      ) => Promise<Partial<import('@agor/core/types').Branch>>;
+      assertTeammateKindIsStable: (current: unknown, patch: unknown) => void;
+    };
+    return { internal, get };
+  }
+  const data = { repo_id: 'repo' as UUID, custom_context: teammateContext };
+
+  it.each([
+    'https://github.com/preset-io/agor-teammate.git',
+    'https://github.com/preset-io/agor-teammate',
+    'git@github.com:preset-io/agor-teammate.git',
+  ])('selects full clone for exact canonical destination %s', async (url) => {
+    const { internal } = harness(url);
+    const result = await internal.applyBranchCreateDefaults({
+      ...data,
+      storage_mode: 'worktree',
+      clone_depth: 1,
+    });
+    expect(result).toMatchObject({
+      storage_mode: 'clone',
+      custom_context: { teammate: { localHome: true } },
+    });
+    expect(result.clone_depth).toBeUndefined();
+    expect(data.custom_context).not.toHaveProperty('teammate.localHome');
+  });
+
+  it.each([
+    undefined,
+    'https://github.com/acme/agor-teammate-private.git',
+    'https://github.com/acme/agor-teammate.git',
+    'https://evil.test/preset-io/agor-teammate.git',
+    'https://github.com/preset-io/agor-teammate.git/extra',
+  ])('preserves custom/private/local destination %s', async (url) => {
+    const { internal } = harness(url);
+    const result = await internal.applyBranchCreateDefaults({ ...data, storage_mode: 'worktree' });
+    expect(result.storage_mode).toBe('worktree');
+    expect(result.custom_context).toEqual(teammateContext);
+  });
+
+  it('preserves ordinary branches and enforces clone/storage operator policy', async () => {
+    const url = 'https://github.com/preset-io/agor-teammate.git';
+    const { internal } = harness(url, {
+      execution: { branch_storage: { allowed_modes: ['worktree'] } },
+    });
+    await expect(internal.applyBranchCreateDefaults(data)).rejects.toThrow();
+    expect(await internal.applyBranchCreateDefaults({ repo_id: data.repo_id })).toMatchObject({
+      storage_mode: 'worktree',
+    });
+    for (const branch_workspace of [undefined, 'replica-local']) {
+      await expect(
+        harness(url, {
+          execution: { unix_user_mode: 'delegated', executor_storage: { branch_workspace } },
+        }).internal.applyBranchCreateDefaults(data)
+      ).rejects.toThrow('persistent branch storage');
+    }
+    expect(
+      await harness(url, {
+        execution: {
+          unix_user_mode: 'delegated',
+          executor_storage: {
+            branch_workspace: 'persistent-per-branch',
+            base_repository: 'unavailable',
+          },
+        },
+      }).internal.applyBranchCreateDefaults(data)
+    ).toMatchObject({ storage_mode: 'clone' });
+  });
+
+  it('rejects forged creation markers and changing/removing a persisted marker', async () => {
+    const { internal } = harness('https://github.com/preset-io/agor-teammate.git');
+    for (const key of ['teammate', 'assistant', 'agent']) {
+      await expect(
+        internal.applyBranchCreateDefaults({
+          ...data,
+          custom_context: { [key]: { kind: 'teammate', localHome: true } },
+        })
+      ).rejects.toThrow('server-managed');
+    }
+    const marked = await internal.applyBranchCreateDefaults(data);
+    expect(() =>
+      internal.assertTeammateKindIsStable(marked, {
+        custom_context: { teammate: { localHome: null } },
+      })
+    ).toThrow('immutable');
+    expect(() =>
+      internal.assertTeammateKindIsStable(data, {
+        custom_context: { teammate: { localHome: true } },
+      })
+    ).toThrow('immutable');
+    expect(() => internal.assertTeammateKindIsStable(marked, { storage_mode: 'worktree' })).toThrow(
+      'full-history'
+    );
+    expect(() =>
+      internal.assertTeammateKindIsStable(marked, {
+        custom_context: { teammate: { displayName: 'Renamed' } },
+      })
+    ).not.toThrow();
+  });
+
+  it('passes caller context to authorized repo lookup; foreign repo fails before creation', async () => {
+    const { internal, get } = harness();
+    const params = { tenant: { tenant_id: 'tenant-b', source: 'jwt' } };
+    get.mockRejectedValueOnce(new Error('Repo not found in tenant-b'));
+    await expect(internal.applyBranchCreateDefaults(data, params)).rejects.toThrow('tenant-b');
+    expect(get).toHaveBeenCalledWith(data.repo_id, params);
+  });
+
+  it('does not recreate a lost marked home during unarchive', async () => {
+    const { service } = createServiceHarness();
+    const branchId = 'lost-home' as BranchID;
+    const branch = {
+      branch_id: branchId,
+      name: 'Lost',
+      path: '/lost-home',
+      archived: true,
+      storage_mode: 'clone',
+      custom_context: { teammate: { ...teammateContext.teammate, localHome: true } },
+    };
+    vi.spyOn(service, 'get').mockResolvedValue(branch as never);
+    const patch = vi
+      .spyOn(service, 'patch')
+      .mockImplementation(async (_id, data) => ({ ...branch, ...data }) as never);
+    vi.mocked(requestExecutor).mockResolvedValueOnce({
+      success: true,
+      data: { exists: false },
+    } as never);
+    vi.mocked(spawnExecutor).mockClear();
+    const result = await service.unarchive(branchId, undefined, {
+      user: { user_id: 'user-1' as UUID, role: 'member' },
+    } as never);
+    expect(result.filesystem_status).toBe('failed');
+    expect(patch).toHaveBeenLastCalledWith(
+      branchId,
+      expect.objectContaining({
+        error_message: expect.stringContaining('cannot recover personal state'),
+      }),
+      expect.anything()
+    );
+    expect(spawnExecutor).not.toHaveBeenCalled();
+  });
+});

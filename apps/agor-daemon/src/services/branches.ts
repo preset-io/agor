@@ -96,6 +96,7 @@ import {
   getBranchCleanupBlockReason,
   getTeammateConfig,
   hasMinimumRole,
+  isCanonicalTeammateFrameworkRepo,
   isTeammate,
   ROLES,
   resolveRepoCleanupPolicy,
@@ -953,7 +954,10 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
    * branch is aligned. The permissions service copies that complete package
    * when the user later switches to override mode.
    */
-  private async applyBranchCreateDefaults(data: Partial<Branch>): Promise<Partial<Branch>> {
+  private async applyBranchCreateDefaults(
+    data: Partial<Branch>,
+    params?: BranchParams
+  ): Promise<Partial<Branch>> {
     const withDefaults: Partial<Branch> = { ...data };
     if (
       withDefaults.base_remote_url !== undefined &&
@@ -963,7 +967,35 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
         'base_remote_url is restricted to the canonical Agor teammate template repository.'
       );
     }
+    for (const key of ['teammate', 'assistant', 'agent']) {
+      const value = data.custom_context?.[key];
+      if (value && typeof value === 'object' && Object.hasOwn(value, 'localHome')) {
+        throw new BadRequest('localHome is server-managed at teammate creation.');
+      }
+    }
     const config = this.app.get('config');
+    if (isTeammate(data)) {
+      const repo = await this.app.service('repos').get(data.repo_id!, params);
+      if (isCanonicalTeammateFrameworkRepo(repo)) {
+        const storage = config.execution?.executor_storage?.branch_workspace;
+        if (
+          (config.execution?.unix_user_mode === 'delegated' ||
+            config.execution?.executor_command_template?.trim()) &&
+          storage !== 'shared' &&
+          storage !== 'persistent-per-branch'
+        ) {
+          throw new BadRequest(
+            'Local teammate homes require operator-configured persistent branch storage.'
+          );
+        }
+        withDefaults.storage_mode = 'clone';
+        withDefaults.clone_depth = undefined;
+        withDefaults.custom_context = {
+          ...data.custom_context,
+          teammate: { ...getTeammateConfig(data)!, localHome: true },
+        };
+      }
+    }
     const { defaultMode } = resolveBranchStorageConfig(config);
     const storageMode = withDefaults.storage_mode ?? defaultMode;
     ensureBranchStorageModeAllowed(storageMode, config);
@@ -1026,7 +1058,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     if (Array.isArray(data)) {
       data.forEach(assertHasBoard);
       const withDefaults = await Promise.all(
-        data.map((item) => this.applyBranchCreateDefaults(item))
+        data.map((item) => this.applyBranchCreateDefaults(item, params))
       );
       const created = (await super.create(withDefaults, params)) as Branch[];
       const readyBranches = await Promise.all(
@@ -1041,7 +1073,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       return readyBranches;
     }
     assertHasBoard(data);
-    const withDefaults = await this.applyBranchCreateDefaults(data);
+    const withDefaults = await this.applyBranchCreateDefaults(data, params);
     const created = (await super.create(withDefaults, params)) as Branch;
     const readyBranch = await this.maybeEnsureTeammateKnowledgeNamespace(created, params);
     await this.maybeSetBoardPrimaryTeammate(readyBranch, params);
@@ -1279,6 +1311,28 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       currentBranch as unknown as Record<string, unknown>,
       patchData as Record<string, unknown>
     ) as unknown as Branch;
+    if (
+      getTeammateConfig(currentBranch)?.localHome !== getTeammateConfig(wouldBeBranch)?.localHome
+    ) {
+      throw new BadRequest('localHome is immutable after teammate creation.');
+    }
+    for (const key of ['teammate', 'assistant', 'agent']) {
+      const value = patchData.custom_context?.[key];
+      if (
+        value &&
+        typeof value === 'object' &&
+        Object.hasOwn(value, 'localHome') &&
+        (value as Record<string, unknown>).localHome !== getTeammateConfig(currentBranch)?.localHome
+      ) {
+        throw new BadRequest('localHome is immutable after teammate creation.');
+      }
+    }
+    if (
+      getTeammateConfig(currentBranch)?.localHome &&
+      (wouldBeBranch.storage_mode !== 'clone' || wouldBeBranch.clone_depth != null)
+    ) {
+      throw new BadRequest('Local teammate homes require full-history clone storage.');
+    }
     if (isTeammate(currentBranch) === isTeammate(wouldBeBranch)) return;
 
     throw new BadRequest(
@@ -2268,6 +2322,19 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       typeof statusResult.data === 'object' &&
       (statusResult.data as { exists?: unknown }).exists === true;
 
+    if (!branchPathExists && getTeammateConfig(branch)?.localHome) {
+      return this.withTenantDatabase(params, () =>
+        this.patch(
+          id,
+          {
+            filesystem_status: 'failed',
+            error_message:
+              'Local teammate home is missing. Restore its files from your own backup; the public template cannot recover personal state.',
+          },
+          { ...params, provider: undefined }
+        )
+      );
+    }
     if (!branchPathExists) {
       console.log(`📂 Branch directory missing, spawning executor to recreate: ${branch.path}`);
 

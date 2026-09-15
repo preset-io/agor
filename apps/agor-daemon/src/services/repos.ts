@@ -49,7 +49,10 @@ import type {
   UUID,
 } from '@agor/core/types';
 import {
+  getTeammateConfig,
   hasMinimumRole,
+  isCanonicalTeammateFrameworkRepo,
+  isTeammate,
   ROLES,
   TEAMMATE_FRAMEWORK_REPO_URL,
   validateRepoCleanupPolicy,
@@ -729,7 +732,10 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     // rule: "daemon/client = database, executor = filesystem").
     const config = this.app.get('config');
     const { defaultMode } = resolveBranchStorageConfig(config);
-    const storageMode: 'worktree' | 'clone' = data.storage_mode ?? defaultMode;
+    const localHome = isTeammate(data) && isCanonicalTeammateFrameworkRepo(repo);
+    const storageMode: 'worktree' | 'clone' = localHome
+      ? 'clone'
+      : (data.storage_mode ?? defaultMode);
     ensureBranchStorageModeAllowed(storageMode, config);
     if (
       storageMode === 'worktree' &&
@@ -739,7 +745,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
         "storage_mode='worktree' is unavailable in hosted multi-tenant mode; use clone storage."
       );
     }
-    const cloneDepth = data.clone_depth;
+    const cloneDepth = localHome ? undefined : data.clone_depth;
     if (cloneDepth !== undefined) {
       if (storageMode !== 'clone') {
         throw new Error(
@@ -995,6 +1001,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
             principalBranchAccess: 'write',
             useReference:
               storageMode === 'clone' &&
+              !getTeammateConfig(branch)?.localHome &&
               !!repo.local_path &&
               shouldUseCloneReferencePath(this.app.get('config')),
           },

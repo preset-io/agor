@@ -1,4 +1,5 @@
 import type { AgenticToolName, AgorClient, Branch, Repo, Session, UserID } from '@agor-live/client';
+import { getTeammateConfig } from '@agor-live/client';
 import type { NewSessionConfig, SessionCreationResult } from '../domain/sessionCreation';
 import type { OnboardingIntegrationRecommendation } from './onboardingGoals';
 import type { OnboardingSlackGatewayIntent } from './onboardingSlack';
@@ -285,6 +286,7 @@ export async function seedOnboardingTeammate(input: SeedOnboardingTeammateInput)
           userEmail: input.user?.email,
           goals: input.goals,
           templateId: input.templateId,
+          localHome: getTeammateConfig(branch)?.localHome,
           suggestedIntegrations: input.suggestedIntegrations,
           slackGatewayIntent: input.slackGatewayIntent,
         }),

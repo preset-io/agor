@@ -71,6 +71,10 @@ export const OnboardingTeammateGalleryStep: React.FC<OnboardingTeammateGallerySt
           </Paragraph>
         </div>
 
+        <Text type="secondary">
+          With the public starter, home files stay on this installation without private backup.
+          Memory lives in Knowledge.
+        </Text>
         <Flex vertical gap={token.marginSM}>
           <Flex vertical gap={14}>
             <div>
