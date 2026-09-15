@@ -3,6 +3,7 @@ import {
   type MCPManagedOAuthPendingMetadata,
   MCPManagedOAuthPendingMetadataSchema,
 } from '../../types/mcp-managed-oauth';
+import { McpOAuthEpochSchema, McpOAuthIdSchema } from '../../types/mcp-managed-oauth-contract';
 /**
  * PostgreSQL authority for browser-based MCP OAuth attempts.
  *
@@ -354,6 +355,7 @@ export class MCPOAuthPendingFlowRepository {
     expected: MCPOAuthPendingFlowRecord,
     operationId: string
   ): Promise<MCPOAuthPendingFlowClaimResult> {
+    McpOAuthIdSchema.parse(operationId);
     if (!expected.managedMetadata || !expected.managedTransactionId || !operationId) {
       throw new RepositoryError('Managed claim requires its complete bound transaction');
     }
@@ -384,6 +386,25 @@ export class MCPOAuthPendingFlowRepository {
     return row ? { outcome: 'claimed', flow: mapRow(row) } : { outcome: 'not_claimed', flow: null };
   }
 
+  /** Exact attempt retirement; existing lifecycle trigger atomically records cancellation. */
+  async retireManagedAttempt(
+    expected: MCPOAuthPendingFlowRecord,
+    failureCode = 'attempt_canceled'
+  ): Promise<boolean> {
+    assertAuthorityFailureCode(failureCode, 'Managed OAuth');
+    await this.lockGrantSubject(expected);
+    const result = await executeRaw(
+      this.db,
+      sql`UPDATE public.mcp_oauth_pending_flows
+      SET status=CASE WHEN status='exchanging' THEN 'ambiguous' ELSE 'failed' END,is_current=false,sealed_material=NULL,
+        failure_code=${failureCode},finished_at=clock_timestamp(),updated_at=clock_timestamp()
+      WHERE tenant_id=${expected.tenantId} AND user_id=${expected.userId} AND mcp_server_id=${expected.mcpServerId}
+        AND attempt_id=${expected.attemptId} AND grant_generation=${expected.grantGeneration} AND credential_origin='cloud_managed_v1'
+        AND status IN ('pending','exchanging') RETURNING attempt_id`
+    );
+    return rawRows(result).length === 1;
+  }
+
   /** Bind prepare's recovered ID while the original local reservation is still current. */
   async bindManagedTransaction(
     expected: MCPOAuthPendingFlowRecord,
@@ -391,6 +412,8 @@ export class MCPOAuthPendingFlowRepository {
     cancelEpoch: string,
     sealedMaterial: string
   ): Promise<boolean> {
+    McpOAuthIdSchema.parse(transactionId);
+    McpOAuthEpochSchema.parse(cancelEpoch);
     if (!expected.managedMetadata || !transactionId || !sealedMaterial)
       throw new RepositoryError('Incomplete managed transaction');
     await this.lockGrantSubject(expected);

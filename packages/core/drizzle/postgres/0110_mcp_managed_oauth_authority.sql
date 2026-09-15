@@ -131,20 +131,20 @@ CREATE TRIGGER mcp_managed_oauth_identity_retirement BEFORE UPDATE OR DELETE ON 
 --> statement-breakpoint
 REVOKE ALL ON FUNCTION public.mcp_managed_oauth_identity_change() FROM PUBLIC;
 --> statement-breakpoint
-ALTER TABLE mcp_oauth_pending_flows ADD CONSTRAINT mcp_pending_managed_origin CHECK (
+ALTER TABLE mcp_oauth_pending_flows ADD CONSTRAINT mcp_pending_managed_origin CHECK ((
  (credential_origin='direct' AND managed_metadata IS NULL AND managed_transaction_id IS NULL AND managed_operation_id IS NULL AND config_fingerprint_version<>5)
  OR (credential_origin='cloud_managed_v1' AND oauth_mode='per_user' AND subject_user_id=user_id AND config_fingerprint_version=5 AND managed_metadata IS NOT NULL
  AND managed_metadata->'owner'->>'workspace_id'=tenant_id AND managed_metadata->'owner'->>'cell_local_user_id'=user_id
  AND managed_metadata->'owner'->>'server_id'=mcp_server_id AND managed_metadata->'owner'->>'attempt_id'=attempt_id
  AND managed_metadata->'owner'->>'grant_generation'=grant_generation::text AND managed_metadata->'owner'->>'config_fingerprint'=config_fingerprint
- AND managed_metadata->'owner'=managed_metadata->'prepare_request'->'owner'));
+ AND managed_metadata->'owner'=managed_metadata->'prepare_request'->'owner')) IS TRUE);
 --> statement-breakpoint
-ALTER TABLE user_mcp_oauth_tokens ADD CONSTRAINT mcp_grant_managed_origin CHECK (
+ALTER TABLE user_mcp_oauth_tokens ADD CONSTRAINT mcp_grant_managed_origin CHECK ((
  (credential_origin='direct' AND managed_metadata IS NULL AND managed_operation_id IS NULL AND grant_binding_version IS DISTINCT FROM 5)
  OR (credential_origin='cloud_managed_v1' AND user_id IS NOT NULL AND grant_binding_version=5 AND managed_metadata IS NOT NULL AND oauth_client_secret IS NULL
  AND managed_metadata->'owner'->>'workspace_id'=tenant_id AND managed_metadata->'owner'->>'cell_local_user_id'=user_id
  AND managed_metadata->'owner'->>'server_id'=mcp_server_id AND managed_metadata->'owner'->>'grant_generation'=grant_generation::text
- AND managed_metadata->'owner'->>'config_fingerprint'=grant_binding_fingerprint));
+ AND managed_metadata->'owner'->>'config_fingerprint'=grant_binding_fingerprint)) IS TRUE);
 --> statement-breakpoint
 CREATE FUNCTION public.mcp_managed_oauth_completion_deadline() RETURNS trigger LANGUAGE plpgsql
  SET search_path = pg_catalog, public, pg_temp AS $$
