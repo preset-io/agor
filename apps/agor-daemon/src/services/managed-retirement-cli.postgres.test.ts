@@ -4,6 +4,8 @@ import {
   acquireTenantWriteGate,
   inspectTenantWriteGate,
   releaseTenantWriteGate,
+  runWithTenantDatabaseScope,
+  UserMCPOAuthTokenRepository,
 } from '@agor/core/db';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { seedManagedRefreshGrant } from '../../../../packages/core/src/db/test-support/managed-oauth-fixture';
@@ -95,6 +97,73 @@ describe.skipIf(process.env.AGOR_DB_DIALECT !== 'postgresql')(
       await expect(
         seedManagedRefreshGrant(owned.db, 'synthetic-cli-master-secret')
       ).rejects.toThrow();
+    });
+    it('forwards the exact cell fence without retiring foreign-cell grants in a shared logical database', async () => {
+      const tenant = `shared-${randomUUID()}`;
+      const a = await seedManagedRefreshGrant(
+        owned.db,
+        'synthetic-cli-master-secret',
+        tenant,
+        'cell-a'
+      );
+      const b = await seedManagedRefreshGrant(
+        owned.db,
+        'synthetic-cli-master-secret',
+        tenant,
+        'cell-b'
+      );
+      const foreign = await seedManagedRefreshGrant(
+        owned.db,
+        'synthetic-cli-master-secret',
+        undefined,
+        'cell-b'
+      );
+      const fence = await beginManagedCellRetirement(
+        owned.db,
+        { cell_id: 'cell-a', operation_id: randomUUID() },
+        'cell-a'
+      );
+      const gate = await acquireTenantWriteGate(owned.db, tenant);
+      const input = {
+        tenant_id: tenant,
+        gate_generation: gate.generation,
+        operation_id: randomUUID(),
+      };
+      const filtered = await listManagedRetirementTargets(
+        owned.db,
+        undefined,
+        100,
+        fence,
+        'cell-a'
+      );
+      expect(filtered.tenant_ids).toContain(tenant);
+      expect(filtered.tenant_ids).not.toContain(foreign.tenant);
+      await expect(executeManagedRetirement(owned.db, input, false)).resolves.toMatchObject({
+        active_grants: 2,
+      });
+      await expect(
+        executeManagedRetirement(owned.db, input, false, fence, 'cell-a')
+      ).resolves.toMatchObject({ active_grants: 1 });
+      await expect(
+        executeManagedRetirement(
+          owned.db,
+          input,
+          true,
+          { ...fence, gate_generation: randomUUID() },
+          'cell-a'
+        )
+      ).rejects.toThrow();
+      await expect(
+        executeManagedRetirement(owned.db, input, true, fence, 'cell-a')
+      ).resolves.toMatchObject({ active_grants: 0, ready: false });
+      await expect(executeManagedRetirement(owned.db, input, false)).resolves.toMatchObject({
+        active_grants: 1,
+      });
+      await runWithTenantDatabaseScope(owned.db, tenant, async (db) => {
+        const repo = new UserMCPOAuthTokenRepository(db);
+        expect(await repo.getManagedMetadata(a.user, a.server)).toBeUndefined();
+        expect(await repo.getManagedMetadata(b.user, b.server)).toEqual(b.commit.metadata);
+      });
     });
   }
 );
