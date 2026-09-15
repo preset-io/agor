@@ -44,6 +44,7 @@ import { resolveBoardFromUrlPure } from '@/utils/urlResolution';
 import { getBoardEmoji } from '../BoardTile';
 import { MarkdownRenderer } from '../MarkdownRenderer/MarkdownRenderer';
 import { StatusPill } from '../Pill';
+import { mobileScrollAreaStyle } from './constants';
 import { MobileHeader } from './MobileHeader';
 
 const { Content } = Layout;
@@ -286,9 +287,7 @@ export const MobileBoardPage: React.FC<MobileBoardPageProps> = ({
       />
       <Content
         style={{
-          flex: 1,
-          minHeight: 0,
-          overflowY: 'auto',
+          ...mobileScrollAreaStyle,
           paddingInline: token.padding,
           paddingBlock: token.paddingMD,
           paddingBottom: `calc(${token.paddingXL}px + env(safe-area-inset-bottom))`,

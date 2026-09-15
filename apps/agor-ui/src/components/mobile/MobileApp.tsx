@@ -47,6 +47,8 @@ import { SessionPage } from './SessionPage';
 interface MobileAppProps {
   client: AgorClient | null;
   user?: User | null;
+  /** Shared post-onboarding banners (e.g. "AI not connected"); shown above the shell content. */
+  topBanner?: React.ReactNode;
   onSendPrompt?: (
     sessionId: string,
     prompt: string
@@ -83,6 +85,7 @@ interface MobileAppProps {
 export const MobileApp: React.FC<MobileAppProps> = ({
   client,
   user,
+  topBanner,
   onSendPrompt,
   onCreateSession,
   onForkSession,
@@ -300,13 +303,18 @@ export const MobileApp: React.FC<MobileAppProps> = ({
           style={{ flexShrink: 0 }}
         />
       )}
+      {/* Proactive connect-AI / integrations banner, shared with desktop. Hidden
+          on the full-screen session view (its composer surfaces credentials). */}
+      {topBanner && !isSessionRoute && <div style={{ flexShrink: 0 }}>{topBanner}</div>}
       <div
         style={{
           flex: 1,
           minHeight: 0,
+          minWidth: 0,
           position: 'relative',
           display: 'flex',
           flexDirection: 'column',
+          overflowX: 'hidden',
         }}
       >
         {/* Descendant routes under `/m/*`; paths are RELATIVE to /m. */}

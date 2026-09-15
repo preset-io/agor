@@ -2,6 +2,7 @@ import type { Branch, Session, User } from '@agor-live/client';
 import { Empty, List, theme } from 'antd';
 import { useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { mobileScrollAreaStyle } from './constants';
 import { MobileHeader } from './MobileHeader';
 import { MobileSessionRow } from './MobileSessionRow';
 
@@ -35,7 +36,7 @@ export const MobileSessionsPage: React.FC<MobileSessionsPageProps> = ({
   return (
     <div style={{ height: '100%', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
       <MobileHeader title="Sessions" onSearch={() => navigate('/m/search')} />
-      <div style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
+      <div style={mobileScrollAreaStyle}>
         {sessions.length === 0 ? (
           <div
             style={{
