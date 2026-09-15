@@ -1,6 +1,7 @@
 import {
   executeRaw,
   MCPManagedOAuthOutboxRepository,
+  rawRows,
   runWithTenantDatabaseScope,
   UserMCPOAuthTokenRepository,
 } from '@agor/core/db';
@@ -180,6 +181,14 @@ describe.skipIf(process.env.AGOR_DB_DIALECT !== 'postgresql')(
             expect(await new UserMCPOAuthTokenRepository(db).getToken(f.user, f.server)).toEqual(
               before
             );
+            const floor = rawRows(
+              await executeRaw(
+                db,
+                sql`SELECT managed_refresh_not_before
+              FROM public.user_mcp_oauth_tokens WHERE user_id=${f.user} AND mcp_server_id=${f.server}`
+              )
+            )[0];
+            expect(floor.managed_refresh_not_before).toBeNull();
             expect(await new MCPManagedOAuthOutboxRepository(db).listPending(f.tenant)).toEqual([]);
           });
         } finally {
@@ -325,6 +334,118 @@ describe.skipIf(process.env.AGOR_DB_DIALECT !== 'postgresql')(
         );
       });
     });
+    it.each([
+      ['not_dispatched', false],
+      ['not_dispatched', true],
+      ['client_configuration_failed', false],
+      ['client_configuration_failed', true],
+    ] as const)(
+      'durably throttles certified %s (receipt recovery=%s) without changing the original permit',
+      async (status, recoveryOnly) => {
+        const f = await seedManagedRefreshGrant(owned.db, master);
+        if (recoveryOnly) {
+          await runWithTenantDatabaseScope(owned.db, f.tenant, (db) =>
+            new UserMCPOAuthTokenRepository(db).claimRefresh(f.user, f.server, f.expected)
+          );
+        }
+        const execute = vi.fn<MCPManagedOAuthRefreshAdapter['execute']>(
+          async ({ request, recoveryOnly: recovering }) => {
+            expect(recovering).toBe(recoveryOnly);
+            const common = {
+              protocol_version: 1 as const,
+              operation_id: request.operation_id,
+              owner: request.owner,
+              claim: request.claim,
+              sequence: request.sequence,
+            };
+            throw new ManagedMCPOAuthOperationError(
+              status === 'not_dispatched'
+                ? { ...common, status, failure_code: 'profile_unavailable' }
+                : {
+                    ...common,
+                    status,
+                    failure_code: 'client_configuration_failed',
+                    next_sequence: String(BigInt(request.sequence) + 1n),
+                  }
+            );
+          }
+        );
+        const adapter = { execute, acknowledge: vi.fn(async () => {}) };
+        const first = await refreshAndPersistToken(deps(f, adapter)).catch((error) => error);
+        expect(first).toBeInstanceOf(ManagedMCPOAuthOperationError);
+        const fence = getManagedOAuthDeferredRefresh(first);
+        expect(fence).toMatchObject({ ...f.expected, refreshGeneration: 1 });
+        const retained = await runWithTenantDatabaseScope(owned.db, f.tenant, async (db) => {
+          const row = rawRows(
+            await executeRaw(
+              db,
+              sql`SELECT
+          extract(epoch FROM (managed_refresh_not_before-clock_timestamp()))*1000 AS remaining,
+          managed_refresh_not_before FROM public.user_mcp_oauth_tokens WHERE user_id=${f.user} AND mcp_server_id=${f.server}`
+            )
+          )[0];
+          expect(Number(row.remaining)).toBeGreaterThan(29000);
+          expect(Number(row.remaining)).toBeLessThanOrEqual(30000);
+          const token = (await new UserMCPOAuthTokenRepository(db).getToken(f.user, f.server))!;
+          expect(token.refresh_status).toBe('idle');
+          expect(token.refresh_claim_id).toBeUndefined();
+          expect(token.managed_operation_id).toBeUndefined();
+          expect(token.managed_metadata?.next_sequence).toBe(
+            status === 'not_dispatched' ? '1' : '2'
+          );
+          expect(token.oauth_access_token).toBe(f.commit.tokens.access_token);
+          expect(token.managed_metadata?.use_authorization).toBe(
+            f.commit.metadata.use_authorization
+          );
+          expect(token.managed_metadata?.use_claims).toEqual(f.commit.metadata.use_claims);
+          expect(await new MCPManagedOAuthOutboxRepository(db).listPending(f.tenant)).toEqual([]);
+          return token;
+        });
+        for (const db of [owned.peer, owned.db]) {
+          const again = await refreshAndPersistToken({
+            ...deps(f, adapter),
+            db,
+            observedRefreshVersion: fence!,
+          }).catch((error) => error);
+          expect(getManagedOAuthDeferredRefresh(again)).toEqual(fence);
+        }
+        // Backoff does not bypass current local admission or mint proof for a
+        // mismatched/replaced configuration. Actual signed-use validation remains
+        // the acquisition owner's responsibility, with the unchanged original permit.
+        const denied = await refreshAndPersistToken({
+          ...deps(f, adapter),
+          db: owned.peer,
+          observedRefreshVersion: fence!,
+          validateGrant: () => false,
+        }).catch((error) => error);
+        expect(getManagedOAuthDeferredRefresh(denied)).toBeUndefined();
+        expect(execute).toHaveBeenCalledTimes(1);
+        expect(adapter.acknowledge).not.toHaveBeenCalled();
+        await runWithTenantDatabaseScope(owned.db, f.tenant, async (db) => {
+          expect(await new UserMCPOAuthTokenRepository(db).getToken(f.user, f.server)).toEqual(
+            retained
+          );
+          // Expire only the DB floor, not a process sleep or altered claim clock.
+          await executeRaw(
+            db,
+            sql`UPDATE public.user_mcp_oauth_tokens SET managed_refresh_not_before=clock_timestamp()-interval '1 second'
+          WHERE user_id=${f.user} AND mcp_server_id=${f.server}`
+          );
+        });
+        const fresh = vi.fn<MCPManagedOAuthRefreshAdapter['execute']>(async (args) => {
+          expect(args.recoveryOnly).toBe(false);
+          expect(args.request.sequence).toBe(status === 'not_dispatched' ? '1' : '2');
+          expect(args.request.operation_id).not.toBe(execute.mock.calls[0][0].request.operation_id);
+          return commitFor(args);
+        });
+        await refreshAndPersistToken({
+          ...deps(f, { execute: fresh, acknowledge: async () => {} }),
+          observedRefreshVersion: fence!,
+        });
+        expect(fresh).toHaveBeenCalledTimes(1);
+      }
+    );
+
     it('expires an unrecovered original claim at the database deadline without replay or a new claim', async () => {
       const f = await seedManagedRefreshGrant(owned.db, master);
       const execute = vi.fn<MCPManagedOAuthRefreshAdapter['execute']>(async () => {
