@@ -199,6 +199,44 @@ describe('single dispatch and original-claim receipt recovery', () => {
     expect(body).not.toHaveProperty('refresh_token');
     expect(body).not.toHaveProperty('pkce_verifier');
   });
+  it('caps in-progress receipt polling without extending the original recovery budget', async () => {
+    vi.useFakeTimers({ toFake: ['performance', 'setTimeout', 'clearTimeout'] });
+    try {
+      fetchMock.mockImplementation(
+        () =>
+          new Response(
+            JSON.stringify({
+              protocol_version: 1,
+              operation_id: expected.operationId,
+              owner: expected.owner,
+              claim: expected.claim,
+              status: 'in_progress',
+              failure_code: 'operation_in_progress',
+              sequence: '0',
+            }),
+            { headers: { 'content-type': 'application/json' } }
+          )
+      );
+      const completion = expect(
+        recoverManagedOAuthOperation({ ...makeOptions(), expected })
+      ).rejects.toThrow('unavailable');
+      await vi.advanceTimersByTimeAsync(10_000);
+      await completion;
+      expect(fetchMock).toHaveBeenCalledTimes(12);
+      for (const [url, init] of fetchMock.mock.calls) {
+        expect(new URL(url).pathname).toBe(
+          '/api/internal/mcp-oauth/v1/operations/operation_alpha/receipt'
+        );
+        expect(JSON.parse(init.body).claim).toEqual(valid.claim);
+        expect(init.body).not.toContain('refresh_token');
+        expect(init.body).not.toContain('pkce_verifier');
+      }
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(fetchMock).toHaveBeenCalledTimes(12);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
   it('rejects sequence disagreement and sender-owner swaps before any secret dispatch', async () => {
     await expect(
       executeManagedOAuthOperation({ ...makeOptions(), sequence: '1' })
