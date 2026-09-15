@@ -12,7 +12,12 @@ import { UserMCPOAuthTokenRepository } from './repositories/user-mcp-oauth-token
 import { UsersRepository } from './repositories/users';
 import { deleteTenantData } from './tenant-deletion';
 import { runWithSystemDatabaseScope, runWithTenantDatabaseScope } from './tenant-scope';
-import { acquireTenantWriteGate, releaseTenantWriteGate } from './tenant-write-gate';
+import {
+  acquireTenantWriteGate,
+  releaseTenantWriteGate,
+  TENANT_WRITE_GATE_KEY,
+  TENANT_WRITE_GATE_NAMESPACE,
+} from './tenant-write-gate';
 import { managedCommit, managedOwner } from './test-support/managed-oauth-fixture';
 import { createOwnedPostgres, type OwnedPostgres } from './test-support/owned-postgres';
 
@@ -685,6 +690,16 @@ describe.skipIf(process.env.AGOR_DB_DIALECT !== 'postgresql')(
       await expect(
         within((r) => r.isTenantRetirementReady(f.tenant, gate.generation))
       ).rejects.toThrow();
+      await runWithTenantDatabaseScope(owned.db, f.tenant, async (db) => {
+        await executeRaw(
+          db,
+          sql`UPDATE public.app_variables SET value_text='malformed'
+          WHERE tenant_id=${f.tenant} AND namespace=${TENANT_WRITE_GATE_NAMESPACE} AND key=${TENANT_WRITE_GATE_KEY}`
+        );
+        await expect(
+          lockMCPManagedSubject(db, f.tenant, f.user, f.owner.cloud_user_subject)
+        ).rejects.toThrow('write');
+      });
     });
     it('gates tenant erasure until close confirmation and then erases cleanup rows without touching another tenant', async () => {
       const f = await seed(false);

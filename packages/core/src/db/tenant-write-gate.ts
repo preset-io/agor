@@ -347,8 +347,22 @@ export async function assertTenantWritableUnderLock(db: Database, tenantId: stri
     throw new Error('Write gate fence requires its active tenant transaction');
   assertPostgres(db, 'fence');
   await lockTenantGateMutation(db, tenantId);
-  const state = toState(await readGateRowScoped(db, tenantId));
-  if (state.active) throw new TenantWriteGateActiveError(tenantId, state.generation);
+  // Any reserved gate row blocks managed authority, including malformed payloads.
+  // Preserve the ordinary read-only gate parser's legacy behavior elsewhere.
+  const rows = rowsOf(
+    await executeRaw(
+      db,
+      sql`
+    SELECT value_text FROM ${appVariablesTable()}
+    WHERE tenant_id=${tenantId} AND namespace=${TENANT_WRITE_GATE_NAMESPACE}
+      AND key=${TENANT_WRITE_GATE_KEY} LIMIT 1`
+    )
+  );
+  if (rows.length)
+    throw new TenantWriteGateActiveError(
+      tenantId,
+      parseGatePayload(rows[0].value_text)?.generation
+    );
 }
 
 export interface AcquireTenantWriteGateOptions {
