@@ -1348,6 +1348,87 @@ describe('agor_branches_set_zone', () => {
     expect(findByBranchId).not.toHaveBeenCalled();
   });
 
+  it('replaces a synthetic out-of-bounds placement with contained zone-relative coordinates', async () => {
+    const baseServiceParams = {
+      authenticated: true,
+      provider: 'mcp',
+      user: { user_id: 'user-1', role: 'member' },
+    };
+    const branch = {
+      branch_id: 'branch-1',
+      board_id: 'board-1',
+      name: 'Branch 1',
+    };
+    const zone = {
+      type: 'zone',
+      x: 2400,
+      y: 80,
+      width: 740,
+      height: 720,
+      label: 'Review',
+    };
+    let persistedBoardObject = {
+      object_id: 'obj-branch-1',
+      board_id: 'board-1',
+      branch_id: 'branch-1',
+      zone_id: 'zone-review',
+      position: { x: 24, y: 1600 },
+    };
+    const boardObjectsPatch = vi.fn(
+      async (
+        _objectId: string,
+        update: { position: { x: number; y: number }; zone_id: string }
+      ) => {
+        persistedBoardObject = { ...persistedBoardObject, ...update };
+        return persistedBoardObject;
+      }
+    );
+    const app = {
+      get: () => ({}),
+      service(name: string) {
+        if (name === 'branches') return { get: vi.fn(async () => branch) };
+        if (name === 'boards') {
+          return {
+            get: vi.fn(async () => ({
+              board_id: 'board-1',
+              objects: { 'zone-review': zone },
+            })),
+          };
+        }
+        if (name === 'board-objects') {
+          return {
+            findByBranchId: vi.fn(async () => persistedBoardObject),
+            patch: boardObjectsPatch,
+          };
+        }
+        throw new Error(`Unexpected service call: ${name}`);
+      },
+    };
+
+    const setZone = registerAndCaptureHandler('agor_branches_set_zone', {
+      app,
+      userId: 'user-1',
+      baseServiceParams,
+    });
+    vi.spyOn(Math, 'random').mockReturnValue(0);
+
+    const result = await setZone({ branchId: 'branch-1', zoneId: 'zone-review' });
+    const parsed = JSON.parse(result.content[0].text);
+
+    // Placement and auto-arrange may choose different slots, but both use
+    // zone-relative coordinates. The non-zero origin is never added here.
+    expect(boardObjectsPatch).toHaveBeenCalledWith(
+      'obj-branch-1',
+      { position: { x: 80, y: 80 }, zone_id: 'zone-review' },
+      baseServiceParams
+    );
+    expect(persistedBoardObject.position).toEqual({ x: 80, y: 80 });
+    expect(parsed.position).toEqual({ x: 80, y: 80 });
+    expect(parsed.position).not.toEqual({ x: 24, y: 1600 });
+    expect(parsed.position.x + 500).toBeLessThanOrEqual(zone.width);
+    expect(parsed.position.y + 200).toBeLessThanOrEqual(zone.height);
+  });
+
   it('triggers a show_picker zone prompt when the target session belongs to the moved branch', async () => {
     const baseServiceParams = {
       authenticated: true,
@@ -1367,10 +1448,10 @@ describe('agor_branches_set_zone', () => {
     };
     const zone = {
       type: 'zone',
-      x: 0,
-      y: 0,
-      width: 400,
-      height: 200,
+      x: 2400,
+      y: 80,
+      width: 740,
+      height: 720,
       label: 'Evidence/QA',
       trigger: {
         behavior: 'show_picker',
@@ -1421,6 +1502,7 @@ describe('agor_branches_set_zone', () => {
       baseServiceParams,
     });
 
+    const random = vi.spyOn(Math, 'random').mockReturnValue(0);
     const result = await setZone({
       branchId: 'branch-1',
       zoneId: 'zone-validate',
@@ -1433,7 +1515,12 @@ describe('agor_branches_set_zone', () => {
     expect(sessionsGet).toHaveBeenCalledWith('session-1', baseServiceParams);
     expect(boardObjectsPatch).toHaveBeenCalledWith(
       'obj-branch-1',
-      expect.objectContaining({ zone_id: 'zone-validate' }),
+      expect.objectContaining({
+        // Zone origin is intentionally non-zero: set_zone persists React Flow
+        // child coordinates, never canvas-absolute coordinates.
+        position: { x: 80, y: 80 },
+        zone_id: 'zone-validate',
+      }),
       baseServiceParams
     );
     expect(promptCreate).toHaveBeenCalledWith(
@@ -1445,6 +1532,7 @@ describe('agor_branches_set_zone', () => {
       { ...baseServiceParams, provider: undefined, route: { id: 'session-1' } }
     );
     expect(parsed.trigger.sessionId).toBe('session-1');
+    random.mockRestore();
   });
 
   it('rejects show_picker zone triggers when the target session belongs to another branch', async () => {
