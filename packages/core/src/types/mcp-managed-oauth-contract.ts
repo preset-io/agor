@@ -177,6 +177,37 @@ export const McpOAuthCancelRequestSchema = z.strictObject({
   transaction_id: McpOAuthIdSchema,
   expected_cancel_epoch: McpOAuthEpochSchema,
 });
+/** Inhibits only the saved prepare owner/operation; never proof that dispatch did not occur. */
+export const McpOAuthCancelReservationRequestSchema = z.strictObject({
+  ...baseRequest,
+  prepare_operation_id: McpOAuthIdSchema,
+});
+export const McpOAuthCancelReservationResponseSchema = z.strictObject({
+  protocol_version: z.literal(1),
+  canceled: z.literal(true),
+  prepare_operation_id: McpOAuthIdSchema,
+});
+/** Operator-reviewed, signed-worker-config capability. Never supplied by runtime requests.
+ * Only non-vending cancel-reservation, close and cleanup may use this historical cell scope.
+ */
+export const McpOAuthCleanupAuthoritySchema = z
+  .strictObject({
+    environment: McpOAuthEnvironmentSchema,
+    residency_region: McpOAuthRegionSchema,
+    recovery_incarnation: McpOAuthOpaqueSchema,
+    cell_id: McpOAuthIdSchema,
+    cell_authority_epoch: McpOAuthPositiveEpochSchema,
+    data_plane_id: McpOAuthIdSchema,
+    data_plane_authority_epoch: McpOAuthPositiveEpochSchema,
+    issued_at: McpOAuthTimeSchema,
+    expires_at: McpOAuthTimeSchema,
+    approval_reference: McpOAuthIdSchema,
+  })
+  .refine(
+    (v) => v.expires_at > v.issued_at && v.expires_at - v.issued_at <= MCP_OAUTH_LIMITS.cleanup_ms,
+    'Historical cleanup capability exceeds its bounded lifetime'
+  );
+export type McpOAuthCleanupAuthority = z.infer<typeof McpOAuthCleanupAuthoritySchema>;
 export const McpOAuthReceiptRequestSchema = z.strictObject({
   ...baseRequest,
   target_operation_id: McpOAuthIdSchema,
@@ -416,6 +447,7 @@ export const MCP_OAUTH_ROUTES = Object.freeze({
   status: `${MCP_OAUTH_INTERNAL_BASE}/transactions/:id/status`,
   exchange: `${MCP_OAUTH_INTERNAL_BASE}/transactions/:id/exchange`,
   cancel: `${MCP_OAUTH_INTERNAL_BASE}/transactions/:id/cancel`,
+  cancel_reservation: `${MCP_OAUTH_INTERNAL_BASE}/reservations/:id/cancel`,
   refresh: `${MCP_OAUTH_INTERNAL_BASE}/grants/:id/refresh`,
   close: `${MCP_OAUTH_INTERNAL_BASE}/grants/:id/close`,
   cleanup: `${MCP_OAUTH_INTERNAL_BASE}/grants/:id/cleanup`,
@@ -440,6 +472,7 @@ export const McpOAuthScopeSchema = z.enum([
   'mcp_oauth:receipt',
   'mcp_oauth:ack',
   'mcp_oauth:cancel',
+  'mcp_oauth:cancel_reservation',
   'mcp_oauth:close',
   'mcp_oauth:cleanup',
   'mcp_oauth:capabilities',
@@ -678,6 +711,7 @@ export const McpOAuthCloseResponseSchema = z.strictObject({
   protocol_version: z.literal(1),
   closed: z.literal(true),
   provider_revocation: z.literal('pending'),
+  cleanup_authorization_id: McpOAuthIdSchema,
 });
 export const McpOAuthCleanupResponseSchema = z.strictObject({
   protocol_version: z.literal(1),

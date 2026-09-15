@@ -142,7 +142,8 @@
     "close": {
       "protocol_version": 1,
       "closed": true,
-      "provider_revocation": "pending"
+      "provider_revocation": "pending",
+      "cleanup_authorization_id": "cleanup_handle_alpha_1"
     },
     "cleanup": {
       "protocol_version": 1,

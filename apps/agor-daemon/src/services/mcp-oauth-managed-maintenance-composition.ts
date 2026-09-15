@@ -9,6 +9,7 @@ import {
   type McpOAuthOwner,
 } from '@agor/core/types';
 import { loadManagedOAuthCleanupDeployment } from '../mcp-egress/managed-deployment.js';
+import type { DaemonMetrics } from '../metrics/types.js';
 import { createManagedOAuthAcknowledger } from './mcp-oauth-managed-ack.js';
 import type { ManagedOAuthServices } from './mcp-oauth-managed-composition.js';
 import { createManagedOAuthMaintenance } from './mcp-oauth-managed-maintenance.js';
@@ -19,6 +20,7 @@ export async function createManagedOAuthMaintenanceServices(input: {
   config: AgorConfig;
   externalLaunchProvider: ResolvedExternalLaunchProvider;
   active?: ManagedOAuthServices;
+  metrics?: Pick<DaemonMetrics, 'increment' | 'gauge'>;
 }) {
   if (!input.active && input.config.managed_mcp_oauth?.revocation !== true) return null;
   const cleanup = await loadManagedOAuthCleanupDeployment(input.config, {
@@ -98,15 +100,25 @@ export async function createManagedOAuthMaintenanceServices(input: {
   };
   const sender: Pick<ManagedMCPOAuthClient, 'request'> = {
     request: (async (request) => {
-      if (!['cancel', 'close', 'cleanup', 'ack', 'capabilities'].includes(request.operation))
-        throw new ManagedOAuthUnavailableError();
+      const deadline = performance.now() + Math.min(10000, request.timeoutMs ?? 10000);
+      const remaining = () => {
+        const value = Math.floor(deadline - performance.now());
+        if (value <= 0) throw new ManagedOAuthUnavailableError();
+        return value;
+      };
       if (
-        ['cancel', 'close', 'cleanup'].includes(request.operation) &&
-        (settings.revocation !== true ||
-          !(await getCapabilities({ timeoutMs: request.timeoutMs })).flags.revocation)
+        !['cancel', 'cancel_reservation', 'close', 'cleanup', 'ack', 'capabilities'].includes(
+          request.operation
+        )
       )
         throw new ManagedOAuthUnavailableError();
-      return rawSender.request(request);
+      if (
+        ['cancel', 'cancel_reservation', 'close', 'cleanup'].includes(request.operation) &&
+        (settings.revocation !== true ||
+          !(await getCapabilities({ timeoutMs: remaining() })).flags.revocation)
+      )
+        throw new ManagedOAuthUnavailableError();
+      return rawSender.request({ ...request, timeoutMs: remaining() });
     }) as ManagedMCPOAuthClient['request'],
   };
   return createManagedOAuthMaintenance({
@@ -120,5 +132,17 @@ export async function createManagedOAuthMaintenanceServices(input: {
     getCurrentIncarnation,
     assertCleanupAdmission: assertOwner,
     acknowledge: createManagedOAuthAcknowledger({ sender, assertOwner }),
+    onResult: (result) => {
+      // No tenant, subject, handle, URL, exception or credential becomes a metric tag.
+      for (const operation of ['reconciled', 'acknowledged', 'closed', 'failures'] as const) {
+        input.metrics?.increment('mcp.managed_maintenance', result[operation], { operation });
+      }
+      input.metrics?.gauge(
+        'mcp.managed_maintenance_capacity_limited',
+        Number(result.capacityLimited)
+      );
+      input.metrics?.gauge('mcp.managed_maintenance_unavailable', 0);
+    },
+    onUnavailable: () => input.metrics?.gauge('mcp.managed_maintenance_unavailable', 1),
   });
 }
