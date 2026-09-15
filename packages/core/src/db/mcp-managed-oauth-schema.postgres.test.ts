@@ -17,6 +17,12 @@ describe.skipIf(process.env.AGOR_DB_DIALECT !== 'postgresql')(
     afterAll(async () => {
       await owned?.dispose();
     }, 30000);
+    it('rejects a privileged login masked as the otherwise-valid runtime role', async () => {
+      await owned.withPrivilegedSessionRole(async (db) => {
+        await expect(readManagedOAuthSchemaDigest(db)).rejects.toThrow();
+      });
+      expect(await readManagedOAuthSchemaDigest(owned.db)).toMatch(/^[a-f0-9]{64}$/);
+    });
     it('hashes the actual schema and exact binary ledger, not mutable tenant data or sequence values', async () => {
       await assertNonOwnerPostgres(owned.sql);
       const first = await readManagedOAuthSchemaDigest(owned.db);

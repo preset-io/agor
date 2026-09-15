@@ -40,6 +40,8 @@ export interface OwnedPostgres {
   peer: Database;
   sql: postgres.Sql;
   dispose(): Promise<void>;
+  /** Negative admission fixture: privileged LOGIN masks itself with SET ROLE. */
+  withPrivilegedSessionRole(reader: (db: Database) => Promise<void>): Promise<void>;
   /** Fixture-only setup by the owned cluster bootstrap, reader still runs as non-owner. */
   withMigrationLedgerDrift(
     kind: 'hash' | 'missing' | 'extra',
@@ -178,6 +180,20 @@ export async function createOwnedPostgres(): Promise<OwnedPostgres> {
       peer,
       sql,
       dispose: close,
+      async withPrivilegedSessionRole(reader) {
+        const masked: Database = createDatabase({
+          dialect: 'postgresql',
+          url: ownerUrl,
+          pool: { max: 1 },
+        });
+        const client = (masked as Database & { $client: postgres.Sql }).$client;
+        try {
+          await client.unsafe(`SET ROLE ${role}`);
+          await reader(masked);
+        } finally {
+          await client.end({ timeout: 2 });
+        }
+      },
       async withMigrationLedgerDrift(kind, reader) {
         const [last] =
           await bootstrap!`SELECT id,hash,created_at FROM drizzle.__drizzle_migrations ORDER BY created_at DESC,id DESC LIMIT 1`;
