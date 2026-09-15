@@ -42,6 +42,7 @@ import { uploadFilesToSession } from './components/FileUpload/upload';
 import { ForcePasswordChangeModal } from './components/ForcePasswordChangeModal';
 import { InitialLoadingScreen } from './components/InitialLoadingScreen';
 import { LoginPage } from './components/LoginPage';
+import { ManagedOAuthCompletePage } from './components/Marketplace/ManagedOAuthCompletePage';
 import { MCPCatalogModalHost } from './components/Marketplace/MCPCatalogModalHost';
 import { OnboardingBanners } from './components/OnboardingBanners';
 import { type OnboardingCompletionResult, OnboardingWizard } from './components/OnboardingWizard';
@@ -2389,6 +2390,20 @@ function AppContent() {
         <DeviceRouter />
         <Suspense fallback={routeFallback}>
           <Routes>
+            <Route
+              path="/mcp-oauth/complete"
+              element={
+                <ManagedOAuthCompletePage
+                  client={client}
+                  userId={user?.user_id ?? ''}
+                  authorityKey={
+                    connected && !connecting && user?.user_id
+                      ? `${user.user_id}:${authGeneration}`
+                      : null
+                  }
+                />
+              }
+            />
             {/* Demo routes */}
             <Route path="/demo/streamdown" element={<StreamdownDemoPage />} />
             <Route path="/demo/marketing-screenshots" element={<MarketingScreenshotPage />} />

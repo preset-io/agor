@@ -563,6 +563,7 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
           if (oauthPopup && result.mcp_server.auth?.type === 'oauth') {
             try {
               const launched = await launchMarketplaceOAuth(client, result, oauthPopup, {
+                userId: currentUser?.user_id,
                 isCurrent: operation.isCurrent,
               });
               if (!launched && operation.isCurrent()) {
@@ -626,7 +627,7 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
         if (operation.isCurrent()) setConnecting(false);
       }
     },
-    [client, operationGuard, selected, onboarding]
+    [client, operationGuard, selected, onboarding, currentUser?.user_id]
   );
 
   const continueSurpriseOAuth = useCallback(
@@ -653,6 +654,7 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
       setConnecting(true);
       try {
         const launched = await launchMarketplaceOAuth(client, result, oauthPopup, {
+          userId: currentUser?.user_id,
           isCurrent: operation.isCurrent,
         });
         if (!operation.isCurrent()) {
@@ -693,7 +695,7 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
         if (operation.isCurrent()) setConnecting(false);
       }
     },
-    [client, operationGuard, onboarding]
+    [client, operationGuard, onboarding, currentUser?.user_id]
   );
 
   const handleStartSession = useCallback(
